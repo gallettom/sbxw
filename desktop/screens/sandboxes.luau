@@ -25,7 +25,11 @@
 -- extra-sandbox-<name>-bash (open a shell), -spare (open in a new pane),
 -- -start, -stop; a badge or the bubble keeps its extra's key when it shows
 -- inline; more-<name> is the "+N" of badges that did not fit.
--- Sessions: extra-row-<name>-<id>. Groups: group-<label>.
+-- Sessions: sessions-<name> (the disclosure line), sessions-block-<name>,
+-- extra-row-<name>-<id> (a line). Groups: block-<label> (the tinted block),
+-- group-<label> (its header); block-ungrouped (the rest, on the plain ground).
+-- What opens and shuts (a group, a sandbox's sessions) folds: its height
+-- glides over 0.18 s and its lines fade (docs/screens.md, `folds`).
 --
 -- Keyboard: Up and Down move between rows, Enter opens the terminal, Space
 -- starts or stops.
@@ -152,7 +156,7 @@ local function est(t)
   return (utf8.len(t) or #t) * 7.2
 end
 
-local word_color = { amber = "amber", blue = "blue", red = "red", green = "text-muted", muted = "text-muted" }
+local word_color = { amber = "amber", blue = "blue", red = "red-text", green = "text-muted", muted = "text-muted" }
 
 -- The model a session runs, short and lower case like the state word beside
 -- it: "opus 5.5" from `model_name` "Opus 5.5" or from the id
@@ -376,31 +380,125 @@ local function item(sb, app, data)
   }
 end
 
--- Features' sub-rows under a sandbox (data.app.extras.rows[name]): one per
--- session (its main agent, each thread), indented, with a small rail of
--- their own, the whole row pressable. A copy of this screen must draw these
--- too (docs/screens.md, "Extras"), or the core draws them below it.
+-- Features' rows under a sandbox (data.app.extras.rows[name]): one per
+-- session (its main agent, each thread). The list draws them as the web UI's
+-- "Sessions" block, improved: a disclosure line ("4 sessions · 1 wants you",
+-- key sessions-<name>) that folds open a block grouped by where each session
+-- works: "Main checkout" (main, and threads in the same checkout), then "Own
+-- worktree" (a thread each). A line: its mark (the small rail; a check when
+-- done), its name, its state word, its model when it differs from the
+-- sandbox's, the pane it is in (P1). Pressing a line runs its extra (opens or
+-- shows its terminal). Shut by default, except for the selected sandbox and
+-- one with a session that wants you; the person's choice is kept per sandbox.
 local sub_tones = { green = "green", amber = "amber", red = "red", blue = "blue", purple = "blue" }
 
-local function sub_rows(sb, app, into)
-  for _, e in ipairs(((app.extras or {}).rows or {})[sb.name] or {}) do
-    local key = "extra-row-" .. sb.name .. "-" .. e.id
-    if e.intent then extra_intents[sb.name .. "\n" .. e.id] = e.intent end
-    local tone = sub_tones[e.tone] or "muted"
-    local label = e.label or ""
-    local shape = (e.tone == "amber" and "notch") or (string.find(label, "working") and "dashed")
-      or (e.tone == "red" and "broken") or ((tone == "muted") and "hollow") or "solid"
-    if string.find(label, "working") then tone = "blue" end
-    table.insert(into, row{ key = key, h = 28, gap = 8, w = "full", align = "stretch", radius = "sm", hover = "hover-subtle",
-      on = e.intent and "extra" or nil, arg = e.intent and (sb.name .. "\n" .. e.id) or nil, help = e.help ~= "" and e.help or label,
-      column{ w = 8 },
-      column{ py = 4, w = 6, align = "start", rail(tone, shape, true) },
-      row{ grow = 1, gap = 8,
-        text{ label, size = "body", color = tone == "amber" and "amber" or "text", truncate = true, grow = 1 },
-        e.count and badge{ "pane " .. e.count, tone = "blue" } or false,
-      },
-    })
+local function parse_row(e)
+  local label = e.label or ""
+  -- The threads feature marks the main checkout ✦ and a worktree ⑂ (3 bytes each).
+  local glyph = string.sub(label, 1, 3)
+  local own = glyph == "⑂"
+  local rest = (glyph == "⑂" or glyph == "✦") and string.gsub(string.sub(label, 4), "^%s+", "") or label
+  local name, word = string.match(rest, "^(.-) · (.*)$")
+  return own, name or rest, word or ""
+end
+
+local function thread_model(data, sb, thread)
+  local v = ((data.threads or {})[sb] or {}).threads or {}
+  for _, t in ipairs(v) do
+    if t.name == thread then return t.model end
   end
+  for _, s in ipairs(data.sessions or {}) do
+    if s.sandbox == sb and s.thread == thread then return s.model_name or s.model end
+  end
+end
+
+local function session_line(sb, e, data, base_model)
+  local key = "extra-row-" .. sb.name .. "-" .. e.id
+  if e.intent then extra_intents[sb.name .. "\n" .. e.id] = e.intent end
+  local _, name, word = parse_row(e)
+  local tone = sub_tones[e.tone] or "muted"
+  local shape = (e.tone == "amber" and "notch") or (word == "working" and "dashed") or (word == "starting" and "dashed")
+    or (e.tone == "red" and "broken") or ((tone == "muted") and "hollow") or "solid"
+  if word == "working" then tone = "blue" end
+  local done = word == "done"
+  local m = e.id ~= "main" and thread_model(data, sb.name, e.id) or nil
+  local mw = m and (string.find(m, " ") and string.lower(m) or short_model(m)) or nil
+  if mw == base_model then mw = nil end
+  -- The name first; the model only where it fits beside the name and word.
+  local room = ((data.app.sidebar or {}).w or 264) - 24 - 8 - 32 - 16 - (e.count and 32 or 0)
+  if mw and est(name) + est(word) + est(mw) + 16 > room then mw = nil end
+  local mark = done and icon{ "check", size = 12, color = "text-muted" } or rail(tone, shape, true)
+  local wants = e.tone == "amber"
+  return row{ key = key, h = 28, gap = 8, w = "full", align = "stretch", radius = "sm", hover = "hover-subtle",
+    on = e.intent and "extra" or nil, arg = e.intent and (sb.name .. "\n" .. e.id) or nil,
+    help = name .. (word ~= "" and (": " .. word) or "") .. (m and (", " .. m) or "") .. (e.count and (". Shown in pane " .. e.count) or ""),
+    column{ w = 12 },
+    column{ py = done and 8 or 4, w = 12, align = done and "center" or "start", mark },
+    row{ grow = 1, gap = 8,
+      text{ name, size = "body", weight = wants and "medium" or "normal", color = done and "text-muted" or (wants and "amber" or "text"), truncate = true },
+      word ~= "" and text{ word, size = "caption", weight = wants and "semibold" or "normal", color = done and "text-muted" or (word_color[tone] or "text-muted") } or false,
+      mw and text{ mw, size = "caption", color = "text-muted", truncate = true } or false,
+      spacer{},
+      e.count and badge{ "P" .. e.count, tone = "blue", help = "Shown in pane " .. e.count .. " (" .. (data.app.platform == "macos" and "⌘" or "Ctrl+") .. e.count .. " focuses it)" } or false,
+    },
+  }
+end
+
+-- The sessions of one sandbox: the disclosure line, and the block when open.
+local function sessions_block(sb, app, data, state, into, base_model)
+  local rows = ((app.extras or {}).rows or {})[sb.name] or {}
+  if #rows == 0 then return end
+  local waiting, done = 0, 0
+  for _, e in ipairs(rows) do
+    if e.tone == "amber" then waiting = waiting + 1 end
+    local _, _, w = parse_row(e)
+    if w == "done" then done = done + 1 end
+  end
+  local open = (state.sessions or {})[sb.name]
+  if open == nil then open = app.selected == sb.name or waiting > 0 end
+  table.insert(into, row{ key = "sessions-" .. sb.name, on = "toggle_sessions", arg = { name = sb.name, open = open }, h = 24, gap = 4, w = "full", radius = "xs",
+    hover = "hover-subtle", help = (open and "Hide" or "Show") .. " the sessions of " .. sb.name,
+    column{ w = 12 },
+    icon{ open and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
+    text{ #rows .. " sessions", size = "caption", color = "text-muted" },
+    waiting > 0 and text{ "· " .. waiting .. (waiting == 1 and " wants you" or " want you"), size = "caption", weight = "semibold", color = "amber" } or false,
+    (not open and waiting == 0 and done > 0) and text{ "· " .. done .. " done", size = "caption", color = "text-muted" } or false,
+  })
+  -- The block stays in the tree with its height set: shut it is 0 tall,
+  -- open as tall as its lines, so the height is what changes (on the
+  -- layout spring, in answer to the press) and it clips what it gains or
+  -- loses while they fade.
+  local block = { key = "sessions-block-" .. sb.name, gap = 0, w = "full", clip = true, h = 0 }
+  if open then
+    local main, own = {}, {}
+    for _, e in ipairs(rows) do
+      local is_own = parse_row(e)
+      table.insert(is_own and own or main, e)
+    end
+    local h = 0
+    for _, g in ipairs({ { "Main checkout", main }, { "Own worktree", own } }) do
+      if #g[2] > 0 then
+        table.insert(block, row{ h = 20, w = "full", column{ w = 36 }, text{ g[1], size = "caption", color = "text-muted" } })
+        h = h + 20
+        for _, e in ipairs(g[2]) do
+          table.insert(block, session_line(sb, e, data, base_model))
+          h = h + 28
+        end
+      end
+    end
+    block.h = h + 4
+  end
+  table.insert(into, column(block))
+end
+
+-- `#rrggbb` drawn at `a` over `under` (the group tints).
+local function mix(fg, a, under)
+  local function ch(h, i) return tonumber(string.sub(h, i, i + 1), 16) end
+  local out = "#"
+  for _, i in ipairs({ 2, 4, 6 }) do
+    out = out .. string.format("%02x", math.floor(ch(fg, i) * a + ch(under, i) * (1 - a) + 0.5))
+  end
+  return out
 end
 
 local function matches(sb, filter)
@@ -416,7 +514,7 @@ end
 
 return {
   init = function()
-    return { filter = "", collapsed = {} }
+    return { filter = "", collapsed = {}, sessions = {} }
   end,
 
   render = function(state, data)
@@ -427,7 +525,18 @@ return {
     for _, sb in ipairs(data.sandboxes) do
       if matches(sb, state.filter or "") then table.insert(shown, sb) end
     end
-    local body = { gap = 2, group = "list", w = "full" }
+    -- One block per sandbox (its row, its sessions), one tinted block per
+    -- group (the group's colour at 12% on the sidebar, as the web UI's 15%
+    -- over its darker floor), all in a folding column: what opens or shuts
+    -- glides (docs/screens.md, `folds`).
+    local body = { gap = 4, group = "list", w = "full" }
+    -- A sandbox in its group's block: its row, then its sessions line and
+    -- block, side by side in the block's folding stack (one level of folds:
+    -- what changes height is always a row of the stack that glides it).
+    local function sandbox_rows(sb, blk)
+      table.insert(blk, item(sb, app, data))
+      sessions_block(sb, app, data, state, blk, (model_of(sb, data)))
+    end
     for _, g in ipairs(groups(shown)) do
       local gk = g.label or ""
       if g.label then
@@ -436,27 +545,29 @@ return {
         for _, sb in ipairs(g.items) do
           if state_of(sb, data).tone == "amber" then waiting = waiting + 1 end
         end
-        table.insert(body, row{ key = "group-" .. gk, on = "toggle_group", arg = gk, h = 28, gap = 8, w = "full", px = 4, radius = "sm",
-          hover = "hover-subtle", help = (closed and "Show " or "Hide ") .. (g.help or g.label),
-          icon{ closed and "chevron-right" or "chevron-down", size = 12, color = "text-muted" },
-          colors[g.color] and column{ w = 8, h = 8, radius = 2, fill = colors[g.color] } or false,
-          text{ g.label, size = "caption", weight = "semibold", color = "text-muted", truncate = true },
-          text{ tostring(#g.items), size = "caption", color = "text-muted" },
-          spacer{},
-          (closed and waiting > 0) and badge{ waiting .. " want" .. (waiting == 1 and "s" or "") .. " you", tone = "amber" } or false,
-        })
+        local gc = colors[g.color]
+        local blk = { key = "block-" .. gk, gap = 2, w = "full", radius = "md", pad = 4, folds = true, clip = true,
+          -- theme.rs GROUP_TINT (0.10), GROUP_TINT_HOVER (0.16), GROUP_LABEL_LIGHT
+          -- (0.40): the contrast test holds every hue at these.
+          fill = gc and mix(gc, 0.10, "#161b22") or nil,
+          row{ key = "group-" .. gk, on = "toggle_group", arg = gk, h = 28, gap = 8, w = "full", px = 4, radius = "sm",
+            hover = gc and mix(gc, 0.16, "#161b22") or "hover-subtle", help = (closed and "Show " or "Hide ") .. (g.help or g.label),
+            icon{ closed and "chevron-right" or "chevron-down", size = 12, color = "text-muted" },
+            gc and column{ w = 8, h = 8, radius = 2, fill = gc } or false,
+            text{ g.label, size = "caption", weight = "semibold", color = gc and mix("#ffffff", 0.40, gc) or "text-muted", truncate = true },
+            text{ tostring(#g.items), size = "caption", color = gc and mix("#ffffff", 0.40, gc) or "text-muted" },
+            spacer{},
+            (closed and waiting > 0) and badge{ waiting .. " want" .. (waiting == 1 and "s" or "") .. " you", tone = "amber" } or false,
+          },
+        }
         if not closed then
-          for _, sb in ipairs(g.items) do
-            table.insert(body, item(sb, app, data))
-            sub_rows(sb, app, body)
-          end
+          for _, sb in ipairs(g.items) do sandbox_rows(sb, blk) end
         end
+        table.insert(body, column(blk))
       else
-        if #body > 0 then table.insert(body, column{ h = 8 }) end
-        for _, sb in ipairs(g.items) do
-          table.insert(body, item(sb, app, data))
-          sub_rows(sb, app, body)
-        end
+        local blk = { key = "block-ungrouped", gap = 2, w = "full", px = 4, py = 4, folds = true }
+        for _, sb in ipairs(g.items) do sandbox_rows(sb, blk) end
+        table.insert(body, column(blk))
       end
     end
 
@@ -501,6 +612,10 @@ return {
   actions = {
     filter = function(state, _, text) state.filter = text or "" end,
     clear_filter = function(state) state.filter = "" end,
+    toggle_sessions = function(state, a)
+      state.sessions = state.sessions or {}
+      state.sessions[a.name] = not a.open
+    end,
     toggle_group = function(state, key)
       state.collapsed = state.collapsed or {}
       state.collapsed[key] = not state.collapsed[key] or nil

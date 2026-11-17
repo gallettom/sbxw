@@ -394,8 +394,13 @@ pub fn menu_surface(key: String, anchor: String, align: rune::Align, w: f32) -> 
     if reduced_motion() {
         e
     } else {
-        e.transition(rune::Transition::opacity().springs(rune::SpringPair::new(rune::Spring::new(0.1, 0.0), rune::Spring::new(0.08, 0.0))))
+        e.transition(quick_fade())
     }
+}
+
+/// Menus and the palette: in over 0.1 s, out over 0.08 s.
+pub fn quick_fade() -> rune::Transition {
+    rune::Transition::opacity().springs(rune::SpringPair::new(rune::Spring::new(0.1, 0.0), rune::Spring::new(0.08, 0.0)))
 }
 
 /// A line between two groups of a menu's rows.
@@ -414,7 +419,7 @@ pub fn menu_row(r: &MenuRow) -> El {
         Some(t) if t != "neutral" => hex(action_tone(t).0),
         _ => c("text-muted"),
     };
-    let label_c = if danger { c("red") } else { c("text-bright") };
+    let label_c = if danger { c("red-text") } else { c("text-bright") };
     let mut row_ = row().key(r.key.clone()).w_full().h(MENU_ROW_H).px(MENU_ROW_PX).gap(0.0).items_center().radius(theme::radius("xs").unwrap()).role("menuitem").label(r.label.to_string()).focusable(!r.disabled);
     let slot = el().w(MENU_ICON).h(MENU_ICON).items_center().justify_center();
     row_ = row_.child(match r.icon.and_then(crate::icons::get) {
@@ -521,7 +526,7 @@ pub fn view<S: Host>(s: &ScreenState) -> El {
 /// window so they paint over every other tile.
 pub fn view_parts<S: Host>(s: &ScreenState) -> (El, Vec<El>) {
     let name: Rc<str> = s.name.as_str().into();
-    let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![], nav: None };
+    let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![], nav: HashMap::new() };
     // The top bar is one line: what the core adds goes beside it, not under it.
     let mut panel = if s.name == "topbar" { row().items_center() } else { col() }.key(format!("screen-{}", s.name)).w_full().h_full().min_h(0.0).gap(8.0);
     if let Some(e) = &s.error {
@@ -668,7 +673,13 @@ impl ScreenState {
                     if !keys.contains(format!("row-{n}").as_str()) && !texts.contains(n) {
                         continue;
                     }
+                    // A sessions disclosure (`sessions-<name>`) accounts for the
+                    // rows it holds, open or shut.
+                    let folded = keys.contains(format!("sessions-{n}").as_str());
                     for (place, prefix) in [("sandboxes", "extra-sandbox"), ("rows", "extra-row")] {
+                        if folded && place == "rows" {
+                            continue;
+                        }
                         for e in x[place][n].as_array().into_iter().flatten() {
                             if !keys.contains(format!("{prefix}-{n}-{}", e["id"].as_str().unwrap_or("")).as_str()) {
                                 out.push((n.to_string(), e.clone()));
@@ -687,9 +698,24 @@ struct Build<'a> {
     name: Rc<str>,
     ui: &'a Ui,
     overlays: Vec<El>,
-    /// Set by a `group = "list"` parent for the child being built: the keys
-    /// of the items before and after it (Up and Down move there).
-    nav: Option<(Option<String>, Option<String>)>,
+    /// Filled by a `group = "list"` container for its items (the pressable
+    /// rows inside it, at any depth, not inside another item): the keys of
+    /// the items before and after each (Up and Down move there).
+    nav: HashMap<String, (Option<String>, Option<String>)>,
+}
+
+/// The items of a list group, in reading order: rows and columns with `on`,
+/// at any depth (a group's rows may sit inside blocks), not inside another.
+fn list_items(n: &Node, out: &mut Vec<String>) {
+    for k in &n.children {
+        if matches!(k.kind, Kind::Row | Kind::Column) && k.on.is_some() {
+            if let Some(key) = key_of(k) {
+                out.push(key);
+            }
+        } else {
+            list_items(k, out);
+        }
+    }
 }
 
 fn arg_key(v: &J) -> String {
@@ -819,22 +845,23 @@ impl Build<'_> {
                 t
             }
             Kind::Row | Kind::Column => {
-                let nav = self.nav.take();
+                let nav = if n.on.is_some() { key.as_ref().and_then(|k| self.nav.get(k).cloned()) } else { None };
                 let folds = n.folds && n.kind == Kind::Column && !reduced_motion();
                 let mut b = boxed(if n.kind == Kind::Row { row().items_center() } else { col() }, st);
                 // A list group: each pressable item learns its neighbours' keys.
-                let items: Vec<Option<String>> = if n.group.is_some() { n.children.iter().map(|k| k.on.as_ref().and(key_of(k))).collect() } else { vec![] };
-                for (i, k) in n.children.iter().enumerate() {
-                    if items.get(i).is_some_and(Option::is_some) {
-                        let prev = items[..i].iter().rev().flatten().next().cloned();
-                        let next = items[i + 1..].iter().flatten().next().cloned();
-                        self.nav = Some((prev, next));
+                if n.group.is_some() {
+                    let mut items = vec![];
+                    list_items(n, &mut items);
+                    for (i, k) in items.iter().enumerate() {
+                        let prev = i.checked_sub(1).map(|j| items[j].clone());
+                        self.nav.insert(k.clone(), (prev, items.get(i + 1).cloned()));
                     }
+                }
+                for k in n.children.iter() {
                     let child = self.node::<S>(k);
                     // A folding column: each child glides to its new height.
                     let child = if folds { child.fold_glide(FOLD) } else { child };
                     b = b.child(child);
-                    self.nav = None;
                 }
                 if folds {
                     b = b.growth(rune::GrowthSpec { spring: FOLD, ..Default::default() });
@@ -1476,7 +1503,14 @@ end, actions = { send = function(_, _, v) end } }"#).unwrap();
         assert!(menu.items.iter().any(|i| i.id == "stop" && i.tone.as_deref() == Some("red")));
         // Every row is one item of the list: Up and Down move between them.
         let list = find_where(&n, &|x| x.group.is_some()).expect("the list group");
-        assert!(list.children.iter().filter(|c| c.on.as_deref() == Some("open")).count() >= 10);
+        // Rows sit in their group's block; every one is an item of the list.
+        let mut items = vec![];
+        list_items(list, &mut items);
+        assert!(items.iter().filter(|k| k.starts_with("row-")).count() >= 10, "{items:?}");
+        // Each group is its own tinted block; ungrouped rows are on the plain ground.
+        // (The tint needs data.app.groups, which the shell fills: see the shots.)
+        assert!(find(&n, "block-Chats").is_some(), "the Chats block");
+        assert!(find(&n, "block-ungrouped").is_some_and(|b| b.style.fill.is_none()), "ungrouped rows are not");
     }
 
     fn node_has(n: &Node, key: &str) -> bool {

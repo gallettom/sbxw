@@ -709,6 +709,9 @@ bar puts the extras that do not fit into its menu `extra-topbar`, whose items
 are then `extra-topbar-<id>`, the same keys as when they show inline.
 A sandbox's extras are looked for only when its row is drawn (a row key
 `row-<name>`, or its name as a text), so a filter does not bring them back.
+A sandbox's session rows are accounted for by its sessions disclosure (an
+element keyed `sessions-<name>`, the built-in list's "4 sessions" line),
+whether the block is open or shut.
 
 At every start the app writes what it has built in to
 `~/.sbxw/desktop/builtin/` (`screens/<name>.luau`, this document as

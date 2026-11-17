@@ -404,6 +404,8 @@ pub fn view(s: &App) -> Option<El> {
         .child(col().w_full().max_h((s.window.1 - 240.0).clamp(120.0, 440.0)).scroll(rune::ScrollSpec { stick_bottom: false }).child(list))
         .child(el().h(1.0).w_full().fill(c("elevated")))
         .child(foot);
+    // It fades in fast (0.1 s), at once under reduced motion.
+    let card = if crate::screen::reduced_motion() { card } else { card.transition(crate::screen::quick_fade()) };
     Some(super::scrim("palette-scrim", card, |s: &mut App| {
         s.palette_close();
         s.push_data();

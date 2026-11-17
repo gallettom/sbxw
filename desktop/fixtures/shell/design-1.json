@@ -1,5 +1,5 @@
 {
- "about": "Ten sandboxes in every state (design shots): chats, two workspace groups, one working, two wanting you, stopped, starting, unreachable, sbx requests, threads, a question from an agent, usage.",
+ "about": "Ten sandboxes in every state (design shots): chats, two workspace groups, one working, two wanting you, stopped, starting, unreachable, sbx requests, threads, a question from an agent, usage; better-checkout has a main session and three threads (one done, one wanting you).",
  "daemon": {
   "sandboxes": [
    {
@@ -264,6 +264,13 @@
       "repo": "",
       "model": "claude-sonnet-5-5",
       "worktree": "own"
+     },
+     {
+      "name": "refunds",
+      "open": false,
+      "repo": "",
+      "model": "claude-haiku-5-5",
+      "worktree": "own"
      }
     ],
     "open": 3,
@@ -288,7 +295,48 @@
     "max": 5
    }
   },
-  "plans": [],
+  "plans": [
+   {
+    "id": "p-polish",
+    "sandbox": "better-checkout",
+    "summary": "Checkout v2 in three threads.",
+    "threads": [
+     {
+      "name": "checkout-v2",
+      "goal": "The new checkout flow.",
+      "scope": "web/checkout/",
+      "repo": "",
+      "model": "claude-sonnet-5-5",
+      "state": "working",
+      "summary": "Flow in, tests next"
+     },
+     {
+      "name": "payments",
+      "goal": "The payments step.",
+      "scope": "web/payments/",
+      "repo": "",
+      "model": "claude-sonnet-5-5",
+      "state": "working",
+      "summary": ""
+     },
+     {
+      "name": "refunds",
+      "goal": "Refunds in the admin.",
+      "scope": "admin/refunds/",
+      "repo": "",
+      "model": "claude-haiku-5-5",
+      "state": "done",
+      "summary": "Refunds page written"
+     }
+    ],
+    "state": "approved",
+    "variant": "split",
+    "justification": "Separate folders.",
+    "lead": "better-checkout lead",
+    "created_ms": 1763290000000,
+    "updated_ms": 1763290000000
+   }
+  ],
   "leads": [],
   "models": {
    "ok": true,

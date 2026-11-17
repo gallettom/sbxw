@@ -2168,6 +2168,42 @@ mod tests {
         assert!(rt.state.feats.modal.is_none(), "Escape closes the form");
     }
 
+    /// The sessions block folds on a press: its height moves over several
+    /// frames (about 0.18 s), not at once, and lands where it should.
+    #[test]
+    fn the_sessions_block_folds_smoothly() {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/design-1.json");
+        let a = App::new(Args { fixture: Some(fixture.into()), ..Args::default() });
+        let mut rt = rune::Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+        for _ in 0..10 {
+            rt.frame(1.0 / 60.0);
+        }
+        let h = |rt: &rune::Runtime<App>| rt.presented("sessions-block-better-checkout").map(|(r, _)| r[3]).unwrap_or(-1.0);
+        let open = h(&rt);
+        assert!(open > 100.0, "open at first (the selected sandbox): {open}");
+        tap(&mut rt, "sessions-better-checkout");
+        let mut seen = vec![h(&rt)];
+        for _ in 0..30 {
+            rt.frame(1.0 / 60.0);
+            seen.push(h(&rt));
+        }
+        let between = seen.iter().filter(|&&x| x > 1.0 && x < open - 1.0).count();
+        assert!(between >= 4, "glides over several frames: {seen:?}");
+        assert!(seen.last().copied().unwrap_or(1.0) < 1.0, "lands shut: {seen:?}");
+        // A group folds the same way, its tinted block with it.
+        let g = |rt: &rune::Runtime<App>| rt.presented("block-sbxw").map(|(r, _)| r[3]).unwrap_or(-1.0);
+        let open = g(&rt);
+        tap(&mut rt, "group-sbxw");
+        let mut seen = vec![g(&rt)];
+        for _ in 0..30 {
+            rt.frame(1.0 / 60.0);
+            seen.push(g(&rt));
+        }
+        let shut = *seen.last().unwrap();
+        assert!(shut < open - 100.0, "the group shut: {open} -> {seen:?}");
+        assert!(seen.iter().filter(|&&x| x > shut + 1.0 && x < open - 1.0).count() >= 4, "glides: {seen:?}");
+    }
+
     fn chords() -> Vec<KeyEvent> {
         let m = |cmd: bool, ctrl: bool, alt: bool, logo: bool, shift: bool| rune::Mods { cmd, ctrl, alt, logo, shift };
         let mut v = vec![];
