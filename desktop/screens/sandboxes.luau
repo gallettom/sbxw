@@ -237,9 +237,9 @@ local function item(sb, app, data)
 
   local menu_items = {}
   if running then
-    table.insert(menu_items, { id = "bash", label = "Open shell", icon = "terminal", help = "A bash shell in " .. name .. ", in a new pane" })
+    table.insert(menu_items, { id = "bash", label = "Open shell", icon = "terminal", tone = "green", help = "A bash shell in " .. name .. ", in a new pane" })
   end
-  table.insert(menu_items, { id = "spare", label = "Open in new pane", icon = "plus", help = "The agent's terminal in a new pane" .. (running and "" or " (starts " .. name .. ")") })
+  table.insert(menu_items, { id = "spare", label = "Open in new pane", icon = "plus", tone = "green", help = "The agent's terminal in a new pane" .. (running and "" or " (starts " .. name .. ")") })
   -- Line 2's text badges: what needs reading (amber first, then counts).
   -- The network count is the name line's bubble instead.
   local wants, counts, approvals = {}, {}, nil
@@ -249,7 +249,9 @@ local function item(sb, app, data)
     if e.id == "approvals" then approvals = e
     elseif e.tone == "amber" then table.insert(wants, e) elseif e.count then table.insert(counts, e) end
     if e.intent then
-      local it = { id = e.id, label = menu_label(e), help = e.help, icon = e.icon or (e.id == "threads" and "chat") or (e.id == "approvals" and "flag") or (e.id == "relay" and "chat") or nil }
+      -- Colour by meaning: what it goes to is blue, what waits for you amber.
+      local tone = (e.tone == "amber" and e.id ~= "codemap") and "amber" or (e.id ~= "more" and "blue" or nil)
+      local it = { id = e.id, label = menu_label(e), help = e.help, tone = tone, icon = e.icon or (e.id == "threads" and "chat") or (e.id == "approvals" and "flag") or (e.id == "relay" and "chat") or nil }
       if e.id == "more" then table.insert(manage, it) else table.insert(go, it) end
     end
   end
@@ -335,13 +337,13 @@ local function item(sb, app, data)
   -- The row's two buttons, one text line tall: start or stop, and "+" (the
   -- agent's terminal in a new pane; a stopped sandbox starts first).
   if with_add and not busy and sb.unreachable_since == nil then
-    table.insert(line2, button{ icon = "plus", compact = true, on = "spare", arg = name, key = "add-" .. name, tab_stop = false,
+    table.insert(line2, button{ icon = "plus", compact = true, tone = "green", on = "spare", arg = name, key = "add-" .. name, tab_stop = false,
       help = running and ("Open " .. name .. " in a new pane") or ("Start " .. name .. " and open it in a new pane") })
   end
   if running then
-    table.insert(line2, button{ icon = "stop", compact = true, on = "stop", arg = name, help = "Stop " .. name, keys = { "Space" }, key = "stop-" .. name, tab_stop = false })
+    table.insert(line2, button{ icon = "stop", compact = true, tone = "red", on = "stop", arg = name, help = "Stop " .. name, keys = { "Space" }, key = "stop-" .. name, tab_stop = false })
   elseif not busy then
-    table.insert(line2, button{ icon = "play", compact = true, on = "start", arg = name, help = "Start " .. name, keys = { "Space" }, key = "start-" .. name, tab_stop = false })
+    table.insert(line2, button{ icon = "play", compact = true, tone = "green", on = "start", arg = name, help = "Start " .. name, keys = { "Space" }, key = "start-" .. name, tab_stop = false })
   end
 
   -- Line 1: the name (it truncates, nothing is drawn over it), the network

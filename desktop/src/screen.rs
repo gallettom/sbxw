@@ -1125,7 +1125,10 @@ impl Build<'_> {
             "ghost" => ("", "", "text-muted", "elevated"),
             _ => ("elevated", "border", "text", "border"),
         };
-        let fg = n.style.color.map(hex).unwrap_or_else(|| c(fg));
+        // A tone (colour by meaning) colours the icon and the label, and
+        // tints the button under the pointer and the keyboard focus.
+        let toned = n.tone.as_deref().filter(|t| *t != "neutral" && variant != "primary").map(action_tone);
+        let fg = n.style.color.map(hex).or(toned.map(|t| hex(t.0))).unwrap_or_else(|| c(fg));
         // At least 28 pt square (24 dense), the icon centred; a label pads 10 (8 dense).
         let (h, size, icon) = if n.dense { (theme::layout::DENSE_H, 12.0, 14.0) } else { (theme::layout::CONTROL_H, 13.0, 16.0) };
         let only_icon = n.text.is_empty();
@@ -1153,8 +1156,12 @@ impl Build<'_> {
         if n.skip_tab {
             b = b.tab_index(-1);
         }
+        if let Some((_, tint)) = toned {
+            b = b.focus_highlight(hex(tint));
+        }
         let (name, on, arg) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone());
-        b.hover(n.style.hover.map(hex).unwrap_or_else(|| c(hover))).cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null))
+        let hover = n.style.hover.map(hex).or(toned.map(|t| hex(t.1))).unwrap_or_else(|| c(hover));
+        b.hover(hover).cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null))
     }
 
     /// A button one text line tall: a 20 pt framed square (or a label

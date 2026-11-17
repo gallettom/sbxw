@@ -44,7 +44,11 @@ local function extra(e, mac)
   local keys = nil
   if e.id == "help" then keys = { "?" } end
   local waits = e.tone == "amber" or e.tone == "red"
+  -- Colour by meaning while quiet: New is green (it starts something),
+  -- what it goes to blue (requests, a plan), the team purple; tools neutral.
+  local meaning = (e.id == "create" and "green") or ((e.id == "approvals" or e.id == "relay" or e.id == "plan") and "blue") or nil
   return button{ label, icon = e.icon, key = key, on = "extra", arg = e.id, help = e.help, keys = keys,
+    tone = (not waits) and meaning or nil,
     -- Quiet until something waits: then the tone's own colour on its tint.
     variant = (e.id == "create") and "neutral" or "ghost",
     color = waits and e.tone or (e.tone == "blue" and "blue" or nil),
@@ -110,7 +114,10 @@ return {
     end
     local state = app.connection.state
     table.insert(right, button{ n > 0 and ("Jarvis · " .. n .. " to review") or "Jarvis", icon = j.voice.recording and "mic" or "sparkle",
-      key = "jarvis-toggle", on = "jarvis", variant = (j.open or n > 0) and "primary" or "neutral",
+      key = "jarvis-toggle", on = "jarvis", variant = "neutral", tone = "purple",
+      -- Jarvis is purple (the team's colour), filled with its tint while open
+      -- or while something waits for review: never a second green primary.
+      fill = (j.open or n > 0) and "purple-tint" or nil, border = (j.open or n > 0) and "purple-strong" or nil,
       keys = mac and { "⌘", "J" } or { "F7" },
       help = j.open and "Close Jarvis" or "Open Jarvis" })
     -- The daemon's state: a dot and a word; where it is connected, or why
