@@ -41,9 +41,11 @@ local function note(t, color)
 end
 
 -- The agent's words, framed as someone else's.
-local function quote(t)
+-- An agent's words, as written: keyword pills ([[Done]]) by the switch of
+-- the sandbox that wrote them (`sb`), as text and pills only.
+local function quote(t, sb)
   return column{ w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = "border",
-    text{ t or "", mono = true, size = "sm", color = "text", wrap = true } }
+    text{ t or "", mono = true, size = "sm", color = "text", wrap = true, pills = sb or true } }
 end
 
 local function candidates(data, r)
@@ -99,7 +101,7 @@ local function round_form(r, ui, editable)
   local listening = ui.voice and ui.voice.id == r.id and ui.voice.index or nil
   local kids = { gap = 12, w = "full" }
   if nz(rd.intro) then
-    kids[#kids + 1] = column{ w = "full", pad = 8, radius = "sm", fill = "surface-alt", markdown{ rd.intro, size = "sm", color = "text-soft" } }
+    kids[#kids + 1] = column{ w = "full", pad = 8, radius = "sm", fill = "surface-alt", markdown{ rd.intro, size = "sm", color = "text-soft", pills = r.from or true } }
   end
   for i, q in ipairs(rd.questions or {}) do
     local qk = { gap = 4, w = "full", key = "relay-q-" .. r.id .. "-" .. i,
@@ -108,7 +110,7 @@ local function round_form(r, ui, editable)
         text{ q.id, weight = "semibold", color = "text-bright", size = "sm" },
         nz(q.title) and text{ q.title, size = "sm", color = "text-bright", truncate = true, grow = 1 } or false,
       },
-      markdown{ q.body, size = "sm" },
+      markdown{ q.body, size = "sm", pills = r.from or true },
     }
     if nz(q.rec) then
       qk[#qk + 1] = row{ gap = 8, w = "full", align = "start",
@@ -187,7 +189,7 @@ local function detail(data, ui, r)
     add(from_line(r, KIND[r.kind] and ("asked for: " .. gist(r.question)) or ""))
     if r.state == "approved" then
       add(row{ gap = 8, icon{ "check", color = "green" }, text{ "Sent to " .. who(r) .. ".", color = "green", weight = "medium" } })
-      if r.kind == "mac" and nz(r.answer) then add(quote(r.answer)) end
+      if r.kind == "mac" and nz(r.answer) then add(quote(r.answer, r.to)) end
     else
       add(row{ gap = 8, icon{ "close", color = "red" }, text{ "Refused. Nothing was shared with " .. who(r) .. ".", color = "red", wrap = true, grow = 1 } })
     end
@@ -197,7 +199,7 @@ local function detail(data, ui, r)
 
   if r.kind == "mac" then
     add(from_line(r, "asks you to approve this on the virtual Mac."))
-    add(quote(r.question))
+    add(quote(r.question, r.from))
     if r.state == "routed" then
       add(note("Approved: sbxw is carrying it out. " .. r.from .. " gets the outcome."))
       return column(kids)
@@ -236,7 +238,7 @@ local function detail(data, ui, r)
     end
     if r.state == "answered" then
       add(text{ (r.to or "?") .. " drafted these answers. Edit them, or clear them and answer yourself; " .. r.from .. " receives only what you send.", size = "sm", color = "text-muted", wrap = true })
-      add(quote(r.answer))
+      add(quote(r.answer, r.to))
     end
     add(round_form(r, ui, true))
     if r.state == "pending" and not r["local"] then add(targets(data, r, "Or ask one of these sandboxes to draft the answers")) end
@@ -247,7 +249,7 @@ local function detail(data, ui, r)
 
   if r.kind == "screenshot" then
     add(from_line(r, "can't see its own screen, and asks, via you, for a look at what it just changed."))
-    add(quote(r.question))
+    add(quote(r.question, r.from))
     local block, n = shots_block(r, ui)
     add(block)
     add(text{ "Or describe it instead", size = "caption", weight = "semibold", color = "text-muted" })
@@ -259,7 +261,7 @@ local function detail(data, ui, r)
 
   -- A question.
   add(from_line(r, "asks, via you, for information it can't see from its own workspace."))
-  add(quote(r.question))
+  add(quote(r.question, r.from))
   if r.state == "pending" then
     add(targets(data, r, "Ask one of these sandboxes"))
     add(text{ "Or answer it yourself", size = "caption", weight = "semibold", color = "text-muted" })
@@ -288,12 +290,12 @@ local function ask_card(a)
     row{ gap = 8, w = "full", badge{ label, tone = "blue" }, text{ "asks", size = "sm", color = "text-muted", grow = 1 } } }
   if not a.answerable or #(a.steps or {}) == 0 then
     local first = (a.steps or {})[1]
-    kids[#kids + 1] = text{ (first and first.text) or a.activity or "Claude is waiting for you.", wrap = true, size = "sm" }
+    kids[#kids + 1] = text{ (first and first.text) or a.activity or "Claude is waiting for you.", wrap = true, size = "sm", pills = a.sandbox }
     kids[#kids + 1] = row{ w = "full", spacer{}, button{ "Answer in its terminal", icon = "terminal", tone = "green", on = "terminal", arg = { sandbox = a.sandbox, thread = a.thread }, key = base .. "-terminal" } }
     return column(kids)
   end
   for si, step in ipairs(a.steps) do
-    kids[#kids + 1] = text{ step.text or "", wrap = true, size = "sm", color = "text-bright" }
+    kids[#kids + 1] = text{ step.text or "", wrap = true, size = "sm", color = "text-bright", pills = a.sandbox }
     local opts = { gap = 8, w = "full" }
     for oi, o in ipairs(step.options or {}) do
       local picked = (a.picks or {})[si] == oi

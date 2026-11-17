@@ -1175,3 +1175,200 @@ fn two_clients_of_different_sizes_settle_after_one_exchange() {
     }
     assert_eq!(pump(&mut ts, &mut d), 0, "settled");
 }
+
+// Keyword pills (terminal/pills.rs, emphasis.rs).
+
+fn pilled() -> (TerminalState, Sender<TermEvent>, Receiver<TermInput>) {
+    let (mut t, ev, rx) = term();
+    t.set_pills(Some(Rc::new(crate::emphasis::Vocab::default())));
+    t.poll(None);
+    (t, ev, rx)
+}
+
+/// (start, end, tone) of each piece on row `r`.
+fn pieces(t: &TerminalState, r: usize) -> Vec<(u16, u16, crate::emphasis::Tone)> {
+    t.row_pills(r).iter().map(|p| (p.start, p.end, p.tone)).collect()
+}
+
+/// The columns of row `r` drawn over a pill background, as a string of `#` and `.`.
+fn pill_cols(t: &TerminalState, r: usize) -> String {
+    let (text, spans, _) = &t.test_parts[r];
+    let mut cols = vec!['.'; text.chars().count()];
+    for s in spans.iter().filter(|s| s.bg.is_some()) {
+        let a = text[..s.start as usize].chars().count();
+        let b = text[..s.end as usize].chars().count();
+        cols[a..b].iter_mut().for_each(|c| *c = '#');
+    }
+    cols.into_iter().collect::<String>().trim_end_matches('.').to_string()
+}
+
+#[test]
+fn a_marker_is_drawn_as_a_pill_over_exactly_its_cells() {
+    use crate::emphasis::Tone;
+    let (mut t, _ev, _rx) = pilled();
+    t.feed(b"Tests [[Done]] and [[Failed: 3 tests]]\r\n");
+    assert_eq!(pieces(&t, 0), vec![(6, 14, Tone::Green), (19, 38, Tone::Red)]);
+    assert_eq!(pill_cols(&t, 0), "......########.....###################");
+    // The brackets are padding; the cells' text is untouched.
+    let (text, spans, _) = &t.test_parts[0];
+    assert_eq!(text.trim_end(), "Tests   Done   and   Failed: 3 tests");
+    assert_eq!(text.chars().count(), 40, "one character per cell: nothing shifts");
+    assert_eq!(t.screen_text().lines().next(), Some("Tests [[Done]] and [[Failed: 3 tests]]"));
+    // The word is bold in the tone's strong colour, the detail regular.
+    let word = spans.iter().find(|s| text[s.start as usize..s.end as usize].contains("Failed")).unwrap();
+    let detail = spans.iter().find(|s| text[s.start as usize..s.end as usize].contains("3 tests")).unwrap();
+    assert_eq!(word.weight, Some(700.0));
+    assert_eq!(detail.weight, None);
+    assert_ne!(word.color, detail.color);
+    assert_eq!(word.bg, detail.bg, "one pill");
+}
+
+#[test]
+fn the_programs_colours_are_replaced_inside_the_pill_only() {
+    let (mut t, _ev, _rx) = pilled();
+    // Bold yellow on blue over the marker and beyond it.
+    t.feed(b"\x1b[1;33;44m[[Done]] x\x1b[0m\r\n");
+    let (_, _, fills) = &t.test_parts[0];
+    // The program's blue background is kept outside the pill only.
+    assert_eq!(fills.iter().map(|f| (f.0, f.1)).collect::<Vec<_>>(), vec![(8, 10)]);
+    let (text, spans, _) = &t.test_parts[0];
+    let x = spans.iter().find(|s| text[s.start as usize..s.end as usize].contains('x')).unwrap();
+    assert!(x.bg.is_none() && x.color != spans[0].color);
+}
+
+#[test]
+fn copy_selection_and_input_are_unchanged() {
+    let (mut t, _ev, rx) = pilled();
+    t.feed(b"say [[Needs you]] now\r\n");
+    written(&rx);
+    let (x, y) = at(0, 0);
+    t.select_start(x, y, 3);
+    assert_eq!(t.selection_text().as_deref(), Some("say [[Needs you]] now"));
+    // The pill yields to the selection: drawn plain under the highlight.
+    t.poll(None);
+    assert_eq!(pill_cols(&t, 0), "");
+    assert_eq!(t.row_pills(0).len(), 1, "still matched; only its drawing yields");
+    t.clear_selection();
+    t.poll(None);
+    assert_eq!(pill_cols(&t, 0), "....#############");
+    // A selection elsewhere on the row leaves the pill drawn.
+    let (x, y) = at(18, 0);
+    t.select_start(x, y, 1);
+    let (x, y) = at_end(19, 0);
+    t.select_update(x, y);
+    t.poll(None);
+    assert_eq!(t.selection_text().as_deref(), Some("no"));
+    assert_eq!(pill_cols(&t, 0), "....#############");
+    assert!(written(&rx).is_empty(), "nothing went to the program");
+}
+
+#[test]
+fn not_while_the_cursor_is_on_the_line() {
+    let (mut t, _ev, _rx) = pilled();
+    t.feed(b"typing [[Do");
+    assert!(pieces(&t, 0).is_empty());
+    t.feed(b"ne]]");
+    assert!(pieces(&t, 0).is_empty(), "complete, but the cursor is still on its line");
+    t.feed(b"\r\n");
+    assert_eq!(pieces(&t, 0).len(), 1, "drawn once the cursor left");
+    // The cursor going back up to the line hides it again (a program editing it).
+    t.feed(b"\x1b[1A");
+    assert!(pieces(&t, 0).is_empty());
+    // A hidden cursor (a full-screen program) does not hold pills back.
+    t.feed(b"\x1b[?25l");
+    assert_eq!(pieces(&t, 0).len(), 1);
+}
+
+#[test]
+fn wrap_splits_a_pill_and_a_hard_break_does_not_match() {
+    let (mut t, _ev, _rx) = pilled();
+    // 40 columns: the marker starts at 35 and wraps.
+    t.feed(format!("{}[[Done: wrap]]\r\n", "x".repeat(35)).as_bytes());
+    let row0 = t.row_pills(0)[0];
+    let row1 = t.row_pills(1)[0];
+    assert_eq!((row0.start, row0.end, row0.cut_left, row0.cut_right), (35, 40, false, true));
+    assert_eq!((row1.start, row1.end, row1.cut_left, row1.cut_right), (0, 9, true, false));
+    assert_eq!(t.test_parts[0].2.last().map(|f| (f.0, f.1)), Some((39, 40)), "square end at the cut");
+    assert_eq!(t.test_parts[1].2.first().map(|f| (f.0, f.1)), Some((0, 1)));
+    // A hard line break is the end of the line.
+    t.feed(b"[[Do\r\nne]]\r\n");
+    assert!(pieces(&t, 2).is_empty() && pieces(&t, 3).is_empty());
+}
+
+#[test]
+fn wide_characters_before_and_inside() {
+    use crate::emphasis::Tone;
+    let (mut t, _ev, _rx) = pilled();
+    t.feed("日本 [[Done]] [[Done: 完了]]\r\n".as_bytes());
+    assert_eq!(pieces(&t, 0), vec![(5, 13, Tone::Green), (14, 28, Tone::Green)]);
+    assert_eq!(pill_cols(&t, 0), ".....########.##############");
+}
+
+#[test]
+fn on_the_alternate_screen_and_scrolled_back() {
+    let (mut t, _ev, _rx) = pilled();
+    t.feed(b"\x1b[?1049h\x1b[H[[Note]] full screen\x1b[3;1H");
+    assert_eq!(pieces(&t, 0).len(), 1);
+    t.feed(b"\x1b[?1049l");
+    t.feed(b"[[Done]]\r\n");
+    t.feed(&lines(10));
+    t.scroll_lines(8);
+    t.poll(None);
+    let r = t.visible_text().lines().position(|l| l.contains("[[Done]]")).expect("in view");
+    assert_eq!(pieces(&t, r).len(), 1);
+}
+
+#[test]
+fn pills_follow_the_switch_live() {
+    let (mut t, _ev, _rx) = term();
+    t.feed(b"[[Done]]\r\n");
+    assert!(pieces(&t, 0).is_empty(), "off by default");
+    t.set_pills(Some(Rc::new(crate::emphasis::Vocab::default())));
+    t.poll(None);
+    assert_eq!(pill_cols(&t, 0), "########");
+    t.set_pills(None);
+    t.poll(None);
+    assert!(pieces(&t, 0).is_empty());
+    assert_eq!(pill_cols(&t, 0), "");
+}
+
+#[test]
+fn unchanged_rows_are_not_matched_again() {
+    let (mut t, _ev, _rx) = pilled();
+    t.resize(80, 24);
+    t.feed(b"[[Done]] one\r\nplain\r\n[[Failed]] two\r\n");
+    let (scanned, matched) = (t.pills.scanned, t.pills.matched);
+    // Frames with nothing new: no line is looked at again.
+    t.poll(None);
+    t.poll(None);
+    assert_eq!((t.pills.scanned, t.pills.matched), (scanned, matched));
+    // Output on one row: that row's line (and the cursor's) only.
+    t.feed(b"x");
+    assert!(t.pills.scanned - scanned <= 2, "{}", t.pills.scanned - scanned);
+    assert_eq!(t.pills.matched, matched, "no [[ on it: the pre-check stops there");
+    assert_eq!(pieces(&t, 0).len(), 1);
+}
+
+/// The cost on a full 200x60 screen of agent-like output, with markers on
+/// every row and with none (printed; the release numbers are in EMPHASIS.md).
+#[test]
+fn cost_of_a_full_screen() {
+    let (mut t, _ev, _rx) = pilled();
+    t.resize(200, 60);
+    let with: String = (0..60).map(|i| format!("\x1b[{};1H{:<170}[[Done]] [[Failed: {i} tests]]", i + 1, "lorem ipsum dolor sit amet ".repeat(7))).collect();
+    let without: String = (0..60).map(|i| format!("\x1b[{};1H{:<199}", i + 1, "lorem ipsum dolor sit amet ".repeat(8))).collect();
+    for (name, s) in [("markers", &with), ("none", &without)] {
+        t.feed(s.as_bytes());
+        let grid = t.term.grid();
+        let mut out = Vec::new();
+        let start = Instant::now();
+        let n = 50;
+        for _ in 0..n {
+            for r in 0..60 {
+                t.pills.line(grid, Line(r), Line(r), &mut out);
+            }
+        }
+        eprintln!("pills on a 200x60 screen, {name}: {:.1} us per full screen", start.elapsed().as_secs_f64() * 1e6 / n as f64);
+    }
+    assert_eq!(t.row_pills(0).len(), 0, "last screen has none");
+}

@@ -69,7 +69,7 @@ pub const FEATURE: Feature = Feature {
     ],
     screens: &[
         ScreenDecl { name: SCREEN, src: include_str!("../../../screens/files.luau"), slot: Slot::Panel { title: "Project", icon: "folder", width: 460.0 } },
-        ScreenDecl { name: MAP_SCREEN, src: include_str!("../../../screens/codemap.luau"), slot: Slot::Panel { title: "Code map", icon: "sparkle", width: 520.0 } },
+        ScreenDecl { name: MAP_SCREEN, src: include_str!("../../../screens/codemap.luau"), slot: Slot::Panel { title: "Code map", icon: "file", width: 520.0 } },
     ],
     intents: INTENTS,
     events: &["codemap"],

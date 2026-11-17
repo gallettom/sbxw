@@ -29,11 +29,54 @@ pub fn rank(tone: &str, count: Option<u64>) -> u8 {
 /// (a lead, Jarvis) purple, an interrupt red, anything else neutral.
 pub fn meaning(id: &str) -> &'static str {
     match id {
-        "approvals" | "relay" | "threads" | "project" | "browser" | "network" | "plan" | "codemap" | "remote" => "blue",
+        "approvals" | "relay" | "threads" | "project" | "browser" | "network" | "plan" | "codemap" | "remote" | "envfile" => "blue",
         "lead" | "jarvis" | "team" => "purple",
         "interrupt" => "red",
         _ => "neutral",
     }
+}
+
+/// The zone of a pane bar an extra sits in, so the eye finds a zone before
+/// a button: 0 the session's state and what waits (sbx asks, questions, a
+/// plan, the model), 1 things it opens (Browser, Project, Env), 2 the team
+/// (Team, Threads), 3 controlling the session (Esc, Remote, closing it).
+/// Zones are drawn in this order, a hairline between two.
+pub fn zone(id: &str) -> u8 {
+    match id {
+        "attention" | "status" | "approvals" | "relay" | "state" | "model" | "merge" | "plan" => 0,
+        "lead" | "threads" => 2,
+        "interrupt" | "remote" | "close" => 3,
+        _ => 1,
+    }
+}
+
+/// The hairline between two zones: drawn in the gap before a zone's first
+/// chip, so it takes no room of its own.
+pub const SEP_W: f32 = 1.0;
+
+/// The panel an extra opens, when it opens one (its chip is drawn active
+/// while that panel shows for this pane).
+pub fn panel_of(id: &str) -> Option<&'static str> {
+    match id {
+        "browser" => Some("browser"),
+        "project" => Some("files"),
+        "codemap" => Some("codemap"),
+        "threads" => Some("threads"),
+        "relay" => Some("relay"),
+        "approvals" => Some("network"),
+        _ => None,
+    }
+}
+
+/// `items` in the order the bar draws them: by zone, stable.
+pub fn by_zone(mut items: Vec<Item>) -> Vec<Item> {
+    items.sort_by_key(|i| zone(&i.id));
+    items
+}
+
+/// How wide `items` are drawn in a bar, each after a `gap`.
+pub fn chips_w(items: &[Item], gap: f32) -> f32 {
+    items.iter().map(|i| gap + chip_w(i)).sum::<f32>()
 }
 
 /// The tone an item's menu row takes: its own when it has one, else the
@@ -85,6 +128,10 @@ impl Item {
     }
 }
 
+/// Extras that always sit in the "⋯" menu, never inline: a view setting
+/// of the pane (keyword pills), not something to act on at a glance.
+pub const MENU_ONLY: &[&str] = &["pills"];
+
 /// Sorted by [`rank`], stable: the order the bar fills in.
 pub fn by_priority(mut items: Vec<Item>) -> Vec<Item> {
     items.sort_by_key(Item::rank);
@@ -120,6 +167,7 @@ pub fn chip_w(it: &Item) -> f32 {
 /// How many of `widths` (in priority order) show inline in `avail` points,
 /// after `fixed`, each preceded by `gap`, keeping room for the overflow
 /// button (`more`, plus its gap) whenever one is left out.
+#[cfg(test)]
 pub fn fit(avail: f32, fixed: f32, widths: &[f32], gap: f32, more: f32) -> usize {
     let n = widths.len();
     let mut used = fixed;
@@ -135,12 +183,23 @@ pub fn fit(avail: f32, fixed: f32, widths: &[f32], gap: f32, more: f32) -> usize
 
 /// A pane bar's parts, measured.
 pub struct PaneFit {
+    /// The mode switch shows inline (else it is the menu's "Switch to ...",
+    /// a core item `mode` in `hidden`: one of the last things to go).
+    pub switch: bool,
     /// Shown inline, in priority order.
     pub shown: Vec<Item>,
     /// In the overflow menu, in priority order.
     pub hidden: Vec<Item>,
     /// The name's least width (points): it never goes under it.
     pub name_min: f32,
+}
+
+impl PaneFit {
+    /// How many extras did not fit (the menu-only ones are not counted:
+    /// they live in the menu whatever the width).
+    pub fn overflowed(&self) -> usize {
+        self.hidden.iter().filter(|i| !MENU_ONLY.contains(&i.id.as_str())).count()
+    }
 }
 
 /// The pane bar's paddings and fixed parts (see `shell::pane_view`).
@@ -160,28 +219,51 @@ pub fn more_w(hidden: usize) -> f32 {
     CHIP_PX * 2.0 + CHIP_ICON + MORE_GAP + measure(&hidden.max(1).to_string(), CHIP_TEXT, 500.0) + MORE_GAP + MORE_DOT
 }
 
-/// The session's kind (`agent`, `bash`): plain text, 12/400.
-pub fn kind_w(kind: &str) -> f32 {
-    measure(kind, CHIP_TEXT, 400.0)
+/// The mode switch's segments: px, icon, gap; the switch's padding and gap.
+pub const SEG_PX: f32 = 6.0;
+pub const SEG_ICON: f32 = 12.0;
+pub const SEG_GAP: f32 = 4.0;
+pub const SWITCH_PAD: f32 = 1.0;
+pub const SWITCH_GAP: f32 = 2.0;
+/// The shell's segment.
+pub const BASH: &str = "Bash";
+
+/// One segment's width (its icon and word).
+pub fn seg_w(label: &str) -> f32 {
+    SEG_PX * 2.0 + SEG_ICON + SEG_GAP + measure(label, CHIP_TEXT, 500.0)
 }
 
-/// What shows in a pane bar `width` points wide. `menu`: the "⋯" button is
+/// The mode switch right after the name: the agent's segment (`agent`:
+/// "Claude", "Codex", "Thread") and "Bash".
+pub fn switch_w(agent: &str) -> f32 {
+    SWITCH_PAD * 2.0 + seg_w(agent) + SWITCH_GAP + seg_w(BASH)
+}
+
+/// What shows in a pane bar `width` points wide. `agent`: the mode
+/// switch's agent segment ("Claude", "Thread"...), `None` for a pane with no
+/// switch (a kit's prompt: its kind word instead). `menu`: the "⋯" button is
 /// always there (it also holds the pane's moves), so its room is kept.
-pub fn pane_fit(width: f32, name: &str, kind: &str, items: Vec<Item>, menu: bool) -> PaneFit {
+pub fn pane_fit(width: f32, name: &str, agent: Option<&str>, items: Vec<Item>, menu: bool) -> PaneFit {
+    let (only_menu, items): (Vec<Item>, Vec<Item>) = items.into_iter().partition(|i| menu && MENU_ONLY.contains(&i.id.as_str()));
     let items = by_priority(items);
     let name_w = measure(name, NAME_TEXT, 500.0);
     let name_min = name_w.min(NAME_MIN);
     let name_keep = name_w.min(NAME_WANT);
-    // grip, dot | name, kind, extras…, more | close
-    let mut fixed = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name_keep + PANE_GAP + kind_w(kind) + PANE_GAP + CLOSE_W;
-    if menu {
-        fixed += PANE_GAP + more_w(items.len());
-    }
-    let widths: Vec<f32> = items.iter().map(chip_w).collect();
-    let k = fit(width, fixed, &widths, PANE_GAP, if menu { 0.0 } else { more_w(items.len()) });
+    // grip, dot | name, switch, extras…, more | close
+    let base = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name_keep + PANE_GAP + CLOSE_W + if menu { PANE_GAP + more_w(items.len()) } else { 0.0 };
+    let sw = agent.map_or(0.0, |a| switch_w(a) + PANE_GAP);
+    // The switch goes into the menu only when even it alone does not fit.
+    let switch = agent.is_some() && base + sw <= width + 0.5;
+    let fixed = base + if switch { sw } else { 0.0 };
+    // The most items, in priority order, whose chips (drawn by zone) fit
+    // after the fixed parts.
+    let more = if menu { 0.0 } else { more_w(items.len()) };
+    let n = items.len();
+    let k = if agent.is_some() && !switch { 0 } else { (0..=n).rev().find(|&k| fixed + chips_w(&items[..k], PANE_GAP) + if k < n { PANE_GAP + more } else { 0.0 } <= width + 0.5).unwrap_or(0) };
     let mut shown = items;
-    let hidden = shown.split_off(k);
-    PaneFit { shown, hidden, name_min }
+    let mut hidden = shown.split_off(k);
+    hidden.extend(only_menu);
+    PaneFit { switch, shown: by_zone(shown), hidden, name_min }
 }
 
 /// The overflow button's mark for what it hides: the most urgent tone among
@@ -201,7 +283,7 @@ pub fn more_tone(hidden: &[Item]) -> Option<&'static str> {
 // ---------------------------------------------------------------------------
 // The top bar (screens/topbar.luau draws it; the core says what fits).
 
-/// Under this width the top bar goes compact: no "sbxw" title.
+/// Under this width the top bar goes compact: no sbxw mark.
 pub const TOP_COMPACT: f32 = 720.0;
 /// Between the bar's groups (left, centre, right, and the spacers between them).
 pub const TOP_GAP: f32 = 16.0;
@@ -282,7 +364,8 @@ impl TopExtra {
 /// inline; the rest go into its menu. Exact: every part is measured the way
 /// the element draws it (tested against the laid out bar).
 pub fn top_fit(width: f32, jarvis: Option<&str>, state_word: &str, extras: &[TopExtra]) -> (bool, usize) {
-    let left = |compact: bool| if compact { 0.0 } else { measure("sbxw", 14.0, 600.0) };
+    // The sbxw mark (topbar.luau, `app-mark`): 22 pt square.
+    let left = |compact: bool| if compact { 0.0 } else { 22.0 };
     // left, spacer, centre, spacer, right: four gaps; inside the right group
     // Jarvis and the state, and the gap before Jarvis when a tool precedes it.
     let fixed = |compact: bool| left(compact) + TOP_GAP * 4.0 + jarvis.map_or(0.0, |j| button_w(j, true) + TOP_RIGHT_GAP) + state_w(state_word);
@@ -408,34 +491,39 @@ mod tests {
         for width in [1100.0, 700.0, 560.0, 450.0, 330.0, 230.0, 200.0, 160.0] {
             for n in [0, 1, 3, 9] {
                 let items: Vec<Item> = many().into_iter().take(n).collect();
-                let f = pane_fit(width, "test-sbx", "agent", items.clone(), true);
+                let f = pane_fit(width, "test-sbx", Some("Claude"), items.clone(), true);
                 assert_eq!(f.shown.len() + f.hidden.len(), n, "{width} {n}");
                 let name = measure("test-sbx", 12.0, 500.0).min(NAME_WANT);
                 // The "⋯" menu is always there (it holds the pane's moves).
-                let mut used = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
-                used += f.shown.iter().map(|i| PANE_GAP + chip_w(i)).sum::<f32>();
-                let floor = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
+                let sw = if f.switch { switch_w("Claude") + PANE_GAP } else { 0.0 };
+                let mut used = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name + sw + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
+                used += chips_w(&f.shown, PANE_GAP);
+                let floor = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name + sw + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
+                // The switch is one of the last to go: shown whenever extras show.
+                assert!(f.switch || f.shown.is_empty(), "{width} {n}");
                 assert!(used <= width + 0.5 || f.shown.is_empty() && used <= floor + 0.5, "{width} {n}: {used}");
                 // Priority: nothing hidden ranks before something shown.
-                if let (Some(s), Some(h)) = (f.shown.last(), f.hidden.first()) {
-                    assert!(s.rank() <= h.rank(), "{width} {n}");
+                if let (Some(s), Some(h)) = (f.shown.iter().map(Item::rank).max(), f.hidden.first()) {
+                    assert!(s <= h.rank(), "{width} {n}");
                 }
+                // Drawn by zone.
+                assert!(f.shown.windows(2).all(|w| zone(&w[0].id) <= zone(&w[1].id)), "{width} {n}");
             }
         }
     }
 
     #[test]
     fn widths_decide_what_overflows() {
-        let wide = pane_fit(1100.0, "test-sbx", "agent", many(), true);
-        assert!(wide.hidden.is_empty(), "one pane at 1400: all inline: {:?}", ids(&wide.hidden));
-        let two = pane_fit(560.0, "test-sbx", "agent", many(), true);
+        let wide = pane_fit(1100.0, "test-sbx", Some("Claude"), many(), true);
+        assert!(wide.switch && wide.hidden.len() <= 1, "one pane at 1400: the switch and all but one inline: {:?}", ids(&wide.hidden));
+        let two = pane_fit(560.0, "test-sbx", Some("Claude"), many(), true);
         assert_eq!(ids(&two.shown)[..2], ["plan", "approvals"], "two panes at 1400: what needs you stays inline");
         assert!(!two.hidden.is_empty());
-        let narrow = pane_fit(210.0, "test-sbx", "agent", many(), true);
+        let narrow = pane_fit(210.0, "test-sbx", Some("Claude"), many(), true);
         assert!(narrow.shown.len() <= 1, "4 panes at 720: {:?}", ids(&narrow.shown));
         assert_eq!(narrow.hidden.len() + narrow.shown.len(), 9);
         // The name keeps its floor even with nothing else drawn.
-        let long = pane_fit(210.0, "a-very-long-sandbox-name-for-tests", "agent", many(), true);
+        let long = pane_fit(210.0, "a-very-long-sandbox-name-for-tests", Some("Claude"), many(), true);
         assert_eq!(long.name_min, NAME_MIN);
     }
 

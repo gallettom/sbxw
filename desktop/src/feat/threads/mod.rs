@@ -36,7 +36,7 @@ pub const FEATURE: Feature = Feature {
     name: "threads",
     data: DATA,
     screens: &[
-        ScreenDecl { name: "threads", src: include_str!("../../../screens/threads.luau"), slot: Slot::Panel { title: "Threads", icon: "terminal", width: 360.0 } },
+        ScreenDecl { name: "threads", src: include_str!("../../../screens/threads.luau"), slot: Slot::Panel { title: "Threads", icon: "threads", width: 360.0 } },
         ScreenDecl { name: "plans", src: include_str!("../../../screens/plans.luau"), slot: Slot::Modal { width: 760.0, light_dismiss: false } },
         ScreenDecl { name: "threads-new", src: include_str!("../../../screens/threads-new.luau"), slot: Slot::Modal { width: 520.0, light_dismiss: false } },
     ],
@@ -1009,9 +1009,9 @@ fn extras(ctx: &Ctx) -> Vec<Extra> {
         // The main session's pane bar.
         let lead = model::leading(ctx.data, sb);
         out.push(if lead {
-            extra(on_session(sb, None), "lead", "Team on", Some("sparkle"), "purple", "Team mode: this session plans threads and follows them. Click to end it", Some(("lead_end", json!({ "sandbox": sb }))))
+            extra(on_session(sb, None), "lead", "Team on", Some("people"), "purple", "Team mode: this session plans threads and follows them. Click to end it", Some(("lead_end", json!({ "sandbox": sb }))))
         } else {
-            extra(on_session(sb, None), "lead", "Team", Some("sparkle"), "muted", "Team mode: make this session plan the work into threads, have you approve the plan, and follow them", Some(("lead_start", json!({ "sandbox": sb }))))
+            extra(on_session(sb, None), "lead", "Team", Some("people"), "muted", "Team mode: make this session plan the work into threads, have you approve the plan, and follow them", Some(("lead_start", json!({ "sandbox": sb }))))
         });
         // Each session's own controls.
         for x in list.iter().filter(|x| x.running || x.thread.is_none()) {
@@ -1034,7 +1034,7 @@ fn extras(ctx: &Ctx) -> Vec<Extra> {
                 on_session(sb, t),
                 "remote",
                 if on { "Remote on" } else { "Remote" },
-                Some("link"),
+                Some("remote"),
                 if on { "green" } else { "muted" },
                 if on { "Reachable from claude.ai: turn off with /remote-control in the session" } else { "Remote control: drive this session from claude.ai/code or the Claude app" },
                 Some(("remote_control", args.clone())),
@@ -1044,7 +1044,7 @@ fn extras(ctx: &Ctx) -> Vec<Extra> {
                 out.push(extra(on_session(sb, Some(t)), "close", label, Some("close"), "red", help, Some(("thread_close", json!({ "sandbox": sb, "thread": t })))));
             }
         }
-        out.push(extra(on_session(sb, None), "threads", "Threads", Some("terminal"), "muted", "Every session of this sandbox; open a new thread", Some(("threads_show", json!({ "sandbox": sb })))));
+        out.push(extra(on_session(sb, None), "threads", "Threads", Some("threads"), "muted", "Every session of this sandbox; open a new thread", Some(("threads_show", json!({ "sandbox": sb })))));
     }
     if let Some(id) = waiting.first() {
         let mut e = extra(Place::Topbar, "plan", "Plan waiting", Some("flag"), "amber", "A lead's plan waits for your approval", Some(("plan_review", json!({ "id": id }))));

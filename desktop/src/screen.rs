@@ -833,7 +833,7 @@ fn arg_key(v: &J) -> String {
 
 /// The element's Rune key: its `key`, else `<on>-<arg>` for anything that
 /// reacts, else none.
-fn key_of(n: &Node) -> Option<String> {
+pub(crate) fn key_of(n: &Node) -> Option<String> {
     n.key.clone().or_else(|| match n.kind {
         Kind::Input | Kind::Textarea | Kind::Menu | Kind::Select | Kind::Split => n.id.clone(),
         _ => n.on.as_ref().map(|on| {
@@ -911,6 +911,33 @@ fn apply(mut e: El, st: &Style, help: &Option<String>) -> El {
     e
 }
 
+/// The least width a field keeps beside other things on its row (points).
+pub const INPUT_MIN: f32 = 160.0;
+
+/// A field (an input or a select) whose screen set no width of its own.
+fn free_input(n: &Node) -> bool {
+    matches!(n.kind, Kind::Input | Kind::Select) && n.style.w.is_none() && n.style.grow.is_none() && n.style.min_w.is_none()
+}
+
+/// A row holding a control (a button, a checkbox, a field, a menu) whose
+/// parts may wrap onto a second line rather than run out of their box when
+/// they do not fit side by side: a text that truncates must also grow (it then
+/// takes what is left and never forces the wrap itself). Not in the top bar
+/// and the sidebar, whose rows have their own fit (`bar.rs`, compact rows).
+fn wrapping_row(screen: &str, n: &Node) -> bool {
+    n.kind == Kind::Row
+        && !matches!(screen, "topbar" | "sandboxes")
+        && n.children.len() > 1
+        && n.children.iter().any(|c| matches!(c.kind, Kind::Button | Kind::Checkbox | Kind::Menu | Kind::Select | Kind::Input))
+        && n.children.iter().all(|c| !(c.kind == Kind::Text && c.style.truncate && c.style.grow.is_none()))
+}
+
+/// Whether a screen's height is its content's: no scroll area, split or
+/// grown box that would need a height given to it (a modal then fits it).
+pub fn sized_by_content(n: &Node) -> bool {
+    !matches!(n.kind, Kind::Scroll | Kind::Split) && n.style.grow.is_none() && n.children.iter().all(sized_by_content)
+}
+
 fn boxed(e: El, st: &Style) -> El {
     let mut e = e;
     if let Some(g) = st.gap {
@@ -939,7 +966,18 @@ impl Build<'_> {
         let name = self.name.clone();
         let e = match n.kind {
             Kind::Text => {
-                let mut t = text(n.text.clone()).font(text_style(st, 13.0, 400.0)).color(hex(st.color.unwrap_or(theme::color_value("text").unwrap())));
+                // `pills`: markers drawn as keyword pills; still one text element.
+                let vocab = st.pills.as_deref().filter(|_| n.text.contains("[[")).and_then(crate::emphasis::for_screen);
+                let mut t = match vocab {
+                    Some(v) => {
+                        let (mut content, mut spans) = (String::new(), vec![]);
+                        crate::emphasis::rich_into(&n.text, &v, &crate::emphasis::screen_palette(), &mut content, &mut spans);
+                        rune::rich(content, spans)
+                    }
+                    None => text(n.text.clone()),
+                }
+                .font(text_style(st, 13.0, 400.0))
+                .color(hex(st.color.unwrap_or(theme::color_value("text").unwrap())));
                 if st.wrap {
                     t = t.wrap();
                 }
@@ -963,8 +1001,16 @@ impl Build<'_> {
                         self.nav.insert(k.clone(), (prev, items.get(i + 1).cloned()));
                     }
                 }
+                // A field and its button on one row: the field takes the room
+                // the others leave (never pushing them out of the row) down to
+                // `INPUT_MIN`; under that the row wraps, the button under it.
+                let field_row = n.kind == Kind::Row && n.children.iter().any(free_input);
+                if field_row || wrapping_row(&self.name, n) {
+                    b = b.flex_wrap();
+                }
                 for k in n.children.iter() {
                     let child = self.node::<S>(k);
+                    let child = if field_row && free_input(k) { child.grow(1.0).min_w(INPUT_MIN) } else { child };
                     // A folding column: each child glides to its new height.
                     let child = if folds { child.fold_glide(FOLD) } else { child };
                     b = b.child(child);
@@ -1154,7 +1200,8 @@ impl Build<'_> {
                 r
             }
             Kind::Markdown => {
-                let look = crate::markdown::Look { color: st.color.unwrap_or(theme::color_value("text").unwrap()), size: st.size.unwrap_or(13.0) };
+                let pills = st.pills.as_deref().and_then(crate::emphasis::for_screen);
+                let look = crate::markdown::Look { color: st.color.unwrap_or(theme::color_value("text").unwrap()), size: st.size.unwrap_or(13.0), pills };
                 let on_link: Option<Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>> = n.on.clone().map(|on| {
                     let (name, arg) = (name.clone(), n.arg.clone());
                     Rc::new(move |s: &mut S, url: &str, _tx: &mut rune::Tx| fire(s, &name, &on, &arg, &J::String(url.to_string()))) as Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>
@@ -1448,6 +1495,9 @@ fn text_style(st: &Style, size: f32, weight: f32) -> TextStyle {
     let t = body(st.size.unwrap_or(size).max(12.0), st.weight.unwrap_or(weight));
     if st.mono {
         t.mono()
+    } else if st.wrap {
+        // A text that wraps is a sentence or more: the prose face.
+        theme::as_prose(t)
     } else {
         t
     }
@@ -1731,9 +1781,10 @@ end, actions = { send = function(_, _, v) end } }"#).unwrap();
         let (am, _) = hl(cv("amber").unwrap());
         let (rd, _) = hl(cv("red-text").unwrap());
         assert!(ta - rd >= 12.0 && am - ta >= 12.0, "terracotta {ta:.0} between red-text {rd:.0} and amber {am:.0}");
-        let (_, lg) = hl(cv("vendor-google").unwrap());
-        let (_, lb) = hl(cv("blue").unwrap());
-        assert!(lg - lb >= 0.08, "Gemini's blue lighter than the working blue: {lg:.2} vs {lb:.2}");
+        let (hg, lg) = hl(cv("vendor-google").unwrap());
+        let (hb, lb) = hl(cv("blue").unwrap());
+        assert!(hg - hb >= 15.0, "Gemini's periwinkle told from the working blue by hue: {hg:.0} vs {hb:.0}");
+        assert!(lg - lb >= 0.08, "and lighter: {lg:.2} vs {lb:.2}");
     }
 
     /// The status rail: each row says its state in a word and a rail shape;

@@ -71,11 +71,17 @@ pub const COLORS: &[(&str, u32)] = &[
     ("status-line", 0x21262d),
     // Who makes a session's model (the sidebar's model words): text colour
     // only, regular weight, never a fill. Not colour by meaning: the
-    // terracotta sits between `red-text` and `amber` in hue, Gemini's blue
-    // is lighter than the `blue` state word beside it.
+    // terracotta sits between `red-text` and `amber` in hue, Gemini's
+    // periwinkle differs from the `blue` state word by hue (232 against 212).
     ("vendor-anthropic", 0xe2875a),
     ("vendor-openai", 0xe6edf3),
-    ("vendor-google", 0x8ab4f8),
+    ("vendor-google", 0x9aa8ff),
+    // Keyword pills (emphasis.rs): the kind of work, and the filled pill of
+    // an irreversible or costly consequence (white text on it, 4.5:1). The
+    // other tones are the colour-by-meaning tokens above; each pill's tint
+    // and text are derived from the ground it sits on (`emphasis::palette`).
+    ("cyan", 0x39c5cf),
+    ("pill-danger", 0xb62324),
 ];
 
 /// Tokens whose desktop value differs from app.css, with app.css's value:
@@ -204,17 +210,32 @@ pub fn to_json() -> serde_json::Value {
     })
 }
 
-/// Long prose (Jarvis's answers, Markdown in screens): the app's monospace
-/// by default, the product's voice. `SBXW_DESKTOP_PROSE=sans` sets it in
-/// Inter, the proportional face Rune bundles (no font file of ours), to
-/// compare the two; nothing else changes.
-pub fn prose(size: f32, weight: f32) -> rune::TextStyle {
-    let t = crate::screen::body(size.max(12.0), weight);
-    if std::env::var("SBXW_DESKTOP_PROSE").is_ok_and(|v| v == "sans") {
+/// Whether long prose is set in the proportional face (the default);
+/// `SBXW_DESKTOP_PROSE=mono` is the way back to monospace everywhere.
+pub fn prose_sans() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| !std::env::var("SBXW_DESKTOP_PROSE").is_ok_and(|v| v == "mono"))
+}
+
+/// `t` in the prose face: Inter, which Rune embeds and registers itself
+/// (its default faces, no font file of ours, so it is there on every
+/// system; a glyph Inter lacks falls back to a system face as any text's
+/// does). Unchanged under `SBXW_DESKTOP_PROSE=mono`.
+pub fn as_prose(t: rune::TextStyle) -> rune::TextStyle {
+    if prose_sans() {
         t.family(rune::Family::Named("Inter"))
     } else {
         t
     }
+}
+
+/// Long prose: Jarvis's answers and Markdown in screens (Help), a wrapped
+/// `text` in a screen (explanations, descriptions), a core dialog's
+/// sentences, the empty pane's line. Terminals, code, paths, names,
+/// numbers, badges, bars, labels and tooltips stay monospace (tooltips are
+/// Rune's, in the app's one UI face).
+pub fn prose(size: f32, weight: f32) -> rune::TextStyle {
+    as_prose(crate::screen::body(size.max(12.0), weight))
 }
 
 /// A sandbox's group colour, as the web UI gives it (`assets/js/sandboxes.js`,
@@ -328,6 +349,52 @@ pub fn contrast(a: u32, b: u32) -> f64 {
 pub const GROUP_TINT: f32 = 0.10;
 pub const GROUP_TINT_HOVER: f32 = 0.16;
 pub const GROUP_LABEL_LIGHT: f32 = 0.40;
+
+/// A pane bar's tint of its group's colour (focused, unfocused) over the
+/// bar's surface: strong enough to tell a group at a glance (the list's
+/// block is 10%).
+pub const BAR_TINT: f32 = 0.20;
+pub const BAR_TINT_UNFOCUSED: f32 = 0.16;
+
+/// A pane bar's ground: the group's colour over the bar's neutral surface,
+/// or that surface for an ungrouped sandbox. The page tabs use the same.
+pub fn bar_ground(group: Option<u32>, focused: bool) -> u32 {
+    let surface = color_value(if focused { "surface" } else { "surface-alt" }).unwrap();
+    match group {
+        Some(g) => over(g, if focused { BAR_TINT } else { BAR_TINT_UNFOCUSED }, surface),
+        None => surface,
+    }
+}
+
+/// A page tab's tint of its group's colour over the pager's floor: the
+/// current page, the others.
+pub const TAB_TINT_CURRENT: f32 = 0.28;
+pub const TAB_TINT: f32 = 0.14;
+
+/// A page tab's ground: the group's colour over the floor, or neutral (the
+/// current one elevated, the others the floor).
+pub fn tab_ground(group: Option<u32>, current: bool) -> u32 {
+    let floor = color_value("floor").unwrap();
+    match group {
+        Some(g) => over(g, if current { TAB_TINT_CURRENT } else { TAB_TINT }, floor),
+        None if current => color_value("elevated").unwrap(),
+        None => floor,
+    }
+}
+
+/// Secondary text on a tinted ground (a pane bar's session kind, a tab's
+/// sandbox prefix): `text-muted`, moved toward `text-bright` until it reads
+/// at 4.5:1 there (a yellow or green tint lifts the ground).
+pub fn muted_on(ground: u32) -> u32 {
+    let (m, b) = (color_value("text-muted").unwrap(), color_value("text-bright").unwrap());
+    (0..=10).map(|k| over(b, k as f32 / 10.0, m)).find(|c| contrast(*c, ground) >= Need::Text.min()).unwrap_or(b)
+}
+
+/// A tone's icon on a tinted ground: the tone, lightened toward white until
+/// it marks at 3:1 there (red on the lightest yellow tint needs it).
+pub fn mark_on(fg: u32, ground: u32) -> u32 {
+    (0..=10).map(|k| over(0xffffff, k as f32 / 20.0, fg)).find(|c| contrast(*c, ground) >= Need::Mark.min()).unwrap_or(0xffffff)
+}
 
 /// `a` drawn at `alpha` over `b`.
 pub fn over(a: u32, alpha: f32, b: u32) -> u32 {
@@ -655,5 +722,38 @@ mod tests {
         assert_eq!(parse_color("#00ff00"), Ok(0x00ff00));
         assert!(parse_color("#0f0").is_err());
         assert!(parse_color("pink").unwrap_err().contains("unknown colour"));
+    }
+
+    /// Every hue a group can take (the wheel at each lightness, and the
+    /// chats' purple): on its pane bar (focused and not) and its page tab
+    /// (current and not), the labels read at 4.5:1, the icons and dots in
+    /// their tones and the focus border at 3:1.
+    #[test]
+    fn contrast_on_every_group_tint() {
+        let mut groups: Vec<u32> = GROUP_LIGHTNESS.iter().flat_map(|l| (0..36).map(move |h| hsl(h as f32 * 10.0, 0.55, *l))).collect();
+        groups.push(hsl(265.0, 0.60, 0.68));
+        let tones = ["blue", "purple", "red", "green", "amber"];
+        let mut bad = vec![];
+        for g in groups.iter().map(|g| Some(*g)).chain([None]) {
+            let grounds = [("bar", bar_ground(g, true)), ("bar unfocused", bar_ground(g, false)), ("tab", tab_ground(g, true)), ("tab other", tab_ground(g, false))];
+            for (what, ground) in grounds {
+                for (fg, c) in [("text-bright", color_value("text-bright").unwrap()), ("muted", muted_on(ground))] {
+                    let r = contrast(c, ground);
+                    if r < Need::Text.min() {
+                        bad.push(format!("{fg} on {what} of {g:06x?}: {r:.2}"));
+                    }
+                }
+                // Bars draw every tone's icon; tabs only their amber and blue dots.
+                let drawn: &[&str] = if what.starts_with("bar") { &tones } else { &["amber", "blue"] };
+                for t in drawn.iter().copied().chain(["focus"]) {
+                    let c = if what.starts_with("bar") && t != "focus" { mark_on(color_value(t).unwrap(), ground) } else { color_value(t).unwrap() };
+                    let r = contrast(c, ground);
+                    if r < Need::Mark.min() {
+                        bad.push(format!("{t} on {what} of {g:06x?}: {r:.2}"));
+                    }
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
     }
 }

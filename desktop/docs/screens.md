@@ -16,6 +16,9 @@ Contents: [The file](#the-file) · [Data](#data) · [Elements](#elements) ·
 [Theme](#theme) · [Icons](#icons) · [Where screens live](#where-screens-live) ·
 [Limits](#limits) · [Checking your screen](#checking-your-screen)
 
+Beside it: [daemon-api.md](daemon-api.md) (the routes behind `data`) and
+[testing.md](testing.md) (running screens and the app headless).
+
 ## The file
 
 ```lua
@@ -142,9 +145,10 @@ Text. Positional: the string (a number is shown as its digits).
 | `color` | colour | `text` |
 | `size` | number or text size | 13 (`md`) |
 | `weight` | `normal`, `medium`, `semibold`, `bold`, or 100 to 900 | `normal` |
-| `mono` | bool | false. The terminal's font. The whole UI is already monospace, as the web UI is |
-| `wrap` | bool | false: one line |
+| `mono` | bool | false. The terminal's font. The UI is monospace, as the web UI is; `mono` also keeps a wrapped text monospace (a command, a path) |
+| `wrap` | bool | false: one line. A wrapped text is a sentence or more: it is set in the prose face (Inter, bundled by Rune), as Markdown and the core dialogs' sentences are; `SBXW_DESKTOP_PROSE=mono` keeps everything monospace |
 | `truncate` | bool | false. One line cut with an ellipsis when it does not fit (give it `grow = 1` in a row) |
+| `pills` | `true` or a sandbox name | none. Keyword pills: each `[[Word]]` or `[[Word: detail]]` in the string is drawn as a rounded coloured pill (the brackets dropped, the word in its tone, the detail regular), wrapping with the text, when the daemon's `[emphasis]` switch is on (`true`: the global switch; a sandbox's name: that sandbox's, and the app's own preference for it). Use it for words an agent wrote. See [Keyword pills](#keyword-pills) |
 
 Sizes under 12 are drawn at 12 (nothing a person reads is smaller); a
 `weight` of `bold` is drawn semibold (600).
@@ -176,6 +180,16 @@ Children side by side. Children are centred vertically.
 ```lua
 row{ gap = 8, w = "full", dot{ tone = "green" }, text{ "running" }, spacer{}, text{ "2" } }
 ```
+
+A field on a row (an `input` or `select` without its own `w`, `grow` or
+`min_w`) takes the room its neighbours leave, down to 160 pt, so a button
+beside it never leaves the row: `row{ gap = 8, w = "full", input{...},
+button{...} }` needs nothing more. A row holding a control (a button, a
+checkbox, a field, a menu) wraps onto a second line when its parts do not fit
+side by side, unless it holds a `truncate` text without `grow` (that text is
+meant to give way instead); the top bar and the sidebar keep their own fit. A
+modal whose screen has no `scroll`, `split` or grown part is as tall as its
+content, up to the window's room, then scrolls.
 
 ### `column`
 
@@ -510,11 +524,39 @@ links (any other link shows its label as text). Positional: the string.
 | `size` | number or text size | Text size (default 13) |
 | `on` | action name | Called when a link is pressed; `value` = its URL. Without `on`, links are drawn but do nothing |
 | `arg` | any value | Passed too |
+| `pills` | `true` or a sandbox name | Keyword pills in its prose (not in code, links, bold or italics), as `text`'s `pills` |
 
 ```lua
 markdown{ "Run **`sbxw up`** first, then see [the docs](https://example.org/sbxw).", on = "link" }
 -- actions.link = function(_, _, url) return intent("open_link", { url = url }) end
 ```
+
+### Keyword pills
+
+Agents write a short label in double brackets beside what it describes
+(`[[Done]]`, `[[Failed: 3 tests]]`, `[[Needs you]]`); `text` and `markdown`
+with `pills` draw each as a pill. The rule is emphasis-core's, the same in
+the terminal, the web UI and here (`desktop/src/emphasis.rs`): a word of 1 to
+32 letters, digits, spaces or hyphens (a letter first, a letter or digit
+last), an optional detail after `:` of 1 to 48 characters with no bracket,
+one line. The vocabulary is the daemon's (`data.emphasis.words`); a word it
+does not know is a pill in the neutral blue only when it starts with a
+capital (`[[summary]]`, a code map's link, stays text). Tones: green settled,
+red wrong, amber needs you, blue context, purple Jarvis and the team, cyan the
+kind of work, and `danger` a filled red for what cannot be undone.
+
+```lua
+text{ r.question, wrap = true, pills = r.from }   -- the sandbox that wrote it
+markdown{ m.text, on = "link", pills = true }
+```
+
+**Text, never anything else.** A screen gets a pill only as part of one
+text element: the core turns the string into characters and styles (colour,
+weight, a rounded background) of that element. No marker can make a
+control, a link, a key or an intent appear, whatever it holds (markup, an
+intent's spelling, a URL): the parts stay characters
+(`shell::layout_tests::pills_in_a_screen_never_make_a_control`). Pills are
+never drawn in tooltips (`help`): they show the marker as written.
 
 ## Events and actions
 
@@ -686,6 +728,23 @@ in it, with its tint under the pointer and the keyboard focus.
 - Every coloured label or icon meets the contrast test on what it sits on
   (its surface, its tint, a group's tint): `theme::tests`.
 
+**Pane bars and page tabs** (drawn by the core). A pane's bar takes its
+sandbox's group colour, the sidebar's own (`App::group_colors`, one function
+for both), as a 20% tint (16% unfocused) under a 2 pt line of the colour; a
+sandbox with no workspace is on the neutral bar. A bar's actions are its
+icon in its colour by meaning and its label in `text-bright`, grouped in
+zones with a hairline between two: state and what waits (sbx asks, a
+question, a plan) | what it opens (Browser, Project, Env) | the team (Team,
+Threads) | the session (Esc, Remote). Hover and focus put the meaning's tint
+under it; an action whose panel shows for the focused pane is a tinted chip.
+A page tab takes the group colour of its first terminal (14%, the current
+one 28% with a 1 pt border and a 2 pt line of the colour, or the focus blue
+when it has none), other groups on the page as small dots, the state dot
+(amber wants you, blue working) ringed so it shows on any tint. Secondary
+words on a tint are lifted until they read (`theme::muted_on`), icons until
+they mark at 3:1 (`theme::mark_on`): `theme::tests::contrast_on_every_group_tint`
+checks every hue a group can take.
+
 **Vendor colours** (a separate axis, not colour by meaning). The sidebar's
 model words (a row's line 2, a session line's model) take the colour of
 whoever makes the model, so "opus 5.5" and "gpt-5-codex" are told apart at a
@@ -696,12 +755,13 @@ state word before it stays the strongest thing on the line.
 |---|---|---|---|
 | `vendor-anthropic` | `#e2875a` terracotta | Anthropic | claude, anthropic, opus, sonnet, haiku, fable, mythos |
 | `vendor-openai` | `#e6edf3` (as `text-bright`) | OpenAI | openai, chatgpt, gpt, codex, the o-series (o3, o4-mini) |
-| `vendor-google` | `#8ab4f8` | Google | gemini, google |
+| `vendor-google` | `#9aa8ff` periwinkle | Google | gemini, google |
 
 Anything else stays `text-muted`. One function decides (`vendor_of` in
 sandboxes.luau); the tooltip keeps the full id and adds "by <vendor>". The
 terracotta's hue sits between `red-text` ("unreachable") and `amber`
-("wants you"); Gemini's blue is lighter than the `blue` "working" word.
+("wants you"); Gemini's periwinkle (hue 232) is told from the `blue`
+"working" word (hue 212) by hue, not only by lightness.
 Both rules and the contrast on every ground are tested (`screen::tests`).
 
 **The rules the built-in screens follow** (write yours the same way):
@@ -749,7 +809,26 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `chevron-right`, `check`, `warning`, `info`, `gear`, `search`, `folder`,
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
-`coin`, `help`, `branch`.
+`coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `threads`,
+`shield`, `prompt`, `ask`, `jarvis`, `tag`, `logo-prompt` (the sbxw mark's
+">", for the top bar's logo).
+
+One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
+
+| Icon | Means |
+|---|---|
+| `sparkle` | the agent (Claude, or another vendor's) |
+| `people` | the team (team mode, the leads) |
+| `jarvis` | Jarvis |
+| `threads` | a sandbox's sessions and threads (`branch` is one worktree) |
+| `globe` | the sandbox's browser |
+| `shield` | network: hosts sbx asks about, rules |
+| `ask` | an agent's question waiting for you (Requests) |
+| `key` | the environment file (sbxenv.yaml) |
+| `remote` | remote control from claude.ai |
+| `prompt` | a shell (Bash) |
+| `stop` | interrupt or stop |
+| `tag` | keyword pills |
 
 ## Where screens live
 
@@ -762,7 +841,9 @@ Screens: `topbar` (the bar at the top, right of macOS's window buttons),
 `sandboxes` (the side panel) and `jarvis` (the panel docked on the right,
 shown while `data.jarvis.open`). The terminals, their pane bars, the
 pager above them (pages of terminals: `src/shell/pager.rs`), the left rail
-(Grid and Tabs, Requests, Network, Jarvis, Setup: `src/shell/rail.rs`), the
+(Requests, Network, Team leads, Jarvis, Setup: `src/shell/rail.rs`; the
+view switch, Tabs | Grid, is the pager's; Team leads shows only the team
+leaders' terminals and, pressed again, the layout before: `src/shell/leads.rs`), the
 panel's resize handle, the status bar at the window's foot (bring-ups,
 total CPU, the sessions' cost, Help: `src/shell/statusbar.rs`) and every
 approval dialog are drawn by the core.

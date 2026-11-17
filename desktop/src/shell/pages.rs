@@ -309,10 +309,53 @@ impl Pages {
     }
 }
 
+/// The grid arrangement `saved` (the pages as they were when the person
+/// switched to Tabs) again, for the panes in `present` (every pane now, in
+/// page order): each saved page keeps its tiling with the panes still
+/// there, a page left with none goes, and panes the saved pages do not hold
+/// (opened while in Tabs) fill pages with room (under `per`), then new
+/// pages, in order.
+pub fn restore(saved: &[Page], present: &[Uid], per: usize) -> Vec<Page> {
+    let mut list: Vec<Page> = saved
+        .iter()
+        .filter_map(|p| {
+            let mut t = Some(p.tile.clone());
+            for u in p.tile.leaves() {
+                if !present.contains(&u) {
+                    t = t.and_then(|t| t.remove(u));
+                }
+            }
+            t.map(|tile| Page { tile, focus: p.focus.filter(|f| present.contains(f)) })
+        })
+        .collect();
+    let held: Vec<Uid> = list.iter().flat_map(|p| p.tile.leaves()).collect();
+    for &u in present.iter().filter(|u| !held.contains(u)) {
+        match list.iter_mut().find(|p| p.tile.count() < per.max(1)) {
+            Some(p) => p.tile.insert(u, ASPECT),
+            None => list.push(Page::of(Tile::Leaf(u))),
+        }
+    }
+    list
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn grid_comes_back_as_it_was_before_tabs() {
+        let saved = vec![Page::of(tiling::default(&[1, 2, 3], false)), Page::of(tiling::default(&[4, 5], true))];
+        // Nothing changed in Tabs: the same pages and tilings.
+        let back = restore(&saved, &[1, 2, 3, 4, 5], 4);
+        assert_eq!(back.iter().map(|p| p.tile.clone()).collect::<Vec<_>>(), saved.iter().map(|p| p.tile.clone()).collect::<Vec<_>>());
+        // 2 closed, 6 opened in Tabs: 2's room closes, 6 fills the first page with room.
+        let back = restore(&saved, &[1, 3, 4, 5, 6], 4);
+        assert_eq!(back.iter().map(|p| p.tile.order()).collect::<Vec<_>>(), vec![vec![1, 3, 6], vec![4, 5]]);
+        // Every pane of a page closed: the page goes.
+        let back = restore(&saved, &[1, 2, 3, 7, 8, 9], 3);
+        assert_eq!(back.iter().map(|p| p.tile.order()).collect::<Vec<_>>(), vec![vec![1, 2, 3], vec![7, 8, 9]]);
+    }
 
     fn ids(p: &Pages) -> Vec<Vec<Uid>> {
         p.list.iter().map(|x| x.tile.order()).collect()

@@ -1,0 +1,36 @@
+{
+  "about": "Status pill matching cases, against the built-in vocabulary. `at` and `len` count Unicode code points of `text`. `detail` is the text after ':' as written (spaces kept), or null. Both web and desktop UIs must give exactly these markers.",
+  "cases": [
+    { "text": "Build [[Done]] now", "markers": [{ "at": 6, "len": 8, "word": "Done", "detail": null, "tone": "green" }] },
+    { "text": "[[verified]]", "markers": [{ "at": 0, "len": 12, "word": "verified", "detail": null, "tone": "green" }] },
+    { "text": "[[Failed: 3 tests]]", "markers": [{ "at": 0, "len": 19, "word": "Failed", "detail": " 3 tests", "tone": "red" }] },
+    { "text": "[[In Progress]] and [[in  progress]]", "markers": [
+      { "at": 0, "len": 15, "word": "In Progress", "detail": null, "tone": "cyan" },
+      { "at": 20, "len": 16, "word": "in  progress", "detail": null, "tone": "cyan" } ] },
+    { "text": "[[Needs you]] then [[Error]]", "markers": [
+      { "at": 0, "len": 13, "word": "Needs you", "detail": null, "tone": "amber" },
+      { "at": 19, "len": 9, "word": "Error", "detail": null, "tone": "red" } ] },
+    { "text": "[[Irreversible: drops the table]]", "markers": [{ "at": 0, "len": 33, "word": "Irreversible", "detail": " drops the table", "tone": "danger" }] },
+    { "text": "[[Shipped]]", "markers": [{ "at": 0, "len": 11, "word": "Shipped", "detail": null, "tone": "blue" }] },
+    { "text": "see [[summary]] and [[base-kit]]", "markers": [] },
+    { "text": "[[Café]] [[état]]", "markers": [{ "at": 0, "len": 8, "word": "Café", "detail": null, "tone": "blue" }] },
+    { "text": "[[AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]]", "markers": [{ "at": 0, "len": 36, "word": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "detail": null, "tone": "blue" }] },
+    { "text": "[[AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]]", "markers": [] },
+    { "text": "[[Done: 12345678901234567890123456789012345678901234567]]", "markers": [{ "at": 0, "len": 57, "word": "Done", "detail": " 12345678901234567890123456789012345678901234567", "tone": "green" }] },
+    { "text": "[[Done:1234567890123456789012345678901234567890123456789]]", "markers": [] },
+    { "text": "[[a [[Done]] b]]", "markers": [{ "at": 4, "len": 8, "word": "Done", "detail": null, "tone": "green" }] },
+    { "text": "[[[Done]]]", "markers": [{ "at": 1, "len": 8, "word": "Done", "detail": null, "tone": "green" }] },
+    { "text": "[[Done ]] [[ Done]] [[Done] [Done]] [[Done]", "markers": [] },
+    { "text": "[[Failed: a]b]]", "markers": [] },
+    { "text": "[[Done:]]", "markers": [] },
+    { "text": "x[[Done]]y", "markers": [{ "at": 1, "len": 8, "word": "Done", "detail": null, "tone": "green" }] },
+    { "text": "[[Done]][[Failed]]", "markers": [
+      { "at": 0, "len": 8, "word": "Done", "detail": null, "tone": "green" },
+      { "at": 8, "len": 10, "word": "Failed", "detail": null, "tone": "red" } ] },
+    { "text": "日本語 [[Done]] ok", "markers": [{ "at": 4, "len": 8, "word": "Done", "detail": null, "tone": "green" }] },
+    { "text": "[[Done: ✅ 日本]]", "markers": [{ "at": 0, "len": 14, "word": "Done", "detail": " ✅ 日本", "tone": "green" }] },
+    { "text": "[[1st]] [[-x]] [[Done-]]", "markers": [] },
+    { "text": "[[Step 2]]", "markers": [{ "at": 0, "len": 10, "word": "Step 2", "detail": null, "tone": "blue" }] },
+    { "text": "[[Done\tnow]]", "markers": [] }
+  ]
+}

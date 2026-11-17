@@ -236,10 +236,11 @@ fn the_pager_menu_sets_the_count_and_tabs_show_pages() {
     super::tests::tap(&mut r.rt, "pager-view-grid");
     r.settle();
     assert_eq!(r.rt.state.pages.per, 2, "Grid goes back to the last count above one");
+    assert_eq!(r.names(), [vec!["a", "b"], vec!["c", "d"]], "and to the grid's pages");
     // Raising the count moves nothing; Gather does.
     super::tests::tap(&mut r.rt, "pager-per");
     super::tests::tap(&mut r.rt, "pager-per-4");
-    assert_eq!(r.rt.state.pages.list.len(), 4);
+    assert_eq!(r.rt.state.pages.list.len(), 2);
     super::tests::tap(&mut r.rt, "pager-per");
     super::tests::tap(&mut r.rt, "pager-gather");
     r.settle();
@@ -507,4 +508,222 @@ fn a_spare_open_from_a_screen_never_replaces_an_open_pane() {
     assert_eq!(r.names()[0], ["a", "b", "c", "d", "web-app"]);
     r.check_kept(&before, "+ with room");
     assert!(r.rt.state.notice.as_ref().map_or(true, |n| !n.0.contains("least recently used")));
+}
+
+/// Every modal fixture (a fixture whose `app.modal` opens one), at a narrow
+/// window and a wide one: no keyed element of the modal's screen lies
+/// outside the modal's rectangle (a field's button pushed out of its row,
+/// a row wider than the card), and a screen sized by its content gets a card
+/// no taller than it needs.
+#[test]
+fn modal_content_stays_inside_the_modal() {
+    fn fixtures(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                fixtures(&p, out);
+            } else if p.extension().is_some_and(|x| x == "json") {
+                let v: J = std::fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(J::Null);
+                if v["app"]["modal"].is_array() {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    fn keys(n: &crate::luau::Node, out: &mut Vec<String>) {
+        if let Some(k) = crate::screen::key_of(n) {
+            out.push(k);
+        }
+        n.children.iter().for_each(|c| keys(c, out));
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    let mut found = vec![];
+    fixtures(&root, &mut found);
+    // (fixture, intent opening the modal: none when the fixture opens it).
+    let mut list: Vec<(std::path::PathBuf, J)> = found.into_iter().map(|p| (p, J::Null)).collect();
+    for f in ["setup/full.json", "setup/errors.json"] {
+        for tab in ["secrets", "kits", "skills", "mcp", "hosts", "voice"] {
+            list.push((root.join(f), serde_json::json!({ "kind": "intent", "name": "open_modal", "args": { "screen": "setup", "arg": tab } })));
+        }
+    }
+    for f in ["create/workspace-full.json", "create/workspace-errors.json", "create/chat.json"] {
+        for d in ["chooser", "workspace", "chat"] {
+            list.push((root.join(f), serde_json::json!({ "kind": "intent", "name": "create_open", "args": { "dialog": d } })));
+        }
+    }
+    list.push((root.join("envfile/basic.json"), J::Null));
+    list.sort_by(|a, b| a.0.cmp(&b.0));
+    assert!(list.len() >= 20, "{list:?}");
+    let mut bad = vec![];
+    let mut checked = 0;
+    for (path, open) in &list {
+        for (w, h) in [(420.0, 700.0), (1284.0, 816.0)] {
+            let mut a = App::new(Args { fixture: Some(path.to_string_lossy().to_string().into()), ..Args::default() });
+            if !open.is_null() {
+                for i in crate::intent::parse(open).unwrap() {
+                    a.run_intent("test", i);
+                }
+            }
+            let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+            // Past the card's entrance (it grows in).
+            for _ in 0..60 {
+                rt.frame(0.016);
+            }
+            let Some((m, _)) = rt.presented("modal") else { continue };
+            let Some((name, _)) = rt.state.feats.modal.clone() else { continue };
+            let Some(node) = rt.state.screens.iter().find(|s| s.name == name).and_then(|s| s.last_good.clone()) else { continue };
+            let mut ks = vec![];
+            keys(&node, &mut ks);
+            for k in ks {
+                let Some((r, _)) = rt.presented(&k) else { continue };
+                checked += 1;
+                // Sideways: inside the card. Down: only above its top (a
+                // long screen scrolls inside the card).
+                if r[0] < m[0] - 0.5 || r[0] + r[2] > m[0] + m[2] + 0.5 || r[1] < m[1] - 0.5 {
+                    bad.push(format!("{} at {w}: {name}: {k} at {r:?}, modal {m:?}", path.file_name().unwrap().to_string_lossy()));
+                }
+            }
+            if crate::screen::sized_by_content(&node) {
+                let body = rt.presented("modal-body").map(|b| b.0[3]).unwrap_or(0.0);
+                assert!(m[3] <= body + 32.0 + 0.5, "{}: the card ({}) is taller than its content ({body})", path.display(), m[3]);
+            }
+        }
+    }
+    assert!(checked > 50, "{checked} elements checked");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+
+/// Tabs, then Grid: the grid's pages and tilings come back as they were,
+/// the same terminals (no reconnect), at most one size each.
+#[test]
+fn tabs_then_grid_puts_the_grid_back() {
+    let mut r = Rig::new(&["a", "b", "c", "d", "e"], 1284.0, 816.0);
+    // A grid of our own: 3 per page, the first page rotated.
+    r.op(PageOp::Per(3));
+    r.op(PageOp::Show(0));
+    r.op(PageOp::Rotate(Some(0)));
+    let grid: Vec<Tile> = r.rt.state.pages.list.iter().map(|p| p.tile.clone()).collect();
+    let names = r.names();
+    let before = r.generations();
+    r.take();
+    r.op(PageOp::View(true));
+    assert_eq!(r.rt.state.pages.list.len(), 5, "tabs: one per page");
+    r.check_kept(&before, "to tabs");
+    r.op(PageOp::Show(3));
+    r.op(PageOp::View(false));
+    assert_eq!(r.rt.state.pages.list.iter().map(|p| p.tile.clone()).collect::<Vec<_>>(), grid, "the same pages and tilings");
+    assert_eq!(r.names(), names);
+    r.check_kept(&before, "back to grid");
+    // A terminal closed while in Tabs: its room closes; the rest as they were.
+    r.op(PageOp::View(true));
+    let b = r.rt.state.pages.list[1].tile.order()[0];
+    r.rt.update(|s, _| {
+        let i = s.index_of(b).unwrap();
+        s.remove_pane(i);
+    });
+    r.settle();
+    r.op(PageOp::View(false));
+    assert_eq!(r.names(), [vec!["a", "c"], vec!["d", "e"]]);
+}
+
+/// Raising N by hand pulls nothing back, and says it can: "Gather" shows
+/// beside the number while gathering would move something.
+#[test]
+fn gather_shows_when_it_would_move_something() {
+    let mut r = Rig::new(&["a", "b", "c"], 1284.0, 816.0);
+    assert!(!r.rt.state.gather_would_move() && r.rt.presented("pager-gather-now").is_none());
+    r.op(PageOp::Per(1));
+    assert!(!r.rt.state.gather_would_move(), "tabs: nothing to gather");
+    r.op(PageOp::Per(4));
+    assert_eq!(r.names().len(), 3, "raising N moves nothing by itself");
+    assert!(r.rt.state.gather_would_move() && r.rt.presented("pager-gather-now").is_some());
+    super::tests::tap(&mut r.rt, "pager-gather-now");
+    r.settle();
+    assert_eq!(r.names(), [vec!["a", "b", "c"]]);
+    assert!(r.rt.presented("pager-gather-now").is_none());
+}
+
+/// The pane bar's mode switch (the web UI's ✦ Claude | ❯ Bash): this pane
+/// goes to the other session of the same sandbox (a thread's pane: the
+/// thread's agent and a shell in its worktree), and back.
+#[test]
+fn the_mode_switch_goes_between_the_agent_and_a_shell() {
+    let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
+    assert!(r.rt.presented("pane-1-mode-agent").is_some() && r.rt.presented("pane-1-mode-bash").is_some(), "the switch is in the bar");
+    super::tests::tap(&mut r.rt, "pane-1-mode-bash");
+    r.settle();
+    let p = &r.rt.state.panes[0];
+    assert_eq!((p.sandbox.as_deref(), p.mode, p.thread.as_deref()), (Some("a"), Mode::Bash, None));
+    assert_eq!(r.rt.state.pages.list[0].tile.order().len(), 2, "same pane, same place");
+    super::tests::tap(&mut r.rt, "pane-1-mode-agent");
+    r.settle();
+    assert_eq!(r.rt.state.panes[0].mode, Mode::Agent);
+    // A thread's pane: its shell is in the thread's worktree (the same thread).
+    r.rt.update(|s, _| {
+        s.panes[1].thread = Some("fix".into());
+        s.switch_mode(1);
+    });
+    r.settle();
+    let p = &r.rt.state.panes[1];
+    assert_eq!((p.mode, p.thread.as_deref()), (Mode::Bash, Some("fix")));
+    // What the daemon is asked: the same sessions as the web UI's switch, so
+    // switching back attaches to the session left running.
+    let q = |m: Mode, t: Option<&str>| crate::client::TerminalRequest::new("b", m, t.map(str::to_string), ThreadStart::default()).query();
+    assert_eq!(q(Mode::Bash, Some("fix")), "sandbox=b&mode=bash&thread=fix");
+    assert_eq!(q(Mode::Agent, Some("fix")), "sandbox=b&mode=thread&thread=fix");
+    assert_eq!(q(Mode::Agent, None), "sandbox=b");
+    // A session already in another pane is focused there, not opened twice.
+    r.rt.update(|s, _| s.switch_mode(0));
+    r.settle();
+    r.rt.update(|s, _| {
+        s.panes[1].thread = None;
+        s.panes[1].sandbox = Some("a".into());
+        s.panes[1].mode = Mode::Agent;
+        s.switch_mode(1);
+    });
+    assert_eq!((r.rt.state.panes[1].mode, r.rt.state.focused), (Mode::Agent, 0), "a's shell is pane 1's: focused, not duplicated");
+    // Narrow: the switch is the menu's first row.
+    let f = bar::pane_fit(200.0, "a", Some("Claude"), vec![], true);
+    assert!(!f.switch);
+    r.rt.update(|s, _| { s.bar_w.insert(s.panes[0].uid, 150.0); });
+    let f = r.rt.state.pane_fit(0).unwrap();
+    assert_eq!((f.switch, f.hidden.first().map(|i| i.label.clone())), (false, Some("Switch to Claude".into())));
+}
+
+/// Keyword pills in the app's screens are text: a hostile string written by
+/// an agent (markers, markup, an intent's spelling, a link, controls) in the
+/// Requests panel becomes one text element with pill styles, and no control,
+/// link or intent appears.
+#[test]
+fn pills_in_a_screen_never_make_a_control() {
+    let hostile = "Build [[Done]] then [[Failed: <button on=x>]] [[Needs you: intent(\"open_url\", {url=\"https://evil\"})]] [[Note]](https://evil.example) ]]]] [[[[x]]]] [[Done: [b] ]] \u{202e}[[Verified]]";
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/relay/basic.json");
+    let count = |rt: &rune::Runtime<App>| -> (usize, usize) {
+        let els = rt.elements();
+        (els.iter().filter(|e| matches!(e.role, "button" | "link" | "checkbox" | "radio" | "menuitem" | "textbox")).count(), els.iter().filter(|e| e.focusable).count())
+    };
+    let mut rt = rune::Runtime::new(App::new(Args { fixture: Some(fixture.into()), ..Args::default() }), view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    for _ in 0..20 {
+        rt.frame(0.016);
+    }
+    let before = count(&rt);
+    rt.update(|s, _| {
+        let mut relay = s.feats.data.get("relay").cloned().unwrap_or_else(|| s.raw["relay"].clone());
+        relay["requests"][0]["question"] = J::String(hostile.into());
+        s.feats.data.insert("relay".into(), relay);
+        s.push_data();
+    });
+    for _ in 0..20 {
+        rt.frame(0.016);
+    }
+    assert_eq!(count(&rt), before, "the same controls, no more");
+    // The quote: one text element; its markers are pills, the markup inside
+    // them only characters; what is not a marker stays as written.
+    let shown: Vec<String> = rt.elements().into_iter().filter_map(|e| e.text).filter(|t| t.starts_with("Build \u{2009}")).collect();
+    assert_eq!(shown.len(), 1, "one text element: {shown:?}");
+    let t = &shown[0];
+    assert!(t.contains("\u{2009}Done\u{2009}") && !t.contains("[[Done]]"), "a pill: {t}");
+    assert!(t.contains("\u{2009}Failed: <button on=x>\u{2009}"), "markup in a detail is its text: {t}");
+    assert!(t.contains("[[[[x]]]]") && t.contains("[[Done: [b] ]]"), "not markers: as written: {t}");
 }

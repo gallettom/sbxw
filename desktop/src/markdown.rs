@@ -387,6 +387,8 @@ pub fn plain(blocks: &[Block]) -> String {
 pub struct Look {
     pub color: u32,
     pub size: f32,
+    /// Keyword pills in the prose (not in code or links), when on.
+    pub pills: Option<std::rc::Rc<crate::emphasis::Vocab>>,
 }
 
 /// One rich text element for `runs`; `on_link(url)` when a link is pressed.
@@ -395,7 +397,15 @@ fn rich_runs<S: 'static>(runs: &[Run], look: &Look, weight: f32, size: f32, key:
     let mut content = String::new();
     let mut spans = vec![];
     let mut links = vec![];
+    let palette = look.pills.as_ref().map(|_| crate::emphasis::screen_palette());
     for r in runs {
+        // Plain prose with markers: its pills (emphasis.rs); code and links stay as written.
+        if let (Some(v), Some(p), false, false, false, false) = (&look.pills, &palette, r.code, r.link.is_some(), r.bold, r.italic) {
+            if r.text.contains("[[") {
+                crate::emphasis::rich_into(&r.text, v, p, &mut content, &mut spans);
+                continue;
+            }
+        }
         let (a, b) = (content.len(), content.len() + r.text.len());
         content.push_str(&r.text);
         if a == b {
@@ -452,7 +462,7 @@ pub fn view<S: 'static>(src: &str, look: &Look, key: &str, on_link: Option<std::
                     3 => 1.0,
                     _ => 0.0,
                 };
-                rich_runs::<S>(runs, &Look { color: crate::theme::color_value("text-bright").unwrap(), size }, 600.0, size, &k, &on_link)
+                rich_runs::<S>(runs, &Look { color: crate::theme::color_value("text-bright").unwrap(), size, pills: look.pills.clone() }, 600.0, size, &k, &on_link)
             }
             Block::Paragraph(runs) => rich_runs::<S>(runs, look, 400.0, look.size, &k, &on_link),
             Block::List { ordered, start, items } => {

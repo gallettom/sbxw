@@ -1,0 +1,176 @@
+{
+ "about": "The Requests panel with keyword pills in the agents' words.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "api",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/api"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "shop",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/shop"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "relay": {
+   "requests": [
+    {
+     "id": "r-1",
+     "from": "web-app",
+     "kind": "question",
+     "question": "What shape does GET /v1/orders return in staging? [[Needs you]]\nI need the pagination field names to build the list. [[Note: v2 is not live yet]]",
+     "shot_count": 0,
+     "state": "pending",
+     "created_ms": 1000,
+     "updated_ms": 1000
+    },
+    {
+     "id": "r-2",
+     "from": "web-app",
+     "kind": "screenshot",
+     "question": "The settings header at mobile width (375px), after I moved the save button to the right. [[Done: layout]] [[Failed: 2 snapshots]]",
+     "shot_count": 0,
+     "state": "pending",
+     "created_ms": 2000,
+     "updated_ms": 2000
+    },
+    {
+     "id": "r-3",
+     "from": "web-app",
+     "from_thread": "checkout",
+     "kind": "ask",
+     "question": "Two things to settle before I write the checkout migration.\n\n\u2753 **Q1 - Port** : which port should the payments API listen on?\n\u27a1\ufe0f 8080, as in staging.\n\n---\n\n\u2753 **Q2 - Auth** : keep the session cookie, or move to tokens?\nIt changes the mobile client too.\n\u27a1\ufe0f Keep the cookie for now.\n",
+     "shot_count": 0,
+     "state": "pending",
+     "created_ms": 3000,
+     "updated_ms": 3000
+    },
+    {
+     "id": "r-4",
+     "from": "docs",
+     "kind": "question",
+     "question": "Which environment variable holds the API base URL in production?",
+     "to": "api",
+     "shot_count": 0,
+     "state": "routed",
+     "created_ms": 4000,
+     "updated_ms": 4100
+    }
+   ]
+  },
+  "sessions": [
+   {
+    "sandbox": "shop",
+    "mode": "claude",
+    "state": "attention",
+    "agent": "claude",
+    "started_ms": 10,
+    "activity": "Which layout should the cart page use?",
+    "steps": [
+     {
+      "text": "Which layout should the cart page use?",
+      "options": [
+       "Two columns",
+       "One column",
+       "Keep it as is"
+      ],
+      "context": [
+       "Two columns: summary on the right",
+       "One column: everything stacked",
+       "Keep it as is: no change"
+      ]
+     }
+    ],
+    "session_id": "s-shop",
+    "origin": "tty",
+    "answerable": true,
+    "ts": 5
+   },
+   {
+    "sandbox": "api",
+    "mode": "claude",
+    "state": "attention",
+    "agent": "claude",
+    "started_ms": 20,
+    "thread": "auth",
+    "steps": [
+     {
+      "text": "Token lifetime?",
+      "options": [
+       "15 minutes",
+       "1 hour"
+      ]
+     },
+     {
+      "text": "Refresh tokens?",
+      "options": [
+       "Yes, rotating",
+       "No"
+      ]
+     }
+    ],
+    "session_id": "s-api-auth",
+    "origin": "remote",
+    "answerable": true,
+    "ts": 6
+   },
+   {
+    "sandbox": "sbxw-jarvis",
+    "mode": "claude",
+    "state": "attention",
+    "agent": "claude",
+    "started_ms": 30,
+    "steps": [
+     {
+      "text": "Which voice?",
+      "options": [
+       "fr",
+       "en"
+      ]
+     }
+    ],
+    "session_id": "s-j",
+    "origin": "tty",
+    "answerable": true,
+    "ts": 7
+   },
+   {
+    "sandbox": "docs",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 40,
+    "session_id": "s-docs",
+    "origin": "tty",
+    "answerable": true,
+    "ts": 8,
+    "reply": "Done."
+   }
+  ]
+ },
+ "app": {
+  "panels": [
+   "relay"
+  ]
+ }
+}

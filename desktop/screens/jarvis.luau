@@ -20,7 +20,7 @@ local function message(m, speaks)
     }
   elseif m.who == "jarvis" then
     return column{ w = "full", gap = 2,
-      markdown{ m.text, on = "link", key = "msg-" .. m.id },
+      markdown{ m.text, on = "link", key = "msg-" .. m.id, pills = true },
       speaks and row{ w = "full", justify = "end",
         button{ icon = "speaker", variant = "ghost", on = "read", arg = m.id,
           color = m.reading and "blue" or "text-dim",
@@ -33,7 +33,7 @@ local function message(m, speaks)
       row{ gap = 8, w = "full", badge{ m.from or "agent", tone = "blue" }, spacer{},
         speaks and button{ icon = "speaker", variant = "ghost", on = "read", arg = m.id,
           color = m.reading and "blue" or "text-dim", help = m.reading and "Stop reading" or "Read aloud" } or false },
-      markdown{ m.text, on = "link" },
+      markdown{ m.text, on = "link", pills = m.from or true },
     }
   elseif m.who == "error" then
     return text{ m.text, wrap = true, size = "sm", color = "red" }

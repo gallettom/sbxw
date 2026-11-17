@@ -5,7 +5,9 @@
 //! Powerline triangles, double, curly, dotted and dashed underlines,
 //! strikethrough, link underlines and the non-block cursor shapes.
 
+use super::pills::{Part, Piece};
 use super::theme::Theme;
+use crate::emphasis::{self, Pill};
 use alacritty_terminal::grid::Row;
 use alacritty_terminal::index::Column;
 use alacritty_terminal::term::cell::{Cell, Flags};
@@ -38,6 +40,10 @@ pub struct RowCtx<'a> {
     pub selection: Option<(usize, usize)>,
     /// Columns of a hovered hyperlink on this row, underlined.
     pub link: Option<(usize, usize)>,
+    /// Keyword pills on this row ([`super::pills`]), left to right, and the
+    /// colours of each tone.
+    pub pills: &'a [Piece],
+    pub pill_colors: &'a [Pill; 7],
 }
 
 /// A 0xRRGGBB (sRGB) colour as Rune's (linear) colour.
@@ -122,8 +128,31 @@ impl Painter {
     }
 }
 
-/// Builds the row. `row` holds at least `ctx.cols` cells.
-pub fn build_row(row: &Row<Cell>, ctx: &RowCtx) -> GridRow {
+/// Appends `glyph` to the row's text, extending the last span when it has
+/// the same look.
+#[allow(clippy::too_many_arguments)]
+fn push_span(text: &mut String, spans: &mut Vec<Span>, glyph: &str, fgc: Color, bold: bool, italic: bool, ul: Option<Color>, bg: Option<Color>) {
+    let at = text.len();
+    text.push_str(glyph);
+    let end = text.len();
+    let same = |s: &Span| s.end as usize == at && s.color == Some(fgc) && s.weight == bold.then_some(700.0) && s.italic == italic && s.underline == ul && s.bg == bg;
+    match spans.last_mut() {
+        Some(s) if same(s) => s.end = end as u32,
+        _ => {
+            let mut s = Span::new(at, end).color(fgc);
+            if bold {
+                s = s.weight(700.0);
+            }
+            s.italic = italic;
+            s.underline = ul;
+            s.bg = bg;
+            spans.push(s);
+        }
+    }
+}
+
+/// The row's text, spans, fills, pinned cells and vectors.
+pub fn row_parts(row: &Row<Cell>, ctx: &RowCtx) -> RowParts {
     let theme = ctx.theme;
     let mut text = String::new();
     let mut spans: Vec<Span> = Vec::new();
@@ -138,7 +167,15 @@ pub fn build_row(row: &Row<Cell>, ctx: &RowCtx) -> GridRow {
     while c < ncols {
         let cell = &row[Column(c)];
         if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
-            text.push(' ');
+            match ctx.pills.iter().find(|p| p.covers(c)) {
+                // Inside a pill, the space keeps the pill's background.
+                Some(p) => {
+                    let colors = ctx.pill_colors[emphasis::index(p.tone)];
+                    let bold = p.part(c) != Part::Detail;
+                    push_span(&mut text, &mut spans, " ", rgb(if bold { colors.strong } else { colors.detail }), bold, false, None, Some(rgb(colors.bg)));
+                }
+                None => text.push(' '),
+            }
             c += 1;
             continue;
         }
@@ -156,6 +193,40 @@ pub fn build_row(row: &Row<Cell>, ctx: &RowCtx) -> GridRow {
         if cursor_here == Some(CursorDraw::Block) {
             fg = theme.background;
             bg = theme.cursor;
+        }
+        // A pill's cell: the pill's colours replace the program's, its
+        // background is the span's rounded one (no fill), the brackets are
+        // padding, and the cell's own decorations are not drawn.
+        let pill = ctx.pills.iter().find(|p| p.covers(c)).map(|p| (p, ctx.pill_colors[emphasis::index(p.tone)], p.part(c)));
+        if let Some((piece, colors, part)) = pill {
+            let x0 = (c as f32 * cw).round();
+            let x1 = ((c + width) as f32 * cw).round();
+            // At a cut by the wrap the pill's end is square: a plain fill
+            // under the rounded span's corner.
+            if (piece.cut_right && c + width == piece.end as usize) || (piece.cut_left && c == piece.start as usize) {
+                fills.push((c as u16, (c + width) as u16, rgb(colors.bg), colors.bg));
+            }
+            let fgv = match part {
+                Part::Word => colors.strong,
+                Part::Detail => colors.detail,
+                Part::Pad => colors.strong,
+            };
+            let fgc = rgb(fgv);
+            let ch = if part == Part::Pad || cell.c == '\0' || cell.c == '\t' { ' ' } else { cell.c };
+            let drawn = !is_wide && cell.zerowidth().is_none() && draw_glyph(&mut p, ch, x0, x1, lh, light, fgc);
+            let mut glyph = String::new();
+            glyph.push(if drawn { ' ' } else { ch });
+            if let (Some(zw), false) = (cell.zerowidth(), part == Part::Pad) {
+                glyph.extend(zw);
+            }
+            let bold = part != Part::Detail;
+            if is_wide {
+                wide.push((c as u16, glyph, fgc, bold));
+                glyph = " ".into();
+            }
+            push_span(&mut text, &mut spans, &glyph, fgc, bold, false, None, Some(rgb(colors.bg)));
+            c += 1;
+            continue;
         }
         if bg != theme.background {
             let col = rgb(bg);
@@ -227,25 +298,32 @@ pub fn build_row(row: &Row<Cell>, ctx: &RowCtx) -> GridRow {
             c += 1;
             continue;
         }
-        let at = text.len();
-        text.push_str(&glyph);
-        let end = text.len();
-        let ul = underline.then_some(ul_color);
-        let same = |s: &Span| s.end as usize == at && s.color == Some(fgc) && s.weight == bold.then_some(700.0) && s.italic == italic && s.underline == ul;
-        match spans.last_mut() {
-            Some(s) if same(s) => s.end = end as u32,
-            _ => {
-                let mut s = Span::new(at, end).color(fgc);
-                if bold {
-                    s = s.weight(700.0);
-                }
-                s.italic = italic;
-                s.underline = ul;
-                spans.push(s);
-            }
-        }
+        push_span(&mut text, &mut spans, &glyph, fgc, bold, italic, underline.then_some(ul_color), None);
         c += 1;
     }
+    RowParts { text, spans, fills, wide, shape: p.any.then_some(p.shape) }
+}
+
+/// A row before it becomes a `GridRow` (tests read it: Rune's row is opaque).
+pub struct RowParts {
+    /// One character per narrow cell (a space for a wide cell's columns).
+    pub text: String,
+    pub spans: Vec<Span>,
+    /// Background runs: columns, colour, 0xRRGGBB.
+    pub fills: Vec<(u16, u16, Color, u32)>,
+    pub wide: Vec<(u16, String, Color, bool)>,
+    pub shape: Option<Shape>,
+}
+
+/// Builds the row. `row` holds at least `ctx.cols` cells.
+pub fn build_row(row: &Row<Cell>, ctx: &RowCtx) -> GridRow {
+    into_row(row_parts(row, ctx), ctx)
+}
+
+/// The parts as Rune's row.
+pub fn into_row(parts: RowParts, ctx: &RowCtx) -> GridRow {
+    let theme = ctx.theme;
+    let RowParts { text, spans, fills, wide, shape } = parts;
     let mut row_el = GridRow::new(text, spans, ctx.style);
     for (a, b, col, _) in fills {
         row_el = row_el.fill(a, b, col);
@@ -257,8 +335,8 @@ pub fn build_row(row: &Row<Cell>, ctx: &RowCtx) -> GridRow {
         let st = TextStyle { weight: if bold { 700.0 } else { ctx.style.weight }, ..ctx.style };
         row_el = row_el.cell(col, 2, g, st, color);
     }
-    if p.any {
-        row_el = row_el.shape(p.shape);
+    if let Some(shape) = shape {
+        row_el = row_el.shape(shape);
     }
     row_el
 }

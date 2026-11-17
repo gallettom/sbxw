@@ -11,7 +11,7 @@
 //!
 //! Keys: `pager`, `page-<k>` (from 1), `page-<k>-close`, `page-new`,
 //! `pager-view-tabs`, `pager-view-grid`, `pager-per` (its list
-//! `pager-per-list`, items `pager-per-<n>` and `pager-gather`), `pager-more`
+//! `pager-per-list`, items `pager-per-<n>` and `pager-gather`), `pager-gather-now` (the Gather button beside it, while gathering would move something), `pager-more`
 //! (`pager-more-list`, items `page-<k>`).
 
 use super::pages::PER_CHOICES;
@@ -36,6 +36,12 @@ pub struct TabInfo {
     pub label: String,
     pub help: String,
     pub tone: Option<&'static str>,
+    /// The group colour of the page's first terminal (the sidebar's and the
+    /// pane bar's, `App::group_colors`), and those of the page's other groups.
+    pub group: Option<u32>,
+    pub others: Vec<u32>,
+    /// Its one terminal shows a shell, not the agent (a prompt glyph).
+    pub bash: bool,
 }
 
 /// A name cut to about `n` characters.
@@ -48,9 +54,12 @@ fn short(name: &str, n: usize) -> String {
 }
 
 /// A tab's width (points) for its label.
-pub fn tab_w(label: &str, dot: bool) -> f32 {
-    TAB_PX * 2.0 + if dot { TAB_DOT + TAB_GAP } else { 0.0 } + bar::measure(label, TAB_TEXT, 500.0).min(TAB_LABEL_MAX) + TAB_GAP + TAB_CLOSE
+pub fn tab_w(label: &str, dot: bool, bash: bool) -> f32 {
+    TAB_PX * 2.0 + if dot { TAB_DOT + TAB_GAP } else { 0.0 } + if bash { TAB_PROMPT + TAB_GAP } else { 0.0 } + bar::measure(label, TAB_TEXT, 500.0).min(TAB_LABEL_MAX) + TAB_GAP + TAB_CLOSE
 }
+
+/// The prompt glyph of a tab whose terminal is a shell.
+const TAB_PROMPT: f32 = 12.0;
 
 /// Which tabs show inline in `avail` points: a run around `current`,
 /// growing to the right, then to the left. `(first, end)`.
@@ -84,6 +93,18 @@ fn controls_w(per: usize) -> f32 {
     seg("Tabs") + seg("Grid") + GAP + bar::measure(&per_label(per), TAB_TEXT, 500.0) + 16.0 + 12.0 + 4.0 + GAP
 }
 
+/// The leads view's mark at the pager's left.
+const LEADS_LABEL: &str = "Team leads";
+
+fn leads_w() -> f32 {
+    16.0 + 14.0 + 6.0 + bar::measure(LEADS_LABEL, TAB_TEXT, 600.0) + GAP
+}
+
+/// The "Gather" button beside the per-page menu.
+fn gather_w() -> f32 {
+    bar::measure("Gather", TAB_TEXT, 500.0) + 16.0
+}
+
 fn per_label(per: usize) -> String {
     if per == 1 { "1 per page".into() } else { format!("{per} per page") }
 }
@@ -98,7 +119,7 @@ impl App {
     }
 
     pub fn tab_info_as(&self, k: usize, compact: bool) -> TabInfo {
-        let Some(page) = self.pages.list.get(k) else { return TabInfo { label: String::new(), help: String::new(), tone: None } };
+        let Some(page) = self.pages.list.get(k) else { return TabInfo { label: String::new(), help: String::new(), tone: None, group: None, others: vec![], bash: false } };
         let panes: Vec<&Pane> = page.tile.order().into_iter().filter_map(|u| self.pane_by_uid(u)).collect();
         let open: Vec<&&Pane> = panes.iter().filter(|p| p.sandbox.is_some()).collect();
         let names: Vec<String> = open.iter().map(|p| pane_name(p)).collect();
@@ -114,7 +135,27 @@ impl App {
         let tone = if wants { Some("amber") } else if working { Some("blue") } else { None };
         let what = if names.is_empty() { "nothing open".to_string() } else { names.join(", ") };
         let state = if wants { " (a terminal wants you)" } else if working { " (an agent is working)" } else { "" };
-        TabInfo { label, help: format!("Page {}: {what}{state}", k + 1), tone }
+        let colors = self.group_colors();
+        let groups: Vec<Option<u32>> = open.iter().map(|p| p.sandbox.as_deref().and_then(|n| colors.get(n).copied())).collect();
+        let group = groups.first().copied().flatten();
+        let mut others: Vec<u32> = groups.iter().flatten().copied().filter(|g| Some(*g) != group).collect();
+        others.dedup();
+        let bash = open.len() == 1 && open[0].mode == Mode::Bash;
+        let help = format!("Page {}: {what}{}{state}", k + 1, if bash { " (a shell)" } else { "" });
+        TabInfo { label, help, tone, group, others, bash }
+    }
+
+    /// Whether "Gather" would move something: terminals on more pages than
+    /// N per page needs, or empty panes among them (raising N by hand pulls
+    /// nothing back by itself; the button beside the number says it can).
+    pub fn gather_would_move(&self) -> bool {
+        if self.pages.tabs() {
+            return false;
+        }
+        let e = self.empty_uids();
+        let mut p = self.pages.clone();
+        p.gather(&|x| e.contains(&x));
+        p.list.iter().map(|x| &x.tile).ne(self.pages.list.iter().map(|x| &x.tile))
     }
 
     /// Which tabs are inline: `(first, end)`; the others are in `pager-more`.
@@ -128,11 +169,11 @@ impl App {
     pub fn pager_fit_as(&self) -> (usize, usize, bool) {
         let n = self.pages.list.len();
         let w = if self.pager_w > 0.0 { self.pager_w } else { self.window.0 - self.left_w() - layout::GUTTER * 2.0 };
-        let fixed = PLUS_W + GAP + controls_w(self.pages.per) + GAP;
+        let fixed = PLUS_W + GAP + controls_w(self.pages.per) + GAP + if self.gather_would_move() { gather_w() + GAP } else { 0.0 } + if self.leads_on() { leads_w() } else { 0.0 };
         let widths = |compact: bool| -> Vec<f32> {
             (0..n).map(|k| {
                 let t = self.tab_info_as(k, compact);
-                tab_w(&t.label, t.tone.is_some())
+                tab_w(&t.label, t.tone.is_some(), t.bash)
             }).collect()
         };
         let total = |v: &[f32]| v.iter().sum::<f32>() + GAP * n.saturating_sub(1) as f32;
@@ -152,7 +193,7 @@ impl App {
     pub(super) fn pager_drawn(&self, key: &str) -> bool {
         let n = self.pages.list.len();
         let (a, b) = self.pager_fit();
-        let fixed = matches!(key, "pager" | "page-new" | "pager-view-tabs" | "pager-view-grid" | "pager-per");
+        let fixed = matches!(key, "pager" | "page-new" | "pager-view-tabs" | "pager-view-grid" | "pager-per") || (key == "pager-gather-now" && self.gather_would_move()) || (key == "pager-leads" && self.leads_on());
         let more = (a > 0 || b < n) && key == "pager-more";
         let tab = key.strip_prefix("page-").and_then(|r| r.strip_suffix("-close").unwrap_or(r).parse::<usize>().ok()).is_some_and(|k| k >= 1 && k <= n && ((a..b).contains(&(k - 1)) || (!key.ends_with("-close") && self.pager_menu.as_deref() == Some("more"))));
         let per = self.pager_menu.as_deref() == Some("per") && (key == "pager-per-list" || key == "pager-gather" || PER_CHOICES.iter().any(|c| key == format!("pager-per-{c}")));
@@ -255,16 +296,41 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
             s.run_intent("pager", Intent::Pages(PageOp::Show(k)));
             s.push_data();
         });
+    // Its group's colour as a tint (stronger for the current page); the
+    // current one also has a 1 pt border and a 2 pt line at its foot in that
+    // colour (the focus blue when it has none) and a heavier label, so it
+    // reads without the colour too.
+    let ground = theme::tab_ground(t.group, on);
+    let line = theme::hex(t.group.unwrap_or_else(|| theme::color_value("focus").unwrap()));
+    e = e.fill(theme::hex(ground)).hover(theme::hex(theme::over(theme::color_value("text").unwrap(), 0.08, ground)));
     if on {
-        e = e.fill(c("elevated")).border(1.0, c("border"));
+        e = e.border(1.0, line).child(el().key(format!("page-{}-line", k + 1)).pin(Some(0.0), None, Some(0.0), Some(0.0)).h(2.0).fill(line));
     }
     if target {
         e = e.border(1.5, c("blue"));
     }
     if let Some(tone) = t.tone {
-        e = e.child(el().w(TAB_DOT).h(TAB_DOT).radius(TAB_DOT / 2.0).fill(c(tone)));
+        // A dark ring keeps the dot clear on any tint.
+        e = e.child(el().w(TAB_DOT).h(TAB_DOT).radius(TAB_DOT / 2.0).fill(c(tone)).border(1.0, c("floor")));
     }
-    e = e.child(text(t.label).font(small(TAB_TEXT, if on { 600.0 } else { 500.0 })).color(c(if on { "text-bright" } else { "text-muted" })).truncate().min_w(0.0).max_w(TAB_LABEL_MAX));
+    if t.bash {
+        e = e.child(small_icon("prompt", TAB_PROMPT, theme::hex(theme::muted_on(ground))));
+    }
+    // A session's tab: the sandbox muted, what tells it apart (the thread)
+    // bright; the cut falls on the second part.
+    let (prefix, rest) = match t.label.split_once(" · ") {
+        Some((a, b)) if !t.label.starts_with("Page ") => (Some(format!("{a} · ")), b.to_string()),
+        _ => (None, t.label.clone()),
+    };
+    let weight = if on { 600.0 } else { 500.0 };
+    if let Some(p) = prefix {
+        e = e.child(text(p).font(small(TAB_TEXT, 500.0)).color(theme::hex(theme::muted_on(ground))));
+    }
+    e = e.child(text(rest).font(small(TAB_TEXT, weight)).color(c("text-bright")).truncate().min_w(0.0).max_w(TAB_LABEL_MAX));
+    // Groups on the page besides the first one's: a small dot each.
+    for g in t.others.iter().take(3) {
+        e = e.child(el().w(5.0).h(5.0).radius(2.5).fill(theme::hex(*g)));
+    }
     let help = if s.pages.list.len() > 1 { format!("Close page {} (its terminals' views close; the sessions go on)", k + 1) } else { "Close this page's terminals (the sessions go on)".to_string() };
     e.child(
         el().key(format!("page-{}-close", k + 1))
@@ -320,6 +386,31 @@ pub fn view(s: &App) -> El {
         tabs = tabs.child(tab(s, k, compact));
     }
     let mut left = row().gap(GAP).items_center().grow(1.0).min_w(0.0);
+    // The team leads view says so before its tabs (leads.rs).
+    if s.leads_on() {
+        let (fg, tint) = crate::screen::action_tone("purple");
+        left = left.child(
+            row()
+                .key("pager-leads")
+                .role("button")
+                .label("Team leads view: press for the layout before")
+                .help("Only the team leaders' terminals. Press (or the rail's Team leads) for the layout before")
+                .h(H - 6.0)
+                .px(8.0)
+                .gap(6.0)
+                .items_center()
+                .radius(theme::radius("xs").unwrap())
+                .fill(theme::hex(tint))
+                .hover(theme::hex(theme::over(fg, 0.12, tint)))
+                .cursor(Cursor::Pointer)
+                .on_press(|s: &mut App| {
+                    s.toggle_leads();
+                    s.push_data();
+                })
+                .child(small_icon("people", 14.0, theme::hex(fg)))
+                .child(text(LEADS_LABEL).font(small(TAB_TEXT, 600.0)).color(theme::hex(fg))),
+        );
+    }
     if a > 0 || b < n {
         let hidden = n - (b - a);
         let open = s.pager_menu.as_deref() == Some("more");
@@ -405,6 +496,25 @@ pub fn view(s: &App) -> El {
         .on_press(|s: &mut App| s.pager_menu = if s.pager_menu.as_deref() == Some("per") { None } else { Some("per".into()) })
         .child(text(per_label(s.pages.per)).font(small(TAB_TEXT, 500.0)).color(c("text")))
         .child(small_icon("chevron-down", 12.0, c("text-muted")));
+    let gather = s.gather_would_move().then(|| {
+        row()
+            .key("pager-gather-now")
+            .role("button")
+            .label("Gather")
+            .help(format!("Gather the terminals onto pages of {}, in page order", s.pages.per))
+            .h(H - 6.0)
+            .px(8.0)
+            .items_center()
+            .radius(theme::radius("xs").unwrap())
+            .fill(c("surface-alt"))
+            .hover(c("elevated"))
+            .cursor(Cursor::Pointer)
+            .on_press(|s: &mut App| {
+                s.run_intent("pager", Intent::Pages(PageOp::Gather));
+                s.push_data();
+            })
+            .child(text("Gather").font(small(TAB_TEXT, 500.0)).color(c("blue")))
+    });
     row()
         .key("pager")
         .role("tablist")
@@ -420,6 +530,7 @@ pub fn view(s: &App) -> El {
         })
         .child(left)
         .child(view_switch)
+        .children(gather)
         .child(per)
 }
 

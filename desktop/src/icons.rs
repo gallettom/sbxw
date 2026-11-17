@@ -15,7 +15,7 @@ macro_rules! icons {
 // Bodies are concatenated at compile time so the stroke attributes stay in one place.
 macro_rules! st {
     ($tag:literal, $attrs:literal) => {
-        concat!("<", $tag, " ", $attrs, " fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>")
+        concat!("<", $tag, " ", $attrs, " fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>")
     };
 }
 
@@ -57,6 +57,28 @@ icons! {
     // A worktree: a branch off the main line.
     BRANCH "branch" concat!(st!("circle", r#"cx="4.5" cy="3.5" r="1.5""#), st!("circle", r#"cx="4.5" cy="12.5" r="1.5""#), st!("circle", r#"cx="11.5" cy="5" r="1.5""#), st!("path", r#"d="M4.5 5v6M11.5 6.5c0 3-7 2.5-7 4.5""#));
     LINK "link" concat!(st!("path", r#"d="M6.5 9.5l3-3""#), st!("path", r#"d="M7.5 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M8.5 11.5l-1 1a2.5 2.5 0 0 1-3.5-3.5l1-1""#));
+    // One mark per meaning, the same in the rail, the pane bars, the menus,
+    // the panels and the palette: the browser a globe; remote control a
+    // screen casting; the environment file a key; the team people; a
+    // sandbox's threads one session forking into several (the worktree's
+    // `branch` is the same family); network requests a shield; a shell a
+    // prompt; the agents' questions a bubble with a question mark; Jarvis a
+    // voice in a ring (the agent keeps the sparkle).
+    GLOBE "globe" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("path", r#"d="M8 1.75c-2.6 2.6-2.6 9.9 0 12.5M8 1.75c2.6 2.6 2.6 9.9 0 12.5M1.75 8h12.5""#));
+    REMOTE "remote" concat!(st!("path", r#"d="M1.75 5.5V3.75a1 1 0 0 1 1-1h10.5a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1H10""#), st!("path", r#"d="M1.75 8.5a5 5 0 0 1 5 5M1.75 11a2.5 2.5 0 0 1 2.5 2.5""#), r#"<circle cx="2" cy="13.4" r="0.9" fill="currentColor"/>"#);
+    KEY "key" concat!(st!("circle", r#"cx="4.75" cy="8" r="2.75""#), st!("path", r#"d="M7.5 8h7M12 8v2.5M14.25 8v2""#));
+    PEOPLE "people" concat!(st!("circle", r#"cx="6" cy="5.25" r="2.25""#), st!("path", r#"d="M1.75 13.75c0-2.6 1.9-4.25 4.25-4.25s4.25 1.65 4.25 4.25""#), st!("path", r#"d="M10.25 3.25a2 2 0 0 1 0 4M11.75 9.6c1.5.5 2.5 1.9 2.5 4.15""#));
+    THREADS "threads" concat!(st!("circle", r#"cx="8" cy="3" r="1.5""#), st!("circle", r#"cx="3.5" cy="13" r="1.5""#), st!("circle", r#"cx="8" cy="13" r="1.5""#), st!("circle", r#"cx="12.5" cy="13" r="1.5""#), st!("path", r#"d="M8 4.5v7M8 6.5c0 2.5-4.5 2.2-4.5 5M8 6.5c0 2.5 4.5 2.2 4.5 5""#));
+    SHIELD "shield" st!("path", r#"d="M8 1.75l5.25 2v4c0 3.2-2.2 5.4-5.25 6.5-3.05-1.1-5.25-3.3-5.25-6.5v-4z""#);
+    PROMPT "prompt" concat!(st!("polyline", r#"points="2.5,4 6.5,8 2.5,12""#), st!("line", r#"x1="8.5" y1="12.25" x2="13.5" y2="12.25""#));
+    ASK "ask" concat!(st!("path", r#"d="M2 3.5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H7l-3 2.5v-2.5H3a1 1 0 0 1-1-1z""#), st!("path", r#"d="M6.6 5.5a1.5 1.5 0 0 1 2.9.5c0 1-1.5 1.1-1.5 2""#), r#"<circle cx="8" cy="9.4" r="0.85" fill="currentColor"/>"#);
+    JARVIS "jarvis" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("path", r#"d="M5.25 7v2M8 5v6M10.75 6.25v3.5""#));
+    // The sbxw mark's prompt (the app icon's green ">", packaging/make-icon.py),
+    // heavier than the set so it holds at 14 pt; the top bar draws it on the
+    // icon's dark tile with the blue cursor beside it (topbar.luau).
+    LOGO_PROMPT "logo-prompt" r#"<polyline points="4.5,3.5 9,8 4.5,12.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>"#;
+    // A keyword pill: a rounded label with a dot (keyword pills, emphasis.rs).
+    TAG "tag" concat!(st!("rect", r#"x="1.75" y="4.75" width="12.5" height="6.5" rx="3.25""#), st!("line", r#"x1="5.5" y1="8" x2="10.5" y2="8""#));
 }
 
 pub fn get(name: &str) -> Option<&'static Icon> {

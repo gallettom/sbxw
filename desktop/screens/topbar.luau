@@ -138,7 +138,12 @@ return {
     })
     return row{ gap = 16, w = "full", h = "full",
       row{ gap = 12,
-        (not compact) and text{ "sbxw", weight = "semibold", size = "title", color = "text-bright" } or false,
+        -- The sbxw mark, not the word: the app icon's dark tile, its green
+        -- prompt and blue cursor (packaging/make-icon.py), drawn as vectors.
+        (not compact) and row{ key = "app-mark", w = 22, h = 22, radius = 6, fill = "bg", border = "border", gap = 0, align = "center", justify = "center", help = "sbxw",
+          icon{ "logo-prompt", size = 14, color = "green" },
+          column{ w = 6, h = 14, justify = "end", py = 2, column{ w = 6, h = 2, radius = 1, fill = "blue" } },
+        } or false,
       },
       spacer{},
       row(centre),

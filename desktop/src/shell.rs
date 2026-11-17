@@ -11,6 +11,7 @@ mod bar;
 mod drag;
 mod features;
 mod jarvis;
+mod leads;
 mod pager;
 pub mod pages;
 mod palette;
@@ -195,6 +196,11 @@ pub struct App {
     pub focused: usize,
     /// The pages and each page's tiling (pages.rs).
     pub pages: Pages,
+    /// The grid's pages as they were when the person switched to Tabs, to
+    /// put back on Grid (`PageOp::View`); in memory only.
+    pub grid_saved: Option<Vec<pages::Page>>,
+    /// The team leads view while it shows, with the layout it replaced (leads.rs).
+    pub leads: Option<leads::LeadsView>,
     /// The last pane id given.
     next_uid: Uid,
     /// Each split's length as laid out (points), by its path, for its divider.
@@ -334,6 +340,8 @@ impl App {
             panes: vec![Pane::empty(1)],
             focused: 0,
             pages: Pages::new(1),
+            grid_saved: None,
+            leads: None,
             next_uid: 1,
             split_len: HashMap::new(),
             rects: Rects::default(),
@@ -408,6 +416,7 @@ impl App {
             for (i, &id) in ids.iter().enumerate() {
                 let mut p = Pane::empty(id);
                 p.sandbox = init.open.get(i).cloned();
+                p.attention = p.sandbox.as_ref().is_some_and(|s| init.attention.contains(s));
                 app.panes.push(p);
             }
             app.pages = Pages { list: vec![pages::Page::of(tiling::default(&ids, init.split.as_deref() == Some("rows")))], current: 0, per: 4, grid_per: 4 };
@@ -416,6 +425,9 @@ impl App {
                 app.pages.current = 0;
             }
             app.sync_panes(ids.get(init.focused.unwrap_or(1).saturating_sub(1)).copied());
+            if init.tabs {
+                app.run_page_op(PageOp::View(true));
+            }
         }
         if a.fixture.is_none() && !headless() {
             app.restore = Some(app.store.get("layout").clone()).filter(|v| !v.is_null());
@@ -586,6 +598,8 @@ impl App {
         data["app"]["shortcuts"] = palette::shortcuts(&self.jarvis.key_name).into_iter().map(|(k, w)| serde_json::json!({ "keys": k, "what": w })).collect::<Vec<_>>().into();
         data["app"]["overrides"] = self.overrides_view();
         data["app"]["kept"] = self.store.get("features").clone();
+        // What the screens' `pills` read (emphasis.rs): the daemon's switch and the app's own.
+        crate::emphasis::set_screen_context(&data["emphasis"], crate::feat::emphasis::app_off(&data["app"]["kept"]["emphasis"]));
         // Picture surfaces: the key that gives the keyboard back, and which one has it.
         data["app"]["uploads"] = crate::files::uploads();
         // The upload dialog for dropped files: false once "Do not ask again" was chosen (features.rs).
@@ -994,6 +1008,9 @@ impl App {
             // Only the pane with the keyboard shows a solid cursor and gets
             // the input method's caret (Rune wants one).
             t.set_focused(self.window_focused && i == self.focused && shown.contains(&i));
+            // Keyword pills: the daemon's switch and the app's own preference
+            // for this sandbox (feat/emphasis.rs), followed live.
+            t.set_pills(crate::feat::emphasis::for_pane(self.feats.data.get("emphasis"), &self.store.get("features")["emphasis"], p.sandbox.as_deref()));
             let mut ch = t.poll_tx(settle, clock, tx);
             for ev in t.take_events() {
                 ch = true;
@@ -1465,6 +1482,26 @@ impl App {
     /// Pages and panes, for the state file: each pane's session (not its
     /// terminal) and each page's tiling.
     fn save_layout(&mut self) {
+        // In the team leads view: the layout it replaced (leads.rs), with the
+        // sessions its panes held (shown, parked, or closed in the view).
+        if let Some(l) = &self.leads {
+            let order = l.saved.all();
+            let info = |u: Uid| -> J {
+                match self.panes.iter().chain(&l.parked).find(|p| p.uid == u) {
+                    Some(p) => serde_json::json!({ "sandbox": p.sandbox, "mode": p.mode.name(), "thread": p.thread }),
+                    None => match l.sessions.get(&u) {
+                        Some((sb, m, t)) => serde_json::json!({ "sandbox": sb, "mode": m.name(), "thread": t }),
+                        None => serde_json::json!({ "sandbox": null, "mode": "agent", "thread": null }),
+                    },
+                }
+            };
+            let panes: Vec<J> = order.iter().map(|u| info(*u)).collect();
+            let idx: HashMap<Uid, Uid> = order.iter().enumerate().map(|(i, u)| (*u, i as Uid)).collect();
+            let mut v = l.saved.to_json(&|u| idx.get(&u).copied());
+            v["panes"] = J::Array(panes);
+            self.store.set("layout", v);
+            return;
+        }
         let panes: Vec<J> = self.panes.iter().map(|p| serde_json::json!({ "sandbox": p.sandbox, "mode": p.mode.name(), "thread": p.thread })).collect();
         let idx: HashMap<Uid, Uid> = self.panes.iter().enumerate().map(|(i, p)| (p.uid, i as Uid)).collect();
         let mut v = self.pages.to_json(&|u| idx.get(&u).copied());
@@ -1556,10 +1593,35 @@ impl App {
                     }
                 });
             }
-            PageOp::View(tabs) => {
-                let n = if tabs { 1 } else { self.pages.grid_per.max(2) };
-                self.run_page_op(PageOp::Per(n));
+            // Tabs keeps the grid as it is (its pages and tilings); Grid from
+            // Tabs puts it back for the terminals still open, those opened
+            // meanwhile filling the room (pages::restore). With nothing kept,
+            // it gathers them onto pages of N.
+            PageOp::View(true) => {
+                if !self.pages.tabs() {
+                    self.grid_saved = Some(self.pages.list.clone());
+                }
+                self.run_page_op(PageOp::Per(1));
             }
+            PageOp::View(false) if self.pages.tabs() => {
+                let n = self.pages.grid_per.max(2);
+                let saved = self.grid_saved.take();
+                let e = self.empty_uids();
+                self.rearrange(|s| {
+                    let f = s.focused_uid();
+                    s.pages.per = n;
+                    match saved {
+                        Some(saved) => {
+                            s.pages.list = pages::restore(&saved, &s.pages.all(), n);
+                        }
+                        None => {
+                            s.pages.gather(&|x| e.contains(&x));
+                        }
+                    }
+                    s.pages.current = f.and_then(|u| s.pages.page_of(u)).unwrap_or(0).min(s.pages.list.len() - 1);
+                });
+            }
+            PageOp::View(false) => self.run_page_op(PageOp::Per(self.pages.grid_per.max(2))),
             PageOp::Gather => {
                 let e = self.empty_uids();
                 self.rearrange(|s| {
@@ -1884,7 +1946,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         let (_, decl) = crate::feat::screen(name)?;
         let crate::feat::Slot::Modal { width, light_dismiss } = decl.slot else { return None };
         let sc = s.screens.iter().find(|x| &x.name == name)?;
-        Some(s.modal_view(screen::view::<App>(sc), width, light_dismiss))
+        let fits = sc.last_good.as_ref().is_some_and(screen::sized_by_content);
+        Some(s.modal_view(screen::view::<App>(sc), width, light_dismiss, fits))
     });
     let panel = match s.screens.iter().find(|x| x.name == "jarvis") {
         Some(j) if s.jarvis.open => {
@@ -2252,7 +2315,51 @@ impl App {
         if p.status() != "connected" {
             items.push(core("status", &p.status(), "muted", "The terminal's connection"));
         }
-        Some(bar::pane_fit(self.bar_width(i), &pane_name(p), p.mode.name(), items, true))
+        let agent = self.agent_label(i);
+        let mut f = bar::pane_fit(self.bar_width(i), &pane_name(p), agent.as_deref(), items, true);
+        if let (false, Some(_)) = (f.switch, &agent) {
+            // Too narrow even for the switch: the menu's first row.
+            let to = if p.mode == Mode::Bash { agent.clone().unwrap_or_default() } else { bar::BASH.to_string() };
+            f.hidden.insert(0, bar::Item { id: "mode".into(), label: format!("Switch to {to}"), icon: Some(if p.mode == Mode::Bash { "sparkle" } else { "prompt" }.into()), tone: String::new(), help: format!("This pane shows {}: switch it to {to} (the other session keeps running)", if p.mode == Mode::Bash { "the shell" } else { "the agent" }), count: None, intent: None, core: true });
+        }
+        Some(f)
+    }
+
+    /// The mode switch's agent segment of pane `i`: "Thread" on a thread's
+    /// pane, else the sandbox's agent by name ("Claude", "Codex"); None for
+    /// a pane with no switch (a kit's prompt).
+    pub fn agent_label(&self, i: usize) -> Option<String> {
+        let p = self.panes.get(i)?;
+        let sb = p.sandbox.as_deref()?;
+        if p.mode == Mode::KitAdd {
+            return None;
+        }
+        if p.thread.is_some() {
+            return Some("Thread".into());
+        }
+        let agent = self.sandboxes.iter().find(|s| s.name == sb).map(|s| s.agent.clone()).filter(|a| !a.is_empty()).unwrap_or_else(|| "claude".into());
+        let mut c = agent.chars();
+        Some(c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default())
+    }
+
+    /// Pane `i` between its agent and a shell of the same sandbox (a
+    /// thread's pane: its agent and a shell in its worktree), as the web
+    /// UI's mode switch: the session left keeps running in the daemon and
+    /// switching back attaches to it again. A session already open in
+    /// another pane is focused there instead of opened twice.
+    pub fn switch_mode(&mut self, i: usize) {
+        let Some(p) = self.panes.get(i) else { return };
+        let (Some(sb), true) = (p.sandbox.clone(), p.mode != Mode::KitAdd) else { return };
+        let to = if p.mode == Mode::Bash { Mode::Agent } else { Mode::Bash };
+        let thread = p.thread.clone();
+        if let Some(j) = self.panes.iter().position(|q| q.sandbox.as_deref() == Some(sb.as_str()) && q.mode == to && q.thread == thread) {
+            self.notify(format!("{} is already open in pane {}", if to == Mode::Bash { "This shell" } else { "This agent" }, j + 1), false);
+            self.show_page_of(self.panes[j].uid);
+            self.focus_pane(j);
+            return;
+        }
+        self.open_with(i, &sb, to, thread, ThreadStart::default());
+        self.save_layout();
     }
 
     /// The overflow menu of pane `i`'s bar, anchored under its button.
@@ -2275,7 +2382,15 @@ impl App {
         let room = below.max(top - 12.0) - screen::MENU_PAD * 2.0 - 4.0;
         let mut list = col().w_full().max_h(room.max(120.0)).scroll(rune::ScrollSpec { stick_bottom: false });
         for (it, r) in f.hidden.iter().zip(&rows) {
-            list = list.child(bar_menu_item(it, r));
+            list = list.child(if it.core && it.id == "mode" {
+                screen::menu_row(r).on_press(move |s: &mut App| {
+                    s.bar_menu = None;
+                    s.switch_mode(i);
+                    s.push_data();
+                })
+            } else {
+                bar_menu_item(it, r)
+            });
         }
         if !rows.is_empty() {
             list = list.child(screen::menu_divider());
@@ -2477,17 +2592,78 @@ fn drag_overlay(s: &App) -> Vec<El> {
 
 /// A pane bar chip: an extra's (or the core's) label, icon, tone and count,
 /// pressable when it has an intent.
-fn bar_chip(it: &bar::Item, n: usize) -> El {
-    // Quiet: a muted chip is text on the bar; a tone is its colour on its tint.
+/// The mode switch right after a pane's name (the web UI's ✦ Claude | ❯
+/// Bash): the current segment marked, the other pressable (switch_mode).
+/// The agent's segment: its mark in its vendor's colour; the shell's: a
+/// prompt. Keys `pane-<n>-mode-agent`, `pane-<n>-mode-bash`.
+fn mode_switch(s: &App, i: usize, agent: &str, ground: u32) -> El {
+    let n = i + 1;
+    let bash = s.panes.get(i).is_some_and(|p| p.mode == Mode::Bash);
+    let thread = s.panes.get(i).is_some_and(|p| p.thread.is_some());
+    let vendor = match agent.to_ascii_lowercase().as_str() {
+        "claude" => "vendor-anthropic",
+        "codex" | "openai" => "vendor-openai",
+        "gemini" | "google" => "vendor-google",
+        _ => "purple",
+    };
+    let seg = |key: String, label: &str, icon: &str, color: u32, on: bool, help: String| {
+        let mut e = row()
+            .key(key)
+            .role("radio")
+            .label(label.to_string())
+            .help(help)
+            .checked(on)
+            .h(layout::DENSE_H - 2.0)
+            .px(bar::SEG_PX)
+            .gap(bar::SEG_GAP)
+            .items_center()
+            .radius(theme::radius("xs").unwrap())
+            .child(rune::icon(crate::icons::get(icon).unwrap(), bar::SEG_ICON).color(theme::hex(theme::mark_on(color, ground))))
+            .child(text(label.to_string()).font(small(bar::CHIP_TEXT, 500.0)).color(if on { c("text-bright") } else { theme::hex(theme::muted_on(ground)) }));
+        if on {
+            e = e.fill(c("elevated"));
+        } else {
+            e = e.hover(c("hover-subtle")).cursor(Cursor::Pointer).focusable(true).focus_ring(2.0, 1.0, c("focus")).on_press(move |s: &mut App| {
+                s.switch_mode(i);
+                s.push_data();
+            });
+        }
+        e
+    };
+    let agent_icon = if thread { "branch" } else { "sparkle" };
+    let agent_help = if bash { format!("Switch this pane to {agent} (the shell keeps running)") } else { format!("This pane shows {agent}") };
+    let bash_help = if bash { "This pane shows a shell".to_string() } else { format!("Switch this pane to a shell in {} (the agent keeps running)", if thread { "this thread's worktree" } else { "this sandbox" }) };
+    row()
+        .key(format!("pane-{n}-mode-switch"))
+        .role("radiogroup")
+        .label("Session")
+        .padding(bar::SWITCH_PAD)
+        .gap(bar::SWITCH_GAP)
+        .items_center()
+        .radius(theme::radius("xs").unwrap())
+        .border(1.0, theme::hex(theme::over(theme::color_value("text").unwrap(), 0.18, ground)))
+        .child(seg(format!("pane-{n}-mode-agent"), agent, agent_icon, theme::color_value(vendor).unwrap(), !bash, agent_help))
+        .child(seg(format!("pane-{n}-mode-bash"), bar::BASH, "prompt", theme::color_value("text").unwrap(), bash, bash_help))
+}
+
+/// `active`: the panel it opens shows, for this pane; `ground`: the bar's tint.
+fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
+    // Quiet: a muted chip is its icon in its colour by meaning and its words
+    // in the bright text on the bar; a tone is its colour on its tint.
     let quiet = it.tone == "muted" || it.tone.is_empty();
     let (fg, tint) = crate::screen::tone(&it.tone);
-    let fg = if quiet { theme::color_value("text").unwrap() } else { fg };
+    let fg = if quiet { theme::color_value("text-bright").unwrap() } else { fg };
     // A quiet chip's icon by meaning (docs/screens.md, "Colour by meaning"):
-    // what it goes to blue, the team purple, stopping red; its words stay text.
-    let icon_fg = if quiet { crate::screen::action_tone(bar::meaning(&it.id)).0 } else { fg };
+    // what it goes to blue, the team purple, stopping red, in its full tone.
+    let (meaning_fg, meaning_tint) = crate::screen::action_tone(bar::meaning(&it.id));
+    let icon_fg = if quiet { theme::mark_on(meaning_fg, ground) } else { fg };
+    // Hover, focus and the active state: the meaning's tint (neutral: the elevated grey).
+    let quiet_tint = if bar::meaning(&it.id) == "neutral" { theme::color_value("elevated").unwrap() } else { meaning_tint };
     let mut b = row().key(it.key(n)).gap(bar::CHIP_GAP).px(bar::CHIP_PX).h(layout::DENSE_H).min_w(layout::DENSE_H).justify_center().items_center().radius(theme::radius("xs").unwrap());
     if !quiet {
         b = b.fill(theme::hex(tint));
+    } else if active {
+        b = b.fill(theme::hex(quiet_tint)).border(1.0, theme::hex(theme::over(meaning_fg, 0.5, quiet_tint)));
     }
     if !it.help.is_empty() {
         b = b.help(it.help.clone());
@@ -2500,7 +2676,8 @@ fn bar_chip(it: &bar::Item, n: usize) -> El {
         b = b.child(text(label).font(small(bar::CHIP_TEXT, 500.0)).color(theme::hex(fg)));
     }
     if let Some((name, args)) = it.intent.clone() {
-        b = b.role("button").label(if it.text().is_empty() { it.help.clone() } else { it.text() }).hover(c(if quiet { "elevated" } else { "active-bg" })).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+        let hover = if quiet { theme::hex(theme::over(meaning_fg, 0.12, quiet_tint)) } else { c("active-bg") };
+        b = b.role("button").label(if it.text().is_empty() { it.help.clone() } else { it.text() }).expanded(active).hover(hover).focusable(true).focus_ring(2.0, 1.0, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
             s.press_extra("pane", &name, &args);
             s.push_data();
         });
@@ -2540,7 +2717,7 @@ fn bar_menu_item(it: &bar::Item, r: &screen::MenuRow) -> El {
 /// in the tone of the most urgent of them (bar::more_tone).
 fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
     let n = i + 1;
-    let count = f.hidden.len();
+    let count = f.overflowed();
     let (label, help) = if count > 0 { (format!("{count} more"), format!("{count} more: what does not fit in this bar, and this pane's moves")) } else { ("Pane menu".to_string(), "Move this pane: left, right, up, down, rotate, to another page".to_string()) };
     let mut b = row()
         .key(format!("pane-{n}-more"))
@@ -2593,6 +2770,12 @@ fn pane_view(s: &App, i: usize) -> El {
     let connected = pane.is_some_and(|p| p.status() == "connected");
     let (dot_tone, dot_word) = if pane.is_some_and(|p| p.attention) { ("amber", "wants you") } else if connected { ("blue", "connected") } else { ("text-muted", "not connected") };
     let dot = el().w(bar::DOT_W).h(bar::DOT_W).radius(bar::DOT_W / 2.0).fill(c(dot_tone)).help(format!("The terminal: {dot_word}"));
+    // The bar takes its sandbox's group colour, as the web UI's grouped panes
+    // do: the same hue as the sidebar's group (App::group_colors, one function
+    // for both), as a tint (theme::bar_ground); an ungrouped sandbox's bar is
+    // the neutral surface.
+    let group = pane.and_then(|p| p.sandbox.as_deref()).and_then(|n| s.group_colors().get(n).copied());
+    let bar_ground = theme::bar_ground(group, focused);
     // grip, dot | name, kind, extras… | "⋯" | close. The middle part is clipped and
     // shrinks; the dot and the close button never move out of view.
     let bar = row()
@@ -2602,7 +2785,7 @@ fn pane_view(s: &App, i: usize) -> El {
         .px(bar::PANE_PAD)
         .gap(bar::PANE_GAP)
         .items_center()
-        .fill(c(if focused { "surface" } else { "surface-alt" }))
+        .fill(theme::hex(bar_ground))
         .on_layout(move |s: &mut App, r: [f32; 4]| {
             let w = s.bar_w.entry(uid).or_insert(0.0);
             if (*w - r[2]).abs() > 0.5 {
@@ -2623,10 +2806,26 @@ fn pane_view(s: &App, i: usize) -> El {
     let mut mid = row().grow(1.0).min_w(0.0).h_full().gap(bar::PANE_GAP).items_center().clip_rounded(0.0).child(
         text(label.clone()).key(format!("pane-{}-name", i + 1)).help(label).font(small(bar::NAME_TEXT, 500.0)).color(c(if focused { "text-bright" } else { "text" })).truncate().min_w(name_min),
     );
-    if let (Some(p), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
-        mid = mid.child(text(p.mode.name()).font(small(bar::CHIP_TEXT, 400.0)).color(c("text-muted")));
+    if let (Some(_), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
+        if f.switch {
+            if let Some(agent) = s.agent_label(i) {
+                mid = mid.child(mode_switch(s, i, &agent, bar_ground));
+            }
+        }
+        // By zone (bar::zone), a hairline between two.
+        let shown_panel = |name: &str| s.feats.panel.as_deref() == Some(name) || (s.feats.split && s.feats.panels.iter().any(|p| p == name));
+        let mut last = None;
         for it in &f.shown {
-            mid = mid.child(bar_chip(it, i + 1));
+            let z = bar::zone(&it.id);
+            let active = focused && bar::panel_of(&it.id).is_some_and(shown_panel);
+            let mut chip = bar_chip(it, i + 1, active, bar_ground);
+            if last.is_some_and(|l| l != z) {
+                // In the gap before the zone's first chip (no room of its own).
+                let x = -(bar::PANE_GAP + bar::SEP_W) / 2.0;
+                chip = chip.child(el().key(format!("pane-{}-zone-{z}", i + 1)).absolute(x, (layout::DENSE_H - 14.0) / 2.0).w(bar::SEP_W).h(14.0).fill(theme::hex(theme::over(theme::color_value("text").unwrap(), 0.3, bar_ground))));
+            }
+            last = Some(z);
+            mid = mid.child(chip);
         }
     }
     bar = bar.child(mid);
@@ -2678,11 +2877,7 @@ fn pane_view(s: &App, i: usize) -> El {
     // The focused pane: a clear 1.5 pt blue border; the others a quiet one.
     // A 2 pt line on top in the sandbox's group colour (the web UI's), so
     // panes of one piece of work read together.
-    let accent = pane
-        .and_then(|p| p.sandbox.as_deref())
-        .and_then(|n| s.group_colors().get(n).copied())
-        .map(theme::hex)
-        .unwrap_or_else(|| c("border"));
+    let accent = group.map(theme::hex).unwrap_or_else(|| c("border"));
     let (bw, border) = if focused { (1.5, c("blue")) } else { (1.0, c("elevated")) };
     col()
         .key(format!("pane-{}", i + 1))
@@ -2769,7 +2964,7 @@ fn empty_pane(s: &App, i: usize) -> El {
         .justify_center()
         .child(rune::icon(crate::icons::get("terminal").unwrap(), 24.0).color(c("text-muted")))
         .child(text(title).font(small(16.0, 600.0)).color(c("text-bright")))
-        .child(text(line).font(small(13.0, 400.0)).color(c("text-muted")).wrap().max_w(360.0))
+        .child(text(line).font(theme::prose(13.0, 400.0)).color(c("text-muted")).wrap().max_w(360.0))
         .child(actions)
 }
 

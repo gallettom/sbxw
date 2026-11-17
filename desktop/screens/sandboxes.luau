@@ -75,6 +75,15 @@ local function in_pane(app, name)
   return nil
 end
 
+-- Whether pane `index` shows a shell rather than the agent (a prompt glyph
+-- beside its "P<n>", so two panes of one sandbox are told apart).
+local function pane_is_bash(app, index)
+  for _, p in ipairs(app.panes or {}) do
+    if p.index == index then return p.mode == "bash" end
+  end
+  return false
+end
+
 -- Features' extras on a row (data.app.extras.sandboxes[name]): the intent of
 -- each by "<sandbox>\n<id>", for the actions (filled by render).
 local extra_intents = {}
@@ -255,7 +264,10 @@ local function menu_label(e)
   return l
 end
 
-local function item(sb, app, data)
+-- `solo`: the colour of its workspace when it is that workspace's only
+-- sandbox (no group block): a small square before its name, the same as a
+-- group header's, so a pane bar's or a tab's colour is found in the list.
+local function item(sb, app, data, solo)
   local name = sb.name
   local selected = app.selected == name
   local pane = in_pane(app, name)
@@ -281,7 +293,7 @@ local function item(sb, app, data)
     if e.intent then
       -- Colour by meaning: what it goes to is blue, what waits for you amber.
       local tone = (e.tone == "amber" and e.id ~= "codemap") and "amber" or (e.id ~= "more" and "blue" or nil)
-      local it = { id = e.id, label = menu_label(e), help = e.help, tone = tone, icon = e.icon or (e.id == "threads" and "chat") or (e.id == "approvals" and "flag") or (e.id == "relay" and "chat") or nil }
+      local it = { id = e.id, label = menu_label(e), help = e.help, tone = tone, icon = e.icon or (e.id == "threads" and "threads") or (e.id == "approvals" and "shield") or (e.id == "relay" and "ask") or nil }
       if e.id == "more" then table.insert(manage, it) else table.insert(go, it) end
     end
   end
@@ -346,6 +358,7 @@ local function item(sb, app, data)
     if #rest == 0 and w + tail <= room then
       room = room - w
       if e.pane then
+        if pane_is_bash(app, e.pane) then table.insert(line2, icon{ "prompt", size = 12, color = "text-muted", help = "Pane " .. e.pane .. " shows a shell" }) end
         table.insert(line2, badge{ label, tone = "blue", help = "Shown in pane " .. e.pane, key = "pane-of-" .. name })
       else
         local tone = e.tone == "amber" and "amber" or (e.tone == "red" and "red" or "neutral")
@@ -386,6 +399,8 @@ local function item(sb, app, data)
   -- padding, which keeps a 24 pt target), and moves with the name's length;
   -- a long name truncates before the bubble is pushed out.
   local line1 = { w = "full", gap = 2,
+    solo and row{ key = "solo-" .. name, w = 12, help = "Its workspace's colour, as on its panes and tabs: " .. (sb.workspace or ""),
+      column{ w = 8, h = 8, radius = 2, fill = solo } } or false,
     text{ name, size = "title", weight = "medium", color = "text-bright", truncate = true, help = name },
   }
   if approvals then
@@ -546,6 +561,7 @@ local function session_line(sb, e, data, base_model)
       word ~= "" and text{ word, size = "caption", weight = wants and "semibold" or "normal", color = done and "text-muted" or (word_color[tone] or "text-muted") } or false,
       mw and text{ mw, size = "caption", color = vendor_of(m, sb.agent) or "text-muted", truncate = true, key = "model-" .. sb.name .. "-" .. e.id } or false,
       spacer{},
+      (e.count and pane_is_bash(data.app, e.count)) and icon{ "prompt", size = 12, color = "text-muted", help = "Pane " .. e.count .. " shows a shell" } or false,
       e.count and badge{ "P" .. e.count, tone = "blue", help = "Shown in pane " .. e.count .. " (" .. (data.app.platform == "macos" and "⌘" or "Ctrl+") .. e.count .. " focuses it)" } or false,
       plus and button{ icon = "plus", compact = true, tone = "green", on = "session_spare", arg = sb.name .. "\n" .. e.id,
         key = "session-add-" .. sb.name .. "-" .. e.id, tab_stop = false, help = "Open " .. name .. " in a new pane" } or false,
@@ -656,8 +672,8 @@ return {
     -- A sandbox in its group's block: its row, then its sessions line and
     -- block, side by side in the block's folding stack (one level of folds:
     -- what changes height is always a row of the stack that glides it).
-    local function sandbox_rows(sb, blk)
-      table.insert(blk, item(sb, app, data))
+    local function sandbox_rows(sb, blk, solo)
+      table.insert(blk, item(sb, app, data, solo))
       sessions_block(sb, app, data, state, blk, (model_of(sb, data)))
     end
     for _, g in ipairs(groups(shown)) do
@@ -689,7 +705,9 @@ return {
         table.insert(body, column(blk))
       else
         local blk = { key = "block-ungrouped", gap = 2, w = "full", px = 4, py = 4, folds = true }
-        for _, sb in ipairs(g.items) do sandbox_rows(sb, blk) end
+        for _, sb in ipairs(g.items) do
+          sandbox_rows(sb, blk, (not sb.chat and sb.workspace and sb.workspace ~= "") and colors[sb.name] or nil)
+        end
         table.insert(body, column(blk))
       end
     end
