@@ -82,9 +82,35 @@ pub struct SessionInfo {
     /// one: what tells a shared plan's threads apart, since they share a cwd.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread: Option<String>,
+    /// The model the session runs, as an id (`claude-opus-5-5`). Reported by
+    /// the session itself (its status line, or a hook event that names it);
+    /// the daemon fills in what sbxw started it with when it has not said yet.
+    /// Absent when nothing is known (another agent that reports none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The model's display name (`Opus 5.5`), when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
     pub origin: SessionOrigin,
     pub answerable: bool,
     pub ts: u64,
+}
+
+/// The model a session says it runs: an id, and a display name when given.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct ModelReport {
+    pub id: String,
+    pub name: Option<String>,
+}
+
+impl ModelReport {
+    /// From what a caller sent: an empty or blank id is no report. Both are
+    /// clipped, since they reach every tab.
+    pub fn new(id: Option<&str>, name: Option<&str>) -> Option<Self> {
+        let id = id.map(str::trim).filter(|s| !s.is_empty())?;
+        let name = name.map(str::trim).filter(|s| !s.is_empty()).map(|n| clip(n, 60));
+        Some(Self { id: clip(id, 120), name })
+    }
 }
 
 /// One session's identity: its sandbox and Claude Code's `session_id` (empty
@@ -105,6 +131,7 @@ struct Status {
     reply: Option<String>,
     cwd: Option<String>,
     thread: Option<String>,
+    model: Option<ModelReport>,
     origin: SessionOrigin,
 }
 
@@ -188,6 +215,19 @@ impl<'a> HookEvent<'a> {
     /// The thread the session was started as (`SBXW_THREAD`), from the status hook.
     pub fn thread(&self) -> Option<&'a str> {
         Some(self.str("sbxw_thread")).filter(|s| !s.is_empty())
+    }
+    /// The model a hook event names. Claude Code gives `SessionStart` a
+    /// `model` id string; an object with `id` and `display_name` (the status
+    /// line's shape) is read too.
+    pub fn model(&self) -> Option<ModelReport> {
+        match self.body.get("model")? {
+            Value::String(id) => ModelReport::new(Some(id), None),
+            Value::Object(m) => ModelReport::new(
+                m.get("id").and_then(Value::as_str),
+                m.get("display_name").and_then(Value::as_str),
+            ),
+            _ => None,
+        }
     }
     pub fn hook_version(&self) -> u64 {
         self.body.get("hook_version").and_then(Value::as_u64).unwrap_or(0)
@@ -403,7 +443,14 @@ impl std::fmt::Display for Ambiguous {
 #[derive(Default, Debug)]
 pub struct AgentBook {
     statuses: BTreeMap<AgentKey, Status>,
+    /// Models reported for sessions no hook has announced yet (the status
+    /// line and the hook race at start), applied when the session appears.
+    early_models: BTreeMap<AgentKey, ModelReport>,
 }
+
+/// Bound on [`AgentBook::early_models`]: a session that never sends a hook
+/// event must not grow it forever.
+const EARLY_MODELS_MAX: usize = 64;
 
 impl AgentBook {
     pub fn new() -> Self {
@@ -426,7 +473,18 @@ impl AgentBook {
             sandbox: sandbox.to_string(),
             session_id: event.session_id().to_string(),
         };
+        let early = self.early_models.remove(&key);
         let st = self.statuses.entry(key.clone()).or_default();
+        if let Some(m) = early {
+            st.model.get_or_insert(m);
+        }
+        if let Some(mut m) = event.model() {
+            // A bare id (`SessionStart`) keeps the name the status line gave it.
+            if m.name.is_none() {
+                m.name = st.model.as_ref().filter(|old| old.id == m.id).and_then(|old| old.name.clone());
+            }
+            st.model = Some(m);
+        }
         if let Some(cwd) = event.cwd() {
             st.cwd = Some(cwd.to_string());
         }
@@ -445,10 +503,35 @@ impl AgentBook {
                 gone.state = SessionState::Exited;
             }
             self.statuses.remove(&key);
+            self.early_models.remove(&key);
             // A session ending can make its sibling answerable again.
             out.extend(self.infos_for(sandbox, has_pty, now));
         }
         out
+    }
+
+    /// The model a session reports (its status line). Returns the payloads to
+    /// broadcast: none when nothing changed, so a report repeated at every
+    /// render costs nothing. A session not seen yet keeps it for later.
+    pub fn report_model(&mut self, sandbox: &str, session_id: &str, model: ModelReport, has_pty: bool, now: u64) -> Vec<SessionInfo> {
+        let key = AgentKey {
+            sandbox: sandbox.to_string(),
+            session_id: session_id.to_string(),
+        };
+        match self.statuses.get_mut(&key) {
+            Some(st) if st.model.as_ref() == Some(&model) => Vec::new(),
+            Some(st) => {
+                st.model = Some(model);
+                self.infos_for(sandbox, has_pty, now)
+            }
+            None => {
+                if self.early_models.len() >= EARLY_MODELS_MAX && !self.early_models.contains_key(&key) {
+                    self.early_models.pop_first();
+                }
+                self.early_models.insert(key, model);
+                Vec::new()
+            }
+        }
     }
 
     fn keys_of(&self, sandbox: &str) -> Vec<&AgentKey> {
@@ -522,6 +605,7 @@ impl AgentBook {
         if running.is_empty() {
             return Vec::new();
         }
+        self.early_models.retain(|k, _| running.contains(&k.sandbox));
         self.evict(now, |k, _| !running.contains(&k.sandbox))
     }
 
@@ -594,6 +678,8 @@ fn build(key: &AgentKey, st: &Status, answerable: bool, now: u64) -> SessionInfo
         session_id: (!key.session_id.is_empty()).then(|| key.session_id.clone()),
         cwd: st.cwd.clone(),
         thread: st.thread.clone(),
+        model: st.model.as_ref().map(|m| m.id.clone()),
+        model_name: st.model.as_ref().and_then(|m| m.name.clone()),
         origin: st.origin,
         answerable,
         ts: now,
@@ -795,6 +881,60 @@ mod tests {
         let gone = book.reconcile(&["b".into()], 3);
         assert_eq!(gone[0].state, SessionState::Exited);
         assert!(book.snapshot(|_| true, 4).is_empty());
+    }
+
+    #[test]
+    fn the_model_comes_from_hooks_and_the_status_line() {
+        let mut book = AgentBook::new();
+        let opus = || ModelReport::new(Some("claude-opus-5-5"), Some("Opus 5.5")).unwrap();
+        // Reported before the session's first hook: kept, applied on arrival.
+        assert!(book.report_model("n", "s1", opus(), true, 1).is_empty());
+        let out = book.apply("n", &ev(&json!({"hook_event_name": "SessionStart", "session_id": "s1"})), SessionOrigin::Tty, true, 2);
+        assert_eq!((out[0].model.as_deref(), out[0].model_name.as_deref()), (Some("claude-opus-5-5"), Some("Opus 5.5")));
+        // The same again broadcasts nothing; another does.
+        assert!(book.report_model("n", "s1", opus(), true, 3).is_empty());
+        let haiku = ModelReport::new(Some("claude-haiku-5-5"), Some("Haiku 5.5")).unwrap();
+        let out = book.report_model("n", "s1", haiku, true, 4);
+        assert_eq!(out[0].model.as_deref(), Some("claude-haiku-5-5"));
+        // A hook naming the same id bare keeps the display name; one naming
+        // none changes nothing.
+        let bare = json!({"hook_event_name": "SessionStart", "session_id": "s1", "model": "claude-haiku-5-5"});
+        let out = book.apply("n", &ev(&bare), SessionOrigin::Tty, true, 5);
+        assert_eq!(out[0].model_name.as_deref(), Some("Haiku 5.5"));
+        let out = book.apply("n", &ev(&json!({"hook_event_name": "Stop", "session_id": "s1"})), SessionOrigin::Tty, true, 6);
+        assert_eq!(out[0].model.as_deref(), Some("claude-haiku-5-5"));
+        // A hook with the status line's shape, and a new id with no name.
+        let obj = json!({"hook_event_name": "Stop", "session_id": "s1", "model": {"id": "claude-sonnet-5-5", "display_name": "Sonnet 5.5"}});
+        assert_eq!(book.apply("n", &ev(&obj), SessionOrigin::Tty, true, 7)[0].model_name.as_deref(), Some("Sonnet 5.5"));
+        let other = json!({"hook_event_name": "Stop", "session_id": "s1", "model": "claude-x"});
+        let out = book.apply("n", &ev(&other), SessionOrigin::Tty, true, 8);
+        assert_eq!((out[0].model.as_deref(), out[0].model_name.as_deref()), (Some("claude-x"), None));
+    }
+
+    #[test]
+    fn no_model_stays_absent() {
+        let mut book = AgentBook::new();
+        let out = book.apply("n", &ev(&json!({"hook_event_name": "SessionStart", "session_id": "s"})), SessionOrigin::Tty, true, 1);
+        assert_eq!((out[0].model.as_ref(), out[0].model_name.as_ref()), (None, None));
+        let v = serde_json::to_value(&out[0]).unwrap();
+        assert!(v.get("model").is_none() && v.get("model_name").is_none(), "omitted, not null");
+        assert!(ModelReport::new(Some("  "), Some("x")).is_none(), "a blank id is no report");
+        assert!(ModelReport::new(None, Some("Opus")).is_none());
+        let junk = json!({"hook_event_name": "Stop", "session_id": "s", "model": 3});
+        assert_eq!(book.apply("n", &ev(&junk), SessionOrigin::Tty, true, 2)[0].model, None);
+    }
+
+    #[test]
+    fn early_models_are_bounded_and_forgotten_with_their_sandbox() {
+        let mut book = AgentBook::new();
+        let m = || ModelReport::new(Some("m"), None).unwrap();
+        for i in 0..(EARLY_MODELS_MAX + 10) {
+            book.report_model("n", &format!("s{i:03}"), m(), true, 1);
+        }
+        assert_eq!(book.early_models.len(), EARLY_MODELS_MAX);
+        book.apply("keep", &ev(&json!({"hook_event_name": "SessionStart", "session_id": "k"})), SessionOrigin::Tty, true, 2);
+        book.reconcile(&["keep".into()], 3);
+        assert!(book.early_models.is_empty());
     }
 
     #[test]

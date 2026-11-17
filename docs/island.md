@@ -98,6 +98,47 @@ sandbox's token.
 | `Stop` | `idle` (with Claude's reply) |
 | `SessionEnd` | `exited` |
 
+### The model a session runs
+
+Each session in `GET /api/sessions` (and each `session` event) carries
+`model`, the model id (`claude-opus-5-5`), and `model_name`, its display name
+(`Opus 5.5`). Each item of `GET /api/sandboxes` carries the same two fields
+for its main agent session: the one without a thread that did not come in
+over SSH or Claude Desktop. Both are optional and left out when unknown.
+
+```json
+{ "sandbox": "myapp", "session_id": "s1", "state": "idle", "agent": "claude",
+  "origin": "tty", "model": "claude-opus-5-5", "model_name": "Opus 5.5", "...": "..." }
+{ "name": "myapp", "agent": "claude", "status": "running",
+  "model": "claude-opus-5-5", "model_name": "Opus 5.5", "...": "..." }
+```
+
+Where the value comes from, best first:
+
+1. **The session itself.** Claude Code tells the `statusLine` script
+   (`assets/usage-statusline.js`) its `model.id` and `model.display_name` at
+   every render. The script sends them with the session's `session_id` to
+   `POST /api/usage`, at once when they differ from what it last sent for that
+   session (the first render, or a `/model` switch), otherwise with the
+   throttled usage report. A hook event that names a model (`SessionStart`
+   gives a `model` id) counts too; a bare id keeps the display name already
+   known for it.
+2. **What sbxw started it with**, until the session has said: the model a
+   thread was opened on, else the sandbox's `claude_model`, else the daemon's,
+   else the first entry of `models`. The display name is that model's `label`
+   in `models`, absent for an id the list does not hold. A model the person
+   saved with `/model` in an earlier session shows only once the status line
+   reports it.
+3. **Nothing**, for an agent other than Claude: no hook or status line of
+   sbxw's runs there, so both fields are left out.
+
+The payload does not say which of these a value came from.
+
+The status line script is written by the tooling batch at each `sbxw up` (and
+each bring-up from the UI), so an existing sandbox starts reporting its model
+after its next bring-up. Until then it shows the fallback; an older script's
+reports, which name no model, change nothing.
+
 Every request the island makes carries the daemon's UI token
 (`Authorization: Bearer`, read from `~/.sbxw/run/ui-token` before each
 request, since the daemon writes a new one each time it starts). Opening a

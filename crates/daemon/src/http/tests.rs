@@ -537,3 +537,95 @@ async fn a_host_command_must_be_acknowledged_to_approve() {
     let (s, v) = call(signed_in(app.clone()), ui(format!("/api/jarvis/proposals/{}/approve", p.id), json!({"via": "click"}))).await;
     assert_eq!((s, v["proposal"]["state"].as_str()), (StatusCode::OK, Some("applied")), "a remote server needs no ack: {v}");
 }
+
+/// The model a session runs: reported by its status line (or a hook event
+/// that names it), else what sbxw started it with; in both payloads.
+#[tokio::test]
+async fn a_sessions_model_reaches_sessions_and_sandboxes() {
+    use sbxw_core::SandboxRef;
+    let (_d, app, _fake) = crate::testing::app_with(|a| match a.first().map(String::as_str) {
+        Some("ls") => sbxw_sbx::runner::Output::ok(
+            &json!([
+                {"name": "myapp", "agent": "claude", "status": "running"},
+                {"name": "tuned", "agent": "claude", "status": "stopped"},
+                {"name": "cx", "agent": "codex", "status": "running"},
+            ])
+            .to_string(),
+        ),
+        _ => crate::testing::sbx_answer(a),
+    });
+    let myapp = SandboxRef::parse("myapp").unwrap();
+    let token = app.store.token(myapp.clone()).unwrap();
+    let agent = |path: &str, body: Value| {
+        json_req(post(path, body.clone()).header("authorization", format!("Bearer {token}")), body)
+    };
+    let get = |path: &str| Request::builder().uri(path).header("host", HOST).body(Body::empty()).unwrap();
+    let session = |v: &Value, id: &str| v.as_array().unwrap().iter().find(|s| s["session_id"] == id).cloned().unwrap();
+    let item = |v: &Value, name: &str| v.as_array().unwrap().iter().find(|s| s["name"] == name).cloned().unwrap();
+
+    // Not reported yet: what sbxw starts it with, the configured default.
+    let start = json!({"hook_event_name": "SessionStart", "session_id": "s1", "hook_version": 2});
+    assert_eq!(call(agent_router(app.clone()), agent("/api/hook", start)).await.0, StatusCode::OK);
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions")).await;
+    assert_eq!((session(&v, "s1")["model"].as_str(), session(&v, "s1")["model_name"].as_str()), (Some("claude-sonnet-5-5"), Some("Sonnet 5.5")));
+
+    // The status line says which: broadcast once, not at every render.
+    let mut bus = app.bus.subscribe();
+    let report = |model: &str, name: &str| {
+        json!({"five_hour_pct": 12.0, "seven_day_pct": null, "session_id": "s1", "model": model, "model_name": name, "sandbox": "myapp"})
+    };
+    assert_eq!(call(agent_router(app.clone()), agent("/api/usage", report("claude-opus-5-5", "Opus 5.5"))).await.0, StatusCode::OK);
+    match bus.try_recv() {
+        Ok(crate::bus::Event::Session(i)) => assert_eq!(i.model.as_deref(), Some("claude-opus-5-5")),
+        other => panic!("expected a session event, got {other:?}"),
+    }
+    call(agent_router(app.clone()), agent("/api/usage", report("claude-opus-5-5", "Opus 5.5"))).await;
+    assert!(bus.try_recv().is_err(), "the same model again changes nothing");
+    assert_eq!(app.usage().five_hour_pct, Some(12.0), "the usage reading still lands");
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions")).await;
+    assert_eq!(session(&v, "s1")["model_name"], "Opus 5.5");
+    let (_, v) = call(signed_in(app.clone()), get("/api/sandboxes")).await;
+    assert_eq!((item(&v, "myapp")["model"].as_str(), item(&v, "myapp")["model_name"].as_str()), (Some("claude-opus-5-5"), Some("Opus 5.5")));
+
+    // `/model`: a later report carries another.
+    call(agent_router(app.clone()), agent("/api/usage", report("claude-haiku-5-5", "Haiku 5.5"))).await;
+    let (_, v) = call(signed_in(app.clone()), get("/api/sandboxes")).await;
+    assert_eq!(item(&v, "myapp")["model"], "claude-haiku-5-5");
+
+    // An older status line sends no model: nothing changes.
+    let old = json!({"five_hour_pct": 20.0, "seven_day_pct": null, "five_hour_resets_at": null, "seven_day_resets_at": null, "sandbox": "myapp"});
+    assert_eq!(call(agent_router(app.clone()), agent("/api/usage", old)).await.0, StatusCode::OK);
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions")).await;
+    assert_eq!(session(&v, "s1")["model"], "claude-haiku-5-5");
+    // A hook event without one neither.
+    call(agent_router(app.clone()), agent("/api/hook", json!({"hook_event_name": "Stop", "session_id": "s1"}))).await;
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions")).await;
+    assert_eq!(session(&v, "s1")["model"], "claude-haiku-5-5");
+
+    // A thread started on a model: that one, until it says otherwise.
+    app.store
+        .update(myapp.clone(), |r| {
+            r.threads.insert("t1".into(), crate::store::ThreadRecord { repo: ".".into(), model: Some("claude-opus-5-5".into()), same_worktree: false })
+        })
+        .unwrap();
+    let thread = json!({"hook_event_name": "SessionStart", "session_id": "t1s", "sbxw_thread": "t1", "hook_version": 2});
+    call(agent_router(app.clone()), agent("/api/hook", thread)).await;
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions")).await;
+    assert_eq!(session(&v, "t1s")["model"], "claude-opus-5-5");
+    let (_, v) = call(signed_in(app.clone()), get("/api/sandboxes")).await;
+    assert_eq!(item(&v, "myapp")["model"], "claude-haiku-5-5", "the main agent's, not the thread's");
+
+    // A sandbox with no session: its own `claude_model`; a model outside the
+    // list has no display name.
+    let tuned = SandboxRef::parse("tuned").unwrap();
+    app.store
+        .update(tuned, |r| {
+            r.config_snapshot = Some(Box::new(sbxw_core::config::Config { claude_model: "claude-next-1".into(), ..Default::default() }))
+        })
+        .unwrap();
+    let (_, v) = call(signed_in(app.clone()), get("/api/sandboxes")).await;
+    assert_eq!(item(&v, "tuned")["model"], "claude-next-1");
+    assert!(item(&v, "tuned").get("model_name").is_none());
+    // Another agent that reports none: left out.
+    assert!(item(&v, "cx").get("model").is_none() && item(&v, "cx").get("model_name").is_none());
+}

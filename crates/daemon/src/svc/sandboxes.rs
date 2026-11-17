@@ -54,6 +54,13 @@ pub struct SandboxItem {
     /// `status` is the last one seen, and actions are refused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unreachable_since: Option<u64>,
+    /// The model the main agent session runs (an id): what the session
+    /// reported, else what sbxw starts it with. Absent when unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// That model's display name, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -132,6 +139,7 @@ impl App {
         }
         let waiting = self.kit_approvals.lock().unwrap().clone();
         let pending = self.sbx.approvals().await.unwrap_or_default();
+        let infos = self.session_infos();
         let pending_for = |name: &str| pending.iter().filter(|a| a.sandbox == name).count();
         let waiting_for = |name: &str| SandboxRef::parse(name).ok().and_then(|r| waiting.get(&r).map(Vec::len)).unwrap_or(0);
         listed
@@ -156,10 +164,18 @@ impl App {
                 created_at: s.created_at,
                 detached: s.detached,
                 unreachable_since: None,
+                model: None,
+                model_name: None,
             })
             .collect::<Vec<_>>()
             .into_iter()
             .chain(self.remote_sandboxes().await)
+            .map(|mut item| {
+                let (model, model_name) = self.main_model(&item.name, &item.agent, &infos);
+                item.model = model;
+                item.model_name = model_name;
+                item
+            })
             .collect()
     }
 
@@ -202,6 +218,8 @@ impl App {
                             kits_waiting: self.kit_approvals.lock().unwrap().get(&sb).map(Vec::len).unwrap_or(0),
                             approvals: 0,
                             unreachable_since: None,
+                            model: None,
+                            model_name: None,
                         });
                     }
                 }
@@ -222,6 +240,8 @@ impl App {
                             kits_waiting: 0,
                             approvals: 0,
                             unreachable_since: Some(since),
+                            model: None,
+                            model_name: None,
                         });
                     }
                 }
