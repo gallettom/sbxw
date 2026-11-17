@@ -12,6 +12,22 @@
 //! * [`TerminalState::set_theme`] with a [`Theme`] (the web UI's defaults, or
 //!   [`Theme::from_setting_strings`] for sbxw's `terminal_color` settings).
 //!
+//! # Size
+//!
+//! The daemon's PTY has ONE size for every client attached to it (the web
+//! UI's panes, other windows); the client used last sets it. So there are two
+//! sizes here: what this pane *wants* (its layout, [`TerminalState::fit`]),
+//! sent as `resize`, and the grid's, [`TerminalState::size`], which is the
+//! PTY's as the daemon announces it (`TermEvent::Size`): the program draws
+//! for that size, so the grid must have it or its output lands in the wrong
+//! cells. When another client owns the size the grid keeps the PTY's, drawn
+//! top-left in the pane (clipped or with room around it), and the status line
+//! says so ([`TerminalState::sized_elsewhere`]); typing in the pane (the
+//! daemon counts it) or clicking it ([`TerminalState::claim`]) takes the size
+//! back. A daemon that announces nothing (older) leaves the grid at the
+//! wanted size, as before. Nothing is sent before the pane has a layout: the
+//! default 100x30 is never told to the daemon.
+//!
 //! Every frame:
 //! * [`TerminalState::poll_tx`]`(settle, clock, tx)`: drains the socket,
 //!   applies the debounced resize, blinks the cursor, retries a dropped
@@ -235,8 +251,13 @@ pub struct TerminalState {
     gesture: Option<Gesture>,
     last_report_cell: Option<(usize, usize)>,
     hover_link: Option<(usize, usize, usize, String)>,
-    /// The size the daemon has, and when the current one was set (app clock;
-    /// `Some(None)`: send on the next poll).
+    /// The size this pane wants (its layout), once it has one.
+    want: Option<(usize, usize)>,
+    /// The PTY's size as the daemon last announced it, and whether this
+    /// client sets it (`None`: not announced, or a daemon that does not).
+    pty: Option<(usize, usize, bool)>,
+    /// The wanted size the daemon was last told, and when the current one was
+    /// set (app clock; `Some(None)`: send on the next poll).
     sent_size: Option<(usize, usize)>,
     resize_at: Option<Option<f64>>,
     reconnect: Option<Reconnect>,
@@ -256,7 +277,13 @@ pub struct TerminalState {
     /// Suffix for the element keys when a window has several terminals
     /// (`grid-<id>`, `terminal-<id>`); empty: `grid`, `terminal`.
     pub id: String,
+    /// Unique per terminal: the key of the element whose layout fits it, so
+    /// a terminal that replaces another in the same pane (same keys, same
+    /// rect) still hears its first layout.
+    generation: u64,
 }
+
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// `SBXW_DESKTOP_DEBUG_KEYS=1`: one line on stderr per key reaching a
 /// terminal, per paste and per copy, so a broken shortcut on someone's
@@ -339,8 +366,10 @@ impl TerminalState {
             gesture: None,
             last_report_cell: None,
             hover_link: None,
+            want: None,
+            pty: None,
             sent_size: None,
-            resize_at: Some(None),
+            resize_at: None,
             reconnect: None,
             attempt: None,
             retry_at: None,
@@ -353,8 +382,8 @@ impl TerminalState {
             clock: 0.0,
             preedit: None,
             id: String::new(),
+            generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
-        t.flush_resize();
         t.rebuild();
         t
     }
@@ -510,6 +539,15 @@ impl TerminalState {
                 self.out.push(TerminalEvent::Attention);
                 return false;
             }
+            TermEvent::Size { cols, rows, owner } => {
+                let (cols, rows) = (cols as usize, rows as usize);
+                if self.pty != Some((cols, rows, owner)) {
+                    log::info!("pty size {cols}x{rows}{}", if owner { "" } else { ", set by another client" });
+                }
+                self.pty = Some((cols, rows, owner));
+                // The grid takes the PTY's size; nothing goes back.
+                self.set_grid(cols, rows);
+            }
             TermEvent::Closed(why) => {
                 self.key_sent = None;
                 if self.reconnect.is_some() {
@@ -650,19 +688,44 @@ impl TerminalState {
         self.hover_link = None;
         self.backoff = Duration::from_millis(500);
         self.status = "connected".into();
+        // A new socket has been told nothing: the wanted size goes again.
         self.sent_size = None;
+        self.pty = None;
         self.flush_resize();
         self.force_all = true;
         self.dirty = true;
     }
 
-    /// Tells the daemon the current size, if it changed.
+    /// Tells the daemon the wanted size, if it changed (never before the
+    /// pane had a layout).
     fn flush_resize(&mut self) {
         self.resize_at = None;
-        if self.sent_size != Some(self.size) {
-            self.sent_size = Some(self.size);
-            log::info!("terminal resized to {}x{}", self.size.0, self.size.1);
-            self.input.send(TermInput::Resize { cols: self.size.0 as u16, rows: self.size.1 as u16 });
+        let Some(want) = self.want else { return };
+        if self.sent_size != Some(want) {
+            self.sent_size = Some(want);
+            log::info!("terminal wants {}x{}", want.0, want.1);
+            self.input.send(TermInput::Resize { cols: want.0 as u16, rows: want.1 as u16 });
+        }
+    }
+
+    /// Another client sets the PTY's size: the grid is the PTY's, not this
+    /// pane's.
+    pub fn sized_elsewhere(&self) -> bool {
+        matches!(self.pty, Some((_, _, false)))
+    }
+
+    /// Takes the PTY's size back (a click in the pane): the wanted size goes
+    /// again, which makes this client the owner. Typing needs no call: the
+    /// daemon counts typed input as use.
+    pub fn claim(&mut self) {
+        if !self.sized_elsewhere() {
+            return;
+        }
+        if let Some(want) = self.want {
+            log::info!("terminal takes the size back: {}x{}", want.0, want.1);
+            self.sent_size = Some(want);
+            self.resize_at = None;
+            self.input.send(TermInput::Resize { cols: want.0 as u16, rows: want.1 as u16 });
         }
     }
 
@@ -708,24 +771,47 @@ impl TerminalState {
         self.resize(cols, rows)
     }
 
-    /// Resizes the grid to `cols` x `rows` cells (the daemon hears on the
-    /// next poll).
+    /// This pane wants `cols` x `rows` cells (its layout changed): the grid
+    /// follows at once, since the daemon gives the size to the client whose
+    /// window changed, and the daemon hears on the next poll. False when the
+    /// wanted size did not change.
     pub fn resize(&mut self, cols: usize, rows: usize) -> bool {
-        if (cols, rows) == self.size {
+        if self.want == Some((cols, rows)) {
             return false;
+        }
+        self.want = Some((cols, rows));
+        self.set_grid(cols, rows);
+        if self.resize_at.is_none() {
+            self.resize_at = Some(None);
+        }
+        true
+    }
+
+    /// The grid at `cols` x `rows` (alacritty reflows what is there; the
+    /// program redraws on the SIGWINCH the daemon's resize gave it).
+    fn set_grid(&mut self, cols: usize, rows: usize) {
+        if (cols, rows) == self.size {
+            return;
         }
         self.size = (cols, rows);
         self.term.resize(Size { cols, rows });
         self.hover_link = None;
-        if self.resize_at.is_none() {
-            self.resize_at = Some(None);
-        }
         self.dirty = true;
         self.rebuild();
-        true
     }
 
-    /// Resizes the daemon has been sent (for tests and measurements).
+    /// The size this pane wants (its layout), once it has one.
+    pub fn wanted_size(&self) -> Option<(usize, usize)> {
+        self.want
+    }
+
+    /// The key of the element whose layout fits this terminal (unique per
+    /// terminal, see `generation`).
+    pub(crate) fn fit_key(&self) -> String {
+        format!("{}-g{}", self.key("term-box"), self.generation)
+    }
+
+    /// The wanted size the daemon has been sent (for tests and measurements).
     pub fn sent_size(&self) -> Option<(usize, usize)> {
         self.sent_size
     }
@@ -1016,6 +1102,10 @@ impl TerminalState {
     /// outside Rune).
     pub fn drag(&mut self, d: DragInput, button: rune::PointerButton, mods: rune::Mods) -> Option<String> {
         use rune::Phase;
+        // A press in the pane is using it: take the PTY's size back.
+        if d.phase == Phase::Down {
+            self.claim();
+        }
         let b = match button {
             rune::PointerButton::Middle => mouse::Button::Middle,
             rune::PointerButton::Secondary => mouse::Button::Right,

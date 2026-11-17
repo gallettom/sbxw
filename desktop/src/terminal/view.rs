@@ -86,9 +86,10 @@ where
     g
 }
 
-/// The whole pane (key `terminal`, or `terminal-<id>`): a status line (size and connection),
-/// the grid, the theme's background; it fits the terminal to the space it is
-/// given and tells the daemon after the size holds (debounced).
+/// The whole pane (key `terminal`, or `terminal-<id>`): a status line (size,
+/// who sets it, connection), the grid, the theme's background; it fits the
+/// terminal to the space it is given and tells the daemon after the size
+/// holds (debounced). The grid has the PTY's size (see `terminal.rs`, "Size").
 pub fn pane<S: 'static, L>(t: &TerminalState, lens: L) -> El
 where
     L: Fn(&mut S) -> Option<&mut TerminalState> + Clone + 'static,
@@ -100,29 +101,46 @@ where
         0 => String::new(),
         n => format!("  scrolled {n} of {} lines (Shift+End: bottom)", t.history_len()),
     };
+    let owner = if t.sized_elsewhere() { ", sized by another window (type or click here to take it)" } else { "" };
     col()
         .key(t.key("terminal"))
         .grow(1.0)
         .h_full()
         .min_w(0.0)
+        .min_h(0.0)
         .padding(PAD)
         .fill(rgb(theme.background))
-        .on_layout_tx({
-            let lens = lens.clone();
-            move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
-            let clock = tx.clock();
-            if let Some(t) = lens(s) {
-                let before = t.size;
-                t.fit_at(r[2], r[3], clock);
-                if t.size != before {
-                    tx.wake_after(std::time::Duration::from_secs_f64(super::RESIZE_DEBOUNCE));
-                }
-            }
-        }})
         .child(
             el().key(t.key("term-status"))
                 .h(STATUS_H)
-                .child(text(format!("terminal {cols}x{rows}  {}{scrolled}", t.status)).font(TextStyle::new(12.0, 400.0)).color(dim)),
+                .child(text(format!("terminal {cols}x{rows}{owner}  {}{scrolled}", t.status)).font(TextStyle::new(12.0, 400.0)).color(dim)),
         )
-        .child(view(t, lens))
+        .child(
+            // The room the grid has. Its layout fits the terminal: keyed per
+            // terminal, so a terminal replacing another in this pane (same
+            // keys, same rect) still hears its first layout. The grid has
+            // the PTY's size, which may be larger than the room when another
+            // window sets it: clipped, top-left.
+            col()
+                .key(t.fit_key())
+                .grow(1.0)
+                .min_w(0.0)
+                .min_h(0.0)
+                .clip_rounded(0.0)
+                .on_layout_tx({
+                    let lens = lens.clone();
+                    move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
+                        let clock = tx.clock();
+                        if let Some(t) = lens(s) {
+                            let before = t.wanted_size();
+                            // fit_at takes the whole pane: add back the padding and the status line.
+                            t.fit_at(r[2] + 2.0 * PAD, r[3] + 2.0 * PAD + STATUS_H, clock);
+                            if t.wanted_size() != before {
+                                tx.wake_after(std::time::Duration::from_secs_f64(super::RESIZE_DEBOUNCE));
+                            }
+                        }
+                    }
+                })
+                .child(view(t, lens)),
+        )
 }
