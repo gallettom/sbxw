@@ -198,6 +198,11 @@
       decos.push({ marker, deco, key: k });
     }
 
+    // The pill is opaque, so the canvas glyphs under it are hidden; it draws
+    // the label itself, one span per cell (widths in % of the pill, so a
+    // scaled font keeps every glyph on its cell). A bracket of the marker's
+    // own start or end keeps its cell but draws nothing (.emph-br): a
+    // wrapped marker's pieces each hide the brackets they hold.
     function paint(el, p) {
       el.style.fontSize = `${term.options.fontSize}px`;
       if (el.dataset.emph) return;

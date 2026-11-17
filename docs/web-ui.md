@@ -235,7 +235,8 @@ Notes:
 
 When an agent writes a status label such as `[[Done]]` or
 `[[Failed: 3 tests]]`, each terminal draws it as a coloured pill over the
-same cells: green for done, red for failed, amber for what needs you, a
+same cells, the brackets left out (their cells pad the pill, as in the
+desktop app): green for done, red for failed, amber for what needs you, a
 filled red for what cannot be undone, blue for context, cyan for the kind of
 work, purple for the team. Copying or selecting gives the text as written,
 brackets included; while a selection is on screen the pills step aside so it
