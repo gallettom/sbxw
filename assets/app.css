@@ -2051,7 +2051,10 @@
   .pane-bar .pane-files-btn:hover:not(:disabled) {
     background: var(--c-amber-tint); border-color: var(--c-amber);
   }
-  .pane-bar .conn-label { color: var(--c-text-muted); font-size: 11px; }
+  .pane-bar .conn-label, .pane-bar .size-label { color: var(--c-text-muted); font-size: 11px; }
+  .pane-bar .size-label[hidden] { display: none; }
+  /* Shrinks and truncates like the name: it must not widen a full bar. */
+  .pane-bar .size-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   /* "connected" says what the blue dot beside the name already says. The
      label speaks only when it has news: connecting, dropped, an error, or
      nothing attached yet. */
