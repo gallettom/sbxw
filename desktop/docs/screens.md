@@ -723,12 +723,13 @@ state word before it stays the strongest thing on the line.
 |---|---|---|---|
 | `vendor-anthropic` | `#e2875a` terracotta | Anthropic | claude, anthropic, opus, sonnet, haiku, fable, mythos |
 | `vendor-openai` | `#e6edf3` (as `text-bright`) | OpenAI | openai, chatgpt, gpt, codex, the o-series (o3, o4-mini) |
-| `vendor-google` | `#8ab4f8` | Google | gemini, google |
+| `vendor-google` | `#9aa8ff` periwinkle | Google | gemini, google |
 
 Anything else stays `text-muted`. One function decides (`vendor_of` in
 sandboxes.luau); the tooltip keeps the full id and adds "by <vendor>". The
 terracotta's hue sits between `red-text` ("unreachable") and `amber`
-("wants you"); Gemini's blue is lighter than the `blue` "working" word.
+("wants you"); Gemini's periwinkle (hue 232) is told from the `blue`
+"working" word (hue 212) by hue, not only by lightness.
 Both rules and the contrast on every ground are tested (`screen::tests`).
 
 **The rules the built-in screens follow** (write yours the same way):

@@ -71,11 +71,11 @@ pub const COLORS: &[(&str, u32)] = &[
     ("status-line", 0x21262d),
     // Who makes a session's model (the sidebar's model words): text colour
     // only, regular weight, never a fill. Not colour by meaning: the
-    // terracotta sits between `red-text` and `amber` in hue, Gemini's blue
-    // is lighter than the `blue` state word beside it.
+    // terracotta sits between `red-text` and `amber` in hue, Gemini's
+    // periwinkle differs from the `blue` state word by hue (232 against 212).
     ("vendor-anthropic", 0xe2875a),
     ("vendor-openai", 0xe6edf3),
-    ("vendor-google", 0x8ab4f8),
+    ("vendor-google", 0x9aa8ff),
     // Keyword pills (emphasis.rs): the kind of work, and the filled pill of
     // an irreversible or costly consequence (white text on it, 4.5:1). The
     // other tones are the colour-by-meaning tokens above; each pill's tint

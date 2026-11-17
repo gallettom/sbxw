@@ -1766,9 +1766,10 @@ end, actions = { send = function(_, _, v) end } }"#).unwrap();
         let (am, _) = hl(cv("amber").unwrap());
         let (rd, _) = hl(cv("red-text").unwrap());
         assert!(ta - rd >= 12.0 && am - ta >= 12.0, "terracotta {ta:.0} between red-text {rd:.0} and amber {am:.0}");
-        let (_, lg) = hl(cv("vendor-google").unwrap());
-        let (_, lb) = hl(cv("blue").unwrap());
-        assert!(lg - lb >= 0.08, "Gemini's blue lighter than the working blue: {lg:.2} vs {lb:.2}");
+        let (hg, lg) = hl(cv("vendor-google").unwrap());
+        let (hb, lb) = hl(cv("blue").unwrap());
+        assert!(hg - hb >= 15.0, "Gemini's periwinkle told from the working blue by hue: {hg:.0} vs {hb:.0}");
+        assert!(lg - lb >= 0.08, "and lighter: {lg:.2} vs {lb:.2}");
     }
 
     /// The status rail: each row says its state in a word and a rail shape;
