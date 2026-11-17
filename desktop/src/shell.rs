@@ -506,7 +506,8 @@ impl App {
         data["app"]["topbar"] = self.top_layout(&mut data);
         data["app"]["errors"] = J::Object(self.feats.errors.clone());
         // Each sandbox's group colour (the web UI's), for rails, swatches and pane accents.
-        data["app"]["groups"] = self.sandboxes.iter().filter_map(|sb| theme::group_color(sb.workspace.as_deref(), sb.chat).map(|c| (sb.name.clone(), J::String(format!("#{c:06x}"))))).collect::<serde_json::Map<_, _>>().into();
+        // Distinct per group (theme::group_colors), the web UI's hue first.
+        data["app"]["groups"] = self.group_colors().into_iter().map(|(n, c)| (n, J::String(format!("#{c:06x}")))).collect::<serde_json::Map<_, _>>().into();
         data["app"]["sidebar"] = serde_json::json!({ "w": self.sidebar_w(), "shown": self.sidebar_shown() });
         // Every shortcut, for Help: `{keys, what}`.
         data["app"]["shortcuts"] = palette::shortcuts(&self.jarvis.key_name).into_iter().map(|(k, w)| serde_json::json!({ "keys": k, "what": w })).collect::<Vec<_>>().into();
@@ -1809,6 +1810,11 @@ fn pane_name(p: &Pane) -> String {
 }
 
 impl App {
+    /// Each sandbox's group colour, distinct per group (theme::group_colors).
+    pub fn group_colors(&self) -> HashMap<String, u32> {
+        theme::group_colors(self.sandboxes.iter().map(|sb| (sb.name.as_str(), sb.workspace.as_deref(), sb.chat)))
+    }
+
     /// The sidebar's width: dragged, else remembered, else the default.
     pub fn sidebar_w(&self) -> f32 {
         let w = self.sidebar_live.unwrap_or_else(|| self.store.get("sidebar")["w"].as_f64().map_or(layout::SIDEBAR_W, |w| w as f32));
@@ -2055,8 +2061,7 @@ fn pane_view(s: &App, i: usize) -> El {
     // panes of one piece of work read together.
     let accent = pane
         .and_then(|p| p.sandbox.as_deref())
-        .and_then(|n| s.sandboxes.iter().find(|x| x.name == n))
-        .and_then(|sb| theme::group_color(sb.workspace.as_deref(), sb.chat))
+        .and_then(|n| s.group_colors().get(n).copied())
         .map(theme::hex)
         .unwrap_or_else(|| c("border"));
     let (bw, border) = if focused { (1.5, c("blue")) } else { (1.0, c("elevated")) };

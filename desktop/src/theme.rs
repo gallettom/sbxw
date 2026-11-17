@@ -219,6 +219,68 @@ pub fn group_color(workspace: Option<&str>, chat: bool) -> Option<u32> {
     Some(hsl((hash % 360) as f32, 0.55, 0.62))
 }
 
+/// Two groups' hues closer than this (degrees) read as the same block.
+pub const GROUP_MIN_HUE: f32 = 40.0;
+/// Lightness as the second cue when the wheel has no free hue left.
+pub const GROUP_LIGHTNESS: &[f32] = &[0.62, 0.72, 0.80];
+
+fn hue_dist(a: f32, b: f32) -> f32 {
+    let d = (a - b).rem_euclid(360.0);
+    d.min(360.0 - d)
+}
+
+/// Every group's colour, distinct: the web UI's hue first (so colours
+/// mostly match it), then, in a stable order (chats first, then workspaces
+/// by path, whatever the list's order or filter), a hue within
+/// [`GROUP_MIN_HUE`] of one already taken moves to the nearest free hue.
+/// With more groups than the wheel holds apart, the hue the furthest from
+/// the others, at the next lightness of [`GROUP_LIGHTNESS`]. Input: each
+/// sandbox's `(name, workspace, chat)`; output: its group's colour, by name
+/// (a sandbox in no group has none). A tint can differ from the web UI's.
+pub fn group_colors<'a>(sandboxes: impl IntoIterator<Item = (&'a str, Option<&'a str>, bool)>) -> std::collections::HashMap<String, u32> {
+    let list: Vec<(&str, Option<&str>, bool)> = sandboxes.into_iter().collect();
+    // The groups: "" for chats, else the workspace path.
+    let mut keys: Vec<String> = list.iter().filter_map(|(_, ws, chat)| if *chat { Some(String::new()) } else { ws.filter(|w| !w.is_empty()).map(str::to_string) }).collect();
+    keys.sort();
+    keys.dedup();
+    let base = |k: &str| -> (f32, f32, f32) {
+        if k.is_empty() {
+            (265.0, 0.60, 0.68)
+        } else {
+            let hash = k.encode_utf16().fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(c as u32));
+            ((hash % 360) as f32, 0.55, 0.62)
+        }
+    };
+    let mut taken: Vec<(f32, usize)> = vec![];
+    let mut by_key = std::collections::HashMap::new();
+    for k in &keys {
+        let (h0, s, l0) = base(k);
+        let free = |h: f32, taken: &[(f32, usize)]| taken.iter().all(|(t, _)| hue_dist(h, *t) >= GROUP_MIN_HUE);
+        let found = (0..=180).flat_map(|d| [h0 + d as f32, h0 - d as f32]).map(|h| h.rem_euclid(360.0)).find(|h| free(*h, &taken));
+        let (h, level) = match found {
+            Some(h) => (h, 0),
+            None => {
+                // The hue the furthest from the others, the next lightness.
+                let h = (0..360).map(|d| (h0 + d as f32).rem_euclid(360.0)).max_by(|a, b| {
+                    let m = |h: f32| taken.iter().map(|(t, _)| hue_dist(h, *t)).fold(f32::MAX, f32::min);
+                    m(*a).total_cmp(&m(*b))
+                }).unwrap_or(h0);
+                let level = 1 + taken.iter().filter(|(t, _)| hue_dist(h, *t) < GROUP_MIN_HUE).count() % (GROUP_LIGHTNESS.len() - 1);
+                (h, level)
+            }
+        };
+        taken.push((h, level));
+        let l = if level == 0 { l0 } else { GROUP_LIGHTNESS[level] };
+        by_key.insert(k.clone(), hsl(h, s, l));
+    }
+    list.iter()
+        .filter_map(|(name, ws, chat)| {
+            let k = if *chat { String::new() } else { ws.filter(|w| !w.is_empty())?.to_string() };
+            by_key.get(&k).map(|c| (name.to_string(), *c))
+        })
+        .collect()
+}
+
 /// `hsl(h, s, l)` as `0xRRGGBB` (CSS's conversion).
 pub fn hsl(h: f32, s: f32, l: f32) -> u32 {
     let a = s * l.min(1.0 - l);
@@ -513,7 +575,8 @@ mod tests {
             Some(w) => w.1 = w.1.min(r),
             None => worst.push((what.to_string(), r, need)),
         };
-        let hues: Vec<u32> = (0..360).map(|h| hsl(h as f32, 0.55, 0.62)).chain([hsl(265.0, 0.60, 0.68)]).collect();
+        // Every hue at every lightness the distinct-colour rule can give.
+        let hues: Vec<u32> = GROUP_LIGHTNESS.iter().flat_map(|&l| (0..360).map(move |h| hsl(h as f32, 0.55, l))).chain([hsl(265.0, 0.60, 0.68)]).collect();
         for g in hues {
             let tint = over(g, GROUP_TINT, surface);
             let hover = over(g, GROUP_TINT_HOVER, surface);
@@ -538,6 +601,41 @@ mod tests {
         }
         let bad: Vec<_> = worst.iter().filter(|(_, r, n)| r < n).collect();
         assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    /// Two groups never share a background: same-hash workspaces, one
+    /// hashing to the chats' hue, stable under filtering, many groups.
+    #[test]
+    fn groups_get_distinct_colours() {
+        let hue = |c: u32| {
+            let (r, g, b) = (((c >> 16) & 255) as f32 / 255.0, ((c >> 8) & 255) as f32 / 255.0, (c & 255) as f32 / 255.0);
+            let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+            let d = mx - mn;
+            if d == 0.0 { 0.0 } else if mx == r { 60.0 * (((g - b) / d).rem_euclid(6.0)) } else if mx == g { 60.0 * ((b - r) / d + 2.0) } else { 60.0 * ((r - g) / d + 4.0) }
+        };
+        let web = |p: &str| (p.encode_utf16().fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(c as u32)) % 360) as f32;
+        // Find two paths with the same web hue, and one at the chats' 265.
+        let paths: Vec<String> = (0..5000).map(|i| format!("/Users/me/dev/p{i}")).collect();
+        let (a, b) = paths.iter().enumerate().find_map(|(i, p)| paths[i + 1..].iter().find(|q| web(q) == web(p)).map(|q| (p.clone(), q.clone()))).unwrap();
+        let near_chat = paths.iter().find(|p| web(p) == 265.0).unwrap().clone();
+        let sbs = vec![("c1", None, true), ("c2", None, true), ("a1", Some(a.as_str()), false), ("a2", Some(a.as_str()), false), ("b1", Some(b.as_str()), false), ("n1", Some(near_chat.as_str()), false)];
+        let m = group_colors(sbs.iter().map(|(n, w, c)| (*n, *w, *c)));
+        assert_eq!(m["c1"], m["c2"], "one group, one colour");
+        assert_eq!(m["a1"], m["a2"]);
+        assert_ne!(m["a1"], m["b1"], "same hash, different groups");
+        assert!(hue_dist(hue(m["a1"]), hue(m["b1"])) >= GROUP_MIN_HUE - 2.0);
+        assert!(hue_dist(hue(m["n1"]), hue(m["c1"])) >= GROUP_MIN_HUE - 2.0, "a workspace at 265 moves off the chats' hue");
+        assert_eq!(m["c1"], hsl(265.0, 0.60, 0.68), "the chats keep the web UI's colour");
+        // Stable: the same set in another order, and a filtered list, give the same colours.
+        let rev = group_colors(sbs.iter().rev().map(|(n, w, c)| (*n, *w, *c)));
+        assert_eq!(m, rev);
+        // Many groups: still pairwise different.
+        let many: Vec<(String, String)> = (0..14).map(|i| (format!("s{i}"), format!("/Users/me/dev/many{i}"))).collect();
+        let mm = group_colors(many.iter().map(|(n, w)| (n.as_str(), Some(w.as_str()), false)).chain([("chat", None, true)]));
+        let mut colours: Vec<u32> = mm.values().copied().collect();
+        colours.sort();
+        colours.dedup();
+        assert_eq!(colours.len(), 15, "15 groups, 15 colours");
     }
 
     #[test]

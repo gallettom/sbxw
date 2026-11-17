@@ -75,7 +75,7 @@ unchanged.
 | `kept` | What features asked the app to keep across runs (`Action::Remember`), by feature then key |
 | `surface.release`, `surface.focused` | The key that gives the keyboard back from a picture surface (`⌘Esc`, `Ctrl+Esc`); the id of the surface that has the keyboard, or nil |
 | `platform` | `macos`, `linux`, `windows` |
-| `groups` | Each sandbox's group colour (`#rrggbb`, the web UI's: chats share one, a workspace folder's from its path), by name; absent for a sandbox in no group |
+| `groups` | Each sandbox's group colour (`#rrggbb`), by name; absent for a sandbox in no group. The web UI's hue first (chats share one, a workspace folder's from its path), then made distinct: a group within 40° of a hue already taken (chats first, then workspaces by path) moves to the nearest free hue, so two groups never share a background; it can then differ from the web UI's (`theme::group_colors`) |
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
 | `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
 | `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |
