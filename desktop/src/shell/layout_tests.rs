@@ -472,3 +472,39 @@ fn dividers_keep_the_least_size_and_double_press_equalises() {
     let (a, b) = (r.rect("pane-1"), r.rect("pane-2"));
     assert!((a[2] - b[2]).abs() < 2.0, "equal: {a:?} {b:?}");
 }
+
+/// A session line's "+" (desktop-netfilter: `open_terminal {sandbox,
+/// thread, pane = "spare"}` from the sandboxes screen) with the page full:
+/// the session goes to the next page with room, else a new page, and no
+/// open pane is ever replaced (the old rule replaced the least recently
+/// used one when all four were full).
+#[test]
+fn a_spare_open_from_a_screen_never_replaces_an_open_pane() {
+    let mut r = Rig::new(&["a", "b", "c", "d"], 1284.0, 816.0);
+    let before = r.generations();
+    let plus = |r: &mut Rig, thread: &str| {
+        let t = thread.to_string();
+        r.rt.update(move |s, _| {
+            let i = Intent::OpenTerminal { sandbox: "web-app".into(), mode: Mode::Agent, thread: Some(t), pane: PaneTarget::Spare, start: crate::intent::ThreadStart::default() };
+            crate::screen::Host::intents(s, "sandboxes", vec![i]);
+        });
+        r.settle();
+    };
+    plus(&mut r, "t1");
+    assert_eq!(r.names(), [vec!["a", "b", "c", "d"], vec!["web-app"]], "page 1 full: a new page");
+    assert_eq!(r.rt.state.pages.current, 1);
+    r.check_kept(&before, "first +");
+    // Back on page 1 (still full): the next page with room, page 2.
+    r.op(PageOp::Show(0));
+    plus(&mut r, "t2");
+    assert_eq!(r.names(), [vec!["a", "b", "c", "d"], vec!["web-app", "web-app"]]);
+    assert_eq!(r.rt.state.pages.current, 1);
+    // Room on the current page: it stays there.
+    r.op(PageOp::Show(0));
+    r.op(PageOp::Per(6));
+    plus(&mut r, "t3");
+    assert_eq!(r.rt.state.pages.current, 0);
+    assert_eq!(r.names()[0], ["a", "b", "c", "d", "web-app"]);
+    r.check_kept(&before, "+ with room");
+    assert!(r.rt.state.notice.as_ref().map_or(true, |n| !n.0.contains("least recently used")));
+}
