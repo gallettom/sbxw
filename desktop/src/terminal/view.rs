@@ -2,7 +2,7 @@
 //! alone, [`pane`] the grid with its status line, padding and background,
 //! laid out to the space it gets.
 
-use super::{cell_width, rgb, style, TerminalState, LINE_HEIGHT, PAD, STATUS_H};
+use super::{rgb, TerminalState, PAD, STATUS_H};
 use rune::{col, el, grid, text, Cursor, Drag, El, KeyEvent, PointerButton, PointerEvent, TextStyle, Tx, WheelEvent};
 
 /// The grid (key `grid`, or `grid-<id>` when [`TerminalState::id`] is set), sized to the terminal's cells: keys (focused),
@@ -18,11 +18,14 @@ where
     L: Fn(&mut S) -> Option<&mut TerminalState> + Clone + 'static,
 {
     let (cols, rows) = t.size;
-    let cw = cell_width();
-    let mut g = grid(cols as u16, cw, LINE_HEIGHT, t.rows.clone())
+    // The cell size the rows were built for: smaller while the grid is scaled
+    // to fit (`TerminalState::metrics`); the handlers' points map through it.
+    let m = t.metrics();
+    let (cw, lh) = (m.cell_w, m.line_h);
+    let mut g = grid(cols as u16, cw, lh, t.rows.clone())
         .key(t.key("grid"))
         .w(cols as f32 * cw)
-        .h(rows as f32 * LINE_HEIGHT)
+        .h(rows as f32 * lh)
         .focusable(true)
         .cursor(if t.hovering_link() { Cursor::Pointer } else { Cursor::Text })
         .pointer_buttons([PointerButton::Middle])
@@ -64,9 +67,9 @@ where
         });
     if let Some((c, r)) = t.cursor {
         g = g.grid_caret(c, r);
-        let (x, y) = (c as f32 * cw, r as f32 * LINE_HEIGHT);
+        let (x, y) = (c as f32 * cw, r as f32 * lh);
         // Where the input method composes and puts its candidate window.
-        let mut caret = el().key(t.key("term-ime")).absolute(x, y).w(cw).h(LINE_HEIGHT);
+        let mut caret = el().key(t.key("term-ime")).absolute(x, y).w(cw).h(lh);
         if t.focused() {
             caret = caret.ime_cursor().ime_option_as_alt(t.keys.option_as_meta);
         }
@@ -76,14 +79,16 @@ where
             g = g.child(
                 el().key(t.key("term-preedit"))
                     .absolute(x, y)
-                    .h(LINE_HEIGHT)
+                    .h(lh)
                     .fill(rgb(theme.background))
                     .border(1.0, rgb(theme.cursor))
-                    .child(text(p.clone()).font(style()).color(rgb(theme.foreground))),
+                    .child(text(p.clone()).font(m.style()).color(rgb(theme.foreground))),
             );
         }
     }
-    g
+    // A new size or cell size lands at once: Rune would spring both (about 0.3 s),
+    // and a terminal is never drawn at a size between two.
+    g.instant_changes()
 }
 
 /// The whole pane (key `terminal`, or `terminal-<id>`): a status line (size,
@@ -101,7 +106,11 @@ where
         0 => String::new(),
         n => format!("  scrolled {n} of {} lines (Shift+End: bottom)", t.history_len()),
     };
-    let owner = if t.sized_elsewhere() { ", sized by another window (type or click here to take it)" } else { "" };
+    let owner = match (t.sized_elsewhere(), t.display_scale().1) {
+        (false, _) => "",
+        (true, false) => ", sized by another window (type or click here to take it)",
+        (true, true) => ", sized by another window, too large to show whole (type or click here to take it)",
+    };
     col()
         .key(t.key("terminal"))
         .grow(1.0)
@@ -120,7 +129,8 @@ where
             // terminal, so a terminal replacing another in this pane (same
             // keys, same rect) still hears its first layout. The grid has
             // the PTY's size, which may be larger than the room when another
-            // window sets it: clipped, top-left.
+            // window sets it: drawn with smaller cells to fit (`metrics`),
+            // top-left, and clipped only below the floor (`MIN_SCALE`).
             col()
                 .key(t.fit_key())
                 .grow(1.0)

@@ -7,8 +7,13 @@
 #   $SBXW_SHOTS/shared-size-1-owner.png   the app sets the size
 #   $SBXW_SHOTS/shared-size-2-other.png   another window set 70x16
 #   $SBXW_SHOTS/shared-size-3-back.png    typed in the app: its size again
-# OTHER=200x60 makes the other window larger than the pane (clipped).
-# and the app's log lines about sizes.
+# Then the other window larger than the pane: the app draws the whole grid
+# scaled down to fit, then much larger: the floor (half size), cut, and the
+# status line says so; then typing takes the size back:
+#   $SBXW_SHOTS/shared-size-4-scaled.png        another window at 160x50
+#   $SBXW_SHOTS/shared-size-5-floor.png         another window at 300x90
+#   $SBXW_SHOTS/shared-size-6-scaled-back.png   typed in the app after 160x50
+# OTHER=WxH changes the first other size; and the app's log lines about sizes.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 shots="$shots_root"; mkdir -p "$shots"
@@ -24,21 +29,24 @@ cat >"$script" <<JSON
 ]}
 JSON
 start_daemon "$shots"
-other_size="${OTHER:-70x16}"; ocols="${other_size%x*}"; orows="${other_size#*x}"
 other() {
+  local ocols="${1%x*}" orows="${1#*x}"
   curl -s -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
-    --data "{\"cols\":$ocols,\"rows\":$orows,\"type\":\"clear; stty size; printf '%0${ocols}d\\\\n' 0 | tr 0 =; echo drawn by another window at $ocols columns\\n\"}" \
+    --data "{\"cols\":$ocols,\"rows\":$orows,\"type\":\"clear; stty size; printf '%0${ocols}d\\\\n' 0 | tr 0 =; echo drawn by another window at $ocols columns; seq 4 $((orows - 1))\\n\"}" \
     "http://$daemon/api/standin/other-client" >/dev/null
 }
-for shot in "1-owner 0.9" "2-other 1.1" "3-back mark:end+0.3"; do
+for shot in "1-owner 0.9 ${OTHER:-70x16}" "2-other 1.1 ${OTHER:-70x16}" "3-back mark:end+0.3 ${OTHER:-70x16}" \
+            "4-scaled 1.1 160x50" "5-floor 1.1 300x90" "6-scaled-back mark:end+0.3 160x50"; do
   set -- $shot
   log="$shots/app-shared-size-$1.log"
   run_app "$log" --sandbox web-app --script "$script" --snap "$shots/shared-size-$1.png" --at "$2" &
   app=$!
   for _ in $(seq 300); do grep -q "hold 2500 ms" "$log" 2>/dev/null && break; sleep 0.05; done
   sleep 0.5
-  other
+  other "$3"
   wait $app
   echo "$shots/shared-size-$1.png"
 done
-grep -hE "pty size|terminal wants|takes the size" "$shots/app-shared-size-3-back.log" | sed 's/^\[[^]]*\] //'
+for l in 3-back 6-scaled-back; do
+  grep -hE "pty size|terminal wants|takes the size" "$shots/app-shared-size-$l.log" | sed 's/^\[[^]]*\] //'
+done

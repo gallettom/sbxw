@@ -915,3 +915,263 @@ fn a_plain_shell_keeps_the_bell_rule() {
     // No sessions data at all (the feature not loaded): the bell rule too.
     assert!(session_for(None, Some("web-app"), None, true).is_none());
 }
+
+// ---- A grid sized by another window, drawn scaled to fit ----
+
+/// The pane's whole size (points) for a room of exactly `cols` x `rows` cells.
+fn pane_for(cols: usize, rows: usize) -> (f32, f32) {
+    (PAD * 2.0 + cols as f32 * cell_width() + 0.5, PAD * 2.0 + STATUS_H + rows as f32 * LINE_HEIGHT + 0.5)
+}
+
+/// A terminal whose pane has room for `cols` x `rows`, its resize sent.
+fn client(cols: usize, rows: usize) -> (TerminalState, Sender<TermEvent>, Receiver<TermInput>) {
+    let (ev_tx, ev_rx) = mpsc::channel();
+    let (in_tx, in_rx) = mpsc::channel();
+    let mut t = TerminalState::new(TerminalConn { events: ev_rx, input: in_tx });
+    let (w, h) = pane_for(cols, rows);
+    t.fit(w, h);
+    t.poll(None);
+    assert_eq!(t.wanted_size(), Some((cols, rows)));
+    (t, ev_tx, in_rx)
+}
+
+fn approx(a: f32, b: f32) -> bool {
+    (a - b).abs() < 0.01
+}
+
+/// The scaled grid: no larger than the ideal scale, within two font steps
+/// of it, and its drawn cells fit the room.
+fn check_fits(t: &TerminalState, ideal: f32, room: (usize, usize)) {
+    let (k, cut) = t.display_scale();
+    let m = t.metrics();
+    let (rw, rh) = (room.0 as f32 * cell_width() + 0.5, room.1 as f32 * LINE_HEIGHT + 0.5);
+    assert!(!cut, "{k}");
+    assert!(k <= ideal + 1e-4 && k > ideal - 2.0 * 0.25 / FONT_SIZE - 1e-4, "k {k}, ideal {ideal}");
+    assert!(t.size.0 as f32 * m.cell_w <= rw && t.size.1 as f32 * m.line_h <= rh, "{m:?} for {:?} in {rw}x{rh}", t.size);
+    assert_eq!(m.font, k * FONT_SIZE);
+    assert!(approx(m.line_h, LINE_HEIGHT * k));
+}
+
+#[test]
+fn a_larger_grid_from_another_window_is_scaled_to_fit_both_ways() {
+    let (mut t, ev, rx) = client(40, 10);
+    let _ = resizes(&rx);
+    let other = |t: &mut TerminalState, cols: u16, rows: u16| {
+        ev.send(TermEvent::Size { cols, rows, owner: false }).unwrap();
+        t.poll(None);
+        t.display_scale()
+    };
+    // Room 40x10 (plus half a point). Too wide: the width decides.
+    other(&mut t, 64, 10);
+    check_fits(&t, 40.0 / 64.0, (40, 10));
+    // Too tall: the height decides.
+    other(&mut t, 40, 16);
+    check_fits(&t, 10.0 / 16.0, (40, 10));
+    // Both: the smaller of the two.
+    other(&mut t, 50, 16);
+    check_fits(&t, 10.0 / 16.0, (40, 10));
+    // Smaller than the room: never above 1, top-left as before.
+    assert_eq!(other(&mut t, 20, 5), (1.0, false));
+    assert_eq!(t.metrics(), Metrics::normal());
+    // Larger than twice the room: the floor (7 pt), and cut.
+    assert_eq!(other(&mut t, 200, 60), (MIN_SCALE, true));
+    assert_eq!(t.metrics().font, 7.0);
+    // Owning the size again: normal size.
+    ev.send(TermEvent::Size { cols: 40, rows: 10, owner: true }).unwrap();
+    t.poll(None);
+    assert_eq!(t.display_scale(), (1.0, false));
+    // Another window at exactly this size, not owned: normal too.
+    other(&mut t, 40, 10);
+    assert_eq!(t.display_scale(), (1.0, false));
+    // The scale is drawing only: nothing was ever sent because of it.
+    assert_eq!(resizes(&rx), vec![]);
+    assert_eq!(t.wanted_size(), Some((40, 10)));
+}
+
+/// Under scale, a point maps to the cell drawn under it: the selection takes
+/// the words drawn where the drag ran.
+#[test]
+fn under_scale_a_selection_takes_the_cells_drawn_under_the_pointer() {
+    let (mut t, ev, _rx) = client(40, 10);
+    ev.send(TermEvent::Size { cols: 80, rows: 20, owner: false }).unwrap();
+    ev.send(TermEvent::Output(b"\r\n\r\n                                              alpha bravo charlie".to_vec())).unwrap();
+    t.poll(None);
+    let m = t.metrics();
+    assert!(m.font < FONT_SIZE);
+    // "bravo" starts at column 52 of row 2, drawn at 52 * the scaled cell.
+    let at = |c: usize, r: usize, f: f32| ((c as f32 + f) * m.cell_w, (r as f32 + 0.5) * m.line_h);
+    let ((sx, sy), (x, y)) = (at(52, 2, 0.25), at(56, 2, 0.75));
+    let shift = Mods { shift: true, ..Mods::default() };
+    for (phase, x, y) in [(Phase::Down, sx, sy), (Phase::Move, x, y), (Phase::Up, x, y)] {
+        t.drag(DragInput { phase, x, y, start_x: sx, start_y: sy, dx: x - sx, dy: y - sy, clicks: 1 }, PointerButton::Primary, shift);
+    }
+    assert_eq!(t.selection_text().as_deref(), Some("bravo"));
+    // The same points at full-size cells would have been columns 26 to 29: blanks.
+}
+
+#[test]
+fn no_resize_is_sent_while_scaled() {
+    let (mut t, ev, rx) = client(40, 10);
+    let _ = resizes(&rx);
+    let mut tx = Tx::default();
+    ev.send(TermEvent::Size { cols: 70, rows: 20, owner: false }).unwrap();
+    t.poll_tx(None, 1.0, &mut tx);
+    assert!(t.display_scale().0 < 1.0);
+    // Frames redrawn, the same layout heard again, output, time passing.
+    let (w, h) = pane_for(40, 10);
+    for i in 0..5 {
+        t.fit_at(w, h, 2.0 + i as f64);
+        ev.send(TermEvent::Output(b"tick\r\n".to_vec())).unwrap();
+        t.poll_tx(None, 2.5 + i as f64, &mut tx);
+    }
+    assert_eq!(resizes(&rx), vec![], "a scaled pane never sends its size");
+    assert_eq!(t.size, (70, 20), "the grid stays the PTY's");
+    // A wheel and a selection under scale send no size either.
+    t.on_wheel(LINE_HEIGHT * 2.0, 10.0, 10.0, Mods::default());
+    let shift = Mods { shift: true, ..Mods::default() };
+    drag(&mut t, Phase::Down, (1, 1), (1, 1), 1, shift);
+    assert_eq!(resizes(&rx), vec![(40, 10)], "only the click, which takes the size back");
+}
+
+/// A pane in Rune with the grid scaled: the drawn grid fits the room, lands
+/// at once (no spring), and a click lands on the cell drawn under it.
+#[test]
+fn under_scale_the_grid_fits_and_the_mouse_maps_to_the_cell_under_it() {
+    use rune::{Cx, El, Env, Runtime};
+    struct S(TerminalState);
+    fn lens(s: &mut S) -> Option<&mut TerminalState> {
+        Some(&mut s.0)
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        rune::row().w_full().h_full().child(super::pane(&s.0, lens))
+    }
+    let (ev_tx, ev_rx) = mpsc::channel();
+    let (in_tx, in_rx) = mpsc::channel();
+    let mut t = TerminalState::new(TerminalConn { events: ev_rx, input: in_tx });
+    t.id = "1".into();
+    let mut rt = Runtime::new(S(t), view, (700.0, 400.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.frame(0.016);
+    let (wc, wr) = rt.state.0.wanted_size().unwrap();
+    // Another window owns the PTY at 1.6 times this pane's cells.
+    let (pc, pr) = ((wc as f32 * 1.6) as u16, (wr as f32 * 1.6) as u16);
+    ev_tx.send(TermEvent::Size { cols: pc, rows: pr, owner: false }).unwrap();
+    // A program that wants the mouse (SGR reports).
+    ev_tx.send(TermEvent::Output(b"\x1b[?1000h\x1b[?1006h".to_vec())).unwrap();
+    rt.update(|s, _| {
+        s.0.poll(None);
+    });
+    rt.frame(0.032);
+    rt.frame(0.048);
+    let _ = resizes(&in_rx);
+    let (k, cut) = rt.state.0.display_scale();
+    assert!(k < 1.0 && k >= MIN_SCALE && !cut, "{k}");
+    let m = rt.state.0.metrics();
+    let (grid, _) = rt.presented("grid-1").expect("grid drawn");
+    let fit_key = rt.state.0.fit_key();
+    let (room, _) = rt.presented(&fit_key).expect("room drawn");
+    assert!(approx(grid[2], pc as f32 * m.cell_w) && approx(grid[3], pr as f32 * m.line_h), "{grid:?}: {m:?}, at once (no spring)");
+    assert!(grid[0] + grid[2] <= room[0] + room[2] + 0.5 && grid[1] + grid[3] <= room[1] + room[3] + 0.5, "nothing cut: {grid:?} in {room:?}");
+    assert!(approx(grid[0], room[0]) && approx(grid[1], room[1]), "top-left");
+    // A click on the cell drawn at (col 30, row 12): reported as that cell.
+    let (c, r) = (30usize, 12usize);
+    let x = grid[0] + (c as f32 + 0.5) * m.cell_w;
+    let y = grid[1] + (r as f32 + 0.5) * m.line_h;
+    rt.pointer_down(x, y);
+    rt.frame(0.064);
+    rt.pointer_up(x, y);
+    rt.frame(0.080);
+    let all: Vec<TermInput> = in_rx.try_iter().collect();
+    let bytes: Vec<u8> = all.iter().filter_map(|i| if let TermInput::Bytes(b) = i { Some(b.clone()) } else { None }).flatten().collect();
+    let want = format!("\x1b[<0;{};{}M", c + 1, r + 1);
+    assert!(String::from_utf8_lossy(&bytes).contains(&want), "{:?} lacks {want:?}", String::from_utf8_lossy(&bytes));
+    // The click took the size back: this pane's size went once.
+    let sent: Vec<(u16, u16)> = all.iter().filter_map(|i| if let TermInput::Resize { cols, rows } = i { Some((*cols, *rows)) } else { None }).collect();
+    assert_eq!(sent, vec![(wc as u16, wr as u16)]);
+    // The daemon answers: owner, normal size, drawn unscaled.
+    ev_tx.send(TermEvent::Size { cols: wc as u16, rows: wr as u16, owner: true }).unwrap();
+    rt.update(|s, _| {
+        s.0.poll(None);
+    });
+    rt.frame(0.096);
+    rt.frame(0.112);
+    assert_eq!(rt.state.0.display_scale(), (1.0, false));
+    let (grid, _) = rt.presented("grid-1").unwrap();
+    assert!(approx(grid[2], wc as f32 * cell_width()), "{grid:?}");
+}
+
+/// Two clients of different sizes on one PTY, with the daemon's rule
+/// (`crates/daemon/src/pty.rs`: the client that last sent a size or typed
+/// owns it; every client hears the size and whether it is the owner). Each
+/// change of hands is one message from the client taking it and one frame
+/// to each: then nothing moves, and the client that does not own it is
+/// scaled, never answering.
+#[test]
+fn two_clients_of_different_sizes_settle_after_one_exchange() {
+    struct Daemon {
+        pty: (u16, u16),
+        owner: Option<usize>,
+        wanted: [Option<(u16, u16)>; 2],
+    }
+    let (a, a_ev, a_rx) = client(60, 15);
+    let (b, b_ev, b_rx) = client(80, 20);
+    let mut ts = [a, b];
+    let evs = [a_ev, b_ev];
+    let rxs = [a_rx, b_rx];
+    let mut d = Daemon { pty: (0, 0), owner: None, wanted: [None, None] };
+    // Delivers what the clients sent until nothing moves; returns the messages carried.
+    let mut pump = |ts: &mut [TerminalState; 2], d: &mut Daemon| -> usize {
+        let mut carried = 0;
+        for _round in 0..10 {
+            let mut moved = false;
+            for i in 0..2 {
+                for input in rxs[i].try_iter() {
+                    carried += 1;
+                    moved = true;
+                    match input {
+                        TermInput::Resize { cols, rows } => {
+                            d.wanted[i] = Some((cols, rows));
+                            d.owner = Some(i);
+                        }
+                        TermInput::Bytes(_) if d.wanted[i].is_some() => d.owner = Some(i),
+                        _ => {}
+                    }
+                }
+            }
+            if !moved {
+                return carried;
+            }
+            let o = d.owner.unwrap();
+            d.pty = d.wanted[o].unwrap();
+            for (j, ev) in evs.iter().enumerate() {
+                ev.send(TermEvent::Size { cols: d.pty.0, rows: d.pty.1, owner: j == o }).unwrap();
+            }
+            for t in ts.iter_mut() {
+                t.poll(None);
+            }
+        }
+        panic!("never settled");
+    };
+    // Both attach; B came last and owns 80x20. A draws it at 3/4.
+    assert_eq!(pump(&mut ts, &mut d), 2);
+    assert_eq!(d.pty, (80, 20));
+    assert!(approx(ts[0].display_scale().0, 0.75), "{:?}", ts[0].display_scale());
+    assert_eq!(ts[1].display_scale(), (1.0, false));
+    // A click in A: one resize, then quiet. B's grid (60x15) is smaller than its pane: normal size.
+    drag(&mut ts[0], Phase::Down, (1, 1), (1, 1), 1, Mods::default());
+    drag(&mut ts[0], Phase::Up, (1, 1), (1, 1), 1, Mods::default());
+    assert_eq!(pump(&mut ts, &mut d), 1, "one message, the claim");
+    assert_eq!(d.pty, (60, 15));
+    assert_eq!((ts[0].display_scale(), ts[1].display_scale()), ((1.0, false), (1.0, false)));
+    assert!(ts[1].sized_elsewhere() && !ts[0].sized_elsewhere());
+    // A key in B: one message (the key), then quiet; A scales again.
+    ts[1].on_key(&key(Key::Text("x".into()), |_| {}));
+    assert_eq!(pump(&mut ts, &mut d), 1, "one message, the key");
+    assert_eq!(d.pty, (80, 20));
+    assert!(approx(ts[0].display_scale().0, 0.75));
+    // Quiet afterwards, frames and polls included.
+    for t in ts.iter_mut() {
+        t.poll(None);
+    }
+    assert_eq!(pump(&mut ts, &mut d), 0, "settled");
+}

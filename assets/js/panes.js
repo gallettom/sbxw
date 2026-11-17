@@ -150,6 +150,8 @@ function createPane(index) {
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg><span class="files-word">Project</span>
       </button>
       <span class="conn-label" id="pconn-${index}"></span>
+      <span class="size-label" id="psize-${index}" hidden
+            title="Another window (a tab or the desktop app) sets this terminal's size, so it is drawn smaller to show whole. Type or click in it to take the size back."></span>
       <button type="button" class="role-chip" id="prole-${index}" hidden
               title="Click to choose this group's colour; right-click to reset it"></button>
       <button class="pane-btn pane-plan-btn" id="pplan-${index}" hidden
@@ -214,6 +216,9 @@ function createPane(index) {
 
   // Focus pane on click inside it
   el.addEventListener('mousedown', () => setFocusedPane(index));
+  // A click in the terminal takes the PTY's size back, as typing does
+  // (claimPaneSize). On termEl, which outlives a rebuilt terminal.
+  termEl.addEventListener('mousedown', () => claimPaneSize(pane), true);
 
   // Mode buttons
   // A main pane switches between Claude and Bash, beside the Sessions menu
@@ -346,9 +351,10 @@ function offerOscCopy(sandbox, text, bytes) {
 // recreatePaneTerminal() on an existing pane — so every wire-up here must
 // read `pane.*` rather than close over locals that a second call would
 // shadow instead of replace.
+const TERM_FONT_SIZE = 13;
 function setupTerminal(pane) {
   const term = new Terminal({
-    cursorBlink: true, fontSize: 13,
+    cursorBlink: true, fontSize: TERM_FONT_SIZE,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
     // The picked colour (term-color.js); --c-term paints the padding around
     // it, so the terminal and its tile stay one colour, not two.
@@ -515,8 +521,12 @@ function sendPaneResize(pane) {
     termLog(pane, 'resize DROPPED (socket not open)');
     return;
   }
-  pane.ws.send(JSON.stringify({ type: 'resize', cols: pane.term.cols, rows: pane.term.rows }));
-  pane.ws.sentSize = termSize(pane);
+  // What this pane wants: its own fit, not the size it may be drawing for
+  // another window (applyPtySize). Sending that would claim the PTY at the
+  // other window's size.
+  const own = pane.ownSize || { cols: pane.term.cols, rows: pane.term.rows };
+  pane.ws.send(JSON.stringify({ type: 'resize', cols: own.cols, rows: own.rows }));
+  pane.ws.sentSize = `${own.cols}x${own.rows}`;
   termLog(pane, 'resize sent');
 }
 
@@ -596,12 +606,27 @@ function fitPane(pane, why = 'fit') {
     termLog(pane, `${why} SKIPPED (no box to measure)`, box);
     return;
   }
+  const pty = pane.ws?.ptySize;
+  // Drawing another window's size and this box is the one the pane last
+  // fitted: nothing of this pane changed, so nothing is sent (a pane that is
+  // not the owner never sends its size unasked: that would take the PTY from
+  // the window using it). The fit addon is not asked either: at a smaller
+  // font it would propose more cells than the pane holds at its own.
+  if (pty && !pty.owner && pane.ownBox === box) {
+    showPtySize(pane);
+    return;
+  }
+  // The pane's own size is measured at its own font.
+  if (pane.term.options.fontSize !== TERM_FONT_SIZE) pane.term.options.fontSize = TERM_FONT_SIZE;
   pane.fit.fit();
+  pane.ownBox = box;
+  pane.ownSize = { cols: pane.term.cols, rows: pane.term.rows };
   termLog(pane, why, box);
   if (termSize(pane) !== pane.ws?.sentSize) sendPaneResize(pane);
   // The box has not changed, and another client sets the PTY's size: draw at
   // the PTY's size, not the box's (see applyPtySize).
-  else if (pane.ws?.ptySize && !pane.ws.ptySize.owner) pane.term.resize(pane.ws.ptySize.cols, pane.ws.ptySize.rows);
+  else if (pty && !pty.owner) showPtySize(pane);
+  updateSizeLabel(pane);
 }
 
 // The daemon's {"type":"size","cols","rows","owner"} frame (asked for with
@@ -617,11 +642,110 @@ function applyPtySize(pane, msg) {
   pane.ws.ptySize = { cols: msg.cols, rows: msg.rows, owner: !!msg.owner };
   pane.termEl.style.overflow = 'hidden';
   if (!msg.owner) {
-    if (pane.term.cols !== msg.cols || pane.term.rows !== msg.rows) pane.term.resize(msg.cols, msg.rows);
-  } else if (was && !was.owner && pane.termEl.offsetWidth && pane.termEl.offsetHeight) {
-    // Owner again: back to the box's size, which is what the PTY took.
-    pane.fit.fit();
+    showPtySize(pane);
+  } else if (was && !was.owner) {
+    // Owner again: its own font, and back to the box's size, which is what
+    // the PTY took.
+    if (pane.term.options.fontSize !== TERM_FONT_SIZE) pane.term.options.fontSize = TERM_FONT_SIZE;
+    if (pane.termEl.offsetWidth && pane.termEl.offsetHeight) pane.fit.fit();
   }
+  updateSizeLabel(pane);
+}
+
+// ── Another window's size, drawn whole ──────────────────────────────────────
+// When another client sets the PTY's size, xterm has the PTY's cells. If they
+// do not fit the box, the font is made smaller until every column and row
+// does: scale = min(room width / grid width, room height / grid height),
+// never above 1 (a smaller grid stays at its normal size, top-left) and never
+// below PANE_MIN_SCALE (then the grid is cut at the right and bottom, and the
+// label says so). A smaller font rather than a CSS transform: xterm measures
+// the new cell, so the text stays crisp and the mouse, selection and links
+// land on the right cell. Drawing only: nothing is sent from here.
+const PANE_MIN_SCALE = 0.5;
+
+// The box the grid may fill, counted as the fit addon counts it.
+function termRoom(pane) {
+  const el = pane.term.element;
+  if (!el?.parentElement) return null;
+  const ps = getComputedStyle(el.parentElement);
+  const es = getComputedStyle(el);
+  const sb = pane.term.options.scrollback === 0 ? 0 : (pane.term._core?.viewport?.scrollBarWidth || 0);
+  const w = parseInt(ps.width) - parseInt(es.paddingLeft) - parseInt(es.paddingRight) - sb;
+  const h = parseInt(ps.height) - parseInt(es.paddingTop) - parseInt(es.paddingBottom);
+  return w > 0 && h > 0 ? { w, h } : null;
+}
+
+// The scale that shows `cols` x `rows` cells of `cell` (CSS px at the normal
+// font) whole in `room`, and whether the grid is cut even so.
+function paneScale(room, cols, rows, cell, min = PANE_MIN_SCALE) {
+  if (!room || !cell?.width || !cell?.height || !cols || !rows) return { k: 1, cut: false };
+  const k = Math.min(1, room.w / (cols * cell.width), room.h / (rows * cell.height));
+  return k < min ? { k: min, cut: true } : { k, cut: false };
+}
+
+// xterm's cell at the font it has now, in CSS px.
+const termCell = pane => pane.term._core?._renderService?.dimensions?.css?.cell;
+
+// Draw the PTY's cells, scaled down to fit the box when they do not.
+function showPtySize(pane) {
+  const pty = pane.ws?.ptySize;
+  if (!pty || pty.owner) return;
+  const term = pane.term;
+  if (term.cols !== pty.cols || term.rows !== pty.rows) term.resize(pty.cols, pty.rows);
+  const room = termRoom(pane);
+  // The normal cell, measured at the normal font (remembered: the font may
+  // already be smaller here).
+  if (term.options.fontSize === TERM_FONT_SIZE && termCell(pane)?.width) pane.normalCell = { ...termCell(pane) };
+  const s = paneScale(room, pty.cols, pty.rows, pane.normalCell);
+  let size = Math.round(TERM_FONT_SIZE * s.k * 4) / 4;
+  const floor = TERM_FONT_SIZE * PANE_MIN_SCALE;
+  if (term.options.fontSize !== size) term.options.fontSize = size;
+  // A smaller font's cell is not exactly k times the normal one (hinting,
+  // rounding to device pixels): step down until the grid fits, or the floor.
+  const fits = () => { const c = termCell(pane); return !c?.width || !room || (pty.cols * c.width <= room.w && pty.rows * c.height <= room.h); };
+  while (!fits() && size > floor) {
+    size = Math.max(floor, size - 0.25);
+    term.options.fontSize = size;
+  }
+  pane.scaleCut = !fits();
+  updateSizeLabel(pane);
+}
+
+// A pane whose socket is gone or replaced draws at its own font again.
+function forgetPtySize(pane) {
+  if (pane.term.options.fontSize !== TERM_FONT_SIZE) pane.term.options.fontSize = TERM_FONT_SIZE;
+  pane.scaleCut = false;
+  updateSizeLabel(pane);
+}
+
+// The pane bar says when another window sets the size, in the place the
+// connection state already uses, and only then.
+function updateSizeLabel(pane) {
+  const label = document.getElementById(`psize-${pane.index}`);
+  if (!label) return;
+  const pty = pane.ws?.ptySize;
+  const elsewhere = !!pty && !pty.owner;
+  label.hidden = !elsewhere;
+  if (!elsewhere) return;
+  const scaled = pane.term.options.fontSize !== TERM_FONT_SIZE;
+  label.textContent = `${pty.cols}x${pty.rows}, sized by another window`
+    + (pane.scaleCut ? ', too large to show whole' : scaled ? ', shown smaller' : '')
+    + ' (type or click to take it)';
+}
+
+// A click in the pane takes the size back, as typing does: back to its own
+// font and fit, and its size goes to the daemon, which makes this tab the
+// owner (and the other window then scales). Nothing when it owns it already.
+function claimPaneSize(pane) {
+  const pty = pane.ws?.ptySize;
+  if (!pty || pty.owner || pane.ws.readyState !== WebSocket.OPEN) return;
+  if (!pane.termEl.offsetWidth || !pane.termEl.offsetHeight) return;
+  if (pane.term.options.fontSize !== TERM_FONT_SIZE) pane.term.options.fontSize = TERM_FONT_SIZE;
+  pane.fit.fit();
+  pane.ownBox = `${pane.termEl.offsetWidth}x${pane.termEl.offsetHeight}`;
+  pane.ownSize = { cols: pane.term.cols, rows: pane.term.rows };
+  termLog(pane, 'click takes the size');
+  sendPaneResize(pane);
 }
 
 function refitPanes(why = 'refit') {
@@ -790,6 +914,7 @@ function emptyPane(idx) {
   const pane = panes[idx];
   if (!pane) return;
   if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
+  forgetPtySize(pane);
   pane.sandbox = null;
   pane.thread = null;
   pane.term.reset();
@@ -824,6 +949,7 @@ function connectPane(idx, name, mode, thread, repo, model, checkout) {
   setPaneMode(idx, nextMode, false);
 
   if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
+  forgetPtySize(pane);
   // Full reset, not just clear(): a previous session (e.g. a TUI that enabled
   // xterm mouse-tracking) can leave DECSET modes on, which would otherwise
   // survive into the new session and turn mouse moves into stray input.
