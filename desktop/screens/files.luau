@@ -63,8 +63,11 @@ local function locations(ui, narrow)
     text{ "Inside " .. (ui.sandbox or "the sandbox") .. ", as its agent sees them", size = "xs", color = "text-dim", truncate = true,
       help = "These are the sandbox's files, not this computer's: only the workspace (and any mount) is a folder of this computer, shared at the same path" },
   }
-  for _, g in ipairs(groups) do
-    kids[#kids + 1] = text{ g.group, size = "xs", weight = "medium", color = "text-dim", key = "files-group-" .. g.group }
+  for gi, g in ipairs(groups) do
+    -- A group reads as a group: more air above its label than between entries, a quieter label.
+    kids[#kids + 1] = column{ w = "full", py = 4, key = "files-group-" .. g.group,
+      spacer{ h = gi == 1 and 0 or 4, grow = 0 },
+      text{ g.group, size = "xs", color = "text-dim" } }
     for _, x in ipairs(g.items or {}) do
       local here = x.id == ui.location
       local item = row{ gap = 8, grow = 1, min_w = 0, px = 8, h = 22, radius = "xs",
@@ -371,10 +374,11 @@ return {
     }
     local top = { gap = 8, w = "full", head }
     if open_up then top[#top + 1] = uploads(ui, dragging) end
+    local three = (over.w or 1000) >= 900
     local picker = row{ gap = 8, w = "full",
       sandbox_picker(data, { id = "files-sandbox", value = ui.sandbox, items = ui.sandboxes or {}, on = "sandbox" }),
       spacer{},
-      button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", dense = true, help = "Read the lists again" },
+      button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", dense = true, help = "Read the lists again" } or false,
       ui.offline and badge{ "stopped: workspace only", tone = "amber", help = "Read from this computer; the sandbox is not started to list a folder" } or false,
     }
     local list_head = nz(ui.artifacts_dir) and ui.tab == "artifacts" and text{ ui.artifacts_dir, size = "xs", color = "text-dim", mono = true, truncate = true, help = ui.artifacts_dir } or false
@@ -389,15 +393,27 @@ return {
       top.h = "full"
       return column(top)
     end
+    -- From 900 pt: three columns, the Locations on their own at the left
+    -- (scrolling on their own, the picker above), the tree the full height,
+    -- the reader. From 760: two, the Locations folded into one line.
     local tree = column{ h = "full", gap = 8, w = "full",
-      picker,
-      locations(ui, false),
-      divider{},
+      (not three) and picker or false,
+      (not three) and locations(ui, true) or false,
       list_head,
       listbar(ui),
       rows(ui),
     }
-    top[#top + 1] = split{ id = "files-split", vertical = true, ratio = 0.34, tree, preview(ui) }
+    local reading = split{ id = "files-split", vertical = true, ratio = three and 0.44 or 0.4, tree, preview(ui) }
+    if three then
+      top[#top + 1] = row{ gap = 12, w = "full", grow = 1, align = "stretch", key = "files-columns",
+        column{ w = 224, h = "full", gap = 8, key = "files-left",
+          picker,
+          scroll{ key = "files-locations-scroll", locations(ui, false) } },
+        divider{ vertical = true },
+        column{ grow = 1, min_w = 0, h = "full", reading } }
+    else
+      top[#top + 1] = reading
+    end
     top.h = "full"
     return column(top)
   end,

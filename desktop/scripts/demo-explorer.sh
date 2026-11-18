@@ -55,6 +55,10 @@ for e in d["daemon"]["files_dir"]["entries"]:
     if e["name"] == "README.md": e["size"] = len(c["/Users/me/web/README.md"])
 for e in d["daemon"]["files_tree"]["/Users/me/web/src"]["entries"]:
     if e["name"] == "app.ts": e["size"] = len(c["/Users/me/web/src/app.ts"])
+# A home of 30 entries more, so the tree's real height shows (views2).
+h = d["daemon"]["files_tree"]["/home/agent"]["entries"]
+for i in range(1, 31):
+    h.append({"name": f"session-notes-{i:02}.md", "kind": "file", "link": False, "size": 500 + i, "modified": 1794199000 - i * 600})
 json.dump(d, open(sys.argv[2], "w"))
 PY
 script() {
@@ -62,6 +66,9 @@ script() {
 import json, os
 m = os.environ["MARK"]
 narrow = int(os.environ["SIZE"].split("x")[0]) < 1000
+# The Locations are their own column when the overlay is 900 pt wide or more
+# (a window of about 1240), else a menu.
+menu_locs = int(os.environ["SIZE"].split("x")[0]) < 1240
 ev = []; t = 0.6
 def add(**e):
     global t
@@ -77,7 +84,7 @@ def project():
     step("pane-1-x-project", "files-row-report.md")
 def loc(path, until):
     # A location: a visible list when wide, a menu when narrow (views2).
-    if narrow:
+    if menu_locs:
         step("files-locations", "files-locations-" + path)
         step("files-locations-" + path, until)
     else:
@@ -130,7 +137,7 @@ add(type="mark", name="end")
 print(json.dumps({"events": ev}))
 PY
 }
-for size in ${SIZES:-1284x816 720x480}; do
+for size in ${SIZES:-1284x816 900x700 720x480}; do
   for m in ${MARKS:-markdown section code rail home tree keys upload}; do
     script "$m" "$size" >"$shots/script-$m.json"
     start_daemon "$shots/standin-$size-$m" --fixture "$shots/standin.json"
