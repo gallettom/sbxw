@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The configure panels out of Setup (MCP servers, Skills, Kits), headless,
+# The configure views out of Setup (MCP servers, Skills, Kits; overlays over
+# the pane area since views2), headless,
 # from their fixtures (no daemon), in the whole window at 1284x816 and
 # 720x480: each panel with content (basic), empty, and with something
 # waiting; Setup after the move (from Settings in the rail); a sandbox's
@@ -29,7 +30,7 @@ for feat in mcp skills kits; do
   for st in basic empty waiting; do
     for sz in "${sizes[@]}"; do
       snap "$feat-$st" "$sz" "$here/fixtures/$feat/$st.json"
-      grep -q "\"panel-close-$feat\"" "$shots/$feat-$st-$sz.tree.json" || { echo "FAIL: $feat panel not drawn ($st, $sz)" >&2; exit 1; }
+      grep -q "\"overlay-$feat\"" "$shots/$feat-$st-$sz.tree.json" || { echo "FAIL: $feat overlay not drawn ($st, $sz)" >&2; exit 1; }
     done
   done
 done

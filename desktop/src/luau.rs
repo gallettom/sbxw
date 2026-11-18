@@ -368,6 +368,23 @@ more_rows = function(c, o)
     button{ "Show " .. tostring(c.more) .. " more", key = key, on = o.on or "more", arg = o.arg, variant = "ghost", tone = "blue",
       help = tostring(c.total - c.shown) .. " more not drawn" } }
 end
+-- A sandbox picker, as the explorer draws it: the sandbox's colour square
+-- (data.app.groups), then the select. opts: `id`, `value`, `items`
+-- ({id, label}), `on`, `placeholder`, `disabled`.
+sandbox_picker = function(data, o)
+  o = o or {}
+  local groups = ((data or {}).app or {}).groups or {}
+  local id = o.id or "sandbox"
+  return row{ gap = 8, key = id .. "-row",
+    column{ w = 8, h = 8, radius = 2, fill = (o.value and groups[o.value]) or "text-dim", key = id .. "-color" },
+    select{ id = id, value = o.value or "", items = o.items or {}, on = o.on, placeholder = o.placeholder, disabled = o.disabled } }
+end
+-- An overlay over the pane area wide enough for two columns (760 pt and
+-- more, data.app.overlay.w; a screen drawn alone counts as wide).
+overlay_wide = function(data)
+  local o = ((data or {}).app or {}).overlay or {}
+  return (o.w or 1000) >= 760
+end
 paged = function(items, o)
   o = o or {}
   local page = o.page or 200

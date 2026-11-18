@@ -1,6 +1,9 @@
--- Kits (a docked panel; it was Setup's Kits tab): the kits waiting for your
--- answer on a running sandbox, and the kits line of each sbxw.toml sbxw
--- uses. The web UI's kits.js.
+-- Kits (an overlay over the pane area, opened from the rail; it was Setup's
+-- Kits tab): the kits waiting for your answer on a running sandbox, and the
+-- kits line of each sbxw.toml sbxw uses. The web UI's kits.js. Wide (760 pt
+-- and more): the sandbox picker, what waits for you and the kits line at the
+-- left, the selected kit's description at the right. Narrow: one column,
+-- the description under the list.
 --
 -- The file shown: data.kits_view.path, else the file data.kits_view.sandbox
 -- uses (the panel opened for a sandbox), else the last one used
@@ -62,17 +65,41 @@ local function kits_list(k, state, f)
   return k.defaults or {}
 end
 
+-- The selected kit's description (the right column; under the picker when
+-- narrow), or nil when none is selected.
+local function describe(ref, bundled, cur, f)
+  if not ref then return nil end
+  local b = nil
+  for _, x in ipairs(bundled) do if x.ref == ref then b = x end end
+  local lab = kit_label(ref) or (b and "bundled with sbxw") or (string.sub(ref, 1, 5) == "sbxw:" and "bundled with sbxw") or "registry kit"
+  local on = contains(cur, ref)
+  local users = {}
+  for _, n in ipairs(f.sandboxes or {}) do users[#users + 1] = n end
+  return column{ w = "full", gap = 8, pad = 12, radius = "md", border = "elevated", key = "kits-about",
+    row{ w = "full", gap = 8,
+      text{ ref, mono = true, weight = "semibold", color = "text-bright", truncate = true, grow = 1, help = ref },
+      badge{ lab, tone = lab == "Jarvis kit" and "purple" or "neutral" },
+      (b and b.default) and badge{ "default", help = "What a file without a kits line gets" } or false,
+      button{ icon = "close", variant = "ghost", on = "sel", key = "kits-about-close", help = "Hide" },
+    },
+    note(on and ("In this kits line: " .. (#users > 0 and table.concat(users, ", ") or "its sandboxes") .. " get it at their next up.") or "Not in this kits line: tick it at the left, then Save.", on and "green" or "text-muted"),
+    text{ (b and b.about) or (lab == "local kit" and "A kit folder on this machine: its kit.yaml says what it adds." or lab == "Jarvis kit" and "A kit Jarvis wrote for this project." or "A kit from a registry, fetched by sbx when the sandbox starts."),
+      wrap = true, color = "text-soft" },
+  }
+end
+
 return {
-  init = function() return { edit = nil, add = "", more = 0 } end,
+  init = function() return { edit = nil, add = "", more = 0, sel = nil } end,
 
   render = function(state, data)
     local errors = (data.app and data.app.errors) or {}
     local k = data.kits or {}
     local err = errors.kits or failed(data.kits)
     local view = data.kits_view or {}
-    local out = { w = "full", gap = 12, key = "kits-body",
-      text{ "A kit is what a sandbox starts with on top of its agent: tools, skills, network rules. Each project lists its kits in the kits line of its sbxw.toml; a change reaches a sandbox at its next up.", wrap = true, color = "text-soft" },
-    }
+    local intro = text{ "A kit is what a sandbox starts with on top of its agent: tools, skills, network rules. Each project lists its kits in the kits line of its sbxw.toml; a change reaches a sandbox at its next up.", wrap = true, color = "text-soft", key = "kits-intro" }
+    local wide = overlay_wide(data)
+    -- Wide, the sentence heads the right column (the list keeps the height).
+    local out = { w = "full", gap = 12, key = "kits-body", (not wide) and intro or false }
     if err then
       out[#out + 1] = row{ w = "full", gap = 8, key = "kits-error",
         icon{ "warning", size = 12, color = "red" },
@@ -108,9 +135,21 @@ return {
       if not err then
         out[#out + 1] = note("No sbxw.toml to show: the daemon runs without one and no sandbox records one. Start the daemon from a project with sbxw web, or create a sandbox from a project folder; its kits line then shows here.")
       end
+      if wide then table.insert(out, 1, intro) end
       return column{ h = "full", w = "full", scroll{ gap = 0, column(out) } }
     end
-    local f = pick_file(files, view, ((data.app or {}).kept or {}).kits or {})
+    local kept = ((data.app or {}).kept or {}).kits or {}
+    local f = pick_file(files, view, kept)
+    -- The sandbox picker at the top: the sandbox asked for, else the first
+    -- one the file shown serves, else the last one used.
+    local sbs, sb_ids = {}, {}
+    for _, sb in ipairs(data.sandboxes or {}) do sbs[#sbs + 1] = { id = sb.name, label = sb.name }; sb_ids[#sb_ids + 1] = sb.name end
+    local on_sb = view.sandbox
+    if not contains(sb_ids, on_sb) then on_sb = (f.sandboxes or {})[1] end
+    if not contains(sb_ids, on_sb) then on_sb = kept.sandbox end
+    if not contains(sb_ids, on_sb) then on_sb = nil end
+    table.insert(out, 1, row{ w = "full", gap = 8, text{ "Sandbox", size = "sm", color = "text-muted" },
+      sandbox_picker(data, { id = "kits-sandbox", value = on_sb, items = sbs, on = "pick_sandbox", placeholder = "No sandbox", disabled = #sbs == 0 }) })
     local items = {}
     for _, x in ipairs(files) do items[#items + 1] = { id = x.path, label = x.path } end
     local cur = kits_list(k, state, f)
@@ -135,8 +174,11 @@ return {
       local on = contains(cur, b.ref)
       bundled[#bundled + 1] = row{ w = "full", gap = 8,
         checkbox{ b.ref, value = on, on = "toggle", arg = { ref = b.ref, path = f.path, list = cur }, disabled = broken, key = "kit-" .. b.name },
-        b.default and badge{ "default", help = "What a file without a kits line gets" } or false,
-        text{ b.about or "", size = "sm", color = on and "text-soft" or "text-dim", truncate = true, grow = 1, help = b.about },
+        row{ gap = 8, grow = 1, min_w = 0, px = 4, h = 28, radius = "xs", key = "kit-sel-" .. b.name, on = "sel", arg = b.ref,
+          fill = state.sel == b.ref and "active-bg" or nil, hover = "hover-subtle", help = "What " .. b.ref .. " gives a sandbox",
+          b.default and badge{ "default", help = "What a file without a kits line gets" } or false,
+          text{ b.about or "", size = "sm", color = on and "text-soft" or "text-dim", truncate = true, grow = 1 },
+        },
       }
     end
     out[#out + 1] = section("Bundled with sbxw")
@@ -152,9 +194,12 @@ return {
       if i > shown then break end
       local lab = kit_label(ref)
       rows[#rows + 1] = row{ w = "full", gap = 8,
-        dot{ tone = "green" },
-        text{ ref, mono = true, truncate = true, grow = 1, help = ref },
-        lab and badge{ lab, tone = lab == "Jarvis kit" and "purple" or "neutral" } or false,
+        row{ gap = 8, grow = 1, min_w = 0, px = 4, h = 28, radius = "xs", key = "kit-sel-" .. ref, on = "sel", arg = ref,
+          fill = state.sel == ref and "active-bg" or nil, hover = "hover-subtle", help = ref,
+          dot{ tone = "green" },
+          text{ ref, mono = true, truncate = true, grow = 1 },
+          lab and badge{ lab, tone = lab == "Jarvis kit" and "purple" or "neutral" } or false,
+        },
         button{ "Remove", variant = "ghost", on = "remove", arg = { ref = ref, path = f.path, list = cur }, disabled = broken, key = "kit-rm-" .. ref },
       }
     end
@@ -182,12 +227,27 @@ return {
       dirty and button{ "Discard", variant = "ghost", on = "discard", key = "kits-discard" } or false,
       button{ "Save…", key = "kits-save", variant = "primary", on = "save", disabled = broken or not dirty },
     }
-    return column{ h = "full", w = "full", gap = 8, scroll{ gap = 0, column(out) }, divider{}, footer }
+    -- The selected kit: what it is and what it gives a sandbox.
+    local about = describe(state.sel, k.bundled or {}, cur, f)
+    local left = column{ h = "full", w = "full", gap = 8, scroll{ gap = 0, column(out) }, divider{}, footer }
+    if not wide then
+      if about then table.insert(out, 2, about) end
+      return left
+    end
+    return split{ id = "kits-split", vertical = true, ratio = 0.56, left,
+      column{ h = "full", w = "full", px = 4, scroll{ gap = 0, column{ w = "full", gap = 12,
+        intro,
+        about or column{ w = "full", gap = 8, key = "kits-about-none",
+          text{ "What a kit gives", size = "caption", weight = "semibold", color = "text-muted" },
+          note("Press a kit's description at the left to read it in full here. Ticking a kit puts it in the kits line; Save writes the line."),
+        } } } } }
   end,
 
   actions = {
     reload = function() return intent("kits_show") end,
     pick = function(state, _, path) state.edit = nil; return intent("kits_pick", { path = path }) end,
+    pick_sandbox = function(state, _, sb) if sb and sb ~= "" then state.edit = nil; return intent("kits_pick", { sandbox = sb }) end end,
+    sel = function(state, ref) if state.sel == ref or ref == nil then state.sel = nil else state.sel = ref end end,
     more = function(state) state.more = (state.more or 0) + PAGE end,
     toggle = function(state, a, on)
       local list = {}

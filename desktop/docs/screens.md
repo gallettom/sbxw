@@ -919,6 +919,16 @@ cut. Two helpers, the same block everywhere:
 Used by Commits, Worktrees and Files. The screens that can still grow past
 the cap with many sessions, threads or requests are listed in VIEWS.md.
 
+### Overlay helpers
+
+- `sandbox_picker(data, { id, value, items, on, placeholder, disabled })`:
+  the sandbox's colour square (`data.app.groups`, key `<id>-color`) then the
+  select (`<id>`), in a row keyed `<id>-row`. The explorer, MCP servers,
+  Skills and Kits draw it at their top left.
+- `overlay_wide(data)`: true when the overlay over the pane area is 760 pt
+  wide or more (`data.app.overlay.w`; a screen drawn alone counts as wide).
+  Two columns from there (a `split` keyed `<screen>-split`), one under it.
+
 ## Checking your screen
 
 ```sh
@@ -1290,8 +1300,9 @@ forgotten; a screen only sees names and whether a value is set.
 
 ### mcp, skills, kits
 
-Three docked panels (440 to 460 pt, the shared panel header: icon, title,
-the close cross at the top right), each its own feature
+Three overlays over the pane area (`Slot::Overlay`, as Commits and
+Worktrees: the core's header with the icon, the title, "Esc closes" and the
+cross; one overlay at a time; the terminals under it untouched), each its own feature
 (`src/feat/mcp.rs`, `skills.rs`, `kits.rs`, tests beside them) and its own
 rail entry in the configure zone above Settings: MCP (order 10), Skills
 (20), Kits (30). Their icons, one mark each wherever the view appears (rail,
@@ -1300,11 +1311,16 @@ connector, not the network's `shield`), `book` skills (not the agent's
 `sparkle`, the team's `people` or Jarvis's ring), `box` kits. Each declares its entry in one
 function, `rail_entry`, an extra whose intent is `open_panel {screen}`
 (the rail marks it on while the panel shows; a second press closes it).
-The palette lists the same extras. A panel rather than a modal: each is
-mostly a list with a few actions per row, kept beside the terminals while
-one loads a server or answers a kit; its one form (a new MCP server) is
-short, and the `<screen>_view` convention (view state dropped on close)
-is the panels'.
+The palette lists the same extras. They were docked panels until the
+person asked for them over the panes, as Commits and Worktrees: a docked
+panel was one narrow column with most of the room empty. Over the pane area
+they use the width: from 760 pt two columns (MCP: the sandbox picker and the
+registered servers | the selected server, which pressing a row inspects, or
+the add form; Kits: the picker, what waits for you and the kits line | the
+selected kit's description, `kits-about`; Skills: the picker and the kept
+skills | that sandbox's skills to look at and keep), one column under it.
+The `<screen>_view` convention (view state dropped on close) holds for
+overlays too: closing one drops its `<screen>_view`.
 
 Each opens for a sandbox from that sandbox's Manage dialog (`sa-mcp`,
 `sa-skills`, `sa-kits`) and from a pane's "⋯" menu (extras `mcp-view`,
@@ -1372,7 +1388,7 @@ pane, never this panel. Keys: `kits-waiting`, `kit-answer-<sandbox>`,
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
 | `kits_show` | `sandbox` (optional) | direct | Opens the panel and reads the kits lines again, on the file that sandbox uses (else the last one used) |
-| `kits_pick` | `path` | direct | Puts the panel on one of the files (view state) |
+| `kits_pick` | `path` or `sandbox` | direct | Puts the view on one of the files, or on the file a sandbox uses (the picker at its top; view state) |
 | `kits_save` | `path`, `kits` (one reference per line) or `defaults = true` | approval | Rewrites that file's `kits` line (or removes it); the dialog lists what is added and removed and asks for an acknowledgement for kits that reach outside the sandbox |
 
 ### threads

@@ -745,15 +745,18 @@ fn the_configure_panels_keep_their_content_inside() {
     let mut checked = 0;
     for feat in ["mcp", "skills", "kits"] {
         for fx in ["basic", "empty", "waiting"] {
-            for (w, h) in [(420.0, 700.0), (1284.0, 816.0)] {
+            // The window's least useful width and the usual one (an overlay spans the pane area).
+            for (w, h) in [(720.0, 480.0), (1284.0, 816.0)] {
                 let path = root.join(feat).join(format!("{fx}.json"));
                 let a = App::new(Args { fixture: Some(path.to_string_lossy().to_string().into()), ..Args::default() });
                 let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
                 for _ in 0..30 {
                     rt.frame(0.016);
                 }
-                let Some((p, _)) = rt.presented("feature-panel") else { panic!("{feat}/{fx} at {w}: no panel") };
-                assert!(rt.presented(&format!("panel-close-{feat}")).is_some(), "{feat}/{fx}: the shared header's cross");
+                // An overlay over the pane area now (as Commits): its header's cross, nothing outside it.
+                let Some((p, _)) = rt.presented(&format!("overlay-{feat}")) else { panic!("{feat}/{fx} at {w}: no overlay") };
+                assert!(rt.presented("overlay-close").is_some(), "{feat}/{fx}: the overlay header's cross");
+                assert!(rt.presented("feature-panel").is_none(), "{feat}/{fx}: not docked any more");
                 let node = rt.state.screens.iter().find(|s| s.name == feat).and_then(|s| s.last_good.clone()).unwrap_or_else(|| panic!("{feat}/{fx}: not drawn"));
                 let mut ks = vec![];
                 keys(&node, &mut ks);
@@ -793,7 +796,8 @@ fn the_configure_panels_open_on_the_sandbox_they_are_opened_for() {
         let asks = h.act(feat, &J::Null, &J::Null).unwrap();
         run(&mut a, asks);
         assert!(a.feats.modal.is_none(), "{feat}: the Manage dialog closes");
-        assert_eq!(a.feats.panel.as_deref(), Some(feat));
+        assert_eq!(a.feats.overlay.as_ref().map(|o| o.0.as_str()), Some(feat), "{feat}: over the pane area");
+        assert!(a.feats.panel.is_none(), "{feat}: not docked");
         assert_eq!(a.screen_data()[view]["sandbox"], "docs", "{feat}");
         run(&mut a, serde_json::json!({ "kind": "intent", "name": "close_panel", "args": { "screen": feat } }));
         assert!(a.screen_data()[view].is_null(), "{feat}: dropped on close");
@@ -812,5 +816,29 @@ fn the_configure_panels_open_on_the_sandbox_they_are_opened_for() {
         let e = e.unwrap_or_else(|| panic!("no pane entry {id}"));
         assert_eq!(e["intent"]["args"], serde_json::json!({ "sandbox": "web-app" }), "{id}");
         assert!(crate::shell::bar::MENU_ONLY.contains(&id), "{id} lives in the ⋯ menu");
+    }
+}
+
+/// MCP servers, Skills and Kits over the pane area use its width: two
+/// columns from 760 pt (MCP: servers | the selected one or the form; Kits:
+/// the line | the selected kit; Skills: kept | the sandbox's), one column
+/// under it; the sandbox picker at the top left with its colour square.
+#[test]
+fn the_configure_overlays_are_two_columns_when_wide() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    for feat in ["mcp", "skills", "kits"] {
+        for (w, h, two) in [(1284.0, 816.0, true), (720.0, 480.0, false)] {
+            let path = root.join(feat).join("basic.json");
+            let a = App::new(Args { fixture: Some(path.to_string_lossy().to_string().into()), ..Args::default() });
+            let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+            for _ in 0..30 {
+                rt.frame(0.016);
+            }
+            let over = rt.presented(&format!("overlay-{feat}")).unwrap_or_else(|| panic!("{feat} at {w}: no overlay")).0;
+            assert_eq!(rt.presented(&format!("{feat}-split")).is_some(), two, "{feat} at {w} ({} wide): two columns {two}", over[2]);
+            let pick = rt.presented(&format!("{feat}-sandbox")).unwrap_or_else(|| panic!("{feat} at {w}: the picker")).0;
+            assert!(rt.presented(&format!("{feat}-sandbox-color")).is_some(), "{feat}: the colour square");
+            assert!(pick[0] < over[0] + over[2] / 2.0 && pick[1] < over[1] + 120.0, "{feat} at {w}: the picker at the top left {pick:?} in {over:?}");
+        }
     }
 }

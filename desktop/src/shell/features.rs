@@ -658,7 +658,9 @@ impl App {
     /// Closes the overlay over the pane area, if one shows; the focused
     /// pane's terminal gets the keyboard back.
     pub(super) fn close_overlay(&mut self) -> bool {
-        let Some(_) = self.feats.overlay.take() else { return false };
+        let Some((name, _)) = self.feats.overlay.take() else { return false };
+        // Its view state (`<screen>_view`: the sandbox it was opened for) goes with it, as a panel's.
+        self.feats.data.remove(&format!("{name}_view"));
         self.feats.asks.push(("core", Ask::Focus(format!("grid-{}", self.focused + 1))));
         true
     }

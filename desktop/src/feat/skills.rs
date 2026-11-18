@@ -1,7 +1,7 @@
 //! Skills: the skills the person keeps for every new sandbox, and keeping one
 //! a sandbox wrote, as the web UI's Skills dialog (`assets/js/skills.js`). It
-//! was Setup's Skills tab; it is now a docked panel of its own
-//! (`screens/skills.luau`), opened from the rail, the palette, a sandbox's
+//! was Setup's Skills tab; it is now an overlay over the pane area
+//! (`screens/skills.luau`, as Commits and Worktrees), opened from the rail, the palette, a sandbox's
 //! Manage dialog and a pane's "⋯" menu. The intents and their dialogs are
 //! the tab's, unchanged.
 //!
@@ -25,7 +25,7 @@ pub const ICON: &str = "book";
 pub const FEATURE: Feature = Feature {
     name: "skills",
     data: &[Data::new("my_skills", "/api/my-skills")],
-    screens: &[ScreenDecl { name: "skills", src: include_str!("../../screens/skills.luau"), slot: Slot::Panel { title: "Skills", icon: ICON, width: 460.0 } }],
+    screens: &[ScreenDecl { name: "skills", src: include_str!("../../screens/skills.luau"), slot: Slot::Overlay { title: "Skills", icon: ICON } }],
     intents: INTENTS,
     act,
     extras: Some(extras),

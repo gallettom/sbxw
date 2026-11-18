@@ -414,6 +414,11 @@ impl App {
             }
         }
         for p in &init.panels {
+            // An overlay screen (MCP servers, Skills, Kits, Commits...) opens over the pane area.
+            if crate::feat::screen(p).is_some_and(|(_, s)| matches!(s.slot, crate::feat::Slot::Overlay { .. })) {
+                app.feats.overlay = Some((p.clone(), J::Null));
+                continue;
+            }
             app.feats.panels.push(p.clone());
             app.feats.panel = Some(p.clone());
         }
@@ -3721,9 +3726,12 @@ mod tests {
         assert!(find(&shown, &|n| n.kind == crate::luau::Kind::Surface).is_none(), "no surface");
         assert!(find(&shown, &|n| n.key.as_deref() == Some("browser-back")).is_some_and(|n| n.disabled));
         tap(&mut rt, "browser-kits");
-        assert_eq!(rt.state.feats.panel.as_deref(), Some("kits"), "the Kits panel, on this sandbox's sbxw.toml");
+        assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("kits"), "the Kits view over the panes, on this sandbox's sbxw.toml");
         assert_eq!(rt.state.screen_data()["kits_view"]["sandbox"], "web-app");
-        rt.update(|s, _| s.feats.panel = Some("browser".into()));
+        rt.update(|s, _| {
+            s.close_overlay();
+            s.feats.panel = Some("browser".into());
+        });
         rt.frame(0.016);
         tap(&mut rt, "browser-recreate");
         assert_eq!(rt.state.feats.modal.as_ref().map(|(n, a)| (n.as_str(), a.clone())), Some(("sandbox-actions", J::from("web-app"))));
@@ -3913,6 +3921,23 @@ mod tests {
         }
         assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("worktrees"));
         assert!(rt.presented("overlay-commits").is_none() && rt.presented("overlay-worktrees").is_some(), "one at a time");
+        // MCP servers, Skills and Kits are overlays too (the configure zone):
+        // each replaces the one before, the panes stay as they were, the gate holds.
+        for feat in ["mcp", "skills", "kits"] {
+            tap(&mut rt, &format!("rail-{feat}"));
+            for _ in 0..10 {
+                rt.frame(0.05);
+            }
+            assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some(feat), "{feat} opens over the panes");
+            assert!(rt.state.feats.panel.is_none() && rt.presented("feature-panel").is_none(), "{feat}: nothing docked");
+            assert!(rt.presented(&format!("overlay-{feat}")).is_some());
+            assert_eq!(rt.presented("pane-1").unwrap().0, pane_before, "{feat}: the pane is not resized");
+            assert!(!rt.state.terminal_may_take_keys(Some("grid-1")), "{feat}: the gate holds");
+        }
+        rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+        rt.frame(0.05);
+        assert!(rt.state.feats.overlay.is_none(), "Escape closes Kits");
+        assert_eq!(resizes(&rx), 0, "no terminal was resized");
     }
 
     #[test]

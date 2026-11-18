@@ -1,7 +1,7 @@
 //! MCP servers: the servers registered on this machine (`sbx mcp`) and the
 //! sandbox they are loaded into, as the web UI's MCP dialog (`assets/js/mcp.js`).
-//! It was Setup's MCP tab; it is now a docked panel of its own
-//! (`screens/mcp.luau`), opened from the rail, the palette, a sandbox's
+//! It was Setup's MCP tab; it is now an overlay over the pane area
+//! (`screens/mcp.luau`, as Commits and Worktrees), opened from the rail, the palette, a sandbox's
 //! Manage dialog and a pane's "⋯" menu. The intents, their arguments and
 //! their dialogs are the tab's, unchanged.
 //!
@@ -28,7 +28,7 @@ pub const ICON: &str = "plug";
 pub const FEATURE: Feature = Feature {
     name: "mcp",
     data: &[Data::new("mcp", "/api/mcp")],
-    screens: &[ScreenDecl { name: "mcp", src: include_str!("../../screens/mcp.luau"), slot: Slot::Panel { title: "MCP servers", icon: ICON, width: 460.0 } }],
+    screens: &[ScreenDecl { name: "mcp", src: include_str!("../../screens/mcp.luau"), slot: Slot::Overlay { title: "MCP servers", icon: ICON } }],
     intents: INTENTS,
     act,
     extras: Some(extras),
