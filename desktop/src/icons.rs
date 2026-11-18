@@ -54,6 +54,11 @@ icons! {
     CPU "cpu" concat!(st!("rect", r#"x="4" y="4" width="8" height="8" rx="1.5""#), st!("path", r#"d="M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5M1.5 6.5h2.5M1.5 9.5h2.5M12 6.5h2.5M12 9.5h2.5""#));
     COIN "coin" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("path", r#"d="M10 5.8c-.4-.6-1.1-.9-2-.9-1.2 0-2 .6-2 1.5 0 2 4 1.1 4 3.2 0 .9-.9 1.5-2 1.5-.9 0-1.7-.4-2.1-1M8 3.8v1.1M8 11.1v1.1""#));
     HELP "help" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("path", r#"d="M6.2 6.2a1.9 1.9 0 0 1 3.7.6c0 1.3-1.9 1.6-1.9 2.8""#), r#"<circle cx="8" cy="11.5" r="0.9" fill="currentColor"/>"#);
+    // The theme control's: a sun (light), a crescent (dark), a disc half
+    // filled (match the system).
+    SUN "sun" concat!(st!("circle", r#"cx="8" cy="8" r="2.75""#), st!("path", r#"d="M8 1.5v1.5M8 13v1.5M1.5 8h1.5M13 8h1.5M3.4 3.4l1.06 1.06M11.54 11.54l1.06 1.06M3.4 12.6l1.06-1.06M11.54 4.46l1.06-1.06""#));
+    MOON "moon" st!("path", r#"d="M13.5 9.6A5.75 5.75 0 1 1 6.4 2.5a4.6 4.6 0 0 0 7.1 7.1z""#);
+    APPEARANCE "appearance" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), r#"<path d="M8 1.75a6.25 6.25 0 0 1 0 12.5z" fill="currentColor"/>"#);
     // A worktree: a branch off the main line.
     BRANCH "branch" concat!(st!("circle", r#"cx="4.5" cy="3.5" r="1.5""#), st!("circle", r#"cx="4.5" cy="12.5" r="1.5""#), st!("circle", r#"cx="11.5" cy="5" r="1.5""#), st!("path", r#"d="M4.5 5v6M11.5 6.5c0 3-7 2.5-7 4.5""#));
     LINK "link" concat!(st!("path", r#"d="M6.5 9.5l3-3""#), st!("path", r#"d="M7.5 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M8.5 11.5l-1 1a2.5 2.5 0 0 1-3.5-3.5l1-1""#));

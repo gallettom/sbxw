@@ -42,8 +42,8 @@ pub const LIGHT_PALETTE: [u32; 16] = [
 /// The light terminal's ground: the app's lightest surface (`bg` in the
 /// light palette), so text has the most contrast; its text one step
 /// darker than the app's body text.
-pub const LIGHT_BACKGROUND: u32 = 0xfdfcfa;
-pub const LIGHT_FOREGROUND: u32 = 0x2b251f;
+pub const LIGHT_BACKGROUND: u32 = 0xfbfbfa;
+pub const LIGHT_FOREGROUND: u32 = 0x1c1a17;
 
 /// The terminal in the light theme: the light palette's ground and text,
 /// the accent as the cursor, the selection the light blue at 25% (visible

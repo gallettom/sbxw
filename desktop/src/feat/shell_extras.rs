@@ -24,7 +24,11 @@ pub const FEATURE: Feature = Feature {
     ],
     intents: INTENTS,
     // Help from anywhere, as the menu bar's Help > Help and shortcuts on macOS.
-    shortcuts: &[Shortcut { key: 'h', intent: "show_help", args: "{}", help: "Help and shortcuts" }],
+    // The theme's switch, as the status bar's sun or moon.
+    shortcuts: &[
+        Shortcut { key: 'h', intent: "show_help", args: "{}", help: "Help and shortcuts" },
+        Shortcut { key: 't', intent: "set_theme", args: r#"{"theme":"toggle"}"#, help: "Switch between the light and the dark theme" },
+    ],
     act,
     on_answer: Some(on_answer),
     extras: Some(extras),

@@ -538,7 +538,7 @@ pub fn menu_row(r: &MenuRow) -> El {
         row_ = row_.child(caps);
     }
     if r.chosen {
-        row_ = row_.child(el().w(8.0)).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("blue")));
+        row_ = row_.child(el().w(8.0)).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("accent")));
     }
     // Its help, else its whole label when the label may be cut.
     let cut = chars_w(r.label, 13.0) > MENU_MAX_W - MENU_PAD * 2.0 - MENU_ROW_PX * 2.0 - MENU_ICON - MENU_ICON_GAP - 24.0;

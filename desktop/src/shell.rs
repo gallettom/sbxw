@@ -1836,7 +1836,10 @@ impl App {
                 l.run(d, format!("stop {sandbox}"), move |d| d.stop_sandbox(&name));
             }
             Intent::Select { sandbox } => self.selected = sandbox,
-            Intent::SetTheme { theme: t } => self.set_theme(t),
+            Intent::SetTheme { theme: t } => {
+                let t = t.unwrap_or(if theme::mode().is_light() { theme::Choice::Dark } else { theme::Choice::Light });
+                self.set_theme(t)
+            }
             Intent::CopyText { text } => {
                 // Only the person's own press copies: not a feature's chain of
                 // actions (`feature:<name>`: data, events, answers), not an

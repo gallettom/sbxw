@@ -450,6 +450,29 @@ fn theme_change_redraws_everything() {
     assert_eq!(t.rebuilt_rows - before, 5);
 }
 
+/// An open terminal follows the app's theme: its ground, text, ANSI set
+/// and pills switch on its next poll, every row drawn again; a theme the
+/// caller set stays (term-demo's `--theme`).
+#[test]
+fn an_open_terminal_follows_the_apps_theme() {
+    use crate::theme::{with_mode, Mode};
+    let (mut t, _ev, _rx) = term();
+    t.feed(b"x");
+    assert_eq!(t.theme().background, theme::WEB_BACKGROUND);
+    with_mode(Mode::Light, || {
+        let before = t.rebuilt_rows;
+        t.poll(None);
+        assert_eq!(*t.theme(), theme::LIGHT);
+        assert!(t.rebuilt_rows > before, "redrawn");
+        assert_eq!(t.pills.colors(crate::emphasis::Tone::Green), crate::emphasis::palette(crate::emphasis::Tone::Green, theme::LIGHT_BACKGROUND, theme::LIGHT_FOREGROUND));
+    });
+    t.poll(None);
+    assert_eq!(t.theme().background, theme::WEB_BACKGROUND, "back to dark");
+    t.set_theme(Theme::from_setting_strings("#fdf6e3", "auto"));
+    with_mode(Mode::Light, || t.poll(None));
+    assert_eq!(t.theme().background, 0xfdf6e3, "the caller's theme stays");
+}
+
 /// Full-screen redraw cost, CPU side: every row of a 111x42 screen changes
 /// each frame (colours on every cell, like `htop` or a `cat` of coloured
 /// output), then Rune lays out and builds the frame's instances. GPU
