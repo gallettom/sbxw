@@ -19,6 +19,23 @@ pub fn sbx_answer(a: &[String]) -> Output {
     }
 }
 
+/// [`sbx_answer`], whose `ls` lists every sandbox it was asked to `create`
+/// as running, as sbx does once one boots. A bring-up then ends its boot
+/// wait at once instead of waiting out its 30 s timeout (`provision.rs`).
+pub fn sbx_answer_booting() -> impl Fn(&[String]) -> Output + Send + Sync + 'static {
+    let made = std::sync::Mutex::new(Vec::<String>::new());
+    move |a: &[String]| match a.first().map(String::as_str) {
+        Some("create") => {
+            if let Some(n) = a.iter().position(|x| x == "--name").and_then(|i| a.get(i + 1)) {
+                made.lock().unwrap().push(n.clone());
+            }
+            sbx_answer(a)
+        }
+        Some("ls") => ls(&made.lock().unwrap().iter().map(|n| (n.as_str(), "running")).collect::<Vec<_>>()),
+        _ => sbx_answer(a),
+    }
+}
+
 /// `sbx ls --format json` listing `(name, status)` Claude sandboxes.
 pub fn ls(rows: &[(&str, &str)]) -> Output {
     let rows: Vec<_> = rows.iter().map(|(n, st)| serde_json::json!({ "name": n, "agent": "claude", "status": st })).collect();
