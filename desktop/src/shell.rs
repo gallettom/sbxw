@@ -3583,8 +3583,9 @@ mod tests {
         assert!(find(&shown, &|n| n.kind == crate::luau::Kind::Surface).is_none(), "no surface");
         assert!(find(&shown, &|n| n.key.as_deref() == Some("browser-back")).is_some_and(|n| n.disabled));
         tap(&mut rt, "browser-kits");
-        assert_eq!(rt.state.feats.modal.as_ref().map(|(n, a)| (n.as_str(), a.clone())), Some(("setup", J::from("kits"))));
-        rt.update(|s, _| s.feats.modal = None);
+        assert_eq!(rt.state.feats.panel.as_deref(), Some("kits"), "the Kits panel, on this sandbox's sbxw.toml");
+        assert_eq!(rt.state.screen_data()["kits_view"]["sandbox"], "web-app");
+        rt.update(|s, _| s.feats.panel = Some("browser".into()));
         rt.frame(0.016);
         tap(&mut rt, "browser-recreate");
         assert_eq!(rt.state.feats.modal.as_ref().map(|(n, a)| (n.as_str(), a.clone())), Some(("sandbox-actions", J::from("web-app"))));

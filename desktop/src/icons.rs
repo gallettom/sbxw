@@ -79,6 +79,13 @@ icons! {
     LOGO_PROMPT "logo-prompt" r#"<polyline points="4.5,3.5 9,8 4.5,12.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>"#;
     // A keyword pill: a rounded label with a dot (keyword pills, emphasis.rs).
     TAG "tag" concat!(st!("rect", r#"x="1.75" y="4.75" width="12.5" height="6.5" rx="3.25""#), st!("line", r#"x1="5.5" y1="8" x2="10.5" y2="8""#));
+    // The configure zone's views out of Setup, one mark each wherever it
+    // shows: MCP servers a plug (a connector, not the network's shield);
+    // Skills an open book (not the agent's sparkle, the team's people or
+    // Jarvis's ring); Kits a packed box.
+    PLUG "plug" concat!(st!("path", r#"d="M5.5 1.75v3M10.5 1.75v3""#), st!("path", r#"d="M3.5 4.75h9v2.5a4.5 4.5 0 0 1-9 0z""#), st!("path", r#"d="M8 11.75v2.5""#));
+    BOOK "book" concat!(st!("path", r#"d="M8 4.25C6.5 3 4.5 2.75 1.75 2.75v9.5c2.75 0 4.75.25 6.25 1.5 1.5-1.25 3.5-1.5 6.25-1.5v-9.5C11.5 2.75 9.5 3 8 4.25z""#), st!("line", r#"x1="8" y1="4.25" x2="8" y2="13.75""#));
+    BOX "box" concat!(st!("path", r#"d="M8 1.75l6 3v6.5l-6 3-6-3v-6.5z""#), st!("path", r#"d="M2 4.75l6 3 6-3M8 7.75v6.5""#));
 }
 
 pub fn get(name: &str) -> Option<&'static Icon> {

@@ -726,6 +726,10 @@ features! {
     mac,
     templates,
     threads,
+    // Out of Setup, each its own panel and rail entry (configure zone).
+    mcp,
+    skills,
+    kits,
 }
 
 // ---------------------------------------------------------------------------

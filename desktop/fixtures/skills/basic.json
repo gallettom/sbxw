@@ -1,0 +1,302 @@
+{
+  "about": "The Skills panel (out of Setup): one kept skill, the picker on web-app.",
+  "daemon": {
+    "sandboxes": [
+      {
+        "name": "web-app",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web-app"
+      },
+      {
+        "name": "web-api",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web-api"
+      },
+      {
+        "name": "docs",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 1,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/docs"
+      }
+    ],
+    "secrets": {
+      "ok": true,
+      "secrets": [
+        {
+          "scope": "global",
+          "kind": "service",
+          "name": "anthropic"
+        },
+        {
+          "scope": "global",
+          "kind": "service",
+          "name": "github"
+        },
+        {
+          "scope": "global",
+          "kind": "custom",
+          "name": "OPENAI_KEY"
+        },
+        {
+          "scope": "web-app",
+          "kind": "custom",
+          "name": "SCOPED_KEY"
+        }
+      ]
+    },
+    "github_token": {
+      "ok": true,
+      "set": true,
+      "gh": "/opt/homebrew/bin/gh"
+    },
+    "kits": {
+      "ok": true,
+      "files": [
+        {
+          "path": "/Users/ana/dev/web/sbxw.toml",
+          "exists": true,
+          "daemon": true,
+          "sandboxes": [
+            "web-app",
+            "web-api"
+          ],
+          "kits": [
+            "sbxw:codemap",
+            "/Users/ana/.sbxw/state/kits/jarvis-notes"
+          ],
+          "error": null
+        },
+        {
+          "path": "/Users/ana/dev/docs/sbxw.toml",
+          "exists": true,
+          "daemon": false,
+          "sandboxes": [
+            "docs"
+          ],
+          "kits": null,
+          "error": null
+        }
+      ],
+      "bundled": [
+        {
+          "ref": "sbxw:codemap",
+          "name": "codemap",
+          "default": true,
+          "about": "/codemap and /codemap-lens: agents read a repo's code map before its source"
+        },
+        {
+          "ref": "sbxw:agent-skills",
+          "name": "agent-skills",
+          "default": true,
+          "about": "/archify, /brag, /i-have-adhd, /handoff, /grilling, /frontend-design, /modern-web-guidance, with Chromium and FFmpeg"
+        },
+        {
+          "ref": "sbxw:md-to-pdf-tools",
+          "name": "md-to-pdf-tools",
+          "default": true,
+          "about": "/md-to-pdf, with WeasyPrint, poppler-utils and Pillow"
+        },
+        {
+          "ref": "sbxw:retro",
+          "name": "retro",
+          "default": true,
+          "about": "/retro: past sessions read back for what should become a script, hook, skill, rule or kit"
+        },
+        {
+          "ref": "sbxw:k8s-tools",
+          "name": "k8s-tools",
+          "default": false,
+          "about": "kubectl, k3d and skaffold in ~/.local/bin"
+        },
+        {
+          "ref": "sbxw:git-identity",
+          "name": "git-identity",
+          "default": false,
+          "about": "your host's Git user.name and user.email in the sandbox"
+        },
+        {
+          "ref": "sbxw:ssh-agent",
+          "name": "ssh-agent",
+          "default": false,
+          "about": "your host's SSH agent, restricted to signing commits and the common Git hosts"
+        },
+        {
+          "ref": "sbxw:terminal-mac",
+          "name": "terminal-mac",
+          "default": false,
+          "about": "a virtual Mac the agent drives (Safari, Mac apps) through the host's terminal-mac; Apple silicon hosts"
+        },
+        {
+          "ref": "sbxw:dev-ports",
+          "name": "dev-ports",
+          "default": false,
+          "about": "the agent publishes a dev server on a loopback port sbx picks, without a prompt (sbx 0.53; at creation only)"
+        }
+      ],
+      "defaults": [
+        "sbxw:codemap",
+        "sbxw:agent-skills",
+        "sbxw:md-to-pdf-tools",
+        "sbxw:retro"
+      ]
+    },
+    "my_skills": {
+      "ok": true,
+      "dir": "/Users/ana/.sbxw/my-skills",
+      "skills": [
+        {
+          "name": "release-notes",
+          "description": "Write release notes from the merged pull requests since the last tag.",
+          "sandbox": "web-app",
+          "path": "/home/agent/workspace/.claude/skills/release-notes",
+          "saved": 1762000000
+        }
+      ]
+    },
+    "sandbox_skills_of": {
+      "web-app": {
+        "ok": true,
+        "skills": [
+          {
+            "name": "deploy",
+            "origin": "project",
+            "path": ".claude/skills/deploy",
+            "description": "Deploy the web app to staging, then smoke test it.",
+            "files": 3,
+            "bytes": 4210,
+            "kept": false,
+            "keepable": true
+          },
+          {
+            "name": "release-notes",
+            "origin": "project",
+            "path": ".claude/skills/release-notes",
+            "description": "Write release notes from the merged pull requests since the last tag.",
+            "files": 1,
+            "bytes": 1800,
+            "kept": true,
+            "keepable": true
+          },
+          {
+            "name": "Bad Name",
+            "origin": "home",
+            "path": "~/.claude/skills/Bad Name",
+            "description": null,
+            "files": 1,
+            "bytes": 300,
+            "kept": false,
+            "keepable": false
+          }
+        ]
+      }
+    },
+    "mcp": {
+      "ok": true,
+      "servers": [
+        {
+          "name": "linear",
+          "type": "remote"
+        },
+        {
+          "name": "playwright",
+          "type": "stdio"
+        }
+      ]
+    },
+    "mcp_inspect_of": {
+      "linear": "Server: linear (remote)\nURL: https://mcp.linear.app/mcp\nHeaders:\n  Authorization: Bearer ${TOKEN}  (secret set)"
+    },
+    "remote_hosts": {
+      "ok": true,
+      "sbxw": "/usr/local/bin/sbxw",
+      "hosts": [
+        {
+          "name": "build-box",
+          "ssh": "build-box",
+          "trust_secrets": true,
+          "address": "build-box",
+          "link": "up",
+          "latency_ms": 38,
+          "sandboxes": 2
+        },
+        {
+          "name": "spare",
+          "host": "10.0.0.12",
+          "user": "ana",
+          "port": 2222,
+          "trust_secrets": false,
+          "address": "10.0.0.12",
+          "link": "never",
+          "sandboxes": 0
+        }
+      ]
+    },
+    "voice": {
+      "ok": true,
+      "compiled": true,
+      "ready": true,
+      "models": [
+        {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "role": "stt",
+          "label": "Parakeet TDT 0.6B v3 (int8)",
+          "license": "CC-BY-4.0",
+          "approx_mb": 670,
+          "installed": {
+            "state": "ready",
+            "bytes": 670000000
+          }
+        },
+        {
+          "id": "voxtral-tts-4bit",
+          "role": "tts",
+          "label": "Voxtral TTS 4B (MLX, 4-bit)",
+          "license": "CC-BY-NC-4.0",
+          "approx_mb": 2550,
+          "installed": {
+            "state": "ready",
+            "bytes": 2550000000
+          }
+        }
+      ],
+      "approx_mb": 3220,
+      "speech": {
+        "supported": true,
+        "runtime": "mlx-audio==0.2.6",
+        "runtime_ready": true,
+        "voice": "neutral_female"
+      },
+      "job": null,
+      "hint": "sbxw voice install",
+      "push_to_talk_key": "F8",
+      "dictate_key": "F9",
+      "dir": "/Users/ana/.sbxw/models"
+    },
+    "standin_voice_steps": true
+  },
+  "app": {
+    "panels": [
+      "skills"
+    ]
+  }
+}

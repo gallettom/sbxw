@@ -1,0 +1,152 @@
+{
+  "about": "The MCP servers panel with no server registered: the empty state says what to do.",
+  "daemon": {
+    "sandboxes": [
+      {
+        "name": "web-app",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web-app"
+      }
+    ],
+    "secrets": {
+      "ok": true,
+      "secrets": []
+    },
+    "github_token": {
+      "ok": true,
+      "set": false,
+      "gh": null
+    },
+    "kits": {
+      "ok": true,
+      "files": [],
+      "bundled": [
+        {
+          "ref": "sbxw:codemap",
+          "name": "codemap",
+          "default": true,
+          "about": "/codemap and /codemap-lens: agents read a repo's code map before its source"
+        },
+        {
+          "ref": "sbxw:agent-skills",
+          "name": "agent-skills",
+          "default": true,
+          "about": "/archify, /brag, /i-have-adhd, /handoff, /grilling, /frontend-design, /modern-web-guidance, with Chromium and FFmpeg"
+        },
+        {
+          "ref": "sbxw:md-to-pdf-tools",
+          "name": "md-to-pdf-tools",
+          "default": true,
+          "about": "/md-to-pdf, with WeasyPrint, poppler-utils and Pillow"
+        },
+        {
+          "ref": "sbxw:retro",
+          "name": "retro",
+          "default": true,
+          "about": "/retro: past sessions read back for what should become a script, hook, skill, rule or kit"
+        },
+        {
+          "ref": "sbxw:k8s-tools",
+          "name": "k8s-tools",
+          "default": false,
+          "about": "kubectl, k3d and skaffold in ~/.local/bin"
+        },
+        {
+          "ref": "sbxw:git-identity",
+          "name": "git-identity",
+          "default": false,
+          "about": "your host's Git user.name and user.email in the sandbox"
+        },
+        {
+          "ref": "sbxw:ssh-agent",
+          "name": "ssh-agent",
+          "default": false,
+          "about": "your host's SSH agent, restricted to signing commits and the common Git hosts"
+        },
+        {
+          "ref": "sbxw:terminal-mac",
+          "name": "terminal-mac",
+          "default": false,
+          "about": "a virtual Mac the agent drives (Safari, Mac apps) through the host's terminal-mac; Apple silicon hosts"
+        },
+        {
+          "ref": "sbxw:dev-ports",
+          "name": "dev-ports",
+          "default": false,
+          "about": "the agent publishes a dev server on a loopback port sbx picks, without a prompt (sbx 0.53; at creation only)"
+        }
+      ],
+      "defaults": [
+        "sbxw:codemap",
+        "sbxw:agent-skills",
+        "sbxw:md-to-pdf-tools",
+        "sbxw:retro"
+      ]
+    },
+    "my_skills": {
+      "ok": true,
+      "dir": "/Users/ana/.sbxw/my-skills",
+      "skills": []
+    },
+    "mcp": {
+      "ok": true,
+      "servers": []
+    },
+    "remote_hosts": {
+      "ok": true,
+      "sbxw": "/usr/local/bin/sbxw",
+      "hosts": []
+    },
+    "voice": {
+      "ok": true,
+      "compiled": true,
+      "ready": false,
+      "models": [
+        {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "role": "stt",
+          "label": "Parakeet TDT 0.6B v3 (int8)",
+          "license": "CC-BY-4.0",
+          "approx_mb": 670,
+          "installed": {
+            "state": "missing"
+          }
+        },
+        {
+          "id": "voxtral-tts-4bit",
+          "role": "tts",
+          "label": "Voxtral TTS 4B (MLX, 4-bit)",
+          "license": "CC-BY-NC-4.0",
+          "approx_mb": 2550,
+          "installed": {
+            "state": "missing"
+          }
+        }
+      ],
+      "approx_mb": 3220,
+      "speech": {
+        "supported": true,
+        "runtime": "mlx-audio==0.2.6",
+        "runtime_ready": false,
+        "voice": "neutral_female"
+      },
+      "job": null,
+      "hint": "sbxw voice install",
+      "push_to_talk_key": "F8",
+      "dictate_key": "F9",
+      "dir": "/Users/ana/.sbxw/models"
+    }
+  },
+  "app": {
+    "panels": [
+      "mcp"
+    ]
+  }
+}
