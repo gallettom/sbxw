@@ -1,0 +1,163 @@
+{
+  "daemon": {
+    "sandboxes": [
+      {
+        "name": "web-app",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web-app"
+      },
+      {
+        "name": "api",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/api"
+      },
+      {
+        "name": "docs",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/docs"
+      }
+    ],
+    "sessions": [
+      {
+        "sandbox": "web-app",
+        "mode": "claude",
+        "state": "idle",
+        "agent": "claude",
+        "started_ms": 1763290000000,
+        "origin": "tty",
+        "answerable": false,
+        "ts": 1763290000001
+      }
+    ],
+    "threads": {
+      "web-app": {
+        "ok": true,
+        "threads": [],
+        "open": 1,
+        "max": 5
+      },
+      "api": {
+        "ok": true,
+        "threads": [],
+        "open": 1,
+        "max": 5
+      }
+    },
+    "plans": [
+      {
+        "id": "p-1",
+        "sandbox": "web-app",
+        "summary": "Three threads, the third short.",
+        "threads": [
+          {
+            "name": "desktop-views2",
+            "goal": "Retouch the new views after the user's test: MCP servers, Skills and Kits shown over the pane area like Commits and Worktrees, with a sandbox picker at the top left; the explorer redesigned so a person finds a file without thinking (a breadcrumb across the top, Locations as a visible list, the folder's content as a real tree); a branch graph of the unmerged worktrees; the logo centred on the rail's icons in full screen; a Team leads icon that says leader.",
+            "scope": "desktop/src/feat/files/ (the explorer), feat/worktrees, feat/commits (only what the graph shares), feat/mcp.rs, skills.rs, kits.rs and their screens, desktop/src/shell/rail.rs, the overlay host and the top bar's mark in desktop/src/shell.rs (say which lines), desktop/src/screen.rs and luau.rs (additions: a vector or lane element if needed), desktop/src/icons.rs, desktop/src/client.rs, desktop/src/bin/standin.rs, desktop/screens/, desktop/fixtures/, desktop/scripts/, desktop/docs/"
+          },
+          {
+            "name": "lead-robustness",
+            "goal": "Fix the lead mode defects better-full reported: a plan approved twice starts its threads twice; a thread that ends before its report reaches the lead is lost; the merge note is cut at the first newline. Each fix with a test that fails before it, and nothing changed in how a person approves a plan or a merge.",
+            "scope": "crates/core/src/plans.rs, crates/daemon/src/threads.rs, crates/daemon/src/http/plans.rs (only the routes the fixes need), docs/threads-and-lead.md, the daemon's tests for plans and threads"
+          },
+          {
+            "name": "test-cleanup",
+            "goal": "Inventory the desktop's tests and propose which to merge or drop, read only until the views branch is merged.",
+            "scope": "desktop/src/**/tests.rs, desktop/tests/"
+          }
+        ],
+        "state": "pending",
+        "variant": "split",
+        "justification": "The three areas live in different folders, so a branch each merges cleanly.",
+        "lead": "web-app lead",
+        "created_ms": 1763290000000,
+        "updated_ms": 1763290000000
+      }
+    ],
+    "leads": [],
+    "models": {
+      "ok": true,
+      "default": "claude-opus-5-5",
+      "models": [
+        {
+          "id": "claude-opus-5-5",
+          "label": "Opus 5.5"
+        },
+        {
+          "id": "claude-sonnet-5-5",
+          "label": "Sonnet 5.5"
+        },
+        {
+          "id": "claude-haiku-5-5",
+          "label": "Haiku 5.5"
+        }
+      ]
+    },
+    "board": {},
+    "thread_repos": {
+      "ok": true,
+      "workspace": "/Users/ana/dev/web-app",
+      "repos": [
+        {
+          "path": "api",
+          "branch": "main",
+          "dirty": 0,
+          "ahead": 0,
+          "behind": 0,
+          "detached": false
+        },
+        {
+          "path": "web",
+          "branch": "main",
+          "dirty": 2,
+          "ahead": 1,
+          "behind": 0,
+          "detached": false
+        },
+        {
+          "path": "docs",
+          "branch": "main",
+          "dirty": 0,
+          "ahead": 0,
+          "behind": 0,
+          "detached": false
+        }
+      ]
+    },
+    "threads_ui": {
+      "repos_for": "web-app"
+    }
+  },
+  "app": {
+    "selected": "web-app",
+    "panes": 2,
+    "open": [
+      "web-app"
+    ],
+    "modal": [
+      "plans",
+      "p-1"
+    ]
+  },
+  "about": "Three threads, two of them long: the list scrolls."
+}

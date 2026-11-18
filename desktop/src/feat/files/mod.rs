@@ -101,6 +101,9 @@ pub const INTENTS: &[Spec] = &[
     Spec { name: "files_more", risk: Risk::Direct, args: &[], doc: "Draws the next rows of a long list (the panel draws 200 at first, 200 more each time)." },
     Spec { name: "files_fold", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Artifacts: opens a folder's rows, or folds them back (`id`: a folder row's id). Folders start folded, with their file count." },
     Spec { name: "files_hidden", risk: Risk::Direct, args: &[("on", Arg::Bool, true)], doc: "Shows dotfiles, or hides them." },
+    Spec { name: "files_expand", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Opens a folder of the list in place (its entries under it, read from the sandbox), or folds it back. Folders start folded. Artifacts: as files_fold." },
+    Spec { name: "files_sort", risk: Risk::Direct, args: &[("by", Arg::OneOf(SORTS), true)], doc: "Sorts a folder's rows by name or by date (newest first); folders first either way." },
+    Spec { name: "files_key", risk: Risk::Direct, args: &[("key", Arg::OneOf(KEYS), true), ("text", Arg::Text, false)], doc: "The explorer's keys when none of its controls has the keyboard: Up and Down move in the list, Right opens a folder in place, Left folds it (or goes to its folder's row), Enter opens a folder or reads a file; typing (`type` with `text`, `backspace`) edits the filter." },
     Spec { name: "files_select", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Picks a row by its `id`: a folder is listed, a file previewed (text, Markdown, pictures; HTML as its source)." },
     Spec { name: "files_show_in_folder", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Recent: lists the folder a file was written to, on that file." },
     Spec { name: "files_copy_path", risk: Risk::Direct, args: &[], doc: "Puts the selected file's path, as the agent sees it, on the clipboard." },
@@ -264,6 +267,14 @@ pub struct State {
     want_worktree: Option<String>,
     /// The Markdown section shown (`files_outline`), by heading index.
     section: Option<usize>,
+    /// Folders of the list opened in place (absolute paths), and what the
+    /// daemon answered for each (its listing, or `{error}`).
+    expanded: std::collections::BTreeSet<String>,
+    children: BTreeMap<String, J>,
+    /// `name` (default) or `date`.
+    sort: String,
+    /// The keyboard's row, by id.
+    cursor: Option<String>,
 }
 
 crate::feat::relay::per_thread!(STATE, State);
@@ -381,6 +392,9 @@ impl State {
                     }
                     out.extend(self.fetch_all(&sb));
                 }
+                if self.sort.is_empty() {
+                    self.sort = cx.get("app")["kept"]["files"]["sort"].as_str().filter(|x| SORTS.contains(x)).unwrap_or("name").into();
+                }
                 match a.s("tab") {
                     Some(t) => self.tab = t.into(),
                     None if self.tab.is_empty() => self.tab = cx.get("app")["kept"]["files"]["tab"].as_str().filter(|t| TABS.contains(t)).unwrap_or("artifacts").into(),
@@ -437,10 +451,18 @@ impl State {
             }
             "files_place" => {
                 let id = a.req("id");
-                if id == "recent" {
-                    self.tab = "recent".into();
+                if id == "recent" || id == "artifacts" {
+                    // A shared location: its list (as its tab was).
+                    self.tab = id.into();
+                    self.more = 0;
+                    self.sel = None;
+                    self.preview = J::Null;
+                    self.cursor = None;
                 } else {
-                    let places = view::places(cx.get(DIR), &self.starred(cx));
+                    // A location (views2) or a former place: the same ids (paths).
+                    let sb = self.sandbox.clone().unwrap_or_default();
+                    let mut places = view::places(cx.get(DIR), &self.starred(cx));
+                    places.extend(view::locations(cx.get(DIR), &self.starred(cx), &sb).into_iter().flat_map(|g| g["items"].as_array().cloned().unwrap_or_default()).filter(|x| x["path"].is_string()));
                     let p = places.iter().find(|p| p["id"] == id).ok_or_else(|| format!("{id} is not one of the places"))?;
                     self.select_next = p["select"].as_str().map(str::to_string);
                     let path = p["path"].as_str().unwrap_or("/").to_string();
@@ -472,6 +494,9 @@ impl State {
                 self.sel = None;
                 self.preview = J::Null;
                 self.tab = "files".into();
+                self.expanded.clear();
+                self.children.clear();
+                self.cursor = None;
                 out.push(self.fetch_dir(&sb));
             }
             "files_filter" => {
@@ -489,6 +514,13 @@ impl State {
                 }
             }
             "files_hidden" => self.hidden = a.b("on").unwrap_or(false),
+            "files_expand" => out.extend(self.expand(cx, a.req("id"))?),
+            "files_sort" => {
+                self.sort = a.req("by").to_string();
+                self.more = 0;
+                out.push(Action::Remember { key: "sort".into(), value: self.sort.clone().into() });
+            }
+            "files_key" => out.extend(self.key(cx, a.req("key"), a.s("text").unwrap_or(""))?),
             "files_select" => out.extend(self.select(cx, a.req("id"))?),
             "files_show_in_folder" => {
                 let id = a.req("id").to_string();
@@ -673,6 +705,9 @@ impl State {
         self.more = 0;
         self.sel = None;
         self.preview = J::Null;
+        self.expanded.clear();
+        self.children.clear();
+        self.cursor = None;
         Ok(vec![self.fetch_dir(&sb)])
     }
 
@@ -725,6 +760,9 @@ impl State {
         let late = rows.iter().skip(shown).find(|r| r["selected"] == true).cloned();
         rows.truncate(shown);
         rows.extend(late);
+        for r in rows.iter_mut() {
+            r["cursor"] = (self.cursor.is_some() && r["id"].as_str() == self.cursor.as_deref()).into();
+        }
         let what = if self.tab() == "files" { "entries" } else { "files" };
         let count = json!({
             "total": total, "shown": shown, "more": PAGE.min(total - shown),
@@ -786,26 +824,141 @@ impl State {
 
     fn dir_rows(&self, cx: &Ctx) -> Vec<J> {
         let d = cx.get(DIR);
-        let base = d["path"].as_str().unwrap_or("/");
+        let mut out = vec![];
+        self.dir_level(d, d, 0, &mut out);
+        out
+    }
+
+    /// One folder's rows (`listing`, the daemon's answer for it), folders
+    /// first, sorted by name or date; an opened folder's rows under it.
+    fn dir_level(&self, top: &J, listing: &J, depth: usize, out: &mut Vec<J>) {
+        let base = listing["path"].as_str().unwrap_or("/");
         let now = view::now_secs();
-        let mut v: Vec<&J> = d["entries"].as_array().into_iter().flatten().filter(|e| {
+        let visible = |e: &&J| {
             let n = e["name"].as_str().unwrap_or("");
-            (self.hidden || !n.starts_with('.')) && self.keep(n)
-        }).collect();
-        v.sort_by_key(|e| (e["kind"] != "dir", e["name"].as_str().unwrap_or("").to_lowercase()));
-        v.into_iter()
-            .map(|e| {
-                let name = e["name"].as_str().unwrap_or("");
-                let id = view::join(base, name);
-                let kind = e["kind"].as_str().unwrap_or("other");
-                let m = e["modified"].as_u64().unwrap_or(0);
-                json!({ "id": id, "name": name, "kind": kind, "link": e["link"] == true, "icon": if kind == "dir" { "folder" } else { icon_of(name) },
-                    "size": if kind == "dir" { String::new() } else { view::size_label(e["size"].as_u64().unwrap_or(0)) },
-                    "when": view::ago(m, now), "fresh": kind == "file" && now.saturating_sub(m) < view::FRESH_SECS,
-                    "can_delete": view::can_delete(&id, d) && !(kind == "other" && e["link"] != true),
-                    "selected": self.sel.as_ref().is_some_and(|s| s.src == Src::Fs && s.path == id) })
-            })
-            .collect()
+            self.hidden || !n.starts_with('.')
+        };
+        let mut v: Vec<&J> = listing["entries"].as_array().into_iter().flatten().filter(visible).collect();
+        if self.sort == "date" {
+            v.sort_by_key(|e| (e["kind"] != "dir", std::cmp::Reverse(e["modified"].as_u64().unwrap_or(0)), e["name"].as_str().unwrap_or("").to_lowercase()));
+        } else {
+            v.sort_by_key(|e| (e["kind"] != "dir", e["name"].as_str().unwrap_or("").to_lowercase()));
+        }
+        for e in v {
+            let name = e["name"].as_str().unwrap_or("");
+            let id = view::join(base, name);
+            let kind = e["kind"].as_str().unwrap_or("other");
+            let open = kind == "dir" && self.expanded.contains(&id);
+            let kids = if open { self.children.get(&id) } else { None };
+            let mut sub = vec![];
+            if let Some(k) = kids.filter(|k| k["entries"].is_array()) {
+                self.dir_level(top, k, depth + 1, &mut sub);
+            }
+            // The filter keeps a row whose name matches, or an opened folder holding one.
+            if !self.keep(name) && sub.is_empty() {
+                continue;
+            }
+            let m = e["modified"].as_u64().unwrap_or(0);
+            let count = kids.and_then(|k| k["entries"].as_array()).map(|l| l.iter().filter(|x| self.hidden || !x["name"].as_str().unwrap_or("").starts_with('.')).count());
+            out.push(json!({ "id": id, "name": name, "kind": kind, "link": e["link"] == true, "icon": if kind == "dir" { "folder" } else { icon_of(name) },
+                "size": if kind == "dir" { String::new() } else { view::size_label(e["size"].as_u64().unwrap_or(0)) },
+                "when": view::ago(m, now), "fresh": kind == "file" && now.saturating_sub(m) < view::FRESH_SECS,
+                "can_delete": view::can_delete(&id, top) && !(kind == "other" && e["link"] != true),
+                "depth": depth, "open": open, "count": count, "loading": open && kids.is_none(),
+                "error": kids.and_then(|k| k["error"].as_str()),
+                "cursor": self.cursor.as_deref() == Some(id.as_str()),
+                "selected": self.sel.as_ref().is_some_and(|s| s.src == Src::Fs && s.path == id) }));
+            out.extend(sub);
+        }
+    }
+
+    /// The listing a row of the Files list belongs to: the folder listed, or
+    /// a folder opened in place.
+    fn entry_of<'a>(&'a self, cx: &'a Ctx, id: &str) -> Option<&'a J> {
+        let parent = view::parent(id);
+        let d = cx.get(DIR);
+        let l = if d["path"].as_str() == Some(parent.as_str()) { d } else { self.children.get(&parent)? };
+        let name = id.rsplit('/').next().unwrap_or(id);
+        l["entries"].as_array()?.iter().find(|e| e["name"] == name)
+    }
+
+    /// Opens a folder in place, or folds it (`files_expand`).
+    fn expand(&mut self, cx: &Ctx, id: &str) -> Result<Vec<Action>, String> {
+        if self.tab() == "artifacts" {
+            if !artifact_dirs(cx).contains_key(id) {
+                return Err(format!("{id} is not a folder of .sbxw-artifacts"));
+            }
+            if !self.open.remove(id) {
+                self.open.insert(id.to_string());
+            }
+            return Ok(vec![]);
+        }
+        let e = self.entry_of(cx, id).ok_or_else(|| format!("{id} is not in this folder"))?;
+        if e["kind"] != "dir" {
+            return Err(format!("{id} is not a folder"));
+        }
+        if self.expanded.remove(id) {
+            // Folded: what was opened inside it folds too.
+            let inside = format!("{}/", id.trim_end_matches('/'));
+            self.expanded.retain(|p| !p.starts_with(&inside));
+            return Ok(vec![]);
+        }
+        self.expanded.insert(id.to_string());
+        if self.children.contains_key(id) {
+            return Ok(vec![]);
+        }
+        let sb = self.sandbox()?;
+        Ok(vec![Action::Call(Call::get(format!("{}?path={}", sb_route(&sb, "/fs"), enc(id)), format!("list {id}")).tag(&format!("expand:{sb}:{id}")).quiet())])
+    }
+
+    /// The explorer's keys (`files_key`), over the rows drawn.
+    fn key(&mut self, cx: &Ctx, key: &str, text: &str) -> Result<Vec<Action>, String> {
+        match key {
+            "type" => {
+                self.filter.push_str(text);
+                self.more = 0;
+                return Ok(vec![]);
+            }
+            "backspace" => {
+                self.filter.pop();
+                self.more = 0;
+                return Ok(vec![]);
+            }
+            _ => {}
+        }
+        let (rows, _) = self.page(cx);
+        let ids: Vec<String> = rows.iter().filter_map(|r| r["id"].as_str().map(str::to_string)).collect();
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let at = self.cursor.as_ref().and_then(|c| ids.iter().position(|i| i == c));
+        let row = |id: &str| rows.iter().find(|r| r["id"] == id).cloned().unwrap_or(J::Null);
+        match key {
+            "down" => self.cursor = ids.get(at.map_or(0, |i| (i + 1).min(ids.len() - 1))).cloned(),
+            "up" => self.cursor = ids.get(at.map_or(0, |i| i.saturating_sub(1))).cloned(),
+            "right" | "left" | "enter" => {
+                let Some(c) = self.cursor.clone().or_else(|| ids.first().cloned()) else { return Ok(vec![]) };
+                self.cursor = Some(c.clone());
+                let r = row(&c);
+                let folder = r["kind"] == "dir" || r["kind"] == "folder";
+                match key {
+                    "right" if folder && r["open"] != true => return self.expand(cx, &c),
+                    "left" if folder && r["open"] == true => return self.expand(cx, &c),
+                    "left" => {
+                        // To the row of the folder it is in, when that is drawn.
+                        let up = if self.tab() == "artifacts" { c.rsplit_once('/').map(|(d, _)| d.to_string()) } else { Some(view::parent(&c)) };
+                        if let Some(u) = up.filter(|u| ids.contains(u)) {
+                            self.cursor = Some(u);
+                        }
+                    }
+                    "enter" if r["kind"] == "folder" => return self.expand(cx, &c),
+                    "enter" => return self.select(cx, &c),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        Ok(vec![])
     }
 
     fn recent_rows(&self, cx: &Ctx) -> Vec<J> {
@@ -847,9 +1000,7 @@ impl State {
                 (Src::Fs, id.rsplit('/').next().unwrap_or(id).to_string(), f["size"].as_u64().unwrap_or(0), f["modified"].as_u64().unwrap_or(0), "file".to_string())
             }
             _ => {
-                let d = cx.get(DIR);
-                let base = d["path"].as_str().unwrap_or("/");
-                let e = d["entries"].as_array().into_iter().flatten().find(|e| view::join(base, e["name"].as_str().unwrap_or("")) == id).ok_or_else(|| format!("{id} is not in this folder"))?;
+                let e = self.entry_of(cx, id).ok_or_else(|| format!("{id} is not in this folder"))?.clone();
                 let kind = e["kind"].as_str().unwrap_or("other").to_string();
                 if kind == "dir" {
                     return self.browse(id);
@@ -1132,12 +1283,24 @@ impl State {
         let a = cx.get(ARTIFACTS);
         let run = run_for(cx, sb.as_deref().unwrap_or(""));
         let (rows, count) = self.page(cx);
+        let locations = if mine(DIR) { view::locations(d, &self.starred(cx), sb.as_deref().unwrap_or("the sandbox")) } else { vec![] };
+        let location = match self.tab() {
+            "files" => d["path"].as_str().and_then(|p| view::location_of(&locations, p)),
+            t => Some(t.to_string()),
+        };
         json!({
             "sandbox": sb, "tab": self.tab(), "filter": self.filter, "hidden": self.hidden,
             "path": d["path"], "can_up": d["path"].as_str().is_some_and(|p| p != "/"), "can_back": !self.history.is_empty(),
             "offline": d["offline"] == true,
             "starred": d["path"].as_str().is_some_and(|p| self.starred(cx).iter().any(|x| x == p)),
             "places": if mine(DIR) { json!(view::places(d, &self.starred(cx))) } else { json!([]) },
+            "locations": locations, "location": location,
+            "crumbs": match self.tab() {
+                "files" => json!(d["path"].as_str().map(|p| view::crumbs(p, d["home"].as_str().unwrap_or("/home/agent"))).unwrap_or_default()),
+                "recent" => json!([{ "label": "Recent", "path": J::Null }]),
+                _ => json!([{ "label": "Artifacts", "path": J::Null }]),
+            },
+            "home": d["home"].as_str().unwrap_or("/home/agent"), "sort": if self.sort.is_empty() { "name" } else { self.sort.as_str() },
             "rows": rows, "count": count,
             "loading": { "artifacts": !mine(ARTIFACTS) || a.is_null(), "files": d.is_null(), "recent": cx.get(RECENT).is_null() },
             "errors": { "artifacts": errors[ARTIFACTS], "files": errors[DIR], "recent": errors[RECENT] },
@@ -1414,7 +1577,17 @@ impl State {
     pub fn on_answer(&mut self, cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
         let mut out = vec![];
         let tag = call.tag.as_str();
-        if tag.starts_with("drop-") {
+        if let Some((sb, path)) = tag.strip_prefix("expand:").and_then(|t| t.split_once(':')) {
+            // A folder opened in place: its listing, or why not (said on its row).
+            if self.sandbox.as_deref() == Some(sb) && self.expanded.contains(path) {
+                let v = match r {
+                    Ok((200, b)) if b["entries"].is_array() => b,
+                    Ok((c, b)) => json!({ "error": why(c, &b) }),
+                    Err(e) => json!({ "error": e }),
+                };
+                self.children.insert(path.to_string(), v);
+            }
+        } else if tag.starts_with("drop-") {
             out.extend(self.drop_uploaded(tag, r));
         } else if let Some(id) = tag.strip_prefix("upload-").and_then(|s| s.parse::<u64>().ok()) {
             out.extend(self.uploaded(id, r));
@@ -1618,6 +1791,10 @@ fn worktree_path(listing: &J, thread: &str) -> Option<String> {
 
 /// Rows drawn at first, and added by each "Show more".
 pub const PAGE: usize = 200;
+/// `files_sort`'s orders.
+pub const SORTS: &[&str] = &["name", "date"];
+/// `files_key`'s keys.
+pub const KEYS: &[&str] = &["up", "down", "left", "right", "enter", "type", "backspace"];
 
 /// Every folder of `.sbxw-artifacts` that holds a listed file, with the
 /// number of files under it.

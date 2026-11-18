@@ -1,6 +1,9 @@
--- MCP servers (a docked panel; it was Setup's MCP tab): the servers
--- registered on this machine (sbx mcp), loading one into a running sandbox,
--- signing in to a remote one, adding one. The web UI's mcp.js.
+-- MCP servers (an overlay over the pane area, opened from the rail; it was
+-- Setup's MCP tab): the servers registered on this machine (sbx mcp),
+-- loading one into a running sandbox, signing in to a remote one, adding
+-- one. The web UI's mcp.js. Wide (760 pt and more): the sandbox picker and
+-- the registered servers at the left; at the right the selected server
+-- (pressing a row inspects it) or the add form. Narrow: one column.
 --
 -- The sandbox Load and Unload act on is data.mcp_view.sandbox (the panel
 -- opened for a sandbox), else the last one used (data.app.kept.mcp.sandbox),
@@ -86,10 +89,15 @@ return {
       }
     end
 
-    out[#out + 1] = field("Sandbox", select{ id = "mcp-sandbox", value = target or "", items = running, on = "pick",
+    local picker = sandbox_picker(data, { id = "mcp-sandbox", value = target, items = running, on = "pick",
       placeholder = "no running sandbox", disabled = #running == 0 })
+    local wide = overlay_wide(data)
+    local sel = data.mcp_inspect_for
+    table.insert(out, 1, row{ w = "full", gap = 8, text{ "Load into", size = "sm", color = "text-muted" }, picker })
     if asked and asked ~= target then
-      out[#out + 1] = note(asked .. " is not running: a server is loaded into a running sandbox. Start it, or pick another.", "amber")
+      -- Opened for a stopped sandbox: the picker is on the first running one,
+      -- and this line says so with the same name the picker and Load show.
+      out[#out + 1] = note("Opened for " .. asked .. ", which is not running: Load acts on " .. (target or "no sandbox") .. " (the picker). Start " .. asked .. ", or pick another.", "amber")
     elseif #running == 0 then
       out[#out + 1] = note("No sandbox is running: start one to load a server into it.")
     end
@@ -101,10 +109,13 @@ return {
       if i > shown then break end
       rows[#rows + 1] = column{ w = "full", gap = 4, key = "mcp-" .. x.name,
         row{ w = "full", gap = 8,
-          dot{ tone = x.stdio and "amber" or "blue" },
-          text{ x.name, mono = true, truncate = true, grow = 1, color = "text-bright", help = x.name },
-          badge{ x.stdio and "local command" or "remote", tone = x.stdio and "amber" or "blue",
-            help = x.stdio and "Runs on this machine, outside any sandbox, each time a sandbox loads it" or "An HTTP endpoint" },
+          row{ gap = 8, grow = 1, min_w = 0, px = 4, h = 28, radius = "xs", key = "mcp-sel-" .. x.name, on = "inspect", arg = x.name,
+            fill = (wide and sel == x.name) and "active-bg" or nil, hover = "hover-subtle", help = "Show " .. x.name .. "'s details",
+            dot{ tone = x.stdio and "amber" or "blue" },
+            text{ x.name, mono = true, truncate = true, grow = 1, color = "text-bright" },
+            badge{ x.stdio and "local command" or "remote", tone = x.stdio and "amber" or "blue",
+              help = x.stdio and "Runs on this machine, outside any sandbox, each time a sandbox loads it" or "An HTTP endpoint" },
+          },
           button{ icon = "trash", variant = "ghost", color = "red", on = "rm", arg = x.name, key = "mcp-rm-" .. x.name, help = "Unregister from this machine" },
         },
         row{ w = "full", gap = 4,
@@ -117,7 +128,8 @@ return {
         },
       }
     end
-    out[#out + 1] = section("Registered on this machine", badge{ tostring(#servers) })
+    out[#out + 1] = row{ w = "full", gap = 8, text{ "Registered on this machine", size = "caption", weight = "semibold", color = "text-muted" }, badge{ tostring(#servers) }, spacer{},
+      (wide and sel) and button{ "Add a server", icon = "plus", key = "mcp-new", variant = "ghost", tone = "blue", on = "inspect_close", help = "The form, at the right" } or false }
     if #rows > 0 then
       out[#out + 1] = list(rows)
       if #servers > shown then
@@ -128,14 +140,29 @@ return {
     elseif not err then
       out[#out + 1] = note("No server registered yet. Add one below: a remote server's URL, or a command that runs on this machine.")
     end
-    if data.mcp_inspect_for then
+    local details = false
+    if sel then
       local t = data.mcp_inspect
       local body = type(t) == "table" and (t.text or t.error or "") or "Reading…"
-      out[#out + 1] = column{ w = "full", gap = 4, pad = 8, radius = "sm", fill = "bg", key = "mcp-inspect",
-        row{ w = "full", text{ "sbx mcp inspect " .. data.mcp_inspect_for, size = "sm", color = "text-muted" }, spacer{},
-          button{ icon = "close", variant = "ghost", on = "inspect_close", key = "mcp-inspect-close", help = "Hide" } },
+      local x = nil
+      for _, y in ipairs(servers) do if y.name == sel then x = y end end
+      details = column{ w = "full", gap = 8, pad = wide and 0 or 8, radius = "sm", fill = (not wide) and "bg" or nil, key = "mcp-inspect",
+        row{ w = "full", gap = 8,
+          x and dot{ tone = x.stdio and "amber" or "blue" } or false,
+          text{ sel, mono = true, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
+          x and badge{ x.stdio and "local command" or "remote", tone = x.stdio and "amber" or "blue" } or false,
+          button{ icon = "close", variant = "ghost", on = "inspect_close", key = "mcp-inspect-close", help = wide and "Back to the form" or "Hide" } },
+        x and note(x.stdio and "Runs on this machine, outside any sandbox, each time a sandbox loads it. Its tools reach the agent of the sandbox it is loaded into."
+          or "An HTTP endpoint the sandbox's agent calls through sbx. Sign in once on this machine: the token serves every sandbox.") or false,
+        x and row{ w = "full", gap = 4,
+          button{ "Load into " .. (target or "a sandbox"), key = "mcp-detail-load", icon = "plus", variant = "neutral", on = "load", arg = { server = sel, sandbox = target }, disabled = not target },
+          button{ "Unload", key = "mcp-detail-unload", variant = "ghost", on = "unload", arg = { server = sel, sandbox = target }, disabled = not target },
+          (not x.stdio) and button{ "Sign in", key = "mcp-detail-auth", variant = "ghost", on = "auth", arg = sel } or false,
+        } or false,
+        text{ "sbx mcp inspect " .. sel, size = "caption", weight = "semibold", color = "text-muted" },
         text{ body ~= "" and body or "(no output)", mono = true, wrap = true, size = "sm" },
       }
+      if not wide then out[#out + 1] = details end
     end
 
     -- The form. Added: the server is listed now, so the form starts again
@@ -148,7 +175,10 @@ return {
     if done then f = {} end
     local stdio = f.kind == "stdio"
     local keys = placeholders(f.headers)
-    out[#out + 1] = divider{}
+    local form = { w = "full", gap = 12, key = "mcp-form" }
+    local main = out
+    out = form
+    if not wide then main[#main + 1] = divider{} end
     out[#out + 1] = section(f.replace and ("Edit " .. f.replace) or "Add a server")
     out[#out + 1] = field("Name", input{ id = "mcp-name", value = f.name or "", on = "field", arg = { k = "name", reset = done }, placeholder = "github" })
     out[#out + 1] = field("Kind", select{ id = "mcp-kind", value = stdio and "stdio" or "remote", on = "kind", arg = { reset = done }, items = {
@@ -173,7 +203,15 @@ return {
       (f.replace or trim(f.name) ~= "") and button{ "Clear", variant = "ghost", on = "clear", key = "mcp-clear" } or false,
       button{ f.replace and "Save…" or "Add…", key = "mcp-save", variant = "primary", on = "save", disabled = trim(f.name) == "" },
     }
-    return column{ h = "full", w = "full", scroll{ gap = 0, column(out) } }
+    if not wide then
+      main[#main + 1] = column(form)
+      return column{ h = "full", w = "full", scroll{ gap = 0, column(main) } }
+    end
+    -- Wide: the list at the left, the selected server or the form at the right.
+    local right = sel and details or column(form)
+    return split{ id = "mcp-split", vertical = true, ratio = 0.46,
+      column{ h = "full", w = "full", px = 4, scroll{ gap = 0, column(main) } },
+      column{ h = "full", w = "full", px = 4, scroll{ gap = 0, column{ w = "full", gap = 12, right } } } }
   end,
 
   actions = {

@@ -170,6 +170,8 @@ pub struct Node {
     /// `split` and `divider`: true for side by side (a vertical divider).
     pub vertical: bool,
     pub stick_bottom: bool,
+    /// `scroll`: its edges fade over this many points where content is hidden under them.
+    pub fade: Option<f32>,
     /// `textarea`: visible lines (default 4).
     pub rows: u32,
     /// `image`: `fit` (letterboxed, default) or `fill` (cropped).
@@ -192,6 +194,10 @@ pub struct Node {
     /// `row`/`column` with `on`: called when Space is pressed while it has
     /// the keyboard (Enter calls `on`).
     pub on_space: Option<String>,
+    /// `row`/`column` with `on`: called with the same `arg` when Left or
+    /// Right is pressed while it has the keyboard (a tree's fold and open).
+    pub on_left: Option<String>,
+    pub on_right: Option<String>,
     /// `row`/`column`: what overflows it is cut at its edges.
     pub clip: bool,
     /// `button`, `menu`: the dense size (24 pt, for bars) instead of 28.
@@ -215,9 +221,26 @@ pub struct Node {
     /// `row`/`column`: lines under its `help` in the tooltip, each what a
     /// key does and its keycaps (`{ { "Open", "Enter" }, { "Start or stop", "Space" } }`).
     pub shortcuts: Vec<(String, Vec<String>)>,
+    /// `row`/`column`: vector drawing under its children, in its own points
+    /// from its top-left (Rune's `Shape`): the Worktrees view's branch graph.
+    pub paint: Option<Paint>,
     pub style: Style,
     pub children: Vec<Node>,
 }
+
+/// A `paint` prop: polylines and dots, drawn in order (strokes, then dots).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Paint {
+    /// Points, width (points), colour.
+    pub strokes: Vec<(Vec<[f32; 2]>, f32, u32)>,
+    /// Centre, radius, colour, hollow (a ring).
+    pub dots: Vec<([f32; 2], f32, u32, bool)>,
+}
+
+/// What one `paint` may hold: a branch graph has at most a few hundred.
+pub const PAINT_STROKES: usize = 400;
+pub const PAINT_DOTS: usize = 600;
+pub const PAINT_POINTS: usize = 8000;
 
 impl Node {
     fn new(kind: Kind) -> Self {
@@ -239,6 +262,7 @@ impl Node {
             secure: false,
             vertical: false,
             stick_bottom: false,
+            fade: None,
             rows: 4,
             fill_image: false,
             hover_group: false,
@@ -247,6 +271,8 @@ impl Node {
             group: None,
             selected: false,
             on_space: None,
+            on_left: None,
+            on_right: None,
             clip: false,
             skip_tab: false,
             dense: false,
@@ -256,6 +282,7 @@ impl Node {
             pill: false,
             folds: false,
             shortcuts: vec![],
+            paint: None,
             style: Style::default(),
             children: vec![],
         }
@@ -281,7 +308,7 @@ pub enum Positional {
 /// Props every element takes.
 pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin"];
 const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate", "pills"];
-const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "clip", "folds", "shortcuts"];
+const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "on_left", "on_right", "clip", "folds", "shortcuts", "paint", "wrap"];
 
 /// The frozen element set: name, kind, positional entries, props beyond [`COMMON`].
 pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
@@ -289,7 +316,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("row", Kind::Row, Positional::Children, BOX_PROPS),
     ("column", Kind::Column, Positional::Children, BOX_PROPS),
     ("list", Kind::List, Positional::Children, &["gap"]),
-    ("scroll", Kind::Scroll, Positional::Children, &["gap", "stick_bottom"]),
+    ("scroll", Kind::Scroll, Positional::Children, &["gap", "stick_bottom", "fade"]),
     ("button", Kind::Button, Positional::Text, &["on", "arg", "variant", "icon", "disabled", "color", "dense", "keys", "tab_stop", "hover", "tone", "compact"]),
     ("input", Kind::Input, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "secure", "disabled"]),
     ("icon", Kind::Icon, Positional::Text, &["color", "size"]),
@@ -367,6 +394,23 @@ more_rows = function(c, o)
     text{ label, size = "sm", color = "text-muted", wrap = true },
     button{ "Show " .. tostring(c.more) .. " more", key = key, on = o.on or "more", arg = o.arg, variant = "ghost", tone = "blue",
       help = tostring(c.total - c.shown) .. " more not drawn" } }
+end
+-- A sandbox picker, as the explorer draws it: the sandbox's colour square
+-- (data.app.groups), then the select. opts: `id`, `value`, `items`
+-- ({id, label}), `on`, `placeholder`, `disabled`.
+sandbox_picker = function(data, o)
+  o = o or {}
+  local groups = ((data or {}).app or {}).groups or {}
+  local id = o.id or "sandbox"
+  return row{ gap = 8, key = id .. "-row",
+    column{ w = 8, h = 8, radius = 2, fill = (o.value and groups[o.value]) or "text-dim", key = id .. "-color" },
+    select{ id = id, value = o.value or "", items = o.items or {}, on = o.on, placeholder = o.placeholder, disabled = o.disabled } }
+end
+-- An overlay over the pane area wide enough for two columns (760 pt and
+-- more, data.app.overlay.w; a screen drawn alone counts as wide).
+overlay_wide = function(data)
+  local o = ((data or {}).app or {}).overlay or {}
+  return (o.w or 1000) >= 760
 end
 paged = function(items, o)
   o = o or {}
@@ -714,6 +758,59 @@ fn size_of(v: &Value) -> Result<Size, String> {
     }
 }
 
+/// `paint = { strokes = { { points = { x1, y1, x2, y2, ... }, width = 2, color = "blue" } },
+/// dots = { { x = 4, y = 4, r = 4, color = "green", hollow = false } } }`.
+fn paint_of(v: &Value) -> Result<Paint, String> {
+    let Value::Table(t) = v else { return Err("paint: expected { strokes = {...}, dots = {...} }".into()) };
+    let num = |x: &Value, what: &str| -> Result<f32, String> { num_of(x).map_err(|e| format!("paint: {what}: {e}")).and_then(|n| if n.is_finite() { Ok(n) } else { Err(format!("paint: {what}: not a number")) }) };
+    let mut p = Paint::default();
+    let mut points = 0usize;
+    for pair in t.pairs::<String, Value>() {
+        let (k, list) = pair.map_err(|_| "paint: keys are strokes and dots".to_string())?;
+        let Value::Table(list) = list else { return Err(format!("paint.{k}: expected a list")) };
+        match k.as_str() {
+            "strokes" => {
+                for s in list.sequence_values::<Value>() {
+                    let Value::Table(s) = s.map_err(|e| e.to_string())? else { return Err("paint.strokes: each is { points = {...}, width =, color = }".into()) };
+                    let mut pts = vec![];
+                    let mut xy: Vec<f32> = vec![];
+                    if let Ok(Value::Table(ps)) = s.get::<Value>("points") {
+                        for x in ps.sequence_values::<Value>() {
+                            xy.push(num(&x.map_err(|e| e.to_string())?, "points")?);
+                        }
+                    }
+                    if xy.len() % 2 != 0 || xy.len() < 4 {
+                        return Err("paint.strokes: points are x, y pairs, two at least".into());
+                    }
+                    for c in xy.chunks(2) {
+                        pts.push([c[0], c[1]]);
+                    }
+                    points += pts.len();
+                    let width = match s.get::<Value>("width").map_err(|e| e.to_string())? { Value::Nil => 1.5, x => num(&x, "width")?.clamp(0.5, 8.0) };
+                    let color = match s.get::<Value>("color").map_err(|e| e.to_string())? { Value::Nil => crate::theme::color_value("text-muted").unwrap(), x => color_of(&x)? };
+                    p.strokes.push((pts, width, color));
+                }
+            }
+            "dots" => {
+                for d in list.sequence_values::<Value>() {
+                    let Value::Table(d) = d.map_err(|e| e.to_string())? else { return Err("paint.dots: each is { x =, y =, r =, color = }".into()) };
+                    let g = |k: &str| d.get::<Value>(k).map_err(|e| e.to_string());
+                    let (x, y) = (num(&g("x")?, "x")?, num(&g("y")?, "y")?);
+                    let r = match g("r")? { Value::Nil => 4.0, v => num(&v, "r")?.clamp(1.0, 12.0) };
+                    let color = match g("color")? { Value::Nil => crate::theme::color_value("text-muted").unwrap(), v => color_of(&v)? };
+                    let hollow = match g("hollow")? { Value::Nil => false, v => bool_of(&v)? };
+                    p.dots.push(([x, y], r, color, hollow));
+                }
+            }
+            other => return Err(format!("paint: unknown key '{other}' (strokes, dots)")),
+        }
+    }
+    if p.strokes.len() > PAINT_STROKES || p.dots.len() > PAINT_DOTS || points > PAINT_POINTS {
+        return Err(format!("paint: at most {PAINT_STROKES} strokes, {PAINT_DOTS} dots and {PAINT_POINTS} points"));
+    }
+    Ok(p)
+}
+
 fn color_of(v: &Value) -> Result<u32, String> {
     crate::theme::parse_color(&string_of(v)?)
 }
@@ -826,11 +923,13 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
                 n.shortcuts.push((what, parts));
             }
         }
+        "paint" => n.paint = Some(paint_of(v)?),
         "icon" => n.icon = Some(string_of(v)?),
         "disabled" => n.disabled = bool_of(v)?,
         "secure" => n.secure = bool_of(v)?,
         "vertical" => n.vertical = bool_of(v)?,
         "stick_bottom" => n.stick_bottom = bool_of(v)?,
+        "fade" => n.fade = Some(num_of(v)?.clamp(0.0, 64.0)),
         "rows" => n.rows = num_of(v)?.clamp(1.0, 40.0) as u32,
         "fit" => n.fill_image = one_of(v, &["fit", "fill"])? == "fill",
         "pin" => {
@@ -849,6 +948,8 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "group" => n.group = Some(one_of(v, &["list"])?),
         "selected" => n.selected = bool_of(v)?,
         "on_space" => n.on_space = Some(string_of(v)?),
+        "on_left" => n.on_left = Some(string_of(v)?),
+        "on_right" => n.on_right = Some(string_of(v)?),
         "dense" => n.dense = bool_of(v)?,
         "clip" => n.clip = bool_of(v)?,
         "tab_stop" => n.skip_tab = !bool_of(v)?,
@@ -1100,6 +1201,25 @@ mod tests {
             n += 1;
         }
         assert_eq!(n, SPEC.len(), "one example per element");
+    }
+
+    /// `paint`: strokes and dots parsed with theme colours; bad shapes and
+    /// too much drawing are errors that name the prop.
+    #[test]
+    fn paint_draws_strokes_and_dots_within_its_caps() {
+        let n = render(r#"column{ w = 100, h = 40, paint = { strokes = { { points = { 0, 1, 50, 1, 50, 30 }, width = 2, color = "blue" } }, dots = { { x = 4, y = 4, r = 3, color = "green" }, { x = 9, y = 9, hollow = true } } } }"#).unwrap();
+        let p = n.paint.expect("paint");
+        assert_eq!(p.strokes[0].0, vec![[0.0, 1.0], [50.0, 1.0], [50.0, 30.0]]);
+        assert_eq!(p.strokes[0].1, 2.0);
+        assert_eq!(p.dots.len(), 2);
+        assert!(p.dots[1].3, "hollow");
+        assert!(render("column{ paint = { strokes = { { points = { 1, 2, 3 } } } } }").unwrap_err().contains("x, y pairs"));
+        assert!(render("column{ paint = { lines = {} } }").unwrap_err().contains("unknown key 'lines'"));
+        assert!(render("text{ 'a', paint = {} }").unwrap_err().contains("unknown prop 'paint'"));
+        let many = "local d = {} for i = 1, 700 do d[i] = { x = i, y = 1 } end return { render = function() return column{ paint = { dots = d } } end }";
+        let mut h = LuauHost::new(Limits::default()).unwrap();
+        h.load("x", many).unwrap();
+        assert!(h.render(&serde_json::json!({})).unwrap_err().to_string().contains("at most"));
     }
 
     #[test]

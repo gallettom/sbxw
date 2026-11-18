@@ -79,6 +79,7 @@ unchanged.
 | `kept` | What features asked the app to keep across runs (`Action::Remember`), by feature then key |
 | `surface.release`, `surface.focused` | The key that gives the keyboard back from a picture surface (`⌘Esc`, `Ctrl+Esc`); the id of the surface that has the keyboard, or nil |
 | `platform` | `macos`, `linux`, `windows` |
+| `window` | `w`, `h`: the window's size in points (the plan dialog moves its header into the scrolling part on a short window) |
 | `groups` | Each sandbox's group colour (`#rrggbb`), by name; absent for a sandbox in no group. The web UI's hue first (chats share one, a workspace folder's from its path), then made distinct: a group within 40° of a hue already taken (chats first, then workspaces by path) moves to the nearest free hue, so two groups never share a background; it can then differ from the web UI's (`theme::group_colors`) |
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
 | `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
@@ -148,7 +149,7 @@ Text. Positional: the string (a number is shown as its digits).
 | `mono` | bool | false. The terminal's font. The UI is monospace, as the web UI is; `mono` also keeps a wrapped text monospace (a command, a path) |
 | `wrap` | bool | false: one line. A wrapped text is a sentence or more: it is set in the prose face (Inter, bundled by Rune), as Markdown and the core dialogs' sentences are; `SBXW_DESKTOP_PROSE=mono` keeps everything monospace |
 | `truncate` | bool | false. One line cut with an ellipsis when it does not fit (give it `grow = 1` in a row) |
-| `pills` | `true` or a sandbox name | none. Keyword pills: each `[[Word]]` or `[[Word: detail]]` in the string is drawn as a rounded coloured pill (the brackets dropped, the word in its tone, the detail regular), wrapping with the text, when the daemon's `[emphasis]` switch is on (`true`: the global switch; a sandbox's name: that sandbox's, and the app's own preference for it). Use it for words an agent wrote. See [Keyword pills](#keyword-pills) |
+| `pills` | `true` or a sandbox name | none. Keyword pills: each `[[Word]]` or `[[Word: detail]]` in the string is drawn as a calm capsule (the brackets dropped, regular weight, the word in the body text tinted toward its tone, the detail in the body text, on a faint tint of the tone), wrapping with the text, when the daemon's `[emphasis]` switch is on (`true`: the global switch; a sandbox's name: that sandbox's, and the app's own preference for it). Use it for words an agent wrote. See [Keyword pills](#keyword-pills) |
 
 Sizes under 12 are drawn at 12 (nothing a person reads is smaller); a
 `weight` of `bold` is drawn semibold (600).
@@ -169,12 +170,15 @@ Children side by side. Children are centred vertically.
 | `hover` | colour | Background under the pointer |
 | `on`, `arg` | action name, any value | The whole row is pressable (a button for screen readers, named by its `help`); `hover` defaults to `surface`. Enter presses it when it has the keyboard |
 | `on_space` | action name | With `on`: called with the same `arg` when Space is pressed while it has the keyboard (the sandbox list: start or stop) |
+| `wrap` | bool | `row`: its children go onto as many lines as they need (a line of chips) |
+| `on_left`, `on_right` | action name | With `on`: called with the same `arg` when Left or Right is pressed while it has the keyboard (a tree: fold, open in place; the explorer's folders) |
 | `hover_group` | bool | Its `reveal` children show while it is hovered or the keyboard focus is in it |
 | `hover_zone` | string | `row`/`column`: one hover zone with every element of this screen that names the same zone, even apart in the tree (a row and the block under it). The core tells the screen where the pointer rests in `data.app.hover_zone` ([Hover zones](#hover-zones)) |
 | `group` | `list` | Its pressable children (with `on`) are one list: Up and Down move the keyboard between them |
 | `selected` | bool | With `on`: the selected item (screen readers say so) |
 | `clip` | bool | What overflows it is cut at its edges (a line of badges that may not fit) |
 | `shortcuts` | list of `{ what, key, ... }` | Lines under its `help` in the tooltip, each what a key does with its keycaps: `shortcuts = { { "Open its terminal", "Enter" }, { "Start or stop", "Space" } }` |
+| `paint` | `{ strokes = { { points = { x1, y1, x2, y2, ... }, width = 2, color = "blue" } }, dots = { { x =, y =, r =, color =, hollow = } } }` | Vector drawing in the element's own points from its top-left, under its children (Rune's `Shape`: round-capped polylines, dots as filled discs or rings). At most 400 strokes, 600 dots, 8000 points. Give the element its `w` and `h`; put pressable parts over it as `pin`ned children. The Worktrees graph draws with it |
 | `folds` | bool | `column`: its children fold open and shut smoothly. A child that grows or shrinks (a block that expands) glides to its new height over about 0.18 s, ease-out, and what it gains or loses fades; only in answer to the person's press or key, never for data that arrives; off under the system's reduced motion |
 
 ```lua
@@ -225,6 +229,7 @@ height**: give the columns above it `h = "full"`.
 |---|---|---|
 | `gap` | number or space | Between children |
 | `stick_bottom` | bool | Opens at the end and follows it while scrolled to the end (logs, chats) |
+| `fade` | number | Its top and bottom edges fade over that many points where content is hidden under them, so a cut list shows it scrolls (the plan dialog's threads) |
 
 ```lua
 column{ h = "full", text"Log", scroll{ gap = 2, stick_bottom = true, text"line 1", text"line 2" } }
@@ -545,6 +550,15 @@ capital (`[[summary]]`, a code map's link, stays text). Tones: green settled,
 red wrong, amber needs you, blue context, purple Jarvis and the team, cyan the
 kind of work, and `danger` a filled red for what cannot be undone.
 
+**Look** (views2, the same in the terminal and here): a capsule (radius half
+its height; square where a soft wrap cuts it), 1.5 pt of air above and below
+in the terminal so pills on consecutive lines never touch; the fill is the
+tone at 10% over whatever is under it (the terminal's ground, or a coloured
+line's own background, a diff's band); the word is the body text moved 45%
+toward the tone, the detail the body text, both regular weight, each moved
+until it reads at 4.5:1 on the fill; `danger` stays a filled red with white
+text. `emphasis::TINT`, `WORD_MIX`, `AIR`, `span_radius`.
+
 ```lua
 text{ r.question, wrap = true, pills = r.from }   -- the sandbox that wrote it
 markdown{ m.text, on = "link", pills = true }
@@ -552,7 +566,7 @@ markdown{ m.text, on = "link", pills = true }
 
 **Text, never anything else.** A screen gets a pill only as part of one
 text element: the core turns the string into characters and styles (colour,
-weight, a rounded background) of that element. No marker can make a
+a rounded background) of that element. No marker can make a
 control, a link, a key or an intent appear, whatever it holds (markup, an
 intent's spelling, a URL): the parts stay characters
 (`shell::layout_tests::pills_in_a_screen_never_make_a_control`). Pills are
@@ -809,7 +823,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `chevron-right`, `check`, `warning`, `info`, `gear`, `search`, `folder`,
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
-`coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `threads`,
+`coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `leader`, `threads`,
 `shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
 ">", for the top bar's logo).
 
@@ -818,7 +832,8 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | Icon | Means |
 |---|---|
 | `sparkle` | the agent (Claude, or another vendor's) |
-| `people` | the team (team mode, the leads) |
+| `people` | the team (a session in team mode: the pane bar's Team) |
+| `leader` | the team leads (a crown over one person: the rail's Team leads, the pager's mark, the palette) |
 | `jarvis` | Jarvis |
 | `threads` | a sandbox's sessions and threads (`branch` is one worktree) |
 | `globe` | the sandbox's browser |
@@ -917,6 +932,16 @@ cut. Two helpers, the same block everywhere:
 
 Used by Commits, Worktrees and Files. The screens that can still grow past
 the cap with many sessions, threads or requests are listed in VIEWS.md.
+
+### Overlay helpers
+
+- `sandbox_picker(data, { id, value, items, on, placeholder, disabled })`:
+  the sandbox's colour square (`data.app.groups`, key `<id>-color`) then the
+  select (`<id>`), in a row keyed `<id>-row`. The explorer, MCP servers,
+  Skills and Kits draw it at their top left.
+- `overlay_wide(data)`: true when the overlay over the pane area is 760 pt
+  wide or more (`data.app.overlay.w`; a screen drawn alone counts as wide).
+  Two columns from there (a `split` keyed `<screen>-split`), one under it.
 
 ## Checking your screen
 
@@ -1289,8 +1314,9 @@ forgotten; a screen only sees names and whether a value is set.
 
 ### mcp, skills, kits
 
-Three docked panels (440 to 460 pt, the shared panel header: icon, title,
-the close cross at the top right), each its own feature
+Three overlays over the pane area (`Slot::Overlay`, as Commits and
+Worktrees: the core's header with the icon, the title, "Esc closes" and the
+cross; one overlay at a time; the terminals under it untouched), each its own feature
 (`src/feat/mcp.rs`, `skills.rs`, `kits.rs`, tests beside them) and its own
 rail entry in the configure zone above Settings: MCP (order 10), Skills
 (20), Kits (30). Their icons, one mark each wherever the view appears (rail,
@@ -1299,11 +1325,16 @@ connector, not the network's `shield`), `book` skills (not the agent's
 `sparkle`, the team's `people` or Jarvis's ring), `box` kits. Each declares its entry in one
 function, `rail_entry`, an extra whose intent is `open_panel {screen}`
 (the rail marks it on while the panel shows; a second press closes it).
-The palette lists the same extras. A panel rather than a modal: each is
-mostly a list with a few actions per row, kept beside the terminals while
-one loads a server or answers a kit; its one form (a new MCP server) is
-short, and the `<screen>_view` convention (view state dropped on close)
-is the panels'.
+The palette lists the same extras. They were docked panels until the
+person asked for them over the panes, as Commits and Worktrees: a docked
+panel was one narrow column with most of the room empty. Over the pane area
+they use the width: from 760 pt two columns (MCP: the sandbox picker and the
+registered servers | the selected server, which pressing a row inspects, or
+the add form; Kits: the picker, what waits for you and the kits line | the
+selected kit's description, `kits-about`; Skills: the picker and the kept
+skills | that sandbox's skills to look at and keep), one column under it.
+The `<screen>_view` convention (view state dropped on close) holds for
+overlays too: closing one drops its `<screen>_view`.
 
 Each opens for a sandbox from that sandbox's Manage dialog (`sa-mcp`,
 `sa-skills`, `sa-kits`) and from a pane's "⋯" menu (extras `mcp-view`,
@@ -1371,7 +1402,7 @@ pane, never this panel. Keys: `kits-waiting`, `kit-answer-<sandbox>`,
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
 | `kits_show` | `sandbox` (optional) | direct | Opens the panel and reads the kits lines again, on the file that sandbox uses (else the last one used) |
-| `kits_pick` | `path` | direct | Puts the panel on one of the files (view state) |
+| `kits_pick` | `path` or `sandbox` | direct | Puts the view on one of the files, or on the file a sandbox uses (the picker at its top; view state) |
 | `kits_save` | `path`, `kits` (one reference per line) or `defaults = true` | approval | Rewrites that file's `kits` line (or removes it); the dialog lists what is added and removed and asks for an acknowledgement for kits that reach outside the sandbox |
 
 ### threads
@@ -1511,10 +1542,32 @@ the map's parser, `standin.rs`, `tests.rs`), `screens/files.luau`,
 the rail's Files (`files_show`: the sandbox used last, else the focused
 pane's, else the selected one), a pane bar's Project (`files_open
 {sandbox}`, and for a thread's pane `{sandbox, worktree}`: at that
-worktree, its path from the daemon's listing) or the Worktrees view. Left
-the tree (a sandbox picker `files-sandbox`, Artifacts, Workspace, Recent,
-the sandbox's worktrees `files-worktree-<thread>`, the upload card, the
-path bar, the filter, the rows); right the reader: Markdown at about 70
+worktree, its path from the daemon's listing) or the Worktrees view.
+
+Its layout (views2, `VIEWS2.md`): **across the top** where the list is, as
+pressable segments (`files-crumb-<i>`, the agent's home shown as `~`, a
+long path folding in the middle into `files-crumbs-more`, never cut at its
+end), back `files-back`, up `files-up`, copy the folder `files-copy-folder`,
+pin it `files-star`, **Go to…** `files-goto` (the typed path `files-path`),
+then **Upload** `files-upload` (the upload card `files-drop` under the
+header: open, while files wait, or while files are dragged over the
+explorer, `data.app.overlay.drop_over`) and the "…" menu `files-actions`
+(read again, the code map). **Left**: the sandbox picker `files-sandbox`
+with its colour, the **Locations** (`files_ui.locations`, `view::locations`:
+"This sandbox": Home (the agent's home, `/home/agent`), Workspace (the
+project, this computer's folder mounted at the same path; Code map
+`files-codemap` beside it), Temporary files (`/tmp`), File system root,
+the mounts, Kit logs; "Shared with sbxw": Artifacts, Recent; "Worktrees":
+`files-worktree-<thread>`; "Pinned"; keys `files-loc-<id>`, the current one
+`files_ui.location` marked; under 760 pt a menu `files-locations`), then
+the list: the filter `files-filter` with **Hidden** `files-hidden` and the
+sort `files-sort` (`files_sort`), and the rows as a tree (`files-rows`, one
+keyboard list): a folder opens in place (`files_expand`, read from the
+sandbox, its count once read; `files-into-<id>` lists it), Up and Down
+move, Right opens, Left folds, Enter presses, typing filters
+(`files_key` when nothing of the explorer has the keyboard, the rows'
+`on_left`/`on_right` when a row has it). Empty and failed lists say what to
+do. Right the reader: Markdown at about 70
 characters in the prose face, paragraphs reflowed, its outline beside it
 (`files-outline-<i>`, `files_outline`: that section, Whole file),
 relative links and `[[wiki links]]` rewritten to
@@ -1551,7 +1604,7 @@ amber) while its map or a lens is being written.
 
 **Keys** (scripts press them): rows `files-row-<id>` (`id`: an artifact's
 path under `.sbxw-artifacts`, else the file's absolute path), Recent's
-`files-show-<id>`, tabs `files-tab-<tab>`, actions `files-download`,
+`files-show-<id>`, Locations `files-loc-<id>` (the tabs `files-tab-<tab>` before views2), actions `files-download`,
 `files-reveal`, `files-open-with`, `files-save-as`, `files-copy-path`,
 `files-delete`, the preview's body `files-preview-<state>` (`loading`, `text` (HTML too), `markdown`, `image`, `note`, `error`), uploads `files-drop` (the drop target), `files-upload-send-<n>`
 and `files-unstage-<n>` (by position), `files-more` (Show N more), a folder row
@@ -1701,7 +1754,7 @@ background. `data.commits_ui`: `sandbox` (nil: every one), `branch`,
 
 | Intent | Args | Effect |
 |---|---|---|
-| `commits_show` | `sandbox?`, `branch?` | Opens the view (every sandbox, one, one branch) and reads |
+| `commits_show` | `sandbox?`, `branch?`, `hash?` | Opens the view (every sandbox, one, one branch) and reads; with `hash` (and `sandbox`) that commit opened, as a dot pressed in the Worktrees graph |
 | `commits_sandbox` | `sandbox?` | All, or one |
 | `commits_filter` | `text` | Subject and author |
 | `commits_unmerged` | `on` | Only what the main checkout's branch does not hold |
@@ -1714,6 +1767,39 @@ background. `data.commits_ui`: `sandbox` (nil: every one), `branch`,
 | `commits_key` | `key` (`up`, `down`, `enter`) | The view's keys when none of its controls has the keyboard |
 
 Commit messages are drawn as plain text: no pills, no Markdown, no links.
+
+### worktrees
+
+An overlay (`src/feat/worktrees.rs`, `screens/worktrees.luau`): one block
+per sandbox, one row per worktree (path, thread and its state, ahead,
+behind, uncommitted changes, merged, the last commit; Terminal, Commits,
+Files). Above a block's rows, the **branch graph** of its unmerged
+worktrees, one per repository (`src/feat/worktrees_graph.rs`, the web UI's
+`wtLayout` mapping): the base branch as the top lane, each unmerged thread
+(a tip with commits of its own) forking from its merge-base and running to
+its tip, a dot per commit; merged worktrees and branches with nothing of
+their own are not drawn (their rows keep the "merged" chip). Lanes go by
+fork, the newest first (no link crosses a lane above it), then by name;
+each lane's colour comes from the thread's name (`lane_color`, a stable
+palette; the row's branch icon wears it), its label from the thread's
+state. Ahead is the lane's dots, behind the base's dots after the fork.
+Caps: 24 base commits and 10 per thread from 760 pt, 10 and 4 under it (a
+"+N" chip for a thread's older commits, a faint "earlier" edge for the
+base's); the same lanes at both widths. The layout is in columns and rows,
+deterministic and tested (`the_branch_graph_lays_out_unmerged_lanes_by_fork_with_caps`);
+the screen turns it into points and draws it with the `paint` prop
+(Rune's `Shape`). A lane's label (`worktrees-lane-<id>`) selects its row
+(`worktrees_select`); a dot (`worktrees-dot-<sandbox>-<short>`) opens that
+commit in Commits (`commits_show {sandbox, branch, hash}`).
+
+| Intent | Args | Effect |
+|---|---|---|
+| `worktrees_show` | | Opens the view and reads every sandbox's worktrees |
+| `worktrees_refresh` | | Reads again |
+| `worktrees_filter` | `text` | By sandbox, thread, branch or path |
+| `worktrees_more` | | The next page of rows |
+| `worktrees_terminal`, `worktrees_commits`, `worktrees_files` | `id` | The row's thread terminal, its branch in Commits, the explorer at it |
+| `worktrees_select` | `id?` | Marks a row (a lane pressed), or none; view state |
 
 ### Overlays
 

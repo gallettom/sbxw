@@ -116,3 +116,122 @@ fn the_screen_renders_every_state() {
     render(answer(&mut st, &cx, out));
     render(ui(&st.act(&cx, &asked("worktrees_filter", json!({ "text": "zzz" }))).unwrap()));
 }
+
+/// The branch graph's layout: only unmerged branches get a lane; lanes go
+/// by fork (newest first, so no link crosses a lane above it), then name;
+/// each forks at its merge-base's column; the caps cut the dots (a "+N"
+/// gap, an "earlier" edge), the same lanes in both variants.
+#[test]
+fn the_branch_graph_lays_out_unmerged_lanes_by_fork_with_caps() {
+    let f = fx();
+    let repo = &f["daemon"]["worktrees_of"]["web-app"]["repos"][0];
+    let none = |_: &str| None;
+    let g = graph::layout(repo, graph::WIDE, &none).expect("web-app has unmerged threads");
+    let lanes = g["lanes"].as_array().unwrap();
+    let names: Vec<&str> = lanes.iter().map(|l| l["thread"].as_str().unwrap()).collect();
+    // header-fix (merged: nothing ahead) and search-index (no branch) are not drawn.
+    assert_eq!(names, ["checkout-copy", "api-cache"], "newest fork first");
+    assert_eq!(lanes.iter().map(|l| l["row"].as_u64().unwrap()).collect::<Vec<_>>(), [1, 2]);
+    // The base: 10 commits, the earliest fork (api-cache at log[6], the 4th
+    // oldest) with one column before it; checkout-copy forks at log[1].
+    let base = g["base"].as_array().unwrap();
+    let col_of = |sha: &J| base.iter().find(|c| &c["sha"] == sha).map(|c| c["col"].as_i64().unwrap());
+    let log = repo["log"].as_array().unwrap();
+    assert_eq!(base.len(), 8, "from just before the earliest fork to HEAD");
+    assert!(g["earlier"] == true, "older commits than drawn: the earlier edge");
+    assert_eq!(lanes[1]["fork"].as_i64(), col_of(&log[6]["sha"]));
+    assert_eq!(lanes[0]["fork"].as_i64(), col_of(&log[1]["sha"]));
+    assert!(base.last().unwrap()["head"] == true && base.last().unwrap()["sha"] == log[0]["sha"]);
+    // Behind is readable from the picture: base dots after the fork.
+    let after = |l: &J| base.iter().filter(|c| c["col"].as_i64().unwrap() > l["fork"].as_i64().unwrap()).count() as u64;
+    assert_eq!(after(&lanes[0]), lanes[0]["behind"].as_u64().unwrap());
+    assert_eq!(after(&lanes[1]), lanes[1]["behind"].as_u64().unwrap());
+    // checkout-copy: its two commits after the fork, oldest first, at the tip its newest.
+    let cc = &lanes[0];
+    let cols: Vec<i64> = cc["commits"].as_array().unwrap().iter().map(|c| c["col"].as_i64().unwrap()).collect();
+    assert_eq!(cols, [cc["fork"].as_i64().unwrap() + 1, cc["fork"].as_i64().unwrap() + 2]);
+    assert_eq!(cc["commits"][1]["sha"], repo["threads"][0]["tip"], "the tip last");
+    assert_eq!(cc["hidden"], 0);
+    // api-cache: 14 ahead, the cap 10 drawn after a gap column, 4 counted.
+    let ac = &lanes[1];
+    assert_eq!((ac["commits"].as_array().unwrap().len(), ac["hidden"].as_u64()), (10, Some(4)));
+    assert_eq!(ac["first"].as_i64().unwrap(), ac["fork"].as_i64().unwrap() + 2, "one column for the +N gap");
+    assert_eq!(g["cols"].as_i64().unwrap(), ac["end"].as_i64().unwrap() + 1);
+    // Narrow: fewer dots, the same lanes in the same rows.
+    let n = graph::layout(repo, graph::NARROW, &none).unwrap();
+    let nl = n["lanes"].as_array().unwrap();
+    assert_eq!(nl.iter().map(|l| l["thread"].clone()).collect::<Vec<_>>(), lanes.iter().map(|l| l["thread"].clone()).collect::<Vec<_>>());
+    assert_eq!((nl[1]["commits"].as_array().unwrap().len(), nl[1]["hidden"].as_u64()), (4, Some(10)));
+    assert!(n["base"].as_array().unwrap().len() <= graph::NARROW.base);
+    // Deterministic: the same answer, the same layout; a colour per name.
+    assert_eq!(graph::layout(repo, graph::WIDE, &none), Some(g.clone()));
+    assert_eq!(graph::lane_color("api-cache"), graph::lane_color("api-cache"));
+    // A repository with only merged worktrees draws nothing.
+    let mut merged = repo.clone();
+    merged["threads"] = json!([repo["threads"][2]]);
+    assert!(graph::layout(&merged, graph::WIDE, &none).is_none());
+    // A fork the log does not hold (further back): drawn from the earlier edge.
+    let mut far = repo.clone();
+    far["threads"][0]["fork"] = json!("0000000000000000000000000000000000000000");
+    let fg = graph::layout(&far, graph::WIDE, &none).unwrap();
+    assert!(fg["lanes"].as_array().unwrap().iter().any(|l| l["thread"] == "checkout-copy" && l["fork"] == -1));
+}
+
+/// The view's data carries both variants per block; a lane's label selects
+/// its row; a dot opens Commits on that commit.
+#[test]
+fn the_graph_selects_a_row_and_opens_a_commit() {
+    let d = data();
+    let cx = Ctx { data: &d };
+    let mut st = State::default();
+    let out = st.act(&cx, &asked("worktrees_show", json!({}))).unwrap();
+    let v = answer(&mut st, &cx, out);
+    let b = &v["blocks"][0];
+    assert_eq!(b["graphs"].as_array().unwrap().len(), 1);
+    assert!(b["graphs"][0]["wide"]["lanes"][0]["id"] == "web-app:checkout-copy");
+    let docs = v["blocks"].as_array().unwrap().iter().find(|b| b["sandbox"] == "docs").unwrap();
+    assert_eq!(docs["graphs"][0]["narrow"]["lanes"][0]["thread"], "release-notes");
+    let out = st.act(&cx, &asked("worktrees_select", json!({ "id": "web-app:api-cache" }))).unwrap();
+    let rows = ui(&out)["blocks"][0]["rows"].as_array().unwrap().clone();
+    assert!(rows.iter().all(|r| r["selected"] == (r["id"] == "web-app:api-cache")));
+    assert!(st.act(&cx, &asked("worktrees_select", json!({ "id": "web-app:nope" }))).is_err());
+    // The screen: the lane's label and a dot fire those intents.
+    let mut data = d.clone();
+    data["worktrees_ui"] = v.clone();
+    data["app"]["overlay"] = json!({ "w": 1200, "h": 700 });
+    let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+    h.load(SCREEN, include_str!("../../screens/worktrees.luau")).unwrap();
+    let tree = h.render(&data).unwrap();
+    fn find<'a>(n: &'a crate::luau::Node, k: &str) -> Option<&'a crate::luau::Node> {
+        if crate::screen::key_of(n).as_deref() == Some(k) {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| find(c, k))
+    }
+    let g = find(&tree, "worktrees-graph-web-app").expect("the graph");
+    let p = g.paint.as_ref().expect("drawn with paint");
+    assert!(p.strokes.len() >= 3 && p.dots.len() >= 8 + 2 + 10, "{} strokes {} dots", p.strokes.len(), p.dots.len());
+    let lane = find(&tree, "worktrees-lane-web-app:api-cache").unwrap();
+    let asks = h.act(lane.on.as_deref().unwrap(), &lane.arg, &J::Null).unwrap();
+    assert_eq!(asks["name"], "worktrees_select");
+    let tip = &v["blocks"][0]["graphs"][0]["wide"]["lanes"][0]["commits"][1];
+    let dot = find(&tree, &format!("worktrees-dot-web-app-{}", tip["short"].as_str().unwrap())).unwrap();
+    let asks = h.act(dot.on.as_deref().unwrap(), &dot.arg, &J::Null).unwrap();
+    assert_eq!(asks["name"], "commits_show");
+    assert_eq!(asks["args"], json!({ "sandbox": "web-app", "hash": tip["sha"], "branch": "sbxw/checkout-copy" }));
+    crate::intent::parse(&json!({ "kind": "intent", "name": "commits_show", "args": asks["args"] })).unwrap();
+    // Every point inside the graph's box, at 1200 and at a 720 window's overlay.
+    for w in [1200.0, 420.0] {
+        data["app"]["overlay"] = json!({ "w": w, "h": 400 });
+        let tree = h.render(&data).unwrap();
+        let g = find(&tree, "worktrees-graph-web-app").unwrap();
+        let (Some(crate::luau::Size::Pt(gw)), Some(crate::luau::Size::Pt(gh))) = (g.style.w, g.style.h) else { panic!("sized") };
+        assert!(gw <= w as f32 - 40.0 + 0.5, "{w}: the graph is {gw} wide");
+        for (pts, _, _) in &g.paint.as_ref().unwrap().strokes {
+            assert!(pts.iter().all(|[x, y]| *x >= 0.0 && *x <= gw && *y >= 0.0 && *y <= gh), "{w}: a stroke outside {gw}x{gh}: {pts:?}");
+        }
+        for ([x, y], r, _, _) in &g.paint.as_ref().unwrap().dots {
+            assert!(x - r >= 0.0 && x + r <= gw && y - r >= 0.0 && y + r <= gh, "{w}: a dot outside");
+        }
+    }
+}

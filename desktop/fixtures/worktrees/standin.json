@@ -71,29 +71,253 @@
      {
       "path": "",
       "base": "main",
-      "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "head": "81474065e55c009845245500f60909b8cf4cb991",
       "dirty": 1,
-      "log": [],
+      "log": [
+       {
+        "sha": "81474065e55c009845245500f60909b8cf4cb991",
+        "parents": [
+         "6fd586b5e26a6c05b4fe14a18d142a925b9b1b38"
+        ],
+        "at": 1794892800,
+        "subject": "Release 2.4.1"
+       },
+       {
+        "sha": "6fd586b5e26a6c05b4fe14a18d142a925b9b1b38",
+        "parents": [
+         "3486684aed86c06921708155289e2468e4fcf4a0"
+        ],
+        "at": 1794889200,
+        "subject": "Checkout: tax line"
+       },
+       {
+        "sha": "3486684aed86c06921708155289e2468e4fcf4a0",
+        "parents": [
+         "610e974337ec3241663d2d9a1ce32cf82eb43c2e"
+        ],
+        "at": 1794885600,
+        "subject": "Merge header fix"
+       },
+       {
+        "sha": "610e974337ec3241663d2d9a1ce32cf82eb43c2e",
+        "parents": [
+         "2f6f72111ceb5b7d9a1c59962e509c9d3c95cb69"
+        ],
+        "at": 1794882000,
+        "subject": "Search: debounce input"
+       },
+       {
+        "sha": "2f6f72111ceb5b7d9a1c59962e509c9d3c95cb69",
+        "parents": [
+         "4faf5bac3d023303a8d1c947b93cec917d879a76"
+        ],
+        "at": 1794878400,
+        "subject": "Footer links"
+       },
+       {
+        "sha": "4faf5bac3d023303a8d1c947b93cec917d879a76",
+        "parents": [
+         "855c64c332537c26b8aec776b55287930ea8a0ff"
+        ],
+        "at": 1794874800,
+        "subject": "Cart: empty state"
+       },
+       {
+        "sha": "855c64c332537c26b8aec776b55287930ea8a0ff",
+        "parents": [
+         "cca04c8b45cd3d5916604f459795f96e95a549f0"
+        ],
+        "at": 1794871200,
+        "subject": "Build: node 24"
+       },
+       {
+        "sha": "cca04c8b45cd3d5916604f459795f96e95a549f0",
+        "parents": [
+         "966dd50ecb5a3492c7f0338b9e6e9f197ea4657e"
+        ],
+        "at": 1794867600,
+        "subject": "Docs: contributing"
+       },
+       {
+        "sha": "966dd50ecb5a3492c7f0338b9e6e9f197ea4657e",
+        "parents": [
+         "415ef6e0971af7e3ef3e7dfdc6179b66f6b2cd57"
+        ],
+        "at": 1794864000,
+        "subject": "Lint: stricter rules"
+       },
+       {
+        "sha": "415ef6e0971af7e3ef3e7dfdc6179b66f6b2cd57",
+        "parents": [
+         "ab76191de34ead3c1a148b01b548cfb12579af1b"
+        ],
+        "at": 1794860400,
+        "subject": "Readme badges"
+       }
+      ],
       "threads": [
        {
         "name": "checkout-copy",
         "branch": "sbxw/checkout-copy",
         "worktree": "/Users/ana/dev/web/.sbxw-worktrees/checkout-copy",
-        "tip": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "fork": null,
+        "tip": "b1b942e56cefd1e55d21f9beebbedf0187522f81",
+        "fork": "6fd586b5e26a6c05b4fe14a18d142a925b9b1b38",
         "ahead": 2,
         "behind": 1,
         "dirty": 3,
-        "commits": [],
+        "commits": [
+         {
+          "sha": "b1b942e56cefd1e55d21f9beebbedf0187522f81",
+          "parents": [
+           "9224b93f02c1a42e5b4b4adbeeeaf47191f0c688"
+          ],
+          "at": 1794895800,
+          "subject": "Checkout: copy for the payment step"
+         },
+         {
+          "sha": "9224b93f02c1a42e5b4b4adbeeeaf47191f0c688",
+          "parents": [
+           "6fd586b5e26a6c05b4fe14a18d142a925b9b1b38"
+          ],
+          "at": 1794894000,
+          "subject": "Checkout: error states for declined cards"
+         }
+        ],
         "tip_subject": "Checkout: copy for the payment step",
         "tip_at": 1794896400
+       },
+       {
+        "name": "api-cache",
+        "branch": "sbxw/api-cache",
+        "worktree": "/Users/ana/dev/web/.sbxw-worktrees/api-cache",
+        "tip": "7a189ca0b8e5a01b52efcde6712df298cd5cb5f0",
+        "fork": "855c64c332537c26b8aec776b55287930ea8a0ff",
+        "ahead": 14,
+        "behind": 6,
+        "dirty": 0,
+        "commits": [
+         {
+          "sha": "7a189ca0b8e5a01b52efcde6712df298cd5cb5f0",
+          "parents": [
+           "b185d72f370efb8dc3b6ce067fee923890df6c90"
+          ],
+          "at": 1794896100,
+          "subject": "Cache: step 14"
+         },
+         {
+          "sha": "b185d72f370efb8dc3b6ce067fee923890df6c90",
+          "parents": [
+           "eb7e00b8518ca8bfc8a499acfe6f991d7cbc0557"
+          ],
+          "at": 1794895800,
+          "subject": "Cache: step 13"
+         },
+         {
+          "sha": "eb7e00b8518ca8bfc8a499acfe6f991d7cbc0557",
+          "parents": [
+           "c3ac25a640ec77e12ddc5b4cad2488426299622e"
+          ],
+          "at": 1794895500,
+          "subject": "Cache: step 12"
+         },
+         {
+          "sha": "c3ac25a640ec77e12ddc5b4cad2488426299622e",
+          "parents": [
+           "f6ec39e6c237449d55aa95b970211cfb654c0aed"
+          ],
+          "at": 1794895200,
+          "subject": "Cache: step 11"
+         },
+         {
+          "sha": "f6ec39e6c237449d55aa95b970211cfb654c0aed",
+          "parents": [
+           "32fedf874c4c5204e1217e923174990486f55a94"
+          ],
+          "at": 1794894900,
+          "subject": "Cache: step 10"
+         },
+         {
+          "sha": "32fedf874c4c5204e1217e923174990486f55a94",
+          "parents": [
+           "b82d1ede27b8728ab9425092cd196a577b4deb1a"
+          ],
+          "at": 1794894600,
+          "subject": "Cache: step 9"
+         },
+         {
+          "sha": "b82d1ede27b8728ab9425092cd196a577b4deb1a",
+          "parents": [
+           "59d38c63385107a3ddf7b7bc5a3a3a54becab9a6"
+          ],
+          "at": 1794894300,
+          "subject": "Cache: step 8"
+         },
+         {
+          "sha": "59d38c63385107a3ddf7b7bc5a3a3a54becab9a6",
+          "parents": [
+           "7ddc4474dee4bf0044ab16f9c08e9df0efae3ea8"
+          ],
+          "at": 1794894000,
+          "subject": "Cache: step 7"
+         },
+         {
+          "sha": "7ddc4474dee4bf0044ab16f9c08e9df0efae3ea8",
+          "parents": [
+           "82424b1eed58ea429a9a80ce3408ef4ae7d2f799"
+          ],
+          "at": 1794893700,
+          "subject": "Cache: step 6"
+         },
+         {
+          "sha": "82424b1eed58ea429a9a80ce3408ef4ae7d2f799",
+          "parents": [
+           "535edf43aacbedeaf9e9a37e7420ea8d74625366"
+          ],
+          "at": 1794893400,
+          "subject": "Cache: step 5"
+         },
+         {
+          "sha": "535edf43aacbedeaf9e9a37e7420ea8d74625366",
+          "parents": [
+           "1392e881b630fabb9feb051719582c77c23bffe6"
+          ],
+          "at": 1794893100,
+          "subject": "Cache: step 4"
+         },
+         {
+          "sha": "1392e881b630fabb9feb051719582c77c23bffe6",
+          "parents": [
+           "d909f85e19a6775c3f2d05515f069f639f9138b1"
+          ],
+          "at": 1794892800,
+          "subject": "Cache: step 3"
+         },
+         {
+          "sha": "d909f85e19a6775c3f2d05515f069f639f9138b1",
+          "parents": [
+           "7e9437ea8879f3ba0b2d078939c60006e3aa0326"
+          ],
+          "at": 1794892500,
+          "subject": "Cache: step 2"
+         },
+         {
+          "sha": "7e9437ea8879f3ba0b2d078939c60006e3aa0326",
+          "parents": [
+           "3339058f58091ed9203bb23021acc5205049d89b"
+          ],
+          "at": 1794892200,
+          "subject": "Cache: step 1"
+         }
+        ],
+        "tip_subject": "Cache: step 14",
+        "tip_at": 1794896100
        },
        {
         "name": "header-fix",
         "branch": "sbxw/header-fix",
         "worktree": "/Users/ana/dev/web/.sbxw-worktrees/header-fix",
-        "tip": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "fork": null,
+        "tip": "3486684aed86c06921708155289e2468e4fcf4a0",
+        "fork": "3486684aed86c06921708155289e2468e4fcf4a0",
         "ahead": 0,
         "behind": 4,
         "dirty": 0,
@@ -126,20 +350,54 @@
      {
       "path": "",
       "base": "main",
-      "head": "cccccccccccccccccccccccccccccccccccccccc",
+      "head": "23a9a0532a5c56838258ebd58307e477c857ebe0",
       "dirty": 0,
-      "log": [],
+      "log": [
+       {
+        "sha": "23a9a0532a5c56838258ebd58307e477c857ebe0",
+        "parents": [
+         "b19fa7dd170b5b914ed44f667c7846895743f659"
+        ],
+        "at": 1794892800,
+        "subject": "Guide: install"
+       },
+       {
+        "sha": "b19fa7dd170b5b914ed44f667c7846895743f659",
+        "parents": [
+         "028c53e75aa8366e1f7a3189ec9e9ff22673bd2a"
+        ],
+        "at": 1794889200,
+        "subject": "Guide: intro"
+       },
+       {
+        "sha": "028c53e75aa8366e1f7a3189ec9e9ff22673bd2a",
+        "parents": [
+         "d047d78b5088b773dc01d86629d53ce915891225"
+        ],
+        "at": 1794885600,
+        "subject": "Index"
+       }
+      ],
       "threads": [
        {
         "name": "release-notes",
         "branch": "sbxw/release-notes",
         "worktree": "/Users/ana/dev/docs/.sbxw-worktrees/release-notes",
-        "tip": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "fork": null,
+        "tip": "fa059f3b1a08395f6537ae75917ec9562d5419e8",
+        "fork": "23a9a0532a5c56838258ebd58307e477c857ebe0",
         "ahead": 1,
         "behind": 0,
         "dirty": 0,
-        "commits": [],
+        "commits": [
+         {
+          "sha": "fa059f3b1a08395f6537ae75917ec9562d5419e8",
+          "parents": [
+           "23a9a0532a5c56838258ebd58307e477c857ebe0"
+          ],
+          "at": 1794895500,
+          "subject": "Release notes for 2.4"
+         }
+        ],
         "tip_subject": "Draft the release notes for 3.7",
         "tip_at": 1794890000
        }

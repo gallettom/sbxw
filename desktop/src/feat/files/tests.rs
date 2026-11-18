@@ -996,13 +996,157 @@ fn the_explorer_keeps_every_action_of_the_project_panel() {
         let s = crate::screen::ScreenState::new(SCREEN, &dir, x.screen_data(&crate::fixture::AppView::default()));
         assert!(s.error.is_none(), "{}: {:?}", f.display(), s.error);
         let n = s.last_good.as_ref().unwrap();
-        for k in ["files-download", "files-reveal", "files-open-with", "files-save-as", "files-copy-path", "files-delete", "files-drop", "files-upload-pick", "files-upload-paste", "files-codemap", "files-sandbox", "files-tab-files", "files-tab-artifacts", "files-tab-recent", "files-filter", "files-back", "files-up", "files-hidden", "files-star"] {
+        // views2: the tabs became Locations (Workspace, Artifacts, Recent), the
+        // path field a breadcrumb (with Go to… for a typed path), the upload card
+        // a popover behind Upload, Code map beside the Workspace location.
+        for k in KEYS {
             if has(n, k) {
                 seen.insert(k);
             }
         }
     }
-    for k in ["files-download", "files-reveal", "files-open-with", "files-save-as", "files-copy-path", "files-delete", "files-drop", "files-upload-pick", "files-upload-paste", "files-codemap", "files-sandbox", "files-tab-files", "files-filter", "files-back", "files-up", "files-hidden", "files-star"] {
+    for k in KEYS {
         assert!(seen.contains(k), "{k} is drawn in no state of the explorer");
+    }
+}
+
+const KEYS: &[&str] = &[
+    "files-download", "files-reveal", "files-open-with", "files-save-as", "files-copy-path", "files-delete", "files-drop", "files-upload-pick", "files-upload-paste",
+    "files-codemap", "files-sandbox", "files-loc-/Users/me/web", "files-loc-artifacts", "files-loc-recent", "files-loc-/home/agent", "files-loc-/tmp", "files-loc-/",
+    "files-worktree-checkout", "files-filter", "files-back", "files-up", "files-hidden", "files-star", "files-upload", "files-actions", "files-crumbs", "files-goto",
+    "files-copy-folder", "files-sort", "files-refresh",
+];
+
+/// views2: the Locations are a visible list, grouped; each is reachable and
+/// marked when it is where the list is; the shared ones are the former tabs.
+#[test]
+fn every_location_is_reachable_and_the_current_one_is_marked() {
+    let mut d = fixture("standin");
+    let mut st = opened_pumped(&mut d);
+    let u = st.ui(&Ctx { data: &d });
+    let groups: Vec<&str> = u["locations"].as_array().unwrap().iter().map(|g| g["group"].as_str().unwrap()).collect();
+    assert_eq!(&groups[..2], ["This sandbox", "Shared with sbxw"]);
+    assert!(groups.contains(&"Worktrees"), "{groups:?}");
+    let items: Vec<J> = u["locations"].as_array().unwrap().iter().flat_map(|g| g["items"].as_array().unwrap().clone()).collect();
+    let labels: Vec<&str> = items.iter().map(|x| x["label"].as_str().unwrap()).collect();
+    for l in ["Home", "Workspace", "Temporary files", "File system root", "Artifacts", "Recent", "checkout"] {
+        assert!(labels.contains(&l), "{l} in {labels:?}");
+    }
+    let ws = items.iter().find(|x| x["label"] == "Workspace").unwrap();
+    assert!(ws["help"].as_str().unwrap().contains("mounted"), "the workspace says it is this computer's folder: {ws}");
+    // Each path location lists its folder and is then the one marked.
+    for (id, path) in [("/home/agent", "/home/agent"), ("/tmp", "/tmp"), ("/", "/"), ("/Users/me/web", "/Users/me/web")] {
+        let a = run(&mut st, &d, "files_place", json!({ "id": id })).unwrap();
+        let a = pump(&mut st, &mut d, a);
+        let u = ui_of(&a);
+        assert_eq!((u["tab"].as_str(), u["path"].as_str()), (Some("files"), Some(path)), "{id}");
+        assert_eq!(u["location"], id, "{id} is marked");
+    }
+    // Inside a worktree: the worktree is marked, not the workspace.
+    let a = run(&mut st, &d, "files_browse", json!({ "path": "/Users/me/web/.sbxw-worktrees/checkout" })).unwrap();
+    let u = ui_of(&pump(&mut st, &mut d, a));
+    assert_eq!(u["location"], "/Users/me/web/.sbxw-worktrees/checkout");
+    // The shared ones: their lists.
+    for t in ["artifacts", "recent"] {
+        let a = run(&mut st, &d, "files_place", json!({ "id": t })).unwrap();
+        let u = ui_of(&a);
+        assert_eq!((u["tab"].as_str(), u["location"].as_str()), (Some(t), Some(t)));
+    }
+    assert!(run(&mut st, &d, "files_place", json!({ "id": "/etc" })).is_err(), "only a location");
+}
+
+/// The breadcrumb: the home as ~, every segment a path the list can go to.
+#[test]
+fn the_breadcrumb_says_where_the_list_is() {
+    assert_eq!(view::crumbs("/home/agent/a/b", "/home/agent"), vec![json!({ "label": "~", "path": "/home/agent" }), json!({ "label": "a", "path": "/home/agent/a" }), json!({ "label": "b", "path": "/home/agent/a/b" })]);
+    assert_eq!(view::crumbs("/", "/home/agent"), vec![json!({ "label": "/", "path": "/" })]);
+    assert_eq!(view::crumbs("/Users/me/web", "/home/agent").iter().map(|c| c["label"].as_str().unwrap()).collect::<Vec<_>>(), ["/", "Users", "me", "web"]);
+    let mut d = fixture("standin");
+    let mut st = opened_pumped(&mut d);
+    let a = run(&mut st, &d, "files_browse", json!({ "path": "/Users/me/web/src" })).unwrap();
+    let u = ui_of(&pump(&mut st, &mut d, a));
+    let c = u["crumbs"].as_array().unwrap();
+    assert_eq!(c.last().unwrap()["path"], "/Users/me/web/src");
+    // The screen: a long path folds in the middle, never at its end; a segment goes there.
+    let mut data = d.clone();
+    data["files_ui"] = u.clone();
+    data["files_ui"]["crumbs"] = json!((0..12).map(|i| json!({ "label": format!("d{i}"), "path": format!("/{}", (0..=i).map(|j| format!("d{j}")).collect::<Vec<_>>().join("/")) })).collect::<Vec<_>>());
+    data["app"]["overlay"] = json!({ "w": 1200, "h": 700 });
+    let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+    h.load(SCREEN, include_str!("../../../screens/files.luau")).unwrap();
+    let tree = h.render(&data).unwrap();
+    fn find<'a>(n: &'a crate::luau::Node, k: &str) -> Option<&'a crate::luau::Node> {
+        if crate::screen::key_of(n).as_deref() == Some(k) {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| find(c, k))
+    }
+    assert!(find(&tree, "files-crumb-12").is_some() && find(&tree, "files-crumb-1").is_some(), "first and last kept");
+    assert!(find(&tree, "files-crumb-5").is_none() && find(&tree, "files-crumbs-more").is_some(), "the middle folds into a menu");
+    let seg = find(&tree, "files-crumb-11").unwrap();
+    let asks = h.act(seg.on.as_deref().unwrap(), &seg.arg, &J::Null).unwrap();
+    assert_eq!(asks, json!({ "kind": "intent", "name": "files_browse", "args": { "path": "/d0/d1/d2/d3/d4/d5/d6/d7/d8/d9/d10" } }));
+    let copy = find(&tree, "files-copy-folder").unwrap();
+    assert_eq!(h.act(copy.on.as_deref().unwrap(), &copy.arg, &J::Null).unwrap()["name"], "copy_text");
+}
+
+/// The list is a tree: a folder opens in place (read from the sandbox, its
+/// count), folds back; the keys move, open, fold, read; typing filters.
+#[test]
+fn the_tree_opens_folders_in_place_and_takes_the_keys() {
+    let mut d = fixture("standin");
+    let mut st = opened_pumped(&mut d);
+    let a = run(&mut st, &d, "files_place", json!({ "id": "/home/agent" })).unwrap();
+    let u = ui_of(&pump(&mut st, &mut d, a));
+    let names = |u: &J| u["rows"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(names(&u), ["scratch", "notes.md"], "folders first, dotfiles hidden");
+    // Open scratch in place: one read, its rows under it, one deeper.
+    let a = run(&mut st, &d, "files_expand", json!({ "id": "/home/agent/scratch" })).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::Call(c) if c.path == "/api/sandboxes/web-app/fs?path=%2Fhome%2Fagent%2Fscratch")), "{a:?}");
+    let u = ui_of(&pump(&mut st, &mut d, a));
+    assert_eq!(names(&u), ["scratch", "draft.txt", "notes.md"]);
+    let r = &u["rows"][0];
+    assert_eq!((r["open"].as_bool(), r["count"].as_u64(), u["rows"][1]["depth"].as_u64()), (Some(true), Some(1), Some(1)));
+    // A file opened in place is read from its listing.
+    let a = run(&mut st, &d, "files_select", json!({ "id": "/home/agent/scratch/draft.txt" })).unwrap();
+    pump(&mut st, &mut d, a);
+    assert_eq!(st.sel.as_ref().map(|s| s.path.as_str()), Some("/home/agent/scratch/draft.txt"));
+    // Keys: Down to the first row, Left folds it, Right opens it, Down, Enter reads.
+    let key = |st: &mut State, d: &mut J, k: &str| {
+        let a = run(st, d, "files_key", json!({ "key": k })).unwrap();
+        pump(st, d, a);
+    };
+    st.cursor = None;
+    key(&mut st, &mut d, "down");
+    assert_eq!(st.cursor.as_deref(), Some("/home/agent/scratch"));
+    key(&mut st, &mut d, "left");
+    assert!(!st.expanded.contains("/home/agent/scratch"), "Left folds");
+    key(&mut st, &mut d, "right");
+    assert!(st.expanded.contains("/home/agent/scratch"), "Right opens");
+    key(&mut st, &mut d, "down");
+    assert_eq!(st.cursor.as_deref(), Some("/home/agent/scratch/draft.txt"));
+    key(&mut st, &mut d, "left");
+    assert_eq!(st.cursor.as_deref(), Some("/home/agent/scratch"), "Left on a file: its folder's row");
+    key(&mut st, &mut d, "down");
+    key(&mut st, &mut d, "down");
+    key(&mut st, &mut d, "enter");
+    assert_eq!(st.sel.as_ref().map(|s| s.path.as_str()), Some("/home/agent/notes.md"), "Enter reads the file");
+    // Enter on a folder lists it.
+    st.cursor = Some("/home/agent/scratch".into());
+    key(&mut st, &mut d, "enter");
+    assert_eq!(st.path, "/home/agent/scratch");
+    // Typing filters; Backspace takes a letter back.
+    run(&mut st, &d, "files_key", json!({ "key": "type", "text": "dr" })).unwrap();
+    assert_eq!(st.filter, "dr");
+    run(&mut st, &d, "files_key", json!({ "key": "backspace" })).unwrap();
+    assert_eq!(st.filter, "d");
+    // Sort by date: the newest first, folders still first.
+    let a = run(&mut st, &d, "files_place", json!({ "id": "/tmp" })).unwrap();
+    pump(&mut st, &mut d, a);
+    let u = ui_of(&run(&mut st, &d, "files_sort", json!({ "by": "date" })).unwrap());
+    assert_eq!(names(&u), ["upload-report.pdf", "paste-1794199000.png"]);
+    assert!(run(&mut st, &d, "files_sort", json!({ "by": "size" })).is_err() || crate::intent::parse(&json!({ "kind": "intent", "name": "files_sort", "args": { "by": "size" } })).is_err());
+    for n in ["files_expand", "files_sort", "files_key"] {
+        assert!(matches!(spec(n).risk, Risk::Direct), "{n}");
     }
 }

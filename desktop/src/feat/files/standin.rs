@@ -30,7 +30,15 @@ fn now_ms() -> u64 {
 /// A listing by path: `files_tree[path]`, else `files_dir` when it is that path (or none was asked).
 fn listing(data: &J, path: &str) -> Option<J> {
     if let Some(l) = data["files_tree"].get(path).filter(|l| l.is_object()) {
-        return Some(l.clone());
+        // The daemon says where things are on every listing (the workspace,
+        // home, mounts, worktrees): the stand-in's from `files_dir`.
+        let mut l = l.clone();
+        for k in ["workspace", "artifacts", "home", "mounts", "worktrees", "offline"] {
+            if l.get(k).is_none() && !data["files_dir"][k].is_null() {
+                l[k] = data["files_dir"][k].clone();
+            }
+        }
+        return Some(l);
     }
     let d = &data["files_dir"];
     (d.is_object() && (path.is_empty() || d["path"] == path)).then(|| d.clone())

@@ -24,14 +24,28 @@ local function find_plan(data, id)
   return nil
 end
 
+-- A goal's first lines and the rest: the first sentence, or (a long one, or
+-- none) the first ~160 characters cut at a space, so every card's goal is
+-- collapsed the same way with "Show more".
+local GOAL_SHOWN = 160
 local function first_sentence(goal)
   goal = goal or ""
-  local i = 1
-  while true do
-    local s, e = string.find(goal, "[%.!%?]%s+[A-Z%(\"'`]", i)
-    if not s then return goal, "" end
-    return string.sub(goal, 1, s), string.sub(goal, e)
-  end
+  local s, e = string.find(goal, "[%.!%?]%s+[A-Z%(\"'`]")
+  if s and s <= GOAL_SHOWN + 40 then return string.sub(goal, 1, s), string.sub(goal, e) end
+  if #goal <= GOAL_SHOWN + 40 then return goal, "" end
+  local cut = GOAL_SHOWN
+  while cut > 80 and string.sub(goal, cut, cut) ~= " " do cut = cut - 1 end
+  return string.sub(goal, 1, cut - 1) .. "…", string.sub(goal, cut + 1)
+end
+
+-- A scope chip's text: whole when short; a long one (a scope written as a
+-- sentence) cut in its middle, its full text in the tooltip.
+local CHIP_MAX = 44
+local function chip_text(s)
+  if utf8.len(s) == nil or utf8.len(s) <= CHIP_MAX then return s end
+  local head = string.sub(s, 1, utf8.offset(s, 21) - 1)
+  local tail = string.sub(s, utf8.offset(s, -20))
+  return head .. "…" .. tail
 end
 
 local function scope_items(scope)
@@ -119,12 +133,19 @@ local function card(state, data, p, t, i, repos)
       if open then table.insert(items, text{ rest, size = "sm", color = "text-soft", wrap = true }) end
       table.insert(items, button{ open and "Show less" or "Show more", variant = "ghost", on = "more", arg = { id = id, i = i }, key = key .. "-more" })
     end
-    local chips = { gap = 4, w = "full", text{ "Owns", size = "sm", color = "text-muted" } }
+    -- What it owns: chips on as many lines as they need, inside the card;
+    -- past 12, a "+N more" that opens the rest.
+    local chips = { gap = 4, w = "full", wrap = true, key = key .. "-owns", text{ "Owns", size = "sm", color = "text-muted" } }
     local sc = scope_items(t.scope)
     if #sc == 0 then table.insert(chips, text{ "Nothing named", size = "sm", color = "text-dim" }) end
+    local all = (state.owns or {})[id .. ":" .. i]
     for k, s in ipairs(sc) do
-      if k > 8 then table.insert(chips, text{ "+" .. (#sc - 8), size = "sm", color = "text-dim" }); break end
-      table.insert(chips, badge{ s, tone = "neutral" })
+      if k > 12 and not all then
+        table.insert(chips, button{ "+" .. (#sc - 12) .. " more", variant = "ghost", dense = true, on = "owns", arg = { id = id, i = i }, key = key .. "-owns-more" })
+        break
+      end
+      local shown = chip_text(s)
+      table.insert(chips, row{ key = key .. "-scope-" .. k, help = shown ~= s and s or nil, badge{ shown, tone = "neutral" } })
     end
     table.insert(items, row(chips))
   end
@@ -146,7 +167,18 @@ local function review(state, data, p)
   local repos = (ui.repos_for == p.sandbox) and data.thread_repos or nil
   local v = (data.threads_view or {})[p.sandbox] or {}
   local out = { gap = 12, w = "full", h = "full" }
-  table.insert(out, header("Plan from the lead of " .. p.sandbox, p.summary))
+  -- A short window (under 600 pt): only the title stays fixed; the summary,
+  -- the variant and the counts scroll with the threads, so the cards keep room.
+  local short = (((data.app or {}).window or {}).h or 900) < 600
+  local fixed = out
+  local cards = { gap = 8, w = "full" }
+  if short then
+    table.insert(out, header("Plan from the lead of " .. p.sandbox, nil))
+    out = cards
+    if p.summary and p.summary ~= "" then table.insert(out, markdown{ p.summary, color = "text-soft" }) end
+  else
+    table.insert(out, header("Plan from the lead of " .. p.sandbox, p.summary))
+  end
   -- The variant, as the lead proposed it with its reason; the choice here is what Approve sends.
   local variant = draft.variant or "split"
   table.insert(out, row{ gap = 8, w = "full",
@@ -176,7 +208,7 @@ local function review(state, data, p)
   if repos and repos.ok ~= false and #(repos.repos or {}) == 0 then
     table.insert(out, note(repo_label("", repos.workspace) .. " holds no git repository, and every thread needs one: run git init there, or clone one into it.", "amber"))
   end
-  local cards = { gap = 8, w = "full" }
+  out = fixed
   local missing = 0
   for i, t in ipairs(draft.threads or {}) do
     local c, needs = card(state, data, p, t, i, repos)
@@ -186,7 +218,9 @@ local function review(state, data, p)
   if n == 0 then table.insert(cards, note("No thread left: add one, or refuse the plan.")) end
   table.insert(cards, row{ gap = 8, button{ "Add thread", icon = "plus", on = "add", arg = p.id, key = "plan-add" },
     button{ "Undo my changes", variant = "ghost", on = "reset", arg = p.id, key = "plan-reset" } })
-  table.insert(out, scroll{ gap = 8, grow = 1, column(cards) })
+  -- The threads are the part that scrolls, between the fixed header and
+  -- footer; its edges fade where cards are hidden.
+  table.insert(out, scroll{ gap = 8, grow = 1, fade = 24, key = "plan-cards", column(cards) })
   local err = (ui.plan_error or {})[p.id]
   if err then table.insert(out, text{ err, color = "red", wrap = true, key = "plan-error" }) end
   if missing > 0 then table.insert(out, note("Choose a repository for " .. plural(missing, "thread") .. " first.", "amber")) end
@@ -305,7 +339,7 @@ local function approved(state, data, p)
   if p.merge then table.insert(body, merge_view(data, p)) end
   table.insert(body, text{ "Threads", size = "sm", weight = "semibold", color = "text-muted" })
   table.insert(body, status(data, p))
-  table.insert(out, scroll{ gap = 8, grow = 1, column(body) })
+  table.insert(out, scroll{ gap = 8, grow = 1, fade = 24, key = "plan-body", column(body) })
   local err = (ui.plan_error or {})[p.id]
   if err then table.insert(out, text{ err, color = "red", wrap = true, key = "plan-error" }) end
   local buttons = { gap = 8, w = "full" }
@@ -346,7 +380,8 @@ return {
         note("Refused" .. ((p.note and p.note ~= "") and (": " .. p.note) or ".") .. (p.closed and " Team mode was ended." or "")),
         row{ spacer{}, button{ "Close", on = "later", key = "plan-close" } } }
     end
-    return column{ pad = 16, gap = 12, w = "full", h = 640, body }
+    -- As tall as the dialog the core gives it: the footer at its bottom edge.
+    return column{ pad = 16, gap = 12, w = "full", h = "full", body }
   end,
 
   actions = {
@@ -356,6 +391,11 @@ return {
       state.editing = state.editing or {}
       local k = a.id .. ":" .. a.i
       state.editing[k] = not state.editing[k]
+    end,
+    owns = function(state, a)
+      state.owns = state.owns or {}
+      local k = a.id .. ":" .. a.i
+      state.owns[k] = not state.owns[k]
     end,
     more = function(state, a)
       state.more = state.more or {}

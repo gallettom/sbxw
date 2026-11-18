@@ -911,6 +911,23 @@ fn apply(mut e: El, st: &Style, help: &Option<String>) -> El {
     e
 }
 
+/// A `paint` prop as Rune's vector shape (`rune::Shape`, crates/rune/src/shape.rs at the
+/// pinned rev): each stroke a round-capped polyline, each dot a filled 20-gon, or a ring.
+pub fn paint_shape(p: &crate::luau::Paint) -> rune::Shape {
+    let mut sh = rune::Shape::new();
+    for (pts, w, c) in &p.strokes {
+        sh = sh.stroke(pts.clone(), *w, hex(*c));
+    }
+    for ([x, y], r, c, hollow) in &p.dots {
+        let ring: Vec<[f32; 2]> = (0..20).map(|i| {
+            let a = i as f32 * std::f32::consts::TAU / 20.0;
+            [x + r * a.cos(), y + r * a.sin()]
+        }).collect();
+        sh = if *hollow { sh.stroke_with(ring, true, 1.5, rune::LineCap::Round, hex(*c)) } else { sh.fill(ring, hex(*c)) };
+    }
+    sh
+}
+
 /// The least width a field keeps beside other things on its row (points).
 pub const INPUT_MIN: f32 = 160.0;
 
@@ -972,7 +989,8 @@ impl Build<'_> {
                     Some(v) => {
                         let (mut content, mut spans) = (String::new(), vec![]);
                         crate::emphasis::rich_into(&n.text, &v, &crate::emphasis::screen_palette(), &mut content, &mut spans);
-                        rune::rich(content, spans)
+                        // Capsules: the radius half the span background's height (views2).
+                        rune::rich(content, spans).span_radius(crate::emphasis::span_radius(st.size.unwrap_or(13.0).max(12.0)))
                     }
                     None => text(n.text.clone()),
                 }
@@ -1005,7 +1023,8 @@ impl Build<'_> {
                 // the others leave (never pushing them out of the row) down to
                 // `INPUT_MIN`; under that the row wraps, the button under it.
                 let field_row = n.kind == Kind::Row && n.children.iter().any(free_input);
-                if field_row || wrapping_row(&self.name, n) {
+                // `wrap = true` on a row: its children go onto more lines (a line of chips).
+                if field_row || wrapping_row(&self.name, n) || (n.kind == Kind::Row && st.wrap) {
                     b = b.flex_wrap();
                 }
                 for k in n.children.iter() {
@@ -1028,8 +1047,9 @@ impl Build<'_> {
                         // Screen readers hear it as the current item.
                         b = b.focus_selected(true).label(format!("{} (selected)", n.help.clone().unwrap_or_default()));
                     }
-                    if n.on_space.is_some() || nav.is_some() {
+                    if n.on_space.is_some() || nav.is_some() || n.on_left.is_some() || n.on_right.is_some() {
                         let (name, arg, sp) = (self.name.clone(), n.arg.clone(), n.on_space.clone());
+                        let (lf, rt) = (n.on_left.clone(), n.on_right.clone());
                         let (prev, next) = nav.unwrap_or((None, None));
                         let me = key.clone();
                         b = b.on_key(move |s: &mut S, ev: &rune::KeyEvent, tx: &mut rune::Tx| {
@@ -1049,6 +1069,16 @@ impl Build<'_> {
                                     }
                                     false
                                 }
+                                rune::Key::Left | rune::Key::Right => {
+                                    let act = if ev.key == rune::Key::Left { &lf } else { &rt };
+                                    match act {
+                                        Some(a) => {
+                                            fire(s, &name, a, &arg, &J::Null);
+                                            true
+                                        }
+                                        None => false,
+                                    }
+                                }
                                 rune::Key::Up | rune::Key::Down => {
                                     let to = if ev.key == rune::Key::Up { &prev } else { &next };
                                     if let Some(k) = to {
@@ -1062,6 +1092,9 @@ impl Build<'_> {
                     }
                 } else if let Some(h) = st.hover {
                     b = b.hover(hex(h));
+                }
+                if let Some(p) = &n.paint {
+                    b = b.shape(paint_shape(p));
                 }
                 if n.hover_group {
                     b = b.hover_group();
@@ -1104,7 +1137,10 @@ impl Build<'_> {
                 for k in &n.children {
                     content = content.child(self.node::<S>(k));
                 }
-                let base = col().scroll(ScrollSpec { stick_bottom: n.stick_bottom }).w_full().min_h(0.0);
+                let mut base = col().scroll(ScrollSpec { stick_bottom: n.stick_bottom }).w_full().min_h(0.0);
+                if let Some(f) = n.fade.filter(|f| *f > 0.0) {
+                    base = base.scroll_edge_fade(f);
+                }
                 let base = if st.h.is_none() && st.grow.is_none() { base.grow(1.0) } else { base };
                 base.child(content)
             }

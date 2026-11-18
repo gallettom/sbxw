@@ -151,6 +151,70 @@ fn push_span(text: &mut String, spans: &mut Vec<Span>, glyph: &str, fgc: Color, 
     }
 }
 
+/// What a pill sits on: the background of its first cell (a diff line's
+/// band, a status bar), else the terminal's.
+fn pill_ground(piece: &Piece, row: &Row<Cell>, ctx: &RowCtx) -> u32 {
+    let cell = &row[Column(piece.start as usize)];
+    let mut bg = resolve(cell.bg, ctx.colors, ctx.theme, false);
+    if cell.flags.contains(Flags::INVERSE) {
+        bg = cell_fg(cell, ctx);
+    }
+    bg
+}
+
+/// A pill's colours over the background it sits on: the tone tinted over
+/// that cell background, so it blends into a coloured line.
+fn pill_colors_on(piece: &Piece, row: &Row<Cell>, ctx: &RowCtx) -> Pill {
+    let g = pill_ground(piece, row, ctx);
+    if g == ctx.theme.background {
+        return ctx.pill_colors[emphasis::index(piece.tone)];
+    }
+    emphasis::palette(piece.tone, g, ctx.theme.foreground)
+}
+
+/// A pill's capsule over its cells' fill: the corners outside each round
+/// end (a half-disc as tall as the pill, square where the wrap cuts it) and
+/// [`emphasis::AIR`] above and below, painted in `under`; a hairline round
+/// it when the colours have one.
+fn pill_shape(p: &mut Painter, piece: &Piece, under: u32, colors: Pill, cw: f32, lh: f32) {
+    let air = emphasis::AIR.min(lh / 6.0);
+    let (x0, x1) = ((piece.start as f32 * cw).round(), (piece.end as f32 * cw).round());
+    let (top, bot) = (air, lh - air);
+    let r = ((bot - top) / 2.0).min((x1 - x0) / 2.0);
+    let cy = (top + bot) / 2.0;
+    let g = rgb(under);
+    p.rect(x0, 0.0, x1, top, g);
+    p.rect(x0, bot, x1, lh, g);
+    let arc = |cx: f32, from: f32, to: f32| -> Vec<[f32; 2]> {
+        (0..=10).map(|i| {
+            let a = from + (to - from) * i as f32 / 10.0;
+            [cx + r * a.cos(), cy + r * a.sin()]
+        }).collect()
+    };
+    use std::f32::consts::{FRAC_PI_2, PI};
+    if !piece.cut_left {
+        // From the top, round the left end, to the bottom; then the cell's corner side.
+        let mut pts = vec![[x0, top]];
+        pts.extend(arc(x0 + r, -FRAC_PI_2, -FRAC_PI_2 - PI));
+        pts.push([x0, bot]);
+        p.poly(pts, g);
+    }
+    if !piece.cut_right {
+        let mut pts = vec![[x1, top]];
+        pts.extend(arc(x1 - r, -FRAC_PI_2, FRAC_PI_2));
+        pts.push([x1, bot]);
+        p.poly(pts, g);
+    }
+    if colors.line != 0 {
+        let mut ring = vec![];
+        if piece.cut_left { ring.extend([[x0, bot], [x0, top]]); } else { ring.extend(arc(x0 + r, FRAC_PI_2, FRAC_PI_2 + PI)); }
+        if piece.cut_right { ring.extend([[x1, top], [x1, bot]]); } else { ring.extend(arc(x1 - r, -FRAC_PI_2, FRAC_PI_2)); }
+        let s = std::mem::take(&mut p.shape);
+        p.shape = s.stroke_with(ring, true, 1.0, rune::LineCap::Round, rgb(colors.line));
+        p.any = true;
+    }
+}
+
 /// The row's text, spans, fills, pinned cells and vectors.
 pub fn row_parts(row: &Row<Cell>, ctx: &RowCtx) -> RowParts {
     let theme = ctx.theme;
@@ -159,6 +223,7 @@ pub fn row_parts(row: &Row<Cell>, ctx: &RowCtx) -> RowParts {
     let mut fills: Vec<(u16, u16, Color, u32)> = Vec::new();
     let mut wide: Vec<(u16, String, Color, bool)> = Vec::new();
     let mut p = Painter { shape: Shape::new(), any: false };
+    let mut drawn: Vec<(u16, u16, bool, bool)> = Vec::new();
     let (cw, lh) = (ctx.cell_w, ctx.line_h);
     let light = (ctx.font_size / 14.0).round().max(1.0);
     let ul_y = (lh / 2.0 + ctx.font_size * 0.45).min(lh - light).floor();
@@ -170,9 +235,9 @@ pub fn row_parts(row: &Row<Cell>, ctx: &RowCtx) -> RowParts {
             match ctx.pills.iter().find(|p| p.covers(c)) {
                 // Inside a pill, the space keeps the pill's background.
                 Some(p) => {
-                    let colors = ctx.pill_colors[emphasis::index(p.tone)];
-                    let bold = p.part(c) != Part::Detail;
-                    push_span(&mut text, &mut spans, " ", rgb(if bold { colors.strong } else { colors.detail }), bold, false, None, Some(rgb(colors.bg)));
+                    let colors = pill_colors_on(p, row, ctx);
+                    let word = p.part(c) != Part::Detail;
+                    push_span(&mut text, &mut spans, " ", rgb(if word { colors.strong } else { colors.detail }), false, false, None, None);
                 }
                 None => text.push(' '),
             }
@@ -194,17 +259,20 @@ pub fn row_parts(row: &Row<Cell>, ctx: &RowCtx) -> RowParts {
             fg = theme.background;
             bg = theme.cursor;
         }
-        // A pill's cell: the pill's colours replace the program's, its
-        // background is the span's rounded one (no fill), the brackets are
-        // padding, and the cell's own decorations are not drawn.
-        let pill = ctx.pills.iter().find(|p| p.covers(c)).map(|p| (p, ctx.pill_colors[emphasis::index(p.tone)], p.part(c)));
+        // A pill's cell: the pill's colours replace the program's, the
+        // brackets are padding, and the cell's own decorations are not drawn.
+        // The pill is a capsule (`pill_shape`): its fill under the text, the
+        // corners outside its half-disc ends and the air above and below
+        // painted back in the background under it.
+        let pill = ctx.pills.iter().find(|p| p.covers(c)).map(|p| (p, pill_colors_on(p, row, ctx), p.part(c)));
         if let Some((piece, colors, part)) = pill {
             let x0 = (c as f32 * cw).round();
             let x1 = ((c + width) as f32 * cw).round();
-            // At a cut by the wrap the pill's end is square: a plain fill
-            // under the rounded span's corner.
-            if (piece.cut_right && c + width == piece.end as usize) || (piece.cut_left && c == piece.start as usize) {
-                fills.push((c as u16, (c + width) as u16, rgb(colors.bg), colors.bg));
+            if c == piece.start as usize {
+                let under = pill_ground(piece, row, ctx);
+                fills.push((piece.start, piece.end, rgb(colors.bg), colors.bg));
+                pill_shape(&mut p, piece, under, colors, cw, lh);
+                drawn.push((piece.start, piece.end, !piece.cut_left, !piece.cut_right));
             }
             let fgv = match part {
                 Part::Word => colors.strong,
@@ -219,12 +287,12 @@ pub fn row_parts(row: &Row<Cell>, ctx: &RowCtx) -> RowParts {
             if let (Some(zw), false) = (cell.zerowidth(), part == Part::Pad) {
                 glyph.extend(zw);
             }
-            let bold = part != Part::Detail;
+            // Regular weight, the word and the detail alike (views2).
             if is_wide {
-                wide.push((c as u16, glyph, fgc, bold));
+                wide.push((c as u16, glyph, fgc, false));
                 glyph = " ".into();
             }
-            push_span(&mut text, &mut spans, &glyph, fgc, bold, false, None, Some(rgb(colors.bg)));
+            push_span(&mut text, &mut spans, &glyph, fgc, false, false, None, None);
             c += 1;
             continue;
         }
@@ -301,7 +369,7 @@ pub fn row_parts(row: &Row<Cell>, ctx: &RowCtx) -> RowParts {
         push_span(&mut text, &mut spans, &glyph, fgc, bold, italic, underline.then_some(ul_color), None);
         c += 1;
     }
-    RowParts { text, spans, fills, wide, shape: p.any.then_some(p.shape) }
+    RowParts { text, spans, fills, wide, shape: p.any.then_some(p.shape), pills: drawn }
 }
 
 /// A row before it becomes a `GridRow` (tests read it: Rune's row is opaque).
@@ -313,6 +381,9 @@ pub struct RowParts {
     pub fills: Vec<(u16, u16, Color, u32)>,
     pub wide: Vec<(u16, String, Color, bool)>,
     pub shape: Option<Shape>,
+    /// Each pill drawn on the row: its columns and whether each end is round
+    /// (square at a cut by the wrap).
+    pub pills: Vec<(u16, u16, bool, bool)>,
 }
 
 /// Builds the row. `row` holds at least `ctx.cols` cells.
@@ -323,7 +394,7 @@ pub fn build_row(row: &Row<Cell>, ctx: &RowCtx) -> GridRow {
 /// The parts as Rune's row.
 pub fn into_row(parts: RowParts, ctx: &RowCtx) -> GridRow {
     let theme = ctx.theme;
-    let RowParts { text, spans, fills, wide, shape } = parts;
+    let RowParts { text, spans, fills, wide, shape, .. } = parts;
     let mut row_el = GridRow::new(text, spans, ctx.style);
     for (a, b, col, _) in fills {
         row_el = row_el.fill(a, b, col);

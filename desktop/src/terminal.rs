@@ -355,6 +355,9 @@ pub struct TerminalState {
     /// Each row's text, spans and fills as last built (tests).
     #[cfg(test)]
     test_parts: Vec<(String, Vec<rune::Span>, Vec<(u16, u16, u32)>)>,
+    /// The pills each row drew (columns, round left, round right).
+    #[cfg(test)]
+    test_pills: Vec<Vec<(u16, u16, bool, bool)>>,
 }
 
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -466,6 +469,8 @@ impl TerminalState {
             line_pills: Vec::new(),
             #[cfg(test)]
             test_parts: Vec::new(),
+            #[cfg(test)]
+            test_pills: Vec::new(),
         };
         t.pills.set_palette(t.theme.background, t.theme.foreground);
         t.rebuild();
@@ -1566,6 +1571,8 @@ impl TerminalState {
             {
                 self.test_parts.resize_with(nrows, Default::default);
                 self.test_parts[r] = (parts.text.clone(), parts.spans.clone(), parts.fills.iter().map(|f| (f.0, f.1, f.3)).collect());
+                self.test_pills.resize_with(nrows, Default::default);
+                self.test_pills[r] = parts.pills.clone();
             }
             self.rows[r] = Rc::new(render::into_row(parts, &ctx));
         }

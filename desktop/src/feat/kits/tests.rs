@@ -119,3 +119,14 @@ fn a_kits_line_change_lists_what_it_adds_and_asks_for_kits_that_reach_out() {
     assert!(run(&data, "kits_save", json!({ "path": "/Users/ana/dev/web/sbxw.toml", "kits": "sbxw:jarvis" })).unwrap_err().contains("Jarvis"));
 }
 
+
+/// The picker at its top: a sandbox puts the view on the file it uses.
+#[test]
+fn the_sandbox_picker_puts_it_on_that_sandbox_s_file() {
+    let data = fixture("full");
+    let v = run(&data, "kits_pick", json!({ "sandbox": "docs" })).unwrap();
+    assert!(v.contains(&Action::Set { key: "kits_view".into(), value: json!({ "sandbox": "docs", "path": "/Users/ana/dev/docs/sbxw.toml" }) }), "{v:?}");
+    assert!(run(&data, "kits_pick", json!({ "sandbox": "nope" })).unwrap_err().contains("no sandbox"));
+    assert!(run(&data, "kits_pick", json!({})).is_err());
+    assert_eq!(press("kits", SRC, "full", json!({}), "kits-sandbox").len(), 1);
+}

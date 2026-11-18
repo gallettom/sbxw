@@ -283,6 +283,8 @@ pub struct Rects {
     /// The overlay view's rectangle (`data.app.overlay`: its screen lays
     /// itself out narrow or wide from it).
     pub overlay: Option<[f32; 4]>,
+    /// Files are being dragged over the overlay (`data.app.overlay.drop_over`).
+    pub overlay_drop: bool,
 }
 
 /// A pane being dragged by its bar: where the press was, where the pointer
@@ -414,6 +416,11 @@ impl App {
             }
         }
         for p in &init.panels {
+            // An overlay screen (MCP servers, Skills, Kits, Commits...) opens over the pane area.
+            if crate::feat::screen(p).is_some_and(|(_, s)| matches!(s.slot, crate::feat::Slot::Overlay { .. })) {
+                app.feats.overlay = Some((p.clone(), J::Null));
+                continue;
+            }
             app.feats.panels.push(p.clone());
             app.feats.panel = Some(p.clone());
         }
@@ -590,6 +597,8 @@ impl App {
         let mut data = crate::fixture::screen_data(&J::Object(daemon), &self.view_model());
         let (modal, panels, extras, _) = self.feats_app(&data);
         data["app"]["modal"] = modal;
+        // The window's size in points (a dialog fits its parts to it).
+        data["app"]["window"] = serde_json::json!({ "w": self.window.0, "h": self.window.1 });
         data["app"]["panels"] = panels;
         data["app"]["extras"] = extras;
         data["app"]["topbar"] = self.top_layout(&mut data);
@@ -619,7 +628,7 @@ impl App {
         data["app"]["surface"] = serde_json::json!({ "release": crate::surface::RELEASE_KEY, "focused": crate::surface::focused() });
         // The overlay over the pane area: its screen and its size, in points.
         data["app"]["overlay"] = match (&self.feats.overlay, self.rects.overlay) {
-            (Some((n, _)), Some(r)) => serde_json::json!({ "screen": n, "w": r[2], "h": r[3] }),
+            (Some((n, _)), Some(r)) => serde_json::json!({ "screen": n, "w": r[2], "h": r[3], "drop_over": self.rects.overlay_drop }),
             (Some((n, _)), None) => serde_json::json!({ "screen": n }),
             _ => J::Null,
         };
@@ -1107,18 +1116,34 @@ impl App {
         // An overlay over the pane area takes Up, Down and Enter when nothing
         // of its own has the keyboard (its rows' list moves the keyboard
         // itself): as its feature's `<screen>_key` intent, if it has one.
+        // Left, Right, Backspace and typed text too, to a feature whose key
+        // intent lists them (the explorer: fold, open, type to filter).
         if let Some((name, _)) = self.feats.overlay.clone() {
-            let k = match ev.key {
+            let k = match &ev.key {
                 Key::Up => Some("up"),
                 Key::Down => Some("down"),
                 Key::Enter => Some("enter"),
+                Key::Left => Some("left"),
+                Key::Right => Some("right"),
+                Key::Backspace => Some("backspace"),
+                Key::Text(t) if !t.is_empty() && t.chars().all(|c| !c.is_control()) => Some("type"),
                 _ => None,
             };
-            let idle = tx.focused().is_none_or(|f| f.starts_with("grid") || f.starts_with("rail") || f.starts_with("overlay"));
+            // Idle: nothing of the overlay's own has the keyboard, or one of its list's rows does (a row pressed).
+            let row_key = format!("{name}-row-");
+            let idle = tx.focused().is_none_or(|f| f.starts_with("grid") || f.starts_with("rail") || f.starts_with("overlay") || f.starts_with(&row_key));
             let intent = format!("{name}_key");
-            if let (Some(k), true, true) = (k, idle, ev.mods == rune::Mods::default()) {
-                if crate::intent::spec(&intent).is_some() {
-                    self.press_extra("keys", &intent, &serde_json::json!({ "key": k }));
+            let plain = ev.mods == rune::Mods::default() || (k == Some("type") && !(ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo));
+            if let (Some(k), true, true) = (k, idle, plain) {
+                let takes = crate::intent::spec(&intent).is_some_and(|sp| {
+                    sp.args.iter().any(|(n, a, _)| *n == "key" && matches!(a, crate::intent::Arg::OneOf(l) if l.contains(&k)))
+                });
+                if takes {
+                    let mut args = serde_json::json!({ "key": k });
+                    if let Key::Text(t) = &ev.key {
+                        args["text"] = t.clone().into();
+                    }
+                    self.press_extra("keys", &intent, &args);
                     self.push_data();
                     return true;
                 }
@@ -1877,15 +1902,21 @@ fn tile(e: El) -> El {
 /// titlebar container this makes never takes a press meant for the bar.
 /// Ignored on Linux and Windows (their native frame stays).
 pub const LIGHTS: (f32, f32) = (layout::GUTTER + 12.0, layout::GUTTER + layout::TOP_BAR_H / 2.0 - rune::Chrome::TRAFFIC_LIGHT / 2.0);
+/// The sbxw mark's width in the top bar (topbar.luau's `app-mark`: the
+/// chevron's 15 pt column, a 2 pt gap, the 11 pt cursor), 28 pt high.
+pub const MARK_W: f32 = 28.0;
+
 /// The room the top bar keeps at its left for the window buttons: up to 12
 /// pt clear after the zoom button (`inset` is from the window's edge, the
-/// bar starts a gutter in); none of them (full screen), the sidebar's
-/// content x, right of the left rail.
+/// bar starts a gutter in). Without them (full screen, Linux, Windows) the
+/// mark, the bar's first item, is centred on the rail's icon column: the
+/// bar and the rail both start a gutter in, so the room is half the rail
+/// less half the mark (8 pt), and logo and rail icons share one axis.
 pub fn lights_room(inset: f32) -> f32 {
     if inset > 0.0 {
         inset - layout::GUTTER + 12.0
     } else {
-        rail::W + layout::GUTTER + layout::SIDEBAR_PAD
+        (rail::W - MARK_W) / 2.0
     }
 }
 
@@ -3715,9 +3746,12 @@ mod tests {
         assert!(find(&shown, &|n| n.kind == crate::luau::Kind::Surface).is_none(), "no surface");
         assert!(find(&shown, &|n| n.key.as_deref() == Some("browser-back")).is_some_and(|n| n.disabled));
         tap(&mut rt, "browser-kits");
-        assert_eq!(rt.state.feats.panel.as_deref(), Some("kits"), "the Kits panel, on this sandbox's sbxw.toml");
+        assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("kits"), "the Kits view over the panes, on this sandbox's sbxw.toml");
         assert_eq!(rt.state.screen_data()["kits_view"]["sandbox"], "web-app");
-        rt.update(|s, _| s.feats.panel = Some("browser".into()));
+        rt.update(|s, _| {
+            s.close_overlay();
+            s.feats.panel = Some("browser".into());
+        });
         rt.frame(0.016);
         tap(&mut rt, "browser-recreate");
         assert_eq!(rt.state.feats.modal.as_ref().map(|(n, a)| (n.as_str(), a.clone())), Some(("sandbox-actions", J::from("web-app"))));
@@ -3907,6 +3941,23 @@ mod tests {
         }
         assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("worktrees"));
         assert!(rt.presented("overlay-commits").is_none() && rt.presented("overlay-worktrees").is_some(), "one at a time");
+        // MCP servers, Skills and Kits are overlays too (the configure zone):
+        // each replaces the one before, the panes stay as they were, the gate holds.
+        for feat in ["mcp", "skills", "kits"] {
+            tap(&mut rt, &format!("rail-{feat}"));
+            for _ in 0..10 {
+                rt.frame(0.05);
+            }
+            assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some(feat), "{feat} opens over the panes");
+            assert!(rt.state.feats.panel.is_none() && rt.presented("feature-panel").is_none(), "{feat}: nothing docked");
+            assert!(rt.presented(&format!("overlay-{feat}")).is_some());
+            assert_eq!(rt.presented("pane-1").unwrap().0, pane_before, "{feat}: the pane is not resized");
+            assert!(!rt.state.terminal_may_take_keys(Some("grid-1")), "{feat}: the gate holds");
+        }
+        rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+        rt.frame(0.05);
+        assert!(rt.state.feats.overlay.is_none(), "Escape closes Kits");
+        assert_eq!(resizes(&rx), 0, "no terminal was resized");
     }
 
     #[test]

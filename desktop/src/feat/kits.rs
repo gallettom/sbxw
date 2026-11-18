@@ -1,7 +1,7 @@
 //! Kits: the `kits` line of each sbxw.toml sbxw uses, and the kits that wait
 //! for the person's answer on a running sandbox, as the web UI's Kits tab
-//! (`assets/js/kits.js`). It was Setup's Kits tab; it is now a docked panel
-//! of its own (`screens/kits.luau`), opened from the rail (its badge counts
+//! (`assets/js/kits.js`). It was Setup's Kits tab; it is now an overlay over
+//! the pane area (`screens/kits.luau`, as Commits and Worktrees), opened from the rail (its badge counts
 //! the kits waiting), the palette, a sandbox's Manage dialog and a pane's
 //! "⋯" menu. The intent and its dialog are the tab's, unchanged.
 //!
@@ -24,7 +24,7 @@ pub const ICON: &str = "box";
 pub const FEATURE: Feature = Feature {
     name: "kits",
     data: &[Data::new("kits", "/api/kits")],
-    screens: &[ScreenDecl { name: "kits", src: include_str!("../../screens/kits.luau"), slot: Slot::Panel { title: "Kits", icon: ICON, width: 460.0 } }],
+    screens: &[ScreenDecl { name: "kits", src: include_str!("../../screens/kits.luau"), slot: Slot::Overlay { title: "Kits", icon: ICON } }],
     intents: INTENTS,
     act,
     extras: Some(extras),
@@ -38,7 +38,12 @@ pub const INTENTS: &[Spec] = &[
         args: &[("sandbox", Arg::Str, false)],
         doc: "Opens the Kits panel and reads the kits lines again; on the sbxw.toml that sandbox uses when given, else on the last one used. View state only.",
     },
-    Spec { name: "kits_pick", risk: Risk::Direct, args: &[("path", Arg::Str, true)], doc: "Puts the Kits panel on one of the sbxw.toml files sbxw uses. View state only: nothing is read or sent." },
+    Spec {
+        name: "kits_pick",
+        risk: Risk::Direct,
+        args: &[("path", Arg::Str, false), ("sandbox", Arg::Str, false)],
+        doc: "Puts the Kits view on one of the sbxw.toml files sbxw uses (`path`), or on the one a sandbox uses (`sandbox`, the picker at its top). View state only: nothing is read or sent.",
+    },
     Spec {
         name: "kits_save",
         risk: Risk::Approval("Change a kits line"),
@@ -100,8 +105,20 @@ pub fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
             v.push(Action::OpenPanel("kits".into()));
             Ok(v)
         }
+        "kits_pick" if q.s("sandbox").is_some() => {
+            let sb = q.req("sandbox");
+            if ctx.sandbox(sb).is_none() {
+                return Err(format!("no sandbox named {sb}"));
+            }
+            let path = file_of(ctx, sb);
+            let mut v = vec![Action::Set { key: "kits_view".into(), value: json!({ "sandbox": sb, "path": path }) }, Action::Remember { key: "sandbox".into(), value: json!(sb) }];
+            if let Some(p) = path {
+                v.push(Action::Remember { key: "path".into(), value: json!(p) });
+            }
+            Ok(v)
+        }
         "kits_pick" => {
-            let path = q.req("path");
+            let path = q.s("path").ok_or("kits_pick: give a path or a sandbox")?;
             if !list(ctx.get("kits"), "files").iter().any(|f| f["path"] == path) {
                 return Err(format!("{path} is not an sbxw.toml sbxw uses"));
             }
@@ -176,9 +193,7 @@ fn kits_save(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
 pub fn rail_entry(ctx: &Ctx) -> Extra {
     let n = waiting(ctx);
     Extra {
-        // The switch, once the rail's `Place::Rail` is in (sbxw/desktop-views):
-        // place: Place::Rail { zone: crate::feat::Zone::Configure, order: 30 },
-        place: Place::Topbar,
+        place: Place::Rail { zone: crate::feat::Zone::Configure, order: 30 },
         id: "kits".into(),
         label: "Kits".into(),
         icon: Some(ICON.into()),

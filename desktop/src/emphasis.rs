@@ -321,6 +321,8 @@ pub struct Pill {
     pub strong: u32,
     /// The detail after `:`.
     pub detail: u32,
+    /// A hairline round the pill, or none (0: none).
+    pub line: u32,
 }
 
 /// The tone's base colour, for a dark or a light background.
@@ -339,8 +341,20 @@ fn base(tone: Tone, light: bool) -> u32 {
     }
 }
 
-/// How much of the tone a tinted pill takes over the background.
-pub const TINT: f32 = 0.20;
+/// How much of the tone a tinted pill takes over the background under it
+/// (views2: half of the first 0.20, so a pill reads as a calm label).
+pub const TINT: f32 = 0.10;
+/// The word's colour: the body text moved this far toward the tone (not the
+/// saturated tone; regular weight, as the detail).
+pub const WORD_MIX: f32 = 0.45;
+
+// The candidates shown to the user (views2/pills/candidates-*.png), fill and
+// word mix: A 0.16 / 0.65, B 0.10 / 0.45 (shipped), C 0.06 / 0.35 with a
+// hairline in the tone at 45% (`palette_with(.., line = true)`).
+
+/// The pill's height within its cell: this much air above and below (points),
+/// so pills on consecutive lines never touch; its ends are half-discs.
+pub const AIR: f32 = 1.5;
 /// What text on a pill must reach (text under 18 pt).
 pub const NEED: f64 = 4.5;
 
@@ -363,6 +377,11 @@ fn readable(c: u32, bg: u32, need: f64) -> u32 {
 /// until it reads at [`NEED`]), the detail in the body text (likewise).
 /// [`Tone::Danger`]: a filled red with white (or black) text.
 pub fn palette(tone: Tone, ground: u32, text: u32) -> Pill {
+    palette_with(tone, ground, text, TINT, WORD_MIX, false)
+}
+
+/// [`palette`] with another strength (the candidates sheet).
+pub fn palette_with(tone: Tone, ground: u32, text: u32, tint: f32, word_mix: f32, line: bool) -> Pill {
     let light = crate::theme::luminance(ground) > 0.18;
     let b = base(tone, light);
     if tone == Tone::Danger {
@@ -373,10 +392,11 @@ pub fn palette(tone: Tone, ground: u32, text: u32) -> Pill {
             t += 0.05;
             bg = crate::terminal::theme::mix(b, 0x000000, t);
         }
-        return Pill { bg, strong: 0xffffff, detail: 0xffffff };
+        return Pill { bg, strong: 0xffffff, detail: 0xffffff, line: 0 };
     }
-    let bg = over(b, TINT, ground);
-    Pill { bg, strong: readable(b, bg, NEED), detail: readable(text, bg, NEED) }
+    let bg = over(b, tint, ground);
+    let word = crate::terminal::theme::mix(text, b, word_mix);
+    Pill { bg, strong: readable(word, bg, NEED), detail: readable(text, bg, NEED), line: if line { over(b, 0.45, ground) } else { 0 } }
 }
 
 /// The seven tones' colours on one ground, in [`TONES`] order.
@@ -424,7 +444,9 @@ pub fn screen_palette() -> [Pill; 7] {
 
 /// `s` as rich text: its plain parts as they are, each marker as a pill
 /// (the brackets dropped; a space of padding inside each end, the word in the
-/// tone's colour at 600, the detail regular, on the tone's rounded fill).
+/// body text tinted toward the tone, the detail in the body text, both
+/// regular, on the tone's faint fill; the caller rounds it into a capsule,
+/// [`span_radius`]).
 /// Appends to `content` and `spans` (byte offsets into `content`). Text only:
 /// the result is one text element's characters and styles, so nothing in `s`
 /// can make a control, a link or an intent.
@@ -439,7 +461,7 @@ pub fn rich_into(s: &str, vocab: &Vocab, palette: &[Pill; 7], content: &mut Stri
                 content.push('\u{2009}');
                 content.push_str(word);
                 let w = content.len();
-                let mut sp = rune::Span::new(a, w).color(crate::theme::hex(c.strong)).weight(600.0);
+                let mut sp = rune::Span::new(a, w).color(crate::theme::hex(c.strong));
                 sp.bg = bg;
                 spans.push(sp);
                 let d0 = content.len();
@@ -454,6 +476,12 @@ pub fn rich_into(s: &str, vocab: &Vocab, palette: &[Pill; 7], content: &mut Stri
             }
         }
     }
+}
+
+/// The corner radius that makes a text's pills capsules at `size` points
+/// (Rune's span background is 1.9 cap heights tall, a cap about 0.7 em).
+pub fn span_radius(size: f32) -> f32 {
+    (size * 0.7 * 1.9 / 2.0).round()
 }
 
 /// The effective switch: the daemon's (global, then this sandbox's) and the
@@ -565,7 +593,9 @@ mod tests {
     /// Every tone's word and detail on its pill, on dark and light grounds.
     #[test]
     fn contrast_of_every_tone() {
-        let grounds = [(0x0d1117, 0xc9d1d9), (0x161b22, 0xc9d1d9), (0x000000, 0xffffff), (0xffffff, 0x24292f), (0xf6f8fa, 0x24292f), (0x2b2b2b, 0xc9d1d9), (0xfdf6e3, 0x657b83), (0x808080, 0x000000)];
+        // The terminal's grounds, light and dark, and coloured lines a pill
+        // sits on (a diff's green and red bands): it is tinted over those.
+        let grounds = [(0x123c22, 0xc9d1d9), (0x46141a, 0xc9d1d9), (0xe6ffec, 0x24292f), (0x0d1117, 0xc9d1d9), (0x161b22, 0xc9d1d9), (0x000000, 0xffffff), (0xffffff, 0x24292f), (0xf6f8fa, 0x24292f), (0x2b2b2b, 0xc9d1d9), (0xfdf6e3, 0x657b83), (0x808080, 0x000000)];
         for (g, text) in grounds {
             for t in TONES {
                 let p = palette(t, g, text);
@@ -633,6 +663,15 @@ mod shared_cases {
 mod screen_tests {
     use super::*;
 
+    /// Screens' pills are capsules: the radius half the span background's height.
+    #[test]
+    fn screen_pills_are_capsules() {
+        for size in [12.0f32, 13.0, 14.0, 16.0] {
+            let h = size * 0.7 * 1.9;
+            assert!((span_radius(size) - h / 2.0).abs() <= 0.5, "{size}: {} for {h}", span_radius(size));
+        }
+    }
+
     #[test]
     fn rich_text_has_the_pills_and_nothing_else() {
         let (mut content, mut spans) = (String::new(), vec![]);
@@ -640,7 +679,7 @@ mod screen_tests {
         assert_eq!(content, "ok \u{2009}Failed: 3 tests\u{2009} and [[summary]].");
         assert_eq!(spans.len(), 2, "the word and the detail");
         assert_eq!(&content[spans[0].start as usize..spans[0].end as usize], "\u{2009}Failed");
-        assert_eq!(spans[0].weight, Some(600.0));
+        assert_eq!(spans[0].weight, None, "regular weight");
         assert!(spans.iter().all(|s| s.bg.is_some() && s.underline.is_none()), "styles only");
         assert_eq!(spans[0].bg, spans[1].bg, "one pill");
     }
@@ -663,6 +702,23 @@ mod screen_tests {
     fn screen_pills_read() {
         for p in screen_palette() {
             assert!(contrast(p.strong, p.bg) >= NEED && contrast(p.detail, p.bg) >= NEED);
+        }
+    }
+}
+
+#[cfg(test)]
+mod palette_print {
+    /// `cargo test palette_values -- --ignored --nocapture`: each tone's
+    /// fill, word and detail on the web UI's dark and light grounds (what
+    /// the web UI matches).
+    #[test]
+    #[ignore]
+    fn palette_values() {
+        for (g, t) in [(0x0d1117u32, 0xc9d1d9u32), (0xffffff, 0x24292f)] {
+            for tone in super::TONES {
+                let p = super::palette(tone, g, t);
+                println!("{g:06x} {:?}: fill #{:06x} word #{:06x} detail #{:06x}", tone, p.bg, p.strong, p.detail);
+            }
         }
     }
 }

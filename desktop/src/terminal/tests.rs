@@ -1191,13 +1191,13 @@ fn pieces(t: &TerminalState, r: usize) -> Vec<(u16, u16, crate::emphasis::Tone)>
 }
 
 /// The columns of row `r` drawn over a pill background, as a string of `#` and `.`.
+/// The columns each drawn pill covers on row `r` (views2: a capsule over
+/// its cells' fill, `render::pill_shape`), as `#`.
 fn pill_cols(t: &TerminalState, r: usize) -> String {
-    let (text, spans, _) = &t.test_parts[r];
+    let (text, _, _) = &t.test_parts[r];
     let mut cols = vec!['.'; text.chars().count()];
-    for s in spans.iter().filter(|s| s.bg.is_some()) {
-        let a = text[..s.start as usize].chars().count();
-        let b = text[..s.end as usize].chars().count();
-        cols[a..b].iter_mut().for_each(|c| *c = '#');
+    for (a, b, _, _) in t.test_pills.get(r).cloned().unwrap_or_default() {
+        cols[a as usize..b as usize].iter_mut().for_each(|c| *c = '#');
     }
     cols.into_iter().collect::<String>().trim_end_matches('.').to_string()
 }
@@ -1214,13 +1214,17 @@ fn a_marker_is_drawn_as_a_pill_over_exactly_its_cells() {
     assert_eq!(text.trim_end(), "Tests   Done   and   Failed: 3 tests");
     assert_eq!(text.chars().count(), 40, "one character per cell: nothing shifts");
     assert_eq!(t.screen_text().lines().next(), Some("Tests [[Done]] and [[Failed: 3 tests]]"));
-    // The word is bold in the tone's strong colour, the detail regular.
+    // Regular weight (views2): the word in the body text tinted toward the
+    // tone, the detail in the body text; the fill is the cells' (under the
+    // text), its round ends the row's shape: no span background.
     let word = spans.iter().find(|s| text[s.start as usize..s.end as usize].contains("Failed")).unwrap();
     let detail = spans.iter().find(|s| text[s.start as usize..s.end as usize].contains("3 tests")).unwrap();
-    assert_eq!(word.weight, Some(700.0));
-    assert_eq!(detail.weight, None);
+    assert_eq!((word.weight, detail.weight), (None, None));
     assert_ne!(word.color, detail.color);
-    assert_eq!(word.bg, detail.bg, "one pill");
+    assert!(spans.iter().all(|s| s.bg.is_none()));
+    let red = t.pills.colors(Tone::Red).bg;
+    assert!(t.test_parts[0].2.iter().any(|f| (f.0, f.1, f.2) == (19, 38, red)), "the pill's fill over exactly its cells");
+    assert_eq!(t.test_pills[0], vec![(6, 14, true, true), (19, 38, true, true)], "both ends round");
 }
 
 #[test]
@@ -1229,8 +1233,10 @@ fn the_programs_colours_are_replaced_inside_the_pill_only() {
     // Bold yellow on blue over the marker and beyond it.
     t.feed(b"\x1b[1;33;44m[[Done]] x\x1b[0m\r\n");
     let (_, _, fills) = &t.test_parts[0];
-    // The program's blue background is kept outside the pill only.
-    assert_eq!(fills.iter().map(|f| (f.0, f.1)).collect::<Vec<_>>(), vec![(8, 10)]);
+    // The program's blue background is kept outside the pill; the pill's
+    // fill is the tone over that blue (it blends into the coloured line).
+    assert_eq!(fills.iter().map(|f| (f.0, f.1)).collect::<Vec<_>>(), vec![(0, 8), (8, 10)]);
+    assert_ne!(fills[0].2, t.pills.colors(crate::emphasis::Tone::Green).bg, "tinted over the blue, not the terminal's ground");
     let (text, spans, _) = &t.test_parts[0];
     let x = spans.iter().find(|s| text[s.start as usize..s.end as usize].contains('x')).unwrap();
     assert!(x.bg.is_none() && x.color != spans[0].color);
@@ -1288,8 +1294,8 @@ fn wrap_splits_a_pill_and_a_hard_break_does_not_match() {
     let row1 = t.row_pills(1)[0];
     assert_eq!((row0.start, row0.end, row0.cut_left, row0.cut_right), (35, 40, false, true));
     assert_eq!((row1.start, row1.end, row1.cut_left, row1.cut_right), (0, 9, true, false));
-    assert_eq!(t.test_parts[0].2.last().map(|f| (f.0, f.1)), Some((39, 40)), "square end at the cut");
-    assert_eq!(t.test_parts[1].2.first().map(|f| (f.0, f.1)), Some((0, 1)));
+    assert_eq!(t.test_pills[0], vec![(35, 40, true, false)], "square end at the cut");
+    assert_eq!(t.test_pills[1], vec![(0, 9, false, true)]);
     // A hard line break is the end of the line.
     t.feed(b"[[Do\r\nne]]\r\n");
     assert!(pieces(&t, 2).is_empty() && pieces(&t, 3).is_empty());

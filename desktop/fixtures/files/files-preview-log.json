@@ -385,7 +385,99 @@
       "staged": [],
       "starred": false,
       "tab": "recent",
-      "upload_max": "128.0 MB"
+      "upload_max": "128.0 MB",
+      "locations": [
+        {
+          "group": "This sandbox",
+          "items": [
+            {
+              "id": "/home/agent",
+              "path": "/home/agent",
+              "label": "Home",
+              "icon": "folder",
+              "help": "/home/agent: the agent's home inside web-app"
+            },
+            {
+              "id": "/Users/me/web",
+              "path": "/Users/me/web",
+              "label": "Workspace",
+              "icon": "folder",
+              "workspace": true,
+              "help": "/Users/me/web: the project, a folder of this computer mounted at the same path in web-app"
+            },
+            {
+              "id": "/tmp",
+              "path": "/tmp",
+              "label": "Temporary files",
+              "icon": "folder",
+              "help": "/tmp in web-app: where pasted pictures and some uploads land"
+            },
+            {
+              "id": "/",
+              "path": "/",
+              "label": "File system root",
+              "icon": "folder",
+              "help": "/ in web-app: its whole file system, as the agent sees it"
+            },
+            {
+              "id": "/Users/me/shared-lib",
+              "path": "/Users/me/shared-lib",
+              "label": "shared-lib",
+              "icon": "folder",
+              "help": "/Users/me/shared-lib: a folder of this computer mounted in web-app (read only)"
+            },
+            {
+              "id": "/var/log",
+              "path": "/var/log",
+              "label": "Kit logs",
+              "icon": "file",
+              "select": "sbx-kit-startup.log",
+              "help": "/var/log in web-app: how its kits started"
+            }
+          ]
+        },
+        {
+          "group": "Shared with sbxw",
+          "items": [
+            {
+              "id": "artifacts",
+              "tab": "artifacts",
+              "label": "Artifacts",
+              "icon": "sparkle",
+              "help": "What agents deliver: documents, pictures, reports in .sbxw-artifacts"
+            },
+            {
+              "id": "recent",
+              "tab": "recent",
+              "label": "Recent",
+              "icon": "search",
+              "help": "What was written lately, in the workspace, home and /tmp"
+            }
+          ]
+        },
+        {
+          "group": "Worktrees",
+          "items": [
+            {
+              "id": "/Users/me/web/.sbxw-worktrees/checkout",
+              "path": "/Users/me/web/.sbxw-worktrees/checkout",
+              "label": "checkout",
+              "icon": "branch",
+              "thread": "checkout",
+              "help": "/Users/me/web/.sbxw-worktrees/checkout: thread checkout's worktree"
+            }
+          ]
+        }
+      ],
+      "location": "recent",
+      "crumbs": [
+        {
+          "label": "Recent",
+          "path": null
+        }
+      ],
+      "home": "/home/agent",
+      "sort": "name"
     },
     "sandboxes": [
       {

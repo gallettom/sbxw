@@ -10,10 +10,12 @@
 //! with `tip_subject` and `tip_at`) per sandbox, [`PARALLEL`] at once, when
 //! the view opens and on Refresh; nothing in the background.
 //!
-//! A graph (the web UI's `assets/js/worktrees.js` draws one) is not drawn
-//! here: the app has no canvas element; it would need lanes per branch from
-//! `log`/`commits`/`fork` (all in the answer) and a vector or canvas element
-//! in Rune to draw them. The list says the same numbers.
+//! Above each sandbox's rows, a branch graph of its unmerged worktrees
+//! (`worktrees_graph.rs`, the web UI's mapping): the base branch as a lane,
+//! each unmerged thread forking from its merge-base to its tip. Drawn with
+//! Rune's vector shapes (the `paint` prop: `rune::Shape`, polylines and
+//! fills, `crates/rune/src/shape.rs` at the pinned rev). Pressing a lane's
+//! label selects its row; pressing a commit's dot opens it in Commits.
 
 use super::{Action, Asked, Call, Ctx, Extra, Feature, Place, ScreenDecl, Slot, Zone};
 use crate::client::enc;
@@ -45,6 +47,7 @@ pub const INTENTS: &[Spec] = &[
     Spec { name: "worktrees_terminal", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Opens the terminal of the thread that owns that worktree (a row's id)." },
     Spec { name: "worktrees_commits", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "The Commits view on that worktree's branch." },
     Spec { name: "worktrees_files", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "The file explorer at that worktree." },
+    Spec { name: "worktrees_select", risk: Risk::Direct, args: &[("id", Arg::Str, false)], doc: "Marks a worktree's row (a branch pressed in the graph), or none. View state only." },
 ];
 
 #[derive(Debug, Default, Clone)]
@@ -62,6 +65,8 @@ pub struct State {
     inflight: usize,
     filter: String,
     pages: usize,
+    /// The row a branch of the graph selected.
+    selected: Option<String>,
 }
 
 crate::feat::relay::per_thread!(STATE, State);
@@ -166,6 +171,9 @@ impl State {
                         "ahead": t["ahead"], "behind": t["behind"], "dirty": t["dirty"],
                         "subject": t["tip_subject"], "when": t["tip_at"].as_i64().filter(|a| *a > 0).map(|a| crate::feat::files::view::ago(a as u64, now)),
                         "merged": has_tip && t["ahead"].as_u64() == Some(0),
+                        "selected": self.selected.as_deref() == Some(format!("{sb}:{name}").as_str()),
+                        // Its lane's colour in the graph (unmerged only).
+                        "lane_color": if graph::unmerged(t) { J::from(graph::lane_color(name)) } else { J::Null },
                         "has_branch": has_tip,
                     }));
                 }
@@ -187,6 +195,15 @@ impl State {
                 self.pages = 1;
             }
             "worktrees_more" => self.pages += 1,
+            "worktrees_select" => {
+                let id = a.s("id").filter(|x| !x.is_empty());
+                if let Some(id) = id {
+                    if !self.rows(cx).iter().any(|r| r["id"] == id) {
+                        return Err(format!("{id} is not a worktree shown"));
+                    }
+                }
+                self.selected = id.map(str::to_string);
+            }
             "worktrees_terminal" | "worktrees_commits" | "worktrees_files" => {
                 let id = a.req("id");
                 let row = self.rows(&Ctx { data: cx.data }).into_iter().find(|r| r["id"] == id).ok_or_else(|| format!("{id} is not a worktree shown"))?;
@@ -240,6 +257,28 @@ impl State {
                 _ => blocks.push(json!({ "sandbox": sb, "color": r["color"], "rows": [r] })),
             }
         }
+        // Each block's branch graphs: one per repository with an unmerged
+        // thread, in both variants (the screen picks one by its width).
+        let sessions_of = |sb: &str| crate::feat::threads::model::sessions(cx.data, sb);
+        for b in blocks.iter_mut() {
+            let sb = b["sandbox"].as_str().unwrap_or("").to_string();
+            let Some(p) = self.per.get(&sb) else { continue };
+            let sessions = sessions_of(&sb);
+            let words: Vec<(String, &'static str, String)> = sessions.iter().filter_map(|x| x.thread.clone().map(|t| (t, state_tone(x.state), x.word().to_string()))).collect();
+            let ids: Vec<String> = p.answer["repos"].as_array().into_iter().flatten().flat_map(|r| r["threads"].as_array().into_iter().flatten()).filter_map(|t| t["name"].as_str().map(|n| format!("{sb}:{n}"))).collect();
+            let extra = |name: &str| -> Option<graph::Extra<'_>> {
+                let id = ids.iter().find(|i| i.rsplit_once(':').is_some_and(|(_, n)| n == name))?;
+                let w = words.iter().find(|w| w.0 == name);
+                Some(graph::Extra { id, tone: w.map_or("muted", |w| w.1), word: w.map_or("", |w| w.2.as_str()) })
+            };
+            let mut graphs = vec![];
+            for repo in p.answer["repos"].as_array().into_iter().flatten() {
+                if let (Some(wide), Some(narrow)) = (graph::layout(repo, graph::WIDE, &extra), graph::layout(repo, graph::NARROW, &extra)) {
+                    graphs.push(json!({ "wide": wide, "narrow": narrow }));
+                }
+            }
+            b["graphs"] = J::Array(graphs);
+        }
         let mut notes = vec![];
         let mut none = vec![];
         for (n, p) in &self.per {
@@ -275,6 +314,9 @@ fn extras(_cx: &Ctx) -> Vec<Extra> {
         intent: Some(("worktrees_show".into(), json!({}))),
     }]
 }
+
+#[path = "worktrees_graph.rs"]
+pub mod graph;
 
 #[cfg(test)]
 #[path = "worktrees_tests.rs"]

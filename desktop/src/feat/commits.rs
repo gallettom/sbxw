@@ -47,7 +47,12 @@ pub const FEATURE: Feature = Feature {
 };
 
 pub const INTENTS: &[Spec] = &[
-    Spec { name: "commits_show", risk: Risk::Direct, args: &[("sandbox", Arg::Text, false), ("branch", Arg::Text, false)], doc: "Opens the Commits view over the panes: every sandbox, or that one (`sandbox`), or one branch of it (`branch`, a thread's `sbxw/<thread>`). Read only." },
+    Spec {
+        name: "commits_show",
+        risk: Risk::Direct,
+        args: &[("sandbox", Arg::Text, false), ("branch", Arg::Text, false), ("hash", Arg::Str, false)],
+        doc: "Opens the Commits view over the panes: every sandbox, or that one (`sandbox`), or one branch of it (`branch`, a thread's `sbxw/<thread>`); with `hash` (and `sandbox`), that commit opened (a dot pressed in the Worktrees graph). Read only.",
+    },
     Spec { name: "commits_sandbox", risk: Risk::Direct, args: &[("sandbox", Arg::Text, false)], doc: "Shows every sandbox's commits (no `sandbox`, or empty), or one sandbox's." },
     Spec { name: "commits_filter", risk: Risk::Direct, args: &[("text", Arg::Text, false)], doc: "Filters the commits by subject and author; give it on every edit." },
     Spec { name: "commits_unmerged", risk: Risk::Direct, args: &[("on", Arg::Bool, true)], doc: "Only the commits the main checkout's branch does not hold yet." },
@@ -238,11 +243,23 @@ impl State {
                         return Err(format!("{b} is not a branch name"));
                     }
                 }
-                self.sandbox = sb;
+                let hash = a.s("hash").filter(|s| !s.is_empty()).map(str::to_string);
+                if let Some(h) = &hash {
+                    if sb.is_none() || h.len() < 7 || h.len() > 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        return Err(format!("{h} is not a commit hash of one sandbox"));
+                    }
+                }
+                self.sandbox = sb.clone();
                 self.branch = branch;
                 self.filter.clear();
                 out.push(Action::OpenPanel(SCREEN.into()));
                 out.extend(self.read_all(cx));
+                // That commit open: its row expands once the list has it.
+                if let (Some(sb), Some(h)) = (sb, hash) {
+                    self.open = Some((sb.clone(), h.clone()));
+                    self.cursor = Some(row_id(&sb, &h));
+                    out.push(Action::Call(Call::get(format!("/api/sandboxes/{}/commits/{h}", enc(&sb)), format!("read commit {}", &h[..7])).tag(&format!("detail:{sb}:{h}")).quiet()));
+                }
             }
             "commits_sandbox" => {
                 let sb = a.s("sandbox").filter(|s| !s.is_empty()).map(str::to_string);

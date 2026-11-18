@@ -475,6 +475,141 @@
     ],
     "offline": false,
     "ok": true
+   },
+   "/home/agent": {
+    "path": "/home/agent",
+    "parent": "/home",
+    "entries": [
+     {
+      "name": ".claude",
+      "kind": "dir",
+      "link": false,
+      "size": 4096,
+      "modified": 1794199000
+     },
+     {
+      "name": ".bashrc",
+      "kind": "file",
+      "link": false,
+      "size": 100,
+      "modified": 1794199000
+     },
+     {
+      "name": "notes.md",
+      "kind": "file",
+      "link": false,
+      "size": 420,
+      "modified": 1794199000
+     },
+     {
+      "name": "scratch",
+      "kind": "dir",
+      "link": false,
+      "size": 4096,
+      "modified": 1794199000
+     }
+    ]
+   },
+   "/home/agent/scratch": {
+    "path": "/home/agent/scratch",
+    "parent": "/home/agent",
+    "entries": [
+     {
+      "name": "draft.txt",
+      "kind": "file",
+      "link": false,
+      "size": 88,
+      "modified": 1794199000
+     }
+    ]
+   },
+   "/tmp": {
+    "path": "/tmp",
+    "parent": "/",
+    "entries": [
+     {
+      "name": "paste-1794199000.png",
+      "kind": "file",
+      "link": false,
+      "size": 20480,
+      "modified": 1794199000
+     },
+     {
+      "name": "upload-report.pdf",
+      "kind": "file",
+      "link": false,
+      "size": 40960,
+      "modified": 1794199060
+     }
+    ]
+   },
+   "/": {
+    "path": "/",
+    "parent": null,
+    "entries": [
+     {
+      "name": "bin",
+      "kind": "dir",
+      "link": false,
+      "size": 4096,
+      "modified": 1794199000
+     },
+     {
+      "name": "etc",
+      "kind": "dir",
+      "link": false,
+      "size": 4096,
+      "modified": 1794199000
+     },
+     {
+      "name": "home",
+      "kind": "dir",
+      "link": false,
+      "size": 4096,
+      "modified": 1794199000
+     },
+     {
+      "name": "tmp",
+      "kind": "dir",
+      "link": false,
+      "size": 4096,
+      "modified": 1794199000
+     },
+     {
+      "name": "var",
+      "kind": "dir",
+      "link": false,
+      "size": 4096,
+      "modified": 1794199000
+     },
+     {
+      "name": "Users",
+      "kind": "dir",
+      "link": false,
+      "size": 4096,
+      "modified": 1794199000
+     }
+    ]
+   },
+   "/Users/me/web/.sbxw-worktrees/checkout": {
+    "path": "/Users/me/web/.sbxw-worktrees/checkout",
+    "parent": "/Users/me/web/.sbxw-worktrees",
+    "entries": [
+     {
+      "name": "README.md",
+      "kind": "file",
+      "link": false,
+      "size": 300,
+      "modified": 1794199000
+     },
+     {
+      "name": "src",
+      "kind": "dir",
+      "link": false,
+      "size": 4096,
+      "modified": 1794199000
+     }
+    ]
    }
   },
   "files_content": {
@@ -496,7 +631,9 @@
     "$raw_hex": "89504e470d0a1a0a0000000d4948445200000140000000c808020000001666affc0000023f4944415478daeddbb10d8020108651c67126a773261a37a0a2a521168e60210a97bce44df05fbef2d2b61f4050c904206040c0808041c08080010103020601030206040c0206040c0818103008181030206040c0206040c0808041c08080817f02eefd028212300818103020601030206040c0808041c08080010183800101030206040c0206040c081810300818103020601030206040c0c0c701e77c026f0818042c601030206010b08041c0020601030206010b18042c60881c30e09901103008181030206040c0206040c0808001018380010103020601030206040c0818040c0818103008181030206040c0206040c0808001018380010103020601030206040c0818040c081810303024e0521b2b7bbc60ab85b9048c80052c60012360048c8011b080052c60010b58c00246c00818012360010b58c00216b080058c8011b080058c80052c60012360048c8011b080052c60010b58c00246c00818012360010b58c01212300246c00858c00246c00216b08011300246c00858c00216b080052c60012360048c8011b080052c60048c8011300216b08011b080052c60048c8011300216b080052c60010b58c00818010b58c00858c00216300246c00818010b58c00216b080052c60048c8011300216f098808189040c0206040c0818040c0818103020601030206040c0206040c08080010183800101030206040c0206040c0818040c0818103020601030206040c0808041c08080010183800101030206040c0206040c0818046c051030206040c0206040c08080010183808125dc30216f9c8916ad050000000049454e44ae426082",
     "$type": "image/png"
    },
-   "/tmp/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/quarterly-report-final-v2.md": "# Quarterly report\n\nNumbers to check.\n"
+   "/tmp/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/quarterly-report-final-v2.md": "# Quarterly report\n\nNumbers to check.\n",
+   "/home/agent/notes.md": "# Notes\n\nWhat the agent keeps for itself between sessions.\n",
+   "/home/agent/scratch/draft.txt": "a draft\n"
   }
  },
  "app": {

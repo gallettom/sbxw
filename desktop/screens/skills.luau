@@ -1,6 +1,8 @@
--- Skills (a docked panel; it was Setup's Skills tab): the skills you keep
--- for every new sandbox, and keeping one a sandbox's agent wrote. The web
--- UI's skills.js.
+-- Skills (an overlay over the pane area, opened from the rail; it was
+-- Setup's Skills tab): the skills you keep for every new sandbox, and
+-- keeping one a sandbox's agent wrote. The web UI's skills.js. Wide (760 pt
+-- and more): the sandbox picker and the kept skills at the left, that
+-- sandbox's skills to look at and keep at the right. Narrow: one column.
 --
 -- The picker's sandbox: data.skills_view.sandbox (the panel opened for a
 -- sandbox), else the last one used (data.app.kept.skills.sandbox), else the
@@ -63,7 +65,18 @@ return {
     local ms = data.my_skills or {}
     local kept_names = {}
     for _, x in ipairs(ms.skills or {}) do kept_names[x.name] = true end
+    -- The sandbox to look into (the picker, at the top left).
+    local names, ids = {}, {}
+    for _, sb in ipairs(data.sandboxes or {}) do
+      names[#names + 1] = { id = sb.name, label = sb.name .. (sb.status == "running" and "" or " (" .. (sb.status or "?") .. ")") }
+      ids[#ids + 1] = sb.name
+    end
+    local want = (data.skills_view or {}).sandbox or ((((data.app or {}).kept or {}).skills or {}).sandbox)
+    local pick = contains(ids, want) and want or ids[1]
+    local wide = overlay_wide(data)
     local out = { w = "full", gap = 12, key = "skills-body",
+      row{ w = "full", gap = 8, text{ "Sandbox", size = "sm", color = "text-muted" },
+        sandbox_picker(data, { id = "skills-sandbox", value = pick, items = names, on = "pick", placeholder = "No sandbox", disabled = #names == 0 }) },
       text{ "A skill is a set of instructions an agent can follow (a /command). Skills you keep here are given to every sandbox created from now on. A sandbox can write a skill, never make it reach the others: keeping one is your act.", wrap = true, color = "text-soft" },
     }
     local err = errors.my_skills or failed(data.my_skills)
@@ -96,21 +109,18 @@ return {
       out[#out + 1] = note("None kept yet. Pick a sandbox below and press Look: you can keep any skill its agent wrote.")
     end
 
-    -- Keep a skill from a sandbox.
-    local names, ids = {}, {}
-    for _, sb in ipairs(data.sandboxes or {}) do
-      names[#names + 1] = { id = sb.name, label = sb.name .. (sb.status == "running" and "" or " (" .. (sb.status or "?") .. ")") }
-      ids[#ids + 1] = sb.name
-    end
-    local want = (data.skills_view or {}).sandbox or ((((data.app or {}).kept or {}).skills or {}).sandbox)
-    local pick = contains(ids, want) and want or ids[1]
-    out[#out + 1] = divider{}
-    out[#out + 1] = section("Keep a skill from a sandbox")
+    -- Keep a skill from a sandbox (the right column when wide).
+    local main = out
+    out = { w = "full", gap = 12, key = "skills-found" }
+    if not wide then main[#main + 1] = divider{} end
     out[#out + 1] = row{ w = "full", gap = 8,
-      select{ id = "skills-sandbox", value = pick or "", items = names, on = "pick", placeholder = "No sandbox", disabled = #names == 0 },
+      text{ pick and ("Skills in " .. pick) or "Keep a skill from a sandbox", size = "caption", weight = "semibold", color = "text-muted", truncate = true, grow = 1 },
       button{ "Look", icon = "search", variant = "primary", on = "look", arg = pick, disabled = not pick, key = "skills-look",
         help = "Lists the skills it has under .claude/skills (a stopped sandbox is started)" },
     }
+    if pick and data.skills_for ~= pick then
+      out[#out + 1] = note("Press Look to list the skills " .. pick .. "'s agent wrote; keep one and every new sandbox gets it.")
+    end
     if #names == 0 then
       out[#out + 1] = note("No sandbox yet: create one, let its agent write a skill, then keep it here.")
     end
@@ -149,7 +159,13 @@ return {
         end
       end
     end
-    return column{ h = "full", w = "full", scroll{ gap = 0, column(out) } }
+    if not wide then
+      main[#main + 1] = column(out)
+      return column{ h = "full", w = "full", scroll{ gap = 0, column(main) } }
+    end
+    return split{ id = "skills-split", vertical = true, ratio = 0.46,
+      column{ h = "full", w = "full", px = 4, scroll{ gap = 0, column(main) } },
+      column{ h = "full", w = "full", px = 4, scroll{ gap = 0, column(out) } } }
   end,
 
   actions = {
