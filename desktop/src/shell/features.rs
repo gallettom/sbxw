@@ -719,7 +719,17 @@ impl App {
                         s.push_data();
                     }
                 })
-                .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| s.overlay_drop(files))
+                .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| {
+                    s.rects.overlay_drop = false;
+                    s.overlay_drop(files)
+                })
+                // Files dragged over it: its screen shows where they would go (the explorer's drop zone).
+                .on_drop_hover(|s: &mut App, over: bool, _tx| {
+                    if s.rects.overlay_drop != over {
+                        s.rects.overlay_drop = over;
+                        s.push_data();
+                    }
+                })
                 .child(head)
                 .child(col().key(format!("overlay-body-{name}")).grow(1.0).w_full().min_h(0.0).child(screen)),
         )

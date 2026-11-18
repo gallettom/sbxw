@@ -269,3 +269,88 @@ pub fn short_dir(path: &str, workspace: Option<&str>, home: &str) -> String {
     }
     dir
 }
+
+/// The explorer's Locations, grouped, as a visible list (views2): "This
+/// sandbox" (Home, Workspace, Temporary files, File system root, the kit
+/// logs, the sandbox's other mounts), "Shared with sbxw" (Artifacts, Recent),
+/// "Worktrees" (one per thread worktree) and "Pinned" (the person's starred
+/// folders). Each `{id, label, icon, path?, tab?, help, select?}`; the ids
+/// of path locations are their paths, as `places` had them, so
+/// `files_place` takes both.
+pub fn locations(listing: &J, starred: &[String], sandbox: &str) -> Vec<J> {
+    let s = |k: &str| listing[k].as_str().filter(|x| !x.is_empty()).map(str::to_string);
+    let home = s("home").unwrap_or_else(|| "/home/agent".into());
+    let mut this = vec![json!({ "id": home, "path": home, "label": "Home", "icon": "folder", "help": format!("{home}: the agent's home inside {sandbox}") })];
+    if let Some(w) = s("workspace") {
+        this.push(json!({ "id": w, "path": w, "label": "Workspace", "icon": "folder", "workspace": true,
+            "help": format!("{w}: the project, a folder of this computer mounted at the same path in {sandbox}") }));
+    }
+    this.push(json!({ "id": "/tmp", "path": "/tmp", "label": "Temporary files", "icon": "folder", "help": format!("/tmp in {sandbox}: where pasted pictures and some uploads land") }));
+    this.push(json!({ "id": "/", "path": "/", "label": "File system root", "icon": "folder", "help": format!("/ in {sandbox}: its whole file system, as the agent sees it") }));
+    for m in listing["mounts"].as_array().into_iter().flatten() {
+        let p = m["path"].as_str().unwrap_or("");
+        if p.is_empty() {
+            continue;
+        }
+        let ro = m["readonly"] == true;
+        this.push(json!({ "id": p, "path": p, "label": p.rsplit('/').find(|c| !c.is_empty()).unwrap_or(p), "icon": "folder",
+            "help": format!("{p}: a folder of this computer mounted in {sandbox} ({})", if ro { "read only" } else { "read-write" }) }));
+    }
+    this.push(json!({ "id": "/var/log", "path": "/var/log", "label": "Kit logs", "icon": "file", "select": "sbx-kit-startup.log", "help": format!("/var/log in {sandbox}: how its kits started") }));
+    let shared = vec![
+        json!({ "id": "artifacts", "tab": "artifacts", "label": "Artifacts", "icon": "sparkle", "help": "What agents deliver: documents, pictures, reports in .sbxw-artifacts" }),
+        json!({ "id": "recent", "tab": "recent", "label": "Recent", "icon": "search", "help": "What was written lately, in the workspace, home and /tmp" }),
+    ];
+    let trees: Vec<J> = listing["worktrees"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|w| {
+            let p = w["path"].as_str().filter(|p| !p.is_empty())?;
+            let t = w["thread"].as_str().unwrap_or("?");
+            Some(json!({ "id": p, "path": p, "label": t, "icon": "branch", "thread": t, "help": format!("{p}: thread {t}'s worktree") }))
+        })
+        .collect();
+    let known: Vec<String> = this.iter().chain(&trees).filter_map(|x| x["path"].as_str().map(str::to_string)).collect();
+    let pinned: Vec<J> = starred
+        .iter()
+        .filter(|p| !known.contains(p))
+        .map(|p| json!({ "id": p, "path": p, "label": p.rsplit('/').find(|c| !c.is_empty()).unwrap_or(p), "icon": "flag", "starred": true, "help": format!("{p} (pinned)") }))
+        .collect();
+    let mut out = vec![json!({ "group": "This sandbox", "items": this }), json!({ "group": "Shared with sbxw", "items": shared })];
+    if !trees.is_empty() {
+        out.push(json!({ "group": "Worktrees", "items": trees }));
+    }
+    if !pinned.is_empty() {
+        out.push(json!({ "group": "Pinned", "items": pinned }));
+    }
+    out
+}
+
+/// The location a folder is in: the deepest path location that holds it
+/// (a worktree before the workspace, the workspace before the root).
+pub fn location_of(locations: &[J], path: &str) -> Option<String> {
+    let under = |root: &str| root == "/" || path == root || path.starts_with(&format!("{}/", root.trim_end_matches('/')));
+    locations
+        .iter()
+        .flat_map(|g| g["items"].as_array().cloned().unwrap_or_default())
+        .filter_map(|x| x["path"].as_str().filter(|p| under(p)).map(|p| (p.len(), x["id"].as_str().unwrap_or("").to_string())))
+        .max_by_key(|(n, _)| *n)
+        .map(|(_, id)| id)
+}
+
+/// A folder's path as pressable segments, the home folder as `~`: each
+/// `{label, path}`, from the top.
+pub fn crumbs(path: &str, home: &str) -> Vec<J> {
+    let home = home.trim_end_matches('/');
+    let (mut out, rest, mut at) = if !home.is_empty() && (path == home || path.starts_with(&format!("{home}/"))) {
+        (vec![json!({ "label": "~", "path": home })], path[home.len()..].to_string(), home.to_string())
+    } else {
+        (vec![json!({ "label": "/", "path": "/" })], path.to_string(), String::new())
+    };
+    for seg in rest.split('/').filter(|s| !s.is_empty()) {
+        at = format!("{at}/{seg}");
+        out.push(json!({ "label": seg, "path": at }));
+    }
+    out
+}

@@ -192,6 +192,10 @@ pub struct Node {
     /// `row`/`column` with `on`: called when Space is pressed while it has
     /// the keyboard (Enter calls `on`).
     pub on_space: Option<String>,
+    /// `row`/`column` with `on`: called with the same `arg` when Left or
+    /// Right is pressed while it has the keyboard (a tree's fold and open).
+    pub on_left: Option<String>,
+    pub on_right: Option<String>,
     /// `row`/`column`: what overflows it is cut at its edges.
     pub clip: bool,
     /// `button`, `menu`: the dense size (24 pt, for bars) instead of 28.
@@ -264,6 +268,8 @@ impl Node {
             group: None,
             selected: false,
             on_space: None,
+            on_left: None,
+            on_right: None,
             clip: false,
             skip_tab: false,
             dense: false,
@@ -299,7 +305,7 @@ pub enum Positional {
 /// Props every element takes.
 pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin"];
 const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate", "pills"];
-const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "clip", "folds", "shortcuts", "paint"];
+const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "on_left", "on_right", "clip", "folds", "shortcuts", "paint"];
 
 /// The frozen element set: name, kind, positional entries, props beyond [`COMMON`].
 pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
@@ -938,6 +944,8 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "group" => n.group = Some(one_of(v, &["list"])?),
         "selected" => n.selected = bool_of(v)?,
         "on_space" => n.on_space = Some(string_of(v)?),
+        "on_left" => n.on_left = Some(string_of(v)?),
+        "on_right" => n.on_right = Some(string_of(v)?),
         "dense" => n.dense = bool_of(v)?,
         "clip" => n.clip = bool_of(v)?,
         "tab_stop" => n.skip_tab = !bool_of(v)?,

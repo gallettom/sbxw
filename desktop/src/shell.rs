@@ -283,6 +283,8 @@ pub struct Rects {
     /// The overlay view's rectangle (`data.app.overlay`: its screen lays
     /// itself out narrow or wide from it).
     pub overlay: Option<[f32; 4]>,
+    /// Files are being dragged over the overlay (`data.app.overlay.drop_over`).
+    pub overlay_drop: bool,
 }
 
 /// A pane being dragged by its bar: where the press was, where the pointer
@@ -624,7 +626,7 @@ impl App {
         data["app"]["surface"] = serde_json::json!({ "release": crate::surface::RELEASE_KEY, "focused": crate::surface::focused() });
         // The overlay over the pane area: its screen and its size, in points.
         data["app"]["overlay"] = match (&self.feats.overlay, self.rects.overlay) {
-            (Some((n, _)), Some(r)) => serde_json::json!({ "screen": n, "w": r[2], "h": r[3] }),
+            (Some((n, _)), Some(r)) => serde_json::json!({ "screen": n, "w": r[2], "h": r[3], "drop_over": self.rects.overlay_drop }),
             (Some((n, _)), None) => serde_json::json!({ "screen": n }),
             _ => J::Null,
         };
@@ -1112,18 +1114,34 @@ impl App {
         // An overlay over the pane area takes Up, Down and Enter when nothing
         // of its own has the keyboard (its rows' list moves the keyboard
         // itself): as its feature's `<screen>_key` intent, if it has one.
+        // Left, Right, Backspace and typed text too, to a feature whose key
+        // intent lists them (the explorer: fold, open, type to filter).
         if let Some((name, _)) = self.feats.overlay.clone() {
-            let k = match ev.key {
+            let k = match &ev.key {
                 Key::Up => Some("up"),
                 Key::Down => Some("down"),
                 Key::Enter => Some("enter"),
+                Key::Left => Some("left"),
+                Key::Right => Some("right"),
+                Key::Backspace => Some("backspace"),
+                Key::Text(t) if !t.is_empty() && t.chars().all(|c| !c.is_control()) => Some("type"),
                 _ => None,
             };
-            let idle = tx.focused().is_none_or(|f| f.starts_with("grid") || f.starts_with("rail") || f.starts_with("overlay"));
+            // Idle: nothing of the overlay's own has the keyboard, or one of its list's rows does (a row pressed).
+            let row_key = format!("{name}-row-");
+            let idle = tx.focused().is_none_or(|f| f.starts_with("grid") || f.starts_with("rail") || f.starts_with("overlay") || f.starts_with(&row_key));
             let intent = format!("{name}_key");
-            if let (Some(k), true, true) = (k, idle, ev.mods == rune::Mods::default()) {
-                if crate::intent::spec(&intent).is_some() {
-                    self.press_extra("keys", &intent, &serde_json::json!({ "key": k }));
+            let plain = ev.mods == rune::Mods::default() || (k == Some("type") && !(ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo));
+            if let (Some(k), true, true) = (k, idle, plain) {
+                let takes = crate::intent::spec(&intent).is_some_and(|sp| {
+                    sp.args.iter().any(|(n, a, _)| *n == "key" && matches!(a, crate::intent::Arg::OneOf(l) if l.contains(&k)))
+                });
+                if takes {
+                    let mut args = serde_json::json!({ "key": k });
+                    if let Key::Text(t) = &ev.key {
+                        args["text"] = t.clone().into();
+                    }
+                    self.press_extra("keys", &intent, &args);
                     self.push_data();
                     return true;
                 }

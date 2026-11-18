@@ -1045,8 +1045,9 @@ impl Build<'_> {
                         // Screen readers hear it as the current item.
                         b = b.focus_selected(true).label(format!("{} (selected)", n.help.clone().unwrap_or_default()));
                     }
-                    if n.on_space.is_some() || nav.is_some() {
+                    if n.on_space.is_some() || nav.is_some() || n.on_left.is_some() || n.on_right.is_some() {
                         let (name, arg, sp) = (self.name.clone(), n.arg.clone(), n.on_space.clone());
+                        let (lf, rt) = (n.on_left.clone(), n.on_right.clone());
                         let (prev, next) = nav.unwrap_or((None, None));
                         let me = key.clone();
                         b = b.on_key(move |s: &mut S, ev: &rune::KeyEvent, tx: &mut rune::Tx| {
@@ -1065,6 +1066,16 @@ impl Build<'_> {
                                         return true;
                                     }
                                     false
+                                }
+                                rune::Key::Left | rune::Key::Right => {
+                                    let act = if ev.key == rune::Key::Left { &lf } else { &rt };
+                                    match act {
+                                        Some(a) => {
+                                            fire(s, &name, a, &arg, &J::Null);
+                                            true
+                                        }
+                                        None => false,
+                                    }
                                 }
                                 rune::Key::Up | rune::Key::Down => {
                                     let to = if ev.key == rune::Key::Up { &prev } else { &next };

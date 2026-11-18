@@ -66,13 +66,14 @@ if not os.environ.get("LONG"):
     step("files-row-wireframe.png", "files-preview-image", "preview-picture")
     step("files-open-with", "cf-confirm", "open-dialog")
     step("cf-cancel", "cf-dialog", gone=True)
-    step("files-tab-files", "files-row-/Users/me/web/.sbxw-artifacts/report.md")
-    step("files-up", "files-preview-markdown", "browse")
+    # views2: the Workspace location (the tabs became Locations).
+    step("files-loc-/Users/me/web", "files-preview-markdown", "browse")
     step("files-row-/Users/me/web/install.sh", "files-preview-text")
     step("files-open-with", "cf-error", "open-refused")
     step("cf-cancel", "cf-dialog", gone=True)
-    step("files-tab-recent", "files-show-/tmp/build.log", "recent")
-    step({"drop_files": {"paths": [f"{SHOTS}/drop/brief.md"], "key": "files-drop", "hover": 0.2}}, "files-staged-1", "staged")
+    step("files-loc-recent", "files-show-/tmp/build.log", "recent")
+    # views2: dropped anywhere on the explorer (its upload card opens).
+    step({"drop_files": {"paths": [f"{SHOTS}/drop/brief.md"], "key": "overlay-files", "hover": 0.2}}, "files-staged-1", "staged")
     step("files-upload-send-1", "cf-confirm", "upload-confirm")
     step("cf-confirm", "files-staged-1", "uploaded", gone=True)
     # A .env file dropped on the pane: asked, saying why (for its mark the
@@ -98,16 +99,18 @@ if not os.environ.get("LONG"):
     # Only against the big stand-in: 3,000 more files, folded into folders;
     # logs/ opened holds 300: a page of 200 and Show more.
     # The explorer is still open over the panes (the Code map docked beside it).
-    step("files-tab-artifacts", "files-row-desktop", "big")
+    # Narrower with the map beside it (under 760 pt): the Locations are a menu.
+    step("files-locations", "files-locations-artifacts")
+    step("files-locations-artifacts", "files-row-desktop", "big")
     step("files-row-logs", "files-more", "big-open")
 else:
     # LONG=1: the dialogs with long paths, at the smallest window.
     step("pane-1-x-project", "files-row-report.md")
-    step("files-tab-recent", "files-show-" + os.environ["LONGREMOTE"])
+    step("files-loc-recent", "files-show-" + os.environ["LONGREMOTE"])
     step("files-row-" + os.environ["LONGREMOTE"], "files-preview-markdown")
     step("files-open-with", "cf-confirm", "long-open")
     step("cf-cancel", "cf-dialog", gone=True)
-    step({"drop_files": {"paths": [os.environ["LONGFILE"]], "key": "files-drop", "hover": 0.2}}, "files-staged-1")
+    step({"drop_files": {"paths": [os.environ["LONGFILE"]], "key": "overlay-files", "hover": 0.2}}, "files-staged-1")
     step("files-upload-send-1", "cf-confirm", "long-upload")
 mark("end")
 print(json.dumps({"events": ev}, indent=1))

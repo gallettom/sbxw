@@ -169,6 +169,7 @@ Children side by side. Children are centred vertically.
 | `hover` | colour | Background under the pointer |
 | `on`, `arg` | action name, any value | The whole row is pressable (a button for screen readers, named by its `help`); `hover` defaults to `surface`. Enter presses it when it has the keyboard |
 | `on_space` | action name | With `on`: called with the same `arg` when Space is pressed while it has the keyboard (the sandbox list: start or stop) |
+| `on_left`, `on_right` | action name | With `on`: called with the same `arg` when Left or Right is pressed while it has the keyboard (a tree: fold, open in place; the explorer's folders) |
 | `hover_group` | bool | Its `reveal` children show while it is hovered or the keyboard focus is in it |
 | `hover_zone` | string | `row`/`column`: one hover zone with every element of this screen that names the same zone, even apart in the tree (a row and the block under it). The core tells the screen where the pointer rests in `data.app.hover_zone` ([Hover zones](#hover-zones)) |
 | `group` | `list` | Its pressable children (with `on`) are one list: Up and Down move the keyboard between them |
@@ -1529,10 +1530,32 @@ the map's parser, `standin.rs`, `tests.rs`), `screens/files.luau`,
 the rail's Files (`files_show`: the sandbox used last, else the focused
 pane's, else the selected one), a pane bar's Project (`files_open
 {sandbox}`, and for a thread's pane `{sandbox, worktree}`: at that
-worktree, its path from the daemon's listing) or the Worktrees view. Left
-the tree (a sandbox picker `files-sandbox`, Artifacts, Workspace, Recent,
-the sandbox's worktrees `files-worktree-<thread>`, the upload card, the
-path bar, the filter, the rows); right the reader: Markdown at about 70
+worktree, its path from the daemon's listing) or the Worktrees view.
+
+Its layout (views2, `VIEWS2.md`): **across the top** where the list is, as
+pressable segments (`files-crumb-<i>`, the agent's home shown as `~`, a
+long path folding in the middle into `files-crumbs-more`, never cut at its
+end), back `files-back`, up `files-up`, copy the folder `files-copy-folder`,
+pin it `files-star`, **Go to…** `files-goto` (the typed path `files-path`),
+then **Upload** `files-upload` (the upload card `files-drop` under the
+header: open, while files wait, or while files are dragged over the
+explorer, `data.app.overlay.drop_over`) and the "…" menu `files-actions`
+(read again, the code map). **Left**: the sandbox picker `files-sandbox`
+with its colour, the **Locations** (`files_ui.locations`, `view::locations`:
+"This sandbox": Home (the agent's home, `/home/agent`), Workspace (the
+project, this computer's folder mounted at the same path; Code map
+`files-codemap` beside it), Temporary files (`/tmp`), File system root,
+the mounts, Kit logs; "Shared with sbxw": Artifacts, Recent; "Worktrees":
+`files-worktree-<thread>`; "Pinned"; keys `files-loc-<id>`, the current one
+`files_ui.location` marked; under 760 pt a menu `files-locations`), then
+the list: the filter `files-filter` with **Hidden** `files-hidden` and the
+sort `files-sort` (`files_sort`), and the rows as a tree (`files-rows`, one
+keyboard list): a folder opens in place (`files_expand`, read from the
+sandbox, its count once read; `files-into-<id>` lists it), Up and Down
+move, Right opens, Left folds, Enter presses, typing filters
+(`files_key` when nothing of the explorer has the keyboard, the rows'
+`on_left`/`on_right` when a row has it). Empty and failed lists say what to
+do. Right the reader: Markdown at about 70
 characters in the prose face, paragraphs reflowed, its outline beside it
 (`files-outline-<i>`, `files_outline`: that section, Whole file),
 relative links and `[[wiki links]]` rewritten to
@@ -1569,7 +1592,7 @@ amber) while its map or a lens is being written.
 
 **Keys** (scripts press them): rows `files-row-<id>` (`id`: an artifact's
 path under `.sbxw-artifacts`, else the file's absolute path), Recent's
-`files-show-<id>`, tabs `files-tab-<tab>`, actions `files-download`,
+`files-show-<id>`, Locations `files-loc-<id>` (the tabs `files-tab-<tab>` before views2), actions `files-download`,
 `files-reveal`, `files-open-with`, `files-save-as`, `files-copy-path`,
 `files-delete`, the preview's body `files-preview-<state>` (`loading`, `text` (HTML too), `markdown`, `image`, `note`, `error`), uploads `files-drop` (the drop target), `files-upload-send-<n>`
 and `files-unstage-<n>` (by position), `files-more` (Show N more), a folder row
