@@ -195,6 +195,12 @@ impl Ui {
 
 pub struct ScreenState {
     pub name: String,
+    /// The source that loaded last (its file name, its text) and the theme's
+    /// generation it was loaded under: Luau resolves a `theme.color.x` read
+    /// once, when the chunk loads, so a theme switch loads it again (its
+    /// state kept) before it renders.
+    loaded: Option<(String, String)>,
+    theme_gen: u64,
     host: LuauHost,
     pub source: Source,
     override_path: PathBuf,
@@ -215,12 +221,6 @@ pub struct ScreenState {
     pub stale: bool,
     /// `loads` when the core last checked the override (shell.rs).
     pub checked: u32,
-    /// The source that loaded last (its file name, its text) and the theme's
-    /// generation it was loaded under: Luau resolves a `theme.color.x` read
-    /// once, when the chunk loads, so a theme switch loads it again (its
-    /// state kept) before it renders.
-    loaded: Option<(String, String)>,
-    theme_gen: u64,
 }
 
 impl ScreenState {
@@ -229,6 +229,8 @@ impl ScreenState {
         let override_path = dir.join(format!("{name}.luau"));
         let mut v = Self {
             name: name.to_string(),
+            loaded: None,
+            theme_gen: theme::generation(),
             host: LuauHost::new(Limits::default()).expect("Luau VM"),
             source: Source::Builtin,
             override_path,
@@ -242,8 +244,6 @@ impl ScreenState {
             override_hash: None,
             stale: false,
             checked: 0,
-            loaded: None,
-            theme_gen: theme::generation(),
         };
         v.seen = std::fs::metadata(&v.override_path).and_then(|m| m.modified()).ok();
         let (src, text) = read_source(name, &v.override_path);
@@ -354,16 +354,6 @@ impl ScreenState {
     }
 
     fn redraw(&mut self) {
-        // The theme changed since the chunk loaded: load it again first.
-        if self.theme_gen != theme::generation() {
-            self.theme_gen = theme::generation();
-            self.host.sync_theme();
-            if let Some((file, text)) = &self.loaded {
-                if let Err(e) = self.host.load(file, text) {
-                    log::warn!("screen {}: {e}", self.name);
-                }
-            }
-        }
         let with_zone;
         let data = match &self.ui.zones.active {
             Some(z) => {
@@ -374,6 +364,16 @@ impl ScreenState {
             }
             None => &self.data,
         };
+        // The theme changed since the chunk loaded: load it again first.
+        if self.theme_gen != theme::generation() {
+            self.theme_gen = theme::generation();
+            self.host.sync_theme();
+            if let Some((file, text)) = &self.loaded {
+                if let Err(e) = self.host.load(file, text) {
+                    log::warn!("screen {}: {e}", self.name);
+                }
+            }
+        }
         match self.host.render(data) {
             Ok(n) => {
                 sync_ui(&mut self.ui, &n);
