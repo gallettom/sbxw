@@ -325,20 +325,14 @@ pub struct Pill {
     pub line: u32,
 }
 
-/// The tone's base colour, for a dark or a light background.
+/// The tone's base colour, for a dark or a light background: its token in
+/// the dark palette, or in the light one (the darker members of each hue),
+/// whichever theme is active: the ground decides, so a light terminal in
+/// the dark app (a `terminal_color` setting) still gets the light ones.
 fn base(tone: Tone, light: bool) -> u32 {
-    let name = tone.token();
-    match (light, tone) {
-        // Darker members of each hue on a light ground (GitHub light).
-        (true, Tone::Green) => 0x1a7f37,
-        (true, Tone::Red) => 0xcf222e,
-        (true, Tone::Amber) => 0x9a6700,
-        (true, Tone::Blue) => 0x0969da,
-        (true, Tone::Purple) => 0x8250df,
-        (true, Tone::Cyan) => 0x1b7c83,
-        (true, Tone::Danger) => 0xcf222e,
-        _ => crate::theme::color_value(name).unwrap_or(0x58a6ff),
-    }
+    use crate::theme::{color_in, Mode};
+    let m = if light { Mode::Light } else { Mode::Dark };
+    color_in(m, tone.token()).or_else(|| color_in(m, "blue")).unwrap_or_default()
 }
 
 /// How much of the tone a tinted pill takes over the background under it
@@ -361,7 +355,7 @@ pub const NEED: f64 = 4.5;
 /// `c` moved toward black or white (whichever is further from `bg`) until it
 /// reaches `need` against `bg`.
 fn readable(c: u32, bg: u32, need: f64) -> u32 {
-    let to = if crate::theme::luminance(bg) > 0.18 { 0x000000 } else { 0xffffff };
+    let to = if crate::theme::luminance(bg) > 0.18 { crate::theme::BLACK } else { crate::theme::WHITE };
     let mut t = 0.0;
     let mut v = c;
     while contrast(v, bg) < need && t < 1.0 {
@@ -388,11 +382,12 @@ pub fn palette_with(tone: Tone, ground: u32, text: u32, tint: f32, word_mix: f32
         // The fill darkened until white reads on it.
         let mut bg = b;
         let mut t = 0.0;
-        while contrast(0xffffff, bg) < NEED && t < 1.0 {
+        let white = crate::theme::WHITE;
+        while contrast(white, bg) < NEED && t < 1.0 {
             t += 0.05;
-            bg = crate::terminal::theme::mix(b, 0x000000, t);
+            bg = crate::terminal::theme::mix(b, crate::theme::BLACK, t);
         }
-        return Pill { bg, strong: 0xffffff, detail: 0xffffff, line: 0 };
+        return Pill { bg, strong: white, detail: white, line: 0 };
     }
     let bg = over(b, tint, ground);
     let word = crate::terminal::theme::mix(text, b, word_mix);

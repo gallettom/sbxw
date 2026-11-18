@@ -1107,7 +1107,7 @@ impl App {
             .radius(radius("lg").unwrap())
             .fill(c("surface"))
             .border(1.0, c("border"))
-            .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
+            .shadow(8.0, 24.0, crate::theme::shadow())
             // A press inside stays inside (it does not reach the scrim).
             .on_press(|_s: &mut App| {})
             .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| {

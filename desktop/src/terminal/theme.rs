@@ -26,6 +26,45 @@ pub const XTERM_PALETTE: [u32; 16] = [
 
 /// The web UI's built-in terminal background (`--c-bg`, "Midnight").
 pub const WEB_BACKGROUND: u32 = 0x0d1117;
+/// Its text (`--c-text`).
+pub const WEB_FOREGROUND: u32 = 0xc9d1d9;
+
+/// The light theme's ANSI colours, tuned for its warm white ground
+/// ([`LIGHT_BACKGROUND`]): the normal eight at 4.5:1 or more there (white
+/// and yellow darkened, as every light terminal theme must), the bright
+/// eight at 3:1 or more (bright white a mid taupe, bright yellow an ochre).
+/// Tested in `light_ansi_reads_on_its_ground`.
+pub const LIGHT_PALETTE: [u32; 16] = [
+    0x3a332c, 0xb3261e, 0x2a6e35, 0x7f5a00, 0x2b5ea9, 0x873c8c, 0x17707a, 0x6b6258, //
+    0x7d7368, 0xcc3b2f, 0x3b873f, 0x977000, 0x3f72c2, 0xa04ca6, 0x1d8790, 0x887d70,
+];
+
+/// The light terminal's ground: the app's lightest surface (`bg` in the
+/// light palette), so text has the most contrast; its text one step
+/// darker than the app's body text.
+pub const LIGHT_BACKGROUND: u32 = 0xfdfcfa;
+pub const LIGHT_FOREGROUND: u32 = 0x2b251f;
+
+/// The terminal in the light theme: the light palette's ground and text,
+/// the accent as the cursor, the selection the light blue at 25% (visible
+/// on the white, never the accent: a selection is not an action).
+pub const LIGHT: Theme = Theme {
+    background: LIGHT_BACKGROUND,
+    foreground: LIGHT_FOREGROUND,
+    cursor: 0xa84a16,
+    selection: 0x2b5ea9,
+    selection_alpha: 0.25,
+    palette: LIGHT_PALETTE,
+};
+
+/// The terminal's theme for one of the app's themes (the dark one is the
+/// web UI's default, unchanged).
+pub fn for_mode(m: crate::theme::Mode) -> Theme {
+    match m {
+        crate::theme::Mode::Dark => Theme::default(),
+        crate::theme::Mode::Light => LIGHT,
+    }
+}
 
 impl Default for Theme {
     fn default() -> Self {
@@ -116,6 +155,46 @@ pub fn mix(a: u32, b: u32, t: f32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every ANSI colour of the light theme reads on its ground: the normal
+    /// eight as text (4.5:1), the bright eight at 3:1; the text, the dim
+    /// text, the cursor and the selection too. Prints the swatch table.
+    #[test]
+    fn light_ansi_reads_on_its_ground() {
+        use crate::theme::contrast;
+        let t = LIGHT;
+        let mut bad = vec![];
+        println!("| ANSI | Colour | On #{:06x} | Needs |\n|---|---|---|---|", t.background);
+        for (i, c) in t.palette.iter().enumerate() {
+            let need = if i < 8 { 4.5 } else { 3.0 };
+            let r = contrast(*c, t.background);
+            println!("| {i} | #{c:06x} | {r:.2} | {need} |");
+            if r < need {
+                bad.push(format!("ANSI {i} #{c:06x}: {r:.2} < {need}"));
+            }
+        }
+        for (what, c, need) in [("text", t.foreground, 4.5), ("dim text", t.dim(t.foreground), 3.0), ("cursor", t.cursor, 3.0)] {
+            let r = contrast(c, t.background);
+            println!("| {what} | #{c:06x} | {r:.2} | {need} |");
+            if r < need {
+                bad.push(format!("{what}: {r:.2}"));
+            }
+        }
+        // The selection is seen (a tint 1.2:1 from the ground) and the text
+        // under it still reads.
+        let sel = crate::theme::over(t.selection, t.selection_alpha, t.background);
+        assert!(contrast(sel, t.background) >= 1.2, "selection {:.2}", contrast(sel, t.background));
+        assert!(contrast(t.foreground, sel) >= 4.5);
+        for c in &t.palette[..8] {
+            if contrast(*c, sel) < 3.0 {
+                bad.push(format!("#{c:06x} under the selection: {:.2}", contrast(*c, sel)));
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+        // The light ground is the app's lightest surface.
+        assert_eq!(crate::theme::color_in(crate::theme::Mode::Light, "bg"), Some(LIGHT_BACKGROUND));
+        assert!(is_light(LIGHT_BACKGROUND));
+    }
 
     #[test]
     fn web_defaults() {

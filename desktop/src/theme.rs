@@ -13,8 +13,9 @@
 
 use rune::Color;
 
-/// `(name, 0xRRGGBB)`, in `app.css` order.
-pub const COLORS: &[(&str, u32)] = &[
+/// The dark palette: `(name, 0xRRGGBB)`, in `app.css` order. The app's
+/// first theme, the web UI's values; unchanged by the light theme.
+pub const DARK: &[(&str, u32)] = &[
     ("bg", 0x0d1117),          // page canvas, wells, inputs
     ("surface", 0x161b22),     // header, sidebar, modals, popovers
     ("surface-alt", 0x12171e), // cards inside a surface
@@ -60,7 +61,10 @@ pub const COLORS: &[(&str, u32)] = &[
     // selects, checkboxes), 3:1 on every surface as WCAG 1.4.11 asks.
     ("focus", 0x58a6ff),
     ("control-border", 0x6e7681),
-    // The primary button hovered: lighter than green-deep, white still 4.5:1.
+    // The one filled primary button of a view: its fill, its label, hovered
+    // (lighter than the fill, the label still 4.5:1).
+    ("primary", 0x238636),
+    ("on-primary", 0xffffff),
     ("primary-hover", 0x2a7f3a),
     // Red as words on a group's tint (the list's "unreachable", a menu's
     // destructive label): `red` falls under 4.5:1 on the lighter tints.
@@ -82,7 +86,220 @@ pub const COLORS: &[(&str, u32)] = &[
     // and text are derived from the ground it sits on (`emphasis::palette`).
     ("cyan", 0x39c5cf),
     ("pill-danger", 0xb62324),
+    // The interaction accent: links, the current tab's mark. In the dark
+    // theme it is the blue the app always had; in the light theme the orange
+    // (THEME.md).
+    ("accent", 0x58a6ff),
+    ("accent-tint", 0x0d1f3c),
+    ("link", 0x58a6ff),
+    // A neutral page tab that is the current one, over the pager's floor.
+    ("tab-current", 0x21262d),
+    // What dims the window under a dialog ([`SCRIM_ALPHA`]), the shadow under
+    // menus, popovers and dialogs ([`SHADOW_ALPHA`]), and the ground behind
+    // a picture or a remote screen (black in both themes).
+    ("scrim", 0x080b0f),
+    ("shadow", 0x000000),
+    ("media", 0x000000),
 ];
+
+/// The light palette: the same names, warm taupe greys and an orange accent
+/// (THEME.md has each value with its contrast). Surfaces step from the floor
+/// (darkest, behind everything) up to `bg` (the lightest: wells, inputs and
+/// the terminal, where text has the most contrast); text steps the other way.
+pub const LIGHT: &[(&str, u32)] = &[
+    ("bg", 0xfdfcfa),
+    ("surface", 0xf7f4ef),
+    ("surface-alt", 0xf2eee8),
+    ("elevated", 0xebe6de),
+    ("border", 0xd9d1c5),
+    ("dim", 0xbcb2a4),
+    ("text", 0x3a332c),
+    ("text-bright", 0x1f1a15),
+    ("text-muted", 0x5c5349),
+    ("text-soft", 0x5c5349),
+    ("text-dim", 0x6b6258),
+    ("blue", 0x2b5ea9),
+    ("blue-tint", 0xe4ebf5),
+    ("green", 0x2a6e35),
+    ("green-strong", 0x2f7a3b),
+    ("green-deep", 0x23652d),
+    ("green-tint", 0xe3eee0),
+    ("red", 0xb02c26),
+    ("red-border", 0xecc8c2),
+    ("red-tint", 0xf7e2de),
+    ("amber", 0x7f5a00),
+    ("amber-strong", 0x6b4b00),
+    ("amber-tint", 0xf6eac2),
+    ("purple", 0x6a42ad),
+    ("purple-strong", 0x6a3fc0),
+    ("purple-alt", 0x7347bd),
+    ("purple-tint", 0xece5f6),
+    ("group-1", 0xa8336f),
+    ("group-2", 0x16717a),
+    ("group-3", 0x76602f),
+    ("group-4", 0x7347bd),
+    ("hover-subtle", 0xf0ece6),
+    ("active-bg", 0xe5dfd5),
+    ("white", 0xffffff),
+    ("floor", 0xe7e1d8),
+    ("pane-bar", 0xf7f4ef),
+    ("focus", 0xa84a16),
+    ("control-border", 0x8a8073),
+    ("primary", 0xa84a16),
+    ("on-primary", 0xffffff),
+    ("primary-hover", 0x8f3d10),
+    ("red-text", 0xa3261f),
+    ("status-bar", 0xe7e1d8),
+    ("status-line", 0xd9d1c5),
+    ("vendor-anthropic", 0x763a30),
+    ("vendor-openai", 0x1f1a15),
+    ("vendor-google", 0x4a52b0),
+    ("cyan", 0x17707a),
+    ("pill-danger", 0xb02c26),
+    ("accent", 0xa84a16),
+    ("accent-tint", 0xf6e2d5),
+    ("link", 0xa04512),
+    ("tab-current", 0xfdfcfa),
+    ("scrim", 0x2a231c),
+    ("shadow", 0x3a2e22),
+    ("media", 0x000000),
+];
+
+/// Pure white and black: the ends that "move toward white or black" math
+/// aims at (a pill's text, a lifted icon), not a theme's colour.
+pub const WHITE: u32 = 0xffffff;
+pub const BLACK: u32 = 0x000000;
+
+/// The dark palette under its old name (`app.css` order).
+pub const COLORS: &[(&str, u32)] = DARK;
+
+/// Which palette is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Mode {
+    Dark,
+    Light,
+}
+
+impl Mode {
+    pub fn palette(self) -> &'static [(&'static str, u32)] {
+        match self {
+            Mode::Dark => DARK,
+            Mode::Light => LIGHT,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Dark => "dark",
+            Mode::Light => "light",
+        }
+    }
+    pub fn is_light(self) -> bool {
+        self == Mode::Light
+    }
+}
+
+// The one place that says which palette is active: the shell sets it from
+// the person's choice (and the system's appearance, for "Match the
+// system") at the top of every frame and on the toggle; every token read
+// goes through it. Per thread: the UI is one thread, and tests that run
+// side by side each have their own.
+thread_local! {
+    static ACTIVE: std::cell::Cell<Mode> = const { std::cell::Cell::new(Mode::Dark) };
+    /// Bumped on every change of the active palette, so what caches a
+    /// colour (a screen's `theme` table) can tell it is stale.
+    static GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The active palette.
+pub fn mode() -> Mode {
+    ACTIVE.with(|a| a.get())
+}
+
+/// Makes `m` the active palette; true when it changed.
+pub fn set_mode(m: Mode) -> bool {
+    let was = ACTIVE.with(|a| a.replace(m));
+    if was != m {
+        GENERATION.with(|g| g.set(g.get() + 1));
+    }
+    was != m
+}
+
+/// Counts the changes of the active palette.
+pub fn generation() -> u64 {
+    GENERATION.with(|g| g.get())
+}
+
+/// `f` with `m` as the active palette, then the one before again.
+pub fn with_mode<R>(m: Mode, f: impl FnOnce() -> R) -> R {
+    struct Back(Mode);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            set_mode(self.0);
+        }
+    }
+    let _back = Back(mode());
+    set_mode(m);
+    f()
+}
+
+/// The person's choice, as the state file keeps it (`theme`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Choice {
+    Dark,
+    Light,
+    /// The system's appearance (Rune's `Cx::system_dark`).
+    System,
+}
+
+impl Choice {
+    pub fn parse(s: &str) -> Option<Choice> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "dark" => Some(Choice::Dark),
+            "light" => Some(Choice::Light),
+            "system" | "auto" => Some(Choice::System),
+            _ => None,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Choice::Dark => "dark",
+            Choice::Light => "light",
+            Choice::System => "system",
+        }
+    }
+    /// The palette this choice draws when the system is (or is not) dark.
+    pub fn resolve(self, system_dark: bool) -> Mode {
+        match self {
+            Choice::Dark => Mode::Dark,
+            Choice::Light => Mode::Light,
+            Choice::System if system_dark => Mode::Dark,
+            Choice::System => Mode::Light,
+        }
+    }
+}
+
+/// A new install's choice: follow the system (Rune reports its appearance
+/// on every platform it runs on; headless runs report dark unless
+/// `--theme light`).
+pub const DEFAULT_CHOICE: Choice = Choice::System;
+
+/// How opaque the scrim under a dialog is, and the shadow under menus and
+/// dialogs, in the active theme: a light theme dims less (a warm dark veil
+/// at 0.32 keeps the window behind recognisable) and casts a softer shadow.
+pub fn scrim_alpha() -> f32 {
+    if mode().is_light() { 0.32 } else { 0.6 }
+}
+pub fn shadow_alpha() -> f32 {
+    if mode().is_light() { 0.16 } else { 0x73 as f32 / 255.0 }
+}
+/// The scrim's colour with its opacity.
+pub fn scrim() -> Color {
+    c("scrim").alpha(scrim_alpha())
+}
+/// The shadow's colour with its opacity.
+pub fn shadow() -> Color {
+    c("shadow").alpha(shadow_alpha())
+}
 
 /// Tokens whose desktop value differs from app.css, with app.css's value:
 /// each failed WCAG AA on a surface the desktop draws it on.
@@ -161,8 +378,14 @@ pub fn c(name: &str) -> Color {
     hex(color_value(name).unwrap_or_else(|| panic!("no colour token {name}")))
 }
 
+/// A token's value in the active palette.
 pub fn color_value(name: &str) -> Option<u32> {
-    COLORS.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
+    color_in(mode(), name)
+}
+
+/// A token's value in `m`'s palette.
+pub fn color_in(m: Mode, name: &str) -> Option<u32> {
+    m.palette().iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
 }
 
 /// A colour prop: a token name or `#rrggbb`.
@@ -194,9 +417,10 @@ pub fn space(s: &str) -> Result<f32, String> {
 
 /// The table screens see as `theme`.
 pub fn to_json() -> serde_json::Value {
-    let colors: serde_json::Map<_, _> = COLORS.iter().map(|(n, v)| (n.to_string(), format!("#{v:06x}").into())).collect();
+    let colors: serde_json::Map<_, _> = mode().palette().iter().map(|(n, v)| (n.to_string(), format!("#{v:06x}").into())).collect();
     let nums = |t: &[(&str, f32)]| -> serde_json::Map<String, serde_json::Value> { t.iter().map(|(n, v)| (n.to_string(), (*v as f64).into())).collect() };
     serde_json::json!({
+        "mode": mode().name(),
         "color": colors,
         "radius": nums(RADII),
         "text": nums(TEXT_SIZES),
@@ -242,19 +466,99 @@ pub fn prose(size: f32, weight: f32) -> rune::TextStyle {
 /// `groupColorOf`): chats share one hue, a workspace folder gets
 /// `hsl(hash % 360, 55%, 62%)` from its path, a sandbox with neither none.
 pub fn group_color(workspace: Option<&str>, chat: bool) -> Option<u32> {
+    let g = group_look();
     if chat {
-        return Some(hsl(265.0, 0.60, 0.68));
+        return Some(hsl(265.0, g.chat.0, g.chat.1));
     }
     let ws = workspace.filter(|w| !w.is_empty())?;
     // JavaScript's `(hash * 31 + charCode) >>> 0` over UTF-16 code units.
     let hash = ws.encode_utf16().fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(c as u32));
-    Some(hsl((hash % 360) as f32, 0.55, 0.62))
+    Some(hsl((hash % 360) as f32, g.saturation, g.lightness[0]))
 }
 
 /// Two groups' hues closer than this (degrees) read as the same block.
 pub const GROUP_MIN_HUE: f32 = 40.0;
-/// Lightness as the second cue when the wheel has no free hue left.
+/// Lightness as the second cue when the wheel has no free hue left (the
+/// dark theme's; [`group_look`] has the active theme's).
 pub const GROUP_LIGHTNESS: &[f32] = &[0.62, 0.72, 0.80];
+
+/// How a theme draws a group's colour: the web UI's hue at this saturation
+/// and lightness (then the lighter or darker steps when the wheel is full),
+/// the chats' purple, and its tints (the list's block, the pane bar, the
+/// page tabs). The hue rule ([`GROUP_MIN_HUE`]) is the same in both themes;
+/// on light the colour is deeper (a mark at 3:1 on a light surface) and its
+/// tints are pastels of it.
+#[derive(Clone, Copy, Debug)]
+pub struct GroupLook {
+    pub saturation: f32,
+    pub lightness: &'static [f32],
+    /// The chats' (saturation, lightness), at hue 265.
+    pub chat: (f32, f32),
+    /// The list's block, and its header hovered.
+    pub tint: f32,
+    pub tint_hover: f32,
+    /// The group's label: its colour moved this far toward white (dark) or
+    /// `text-bright`, the darkest text (light).
+    pub label: f32,
+    /// A pane bar, focused and not.
+    pub bar: f32,
+    pub bar_unfocused: f32,
+    /// A page tab, current and not.
+    pub tab_current: f32,
+    pub tab: f32,
+}
+
+pub const GROUP_DARK: GroupLook = GroupLook {
+    saturation: 0.55,
+    lightness: GROUP_LIGHTNESS,
+    chat: (0.60, 0.68),
+    tint: GROUP_TINT,
+    tint_hover: GROUP_TINT_HOVER,
+    label: GROUP_LABEL_LIGHT,
+    bar: BAR_TINT,
+    bar_unfocused: BAR_TINT_UNFOCUSED,
+    tab_current: TAB_TINT_CURRENT,
+    tab: TAB_TINT,
+};
+
+/// On light: the hue at 50% saturation, 35% lightness (then 28, 22), so the
+/// square and the accent line mark at 3:1 on the surfaces; the block a 10%
+/// pastel of it, the pane bar 16% (unfocused 12%), the current tab 16%
+/// (others 8%): the same steps as dark, a little lower, since a hue shows
+/// more on a light ground.
+pub const GROUP_LIGHT: GroupLook = GroupLook {
+    saturation: 0.50,
+    lightness: &[0.35, 0.28, 0.22],
+    chat: (0.45, 0.48),
+    tint: 0.10,
+    tint_hover: 0.16,
+    label: 0.45,
+    bar: 0.16,
+    bar_unfocused: 0.12,
+    tab_current: 0.16,
+    tab: 0.08,
+};
+
+/// The active theme's [`GroupLook`].
+pub fn group_look() -> GroupLook {
+    look_of(mode())
+}
+pub fn look_of(m: Mode) -> GroupLook {
+    match m {
+        Mode::Dark => GROUP_DARK,
+        Mode::Light => GROUP_LIGHT,
+    }
+}
+
+/// A group's tints as the list draws them: its block, the header hovered,
+/// and the label's colour (sandboxes.luau reads these as `app.group_look`).
+pub fn group_tints(g: u32) -> (u32, u32, u32) {
+    let look = group_look();
+    let surface = color_value("surface").unwrap();
+    // Toward white on dark (as the web UI), toward the darkest text on light.
+    let to = if mode().is_light() { color_value("text-bright").unwrap() } else { WHITE };
+    (over(g, look.tint, surface), over(g, look.tint_hover, surface), over(to, look.label, g))
+}
 
 fn hue_dist(a: f32, b: f32) -> f32 {
     let d = (a - b).rem_euclid(360.0);
@@ -275,12 +579,13 @@ pub fn group_colors<'a>(sandboxes: impl IntoIterator<Item = (&'a str, Option<&'a
     let mut keys: Vec<String> = list.iter().filter_map(|(_, ws, chat)| if *chat { Some(String::new()) } else { ws.filter(|w| !w.is_empty()).map(str::to_string) }).collect();
     keys.sort();
     keys.dedup();
+    let look = group_look();
     let base = |k: &str| -> (f32, f32, f32) {
         if k.is_empty() {
-            (265.0, 0.60, 0.68)
+            (265.0, look.chat.0, look.chat.1)
         } else {
             let hash = k.encode_utf16().fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(c as u32));
-            ((hash % 360) as f32, 0.55, 0.62)
+            ((hash % 360) as f32, look.saturation, look.lightness[0])
         }
     };
     let mut taken: Vec<(f32, usize)> = vec![];
@@ -297,12 +602,12 @@ pub fn group_colors<'a>(sandboxes: impl IntoIterator<Item = (&'a str, Option<&'a
                     let m = |h: f32| taken.iter().map(|(t, _)| hue_dist(h, *t)).fold(f32::MAX, f32::min);
                     m(*a).total_cmp(&m(*b))
                 }).unwrap_or(h0);
-                let level = 1 + taken.iter().filter(|(t, _)| hue_dist(h, *t) < GROUP_MIN_HUE).count() % (GROUP_LIGHTNESS.len() - 1);
+                let level = 1 + taken.iter().filter(|(t, _)| hue_dist(h, *t) < GROUP_MIN_HUE).count() % (look.lightness.len() - 1);
                 (h, level)
             }
         };
         taken.push((h, level));
-        let l = if level == 0 { l0 } else { GROUP_LIGHTNESS[level] };
+        let l = if level == 0 { l0 } else { look.lightness[level] };
         by_key.insert(k.clone(), hsl(h, s, l));
     }
     list.iter()
@@ -360,8 +665,9 @@ pub const BAR_TINT_UNFOCUSED: f32 = 0.16;
 /// or that surface for an ungrouped sandbox. The page tabs use the same.
 pub fn bar_ground(group: Option<u32>, focused: bool) -> u32 {
     let surface = color_value(if focused { "surface" } else { "surface-alt" }).unwrap();
+    let look = group_look();
     match group {
-        Some(g) => over(g, if focused { BAR_TINT } else { BAR_TINT_UNFOCUSED }, surface),
+        Some(g) => over(g, if focused { look.bar } else { look.bar_unfocused }, surface),
         None => surface,
     }
 }
@@ -375,9 +681,10 @@ pub const TAB_TINT: f32 = 0.14;
 /// current one elevated, the others the floor).
 pub fn tab_ground(group: Option<u32>, current: bool) -> u32 {
     let floor = color_value("floor").unwrap();
+    let look = group_look();
     match group {
-        Some(g) => over(g, if current { TAB_TINT_CURRENT } else { TAB_TINT }, floor),
-        None if current => color_value("elevated").unwrap(),
+        Some(g) => over(g, if current { look.tab_current } else { look.tab }, floor),
+        None if current => color_value("tab-current").unwrap(),
         None => floor,
     }
 }
@@ -390,10 +697,12 @@ pub fn muted_on(ground: u32) -> u32 {
     (0..=10).map(|k| over(b, k as f32 / 10.0, m)).find(|c| contrast(*c, ground) >= Need::Text.min()).unwrap_or(b)
 }
 
-/// A tone's icon on a tinted ground: the tone, lightened toward white until
-/// it marks at 3:1 there (red on the lightest yellow tint needs it).
+/// A tone's icon on a tinted ground: the tone, moved toward `text-bright`
+/// (white on dark, the darkest text on light) until it marks at 3:1 there
+/// (red on the lightest yellow tint needs it).
 pub fn mark_on(fg: u32, ground: u32) -> u32 {
-    (0..=10).map(|k| over(0xffffff, k as f32 / 20.0, fg)).find(|c| contrast(*c, ground) >= Need::Mark.min()).unwrap_or(0xffffff)
+    let to = if luminance(ground) > 0.18 { color_value("text-bright").unwrap() } else { 0xffffff };
+    (0..=10).map(|k| over(to, k as f32 / 20.0, fg)).find(|c| contrast(*c, ground) >= Need::Mark.min()).unwrap_or(to)
 }
 
 /// `a` drawn at `alpha` over `b`.
@@ -497,8 +806,30 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("bg", "blue", Need::Text),
     ("bg", "amber", Need::Text),
     // The primary button's label, at rest and hovered.
-    ("white", "green-deep", Need::Text),
-    ("white", "primary-hover", Need::Text),
+    ("on-primary", "primary", Need::Text),
+    ("on-primary", "primary-hover", Need::Text),
+    // The accent: the focused pane's border, the focus ring, the current
+    // tab; links as text on every surface they sit on.
+    ("accent", "bg", Need::Mark),
+    ("accent", "surface", Need::Mark),
+    ("accent", "floor", Need::Mark),
+    ("accent", "elevated", Need::Mark),
+    ("primary", "surface", Need::Mark),
+    ("link", "bg", Need::Text),
+    ("link", "surface", Need::Text),
+    ("link", "elevated", Need::Text),
+    ("text-bright", "accent-tint", Need::Text),
+    ("text", "tab-current", Need::Text),
+    ("text-muted", "tab-current", Need::Text),
+    // Who makes a model: the vendor words on the sidebar's surfaces.
+    ("vendor-anthropic", "surface", Need::Text),
+    ("vendor-anthropic", "active-bg", Need::Text),
+    ("vendor-openai", "surface", Need::Text),
+    ("vendor-google", "surface", Need::Text),
+    ("vendor-google", "active-bg", Need::Text),
+    // Keyword pill kinds and the filled danger pill.
+    ("cyan", "surface", Need::Text),
+    ("white", "pill-danger", Need::Text),
     // Marks: rails, dots, icons, focus rings, control edges.
     ("green", "surface", Need::Mark),
     ("blue", "surface", Need::Mark),
@@ -542,6 +873,24 @@ pub fn pair_contrast(fg: &str, bg: &str, need: Need) -> f64 {
     contrast(f, b)
 }
 
+/// `0xRRGGBB` as (hue in degrees, saturation, lightness), CSS's HSL.
+pub fn to_hsl(c: u32) -> (f32, f32, f32) {
+    let (r, g, b) = (((c >> 16) & 255) as f32 / 255.0, ((c >> 8) & 255) as f32 / 255.0, (c & 255) as f32 / 255.0);
+    let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+    let (d, l) = (mx - mn, (mx + mn) / 2.0);
+    if d == 0.0 {
+        return (0.0, 0.0, l);
+    }
+    let s = d / (1.0 - (2.0 * l - 1.0).abs());
+    let h = if mx == r { 60.0 * ((g - b) / d).rem_euclid(6.0) } else if mx == g { 60.0 * ((b - r) / d + 2.0) } else { 60.0 * ((r - g) / d + 4.0) };
+    (h, s, l)
+}
+
+/// The accent, amber and the vendor terracotta: at least this far apart in
+/// hue (degrees) and in lightness (HSL points), pairwise, in each theme.
+pub const ORANGE_MIN_HUE: f32 = 12.0;
+pub const ORANGE_MIN_LIGHT: f32 = 4.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,6 +900,10 @@ mod tests {
     /// whose app.css values are checked so a change there is seen).
     #[test]
     fn colours_match_app_css() {
+        with_mode(Mode::Dark, colours_match_app_css_dark);
+    }
+
+    fn colours_match_app_css_dark() {
         let css = include_str!("../../assets/app.css");
         let root = &css[css.find(":root {").unwrap()..];
         let root = &root[..root.find("\n  }").unwrap()];
@@ -584,13 +937,17 @@ mod tests {
     #[test]
     fn contrast_of_every_pair_used() {
         let mut bad = vec![];
-        println!("| Foreground | Background | Kind | Ratio | Needs |\n|---|---|---|---|---|");
-        for &(fg, bg, need) in PAIRS {
-            let r = pair_contrast(fg, bg, need);
-            println!("| `{fg}` | `{bg}` | {need:?} | {r:.2} | {} |", need.min());
-            if r < need.min() {
-                bad.push(format!("{fg} on {bg} ({need:?}): {r:.2} < {}", need.min()));
-            }
+        for m in MODES {
+            with_mode(m, || {
+                println!("\n{m:?}\n\n| Foreground | Background | Kind | Ratio | Needs |\n|---|---|---|---|---|");
+                for &(fg, bg, need) in PAIRS {
+                    let r = pair_contrast(fg, bg, need);
+                    println!("| `{fg}` | `{bg}` | {need:?} | {r:.2} | {} |", need.min());
+                    if r < need.min() {
+                        bad.push(format!("{m:?}: {fg} on {bg} ({need:?}): {r:.2} < {}", need.min()));
+                    }
+                }
+            });
         }
         assert!(bad.is_empty(), "{bad:#?}");
         // The ratio itself, against WCAG's own examples.
@@ -628,6 +985,24 @@ mod tests {
 
     #[test]
     fn group_colours_match_the_web_ui() {
+        with_mode(Mode::Dark, group_colours_match_the_web_ui_dark);
+        // On light: every hue the hash can give, at every step, marks at 3:1
+        // on the surfaces it is drawn on.
+        with_mode(Mode::Light, || {
+            let look = group_look();
+            for &l in look.lightness {
+                for h in 0..360 {
+                    for ground in ["surface", "surface-alt"] {
+                        let g = hsl(h as f32, look.saturation, l);
+                        assert!(contrast(g, color_value(ground).unwrap()) >= 3.0, "hue {h} at {l} on {ground}");
+                    }
+                }
+            }
+            assert!(contrast(hsl(265.0, look.chat.0, look.chat.1), color_value("surface").unwrap()) >= 3.0);
+        });
+    }
+
+    fn group_colours_match_the_web_ui_dark() {
         // hsl(265, 60%, 68%) and hsl(120, 100%, 50%), as a browser computes them.
         assert_eq!(group_color(None, true), Some(0xa57cde));
         assert_eq!(hsl(120.0, 1.0, 0.5), 0x00ff00);
@@ -647,19 +1022,24 @@ mod tests {
     /// 3:1; on the header's hover tint too. Prints the worst of each.
     #[test]
     fn text_and_rails_read_on_every_group_tint() {
-        let surface = color_value("surface").unwrap();
+        for m in MODES {
+            with_mode(m, text_and_rails_read_on_every_group_tint_in);
+        }
+    }
+
+    fn text_and_rails_read_on_every_group_tint_in() {
+        let look = group_look();
+        println!("\n{:?}", mode());
         let mut worst: Vec<(String, f64, f64)> = vec![];
         let mut note = |what: &str, r: f64, need: f64| match worst.iter_mut().find(|w| w.0 == what) {
             Some(w) => w.1 = w.1.min(r),
             None => worst.push((what.to_string(), r, need)),
         };
         // Every hue at every lightness the distinct-colour rule can give.
-        let hues: Vec<u32> = GROUP_LIGHTNESS.iter().flat_map(|&l| (0..360).map(move |h| hsl(h as f32, 0.55, l))).chain([hsl(265.0, 0.60, 0.68)]).collect();
+        let hues: Vec<u32> = look.lightness.iter().flat_map(|&l| (0..360).map(move |h| hsl(h as f32, look.saturation, l))).chain([hsl(265.0, look.chat.0, look.chat.1)]).collect();
         for g in hues {
-            let tint = over(g, GROUP_TINT, surface);
-            let hover = over(g, GROUP_TINT_HOVER, surface);
-            let label = over(0xffffff, GROUP_LABEL_LIGHT, g);
-            for t in ["text-bright", "text", "text-muted", "amber", "blue", "red-text"] {
+            let (tint, hover, label) = group_tints(g);
+            for t in ["text-bright", "text", "text-muted", "amber", "blue", "red-text", "vendor-anthropic", "vendor-openai", "vendor-google"] {
                 note(&format!("`{t}` on a tint (text)"), contrast(color_value(t).unwrap(), tint), 4.5);
             }
             for m in ["green", "blue", "amber", "red", "text-muted"] {
@@ -718,6 +1098,11 @@ mod tests {
 
     #[test]
     fn colour_props() {
+        with_mode(Mode::Dark, colour_props_dark);
+        assert_eq!(with_mode(Mode::Light, || parse_color("text-muted")), Ok(color_in(Mode::Light, "text-muted").unwrap()));
+    }
+
+    fn colour_props_dark() {
         assert_eq!(parse_color("text-muted"), Ok(0x9198a1));
         assert_eq!(parse_color("#00ff00"), Ok(0x00ff00));
         assert!(parse_color("#0f0").is_err());
@@ -730,8 +1115,15 @@ mod tests {
     /// their tones and the focus border at 3:1.
     #[test]
     fn contrast_on_every_group_tint() {
-        let mut groups: Vec<u32> = GROUP_LIGHTNESS.iter().flat_map(|l| (0..36).map(move |h| hsl(h as f32 * 10.0, 0.55, *l))).collect();
-        groups.push(hsl(265.0, 0.60, 0.68));
+        for m in MODES {
+            with_mode(m, contrast_on_every_group_tint_in);
+        }
+    }
+
+    fn contrast_on_every_group_tint_in() {
+        let look = group_look();
+        let mut groups: Vec<u32> = look.lightness.iter().flat_map(|l| (0..36).map(move |h| hsl(h as f32 * 10.0, look.saturation, *l))).collect();
+        groups.push(hsl(265.0, look.chat.0, look.chat.1));
         let tones = ["blue", "purple", "red", "green", "amber"];
         let mut bad = vec![];
         for g in groups.iter().map(|g| Some(*g)).chain([None]) {
@@ -754,6 +1146,122 @@ mod tests {
                 }
             }
         }
-        assert!(bad.is_empty(), "{}", bad.join("\n"));
+        assert!(bad.is_empty(), "{:?}: {}", mode(), bad.join("\n"));
+    }
+
+    const MODES: [Mode; 2] = [Mode::Dark, Mode::Light];
+
+    /// Both palettes name the same tokens, in the same order, each once.
+    #[test]
+    fn every_token_is_in_both_palettes() {
+        fn names(p: &'static [(&'static str, u32)]) -> Vec<&'static str> {
+            p.iter().map(|(n, _)| *n).collect()
+        }
+        assert_eq!(names(DARK), names(LIGHT));
+        let mut seen = std::collections::HashSet::new();
+        for (n, _) in DARK {
+            assert!(seen.insert(*n), "{n} twice");
+        }
+        // The dark palette is today's: a few anchors of the web UI.
+        assert_eq!(color_in(Mode::Dark, "bg"), Some(0x0d1117));
+        assert_eq!(color_in(Mode::Dark, "focus"), Some(0x58a6ff));
+        assert_eq!(color_in(Mode::Dark, "primary"), color_in(Mode::Dark, "green-deep"));
+    }
+
+    /// The active palette is per process, a forced one per thread.
+    #[test]
+    fn the_active_palette_switches() {
+        assert_eq!(with_mode(Mode::Light, || c("bg")), hex(0xfdfcfa));
+        assert_eq!(with_mode(Mode::Dark, || c("bg")), hex(0x0d1117));
+        let nested = with_mode(Mode::Light, || with_mode(Mode::Dark, || mode()) == Mode::Dark && mode() == Mode::Light);
+        assert!(nested);
+        assert_eq!(Choice::parse("Light"), Some(Choice::Light));
+        assert_eq!(Choice::System.resolve(true), Mode::Dark);
+        assert_eq!(Choice::System.resolve(false), Mode::Light);
+        assert_eq!(with_mode(Mode::Light, || to_json()["mode"].clone()), "light");
+    }
+
+    /// The three oranges that meet on a sidebar row: the accent (the focus
+    /// ring, the primary button, links: interaction), amber (needs you: a
+    /// state) and Anthropic's terracotta (a vendor word). In each theme every
+    /// pair differs in hue by [`ORANGE_MIN_HUE`] degrees and in HSL
+    /// lightness by [`ORANGE_MIN_LIGHT`] points (the dark theme has no orange
+    /// accent: its accent is the blue, far from both).
+    #[test]
+    fn the_three_oranges_stay_apart() {
+        for m in MODES {
+            let three = [("accent", color_in(m, "focus").unwrap()), ("amber", color_in(m, "amber").unwrap()), ("vendor", color_in(m, "vendor-anthropic").unwrap())];
+            println!("{m:?}");
+            for (n, v) in three {
+                let (h, s, l) = to_hsl(v);
+                println!("  {n}: #{v:06x} hue {h:.0} sat {:.0} light {:.0}", s * 100.0, l * 100.0);
+            }
+            for i in 0..3 {
+                for j in i + 1..3 {
+                    let ((a, x), (b, y)) = (three[i], three[j]);
+                    let ((h1, _, l1), (h2, _, l2)) = (to_hsl(x), to_hsl(y));
+                    let dh = hue_dist(h1, h2);
+                    let dl = (l1 - l2).abs() * 100.0;
+                    assert!(dh >= ORANGE_MIN_HUE, "{m:?}: {a} and {b} {dh:.0} degrees apart");
+                    assert!(dl >= ORANGE_MIN_LIGHT, "{m:?}: {a} and {b} {dl:.1} points of lightness apart");
+                }
+            }
+        }
+    }
+
+    /// No colour is written outside this file: every literal `0xRRGGBB` or
+    /// `#rrggbb` in the app's Rust and Luau sources is a token here, except
+    /// in tests, fixtures and the few places listed (with why).
+    #[test]
+    fn no_literal_colour_outside_the_theme() {
+        // (file, what may stay): data that is not a colour, and the terminal
+        // module, whose ANSI palettes are its own tokens (terminal/theme.rs).
+        const ALLOWED: &[(&str, &str)] = &[
+            ("src/terminal/theme.rs", "the terminal's palettes: its own tokens, tested there"),
+            ("src/feat/threads/standin.rs", "a commit hash, not a colour"),
+            ("src/bin/term-demo.rs", "a test tool's banner"),
+        ];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = vec![];
+        let mut stack = vec![root.join("src"), root.join("screens")];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().is_some_and(|x| x == "rs" || x == "luau") {
+                    files.push(p);
+                }
+            }
+        }
+        let mut found = vec![];
+        for p in files {
+            let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            let name = p.file_name().unwrap().to_string_lossy();
+            if rel == "src/theme.rs" || name.ends_with("tests.rs") || name == "tests.rs" || ALLOWED.iter().any(|(f, _)| *f == rel) {
+                continue;
+            }
+            let src = std::fs::read_to_string(&p).unwrap();
+            // Unit tests at the end of a file are fixtures too.
+            let body = src.split("#[cfg(test)]").next().unwrap();
+            for (n, line) in body.lines().enumerate() {
+                let code = line.split("//").next().unwrap();
+                let code = if rel.ends_with(".luau") { line.split("--").next().unwrap() } else { code };
+                if literal_colour(code) {
+                    found.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(found.is_empty(), "literal colours outside theme.rs:\n{}", found.join("\n"));
+    }
+
+    /// `0xRRGGBB` or `#rrggbb` (`#rrggbbaa` too) in a line of code.
+    fn literal_colour(code: &str) -> bool {
+        let b = code.as_bytes();
+        let hex = |i: usize, n: usize| i + n <= b.len() && b[i..i + n].iter().all(u8::is_ascii_hexdigit) && (i + n == b.len() || !b[i + n].is_ascii_alphanumeric());
+        (0..b.len()).any(|i| {
+            let start = i == 0 || !b[i - 1].is_ascii_alphanumeric();
+            (start && b[i] == b'0' && b.get(i + 1) == Some(&b'x') && hex(i + 2, 6)) || (b[i] == b'#' && (hex(i + 1, 6) || hex(i + 1, 8)))
+        })
     }
 }

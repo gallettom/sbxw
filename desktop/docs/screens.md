@@ -601,6 +601,7 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `start_sandbox` | `sandbox` (required), `pane` | Starts a stopped sandbox by opening its agent, as the web UI's Connect does |
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
+| `set_theme` | `theme`: `dark`, `light` or `system` | The app's theme, remembered across launches; every surface switches at once (`data.app.theme` says which palette is drawn) |
 | `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | The old layout picker's: that many terminals per page, and the current page that many panes (empty ones added) in the old arrangement |
 | `page_show` | `page` (from 1, required) | Shows that page of terminals |
 | `page_step` | `back` (bool) | Shows the next page (`back`: the previous one), round |

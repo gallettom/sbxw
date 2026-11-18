@@ -489,7 +489,7 @@ pub fn menu_surface(key: String, anchor: String, align: rune::Align, w: f32) -> 
         .fill(c("surface"))
         .border(1.0, c("border"))
         .radius(theme::radius("md").unwrap())
-        .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap());
+        .shadow(8.0, 24.0, crate::theme::shadow());
     if reduced_motion() {
         e
     } else {
@@ -1325,7 +1325,7 @@ impl Build<'_> {
         }
         let variant = n.variant.as_deref().unwrap_or("neutral");
         let (fill, border, fg, hover) = match variant {
-            "primary" => ("green-deep", "green-deep", "white", "primary-hover"),
+            "primary" => ("primary", "primary", "on-primary", "primary-hover"),
             "danger" => ("elevated", "border", "red", "red-tint"),
             "ghost" => ("", "", "text-muted", "elevated"),
             _ => ("elevated", "border", "text", "border"),

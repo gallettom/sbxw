@@ -432,6 +432,9 @@ pub struct LuauHost {
     module: Option<RegistryKey>,
     /// The screen's state, kept across reloads.
     state: Option<RegistryKey>,
+    /// `theme::generation()` when the `theme` global was last filled: a
+    /// switch of theme refills its colours before the next render.
+    theme_gen: Cell<u64>,
 }
 
 struct Budget {
@@ -473,7 +476,7 @@ impl LuauHost {
             }
             Ok(VmState::Continue)
         });
-        Ok(Self { lua, limits, budget, module: None, state: None })
+        Ok(Self { lua, limits, budget, module: None, state: None, theme_gen: Cell::new(crate::theme::generation()) })
     }
 
     fn arm(&self) {
@@ -518,6 +521,7 @@ impl LuauHost {
 
     /// Render with the current module and state; `data` is what the core hands in.
     pub fn render(&self, data: &J) -> Result<Node, String> {
+        self.sync_theme();
         let (module, state) = self.parts()?;
         let tree: Value = self.guarded(|lua| {
             let render: Function = module.get("render")?;
@@ -526,6 +530,35 @@ impl LuauHost {
         })?;
         let mut count = 0;
         to_node(&tree, 0, &mut count, self.limits.nodes)
+    }
+
+    /// Refills the read-only `theme` table's colours and mode from the active
+    /// palette when it changed since the table was filled (the table stays
+    /// the same object, read-only to screens).
+    fn sync_theme(&self) {
+        let now = crate::theme::generation();
+        if self.theme_gen.replace(now) == now {
+            return;
+        }
+        let fresh = crate::theme::to_json();
+        let refill = || -> mlua::Result<()> {
+            let theme: Table = self.lua.globals().raw_get("theme")?;
+            let colors: Table = theme.raw_get("color")?;
+            theme.set_readonly(false);
+            colors.set_readonly(false);
+            if let Some(m) = fresh["color"].as_object() {
+                for (k, v) in m {
+                    colors.raw_set(k.as_str(), v.as_str().unwrap_or_default())?;
+                }
+            }
+            theme.raw_set("mode", fresh["mode"].as_str().unwrap_or_default())?;
+            colors.set_readonly(true);
+            theme.set_readonly(true);
+            Ok(())
+        };
+        if let Err(e) = refill() {
+            log::warn!("screen theme: {e}");
+        }
     }
 
     /// Run an action, `action(state, arg, value)`: `arg` is the element's `arg`

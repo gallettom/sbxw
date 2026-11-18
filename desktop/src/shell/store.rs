@@ -17,6 +17,8 @@
 //!   ask again for files I drop" in the core's upload dialog; only that box
 //!   sets it, Setup's "Ask before uploading dropped files" clears it
 //!   (`shell/features.rs`, "Files dropped on a pane").
+//! * `theme`: `"dark"`, `"light"` or `"system"`, the person's choice from
+//!   the status bar's theme control (`set_theme`); absent: match the system.
 
 use serde_json::{Map, Value as J};
 use std::path::PathBuf;

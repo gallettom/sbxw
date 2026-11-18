@@ -60,6 +60,9 @@ pub enum Intent {
     CopyText { text: String },
     /// Marks a sandbox as the selected one (the sidebar's highlight).
     Select { sandbox: Option<String> },
+    /// The app's theme: dark, light, or the system's appearance; kept in the
+    /// state file, applied at once (every surface, open terminals included).
+    SetTheme { theme: crate::theme::Choice },
     /// Pane count (1 to 4) and how two panes split.
     SetLayout { panes: usize, split: Split },
     /// Creates Jarvis's sandbox, or starts it, and opens its session.
@@ -230,6 +233,7 @@ pub const REGISTRY: &[Spec] = &[
         doc: "Empties the panes showing that sandbox's session (`thread`: that thread's; none: the sandbox's own), its terminals closed.",
     },
     Spec { name: "copy_text", risk: Risk::Direct, args: &[("text", Arg::Str, true)], doc: "Writes the text (up to 100 KB) to the person's clipboard, replacing what it held; only from the person's own press (never from typing, data or a feature), and a notice shows the size and the first characters, controls made visible. Screens can never read the clipboard." },
+    Spec { name: "set_theme", risk: Risk::Direct, args: &[("theme", Arg::OneOf(&["dark", "light", "system"]), true)], doc: "The app's theme: `dark`, `light`, or `system` (follow the system's appearance). Remembered across launches; every surface switches at once, open terminals included." },
     Spec { name: "select", risk: Risk::Direct, args: &[("sandbox", Arg::Str, false)], doc: "Marks a sandbox as selected (no `sandbox`: none)." },
     Spec {
         name: "set_layout",
@@ -296,6 +300,7 @@ impl Intent {
             Intent::StartSandbox { .. } => "start_sandbox",
             Intent::StopSandbox { .. } => "stop_sandbox",
             Intent::Select { .. } => "select",
+            Intent::SetTheme { .. } => "set_theme",
             Intent::SetLayout { .. } => "set_layout",
             Intent::ClosePanes { .. } => "close_panes",
             Intent::CopyText { .. } => "copy_text",
@@ -400,6 +405,7 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
         "start_sandbox" => Intent::StartSandbox { sandbox: s("sandbox").unwrap(), pane: pane() },
         "stop_sandbox" => Intent::StopSandbox { sandbox: s("sandbox").unwrap() },
         "select" => Intent::Select { sandbox: s("sandbox") },
+        "set_theme" => Intent::SetTheme { theme: s("theme").as_deref().and_then(crate::theme::Choice::parse).unwrap_or(crate::theme::DEFAULT_CHOICE) },
         "set_layout" => Intent::SetLayout {
             panes: m.get("panes").and_then(Value::as_u64).unwrap_or(1) as usize,
             split: if s("split").as_deref() == Some("rows") { Split::Rows } else { Split::Columns },

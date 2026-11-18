@@ -147,9 +147,9 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
             .px(12.0)
             .py(4.0).min_h(crate::theme::layout::CONTROL_H).items_center()
             .radius(radius("sm").unwrap())
-            .fill(c(if primary { "green-deep" } else { "elevated" }))
-            .border(1.0, c(if primary { "green-deep" } else { "border" }))
-            .child(text(label.to_string()).font(crate::screen::body(13.0, 500.0)).color(c(if primary { "white" } else { "text-bright" })));
+            .fill(c(if primary { "primary" } else { "elevated" }))
+            .border(1.0, c(if primary { "primary" } else { "border" }))
+            .child(text(label.to_string()).font(crate::screen::body(13.0, 500.0)).color(c(if primary { "on-primary" } else { "text-bright" })));
         if enabled {
             b.hover(c(if primary { "primary-hover" } else { "border" })).cursor(Cursor::Pointer)
         } else {
@@ -347,7 +347,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
         .radius(radius("lg").unwrap())
         .fill(c("surface"))
         .border(1.0, c(if high { "red-border" } else { "border" }))
-        .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
+        .shadow(8.0, 24.0, crate::theme::shadow())
         .child(head)
         .child(watch::<S>(col().key("jv-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 130.0).max(80.0)).child(body), "jv-body"))
         .children(more_below("jv-body"))
@@ -461,7 +461,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
     let button = |key: &str, label: &str, primary: bool, enabled: bool| {
         let (fill, edge, hover) = match (primary, danger) {
             (true, true) => ("red-tint", "red", "red-border"),
-            (true, false) => ("green-deep", "green-deep", "primary-hover"),
+            (true, false) => ("primary", "primary", "primary-hover"),
             _ => ("elevated", "border", "border"),
         };
         let b = rune::el()
@@ -474,7 +474,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
             .fill(c(fill))
             .border(1.0, c(edge))
             .min_w(0.0)
-            .child(text(label.to_string()).font(crate::screen::body(13.0, 500.0)).color(c(if primary && !danger { "white" } else { "text-bright" })).wrap_anywhere().min_w(0.0));
+            .child(text(label.to_string()).font(crate::screen::body(13.0, 500.0)).color(c(if primary && !danger { "on-primary" } else { "text-bright" })).wrap_anywhere().min_w(0.0));
         if enabled {
             b.hover(c(hover)).cursor(Cursor::Pointer)
         } else {
@@ -626,7 +626,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
         .radius(radius("lg").unwrap())
         .fill(c("surface"))
         .border(1.0, c(if danger { "red-border" } else { "border" }))
-        .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
+        .shadow(8.0, 24.0, crate::theme::shadow())
         .child(watch::<S>(col().key("cf-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 110.0).max(80.0)).child(body), "cf-body"))
         .children(more_below("cf-body"))
         .children(ack_row)
@@ -745,11 +745,11 @@ pub fn copy_offer_view<S: 'static>(o: &CopyOffer, copy: impl Fn(&mut S, &mut Tx)
             .min_h(crate::theme::layout::CONTROL_H)
             .items_center()
             .radius(radius("sm").unwrap())
-            .fill(c(if primary { "green-deep" } else { "elevated" }))
-            .border(1.0, c(if primary { "green-deep" } else { "border" }))
+            .fill(c(if primary { "primary" } else { "elevated" }))
+            .border(1.0, c(if primary { "primary" } else { "border" }))
             .hover(c(if primary { "primary-hover" } else { "border" }))
             .cursor(Cursor::Pointer)
-            .child(text(label.to_string()).font(crate::screen::body(13.0, 500.0)).color(c(if primary { "white" } else { "text-bright" })))
+            .child(text(label.to_string()).font(crate::screen::body(13.0, 500.0)).color(c(if primary { "on-primary" } else { "text-bright" })))
     };
     col()
         .key("copy-offer")

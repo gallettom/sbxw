@@ -647,16 +647,6 @@ local function sessions_block(sb, app, data, state, into, base_model)
   table.insert(into, column(block))
 end
 
--- `#rrggbb` drawn at `a` over `under` (the group tints).
-local function mix(fg, a, under)
-  local function ch(h, i) return tonumber(string.sub(h, i, i + 1), 16) end
-  local out = "#"
-  for _, i in ipairs({ 2, 4, 6 }) do
-    out = out .. string.format("%02x", math.floor(ch(fg, i) * a + ch(under, i) * (1 - a) + 0.5))
-  end
-  return out
-end
-
 local function matches(sb, filter)
   return filter == "" or string.find(string.lower(sb.name), string.lower(filter), 1, true) ~= nil
 end
@@ -702,16 +692,17 @@ return {
           if state_of(sb, data).tone == "amber" then waiting = waiting + 1 end
         end
         local gc = colors[g.color]
+        -- The block, its header hovered and the label, from the active theme
+        -- (theme.rs `group_tints`; the contrast test holds every hue).
+        local look = gc and (app.group_look or {})[gc] or {}
         local blk = { key = "block-" .. gk, gap = 2, w = "full", radius = "md", pad = 4, folds = true, clip = true,
-          -- theme.rs GROUP_TINT (0.10), GROUP_TINT_HOVER (0.16), GROUP_LABEL_LIGHT
-          -- (0.40): the contrast test holds every hue at these.
-          fill = gc and mix(gc, 0.10, "#161b22") or nil,
+          fill = gc and look.tint or nil,
           row{ key = "group-" .. gk, on = "toggle_group", arg = gk, h = 28, gap = 8, w = "full", px = 4, radius = "sm",
-            hover = gc and mix(gc, 0.16, "#161b22") or "hover-subtle", help = (closed and "Show " or "Hide ") .. (g.help or g.label),
+            hover = gc and look.hover or "hover-subtle", help = (closed and "Show " or "Hide ") .. (g.help or g.label),
             icon{ closed and "chevron-right" or "chevron-down", size = 12, color = "text-muted" },
             gc and column{ w = 8, h = 8, radius = 2, fill = gc } or false,
-            text{ g.label, size = "caption", weight = "semibold", color = gc and mix("#ffffff", 0.40, gc) or "text-muted", truncate = true },
-            text{ tostring(#g.items), size = "caption", color = gc and mix("#ffffff", 0.40, gc) or "text-muted" },
+            text{ g.label, size = "caption", weight = "semibold", color = gc and look.label or "text-muted", truncate = true },
+            text{ tostring(#g.items), size = "caption", color = gc and look.label or "text-muted" },
             spacer{},
             (closed and waiting > 0) and badge{ waiting .. " want" .. (waiting == 1 and "s" or "") .. " you", tone = "amber" } or false,
           },

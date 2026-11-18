@@ -516,7 +516,7 @@ pub fn popover(s: &App) -> Vec<El> {
         .fill(c("surface"))
         .border(1.0, c("border"))
         .radius(theme::radius("md").unwrap())
-        .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap());
+        .shadow(8.0, 24.0, crate::theme::shadow());
     if !screen::reduced_motion() {
         surface = surface.transition(screen::quick_fade());
     }
