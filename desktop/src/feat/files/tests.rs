@@ -678,7 +678,7 @@ fn generating_a_map_and_a_lens_follow_the_daemons_rules() {
     d[RUNS] = daemon(&mut d, "GET", "/api/codemap", J::Null).1;
     let ex = extras(&Ctx { data: &d });
     assert!(ex.iter().any(|e| e.id == "codemap" && e.place == Place::Sandbox("web-app".into())));
-    assert!(ex.iter().any(|e| e.id == "project" && e.place == Place::Pane("web-app".into())));
+    assert!(ex.iter().any(|e| e.id == "project" && e.place == Place::Session { sandbox: "web-app".into(), thread: None }));
     // Done: a notice that opens it, the panel reads again.
     let n = st.on_event(&Ctx { data: &d }, "codemap", &json!({ "sandbox": "web-app", "kind": "map", "phase": "done" }));
     assert!(n.iter().any(|x| matches!(x, Action::Notice { then: Some((i, _)), .. } if i == "codemap_open")));
@@ -900,4 +900,109 @@ fn thousands_of_files_render_under_the_cap_and_the_filter_reaches_them_all() {
     let ui = render(&st, &d);
     assert_eq!(ui["rows"].as_array().unwrap().len(), PAGE);
     assert!(ui["count"]["label"].as_str().unwrap().starts_with("3,0"), "{}", ui["count"]);
+}
+
+fn ui_of(acts: &[Action]) -> J {
+    acts.iter().rev().find_map(|a| match a {
+        Action::Set { key, value } if key == UI => Some(value.clone()),
+        _ => None,
+    }).expect("files_ui")
+}
+
+/// The explorer: opened from the rail on the focused pane's sandbox (else
+/// the one used last); from a thread pane at its worktree, as the daemon
+/// lists it (before or after the listing arrives); a Markdown file read
+/// with its outline, a section, its relative and wiki links followed in
+/// the explorer and the others opened through the safe path; a code file
+/// with line numbers.
+#[test]
+fn the_explorer_opens_where_it_is_asked_and_reads_markdown_and_code() {
+    let mut d = fixture("standin");
+    d["app"]["focused"] = json!(1);
+    d["app"]["panes"] = json!([{ "index": 1, "sandbox": "web-app" }]);
+    let mut st = State::default();
+    let a = run(&mut st, &d, "files_show", json!({})).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::OpenPanel(s) if s == SCREEN)));
+    assert!(a.iter().any(|x| matches!(x, Action::Remember { key, value } if key == "last" && value == "web-app")));
+    // A thread pane: at its worktree once the places are read.
+    d["__daemon"]["files_tree"]["/Users/me/web/.sbxw-worktrees/checkout"] = json!({ "ok": true, "path": "/Users/me/web/.sbxw-worktrees/checkout", "parent": "/Users/me/web/.sbxw-worktrees", "entries": [{ "name": "README.md", "kind": "file", "size": 10, "modified": 1 }], "workspace": "/Users/me/web", "home": "/home/agent", "worktrees": d["__daemon"]["files_dir"]["worktrees"].clone() });
+    let mut st = State::default();
+    let a = run(&mut st, &d, "files_open", json!({ "sandbox": "web-app", "worktree": "checkout" })).unwrap();
+    let a = pump(&mut st, &mut d, a);
+    let u = ui_of(&a);
+    assert_eq!(u["path"], "/Users/me/web/.sbxw-worktrees/checkout");
+    assert_eq!(st.path, "/Users/me/web/.sbxw-worktrees/checkout");
+    assert!(u["worktrees"].as_array().unwrap().iter().any(|w| w["thread"] == "checkout"));
+    // A thread unknown to the daemon: nothing browsed.
+    let mut st2 = opened(&d);
+    run(&mut st2, &d, "files_open", json!({ "sandbox": "web-app", "worktree": "nope" })).unwrap();
+    assert_ne!(st2.path, "nope");
+    // Markdown: outline, section, links.
+    let mut st = opened(&d);
+    let a = run(&mut st, &d, "files_browse", json!({ "path": "/Users/me/web" })).unwrap();
+    pump(&mut st, &mut d, a);
+    let a = run(&mut st, &d, "files_select", json!({ "id": "/Users/me/web/README.md" })).unwrap();
+    let a = pump(&mut st, &mut d, a);
+    st.preview = json!({ "state": "markdown", "text": "# Web\nSee [the notes](docs/notes.md) and [[CHANGELOG]] and [site](https://example.org).\n## Run\nnpm start\n## Test\nnpm test\n" });
+    let u = st.ui(&Ctx { data: &d });
+    let _ = a;
+    let p = &u["preview"];
+    assert_eq!(p["outline"].as_array().unwrap().len(), 3);
+    let t = p["text"].as_str().unwrap();
+    assert!(t.contains(&explorer::url("/Users/me/web/docs/notes.md")) && t.contains(&explorer::url("/Users/me/web/CHANGELOG.md")) && t.contains("(https://example.org)"), "{t}");
+    run(&mut st, &d, "files_outline", json!({ "index": 1 })).unwrap();
+    let t = st.ui(&Ctx { data: &d })["preview"]["text"].as_str().unwrap().to_string();
+    assert!(t.starts_with("## Run") && !t.contains("npm test"), "{t}");
+    assert!(run(&mut st, &d, "files_outline", json!({ "index": 9 })).is_err());
+    run(&mut st, &d, "files_outline", json!({})).unwrap();
+    // A relative link: its folder listed, the file selected when it comes.
+    let a = run(&mut st, &d, "files_link", json!({ "url": explorer::url("/Users/me/web/src/app.ts") })).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::Fetch { key, path } if key == DIR && path.contains("path=%2FUsers%2Fme%2Fweb%2Fsrc"))), "{a:?}");
+    let a = pump(&mut st, &mut d, a);
+    assert_eq!(st.sel.as_ref().map(|s| s.path.as_str()), Some("/Users/me/web/src/app.ts"));
+    // A code file: line numbers.
+    let u = ui_of(&a);
+    assert!(u["preview"]["numbered"].as_str().is_some_and(|t| t.starts_with('1') || t.starts_with(' ')), "{}", u["preview"]);
+    // Another link: the browser, through the app's safe path.
+    let a = run(&mut st, &d, "files_link", json!({ "url": "https://example.org/x" })).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::Intent { name, args } if name == "open_link" && args["url"] == "https://example.org/x")));
+}
+
+/// Everything the docked Project panel did is still reachable in the
+/// explorer: the same intents, and the screen draws each action's control
+/// (downloads, reveal, open, save as, copy path, delete, uploads by card,
+/// Choose and Paste, the code map's entry, Generate code map) over every
+/// state fixture.
+#[test]
+fn the_explorer_keeps_every_action_of_the_project_panel() {
+    for n in ["files_download", "files_reveal", "files_open_with", "files_save_as", "files_copy_path", "files_delete", "files_upload_pick", "files_upload_paste", "files_upload_send", "files_upload_dropped", "files_upload_ask_again", "files_star", "files_hidden", "files_back", "files_up", "codemap_open", "codemap_generate", "codemap_lens"] {
+        assert!(INTENTS.iter().any(|s| s.name == n), "{n}");
+    }
+    let dir = std::env::temp_dir().join("sbxw-no-overrides");
+    let fx = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/files");
+    let has = |n: &crate::luau::Node, k: &str| {
+        fn walk(n: &crate::luau::Node, k: &str) -> bool {
+            n.key.as_deref() == Some(k) || n.id.as_deref() == Some(k) || n.children.iter().any(|c| walk(c, k))
+        }
+        walk(n, k)
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for f in std::fs::read_dir(&fx).unwrap() {
+        let f = f.unwrap().path();
+        if !f.file_name().unwrap().to_string_lossy().starts_with("files-") {
+            continue;
+        }
+        let x = crate::fixture::Fixture::load(&f).unwrap();
+        let s = crate::screen::ScreenState::new(SCREEN, &dir, x.screen_data(&crate::fixture::AppView::default()));
+        assert!(s.error.is_none(), "{}: {:?}", f.display(), s.error);
+        let n = s.last_good.as_ref().unwrap();
+        for k in ["files-download", "files-reveal", "files-open-with", "files-save-as", "files-copy-path", "files-delete", "files-drop", "files-upload-pick", "files-upload-paste", "files-codemap", "files-sandbox", "files-tab-files", "files-tab-artifacts", "files-tab-recent", "files-filter", "files-back", "files-up", "files-hidden", "files-star"] {
+            if has(n, k) {
+                seen.insert(k);
+            }
+        }
+    }
+    for k in ["files-download", "files-reveal", "files-open-with", "files-save-as", "files-copy-path", "files-delete", "files-drop", "files-upload-pick", "files-upload-paste", "files-codemap", "files-sandbox", "files-tab-files", "files-filter", "files-back", "files-up", "files-hidden", "files-star"] {
+        assert!(seen.contains(k), "{k} is drawn in no state of the explorer");
+    }
 }

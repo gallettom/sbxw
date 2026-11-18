@@ -280,6 +280,9 @@ pub struct Rects {
     pub plus: Option<tiling::Rect>,
     /// The left rail's rectangle (what folds into its "More", rail.rs).
     pub rail: Option<[f32; 4]>,
+    /// The overlay view's rectangle (`data.app.overlay`: its screen lays
+    /// itself out narrow or wide from it).
+    pub overlay: Option<[f32; 4]>,
 }
 
 /// A pane being dragged by its bar: where the press was, where the pointer
@@ -614,6 +617,12 @@ impl App {
         // The upload dialog for dropped files: false once "Do not ask again" was chosen (features.rs).
         data["app"]["ask_dropped_uploads"] = (!self.drops_skip_dialog()).into();
         data["app"]["surface"] = serde_json::json!({ "release": crate::surface::RELEASE_KEY, "focused": crate::surface::focused() });
+        // The overlay over the pane area: its screen and its size, in points.
+        data["app"]["overlay"] = match (&self.feats.overlay, self.rects.overlay) {
+            (Some((n, _)), Some(r)) => serde_json::json!({ "screen": n, "w": r[2], "h": r[3] }),
+            (Some((n, _)), None) => serde_json::json!({ "screen": n }),
+            _ => J::Null,
+        };
         data
     }
 
@@ -3663,6 +3672,44 @@ mod tests {
 
     /// No key and no paste reaches a terminal while anything else has the
     /// keyboard: a screen input, a core dialog and its secret field, a modal.
+    /// The shared paging helper (`screen::paged`, Luau `paged` and
+    /// `more_rows`): the first page and "Show N more", the filter before
+    /// the cap. Used by a sandbox with very many sessions (40 lines a page)
+    /// and the Requests panel; a press shows the next page.
+    #[test]
+    fn long_lists_draw_a_page_and_show_more() {
+        let (rows, c) = screen::paged((0..450).collect::<Vec<_>>(), 200, 1, "rows");
+        assert_eq!((rows.len(), c["total"].as_u64(), c["more"].as_u64(), c["label"].as_str()), (200, Some(450), Some(200), Some("450 rows, showing 200")));
+        let (rows, c) = screen::paged((0..450).collect::<Vec<_>>(), 200, 3, "rows");
+        assert_eq!((rows.len(), c["more"].as_u64(), c["label"].as_str()), (450, Some(0), Some("")));
+        fn count(n: &crate::luau::Node, prefix: &str) -> usize {
+            n.key.as_deref().is_some_and(|k| k.starts_with(prefix)) as usize + n.children.iter().map(|c| count(c, prefix)).sum::<usize>()
+        }
+        fn find<'a>(n: &'a crate::luau::Node, key: &str) -> Option<&'a crate::luau::Node> {
+            if n.key.as_deref() == Some(key) {
+                return Some(n);
+            }
+            n.children.iter().find_map(|c| find(c, key))
+        }
+        let dir = std::env::temp_dir().join("sbxw-no-overrides");
+        let fx = crate::fixture::Fixture::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/sandboxes/basic.json")).unwrap();
+        let mut data = fx.screen_data(&crate::fixture::AppView::default());
+        let name = data["sandboxes"][0]["name"].as_str().unwrap().to_string();
+        data["app"]["selected"] = name.clone().into();
+        let lines: Vec<J> = (0..100).map(|i| serde_json::json!({ "id": format!("t{i}"), "label": format!("⑂ t{i} · done"), "tone": "blue", "help": "", "count": null, "icon": null, "intent": null })).collect();
+        data["app"]["extras"] = serde_json::json!({ "rows": { name.clone(): lines } });
+        let mut s = crate::screen::ScreenState::new("sandboxes", &dir, data.clone());
+        assert!(s.error.is_none(), "{:?}", s.error);
+        let n = s.last_good.clone().unwrap();
+        assert_eq!(count(&n, &format!("extra-row-{name}-")), 40, "a page of 40 lines");
+        let more = find(&n, &format!("sessions-more-{name}-own")).expect("Show 60 more").clone();
+        assert!(find(&n, &format!("sessions-more-{name}-own-box")).is_some());
+        s.act(more.on.as_deref().unwrap(), &more.arg, &J::Null);
+        s.set_data(data);
+        let n = s.last_good.clone().unwrap();
+        assert_eq!(count(&n, &format!("extra-row-{name}-")), 80, "the next page");
+    }
+
     /// A thread on its own worktree, its 13-character name, its state word
     /// and the "+" on its line, at the sidebar's normal width (264): the
     /// path relative to the repository when it fits, else "…/<name>", else

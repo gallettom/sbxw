@@ -28,6 +28,7 @@
 
 pub mod codemap;
 pub mod drops;
+pub mod explorer;
 mod standin;
 #[cfg(test)]
 mod tests;
@@ -68,7 +69,7 @@ pub const FEATURE: Feature = Feature {
         Data { key: RUNS, path: "/api/codemap", on: &["codemap"], every: 0, lazy: false },
     ],
     screens: &[
-        ScreenDecl { name: SCREEN, src: include_str!("../../../screens/files.luau"), slot: Slot::Panel { title: "Project", icon: "folder", width: 460.0 } },
+        ScreenDecl { name: SCREEN, src: include_str!("../../../screens/files.luau"), slot: Slot::Overlay { title: "Files", icon: "folder" } },
         ScreenDecl { name: MAP_SCREEN, src: include_str!("../../../screens/codemap.luau"), slot: Slot::Panel { title: "Code map", icon: "file", width: 520.0 } },
     ],
     intents: INTENTS,
@@ -87,7 +88,10 @@ pub const FEATURE: Feature = Feature {
 };
 
 pub const INTENTS: &[Spec] = &[
-    Spec { name: "files_open", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true), ("tab", Arg::OneOf(TABS), false)], doc: "Opens the Project panel on that sandbox (its deliverables first, or `tab`)." },
+    Spec { name: "files_open", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true), ("tab", Arg::OneOf(TABS), false), ("worktree", Arg::Str, false)], doc: "Opens the file explorer over the panes on that sandbox (its deliverables first, or `tab`; `worktree`: at that thread's worktree, as the daemon lists it)." },
+    Spec { name: "files_show", risk: Risk::Direct, args: &[], doc: "Opens the file explorer on the sandbox used last, else the focused pane's, else the selected one." },
+    Spec { name: "files_link", risk: Risk::Direct, args: &[("url", Arg::Url, true)], doc: "A link pressed in a file read in the explorer: a relative link or a `[[wiki link]]` is followed in the explorer (its folder listed, the file selected), any other opens in the browser." },
+    Spec { name: "files_outline", risk: Risk::Direct, args: &[("index", Arg::Int(0, 10_000), false)], doc: "Shows one heading's section of the Markdown file read (`index` in its outline), or the whole file (none)." },
     Spec { name: "files_tab", risk: Risk::Direct, args: &[("tab", Arg::OneOf(TABS), true)], doc: "Shows the Artifacts, Files or Recent tab." },
     Spec { name: "files_place", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Goes to one of the places (`recent`, or a place's path as listed in `files_ui.places`)." },
     Spec { name: "files_browse", risk: Risk::Direct, args: &[("path", Arg::Str, true)], doc: "Lists that folder of the sandbox (`~` is the agent's home). The daemon reads it as the agent sees it." },
@@ -256,6 +260,10 @@ pub struct State {
     /// (then "is writing" would be stale).
     finished: std::collections::HashSet<String>,
     map: MapState,
+    /// A thread's worktree to list once the sandbox's places are read.
+    want_worktree: Option<String>,
+    /// The Markdown section shown (`files_outline`), by heading index.
+    section: Option<usize>,
 }
 
 crate::feat::relay::per_thread!(STATE, State);
@@ -378,7 +386,47 @@ impl State {
                     None if self.tab.is_empty() => self.tab = cx.get("app")["kept"]["files"]["tab"].as_str().filter(|t| TABS.contains(t)).unwrap_or("artifacts").into(),
                     None => {}
                 }
+                if let Some(t) = a.s("worktree") {
+                    // Its path as the daemon lists it (never a path from the screen).
+                    match worktree_path(cx.get(DIR), t).filter(|_| self.asked_for.get(DIR) == Some(&sb)) {
+                        Some(p) => out.extend(self.browse(&p)?),
+                        None => {
+                            self.want_worktree = Some(t.to_string());
+                            self.first = false;
+                        }
+                    }
+                }
                 out.push(Action::OpenPanel(SCREEN.into()));
+                out.push(Action::Remember { key: "last".into(), value: sb.into() });
+            }
+            "files_show" => {
+                let app = cx.get("app");
+                let focused = app["focused"].as_u64().and_then(|f| app["panes"].as_array()?.iter().find(|p| p["index"].as_u64() == Some(f)).and_then(|p| p["sandbox"].as_str()));
+                let known = |s: &&str| cx.sandbox(s).is_some();
+                let sb = self.sandbox.as_deref().filter(known).or(app["kept"]["files"]["last"].as_str().filter(known)).or(focused.filter(known)).or(app["selected"].as_str().filter(known)).or(cx.get("sandboxes")[0]["name"].as_str())
+                    .ok_or("no sandbox to explore yet")?.to_string();
+                return self.act(cx, &Asked { name: "files_open", args: json!({ "sandbox": sb }).as_object().cloned().unwrap_or_default() });
+            }
+            "files_link" => {
+                let url = a.req("url");
+                match explorer::parse_url(url) {
+                    Some(path) => {
+                        self.select_next = Some(path.rsplit('/').next().unwrap_or("").to_string());
+                        out.extend(self.browse(&view::parent(&path))?);
+                        self.select_next = Some(path.rsplit('/').next().unwrap_or("").to_string());
+                    }
+                    None => out.push(Action::Intent { name: "open_link".into(), args: json!({ "url": url }) }),
+                }
+            }
+            "files_outline" => {
+                let n = a.i("index").map(|i| i as usize);
+                let text = self.preview["text"].as_str().unwrap_or("");
+                if let Some(i) = n {
+                    if explorer::section(text, i).is_none() {
+                        return Err(format!("the file has no heading {i}"));
+                    }
+                }
+                self.section = n;
             }
             "files_tab" => {
                 self.tab = a.req("tab").into();
@@ -815,6 +863,7 @@ impl State {
         }
         let s = Sel { src, path: id.to_string(), name: name.clone(), size, modified, kind: kind.clone() };
         self.seq += 1;
+        self.section = None;
         if kind != "file" {
             self.preview = json!({ "state": "note", "text": "Not a regular file." });
         } else if let Some(p) = view::preview_without_reading(&name, size) {
@@ -1096,10 +1145,37 @@ impl State {
             "lenses": a["lenses"].as_array().map(|l| l.len()).unwrap_or(0),
             "run": run,
             "recent_fresh": recent_fresh, "recent_days": cx.get(RECENT)["days"],
-            "selected": sel, "preview": self.preview,
+            "selected": sel, "preview": self.reader(cx),
+            "sandboxes": cx.get("sandboxes").as_array().into_iter().flatten().filter_map(|x| x["name"].as_str()).map(|n| json!({ "id": n, "label": n })).collect::<Vec<_>>(),
+            "color": cx.get("app")["groups"][sb.as_deref().unwrap_or("")],
+            "worktrees": if mine(DIR) { d["worktrees"].as_array().into_iter().flatten().filter_map(|w| Some(json!({ "thread": w["thread"].as_str()?, "path": w["path"].as_str()?, "here": d["path"].as_str().is_some_and(|p| w["path"].as_str().is_some_and(|wp| p.starts_with(wp))) }))).collect::<Vec<_>>() } else { vec![] },
             "staged": staged, "upload_max": view::size_label(view::UPLOAD_MAX),
             "saved": self.saved.as_ref().map(|(n, p)| json!({ "name": n, "path": p })),
         })
+    }
+
+    /// The preview as the explorer's reader draws it: a Markdown file with
+    /// its links made the explorer's own, its outline and the section shown;
+    /// a text file with line numbers.
+    fn reader(&self, cx: &Ctx) -> J {
+        let mut p = self.preview.clone();
+        let text = p["text"].as_str().unwrap_or("").to_string();
+        match p["state"].as_str() {
+            Some("markdown") => {
+                let dir = self.sel.as_ref().map(|s| view::parent(&self.abs_path(cx, s))).unwrap_or_else(|| "/".into());
+                let outline = explorer::outline(&text);
+                let shown = self.section.and_then(|i| explorer::section(&text, i)).unwrap_or(text);
+                p["text"] = explorer::rewrite(&shown, &dir).into();
+                p["outline"] = J::Array(outline.into_iter().map(|mut h| {
+                    h["on"] = (self.section == h["index"].as_u64().map(|i| i as usize)).into();
+                    h
+                }).collect());
+                p["section"] = self.section.map_or(J::Null, |i| json!(i));
+            }
+            Some("text") => p["numbered"] = explorer::numbered(&text).into(),
+            _ => {}
+        }
+        p
     }
 
     pub fn map_ui(&self, cx: &Ctx) -> J {
@@ -1411,6 +1487,16 @@ impl State {
     pub fn on_data(&mut self, cx: &Ctx, key: &str, _old: &J, new: &J) -> Vec<Action> {
         let mut out = vec![];
         if key == DIR && self.sandbox.is_some() {
+            // The explorer was opened at a thread's worktree before its places were read.
+            if let Some(t) = self.want_worktree.take() {
+                if let Some(p) = worktree_path(new, &t) {
+                    if let Ok(a) = self.browse(&p) {
+                        out.extend(a);
+                        out.extend(self.ui_action(cx));
+                        return out;
+                    }
+                }
+            }
             // The first listing (the workspace) goes on to its deliverables
             // folder, when it has one, as the web UI's panel opens.
             if std::mem::take(&mut self.first) && self.path.is_empty() {
@@ -1525,6 +1611,11 @@ pub fn typable(path: &str) -> bool {
         && !path.split('/').any(|c| c == ".." || c.starts_with('-'))
 }
 
+/// A thread's worktree folder, as the daemon's listing names it.
+fn worktree_path(listing: &J, thread: &str) -> Option<String> {
+    listing["worktrees"].as_array()?.iter().find(|w| w["thread"] == thread)?["path"].as_str().filter(|p| p.starts_with('/')).map(str::to_string)
+}
+
 /// Rows drawn at first, and added by each "Show more".
 pub const PAGE: usize = 200;
 
@@ -1585,19 +1676,38 @@ fn run_for(cx: &Ctx, sb: &str) -> J {
 }
 
 fn extras(cx: &Ctx) -> Vec<Extra> {
-    let mut v = vec![];
+    // The rail's Files (browse zone, last): the sandbox used last, else the focused pane's.
+    let mut v = vec![Extra {
+        place: Place::Rail { zone: crate::feat::Zone::Browse, order: 30 },
+        id: SCREEN.into(),
+        label: "Files".into(),
+        icon: Some("folder".into()),
+        tone: "blue".into(),
+        help: "Explore a sandbox's files and deliverables, read Markdown, upload".into(),
+        count: None,
+        intent: Some(("files_show".into(), json!({}))),
+    }];
     for sb in cx.get("sandboxes").as_array().into_iter().flatten() {
         let Some(name) = sb["name"].as_str() else { continue };
-        v.push(Extra {
-            place: Place::Pane(name.into()),
-            id: "project".into(),
-            label: "Project".into(),
-            icon: Some("folder".into()),
-            tone: "muted".into(),
-            help: "Its deliverables, files, uploads and code map".into(),
-            count: None,
-            intent: Some(("files_open".into(), json!({ "sandbox": name }))),
-        });
+        // A pane's Project opens the explorer on its sandbox, and a thread's
+        // pane at that thread's worktree.
+        for se in crate::feat::threads::model::sessions(cx.data, name) {
+            let own = se.thread.is_some() && se.kind == "own";
+            let mut args = json!({ "sandbox": name });
+            if own {
+                args["worktree"] = se.thread.clone().into();
+            }
+            v.push(Extra {
+                place: Place::Session { sandbox: name.into(), thread: se.thread.clone() },
+                id: "project".into(),
+                label: "Project".into(),
+                icon: Some("folder".into()),
+                tone: "muted".into(),
+                help: if own { "The file explorer at this thread's worktree: files, deliverables, uploads, code map".into() } else { "The file explorer on this sandbox: files, deliverables, uploads, code map".into() },
+                count: None,
+                intent: Some(("files_open".into(), args)),
+            });
+        }
         if run_for(cx, name)["phase"] == "writing" {
             v.push(Extra {
                 place: Place::Sandbox(name.into()),

@@ -1,4 +1,8 @@
--- The Project panel (docked on the right): a sandbox's deliverables
+-- The file explorer, an overlay over the pane area (it replaced the docked
+-- Project panel): left, the tree (a sandbox picker, its roots: Artifacts,
+-- Workspace, Recent and its threads' worktrees, uploads, the filter, the
+-- rows); right, the reader (Markdown at a reading measure with its outline,
+-- text and code with line numbers, pictures). A sandbox's deliverables
 -- (.sbxw-artifacts), its files, what was written lately, and uploads into
 -- it (assets/js/files.js, upload.js).
 --
@@ -19,9 +23,9 @@ local function head(t)
 end
 
 local function tabs(ui)
-  local function tab(id, label, count)
+  local function tab(id, label, count, icon)
     local on = ui.tab == id
-    return button{ label, key = "files-tab-" .. id, on = "tab", arg = id, variant = on and "neutral" or "ghost",
+    return button{ label, key = "files-tab-" .. id, icon = icon, on = "tab", arg = id, variant = on and "neutral" or "ghost",
       color = on and "text-bright" or "text-muted", help = count and (count .. " written in the last hour") or nil }
   end
   local fresh = (ui.recent_fresh or 0) > 0 and ui.recent_fresh or nil
@@ -31,16 +35,32 @@ local function tabs(ui)
   elseif not ui.has_map then
     map_label = "Generate code map"
   end
-  return row{ gap = 4, w = "full",
-    tab("artifacts", "Artifacts"),
-    tab("files", "Files"),
-    tab("recent", fresh and ("Recent · " .. fresh) or "Recent", fresh),
-    spacer{},
-    button{ map_label, key = "files-codemap", icon = "sparkle", on = "codemap", arg = { sandbox = ui.sandbox, has_map = ui.has_map == true }, variant = "ghost",
-      disabled = ui.run and ui.run.phase == "writing" and not ui.has_map,
-      help = ui.has_map and "Read the code map" or "Ask this sandbox's agent to write one, in a background session" },
-    button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", help = "Read the lists again" },
+  local items = {}
+  for _, s in ipairs(ui.sandboxes or {}) do items[#items + 1] = { id = s.id, label = s.label } end
+  local kids = { gap = 8, w = "full",
+    row{ gap = 8, w = "full",
+      ui.color and column{ w = 8, h = 8, radius = 2, fill = ui.color } or false,
+      select{ id = "files-sandbox", value = ui.sandbox or "", on = "sandbox", items = items },
+      button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", help = "Read the lists again" },
+    },
+    row{ gap = 4, w = "full",
+      tab("artifacts", "Artifacts", nil, "sparkle"),
+      tab("files", "Workspace", nil, "folder"),
+      tab("recent", fresh and ("Recent · " .. fresh) or "Recent", fresh, "search"),
+    },
   }
+  for _, w in ipairs(ui.worktrees or {}) do
+    kids[#kids + 1] = row{ gap = 8, w = "full", px = 8, h = 24, radius = "xs", key = "files-worktree-" .. w.thread, on = "worktree", arg = { sandbox = ui.sandbox, thread = w.thread },
+      fill = w.here and "active-bg" or nil, hover = "hover-subtle", help = w.path,
+      icon{ "branch", size = 12, color = "blue" },
+      text{ w.thread, size = "sm", truncate = true, grow = 1, color = w.here and "text-bright" or "text" },
+      text{ "worktree", size = "xs", color = "text-dim" },
+    }
+  end
+  kids[#kids + 1] = button{ map_label, key = "files-codemap", icon = "sparkle", on = "codemap", arg = { sandbox = ui.sandbox, has_map = ui.has_map == true }, variant = "ghost",
+    disabled = ui.run and ui.run.phase == "writing" and not ui.has_map,
+    help = ui.has_map and "Read the code map" or "Ask this sandbox's agent to write one, in a background session" }
+  return column(kids)
 end
 
 local function uploads(ui)
@@ -140,8 +160,8 @@ local function rowview(ui, r, i)
   return row(kids)
 end
 
-local function rows(ui)
-  local list = { gap = 2 }
+local function rows(ui, flat)
+  local list = { gap = 2, w = "full" }
   local last
   for i, r in ipairs(ui.rows or {}) do
     if ui.tab == "recent" and r.group ~= last then
@@ -150,15 +170,10 @@ local function rows(ui)
     end
     list[#list + 1] = rowview(ui, r, i)
   end
-  -- The panel draws at most a page of rows (the core refuses a render past
-  -- its element cap); the rest is counted, and the filter runs over all.
-  local c = ui.count or {}
-  if (c.more or 0) > 0 then
-    list[#list + 1] = column{ gap = 4, w = "full", py = 4, key = "files-more-box",
-      note(c.label .. ". Filter by name to find one."),
-      button{ "Show " .. c.more .. " more", key = "files-more", on = "more", variant = "ghost", tone = "blue",
-        help = (c.total - c.shown) .. " more rows not drawn" } }
-  end
+  -- The explorer draws at most a page of rows (the core refuses a render
+  -- past its element cap); the rest is counted, and the filter runs over all.
+  local more = more_rows(ui.count, { key = "files-more", on = "more", hint = "Filter by name to find one" })
+  if more then list[#list + 1] = more end
   local err = ui.errors and ui.errors[ui.tab]
   if nz(err) then
     list[#list + 1] = note(err, "red")
@@ -171,10 +186,12 @@ local function rows(ui)
     }
     list[#list + 1] = note(loading and "Loading…" or empty[ui.tab] or "")
   end
+  -- Narrow, the whole tree scrolls as one (the caller's scroll).
+  if flat then return column(list) end
   return scroll(list)
 end
 
-local function preview(ui)
+local function preview(ui, narrow)
   local s = ui.selected
   if not s then
     return column{ h = "full", pad = 8, note("Pick a file to preview it.") }
@@ -194,13 +211,29 @@ local function preview(ui)
   if p.state == "loading" then
     body = note("Loading…")
   elseif p.state == "markdown" then
-    body = scroll{ markdown{ p.text or "", on = "link", size = "sm" }, nz(p.note) and note(p.note) or false }
+    -- About 70 characters a line, the prose face; links followed inside.
+    local md = column{ w = "full", max_w = 640, gap = 8,
+      nz(p.section ~= nil and "x" or "") and row{ gap = 8, button{ "Whole file", key = "files-whole", on = "outline", variant = "ghost", tone = "blue" } } or false,
+      markdown{ p.text or "", on = "link", size = 14 }, nz(p.note) and note(p.note) or false }
+    local outline = p.outline or {}
+    if #outline > 1 and not narrow then
+      local o = { gap = 2, w = 200, key = "files-outline", text{ "Outline", size = "caption", weight = "semibold", color = "text-muted" } }
+      for _, h in ipairs(outline) do
+        o[#o + 1] = row{ key = "files-outline-" .. h.index, on = "outline", arg = h.index, px = 4, h = 24, radius = "xs", hover = "hover-subtle",
+          fill = h.on and "active-bg" or nil, help = h.text,
+          spacer{ w = 8 * ((h.level or 1) - 1), grow = 0 },
+          text{ h.text, size = "xs", color = h.on and "text-bright" or "text-muted", truncate = true, grow = 1 } }
+      end
+      body = row{ gap = 16, w = "full", h = "full", align = "start", scroll{ grow = 1, md }, scroll{ w = 200, h = "full", column(o) } }
+    else
+      body = scroll{ md }
+    end
   elseif p.state == "text" or p.state == "html" then
     body = scroll{
       p.state == "html" and note("An HTML page, shown as its source: the app does not draw pages. Open it to see it in your browser.", "amber") or false,
-      text{ p.text or "", mono = true, size = "xs", wrap = true }, nz(p.note) and note(p.note) or false }
+      text{ p.numbered or p.text or "", mono = true, size = "xs", wrap = true }, nz(p.note) and note(p.note) or false }
   elseif p.state == "image" then
-    body = column{ gap = 4, image{ key = p.key, max_w = 420, max_h = 320 }, note((p.w or "?") .. " × " .. (p.h or "?") .. " px") }
+    body = column{ gap = 4, image{ key = p.key, max_w = 900, max_h = 600 }, note((p.w or "?") .. " × " .. (p.h or "?") .. " px") }
   elseif p.state == "error" then
     body = note(p.text or "Could not read it.", "red")
   else
@@ -218,19 +251,40 @@ local function preview(ui)
 end
 
 return {
-  render = function(_, data)
+  init = function()
+    -- Narrow (the overlay under 760 pt): the tree or the reader, one at a time.
+    return { pane = "tree" }
+  end,
+
+  render = function(state, data)
     local ui = data.files_ui
     if not ui or not ui.sandbox then
-      return column{ pad = 12, note("Open a sandbox's Project from its pane bar.") }
+      return column{ pad = 12, note("Pick a sandbox: the rail's Files, or Project on a pane's bar.") }
     end
-    return column{ h = "full", gap = 8, pad = 12,
-      row{ gap = 8, w = "full", badge{ ui.sandbox, tone = "blue" },
-        nz(ui.artifacts_dir) and text{ ui.artifacts_dir, size = "xs", color = "text-dim", mono = true, truncate = true, grow = 1 } or spacer{} },
+    local tree = column{ h = "full", gap = 8, w = "full",
       tabs(ui),
       uploads(ui),
       ui.tab == "files" and filebar(ui) or false,
       input{ id = "files-filter", value = ui.filter or "", placeholder = "Filter by name", on = "filter" },
-      split{ id = "files-split", ratio = 0.5, rows(ui), preview(ui) },
+      rows(ui),
+    }
+    local over = (data.app or {}).overlay or {}
+    local narrow = (over.w or 1000) < 760
+    local head = nz(ui.artifacts_dir) and ui.tab == "artifacts" and text{ ui.artifacts_dir, size = "xs", color = "text-dim", mono = true, truncate = true } or false
+    if narrow then
+      if state.pane == "reader" and ui.selected then
+        return column{ h = "full", gap = 8, w = "full",
+          row{ w = "full", button{ "← Files", key = "files-to-tree", on = "to_tree", variant = "ghost", tone = "blue", help = "Back to the list" }, spacer{} },
+          preview(ui, true) }
+      end
+      return column{ h = "full", gap = 8, w = "full", head,
+        scroll{ key = "files-tree-scroll", column{ gap = 8, w = "full",
+          tabs(ui), uploads(ui), ui.tab == "files" and filebar(ui) or false,
+          input{ id = "files-filter", value = ui.filter or "", placeholder = "Filter by name", on = "filter" },
+          rows(ui, true) } } }
+    end
+    return column{ h = "full", gap = 8, w = "full", head,
+      split{ id = "files-split", vertical = true, ratio = 0.34, tree, preview(ui) },
     }
   end,
   actions = {
@@ -254,7 +308,8 @@ return {
     filter = function(_, _, t) return intent("files_filter", { text = t or "" }) end,
     more = function() return intent("files_more", {}) end,
     fold = function(_, id) return intent("files_fold", { id = id }) end,
-    select = function(_, id) return intent("files_select", { id = id }) end,
+    select = function(state, id) state.pane = "reader"; return intent("files_select", { id = id }) end,
+    to_tree = function(state) state.pane = "tree" end,
     show = function(_, id) return intent("files_show_in_folder", { id = id }) end,
     download = function() return intent("files_download", {}) end,
     reveal = function() return intent("files_reveal", {}) end,
@@ -262,6 +317,9 @@ return {
     save_as = function() return intent("files_save_as", {}) end,
     copy = function() return intent("files_copy_path", {}) end,
     delete = function() return intent("files_delete", {}) end,
-    link = function(_, _, url) return intent("open_link", { url = url }) end,
+    link = function(_, _, url) return intent("files_link", { url = url }) end,
+    worktree = function(_, a) return intent("files_open", { sandbox = a.sandbox, worktree = a.thread }) end,
+    sandbox = function(_, _, id) if id and id ~= "" then return intent("files_open", { sandbox = id }) end end,
+    outline = function(_, i) if i ~= nil then return intent("files_outline", { index = i }) end return intent("files_outline", {}) end,
   },
 }

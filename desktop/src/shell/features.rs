@@ -711,6 +711,12 @@ impl App {
                 .clip_rounded(radius("md").unwrap())
                 .focus_group()
                 .on_press(|_s: &mut App| {})
+                .on_layout(|s: &mut App, r: [f32; 4]| {
+                    if s.rects.overlay.is_none_or(|o| (o[2] - r[2]).abs() > 1.0 || (o[3] - r[3]).abs() > 1.0) {
+                        s.rects.overlay = Some(r);
+                        s.push_data();
+                    }
+                })
                 .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| s.overlay_drop(files))
                 .child(head)
                 .child(col().key(format!("overlay-body-{name}")).grow(1.0).w_full().min_h(0.0).child(screen)),
