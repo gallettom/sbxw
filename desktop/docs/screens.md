@@ -1425,7 +1425,24 @@ the map's parser, `standin.rs`, `tests.rs`), `screens/files.luau`,
 `screens/codemap.luau`, `fixtures/files/`, `scripts/demo-files.sh`. Report:
 `.sbxw-artifacts/desktop/FILES.md` in the main checkout.
 
-**Screens.** `files` (panel "Project", 460 pt): tabs Artifacts
+**The explorer** (thread desktop-views, `VIEWS.md`): `files` is an
+**overlay** over the pane area (`Slot::Overlay`, title "Files"), opened by
+the rail's Files (`files_show`: the sandbox used last, else the focused
+pane's, else the selected one), a pane bar's Project (`files_open
+{sandbox}`, and for a thread's pane `{sandbox, worktree}`: at that
+worktree, its path from the daemon's listing) or the Worktrees view. Left
+the tree (a sandbox picker `files-sandbox`, Artifacts, Workspace, Recent,
+the sandbox's worktrees `files-worktree-<thread>`, the upload card, the
+path bar, the filter, the rows); right the reader: Markdown at about 70
+characters in the prose face, paragraphs reflowed, its outline beside it
+(`files-outline-<i>`, `files_outline`: that section, Whole file),
+relative links and `[[wiki links]]` rewritten to
+`https://files.sbxw.invalid/<path>` and followed inside (`files_link`:
+its folder listed, the file selected), other links through `open_link`;
+text and code with line numbers. Under 760 pt wide (`data.app.overlay.w`)
+one pane at a time (`files-to-tree`). `src/feat/files/explorer.rs`.
+
+**Screens (before the explorer, kept as written).** `files` (panel "Project", 460 pt): tabs Artifacts
 (`.sbxw-artifacts`, newest first, each folder one folded row with its file
 count until pressed), Files (a folder of the sandbox, the
 places, Hidden files, the typed path) and Recent (written lately anywhere,
