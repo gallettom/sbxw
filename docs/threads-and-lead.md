@@ -168,9 +168,24 @@ report your state).
 When every thread is done, the lead calls `propose_merge` with an order and a
 note. The plan dialog offers **Merge all**. For each thread, in order, sbxw:
 
-1. refuses if the main checkout has uncommitted changes,
+1. checks the main checkout against the paths the merge changes (from the
+   merge base to the branch), and refuses only when the merge could be harmed
+   or harm your work: a merge, rebase, cherry-pick or revert under way;
+   unresolved conflicts; staged changes (git itself will not merge into an
+   index that differs from `HEAD`); uncommitted edits to a path the merge
+   changes (named: commit or stash those); a path the merge changes that is
+   missing from the working tree (see below),
 2. runs `git merge --no-ff --no-edit sbxw/<thread>` inside the sandbox,
 3. on conflict, runs `git merge --abort` and stops there.
+
+Unstaged edits elsewhere stay in the working tree, out of the merge commit.
+**Tracked files absent from the checkout** (`git status` shows ` D`, most
+often because the sandbox mounts only part of the workspace) are left alone
+when the merge does not touch them: they stay in the commit, since a merge
+commit records the index plus the merge, and the result says how many were
+absent. When the merge *does* touch one, it is refused with the files named:
+the merge has to be done where the whole repository is present. sbxw never
+advises committing those "deletions", which would delete real files.
 
 With **close threads** ticked, merged threads are then closed and their branches
 deleted. The lead is told the result in one line, e.g.

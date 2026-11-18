@@ -399,7 +399,8 @@ function paintMerge(plan) {
   outcome.className = 'merge-outcome';
   if (m.state === 'merged') {
     outcome.classList.add('ok');
-    outcome.textContent = m.base ? `Merged into ${m.base}` : 'Merged';
+    const notes = (m.results || []).filter(r => r.ok && r.note).map(r => `${r.thread}: ${r.note}.`);
+    outcome.textContent = (m.base ? `Merged into ${m.base}.` : 'Merged.') + (notes.length ? ` ${notes.join(' ')}` : '');
   } else if (m.state === 'failed') {
     outcome.classList.add('failed');
     const bad = (m.results || []).find(r => !r.ok);

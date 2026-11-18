@@ -328,6 +328,11 @@ pub fn merge_summary(merge: &Merge) -> String {
     if !untried.is_empty() {
         line.push_str(&format!(" Not tried: {}.", untried.join(", ")));
     }
+    for r in merge.results.iter().filter(|r| r.ok) {
+        if let Some(note) = &r.note {
+            line.push_str(&format!(" {}: {note}.", r.thread));
+        }
+    }
     line.replace('\n', " ")
 }
 
@@ -460,8 +465,8 @@ mod tests {
             state: MergeState::Failed,
             base: None,
             results: vec![
-                MergeResult { thread: "a".into(), ok: true, commit: None, error: None },
-                MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict in x\ny".into()) },
+                MergeResult { thread: "a".into(), ok: true, commit: None, error: None, note: None },
+                MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict in x\ny".into()), note: None },
             ],
             distillate: vec![],
         };

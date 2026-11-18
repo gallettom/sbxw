@@ -341,8 +341,8 @@ impl App {
             };
             let ok = outcome.is_ok();
             let result = match outcome {
-                Ok(commit) => MergeResult { thread: thread.clone(), ok: true, commit: Some(commit).filter(|c| !c.is_empty()), error: None },
-                Err(e) => MergeResult { thread: thread.clone(), ok: false, commit: None, error: Some(e) },
+                Ok(m) => MergeResult { thread: thread.clone(), ok: true, note: m.note(), commit: Some(m.commit).filter(|c| !c.is_empty()), error: None },
+                Err(e) => MergeResult { thread: thread.clone(), ok: false, commit: None, error: Some(e), note: None },
             };
             let p = self.plans.lock().unwrap().merge_result(id, result, now_ms())?;
             self.plan_changed(p);
@@ -439,8 +439,8 @@ impl App {
             (Ok(()), Ok(dir)) => self.sbx_of(sandbox).await?.thread_merge(&sandbox.name, &dir, &team).await.map(|c| (c, dir)).map_err(|e| format!("{e:#}")),
         };
         let (result, dir) = match outcome {
-            Ok((commit, dir)) => (MergeResult { thread: team.to_string(), ok: true, commit: Some(commit).filter(|c| !c.is_empty()), error: None }, Some(dir)),
-            Err(e) => (MergeResult { thread: team.to_string(), ok: false, commit: None, error: Some(e) }, None),
+            Ok((m, dir)) => (MergeResult { thread: team.to_string(), ok: true, note: m.note(), commit: Some(m.commit).filter(|c| !c.is_empty()), error: None }, Some(dir)),
+            Err(e) => (MergeResult { thread: team.to_string(), ok: false, commit: None, error: Some(e), note: None }, None),
         };
         self.plans.lock().unwrap().merge_result(id, result, now_ms())?;
         let plan = self.plans.lock().unwrap().finish_merge(id, now_ms())?;

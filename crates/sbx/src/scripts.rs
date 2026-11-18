@@ -47,6 +47,69 @@ macro_rules! no_repo_fn {
     };
 }
 
+/// Shell function `sbxw_merge_check <root> <git-common-dir> <branch>`: may
+/// `<branch>` be merged into the main checkout `<root>` as it stands? On a
+/// refusal it prints the `error=` line and returns 1. Otherwise it sets
+/// `absent_n` (tracked files missing from the working tree, untouched by the
+/// merge) and `edits_n` (unstaged edits, untouched by the merge). The rules
+/// are `THREAD_MERGE_SCRIPT`'s; the plan dialog's count of uncommitted work
+/// (`CHECKOUT_STATE_SCRIPT`) classifies the same way.
+macro_rules! merge_check_fn {
+    () => {
+        r#"
+        sbxw_names() { # the first 5 of "$@", space-separated, then "and N more"
+            local out="" n=0
+            for p do n=$((n + 1)); [ "$n" -le 5 ] && out="$out${out:+, }$p"; done
+            [ "$n" -gt 5 ] && out="$out and $((n - 5)) more"
+            printf '%s' "$out"
+        }
+        sbxw_merge_check() {
+            local root="$1" common="$2" br="$3" f p st mb
+            for f in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
+                if [ -e "$common/$f" ]; then
+                    echo "error=the main checkout of $root is in the middle of a merge, rebase, cherry-pick or revert ($f): finish or abort it there first"
+                    return 1
+                fi
+            done
+            local -a unmerged=() staged=() edits=() absent=() hit_edits=() hit_absent=()
+            while IFS= read -r -d '' p; do unmerged+=("$p"); done < <(git -C "$root" diff --name-only -z --diff-filter=U)
+            if [ "${#unmerged[@]}" -gt 0 ]; then
+                echo "error=the main checkout of $root has unresolved conflicts ($(sbxw_names "${unmerged[@]}")): resolve them there first"
+                return 1
+            fi
+            local -A touched=()
+            if mb=$(git -C "$root" merge-base HEAD "$br" 2>/dev/null); then
+                while IFS= read -r -d '' p; do touched[$p]=1; done < <(git -C "$root" diff --name-only -z --no-renames "$mb" "$br" --)
+            else
+                while IFS= read -r -d '' p; do touched[$p]=1; done < <(git -C "$root" ls-tree -r -z --name-only "$br")
+            fi
+            while IFS= read -r -d '' p; do staged+=("$p"); done < <(git -C "$root" diff --cached --name-only -z --no-renames)
+            while IFS= read -r -d '' st && IFS= read -r -d '' p; do
+                if [ "$st" = D ]; then
+                    if [ -n "${touched[$p]:-}" ]; then hit_absent+=("$p"); else absent+=("$p"); fi
+                else
+                    if [ -n "${touched[$p]:-}" ]; then hit_edits+=("$p"); else edits+=("$p"); fi
+                fi
+            done < <(git -C "$root" diff --name-status -z --no-renames)
+            if [ "${#hit_absent[@]}" -gt 0 ]; then
+                echo "error=${#hit_absent[@]} file(s) this merge changes are missing from the main checkout of $root in this sandbox ($(sbxw_names "${hit_absent[@]}")). The repository is most likely only partly mounted here: do this merge where the whole repository is present. Do not commit these as deletions: that would delete real files."
+                return 1
+            fi
+            if [ "${#staged[@]}" -gt 0 ]; then
+                echo "error=the main checkout of $root has ${#staged[@]} staged change(s) ($(sbxw_names "${staged[@]}")), and git will not merge into an index that differs from HEAD: commit or unstage those first"
+                return 1
+            fi
+            if [ "${#hit_edits[@]}" -gt 0 ]; then
+                echo "error=the main checkout of $root has uncommitted changes to ${#hit_edits[@]} file(s) this merge changes ($(sbxw_names "${hit_edits[@]}")): commit or stash those files first"
+                return 1
+            fi
+            absent_n=${#absent[@]}
+            edits_n=${#edits[@]}
+            return 0
+        }"#
+    };
+}
+
 /// Argv for a *thread*: a second Claude session in `name`, in its own git
 /// worktree `<repo>/.sbxw-worktrees/<thread>` on branch `sbxw/<thread>` — two
 /// agents in one working tree overwrite each other's files and mix their
@@ -304,15 +367,33 @@ pub fn thread_end_args(
 /// under `$1` is on — what a lead's proposed merge runs, one thread at a time
 /// (the daemon's plan merge).
 ///
-/// Refuses a main checkout with uncommitted changes to tracked files: merging
-/// into one mixes the person's unfinished work into the merge commit, or fails
-/// halfway. Untracked files are left to git, which refuses only if the merge
-/// would overwrite one. A failed merge is aborted (`git merge --abort`), so
-/// the checkout is as it was, and the conflicting files are named.
+/// Refuses only what could harm the merge or the person's work, judged
+/// against the paths the merge changes (`git diff --name-only` from the
+/// merge base to the branch, renames as two paths):
 ///
-/// Prints `key=value` lines like `THREAD_END_SCRIPT`: `commit=` on success,
-/// `error=` otherwise. Everything variable is positional.
-pub const THREAD_MERGE_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
+/// * a merge, rebase, cherry-pick or revert under way, or unresolved
+///   conflicts: the checkout is mid-operation;
+/// * staged changes, anywhere: git itself refuses a merge whose index differs
+///   from `HEAD` (they would be recorded in the merge commit);
+/// * uncommitted edits to a path the merge changes, named: commit or stash
+///   *those*;
+/// * a path the merge changes that is missing from the working tree (an
+///   unstaged deletion): most often a workspace only partly mounted in the
+///   sandbox. The merge must then be done where the whole repository is.
+///   Committing the "deletions" would delete real files, so it is never the
+///   advice.
+///
+/// Everything else is left as it is: unstaged edits elsewhere stay in the
+/// working tree, and tracked files absent from it (` D`) that the merge does
+/// not touch stay absent and stay in the commit — a merge commit records the
+/// index plus the merge, and the index still holds them. Their counts come
+/// back as `edits=` and `absent=` so the result can say so.
+///
+/// A failed merge is aborted (`git merge --abort`), so the checkout is as it
+/// was, and the conflicting files are named. Prints `key=value` lines like
+/// `THREAD_END_SCRIPT`: `commit=` on success, `error=` otherwise. Everything
+/// variable is positional.
+pub const THREAD_MERGE_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), merge_check_fn!(), r#"
     [ -n "$1" ] && cd "$1" 2>/dev/null
     if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
         echo "error=$(sbxw_no_repo)"; exit 3
@@ -325,13 +406,12 @@ pub const THREAD_MERGE_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
     if ! git -C "$root" show-ref --verify --quiet "refs/heads/$br"; then
         echo "error=there is no branch $br in $root"; exit 5
     fi
-    n=$(git -C "$root" status --porcelain --untracked-files=no | wc -l | tr -d ' ')
-    if [ "$n" -gt 0 ]; then
-        echo "error=the main checkout of $root has $n uncommitted change(s); commit or stash them first"; exit 6
-    fi
+    sbxw_merge_check "$root" "$common" "$br" || exit 6
     if out=$(git -C "$root" merge --no-ff --no-edit "$br" 2>&1); then
         echo "base=$base"
         echo "commit=$(git -C "$root" rev-parse --short HEAD)"
+        echo "absent=$absent_n"
+        echo "edits=$edits_n"
         echo ok=1
         exit 0
     fi
@@ -349,6 +429,43 @@ pub fn thread_merge_args(name: &SandboxName, workspace: &str, thread: &ThreadNam
     let mut args = owned(&["exec", name.as_str(), "--", "bash", "-lc", THREAD_MERGE_SCRIPT, "sbxw-thread-merge"]);
     args.extend([workspace, thread.as_str()].map(pos));
     args
+}
+
+/// What a merge that went through has to say besides its commit.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MergeOutcome {
+    /// The merge commit, short.
+    pub commit: String,
+    /// Tracked files missing from the main checkout's working tree that the
+    /// merge did not touch: left alone, still in the commit.
+    pub absent: u32,
+    /// Unstaged edits in the main checkout the merge did not touch: left as
+    /// they were.
+    pub edits: u32,
+}
+
+impl MergeOutcome {
+    /// From the `key=value` lines `THREAD_MERGE_SCRIPT` prints.
+    pub fn from_fields(f: &std::collections::HashMap<String, String>) -> Self {
+        let num = |k: &str| f.get(k).and_then(|v| v.parse().ok()).unwrap_or(0);
+        MergeOutcome { commit: f.get("commit").cloned().unwrap_or_default(), absent: num("absent"), edits: num("edits") }
+    }
+
+    /// What the person should know about the checkout after the merge, or
+    /// `None` when there is nothing to say.
+    pub fn note(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if self.absent > 0 {
+            parts.push(format!(
+                "{} tracked file(s) are absent from this checkout (not mounted in the sandbox, or deleted without git rm) and were left alone: they are still in the commit",
+                self.absent
+            ));
+        }
+        if self.edits > 0 {
+            parts.push(format!("{} uncommitted change(s) the merge did not touch were left as they were", self.edits));
+        }
+        (!parts.is_empty()).then(|| parts.join("; "))
+    }
 }
 
 impl ThreadStatus {
@@ -543,6 +660,175 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
         let w = memory_write_args("/w", "team-p-1.md", "- [x](team-p-1.md) — y; z");
         assert_eq!(&w[4..], ["=/w", "=team-p-1.md", "=- [x](team-p-1.md) — y; z"]);
         assert!(!w[2].contains("team-p-1"));
+    }
+
+    /// A scratch git repository for the scripts' own logic, under the
+    /// system's temp dir; `None` when git is not installed.
+    struct Repo {
+        dir: std::path::PathBuf,
+        root: std::path::PathBuf,
+    }
+
+    impl Repo {
+        fn new(tag: &str) -> Option<Repo> {
+            let has_git = std::process::Command::new("git").arg("--version").output().is_ok_and(|o| o.status.success());
+            if !has_git {
+                return None;
+            }
+            let dir = std::env::temp_dir().join(format!("sbxw-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let root = dir.join("repo");
+            std::fs::create_dir_all(&root).unwrap();
+            let r = Repo { dir, root };
+            r.git(&["init", "-q"]);
+            Some(r)
+        }
+        fn git(&self, args: &[&str]) -> String {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&self.root)
+                .args(["-c", "user.email=t@t", "-c", "user.name=t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        }
+        fn write(&self, path: &str, text: &str) {
+            let p = self.root.join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        fn rm(&self, path: &str) {
+            let p = self.root.join(path);
+            if p.is_dir() {
+                std::fs::remove_dir_all(p).unwrap();
+            } else {
+                std::fs::remove_file(p).unwrap();
+            }
+        }
+        /// main with files a, b, docs/c and src/d; branch sbxw/<t> changing `touch`.
+        fn with_branch(&self, thread: &str, touch: &str) {
+            for f in ["a", "b", "docs/c", "src/d"] {
+                self.write(f, f);
+            }
+            self.git(&["add", "-A"]);
+            self.git(&["commit", "-q", "-m", "one"]);
+            self.git(&["checkout", "-q", "-b", &format!("sbxw/{thread}")]);
+            self.write(touch, "changed on the branch");
+            self.git(&["add", "-A"]);
+            self.git(&["commit", "-q", "-m", "thread"]);
+            self.git(&["checkout", "-q", "main"]);
+        }
+        /// Run a `key=value` script with its positional values, `=`-wrapped.
+        fn run(&self, script: &str, args: &[&str]) -> (bool, String) {
+            let out = std::process::Command::new("bash")
+                .args(["-c", script, "x"])
+                .args(args.iter().map(|a| format!("={a}")))
+                .env("HOME", &self.dir)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
+        }
+        fn merge(&self, thread: &str) -> Result<MergeOutcome, String> {
+            let (_, out) = self.run(THREAD_MERGE_SCRIPT, &[self.root.to_str().unwrap(), thread]);
+            script_fields(&out).map(|f| MergeOutcome::from_fields(&f))
+        }
+    }
+
+    impl Drop for Repo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn a_merge_leaves_files_absent_by_mount_alone_and_keeps_them_in_the_commit() {
+        // The report: tracked files missing from the working tree (not
+        // mounted), nothing staged; the branch touches other paths.
+        let Some(r) = Repo::new("merge-absent") else { return };
+        r.with_branch("api", "src/d");
+        r.rm("a");
+        r.rm("docs");
+        assert_eq!(r.git(&["status", "--porcelain", "--untracked-files=no"]).lines().count(), 2);
+        let m = r.merge("api").expect("an untouched absent file does not block");
+        assert_eq!((m.absent, m.edits), (2, 0));
+        assert!(m.note().unwrap().contains("2 tracked file(s) are absent"), "{:?}", m.note());
+        let tree = r.git(&["ls-tree", "-r", "--name-only", "HEAD"]);
+        assert_eq!(tree.lines().collect::<Vec<_>>(), ["a", "b", "docs/c", "src/d"], "nothing recorded as deleted");
+        assert_eq!(r.git(&["show", "HEAD:src/d"]), "changed on the branch");
+        assert!(!r.root.join("a").exists(), "and nothing written back where it was absent");
+        assert_eq!(r.git(&["rev-list", "--parents", "-n1", "HEAD"]).split_whitespace().count(), 3, "a merge commit");
+    }
+
+    #[test]
+    fn a_merge_touching_an_absent_file_is_refused_without_advising_a_commit() {
+        let Some(r) = Repo::new("merge-absent-hit") else { return };
+        r.with_branch("api", "docs/c");
+        r.rm("docs");
+        let head = r.git(&["rev-parse", "HEAD"]);
+        let err = r.merge("api").unwrap_err();
+        assert!(err.contains("missing from the main checkout") && err.contains("docs/c"), "{err}");
+        assert!(err.contains("partly mounted") && err.contains("where the whole repository is present"), "{err}");
+        assert!(err.contains("Do not commit these"), "{err}");
+        assert!(!err.contains("commit or stash"), "{err}");
+        assert_eq!(r.git(&["rev-parse", "HEAD"]), head, "nothing merged");
+    }
+
+    #[test]
+    fn a_merge_is_refused_only_for_edits_to_the_paths_it_changes() {
+        let Some(r) = Repo::new("merge-edits") else { return };
+        r.with_branch("api", "src/d");
+        r.write("b", "unfinished");
+        let m = r.merge("api").expect("an edit elsewhere is left alone");
+        assert_eq!((m.absent, m.edits), (0, 1));
+        assert_eq!(std::fs::read_to_string(r.root.join("b")).unwrap(), "unfinished");
+        assert_eq!(r.git(&["show", "HEAD:b"]), "b", "not in the merge commit");
+
+        let Some(r) = Repo::new("merge-edits-hit") else { return };
+        r.with_branch("api", "src/d");
+        r.write("src/d", "mine");
+        let err = r.merge("api").unwrap_err();
+        assert!(err.contains("uncommitted changes to 1 file(s) this merge changes (src/d)") && err.contains("commit or stash those files"), "{err}");
+    }
+
+    #[test]
+    fn a_merge_is_refused_with_staged_changes_or_mid_operation() {
+        let Some(r) = Repo::new("merge-staged") else { return };
+        r.with_branch("api", "src/d");
+        r.write("b", "staged");
+        r.git(&["add", "b"]);
+        let err = r.merge("api").unwrap_err();
+        assert!(err.contains("1 staged change(s) (b)") && err.contains("commit or unstage"), "{err}");
+
+        let Some(r) = Repo::new("merge-mid") else { return };
+        r.with_branch("api", "src/d");
+        let head = r.git(&["rev-parse", "HEAD"]);
+        std::fs::write(r.root.join(".git/MERGE_HEAD"), head).unwrap();
+        let err = r.merge("api").unwrap_err();
+        assert!(err.contains("in the middle of a merge") && err.contains("MERGE_HEAD"), "{err}");
+    }
+
+    #[test]
+    fn a_conflict_is_aborted_and_absent_files_stay_absent() {
+        let Some(r) = Repo::new("merge-conflict") else { return };
+        r.with_branch("api", "b");
+        r.write("b", "main's own");
+        r.git(&["commit", "-q", "-am", "main"]);
+        r.rm("a");
+        let err = r.merge("api").unwrap_err();
+        assert_eq!(err, "conflict in b");
+        assert!(!r.root.join(".git/MERGE_HEAD").exists(), "aborted");
+        assert!(!r.root.join("a").exists());
+        assert_eq!(r.git(&["status", "--porcelain"]), " D a\n");
     }
 
     #[test]

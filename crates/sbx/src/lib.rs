@@ -1129,10 +1129,11 @@ impl Sbx {
         self.thread_script(scripts::thread_end_args(name, dir, thread, "close", discard, delete_branch)).await.map(drop)
     }
 
-    /// Merge a thread's branch into its repo's checked-out branch; the commit.
-    pub async fn thread_merge(&self, name: &SandboxName, dir: &str, thread: &ThreadName) -> Result<String> {
+    /// Merge a thread's branch into its repo's checked-out branch: the
+    /// commit, and what was left alone in the checkout.
+    pub async fn thread_merge(&self, name: &SandboxName, dir: &str, thread: &ThreadName) -> Result<scripts::MergeOutcome> {
         let f = self.thread_script(scripts::thread_merge_args(name, dir, thread)).await?;
-        Ok(f.get("commit").cloned().unwrap_or_default())
+        Ok(scripts::MergeOutcome::from_fields(&f))
     }
 
     pub async fn setup_ssh(&self) -> Result<()> {

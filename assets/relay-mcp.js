@@ -678,6 +678,7 @@ function planText(res) {
     lines.push(`Merge [${m.state}]${m.base ? ` into ${m.base}` : ""}: ${(m.order || []).join(", ")}`);
     for (const r of m.results || []) {
       lines.push(`- ${r.thread}: ${r.ok ? `merged${r.commit ? ` (${r.commit})` : ""}` : `failed: ${r.error || "?"}`}`);
+      if (r.ok && r.note) lines.push(`  ${r.note}`);
     }
   }
   return lines.join("\n");

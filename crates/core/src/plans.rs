@@ -138,6 +138,10 @@ pub struct MergeResult {
     pub commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// A merge that went through, with something left alone in the checkout
+    /// (tracked files absent from it, edits the merge did not touch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -797,13 +801,13 @@ mod tests {
         b.set_thread("n", "b", ThreadState::Done, "ok", false, 5).unwrap();
         b.propose_merge(&p.id, "n", vec!["a".into(), "b".into()], "", vec![], 6).unwrap();
         b.start_merge(&p.id, None, None, 7).unwrap();
-        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None }, 8).unwrap();
-        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict".into()) }, 9).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None, note: None }, 8).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict".into()), note: None }, 9).unwrap();
         assert_eq!(b.finish_merge(&p.id, 10).unwrap().merge.unwrap().state, MergeState::Failed);
         let m = b.start_merge(&p.id, None, None, 11).unwrap().merge.unwrap();
         assert_eq!(m.results.len(), 1, "only a's ok result is kept");
         assert_eq!(m.results[0].thread, "a");
-        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: true, commit: Some("def".into()), error: None }, 12).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: true, commit: Some("def".into()), error: None, note: None }, 12).unwrap();
         let m = b.finish_merge(&p.id, 13).unwrap().merge.unwrap();
         assert_eq!(m.state, MergeState::Merged);
         assert!(m.results.iter().all(|r| r.ok) && m.results.len() == 2);
@@ -839,7 +843,7 @@ mod tests {
         b.propose_merge(&p.id, "n", vec!["a".into()], "go", vec![], 7).unwrap();
         b.start_merge(&p.id, Some("main".into()), None, 8).unwrap();
         assert!(b.start_merge(&p.id, None, None, 9).is_err(), "a second click");
-        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None }, 10).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None, note: None }, 10).unwrap();
         let done = b.finish_merge(&p.id, 11).unwrap();
         assert_eq!(done.merge.unwrap().state, MergeState::Merged);
     }
@@ -928,7 +932,7 @@ mod tests {
         let kept = vec![DistillItem { kind: DistillKind::Warning, text: "no float money".into() }];
         let m = b.start_merge(&p.id, None, Some(kept.clone()), 7).unwrap().merge.unwrap();
         assert_eq!(m.distillate, kept, "the person's version wins");
-        b.merge_result(&p.id, MergeResult { thread: "team-p-s".into(), ok: true, commit: None, error: None }, 8).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "team-p-s".into(), ok: true, commit: None, error: None, note: None }, 8).unwrap();
         let merged = b.finish_merge(&p.id, 9).unwrap();
         assert_eq!(merged.merge.as_ref().unwrap().state, MergeState::Merged);
         let (file, body, index) = merged.distillate_memory().unwrap();
