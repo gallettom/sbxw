@@ -1877,15 +1877,21 @@ fn tile(e: El) -> El {
 /// titlebar container this makes never takes a press meant for the bar.
 /// Ignored on Linux and Windows (their native frame stays).
 pub const LIGHTS: (f32, f32) = (layout::GUTTER + 12.0, layout::GUTTER + layout::TOP_BAR_H / 2.0 - rune::Chrome::TRAFFIC_LIGHT / 2.0);
+/// The sbxw mark's width in the top bar (topbar.luau's `app-mark`: the
+/// chevron's 15 pt column, a 2 pt gap, the 11 pt cursor), 28 pt high.
+pub const MARK_W: f32 = 28.0;
+
 /// The room the top bar keeps at its left for the window buttons: up to 12
 /// pt clear after the zoom button (`inset` is from the window's edge, the
-/// bar starts a gutter in); none of them (full screen), the sidebar's
-/// content x, right of the left rail.
+/// bar starts a gutter in). Without them (full screen, Linux, Windows) the
+/// mark, the bar's first item, is centred on the rail's icon column: the
+/// bar and the rail both start a gutter in, so the room is half the rail
+/// less half the mark (8 pt), and logo and rail icons share one axis.
 pub fn lights_room(inset: f32) -> f32 {
     if inset > 0.0 {
         inset - layout::GUTTER + 12.0
     } else {
-        rail::W + layout::GUTTER + layout::SIDEBAR_PAD
+        (rail::W - MARK_W) / 2.0
     }
 }
 

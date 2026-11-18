@@ -478,6 +478,31 @@ mod tests {
         assert!(fit >= 10);
     }
 
+    /// The sbxw mark: without window buttons (full screen, Linux, Windows)
+    /// it is centred on the rail's icon column; in a macOS window it sits
+    /// right after the buttons, as before. Wide and narrow (points: the
+    /// scale does not move it; the 2x shots in views2/logo show it).
+    #[test]
+    fn the_mark_sits_on_the_rail_axis_without_window_buttons() {
+        for (w, h) in [(1284.0, 816.0), (900.0, 600.0)] {
+            {
+                let scale = 1.0;
+                let mut r = Rig::new(&["a"], w, h);
+                let mark = r.rt.presented("app-mark").expect("the mark").0;
+                let entry = r.rt.presented("rail-requests").expect("a rail icon").0;
+                let rail = r.rt.presented("rail").expect("the rail").0;
+                let (mc, ec, rc) = (mark[0] + mark[2] / 2.0, entry[0] + entry[2] / 2.0, rail[0] + rail[2] / 2.0);
+                assert!((mark[2] - crate::shell::MARK_W).abs() < 0.5, "the mark's box is {} wide", mark[2]);
+                assert!((mc - ec).abs() <= 0.5 && (mc - rc).abs() <= 0.5, "{w}x{h} @{scale}: mark centre {mc}, rail icon {ec}, rail {rc}");
+                // In a macOS window (buttons up to x 76 from the window's edge): after them.
+                r.rt.set_titlebar_inset(76.0);
+                r.settle();
+                let mark = r.rt.presented("app-mark").expect("the mark").0;
+                assert!((mark[0] - (76.0 + 12.0)).abs() <= 1.5, "after the window buttons, 12 pt clear: x {}", mark[0]);
+            }
+        }
+    }
+
     /// Team leads wears the `leader` mark (a crown over one person) in the
     /// rail and the palette, never the team's `people` the pane bar's Team
     /// keeps; its tooltip's second line stays in words.
