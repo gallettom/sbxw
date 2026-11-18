@@ -1939,8 +1939,8 @@ fn tile(e: El) -> El {
 /// Ignored on Linux and Windows (their native frame stays).
 pub const LIGHTS: (f32, f32) = (layout::GUTTER + 12.0, layout::GUTTER + layout::TOP_BAR_H / 2.0 - rune::Chrome::TRAFFIC_LIGHT / 2.0);
 /// The sbxw mark's width in the top bar (topbar.luau's `app-mark`: the
-/// chevron's 15 pt column, a 2 pt gap, the 11 pt cursor), 28 pt high.
-pub const MARK_W: f32 = 28.0;
+/// chevron's 13 pt column, a 2 pt gap, the 10 pt cursor), 28 pt high.
+pub const MARK_W: f32 = 25.0;
 
 /// The room the top bar keeps at its left for the window buttons: up to 12
 /// pt clear after the zoom button (`inset` is from the window's edge, the
@@ -3031,7 +3031,7 @@ fn pane_view(s: &App, i: usize) -> El {
             };
             let mut body = row().gap(8.0).items_start().w_full().child(text(msg).font(small(13.0, 400.0)).color(c(if p.error.is_some() { "red" } else { "text-muted" })).wrap().grow(1.0).min_w(0.0));
             if p.error.is_some() {
-                body = row().gap(8.0).items_start().w_full().child(rune::icon(crate::icons::get("warning").unwrap(), 16.0).color(c("red"))).child(body);
+                body = row().gap(8.0).items_start().w_full().child(rune::icon(crate::icons::get("warning").unwrap(), crate::theme::icon::MEDIUM).color(c("red"))).child(body);
             }
             col().grow(1.0).w_full().padding(16.0).child(body)
         }
@@ -3094,7 +3094,7 @@ fn core_button(key: &str, label: &str, icon: &str, keys: Vec<String>, primary: b
             s.push_data();
         });
     if let Some(ic) = crate::icons::get(icon) {
-        b = b.child(rune::icon(ic, 16.0).color(c(fg)));
+        b = b.child(rune::icon(ic, crate::theme::icon::MEDIUM).color(c(fg)));
     }
     b.child(text(label.to_string()).font(small(13.0, 500.0)).color(c(fg)))
 }
@@ -3127,7 +3127,7 @@ fn empty_pane(s: &App, i: usize) -> El {
         .gap(12.0)
         .items_center()
         .justify_center()
-        .child(rune::icon(crate::icons::get("terminal").unwrap(), 24.0).color(c("text-muted")))
+        .child(rune::icon(crate::icons::get("terminal").unwrap(), theme::icon::LARGE).color(c("text-muted")))
         .child(text(title).font(small(16.0, 600.0)).color(c("text-bright")))
         .child(text(line).font(theme::prose(13.0, 400.0)).color(c("text-muted")).wrap().max_w(360.0))
         .child(actions)

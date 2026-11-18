@@ -122,7 +122,7 @@ local function locations(ui, narrow)
         here and column{ pin = { left = 0, top = 3, bottom = 3 }, w = 2, radius = 1, fill = "accent" } or false,
         icon{ x.icon or "folder", size = 12, color = here and "accent" or loc_color(x) },
         text{ x.label, size = "sm", truncate = true, grow = 1, color = here and "text-bright" or "text" },
-        here and icon{ "chevron-right", size = 10, color = "accent" } or false,
+        here and icon{ "chevron-right", size = 12, color = "accent" } or false,
       }
     end
   end
@@ -193,7 +193,7 @@ local function uploads(ui, dragging)
     for _, s in ipairs(staged) do
       local sending = s.state == "sending"
       kids[#kids + 1] = row{ gap = 8, w = "full", key = "files-staged-" .. s.index,
-        icon{ "file", size = 11, color = "text-muted" },
+        icon{ "file", size = 12, color = "text-muted" },
         column{ gap = 2, grow = 1,
           text{ s.name, size = "sm", truncate = true },
           nz(s.problem) and text{ s.problem, size = "xs", color = "red", wrap = true }
@@ -211,7 +211,7 @@ local function uploads(ui, dragging)
   end
   if ui.saved then
     kids[#kids + 1] = row{ gap = 8, w = "full", key = "files-saved",
-      icon{ "check", size = 11, color = "green" },
+      icon{ "check", size = 12, color = "green" },
       text{ "Saved " .. ui.saved.name, size = "xs", color = "text-muted", truncate = true, grow = 1, help = ui.saved.path },
       button{ "Show in folder", key = "files-show-saved", on = "show_saved", variant = "ghost" },
     }
@@ -236,7 +236,7 @@ local function folderview(r)
   return row{ gap = 8, w = "full", px = 8, py = 4, radius = "xs", key = "files-row-" .. r.id, on = "fold", arg = r.id, fill = r.cursor and "elevated" or nil,
     on_right = (not r.open) and "fold" or nil, on_left = r.open and "fold" or nil,
     (r.depth or 0) > 0 and spacer{ w = 12 * r.depth, grow = 0 } or false,
-    icon{ r.open and "chevron-down" or "chevron-right", size = 10, color = "text-muted" },
+    icon{ r.open and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
     icon{ "folder", size = 12, color = "blue" },
     text{ r.name, size = "sm", truncate = true, grow = 1 },
     text{ r.count .. (r.count == 1 and " file" or " files"), size = "xs", color = "text-muted" },
@@ -252,7 +252,7 @@ local function dirview(r)
       on_right = (not r.open) and "expand" or nil, on_left = r.open and "expand" or nil,
       fill = r.cursor and "elevated" or nil, help = (r.open and "Fold " or "Open ") .. r.name .. " here (Right, Left)",
       (r.depth or 0) > 0 and spacer{ w = 12 * r.depth, grow = 0 } or false,
-      icon{ r.open and "chevron-down" or "chevron-right", size = 10, color = "text-muted" },
+      icon{ r.open and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
       icon{ "folder", size = 12, color = "blue" },
       text{ r.name .. (r.link and " ↪" or ""), size = "sm", truncate = true, grow = 1 },
       count and text{ count, size = "xs", color = "text-muted" } or false,

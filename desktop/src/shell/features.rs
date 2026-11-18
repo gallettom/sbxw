@@ -676,7 +676,7 @@ impl App {
         let n1 = name.clone();
         let mut head = row().key(format!("overlay-head-{name}")).w_full().h(layout::CONTROL_H).gap(8.0).items_center();
         if let Some(i) = crate::icons::get(icon) {
-            head = head.child(rune::icon(i, 16.0).color(c("text-bright")));
+            head = head.child(rune::icon(i, crate::theme::icon::MEDIUM).color(c("text-bright")));
         }
         // The title, then what the screen puts beside it (its sandbox picker:
         // `screen::TITLE_SLOT`), then the room, then the way out.
@@ -705,7 +705,7 @@ impl App {
                         s.close_panel(&n1);
                         s.push_data();
                     })
-                    .child(rune::icon(crate::icons::get("close").unwrap(), 14.0).color(c("text-muted"))),
+                    .child(rune::icon(crate::icons::get("close").unwrap(), crate::theme::icon::MEDIUM).color(c("text-muted"))),
             );
         Some(
             col()
@@ -1174,7 +1174,7 @@ impl App {
                 tab = tab.grow(1.0).pl(4.0);
             }
             if let Some(i) = crate::icons::get(icon) {
-                tab = tab.child(rune::icon(i, 16.0).color(c(if shown { "text-bright" } else { "text-muted" })));
+                tab = tab.child(rune::icon(i, crate::theme::icon::MEDIUM).color(c(if shown { "text-bright" } else { "text-muted" })));
             }
             tab = tab.child(text(title).font(crate::screen::body(14.0, 600.0)).color(c(if shown { "text-bright" } else { "text-muted" })).truncate().min_w(0.0));
             tabs = tabs.child(tab);
@@ -1200,7 +1200,7 @@ impl App {
                         s.feats.split = !s.feats.split;
                         s.push_data();
                     })
-                    .child(rune::icon(crate::icons::get(if split { "single" } else { "columns" }).unwrap(), 16.0).color(c("text-muted"))),
+                    .child(rune::icon(crate::icons::get(if split { "single" } else { "columns" }).unwrap(), crate::theme::icon::MEDIUM).color(c("text-muted"))),
             );
         }
         if let Some(name) = shown_name {
@@ -1221,7 +1221,7 @@ impl App {
                         s.close_panel(&n2);
                         s.push_data();
                     })
-                    .child(rune::icon(crate::icons::get("close").unwrap(), 16.0).color(c("text-muted"))),
+                    .child(rune::icon(crate::icons::get("close").unwrap(), crate::theme::icon::MEDIUM).color(c("text-muted"))),
             );
         }
         col()

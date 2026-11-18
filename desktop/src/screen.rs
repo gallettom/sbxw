@@ -439,7 +439,7 @@ fn sync_ui(ui: &mut Ui, n: &Node) {
 pub const MENU_PAD: f32 = 6.0;
 pub const MENU_ROW_H: f32 = 28.0;
 pub const MENU_ROW_PX: f32 = 8.0;
-pub const MENU_ICON: f32 = 14.0;
+pub const MENU_ICON: f32 = theme::icon::MEDIUM;
 pub const MENU_ICON_GAP: f32 = 12.0;
 pub const MENU_MIN_W: f32 = 160.0;
 pub const MENU_MAX_W: f32 = 320.0;
@@ -685,7 +685,7 @@ fn stale_marker<S: Host>(name: &str) -> El {
         .role("button")
         .cursor(Cursor::Pointer)
         .help(format!("Your {name} screen is a customised copy made for an older version; new features may be missing. Ask Jarvis to update it, or restore the built-in."))
-        .child(rune::icon(crate::icons::get("warning").unwrap(), 11.0).color(c("amber")))
+        .child(rune::icon(crate::icons::get("warning").unwrap(), 12.0).color(c("amber")))
         .w_full()
         .child(text(line).font(body(12.0, 500.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0))
         .on_press(move |s: &mut S| press_intent(s, &screen, "screen_restore", &serde_json::json!({ "screen": &*screen })))
@@ -720,7 +720,7 @@ fn fallback_extras<S: Host>(name: &str, missing: &[(String, J)]) -> El {
             b = b.help(h.to_string());
         }
         if let Some(i) = e["icon"].as_str().and_then(crate::icons::get) {
-            b = b.child(rune::icon(i, 11.0).color(hex(fg)));
+            b = b.child(rune::icon(i, 12.0).color(hex(fg)));
         }
         if !label.is_empty() {
             b = b.child(text(label).font(body(12.0, 500.0)).color(hex(fg)));
@@ -1206,7 +1206,7 @@ impl Build<'_> {
             }
             Kind::Icon => {
                 let i = crate::icons::get(&n.text).expect("checked icon");
-                rune::icon(i, st.size.unwrap_or(14.0)).color(hex(st.color.unwrap_or(theme::color_value("text").unwrap())))
+                rune::icon(i, st.size.unwrap_or(theme::icon::MEDIUM)).color(hex(st.color.unwrap_or(theme::color_value("text").unwrap())))
             }
             Kind::Badge if n.pill => {
                 // A count alone in a round bubble: the tone's colour filled,
@@ -1359,7 +1359,7 @@ impl Build<'_> {
         let toned = n.tone.as_deref().filter(|t| *t != "neutral" && variant != "primary").map(action_tone);
         let fg = n.style.color.map(hex).or(toned.map(|t| hex(t.0))).unwrap_or_else(|| c(fg));
         // At least 28 pt square (24 dense), the icon centred; a label pads 10 (8 dense).
-        let (h, size, icon) = if n.dense { (theme::layout::DENSE_H, 12.0, 14.0) } else { (theme::layout::CONTROL_H, 13.0, 16.0) };
+        let (h, size, icon) = if n.dense { (theme::layout::DENSE_H, 12.0, theme::icon::MEDIUM) } else { (theme::layout::CONTROL_H, 13.0, theme::icon::MEDIUM) };
         let only_icon = n.text.is_empty();
         let name = if only_icon { n.help.clone().unwrap_or_else(|| n.icon.clone().unwrap_or_default()) } else { n.text.clone() };
         let mut b = row().gap(6.0).items_center().justify_center().h(h).min_w(h).px(if only_icon { 0.0 } else if n.dense { 8.0 } else { 10.0 }).radius(theme::radius("xs").unwrap()).role("button").label(name);

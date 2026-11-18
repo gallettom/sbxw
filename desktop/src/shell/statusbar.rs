@@ -46,7 +46,7 @@ pub const GAP: f32 = 4.0;
 pub const INNER: f32 = 8.0;
 /// An entry: padding each side, its 12 pt icon, the gap to its text.
 pub const ITEM_PX: f32 = 8.0;
-pub const ICON: f32 = 12.0;
+pub const ICON: f32 = theme::icon::MEDIUM;
 pub const ICON_GAP: f32 = 6.0;
 /// The type: 12 pt; numbers in the monospace face are tabular already.
 pub const TEXT: f32 = 12.0;
@@ -705,7 +705,7 @@ fn theme_view(s: &App) -> El {
         .focus_ring(2.0, -2.0, c("focus"))
         .cursor(Cursor::Pointer)
         .on_press(|s: &mut App| s.statusbar_toggle(Pop::Theme))
-        .child(rune::icon(crate::icons::get("chevron-down").unwrap(), 10.0).color(c("text-muted")));
+        .child(rune::icon(crate::icons::get("chevron-down").unwrap(), theme::icon::SMALL).color(c("text-muted")));
     let more = if open { more.fill(c("elevated")) } else { more };
     row().key("status-theme-group").w(THEME_W).h(layout::DENSE_H).items_center().child(switch).child(more)
 }

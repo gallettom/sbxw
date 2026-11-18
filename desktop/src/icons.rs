@@ -86,7 +86,7 @@ icons! {
     LOGO_PROMPT "logo-prompt" r#"<polyline points="4.5,3.5 9,8 4.5,12.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>"#;
     // The top bar's mark (topbar.luau): the same prompt flush left in its
     // box and heavier, drawn at 28 pt with the blue cursor beside it.
-    LOGO_MARK "logo-mark" r#"<polyline points="1.6,3 7.4,8 1.6,13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>"#;
+    LOGO_MARK "logo-mark" r#"<polyline points="1.6,3 7.4,8 1.6,13" fill="none" stroke="currentColor" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round"/>"#;
     // Team leads (the rail, the pager's mark, the palette): a crown over one
     // person, so it says "the one who leads", not the team's `people` that
     // the pane bar's Team uses. Filled crown, so it holds at 14 pt.

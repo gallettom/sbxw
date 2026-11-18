@@ -349,6 +349,22 @@ pub const TEXT_SIZES: &[(&str, f32)] = &[
     ("xl", 16.0),
 ];
 
+/// The chrome's icon sizes (pt), one optical system: `SMALL` inline with
+/// 12 to 13 pt text (a row's chevron, a badge's mark, a file in a list),
+/// `MEDIUM` every control (buttons, dense or not, the pane bar's actions,
+/// the status bar, menus, headers, the palette), `LARGE` the rail's glyphs
+/// (in 28 pt targets), `MARK` the top bar's `>_`, the app's signature, a
+/// little larger than the rail and a little heavier, not by half. Screens
+/// read them as `theme.icon.sm`, `md`, `lg`, `mark`.
+pub mod icon {
+    pub const SMALL: f32 = 12.0;
+    pub const MEDIUM: f32 = 14.0;
+    pub const LARGE: f32 = 20.0;
+    pub const MARK: f32 = 24.0;
+    /// Every size an icon may be drawn at.
+    pub const ALL: &[f32] = &[SMALL, MEDIUM, LARGE, MARK];
+}
+
 /// Line height of wrapped text, a multiple of the size.
 pub const LINE_HEIGHT: f32 = 1.4;
 
@@ -447,6 +463,7 @@ pub fn to_json() -> serde_json::Value {
         "text": nums(TEXT_SIZES),
         "space": nums(SPACE),
         "line_height": LINE_HEIGHT,
+        "icon": { "sm": icon::SMALL, "md": icon::MEDIUM, "lg": icon::LARGE, "mark": icon::MARK },
         "layout": {
             "top_bar_h": layout::TOP_BAR_H, "gutter": layout::GUTTER, "sidebar_w": layout::SIDEBAR_W,
             "pane_bar_h": layout::PANE_BAR_H, "traffic_lights_w": layout::TRAFFIC_LIGHTS_W,
@@ -975,6 +992,65 @@ mod tests {
         // The ratio itself, against WCAG's own examples.
         assert!((contrast(0xffffff, 0x000000) - 21.0).abs() < 0.01);
         assert!((contrast(0x777777, 0xffffff) - 4.48).abs() < 0.01);
+    }
+
+    /// Every icon the built-in screens and the core draw is one of the
+    /// sizes of [`icon`]: a source scan of `icon{ ..., size = N }` in the
+    /// screens and of `rune::icon(.., N)` in the core (named constants are
+    /// the scale's own). approval.rs is the one exception (its dialogs' ×
+    /// at 14, listed: that file's layout is not this change's).
+    #[test]
+    fn every_icon_is_on_the_scale() {
+        let mut off = vec![];
+        for (name, src) in crate::screen::all_builtin() {
+            for (i, line) in src.lines().enumerate() {
+                let mut rest = line;
+                while let Some(at) = rest.find("icon{") {
+                    rest = &rest[at + 5..];
+                    let end = rest.find('}').unwrap_or(rest.len());
+                    let body = &rest[..end];
+                    if let Some(p) = body.find("size = ") {
+                        let num: String = body[p + 7..].chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                        if let Ok(v) = num.parse::<f32>() {
+                            if !icon::ALL.contains(&v) {
+                                off.push(format!("{name}.luau:{}: size = {num}", i + 1));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![root.clone()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                let rel = p.strip_prefix(&root).unwrap().to_string_lossy().to_string();
+                if !rel.ends_with(".rs") || rel.contains("tests") || rel == "approval.rs" || rel.starts_with("bin/") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&p).unwrap();
+                for (i, line) in src.split("#[cfg(test)]").next().unwrap().lines().enumerate() {
+                    let mut rest = line;
+                    while let Some(at) = rest.find("rune::icon(") {
+                        rest = &rest[at + 11..];
+                        let end = rest.find(')').map(|e| e + 1).unwrap_or(rest.len());
+                        let args = &rest[..end];
+                        let last = args.rsplit(',').next().unwrap_or("").trim().trim_end_matches(')');
+                        if let Ok(v) = last.trim_end_matches(".0").parse::<f32>() {
+                            if !icon::ALL.contains(&v) {
+                                off.push(format!("src/{rel}:{}: {}", i + 1, line.trim()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(off.is_empty(), "icons off the scale (12, 14, 20, 24): {off:#?}");
     }
 
     /// Built-in screens space things on the 4 pt grid: every number given
