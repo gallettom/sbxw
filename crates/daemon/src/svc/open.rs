@@ -582,6 +582,25 @@ mod tests {
         assert_eq!((spawn.args[n - 5].as_str(), spawn.args[n - 1].as_str()), ("=", "=reopen"));
     }
 
+    #[tokio::test]
+    async fn a_second_open_of_a_running_thread_attaches_and_starts_or_stops_nothing() {
+        // Web and desktop on one thread, or a pane closed and reopened: the
+        // daemon still holds the thread's PTY, so the open is that PTY. No
+        // script runs, so nothing in the sandbox is stopped or started.
+        let (_d, app, fake) = app_with(sbx_answer);
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let key = sbxw_core::session::SessionKey::thread(&sb, &sbxw_core::ThreadName::parse("api").unwrap());
+        let sh = crate::pty::Spawn { program: "sh".into(), args: vec!["-c".into(), "sleep 5".into()], env: vec![] };
+        let (first, _) = app.sessions.get_or_open(&key, 0, || async { Ok(sh) }).await.unwrap();
+        let before = fake.log().len();
+        for _ in 0..2 {
+            let (again, fresh) = app.open_session(&key).await.unwrap();
+            assert!(std::sync::Arc::ptr_eq(&first, &again) && !fresh, "the same terminal");
+        }
+        assert_eq!(fake.log().len(), before, "no sbx call at all: {:?}", &fake.log()[before..]);
+        app.sessions.drop_sandbox("myapp");
+    }
+
     #[test]
     fn the_reason_of_an_early_end_is_the_last_line_printed() {
         let out = b"\x1b[2m[sbxw] thread api - worktree /w\x1b[0m\r\n\x1b[31m[sbxw] cannot create /w/.sbxw-worktrees: denied\x1b[0m\r\n\r\n";

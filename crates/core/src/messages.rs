@@ -298,8 +298,9 @@ pub fn thread_restart_briefing(plan: &Plan, t: &PlanThread) -> String {
     format!(
         "[sbxw] This is a restart of thread \"{name}\": its earlier session ended and its \
          conversation could not be resumed. Your work so far is what is committed on your \
-         branch and left in the worktree: read `git log` and `git status` there before doing \
-         anything, carry on from it, and report your state with `report_thread_status` now \
+         branch and left in the worktree: edits it had not committed are still on disk. Read \
+         `git log`, `git status` and `git diff` there before doing anything, carry on from it, \
+         and report your state with `report_thread_status` now \
          (it is \"{state}\" in sbxw). Your briefing, as first given:\n\n{briefing}",
         name = t.name,
         state = format!("{:?}", t.state).to_lowercase(),

@@ -287,29 +287,47 @@ pub fn thread_run_args(
                 .filter((e) => e && e.name === name && e.cwd === cwd && Number.isInteger(e.pid))
                 .filter((e) => typeof e.sessionId === "string" && /^[0-9a-f-]{8,64}$/.test(e.sessionId))
                 .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+            // Live, and the very session sbxw started for this thread: its
+            // environment says SBXW_THREAD=<thread> and its command line
+            // carries --name <thread>. A pid the registry names but that is
+            // now some other process fails both.
             const alive = (e) => {
                 try { process.kill(e.pid, 0); } catch (x) { return false; }
-                try { return fs.readFileSync("/proc/" + e.pid + "/environ", "utf8").split("\0").includes("SBXW_THREAD=" + name); }
-                catch (x) { return false; }
+                try {
+                    const env = fs.readFileSync("/proc/" + e.pid + "/environ", "utf8").split("\0");
+                    const argv = fs.readFileSync("/proc/" + e.pid + "/cmdline", "utf8").split("\0");
+                    const named = argv.some((a, i) => a === "--name" && argv[i + 1] === name);
+                    return env.includes("SBXW_THREAD=" + name) && named;
+                } catch (x) { return false; }
             };
             const live = ours.find(alive);
             if (live) console.log("live " + live.pid + " " + live.sessionId);
             else if (ours[0]) console.log("last 0 " + ours[0].sessionId);
         ' "$cfg/sessions" "$2" "$wt" 2>/dev/null)
         found="${8:-}"; found_pid="${9:-}"; found_id="${10:-}"
-        resume=""
+        resume=""; resume_note=""
         if [ "$found" = live ]; then
             printf '\033[33m[sbxw] thread %s already has a session running in this sandbox (pid %s) that no pane shows (its terminal was lost, e.g. when the daemon restarted): stopping it so that one session works in this worktree.\033[0m\r\n' "$2" "$found_pid"
             kill -TERM "$found_pid" 2>/dev/null
             for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$found_pid" 2>/dev/null || break; sleep 1; done
-            kill -KILL "$found_pid" 2>/dev/null
-            [ "$7" != new ] && resume="$found_id"
+            if kill -0 "$found_pid" 2>/dev/null; then
+                kill -KILL "$found_pid" 2>/dev/null; sleep 1
+            fi
+            if kill -0 "$found_pid" 2>/dev/null && [ "$(cut -d' ' -f3 "/proc/$found_pid/stat" 2>/dev/null)" != Z ]; then
+                printf '[31m[sbxw] the earlier session of thread %s (pid %s) did not stop: not starting a second one beside it. Stop it in the sandbox (kill -9 %s), then open the thread again.[0m
+' "$2" "$found_pid" "$found_pid"
+                exit 1
+            fi
+            if [ "$7" != new ]; then
+                resume="$found_id"
+                resume_note="[sbxw] Your session was stopped and resumed here by sbxw: its terminal was lost (the sbxw daemon restarted), and a second session must not work beside it. Whatever you were doing was interrupted: a command you were running was stopped, and the edits you had made are still on disk, uncommitted. Read git status and git diff in your worktree before going on, then carry on with your goal."
+            fi
         elif [ "$found" = last ] && [ "$7" != new ] && [ -f "$tr/$found_id.jsonl" ]; then
             resume="$found_id"
         fi
         if [ -n "$resume" ]; then
             printf '\033[2m[sbxw] resuming its conversation (%s)\033[0m\r\n' "$resume"
-            exec claude --dangerously-skip-permissions --name "$2" ${4:+--model "$4"} --resume "$resume"
+            exec claude --dangerously-skip-permissions --name "$2" ${4:+--model "$4"} --resume "$resume" ${resume_note:+"$resume_note"}
         fi
         # A thread started before sbxw resumed by id: its last conversation
         # in its own worktree. Never in a shared one.
@@ -1080,9 +1098,10 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
         run_thread(&r, "the briefing", None, StartMode::New);
         let wt = format!("{}/.sbxw-worktrees/api-auth", r.root.display());
         // The session sbxw lost its terminal to: still running, as the thread.
+        // `--name api-auth` on its command line, as `claude` has it.
         let orphan = || -> u32 {
             let out = std::process::Command::new("bash")
-                .args(["-c", "SBXW_THREAD=api-auth sleep 60 >/dev/null 2>&1 & echo $!"])
+                .args(["-c", "SBXW_THREAD=api-auth bash -c 'sleep 60; :' claude --name api-auth >/dev/null 2>&1 & echo $!"])
                 .output()
                 .unwrap();
             String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
@@ -1096,8 +1115,22 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
         register(&r, pid, sid, &wt, 5);
         let out = run_thread(&r, "restart: the briefing", None, StartMode::Reopen);
         assert!(out.contains(&format!("already has a session running in this sandbox (pid {pid})")), "{out}");
-        assert!(out.trim_end().ends_with(&format!("--resume {sid}")), "its conversation goes on here: {out}");
+        assert!(out.contains(&format!("--resume {sid} [sbxw] Your session was stopped and resumed here")), "its conversation goes on here: {out}");
+        assert!(out.contains("still on disk, uncommitted") && out.contains("git status"), "{out}");
         assert!(gone(pid), "the first session was stopped");
+
+        // The thread's name in the environment alone is not enough: not the
+        // session sbxw started (no --name), so it is left alone.
+        let out = std::process::Command::new("bash")
+            .args(["-c", "SBXW_THREAD=api-auth bash -c 'sleep 60; :' >/dev/null 2>&1 & echo $!"])
+            .output()
+            .unwrap();
+        let half: u32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+        register(&r, half, "0f1e2d3c-0000-4000-8000-00000000000c", &wt, 5);
+        let out = run_thread(&r, "restart: the briefing", None, StartMode::Reopen);
+        assert!(!out.contains("already has a session"), "{out}");
+        assert!(!gone(half));
+        let _ = std::process::Command::new("kill").arg(half.to_string()).status();
 
         // A process that is not the thread (a recycled pid) is left alone.
         let other = std::process::Command::new("sleep").arg("60").spawn().unwrap();

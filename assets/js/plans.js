@@ -376,7 +376,7 @@ function mergeRowHtml(plan, name, i) {
     state = 'pending';
     status = '<span>pending</span>';
   } else if (t?.set_by === 'lead' && !(m.state === 'failed' || m.state === 'merged')) {
-    status = `<span title="${escHtml(t.summary || '')}">marked done by the lead</span>`;
+    status = `<span>marked done by the lead${t.summary ? `: ${escHtml(t.summary)}` : ''}</span>`;
   } else if (m.state === 'failed' || m.state === 'merged') {
     state = 'skipped';
     status = '<span>not merged</span>';

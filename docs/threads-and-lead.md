@@ -62,9 +62,14 @@ same threads under the sandbox.
   sbxw's terminals but not always the session behind one: `sbx exec`'s
   process can outlive its client and go on working unseen. Reopening the
   thread then finds that session (same name, same worktree, a live process
-  whose environment says it is the thread), stops it, and resumes its
-  conversation in the new pane, instead of starting a second session on the
-  same files.
+  whose environment says `SBXW_THREAD=<thread>` and whose command line says
+  `--name <thread>`), stops it (`SIGTERM`, then `SIGKILL` after 10 s; if it
+  still does not stop, the open is refused rather than start a second one),
+  and resumes its conversation in the new pane with a first message saying
+  it was interrupted and that its uncommitted edits are still on disk, to
+  read `git status` and `git diff` before going on. This happens only when
+  sbxw holds no terminal for the thread: while it does, every open attaches
+  to that terminal and runs nothing in the sandbox.
 - **A stopped sandbox comes back** when you open one of its threads: sbxw
   starts it directly (`sbx exec` starts a stopped sandbox, sbx 0.50) after
   releasing any busy host port, then opens the thread. The main session is
