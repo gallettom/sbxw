@@ -774,6 +774,43 @@ impl PlanBook {
         .ok()
     }
 
+    /// The lead marks `thread` of its plan `id` done, having reviewed its
+    /// work, when the thread will not say so itself (its session is gone, or
+    /// it reported to the lead only). This only lets the lead propose the
+    /// merge, which a person still approves; the plan records that the lead
+    /// set it, and the dialog says so. `note` (what the lead checked) is
+    /// required. A thread that reported done itself is left as it is.
+    pub fn mark_done(&mut self, id: &str, sandbox: &str, thread: &str, note: &str, now: u64) -> Result<Plan, String> {
+        let plan = self.led(id, sandbox)?;
+        if plan.state != PlanState::Approved {
+            return Err(format!("plan {id} is not approved"));
+        }
+        let t = plan
+            .threads
+            .iter()
+            .find(|t| t.name == thread)
+            .ok_or_else(|| format!("{thread:?} is not a thread of plan {id}"))?;
+        if t.state == ThreadState::Done && t.set_by.is_none() {
+            return Ok(plan.clone());
+        }
+        if plan.merge.as_ref().is_some_and(|m| matches!(m.state, MergeState::Merging | MergeState::Merged)) {
+            return Err(format!("plan {id} is already merging or merged"));
+        }
+        let note = clip(note);
+        if note.is_empty() {
+            return Err("say what you reviewed (note): it is shown to the user as the reason the thread is done".into());
+        }
+        self.mutate(id, now, |p| {
+            if let Some(t) = p.threads.iter_mut().find(|t| t.name == thread) {
+                t.state = ThreadState::Done;
+                t.summary = note;
+                t.set_by = Some(SetBy::Lead);
+                t.updated_ms = now;
+            }
+            Ok(())
+        })
+    }
+
     /// Forget old settled plans whose threads all finished. Returns the
     /// sandboxes whose files changed.
     pub fn prune(&mut self, now: u64, max_age_ms: u64) -> Vec<String> {
@@ -814,6 +851,30 @@ mod tests {
     fn proposed(book: &mut PlanBook, sb: &str, names: &[&str]) -> Plan {
         book.propose(format!("p-{sb}"), sb, "s", names.iter().map(|n| t(n)).collect(), Variant::Split, "why", Some("lead-1"), 1)
             .unwrap()
+    }
+
+    #[test]
+    fn the_lead_marks_a_reviewed_thread_done_and_the_plan_says_so() {
+        let mut b = PlanBook::new();
+        let p = b.propose("p".into(), "n", "", vec![t("a"), t("b")], Variant::Shared, "x", Some("lead"), 1).unwrap();
+        b.approve(&p.id, vec![t("a"), t("b")], None, None, 2).unwrap();
+        b.set_thread("n", "a", ThreadState::Done, "mine", false, 3).unwrap();
+        let err = b.propose_merge("p", "n", vec![], "", vec![], 4).unwrap_err();
+        assert!(err.contains("\"b\" is not done (it is starting)"), "{err}");
+        assert!(b.mark_done("p", "n", "b", "  ", 5).unwrap_err().contains("say what you reviewed"));
+        assert!(b.mark_done("p", "other", "b", "x", 5).is_err(), "only the plan's own sandbox");
+        assert!(b.mark_done("p", "n", "c", "x", 5).is_err());
+        let p = b.mark_done("p", "n", "b", "reviewed sbxw/team-p: tests pass", 6).unwrap();
+        let tb = &p.threads[1];
+        assert_eq!((tb.state, tb.set_by, tb.summary.as_str()), (ThreadState::Done, Some(SetBy::Lead), "reviewed sbxw/team-p: tests pass"));
+        let unchanged = b.mark_done("p", "n", "a", "x", 7).unwrap();
+        assert_eq!((unchanged.threads[0].summary.as_str(), unchanged.threads[0].set_by), ("mine", None), "a thread's own done stands");
+        b.propose_merge("p", "n", vec![], "", vec![], 8).unwrap();
+        // The thread reporting again takes its mark back.
+        let p = b.set_thread("n", "b", ThreadState::Working, "still on it", false, 9).unwrap();
+        assert_eq!(p.threads[1].set_by, None);
+        b.end_lead("n", 10);
+        assert!(b.mark_done("p", "n", "b", "x", 11).unwrap_err().contains("ended lead mode"));
     }
 
     #[test]

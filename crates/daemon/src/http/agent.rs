@@ -38,6 +38,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/plans/status", post(plan_status))
         .route("/api/plans/propose_merge", post(propose_merge))
         .route("/api/plans/report", post(report))
+        .route("/api/plans/mark_done", post(mark_done))
         .route("/api/sandboxes/:name/codemap/done", post(codemap_done))
         .merge(super::board::agent_routes())
         .merge(super::jarvis::agent_routes())
@@ -227,6 +228,21 @@ struct MergeProposeBody {
 
 async fn propose_merge(State(app): S, Agent(me): Agent, Json(b): Json<MergeProposeBody>) -> ApiResult {
     let plan = app.plan_propose_merge(&b.id, &me, b.order, &b.note, b.distillate)?;
+    Ok(ok_with(json!({ "plan": app.plan_view(&plan) })))
+}
+
+#[derive(Deserialize)]
+struct MarkDoneBody {
+    id: String,
+    thread: String,
+    #[serde(default)]
+    note: String,
+}
+
+/// The lead marks a thread it reviewed done: the plan id is its capability,
+/// as for `propose_merge`.
+async fn mark_done(State(app): S, Agent(me): Agent, Json(b): Json<MarkDoneBody>) -> ApiResult {
+    let plan = app.plan_mark_done(&b.id, &me, &b.thread, &b.note)?;
     Ok(ok_with(json!({ "plan": app.plan_view(&plan) })))
 }
 

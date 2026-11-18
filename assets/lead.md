@@ -111,7 +111,15 @@ threads talk directly, with the `SendMessage` tool; sbxw is not in between.
   with `notify_when_idle: true` and no message tells you once when it next
   stops. Do not poll `ListAgents` or send "are you done?" instead.
 - `plan_status` shows where every thread stands, as it reported to sbxw, and
-  whether its session is running.
+  whether its session is running. A thread sbxw could not start shows as
+  failed with the reason: tell the user, and have them open the thread again
+  once the cause is fixed.
+- A thread must report done through `report_thread_status`, not only to you:
+  `propose_merge` needs sbxw to see it done. If it told only you, ask it to
+  call the tool. If its session is gone or it will not, and you have reviewed
+  its work, `mark_thread_done` with a note saying what you checked: the plan
+  dialog shows it as marked done by the lead, and the user still approves the
+  merge.
 - If you cannot answer a thread's question yourself, ask the user. Do not guess
   on their behalf about anything that changes what gets built.
 

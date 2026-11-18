@@ -187,6 +187,14 @@ impl App {
         Ok(self.plan_changed(plan))
     }
 
+    /// The lead marks a thread of its plan done ([`PlanBook::mark_done`]).
+    pub fn plan_mark_done(&self, id: &str, sandbox: &SandboxRef, thread: &str, note: &str) -> Result<Plan, String> {
+        let note = messages::clip_text(note, sbxw_core::plans::MAX_TEXT);
+        let plan = self.plans.lock().unwrap().mark_done(id, &sandbox.to_string(), thread.trim(), &note, now_ms())?;
+        tracing::info!("plans: the lead of '{sandbox}' marked thread '{}' of {id} done", thread.trim());
+        Ok(self.plan_changed(plan))
+    }
+
     /// A thread reports. When the plan has no lead name, blocked and done are
     /// typed into the main session so the lead still hears. Returns the lead's
     /// address for the thread's own `SendMessage`.
@@ -687,6 +695,22 @@ mod tests {
         assert_eq!(again.plan(&p.id).unwrap().state, PlanState::Pending);
         // Another sandbox cannot wait on it.
         assert!(app.plan_wait(&p.id, &SandboxRef::parse("other").unwrap(), Duration::from_millis(10)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_lead_can_mark_a_silent_thread_done_and_then_propose_the_merge() {
+        let (_d, app) = app();
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let p = app.plan_propose(&sb, "", vec![t("api")], Variant::Split, "one", Some("lead")).await.unwrap();
+        app.plans.lock().unwrap().approve(&p.id, vec![t("api")], None, None, 1).unwrap();
+        assert!(app.plan_propose_merge(&p.id, &sb, vec!["api".into()], "", vec![]).unwrap_err().contains("not done"));
+        assert!(app.plan_mark_done(&p.id, &SandboxRef::parse("other").unwrap(), "api", "x").is_err(), "another sandbox's lead cannot");
+        let plan = app.plan_mark_done(&p.id, &sb, "api", "reviewed sbxw/api").unwrap();
+        let view = app.plan_view(&plan);
+        assert_eq!((view["threads"][0]["state"].as_str(), view["threads"][0]["set_by"].as_str()), (Some("done"), Some("lead")));
+        app.plan_propose_merge(&p.id, &sb, vec!["api".into()], "", vec![]).unwrap();
+        let again = crate::testing::app_in(_d.path());
+        assert_eq!(again.plan(&p.id).unwrap().threads[0].set_by, Some(sbxw_core::plans::SetBy::Lead), "persisted");
     }
 
     #[tokio::test]

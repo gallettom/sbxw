@@ -192,6 +192,14 @@ report your state).
 - All sessions run with `--dangerously-skip-permissions`. If you change the
   lead's permission mode, Claude Code holds messages between them for approval.
 
+- **When a thread will not report done** (its session is gone, or it told
+  only the lead), the lead can mark it done with `mark_thread_done`, after
+  reviewing its work and with a note saying what it checked. This only lets
+  the lead propose the merge, which you still approve; the plan records it
+  (`set_by: "lead"`) and the merge view shows the thread as
+  `marked done by the lead`, the note on hover. A thread that reports again
+  replaces the mark; a thread that reported done itself keeps its own report.
+
 ### 3. One-click merge
 
 When every thread is done, the lead calls `propose_merge` with an order and a
@@ -318,7 +326,7 @@ lead's session also removes the mark.
 <summary>Lead details for the curious</summary>
 
 - **Tools.** The `sbxw-relay` MCP server gives the main session `propose_plan`,
-  `check_plan`, `plan_status` and `propose_merge`; a thread gets
+  `check_plan`, `plan_status`, `propose_merge` and `mark_thread_done`; a thread gets
   `report_thread_status` instead. A session knows which it is from
   `SBXW_THREAD`. **★ Lead mode** installs `/lead` and refreshes the server first.
   A main session started before that keeps its old server: if `/lead` says it
@@ -334,6 +342,10 @@ lead's session also removes the mark.
   `worktree`, the shared worktree's path, set on approval. `propose_plan` takes
   `variant` and `justification`; `POST /api/plans/<id>/approve` takes
   `{threads, variant?}`.
+- **Who set a thread's state.** A thread carries `set_by` when it was not the
+  thread itself: `"sbxw"` for a start that failed (`summary` is the reason),
+  `"lead"` for a thread the lead marked done (`summary` is its note).
+  `POST /api/plans/mark_done` (agent listener) takes `{id, thread, note}`.
 - **Merge state.** The plan carries
   `merge: {order, note, state, base, results, distillate}`; `state` goes
   `proposed` → `merging` → `merged` or `failed`. A shared plan's `order` is every
