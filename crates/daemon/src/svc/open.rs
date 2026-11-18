@@ -258,9 +258,23 @@ impl App {
             .thread_prepare(&sandbox.name, &dir, thread, team.as_ref())
             .await
             .with_context(|| format!("thread {thread}: its worktree could not be made"))?;
-        // Taken only now: a start that failed above keeps it for the retry.
-        let briefing = self.briefings.lock().unwrap().remove(&(sandbox.clone(), thread.to_string())).unwrap_or_default();
-        Ok(Spawn::sbx(scripts::thread_run_args(&sandbox.name, &dir, thread, &briefing, model.as_ref(), team.as_ref())))
+        // The briefing an approval left is taken only now: a start that
+        // failed above keeps it for the retry. Without one, this is a reopen:
+        // the script resumes the thread's conversation, and only failing that
+        // starts it with its plan's goal, said as a restart, never blank.
+        let pending = self.briefings.lock().unwrap().remove(&(sandbox.clone(), thread.to_string()));
+        let (prompt, mode) = match pending {
+            Some(b) => (b, scripts::StartMode::New),
+            None => {
+                let plans = self.plans.lock().unwrap();
+                let restart = plans
+                    .thread_plan(&sandbox.to_string(), thread.as_str())
+                    .map(|(p, t)| sbxw_core::messages::thread_restart_briefing(p, t))
+                    .unwrap_or_default();
+                (restart, scripts::StartMode::Reopen)
+            }
+        };
+        Ok(Spawn::sbx(scripts::thread_run_args(&sandbox.name, &dir, thread, &prompt, model.as_ref(), team.as_ref(), mode)))
     }
 
     /// A stopped sandbox keeps the mappings it was created with (`-p`), and
@@ -505,6 +519,39 @@ mod tests {
         assert!(spawn.args.iter().any(|a| a == "=the briefing"), "{:?}", spawn.args);
         let t = app.plan(&p.id).unwrap().threads[0].clone();
         assert_eq!((t.state, t.set_by, t.summary.as_str()), (ThreadState::Starting, None, ""), "cleared");
+        assert_eq!(spawn.args.last().map(String::as_str), Some("=new"));
+    }
+
+    #[tokio::test]
+    async fn a_reopened_plan_thread_gets_its_goal_said_as_a_restart_never_nothing() {
+        // The pane after a daemon restart: the approval's briefing is gone
+        // (it lived in memory), the plan is not.
+        let (_d, app, _fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("myapp", "running")]),
+            _ => sbx_answer(a),
+        });
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir(ws.path().join(".git")).unwrap();
+        app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+        let p = app
+            .plan_propose(&sb, "the whole plan", vec![plan_thread("api")], sbxw_core::plans::Variant::Split, "one", Some("lead"))
+            .await
+            .unwrap();
+        app.plans.lock().unwrap().approve(&p.id, vec![plan_thread("api")], None, None, 1).unwrap();
+        let key = sbxw_core::session::SessionKey::thread(&sb, &sbxw_core::ThreadName::parse("api").unwrap());
+        let spawn = app.spawn_for(&key).await.unwrap();
+        let n = spawn.args.len();
+        assert_eq!(spawn.args[n - 1], "=reopen");
+        let prompt = &spawn.args[n - 5];
+        assert!(prompt.starts_with("=[sbxw] This is a restart of thread \"api\""), "{prompt}");
+        assert!(prompt.contains("Your goal: do the api") && prompt.contains("report_thread_status") && prompt.contains("\"lead\""), "{prompt}");
+
+        // A thread of no plan reopens as before: nothing to say, resume if it can.
+        let solo = sbxw_core::session::SessionKey::thread(&sb, &sbxw_core::ThreadName::parse("solo").unwrap());
+        let spawn = app.spawn_for(&solo).await.unwrap();
+        let n = spawn.args.len();
+        assert_eq!((spawn.args[n - 5].as_str(), spawn.args[n - 1].as_str()), ("=", "=reopen"));
     }
 
     #[test]

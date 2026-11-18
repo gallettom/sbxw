@@ -729,8 +729,8 @@ mod tests {
         let api = sbxw_core::ThreadName::parse("api").unwrap();
         let tm = app.team_for(&sb, &api).unwrap();
         assert_eq!((tm.plan.as_str(), tm.worktree.as_str()), (p.id.as_str(), team.as_str()));
-        let argv = sbxw_sbx::scripts::thread_run_args(&sb.name, "/w", &api, "", None, Some(&tm));
-        assert_eq!(&argv[argv.len() - 2..], [format!("={team}"), format!("={}", p.id)]);
+        let argv = sbxw_sbx::scripts::thread_run_args(&sb.name, "/w", &api, "", None, Some(&tm), sbxw_sbx::scripts::StartMode::New);
+        assert_eq!(&argv[argv.len() - 3..], [format!("={team}"), format!("={}", p.id), "=new".to_string()]);
         let listed: Vec<String> = app.threads(&sb).await.threads.iter().map(|v| v["name"].as_str().unwrap().to_string()).collect();
         assert_eq!(listed, ["api", "web"], "its threads are listed though they have no worktree of their own");
 

@@ -52,7 +52,19 @@ same threads under the sandbox.
 - **Hiding** closes the pane, never the session. The pane's ✕ leaves the thread
   running too.
 - **Reopened, it picks up where it was.** After a daemon or sandbox restart, a
-  thread resumes with `claude --continue`.
+  thread resumes its conversation: by its session id, read from Claude Code's
+  session registry by the thread's name and worktree (`claude --resume`), or
+  `claude --continue` for an older one. A plan's thread with nothing to resume
+  starts again with its goal, scope and rules, told it is a restart; it never
+  comes back blank.
+- **One live session per thread.** A second open (another pane, the desktop
+  and the web together) attaches to the same terminal. A daemon restart ends
+  sbxw's terminals but not always the session behind one: `sbx exec`'s
+  process can outlive its client and go on working unseen. Reopening the
+  thread then finds that session (same name, same worktree, a live process
+  whose environment says it is the thread), stops it, and resumes its
+  conversation in the new pane, instead of starting a second session on the
+  same files.
 - **A stopped sandbox comes back** when you open one of its threads: sbxw
   starts it directly (`sbx exec` starts a stopped sandbox, sbx 0.50) after
   releasing any busy host port, then opens the thread. The main session is
@@ -173,9 +185,10 @@ report your state).
   session instead.
 - **In a shared plan**, every thread opens in the plan's worktree, made by the
   first one to start, with `SBXW_TEAM=shared` and `SBXW_TEAM_PLAN=<plan id>` in
-  its environment. A thread reopened after a restart starts a fresh
-  conversation there rather than `--continue`: the threads share one folder,
-  so "the last conversation in it" could be another thread's.
+  its environment. A thread reopened after a restart resumes its own
+  conversation by session id, never with `--continue`: the threads share one
+  folder, so "the last conversation in it" could be another thread's. With no
+  conversation of its own to resume, it starts again with its briefing.
 - All sessions run with `--dangerously-skip-permissions`. If you change the
   lead's permission mode, Claude Code holds messages between them for approval.
 
@@ -251,8 +264,8 @@ lead's session also removes the mark.
   open is refused with the list.
 - **No trust dialog.** Before starting `claude`, the thread marks its worktree
   trusted in `~/.claude.json`, the same way provisioning does for the workspace.
-- **Model.** Passed as `claude --model <id>` on a fresh start and on
-  `--continue`; checked against `^[a-z0-9][a-z0-9.\-]{0,63}$`.
+- **Model.** Passed as `claude --model <id>` on a fresh start and on a
+  resume; checked against `^[a-z0-9][a-z0-9.\-]{0,63}$`.
   `GET /api/models` lists the choices, `GET /api/sandboxes/<name>/threads` gives
   each thread's model.
 - **Worktree graph API.** `GET /api/sandboxes/<name>/worktrees` returns

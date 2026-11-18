@@ -183,9 +183,17 @@ macro_rules! merge_check_fn {
 ///   would be that same session. The permission flag is the one sbx gives the
 ///   agent it starts: a thread is exactly as trusted as the pane beside it.
 ///   `bash -lc` is a login shell, for `claude` on PATH (see `codemap_run_args`).
-/// * Reopened without a prompt, a thread that has a conversation resumes it
-///   (`claude --continue`): its pane after the daemon or the sandbox
-///   restarted, which ends every session sbxw held.
+/// * A thread has at most one live session. `mode` says whether this is its
+///   first start ([`StartMode::New`]) or a reopen ([`StartMode::Reopen`]):
+///   its pane after the daemon or the sandbox restarted, which ends every
+///   terminal sbxw held but not always the session behind it (`sbx exec`'s
+///   process outlives its client). A session of the thread still running
+///   with no pane is stopped first; a reopen then resumes that conversation,
+///   or the thread's last one in the worktree (`claude --resume <id>`, read
+///   from Claude Code's session registry by the thread's name and worktree;
+///   `--continue` for a split thread whose conversation predates that), and
+///   only failing both starts fresh with `prompt`: the plan's goal, said as
+///   a restart. A thread never comes back blank when its plan has a goal.
 /// * `SBXW_THREAD` names the thread to everything the session starts; the
 ///   relay MCP server reads it to know it serves a thread, not the main
 ///   session (the one that can lead). `prompt`, when given, is the session's
@@ -207,8 +215,8 @@ macro_rules! merge_check_fn {
 ///   starts first (they all start at once), with `SBXW_TEAM=shared` and
 ///   `SBXW_TEAM_PLAN=<plan>` set. Such a thread never `--continue`s: all
 ///   share the cwd transcripts are filed under, so "its last conversation"
-///   could be another thread's.
-/// * Workspace, thread name, prompt, model and plan are positional (`$1`–`$6`),
+///   could be another thread's. It resumes by session id only.
+/// * Workspace, thread name, prompt, model, plan and mode are positional (`$1`–`$7`),
 ///   never script text: the thread name comes from a WebSocket query parameter.
 pub fn thread_run_args(
     name: &SandboxName,
@@ -217,6 +225,7 @@ pub fn thread_run_args(
     prompt: &str,
     model: Option<&ModelId>,
     team: Option<&Team>,
+    mode: StartMode,
 ) -> Vec<String> {
     const SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), worktree_fn!(), r#"
         [ -n "$1" ] && cd "$1" 2>/dev/null
@@ -253,21 +262,92 @@ pub fn thread_run_args(
             fs.writeFileSync(t, JSON.stringify(d, null, 2), { mode: st.mode & 0o777 });
             fs.renameSync(t, p);
         ' "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" 2>/dev/null
-        # Reopened with nothing new to say (its pane after a restart of the
-        # daemon or the sandbox): pick its conversation back up, if it had one.
-        # Claude Code files transcripts under the cwd with every character
-        # outside [A-Za-z0-9] turned into '-'.
-        tr="$HOME/.claude/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')"
-        if [ -z "$3" ] && [ -z "$5" ] && ls "$tr"/*.jsonl >/dev/null 2>&1; then
+        # At most one live session per thread. A session sbxw started earlier
+        # can still be running in the sandbox with no pane: `sbx exec`'s
+        # process outlives its client, so a daemon restart leaves it working
+        # unseen. It is found in Claude Code's registry of sessions (this
+        # thread's name, this worktree, a live pid whose environment says
+        # SBXW_THREAD is this thread), stopped, and its conversation resumed
+        # here, rather than a second session started beside it on the same
+        # files. Otherwise, reopened: the thread's last conversation in this
+        # worktree, by its id (a shared worktree holds every thread's), and
+        # only failing that a fresh start with the goal sbxw passed.
+        cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+        tr="$cfg/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')"
+        set -- "$@" $(node -e '
+            const fs = require("fs"), path = require("path");
+            const [dir, name, cwd] = process.argv.slice(1);
+            let all = [];
+            try {
+                all = fs.readdirSync(dir).filter((f) => /^[0-9]+\.json$/.test(f)).map((f) => {
+                    try { return JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")); } catch (e) { return null; }
+                });
+            } catch (e) {}
+            const ours = all
+                .filter((e) => e && e.name === name && e.cwd === cwd && Number.isInteger(e.pid))
+                .filter((e) => typeof e.sessionId === "string" && /^[0-9a-f-]{8,64}$/.test(e.sessionId))
+                .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+            const alive = (e) => {
+                try { process.kill(e.pid, 0); } catch (x) { return false; }
+                try { return fs.readFileSync("/proc/" + e.pid + "/environ", "utf8").split("\0").includes("SBXW_THREAD=" + name); }
+                catch (x) { return false; }
+            };
+            const live = ours.find(alive);
+            if (live) console.log("live " + live.pid + " " + live.sessionId);
+            else if (ours[0]) console.log("last 0 " + ours[0].sessionId);
+        ' "$cfg/sessions" "$2" "$wt" 2>/dev/null)
+        found="${8:-}"; found_pid="${9:-}"; found_id="${10:-}"
+        resume=""
+        if [ "$found" = live ]; then
+            printf '\033[33m[sbxw] thread %s already has a session running in this sandbox (pid %s) that no pane shows (its terminal was lost, e.g. when the daemon restarted): stopping it so that one session works in this worktree.\033[0m\r\n' "$2" "$found_pid"
+            kill -TERM "$found_pid" 2>/dev/null
+            for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$found_pid" 2>/dev/null || break; sleep 1; done
+            kill -KILL "$found_pid" 2>/dev/null
+            [ "$7" != new ] && resume="$found_id"
+        elif [ "$found" = last ] && [ "$7" != new ] && [ -f "$tr/$found_id.jsonl" ]; then
+            resume="$found_id"
+        fi
+        if [ -n "$resume" ]; then
+            printf '\033[2m[sbxw] resuming its conversation (%s)\033[0m\r\n' "$resume"
+            exec claude --dangerously-skip-permissions --name "$2" ${4:+--model "$4"} --resume "$resume"
+        fi
+        # A thread started before sbxw resumed by id: its last conversation
+        # in its own worktree. Never in a shared one.
+        if [ "$7" != new ] && [ -z "$5" ] && [ -z "$3" ] && ls "$tr"/*.jsonl >/dev/null 2>&1; then
             printf '\033[2m[sbxw] resuming its last conversation\033[0m\r\n'
             exec claude --dangerously-skip-permissions --name "$2" ${4:+--model "$4"} --continue
+        fi
+        if [ "$7" != new ] && [ -n "$3" ]; then
+            printf '\033[2m[sbxw] no conversation of thread %s to resume: starting it again with its goal\033[0m\r\n' "$2"
         fi
         exec claude --dangerously-skip-permissions --name "$2" ${4:+--model "$4"} ${3:+"$3"}"#);
     let mut args = owned(&["exec", "-it", name.as_str(), "--", "bash", "-lc", SCRIPT, "sbxw-thread"]);
     let model = model.map(ModelId::as_str).unwrap_or("");
     let (worktree, plan) = team.map_or(("", ""), |t| (t.worktree.as_str(), t.plan.as_str()));
-    args.extend([workspace, thread.as_str(), prompt, model, worktree, plan].map(pos));
+    args.extend([workspace, thread.as_str(), prompt, model, worktree, plan, mode.as_str()].map(pos));
     args
+}
+
+/// How a thread's session is being started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartMode {
+    /// Its first start for this plan (or a retry before it ever ran): a fresh
+    /// conversation with `prompt` as its first message, whatever conversation
+    /// the worktree holds from earlier.
+    New,
+    /// Opened again (its pane after a restart, a second open, a reopen after
+    /// a failure): resume its conversation if it has one, and only failing
+    /// that start fresh with `prompt`, the plan's goal said as a restart.
+    Reopen,
+}
+
+impl StartMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StartMode::New => "new",
+            StartMode::Reopen => "reopen",
+        }
+    }
 }
 
 /// Make thread `$2`'s worktree (or, with `$3`, the shared plan worktree
@@ -627,12 +707,12 @@ mod tests {
     #[test]
     fn a_thread_passes_everything_as_arguments_not_as_script() {
         let model = ModelId::parse("claude-opus-5-5").unwrap();
-        let args = thread_run_args(&sb(), "/w s", &th(), "do it; rm -rf /", Some(&model), None);
+        let args = thread_run_args(&sb(), "/w s", &th(), "do it; rm -rf /", Some(&model), None, StartMode::New);
         let script = &args[6];
         assert!(!script.contains("rm -rf") && !script.contains("api-auth") && !script.contains("/w s"));
-        assert_eq!(&args[7..], ["sbxw-thread", "=/w s", "=api-auth", "=do it; rm -rf /", "=claude-opus-5-5", "=", "="]);
+        assert_eq!(&args[7..], ["sbxw-thread", "=/w s", "=api-auth", "=do it; rm -rf /", "=claude-opus-5-5", "=", "=", "=new"]);
         assert_eq!(&args[..3], ["exec", "-it", "myapp"]);
-        let no_model = thread_run_args(&sb(), "", &th(), "", None, None);
+        let no_model = thread_run_args(&sb(), "", &th(), "", None, None, StartMode::New);
         assert_eq!(no_model[11], "=");
     }
 
@@ -650,8 +730,8 @@ mod tests {
     #[test]
     fn a_shared_plan_thread_opens_in_the_plan_worktree_with_its_env() {
         let team = Team { plan: "p-1".into(), worktree: ThreadName::parse("team-p-1").unwrap() };
-        let args = thread_run_args(&sb(), "/w", &th(), "", None, Some(&team));
-        assert_eq!(&args[12..], ["=team-p-1", "=p-1"]);
+        let args = thread_run_args(&sb(), "/w", &th(), "", None, Some(&team), StartMode::New);
+        assert_eq!(&args[12..], ["=team-p-1", "=p-1", "=new"]);
         let script = &args[6];
         assert!(script.contains(r#"wt="$wtd/$key""#) && script.contains(r#"key="${5:-$2}""#));
         assert!(script.contains(r#"export SBXW_TEAM=shared SBXW_TEAM_PLAN="$6""#));
@@ -684,7 +764,7 @@ mod tests {
         git(&["commit", "-q", "--allow-empty", "-m", "one"]);
         let team = Team { plan: "p-1".into(), worktree: ThreadName::parse("team-p-1").unwrap() };
         for t in ["api", "web"] {
-            let args = thread_run_args(&sb(), r.to_str().unwrap(), &ThreadName::parse(t).unwrap(), "go", None, Some(&team));
+            let args = thread_run_args(&sb(), r.to_str().unwrap(), &ThreadName::parse(t).unwrap(), "go", None, Some(&team), StartMode::New);
             let script = args[6].replace("exec claude", "echo claude").replace("node -e", "true");
             let out = std::process::Command::new("bash")
                 .env("HOME", &d)
@@ -699,7 +779,7 @@ mod tests {
         assert!(wt.is_dir());
         assert!(!r.join(".sbxw-worktrees/api").exists(), "no worktree of its own");
         let env = std::process::Command::new("bash")
-            .args(["-c", &thread_run_args(&sb(), "", &th(), "", None, Some(&team))[6].replace("exec claude", "env #").replace("node -e", "true")])
+            .args(["-c", &thread_run_args(&sb(), "", &th(), "", None, Some(&team), StartMode::Reopen)[6].replace("exec claude", "env #").replace("node -e", "true")])
             .args(["x", &format!("={}", r.display()), "=api-auth", "=", "=", "=team-p-1", "=p-1"])
             .env("HOME", &d)
             .output()
@@ -930,6 +1010,113 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
         let exclude = std::fs::read_to_string(r.root.join(".git/info/exclude")).unwrap();
         assert!(exclude.lines().any(|l| l == "/.sbxw-worktrees/"), "excluded, not in .gitignore");
         assert!(r.git(&["status", "--porcelain"]).is_empty());
+    }
+
+    /// `thread_run_args`' script against a real repo, `claude` printed
+    /// rather than run, with Claude Code's registry under the repo's HOME.
+    fn run_thread(r: &Repo, prompt: &str, team: Option<&Team>, mode: StartMode) -> String {
+        let args = thread_run_args(&sb(), r.root.to_str().unwrap(), &th(), prompt, None, team, mode);
+        let script = args[6].replace("exec claude", "exec echo claude");
+        let out = std::process::Command::new("bash")
+            .args(["-c", &script])
+            .args(&args[7..])
+            .env("HOME", &r.dir)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    fn register(r: &Repo, pid: u32, session: &str, cwd: &str, started: u64) {
+        let dir = r.dir.join(".claude/sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        let entry = serde_json::json!({ "pid": pid, "sessionId": session, "cwd": cwd, "name": "api-auth", "startedAt": started });
+        std::fs::write(dir.join(format!("{pid}.json")), entry.to_string()).unwrap();
+    }
+
+    fn has_node() -> bool {
+        std::process::Command::new("node").arg("--version").output().is_ok_and(|o| o.status.success())
+    }
+
+    #[test]
+    fn a_reopened_thread_resumes_its_conversation_by_id_or_starts_with_its_goal() {
+        let Some(r) = Repo::new("thread-reopen") else { return };
+        if !has_node() {
+            return;
+        }
+        r.with_branch("other", "a");
+        let first = run_thread(&r, "the briefing", None, StartMode::New);
+        assert!(first.trim_end().ends_with("claude --dangerously-skip-permissions --name api-auth the briefing"), "{first}");
+        let wt = format!("{}/.sbxw-worktrees/api-auth", r.root.display());
+
+        // Reopened with nothing to resume: the goal, said as a restart.
+        let again = run_thread(&r, "restart: the briefing", None, StartMode::Reopen);
+        assert!(again.contains("no conversation of thread api-auth to resume: starting it again with its goal"), "{again}");
+        assert!(again.trim_end().ends_with("--name api-auth restart: the briefing"), "{again}");
+
+        // Its last session, gone, with a transcript: resumed by id, in a
+        // shared worktree too (where --continue would pick anyone's).
+        let sid = "0f1e2d3c-0000-4000-8000-000000000001";
+        register(&r, 999_999_999, sid, &wt, 2);
+        register(&r, 999_999_998, "0f1e2d3c-0000-4000-8000-000000000000", &wt, 1);
+        let projects = r.dir.join(".claude/projects").join(wt.replace(|c: char| !c.is_ascii_alphanumeric(), "-"));
+        std::fs::create_dir_all(&projects).unwrap();
+        std::fs::write(projects.join(format!("{sid}.jsonl")), "{}\n").unwrap();
+        let resumed = run_thread(&r, "restart: the briefing", None, StartMode::Reopen);
+        assert!(resumed.trim_end().ends_with(&format!("--name api-auth --resume {sid}")), "{resumed}");
+
+        // A new plan's first start never resumes an old conversation.
+        let fresh = run_thread(&r, "a new briefing", None, StartMode::New);
+        assert!(fresh.trim_end().ends_with("--name api-auth a new briefing"), "{fresh}");
+    }
+
+    #[test]
+    fn a_session_still_running_without_a_pane_is_stopped_not_doubled() {
+        let Some(r) = Repo::new("thread-orphan") else { return };
+        if !has_node() {
+            return;
+        }
+        r.with_branch("other", "a");
+        run_thread(&r, "the briefing", None, StartMode::New);
+        let wt = format!("{}/.sbxw-worktrees/api-auth", r.root.display());
+        // The session sbxw lost its terminal to: still running, as the thread.
+        let orphan = || -> u32 {
+            let out = std::process::Command::new("bash")
+                .args(["-c", "SBXW_THREAD=api-auth sleep 60 >/dev/null 2>&1 & echo $!"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+        };
+        let gone = |pid: u32| {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+            stat.is_empty() || stat.split_whitespace().nth(2) == Some("Z")
+        };
+        let sid = "0f1e2d3c-0000-4000-8000-00000000000a";
+        let pid = orphan();
+        register(&r, pid, sid, &wt, 5);
+        let out = run_thread(&r, "restart: the briefing", None, StartMode::Reopen);
+        assert!(out.contains(&format!("already has a session running in this sandbox (pid {pid})")), "{out}");
+        assert!(out.trim_end().ends_with(&format!("--resume {sid}")), "its conversation goes on here: {out}");
+        assert!(gone(pid), "the first session was stopped");
+
+        // A process that is not the thread (a recycled pid) is left alone.
+        let other = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        register(&r, other.id(), "0f1e2d3c-0000-4000-8000-00000000000b", &wt, 6);
+        let out = run_thread(&r, "restart: the briefing", None, StartMode::Reopen);
+        assert!(!out.contains("already has a session"), "{out}");
+        assert!(!gone(other.id()));
+        let mut other = other;
+        let _ = other.kill();
+        let _ = other.wait();
+
+        // At a new plan's first start the stray session is stopped too, and
+        // the thread starts fresh with its briefing.
+        let pid = orphan();
+        register(&r, pid, sid, &wt, 7);
+        let out = run_thread(&r, "a new briefing", None, StartMode::New);
+        assert!(out.contains("already has a session running"), "{out}");
+        assert!(out.trim_end().ends_with("--name api-auth a new briefing"), "{out}");
+        assert!(gone(pid));
     }
 
     #[test]

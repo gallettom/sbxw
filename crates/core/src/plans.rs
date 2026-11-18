@@ -733,6 +733,13 @@ impl PlanBook {
             .map(|p| p.id.clone())
     }
 
+    /// The approved plan `thread` works under, and its entry there: the
+    /// latest approved plan holding the name, as `set_thread` picks it.
+    pub fn thread_plan(&self, sandbox: &str, thread: &str) -> Option<(&Plan, &PlanThread)> {
+        let p = self.plans.get(&self.plan_of_thread(sandbox, thread)?)?;
+        Some((p, p.threads.iter().find(|t| t.name == thread)?))
+    }
+
     /// `thread` could not start (its worktree, its branch, its session):
     /// failed, with the reason, set by sbxw. A thread already done keeps its
     /// state: the failure is a later reopen's, and the work is finished.
