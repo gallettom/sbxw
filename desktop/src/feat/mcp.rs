@@ -255,9 +255,7 @@ fn mcp_save(q: &Asked) -> Result<Vec<Action>, String> {
 pub fn rail_entry(ctx: &Ctx) -> Extra {
     let n = list(ctx.get("mcp"), "servers").len();
     Extra {
-        // The switch, once the rail's `Place::Rail` is in (sbxw/desktop-views):
-        // place: Place::Rail { zone: crate::feat::Zone::Configure, order: 10 },
-        place: Place::Topbar,
+        place: Place::Rail { zone: crate::feat::Zone::Configure, order: 10 },
         id: "mcp".into(),
         label: "MCP servers".into(),
         icon: Some(ICON.into()),

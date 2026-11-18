@@ -176,9 +176,7 @@ fn kits_save(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
 pub fn rail_entry(ctx: &Ctx) -> Extra {
     let n = waiting(ctx);
     Extra {
-        // The switch, once the rail's `Place::Rail` is in (sbxw/desktop-views):
-        // place: Place::Rail { zone: crate::feat::Zone::Configure, order: 30 },
-        place: Place::Topbar,
+        place: Place::Rail { zone: crate::feat::Zone::Configure, order: 30 },
         id: "kits".into(),
         label: "Kits".into(),
         icon: Some(ICON.into()),
