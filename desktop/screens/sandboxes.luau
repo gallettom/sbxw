@@ -1,14 +1,18 @@
--- The sandbox list: a status rail. Built in; a copy at
+-- The sandbox list: a status dot. Built in; a copy at
 -- ~/.sbxw/desktop/screens/sandboxes.luau replaces it and reloads on save.
 --
--- Every row has a 3 pt rail on its left edge that carries the sandbox's
--- state by colour AND shape, with the state word beside it:
---   wants you  amber, solid, with a notch     (the only one that draws the eye)
---   working    blue, dashed
---   running    green, solid                   (running and idle)
---   starting…  grey, dashed                   (any state in progress)
+-- Every row starts with a round dot before its name that carries the
+-- sandbox's state, with the state word under it (colour is never alone):
+--   wants you  amber, filled, and the amber notch on the row's left edge
+--              (the only state that draws the eye)
+--   working    blue, filled
+--   running    green, filled                  (running and idle)
+--   starting…  blue, hollow                   (any state in progress)
 --   stopped    grey, hollow
---   failed     red, broken in the middle      (unreachable, or a state sbx calls an error)
+--   failed     red, filled                    (unreachable, or a state sbx calls an error)
+-- The rail the rows had (a 3 pt bar per state) went with the dot: it said
+-- the same thing a third time. Only "wants you" keeps its notch at the edge.
+-- Sessions under a sandbox keep their small rails (their own states).
 -- Line 1: the name (it truncates; nothing is drawn over it), the network
 -- count as a bubble (blue: hosts sbx refused; amber: sbx holds something for
 -- you), the pane chip (P1), the ⋯ menu (shown on hover, keyboard focus and
@@ -134,6 +138,16 @@ local function state_of(sb, data)
 end
 
 local rail_fill = { green = "green", blue = "blue", amber = "amber", red = "red", muted = "text-muted" }
+
+-- The row's status dot: 8 pt, filled, or a ring for a state in progress
+-- (blue) and for stopped (grey).
+local function status_dot(st, name)
+  local progress = st.tone == "muted" and st.shape == "dashed"
+  local hollow = st.shape == "hollow" or progress
+  local c = (progress and "blue") or rail_fill[st.tone] or "text-muted"
+  return row{ key = "dot-" .. name, w = 12, h = 20, align = "center", help = st.word,
+    column{ w = 8, h = 8, radius = 4, fill = (not hollow) and c or nil, border = hollow and c or nil } }
+end
 
 -- The rail: 3 pt, its shape says the state without colour.
 local function rail(tone, shape, small)
@@ -264,10 +278,7 @@ local function menu_label(e)
   return l
 end
 
--- `solo`: the colour of its workspace when it is that workspace's only
--- sandbox (no group block): a small square before its name, the same as a
--- group header's, so a pane bar's or a tab's colour is found in the list.
-local function item(sb, app, data, solo)
+local function item(sb, app, data)
   local name = sb.name
   local selected = app.selected == name
   local pane = in_pane(app, name)
@@ -399,8 +410,7 @@ local function item(sb, app, data, solo)
   -- padding, which keeps a 24 pt target), and moves with the name's length;
   -- a long name truncates before the bubble is pushed out.
   local line1 = { w = "full", gap = 2,
-    solo and row{ key = "solo-" .. name, w = 12, help = "Its workspace's colour, as on its panes and tabs: " .. (sb.workspace or ""),
-      column{ w = 8, h = 8, radius = 2, fill = solo } } or false,
+    status_dot(st, name),
     text{ name, size = "title", weight = "medium", color = "text-bright", truncate = true, help = name },
   }
   if approvals then
@@ -412,7 +422,7 @@ local function item(sb, app, data, solo)
   -- The ⋯ takes its room beside the name when the whole name still fits;
   -- a name too long for the line keeps all of it at rest, and the ⋯ shows
   -- over its end only on hover or focus, on the row's own fill.
-  local name_w = (utf8.len(name) or #name) * 8.4 + (approvals and 30 or 0)
+  local name_w = (utf8.len(name) or #name) * 8.4 + (approvals and 30 or 0) + 14
   -- With a bubble the ⋯ always keeps its room, so it never covers the bubble.
   local fits = approvals ~= nil or name_w + 28 <= col_w
   table.insert(line1, row{ gap = 0, reveal = not selected,
@@ -428,7 +438,7 @@ local function item(sb, app, data, solo)
     shortcuts = { { "Open its terminal", "Enter" }, { "Start or stop", "Space" } },
     h = 52, w = "full", gap = 8, align = "stretch", radius = "sm",
     fill = selected and "elevated" or nil, hover = selected and "elevated" or "hover-subtle",
-    column{ py = 8, w = 7, align = "start", rail(st.tone, st.shape) },
+    column{ py = 8, w = 7, align = "start", st.shape == "notch" and rail(st.tone, st.shape) or false },
     column{ grow = 1, gap = 0, justify = "center",
       row(line1),
       row(line2),
@@ -679,8 +689,8 @@ return {
     -- A sandbox in its group's block: its row, then its sessions line and
     -- block, side by side in the block's folding stack (one level of folds:
     -- what changes height is always a row of the stack that glides it).
-    local function sandbox_rows(sb, blk, solo)
-      table.insert(blk, item(sb, app, data, solo))
+    local function sandbox_rows(sb, blk)
+      table.insert(blk, item(sb, app, data))
       sessions_block(sb, app, data, state, blk, (model_of(sb, data)))
     end
     for _, g in ipairs(groups(shown)) do
@@ -714,7 +724,7 @@ return {
       else
         local blk = { key = "block-ungrouped", gap = 2, w = "full", px = 4, py = 4, folds = true }
         for _, sb in ipairs(g.items) do
-          sandbox_rows(sb, blk, (not sb.chat and sb.workspace and sb.workspace ~= "") and colors[sb.name] or nil)
+          sandbox_rows(sb, blk)
         end
         table.insert(body, column(blk))
       end
