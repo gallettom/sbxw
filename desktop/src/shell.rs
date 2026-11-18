@@ -3666,31 +3666,56 @@ mod tests {
     /// then it goes into the menu like any extra.
     #[test]
     fn the_usage_bars_go_first_and_the_words_stay() {
-        let mut seen = vec![];
-        // Under 720: what the app's zoom gives.
-        for w in (280..=1800).rev().step_by(40) {
-            let mut rt = runtime("shell/usage-a.json", w as f32, 816.0);
-            rt.update(|s, _| {
-                s.notice = None;
-                s.feats.panels.clear();
-                s.feats.panel = None;
-            });
+        // One window resized through every width (a fresh window per width
+        // gave the same state at each of them, checked 2026-11-18), down
+        // from 1800, then back up: what a narrow window drops comes back.
+        let mut rt = runtime("shell/usage-a.json", 1800.0, 816.0);
+        rt.set_system_reduced_motion(true);
+        rt.update(|s, _| {
+            s.notice = None;
+            s.feats.panels.clear();
+            s.feats.panel = None;
+        });
+        let mut state_at = |w: f32| {
+            rt.set_viewport((w, 816.0), 1.0);
             for _ in 0..6 {
                 rt.frame(0.016);
             }
             rt.update(|s, _| s.push_data());
+            // Until the top bar's data has held for three frames (at most 40).
+            let topbar = |rt: &rune::Runtime<App>| rt.state.screens.iter().find(|x| x.name == "topbar").unwrap().data().clone();
+            let (mut last, mut still) = (J::Null, 0);
             for _ in 0..40 {
                 rt.frame(0.016);
+                let now = topbar(&rt);
+                still = if now == last { still + 1 } else { 0 };
+                last = now;
+                if still >= 3 {
+                    break;
+                }
             }
-            let data = rt.state.screens.iter().find(|x| x.name == "topbar").unwrap().data().clone();
+            let data = topbar(&rt);
             let inline = data["app"]["extras"]["topbar"].as_array().unwrap().iter().any(|e| e["id"] == "usage" && e["more"] != true);
             let bars = data["app"]["topbar"]["usage_bars"] == true;
-            let state = if bars { "bars" } else if inline { "words" } else { "menu" };
-            if seen.last() != Some(&state) {
-                seen.push(state);
+            if bars { "bars" } else if inline { "words" } else { "menu" }
+        };
+        let mut down = vec![];
+        // Under 720: what the app's zoom gives.
+        for w in (280..=1800).rev().step_by(40) {
+            let state = state_at(w as f32);
+            if down.last() != Some(&state) {
+                down.push(state);
             }
         }
-        assert_eq!(seen, ["bars", "words", "menu"], "from 1800 down to 440");
+        assert_eq!(down, ["bars", "words", "menu"], "from 1800 down to 280");
+        let mut up = vec![];
+        for w in (280..=1800).step_by(40) {
+            let state = state_at(w as f32);
+            if up.last() != Some(&state) {
+                up.push(state);
+            }
+        }
+        assert_eq!(up, ["menu", "words", "bars"], "from 280 back up to 1800");
     }
 
     /// The palette opens with the app's chord, filters, runs the same
