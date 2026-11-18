@@ -810,8 +810,8 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
 `coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `threads`,
-`shield`, `prompt`, `ask`, `jarvis`, `tag`, `plug`, `book`, `box`,
-`logo-prompt` (the sbxw mark's ">", for the top bar's logo).
+`shield`, `prompt`, `ask`, `jarvis`, `tag`, `logo-prompt` (the sbxw mark's
+">", for the top bar's logo).
 
 One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 
@@ -829,9 +829,6 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `prompt` | a shell (Bash) |
 | `stop` | interrupt or stop |
 | `tag` | keyword pills |
-| `plug` | MCP servers |
-| `book` | skills (kept for every new sandbox) |
-| `box` | kits |
 
 ## Where screens live
 
@@ -1237,8 +1234,11 @@ forgotten; a screen only sees names and whether a value is set.
 Three docked panels (440 to 460 pt, the shared panel header: icon, title,
 the close cross at the top right), each its own feature
 (`src/feat/mcp.rs`, `skills.rs`, `kits.rs`, tests beside them) and its own
-rail entry in the configure zone above Settings: MCP (`plug`, order 10),
-Skills (`book`, 20), Kits (`box`, 30). Each declares its entry in one
+rail entry in the configure zone above Settings: MCP (order 10), Skills
+(20), Kits (30). Their icons, one mark each wherever the view appears (rail,
+panel header, palette, Manage dialog, pane menu): `plug` MCP servers (a
+connector, not the network's `shield`), `book` skills (not the agent's
+`sparkle`, the team's `people` or Jarvis's ring), `box` kits. Each declares its entry in one
 function, `rail_entry`, an extra whose intent is `open_panel {screen}`
 (the rail marks it on while the panel shows; a second press closes it).
 The palette lists the same extras. A panel rather than a modal: each is
