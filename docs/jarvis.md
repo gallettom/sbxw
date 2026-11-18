@@ -164,8 +164,7 @@ what it runs, refuse it.
 
 ## How approval works
 
-A proposal opens a dialog under the top bar. It does not take the keyboard
-from a terminal: click into it to use it. It shows:
+A proposal opens a dialog under the top bar. It shows:
 
 - the summary, in Jarvis's words;
 - a **Low risk** or **High risk** badge;
@@ -180,6 +179,19 @@ reason. The changes are applied in order and stop at the first that fails:
 the dialog then shows the result of each change, and the error.
 
 **✕** means later. The bar's **Jarvis · N to review** brings the dialog back.
+
+**Low risk leaves the terminals alone; high risk holds them.** A low-risk
+proposal does not take the keyboard from a terminal (click into the dialog to
+use it): it is answered by a spoken or typed yes, and the person may be in
+the middle of typing elsewhere. A high-risk one (a kit, a network host, an
+MCP server or its host command, a desktop screen, or anything else the daemon marks
+high) must be read and clicked, so while it shows the terminals take nothing
+from you (no keys, paste, mouse, wheel or file drop), a dimmed layer covers
+them, and the focus goes to the proposal's controls. Otherwise a key meant
+for the dialog, or an agent's prompt answered by habit, could land in a
+terminal beside the change you are reviewing. Closing it, answering it, or a
+proposal turning low risk frees the terminals and gives the focus back.
+Jarvis's own panel stays usable throughout.
 
 **By voice.** With the voice on, Jarvis reads the summary of a new proposal:
 

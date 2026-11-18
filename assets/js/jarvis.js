@@ -6,9 +6,13 @@
 //
 // * **The diff is the sandbox's word.** Summary, titles and diffs are put on
 //   the page with textContent only, never as HTML.
-// * **It never takes the keyboard.** The dialog opens beside the page, not
-//   as a modal, and gives the focus back to whatever had it (a terminal):
-//   click into it to use it.
+// * **A low-risk proposal never takes the keyboard.** The dialog opens beside
+//   the page, not as a modal, and gives the focus back to whatever had it (a
+//   terminal): click into it to use it.
+// * **A high-risk one holds the terminals** (jvSyncHold): while it shows, no
+//   terminal takes keys, pastes, pointer or drops (panes.js, input hold), a
+//   scrim covers them, and the focus goes to the proposal's controls, then
+//   back where it was when it closes or turns low risk.
 // * **Voice approval depends on the risk.** A low-risk proposal is read and
 //   a spoken yes approves it (`via: "voice"`); a high-risk one is read and
 //   must be approved on screen: a spoken yes only says so again, and so does
@@ -86,7 +90,32 @@ function jvChangeResult(p, c, i) {
   return null;
 }
 
+// Is the proposal on screen one that holds the terminals? Shown, pending and
+// screen-only (high risk, or a host command to acknowledge).
+function jvHolds() {
+  const p = jvCurrent();
+  return !!(jvDlg.open && p && p.state === 'pending' && jvScreenOnly(p));
+}
+// Hold or free the terminals as the dialog now stands: called after every
+// render, so a proposal that turns high or low, or is replaced, updates it.
+function jvSyncHold() {
+  if (typeof setPaneInputHold !== 'function') return;
+  const on = jvHolds();
+  const focusTo = on ? (jvFoot.querySelector('input[type=checkbox], button:not(:disabled)') || jvDlg) : null;
+  setPaneInputHold(on, focusTo);
+  // A render replaces the controls, and the focus with them: kept on the
+  // proposal while held, unless the person is in Jarvis's own panel.
+  const a = document.activeElement;
+  const inJarvis = a && (jvDlg.contains(a) || document.getElementById('vc-dock')?.contains(a));
+  if (on && !inJarvis) focusTo?.focus({ preventScroll: true });
+}
+
 function jvRender() {
+  jvRenderInner();
+  jvSyncHold();
+}
+
+function jvRenderInner() {
   const p = jvCurrent();
   jvRenderBadge();
   if (!p) { jvBody.replaceChildren(); jvFoot.replaceChildren(); return; }
@@ -195,8 +224,9 @@ function jvRenderBadge() {
 }
 
 // ── Open / close ─────────────────────────────────────────────────────────
-// Not modal: the page stays usable and the focus goes back where it was,
-// so a terminal being typed into keeps its keystrokes.
+// Not modal: the page stays usable and, for a low-risk proposal, the focus
+// goes back where it was, so a terminal being typed into keeps its
+// keystrokes. A high-risk one holds the terminals instead (jvSyncHold).
 function jvShow(id) {
   if (id) jvCurrentId = id;
   if (!jvCurrentId) jvCurrentId = jvPending()[0]?.id || null;
@@ -204,12 +234,14 @@ function jvShow(id) {
   const had = document.activeElement;
   if (!jvDlg.open) jvDlg.show();
   jvRender();
+  if (jvHolds()) return; // the hold has the focus, and gives it back on close
   if (had && had !== document.body && had.isConnected && !jvDlg.contains(had)) had.focus({ preventScroll: true });
   else jvDlg.querySelector('.modal-close')?.blur();
 }
 function jvClose() {
   jvDlg.close();
   jvCurrentId = null;
+  jvSyncHold();
   if (typeof vcPending !== 'undefined' && vcPending?.kind === 'jarvis' && typeof vcDisarm === 'function') vcDisarm();
   jvRenderBadge();
 }

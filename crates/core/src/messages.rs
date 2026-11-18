@@ -290,6 +290,24 @@ pub fn thread_briefing(plan: &Plan, t: &PlanThread) -> String {
     )
 }
 
+/// A thread's first message when it starts again with no conversation to
+/// resume (its session ended, its pane was reopened after a restart): the
+/// same briefing, said as a restart, so it does not begin again from nothing
+/// nor take the goal for new work.
+pub fn thread_restart_briefing(plan: &Plan, t: &PlanThread) -> String {
+    format!(
+        "[sbxw] This is a restart of thread \"{name}\": its earlier session ended and its \
+         conversation could not be resumed. Your work so far is what is committed on your \
+         branch and left in the worktree: edits it had not committed are still on disk. Read \
+         `git log`, `git status` and `git diff` there before doing anything, carry on from it, \
+         and report your state with `report_thread_status` now \
+         (it is \"{state}\" in sbxw). Your briefing, as first given:\n\n{briefing}",
+        name = t.name,
+        state = format!("{:?}", t.state).to_lowercase(),
+        briefing = thread_briefing(plan, t),
+    )
+}
+
 /// For a plan without a lead name: a blocked or done report, quoted.
 pub fn report_to_lead(thread: &str, state: ThreadState, summary: &str) -> Option<String> {
     let what = match state {
@@ -327,6 +345,11 @@ pub fn merge_summary(merge: &Merge) -> String {
         .collect();
     if !untried.is_empty() {
         line.push_str(&format!(" Not tried: {}.", untried.join(", ")));
+    }
+    for r in merge.results.iter().filter(|r| r.ok) {
+        if let Some(note) = &r.note {
+            line.push_str(&format!(" {}: {note}.", r.thread));
+        }
     }
     line.replace('\n', " ")
 }
@@ -417,6 +440,7 @@ mod tests {
             state: ThreadState::Starting,
             summary: String::new(),
             updated_ms: 0,
+            set_by: None,
         };
         let p = Plan {
             id: "p".into(),
@@ -431,6 +455,7 @@ mod tests {
             lead: lead.map(String::from),
             closed: false,
             merge: None,
+            main_uncommitted: None,
             created_ms: 0,
             updated_ms: 0,
         };
@@ -440,6 +465,8 @@ mod tests {
     #[test]
     fn a_briefing_names_its_lead_when_known() {
         let (p, t) = plan(Some("lead-7"));
+        let r = thread_restart_briefing(&p, &t);
+        assert!(r.starts_with("[sbxw] This is a restart of thread") && r.contains("report_thread_status") && r.contains(&thread_briefing(&p, &t)));
         let b = thread_briefing(&p, &t);
         assert!(b.contains("named \"lead-7\""));
         assert!(b.contains("branch sbxw/api"));
@@ -460,8 +487,8 @@ mod tests {
             state: MergeState::Failed,
             base: None,
             results: vec![
-                MergeResult { thread: "a".into(), ok: true, commit: None, error: None },
-                MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict in x\ny".into()) },
+                MergeResult { thread: "a".into(), ok: true, commit: None, error: None, note: None },
+                MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict in x\ny".into()), note: None },
             ],
             distillate: vec![],
         };

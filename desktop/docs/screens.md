@@ -57,6 +57,15 @@ return {
 | `data.jarvis` | Jarvis: the conversation, its sandbox's state, waiting proposals, the voice (below) |
 | other keys | Later waves add their daemon data here (`threads`, `plans`, ...), by the key their fixture uses |
 
+**When a screen renders.** Only while it is drawn (the top bar, the list,
+an open panel, overlay or dialog, Jarvis's panel when open), and only when
+something it read in its last render changed: the core notes which fields of
+`data` (and of `data.app`) a render reads, and turns each into Lua only then.
+A closed screen keeps its data and renders when it is next shown. So
+`render` must be a function of `state` and `data` only (it is: nothing else
+reaches it), and iterating `data` or `data.app` with `pairs` reads all of
+that level.
+
 A sandbox: `name` (string), `agent` (`claude`, `codex`, ...), `status`
 (`running`, `stopped`, `stopping…`, or another word sbx uses), `workspace`
 (string or nil), `chat` (bool), `created_at` (ISO time or nil), `detached`,

@@ -202,6 +202,28 @@ SBXW_DAEMON=127.0.0.1:7681 SBXW_TOKEN=$(cat ~/.sbxw/run/ui-token) SBXW_SANDBOX=<
   the mode switch; `modal_content_stays_inside_the_modal` runs every modal
   fixture at 420 and 1284 pt.
 
+## Performance
+
+`desktop/scripts/perf.sh` builds the release binary and runs one script
+headless against the stand-in with realistic sizes
+(`scripts/perf-fixture.py`, generated on each run: 11 sandboxes, 200
+commits with their details, a 3,000-entry folder, 113 requests). It prints,
+per step (open Commits, expand a commit, its diff, a filter keystroke,
+Files, a folder, hovering):
+
+- the app's own probes (`SBXW_DESKTOP_PERF=1`, also usable on a real run:
+  each Luau render, the data pushed to the screens and how many rendered,
+  the core's view, each daemon request, off the UI thread);
+- Rune's split of each input, input to present (`RUNE_PERF=1`, through
+  `scripts/perf-collector.py`, a local OTLP/JSON collector): handler, view,
+  commit, layout, text, paint, apply, and the node count.
+
+It exits 1 when an input takes over `PERF_BUDGET_MS` (160 ms: ten frames, a
+regression check on a loaded machine, not a benchmark) or a data push
+renders more than the screens drawn. `src/perf.rs` says what the probes
+cost when off (one cached flag). Numbers and causes: the checkout's
+`.sbxw-artifacts/desktop/PERF.md`.
+
 ## Jarvis
 
 - `scripts/screen.sh jarvis <fixture>`: the panel alone (`fixtures/jarvis/`).

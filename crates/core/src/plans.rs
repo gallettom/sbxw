@@ -119,6 +119,21 @@ pub struct PlanThread {
     pub summary: String,
     #[serde(default)]
     pub updated_ms: u64,
+    /// Who set `state` and `summary` when it was not the thread itself:
+    /// sbxw (a start that failed, with its reason) or the lead (a thread it
+    /// marked done). Absent for the thread's own reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_by: Option<SetBy>,
+}
+
+/// Who set a thread's state, when not the thread.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum SetBy {
+    /// The daemon: the thread could not start, `summary` says why.
+    Sbxw,
+    /// The lead marked it done after reviewing it (`mark_thread_done`).
+    Lead,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -138,6 +153,10 @@ pub struct MergeResult {
     pub commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// A merge that went through, with something left alone in the checkout
+    /// (tracked files absent from it, edits the merge did not touch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -179,6 +198,13 @@ pub struct Plan {
     pub closed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge: Option<Merge>,
+    /// Uncommitted changes (tracked and untracked) in the main checkout of
+    /// the repo(s) the threads work in, read on the host when the plan was
+    /// proposed: work the threads' worktrees, cut from `HEAD`, will not
+    /// have. The host holds the whole repository, so files a sandbox merely
+    /// does not mount are not counted. `None` when it could not be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_uncommitted: Option<u32>,
     pub created_ms: u64,
     pub updated_ms: u64,
 }
@@ -299,6 +325,7 @@ pub fn validate(threads: Vec<PlanThread>) -> Result<Vec<PlanThread>, String> {
                 state: ThreadState::Starting,
                 summary: String::new(),
                 updated_ms: 0,
+                set_by: None,
             })
         })
         .collect()
@@ -414,11 +441,19 @@ impl PlanBook {
             lead: lead_address(lead),
             closed: false,
             merge: None,
+            main_uncommitted: None,
             created_ms: now,
             updated_ms: now,
         };
         self.plans.insert(id, plan.clone());
         Ok(plan)
+    }
+
+    /// Record what the main checkout held when plan `id` was proposed.
+    pub fn note_main_uncommitted(&mut self, id: &str, n: Option<u32>) -> Option<Plan> {
+        let p = self.plans.get_mut(id)?;
+        p.main_uncommitted = n;
+        Some(p.clone())
     }
 
     fn mutate<F>(&mut self, id: &str, now: u64, f: F) -> Result<Plan, String>
@@ -697,6 +732,95 @@ impl PlanBook {
                 t.state = state;
                 t.summary = clip(summary);
                 t.updated_ms = now;
+                t.set_by = by_daemon.then_some(SetBy::Sbxw);
+            }
+            Ok(())
+        })
+    }
+
+    /// The approved plan `thread` belongs to (the latest holding its name).
+    fn plan_of_thread(&self, sandbox: &str, thread: &str) -> Option<String> {
+        self.plans
+            .values()
+            .filter(|p| p.sandbox == sandbox && p.state == PlanState::Approved)
+            .filter(|p| p.threads.iter().any(|t| t.name == thread))
+            .max_by_key(|p| p.created_ms)
+            .map(|p| p.id.clone())
+    }
+
+    /// The approved plan `thread` works under, and its entry there: the
+    /// latest approved plan holding the name, as `set_thread` picks it.
+    pub fn thread_plan(&self, sandbox: &str, thread: &str) -> Option<(&Plan, &PlanThread)> {
+        let p = self.plans.get(&self.plan_of_thread(sandbox, thread)?)?;
+        Some((p, p.threads.iter().find(|t| t.name == thread)?))
+    }
+
+    /// `thread` could not start (its worktree, its branch, its session):
+    /// failed, with the reason, set by sbxw. A thread already done keeps its
+    /// state: the failure is a later reopen's, and the work is finished.
+    /// `None` when it is in no approved plan, or nothing changed.
+    pub fn start_failed(&mut self, sandbox: &str, thread: &str, reason: &str, now: u64) -> Option<Plan> {
+        let id = self.plan_of_thread(sandbox, thread)?;
+        let t = self.plans.get(&id)?.threads.iter().find(|t| t.name == thread)?;
+        let reason = clip(reason);
+        if t.state == ThreadState::Done || (t.state == ThreadState::Failed && t.summary == reason) {
+            return None;
+        }
+        self.set_thread(sandbox, thread, ThreadState::Failed, &reason, true, now).ok()
+    }
+
+    /// `thread` started after all: a failure sbxw recorded is cleared (back to
+    /// starting, until the thread reports). `None` when there was none.
+    pub fn start_cleared(&mut self, sandbox: &str, thread: &str, now: u64) -> Option<Plan> {
+        let id = self.plan_of_thread(sandbox, thread)?;
+        let t = self.plans.get(&id)?.threads.iter().find(|t| t.name == thread)?;
+        if !(t.state == ThreadState::Failed && t.set_by == Some(SetBy::Sbxw)) {
+            return None;
+        }
+        self.mutate(&id, now, |p| {
+            if let Some(t) = p.threads.iter_mut().find(|t| t.name == thread) {
+                t.state = ThreadState::Starting;
+                t.summary.clear();
+                t.set_by = None;
+                t.updated_ms = now;
+            }
+            Ok(())
+        })
+        .ok()
+    }
+
+    /// The lead marks `thread` of its plan `id` done, having reviewed its
+    /// work, when the thread will not say so itself (its session is gone, or
+    /// it reported to the lead only). This only lets the lead propose the
+    /// merge, which a person still approves; the plan records that the lead
+    /// set it, and the dialog says so. `note` (what the lead checked) is
+    /// required. A thread that reported done itself is left as it is.
+    pub fn mark_done(&mut self, id: &str, sandbox: &str, thread: &str, note: &str, now: u64) -> Result<Plan, String> {
+        let plan = self.led(id, sandbox)?;
+        if plan.state != PlanState::Approved {
+            return Err(format!("plan {id} is not approved"));
+        }
+        let t = plan
+            .threads
+            .iter()
+            .find(|t| t.name == thread)
+            .ok_or_else(|| format!("{thread:?} is not a thread of plan {id}"))?;
+        if t.state == ThreadState::Done && t.set_by.is_none() {
+            return Ok(plan.clone());
+        }
+        if plan.merge.as_ref().is_some_and(|m| matches!(m.state, MergeState::Merging | MergeState::Merged)) {
+            return Err(format!("plan {id} is already merging or merged"));
+        }
+        let note = clip(note);
+        if note.is_empty() {
+            return Err("say what you reviewed (note): it is shown to the user as the reason the thread is done".into());
+        }
+        self.mutate(id, now, |p| {
+            if let Some(t) = p.threads.iter_mut().find(|t| t.name == thread) {
+                t.state = ThreadState::Done;
+                t.summary = note;
+                t.set_by = Some(SetBy::Lead);
+                t.updated_ms = now;
             }
             Ok(())
         })
@@ -735,12 +859,54 @@ mod tests {
             state: ThreadState::Starting,
             summary: String::new(),
             updated_ms: 0,
+            set_by: None,
         }
     }
 
     fn proposed(book: &mut PlanBook, sb: &str, names: &[&str]) -> Plan {
         book.propose(format!("p-{sb}"), sb, "s", names.iter().map(|n| t(n)).collect(), Variant::Split, "why", Some("lead-1"), 1)
             .unwrap()
+    }
+
+    #[test]
+    fn the_lead_marks_a_reviewed_thread_done_and_the_plan_says_so() {
+        let mut b = PlanBook::new();
+        let p = b.propose("p".into(), "n", "", vec![t("a"), t("b")], Variant::Shared, "x", Some("lead"), 1).unwrap();
+        b.approve(&p.id, vec![t("a"), t("b")], None, None, 2).unwrap();
+        b.set_thread("n", "a", ThreadState::Done, "mine", false, 3).unwrap();
+        let err = b.propose_merge("p", "n", vec![], "", vec![], 4).unwrap_err();
+        assert!(err.contains("\"b\" is not done (it is starting)"), "{err}");
+        assert!(b.mark_done("p", "n", "b", "  ", 5).unwrap_err().contains("say what you reviewed"));
+        assert!(b.mark_done("p", "other", "b", "x", 5).is_err(), "only the plan's own sandbox");
+        assert!(b.mark_done("p", "n", "c", "x", 5).is_err());
+        let p = b.mark_done("p", "n", "b", "reviewed sbxw/team-p: tests pass", 6).unwrap();
+        let tb = &p.threads[1];
+        assert_eq!((tb.state, tb.set_by, tb.summary.as_str()), (ThreadState::Done, Some(SetBy::Lead), "reviewed sbxw/team-p: tests pass"));
+        let unchanged = b.mark_done("p", "n", "a", "x", 7).unwrap();
+        assert_eq!((unchanged.threads[0].summary.as_str(), unchanged.threads[0].set_by), ("mine", None), "a thread's own done stands");
+        b.propose_merge("p", "n", vec![], "", vec![], 8).unwrap();
+        // The thread reporting again takes its mark back.
+        let p = b.set_thread("n", "b", ThreadState::Working, "still on it", false, 9).unwrap();
+        assert_eq!(p.threads[1].set_by, None);
+        b.end_lead("n", 10);
+        assert!(b.mark_done("p", "n", "b", "x", 11).unwrap_err().contains("ended lead mode"));
+    }
+
+    #[test]
+    fn a_failed_start_is_recorded_with_its_reason_and_cleared_by_a_start() {
+        let mut b = PlanBook::new();
+        let p = b.propose("p".into(), "n", "", vec![t("api")], Variant::Split, "x", None, 1).unwrap();
+        b.approve(&p.id, vec![t("api")], None, None, 2).unwrap();
+        let p = b.start_failed("n", "api", "cannot create /w/.sbxw-worktrees", 3).unwrap();
+        assert_eq!((p.threads[0].state, p.threads[0].set_by), (ThreadState::Failed, Some(SetBy::Sbxw)));
+        assert!(b.start_failed("n", "api", "cannot create /w/.sbxw-worktrees", 4).is_none(), "the same reason twice is no change");
+        let p = b.start_cleared("n", "api", 5).unwrap();
+        assert_eq!((p.threads[0].state, p.threads[0].set_by), (ThreadState::Starting, None));
+        assert!(b.start_cleared("n", "api", 6).is_none());
+        // A thread's own report is never cleared, and done is never undone.
+        b.set_thread("n", "api", ThreadState::Done, "finished", false, 7).unwrap();
+        assert!(b.start_failed("n", "api", "a later reopen failed", 8).is_none());
+        assert!(b.start_failed("n", "other", "x", 8).is_none());
     }
 
     #[test]
@@ -797,13 +963,13 @@ mod tests {
         b.set_thread("n", "b", ThreadState::Done, "ok", false, 5).unwrap();
         b.propose_merge(&p.id, "n", vec!["a".into(), "b".into()], "", vec![], 6).unwrap();
         b.start_merge(&p.id, None, None, 7).unwrap();
-        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None }, 8).unwrap();
-        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict".into()) }, 9).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None, note: None }, 8).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict".into()), note: None }, 9).unwrap();
         assert_eq!(b.finish_merge(&p.id, 10).unwrap().merge.unwrap().state, MergeState::Failed);
         let m = b.start_merge(&p.id, None, None, 11).unwrap().merge.unwrap();
         assert_eq!(m.results.len(), 1, "only a's ok result is kept");
         assert_eq!(m.results[0].thread, "a");
-        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: true, commit: Some("def".into()), error: None }, 12).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: true, commit: Some("def".into()), error: None, note: None }, 12).unwrap();
         let m = b.finish_merge(&p.id, 13).unwrap().merge.unwrap();
         assert_eq!(m.state, MergeState::Merged);
         assert!(m.results.iter().all(|r| r.ok) && m.results.len() == 2);
@@ -839,7 +1005,7 @@ mod tests {
         b.propose_merge(&p.id, "n", vec!["a".into()], "go", vec![], 7).unwrap();
         b.start_merge(&p.id, Some("main".into()), None, 8).unwrap();
         assert!(b.start_merge(&p.id, None, None, 9).is_err(), "a second click");
-        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None }, 10).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None, note: None }, 10).unwrap();
         let done = b.finish_merge(&p.id, 11).unwrap();
         assert_eq!(done.merge.unwrap().state, MergeState::Merged);
     }
@@ -928,7 +1094,7 @@ mod tests {
         let kept = vec![DistillItem { kind: DistillKind::Warning, text: "no float money".into() }];
         let m = b.start_merge(&p.id, None, Some(kept.clone()), 7).unwrap().merge.unwrap();
         assert_eq!(m.distillate, kept, "the person's version wins");
-        b.merge_result(&p.id, MergeResult { thread: "team-p-s".into(), ok: true, commit: None, error: None }, 8).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "team-p-s".into(), ok: true, commit: None, error: None, note: None }, 8).unwrap();
         let merged = b.finish_merge(&p.id, 9).unwrap();
         assert_eq!(merged.merge.as_ref().unwrap().state, MergeState::Merged);
         let (file, body, index) = merged.distillate_memory().unwrap();

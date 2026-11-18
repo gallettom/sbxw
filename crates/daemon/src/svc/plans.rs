@@ -95,6 +95,26 @@ impl App {
         Ok(())
     }
 
+    /// Uncommitted changes in the main checkouts the threads' worktrees
+    /// will be cut from, summed over the repos they resolve to, read with git
+    /// on the host (where the whole repository is). `None` without a
+    /// workspace or when one could not be read.
+    async fn main_uncommitted(&self, sandbox: &SandboxRef, threads: &[PlanThread]) -> Option<u32> {
+        let ws = self.store.workspace(sandbox)?;
+        let rec = self.store.get(sandbox);
+        let host = self.host_for(sandbox).await.ok()?;
+        let mut repos = std::collections::BTreeSet::new();
+        for t in threads {
+            let recorded = rec.threads.get(t.name.as_str()).map(|r| r.repo.as_str());
+            repos.insert(git::choose(&host, &ws, recorded, &t.name, t.repo.as_deref()).await.ok()?);
+        }
+        let mut n = 0;
+        for rel in repos {
+            n += git::uncommitted(&host, &git::thread_dir(&ws, &rel)).await?;
+        }
+        Some(n)
+    }
+
     /// A shared plan's threads all work in one worktree, so in one repo: the
     /// one they resolve to, and the worktree's path in it. `Ok(None)` when the
     /// sandbox has no workspace recorded (the scripts find the repo there).
@@ -152,6 +172,8 @@ impl App {
             now_ms(),
         )?;
         tracing::info!("plans: '{sandbox}' proposed {} ({} thread(s), {:?})", plan.id, plan.threads.len(), plan.variant);
+        let n = self.main_uncommitted(sandbox, &plan.threads).await;
+        let plan = self.plans.lock().unwrap().note_main_uncommitted(&plan.id, n).unwrap_or(plan);
         Ok(self.plan_changed(plan))
     }
 
@@ -184,6 +206,14 @@ impl App {
         let note = messages::clip_text(note, sbxw_core::plans::MAX_TEXT);
         let plan = self.plans.lock().unwrap().propose_merge(id, &sandbox.to_string(), order, &note, distillate, now_ms())?;
         tracing::info!("plans: '{sandbox}' proposed merging {id}");
+        Ok(self.plan_changed(plan))
+    }
+
+    /// The lead marks a thread of its plan done ([`PlanBook::mark_done`]).
+    pub fn plan_mark_done(&self, id: &str, sandbox: &SandboxRef, thread: &str, note: &str) -> Result<Plan, String> {
+        let note = messages::clip_text(note, sbxw_core::plans::MAX_TEXT);
+        let plan = self.plans.lock().unwrap().mark_done(id, &sandbox.to_string(), thread.trim(), &note, now_ms())?;
+        tracing::info!("plans: the lead of '{sandbox}' marked thread '{}' of {id} done", thread.trim());
         Ok(self.plan_changed(plan))
     }
 
@@ -276,11 +306,25 @@ impl App {
             }
         };
         if let Err(e) = outcome {
-            tracing::warn!("plans: thread '{name}' of '{sandbox}' did not start: {e}");
-            if let Ok(p) = self.plans.lock().unwrap().set_thread(&sandbox.to_string(), name, ThreadState::Failed, &e, true, now_ms()) {
-                self.send(Event::Plan(p.clone()));
-                self.persist_plans(&p.sandbox);
-            }
+            self.thread_start_failed(sandbox, &thread, &e);
+        }
+    }
+
+    /// Thread `thread` could not start: recorded on its plan, if it has one,
+    /// with the reason (see `PlanBook::start_failed`).
+    pub fn thread_start_failed(&self, sandbox: &SandboxRef, thread: &ThreadName, reason: &str) {
+        let changed = self.plans.lock().unwrap().start_failed(&sandbox.to_string(), thread.as_str(), reason, now_ms());
+        if let Some(p) = changed {
+            tracing::warn!("plans: thread '{thread}' of '{sandbox}' did not start: {reason}");
+            self.plan_changed(p);
+        }
+    }
+
+    /// Thread `thread` started: a start failure recorded earlier is cleared.
+    pub fn thread_start_cleared(&self, sandbox: &SandboxRef, thread: &ThreadName) {
+        let changed = self.plans.lock().unwrap().start_cleared(&sandbox.to_string(), thread.as_str(), now_ms());
+        if let Some(p) = changed {
+            self.plan_changed(p);
         }
     }
 
@@ -337,12 +381,12 @@ impl App {
                 (Err(e), _, _) => Err(format!("the sandbox could not be started: {e}")),
                 (Ok(()), Err(e), _) => Err(e),
                 (Ok(()), Ok(_), Err(e)) => Err(e.to_string()),
-                (Ok(()), Ok(dir), Ok(name)) => self.sbx_of(&sandbox).await?.thread_merge(&sandbox.name, &dir, &name).await.map_err(|e| format!("{e:#}")),
+                (Ok(()), Ok(dir), Ok(name)) => self.sbx_of(&sandbox).await?.thread_merge(&sandbox.name, &dir, &name).await.map_err(|e| self.with_split_note(&sandbox, format!("{e:#}"))),
             };
             let ok = outcome.is_ok();
             let result = match outcome {
-                Ok(commit) => MergeResult { thread: thread.clone(), ok: true, commit: Some(commit).filter(|c| !c.is_empty()), error: None },
-                Err(e) => MergeResult { thread: thread.clone(), ok: false, commit: None, error: Some(e) },
+                Ok(m) => MergeResult { thread: thread.clone(), ok: true, note: m.note(), commit: Some(m.commit).filter(|c| !c.is_empty()), error: None },
+                Err(e) => MergeResult { thread: thread.clone(), ok: false, commit: None, error: Some(e), note: None },
             };
             let p = self.plans.lock().unwrap().merge_result(id, result, now_ms())?;
             self.plan_changed(p);
@@ -369,6 +413,15 @@ impl App {
         }
         self.tell_lead_merged(&sandbox, id, &summary).await;
         Ok(merge)
+    }
+
+    /// A merge refused for files missing from the checkout, with the reason
+    /// sbxw knows when it split the workspace itself.
+    fn with_split_note(&self, sandbox: &SandboxRef, err: String) -> String {
+        match self.split_note(sandbox) {
+            Some(note) if err.contains("missing from the main checkout") => format!("{err} {note}"),
+            _ => err,
+        }
     }
 
     /// A shared plan's merge waits for its board: files still claimed are
@@ -436,11 +489,11 @@ impl App {
         let outcome = match (self.ensure_running_for_thread(sandbox).await, dir) {
             (Err(e), _) => Err(format!("the sandbox could not be started: {e:#}")),
             (Ok(()), Err(e)) => Err(e),
-            (Ok(()), Ok(dir)) => self.sbx_of(sandbox).await?.thread_merge(&sandbox.name, &dir, &team).await.map(|c| (c, dir)).map_err(|e| format!("{e:#}")),
+            (Ok(()), Ok(dir)) => self.sbx_of(sandbox).await?.thread_merge(&sandbox.name, &dir, &team).await.map(|c| (c, dir)).map_err(|e| self.with_split_note(sandbox, format!("{e:#}"))),
         };
         let (result, dir) = match outcome {
-            Ok((commit, dir)) => (MergeResult { thread: team.to_string(), ok: true, commit: Some(commit).filter(|c| !c.is_empty()), error: None }, Some(dir)),
-            Err(e) => (MergeResult { thread: team.to_string(), ok: false, commit: None, error: Some(e) }, None),
+            Ok((m, dir)) => (MergeResult { thread: team.to_string(), ok: true, note: m.note(), commit: Some(m.commit).filter(|c| !c.is_empty()), error: None }, Some(dir)),
+            Err(e) => (MergeResult { thread: team.to_string(), ok: false, commit: None, error: Some(e), note: None }, None),
         };
         self.plans.lock().unwrap().merge_result(id, result, now_ms())?;
         let plan = self.plans.lock().unwrap().finish_merge(id, now_ms())?;
@@ -658,6 +711,7 @@ mod tests {
             state: ThreadState::Starting,
             summary: String::new(),
             updated_ms: 0,
+            set_by: None,
         }
     }
 
@@ -672,6 +726,57 @@ mod tests {
         assert_eq!(again.plan(&p.id).unwrap().state, PlanState::Pending);
         // Another sandbox cannot wait on it.
         assert!(app.plan_wait(&p.id, &SandboxRef::parse("other").unwrap(), Duration::from_millis(10)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_lead_can_mark_a_silent_thread_done_and_then_propose_the_merge() {
+        let (_d, app) = app();
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let p = app.plan_propose(&sb, "", vec![t("api")], Variant::Split, "one", Some("lead")).await.unwrap();
+        app.plans.lock().unwrap().approve(&p.id, vec![t("api")], None, None, 1).unwrap();
+        assert!(app.plan_propose_merge(&p.id, &sb, vec!["api".into()], "", vec![]).unwrap_err().contains("not done"));
+        assert!(app.plan_mark_done(&p.id, &SandboxRef::parse("other").unwrap(), "api", "x").is_err(), "another sandbox's lead cannot");
+        let plan = app.plan_mark_done(&p.id, &sb, "api", "reviewed sbxw/api").unwrap();
+        let view = app.plan_view(&plan);
+        assert_eq!((view["threads"][0]["state"].as_str(), view["threads"][0]["set_by"].as_str()), (Some("done"), Some("lead")));
+        app.plan_propose_merge(&p.id, &sb, vec!["api".into()], "", vec![]).unwrap();
+        let again = crate::testing::app_in(_d.path());
+        assert_eq!(again.plan(&p.id).unwrap().threads[0].set_by, Some(sbxw_core::plans::SetBy::Lead), "persisted");
+    }
+
+    #[tokio::test]
+    async fn a_proposal_counts_the_uncommitted_work_the_worktrees_will_not_have() {
+        let (_d, app) = app();
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(ws.path())
+                .args(["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .output()
+                .is_ok_and(|o| o.status.success());
+            assert!(ok, "git {args:?}");
+        };
+        if std::process::Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        git(&["init", "-q"]);
+        std::fs::write(ws.path().join("a"), "a").unwrap();
+        git(&["add", "a"]);
+        git(&["commit", "-q", "-m", "one"]);
+        app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+
+        let p = app.plan_propose(&sb, "", vec![t("api")], Variant::Split, "one", None).await.unwrap();
+        assert_eq!(p.main_uncommitted, Some(0));
+        app.plan_refuse(&p.id, None).unwrap();
+
+        std::fs::write(ws.path().join("a"), "edited").unwrap();
+        std::fs::write(ws.path().join("new"), "untracked").unwrap();
+        let p = app.plan_propose(&sb, "", vec![t("api")], Variant::Split, "one", None).await.unwrap();
+        assert_eq!(p.main_uncommitted, Some(2));
+        assert_eq!(serde_json::to_value(app.plan(&p.id).unwrap()).unwrap()["main_uncommitted"], 2, "on the plan both UIs receive");
     }
 
     #[tokio::test]
@@ -714,8 +819,8 @@ mod tests {
         let api = sbxw_core::ThreadName::parse("api").unwrap();
         let tm = app.team_for(&sb, &api).unwrap();
         assert_eq!((tm.plan.as_str(), tm.worktree.as_str()), (p.id.as_str(), team.as_str()));
-        let argv = sbxw_sbx::scripts::thread_run_args(&sb.name, "/w", &api, "", None, Some(&tm));
-        assert_eq!(&argv[argv.len() - 2..], [format!("={team}"), format!("={}", p.id)]);
+        let argv = sbxw_sbx::scripts::thread_run_args(&sb.name, "/w", &api, "", None, Some(&tm), sbxw_sbx::scripts::StartMode::New);
+        assert_eq!(&argv[argv.len() - 3..], [format!("={team}"), format!("={}", p.id), "=new".to_string()]);
         let listed: Vec<String> = app.threads(&sb).await.threads.iter().map(|v| v["name"].as_str().unwrap().to_string()).collect();
         assert_eq!(listed, ["api", "web"], "its threads are listed though they have no worktree of their own");
 

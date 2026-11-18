@@ -46,7 +46,10 @@ fn on_visibility(s: &mut App, shown: bool, _tx: &mut Tx) {
 }
 
 fn view(s: &App, cx: &mut Cx<App>) -> El {
-    shell::view(s, cx)
+    let t = sbxw_desktop::perf::start();
+    let el = shell::view(s, cx);
+    sbxw_desktop::perf::done(t, || "view (the core's element tree)".to_string());
+    el
 }
 
 fn main() {

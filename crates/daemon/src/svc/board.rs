@@ -227,6 +227,7 @@ mod tests {
             state: ThreadState::Starting,
             summary: String::new(),
             updated_ms: 0,
+            set_by: None,
         }
     }
 

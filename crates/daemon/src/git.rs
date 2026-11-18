@@ -423,6 +423,11 @@ pub fn parse_log(raw: &str) -> Vec<Commit> {
         .collect()
 }
 
+/// Uncommitted changes in the checkout at `dir`, untracked files included.
+pub async fn uncommitted(host: &Host, dir: &Path) -> Option<u32> {
+    count_status(host, dir).await
+}
+
 async fn count_status(host: &Host, dir: &Path) -> Option<u32> {
     git(host, dir, &["status", "--porcelain"]).await.map(|r| r.lines().filter(|l| !l.is_empty()).count() as u32)
 }

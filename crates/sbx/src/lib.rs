@@ -1120,6 +1120,13 @@ impl Sbx {
         Ok(fields)
     }
 
+    /// Make a thread's worktree (a shared plan's, with `team`) before its
+    /// session starts; where it is.
+    pub async fn thread_prepare(&self, name: &SandboxName, dir: &str, thread: &ThreadName, team: Option<&scripts::Team>) -> Result<String> {
+        let f = self.thread_script(scripts::thread_prepare_args(name, dir, thread, team)).await?;
+        Ok(f.get("worktree").cloned().unwrap_or_default())
+    }
+
     pub async fn thread_status(&self, name: &SandboxName, dir: &str, thread: &ThreadName) -> Result<ThreadStatus> {
         let f = self.thread_script(scripts::thread_end_args(name, dir, thread, "status", false, false)).await?;
         Ok(ThreadStatus::from_fields(&f))
@@ -1129,10 +1136,11 @@ impl Sbx {
         self.thread_script(scripts::thread_end_args(name, dir, thread, "close", discard, delete_branch)).await.map(drop)
     }
 
-    /// Merge a thread's branch into its repo's checked-out branch; the commit.
-    pub async fn thread_merge(&self, name: &SandboxName, dir: &str, thread: &ThreadName) -> Result<String> {
+    /// Merge a thread's branch into its repo's checked-out branch: the
+    /// commit, and what was left alone in the checkout.
+    pub async fn thread_merge(&self, name: &SandboxName, dir: &str, thread: &ThreadName) -> Result<scripts::MergeOutcome> {
         let f = self.thread_script(scripts::thread_merge_args(name, dir, thread)).await?;
-        Ok(f.get("commit").cloned().unwrap_or_default())
+        Ok(scripts::MergeOutcome::from_fields(&f))
     }
 
     pub async fn setup_ssh(&self) -> Result<()> {

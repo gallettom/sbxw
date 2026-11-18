@@ -52,7 +52,24 @@ same threads under the sandbox.
 - **Hiding** closes the pane, never the session. The pane's ✕ leaves the thread
   running too.
 - **Reopened, it picks up where it was.** After a daemon or sandbox restart, a
-  thread resumes with `claude --continue`.
+  thread resumes its conversation: by its session id, read from Claude Code's
+  session registry by the thread's name and worktree (`claude --resume`), or
+  `claude --continue` for an older one. A plan's thread with nothing to resume
+  starts again with its goal, scope and rules, told it is a restart; it never
+  comes back blank.
+- **One live session per thread.** A second open (another pane, the desktop
+  and the web together) attaches to the same terminal. A daemon restart ends
+  sbxw's terminals but not always the session behind one: `sbx exec`'s
+  process can outlive its client and go on working unseen. Reopening the
+  thread then finds that session (same name, same worktree, a live process
+  whose environment says `SBXW_THREAD=<thread>` and whose command line says
+  `--name <thread>`), stops it (`SIGTERM`, then `SIGKILL` after 10 s; if it
+  still does not stop, the open is refused rather than start a second one),
+  and resumes its conversation in the new pane with a first message saying
+  it was interrupted and that its uncommitted edits are still on disk, to
+  read `git status` and `git diff` before going on. This happens only when
+  sbxw holds no terminal for the thread: while it does, every open attaches
+  to that terminal and runs nothing in the sandbox.
 - **A stopped sandbox comes back** when you open one of its threads: sbxw
   starts it directly (`sbx exec` starts a stopped sandbox, sbx 0.50) after
   releasing any busy host port, then opens the thread. The main session is
@@ -136,6 +153,13 @@ plan's threads work in one repo; a proposal naming two is refused.
 
 ![A plan from the lead of myapp: three threads, each with a goal, the files it owns and a model, and Refuse, Later, Approve and start](images/plan.png)
 
+When the main checkout has uncommitted changes, the dialog says so first:
+"N uncommitted changes in the main checkout will not be in the threads'
+worktrees: commit them first if the plan depends on them". The threads'
+branches are cut from `HEAD`. The count is read on the host when the plan is
+proposed (`main_uncommitted` on the plan), so files a sandbox merely does not
+mount are not counted.
+
 Nothing starts without you. Edit any thread's name, goal, scope, repo or model;
 remove or add threads; check the variant against the lead's justification; then **Approve and start**, **Refuse** (final), or
 **Later** (**Review plan** on the main pane brings it back). Approval is
@@ -150,6 +174,30 @@ report your state).
 - **Threads report to sbxw** with `report_thread_status`. The chip shows the
   state: `…` starting, `●` working, `?` blocked, `✓` done, `✕` failed. Hover for
   the report.
+- **A thread that cannot start is failed, with the reason.** sbxw makes the
+  worktree first, on its own (`THREAD_PREPARE_SCRIPT`), then starts the
+  session. Whatever stops it (no repo, a workspace root the agent cannot
+  write, `git worktree add` refusing, the session ceiling, a session that
+  ends before the thread ever reported) sets the thread to `✕` failed with
+  the reason, which `plan_status` gives the lead and the chip's hover gives
+  you (`sbxw could not start it: …`). Opening the thread again, once the
+  cause is fixed, retries it and clears the failure; the briefing waits for
+  that retry. A thread already done is never set back to failed.
+- **The worktree folder is never forced.** When `<repo>/.sbxw-worktrees`
+  cannot be created, sbxw says so in plain words, and when `.git` is a
+  separate mount from the workspace root it adds that the sandbox most
+  likely mounts only some of the workspace's folders. It does not use `sudo`
+  or a folder elsewhere: a worktree outside the mounted repository would
+  live in the container only, unseen by the host's git and lost with the
+  sandbox.
+- **A workspace split by a strict carve cannot hold threads.** A strict
+  [carve](configuration.md#carving-a-folder-out) of a folder inside the
+  workspace mounts the workspace folder by folder: the files beside those
+  folders are missing, and nothing can be created at its root, so
+  `.sbxw-worktrees` cannot be made and git in the sandbox sees the missing
+  tracked files as deleted. When sbxw created the sandbox that way, a thread
+  that cannot start and a merge refused for missing files say so, and point
+  to `enforce = "soft"`, which keeps the repository whole.
 - **Threads talk to the lead directly**, with Claude Code's own `SendMessage`
   between sessions of the sandbox. A thread runs as `claude --name <thread>`,
   so the lead knows its address in advance; each briefing gives the lead's
@@ -157,20 +205,44 @@ report your state).
   session instead.
 - **In a shared plan**, every thread opens in the plan's worktree, made by the
   first one to start, with `SBXW_TEAM=shared` and `SBXW_TEAM_PLAN=<plan id>` in
-  its environment. A thread reopened after a restart starts a fresh
-  conversation there rather than `--continue`: the threads share one folder,
-  so "the last conversation in it" could be another thread's.
+  its environment. A thread reopened after a restart resumes its own
+  conversation by session id, never with `--continue`: the threads share one
+  folder, so "the last conversation in it" could be another thread's. With no
+  conversation of its own to resume, it starts again with its briefing.
 - All sessions run with `--dangerously-skip-permissions`. If you change the
   lead's permission mode, Claude Code holds messages between them for approval.
+
+- **When a thread will not report done** (its session is gone, or it told
+  only the lead), the lead can mark it done with `mark_thread_done`, after
+  reviewing its work and with a note saying what it checked. This only lets
+  the lead propose the merge, which you still approve; the plan records it
+  (`set_by: "lead"`) and the merge view shows the thread as
+  `marked done by the lead`, the note on hover. A thread that reports again
+  replaces the mark; a thread that reported done itself keeps its own report.
 
 ### 3. One-click merge
 
 When every thread is done, the lead calls `propose_merge` with an order and a
 note. The plan dialog offers **Merge all**. For each thread, in order, sbxw:
 
-1. refuses if the main checkout has uncommitted changes,
+1. checks the main checkout against the paths the merge changes (from the
+   merge base to the branch), and refuses only when the merge could be harmed
+   or harm your work: a merge, rebase, cherry-pick or revert under way;
+   unresolved conflicts; staged changes (git itself will not merge into an
+   index that differs from `HEAD`); uncommitted edits to a path the merge
+   changes (named: commit or stash those); a path the merge changes that is
+   missing from the working tree (see below),
 2. runs `git merge --no-ff --no-edit sbxw/<thread>` inside the sandbox,
 3. on conflict, runs `git merge --abort` and stops there.
+
+Unstaged edits elsewhere stay in the working tree, out of the merge commit.
+**Tracked files absent from the checkout** (`git status` shows ` D`, most
+often because the sandbox mounts only part of the workspace) are left alone
+when the merge does not touch them: they stay in the commit, since a merge
+commit records the index plus the merge, and the result says how many were
+absent. When the merge *does* touch one, it is refused with the files named:
+the merge has to be done where the whole repository is present. sbxw never
+advises committing those "deletions", which would delete real files.
 
 With **close threads** ticked, merged threads are then closed and their branches
 deleted. The lead is told the result in one line, e.g.
@@ -220,8 +292,8 @@ lead's session also removes the mark.
   open is refused with the list.
 - **No trust dialog.** Before starting `claude`, the thread marks its worktree
   trusted in `~/.claude.json`, the same way provisioning does for the workspace.
-- **Model.** Passed as `claude --model <id>` on a fresh start and on
-  `--continue`; checked against `^[a-z0-9][a-z0-9.\-]{0,63}$`.
+- **Model.** Passed as `claude --model <id>` on a fresh start and on a
+  resume; checked against `^[a-z0-9][a-z0-9.\-]{0,63}$`.
   `GET /api/models` lists the choices, `GET /api/sandboxes/<name>/threads` gives
   each thread's model.
 - **Worktree graph API.** `GET /api/sandboxes/<name>/worktrees` returns
@@ -274,7 +346,7 @@ lead's session also removes the mark.
 <summary>Lead details for the curious</summary>
 
 - **Tools.** The `sbxw-relay` MCP server gives the main session `propose_plan`,
-  `check_plan`, `plan_status` and `propose_merge`; a thread gets
+  `check_plan`, `plan_status`, `propose_merge` and `mark_thread_done`; a thread gets
   `report_thread_status` instead. A session knows which it is from
   `SBXW_THREAD`. **★ Lead mode** installs `/lead` and refreshes the server first.
   A main session started before that keeps its old server: if `/lead` says it
@@ -290,6 +362,10 @@ lead's session also removes the mark.
   `worktree`, the shared worktree's path, set on approval. `propose_plan` takes
   `variant` and `justification`; `POST /api/plans/<id>/approve` takes
   `{threads, variant?}`.
+- **Who set a thread's state.** A thread carries `set_by` when it was not the
+  thread itself: `"sbxw"` for a start that failed (`summary` is the reason),
+  `"lead"` for a thread the lead marked done (`summary` is its note).
+  `POST /api/plans/mark_done` (agent listener) takes `{id, thread, note}`.
 - **Merge state.** The plan carries
   `merge: {order, note, state, base, results, distillate}`; `state` goes
   `proposed` → `merging` → `merged` or `failed`. A shared plan's `order` is every

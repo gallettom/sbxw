@@ -29,6 +29,7 @@ pub mod intent;
 pub mod jarvis;
 pub mod luau;
 pub mod markdown;
+pub mod perf;
 pub mod picture;
 pub mod safe;
 pub mod screen;

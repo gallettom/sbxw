@@ -28,7 +28,7 @@
 
 use mlua::{Function, Lua, LuaOptions, RegistryKey, StdLib, Table, Value, VmState};
 use serde_json::Value as J;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -422,6 +422,17 @@ paged = function(items, o)
   for i = 1, n do shown[i] = items[i] end
   return shown, more_rows({ total = total, shown = n, more = math.min(page, total - n) }, o)
 end
+-- `data` and `data.app` fill their fields on first read (luau.rs,
+-- `lazy_data`): `pairs` and `next` over one fill it all first.
+do
+  local raw_pairs, raw_next = pairs, next
+  local function fill(t)
+    local mt = type(t) == "table" and getmetatable(t)
+    if type(mt) == "table" and rawget(mt, "__lazy") then mt.__iter(t) end
+  end
+  pairs = function(t) fill(t) return raw_pairs(t) end
+  next = function(t, k) if k == nil then fill(t) end return raw_next(t, k) end
+end
 "#;
 
 pub struct LuauHost {
@@ -518,14 +529,28 @@ impl LuauHost {
 
     /// Render with the current module and state; `data` is what the core hands in.
     pub fn render(&self, data: &J) -> Result<Node, String> {
+        self.render_tracked(data).map(|(n, _)| n)
+    }
+
+    /// [`Self::render`], and what of `data` the render read. `data` reaches
+    /// the screen as a table whose top-level fields (and `app`'s) are turned
+    /// into Lua only when the screen reads them: converting the whole data
+    /// for each render was most of its time. The paths read (`sessions`,
+    /// `app.pages`; `*` or `app.*` when a level was iterated) let the core
+    /// skip a render whose inputs did not change (screen.rs).
+    pub fn render_tracked(&self, data: &J) -> Result<(Node, Reads), String> {
         let (module, state) = self.parts()?;
+        let reads = Rc::new(RefCell::new(Reads::default()));
+        let root = Rc::new(data.clone());
         let tree: Value = self.guarded(|lua| {
             let render: Function = module.get("render")?;
-            let data = json_to_lua(lua, data)?;
+            let data = lazy_data(lua, &root, &[], &reads)?;
             render.call((state, data))
         })?;
         let mut count = 0;
-        to_node(&tree, 0, &mut count, self.limits.nodes)
+        let node = to_node(&tree, 0, &mut count, self.limits.nodes)?;
+        let reads = std::mem::take(&mut *reads.borrow_mut());
+        Ok((node, reads))
     }
 
     /// Run an action, `action(state, arg, value)`: `arg` is the element's `arg`
@@ -564,6 +589,114 @@ fn readonly(t: &Table) {
         }
     }
     t.set_readonly(true);
+}
+
+/// What of the data a render read: field paths from the top (`["sessions"]`,
+/// `["app", "pages"]`); a level iterated with `pairs` reads as its path
+/// with `*` (`["*"]`, `["app", "*"]`); a level itself read lazily as its
+/// path with `?` (only whether it is still an object counts).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Reads(pub std::collections::BTreeSet<Vec<String>>);
+
+impl Reads {
+    /// Whether the parts read differ between `old` and `new`.
+    pub fn changed(&self, old: &J, new: &J) -> bool {
+        self.0.iter().any(|path| {
+            let (mut a, mut b) = (old, new);
+            for (i, k) in path.iter().enumerate() {
+                if k == "*" {
+                    return a != b;
+                }
+                if k == "?" {
+                    return a.is_object() != b.is_object();
+                }
+                a = &a[k.as_str()];
+                b = &b[k.as_str()];
+                if i + 1 == path.len() {
+                    return a != b;
+                }
+            }
+            a != b
+        })
+    }
+}
+
+/// The levels converted lazily: the top, and `app`'s fields (the core's own
+/// state, many small parts of which change on their own).
+const LAZY_DEPTH: usize = 2;
+
+/// Whether the value at `path` of `root` is turned into a lazy table.
+fn lazy_at(root: &J, path: &[String]) -> bool {
+    let mut v: &J = root;
+    for k in path {
+        v = &v[k.as_str()];
+    }
+    matches!(v, J::Object(_)) && (path.is_empty() || (path.len() < LAZY_DEPTH && path[0] == "app"))
+}
+
+/// The JSON object at `path` of `root`, as a Lua table whose fields are
+/// converted on first read (and kept, so a second read is a plain lookup),
+/// each read noted in `reads`. Anything else, or deeper, converts at once.
+fn lazy_data(lua: &Lua, root: &Rc<J>, path: &[String], reads: &Rc<RefCell<Reads>>) -> mlua::Result<Value> {
+    let mut v: &J = root;
+    for k in path {
+        v = &v[k.as_str()];
+    }
+    if !lazy_at(root, path) {
+        return json_to_lua(lua, v);
+    }
+    let t = lua.create_table()?;
+    let mt = lua.create_table()?;
+    let (r, rd, p) = (root.clone(), reads.clone(), path.to_vec());
+    mt.raw_set(
+        "__index",
+        lua.create_function(move |lua, (t, k): (Table, Value)| {
+            let Value::String(k) = k else { return Ok(Value::Nil) };
+            let k = k.to_string_lossy();
+            let mut sub = p.clone();
+            sub.push(k);
+            let v = lazy_data(lua, &r, &sub, &rd)?;
+            // A level read lazily in turn is noted by what is read inside
+            // it; of itself, only that it is an object (`?`).
+            let mut noted = sub.clone();
+            if lazy_at(&r, &sub) {
+                noted.push("?".into());
+            }
+            rd.borrow_mut().0.insert(noted);
+            if !v.is_nil() {
+                t.raw_set(sub.last().unwrap().as_str(), v.clone())?;
+            }
+            Ok(v)
+        })?,
+    )?;
+    let (r, rd, p) = (root.clone(), reads.clone(), path.to_vec());
+    mt.raw_set(
+        "__iter",
+        lua.create_function(move |lua, t: Table| {
+            let mut all = p.clone();
+            all.push("*".into());
+            rd.borrow_mut().0.insert(all);
+            let mut v: &J = &r;
+            for k in &p {
+                v = &v[k.as_str()];
+            }
+            if let J::Object(o) = v {
+                for k in o.keys() {
+                    if t.raw_get::<Value>(k.as_str())?.is_nil() {
+                        let mut sub = p.clone();
+                        sub.push(k.clone());
+                        let x = lazy_data(lua, &r, &sub, &rd)?;
+                        t.raw_set(k.as_str(), x)?;
+                    }
+                }
+            }
+            let next: Function = lua.globals().get("next")?;
+            Ok((next, t))
+        })?,
+    )?;
+    mt.raw_set("__lazy", true)?;
+    t.set_metatable(Some(mt))?;
+    Ok(Value::Table(t))
 }
 
 pub fn json_to_lua(lua: &Lua, v: &J) -> mlua::Result<Value> {
@@ -1030,6 +1163,45 @@ mod tests {
         let mut h = host();
         h.load("s", &format!("return {{ render = function(state, data) return {src} end }}"))?;
         h.render(&J::Null)
+    }
+
+    #[test]
+    fn data_is_read_lazily_and_what_was_read_is_known() {
+        let mut h = host();
+        h.load("s", r#"return { render = function(state, data)
+            local n = 0
+            if data.flag then for _ in pairs(data.app.list or {}) do n = n + 1 end end
+            return column{ text(data.title .. " " .. tostring(data.app.pages.current) .. " " .. n) }
+          end }"#).unwrap();
+        let data = serde_json::json!({ "title": "t", "flag": false, "big": { "x": 1 }, "app": { "pages": { "current": 2 }, "list": [1, 2], "hover": "a" } });
+        let (n, reads) = h.render_tracked(&data).unwrap();
+        assert_eq!(n.children[0].text, "t 2 0");
+        let paths: Vec<String> = reads.0.iter().map(|p| p.join(".")).collect();
+        assert_eq!(paths, ["app.?", "app.pages", "flag", "title"], "big and app.list never read, so never converted");
+        // A change only where it did not read leaves the view as it is.
+        let mut other = data.clone();
+        other["big"]["x"] = 2.into();
+        other["app"]["hover"] = "b".into();
+        assert!(!reads.changed(&data, &other));
+        let mut flag = data.clone();
+        flag["flag"] = true.into();
+        assert!(reads.changed(&data, &flag));
+        // Iterating a level reads all of it.
+        let (n, reads) = h.render_tracked(&flag).unwrap();
+        assert_eq!(n.children[0].text, "t 2 2");
+        assert!(reads.0.contains(&vec!["app".to_string(), "list".to_string()]));
+        let mut list = flag.clone();
+        list["app"]["list"] = serde_json::json!([1]);
+        assert!(reads.changed(&flag, &list));
+        h.load("s", r#"return { render = function(state, data)
+            local keys = {}
+            for k in pairs(data) do keys[#keys + 1] = k end
+            table.sort(keys)
+            return column{ text(table.concat(keys, ",")) }
+          end }"#).unwrap();
+        let (n, reads) = h.render_tracked(&data).unwrap();
+        assert_eq!(n.children[0].text, "app,big,flag,title");
+        assert!(reads.changed(&data, &other), "pairs over the top reads everything");
     }
 
     #[test]
