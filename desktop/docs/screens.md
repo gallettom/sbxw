@@ -810,7 +810,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
 `coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `threads`,
-`shield`, `prompt`, `ask`, `jarvis`, `tag`, `logo-prompt`, `logo-mark` (the sbxw mark's
+`shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `logo-prompt`, `logo-mark` (the sbxw mark's
 ">", for the top bar's logo).
 
 One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
@@ -829,6 +829,7 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `prompt` | a shell (Bash) |
 | `stop` | interrupt or stop |
 | `tag` | keyword pills |
+| `monitor` | the virtual Mac (rail, its panel, the palette) |
 
 ## Where screens live
 
@@ -1056,6 +1057,12 @@ Extra {
     intent: Some(("open_panel".into(), json!({ "screen": "mcp" }))),
 }
 ```
+
+A status dot on an entry (live state, such as the virtual Mac's): a second
+extra, `Place::RailStatus("<the entry's id>")`, whose `tone` is the dot
+(`green`, `blue`, `amber`, `red`; `muted` a hollow grey ring; none, no dot),
+drawn at the icon's lower right with a dark ring, key `rail-<id>-dot`. Say
+the state in the entry's `help` too: colour is never the only signal.
 
 An entry whose intent is `open_panel {screen}` or `open_modal {screen}` is
 marked on while that screen shows, and a second press closes a panel or an

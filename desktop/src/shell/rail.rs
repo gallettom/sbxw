@@ -51,6 +51,8 @@ pub struct Entry {
     pub zone: Option<Zone>,
     /// Its place within the zone, lower first (Settings: `u16::MAX`).
     pub order: u16,
+    /// A status dot's tone (`Place::RailStatus`): `muted` is a hollow ring.
+    pub dot: Option<String>,
 }
 
 /// The rail as drawn: the top block (activity, then browse), the bottom
@@ -145,11 +147,11 @@ impl App {
         // The feature's own sentence ("Agents wait for you: ...") is the line; it is not said twice.
         let help = if help.starts_with("Agents wait for you") { "Agents waiting for your answer: questions, screenshots, choices".to_string() } else { help };
         let tone = if count.is_some() && badge == "amber" { "amber" } else if count.is_some() { "blue" } else { "quiet-blue" };
-        all.push(Entry { key: "rail-requests".into(), icon: "ask".into(), help: format!("Requests\n{help}"), keys: App::shortcut_for("relay_open"), tone: tone.into(), on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Intent("relay_open".into(), serde_json::json!({})), disabled: false, zone: Some(Zone::Activity), order: 10 });
+        all.push(Entry { key: "rail-requests".into(), icon: "ask".into(), help: format!("Requests\n{help}"), keys: App::shortcut_for("relay_open"), tone: tone.into(), on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Intent("relay_open".into(), serde_json::json!({})), disabled: false, zone: Some(Zone::Activity), order: 10, dot: None });
         let net = self.top_extra("approvals");
         let (count, badge) = badge_of(&net);
         let help = net.as_ref().and_then(|e| e["help"].as_str().map(str::to_string)).filter(|h| !h.is_empty()).unwrap_or_else(|| "What sbx asks you to allow, the hosts sandboxes reach".into());
-        all.push(Entry { key: "rail-network".into(), icon: "shield".into(), help: format!("Network\n{help}"), keys: App::shortcut_for("network_show"), tone: "blue".into(), on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Intent("network_show".into(), serde_json::json!({})), disabled: false, zone: Some(Zone::Activity), order: 20 });
+        all.push(Entry { key: "rail-network".into(), icon: "shield".into(), help: format!("Network\n{help}"), keys: App::shortcut_for("network_show"), tone: "blue".into(), on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Intent("network_show".into(), serde_json::json!({})), disabled: false, zone: Some(Zone::Activity), order: 20, dot: None });
         // The team leads view (leads.rs): only the leaders' terminals.
         let leaders = self.leaders();
         let help = if self.leads_on() {
@@ -159,7 +161,7 @@ impl App {
         } else {
             format!("Team leads\nOnly the {} team leader{}' terminals; press again for this layout", leaders.len(), if leaders.len() == 1 { "" } else { "s" })
         };
-        all.push(Entry { key: "rail-leads".into(), icon: "people".into(), help, keys: vec![], tone: "purple".into(), on: self.leads_on(), count: None, badge: "", run: RailRun::Leads, disabled: leaders.is_empty() && !self.leads_on(), zone: Some(Zone::Activity), order: 30 });
+        all.push(Entry { key: "rail-leads".into(), icon: "people".into(), help, keys: vec![], tone: "purple".into(), on: self.leads_on(), count: None, badge: "", run: RailRun::Leads, disabled: leaders.is_empty() && !self.leads_on(), zone: Some(Zone::Activity), order: 30, dot: None });
         // The features' entries (`Place::Rail`).
         for e in &self.feats.pane_extras {
             let Place::Rail { zone, order } = e.place else { continue };
@@ -173,11 +175,12 @@ impl App {
             let help = if e.help.is_empty() { e.label.clone() } else { format!("{}\n{}", e.label, e.help) };
             let badge = if e.tone == "amber" || e.tone == "red" { "amber" } else { "blue" };
             let shortcut = App::shortcut_for(&name);
-            all.push(Entry { key: format!("rail-{}", e.id), icon: e.icon.clone().unwrap_or_else(|| "single".into()), help, keys: shortcut, tone: if e.tone.is_empty() { "neutral".into() } else { e.tone.clone() }, on, count: e.count.filter(|n| *n > 0), badge, run: RailRun::Intent(name, args), disabled: false, zone: Some(zone), order });
+            let dot = self.feats.pane_extras.iter().find(|d| d.place == Place::RailStatus(e.id.clone())).map(|d| d.tone.clone());
+            all.push(Entry { key: format!("rail-{}", e.id), icon: e.icon.clone().unwrap_or_else(|| "single".into()), help, keys: shortcut, tone: if e.tone.is_empty() { "neutral".into() } else { e.tone.clone() }, on, count: e.count.filter(|n| *n > 0), badge, run: RailRun::Intent(name, args), disabled: false, zone: Some(zone), order, dot });
         }
         if let Some(e) = self.top_extra("setup") {
             if let Some(name) = e["intent"]["name"].as_str() {
-                all.push(Entry { key: "rail-setup".into(), icon: "gear".into(), help: format!("Settings\n{}", e["help"].as_str().unwrap_or("Setup")), keys: App::shortcut_for(name), tone: "neutral".into(), on: self.feats.modal.as_ref().is_some_and(|m| m.0 == "setup"), count: None, badge: "", run: RailRun::Intent(name.to_string(), e["intent"]["args"].clone()), disabled: false, zone: Some(Zone::Configure), order: u16::MAX });
+                all.push(Entry { key: "rail-setup".into(), icon: "gear".into(), help: format!("Settings\n{}", e["help"].as_str().unwrap_or("Setup")), keys: App::shortcut_for(name), tone: "neutral".into(), on: self.feats.modal.as_ref().is_some_and(|m| m.0 == "setup"), count: None, badge: "", run: RailRun::Intent(name.to_string(), e["intent"]["args"].clone()), disabled: false, zone: Some(Zone::Configure), order: u16::MAX, dot: None });
             }
         }
         let pending = self.jarvis.pending_list().len();
@@ -194,6 +197,7 @@ impl App {
             disabled: false,
             zone: None,
             order: 0,
+            dot: None,
         });
         // Jarvis (no zone) sorts last: `None` is mapped after every zone.
         all.sort_by_key(|e| (e.zone.map_or(9, |z| z as u8), e.order));
@@ -233,7 +237,7 @@ impl App {
             let n: u64 = folded.iter().filter_map(|e| e.count).sum();
             let badge = if folded.iter().any(|e| e.count.is_some() && e.badge == "amber") { "amber" } else { "blue" };
             let names: Vec<&str> = folded.iter().map(|e| e.help.split('\n').next().unwrap_or("")).collect();
-            let more = Entry { key: "rail-more".into(), icon: "more".into(), help: format!("More\n{}", names.join(", ")), keys: vec![], tone: "neutral".into(), on: self.rail_menu || folded.iter().any(|e| e.on), count: (n > 0).then_some(n), badge, run: RailRun::More, disabled: false, zone: Some(Zone::Configure), order: 0 };
+            let more = Entry { key: "rail-more".into(), icon: "more".into(), help: format!("More\n{}", names.join(", ")), keys: vec![], tone: "neutral".into(), on: self.rail_menu || folded.iter().any(|e| e.on), count: (n > 0).then_some(n), badge, run: RailRun::More, disabled: false, zone: Some(Zone::Configure), order: 0, dot: None };
             bottom.insert(0, more);
         }
         RailLayout { top, bottom, folded }
@@ -245,7 +249,7 @@ impl App {
             return true;
         }
         let l = self.rail_layout();
-        let badge = |e: &Entry| e.count.is_some() && key == format!("{}-badge", e.key);
+        let badge = |e: &Entry| (e.count.is_some() && key == format!("{}-badge", e.key)) || (e.dot.is_some() && key == format!("{}-dot", e.key));
         if l.top.iter().chain(&l.bottom).any(|e| key == e.key || badge(e)) {
             return true;
         }
@@ -353,6 +357,12 @@ fn button(e: &Entry, prev: Option<String>, next: Option<String>) -> El {
         b = b.fill(theme::hex(tint)).checked(true).child(el().key(format!("{}-on", e.key)).absolute(-(W - TARGET) / 2.0 + 1.0, 4.0).w(2.0).h(TARGET - 8.0).radius(1.0).fill(theme::hex(fg)));
     }
     b = b.child(rune::icon(crate::icons::get(&e.icon).unwrap_or_else(|| crate::icons::get("single").unwrap()), ICON).color(theme::hex(fg)));
+    if let Some(t) = &e.dot {
+        // The status dot: lower right, a dark ring so it reads on any tile;
+        // `muted` is a hollow grey ring (off, not set up).
+        let d = el().key(format!("{}-dot", e.key)).pin(None, None, Some(-3.0), Some(-3.0)).w(10.0).h(10.0).radius(5.0);
+        b = b.child(if t == "muted" { d.fill(c("bg")).border(2.0, c("text-muted")) } else { d.fill(c(t)).border(2.0, c("bg")) });
+    }
     if let Some(n) = e.count {
         // The badge: the tone filled, its number dark, a dark ring so it
         // reads over the coloured icon.

@@ -64,6 +64,8 @@ icons! {
     // `branch` is the same family); network requests a shield; a shell a
     // prompt; the agents' questions a bubble with a question mark; Jarvis a
     // voice in a ring (the agent keeps the sparkle).
+    // The virtual Mac: a desktop screen on its stand (not Remote's casting screen).
+    MONITOR "monitor" concat!(st!("rect", r#"x="1.5" y="2" width="13" height="9" rx="1.5""#), st!("path", r#"d="M8 11v3M5 14.25h6""#));
     GLOBE "globe" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("path", r#"d="M8 1.75c-2.6 2.6-2.6 9.9 0 12.5M8 1.75c2.6 2.6 2.6 9.9 0 12.5M1.75 8h12.5""#));
     REMOTE "remote" concat!(st!("path", r#"d="M1.75 5.5V3.75a1 1 0 0 1 1-1h10.5a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1H10""#), st!("path", r#"d="M1.75 8.5a5 5 0 0 1 5 5M1.75 11a2.5 2.5 0 0 1 2.5 2.5""#), r#"<circle cx="2" cy="13.4" r="0.9" fill="currentColor"/>"#);
     KEY "key" concat!(st!("circle", r#"cx="4.75" cy="8" r="2.75""#), st!("path", r#"d="M7.5 8h7M12 8v2.5M14.25 8v2""#));

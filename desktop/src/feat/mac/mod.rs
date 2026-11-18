@@ -39,7 +39,7 @@ pub const KEY: &str = "mac";
 pub const FEATURE: Feature = Feature {
     name: "mac",
     data: &[Data { key: KEY, path: "/api/mac", on: &["mac"], every: 10, lazy: false }],
-    screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/mac.luau"), slot: Slot::Panel { title: "Virtual Mac", icon: "single", width: 440.0 } }],
+    screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/mac.luau"), slot: Slot::Panel { title: "Virtual Mac", icon: "monitor", width: 440.0 } }],
     intents: INTENTS,
     act,
     on_answer: Some(on_answer),
@@ -223,40 +223,58 @@ fn one_line(t: &str) -> String {
     }
 }
 
-/// A top bar button on a host that can run the Mac: its state at a glance,
-/// amber when something waits on the person.
+/// The Mac's entry in the left rail, on a host that can run it (activity
+/// zone, after Team leads: its dot is live state), with a status dot: none
+/// before it is installed, a hollow grey ring while off (stopped, paused,
+/// not created), blue while an action runs, green running and free, amber
+/// running and held by an agent or with its guest setup unfinished, red when
+/// the last action failed. The tooltip's second line says the same in words;
+/// requests waiting on the person are the amber count badge.
 fn extras(cx: &Ctx) -> Vec<Extra> {
     let m = &cx.get(KEY)["mac"];
     if m["supported"] != true {
         return vec![];
     }
     let pending = m["pending"].as_array().map_or(0, Vec::len) as u64;
-    let st = state(m);
-    let (tone, help) = if pending > 0 {
-        ("amber", format!("The virtual Mac: {pending} request(s) wait for you"))
-    } else if m["error"].is_string() {
-        ("red", "The virtual Mac: the last action failed".to_string())
-    } else if m["busy"].is_string() {
-        ("blue", format!("The virtual Mac: {}", m["busy"].as_str().unwrap_or("")))
-    } else if m["installed"] != true {
-        ("muted", "The virtual Mac: terminal-mac is not installed".to_string())
-    } else if st == "running" && m["guest_ready"] != true {
-        ("amber", "The virtual Mac is running; its guest setup is not finished".to_string())
-    } else if st == "running" {
-        ("green", match m["holder"].as_str() { Some(h) => format!("The virtual Mac is running, held by {h}"), None => "The virtual Mac is running, free".into() })
-    } else {
-        ("muted", format!("The virtual Mac is {st}"))
-    };
-    vec![Extra {
-        place: Place::Topbar,
+    let (dot, words) = mac_state(m);
+    let help = if pending > 0 { format!("{words}; {pending} request(s) wait for you") } else { words };
+    let mut v = vec![Extra {
+        place: Place::Rail { zone: crate::feat::Zone::Activity, order: 40 },
         id: "mac".into(),
-        label: "Mac".into(),
-        icon: Some("single".into()),
-        tone: tone.into(),
+        label: "Virtual Mac".into(),
+        icon: Some("monitor".into()),
+        tone: if pending > 0 { "amber".into() } else { "neutral".into() },
         help,
         count: (pending > 0).then_some(pending),
         intent: Some(("mac_open".into(), json!({}))),
-    }]
+    }];
+    if let Some(t) = dot {
+        v.push(Extra { place: Place::RailStatus("mac".into()), id: "mac-status".into(), label: String::new(), icon: None, tone: t.into(), help: String::new(), count: None, intent: None });
+    }
+    v
+}
+
+/// The Mac's state: the dot's tone (`None`: no dot) and the words.
+pub fn mac_state(m: &J) -> (Option<&'static str>, String) {
+    let st = state(m);
+    if m["error"].is_string() {
+        (Some("red"), "Virtual Mac: the last action failed".into())
+    } else if m["busy"].is_string() {
+        (Some("blue"), format!("Virtual Mac: {}", m["busy"].as_str().unwrap_or("working")))
+    } else if matches!(st, "starting" | "stopping" | "pausing" | "resuming" | "creating") {
+        (Some("blue"), format!("Virtual Mac: {st}"))
+    } else if m["installed"] != true {
+        (None, "Virtual Mac: not set up (terminal-mac is not installed)".into())
+    } else if st == "running" && m["guest_ready"] != true {
+        (Some("amber"), "Virtual Mac: running, its guest setup is not finished".into())
+    } else if st == "running" {
+        match m["holder"].as_str() {
+            Some(h) => (Some("amber"), format!("Virtual Mac: running, in use by {h}")),
+            None => (Some("green"), "Virtual Mac: running".into()),
+        }
+    } else {
+        (Some("muted"), format!("Virtual Mac: {}", if st == "missing" { "not created yet" } else { st }))
+    }
 }
 
 /// The stand-in daemon's Mac: the fixture's `mac` answers `GET /api/mac`;

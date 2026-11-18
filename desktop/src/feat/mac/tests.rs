@@ -126,13 +126,25 @@ fn nothing_is_asked_of_a_mac_that_cannot_do_it() {
 }
 
 #[test]
-fn the_top_bar_button_shows_the_state_and_waiting_requests() {
+fn the_rail_entry_shows_the_state_as_a_dot_and_in_words_and_waiting_requests() {
+    let dot = |e: &[Extra]| e.iter().find(|x| x.place == Place::RailStatus("mac".into())).map(|x| x.tone.clone());
     let e = extras(&Ctx { data: &fixture("basic") });
-    assert_eq!(e.len(), 1);
-    assert_eq!((e[0].tone.as_str(), e[0].count), ("green", None));
-    assert!(e[0].help.contains("web-app"));
+    assert_eq!(e[0].place, Place::Rail { zone: crate::feat::Zone::Activity, order: 40 });
+    assert_eq!((e[0].icon.as_deref(), e[0].count), (Some("monitor"), None));
+    assert!(e[0].help.contains("in use by web-app"), "{}", e[0].help);
+    assert_eq!(dot(&e).as_deref(), Some("amber"), "held by an agent");
     let e = extras(&Ctx { data: &fixture("setup") });
     assert_eq!((e[0].tone.as_str(), e[0].count), ("amber", Some(2)));
+    assert!(e[0].help.contains("2 request(s) wait"));
+    assert_eq!(dot(&extras(&Ctx { data: &fixture("not-installed") })), None, "not set up: no dot");
+    assert_eq!(dot(&extras(&Ctx { data: &fixture("missing") })).as_deref(), Some("muted"));
+    assert_eq!(dot(&extras(&Ctx { data: &fixture("stopping") })).as_deref(), Some("blue"), "an action runs");
+    let mut d = fixture("basic");
+    d["mac"]["mac"]["holder"] = J::Null;
+    assert_eq!(dot(&extras(&Ctx { data: &d })).as_deref(), Some("green"));
+    d["mac"]["mac"]["error"] = "boom".into();
+    let e = extras(&Ctx { data: &d });
+    assert_eq!((dot(&e).as_deref(), e[0].help.as_str()), (Some("red"), "Virtual Mac: the last action failed"));
     assert!(extras(&Ctx { data: &fixture("unsupported") }).is_empty());
     assert!(extras(&Ctx { data: &fixture("errors") }).is_empty());
 }

@@ -926,7 +926,7 @@ impl App {
                     Place::Sandbox(n) => sandboxes.entry(n.clone()).or_insert_with(|| J::Array(vec![])).as_array_mut().unwrap().push(e.to_json()),
                     Place::SandboxRow(n) => rows.entry(n.clone()).or_insert_with(|| J::Array(vec![])).as_array_mut().unwrap().push(e.to_json()),
                     // Pane bars' and the rail's entries, both drawn by the core.
-                    Place::Pane(_) | Place::Session { .. } | Place::Rail { .. } => panes.push(e),
+                    Place::Pane(_) | Place::Session { .. } | Place::Rail { .. } | Place::RailStatus(_) => panes.push(e),
                 }
             }
         }

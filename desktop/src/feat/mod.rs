@@ -659,6 +659,12 @@ pub enum Place {
     /// overlay it opened. Settings is the configure zone's last entry and
     /// Jarvis stands apart at the very bottom (both the core's own).
     Rail { zone: Zone, order: u16 },
+    /// A status dot on the rail entry of that id (`Place::Rail`): `tone` is
+    /// the dot's colour (`green`, `blue`, `amber`, `red`; `muted` a hollow
+    /// grey ring; no such extra, no dot), drawn at the icon's lower right
+    /// with a dark ring. Colour is never the only signal: say the state in
+    /// the entry's own `help` too. Only `tone` is read.
+    RailStatus(String),
 }
 
 /// The left rail's zones, top to bottom (`Place::Rail`).
