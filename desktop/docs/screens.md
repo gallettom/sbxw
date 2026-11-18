@@ -81,6 +81,8 @@ unchanged.
 | `platform` | `macos`, `linux`, `windows` |
 | `window` | `w`, `h`: the window's size in points (the plan dialog moves its header into the scrolling part on a short window) |
 | `groups` | Each sandbox's group colour (`#rrggbb`), by name; absent for a sandbox in no group. The web UI's hue first (chats share one, a workspace folder's from its path), then made distinct: a group within 40° of a hue already taken (chats first, then workspaces by path) moves to the nearest free hue, so two groups never share a background; it can then differ from the web UI's (`theme::group_colors`) |
+| `group_look` | By group colour (as `groups` gives it): `{ tint, hover, label }`, the list's block, its header hovered and the group's label, in the theme drawn now (`theme::group_tints`) |
+| `theme` | The theme drawn: `dark` or `graphite` |
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
 | `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
 | `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |
@@ -704,13 +706,36 @@ the sessions line and block, `sb:<name>`).
 
 ## Theme
 
-The global `theme` (read only) is the web UI's design tokens
-(`assets/app.css`). Any colour prop takes these names; `theme.color[name]`
-gives the `#rrggbb`.
+The global `theme` (read only) is the app's design tokens (the dark
+theme's are the web UI's, `assets/app.css`). Any colour prop takes these
+names; `theme.color[name]` gives the `#rrggbb` of the theme drawn now.
+
+**Themes.** The app has named themes, each one palette behind the same
+token names: `dark` (the default, the web UI's blue-black) and `graphite`
+(neutral dark greys, an orange accent). The person switches them in the
+status bar; `theme.mode` (and `data.app.theme`) says which is drawn, and on a
+switch every screen is loaded again and renders with the new values. So:
+
+- **Use token names, never literal colours.** `color = "text-muted"`,
+  `fill = "surface"`, `border = "accent"`. A `#rrggbb` written in a screen is
+  the same in every theme and will look wrong in all but one (a dark grey
+  that was a surface in Dark is a hole in Graphite). The built-in screens
+  have none (a test scans them).
+- Mixing your own tints from `theme.color` values is fine: they are read
+  again on a switch. The core hands the list's group tints ready made
+  (`data.app.group_look[colour]`: `tint`, `hover`, `label`).
+- For "the current one", a focus or a link, use `accent` (`link` for link
+  text); for meaning, the tones (below). `accent` is blue in Dark, orange in
+  Graphite; never use it for a state.
+- A customised copy of a screen (the override folder) made before themes
+  existed may carry literal colours: it then looks wrong in Graphite. Ask
+  Jarvis to replace them by tokens, or restore the built-in.
 
 | Table | Names |
 |---|---|
-| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary-hover`, `red-text` (red words on a group's tint) |
+| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary` (the one filled button's fill), `on-primary` (its label), `primary-hover`, `red-text` (red words on a group's tint), `status-bar`, `status-line`, `vendor-anthropic`, `vendor-openai`, `vendor-google`, `cyan`, `pill-danger`, `accent`, `accent-tint`, `link`, `tab-current`, `scrim`, `shadow`, `media` (behind a picture), `file-doc`, `file-code`, `file-image`, `file-data`, `file-archive` (the explorer's file kinds) |
+| `theme.mode` | `dark` or `graphite` |
+| `theme.icon` | `sm` 12 (inline with text), `md` 14 (every control), `lg` 20 (the rail), `mark` 24 (the top bar's mark) |
 | `theme.radius` | `xs` 6, `sm` 6, `md` 10, `lg` 12, `pill` 999 |
 | `theme.text` | `caption` 12, `body` 13, `title` 14, `heading` 16; older names `xxs`, `xs`, `sm` 12, `md` 13, `lg` 14, `xl` 16 |
 | `theme.space` | `xxs` 2, `xs` 4, `sm` 8, `md` 12, `lg` 16, `xl` 24 |

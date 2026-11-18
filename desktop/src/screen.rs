@@ -705,7 +705,7 @@ fn stale_marker<S: Host>(name: &str) -> El {
         .border(1.0, c("amber"))
         .role("button")
         .cursor(Cursor::Pointer)
-        .help(format!("Your {name} screen is a customised copy made for an older version; new features may be missing. Ask Jarvis to update it, or restore the built-in."))
+        .help(format!("Your {name} screen is a customised copy made for an older version; new features may be missing, and colours it writes as #rrggbb do not follow the theme. Ask Jarvis to update it, or restore the built-in."))
         .child(rune::icon(crate::icons::get("warning").unwrap(), 12.0).color(c("amber")))
         .w_full()
         .child(text(line).font(body(12.0, 500.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0))
