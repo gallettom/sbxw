@@ -976,6 +976,7 @@ impl App {
         let mut changed = false;
         if self.theme_seen != theme::generation() {
             self.theme_seen = theme::generation();
+            crate::screen::invalidate_renders();
             self.push_data();
             changed = true;
         }
@@ -2505,6 +2506,9 @@ impl App {
         self.theme_choice = t;
         self.store.set("theme", J::String(t.name().into()));
         theme::set_mode(t);
+        // Every drawn screen renders again: the skip on unchanged reads
+        // would otherwise keep a screen in the old palette.
+        crate::screen::invalidate_renders();
         self.theme_seen = theme::generation();
         for p in &mut self.panes {
             if let Some(term) = &mut p.term {
