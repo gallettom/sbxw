@@ -113,8 +113,10 @@ mod tests {
         assert!(std::fs::read_to_string(&spec).unwrap().contains("displayName: codemap"));
         let script = p.kits().join("codemap/files/home/agent/.sbxw/codemap/install-hooks.mjs");
         assert!(script.is_file());
-        let before = std::fs::metadata(&spec).unwrap().modified().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        // A time of its own, far in the past: a rewrite would change it, at
+        // any timestamp resolution (no sleep to wait one out).
+        let before = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        std::fs::File::options().write(true).open(&spec).unwrap().set_modified(before).unwrap();
         resolve(&p, &kits).unwrap();
         assert_eq!(std::fs::metadata(&spec).unwrap().modified().unwrap(), before, "unchanged, not rewritten");
         assert!(resolve(&p, &["sbxw:nope".into()]).is_err());

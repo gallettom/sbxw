@@ -758,8 +758,10 @@ mod tests {
             assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o644);
         }
         // Current: left as it is.
-        let before = std::fs::metadata(&file).unwrap().modified().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        // A time of its own, far in the past: a rewrite would change it, at
+        // any timestamp resolution (no sleep to wait one out).
+        let before = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(before).unwrap();
         let r = run();
         assert_eq!((r.failed.clone(), r.changed.clone()), (vec![], vec![]), "{r:?}");
         assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), before, "not rewritten");
