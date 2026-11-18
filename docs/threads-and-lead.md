@@ -148,6 +148,13 @@ plan's threads work in one repo; a proposal naming two is refused.
 
 ![A plan from the lead of myapp: three threads, each with a goal, the files it owns and a model, and Refuse, Later, Approve and start](images/plan.png)
 
+When the main checkout has uncommitted changes, the dialog says so first:
+"N uncommitted changes in the main checkout will not be in the threads'
+worktrees: commit them first if the plan depends on them". The threads'
+branches are cut from `HEAD`. The count is read on the host when the plan is
+proposed (`main_uncommitted` on the plan), so files a sandbox merely does not
+mount are not counted.
+
 Nothing starts without you. Edit any thread's name, goal, scope, repo or model;
 remove or add threads; check the variant against the lead's justification; then **Approve and start**, **Refuse** (final), or
 **Later** (**Review plan** on the main pane brings it back). Approval is

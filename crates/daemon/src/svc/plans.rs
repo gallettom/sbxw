@@ -95,6 +95,26 @@ impl App {
         Ok(())
     }
 
+    /// Uncommitted changes in the main checkouts the threads' worktrees
+    /// will be cut from, summed over the repos they resolve to, read with git
+    /// on the host (where the whole repository is). `None` without a
+    /// workspace or when one could not be read.
+    async fn main_uncommitted(&self, sandbox: &SandboxRef, threads: &[PlanThread]) -> Option<u32> {
+        let ws = self.store.workspace(sandbox)?;
+        let rec = self.store.get(sandbox);
+        let host = self.host_for(sandbox).await.ok()?;
+        let mut repos = std::collections::BTreeSet::new();
+        for t in threads {
+            let recorded = rec.threads.get(t.name.as_str()).map(|r| r.repo.as_str());
+            repos.insert(git::choose(&host, &ws, recorded, &t.name, t.repo.as_deref()).await.ok()?);
+        }
+        let mut n = 0;
+        for rel in repos {
+            n += git::uncommitted(&host, &git::thread_dir(&ws, &rel)).await?;
+        }
+        Some(n)
+    }
+
     /// A shared plan's threads all work in one worktree, so in one repo: the
     /// one they resolve to, and the worktree's path in it. `Ok(None)` when the
     /// sandbox has no workspace recorded (the scripts find the repo there).
@@ -152,6 +172,8 @@ impl App {
             now_ms(),
         )?;
         tracing::info!("plans: '{sandbox}' proposed {} ({} thread(s), {:?})", plan.id, plan.threads.len(), plan.variant);
+        let n = self.main_uncommitted(sandbox, &plan.threads).await;
+        let plan = self.plans.lock().unwrap().note_main_uncommitted(&plan.id, n).unwrap_or(plan);
         Ok(self.plan_changed(plan))
     }
 
@@ -711,6 +733,41 @@ mod tests {
         app.plan_propose_merge(&p.id, &sb, vec!["api".into()], "", vec![]).unwrap();
         let again = crate::testing::app_in(_d.path());
         assert_eq!(again.plan(&p.id).unwrap().threads[0].set_by, Some(sbxw_core::plans::SetBy::Lead), "persisted");
+    }
+
+    #[tokio::test]
+    async fn a_proposal_counts_the_uncommitted_work_the_worktrees_will_not_have() {
+        let (_d, app) = app();
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(ws.path())
+                .args(["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .output()
+                .is_ok_and(|o| o.status.success());
+            assert!(ok, "git {args:?}");
+        };
+        if std::process::Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        git(&["init", "-q"]);
+        std::fs::write(ws.path().join("a"), "a").unwrap();
+        git(&["add", "a"]);
+        git(&["commit", "-q", "-m", "one"]);
+        app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+
+        let p = app.plan_propose(&sb, "", vec![t("api")], Variant::Split, "one", None).await.unwrap();
+        assert_eq!(p.main_uncommitted, Some(0));
+        app.plan_refuse(&p.id, None).unwrap();
+
+        std::fs::write(ws.path().join("a"), "edited").unwrap();
+        std::fs::write(ws.path().join("new"), "untracked").unwrap();
+        let p = app.plan_propose(&sb, "", vec![t("api")], Variant::Split, "one", None).await.unwrap();
+        assert_eq!(p.main_uncommitted, Some(2));
+        assert_eq!(serde_json::to_value(app.plan(&p.id).unwrap()).unwrap()["main_uncommitted"], 2, "on the plan both UIs receive");
     }
 
     #[tokio::test]

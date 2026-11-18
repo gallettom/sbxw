@@ -659,12 +659,33 @@ function setPlanError(msg) {
   showNote(planError, msg);
 }
 
+// The main checkout's uncommitted work, counted on the host when the plan was
+// proposed (main_uncommitted): the threads' worktrees are cut from HEAD and
+// will not have it.
+function paintPlanUncommitted(plan) {
+  const summary = document.getElementById('plan-summary');
+  let note = document.getElementById('plan-uncommitted');
+  if (!note) {
+    note = document.createElement('p');
+    note.id = 'plan-uncommitted';
+    note.className = 'plan-summary';
+    note.setAttribute('role', 'note');
+    summary.after(note);
+  }
+  const n = plan.main_uncommitted || 0;
+  note.textContent = n
+    ? `⚠ ${n} uncommitted change${n === 1 ? '' : 's'} in the main checkout will not be in the threads' worktrees: commit ${n === 1 ? 'it' : 'them'} first if the plan depends on ${n === 1 ? 'it' : 'them'}.`
+    : '';
+  note.hidden = !n;
+}
+
 async function showPlan(plan) {
   planShown = plan.id;
   setPlanView('review');
   if (planRepos?.sandbox !== plan.sandbox) planRepos = null;
   document.getElementById('plan-title').textContent = `Plan from the lead of ${plan.sandbox}`;
   document.getElementById('plan-summary').textContent = plan.summary || '';
+  paintPlanUncommitted(plan);
   paintPlanVariant(plan);
   planRows.innerHTML = plan.threads.map((t, i) => planRowHtml(t, i)).join('');
   setPlanError('');

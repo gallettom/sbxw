@@ -198,6 +198,13 @@ pub struct Plan {
     pub closed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge: Option<Merge>,
+    /// Uncommitted changes (tracked and untracked) in the main checkout of
+    /// the repo(s) the threads work in, read on the host when the plan was
+    /// proposed: work the threads' worktrees, cut from `HEAD`, will not
+    /// have. The host holds the whole repository, so files a sandbox merely
+    /// does not mount are not counted. `None` when it could not be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_uncommitted: Option<u32>,
     pub created_ms: u64,
     pub updated_ms: u64,
 }
@@ -434,11 +441,19 @@ impl PlanBook {
             lead: lead_address(lead),
             closed: false,
             merge: None,
+            main_uncommitted: None,
             created_ms: now,
             updated_ms: now,
         };
         self.plans.insert(id, plan.clone());
         Ok(plan)
+    }
+
+    /// Record what the main checkout held when plan `id` was proposed.
+    pub fn note_main_uncommitted(&mut self, id: &str, n: Option<u32>) -> Option<Plan> {
+        let p = self.plans.get_mut(id)?;
+        p.main_uncommitted = n;
+        Some(p.clone())
     }
 
     fn mutate<F>(&mut self, id: &str, now: u64, f: F) -> Result<Plan, String>
