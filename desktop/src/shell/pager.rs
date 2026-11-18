@@ -359,7 +359,7 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
                 s.run_intent("pager", Intent::Pages(PageOp::Close(Some(k))));
                 s.push_data();
             })
-            .child(small_icon("close", 10.0, c("text-muted"))),
+            .child(small_icon("close", theme::icon::SMALL, c("text-muted"))),
     )
 }
 
@@ -384,7 +384,7 @@ fn segment(key: &str, label: &str, icon: &str, on: bool, help: &str, keys: Vec<S
             s.run_intent("pager", Intent::Pages(op.clone()));
             s.push_data();
         })
-        .child(small_icon(icon, 14.0, c(if on { "blue" } else { "text-muted" })))
+        .child(small_icon(icon, theme::icon::MEDIUM, c(if on { "blue" } else { "text-muted" })))
         .child(text(label.to_string()).font(small(TAB_TEXT, 500.0)).color(c(if on { "text-bright" } else { "text-muted" })))
 }
 
@@ -419,7 +419,7 @@ pub fn view(s: &App) -> El {
                     s.toggle_leads();
                     s.push_data();
                 })
-                .child(small_icon("leader", 14.0, theme::hex(fg)))
+                .child(small_icon("leader", theme::icon::MEDIUM, theme::hex(fg)))
                 .child(text(LEADS_LABEL).font(small(TAB_TEXT, 600.0)).color(theme::hex(fg))),
         );
     }
@@ -442,7 +442,7 @@ pub fn view(s: &App) -> El {
             .hover(c("elevated"))
             .cursor(Cursor::Pointer)
             .on_press(|s: &mut App| s.pager_menu = if s.pager_menu.as_deref() == Some("more") { None } else { Some("more".into()) })
-            .child(small_icon("more", 14.0, c("text")))
+            .child(small_icon("more", theme::icon::MEDIUM, c("text")))
             .child(text(hidden.to_string()).font(small(TAB_TEXT, 500.0)).color(c("text")));
         if let Some(t) = hidden_tone {
             m = m.child(el().w(TAB_DOT).h(TAB_DOT).radius(TAB_DOT / 2.0).fill(c(t)));
@@ -473,7 +473,7 @@ pub fn view(s: &App) -> El {
             s.run_intent("pager", Intent::Pages(PageOp::New));
             s.push_data();
         })
-        .child(small_icon("plus", 14.0, c("text-muted")));
+        .child(small_icon("plus", theme::icon::MEDIUM, c("text-muted")));
     if plus_target {
         plus = plus.border(1.5, c("blue"));
     }

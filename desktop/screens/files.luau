@@ -26,7 +26,7 @@ local function head(t)
 end
 
 -- The code map's button: "Code map" when the sandbox has one, else
--- "Generate code map" (or the run's progress). Beside the Workspace location.
+-- "Generate code map" (or the run's progress). In the header, beside Upload.
 local function codemap_button(ui)
   local label = "Code map"
   if ui.run and ui.run.phase == "writing" then
@@ -37,6 +37,49 @@ local function codemap_button(ui)
   return button{ label, key = "files-codemap", icon = "sparkle", on = "codemap", arg = { sandbox = ui.sandbox, has_map = ui.has_map == true }, variant = "ghost", dense = true,
     disabled = ui.run and ui.run.phase == "writing" and not ui.has_map,
     help = ui.has_map and "Read the code map" or "Ask this sandbox's agent to write one, in a background session" }
+end
+
+-- A location's icon colour: folders blue (the explorer's one folder
+-- colour), the shared and pinned places their own quiet marks.
+local function loc_color(x)
+  if x.icon == "folder" or x.icon == "branch" or x.icon == "columns" then return "blue" end
+  if x.icon == "flag" then return "amber" end
+  return "text-muted"
+end
+
+-- A file's icon colour by kind, from its name (quiet tokens; the icon's
+-- shape and the name say it too): documents, code, pictures, data, archives.
+local kinds = {
+  md = "file-doc", markdown = "file-doc", txt = "file-doc", rst = "file-doc", pdf = "file-doc", html = "file-doc", htm = "file-doc",
+  rs = "file-code", js = "file-code", ts = "file-code", tsx = "file-code", jsx = "file-code", py = "file-code", go = "file-code", rb = "file-code",
+  sh = "file-code", lua = "file-code", luau = "file-code", c = "file-code", h = "file-code", cpp = "file-code", java = "file-code", kt = "file-code",
+  swift = "file-code", css = "file-code", scss = "file-code", sql = "file-code",
+  png = "file-image", jpg = "file-image", jpeg = "file-image", gif = "file-image", svg = "file-image", webp = "file-image", ico = "file-image",
+  json = "file-data", yaml = "file-data", yml = "file-data", toml = "file-data", csv = "file-data", xml = "file-data", lock = "file-data", env = "file-data", ini = "file-data",
+  zip = "file-archive", tar = "file-archive", gz = "file-archive", tgz = "file-archive", xz = "file-archive", bz2 = "file-archive", ["7z"] = "file-archive",
+}
+local function file_color(name)
+  local ext = string.match(string.lower(name or ""), "%.([%w]+)$")
+  return (ext and kinds[ext]) or "text-muted"
+end
+
+-- What the middle column lists, said at its top: the current location's
+-- icon, name and path, on the same highlight as the location at the left.
+local function listing_head(ui)
+  local here
+  for _, g in ipairs(ui.locations or {}) do
+    for _, x in ipairs(g.items or {}) do
+      if x.id == ui.location then here = x end
+    end
+  end
+  if not here then return false end
+  local path = ui.tab == "files" and (ui.path or here.path) or here.path
+  return row{ key = "files-listing-head", gap = 8, w = "full", px = 8, h = 28, radius = "xs", fill = "active-bg",
+    column{ pin = { left = 0, top = 4, bottom = 4 }, w = 2, radius = 1, fill = "accent" },
+    icon{ here.icon or "folder", size = 14, color = "accent" },
+    text{ here.label, size = "sm", weight = "semibold", color = "text-bright", truncate = true },
+    path and text{ path, size = "xs", mono = true, color = "text-muted", truncate = true, grow = 1, help = path } or spacer{},
+  }
 end
 
 -- WHERE TO LOOK: the Locations, a visible list grouped by where the files
@@ -55,7 +98,6 @@ local function locations(ui, narrow)
     return row{ gap = 8, w = "full",
       #items > 0 and menu{ label, id = "files-locations", icon = "folder", items = items, on = "place" } or false,
       spacer{},
-      codemap_button(ui),
     }
   end
   local kids = { gap = 2, w = "full", key = "files-locations-list",
@@ -70,14 +112,18 @@ local function locations(ui, narrow)
       text{ g.group, size = "xs", color = "text-dim" } }
     for _, x in ipairs(g.items or {}) do
       local here = x.id == ui.location
-      local item = row{ gap = 8, grow = 1, min_w = 0, px = 8, h = 22, radius = "xs",
+      -- The current one: the listing's own highlight (its header at the
+      -- middle has the same ground and the same accent edge), so the two read
+      -- as one thing: this location, listed there.
+      kids[#kids + 1] = row{ gap = 8, w = "full", min_w = 0, px = 8, h = 22, radius = "xs",
         key = x.thread and ("files-worktree-" .. x.thread) or ("files-loc-" .. x.id),
         on = x.thread and "worktree" or "place", arg = x.thread and { sandbox = ui.sandbox, thread = x.thread } or x.id,
         fill = here and "active-bg" or nil, hover = "hover-subtle", help = x.help, selected = here,
-        icon{ x.icon or "folder", size = 12, color = x.thread and "blue" or (here and "text-bright" or "text-muted") },
+        here and column{ pin = { left = 0, top = 3, bottom = 3 }, w = 2, radius = 1, fill = "accent" } or false,
+        icon{ x.icon or "folder", size = 12, color = here and "accent" or loc_color(x) },
         text{ x.label, size = "sm", truncate = true, grow = 1, color = here and "text-bright" or "text" },
+        here and icon{ "chevron-right", size = 12, color = "accent" } or false,
       }
-      kids[#kids + 1] = x.workspace and row{ gap = 4, w = "full", item, codemap_button(ui) } or item
     end
   end
   return column(kids)
@@ -147,7 +193,7 @@ local function uploads(ui, dragging)
     for _, s in ipairs(staged) do
       local sending = s.state == "sending"
       kids[#kids + 1] = row{ gap = 8, w = "full", key = "files-staged-" .. s.index,
-        icon{ "file", size = 11, color = "text-muted" },
+        icon{ "file", size = 12, color = "text-muted" },
         column{ gap = 2, grow = 1,
           text{ s.name, size = "sm", truncate = true },
           nz(s.problem) and text{ s.problem, size = "xs", color = "red", wrap = true }
@@ -165,7 +211,7 @@ local function uploads(ui, dragging)
   end
   if ui.saved then
     kids[#kids + 1] = row{ gap = 8, w = "full", key = "files-saved",
-      icon{ "check", size = 11, color = "green" },
+      icon{ "check", size = 12, color = "green" },
       text{ "Saved " .. ui.saved.name, size = "xs", color = "text-muted", truncate = true, grow = 1, help = ui.saved.path },
       button{ "Show in folder", key = "files-show-saved", on = "show_saved", variant = "ghost" },
     }
@@ -190,7 +236,7 @@ local function folderview(r)
   return row{ gap = 8, w = "full", px = 8, py = 4, radius = "xs", key = "files-row-" .. r.id, on = "fold", arg = r.id, fill = r.cursor and "elevated" or nil,
     on_right = (not r.open) and "fold" or nil, on_left = r.open and "fold" or nil,
     (r.depth or 0) > 0 and spacer{ w = 12 * r.depth, grow = 0 } or false,
-    icon{ r.open and "chevron-down" or "chevron-right", size = 10, color = "text-muted" },
+    icon{ r.open and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
     icon{ "folder", size = 12, color = "blue" },
     text{ r.name, size = "sm", truncate = true, grow = 1 },
     text{ r.count .. (r.count == 1 and " file" or " files"), size = "xs", color = "text-muted" },
@@ -206,7 +252,7 @@ local function dirview(r)
       on_right = (not r.open) and "expand" or nil, on_left = r.open and "expand" or nil,
       fill = r.cursor and "elevated" or nil, help = (r.open and "Fold " or "Open ") .. r.name .. " here (Right, Left)",
       (r.depth or 0) > 0 and spacer{ w = 12 * r.depth, grow = 0 } or false,
-      icon{ r.open and "chevron-down" or "chevron-right", size = 10, color = "text-muted" },
+      icon{ r.open and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
       icon{ "folder", size = 12, color = "blue" },
       text{ r.name .. (r.link and " ↪" or ""), size = "sm", truncate = true, grow = 1 },
       count and text{ count, size = "xs", color = "text-muted" } or false,
@@ -228,7 +274,7 @@ local function rowview(ui, r, i)
   local kids = { gap = 8, w = "full", px = 8, py = 4, radius = "xs", key = "files-row-" .. r.id, on = "select", arg = r.id,
     fill = r.selected and "active-bg" or (r.cursor and "elevated" or nil),
     (r.depth or 0) > 0 and spacer{ w = 12 * r.depth + 18, grow = 0 } or false,
-    icon{ r.icon or "file", size = 12, color = r.kind == "dir" and "blue" or "text-muted" },
+    icon{ r.icon or "file", size = 12, color = r.kind == "dir" and "blue" or file_color(r.name) },
     column{ gap = 2, grow = 1,
       text{ r.name .. (r.link and " ↪" or ""), size = "sm", truncate = true, color = r.selected and "text-bright" or "text" },
       #meta > 0 and text{ table.concat(meta, " · "), size = "xs", color = "text-dim", truncate = true } or false,
@@ -368,6 +414,7 @@ return {
     }
     local head = row{ gap = 8, w = "full", key = "files-head",
       crumbs(state, ui, narrow),
+      codemap_button(ui),
       button{ (not narrow) and "Upload" or nil, key = "files-upload", icon = "plus", on = "upload", variant = open_up and "neutral" or "ghost", dense = true,
         help = "Upload into " .. ui.sandbox .. ": drop files on the explorer, choose them or paste a picture" },
       menu{ "", id = "files-actions", icon = "more", items = actions, on = "action", arg = { sandbox = ui.sandbox, has_map = ui.has_map == true } },
@@ -375,10 +422,11 @@ return {
     local top = { gap = 8, w = "full", head }
     if open_up then top[#top + 1] = uploads(ui, dragging) end
     local three = (over.w or 1000) >= 900
-    local picker = row{ gap = 8, w = "full",
+    -- The sandbox picker beside the overlay's title ("Files  [web-app v]"):
+    -- the core's header draws this row (screen.rs, TITLE_SLOT).
+    top[#top + 1] = row{ key = "title-slot", gap = 8,
       sandbox_picker(data, { id = "files-sandbox", value = ui.sandbox, items = ui.sandboxes or {}, on = "sandbox" }),
-      spacer{},
-      button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", dense = true, help = "Read the lists again" } or false,
+      button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", dense = true, help = "Read the lists again" },
       ui.offline and badge{ "stopped: workspace only", tone = "amber", help = "Read from this computer; the sandbox is not started to list a folder" } or false,
     }
     local list_head = nz(ui.artifacts_dir) and ui.tab == "artifacts" and text{ ui.artifacts_dir, size = "xs", color = "text-dim", mono = true, truncate = true, help = ui.artifacts_dir } or false
@@ -389,7 +437,7 @@ return {
           preview(ui, true) }
       end
       top[#top + 1] = scroll{ key = "files-tree-scroll", column{ gap = 8, w = "full",
-        picker, locations(ui, true), list_head, listbar(ui), rows(ui, true) } }
+        locations(ui, true), listing_head(ui), list_head, listbar(ui), rows(ui, true) } }
       top.h = "full"
       return column(top)
     end
@@ -397,8 +445,8 @@ return {
     -- (scrolling on their own, the picker above), the tree the full height,
     -- the reader. From 760: two, the Locations folded into one line.
     local tree = column{ h = "full", gap = 8, w = "full",
-      (not three) and picker or false,
       (not three) and locations(ui, true) or false,
+      listing_head(ui),
       list_head,
       listbar(ui),
       rows(ui),
@@ -407,7 +455,6 @@ return {
     if three then
       top[#top + 1] = row{ gap = 12, w = "full", grow = 1, align = "stretch", key = "files-columns",
         column{ w = 224, h = "full", gap = 8, key = "files-left",
-          picker,
           scroll{ key = "files-locations-scroll", locations(ui, false) } },
         divider{ vertical = true },
         column{ grow = 1, min_w = 0, h = "full", reading } }

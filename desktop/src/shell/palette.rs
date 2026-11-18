@@ -424,7 +424,7 @@ pub fn view(s: &App) -> Option<El> {
         .px(16.0)
         .h(48.0)
         .items_center()
-        .child(rune::icon(crate::icons::get("search").unwrap(), 16.0).color(c("text-muted")))
+        .child(rune::icon(crate::icons::get("search").unwrap(), crate::theme::icon::MEDIUM).color(c("text-muted")))
         .child(input);
     let mut list = col().key("palette-list").role("listbox").w_full().gap(2.0).padding(8.0);
     if shown.is_empty() {
@@ -449,7 +449,7 @@ pub fn view(s: &App) -> Option<El> {
             r = r.fill(c("elevated"));
         }
         r = r.child(match cmd.icon.as_deref().and_then(crate::icons::get) {
-            Some(ic) => rune::icon(ic, 16.0).color(c(if on { "text-bright" } else { "text-muted" })),
+            Some(ic) => rune::icon(ic, crate::theme::icon::MEDIUM).color(c(if on { "text-bright" } else { "text-muted" })),
             None => el().w(16.0),
         });
         r = r.child(text(cmd.label.clone()).font(crate::screen::body(13.0, 500.0)).color(c("text-bright")).truncate().min_w(0.0));
@@ -475,7 +475,7 @@ pub fn view(s: &App) -> Option<El> {
         .fill(c("surface"))
         .border(1.0, c("border"))
         .radius(theme::radius("lg").unwrap())
-        .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
+        .shadow(8.0, 24.0, crate::theme::shadow())
         .on_press(|_s: &mut App| {})
         .child(field)
         .child(el().h(1.0).w_full().fill(c("elevated")))

@@ -90,6 +90,8 @@ unchanged.
 | `platform` | `macos`, `linux`, `windows` |
 | `window` | `w`, `h`: the window's size in points (the plan dialog moves its header into the scrolling part on a short window) |
 | `groups` | Each sandbox's group colour (`#rrggbb`), by name; absent for a sandbox in no group. The web UI's hue first (chats share one, a workspace folder's from its path), then made distinct: a group within 40° of a hue already taken (chats first, then workspaces by path) moves to the nearest free hue, so two groups never share a background; it can then differ from the web UI's (`theme::group_colors`) |
+| `group_look` | By group colour (as `groups` gives it): `{ tint, hover, label }`, the list's block, its header hovered and the group's label, in the theme drawn now (`theme::group_tints`) |
+| `theme` | The theme drawn: `dark` or `graphite` |
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
 | `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
 | `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |
@@ -610,6 +612,7 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `start_sandbox` | `sandbox` (required), `pane` | Starts a stopped sandbox by opening its agent, as the web UI's Connect does |
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
+| `set_theme` | `theme`: `dark`, `graphite` or `toggle` (the next one) | The app's theme, remembered across launches; every surface switches at once (`data.app.theme` and `theme.mode` say which palette is drawn) |
 | `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | The old layout picker's: that many terminals per page, and the current page that many panes (empty ones added) in the old arrangement |
 | `page_show` | `page` (from 1, required) | Shows that page of terminals |
 | `page_step` | `back` (bool) | Shows the next page (`back`: the previous one), round |
@@ -712,13 +715,36 @@ the sessions line and block, `sb:<name>`).
 
 ## Theme
 
-The global `theme` (read only) is the web UI's design tokens
-(`assets/app.css`). Any colour prop takes these names; `theme.color[name]`
-gives the `#rrggbb`.
+The global `theme` (read only) is the app's design tokens (the dark
+theme's are the web UI's, `assets/app.css`). Any colour prop takes these
+names; `theme.color[name]` gives the `#rrggbb` of the theme drawn now.
+
+**Themes.** The app has named themes, each one palette behind the same
+token names: `dark` (the default, the web UI's blue-black) and `graphite`
+(neutral dark greys, an orange accent). The person switches them in the
+status bar; `theme.mode` (and `data.app.theme`) says which is drawn, and on a
+switch every screen is loaded again and renders with the new values. So:
+
+- **Use token names, never literal colours.** `color = "text-muted"`,
+  `fill = "surface"`, `border = "accent"`. A `#rrggbb` written in a screen is
+  the same in every theme and will look wrong in all but one (a dark grey
+  that was a surface in Dark is a hole in Graphite). The built-in screens
+  have none (a test scans them).
+- Mixing your own tints from `theme.color` values is fine: they are read
+  again on a switch. The core hands the list's group tints ready made
+  (`data.app.group_look[colour]`: `tint`, `hover`, `label`).
+- For "the current one", a focus or a link, use `accent` (`link` for link
+  text); for meaning, the tones (below). `accent` is blue in Dark, orange in
+  Graphite; never use it for a state.
+- A customised copy of a screen (the override folder) made before themes
+  existed may carry literal colours: it then looks wrong in Graphite. Ask
+  Jarvis to replace them by tokens, or restore the built-in.
 
 | Table | Names |
 |---|---|
-| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary-hover`, `red-text` (red words on a group's tint) |
+| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary` (the one filled button's fill), `on-primary` (its label), `primary-hover`, `red-text` (red words on a group's tint), `status-bar`, `status-line`, `vendor-anthropic`, `vendor-openai`, `vendor-google`, `cyan`, `pill-danger`, `accent`, `accent-tint`, `link`, `tab-current`, `scrim`, `shadow`, `media` (behind a picture), `file-doc`, `file-code`, `file-image`, `file-data`, `file-archive` (the explorer's file kinds) |
+| `theme.mode` | `dark` or `graphite` |
+| `theme.icon` | `sm` 12 (inline with text), `md` 14 (every control), `lg` 20 (the rail), `mark` 24 (the top bar's mark) |
 | `theme.radius` | `xs` 6, `sm` 6, `md` 10, `lg` 12, `pill` 999 |
 | `theme.text` | `caption` 12, `body` 13, `title` 14, `heading` 16; older names `xxs`, `xs`, `sm` 12, `md` 13, `lg` 14, `xl` 16 |
 | `theme.space` | `xxs` 2, `xs` 4, `sm` 8, `md` 12, `lg` 16, `xl` 24 |
@@ -832,7 +858,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `chevron-right`, `check`, `warning`, `info`, `gear`, `search`, `folder`,
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
-`coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `leader`, `threads`,
+`coin`, `help`, `moon`, `appearance`, `branch`, `globe`, `remote`, `key`, `people`, `leader`, `threads`,
 `shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
 ">", for the top bar's logo).
 
@@ -948,6 +974,10 @@ the cap with many sessions, threads or requests are listed in VIEWS.md.
   the sandbox's colour square (`data.app.groups`, key `<id>-color`) then the
   select (`<id>`), in a row keyed `<id>-row`. The explorer, MCP servers,
   Skills and Kits draw it at their top left.
+- A row keyed `title-slot` in an overlay's screen (a sandbox picker) is
+  drawn by the core in the overlay's header, right after its title
+  ("Files  [web-app v]"), not where it sits in the tree; in a panel or a
+  modal it stays in place. Its keys and actions are the screen's as usual.
 - `overlay_wide(data)`: true when the overlay over the pane area is 760 pt
   wide or more (`data.app.overlay.w`; a screen drawn alone counts as wide).
   Two columns from there (a `split` keyed `<screen>-split`), one under it.

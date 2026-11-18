@@ -282,6 +282,12 @@ pub struct App {
     bar_menu: Option<usize>,
     /// The sidebar's width while its edge is dragged (written to the store on release).
     sidebar_live: Option<f32>,
+    /// The theme the person chose (`theme` in the state file, or
+    /// `$SBXW_DESKTOP_THEME` for this run).
+    pub theme_choice: theme::Mode,
+    /// `theme::generation()` when the screens' data was last made: a switch
+    /// sends the data again (group tints, `app.theme`).
+    theme_seen: u64,
     /// The command palette, while open (palette.rs).
     pub palette: Option<palette::Palette>,
     /// While Jarvis's proposal dialog shows: what had the keyboard before it
@@ -408,11 +414,20 @@ impl App {
             top_w: 0.0,
             bar_menu: None,
             sidebar_live: None,
+            theme_choice: theme::DEFAULT_MODE,
+            theme_seen: 0,
             palette: None,
             held_focus: None,
             status: Default::default(),
         };
         jarvis::load_prefs(&mut app.jarvis);
+        // The theme: this run's `$SBXW_DESKTOP_THEME` (scripts' `THEME=light`),
+        // else the person's last choice, else the default (Dark; an older
+        // file's "light" or "system" too).
+        let forced = std::env::var("SBXW_DESKTOP_THEME").ok().as_deref().and_then(theme::Mode::parse);
+        app.theme_choice = forced.or_else(|| app.store.get("theme").as_str().and_then(theme::Mode::parse)).unwrap_or(theme::DEFAULT_MODE);
+        theme::set_mode(app.theme_choice);
+        app.theme_seen = theme::generation();
         if init.jarvis_open {
             app.jarvis.open = true;
         }
@@ -629,7 +644,19 @@ impl App {
         data["app"]["errors"] = J::Object(self.feats.errors.clone());
         // Each sandbox's group colour (the web UI's), for rails, swatches and pane accents.
         // Distinct per group (theme::group_colors), the web UI's hue first.
-        data["app"]["groups"] = self.group_colors().into_iter().map(|(n, c)| (n, J::String(format!("#{c:06x}")))).collect::<serde_json::Map<_, _>>().into();
+        let groups = self.group_colors();
+        // Each group colour's tints in the active theme (the list's block,
+        // its header hovered, its label), by the colour as `groups` gives it.
+        data["app"]["group_look"] = groups
+            .values()
+            .map(|&g| {
+                let (tint, hover, label) = theme::group_tints(g);
+                (format!("#{g:06x}"), serde_json::json!({ "tint": format!("#{tint:06x}"), "hover": format!("#{hover:06x}"), "label": format!("#{label:06x}") }))
+            })
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+        data["app"]["theme"] = J::String(theme::mode().name().into());
+        data["app"]["groups"] = groups.into_iter().map(|(n, c)| (n, J::String(format!("#{c:06x}")))).collect::<serde_json::Map<_, _>>().into();
         data["app"]["sidebar"] = serde_json::json!({ "w": self.sidebar_w(), "shown": self.sidebar_shown() });
         // The pages of terminals: which shows, how many, per page, the view.
         data["app"]["pages"] = serde_json::json!({
@@ -947,6 +974,11 @@ impl App {
 
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         let mut changed = false;
+        if self.theme_seen != theme::generation() {
+            self.theme_seen = theme::generation();
+            self.push_data();
+            changed = true;
+        }
         if !self.feats.asks.is_empty() {
             self.run_asks(tx);
             changed = true;
@@ -1907,6 +1939,10 @@ impl App {
                 l.run(d, format!("stop {sandbox}"), move |d| d.stop_sandbox(&name));
             }
             Intent::Select { sandbox } => self.selected = sandbox,
+            Intent::SetTheme { theme: t } => {
+                let t = t.unwrap_or(self.theme_choice.next());
+                self.set_theme(t)
+            }
             Intent::CopyText { text } => {
                 // Only the person's own press copies: not a feature's chain of
                 // actions (`feature:<name>`: data, events, answers), not an
@@ -2008,8 +2044,8 @@ fn tile(e: El) -> El {
 /// Ignored on Linux and Windows (their native frame stays).
 pub const LIGHTS: (f32, f32) = (layout::GUTTER + 12.0, layout::GUTTER + layout::TOP_BAR_H / 2.0 - rune::Chrome::TRAFFIC_LIGHT / 2.0);
 /// The sbxw mark's width in the top bar (topbar.luau's `app-mark`: the
-/// chevron's 15 pt column, a 2 pt gap, the 11 pt cursor), 28 pt high.
-pub const MARK_W: f32 = 28.0;
+/// chevron's 13 pt column, a 2 pt gap, the 10 pt cursor), 28 pt high.
+pub const MARK_W: f32 = 25.0;
 
 /// The room the top bar keeps at its left for the window buttons: up to 12
 /// pt clear after the zoom button (`inset` is from the window's edge, the
@@ -2030,6 +2066,8 @@ pub const fn window_chrome() -> rune::Chrome {
 }
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
+    // The theme first: every colour below reads the active palette.
+    theme::set_mode(s.theme_choice);
     // Keyboard focus as a web page has it: every pressable control is a Tab
     // stop in reading order, and shows a 2 pt ring 2 pt outside it when the
     // keyboard put it there (never for a click).
@@ -2216,9 +2254,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // A feature's overlay view covers the pane area (pager and panes), drawn
     // absolute over it so no terminal moves or resizes (features.rs).
     let over = s.feats.overlay.as_ref().and_then(|(name, _)| s.screens.iter().find(|x| &x.name == name)).and_then(|sc| {
-        let (el_, more) = screen::view_parts::<App>(sc);
+        let (el_, more, slot) = screen::view_slot::<App>(sc);
         overlays.extend(more);
-        s.overlay_view(el_)
+        s.overlay_view(el_, slot)
     });
     let panes = match over {
         Some(o) => panes_view(s).child(o),
@@ -2304,7 +2342,7 @@ pub fn scrim_with(key: &str, dialog: El, outside: impl Fn(&mut App) + Clone + 's
     let o2 = outside.clone();
     el().key(key.to_string())
         .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-        .fill(c("floor").alpha(0.6))
+        .fill(theme::scrim())
         .modal(false, move |s: &mut App| o2(s))
         .on_press(move |s: &mut App| {
             if light {
@@ -2324,7 +2362,7 @@ fn notice_view(s: &App) -> Option<El> {
     });
     let mut body = col().gap(1.0).grow(1.0).min_w(0.0).child(text(t.clone()).font(small(13.0, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
     if let Some(w) = what {
-        body = body.child(text(w).font(small(12.0, 500.0)).color(c("blue")).truncate().min_w(0.0));
+        body = body.child(text(w).font(small(12.0, 500.0)).color(c("link")).truncate().min_w(0.0));
     }
     let close = el()
         .key("notice-close")
@@ -2459,6 +2497,21 @@ impl App {
             self.note_focus();
             self.push_data();
         }
+    }
+
+    /// The person's choice of theme: kept, applied now (the screens' data
+    /// again, every terminal's colours, the chrome on the next frame).
+    pub fn set_theme(&mut self, t: theme::Mode) {
+        self.theme_choice = t;
+        self.store.set("theme", J::String(t.name().into()));
+        theme::set_mode(t);
+        self.theme_seen = theme::generation();
+        for p in &mut self.panes {
+            if let Some(term) = &mut p.term {
+                term.poll(None);
+            }
+        }
+        self.push_data();
     }
 
     /// Each sandbox's group colour, distinct per group (theme::group_colors).
@@ -3100,17 +3153,18 @@ fn pane_view(s: &App, i: usize) -> El {
             };
             let mut body = row().gap(8.0).items_start().w_full().child(text(msg).font(small(13.0, 400.0)).color(c(if p.error.is_some() { "red" } else { "text-muted" })).wrap().grow(1.0).min_w(0.0));
             if p.error.is_some() {
-                body = row().gap(8.0).items_start().w_full().child(rune::icon(crate::icons::get("warning").unwrap(), 16.0).color(c("red"))).child(body);
+                body = row().gap(8.0).items_start().w_full().child(rune::icon(crate::icons::get("warning").unwrap(), crate::theme::icon::MEDIUM).color(c("red"))).child(body);
             }
             col().grow(1.0).w_full().padding(16.0).child(body)
         }
         None => el().grow(1.0),
     };
-    // The focused pane: a clear 1.5 pt blue border; the others a quiet one.
+    // The focused pane: a clear 1.5 pt border in the accent (blue in the dark
+    // theme, the orange in the light one); the others a quiet one.
     // A 2 pt line on top in the sandbox's group colour (the web UI's), so
     // panes of one piece of work read together.
     let accent = group.map(theme::hex).unwrap_or_else(|| c("border"));
-    let (bw, border) = if focused { (1.5, c("blue")) } else { (1.0, c("elevated")) };
+    let (bw, border) = if focused { (1.5, c("accent")) } else { (1.0, c("elevated")) };
     let md = theme::radius("md").unwrap();
     col()
         .key(format!("pane-{}", i + 1))
@@ -3151,7 +3205,7 @@ fn pane_view(s: &App, i: usize) -> El {
 /// A core-drawn button, as the `button` element draws one: 28 pt, a label
 /// 13/500, its shortcut in its tooltip.
 fn core_button(key: &str, label: &str, icon: &str, keys: Vec<String>, primary: bool, on: impl Fn(&mut App) + 'static) -> El {
-    let (fill, fg, hover) = if primary { ("green-deep", "white", "primary-hover") } else { ("elevated", "text", "border") };
+    let (fill, fg, hover) = if primary { ("primary", "on-primary", "primary-hover") } else { ("elevated", "text", "border") };
     let mut b = row()
         .key(key.to_string())
         .role("button")
@@ -3164,7 +3218,7 @@ fn core_button(key: &str, label: &str, icon: &str, keys: Vec<String>, primary: b
         .items_center()
         .radius(theme::radius("xs").unwrap())
         .fill(c(fill))
-        .border(1.0, c(if primary { "green-deep" } else { "border" }))
+        .border(1.0, c(if primary { "primary" } else { "border" }))
         .hover(c(hover))
         .cursor(Cursor::Pointer)
         .on_press(move |s: &mut App| {
@@ -3172,7 +3226,7 @@ fn core_button(key: &str, label: &str, icon: &str, keys: Vec<String>, primary: b
             s.push_data();
         });
     if let Some(ic) = crate::icons::get(icon) {
-        b = b.child(rune::icon(ic, 16.0).color(c(fg)));
+        b = b.child(rune::icon(ic, crate::theme::icon::MEDIUM).color(c(fg)));
     }
     b.child(text(label.to_string()).font(small(13.0, 500.0)).color(c(fg)))
 }
@@ -3205,7 +3259,7 @@ fn empty_pane(s: &App, i: usize) -> El {
         .gap(12.0)
         .items_center()
         .justify_center()
-        .child(rune::icon(crate::icons::get("terminal").unwrap(), 24.0).color(c("text-muted")))
+        .child(rune::icon(crate::icons::get("terminal").unwrap(), theme::icon::LARGE).color(c("text-muted")))
         .child(text(title).font(small(16.0, 600.0)).color(c("text-bright")))
         .child(text(line).font(theme::prose(13.0, 400.0)).color(c("text-muted")).wrap().max_w(360.0))
         .child(actions)

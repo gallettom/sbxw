@@ -224,6 +224,12 @@ impl Ui {
 
 pub struct ScreenState {
     pub name: String,
+    /// The source that loaded last (its file name, its text) and the theme's
+    /// generation it was loaded under: Luau resolves a `theme.color.x` read
+    /// once, when the chunk loads, so a theme switch loads it again (its
+    /// state kept) before it renders.
+    loaded: Option<(String, String)>,
+    theme_gen: u64,
     host: LuauHost,
     pub source: Source,
     override_path: PathBuf,
@@ -275,6 +281,8 @@ impl ScreenState {
         let override_path = dir.join(format!("{name}.luau"));
         let mut v = Self {
             name: name.to_string(),
+            loaded: None,
+            theme_gen: theme::generation(),
             host: LuauHost::new(Limits::default()).expect("Luau VM"),
             source: Source::Builtin,
             override_path,
@@ -355,11 +363,14 @@ impl ScreenState {
             (Source::File(_), Ok(t)) => Some(crate::shell::store::hash(t)),
             _ => None,
         };
+        let text = src.as_ref().ok().cloned();
         let loaded = src.map_err(|e| format!("{file}: {e}")).and_then(|src| self.host.load(&file, &src));
         self.loads += 1;
         match loaded {
             Ok(()) => {
                 log::info!("screen {} loaded from {source} (load #{})", self.name, self.loads);
+                self.loaded = text.map(|t| (file.clone(), t));
+                self.theme_gen = theme::generation();
                 self.override_hash = hash;
                 self.source = source;
                 self.error = None;
@@ -439,6 +450,16 @@ impl ScreenState {
     fn redraw(&mut self) {
         self.stale_view = false;
         let with_zone;
+        // The theme changed since the chunk loaded: load it again first.
+        if self.theme_gen != theme::generation() {
+            self.theme_gen = theme::generation();
+            self.host.sync_theme();
+            if let Some((file, text)) = &self.loaded {
+                if let Err(e) = self.host.load(file, text) {
+                    log::warn!("screen {}: {e}", self.name);
+                }
+            }
+        }
         let data = match &self.ui.zones.active {
             Some(z) => {
                 let mut d = (*self.data).clone();
@@ -556,7 +577,7 @@ fn sync_ui(ui: &mut Ui, n: &Node) {
 pub const MENU_PAD: f32 = 6.0;
 pub const MENU_ROW_H: f32 = 28.0;
 pub const MENU_ROW_PX: f32 = 8.0;
-pub const MENU_ICON: f32 = 14.0;
+pub const MENU_ICON: f32 = theme::icon::MEDIUM;
 pub const MENU_ICON_GAP: f32 = 12.0;
 pub const MENU_MIN_W: f32 = 160.0;
 pub const MENU_MAX_W: f32 = 320.0;
@@ -606,7 +627,7 @@ pub fn menu_surface(key: String, anchor: String, align: rune::Align, w: f32) -> 
         .fill(c("surface"))
         .border(1.0, c("border"))
         .radius(theme::radius("md").unwrap())
-        .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap());
+        .shadow(8.0, 24.0, crate::theme::shadow());
     if reduced_motion() {
         e
     } else {
@@ -655,7 +676,7 @@ pub fn menu_row(r: &MenuRow) -> El {
         row_ = row_.child(caps);
     }
     if r.chosen {
-        row_ = row_.child(el().w(8.0)).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("blue")));
+        row_ = row_.child(el().w(8.0)).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("accent")));
     }
     // Its help, else its whole label when the label may be cut.
     let cut = chars_w(r.label, 13.0) > MENU_MAX_W - MENU_PAD * 2.0 - MENU_ROW_PX * 2.0 - MENU_ICON - MENU_ICON_GAP - 24.0;
@@ -741,8 +762,20 @@ pub fn view<S: Host>(s: &ScreenState) -> El {
 /// The panel, and its open menus apart: the shell puts those last in the
 /// window so they paint over every other tile.
 pub fn view_parts<S: Host>(s: &ScreenState) -> (El, Vec<El>) {
+    let (panel, overlays, _) = build_view::<S>(s, false);
+    (panel, overlays)
+}
+
+/// [`view_parts`], with the screen's [`TITLE_SLOT`] row apart (the overlay's
+/// header draws it after its title).
+pub fn view_slot<S: Host>(s: &ScreenState) -> (El, Vec<El>, Option<El>) {
+    build_view::<S>(s, true)
+}
+
+/// The screen's view; with `slot`, its [`TITLE_SLOT`] row apart (else in place).
+fn build_view<S: Host>(s: &ScreenState, slot: bool) -> (El, Vec<El>, Option<El>) {
     let name: Rc<str> = s.name.as_str().into();
-    let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![], nav: HashMap::new() };
+    let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![], slot: None, take_slot: slot, nav: HashMap::new() };
     // The top bar is one line: what the core adds goes beside it, not under it.
     let mut panel = if s.name == "topbar" { row().items_center() } else { col() }.key(format!("screen-{}", s.name)).w_full().h_full().min_h(0.0).gap(8.0);
     if let Some(e) = &s.error {
@@ -762,7 +795,7 @@ pub fn view_parts<S: Host>(s: &ScreenState) -> (El, Vec<El>) {
     if !missing.is_empty() {
         panel = panel.child(fallback_extras::<S>(&s.name, &missing));
     }
-    (panel, b.overlays)
+    (panel, b.overlays, b.slot)
 }
 
 /// The press of a core-drawn element: an intent, checked as any.
@@ -789,8 +822,8 @@ fn stale_marker<S: Host>(name: &str) -> El {
         .border(1.0, c("amber"))
         .role("button")
         .cursor(Cursor::Pointer)
-        .help(format!("Your {name} screen is a customised copy made for an older version; new features may be missing. Ask Jarvis to update it, or restore the built-in."))
-        .child(rune::icon(crate::icons::get("warning").unwrap(), 11.0).color(c("amber")))
+        .help(format!("Your {name} screen is a customised copy made for an older version; new features may be missing, and colours it writes as #rrggbb do not follow the theme. Ask Jarvis to update it, or restore the built-in."))
+        .child(rune::icon(crate::icons::get("warning").unwrap(), 12.0).color(c("amber")))
         .w_full()
         .child(text(line).font(body(12.0, 500.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0))
         .on_press(move |s: &mut S| press_intent(s, &screen, "screen_restore", &serde_json::json!({ "screen": &*screen })))
@@ -825,7 +858,7 @@ fn fallback_extras<S: Host>(name: &str, missing: &[(String, J)]) -> El {
             b = b.help(h.to_string());
         }
         if let Some(i) = e["icon"].as_str().and_then(crate::icons::get) {
-            b = b.child(rune::icon(i, 11.0).color(hex(fg)));
+            b = b.child(rune::icon(i, 12.0).color(hex(fg)));
         }
         if !label.is_empty() {
             b = b.child(text(label).font(body(12.0, 500.0)).color(hex(fg)));
@@ -915,10 +948,18 @@ impl ScreenState {
     }
 }
 
+/// The key of a row an overlay's screen hands to the core's header: drawn
+/// right after the overlay's title (a sandbox picker beside "Files"), not
+/// where it sits in the screen's tree.
+pub const TITLE_SLOT: &str = "title-slot";
+
 struct Build<'a> {
     name: Rc<str>,
     ui: &'a Ui,
     overlays: Vec<El>,
+    /// The [`TITLE_SLOT`] row, built apart when `take_slot` (an overlay).
+    slot: Option<El>,
+    take_slot: bool,
     /// Filled by a `group = "list"` container for its items (the pressable
     /// rows inside it, at any depth, not inside another item): the keys of
     /// the items before and after each (Up and Down move there).
@@ -1153,6 +1194,10 @@ impl Build<'_> {
                     b = b.flex_wrap();
                 }
                 for k in n.children.iter() {
+                    if self.take_slot && k.key.as_deref() == Some(TITLE_SLOT) && self.slot.is_none() {
+                        self.slot = Some(self.node::<S>(k));
+                        continue;
+                    }
                     let child = self.node::<S>(k);
                     let child = if field_row && free_input(k) { child.grow(1.0).min_w(INPUT_MIN) } else { child };
                     // A folding column: each child glides to its new height.
@@ -1307,7 +1352,7 @@ impl Build<'_> {
             }
             Kind::Icon => {
                 let i = crate::icons::get(&n.text).expect("checked icon");
-                rune::icon(i, st.size.unwrap_or(14.0)).color(hex(st.color.unwrap_or(theme::color_value("text").unwrap())))
+                rune::icon(i, st.size.unwrap_or(theme::icon::MEDIUM)).color(hex(st.color.unwrap_or(theme::color_value("text").unwrap())))
             }
             Kind::Badge if n.pill => {
                 // A count alone in a round bubble: the tone's colour filled,
@@ -1450,7 +1495,7 @@ impl Build<'_> {
         }
         let variant = n.variant.as_deref().unwrap_or("neutral");
         let (fill, border, fg, hover) = match variant {
-            "primary" => ("green-deep", "green-deep", "white", "primary-hover"),
+            "primary" => ("primary", "primary", "on-primary", "primary-hover"),
             "danger" => ("elevated", "border", "red", "red-tint"),
             "ghost" => ("", "", "text-muted", "elevated"),
             _ => ("elevated", "border", "text", "border"),
@@ -1460,7 +1505,7 @@ impl Build<'_> {
         let toned = n.tone.as_deref().filter(|t| *t != "neutral" && variant != "primary").map(action_tone);
         let fg = n.style.color.map(hex).or(toned.map(|t| hex(t.0))).unwrap_or_else(|| c(fg));
         // At least 28 pt square (24 dense), the icon centred; a label pads 10 (8 dense).
-        let (h, size, icon) = if n.dense { (theme::layout::DENSE_H, 12.0, 14.0) } else { (theme::layout::CONTROL_H, 13.0, 16.0) };
+        let (h, size, icon) = if n.dense { (theme::layout::DENSE_H, 12.0, theme::icon::MEDIUM) } else { (theme::layout::CONTROL_H, 13.0, theme::icon::MEDIUM) };
         let only_icon = n.text.is_empty();
         let name = if only_icon { n.help.clone().unwrap_or_else(|| n.icon.clone().unwrap_or_default()) } else { n.text.clone() };
         let mut b = row().gap(6.0).items_center().justify_center().h(h).min_w(h).px(if only_icon { 0.0 } else if n.dense { 8.0 } else { 10.0 }).radius(theme::radius("xs").unwrap()).role("button").label(name);

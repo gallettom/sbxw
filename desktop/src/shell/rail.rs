@@ -316,7 +316,7 @@ impl App {
 
 /// One 28 pt button.
 /// The icon's size in its 28 pt target.
-pub const ICON: f32 = 20.0;
+pub const ICON: f32 = theme::icon::LARGE;
 
 fn button(e: &Entry, prev: Option<String>, next: Option<String>) -> El {
     let (fg, tint) = (color_of(&e.tone), tint_of(&e.tone));

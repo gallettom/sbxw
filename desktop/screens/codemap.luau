@@ -72,7 +72,7 @@ local function side(ui, d)
     kids[#kids + 1] = head("Code referenced")
     for i, c in ipairs(d.code) do
       kids[#kids + 1] = row{ w = "full", px = 4, py = 2, radius = "xs", key = "codemap-code-" .. i, on = "copy", arg = c, help = "Copy the path",
-        icon{ "copy", size = 10, color = "text-dim" }, text{ c, size = "xs", mono = true, truncate = true, grow = 1 } }
+        icon{ "copy", size = 12, color = "text-dim" }, text{ c, size = "xs", mono = true, truncate = true, grow = 1 } }
     end
   end
   return scroll(kids)

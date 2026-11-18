@@ -429,7 +429,7 @@ fn rich_runs<S: 'static>(runs: &[Run], look: &Look, weight: f32, size: f32, key:
             styled = true;
         }
         if let Some(u) = &r.link {
-            s = s.color(c("blue")).underline(c("blue"));
+            s = s.color(c("link")).underline(c("link"));
             styled = true;
             links.push((a..b, u.clone()));
         }

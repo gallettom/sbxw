@@ -26,7 +26,7 @@ local function job(j)
   end
   for i, s in ipairs(j.steps) do
     kids[#kids + 1] = row{ w = "full", gap = 8, key = "job-" .. j.sandbox .. "-step-" .. i,
-      icon{ MARK[s.state] or "chevron-right", size = 11, color = TONE[s.state] or "text-dim" },
+      icon{ MARK[s.state] or "chevron-right", size = 12, color = TONE[s.state] or "text-dim" },
       text{ s.label, size = "sm", color = s.state == "waiting" and "text-dim" or "text", truncate = true, grow = 1 },
     }
     if s.detail then

@@ -20,6 +20,10 @@
 #   screen:<name>=<path>   load that file as that screen now.
 # Prefer wait: before a tap on something the daemon's answer draws: a fixed
 # hold is a guess that fails under load.
+#
+# THEME=graphite (or dark) runs the app in that theme: any demo script or
+# shot.sh re-shoots in it with no change to it
+# (`THEME=graphite desktop/scripts/demo-commits.sh`).
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/target}"
@@ -71,7 +75,7 @@ run_app() {
   local log="$1"; shift
   local target=(--daemon "${daemon:-}" --token "${token:-}")
   case " $* " in *" --fixture "*) target=() ;; esac
-  env -u DISPLAY -u WAYLAND_DISPLAY "$bin/sbxw" "${target[@]}" \
+  env -u DISPLAY -u WAYLAND_DISPLAY SBXW_DESKTOP_THEME="${THEME:-${SBXW_DESKTOP_THEME:-}}" "$bin/sbxw" "${target[@]}" \
     --size "${SHOT_SIZE:-1280x800}" --scale "${SHOT_SCALE:-1}" "$@" >"$log" 2>&1 \
     || { echo "app failed; see $log" >&2; tail -5 "$log" >&2; return 1; }
 }

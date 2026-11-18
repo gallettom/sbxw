@@ -441,7 +441,7 @@ pub fn view<S: 'static>(id: &str, sink: fn(&mut S, SurfaceEvent, &mut Tx), keys:
         .grow(1.0)
         .min_h(0.0)
         .min_w(0.0)
-        .fill(rune::color::hex("#000000").unwrap())
+        .fill(crate::theme::c("media"))
         .focusable(true)
         .cursor(rune::Cursor::Default)
         .pointer_buttons([rune::PointerButton::Middle])

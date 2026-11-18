@@ -125,7 +125,7 @@ pub const RESIZE_DEBOUNCE: f64 = 0.08;
 pub const BLINK: f64 = 0.53;
 
 /// The web UI's default text and background (see [`Theme`]).
-pub const FG: u32 = 0xc9d1d9;
+pub const FG: u32 = theme::WEB_FOREGROUND;
 pub const BG: u32 = theme::WEB_BACKGROUND;
 
 /// The terminal's text style: Rune's mono slot, which `main` sets to
@@ -295,6 +295,8 @@ pub struct TerminalState {
     dirty: bool,
     force_all: bool,
     theme: Theme,
+    /// The colours follow the app's theme ([`Self::sync_theme`]).
+    follows_app: bool,
     pub keys: KeyOpts,
     /// When the first key still waiting for its echo went out.
     key_sent: Option<Instant>,
@@ -431,7 +433,8 @@ impl TerminalState {
             cursor: None,
             dirty: true,
             force_all: true,
-            theme: Theme::default(),
+            theme: theme::for_mode(crate::theme::mode()),
+            follows_app: true,
             keys: KeyOpts::default(),
             key_sent: None,
             echo_ms: Vec::new(),
@@ -497,6 +500,17 @@ impl TerminalState {
         &self.theme
     }
 
+    /// Follow the app's theme (true unless [`Self::set_theme`] was given a
+    /// theme of the caller's): the terminal's colours switch with it.
+    fn sync_theme(&mut self) {
+        if self.follows_app {
+            let want = theme::for_mode(crate::theme::mode());
+            if want != self.theme {
+                self.apply_theme(want);
+            }
+        }
+    }
+
     /// Keyword pills on (with this vocabulary) or off (`None`); every row is
     /// drawn again when it changes. The caller combines the daemon's switch
     /// and the app's own preference (`emphasis::enabled`).
@@ -522,8 +536,14 @@ impl TerminalState {
         self.row_pills.get(r).map_or(&[], Vec::as_slice)
     }
 
-    /// New colours; every row is drawn again.
+    /// New colours of the caller's (term-demo's `--theme`, a test): the
+    /// terminal stops following the app's theme. Every row is drawn again.
     pub fn set_theme(&mut self, theme: Theme) {
+        self.follows_app = false;
+        self.apply_theme(theme);
+    }
+
+    fn apply_theme(&mut self, theme: Theme) {
         if theme != self.theme {
             self.pills.set_palette(theme.background, theme.foreground);
             self.theme = theme;
@@ -585,6 +605,7 @@ impl TerminalState {
 
     fn poll_inner(&mut self, settle: Option<Duration>, tx: Option<&mut Tx>) -> bool {
         let mut changed = false;
+        self.sync_theme();
         if let Some(limit) = settle {
             let deadline = Instant::now() + limit;
             let waiting = self.key_sent.is_some() || self.status == "connecting";

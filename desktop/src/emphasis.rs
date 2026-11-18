@@ -325,20 +325,15 @@ pub struct Pill {
     pub line: u32,
 }
 
-/// The tone's base colour, for a dark or a light background.
+/// The tone's base colour, for a dark or a light background: its token in
+/// the active theme, or the darker member of its hue on a light ground
+/// (`theme::ON_LIGHT_GROUND`: a terminal whose `terminal_color` is light).
 fn base(tone: Tone, light: bool) -> u32 {
     let name = tone.token();
-    match (light, tone) {
-        // Darker members of each hue on a light ground (GitHub light).
-        (true, Tone::Green) => 0x1a7f37,
-        (true, Tone::Red) => 0xcf222e,
-        (true, Tone::Amber) => 0x9a6700,
-        (true, Tone::Blue) => 0x0969da,
-        (true, Tone::Purple) => 0x8250df,
-        (true, Tone::Cyan) => 0x1b7c83,
-        (true, Tone::Danger) => 0xcf222e,
-        _ => crate::theme::color_value(name).unwrap_or(0x58a6ff),
+    if light {
+        return crate::theme::ON_LIGHT_GROUND.iter().find(|(n, _)| *n == name).map(|(_, v)| *v).unwrap_or_default();
     }
+    crate::theme::color_value(name).or_else(|| crate::theme::color_value("blue")).unwrap_or_default()
 }
 
 /// How much of the tone a tinted pill takes over the background under it
@@ -361,7 +356,7 @@ pub const NEED: f64 = 4.5;
 /// `c` moved toward black or white (whichever is further from `bg`) until it
 /// reaches `need` against `bg`.
 fn readable(c: u32, bg: u32, need: f64) -> u32 {
-    let to = if crate::theme::luminance(bg) > 0.18 { 0x000000 } else { 0xffffff };
+    let to = if crate::theme::luminance(bg) > 0.18 { crate::theme::BLACK } else { crate::theme::WHITE };
     let mut t = 0.0;
     let mut v = c;
     while contrast(v, bg) < need && t < 1.0 {
@@ -388,11 +383,12 @@ pub fn palette_with(tone: Tone, ground: u32, text: u32, tint: f32, word_mix: f32
         // The fill darkened until white reads on it.
         let mut bg = b;
         let mut t = 0.0;
-        while contrast(0xffffff, bg) < NEED && t < 1.0 {
+        let white = crate::theme::WHITE;
+        while contrast(white, bg) < NEED && t < 1.0 {
             t += 0.05;
-            bg = crate::terminal::theme::mix(b, 0x000000, t);
+            bg = crate::terminal::theme::mix(b, crate::theme::BLACK, t);
         }
-        return Pill { bg, strong: 0xffffff, detail: 0xffffff, line: 0 };
+        return Pill { bg, strong: white, detail: white, line: 0 };
     }
     let bg = over(b, tint, ground);
     let word = crate::terminal::theme::mix(text, b, word_mix);
@@ -573,18 +569,23 @@ mod tests {
     fn contrast_of_every_tone() {
         // The terminal's grounds, light and dark, and coloured lines a pill
         // sits on (a diff's green and red bands): it is tinted over those.
-        let grounds = [(0x123c22, 0xc9d1d9), (0x46141a, 0xc9d1d9), (0xe6ffec, 0x24292f), (0x0d1117, 0xc9d1d9), (0x161b22, 0xc9d1d9), (0x000000, 0xffffff), (0xffffff, 0x24292f), (0xf6f8fa, 0x24292f), (0x2b2b2b, 0xc9d1d9), (0xfdf6e3, 0x657b83), (0x808080, 0x000000)];
-        for (g, text) in grounds {
-            for t in TONES {
-                let p = palette(t, g, text);
-                for fg in [p.strong, p.detail] {
-                    let r = contrast(fg, p.bg);
-                    assert!(r >= NEED, "{t:?} on {g:06x}: {fg:06x} on {:06x} is {r:.2}", p.bg);
+        let grounds = [(0x123c22, 0xc9d1d9), (0x46141a, 0xc9d1d9), (0x202124, 0xdadce0), (0x292a2d, 0xdadce0), (0x123d1e, 0xdadce0), (0x3d1317, 0xdadce0), (0xe6ffec, 0x24292f), (0x0d1117, 0xc9d1d9), (0x161b22, 0xc9d1d9), (0x000000, 0xffffff), (0xffffff, 0x24292f), (0xf6f8fa, 0x24292f), (0x2b2b2b, 0xc9d1d9), (0xfdf6e3, 0x657b83), (0x808080, 0x000000)];
+        // In every theme: a pill's tone is the active palette's on a dark ground.
+        for m in crate::theme::Mode::ALL {
+            crate::theme::with_mode(m, || {
+                for (g, text) in grounds {
+                    for t in TONES {
+                        let p = palette(t, g, text);
+                        for fg in [p.strong, p.detail] {
+                            let r = contrast(fg, p.bg);
+                            assert!(r >= NEED, "{m:?}: {t:?} on {g:06x}: {fg:06x} on {:06x} is {r:.2}", p.bg);
+                        }
+                        if t != Tone::Danger {
+                            assert_ne!(p.bg, g, "a tinted pill shows on its ground");
+                        }
+                    }
                 }
-                if t != Tone::Danger {
-                    assert_ne!(p.bg, g, "a tinted pill shows on its ground");
-                }
-            }
+            });
         }
     }
 }

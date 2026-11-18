@@ -75,7 +75,8 @@ return {
     local pick = contains(ids, want) and want or ids[1]
     local wide = overlay_wide(data)
     local out = { w = "full", gap = 12, key = "skills-body",
-      row{ w = "full", gap = 8, text{ "Sandbox", size = "sm", color = "text-muted" },
+      -- Beside the overlay's title (the core's header draws it: TITLE_SLOT).
+      row{ key = "title-slot", gap = 8, text{ "Sandbox", size = "sm", color = "text-muted" },
         sandbox_picker(data, { id = "skills-sandbox", value = pick, items = names, on = "pick", placeholder = "No sandbox", disabled = #names == 0 }) },
       text{ "A skill is a set of instructions an agent can follow (a /command). Skills you keep here are given to every sandbox created from now on. A sandbox can write a skill, never make it reach the others: keeping one is your act.", wrap = true, color = "text-soft" },
     }

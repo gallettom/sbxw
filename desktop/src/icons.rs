@@ -54,6 +54,9 @@ icons! {
     CPU "cpu" concat!(st!("rect", r#"x="4" y="4" width="8" height="8" rx="1.5""#), st!("path", r#"d="M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5M1.5 6.5h2.5M1.5 9.5h2.5M12 6.5h2.5M12 9.5h2.5""#));
     COIN "coin" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("path", r#"d="M10 5.8c-.4-.6-1.1-.9-2-.9-1.2 0-2 .6-2 1.5 0 2 4 1.1 4 3.2 0 .9-.9 1.5-2 1.5-.9 0-1.7-.4-2.1-1M8 3.8v1.1M8 11.1v1.1""#));
     HELP "help" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("path", r#"d="M6.2 6.2a1.9 1.9 0 0 1 3.7.6c0 1.3-1.9 1.6-1.9 2.8""#), r#"<circle cx="8" cy="11.5" r="0.9" fill="currentColor"/>"#);
+    // The theme switch's: a crescent (Dark), a disc half filled (Graphite).
+    MOON "moon" st!("path", r#"d="M13.5 9.6A5.75 5.75 0 1 1 6.4 2.5a4.6 4.6 0 0 0 7.1 7.1z""#);
+    APPEARANCE "appearance" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), r#"<path d="M8 1.75a6.25 6.25 0 0 1 0 12.5z" fill="currentColor"/>"#);
     // A worktree: a branch off the main line.
     BRANCH "branch" concat!(st!("circle", r#"cx="4.5" cy="3.5" r="1.5""#), st!("circle", r#"cx="4.5" cy="12.5" r="1.5""#), st!("circle", r#"cx="11.5" cy="5" r="1.5""#), st!("path", r#"d="M4.5 5v6M11.5 6.5c0 3-7 2.5-7 4.5""#));
     LINK "link" concat!(st!("path", r#"d="M6.5 9.5l3-3""#), st!("path", r#"d="M7.5 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M8.5 11.5l-1 1a2.5 2.5 0 0 1-3.5-3.5l1-1""#));
@@ -83,7 +86,7 @@ icons! {
     LOGO_PROMPT "logo-prompt" r#"<polyline points="4.5,3.5 9,8 4.5,12.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>"#;
     // The top bar's mark (topbar.luau): the same prompt flush left in its
     // box and heavier, drawn at 28 pt with the blue cursor beside it.
-    LOGO_MARK "logo-mark" r#"<polyline points="1.6,3 7.4,8 1.6,13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>"#;
+    LOGO_MARK "logo-mark" r#"<polyline points="1.6,3 7.4,8 1.6,13" fill="none" stroke="currentColor" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round"/>"#;
     // Team leads (the rail, the pager's mark, the palette): a crown over one
     // person, so it says "the one who leads", not the team's `people` that
     // the pane bar's Team uses. Filled crown, so it holds at 14 pt.

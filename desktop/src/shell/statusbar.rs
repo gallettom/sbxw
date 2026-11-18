@@ -5,7 +5,9 @@
 //! Left: the bring-ups in progress (create's jobs, `feat::create::bar_jobs`);
 //! a press opens the "New sandboxes" panel, as the top bar's "Creating"
 //! does. A failure stays in red until that press (or until it is retried or
-//! dismissed); a success says "created" for four seconds. Right, in this order: Help. Each entry runs an intent that exists
+//! dismissed); a success says "created" for four seconds. Right, in this order: CPU, cost, the theme's switch
+//! (the theme's mark: a press goes to the next theme; its chevron lists
+//! them, Dark and Graphite), Help. Each entry runs an intent that exists
 //! already, or opens a read-only popover. Its code stays here so the
 //! window's structure can be rearranged around it.
 //!
@@ -44,7 +46,7 @@ pub const GAP: f32 = 4.0;
 pub const INNER: f32 = 8.0;
 /// An entry: padding each side, its 12 pt icon, the gap to its text.
 pub const ITEM_PX: f32 = 8.0;
-pub const ICON: f32 = 12.0;
+pub const ICON: f32 = theme::icon::MEDIUM;
 pub const ICON_GAP: f32 = 6.0;
 /// The type: 12 pt; numbers in the monospace face are tabular already.
 pub const TEXT: f32 = 12.0;
@@ -99,6 +101,8 @@ pub struct Status {
 pub enum Pop {
     Cpu,
     Cost,
+    /// The theme's three choices.
+    Theme,
 }
 
 /// The bring-ups the bar shows from create's list: failures looked at go.
@@ -146,7 +150,7 @@ pub fn jobs_w(jobs: &[BarJob], words: bool) -> f32 {
 
 /// The right entries' texts at a fit: CPU with or without its word, cost.
 pub fn right_w(cpu: &Cpu, cost: &Cost, f: Fit) -> f32 {
-    item_w(&numbers::cpu_text(cpu, f.cpu_word)) + GAP + item_w(&numbers::cost_text(cost)) + GAP + item_w(if f.help_word { "Help" } else { "" })
+    item_w(&numbers::cpu_text(cpu, f.cpu_word)) + GAP + item_w(&numbers::cost_text(cost)) + GAP + THEME_W + GAP + item_w(if f.help_word { "Help" } else { "" })
 }
 
 /// What shows at a width.
@@ -186,7 +190,7 @@ impl App {
         let jobs = shown_jobs(create::bar_jobs(), &self.status.seen);
         let first = jobs.first();
         match key {
-            "status-bar" | "status-left" | "status-right" | "status-cpu" | "status-cost" | "status-help" => true,
+            "status-bar" | "status-left" | "status-right" | "status-cpu" | "status-cost" | "status-help" | "status-theme" | "status-theme-more" => true,
             "status-jobs" => first.is_some(),
             "status-jobs-track" | "status-jobs-fill" => first.is_some_and(|j| j.state != BarState::Created),
             "status-jobs-more" => more(&jobs).is_some(),
@@ -197,6 +201,7 @@ impl App {
             "status-pop-scrim" => self.status.pop.is_some(),
             "status-cpu-pop" => self.status.pop == Some(Pop::Cpu),
             "status-cost-pop" => self.status.pop == Some(Pop::Cost),
+            "status-theme-pop" | "status-theme-dark" | "status-theme-graphite" => self.status.pop == Some(Pop::Theme),
             _ => false,
         }
     }
@@ -356,6 +361,7 @@ pub fn view(s: &App) -> El {
         .items_center()
         .child(cpu_view(&cpu, f.cpu_word, s.status.hot, s.status.pop == Some(Pop::Cpu)))
         .child(cost_view(&cost, s.status.pop == Some(Pop::Cost)))
+        .child(theme_view(s))
         .child(help_view(f.help_word));
     let mut left = row().key("status-left").grow(1.0).min_w(0.0).h_full().items_center();
     if let Some(j) = jobs_view(s, f) {
@@ -504,6 +510,7 @@ pub fn popover(s: &App) -> Vec<El> {
     let (key, anchor, body) = match p {
         Pop::Cpu => ("status-cpu-pop", "status-cpu", cpu_pop(&cpu, max_lines(s))),
         Pop::Cost => ("status-cost-pop", "status-cost", cost_pop(&cost, max_lines(s))),
+        Pop::Theme => return theme_menu(s),
     };
     let mut surface = rune::col()
         .key(key)
@@ -516,7 +523,7 @@ pub fn popover(s: &App) -> Vec<El> {
         .fill(c("surface"))
         .border(1.0, c("border"))
         .radius(theme::radius("md").unwrap())
-        .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap());
+        .shadow(8.0, 24.0, crate::theme::shadow());
     if !screen::reduced_motion() {
         surface = surface.transition(screen::quick_fade());
     }
@@ -652,6 +659,99 @@ fn entry(key: &str, icon: &str, label: &str, color: &str, help: &str) -> El {
         e = e.child(text(label.to_string()).font(screen::body(TEXT, 400.0)).color(c(color)));
     }
     e
+}
+
+/// The theme's switch (keys `status-theme`, its chevron `status-theme-more`):
+/// the drawn theme's mark (a crescent for Dark, a half disc for Graphite);
+/// a press goes to the next theme at once and keeps it; the chevron lists
+/// them by name, each with a swatch of its ground and accent.
+pub const THEME_W: f32 = ITEM_PX * 2.0 + ICON + THEME_MORE_W;
+pub const THEME_MORE_W: f32 = 14.0;
+
+fn theme_view(s: &App) -> El {
+    let now = s.theme_choice;
+    let keys = if cfg!(target_os = "macos") { "⌃⌥T" } else { "Ctrl+Alt+T" };
+    let help = format!("{} theme. Click for {} ({keys})", now.label(), now.next().label());
+    let switch = row()
+        .key("status-theme")
+        .role("button")
+        .label(format!("{} theme", now.label()))
+        .help(help)
+        .w(ITEM_PX * 2.0 + ICON)
+        .h(layout::DENSE_H)
+        .items_center()
+        .justify_center()
+        .radius(theme::radius("xs").unwrap())
+        .hover(c("hover-subtle"))
+        .focus_ring(2.0, -2.0, c("focus"))
+        .cursor(Cursor::Pointer)
+        .on_press(|s: &mut App| {
+            s.status.pop = None;
+            s.run_intent("statusbar", Intent::SetTheme { theme: None });
+        })
+        .child(rune::icon(crate::icons::get(now.icon()).unwrap(), ICON).color(c("text-muted")));
+    let open = s.status.pop == Some(Pop::Theme);
+    let more = row()
+        .key("status-theme-more")
+        .role("button")
+        .label("Themes")
+        .help("Every theme, by name")
+        .w(THEME_MORE_W)
+        .h(layout::DENSE_H)
+        .items_center()
+        .justify_center()
+        .radius(theme::radius("xs").unwrap())
+        .hover(c("hover-subtle"))
+        .focus_ring(2.0, -2.0, c("focus"))
+        .cursor(Cursor::Pointer)
+        .on_press(|s: &mut App| s.statusbar_toggle(Pop::Theme))
+        .child(rune::icon(crate::icons::get("chevron-down").unwrap(), theme::icon::SMALL).color(c("text-muted")));
+    let more = if open { more.fill(c("elevated")) } else { more };
+    row().key("status-theme-group").w(THEME_W).h(layout::DENSE_H).items_center().child(switch).child(more)
+}
+
+/// The theme's menu over the status bar: every theme by name, the chosen
+/// one checked, each with a swatch (its surface, its accent).
+fn theme_menu(s: &App) -> Vec<El> {
+    let rows: Vec<screen::MenuRow> = theme::Mode::ALL
+        .iter()
+        .map(|m| screen::MenuRow { key: format!("status-theme-{}", m.name()), label: m.label(), icon: Some(m.icon()), tone: None, help: None, keys: &[], count: None, chosen: s.theme_choice == *m, disabled: false })
+        .collect();
+    let w = screen::menu_width(&rows) + 28.0;
+    let mut surface = rune::col()
+        .key("status-theme-pop")
+        .role("menu")
+        .label("Themes")
+        .focus_group()
+        .anchored("status-theme-group".to_string(), rune::Side::Top, rune::Align::End, 6.0)
+        .w(w)
+        .padding(screen::MENU_PAD)
+        .fill(c("surface"))
+        .border(1.0, c("border"))
+        .radius(theme::radius("md").unwrap())
+        .shadow(8.0, 24.0, crate::theme::shadow());
+    if !screen::reduced_motion() {
+        surface = surface.transition(screen::quick_fade());
+    }
+    for (r, m) in rows.iter().zip(theme::Mode::ALL) {
+        let at = |n: &str| theme::hex(theme::color_in(m, n).unwrap_or_default());
+        // The theme's own ground with its accent: what it looks like, beside its name.
+        let swatch = row()
+            .w(20.0)
+            .h(14.0)
+            .ml(8.0)
+            .radius(3.0)
+            .fill(at("surface"))
+            .border(1.0, c("control-border"))
+            .items_center()
+            .justify_center()
+            .child(el().w(8.0).h(4.0).radius(2.0).fill(at("accent")));
+        surface = surface.child(screen::menu_row(r).child(swatch).on_press(move |s: &mut App| {
+            s.status.pop = None;
+            s.run_intent("statusbar", Intent::SetTheme { theme: Some(m) });
+        }));
+    }
+    vec![screen::menu_scrim("status-pop-scrim".into(), |s: &mut App| s.status.pop = None), surface]
 }
 
 /// Help at the far right: the existing `show_help` (the macOS Help menu

@@ -33,7 +33,7 @@ end
 local function card(key, ic, t, lead, points, go)
   local kids = { key = key, on = "open", arg = key == "kind-chat" and "chat" or "workspace",
     grow = 1, gap = 8, pad = 12, radius = "md", border = "border", fill = "surface", align = "start",
-    row{ gap = 8, icon{ ic, size = 16, color = "blue" }, title(t) },
+    row{ gap = 8, icon{ ic, size = 14, color = "blue" }, title(t) },
     hint(lead, "text"),
   }
   for _, p in ipairs(points) do kids[#kids + 1] = hint("· " .. p) end
@@ -90,7 +90,7 @@ local function folder_browser(c)
   if l then
     if l.can_up then
       rows[#rows + 1] = row{ key = "fs-up", on = "browse", arg = l.parent, w = "full", gap = 8, py = 4, px = 4, radius = "xs",
-        icon{ "chevron-right", size = 11, color = "text-dim" }, text{ "..", color = "text-muted" } }
+        icon{ "chevron-right", size = 12, color = "text-dim" }, text{ "..", color = "text-muted" } }
     end
     for _, e in ipairs(l.entries) do
       rows[#rows + 1] = row{ key = "fs-" .. e.name, on = "browse", arg = e.path, w = "full", gap = 8, py = 2, px = 4, radius = "xs",

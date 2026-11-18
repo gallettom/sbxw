@@ -26,6 +26,43 @@ pub const XTERM_PALETTE: [u32; 16] = [
 
 /// The web UI's built-in terminal background (`--c-bg`, "Midnight").
 pub const WEB_BACKGROUND: u32 = 0x0d1117;
+/// Its text (`--c-text`).
+pub const WEB_FOREGROUND: u32 = 0xc9d1d9;
+
+/// Graphite's ANSI colours: xterm's set (as the dark theme's) on the grey
+/// ground [`GRAPHITE_BACKGROUND`], with what fell under 4.5:1 there lifted
+/// (red, blue, magenta) and bright black lifted to 3:1; black stays the
+/// ground's own dark (it is the background role, never text on it).
+/// Tested in `graphite_ansi_reads_on_its_ground`.
+pub const GRAPHITE_PALETTE: [u32; 16] = [
+    0x2e3436, 0xf0544b, 0x4e9a06, 0xc4a000, 0x5e93d9, 0xb07fb5, 0x06989a, 0xd3d7cf, //
+    0x707478, 0xff7b72, 0x8ae234, 0xfce94f, 0x8ab4f0, 0xd4a2cf, 0x34e2e2, 0xeeeeec,
+];
+
+/// Graphite's terminal ground and text: the palette's `bg` and `text`.
+pub const GRAPHITE_BACKGROUND: u32 = 0x202124;
+pub const GRAPHITE_FOREGROUND: u32 = 0xdadce0;
+
+/// The terminal in Graphite: its ground and text, the orange accent as the
+/// cursor, the selection the dark theme's blue (a selection is not an
+/// action).
+pub const GRAPHITE: Theme = Theme {
+    background: GRAPHITE_BACKGROUND,
+    foreground: GRAPHITE_FOREGROUND,
+    cursor: 0xe8833a,
+    selection: 0x58a6ff,
+    selection_alpha: 0x4d as f32 / 255.0,
+    palette: GRAPHITE_PALETTE,
+};
+
+/// The terminal's theme for one of the app's themes (the dark one is the
+/// web UI's default, unchanged).
+pub fn for_mode(m: crate::theme::Mode) -> Theme {
+    match m {
+        crate::theme::Mode::Dark => Theme::default(),
+        crate::theme::Mode::Graphite => GRAPHITE,
+    }
+}
 
 impl Default for Theme {
     fn default() -> Self {
@@ -116,6 +153,48 @@ pub fn mix(a: u32, b: u32, t: f32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every ANSI colour of Graphite reads on its ground: the normal eight
+    /// (black apart: the background role) as text at 4.5:1, the bright
+    /// eight at 3:1; the text, the dim text, the cursor and the selection
+    /// too. Prints the swatch table.
+    #[test]
+    fn graphite_ansi_reads_on_its_ground() {
+        use crate::theme::contrast;
+        let t = GRAPHITE;
+        let mut bad = vec![];
+        println!("| ANSI | Colour | On #{:06x} | Needs |\n|---|---|---|---|", t.background);
+        for (i, c) in t.palette.iter().enumerate() {
+            let need = match i {
+                0 => 1.0,
+                1..=7 => 4.5,
+                _ => 3.0,
+            };
+            let r = contrast(*c, t.background);
+            println!("| {i} | #{c:06x} | {r:.2} | {need} |");
+            if r < need {
+                bad.push(format!("ANSI {i} #{c:06x}: {r:.2} < {need}"));
+            }
+        }
+        for (what, c, need) in [("text", t.foreground, 4.5), ("dim text", t.dim(t.foreground), 3.0), ("cursor", t.cursor, 3.0)] {
+            let r = contrast(c, t.background);
+            println!("| {what} | #{c:06x} | {r:.2} | {need} |");
+            if r < need {
+                bad.push(format!("{what}: {r:.2}"));
+            }
+        }
+        // The selection is seen, and the text under it still reads.
+        let sel = crate::theme::over(t.selection, t.selection_alpha, t.background);
+        assert!(contrast(sel, t.background) >= 1.3, "selection {:.2}", contrast(sel, t.background));
+        assert!(contrast(t.foreground, sel) >= 4.5);
+        assert!(bad.is_empty(), "{bad:#?}");
+        // The ground and the text are the palette's.
+        let m = crate::theme::Mode::Graphite;
+        assert_eq!(crate::theme::color_in(m, "bg"), Some(GRAPHITE_BACKGROUND));
+        assert_eq!(crate::theme::color_in(m, "text"), Some(GRAPHITE_FOREGROUND));
+        assert_eq!(crate::theme::color_in(m, "accent"), Some(t.cursor));
+        assert!(!is_light(GRAPHITE_BACKGROUND));
+    }
 
     #[test]
     fn web_defaults() {

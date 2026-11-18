@@ -140,12 +140,14 @@ return {
       row{ gap = 12,
         -- The sbxw mark, not the word: the app icon's green prompt and blue
         -- cursor (packaging/make-icon.py), drawn as vectors straight on the
-        -- bar, no tile and no border (it is not a button), 28 pt high on the
-        -- bar's line. The prompt's icon box is cut to its drawn part so the
-        -- cursor sits right after the chevron.
+        -- bar, no tile and no border (it is not a button), on the bar's 28 pt
+        -- line at the icons' mark size (theme.icon.mark, 24: a little larger
+        -- and heavier than the rail's 20 pt glyphs, not by half). The
+        -- prompt's icon box is cut to its drawn part so the cursor sits
+        -- right after the chevron.
         (not compact) and row{ key = "app-mark", h = 28, gap = 2, align = "center", help = "sbxw",
-          column{ w = 15, h = 28, align = "start", justify = "center", icon{ "logo-mark", size = 28, color = "green" } },
-          column{ w = 11, h = 28, justify = "end", py = 4, column{ w = 11, h = 3.5, radius = 1.5, fill = "blue" } },
+          column{ w = 13, h = 28, align = "start", justify = "center", icon{ "logo-mark", size = 24, color = "green" } },
+          column{ w = 10, h = 28, justify = "end", py = 8, column{ w = 10, h = 3, radius = 1.5, fill = "blue" } },
         } or false,
       },
       spacer{},

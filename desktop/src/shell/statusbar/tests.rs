@@ -163,3 +163,81 @@ fn the_status_bar_fit_measures_what_is_drawn() {
         eprintln!("status bar at {w}: {f:?}");
     }
 }
+
+/// The theme's switch: a press goes to the next theme at once and is
+/// kept; its menu lists every theme by name; the screens get their data
+/// again; an older state file's "light" falls back to Dark.
+#[test]
+fn the_theme_switch_switches_at_once_and_is_kept() {
+    use crate::shell::{view, Args};
+    use crate::theme::{self, Mode};
+    let app = || App::new(Args { fixture: Some(format!("{}/fixtures/shell/design-2.json", env!("CARGO_MANIFEST_DIR")).into()), ..Args::default() });
+    let mut rt = rune::Runtime::new(app(), view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    for _ in 0..6 {
+        rt.frame(0.016);
+    }
+    assert_eq!(rt.state.theme_choice, Mode::Dark, "a new install: Dark");
+    assert_eq!(theme::mode(), Mode::Dark);
+    let tap = |rt: &mut rune::Runtime<App>, key: &str| {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.016);
+        rt.frame(0.016);
+    };
+    tap(&mut rt, "status-theme");
+    assert_eq!(theme::mode(), Mode::Graphite, "one press");
+    assert_eq!(rt.state.theme_choice, Mode::Graphite);
+    assert_eq!(rt.state.store.get("theme"), "graphite", "kept in the state file");
+    assert_eq!(rt.state.screen_data()["app"]["theme"], "graphite", "the screens' data says so");
+    // The menu: every theme by name.
+    tap(&mut rt, "status-theme-more");
+    for m in Mode::ALL {
+        assert!(rt.find(&format!("status-theme-{}", m.name())).is_some(), "{m:?} listed");
+    }
+    tap(&mut rt, "status-theme-dark");
+    assert_eq!(theme::mode(), Mode::Dark);
+    assert!(rt.find("status-theme-pop").is_none(), "the menu closed");
+    // A state file from the light-theme days: Dark.
+    let mut a = app();
+    a.store.set("theme", serde_json::json!("light"));
+    assert_eq!(a.store.get("theme").as_str().and_then(Mode::parse), None);
+}
+
+/// After a theme switch, a screen that read a theme colour shows the new
+/// one though no data it read changed: its colour props (`color = "text"`)
+/// and `theme.color` reads are resolved when it renders, so a switch must
+/// render every screen again. Fails if renders are skipped on a switch.
+#[test]
+fn a_theme_switch_renders_the_screens_again() {
+    use crate::shell::{view, Args};
+    use crate::theme::{self, Mode};
+    let dir = std::env::temp_dir().join(format!("sbxw-theme-probe-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("probe.luau");
+    // Reads no data at all: only the theme.
+    std::fs::write(&probe, r#"return { render = function() return column{ key = "probe", fill = "surface", text{ theme.color.bg, key = "probe-bg", color = "text" } } end }"#).unwrap();
+    let a = App::new(Args { fixture: Some(format!("{}/fixtures/shell/design-2.json", env!("CARGO_MANIFEST_DIR")).into()), ..Args::default() });
+    let mut rt = rune::Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    rt.update(|s, _| s.screens.iter_mut().find(|x| x.name == "sandboxes").unwrap().load_file(probe.clone()));
+    for _ in 0..4 {
+        rt.frame(0.016);
+    }
+    let read = |rt: &rune::Runtime<App>| {
+        let sc = rt.state.screens.iter().find(|x| x.name == "sandboxes").unwrap();
+        let n = sc.last_good.as_ref().expect("the probe rendered");
+        let t = &n.children[0];
+        (t.text.clone(), t.style.color, n.style.fill)
+    };
+    let dark = read(&rt);
+    assert_eq!(dark.0, format!("#{:06x}", theme::color_in(Mode::Dark, "bg").unwrap()));
+    rt.update(|s, _| s.set_theme(Mode::Graphite));
+    for _ in 0..4 {
+        rt.frame(0.016);
+    }
+    let graphite = read(&rt);
+    assert_eq!(graphite.0, format!("#{:06x}", theme::color_in(Mode::Graphite, "bg").unwrap()), "theme.color read again");
+    assert_eq!(graphite.1, theme::color_in(Mode::Graphite, "text"), "a colour prop resolved again");
+    assert_eq!(graphite.2, theme::color_in(Mode::Graphite, "surface"));
+    std::fs::remove_dir_all(&dir).ok();
+}

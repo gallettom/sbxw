@@ -148,7 +148,7 @@ pub fn measure(t: &str, size: f32, weight: f32) -> f32 {
 /// A pane bar chip (shell.rs, `bar_chip`): 24 pt high, px 8, icon 14, gap 6, text 12/500.
 pub const CHIP_PX: f32 = 8.0;
 pub const CHIP_GAP: f32 = 6.0;
-pub const CHIP_ICON: f32 = 14.0;
+pub const CHIP_ICON: f32 = crate::theme::icon::MEDIUM;
 pub const CHIP_TEXT: f32 = 12.0;
 /// The pane's name in its bar.
 pub const NAME_TEXT: f32 = 13.0;
