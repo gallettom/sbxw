@@ -441,6 +441,10 @@ From left to right in the bar:
 | **Open** | Opens the panel under the bar (**Close** closes it): what was sent, agents' messages, errors |
 | **Jarvis · N to review** | Shown while Jarvis has proposals waiting for you. Click it to see them |
 
+While a **high-risk** proposal is on screen, the terminals are held: a dimmed
+layer covers them and no key, paste, click, wheel or file drop reaches them
+until it is answered or closed ([why](jarvis.md#how-approval-works)).
+
 Rings leave the border while someone talks: blue when the voice reads, red
 when the microphone listens. The panel never opens by itself: a message
 read aloud, a question or an error leaves a blue dot on **Open** (an error is

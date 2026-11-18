@@ -133,6 +133,107 @@ function mouseToCell(e, pane) {
   };
 }
 
+// ── Input hold (Jarvis's high-risk proposals) ────────────────────────────
+// While Jarvis shows a high-risk proposal (jarvis.js, setPaneInputHold), no
+// terminal takes anything from the person: what is read must not be typed
+// over by an agent's prompt beside it, and a key meant for the dialog must
+// not land in a terminal. Two places, each the one path of its kind:
+//
+// * Every pane socket's `send` (holdPaneSocket, at the one place a pane's
+//   socket is made). Input to a PTY is a binary frame, whoever sends it:
+//   xterm's keys, pastes and mouse reports (onData), dictation, a pasted
+//   image's or an upload's path. A text frame is the pane's own control
+//   message (its size), which still goes.
+// * One capture listener on `window`, ahead of every other handler: events
+//   aimed at the terminals' area (keys, pointer, wheel, paste, drag and
+//   drop) are stopped there, and a pasted or dropped file is stopped
+//   anywhere, since an image paste uploads to the focused pane wherever it
+//   lands (sandboxes.js).
+//
+// The scrim over the terminals' area says so, and a press on it does nothing.
+// Low-risk proposals never hold anything. The rules are the pure functions
+// first, which a node test loads on their own (BEGIN/END markers).
+// BEGIN pane-hold rules
+let paneInputHeld = false;
+// May a pane socket send `data` now? Its own control messages (text) always.
+function paneFrameAllowed(data) {
+  return !paneInputHeld || typeof data === 'string';
+}
+const PANE_HOLD_EVENTS = [
+  'keydown', 'keypress', 'keyup', 'beforeinput', 'input', 'compositionstart', 'paste', 'cut',
+  'mousedown', 'mouseup', 'click', 'dblclick', 'auxclick', 'contextmenu', 'wheel',
+  'pointerdown', 'pointerup', 'touchstart', 'touchend',
+  'dragstart', 'dragenter', 'dragover', 'drop',
+];
+// Is an event of `type` stopped? `inPanes`: aimed at the terminals' area (or
+// the scrim over it); `hasFiles`: it carries files (a paste or a drop).
+function paneHoldStops(type, inPanes, hasFiles) {
+  if (!paneInputHeld || !PANE_HOLD_EVENTS.includes(type)) return false;
+  if (inPanes) return true;
+  return (type === 'paste' || type === 'drop' || type === 'dragover') && hasFiles;
+}
+// A pane socket whose input goes through the hold.
+function holdPaneSocket(ws) {
+  const send = ws.send.bind(ws);
+  ws.send = data => { if (paneFrameAllowed(data)) send(data); };
+  return ws;
+}
+// END pane-hold rules
+
+function eventHasFiles(e) {
+  const t = e.clipboardData || e.dataTransfer;
+  if (!t) return false;
+  if (t.files && t.files.length) return true;
+  return [...(t.items || [])].some(i => i.kind === 'file') || [...(t.types || [])].includes('Files');
+}
+for (const type of PANE_HOLD_EVENTS) {
+  window.addEventListener(type, e => {
+    if (!paneInputHeld) return;
+    const area = document.getElementById('main-area');
+    const inPanes = !!(area && e.target instanceof Node && area.contains(e.target));
+    if (!paneHoldStops(e.type, inPanes, eventHasFiles(e))) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, { capture: true, passive: false });
+}
+
+let paneHoldReturn = null; // what had the focus when the hold began
+// Hold or free every terminal. `focusTo`: what takes the focus while held (the
+// proposal's controls). Freed, the focus goes back where it was.
+function setPaneInputHold(on, focusTo) {
+  on = !!on;
+  if (on === paneInputHeld) return;
+  const area = document.getElementById('main-area');
+  if (on) {
+    const had = document.activeElement;
+    paneHoldReturn = had && had !== document.body ? had : null;
+    paneInputHeld = true;
+    let scrim = document.getElementById('pane-hold-scrim');
+    if (!scrim && area) {
+      scrim = document.createElement('div');
+      scrim.id = 'pane-hold-scrim';
+      scrim.className = 'pane-hold-scrim';
+      scrim.setAttribute('role', 'note');
+      scrim.innerHTML = '<span class="pane-hold-note">Terminals are held while you review Jarvis\'s high-risk proposal</span>';
+      area.append(scrim);
+    }
+    if (scrim) scrim.hidden = false;
+    area?.classList.add('input-held');
+    if (area?.contains(document.activeElement)) document.activeElement.blur();
+    focusTo?.focus({ preventScroll: true });
+  } else {
+    paneInputHeld = false;
+    const scrim = document.getElementById('pane-hold-scrim');
+    if (scrim) scrim.hidden = true;
+    area?.classList.remove('input-held');
+    const back = paneHoldReturn;
+    paneHoldReturn = null;
+    if (back?.isConnected) back.focus({ preventScroll: true });
+    else panes[focusedPane]?.term?.focus();
+  }
+}
+function paneInputHoldActive() { return paneInputHeld; }
+
 function createPane(index) {
   const el = document.createElement('div');
   el.className = 'pane';
@@ -979,6 +1080,7 @@ function connectPane(idx, name, mode, thread, repo, model, checkout) {
     : '';
   pane.ws = new WebSocket(`${proto}://${location.host}/ws?sandbox=${encodeURIComponent(name)}&mode=${encodeURIComponent(pane.mode)}${threadParam}&size=1`);
   pane.ws.binaryType = 'arraybuffer';
+  holdPaneSocket(pane.ws);
 
   pane.ws.onopen = () => {
     document.getElementById(`pdot-${idx}`).className = 'dot term-connected';

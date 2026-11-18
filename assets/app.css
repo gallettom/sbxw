@@ -1863,6 +1863,21 @@
     display: grid; gap: 6px; padding: 6px;
   }
 
+  /* Jarvis's high-risk proposal holds the terminals (panes.js, input hold):
+     the approvals dialog's backdrop over the terminals' area only, under the
+     Jarvis dock and dialog. A press on it does nothing. */
+  .main.input-held { position: relative; }
+  .pane-hold-scrim {
+    position: absolute; inset: 0; z-index: 100;
+    background: rgb(1 4 9 / .75); cursor: not-allowed;
+    display: flex; align-items: flex-end; justify-content: center; padding: 1.5rem;
+  }
+  .pane-hold-scrim[hidden] { display: none; }
+  .pane-hold-note {
+    color: var(--c-text-bright); background: var(--c-surface); border: 1px solid var(--c-border);
+    border-radius: var(--r-md); padding: .4rem .75rem; font-size: .85em;
+  }
+
   /* ── Pane ── */
   .pane {
     display: flex; flex-direction: column; overflow: hidden;
