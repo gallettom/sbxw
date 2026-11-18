@@ -1591,14 +1591,17 @@ return {
         assert_eq!(title(&s), "TITLE 1");
 
         // Some file systems keep whole-second mtimes: wait past the second.
-        std::thread::sleep(Duration::from_millis(1100));
+        // Each edit gets a time of its own (no sleep to cross a whole
+        // second of the file's modification time).
+        let stamp = |k: u64| std::fs::File::options().write(true).open(&path).unwrap().set_modified(std::time::UNIX_EPOCH + Duration::from_secs(2_000_000 + k)).unwrap();
         std::fs::write(&path, SCREEN.replace("TITLE", "EDITED")).unwrap();
+        stamp(2);
         wait_wake(&wakes, 2);
         assert!(s.poll());
         assert_eq!(title(&s), "EDITED 1", "state kept across the reload");
 
-        std::thread::sleep(Duration::from_millis(1100));
         std::fs::write(&path, "return {{{").unwrap();
+        stamp(3);
         wait_wake(&wakes, 3);
         assert!(s.poll());
         assert_eq!(title(&s), "EDITED 1", "last good view kept");
