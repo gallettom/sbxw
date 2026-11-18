@@ -211,6 +211,8 @@ pub struct App {
     pub drag: Option<PaneDrag>,
     /// The pager's open menu: `per` or `more`.
     pub pager_menu: Option<String>,
+    /// The rail's "More" menu is open (rail.rs).
+    pub rail_menu: bool,
     /// The pager's width as last laid out (0: not yet).
     pager_w: f32,
     /// The pages and panes of the last run, until the first list says what
@@ -272,6 +274,8 @@ pub struct Rects {
     pub area: Option<tiling::Rect>,
     pub tabs: HashMap<usize, tiling::Rect>,
     pub plus: Option<tiling::Rect>,
+    /// The left rail's rectangle (what folds into its "More", rail.rs).
+    pub rail: Option<[f32; 4]>,
 }
 
 /// A pane being dragged by its bar: where the press was, where the pointer
@@ -347,6 +351,7 @@ impl App {
             rects: Rects::default(),
             drag: None,
             pager_menu: None,
+            rail_menu: false,
             pager_w: 0.0,
             restore: None,
             selected: init.selected.clone(),
@@ -1063,7 +1068,7 @@ impl App {
         if self.screens.iter_mut().any(|s| s.close_menus()) {
             return true;
         }
-        if self.bar_menu.take().is_some() || self.pager_menu.take().is_some() || self.drag.take().is_some() {
+        if self.bar_menu.take().is_some() || self.pager_menu.take().is_some() || std::mem::take(&mut self.rail_menu) || self.drag.take().is_some() {
             return true;
         }
         if self.feats.dialog.is_some() || self.feats.modal.is_some() {
@@ -2042,6 +2047,10 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     if let Some(m) = s.pager_menu_view() {
         overlays.push(screen::menu_scrim("pager-scrim".into(), |s: &mut App| s.pager_menu = None));
+        overlays.push(m);
+    }
+    if let Some(m) = s.rail_menu_view() {
+        overlays.push(screen::menu_scrim("rail-scrim".into(), |s: &mut App| s.rail_menu = false));
         overlays.push(m);
     }
     // The status bar at the foot, in every layout: the panes' area shrinks by its height.

@@ -649,6 +649,33 @@ pub enum Place {
     /// a dot of `tone`, the label, a right badge (`count`, else `help`),
     /// pressable with its `intent`; key `extra-row-<sandbox>-<id>`.
     SandboxRow(String),
+    /// An entry of the left rail (`shell/rail.rs`), drawn zone by zone in
+    /// [`Zone`] order, a hairline between two zones, then by `order` (lower
+    /// first) within its zone. Key `rail-<id>`; `icon` is its mark (set it),
+    /// `tone` its colour by meaning, `help` its tooltip (first line the
+    /// name), `count` a badge, `intent` what a press asks. An entry whose
+    /// intent is `open_panel {screen}` or `open_modal {screen}` shows as on
+    /// while that screen is shown, and a second press closes a panel or an
+    /// overlay it opened. Settings is the configure zone's last entry and
+    /// Jarvis stands apart at the very bottom (both the core's own).
+    Rail { zone: Zone, order: u16 },
+}
+
+/// The left rail's zones, top to bottom (`Place::Rail`).
+///
+/// * `Activity`: what happens now (Requests 10, Network 20, Team leads 30).
+/// * `Browse`: views to read (Commits 10, Worktrees 20, Files 30).
+/// * `Configure`: what is set up (MCP 10, Skills 20, Kits 30; Settings is
+///   always its last, drawn by the core). Anchored at the bottom of the
+///   rail, above Jarvis. When the rail is too short for every entry, the
+///   configure zone's entries fold first into one "More" entry (a menu),
+///   then the browse zone's; Settings, Jarvis and the activity zone never
+///   fold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Zone {
+    Activity,
+    Browse,
+    Configure,
 }
 
 /// A button or a badge a feature adds to a slot drawn by someone else.

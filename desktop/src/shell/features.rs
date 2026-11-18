@@ -51,6 +51,9 @@ pub struct Feats {
     pub panel: Option<String>,
     /// Open panels shown side by side, each in its own column, instead of as tabs.
     pub split: bool,
+    /// The overlay view shown over the pane area, one at a time
+    /// (`feat::Slot::Overlay`), and its argument.
+    pub overlay: Option<(String, J)>,
     pub dialog: Option<Dialog>,
     /// Data keys to read again at that time (bursts of events merged).
     due: HashMap<String, Instant>,
@@ -922,7 +925,8 @@ impl App {
                     Place::Topbar => topbar.push(e.to_json()),
                     Place::Sandbox(n) => sandboxes.entry(n.clone()).or_insert_with(|| J::Array(vec![])).as_array_mut().unwrap().push(e.to_json()),
                     Place::SandboxRow(n) => rows.entry(n.clone()).or_insert_with(|| J::Array(vec![])).as_array_mut().unwrap().push(e.to_json()),
-                    Place::Pane(_) | Place::Session { .. } => panes.push(e),
+                    // Pane bars' and the rail's entries, both drawn by the core.
+                    Place::Pane(_) | Place::Session { .. } | Place::Rail { .. } => panes.push(e),
                 }
             }
         }

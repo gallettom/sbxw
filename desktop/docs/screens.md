@@ -931,7 +931,7 @@ What a feature declares:
 | `intents` | Rows of the closed list (`intent::Spec`: name, typed arguments, risk, doc). Exported to `intents.json` |
 | `act` | `fn(&Ctx, &Asked) -> Result<Vec<Action>, String>`: runs one of its intents, already checked |
 | `on_answer` | Optional: gets every answer of its calls, status and JSON body, non-2xx included; then the core says nothing itself |
-| `extras` | Buttons and badges in others' slots: `Extra { place, id, label, icon, tone, help, count, intent }`; `place`: `Topbar`, `Sandbox(name)` (on its row), `SandboxRow(name)` (a sub-row under it: one per session), `Pane(sandbox)` (every pane bar of that sandbox), `Session { sandbox, thread }` (the pane bars of that session only; `thread: None` is the main one) |
+| `extras` | Buttons and badges in others' slots: `Extra { place, id, label, icon, tone, help, count, intent }`; `place`: `Topbar`, `Sandbox(name)` (on its row), `SandboxRow(name)` (a sub-row under it: one per session), `Pane(sandbox)` (every pane bar of that sandbox), `Session { sandbox, thread }` (the pane bars of that session only; `thread: None` is the main one), `Rail { zone, order }` (an entry of the left rail, see below) |
 | `standin` | Its routes for the stand-in daemon and fixture daemons: `fn(&mut Standin { data, publish }, method, path, body) -> Option<(status, body)>`; `publish_after(ms, event, data)` for events sent before the answer |
 | `core_only` | Body fields only the core sets, after the person's Confirm (`Confirm::grant`); any other call carrying one is refused |
 | `shortcuts` | `&[Shortcut { key, intent, args, help }]`: global keys, taken by the window before any pane, as the web UI's: Alt+<key> off macOS, Ctrl+Option+<key> on macOS (Option alone types characters). `key` is the letter by its place on the keyboard; `args` a JSON object. Create declares N (New) and M (chat) |
@@ -1032,6 +1032,38 @@ for either (an item counts while its menu is open). The core's "wants you"
 the same fit. Escape closes the menu. The fit follows each bar's laid-out
 width, at every resize. The top bar's extras get the same order; the core
 marks those that do not fit `more` (above).
+
+### A rail entry
+
+A feature puts an entry in the left rail with `Place::Rail { zone, order }`.
+`zone` is a `feat::Zone`: `Activity` (what happens now: Requests 10,
+Network 20, Team leads 30), `Browse` (views to read: Commits 10,
+Worktrees 20, Files 30) or `Configure` (what is set up: MCP 10, Skills 20,
+Kits 30; Settings is always its last). `order` sorts within the zone, lower
+first. The rail draws the activity and browse zones at its top, the
+configure zone at its bottom, Jarvis apart under it, and a hairline between
+two zones (`rail-zone-<zone>`).
+
+```rust
+Extra {
+    place: Place::Rail { zone: Zone::Configure, order: 10 },
+    id: "mcp".into(),                 // key `rail-mcp`
+    label: "MCP".into(),              // the tooltip's first line
+    icon: Some("plug".into()),        // its one mark (icons.rs)
+    tone: "blue".into(),              // colour by meaning
+    help: "MCP servers the sandboxes reach".into(), // the tooltip's second line
+    count: None,                      // a badge (amber with tone amber or red)
+    intent: Some(("open_panel".into(), json!({ "screen": "mcp" }))),
+}
+```
+
+An entry whose intent is `open_panel {screen}` or `open_modal {screen}` is
+marked on while that screen shows, and a second press closes a panel or an
+overlay it opened. When the rail is too short for every entry (it holds 18
+at a 720 pt window), the configure zone's entries fold first into one
+**More** entry (`rail-more`, its menu `rail-more-list` opens right of it,
+the folded entries keep their keys), then the browse zone's; the activity
+zone, Settings and Jarvis never fold.
 
 ### Worked example
 

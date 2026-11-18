@@ -21,6 +21,7 @@
 //! `<key>-badge`.
 
 use super::*;
+use crate::feat::{Place, Zone};
 
 /// The rail's width.
 pub const W: f32 = layout::RAIL_W;
@@ -32,12 +33,12 @@ pub const IN_RAIL: &[&str] = &["relay", "approvals", "setup"];
 
 /// One rail entry.
 pub struct Entry {
-    pub key: &'static str,
+    pub key: String,
     pub icon: String,
     pub help: String,
     pub keys: Vec<String>,
     /// The icon's colour by meaning.
-    pub tone: &'static str,
+    pub tone: String,
     /// Marked (the current view; Jarvis open).
     pub on: bool,
     pub count: Option<u64>,
@@ -46,10 +47,31 @@ pub struct Entry {
     pub run: RailRun,
     /// Nothing to do now (no team running): drawn dim, no press.
     pub disabled: bool,
-    /// Its zone: 0 activity (Requests, Network, Team leads), 1 browse (for
-    /// later: commits, worktrees, files), 2 configure (Jarvis, Settings). A
-    /// hairline parts two zones of the same end of the rail.
-    pub zone: u8,
+    /// Its zone (`feat::Zone`); `None`: Jarvis, apart at the very bottom.
+    pub zone: Option<Zone>,
+    /// Its place within the zone, lower first (Settings: `u16::MAX`).
+    pub order: u16,
+}
+
+/// The rail as drawn: the top block (activity, then browse), the bottom
+/// block (configure, Settings last, then Jarvis apart), and what folded into
+/// the "More" entry because the rail is too short.
+pub struct RailLayout {
+    pub top: Vec<Entry>,
+    pub bottom: Vec<Entry>,
+    pub folded: Vec<Entry>,
+}
+
+/// The height `n` entries and `lines` hairlines take in the rail (its
+/// padding included), as `view` lays them out.
+pub fn height_for(n: usize, lines: usize) -> f32 {
+    let items = n + lines;
+    16.0 + n as f32 * TARGET + lines as f32 + items.saturating_sub(1) as f32 * 6.0
+}
+
+/// How many hairlines a list of zones draws (one between two zones).
+fn lines_in(zones: &[Option<Zone>]) -> usize {
+    zones.windows(2).filter(|w| w[0] != w[1]).count()
 }
 
 /// An entry's colour by meaning (0xRRGGBB), always shown: its tone, Jarvis's
@@ -81,6 +103,8 @@ pub enum RailRun {
     Intent(String, J),
     /// The team leads view on and off (leads.rs).
     Leads,
+    /// The "More" entry: the folded entries' menu.
+    More,
 }
 
 impl App {
@@ -103,9 +127,12 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// The rail's entries, top group then bottom group.
+    /// Every rail entry: the core's own (Requests, Network, Team leads,
+    /// Settings, Jarvis) and the features' `Place::Rail` extras, each with
+    /// its zone and order. Top block (activity, browse) then bottom block
+    /// (configure, Settings last, then Jarvis), each sorted.
     pub fn rail_entries(&self) -> (Vec<Entry>, Vec<Entry>) {
-        let mut top = vec![];
+        let mut all = vec![];
         let badge_of = |e: &Option<J>| -> (Option<u64>, &'static str) {
             match e {
                 Some(e) => (e["count"].as_u64().filter(|n| *n > 0), if e["tone"] == "amber" || e["tone"] == "red" { "amber" } else { "blue" }),
@@ -118,11 +145,11 @@ impl App {
         // The feature's own sentence ("Agents wait for you: ...") is the line; it is not said twice.
         let help = if help.starts_with("Agents wait for you") { "Agents waiting for your answer: questions, screenshots, choices".to_string() } else { help };
         let tone = if count.is_some() && badge == "amber" { "amber" } else if count.is_some() { "blue" } else { "quiet-blue" };
-        top.push(Entry { key: "rail-requests", icon: "ask".into(), help: format!("Requests\n{help}"), keys: App::shortcut_for("relay_open"), tone, on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Intent("relay_open".into(), serde_json::json!({})), disabled: false, zone: 0 });
+        all.push(Entry { key: "rail-requests".into(), icon: "ask".into(), help: format!("Requests\n{help}"), keys: App::shortcut_for("relay_open"), tone: tone.into(), on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Intent("relay_open".into(), serde_json::json!({})), disabled: false, zone: Some(Zone::Activity), order: 10 });
         let net = self.top_extra("approvals");
         let (count, badge) = badge_of(&net);
         let help = net.as_ref().and_then(|e| e["help"].as_str().map(str::to_string)).filter(|h| !h.is_empty()).unwrap_or_else(|| "What sbx asks you to allow, the hosts sandboxes reach".into());
-        top.push(Entry { key: "rail-network", icon: "shield".into(), help: format!("Network\n{help}"), keys: App::shortcut_for("network_show"), tone: "blue", on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Intent("network_show".into(), serde_json::json!({})), disabled: false, zone: 0 });
+        all.push(Entry { key: "rail-network".into(), icon: "shield".into(), help: format!("Network\n{help}"), keys: App::shortcut_for("network_show"), tone: "blue".into(), on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Intent("network_show".into(), serde_json::json!({})), disabled: false, zone: Some(Zone::Activity), order: 20 });
         // The team leads view (leads.rs): only the leaders' terminals.
         let leaders = self.leaders();
         let help = if self.leads_on() {
@@ -132,27 +159,84 @@ impl App {
         } else {
             format!("Team leads\nOnly the {} team leader{}' terminals; press again for this layout", leaders.len(), if leaders.len() == 1 { "" } else { "s" })
         };
-        top.push(Entry { key: "rail-leads", icon: "people".into(), help, keys: vec![], tone: "purple", on: self.leads_on(), count: None, badge: "", run: RailRun::Leads, disabled: leaders.is_empty() && !self.leads_on(), zone: 0 });
+        all.push(Entry { key: "rail-leads".into(), icon: "people".into(), help, keys: vec![], tone: "purple".into(), on: self.leads_on(), count: None, badge: "", run: RailRun::Leads, disabled: leaders.is_empty() && !self.leads_on(), zone: Some(Zone::Activity), order: 30 });
+        // The features' entries (`Place::Rail`).
+        for e in &self.feats.pane_extras {
+            let Place::Rail { zone, order } = e.place else { continue };
+            let Some((name, args)) = e.intent.clone() else { continue };
+            let screen = args["screen"].as_str().unwrap_or("");
+            let on = match name.as_str() {
+                "open_panel" => self.feats.panel.as_deref() == Some(screen) || self.feats.overlay.as_ref().is_some_and(|o| o.0 == screen),
+                "open_modal" => self.feats.modal.as_ref().is_some_and(|m| m.0 == screen),
+                _ => false,
+            };
+            let help = if e.help.is_empty() { e.label.clone() } else { format!("{}\n{}", e.label, e.help) };
+            let badge = if e.tone == "amber" || e.tone == "red" { "amber" } else { "blue" };
+            let shortcut = App::shortcut_for(&name);
+            all.push(Entry { key: format!("rail-{}", e.id), icon: e.icon.clone().unwrap_or_else(|| "single".into()), help, keys: shortcut, tone: if e.tone.is_empty() { "neutral".into() } else { e.tone.clone() }, on, count: e.count.filter(|n| *n > 0), badge, run: RailRun::Intent(name, args), disabled: false, zone: Some(zone), order });
+        }
+        if let Some(e) = self.top_extra("setup") {
+            if let Some(name) = e["intent"]["name"].as_str() {
+                all.push(Entry { key: "rail-setup".into(), icon: "gear".into(), help: format!("Settings\n{}", e["help"].as_str().unwrap_or("Setup")), keys: App::shortcut_for(name), tone: "neutral".into(), on: self.feats.modal.as_ref().is_some_and(|m| m.0 == "setup"), count: None, badge: "", run: RailRun::Intent(name.to_string(), e["intent"]["args"].clone()), disabled: false, zone: Some(Zone::Configure), order: u16::MAX });
+            }
+        }
         let pending = self.jarvis.pending_list().len();
-        let mut bottom = vec![Entry {
-            key: "jarvis-toggle",
+        all.push(Entry {
+            key: "jarvis-toggle".into(),
             icon: if self.jarvis.recording { "mic" } else { "jarvis" }.into(),
             help: if self.jarvis.open { "Close Jarvis\nYour voice and chat concierge".into() } else if pending > 0 { format!("Open Jarvis\n{pending} to review") } else { "Open Jarvis\nYour voice and chat concierge".into() },
             keys: if cfg!(target_os = "macos") { palette::chord_keys("J") } else { vec!["F7".into()] },
-            tone: "jarvis",
+            tone: "jarvis".into(),
             on: self.jarvis.open,
             count: (pending > 0).then_some(pending as u64),
             badge: "amber",
             run: RailRun::Intent("toggle_jarvis_panel".into(), serde_json::json!({})),
             disabled: false,
-            zone: 2,
-        }];
-        if let Some(e) = self.top_extra("setup") {
-            if let Some(name) = e["intent"]["name"].as_str() {
-                bottom.push(Entry { key: "rail-setup", icon: "gear".into(), help: format!("Settings\n{}", e["help"].as_str().unwrap_or("Setup")), keys: App::shortcut_for(name), tone: "neutral", on: self.feats.modal.as_ref().is_some_and(|m| m.0 == "setup"), count: None, badge: "", run: RailRun::Intent(name.to_string(), e["intent"]["args"].clone()), disabled: false, zone: 2 });
+            zone: None,
+            order: 0,
+        });
+        // Jarvis (no zone) sorts last: `None` is mapped after every zone.
+        all.sort_by_key(|e| (e.zone.map_or(9, |z| z as u8), e.order));
+        let (top, bottom): (Vec<Entry>, Vec<Entry>) = all.into_iter().partition(|e| matches!(e.zone, Some(Zone::Activity | Zone::Browse)));
+        (top, bottom)
+    }
+
+    /// The rail as it fits its height: when every entry does not fit, the
+    /// configure zone's entries (not Settings) fold into "More", then the
+    /// browse zone's. The activity zone, Settings and Jarvis never fold.
+    pub fn rail_layout(&self) -> RailLayout {
+        let (mut top, mut bottom) = self.rail_entries();
+        let room = self.rects.rail.map(|r| r[3]).unwrap_or(f32::MAX);
+        let need = |top: &[Entry], bottom: &[Entry], more: bool| {
+            let mut zones: Vec<Option<Zone>> = top.iter().map(|e| e.zone).collect();
+            let lines_top = lines_in(&zones);
+            zones = bottom.iter().map(|e| e.zone).collect();
+            if more {
+                zones.insert(0, Some(Zone::Configure));
+            }
+            let lines_bottom = lines_in(&zones);
+            // The spacer between the blocks is one more gap.
+            height_for(top.len() + bottom.len() + more as usize, lines_top + lines_bottom) + 6.0
+        };
+        let mut folded = vec![];
+        if need(&top, &bottom, false) > room {
+            let (f, keep): (Vec<Entry>, Vec<Entry>) = bottom.into_iter().partition(|e| e.zone == Some(Zone::Configure) && e.key != "rail-setup");
+            folded = f;
+            bottom = keep;
+            if need(&top, &bottom, true) > room {
+                let (f, keep): (Vec<Entry>, Vec<Entry>) = top.into_iter().partition(|e| e.zone == Some(Zone::Browse));
+                folded.splice(0..0, f);
+                top = keep;
             }
         }
-        (top, bottom)
+        if !folded.is_empty() {
+            let n: u64 = folded.iter().filter_map(|e| e.count).sum();
+            let badge = if folded.iter().any(|e| e.count.is_some() && e.badge == "amber") { "amber" } else { "blue" };
+            let names: Vec<&str> = folded.iter().map(|e| e.help.split('\n').next().unwrap_or("")).collect();
+            let more = Entry { key: "rail-more".into(), icon: "more".into(), help: format!("More\n{}", names.join(", ")), keys: vec![], tone: "neutral".into(), on: self.rail_menu || folded.iter().any(|e| e.on), count: (n > 0).then_some(n), badge, run: RailRun::More, disabled: false, zone: Some(Zone::Configure), order: 0 };
+            bottom.insert(0, more);
+        }
+        RailLayout { top, bottom, folded }
     }
 
     /// Whether the rail draws an element of that key (`wait:` marks).
@@ -160,8 +244,63 @@ impl App {
         if key == "rail" {
             return true;
         }
-        let (a, b) = self.rail_entries();
-        a.iter().chain(&b).any(|e| key == e.key || (e.count.is_some() && key == format!("{}-badge", e.key)))
+        let l = self.rail_layout();
+        let badge = |e: &Entry| e.count.is_some() && key == format!("{}-badge", e.key);
+        if l.top.iter().chain(&l.bottom).any(|e| key == e.key || badge(e)) {
+            return true;
+        }
+        self.rail_menu && (key == "rail-more-list" || l.folded.iter().any(|e| key == e.key))
+    }
+
+    /// The "More" entry's menu: the folded entries, anchored right of it.
+    pub(super) fn rail_menu_view(&self) -> Option<El> {
+        if !self.rail_menu {
+            return None;
+        }
+        let l = self.rail_layout();
+        if l.folded.is_empty() {
+            return None;
+        }
+        let labels: Vec<String> = l.folded.iter().map(|e| e.help.split('\n').next().unwrap_or("").to_string()).collect();
+        let rows: Vec<screen::MenuRow> = l
+            .folded
+            .iter()
+            .zip(&labels)
+            .map(|(e, label)| screen::MenuRow { key: e.key.clone(), label, icon: Some(e.icon.as_str()), tone: Some(e.tone.as_str()), help: e.help.split_once('\n').map(|x| x.1), keys: &e.keys, count: e.count, chosen: e.on, disabled: e.disabled })
+            .collect();
+        let mut list = screen::menu_surface("rail-more-list".into(), "rail-more".into(), rune::Align::End, screen::menu_width(&rows)).anchored("rail-more", rune::Side::Right, rune::Align::End, 6.0);
+        let mut zone = l.folded.first().and_then(|e| e.zone);
+        for (e, r) in l.folded.iter().zip(&rows) {
+            if e.zone != zone {
+                list = list.child(screen::menu_divider());
+                zone = e.zone;
+            }
+            let run = e.run.clone();
+            list = list.child(screen::menu_row(r).on_press(move |s: &mut App| {
+                s.rail_menu = false;
+                s.rail_run(run.clone());
+                s.push_data();
+            }));
+        }
+        Some(list)
+    }
+
+    /// A rail entry's press. An entry that opened a panel or an overlay
+    /// closes it when pressed again.
+    pub(super) fn rail_run(&mut self, run: RailRun) {
+        match run {
+            RailRun::Intent(name, args) => {
+                let screen = args["screen"].as_str().unwrap_or("").to_string();
+                let shown = self.feats.panel.as_deref() == Some(screen.as_str()) || self.feats.overlay.as_ref().is_some_and(|o| o.0 == screen);
+                if name == "open_panel" && shown {
+                    self.press_extra("rail", "close_panel", &serde_json::json!({ "screen": screen }));
+                } else {
+                    self.press_extra("rail", &name, &args);
+                }
+            }
+            RailRun::Leads => self.toggle_leads(),
+            RailRun::More => self.rail_menu = !self.rail_menu,
+        }
     }
 }
 
@@ -169,13 +308,13 @@ impl App {
 /// The icon's size in its 28 pt target.
 pub const ICON: f32 = 20.0;
 
-fn button(e: &Entry, prev: Option<&'static str>, next: Option<&'static str>) -> El {
-    let (fg, tint) = (color_of(e.tone), tint_of(e.tone));
+fn button(e: &Entry, prev: Option<String>, next: Option<String>) -> El {
+    let (fg, tint) = (color_of(&e.tone), tint_of(&e.tone));
     let run = e.run.clone();
     let disabled = e.disabled;
     let (label, line2) = e.help.split_once('\n').unwrap_or((e.help.as_str(), ""));
     let mut b = el()
-        .key(e.key)
+        .key(e.key.clone())
         .role("button")
         .label(if line2.is_empty() { label.to_string() } else { format!("{label}: {line2}") })
         .help(e.help.clone())
@@ -192,19 +331,16 @@ fn button(e: &Entry, prev: Option<&'static str>, next: Option<&'static str>) -> 
             if disabled {
                 return;
             }
-            match run.clone() {
-                RailRun::Intent(name, args) => s.press_extra("rail", &name, &args),
-                RailRun::Leads => s.toggle_leads(),
-            }
+            s.rail_run(run.clone());
             s.push_data();
         })
         .on_key(move |_s: &mut App, ev: &KeyEvent, tx: &mut Tx| {
             let to = match ev.key {
-                Key::Up | Key::Left => prev,
-                Key::Down | Key::Right => next,
+                Key::Up | Key::Left => prev.clone(),
+                Key::Down | Key::Right => next.clone(),
                 _ => return false,
             };
-            if let Some(k) = to {
+            if let Some(k) = &to {
                 tx.focus(k, true);
             }
             true
@@ -239,31 +375,57 @@ fn button(e: &Entry, prev: Option<&'static str>, next: Option<&'static str>) -> 
     b
 }
 
-/// The rail.
+/// The rail: the top block, a spacer, the bottom block; a hairline
+/// between two zones; the column reports its height so the layout knows
+/// what folds.
 pub fn view(s: &App) -> El {
-    let (top, bottom) = s.rail_entries();
-    let keys: Vec<&'static str> = top.iter().chain(&bottom).map(|e| e.key).collect();
-    let around = |k: &'static str| {
-        let i = keys.iter().position(|x| *x == k).unwrap_or(0);
-        (i.checked_sub(1).map(|j| keys[j]), keys.get(i + 1).copied())
+    let l = s.rail_layout();
+    let keys: Vec<String> = l.top.iter().chain(&l.bottom).map(|e| e.key.clone()).collect();
+    let around = |k: &str| {
+        let i = keys.iter().position(|x| x == k).unwrap_or(0);
+        (i.checked_sub(1).map(|j| keys[j].clone()), keys.get(i + 1).cloned())
     };
-    let mut col_ = col().key("rail").role("toolbar").label("Views and panels").w(W).h_full().min_h(0.0).py(8.0).gap(6.0).items_center().fill(c("bg")).border(1.0, c("elevated")).radius(theme::radius("md").unwrap());
-    // Zones, a hairline between two (activity, then browse when it comes).
-    let mut zone = None;
-    for e in top.iter() {
-        if zone.is_some_and(|z| z != e.zone) {
-            col_ = col_.child(el().key(format!("rail-zone-{}", e.zone)).w(20.0).h(1.0).fill(c("elevated")));
+    let mut col_ = col()
+        .key("rail")
+        .role("toolbar")
+        .label("Views and panels")
+        .w(W)
+        .h_full()
+        .min_h(0.0)
+        .py(8.0)
+        .gap(6.0)
+        .items_center()
+        .clip_rounded(theme::radius("md").unwrap())
+        .fill(c("bg"))
+        .border(1.0, c("elevated"))
+        .radius(theme::radius("md").unwrap())
+        .on_layout(|s: &mut App, r: [f32; 4]| {
+            if s.rects.rail.is_none_or(|o| (o[3] - r[3]).abs() > 0.5) {
+                s.rects.rail = Some(r);
+                s.push_data();
+            }
+        });
+    let zone_name = |z: Option<Zone>| match z {
+        Some(Zone::Activity) => "activity",
+        Some(Zone::Browse) => "browse",
+        Some(Zone::Configure) => "configure",
+        None => "jarvis",
+    };
+    let block = |mut col_: El, list: &[Entry]| {
+        let mut zone: Option<Option<Zone>> = None;
+        for e in list {
+            if zone.is_some_and(|z| z != e.zone) {
+                col_ = col_.child(el().key(format!("rail-zone-{}", zone_name(e.zone))).w(20.0).h(1.0).fill(c("elevated")));
+            }
+            zone = Some(e.zone);
+            let (p, n) = around(&e.key);
+            col_ = col_.child(button(e, p, n));
         }
-        zone = Some(e.zone);
-        let (p, n) = around(e.key);
-        col_ = col_.child(button(e, p, n));
-    }
+        col_
+    };
+    col_ = block(col_, &l.top);
     col_ = col_.child(el().grow(1.0));
-    for e in &bottom {
-        let (p, n) = around(e.key);
-        col_ = col_.child(button(e, p, n));
-    }
-    col_
+    block(col_, &l.bottom)
 }
 
 #[cfg(test)]
@@ -298,6 +460,50 @@ mod tests {
         let fit = ((rail[3] - 16.0 + 6.0) / (TARGET + 6.0)).floor() as usize;
         eprintln!("rail at 720: {} pt high, {fit} entries of 28 pt (6 pt apart), minus one per hairline", rail[3]);
         assert!(fit >= 10);
+    }
+
+    /// Zones in order (activity, browse; then configure with Settings last,
+    /// then Jarvis apart), a hairline between two; features' entries by
+    /// their `order`; too short a rail folds the configure zone first, then
+    /// the browse zone, into "More", whose menu runs the folded entry.
+    #[test]
+    fn zones_order_hairlines_and_the_configure_zone_folds_first() {
+        use crate::feat::Extra;
+        let mut r = Rig::new(&["a"], 1284.0, 816.0);
+        let x = |id: &str, zone, order| Extra { place: Place::Rail { zone, order }, id: id.into(), label: id.to_uppercase(), icon: Some("plus".into()), tone: "blue".into(), help: "line".into(), count: None, intent: Some(("open_panel".into(), serde_json::json!({ "screen": id }))) };
+        let s = &mut r.rt.state;
+        s.feats.pane_extras.extend([x("kits", Zone::Configure, 30), x("mcp", Zone::Configure, 10), x("files", Zone::Browse, 30), x("commits", Zone::Browse, 10)]);
+        let keys = |v: &[Entry]| v.iter().map(|e| e.key.clone()).collect::<Vec<_>>();
+        s.rects.rail = Some([0.0, 0.0, W, 2000.0]);
+        let l = s.rail_layout();
+        assert_eq!(keys(&l.top), ["rail-requests", "rail-network", "rail-leads", "rail-commits", "rail-files"]);
+        assert_eq!(keys(&l.bottom), ["rail-mcp", "rail-kits", "rail-setup", "jarvis-toggle"]);
+        assert!(l.folded.is_empty());
+        // Exactly the room for all of it (9 entries, 2 hairlines, the spacer's gap): nothing folds.
+        let all = height_for(9, 2) + 6.0;
+        s.rects.rail = Some([0.0, 0.0, W, all]);
+        assert!(s.rail_layout().folded.is_empty());
+        // A point less: the configure zone folds (not Settings).
+        s.rects.rail = Some([0.0, 0.0, W, all - 1.0]);
+        let l = s.rail_layout();
+        assert_eq!(keys(&l.folded), ["rail-mcp", "rail-kits"]);
+        assert_eq!(keys(&l.bottom), ["rail-more", "rail-setup", "jarvis-toggle"]);
+        assert_eq!(keys(&l.top).len(), 5, "browse stays while it fits");
+        // Much shorter: browse folds too; activity, Settings and Jarvis never.
+        s.rects.rail = Some([0.0, 0.0, W, 200.0]);
+        let l = s.rail_layout();
+        assert_eq!(keys(&l.folded), ["rail-commits", "rail-files", "rail-mcp", "rail-kits"]);
+        assert_eq!(keys(&l.top), ["rail-requests", "rail-network", "rail-leads"]);
+        assert_eq!(keys(&l.bottom), ["rail-more", "rail-setup", "jarvis-toggle"]);
+        // "More" opens its menu, a folded entry in it opens its panel's intent.
+        s.rects.rail = Some([0.0, 0.0, W, 200.0]);
+        s.rail_run(RailRun::More);
+        assert!(s.rail_menu && s.rail_drawn("rail-more-list") && s.rail_drawn("rail-mcp"));
+        assert!(s.rail_menu_view().is_some());
+        assert!(s.escape() && !s.rail_menu, "Escape closes the menu");
+        // Drawn: the hairline between Settings' zone and Jarvis.
+        let r = Rig::new(&["a"], 1284.0, 816.0);
+        assert!(r.rt.presented("rail-zone-jarvis").is_some());
     }
 
     #[test]
