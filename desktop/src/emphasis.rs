@@ -326,13 +326,14 @@ pub struct Pill {
 }
 
 /// The tone's base colour, for a dark or a light background: its token in
-/// the dark palette, or in the light one (the darker members of each hue),
-/// whichever theme is active: the ground decides, so a light terminal in
-/// the dark app (a `terminal_color` setting) still gets the light ones.
+/// the active theme, or the darker member of its hue on a light ground
+/// (`theme::ON_LIGHT_GROUND`: a terminal whose `terminal_color` is light).
 fn base(tone: Tone, light: bool) -> u32 {
-    use crate::theme::{color_in, Mode};
-    let m = if light { Mode::Light } else { Mode::Dark };
-    color_in(m, tone.token()).or_else(|| color_in(m, "blue")).unwrap_or_default()
+    let name = tone.token();
+    if light {
+        return crate::theme::ON_LIGHT_GROUND.iter().find(|(n, _)| *n == name).map(|(_, v)| *v).unwrap_or_default();
+    }
+    crate::theme::color_value(name).or_else(|| crate::theme::color_value("blue")).unwrap_or_default()
 }
 
 /// How much of the tone a tinted pill takes over the background under it

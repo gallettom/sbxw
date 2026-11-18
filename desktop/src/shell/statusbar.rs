@@ -6,8 +6,8 @@
 //! a press opens the "New sandboxes" panel, as the top bar's "Creating"
 //! does. A failure stays in red until that press (or until it is retried or
 //! dismissed); a success says "created" for four seconds. Right, in this order: CPU, cost, the theme's switch
-//! (a sun or a moon: a press switches between light and dark; its chevron
-//! opens Light, Dark and Match the system), Help. Each entry runs an intent that exists
+//! (the theme's mark: a press goes to the next theme; its chevron lists
+//! them, Dark and Graphite), Help. Each entry runs an intent that exists
 //! already, or opens a read-only popover. Its code stays here so the
 //! window's structure can be rearranged around it.
 //!
@@ -201,7 +201,7 @@ impl App {
             "status-pop-scrim" => self.status.pop.is_some(),
             "status-cpu-pop" => self.status.pop == Some(Pop::Cpu),
             "status-cost-pop" => self.status.pop == Some(Pop::Cost),
-            "status-theme-pop" | "status-theme-light" | "status-theme-dark" | "status-theme-system" => self.status.pop == Some(Pop::Theme),
+            "status-theme-pop" | "status-theme-dark" | "status-theme-graphite" => self.status.pop == Some(Pop::Theme),
             _ => false,
         }
     }
@@ -662,22 +662,20 @@ fn entry(key: &str, icon: &str, label: &str, color: &str, help: &str) -> El {
 }
 
 /// The theme's switch (keys `status-theme`, its chevron `status-theme-more`):
-/// the drawn theme's mark (a sun for light, a moon for dark); a press
-/// switches to the other at once and keeps it; the chevron opens the three
-/// choices, "Match the system" among them.
+/// the drawn theme's mark (a crescent for Dark, a half disc for Graphite);
+/// a press goes to the next theme at once and keeps it; the chevron lists
+/// them by name, each with a swatch of its ground and accent.
 pub const THEME_W: f32 = ITEM_PX * 2.0 + ICON + THEME_MORE_W;
 pub const THEME_MORE_W: f32 = 14.0;
 
 fn theme_view(s: &App) -> El {
-    let light = theme::mode().is_light();
+    let now = s.theme_choice;
     let keys = if cfg!(target_os = "macos") { "⌃⌥T" } else { "Ctrl+Alt+T" };
-    let now = if light { "Light theme" } else { "Dark theme" };
-    let system = if s.theme_choice == theme::Choice::System { ", as the system" } else { "" };
-    let help = format!("{now}{system}. Click for the {} theme ({keys})", if light { "dark" } else { "light" });
+    let help = format!("{} theme. Click for {} ({keys})", now.label(), now.next().label());
     let switch = row()
         .key("status-theme")
         .role("button")
-        .label(format!("{now}{system}"))
+        .label(format!("{} theme", now.label()))
         .help(help)
         .w(ITEM_PX * 2.0 + ICON)
         .h(layout::DENSE_H)
@@ -691,13 +689,13 @@ fn theme_view(s: &App) -> El {
             s.status.pop = None;
             s.run_intent("statusbar", Intent::SetTheme { theme: None });
         })
-        .child(rune::icon(crate::icons::get(if light { "sun" } else { "moon" }).unwrap(), ICON).color(c("text-muted")));
+        .child(rune::icon(crate::icons::get(now.icon()).unwrap(), ICON).color(c("text-muted")));
     let open = s.status.pop == Some(Pop::Theme);
     let more = row()
         .key("status-theme-more")
         .role("button")
-        .label("Theme")
-        .help("Light, dark, or match the system")
+        .label("Themes")
+        .help("Every theme, by name")
         .w(THEME_MORE_W)
         .h(layout::DENSE_H)
         .items_center()
@@ -712,19 +710,18 @@ fn theme_view(s: &App) -> El {
     row().key("status-theme-group").w(THEME_W).h(layout::DENSE_H).items_center().child(switch).child(more)
 }
 
-/// The theme's menu over the status bar: Light, Dark, Match the system,
-/// the person's choice checked.
+/// The theme's menu over the status bar: every theme by name, the chosen
+/// one checked, each with a swatch (its surface, its accent).
 fn theme_menu(s: &App) -> Vec<El> {
-    let choices = [("light", "Light", "sun", theme::Choice::Light), ("dark", "Dark", "moon", theme::Choice::Dark), ("system", "Match the system", "appearance", theme::Choice::System)];
-    let rows: Vec<screen::MenuRow> = choices
+    let rows: Vec<screen::MenuRow> = theme::Mode::ALL
         .iter()
-        .map(|(id, label, icon, ch)| screen::MenuRow { key: format!("status-theme-{id}"), label, icon: Some(icon), tone: None, help: None, keys: &[], count: None, chosen: s.theme_choice == *ch, disabled: false })
+        .map(|m| screen::MenuRow { key: format!("status-theme-{}", m.name()), label: m.label(), icon: Some(m.icon()), tone: None, help: None, keys: &[], count: None, chosen: s.theme_choice == *m, disabled: false })
         .collect();
-    let w = screen::menu_width(&rows);
+    let w = screen::menu_width(&rows) + 28.0;
     let mut surface = rune::col()
         .key("status-theme-pop")
         .role("menu")
-        .label("Theme")
+        .label("Themes")
         .focus_group()
         .anchored("status-theme-group".to_string(), rune::Side::Top, rune::Align::End, 6.0)
         .w(w)
@@ -736,10 +733,22 @@ fn theme_menu(s: &App) -> Vec<El> {
     if !screen::reduced_motion() {
         surface = surface.transition(screen::quick_fade());
     }
-    for (r, (_, _, _, ch)) in rows.iter().zip(choices) {
-        surface = surface.child(screen::menu_row(r).on_press(move |s: &mut App| {
+    for (r, m) in rows.iter().zip(theme::Mode::ALL) {
+        let at = |n: &str| theme::hex(theme::color_in(m, n).unwrap_or_default());
+        // The theme's own ground with its accent: what it looks like, beside its name.
+        let swatch = row()
+            .w(20.0)
+            .h(14.0)
+            .ml(8.0)
+            .radius(3.0)
+            .fill(at("surface"))
+            .border(1.0, c("control-border"))
+            .items_center()
+            .justify_center()
+            .child(el().w(8.0).h(4.0).radius(2.0).fill(at("accent")));
+        surface = surface.child(screen::menu_row(r).child(swatch).on_press(move |s: &mut App| {
             s.status.pop = None;
-            s.run_intent("statusbar", Intent::SetTheme { theme: Some(ch) });
+            s.run_intent("statusbar", Intent::SetTheme { theme: Some(m) });
         }));
     }
     vec![screen::menu_scrim("status-pop-scrim".into(), |s: &mut App| s.status.pop = None), surface]

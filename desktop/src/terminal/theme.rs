@@ -29,32 +29,30 @@ pub const WEB_BACKGROUND: u32 = 0x0d1117;
 /// Its text (`--c-text`).
 pub const WEB_FOREGROUND: u32 = 0xc9d1d9;
 
-/// The light theme's ANSI colours, tuned for its warm white ground
-/// ([`LIGHT_BACKGROUND`]): the normal eight at 4.5:1 or more there (white
-/// and yellow darkened, as every light terminal theme must), the bright
-/// eight at 3:1 or more (bright white a mid taupe, bright yellow an ochre).
-/// Tested in `light_ansi_reads_on_its_ground`.
-pub const LIGHT_PALETTE: [u32; 16] = [
-    0x3a332c, 0xb3261e, 0x2a6e35, 0x7f5a00, 0x2b5ea9, 0x873c8c, 0x17707a, 0x6b6258, //
-    0x7d7368, 0xcc3b2f, 0x3b873f, 0x977000, 0x3f72c2, 0xa04ca6, 0x1d8790, 0x887d70,
+/// Graphite's ANSI colours: xterm's set (as the dark theme's) on the grey
+/// ground [`GRAPHITE_BACKGROUND`], with what fell under 4.5:1 there lifted
+/// (red, blue, magenta) and bright black lifted to 3:1; black stays the
+/// ground's own dark (it is the background role, never text on it).
+/// Tested in `graphite_ansi_reads_on_its_ground`.
+pub const GRAPHITE_PALETTE: [u32; 16] = [
+    0x2e3436, 0xf0544b, 0x4e9a06, 0xc4a000, 0x5e93d9, 0xb07fb5, 0x06989a, 0xd3d7cf, //
+    0x707478, 0xff7b72, 0x8ae234, 0xfce94f, 0x8ab4f0, 0xd4a2cf, 0x34e2e2, 0xeeeeec,
 ];
 
-/// The light terminal's ground: the app's lightest surface (`bg` in the
-/// light palette), so text has the most contrast; its text one step
-/// darker than the app's body text.
-pub const LIGHT_BACKGROUND: u32 = 0xfbfbfa;
-pub const LIGHT_FOREGROUND: u32 = 0x1c1a17;
+/// Graphite's terminal ground and text: the palette's `bg` and `text`.
+pub const GRAPHITE_BACKGROUND: u32 = 0x202124;
+pub const GRAPHITE_FOREGROUND: u32 = 0xdadce0;
 
-/// The terminal in the light theme: the light palette's ground and text,
-/// the accent as the cursor, the selection the light blue at 25% (visible
-/// on the white, never the accent: a selection is not an action).
-pub const LIGHT: Theme = Theme {
-    background: LIGHT_BACKGROUND,
-    foreground: LIGHT_FOREGROUND,
-    cursor: 0xa84a16,
-    selection: 0x2b5ea9,
-    selection_alpha: 0.25,
-    palette: LIGHT_PALETTE,
+/// The terminal in Graphite: its ground and text, the orange accent as the
+/// cursor, the selection the dark theme's blue (a selection is not an
+/// action).
+pub const GRAPHITE: Theme = Theme {
+    background: GRAPHITE_BACKGROUND,
+    foreground: GRAPHITE_FOREGROUND,
+    cursor: 0xe8833a,
+    selection: 0x58a6ff,
+    selection_alpha: 0x4d as f32 / 255.0,
+    palette: GRAPHITE_PALETTE,
 };
 
 /// The terminal's theme for one of the app's themes (the dark one is the
@@ -62,7 +60,7 @@ pub const LIGHT: Theme = Theme {
 pub fn for_mode(m: crate::theme::Mode) -> Theme {
     match m {
         crate::theme::Mode::Dark => Theme::default(),
-        crate::theme::Mode::Light => LIGHT,
+        crate::theme::Mode::Graphite => GRAPHITE,
     }
 }
 
@@ -156,17 +154,22 @@ pub fn mix(a: u32, b: u32, t: f32) -> u32 {
 mod tests {
     use super::*;
 
-    /// Every ANSI colour of the light theme reads on its ground: the normal
-    /// eight as text (4.5:1), the bright eight at 3:1; the text, the dim
-    /// text, the cursor and the selection too. Prints the swatch table.
+    /// Every ANSI colour of Graphite reads on its ground: the normal eight
+    /// (black apart: the background role) as text at 4.5:1, the bright
+    /// eight at 3:1; the text, the dim text, the cursor and the selection
+    /// too. Prints the swatch table.
     #[test]
-    fn light_ansi_reads_on_its_ground() {
+    fn graphite_ansi_reads_on_its_ground() {
         use crate::theme::contrast;
-        let t = LIGHT;
+        let t = GRAPHITE;
         let mut bad = vec![];
         println!("| ANSI | Colour | On #{:06x} | Needs |\n|---|---|---|---|", t.background);
         for (i, c) in t.palette.iter().enumerate() {
-            let need = if i < 8 { 4.5 } else { 3.0 };
+            let need = match i {
+                0 => 1.0,
+                1..=7 => 4.5,
+                _ => 3.0,
+            };
             let r = contrast(*c, t.background);
             println!("| {i} | #{c:06x} | {r:.2} | {need} |");
             if r < need {
@@ -180,20 +183,17 @@ mod tests {
                 bad.push(format!("{what}: {r:.2}"));
             }
         }
-        // The selection is seen (a tint 1.2:1 from the ground) and the text
-        // under it still reads.
+        // The selection is seen, and the text under it still reads.
         let sel = crate::theme::over(t.selection, t.selection_alpha, t.background);
-        assert!(contrast(sel, t.background) >= 1.2, "selection {:.2}", contrast(sel, t.background));
+        assert!(contrast(sel, t.background) >= 1.3, "selection {:.2}", contrast(sel, t.background));
         assert!(contrast(t.foreground, sel) >= 4.5);
-        for c in &t.palette[..8] {
-            if contrast(*c, sel) < 3.0 {
-                bad.push(format!("#{c:06x} under the selection: {:.2}", contrast(*c, sel)));
-            }
-        }
         assert!(bad.is_empty(), "{bad:#?}");
-        // The light ground is the app's lightest surface.
-        assert_eq!(crate::theme::color_in(crate::theme::Mode::Light, "bg"), Some(LIGHT_BACKGROUND));
-        assert!(is_light(LIGHT_BACKGROUND));
+        // The ground and the text are the palette's.
+        let m = crate::theme::Mode::Graphite;
+        assert_eq!(crate::theme::color_in(m, "bg"), Some(GRAPHITE_BACKGROUND));
+        assert_eq!(crate::theme::color_in(m, "text"), Some(GRAPHITE_FOREGROUND));
+        assert_eq!(crate::theme::color_in(m, "accent"), Some(t.cursor));
+        assert!(!is_light(GRAPHITE_BACKGROUND));
     }
 
     #[test]

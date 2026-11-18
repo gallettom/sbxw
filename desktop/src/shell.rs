@@ -266,10 +266,8 @@ pub struct App {
     /// The sidebar's width while its edge is dragged (written to the store on release).
     sidebar_live: Option<f32>,
     /// The theme the person chose (`theme` in the state file, or
-    /// `$SBXW_DESKTOP_THEME` for this run), and the system's appearance as
-    /// the last frame saw it (Rune's `Cx::system_dark`), for "Match the system".
-    pub theme_choice: theme::Choice,
-    pub system_dark: std::cell::Cell<bool>,
+    /// `$SBXW_DESKTOP_THEME` for this run).
+    pub theme_choice: theme::Mode,
     /// `theme::generation()` when the screens' data was last made: a switch
     /// sends the data again (group tints, `app.theme`).
     theme_seen: u64,
@@ -396,18 +394,18 @@ impl App {
             top_w: 0.0,
             bar_menu: None,
             sidebar_live: None,
-            theme_choice: theme::DEFAULT_CHOICE,
-            system_dark: std::cell::Cell::new(true),
+            theme_choice: theme::DEFAULT_MODE,
             theme_seen: 0,
             palette: None,
             status: Default::default(),
         };
         jarvis::load_prefs(&mut app.jarvis);
         // The theme: this run's `$SBXW_DESKTOP_THEME` (scripts' `THEME=light`),
-        // else the person's last choice, else the default (match the system).
-        let forced = std::env::var("SBXW_DESKTOP_THEME").ok().as_deref().and_then(theme::Choice::parse);
-        app.theme_choice = forced.or_else(|| app.store.get("theme").as_str().and_then(theme::Choice::parse)).unwrap_or(theme::DEFAULT_CHOICE);
-        theme::set_mode(app.theme_choice.resolve(true));
+        // else the person's last choice, else the default (Dark; an older
+        // file's "light" or "system" too).
+        let forced = std::env::var("SBXW_DESKTOP_THEME").ok().as_deref().and_then(theme::Mode::parse);
+        app.theme_choice = forced.or_else(|| app.store.get("theme").as_str().and_then(theme::Mode::parse)).unwrap_or(theme::DEFAULT_MODE);
+        theme::set_mode(app.theme_choice);
         app.theme_seen = theme::generation();
         if init.jarvis_open {
             app.jarvis.open = true;
@@ -1837,7 +1835,7 @@ impl App {
             }
             Intent::Select { sandbox } => self.selected = sandbox,
             Intent::SetTheme { theme: t } => {
-                let t = t.unwrap_or(if theme::mode().is_light() { theme::Choice::Dark } else { theme::Choice::Light });
+                let t = t.unwrap_or(self.theme_choice.next());
                 self.set_theme(t)
             }
             Intent::CopyText { text } => {
@@ -1963,11 +1961,8 @@ pub const fn window_chrome() -> rune::Chrome {
 }
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
-    // The theme first: every colour below reads the active palette. "Match
-    // the system" follows the appearance Rune reports (the next poll sends
-    // the screens their data again and the terminals switch).
-    s.system_dark.set(cx.system_dark());
-    theme::set_mode(s.theme_choice.resolve(cx.system_dark()));
+    // The theme first: every colour below reads the active palette.
+    theme::set_mode(s.theme_choice);
     // Keyboard focus as a web page has it: every pressable control is a Tab
     // stop in reading order, and shows a 2 pt ring 2 pt outside it when the
     // keyboard put it there (never for a click).
@@ -2384,10 +2379,10 @@ impl App {
 
     /// The person's choice of theme: kept, applied now (the screens' data
     /// again, every terminal's colours, the chrome on the next frame).
-    pub fn set_theme(&mut self, t: theme::Choice) {
+    pub fn set_theme(&mut self, t: theme::Mode) {
         self.theme_choice = t;
         self.store.set("theme", J::String(t.name().into()));
-        theme::set_mode(t.resolve(self.system_dark.get()));
+        theme::set_mode(t);
         self.theme_seen = theme::generation();
         for p in &mut self.panes {
             if let Some(term) = &mut p.term {

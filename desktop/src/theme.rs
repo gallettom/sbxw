@@ -102,67 +102,67 @@ pub const DARK: &[(&str, u32)] = &[
     ("media", 0x000000),
 ];
 
-/// The light palette: the same names, taupe greys (hue 34, 6% saturation:
-/// a grey with a hint of warmth, the user's pick among three) and an orange accent
-/// (THEME.md has each value with its contrast). Surfaces step from the floor
-/// (darkest, behind everything) up to `bg` (the lightest: wells, inputs and
-/// the terminal, where text has the most contrast); text steps the other way.
-pub const LIGHT: &[(&str, u32)] = &[
-    ("bg", 0xfbfbfa),
-    ("surface", 0xf2f1f0),
-    ("surface-alt", 0xecebe9),
-    ("elevated", 0xe5e3e1),
-    ("border", 0xcdcac6),
-    ("dim", 0xb2aea9),
-    ("text", 0x35302c),
-    ("text-bright", 0x1c1a17),
-    ("text-muted", 0x544f4a),
-    ("text-soft", 0x544f4a),
-    ("text-dim", 0x5f5953),
-    ("blue", 0x2b5ea9),
-    ("blue-tint", 0xdce1e8),
-    ("green", 0x286a33),
-    ("green-strong", 0x2f7a3b),
-    ("green-deep", 0x23652d),
-    ("green-tint", 0xdce3db),
-    ("red", 0xb02c26),
-    ("red-border", 0xe2c0be),
-    ("red-tint", 0xebdbda),
-    ("amber", 0x7f5a00),
-    ("amber-strong", 0x6b4b00),
-    ("amber-tint", 0xede0b2),
-    ("purple", 0x6a42ad),
-    ("purple-strong", 0x6a3fc0),
-    ("purple-alt", 0x7347bd),
-    ("purple-tint", 0xe3dee9),
-    ("group-1", 0xa8336f),
-    ("group-2", 0x16717a),
-    ("group-3", 0x76602f),
-    ("group-4", 0x7347bd),
-    ("hover-subtle", 0xedeceb),
-    ("active-bg", 0xdbd9d6),
+/// Graphite: the same names on neutral dark greys (a ground near #202124,
+/// panels #292a2d, raised #35363a, hairlines #3c4043, the range of a
+/// browser's night mode) with an orange accent for interaction. Meaning
+/// colours are the dark theme's, re-checked on grey (THEME.md lists what
+/// moved and why).
+pub const GRAPHITE: &[(&str, u32)] = &[
+    ("bg", 0x202124),
+    ("surface", 0x292a2d),
+    ("surface-alt", 0x252629),
+    ("elevated", 0x35363a),
+    ("border", 0x3c4043),
+    ("dim", 0x5f6368),
+    ("text", 0xdadce0),
+    ("text-bright", 0xf1f3f4),
+    ("text-muted", 0xa3a9af),
+    ("text-soft", 0xa3a9af),
+    ("text-dim", 0x9aa0a6),
+    ("blue", 0x6cb0ff),
+    ("blue-tint", 0x303742),
+    ("green", 0x4cc35d),
+    ("green-strong", 0x2ea043),
+    ("green-deep", 0x238636),
+    ("green-tint", 0x2c3932),
+    ("red", 0xff7369),
+    ("red-border", 0x4b3637),
+    ("red-tint", 0x3e3133),
+    ("amber", 0xdea42c),
+    ("amber-strong", 0xe3b341),
+    ("amber-tint", 0x3d372d),
+    ("purple", 0xd2a8ff),
+    ("purple-strong", 0x8957e5),
+    ("purple-alt", 0xa371f7),
+    ("purple-tint", 0x3a3742),
+    ("group-1", 0xf778ba),
+    ("group-2", 0x39c5cf),
+    ("group-3", 0xc9b38a),
+    ("group-4", 0xa371f7),
+    ("hover-subtle", 0x2f3033),
+    ("active-bg", 0x3b3c40),
     ("white", 0xffffff),
-    ("floor", 0xdddcd9),
-    ("pane-bar", 0xf2f1f0),
-    ("focus", 0xa84a16),
-    ("control-border", 0x847e76),
-    ("primary", 0xa84a16),
-    ("on-primary", 0xffffff),
-    ("primary-hover", 0x8f3d10),
-    ("red-text", 0xa3261f),
-    ("status-bar", 0xdddcd9),
-    ("status-line", 0xcdcac6),
-    ("vendor-anthropic", 0x763a30),
-    ("vendor-openai", 0x1c1a17),
-    ("vendor-google", 0x4a52b0),
-    ("cyan", 0x17707a),
-    ("pill-danger", 0xb02c26),
-    ("accent", 0xa84a16),
-    ("accent-tint", 0xe9ddd6),
-    ("link", 0xa04512),
-    ("tab-current", 0xfbfbfa),
-    ("scrim", 0x2a231c),
-    ("shadow", 0x3a2e22),
+    ("floor", 0x1b1c1e),
+    ("pane-bar", 0x292a2d),
+    ("focus", 0xe8833a),
+    ("control-border", 0x80868b),
+    ("primary", 0xe8833a),
+    ("on-primary", 0x1b1c1e),
+    ("primary-hover", 0xf0955a),
+    ("red-text", 0xff8c84),
+    ("status-bar", 0x1b1c1e),
+    ("status-line", 0x35363a),
+    ("vendor-anthropic", 0xd99a8c),
+    ("vendor-openai", 0xf1f3f4),
+    ("vendor-google", 0x9aa8ff),
+    ("cyan", 0x39c5cf),
+    ("pill-danger", 0xb62324),
+    ("accent", 0xe8833a),
+    ("accent-tint", 0x40352f),
+    ("link", 0xf0955a),
+    ("tab-current", 0x35363a),
+    ("scrim", 0x0e0e0f),
+    ("shadow", 0x000000),
     ("media", 0x000000),
 ];
 
@@ -174,36 +174,65 @@ pub const BLACK: u32 = 0x000000;
 /// The dark palette under its old name (`app.css` order).
 pub const COLORS: &[(&str, u32)] = DARK;
 
-/// Which palette is drawn.
+/// The app's themes, by name: each one palette behind the same tokens. A
+/// theme is added as one more table and one more entry here (the light
+/// variants explored for this app are in THEME.md, not shipped).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mode {
+    /// The web UI's blue-black: the default.
     Dark,
-    Light,
+    /// Neutral dark greys with an orange accent.
+    Graphite,
 }
 
 impl Mode {
+    /// Every theme, in the order the switch cycles and its menu lists them.
+    pub const ALL: [Mode; 2] = [Mode::Dark, Mode::Graphite];
+
     pub fn palette(self) -> &'static [(&'static str, u32)] {
         match self {
             Mode::Dark => DARK,
-            Mode::Light => LIGHT,
+            Mode::Graphite => GRAPHITE,
         }
     }
+    /// Its name in the state file and in `set_theme`.
     pub fn name(self) -> &'static str {
         match self {
             Mode::Dark => "dark",
-            Mode::Light => "light",
+            Mode::Graphite => "graphite",
         }
     }
-    pub fn is_light(self) -> bool {
-        self == Mode::Light
+    /// Its name for a person.
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Dark => "Dark",
+            Mode::Graphite => "Graphite",
+        }
+    }
+    /// The theme's mark in the status bar and its menu.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Mode::Dark => "moon",
+            Mode::Graphite => "appearance",
+        }
+    }
+    /// A name as the state file or an intent spells it; anything else
+    /// (an older file's "light" or "system") is `None`.
+    pub fn parse(s: &str) -> Option<Mode> {
+        let s = s.trim().to_ascii_lowercase();
+        Mode::ALL.into_iter().find(|m| m.name() == s)
+    }
+    /// The next theme in [`Mode::ALL`], round.
+    pub fn next(self) -> Mode {
+        let i = Mode::ALL.iter().position(|m| *m == self).unwrap_or(0);
+        Mode::ALL[(i + 1) % Mode::ALL.len()]
     }
 }
 
 // The one place that says which palette is active: the shell sets it from
-// the person's choice (and the system's appearance, for "Match the
-// system") at the top of every frame and on the toggle; every token read
-// goes through it. Per thread: the UI is one thread, and tests that run
-// side by side each have their own.
+// the person's choice, at start, on the switch and at the top of every
+// frame; every token read goes through it. Per thread: the UI is one
+// thread, and tests that run side by side each have their own.
 thread_local! {
     static ACTIVE: std::cell::Cell<Mode> = const { std::cell::Cell::new(Mode::Dark) };
     /// Bumped on every change of the active palette, so what caches a
@@ -243,55 +272,20 @@ pub fn with_mode<R>(m: Mode, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// The person's choice, as the state file keeps it (`theme`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Choice {
-    Dark,
-    Light,
-    /// The system's appearance (Rune's `Cx::system_dark`).
-    System,
-}
+/// A new install's theme.
+pub const DEFAULT_MODE: Mode = Mode::Dark;
 
-impl Choice {
-    pub fn parse(s: &str) -> Option<Choice> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "dark" => Some(Choice::Dark),
-            "light" => Some(Choice::Light),
-            "system" | "auto" => Some(Choice::System),
-            _ => None,
-        }
-    }
-    pub fn name(self) -> &'static str {
-        match self {
-            Choice::Dark => "dark",
-            Choice::Light => "light",
-            Choice::System => "system",
-        }
-    }
-    /// The palette this choice draws when the system is (or is not) dark.
-    pub fn resolve(self, system_dark: bool) -> Mode {
-        match self {
-            Choice::Dark => Mode::Dark,
-            Choice::Light => Mode::Light,
-            Choice::System if system_dark => Mode::Dark,
-            Choice::System => Mode::Light,
-        }
-    }
-}
-
-/// A new install's choice: follow the system (Rune reports its appearance
-/// on every platform it runs on; headless runs report dark unless
-/// `--theme light`).
-pub const DEFAULT_CHOICE: Choice = Choice::System;
-
-/// How opaque the scrim under a dialog is, and the shadow under menus and
-/// dialogs, in the active theme: a light theme dims less (a warm dark veil
-/// at 0.32 keeps the window behind recognisable) and casts a softer shadow.
+/// How opaque the scrim under a dialog is, and the shadow under menus,
+/// popovers and dialogs. Graphite's surfaces sit closer to each other in
+/// lightness than the blue-black ones, so its shadow is a little denser.
 pub fn scrim_alpha() -> f32 {
-    if mode().is_light() { 0.32 } else { 0.6 }
+    0.6
 }
 pub fn shadow_alpha() -> f32 {
-    if mode().is_light() { 0.16 } else { 0x73 as f32 / 255.0 }
+    match mode() {
+        Mode::Dark => 0x73 as f32 / 255.0,
+        Mode::Graphite => 0.55,
+    }
 }
 /// The scrim's colour with its opacity.
 pub fn scrim() -> Color {
@@ -301,6 +295,20 @@ pub fn scrim() -> Color {
 pub fn shadow() -> Color {
     c("shadow").alpha(shadow_alpha())
 }
+
+/// The tones' colours for a LIGHT ground the app may still meet though no
+/// theme is light: a terminal whose `terminal_color` setting is light (or
+/// term-demo's `--theme`), where the keyword pills take the darker members
+/// of each hue. Keyed by the tones' token names.
+pub const ON_LIGHT_GROUND: &[(&str, u32)] = &[
+    ("green", 0x1a7f37),
+    ("red", 0xcf222e),
+    ("amber", 0x9a6700),
+    ("blue", 0x0969da),
+    ("purple", 0x8250df),
+    ("cyan", 0x1b7c83),
+    ("pill-danger", 0xcf222e),
+];
 
 /// Tokens whose desktop value differs from app.css, with app.css's value:
 /// each failed WCAG AA on a surface the desktop draws it on.
@@ -522,23 +530,11 @@ pub const GROUP_DARK: GroupLook = GroupLook {
     tab: TAB_TINT,
 };
 
-/// On light: the hue at 50% saturation, 35% lightness (then 28, 22), so the
-/// square and the accent line mark at 3:1 on the surfaces; the block a 10%
-/// pastel of it, the pane bar 16% (unfocused 12%), the current tab 16%
-/// (others 8%): the same steps as dark, a little lower, since a hue shows
-/// more on a light ground.
-pub const GROUP_LIGHT: GroupLook = GroupLook {
-    saturation: 0.50,
-    lightness: &[0.35, 0.28, 0.22],
-    chat: (0.45, 0.48),
-    tint: 0.10,
-    tint_hover: 0.16,
-    label: 0.45,
-    bar: 0.16,
-    bar_unfocused: 0.12,
-    tab_current: 0.16,
-    tab: 0.08,
-};
+/// Graphite: the dark theme's hues and steps on a grey a little lighter
+/// than the blue-black: the colour a step lighter (66%, then 74, 81) so its
+/// square still marks at 3:1 on its block, the current tab's tint 22% (the
+/// orange focus ring keeps 3:1 on the yellow tabs).
+pub const GROUP_GRAPHITE: GroupLook = GroupLook { lightness: &[0.66, 0.74, 0.81], chat: (0.60, 0.70), tab_current: 0.22, ..GROUP_DARK };
 
 /// The active theme's [`GroupLook`].
 pub fn group_look() -> GroupLook {
@@ -547,7 +543,7 @@ pub fn group_look() -> GroupLook {
 pub fn look_of(m: Mode) -> GroupLook {
     match m {
         Mode::Dark => GROUP_DARK,
-        Mode::Light => GROUP_LIGHT,
+        Mode::Graphite => GROUP_GRAPHITE,
     }
 }
 
@@ -556,8 +552,8 @@ pub fn look_of(m: Mode) -> GroupLook {
 pub fn group_tints(g: u32) -> (u32, u32, u32) {
     let look = group_look();
     let surface = color_value("surface").unwrap();
-    // Toward white on dark (as the web UI), toward the darkest text on light.
-    let to = if mode().is_light() { color_value("text-bright").unwrap() } else { WHITE };
+    // Toward white, as the web UI.
+    let to = WHITE;
     (over(g, look.tint, surface), over(g, look.tint_hover, surface), over(to, look.label, g))
 }
 
@@ -698,11 +694,11 @@ pub fn muted_on(ground: u32) -> u32 {
     (0..=10).map(|k| over(b, k as f32 / 10.0, m)).find(|c| contrast(*c, ground) >= Need::Text.min()).unwrap_or(b)
 }
 
-/// A tone's icon on a tinted ground: the tone, moved toward `text-bright`
-/// (white on dark, the darkest text on light) until it marks at 3:1 there
-/// (red on the lightest yellow tint needs it).
+/// A tone's icon on a tinted ground: the tone, moved toward white (black on
+/// a light ground) until it marks at 3:1 there (red on the lightest yellow
+/// tint needs it).
 pub fn mark_on(fg: u32, ground: u32) -> u32 {
-    let to = if luminance(ground) > 0.18 { color_value("text-bright").unwrap() } else { 0xffffff };
+    let to = if luminance(ground) > 0.18 { BLACK } else { WHITE };
     (0..=10).map(|k| over(to, k as f32 / 20.0, fg)).find(|c| contrast(*c, ground) >= Need::Mark.min()).unwrap_or(to)
 }
 
@@ -987,20 +983,22 @@ mod tests {
     #[test]
     fn group_colours_match_the_web_ui() {
         with_mode(Mode::Dark, group_colours_match_the_web_ui_dark);
-        // On light: every hue the hash can give, at every step, marks at 3:1
-        // on the surfaces it is drawn on.
-        with_mode(Mode::Light, || {
+        // In every theme: every hue the hash can give, at every step, marks
+        // at 3:1 on the surfaces it is drawn on.
+        for m in MODES {
+            with_mode(m, || {
             let look = group_look();
             for &l in look.lightness {
                 for h in 0..360 {
                     for ground in ["surface", "surface-alt"] {
                         let g = hsl(h as f32, look.saturation, l);
-                        assert!(contrast(g, color_value(ground).unwrap()) >= 3.0, "hue {h} at {l} on {ground}");
+                        assert!(contrast(g, color_value(ground).unwrap()) >= 3.0, "{m:?}: hue {h} at {l} on {ground}");
                     }
                 }
             }
             assert!(contrast(hsl(265.0, look.chat.0, look.chat.1), color_value("surface").unwrap()) >= 3.0);
-        });
+            });
+        }
     }
 
     fn group_colours_match_the_web_ui_dark() {
@@ -1100,7 +1098,7 @@ mod tests {
     #[test]
     fn colour_props() {
         with_mode(Mode::Dark, colour_props_dark);
-        assert_eq!(with_mode(Mode::Light, || parse_color("text-muted")), Ok(color_in(Mode::Light, "text-muted").unwrap()));
+        assert_eq!(with_mode(Mode::Graphite, || parse_color("text-muted")), Ok(color_in(Mode::Graphite, "text-muted").unwrap()));
     }
 
     fn colour_props_dark() {
@@ -1150,7 +1148,7 @@ mod tests {
         assert!(bad.is_empty(), "{:?}: {}", mode(), bad.join("\n"));
     }
 
-    const MODES: [Mode; 2] = [Mode::Dark, Mode::Light];
+    const MODES: [Mode; 2] = Mode::ALL;
 
     /// Both palettes name the same tokens, in the same order, each once.
     #[test]
@@ -1158,7 +1156,9 @@ mod tests {
         fn names(p: &'static [(&'static str, u32)]) -> Vec<&'static str> {
             p.iter().map(|(n, _)| *n).collect()
         }
-        assert_eq!(names(DARK), names(LIGHT));
+        for m in Mode::ALL {
+            assert_eq!(names(DARK), names(m.palette()), "{m:?}");
+        }
         let mut seen = std::collections::HashSet::new();
         for (n, _) in DARK {
             assert!(seen.insert(*n), "{n} twice");
@@ -1172,15 +1172,17 @@ mod tests {
     /// The active palette is per process, a forced one per thread.
     #[test]
     fn the_active_palette_switches() {
-        assert_eq!(with_mode(Mode::Light, || c("bg")), hex(color_in(Mode::Light, "bg").unwrap()));
-        assert_ne!(with_mode(Mode::Light, || c("bg")), with_mode(Mode::Dark, || c("bg")));
+        assert_eq!(with_mode(Mode::Graphite, || c("bg")), hex(color_in(Mode::Graphite, "bg").unwrap()));
+        assert_ne!(with_mode(Mode::Graphite, || c("bg")), with_mode(Mode::Dark, || c("bg")));
         assert_eq!(with_mode(Mode::Dark, || c("bg")), hex(0x0d1117));
-        let nested = with_mode(Mode::Light, || with_mode(Mode::Dark, || mode()) == Mode::Dark && mode() == Mode::Light);
+        let nested = with_mode(Mode::Graphite, || with_mode(Mode::Dark, || mode()) == Mode::Dark && mode() == Mode::Graphite);
         assert!(nested);
-        assert_eq!(Choice::parse("Light"), Some(Choice::Light));
-        assert_eq!(Choice::System.resolve(true), Mode::Dark);
-        assert_eq!(Choice::System.resolve(false), Mode::Light);
-        assert_eq!(with_mode(Mode::Light, || to_json()["mode"].clone()), "light");
+        assert_eq!(Mode::parse("Graphite"), Some(Mode::Graphite));
+        assert_eq!(Mode::parse("light"), None, "an older state file's light falls back");
+        assert_eq!(Mode::parse("system"), None);
+        assert_eq!(Mode::Dark.next(), Mode::Graphite);
+        assert_eq!(Mode::Graphite.next(), Mode::Dark);
+        assert_eq!(with_mode(Mode::Graphite, || to_json()["mode"].clone()), "graphite");
     }
 
     /// The three oranges that meet on a sidebar row: the accent (the focus

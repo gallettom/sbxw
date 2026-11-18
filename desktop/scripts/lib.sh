@@ -21,9 +21,9 @@
 # Prefer wait: before a tap on something the daemon's answer draws: a fixed
 # hold is a guess that fails under load.
 #
-# THEME=light (or dark, or system) runs the app in that theme: any demo
-# script or shot.sh re-shoots in the light theme with no change to it
-# (`THEME=light desktop/scripts/demo-commits.sh`).
+# THEME=graphite (or dark) runs the app in that theme: any demo script or
+# shot.sh re-shoots in it with no change to it
+# (`THEME=graphite desktop/scripts/demo-commits.sh`).
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/target}"

@@ -177,20 +177,19 @@ fn the_status_bar_fit_measures_what_is_drawn() {
     }
 }
 
-/// The theme's switch: a press on the sun or moon switches at once and is
-/// kept; its menu offers the three choices and "Match the system" follows
-/// the appearance Rune reports; the screens get their data again.
+/// The theme's switch: a press goes to the next theme at once and is
+/// kept; its menu lists every theme by name; the screens get their data
+/// again; an older state file's "light" falls back to Dark.
 #[test]
 fn the_theme_switch_switches_at_once_and_is_kept() {
     use crate::shell::{view, Args};
-    use crate::theme::{self, Choice, Mode};
-    let a = App::new(Args { fixture: Some(format!("{}/fixtures/shell/design-2.json", env!("CARGO_MANIFEST_DIR")).into()), ..Args::default() });
-    // A dark system: a new install matches it.
-    let mut rt = rune::Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    use crate::theme::{self, Mode};
+    let app = || App::new(Args { fixture: Some(format!("{}/fixtures/shell/design-2.json", env!("CARGO_MANIFEST_DIR")).into()), ..Args::default() });
+    let mut rt = rune::Runtime::new(app(), view, (1284.0, 816.0), rune::Env::new(true, 1.0));
     for _ in 0..6 {
         rt.frame(0.016);
     }
-    assert_eq!(rt.state.theme_choice, Choice::System);
+    assert_eq!(rt.state.theme_choice, Mode::Dark, "a new install: Dark");
     assert_eq!(theme::mode(), Mode::Dark);
     let tap = |rt: &mut rune::Runtime<App>, key: &str| {
         let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
@@ -200,26 +199,20 @@ fn the_theme_switch_switches_at_once_and_is_kept() {
         rt.frame(0.016);
     };
     tap(&mut rt, "status-theme");
-    assert_eq!(theme::mode(), Mode::Light, "one press");
-    assert_eq!(rt.state.theme_choice, Choice::Light);
-    assert_eq!(rt.state.store.get("theme"), "light", "kept in the state file");
-    assert_eq!(rt.state.screen_data()["app"]["theme"], "light", "the screens' data says so");
-    let (bar, _) = rt.presented("status-bar").unwrap();
-    assert!(bar[3] > 0.0);
-    // The menu: Match the system, on a light system.
+    assert_eq!(theme::mode(), Mode::Graphite, "one press");
+    assert_eq!(rt.state.theme_choice, Mode::Graphite);
+    assert_eq!(rt.state.store.get("theme"), "graphite", "kept in the state file");
+    assert_eq!(rt.state.screen_data()["app"]["theme"], "graphite", "the screens' data says so");
+    // The menu: every theme by name.
     tap(&mut rt, "status-theme-more");
-    assert!(rt.state.statusbar_drawn("status-theme-system"));
-    tap(&mut rt, "status-theme-system");
-    assert_eq!(rt.state.theme_choice, Choice::System);
-    assert_eq!(theme::mode(), Mode::Dark, "the system is dark");
-    rt.set_system_dark(false);
-    rt.frame(0.016);
-    assert_eq!(theme::mode(), Mode::Light, "the system turned light");
-    rt.set_system_dark(true);
-    rt.frame(0.016);
+    for m in Mode::ALL {
+        assert!(rt.find(&format!("status-theme-{}", m.name())).is_some(), "{m:?} listed");
+    }
+    tap(&mut rt, "status-theme-dark");
     assert_eq!(theme::mode(), Mode::Dark);
-    // A restart reads the choice back.
-    let mut store = crate::shell::store::Store::memory();
-    store.set("theme", serde_json::json!("light"));
-    assert_eq!(store.get("theme").as_str().and_then(Choice::parse), Some(Choice::Light));
+    assert!(rt.find("status-theme-pop").is_none(), "the menu closed");
+    // A state file from the light-theme days: Dark.
+    let mut a = app();
+    a.store.set("theme", serde_json::json!("light"));
+    assert_eq!(a.store.get("theme").as_str().and_then(Mode::parse), None);
 }

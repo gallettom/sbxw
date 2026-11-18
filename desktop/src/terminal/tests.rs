@@ -459,17 +459,17 @@ fn an_open_terminal_follows_the_apps_theme() {
     let (mut t, _ev, _rx) = term();
     t.feed(b"x");
     assert_eq!(t.theme().background, theme::WEB_BACKGROUND);
-    with_mode(Mode::Light, || {
+    with_mode(Mode::Graphite, || {
         let before = t.rebuilt_rows;
         t.poll(None);
-        assert_eq!(*t.theme(), theme::LIGHT);
+        assert_eq!(*t.theme(), theme::GRAPHITE);
         assert!(t.rebuilt_rows > before, "redrawn");
-        assert_eq!(t.pills.colors(crate::emphasis::Tone::Green), crate::emphasis::palette(crate::emphasis::Tone::Green, theme::LIGHT_BACKGROUND, theme::LIGHT_FOREGROUND));
+        assert_eq!(t.pills.colors(crate::emphasis::Tone::Green), crate::emphasis::palette(crate::emphasis::Tone::Green, theme::GRAPHITE_BACKGROUND, theme::GRAPHITE_FOREGROUND));
     });
     t.poll(None);
     assert_eq!(t.theme().background, theme::WEB_BACKGROUND, "back to dark");
     t.set_theme(Theme::from_setting_strings("#fdf6e3", "auto"));
-    with_mode(Mode::Light, || t.poll(None));
+    with_mode(Mode::Graphite, || t.poll(None));
     assert_eq!(t.theme().background, 0xfdf6e3, "the caller's theme stays");
 }
 
