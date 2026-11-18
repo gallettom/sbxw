@@ -419,7 +419,7 @@ pub fn view(s: &App) -> El {
                     s.toggle_leads();
                     s.push_data();
                 })
-                .child(small_icon("people", 14.0, theme::hex(fg)))
+                .child(small_icon("leader", 14.0, theme::hex(fg)))
                 .child(text(LEADS_LABEL).font(small(TAB_TEXT, 600.0)).color(theme::hex(fg))),
         );
     }

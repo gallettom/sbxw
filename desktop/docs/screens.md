@@ -809,7 +809,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `chevron-right`, `check`, `warning`, `info`, `gear`, `search`, `folder`,
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
-`coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `threads`,
+`coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `leader`, `threads`,
 `shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
 ">", for the top bar's logo).
 
@@ -818,7 +818,8 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | Icon | Means |
 |---|---|
 | `sparkle` | the agent (Claude, or another vendor's) |
-| `people` | the team (team mode, the leads) |
+| `people` | the team (a session in team mode: the pane bar's Team) |
+| `leader` | the team leads (a crown over one person: the rail's Team leads, the pager's mark, the palette) |
 | `jarvis` | Jarvis |
 | `threads` | a sandbox's sessions and threads (`branch` is one worktree) |
 | `globe` | the sandbox's browser |

@@ -268,7 +268,7 @@ impl App {
         }
         if self.leads_on() || !self.leaders().is_empty() {
             let (label, hint) = if self.leads_on() { ("Leave the team leads view", "The layout before it") } else { ("Team leads view", "Only the team leaders' terminals") };
-            v.push(core("leads", label, hint, "people", vec![], Run::Leads));
+            v.push(core("leads", label, hint, "leader", vec![], Run::Leads));
         }
         v.push(core("rotate", "Rotate split", "The focused pane and its neighbour: side by side or stacked", "rows", vec![], i("pane_rotate", J::Null)));
         v.push(core("equalise", "Make the panes equal", "This page's splits share their room equally", "grid", vec![], i("panes_equalise", J::Null)));

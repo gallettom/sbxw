@@ -84,6 +84,10 @@ icons! {
     // The top bar's mark (topbar.luau): the same prompt flush left in its
     // box and heavier, drawn at 28 pt with the blue cursor beside it.
     LOGO_MARK "logo-mark" r#"<polyline points="1.6,3 7.4,8 1.6,13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>"#;
+    // Team leads (the rail, the pager's mark, the palette): a crown over one
+    // person, so it says "the one who leads", not the team's `people` that
+    // the pane bar's Team uses. Filled crown, so it holds at 14 pt.
+    LEADER "leader" concat!(r#"<path d="M4.25 5 3.75 1.25 6.25 3 8 0.75 9.75 3 12.25 1.25 11.75 5z" fill="currentColor"/>"#, st!("circle", r#"cx="8" cy="8" r="1.9""#), st!("path", r#"d="M3.25 15.25c0-2.2 2.1-3.5 4.75-3.5s4.75 1.3 4.75 3.5""#));
     // A keyword pill: a rounded label with a dot (keyword pills, emphasis.rs).
     TAG "tag" concat!(st!("rect", r#"x="1.75" y="4.75" width="12.5" height="6.5" rx="3.25""#), st!("line", r#"x1="5.5" y1="8" x2="10.5" y2="8""#));
     // The configure zone's views out of Setup, one mark each wherever it

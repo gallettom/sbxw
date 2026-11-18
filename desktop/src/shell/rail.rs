@@ -164,7 +164,7 @@ impl App {
         } else {
             format!("Team leads\nOnly the {} team leader{}' terminals; press again for this layout", leaders.len(), if leaders.len() == 1 { "" } else { "s" })
         };
-        all.push(Entry { key: "rail-leads".into(), icon: "people".into(), help, keys: vec![], tone: "purple".into(), on: self.leads_on(), count: None, badge: "", run: RailRun::Leads, disabled: leaders.is_empty() && !self.leads_on(), zone: Some(Zone::Activity), order: 30, dot: None });
+        all.push(Entry { key: "rail-leads".into(), icon: "leader".into(), help, keys: vec![], tone: "purple".into(), on: self.leads_on(), count: None, badge: "", run: RailRun::Leads, disabled: leaders.is_empty() && !self.leads_on(), zone: Some(Zone::Activity), order: 30, dot: None });
         // The features' entries (`Place::Rail`).
         for e in &self.feats.pane_extras {
             let Place::Rail { zone, order } = e.place else { continue };
@@ -476,6 +476,24 @@ mod tests {
         let fit = ((rail[3] - 16.0 + 6.0) / (TARGET + 6.0)).floor() as usize;
         eprintln!("rail at 720: {} pt high, {fit} entries of 28 pt (6 pt apart), minus one per hairline", rail[3]);
         assert!(fit >= 10);
+    }
+
+    /// Team leads wears the `leader` mark (a crown over one person) in the
+    /// rail and the palette, never the team's `people` the pane bar's Team
+    /// keeps; its tooltip's second line stays in words.
+    #[test]
+    fn team_leads_has_its_own_mark() {
+        let r = Rig::new(&["a"], 1284.0, 816.0);
+        let s = &r.rt.state;
+        let l = s.rail_layout();
+        let e = l.top.iter().find(|e| e.key == "rail-leads").expect("the leads entry");
+        assert_eq!(e.icon, "leader");
+        assert!(crate::icons::exists("leader") && crate::icons::exists("people"));
+        assert_ne!(crate::icons::get("leader").unwrap().body, crate::icons::get("people").unwrap().body);
+        assert!(e.help.chars().any(|c| c.is_alphabetic()), "line 2 in words: {:?}", e.help);
+        let src = include_str!("palette.rs");
+        assert!(src.contains("hint, \"leader\""), "the palette's Team leads uses the same mark");
+        assert!(include_str!("pager.rs").contains("small_icon(\"leader\""), "the pager's Team leads mark too");
     }
 
     /// Zones in order (activity, browse; then configure with Settings last,
