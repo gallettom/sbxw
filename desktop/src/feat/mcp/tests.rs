@@ -66,7 +66,7 @@ fn opened_for_a_sandbox_it_is_on_that_sandbox_and_remembers_it() {
     assert_eq!(load(json!({})), vec![json!({ "name": "mcp_load", "args": { "server": "linear", "sandbox": "web-app" } })]);
     // A stopped sandbox: said, and the first running one is used.
     let (t, _) = render_panel("mcp", SRC, "full", json!({ "mcp_view": { "sandbox": "web-api" } }));
-    assert!(t.iter().any(|x| x.starts_with("web-api is not running")), "{t:?}");
+    assert!(t.iter().any(|x| x.starts_with("Opened for web-api, which is not running: Load acts on web-app")), "{t:?}");
 }
 
 #[test]
@@ -157,3 +157,26 @@ fn a_remote_server_asks_one_secret_per_placeholder() {
     assert!(run(&data, "mcp_save", json!({ "name": "-x", "kind": "stdio", "command": "a" })).unwrap_err().contains("server name"));
 }
 
+
+/// The picker, the notice and every "Load into X" come from one sandbox: the
+/// one picked (or, opened for a stopped one, the first running one).
+#[test]
+fn the_picker_the_notice_and_load_name_the_same_sandbox() {
+    for (view, want) in [(json!({ "sandbox": "docs" }), "docs"), (json!({ "sandbox": "web-api" }), "web-app"), (json!({ "sandbox": "web-app" }), "web-app")] {
+        let extra = json!({ "mcp_view": view, "mcp_inspect_for": "linear", "mcp_inspect": { "text": "x" } });
+        let (t, tree) = render_panel("mcp", SRC, "full", extra.clone());
+        fn find<'a>(n: &'a crate::luau::Node, id: &str) -> Option<&'a crate::luau::Node> {
+            if n.id.as_deref() == Some(id) {
+                return Some(n);
+            }
+            n.children.iter().find_map(|c| find(c, id))
+        }
+        assert_eq!(find(&tree, "mcp-sandbox").unwrap().value, json!(want), "{view}: the picker");
+        assert!(t.iter().any(|x| x == &format!("Load into {want}")), "{view}: the details' Load: {t:?}");
+        assert_eq!(press("mcp", SRC, "full", extra.clone(), "mcp-load-linear")[0]["args"]["sandbox"], want, "{view}: a row's Load");
+        assert_eq!(press("mcp", SRC, "full", extra, "mcp-detail-load")[0]["args"]["sandbox"], want, "{view}: the details' Load");
+        for line in t.iter().filter(|x| x.starts_with("Opened for")) {
+            assert!(line.contains(&format!("Load acts on {want}")), "{line}");
+        }
+    }
+}

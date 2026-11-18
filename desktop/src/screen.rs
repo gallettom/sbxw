@@ -911,6 +911,23 @@ fn apply(mut e: El, st: &Style, help: &Option<String>) -> El {
     e
 }
 
+/// A `paint` prop as Rune's vector shape (`rune::Shape`, crates/rune/src/shape.rs at the
+/// pinned rev): each stroke a round-capped polyline, each dot a filled 20-gon, or a ring.
+pub fn paint_shape(p: &crate::luau::Paint) -> rune::Shape {
+    let mut sh = rune::Shape::new();
+    for (pts, w, c) in &p.strokes {
+        sh = sh.stroke(pts.clone(), *w, hex(*c));
+    }
+    for ([x, y], r, c, hollow) in &p.dots {
+        let ring: Vec<[f32; 2]> = (0..20).map(|i| {
+            let a = i as f32 * std::f32::consts::TAU / 20.0;
+            [x + r * a.cos(), y + r * a.sin()]
+        }).collect();
+        sh = if *hollow { sh.stroke_with(ring, true, 1.5, rune::LineCap::Round, hex(*c)) } else { sh.fill(ring, hex(*c)) };
+    }
+    sh
+}
+
 /// The least width a field keeps beside other things on its row (points).
 pub const INPUT_MIN: f32 = 160.0;
 
@@ -1062,6 +1079,9 @@ impl Build<'_> {
                     }
                 } else if let Some(h) = st.hover {
                     b = b.hover(hex(h));
+                }
+                if let Some(p) = &n.paint {
+                    b = b.shape(paint_shape(p));
                 }
                 if n.hover_group {
                     b = b.hover_group();

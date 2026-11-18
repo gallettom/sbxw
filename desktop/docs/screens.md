@@ -175,6 +175,7 @@ Children side by side. Children are centred vertically.
 | `selected` | bool | With `on`: the selected item (screen readers say so) |
 | `clip` | bool | What overflows it is cut at its edges (a line of badges that may not fit) |
 | `shortcuts` | list of `{ what, key, ... }` | Lines under its `help` in the tooltip, each what a key does with its keycaps: `shortcuts = { { "Open its terminal", "Enter" }, { "Start or stop", "Space" } }` |
+| `paint` | `{ strokes = { { points = { x1, y1, x2, y2, ... }, width = 2, color = "blue" } }, dots = { { x =, y =, r =, color =, hollow = } } }` | Vector drawing in the element's own points from its top-left, under its children (Rune's `Shape`: round-capped polylines, dots as filled discs or rings). At most 400 strokes, 600 dots, 8000 points. Give the element its `w` and `h`; put pressable parts over it as `pin`ned children. The Worktrees graph draws with it |
 | `folds` | bool | `column`: its children fold open and shut smoothly. A child that grows or shrinks (a block that expands) glides to its new height over about 0.18 s, ease-out, and what it gains or loses fades; only in answer to the person's press or key, never for data that arrives; off under the system's reduced motion |
 
 ```lua
@@ -1718,7 +1719,7 @@ background. `data.commits_ui`: `sandbox` (nil: every one), `branch`,
 
 | Intent | Args | Effect |
 |---|---|---|
-| `commits_show` | `sandbox?`, `branch?` | Opens the view (every sandbox, one, one branch) and reads |
+| `commits_show` | `sandbox?`, `branch?`, `hash?` | Opens the view (every sandbox, one, one branch) and reads; with `hash` (and `sandbox`) that commit opened, as a dot pressed in the Worktrees graph |
 | `commits_sandbox` | `sandbox?` | All, or one |
 | `commits_filter` | `text` | Subject and author |
 | `commits_unmerged` | `on` | Only what the main checkout's branch does not hold |
@@ -1731,6 +1732,39 @@ background. `data.commits_ui`: `sandbox` (nil: every one), `branch`,
 | `commits_key` | `key` (`up`, `down`, `enter`) | The view's keys when none of its controls has the keyboard |
 
 Commit messages are drawn as plain text: no pills, no Markdown, no links.
+
+### worktrees
+
+An overlay (`src/feat/worktrees.rs`, `screens/worktrees.luau`): one block
+per sandbox, one row per worktree (path, thread and its state, ahead,
+behind, uncommitted changes, merged, the last commit; Terminal, Commits,
+Files). Above a block's rows, the **branch graph** of its unmerged
+worktrees, one per repository (`src/feat/worktrees_graph.rs`, the web UI's
+`wtLayout` mapping): the base branch as the top lane, each unmerged thread
+(a tip with commits of its own) forking from its merge-base and running to
+its tip, a dot per commit; merged worktrees and branches with nothing of
+their own are not drawn (their rows keep the "merged" chip). Lanes go by
+fork, the newest first (no link crosses a lane above it), then by name;
+each lane's colour comes from the thread's name (`lane_color`, a stable
+palette; the row's branch icon wears it), its label from the thread's
+state. Ahead is the lane's dots, behind the base's dots after the fork.
+Caps: 24 base commits and 10 per thread from 760 pt, 10 and 4 under it (a
+"+N" chip for a thread's older commits, a faint "earlier" edge for the
+base's); the same lanes at both widths. The layout is in columns and rows,
+deterministic and tested (`the_branch_graph_lays_out_unmerged_lanes_by_fork_with_caps`);
+the screen turns it into points and draws it with the `paint` prop
+(Rune's `Shape`). A lane's label (`worktrees-lane-<id>`) selects its row
+(`worktrees_select`); a dot (`worktrees-dot-<sandbox>-<short>`) opens that
+commit in Commits (`commits_show {sandbox, branch, hash}`).
+
+| Intent | Args | Effect |
+|---|---|---|
+| `worktrees_show` | | Opens the view and reads every sandbox's worktrees |
+| `worktrees_refresh` | | Reads again |
+| `worktrees_filter` | `text` | By sandbox, thread, branch or path |
+| `worktrees_more` | | The next page of rows |
+| `worktrees_terminal`, `worktrees_commits`, `worktrees_files` | `id` | The row's thread terminal, its branch in Commits, the explorer at it |
+| `worktrees_select` | `id?` | Marks a row (a lane pressed), or none; view state |
 
 ### Overlays
 

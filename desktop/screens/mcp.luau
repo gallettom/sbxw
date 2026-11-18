@@ -95,7 +95,9 @@ return {
     local sel = data.mcp_inspect_for
     table.insert(out, 1, row{ w = "full", gap = 8, text{ "Load into", size = "sm", color = "text-muted" }, picker })
     if asked and asked ~= target then
-      out[#out + 1] = note(asked .. " is not running: a server is loaded into a running sandbox. Start it, or pick another.", "amber")
+      -- Opened for a stopped sandbox: the picker is on the first running one,
+      -- and this line says so with the same name the picker and Load show.
+      out[#out + 1] = note("Opened for " .. asked .. ", which is not running: Load acts on " .. (target or "no sandbox") .. " (the picker). Start " .. asked .. ", or pick another.", "amber")
     elseif #running == 0 then
       out[#out + 1] = note("No sandbox is running: start one to load a server into it.")
     end

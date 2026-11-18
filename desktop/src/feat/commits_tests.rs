@@ -232,3 +232,22 @@ fn the_screen_renders_every_state() {
     render(ui(&st.act(&cx, &asked("commits_unmerged", json!({ "on": false }))).unwrap()));
     render(ui(&st.act(&cx, &asked("commits_filter", json!({ "text": "zzz" }))).unwrap()));
 }
+
+/// Opened on one commit (a dot of the Worktrees graph): its detail is asked
+/// at once and its row is the open one; a hash needs its sandbox.
+#[test]
+fn opened_on_a_commit_it_reads_and_opens_it() {
+    let d = data();
+    let cx = Ctx { data: &d };
+    let mut st = State::default();
+    let h = "b1b942e56cefd1e55d21f9beebbedf0187522f81";
+    let out = st.act(&cx, &asked("commits_show", json!({ "sandbox": "web-app", "branch": "sbxw/checkout-copy", "hash": h }))).unwrap();
+    let c = calls(&out);
+    assert!(c.iter().any(|(p, _)| p == &format!("/api/sandboxes/web-app/commits/{h}")), "{c:?}");
+    let more = answer(&mut st, &cx, &out);
+    let v = ui(&more);
+    let row = v["rows"].as_array().unwrap().iter().find(|r| r["hash"] == h).cloned().expect("listed");
+    assert_eq!(row["expanded"], true, "{row}");
+    assert!(st.act(&cx, &asked("commits_show", json!({ "hash": h }))).is_err(), "a hash without its sandbox");
+    assert!(st.act(&cx, &asked("commits_show", json!({ "sandbox": "web-app", "hash": "zz" }))).is_err());
+}
