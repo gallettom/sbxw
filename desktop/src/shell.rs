@@ -1944,13 +1944,6 @@ pub const fn window_chrome() -> rune::Chrome {
 }
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
-    let t = crate::perf::start();
-    let el = view_inner(s, cx);
-    crate::perf::done(t, || "view (the core's element tree)".to_string());
-    el
-}
-
-fn view_inner(s: &App, cx: &mut Cx<App>) -> El {
     // Keyboard focus as a web page has it: every pressable control is a Tab
     // stop in reading order, and shows a 2 pt ring 2 pt outside it when the
     // keyboard put it there (never for a click).
