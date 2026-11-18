@@ -769,6 +769,7 @@ features! {
     kits,
     shell_extras,
     mac,
+    monitor,
     templates,
     threads,
     worktrees,
