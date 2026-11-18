@@ -3406,14 +3406,41 @@ mod tests {
             for _ in 0..6 {
                 rt.frame(0.016);
             }
+            // The fixture's first reads land on the real clock: the Requests
+            // feature opens its panel when its first read finds several
+            // requests waiting (relay `on_data`). On a loaded machine that
+            // read came after the panel was closed below, docking it again
+            // and narrowing the panes to a 56 pt bar (the flaky failure).
+            // Wait for it, then close what it opened.
+            for _ in 0..400 {
+                if rt.state.feats.data.contains_key("relay") {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                rt.update(|s, tx| {
+                    s.poll(0.0, tx);
+                });
+                rt.frame(0.016);
+            }
+            assert!(rt.state.feats.data.contains_key("relay"), "the fixture's requests were read");
+            for _ in 0..6 {
+                rt.update(|s, tx| {
+                    s.poll(0.0, tx);
+                });
+                rt.frame(0.016);
+            }
             // The plan dialog the fixture opens, then the Requests panel.
             rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
             rt.update(|s, _| {
                 s.feats.panel = None;
                 s.feats.panels.clear();
+                // As closing a panel does: the screens and the bars' fit follow.
+                s.push_data();
             });
-            for _ in 0..6 {
-                rt.frame(0.016);
+            // Closing the panel widens the panes with a glide: measure once
+            // it has landed (a mid-glide pane is narrower than its layout).
+            for _ in 0..40 {
+                rt.frame(0.05);
             }
             let inside = |rt: &rune::Runtime<App>, key: &str, outer: &str| {
                 let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{w}: {key} drawn"));
