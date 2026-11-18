@@ -489,6 +489,33 @@ mod tests {
         assert!(is_valid_sandbox_name("a-b"));
     }
 
+    /// Rule (docs/security.md, names): a sandbox, host, ref or thread name
+    /// becomes a path part, a branch and a command argument, so none may climb
+    /// out of its directory, split into two parts or carry a separator,
+    /// whichever door it comes in by (`parse` or a request body).
+    #[test]
+    fn no_name_can_climb_a_path_or_carry_a_separator() {
+        let forms = [
+            "../x", "..", ".", "./x", "x/..", "a/../b", "a/b", "/a", "a\\b", "..\\x", "a/", "~x", "x~", "a~b~c", "a\0b", "a\nb", "a\tb", ".hidden",
+            "a.b", "%2e%2e", "a:b", "a;b", "$(x)", "`x`",
+        ];
+        for bad in forms {
+            let quoted = serde_json::to_string(bad).unwrap();
+            assert!(SandboxName::parse(bad).is_err(), "sandbox {bad:?}");
+            assert!(serde_json::from_str::<SandboxName>(&quoted).is_err(), "sandbox body {bad:?}");
+            assert!(HostName::parse(bad).is_err(), "host {bad:?}");
+            assert!(ThreadName::parse(bad).is_err(), "thread {bad:?}");
+            assert!(serde_json::from_str::<ThreadName>(&quoted).is_err(), "thread body {bad:?}");
+            // A ref is `host~name`: neither half may be one of these either.
+            for r in [format!("gpu~{bad}"), format!("{bad}~docs")] {
+                assert!(SandboxRef::parse(&r).is_err(), "ref {r:?}");
+            }
+        }
+        // The same alphabet still lets ordinary names through.
+        assert!(SandboxRef::parse("gpu~docs").is_ok() && SandboxRef::parse("docs").is_ok());
+        assert!(ThreadName::parse("fix-login").is_ok());
+    }
+
     #[test]
     fn copies_keep_their_suffix_within_the_limit() {
         let base = sanitize_sandbox_name("myapp");
