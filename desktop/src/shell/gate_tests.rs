@@ -202,7 +202,7 @@ fn a_focused_surface_keeps_keys_from_the_terminal() {
 /// panes: a key, a chord, text from the input method, the window's paste,
 /// Ctrl/Cmd+V (the terminal's own clipboard read), the wheel and a press on
 /// the grid. The program has mouse reporting on, so a press or a wheel that
-/// got through would send bytes. Each case starts from a fresh layer.
+/// got through would send bytes. Each case starts with nothing over the panes.
 #[test]
 fn no_input_path_reaches_a_terminal_under_a_covering_layer() {
     type Layer = (&'static str, fn(&mut rune::Runtime<App>));
@@ -239,16 +239,29 @@ fn no_input_path_reaches_a_terminal_under_a_covering_layer() {
             rt.pointer_up(x, y);
         }),
     ];
+    // One window per layer; the layer is closed after each input, so each
+    // case starts with nothing over the panes.
+    let close_all = |rt: &mut rune::Runtime<App>| {
+        rt.update(|s, _| {
+            s.feats.dialog = None;
+            s.feats.modal = None;
+            s.feats.overlay = None;
+            s.jarvis.shown = None;
+            s.palette = None;
+        });
+        settle(rt, 2);
+    };
     for (layer, open) in layers {
+        let (mut rt, rx, ev) = window_with_events("jarvis/proposal-high");
+        rt.update(|s, _| s.jarvis.shown = None);
+        ev.send(crate::client::TermEvent::Output(b"\x1b[?1000h\x1b[?1006h".to_vec())).unwrap();
+        settle(&mut rt, 1);
         for (what, input) in inputs {
             // The window's paste is wired on macOS and in headless runs only.
             if what == "the window's paste" && !super::window_paste() {
                 continue;
             }
-            let (mut rt, rx, ev) = window_with_events("jarvis/proposal-high");
-            rt.update(|s, _| s.jarvis.shown = None);
-            ev.send(crate::client::TermEvent::Output(b"\x1b[?1000h\x1b[?1006h".to_vec())).unwrap();
-            settle(&mut rt, 1);
+            close_all(&mut rt);
             let grid = rt.presented("grid-1").expect("the grid is drawn").0;
             let at = (grid[0] + grid[2] / 2.0, grid[1] + grid[3] / 2.0);
             // With nothing over the panes, this input does reach the terminal
