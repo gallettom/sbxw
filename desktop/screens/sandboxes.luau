@@ -627,9 +627,18 @@ local function sessions_block(sb, app, data, state, into, base_model)
       if #g[2] > 0 then
         table.insert(block, row{ h = 20, w = "full", column{ w = 36 }, text{ g[1], size = "caption", color = "text-muted" } })
         h = h + 20
-        for _, e in ipairs(g[2]) do
+        -- A sandbox with very many sessions draws a page of them and
+        -- "Show N more" (docs/screens.md, "Long lists": a render holds
+        -- 5000 elements).
+        local key = sb.name .. "/" .. g[1]
+        local shown, more = paged(g[2], { page = 40, pages = ((state.line_pages or {})[key]) or 1, key = "sessions-more-" .. sb.name .. "-" .. (g[1] == "Own worktree" and "own" or "main"), on = "more_lines", arg = key, what = "sessions" })
+        for _, e in ipairs(shown) do
           table.insert(block, session_line(sb, e, data, base_model))
           h = h + 28
+        end
+        if more then
+          table.insert(block, more)
+          h = h + 72
         end
       end
     end
@@ -772,6 +781,7 @@ return {
   end,
 
   actions = {
+    more_lines = function(state, key) state.line_pages = state.line_pages or {}; state.line_pages[key] = (state.line_pages[key] or 1) + 1 end,
     filter = function(state, _, text) state.filter = text or "" end,
     clear_filter = function(state) state.filter = "" end,
     toggle_sessions = function(state, a)

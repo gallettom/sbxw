@@ -314,7 +314,12 @@ local function ask_card(a)
 end
 
 return {
-  render = function(_, data)
+  init = function()
+    return { pages = {} }
+  end,
+
+  render = function(state, data)
+    state.pages = state.pages or {}
     local ui = data.relay_ui or {}
     local reqs = {}
     for _, r in ipairs((data.relay and data.relay.requests) or {}) do reqs[#reqs + 1] = r end
@@ -368,7 +373,9 @@ return {
           text{ gist(r.question), size = "sm", color = "text-muted", truncate = true, grow = 1 },
         }
       end
-      body[#body + 1] = column{ gap = 4, w = "full", section("Waiting for you", #waiting), list(rows) }
+      -- Long lists draw a page and "Show N more" (docs/screens.md, "Long lists").
+      local shown, more = paged(rows, { page = 50, pages = state.pages.waiting or 1, key = "relay-req-more", on = "more", arg = "waiting", what = "requests" })
+      body[#body + 1] = column{ gap = 4, w = "full", section("Waiting for you", #waiting), list(shown), more }
     end
     if current then body[#body + 1] = detail(data, ui, current) end
     local others = {}
@@ -381,7 +388,10 @@ return {
         }
       end
     end
-    if #others > 0 then body[#body + 1] = column{ gap = 4, w = "full", section("With another sandbox", #others), list(others) } end
+    if #others > 0 then
+      local shown, more = paged(others, { page = 50, pages = state.pages.others or 1, key = "relay-out-more", on = "more", arg = "others", what = "requests" })
+      body[#body + 1] = column{ gap = 4, w = "full", section("With another sandbox", #others), list(shown), more }
+    end
     if #asks > 0 then
       local cards = { gap = 8, w = "full", section("Agents asking", #asks) }
       for _, a in ipairs(asks) do cards[#cards + 1] = ask_card(a) end
@@ -403,6 +413,7 @@ return {
   end,
 
   actions = {
+    more = function(state, which) state.pages = state.pages or {}; state.pages[which] = (state.pages[which] or 1) + 1 end,
     open = function(_, id) return intent("relay_open", { id = id }) end,
     later = function(_, id) return intent("relay_later", { id = id }) end,
     deny = function(_, id) return intent("relay_deny", { id = id }) end,
