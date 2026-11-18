@@ -398,11 +398,14 @@ fn rich_runs<S: 'static>(runs: &[Run], look: &Look, weight: f32, size: f32, key:
     let mut spans = vec![];
     let mut links = vec![];
     let palette = look.pills.as_ref().map(|_| crate::emphasis::screen_palette());
+    let (mut pilled, mut coded) = (false, false);
     for r in runs {
+        coded |= r.code;
         // Plain prose with markers: its pills (emphasis.rs); code and links stay as written.
         if let (Some(v), Some(p), false, false, false, false) = (&look.pills, &palette, r.code, r.link.is_some(), r.bold, r.italic) {
             if r.text.contains("[[") {
                 crate::emphasis::rich_into(&r.text, v, p, &mut content, &mut spans);
+                pilled = true;
                 continue;
             }
         }
@@ -435,6 +438,10 @@ fn rich_runs<S: 'static>(runs: &[Run], look: &Look, weight: f32, size: f32, key:
         }
     }
     let mut e = rune::rich(content, spans).font(crate::theme::prose(size, weight)).color(hex(look.color)).w_full().min_w(0.0).key(key.to_string());
+    // A paragraph with pills (and no inline code, whose chips keep their corners): capsules.
+    if pilled && !coded {
+        e = e.span_radius(crate::emphasis::span_radius(size));
+    }
     if !links.is_empty() {
         for (n, (range, url)) in links.into_iter().enumerate() {
             e = e.link(rune::Link::new(range, url.clone()).label(url.clone()).help(url).role("link")).key(format!("{key}-l{n}"));

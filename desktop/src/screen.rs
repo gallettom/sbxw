@@ -989,7 +989,8 @@ impl Build<'_> {
                     Some(v) => {
                         let (mut content, mut spans) = (String::new(), vec![]);
                         crate::emphasis::rich_into(&n.text, &v, &crate::emphasis::screen_palette(), &mut content, &mut spans);
-                        rune::rich(content, spans)
+                        // Capsules: the radius half the span background's height (views2).
+                        rune::rich(content, spans).span_radius(crate::emphasis::span_radius(st.size.unwrap_or(13.0).max(12.0)))
                     }
                     None => text(n.text.clone()),
                 }

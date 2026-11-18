@@ -1,0 +1,22 @@
+[1m●[0m I moved the cache into its own module and ran the suite. [[Done: 48 tests]]
+
+  [2m⎿[0m  src/cache.rs     [32m+112[0m [31m-40[0m
+     src/server.rs    [32m+6[0m   [31m-31[0m
+
+[1m●[0m Two things before I go on:
+
+  1. The old cache file under ~/.cache/app is no longer read. Deleting it is [[Irreversible]]
+     and frees 2.1 GB: shall I? [[Needs you]]
+  2. The integration test against the staging API still times out. [[Failed: timeout 30 s]]
+     It looks unrelated to this change. [[Note: flaky since Monday]]
+
+  Next I will split the handler, as the lead asked. [[Working: refactor]] [[Team: lead]]
+
+  日本語の説明 [[Verified]]   (a wide-character line, and a wiki link [[summary]] that stays plain)
+
+[1m●[0m The patch, as a diff:
+
+[48;2;18;60;34m[32m+ cache.evict(key)   // bounded now [[Done]]                          [0m
+[48;2;70;20;24m[31m- cache.clear()      // the old path [[Failed: 3 tests]]              [0m
+  unchanged line [[In Progress]] then [[verified]] on the next one
+  [[Needs you]] two lines in a row [[Irreversible]]

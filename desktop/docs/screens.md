@@ -149,7 +149,7 @@ Text. Positional: the string (a number is shown as its digits).
 | `mono` | bool | false. The terminal's font. The UI is monospace, as the web UI is; `mono` also keeps a wrapped text monospace (a command, a path) |
 | `wrap` | bool | false: one line. A wrapped text is a sentence or more: it is set in the prose face (Inter, bundled by Rune), as Markdown and the core dialogs' sentences are; `SBXW_DESKTOP_PROSE=mono` keeps everything monospace |
 | `truncate` | bool | false. One line cut with an ellipsis when it does not fit (give it `grow = 1` in a row) |
-| `pills` | `true` or a sandbox name | none. Keyword pills: each `[[Word]]` or `[[Word: detail]]` in the string is drawn as a rounded coloured pill (the brackets dropped, the word in its tone, the detail regular), wrapping with the text, when the daemon's `[emphasis]` switch is on (`true`: the global switch; a sandbox's name: that sandbox's, and the app's own preference for it). Use it for words an agent wrote. See [Keyword pills](#keyword-pills) |
+| `pills` | `true` or a sandbox name | none. Keyword pills: each `[[Word]]` or `[[Word: detail]]` in the string is drawn as a calm capsule (the brackets dropped, regular weight, the word in the body text tinted toward its tone, the detail in the body text, on a faint tint of the tone), wrapping with the text, when the daemon's `[emphasis]` switch is on (`true`: the global switch; a sandbox's name: that sandbox's, and the app's own preference for it). Use it for words an agent wrote. See [Keyword pills](#keyword-pills) |
 
 Sizes under 12 are drawn at 12 (nothing a person reads is smaller); a
 `weight` of `bold` is drawn semibold (600).
@@ -550,6 +550,15 @@ capital (`[[summary]]`, a code map's link, stays text). Tones: green settled,
 red wrong, amber needs you, blue context, purple Jarvis and the team, cyan the
 kind of work, and `danger` a filled red for what cannot be undone.
 
+**Look** (views2, the same in the terminal and here): a capsule (radius half
+its height; square where a soft wrap cuts it), 1.5 pt of air above and below
+in the terminal so pills on consecutive lines never touch; the fill is the
+tone at 10% over whatever is under it (the terminal's ground, or a coloured
+line's own background, a diff's band); the word is the body text moved 45%
+toward the tone, the detail the body text, both regular weight, each moved
+until it reads at 4.5:1 on the fill; `danger` stays a filled red with white
+text. `emphasis::TINT`, `WORD_MIX`, `AIR`, `span_radius`.
+
 ```lua
 text{ r.question, wrap = true, pills = r.from }   -- the sandbox that wrote it
 markdown{ m.text, on = "link", pills = true }
@@ -557,7 +566,7 @@ markdown{ m.text, on = "link", pills = true }
 
 **Text, never anything else.** A screen gets a pill only as part of one
 text element: the core turns the string into characters and styles (colour,
-weight, a rounded background) of that element. No marker can make a
+a rounded background) of that element. No marker can make a
 control, a link, a key or an intent appear, whatever it holds (markup, an
 intent's spelling, a URL): the parts stay characters
 (`shell::layout_tests::pills_in_a_screen_never_make_a_control`). Pills are
