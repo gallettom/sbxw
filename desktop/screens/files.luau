@@ -225,6 +225,13 @@ local function preview(ui, narrow)
           text{ h.text, size = "xs", color = h.on and "text-bright" or "text-muted", truncate = true, grow = 1 } }
       end
       body = row{ gap = 16, w = "full", h = "full", align = "start", scroll{ grow = 1, md }, scroll{ w = 200, h = "full", column(o) } }
+    elseif #outline > 1 then
+      -- Narrow: the outline is a menu above the text.
+      local items = {}
+      for _, h in ipairs(outline) do items[#items + 1] = { id = tostring(h.index), label = string.rep("  ", (h.level or 1) - 1) .. h.text } end
+      body = column{ gap = 8, w = "full", h = "full",
+        menu{ "Outline", id = "files-outline", icon = "rows", items = items, on = "outline_pick" },
+        scroll{ md } }
     else
       body = scroll{ md }
     end
@@ -310,6 +317,7 @@ return {
     fold = function(_, id) return intent("files_fold", { id = id }) end,
     select = function(state, id) state.pane = "reader"; return intent("files_select", { id = id }) end,
     to_tree = function(state) state.pane = "tree" end,
+    outline_pick = function(_, _, id) return intent("files_outline", { index = tonumber(id) }) end,
     show = function(_, id) return intent("files_show_in_folder", { id = id }) end,
     download = function() return intent("files_download", {}) end,
     reveal = function() return intent("files_reveal", {}) end,

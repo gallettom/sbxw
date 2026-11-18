@@ -92,6 +92,9 @@ else:
     else:
         step("files-up", "files-outline")
     if m == "section":
+        if narrow:
+            # Narrow, the outline is a menu above the text.
+            step("files-outline", "files-outline-1")
         step("files-outline-1", "files-whole")
 add(type="mark", name="hold:400")
 add(type="mark", name=m)
