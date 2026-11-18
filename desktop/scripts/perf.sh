@@ -14,6 +14,8 @@ export SBXW_PROFILE=release
 source "$(dirname "$0")/lib.sh"
 out="$shots_root/perf"; mkdir -p "$out"
 build
+# PERF_BIN_DIR: another build's sbxw and standin (an earlier commit's, to compare).
+bin=${PERF_BIN_DIR:-$bin}
 python3 "$here/scripts/perf-fixture.py" >"$out/big.json"
 row="web-app:$(python3 -c 'import hashlib; print(hashlib.sha1(b"web-app-0").hexdigest())')"
 python3 - "$row" >"$out/script.json" <<'PY'
@@ -42,7 +44,11 @@ add(type="mark", name="perf:type 6 characters in the filter")
 add(type="tap", key="commits-filter"); add(type="type", text="change", every=0.05); t += 0.5
 add(type="mark", name="hold:300")
 step("switch to the Files overlay", "rail-files", "files-tab-files")
-step("browse the workspace", "files-tab-files", "files-row-/Users/me/web/big")
+step("the Workspace tab", "files-tab-files", "files-up")
+step("browse the workspace (the folder above)", "files-up", "files-row-/Users/me/web/big")
+step("open the 3,000-entry folder", "files-row-/Users/me/web/big")
+add(type="mark", name="hold:800")
+add(type="mark", name="browsed")
 step("open the 3,000-entry folder", "files-row-/Users/me/web/big")
 add(type="mark", name="hold:800")
 add(type="mark", name="hold:800")
@@ -56,11 +62,12 @@ add(type="mark", name="end")
 print(json.dumps({"events": ev}))
 PY
 start_daemon "$out/standin" --fixture "$out/big.json"
+bin=${PERF_BIN_DIR:-$bin}
 # Rune's own phases (view, commit, layout, text, paint, apply) per input,
 # through a local collector: every interaction is sent (threshold 0).
 rm -f "$out/rune.jsonl"
 python3 "$here/scripts/perf-collector.py" "$out/rune.jsonl" & pids+=($!)
 sleep 0.3
-RUNE_PERF=1 RUNE_PERF_SLOW_MS=0.01 SBXW_DESKTOP_PERF=1 SHOT_SIZE=1284x816 run_app "$out/perf.log" --script "$out/script.json" --snap "$out/perf.png" --at mark:end+0.2 || true
+RUNE_PERF=1 RUNE_PERF_SLOW_MS=0.01 SBXW_DESKTOP_PERF=1 SHOT_SIZE=1284x816 run_app "$out/perf.log" --script "$out/script.json" --snap "$out/perf.png" --tree "$out/tree.json" --at "${PERF_AT:-mark:end+0.2}" || true
 cleanup; pids=()
-python3 "$here/scripts/perf-summary.py" "$out/perf.log" "$out/rune.jsonl"
+python3 "$here/scripts/perf-summary.py" "$out/perf.log" "$out/rune.jsonl"   # exits 1 over the budget

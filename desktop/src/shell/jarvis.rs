@@ -822,6 +822,7 @@ impl App {
 
     pub(super) fn toggle_panel(&mut self, open: Option<bool>) {
         self.jarvis.open = open.unwrap_or(!self.jarvis.open);
+        self.render_shown();
         save_prefs(&self.jarvis);
         if self.jarvis.open && self.jarvis.status == "unknown" {
             self.jarvis_job(|d| JEvent::Status(d.jarvis_status().map_err(|e| client::reason(&e))));
@@ -838,6 +839,7 @@ impl App {
             if !self.wiring.key_held {
                 self.wiring.key_held = true;
                 self.jarvis.open = true;
+                self.render_shown();
                 self.talk_start();
             }
             return true;

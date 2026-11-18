@@ -761,13 +761,49 @@ impl App {
         let d = self.screen_data();
         let built = crate::perf::ms(t);
         self.feats.pane_extras = self.feats_app(&d).3;
+        let extras = crate::perf::ms(t) - built;
         let mut rendered = 0;
+        let shown = self.shown_screens();
+        let d = std::rc::Rc::new(d);
         for s in &mut self.screens {
             let before = s.renders;
-            s.set_data(d.clone());
+            let on = shown.contains(&s.name);
+            s.set_data_shown(d.clone(), on);
             rendered += (s.renders != before) as usize;
         }
-        crate::perf::done(t, || format!("push_data (screen_data {built:.2} ms, {} bytes; {rendered} of {} screens rendered)", d.to_string().len(), self.screens.len()));
+        crate::perf::done(t, || format!("push_data (screen_data {built:.2} ms, extras {extras:.2} ms, {} bytes; {rendered} of {} screens rendered)", d.to_string().len(), self.screens.len()));
+    }
+
+    /// The screens drawn now, as `view` draws them: the top bar, the list,
+    /// Jarvis's panel when open, the docked panels shown, the overlay, the
+    /// modal (or the one screen of a solo run). Only these render on new data.
+    pub(crate) fn shown_screens(&self) -> Vec<String> {
+        if let Some(n) = &self.solo {
+            return vec![n.clone()];
+        }
+        let mut v = vec!["topbar".to_string(), "sandboxes".to_string()];
+        if self.jarvis.open {
+            v.push("jarvis".into());
+        }
+        if self.feats.split && self.feats.panels.len() > 1 {
+            v.extend(self.feats.panels.iter().cloned());
+        } else {
+            v.extend(self.feats.panel.iter().cloned());
+        }
+        v.extend(self.feats.overlay.iter().map(|(n, _)| n.clone()));
+        v.extend(self.feats.modal.iter().map(|(n, _)| n.clone()));
+        v
+    }
+
+    /// Renders the screens just shown whose data changed while they were
+    /// not drawn (a panel opened, Jarvis's panel toggled). True when one did.
+    pub(crate) fn render_shown(&mut self) -> bool {
+        let shown = self.shown_screens();
+        let mut any = false;
+        for s in self.screens.iter_mut().filter(|s| shown.contains(&s.name)) {
+            any |= s.render_if_stale();
+        }
+        any
     }
 
     fn notify(&mut self, text: impl Into<String>, error: bool) {
@@ -1071,6 +1107,8 @@ impl App {
             self.osc_copy(i, &name, text, now, tx);
             changed = true;
         }
+        // A screen shown since its data changed (a toggle that ran no intent).
+        changed |= self.render_shown();
         if changed {
             self.push_data();
         }
@@ -3075,6 +3113,33 @@ mod tests {
     fn app() -> App {
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/two-panes.json");
         App::new(Args { fixture: Some(fixture.into()), ..Args::default() })
+    }
+
+    #[test]
+    fn only_the_screens_drawn_render_and_a_change_they_do_not_read_renders_none() {
+        let mut a = app();
+        let count = |a: &App| a.screens.iter().map(|s| (s.name.clone(), s.renders)).collect::<std::collections::BTreeMap<_, _>>();
+        // A sandbox's data changes: the screens drawn now (top bar, list)
+        // may render; the 20-odd closed panels, overlays and dialogs do not.
+        let before = count(&a);
+        a.sandboxes[0].status = if a.sandboxes[0].status == "running" { "stopped".into() } else { "running".into() };
+        a.push_data();
+        let after = count(&a);
+        let rendered: Vec<&String> = after.iter().filter(|(n, r)| before[*n] != **r).map(|(n, _)| n).collect();
+        let shown = a.shown_screens();
+        assert!(!rendered.is_empty(), "the list shows the change");
+        assert!(rendered.iter().all(|n| shown.contains(n)), "only drawn screens render: {rendered:?} (drawn: {shown:?})");
+        // A push that changes nothing the drawn screens read renders nothing.
+        let before = count(&a);
+        a.feats.data.insert("commits_ui".into(), serde_json::json!({ "rows": [1, 2, 3] }));
+        a.push_data();
+        assert_eq!(count(&a), before, "the Commits view's data, with Commits closed, renders no screen");
+        // Opened, a screen renders from the data it was not drawn with.
+        a.run_intent("test", Intent::OpenPanel { screen: "commits".into() });
+        a.push_data();
+        let c = a.screens.iter().find(|s| s.name == "commits").unwrap();
+        assert!(c.renders > before["commits"], "shown: rendered with the current data");
+        assert_eq!(c.data()["commits_ui"]["rows"], serde_json::json!([1, 2, 3]));
     }
 
     /// One page with these panes (None: empty) in the default arrangement.

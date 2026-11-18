@@ -53,6 +53,7 @@ big = {"path": "/Users/me/web/big", "parent": "/Users/me/web",
 for k in [k for k in fs["files_dir"] if k not in ("path", "parent", "entries")]:
     big[k] = fs["files_dir"][k]
 d["files_tree"]["/Users/me/web/big"] = big
+d["files_dir"]["entries"].append({"name": "big", "kind": "dir", "link": False, "size": 4096, "modified": 1794199100})
 d["files_tree"]["/Users/me/web"]["entries"].append({"name": "big", "kind": "dir", "link": False, "size": 4096, "modified": 1794199100})
 
 # 113 pending network requests.

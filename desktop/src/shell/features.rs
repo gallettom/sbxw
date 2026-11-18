@@ -614,7 +614,10 @@ impl App {
 
     pub(super) fn open_modal(&mut self, screen: &str, arg: J) {
         match feat::screen(screen) {
-            Some((_, s)) if matches!(s.slot, Slot::Modal { .. }) => self.feats.modal = Some((screen.to_string(), arg)),
+            Some((_, s)) if matches!(s.slot, Slot::Modal { .. }) => {
+                self.feats.modal = Some((screen.to_string(), arg));
+                self.render_shown();
+            }
             _ => self.notify(format!("open_modal: no dialog screen named {screen}"), true),
         }
     }
@@ -639,8 +642,10 @@ impl App {
                 }
                 self.feats.panel = Some(screen.to_string());
             }
-            _ => self.notify(format!("open_panel: no panel screen named {screen}"), true),
+            _ => return self.notify(format!("open_panel: no panel screen named {screen}"), true),
         }
+        // Shown now: drawn from data it may not have rendered yet.
+        self.render_shown();
     }
 
     fn close_panel(&mut self, screen: &str) {

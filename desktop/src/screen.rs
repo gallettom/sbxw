@@ -199,7 +199,7 @@ pub struct ScreenState {
     pub source: Source,
     override_path: PathBuf,
     /// What the core hands the screen, as JSON (see `docs/screens.md`, "Data").
-    data: J,
+    data: Rc<J>,
     pub last_good: Option<Node>,
     pub error: Option<String>,
     pub loads: u32,
@@ -217,6 +217,10 @@ pub struct ScreenState {
     pub checked: u32,
     /// Renders run (counted for SBXW_DESKTOP_PERF).
     pub renders: u64,
+    /// The data changed since the last render (the screen was not drawn).
+    stale_view: bool,
+    /// What of the data the last render read (`None`: not known, so any change counts).
+    reads: Option<crate::luau::Reads>,
 }
 
 impl ScreenState {
@@ -228,7 +232,7 @@ impl ScreenState {
             host: LuauHost::new(Limits::default()).expect("Luau VM"),
             source: Source::Builtin,
             override_path,
-            data,
+            data: Rc::new(data),
             last_good: None,
             error: None,
             loads: 0,
@@ -239,6 +243,8 @@ impl ScreenState {
             stale: false,
             checked: 0,
             renders: 0,
+            stale_view: false,
+            reads: None,
         };
         v.seen = std::fs::metadata(&v.override_path).and_then(|m| m.modified()).ok();
         let (src, text) = read_source(name, &v.override_path);
@@ -329,10 +335,41 @@ impl ScreenState {
     }
 
     pub fn set_data(&mut self, data: J) {
-        if data != self.data {
+        self.set_data_shown(Rc::new(data), true);
+    }
+
+    /// The core's new data. A screen on screen renders now; one that is not
+    /// drawn (a closed panel, overlay or modal) keeps the data and renders
+    /// when it is next shown ([`Self::render_if_stale`]): every input used to
+    /// re-render all 25 screens, each converting the whole data to Lua.
+    /// The data is shared by every screen (one copy per push).
+    pub fn set_data_shown(&mut self, data: Rc<J>, shown: bool) {
+        if !Rc::ptr_eq(&data, &self.data) {
+            // Only what the last render read decides: a change elsewhere in
+            // the data (another feature's view, a sandbox's CPU) leaves
+            // this screen's view as it is. Not known (no render yet, or it
+            // failed): any change counts.
+            let changed = match &self.reads {
+                Some(r) => r.changed(&self.data, &data),
+                None => *data != *self.data,
+            };
+            if changed {
+                self.stale_view = true;
+            }
             self.data = data;
-            self.redraw();
         }
+        if shown {
+            self.render_if_stale();
+        }
+    }
+
+    /// Renders if the data changed since the last render. True when it did.
+    pub fn render_if_stale(&mut self) -> bool {
+        if !self.stale_view {
+            return false;
+        }
+        self.redraw();
+        true
     }
 
     /// Hover zones: what became due. Whether the screen drew again (the
@@ -346,10 +383,11 @@ impl ScreenState {
     }
 
     fn redraw(&mut self) {
+        self.stale_view = false;
         let with_zone;
         let data = match &self.ui.zones.active {
             Some(z) => {
-                let mut d = self.data.clone();
+                let mut d = (*self.data).clone();
                 d["app"]["hover_zone"] = J::String(z.clone());
                 with_zone = d;
                 &with_zone
@@ -358,15 +396,19 @@ impl ScreenState {
         };
         self.renders += 1;
         let t = crate::perf::start();
-        let out = self.host.render(data);
+        let out = self.host.render_tracked(data);
         crate::perf::done(t, || format!("render {}", self.name));
         match out {
-            Ok(n) => {
+            Ok((n, reads)) => {
+                self.reads = Some(reads);
                 sync_ui(&mut self.ui, &n);
                 self.last_good = Some(n);
                 self.error = None;
             }
-            Err(e) => self.error = Some(format!("render: {e}")),
+            Err(e) => {
+                self.reads = None;
+                self.error = Some(format!("render: {e}"));
+            }
         }
     }
 
@@ -374,18 +416,32 @@ impl ScreenState {
     /// error (in the action, or an intent not in the closed list) the error
     /// is shown and nothing is returned.
     pub fn act(&mut self, action: &str, arg: &J, value: &J) -> Option<Vec<Intent>> {
+        let r = self.act_deferred(action, arg, value);
+        self.render_if_stale();
+        r
+    }
+
+    /// [`Self::act`], leaving the render to the caller when the action asked
+    /// for intents: their handling hands the screen new data and renders it
+    /// once (`fire`), rather than once here and again with the data.
+    pub fn act_deferred(&mut self, action: &str, arg: &J, value: &J) -> Option<Vec<Intent>> {
         let out = self.host.act(action, arg, value).and_then(|v| intent::parse(&v).map_err(|e| format!("intent refused, nothing done: {e}")));
-        let r = match out {
-            Ok(i) => Some(i),
+        match out {
+            Ok(i) => {
+                // The action may have changed the screen's own state.
+                self.stale_view = true;
+                if i.is_empty() {
+                    self.redraw();
+                }
+                Some(i)
+            }
             Err(e) => {
                 log::warn!("screen {}: {e}", self.name);
                 self.redraw();
                 self.error = Some(e);
-                return None;
+                None
             }
-        };
-        self.redraw();
-        r
+        }
     }
 
     /// Closes an open menu (Escape). True when one was open.
@@ -856,8 +912,8 @@ pub(crate) fn key_of(n: &Node) -> Option<String> {
 
 fn fire<S: Host>(s: &mut S, screen: &str, action: &str, arg: &J, value: &J) {
     let t = crate::perf::start();
-    let asked = s.screen(screen).act(action, arg, value);
-    crate::perf::done(t, || format!("act {screen}.{action} (the screen's action and its own render)"));
+    let asked = s.screen(screen).act_deferred(action, arg, value);
+    crate::perf::done(t, || format!("act {screen}.{action} (the screen's action)"));
     if let Some(intents) = asked {
         if !intents.is_empty() {
             let t = crate::perf::start();
@@ -866,6 +922,8 @@ fn fire<S: Host>(s: &mut S, screen: &str, action: &str, arg: &J, value: &J) {
             crate::perf::done(t, || format!("intents {screen} {names:?} (handling, then push_data)"));
         }
     }
+    // Drawn once, with the intents' data when there were any.
+    s.screen(screen).render_if_stale();
 }
 
 fn apply(mut e: El, st: &Style, help: &Option<String>) -> El {

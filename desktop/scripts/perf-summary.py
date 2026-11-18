@@ -39,3 +39,29 @@ if len(sys.argv) > 2:
                         u = {x["key"]: float(val(x["value"])) for x in up["attributes"]} if up else {}
                         ph = " / ".join(f"{u.get('rune.' + k + '_ms', 0):.1f}" for k in ["handler", "view", "commit", "layout", "text", "paint", "apply"])
                         print(f"  {float(a.get('rune.input_to_present_ms', 0)):7.1f} ms  {a.get('rune.control', '?')} {a.get('rune.action', '')}: {ph}; {a.get('rune.nodes', '?')} nodes")
+
+# The budget (PERF.md): a regression check, not a benchmark. Generous for a
+# headless run on a loaded machine (10x a 60 Hz frame); `PERF_BUDGET_MS`
+# overrides it. Also structural: a push of data renders only the screens
+# drawn (at most 8 of them), never all of them.
+import os, json as _json
+budget = float(os.environ.get("PERF_BUDGET_MS", "160"))
+over, wide = [], []
+for line in open(sys.argv[1], errors="replace"):
+    m = re.search(r"; (\d+) of (\d+) screens rendered\)", line)
+    if m and int(m.group(1)) > 8:
+        wide.append(line.strip())
+if len(sys.argv) > 2 and os.path.exists(sys.argv[2]):
+    for line in open(sys.argv[2]):
+        for rs in _json.loads(line).get("resourceSpans", []):
+            for ss in rs["scopeSpans"]:
+                for sp in ss["spans"]:
+                    if sp["name"] != "ui.interaction": continue
+                    a = {x["key"]: next(iter(x["value"].values())) for x in sp["attributes"]}
+                    ms = float(a.get("rune.input_to_present_ms", 0))
+                    if ms > budget:
+                        over.append(f"{ms:.1f} ms {a.get('rune.control')}")
+print(f"\nbudget: every input under {budget:.0f} ms (PERF_BUDGET_MS), at most 8 screens a push")
+for o in over: print("  OVER BUDGET:", o)
+for w in wide[:5]: print("  TOO MANY RENDERS:", w)
+sys.exit(1 if over or wide else 0)
