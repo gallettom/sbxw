@@ -221,6 +221,23 @@ pub struct ScreenState {
     stale_view: bool,
     /// What of the data the last render read (`None`: not known, so any change counts).
     reads: Option<crate::luau::Reads>,
+    /// [`render_epoch`] at the last render.
+    epoch: u64,
+}
+
+thread_local! {
+    static EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Bumped when something every render reads besides `data` changes (the
+/// theme's palette, which screens read as `theme`): the skip on unchanged
+/// reads (`set_data_shown`) then renders every shown screen again.
+pub fn invalidate_renders() {
+    EPOCH.with(|e| e.set(e.get() + 1));
+}
+
+fn render_epoch() -> u64 {
+    EPOCH.with(|e| e.get())
 }
 
 impl ScreenState {
@@ -245,6 +262,7 @@ impl ScreenState {
             renders: 0,
             stale_view: false,
             reads: None,
+            epoch: render_epoch(),
         };
         v.seen = std::fs::metadata(&v.override_path).and_then(|m| m.modified()).ok();
         let (src, text) = read_source(name, &v.override_path);
@@ -344,6 +362,13 @@ impl ScreenState {
     /// re-render all 25 screens, each converting the whole data to Lua.
     /// The data is shared by every screen (one copy per push).
     pub fn set_data_shown(&mut self, data: Rc<J>, shown: bool) {
+        // Something outside the data that renders read changed (the theme):
+        // every screen renders again, when shown.
+        let epoch = render_epoch();
+        if self.epoch != epoch {
+            self.epoch = epoch;
+            self.stale_view = true;
+        }
         if !Rc::ptr_eq(&data, &self.data) {
             // Only what the last render read decides: a change elsewhere in
             // the data (another feature's view, a sandbox's CPU) leaves

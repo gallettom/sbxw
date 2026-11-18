@@ -1067,6 +1067,8 @@ impl App {
             }
         }
         changed |= self.surfaces_poll(tx);
+        // A screen shown since its data changed (a toggle that ran no intent).
+        changed |= self.render_shown();
         let settle = headless().then_some(Duration::from_millis(1500));
         let mut copies = vec![];
         for (i, p) in self.panes.iter_mut().enumerate() {
@@ -1107,8 +1109,6 @@ impl App {
             self.osc_copy(i, &name, text, now, tx);
             changed = true;
         }
-        // A screen shown since its data changed (a toggle that ran no intent).
-        changed |= self.render_shown();
         if changed {
             self.push_data();
         }
