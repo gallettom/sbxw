@@ -2176,7 +2176,22 @@ fn panes_view(s: &App) -> El {
         .min_h(0.0)
         .on_layout(|s: &mut App, r: [f32; 4]| s.rects.area = Some(r))
         .child(tile_view(s, page, String::new()));
-    col().key("panes").grow(1.0).h_full().min_w(0.0).min_h(0.0).gap(layout::GUTTER / 2.0).child(pager::view(s)).child(area)
+    // No gap under the pager: the current page's tab joins the pane area (pager.rs).
+    col().key("panes").grow(1.0).h_full().min_w(0.0).min_h(0.0).gap(0.0).child(pager::view(s)).child(area)
+}
+
+/// The pane the current page's tab is joined to: the one at the pane
+/// area's top-left corner, while that tab starts at the area's left edge
+/// (not after the leads view's mark or the hidden tabs' menu). Its top-left
+/// corner is drawn square so tab and pane make one shape.
+fn joined_pane(s: &App) -> Option<Uid> {
+    let area = s.rects.area?;
+    let tab = s.rects.tabs.get(&s.pages.current)?;
+    if (tab[0] - area[0]).abs() > 1.0 {
+        return None;
+    }
+    let on_page = s.pages.cur().tile.order();
+    s.rects.panes.iter().find(|(u, r)| on_page.contains(u) && (r[0] - area[0]).abs() < 1.0 && (r[1] - area[1]).abs() < 1.0).map(|(u, _)| *u)
 }
 
 /// A split's element key: `panes` for the page's first split, then the
@@ -2888,6 +2903,7 @@ fn pane_view(s: &App, i: usize) -> El {
     // panes of one piece of work read together.
     let accent = group.map(theme::hex).unwrap_or_else(|| c("border"));
     let (bw, border) = if focused { (1.5, c("blue")) } else { (1.0, c("elevated")) };
+    let md = theme::radius("md").unwrap();
     col()
         .key(format!("pane-{}", i + 1))
         .w_full()
@@ -2896,8 +2912,8 @@ fn pane_view(s: &App, i: usize) -> El {
         .min_h(0.0)
         .fill(c("bg"))
         .border(bw, border)
-        .radius(theme::radius("md").unwrap())
-        .clip_rounded(theme::radius("md").unwrap())
+        .corners(if joined_pane(s) == Some(uid) && uid != 0 { [0.0, md, md, md] } else { [md; 4] })
+        .clip_rounded(md)
         .on_layout(move |s: &mut App, r: [f32; 4]| {
             s.rects.panes.insert(uid, r);
         })

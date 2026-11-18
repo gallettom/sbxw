@@ -77,6 +77,9 @@ icons! {
     // heavier than the set so it holds at 14 pt; the top bar draws it on the
     // icon's dark tile with the blue cursor beside it (topbar.luau).
     LOGO_PROMPT "logo-prompt" r#"<polyline points="4.5,3.5 9,8 4.5,12.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>"#;
+    // The top bar's mark (topbar.luau): the same prompt flush left in its
+    // box and heavier, drawn at 28 pt with the blue cursor beside it.
+    LOGO_MARK "logo-mark" r#"<polyline points="1.6,3 7.4,8 1.6,13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>"#;
     // A keyword pill: a rounded label with a dot (keyword pills, emphasis.rs).
     TAG "tag" concat!(st!("rect", r#"x="1.75" y="4.75" width="12.5" height="6.5" rx="3.25""#), st!("line", r#"x1="5.5" y1="8" x2="10.5" y2="8""#));
 }

@@ -304,7 +304,18 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
     let line = theme::hex(t.group.unwrap_or_else(|| theme::color_value("focus").unwrap()));
     e = e.fill(theme::hex(ground)).hover(theme::hex(theme::over(theme::color_value("text").unwrap(), 0.08, ground)));
     if on {
-        e = e.border(1.0, line).child(el().key(format!("page-{}-line", k + 1)).pin(Some(0.0), None, Some(0.0), Some(0.0)).h(2.0).fill(line));
+        // The current tab is joined to the page under it, as a browser tab
+        // to its page: full height down to the pane area (no gap), square at
+        // its foot, its sides and top in the group's colour, which carries on
+        // as the pane's 2 pt top line; the pane under it squares its corner
+        // (shell.rs, `joined_pane`). In Tabs view it takes the pane bar's
+        // own tint, so tab and header read as one shape.
+        let r = theme::radius("sm").unwrap();
+        let fill = if s.pages.tabs() { theme::bar_ground(t.group, true) } else { ground };
+        e = e.h(H).corners([r, r, 0.0, 0.0]).fill(theme::hex(fill)).hover(theme::hex(theme::over(theme::color_value("text").unwrap(), 0.06, fill))).border_sides([1.0, 1.0, 0.0, 1.0], line);
+    } else {
+        // The others stay detached and quieter, off the pane area.
+        e = e.mb(4.0);
     }
     if target {
         e = e.border(1.5, c("blue"));
@@ -381,7 +392,8 @@ fn segment(key: &str, label: &str, icon: &str, on: bool, help: &str, keys: Vec<S
 pub fn view(s: &App) -> El {
     let n = s.pages.list.len();
     let (a, b, compact) = s.pager_fit_as();
-    let mut tabs = row().gap(GAP).items_center().min_w(0.0).clip_rounded(0.0);
+    // Tabs sit on the pager's foot: the current one reaches the pane area.
+    let mut tabs = row().gap(GAP).h(H).items_end().min_w(0.0).clip_rounded(0.0);
     for k in a..b {
         tabs = tabs.child(tab(s, k, compact));
     }

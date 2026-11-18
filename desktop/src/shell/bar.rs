@@ -364,8 +364,8 @@ impl TopExtra {
 /// inline; the rest go into its menu. Exact: every part is measured the way
 /// the element draws it (tested against the laid out bar).
 pub fn top_fit(width: f32, jarvis: Option<&str>, state_word: &str, extras: &[TopExtra]) -> (bool, usize) {
-    // The sbxw mark (topbar.luau, `app-mark`): 22 pt square.
-    let left = |compact: bool| if compact { 0.0 } else { 22.0 };
+    // The sbxw mark (topbar.luau, `app-mark`): the prompt (15) and the cursor (11), 2 apart.
+    let left = |compact: bool| if compact { 0.0 } else { 28.0 };
     // left, spacer, centre, spacer, right: four gaps; inside the right group
     // Jarvis and the state, and the gap before Jarvis when a tool precedes it.
     let fixed = |compact: bool| left(compact) + TOP_GAP * 4.0 + jarvis.map_or(0.0, |j| button_w(j, true) + TOP_RIGHT_GAP) + state_w(state_word);
