@@ -355,15 +355,6 @@ impl ScreenState {
 
     fn redraw(&mut self) {
         let with_zone;
-        let data = match &self.ui.zones.active {
-            Some(z) => {
-                let mut d = self.data.clone();
-                d["app"]["hover_zone"] = J::String(z.clone());
-                with_zone = d;
-                &with_zone
-            }
-            None => &self.data,
-        };
         // The theme changed since the chunk loaded: load it again first.
         if self.theme_gen != theme::generation() {
             self.theme_gen = theme::generation();
@@ -374,6 +365,15 @@ impl ScreenState {
                 }
             }
         }
+        let data = match &self.ui.zones.active {
+            Some(z) => {
+                let mut d = self.data.clone();
+                d["app"]["hover_zone"] = J::String(z.clone());
+                with_zone = d;
+                &with_zone
+            }
+            None => &self.data,
+        };
         match self.host.render(data) {
             Ok(n) => {
                 sync_ui(&mut self.ui, &n);

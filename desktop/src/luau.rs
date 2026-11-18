@@ -521,7 +521,6 @@ impl LuauHost {
 
     /// Render with the current module and state; `data` is what the core hands in.
     pub fn render(&self, data: &J) -> Result<Node, String> {
-        self.sync_theme();
         let (module, state) = self.parts()?;
         let tree: Value = self.guarded(|lua| {
             let render: Function = module.get("render")?;
@@ -534,7 +533,8 @@ impl LuauHost {
 
     /// Refills the read-only `theme` table's colours and mode from the active
     /// palette when it changed since the table was filled (the table stays
-    /// the same object, read-only to screens).
+    /// the same object, read-only to screens). The screen then loads its
+    /// chunk again (screen.rs, `redraw`): Luau resolved its reads at load.
     pub fn sync_theme(&self) {
         let now = crate::theme::generation();
         if self.theme_gen.replace(now) == now {
