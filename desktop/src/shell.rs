@@ -597,6 +597,8 @@ impl App {
         let mut data = crate::fixture::screen_data(&J::Object(daemon), &self.view_model());
         let (modal, panels, extras, _) = self.feats_app(&data);
         data["app"]["modal"] = modal;
+        // The window's size in points (a dialog fits its parts to it).
+        data["app"]["window"] = serde_json::json!({ "w": self.window.0, "h": self.window.1 });
         data["app"]["panels"] = panels;
         data["app"]["extras"] = extras;
         data["app"]["topbar"] = self.top_layout(&mut data);

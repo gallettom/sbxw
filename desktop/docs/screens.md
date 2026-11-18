@@ -79,6 +79,7 @@ unchanged.
 | `kept` | What features asked the app to keep across runs (`Action::Remember`), by feature then key |
 | `surface.release`, `surface.focused` | The key that gives the keyboard back from a picture surface (`⌘Esc`, `Ctrl+Esc`); the id of the surface that has the keyboard, or nil |
 | `platform` | `macos`, `linux`, `windows` |
+| `window` | `w`, `h`: the window's size in points (the plan dialog moves its header into the scrolling part on a short window) |
 | `groups` | Each sandbox's group colour (`#rrggbb`), by name; absent for a sandbox in no group. The web UI's hue first (chats share one, a workspace folder's from its path), then made distinct: a group within 40° of a hue already taken (chats first, then workspaces by path) moves to the nearest free hue, so two groups never share a background; it can then differ from the web UI's (`theme::group_colors`) |
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
 | `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
@@ -169,6 +170,7 @@ Children side by side. Children are centred vertically.
 | `hover` | colour | Background under the pointer |
 | `on`, `arg` | action name, any value | The whole row is pressable (a button for screen readers, named by its `help`); `hover` defaults to `surface`. Enter presses it when it has the keyboard |
 | `on_space` | action name | With `on`: called with the same `arg` when Space is pressed while it has the keyboard (the sandbox list: start or stop) |
+| `wrap` | bool | `row`: its children go onto as many lines as they need (a line of chips) |
 | `on_left`, `on_right` | action name | With `on`: called with the same `arg` when Left or Right is pressed while it has the keyboard (a tree: fold, open in place; the explorer's folders) |
 | `hover_group` | bool | Its `reveal` children show while it is hovered or the keyboard focus is in it |
 | `hover_zone` | string | `row`/`column`: one hover zone with every element of this screen that names the same zone, even apart in the tree (a row and the block under it). The core tells the screen where the pointer rests in `data.app.hover_zone` ([Hover zones](#hover-zones)) |
@@ -227,6 +229,7 @@ height**: give the columns above it `h = "full"`.
 |---|---|---|
 | `gap` | number or space | Between children |
 | `stick_bottom` | bool | Opens at the end and follows it while scrolled to the end (logs, chats) |
+| `fade` | number | Its top and bottom edges fade over that many points where content is hidden under them, so a cut list shows it scrolls (the plan dialog's threads) |
 
 ```lua
 column{ h = "full", text"Log", scroll{ gap = 2, stick_bottom = true, text"line 1", text"line 2" } }

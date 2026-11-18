@@ -842,3 +842,41 @@ fn the_configure_overlays_are_two_columns_when_wide() {
         }
     }
 }
+
+/// The plan dialog with long scopes and goals (the user's overflow report):
+/// every scope chip inside its card (they wrap), every card's goal folded
+/// the same way (Show more on each), the cards the part that scrolls (its
+/// edges fade) between the header and the footer, and the footer at the
+/// dialog's bottom edge (no empty band under it). At 720 and 1284 wide.
+#[test]
+fn the_plan_dialog_keeps_long_threads_inside_and_its_footer_at_the_bottom() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/threads");
+    for fx in ["plan-long", "plan-three"] {
+        for (w, h) in [(720.0, 480.0), (1284.0, 816.0)] {
+            let path = root.join(format!("{fx}.json"));
+            let a = App::new(Args { fixture: Some(path.to_string_lossy().to_string().into()), ..Args::default() });
+            let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+            for _ in 0..60 {
+                rt.frame(0.016);
+            }
+            let m = rt.presented("modal").unwrap_or_else(|| panic!("{fx} at {w}: no dialog")).0;
+            let n = rt.state.feats.modal.as_ref().map(|x| x.0.clone());
+            assert_eq!(n.as_deref(), Some("plans"));
+            let cards = rt.presented("plan-cards").expect("the cards scroll").0;
+            for i in 1..=2 {
+                let card = rt.presented(&format!("pt-{i}")).map(|c| c.0);
+                assert!(rt.state.screens.iter().find(|s| s.name == "plans").and_then(|s| s.last_good.as_ref()).is_some_and(|t| format!("{t:?}").contains(&format!("pt-{i}-more"))), "{fx} at {w}: card {i} folds its goal (Show more)");
+                let Some(card) = card else { continue };
+                for k in 1..=40 {
+                    let Some((r, _)) = rt.presented(&format!("pt-{i}-scope-{k}")) else { break };
+                    assert!(r[0] >= card[0] - 0.5 && r[0] + r[2] <= card[0] + card[2] + 0.5, "{fx} at {w}: chip {k} of card {i} at {r:?} outside its card {card:?}");
+                }
+            }
+            let foot = rt.presented("plan-approve").expect("the footer").0;
+            assert!(foot[1] >= cards[1] + cards[3] - 0.5, "{fx} at {w}: the footer under the scrolling cards");
+            let band = (m[1] + m[3]) - (foot[1] + foot[3]);
+            assert!(band <= 40.0, "{fx} at {w}: {band} pt under the footer (the dialog {m:?}, the footer {foot:?})");
+            assert!(foot[1] + foot[3] <= m[1] + m[3] + 0.5, "{fx} at {w}: the footer inside the dialog");
+        }
+    }
+}

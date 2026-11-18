@@ -170,6 +170,8 @@ pub struct Node {
     /// `split` and `divider`: true for side by side (a vertical divider).
     pub vertical: bool,
     pub stick_bottom: bool,
+    /// `scroll`: its edges fade over this many points where content is hidden under them.
+    pub fade: Option<f32>,
     /// `textarea`: visible lines (default 4).
     pub rows: u32,
     /// `image`: `fit` (letterboxed, default) or `fill` (cropped).
@@ -260,6 +262,7 @@ impl Node {
             secure: false,
             vertical: false,
             stick_bottom: false,
+            fade: None,
             rows: 4,
             fill_image: false,
             hover_group: false,
@@ -305,7 +308,7 @@ pub enum Positional {
 /// Props every element takes.
 pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin"];
 const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate", "pills"];
-const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "on_left", "on_right", "clip", "folds", "shortcuts", "paint"];
+const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "on_left", "on_right", "clip", "folds", "shortcuts", "paint", "wrap"];
 
 /// The frozen element set: name, kind, positional entries, props beyond [`COMMON`].
 pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
@@ -313,7 +316,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("row", Kind::Row, Positional::Children, BOX_PROPS),
     ("column", Kind::Column, Positional::Children, BOX_PROPS),
     ("list", Kind::List, Positional::Children, &["gap"]),
-    ("scroll", Kind::Scroll, Positional::Children, &["gap", "stick_bottom"]),
+    ("scroll", Kind::Scroll, Positional::Children, &["gap", "stick_bottom", "fade"]),
     ("button", Kind::Button, Positional::Text, &["on", "arg", "variant", "icon", "disabled", "color", "dense", "keys", "tab_stop", "hover", "tone", "compact"]),
     ("input", Kind::Input, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "secure", "disabled"]),
     ("icon", Kind::Icon, Positional::Text, &["color", "size"]),
@@ -926,6 +929,7 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "secure" => n.secure = bool_of(v)?,
         "vertical" => n.vertical = bool_of(v)?,
         "stick_bottom" => n.stick_bottom = bool_of(v)?,
+        "fade" => n.fade = Some(num_of(v)?.clamp(0.0, 64.0)),
         "rows" => n.rows = num_of(v)?.clamp(1.0, 40.0) as u32,
         "fit" => n.fill_image = one_of(v, &["fit", "fill"])? == "fill",
         "pin" => {

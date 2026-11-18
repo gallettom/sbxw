@@ -1022,7 +1022,8 @@ impl Build<'_> {
                 // the others leave (never pushing them out of the row) down to
                 // `INPUT_MIN`; under that the row wraps, the button under it.
                 let field_row = n.kind == Kind::Row && n.children.iter().any(free_input);
-                if field_row || wrapping_row(&self.name, n) {
+                // `wrap = true` on a row: its children go onto more lines (a line of chips).
+                if field_row || wrapping_row(&self.name, n) || (n.kind == Kind::Row && st.wrap) {
                     b = b.flex_wrap();
                 }
                 for k in n.children.iter() {
@@ -1135,7 +1136,10 @@ impl Build<'_> {
                 for k in &n.children {
                     content = content.child(self.node::<S>(k));
                 }
-                let base = col().scroll(ScrollSpec { stick_bottom: n.stick_bottom }).w_full().min_h(0.0);
+                let mut base = col().scroll(ScrollSpec { stick_bottom: n.stick_bottom }).w_full().min_h(0.0);
+                if let Some(f) = n.fade.filter(|f| *f > 0.0) {
+                    base = base.scroll_edge_fade(f);
+                }
                 let base = if st.h.is_none() && st.grow.is_none() { base.grow(1.0) } else { base };
                 base.child(content)
             }
