@@ -185,6 +185,14 @@ report your state).
   or a folder elsewhere: a worktree outside the mounted repository would
   live in the container only, unseen by the host's git and lost with the
   sandbox.
+- **A workspace split by a strict carve cannot hold threads.** A strict
+  [carve](configuration.md#carving-a-folder-out) of a folder inside the
+  workspace mounts the workspace folder by folder: the files beside those
+  folders are missing, and nothing can be created at its root, so
+  `.sbxw-worktrees` cannot be made and git in the sandbox sees the missing
+  tracked files as deleted. When sbxw created the sandbox that way, a thread
+  that cannot start and a merge refused for missing files say so, and point
+  to `enforce = "soft"`, which keeps the repository whole.
 - **Threads talk to the lead directly**, with Claude Code's own `SendMessage`
   between sessions of the sandbox. A thread runs as `claude --name <thread>`,
   so the lead knows its address in advance; each briefing gives the lead's

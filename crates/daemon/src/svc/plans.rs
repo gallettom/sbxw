@@ -381,7 +381,7 @@ impl App {
                 (Err(e), _, _) => Err(format!("the sandbox could not be started: {e}")),
                 (Ok(()), Err(e), _) => Err(e),
                 (Ok(()), Ok(_), Err(e)) => Err(e.to_string()),
-                (Ok(()), Ok(dir), Ok(name)) => self.sbx_of(&sandbox).await?.thread_merge(&sandbox.name, &dir, &name).await.map_err(|e| format!("{e:#}")),
+                (Ok(()), Ok(dir), Ok(name)) => self.sbx_of(&sandbox).await?.thread_merge(&sandbox.name, &dir, &name).await.map_err(|e| self.with_split_note(&sandbox, format!("{e:#}"))),
             };
             let ok = outcome.is_ok();
             let result = match outcome {
@@ -413,6 +413,15 @@ impl App {
         }
         self.tell_lead_merged(&sandbox, id, &summary).await;
         Ok(merge)
+    }
+
+    /// A merge refused for files missing from the checkout, with the reason
+    /// sbxw knows when it split the workspace itself.
+    fn with_split_note(&self, sandbox: &SandboxRef, err: String) -> String {
+        match self.split_note(sandbox) {
+            Some(note) if err.contains("missing from the main checkout") => format!("{err} {note}"),
+            _ => err,
+        }
     }
 
     /// A shared plan's merge waits for its board: files still claimed are
@@ -480,7 +489,7 @@ impl App {
         let outcome = match (self.ensure_running_for_thread(sandbox).await, dir) {
             (Err(e), _) => Err(format!("the sandbox could not be started: {e:#}")),
             (Ok(()), Err(e)) => Err(e),
-            (Ok(()), Ok(dir)) => self.sbx_of(sandbox).await?.thread_merge(&sandbox.name, &dir, &team).await.map(|c| (c, dir)).map_err(|e| format!("{e:#}")),
+            (Ok(()), Ok(dir)) => self.sbx_of(sandbox).await?.thread_merge(&sandbox.name, &dir, &team).await.map(|c| (c, dir)).map_err(|e| self.with_split_note(sandbox, format!("{e:#}"))),
         };
         let (result, dir) = match outcome {
             Ok((m, dir)) => (MergeResult { thread: team.to_string(), ok: true, note: m.note(), commit: Some(m.commit).filter(|c| !c.is_empty()), error: None }, Some(dir)),

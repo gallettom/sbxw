@@ -257,6 +257,10 @@ impl App {
             .await?
             .thread_prepare(&sandbox.name, &dir, thread, team.as_ref())
             .await
+            .map_err(|e| match self.split_note(&sandbox) {
+                Some(note) => anyhow!("{e:#} {note}"),
+                None => e,
+            })
             .with_context(|| format!("thread {thread}: its worktree could not be made"))?;
         // The briefing an approval left is taken only now: a start that
         // failed above keeps it for the retry. Without one, this is a reopen:
@@ -343,6 +347,22 @@ impl App {
                 .map_err(|e| format!("could not record the repo of thread {thread}: {e:#}"))?;
         }
         Ok(git::thread_dir(&ws, &chosen).to_string_lossy().into_owned())
+    }
+
+    /// When sbxw itself created `sandbox` with its main workspace split by a
+    /// strict carve (only some of its folders mounted, the root a folder
+    /// nothing can be created in), a sentence saying so: the cause of a
+    /// worktree that cannot be made and of tracked files missing from the
+    /// checkout, read from what sbxw recorded at creation, not guessed.
+    pub fn split_note(&self, sandbox: &SandboxRef) -> Option<String> {
+        let rec = self.store.get(sandbox);
+        let main = rec.carve.as_ref()?.split.as_deref()?.to_string();
+        Some(format!(
+            "sbxw created this sandbox with a strict carve that splits its workspace {main}: only some of \
+             its folders are mounted, the files beside them are not, and nothing can be created at its \
+             root. For a repository, make that carve enforce = \"soft\" in sbxw.toml, then recreate the \
+             sandbox (sbxw rm, then sbxw up)."
+        ))
     }
 
     /// Is `thread` a session in the main checkout rather than in a worktree?
@@ -506,6 +526,7 @@ mod tests {
 
         let err = format!("{:#}", app.open_session(&key).await.err().expect("refused"));
         assert!(err.contains("not writable by agent"), "{err}");
+        assert!(!err.contains("strict carve"), "said only when sbxw split the workspace: {err}");
         let t = app.plan(&p.id).unwrap().threads[0].clone();
         assert_eq!((t.state, t.set_by), (ThreadState::Failed, Some(SetBy::Sbxw)));
         assert!(t.summary.contains("its worktree could not be made") && t.summary.contains("not writable"), "{}", t.summary);
@@ -513,6 +534,13 @@ mod tests {
         assert_eq!(view["threads"][0]["state"], "failed");
         assert_eq!(view["threads"][0]["set_by"], "sbxw");
         assert!(app.briefings.lock().unwrap().contains_key(&(sb.clone(), "api".into())), "the briefing waits for the retry");
+
+        app.store
+            .update(&sb, |r| r.carve = Some(crate::store::CarveRecord { file: vec![], extra: vec![], split: Some("/w".into()) }))
+            .unwrap();
+        let err = format!("{:#}", app.open_session(&key).await.err().expect("refused"));
+        assert!(err.contains("strict carve that splits its workspace /w") && err.contains("enforce = \"soft\""), "{err}");
+        app.store.update(&sb, |r| r.carve = None).unwrap();
 
         refuse.store(false, std::sync::atomic::Ordering::SeqCst);
         let spawn = app.spawn_for(&key).await.expect("the retry starts it");
