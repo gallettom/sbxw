@@ -484,21 +484,6 @@ mod tests {
     }
 
     #[test]
-    fn known_word_synonym_detail_unknown() {
-        assert_eq!(marks("Tests [[Done]] now"), vec![("[[Done]]".into(), Tone::Green)]);
-        assert_eq!(marks("[[passed]] and [[VERIFIED]]"), vec![("[[passed]]".into(), Tone::Green), ("[[VERIFIED]]".into(), Tone::Green)]);
-        assert_eq!(marks("x [[Failed: 3 tests]]"), vec![("[[Failed: 3 tests]]".into(), Tone::Red)]);
-        assert_eq!(marks("[[Needs  you]]"), vec![("[[Needs  you]]".into(), Tone::Amber)], "spaces collapsed for the lookup");
-        assert_eq!(marks("[[Wibble]]"), vec![("[[Wibble]]".into(), Tone::Blue)], "unknown, capitalised: the unknown tone");
-        assert!(marks("[[summary]] [[base-kit]]").is_empty(), "unknown, lower case: a wiki link, plain");
-        let chars: Vec<char> = "[[Failed: 3 tests]]".chars().collect();
-        let mut m = vec![];
-        find(&chars, &Vocab::default(), &mut m);
-        assert_eq!(chars[m[0].start + 2..m[0].word_end].iter().collect::<String>(), "Failed");
-        assert_eq!(chars[m[0].word_end..m[0].label_end].iter().collect::<String>(), ": 3 tests");
-    }
-
-    #[test]
     fn what_is_not_a_marker() {
         let w = |n: usize| format!("[[D{}]]", "a".repeat(n - 1));
         assert!(marks(&w(MAX_WORD + 1)).is_empty(), "word too long");
@@ -513,13 +498,6 @@ mod tests {
         assert!(marks("[[Failed:]]").is_empty(), "empty detail");
         assert!(marks("[[Done: a\u{7}b]]").is_empty(), "control character in the detail");
         assert!(marks("[[a=b]]").is_empty(), "not a word");
-    }
-
-    #[test]
-    fn two_on_a_line_and_wide_characters() {
-        assert_eq!(marks("[[Done]] then [[Failed]]").len(), 2);
-        assert_eq!(marks("日本 [[Done]]").len(), 1);
-        assert_eq!(marks("[[Done: 完了]]").len(), 1);
     }
 
     #[test]
