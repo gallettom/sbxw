@@ -130,7 +130,7 @@ impl Item {
 
 /// Extras that always sit in the "⋯" menu, never inline: a view setting
 /// of the pane (keyword pills), not something to act on at a glance.
-pub const MENU_ONLY: &[&str] = &["pills", "commits"];
+pub const MENU_ONLY: &[&str] = &["pills", "commits", "mcp-view", "skills-view", "kits-view"];
 
 /// Sorted by [`rank`], stable: the order the bar fills in.
 pub fn by_priority(mut items: Vec<Item>) -> Vec<Item> {
