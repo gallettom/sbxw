@@ -215,6 +215,8 @@ pub struct ScreenState {
     pub stale: bool,
     /// `loads` when the core last checked the override (shell.rs).
     pub checked: u32,
+    /// Renders run (counted for SBXW_DESKTOP_PERF).
+    pub renders: u64,
 }
 
 impl ScreenState {
@@ -236,6 +238,7 @@ impl ScreenState {
             override_hash: None,
             stale: false,
             checked: 0,
+            renders: 0,
         };
         v.seen = std::fs::metadata(&v.override_path).and_then(|m| m.modified()).ok();
         let (src, text) = read_source(name, &v.override_path);
@@ -353,7 +356,11 @@ impl ScreenState {
             }
             None => &self.data,
         };
-        match self.host.render(data) {
+        self.renders += 1;
+        let t = crate::perf::start();
+        let out = self.host.render(data);
+        crate::perf::done(t, || format!("render {}", self.name));
+        match out {
             Ok(n) => {
                 sync_ui(&mut self.ui, &n);
                 self.last_good = Some(n);
@@ -848,9 +855,15 @@ pub(crate) fn key_of(n: &Node) -> Option<String> {
 }
 
 fn fire<S: Host>(s: &mut S, screen: &str, action: &str, arg: &J, value: &J) {
-    if let Some(intents) = s.screen(screen).act(action, arg, value) {
+    let t = crate::perf::start();
+    let asked = s.screen(screen).act(action, arg, value);
+    crate::perf::done(t, || format!("act {screen}.{action} (the screen's action and its own render)"));
+    if let Some(intents) = asked {
         if !intents.is_empty() {
+            let t = crate::perf::start();
+            let names: Vec<&'static str> = if t.is_some() { intents.iter().map(|i| i.name()).collect() } else { vec![] };
             s.intents(screen, intents);
+            crate::perf::done(t, || format!("intents {screen} {names:?} (handling, then push_data)"));
         }
     }
 }

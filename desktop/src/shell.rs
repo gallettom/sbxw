@@ -146,6 +146,8 @@ enum Mark {
     /// default); then the script goes on either way, so a tap on a key that
     /// never came fails with Rune's own message.
     Wait { key: String, ms: u64, gone: bool },
+    /// `perf:<label>`: a line in the log, to read SBXW_DESKTOP_PERF's lines by step.
+    Perf(String),
 }
 
 /// Parses `wait:<key>[:<ms>]` and `wait-gone:<key>[:<ms>]`.
@@ -485,6 +487,9 @@ impl App {
                         if let Some(m) = wait_mark(n) {
                             return Some((t, m));
                         }
+                        if let Some(l) = n.strip_prefix("perf:") {
+                            return Some((t, Mark::Perf(l.to_string())));
+                        }
                         let (name, path) = n.strip_prefix("screen:")?.split_once('=')?;
                         Some((t, Mark::Screen(name.into(), path.into())))
                     })
@@ -752,11 +757,17 @@ impl App {
     }
 
     fn push_data(&mut self) {
+        let t = crate::perf::start();
         let d = self.screen_data();
+        let built = crate::perf::ms(t);
         self.feats.pane_extras = self.feats_app(&d).3;
+        let mut rendered = 0;
         for s in &mut self.screens {
+            let before = s.renders;
             s.set_data(d.clone());
+            rendered += (s.renders != before) as usize;
         }
+        crate::perf::done(t, || format!("push_data (screen_data {built:.2} ms, {} bytes; {rendered} of {} screens rendered)", d.to_string().len(), self.screens.len()));
     }
 
     fn notify(&mut self, text: impl Into<String>, error: bool) {
@@ -878,6 +889,7 @@ impl App {
         }
         while self.marks.first().is_some_and(|(t, _)| *t <= clock) {
             match self.marks.remove(0).1 {
+                Mark::Perf(l) => log::info!("perf: ---- {l}"),
                 Mark::Hold(ms) => {
                     log::info!("hold {ms} ms at {clock:.2}s");
                     let until = Instant::now() + Duration::from_millis(ms);
@@ -1894,6 +1906,13 @@ pub const fn window_chrome() -> rune::Chrome {
 }
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
+    let t = crate::perf::start();
+    let el = view_inner(s, cx);
+    crate::perf::done(t, || "view (the core's element tree)".to_string());
+    el
+}
+
+fn view_inner(s: &App, cx: &mut Cx<App>) -> El {
     // Keyboard focus as a web page has it: every pressable control is a Tab
     // stop in reading order, and shows a 2 pt ring 2 pt outside it when the
     // keyboard put it there (never for a click).

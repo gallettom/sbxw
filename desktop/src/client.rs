@@ -1098,6 +1098,9 @@ impl Link {
                 crate::feat::Method::Core => "CORE",
             };
             let t = Duration::from_secs(call.timeout.max(1));
+            let clock = crate::perf::start();
+            let path = if clock.is_some() { call.path.clone() } else { String::new() };
+            let _timed = crate::perf::OnDrop::new(clock, move || format!("request {method} {path} (off the UI thread)"));
             if let (Some(max), "GET") = (call.raw, method) {
                 let result = daemon.request_raw(&call.path, max, t).map_err(|e| format!("{e:#}"));
                 return LinkEvent::Bytes { id, feature, call, result };
