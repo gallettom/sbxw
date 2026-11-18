@@ -375,12 +375,20 @@ fn the_typed_yes_still_works_with_the_scrim_up() {
     assert_eq!(sent(&rx), b"", "the typed yes reached the terminal");
 }
 
+/// `PANE_DROPS` counts drops for the whole process: the tests that read it
+/// run one at a time, or one's own drop would count in the other.
+fn one_drop_test_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ONE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Files dropped on a pane while something covers the panes start nothing:
 /// no upload, and no dialog skipped behind the one that shows. Over an
 /// overlay a drop is the overlay's (the explorer's upload card, once it
 /// takes drops), never the pane's under it: counted where a pane takes one.
 #[test]
 fn a_drop_on_a_covered_pane_starts_nothing() {
+    let _one = one_drop_test_at_a_time();
     let drops = || super::PANE_DROPS.load(std::sync::atomic::Ordering::SeqCst);
     let before = drops();
     let (mut rt, _rx) = window_on("jarvis/proposal-high");
@@ -428,6 +436,7 @@ fn a_drop_on_a_covered_pane_starts_nothing() {
 /// pane's under it.
 #[test]
 fn an_overlay_under_jarvis_s_proposal_takes_no_key_or_file_for_a_terminal() {
+    let _one = one_drop_test_at_a_time();
     let drops = || super::PANE_DROPS.load(std::sync::atomic::Ordering::SeqCst);
     for overlay in ["rail-files", "rail-commits"] {
         let (mut rt, rx) = window_on("jarvis/proposal-high");
