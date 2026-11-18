@@ -542,7 +542,7 @@ fn modal_content_stays_inside_the_modal() {
     // (fixture, intent opening the modal: none when the fixture opens it).
     let mut list: Vec<(std::path::PathBuf, J)> = found.into_iter().map(|p| (p, J::Null)).collect();
     for f in ["setup/full.json", "setup/errors.json"] {
-        for tab in ["secrets", "kits", "skills", "mcp", "hosts", "voice"] {
+        for tab in crate::feat::setup::SECTIONS {
             list.push((root.join(f), serde_json::json!({ "kind": "intent", "name": "open_modal", "args": { "screen": "setup", "arg": tab } })));
         }
     }
@@ -726,4 +726,91 @@ fn pills_in_a_screen_never_make_a_control() {
     assert!(t.contains("\u{2009}Done\u{2009}") && !t.contains("[[Done]]"), "a pill: {t}");
     assert!(t.contains("\u{2009}Failed: <button on=x>\u{2009}"), "markup in a detail is its text: {t}");
     assert!(t.contains("[[[[x]]]]") && t.contains("[[Done: [b] ]]"), "not markers: as written: {t}");
+}
+
+/// The panels out of Setup (MCP servers, Skills, Kits), as the modal audit:
+/// at 420 and 1284 pt, every keyed element of the screen inside its panel
+/// sideways (down, it scrolls), the close cross shown, no secret value in
+/// the tree; each preselected on its sandbox from its fixture.
+#[test]
+fn the_configure_panels_keep_their_content_inside() {
+    fn keys(n: &crate::luau::Node, out: &mut Vec<String>) {
+        if let Some(k) = crate::screen::key_of(n) {
+            out.push(k);
+        }
+        n.children.iter().for_each(|c| keys(c, out));
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    let mut bad = vec![];
+    let mut checked = 0;
+    for feat in ["mcp", "skills", "kits"] {
+        for fx in ["basic", "empty", "waiting"] {
+            for (w, h) in [(420.0, 700.0), (1284.0, 816.0)] {
+                let path = root.join(feat).join(format!("{fx}.json"));
+                let a = App::new(Args { fixture: Some(path.to_string_lossy().to_string().into()), ..Args::default() });
+                let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+                for _ in 0..30 {
+                    rt.frame(0.016);
+                }
+                let Some((p, _)) = rt.presented("feature-panel") else { panic!("{feat}/{fx} at {w}: no panel") };
+                assert!(rt.presented(&format!("panel-close-{feat}")).is_some(), "{feat}/{fx}: the shared header's cross");
+                let node = rt.state.screens.iter().find(|s| s.name == feat).and_then(|s| s.last_good.clone()).unwrap_or_else(|| panic!("{feat}/{fx}: not drawn"));
+                let mut ks = vec![];
+                keys(&node, &mut ks);
+                for k in ks {
+                    let Some((r, _)) = rt.presented(&k) else { continue };
+                    checked += 1;
+                    if r[0] < p[0] - 0.5 || r[0] + r[2] > p[0] + p[2] + 0.5 || r[1] < p[1] - 0.5 {
+                        bad.push(format!("{feat}/{fx} at {w}: {k} at {r:?}, panel {p:?}"));
+                    }
+                }
+                let tree = format!("{node:?}");
+                assert!(!tree.contains("ghp_") && !tree.contains("sk-") && !tree.contains("tok-"), "{feat}/{fx}: a value in the tree");
+            }
+        }
+    }
+    assert!(checked > 60, "{checked} elements checked");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// Opened from a sandbox's Manage dialog and from a pane's "⋯" menu, each
+/// panel is on that sandbox; from the rail entry, on the last one used; the
+/// view is dropped when the panel closes.
+#[test]
+fn the_configure_panels_open_on_the_sandbox_they_are_opened_for() {
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/setup/full.json");
+    let mut a = App::new(Args { fixture: Some(fixture.into()), ..Args::default() });
+    let run = |a: &mut App, v: J| {
+        for i in crate::intent::parse(&v).unwrap() {
+            a.run_intent("test", i);
+        }
+    };
+    for (feat, view) in [("mcp", "mcp_view"), ("skills", "skills_view"), ("kits", "kits_view")] {
+        run(&mut a, serde_json::json!({ "kind": "intent", "name": "open_modal", "args": { "screen": "sandbox-actions", "arg": "docs" } }));
+        let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+        h.load("sandbox-actions", include_str!("../../screens/sandbox-actions.luau")).unwrap();
+        h.render(&a.screen_data()).unwrap();
+        let asks = h.act(feat, &J::Null, &J::Null).unwrap();
+        run(&mut a, asks);
+        assert!(a.feats.modal.is_none(), "{feat}: the Manage dialog closes");
+        assert_eq!(a.feats.panel.as_deref(), Some(feat));
+        assert_eq!(a.screen_data()[view]["sandbox"], "docs", "{feat}");
+        run(&mut a, serde_json::json!({ "kind": "intent", "name": "close_panel", "args": { "screen": feat } }));
+        assert!(a.screen_data()[view].is_null(), "{feat}: dropped on close");
+        // The rail's entry: the panel, on the last sandbox used (kept).
+        run(&mut a, serde_json::json!({ "kind": "intent", "name": "open_panel", "args": { "screen": feat } }));
+        assert_eq!(a.screen_data()["app"]["kept"][feat]["sandbox"], "docs", "{feat}: kept for the rail");
+        run(&mut a, serde_json::json!({ "kind": "intent", "name": "close_panel", "args": { "screen": feat } }));
+    }
+    // The pane menu's entries run the same intents.
+    let data = a.screen_data();
+    for id in ["mcp-view", "skills-view", "kits-view"] {
+        let e = data["app"]["extras"]["panes"]["web-app"].as_array().and_then(|l| l.iter().find(|e| e["id"] == id).cloned());
+        let e = e.or_else(|| {
+            crate::feat::FEATURES.iter().filter_map(|f| f.extras).flat_map(|x| x(&crate::feat::Ctx { data: &data })).find(|e| e.id == id && e.place == crate::feat::Place::Pane("web-app".into())).map(|e| e.to_json())
+        });
+        let e = e.unwrap_or_else(|| panic!("no pane entry {id}"));
+        assert_eq!(e["intent"]["args"], serde_json::json!({ "sandbox": "web-app" }), "{id}");
+        assert!(crate::shell::bar::MENU_ONLY.contains(&id), "{id} lives in the ⋯ menu");
+    }
 }

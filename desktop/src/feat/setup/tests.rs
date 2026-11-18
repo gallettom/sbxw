@@ -1,24 +1,24 @@
 use super::*;
-use crate::feat::{Method, Standin};
+use crate::feat::Standin;
 use serde_json::Map;
 
-fn fixture(name: &str) -> J {
+pub(crate) fn fixture(name: &str) -> J {
     let p = crate::fixture::dir().join("setup").join(format!("{name}.json"));
     let f: J = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
     f["daemon"].clone()
 }
 
-fn asked(name: &'static str, args: J) -> Asked {
+pub(crate) fn asked(name: &'static str, args: J) -> Asked {
     let args: Map<String, J> = args.as_object().cloned().unwrap_or_default();
-    // Checked as the core checks it, against this feature's own row.
-    let spec = INTENTS.iter().find(|s| s.name == name).unwrap_or_else(|| panic!("no row {name}"));
+    // Checked as the core checks it, against the row of the feature it belongs to.
+    let spec = crate::feat::intent(name).unwrap_or_else(|| panic!("no row {name}")).1;
     let checked = crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })).unwrap_or_else(|e| panic!("{name}: {e}"));
     assert_eq!(checked.len(), 1);
     let _ = spec;
     Asked { name, args }
 }
 
-fn one_confirm(r: Result<Vec<Action>, String>) -> Confirm {
+pub(crate) fn one_confirm(r: Result<Vec<Action>, String>) -> Confirm {
     let mut v = r.unwrap();
     assert_eq!(v.len(), 1, "{v:?}");
     match v.remove(0) {
@@ -40,11 +40,6 @@ fn every_approval_intent_answers_one_confirm_or_prepare() {
         ("github_token_rm", json!({})),
         ("secret_custom_set", json!({ "hosts": "api.example.com, *.example.io", "env": "EXAMPLE_KEY" })),
         ("secret_rm", json!({ "name": "OPENAI_KEY" })),
-        ("kits_save", json!({ "path": "/Users/ana/dev/web/sbxw.toml", "kits": "sbxw:codemap\nsbxw:dev-ports" })),
-        ("mcp_unload", json!({ "server": "linear", "sandbox": "web-app" })),
-        ("mcp_rm", json!({ "server": "linear" })),
-        ("mcp_save", json!({ "name": "pw", "kind": "stdio", "command": "npx", "args": "-y @playwright/mcp@latest" })),
-        ("skill_forget", json!({ "name": "release-notes" })),
         ("host_rm", json!({ "name": "build-box" })),
         ("host_save", json!({ "name": "gpu", "host": "10.0.0.9" })),
         ("voice_install", json!({})),
@@ -98,75 +93,6 @@ fn custom_secret_rules_are_the_daemons() {
 }
 
 #[test]
-fn a_stdio_server_shows_its_host_command_and_needs_the_acknowledgement() {
-    let data = fixture("full");
-    let c = one_confirm(run(&data, "mcp_save", json!({ "name": "fs", "kind": "stdio", "command": "npx", "args": "-y @mcp/fs /srv/my data", "dir": "/srv" })));
-    assert_eq!(c.preview.as_ref().unwrap().text, "cd /srv && npx -y @mcp/fs /srv/my data");
-    assert_eq!(c.ack.as_deref(), Some("I have read this command"));
-    assert_eq!(c.call.body["spec"]["kind"], "stdio");
-    assert_eq!(c.call.body["spec"]["args"], json!(["-y", "@mcp/fs", "/srv/my", "data"]));
-    assert_eq!(host_command("my tool", &["it's".into()], ""), "'my tool' 'it'\\''s'");
-}
-
-#[test]
-fn a_remote_server_asks_one_secret_per_placeholder() {
-    let data = fixture("full");
-    let c = one_confirm(run(
-        &data,
-        "mcp_save",
-        json!({ "name": "linear2", "kind": "remote", "url": "https://mcp.linear.app/mcp", "headers": "Authorization: Bearer ${TOKEN}; X-Org: ${ORG}; X-Again: ${TOKEN}" }),
-    ));
-    let fields: Vec<&str> = c.secrets.iter().map(|s| s.field.as_str()).collect();
-    assert_eq!(fields, ["secrets.TOKEN", "secrets.ORG"]);
-    assert!(c.secrets.iter().all(|s| !s.optional));
-    assert_eq!(c.call.body["secrets"], json!({}));
-    assert!(c.ack.is_none());
-    // An edit: empty means unchanged, and the dialog says the token is dropped.
-    let c = one_confirm(run(&data, "mcp_save", json!({ "name": "linear", "kind": "remote", "url": "https://mcp.linear.app/mcp", "headers": "Authorization: Bearer ${TOKEN}", "replace": "linear" })));
-    assert!(c.secrets[0].optional);
-    assert!(c.lines.iter().any(|l| l.contains("drops its OAuth token")));
-    assert!(run(&data, "mcp_save", json!({ "name": "x", "kind": "remote", "url": "ftp://x" })).unwrap_err().contains("http"));
-    assert!(run(&data, "mcp_save", json!({ "name": "-x", "kind": "stdio", "command": "a" })).unwrap_err().contains("server name"));
-}
-
-#[test]
-fn a_kits_line_change_lists_what_it_adds_and_asks_for_kits_that_reach_out() {
-    let data = fixture("full");
-    // Only bundled, harmless: no acknowledgement.
-    let c = one_confirm(run(&data, "kits_save", json!({ "path": "/Users/ana/dev/web/sbxw.toml", "kits": "sbxw:codemap\n/Users/ana/.sbxw/state/kits/jarvis-notes\nsbxw:agent-skills" })));
-    assert!(c.ack.is_none(), "{c:?}");
-    assert!(c.lines.iter().any(|l| l == "Adds sbxw:agent-skills (bundled)."));
-    assert_eq!(c.call.body, json!({ "path": "/Users/ana/dev/web/sbxw.toml", "kits": ["sbxw:codemap", "/Users/ana/.sbxw/state/kits/jarvis-notes", "sbxw:agent-skills"] }));
-    // A local kit, and a bundled one that reaches this machine: acknowledged.
-    let c = one_confirm(run(&data, "kits_save", json!({ "path": "/Users/ana/dev/web/sbxw.toml", "kits": "sbxw:codemap\n./kits/mine\nsbxw:ssh-agent" })));
-    assert!(c.ack.as_deref().unwrap().contains("./kits/mine, sbxw:ssh-agent"), "{c:?}");
-    assert!(c.lines.iter().any(|l| l.starts_with("Removes /Users/ana/.sbxw/state/kits/jarvis-notes")), "{c:?}");
-    assert!(c.preview.unwrap().diff);
-    // Defaults: the line goes, `kits: null`.
-    let c = one_confirm(run(&data, "kits_save", json!({ "path": "/Users/ana/dev/web/sbxw.toml", "defaults": true })));
-    assert_eq!(c.call.body["kits"], J::Null);
-    // Unchanged, unknown file, jarvis: refused.
-    assert!(run(&data, "kits_save", json!({ "path": "/Users/ana/dev/web/sbxw.toml", "kits": "sbxw:codemap\n/Users/ana/.sbxw/state/kits/jarvis-notes" })).unwrap_err().contains("unchanged"));
-    assert!(run(&data, "kits_save", json!({ "path": "/etc/passwd", "kits": "x" })).unwrap_err().contains("not an sbxw.toml"));
-    assert!(run(&data, "kits_save", json!({ "path": "/Users/ana/dev/web/sbxw.toml", "kits": "sbxw:jarvis" })).unwrap_err().contains("Jarvis"));
-}
-
-#[test]
-fn keeping_a_skill_uses_the_cores_listing_not_the_screens_words() {
-    let mut data = fixture("full");
-    assert!(run(&data, "skill_keep", json!({ "sandbox": "web-app", "name": "deploy" })).unwrap_err().contains("look at"));
-    let v = run(&data, "skills_look", json!({ "sandbox": "web-app" })).unwrap();
-    assert!(matches!(&v[2], Action::Fetch { key, path } if key == "sandbox_skills" && path == "/api/sandboxes/web-app/skills"));
-    data["skills_for"] = json!("web-app");
-    data["sandbox_skills"] = data["sandbox_skills_of"]["web-app"].clone();
-    let c = one_confirm(run(&data, "skill_keep", json!({ "sandbox": "web-app", "name": "deploy" })));
-    assert_eq!(c.call.body, json!({ "origin": "project", "name": "deploy", "replace": false }));
-    let c = one_confirm(run(&data, "skill_keep", json!({ "sandbox": "web-app", "name": "release-notes" })));
-    assert_eq!(c.call.body["replace"], true);
-    assert!(run(&data, "skill_keep", json!({ "sandbox": "web-app", "name": "Bad Name" })).unwrap_err().contains("cannot be kept"));
-}
-
-#[test]
 fn a_new_host_is_confirmed_on_fingerprints_the_core_read() {
     let data = fixture("full");
     let v = run(&data, "host_save", json!({ "name": "gpu", "host": "10.0.0.9", "port": 2222, "user": "ana", "trust_secrets": true })).unwrap();
@@ -205,25 +131,42 @@ fn removing_a_host_with_sandboxes_needs_the_tick_and_forces() {
 }
 
 #[test]
-fn voice_events_replace_the_status_and_a_kit_waiting_gets_its_button() {
-    let data = fixture("full");
+fn voice_events_replace_the_status_and_settings_keeps_only_its_tabs() {
+    let mut data = fixture("full");
     let v = on_event(&Ctx { data: &data }, "voice", &json!({ "ready": false, "job": { "state": "running" } }));
     assert!(matches!(&v[0], Action::Set { key, .. } if key == "voice"));
     let ex = extras(&Ctx { data: &data });
-    assert!(ex.iter().any(|e| e.place == Place::Topbar && e.icon.as_deref() == Some("gear")));
-    let k = ex.iter().find(|e| e.place == Place::Sandbox("docs".into())).unwrap();
-    assert_eq!(k.intent.as_ref().unwrap().1, json!({ "sandbox": "docs", "mode": "kit-add", "pane": "spare" }));
-    // The intent it asks is one the core knows.
-    crate::intent::parse(&json!({ "kind": "intent", "name": "open_terminal", "args": k.intent.as_ref().unwrap().1 })).unwrap();
+    assert_eq!(ex.len(), 1, "Settings' entry only: the kit-add badge is the Kits feature's now");
+    assert!(ex[0].place == Place::Topbar && ex[0].icon.as_deref() == Some("gear"));
+    assert!(!ex[0].help.contains("kits") && !ex[0].help.contains("MCP") && !ex[0].help.contains("skills"), "{}", ex[0].help);
+    // A tab kept from before the move (kits) opens Setup on its first tab.
+    data["app"] = json!({ "kept": { "setup": { "tab": "kits" } } });
+    assert_eq!(extras(&Ctx { data: &data })[0].intent.as_ref().unwrap().1, json!({ "screen": "setup" }));
+    data["app"] = json!({ "kept": { "setup": { "tab": "hosts" } } });
+    assert_eq!(extras(&Ctx { data: &data })[0].intent.as_ref().unwrap().1, json!({ "screen": "setup", "arg": "hosts" }));
+}
+
+#[test]
+fn setup_no_longer_has_the_tabs_that_moved() {
+    assert_eq!(SECTIONS, &["secrets", "hosts", "voice"]);
+    for gone in ["kits", "skills", "mcp"] {
+        assert!(crate::intent::parse(&json!({ "kind": "intent", "name": "setup_load", "args": { "section": gone } })).is_err(), "{gone}");
+    }
+    let src = include_str!("../../../screens/setup.luau");
+    for gone in ["id = \"kits\"", "id = \"skills\"", "id = \"mcp\"", "kits_save", "mcp_save", "skill_keep"] {
+        assert!(!src.contains(gone), "setup.luau still has {gone}");
+    }
+    // Nothing points at the old tabs any more.
+    for (name, src) in crate::feat::FEATURES.iter().flat_map(|f| f.screens.iter()).map(|s| (s.name, s.src)) {
+        for old in ["arg = \"kits\"", "arg = \"mcp\"", "arg = \"skills\"", "Kits in Setup", "Setup > Kits"] {
+            assert!(!src.contains(old), "{name}.luau still points at Setup's old tab: {old}");
+        }
+    }
 }
 
 #[test]
 fn calls_go_where_the_web_ui_sends_them() {
     let data = fixture("full");
-    let v = run(&data, "mcp_load", json!({ "server": "linear", "sandbox": "web-app" })).unwrap();
-    let Action::Call(c) = &v[0] else { panic!() };
-    assert_eq!((c.method, c.path.as_str()), (Method::Post, "/api/sandboxes/web-app/mcp/load"));
-    assert!(run(&data, "mcp_load", json!({ "server": "linear", "sandbox": "web-api" })).unwrap_err().contains("not running"));
     let v = run(&data, "setup_load", json!({ "section": "secrets" })).unwrap();
     assert_eq!(v, vec![Action::Refresh("secrets"), Action::Refresh("github_token"), Action::Remember { key: "tab".into(), value: J::String("secrets".into()) }], "the tab is kept for next time");
     let v = run(&data, "host_provision", json!({ "name": "build-box" })).unwrap();
@@ -272,7 +215,7 @@ fn the_standin_downloads_the_voice_in_steps() {
 }
 
 /// Each element's texts, keys and helps, depth first.
-fn texts(n: &crate::luau::Node, out: &mut Vec<String>) {
+pub(crate) fn texts(n: &crate::luau::Node, out: &mut Vec<String>) {
     out.push(n.text.clone());
     out.extend(n.key.clone());
     out.extend(n.help.clone());
@@ -311,10 +254,6 @@ fn every_fixture_renders_every_tab_without_a_value() {
 fn the_tabs_show_what_the_daemon_said() {
     let s = render_tab("full", "secrets").join("\n");
     assert!(s.contains("anthropic") && s.contains("OPENAI_KEY") && s.contains("token set"), "{s}");
-    let k = render_tab("full", "kits").join("\n");
-    assert!(k.contains("sbxw:codemap") && k.contains("Jarvis kit") && k.contains("Answer in a pane"), "{k}");
-    let m = render_tab("full", "mcp").join("\n");
-    assert!(m.contains("linear") && m.contains("Sign in"), "{m}");
     let h = render_tab("full", "hosts").join("\n");
     assert!(h.contains("build-box") && h.contains("trusted with secrets"), "{h}");
     let v = render_tab("voice-downloading", "voice").join("\n");
@@ -327,5 +266,67 @@ fn every_setup_intent_is_described_in_the_screen_doc() {
     let section = &doc[doc.find("### setup").expect("a ### setup section")..];
     for s in INTENTS {
         assert!(section.contains(&format!("`{}`", s.name)), "docs/screens.md, ### setup, does not describe {}", s.name);
+    }
+}
+
+/// A panel screen moved out of Setup (mcp, skills, kits), rendered from one
+/// of Setup's fixtures, with extra keys set in `data` (a view, the kept
+/// state): its texts, keys and helps, and the tree.
+pub(crate) fn render_panel(screen: &str, src: &str, fixture: &str, extra: J) -> (Vec<String>, crate::luau::Node) {
+    let p = crate::fixture::dir().join("setup").join(format!("{fixture}.json"));
+    let fx = crate::fixture::Fixture::load(&p).unwrap();
+    let mut data = fx.screen_data(&crate::fixture::AppView::default());
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        if k == "kept" {
+            data["app"]["kept"] = v;
+        } else {
+            data[k] = v;
+        }
+    }
+    let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+    h.load(screen, src).unwrap();
+    let tree = h.render(&data).unwrap_or_else(|e| panic!("{screen} {fixture}: {e}"));
+    let mut out = Vec::new();
+    texts(&tree, &mut out);
+    (out, tree)
+}
+
+/// What a press on the element of that key returns, each `{name, args}`
+/// (checked as the core checks a screen's intents).
+pub(crate) fn press(screen: &str, src: &str, fixture: &str, extra: J, key: &str) -> Vec<J> {
+    let p = crate::fixture::dir().join("setup").join(format!("{fixture}.json"));
+    let fx = crate::fixture::Fixture::load(&p).unwrap();
+    let mut data = fx.screen_data(&crate::fixture::AppView::default());
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        if k == "kept" {
+            data["app"]["kept"] = v;
+        } else {
+            data[k] = v;
+        }
+    }
+    let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+    h.load(screen, src).unwrap();
+    let tree = h.render(&data).unwrap();
+    fn find<'a>(n: &'a crate::luau::Node, k: &str) -> Option<&'a crate::luau::Node> {
+        if crate::screen::key_of(n).as_deref() == Some(k) {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| find(c, k))
+    }
+    let n = find(&tree, key).unwrap_or_else(|| panic!("{screen}: no element {key}"));
+    let on = n.on.clone().unwrap_or_else(|| panic!("{key} has no handler"));
+    let asks = h.act(&on, &n.arg, &n.value).unwrap();
+    crate::intent::parse(&asks).unwrap_or_else(|e| panic!("{key}: {e}"));
+    let list = if asks.is_array() { asks.as_array().cloned().unwrap() } else { vec![asks] };
+    list.into_iter().map(|a| json!({ "name": a["name"], "args": if a["args"].is_null() { json!({}) } else { a["args"].clone() } })).collect()
+}
+
+#[test]
+fn every_intent_of_the_three_panels_is_described_in_the_screen_doc() {
+    let doc = include_str!("../../../docs/screens.md");
+    let section = &doc[doc.find("### mcp, skills, kits").expect("a ### mcp, skills, kits section")..];
+    for s in crate::feat::mcp::INTENTS.iter().chain(crate::feat::skills::INTENTS).chain(crate::feat::kits::INTENTS) {
+        assert!(section.contains(&format!("`{}`", s.name)), "docs/screens.md does not describe {}", s.name);
+        assert!(!s.doc.is_empty());
     }
 }

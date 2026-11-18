@@ -763,6 +763,10 @@ features! {
     network,
     relay,
     setup,
+    // Out of Setup, each its own panel and rail entry (configure zone).
+    mcp,
+    skills,
+    kits,
     shell_extras,
     mac,
     templates,

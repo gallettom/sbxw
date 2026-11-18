@@ -1245,21 +1245,25 @@ ready, the core selects the sandbox and opens its agent in a spare pane.
 ### setup
 
 The web UI's Setup dialog (`assets/js/setup.js` and its tabs): secrets and
-the GitHub token, kits lines, kept skills, MCP servers, remote hosts, the
-voice models. A modal, opened by the gear in the top bar
-(`open_modal { screen = "setup", arg = <tab> }`). A sandbox with a kit
-waiting gets an amber ✓ on its row (`open_terminal` with `mode = "kit-add"`).
+the GitHub token (tab "Secrets and sign-in", with the dropped files
+setting), remote hosts ("Remote hosts"), the voice models ("Voice"). A
+modal, opened by Settings at the bottom of the rail
+(`open_modal { screen = "setup", arg = <tab> }`, the tab shown last; a tab
+kept from before MCP, Kits and Skills left opens on the first tab). MCP
+servers, Kits and Skills were tabs here: each is now a docked panel with
+its own rail entry ([mcp](#mcp), [skills](#skills), [kits](#kits)), with the
+same intents, arguments and dialogs.
 
 Files: `src/feat/setup/` (rules, stand-in, tests), `screens/setup.luau`,
-`fixtures/setup/`. Data, each key one route's answer as the daemon gives
-it (why a read failed: `data.app.errors[key]`, shown as a red line in its
-tab): `data.secrets` (`GET /api/secrets`:
-names, scopes and kinds, never a value), `data.github_token` (`{set, gh}`),
-`data.kits` (`GET /api/kits`), `data.my_skills`, `data.mcp`,
+`fixtures/setup/`. The stand-in still answers every route of the former
+tabs too (`setup/standin.rs`, one fixture object), and `fixtures/setup/`
+serves the three panels' tests. Data, each key one route's answer as the
+daemon gives it (why a read failed: `data.app.errors[key]`, shown as a red
+line in its tab): `data.secrets` (`GET /api/secrets`: names, scopes and
+kinds, never a value), `data.github_token` (`{set, gh}`),
 `data.remote_hosts`, `data.voice` (`GET /api/voice`, then each `voice`
-event). Set by its intents: `data.skills_for` and `data.sandbox_skills`
-(`skills_look`), `data.mcp_inspect_for` and `data.mcp_inspect`
-(`mcp_inspect`), `data.provision` (`{host, command}`, `host_provision`).
+event). Set by its intents: `data.provision` (`{host, command}`,
+`host_provision`).
 
 **No intent carries a secret value.** The value of a token, a custom secret
 or an MCP header placeholder is typed in the core's dialog, sent once and
@@ -1267,22 +1271,12 @@ forgotten; a screen only sees names and whether a value is set.
 
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
-| `setup_load` | `section` (`secrets`, `kits`, `skills`, `mcp`, `hosts`, `voice`) | direct | Reads that tab's data again |
+| `setup_load` | `section` (`secrets`, `hosts`, `voice`) | direct | Reads that tab's data again |
 | `github_token_set` | none | approval | Asks for the token in its dialog, stores it as sbx's `github` secret |
 | `github_token_gh` | none | approval | Makes sbx use this machine's `gh auth token` |
 | `github_token_rm` | none | approval | Removes the `github` secret |
 | `secret_custom_set` | `hosts` (comma or space separated), `env` | approval | Asks for the value in its dialog; the proxy puts it in requests to those hosts |
 | `secret_rm` | `name` | approval | Removes a global secret |
-| `kits_save` | `path`, `kits` (one reference per line) or `defaults = true` | approval | Rewrites that file's `kits` line (or removes it); the dialog lists what is added and removed and asks for an acknowledgement for kits that reach outside the sandbox |
-| `skills_look` | `sandbox` | direct | Lists that sandbox's skills (`data.sandbox_skills`) |
-| `skill_keep` | `sandbox`, `name` | approval | Keeps a skill found by `skills_look` for every new sandbox |
-| `skill_forget` | `name` | approval | Stops keeping it |
-| `mcp_load` | `server`, `sandbox` | direct | Loads a server into a running sandbox |
-| `mcp_unload` | `server`, `sandbox` | approval | Unloads it |
-| `mcp_auth` | `server` | direct | `sbx mcp auth`, in this machine's browser |
-| `mcp_inspect`, `mcp_inspect_close` | `server` / none | direct | Shows or hides `sbx mcp inspect` |
-| `mcp_rm` | `server` | approval | Unregisters a server |
-| `mcp_save` | `name`, `kind` (`remote`, `stdio`), `url`, `headers` (`;` or new lines), `command`, `args`, `dir`, `replace` | approval | Registers (or replaces) a server; one secret field per `${KEY}`; a `stdio` one shows its host command and needs "I have read this command" |
 | `host_save` | `name`, `ssh` or `host`/`user`/`port`/`key`, `agent_port`, `sbx_path`, `trust_secrets`, `editing` | approval | For a new address, reads the host key first and shows its fingerprints; adds or edits the host |
 | `host_rm` | `name` | approval | Unregisters a host (with records there: an acknowledgement, then forced) |
 | `host_test` | `name` | direct | `sbx version` over the link |
@@ -1292,6 +1286,93 @@ forgotten; a screen only sees names and whether a value is set.
 | `voice_cancel` | none | direct | Stops the download |
 | `voice_rm` | none | approval | Deletes the models |
 | `voice_warm` | none | direct | Loads the models now |
+
+### mcp, skills, kits
+
+Three docked panels (440 to 460 pt, the shared panel header: icon, title,
+the close cross at the top right), each its own feature
+(`src/feat/mcp.rs`, `skills.rs`, `kits.rs`, tests beside them) and its own
+rail entry in the configure zone above Settings: MCP (order 10), Skills
+(20), Kits (30). Their icons, one mark each wherever the view appears (rail,
+panel header, palette, Manage dialog, pane menu): `plug` MCP servers (a
+connector, not the network's `shield`), `book` skills (not the agent's
+`sparkle`, the team's `people` or Jarvis's ring), `box` kits. Each declares its entry in one
+function, `rail_entry`, an extra whose intent is `open_panel {screen}`
+(the rail marks it on while the panel shows; a second press closes it).
+The palette lists the same extras. A panel rather than a modal: each is
+mostly a list with a few actions per row, kept beside the terminals while
+one loads a server or answers a kit; its one form (a new MCP server) is
+short, and the `<screen>_view` convention (view state dropped on close)
+is the panels'.
+
+Each opens for a sandbox from that sandbox's Manage dialog (`sa-mcp`,
+`sa-skills`, `sa-kits`) and from a pane's "⋯" menu (extras `mcp-view`,
+`skills-view`, `kits-view`, menu-only), with `<name>_show { sandbox }`;
+from the rail, on the last sandbox (or file) used, kept in the app's state
+file (`data.app.kept.<feature>`). Each panel: a sentence saying what the
+thing is, state by colour (green kept or listed, amber a local command or
+something waiting for you, red a failed read), one filled button (Add…,
+Look, Save…), at most 25 rows of a list then **Show 25 more** (a local cap;
+the shared paging helper replaces it when it lands), and an empty state
+saying what to do.
+
+#### mcp
+
+`screens/mcp.luau`. Data: `data.mcp` (`GET /api/mcp`), `data.mcp_view`
+(`{sandbox}`), `data.mcp_inspect_for` and `data.mcp_inspect`. Keys:
+`mcp-sandbox` (the sandbox Load and Unload act on), per server
+`mcp-<name>`, `mcp-load-<name>`, `mcp-unload-<name>`, `mcp-auth-<name>`
+(remote only), `mcp-inspect-<name>`, `mcp-rm-<name>`; `mcp-more`, the form
+`mcp-name`, `mcp-kind`, `mcp-url`, `mcp-headers`, `mcp-command`,
+`mcp-args`, `mcp-dir`, `mcp-save`, `mcp-clear`; `mcp-error`. The daemon
+lists no load state per sandbox, so a row shows its kind (remote blue,
+local command amber), not whether it is loaded.
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `mcp_show` | `sandbox` (optional) | direct | Opens the panel and reads the servers again, on that sandbox (else the last one used) |
+| `mcp_pick` | `sandbox` | direct | Puts the panel on that sandbox (view state) |
+| `mcp_load` | `server`, `sandbox` | direct | Loads a server into a running sandbox |
+| `mcp_unload` | `server`, `sandbox` | approval | Unloads it |
+| `mcp_auth` | `server` | direct | `sbx mcp auth`, in this machine's browser |
+| `mcp_inspect`, `mcp_inspect_close` | `server` / none | direct | Shows or hides `sbx mcp inspect` |
+| `mcp_rm` | `server` | approval | Unregisters a server |
+| `mcp_save` | `name`, `kind` (`remote`, `stdio`), `url`, `headers` (`;` or new lines), `command`, `args`, `dir`, `replace` | approval | Registers (or replaces) a server; one secret field per `${KEY}`; a `stdio` one shows its host command and needs "I have read this command" |
+
+#### skills
+
+`screens/skills.luau`. Data: `data.my_skills` (`GET /api/my-skills`),
+`data.skills_view` (`{sandbox}`), `data.skills_for` and
+`data.sandbox_skills` (`skills_look`). Keys: `kept-<name>`,
+`forget-<name>`, `skills-sandbox`, `skills-look`, `found-<name>`,
+`keep-<name>`, `skills-more-kept`, `skills-more-found`. Looking stays a
+press: it starts a stopped sandbox.
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `skills_show` | `sandbox` (optional) | direct | Opens the panel and reads the kept skills again; its picker on that sandbox (else the last one used) |
+| `skills_pick` | `sandbox` | direct | Puts the picker on that sandbox (view state) |
+| `skills_look` | `sandbox` | direct | Lists that sandbox's skills (`data.sandbox_skills`) |
+| `skill_keep` | `sandbox`, `name` | approval | Keeps a skill found by `skills_look` for every new sandbox |
+| `skill_forget` | `name` | approval | Stops keeping it |
+
+#### kits
+
+`screens/kits.luau`. Data: `data.kits` (`GET /api/kits`), `data.kits_view`
+(`{sandbox, path}`), each sandbox's `kits_waiting`. Its rail entry turns
+amber with the number of kits waiting (summed over sandboxes); a sandbox
+with a kit waiting keeps its amber ✓ on its row (`kit-add`,
+`open_terminal` with `mode = "kit-add"`): the answer is sbx's prompt, in a
+pane, never this panel. Keys: `kits-waiting`, `kit-answer-<sandbox>`,
+`kits-file`, `kit-<name>` (a bundled kit's box), `kit-rm-<ref>`,
+`kits-add`, `kit-push`, `kits-defaults`, `kits-discard`, `kits-save`,
+`kits-more`, `kits-error`.
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `kits_show` | `sandbox` (optional) | direct | Opens the panel and reads the kits lines again, on the file that sandbox uses (else the last one used) |
+| `kits_pick` | `path` | direct | Puts the panel on one of the files (view state) |
+| `kits_save` | `path`, `kits` (one reference per line) or `defaults = true` | approval | Rewrites that file's `kits` line (or removes it); the dialog lists what is added and removed and asks for an acknowledgement for kits that reach outside the sandbox |
 
 ### threads
 
@@ -1562,7 +1643,7 @@ be allowed); how many hosts were allowed from here; the error; the picture,
 measured frames per second and input-to-picture latency. When the browser
 could not start (an error before its first picture) or has ended: no
 picture and no hint, the controls off, the error kept, and the next steps
-`browser-kits` (Setup on its Kits tab, `open_modal`) and `browser-recreate`
+`browser-kits` (the Kits panel on this sandbox's sbxw.toml, `kits_show`) and `browser-recreate`
 (the sandbox's actions, where Recreate goes through the core's dialog).
 `browser-settle`
 (dialog, 440 pt): on close, the hosts allowed from the panel, Keep them

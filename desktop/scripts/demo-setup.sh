@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The Setup dialog, headless, from its fixtures (no daemon).
+# The Setup dialog and the three panels that left it (MCP servers, Kits),
+# headless, from its fixtures (no daemon).
 #
 #   desktop/scripts/demo-setup.sh            # every fixture state, one PNG each
 #   desktop/scripts/demo-setup.sh window     # the whole window, scripted (see below)
@@ -10,11 +11,12 @@
 #
 # Part 2 (`window`): the whole window against the fixture `full` (the
 # fixture is the daemon: the feature's stand-in routes answer in memory).
-# It opens Setup from the top bar's gear, stores a GitHub token through the
-# core's dialog (typed into its secure field), adds a stdio MCP server
-# (the host command and the acknowledgement), adds a remote host (the
-# fingerprints read by the core), starts the voice download, saves a kits
-# line adding sbxw:ssh-agent (acknowledged), closes Setup and presses the
+# It opens Setup from Settings in the rail, stores a GitHub token through the
+# core's dialog (typed into its secure field), adds a remote host (the
+# fingerprints read by the core), starts the voice download, closes Setup,
+# opens the MCP servers panel from its own entry and adds a stdio server (the
+# host command and the acknowledgement), opens the Kits panel and saves a
+# kits line adding sbxw:ssh-agent (acknowledged), closes it and presses the
 # amber check on docs (a kit-add pane). One PNG
 # per step in $SBXW_SHOTS/setup/window-*.png, and the app log, where the token
 # must not appear.
@@ -24,12 +26,15 @@ shots="$shots_root/setup"; mkdir -p "$shots"
 size="${SHOT_SIZE:-760x820}"
 
 pairs=(
-  full:secrets full:kits full:skills full:mcp full:hosts full:voice
-  empty:secrets empty:kits empty:skills empty:mcp empty:hosts empty:voice
-  errors:secrets errors:kits errors:mcp errors:hosts
-  looking:skills looked:skills looked:mcp looked:hosts
+  full:secrets full:hosts full:voice
+  empty:secrets empty:hosts empty:voice
+  errors:secrets errors:hosts
+  looked:hosts
   voice-downloading:voice voice-failed:voice no-voice:voice
 )
+# The panels' entries: in the rail once it takes features' entries
+# (Place::Rail), in the top bar before.
+if grep -qE '^\s*place: Place::Rail' "$here/src/feat/mcp.rs"; then entry=rail-; else entry=extra-topbar-; fi
 
 tab_script() {
   python3 - "$1" <<'PY'
@@ -55,7 +60,7 @@ fi
 # ── Part 2: the whole window ──────────────────────────────────────────────
 token="ghp_DEMOTOKEN0000000000000000000000"
 script="$shots/window-script.json"
-TOKEN="$token" python3 - >"$script" <<'PY'
+TOKEN="$token" ENTRY="$entry" python3 - >"$script" <<'PY'
 import json, os
 ev = []; t = 0.4
 def add(**e):
@@ -76,17 +81,6 @@ typ("cf-secret-0", os.environ["TOKEN"])
 mark("token-typed")
 add(type="tap", key="cf-confirm")
 mark("token-saved", 600)
-add(type="tap", key="tab-mcp")
-typ("mcp-name", "playwright2")
-add(type="tap", key="mcp-kind"); add(type="tap", key="mcp-kind-stdio")
-typ("mcp-command", "npx")
-typ("mcp-args", "-y @playwright/mcp@latest")
-add(type="tap", key="mcp-save")
-mark("mcp-dialog", 300)
-add(type="tap", key="cf-ack")
-mark("mcp-acked")
-add(type="tap", key="cf-confirm")
-mark("mcp-added", 600)
 add(type="tap", key="tab-hosts")
 typ("host-name", "gpu")
 add(type="tap", key="host-mode"); add(type="tap", key="host-mode-direct")
@@ -106,20 +100,35 @@ add(type="tap", key="cf-confirm")
 mark("voice-started", 500)
 add(type="tap", key="setup-reload")
 mark("voice-progress", 400)
-add(type="tap", key="tab-kits")
+add(type="tap", key="setup-close")
+add(type="mark", name="wait:" + os.environ["ENTRY"] + "mcp")
+add(type="tap", key=os.environ["ENTRY"] + "mcp")
+mark("mcp-panel", 300)
+typ("mcp-name", "playwright2")
+add(type="tap", key="mcp-kind"); add(type="tap", key="mcp-kind-stdio")
+typ("mcp-command", "npx")
+typ("mcp-args", "-y @playwright/mcp@latest")
+add(type="tap", key="mcp-save")
+mark("mcp-dialog", 300)
+add(type="tap", key="cf-ack")
+mark("mcp-acked")
+add(type="tap", key="cf-confirm")
+mark("mcp-added", 600)
+add(type="tap", key=os.environ["ENTRY"] + "kits")
+mark("kits-panel", 300)
 add(type="tap", key="kit-ssh-agent")
 add(type="tap", key="kits-save")
 mark("kits-dialog", 300)
 add(type="tap", key="cf-ack")
 add(type="tap", key="cf-confirm")
 mark("kits-saved", 500)
-add(type="tap", key="setup-close")
+add(type="tap", key="panel-close-kits")
 add(type="tap", key="extra-sandbox-docs-kit-add")
 mark("kit-pane", 500)
 mark("end")
 print(json.dumps({"events": ev}, indent=1))
 PY
-marks=(opened token-dialog token-typed token-saved mcp-dialog mcp-acked mcp-added host-dialog host-added voice-removed voice-dialog voice-started voice-progress kits-dialog kits-saved kit-pane end)
+marks=(opened token-dialog token-typed token-saved host-dialog host-added voice-removed voice-dialog voice-started voice-progress mcp-panel mcp-dialog mcp-acked mcp-added kits-panel kits-dialog kits-saved kit-pane end)
 build
 for m in "${marks[@]}"; do
   SHOT_SIZE="1280x860" run_app "$shots/window-$m.log" --fixture "$here/fixtures/setup/full.json" \

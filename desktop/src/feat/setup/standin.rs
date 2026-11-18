@@ -207,7 +207,7 @@ pub fn answer(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u
         (false, ["api", "mcp"]) => {
             let spec = &body["spec"];
             let name = spec["name"].as_str().unwrap_or("").to_string();
-            if !super::mcp_name_ok(&name) {
+            if !crate::feat::mcp::mcp_name_ok(&name) {
                 return bad("not a server name");
             }
             let secrets = body["secrets"].as_object().map(|m| m.len()).unwrap_or(0);

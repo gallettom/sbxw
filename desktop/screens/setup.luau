@@ -1,21 +1,18 @@
--- Setup: what every sandbox starts with and what sbxw holds for them, as tabs
--- of one dialog (assets/js/setup.js): Secrets, Kits, Skills, MCP, Hosts,
--- Voice. The core reads the daemon and hands `data.setup`; this screen only
--- shows it and asks for things with intents.
+-- Setup (Settings in the rail): what sbxw holds for every sandbox, as tabs
+-- of one dialog (assets/js/setup.js): Secrets, Hosts, Voice. MCP servers,
+-- Kits and Skills have their own panels (mcp.luau, kits.luau, skills.luau)
+-- and rail entries. The core reads the daemon and hands its answers; this
+-- screen only shows them and asks for things with intents.
 --
 -- Secrets: this screen never sees a value. It shows names and whether a
 -- value is set; "Set" asks the core, which draws its own dialog with a
 -- secret field, sends the value once and forgets it. Everything that
--- changes what sandboxes get (a secret, a kits line, a kept skill, an MCP
--- server, a remote host, the voice models) is confirmed in the core's
--- dialog, not here.
+-- changes what sandboxes get (a secret, a remote host, the voice models) is
+-- confirmed in the core's dialog, not here.
 
 local TABS = {
-  { id = "secrets", label = "Secrets" },
-  { id = "kits", label = "Kits" },
-  { id = "skills", label = "Skills" },
-  { id = "mcp", label = "MCP" },
-  { id = "hosts", label = "Hosts" },
+  { id = "secrets", label = "Secrets and sign-in" },
+  { id = "hosts", label = "Remote hosts" },
   { id = "voice", label = "Voice" },
 }
 
@@ -25,12 +22,6 @@ local TABS = {
 local function failed(v)
   if type(v) == "table" and v.ok == false then return v.error or "the daemon refused" end
   return nil
-end
-
-local function is_stdio(x)
-  local t = string.lower(x.type or "")
-  return string.find(t, "stdio") ~= nil or string.find(t, "local") ~= nil or string.find(t, "command") ~= nil
-    or (type(x.detail) == "table" and x.detail.command ~= nil)
 end
 
 local function view(data)
@@ -47,46 +38,6 @@ local function view(data)
   local gh = data.github_token
   d.secrets = { github = (type(gh) == "table" and gh.ok ~= false) and gh or nil, services = services, custom = custom }
   d.errors.secrets = err("secrets") or err("github_token")
-
-  d.kits = data.kits or {}
-  d.errors.kits = err("kits")
-
-  local kept_names = {}
-  local ms = data.my_skills or {}
-  for _, x in ipairs(ms.skills or {}) do kept_names[x.name] = true end
-  local look = nil
-  if data.skills_for then
-    local found = data.sandbox_skills
-    look = { sandbox = data.skills_for, loading = found == nil }
-    if type(found) == "table" then
-      if found.ok == false then
-        look.error = found.error
-      else
-        look.skills = {}
-        for _, x in ipairs(found.skills or {}) do
-          local c = {}
-          for k, v in pairs(x) do c[k] = v end
-          c.kept = kept_names[x.name] == true
-          look.skills[#look.skills + 1] = c
-        end
-      end
-    end
-  end
-  d.skills = { kept = ms.skills or {}, look = look }
-  d.errors.skills = err("my_skills") or (look and look.error) or app_errors.sandbox_skills
-
-  local servers = {}
-  for _, x in ipairs((data.mcp or {}).servers or {}) do
-    servers[#servers + 1] = { name = x.name, type = x.type, stdio = is_stdio(x) }
-  end
-  local inspect = nil
-  if data.mcp_inspect_for then
-    local t = data.mcp_inspect
-    inspect = { server = data.mcp_inspect_for,
-      text = type(t) == "table" and (t.text or t.error or "") or "Reading…" }
-  end
-  d.mcp = { servers = servers, inspect = inspect }
-  d.errors.mcp = err("mcp")
 
   local rh = data.remote_hosts or {}
   d.hosts = { hosts = rh.hosts or {}, provision = data.provision }
@@ -111,11 +62,6 @@ local function view(data)
 end
 
 local function trim(v) return (string.gsub(v or "", "^%s*(.-)%s*$", "%1")) end
-
-local function contains(list, v)
-  for _, x in ipairs(list or {}) do if x == v then return true end end
-  return false
-end
 
 local function note(t, color)
   return text{ t, wrap = true, size = "sm", color = color or "text-muted" }
@@ -151,12 +97,6 @@ end
 
 local function mb(n) return tostring(math.floor((tonumber(n) or 0) / 1e6 + 0.5)) .. " MB" end
 local function gb(m) return string.format("%.1f GB", (tonumber(m) or 0) / 1000) end
-local function kb(n)
-  n = tonumber(n) or 0
-  if n < 1024 then return n .. " B" end
-  return math.floor(n / 1024 + 0.5) .. " KB"
-end
-
 -- data.app of the render under way (set by render, read by the tabs).
 local data_app = nil
 
@@ -231,270 +171,6 @@ local function secrets_tab(state, d)
     not ask and row{ w = "full", spacer{},
       button{ "Ask before uploading dropped files", key = "setup-drops-ask", on = "drops_ask" } } or false,
   }
-  return out
-end
-
--- ── Kits ────────────────────────────────────────────────────────────────
-local function kits_file(d, state)
-  local k = d.kits or {}
-  for _, f in ipairs(k.files or {}) do
-    if f.path == state.kits_path then return f end
-  end
-  for _, f in ipairs(k.files or {}) do
-    if f.daemon then return f end
-  end
-  return (k.files or {})[1]
-end
-
--- The line being edited: the person's edits, or the file's own line.
-local function kits_list(d, state, f)
-  if state.kits_edit and state.kits_edit.path == f.path then return state.kits_edit.list end
-  if f.kits then return f.kits end
-  return (d.kits or {}).defaults or {}
-end
-
-local function kit_label(ref)
-  if string.find(ref, "/kits/jarvis%-") then return "Jarvis kit" end
-  if string.find(ref, "^[%./~]") then return "local kit" end
-  return false
-end
-
-local function kits_tab(state, d)
-  local k = d.kits or {}
-  local out = { gap = 12 }
-  local waiting = {}
-  for _, sb in ipairs(d.sandboxes or {}) do
-    if (sb.kits_waiting or 0) > 0 then
-      waiting[#waiting + 1] = row{ w = "full", gap = 8, key = "waiting-" .. sb.name,
-        icon{ "warning", size = 12, color = "amber" },
-        text{ sb.name, weight = "medium" },
-        text{ sb.kits_waiting .. (sb.kits_waiting == 1 and " kit waits" or " kits wait") .. " for your answer", size = "sm", color = "text-muted" },
-        spacer{},
-        button{ "Answer in a pane", icon = "terminal", on = "kit_add", arg = sb.name,
-          help = "Opens sbx kit add in a pane: answer sbx's prompt there, one kit per answer" },
-      }
-    end
-  end
-  if #waiting > 0 then
-    out[#out + 1] = card{ title("Waiting for you"),
-      note("A kit that adds network rules makes sbx ask you before it reaches a running sandbox."),
-      list(waiting) }
-  end
-
-  local files = k.files or {}
-  if #files == 0 then
-    out[#out + 1] = note("The daemon runs without an sbxw.toml and no sandbox records one: start it from a project with sbxw web, or create a sandbox from one.")
-    return out
-  end
-  local f = kits_file(d, state)
-  local items = {}
-  for _, x in ipairs(files) do items[#items + 1] = { id = x.path, label = x.path } end
-  local cur = kits_list(d, state, f)
-  local broken = f.error ~= nil
-  local dirty = state.kits_edit ~= nil and state.kits_edit.path == f.path
-
-  local users = {}
-  if f.daemon then users[#users + 1] = "the daemon (new sandboxes from this app)" end
-  for _, n in ipairs(f.sandboxes or {}) do users[#users + 1] = n end
-  local lines = {}
-  if #users > 0 then lines[#lines + 1] = "Used by " .. table.concat(users, ", ") .. "." end
-  if not f.exists then lines[#lines + 1] = "The file does not exist yet: saving creates it." end
-  if not f.kits then lines[#lines + 1] = "No kits line: the default kits apply. Saving writes them out." end
-
-  local bundled = {}
-  for _, b in ipairs(k.bundled or {}) do
-    bundled[#bundled + 1] = row{ w = "full", gap = 8,
-      checkbox{ b.ref, value = contains(cur, b.ref), on = "kit_toggle", arg = { ref = b.ref, path = f.path, list = cur }, disabled = broken, key = "kit-" .. b.name },
-      b.default and badge{ "default", help = "What a file without a kits line gets" } or false,
-      text{ b.about or "", size = "sm", color = "text-muted", truncate = true, grow = 1 },
-    }
-  end
-  local others = {}
-  for _, ref in ipairs(cur) do
-    if string.sub(ref, 1, 5) ~= "sbxw:" then
-      local lab = kit_label(ref)
-      others[#others + 1] = row{ w = "full", gap = 8,
-        text{ ref, mono = true, truncate = true, grow = 1, help = ref },
-        lab and badge{ lab, tone = lab == "Jarvis kit" and "purple" or "neutral" } or false,
-        button{ "Remove", variant = "ghost", on = "kit_remove", arg = { ref = ref, path = f.path, list = cur }, disabled = broken, key = "kit-rm-" .. ref },
-      }
-    end
-  end
-
-  out[#out + 1] = card{
-    title("Kits line", dirty and badge{ "unsaved", tone = "amber" } or false),
-    note("The kits line of each sbxw.toml sbxw uses. Only that line is rewritten, comments kept. A change reaches a sandbox at its next up."),
-    select{ id = "kits-file", value = f.path, items = items, on = "kits_file" },
-    #lines > 0 and note(table.concat(lines, " ")) or false,
-    broken and note("Cannot be edited: " .. f.error, "red") or false,
-    text{ "Bundled", size = "sm", weight = "semibold", color = "text-muted" },
-    list(bundled),
-    text{ "Other kits", size = "sm", weight = "semibold", color = "text-muted" },
-    #others > 0 and list(others) or note("None: only bundled kits."),
-    row{ w = "full", gap = 8,
-      column{ grow = 1, input{ id = "kits-add", value = state.kit_add or "", on = "kit_typed", on_submit = "kit_push", arg = { path = f.path, list = cur },
-        placeholder = "A path or a registry reference", disabled = broken } },
-      button{ "Add", key = "kit-push", on = "kit_push", arg = { path = f.path, list = cur }, disabled = broken },
-    },
-    row{ w = "full", gap = 8,
-      button{ "Use defaults", key = "kits-defaults", on = "kits_defaults", arg = f.path, disabled = broken or not f.kits,
-        help = "Remove the kits line: its sandboxes then get the default kits" },
-      spacer{},
-      dirty and button{ "Discard", variant = "ghost", on = "kits_discard" } or false,
-      button{ "Save…", key = "kits-save", variant = "primary", on = "kits_save", disabled = broken or not dirty },
-    },
-  }
-  return out
-end
-
--- ── Skills ──────────────────────────────────────────────────────────────
-local function skills_tab(state, d)
-  local sk = d.skills or {}
-  local out = { gap = 12 }
-  local kept = {}
-  for _, x in ipairs(sk.kept or {}) do
-    kept[#kept + 1] = row{ w = "full", gap = 8, align = "start", key = "kept-" .. x.name,
-      column{ grow = 1, gap = 2,
-        text{ "/" .. x.name, mono = true, color = "text-bright" },
-        x.description and text{ x.description, size = "sm", wrap = true, color = "text-soft" } or false,
-        text{ "from " .. (x.sandbox or "?"), size = "xs", color = "text-dim", help = x.path },
-      },
-      button{ "Remove", variant = "ghost", on = "skill_forget", arg = x.name, help = "New sandboxes stop getting it" },
-    }
-  end
-  out[#out + 1] = card{
-    title("Your skills", pill(#kept > 0, #kept .. " kept", "none")),
-    note("Skills kept from a sandbox: every sandbox created from now on gets them. A sandbox can write a skill, never make it reach the others; keeping one is your act, here."),
-    #kept > 0 and list(kept) or note("None kept yet."),
-  }
-
-  local names = {}
-  for _, sb in ipairs(d.sandboxes or {}) do names[#names + 1] = { id = sb.name, label = sb.name } end
-  local pick = state.skills_sandbox
-  if not pick and #names > 0 then pick = names[1].id end
-  local look = sk.look
-  local found = false
-  if look and look.sandbox == pick then
-    if look.loading then
-      found = note("Reading the sandbox's skills… (a stopped sandbox is started)")
-    elseif look.skills then
-      local rows = {}
-      for _, x in ipairs(look.skills) do
-        rows[#rows + 1] = row{ w = "full", gap = 8, align = "start", key = "found-" .. x.name,
-          column{ grow = 1, gap = 2,
-            text{ "/" .. x.name, mono = true, color = "text-bright" },
-            x.description and text{ x.description, size = "sm", wrap = true, color = "text-soft" } or false,
-            text{ x.path .. " · " .. (x.files or 0) .. " files, " .. kb(x.bytes), size = "xs", color = "text-dim" },
-          },
-          x.keepable and button{ x.kept and "Replace…" or "Keep…", key = "keep-" .. x.name, on = "skill_keep", arg = { sandbox = look.sandbox, name = x.name },
-            help = "Every sandbox created from now on gets it" }
-            or text{ "name not kept", size = "sm", color = "text-dim", help = "Lowercase letters, digits, - and _ only" },
-        }
-      end
-      found = #rows > 0 and list(rows)
-        or note("No skill in " .. look.sandbox .. ": none under the project's .claude/skills/ or the sandbox's own ~/.claude/skills/.")
-    end
-  end
-  out[#out + 1] = card{
-    title("Keep a skill from a sandbox"),
-    row{ w = "full", gap = 8,
-      column{ grow = 1, select{ id = "skills-sandbox", value = pick or "", items = names, on = "skills_sandbox",
-        placeholder = "No sandbox", disabled = #names == 0 } },
-      button{ "Look", icon = "search", on = "skills_look", arg = pick, disabled = not pick },
-    },
-    found,
-  }
-  return out
-end
-
--- ── MCP ─────────────────────────────────────────────────────────────────
-local function placeholders(headers)
-  local keys = {}
-  for k in string.gmatch(headers or "", "%${([%w_%-]+)}") do
-    if not contains(keys, k) then keys[#keys + 1] = k end
-  end
-  return keys
-end
-
-local function mcp_tab(state, d)
-  local m = d.mcp or {}
-  local out = { gap = 12 }
-  local running = {}
-  for _, sb in ipairs(d.sandboxes or {}) do
-    if sb.status == "running" then running[#running + 1] = { id = sb.name, label = sb.name } end
-  end
-  local target = state.mcp_sandbox
-  if not contains((function() local l = {} for _, r in ipairs(running) do l[#l + 1] = r.id end return l end)(), target) then
-    target = running[1] and running[1].id or nil
-  end
-
-  local rows = {}
-  for _, x in ipairs(m.servers or {}) do
-    rows[#rows + 1] = row{ w = "full", gap = 8, key = "mcp-" .. x.name,
-      text{ x.name, mono = true, truncate = true, grow = 1, help = x.name },
-      text{ x.type or "", size = "sm", color = "text-muted" },
-      button{ "Load", key = "mcp-load-" .. x.name, variant = "ghost", on = "mcp_load", arg = { server = x.name, sandbox = target }, disabled = not target,
-        help = "Attach to " .. (target or "a running sandbox") .. ": its agent picks up the tools without a restart" },
-      button{ "Unload", key = "mcp-unload-" .. x.name, variant = "ghost", on = "mcp_unload", arg = { server = x.name, sandbox = target }, disabled = not target },
-      (not x.stdio) and button{ "Sign in", variant = "ghost", on = "mcp_auth", arg = x.name,
-        help = "sbx mcp auth: sign in from this machine's browser; the token serves every sandbox" } or false,
-      button{ "Inspect", variant = "ghost", on = "mcp_inspect", arg = x.name },
-      button{ icon = "trash", variant = "ghost", color = "red", on = "mcp_rm", arg = x.name, help = "Unregister from this machine" },
-    }
-  end
-  out[#out + 1] = card{
-    title("Servers on this machine", badge{ tostring(#(m.servers or {})) }),
-    note("Registered on this machine (sbx mcp); a sandbox gets a server once it is loaded there, while it runs."),
-    row{ w = "full", gap = 8,
-      text{ "Sandbox", size = "sm", color = "text-muted" },
-      column{ grow = 1, select{ id = "mcp-sandbox", value = target or "", items = running, on = "mcp_sandbox",
-        placeholder = "no running sandbox", disabled = #running == 0 } },
-    },
-    #rows > 0 and list(rows) or note("No servers registered yet. Add the first one below."),
-    m.inspect and column{ w = "full", gap = 4, pad = 8, radius = "sm", fill = "bg",
-      row{ w = "full", text{ "sbx mcp inspect " .. m.inspect.server, size = "sm", color = "text-muted" }, spacer{},
-        button{ icon = "close", variant = "ghost", on = "mcp_inspect_close", help = "Hide" } },
-      text{ m.inspect.text ~= "" and m.inspect.text or "(no output)", mono = true, wrap = true, size = "sm" },
-    } or false,
-  }
-
-  -- Added: the server is listed now, so the form starts again (as the web
-  -- UI resets it). The next edit drops the old fields (`reset`).
-  local f = state.mcp or {}
-  local done = false
-  if f.sent and not f.replace then
-    for _, x in ipairs(m.servers or {}) do if x.name == f.sent then done = true end end
-  end
-  if done then f = {} end
-  local stdio = f.kind == "stdio"
-  local keys = placeholders(f.headers)
-  local form = {
-    title(f.replace and ("Edit " .. f.replace) or "New server"),
-    field("Name", input{ id = "mcp-name", value = f.name or "", on = "mcp_field", arg = { k = "name", reset = done }, placeholder = "github" }),
-    field("Kind", select{ id = "mcp-kind", value = stdio and "stdio" or "remote", on = "mcp_kind", arg = { reset = done }, items = {
-      { id = "remote", label = "Remote (an HTTP endpoint)" },
-      { id = "stdio", label = "Local command (runs on this machine)" } } }),
-  }
-  if stdio then
-    form[#form + 1] = field("Command", input{ id = "mcp-command", value = f.command or "", on = "mcp_field", arg = { k = "command", reset = done }, placeholder = "npx" })
-    form[#form + 1] = field("Arguments", input{ id = "mcp-args", value = f.args or "", on = "mcp_field", arg = { k = "args", reset = done }, placeholder = "-y @modelcontextprotocol/server-filesystem /srv" })
-    form[#form + 1] = field("Directory", input{ id = "mcp-dir", value = f.dir or "", on = "mcp_field", arg = { k = "dir", reset = done }, placeholder = "optional" })
-    form[#form + 1] = note("A local command runs on this machine, outside any sandbox: the next dialog shows the exact line and asks you to confirm you read it.", "amber")
-  else
-    form[#form + 1] = field("URL", input{ id = "mcp-url", value = f.url or "", on = "mcp_field", arg = { k = "url", reset = done }, placeholder = "https://mcp.example.com/mcp" })
-    form[#form + 1] = field("Headers", input{ id = "mcp-headers", value = f.headers or "", on = "mcp_field", arg = { k = "headers", reset = done },
-      placeholder = "Authorization: Bearer ${TOKEN}; one per ;" })
-    if #keys > 0 then
-      form[#form + 1] = note("Secrets asked in the next dialog: " .. table.concat(keys, ", ") .. (f.replace and " (left empty: unchanged)" or ""))
-    end
-    form[#form + 1] = note("OAuth servers are added unauthorized: use Sign in once added.")
-  end
-  form[#form + 1] = row{ w = "full", gap = 8,
-    spacer{},
-    (f.replace or trim(f.name) ~= "") and button{ "Clear", variant = "ghost", on = "mcp_clear" } or false,
-    button{ f.replace and "Save…" or "Add…", key = "mcp-save", variant = "primary", on = "mcp_save", disabled = trim(f.name) == "" },
-  }
-  out[#out + 1] = card(form)
   return out
 end
 
@@ -664,7 +340,7 @@ local function host_args(f)
   return args
 end
 
-local BODY = { secrets = secrets_tab, kits = kits_tab, skills = skills_tab, mcp = mcp_tab, hosts = hosts_tab, voice = voice_tab }
+local BODY = { secrets = secrets_tab, hosts = hosts_tab, voice = voice_tab }
 
 return {
   -- No tab yet: the one the core passes (the last one shown, kept across runs).
@@ -715,90 +391,6 @@ return {
       return intent("secret_custom_set", { hosts = trim(state.secret_hosts), env = trim(state.secret_env) })
     end,
     secret_rm = function(_, name) return intent("secret_rm", { name = name }) end,
-
-    -- Kits: the line is edited here, saved through the core's dialog.
-    kits_file = function(state, _, path) state.kits_path = path; state.kits_edit = nil end,
-    kit_toggle = function(state, a, on)
-      local list = {}
-      for _, k in ipairs(a.list or {}) do
-        if k ~= a.ref then list[#list + 1] = k end
-      end
-      if on then list[#list + 1] = a.ref end
-      state.kits_path = a.path
-      state.kits_edit = { path = a.path, list = list }
-    end,
-    kit_remove = function(state, a)
-      local list = {}
-      for _, k in ipairs(a.list or {}) do
-        if k ~= a.ref then list[#list + 1] = k end
-      end
-      state.kits_path = a.path
-      state.kits_edit = { path = a.path, list = list }
-    end,
-    kit_typed = function(state, _, v) state.kit_add = v end,
-    kit_push = function(state, a)
-      local ref = trim(state.kit_add)
-      if ref == "" then return end
-      local list = {}
-      for _, k in ipairs(a.list or {}) do list[#list + 1] = k end
-      if not contains(list, ref) then list[#list + 1] = ref end
-      state.kits_path = a.path
-      state.kits_edit = { path = a.path, list = list }
-      state.kit_add = ""
-    end,
-    kits_discard = function(state) state.kits_edit = nil end,
-    kits_save = function(state)
-      if not state.kits_edit then return end
-      local e = state.kits_edit
-      return intent("kits_save", { path = e.path, kits = table.concat(e.list, "\n") })
-    end,
-    kits_defaults = function(state, path)
-      state.kits_edit = nil
-      return intent("kits_save", { path = path, defaults = true })
-    end,
-    kit_add = function(_, name)
-      return intent("open_terminal", { sandbox = name, mode = "kit-add", pane = "spare" })
-    end,
-
-    -- Skills
-    skills_sandbox = function(state, _, v) state.skills_sandbox = v end,
-    skills_look = function(_, name) return intent("skills_look", { sandbox = name }) end,
-    skill_keep = function(_, a) return intent("skill_keep", { sandbox = a.sandbox, name = a.name }) end,
-    skill_forget = function(_, name) return intent("skill_forget", { name = name }) end,
-
-    -- MCP
-    mcp_sandbox = function(state, _, v) state.mcp_sandbox = v end,
-    mcp_load = function(_, a) return intent("mcp_load", { server = a.server, sandbox = a.sandbox }) end,
-    mcp_unload = function(_, a) return intent("mcp_unload", { server = a.server, sandbox = a.sandbox }) end,
-    mcp_auth = function(_, server) return intent("mcp_auth", { server = server }) end,
-    mcp_inspect = function(_, server) return intent("mcp_inspect", { server = server }) end,
-    mcp_inspect_close = function() return intent("mcp_inspect_close") end,
-    mcp_rm = function(_, server) return intent("mcp_rm", { server = server }) end,
-    mcp_field = function(state, a, v)
-      if a.reset or not state.mcp then state.mcp = {} end
-      state.mcp[a.k] = v
-    end,
-    mcp_kind = function(state, a, v)
-      if a.reset or not state.mcp then state.mcp = {} end
-      state.mcp.kind = v
-    end,
-    mcp_clear = function(state) state.mcp = {} end,
-    mcp_save = function(state)
-      local f = state.mcp or {}
-      local args = { name = trim(f.name), kind = f.kind == "stdio" and "stdio" or "remote" }
-      if args.kind == "stdio" then
-        args.command = trim(f.command)
-        if trim(f.args) ~= "" then args.args = trim(f.args) end
-        if trim(f.dir) ~= "" then args.dir = trim(f.dir) end
-      else
-        args.url = trim(f.url)
-        if trim(f.headers) ~= "" then args.headers = trim(f.headers) end
-      end
-      if f.replace then args.replace = f.replace end
-      f.sent = args.name
-      state.mcp = f
-      return intent("mcp_save", args)
-    end,
 
     -- Hosts
     host_field = function(state, a, v)

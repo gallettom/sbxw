@@ -82,12 +82,12 @@ return {
     end
 
     if dead then
-      -- The next step, through what the app already has: Setup's Kits tab
-      -- (the kits line), and the sandbox's actions (Recreate, behind the
-      -- core's dialog). Nothing here changes anything by itself.
+      -- The next step, through what the app already has: the Kits panel on
+      -- this sandbox's sbxw.toml (the kits line), and the sandbox's actions
+      -- (Recreate, behind the core's dialog). Nothing here changes anything by itself.
       table.insert(out, row{ gap = 8, w = "full", key = "browser-next",
-        button{ "Kits in Setup", icon = "gear", on = "kits", key = "browser-kits",
-          help = "Open Setup on the Kits tab: add \"sbxw:agent-skills\" to the kits line of this sandbox's sbxw.toml" },
+        button{ "Kits…", icon = "box", on = "kits", arg = sb, key = "browser-kits",
+          help = "Open the Kits panel on this sandbox's sbxw.toml: add \"sbxw:agent-skills\" to its kits line" },
         button{ "Recreate…", icon = "more", on = "actions", arg = sb, key = "browser-recreate",
           help = "Open " .. sb .. "'s actions: Recreate applies a new kits line (the app asks before it does anything)" },
       })
@@ -124,7 +124,7 @@ return {
       return intent("browser_nav", { url = value })
     end,
     viewport = function(_, _, value) return intent("browser_viewport", { value = value }) end,
-    kits = function() return intent("open_modal", { screen = "setup", arg = "kits" }) end,
+    kits = function(_, sb) return intent("kits_show", { sandbox = sb }) end,
     actions = function(_, sb) return intent("open_modal", { screen = "sandbox-actions", arg = sb }) end,
     allow = function(_, host) return intent("browser_allow", { host = host }) end,
     ignore = function(_, host) return intent("browser_ignore", { host = host }) end,
