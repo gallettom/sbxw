@@ -137,6 +137,10 @@ pub fn lens(i: usize) -> impl Fn(&mut App) -> Option<&mut TerminalState> + Clone
     move |s: &mut App| if s.panes_covered() { None } else { s.panes.get_mut(i).and_then(|p| p.term.as_mut()) }
 }
 
+/// Drops that reached a pane (tests: a drop over a layer never does).
+#[cfg(test)]
+pub(crate) static PANE_DROPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Pane `i`'s terminal for its layout only (fitting it to the pane): kept
 /// under a dialog or a modal, so a window resized behind one still fits;
 /// not under an overlay, which keeps the panes' sizes as they were.
@@ -3052,6 +3056,8 @@ fn pane_view(s: &App, i: usize) -> El {
             if s.panes_covered() {
                 s.notify("Close what is open first: nothing was dropped", false);
             } else {
+                #[cfg(test)]
+                PANE_DROPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 s.pane_drop(i, files)
             }
         })

@@ -216,6 +216,8 @@ fn no_input_path_reaches_a_terminal_under_a_covering_layer() {
         }),
         ("Jarvis's proposal", |rt| rt.update(|s, _| s.jarvis.shown = Some("p-high-1".into()))),
         ("a modal", |rt| rt.update(|s, _| s.open_modal("templates", J::Null))),
+        // Typed text under an overlay is the overlay's (its `<screen>_key`
+        // filter, once it takes text), never a terminal's.
         ("an overlay", |rt| tap(rt, "rail-commits")),
         ("the palette", |rt| rt.update(|s, _| s.palette_open())),
     ];
@@ -361,9 +363,13 @@ fn the_typed_yes_still_works_with_the_scrim_up() {
 }
 
 /// Files dropped on a pane while something covers the panes start nothing:
-/// no upload, and no dialog skipped behind the one that shows.
+/// no upload, and no dialog skipped behind the one that shows. Over an
+/// overlay a drop is the overlay's (the explorer's upload card, once it
+/// takes drops), never the pane's under it: counted where a pane takes one.
 #[test]
 fn a_drop_on_a_covered_pane_starts_nothing() {
+    let drops = || super::PANE_DROPS.load(std::sync::atomic::Ordering::SeqCst);
+    let before = drops();
     let (mut rt, _rx) = window_on("jarvis/proposal-high");
     rt.update(|s, _| s.jarvis.shown = Some("p-high-1".into()));
     settle(&mut rt, 5);
@@ -387,7 +393,7 @@ fn a_drop_on_a_covered_pane_starts_nothing() {
     assert!(rt.state.feats.overlay.is_some());
     rt.drop_files(vec![file.clone()], Some((grid[0] + 10.0, grid[1] + 10.0)));
     settle(&mut rt, 3);
-    assert!(rt.state.feats.dialog.is_none(), "a drop under an overlay opened the upload dialog");
+    assert_eq!(drops(), before, "a drop over a covering layer reached a pane");
     let _ = std::fs::remove_file(&file);
     // With nothing over the pane, the same drop opens the upload's dialog.
     let (mut rt, _rx) = window_on("jarvis/proposal-high");
@@ -398,4 +404,5 @@ fn a_drop_on_a_covered_pane_starts_nothing() {
     settle(&mut rt, 3);
     let _ = std::fs::remove_file(&file);
     assert!(rt.state.feats.dialog.is_some(), "a drop on an uncovered pane opens the upload's dialog");
+    assert_eq!(drops(), before + 1, "the uncovered pane took its drop");
 }
