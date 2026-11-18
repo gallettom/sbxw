@@ -403,8 +403,11 @@ fn the_status_bar_follows_bring_ups_from_provision_events() {
     let b = st.bar_jobs(now);
     assert_eq!((b[0].step.as_deref(), b[0].frac), (Some("Install kits"), 0.5), "the detail clears with the next step");
 
-    // A second one, started later, shows first.
-    std::thread::sleep(Duration::from_millis(2));
+    // A second one, started later, shows first. (The first one's start is
+    // set a second back: no sleep to tell two instants apart.)
+    for j in st.jobs.iter_mut().filter(|j| j.sandbox == "better-api") {
+        j.since = j.since.checked_sub(Duration::from_secs(1)).unwrap_or(j.since);
+    }
     ev(&mut st, json!({ "sandbox": "web", "kind": "plan", "steps": plan }));
     let b = st.bar_jobs(Instant::now());
     assert_eq!(b.iter().map(|j| j.sandbox.as_str()).collect::<Vec<_>>(), ["web", "better-api"]);
