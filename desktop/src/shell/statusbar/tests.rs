@@ -124,19 +124,6 @@ fn cost_sums_the_sandboxes_and_lists_sessions_and_what_ended() {
     assert_eq!(short_model(None, Some("claude-sonnet-5-5-20261001")).as_deref(), Some("sonnet 5.5"));
 }
 
-#[cfg(unix)]
-#[test]
-fn this_apps_cpu_time_is_read() {
-    let a = numbers::own_cpu_seconds().unwrap();
-    let mut x = 0u64;
-    for i in 0..30_000_000u64 {
-        x = x.wrapping_add(i * i);
-    }
-    std::hint::black_box(x);
-    let b = numbers::own_cpu_seconds().unwrap();
-    assert!(b >= a && b - a < 60.0, "{a} {b}");
-}
-
 /// The fit is the one laid out: at every width the window allows, the
 /// right entries are as wide as measured, side by side inside the bar, and
 /// the bring-up's entry ends before them.

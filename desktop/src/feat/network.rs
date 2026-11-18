@@ -759,8 +759,19 @@ mod tests {
     /// top bar counts one per (sandbox, host): sbx lists a refused host again
     /// at each retry. Refused hosts are dismissed in bulk, one call after the
     /// other, never a request that holds something.
+    /// The bulk dismiss's queue (`DISMISS`) is process-wide: the tests that
+    /// run one hold this for their whole run and start from an empty queue,
+    /// so two of them in parallel never meet in it.
+    fn one_dismiss_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+        static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let g = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        *DISMISS.lock().unwrap_or_else(|e| e.into_inner()) = (Vec::new(), 0, 0);
+        g
+    }
+
     #[test]
     fn repeated_hosts_count_once_and_refused_ones_dismiss_in_bulk() {
+        let _one = one_dismiss_at_a_time();
         let row = |id: &str, sb: &str, kind: &str, title: &str, at: &str| json!({ "id": id, "kind": kind, "sandbox": sb, "title": title, "detail": "", "created_at": at,
             "options": [{ "id": "allow", "label": "Allow" }, { "id": "dismiss", "label": "Dismiss" }] });
         let d = json!({
@@ -926,6 +937,7 @@ mod tests {
 
     #[test]
     fn under_a_filter_the_bulk_dismiss_sends_exactly_that_sandboxs_ids() {
+        let _one = one_dismiss_at_a_time();
         let d = filtered();
         let cx = Ctx { data: &d };
         let a = act(&cx, &ask("approvals_dismiss", json!({ "sandbox": "test-sbx", "expect": 2 }))).unwrap();

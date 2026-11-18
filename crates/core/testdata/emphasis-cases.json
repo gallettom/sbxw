@@ -3,6 +3,9 @@
   "cases": [
     { "text": "Build [[Done]] now", "markers": [{ "at": 6, "len": 8, "word": "Done", "detail": null, "tone": "green" }] },
     { "text": "[[verified]]", "markers": [{ "at": 0, "len": 12, "word": "verified", "detail": null, "tone": "green" }] },
+    { "text": "[[passed]] and [[VERIFIED]]", "markers": [
+      { "at": 0, "len": 10, "word": "passed", "detail": null, "tone": "green" },
+      { "at": 15, "len": 12, "word": "VERIFIED", "detail": null, "tone": "green" } ] },
     { "text": "[[Failed: 3 tests]]", "markers": [{ "at": 0, "len": 19, "word": "Failed", "detail": " 3 tests", "tone": "red" }] },
     { "text": "[[In Progress]] and [[in  progress]]", "markers": [
       { "at": 0, "len": 15, "word": "In Progress", "detail": null, "tone": "cyan" },

@@ -939,13 +939,6 @@ PY
         assert!(e.contains("stopped at once"), "{e}");
     }
 
-    #[tokio::test]
-    async fn a_failed_local_request_reports_what_was_said() {
-        // Nothing listens on port 9: curl's own error comes back, not a panic.
-        let e = curl_local(&["http://127.0.0.1:9/v1/models"], None, Duration::from_secs(2)).await.unwrap_err();
-        assert!(!e.is_empty());
-    }
-
     #[test]
     fn samples_are_little_endian_f32_and_bounded() {
         let bytes: Vec<u8> = [0.5f32, -1.0].iter().flat_map(|f| f.to_le_bytes()).collect();

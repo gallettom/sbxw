@@ -1850,7 +1850,7 @@ mod tests {
     /// line approves nothing; removing the mount asks nothing.
     #[tokio::test]
     async fn a_new_mount_needs_the_persons_yes_once() {
-        let (dir, app, fake) = app_with(sbx_answer);
+        let (dir, app, fake) = app_with(crate::testing::sbx_answer_booting());
         let ws = dir.path().join("myapp");
         std::fs::create_dir_all(&ws).unwrap();
         let file = ws.join("sbxw.toml");
@@ -2314,7 +2314,7 @@ mod tests {
 
     #[tokio::test]
     async fn volumes_are_a_kit_given_at_creation() {
-        let (dir, app, fake) = app_with(sbx_answer);
+        let (dir, app, fake) = app_with(crate::testing::sbx_answer_booting());
         let ws = dir.path().join("myapp");
         std::fs::create_dir_all(&ws).unwrap();
         let req = BringUp {
@@ -2344,7 +2344,7 @@ mod tests {
     #[tokio::test]
     async fn a_kit_folder_picked_in_the_dialog_is_a_mount_at_creation() {
         use crate::svc::sandboxes::CreateForm;
-        let (dir, app, fake) = app_with(sbx_answer);
+        let (dir, app, fake) = app_with(crate::testing::sbx_answer_booting());
         let ws = dir.path().join("ws");
         let kit = dir.path().join("hist-kit");
         std::fs::create_dir_all(&ws).unwrap();
@@ -2380,7 +2380,7 @@ mod tests {
     #[tokio::test]
     async fn the_dialogs_other_repos_are_mounted_beside_the_workspace() {
         use crate::svc::sandboxes::CreateForm;
-        let (dir, app, fake) = app_with(sbx_answer);
+        let (dir, app, fake) = app_with(crate::testing::sbx_answer_booting());
         let [ws, docs, lib] = ["ws", "docs", "lib"].map(|n| {
             let p = dir.path().join(n);
             std::fs::create_dir_all(&p).unwrap();
@@ -2395,17 +2395,18 @@ mod tests {
         assert!(create.contains(&format!(" {docs}:ro")), "{create}");
         let mounts = app.store.get(sbxw_core::SandboxRef::parse("multi").unwrap()).mounts;
         assert_eq!(mounts.iter().map(|m| (m.path.to_string_lossy().into_owned(), m.readonly)).collect::<Vec<_>>(), [(docs.clone(), true), (lib.clone(), false)]);
+        // Each refusal below under a name of its own: "multi" exists now.
         let twice = vec![(ws.clone(), false)];
-        let e = app.create(name.clone(), &ws, CreateForm { mounts: twice, ..Default::default() }, None).await.unwrap_err();
+        let e = app.create(SandboxRef::parse("multi-2").unwrap(), &ws, CreateForm { mounts: twice, ..Default::default() }, None).await.unwrap_err();
         assert!(e.to_string().contains("already mounted"), "{e}");
         // A repo inside the workspace is reached through the workspace's own
         // mount, writable: its `:ro` would be a lie, so it is refused.
         let inner = format!("{ws}/frontend");
         std::fs::create_dir_all(&inner).unwrap();
-        let e = app.create(name.clone(), &ws, CreateForm { mounts: vec![(inner, true)], ..Default::default() }, None).await.unwrap_err();
+        let e = app.create(SandboxRef::parse("multi-3").unwrap(), &ws, CreateForm { mounts: vec![(inner, true)], ..Default::default() }, None).await.unwrap_err();
         assert!(e.to_string().contains("nested"), "{e}");
         let outer = dir.path().canonicalize().unwrap().to_string_lossy().into_owned();
-        let e = app.create(name, &ws, CreateForm { mounts: vec![(outer, true)], ..Default::default() }, None).await.unwrap_err();
+        let e = app.create(SandboxRef::parse("multi-4").unwrap(), &ws, CreateForm { mounts: vec![(outer, true)], ..Default::default() }, None).await.unwrap_err();
         assert!(e.to_string().contains("nested"), "{e}");
     }
 }

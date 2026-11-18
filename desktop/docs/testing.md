@@ -32,8 +32,10 @@ Every demo (each writes its shots and says what they show in its header):
 | Script | Shows |
 |---|---|
 | `demo-browser.sh` | the sandbox's browser panel |
+| `demo-commits.sh`, `demo-worktrees.sh` | the Commits and Worktrees views |
+| `demo-configviews.sh` | the MCP servers, Skills and Kits views out of Setup |
 | `demo-create.sh` | a whole creation, chooser to running |
-| `demo-files.sh` | the Project panel and the code map |
+| `demo-explorer.sh`, `demo-files.sh` | the file explorer; the files and the code map |
 | `demo-jarvis.sh`, `demo-jarvis-first-run.sh` | Jarvis end to end; the first run on a Mac, replayed |
 | `demo-live.sh` | list updates made behind the app |
 | `demo-mac.sh` | the virtual Mac panel |
@@ -172,7 +174,54 @@ SBXW_DAEMON=127.0.0.1:7681 SBXW_TOKEN=$(cat ~/.sbxw/run/ui-token) SBXW_SANDBOX=<
 
 ## Tests
 
-`cd desktop && cargo test`:
+### Running them
+
+| Suite | Command (from the repository root) | Tests |
+|---|---|---|
+| Desktop | `cd desktop && CARGO_PROFILE_DEV_DEBUG=0 cargo test -j1` | about 450, plus 9 against a real stand-in process |
+| Crates | `cargo test -p sbxw-core -p sbxw-daemon -p sbxw-sbx -p sbxw` | about 740 |
+| Web UI matcher | run by `crates/core`'s `the_web_matcher_passes_the_shared_cases` (needs `node`) | the shared pill cases |
+| Jarvis's MCP server | `node scripts/test-config-mcp.mjs` (by hand: nothing runs it yet) | 8 checks |
+| Web UI smoke | `scripts/ui-smoke.sh` (by hand, needs Playwright) | about 30 steps |
+
+A thread keeps `CARGO_TARGET_DIR` in its own worktree (`desktop/target-<name>`,
+`target/<name>`, both git-ignored) and sets it on every command. A scratch copy
+of the sources (a mutation check) gets a target dir of its own: two copies of
+one package in one target dir share artifact names, and cargo then runs the
+other copy's binary.
+
+Measured 2026-11-18 in the sandbox (10 cores, 11 GB, other sessions building: load
+average 4 to 9), `CARGO_PROFILE_DEV_DEBUG=0` for the desktop, the default for
+the crates; tests only, the build excluded:
+
+| Suite | Wall time (parallel) | Serial sum | Slowest |
+|---|---|---|---|
+| Desktop lib | 41 to 44 s (was 72 to 82 s) | about 210 s | the modal rule's three tests (60 s together), the configure panels (19 s), the gate matrix (11 s), the usage-bar fit (10 s) |
+| Desktop `tests/` | 7 s | 7 s | `tests/link.rs` (real restarts) |
+| Daemon | 11.6 s (was 90 s) | 40 s (was 225 s) | `no_stats_are_read_while_nobody_listens` (11.5 s: the stats ticker on the real clock) |
+| Core, sbx, cli | 0.5 s, 0.1 s, 1 s | | |
+| Every demo script, one after the other | about 36 min | | `demo-files`, `demo-setup.sh window`, `demo-relay`, `demo-browser` (each mark is its own run, replaying the script from the start) |
+
+### Writing one
+
+- **A new test names the behaviour or the rule it protects**, in its name and
+  in a line above it ("Rule (docs/security.md): ...", "Design rule (the
+  user's): ..."), so the next cleanup can tell what it guards.
+- Check that it fails when the rule breaks: break the code by hand in a scratch
+  copy and run it. A test no sensible break can fail protects nothing.
+- No real time: no `sleep` to wait for something, no wall-clock bound. Wait
+  for the event or the mark (`wait:` in scripts, a channel, a polled condition
+  with a generous deadline that only stops a hang); move a clock the test
+  owns (the hover zones' `screen::advance_zone_clock`); set file times
+  (`File::set_modified`) instead of waiting for a second to pass; let a fake
+  `sbx` answer what the code waits for (`testing::sbx_answer_booting`).
+- Process-wide state (`surface::FOCUSED`, the network panel's `DISMISS`
+  queue) is shared by tests running in parallel: hold a test lock, or retry
+  a set-and-check, and say why.
+- Not a second copy: when a shared case list exists (`emphasis-cases.json`,
+  `host/exec_fs.rs`'s `both()`), add the case there.
+
+### What they cover
 
 - `luau`: sandbox limits (no io/os/require, read-only globals and theme,
   memory cap, instruction budget on load, render and actions, element count),
@@ -184,23 +233,34 @@ SBXW_DAEMON=127.0.0.1:7681 SBXW_TOKEN=$(cat ~/.sbxw/run/ui-token) SBXW_SANDBOX=<
   keeps the last good view, deleting it restores the built-in (a real
   watcher thread on real files); refused intents are shown, not run;
   built-ins render against every fixture.
+- `shell::gate_tests`: the keyboard gate, layer by layer. Under the core
+  dialog, a modal, an overlay, Jarvis's proposal and the palette, no key,
+  chord, input-method text, paste, Ctrl/Cmd+V, wheel or press reaches a
+  terminal (one predicate, `App::panes_covered`, for the window's path and
+  the grid's); a menu and a focused surface keep the keyboard; the OSC 52
+  card is never accepted by a key; Jarvis's scrim holds the panes and gives
+  the keyboard back; the typed yes still works; a drop on a covered pane
+  starts nothing; an overlay under the proposal takes no key or file for a
+  terminal or an upload.
 - `theme`: every colour token equals `assets/app.css`'s.
 - `client`: SSE parsing, unknown sandbox fields kept, readable reasons.
 - `tests/link.rs` (real stand-in process): a change behind the app reaches
   the list; a restarted daemon with a new token in the token file is found
   again; no daemon gives the one-line message.
 - `tests/pump.rs`: key-to-echo through the terminal socket thread against an
-  in-process echo server, idle wake-ups, close on drop (`cargo test --release
-  --test pump -- --nocapture` prints the numbers).
-- `terminal` (thread desktop-terminal): key bytes; `full_screen_redraw_cost`
-  is `--ignored` (a benchmark). Keyword pills: the matcher, emphasis-core's
-  shared cases (`fixtures/emphasis/emphasis-cases.json`), pills over exactly
-  their cells, copy and selection unchanged, the switch, dirty-row caching,
-  contrast; `tests/pills_alloc.rs` proves a frame without markers allocates
-  nothing.
+  in-process echo server, idle wake-ups, close on drop; the latency budget is
+  checked in a release build (`cargo test --release --test pump --
+  --nocapture` prints the numbers).
+- `terminal`: key bytes, mouse reports, OSC 8 and OSC 52, bracketed paste,
+  reconnects. Keyword pills: the matcher, emphasis-core's shared cases
+  (`fixtures/emphasis/emphasis-cases.json`, a copy of
+  `crates/core/testdata/`), pills over exactly their cells, copy and
+  selection unchanged, the switch, contrast; `tests/pills_alloc.rs` proves a
+  frame without markers allocates nothing.
 - `shell::layout_tests`: pages, tiling, Tabs then Grid, the team leads view,
-  the mode switch; `modal_content_stays_inside_the_modal` runs every modal
-  fixture at 420 and 1284 pt.
+  the mode switch; `modal_content_stays_inside_the_modal_in_every_*` (modal
+  fixtures, Setup sections, create dialogs) checks every modal at 420 and
+  1284 pt.
 
 ## Performance
 

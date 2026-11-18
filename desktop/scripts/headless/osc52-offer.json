@@ -1,9 +1,0 @@
-{
-  "events": [
-    { "t": 0.3, "type": "type", "every": 0.01, "text": "clear; printf '\\e]52;c;%s\\a' \"$({ printf 'echo hi\\n\\tsecond \\u202eevil\\e[0m '; head -c 6000 /dev/zero | tr '\\0' x; } | base64 -w0)\"" },
-    { "t": 2.2, "type": "key", "name": "Enter" },
-    { "t": 2.8, "type": "mark", "name": "end" },
-    { "t": 3.6, "type": "tap", "key": "copy-offer-copy" },
-    { "t": 4.0, "type": "mark", "name": "copied" }
-  ]
-}

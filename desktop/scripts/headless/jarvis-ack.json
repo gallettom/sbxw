@@ -1,6 +1,0 @@
-{ "events": [
-  { "t": 0.4, "type": "tap", "key": "jv-ack" },
-  { "t": 0.8, "type": "mark", "name": "ticked" },
-  { "t": 1.0, "type": "tap", "key": "jv-approve" },
-  { "t": 1.6, "type": "mark", "name": "end" }
-] }

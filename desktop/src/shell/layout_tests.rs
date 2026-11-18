@@ -510,13 +510,15 @@ fn a_spare_open_from_a_screen_never_replaces_an_open_pane() {
     assert!(r.rt.state.notice.as_ref().map_or(true, |n| !n.0.contains("least recently used")));
 }
 
-/// Every modal fixture (a fixture whose `app.modal` opens one), at a narrow
-/// window and a wide one: no keyed element of the modal's screen lies
-/// outside the modal's rectangle (a field's button pushed out of its row,
-/// a row wider than the card), and a screen sized by its content gets a card
-/// no taller than it needs.
-#[test]
-fn modal_content_stays_inside_the_modal() {
+/// Design rule (the user's): every modal, at a narrow window (420 pt) and a
+/// wide one (1284 pt): no keyed element of the modal's screen lies outside
+/// the modal's rectangle (a field's button pushed out of its row, a row
+/// wider than the card), and a screen sized by its content gets a card no
+/// taller than it needs. The cases are split in three tests (they run side
+/// by side, and a failure names its fixture and modal); each case is a
+/// fresh app per size, drawn until its card stops moving (reduced motion:
+/// no entrance to wait out), as before.
+fn modal_cases(group: &str) -> Vec<(std::path::PathBuf, J)> {
     fn fixtures(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let p = e.path();
@@ -530,30 +532,46 @@ fn modal_content_stays_inside_the_modal() {
             }
         }
     }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    // (fixture, intent opening the modal: none when the fixture opens it).
+    let mut list: Vec<(std::path::PathBuf, J)> = vec![];
+    match group {
+        "fixtures" => {
+            let mut found = vec![];
+            fixtures(&root, &mut found);
+            list.extend(found.into_iter().map(|p| (p, J::Null)));
+            list.push((root.join("envfile/basic.json"), J::Null));
+        }
+        "setup" => {
+            for f in ["setup/full.json", "setup/errors.json"] {
+                for tab in crate::feat::setup::SECTIONS {
+                    list.push((root.join(f), serde_json::json!({ "kind": "intent", "name": "open_modal", "args": { "screen": "setup", "arg": tab } })));
+                }
+            }
+        }
+        "create" => {
+            for f in ["create/workspace-full.json", "create/workspace-errors.json", "create/chat.json"] {
+                for d in ["chooser", "workspace", "chat"] {
+                    list.push((root.join(f), serde_json::json!({ "kind": "intent", "name": "create_open", "args": { "dialog": d } })));
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
+    list.sort_by(|a, b| a.0.cmp(&b.0));
+    list
+}
+
+/// Checks one group of [`modal_cases`]: how many elements it checked, and
+/// what it found outside its card.
+fn check_modal_cases(group: &str) -> (usize, Vec<String>) {
     fn keys(n: &crate::luau::Node, out: &mut Vec<String>) {
         if let Some(k) = crate::screen::key_of(n) {
             out.push(k);
         }
         n.children.iter().for_each(|c| keys(c, out));
     }
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
-    let mut found = vec![];
-    fixtures(&root, &mut found);
-    // (fixture, intent opening the modal: none when the fixture opens it).
-    let mut list: Vec<(std::path::PathBuf, J)> = found.into_iter().map(|p| (p, J::Null)).collect();
-    for f in ["setup/full.json", "setup/errors.json"] {
-        for tab in crate::feat::setup::SECTIONS {
-            list.push((root.join(f), serde_json::json!({ "kind": "intent", "name": "open_modal", "args": { "screen": "setup", "arg": tab } })));
-        }
-    }
-    for f in ["create/workspace-full.json", "create/workspace-errors.json", "create/chat.json"] {
-        for d in ["chooser", "workspace", "chat"] {
-            list.push((root.join(f), serde_json::json!({ "kind": "intent", "name": "create_open", "args": { "dialog": d } })));
-        }
-    }
-    list.push((root.join("envfile/basic.json"), J::Null));
-    list.sort_by(|a, b| a.0.cmp(&b.0));
-    assert!(list.len() >= 20, "{list:?}");
+    let list = modal_cases(group);
     let mut bad = vec![];
     let mut checked = 0;
     for (path, open) in &list {
@@ -565,13 +583,31 @@ fn modal_content_stays_inside_the_modal() {
                 }
             }
             let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
-            // Past the card's entrance (it grows in).
+            rt.set_system_reduced_motion(true);
+            // Until the card has stood still for three frames (at most 60).
+            let (mut last, mut still) = (None, 0);
             for _ in 0..60 {
                 rt.frame(0.016);
+                let now = rt.presented("modal").map(|m| m.0);
+                still = if now.is_some() && now == last { still + 1 } else { 0 };
+                last = now;
+                if still >= 3 {
+                    break;
+                }
             }
-            let Some((m, _)) = rt.presented("modal") else { continue };
-            let Some((name, _)) = rt.state.feats.modal.clone() else { continue };
-            let Some(node) = rt.state.screens.iter().find(|s| s.name == name).and_then(|s| s.last_good.clone()) else { continue };
+            let case = format!("{} at {w}", path.file_name().unwrap().to_string_lossy());
+            let Some((m, _)) = rt.presented("modal") else {
+                bad.push(format!("{case}: no modal drawn"));
+                continue;
+            };
+            let Some((name, _)) = rt.state.feats.modal.clone() else {
+                bad.push(format!("{case}: no modal open"));
+                continue;
+            };
+            let Some(node) = rt.state.screens.iter().find(|s| s.name == name).and_then(|s| s.last_good.clone()) else {
+                bad.push(format!("{case}: {name} has no render"));
+                continue;
+            };
             let mut ks = vec![];
             keys(&node, &mut ks);
             for k in ks {
@@ -589,7 +625,28 @@ fn modal_content_stays_inside_the_modal() {
             }
         }
     }
+    (checked, bad)
+}
+
+#[test]
+fn modal_content_stays_inside_the_modal_in_every_modal_fixture() {
+    assert!(modal_cases("fixtures").len() >= 10);
+    let (checked, bad) = check_modal_cases("fixtures");
     assert!(checked > 50, "{checked} elements checked");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+#[test]
+fn modal_content_stays_inside_the_modal_in_every_setup_section() {
+    let (checked, bad) = check_modal_cases("setup");
+    assert!(checked > 20, "{checked} elements checked");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+#[test]
+fn modal_content_stays_inside_the_modal_in_every_create_dialog() {
+    let (checked, bad) = check_modal_cases("create");
+    assert!(checked > 20, "{checked} elements checked");
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 

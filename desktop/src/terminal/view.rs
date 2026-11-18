@@ -99,6 +99,17 @@ pub fn pane<S: 'static, L>(t: &TerminalState, lens: L) -> El
 where
     L: Fn(&mut S) -> Option<&mut TerminalState> + Clone + 'static,
 {
+    pane_with(t, lens.clone(), lens)
+}
+
+/// [`pane`] with a separate lens for the layout (fitting the terminal to the
+/// pane): the shell keeps fitting a terminal its input lens refuses (under a
+/// dialog), so the input gate never changes a terminal's size.
+pub fn pane_with<S: 'static, L, F>(t: &TerminalState, lens: L, layout: F) -> El
+where
+    L: Fn(&mut S) -> Option<&mut TerminalState> + Clone + 'static,
+    F: Fn(&mut S) -> Option<&mut TerminalState> + Clone + 'static,
+{
     let (cols, rows) = t.size;
     let theme = t.theme();
     let dim = rgb(super::theme::mix(theme.foreground, theme.background, 0.45));
@@ -138,10 +149,9 @@ where
                 .min_h(0.0)
                 .clip_rounded(0.0)
                 .on_layout_tx({
-                    let lens = lens.clone();
                     move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
                         let clock = tx.clock();
-                        if let Some(t) = lens(s) {
+                        if let Some(t) = layout(s) {
                             let before = t.wanted_size();
                             // fit_at takes the whole pane: add back the padding and the status line.
                             t.fit_at(r[2] + 2.0 * PAD, r[3] + 2.0 * PAD + STATUS_H, clock);

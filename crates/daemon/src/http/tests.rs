@@ -719,7 +719,7 @@ async fn stats_come_from_the_sandboxes_reports_and_the_daemons_cpu_time() {
         Some("ls") => sbxw_sbx::runner::Output::ok(&json!([{"name": "myapp", "agent": "claude", "status": "running"}, {"name": "cx", "agent": "codex", "status": "running"}]).to_string()),
         _ => crate::testing::sbx_answer(a),
     });
-    let (ps, log) = fake_ps(d.path(), "ps-ok", "echo '  0:01.50'");
+    let (ps, log) = fake_ps(d.path(), "ps-ok", "echo ' 25:00.00'");
     *app.cpu_probe.lock().unwrap() = CpuProbe::Command(ps);
     app.stats.lock().unwrap().set_running(&["myapp".into(), "cx".into()]);
     let token = app.store.token(SandboxRef::parse("myapp").unwrap()).unwrap();
@@ -739,8 +739,9 @@ async fn stats_come_from_the_sandboxes_reports_and_the_daemons_cpu_time() {
 
     call(agent_router(app.clone()), agent(report("cpu  9617884 113451 1415149 177022282 68855 0 474660 0 0 0"))).await;
     call(agent_router(app.clone()), agent(report("cpu  9619884 113451 1415649 177030282 68855 0 474760 0 0 0"))).await;
-    // The daemon used 1.5 s of CPU in the 2 s since a reading of 0.
-    app.own_cpu.lock().unwrap().update(Some(std::time::Duration::ZERO), crate::app::now_ms() - 2000);
+    // The daemon used 1,500 s of CPU in the 2,000 s since a reading of 0:
+    // 75 %, and the time this test takes moves that by a few thousandths.
+    app.own_cpu.lock().unwrap().update(Some(std::time::Duration::ZERO), crate::app::now_ms() - 2_000_000);
     let (_, v) = call(signed_in(app.clone()), get()).await;
     let pct = v["daemon_cpu_pct"].as_f64().unwrap();
     assert!((70.0..=80.0).contains(&pct), "{v}");

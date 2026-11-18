@@ -1014,6 +1014,20 @@ esac
         script
     }
 
+    /// The Mac's card on the relay, once `mac_start_for` has put it there:
+    /// waited for, not slept for (the status look runs a script first, which
+    /// a loaded machine slows). The deadline only stops a hang.
+    async fn mac_card(app: &crate::app::App) -> sbxw_core::relay::RelayRequest {
+        let until = tokio::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(r) = app.relay_list().into_iter().find(|r| r.kind == sbxw_core::relay::RelayKind::Mac) {
+                return r;
+            }
+            assert!(tokio::time::Instant::now() < until, "no Mac card on the relay");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     fn calls(dir: &std::path::Path) -> String {
         std::fs::read_to_string(dir.join("calls")).unwrap_or_default()
     }
@@ -1052,9 +1066,11 @@ esac
         *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "stopped"));
         let a = app.clone();
         let asker = tokio::spawn(async move { a.mac_start_for(&sb("alpha"), None, "Safari", Duration::from_secs(5)).await });
+        let req = mac_card(&app).await;
+        // The card is up: what must not happen before the yes gets the same
+        // 200 ms it had (a pause here can only miss a bug, never fail a run).
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(!calls(d.path()).contains("start"), "nothing boots before the yes");
-        let req = app.relay_list().into_iter().find(|r| r.kind == sbxw_core::relay::RelayKind::Mac).expect("a request");
         assert!(req.question.contains("Start the virtual Mac"));
         app.relay_approve(&req.id, None, &[]).unwrap();
         let got = asker.await.unwrap().unwrap();
@@ -1069,8 +1085,7 @@ esac
         *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "stopped"));
         let a = app.clone();
         let asker = tokio::spawn(async move { a.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(5)).await });
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let req = app.relay_list().pop().unwrap();
+        let req = mac_card(&app).await;
         app.relay_deny(&req.id, Some("not now")).unwrap();
         let got = asker.await.unwrap().unwrap();
         assert!(got.contains("declined") && got.contains("not now"), "{got}");
@@ -1086,9 +1101,11 @@ esac
         app.mac.lock().unwrap().book.booted(0);
         let a = app.clone();
         let asker = tokio::spawn(async move { a.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(5)).await });
+        let req = mac_card(&app).await;
+        // The card is up: what must not happen before the yes gets the same
+        // 200 ms it had (a pause here can only miss a bug, never fail a run).
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(!calls(d.path()).contains("resume"), "nothing resumes before the yes");
-        let req = app.relay_list().pop().expect("a card");
         assert!(req.question.starts_with("Resume the paused virtual Mac"), "{}", req.question);
         app.relay_approve(&req.id, None, &[]).unwrap();
         let got = asker.await.unwrap().unwrap();
@@ -1107,9 +1124,11 @@ esac
         assert!(!calls(d.path()).contains("screenshot"));
         let a = app.clone();
         let asker = tokio::spawn(async move { a.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(5)).await });
+        let req = mac_card(&app).await;
+        // The card is up: what must not happen before the yes gets the same
+        // 200 ms it had (a pause here can only miss a bug, never fail a run).
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(app.mac.lock().unwrap().book.holder(), None);
-        let req = app.relay_list().pop().expect("a card");
         assert!(req.question.contains("sbxw did not start it"), "{}", req.question);
         app.relay_approve(&req.id, None, &[]).unwrap();
         let got = asker.await.unwrap().unwrap();
@@ -1416,8 +1435,7 @@ esac
         *app.mac_boot_wait.lock().unwrap() = Duration::from_secs(10);
         let a = app.clone();
         let asker = tokio::spawn(async move { a.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(20)).await });
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let req = app.relay_list().pop().expect("a resume card");
+        let req = mac_card(&app).await;
         app.relay_approve(&req.id, None, &[]).unwrap();
         let got = asker.await.unwrap().unwrap();
         assert!(got.contains("Start with mac_screenshot"), "{got}");
