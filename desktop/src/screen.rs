@@ -101,6 +101,35 @@ pub struct Zones {
 pub const ZONE_OPEN: Duration = Duration::from_millis(180);
 pub const ZONE_CLOSE: Duration = Duration::from_millis(280);
 
+#[cfg(test)]
+thread_local! {
+    /// A test thread's hover-zone clock: frozen at its first read, moved
+    /// only by [`advance_zone_clock`].
+    static ZONE_CLOCK: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The clock the hover zones read (their open and close delays): the real
+/// one; in tests, a clock of the test's own that stands still until the
+/// test moves it, so a test waits out ZONE_OPEN and ZONE_CLOSE without
+/// sleeping and a loaded machine cannot run a delay out early.
+pub fn zone_now() -> Instant {
+    #[cfg(test)]
+    return ZONE_CLOCK.with(|c| *c.get().get_or_insert_with(|| {
+        let t = Instant::now();
+        c.set(Some(t));
+        t
+    }));
+    #[cfg(not(test))]
+    Instant::now()
+}
+
+/// Moves this thread's hover-zone clock forward by `d` (tests).
+#[cfg(test)]
+pub fn advance_zone_clock(d: Duration) {
+    let t = zone_now() + d;
+    ZONE_CLOCK.with(|c| c.set(Some(t)));
+}
+
 impl Zones {
     fn over(&self, zone: &str) -> bool {
         self.inside.get(zone).is_some_and(|s| !s.is_empty())
@@ -1072,11 +1101,11 @@ impl Build<'_> {
                     let (nm, nm2, z2) = (self.name.clone(), self.name.clone(), z.clone());
                     b = b
                         .on_hover_change(move |s: &mut S, inside: bool, tx: &mut rune::Tx| {
-                            s.screen(&nm).ui.zones.hover(&z, &el_key, inside, Instant::now());
+                            s.screen(&nm).ui.zones.hover(&z, &el_key, inside, zone_now());
                             tx.wake_after(ZONE_CLOSE + Duration::from_millis(10));
                         })
                         .on_pointer_move_local(move |s: &mut S, _p: rune::PointerEvent, tx: &mut rune::Tx| {
-                            s.screen(&nm2).ui.zones.moved(&z2, Instant::now());
+                            s.screen(&nm2).ui.zones.moved(&z2, zone_now());
                             tx.wake_after(ZONE_OPEN + Duration::from_millis(10));
                         });
                 }

@@ -974,7 +974,7 @@ impl App {
         }
         // Hover zones that became due: what opens or shuts on them glides
         // (a poll's commit would land at once), except under reduced motion.
-        let zone_now = Instant::now();
+        let zone_now = screen::zone_now();
         let mut zoned = false;
         for s in &mut self.screens {
             zoned |= s.tick_zones(zone_now);
@@ -3325,7 +3325,7 @@ mod tests {
         });
         rt.frame(1.0 / 60.0);
         assert!(h(&rt, "sbxw-jarvis") < 1.0, "not before the delay");
-        std::thread::sleep(crate::screen::ZONE_OPEN + std::time::Duration::from_millis(40));
+        crate::screen::advance_zone_clock(crate::screen::ZONE_OPEN + std::time::Duration::from_millis(40));
         settle(&mut rt);
         let open = h(&rt, "sbxw-jarvis");
         assert!(open > 40.0, "opened on hover: {open}");
@@ -3333,7 +3333,7 @@ mod tests {
         let (b, _) = rt.presented("sessions-block-sbxw-jarvis").unwrap();
         rt.pointer_move(b[0] + 20.0, b[1] + b[3] / 2.0);
         settle(&mut rt);
-        std::thread::sleep(crate::screen::ZONE_CLOSE + std::time::Duration::from_millis(40));
+        crate::screen::advance_zone_clock(crate::screen::ZONE_CLOSE + std::time::Duration::from_millis(40));
         settle(&mut rt);
         assert!(h(&rt, "sbxw-jarvis") > 40.0, "the block is the same zone");
         // Out to the panes: shuts after the close delay.
@@ -3344,7 +3344,7 @@ mod tests {
         });
         rt.frame(1.0 / 60.0);
         assert!(h(&rt, "sbxw-jarvis") > 40.0, "not before the delay");
-        std::thread::sleep(crate::screen::ZONE_CLOSE + std::time::Duration::from_millis(40));
+        crate::screen::advance_zone_clock(crate::screen::ZONE_CLOSE + std::time::Duration::from_millis(40));
         settle(&mut rt);
         assert!(h(&rt, "sbxw-jarvis") < 1.0, "shut after leaving: {}", h(&rt, "sbxw-jarvis"));
         // Pinned shut wins over hover.
@@ -3357,7 +3357,7 @@ mod tests {
         rt.pointer_move(r[0] + 10.0, r[1] + 10.0);
         rt.frame(1.0 / 60.0);
         rt.pointer_move(r[0] + 14.0, r[1] + 10.0);
-        std::thread::sleep(crate::screen::ZONE_OPEN + std::time::Duration::from_millis(40));
+        crate::screen::advance_zone_clock(crate::screen::ZONE_OPEN + std::time::Duration::from_millis(40));
         settle(&mut rt);
         assert!(h(&rt, "sbxw-jarvis") < 1.0, "a pin wins over hover");
     }
