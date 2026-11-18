@@ -2134,7 +2134,8 @@ function paintGroups() {
       leadBtn.dataset.title ??= leadBtn.title;
       leadBtn.title = leading ? 'Team mode is on — click to end it: this session stops leading; its threads keep running' : leadBtn.dataset.title;
     }
-    chip.title = st ? `${st.state}${st.summary ? ` — ${st.summary}` : ''}` : '';
+    const by = st?.set_by === 'sbxw' ? 'sbxw could not start it: ' : st?.set_by === 'lead' ? 'marked done by the lead: ' : '';
+    chip.title = st ? `${st.state}${st.summary ? ` — ${by}${st.summary}` : ''}` : '';
     chip.classList.toggle('thread', !!thread);
     chip.hidden = !(i < paneCount && p.sandbox && (thread || color));
     if (!color) { p.el.style.removeProperty('--group-color'); return; }

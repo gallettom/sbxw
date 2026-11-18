@@ -276,11 +276,25 @@ impl App {
             }
         };
         if let Err(e) = outcome {
-            tracing::warn!("plans: thread '{name}' of '{sandbox}' did not start: {e}");
-            if let Ok(p) = self.plans.lock().unwrap().set_thread(&sandbox.to_string(), name, ThreadState::Failed, &e, true, now_ms()) {
-                self.send(Event::Plan(p.clone()));
-                self.persist_plans(&p.sandbox);
-            }
+            self.thread_start_failed(sandbox, &thread, &e);
+        }
+    }
+
+    /// Thread `thread` could not start: recorded on its plan, if it has one,
+    /// with the reason (see `PlanBook::start_failed`).
+    pub fn thread_start_failed(&self, sandbox: &SandboxRef, thread: &ThreadName, reason: &str) {
+        let changed = self.plans.lock().unwrap().start_failed(&sandbox.to_string(), thread.as_str(), reason, now_ms());
+        if let Some(p) = changed {
+            tracing::warn!("plans: thread '{thread}' of '{sandbox}' did not start: {reason}");
+            self.plan_changed(p);
+        }
+    }
+
+    /// Thread `thread` started: a start failure recorded earlier is cleared.
+    pub fn thread_start_cleared(&self, sandbox: &SandboxRef, thread: &ThreadName) {
+        let changed = self.plans.lock().unwrap().start_cleared(&sandbox.to_string(), thread.as_str(), now_ms());
+        if let Some(p) = changed {
+            self.plan_changed(p);
         }
     }
 
@@ -658,6 +672,7 @@ mod tests {
             state: ThreadState::Starting,
             summary: String::new(),
             updated_ms: 0,
+            set_by: None,
         }
     }
 

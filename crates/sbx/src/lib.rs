@@ -1120,6 +1120,13 @@ impl Sbx {
         Ok(fields)
     }
 
+    /// Make a thread's worktree (a shared plan's, with `team`) before its
+    /// session starts; where it is.
+    pub async fn thread_prepare(&self, name: &SandboxName, dir: &str, thread: &ThreadName, team: Option<&scripts::Team>) -> Result<String> {
+        let f = self.thread_script(scripts::thread_prepare_args(name, dir, thread, team)).await?;
+        Ok(f.get("worktree").cloned().unwrap_or_default())
+    }
+
     pub async fn thread_status(&self, name: &SandboxName, dir: &str, thread: &ThreadName) -> Result<ThreadStatus> {
         let f = self.thread_script(scripts::thread_end_args(name, dir, thread, "status", false, false)).await?;
         Ok(ThreadStatus::from_fields(&f))

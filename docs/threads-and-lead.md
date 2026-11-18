@@ -150,6 +150,22 @@ report your state).
 - **Threads report to sbxw** with `report_thread_status`. The chip shows the
   state: `…` starting, `●` working, `?` blocked, `✓` done, `✕` failed. Hover for
   the report.
+- **A thread that cannot start is failed, with the reason.** sbxw makes the
+  worktree first, on its own (`THREAD_PREPARE_SCRIPT`), then starts the
+  session. Whatever stops it (no repo, a workspace root the agent cannot
+  write, `git worktree add` refusing, the session ceiling, a session that
+  ends before the thread ever reported) sets the thread to `✕` failed with
+  the reason, which `plan_status` gives the lead and the chip's hover gives
+  you (`sbxw could not start it: …`). Opening the thread again, once the
+  cause is fixed, retries it and clears the failure; the briefing waits for
+  that retry. A thread already done is never set back to failed.
+- **The worktree folder is never forced.** When `<repo>/.sbxw-worktrees`
+  cannot be created, sbxw says so in plain words, and when `.git` is a
+  separate mount from the workspace root it adds that the sandbox most
+  likely mounts only some of the workspace's folders. It does not use `sudo`
+  or a folder elsewhere: a worktree outside the mounted repository would
+  live in the container only, unseen by the host's git and lost with the
+  sandbox.
 - **Threads talk to the lead directly**, with Claude Code's own `SendMessage`
   between sessions of the sandbox. A thread runs as `claude --name <thread>`,
   so the lead knows its address in advance; each briefing gives the lead's

@@ -47,6 +47,66 @@ macro_rules! no_repo_fn {
     };
 }
 
+/// Shell function `sbxw_worktree <root> <key> <shared>`: make sure the
+/// worktree `<root>/.sbxw-worktrees/<key>` exists, on branch `sbxw/<key>`
+/// (made from `HEAD` when it does not exist yet), and set `wt` to it. On a
+/// failure it returns 1 with the reason in `sbxw_err`, one line.
+///
+/// * `.sbxw-worktrees/` goes in the repo's `info/exclude`, not `.gitignore`:
+///   hiding sbxw's bookkeeping must not be a change someone has to commit.
+/// * `<shared>` = 1 for a shared plan's worktree, which its threads all ask
+///   for at once: one makes it, under a lock in the git dir.
+/// * `.sbxw-worktrees` is made before `git worktree add`, so a root the agent
+///   cannot write is said in plain words rather than as git's "could not
+///   create leading directories". Nothing tries harder: not `sudo` (the
+///   sandbox gives it for installing packages, not for writing the person's
+///   repository), not a folder elsewhere. A workspace root the agent cannot
+///   write is most often one the sandbox did not mount at all (only some of
+///   its folders are), and a worktree made there or anywhere else outside the
+///   mounted repository would live in the container only: the host's git
+///   would not see it (the worktree graph, `git worktree prune` there) and
+///   the sandbox's removal would take the thread's uncommitted work with it.
+///   When `.git` sits on another filesystem than the root, the reason says
+///   so: that is the mark of such a partial mount, read, not guessed.
+macro_rules! worktree_fn {
+    () => {
+        r#"
+        sbxw_worktree() {
+            local root="$1" key="$2" shared="$3" wtd="$1/.sbxw-worktrees" ex out who owner note=""
+            wt="$wtd/$key"; sbxw_err=""
+            [ -d "$wt" ] && return 0
+            if [ "$shared" = 1 ] && command -v flock >/dev/null; then
+                exec 9>"$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)/sbxw-$key.lock"
+                flock -w 60 9
+            fi
+            if [ -d "$wt" ]; then exec 9>&-; return 0; fi
+            if ! mkdir -p "$wtd" 2>/dev/null || [ ! -w "$wtd" ]; then
+                who=$(id -un 2>/dev/null || id -u); owner=$(stat -c %U "$root" 2>/dev/null || echo unknown)
+                if [ -e "$root/.git" ] && [ "$(stat -c %d "$root" 2>/dev/null)" != "$(stat -c %d "$root/.git" 2>/dev/null)" ]; then
+                    note=" $root/.git is mounted separately from $root itself, so this sandbox most likely mounts only some of the workspace's folders, not the workspace."
+                fi
+                sbxw_err="cannot create $wtd: $root is not writable by $who in this sandbox (owner $owner).$note A thread's worktree has to be made there: give the sandbox the whole repository, writable, then open the thread again."
+                exec 9>&-; return 1
+            fi
+            ex=$(git -C "$root" rev-parse --git-path info/exclude)
+            case "$ex" in /*) ;; *) ex="$root/$ex" ;; esac
+            mkdir -p "$(dirname "$ex")"
+            grep -qxF '/.sbxw-worktrees/' "$ex" 2>/dev/null || printf '/.sbxw-worktrees/\n' >> "$ex"
+            if git -C "$root" show-ref --verify --quiet "refs/heads/sbxw/$key"; then
+                out=$(git -C "$root" worktree add "$wt" "sbxw/$key" 2>&1)
+            else
+                out=$(git -C "$root" worktree add -b "sbxw/$key" "$wt" 2>&1)
+            fi
+            if [ $? -ne 0 ]; then
+                sbxw_err="git worktree add $wt failed: $(printf '%s' "$out" | grep -v '^Preparing' | tail -n 1)"
+                exec 9>&-; return 1
+            fi
+            exec 9>&-
+            return 0
+        }"#
+    };
+}
+
 /// Shell function `sbxw_merge_check <root> <git-common-dir> <branch>`: may
 /// `<branch>` be merged into the main checkout `<root>` as it stands? On a
 /// refusal it prints the `error=` line and returns 1. Otherwise it sets
@@ -117,8 +177,8 @@ macro_rules! merge_check_fn {
 /// (reopening lands back in it, on its branch, uncommitted work included);
 /// removing it is left to a person, since it can hold uncommitted work.
 ///
-/// * `.sbxw-worktrees/` goes in the repo's `info/exclude`, not `.gitignore`:
-///   hiding sbxw's bookkeeping must not be a change someone has to commit.
+/// * The worktree is made by `sbxw_worktree` (see `worktree_fn!`), which the
+///   daemon has already run once through `THREAD_PREPARE_SCRIPT`.
 /// * `sbx exec`, not `sbx run`: `run` attaches *the* agent, so a second one
 ///   would be that same session. The permission flag is the one sbx gives the
 ///   agent it starts: a thread is exactly as trusted as the pane beside it.
@@ -158,31 +218,17 @@ pub fn thread_run_args(
     model: Option<&ModelId>,
     team: Option<&Team>,
 ) -> Vec<String> {
-    const SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
+    const SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), worktree_fn!(), r#"
         [ -n "$1" ] && cd "$1" 2>/dev/null
         if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
             printf '\033[31m[sbxw] %s\033[0m\r\n' "$(sbxw_no_repo)"
             exit 1
         fi
         key="${5:-$2}"
-        wt="$root/.sbxw-worktrees/$key"
-        if [ ! -d "$wt" ] && [ -n "$5" ] && command -v flock >/dev/null; then
-            # A shared plan's threads all start at once: one makes the worktree.
-            exec 9>"$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)/sbxw-$key.lock"
-            flock -w 60 9
+        if ! sbxw_worktree "$root" "$key" "$([ -n "$5" ] && echo 1)"; then
+            printf '\033[31m[sbxw] %s\033[0m\r\n' "$sbxw_err"
+            exit 1
         fi
-        if [ ! -d "$wt" ]; then
-            ex=$(git -C "$root" rev-parse --git-path info/exclude)
-            case "$ex" in /*) ;; *) ex="$root/$ex" ;; esac
-            mkdir -p "$(dirname "$ex")"
-            grep -qxF '/.sbxw-worktrees/' "$ex" 2>/dev/null || printf '/.sbxw-worktrees/\n' >> "$ex"
-            if git -C "$root" show-ref --verify --quiet "refs/heads/sbxw/$key"; then
-                git -C "$root" worktree add "$wt" "sbxw/$key" || exit 1
-            else
-                git -C "$root" worktree add -b "sbxw/$key" "$wt" || exit 1
-            fi
-        fi
-        exec 9>&-
         printf '\033[2m[sbxw] thread %s - worktree %s, branch sbxw/%s\033[0m\r\n' "$2" "$wt" "$key"
         export SBXW_THREAD="$2"
         if [ -n "$5" ]; then
@@ -221,6 +267,32 @@ pub fn thread_run_args(
     let model = model.map(ModelId::as_str).unwrap_or("");
     let (worktree, plan) = team.map_or(("", ""), |t| (t.worktree.as_str(), t.plan.as_str()));
     args.extend([workspace, thread.as_str(), prompt, model, worktree, plan].map(pos));
+    args
+}
+
+/// Make thread `$2`'s worktree (or, with `$3`, the shared plan worktree
+/// `$3`) in the repo under `$1`, without starting anything: what the daemon
+/// runs before a thread's session, so a failure (no repo, a root it cannot
+/// write, `git worktree add` refusing) comes back as a reason it records on
+/// the thread, not as a pane that printed it and died. Prints `worktree=`
+/// and `ok=1`, or `error=`. The session's own script does the same again,
+/// finding it made. Positional arguments, as in `thread_run_args`.
+pub const THREAD_PREPARE_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), worktree_fn!(), r#"
+    [ -n "$1" ] && cd "$1" 2>/dev/null
+    if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
+        echo "error=$(sbxw_no_repo)"; exit 3
+    fi
+    if ! sbxw_worktree "$root" "${3:-$2}" "$([ -n "$3" ] && echo 1)"; then
+        echo "error=$sbxw_err"; exit 4
+    fi
+    echo "worktree=$wt"
+    echo ok=1"#);
+
+/// Argv for `THREAD_PREPARE_SCRIPT`.
+pub fn thread_prepare_args(name: &SandboxName, workspace: &str, thread: &ThreadName, team: Option<&Team>) -> Vec<String> {
+    let mut args = owned(&["exec", name.as_str(), "--", "bash", "-lc", THREAD_PREPARE_SCRIPT, "sbxw-thread-prepare"]);
+    let worktree = team.map_or("", |t| t.worktree.as_str());
+    args.extend([workspace, thread.as_str(), worktree].map(pos));
     args
 }
 
@@ -581,7 +653,7 @@ mod tests {
         let args = thread_run_args(&sb(), "/w", &th(), "", None, Some(&team));
         assert_eq!(&args[12..], ["=team-p-1", "=p-1"]);
         let script = &args[6];
-        assert!(script.contains(r#"wt="$root/.sbxw-worktrees/$key""#) && script.contains(r#"key="${5:-$2}""#));
+        assert!(script.contains(r#"wt="$wtd/$key""#) && script.contains(r#"key="${5:-$2}""#));
         assert!(script.contains(r#"export SBXW_TEAM=shared SBXW_TEAM_PLAN="$6""#));
         let bash = thread_bash_args(&sb(), "/w", &th(), Some(&team));
         assert_eq!(&bash[7..], ["sbxw-thread-bash", "=/w", "=api-auth", "=team-p-1"]);
@@ -829,6 +901,35 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
         assert!(!r.root.join(".git/MERGE_HEAD").exists(), "aborted");
         assert!(!r.root.join("a").exists());
         assert_eq!(r.git(&["status", "--porcelain"]), " D a\n");
+    }
+
+    #[test]
+    fn a_root_the_agent_cannot_write_is_a_reason_not_a_git_error() {
+        let Some(r) = Repo::new("prepare-ro") else { return };
+        r.with_branch("other", "a");
+        let uid = std::process::Command::new("id").arg("-u").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        if uid.as_deref().ok() == Some("0") {
+            return; // root writes anywhere: nothing to show
+        }
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&r.root, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let (ok, out) = r.run(THREAD_PREPARE_SCRIPT, &[r.root.to_str().unwrap(), "api", ""]);
+        std::fs::set_permissions(&r.root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!ok);
+        let err = script_fields(&out).unwrap_err();
+        assert!(err.starts_with(&format!("cannot create {}/.sbxw-worktrees: {} is not writable by", r.root.display(), r.root.display())), "{err}");
+        assert!(err.contains("give the sandbox the whole repository"), "{err}");
+        assert!(!err.contains("leading directories"), "{err}");
+        assert!(!r.git(&["branch", "--list"]).contains("sbxw/api"), "no branch left behind");
+
+        let (ok, out) = r.run(THREAD_PREPARE_SCRIPT, &[r.root.to_str().unwrap(), "api", ""]);
+        assert!(ok, "{out}");
+        let f = script_fields(&out).unwrap();
+        assert_eq!(f["worktree"], format!("{}/.sbxw-worktrees/api", r.root.display()));
+        assert!(r.root.join(".sbxw-worktrees/api/a").exists());
+        let exclude = std::fs::read_to_string(r.root.join(".git/info/exclude")).unwrap();
+        assert!(exclude.lines().any(|l| l == "/.sbxw-worktrees/"), "excluded, not in .gitignore");
+        assert!(r.git(&["status", "--porcelain"]).is_empty());
     }
 
     #[test]

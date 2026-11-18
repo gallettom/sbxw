@@ -19,6 +19,18 @@ use sbxw_sbx::scripts;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// How long a new thread session is watched for an early end.
+const THREAD_START_WATCH: Duration = Duration::from_secs(90);
+
+/// The last line a session printed, escapes and `[sbxw] ` taken off.
+fn last_line(replay: &[u8]) -> Option<String> {
+    let text = sbxw_sbx::runner::strip_ansi(&String::from_utf8_lossy(replay));
+    text.lines()
+        .map(|l| l.trim().trim_start_matches("[sbxw]").trim())
+        .rfind(|l| !l.is_empty())
+        .map(|l| l.chars().take(500).collect())
+}
+
 /// A stopped sandbox starts its container, then boots Claude Code.
 const COLD_START_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -55,10 +67,46 @@ impl App {
         Box::pin(async move {
             let app = self.clone();
             let k = key.clone();
-            self.sessions
+            let opened = self
+                .sessions
                 .get_or_open(key, now_ms(), move || async move { app.spawn_for(&k).await })
-                .await
+                .await?;
+            if let (true, Some(sb), SessionKind::Thread(t)) = (opened.1, &key.sandbox, &key.kind) {
+                self.watch_thread_start(sb.clone(), t.clone(), opened.0.clone());
+            }
+            Ok(opened)
         })
+    }
+
+    /// A thread's session that ends before the thread ever reported (its
+    /// script refused, `claude` would not start) leaves its plan thread at
+    /// "starting" for good: the end is recorded as a failed start, with the
+    /// last line it printed as the reason.
+    fn watch_thread_start(self: &Arc<Self>, sandbox: SandboxRef, thread: ThreadName, session: Arc<PtySession>) {
+        let app = self.clone();
+        tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + THREAD_START_WATCH;
+            while session.alive() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            if session.alive() {
+                return;
+            }
+            let starting = app
+                .plans
+                .lock()
+                .unwrap()
+                .approved_threads(&sandbox.to_string())
+                .iter()
+                .any(|(_, t)| t.name == thread.as_str() && t.state == sbxw_core::plans::ThreadState::Starting);
+            if starting {
+                let reason = match last_line(&session.replay()) {
+                    Some(l) => format!("its session ended before the thread reported: {l}"),
+                    None => "its session ended before the thread reported".to_string(),
+                };
+                app.thread_start_failed(&sandbox, &thread, &reason);
+            }
+        });
     }
 
     async fn spawn_for(self: &Arc<Self>, key: &SessionKey) -> Result<Spawn> {
@@ -155,48 +203,64 @@ impl App {
                 Spawn::sbx(scripts::thread_bash_args(&sandbox.name, &dir, thread, self.team_for(&sandbox, thread).as_ref()))
             }
             SessionKind::Thread(thread) => {
-                // A shared plan's worktree is named like a thread but is not one:
-                // a session opened under its name would find no briefing and
-                // resume whichever conversation that folder holds.
-                if self.plans.lock().unwrap().of(&sandbox.to_string()).iter().any(|p| p.team_name() == thread.as_str()) {
-                    bail!("'{thread}' is the worktree a shared plan's threads share, not a thread: open one of its threads instead");
+                // Whatever stops a plan's thread from starting is recorded on
+                // it, with the reason, rather than left at "starting".
+                let spawn = self.spawn_thread(&sandbox, thread, &cfg).await;
+                match &spawn {
+                    Err(e) => self.thread_start_failed(&sandbox, thread, &format!("{e:#}")),
+                    Ok(_) => self.thread_start_cleared(&sandbox, thread),
                 }
-                self.ensure_running_for_thread(&sandbox).await?;
-                // The ceiling refuses a *new* thread only; the agent never.
-                let open = self.sessions.agents_open(&sandbox.to_string());
-                let max = cfg.max_sessions();
-                if open >= max {
-                    bail!(
-                        "'{sandbox}' already has {open} Claude session{} open, and max_agent_sessions \
-                         is {max} (sbxw.toml). Close a thread first, or raise the ceiling.",
-                        if open == 1 { "" } else { "s" }
-                    );
-                }
-                let dir = self.settle_thread_repo(&sandbox, thread, None).await.map_err(|e| anyhow!(e))?;
-                let briefing = self
-                    .briefings
-                    .lock()
-                    .unwrap()
-                    .remove(&(sandbox.clone(), thread.to_string()))
-                    .unwrap_or_default();
-                // Spelled out even for the default: `sbx exec` carries the
-                // environment the sandbox was *created* with, which may name a
-                // model since retired.
-                let model = self
-                    .store
-                    .get(&sandbox)
-                    .threads
-                    .get(thread.as_str())
-                    .and_then(|r| r.model.clone())
-                    .or_else(|| Some(cfg.claude_model.clone()))
-                    .and_then(|m| ModelId::parse(&m).ok());
-                if self.is_same_worktree(&sandbox, thread) {
-                    return Ok(Spawn::sbx(scripts::same_worktree_run_args(&sandbox.name, &dir, thread, model.as_ref())));
-                }
-                let team = self.team_for(&sandbox, thread);
-                Spawn::sbx(scripts::thread_run_args(&sandbox.name, &dir, thread, &briefing, model.as_ref(), team.as_ref()))
+                spawn?
             }
         })
+    }
+
+    /// The command for thread `thread`'s session, its worktree made first.
+    async fn spawn_thread(self: &Arc<Self>, sandbox: &SandboxRef, thread: &ThreadName, cfg: &Config) -> Result<Spawn> {
+        let sandbox = sandbox.clone();
+        // A shared plan's worktree is named like a thread but is not one:
+        // a session opened under its name would find no briefing and
+        // resume whichever conversation that folder holds.
+        if self.plans.lock().unwrap().of(&sandbox.to_string()).iter().any(|p| p.team_name() == thread.as_str()) {
+            bail!("'{thread}' is the worktree a shared plan's threads share, not a thread: open one of its threads instead");
+        }
+        self.ensure_running_for_thread(&sandbox).await?;
+        // The ceiling refuses a *new* thread only; the agent never.
+        let open = self.sessions.agents_open(&sandbox.to_string());
+        let max = cfg.max_sessions();
+        if open >= max {
+            bail!(
+                "'{sandbox}' already has {open} Claude session{} open, and max_agent_sessions \
+                 is {max} (sbxw.toml). Close a thread first, or raise the ceiling.",
+                if open == 1 { "" } else { "s" }
+            );
+        }
+        let dir = self.settle_thread_repo(&sandbox, thread, None).await.map_err(|e| anyhow!(e))?;
+        // Spelled out even for the default: `sbx exec` carries the
+        // environment the sandbox was *created* with, which may name a
+        // model since retired.
+        let model = self
+            .store
+            .get(&sandbox)
+            .threads
+            .get(thread.as_str())
+            .and_then(|r| r.model.clone())
+            .or_else(|| Some(cfg.claude_model.clone()))
+            .and_then(|m| ModelId::parse(&m).ok());
+        if self.is_same_worktree(&sandbox, thread) {
+            return Ok(Spawn::sbx(scripts::same_worktree_run_args(&sandbox.name, &dir, thread, model.as_ref())));
+        }
+        let team = self.team_for(&sandbox, thread);
+        // The worktree first, on its own: a failure here is a reason (a root
+        // the agent cannot write, git refusing), not a pane that dies.
+        self.sbx_for(&sandbox)
+            .await?
+            .thread_prepare(&sandbox.name, &dir, thread, team.as_ref())
+            .await
+            .with_context(|| format!("thread {thread}: its worktree could not be made"))?;
+        // Taken only now: a start that failed above keeps it for the retry.
+        let briefing = self.briefings.lock().unwrap().remove(&(sandbox.clone(), thread.to_string())).unwrap_or_default();
+        Ok(Spawn::sbx(scripts::thread_run_args(&sandbox.name, &dir, thread, &briefing, model.as_ref(), team.as_ref())))
     }
 
     /// A stopped sandbox keeps the mappings it was created with (`-p`), and
@@ -386,6 +450,69 @@ mod tests {
     use sbxw_core::config::Config;
     use sbxw_core::SandboxRef;
     use sbxw_sbx::runner::Output;
+
+    fn plan_thread(name: &str) -> sbxw_core::plans::PlanThread {
+        sbxw_core::plans::PlanThread {
+            name: name.into(),
+            goal: "do the api".into(),
+            scope: "src/api".into(),
+            repo: None,
+            model: None,
+            state: sbxw_core::plans::ThreadState::Starting,
+            summary: String::new(),
+            updated_ms: 0,
+            set_by: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_thread_that_cannot_make_its_worktree_fails_with_the_reason_and_a_retry_clears_it() {
+        use sbxw_core::plans::{SetBy, ThreadState};
+        let refuse = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let flag = refuse.clone();
+        let (_d, app, _fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("myapp", "running")]),
+            Some("exec") if a.iter().any(|x| x == "sbxw-thread-prepare") && flag.load(std::sync::atomic::Ordering::SeqCst) => {
+                Output::ok("error=cannot create /w/.sbxw-worktrees: /w is not writable by agent in this sandbox (owner root).\n")
+            }
+            Some("exec") if a.iter().any(|x| x == "sbxw-thread-prepare") => Output::ok("worktree=/w/.sbxw-worktrees/api\nok=1\n"),
+            _ => sbx_answer(a),
+        });
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir(ws.path().join(".git")).unwrap();
+        app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+        let p = app
+            .plan_propose(&sb, "s", vec![plan_thread("api")], sbxw_core::plans::Variant::Split, "one", Some("lead"))
+            .await
+            .unwrap();
+        app.plans.lock().unwrap().approve(&p.id, vec![plan_thread("api")], None, None, 1).unwrap();
+        app.briefings.lock().unwrap().insert((sb.clone(), "api".into()), "the briefing".into());
+        let key = sbxw_core::session::SessionKey::thread(&sb, &sbxw_core::ThreadName::parse("api").unwrap());
+
+        let err = format!("{:#}", app.open_session(&key).await.err().expect("refused"));
+        assert!(err.contains("not writable by agent"), "{err}");
+        let t = app.plan(&p.id).unwrap().threads[0].clone();
+        assert_eq!((t.state, t.set_by), (ThreadState::Failed, Some(SetBy::Sbxw)));
+        assert!(t.summary.contains("its worktree could not be made") && t.summary.contains("not writable"), "{}", t.summary);
+        let view = app.plan_view(&app.plan(&p.id).unwrap());
+        assert_eq!(view["threads"][0]["state"], "failed");
+        assert_eq!(view["threads"][0]["set_by"], "sbxw");
+        assert!(app.briefings.lock().unwrap().contains_key(&(sb.clone(), "api".into())), "the briefing waits for the retry");
+
+        refuse.store(false, std::sync::atomic::Ordering::SeqCst);
+        let spawn = app.spawn_for(&key).await.expect("the retry starts it");
+        assert!(spawn.args.iter().any(|a| a == "=the briefing"), "{:?}", spawn.args);
+        let t = app.plan(&p.id).unwrap().threads[0].clone();
+        assert_eq!((t.state, t.set_by, t.summary.as_str()), (ThreadState::Starting, None, ""), "cleared");
+    }
+
+    #[test]
+    fn the_reason_of_an_early_end_is_the_last_line_printed() {
+        let out = b"\x1b[2m[sbxw] thread api - worktree /w\x1b[0m\r\n\x1b[31m[sbxw] cannot create /w/.sbxw-worktrees: denied\x1b[0m\r\n\r\n";
+        assert_eq!(super::last_line(out).as_deref(), Some("cannot create /w/.sbxw-worktrees: denied"));
+        assert_eq!(super::last_line(b"\r\n"), None);
+    }
 
     #[tokio::test]
     async fn a_busy_host_port_is_unpublished_before_a_start() {
