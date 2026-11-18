@@ -129,9 +129,7 @@ pub fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
 pub fn rail_entry(ctx: &Ctx) -> Extra {
     let n = list(ctx.get("my_skills"), "skills").len();
     Extra {
-        // The switch, once the rail's `Place::Rail` is in (sbxw/desktop-views):
-        // place: Place::Rail { zone: crate::feat::Zone::Configure, order: 20 },
-        place: Place::Topbar,
+        place: Place::Rail { zone: crate::feat::Zone::Configure, order: 20 },
         id: "skills".into(),
         label: "Skills".into(),
         icon: Some(ICON.into()),
