@@ -21,6 +21,8 @@ pub mod store;
 pub mod tiling;
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod gate_tests;
 
 use crate::approval;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
@@ -125,11 +127,20 @@ impl Pane {
 }
 
 /// Finds pane `i`'s terminal in the app (the terminal's handlers take one per pane).
-/// Pane `i`'s terminal, for its element's handlers (keys, drags, the
-/// wheel, the pointer). None while a feature's overlay covers the pane
-/// area: a terminal under it takes nothing, even with its grid still
-/// holding Rune's focus (`terminal_may_take_keys` holds the window's path).
+/// Pane `i`'s terminal, for its grid element's input handlers (keys, a
+/// paste it asked for, presses, drags, the wheel, the pointer). None while
+/// anything covers the panes (`App::panes_covered`, the same predicate the
+/// window's keys go through in `terminal_may_take_keys`): a terminal under a
+/// dialog, a modal, an overlay, Jarvis's dialog or the palette takes nothing,
+/// even with its grid still holding Rune's focus.
 pub fn lens(i: usize) -> impl Fn(&mut App) -> Option<&mut TerminalState> + Clone + 'static {
+    move |s: &mut App| if s.panes_covered() { None } else { s.panes.get_mut(i).and_then(|p| p.term.as_mut()) }
+}
+
+/// Pane `i`'s terminal for its layout only (fitting it to the pane): kept
+/// under a dialog or a modal, so a window resized behind one still fits;
+/// not under an overlay, which keeps the panes' sizes as they were.
+fn layout_lens(i: usize) -> impl Fn(&mut App) -> Option<&mut TerminalState> + Clone + 'static {
     move |s: &mut App| if s.feats.overlay.is_some() { None } else { s.panes.get_mut(i).and_then(|p| p.term.as_mut()) }
 }
 
@@ -267,6 +278,9 @@ pub struct App {
     sidebar_live: Option<f32>,
     /// The command palette, while open (palette.rs).
     pub palette: Option<palette::Palette>,
+    /// While Jarvis's proposal dialog shows: what had the keyboard before it
+    /// (given back when it closes, if that was a terminal's grid).
+    held_focus: Option<Option<String>>,
     /// The status bar's state (statusbar.rs).
     pub status: statusbar::Status,
 }
@@ -387,6 +401,7 @@ impl App {
             bar_menu: None,
             sidebar_live: None,
             palette: None,
+            held_focus: None,
             status: Default::default(),
         };
         jarvis::load_prefs(&mut app.jarvis);
@@ -1059,6 +1074,8 @@ impl App {
             self.osc_copy(i, &name, text, now, tx);
             changed = true;
         }
+        // Last: what it asks for wins over this frame's own refocus of a pane.
+        changed |= self.hold_focus_for_proposal(tx);
         if changed {
             self.push_data();
         }
@@ -1245,9 +1262,43 @@ impl App {
     /// up, no overlay over the pane area, and Rune's focus on a terminal grid (the core moves it there when
     /// it opens or focuses a pane).
     pub fn terminal_may_take_keys(&self, rune_focus: Option<&str>) -> bool {
-        // A feature's overlay over the pane area covers the terminals: none takes a key.
-        let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || crate::surface::focused().is_some();
-        !overlay && rune_focus.is_some_and(|k| k.starts_with("grid"))
+        // A focused picture surface keeps the keyboard for itself.
+        !self.panes_covered() && crate::surface::focused().is_none() && rune_focus.is_some_and(|k| k.starts_with("grid"))
+    }
+
+    /// Jarvis's proposal dialog is on screen (a shown proposal that exists).
+    pub fn proposal_up(&self) -> bool {
+        self.jarvis.shown.as_deref().is_some_and(|id| self.jarvis.proposal(id).is_some())
+    }
+
+    /// When Jarvis's proposal dialog appears, the keyboard leaves a terminal's
+    /// grid (to the Jarvis panel's input when the panel is open, else to the
+    /// dialog); when it closes, it goes back to the grid that had it.
+    fn hold_focus_for_proposal(&mut self, tx: &mut Tx) -> bool {
+        match (self.proposal_up(), self.held_focus.is_some()) {
+            (true, false) => {
+                let had = tx.focused().map(str::to_string);
+                if had.as_deref().is_some_and(|k| k.starts_with("grid")) {
+                    tx.focus(if self.jarvis.open { jarvis::INPUT } else { "jv-close" }, true);
+                }
+                self.held_focus = Some(had);
+                true
+            }
+            (false, true) => {
+                if let Some(k) = self.held_focus.take().flatten().filter(|k| k.starts_with("grid")) {
+                    tx.focus(&k, true);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Something is over the panes: the core's dialog, a modal, a feature's
+    /// overlay, Jarvis's dialog, the palette. No terminal takes input then,
+    /// by the window's path (`terminal_may_take_keys`) or its grid's (`lens`).
+    pub fn panes_covered(&self) -> bool {
+        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.jarvis.shown.is_some() || self.palette.is_some()
     }
 
     /// The input method (dead keys, CJK, emoji): to the focused pane.
@@ -2084,10 +2135,11 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         overlays.extend(more);
         s.overlay_view(el_)
     });
-    main = main.child(match over {
+    let panes = match over {
         Some(o) => panes_view(s).child(o),
         None => panes_view(s),
-    });
+    };
+    main = main.child(if s.proposal_up() { panes.child(proposal_scrim()) } else { panes });
     for p in fpanels {
         main = main.child(p);
     }
@@ -2135,6 +2187,22 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         root = root.child(scrim("cf-scrim", dialog, |s: &mut App| approval::ConfirmAnswers::cancel_click(s)));
     }
     root
+}
+
+/// Over the pane area (the pager, the panes, an open overlay) while Jarvis's
+/// proposal dialog shows: the core scrim's look, so the terminals read as
+/// held. A press, the wheel or a drop on it reaches nothing and answers
+/// nothing (only the dialog's controls and a typed or spoken answer do). The
+/// Jarvis panel, the rail and the sidebar stay usable: the typed yes and
+/// push-to-talk must work while the dialog shows.
+fn proposal_scrim() -> El {
+    el().key("jv-scrim")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .fill(c("floor").alpha(0.6))
+        .on_press(|_s: &mut App| {})
+        .on_secondary_press_local(|_s: &mut App, _p: rune::PointerEvent, _tx: &mut Tx| {})
+        .on_wheel(|_s: &mut App, _ev: rune::WheelEvent, _tx: &mut Tx| true)
+        .on_drop_files(|s: &mut App, _files: &[std::path::PathBuf], _tx| s.notify("Answer Jarvis's proposal first: nothing was dropped", false))
 }
 
 /// What sits under a dialog: the window's floor at 60%, so what is behind
@@ -2936,7 +3004,7 @@ fn pane_view(s: &App, i: usize) -> El {
     }
     let body = match pane {
         // The pane fills a row (its width grows, its height is the row's).
-        Some(Pane { term: Some(t), .. }) => row().w_full().grow(1.0).min_h(0.0).child(terminal::pane(t, lens(i))),
+        Some(Pane { term: Some(t), .. }) => row().w_full().grow(1.0).min_h(0.0).child(terminal::pane_with(t, lens(i), layout_lens(i))),
         Some(Pane { sandbox: None, error: None, .. }) => empty_pane(s, i),
         Some(p) => {
             let msg = match (&p.sandbox, &p.error) {
@@ -2978,7 +3046,15 @@ fn pane_view(s: &App, i: usize) -> El {
             s.focus_pane(i);
         })
         // Files dropped on a pane: to the feature that takes them (files: the upload's dialog).
-        .on_drop_files(move |s: &mut App, files: &[std::path::PathBuf], _tx| s.pane_drop(i, files))
+        // Not while something covers the panes: a drop's upload must not
+        // start (nor skip its dialog) behind another dialog.
+        .on_drop_files(move |s: &mut App, files: &[std::path::PathBuf], _tx| {
+            if s.panes_covered() {
+                s.notify("Close what is open first: nothing was dropped", false);
+            } else {
+                s.pane_drop(i, files)
+            }
+        })
         .child(el().key(format!("pane-{}-accent", i + 1)).h(2.0).w_full().fill(accent))
         .child(bar)
         .child(el().h(1.0).w_full().fill(c("elevated")))
