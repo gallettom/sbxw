@@ -535,14 +535,16 @@ impl LuauHost {
     /// Refills the read-only `theme` table's colours and mode from the active
     /// palette when it changed since the table was filled (the table stays
     /// the same object, read-only to screens).
-    fn sync_theme(&self) {
+    pub fn sync_theme(&self) {
         let now = crate::theme::generation();
         if self.theme_gen.replace(now) == now {
             return;
         }
         let fresh = crate::theme::to_json();
         let refill = || -> mlua::Result<()> {
-            let theme: Table = self.lua.globals().raw_get("theme")?;
+            // `get`, not `raw_get`: once sandboxed, the globals a script sees are
+            // a proxy over the table the theme was put in.
+            let theme: Table = self.lua.globals().get("theme")?;
             let colors: Table = theme.raw_get("color")?;
             theme.set_readonly(false);
             colors.set_readonly(false);
@@ -1131,6 +1133,24 @@ mod tests {
             eprintln!("{src}\n  -> {}", e.lines().next().unwrap_or(""));
             assert!(e.contains("attempt to") || e.contains("nil"), "{src}: {e}");
         }
+    }
+
+    #[test]
+    fn the_theme_table_follows_a_switch() {
+        // Luau resolves `theme.color.bg` once, when the chunk loads (an
+        // import of a sandboxed global): the table is refilled on a switch,
+        // and the screen is loaded again (screen.rs, `redraw`) to read it.
+        let src = r#"return { render = function() return text{ theme.color.bg } end }"#;
+        let mut h = host();
+        h.load("t.luau", src).unwrap();
+        assert_eq!(h.render(&J::Null).unwrap().text, "#0d1117");
+        crate::theme::with_mode(crate::theme::Mode::Graphite, || {
+            h.sync_theme();
+            assert_eq!(h.eval("return theme.color.bg").unwrap().to_string().unwrap(), "#202124", "the table holds the new palette");
+            assert_eq!(h.eval("return theme.mode").unwrap().to_string().unwrap(), "graphite");
+            h.load("t.luau", src).unwrap();
+            assert_eq!(h.render(&J::Null).unwrap().text, "#202124", "loaded again, it reads it");
+        });
     }
 
     #[test]

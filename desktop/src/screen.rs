@@ -215,6 +215,12 @@ pub struct ScreenState {
     pub stale: bool,
     /// `loads` when the core last checked the override (shell.rs).
     pub checked: u32,
+    /// The source that loaded last (its file name, its text) and the theme's
+    /// generation it was loaded under: Luau resolves a `theme.color.x` read
+    /// once, when the chunk loads, so a theme switch loads it again (its
+    /// state kept) before it renders.
+    loaded: Option<(String, String)>,
+    theme_gen: u64,
 }
 
 impl ScreenState {
@@ -236,6 +242,8 @@ impl ScreenState {
             override_hash: None,
             stale: false,
             checked: 0,
+            loaded: None,
+            theme_gen: theme::generation(),
         };
         v.seen = std::fs::metadata(&v.override_path).and_then(|m| m.modified()).ok();
         let (src, text) = read_source(name, &v.override_path);
@@ -299,11 +307,14 @@ impl ScreenState {
             (Source::File(_), Ok(t)) => Some(crate::shell::store::hash(t)),
             _ => None,
         };
+        let text = src.as_ref().ok().cloned();
         let loaded = src.map_err(|e| format!("{file}: {e}")).and_then(|src| self.host.load(&file, &src));
         self.loads += 1;
         match loaded {
             Ok(()) => {
                 log::info!("screen {} loaded from {source} (load #{})", self.name, self.loads);
+                self.loaded = text.map(|t| (file.clone(), t));
+                self.theme_gen = theme::generation();
                 self.override_hash = hash;
                 self.source = source;
                 self.error = None;
@@ -343,6 +354,16 @@ impl ScreenState {
     }
 
     fn redraw(&mut self) {
+        // The theme changed since the chunk loaded: load it again first.
+        if self.theme_gen != theme::generation() {
+            self.theme_gen = theme::generation();
+            self.host.sync_theme();
+            if let Some((file, text)) = &self.loaded {
+                if let Err(e) = self.host.load(file, text) {
+                    log::warn!("screen {}: {e}", self.name);
+                }
+            }
+        }
         let with_zone;
         let data = match &self.ui.zones.active {
             Some(z) => {
