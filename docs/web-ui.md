@@ -234,15 +234,23 @@ Notes:
 ## Status pills
 
 When an agent writes a status label such as `[[Done]]` or
-`[[Failed: 3 tests]]`, each terminal draws it as a coloured pill over the
-same cells, the brackets left out (their cells pad the pill, as in the
-desktop app): green for done, red for failed, amber for what needs you, a
-filled red for what cannot be undone, blue for context, cyan for the kind of
+`[[Failed: 3 tests]]`, each terminal draws it as a discreet rounded pill over
+the same cells, the brackets left out (their cells are its rounded ends, as
+in the desktop app): a faint tint of its colour over the row's own background,
+the label in the terminal's text colour tinted toward it, never bold. Green
+for done, red for failed, amber for what needs you, a stronger red for what
+cannot be undone, blue for context, cyan for the kind of
 work, purple for the team. Copying or selecting gives the text as written,
 brackets included; while a selection is on screen the pills step aside so it
 can be seen. The words, colours and switches are in the daemon's
 `sbxw.toml` (see [Status pills](configuration.md#status-pills)), and a change
 Jarvis applies redraws every open terminal without a reload.
+
+Each pill is attached to its line, so it scrolls with the text in the same
+frame, and stays on lines in the scrollback (up to 1,000 per terminal; past
+that, the ones farthest from what you are reading go first). Rows brought
+into view by a scroll are read in that frame; only a burst of output
+repainting the whole screen is read once it settles (60 ms).
 
 The pills are drawn in the terminals only, not yet in the requests panel or
 the session activity lines.

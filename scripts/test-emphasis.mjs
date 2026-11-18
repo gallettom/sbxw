@@ -65,4 +65,131 @@ assert.deepEqual(E.findCodePoints("[[Shipped]] [[done]] [[Done]]", custom).map((
 // No marker, no work.
 assert.deepEqual(E.pieces([row(0, "plain text, nothing [here]")], contract), []);
 
-console.log(`emphasis matcher: ${n} shared cases and 6 cell checks passed`);
+// ── Pills while scrolling (attachWith, against a fake xterm) ────────────
+// A buffer of `lines` (absolute rows), a viewport of `rows`; markers record
+// the line they were put on; timers only run when flushed.
+function fakeTerm(lines, rows = 24, cols = 80) {
+  const on = { render: [], resize: [], buffer: [], sel: [] };
+  const sub = (list) => (f) => { list.push(f); return { dispose() {} }; };
+  const markers = [];
+  const term = {
+    rows, cols,
+    options: { fontSize: 13, fontFamily: "mono", theme: {} },
+    buffer: {
+      active: {
+        viewportY: 0, cursorY: 0,
+        get baseY() { return Math.max(0, lines.length - rows); },
+        get length() { return lines.length; },
+        getNullCell: () => ({}),
+        getLine(y) {
+          const text = lines[y];
+          if (text === undefined) return undefined;
+          return {
+            isWrapped: false,
+            translateToString: () => text,
+            getCell: (x) => (x < [...text].length ? { getWidth: () => 1, getChars: () => [...text][x] } : undefined),
+          };
+        },
+      },
+      onBufferChange: sub(on.buffer),
+    },
+    registerMarker(offset) {
+      const b = term.buffer.active;
+      const m = { line: b.baseY + b.cursorY + offset, isDisposed: false, subs: [], onDispose(f) { m.subs.push(f); }, dispose() { if (!m.isDisposed) { m.isDisposed = true; m.line = -1; m.subs.forEach((f) => f()); } } };
+      markers.push(m);
+      return m;
+    },
+    registerDecoration({ marker }) { return { marker, onRender() {}, dispose() {} }; },
+    onRender: sub(on.render),
+    onResize: sub(on.resize),
+    onSelectionChange: sub(on.sel),
+    hasSelection: () => false,
+  };
+  const timers = [];
+  const env = {
+    enabled: () => true,
+    contract: () => contract,
+    setTimeout: (f) => { timers.push(f); return timers.length; },
+    clearTimeout: (t) => { timers[t - 1] = null; },
+    paint() {},
+  };
+  const render = (start = 0, end = rows - 1) => on.render.forEach((f) => f({ start, end }));
+  const flush = () => { const fs = timers.splice(0); fs.forEach((f) => f && f()); };
+  const pending = () => timers.some(Boolean);
+  const live = () => markers.filter((m) => !m.isDisposed).map((m) => m.line).sort((a, b) => a - b);
+  return { term, env, render, flush, pending, markers, live };
+}
+
+// 5,000 lines, a pill every 50th; the cursor at the bottom.
+const big = Array.from({ length: 5000 }, (_, i) => (i % 50 === 7 ? `line ${i} [[Done]] ok` : `line ${i} plain`));
+{
+  const f = fakeTerm(big);
+  f.term.buffer.active.cursorY = 23;
+  f.term.buffer.active.viewportY = 4976;
+  const h = E.attachWith(f.term, f.env);
+  f.render();
+  assert.deepEqual(f.live(), [4957].filter((y) => y >= 4976), "the first render is read at once (no pill in the last 24 rows here)");
+  // Scroll up a page: the rows brought into view get their pills in that
+  // render, before any timer runs.
+  f.term.buffer.active.viewportY = 4940;
+  const readBefore = h.stats.rowsRead;
+  f.render();
+  assert.deepEqual(f.live(), [4957], "the pill on line 4957 is there in the frame that shows it");
+  assert.equal(h.stats.rowsRead - readBefore, 24, "one viewport read, not the scrollback");
+  // A fast scroll, several pages at once: same.
+  f.term.buffer.active.viewportY = 4800;
+  f.render();
+  assert.deepEqual(f.live(), [4807, 4957], "a jump of several pages: the rows it lands on");
+  assert.equal(h.stats.debounced, 0, "a scroll never waits for the timer");
+  // Back down through lines read before: their pills are still on their
+  // markers, nothing new is made.
+  const made = h.stats.markers;
+  f.term.buffer.active.viewportY = 4940;
+  f.render();
+  assert.equal(h.stats.markers, made, "scrolling back reuses the pills");
+  assert.deepEqual(f.live(), [4807, 4957], "kept in the scrollback");
+  // Reading the whole 5,000 lines by scrolling costs one viewport per render.
+  let renders = 0;
+  const read0 = h.stats.rowsRead;
+  for (let y = 0; y <= 4976; y += 24) { f.term.buffer.active.viewportY = y; f.render(); renders++; }
+  assert.ok(h.stats.rowsRead - read0 <= renders * 24, "never more than a viewport per frame");
+  assert.equal(f.live().length, 100, "every pill seen is kept (under the cap)");
+  assert.ok(!f.pending(), "no timer was needed");
+
+  // Output in place: a few rows repainted are read at once (a pill whose
+  // text went goes in that frame); a burst repainting the screen waits for
+  // the burst to settle.
+  f.term.buffer.active.viewportY = 4940;
+  f.render();
+  big[4957] = "line 4957 repainted, no pill";
+  f.render(17, 17);
+  assert.deepEqual(f.live().filter((y) => y >= 4940), [], "gone in the same frame");
+  big[4958] = "now [[Failed: x]] here";
+  f.render(0, 23);
+  assert.ok(f.pending(), "a full in-place repaint is debounced");
+  assert.ok(!f.live().includes(4958));
+  f.flush();
+  assert.ok(f.live().includes(4958), "and read once it settles");
+
+  // A line trimmed off the scrollback takes its marker, and the pill.
+  const first = f.markers.find((m) => !m.isDisposed);
+  const before = h.count;
+  first.dispose();
+  assert.equal(h.count, before - 1);
+  h.dispose();
+}
+
+// The cap keeps the pills nearest the viewport.
+{
+  const many = Array.from({ length: 3000 }, (_, i) => `[[Done]] ${i}`);
+  const f = fakeTerm(many);
+  f.term.buffer.active.cursorY = 23;
+  const h = E.attachWith(f.term, f.env);
+  for (let y = 0; y <= 2976; y += 24) { f.term.buffer.active.viewportY = y; f.render(); }
+  assert.ok(h.count <= E.MAX_DECOS, `${h.count} pills, capped at ${E.MAX_DECOS}`);
+  const kept = f.live();
+  assert.ok(kept.includes(2999) && !kept.includes(0), "the oldest, farthest from the viewport, went first");
+  h.dispose();
+}
+
+console.log(`emphasis matcher: ${n} shared cases and 6 cell checks passed; scrolling checks passed`);
