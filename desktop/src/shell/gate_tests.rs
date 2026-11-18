@@ -419,3 +419,45 @@ fn a_drop_on_a_covered_pane_starts_nothing() {
     assert!(rt.state.feats.dialog.is_some(), "a drop on an uncovered pane opens the upload's dialog");
     assert_eq!(drops(), before + 1, "the uncovered pane took its drop");
 }
+
+/// An overlay over the panes (the explorer, Commits) with Jarvis's proposal
+/// on top: keys an overlay takes for itself (typed text, Left, Right,
+/// Backspace, Up, Down, Enter, forwarded to its `<screen>_key`) reach no
+/// terminal; files dragged over it are not offered to it, and dropped on it
+/// they start no upload, neither the overlay's (the explorer's card) nor the
+/// pane's under it.
+#[test]
+fn an_overlay_under_jarvis_s_proposal_takes_no_key_or_file_for_a_terminal() {
+    let drops = || super::PANE_DROPS.load(std::sync::atomic::Ordering::SeqCst);
+    for overlay in ["rail-files", "rail-commits"] {
+        let (mut rt, rx) = window_on("jarvis/proposal-high");
+        rt.update(|s, _| s.jarvis.shown = None);
+        settle(&mut rt, 2);
+        tap(&mut rt, overlay);
+        settle(&mut rt, 5);
+        assert!(rt.state.feats.overlay.is_some(), "{overlay} opens an overlay");
+        let over = rt.presented(&format!("overlay-{}", rt.state.feats.overlay.as_ref().unwrap().0)).expect("the overlay is drawn").0;
+        rt.update(|s, _| s.jarvis.shown = Some("p-high-1".into()));
+        settle(&mut rt, 5);
+        assert!(rt.state.proposal_up());
+        rt.update(|_, tx| tx.focus("grid-1", false));
+        for key in [Key::Text("a".into()), Key::Left, Key::Right, Key::Backspace, Key::Up, Key::Down, Key::Enter] {
+            rt.key(KeyEvent { key: key.clone(), mods: rune::Mods::default() });
+            rt.frame(0.02);
+            assert_eq!(sent(&rx), b"", "{key:?} reached a terminal under {overlay}'s overlay and Jarvis's proposal");
+        }
+        let file = std::env::temp_dir().join(format!("sbxw-gate-overlay-{}-{overlay}.txt", std::process::id()));
+        std::fs::write(&file, "x").unwrap();
+        let at = (over[0] + over[2] / 2.0, over[1] + over[3] / 2.0);
+        let before = drops();
+        rt.drag_files(vec![file.clone()], Some(at));
+        settle(&mut rt, 2);
+        let hovered = rt.drop_hovered();
+        assert!(!hovered.as_deref().is_some_and(|k| k.starts_with("overlay") || k.starts_with("pane")), "{overlay}: a drag under the proposal is offered to {hovered:?}");
+        rt.drop_files(vec![file.clone()], Some(at));
+        settle(&mut rt, 3);
+        assert!(!crate::files::was_handed(&file), "{overlay}: a drop under the proposal was handed to an upload");
+        assert_eq!(drops(), before, "{overlay}: a drop under the proposal reached a pane");
+        let _ = std::fs::remove_file(&file);
+    }
+}
