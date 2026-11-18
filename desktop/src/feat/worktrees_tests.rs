@@ -57,6 +57,8 @@ fn every_sandbox_s_worktrees_with_their_numbers_and_thread_state() {
     let c = r("checkout-copy");
     assert_eq!((c["path"].as_str(), c["ahead"].as_u64(), c["behind"].as_u64(), c["dirty"].as_u64(), c["merged"].as_bool(), c["word"].as_str()), (Some(".sbxw-worktrees/checkout-copy"), Some(2), Some(1), Some(3), Some(false), Some("working")));
     assert_eq!(c["subject"], "Checkout: copy for the payment step");
+    assert_eq!(c["tone"], "blue", "working is blue, as in the sidebar");
+    assert_eq!(r("header-fix")["tone"], "amber");
     assert_eq!(r("header-fix")["merged"], true);
     assert_eq!(r("header-fix")["word"], "wants you");
     assert_eq!(r("search-index")["has_branch"], false);

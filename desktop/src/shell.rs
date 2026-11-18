@@ -3663,6 +3663,65 @@ mod tests {
 
     /// No key and no paste reaches a terminal while anything else has the
     /// keyboard: a screen input, a core dialog and its secret field, a modal.
+    /// A thread on its own worktree, its 13-character name, its state word
+    /// and the "+" on its line, at the sidebar's normal width (264): the
+    /// path relative to the repository when it fits, else "…/<name>", else
+    /// the name whole, a middle cut only for a long name; never cut twice;
+    /// the word always whole (STATUSBAR.md's rule, with the "+" present).
+    #[test]
+    fn a_worktree_session_line_keeps_its_name_and_its_word_with_the_plus() {
+        fn find<'a>(n: &'a crate::luau::Node, key: &str) -> Option<&'a crate::luau::Node> {
+            if n.key.as_deref() == Some(key) {
+                return Some(n);
+            }
+            n.children.iter().find_map(|c| find(c, key))
+        }
+        fn texts(n: &crate::luau::Node, out: &mut Vec<String>) {
+            if matches!(n.kind, crate::luau::Kind::Text) {
+                out.push(n.text.clone());
+            }
+            for c in &n.children {
+                texts(c, out);
+            }
+        }
+        let dir = std::env::temp_dir().join("sbxw-no-overrides");
+        let fx = crate::fixture::Fixture::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/sandboxes/basic.json")).unwrap();
+        for (w, thread, word, tone) in [(264.0f32, "checkout-copy", "working", "green"), (264.0, "checkout-copy", "wants you", "amber"), (264.0, "a-really-long-thread-name", "working", "green"), (300.0, "checkout-copy", "working", "green"), (320.0, "checkout-copy", "wants you", "amber")] {
+            let mut data = fx.screen_data(&crate::fixture::AppView::default());
+            let name = data["sandboxes"][0]["name"].as_str().unwrap().to_string();
+            let ws = data["sandboxes"][0]["workspace"].as_str().unwrap().to_string();
+            data["app"]["selected"] = name.clone().into();
+            data["app"]["sidebar"] = serde_json::json!({ "w": w, "shown": true });
+            data["sessions"] = serde_json::json!([{ "sandbox": name, "thread": thread, "cwd": format!("{ws}/.sbxw-worktrees/{thread}") }]);
+            let args = serde_json::json!({ "sandbox": name, "thread": thread, "pane": "focused" });
+            data["app"]["extras"] = serde_json::json!({ "rows": { name.clone(): [
+                { "id": thread, "label": format!("⑂ {thread} · {word}"), "tone": tone, "help": "", "count": null, "icon": null, "intent": { "name": "open_terminal", "args": args } },
+            ] } });
+            let s = crate::screen::ScreenState::new("sandboxes", &dir, data);
+            assert!(s.error.is_none(), "{:?}", s.error);
+            let n = s.last_good.clone().unwrap();
+            let line = find(&n, &format!("extra-row-{name}-{thread}")).expect("the line");
+            assert!(find(line, &format!("session-add-{name}-{thread}")).is_some(), "the + is there");
+            let mut t = vec![];
+            texts(line, &mut t);
+            let label = t[0].clone();
+            assert!(t.iter().any(|x| x == word), "{word} shown whole: {t:?}");
+            assert!(label.matches('…').count() <= 1, "cut once at most: {label}");
+            // The line as laid out: the sidebar less paddings, columns, glyph, gaps and the +.
+            let room = w - 24.0 - 40.0 - 20.0 - 16.0 - 32.0;
+            let whole_fits = bar::measure(thread, 13.0, 400.0) + bar::measure(word, 12.0, 400.0) <= room;
+            if whole_fits {
+                assert!(label == thread || label == format!("…/{thread}") || label == format!(".sbxw-worktrees/{thread}"), "{w}: the name whole: {label}");
+            } else {
+                // One middle cut, both ends of the name kept.
+                let (a, b) = label.split_once('…').unwrap_or_else(|| panic!("{w} {word}: {label} not cut, {} pt", bar::measure(&label, 13.0, 400.0)));
+                assert!(thread.starts_with(a) && thread.ends_with(b) && a.len() >= 3 && b.len() >= 3, "{w}: {label}");
+            }
+            let used = bar::measure(&label, 13.0, 400.0) + bar::measure(word, 12.0, 400.0);
+            assert!(used <= room + 1.0, "{label} + {word}: {used} pt in {room}");
+        }
+    }
+
     /// An overlay view over the pane area (`Slot::Overlay`): opened from
     /// the rail, it covers the pager and the panes; no terminal takes a key,
     /// a paste or a press while it shows, none is resized; Escape, its × or

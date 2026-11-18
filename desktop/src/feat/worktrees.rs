@@ -95,6 +95,19 @@ pub fn short_path(path: &str, workspace: Option<&str>) -> String {
     path.to_string()
 }
 
+/// A thread state's colour, as the sidebar's session lines draw it:
+/// working (and starting) blue, wants you amber, done green (settled),
+/// failed red, the rest muted.
+pub fn state_tone(state: &str) -> &'static str {
+    match state {
+        "working" | "starting" => "blue",
+        "wants" => "amber",
+        "done" => "green",
+        "failed" => "red",
+        _ => "muted",
+    }
+}
+
 impl State {
     fn read_all(&mut self, cx: &Ctx) -> Vec<Action> {
         self.gen += 1;
@@ -148,7 +161,7 @@ impl State {
                         "id": format!("{sb}:{name}"),
                         "sandbox": sb, "color": colour, "thread": name, "branch": branch,
                         "path": short, "full": path, "repo": repo["path"], "base": repo["base"],
-                        "state": session.map(|x| x.state).unwrap_or(""), "word": session.map(|x| x.word()).unwrap_or(""), "tone": session.map(|x| x.tone()).unwrap_or("muted"),
+                        "state": session.map(|x| x.state).unwrap_or(""), "word": session.map(|x| x.word()).unwrap_or(""), "tone": session.map(|x| state_tone(x.state)).unwrap_or("muted"),
                         "has_session": session.is_some(),
                         "ahead": t["ahead"], "behind": t["behind"], "dirty": t["dirty"],
                         "subject": t["tip_subject"], "when": t["tip_at"].as_i64().filter(|a| *a > 0).map(|a| crate::feat::files::view::ago(a as u64, now)),
