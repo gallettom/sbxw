@@ -669,7 +669,7 @@ impl App {
     /// ×) and the screen under it, on the app's floor, covering the pager
     /// and the panes (absolute: nothing under it moves or resizes). A press
     /// anywhere on it stays on it; files dropped on it go to its feature.
-    pub(super) fn overlay_view(&self, screen: El) -> Option<El> {
+    pub(super) fn overlay_view(&self, screen: El, slot: Option<El>) -> Option<El> {
         let (name, _) = self.feats.overlay.as_ref()?;
         let (_, decl) = feat::screen(name)?;
         let Slot::Overlay { title, icon } = decl.slot else { return None };
@@ -678,8 +678,16 @@ impl App {
         if let Some(i) = crate::icons::get(icon) {
             head = head.child(rune::icon(i, 16.0).color(c("text-bright")));
         }
+        // The title, then what the screen puts beside it (its sandbox picker:
+        // `screen::TITLE_SLOT`), then the room, then the way out.
+        // Whole when a slot follows it (the slot shrinks first); else it may truncate.
+        let t = text(title).font(crate::screen::body(14.0, 600.0)).color(c("text-bright"));
+        head = head.child(if slot.is_some() { t } else { t.truncate().min_w(0.0) });
+        if let Some(e) = slot {
+            head = head.child(el().w(4.0)).child(e);
+        }
         head = head
-            .child(text(title).font(crate::screen::body(14.0, 600.0)).color(c("text-bright")).truncate().min_w(0.0).grow(1.0))
+            .child(el().grow(1.0).min_w(0.0))
             .child(text("Esc closes").font(crate::screen::body(12.0, 400.0)).color(c("text-muted")))
             .child(
                 el().key("overlay-close")

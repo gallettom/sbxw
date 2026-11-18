@@ -822,7 +822,8 @@ fn the_configure_panels_open_on_the_sandbox_they_are_opened_for() {
 /// MCP servers, Skills and Kits over the pane area use its width: two
 /// columns from 760 pt (MCP: servers | the selected one or the form; Kits:
 /// the line | the selected kit; Skills: kept | the sandbox's), one column
-/// under it; the sandbox picker at the top left with its colour square.
+/// under it; the sandbox picker in the header beside the title, with its
+/// colour square, inside the overlay.
 #[test]
 fn the_configure_overlays_are_two_columns_when_wide() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
@@ -838,7 +839,9 @@ fn the_configure_overlays_are_two_columns_when_wide() {
             assert_eq!(rt.presented(&format!("{feat}-split")).is_some(), two, "{feat} at {w} ({} wide): two columns {two}", over[2]);
             let pick = rt.presented(&format!("{feat}-sandbox")).unwrap_or_else(|| panic!("{feat} at {w}: the picker")).0;
             assert!(rt.presented(&format!("{feat}-sandbox-color")).is_some(), "{feat}: the colour square");
-            assert!(pick[0] < over[0] + over[2] / 2.0 && pick[1] < over[1] + 120.0, "{feat} at {w}: the picker at the top left {pick:?} in {over:?}");
+            let head = rt.presented(&format!("overlay-head-{feat}")).unwrap().0;
+            assert!(pick[1] >= head[1] - 0.5 && pick[1] + pick[3] <= head[1] + head[3] + 0.5, "{feat} at {w}: the picker in the header {pick:?} in {head:?}");
+            assert!(pick[0] + pick[2] <= over[0] + over[2] + 0.5, "{feat} at {w}: the picker inside the overlay {pick:?} in {over:?}");
         }
     }
 }

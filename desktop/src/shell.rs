@@ -2149,9 +2149,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // A feature's overlay view covers the pane area (pager and panes), drawn
     // absolute over it so no terminal moves or resizes (features.rs).
     let over = s.feats.overlay.as_ref().and_then(|(name, _)| s.screens.iter().find(|x| &x.name == name)).and_then(|sc| {
-        let (el_, more) = screen::view_parts::<App>(sc);
+        let (el_, more, slot) = screen::view_slot::<App>(sc);
         overlays.extend(more);
-        s.overlay_view(el_)
+        s.overlay_view(el_, slot)
     });
     main = main.child(match over {
         Some(o) => panes_view(s).child(o),

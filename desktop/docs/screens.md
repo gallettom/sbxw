@@ -940,6 +940,10 @@ the cap with many sessions, threads or requests are listed in VIEWS.md.
   the sandbox's colour square (`data.app.groups`, key `<id>-color`) then the
   select (`<id>`), in a row keyed `<id>-row`. The explorer, MCP servers,
   Skills and Kits draw it at their top left.
+- A row keyed `title-slot` in an overlay's screen (a sandbox picker) is
+  drawn by the core in the overlay's header, right after its title
+  ("Files  [web-app v]"), not where it sits in the tree; in a panel or a
+  modal it stays in place. Its keys and actions are the screen's as usual.
 - `overlay_wide(data)`: true when the overlay over the pane area is 760 pt
   wide or more (`data.app.overlay.w`; a screen drawn alone counts as wide).
   Two columns from there (a `split` keyed `<screen>-split`), one under it.

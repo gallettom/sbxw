@@ -100,6 +100,13 @@ pub const DARK: &[(&str, u32)] = &[
     ("scrim", 0x080b0f),
     ("shadow", 0x000000),
     ("media", 0x000000),
+    // The explorer's file icons by kind: quiet hues, never a meaning
+    // colour's (folders are `blue`); a mark at 3:1 on the explorer's grounds.
+    ("file-doc", 0x6cb6c8),
+    ("file-code", 0xb392f0),
+    ("file-image", 0xe38bb5),
+    ("file-data", 0x9cc26a),
+    ("file-archive", 0xc9a36b),
 ];
 
 /// Graphite: the same names on neutral dark greys (a ground near #202124,
@@ -164,6 +171,11 @@ pub const GRAPHITE: &[(&str, u32)] = &[
     ("scrim", 0x0e0e0f),
     ("shadow", 0x000000),
     ("media", 0x000000),
+    ("file-doc", 0x6cb6c8),
+    ("file-code", 0xb392f0),
+    ("file-image", 0xe38bb5),
+    ("file-data", 0x9cc26a),
+    ("file-archive", 0xc9a36b),
 ];
 
 /// Pure white and black: the ends that "move toward white or black" math
@@ -824,6 +836,19 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("vendor-openai", "surface", Need::Text),
     ("vendor-google", "surface", Need::Text),
     ("vendor-google", "active-bg", Need::Text),
+    // The explorer's file kinds, on its ground, a row's cursor and the selected row.
+    ("file-doc", "bg", Need::Mark),
+    ("file-code", "bg", Need::Mark),
+    ("file-image", "bg", Need::Mark),
+    ("file-data", "bg", Need::Mark),
+    ("file-archive", "bg", Need::Mark),
+    ("file-doc", "active-bg", Need::Mark),
+    ("file-code", "active-bg", Need::Mark),
+    ("file-image", "active-bg", Need::Mark),
+    ("file-data", "active-bg", Need::Mark),
+    ("file-archive", "active-bg", Need::Mark),
+    ("accent", "active-bg", Need::Mark),
+    ("blue", "active-bg", Need::Mark),
     // Keyword pill kinds and the filled danger pill.
     ("cyan", "surface", Need::Text),
     ("white", "pill-danger", Need::Text),

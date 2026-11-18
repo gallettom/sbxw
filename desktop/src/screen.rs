@@ -624,8 +624,20 @@ pub fn view<S: Host>(s: &ScreenState) -> El {
 /// The panel, and its open menus apart: the shell puts those last in the
 /// window so they paint over every other tile.
 pub fn view_parts<S: Host>(s: &ScreenState) -> (El, Vec<El>) {
+    let (panel, overlays, _) = build_view::<S>(s, false);
+    (panel, overlays)
+}
+
+/// [`view_parts`], with the screen's [`TITLE_SLOT`] row apart (the overlay's
+/// header draws it after its title).
+pub fn view_slot<S: Host>(s: &ScreenState) -> (El, Vec<El>, Option<El>) {
+    build_view::<S>(s, true)
+}
+
+/// The screen's view; with `slot`, its [`TITLE_SLOT`] row apart (else in place).
+fn build_view<S: Host>(s: &ScreenState, slot: bool) -> (El, Vec<El>, Option<El>) {
     let name: Rc<str> = s.name.as_str().into();
-    let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![], nav: HashMap::new() };
+    let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![], slot: None, take_slot: slot, nav: HashMap::new() };
     // The top bar is one line: what the core adds goes beside it, not under it.
     let mut panel = if s.name == "topbar" { row().items_center() } else { col() }.key(format!("screen-{}", s.name)).w_full().h_full().min_h(0.0).gap(8.0);
     if let Some(e) = &s.error {
@@ -645,7 +657,7 @@ pub fn view_parts<S: Host>(s: &ScreenState) -> (El, Vec<El>) {
     if !missing.is_empty() {
         panel = panel.child(fallback_extras::<S>(&s.name, &missing));
     }
-    (panel, b.overlays)
+    (panel, b.overlays, b.slot)
 }
 
 /// The press of a core-drawn element: an intent, checked as any.
@@ -798,10 +810,18 @@ impl ScreenState {
     }
 }
 
+/// The key of a row an overlay's screen hands to the core's header: drawn
+/// right after the overlay's title (a sandbox picker beside "Files"), not
+/// where it sits in the screen's tree.
+pub const TITLE_SLOT: &str = "title-slot";
+
 struct Build<'a> {
     name: Rc<str>,
     ui: &'a Ui,
     overlays: Vec<El>,
+    /// The [`TITLE_SLOT`] row, built apart when `take_slot` (an overlay).
+    slot: Option<El>,
+    take_slot: bool,
     /// Filled by a `group = "list"` container for its items (the pressable
     /// rows inside it, at any depth, not inside another item): the keys of
     /// the items before and after each (Up and Down move there).
@@ -1028,6 +1048,10 @@ impl Build<'_> {
                     b = b.flex_wrap();
                 }
                 for k in n.children.iter() {
+                    if self.take_slot && k.key.as_deref() == Some(TITLE_SLOT) && self.slot.is_none() {
+                        self.slot = Some(self.node::<S>(k));
+                        continue;
+                    }
                     let child = self.node::<S>(k);
                     let child = if field_row && free_input(k) { child.grow(1.0).min_w(INPUT_MIN) } else { child };
                     // A folding column: each child glides to its new height.
