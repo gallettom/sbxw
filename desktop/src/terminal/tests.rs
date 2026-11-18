@@ -440,16 +440,6 @@ fn ime_commit_types_and_preedit_shows() {
     assert_eq!(written(&rx), "ê".as_bytes());
 }
 
-#[test]
-fn theme_change_redraws_everything() {
-    let (mut t, _ev, _rx) = term();
-    t.feed(b"x");
-    let before = t.rebuilt_rows;
-    t.set_theme(Theme::from_setting_strings("#fdf6e3", "auto"));
-    t.poll(None);
-    assert_eq!(t.rebuilt_rows - before, 5);
-}
-
 /// An open terminal follows the app's theme: its ground, text, ANSI set
 /// and pills switch on its next poll, every row drawn again; a theme the
 /// caller set stays (term-demo's `--theme`).
@@ -471,6 +461,16 @@ fn an_open_terminal_follows_the_apps_theme() {
     t.set_theme(Theme::from_setting_strings("#fdf6e3", "auto"));
     with_mode(Mode::Graphite, || t.poll(None));
     assert_eq!(t.theme().background, 0xfdf6e3, "the caller's theme stays");
+}
+
+#[test]
+fn theme_change_redraws_everything() {
+    let (mut t, _ev, _rx) = term();
+    t.feed(b"x");
+    let before = t.rebuilt_rows;
+    t.set_theme(Theme::from_setting_strings("#fdf6e3", "auto"));
+    t.poll(None);
+    assert_eq!(t.rebuilt_rows - before, 5);
 }
 
 /// Full-screen redraw cost, CPU side: every row of a 111x42 screen changes
