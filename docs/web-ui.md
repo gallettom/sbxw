@@ -234,12 +234,13 @@ Notes:
 ## Status pills
 
 When an agent writes a status label such as `[[Done]]` or
-`[[Failed: 3 tests]]`, each terminal draws it as a discreet rounded pill over
-the same cells, the brackets left out (their cells are its rounded ends, as
-in the desktop app): a faint tint of its colour over the row's own background,
-the label in the terminal's text colour tinted toward it, never bold. Green
-for done, red for failed, amber for what needs you, a stronger red for what
-cannot be undone, blue for context, cyan for the kind of
+`[[Failed: 3 tests]]`, each terminal draws it as a discreet capsule over the
+same cells, the brackets left out (their cells are its rounded ends), with
+the desktop app's colours: a 10% tint of its colour over the row's own
+background, the word in the terminal's text tinted toward the colour and the
+detail in plain text, both kept readable (4.5:1), never bold, no outline.
+Green for done, red for failed, amber for what needs you, a filled red with
+white text for what cannot be undone, blue for context, cyan for the kind of
 work, purple for the team. Copying or selecting gives the text as written,
 brackets included; while a selection is on screen the pills step aside so it
 can be seen. The words, colours and switches are in the daemon's

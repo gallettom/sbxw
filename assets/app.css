@@ -4372,37 +4372,42 @@
 /* ── Status pills (emphasis.js) ────────────────────────────────────────────
    An xterm decoration over exactly the cells of `[[Done]]` (.emph-cell),
    painted in the row's own background (--emph-row, read from the cell) so
-   the canvas text under it does not show, holding the pill: a little shorter
-   than the cell, fully rounded ends (a radius over half the height is cut to
-   half by the browser), a faint fill of the tone blended over the row's
-   background (a diff line's green band stays green around it), and the
-   label in the terminal's text colour tinted toward the tone, never bold.
-   The brackets' cells stay (the pill covers exactly the marker) but draw
-   nothing: they are its rounded ends. A piece cut by the soft wrap is square
-   where it was cut. Clicks and selection go to the terminal underneath;
-   while a selection exists the pills step aside so it can be seen. */
+   the canvas text under it does not show, holding the pill, as the desktop
+   draws it: a capsule (a radius over half the height is cut to half by the
+   browser), square where a soft wrap cuts it, the cell's height less 2px
+   (1.5pt) above and below, regular weight, no outline. Colours are the
+   desktop's rule, computed per pill by emphasis.js (pillColors): fill the
+   tone at 10% over the row's background, the word the terminal's text mixed
+   45% toward the tone, then pushed to 4.5:1 on the fill; the detail the
+   terminal's text, same contrast rule; danger white on a filled tone. The
+   color-mix() values are the same rule without the contrast step, for a
+   pill whose colours could not be read. The brackets' cells stay (the pill
+   covers exactly the marker) but draw nothing: they are its rounded ends.
+   While a selection exists the pills step aside so it can be seen. */
 .xterm .emph-cell {
     display: flex; align-items: center; box-sizing: border-box;
     pointer-events: none; overflow: hidden; white-space: pre; line-height: 1;
     background: var(--emph-row, var(--c-bg));
-    --emph-tone: var(--c-blue); --emph-fill: 16%; --emph-ink: 55%;
+    --emph-tone: var(--c-blue);
 }
 .xterm .emph-cell > .emph-pill {
     display: flex; align-items: center; box-sizing: border-box;
-    width: 100%; height: 84%; font-weight: normal;
-    background: color-mix(in srgb, var(--emph-tone) var(--emph-fill), var(--emph-row, var(--c-bg)));
-    color: color-mix(in srgb, var(--emph-tone) var(--emph-ink), var(--emph-term-fg, var(--c-text)));
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--emph-tone) 28%, transparent);
+    width: 100%; height: calc(100% - 4px); font-weight: normal;
+    background: var(--emph-fill-c, color-mix(in srgb, var(--emph-tone) 10%, var(--emph-row, var(--c-bg))));
+    color: var(--emph-word-c, color-mix(in srgb, var(--emph-tone) 45%, var(--emph-term-fg, var(--c-text))));
 }
 .xterm .emph-pill > span { display: inline-block; text-align: center; flex: none; }
+.xterm .emph-pill > .emph-detail { color: var(--emph-detail-c, var(--emph-term-fg, var(--c-text))); }
 .xterm .emph-pill > .emph-br { visibility: hidden; }
 .xterm .emph-cell.emph-l > .emph-pill { border-top-left-radius: 999px; border-bottom-left-radius: 999px; }
 .xterm .emph-cell.emph-r > .emph-pill { border-top-right-radius: 999px; border-bottom-right-radius: 999px; }
 .xterm .emph-green  { --emph-tone: var(--c-green); }
 .xterm .emph-red    { --emph-tone: var(--c-red); }
-.xterm .emph-amber  { --emph-tone: var(--c-amber-strong); }
+.xterm .emph-amber  { --emph-tone: var(--c-amber); }
 .xterm .emph-blue   { --emph-tone: var(--c-blue); }
 .xterm .emph-purple { --emph-tone: var(--c-purple); }
 .xterm .emph-cyan   { --emph-tone: var(--c-group-2); }
-.xterm .emph-danger { --emph-tone: var(--c-red); --emph-fill: 38%; --emph-ink: 25%; }
+.xterm .emph-danger { --emph-tone: #b62324; }
+.xterm .emph-danger > .emph-pill { background: var(--emph-fill-c, var(--emph-tone)); color: #fff; }
+.xterm .emph-danger > .emph-pill > .emph-detail { color: #fff; }
 .xterm.emph-selecting .emph-cell { visibility: hidden; }

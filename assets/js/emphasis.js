@@ -68,6 +68,8 @@
     const out = [];
     for (const m of find(text, contract)) {
       let cur = null;
+      // The detail starts at its colon: "[[" WORD ":" ...
+      const detailAt = m.detail === null ? Infinity : m.index + 2 + m.word.length;
       for (let i = m.index; i < m.end; i++) {
         const pos = at[i];
         if (!pos) continue;
@@ -77,13 +79,73 @@
           if (cur) out.push(cur);
           cur = { row: ri, y: rows[ri].y, x: c.x, width: 0, chars: [], tone: m.tone, left: i === m.index, right: false };
         }
-        cur.chars.push({ ch: c.ch, w: c.w });
+        cur.chars.push({ ch: c.ch, w: c.w, detail: i >= detailAt && i < m.end - 2 });
         cur.width = c.x + c.w - cur.x;
       }
       if (cur) { cur.right = true; out.push(cur); }
     }
     return out.map(({ row, ...p }) => p);
   }
+
+  // ── Pill colours (the desktop's rule) ──────────────────────────────────
+  // Fill: the tone at 10% over the background under the pill (the cell's
+  // own, so a diff band shows through). Word: the terminal's text mixed 45%
+  // toward the tone, then moved toward white on a dark ground (black on a
+  // light one) until it reads at 4.5:1 on the fill. Detail: the terminal's
+  // text, same contrast rule. Danger: the tone darkened until white reads at
+  // 4.5:1 on it, white text. The contrast step is why this is code and not
+  // color-mix() alone: CSS cannot test a contrast ratio.
+  function parseColor(s) {
+    if (!s) return null;
+    s = String(s).trim();
+    let m = /^#([0-9a-f]{3,8})$/i.exec(s);
+    if (m) {
+      let h = m[1];
+      if (h.length === 3 || h.length === 4) h = [...h.slice(0, 3)].map(c => c + c).join('');
+      return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16));
+    }
+    m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(s);
+    return m ? [m[1], m[2], m[3]].map(Number) : null;
+  }
+  const hex = c => '#' + c.map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('');
+  const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);   // t of the way from a to b
+  const lum = c => {
+    const [r, g, b] = c.map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  const WHITE = [255, 255, 255], BLACK = [0, 0, 0];
+  // `c` moved toward `toward` in steps of 2%, until it reads at 4.5:1 on `on`.
+  const readable = (c, on, toward) => {
+    for (let k = 0; k <= 50; k++) {
+      const d = mix(c, toward, k / 50);
+      if (contrast(d, on) >= 4.5) return d;
+    }
+    return toward;
+  };
+  // `tone`, `bg`, `text`: colours as CSS strings. Returns { fill, word,
+  // detail } as hex, or null when one cannot be read.
+  function pillColors(tone, bg, text, danger) {
+    const [t, b, x] = [tone, bg, text].map(parseColor);
+    if (!t || !b || !x) return null;
+    const dark = contrast(b, WHITE) > contrast(b, BLACK);
+    if (danger) {
+      let f = t;
+      for (let k = 0; k < 100 && contrast(WHITE, f) < 4.5; k++) f = mix(f, BLACK, 0.02);
+      return { fill: hex(f), word: '#ffffff', detail: '#ffffff' };
+    }
+    const fill = mix(b, t, 0.10);
+    const toward = dark ? WHITE : BLACK;
+    return {
+      fill: hex(fill),
+      word: hex(readable(mix(x, t, 0.45), fill, toward)),
+      detail: hex(readable(x, fill, toward)),
+    };
+  }
+  // The tones on a light ground: the web theme's tone variables are a dark
+  // ground's, so a light terminal takes these (GitHub's light palette, the
+  // desktop's light tones).
+  const LIGHT_TONES = { green: '#1a7f37', red: '#cf222e', amber: '#9a6700', blue: '#0969da', purple: '#8250df', cyan: '#197d87', danger: '#cf222e' };
 
   // ── Pills on a terminal ────────────────────────────────────────────────
   // Each pill is a decoration on a MARKER of its buffer line: xterm moves it
@@ -257,7 +319,7 @@
     return h;
   }
 
-  const api = { find, findCodePoints, pieces, key, attachWith, SYNC_ROWS, SCAN_MS, MAX_DECOS };
+  const api = { find, findCodePoints, pieces, key, attachWith, pillColors, contrast, parseColor, LIGHT_TONES, SYNC_ROWS, SCAN_MS, MAX_DECOS };
 
   // ── Browser half ───────────────────────────────────────────────────────
   if (typeof window === 'undefined') {
@@ -312,6 +374,26 @@
     return bg || theme.background || null;
   }
 
+  // A tone's colours on a ground and text, computed once per combination.
+  // The web theme's tones, as the desktop's dark ground uses them. Danger's
+  // base is the one colour hard-coded on a dark ground: GitHub's danger
+  // emphasis (#b62324), which the desktop fills with; the theme's --c-red
+  // is a text colour, too light under white.
+  const TONE_VARS = { green: '--c-green', red: '--c-red', amber: '--c-amber', blue: '--c-blue', purple: '--c-purple', cyan: '--c-group-2' };
+  const DARK_DANGER = '#b62324';
+  const colorCache = new Map();
+  function colorsFor(tone, bg, fg) {
+    const k = `${tone}|${bg}|${fg}`;
+    if (colorCache.has(k)) return colorCache.get(k);
+    const b = parseColor(bg);
+    const lightGround = b && contrast(b, [0, 0, 0]) > contrast(b, [255, 255, 255]);
+    const css = tone === 'danger' ? DARK_DANGER : getComputedStyle(document.documentElement).getPropertyValue(TONE_VARS[tone] || '--c-blue');
+    const out = pillColors(lightGround ? LIGHT_TONES[tone] || LIGHT_TONES.blue : css, bg, fg, tone === 'danger');
+    if (colorCache.size > 200) colorCache.clear();
+    colorCache.set(k, out);
+    return out;
+  }
+
   // The pill draws the label itself, one span per cell (widths in % of the
   // pill, so a scaled font keeps every glyph on its cell). A bracket of the
   // marker's own start or end keeps its cell but draws nothing (.emph-br): a
@@ -330,6 +412,12 @@
     if (row) el.style.setProperty('--emph-row', row);
     const fg = term.options.theme?.foreground;
     if (fg) el.style.setProperty('--emph-term-fg', fg);
+    const colors = row && fg ? colorsFor(p.tone, row, fg) : null;
+    if (colors) {
+      el.style.setProperty('--emph-fill-c', colors.fill);
+      el.style.setProperty('--emph-word-c', colors.word);
+      el.style.setProperty('--emph-detail-c', colors.detail);
+    }
     const pill = document.createElement('span');
     pill.className = 'emph-pill';
     const n = p.chars.length;
@@ -339,6 +427,7 @@
       s.style.width = `${(c.w / p.width) * 100}%`;
       const bracket = (p.left && i < 2 && c.ch === '[') || (p.right && i >= n - 2 && c.ch === ']');
       if (bracket) s.className = 'emph-br';
+      else if (c.detail) s.className = 'emph-detail';
       pill.append(s);
     });
     el.append(pill);

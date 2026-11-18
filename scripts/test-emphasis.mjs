@@ -192,4 +192,34 @@ const big = Array.from({ length: 5000 }, (_, i) => (i % 50 === 7 ? `line ${i} [[
   h.dispose();
 }
 
-console.log(`emphasis matcher: ${n} shared cases and 6 cell checks passed; scrolling checks passed`);
+// ── Pill colours: the desktop's rule lands on its values ────────────────
+// The web theme's tones (assets/app.css) on a dark terminal, the light tones
+// on a light one, against the desktop's final values (each channel within 3).
+{
+  const near = (a, b) => {
+    const p = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    return p(a).every((v, i) => Math.abs(v - p(b)[i]) <= 3);
+  };
+  const web = { green: "#3fb950", red: "#f85149", amber: "#d29922", blue: "#58a6ff", purple: "#d2a8ff", cyan: "#39c5cf", danger: "#b62324" };
+  const dark = { green: ["#12221d", "#8bc69b"], red: ["#25171c", "#de9798"], amber: ["#211f18", "#cdb887"], blue: ["#15202e", "#96beea"], purple: ["#21202e", "#cdbfea"], cyan: ["#112329", "#88ccd5"], danger: ["#b62324", "#ffffff"] };
+  const light = { green: ["#e8f2eb", "#205033"], red: ["#fae9ea", "#71262f"], amber: ["#f5f0e6", "#59451a"], blue: ["#e6f0fb", "#18467c"], purple: ["#f3eefc", "#4e3b7e"], cyan: ["#e8f2f3", "#204e55"], danger: ["#cf222e", "#ffffff"] };
+  for (const [tone, [fill, word]] of Object.entries(dark)) {
+    const c = E.pillColors(web[tone], "#0d1117", "#c9d1d9", tone === "danger");
+    assert.ok(near(c.fill, fill) && near(c.word, word), `dark ${tone}: ${JSON.stringify(c)} vs ${fill} ${word}`);
+    if (tone !== "danger") assert.equal(c.detail, "#c9d1d9");
+    assert.ok(E.contrast(E.parseColor(c.word), E.parseColor(c.fill)) >= 4.5);
+  }
+  for (const [tone, [fill, word]] of Object.entries(light)) {
+    const c = E.pillColors(E.LIGHT_TONES[tone], "#ffffff", "#24292f", tone === "danger");
+    assert.ok(near(c.fill, fill) && near(c.word, word), `light ${tone}: ${JSON.stringify(c)} vs ${fill} ${word}`);
+    if (tone !== "danger") assert.equal(c.detail, "#24292f");
+  }
+  // Over a diff line's green band, the fill is the tone over the band.
+  const band = E.pillColors(web.blue, "#12261e", "#c9d1d9");
+  assert.notEqual(band.fill, E.pillColors(web.blue, "#0d1117", "#c9d1d9").fill);
+  // The detail starts at the colon, and leaves the closing brackets out.
+  const [piece] = E.pieces([row(0, "[[Failed: 3]]")], contract);
+  assert.equal(piece.chars.map((c) => (c.detail ? "d" : ".")).join(""), "........ddd..", "the colon and the detail");
+}
+
+console.log(`emphasis matcher: ${n} shared cases and 6 cell checks passed; scrolling and colour checks passed`);
