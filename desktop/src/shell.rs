@@ -3740,6 +3740,14 @@ mod tests {
         rt.frame(0.05);
         tap(&mut rt, "overlay-close");
         assert!(rt.state.feats.overlay.is_none(), "its × closes it");
+        // One at a time: another overlay replaces it.
+        tap(&mut rt, "rail-commits");
+        tap(&mut rt, "rail-worktrees");
+        for _ in 0..10 {
+            rt.frame(0.05);
+        }
+        assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("worktrees"));
+        assert!(rt.presented("overlay-commits").is_none() && rt.presented("overlay-worktrees").is_some(), "one at a time");
     }
 
     #[test]

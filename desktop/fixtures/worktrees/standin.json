@@ -1,0 +1,199 @@
+{
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/web",
+    "created_at": "2026-11-10T09:12:00Z"
+   },
+   {
+    "name": "web-api",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/web"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/data"
+   },
+   {
+    "name": "docs",
+    "agent": "codex",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 2,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/docs"
+   },
+   {
+    "name": "chat-0412",
+    "agent": "claude",
+    "status": "running",
+    "chat": true,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/.sbxw/chats/0412"
+   }
+  ],
+  "worktrees_of": {
+   "web-app": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/web",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dirty": 1,
+      "log": [],
+      "threads": [
+       {
+        "name": "checkout-copy",
+        "branch": "sbxw/checkout-copy",
+        "worktree": "/Users/ana/dev/web/.sbxw-worktrees/checkout-copy",
+        "tip": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fork": null,
+        "ahead": 2,
+        "behind": 1,
+        "dirty": 3,
+        "commits": [],
+        "tip_subject": "Checkout: copy for the payment step",
+        "tip_at": 1794896400
+       },
+       {
+        "name": "header-fix",
+        "branch": "sbxw/header-fix",
+        "worktree": "/Users/ana/dev/web/.sbxw-worktrees/header-fix",
+        "tip": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fork": null,
+        "ahead": 0,
+        "behind": 4,
+        "dirty": 0,
+        "commits": [],
+        "tip_subject": "Header: keep the logo at 32 px",
+        "tip_at": 1794880000
+       },
+       {
+        "name": "search-index",
+        "branch": "sbxw/search-index",
+        "worktree": "/Users/ana/dev/web/.sbxw-worktrees/search-index",
+        "tip": null,
+        "fork": null,
+        "ahead": 0,
+        "behind": 0,
+        "dirty": null,
+        "commits": [],
+        "tip_subject": null,
+        "tip_at": null
+       }
+      ],
+      "error": null
+     }
+    ]
+   },
+   "docs": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/docs",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "cccccccccccccccccccccccccccccccccccccccc",
+      "dirty": 0,
+      "log": [],
+      "threads": [
+       {
+        "name": "release-notes",
+        "branch": "sbxw/release-notes",
+        "worktree": "/Users/ana/dev/docs/.sbxw-worktrees/release-notes",
+        "tip": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fork": null,
+        "ahead": 1,
+        "behind": 0,
+        "dirty": 0,
+        "commits": [],
+        "tip_subject": "Draft the release notes for 3.7",
+        "tip_at": 1794890000
+       }
+      ],
+      "error": null
+     }
+    ]
+   },
+   "web-api": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/web",
+    "repos": []
+   },
+   "data-pipeline": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/data",
+    "repos": [
+     {
+      "path": "",
+      "base": null,
+      "head": null,
+      "dirty": null,
+      "log": [],
+      "threads": [],
+      "error": "the workspace is not in a git repository"
+     }
+    ]
+   },
+   "chat-0412": {
+    "ok": true,
+    "workspace": "/Users/ana/.sbxw/chats/0412",
+    "repos": []
+   }
+  },
+  "sessions": [
+   {
+    "sandbox": "web-app",
+    "thread": "checkout-copy",
+    "state": "working",
+    "cwd": "/Users/ana/dev/web/.sbxw-worktrees/checkout-copy"
+   },
+   {
+    "sandbox": "web-app",
+    "thread": "header-fix",
+    "state": "attention",
+    "cwd": "/Users/ana/dev/web/.sbxw-worktrees/header-fix"
+   }
+  ]
+ },
+ "app": {
+  "selected": "web-app",
+  "open": [
+   "web-app"
+  ]
+ },
+ "about": "The Worktrees view (feat/worktrees.rs): basic.json's sandboxes, worktrees_of (GET .../worktrees, the daemon's graph with tip_subject and tip_at), sessions (thread states)."
+}
