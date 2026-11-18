@@ -283,6 +283,13 @@ pub enum Slot {
     /// A panel docked on the right, beside Jarvis's (`open_panel`,
     /// `close_panel`). Several open show as tabs; one is shown at a time.
     Panel { title: &'static str, icon: &'static str, width: f32 },
+    /// A full view drawn OVER the pane area (`open_panel` opens it,
+    /// `close_panel`, Escape, its ×, or its rail entry pressed again close
+    /// it), one at a time: opening one closes the other. The terminals keep
+    /// running underneath and are not resized; the rail, the sidebar and the
+    /// top and status bars stay; the pager is covered. No terminal gets a key
+    /// or a press while it shows (`App::terminal_may_take_keys`).
+    Overlay { title: &'static str, icon: &'static str },
 }
 
 /// One of a feature's intents, checked against its [`Spec`].
@@ -748,6 +755,7 @@ macro_rules! features {
 
 features! {
     browser,
+    commits,
     create,
     emphasis,
     envfile,

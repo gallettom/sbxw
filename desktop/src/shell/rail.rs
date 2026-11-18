@@ -103,6 +103,9 @@ pub fn tint_of(tone: &str) -> u32 {
 #[derive(Clone)]
 pub enum RailRun {
     Intent(String, J),
+    /// A feature's entry: its intent, or, while its screen shows (a panel,
+    /// an overlay, a modal), closing that screen.
+    Toggle { name: String, args: J, screen: String },
     /// The team leads view on and off (leads.rs).
     Leads,
     /// The "More" entry: the folded entries' menu.
@@ -166,17 +169,15 @@ impl App {
         for e in &self.feats.pane_extras {
             let Place::Rail { zone, order } = e.place else { continue };
             let Some((name, args)) = e.intent.clone() else { continue };
-            let screen = args["screen"].as_str().unwrap_or("");
-            let on = match name.as_str() {
-                "open_panel" => self.feats.panel.as_deref() == Some(screen) || self.feats.overlay.as_ref().is_some_and(|o| o.0 == screen),
-                "open_modal" => self.feats.modal.as_ref().is_some_and(|m| m.0 == screen),
-                _ => false,
-            };
+            // The screen it shows: its `open_panel`/`open_modal` argument, else
+            // the screen named as the entry (a feature's own opening intent).
+            let screen = args["screen"].as_str().unwrap_or(&e.id).to_string();
+            let on = self.screen_shown(&screen);
             let help = if e.help.is_empty() { e.label.clone() } else { format!("{}\n{}", e.label, e.help) };
             let badge = if e.tone == "amber" || e.tone == "red" { "amber" } else { "blue" };
             let shortcut = App::shortcut_for(&name);
             let dot = self.feats.pane_extras.iter().find(|d| d.place == Place::RailStatus(e.id.clone())).map(|d| d.tone.clone());
-            all.push(Entry { key: format!("rail-{}", e.id), icon: e.icon.clone().unwrap_or_else(|| "single".into()), help, keys: shortcut, tone: if e.tone.is_empty() { "neutral".into() } else { e.tone.clone() }, on, count: e.count.filter(|n| *n > 0), badge, run: RailRun::Intent(name, args), disabled: false, zone: Some(zone), order, dot });
+            all.push(Entry { key: format!("rail-{}", e.id), icon: e.icon.clone().unwrap_or_else(|| "single".into()), help, keys: shortcut, tone: if e.tone.is_empty() { "neutral".into() } else { e.tone.clone() }, on, count: e.count.filter(|n| *n > 0), badge, run: RailRun::Toggle { name, args, screen }, disabled: false, zone: Some(zone), order, dot });
         }
         if let Some(e) = self.top_extra("setup") {
             if let Some(name) = e["intent"]["name"].as_str() {
@@ -289,14 +290,19 @@ impl App {
         Some(list)
     }
 
-    /// A rail entry's press. An entry that opened a panel or an overlay
-    /// closes it when pressed again.
+    /// Whether that screen shows: the docked panel shown, the overlay, the modal.
+    pub fn screen_shown(&self, screen: &str) -> bool {
+        self.feats.panel.as_deref() == Some(screen) || self.feats.overlay.as_ref().is_some_and(|o| o.0 == screen) || self.feats.modal.as_ref().is_some_and(|m| m.0 == screen)
+    }
+
+    /// A rail entry's press. An entry whose screen shows closes it.
     pub(super) fn rail_run(&mut self, run: RailRun) {
         match run {
-            RailRun::Intent(name, args) => {
-                let screen = args["screen"].as_str().unwrap_or("").to_string();
-                let shown = self.feats.panel.as_deref() == Some(screen.as_str()) || self.feats.overlay.as_ref().is_some_and(|o| o.0 == screen);
-                if name == "open_panel" && shown {
+            RailRun::Intent(name, args) => self.press_extra("rail", &name, &args),
+            RailRun::Toggle { name, args, screen } => {
+                if self.feats.modal.as_ref().is_some_and(|m| m.0 == screen) {
+                    self.press_extra("rail", "close_modal", &serde_json::json!({}));
+                } else if self.screen_shown(&screen) {
                     self.press_extra("rail", "close_panel", &serde_json::json!({ "screen": screen }));
                 } else {
                     self.press_extra("rail", &name, &args);
@@ -482,6 +488,7 @@ mod tests {
         let mut r = Rig::new(&["a"], 1284.0, 816.0);
         let x = |id: &str, zone, order| Extra { place: Place::Rail { zone, order }, id: id.into(), label: id.to_uppercase(), icon: Some("plus".into()), tone: "blue".into(), help: "line".into(), count: None, intent: Some(("open_panel".into(), serde_json::json!({ "screen": id }))) };
         let s = &mut r.rt.state;
+        s.feats.pane_extras.retain(|e| !matches!(e.place, Place::Rail { .. } | Place::RailStatus(_)));
         s.feats.pane_extras.extend([x("kits", Zone::Configure, 30), x("mcp", Zone::Configure, 10), x("files", Zone::Browse, 30), x("commits", Zone::Browse, 10)]);
         let keys = |v: &[Entry]| v.iter().map(|e| e.key.clone()).collect::<Vec<_>>();
         s.rects.rail = Some([0.0, 0.0, W, 2000.0]);

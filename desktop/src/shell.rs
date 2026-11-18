@@ -125,8 +125,12 @@ impl Pane {
 }
 
 /// Finds pane `i`'s terminal in the app (the terminal's handlers take one per pane).
+/// Pane `i`'s terminal, for its element's handlers (keys, drags, the
+/// wheel, the pointer). None while a feature's overlay covers the pane
+/// area: a terminal under it takes nothing, even with its grid still
+/// holding Rune's focus (`terminal_may_take_keys` holds the window's path).
 pub fn lens(i: usize) -> impl Fn(&mut App) -> Option<&mut TerminalState> + Clone + 'static {
-    move |s: &mut App| s.panes.get_mut(i).and_then(|p| p.term.as_mut())
+    move |s: &mut App| if s.feats.overlay.is_some() { None } else { s.panes.get_mut(i).and_then(|p| p.term.as_mut()) }
 }
 
 /// Headless script marks the app acts on.
@@ -1079,6 +1083,11 @@ impl App {
             self.push_data();
             return true;
         }
+        // Then the overlay over the pane area.
+        if self.close_overlay() {
+            self.push_data();
+            return true;
+        }
         false
     }
 
@@ -1086,11 +1095,31 @@ impl App {
         if ev.key == Key::Escape && self.escape() {
             return true;
         }
+        // An overlay over the pane area takes Up, Down and Enter when nothing
+        // of its own has the keyboard (its rows' list moves the keyboard
+        // itself): as its feature's `<screen>_key` intent, if it has one.
+        if let Some((name, _)) = self.feats.overlay.clone() {
+            let k = match ev.key {
+                Key::Up => Some("up"),
+                Key::Down => Some("down"),
+                Key::Enter => Some("enter"),
+                _ => None,
+            };
+            let idle = tx.focused().is_none_or(|f| f.starts_with("grid") || f.starts_with("rail") || f.starts_with("overlay"));
+            let intent = format!("{name}_key");
+            if let (Some(k), true, true) = (k, idle, ev.mods == rune::Mods::default()) {
+                if crate::intent::spec(&intent).is_some() {
+                    self.press_extra("keys", &intent, &serde_json::json!({ "key": k }));
+                    self.push_data();
+                    return true;
+                }
+            }
+        }
         // Pages: Ctrl+Tab, Ctrl+Shift+Tab (and ⌘⌥→/← on macOS), even in a
         // terminal (palette.rs, `page_step`); not while a dialog, modal or
         // the palette is up.
         if let Some(d) = palette::page_step(ev) {
-            let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.palette.is_some();
+            let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.palette.is_some();
             if !overlay {
                 self.run_intent("keys", Intent::Pages(PageOp::Step(d)));
                 self.push_data();
@@ -1136,6 +1165,12 @@ impl App {
     fn drawn(&self, key: &str) -> bool {
         if self.pager_drawn(key) || self.rail_drawn(key) {
             return true;
+        }
+        // The overlay over the pane area and its close button.
+        if let Some((n, _)) = &self.feats.overlay {
+            if key == "overlay-close" || key == format!("overlay-{n}") || key == format!("overlay-head-{n}") {
+                return true;
+            }
         }
         // A docked feature panel's close button (`panel-close-<screen>`).
         if key.strip_prefix("panel-close-").is_some_and(|n| self.feats.panel.as_deref() == Some(n) || (self.feats.split && self.feats.panels.iter().any(|p| p == n))) {
@@ -1198,10 +1233,11 @@ impl App {
 
     /// Whether a key or a paste the window did not route elsewhere may go to
     /// the focused pane's terminal: only with no dialog, modal or surface
-    /// up, and Rune's focus on a terminal grid (the core moves it there when
+    /// up, no overlay over the pane area, and Rune's focus on a terminal grid (the core moves it there when
     /// it opens or focuses a pane).
     pub fn terminal_may_take_keys(&self, rune_focus: Option<&str>) -> bool {
-        let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || crate::surface::focused().is_some();
+        // A feature's overlay over the pane area covers the terminals: none takes a key.
+        let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || crate::surface::focused().is_some();
         !overlay && rune_focus.is_some_and(|k| k.starts_with("grid"))
     }
 
@@ -2032,7 +2068,17 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if s.sidebar_shown() {
         main = main.child(sidebar);
     }
-    main = main.child(panes_view(s));
+    // A feature's overlay view covers the pane area (pager and panes), drawn
+    // absolute over it so no terminal moves or resizes (features.rs).
+    let over = s.feats.overlay.as_ref().and_then(|(name, _)| s.screens.iter().find(|x| &x.name == name)).and_then(|sc| {
+        let (el_, more) = screen::view_parts::<App>(sc);
+        overlays.extend(more);
+        s.overlay_view(el_)
+    });
+    main = main.child(match over {
+        Some(o) => panes_view(s).child(o),
+        None => panes_view(s),
+    });
     for p in fpanels {
         main = main.child(p);
     }
@@ -3617,6 +3663,85 @@ mod tests {
 
     /// No key and no paste reaches a terminal while anything else has the
     /// keyboard: a screen input, a core dialog and its secret field, a modal.
+    /// An overlay view over the pane area (`Slot::Overlay`): opened from
+    /// the rail, it covers the pager and the panes; no terminal takes a key,
+    /// a paste or a press while it shows, none is resized; Escape, its × or
+    /// its rail entry again closes it; one at a time.
+    #[test]
+    fn an_overlay_covers_the_panes_and_no_terminal_takes_a_key_or_is_resized() {
+        let (mut rt, rx, _clip) = window_with_terminal();
+        tap(&mut rt, "grid-1");
+        rt.key(KeyEvent { key: Key::Text("a".into()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"a", "the control: the grid types");
+        let resizes = |rx: &std::sync::mpsc::Receiver<crate::client::TermInput>| {
+            let mut n = 0;
+            while let Ok(i) = rx.try_recv() {
+                match i {
+                    crate::client::TermInput::Resize { .. } => n += 1,
+                    crate::client::TermInput::Bytes(b) => panic!("bytes reached the terminal under the overlay: {b:?}"),
+                    _ => {}
+                }
+            }
+            n
+        };
+        for _ in 0..30 {
+            rt.frame(0.05);
+        }
+        resizes(&rx);
+        let pane_before = rt.presented("pane-1").unwrap().0;
+        tap(&mut rt, "rail-commits");
+        for _ in 0..10 {
+            rt.frame(0.05);
+        }
+        assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("commits"));
+        let over = rt.presented("overlay-commits").expect("drawn").0;
+        let area = rt.presented("panes").unwrap().0;
+        assert!((over[0] - area[0]).abs() < 1.0 && (over[1] - area[1]).abs() < 1.0 && (over[2] - area[2]).abs() < 1.0 && (over[3] - area[3]).abs() < 1.0, "it covers the pager and the panes: {over:?} {area:?}");
+        assert!(rt.presented("sidebar").is_some() && rt.presented("rail").is_some() && rt.presented("top-bar").is_some(), "the rail, sidebar and top bar stay");
+        assert_eq!(rt.presented("pane-1").unwrap().0, pane_before, "the pane under it is not moved nor resized");
+        assert!(rt.state.rail_entries().0.iter().any(|e| e.key == "rail-commits" && e.on), "its rail entry is on");
+        // Keys, chords, a paste: none reaches the terminal (its grid still had Rune's focus).
+        rt.update(|_, tx| tx.focus("grid-1", false));
+        for ev in chords().into_iter().filter(|e| e.key != Key::Escape) {
+            rt.key(ev.clone());
+            rt.frame(0.02);
+            assert!(rt.state.feats.overlay.is_some(), "{ev:?} closed the overlay");
+            assert_eq!(sent(&rx), b"", "{ev:?} reached the terminal under the overlay");
+        }
+        rt.key(KeyEvent { key: Key::Text("x".into()), mods: rune::Mods::default() });
+        rt.paste("rm -rf ~");
+        rt.frame(0.02);
+        assert!(!rt.state.terminal_may_take_keys(Some("grid-1")), "the gate holds with an overlay up");
+        // A press where the terminal is: the overlay keeps it.
+        let (x, y) = (pane_before[0] + pane_before[2] / 2.0, pane_before[1] + pane_before[3] / 2.0);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        for _ in 0..10 {
+            rt.frame(0.05);
+        }
+        assert_eq!(resizes(&rx), 0, "no terminal was resized and no byte was sent");
+        // Escape closes it; the terminal types again.
+        rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+        for _ in 0..20 {
+            rt.frame(0.05);
+        }
+        assert!(rt.state.feats.overlay.is_none() && rt.presented("overlay-commits").is_none());
+        tap(&mut rt, "grid-1");
+        rt.key(KeyEvent { key: Key::Text("b".into()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"b");
+        // The rail entry opens it and closes it again; its × closes it.
+        tap(&mut rt, "rail-commits");
+        assert!(rt.state.feats.overlay.is_some());
+        tap(&mut rt, "rail-commits");
+        assert!(rt.state.feats.overlay.is_none(), "pressed again: closed");
+        tap(&mut rt, "rail-commits");
+        rt.frame(0.05);
+        tap(&mut rt, "overlay-close");
+        assert!(rt.state.feats.overlay.is_none(), "its × closes it");
+    }
+
     #[test]
     fn keys_reach_a_terminal_only_when_its_grid_has_the_keyboard() {
         let (mut rt, rx, clip) = window_with_terminal();

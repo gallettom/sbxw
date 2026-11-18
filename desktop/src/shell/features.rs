@@ -316,9 +316,20 @@ impl App {
     }
 
     /// The feature whose panel is shown, if it takes files.
+    /// The feature whose overlay (first) or panel is shown, if it takes files.
     pub(super) fn files_target(&self) -> Option<&'static str> {
-        let (f, _) = feat::screen(self.feats.panel.as_deref()?)?;
+        let shown = self.feats.overlay.as_ref().map(|o| o.0.as_str()).or(self.feats.panel.as_deref())?;
+        let (f, _) = feat::screen(shown)?;
         f.on_files.map(|_| f.name)
+    }
+
+    /// Files dropped on the overlay: to its feature when it takes files
+    /// (never to a terminal under it).
+    pub(super) fn overlay_drop(&mut self, files: &[std::path::PathBuf]) {
+        if let Some(f) = self.feats.overlay.as_ref().and_then(|(m, _)| feat::screen(m)).filter(|(f, _)| f.on_files.is_some()).map(|(f, _)| f.name) {
+            self.feature_incoming(f, feat::Incoming::Files(files.to_vec()));
+            self.push_data();
+        }
     }
 
     /// Runs the window requests features made (file dialog, clipboard read).
@@ -610,6 +621,18 @@ impl App {
 
     fn open_panel(&mut self, screen: &str) {
         match feat::screen(screen) {
+            // An overlay over the pane area: one at a time.
+            Some((_, s)) if matches!(s.slot, Slot::Overlay { .. }) => {
+                if let Some((old, _)) = self.feats.overlay.take() {
+                    if old != screen {
+                        self.feats.data.remove(&format!("{old}_view"));
+                    }
+                }
+                self.feats.overlay = Some((screen.to_string(), J::Null));
+                self.bar_menu = None;
+                self.pager_menu = None;
+                self.rail_menu = false;
+            }
             Some((_, s)) if matches!(s.slot, Slot::Panel { .. }) => {
                 if !self.feats.panels.iter().any(|p| p == screen) {
                     self.feats.panels.push(screen.to_string());
@@ -621,11 +644,77 @@ impl App {
     }
 
     fn close_panel(&mut self, screen: &str) {
+        if self.feats.overlay.as_ref().is_some_and(|o| o.0 == screen) {
+            self.close_overlay();
+            return;
+        }
         self.feats.data.remove(&format!("{screen}_view"));
         self.feats.panels.retain(|p| p != screen);
         if self.feats.panel.as_deref() == Some(screen) {
             self.feats.panel = self.feats.panels.last().cloned();
         }
+    }
+
+    /// Closes the overlay over the pane area, if one shows; the focused
+    /// pane's terminal gets the keyboard back.
+    pub(super) fn close_overlay(&mut self) -> bool {
+        let Some(_) = self.feats.overlay.take() else { return false };
+        self.feats.asks.push(("core", Ask::Focus(format!("grid-{}", self.focused + 1))));
+        true
+    }
+
+    /// The overlay view over the pane area: the core's header (icon, title,
+    /// ×) and the screen under it, on the app's floor, covering the pager
+    /// and the panes (absolute: nothing under it moves or resizes). A press
+    /// anywhere on it stays on it; files dropped on it go to its feature.
+    pub(super) fn overlay_view(&self, screen: El) -> Option<El> {
+        let (name, _) = self.feats.overlay.as_ref()?;
+        let (_, decl) = feat::screen(name)?;
+        let Slot::Overlay { title, icon } = decl.slot else { return None };
+        let n1 = name.clone();
+        let mut head = row().key(format!("overlay-head-{name}")).w_full().h(layout::CONTROL_H).gap(8.0).items_center();
+        if let Some(i) = crate::icons::get(icon) {
+            head = head.child(rune::icon(i, 16.0).color(c("text-bright")));
+        }
+        head = head
+            .child(text(title).font(crate::screen::body(14.0, 600.0)).color(c("text-bright")).truncate().min_w(0.0).grow(1.0))
+            .child(text("Esc closes").font(crate::screen::body(12.0, 400.0)).color(c("text-muted")))
+            .child(
+                el().key("overlay-close")
+                    .role("button")
+                    .label(format!("Close {title}"))
+                    .help(format!("Close {title} (Esc); the terminals are still there"))
+                    .w(layout::CONTROL_H)
+                    .h(layout::CONTROL_H)
+                    .items_center()
+                    .justify_center()
+                    .radius(radius("sm").unwrap())
+                    .hover(c("elevated"))
+                    .cursor(Cursor::Pointer)
+                    .on_press(move |s: &mut App| {
+                        s.close_panel(&n1);
+                        s.push_data();
+                    })
+                    .child(rune::icon(crate::icons::get("close").unwrap(), 14.0).color(c("text-muted"))),
+            );
+        Some(
+            col()
+                .key(format!("overlay-{name}"))
+                .role("dialog")
+                .label(title)
+                .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .padding(12.0)
+                .gap(8.0)
+                .fill(c("bg"))
+                .border(1.0, c("elevated"))
+                .radius(radius("md").unwrap())
+                .clip_rounded(radius("md").unwrap())
+                .focus_group()
+                .on_press(|_s: &mut App| {})
+                .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| s.overlay_drop(files))
+                .child(head)
+                .child(col().key(format!("overlay-body-{name}")).grow(1.0).w_full().min_h(0.0).child(screen)),
+        )
     }
 
     fn open_dialog(&mut self, f: &'static Feature, from: &str, confirm: Option<Confirm>, prepare: Option<Box<feat::Prepare>>) {

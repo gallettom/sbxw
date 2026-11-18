@@ -1947,3 +1947,16 @@ mod zone_tests {
         assert!(z.tick(ms(2300)) && z.active.as_deref() == Some("sb:c"), "the next move opens it");
     }
 }
+
+/// Long lists (docs/screens.md, "Long lists"): the first `pages` pages of
+/// `page` rows, the filter having run over all of them before, and the count
+/// a screen's `more_rows` draws its "Show N more" from: `{total, shown,
+/// more, label}` (`what`: "commits", "files"...). A render is capped at 5000
+/// elements: a list never builds more than its pages.
+pub fn paged<T>(mut rows: Vec<T>, page: usize, pages: usize, what: &str) -> (Vec<T>, serde_json::Value) {
+    let total = rows.len();
+    let shown = total.min(page.saturating_mul(pages.max(1)));
+    rows.truncate(shown);
+    let label = if shown < total { format!("{total} {what}, showing {shown}") } else { String::new() };
+    (rows, serde_json::json!({ "total": total, "shown": shown, "more": page.min(total - shown), "label": label }))
+}

@@ -810,7 +810,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
 `coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `threads`,
-`shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `logo-prompt`, `logo-mark` (the sbxw mark's
+`shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
 ">", for the top bar's logo).
 
 One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
@@ -830,6 +830,7 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `stop` | interrupt or stop |
 | `tag` | keyword pills |
 | `monitor` | the virtual Mac (rail, its panel, the palette) |
+| `history` | commits (the Commits view, its rail entry, a pane's menu) |
 
 ## Where screens live
 
@@ -899,6 +900,24 @@ into the screen (`init`, `render`, an action) gets 200,000 interrupt checks
 return 5,000 elements, nested 32 deep. Going over is an error in the banner
 over the last good view, retried on the next change; the app keeps running.
 
+### Long lists
+
+A render returns 5,000 elements at most, so a long list draws its first rows
+and a **Show N more** block, the filter having run over every row before the
+cut. Two helpers, the same block everywhere:
+
+- A list the feature builds in Rust: `crate::screen::paged(rows, page,
+  pages, what)` returns the rows to draw and a count `{total, shown, more,
+  label}`; the screen draws the block with `more_rows(count, { key = "x-more",
+  on = "more", what = "commits", hint = "Filter to find one" })` (false when
+  nothing is left; the box is `<key>-box`).
+- A list the screen filters itself: `local rows, more = paged(items, { page
+  = 200, pages = state.pages, key = "x-more", on = "more" })`, then draw
+  `rows` and `more`; the action adds a page.
+
+Used by Commits, Worktrees and Files. The screens that can still grow past
+the cap with many sessions, threads or requests are listed in VIEWS.md.
+
 ## Checking your screen
 
 ```sh
@@ -928,7 +947,7 @@ What a feature declares:
 | `name` | Short name, the notices' prefix |
 | `data` | `Data { key, path, on, every, lazy }`: a `GET` route read into `data.<key>` at connection, again 300 ms after a stream event in `on`, every `every` seconds, or when an action asks (`lazy`: only then). `{sandbox}` in the path: read for each running sandbox, `data.<key>` is then an object by sandbox name. A fixture holds the same key in its `daemon` object |
 | `events` | Stream events handed to `on_event`, which answers actions |
-| `screens` | `ScreenDecl { name, src: include_str!(..), slot }`; `Slot::Modal { width }` (a dialog over the window) or `Slot::Panel { title, icon, width }` (docked on the right, beside Jarvis; several open show as tabs) |
+| `screens` | `ScreenDecl { name, src: include_str!(..), slot }`; `Slot::Modal { width }` (a dialog over the window) or `Slot::Panel { title, icon, width }` (docked on the right, beside Jarvis; several open show as tabs) or `Slot::Overlay { title, icon }` (a full view over the pane area, below) |
 | `intents` | Rows of the closed list (`intent::Spec`: name, typed arguments, risk, doc). Exported to `intents.json` |
 | `act` | `fn(&Ctx, &Asked) -> Result<Vec<Action>, String>`: runs one of its intents, already checked |
 | `on_answer` | Optional: gets every answer of its calls, status and JSON body, non-2xx included; then the core says nothing itself |
@@ -1563,6 +1582,55 @@ opened on the person's machine; nothing from the sandbox reaches the
 clipboard or `open_link`. A paste is the person's own ⌘V / Ctrl+V on the
 picture, text only. Hiding the panel leaves the browser running; no
 automatic reconnect (a new socket runs a new bridge in the sandbox).
+
+### commits
+
+The Commits view: an **overlay** over the pane area (`Slot::Overlay`), from
+the rail's Commits entry (browse zone), a pane's "⋯" menu (filtered to that
+sandbox) or the Worktrees view (filtered to a thread's branch). Read only.
+
+Data: `GET /api/sandboxes/:name/commits?limit=50&before=&ref=` per sandbox
+(six at a time), `.../commits/:hash` for a row opened; nothing in the
+background. `data.commits_ui`: `sandbox` (nil: every one), `branch`,
+`filter`, `unmerged`, `sandboxes` (`{id, label, color}`), `rows` (`id`
+`<sandbox>:<hash>`, `hash`, `short`, `subject`, `author`, `when`, `at`,
+`sandbox`, `color`, `branch`, `branch_label` (a thread's name for
+`sbxw/<thread>`), `thread`, `merged`, `files`, `expanded`, `selected`),
+`count` (`more_rows`), `detail` (`loading`, `error`, `body`, `files`: `path`,
+`added`, `removed`, `binary`, `open`, `groups` (`{kind, text}`: `add`, `del`,
+`hunk`, `ctx`, 600 lines drawn at most), `note`; `files_more`, `truncated`),
+`notes` (a sandbox not available, an error).
+
+| Intent | Args | Effect |
+|---|---|---|
+| `commits_show` | `sandbox?`, `branch?` | Opens the view (every sandbox, one, one branch) and reads |
+| `commits_sandbox` | `sandbox?` | All, or one |
+| `commits_filter` | `text` | Subject and author |
+| `commits_unmerged` | `on` | Only what the main checkout's branch does not hold |
+| `commits_branch_clear` | | Every branch again |
+| `commits_expand` | `id` | Opens a row in place (its body, its files), or folds it |
+| `commits_file` | `path` | A file's diff under it, or hides it (only a path the commit lists) |
+| `commits_more` | | 50 more (the next page where needed) |
+| `commits_copy` | `id` | The full hash on the clipboard |
+| `commits_refresh` | | Reads again |
+| `commits_key` | `key` (`up`, `down`, `enter`) | The view's keys when none of its controls has the keyboard |
+
+Commit messages are drawn as plain text: no pills, no Markdown, no links.
+
+### Overlays
+
+`Slot::Overlay { title, icon }`: a full view over the pane area (the
+pager and the panes); the rail, the sidebar, the top and status bars stay.
+`open_panel` opens it, one at a time (another overlay replaces it);
+`close_panel`, Escape (after any menu, dialog or modal), its × or its rail
+entry pressed again close it. The core draws its header (icon, title,
+"Esc closes", ×, key `overlay-close`); the element is `overlay-<screen>`.
+The terminals keep running underneath and are not resized (it is drawn
+absolute over them); none takes a key, a paste, a press, a drag or the wheel
+while it shows (`App::terminal_may_take_keys` and the panes' handlers);
+files dropped on it go to its feature's `on_files`. Up, Down and Enter, when
+none of its controls has the keyboard, run its feature's `<screen>_key`
+intent if it declares one.
 
 ### mac
 

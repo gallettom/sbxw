@@ -120,6 +120,9 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/threads", get(threads))
         .route("/api/sandboxes/:name/repos", get(repos))
         .route("/api/sandboxes/:name/worktrees", get(worktrees))
+        // Commit history, read-only (git.rs, `commits`).
+        .route("/api/sandboxes/:name/commits", get(commits))
+        .route("/api/sandboxes/:name/commits/:hash", get(commit_detail))
         .route("/api/sandboxes/:name/threads/:thread", get(thread_status))
         .route("/api/sandboxes/:name/threads/:thread/close", post(thread_close))
         .route("/api/sandboxes/:name/lead", post(lead))
@@ -1181,6 +1184,84 @@ async fn repos(State(app): S, Path(name): Path<String>) -> ApiResult {
 async fn worktrees(State(app): S, Path(name): Path<String>) -> ApiResult {
     let (ws, repos) = app.worktree_graph(&sandbox(&name)?).await.map_err(ApiError::not_found)?;
     Ok(ok_with(json!({ "workspace": ws, "repos": repos })))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct CommitsQuery {
+    limit: Option<usize>,
+    before: Option<String>,
+    #[serde(rename = "ref")]
+    branch: Option<String>,
+}
+
+/// Why the history cannot be read, as an answer (not an error): no
+/// workspace recorded, a host that cannot be reached, a workspace git
+/// cannot read. The workspace is mounted from the host at the same path
+/// (sbxw creates no `--clone` sandbox), so what the host sees is the
+/// sandbox's history; nothing is ever run inside a sandbox for it.
+fn not_available(why: String) -> ApiResult {
+    Ok(ok_with(json!({ "available": false, "reason": why, "commits": [], "more": false })))
+}
+
+/// `GET /api/sandboxes/:name/commits?limit=&before=&ref=`: a page of the
+/// workspace's commits, every repo under it with its worktrees' branches,
+/// newest first. `limit` 1 to 200 (50); `before` a hash (the page after
+/// it); `ref` one branch. Authors' names only, never an email.
+async fn commits(State(app): S, Path(name): Path<String>, Query(q): Query<CommitsQuery>) -> ApiResult {
+    use sbxw_core::commits as hist;
+    let sb = sandbox(&name)?;
+    let limit = q.limit.unwrap_or(hist::PAGE_DEFAULT);
+    if !(1..=hist::PAGE_MAX).contains(&limit) {
+        return Err(ApiError::bad(format!("limit is 1 to {}", hist::PAGE_MAX)));
+    }
+    let before = non_blank(q.before);
+    if let Some(b) = &before {
+        hist::valid_hash(b).map_err(ApiError::bad)?;
+    }
+    let branch = non_blank(q.branch);
+    if let Some(b) = &branch {
+        hist::valid_branch(b).map_err(ApiError::bad)?;
+    }
+    let Some(ws) = app.store.workspace(&sb) else {
+        return not_available(format!("sbxw has no workspace recorded for '{sb}'"));
+    };
+    let host = match app.host_for(&sb).await {
+        Ok(h) => h,
+        Err(e) => return not_available(format!("the host of '{sb}' cannot be reached: {e:#}")),
+    };
+    let ask = crate::git::CommitAsk { branch: branch.as_deref(), before: before.as_deref(), limit };
+    match crate::git::commits(&host, &ws, &ask).await {
+        Ok(page) => Ok(ok_with(json!({
+            "available": true, "workspace": ws, "repos": page.repos, "commits": page.commits, "more": page.more,
+            "limits": { "page_max": hist::PAGE_MAX, "walk_max": hist::WALK_MAX },
+        }))),
+        Err(why) => not_available(why),
+    }
+}
+
+/// `GET /api/sandboxes/:name/commits/:hash`: one commit, its files with
+/// their counts and its patch, capped (64 KiB a file, 512 KiB in all, 300
+/// files; binary files named, never dumped), `truncated` when cut.
+async fn commit_detail(State(app): S, Path((name, hash)): Path<(String, String)>) -> ApiResult {
+    use sbxw_core::commits as hist;
+    let sb = sandbox(&name)?;
+    let hash = hist::valid_hash(&hash).map_err(ApiError::bad)?.to_string();
+    let Some(ws) = app.store.workspace(&sb) else {
+        return not_available(format!("sbxw has no workspace recorded for '{sb}'"));
+    };
+    let host = match app.host_for(&sb).await {
+        Ok(h) => h,
+        Err(e) => return not_available(format!("the host of '{sb}' cannot be reached: {e:#}")),
+    };
+    match crate::git::commit_detail(&host, &ws, &hash).await {
+        Ok(Some(d)) => Ok(ok_with(json!({
+            "available": true, "commit": d, "truncated": d.truncated,
+            "limits": { "file": hist::PATCH_FILE_MAX, "total": hist::PATCH_TOTAL_MAX, "files": hist::FILES_MAX, "file_lines": hist::FILE_LINES_MAX },
+        }))),
+        Ok(None) => Err(ApiError::not_found(format!("no commit {hash} in the workspace of '{sb}'"))),
+        Err(why) => not_available(why),
+    }
 }
 
 async fn thread_status(State(app): S, Path((name, thread)): Path<(String, String)>) -> ApiResult {

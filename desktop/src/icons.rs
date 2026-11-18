@@ -64,6 +64,8 @@ icons! {
     // `branch` is the same family); network requests a shield; a shell a
     // prompt; the agents' questions a bubble with a question mark; Jarvis a
     // voice in a ring (the agent keeps the sparkle).
+    // Commit history: a clock face with the arrow going back round it.
+    HISTORY "history" concat!(st!("path", r#"d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9""#), st!("polyline", r#"points="2.5,2.5 2.5,5.5 5.5,5.5""#), st!("polyline", r#"points="8,5 8,8 10.25,9.5""#));
     // The virtual Mac: a desktop screen on its stand (not Remote's casting screen).
     MONITOR "monitor" concat!(st!("rect", r#"x="1.5" y="2" width="13" height="9" rx="1.5""#), st!("path", r#"d="M8 11v3M5 14.25h6""#));
     GLOBE "globe" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("path", r#"d="M8 1.75c-2.6 2.6-2.6 9.9 0 12.5M8 1.75c2.6 2.6 2.6 9.9 0 12.5M1.75 8h12.5""#));
