@@ -78,6 +78,9 @@ if not os.environ.get("LONG"):
     # A .env file dropped on the pane: asked, saying why (for its mark the
     # state file has "Do not ask again" chosen, so it says it asks all the
     # same); first, so the marks after it run with the choice unset.
+    # The explorer covers the panes: closed (Escape) for the drops on the
+    # terminal pane, opened again from the pane bar for the code map.
+    step({"type": "key", "name": "Escape"}, "overlay-files", gone=True)
     step({"drop_files": {"paths": [f"{SHOTS}/drop/.env"], "key": "pane-1", "hover": 0.2}}, "cf-confirm", "pane-drop-env")
     step("cf-cancel", "cf-dialog", gone=True)
     step({"drop_files": {"paths": [f"{SHOTS}/drop/order list.csv"], "key": "pane-1", "hover": 0.2}}, "cf-confirm", "pane-drop-confirm")
@@ -85,6 +88,7 @@ if not os.environ.get("LONG"):
     # Two files dropped together: one dialog.
     step({"drop_files": {"paths": [f"{SHOTS}/drop/brief.md", f"{SHOTS}/drop/order list.csv"], "key": "pane-1", "hover": 0.2}}, "cf-confirm", "pane-drop-multi")
     step("cf-cancel", "cf-dialog", gone=True)
+    step("pane-1-x-project", "files-codemap")
     step("files-codemap", "codemap-docs", "codemap")
     step("codemap-docs", "codemap-docs-net")
     step("codemap-docs-net", "codemap-outline-net-proxy", "codemap-net")
@@ -93,7 +97,7 @@ if not os.environ.get("LONG"):
     step("cf-cancel", "cf-dialog", gone=True)
     # Only against the big stand-in: 3,000 more files, folded into folders;
     # logs/ opened holds 300: a page of 200 and Show more.
-    step("pane-1-x-project", "files-tab-artifacts")
+    # The explorer is still open over the panes (the Code map docked beside it).
     step("files-tab-artifacts", "files-row-desktop", "big")
     step("files-row-logs", "files-more", "big-open")
 else:

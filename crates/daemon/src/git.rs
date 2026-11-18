@@ -384,6 +384,10 @@ pub struct ThreadBranch {
     pub behind: u32,
     pub dirty: Option<u32>,
     pub commits: Vec<Commit>,
+    /// The tip's subject and commit date (unix), for a view of the
+    /// worktrees; `None` without a branch.
+    pub tip_subject: Option<String>,
+    pub tip_at: Option<i64>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq, Eq, Default)]
@@ -480,8 +484,215 @@ async fn read_thread(host: &Host, root: &Path, name: &str) -> ThreadBranch {
         let (n, own) = (format!("-n{THREAD_LOG}"), format!("HEAD..{tip}"));
         t.commits = git(host, root, &["log", &n, LOG_FORMAT, &own]).await.map(|r| parse_log(&r)).unwrap_or_default();
     }
+    let last = match t.commits.first() {
+        Some(c) => Some(c.clone()),
+        None => git(host, root, &["log", "-n1", LOG_FORMAT, "--end-of-options", &tip]).await.and_then(|r| parse_log(&r).into_iter().next()),
+    };
+    if let Some(c) = last {
+        (t.tip_subject, t.tip_at) = (Some(c.subject), Some(c.at));
+    }
     t.tip = Some(tip);
     t
+}
+
+// ── Commit history (read-only, `GET /api/sandboxes/:name/commits`) ─────────
+
+use sbxw_core::commits::{self as hist, CommitRow, FileChange};
+
+/// A page of commits across the workspace's repositories, newest first.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct CommitPage {
+    pub repos: Vec<String>,
+    pub commits: Vec<CommitRow>,
+    /// More commits follow this page (ask again with `before` = the last hash).
+    pub more: bool,
+}
+
+/// What a client asks for: one branch (`None`: every local branch and the
+/// main checkout's HEAD), after a hash, a page size. Both names are checked
+/// by the caller ([`hist::valid_branch`], [`hist::valid_hash`]).
+pub struct CommitAsk<'a> {
+    pub branch: Option<&'a str>,
+    pub before: Option<&'a str>,
+    pub limit: usize,
+}
+
+/// The walk of one repo: `(hash, time, ref, repo index)` and its merged set.
+async fn walk_repo(host: &Host, root: &Path, branch: Option<&str>) -> (Vec<(String, i64, String)>, BTreeSet<String>) {
+    let n = format!("-n{}", hist::WALK_MAX);
+    let full = branch.map(|b| format!("refs/heads/{b}"));
+    let mut args = vec!["log", "--date-order", "--source", n.as_str(), hist::WALK_FORMAT];
+    match &full {
+        Some(r) => args.extend(["--end-of-options", r.as_str()]),
+        None => args.extend(["--branches", "HEAD"]),
+    }
+    let rev = ["rev-list", n.as_str(), "HEAD"];
+    let (walk, merged) = tokio::join!(git(host, root, &args), git(host, root, &rev));
+    let walk = walk.map(|w| hist::parse_walk(&w)).unwrap_or_default();
+    let merged = merged.map(|m| m.lines().map(str::to_string).collect()).unwrap_or_default();
+    (walk, merged)
+}
+
+/// Rows for these hashes of one repo, in that order, with their files count.
+async fn rows_of(host: &Host, root: &Path, hashes: &[String]) -> Vec<CommitRow> {
+    if hashes.is_empty() {
+        return vec![];
+    }
+    let base = ["log", "--no-walk=unsorted", "--shortstat", "--no-renames", "--no-color", hist::LIST_FORMAT];
+    let with = |extra: Option<&'static str>| {
+        let mut a: Vec<&str> = base.to_vec();
+        a.extend(extra);
+        a.push("--end-of-options");
+        a.extend(hashes.iter().map(String::as_str));
+        a
+    };
+    // A merge's files against its first parent; an older git without
+    // `--diff-merges` reads it without (its merges then count no files).
+    let raw = match git(host, root, &with(Some("--diff-merges=first-parent"))).await {
+        Some(r) => Some(r),
+        None => git(host, root, &with(None)).await,
+    };
+    raw.map(|r| hist::parse_list(&r)).unwrap_or_default()
+}
+
+/// The repos of the workspace with their roots.
+async fn repo_roots(host: &Host, workspace: &Path) -> Vec<(String, PathBuf)> {
+    let mut out = vec![];
+    for rel in scan(host, workspace).await {
+        if let Some(root) = repo_root(host, workspace, &rel).await {
+            out.push((rel, root));
+        }
+    }
+    out
+}
+
+/// A page of the workspace's commits: every repo under it, each with the
+/// branches of its worktrees, newest first by commit date.
+pub async fn commits(host: &Host, workspace: &Path, ask: &CommitAsk<'_>) -> Result<CommitPage, String> {
+    let roots = repo_roots(host, workspace).await;
+    if roots.is_empty() {
+        return Err("the workspace is not a git repository, or git on the host cannot read it".into());
+    }
+    let walks = futures_util::future::join_all(roots.iter().map(|(_, root)| walk_repo(host, root, ask.branch))).await;
+    // One list over every repo: (hash, time, ref, repo index), newest first.
+    let mut all: Vec<(String, i64, String, usize)> = vec![];
+    for (i, (walk, _)) in walks.iter().enumerate() {
+        all.extend(walk.iter().map(|(h, t, r)| (h.clone(), *t, r.clone(), i)));
+    }
+    all.sort_by_key(|e| std::cmp::Reverse(e.1));
+    let (page, more) = hist::page(&all, |e| e.0.as_str(), ask.before, ask.limit);
+    let mut rows: Vec<CommitRow> = vec![];
+    let reads = (0..roots.len()).map(|i| {
+        let hashes: Vec<String> = page.iter().filter(|e| e.3 == i).map(|e| e.0.clone()).collect();
+        let root = roots[i].1.clone();
+        async move { rows_of(host, &root, &hashes).await }
+    });
+    let per_repo = futures_util::future::join_all(reads).await;
+    for (h, _, source, i) in &page {
+        let Some(mut r) = per_repo[*i].iter().find(|r| &r.hash == h).cloned() else { continue };
+        r.branch = hist::branch_shown(source);
+        r.thread = hist::thread_of(&r.branch);
+        r.merged = walks[*i].1.contains(h);
+        r.repo = roots[*i].0.clone();
+        rows.push(r);
+    }
+    Ok(CommitPage { repos: roots.into_iter().map(|(r, _)| r).collect(), commits: rows, more })
+}
+
+/// One commit with its files and its patch, capped.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct CommitDetail {
+    pub hash: String,
+    pub short: String,
+    pub author: String,
+    pub at: i64,
+    pub subject: String,
+    /// The whole body, up to [`DETAIL_BODY_MAX`] bytes.
+    pub body: String,
+    pub repo: String,
+    pub files: Vec<FileChange>,
+    /// Files past [`hist::FILES_MAX`] (not listed).
+    pub files_more: usize,
+    /// Something was cut: a file's patch, the total, the file list.
+    pub truncated: bool,
+}
+
+/// A commit's body in the detail.
+pub const DETAIL_BODY_MAX: usize = 16 * 1024;
+
+/// The commit `hash` (checked by the caller) in one of the workspace's repos.
+pub async fn commit_detail(host: &Host, workspace: &Path, hash: &str) -> Result<Option<CommitDetail>, String> {
+    let roots = repo_roots(host, workspace).await;
+    if roots.is_empty() {
+        return Err("the workspace is not a git repository, or git on the host cannot read it".into());
+    }
+    let obj = format!("{hash}^{{commit}}");
+    for (rel, root) in &roots {
+        let Some(full) = one_line(git(host, root, &["rev-parse", "--verify", "--quiet", "--end-of-options", &obj]).await) else { continue };
+        if !hist::is_full_hash(&full) {
+            continue;
+        }
+        let meta_args = ["log", "-n1", "--no-color", hist::LIST_FORMAT, "--end-of-options", full.as_str()];
+        let num_args = ["show", "--format=", "--numstat", "--no-renames", "--no-color", "--diff-merges=first-parent", "--end-of-options", full.as_str()];
+        let (meta, num) = tokio::join!(git(host, root, &meta_args), git(host, root, &num_args));
+        let num = match num {
+            Some(n) => Some(n),
+            None => git(host, root, &["show", "--format=", "--numstat", "--no-renames", "--no-color", "--end-of-options", full.as_str()]).await,
+        };
+        let mut d = CommitDetail { repo: rel.clone(), ..Default::default() };
+        if let Some(raw) = &meta {
+            // The full body, not the list's first lines.
+            let rec = raw.split('\u{1e}').next().unwrap_or("");
+            let f: Vec<&str> = rec.splitn(6, '\u{1f}').collect();
+            if f.len() == 6 {
+                d.hash = f[0].trim().to_string();
+                d.short = f[1].to_string();
+                d.author = f[2].to_string();
+                d.at = f[3].parse().unwrap_or(0);
+                d.subject = f[4].to_string();
+                let (b, cut) = hist::cut_at_line(f[5].trim(), DETAIL_BODY_MAX);
+                d.body = b.to_string();
+                d.truncated |= cut;
+            }
+        }
+        if d.hash.is_empty() {
+            d.hash = full.clone();
+        }
+        let mut files = num.map(|n| hist::parse_numstat(&n)).unwrap_or_default();
+        if files.len() > hist::FILES_MAX {
+            d.files_more = files.len() - hist::FILES_MAX;
+            files.truncate(hist::FILES_MAX);
+            d.truncated = true;
+        }
+        // The patch, asked only for text files of a sane size, by the paths
+        // git itself listed (never a client's), literal pathspecs. A path git
+        // printed quoted (odd characters) is listed without its patch.
+        let mut budget: u64 = (hist::PATCH_TOTAL_MAX as u64) / 24;
+        let mut wanted = vec![];
+        for f in files.iter_mut() {
+            let lines = f.added.unwrap_or(0) + f.removed.unwrap_or(0);
+            if f.binary || f.path.starts_with('"') {
+                continue;
+            }
+            if lines > hist::FILE_LINES_MAX || lines > budget {
+                f.truncated = true;
+                d.truncated = true;
+                continue;
+            }
+            budget -= lines;
+            wanted.push(format!(":(literal){}", f.path));
+        }
+        if !wanted.is_empty() {
+            let mut args = vec!["show", "--format=", "--patch", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-merges=first-parent", "--end-of-options", full.as_str(), "--"];
+            args.extend(wanted.iter().map(String::as_str));
+            if let Some(p) = git(host, root, &args).await {
+                d.truncated |= hist::attach_patch(&mut files, &p);
+            }
+        }
+        d.files = files;
+        return Ok(Some(d));
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -706,4 +917,90 @@ mod tests {
         assert_eq!(c[0].parents.len(), 2);
         assert_eq!(c[0].subject, "subject with \u{1f} unit");
     }
+
+    fn commit_as(dir: &Path, who: &str, msg: &str) {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", &format!("user.name={who}"), "-c", "user.email=secret.person@example.org", "commit", "-q", "--no-verify", "-am", msg])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "commit {msg}");
+    }
+
+    /// A repo with a main line, a thread's worktree ahead of it and one
+    /// merged into it: the list holds both branches, newest first, names
+    /// the thread, marks what main holds, pages, filters to a branch, and
+    /// never says an email; the detail lists files and caps the patch.
+    #[tokio::test]
+    async fn commits_list_both_branches_and_the_detail_caps_its_patch() {
+        if !git_ok() {
+            return;
+        }
+        for (n, h) in hosts() {
+            let d = tempfile::tempdir().unwrap();
+            let w = d.path();
+            run(w, &["init", "-q"]);
+            std::fs::write(w.join("a.txt"), "one\n").unwrap();
+            std::fs::write(w.join("logo.png"), [0u8, 159, 146, 150, 0, 1, 2]).unwrap();
+            run(w, &["add", "."]);
+            commit_as(w, "Ada", "First commit\n\nWhy it exists.");
+            run(w, &["worktree", "add", "-q", "-b", "sbxw/views", ".sbxw-worktrees/views"]);
+            let wt = w.join(".sbxw-worktrees/views");
+            std::fs::write(wt.join("a.txt"), "one\ntwo\n").unwrap();
+            std::fs::write(wt.join("logo.png"), [0u8, 159, 146, 150, 9, 9, 9, 9]).unwrap();
+            let big: String = (0..3000).map(|i| format!("line {i:05} of a long file that fills the patch quickly\n")).collect();
+            std::fs::write(wt.join("big.txt"), big).unwrap();
+            run(&wt, &["add", "."]);
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            commit_as(&wt, "Bo", "Thread work");
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            std::fs::write(w.join("a.txt"), "one\nmain\n").unwrap();
+            commit_as(w, "Ada", "Main work");
+
+            let all = commits(&h, w, &CommitAsk { branch: None, before: None, limit: 50 }).await.unwrap();
+            let subjects: Vec<&str> = all.commits.iter().map(|c| c.subject.as_str()).collect();
+            assert_eq!(subjects, ["Main work", "Thread work", "First commit"], "{n}");
+            let t = &all.commits[1];
+            assert_eq!((t.branch.as_str(), t.thread.as_deref(), t.merged, t.files, t.author.as_str()), ("sbxw/views", Some("views"), false, 3, "Bo"), "{n}");
+            assert!(all.commits[0].merged && all.commits[2].merged, "{n}: main holds them");
+            assert_eq!(all.commits[2].body, "Why it exists.");
+            let json = serde_json::to_string(&all).unwrap();
+            assert!(!json.contains("secret.person") && !json.contains('@'), "{n}: no email");
+
+            // Pages: one at a time, then after the first.
+            let p1 = commits(&h, w, &CommitAsk { branch: None, before: None, limit: 1 }).await.unwrap();
+            assert!(p1.more && p1.commits.len() == 1);
+            let p2 = commits(&h, w, &CommitAsk { branch: None, before: Some(&p1.commits[0].short), limit: 1 }).await.unwrap();
+            assert_eq!(p2.commits[0].subject, "Thread work");
+            // One branch.
+            let th = commits(&h, w, &CommitAsk { branch: Some("sbxw/views"), before: None, limit: 50 }).await.unwrap();
+            assert_eq!(th.commits.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["Thread work", "First commit"]);
+            assert!(commits(&h, w, &CommitAsk { branch: Some("nope"), before: None, limit: 50 }).await.unwrap().commits.is_empty());
+
+            // The detail: the binary named, not dumped; the big file cut.
+            let dt = commit_detail(&h, w, &t.short).await.unwrap().expect("found");
+            assert_eq!((dt.subject.as_str(), dt.author.as_str(), dt.files.len()), ("Thread work", "Bo", 3));
+            let f = |p: &str| dt.files.iter().find(|f| f.path == p).unwrap().clone();
+            assert!(f("a.txt").patch.contains("+two") && !f("a.txt").truncated);
+            assert!(f("logo.png").binary && f("logo.png").patch.is_empty());
+            let b = f("big.txt");
+            assert!(b.truncated && b.patch.len() <= sbxw_core::commits::PATCH_FILE_MAX, "{n}: {}", b.patch.len());
+            assert!(dt.truncated);
+            assert!(!serde_json::to_string(&dt).unwrap().contains("secret.person"));
+            assert!(commit_detail(&h, w, "abcdef0").await.unwrap().is_none(), "{n}: unknown");
+
+            // The worktree view's numbers: the tip's subject and date.
+            let g = graph(&h, w, &[("views".to_string(), String::new())]).await;
+            let th = &g[0].threads[0];
+            assert_eq!((th.tip_subject.as_deref(), th.ahead, th.behind, th.dirty), (Some("Thread work"), 1, 1, Some(0)), "{n}");
+            assert!(th.tip_at.is_some());
+            // Not a repo: said, not a crash.
+            let empty = tempfile::tempdir().unwrap();
+            assert!(commits(&h, empty.path(), &CommitAsk { branch: None, before: None, limit: 5 }).await.is_err());
+        }
+    }
+
 }

@@ -24,7 +24,7 @@ def add(**e):
 def mark(n, hold=0):
     if hold: add(type="mark", name=f"hold:{hold}")
     add(type="mark", name=n)
-add(type="tap", key="extra-topbar-mac")
+add(type="tap", key="rail-mac")
 mark("1-panel", 600)
 add(type="tap", key="mac-install")
 mark("2-install", 300)

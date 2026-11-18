@@ -506,7 +506,12 @@ local function middle(t, room)
   if n <= fit then return t end
   local last = string.match(t, "([^/]+)$") or t
   if (utf8.len(last) or #last) + 2 <= fit then return "…/" .. last end
-  if fit < 8 then return last end
+  -- The worktree's own name whole, when only it fits (the branch glyph
+  -- before it already says it is a worktree's path).
+  if (utf8.len(last) or #last) <= fit then return last end
+  -- Short of room (a long state word and the "+"): still one middle cut,
+  -- never the whole name for `truncate` to cut again at its end.
+  fit = math.max(fit, 7)
   local m = utf8.len(last) or #last
   local tail = math.ceil((fit - 1) * 0.5)
   return string.sub(last, 1, fit - 1 - tail) .. "…" .. string.sub(last, m - tail + 1)
@@ -539,9 +544,12 @@ local function session_line(sb, e, data, base_model)
     path, full = worktree_path(sb, name, data)
     local last = string.match(path, "([^/]+)$")
     local both = last ~= name
-    -- The line's own room: the sidebar less its paddings, the two 12 pt
-    -- columns, the glyph and the gaps, then the state word and the P chip.
-    local line_room = ((data.app.sidebar or {}).w or 264) - 92 - (chip and 32 or 0)
+    -- The line's own room, as it is laid out: the sidebar less its
+    -- paddings (24), the two 12 pt columns and their gaps (40), then in the
+    -- line the glyph and its gap (20), the gaps around the word (16), and
+    -- the P chip or the "+" with its gap (32). One cut at most: the label
+    -- is made to fit, so `truncate` never cuts it a second time.
+    local line_room = ((data.app.sidebar or {}).w or 264) - 100 - (chip and 32 or 0)
     local avail = line_room - est(word) - 8 - (both and (est(name) + 8) or 0)
     label = middle(path, math.max(avail, 60))
     if both then label = name .. " · " .. label end
@@ -619,9 +627,18 @@ local function sessions_block(sb, app, data, state, into, base_model)
       if #g[2] > 0 then
         table.insert(block, row{ h = 20, w = "full", column{ w = 36 }, text{ g[1], size = "caption", color = "text-muted" } })
         h = h + 20
-        for _, e in ipairs(g[2]) do
+        -- A sandbox with very many sessions draws a page of them and
+        -- "Show N more" (docs/screens.md, "Long lists": a render holds
+        -- 5000 elements).
+        local key = sb.name .. "/" .. g[1]
+        local shown, more = paged(g[2], { page = 40, pages = ((state.line_pages or {})[key]) or 1, key = "sessions-more-" .. sb.name .. "-" .. (g[1] == "Own worktree" and "own" or "main"), on = "more_lines", arg = key, what = "sessions" })
+        for _, e in ipairs(shown) do
           table.insert(block, session_line(sb, e, data, base_model))
           h = h + 28
+        end
+        if more then
+          table.insert(block, more)
+          h = h + 72
         end
       end
     end
@@ -764,6 +781,7 @@ return {
   end,
 
   actions = {
+    more_lines = function(state, key) state.line_pages = state.line_pages or {}; state.line_pages[key] = (state.line_pages[key] or 1) + 1 end,
     filter = function(state, _, text) state.filter = text or "" end,
     clear_filter = function(state) state.filter = "" end,
     toggle_sessions = function(state, a)

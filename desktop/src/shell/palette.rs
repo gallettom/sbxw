@@ -214,6 +214,15 @@ impl App {
             let keys = if e["id"] == "help" { vec!["?".to_string()] } else { vec![] };
             v.push(Cmd { id: format!("top-{}", e["id"].as_str().unwrap_or("")), label, hint: e["help"].as_str().unwrap_or("").to_string(), icon: e["icon"].as_str().map(str::to_string), keys, run: Run::Intents(vec![(name.to_string(), e["intent"]["args"].clone())]) });
         }
+        // The features' rail entries (rail.rs), as their buttons run them.
+        for e in &self.feats.pane_extras {
+            let (feat::Place::Rail { .. }, Some((name, args))) = (&e.place, &e.intent) else { continue };
+            let label = match e.count {
+                Some(n) if n > 0 => format!("{} ({n})", e.label),
+                _ => e.label.clone(),
+            };
+            v.push(Cmd { id: format!("rail-{}", e.id), label, hint: e.help.clone(), icon: e.icon.clone(), keys: vec![], run: Run::Intents(vec![(name.clone(), args.clone())]) });
+        }
         for sc in feat::FEATURES.iter().flat_map(|f| f.shortcuts.iter()) {
             let k = sc.key.to_ascii_uppercase().to_string();
             let keys = if mac() { vec!["⌃".into(), "⌥".into(), k] } else { vec!["Alt".into(), k] };

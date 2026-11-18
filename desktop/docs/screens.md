@@ -810,7 +810,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
 `coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `threads`,
-`shield`, `prompt`, `ask`, `jarvis`, `tag`, `logo-prompt` (the sbxw mark's
+`shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
 ">", for the top bar's logo).
 
 One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
@@ -829,6 +829,8 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `prompt` | a shell (Bash) |
 | `stop` | interrupt or stop |
 | `tag` | keyword pills |
+| `monitor` | the virtual Mac (rail, its panel, the palette) |
+| `history` | commits (the Commits view, its rail entry, a pane's menu) |
 
 ## Where screens live
 
@@ -898,6 +900,24 @@ into the screen (`init`, `render`, an action) gets 200,000 interrupt checks
 return 5,000 elements, nested 32 deep. Going over is an error in the banner
 over the last good view, retried on the next change; the app keeps running.
 
+### Long lists
+
+A render returns 5,000 elements at most, so a long list draws its first rows
+and a **Show N more** block, the filter having run over every row before the
+cut. Two helpers, the same block everywhere:
+
+- A list the feature builds in Rust: `crate::screen::paged(rows, page,
+  pages, what)` returns the rows to draw and a count `{total, shown, more,
+  label}`; the screen draws the block with `more_rows(count, { key = "x-more",
+  on = "more", what = "commits", hint = "Filter to find one" })` (false when
+  nothing is left; the box is `<key>-box`).
+- A list the screen filters itself: `local rows, more = paged(items, { page
+  = 200, pages = state.pages, key = "x-more", on = "more" })`, then draw
+  `rows` and `more`; the action adds a page.
+
+Used by Commits, Worktrees and Files. The screens that can still grow past
+the cap with many sessions, threads or requests are listed in VIEWS.md.
+
 ## Checking your screen
 
 ```sh
@@ -927,11 +947,11 @@ What a feature declares:
 | `name` | Short name, the notices' prefix |
 | `data` | `Data { key, path, on, every, lazy }`: a `GET` route read into `data.<key>` at connection, again 300 ms after a stream event in `on`, every `every` seconds, or when an action asks (`lazy`: only then). `{sandbox}` in the path: read for each running sandbox, `data.<key>` is then an object by sandbox name. A fixture holds the same key in its `daemon` object |
 | `events` | Stream events handed to `on_event`, which answers actions |
-| `screens` | `ScreenDecl { name, src: include_str!(..), slot }`; `Slot::Modal { width }` (a dialog over the window) or `Slot::Panel { title, icon, width }` (docked on the right, beside Jarvis; several open show as tabs) |
+| `screens` | `ScreenDecl { name, src: include_str!(..), slot }`; `Slot::Modal { width }` (a dialog over the window) or `Slot::Panel { title, icon, width }` (docked on the right, beside Jarvis; several open show as tabs) or `Slot::Overlay { title, icon }` (a full view over the pane area, below) |
 | `intents` | Rows of the closed list (`intent::Spec`: name, typed arguments, risk, doc). Exported to `intents.json` |
 | `act` | `fn(&Ctx, &Asked) -> Result<Vec<Action>, String>`: runs one of its intents, already checked |
 | `on_answer` | Optional: gets every answer of its calls, status and JSON body, non-2xx included; then the core says nothing itself |
-| `extras` | Buttons and badges in others' slots: `Extra { place, id, label, icon, tone, help, count, intent }`; `place`: `Topbar`, `Sandbox(name)` (on its row), `SandboxRow(name)` (a sub-row under it: one per session), `Pane(sandbox)` (every pane bar of that sandbox), `Session { sandbox, thread }` (the pane bars of that session only; `thread: None` is the main one) |
+| `extras` | Buttons and badges in others' slots: `Extra { place, id, label, icon, tone, help, count, intent }`; `place`: `Topbar`, `Sandbox(name)` (on its row), `SandboxRow(name)` (a sub-row under it: one per session), `Pane(sandbox)` (every pane bar of that sandbox), `Session { sandbox, thread }` (the pane bars of that session only; `thread: None` is the main one), `Rail { zone, order }` (an entry of the left rail, see below) |
 | `standin` | Its routes for the stand-in daemon and fixture daemons: `fn(&mut Standin { data, publish }, method, path, body) -> Option<(status, body)>`; `publish_after(ms, event, data)` for events sent before the answer |
 | `core_only` | Body fields only the core sets, after the person's Confirm (`Confirm::grant`); any other call carrying one is refused |
 | `shortcuts` | `&[Shortcut { key, intent, args, help }]`: global keys, taken by the window before any pane, as the web UI's: Alt+<key> off macOS, Ctrl+Option+<key> on macOS (Option alone types characters). `key` is the letter by its place on the keyboard; `args` a JSON object. Create declares N (New) and M (chat) |
@@ -1032,6 +1052,44 @@ for either (an item counts while its menu is open). The core's "wants you"
 the same fit. Escape closes the menu. The fit follows each bar's laid-out
 width, at every resize. The top bar's extras get the same order; the core
 marks those that do not fit `more` (above).
+
+### A rail entry
+
+A feature puts an entry in the left rail with `Place::Rail { zone, order }`.
+`zone` is a `feat::Zone`: `Activity` (what happens now: Requests 10,
+Network 20, Team leads 30), `Browse` (views to read: Commits 10,
+Worktrees 20, Files 30) or `Configure` (what is set up: MCP 10, Skills 20,
+Kits 30; Settings is always its last). `order` sorts within the zone, lower
+first. The rail draws the activity and browse zones at its top, the
+configure zone at its bottom, Jarvis apart under it, and a hairline between
+two zones (`rail-zone-<zone>`).
+
+```rust
+Extra {
+    place: Place::Rail { zone: Zone::Configure, order: 10 },
+    id: "mcp".into(),                 // key `rail-mcp`
+    label: "MCP".into(),              // the tooltip's first line
+    icon: Some("plug".into()),        // its one mark (icons.rs)
+    tone: "blue".into(),              // colour by meaning
+    help: "MCP servers the sandboxes reach".into(), // the tooltip's second line
+    count: None,                      // a badge (amber with tone amber or red)
+    intent: Some(("open_panel".into(), json!({ "screen": "mcp" }))),
+}
+```
+
+A status dot on an entry (live state, such as the virtual Mac's): a second
+extra, `Place::RailStatus("<the entry's id>")`, whose `tone` is the dot
+(`green`, `blue`, `amber`, `red`; `muted` a hollow grey ring; none, no dot),
+drawn at the icon's lower right with a dark ring, key `rail-<id>-dot`. Say
+the state in the entry's `help` too: colour is never the only signal.
+
+An entry whose intent is `open_panel {screen}` or `open_modal {screen}` is
+marked on while that screen shows, and a second press closes a panel or an
+overlay it opened. When the rail is too short for every entry (it holds 18
+at a 720 pt window), the configure zone's entries fold first into one
+**More** entry (`rail-more`, its menu `rail-more-list` opens right of it,
+the folded entries keep their keys), then the browse zone's; the activity
+zone, Settings and Jarvis never fold.
 
 ### Worked example
 
@@ -1367,7 +1425,24 @@ the map's parser, `standin.rs`, `tests.rs`), `screens/files.luau`,
 `screens/codemap.luau`, `fixtures/files/`, `scripts/demo-files.sh`. Report:
 `.sbxw-artifacts/desktop/FILES.md` in the main checkout.
 
-**Screens.** `files` (panel "Project", 460 pt): tabs Artifacts
+**The explorer** (thread desktop-views, `VIEWS.md`): `files` is an
+**overlay** over the pane area (`Slot::Overlay`, title "Files"), opened by
+the rail's Files (`files_show`: the sandbox used last, else the focused
+pane's, else the selected one), a pane bar's Project (`files_open
+{sandbox}`, and for a thread's pane `{sandbox, worktree}`: at that
+worktree, its path from the daemon's listing) or the Worktrees view. Left
+the tree (a sandbox picker `files-sandbox`, Artifacts, Workspace, Recent,
+the sandbox's worktrees `files-worktree-<thread>`, the upload card, the
+path bar, the filter, the rows); right the reader: Markdown at about 70
+characters in the prose face, paragraphs reflowed, its outline beside it
+(`files-outline-<i>`, `files_outline`: that section, Whole file),
+relative links and `[[wiki links]]` rewritten to
+`https://files.sbxw.invalid/<path>` and followed inside (`files_link`:
+its folder listed, the file selected), other links through `open_link`;
+text and code with line numbers. Under 760 pt wide (`data.app.overlay.w`)
+one pane at a time (`files-to-tree`). `src/feat/files/explorer.rs`.
+
+**Screens (before the explorer, kept as written).** `files` (panel "Project", 460 pt): tabs Artifacts
 (`.sbxw-artifacts`, newest first, each folder one folded row with its file
 count until pressed), Files (a folder of the sandbox, the
 places, Hidden files, the typed path) and Recent (written lately anywhere,
@@ -1524,6 +1599,55 @@ opened on the person's machine; nothing from the sandbox reaches the
 clipboard or `open_link`. A paste is the person's own ⌘V / Ctrl+V on the
 picture, text only. Hiding the panel leaves the browser running; no
 automatic reconnect (a new socket runs a new bridge in the sandbox).
+
+### commits
+
+The Commits view: an **overlay** over the pane area (`Slot::Overlay`), from
+the rail's Commits entry (browse zone), a pane's "⋯" menu (filtered to that
+sandbox) or the Worktrees view (filtered to a thread's branch). Read only.
+
+Data: `GET /api/sandboxes/:name/commits?limit=50&before=&ref=` per sandbox
+(six at a time), `.../commits/:hash` for a row opened; nothing in the
+background. `data.commits_ui`: `sandbox` (nil: every one), `branch`,
+`filter`, `unmerged`, `sandboxes` (`{id, label, color}`), `rows` (`id`
+`<sandbox>:<hash>`, `hash`, `short`, `subject`, `author`, `when`, `at`,
+`sandbox`, `color`, `branch`, `branch_label` (a thread's name for
+`sbxw/<thread>`), `thread`, `merged`, `files`, `expanded`, `selected`),
+`count` (`more_rows`), `detail` (`loading`, `error`, `body`, `files`: `path`,
+`added`, `removed`, `binary`, `open`, `groups` (`{kind, text}`: `add`, `del`,
+`hunk`, `ctx`, 600 lines drawn at most), `note`; `files_more`, `truncated`),
+`notes` (a sandbox not available, an error).
+
+| Intent | Args | Effect |
+|---|---|---|
+| `commits_show` | `sandbox?`, `branch?` | Opens the view (every sandbox, one, one branch) and reads |
+| `commits_sandbox` | `sandbox?` | All, or one |
+| `commits_filter` | `text` | Subject and author |
+| `commits_unmerged` | `on` | Only what the main checkout's branch does not hold |
+| `commits_branch_clear` | | Every branch again |
+| `commits_expand` | `id` | Opens a row in place (its body, its files), or folds it |
+| `commits_file` | `path` | A file's diff under it, or hides it (only a path the commit lists) |
+| `commits_more` | | 50 more (the next page where needed) |
+| `commits_copy` | `id` | The full hash on the clipboard |
+| `commits_refresh` | | Reads again |
+| `commits_key` | `key` (`up`, `down`, `enter`) | The view's keys when none of its controls has the keyboard |
+
+Commit messages are drawn as plain text: no pills, no Markdown, no links.
+
+### Overlays
+
+`Slot::Overlay { title, icon }`: a full view over the pane area (the
+pager and the panes); the rail, the sidebar, the top and status bars stay.
+`open_panel` opens it, one at a time (another overlay replaces it);
+`close_panel`, Escape (after any menu, dialog or modal), its × or its rail
+entry pressed again close it. The core draws its header (icon, title,
+"Esc closes", ×, key `overlay-close`); the element is `overlay-<screen>`.
+The terminals keep running underneath and are not resized (it is drawn
+absolute over them); none takes a key, a paste, a press, a drag or the wheel
+while it shows (`App::terminal_may_take_keys` and the panes' handlers);
+files dropped on it go to its feature's `on_files`. Up, Down and Enter, when
+none of its controls has the keyboard, run its feature's `<screen>_key`
+intent if it declares one.
 
 ### mac
 

@@ -225,7 +225,41 @@ lead's session also removes the mark.
   `GET /api/models` lists the choices, `GET /api/sandboxes/<name>/threads` gives
   each thread's model.
 - **Worktree graph API.** `GET /api/sandboxes/<name>/worktrees` returns
-  `{ok, workspace, repos: [{path, base, head, dirty, log, threads: [{name, branch, worktree, tip, fork, ahead, behind, dirty, commits}], error}]}`.
+  `{ok, workspace, repos: [{path, base, head, dirty, log, threads: [{name, branch, worktree, tip, fork, ahead, behind, dirty, commits, tip_subject, tip_at}], error}]}`.
+  `tip_subject` and `tip_at` are the branch tip's subject and commit date
+  (null without a branch); a branch with a tip and `ahead` 0 is merged.
+- **Commit history API (read-only).** Git runs on the host with fixed
+  arguments (the worktree graph's runner: `--no-optional-locks`, no program
+  the repo's config names, a 5 s timeout), never a shell string; nothing is
+  cached. Authors' names only: no email is asked of git or returned.
+  - `GET /api/sandboxes/<name>/commits?limit=&before=&ref=`: a page of the
+    commits of every repo under the workspace, all local branches (the
+    threads' `sbxw/<thread>` included) and the main checkout's HEAD, newest
+    first by commit date. `limit` 1 to 200 (default 50); `before` a hash (7
+    to 64 lowercase hex: the page after it); `ref` one branch (`sbxw/<thread>`
+    or a plain branch name; passed as `refs/heads/<ref>` after
+    `--end-of-options`). Answer `{ok, available: true, workspace, repos,
+    commits: [{hash, short, author, at, subject, body, branch, thread,
+    merged, files, repo}], more, limits}`: `body` is its first 12 lines
+    (2000 bytes), `branch` the ref it was reached from, `thread` the thread
+    of a `sbxw/<thread>` branch, `merged` whether the main checkout's HEAD
+    holds it, `files` the files it changed against its first parent. The
+    walk goes 2000 commits deep per repo.
+  - `GET /api/sandboxes/<name>/commits/<hash>`: `{ok, available: true,
+    commit: {hash, short, author, at, subject, body, repo, files: [{path,
+    added, removed, binary, patch, truncated}], files_more, truncated},
+    truncated, limits}`. Caps: a file's patch 64 KiB, the whole 512 KiB
+    (cut on a line), 300 files listed, a file over 4000 changed lines listed
+    without its patch; binary files named, never dumped; `truncated` when
+    anything was cut. The patch is asked only for the paths git itself
+    listed, as literal pathspecs. 404 for a hash in no repo.
+  - Not available (`{ok, available: false, reason, commits: []}`, status
+    200): no workspace recorded, a remote host that cannot be reached, a
+    workspace that is not a repository or that git on the host cannot read.
+    A bad `limit`, hash or `ref` is a 400 before git runs. sbxw makes no
+    `--clone` sandbox: the workspace is the host's folder, mounted at the
+    same path, so what the host reads is the sandbox's whole history; the
+    daemon never execs into a sandbox for it.
 - **Exclude.** `.sbxw-worktrees/` is added to `.git/info/exclude`, not
   `.gitignore`.
 - **Env changes.** `[env]` edits reach the agent on its next attach (`sbx run`

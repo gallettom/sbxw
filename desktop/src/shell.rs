@@ -125,8 +125,12 @@ impl Pane {
 }
 
 /// Finds pane `i`'s terminal in the app (the terminal's handlers take one per pane).
+/// Pane `i`'s terminal, for its element's handlers (keys, drags, the
+/// wheel, the pointer). None while a feature's overlay covers the pane
+/// area: a terminal under it takes nothing, even with its grid still
+/// holding Rune's focus (`terminal_may_take_keys` holds the window's path).
 pub fn lens(i: usize) -> impl Fn(&mut App) -> Option<&mut TerminalState> + Clone + 'static {
-    move |s: &mut App| s.panes.get_mut(i).and_then(|p| p.term.as_mut())
+    move |s: &mut App| if s.feats.overlay.is_some() { None } else { s.panes.get_mut(i).and_then(|p| p.term.as_mut()) }
 }
 
 /// Headless script marks the app acts on.
@@ -211,6 +215,8 @@ pub struct App {
     pub drag: Option<PaneDrag>,
     /// The pager's open menu: `per` or `more`.
     pub pager_menu: Option<String>,
+    /// The rail's "More" menu is open (rail.rs).
+    pub rail_menu: bool,
     /// The pager's width as last laid out (0: not yet).
     pager_w: f32,
     /// The pages and panes of the last run, until the first list says what
@@ -272,6 +278,11 @@ pub struct Rects {
     pub area: Option<tiling::Rect>,
     pub tabs: HashMap<usize, tiling::Rect>,
     pub plus: Option<tiling::Rect>,
+    /// The left rail's rectangle (what folds into its "More", rail.rs).
+    pub rail: Option<[f32; 4]>,
+    /// The overlay view's rectangle (`data.app.overlay`: its screen lays
+    /// itself out narrow or wide from it).
+    pub overlay: Option<[f32; 4]>,
 }
 
 /// A pane being dragged by its bar: where the press was, where the pointer
@@ -347,6 +358,7 @@ impl App {
             rects: Rects::default(),
             drag: None,
             pager_menu: None,
+            rail_menu: false,
             pager_w: 0.0,
             restore: None,
             selected: init.selected.clone(),
@@ -605,6 +617,12 @@ impl App {
         // The upload dialog for dropped files: false once "Do not ask again" was chosen (features.rs).
         data["app"]["ask_dropped_uploads"] = (!self.drops_skip_dialog()).into();
         data["app"]["surface"] = serde_json::json!({ "release": crate::surface::RELEASE_KEY, "focused": crate::surface::focused() });
+        // The overlay over the pane area: its screen and its size, in points.
+        data["app"]["overlay"] = match (&self.feats.overlay, self.rects.overlay) {
+            (Some((n, _)), Some(r)) => serde_json::json!({ "screen": n, "w": r[2], "h": r[3] }),
+            (Some((n, _)), None) => serde_json::json!({ "screen": n }),
+            _ => J::Null,
+        };
         data
     }
 
@@ -1063,7 +1081,7 @@ impl App {
         if self.screens.iter_mut().any(|s| s.close_menus()) {
             return true;
         }
-        if self.bar_menu.take().is_some() || self.pager_menu.take().is_some() || self.drag.take().is_some() {
+        if self.bar_menu.take().is_some() || self.pager_menu.take().is_some() || std::mem::take(&mut self.rail_menu) || self.drag.take().is_some() {
             return true;
         }
         if self.feats.dialog.is_some() || self.feats.modal.is_some() {
@@ -1074,6 +1092,11 @@ impl App {
             self.push_data();
             return true;
         }
+        // Then the overlay over the pane area.
+        if self.close_overlay() {
+            self.push_data();
+            return true;
+        }
         false
     }
 
@@ -1081,11 +1104,31 @@ impl App {
         if ev.key == Key::Escape && self.escape() {
             return true;
         }
+        // An overlay over the pane area takes Up, Down and Enter when nothing
+        // of its own has the keyboard (its rows' list moves the keyboard
+        // itself): as its feature's `<screen>_key` intent, if it has one.
+        if let Some((name, _)) = self.feats.overlay.clone() {
+            let k = match ev.key {
+                Key::Up => Some("up"),
+                Key::Down => Some("down"),
+                Key::Enter => Some("enter"),
+                _ => None,
+            };
+            let idle = tx.focused().is_none_or(|f| f.starts_with("grid") || f.starts_with("rail") || f.starts_with("overlay"));
+            let intent = format!("{name}_key");
+            if let (Some(k), true, true) = (k, idle, ev.mods == rune::Mods::default()) {
+                if crate::intent::spec(&intent).is_some() {
+                    self.press_extra("keys", &intent, &serde_json::json!({ "key": k }));
+                    self.push_data();
+                    return true;
+                }
+            }
+        }
         // Pages: Ctrl+Tab, Ctrl+Shift+Tab (and ⌘⌥→/← on macOS), even in a
         // terminal (palette.rs, `page_step`); not while a dialog, modal or
         // the palette is up.
         if let Some(d) = palette::page_step(ev) {
-            let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.palette.is_some();
+            let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.palette.is_some();
             if !overlay {
                 self.run_intent("keys", Intent::Pages(PageOp::Step(d)));
                 self.push_data();
@@ -1131,6 +1174,12 @@ impl App {
     fn drawn(&self, key: &str) -> bool {
         if self.pager_drawn(key) || self.rail_drawn(key) {
             return true;
+        }
+        // The overlay over the pane area and its close button.
+        if let Some((n, _)) = &self.feats.overlay {
+            if key == "overlay-close" || key == format!("overlay-{n}") || key == format!("overlay-head-{n}") {
+                return true;
+            }
         }
         // A docked feature panel's close button (`panel-close-<screen>`).
         if key.strip_prefix("panel-close-").is_some_and(|n| self.feats.panel.as_deref() == Some(n) || (self.feats.split && self.feats.panels.iter().any(|p| p == n))) {
@@ -1193,10 +1242,11 @@ impl App {
 
     /// Whether a key or a paste the window did not route elsewhere may go to
     /// the focused pane's terminal: only with no dialog, modal or surface
-    /// up, and Rune's focus on a terminal grid (the core moves it there when
+    /// up, no overlay over the pane area, and Rune's focus on a terminal grid (the core moves it there when
     /// it opens or focuses a pane).
     pub fn terminal_may_take_keys(&self, rune_focus: Option<&str>) -> bool {
-        let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || crate::surface::focused().is_some();
+        // A feature's overlay over the pane area covers the terminals: none takes a key.
+        let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || crate::surface::focused().is_some();
         !overlay && rune_focus.is_some_and(|k| k.starts_with("grid"))
     }
 
@@ -2027,7 +2077,17 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if s.sidebar_shown() {
         main = main.child(sidebar);
     }
-    main = main.child(panes_view(s));
+    // A feature's overlay view covers the pane area (pager and panes), drawn
+    // absolute over it so no terminal moves or resizes (features.rs).
+    let over = s.feats.overlay.as_ref().and_then(|(name, _)| s.screens.iter().find(|x| &x.name == name)).and_then(|sc| {
+        let (el_, more) = screen::view_parts::<App>(sc);
+        overlays.extend(more);
+        s.overlay_view(el_)
+    });
+    main = main.child(match over {
+        Some(o) => panes_view(s).child(o),
+        None => panes_view(s),
+    });
     for p in fpanels {
         main = main.child(p);
     }
@@ -2042,6 +2102,10 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     if let Some(m) = s.pager_menu_view() {
         overlays.push(screen::menu_scrim("pager-scrim".into(), |s: &mut App| s.pager_menu = None));
+        overlays.push(m);
+    }
+    if let Some(m) = s.rail_menu_view() {
+        overlays.push(screen::menu_scrim("rail-scrim".into(), |s: &mut App| s.rail_menu = false));
         overlays.push(m);
     }
     // The status bar at the foot, in every layout: the panes' area shrinks by its height.
@@ -2167,7 +2231,22 @@ fn panes_view(s: &App) -> El {
         .min_h(0.0)
         .on_layout(|s: &mut App, r: [f32; 4]| s.rects.area = Some(r))
         .child(tile_view(s, page, String::new()));
-    col().key("panes").grow(1.0).h_full().min_w(0.0).min_h(0.0).gap(layout::GUTTER / 2.0).child(pager::view(s)).child(area)
+    // No gap under the pager: the current page's tab joins the pane area (pager.rs).
+    col().key("panes").grow(1.0).h_full().min_w(0.0).min_h(0.0).gap(0.0).child(pager::view(s)).child(area)
+}
+
+/// The pane the current page's tab is joined to: the one at the pane
+/// area's top-left corner, while that tab starts at the area's left edge
+/// (not after the leads view's mark or the hidden tabs' menu). Its top-left
+/// corner is drawn square so tab and pane make one shape.
+fn joined_pane(s: &App) -> Option<Uid> {
+    let area = s.rects.area?;
+    let tab = s.rects.tabs.get(&s.pages.current)?;
+    if (tab[0] - area[0]).abs() > 1.0 {
+        return None;
+    }
+    let on_page = s.pages.cur().tile.order();
+    s.rects.panes.iter().find(|(u, r)| on_page.contains(u) && (r[0] - area[0]).abs() < 1.0 && (r[1] - area[1]).abs() < 1.0).map(|(u, _)| *u)
 }
 
 /// A split's element key: `panes` for the page's first split, then the
@@ -2879,6 +2958,7 @@ fn pane_view(s: &App, i: usize) -> El {
     // panes of one piece of work read together.
     let accent = group.map(theme::hex).unwrap_or_else(|| c("border"));
     let (bw, border) = if focused { (1.5, c("blue")) } else { (1.0, c("elevated")) };
+    let md = theme::radius("md").unwrap();
     col()
         .key(format!("pane-{}", i + 1))
         .w_full()
@@ -2887,8 +2967,8 @@ fn pane_view(s: &App, i: usize) -> El {
         .min_h(0.0)
         .fill(c("bg"))
         .border(bw, border)
-        .radius(theme::radius("md").unwrap())
-        .clip_rounded(theme::radius("md").unwrap())
+        .corners(if joined_pane(s) == Some(uid) && uid != 0 { [0.0, md, md, md] } else { [md; 4] })
+        .clip_rounded(md)
         .on_layout(move |s: &mut App, r: [f32; 4]| {
             s.rects.panes.insert(uid, r);
         })
@@ -3326,15 +3406,67 @@ mod tests {
             for _ in 0..6 {
                 rt.frame(0.016);
             }
+            // The fixture's first reads land on the real clock: the Requests
+            // feature opens its panel when its first read finds several
+            // requests waiting (relay `on_data`). On a loaded machine that
+            // read came after the panel was closed below, docking it again
+            // and narrowing the panes to a 56 pt bar (the flaky failure).
+            // Wait for it, then close what it opened.
+            for _ in 0..400 {
+                if rt.state.feats.data.contains_key("relay") {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                rt.update(|s, tx| {
+                    s.poll(0.0, tx);
+                });
+                rt.frame(0.016);
+            }
+            assert!(rt.state.feats.data.contains_key("relay"), "the fixture's requests were read");
+            for _ in 0..6 {
+                rt.update(|s, tx| {
+                    s.poll(0.0, tx);
+                });
+                rt.frame(0.016);
+            }
             // The plan dialog the fixture opens, then the Requests panel.
             rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
             rt.update(|s, _| {
                 s.feats.panel = None;
                 s.feats.panels.clear();
+                // As closing a panel does: the screens and the bars' fit follow.
+                s.push_data();
             });
-            for _ in 0..6 {
-                rt.frame(0.016);
+            // A late read of the fixture may dock a panel again: keep it
+            // closed while the reads settle, then let the panes' glide land
+            // (a mid-glide pane is narrower than its layout).
+            for _ in 0..40 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                rt.update(|s, tx| {
+                    s.poll(0.0, tx);
+                    if s.feats.panel.is_some() || !s.feats.panels.is_empty() || s.feats.modal.is_some() {
+                        s.feats.panel = None;
+                        s.feats.panels.clear();
+                        s.feats.modal = None;
+                        s.push_data();
+                    }
+                });
+                rt.frame(0.05);
             }
+            // The glide runs on the wall clock too: give it real time, so a
+            // loaded machine (the whole suite in parallel) measures where
+            // the panes land, not where they pass.
+            let land = std::time::Instant::now();
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                rt.frame(0.05);
+                let (bar, _) = rt.presented("pane-1-bar").unwrap();
+                let (pane, _) = rt.presented("pane-1").unwrap();
+                if ((bar[2] - pane[2]).abs() < 4.0 && land.elapsed() > std::time::Duration::from_millis(500)) || land.elapsed() > std::time::Duration::from_secs(5) {
+                    break;
+                }
+            }
+            assert!(rt.state.feats.panel.is_none(), "no panel docked while the bars are measured");
             let inside = |rt: &rune::Runtime<App>, key: &str, outer: &str| {
                 let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{w}: {key} drawn"));
                 let (o, _) = rt.presented(outer).unwrap();
@@ -3592,6 +3724,190 @@ mod tests {
 
     /// No key and no paste reaches a terminal while anything else has the
     /// keyboard: a screen input, a core dialog and its secret field, a modal.
+    /// The shared paging helper (`screen::paged`, Luau `paged` and
+    /// `more_rows`): the first page and "Show N more", the filter before
+    /// the cap. Used by a sandbox with very many sessions (40 lines a page)
+    /// and the Requests panel; a press shows the next page.
+    #[test]
+    fn long_lists_draw_a_page_and_show_more() {
+        let (rows, c) = screen::paged((0..450).collect::<Vec<_>>(), 200, 1, "rows");
+        assert_eq!((rows.len(), c["total"].as_u64(), c["more"].as_u64(), c["label"].as_str()), (200, Some(450), Some(200), Some("450 rows, showing 200")));
+        let (rows, c) = screen::paged((0..450).collect::<Vec<_>>(), 200, 3, "rows");
+        assert_eq!((rows.len(), c["more"].as_u64(), c["label"].as_str()), (450, Some(0), Some("")));
+        fn count(n: &crate::luau::Node, prefix: &str) -> usize {
+            n.key.as_deref().is_some_and(|k| k.starts_with(prefix)) as usize + n.children.iter().map(|c| count(c, prefix)).sum::<usize>()
+        }
+        fn find<'a>(n: &'a crate::luau::Node, key: &str) -> Option<&'a crate::luau::Node> {
+            if n.key.as_deref() == Some(key) {
+                return Some(n);
+            }
+            n.children.iter().find_map(|c| find(c, key))
+        }
+        let dir = std::env::temp_dir().join("sbxw-no-overrides");
+        let fx = crate::fixture::Fixture::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/sandboxes/basic.json")).unwrap();
+        let mut data = fx.screen_data(&crate::fixture::AppView::default());
+        let name = data["sandboxes"][0]["name"].as_str().unwrap().to_string();
+        data["app"]["selected"] = name.clone().into();
+        let lines: Vec<J> = (0..100).map(|i| serde_json::json!({ "id": format!("t{i}"), "label": format!("⑂ t{i} · done"), "tone": "blue", "help": "", "count": null, "icon": null, "intent": null })).collect();
+        data["app"]["extras"] = serde_json::json!({ "rows": { name.clone(): lines } });
+        let mut s = crate::screen::ScreenState::new("sandboxes", &dir, data.clone());
+        assert!(s.error.is_none(), "{:?}", s.error);
+        let n = s.last_good.clone().unwrap();
+        assert_eq!(count(&n, &format!("extra-row-{name}-")), 40, "a page of 40 lines");
+        let more = find(&n, &format!("sessions-more-{name}-own")).expect("Show 60 more").clone();
+        assert!(find(&n, &format!("sessions-more-{name}-own-box")).is_some());
+        s.act(more.on.as_deref().unwrap(), &more.arg, &J::Null);
+        s.set_data(data);
+        let n = s.last_good.clone().unwrap();
+        assert_eq!(count(&n, &format!("extra-row-{name}-")), 80, "the next page");
+    }
+
+    /// A thread on its own worktree, its 13-character name, its state word
+    /// and the "+" on its line, at the sidebar's normal width (264): the
+    /// path relative to the repository when it fits, else "…/<name>", else
+    /// the name whole, a middle cut only for a long name; never cut twice;
+    /// the word always whole (STATUSBAR.md's rule, with the "+" present).
+    #[test]
+    fn a_worktree_session_line_keeps_its_name_and_its_word_with_the_plus() {
+        fn find<'a>(n: &'a crate::luau::Node, key: &str) -> Option<&'a crate::luau::Node> {
+            if n.key.as_deref() == Some(key) {
+                return Some(n);
+            }
+            n.children.iter().find_map(|c| find(c, key))
+        }
+        fn texts(n: &crate::luau::Node, out: &mut Vec<String>) {
+            if matches!(n.kind, crate::luau::Kind::Text) {
+                out.push(n.text.clone());
+            }
+            for c in &n.children {
+                texts(c, out);
+            }
+        }
+        let dir = std::env::temp_dir().join("sbxw-no-overrides");
+        let fx = crate::fixture::Fixture::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/sandboxes/basic.json")).unwrap();
+        for (w, thread, word, tone) in [(264.0f32, "checkout-copy", "working", "green"), (264.0, "checkout-copy", "wants you", "amber"), (264.0, "a-really-long-thread-name", "working", "green"), (300.0, "checkout-copy", "working", "green"), (320.0, "checkout-copy", "wants you", "amber")] {
+            let mut data = fx.screen_data(&crate::fixture::AppView::default());
+            let name = data["sandboxes"][0]["name"].as_str().unwrap().to_string();
+            let ws = data["sandboxes"][0]["workspace"].as_str().unwrap().to_string();
+            data["app"]["selected"] = name.clone().into();
+            data["app"]["sidebar"] = serde_json::json!({ "w": w, "shown": true });
+            data["sessions"] = serde_json::json!([{ "sandbox": name, "thread": thread, "cwd": format!("{ws}/.sbxw-worktrees/{thread}") }]);
+            let args = serde_json::json!({ "sandbox": name, "thread": thread, "pane": "focused" });
+            data["app"]["extras"] = serde_json::json!({ "rows": { name.clone(): [
+                { "id": thread, "label": format!("⑂ {thread} · {word}"), "tone": tone, "help": "", "count": null, "icon": null, "intent": { "name": "open_terminal", "args": args } },
+            ] } });
+            let s = crate::screen::ScreenState::new("sandboxes", &dir, data);
+            assert!(s.error.is_none(), "{:?}", s.error);
+            let n = s.last_good.clone().unwrap();
+            let line = find(&n, &format!("extra-row-{name}-{thread}")).expect("the line");
+            assert!(find(line, &format!("session-add-{name}-{thread}")).is_some(), "the + is there");
+            let mut t = vec![];
+            texts(line, &mut t);
+            let label = t[0].clone();
+            assert!(t.iter().any(|x| x == word), "{word} shown whole: {t:?}");
+            assert!(label.matches('…').count() <= 1, "cut once at most: {label}");
+            // The line as laid out: the sidebar less paddings, columns, glyph, gaps and the +.
+            let room = w - 24.0 - 40.0 - 20.0 - 16.0 - 32.0;
+            let whole_fits = bar::measure(thread, 13.0, 400.0) + bar::measure(word, 12.0, 400.0) <= room;
+            if whole_fits {
+                assert!(label == thread || label == format!("…/{thread}") || label == format!(".sbxw-worktrees/{thread}"), "{w}: the name whole: {label}");
+            } else {
+                // One middle cut, both ends of the name kept.
+                let (a, b) = label.split_once('…').unwrap_or_else(|| panic!("{w} {word}: {label} not cut, {} pt", bar::measure(&label, 13.0, 400.0)));
+                assert!(thread.starts_with(a) && thread.ends_with(b) && a.len() >= 3 && b.len() >= 3, "{w}: {label}");
+            }
+            let used = bar::measure(&label, 13.0, 400.0) + bar::measure(word, 12.0, 400.0);
+            assert!(used <= room + 1.0, "{label} + {word}: {used} pt in {room}");
+        }
+    }
+
+    /// An overlay view over the pane area (`Slot::Overlay`): opened from
+    /// the rail, it covers the pager and the panes; no terminal takes a key,
+    /// a paste or a press while it shows, none is resized; Escape, its × or
+    /// its rail entry again closes it; one at a time.
+    #[test]
+    fn an_overlay_covers_the_panes_and_no_terminal_takes_a_key_or_is_resized() {
+        let (mut rt, rx, _clip) = window_with_terminal();
+        tap(&mut rt, "grid-1");
+        rt.key(KeyEvent { key: Key::Text("a".into()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"a", "the control: the grid types");
+        let resizes = |rx: &std::sync::mpsc::Receiver<crate::client::TermInput>| {
+            let mut n = 0;
+            while let Ok(i) = rx.try_recv() {
+                match i {
+                    crate::client::TermInput::Resize { .. } => n += 1,
+                    crate::client::TermInput::Bytes(b) => panic!("bytes reached the terminal under the overlay: {b:?}"),
+                    _ => {}
+                }
+            }
+            n
+        };
+        for _ in 0..30 {
+            rt.frame(0.05);
+        }
+        resizes(&rx);
+        let pane_before = rt.presented("pane-1").unwrap().0;
+        tap(&mut rt, "rail-commits");
+        for _ in 0..10 {
+            rt.frame(0.05);
+        }
+        assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("commits"));
+        let over = rt.presented("overlay-commits").expect("drawn").0;
+        let area = rt.presented("panes").unwrap().0;
+        assert!((over[0] - area[0]).abs() < 1.0 && (over[1] - area[1]).abs() < 1.0 && (over[2] - area[2]).abs() < 1.0 && (over[3] - area[3]).abs() < 1.0, "it covers the pager and the panes: {over:?} {area:?}");
+        assert!(rt.presented("sidebar").is_some() && rt.presented("rail").is_some() && rt.presented("top-bar").is_some(), "the rail, sidebar and top bar stay");
+        assert_eq!(rt.presented("pane-1").unwrap().0, pane_before, "the pane under it is not moved nor resized");
+        assert!(rt.state.rail_entries().0.iter().any(|e| e.key == "rail-commits" && e.on), "its rail entry is on");
+        // Keys, chords, a paste: none reaches the terminal (its grid still had Rune's focus).
+        rt.update(|_, tx| tx.focus("grid-1", false));
+        for ev in chords().into_iter().filter(|e| e.key != Key::Escape) {
+            rt.key(ev.clone());
+            rt.frame(0.02);
+            assert!(rt.state.feats.overlay.is_some(), "{ev:?} closed the overlay");
+            assert_eq!(sent(&rx), b"", "{ev:?} reached the terminal under the overlay");
+        }
+        rt.key(KeyEvent { key: Key::Text("x".into()), mods: rune::Mods::default() });
+        rt.paste("rm -rf ~");
+        rt.frame(0.02);
+        assert!(!rt.state.terminal_may_take_keys(Some("grid-1")), "the gate holds with an overlay up");
+        // A press where the terminal is: the overlay keeps it.
+        let (x, y) = (pane_before[0] + pane_before[2] / 2.0, pane_before[1] + pane_before[3] / 2.0);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        for _ in 0..10 {
+            rt.frame(0.05);
+        }
+        assert_eq!(resizes(&rx), 0, "no terminal was resized and no byte was sent");
+        // Escape closes it; the terminal types again.
+        rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+        for _ in 0..20 {
+            rt.frame(0.05);
+        }
+        assert!(rt.state.feats.overlay.is_none() && rt.presented("overlay-commits").is_none());
+        tap(&mut rt, "grid-1");
+        rt.key(KeyEvent { key: Key::Text("b".into()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"b");
+        // The rail entry opens it and closes it again; its × closes it.
+        tap(&mut rt, "rail-commits");
+        assert!(rt.state.feats.overlay.is_some());
+        tap(&mut rt, "rail-commits");
+        assert!(rt.state.feats.overlay.is_none(), "pressed again: closed");
+        tap(&mut rt, "rail-commits");
+        rt.frame(0.05);
+        tap(&mut rt, "overlay-close");
+        assert!(rt.state.feats.overlay.is_none(), "its × closes it");
+        // One at a time: another overlay replaces it.
+        tap(&mut rt, "rail-commits");
+        tap(&mut rt, "rail-worktrees");
+        for _ in 0..10 {
+            rt.frame(0.05);
+        }
+        assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("worktrees"));
+        assert!(rt.presented("overlay-commits").is_none() && rt.presented("overlay-worktrees").is_some(), "one at a time");
+    }
+
     #[test]
     fn keys_reach_a_terminal_only_when_its_grid_has_the_keyboard() {
         let (mut rt, rx, clip) = window_with_terminal();

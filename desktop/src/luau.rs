@@ -348,6 +348,36 @@ intent = function(name, args)
   if type(name) ~= "string" then error("intent(name, args): name must be a string", 2) end
   return { kind = "intent", name = name, args = args or {} }
 end
+-- Long lists (docs/screens.md, "Long lists"): a render is capped at 5000
+-- elements, so a list draws its first rows and a "Show N more" block.
+-- `more_rows(count, opts)` draws that block from a count the core made
+-- (`{total, shown, more, label}`, `screen::paged`), or false when nothing
+-- is left; `paged(items, opts)` cuts a list the screen filtered itself and
+-- returns the rows to draw and that block. opts: `page` (rows a page, 200),
+-- `pages` (pages shown, 1), `key` (the button's key; its box is
+-- `<key>-box`), `on` and `arg` (the press), `what` ("rows"), `hint`.
+more_rows = function(c, o)
+  o = o or {}
+  if type(c) ~= "table" or (c.more or 0) <= 0 then return false end
+  local key = o.key or "more"
+  local label = c.label
+  if label == nil or label == "" then label = tostring(c.total) .. " " .. (o.what or "rows") .. ", showing " .. tostring(c.shown) end
+  if o.hint then label = label .. ". " .. o.hint end
+  return column{ gap = 4, w = "full", py = 4, key = key .. "-box",
+    text{ label, size = "sm", color = "text-muted", wrap = true },
+    button{ "Show " .. tostring(c.more) .. " more", key = key, on = o.on or "more", arg = o.arg, variant = "ghost", tone = "blue",
+      help = tostring(c.total - c.shown) .. " more not drawn" } }
+end
+paged = function(items, o)
+  o = o or {}
+  local page = o.page or 200
+  local n = page * (o.pages or 1)
+  local total = #items
+  if total <= n then return items, false end
+  local shown = {}
+  for i = 1, n do shown[i] = items[i] end
+  return shown, more_rows({ total = total, shown = n, more = math.min(page, total - n) }, o)
+end
 "#;
 
 pub struct LuauHost {

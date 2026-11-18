@@ -283,6 +283,13 @@ pub enum Slot {
     /// A panel docked on the right, beside Jarvis's (`open_panel`,
     /// `close_panel`). Several open show as tabs; one is shown at a time.
     Panel { title: &'static str, icon: &'static str, width: f32 },
+    /// A full view drawn OVER the pane area (`open_panel` opens it,
+    /// `close_panel`, Escape, its ×, or its rail entry pressed again close
+    /// it), one at a time: opening one closes the other. The terminals keep
+    /// running underneath and are not resized; the rail, the sidebar and the
+    /// top and status bars stay; the pager is covered. No terminal gets a key
+    /// or a press while it shows (`App::terminal_may_take_keys`).
+    Overlay { title: &'static str, icon: &'static str },
 }
 
 /// One of a feature's intents, checked against its [`Spec`].
@@ -649,6 +656,39 @@ pub enum Place {
     /// a dot of `tone`, the label, a right badge (`count`, else `help`),
     /// pressable with its `intent`; key `extra-row-<sandbox>-<id>`.
     SandboxRow(String),
+    /// An entry of the left rail (`shell/rail.rs`), drawn zone by zone in
+    /// [`Zone`] order, a hairline between two zones, then by `order` (lower
+    /// first) within its zone. Key `rail-<id>`; `icon` is its mark (set it),
+    /// `tone` its colour by meaning, `help` its tooltip (first line the
+    /// name), `count` a badge, `intent` what a press asks. An entry whose
+    /// intent is `open_panel {screen}` or `open_modal {screen}` shows as on
+    /// while that screen is shown, and a second press closes a panel or an
+    /// overlay it opened. Settings is the configure zone's last entry and
+    /// Jarvis stands apart at the very bottom (both the core's own).
+    Rail { zone: Zone, order: u16 },
+    /// A status dot on the rail entry of that id (`Place::Rail`): `tone` is
+    /// the dot's colour (`green`, `blue`, `amber`, `red`; `muted` a hollow
+    /// grey ring; no such extra, no dot), drawn at the icon's lower right
+    /// with a dark ring. Colour is never the only signal: say the state in
+    /// the entry's own `help` too. Only `tone` is read.
+    RailStatus(String),
+}
+
+/// The left rail's zones, top to bottom (`Place::Rail`).
+///
+/// * `Activity`: what happens now (Requests 10, Network 20, Team leads 30).
+/// * `Browse`: views to read (Commits 10, Worktrees 20, Files 30).
+/// * `Configure`: what is set up (MCP 10, Skills 20, Kits 30; Settings is
+///   always its last, drawn by the core). Anchored at the bottom of the
+///   rail, above Jarvis. When the rail is too short for every entry, the
+///   configure zone's entries fold first into one "More" entry (a menu),
+///   then the browse zone's; Settings, Jarvis and the activity zone never
+///   fold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Zone {
+    Activity,
+    Browse,
+    Configure,
 }
 
 /// A button or a badge a feature adds to a slot drawn by someone else.
@@ -715,6 +755,7 @@ macro_rules! features {
 
 features! {
     browser,
+    commits,
     create,
     emphasis,
     envfile,
@@ -726,6 +767,7 @@ features! {
     mac,
     templates,
     threads,
+    worktrees,
 }
 
 // ---------------------------------------------------------------------------

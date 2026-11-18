@@ -812,3 +812,57 @@ async fn the_daemons_own_cpu_is_read_from_the_os() {
     let pct = app.stats().await.daemon_cpu_pct;
     assert!(pct.is_some_and(|p| p >= 0.0), "{pct:?}");
 }
+
+/// The commit routes: limits and names checked before git runs; no
+/// workspace, a folder that is not a repo: "not available", not an error;
+/// a real repo: names only, never an email, and the detail found by hash.
+#[tokio::test]
+async fn commits_check_their_arguments_and_say_when_history_is_not_available() {
+    use sbxw_core::SandboxRef;
+    if std::process::Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let (_d, app) = app();
+    let get = |path: &str| Request::builder().uri(path).header("host", HOST).body(Body::empty()).unwrap();
+    for bad in ["limit=0", "limit=201", "before=--all", "before=HEAD", "ref=--output=x", "ref=a..b", "ref=-x", "ref=$(id)"] {
+        let (s, v) = call(signed_in(app.clone()), get(&format!("/api/sandboxes/web/commits?{bad}"))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {v}");
+    }
+    assert_eq!(call(signed_in(app.clone()), get("/api/sandboxes/web/commits/--stat")).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(signed_in(app.clone()), get("/api/sandboxes/web/commits/HEAD")).await.0, StatusCode::BAD_REQUEST);
+    // No workspace recorded.
+    let (s, v) = call(signed_in(app.clone()), get("/api/sandboxes/web/commits")).await;
+    assert_eq!((s, v["available"].clone()), (StatusCode::OK, json!(false)), "{v}");
+    assert!(v["reason"].as_str().unwrap().contains("no workspace"));
+    // A folder that is not a repository.
+    let plain = tempfile::tempdir().unwrap();
+    let web = SandboxRef::parse("web").unwrap();
+    app.store.update(web.clone(), |r| r.workspace = Some(plain.path().to_path_buf())).unwrap();
+    let (s, v) = call(signed_in(app.clone()), get("/api/sandboxes/web/commits")).await;
+    assert_eq!((s, v["available"].clone()), (StatusCode::OK, json!(false)), "{v}");
+    // A repository.
+    let repo = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git").arg("-C").arg(repo.path()).args(["-c", "user.name=Ada Lovelace", "-c", "user.email=ada@example.org", "-c", "init.defaultBranch=main"]).args(args).output().unwrap().status.success();
+        assert!(ok, "{args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.path().join("a.txt"), "a\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "--no-verify", "-m", "Hello"]);
+    app.store.update(web.clone(), |r| r.workspace = Some(repo.path().to_path_buf())).unwrap();
+    let (s, v) = call(signed_in(app.clone()), get("/api/sandboxes/web/commits?limit=5")).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["available"], true);
+    let c = &v["commits"][0];
+    assert_eq!((c["subject"].as_str(), c["author"].as_str(), c["merged"].as_bool(), c["branch"].as_str()), (Some("Hello"), Some("Ada Lovelace"), Some(true), Some("main")));
+    assert!(!v.to_string().contains("ada@example.org"), "no email");
+    let short = c["short"].as_str().unwrap().to_string();
+    let (s, d) = call(signed_in(app.clone()), get(&format!("/api/sandboxes/web/commits/{short}"))).await;
+    assert_eq!(s, StatusCode::OK, "{d}");
+    assert_eq!(d["commit"]["files"][0]["path"], "a.txt");
+    assert!(d["commit"]["files"][0]["patch"].as_str().unwrap().contains("+a"));
+    assert!(!d.to_string().contains("ada@example.org"));
+    assert_eq!(d["limits"]["file"], sbxw_core::commits::PATCH_FILE_MAX);
+    assert_eq!(call(signed_in(app.clone()), get("/api/sandboxes/web/commits/abcdef0")).await.0, StatusCode::NOT_FOUND);
+}
