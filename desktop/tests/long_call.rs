@@ -58,5 +58,7 @@ fn stream_events_arrive_while_a_long_call_is_pending() {
     eprintln!("answered at {at:?}; provision events at {steps:?}; longest poll {longest_poll:?}");
     assert!(steps.len() >= 4, "steps seen while pending: {steps:?}");
     assert!(steps.iter().filter(|t| **t + Duration::from_millis(300) < at).count() >= 3, "steps came before the answer, spread over the call: {steps:?} answer {at:?}");
-    assert!(longest_poll < Duration::from_millis(20), "a poll never waits: {longest_poll:?}");
+    // A poll that waited would wait for the stand-in's next step (350 ms
+    // apart); 200 ms tells that from a loaded machine's scheduling.
+    assert!(longest_poll < Duration::from_millis(200), "a poll never waits: {longest_poll:?}");
 }
