@@ -3437,11 +3437,36 @@ mod tests {
                 // As closing a panel does: the screens and the bars' fit follow.
                 s.push_data();
             });
-            // Closing the panel widens the panes with a glide: measure once
-            // it has landed (a mid-glide pane is narrower than its layout).
+            // A late read of the fixture may dock a panel again: keep it
+            // closed while the reads settle, then let the panes' glide land
+            // (a mid-glide pane is narrower than its layout).
             for _ in 0..40 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                rt.update(|s, tx| {
+                    s.poll(0.0, tx);
+                    if s.feats.panel.is_some() || !s.feats.panels.is_empty() || s.feats.modal.is_some() {
+                        s.feats.panel = None;
+                        s.feats.panels.clear();
+                        s.feats.modal = None;
+                        s.push_data();
+                    }
+                });
                 rt.frame(0.05);
             }
+            // The glide runs on the wall clock too: give it real time, so a
+            // loaded machine (the whole suite in parallel) measures where
+            // the panes land, not where they pass.
+            let land = std::time::Instant::now();
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                rt.frame(0.05);
+                let (bar, _) = rt.presented("pane-1-bar").unwrap();
+                let (pane, _) = rt.presented("pane-1").unwrap();
+                if ((bar[2] - pane[2]).abs() < 4.0 && land.elapsed() > std::time::Duration::from_millis(500)) || land.elapsed() > std::time::Duration::from_secs(5) {
+                    break;
+                }
+            }
+            assert!(rt.state.feats.panel.is_none(), "no panel docked while the bars are measured");
             let inside = |rt: &rune::Runtime<App>, key: &str, outer: &str| {
                 let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{w}: {key} drawn"));
                 let (o, _) = rt.presented(outer).unwrap();
