@@ -49,12 +49,15 @@ pub fn card(c: &J, groups: &J, all: bool, focus: Option<&str>) -> J {
     let sb = c["sandbox"].as_str().unwrap_or("");
     let thread = c["thread"].as_str().unwrap_or("");
     let marks: Vec<J> = c["marks"].as_array().into_iter().flatten().map(|m| json!({ "label": m["label"], "tone": m["tone"], "help": m["help"] })).collect();
-    let red = c["marks"].as_array().into_iter().flatten().any(|m| m["tone"] == "red");
+    // Failed or refused work: a red edge (a priority is not a failure).
+    let red = c["marks"].as_array().into_iter().flatten().any(|m| matches!(m["id"].as_str(), Some("failed" | "merge_failed" | "refused")));
     let can = &c["can"];
+    // The whole title in the tooltip only when the card cuts it (and its sandbox in All).
+    let cut = c["title_long"] != c["title"] || c["title_short"] != c["title"];
     let help = match c["title"].as_str() {
         Some(t) if all => format!("{t}\n{sb}"),
-        Some(t) => t.to_string(),
-        None => String::new(),
+        Some(t) if cut => t.to_string(),
+        _ => String::new(),
     };
     json!({
         "id": id,
@@ -63,7 +66,7 @@ pub fn card(c: &J, groups: &J, all: bool, focus: Option<&str>) -> J {
         "thread_card": c["n"].is_null(),
         "title": c["title_short"],
         "title_long": c["title_long"],
-        "help": help,
+        "help": if help.is_empty() { J::Null } else { help.into() },
         "thread": if thread.is_empty() { J::Null } else { thread.into() },
         "thread_tone": c["thread_tone"],
         "thread_color": if thread.is_empty() { J::Null } else { crate::feat::worktrees::graph::lane_color(thread).into() },

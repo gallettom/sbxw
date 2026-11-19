@@ -447,8 +447,7 @@ impl Priority {
     }
     pub fn tone(self) -> &'static str {
         match self {
-            Priority::P1 => "red",
-            Priority::P2 => "amber",
+            Priority::P1 => "amber",
             _ => "neutral",
         }
     }

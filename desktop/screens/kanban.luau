@@ -29,7 +29,7 @@ local function scope(ui)
 end
 
 local function marks(c)
-  local r = { gap = 4 }
+  local r = { gap = 4, wrap = true, w = "full" }
   for _, m in ipairs(c.marks or {}) do
     r[#r + 1] = badge{ m.label, tone = m.tone or "neutral", help = m.help }
   end
@@ -45,12 +45,12 @@ local function card(c, wide)
       c.team_color and column{ w = 8, h = 8, radius = 2, fill = c.team_color, help = c.team_help } or false,
       text{ c.num or "", size = "xs", mono = true, color = c.thread_card and "text-dim" or "text-muted", help = c.thread_card and "A thread with no ticket: its plan's goal" or nil },
       spacer{},
-      marks(c) },
-    text{ wide and (c.title_long or "") or (c.title or ""), size = "sm", wrap = true, color = "text-bright" },
-    row{ gap = 8, w = "full",
-      c.thread and dot{ tone = c.thread_tone or "neutral" } or false,
-      c.thread and text{ c.thread, size = "xs", mono = true, color = c.thread_color or "text-muted", truncate = true, grow = 1 } or spacer{},
       text{ c.age or "", size = "xs", color = "text-dim" } },
+    text{ wide and (c.title_long or "") or (c.title or ""), size = "sm", wrap = true, color = "text-bright" },
+    #(c.marks or {}) > 0 and marks(c) or false,
+    c.thread and row{ gap = 8, w = "full",
+      dot{ tone = c.thread_tone or "neutral" },
+      text{ c.thread, size = "xs", mono = true, color = c.thread_color or "text-muted", truncate = true, grow = 1 } } or false,
   }
 end
 

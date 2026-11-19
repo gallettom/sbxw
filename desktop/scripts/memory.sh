@@ -108,6 +108,14 @@ for k in RAIL:
         wait("commits-row-" + row, 5000)
         add(type="tap", key="commits-row-" + row); wait("commits-file-src/area0/File0.tsx", 5000)
         add(type="tap", key="commits-file-src/area0/File0.tsx"); hold(500)
+    if k == "rail-board":
+        # The Kanban, the Board's second view (60 tickets, 40 threads), and a ticket open.
+        wait("board-convo", 5000)
+        add(type="tap", key="board-view-kanban"); wait("kanban-lane-planned", 5000)
+        add(type="tap", key="kanban-sandbox"); wait("kanban-sandbox-list", 5000)
+        add(type="type", text="web-app", every=0.03); t += 0.3; hold(300)
+        add(type="tap", key="kanban-sandbox-web-app"); wait("kanban-row-t-web-app-1", 5000)
+        add(type="tap", key="kanban-row-t-web-app-1"); wait("kanban-panel", 5000); hold(500)
     if k == "rail-files":
         # It opens on the artifacts: the pictures there, then the workspace's 3,000-entry folder.
         wait("files-row-report.md", 5000)
