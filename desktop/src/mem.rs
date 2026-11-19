@@ -66,8 +66,13 @@ unsafe impl GlobalAlloc for Counting {
 /// make the count read a few bytes low.
 pub fn start() {
     if std::env::var_os("SBXW_DESKTOP_MEM").is_some_and(|v| !v.is_empty() && v != "0") {
-        ON.store(true, Relaxed);
+        count();
     }
+}
+
+/// Turns counting on (a test's own binary, with [`Counting`] as its allocator).
+pub fn count() {
+    ON.store(true, Relaxed);
 }
 
 /// Counting is on.
@@ -138,6 +143,33 @@ pub fn trim() {
         unsafe {
             malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
         }
+    }
+}
+
+/// [`trim`] off the UI thread, a moment after a large free (a terminal
+/// closed, its rows compacted, an overlay closed): never on the frame path.
+/// At most one waits at a time; `SBXW_DESKTOP_TRIM=0` turns it off (to
+/// compare the resident size with and without it).
+pub fn trim_soon() {
+    static WAITING: AtomicBool = AtomicBool::new(false);
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *OFF.get_or_init(|| std::env::var_os("SBXW_DESKTOP_TRIM").is_some_and(|v| v == "0")) {
+        return;
+    }
+    if WAITING.swap(true, Relaxed) {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("mem-trim".into()).spawn(|| {
+        // After the caller's frees (a dropped terminal's fields go after its
+        // `drop`), and after a burst of closes.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        WAITING.store(false, Relaxed);
+        let t = std::time::Instant::now();
+        trim();
+        log::debug!("memory handed back to the system in {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+    });
+    if spawned.is_err() {
+        WAITING.store(false, Relaxed);
     }
 }
 

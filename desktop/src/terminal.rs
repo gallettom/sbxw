@@ -121,6 +121,9 @@ pub const SCROLLBACK: usize = 10_000;
 /// How long a size must hold before the daemon is told (a window drag sends
 /// one resize, not one a frame).
 pub const RESIZE_DEBOUNCE: f64 = 0.08;
+/// How long a narrower grid must hold before its rows are compacted (a
+/// window drag narrows it many times: one pass once it settles).
+pub const COMPACT_AFTER: Duration = Duration::from_secs(1);
 /// Half a blink period, in seconds.
 pub const BLINK: f64 = 0.53;
 
@@ -327,6 +330,11 @@ pub struct TerminalState {
     /// The heap's growth while parsing output and resizing (counting on,
     /// `SBXW_DESKTOP_MEM=1`): what alacritty's grids really hold, measured.
     pub grid_heap: i64,
+    /// A narrower grid since: its rows still hold the wider width's cells
+    /// (alacritty's `Row::shrink` keeps the capacity, and the history ring
+    /// reuses rows), so once the size has held [`COMPACT_AFTER`] they are
+    /// copied at their width ([`Self::compact_rows`]).
+    compact_at: Option<Instant>,
     wheel_acc: f32,
     gesture: Option<Gesture>,
     last_report_cell: Option<(usize, usize)>,
@@ -380,6 +388,14 @@ pub struct TerminalState {
     /// The pills each row drew (columns, round left, round right).
     #[cfg(test)]
     test_pills: Vec<Vec<(u16, u16, bool, bool)>>,
+}
+
+/// A closed terminal's grids are large (MEMORY.md): once they are freed,
+/// the allocator hands the memory back to the system.
+impl Drop for TerminalState {
+    fn drop(&mut self) {
+        crate::mem::trim_soon();
+    }
 }
 
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -463,6 +479,7 @@ impl TerminalState {
             build_time: Duration::ZERO,
             bytes_in: 0,
             grid_heap: 0,
+            compact_at: None,
             wheel_acc: 0.0,
             gesture: None,
             last_report_cell: None,
@@ -603,6 +620,9 @@ impl TerminalState {
             None => {}
         }
         let changed = self.poll_inner(settle, Some(tx));
+        if let Some(at) = self.compact_at {
+            tx.wake_after(at.saturating_duration_since(Instant::now()) + Duration::from_millis(1));
+        }
         // Blink while the cursor shows; it stays lit for a period after activity.
         let blinking = self.cursor_blink || self.term.cursor_style().blinking;
         if blinking && self.focused && self.cursor.is_some() {
@@ -670,6 +690,9 @@ impl TerminalState {
             }
         }
         changed |= self.drain_term_events();
+        if self.compact_at.is_some_and(|at| Instant::now() >= at) {
+            self.compact_rows();
+        }
         changed |= self.step_reconnect(tx);
         if changed || self.dirty {
             self.rebuild();
@@ -850,6 +873,9 @@ impl TerminalState {
         self.term = new_term(self.size, &self.input, &tev_tx);
         self.term_events = tev_rx;
         self.parser = Processor::new();
+        self.grid_heap = 0;
+        self.compact_at = None;
+        crate::mem::trim_soon();
         self.gesture = None;
         self.hover_link = None;
         self.backoff = Duration::from_millis(500);
@@ -1020,6 +1046,9 @@ impl TerminalState {
     fn set_grid(&mut self, cols: usize, rows: usize) {
         if (cols, rows) == self.size {
             return;
+        }
+        if cols < self.size.0 {
+            self.compact_at = Some(Instant::now() + COMPACT_AFTER);
         }
         self.size = (cols, rows);
         let before = crate::mem::live();
@@ -1199,6 +1228,33 @@ impl TerminalState {
     /// How many lines the view is scrolled up into the history.
     pub fn display_offset(&self) -> usize {
         self.term.grid().display_offset()
+    }
+
+    /// Copies every row (history and screen) at the grid's width: a row
+    /// that was wider keeps its old cells' room otherwise (MEMORY.md, "Rows
+    /// keep their widest width"). Nothing drawn changes: the same cells, in
+    /// the same rows. Then hands the freed memory back ([`crate::mem::trim_soon`]).
+    pub fn compact_rows(&mut self) {
+        use alacritty_terminal::grid::Row;
+        self.compact_at = None;
+        let t = crate::perf::start();
+        let before = crate::mem::live();
+        let grid = self.term.grid_mut();
+        let (history, screen) = (grid.history_size() as i32, grid.screen_lines() as i32);
+        for l in -history..screen {
+            let row = &mut grid[Line(l)];
+            // `occ` (how many cells may differ from the default) is the
+            // crate's own: all of them is always right, a reset just clears
+            // the whole row once.
+            let cells = row[..].to_vec();
+            let n = cells.len();
+            *row = Row::from_vec(cells, n);
+        }
+        if let (Some(a), Some(b)) = (before, crate::mem::live()) {
+            self.grid_heap += b as i64 - a as i64;
+        }
+        crate::perf::done(t, || format!("terminal rows compacted ({} lines)", history + screen));
+        crate::mem::trim_soon();
     }
 
     /// What this terminal holds (MEMORY.md): lines kept (history and
