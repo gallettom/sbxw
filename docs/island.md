@@ -94,9 +94,26 @@ sandbox's token.
 | `UserPromptSubmit` | `working` (captures your prompt) |
 | `PreToolUse` (`AskUserQuestion`) | `attention`, with every question of the call |
 | `PreToolUse` / `PostToolUse` (other) | `working` (the tool as activity) |
-| `Notification` | `attention` (permission or idle nudge) |
+| `Notification`: `permission_prompt`, `worker_permission_prompt`, `elicitation_dialog`, `elicitation_url_dialog`, `agent_needs_input`, or no type | `attention` |
+| `Notification`: `idle_prompt` | `idle` |
+| `Notification`: any other type | unchanged |
+| a subagent's `PreToolUse` / `PostToolUse` (`agent_id` set) | unchanged, except that it ends an `attention` with no question pending |
 | `Stop` | `idle` (with Claude's reply) |
 | `SessionEnd` | `exited` |
+
+`attention` ("wants you") means the session cannot go on without the
+person: a permission prompt, a question, an elicitation, a dialog. Claude
+Code sends `Notification` for news too (a teammate or background agent
+finished, an elicitation answered, a push the model sent, a usage limit
+reset, a login), with the type saying which; those change nothing, and a
+type the daemon does not know is read as news. A `Notification` with no
+type comes from a Claude Code older than `notification_type`, or from one of
+today's dialogs that names none ("Claude needs your permission", a plan to
+approve), so it still reads as `attention`. The idle reminder (a minute
+into an open prompt) is `idle`, never `attention`: it also settles a turn
+cut short with Esc, which fires no `Stop`. Any evidence of work or of an
+answer ends `attention`: a prompt (the person's or an injected message), a
+tool call or result of the session, `Stop`, `SessionEnd`.
 
 A session's last payload says `ended: true` with an `end_reason`, and a new
 session says which one it `continues` when the daemon can tell (the same

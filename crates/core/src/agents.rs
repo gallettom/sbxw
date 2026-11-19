@@ -12,7 +12,10 @@
 //! | `UserPromptSubmit` | working (captures the prompt) |
 //! | `PreToolUse` `AskUserQuestion` | attention + the structured question |
 //! | `PreToolUse` / `PostToolUse` | working (the tool is the activity) |
-//! | `Notification` | attention (`idle_prompt`: idle; `auth_success`: unchanged) |
+//! | `Notification` [`SUMMONS_NOTIFICATIONS`] or untyped | attention |
+//! | `Notification` `idle_prompt` | idle |
+//! | `Notification` any other type | unchanged (a notice) |
+//! | a subagent's (`agent_id`) `PreToolUse` / `PostToolUse` | unchanged, but answers a permission prompt |
 //! | `Stop` | idle (captures the reply) |
 //! | `SessionEnd` | exited, dropped |
 
@@ -322,6 +325,11 @@ impl<'a> HookEvent<'a> {
     pub fn is_background(&self) -> bool {
         self.body.get("background").and_then(Value::as_str).is_some()
     }
+    /// From within a subagent: Claude Code adds `agent_id` to the hook input
+    /// of a subagent's tool calls, under its parent's `session_id`.
+    pub fn subagent(&self) -> bool {
+        !self.str("agent_id").is_empty()
+    }
     pub fn strings(&self, k: &str) -> Vec<String> {
         self.body
             .get(k)
@@ -421,9 +429,59 @@ pub fn describe_tool(tool: &str, input: Option<&Value>) -> String {
     }
 }
 
+/// The `Notification` types that mean the session cannot go on without the
+/// person: a permission prompt (its own, or a sandboxed worker's), an MCP
+/// elicitation dialog, a dialog Claude Code files as "needs your input". From
+/// Claude Code 2.1's own list of types; every other type is a notice
+/// (`agent_completed`, `elicitation_complete`, `elicitation_response`,
+/// `push_notification`, `quota_auto_resume_*`, `computer_use_*`, ...), and so
+/// is a type this list has never heard of.
+pub const SUMMONS_NOTIFICATIONS: &[&str] = &[
+    "permission_prompt",
+    "worker_permission_prompt",
+    "elicitation_dialog",
+    "elicitation_url_dialog",
+    "agent_needs_input",
+];
+
+/// What a `Notification` says of the session.
+#[derive(Debug, PartialEq, Eq)]
+enum Notice {
+    /// It waits on the person.
+    Summons,
+    /// The idle reminder: the prompt is open, nothing is asked.
+    Idle,
+    /// News: changes nothing.
+    Info,
+}
+
+fn notice(kind: &str) -> Notice {
+    match kind {
+        "idle_prompt" => Notice::Idle,
+        // No type: a Claude Code from before `notification_type`, or one of
+        // today's dialogs that names none ("Claude needs your permission", a
+        // plan to approve, a paused session). Each of those is a dialog open
+        // on the person, so the old reading stands.
+        "" => Notice::Summons,
+        k if SUMMONS_NOTIFICATIONS.contains(&k) => Notice::Summons,
+        _ => Notice::Info,
+    }
+}
+
 /// Fold an event into a status. `true` when the session ended.
 fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
     let body = event.body;
+    // A subagent's tool calls come under its parent's session, marked with
+    // `agent_id`. They are not the parent's turn: an idle parent stays idle
+    // (a background helper works, the person can type) and its activity stays
+    // its own. They only answer a permission prompt (one of theirs, most
+    // likely, since the parent waits on them); a pending question stays.
+    if event.subagent() && matches!(event.event(), "PreToolUse" | "PostToolUse") && event.tool() != "AskUserQuestion" {
+        if st.state == SessionState::Attention && st.prompt.is_empty() {
+            st.state = SessionState::Working;
+        }
+        return false;
+    }
     match event.event() {
         "SessionStart" => {
             st.state = SessionState::Idle;
@@ -473,19 +531,24 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
         // with Esc fires no `Stop`, so this is the only word that settles it;
         // without it the session reads as working (or, after a rejected
         // permission prompt, as wanting you) until the next prompt.
-        "Notification" if event.str("notification_type") == "idle_prompt" => {
-            st.state = SessionState::Idle;
-            st.prompt.clear();
-            st.activity = None;
-        }
-        // A login finishing is news to nobody watching the strip.
-        "Notification" if event.str("notification_type") == "auth_success" => {}
-        "Notification" => {
-            st.state = SessionState::Attention;
-            if let Some(m) = body.get("message").and_then(Value::as_str) {
-                st.activity = Some(clip(m, 120));
+        "Notification" => match notice(event.str("notification_type")) {
+            Notice::Idle => {
+                st.state = SessionState::Idle;
+                st.prompt.clear();
+                st.activity = None;
             }
-        }
+            Notice::Summons => {
+                st.state = SessionState::Attention;
+                if let Some(m) = body.get("message").and_then(Value::as_str) {
+                    st.activity = Some(clip(m, 120));
+                }
+            }
+            // A login finishing, a teammate done, an elicitation answered, a
+            // push the model sent: news. Above all not a summons while the
+            // session works (the reported case: a notice during a foreground
+            // `cargo test` lit "wants you" until the tool ended).
+            Notice::Info => {}
+        },
         "Stop" => {
             st.state = SessionState::Idle;
             st.prompt.clear();
