@@ -453,12 +453,15 @@ impl State {
     fn rows(&self, cx: &Ctx) -> Vec<J> {
         let waiting = Self::waiting(cx);
         let o = model::Opts { expanded: Some(&self.expanded), all: self.team.is_none(), now_s: crate::feat::files::view::now_secs(), waiting: Some(&waiting) };
-        let groups = cx.get("app")["groups"].clone();
-        let mut rows = model::rows(&self.events(), &o);
+        let groups = &cx.get("app")["groups"];
+        let events = self.events();
+        let mut rows = model::rows(&events, &o);
         if self.team.is_none() {
+            // Each row's team's sandbox colour (a commit group's id is its own).
+            let sb_of: BTreeMap<&str, &str> = self.timelines.keys().filter_map(|id| self.team_row(id).and_then(|t| t["sandbox"].as_str()).map(|sb| (id.as_str(), sb))).collect();
             for r in rows.iter_mut() {
-                if let Some(sb) = self.events().iter().find(|e| e["id"] == r["id"]).and_then(|e| e["team_sandbox"].as_str().map(str::to_string)) {
-                    r["team_color"] = groups[sb.as_str()].clone();
+                if let Some(sb) = r["team"].as_str().and_then(|t| sb_of.get(t)) {
+                    r["team_color"] = groups[*sb].clone();
                 }
             }
         }
@@ -524,8 +527,9 @@ impl State {
             .iter()
             .map(|n| {
                 let warn = n["kind"] == "warning";
+                // A team note's pinned decisions and warnings say where they came from.
                 let (who, color) = model::who(n["by"].as_str().unwrap_or(""));
-                json!({ "id": n["id"], "label": if warn { "Warning" } else { "Decision" }, "tone": if warn { "amber" } else { "green" }, "who": who, "who_color": color, "text": n["text"], "files": n["files"], "guess": n["guess"] })
+                json!({ "id": n["id"], "label": if warn { "Warning" } else { "Decision" }, "tone": if warn { "amber" } else { "green" }, "who": who, "who_color": color, "text": n["text"], "files": n["files"], "guess": n["guess"], "via": if n["team_note"] == true { "team note" } else { "board" } })
             })
             .collect();
         let list: Vec<J> = t.commits["list"].as_array().cloned().unwrap_or_default();

@@ -30,6 +30,8 @@ pub fn agent_routes() -> Router<Arc<App>> {
         .route("/api/board/after", post(after))
         .route("/api/board/force_release", post(force_release))
         .route("/api/board/approve_extension", post(approve_extension))
+        .route("/api/team/note", post(team_note))
+        .route("/api/team/notes", post(team_notes))
 }
 
 pub fn ui_routes() -> Router<Arc<App>> {
@@ -167,6 +169,34 @@ async fn approve_extension(State(app): S, Agent(me): Agent, Json(b): Json<Body>)
     lead_only(&b.thread)?;
     let extended = app.board_approve_extension(&me.to_string(), &b.files)?;
     Ok(ok_with(json!({ "extended": extended })))
+}
+
+#[derive(Deserialize)]
+struct TeamNoteBody {
+    #[serde(default)]
+    thread: Option<String>,
+    to: String,
+    kind: String,
+    text: String,
+}
+
+fn thread_name(raw: &Option<String>) -> Result<Option<ThreadName>, ApiError> {
+    Ok(raw.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(ThreadName::parse).transpose()?)
+}
+
+/// `team_note`: a lead or thread writes to its team; recorded on the
+/// timeline, the addressees told a note waits.
+async fn team_note(State(app): S, Agent(me): Agent, Json(b): Json<TeamNoteBody>) -> ApiResult {
+    let thread = thread_name(&b.thread)?;
+    let (note, told) = app.team_note(&me, thread.as_ref(), &b.to, &b.kind, &b.text).map_err(ApiError::bad)?;
+    Ok(ok_with(json!({ "note": note, "told": told })))
+}
+
+/// `read_team_notes`: the notes for the caller not handed yet.
+async fn team_notes(State(app): S, Agent(me): Agent, Json(b): Json<Body>) -> ApiResult {
+    let thread = thread_name(&b.thread)?;
+    let notes = app.team_notes_read(&me, thread.as_ref()).map_err(ApiError::bad)?;
+    Ok(ok_with(json!({ "notes": notes })))
 }
 
 async fn board(State(app): S, Path(name): Path<String>) -> ApiResult {

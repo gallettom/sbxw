@@ -210,6 +210,20 @@ pub fn row(ev: &J, o: &Opts) -> J {
             with_text(&mut r, &id, text, o);
             r["files"] = data["files"].clone();
         }
+        "team_note" => {
+            // Sent through sbxw (`team_note`): labelled by what it says it is.
+            r["type"] = "note".into();
+            let (lab, tone, look) = match data["kind"].as_str() {
+                Some("warning") => ("Warning", "amber", "board_warning"),
+                Some("decision") => ("Decision", "green", "board_decision"),
+                _ => ("Info", "blue", "board_question"),
+            };
+            r["label"] = lab.into();
+            r["tone"] = tone.into();
+            r["look"] = look.into();
+            r["note_via"] = "team note".into();
+            with_text(&mut r, &id, text, o);
+        }
         "user_question" | "user_answer" | "relay_question" | "relay_drafted" | "relay_answer" | "screenshot_asked" | "screenshot_given" | "relay_refused" | "relay_routed" | "board_question_reply" => {
             r["type"] = "question".into();
             with_text(&mut r, &id, text, o);

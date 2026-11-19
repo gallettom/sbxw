@@ -12,7 +12,8 @@ use crate::store::write_atomic;
 use sbxw_core::plans::{MergeState, Plan, Variant};
 use sbxw_core::relay::RelayRequest;
 use sbxw_core::team::{self, Filter, TeamCommit};
-use sbxw_core::SandboxRef;
+use sbxw_core::session::{SessionKey, SessionKind};
+use sbxw_core::{SandboxRef, ThreadName};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -183,7 +184,7 @@ impl App {
             "team": team::team_row(&plan, log.entries.last().map(|e| e.at)),
             "events": events,
             "more": more,
-            "standing": team::standing_notes(&plan, &board, now),
+            "standing": team::standing_notes(&plan, &board, &log, now),
             "relay_text_kept": team::KEEP_RELAY_TEXT,
         });
         if before.is_none() {
@@ -203,6 +204,90 @@ impl App {
             });
         }
         Ok(out)
+    }
+}
+
+/// The last team note each reader was handed, by (plan, reader). In memory:
+/// after a restart a reader is handed its notes again once.
+type NoteCursors = Mutex<HashMap<(String, String), u64>>;
+
+fn note_cursors() -> &'static NoteCursors {
+    static C: OnceLock<NoteCursors> = OnceLock::new();
+    C.get_or_init(Default::default)
+}
+
+impl App {
+    /// `team_note`: an agent of a team (`thread`, or the lead) writes to
+    /// `to` (`lead`, a thread of its plan, or `team`). Recorded on the
+    /// team's timeline, then each addressee whose session is open is typed
+    /// one line of sbxw's own that says a note waits (never the note's
+    /// words), as a relay question is announced; it reads the note with
+    /// `read_team_notes`. Returns the note's line on the log and who was told.
+    pub fn team_note(self: &std::sync::Arc<Self>, sandbox: &SandboxRef, thread: Option<&ThreadName>, to: &str, kind: &str, text: &str) -> Result<(u64, Vec<String>), String> {
+        if !team::NOTE_KINDS.contains(&kind) {
+            return Err(format!("kind is one of {}", team::NOTE_KINDS.join(", ")));
+        }
+        let text = sbxw_core::messages::clip_text(text, team::MAX_TEXT);
+        if text.is_empty() {
+            return Err("a note needs text".into());
+        }
+        let me = thread.map_or(team::LEAD.to_string(), |t| t.to_string());
+        let to = to.trim();
+        let (id, seq, sessions) = {
+            let mut plans = self.plans.lock().unwrap();
+            let id = plans
+                .plan_for_request(&sandbox.to_string(), thread.map(|t| t.as_str()))
+                .ok_or("you are in no team: team_note is for a lead and its threads")?;
+            let plan = plans.get(&id).cloned().ok_or("no plan")?;
+            let names: Vec<String> = plan.threads.iter().map(|t| t.name.clone()).collect();
+            let valid = to == "team" || to == team::LEAD || names.iter().any(|n| n == to);
+            if !valid || to == me {
+                return Err(format!("to is \"lead\", \"team\" or a thread of your plan ({}), not yourself", names.join(", ")));
+            }
+            plans.note(&id, now_ms(), team::EventKind::TeamNote, &me, Some(to), Some(&text), json!({ "kind": kind }));
+            let seq = plans.log_of(&id).next;
+            let mut who: Vec<String> = match to {
+                "team" => std::iter::once(team::LEAD.to_string()).chain(names).collect(),
+                t => vec![t.to_string()],
+            };
+            who.retain(|w| w != &me);
+            (id, seq, who)
+        };
+        self.persist_team_logs(&sandbox.to_string());
+        self.team_changed(&id);
+        let mut told = vec![];
+        for w in sessions {
+            let kind_of = if w == team::LEAD { Some(SessionKind::Agent) } else { ThreadName::parse(&w).ok().map(SessionKind::Thread) };
+            let Some(k) = kind_of else { continue };
+            let key = match &k {
+                SessionKind::Thread(t) => SessionKey::thread(sandbox, t),
+                _ => SessionKey::agent(sandbox),
+            };
+            if !self.sessions.is_live(&key) {
+                continue;
+            }
+            let line = format!("[sbxw team note · {seq}] A {kind} from {me} for you: read it with the read_team_notes tool (MCP sbxw-relay).");
+            self.spawn_push(sandbox.clone(), k, line, None);
+            told.push(w);
+        }
+        tracing::info!("team: {me} of '{sandbox}' wrote note {seq} ({kind}) to {to}");
+        Ok((seq, told))
+    }
+
+    /// `read_team_notes`: the notes for the caller not handed yet, oldest
+    /// first, each `{from, kind, text, at, to}`.
+    pub fn team_notes_read(&self, sandbox: &SandboxRef, thread: Option<&ThreadName>) -> Result<Vec<Value>, String> {
+        let me = thread.map_or(team::LEAD.to_string(), |t| t.to_string());
+        let plans = self.plans.lock().unwrap();
+        let id = plans.plan_for_request(&sandbox.to_string(), thread.map(|t| t.as_str())).ok_or("you are in no team")?;
+        let log = plans.log_of(&id);
+        let mut cur = note_cursors().lock().unwrap();
+        let after = cur.get(&(id.clone(), me.clone())).copied().unwrap_or(0);
+        let notes = team::notes_for(&log, &me, after);
+        if let Some(last) = notes.last() {
+            cur.insert((id.clone(), me.clone()), last.seq);
+        }
+        Ok(notes.iter().map(|e| json!({ "from": e.from, "to": e.to, "kind": e.data["kind"], "text": e.text, "at": e.at })).collect())
     }
 }
 

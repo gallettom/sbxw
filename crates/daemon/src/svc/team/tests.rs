@@ -206,16 +206,51 @@ async fn a_plan_life_reads_as_one_ordered_timeline_with_its_commits() {
     assert_eq!(get(app.clone(), &format!("/api/teams/{}/timeline?group=nope", p.id)).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(get(app.clone(), "/api/teams/p-nope/timeline").await.0, StatusCode::NOT_FOUND);
 
-    // After a restart: the log is read back; the relay's memory is gone, so
-    // its texts are not shown (they were never written: KEEP_RELAY_TEXT).
+    // After a restart: the log is read back, the relay's texts with it (the
+    // person's choice, KEEP_RELAY_TEXT), clipped; never an image.
     let again = app_in(_d.path());
     again.store.update(&sb, |r| r.workspace = Some(w.to_path_buf())).unwrap();
     let (_, after) = get(again.clone(), &format!("/api/teams/{}/timeline", p.id)).await;
     assert_eq!(kinds(&after).iter().filter(|k| *k != "commit").count(), without_commits.len());
     let ra = after["events"].as_array().unwrap().iter().find(|e| e["kind"] == "relay_answer").unwrap().clone();
-    assert_eq!(ra["text"], Value::Null, "no relay text on disk");
+    assert_eq!(ra["text"], "in docs/style.md", "kept with the plan");
+    let rq = after["events"].as_array().unwrap().iter().find(|e| e["kind"] == "relay_question").unwrap().clone();
+    assert_eq!(rq["text"], "where is the style guide?");
     let file = std::fs::read_to_string(again.store.paths.plans().join("team").join("myapp.json")).unwrap();
-    assert!(!file.contains("docs/style.md") && !file.contains("9090") && !file.contains("style guide"), "relay text is not written");
+    assert!(file.contains("docs/style.md") && !file.contains("b64"), "the text is kept, no image");
+}
+
+#[tokio::test]
+async fn a_team_note_is_on_the_timeline_and_read_once_by_its_addressees() {
+    let (_d, app) = app();
+    let sb = SandboxRef::parse("myapp").unwrap();
+    let p = app.plan_propose(&sb, "Notes", vec![t("a"), t("b")], Variant::Split, "x", Some("Lead")).await.unwrap();
+    app.plans.lock().unwrap().approve(&p.id, vec![t("a"), t("b")], None, None, crate::app::now_ms()).unwrap();
+    let a = ThreadName::parse("a").unwrap();
+    // The lead to a; a to the whole team.
+    let (_, told) = app.team_note(&sb, None, "a", "info", "The fixtures moved to tests/data.").unwrap();
+    assert!(told.is_empty(), "no session open: recorded, nobody typed to");
+    tick();
+    app.team_note(&sb, Some(&a), "team", "warning", "Do not touch the money helper today.").unwrap();
+    // Refused: an unknown kind, an addressee outside the plan, oneself, no team.
+    assert!(app.team_note(&sb, None, "a", "order", "x").is_err());
+    assert!(app.team_note(&sb, None, "zz", "info", "x").is_err());
+    assert!(app.team_note(&sb, Some(&a), "a", "info", "x").is_err());
+    assert!(app.team_note(&SandboxRef::parse("other").unwrap(), None, "a", "info", "x").is_err());
+    // On the timeline, as notes, from whom to whom.
+    let (_, v) = get(app.clone(), &format!("/api/teams/{}/timeline?group=notes", p.id)).await;
+    let notes: Vec<(String, String, String)> = v["events"].as_array().unwrap().iter().rev().map(|e| (e["from"].as_str().unwrap().into(), e["to"].as_str().unwrap().into(), e["data"]["kind"].as_str().unwrap().into())).collect();
+    assert_eq!(notes, [("lead".into(), "a".into(), "info".into()), ("a".into(), "team".into(), "warning".into())]);
+    assert_eq!(v["standing"][0]["text"], "Do not touch the money helper today.", "a warning stands pinned");
+    // Each addressee reads its own once; the sender is not handed its own.
+    let mine = app.team_notes_read(&sb, Some(&a)).unwrap();
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0]["text"], "The fixtures moved to tests/data.");
+    assert!(app.team_notes_read(&sb, Some(&a)).unwrap().is_empty(), "once");
+    let lead = app.team_notes_read(&sb, None).unwrap();
+    assert_eq!((lead.len(), lead[0]["kind"].as_str()), (1, Some("warning")));
+    let b = app.team_notes_read(&sb, Some(&ThreadName::parse("b").unwrap())).unwrap();
+    assert_eq!(b.len(), 1, "to the team reaches every other session");
 }
 
 #[tokio::test]

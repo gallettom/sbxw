@@ -107,6 +107,8 @@ fn the_conversation_puts_each_act_on_its_side_with_its_kind() {
     let warn = find("board_warning");
     assert_eq!((warn["type"].as_str(), warn["label"].as_str(), warn["tone"].as_str()), (Some("note"), Some("Warning"), Some("amber")));
     assert_eq!(find("board_decision")["tone"], "green");
+    let note = find("team_note");
+    assert_eq!((note["type"].as_str(), note["label"].as_str(), note["tone"].as_str(), note["note_via"].as_str()), (Some("note"), Some("Info"), Some("blue"), Some("team note")));
     let answer = find("user_answer");
     assert_eq!(answer["side"], "right");
     assert_eq!(answer["questions"][1]["answer"], "50, people scroll anyway.");
@@ -161,7 +163,7 @@ fn filters_and_search_ask_the_daemon_and_the_rows_follow() {
     let (v, paths) = run(&mut st, &mut d, "board_filter", json!({ "group": "notes" }));
     assert!(paths[0].contains("group=notes"), "{paths:?}");
     let kinds: BTreeSet<&str> = v["rows"].as_array().unwrap().iter().filter(|r| r["type"] != "day").filter_map(|r| r["kind"].as_str()).collect();
-    assert_eq!(kinds, ["board_decision", "board_warning"].into_iter().collect());
+    assert_eq!(kinds, ["board_decision", "board_warning", "team_note"].into_iter().collect());
     let (v, paths) = run(&mut st, &mut d, "board_filter", json!({ "group": "all", "thread": "web-page" }));
     assert!(paths[0].contains("thread=web-page") && paths[0].contains("group=conversation"), "{paths:?}");
     assert!(v["rows"].as_array().unwrap().iter().filter(|r| r["type"] != "day").all(|r| r["who"] == "web-page" || r["to"] == "web-page" || r["kind"] == "thread_status"));

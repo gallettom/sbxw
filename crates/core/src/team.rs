@@ -35,12 +35,13 @@ pub const MAX_TEXT: usize = 2000;
 pub const PAGE_DEFAULT: usize = 100;
 pub const PAGE_MAX: usize = 500;
 /// Whether the text of relay requests (questions, answers) is written to the
-/// log on disk. Off: only who asked whom, the outcome, the times and the
-/// image count are kept; the text shows while the request is still in the
-/// relay's memory (30 minutes after it settles, until a restart). On: the
-/// text, clipped to [`MAX_TEXT`], is kept with the plan and pruned with it.
-/// The person decides (BOARD.md); images are never kept either way.
-pub const KEEP_RELAY_TEXT: bool = false;
+/// log on disk. On (the person's choice, BOARD.md): the text, clipped to
+/// [`MAX_TEXT`], is kept with the plan and pruned with it. Off: only who
+/// asked whom, the outcome, the times and the image count, the text shown
+/// while the relay still holds the request. Images are never kept.
+pub const KEEP_RELAY_TEXT: bool = true;
+/// What a team note (`team_note`) says it is.
+pub const NOTE_KINDS: &[&str] = &["info", "warning", "decision"];
 
 /// The person, the lead and sbxw as authors; a thread is its name.
 pub const USER: &str = "user";
@@ -86,6 +87,9 @@ pub enum EventKind {
     MergeResult,
     MergeFinished,
     Commit,
+    /// A note an agent of the team sent another, or the whole team, through
+    /// sbxw (`team_note`): `data.kind` is info, warning or decision.
+    TeamNote,
 }
 
 impl EventKind {
@@ -95,7 +99,7 @@ impl EventKind {
     pub fn group(self) -> &'static str {
         use EventKind::*;
         match self {
-            BoardDecision | BoardWarning | BoardHandoff | Conflict => "notes",
+            BoardDecision | BoardWarning | BoardHandoff | Conflict | TeamNote => "notes",
             BoardQuestion | RelayQuestion | RelayRouted | RelayDrafted | RelayAnswer | UserQuestion | UserAnswer | ScreenshotAsked | ScreenshotGiven | RelayRefused => "questions",
             Commit => "commits",
             Claim | Release => "claims",
@@ -596,18 +600,35 @@ pub fn page(all: &[Event], filter: &Filter, before: Option<&str>, limit: usize) 
     (page, start > 0)
 }
 
-/// The board's decisions and warnings that still stand for plan `p`: the
-/// latest of each, newest first, for the pinned notes.
-pub fn standing_notes(p: &Plan, board: &[BoardEntry], now: u64) -> Vec<Value> {
+/// The decisions and warnings that still stand for plan `p`, from the board
+/// and from team notes, newest first, for the pinned notes.
+pub fn standing_notes(p: &Plan, board: &[BoardEntry], log: &TeamLog, now: u64) -> Vec<Value> {
     let end = if team_state(p) == "merged" { p.updated_ms } else { now.max(p.updated_ms) };
-    let mut out: Vec<Value> = board_entries(p, board, end)
+    let mut out: Vec<(u64, Value)> = board_entries(p, board, end)
         .into_iter()
         .filter(|(e, _)| matches!(e.kind, BoardKind::Decision | BoardKind::Warning) && e.by != crate::board::SBXW)
-        .map(|(e, g)| json!({ "id": format!("b{}", e.id), "at": e.at, "kind": e.kind, "by": e.by, "to": e.to, "text": e.text, "files": e.files, "guess": g }))
+        .map(|(e, g)| (e.at, json!({ "id": format!("b{}", e.id), "at": e.at, "kind": e.kind, "by": e.by, "to": e.to, "text": e.text, "files": e.files, "guess": g })))
         .collect();
-    out.reverse();
+    out.extend(
+        log.entries
+            .iter()
+            .filter(|e| e.kind == EventKind::TeamNote && matches!(e.data["kind"].as_str(), Some("warning" | "decision")))
+            .map(|e| (e.at, json!({ "id": format!("l{}", e.seq), "at": e.at, "kind": e.data["kind"], "by": e.from, "to": e.to, "text": e.text, "files": [], "guess": false, "team_note": true }))),
+    );
+    out.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
     out.truncate(50);
-    out
+    out.into_iter().map(|(_, v)| v).collect()
+}
+
+/// The team notes addressed to `me` (by name, or to the whole team, not its
+/// own) after the log line `after`, oldest first.
+pub fn notes_for<'a>(log: &'a TeamLog, me: &str, after: u64) -> Vec<&'a LogEntry> {
+    log.entries
+        .iter()
+        .filter(|e| e.kind == EventKind::TeamNote && e.from != me)
+        .filter(|e| matches!(e.to.as_deref(), Some(t) if t == me || t == "team"))
+        .filter(|e| e.seq > after)
+        .collect()
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ DAY = 86_400_000
 T0 = 1794_902_400_000  # 2026-11-17 08:00 UTC
 seq = [0]
 def h(s): return hashlib.sha1(s.encode()).hexdigest()
-GROUP = {"board_decision":"notes","board_warning":"notes","board_handoff":"notes","conflict":"notes","board_question":"questions",
+GROUP = {"team_note":"notes","board_decision":"notes","board_warning":"notes","board_handoff":"notes","conflict":"notes","board_question":"questions",
  "relay_question":"questions","relay_routed":"questions","relay_drafted":"questions","relay_answer":"questions","user_question":"questions",
  "user_answer":"questions","screenshot_asked":"questions","screenshot_given":"questions","relay_refused":"questions","commit":"commits","claim":"claims","release":"claims"}
 def ev(at, kind, frm, text=None, to=None, data=None, prefix="l"):
@@ -42,6 +42,7 @@ run.append(ev(m(64), "user_question", "web-page", None, "user", {"relay": "r-11"
 run.append(ev(m(70), "user_answer", "user", None, "web-page", {"relay": "r-11", "relay_created": m(64), "relay_kind": "ask", "state": "approved", "shots": 0, "live": True,
   "questions": [{"id": "Q1", "title": "Empty state", "text": "When a filter matches no order, show the empty state's illustration or only the sentence?", "recommendation": "Only the sentence: the page stays light.", "answer": "Only the sentence."},
                 {"id": "Q2", "title": "Page size", "text": "How many orders a page: 25 or 50?", "recommendation": "25, as the v1 list.", "answer": "50, people scroll anyway."}]}))
+run.append(ev(m(71), "team_note", "lead", "The table component takes a page size now: pass 50, as you were told.", "web-page", {"kind": "info"}))
 run.append(ev(m(72), "relay_question", "docs-update", "Where is the style guide for the API docs, and does it want one example per route?", None, {"relay": "r-12", "relay_created": m(72), "relay_kind": "question", "state": "pending", "live": True}))
 run.append(ev(m(75), "relay_routed", "user", None, "docs", {"relay": "r-12", "relay_created": m(72), "relay_kind": "question", "state": "routed", "to_sandbox": "docs"}))
 run.append(ev(m(79), "relay_drafted", "docs", "docs/STYLE.md, section API. One request and one answer per route, trimmed to the fields that matter.", "user", {"relay": "r-12", "relay_created": m(72), "relay_kind": "question", "state": "answered", "live": True}))

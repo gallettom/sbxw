@@ -276,9 +276,10 @@ and each result, the board's notes and claims, the relay requests the team
 opened, and the commits of the team's branches. The desktop app's **Board**
 shows it as a conversation.
 
-It shows only what went through sbxw. Messages the lead and its threads send
-each other with Claude Code's own `SendMessage`, and what you type in a
-terminal, never reach the daemon and are not in it.
+It shows only what went through sbxw: what you type in a terminal never
+reaches it. Messages the lead and its threads send each other with Claude
+Code's own `SendMessage` go from session to session; `team_note` (below) is
+the way an agent puts a message where you can follow it.
 
 - `GET /api/teams`: every team, the latest active first, with its state
   (`proposed`, `running`, `done`, `merged`, `refused`, `closed`).
@@ -294,10 +295,16 @@ terminal, never reach the daemon and are not in it.
   `~/.sbxw/state/plans/team/<sandbox>.json` (the plans' 0700 folder), and is
   pruned with its plan. A plan from before shows what its state holds, with
   "time unknown" where sbxw never recorded one.
-- Relay requests appear as who asked whom, the outcome and the times; their
-  text shows while the relay still holds the request (30 minutes after it
-  settles, until the daemon restarts). It is not written to disk, and an
-  image never is.
+- Relay requests appear as who asked whom, the outcome and the times, with
+  their question and answer texts (2000 characters at most), kept with the
+  plan and pruned with it. An image never is.
+- **Team notes.** The lead and its threads have two relay tools for what
+  you should be able to follow: `team_note {to, kind, text}` (`to`: `lead`,
+  a thread, or `team`; `kind`: `info`, `warning` or `decision`) records the
+  note on the team's timeline and types one line of sbxw's own into each
+  addressee's open session saying a note waits (never the note's words);
+  `read_team_notes` hands the caller its notes once, framed as another
+  agent's data. Their decisions and warnings stand pinned beside the board's.
 - Commits: each thread's branch against the main checkout, or once merged,
   the recorded merge commit's other side, so a thread's commits stay its own
   after the merge deletes its branch. No author email. A shared plan's

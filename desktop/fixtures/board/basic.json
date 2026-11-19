@@ -182,7 +182,7 @@
       }
      },
      {
-      "id": "l17",
+      "id": "l18",
       "at": 1795026960000,
       "kind": "thread_status",
       "group": "status",
@@ -195,7 +195,7 @@
       }
      },
      {
-      "id": "l16",
+      "id": "l17",
       "at": 1795026780000,
       "kind": "screenshot_asked",
       "group": "questions",
@@ -212,7 +212,7 @@
       }
      },
      {
-      "id": "l15",
+      "id": "l16",
       "at": 1795026720000,
       "kind": "thread_status",
       "group": "status",
@@ -267,7 +267,7 @@
       }
      },
      {
-      "id": "l14",
+      "id": "l15",
       "at": 1795026060000,
       "kind": "relay_answer",
       "group": "questions",
@@ -283,7 +283,7 @@
       }
      },
      {
-      "id": "l13",
+      "id": "l14",
       "at": 1795025940000,
       "kind": "relay_drafted",
       "group": "questions",
@@ -299,7 +299,7 @@
       }
      },
      {
-      "id": "l12",
+      "id": "l13",
       "at": 1795025700000,
       "kind": "relay_routed",
       "group": "questions",
@@ -315,7 +315,7 @@
       }
      },
      {
-      "id": "l11",
+      "id": "l12",
       "at": 1795025520000,
       "kind": "relay_question",
       "group": "questions",
@@ -328,6 +328,18 @@
        "relay_kind": "question",
        "state": "pending",
        "live": true
+      }
+     },
+     {
+      "id": "l11",
+      "at": 1795025460000,
+      "kind": "team_note",
+      "group": "notes",
+      "from": "lead",
+      "to": "web-page",
+      "text": "The table component takes a page size now: pass 50, as you were told.",
+      "data": {
+       "kind": "info"
       }
      },
      {
@@ -783,7 +795,7 @@
     },
     "events": [
      {
-      "id": "l27",
+      "id": "l28",
       "at": 1794913205000,
       "kind": "merge_finished",
       "group": "status",
@@ -799,7 +811,7 @@
       }
      },
      {
-      "id": "l26",
+      "id": "l27",
       "at": 1794913204000,
       "kind": "merge_result",
       "group": "status",
@@ -813,7 +825,7 @@
       }
      },
      {
-      "id": "l25",
+      "id": "l26",
       "at": 1794913202000,
       "kind": "merge_result",
       "group": "status",
@@ -827,7 +839,7 @@
       }
      },
      {
-      "id": "l24",
+      "id": "l25",
       "at": 1794913200000,
       "kind": "merge_started",
       "group": "status",
@@ -843,7 +855,7 @@
       }
      },
      {
-      "id": "l23",
+      "id": "l24",
       "at": 1794912900000,
       "kind": "merge_proposed",
       "group": "status",
@@ -859,7 +871,7 @@
       }
      },
      {
-      "id": "l22",
+      "id": "l23",
       "at": 1794912720000,
       "kind": "thread_status",
       "group": "status",
@@ -872,7 +884,7 @@
       }
      },
      {
-      "id": "l21",
+      "id": "l22",
       "at": 1794912600000,
       "kind": "thread_status",
       "group": "status",
@@ -885,7 +897,7 @@
       }
      },
      {
-      "id": "l20",
+      "id": "l21",
       "at": 1794912300000,
       "kind": "board_decision",
       "group": "notes",
@@ -981,7 +993,7 @@
       }
      },
      {
-      "id": "l19",
+      "id": "l20",
       "at": 1794909720000,
       "kind": "plan_approved",
       "group": "status",
@@ -997,7 +1009,7 @@
       }
      },
      {
-      "id": "l18",
+      "id": "l19",
       "at": 1794909600000,
       "kind": "plan_proposed",
       "group": "status",
@@ -1134,7 +1146,7 @@
     },
     "events": [
      {
-      "id": "l28",
+      "id": "l29",
       "at": 1795077000000,
       "kind": "plan_proposed",
       "group": "status",

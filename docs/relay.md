@@ -165,8 +165,9 @@ Routing, approving and refusing exist only on the UI listener, which sandboxes
 can't reach. Requests live in memory (`crates/core/src/relay.rs`): a settled
 one is kept 30 minutes for a late pickup, an unanswered one 6 hours. A
 request opened by a thread or lead of a plan is also noted on that team's
-timeline (`docs/threads-and-lead.md`): who asked whom, the outcome, the times
-and the image count, never the text or an image on disk.
+timeline (`docs/threads-and-lead.md`): who asked whom, the outcome, the
+times, the image count and the texts (2000 characters at most), kept with the
+plan; never an image.
 
 The daemon never decodes images. It checks each one is a `data:` URL of PNG,
 JPEG or WebP under the size cap, and the set is at most six and 16 MB.

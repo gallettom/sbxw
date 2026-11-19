@@ -104,9 +104,10 @@ local function rowview(r, sb)
       text{ r.text or "", size = "sm", color = "text-muted", wrap = true, max_w = math.min(560, CONV_W - 160) },
       team_tag(r), when(r), link(r.link, "board-link-" .. (r.id or "")) }
   elseif r.type == "note" then
-    local look = NOTE_LOOK[r.kind] or { "surface", "elevated" }
+    local look = NOTE_LOOK[r.look or r.kind] or { "surface", "elevated" }
     local kids = {
-      row{ gap = 4, icon{ ICON[r.tone] or "info", size = 12, color = r.tone == "neutral" and "text-muted" or r.tone }, text{ r.label, size = "sm", weight = "semibold", color = "text-bright" } },
+      row{ gap = 4, icon{ ICON[r.tone] or "info", size = 12, color = r.tone == "neutral" and "text-muted" or r.tone }, text{ r.label, size = "sm", weight = "semibold", color = "text-bright" },
+        nz(r.note_via) and text{ r.note_via, size = "xs", color = "text-muted", help = "Sent through sbxw with team_note" } or false },
       words(r.text or "", sb),
       fold_button(r),
     }
