@@ -143,9 +143,8 @@ fn an_event_changes_one_card_and_the_screen_builds_one_row_again() {
     let n = h.render(&d).unwrap();
     assert_eq!(built(&n), 9, "one row built again, not eight");
     let row = find(&n, "monitor-row-docs-site:s-docs-main").unwrap();
-    let mut all = vec![];
-    walk(row, &mut all);
-    assert!(all.iter().any(|x| x.text == "Edit guides/install.md"));
+    // One line a row: the activity is the row's tooltip (and the detail's "Now").
+    assert_eq!(row.help.as_deref(), Some("Edit guides/install.md"));
     // The same report again changes nothing, and hands no view over.
     assert!(no_hist(on_event(&Ctx { data: &d }, "session", &info)).is_empty());
     // While the view is closed, the card changes but no view is pushed.
@@ -1609,4 +1608,123 @@ fn a_session_waiting_on_its_background_work_reads_as_prose() {
     m.upsert(&json!({ "sandbox": "lab", "mode": "claude", "state": "working", "started_ms": 1, "ts": 2, "session_id": "a",
         "activity": "Waiting for its background command", "background": { "shells": 1, "agents": 0, "other": 0, "wakeups": 0 } }));
     assert_eq!((row(&m)["line"].clone(), row(&m)["mono"].clone()), (json!("Waiting for its background command"), json!(false)));
+}
+
+/// One line a row: nested under its leader, a thread row names the thread
+/// alone; long names clip, each with its whole name in its tooltip; the
+/// list's head clips its words, never what needs the person; an idle
+/// reply's status marker is a chip.
+#[test]
+fn rows_are_one_line_and_a_nested_thread_names_itself_alone() {
+    let long_sb = "a-sandbox-with-a-very-long-name-for-its-project";
+    let long_t = "a-thread-with-an-equally-long-name-of-its-own";
+    let mut d = data_of("basic");
+    d["sessions"][1]["sandbox"] = long_sb.into();
+    d["sessions"][1]["thread"] = long_t.into();
+    d["sandboxes"][0]["name"] = long_sb.into();
+    d["app"]["leads"] = json!({ "on": true, "leaders": ["shop-web"] });
+    let v = opened(&mut d);
+    d["monitor"] = v.clone();
+    let n = host().render(&d).unwrap();
+    let nested: Vec<&J> = v["rows"].as_array().unwrap().iter().filter(|r| r["indent"] == true).collect();
+    assert!(!nested.is_empty(), "Lead Mode: threads under their leader");
+    for r in &nested {
+        let k = r["key"].as_str().unwrap();
+        assert!(find(&n, &format!("monitor-row-sb-{k}")).is_none(), "{k}: no sandbox name under its leader");
+        assert_eq!(find(&n, &format!("monitor-row-name-{k}")).unwrap().text, r["name"].as_str().unwrap());
+    }
+    let leader = v["rows"].as_array().unwrap().iter().find(|r| r["indent"].is_null()).unwrap();
+    let k = leader["key"].as_str().unwrap();
+    assert!(find(&n, &format!("monitor-row-sb-{k}")).is_some(), "the leader's row names its sandbox");
+    // The plain list: every row its sandbox; long names with their tooltips.
+    d["app"]["leads"] = json!({ "on": false });
+    let v = opened(&mut d);
+    d["monitor"] = v.clone();
+    let n = host().render(&d).unwrap();
+    let r = v["rows"].as_array().unwrap().iter().find(|r| r["sandbox"] == long_sb).unwrap();
+    let k = r["key"].as_str().unwrap();
+    let sb = find(&n, &format!("monitor-row-sb-{k}")).unwrap();
+    assert!(sb.style.truncate && sb.help.as_deref() == Some(long_sb), "{:?}", sb.help);
+    let name = find(&n, &format!("monitor-row-name-{k}")).unwrap();
+    assert!(name.style.truncate && name.help.as_deref() == Some(name.text.as_str()) && name.text.contains(long_t));
+    assert!(name.style.min_w.unwrap_or(0.0) >= 48.0, "the thread keeps about 8 characters");
+    // The whole activity line is the row's tooltip; no second line of it.
+    let row = find(&n, &format!("monitor-row-{k}")).unwrap();
+    assert_eq!(row.help.as_deref(), r["line"].as_str());
+    let head = find(&n, "monitor-count").unwrap();
+    assert!(head.style.truncate && head.help.is_some(), "the head clips, whole in its tooltip");
+    assert!(!find(&n, "monitor-next").map_or(false, |x| x.style.truncate), "what needs you never clips");
+    // A status marker of an idle reply: a chip, its word only.
+    assert_eq!(super::model::chip_of_for_tests("[[Failed: 2 tests]] the build broke").as_deref(), Some("[[Failed]]"));
+    assert_eq!(super::model::chip_of_for_tests("no marker"), None);
+}
+
+/// The whole window: nothing of the list column leaves it (the divider, the
+/// scroll bar and the detail are not drawn over), at every width, in both
+/// modes; beside the detail the list is 280 pt.
+#[test]
+fn nothing_of_the_list_leaves_its_column_at_any_width_in_either_mode() {
+    use crate::shell::{view as shell_view, App};
+    let frames = |rt: &mut rune::Runtime<App>, n: usize| {
+        for _ in 0..n {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+        }
+    };
+    let mut bad = vec![];
+    let mut checked = 0;
+    for (w, h, file) in [(1284.0, 816.0, "basic"), (1284.0, 816.0, "long-names"), (760.0, 600.0, "long-names"), (500.0, 600.0, "basic"), (420.0, 700.0, "long-names")] {
+        for leads in [false, true] {
+            let fx = format!("{}/fixtures/monitor/{file}.json", env!("CARGO_MANIFEST_DIR"));
+            let a = App::new(crate::shell::Args { fixture: Some(fx), ..Default::default() });
+            let mut rt = rune::Runtime::new(a, shell_view, (w, h), rune::Env::new(true, 1.0));
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while !rt.state.link_quiet() {
+                frames(&mut rt, 1);
+                assert!(std::time::Instant::now() < end, "the fixture's link never settled");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            frames(&mut rt, 4);
+            if w < 700.0 {
+                rt.update(|s, _| s.toggle_sidebar());
+            }
+            let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_open", "args": {} })).unwrap();
+            rt.update(|s, _| l.into_iter().for_each(|i| s.run_intent("test", i)));
+            frames(&mut rt, 6);
+            if leads {
+                rt.update(|s, _| {
+                    if !s.leads_on() {
+                        s.toggle_leads();
+                    }
+                });
+                frames(&mut rt, 6);
+                assert!(rt.state.leads_on(), "{w}: Lead Mode on");
+            }
+            let Some((col, _)) = rt.presented("monitor-list-col") else { panic!("{w} {leads}: the list") };
+            let side = rt.presented("monitor-detail").is_some();
+            if side {
+                assert!((col[2] - 280.0).abs() < 1.0, "{w}: the list is {} wide", col[2]);
+            }
+            for e in rt.elements() {
+                let Some(k) = e.key.clone() else { continue };
+                if !(k.starts_with("monitor-row") || k == "monitor-count" || k == "monitor-calm" || k == "monitor-next") || e.exiting {
+                    continue;
+                }
+                // Scrolled out of view: clipped, not over its neighbours.
+                if e.visible[2] <= 0.5 || e.visible[3] <= 0.5 {
+                    continue;
+                }
+                // The laid-out box, not what a clip leaves of it.
+                let r = e.rect;
+                checked += 1;
+                if r[0] < col[0] - 0.5 || r[0] + r[2] > col[0] + col[2] + 0.5 {
+                    bad.push(format!("{file} at {w}, leads={leads}: {k} {r:?} leaves the list {col:?}"));
+                }
+            }
+        }
+    }
+    assert!(checked > 40, "{checked} checked");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
