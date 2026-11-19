@@ -143,6 +143,51 @@ pub struct SessionInfo {
     /// Boxed: every bus event carries a `SessionInfo`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<Box<Background>>,
+    /// `"background"` for a session Claude Code's harness runs with no
+    /// terminal of its own (its background sessions and the spares it keeps
+    /// ready for them: `CLAUDE_CODE_SESSION_KIND=bg`, or, from a hook older
+    /// than v4, an agent process started as a versioned binary). Never
+    /// sbxw's terminal's session: it is never answerable and does not count
+    /// among the sessions of its place. Absent for any other session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
+    /// When this session last reported an event of its own (ms), unlike
+    /// `ts`, which is when this payload was built: every event of a sandbox
+    /// re-sends all its sessions with the same `ts`. 0 when not known.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub event_ms: u64,
+    /// Why sbxw will not type into this session, when `answerable` is
+    /// false and it is not over. Absent for a thread's session (its own
+    /// terminal is how sbxw reaches it) and for an answerable one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unanswerable: Option<Unanswerable>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// Why a session cannot be typed into from sbxw, with the facts that say
+/// so. Machine-readable; the clients word it.
+#[derive(Clone, Copy, Serialize, Debug, PartialEq, Eq)]
+pub struct Unanswerable {
+    /// `background`: a harness background session, with no terminal.
+    /// `no_terminal`: sbxw holds no terminal for the sandbox's main session
+    /// (never opened in sbxw, or the daemon restarted since).
+    /// `remote`: the session came in over SSH or Claude Desktop, while
+    /// sbxw's terminal is another session's.
+    /// `old_hook`: several sessions, and one at least was reported by a
+    /// hook older than v3, whose dead records cannot be told from live ones.
+    /// `several_sessions`: several sessions share the sandbox and none or
+    /// more than one could be sbxw's terminal's.
+    pub reason: &'static str,
+    /// Sessions the daemon counts in that sandbox's main checkout (no
+    /// thread, not background), this one included when it is one.
+    pub sessions: usize,
+    /// Of those, how many look started from a terminal (`origin` tty).
+    pub tty: usize,
+    /// The oldest hook version among them (0: unknown).
+    pub hook_version: u64,
 }
 
 /// A session's own pending background work, as its last `Stop` listed it
@@ -261,6 +306,15 @@ struct Status {
     continues: Option<String>,
     last_input_from: Option<&'static str>,
     last_input_sender: Option<String>,
+    /// A harness background session ([`SessionInfo::kind`]). Never unset.
+    bg: bool,
+    /// The name of the agent process (`claude`, `2.1.328`), from the hook's
+    /// ancestry: which `live_procs` lists can speak for it.
+    agent_name: Option<String>,
+    /// The newest hook version that reported this session.
+    hook_version: u64,
+    /// When the session last sent an event.
+    event_ms: u64,
 }
 
 /// What a hook event says about where its session came from.
@@ -396,6 +450,31 @@ impl<'a> HookEvent<'a> {
     pub fn hook_version(&self) -> u64 {
         self.body.get("hook_version").and_then(Value::as_u64).unwrap_or(0)
     }
+    /// The agent process's name, as the hook found it: the first of its
+    /// ancestors (after the hook itself) that is not a shell. The same
+    /// process `agent_proc` names.
+    pub fn agent_name(&self) -> Option<String> {
+        let names = self.strings("ancestry");
+        names.iter().skip(1).find(|n| !LAUNCHERS.contains(&n.as_str())).filter(|n| !n.is_empty()).map(|n| clip(n, 40))
+    }
+    /// Claude Code's own word for the session (`CLAUDE_CODE_SESSION_KIND`,
+    /// forwarded by hook v4): `bg` for its background sessions.
+    pub fn session_kind(&self) -> Option<&'a str> {
+        Some(self.str("session_kind")).filter(|s| !s.is_empty())
+    }
+    /// A harness background session: Claude Code says so (hook v4), or its
+    /// agent process was started as a versioned binary (`2.1.328`), which is
+    /// how Claude Code starts its background sessions and never how a
+    /// terminal's `claude` runs. The second is a reading of the evidence
+    /// that only ever takes a session out of the answerable ones.
+    pub fn harness_background(&self) -> bool {
+        false // INERT: the failing tests' commit; the fix reads the evidence
+    }
+    /// The hook's `live_procs` covers every Claude-like process (hook v4),
+    /// not only those of the agent's own name.
+    pub fn live_scope_claude(&self) -> bool {
+        self.str("live_scope") == "claude"
+    }
     /// A session sbxw started in the background (a code map run): nobody
     /// attached it and no terminal holds it, so it is not the sandbox's agent.
     pub fn is_background(&self) -> bool {
@@ -413,6 +492,21 @@ impl<'a> HookEvent<'a> {
             .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
             .unwrap_or_default()
     }
+}
+
+/// What runs a command for the agent, not the agent (the hook's list).
+const LAUNCHERS: &[&str] = &["sh", "bash", "dash", "zsh", "fish", "env", "timeout"];
+
+/// A Claude Code binary started by its versioned path: `2.1.328`.
+pub fn version_shaped(name: &str) -> bool {
+    let parts: Vec<&str> = name.split('.').collect();
+    parts.len() >= 2 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The process names a v4 hook's `live_procs` covers (`live_scope:
+/// "claude"`): `claude` and the versioned binaries.
+fn claude_like(name: &str) -> bool {
+    name == "claude" || version_shaped(name)
 }
 
 /// Trim to one line and at most `max` chars.
@@ -763,9 +857,20 @@ impl AgentBook {
                 continues = self.ended.iter().rev().find(|(sb, pr, id)| sb == sandbox && pr == p && *id != key.session_id).map(|e| e.2.clone());
             }
             let live = (event.hook_version() >= crate::history::HOOK_VERSION_TRANSCRIPT).then(|| event.live_procs()).flatten();
+            // The names the list was made for: the hook lists the processes
+            // of its agent's name (v3), or every Claude-like one (v4). A
+            // record of another name is not in it whether it lives or not
+            // (a background session's `2.1.328` beside terminals' `claude`).
+            let name = event.agent_name();
+            let wide = event.live_scope_claude();
+            let covers = |theirs: Option<&str>| match theirs {
+                // INERT: the old rule, any list speaks for every record.
+                _ => { let _ = (&name, wide, claude_like as fn(&str) -> bool); true }
+            };
             // Records proven over: the same process now runs this session, or
             // their process is no longer alive. A record whose process is not
-            // known is never retired: no guess makes a terminal answerable.
+            // known, or that the list cannot speak for, is never retired: no
+            // guess makes a terminal answerable.
             let over: Vec<(AgentKey, &'static str)> = self
                 .statuses
                 .iter()
@@ -774,7 +879,7 @@ impl AgentBook {
                     let theirs = st.proc.as_deref()?;
                     if Some(theirs) == proc {
                         Some((k.clone(), "replaced"))
-                    } else if live.as_ref().is_some_and(|l| !l.iter().any(|x| x == theirs)) {
+                    } else if covers(st.agent_name.as_deref()) && live.as_ref().is_some_and(|l| !l.iter().any(|x| x == theirs)) {
                         Some((k.clone(), "process_gone"))
                     } else {
                         None
@@ -791,7 +896,11 @@ impl AgentBook {
         let st = self.statuses.entry(key.clone()).or_default();
         if let Some(p) = proc {
             st.proc = Some(p.to_string());
+            st.agent_name = event.agent_name();
         }
+        st.bg |= event.harness_background();
+        st.hook_version = st.hook_version.max(event.hook_version());
+        st.event_ms = now;
         if let Some(c) = continues.filter(|c| *c != key.session_id && !c.is_empty()) {
             st.continues.get_or_insert(c);
         }
@@ -983,26 +1092,51 @@ impl AgentBook {
         }
     }
 
+    /// The sessions of `sandbox` that could be its terminal's: every one
+    /// but the harness's background sessions.
     fn keys_of(&self, sandbox: &str) -> Vec<&AgentKey> {
-        self.statuses.keys().filter(|k| k.sandbox == sandbox).collect()
+        self.statuses.iter().filter(|(k, st)| k.sandbox == sandbox && !st.bg).map(|(k, _)| k).collect()
     }
 
     /// May sbxw type into the terminal of `key`? Only when sbxw's PTY is
     /// unambiguously that session's: a sandbox with one agent session, or
-    /// several of which exactly one was started from sbxw's tty.
-    fn is_answerable(&self, key: &AgentKey, has_pty: bool) -> bool {
-        if !has_pty {
-            return false;
-        }
+    /// several of which exactly one was started from sbxw's tty. A
+    /// background session is never it, and is not counted. `Err` says why
+    /// not.
+    fn why_not(&self, key: &AgentKey, has_pty: bool) -> Result<(), Unanswerable> {
         let siblings = self.keys_of(&key.sandbox);
-        if siblings.len() == 1 {
-            return true;
+        let main: Vec<&Status> = siblings.iter().filter_map(|k| self.statuses.get(*k)).filter(|s| s.thread.is_none()).collect();
+        let tty_keys: Vec<&&AgentKey> = siblings.iter().filter(|k| self.statuses.get(**k).is_some_and(|s| s.origin == SessionOrigin::Tty)).collect();
+        let me = self.statuses.get(key);
+        let mut why = Unanswerable {
+            reason: "several_sessions",
+            sessions: main.len(),
+            tty: main.iter().filter(|s| s.origin == SessionOrigin::Tty).count(),
+            hook_version: main.iter().map(|s| s.hook_version).min().unwrap_or(0),
+        };
+        if me.is_some_and(|s| s.bg) {
+            why.reason = "background";
+            return Err(why);
         }
-        let tty: Vec<&&AgentKey> = siblings
-            .iter()
-            .filter(|k| self.statuses.get(**k).is_some_and(|s| s.origin == SessionOrigin::Tty))
-            .collect();
-        tty.len() == 1 && **tty[0] == *key
+        if !has_pty {
+            why.reason = "no_terminal";
+            return Err(why);
+        }
+        if siblings.len() == 1 || (tty_keys.len() == 1 && **tty_keys[0] == *key) {
+            return Ok(());
+        }
+        why.reason = if me.is_some_and(|s| s.origin == SessionOrigin::Remote) && tty_keys.len() == 1 {
+            "remote"
+        } else if siblings.iter().filter_map(|k| self.statuses.get(*k)).any(|s| s.hook_version < crate::history::HOOK_VERSION_TRANSCRIPT) {
+            "old_hook"
+        } else {
+            "several_sessions"
+        };
+        Err(why)
+    }
+
+    fn is_answerable(&self, key: &AgentKey, has_pty: bool) -> bool {
+        self.why_not(key, has_pty).is_ok()
     }
 
     /// The one session of `sandbox` whose prompt sbxw may answer.
@@ -1017,7 +1151,7 @@ impl AgentBook {
 
     /// Before typing a chat message into a sandbox's agent: several sessions
     /// are fine if exactly one is the tty's; zero is fine (it is about to be
-    /// brought up).
+    /// brought up). Background sessions do not count.
     pub fn can_type_into(&self, sandbox: &str) -> Result<(), Ambiguous> {
         let keys = self.keys_of(sandbox);
         let tty = keys
@@ -1083,7 +1217,8 @@ impl AgentBook {
         self.statuses.retain(|k, st| {
             let go = gone(k, st);
             if go {
-                let mut info = build(k, st, false, now);
+                let mut info = build(k, st, Err(Unanswerable { reason: "ended", sessions: 0, tty: 0, hook_version: 0 }), now);
+                info.unanswerable = None;
                 info.state = SessionState::Exited;
                 info.ended = true;
                 info.end_reason = Some(reason.to_string());
@@ -1116,7 +1251,7 @@ impl AgentBook {
         self.statuses
             .iter()
             .filter(|(k, _)| k.sandbox == sandbox)
-            .map(|(k, st)| build(k, st, self.is_answerable(k, has_pty), now))
+            .map(|(k, st)| build(k, st, self.why_not(k, has_pty), now))
             .collect()
     }
 
@@ -1125,7 +1260,7 @@ impl AgentBook {
         let mut out: Vec<SessionInfo> = self
             .statuses
             .iter()
-            .map(|(k, st)| build(k, st, self.is_answerable(k, has_pty(&k.sandbox)), now))
+            .map(|(k, st)| build(k, st, self.why_not(k, has_pty(&k.sandbox)), now))
             .collect();
         out.sort_by(|a, b| {
             a.sandbox
@@ -1137,7 +1272,8 @@ impl AgentBook {
     }
 }
 
-fn build(key: &AgentKey, st: &Status, answerable: bool, now: u64) -> SessionInfo {
+fn build(key: &AgentKey, st: &Status, why: Result<(), Unanswerable>, now: u64) -> SessionInfo {
+    let answerable = why.is_ok();
     SessionInfo {
         sandbox: key.sandbox.clone(),
         mode: "claude".into(),
@@ -1167,6 +1303,9 @@ fn build(key: &AgentKey, st: &Status, answerable: bool, now: u64) -> SessionInfo
         ended: false,
         end_reason: None,
         background: st.background.filter(|_| st.state == SessionState::Working).map(Box::new),
+        kind: st.bg.then_some("background"),
+        event_ms: st.event_ms,
+        unanswerable: why.err().filter(|_| st.thread.is_none()),
     }
 }
 
@@ -1553,6 +1692,7 @@ mod tests {
             v["session_id"] = sid.into();
             v["hook_version"] = 3.into();
             v["agent_proc"] = p.into();
+            v["ancestry"] = json!(["node", "claude"]);
             v
         };
         let mut book = AgentBook::new();
@@ -1879,7 +2019,7 @@ mod tests {
     }
 
     fn start3(id: &str, proc: Option<&str>, live: Option<&[&str]>) -> Value {
-        let mut v = json!({"hook_event_name": "SessionStart", "session_id": id, "hook_version": 3});
+        let mut v = json!({"hook_event_name": "SessionStart", "session_id": id, "hook_version": 3, "ancestry": ["node", "claude"]});
         if let Some(p) = proc {
             v["agent_proc"] = json!(p);
         }
@@ -1982,5 +2122,197 @@ mod tests {
         assert_eq!(out[0].last_input_sender.as_deref(), Some("lead"));
         let json = serde_json::to_value(&out[0]).unwrap();
         assert!(json.get("ended").is_none() && json.get("continues").is_none(), "absent unless known");
+    }
+
+    // ---- Background sessions, retirement by name, the reason on the wire.
+
+    /// A v3 hook's event of a terminal's `claude` (ancestry as sbxw-2's hook
+    /// log shows it).
+    fn term(event: &str, id: &str, proc: &str) -> Value {
+        json!({"hook_event_name": event, "session_id": id, "hook_version": 3, "agent_proc": proc,
+            "ancestry": ["MainThread", "claude"], "cwd": "/w"})
+    }
+
+    /// A harness background session's start (a spare, or a `/bg` job): its
+    /// process is the versioned binary, and the hook listed only processes
+    /// of that name.
+    fn bg_start(id: &str, proc: &str, live: &[&str]) -> Value {
+        json!({"hook_event_name": "SessionStart", "session_id": id, "hook_version": 3, "agent_proc": proc,
+            "ancestry": ["MainThread", "2.1.328", "2.1.328", "claude"], "live_procs": live, "cwd": "/w"})
+    }
+
+    fn info_of<'a>(infos: &'a [SessionInfo], id: &str) -> &'a SessionInfo {
+        infos.iter().find(|i| i.session_id.as_deref() == Some(id)).expect("listed")
+    }
+
+    /// The user's sequence on sbxw-2: the daemon restarts; the lead's busy
+    /// session and four idle ones are interactive; a background spare starts.
+    /// Every interactive record survives the spare's start, the spare is its
+    /// own background record, and when the lead is the only tty session it
+    /// stays answerable.
+    #[test]
+    fn a_helper_s_start_after_a_restart_keeps_the_interactive_sessions() {
+        let mut book = AgentBook::new();
+        // The busy lead reports first (any event: the daemon knew nothing).
+        book.apply("sbxw-2", &ev(&term("PreToolUse", "lead", "100:5")), SessionOrigin::Tty, true, 1);
+        // Four idle interactive sessions act once each (they had been idle).
+        for (n, id) in ["i1", "i2", "i3", "i4"].iter().enumerate() {
+            book.apply("sbxw-2", &ev(&term("Stop", id, &format!("{}:6", 200 + n))), SessionOrigin::Tty, true, 2);
+        }
+        // The spare: the hook lists the `2.1.328` processes only.
+        let out = book.apply("sbxw-2", &ev(&bg_start("spare", "300:7", &["300:7", "301:7"])), SessionOrigin::Tty, true, 3);
+        assert!(out.iter().all(|i| !i.ended), "nothing retired: {:?}", out.iter().filter(|i| i.ended).map(|i| &i.session_id).collect::<Vec<_>>());
+        let snap = book.snapshot(|_| true, 4);
+        assert_eq!(snap.len(), 6, "five interactive and the spare");
+        let spare = info_of(&snap, "spare");
+        assert_eq!(spare.kind, Some("background"));
+        assert!(!spare.answerable);
+        assert_eq!(spare.unanswerable.map(|u| u.reason), Some("background"));
+        let lead = info_of(&snap, "lead");
+        assert_eq!(lead.kind, None);
+        assert_eq!(lead.unanswerable.map(|u| (u.reason, u.sessions, u.tty)), Some(("several_sessions", 5, 5)), "five terminals: nobody's, and it says how many");
+        assert!(lead.event_ms > 0 && spare.event_ms > lead.event_ms, "each says when it last reported");
+        // The lead alone beside the spare: answerable, the spare not counted.
+        let mut book = AgentBook::new();
+        book.apply("sbxw-2", &ev(&term("PreToolUse", "lead", "100:5")), SessionOrigin::Tty, true, 1);
+        book.apply("sbxw-2", &ev(&bg_start("spare", "300:7", &["300:7"])), SessionOrigin::Tty, true, 2);
+        let snap = book.snapshot(|_| true, 3);
+        assert!(info_of(&snap, "lead").answerable, "the only terminal session");
+        assert_eq!(info_of(&snap, "lead").unanswerable, None);
+        assert_eq!(book.answerable("sbxw-2").unwrap().session_id, "lead");
+        assert!(book.can_type_into("sbxw-2").is_ok());
+    }
+
+    /// Claude Code's own word (hook v4) marks a background session whatever
+    /// its process is named.
+    #[test]
+    fn claude_code_s_own_word_marks_a_background_session() {
+        let mut book = AgentBook::new();
+        let mut v = term("SessionStart", "job", "400:1");
+        v["hook_version"] = 4.into();
+        v["session_kind"] = "bg".into();
+        let out = book.apply("n", &ev(&v), SessionOrigin::Tty, true, 1);
+        assert_eq!(out[0].kind, Some("background"));
+        assert_eq!(out[0].unanswerable.map(|u| u.reason), Some("background"));
+        // Sticky: a later event without the word does not make it a terminal's.
+        let out = book.apply("n", &ev(&term("Stop", "job", "400:1")), SessionOrigin::Tty, true, 2);
+        assert_eq!(out[0].kind, Some("background"));
+        // An interactive session's v4 event says nothing of the kind.
+        let mut v = term("SessionStart", "me", "401:1");
+        v["hook_version"] = 4.into();
+        let out = book.apply("n", &ev(&v), SessionOrigin::Tty, true, 3);
+        assert_eq!(info_of(&out, "me").kind, None);
+        assert!(info_of(&out, "me").answerable, "the job is not counted");
+    }
+
+    /// The v3 reading (a versioned process name) is a heuristic in the safe
+    /// direction: a real terminal session whose process is named like a
+    /// version is shown as background, listed, and never answerable.
+    #[test]
+    fn a_version_named_terminal_is_shown_as_background_never_answerable() {
+        let mut book = AgentBook::new();
+        let mut v = term("SessionStart", "odd", "500:1");
+        v["ancestry"] = json!(["node", "bash", "2.1.300"]);
+        let out = book.apply("n", &ev(&v), SessionOrigin::Tty, true, 1);
+        assert_eq!(out.len(), 1, "listed, its own record");
+        assert_eq!(out[0].kind, Some("background"));
+        assert!(!out[0].answerable);
+        assert!(book.answerable("n").is_err());
+        assert_eq!(book.can_type_into("n"), Ok(()), "nothing to type into: the main session is brought up");
+    }
+
+    #[test]
+    fn a_background_session_alone_is_not_answerable() {
+        let mut book = AgentBook::new();
+        let out = book.apply("n", &ev(&bg_start("spare", "300:7", &["300:7"])), SessionOrigin::Tty, true, 1);
+        assert!(!out[0].answerable, "even with sbxw's terminal open, it is not that terminal's");
+        let u = out[0].unanswerable.unwrap();
+        assert_eq!((u.reason, u.sessions, u.tty), ("background", 0, 0));
+        assert!(book.answerable("n").is_err());
+        let wire = serde_json::to_value(&out[0]).unwrap();
+        assert_eq!(wire["kind"], "background");
+        assert_eq!(wire["unanswerable"]["reason"], "background");
+    }
+
+    #[test]
+    fn several_interactive_sessions_say_how_many() {
+        let mut book = AgentBook::new();
+        for (n, id) in ["a", "b", "c"].iter().enumerate() {
+            book.apply("n", &ev(&term("SessionStart", id, &format!("{}:1", 10 + n))), SessionOrigin::Tty, true, 1 + n as u64);
+        }
+        let snap = book.snapshot(|_| true, 9);
+        for i in &snap {
+            let u = i.unanswerable.expect("a reason");
+            assert_eq!((u.reason, u.sessions, u.tty, u.hook_version), ("several_sessions", 3, 3, 3));
+        }
+        // A thread's session carries none: its own terminal reaches it.
+        let mut t = term("SessionStart", "t", "20:1");
+        t["sbxw_thread"] = "t1".into();
+        let out = book.apply("n", &ev(&t), SessionOrigin::Remote, true, 10);
+        assert_eq!(info_of(&out, "t").unanswerable, None);
+        assert_eq!(info_of(&out, "a").unanswerable.unwrap().sessions, 3, "a thread is not in the main checkout");
+    }
+
+    #[test]
+    fn no_terminal_is_its_own_reason() {
+        let mut book = AgentBook::new();
+        book.apply("n", &ev(&term("SessionStart", "a", "10:1")), SessionOrigin::Tty, false, 1);
+        let snap = book.snapshot(|_| false, 2);
+        let u = snap[0].unanswerable.unwrap();
+        assert_eq!((u.reason, u.sessions, u.tty), ("no_terminal", 1, 1));
+        // The terminal opened: answerable, no reason.
+        let snap = book.snapshot(|_| true, 3);
+        assert!(snap[0].answerable && snap[0].unanswerable.is_none());
+    }
+
+    #[test]
+    fn an_old_hook_sandbox_says_so() {
+        let mut book = AgentBook::new();
+        let s = |id: &str| json!({"hook_event_name": "SessionStart", "session_id": id, "hook_version": 2});
+        book.apply("n", &ev(&s("a")), SessionOrigin::Tty, true, 1);
+        book.apply("n", &ev(&s("b")), SessionOrigin::Tty, true, 2);
+        let snap = book.snapshot(|_| true, 3);
+        let u = snap[0].unanswerable.unwrap();
+        assert_eq!((u.reason, u.sessions, u.hook_version), ("old_hook", 2, 2));
+        // A remote session beside the one terminal session says it is remote.
+        let mut book = AgentBook::new();
+        book.apply("n", &ev(&term("SessionStart", "a", "10:1")), SessionOrigin::Tty, true, 1);
+        let out = book.apply("n", &ev(&term("SessionStart", "ssh", "11:1")), SessionOrigin::Remote, true, 2);
+        assert_eq!(info_of(&out, "ssh").unanswerable.map(|u| u.reason), Some("remote"));
+        assert!(info_of(&out, "a").answerable);
+    }
+
+    /// Retirement never drops a live interactive session because a list
+    /// was made for another name, and a v4 list made for every Claude-like
+    /// process still retires the dead ones of either name.
+    #[test]
+    fn retirement_never_drops_a_live_interactive_session() {
+        let mut book = AgentBook::new();
+        book.apply("n", &ev(&term("SessionStart", "a", "10:1")), SessionOrigin::Tty, true, 1);
+        book.apply("n", &ev(&bg_start("spare", "300:7", &["300:7"])), SessionOrigin::Tty, true, 2);
+        // Another spare, the first gone: only the old spare (same name) goes.
+        let out = book.apply("n", &ev(&bg_start("spare2", "301:7", &["301:7"])), SessionOrigin::Tty, true, 3);
+        let ended: Vec<_> = out.iter().filter(|i| i.ended).map(|i| i.session_id.clone().unwrap()).collect();
+        assert_eq!(ended, vec!["spare".to_string()]);
+        // A terminal's start lists `claude` processes: the spare is kept.
+        let out = book.apply("n", &ev(&start3("b", Some("11:1"), Some(&["10:1", "11:1"]))), SessionOrigin::Tty, true, 4);
+        assert!(out.iter().all(|i| !i.ended));
+        // A v4 list covers every Claude-like process: the dead spare and a
+        // dead terminal go, the live terminal stays.
+        let mut v = term("SessionStart", "c", "12:1");
+        v["hook_version"] = 4.into();
+        v["live_scope"] = "claude".into();
+        v["live_procs"] = json!(["10:1", "12:1"]);
+        let out = book.apply("n", &ev(&v), SessionOrigin::Tty, true, 5);
+        let mut ended: Vec<_> = out.iter().filter(|i| i.ended).map(|i| i.session_id.clone().unwrap()).collect();
+        ended.sort();
+        assert_eq!(ended, vec!["b".to_string(), "spare2".to_string()]);
+        assert!(book.snapshot(|_| true, 6).iter().any(|i| i.session_id.as_deref() == Some("a")), "alive, kept");
+    }
+
+    #[test]
+    fn version_shapes() {
+        assert!(version_shaped("2.1.328") && version_shaped("10.0"));
+        assert!(!version_shaped("claude") && !version_shaped("2") && !version_shaped("2..1") && !version_shaped("v2.1"));
     }
 }
