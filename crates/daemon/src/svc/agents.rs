@@ -81,13 +81,15 @@ impl App {
     }
 
     /// Send the cost changes held back for 30 s: the last cent of a session
-    /// that went quiet. On the background tick.
+    /// that went quiet. On the background tick, which also shows idle a
+    /// session left waiting on background work past its bound
+    /// ([`agents::BACKGROUND_MAX_MS`]: a missed wake-up never leaves it at
+    /// work for ever).
     pub fn flush_session_costs(&self) {
         let sessions = self.sessions.clone();
-        let infos = self.agents.lock().unwrap().flush_costs(
-            |sb| SandboxName::parse(sb).map(|n| sessions.is_live(&SessionKey::agent(&n))).unwrap_or(false),
-            now_ms(),
-        );
+        let live = |sb: &str| SandboxName::parse(sb).map(|n| sessions.is_live(&SessionKey::agent(&n))).unwrap_or(false);
+        let mut infos = self.agents.lock().unwrap().expire_background(live, now_ms());
+        infos.extend(self.agents.lock().unwrap().flush_costs(live, now_ms()));
         for info in infos {
             self.send(Event::Session(info));
         }
@@ -252,5 +254,50 @@ mod tests {
         assert_eq!(state(&app, "sid-a"), SessionState::Attention, "a real prompt still summons");
         post(json!({"hook_event_name": "PostToolUse", "tool_name": "Bash"}));
         assert_eq!(state(&app, "sid-a"), SessionState::Working, "answered");
+    }
+
+    /// The user's case, end to end through `ingest_hook`: a thread ends its
+    /// turn while a background shell of its own runs. Shown at work with
+    /// what it waits for, never as wanting the person; a team note's line is
+    /// typed to it as to any working session.
+    #[test]
+    fn a_thread_waiting_on_its_background_command_is_at_work() {
+        let (_d, app) = app();
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let post = |mut ev: serde_json::Value| {
+            ev["session_id"] = "sid-b".into();
+            ev["hook_version"] = 3.into();
+            ev["sbxw_thread"] = "scope-picker".into();
+            app.ingest_hook(&sb, ev);
+        };
+        let info = || {
+            let snap = app.agents.lock().unwrap().snapshot(|_| true, crate::app::now_ms());
+            snap.into_iter().find(|i| i.session_id.as_deref() == Some("sid-b")).expect("a session")
+        };
+        post(json!({"hook_event_name": "SessionStart"}));
+        post(json!({"hook_event_name": "UserPromptSubmit", "prompt": "build the picker"}));
+        post(json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "cargo test", "run_in_background": true}}));
+        post(json!({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "cargo test", "run_in_background": true}}));
+        post(json!({"hook_event_name": "Stop", "stop_hook_active": false, "last_assistant_message": "Tests run in the background.",
+            "background_tasks": [{"id": "b1", "type": "shell", "status": "running", "description": "cargo test", "command": "cargo test"}],
+            "session_crons": []}));
+        let i = info();
+        assert_eq!(i.state, SessionState::Working, "busy, not attention, not idle");
+        assert_eq!(i.background.as_ref().map(|b| b.shells), Some(1));
+        assert_eq!(i.activity.as_deref(), Some("Waiting for its background command"));
+        let wire = serde_json::to_value(&i).unwrap();
+        assert_eq!(wire["state"], "working", "a client that ignores `background` still reads it at work");
+        assert_eq!(wire["background"]["shells"], 1);
+        // The periodic tick does not end it before the bound.
+        app.flush_session_costs();
+        assert_eq!(state(&app, "sid-b"), SessionState::Working);
+        // A team note's line is typed, as to a working session.
+        let d = app.note_targets(&sb, &["scope-picker".to_string()], |_| true);
+        assert_eq!(d, vec![("scope-picker".to_string(), sbxw_core::team::Delivery::Type)]);
+        // The command ends: Claude Code wakes the session, which finishes.
+        post(json!({"hook_event_name": "UserPromptSubmit", "prompt": "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>"}));
+        assert_eq!(info().background, None);
+        post(json!({"hook_event_name": "Stop", "background_tasks": [], "session_crons": []}));
+        assert_eq!(state(&app, "sid-b"), SessionState::Idle);
     }
 }

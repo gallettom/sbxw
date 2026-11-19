@@ -95,10 +95,11 @@ sandbox's token.
 | `PreToolUse` (`AskUserQuestion`) | `attention`, with every question of the call |
 | `PreToolUse` / `PostToolUse` (other) | `working` (the tool as activity) |
 | `Notification`: `permission_prompt`, `worker_permission_prompt`, `elicitation_dialog`, `elicitation_url_dialog`, `agent_needs_input`, or no type | `attention` |
-| `Notification`: `idle_prompt` | `idle` |
+| `Notification`: `idle_prompt` | `idle`, or still `working` while its background work runs |
 | `Notification`: any other type | unchanged |
 | a subagent's `PreToolUse` / `PostToolUse` (`agent_id` set) | unchanged, except that it ends an `attention` with no question pending |
 | `Stop` | `idle` (with Claude's reply) |
+| `Stop` listing background work of the session's own | `working`, with `background` set (and Claude's reply) |
 | `SessionEnd` | `exited` |
 
 `attention` ("wants you") means the session cannot go on without the
@@ -114,6 +115,49 @@ into an open prompt) is `idle`, never `attention`: it also settles a turn
 cut short with Esc, which fires no `Stop`. Any evidence of work or of an
 answer ends `attention`: a prompt (the person's or an injected message), a
 tool call or result of the session, `Stop`, `SessionEnd`.
+
+#### A turn that ends on background work
+
+A turn can end while work the session started runs on: a shell command
+started with `run_in_background` (Claude Code's status line says `1 shell`),
+a background agent, a one-shot scheduled wakeup (`ScheduleWakeup`, a
+one-shot `CronCreate`). Claude Code wakes the session itself when that work
+ends (it types a task notification in, a new turn), so the person has
+nothing to do. Claude Code 2.1 lists that work in the `Stop` event:
+`background_tasks` (in flight: running or pending, and backgrounded) and
+`session_crons`. The daemon then keeps the session `working` and adds:
+
+```json
+{ "state": "working", "activity": "Waiting for its background command",
+  "background": { "shells": 1, "agents": 0, "other": 0, "wakeups": 0,
+                  "since_ms": 1763560000000, "until_ms": 1763563600000 },
+  "reply": "The tests run in the background; I will report when they end." }
+```
+
+`shells` counts background commands; `agents` background subagents,
+teammates, workflows and cloud sessions; `other` any other background task
+(a monitor, an MCP task); `wakeups` the one-shot crons. A recurring cron
+does not count: between its runs the session is idle. `activity` words it
+("Waiting for its 2 background commands", "Waiting for its background
+agent", "Waiting for its scheduled wakeup", "Waiting for its background
+work" for a mix). A client that ignores `background` reads a working
+session, never one that wants the person.
+
+It ends at the next turn (the wake-up's injected prompt, or the person's),
+at any tool call of the session, at the next `Stop` (which lists what is
+left, so one of two commands ending stays `working`), at `SessionEnd` or
+when the session is retired. Claude Code's idle reminder does not end it
+(Claude Code waits for background agents and wakeups before reminding, not
+for background shells). A permission prompt or a question meanwhile is
+`attention`, and `background` is left out while it lasts; once a background
+agent's tool runs (the prompt answered), the session is back to waiting on
+its work. If nothing happens for an hour (`until_ms`), the daemon shows the
+session `idle`: a wakeup always fires within an hour, and a command or agent
+still running after one is most likely a server or a watcher that will not
+end by itself. Nothing about answering or typing into the session changes:
+`answerable` is computed as before, and a team note's line is typed to it as
+to any working session. A Claude Code that sends neither field gives the old
+reading (`idle`).
 
 A session's last payload says `ended: true` with an `end_reason`, and a new
 session says which one it `continues` when the daemon can tell (the same
