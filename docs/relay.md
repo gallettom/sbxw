@@ -128,6 +128,15 @@ An agent reaches only its own sandbox's canvases (its token says which
 sandbox it is; a body field never does). It cannot delete a canvas, edit a
 remark or read another sandbox's canvas.
 
+**Layout.** Each round is a grid below the earlier ones (12 desktop shots
+make 4 columns of 3 rows, 9 make 3 x 3, phones share a cell three by
+three), its title under each shot. Give the same `screen` key to the same
+screen in every round: it takes the same cell as before, so before and after
+line up in one column; a new screen goes after the earlier ones. A shot the
+person moved keeps its place. Canvases made before grids are laid out again
+once, when the daemon reads them, unless the person had arranged them.
+In `canvas_read`, a picture the person added is "Example N".
+
 **Limits.** PNG, JPEG or WebP, checked by content, never by name (animated
 pictures refused); 20 MB and 8192 px a side per picture; 24 shots a round;
 500 MB of pictures a canvas; titles 120 characters, notes and remarks 2000.

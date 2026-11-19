@@ -364,10 +364,13 @@ note cards on an infinite surface, drawn by the core
 (`src/surface_canvas.rs`). The person pans (drag the ground, the wheel, two
 fingers, the middle button) and zooms (pinch, ⌘ or Ctrl with the wheel)
 without the screen running; presses that mean something (select, move,
-resize, place a pin, a note, a picture) go to the owning feature's Rust as
+resize, place a pin, a note, an example picture) go to the owning feature's Rust as
 `SurfaceEvent::Canvas`, never to the screen. It takes the space its parent
 leaves. An `id` no feature declares in `surfaces` draws nothing and hears
-nothing.
+nothing. Each picture sits on a mat (`surface`, a `dim` hairline); a
+selected item has an accent ring outside it, and a resize handle on its
+corner only when it is drawn large enough (8 % of its smaller side, 6 to
+12 pt). Fit leaves room for the round bands above and the captions below.
 
 | Prop | Value | Effect |
 |---|---|---|
@@ -982,7 +985,7 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `inbox` | Sessions: every session, who needs you first (the top bar's GUI) |
 | `history` | commits (the Commits view, its rail entry, a pane's menu) |
 | `canvas` | Canvas: shots of an agent's screens to review (rail, its overlay) |
-| `pointer`, `pin`, `note`, `image` | Canvas's tools: select, a numbered pin, a note card, an example picture |
+| `pointer`, `pin`, `note`, `image` | Canvas's tools: select, a numbered pin, a note card, Add example (a picture of the person's) |
 | `minus`, `fit` | zoom out; show everything (Canvas) |
 
 ## Where screens live

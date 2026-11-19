@@ -8,24 +8,49 @@ local function note(t, color)
   return text{ t, size = "sm", color = color or "text-muted", wrap = true }
 end
 
+-- The storage line sits in the title band only on a wide overlay (1100 pt
+-- and more); else beside Rename and Delete. It never wraps.
+local function storage_in_title(data)
+  return ((((data.app or {}).overlay or {}).w) or 1000) >= 1100
+end
+
+-- A title cut to `n` characters with an ellipsis (the menu keeps a sane width).
+local function clip(t, n)
+  local len = utf8.len(t)
+  if not len or len <= n then return t end
+  return string.sub(t, 1, utf8.offset(t, n) - 1) .. "…"
+end
+
 -- The pickers beside the overlay's title, in ONE function so a shared
 -- scope picker can replace them: the sandbox, then the canvas.
 local function pickers(data, ui)
   local cur = ui.current or {}
   local w = (((data.app or {}).overlay or {}).w or 1000)
+  local label = "No canvas"
+  if cur.title then label = (w >= 600) and clip(cur.title, w >= 1100 and 40 or 24) or "Canvas" end
   return row{ key = "title-slot", gap = 8,
     select{ id = "canvas-sandbox", value = ui.sandbox or "", on = "sandbox", scope = "sandbox", placeholder = "Pick a sandbox" },
-    menu{ cur.title and (w >= 600 and cur.title or "Canvas") or "No canvas", id = "canvas-pick", items = ui.canvases or {}, on = "pick", icon = "canvas" },
-    w >= 900 and text{ ui.storage or "", size = "xs", color = "text-muted", key = "canvas-storage" } or false,
+    menu{ label, id = "canvas-pick", items = ui.canvases or {}, on = "pick", icon = "canvas", help = cur.title },
+    storage_in_title(data) and text{ ui.storage or "", size = "xs", color = "text-muted", key = "canvas-storage", truncate = true } or false,
   }
 end
 
+-- id, icon, label, tooltip (one line: what it does), key.
 local TOOLS = {
-  { "select", "pointer", "Select", "Select, move and resize; drag the ground to pan", "V" },
-  { "pin", "pin", "Pin", "Pin: press a point of a shot", "P" },
-  { "note", "note", "Note", "Note: press where it goes", "N" },
-  { "asset", "image", "Picture", "Example picture: press where it goes, then pick the file", "A" },
+  { "select", "pointer", "Select", "Select, move and resize shots, notes and examples; drag the ground to pan", "V" },
+  { "pin", "pin", "Pin", "Pin: a numbered remark on a point of a shot (press the point)", "P" },
+  { "note", "note", "Note", "Note: a remark placed anywhere on the canvas (press where it goes)", "N" },
+  { "asset", "image", "Add example", "Add a picture of yours as an example for the agent: pick a file, drop one, or paste", "A" },
 }
+
+-- While Add example is chosen: what it does and how, above the surface.
+local function example_hint()
+  return row{ gap = 8, w = "full", key = "canvas-asset-hint", px = 8, py = 8, radius = "xs", fill = "elevated", align = "center",
+    icon{ "image", size = 14, color = "blue" },
+    text{ "Add a picture of yours (a mock-up, a reference) as an example for the agent: press where it goes, then pick the file. Or drop one here, or paste it (⌘V). It is numbered (Example 1) and sent with your remarks.",
+      size = "sm", color = "text", wrap = true, grow = 1 },
+    button{ "Pick a file…", icon = "image", key = "canvas-asset-pick", on = "asset", dense = true, help = "Opens the file dialog (PNG, JPEG or WebP)" } }
+end
 
 local function toolbar(ui, wide)
   local out = { gap = 4, w = "full", key = "canvas-tools" }
@@ -78,7 +103,7 @@ local function side(ui, data)
   out[#out + 1] = row{ gap = 8, w = "full", text{ "New remarks", weight = "semibold", color = "text-bright", grow = 1 },
     badge{ tostring(#draft), tone = #draft > 0 and "green" or "neutral" } }
   if #draft == 0 then
-    out[#out + 1] = note("Pick Pin (P) and press a point of a shot, Note (N) or a picture (A). Your remarks are saved as you go and sent together.")
+    out[#out + 1] = note("Pin (P): press a point of a shot. Note (N): press anywhere. Add example (A): a picture of yours for the agent. Your remarks are saved as you go and sent together.")
   end
   for _, d in ipairs(draft) do out[#out + 1] = remark(d) end
   local hist = ui.history or {}
@@ -139,10 +164,11 @@ return {
         { id = "7", label = "Delete canvases older than 7 days…" },
         { id = "30", label = "Delete canvases older than 30 days…" },
         { id = "90", label = "Delete canvases older than 90 days…" } } },
-      (not wide) and text{ ui.storage or "", size = "xs", color = "text-muted", truncate = true } or false }
+      (not storage_in_title(data)) and text{ ui.storage or "", size = "xs", color = "text-muted", truncate = true, key = "canvas-storage-line" } or false }
     local surface = column{ grow = 1, h = "full", min_w = 0, min_h = 0, gap = 8, key = "canvas-surface-col",
       toolbar(ui, wide),
       ui.empty == "shots" and ask_block(ui, data, false) or false,
+      ui.tool == "asset" and example_hint() or false,
       canvas{ id = "canvas" } }
     local panel = column{ w = wide and 320 or "full", h = "full", gap = 8,
       column{ grow = 1, min_h = 0, w = "full", scroll{ key = "canvas-side", side(ui, data) } }, sendbar(ui) }
@@ -177,6 +203,7 @@ return {
       return intent("canvas_delete", { older = v })
     end,
     tool = function(_, t) return intent("canvas_tool", { tool = t }) end,
+    asset = function() return intent("canvas_asset", {}) end,
     zoom = function(_, c) return intent("canvas_zoom", { cmd = c }) end,
     select = function(_, k) return intent("canvas_select", { target = k }) end,
     text = function(_, k, v) return intent("canvas_text", { target = k, text = v or "" }) end,

@@ -38,9 +38,24 @@ pub const MAX_NAME: usize = 120;
 pub const MAX_PINS: usize = 500;
 pub const MAX_NOTES: usize = 300;
 pub const MAX_ASSETS: usize = 200;
-/// World points between two rounds' rows, and between two shots of a row.
+/// World points between two rounds' rows in the one-row layout before
+/// grids (kept to recognise a canvas laid out so), and between two shots of a row.
 pub const ROW_GAP: f32 = 320.0;
+/// World points between two rounds' grids: the last row's titles and the
+/// next round's band, each at most 100 world points tall (they keep a fixed
+/// size on screen), both fit at any zoom.
+pub const ROUND_GAP: f32 = 480.0;
 pub const COL_GAP: f32 = 120.0;
+/// World points between two rows of one round's grid: the titles under a row sit in it.
+pub const GRID_ROW_GAP: f32 = 200.0;
+/// World points between two narrow shots (phones) sharing one cell.
+pub const NARROW_GAP: f32 = 48.0;
+/// The shape a round's grid aims for: a laptop's canvas, wider than tall.
+pub const GRID_ASPECT: f32 = 1.6;
+/// A round's grid has at most this many columns.
+pub const MAX_COLS: u32 = 8;
+/// A cell's slot meaning "the whole cell" (a shot wider than half a cell).
+pub const WHOLE: u32 = u32::MAX;
 /// A note card's default size (world points).
 pub const NOTE_W: f32 = 240.0;
 pub const NOTE_H: f32 = 140.0;
@@ -333,6 +348,12 @@ pub struct Shot {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+    /// Moved or resized by the person: the layout never places it again.
+    pub moved: bool,
+    /// Its cell in its round's grid: row, column and slot (narrow shots
+    /// share a cell side by side; [`WHOLE`] for a shot that fills one).
+    /// `None` for a shot laid out before grids (one long row).
+    pub cell: Option<[u32; 3]>,
 }
 
 /// A picture the person added.
@@ -397,6 +418,11 @@ pub struct Round {
     pub shots: u32,
     /// The tool call's batch id, so its several posts form one round.
     pub batch: String,
+    /// Its grid: columns, a cell's width, a narrow slot's width (world
+    /// points). `cols` 0: laid out before grids, as one long row.
+    pub cols: u32,
+    pub cell_w: f32,
+    pub slot_w: f32,
 }
 
 /// One round of remarks sent to the agent.
@@ -537,37 +563,21 @@ impl Canvas {
             }
         }
         let n = self.rounds.last().map_or(1, |r| r.n + 1);
-        self.rounds.push(Round { n, at_ms: now, shots: 0, batch: batch.to_string() });
+        self.rounds.push(Round { n, at_ms: now, shots: 0, batch: batch.to_string(), ..Default::default() });
         Ok(n)
     }
 
-    /// Adds a shot (the picture already checked and stored under `file`),
-    /// placed in its round's row: below every earlier row, under an earlier
-    /// shot of the same screen when there is one, else after the row's last.
+    /// Adds a shot (the picture already checked and stored under `file`)
+    /// to its round's grid ([`Canvas::layout_round`]); notes and assets
+    /// beside a shot that moves follow it.
     #[allow(clippy::too_many_arguments)]
     pub fn add_shot(&mut self, round: u32, file: String, h: Header, bytes: u64, title: &str, note: &str, width: Option<u32>, screen: Option<&str>, now: u64) -> &Shot {
-        let w = match width.filter(|w| (100..=MAX_SIDE).contains(w)) {
-            Some(w) => w as f32,
-            None => h.width as f32,
-        };
-        let sh = w * h.height as f32 / h.width as f32;
+        let (w, sh) = auto_size(width, h.width, h.height);
         let screen = screen.and_then(screen_key);
-        // The row's top: under everything placed before this round.
-        let earlier = |s: &&Shot| s.round < round;
-        let row_y = self.shots.iter().filter(earlier).map(|s| s.y + s.h).fold(None, |m: Option<f32>, v| Some(m.map_or(v, |m| m.max(v)))).map_or(0.0, |b| b + ROW_GAP);
-        let row_y = self.shots.iter().filter(|s| s.round == round).map(|s| s.y).fold(row_y, f32::min);
-        let next_x = self.shots.iter().filter(|s| s.round == round).map(|s| s.x + s.w + COL_GAP).fold(0.0, f32::max);
-        let column = screen.as_ref().and_then(|k| self.shots.iter().rev().find(|s| s.round < round && s.screen.as_deref() == Some(k)).map(|s| s.x));
-        let mut x = match column {
-            Some(cx) if cx >= next_x || !self.shots.iter().any(|s| s.round == round && s.x < cx + w && cx < s.x + s.w) => cx,
-            _ => next_x,
-        };
-        // Never on top of a shot of the same row.
-        while self.shots.iter().any(|s| s.round == round && x < s.x + s.w && s.x < x + w) {
-            x = self.shots.iter().filter(|s| s.round == round).map(|s| s.x + s.w + COL_GAP).fold(x, f32::max);
-        }
+        let near = self.nearest_map();
+        let id = item_id("s");
         self.shots.push(Shot {
-            id: item_id("s"),
+            id: id.clone(),
             file,
             format: Some(h.format),
             round,
@@ -579,16 +589,242 @@ impl Canvas {
             px_h: h.height,
             bytes,
             added_ms: now,
-            x,
-            y: row_y,
+            x: 0.0,
+            y: 0.0,
             w,
             h: sh,
+            moved: false,
+            cell: None,
         });
         if let Some(r) = self.rounds.iter_mut().find(|r| r.n == round) {
             r.shots += 1;
         }
+        let moves = self.layout_round(round);
+        self.follow(&near, &moves);
         self.updated_ms = now;
-        self.shots.last().unwrap()
+        self.shots.iter().find(|s| s.id == id).unwrap()
+    }
+
+    /// Lays round `round` out as a grid, below every earlier round, and
+    /// returns the shots it moved (id, dx, dy). Shots the person moved keep
+    /// their place (and their cell, if they had one).
+    ///
+    /// * Cells are as wide as the round's widest shot. A shot at most half a
+    ///   cell wide (a phone beside desktop shots) is narrow: narrow shots
+    ///   share a cell side by side, [`NARROW_GAP`] apart.
+    /// * Columns: the count whose block is closest to [`GRID_ASPECT`]
+    ///   ([`grid_cols`]): 12 desktop shots make 4 x 3, 9 make 3 x 3, 4 make
+    ///   2 x 2, 24 make 5 x 5.
+    /// * Rows are as tall as their tallest shot; a row with nothing in this
+    ///   round takes no room (its order is kept).
+    /// * A shot whose `screen` key was in an earlier grid takes the SAME
+    ///   cell (row, column, slot) as its latest earlier shot, and the round
+    ///   takes that round's columns and cell width, so before and after line
+    ///   up. A new screen takes the first free cell (row by row) where that
+    ///   earlier round showed nothing: it never sits under another screen.
+    pub fn layout_round(&mut self, round: u32) -> Vec<(String, f32, f32)> {
+        let idx: Vec<usize> = (0..self.shots.len()).filter(|&i| self.shots[i].round == round).collect();
+        if idx.is_empty() {
+            return vec![];
+        }
+        let top = self.shots.iter().filter(|s| s.round < round).map(|s| s.y + s.h).fold(None, |m: Option<f32>, v| Some(m.map_or(v, |m| m.max(v)))).map_or(0.0, |b| b + ROUND_GAP);
+        let keys: Vec<&str> = idx.iter().filter_map(|&i| self.shots[i].screen.as_deref()).collect();
+        // The earlier grid this round compares with: the latest with a screen of this round.
+        let rref = self.shots.iter().filter(|s| s.round < round && s.cell.is_some() && s.screen.as_deref().is_some_and(|k| keys.contains(&k))).map(|s| s.round).max();
+        let rinfo = rref.and_then(|n| self.rounds.iter().find(|r| r.n == n && r.cols > 0)).cloned();
+        let ref_used: Vec<[u32; 3]> = match rref {
+            Some(n) => self.shots.iter().filter(|s| s.round == n).filter_map(|s| s.cell).collect(),
+            None => vec![],
+        };
+        let mut cell_w = idx.iter().map(|&i| self.shots[i].w).fold(0.0, f32::max);
+        if let Some(r) = &rinfo {
+            cell_w = cell_w.max(r.cell_w);
+        }
+        let narrow = |w: f32| w <= (cell_w - NARROW_GAP) / 2.0;
+        let mut slot_w = idx.iter().map(|&i| self.shots[i].w).filter(|&w| narrow(w)).fold(0.0, f32::max);
+        if let Some(r) = &rinfo {
+            if r.slot_w > 0.0 && narrow(r.slot_w) {
+                slot_w = slot_w.max(r.slot_w);
+            }
+        }
+        let per = if slot_w > 0.0 { (((cell_w + NARROW_GAP) / (slot_w + NARROW_GAP)).floor() as u32).max(1) } else { 1 };
+        let cell_h = idx.iter().map(|&i| self.shots[i].h).fold(0.0, f32::max);
+        let auto: Vec<usize> = idx.iter().copied().filter(|&i| !self.shots[i].moved).collect();
+        let wide_n = idx.iter().filter(|&&i| !narrow(self.shots[i].w)).count();
+        let cells = wide_n + (idx.len() - wide_n).div_ceil(per as usize);
+        let cols = match &rinfo {
+            Some(r) => r.cols,
+            None => grid_cols(cells, cell_w, cell_h),
+        };
+        // What this round's cells hold: (row, col) -> slots, WHOLE for a whole cell.
+        let mut taken: Vec<([u32; 2], u32)> = idx.iter().filter(|&&i| self.shots[i].moved).filter_map(|&i| self.shots[i].cell).map(|c| ([c[0], c[1]], c[2])).collect();
+        let free = |taken: &Vec<([u32; 2], u32)>, rc: [u32; 2], k: u32| -> bool {
+            let here: Vec<u32> = taken.iter().filter(|(c, _)| *c == rc).map(|(_, k)| *k).collect();
+            if k == WHOLE {
+                here.is_empty()
+            } else {
+                !here.contains(&WHOLE) && !here.contains(&k)
+            }
+        };
+        let mut place: Vec<(usize, [u32; 3])> = vec![];
+        // Same screen, same cell.
+        for &i in &auto {
+            let s = &self.shots[i];
+            let want = if narrow(s.w) { None } else { Some(WHOLE) };
+            let Some(k) = s.screen.as_deref() else { continue };
+            let earlier = self.shots.iter().filter(|e| e.round < round && e.screen.as_deref() == Some(k) && e.cell.is_some()).max_by_key(|e| e.round);
+            let Some(c) = earlier.and_then(|e| e.cell) else { continue };
+            let fits = c[1] < cols && match want {
+                Some(_) => c[2] == WHOLE,
+                None => c[2] != WHOLE && c[2] < per,
+            };
+            if fits && free(&taken, [c[0], c[1]], c[2]) {
+                taken.push(([c[0], c[1]], c[2]));
+                place.push((i, c));
+            }
+        }
+        // New screens: the first free cell the earlier round left empty.
+        for &i in &auto {
+            if place.iter().any(|(j, _)| *j == i) {
+                continue;
+            }
+            let wide = !narrow(self.shots[i].w);
+            let mut n = 0u32;
+            let cell = loop {
+                let rc = [n / cols, n % cols];
+                let in_ref = |k: u32| ref_used.iter().any(|c| [c[0], c[1]] == rc && (c[2] == WHOLE || k == WHOLE || c[2] == k));
+                let got = if wide {
+                    (free(&taken, rc, WHOLE) && !in_ref(WHOLE)).then_some(WHOLE)
+                } else {
+                    (0..per).find(|&k| free(&taken, rc, k) && !in_ref(k))
+                };
+                if let Some(k) = got {
+                    break [rc[0], rc[1], k];
+                }
+                n += 1;
+            };
+            taken.push(([cell[0], cell[1]], cell[2]));
+            place.push((i, cell));
+        }
+        // Rows as tall as their tallest shot; a row this round leaves empty
+        // (screens that did not come back) takes no room.
+        let rows = place.iter().map(|(_, c)| c[0] + 1).max().unwrap_or(0);
+        let mut row_y = Vec::with_capacity(rows as usize);
+        let mut y = top;
+        for r in 0..rows {
+            row_y.push(y);
+            let rh = place.iter().filter(|(_, c)| c[0] == r).map(|(i, _)| self.shots[*i].h).fold(0.0, f32::max);
+            if place.iter().any(|(_, c)| c[0] == r) {
+                y += rh + GRID_ROW_GAP;
+            }
+        }
+        let mut moves = vec![];
+        for (i, c) in place {
+            let x = c[1] as f32 * (cell_w + COL_GAP) + if c[2] == WHOLE { 0.0 } else { c[2] as f32 * (slot_w + NARROW_GAP) };
+            let s = &mut self.shots[i];
+            let (dx, dy) = (x - s.x, row_y[c[0] as usize] - s.y);
+            if dx != 0.0 || dy != 0.0 {
+                moves.push((s.id.clone(), dx, dy));
+            }
+            (s.x, s.y, s.cell) = (x, row_y[c[0] as usize], Some(c));
+        }
+        if let Some(r) = self.rounds.iter_mut().find(|r| r.n == round) {
+            (r.cols, r.cell_w, r.slot_w) = (cols, cell_w, slot_w);
+        }
+        moves
+    }
+
+    /// Each note's and asset's nearest shot (as `review_text` names it).
+    fn nearest_map(&self) -> (Vec<Option<String>>, Vec<Option<String>>) {
+        let notes = self.notes.iter().map(|n| self.nearest_shot(n.x + n.w / 2.0, n.y + n.h / 2.0).map(|s| s.id.clone())).collect();
+        let assets = self.assets.iter().map(|a| self.nearest_shot(a.x + a.w / 2.0, a.y + a.h / 2.0).map(|s| s.id.clone())).collect();
+        (notes, assets)
+    }
+
+    /// Moves each note and asset whose nearest shot moved by as much, so
+    /// it stays beside the shot it was placed next to.
+    fn follow(&mut self, near: &(Vec<Option<String>>, Vec<Option<String>>), moves: &[(String, f32, f32)]) {
+        let d = |id: &Option<String>| id.as_ref().and_then(|id| moves.iter().find(|m| &m.0 == id)).map(|m| (m.1, m.2));
+        for (n, id) in self.notes.iter_mut().zip(&near.0) {
+            if let Some((dx, dy)) = d(id) {
+                (n.x, n.y) = (finite(n.x + dx, -WORLD, WORLD), finite(n.y + dy, -WORLD, WORLD));
+            }
+        }
+        for (a, id) in self.assets.iter_mut().zip(&near.1) {
+            if let Some((dx, dy)) = d(id) {
+                (a.x, a.y) = (finite(a.x + dx, -WORLD, WORLD), finite(a.y + dy, -WORLD, WORLD));
+            }
+        }
+    }
+
+    /// Where the one-row layout (before grids) put shot `i`, from the shots
+    /// before it: to tell a round nobody moved from one the person arranged.
+    fn legacy_spot(&self, i: usize) -> (f32, f32) {
+        let prev = &self.shots[..i];
+        let s = &self.shots[i];
+        let (round, w) = (s.round, s.w);
+        let row_y = prev.iter().filter(|p| p.round < round).map(|p| p.y + p.h).fold(None, |m: Option<f32>, v| Some(m.map_or(v, |m| m.max(v)))).map_or(0.0, |b| b + ROW_GAP);
+        let row_y = prev.iter().filter(|p| p.round == round).map(|p| p.y).fold(row_y, f32::min);
+        let next_x = prev.iter().filter(|p| p.round == round).map(|p| p.x + p.w + COL_GAP).fold(0.0, f32::max);
+        let column = s.screen.as_ref().and_then(|k| prev.iter().rev().find(|p| p.round < round && p.screen.as_deref() == Some(k)).map(|p| p.x));
+        let mut x = match column {
+            Some(cx) if cx >= next_x || !prev.iter().any(|p| p.round == round && p.x < cx + w && cx < p.x + p.w) => cx,
+            _ => next_x,
+        };
+        while prev.iter().any(|p| p.round == round && x < p.x + p.w && p.x < x + w) {
+            x = prev.iter().filter(|p| p.round == round).map(|p| p.x + p.w + COL_GAP).fold(x, f32::max);
+        }
+        (x, row_y)
+    }
+
+    /// A canvas saved before grids: each round still in its one long row,
+    /// as placed, is laid out again as a grid; a round where the person
+    /// moved or resized a shot is left as it is (moved down as a block by
+    /// what the rounds above it grew, so nothing overlaps). Notes and
+    /// assets follow their nearest shot. Pins are fractions of their shot
+    /// and follow on their own. Returns whether anything changed.
+    pub fn relayout_legacy(&mut self) -> bool {
+        let mut rounds: Vec<u32> = self.shots.iter().map(|s| s.round).collect();
+        rounds.sort_unstable();
+        rounds.dedup();
+        let gridded = |n: u32| self.rounds.iter().any(|r| r.n == n && r.cols > 0) || self.shots.iter().any(|s| s.round == n && s.cell.is_some());
+        // Judged on the canvas as loaded, before anything moves.
+        let as_placed: Vec<u32> = rounds
+            .iter()
+            .copied()
+            .filter(|&n| !gridded(n))
+            .filter(|&n| {
+                (0..self.shots.len()).filter(|&i| self.shots[i].round == n).all(|i| {
+                    let s = &self.shots[i];
+                    let (aw, ah) = auto_size(s.width, s.px_w, s.px_h);
+                    let (x, y) = self.legacy_spot(i);
+                    !s.moved && (s.x - x).abs() < 0.5 && (s.y - y).abs() < 0.5 && (s.w - aw).abs() < 0.5 && (s.h - ah).abs() < 0.5
+                })
+            })
+            .collect();
+        if as_placed.is_empty() {
+            return false;
+        }
+        let near = self.nearest_map();
+        let before: Vec<(String, f32, f32)> = self.shots.iter().map(|s| (s.id.clone(), s.x, s.y)).collect();
+        let bottom = |c: &Canvas, below: u32| c.shots.iter().filter(|s| s.round < below).map(|s| s.y + s.h).fold(f32::MIN, f32::max);
+        for &n in &rounds {
+            if as_placed.contains(&n) {
+                self.layout_round(n);
+            } else {
+                // Grown by the rounds above it, as they were and as they are.
+                let was = before.iter().zip(&self.shots).filter(|(_, s)| s.round < n).map(|((_, _, y), s)| y + s.h).fold(f32::MIN, f32::max);
+                let grew = bottom(self, n) - was;
+                if was > f32::MIN && grew > 0.0 {
+                    for s in self.shots.iter_mut().filter(|s| s.round == n) {
+                        s.y += grew;
+                    }
+                }
+            }
+        }
+        let moves: Vec<(String, f32, f32)> = before.iter().zip(&self.shots).filter(|((_, x, y), s)| s.x != *x || s.y != *y).map(|((id, x, y), s)| (id.clone(), s.x - x, s.y - y)).collect();
+        self.follow(&near, &moves);
+        !moves.is_empty()
     }
 
     pub fn add_asset(&mut self, file: String, h: Header, bytes: u64, name: &str, at: Option<(f32, f32)>, now: u64) -> Result<&Asset, String> {
@@ -660,6 +896,9 @@ impl Canvas {
             let (x, y) = (finite(p.x, -WORLD, WORLD), finite(p.y, -WORLD, WORLD));
             let (w, h) = (finite(p.w, 20.0, 20_000.0), finite(p.h, 20.0, 20_000.0));
             if let Some(s) = self.shots.iter_mut().find(|s| s.id == p.id) {
+                if (s.x - x).abs() >= 0.5 || (s.y - y).abs() >= 0.5 || (s.w - w).abs() >= 0.5 || (s.h - h).abs() >= 0.5 {
+                    s.moved = true;
+                }
                 (s.x, s.y, s.w, s.h) = (x, y, w, h);
             } else if let Some(a) = self.assets.iter_mut().find(|a| a.id == p.id) {
                 (a.x, a.y, a.w, a.h) = (x, y, w, h);
@@ -680,7 +919,7 @@ impl Canvas {
         }
         for a in self.assets.iter().filter(|a| a.sent.is_none()) {
             if !paths.iter().any(|(id, _)| id == &a.id) {
-                return Err(format!("asset {} was not copied into the sandbox", a.n));
+                return Err(format!("example {} was not copied into the sandbox", a.n));
             }
         }
         let n = self.reviews.last().map_or(1, |r| r.n + 1);
@@ -713,14 +952,14 @@ impl Canvas {
     pub fn review_text(&self, n: u32) -> String {
         let mut out = String::new();
         let Some(r) = self.reviews.iter().find(|r| r.n == n) else { return out };
-        out.push_str(&format!("Review round {n} of canvas \"{}\" ({}): {} pin(s), {} note(s), {} asset(s).\n", self.title, self.id, r.pins, r.notes, r.assets));
+        out.push_str(&format!("Review round {n} of canvas \"{}\" ({}): {} pin(s), {} note(s), {} example picture(s).\n", self.title, self.id, r.pins, r.notes, r.assets));
         let mut pins: Vec<&Pin> = self.pins.iter().filter(|p| p.sent == Some(n)).collect();
         pins.sort_by_key(|p| p.n);
         for p in pins {
             let on = match self.shots.iter().find(|s| s.id == p.on) {
                 Some(s) => format!("shot \"{}\" (round {}{})", s.title, s.round, s.width.map(|w| format!(", {w} wide")).unwrap_or_default()),
                 None => match self.assets.iter().find(|a| a.id == p.on) {
-                    Some(a) => format!("asset {}", a.n),
+                    Some(a) => format!("example {}", a.n),
                     None => "a removed item".into(),
                 },
             };
@@ -734,7 +973,7 @@ impl Canvas {
         }
         for a in self.assets.iter().filter(|a| a.sent == Some(n)) {
             let near = self.nearest_shot(a.x + a.w / 2.0, a.y + a.h / 2.0).map(|s| format!(", placed next to shot \"{}\"", s.title)).unwrap_or_default();
-            out.push_str(&format!("\nAsset {}: an example picture the person added ({}x{} px{near}), copied to {}\n", a.n, a.px_w, a.px_h, a.sandbox_path.as_deref().unwrap_or("(not copied)")));
+            out.push_str(&format!("\nExample {}: a picture the person added as an example ({}x{} px{near}), copied to {}\n", a.n, a.px_w, a.px_h, a.sandbox_path.as_deref().unwrap_or("(not copied)")));
         }
         out
     }
@@ -745,6 +984,37 @@ impl Canvas {
             d(a).total_cmp(&d(b))
         })
     }
+}
+
+/// A shot's size on the surface: its stated viewport width (else its
+/// pixels) wide, its picture's aspect kept.
+pub fn auto_size(width: Option<u32>, px_w: u32, px_h: u32) -> (f32, f32) {
+    let w = match width.filter(|w| (100..=MAX_SIDE).contains(w)) {
+        Some(w) => w as f32,
+        None => px_w.max(1) as f32,
+    };
+    (w, w * px_h as f32 / px_w.max(1) as f32)
+}
+
+/// The columns of a round's grid of `cells` cells, each `cell_w` x
+/// `cell_h`: the count whose block is closest to [`GRID_ASPECT`], an empty
+/// cell costing a little.
+pub fn grid_cols(cells: usize, cell_w: f32, cell_h: f32) -> u32 {
+    if cells <= 1 || cell_w <= 0.0 || cell_h <= 0.0 {
+        return 1;
+    }
+    let mut best = (f32::MAX, 1);
+    for c in 1..=(cells as u32).min(MAX_COLS) {
+        let rows = (cells as u32).div_ceil(c);
+        let w = c as f32 * cell_w + (c - 1) as f32 * COL_GAP;
+        let h = rows as f32 * cell_h + (rows - 1) as f32 * GRID_ROW_GAP;
+        let empty = (rows * c) as usize - cells;
+        let cost = (w / h / GRID_ASPECT).ln().abs() + 0.05 * empty as f32;
+        if cost < best.0 - 1e-4 {
+            best = (cost, c);
+        }
+    }
+    best.1
 }
 
 /// A short location hint: top-left, middle, bottom-right...
@@ -853,24 +1123,199 @@ mod tests {
         Header { format: Format::Png, width: w, height: h }
     }
 
+    fn round_of(c: &mut Canvas, batch: &str, shots: &[(u32, u32, &str)]) -> u32 {
+        let r = c.round_for(batch, 1).unwrap();
+        for (k, (w, h, screen)) in shots.iter().enumerate() {
+            let key = (!screen.is_empty()).then_some(*screen);
+            c.add_shot(r, format!("s-{:012}.png", c.shots.len()), hdr(*w * 2, *h * 2), 10, &format!("{screen} {k}"), "", Some(*w), key, 1);
+        }
+        r
+    }
+
+    fn desk(n: usize) -> Vec<(u32, u32, &'static str)> {
+        const KEYS: [&str; 24] = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x"];
+        (0..n).map(|k| (1284, 816, KEYS[k])).collect()
+    }
+
+    fn cells(c: &Canvas, round: u32) -> Vec<[u32; 3]> {
+        c.shots.iter().filter(|s| s.round == round).map(|s| s.cell.unwrap()).collect()
+    }
+
     #[test]
-    fn rounds_form_rows_and_the_same_screen_lines_up() {
+    fn a_round_is_a_grid_whose_columns_follow_its_shots() {
+        for (n, cols) in [(1, 1), (2, 2), (4, 2), (9, 3), (12, 4), (16, 4), (24, 5)] {
+            let mut c = Canvas::new(new_id(), "web".into(), "Review", 1);
+            let r = round_of(&mut c, "b", &desk(n));
+            assert_eq!(c.rounds[0].cols, cols, "{n} desktop shots");
+            for (k, s) in c.shots.iter().enumerate() {
+                let (row, col) = (k as u32 / cols, k as u32 % cols);
+                assert_eq!(s.cell, Some([row, col, WHOLE]), "{n} shots, shot {k}");
+                assert_eq!((s.x, s.y), (col as f32 * (1284.0 + COL_GAP), row as f32 * (816.0 + GRID_ROW_GAP)), "{n} shots, shot {k}");
+            }
+            assert_eq!(r, 1);
+        }
+        // 12 desktop shots: 4 x 3, a block wider than tall, not one row 16 000 points long.
         let mut c = Canvas::new(new_id(), "web".into(), "Review", 1);
-        let r1 = c.round_for("b1", 1).unwrap();
-        c.add_shot(r1, "s-000000000001.png".into(), hdr(2880, 1800), 10, "Home", "", Some(1440), Some("home"), 1);
-        c.add_shot(r1, "s-000000000002.png".into(), hdr(2880, 1800), 10, "Settings", "", Some(1440), Some("settings"), 1);
+        round_of(&mut c, "b", &desk(12));
+        let right = c.shots.iter().map(|s| s.x + s.w).fold(0.0, f32::max);
+        let bottom = c.shots.iter().map(|s| s.y + s.h).fold(0.0, f32::max);
+        assert_eq!((right, bottom), (4.0 * 1284.0 + 3.0 * COL_GAP, 3.0 * 816.0 + 2.0 * GRID_ROW_GAP));
+        // Phones alone: cells as wide as a phone, more columns.
+        assert_eq!(grid_cols(6, 390.0, 844.0), 5);
+        assert_eq!(grid_cols(12, 390.0, 844.0), 6);
+    }
+
+    #[test]
+    fn phones_share_a_cell_beside_desktop_shots() {
+        let mut c = Canvas::new(new_id(), "web".into(), "Review", 1);
+        let mut shots = desk(8);
+        shots.extend([(390, 844, "p1"), (390, 844, "p2"), (390, 844, "p3"), (390, 844, "p4")]);
+        round_of(&mut c, "b", &shots);
+        // 8 whole cells and two phone cells (3 phones a cell): 10 cells, 4 columns.
+        assert_eq!(c.rounds[0].cols, 4);
+        let ph: Vec<[u32; 3]> = c.shots[8..].iter().map(|s| s.cell.unwrap()).collect();
+        assert_eq!(ph, vec![[2, 0, 0], [2, 0, 1], [2, 0, 2], [2, 1, 0]]);
+        let p = &c.shots[9];
+        assert_eq!(p.x, 390.0 + NARROW_GAP);
+        // The phones' row is as tall as a phone.
+        assert_eq!(p.y, 2.0 * (816.0 + GRID_ROW_GAP));
+        // Nothing overlaps.
+        for a in &c.shots {
+            for b in &c.shots {
+                if a.id != b.id {
+                    assert!(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y, "{} over {}", a.title, b.title);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_same_screen_takes_the_same_cell_in_a_later_round() {
+        let mut c = Canvas::new(new_id(), "web".into(), "Review", 1);
+        round_of(&mut c, "b1", &desk(12));
+        let r1_bottom = c.shots.iter().map(|s| s.y + s.h).fold(0.0, f32::max);
+        // Round 2: three screens of round 1, out of order, and a new one.
+        round_of(&mut c, "b2", &[(1284, 816, "k"), (1284, 816, "new"), (1284, 816, "b"), (1284, 816, "f")]);
+        assert_eq!(c.rounds[1].cols, 4, "the earlier round's columns");
+        let r2: Vec<&Shot> = c.shots.iter().filter(|s| s.round == 2).collect();
+        let r1 = |k: &str| c.shots.iter().find(|s| s.round == 1 && s.screen.as_deref() == Some(k)).unwrap();
+        for s in r2.iter().filter(|s| s.screen.as_deref() != Some("new")) {
+            let e = r1(s.screen.as_deref().unwrap());
+            assert_eq!(s.cell, e.cell, "{}", s.title);
+            assert_eq!(s.x, e.x, "{}: the same column", s.title);
+        }
+        // Round 1 filled its 12 cells: the new screen goes after them (row 3), never under another screen.
+        let new = r2.iter().find(|s| s.screen.as_deref() == Some("new")).unwrap();
+        assert_eq!(new.cell, Some([3, 0, WHOLE]));
+        let top = r2.iter().map(|s| s.y).fold(f32::MAX, f32::min);
+        assert_eq!(top, r1_bottom + ROUND_GAP, "newest round below");
+        // Round 3 of two screens of round 2 and one new: round 2 left (0,0) empty, the new one takes it.
+        round_of(&mut c, "b3", &[(1284, 816, "new"), (1284, 816, "z")]);
+        let r3 = cells(&c, 3);
+        assert_eq!(r3, vec![[3, 0, WHOLE], [0, 0, WHOLE]]);
+        // Rows 1 and 2 hold nothing in round 3: they take no room.
+        let r3: Vec<&Shot> = c.shots.iter().filter(|s| s.round == 3).collect();
+        assert_eq!(r3[0].y - r3[1].y, 816.0 + GRID_ROW_GAP);
+    }
+
+    #[test]
+    fn shots_moved_by_hand_keep_their_place() {
+        let mut c = Canvas::new(new_id(), "web".into(), "Review", 1);
+        round_of(&mut c, "b", &desk(3));
+        let id = c.shots[1].id.clone();
+        let (w, h) = (c.shots[1].w, c.shots[1].h);
+        c.apply(Edit { layout: vec![Place { id: id.clone(), x: 9000.0, y: -400.0, w, h }], ..Default::default() }, 2).unwrap();
+        assert!(c.shots[1].moved);
+        assert!(!c.shots[0].moved, "only the shot the person moved");
+        // More shots of the same round (10 in all: the grid grows to 4 columns).
+        let r = c.round_for("b", 3).unwrap();
+        for k in 0..7 {
+            c.add_shot(r, format!("s-9{k:011}.png"), hdr(2568, 1632), 10, "more", "", Some(1284), None, 3);
+        }
+        let s = c.shots.iter().find(|s| s.id == id).unwrap();
+        assert_eq!((s.x, s.y), (9000.0, -400.0));
+        // Its cell stays its own: no other shot took it.
+        assert!(c.shots.iter().filter(|o| o.id != id).all(|o| o.cell != s.cell));
+        // Placing the same spot again is not a move.
+        let mut d = c.clone();
+        let o = d.shots[0].clone();
+        d.apply(Edit { layout: vec![Place { id: o.id.clone(), x: o.x, y: o.y, w: o.w, h: o.h }], ..Default::default() }, 4).unwrap();
+        assert!(!d.shots[0].moved);
+    }
+
+    /// A canvas as the one-row layout left it (before grids).
+    fn legacy(rounds: &[usize]) -> Canvas {
+        let mut c = Canvas::new(new_id(), "web".into(), "Old", 1);
+        for (n, &count) in rounds.iter().enumerate() {
+            let n = n as u32 + 1;
+            c.rounds.push(Round { n, at_ms: 1, shots: count as u32, batch: format!("b{n}"), ..Default::default() });
+            for (k, (w, h, key)) in desk(count).into_iter().enumerate() {
+                let (sw, sh) = auto_size(Some(w), w * 2, h * 2);
+                c.shots.push(Shot { id: format!("s-{n}{k:03}"), file: format!("s-{n:06}{k:06}.png"), round: n, title: key.into(), screen: Some(key.into()), width: Some(w), px_w: w * 2, px_h: h * 2, w: sw, h: sh, ..Default::default() });
+                let i = c.shots.len() - 1;
+                let (x, y) = c.legacy_spot(i);
+                (c.shots[i].x, c.shots[i].y) = (x, y);
+            }
+        }
+        c
+    }
+
+    #[test]
+    fn an_old_one_row_canvas_is_laid_out_again_on_load() {
+        let mut c = legacy(&[12]);
+        assert_eq!(c.shots[11].x, 11.0 * (1284.0 + COL_GAP), "one long row");
+        // A note under shot 6 ("f", the sixth), an asset beside the last one, a pin on shot 6.
+        let f = c.shots[5].clone();
+        c.notes.push(Note { id: "n-0001".into(), n: 1, x: f.x + 100.0, y: f.y + f.h + 40.0, w: NOTE_W, h: NOTE_H, ..Default::default() });
+        let l = c.shots[11].clone();
+        c.assets.push(Asset { id: "a-0001".into(), n: 1, x: l.x + l.w + 60.0, y: 0.0, w: 400.0, h: 300.0, ..Default::default() });
+        c.pins.push(Pin { n: 1, on: f.id.clone(), fx: 0.25, fy: 0.5, ..Default::default() });
+        assert!(c.relayout_legacy());
+        assert_eq!(c.rounds[0].cols, 4);
+        let nf = c.shots[5].clone();
+        assert_eq!(nf.cell, Some([1, 1, WHOLE]));
+        // The note and the asset kept their place beside their shot; the pin is a fraction of it.
+        assert_eq!((c.notes[0].x - nf.x, c.notes[0].y - nf.y), (100.0, f.h + 40.0));
+        let nl = &c.shots[11];
+        assert_eq!((c.assets[0].x - nl.x, c.assets[0].y - nl.y), (nl.w + 60.0, 0.0), "the asset stays to the right of the last shot");
+        assert_eq!((c.pins[0].fx, c.pins[0].fy), (0.25, 0.5));
+        // Loaded again: nothing more to do.
+        assert!(!c.relayout_legacy());
+    }
+
+    #[test]
+    fn an_old_round_the_person_arranged_is_left_alone() {
+        // Round 1 untouched, round 2 with a shot dragged out of its row.
+        let mut c = legacy(&[12, 3]);
+        let moved = c.shots[13].id.clone();
+        c.shots[13].y += 500.0;
+        let r2_before: Vec<(f32, f32)> = c.shots[12..].iter().map(|s| (s.x, s.y)).collect();
+        let r1_bottom_before = c.shots[..12].iter().map(|s| s.y + s.h).fold(0.0, f32::max);
+        assert!(c.relayout_legacy());
+        // Round 1 is a grid now, 3 rows tall: round 2 went down by what round 1 grew, as one block.
+        let r1_bottom = c.shots[..12].iter().map(|s| s.y + s.h).fold(0.0, f32::max);
+        let grew = r1_bottom - r1_bottom_before;
+        assert!(grew > 0.0);
+        for (s, (x, y)) in c.shots[12..].iter().zip(r2_before) {
+            assert_eq!((s.x, s.y), (x, y + grew), "{}", s.id);
+            assert_eq!(s.cell, None);
+        }
+        assert_eq!(c.rounds[1].cols, 0);
+        assert!(c.shots.iter().any(|s| s.id == moved));
+        // A one-round canvas with a resized shot: nothing changes.
+        let mut d = legacy(&[4]);
+        d.shots[2].w *= 0.5;
+        d.shots[2].h *= 0.5;
+        let same = d.clone();
+        assert!(!d.relayout_legacy());
+        assert_eq!(d, same);
+    }
+
+    #[test]
+    fn a_full_round_refuses_more() {
+        let mut c = Canvas::new(new_id(), "web".into(), "Review", 1);
+        assert_eq!(c.round_for("b1", 1).unwrap(), 1);
         assert_eq!(c.round_for("b1", 1).unwrap(), 1, "the same batch is the same round");
-        let (a, b) = (&c.shots[0], &c.shots[1]);
-        assert_eq!((a.x, a.y, a.w, a.h), (0.0, 0.0, 1440.0, 900.0));
-        assert_eq!((b.x, b.y), (1440.0 + COL_GAP, 0.0));
-        let r2 = c.round_for("b2", 2).unwrap();
-        assert_eq!(r2, 2);
-        c.add_shot(r2, "s-000000000003.png".into(), hdr(1440, 900), 10, "Settings after", "", None, Some("settings"), 2);
-        let s = c.shots[2].clone();
-        assert_eq!((s.x, s.y), (1440.0 + COL_GAP, 900.0 + ROW_GAP), "under the same screen, a row below");
-        c.add_shot(r2, "s-000000000004.png".into(), hdr(1440, 900), 10, "New", "", None, None, 2);
-        assert!(c.shots[3].x >= s.x + s.w, "a new screen after the row's last");
-        // A full round refuses the 25th.
         let r3 = c.round_for("b3", 3).unwrap();
         for k in 0..MAX_SHOTS_PER_ROUND {
             c.round_for("b3", 3).unwrap();
@@ -890,7 +1335,7 @@ mod tests {
         let e = Edit { pins: Some(vec![Pin { n: 1, on: shot.clone(), fx: 0.1, fy: 0.05, text: "Logo too big".into(), sent: None }]), notes: Some(vec![Note { n: 1, x: 10.0, y: 950.0, w: 240.0, h: 140.0, text: "Calmer colours".into(), ..Default::default() }]), ..Default::default() };
         c.apply(e, 3).unwrap();
         assert_eq!(c.draft(), 3);
-        assert!(c.submit("web · main", &[], 4).unwrap_err().contains("asset 1"), "an asset must have been copied");
+        assert!(c.submit("web · main", &[], 4).unwrap_err().contains("example 1"), "an example must have been copied");
         let r = c.submit("web · main", &[(a.clone(), "/tmp/sbxw-uploads/x/example.png".into())], 4).unwrap().clone();
         assert_eq!((r.n, r.pins, r.notes, r.assets), (1, 1, 1, 1));
         assert_eq!(c.draft(), 0);

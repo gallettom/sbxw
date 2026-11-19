@@ -27,7 +27,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-pub const MIN_ZOOM: f32 = 0.05;
+pub const MIN_ZOOM: f32 = 0.02;
 pub const MAX_ZOOM: f32 = 8.0;
 /// The preview level's longest side, in pixels.
 pub const PREVIEW_PX: u32 = 1024;
@@ -178,12 +178,23 @@ impl Camera {
     }
     /// Show world rectangle `r` (x, y, w, h) whole, centred, with a margin, at most `max` zoom.
     pub fn fit(&mut self, r: [f32; 4], max: f32) {
+        self.fit_in(r, max, [FIT_MARGIN; 4]);
+    }
+    /// [`Camera::fit`] leaving `pad` view points (top, right, bottom, left)
+    /// around it: room for a round's band above and captions below, which
+    /// keep their size on screen.
+    pub fn fit_in(&mut self, r: [f32; 4], max: f32, pad: [f32; 4]) {
         if r[2] <= 0.0 || r[3] <= 0.0 {
             return;
         }
-        let m = 32.0;
-        let z = ((self.view[0] - 2.0 * m) / r[2]).min((self.view[1] - 2.0 * m) / r[3]).clamp(MIN_ZOOM, max.min(MAX_ZOOM));
-        self.centre_on([r[0] + r[2] / 2.0, r[1] + r[3] / 2.0], z);
+        let (aw, ah) = ((self.view[0] - pad[1] - pad[3]).max(1.0), (self.view[1] - pad[0] - pad[2]).max(1.0));
+        let z = (aw / r[2]).min(ah / r[3]).clamp(MIN_ZOOM, max.min(MAX_ZOOM));
+        // The rectangle's centre at the padded area's centre.
+        let c = self.c();
+        let (qx, qy) = (pad[3] + aw / 2.0, pad[0] + ah / 2.0);
+        self.zoom = z;
+        let p = [r[0] + r[2] / 2.0, r[1] + r[3] / 2.0];
+        self.pan = [qx - c[0] - (p[0] - c[0]) * z, qy - c[1] - (p[1] - c[1]) * z];
     }
     /// World point `p` in the view's middle at `zoom`.
     pub fn centre_on(&mut self, p: [f32; 2], zoom: f32) {
@@ -198,6 +209,13 @@ impl Camera {
         [a[0], a[1], b[0] - a[0], b[1] - a[1]]
     }
 }
+
+/// The margin a fit leaves on each side, view points.
+pub const FIT_MARGIN: f32 = 24.0;
+/// What a fit of the whole canvas leaves (top, right, bottom, left): a
+/// round's band (about 30 pt) above the first row, the captions (two lines,
+/// about 40 pt) under the last.
+pub const FIT_PAD: [f32; 4] = [FIT_MARGIN + 32.0, FIT_MARGIN, FIT_MARGIN + 40.0, FIT_MARGIN];
 
 /// A view command from a button or a key.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -281,7 +299,7 @@ pub fn set_scene(id: &str, scene: Scene) {
             if c.sized {
                 let mut cam = c.cam;
                 if let Some(b) = c.bounds() {
-                    cam.fit(b, 1.0);
+                    cam.fit_in(b, 1.0, FIT_PAD);
                     c.fitted = true;
                 }
                 c.set_cam(cam);
@@ -313,7 +331,7 @@ pub fn zoom(id: &str, cmd: ZoomCmd) {
             ZoomCmd::Actual => cam.zoom_about(mid, 1.0),
             ZoomCmd::Fit => {
                 if let Some(b) = c.bounds() {
-                    cam.fit(b, 1.0)
+                    cam.fit_in(b, 1.0, FIT_PAD)
                 }
             }
         }
@@ -558,10 +576,32 @@ fn pic_error(id: &str, image: &str) -> Option<String> {
 pub const PIN_R: f32 = 11.0;
 /// A caption's or a band's text: a fixed size on screen, as map labels,
 /// but at most this tall in world points, so a row's titles and the next
-/// row's band fit in the gap between rows (`ROW_GAP`, 320) at any zoom.
+/// round's band fit in the gap between rounds (`ROUND_GAP`, 480) and a
+/// row's titles in the gap between rows (`GRID_ROW_GAP`, 200) at any zoom.
 const CAPTION_MAX: f32 = 100.0;
-/// The resize handle's half size on screen, points.
-const HANDLE: f32 = 7.0;
+/// The resize handle: a square on the selected item's bottom-right corner,
+/// its side a share ([`HANDLE_SHARE`]) of the item's drawn size, at most
+/// [`HANDLE_MAX`] points, and no handle at all when that would be under
+/// [`HANDLE_MIN`] (an item drawn about 80 points or less: zoom in to resize).
+/// Its hit area is [`HANDLE_HIT`] points around the corner, whatever its size.
+pub const HANDLE_SHARE: f32 = 0.08;
+pub const HANDLE_MAX: f32 = 12.0;
+pub const HANDLE_MIN: f32 = 6.0;
+pub const HANDLE_HIT: f32 = 9.0;
+/// The selection ring: this far outside the item, this thick (points).
+const RING_GAP: f32 = 3.0;
+const RING_W: f32 = 2.0;
+/// A picture's mat: this many points around it on screen, at most
+/// [`MAT_MAX`] world points (so it never fills the gap between shots).
+const MAT: f32 = 4.0;
+const MAT_MAX: f32 = 24.0;
+
+/// The handle's side on screen for an item drawn `w` x `h` points, or
+/// `None` when the item is drawn too small to carry one.
+pub fn handle_side(w: f32, h: f32) -> Option<f32> {
+    let side = (w.min(h) * HANDLE_SHARE).min(HANDLE_MAX);
+    (side >= HANDLE_MIN).then_some(side)
+}
 
 fn pin_world(sc: &Scene, p: &Pin) -> Option<[f32; 2]> {
     let i = sc.items.iter().find(|i| i.id == p.item)?;
@@ -589,7 +629,7 @@ fn hit(cv: &Canvas, w: [f32; 2]) -> Hit {
     if let Some(sel) = &cv.scene.selected {
         if let Some((k, i)) = cv.scene.items.iter().enumerate().find(|(_, i)| &i.id == sel && i.movable) {
             let (hx, hy) = (i.x + i.w, i.y + i.h);
-            if (w[0] - hx).abs() <= (HANDLE + 3.0) / z && (w[1] - hy).abs() <= (HANDLE + 3.0) / z {
+            if handle_side(i.w * z, i.h * z).is_some() && (w[0] - hx).abs() <= HANDLE_HIT / z && (w[1] - hy).abs() <= HANDLE_HIT / z {
                 return Hit::Handle(k);
             }
         }
@@ -806,7 +846,7 @@ fn laid_out(id: &str, size: [f32; 2]) -> bool {
         if !cv.fitted {
             cv.fitted = true;
             match cv.bounds() {
-                Some(b) => cam.fit(b, 1.0),
+                Some(b) => cam.fit_in(b, 1.0, FIT_PAD),
                 None => cam.centre_on([size[0] / 2.0, size[1] / 2.0], 1.0),
             }
         } else {
@@ -931,6 +971,17 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
         }
         let on = i.x < vis[0] + vis[2] + mx && i.x + i.w > vis[0] - mx && i.y < vis[1] + vis[3] + my && i.y + i.h > vis[1] - my;
         let selected = cv.scene.selected.as_deref() == Some(&i.id);
+        if matches!(i.body, Body::Picture { .. }) {
+            // A mat a shade lighter than the ground, edged by a hairline: dark
+            // screens stand apart from the surface and from each other.
+            let m = (MAT * inv).min(MAT_MAX);
+            w = w.child(el().key(format!("canvas-mat-{}", i.id)).pin(Some(i.x - m), Some(i.y - m), None, None).w(i.w + 2.0 * m).h(i.h + 2.0 * m).fill(c("surface")).border(inv, c("dim")).radius(3.0 * inv));
+        }
+        if selected {
+            // The selection ring, outside the item (and its mat): it reads on any picture, at any zoom.
+            let o = (MAT * inv).min(MAT_MAX) + RING_GAP * inv;
+            w = w.child(el().key(format!("canvas-ring-{}", i.id)).pin(Some(i.x - o), Some(i.y - o), None, None).w(i.w + 2.0 * o).h(i.h + 2.0 * o).border(RING_W * inv, c("accent")).radius(4.0 * inv));
+        }
         let mut b = el().key(format!("canvas-{}", i.id)).pin(Some(i.x), Some(i.y), None, None).w(i.w).h(i.h);
         match &i.body {
             Body::Picture { image, caption, asset } => {
@@ -942,7 +993,7 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
                         b = b.child(text(format!("This picture cannot be shown: {e}")).font(small(12.0 * inv, 400.0)).color(c("text-muted")).wrap().w(i.w));
                     }
                 }
-                b = b.border(if selected { 2.0 * inv } else { 1.0 * inv }, if selected { c("accent") } else if *asset { c("amber") } else { c("border") });
+                b = b.border(inv, if selected { c("accent") } else if *asset { c("amber") } else { c("border") });
                 // The caption under the picture, at a size that stays readable.
                 // Zoomed far out, the title alone, and never taller than the gap between rows.
                 let mut cap = el().pin(Some(0.0), Some(i.h + (6.0 * inv).min(16.0)), None, None).w(i.w);
@@ -970,9 +1021,9 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
             }
             Body::Band { .. } => {}
         }
-        if selected && i.movable {
-            let hs = HANDLE * inv;
-            b = b.child(el().key(format!("canvas-handle-{}", i.id)).pin(Some(i.w - hs), Some(i.h - hs), None, None).w(2.0 * hs).h(2.0 * hs).radius(2.0 * inv).fill(c("accent")).border(1.0 * inv, c("bg")));
+        if let Some(side) = handle_side(i.w * z, i.h * z).filter(|_| selected && i.movable) {
+            let hs = side / 2.0 * inv;
+            b = b.child(el().key(format!("canvas-handle-{}", i.id)).pin(Some(i.w - hs), Some(i.h - hs), None, None).w(2.0 * hs).h(2.0 * hs).radius(inv).fill(c("accent")).border(inv, c("bg")));
         }
         w = w.child(b);
     }
