@@ -4,9 +4,11 @@
 //! /api/teams/:id/timeline`) is drawn as a conversation in time order: the
 //! person's acts on the right, the lead and threads on the left, sbxw's own
 //! events in the middle; the board's decisions and warnings stand out, and
-//! a thread's consecutive commits fold into one row. Beside it, when wide:
-//! the team, the decisions and warnings that still stand, and the commits
-//! per thread with a lane graph and a commit's diff in place.
+//! a thread's consecutive commits fold into one row. One column: above the
+//! conversation a summary (the team's state, its lead, its threads as chips,
+//! the places one acts, counters that are the filters); the Commits filter
+//! shows the lane graph and each thread's commits with a commit's diff in
+//! place, at the conversation's width.
 //!
 //! Read only. Acting stays where it is done: the plan dialog (approve,
 //! merge), the Requests panel (answers), a thread's terminal. The Board
@@ -35,7 +37,6 @@ pub const ALL_TEAMS: usize = 8;
 pub const ALL_PAGE: usize = 40;
 
 const GROUPS: &[&str] = &["all", "notes", "questions", "messages", "commits", "status"];
-const TABS: &[&str] = &["conversation", "notes", "commits"];
 const KEYS: &[&str] = &["up", "down", "enter", "escape"];
 /// Teams the picker lists a page (then "Show more").
 pub const PICKER_PAGE: usize = 20;
@@ -63,10 +64,9 @@ pub const INTENTS: &[Spec] = &[
     d("board_team", &[("id", Arg::Str, true)], "Shows that team's conversation (`all`: every team's latest events)."),
     d("board_filter", &[("group", Arg::OneOf(GROUPS), false), ("thread", Arg::Text, false), ("text", Arg::Text, false)], "Filters the conversation: by kind (all, notes: decisions and warnings, questions, messages: the agents' direct messages, commits, status), by thread (empty: every one), by words; give the words on every edit."),
     d("board_more", &[], "Reads and shows older events of the team's conversation."),
-    d("board_expand", &[("id", Arg::Str, true)], "Opens or folds a row in place: a long message, a plan's goals, a thread's commits. View state only."),
-    d("board_commit", &[("hash", Arg::Str, true)], "Opens a commit of the team in the Commits column, its files and their diff, or folds it."),
+    d("board_expand", &[("id", Arg::Str, true)], "Opens or folds a row in place: a long message, a plan's goals, a thread's commits, the summary's details (`summary`). View state only."),
+    d("board_commit", &[("hash", Arg::Str, true)], "Opens a commit of the team in the Commits filter, its files and their diff, or folds it."),
     d("board_file", &[("path", Arg::Str, true)], "Shows or hides a changed file's diff in the open commit (`path`: as the commit lists it)."),
-    d("board_tab", &[("tab", Arg::OneOf(TABS), true)], "On a narrow window, which column shows: the conversation, the team and its notes, or the commits."),
     d("board_open", &[("what", Arg::OneOf(LINKS), true), ("thread", Arg::Text, false), ("relay", Arg::Str, false)], "Goes where one acts or reads more: a thread's terminal, its session in Sessions, its commits or worktrees, the plan dialog, the Requests panel (on a request), the Threads panel."),
     d("board_refresh", &[], "Reads the teams and the conversation again."),
     d("board_picker", &[("open", Arg::Bool, false), ("more", Arg::Bool, false)], "Opens or closes the team picker's list (`open`; none: toggles), or lists more teams in it (`more`). View state only."),
@@ -122,8 +122,7 @@ pub struct State {
     /// what is under it (the pressed bubble's top stays put). A new team,
     /// filter or search follows the end again.
     held: bool,
-    tab: String,
-    /// The commit open in the Commits column, and its detail.
+    /// The commit open in the Commits filter, and its detail.
     commit: Option<(String, String)>,
     detail: J,
     detail_error: Option<String>,
@@ -314,7 +313,6 @@ impl State {
                     self.files_open.insert(p);
                 }
             }
-            "board_tab" => self.tab = a.req("tab").to_string(),
             "board_open" => return self.open_link(a),
             "board_refresh" => {
                 out.push(self.read_teams());
@@ -554,18 +552,11 @@ impl State {
         list.into_iter().flatten().filter(|r| r["state"] == "pending" || r["state"] == "answered").filter_map(|r| r["id"].as_str().map(str::to_string)).collect()
     }
 
-    /// Characters a line of a bubble holds at the overlay's width now: the
-    /// fold counts lines as drawn.
-    fn cpl(&self, cx: &Ctx) -> usize {
-        let ov = &cx.get("app")["overlay"];
-        let Some(ow) = ov["w"].as_f64().map(|w| w as f32) else { return 0 };
-        let conv = model::conv_w(ow, self.team.is_some());
-        model::chars_per_line(model::bubble_max(conv, ow))
-    }
-
     fn rows(&self, cx: &Ctx) -> Vec<J> {
         let waiting = Self::waiting(cx);
-        let o = model::Opts { expanded: Some(&self.expanded), all: self.team.is_none(), now_s: crate::feat::files::view::now_secs(), waiting: Some(&waiting), cpl: self.cpl(cx) };
+        // The notes that still stand, marked in the flow (shown once, there).
+        let standing: BTreeSet<String> = self.timelines.values().flat_map(|t| t.standing.iter().filter_map(|n| n["id"].as_str().map(str::to_string))).collect();
+        let o = model::Opts { expanded: Some(&self.expanded), all: self.team.is_none(), now_s: crate::feat::files::view::now_secs(), waiting: Some(&waiting), standing: Some(&standing) };
         let groups = &cx.get("app")["groups"];
         let events = self.events();
         let mut rows = model::rows(&events, &o);
@@ -612,16 +603,27 @@ impl State {
             "teams": teams, "team": current, "all": self.team.is_none(), "picker": picker, "popup": self.picker,
             "rows": rows[cut..], "older": older, "held": self.held, "hidden": cut, "total": total,
             "group": if self.group.is_empty() { "all" } else { self.group.as_str() }, "thread": self.thread, "text": self.text,
-            "tab": if self.tab.is_empty() { "conversation" } else { self.tab.as_str() },
+            "details": self.expanded.contains("summary"),
             "loading": loading, "errors": errors, "monitor": crate::feat::intent("monitor_open").is_some(),
         });
         if let Some(t) = tl {
-            v["side"] = self.side(t, &groups);
+            let ow = cx.get("app")["overlay"]["w"].as_f64().map_or(1000.0, |w| w as f32);
+            v["side"] = self.side(t, &groups, Self::waiting_from(cx, t), ow);
         }
         Action::Set { key: UI.into(), value: v }
     }
 
-    fn side(&self, t: &Timeline, groups: &J) -> J {
+    /// Questions of the team's sandbox still waiting in Requests (the summary's counter).
+    fn waiting_from(cx: &Ctx, t: &Timeline) -> usize {
+        let sb = t.team["sandbox"].as_str().unwrap_or("");
+        let reqs = cx.get("relay");
+        let list = reqs["requests"].as_array().or_else(|| reqs.as_array());
+        list.into_iter().flatten().filter(|r| r["from"] == sb && (r["state"] == "pending" || r["state"] == "answered")).count()
+    }
+
+    /// The summary above the conversation (`side`, the name it kept): the
+    /// team, its threads, the counters, the Commits filter's lanes and lists.
+    fn side(&self, t: &Timeline, groups: &J, waiting: usize, ow: f32) -> J {
         let team = &t.team;
         let sb = team["sandbox"].as_str().unwrap_or("");
         let threads: Vec<J> = team["threads"]
@@ -642,16 +644,9 @@ impl State {
                 json!({ "name": n, "color": crate::feat::worktrees::graph::lane_color(n), "state": w, "tone": tone, "meta": meta.join(" · "), "selected": self.thread == n })
             })
             .collect();
-        let notes: Vec<J> = t
-            .standing
-            .iter()
-            .map(|n| {
-                let warn = n["kind"] == "warning";
-                // A team note's pinned decisions and warnings say where they came from.
-                let (who, color) = model::who(n["by"].as_str().unwrap_or(""));
-                json!({ "id": n["id"], "label": if warn { "Warning" } else { "Decision" }, "tone": if warn { "amber" } else { "green" }, "who": who, "who_color": color, "text": n["text"], "files": n["files"], "guess": n["guess"], "via": if n["team_note"] == true { "team note" } else { "board" } })
-            })
-            .collect();
+        // Counted only: a decision or a warning is drawn once, in the conversation.
+        let warnings = t.standing.iter().filter(|n| n["kind"] == "warning").count();
+        let decisions = t.standing.len() - warnings;
         let list: Vec<J> = t.commits["list"].as_array().cloned().unwrap_or_default();
         let names: Vec<String> = threads.iter().filter_map(|x| x["name"].as_str().map(str::to_string)).collect();
         let mut per: Vec<J> = vec![];
@@ -677,15 +672,16 @@ impl State {
             let merged = !mine.is_empty() && mine.iter().all(|c| c["merged"] == true);
             per.push(json!({ "thread": n, "color": crate::feat::worktrees::graph::lane_color(n), "commits": mine, "totals": tot, "merged": merged }));
         }
-        let lanes_w = model::lanes(&lane_names, &list, 320.0);
-        let lanes_n = model::lanes(&lane_names, &list, 260.0);
+        let lanes = model::lanes(&lane_names, &list, model::lanes_w(ow));
+        let n = |k: &str| t.commits["totals"].as_array().into_iter().flatten().map(|x| x[k].as_u64().unwrap_or(0)).sum::<u64>();
+        let counts = json!({ "decisions": decisions, "warnings": warnings, "waiting": waiting, "commits": list.len().max(n("commits") as usize), "added": n("added"), "removed": n("removed") });
         json!({
             "id": team["id"], "sandbox": sb, "color": groups[sb], "summary": team["summary"], "names": model::team_names(team), "state": team["state"], "tone": model::team_tone(team["state"].as_str().unwrap_or("")),
-            "lead": team["lead"], "variant": team["variant"], "threads": threads, "notes": notes,
+            "lead": team["lead"], "variant": team["variant"], "threads": threads, "counts": counts,
             // The picker's capsule in the team sandbox's colours (scope.rs, as every scoped screen).
             "look": crate::scope::look_json(groups[sb].as_str().and_then(crate::scope::parse_hex)),
             "commits": per, "commits_available": t.commits["available"].as_bool().unwrap_or(t.commits.is_null()), "commits_why": t.commits["why"],
-            "lanes": { "wide": lanes_w, "narrow": lanes_n },
+            "lanes": lanes,
             "loading": t.loading,
         })
     }

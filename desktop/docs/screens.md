@@ -1944,8 +1944,19 @@ page ("Show n more"). The list is at least as wide as the button, up to
 560 pt, never wider than the overlay; a press outside closes it (and does
 nothing else), a pick closes it, its rows are one keyboard list (Up, Down,
 Enter; the keyboard lands on the team shown), Escape closes it through
-`board_key` (`board_ui.popup` is true while it is open). The main column is
-the team's timeline (`GET /api/teams/:id/timeline`) as a **conversation**,
+`board_key` (`board_ui.popup` is true while it is open). One column. Under
+the title, a **summary** (`board-summary`): the lead as a chip, each thread
+as a chip (status dot, name, state; a press filters the conversation to it,
+pressed again every thread; its terminal and its session in Sessions as
+icons shown on hover and keyboard focus, their room kept), then counters
+that are the filters below (standing decisions, standing warnings,
+questions waiting in Requests, commits with their +/- totals: a press
+applies that filter and marks the counter, pressed again All), the Plan
+dialog, Threads and Worktrees, and Details (each thread's worktree and
+model, in place). The team's state is beside the picker only. Under 760 pt
+the summary is one wrapping line: counters without their words (tooltips
+keep them), the links as icons, a thread's terminal and session in Details.
+Under it the conversation, the overlay's whole width: the team's timeline (`GET /api/teams/:id/timeline`) as a **conversation**,
 oldest at the top, opening at the newest: the person's acts on the right,
 the lead and threads on the left, sbxw's own events as centred lines. Each
 message has its **author line above its bubble**: the dot and the name (mono,
@@ -1976,15 +1987,22 @@ note labelled Info, Warning or Decision with "team note"; a direct message
 (the agents' own `SendMessage`, as sbxw's hook saw it) as a bubble labelled
 "direct message"; a thread's consecutive commits one row ("api-routes made
 4 commits") that opens. A text drawn on more than 8 lines at the bubble's width folds (Show more,
-6 lines shown: `model::FOLD_DRAWN`); on a wide window a few lines are not folded; day separators; relative times, the exact UTC time in the tooltip.
-A filter row (All, Decisions and warnings, Questions, Messages, Commits, Status), a
-thread and words, applied by the daemon before paging. From 760 pt a side
-column: **Team** (the lead, each thread with its state, worktree and model;
-pressing one filters the conversation; its terminal and its session in Sessions),
-**Decisions and warnings** that still stand, **Commits** per thread (totals,
-merged, a lane graph drawn with `paint`, a commit opened in place with the
-Commits view's diff groups, `commits::diff_groups`). Under 760 pt one
-column with Conversation, Team and notes, Commits.
+6 lines shown: `model::FOLD_DRAWN`), decided by the screen at the width it
+draws now (the data holds the whole text); on a wide window a few lines are not folded; day separators; relative times, the exact UTC time in the tooltip.
+A filter row (All, Decisions and warnings, Questions, Messages, Commits, Status) and
+words, applied by the daemon before paging (the thread: its chip). A decision
+or warning is drawn once, in the conversation; one that still stands has a
+"standing" mark on its bubble. On a team, the **Commits** filter shows, at
+the conversation's width, a lane graph (drawn with `paint`, 260 to 960 pt),
+each thread's totals and commits, a commit opened in place with the Commits
+view's diff groups (`commits::diff_groups`); in All, commits stay folded rows.
+**Folds hold the page**: once a fold is pressed (a long text, goals, a
+thread's commits, a commit, a file's diff, Details) the conversation stops
+following its end until the next team, filter or search, so the pressed
+bubble's top and the rows above it stay put; folding a bubble whose top is
+above the view scrolls it back into view (`ScrollIntoView`). At the very end
+of the conversation a fold removes content under the view: the rows come
+down together by that much.
 
 Read only: every intent is Direct and reads; links go to the plan dialog,
 the Requests panel, a terminal, Commits, Worktrees, the Threads panel, the
@@ -1999,9 +2017,8 @@ again.
 | `board_team` | `id` | Another team, or `all` |
 | `board_filter` | `group?`, `thread?`, `text?` | Filters (applied by the daemon) |
 | `board_more` | | Earlier rows, then an older page |
-| `board_expand` | `id` | Opens or folds a row (long text, goals, commits) |
-| `board_commit`, `board_file` | `hash`; `path` | A team commit opened in the Commits column; a file's diff |
-| `board_tab` | `tab` | The narrow layout's column |
+| `board_expand` | `id` | Opens or folds a row (long text, goals, commits; `summary`: the summary's details) |
+| `board_commit`, `board_file` | `hash`; `path` | A team commit opened in the Commits filter; a file's diff |
 | `board_open` | `what`, `thread?`, `relay?` | Where one acts: terminal, monitor, commits, worktrees, plan, requests, threads |
 | `board_refresh` | | Reads again |
 | `board_picker` | `open?`, `more?` | Opens or closes the team picker's list (none: toggles), or lists 20 more teams in it |
