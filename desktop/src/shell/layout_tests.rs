@@ -11,7 +11,7 @@ use std::sync::mpsc;
 pub(super) struct Rig {
     pub rt: rune::Runtime<App>,
     pub inputs: Vec<(Uid, mpsc::Receiver<TermInput>)>,
-    _events: Vec<mpsc::Sender<TermEvent>>,
+    pub events: Vec<mpsc::Sender<TermEvent>>,
     pub clock: f64,
 }
 
@@ -33,7 +33,7 @@ impl Rig {
         }
         let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
         rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut Tx| s.on_key(ev, tx));
-        let mut r = Rig { rt, inputs, _events: events, clock: 0.0 };
+        let mut r = Rig { rt, inputs, events, clock: 0.0 };
         r.settle();
         r.take();
         r
