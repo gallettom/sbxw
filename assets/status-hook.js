@@ -40,7 +40,8 @@ function done() {
 
 // What this hook can report, so the daemon can tell "the session is not over
 // SSH" from "the hook is too old to have looked". Bump when a signal is added.
-const HOOK_VERSION = 2;
+// v3: the transcript's tail (see `postHistory`) and the agent process.
+const HOOK_VERSION = 3;
 
 // Which sshd-set variables are in this session's environment.
 //
@@ -72,9 +73,12 @@ function sshEnvNames() {
 // Read from /proc, walking PPid up to init. `comm` sits between the first "("
 // and the *last* ")" of /proc/<pid>/stat because a process name may itself
 // contain parentheses; the state letter follows it, then PPid. Best-effort
-// throughout: an unreadable chain yields an empty list.
-function ancestry() {
-  const names = [];
+// throughout: an unreadable chain yields an empty list. Each comes with its
+// pid and start time (field 22 of its stat, in clock ticks since boot):
+// `<pid>:<start>` names one process for good, a reused pid being another
+// start.
+function ancestors() {
+  const out = [];
   let pid = process.pid;
   for (let depth = 0; depth < 24 && pid > 1; depth++) {
     let stat;
@@ -86,15 +90,299 @@ function ancestry() {
     const open = stat.indexOf("(");
     const close = stat.lastIndexOf(")");
     if (open < 0 || close < open) break;
-    names.push(stat.slice(open + 1, close));
     // After ")" comes " <state> <ppid> …".
     const after = stat.slice(close + 1).trim().split(/\s+/);
+    out.push({ pid, name: stat.slice(open + 1, close), start: after[19] || "" });
     const ppid = parseInt(after[1], 10);
     if (!Number.isFinite(ppid) || ppid <= 0) break;
     pid = ppid;
   }
-  return names;
+  return out;
 }
+
+// What runs only a command for the agent, not the agent itself.
+const LAUNCHERS = new Set(["sh", "bash", "dash", "zsh", "fish", "env", "timeout"]);
+
+// The agent process this hook runs for: its nearest ancestor that is not a
+// shell. One Claude Code process runs one session at a time, so a new
+// session from the same process ends the previous one for sure.
+function agentProcess(chain) {
+  const a = chain.slice(1).find((p) => !LAUNCHERS.has(p.name));
+  return a && a.start ? a : null;
+}
+
+// Every process alive in the sandbox with the agent's name, as
+// `<pid>:<start>`: which earlier sessions' processes are gone. Names and
+// pids only. Undefined when /proc cannot be listed (then nothing is retired).
+function liveProcs(name) {
+  try {
+    const out = [];
+    for (const d of fs.readdirSync("/proc")) {
+      if (!/^[0-9]+$/.test(d)) continue;
+      let stat;
+      try {
+        stat = fs.readFileSync("/proc/" + d + "/stat", "utf8");
+      } catch (_) {
+        continue;
+      }
+      const open = stat.indexOf("(");
+      const close = stat.lastIndexOf(")");
+      if (open < 0 || close < open || stat.slice(open + 1, close) !== name) continue;
+      const after = stat.slice(close + 1).trim().split(/\s+/);
+      if (after[19]) out.push(d + ":" + after[19]);
+    }
+    return out;
+  } catch (_) {
+    return undefined;
+  }
+}
+// BEGIN history
+// The conversation, for the Monitor: this session's own transcript (the path
+// Claude Code hands every hook; nothing else is read), from where the last
+// call stopped, at most READ_MAX bytes per event, complete lines only. What
+// is posted is summarised: texts clipped, a tool's few telling input fields,
+// a result's status, size and head. Never thinking, images, whole results.
+// The daemon masks and stores it in memory; the offset file below holds
+// offsets only, never text. Any error: nothing is posted, the hook goes on.
+const HISTORY_DIR = "/tmp/sbxw-history";
+const READ_MAX = 256 * 1024; // new transcript bytes read per event
+const BACKFILL_MAX = 2 * 1024 * 1024; // a first read starts this far from the end
+const SCAN_MAX = 8 * 1024 * 1024; // an oversized line is skipped up to this
+const POST_ITEMS = 380; // under the daemon's 400
+const POST_BYTES = 400 * 1024; // under the daemon's 512 KB
+const TEXT_MAX = 16 * 1024;
+const HEAD_MAX = 2000;
+const FIELD_MAX = 500;
+const COMMAND_MAX = 1000;
+
+function clipText(s, n) {
+  s = typeof s === "string" ? s : "";
+  return s.length > n ? s.slice(0, n) : s;
+}
+
+function validSession(sid) {
+  return typeof sid === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(sid);
+}
+
+// Why the transcript cannot be read, or "" when it can.
+function transcriptProblem(evt) {
+  const tp = evt.transcript_path;
+  if (typeof tp !== "string" || tp === "") return "no_path";
+  if (!validSession(evt.session_id)) return "no_session";
+  if (require("path").basename(tp) !== evt.session_id + ".jsonl") return "not_this_sessions";
+  return "";
+}
+
+function statePath(dir, sid) {
+  return require("path").join(dir, sid + ".json");
+}
+
+function loadState(dir, sid) {
+  try {
+    const st = JSON.parse(fs.readFileSync(statePath(dir, sid), "utf8"));
+    return st && typeof st === "object" ? st : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveState(dir, sid, st) {
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const clean = {};
+    for (const k of ["off", "ino", "reset", "align"]) if (st[k] !== undefined) clean[k] = st[k];
+    fs.writeFileSync(statePath(dir, sid), JSON.stringify(clean), { mode: 0o600 });
+  } catch (_) {}
+}
+
+// A tool's input, reduced to what its one-line summary needs.
+function toolInput(name, input) {
+  const i = input && typeof input === "object" ? input : {};
+  const out = {};
+  const str = (k, n) => {
+    if (typeof i[k] === "string") out[k] = clipText(i[k], n || FIELD_MAX);
+  };
+  const num = (k) => {
+    if (typeof i[k] === "number") out[k] = i[k];
+  };
+  const lines = (s) => (typeof s === "string" ? s.split("\n").length : undefined);
+  if (typeof name === "string" && name.startsWith("mcp__")) return out;
+  str("command", COMMAND_MAX);
+  str("file_path");
+  str("notebook_path");
+  str("path");
+  str("pattern");
+  str("description");
+  str("subagent_type");
+  num("offset");
+  num("limit");
+  if (name === "Edit") {
+    out.lines_old = lines(i.old_string);
+    out.lines_new = lines(i.new_string);
+  }
+  if (name === "Write") out.lines = lines(i.content);
+  if (Array.isArray(i.edits)) out.edits_count = i.edits.length;
+  if (Array.isArray(i.questions) && i.questions[0] && typeof i.questions[0].question === "string") {
+    out.questions = [{ question: clipText(i.questions[0].question, FIELD_MAX) }];
+  }
+  return out;
+}
+
+// A tool result's content as text (images left out) and whether one was there.
+function resultText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((b) => (b && b.type === "text" && typeof b.text === "string" ? b.text : b && b.type === "image" ? "[image]" : ""))
+    .join("\n");
+}
+
+// One transcript entry as items. Unknown entries and blocks: none.
+function entryItems(e) {
+  const out = [];
+  if (!e || typeof e !== "object" || e.isSidechain) return out;
+  const at = Date.parse(e.timestamp) || 0;
+  const msg = e.message && typeof e.message === "object" ? e.message : {};
+  const content = msg.content;
+  if (e.type === "user") {
+    if (e.isCompactSummary) {
+      out.push({ t: "user", compact_summary: true, text: clipText(resultText(content), TEXT_MAX), at });
+      return out;
+    }
+    const meta = !!e.isMeta;
+    if (typeof content === "string") {
+      out.push({ t: "user", text: clipText(content, TEXT_MAX), meta, at });
+      return out;
+    }
+    for (const b of Array.isArray(content) ? content : []) {
+      if (!b || typeof b !== "object") continue;
+      if (b.type === "text") out.push({ t: "user", text: clipText(b.text, TEXT_MAX), meta, at });
+      else if (b.type === "image") out.push({ t: "image", at });
+      else if (b.type === "tool_result") {
+        const text = resultText(b.content);
+        out.push({ t: "tool_result", id: clipText(b.tool_use_id, 80), is_error: b.is_error === true, size: text.length, head: clipText(text, HEAD_MAX), at });
+      }
+    }
+  } else if (e.type === "assistant") {
+    if (e.isApiErrorMessage) {
+      out.push({ t: "api_error", text: clipText(resultText(content), 300), at });
+      return out;
+    }
+    for (const b of Array.isArray(content) ? content : []) {
+      if (!b || typeof b !== "object") continue;
+      if (b.type === "text") out.push({ t: "assistant", text: clipText(b.text, TEXT_MAX), at });
+      else if (b.type === "tool_use") out.push({ t: "tool_use", id: clipText(b.id, 80), name: clipText(b.name, 120), input: toolInput(b.name, b.input), at });
+      else if (b.type === "image") out.push({ t: "image", at });
+      // thinking, redacted_thinking and anything new: left out.
+    }
+  } else if (e.type === "system" && e.subtype === "compact_boundary") {
+    out.push({ t: "compact", at: Date.parse(e.timestamp) || 0 });
+  }
+  return out;
+}
+
+// What a line too long to read whole says about itself, from its head.
+function oversizedItems(head) {
+  if (!/"type"\s*:\s*"user"/.test(head) || !/"tool_result"/.test(head)) return [];
+  const id = /"tool_use_id"\s*:\s*"([^"]{1,80})"/.exec(head);
+  return [{ t: "tool_result", id: id ? id[1] : "", is_error: /"is_error"\s*:\s*true/.test(head), size: 0, head: "" , oversized: true }];
+}
+
+// The next piece of the transcript to post: `{from, to, reset, items}`, or
+// null when there is nothing new (or the file cannot be read). `st` is this
+// session's offset state; `limits` overrides the constants (tests).
+function readTail(tp, st, sid, limits) {
+  const L = Object.assign({ read: READ_MAX, backfill: BACKFILL_MAX, scan: SCAN_MAX, items: POST_ITEMS, bytes: POST_BYTES }, limits || {});
+  let fd;
+  try {
+    fd = fs.openSync(tp, "r");
+    const stat = fs.fstatSync(fd);
+    let reset = !!st.reset;
+    let align = !!st.align;
+    let off = typeof st.off === "number" && st.off >= 0 ? st.off : null;
+    // Replaced or truncated: start again from its tail.
+    if (off !== null && ((st.ino && st.ino !== stat.ino) || stat.size < off)) {
+      off = null;
+      reset = true;
+    }
+    if (off === null) {
+      off = Math.max(0, stat.size - L.backfill);
+      align = off > 0;
+      if (off > 0) reset = true;
+    }
+    const from = off;
+    if (off >= stat.size) return { from, to: off, reset, items: [], ino: stat.ino, prior: null, empty: !reset };
+    const len = Math.min(stat.size - off, L.read);
+    const buf = Buffer.alloc(len);
+    const n = fs.readSync(fd, buf, 0, len, off);
+    let start = 0;
+    if (align) {
+      const nl = buf.indexOf(10);
+      if (nl < 0 || nl >= n) {
+        // Still inside the line we landed in: skip what was read.
+        return { from, to: off + n, reset, items: [], ino: stat.ino, prior: null, align: true };
+      }
+      start = nl + 1;
+    }
+    const last = buf.lastIndexOf(10, n - 1);
+    if (last < start) {
+      if (n < L.read) return null; // a line still being written
+      // One line longer than a read: report it from its head, skip it.
+      const items = oversizedItems(buf.slice(start, n).toString("utf8"));
+      let pos = off + n;
+      const chunk = Buffer.alloc(64 * 1024);
+      while (pos - off < L.scan) {
+        const m = fs.readSync(fd, chunk, 0, chunk.length, pos);
+        if (m <= 0) return null; // not finished being written
+        const nl = chunk.indexOf(10);
+        if (nl >= 0 && nl < m) return { from, to: pos + nl + 1, reset, items, ino: stat.ino, prior: null };
+        pos += m;
+      }
+      return { from, to: pos, reset, items, ino: stat.ino, prior: null, align: true };
+    }
+    const items = [];
+    let prior = null;
+    let to = off + start;
+    let bytes = 0;
+    let p = start;
+    while (p <= last) {
+      const nl = buf.indexOf(10, p);
+      const line = buf.slice(p, nl).toString("utf8");
+      p = nl + 1;
+      let entry = null;
+      try {
+        entry = JSON.parse(line);
+      } catch (_) {}
+      const got = entry ? entryItems(entry) : [];
+      if (entry && typeof entry.sessionId === "string" && entry.sessionId !== sid && !prior && validSession(entry.sessionId)) prior = entry.sessionId;
+      const size = got.reduce((a, it) => a + JSON.stringify(it).length, 0);
+      if (items.length > 0 && (items.length + got.length > L.items || bytes + size > L.bytes)) break; // the rest next time
+      items.push(...got.slice(0, L.items));
+      bytes += size;
+      to = off + p;
+    }
+    return { from, to, reset, items, ino: stat.ino, prior };
+  } catch (_) {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch (_) {}
+    }
+  }
+}
+
+// What to keep after the daemon answered a post: its status and `next`.
+function stateAfter(status, body, piece) {
+  const next = body && typeof body.next === "number" ? body.next : null;
+  if (status === 200 && next !== null) return { off: next, ino: piece.ino, align: piece.align ? true : undefined };
+  if (status === 409 && next === 0) return { reset: true };
+  if (status === 409 && next !== null) return { off: next, ino: piece.ino };
+  return null; // unchanged: tried again at the next event
+}
+// END history
+
 // Safety net: never hang the agent if stdin doesn't close.
 setTimeout(done, 2000);
 
@@ -116,7 +404,8 @@ process.stdin.on("end", () => {
   // the hook into every existing sandbox.
   evt.hook_version = HOOK_VERSION;
   evt.ssh_env = sshEnvNames();
-  evt.ancestry = ancestry();
+  const chain = ancestors();
+  evt.ancestry = chain.map((a) => a.name);
   // The thread sbxw started this session as, if any. Its worktree says the
   // same for a split plan, but a shared plan's threads all share one.
   if (process.env.SBXW_THREAD) evt.sbxw_thread = process.env.SBXW_THREAD;
@@ -132,62 +421,116 @@ process.stdin.on("end", () => {
   // no other session — including one where a human typed /codemap themselves,
   // which is an ordinary session in every way that matters here.
   if (process.env.SBXW_CODEMAP_DONE) evt.background = "codemap";
+  // The agent process, and on a start which agent processes are alive, so
+  // the daemon can tell a /clear or a killed terminal from a second one.
+  const agent = agentProcess(chain);
+  if (agent) {
+    evt.agent_proc = agent.pid + ":" + agent.start;
+    if (evt.hook_event_name === "SessionStart") {
+      const live = liveProcs(agent.name);
+      if (live) evt.live_procs = live;
+    }
+  }
+  // The transcript's tail, unless this is a background session.
+  let piece = null;
+  const problem = transcriptProblem(evt);
+  if (!evt.background) {
+    if (problem) evt.history = "none:" + problem;
+    else {
+      const st = loadState(HISTORY_DIR, evt.session_id);
+      piece = readTail(evt.transcript_path, st, evt.session_id);
+      evt.history = piece ? "transcript" : fs.existsSync(evt.transcript_path) ? "transcript" : "none:unreadable";
+      if (piece && !(piece.to > piece.from || piece.reset)) piece = null;
+    }
+  }
   log(
     "fire event=" + (evt.hook_event_name || "?") +
       " ssh=" + (evt.ssh_env.join(",") || "-") +
       " ancestry=" + evt.ancestry.join("<") +
+      (piece ? " history=" + piece.items.length + " items " + (piece.to - piece.from) + "B" : "") +
       " → host.docker.internal:" + PORT,
   );
 
-  const payload = Buffer.from(JSON.stringify(evt));
+  // Both requests at once; the hook exits when both are answered.
+  let pending = 1 + (piece ? 1 : 0);
+  let output = null;
+  const settle = () => {
+    pending -= 1;
+    if (pending > 0) return;
+    if (output) process.stdout.write(JSON.stringify(output), done);
+    else done();
+  };
+
+  send("/api/hook", evt, (status, body) => {
+    if (status >= 400) log("status=" + status + " body=" + body.replace(/\s+/g, " ").trim());
+    else {
+      log("ok status=" + status);
+      let out = null;
+      try {
+        out = JSON.parse(body);
+      } catch (_) {}
+      if (out && out.hookSpecificOutput) output = out;
+    }
+    settle();
+  });
+  if (piece) {
+    const post = { session_id: evt.session_id, from: piece.from, to: piece.to, reset: !!piece.reset, items: piece.items };
+    if (piece.prior) post.prior_session = piece.prior;
+    send("/api/hook/history", post, (status, body) => {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(body);
+      } catch (_) {}
+      const next = stateAfter(status, parsed, piece);
+      if (next) saveState(HISTORY_DIR, evt.session_id, next);
+      log("history status=" + status);
+      settle();
+    });
+  }
+});
+
+// POST `body` to the daemon; `then(status, text)` once, 0 on a failure.
+function send(path, body, then) {
+  let called = false;
+  const once = (status, text) => {
+    if (!called) {
+      called = true;
+      then(status, text || "");
+    }
+  };
+  const payload = Buffer.from(JSON.stringify(body));
   const req = http.request(
     {
       host: "host.docker.internal",
       port: PORT,
-      path: "/api/hook",
+      path,
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "content-length": payload.length, authorization: "Bearer " + agentToken(),
+        "content-length": payload.length,
+        authorization: "Bearer " + agentToken(),
       },
       timeout: 1500,
     },
     (res) => {
-      // On a policy block (403) the proxy returns a structured body telling us
-      // exactly which `sbx policy allow` rule is missing — capture it.
-      if (res.statusCode && res.statusCode >= 400) {
-        let body = "";
-        res.setEncoding("utf8");
-        res.on("data", (c) => (body += c));
-        res.on("end", () => {
-          log("status=" + res.statusCode + " body=" + body.replace(/\s+/g, " ").trim());
-          done();
-        });
-        return;
-      }
-      let body = "";
+      // On a policy block (403) the proxy returns a structured body telling
+      // us exactly which `sbx policy allow` rule is missing: it is logged.
+      let text = "";
       res.setEncoding("utf8");
-      res.on("data", (c) => (body += c));
-      res.on("end", () => {
-        log("ok status=" + res.statusCode);
-        let out = null;
-        try {
-          out = JSON.parse(body);
-        } catch (_) {}
-        if (out && out.hookSpecificOutput) process.stdout.write(JSON.stringify(out), done);
-        else done();
-      });
+      res.on("data", (c) => (text += c));
+      res.on("end", () => once(res.statusCode || 0, text));
+      res.on("error", () => once(0, ""));
     },
   );
   req.on("error", (e) => {
-    log("error " + (e && e.message));
-    done();
+    log(path + " error " + (e && e.message));
+    once(0, "");
   });
   req.on("timeout", () => {
-    log("timeout");
+    log(path + " timeout");
     req.destroy();
-    done();
+    once(0, "");
   });
   req.write(payload);
   req.end();
-});
+}

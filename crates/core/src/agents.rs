@@ -833,6 +833,20 @@ impl AgentBook {
         Ok(())
     }
 
+    /// `key`'s transcript says it was resumed from `prior` (its first
+    /// entries carry that session id): its `continues`, unless one is known.
+    /// Returns the payloads to broadcast when it changed.
+    pub fn resumed_from(&mut self, key: &AgentKey, prior: &str, has_pty: bool, now: u64) -> Vec<SessionInfo> {
+        let valid = !prior.is_empty() && prior.len() <= 128 && prior.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        match self.statuses.get_mut(key) {
+            Some(st) if valid && prior != key.session_id && st.continues.is_none() => {
+                st.continues = Some(prior.to_string());
+                self.emit(&key.sandbox, has_pty, now)
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// How many options each step of `key`'s pending prompt offers.
     pub fn prompt_sizes(&self, key: &AgentKey) -> Vec<u32> {
         self.statuses
@@ -1375,6 +1389,18 @@ mod tests {
         let out = book.reconcile(&["other".to_string()], 2);
         assert!(out[0].ended);
         assert_eq!(out[0].end_reason.as_deref(), Some("sandbox_stopped"));
+    }
+
+    #[test]
+    fn a_resumed_transcript_names_what_it_continues_once() {
+        let mut book = AgentBook::new();
+        book.apply("a", &ev(&json!({"hook_event_name": "SessionStart", "session_id": "new"})), SessionOrigin::Tty, true, 1);
+        let key = AgentKey { sandbox: "a".into(), session_id: "new".into() };
+        assert!(book.resumed_from(&key, "../x", true, 2).is_empty());
+        assert_eq!(book.resumed_from(&key, "old", true, 2)[0].continues.as_deref(), Some("old"));
+        assert!(book.resumed_from(&key, "older", true, 3).is_empty(), "the first word stands");
+        let other = AgentKey { sandbox: "b".into(), session_id: "new".into() };
+        assert!(book.resumed_from(&other, "old", true, 3).is_empty());
     }
 
     #[test]

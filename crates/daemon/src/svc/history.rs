@@ -71,6 +71,14 @@ impl App {
             let res = book.ingest_transcript(&sb, post, &rules, now_ms());
             (res, book.total_bytes(), book.sessions())
         };
+        if let (Posted::Accepted { .. }, Some(prior)) = (&res, post.get("prior_session").and_then(Value::as_str)) {
+            let key = sbxw_core::agents::AgentKey { sandbox: sb.clone(), session_id: session_id.to_string() };
+            let has_pty = self.sessions.is_live(&sbxw_core::session::SessionKey::agent(sandbox));
+            let infos = self.agents.lock().unwrap().resumed_from(&key, prior, has_pty, now_ms());
+            for info in infos {
+                self.send(Event::Session(info));
+            }
+        }
         match &res {
             Posted::Accepted { nudge, .. } => {
                 tracing::debug!("history: sandbox={sb} items={n} held={total}B in {sessions} sessions");
