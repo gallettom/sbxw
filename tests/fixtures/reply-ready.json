@@ -1,0 +1,19 @@
+{
+  "about": "The one rule for 'a session's reply is ready to announce', shared by desktop/src/jarvis.rs (reply_ready, also used by feat/relay/follow.rs) and assets/js/chat-core.js (chatReplyReady). Each case: in_turn (the reader last saw the session working or attention), last (the reply it last handled), the event, and the reply to announce or null.",
+  "cases": [
+    { "name": "a turn ends with a reply", "in_turn": true, "last": null, "info": { "state": "idle", "reply": "Done." }, "ready": "Done." },
+    { "name": "the same idle event again", "in_turn": false, "last": "Done.", "info": { "state": "idle", "reply": "Done." }, "ready": null },
+    { "name": "idle without having seen the turn", "in_turn": false, "last": null, "info": { "state": "idle", "reply": "Done." }, "ready": null },
+    { "name": "an exited session counts as idle", "in_turn": true, "last": null, "info": { "state": "exited", "reply": "Bye." }, "ready": "Bye." },
+    { "name": "an empty reply", "in_turn": true, "last": null, "info": { "state": "idle", "reply": "  " }, "ready": null },
+    { "name": "no reply", "in_turn": true, "last": null, "info": { "state": "idle" }, "ready": null },
+    { "name": "working without background is never a reply", "in_turn": true, "last": null, "info": { "state": "working", "reply": "Old." }, "ready": null },
+    { "name": "a turn ends on background work: the interim reply", "in_turn": true, "last": null, "info": { "state": "working", "reply": "Build started, I will tell you.", "background": { "shells": 1, "agents": 0, "other": 0, "wakeups": 0 } }, "ready": "Build started, I will tell you." },
+    { "name": "a later event of the same wait", "in_turn": true, "last": "Build started, I will tell you.", "info": { "state": "working", "reply": "Build started, I will tell you.", "background": { "shells": 2, "agents": 0, "other": 0, "wakeups": 0 } }, "ready": null },
+    { "name": "the wait falls back to idle with the same reply", "in_turn": true, "last": "Build started, I will tell you.", "info": { "state": "idle", "reply": "Build started, I will tell you." }, "ready": null },
+    { "name": "the final reply after the wait", "in_turn": true, "last": "Build started, I will tell you.", "info": { "state": "idle", "reply": "Build passed." }, "ready": "Build passed." },
+    { "name": "background without a reply", "in_turn": true, "last": null, "info": { "state": "working", "background": { "shells": 1, "agents": 0, "other": 0, "wakeups": 0 } }, "ready": null },
+    { "name": "background not seen in a turn", "in_turn": false, "last": null, "info": { "state": "working", "reply": "x", "background": { "shells": 1, "agents": 0, "other": 0, "wakeups": 0 } }, "ready": null },
+    { "name": "a question is not a reply", "in_turn": true, "last": null, "info": { "state": "attention", "reply": "x" }, "ready": null }
+  ]
+}

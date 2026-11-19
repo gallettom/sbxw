@@ -25,7 +25,21 @@ function chatOwnSession(info) {
 }
 
 function chatNew() {
-  return { log: [], state: 'idle', steps: null, answerable: false, activity: null };
+  return { log: [], state: 'idle', steps: null, answerable: false, activity: null, handled: null };
+}
+
+// The one rule for "this event brings a reply to announce", the same as the
+// desktop's (`reply_ready`, desktop/src/jarvis.rs); both are checked against
+// tests/fixtures/reply-ready.json. `inTurn`: the reader last saw the session
+// `working` or `attention`; `last`: the reply it last handled. A turn ends
+// with a reply at `idle`, or while the session waits on background work of
+// its own (`working` with `background` set): the interim reply. Once each.
+function chatReplyReady(inTurn, info, last) {
+  const reply = typeof info.reply === 'string' && info.reply.trim() ? info.reply : null;
+  if (!reply || !inTurn || reply === last) return null;
+  const ended = info.state === 'idle' || info.state === 'exited'
+    || (info.state === 'working' && !!info.background && typeof info.background === 'object');
+  return ended ? reply : null;
 }
 
 // Fold a `session` event into `c`. Returns what the reader may want to hear
@@ -47,12 +61,18 @@ function chatIngest(c, info, seed = false) {
       c.log.push({ who: 'me', text: info.last_input });
       if (info.reply) c.log.push({ who: 'ai', text: info.reply });
     }
+    // Known already: a later event of the same busy stop is not news.
+    if (info.reply) c.handled = info.reply;
     return null;
   }
-  if (info.state === 'idle' && (prev === 'working' || prev === 'attention') && info.reply) {
+  // A new turn (not a busy stop): the same words later are a new answer.
+  if (info.state === 'working' && !info.background) c.handled = null;
+  const reply = chatReplyReady(prev === 'working' || prev === 'attention', info, c.handled ?? null);
+  if (reply) {
+    c.handled = reply;
     const last = c.log[c.log.length - 1];
-    if (!(last?.who === 'ai' && last.text === info.reply)) c.log.push({ who: 'ai', text: info.reply });
-    return { reply: info.reply };
+    if (!(last?.who === 'ai' && last.text === reply)) c.log.push({ who: 'ai', text: reply });
+    return { reply };
   }
   if (info.state === 'attention' && prev !== 'attention') {
     return { asked: c.steps?.[0]?.text || info.activity || 'Claude is waiting for you.' };
