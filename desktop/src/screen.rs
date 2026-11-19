@@ -222,6 +222,19 @@ impl Ui {
     }
 }
 
+/// A screen's memory ([`ScreenState::mem`]).
+pub struct ScreenMem {
+    pub lua: u64,
+    pub data: Rc<J>,
+    /// Heap bytes of its last element tree (counting on; else 0).
+    pub tree: u64,
+    pub nodes: usize,
+}
+
+fn count_nodes(n: &Node) -> usize {
+    1 + n.children.iter().map(count_nodes).sum::<usize>()
+}
+
 pub struct ScreenState {
     pub name: String,
     /// The source that loaded last (its file name, its text) and the theme's
@@ -390,6 +403,14 @@ impl ScreenState {
     /// Where this screen's override is read from (it may not exist).
     pub fn override_file(&self) -> &Path {
         &self.override_path
+    }
+
+    /// What this screen holds (MEMORY.md): its Luau VM's bytes, the data it
+    /// points at (shared with every screen: the caller counts it once), and
+    /// its last element tree.
+    pub fn mem(&self) -> ScreenMem {
+        let tree = self.last_good.as_ref().map_or(0, |n| crate::mem::heap_of(|| n.clone()).unwrap_or(0));
+        ScreenMem { lua: self.host.used_memory() as u64, data: self.data.clone(), tree, nodes: self.last_good.as_ref().map_or(0, count_nodes) }
     }
 
     pub fn set_data(&mut self, data: J) {

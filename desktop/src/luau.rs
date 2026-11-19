@@ -454,6 +454,12 @@ struct Budget {
 }
 
 impl LuauHost {
+    /// Bytes the Luau VM holds now (its allocator's count: tables, strings,
+    /// functions, garbage not yet collected).
+    pub fn used_memory(&self) -> usize {
+        self.lua.used_memory()
+    }
+
     pub fn new(limits: Limits) -> mlua::Result<Self> {
         let libs = StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8 | StdLib::BIT;
         let lua = Lua::new_with(libs, LuaOptions::default())?;

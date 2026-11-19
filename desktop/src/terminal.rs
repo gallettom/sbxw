@@ -161,6 +161,23 @@ pub fn cell_width_at(font: f32) -> f32 {
     W.with(|w| *w.borrow_mut().entry(font.to_bits()).or_insert_with(|| rune::text::advance(&"m".repeat(100), style_at(font)) / 100.0))
 }
 
+/// A terminal's memory ([`TerminalState::mem`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TermMem {
+    /// Lines kept: history and screen.
+    pub lines: usize,
+    pub cols: usize,
+    /// alacritty's grids (history, screen, the other screen).
+    pub grid_bytes: u64,
+    /// The rows drawn now (Rune's rows, an estimate: Rune's shaped cells are
+    /// its own) and their pills.
+    pub drawn_bytes: u64,
+    /// The heap's growth while parsing and resizing (counting on; else 0).
+    pub measured: u64,
+    /// Output bytes parsed.
+    pub bytes_in: u64,
+}
+
 /// How the grid is drawn: font size, cell width and line height (points),
 /// and whether it is cut even at the smallest scale.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -307,6 +324,9 @@ pub struct TerminalState {
     pub build_time: Duration,
     /// Output bytes parsed over the run.
     pub bytes_in: usize,
+    /// The heap's growth while parsing output and resizing (counting on,
+    /// `SBXW_DESKTOP_MEM=1`): what alacritty's grids really hold, measured.
+    pub grid_heap: i64,
     wheel_acc: f32,
     gesture: Option<Gesture>,
     last_report_cell: Option<(usize, usize)>,
@@ -442,6 +462,7 @@ impl TerminalState {
             rebuilds: 0,
             build_time: Duration::ZERO,
             bytes_in: 0,
+            grid_heap: 0,
             wheel_acc: 0.0,
             gesture: None,
             last_report_cell: None,
@@ -670,7 +691,11 @@ impl TerminalState {
                 }
                 self.bytes_in += bytes.len();
                 self.blink_epoch = self.clock;
+                let before = crate::mem::live();
                 self.parser.advance(&mut self.term, &bytes);
+                if let (Some(a), Some(b)) = (before, crate::mem::live()) {
+                    self.grid_heap += b as i64 - a as i64;
+                }
             }
             TermEvent::Notice(t) => self.parser.advance(&mut self.term, t.as_bytes()),
             TermEvent::Attention => {
@@ -997,7 +1022,11 @@ impl TerminalState {
             return;
         }
         self.size = (cols, rows);
+        let before = crate::mem::live();
         self.term.resize(Size { cols, rows });
+        if let (Some(a), Some(b)) = (before, crate::mem::live()) {
+            self.grid_heap += b as i64 - a as i64;
+        }
         self.hover_link = None;
         self.metrics = self.scaled_metrics();
         self.force_all = true;
@@ -1170,6 +1199,23 @@ impl TerminalState {
     /// How many lines the view is scrolled up into the history.
     pub fn display_offset(&self) -> usize {
         self.term.grid().display_offset()
+    }
+
+    /// What this terminal holds (MEMORY.md): lines kept (history and
+    /// screen), their width, and the bytes of alacritty's grids counted from
+    /// those (a cell is `size_of::<Cell>()`, a row adds its `Vec` and its
+    /// occupancy); plus the rows drawn and their pills.
+    pub fn mem(&self) -> TermMem {
+        use alacritty_terminal::term::cell::Cell;
+        let g = self.term.grid();
+        let (lines, cols) = (g.total_lines(), g.columns());
+        let row = cols * std::mem::size_of::<Cell>() + std::mem::size_of::<Vec<Cell>>() + std::mem::size_of::<usize>();
+        // The other grid (the alternate screen when the primary shows, and
+        // back): the screen's size, no history.
+        let screens = g.screen_lines() * row;
+        let drawn = self.rows.len() * (std::mem::size_of::<rune::GridRow>() + cols * 48)
+            + self.row_pills.iter().chain(&self.line_pills).map(|p| p.capacity() * std::mem::size_of::<pills::Piece>()).sum::<usize>();
+        TermMem { lines, cols, grid_bytes: (lines * row + screens) as u64, drawn_bytes: drawn as u64, measured: self.grid_heap.max(0) as u64, bytes_in: self.bytes_in as u64 }
     }
 
     /// Lines of history kept above the screen.

@@ -12,6 +12,7 @@ mod drag;
 mod features;
 mod jarvis;
 mod leads;
+mod memory;
 mod pager;
 pub mod pages;
 mod palette;
@@ -163,6 +164,8 @@ enum Mark {
     Wait { key: String, ms: u64, gone: bool },
     /// `perf:<label>`: a line in the log, to read SBXW_DESKTOP_PERF's lines by step.
     Perf(String),
+    /// `mem:<label>`: the memory report in the log (shell/memory.rs).
+    Mem(String),
 }
 
 /// Parses `wait:<key>[:<ms>]` and `wait-gone:<key>[:<ms>]`.
@@ -530,6 +533,9 @@ impl App {
                         }
                         if let Some(l) = n.strip_prefix("perf:") {
                             return Some((t, Mark::Perf(l.to_string())));
+                        }
+                        if let Some(l) = n.strip_prefix("mem:") {
+                            return Some((t, Mark::Mem(l.to_string())));
                         }
                         let (name, path) = n.strip_prefix("screen:")?.split_once('=')?;
                         Some((t, Mark::Screen(name.into(), path.into())))
@@ -986,6 +992,7 @@ impl App {
         while self.marks.first().is_some_and(|(t, _)| *t <= clock) {
             match self.marks.remove(0).1 {
                 Mark::Perf(l) => log::info!("perf: ---- {l}"),
+                Mark::Mem(l) => self.memory_report(&l),
                 Mark::Hold(ms) => {
                     log::info!("hold {ms} ms at {clock:.2}s");
                     let until = Instant::now() + Duration::from_millis(ms);
