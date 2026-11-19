@@ -109,6 +109,29 @@ pub struct SessionInfo {
     pub origin: SessionOrigin,
     pub answerable: bool,
     pub ts: u64,
+    /// Who wrote `last_input`: `"person"`, or `"injected"` when the harness
+    /// did (a message from another session, a task notification…; see
+    /// [`crate::history::classify_user_text`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_input_from: Option<&'static str>,
+    /// Who injected it, when that can be read (a cross-session message's
+    /// sender, `task`, `system`, `hook`…).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_input_sender: Option<String>,
+    /// The session this one continues: the one the same agent process ran
+    /// before (`/clear`, `/resume` in place), or the one its transcript was
+    /// resumed from. Absent when not known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continues: Option<String>,
+    /// Set (`true`) only on a session's last payload: it is over, and no
+    /// event of it will follow. `end_reason` says how.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ended: bool,
+    /// `session_end:<Claude Code's reason>`, `replaced` (its process started
+    /// another session), `process_gone` (its process no longer runs),
+    /// `sandbox_stopped`, `thread_closed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_reason: Option<String>,
 }
 
 /// The model a session says it runs: an id, and a display name when given.
@@ -178,6 +201,12 @@ struct Status {
     cost_sent_ms: u64,
     cost_pending: bool,
     origin: SessionOrigin,
+    /// The agent process the session runs in (`<pid>:<starttime>`), from a
+    /// v3 hook: what tells "the same terminal" for sure.
+    proc: Option<String>,
+    continues: Option<String>,
+    last_input_from: Option<&'static str>,
+    last_input_sender: Option<String>,
 }
 
 /// What a hook event says about where its session came from.
@@ -273,6 +302,17 @@ impl<'a> HookEvent<'a> {
             ),
             _ => None,
         }
+    }
+    /// The agent process the hook runs under, `<pid>:<starttime>` (hook v3).
+    pub fn agent_proc(&self) -> Option<&'a str> {
+        Some(self.str("agent_proc")).filter(|s| !s.is_empty() && s.len() <= 40)
+    }
+    /// Every process of the agent's name alive in the sandbox, as
+    /// `agent_proc` keys: sent by a v3 hook on `SessionStart`, absent when
+    /// `/proc` could not be read (then nothing is retired).
+    pub fn live_procs(&self) -> Option<Vec<String>> {
+        self.body.get("live_procs")?.as_array()?;
+        Some(self.strings("live_procs"))
     }
     pub fn hook_version(&self) -> u64 {
         self.body.get("hook_version").and_then(Value::as_u64).unwrap_or(0)
@@ -399,7 +439,11 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
             // The previous answer is stale the moment a new turn starts.
             st.reply = None;
             if let Some(p) = body.get("prompt").and_then(Value::as_str) {
-                st.last_input = Some(clip(p, 200));
+                let said = crate::history::classify_user_text(p);
+                let person = said.kind == crate::history::Kind::UserPrompt;
+                st.last_input = Some(clip(if person { &said.text } else { p }, 200));
+                st.last_input_from = Some(if person { "person" } else { "injected" });
+                st.last_input_sender = if person { None } else { said.from.map(|f| clip(&f, 80)) };
             }
         }
         "PreToolUse" if event.tool() == "AskUserQuestion" => {
@@ -496,7 +540,14 @@ pub struct AgentBook {
     /// it running: kept in its total until it stops, so the total never goes
     /// backwards when a session exits (or `/clear` starts a new one).
     retired_cost: BTreeMap<String, f64>,
+    /// Sessions that ended with a known agent process, newest last: what a
+    /// new session of the same process continues (`/clear` ends one, then
+    /// starts the next). Bounded by [`ENDED_MAX`].
+    ended: std::collections::VecDeque<(String, String, String)>,
 }
+
+/// Bound on [`AgentBook::ended`].
+const ENDED_MAX: usize = 64;
 
 #[derive(Default, Debug)]
 struct Early {
@@ -530,7 +581,46 @@ impl AgentBook {
             session_id: event.session_id().to_string(),
         };
         let early = self.early.remove(&key).unwrap_or_default();
+        let proc = (event.hook_version() >= crate::history::HOOK_VERSION_TRANSCRIPT).then(|| event.agent_proc()).flatten();
+        let mut out = Vec::new();
+        let mut continues = None;
+        if event.event() == "SessionStart" {
+            if let Some(p) = proc {
+                continues = self.ended.iter().rev().find(|(sb, pr, id)| sb == sandbox && pr == p && *id != key.session_id).map(|e| e.2.clone());
+            }
+            let live = (event.hook_version() >= crate::history::HOOK_VERSION_TRANSCRIPT).then(|| event.live_procs()).flatten();
+            // Records proven over: the same process now runs this session, or
+            // their process is no longer alive. A record whose process is not
+            // known is never retired: no guess makes a terminal answerable.
+            let over: Vec<(AgentKey, &'static str)> = self
+                .statuses
+                .iter()
+                .filter(|(k, _)| k.sandbox == sandbox && **k != key)
+                .filter_map(|(k, st)| {
+                    let theirs = st.proc.as_deref()?;
+                    if Some(theirs) == proc {
+                        Some((k.clone(), "replaced"))
+                    } else if live.as_ref().is_some_and(|l| !l.iter().any(|x| x == theirs)) {
+                        Some((k.clone(), "process_gone"))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (k, reason) in over {
+                if reason == "replaced" {
+                    continues = Some(k.session_id.clone());
+                }
+                out.extend(self.evict(now, reason, |kk, _| *kk == k));
+            }
+        }
         let st = self.statuses.entry(key.clone()).or_default();
+        if let Some(p) = proc {
+            st.proc = Some(p.to_string());
+        }
+        if let Some(c) = continues.filter(|c| *c != key.session_id && !c.is_empty()) {
+            st.continues.get_or_insert(c);
+        }
         if let Some(m) = early.model {
             st.model.get_or_insert(m);
         }
@@ -556,10 +646,16 @@ impl AgentBook {
             st.origin = origin;
         }
         let ended = apply(event, st, now);
-        let mut out = self.emit(sandbox, has_pty, now);
+        out.extend(self.emit(sandbox, has_pty, now));
         if ended {
-            if let Some(gone) = out.iter_mut().find(|i| i.session_id.as_deref().unwrap_or("") == key.session_id) {
+            let reason = match event.str("reason") {
+                "" => "session_end".to_string(),
+                r => format!("session_end:{}", clip(r, 40)),
+            };
+            if let Some(gone) = out.iter_mut().rev().find(|i| i.session_id.as_deref().unwrap_or("") == key.session_id) {
                 gone.state = SessionState::Exited;
+                gone.ended = true;
+                gone.end_reason = Some(reason);
             }
             if let Some(st) = self.statuses.remove(&key) {
                 self.retire(&key, &st);
@@ -586,6 +682,12 @@ impl AgentBook {
 
     /// A session leaves: its cost stays in its sandbox's total.
     fn retire(&mut self, key: &AgentKey, st: &Status) {
+        if let Some(p) = &st.proc {
+            if self.ended.len() >= ENDED_MAX {
+                self.ended.pop_front();
+            }
+            self.ended.push_back((key.sandbox.clone(), p.clone(), key.session_id.clone()));
+        }
         if let Some(c) = &st.cost {
             *self.retired_cost.entry(key.sandbox.clone()).or_default() += c.usd;
         }
@@ -756,14 +858,15 @@ impl AgentBook {
             return Vec::new();
         }
         self.early.retain(|k, _| running.contains(&k.sandbox));
-        let out = self.evict(now, |k, _| !running.contains(&k.sandbox));
+        let out = self.evict(now, "sandbox_stopped", |k, _| !running.contains(&k.sandbox));
+        self.ended.retain(|(sb, _, _)| running.contains(sb));
         // A stopped sandbox starts its total again at its next run.
         self.retired_cost.retain(|sb, _| running.contains(sb));
         out
     }
 
     /// Drop the sessions `gone` picks; their `Exited` payloads, in key order.
-    fn evict(&mut self, now: u64, gone: impl Fn(&AgentKey, &Status) -> bool) -> Vec<SessionInfo> {
+    fn evict(&mut self, now: u64, reason: &str, gone: impl Fn(&AgentKey, &Status) -> bool) -> Vec<SessionInfo> {
         let mut out = Vec::new();
         let mut retired = Vec::new();
         self.statuses.retain(|k, st| {
@@ -771,6 +874,8 @@ impl AgentBook {
             if go {
                 let mut info = build(k, st, false, now);
                 info.state = SessionState::Exited;
+                info.ended = true;
+                info.end_reason = Some(reason.to_string());
                 out.push(info);
                 retired.push((k.clone(), st.clone()));
             }
@@ -787,7 +892,7 @@ impl AgentBook {
     /// their `Exited` payloads.
     pub fn forget_thread(&mut self, sandbox: &str, thread: &str, now: u64) -> Vec<SessionInfo> {
         let tail = format!("/.sbxw-worktrees/{thread}");
-        self.evict(now, |k, st| {
+        self.evict(now, "thread_closed", |k, st| {
             k.sandbox == sandbox
                 && match st.thread.as_deref() {
                     Some(t) => t == thread,
@@ -845,6 +950,11 @@ fn build(key: &AgentKey, st: &Status, answerable: bool, now: u64) -> SessionInfo
         origin: st.origin,
         answerable,
         ts: now,
+        last_input_from: st.last_input_from,
+        last_input_sender: st.last_input_sender.clone(),
+        continues: st.continues.clone(),
+        ended: false,
+        end_reason: None,
     }
 }
 
@@ -1185,5 +1295,99 @@ mod tests {
     fn clip_lines_keeps_lines_and_bounds_length() {
         assert_eq!(clip_lines("a\nb\nc", 2, 100), "a\nb");
         assert_eq!(clip_lines(&"x".repeat(10), 5, 4), "xxxx…");
+    }
+
+    fn start3(id: &str, proc: Option<&str>, live: Option<&[&str]>) -> Value {
+        let mut v = json!({"hook_event_name": "SessionStart", "session_id": id, "hook_version": 3});
+        if let Some(p) = proc {
+            v["agent_proc"] = json!(p);
+        }
+        if let Some(l) = live {
+            v["live_procs"] = json!(l);
+        }
+        v
+    }
+
+    #[test]
+    fn a_restarted_main_session_retires_its_dead_record_and_is_answerable_again() {
+        let mut book = AgentBook::new();
+        book.apply("a", &ev(&start3("old", Some("100:5"), Some(&["100:5"]))), SessionOrigin::Tty, true, 1);
+        // The terminal was killed: no SessionEnd. A new claude starts.
+        let out = book.apply("a", &ev(&start3("new", Some("200:9"), Some(&["200:9"]))), SessionOrigin::Tty, true, 2);
+        let gone = out.iter().find(|i| i.session_id.as_deref() == Some("old")).unwrap();
+        assert!(gone.ended && gone.state == SessionState::Exited);
+        assert_eq!(gone.end_reason.as_deref(), Some("process_gone"));
+        assert_eq!(book.answerable("a").unwrap().session_id, "new");
+        assert!(book.can_type_into("a").is_ok());
+    }
+
+    #[test]
+    fn a_live_second_terminal_or_an_unknown_process_is_never_retired() {
+        let mut book = AgentBook::new();
+        book.apply("a", &ev(&start3("one", Some("100:5"), Some(&["100:5"]))), SessionOrigin::Tty, true, 1);
+        // An old hook's record: its process is not known.
+        book.apply("a", &ev(&json!({"hook_event_name": "SessionStart", "session_id": "legacy", "hook_version": 2})), SessionOrigin::Tty, true, 1);
+        // A second terminal, both alive.
+        book.apply("a", &ev(&start3("two", Some("200:9"), Some(&["100:5", "200:9"]))), SessionOrigin::Tty, true, 2);
+        assert_eq!(book.snapshot(|_| true, 3).len(), 3);
+        assert!(book.answerable("a").is_err(), "three tty sessions: still nobody's");
+        // /proc unreadable: no list, nothing retired.
+        book.apply("a", &ev(&start3("three", Some("300:1"), None)), SessionOrigin::Remote, true, 4);
+        assert_eq!(book.snapshot(|_| true, 5).len(), 4);
+        // A v2 hook's process and list are not trusted.
+        let v2 = json!({"hook_event_name": "SessionStart", "session_id": "four", "hook_version": 2, "agent_proc": "100:5", "live_procs": []});
+        book.apply("a", &ev(&v2), SessionOrigin::Remote, true, 6);
+        assert_eq!(book.snapshot(|_| true, 7).len(), 5);
+    }
+
+    #[test]
+    fn clear_in_the_same_process_continues_the_previous_session() {
+        let mut book = AgentBook::new();
+        book.apply("a", &ev(&start3("s1", Some("100:5"), Some(&["100:5"]))), SessionOrigin::Tty, true, 1);
+        // /clear: SessionEnd for s1, then SessionStart for s2, same process.
+        let end = json!({"hook_event_name": "SessionEnd", "session_id": "s1", "hook_version": 3, "agent_proc": "100:5", "reason": "clear"});
+        let out = book.apply("a", &ev(&end), SessionOrigin::Tty, true, 2);
+        let last = out.iter().find(|i| i.session_id.as_deref() == Some("s1")).unwrap();
+        assert!(last.ended);
+        assert_eq!(last.end_reason.as_deref(), Some("session_end:clear"));
+        let out = book.apply("a", &ev(&start3("s2", Some("100:5"), Some(&["100:5"]))), SessionOrigin::Tty, true, 3);
+        assert_eq!(out.iter().find(|i| i.session_id.as_deref() == Some("s2")).unwrap().continues.as_deref(), Some("s1"));
+        // /resume in place, no SessionEnd: the same process replaces s2.
+        let out = book.apply("a", &ev(&start3("s3", Some("100:5"), None)), SessionOrigin::Tty, true, 4);
+        let s2 = out.iter().find(|i| i.session_id.as_deref() == Some("s2")).unwrap();
+        assert_eq!(s2.end_reason.as_deref(), Some("replaced"));
+        assert_eq!(out.iter().find(|i| i.session_id.as_deref() == Some("s3")).unwrap().continues.as_deref(), Some("s2"));
+        assert_eq!(book.snapshot(|_| true, 5).len(), 1);
+    }
+
+    #[test]
+    fn a_hook_never_retires_another_sandboxs_session() {
+        let mut book = AgentBook::new();
+        book.apply("a", &ev(&start3("a1", Some("100:5"), Some(&["100:5"]))), SessionOrigin::Tty, true, 1);
+        book.apply("b", &ev(&start3("b1", Some("100:5"), Some(&["999:1"]))), SessionOrigin::Tty, true, 2);
+        assert_eq!(book.snapshot(|_| true, 3).len(), 2, "same pid in another sandbox, and a list without it: untouched");
+    }
+
+    #[test]
+    fn stopped_sandboxes_and_closed_threads_say_they_ended() {
+        let mut book = AgentBook::new();
+        book.apply("a", &ev(&json!({"hook_event_name": "SessionStart", "session_id": "s"})), SessionOrigin::Tty, true, 1);
+        let out = book.reconcile(&["other".to_string()], 2);
+        assert!(out[0].ended);
+        assert_eq!(out[0].end_reason.as_deref(), Some("sandbox_stopped"));
+    }
+
+    #[test]
+    fn the_last_input_says_who_wrote_it() {
+        let mut book = AgentBook::new();
+        let p = |t: &str| json!({"hook_event_name": "UserPromptSubmit", "session_id": "s", "prompt": t});
+        let out = book.apply("a", &ev(&p("Fix the build")), SessionOrigin::Tty, true, 1);
+        assert_eq!(out[0].last_input_from, Some("person"));
+        assert_eq!(out[0].last_input_sender, None);
+        let out = book.apply("a", &ev(&p("<cross-session-message from-name=\"lead\">rebase</cross-session-message>")), SessionOrigin::Tty, true, 2);
+        assert_eq!(out[0].last_input_from, Some("injected"));
+        assert_eq!(out[0].last_input_sender.as_deref(), Some("lead"));
+        let json = serde_json::to_value(&out[0]).unwrap();
+        assert!(json.get("ended").is_none() && json.get("continues").is_none(), "absent unless known");
     }
 }

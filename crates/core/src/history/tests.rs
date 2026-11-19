@@ -1,0 +1,333 @@
+//! Every text here is invented, and every "secret" a fake made for the test.
+
+use super::*;
+use serde_json::json;
+
+const SB: &str = "shop";
+const ID: &str = "s1";
+
+fn rules() -> Rules {
+    Rules::default()
+}
+
+fn ev(book: &mut HistoryBook, body: Value, now: u64) -> Option<u64> {
+    book.ingest_event(SB, &HookEvent::new(&body), &rules(), now)
+}
+
+fn post(book: &mut HistoryBook, from: u64, to: u64, items: Value, now: u64) -> Posted {
+    book.ingest_transcript(SB, &json!({"session_id": ID, "from": from, "to": to, "items": items}), &rules(), now)
+}
+
+fn page(book: &mut HistoryBook) -> Page {
+    book.page(SB, ID, None, Some(200), 0).unwrap()
+}
+
+fn kinds(p: &Page) -> Vec<Kind> {
+    p.items.iter().map(|i| i.kind).collect()
+}
+
+fn v3(event: &str, extra: Value) -> Value {
+    let mut b = json!({"hook_event_name": event, "session_id": ID, "hook_version": 3, "history": "transcript"});
+    for (k, v) in extra.as_object().unwrap() {
+        b[k] = v.clone();
+    }
+    b
+}
+
+#[test]
+fn a_scripted_session_comes_in_order_with_its_kinds() {
+    let mut b = HistoryBook::new();
+    ev(&mut b, v3("SessionStart", json!({"source": "startup"})), 1);
+    ev(&mut b, v3("UserPromptSubmit", json!({"prompt": "Fix the basket total"})), 2);
+    let items = json!([
+        {"t": "user", "text": "Fix the basket total", "at": 2},
+        {"t": "thinking", "text": "never kept"},
+        {"t": "assistant", "text": "Reading the basket first.", "at": 3},
+        {"t": "tool_use", "id": "tu1", "name": "Read", "input": {"file_path": "/w/src/basket.rs", "offset": 10, "limit": 40}, "at": 4},
+        {"t": "tool_result", "id": "tu1", "size": 1200, "head": "fn total() {}", "at": 5},
+        {"t": "tool_use", "id": "tu2", "name": "Bash", "input": {"command": "cargo test basket"}, "at": 6},
+        {"t": "tool_result", "id": "tu2", "is_error": true, "size": 30, "head": "1 failed", "at": 7},
+        {"t": "a-new-kind-of-entry", "text": "skipped"},
+    ]);
+    assert!(matches!(post(&mut b, 0, 900, items, 8), Posted::Accepted { next: 900, .. }));
+    ev(&mut b, v3("PreToolUse", json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": [
+        {"question": "Round half up?", "options": [{"label": "Yes"}, {"label": "No"}]}]}})), 9);
+    ev(&mut b, v3("PreToolUse", json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf build"}})), 10);
+    ev(&mut b, v3("Notification", json!({"notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"})), 11);
+    post(&mut b, 900, 1000, json!([{"t": "compact"}, {"t": "user", "compact_summary": true, "text": "Summary of the work so far"}]), 12);
+    ev(&mut b, v3("Stop", json!({"last_assistant_message": "Done: the total rounds half up."})), 13);
+    let p = page(&mut b);
+    assert_eq!(
+        kinds(&p),
+        vec![
+            Kind::Notice,
+            Kind::UserPrompt,
+            Kind::AssistantText,
+            Kind::ToolCall,
+            Kind::ToolResult,
+            Kind::ToolCall,
+            Kind::ToolResult,
+            Kind::Question,
+            Kind::Permission,
+            Kind::CompactMarker,
+            Kind::CompactMarker,
+            Kind::AssistantText,
+        ]
+    );
+    let seqs: Vec<u64> = p.items.iter().map(|i| i.seq).collect();
+    assert!(seqs.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(p.items[3].tool.as_ref().unwrap().summary, "Read /w/src/basket.rs (lines 10-50)");
+    assert_eq!(p.items[6].result.as_ref().unwrap().status, ResultStatus::Error);
+    assert_eq!(p.items[7].steps.as_ref().unwrap()[0].options, vec!["Yes", "No"]);
+    assert_eq!(p.items[8].tool.as_ref().unwrap().summary, "$ rm -rf build", "the permission says which command");
+    assert!(p.items[11].provisional, "Stop's reply waits for the transcript");
+    assert!(!p.partial);
+
+    // The transcript catches up: the provisional reply makes way for its own.
+    post(&mut b, 1000, 1100, json!([{"t": "assistant", "text": "Done: the total rounds half up."}]), 14);
+    let p = page(&mut b);
+    assert_eq!(p.items.iter().filter(|i| i.kind == Kind::AssistantText).count(), 2);
+    assert!(p.items.iter().all(|i| !i.provisional));
+
+    ev(&mut b, v3("SessionEnd", json!({"reason": "prompt_input_exit"})), 15);
+    let p = page(&mut b);
+    assert!(p.ended);
+    assert_eq!(p.items.last().unwrap().text, "Session ended (prompt_input_exit)");
+}
+
+#[test]
+fn a_resumed_session_is_a_log_of_its_own() {
+    let mut b = HistoryBook::new();
+    post(&mut b, 0, 10, json!([{"t": "user", "text": "first"}]), 1);
+    let resumed = json!({"session_id": "s2", "from": 0, "to": 50, "items": [{"t": "user", "text": "again"}]});
+    b.ingest_transcript(SB, &resumed, &rules(), 2);
+    assert_eq!(page(&mut b).items.len(), 1);
+    assert_eq!(b.page(SB, "s2", None, None, 2).unwrap().items[0].text, "again");
+}
+
+#[test]
+fn injected_turns_are_never_the_persons_words() {
+    let cases = [
+        ("<cross-session-message from=\"uds:/x.sock\" from-name=\"lead\">Please rebase</cross-session-message>", Kind::Injected, Some("lead")),
+        ("<task-notification><task-id>b1</task-id>done</task-notification>", Kind::Injected, Some("task")),
+        ("<system-reminder>The date changed.</system-reminder>", Kind::Injected, Some("system")),
+        ("<local-command-stdout>Set model to Opus</local-command-stdout>", Kind::Injected, Some("command")),
+        ("<user-prompt-submit-hook>battery low</user-prompt-submit-hook>", Kind::Injected, Some("hook")),
+        ("<some-new-wrapper>harness text</some-new-wrapper>", Kind::Injected, Some("some-new-wrapper")),
+        ("Caveat: The messages below were generated by the user while running local commands. DO NOT respond", Kind::Injected, Some("command")),
+        ("<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>", Kind::UserPrompt, None),
+        ("<bash-input>ls -la</bash-input>", Kind::UserPrompt, None),
+        ("[Request interrupted by user for tool use]", Kind::Notice, None),
+        ("Please fix <b>this</b>", Kind::UserPrompt, None),
+    ];
+    for (text, kind, from) in cases {
+        let c = classify_user_text(text);
+        assert_eq!(c.kind, kind, "{text}");
+        assert_eq!(c.from.as_deref(), from, "{text}");
+    }
+    assert_eq!(classify_user_text("<command-name>/model</command-name><command-args>opus</command-args>").text, "/model opus");
+
+    // In a log: from the transcript and from an old hook's prompt alike.
+    let mut b = HistoryBook::new();
+    post(&mut b, 0, 10, json!([
+        {"t": "user", "text": "<cross-session-message from-name=\"lead\">ship it</cross-session-message>"},
+        {"t": "user", "text": "Check the tests\n<system-reminder>todo list empty</system-reminder>"},
+        {"t": "user", "meta": true, "text": "Base directory for this skill: /x"},
+    ]), 1);
+    let p = page(&mut b);
+    assert_eq!(kinds(&p), vec![Kind::Injected, Kind::UserPrompt, Kind::Injected, Kind::Injected]);
+    assert_eq!(p.items[0].from.as_deref(), Some("lead"));
+    assert_eq!(p.items[1].text, "Check the tests");
+    assert_eq!(p.items[3].from.as_deref(), Some("meta"));
+
+    let mut old = HistoryBook::new();
+    old.ingest_event(SB, &HookEvent::new(&json!({"hook_event_name": "UserPromptSubmit", "session_id": ID, "hook_version": 2,
+        "prompt": "<cross-session-message from-name=\"lead\">hi</cross-session-message>"})), &rules(), 1);
+    assert_eq!(kinds(&page(&mut old)), vec![Kind::Injected]);
+}
+
+#[test]
+fn thinking_and_images_are_never_stored() {
+    let mut b = HistoryBook::new();
+    post(&mut b, 0, 10, json!([
+        {"t": "thinking", "text": "secret reasoning"},
+        {"t": "redacted_thinking", "data": "xxx"},
+        {"t": "image", "data": "iVBORw0KGgo"},
+    ]), 1);
+    let p = page(&mut b);
+    assert_eq!(kinds(&p), vec![Kind::Notice]);
+    let all = serde_json::to_string(&p).unwrap();
+    assert!(!all.contains("reasoning") && !all.contains("iVBOR"));
+}
+
+#[test]
+fn texts_are_capped_and_the_ring_drops_the_oldest() {
+    let mut b = HistoryBook::with_bounds(Bounds { ring_max: 5, ..Default::default() });
+    let long = "é".repeat(limits::TEXT_MAX);
+    post(&mut b, 0, 1, json!([{"t": "assistant", "text": long}, {"t": "tool_result", "head": "x".repeat(5000), "size": 5000}]), 1);
+    let p = page(&mut b);
+    assert!(p.items[0].text.len() <= limits::TEXT_MAX && p.items[0].clipped);
+    assert_eq!(p.items[1].result.as_ref().unwrap().head.chars().count(), limits::RESULT_HEAD_MAX);
+    assert_eq!(p.items[1].result.as_ref().unwrap().size, 5000);
+    assert!(!p.truncated_before);
+    let more: Vec<Value> = (0..6).map(|n| json!({"t": "assistant", "text": format!("n{n}")})).collect();
+    post(&mut b, 1, 2, Value::Array(more), 2);
+    let p = page(&mut b);
+    assert_eq!(p.items.len(), 5);
+    assert_eq!(p.items[0].text, "n1");
+    assert!(p.truncated_before);
+    let summary = summarize_tool("Bash", &json!({"command": "y".repeat(1000)}));
+    assert!(summary.chars().count() <= limits::SUMMARY_MAX + 1);
+}
+
+#[test]
+fn the_memory_ceiling_drops_idle_logs_first() {
+    let mut b = HistoryBook::with_bounds(Bounds { total_max: 3000, ..Default::default() });
+    let fill = |b: &mut HistoryBook, id: &str, now: u64| {
+        b.ingest_transcript(SB, &json!({"session_id": id, "from": 0, "to": 1, "items": [{"t": "assistant", "text": "x".repeat(800)}]}), &rules(), now);
+    };
+    fill(&mut b, "ended", 1);
+    fill(&mut b, "old-idle", 2);
+    fill(&mut b, "recent", 3);
+    b.end(SB, "ended", 4);
+    fill(&mut b, "new", 5);
+    assert!(b.page(SB, "ended", None, None, 6).is_none(), "an ended log goes first");
+    assert!(b.page(SB, "old-idle", None, None, 6).is_some());
+    b.ingest_transcript(SB, &json!({"session_id": "new2", "from": 0, "to": 1, "items": [{"t": "assistant", "text": "x".repeat(800)}]}), &rules(), 7);
+    assert!(b.page(SB, "old-idle", None, None, 8).is_none(), "then the longest idle");
+    assert!(b.page(SB, "recent", None, None, 8).is_some());
+    assert!(b.total_bytes() <= 3000);
+}
+
+#[test]
+fn a_log_expires_an_hour_after_its_end_and_with_its_sandbox() {
+    let mut b = HistoryBook::new();
+    post(&mut b, 0, 1, json!([{"t": "user", "text": "hi"}]), 1);
+    b.ingest_transcript("other", &json!({"session_id": "o", "from": 0, "to": 1, "items": [{"t": "user", "text": "x"}]}), &rules(), 1);
+    ev(&mut b, v3("SessionEnd", json!({})), 10);
+    b.expire(10 + limits::ENDED_TTL_MS - 1);
+    assert!(b.page(SB, ID, None, None, 0).is_some());
+    b.expire(10 + limits::ENDED_TTL_MS);
+    assert!(b.page(SB, ID, None, None, 0).is_none());
+    assert!(b.page("other", "o", None, None, 0).is_some(), "a live log does not expire");
+    b.drop_sandbox("other");
+    assert!(b.page("other", "o", None, None, 0).is_none());
+    assert_eq!(b.total_bytes(), 0);
+}
+
+#[test]
+fn pages_go_back_with_before() {
+    let mut b = HistoryBook::new();
+    let items: Vec<Value> = (1..=250).map(|n| json!({"t": "assistant", "text": format!("m{n}")})).collect();
+    post(&mut b, 0, 1, Value::Array(items), 1);
+    let first = b.page(SB, ID, None, None, 2).unwrap();
+    assert_eq!(first.items.len(), limits::PAGE_DEFAULT);
+    assert_eq!(first.items.last().unwrap().text, "m250");
+    assert_eq!(first.latest_seq, 250);
+    let second = b.page(SB, ID, first.next_before, Some(1000), 2).unwrap();
+    assert_eq!(second.items.len(), 150, "the max is 200, and 150 are left");
+    assert_eq!(second.items[0].text, "m1");
+    assert_eq!(second.next_before, None);
+    assert_eq!(b.page(SB, ID, Some(11), Some(5), 2).unwrap().items.iter().map(|i| i.seq).collect::<Vec<_>>(), vec![6, 7, 8, 9, 10]);
+}
+
+#[test]
+fn a_nudge_only_while_subscribed() {
+    let mut b = HistoryBook::new();
+    let one = |b: &mut HistoryBook, from: u64, now: u64| match post(b, from, from + 1, json!([{"t": "user", "text": "x"}]), now) {
+        Posted::Accepted { nudge, .. } => nudge,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(one(&mut b, 0, 1), None, "nobody read it");
+    b.page(SB, ID, None, None, 2);
+    assert_eq!(one(&mut b, 1, 3), Some(2));
+    assert_eq!(one(&mut b, 2, 2 + limits::SUBSCRIPTION_MS), None, "the subscription lapsed");
+    b.page(SB, ID, None, None, 200_000);
+    assert!(b.unsubscribe(SB, ID));
+    assert_eq!(one(&mut b, 3, 200_001), None);
+    assert!(!b.unsubscribe(SB, "nobody"));
+}
+
+#[test]
+fn offsets_must_line_up_and_a_reset_starts_over() {
+    let mut b = HistoryBook::new();
+    assert_eq!(post(&mut b, 500, 600, json!([]), 1), Posted::OutOfStep { next: 0 }, "a daemon that never saw it asks for a reset");
+    assert!(matches!(post(&mut b, 0, 100, json!([{"t": "user", "text": "a"}]), 1), Posted::Accepted { next: 100, .. }));
+    assert_eq!(post(&mut b, 50, 120, json!([{"t": "user", "text": "dup"}]), 2), Posted::OutOfStep { next: 100 });
+    let reset = json!({"session_id": ID, "from": 4000, "to": 4100, "reset": true, "items": [{"t": "user", "text": "tail"}]});
+    assert!(matches!(b.ingest_transcript(SB, &reset, &rules(), 3), Posted::Accepted { next: 4100, .. }));
+    let p = page(&mut b);
+    assert_eq!(p.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), vec!["tail"]);
+    assert!(p.truncated_before, "a backfill from the tail says the start is missing");
+}
+
+#[test]
+fn secrets_and_listed_names_are_masked_before_they_are_stored() {
+    // Invented: not a real key or person.
+    let fake_key = "ghp_FAKEfake0123456789abcdefABCDEF0000";
+    let fake_aws = "AKIAFAKE0123456789XY";
+    let r = Rules::parse("[replace]\n\"Jeanne Exemple\" = \"Personne A\"\n").unwrap();
+    let mut b = HistoryBook::new();
+    let items = json!([
+        {"t": "user", "text": format!("my token is {fake_key}, ask Jeanne Exemple")},
+        {"t": "tool_use", "name": "Bash", "input": {"command": format!("export AWS_KEY={fake_aws}")}},
+        {"t": "tool_result", "head": format!("TOKEN={fake_key}\nmail: someone@example.org"), "size": 80},
+        {"t": "user", "text": format!("<cross-session-message from-name=\"Jeanne Exemple\">{fake_key}</cross-session-message>")},
+    ]);
+    b.ingest_transcript(SB, &json!({"session_id": ID, "from": 0, "to": 1, "items": items}), &r, 1);
+    b.ingest_event(SB, &HookEvent::new(&json!({"hook_event_name": "Stop", "session_id": ID, "hook_version": 3, "history": "transcript",
+        "last_assistant_message": format!("Used {fake_key}")})), &r, 2);
+    let all = serde_json::to_string(&page(&mut b)).unwrap();
+    for leaked in [fake_key, fake_aws, "Jeanne", "someone@example.org"] {
+        assert!(!all.contains(leaked), "{leaked} leaked: {all}");
+    }
+    assert!(all.contains("[secret]") && all.contains("Personne A") && all.contains("[email]"));
+}
+
+#[test]
+fn an_old_hook_gives_a_partial_history_from_events() {
+    let mut b = HistoryBook::new();
+    let e = |name: &str, extra: Value| {
+        let mut v = json!({"hook_event_name": name, "session_id": ID, "hook_version": 2});
+        for (k, x) in extra.as_object().unwrap() {
+            v[k] = x.clone();
+        }
+        v
+    };
+    ev(&mut b, e("UserPromptSubmit", json!({"prompt": "List the files"})), 1);
+    ev(&mut b, e("PreToolUse", json!({"tool_name": "Edit", "tool_input": {"file_path": "/w/a.rs", "old_string": "a\nb", "new_string": "c"}})), 2);
+    ev(&mut b, e("PostToolUse", json!({"tool_name": "Edit", "tool_response": {"stdout": "ok"}})), 3);
+    ev(&mut b, e("Stop", json!({"last_assistant_message": "Two files."})), 4);
+    let p = page(&mut b);
+    assert_eq!(kinds(&p), vec![Kind::UserPrompt, Kind::ToolCall, Kind::ToolResult, Kind::AssistantText]);
+    assert_eq!(p.items[1].tool.as_ref().unwrap().summary, "Edit /w/a.rs (-2 +1 lines)");
+    assert!(!p.items[3].provisional);
+    assert!(p.partial);
+    assert!(p.partial_reason.unwrap().starts_with("old_hook"));
+
+    // A v3 hook that has not posted yet: catching up, and no doubles from events.
+    let mut c = HistoryBook::new();
+    c.ingest_event(SB, &HookEvent::new(&v3("UserPromptSubmit", json!({"prompt": "x"}))), &rules(), 1);
+    let p = c.page(SB, ID, None, None, 1).unwrap();
+    assert!(p.items.is_empty() && p.partial && p.partial_reason.unwrap().starts_with("catching_up"));
+    // One that could not read its transcript falls back to events.
+    let mut d = HistoryBook::new();
+    let none = json!({"hook_event_name": "UserPromptSubmit", "session_id": ID, "hook_version": 3, "history": "none:unreadable", "prompt": "x"});
+    d.ingest_event(SB, &HookEvent::new(&none), &rules(), 1);
+    let p = d.page(SB, ID, None, None, 1).unwrap();
+    assert_eq!(kinds(&p), vec![Kind::UserPrompt]);
+    assert!(p.partial_reason.unwrap().starts_with("no_transcript"));
+}
+
+#[test]
+fn tools_are_summarised_in_one_line() {
+    let s = summarize_tool;
+    assert_eq!(s("Bash", &json!({"command": "cargo build\ncargo test"})), "$ cargo build …");
+    assert_eq!(s("Write", &json!({"file_path": "/w/n.md", "lines": 12})), "Write /w/n.md (12 lines)");
+    assert_eq!(s("Edit", &json!({"file_path": "/w/a", "lines_old": 3, "lines_new": 4})), "Edit /w/a (-3 +4 lines)");
+    assert_eq!(s("Grep", &json!({"pattern": "fn main", "path": "src"})), "Grep fn main in src");
+    assert_eq!(s("Glob", &json!({"pattern": "**/*.rs"})), "Glob **/*.rs");
+    assert_eq!(s("Task", &json!({"description": "Find the bus", "subagent_type": "Explore"})), "Task (Explore): Find the bus");
+    assert_eq!(s("mcp__sbxw-relay__team_note", &json!({"text": "not shown"})), "MCP sbxw-relay: team_note");
+    assert_eq!(s("WebFetch", &json!({"url": "https://example.org/a?token=x"})), "WebFetch", "unknown tools: the name only");
+}

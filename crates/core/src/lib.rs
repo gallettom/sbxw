@@ -22,6 +22,7 @@ pub mod embed;
 pub mod envexport;
 pub mod envfile;
 pub mod favourites;
+pub mod history;
 pub mod hosts;
 pub mod ids;
 pub mod jarvis;
