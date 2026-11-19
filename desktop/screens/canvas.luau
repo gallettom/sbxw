@@ -47,7 +47,7 @@ local function ask_block(ui, data)
   local s = ui.send or {}
   return column{ gap = 8, w = "full", key = "canvas-ask",
     note("Shots come from the agent: it takes screenshots of the app it works on and adds them with its canvas_add_shots tool. You can ask it here; the prompt goes only after you press Ask and confirm."),
-    textarea{ id = "canvas-ask-text", value = (ui.ask or {}).text or "", rows = 4, on = "ask_text", tone = "compose" },
+    textarea{ id = "canvas-ask-text", value = (ui.ask or {}).text or "", rows = 4, on = "ask_text" },
     row{ gap = 8, w = "full",
       button{ "Ask the agent for screenshots", icon = "send", key = "canvas-ask-go", on = "ask", variant = "primary", disabled = not s.ask_ok,
         help = s.ask_ok and ("Types this prompt into " .. (s.to or "the session") .. " after one confirmation") or (s.why or "") },
