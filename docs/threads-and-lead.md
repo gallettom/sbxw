@@ -382,6 +382,67 @@ sent before the daemon had this version are not recovered.
   browser. A thread report carries no id and could be forged by another session
   in the same sandbox, but it only changes a label, never what runs.
 
+## Tickets and the Kanban
+
+A **ticket** is a unit of work the person writes for one sandbox's
+repository: a title, a description, attached files. The **Kanban** is the
+Board's second view (the "Conversation | Kanban" switch): the tickets and the
+threads that exist, in five columns. sbxw places every card from its own
+state; nobody drags a card past what sbxw knows.
+
+| Column | What puts a card there |
+|---|---|
+| Planned | A ticket no thread works on; a thread of a plan that waits for your approval (mark "proposed"); a ticket whose plan was refused (mark "plan refused") |
+| In progress | Its thread is starting, working, blocked (mark) or failed (red mark) |
+| In test | Its thread reported done (or the lead marked it done) and no merge names it yet: the lead reviews and checks |
+| Ready to merge | A merge is proposed (or running) and names the thread; a failed merge stays here with a red mark |
+| Merged | Its merge result is ok |
+
+`sbxw_core::tickets::column_of` is the one place this is decided; the
+desktop, the web and the agents read the daemon's answer. A team that ended
+before its thread merged keeps the card where it is, marked "team ended".
+Merged shows the 12 newest; the rest are behind "Show older". A thread with
+no ticket is a card too, titled with its name and its goal's first line;
+when it merges sbxw records it (at most 200 a sandbox), so it stays in Merged
+after its plan is pruned.
+
+**Linking.** The lead reads the planned tickets (`tickets_list`,
+`ticket_read`) and names one per thread in `propose_plan` (`ticket:
+"T-12"`). sbxw links them when the plan is proposed, follows the thread
+through every column, and keeps a snapshot on the ticket, so the card keeps
+its place after a restart or once its plan is pruned (24 h after it
+settles). A ticket a working thread holds is never taken over by another
+plan; the lead's answer says so, as it does for a number that is not a ticket
+of the sandbox. A takeover happens only when the earlier plan was refused,
+or its thread failed or merged. The thread's briefing names its ticket.
+
+**What you do.** New ticket, edit, attach (the file dialog, a drop on the
+form, a pasted picture), priority (P1 to P3), reorder inside Planned (Move
+up, Move down, To the top), "Validated on my machine" on a merged ticket,
+delete (one confirmation naming the files that go), and **Send to the
+lead**: after one confirmation, sbxw types one fixed line into the sandbox's
+main session, `[sbxw] ticket T-12 waits for a plan: read it with
+ticket_read`, under a team note's rule (typed when it is idle or working,
+held while it waits on a question). The ticket's words are never typed.
+
+**Storage and limits.** On the host, under sbxw's state directory, per
+sandbox: `state/tickets/<sandbox>/tickets.json` and `files/` (0700 folders,
+0600 files, atomic writes). File names on disk are generated; your name for a
+file is kept as data. An older book loads with defaults; an unreadable one is
+set aside as `tickets.unreadable-<ms>.json`. The log holds numbers, counts
+and sizes, never a title, a description or a file name. A title is 160
+characters at most, a description 8000 (plain text), a file 20 MB, a ticket
+20 files and 100 MB, a sandbox 1000 tickets. Files are known by their first
+bytes (PNG, JPEG, WebP, GIF, PDF, text, other); archives and native programs
+are refused. A file is served as the type sniffed (text as `text/plain`,
+never HTML) with `nosniff`, a sandboxing CSP and `attachment`: nothing is run
+or rendered as a page.
+
+**Trust.** Agents only read tickets, and only their own sandbox's (the
+token decides). `ticket_read` frames the ticket as the person's request,
+data rather than instructions, and copies its files into the sandbox under
+`/tmp/sbxw-uploads/<ms>/T-<n>-<name>` on each read.
+
 ## Reference
 
 <details>
@@ -477,5 +538,22 @@ sent before the daemon had this version are not recovered.
   `{close_threads, distillate?}` runs it; `distillate`, when given, replaces the
   proposed one.
 - **End.** `POST /api/sandboxes/<name>/lead/end`.
+- **Tickets API** (UI listener). `GET /api/tickets?sandbox=<name>|all&older=1`
+  is the board, every card's column, label, mark and count decided there:
+  `{board: {scope, now, columns: [{id, title, tone, help, empty, count,
+  cards, older}], counts_line, tickets, bytes, limits}}`; a card is `{key,
+  sandbox, n, num, column, title, title_short, title_long, source, priority,
+  thread, thread_state, thread_tone, plan, marks: [{id, label, tone, help}],
+  files, bytes, validated, created_ms, updated_ms, age, can: {reorder,
+  validate, edit, delete, send, reorder_why, delete_why, send_why}}`. `GET
+  /api/tickets/<sandbox>/<n>` is one ticket (its card, description, files,
+  history). Writes: `POST /api/tickets/<sandbox>` (create `{title,
+  description?, priority?}`), `.../<n>/edit` (`{title?, description?,
+  priority?, validated?}`), `.../<n>/files?name=` (a raw body), `GET
+  .../<n>/files/<file>`, `.../<n>/files/<file>/remove`, `.../<n>/move` (`{to:
+  up|down|top|bottom}`), `.../<n>/delete`, `.../<n>/send` (`{sent:
+  typed|held, line}`; 409 with no session open). The stream event `tickets`
+  `{sandbox, n?, what}` says when to read the board again. Agents:
+  `POST /api/tickets/list` and `/api/tickets/read {id}`, read only.
 
 </details>

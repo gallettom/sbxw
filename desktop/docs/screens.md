@@ -2052,6 +2052,60 @@ again.
 | `board_picker` | `open?`, `more?` | Opens or closes the team picker's list (none: toggles), or lists 20 more teams in it |
 | `board_key` | `key` (`up`, `down`, `enter`, `escape`) | The picker's keys while its list is open; Escape closes the list only |
 
+The filter row starts with the **Conversation | Kanban** switch
+(`board-view`, a two-position `select`): Kanban runs `kanban_show`.
+
+### kanban
+
+The Board's second view (`src/feat/kanban/`, `screens/kanban.luau`, the
+form `screens/kanban-form.luau`): an overlay titled "Board" (icon `board`)
+with the same switch (`kanban-view`) and the sandbox's scope capsule in its
+title (`kanban-sandbox`, All sandboxes first). Five columns side by side
+(`kanban-lane-<id>`: planned, progress, test, ready, merged), each with its
+count and its cards scrolling inside it (`kanban-scroll-<id>`), 30 cards a
+page (`kanban-more-<id>`, four pages at most), Merged's older ones behind
+`kanban-older`. Under 900 pt one column at a time, picked with
+`kanban-colpick`. A card (`kanban-row-<key>`, the daemon's key made safe):
+its T-number (or "thread", dim, for a thread with no ticket), its age, its
+title on two lines (the daemon's `title_short` under 300 pt a column, else
+`title_long`: one comparison, no string work), its marks on a wrapping line
+under the title (priority, proposed, blocked, failed, merging, merge failed,
+plan refused, team ended, files, validated), its thread's dot and name, the
+sandbox's colour square in All; a red edge for failed or refused work. A
+press opens the ticket as a panel over the board (`kanban-panel`, at most
+640 pt, pinned right): column and marks, title, description (prose face,
+pills), pictures previewed in place (their bytes read by the feature,
+decoded by the core: `Action::Image`), files as chips (a press saves it to
+Downloads and shows it), priority and Move up / Move down / To the top for a
+planned ticket with no thread (else the reason it does not move),
+"Validated on my machine" on a merged one, the thread with Terminal,
+Sessions, Commits, Worktrees and Plan, the history, Send to the lead
+(disabled with its reason). Escape (`kanban_key`, `kanban_ui.popup`), its
+cross or a press outside (`kanban-panel-dismiss`) closes it and gives the
+keyboard back to its card. Keys while no control has the keyboard: arrows
+between cards and columns, Enter opens, N a new ticket. The form is a modal
+(no light dismiss): sandbox (new tickets), title, description (`tone =
+"compose"`), priority, files (Attach… opens the file dialog, Paste picture
+reads the clipboard, a drop on the dialog; each checked by
+`drops::guardrails`, a secret-looking one marked "Look first" and asked
+about once, with the ack box, at Save), Save (Cmd+Return).
+
+| Intent | Args | Effect |
+|---|---|---|
+| `kanban_show` | `sandbox?` | Opens it (empty: every sandbox) |
+| `kanban_scope` | `sandbox` | Another sandbox, or every one (`""`) |
+| `kanban_open` | `id` | Opens a card's ticket (`""`: closes it) |
+| `kanban_column`, `kanban_more`, `kanban_older` | `column`; `column`; | The narrow column; more cards of a column; Merged in full |
+| `kanban_key` | `key` (`up`, `down`, `left`, `right`, `enter`, `escape`, `type`), `text?` | The view's keys |
+| `kanban_new`, `kanban_edit`, `kanban_form`, `kanban_attach`, `kanban_paste`, `kanban_unattach`, `kanban_save`, `kanban_cancel` | | The form |
+| `kanban_delete` | | **Approval**: one Confirm naming the ticket and its files' count and size |
+| `kanban_remove_file` | `file` | **Approval**: one Confirm naming the file |
+| `kanban_move`, `kanban_priority`, `kanban_validate` | `to`; `priority`; `on` | Planned's order (refused for a card with a thread), the priority, validated on your machine (merged only) |
+| `kanban_send` | | **Approval**: one Confirm naming the sandbox's lead, the fixed line in full; refused under a dialog or a menu, a Jarvis proposal, or with no session open; a session asked something gets it once answered |
+| `kanban_file` | `file`, `open?` | Saves a file to Downloads and shows it (`open`: opens it, after a Confirm and the core's check) |
+| `kanban_link` | `what` | terminal, monitor, commits, worktrees, plan |
+| `kanban_refresh` | | Reads again |
+
 ### worktrees
 
 An overlay (`src/feat/worktrees.rs`, `screens/worktrees.luau`): one block
