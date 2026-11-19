@@ -876,15 +876,15 @@ fn the_configure_panels_open_on_the_sandbox_they_are_opened_for() {
     }
 }
 
-/// MCP servers, Skills and Kits over the pane area use its width: two
-/// columns from 760 pt (MCP: servers | the selected one or the form; Kits:
-/// the line | the selected kit; Skills: kept | the sandbox's), one column
-/// under it; the scope picker in the header beside the title, inside the
-/// overlay.
+/// MCP servers, Skills and Kits over the pane area use its width: MCP and
+/// Skills one column at every width (the form or the sandbox's skills on
+/// top, the list under it); two columns from 760 pt for Kits (the line |
+/// the selected kit), one column under it; the scope picker in the header
+/// beside the title, inside the overlay.
 #[test]
-fn the_configure_overlays_are_two_columns_when_wide() {
+fn the_configure_overlays_use_the_width_with_the_picker_in_the_header() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
-    for feat in ["mcp", "skills", "kits"] {
+    for (feat, wide_split) in [("mcp", false), ("skills", false), ("kits", true)] {
         for (w, h, two) in [(1284.0, 816.0, true), (720.0, 480.0, false)] {
             let path = root.join(feat).join("basic.json");
             let a = App::new(Args { fixture: Some(path.to_string_lossy().to_string().into()), ..Args::default() });
@@ -893,7 +893,7 @@ fn the_configure_overlays_are_two_columns_when_wide() {
                 rt.frame(0.016);
             }
             let over = rt.presented(&format!("overlay-{feat}")).unwrap_or_else(|| panic!("{feat} at {w}: no overlay")).0;
-            assert_eq!(rt.presented(&format!("{feat}-split")).is_some(), two, "{feat} at {w} ({} wide): two columns {two}", over[2]);
+            assert_eq!(rt.presented(&format!("{feat}-split")).is_some(), two && wide_split, "{feat} at {w} ({} wide): two columns {}", over[2], two && wide_split);
             let pick = rt.presented(&format!("{feat}-sandbox")).unwrap_or_else(|| panic!("{feat} at {w}: the picker")).0;
             // The scope picker (scope.rs): its sandbox named in the capsule.
             assert!(rt.elements().iter().any(|e| e.key.as_deref() == Some(format!("{feat}-sandbox").as_str()) && e.label.as_deref().is_some_and(|l| l.starts_with("Scope: "))), "{feat}: the scope capsule");

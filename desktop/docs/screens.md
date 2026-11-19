@@ -1150,7 +1150,10 @@ goes through `Confirm`, like every destructive call), `Confirm`,
 click on the notice runs), `OpenLink(url)`, `Intent { name, args }` (checked
 exactly as from a screen), `Remember { key, value }` (kept across runs in the
 app's state file, read back as `data.app.kept.<feature>.<key>`; null forgets).
-`OpenSocket`, `CloseSocket(id)`, `Focus(element key)`. A `Call` of method
+`OpenSocket`, `CloseSocket(id)`, `Focus(element key)`, `ScrollIntoView(element key)`
+(scrolls the nearest viewport so that element shows, once the change is
+drawn; it never moves the keyboard focus, and a key not drawn does nothing:
+the Board's Show less on a bubble taller than its view). A `Call` of method
 `Core` is one of the core's own operations: restoring a screen (from the
 core's dialog only), and the file operations of `src/files.rs` built with
 `feat::core_call(op, body, what, tag)`: `inspect {path}` and `reveal {path}`
@@ -1482,11 +1485,11 @@ function, `rail_entry`, an extra whose intent is `open_panel {screen}`
 The palette lists the same extras. They were docked panels until the
 person asked for them over the panes, as Commits and Worktrees: a docked
 panel was one narrow column with most of the room empty. Over the pane area
-they use the width: from 760 pt two columns (MCP: the sandbox picker and the
-registered servers | the selected server, which pressing a row inspects, or
-the add form; Kits: the picker, what waits for you and the kits line | the
-selected kit's description, `kits-about`; Skills: the picker and the kept
-skills | that sandbox's skills to look at and keep), one column under it.
+they use the width (MCP: one column at every width, the add form on top,
+the registered servers under it, a server's details under its row; Skills:
+one column, the picked sandbox's skills with Look and Keep on top, your kept
+skills under it; Kits: from 760 pt two columns, the picker, what waits for you and the kits line | the
+selected kit's description, `kits-about`, one column under it).
 The `<screen>_view` convention (view state dropped on close) holds for
 overlays too: closing one drops its `<screen>_view`.
 
@@ -1509,9 +1512,16 @@ saying what to do.
 `mcp-<name>`, `mcp-load-<name>`, `mcp-unload-<name>`, `mcp-auth-<name>`
 (remote only), `mcp-inspect-<name>`, `mcp-rm-<name>`; `mcp-more`, the form
 `mcp-name`, `mcp-kind`, `mcp-url`, `mcp-headers`, `mcp-command`,
-`mcp-args`, `mcp-dir`, `mcp-save`, `mcp-clear`; `mcp-error`. The daemon
-lists no load state per sandbox, so a row shows its kind (remote blue,
-local command amber), not whether it is loaded.
+`mcp-args`, `mcp-dir`, `mcp-save`, `mcp-clear`; `mcp-error`; `mcp-about`
+(the quiet line under the title, its full text in the tooltip), `mcp-form`,
+`mcp-sel-<name>` (the row's name: opens its details, `mcp-inspect`, under
+the row). One column: the form on top (Name and Kind on one row when each
+keeps 240 pt, the fields that depend on Kind under them two by two, the
+hint and Add… on the last row), the servers under it, each a full-width
+row with Load, Unload, Sign in (remote), Inspect and the bin. The daemon
+lists no load state per sandbox (`sbx mcp ls` gives name and type), so a
+row shows its kind (remote blue, local command amber), not whether it is
+loaded, and the list keeps this machine's order; the list's heading says so.
 
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
@@ -1942,8 +1952,19 @@ page ("Show n more"). The list is at least as wide as the button, up to
 560 pt, never wider than the overlay; a press outside closes it (and does
 nothing else), a pick closes it, its rows are one keyboard list (Up, Down,
 Enter; the keyboard lands on the team shown), Escape closes it through
-`board_key` (`board_ui.popup` is true while it is open). The main column is
-the team's timeline (`GET /api/teams/:id/timeline`) as a **conversation**,
+`board_key` (`board_ui.popup` is true while it is open). One column. Under
+the title, a **summary** (`board-summary`): the lead as a chip, each thread
+as a chip (status dot, name, state; a press filters the conversation to it,
+pressed again every thread; its terminal and its session in Sessions as
+icons shown on hover and keyboard focus, their room kept), then counters
+that are the filters below (standing decisions, standing warnings,
+questions waiting in Requests, commits with their +/- totals: a press
+applies that filter and marks the counter, pressed again All), the Plan
+dialog, Threads and Worktrees, and Details (each thread's worktree and
+model, in place). The team's state is beside the picker only. Under 760 pt
+the summary is one wrapping line: counters without their words (tooltips
+keep them), the links as icons, a thread's terminal and session in Details.
+Under it the conversation, the overlay's whole width: the team's timeline (`GET /api/teams/:id/timeline`) as a **conversation**,
 oldest at the top, opening at the newest: the person's acts on the right,
 the lead and threads on the left, sbxw's own events as centred lines. Each
 message has its **author line above its bubble**: the dot and the name (mono,
@@ -1974,15 +1995,22 @@ note labelled Info, Warning or Decision with "team note"; a direct message
 (the agents' own `SendMessage`, as sbxw's hook saw it) as a bubble labelled
 "direct message"; a thread's consecutive commits one row ("api-routes made
 4 commits") that opens. A text drawn on more than 8 lines at the bubble's width folds (Show more,
-6 lines shown: `model::FOLD_DRAWN`); on a wide window a few lines are not folded; day separators; relative times, the exact UTC time in the tooltip.
-A filter row (All, Decisions and warnings, Questions, Messages, Commits, Status), a
-thread and words, applied by the daemon before paging. From 760 pt a side
-column: **Team** (the lead, each thread with its state, worktree and model;
-pressing one filters the conversation; its terminal and its session in Sessions),
-**Decisions and warnings** that still stand, **Commits** per thread (totals,
-merged, a lane graph drawn with `paint`, a commit opened in place with the
-Commits view's diff groups, `commits::diff_groups`). Under 760 pt one
-column with Conversation, Team and notes, Commits.
+6 lines shown: `model::FOLD_DRAWN`), decided by the screen at the width it
+draws now (the data holds the whole text); on a wide window a few lines are not folded; day separators; relative times, the exact UTC time in the tooltip.
+A filter row (All, Decisions and warnings, Questions, Messages, Commits, Status) and
+words, applied by the daemon before paging (the thread: its chip). A decision
+or warning is drawn once, in the conversation; one that still stands has a
+"standing" mark on its bubble. On a team, the **Commits** filter shows, at
+the conversation's width, a lane graph (drawn with `paint`, 260 to 960 pt),
+each thread's totals and commits, a commit opened in place with the Commits
+view's diff groups (`commits::diff_groups`); in All, commits stay folded rows.
+**Folds hold the page**: once a fold is pressed (a long text, goals, a
+thread's commits, a commit, a file's diff, Details) the conversation stops
+following its end until the next team, filter or search, so the pressed
+bubble's top and the rows above it stay put; folding a bubble whose top is
+above the view scrolls it back into view (`ScrollIntoView`). At the very end
+of the conversation a fold removes content under the view: the rows come
+down together by that much.
 
 Read only: every intent is Direct and reads; links go to the plan dialog,
 the Requests panel, a terminal, Commits, Worktrees, the Threads panel, the
@@ -1997,9 +2025,8 @@ again.
 | `board_team` | `id` | Another team, or `all` |
 | `board_filter` | `group?`, `thread?`, `text?` | Filters (applied by the daemon) |
 | `board_more` | | Earlier rows, then an older page |
-| `board_expand` | `id` | Opens or folds a row (long text, goals, commits) |
-| `board_commit`, `board_file` | `hash`; `path` | A team commit opened in the Commits column; a file's diff |
-| `board_tab` | `tab` | The narrow layout's column |
+| `board_expand` | `id` | Opens or folds a row (long text, goals, commits; `summary`: the summary's details) |
+| `board_commit`, `board_file` | `hash`; `path` | A team commit opened in the Commits filter; a file's diff |
 | `board_open` | `what`, `thread?`, `relay?` | Where one acts: terminal, monitor, commits, worktrees, plan, requests, threads |
 | `board_refresh` | | Reads again |
 | `board_picker` | `open?`, `more?` | Opens or closes the team picker's list (none: toggles), or lists 20 more teams in it |

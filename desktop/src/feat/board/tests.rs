@@ -71,9 +71,10 @@ fn opened_from_a_sandbox_it_shows_that_sandbox_s_team_and_the_picker_lists_every
     let v = show(&mut st, &mut d, json!({ "sandbox": "web-app" }));
     assert_eq!(v["team"], "p-run");
     let ids: Vec<&str> = v["teams"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["p-run", "p-new", "p-old", "p-long"], "as the daemon lists them");
-    assert_eq!(v["teams"][0]["color"], "#e06c75", "the sandbox's colour");
-    assert_eq!(v["teams"][0]["state"], "running");
+    assert_eq!(ids, ["p-new", "p-long", "p-run", "p-old"], "proposed, then running (the most recent first), then merged");
+    assert_eq!(v["teams"][2]["color"], "#e06c75", "the sandbox's colour");
+    assert_eq!(v["teams"][2]["state"], "running");
+    assert_eq!(v["teams"].as_array().unwrap().iter().map(|t| t["live"].as_bool().unwrap()).collect::<Vec<_>>(), [true, true, true, false]);
     // A merged team's sandbox: its latest plan.
     let v = show(&mut st, &mut d, json!({ "sandbox": "docs" }));
     assert_eq!(v["team"], "p-old");
@@ -139,14 +140,16 @@ fn notes_stand_pinned_and_a_commit_opens_with_its_diff() {
     let mut d = data();
     let mut st = State::default();
     let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
-    let notes = v["side"]["notes"].as_array().unwrap();
-    assert_eq!(notes.len(), 2);
-    assert_eq!((notes[0]["label"].as_str(), notes[0]["tone"].as_str()), (Some("Decision"), Some("green")));
-    assert_eq!(notes[1]["tone"], "amber");
+    // Counted in the summary, marked in the flow, never listed a second time.
+    let c = &v["side"]["counts"];
+    assert_eq!((c["decisions"].as_u64(), c["warnings"].as_u64(), c["waiting"].as_u64()), (Some(2), Some(1), Some(1)), "{c}");
+    assert!(v["side"]["notes"].is_null());
+    let standing: Vec<String> = rows_of(&v).iter().filter(|r| r["standing"] == true).filter_map(|r| r["id"].as_str().map(str::to_string)).collect();
+    assert_eq!(standing, ["b7", "b8", "l26"], "the standing ones marked where they are");
     let per = v["side"]["commits"].as_array().unwrap();
     let api = per.iter().find(|p| p["thread"] == "api-routes").unwrap();
     assert_eq!(api["totals"]["commits"], 4);
-    assert_eq!(v["side"]["lanes"]["wide"]["labels"].as_array().unwrap().len(), 4, "main and three lanes");
+    assert_eq!(v["side"]["lanes"]["labels"].as_array().unwrap().len(), 4, "main and three lanes");
     let hash = api["commits"][0]["hash"].as_str().unwrap().to_string();
     let (v, paths) = run(&mut st, &mut d, "board_commit", json!({ "hash": hash }));
     assert_eq!(paths, [format!("/api/sandboxes/web-app/commits/{hash}")], "the Commits view's route, on the team's sandbox");
@@ -308,7 +311,7 @@ fn nothing_of_the_board_is_drawn_outside_its_overlay_at_any_width() {
     let mut bad = vec![];
     let mut checked = 0;
     for (w, h) in [(2000.0, 1000.0), (1284.0, 816.0), (760.0, 600.0), (500.0, 600.0), (420.0, 700.0)] {
-        for tab in ["conversation", "notes", "commits"] {
+        for tab in ["all", "details", "commits"] {
             let mut rt = window(w, h);
             // A narrow window is used with the sidebar hidden (at 500 pt it
             // would leave the pane area 224 pt).
@@ -317,7 +320,10 @@ fn nothing_of_the_board_is_drawn_outside_its_overlay_at_any_width() {
                 settle(&mut rt);
             }
             open(&mut rt, json!({ "team": "p-run" }));
-            let v = json!({ "kind": "intent", "name": "board_tab", "args": { "tab": tab } });
+            let v = match tab {
+                "details" => json!({ "kind": "intent", "name": "board_expand", "args": { "id": "summary" } }),
+                g => json!({ "kind": "intent", "name": "board_filter", "args": { "group": g } }),
+            };
             for i in crate::intent::parse(&v).unwrap() {
                 rt.update(|s, _| s.run_intent("test", i));
             }
@@ -335,6 +341,24 @@ fn nothing_of_the_board_is_drawn_outside_its_overlay_at_any_width() {
                 }
                 if r[0] < p[0] - 0.5 || r[0] + r[2] > p[0] + p[2] + 0.5 {
                     bad.push(format!("{tab} at {w}: {k} at {r:?}, overlay {p:?}"));
+                }
+            }
+            // The summary: inside the overlay, its pieces side by side or
+            // wrapped, never over each other.
+            let (sm, _) = rt.presented("board-summary").unwrap_or_else(|| panic!("no summary at {w}"));
+            let piece = |k: &str| ["board-chip-", "board-count-", "board-summary-details", "board-links", "board-detail-"].iter().any(|p| k.starts_with(p)) && !k.starts_with("board-detail-thread-");
+            let parts: Vec<(String, [f32; 4])> = rt.elements().into_iter().filter_map(|e| e.key.clone().filter(|k| piece(k)).map(|k| (k, e.rect))).collect();
+            assert!(parts.len() >= 6, "{tab} at {w}: {} summary pieces", parts.len());
+            for (i, (ka, a)) in parts.iter().enumerate() {
+                if a[0] < sm[0] - 0.5 || a[0] + a[2] > sm[0] + sm[2] + 0.5 || a[1] < sm[1] - 0.5 || a[1] + a[3] > sm[1] + sm[3] + 0.5 {
+                    bad.push(format!("{tab} at {w}: {ka} {a:?} outside the summary {sm:?}"));
+                }
+                for (kb, b) in &parts[i + 1..] {
+                    let x = a[0] < b[0] + b[2] - 0.5 && b[0] < a[0] + a[2] - 0.5;
+                    let y = a[1] < b[1] + b[3] - 0.5 && b[1] < a[1] + a[3] - 0.5;
+                    if x && y {
+                        bad.push(format!("{tab} at {w}: {ka} {a:?} over {kb} {b:?}"));
+                    }
                 }
             }
         }
@@ -413,7 +437,7 @@ fn the_picker_names_a_team_by_its_threads_with_its_summary_state_and_age() {
     let mut d = data();
     let mut st = State::default();
     let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
-    let t = &v["teams"][0];
+    let t = v["teams"].as_array().unwrap().iter().find(|t| t["id"] == "p-run").unwrap();
     assert_eq!(t["names"], "api-routes + web-page + docs-update", "thread names first");
     assert_eq!(t["summary"], "Orders v2: the API routes, the web page that uses them, and their docs", "the summary whole (the screen wraps it on two lines)");
     assert_eq!((t["state"].as_str(), t["tone"].as_str()), (Some("running"), Some("blue")));
@@ -432,12 +456,16 @@ fn the_picker_opens_moves_picks_and_closes_by_key_press_outside_and_reopen() {
     let mut st = State::default();
     show(&mut st, &mut d, json!({ "team": "p-run" }));
     let (v, _) = run(&mut st, &mut d, "board_picker", json!({}));
-    assert_eq!((v["popup"].as_bool(), v["picker"]["hl"].as_u64()), (Some(true), Some(1)), "open, the team shown marked (0 is All teams)");
+    assert_eq!((v["popup"].as_bool(), v["picker"]["hl"].as_u64()), (Some(true), Some(3)), "open, the team shown marked (0 is All teams; p-new, p-long, p-run)");
     let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "down" }));
-    assert_eq!(v["picker"]["hl"], 2);
+    assert_eq!(v["picker"]["hl"], 4);
+    let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "down" }));
+    assert_eq!(v["picker"]["hl"], 4, "stays on the last row");
     let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
     let (v2, _) = run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
-    assert_eq!((v["picker"]["hl"].as_u64(), v2["picker"]["hl"].as_u64()), (Some(1), Some(0)));
+    assert_eq!((v["picker"]["hl"].as_u64(), v2["picker"]["hl"].as_u64()), (Some(3), Some(2)));
+    run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
+    run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
     let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
     assert_eq!(v["picker"]["hl"], 0, "stays on the first row");
     // Escape closes the list only.
@@ -447,7 +475,7 @@ fn the_picker_opens_moves_picks_and_closes_by_key_press_outside_and_reopen() {
     run(&mut st, &mut d, "board_picker", json!({ "open": true }));
     run(&mut st, &mut d, "board_key", json!({ "key": "down" }));
     let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "enter" }));
-    assert_eq!((v["team"].as_str(), v["popup"].as_bool()), (Some("p-new"), Some(false)));
+    assert_eq!((v["team"].as_str(), v["popup"].as_bool()), (Some("p-old"), Some(false)));
     // A press outside (the dismiss layer's intent), a pick with the pointer.
     run(&mut st, &mut d, "board_picker", json!({}));
     let (v, _) = run(&mut st, &mut d, "board_picker", json!({ "open": false }));
@@ -744,7 +772,7 @@ fn the_picker_answers_up_down_and_enter() {
         settle(&mut rt);
     }
     assert!(rt.presented("board-picker").is_none(), "Enter picks and closes");
-    assert_eq!(shown_team(&rt), "p-old", "All teams, p-run, p-new, p-old: two down from p-run");
+    assert_eq!(shown_team(&rt), "p-old", "All teams, p-new, p-long, p-run, p-old: down from p-run stops at p-old");
 }
 
 #[test]
@@ -777,7 +805,7 @@ fn bubbles_are_as_wide_as_the_column_allows_and_never_leave_it() {
         append(&mut rt, note_event("l990", &prose));
         let (p, _) = rt.presented("overlay-board").unwrap();
         let (c, _) = rt.presented("board-convo").unwrap();
-        let conv = model::conv_w(p[2], team != "all");
+        let conv = model::conv_w(p[2]);
         let max = model::bubble_max(conv, p[2]);
         let widest = rt.elements().iter().filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("board-bubble-"))).map(|e| e.rect[2]).fold(0.0, f32::max);
         assert!((widest - max).abs() <= 1.0, "{team} at {w}: widest bubble {widest}, rule {max} (overlay {}, column {})", p[2], c[2]);
@@ -788,4 +816,412 @@ fn bubbles_are_as_wide_as_the_column_allows_and_never_leave_it() {
             assert!(max <= model::BUBBLE_MIN);
         }
     }
+}
+
+// ── The fold holds the page (A6) ─────────────────────────────────────────
+
+/// Where the pressed bubble and every row above it are drawn, in the window.
+fn rows_at(rt: &Runtime<App>, id: &str) -> (Option<[f32; 4]>, Vec<(String, f32)>) {
+    let b = rt.presented(&format!("board-bubble-{id}")).map(|(r, _)| r);
+    let (c, _) = rt.presented("board-convo").unwrap();
+    let above: Vec<(String, f32)> = rt
+        .elements()
+        .into_iter()
+        .filter_map(|e| e.key.clone().map(|k| (k, e.rect)))
+        .filter(|(k, _)| k.starts_with("board-msg-") || k.starts_with("board-author-"))
+        .filter(|(_, r)| b.is_some_and(|b| r[1] + r[3] <= b[1] + 0.5) && r[1] + r[3] > c[1] && r[1] < c[1] + c[3])
+        .map(|(k, r)| (k, r[1]))
+        .collect();
+    (b, above)
+}
+
+/// Presses `key` and checks the fold rule: the bubble's top edge and every
+/// row above it stay where they were (within 1 pt) on every frame, its
+/// width is the same. Returns what moved.
+/// Scrolls with the wheel until `key` is wholly in the conversation's view,
+/// as a person reaches a control before pressing it.
+fn reach(rt: &mut Runtime<App>, key: &str) {
+    let (c, _) = rt.presented("board-convo").unwrap();
+    for _ in 0..80 {
+        let Some((r, _)) = rt.presented(key) else { return };
+        let dy = if r[1] < c[1] { 30.0 } else if r[1] + r[3] > c[1] + c[3] { -30.0 } else { return };
+        rt.wheel(c[0] + c[2] / 2.0, c[1] + c[3] / 2.0, dy);
+        settle(rt);
+    }
+}
+
+fn press_holds(rt: &mut Runtime<App>, key: &str, id: &str, folding: bool) -> Vec<String> {
+    reach(rt, key);
+    let (b0, above0) = rows_at(rt, id);
+    let b0 = b0.unwrap_or_else(|| panic!("{id} not drawn"));
+    let (c, _) = rt.presented("board-convo").unwrap();
+    if folding && b0[1] < c[1] - 0.5 {
+        // Its top above the view: folding brings it back into the view
+        // (Action::ScrollIntoView) instead of holding it out of sight.
+        tap(rt, key);
+        let (b, _) = rt.presented(&format!("board-bubble-{id}")).unwrap();
+        return if b[1] >= c[1] - 0.5 && b[1] < c[1] + c[3] { vec![] } else { vec![format!("{key}: folded from above the view, its top {b:?} is not in {c:?}")] };
+    }
+    let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{key} not drawn"));
+    let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+    // Folded at the very end of the conversation: nothing under the view
+    // fills what the fold removes, so the view's offset is clamped and the
+    // rows come down together by that much (the control stays under the
+    // pointer). Anywhere else the bubble's top holds.
+    let at_end = folding && rt.presented("board-rows").is_some_and(|(rows, _)| (rows[1] + rows[3] - (c[1] + c[3])).abs() < 1.0);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    let mut bad = vec![];
+    for f in 0..24 {
+        rt.frame(0.025);
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        let (b, above) = rows_at(rt, id);
+        let Some(b) = b else { bad.push(format!("frame {f}: the bubble is gone")); continue };
+        if at_end {
+            // One rigid shift: the bubble and every row above move by the same amount, its top stays in view.
+            let d = b[1] - b0[1];
+            if d < -1.0 || b[1] < c[1] - 0.5 {
+                bad.push(format!("frame {f}: {key} at the end: the top went {} -> {} (view {c:?})", b0[1], b[1]));
+            }
+            for (k, y0) in &above0 {
+                if let Some((_, y1)) = above.iter().find(|(k1, _)| k1 == k) {
+                    if (y1 - y0 - d).abs() > 1.0 {
+                        bad.push(format!("frame {f}: {key} at the end: {k} moved {} while the bubble moved {d}", y1 - y0));
+                    }
+                }
+            }
+            continue;
+        }
+        if (b[1] - b0[1]).abs() > 1.0 {
+            bad.push(format!("frame {f}: {key}: the bubble's top moved {} -> {}", b0[1], b[1]));
+        }
+        if (b[2] - b0[2]).abs() > 1.0 {
+            bad.push(format!("frame {f}: {key}: the bubble's width changed {} -> {}", b0[2], b[2]));
+        }
+        for (k, y0) in &above0 {
+            if let Some((_, y1)) = above.iter().find(|(k1, _)| k1 == k) {
+                if (y1 - y0).abs() > 1.0 {
+                    bad.push(format!("frame {f}: {key}: {k} above moved {y0} -> {y1}"));
+                }
+            }
+        }
+    }
+    bad.dedup();
+    bad
+}
+
+fn long_note(id: &str, at: u64) -> J {
+    let text = "The handler reads its input once, checks it against the schema, and returns a typed error the page can show without parsing a message. ".repeat(14);
+    let mut e = note_event(id, &text);
+    e["at"] = at.into();
+    e
+}
+
+#[test]
+fn show_more_and_show_less_keep_the_bubble_and_the_rows_above_in_place() {
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+        let mut rt = window(w, h);
+        if w < 760.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            settle(&mut rt);
+        }
+        open(&mut rt, json!({ "team": "p-run" }));
+        append(&mut rt, long_note("l980", 1_795_100_000_000));
+        // At the end of a conversation longer than the window (the view
+        // follows its end): the newest bubble folded.
+        let mut bad = press_holds(&mut rt, "board-fold-l980", "l980", false);
+        settle(&mut rt);
+        bad.extend(press_holds(&mut rt, "board-fold-l980", "l980", true));
+        settle(&mut rt);
+        // In the middle: rows after it, the view scrolled so it shows.
+        for i in 0..6 {
+            append(&mut rt, note_event(&format!("l98{}", i + 1), "A short note after the long one."));
+        }
+        let (c, _) = rt.presented("board-convo").unwrap();
+        for _ in 0..40 {
+            let Some((b, _)) = rt.presented("board-fold-l980") else { break };
+            if b[1] > c[1] + c[3] * 0.35 {
+                break;
+            }
+            rt.wheel(c[0] + c[2] / 2.0, c[1] + c[3] / 2.0, 40.0);
+            settle(&mut rt);
+        }
+        for _ in 0..40 {
+            let Some((b, _)) = rt.presented("board-fold-l980") else { break };
+            if b[1] < c[1] + c[3] * 0.7 {
+                break;
+            }
+            rt.wheel(c[0] + c[2] / 2.0, c[1] + c[3] / 2.0, -40.0);
+            settle(&mut rt);
+        }
+        bad.extend(press_holds(&mut rt, "board-fold-l980", "l980", false));
+        settle(&mut rt);
+        // Show less: the bubble's top is in view after. An open bubble whose
+        // top is above the view comes back into it (Action::ScrollIntoView); one in
+        // view holds.
+        bad.extend(press_holds(&mut rt, "board-fold-l980", "l980", true));
+        settle(&mut rt);
+        let (b, _) = rt.presented("board-bubble-l980").unwrap();
+        assert!(b[1] >= c[1] - 0.5 && b[1] < c[1] + c[3], "at {w}: after Show less the bubble's top is in view: {b:?} in {c:?}");
+        assert!(bad.is_empty(), "at {w}:\n{}", bad.join("\n"));
+    }
+}
+
+#[test]
+fn show_less_from_the_end_of_a_tall_bubble_brings_its_top_into_view() {
+    let mut rt = window(720.0, 480.0);
+    rt.update(|s, _| s.toggle_sidebar());
+    settle(&mut rt);
+    open(&mut rt, json!({ "team": "p-run" }));
+    append(&mut rt, long_note("l980", 1_795_100_000_000));
+    tap(&mut rt, "board-fold-l980");
+    let (c, _) = rt.presented("board-convo").unwrap();
+    // Down to its end: its Show less in view, its top above the view.
+    for _ in 0..60 {
+        if rt.presented("board-fold-l980").is_some_and(|(f, _)| f[1] + f[3] <= c[1] + c[3] && f[1] >= c[1]) && rt.presented("board-bubble-l980").is_some_and(|(b, _)| b[1] < c[1]) {
+            break;
+        }
+        rt.wheel(c[0] + c[2] / 2.0, c[1] + c[3] / 2.0, -30.0);
+        settle(&mut rt);
+    }
+    let (b, _) = rt.presented("board-bubble-l980").unwrap();
+    assert!(b[1] < c[1], "the open bubble's top is above the view: {b:?} in {c:?}");
+    tap(&mut rt, "board-fold-l980");
+    let (b, _) = rt.presented("board-bubble-l980").unwrap();
+    assert!(b[1] >= c[1] - 0.5 && b[1] < c[1] + c[3], "after Show less its top is in view: {b:?} in {c:?}");
+}
+
+#[test]
+fn scrolling_to_a_key_not_drawn_does_nothing() {
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    settle(&mut rt);
+    settle(&mut rt);
+    let (c0, _) = rt.presented("board-convo").unwrap();
+    let before: Vec<(Option<String>, [f32; 4])> = rt.elements().into_iter().map(|e| (e.key, e.rect)).collect();
+    let focus0 = rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key);
+    // Opened then folded: a fold key with no bubble drawn asks to scroll to "board-bubble-nowhere".
+    for _ in 0..2 {
+        let v = json!({ "kind": "intent", "name": "board_expand", "args": { "id": "nowhere" } });
+        for i in crate::intent::parse(&v).unwrap() {
+            rt.update(|s, _| s.run_intent("test", i));
+        }
+        settle(&mut rt);
+    }
+    let after: Vec<(Option<String>, [f32; 4])> = rt.elements().into_iter().map(|e| (e.key, e.rect)).collect();
+    assert_eq!(before.len(), after.len());
+    for ((ka, a), (kb, b)) in before.iter().zip(&after) {
+        assert!(ka == kb && (0..4).all(|i| (a[i] - b[i]).abs() < 0.5), "nothing moved: {ka:?} {a:?} -> {kb:?} {b:?}");
+    }
+    assert_eq!(rt.presented("board-convo").unwrap().0, c0);
+    assert_eq!(rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key), focus0, "the keyboard focus stays");
+}
+
+// ── One column: the summary (A2 to A5) ───────────────────────────────────
+
+fn ui_now(rt: &Runtime<App>) -> J {
+    rt.state.feats.data.get(UI).cloned().unwrap_or(J::Null)
+}
+
+#[test]
+fn a_counter_applies_its_filter_and_shows_it_applied() {
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    // (The questions counter needs a request waiting in Requests: the window
+    // fixture has none; its count is tested in notes_stand_pinned_...)
+    assert!(rt.presented("board-count-questions").is_none(), "no counter for nothing waiting");
+    for (counter, group) in [("board-count-decisions", "notes"), ("board-count-warnings", "notes"), ("board-count-commits", "commits")] {
+        tap(&mut rt, counter);
+        assert_eq!(ui_now(&rt)["group"], group, "{counter}");
+        let el = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(counter)).unwrap();
+        assert!(el.item_selected, "{counter} shows its filter applied");
+        // Pressed again: every kind.
+        tap(&mut rt, counter);
+        assert_eq!(ui_now(&rt)["group"], "all", "{counter} again");
+    }
+}
+
+#[test]
+fn a_thread_chip_filters_the_conversation_and_its_links_keep_their_intents() {
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    tap(&mut rt, "board-thread-web-page");
+    assert_eq!(ui_now(&rt)["thread"], "web-page");
+    assert!(rt.elements().into_iter().find(|e| e.key.as_deref() == Some("board-thread-web-page")).unwrap().item_selected);
+    tap(&mut rt, "board-thread-web-page");
+    assert_eq!(ui_now(&rt)["thread"], "", "pressed again: every thread");
+    tap(&mut rt, "board-thread-lead");
+    assert_eq!(ui_now(&rt)["thread"], "lead");
+    // The chip's links and the summary's buttons: the same intents as before.
+    let node = rt.state.screens.iter().find(|s| s.name == SCREEN).and_then(|s| s.last_good.clone()).unwrap();
+    let mut ks = vec![];
+    keys(&node, &mut ks);
+    for k in ["board-term-web-page", "board-plan", "board-threads", "board-worktrees", "board-summary-details"] {
+        assert!(ks.iter().any(|x| x == k), "{k} drawn");
+    }
+    let mut d = data();
+    let mut st = State::default();
+    show(&mut st, &mut d, json!({ "team": "p-run" }));
+    let out = st.act(&Ctx { data: &d }, &asked("board_open", json!({ "what": "terminal", "thread": "web-page" }))).unwrap();
+    assert!(out.iter().any(|a| matches!(a, Action::Intent { name, args } if name == "open_terminal" && args["thread"] == "web-page")));
+}
+
+#[test]
+fn no_decision_or_warning_is_drawn_twice() {
+    for (w, h) in [(1284.0, 816.0), (420.0, 700.0)] {
+        let mut rt = window(w, h);
+        if w < 700.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            settle(&mut rt);
+        }
+        open(&mut rt, json!({ "team": "p-run" }));
+        tap(&mut rt, "board-group-notes");
+        let texts: Vec<String> = rt.elements().into_iter().filter_map(|e| e.text).collect();
+        let fx = fx();
+        for n in fx["daemon"]["board_timelines"]["p-run"]["standing"].as_array().unwrap() {
+            let t = n["text"].as_str().unwrap();
+            let head: String = t.chars().take(30).collect();
+            let n = texts.iter().filter(|x| x.contains(&head)).count();
+            assert_eq!(n, 1, "at {w}: {head:?} drawn {n} times");
+        }
+        // Each standing one is marked where it is.
+        assert!(rt.presented("board-standing-b8").is_some() && rt.presented("board-standing-b7").is_some() && rt.presented("board-standing-l26").is_some());
+    }
+}
+
+#[test]
+fn commits_take_the_full_width_and_a_diff_opens_in_place() {
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    tap(&mut rt, "board-count-commits");
+    let (o, _) = rt.presented("overlay-board").unwrap();
+    let (l, _) = rt.presented("board-commits").unwrap();
+    assert!(l[2] >= o[2] - 40.0, "the commits use the overlay's width: {l:?} in {o:?}");
+    assert!(rt.presented("board-lanes").is_some(), "the lane graph on top");
+    let hash = rt.elements().into_iter().filter_map(|e| e.key).find(|k| k.starts_with("board-side-commit-")).unwrap();
+    tap(&mut rt, &hash);
+    let file = rt.elements().into_iter().filter_map(|e| e.key).find(|k| k.starts_with("board-file-")).expect("its files");
+    let (r0, _) = rt.presented(&hash).unwrap();
+    tap(&mut rt, &file);
+    let diff = file.replacen("board-file-", "board-diff-", 1);
+    let (d, _) = rt.presented(&diff).expect("the diff in place");
+    assert!(d[2] >= o[2] - 120.0, "the diff at the width: {d:?}");
+    let (r1, _) = rt.presented(&hash).unwrap();
+    assert!((r1[1] - r0[1]).abs() <= 1.0, "the commit's row stays where it was: {r0:?} -> {r1:?}");
+}
+
+#[test]
+fn the_other_folds_hold_the_rows_above() {
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    // A thread's commits (a row, not a bubble) in the conversation.
+    let g = rows_of(&ui_now(&rt)).into_iter().rev().find(|r| r["type"] == "commits" && r["count"].as_u64() > Some(1)).unwrap();
+    let key = format!("board-msg-{}", g["id"].as_str().unwrap());
+    reach(&mut rt, &key);
+    let above = |rt: &Runtime<App>, y: f32| -> Vec<(String, f32)> {
+        let (c, _) = rt.presented("board-convo").unwrap();
+        rt.elements().into_iter().filter_map(|e| e.key.map(|k| (k, e.rect))).filter(|(k, r)| k.starts_with("board-msg-") && r[1] + r[3] <= y + 0.5 && r[1] > c[1]).map(|(k, r)| (k, r[1])).collect()
+    };
+    let (r0, _) = rt.presented(&key).unwrap();
+    let a0 = above(&rt, r0[1]);
+    tap(&mut rt, &key);
+    let (r1, _) = rt.presented(&key).unwrap();
+    assert!((r1[1] - r0[1]).abs() <= 1.0, "a commit group opening holds its row: {r0:?} -> {r1:?}");
+    let a1 = above(&rt, r1[1]);
+    for (k, y) in &a0 {
+        if let Some((_, y1)) = a1.iter().find(|(k1, _)| k1 == k) {
+            assert!((y1 - y).abs() <= 1.0, "{k} above moved {y} -> {y1}");
+        }
+    }
+    // The summary's details: the summary's top and the filters do not move up.
+    let (s0, _) = rt.presented("board-summary").unwrap();
+    tap(&mut rt, "board-summary-details");
+    let (s1, _) = rt.presented("board-summary").unwrap();
+    assert!((s1[1] - s0[1]).abs() <= 1.0 && (s1[2] - s0[2]).abs() <= 1.0, "{s0:?} -> {s1:?}");
+    assert!(rt.presented("board-detail-api-routes").is_some(), "the worktree and model in place");
+}
+
+#[test]
+fn a_long_text_folds_by_the_width_drawn_now() {
+    // 500 characters: open at 2000 pt (5 lines), folded at 420 pt (9 lines).
+    let t = "word ".repeat(100).trim_end().to_string();
+    for (w, h, folded) in [(2000.0, 1000.0, false), (420.0, 700.0, true)] {
+        let mut rt = window(w, h);
+        if w < 700.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            settle(&mut rt);
+        }
+        open(&mut rt, json!({ "team": "p-run" }));
+        append(&mut rt, note_event("l970", &t));
+        assert_eq!(rt.presented("board-fold-l970").is_some(), folded, "at {w}");
+    }
+}
+
+/// The window on the fixture with p-run's team given eight threads (a file
+/// of its own under the system's temporary folder).
+fn eight_threads(w: f32, h: f32) -> Runtime<App> {
+    let mut f = fx();
+    const STATES: [&str; 4] = ["working", "done", "blocked", "working"];
+    let names = ["api-routes", "web-page", "docs-update", "payments-v2", "search-index", "auth-refresh", "mobile-layout", "release-notes"];
+    let threads: Vec<J> = names.iter().enumerate().map(|(i, n)| json!({ "name": n, "state": STATES[i % 4], "model": "claude-sonnet-5-5" })).collect();
+    f["daemon"]["board_timelines"]["p-run"]["team"]["threads"] = J::Array(threads.clone());
+    for t in f["daemon"]["board_teams"].as_array_mut().unwrap() {
+        if t["id"] == "p-run" {
+            t["threads"] = J::Array(threads.clone());
+        }
+    }
+    let path = std::env::temp_dir().join(format!("sbxw-board-eight-{}.json", std::process::id()));
+    std::fs::write(&path, serde_json::to_string(&f).unwrap()).unwrap();
+    let a = App::new(Args { fixture: Some(path.to_string_lossy().into_owned()), ..Args::default() });
+    let mut rt = Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+    settle(&mut rt);
+    let _ = std::fs::remove_file(&path);
+    rt
+}
+
+#[test]
+fn eight_threads_keep_the_summary_to_two_rows() {
+    for (w, h, rows) in [(1284.0, 816.0, 2), (760.0, 600.0, 3)] {
+        let mut rt = eight_threads(w, h);
+        open(&mut rt, json!({ "team": "p-run" }));
+        // (The view state outlives a window in a test thread: Details closed, every thread.)
+        if rt.presented("board-summary-more").is_some() {
+            tap(&mut rt, "board-summary-details");
+        }
+        if ui_now(&rt)["thread"] != "" {
+            let k = format!("board-thread-{}", ui_now(&rt)["thread"].as_str().unwrap());
+            tap(&mut rt, &k);
+        }
+        let (sm, _) = rt.presented("board-summary").unwrap();
+        // A row of chips or counters is 26 pt and 6 pt apart, 8 pt of padding each side.
+        let max_h = 16.0 + rows as f32 * 26.0 + (rows - 1) as f32 * 8.0 + 4.0;
+        assert!(sm[3] <= max_h, "at {w}: the summary is {} tall (at most {rows} rows: {max_h})", sm[3]);
+        let chips = rt.elements().into_iter().filter_map(|e| e.key).filter(|k| k.starts_with("board-chip-") && k != "board-chip-lead" && k != "board-chip-more").count();
+        assert!(chips >= 2 && chips < 8, "at {w}: {chips} chips shown");
+        assert!(rt.presented("board-chip-more").is_some(), "the rest behind +n");
+        // +n opens Details, where every thread is listed and pressable.
+        tap(&mut rt, "board-chip-more");
+        tap(&mut rt, "board-detail-thread-release-notes");
+        assert_eq!(ui_now(&rt)["thread"], "release-notes");
+        assert!(rt.presented("board-chip-release-notes").is_some(), "a selected thread's chip is always shown");
+    }
+}
+
+#[test]
+fn the_picker_lists_live_teams_first_then_finished_under_a_heading_and_no_needless_tooltip() {
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    tap(&mut rt, "board-row-picker");
+    let y = |k: &str| rt.presented(k).unwrap_or_else(|| panic!("{k}")).0[1];
+    let order = ["board-row-team-all", "board-row-team-p-new", "board-row-team-p-long", "board-row-team-p-run", "board-picker-finished", "board-row-team-p-old"];
+    for w in order.windows(2) {
+        assert!(y(w[0]) < y(w[1]), "{} above {}", w[0], w[1]);
+    }
+    // A row whose summary is shown whole has no tooltip; the All teams row neither.
+    let els = rt.elements();
+    let help = |k: &str| els.iter().find(|e| e.key.as_deref() == Some(k)).and_then(|e| e.help.clone());
+    assert_eq!(help("board-row-team-all"), None);
+    assert_eq!(help("board-row-team-p-run"), None, "Orders v2's summary fits its two lines");
 }

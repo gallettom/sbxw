@@ -180,3 +180,85 @@ fn the_picker_the_notice_and_load_name_the_same_sandbox() {
         }
     }
 }
+
+// ── One column (the form on top, the servers under it) ───────────────────
+
+mod window {
+    use crate::shell::{view, App, Args};
+    use rune::Runtime;
+    use serde_json::json;
+
+    const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/mcp/basic.json");
+
+    fn settle(rt: &mut Runtime<App>) {
+        for _ in 0..12 {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+        }
+    }
+
+    fn window(w: f32, h: f32) -> Runtime<App> {
+        let a = App::new(Args { fixture: Some(FIXTURE.into()), ..Args::default() });
+        let mut rt = Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+        settle(&mut rt);
+        if w < 700.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            settle(&mut rt);
+        }
+        let v = json!({ "kind": "intent", "name": "mcp_show", "args": {} });
+        for i in crate::intent::parse(&v).unwrap() {
+            rt.update(|s, _| s.run_intent("test", i));
+        }
+        settle(&mut rt);
+        rt
+    }
+
+    #[test]
+    fn the_form_is_above_the_servers_and_nothing_leaves_the_overlay() {
+        for (w, h) in [(2000.0, 1000.0), (1284.0, 816.0), (720.0, 480.0), (500.0, 700.0), (420.0, 700.0)] {
+            let mut rt = window(w, h);
+            let (o, _) = rt.presented("overlay-mcp").unwrap_or_else(|| panic!("no overlay at {w}"));
+            let (f, _) = rt.presented("mcp-form").unwrap_or_else(|| panic!("no form at {w}"));
+            let (l, _) = rt.presented("mcp-linear").unwrap_or_else(|| panic!("no server row at {w}"));
+            assert!(f[1] + f[3] <= l[1] + 0.5, "at {w}: the form {f:?} above the list {l:?}");
+            assert!(f[2] >= o[2] - 64.0 && l[2] >= o[2] - 64.0, "at {w}: full width: form {f:?}, row {l:?} in {o:?}");
+            let mut bad = vec![];
+            for e in rt.elements() {
+                let Some(k) = e.key.clone() else { continue };
+                if !k.starts_with("mcp-") {
+                    continue;
+                }
+                let r = e.rect;
+                if r[1] + r[3] <= o[1] || r[1] >= o[1] + o[3] || r[2] <= 0.0 {
+                    continue;
+                }
+                if r[0] < o[0] - 0.5 || r[0] + r[2] > o[0] + o[2] + 0.5 {
+                    bad.push(format!("{k} {r:?}"));
+                }
+            }
+            assert!(bad.is_empty(), "at {w}, outside {o:?}:\n{}", bad.join("\n"));
+            // Every action of a row is drawn (and reaches its intent: the
+            // tree tests above press them).
+            for k in ["mcp-load-linear", "mcp-unload-linear", "mcp-auth-linear", "mcp-inspect-linear", "mcp-rm-linear", "mcp-save"] {
+                assert!(rt.presented(k).is_some(), "at {w}: {k}");
+            }
+        }
+    }
+
+    #[test]
+    fn inspect_opens_under_its_row() {
+        let mut rt = window(1284.0, 816.0);
+        let (r, _) = rt.presented("mcp-sel-linear").unwrap();
+        let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        settle(&mut rt);
+        let (d, _) = rt.presented("mcp-inspect").expect("the details");
+        let (row, _) = rt.presented("mcp-sel-linear").unwrap();
+        assert!(d[1] >= row[1] + row[3] - 0.5, "under its row: {d:?} under {row:?}");
+        let (p, _) = rt.presented("mcp-playwright").unwrap();
+        assert!(p[1] >= d[1] + d[3] - 0.5, "the next server under the details");
+    }
+}

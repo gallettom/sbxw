@@ -8,8 +8,10 @@ def h(s): return hashlib.sha1(s.encode()).hexdigest()
 GROUP = {"direct_message":"messages","team_note":"notes","board_decision":"notes","board_warning":"notes","board_handoff":"notes","conflict":"notes","board_question":"questions",
  "relay_question":"questions","relay_routed":"questions","relay_drafted":"questions","relay_answer":"questions","user_question":"questions",
  "user_answer":"questions","screenshot_asked":"questions","screenshot_given":"questions","relay_refused":"questions","commit":"commits","claim":"claims","release":"claims"}
-def ev(at, kind, frm, text=None, to=None, data=None, prefix="l"):
+def ev(at, kind, frm, text=None, to=None, data=None, prefix=None):
     seq[0] += 1
+    # The daemon's ids: a board entry is b<id>, a log entry l<seq>; a standing note keeps its event's id.
+    prefix = prefix or ("b" if kind in ("board_decision", "board_warning", "board_question", "board_handoff") else "l")
     return {"id": f"{prefix}{seq[0]}", "at": at, "kind": kind, "group": GROUP.get(kind, "status"), "from": frm, "to": to, "text": text, "data": data or {}}
 def commit(at, thread, subject, files, add, rem, merged=False):
     hh = h(thread + subject)
@@ -75,7 +77,12 @@ def totals(cs):
         x["commits"] += 1; x["files"] += c["data"]["files"]; x["added"] += c["data"]["added"]; x["removed"] += c["data"]["removed"]
     return list(t.values())
 def clist(cs): return [{"hash": c["data"]["hash"], "short": c["data"]["short"], "subject": c["text"], "author": "Agent", "at": c["at"]//1000, "thread": c["data"]["thread"], "branch": c["data"]["branch"], "merged": c["data"]["merged"], "files": c["data"]["files"], "added": c["data"]["added"], "removed": c["data"]["removed"], "repo": ""} for c in cs]
-standing = [{"id": e["id"].replace("l", "b"), "at": e["at"], "kind": "decision" if e["kind"] == "board_decision" else "warning", "by": e["from"], "text": e["text"], "files": e["data"]["files"], "guess": False} for e in run if e["kind"] in ("board_decision", "board_warning")]
+def standing_of(evs):
+    # As the daemon's team::standing_notes: board decisions and warnings, and team notes that say decision or warning; newest first.
+    out = [{"id": e["id"], "at": e["at"], "kind": "decision" if e["kind"] == "board_decision" else "warning", "by": e["from"], "text": e["text"], "files": e["data"]["files"], "guess": False} for e in evs if e["kind"] in ("board_decision", "board_warning")]
+    out += [{"id": e["id"], "at": e["at"], "kind": e["data"]["kind"], "by": e["from"], "to": e["to"], "text": e["text"], "files": [], "guess": False, "team_note": True} for e in evs if e["kind"] == "team_note" and e["data"].get("kind") in ("decision", "warning")]
+    return sorted(out, key=lambda n: -n["at"])
+standing = standing_of(run)
 
 # ── A merged team on docs ──
 M = T0 + 2*3600_000
@@ -150,8 +157,8 @@ fx = {
   "board_teams": [run_team, pro_team, mer_team, long_team],
   "board_timelines": {
     "p-run": {"team": run_team, "events": run, "standing": standing, "commits": {"available": True, "list": clist(sorted(cl, key=lambda c: -c["at"])), "totals": totals(cl), "merged": False}},
-    "p-old": {"team": mer_team, "events": mer, "standing": [{"id": "b90", "at": mm(45), "kind": "decision", "by": "guide-search", "text": "The search index is built at deploy, never in the browser.", "files": [], "guess": False}], "commits": {"available": True, "list": clist(sorted(mcl, key=lambda c: -c["at"])), "totals": totals(mcl), "merged": True}},
-    "p-long": {"team": long_team, "events": long_ev, "standing": [], "commits": {"available": True, "list": [], "totals": [], "merged": False}},
+    "p-old": {"team": mer_team, "events": mer, "standing": standing_of(mer), "commits": {"available": True, "list": clist(sorted(mcl, key=lambda c: -c["at"])), "totals": totals(mcl), "merged": True}},
+    "p-long": {"team": long_team, "events": long_ev, "standing": standing_of(long_ev), "commits": {"available": True, "list": [], "totals": [], "merged": False}},
     "p-new": {"team": pro_team, "events": pro, "standing": [], "commits": {"available": True, "list": [], "totals": [], "merged": False}},
   },
   "commits": {"web-app": [], "docs": []},

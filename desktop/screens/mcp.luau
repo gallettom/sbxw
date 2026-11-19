@@ -1,9 +1,10 @@
 -- MCP servers (an overlay over the pane area, opened from the rail; it was
 -- Setup's MCP tab): the servers registered on this machine (sbx mcp),
 -- loading one into a running sandbox, signing in to a remote one, adding
--- one. The web UI's mcp.js. Wide (760 pt and more): the sandbox picker and
--- the registered servers at the left; at the right the selected server
--- (pressing a row inspects it) or the add form. Narrow: one column.
+-- one. The web UI's mcp.js. One column at every width: the form on top
+-- (Name and Kind on one row when there is room), the registered servers
+-- under it, each a full-width row with its actions; pressing a row opens
+-- its details (sbx mcp inspect) under it.
 --
 -- The sandbox Load and Unload act on is data.mcp_view.sandbox (the panel
 -- opened for a sandbox), else the last one used (data.app.kept.mcp.sandbox),
@@ -30,20 +31,6 @@ end
 
 local function note(t, color)
   return text{ t, wrap = true, size = "sm", color = color or "text-muted" }
-end
-
-local function section(t, extra)
-  return row{ w = "full", gap = 8,
-    text{ t, size = "caption", weight = "semibold", color = "text-muted" },
-    extra or false,
-  }
-end
-
-local function field(label, child)
-  return row{ w = "full", gap = 8,
-    text{ label, size = "sm", color = "text-muted", w = 84 },
-    child,
-  }
 end
 
 local function is_stdio(x)
@@ -78,8 +65,19 @@ return {
     local asked = (data.mcp_view or {}).sandbox
     local want = asked or ((((data.app or {}).kept or {}).mcp or {}).sandbox)
     local target = contains(names, want) and want or names[1]
+    local wide = overlay_wide(data)
+    local sel = data.mcp_inspect_for
+
+    -- One column: a quiet line, the form, the servers under it.
     local out = { w = "full", gap = 12, key = "mcp-body",
-      text{ "An MCP server gives an agent more tools (an issue tracker, a browser, a database). It is registered once on this machine, then loaded into each running sandbox that needs it.", wrap = true, color = "text-soft" },
+      -- Beside the overlay's title (the core's header draws it: TITLE_SLOT).
+      -- The scope (scope.rs): the running sandbox servers load into.
+      row{ key = "title-slot", gap = 8, select{ id = "mcp-sandbox", value = target or "", on = "pick", scope = { kind = "sandbox", running = true },
+        placeholder = "No running sandbox", disabled = #running == 0 } },
+      row{ w = "full", gap = 4, key = "mcp-about",
+        help = "An MCP server gives an agent more tools (an issue tracker, a browser, a database). It is registered once on this machine, then loaded into each running sandbox that needs it.",
+        icon{ "info", size = 12, color = "text-muted" },
+        text{ "More tools for an agent: registered once on this machine, loaded into a running sandbox.", size = "sm", color = "text-muted", truncate = true, grow = 1 } },
     }
     if err then
       out[#out + 1] = row{ w = "full", gap = 8, key = "mcp-error",
@@ -88,14 +86,6 @@ return {
         button{ "Read again", icon = "reload", variant = "ghost", on = "reload", key = "mcp-reload" },
       }
     end
-
-    -- The scope (scope.rs): the running sandbox servers load into and are read from.
-    local picker = select{ id = "mcp-sandbox", value = target or "", on = "pick", scope = { kind = "sandbox", running = true },
-      placeholder = "No running sandbox", disabled = #running == 0 }
-    local wide = overlay_wide(data)
-    local sel = data.mcp_inspect_for
-    -- Beside the overlay's title (the core's header draws it: TITLE_SLOT).
-    table.insert(out, 1, row{ key = "title-slot", gap = 8, picker })
     if asked and asked ~= target then
       -- Opened for a stopped sandbox: the picker is on the first running one,
       -- and this line says so with the same name the picker and Load show.
@@ -104,71 +94,8 @@ return {
       out[#out + 1] = note("No sandbox is running: start one to load a server into it.")
     end
 
-    -- The servers, the first PAGE (+ "Show more").
-    local shown = PAGE + (state.more or 0)
-    local rows = {}
-    for i, x in ipairs(servers) do
-      if i > shown then break end
-      rows[#rows + 1] = column{ w = "full", gap = 4, key = "mcp-" .. x.name,
-        row{ w = "full", gap = 8,
-          row{ gap = 8, grow = 1, min_w = 0, px = 4, h = 28, radius = "xs", key = "mcp-sel-" .. x.name, on = "inspect", arg = x.name,
-            fill = (wide and sel == x.name) and "active-bg" or nil, hover = "hover-subtle", help = "Show " .. x.name .. "'s details",
-            dot{ tone = x.stdio and "amber" or "blue" },
-            text{ x.name, mono = true, truncate = true, grow = 1, color = "text-bright" },
-            badge{ x.stdio and "local command" or "remote", tone = x.stdio and "amber" or "blue",
-              help = x.stdio and "Runs on this machine, outside any sandbox, each time a sandbox loads it" or "An HTTP endpoint" },
-          },
-          button{ icon = "trash", variant = "ghost", color = "red", on = "rm", arg = x.name, key = "mcp-rm-" .. x.name, help = "Unregister from this machine" },
-        },
-        row{ w = "full", gap = 4,
-          button{ "Load", key = "mcp-load-" .. x.name, variant = "ghost", on = "load", arg = { server = x.name, sandbox = target }, disabled = not target,
-            help = "Attach to " .. (target or "a running sandbox") .. ": its agent picks up the tools without a restart" },
-          button{ "Unload", key = "mcp-unload-" .. x.name, variant = "ghost", on = "unload", arg = { server = x.name, sandbox = target }, disabled = not target },
-          (not x.stdio) and button{ "Sign in", key = "mcp-auth-" .. x.name, variant = "ghost", on = "auth", arg = x.name,
-            help = "sbx mcp auth: sign in from this machine's browser; the token serves every sandbox" } or false,
-          button{ "Inspect", key = "mcp-inspect-" .. x.name, variant = "ghost", on = "inspect", arg = x.name },
-        },
-      }
-    end
-    out[#out + 1] = row{ w = "full", gap = 8, text{ "Registered on this machine", size = "caption", weight = "semibold", color = "text-muted" }, badge{ tostring(#servers) }, spacer{},
-      (wide and sel) and button{ "Add a server", icon = "plus", key = "mcp-new", variant = "ghost", tone = "blue", on = "inspect_close", help = "The form, at the right" } or false }
-    if #rows > 0 then
-      out[#out + 1] = list(rows)
-      if #servers > shown then
-        local n = math.min(PAGE, #servers - shown)
-        out[#out + 1] = row{ w = "full", note("Showing " .. shown .. " of " .. #servers .. "."), spacer{},
-          button{ "Show " .. n .. " more", variant = "ghost", on = "more", key = "mcp-more" } }
-      end
-    elseif not err then
-      out[#out + 1] = note("No server registered yet. Add one below: a remote server's URL, or a command that runs on this machine.")
-    end
-    local details = false
-    if sel then
-      local t = data.mcp_inspect
-      local body = type(t) == "table" and (t.text or t.error or "") or "Reading…"
-      local x = nil
-      for _, y in ipairs(servers) do if y.name == sel then x = y end end
-      details = column{ w = "full", gap = 8, pad = wide and 0 or 8, radius = "sm", fill = (not wide) and "bg" or nil, key = "mcp-inspect",
-        row{ w = "full", gap = 8,
-          x and dot{ tone = x.stdio and "amber" or "blue" } or false,
-          text{ sel, mono = true, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
-          x and badge{ x.stdio and "local command" or "remote", tone = x.stdio and "amber" or "blue" } or false,
-          button{ icon = "close", variant = "ghost", on = "inspect_close", key = "mcp-inspect-close", help = wide and "Back to the form" or "Hide" } },
-        x and note(x.stdio and "Runs on this machine, outside any sandbox, each time a sandbox loads it. Its tools reach the agent of the sandbox it is loaded into."
-          or "An HTTP endpoint the sandbox's agent calls through sbx. Sign in once on this machine: the token serves every sandbox.") or false,
-        x and row{ w = "full", gap = 4,
-          button{ "Load into " .. (target or "a sandbox"), key = "mcp-detail-load", icon = "plus", variant = "neutral", on = "load", arg = { server = sel, sandbox = target }, disabled = not target },
-          button{ "Unload", key = "mcp-detail-unload", variant = "ghost", on = "unload", arg = { server = sel, sandbox = target }, disabled = not target },
-          (not x.stdio) and button{ "Sign in", key = "mcp-detail-auth", variant = "ghost", on = "auth", arg = sel } or false,
-        } or false,
-        text{ "sbx mcp inspect " .. sel, size = "caption", weight = "semibold", color = "text-muted" },
-        text{ body ~= "" and body or "(no output)", mono = true, wrap = true, size = "sm" },
-      }
-      if not wide then out[#out + 1] = details end
-    end
-
-    -- The form. Added: the server is listed now, so the form starts again
-    -- (as the web UI resets it). The next edit drops the old fields (`reset`).
+    -- The form, on top. Added: the server is listed now, so the form starts
+    -- again (as the web UI resets it). The next edit drops the old fields (`reset`).
     local f = state.mcp or {}
     local done = false
     if f.sent and not f.replace then
@@ -177,43 +104,102 @@ return {
     if done then f = {} end
     local stdio = f.kind == "stdio"
     local keys = placeholders(f.headers)
-    local form = { w = "full", gap = 12, key = "mcp-form" }
-    local main = out
-    out = form
-    if not wide then main[#main + 1] = divider{} end
-    out[#out + 1] = section(f.replace and ("Edit " .. f.replace) or "Add a server")
-    out[#out + 1] = field("Name", input{ id = "mcp-name", value = f.name or "", on = "field", arg = { k = "name", reset = done }, placeholder = "github" })
-    out[#out + 1] = field("Kind", select{ id = "mcp-kind", value = stdio and "stdio" or "remote", on = "kind", arg = { reset = done }, items = {
-      { id = "remote", label = "Remote (an HTTP endpoint)" },
-      { id = "stdio", label = "Local command (runs on this machine)" } } })
-    if stdio then
-      out[#out + 1] = field("Command", input{ id = "mcp-command", value = f.command or "", on = "field", arg = { k = "command", reset = done }, placeholder = "npx" })
-      out[#out + 1] = field("Arguments", input{ id = "mcp-args", value = f.args or "", on = "field", arg = { k = "args", reset = done }, placeholder = "-y @modelcontextprotocol/server-filesystem /srv" })
-      out[#out + 1] = field("Directory", input{ id = "mcp-dir", value = f.dir or "", on = "field", arg = { k = "dir", reset = done }, placeholder = "optional" })
-      out[#out + 1] = note("A local command runs on this machine, outside any sandbox: the next dialog shows the exact line and asks you to confirm you read it.", "amber")
-    else
-      out[#out + 1] = field("URL", input{ id = "mcp-url", value = f.url or "", on = "field", arg = { k = "url", reset = done }, placeholder = "https://mcp.example.com/mcp" })
-      out[#out + 1] = field("Headers", input{ id = "mcp-headers", value = f.headers or "", on = "field", arg = { k = "headers", reset = done },
-        placeholder = "Authorization: Bearer ${TOKEN}; one per ;" })
-      if #keys > 0 then
-        out[#out + 1] = note("Secrets asked in the next dialog: " .. table.concat(keys, ", ") .. (f.replace and " (left empty: unchanged)" or ""))
-      end
-      out[#out + 1] = note("OAuth servers are added unauthorized: use Sign in once added.")
+    -- Two fields on a row when there is room (each keeps 240 pt), else one under the other.
+    local function pair(a, b) return row{ w = "full", gap = 12, wrap = true, a, b or false } end
+    local function cell(label, child, w)
+      return row{ gap = 8, grow = w and nil or 1, w = w, min_w = w and nil or 240, text{ label, size = "sm", color = "text-muted", w = 76 }, child }
     end
-    out[#out + 1] = row{ w = "full", gap = 8,
-      spacer{},
+    local form = { w = "full", gap = 8, key = "mcp-form", px = 12, py = 12, radius = "md", fill = "surface", border = "elevated",
+      text{ f.replace and ("Edit " .. f.replace) or "Add a server", size = "sm", weight = "semibold", color = "text-bright" },
+      pair(cell("Name", input{ id = "mcp-name", value = f.name or "", on = "field", arg = { k = "name", reset = done }, placeholder = "github" }),
+        cell("Kind", select{ id = "mcp-kind", value = stdio and "stdio" or "remote", on = "kind", arg = { reset = done }, items = {
+          { id = "remote", label = "Remote (an HTTP endpoint)" },
+          { id = "stdio", label = "Local command (runs on this machine)" } } }, wide and 380 or nil)),
+    }
+    if stdio then
+      form[#form + 1] = pair(cell("Command", input{ id = "mcp-command", value = f.command or "", on = "field", arg = { k = "command", reset = done }, placeholder = "npx" }),
+        cell("Arguments", input{ id = "mcp-args", value = f.args or "", on = "field", arg = { k = "args", reset = done }, placeholder = "-y @modelcontextprotocol/server-filesystem /srv" }))
+      form[#form + 1] = cell("Directory", input{ id = "mcp-dir", value = f.dir or "", on = "field", arg = { k = "dir", reset = done }, placeholder = "optional" })
+    else
+      form[#form + 1] = pair(cell("URL", input{ id = "mcp-url", value = f.url or "", on = "field", arg = { k = "url", reset = done }, placeholder = "https://mcp.example.com/mcp" }),
+        cell("Headers", input{ id = "mcp-headers", value = f.headers or "", on = "field", arg = { k = "headers", reset = done },
+          placeholder = "Authorization: Bearer ${TOKEN}; one per ;" }))
+    end
+    local hint
+    if stdio then
+      hint = note("A local command runs on this machine, outside any sandbox: the next dialog shows the exact line and asks you to confirm you read it.", "amber")
+    elseif #keys > 0 then
+      hint = note("Secrets asked in the next dialog: " .. table.concat(keys, ", ") .. (f.replace and " (left empty: unchanged)" or ""))
+    else
+      hint = note("OAuth servers are added unauthorized: use Sign in once added.")
+    end
+    form[#form + 1] = row{ w = "full", gap = 8, wrap = true,
+      column{ grow = 1, min_w = 200, hint },
       (f.replace or trim(f.name) ~= "") and button{ "Clear", variant = "ghost", on = "clear", key = "mcp-clear" } or false,
       button{ f.replace and "Save…" or "Add…", key = "mcp-save", variant = "primary", on = "save", disabled = trim(f.name) == "" },
     }
-    if not wide then
-      main[#main + 1] = column(form)
-      return column{ h = "full", w = "full", scroll{ gap = 0, column(main) } }
+    out[#out + 1] = column(form)
+
+    -- The servers, under the form, the whole width: the first PAGE (+ "Show more").
+    out[#out + 1] = row{ w = "full", gap = 8, wrap = true, key = "mcp-list-head",
+      text{ "Registered on this machine", size = "caption", weight = "semibold", color = "text-muted" }, badge{ tostring(#servers) },
+      text{ "sbx does not say which servers a sandbox has loaded: Load and Unload are both offered.", size = "xs", color = "text-dim", truncate = true, grow = 1, min_w = 0,
+        help = "sbx does not say which servers a sandbox has loaded: Load and Unload are both offered, and the list keeps the order of this machine's registrations." } }
+    local shown = PAGE + (state.more or 0)
+    local rows = {}
+    for i, x in ipairs(servers) do
+      if i > shown then break end
+      local open = sel == x.name
+      local acts = row{ gap = 4, wrap = true,
+        button{ "Load", key = "mcp-load-" .. x.name, variant = "ghost", on = "load", arg = { server = x.name, sandbox = target }, disabled = not target,
+          help = "Attach to " .. (target or "a running sandbox") .. ": its agent picks up the tools without a restart" },
+        button{ "Unload", key = "mcp-unload-" .. x.name, variant = "ghost", on = "unload", arg = { server = x.name, sandbox = target }, disabled = not target },
+        (not x.stdio) and button{ "Sign in", key = "mcp-auth-" .. x.name, variant = "ghost", on = "auth", arg = x.name,
+          help = "sbx mcp auth: sign in from this machine's browser; the token serves every sandbox" } or false,
+        button{ "Inspect", key = "mcp-inspect-" .. x.name, variant = "ghost", on = open and "inspect_close" or "inspect", arg = x.name, help = open and "Hide the details" or nil },
+        button{ icon = "trash", variant = "ghost", color = "red", on = "rm", arg = x.name, key = "mcp-rm-" .. x.name, help = "Unregister from this machine" },
+      }
+      local kids = { w = "full", gap = 4, key = "mcp-" .. x.name, px = 8, py = 4, radius = "sm", fill = open and "surface" or nil, border = open and "elevated" or nil,
+        row{ w = "full", gap = 8, wrap = not wide,
+          row{ gap = 8, grow = 1, min_w = 200, px = 4, h = 28, radius = "xs", key = "mcp-sel-" .. x.name, on = open and "inspect_close" or "inspect", arg = x.name,
+            fill = open and "active-bg" or nil, hover = "hover-subtle", help = open and ("Hide " .. x.name .. "'s details") or ("Show " .. x.name .. "'s details"),
+            icon{ open and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
+            dot{ tone = x.stdio and "amber" or "blue" },
+            text{ x.name, mono = true, truncate = true, color = "text-bright" },
+            badge{ x.stdio and "local command" or "remote", tone = x.stdio and "amber" or "blue",
+              help = x.stdio and "Runs on this machine, outside any sandbox, each time a sandbox loads it" or "An HTTP endpoint" },
+            spacer{} },
+          acts },
+      }
+      if open then
+        local t = data.mcp_inspect
+        local body = type(t) == "table" and (t.text or t.error or "") or "Reading…"
+        kids[#kids + 1] = column{ w = "full", gap = 8, px = 24, py = 4, key = "mcp-inspect",
+          note(x.stdio and "Runs on this machine, outside any sandbox, each time a sandbox loads it. Its tools reach the agent of the sandbox it is loaded into."
+            or "An HTTP endpoint the sandbox's agent calls through sbx. Sign in once on this machine: the token serves every sandbox."),
+          row{ w = "full", gap = 4, wrap = true,
+            button{ "Load into " .. (target or "a sandbox"), key = "mcp-detail-load", icon = "plus", variant = "neutral", on = "load", arg = { server = sel, sandbox = target }, disabled = not target },
+            button{ "Unload", key = "mcp-detail-unload", variant = "ghost", on = "unload", arg = { server = sel, sandbox = target }, disabled = not target },
+            (not x.stdio) and button{ "Sign in", key = "mcp-detail-auth", variant = "ghost", on = "auth", arg = sel } or false,
+            spacer{},
+            button{ icon = "close", variant = "ghost", on = "inspect_close", key = "mcp-inspect-close", help = "Hide the details" } },
+          text{ "sbx mcp inspect " .. sel, size = "caption", weight = "semibold", color = "text-muted" },
+          text{ body ~= "" and body or "(no output)", mono = true, wrap = true, size = "sm" },
+        }
+      end
+      rows[#rows + 1] = column(kids)
     end
-    -- Wide: the list at the left, the selected server or the form at the right.
-    local right = sel and details or column(form)
-    return split{ id = "mcp-split", vertical = true, ratio = 0.46,
-      column{ h = "full", w = "full", px = 4, scroll{ gap = 0, column(main) } },
-      column{ h = "full", w = "full", px = 4, scroll{ gap = 0, column{ w = "full", gap = 12, right } } } }
+    if #rows > 0 then
+      out[#out + 1] = list(rows)
+      if #servers > shown then
+        local n = math.min(PAGE, #servers - shown)
+        out[#out + 1] = row{ w = "full", note("Showing " .. shown .. " of " .. #servers .. "."), spacer{},
+          button{ "Show " .. n .. " more", variant = "ghost", on = "more", key = "mcp-more" } }
+      end
+    elseif not err then
+      out[#out + 1] = note("No server registered yet. Add one above: a remote server's URL, or a command that runs on this machine.")
+    end
+    return column{ h = "full", w = "full", scroll{ gap = 0, column{ w = "full", px = 4, column(out) } } }
   end,
 
   actions = {

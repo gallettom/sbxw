@@ -1,8 +1,8 @@
 -- Skills (an overlay over the pane area, opened from the rail; it was
 -- Setup's Skills tab): the skills you keep for every new sandbox, and
--- keeping one a sandbox's agent wrote. The web UI's skills.js. Wide (760 pt
--- and more): the sandbox picker and the kept skills at the left, that
--- sandbox's skills to look at and keep at the right. Narrow: one column.
+-- keeping one a sandbox's agent wrote. The web UI's skills.js. One column
+-- at every width: the picked sandbox's skills to look at and keep on top
+-- (the action), your kept skills under it (the list).
 --
 -- The picker's sandbox: data.skills_view.sandbox (the panel opened for a
 -- sandbox), else the last one used (data.app.kept.skills.sandbox), else the
@@ -78,7 +78,10 @@ return {
       -- Beside the overlay's title (the core's header draws it: TITLE_SLOT).
       row{ key = "title-slot", gap = 8,
         select{ id = "skills-sandbox", value = pick or "", on = "pick", scope = "sandbox", placeholder = "No sandbox", disabled = #names == 0 } },
-      text{ "A skill is a set of instructions an agent can follow (a /command). Skills you keep here are given to every sandbox created from now on. A sandbox can write a skill, never make it reach the others: keeping one is your act.", wrap = true, color = "text-soft" },
+      row{ w = "full", gap = 4, key = "skills-about",
+        help = "A skill is a set of instructions an agent can follow (a /command). Skills you keep here are given to every sandbox created from now on. A sandbox can write a skill, never make it reach the others: keeping one is your act.",
+        icon{ "info", size = 12, color = "text-muted" },
+        text{ "Keep a skill a sandbox's agent wrote: every new sandbox gets it.", size = "sm", color = "text-muted", truncate = true, grow = 1 } },
     }
     local err = errors.my_skills or failed(data.my_skills)
     if err then
@@ -101,19 +104,20 @@ return {
         button{ "Remove", variant = "ghost", on = "forget", arg = x.name, key = "forget-" .. x.name, help = "New sandboxes stop getting it" },
       }
     end
-    out[#out + 1] = section("Your skills", badge{ #kept .. " kept", tone = #kept > 0 and "green" or "neutral" })
+    local yours = { w = "full", gap = 12, key = "skills-kept" }
+    yours[#yours + 1] = section("Your skills", badge{ #kept .. " kept", tone = #kept > 0 and "green" or "neutral" })
     if #kept > 0 then
       local l, more = paged(kept, state.more.kept, "kept")
-      out[#out + 1] = l
-      out[#out + 1] = more
+      yours[#yours + 1] = l
+      yours[#yours + 1] = more
     elseif not err then
-      out[#out + 1] = note("None kept yet. Pick a sandbox below and press Look: you can keep any skill its agent wrote.")
+      yours[#yours + 1] = note("None kept yet. Press Look above on a sandbox: you can keep any skill its agent wrote.")
     end
 
-    -- Keep a skill from a sandbox (the right column when wide).
+    -- One column: keep a skill from a sandbox on top (the action), your
+    -- skills under it (the list), the whole width.
     local main = out
-    out = { w = "full", gap = 12, key = "skills-found" }
-    if not wide then main[#main + 1] = divider{} end
+    out = { w = "full", gap = 12, key = "skills-found", px = 12, py = 12, radius = "md", fill = "surface", border = "elevated" }
     out[#out + 1] = row{ w = "full", gap = 8,
       text{ pick and ("Skills in " .. pick) or "Keep a skill from a sandbox", size = "caption", weight = "semibold", color = "text-muted", truncate = true, grow = 1 },
       button{ "Look", icon = "search", variant = "primary", on = "look", arg = pick, disabled = not pick, key = "skills-look",
@@ -160,13 +164,10 @@ return {
         end
       end
     end
-    if not wide then
-      main[#main + 1] = column(out)
-      return column{ h = "full", w = "full", scroll{ gap = 0, column(main) } }
-    end
-    return split{ id = "skills-split", vertical = true, ratio = 0.46,
-      column{ h = "full", w = "full", px = 4, scroll{ gap = 0, column(main) } },
-      column{ h = "full", w = "full", px = 4, scroll{ gap = 0, column(out) } } }
+    main[#main + 1] = column(out)
+    main[#main + 1] = column(yours)
+    local _ = wide
+    return column{ h = "full", w = "full", scroll{ gap = 0, column{ w = "full", px = 4, column(main) } } }
   end,
 
   actions = {

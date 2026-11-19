@@ -2,8 +2,9 @@
 -- conversation, as sbxw saw it. The person's acts on the right, the lead and
 -- the threads on the left, sbxw's own events in the middle; the board's
 -- decisions and warnings stand out as labelled notes; a thread's commits
--- fold into one row. Beside it (760 pt and more): the team, the notes that
--- still stand, and the commits per thread with their diff in place.
+-- fold into one row. One column: above it a summary (the team, its threads,
+-- the places one acts, counters that are the filters); the Commits filter
+-- shows the lane graph and the commits with their diff at the full width.
 --
 -- A message reads as a chat: the author line above the bubble (the
 -- thread's dot and name, the role when it adds something, "to" whom, the
@@ -32,6 +33,41 @@ end
 
 local function when(r)
   return text{ r.when or "", size = "xs", color = "text-dim", help = r.exact }
+end
+
+-- The fold, decided here at the width drawn now (model.rs's `folded` and
+-- `head` mirror these; the data holds the whole text): a text drawn on more
+-- than FOLD_DRAWN lines at the bubble's width shows its first SHOW_DRAWN,
+-- cut on a word, and "Show more". Decided per frame, so a resize or a
+-- press elsewhere never refolds a bubble from a width known earlier.
+local FOLD_DRAWN, SHOW_DRAWN, CHAR_W = 8, 6, 6.0
+local function ulen(s) return utf8.len(s) or #s end
+local function lines_of(t)
+  local out = {}
+  for l in string.gmatch(t .. "\n", "(.-)\n") do out[#out + 1] = l end
+  return out
+end
+local function drawn(t, c)
+  local n = 0
+  for _, l in ipairs(lines_of(t)) do n += math.max(1, math.ceil(ulen(l) / c)) end
+  return n
+end
+local function head(t, c)
+  local s, left = {}, SHOW_DRAWN
+  for _, l in ipairs(lines_of(t)) do
+    local n = math.max(1, math.ceil(ulen(l) / c))
+    if n > left then
+      local cut = string.sub(l, 1, (utf8.offset(l, left * c + 1) or (#l + 1)) - 1)
+      local sp = string.find(cut, " [^ ]*$")
+      if sp and sp > #cut / 2 then cut = string.sub(cut, 1, sp - 1) end
+      s[#s + 1] = cut
+      break
+    end
+    s[#s + 1] = l
+    left -= n
+    if left == 0 then break end
+  end
+  return (string.gsub(table.concat(s, "\n"), "%s+$", "")) .. "…"
 end
 
 local function fold_button(r)
@@ -129,7 +165,23 @@ local NOTE_LOOK = {
 -- A report's tint by its state: done green, blocked amber, failed red.
 local TINT = { green = { "green-tint", "green" }, amber = { "amber-tint", "amber" }, red = { "red-tint", "red-border" } }
 
+-- A row as drawn now: a long text folded at this width (a shallow copy:
+-- the data is not touched).
+local function at_width(r)
+  if not r.fold or not nz(r.text) then return r end
+  local c = math.max(16, math.floor((bubble_w() - 24) / CHAR_W))
+  local v = {}
+  for k, x in pairs(r) do v[k] = x end
+  if drawn(r.text, c) <= FOLD_DRAWN then
+    v.fold = nil
+  elseif not r.fold.open then
+    v.text = head(r.text, c)
+  end
+  return v
+end
+
 local function rowview(r, sb)
+  r = at_width(r)
   if r.type == "day" then
     return row{ gap = 8, w = "full", py = 4, key = "board-" .. r.id, column{ grow = 1, h = 1, fill = "elevated" }, text{ r.label, size = "xs", color = "text-muted" }, column{ grow = 1, h = 1, fill = "elevated" } }
   elseif r.type == "system" then
@@ -151,8 +203,11 @@ local function rowview(r, sb)
   elseif r.type == "note" then
     local look = NOTE_LOOK[r.look or r.kind] or { "surface", "elevated" }
     local kids = {
-      kind_line(r.label, { icon = ICON[r.tone] or "info", icon_color = r.tone == "neutral" and "text-muted" or r.tone, color = "text-bright", weight = "semibold",
-        extra = r.note_via, extra_help = "Sent through sbxw with team_note" }),
+      row{ gap = 8, wrap = true,
+        kind_line(r.label, { icon = ICON[r.tone] or "info", icon_color = r.tone == "neutral" and "text-muted" or r.tone, color = "text-bright", weight = "semibold",
+          extra = r.note_via, extra_help = "Sent through sbxw with team_note" }),
+        -- Still standing: the summary counts it, the filter finds it, this marks it.
+        r.standing and badge{ "standing", tone = r.tone == "amber" and "amber" or "green", key = "board-standing-" .. (r.id or ""), help = "Still standing on the team's board: the summary counts it" } or false },
       words(r.text or "", sb),
       fold_button(r),
     }
@@ -290,15 +345,17 @@ end
 local function picker_row(t, i, p, mw)
   local hl = (p.hl or 0) == i
   local current = p.current == t.id
+  -- A tooltip only when the summary is cut here (none over a row that shows it all).
+  local shown = nz(t.summary) and two_lines(t.summary, mw) or nil
   return column{ key = "board-row-team-" .. t.id, on = "team", arg = t.id, gap = 2, px = 8, py = 8, radius = "xs", w = "full",
-    fill = (hl or current) and "active-bg" or nil, hover = "hover-subtle", selected = current, help = t.summary,
+    fill = (hl or current) and "active-bg" or nil, hover = "hover-subtle", selected = current, help = (shown and shown ~= t.summary) and t.summary or nil,
     row{ gap = 8, w = "full",
       column{ w = 8, h = 8, radius = 2, fill = t.color or "text-dim" },
       text{ t.names or "", size = "sm", mono = true, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
       current and icon{ "check", size = 12, color = "accent" } or false,
       nz(t.state) and badge{ t.state, tone = t.tone or "neutral" } or false,
       nz(t.when) and text{ t.when, size = "xs", color = "text-dim" } or false },
-    nz(t.summary) and text{ two_lines(t.summary, mw), size = "xs", color = "text-muted", wrap = true } or false }
+    shown and text{ shown, size = "xs", color = "text-muted", wrap = true } or false }
 end
 
 local function picker_menu(ui, ow, oh, wide)
@@ -307,11 +364,21 @@ local function picker_menu(ui, ow, oh, wide)
   local mw = menu_w(ow, wide)
   local list = { gap = 2, w = "full", key = "board-picker-list", group = "list" }
   list[#list + 1] = picker_row({ id = "all", names = "All teams", summary = "Every team's latest messages, each with its team", color = "text-dim" }, 0, p, mw)
-  for i, t in ipairs(ui.teams or {}) do list[#list + 1] = picker_row(t, i, p, mw) end
+  -- Teams that need you first (the core's order), then the finished ones
+  -- under a quiet heading.
+  local headed = false
+  for i, t in ipairs(ui.teams or {}) do
+    if t.live == false and not headed and i > 1 then
+      list[#list + 1] = row{ w = "full", gap = 8, px = 8, key = "board-picker-finished",
+        text{ "Finished", size = "xs", weight = "semibold", color = "text-dim" }, column{ grow = 1, h = 1, fill = "elevated" } }
+      headed = true
+    end
+    list[#list + 1] = picker_row(t, i, p, mw)
+  end
   if (p.more or 0) > 0 then
     list[#list + 1] = row{ w = "full", justify = "center", button{ "Show " .. p.more .. " more", variant = "ghost", tone = "blue", dense = true, on = "picker_more", key = "board-picker-more" } }
   end
-  local est = 8 + 58 * (#(ui.teams or {}) + 1) + ((p.more or 0) > 0 and 32 or 0)
+  local est = 8 + 58 * (#(ui.teams or {}) + 1) + ((p.more or 0) > 0 and 32 or 0) + 24
   local h = math.max(80, math.min(est, (oh or 600) - 24))
   return column{ pin = { left = 0, top = 0 }, w = mw, key = "board-picker", fill = "surface", border = "elevated", radius = "md", pad = 4,
     scroll{ h = h, key = "board-picker-scroll", column(list) } }
@@ -326,12 +393,6 @@ local function filters(ui, wide)
     local on_it = ui.group == g[1]
     seg[#seg + 1] = button{ g[2], variant = on_it and "neutral" or "ghost", color = on_it and "text-bright" or "text-muted", dense = true, on = "group", arg = g[1], key = "board-group-" .. g[1], help = GROUP_HELP[g[1]] }
   end
-  local threads = { { id = "", label = "Every thread" } }
-  if ui.side then
-    threads[#threads + 1] = { id = "lead", label = "lead" }
-    for _, t in ipairs(ui.side.threads or {}) do threads[#threads + 1] = { id = t.name, label = t.name } end
-  end
-  seg[#seg + 1] = not ui.all and select{ id = "board-thread", value = ui.thread or "", items = threads, on = "thread", w = 160 } or false
   seg[#seg + 1] = input{ id = "board-search", value = ui.text or "", placeholder = "Search the conversation", on = "search", grow = 1, min_w = 160 }
   return row(seg)
 end
@@ -349,48 +410,155 @@ local function conversation(ui, sb)
     list[#list + 1] = note(ui.loading and "Reading the conversation…" or ((#(ui.teams or {}) == 0) and "No team yet: a lead's plan makes one (Team mode on a sandbox)." or (ui.group == "messages" and "No direct message. They show from the day the daemon had this version; none from before is recovered." or "Nothing here matches.")))
   end
   for _, e in ipairs(ui.errors or {}) do list[#list + 1] = note(e, "red") end
-  return scroll{ key = "board-convo", stick_bottom = true, column(list) }
+  -- Follows its end (new events), until a fold is pressed: then growing or
+  -- shrinking a bubble moves only what is under it (see `held`, mod.rs).
+  return scroll{ key = "board-convo", stick_bottom = not ui.held, column(list) }
+end
+
+-- ── The summary (one column: replaces the side column) ──────────────────
+-- Under the title (which has the team's state), above the filters: its lead, each
+-- thread as a chip (press: only that thread; its terminal and its session
+-- beside it, shown on hover and focus), the places one acts, and counters
+-- that are the filters below (a press applies one; nothing is listed
+-- again). "Details" opens, in place, what the conversation does not show:
+-- each thread's worktree and model. Narrow (under 760 pt): one wrapping
+-- line, chips and counters lose their words (their tooltips keep them),
+-- the links become icons, a thread's terminal and session move to Details.
+
+-- A thread's two links: 20 pt icons (on a chip, shown on hover and focus,
+-- their room kept so nothing reflows).
+local function icon_link(ic, what, t, key, help, reveal)
+  return row{ key = key, on = "open", arg = { what = what, thread = t.name }, w = 20, h = 20, radius = "xs", justify = "center",
+    hover = "hover-subtle", reveal = reveal, help = help, icon{ ic, size = 12, color = "text-muted" } }
+end
+local function term_link(t, reveal)
+  return icon_link("terminal", "terminal", t, "board-term-" .. t.name, t.name .. ": its terminal", reveal)
+end
+local function mon_link(t, ui, reveal)
+  return ui.monitor and icon_link("inbox", "monitor", t, "board-mon-" .. t.name, t.name .. ": its session in Sessions", reveal) or false
+end
+
+-- About how wide a chip draws (mono 11 pt name, 11 pt state, the two icons).
+local function chip_w(t, ui, narrow)
+  local w = 8 + 8 + 6 + math.min(narrow and 120 or 180, ulen(t.name) * 6.8) + 6 + 4
+  if not narrow then w = w + ulen(t.state or "") * 6.2 + 6 + 20 + (ui.monitor and 20 or 0) end
+  return w
+end
+
+local function thread_chip(t, ui, narrow)
+  local tone_c = t.tone == "neutral" and "text-muted" or t.tone
+  return row{ key = "board-chip-" .. t.name, gap = 0, radius = "pill", h = 26, px = 0, hover_group = true, pad = 0,
+    fill = t.selected and "active-bg" or "floor", border = t.selected and "accent" or "elevated",
+    row{ key = "board-thread-" .. t.name, on = "thread", arg = t.selected and "" or t.name, selected = t.selected,
+      gap = 4, px = 8, h = 24, radius = "pill", hover = "hover-subtle",
+      help = t.selected and "Every thread again" or ("Only " .. t.name .. " in the conversation (" .. t.state .. ")"),
+      dot{ tone = t.tone },
+      text{ t.name, size = "xs", mono = true, weight = "semibold", color = t.color, truncate = true, max_w = narrow and 120 or 180 },
+      (not narrow) and text{ t.state, size = "xs", color = tone_c } or false },
+    -- Narrow: these two are in Details (a chip stays small).
+    (not narrow) and term_link(t, true) or false,
+    (not narrow) and mon_link(t, ui, true) or false,
+  }
+end
+
+-- A counter: how many, and the filter of the row below it applies.
+local function counter(ui, key, group, icon_name, tone, n, word, help, extra)
+  local on_it = ui.group == group
+  return row{ key = "board-count-" .. key, on = "group", arg = on_it and "all" or group, selected = on_it,
+    gap = 4, px = 8, h = 24, radius = "pill", hover = "hover-subtle",
+    fill = on_it and "active-bg" or nil, border = on_it and "accent" or nil,
+    help = on_it and ("Shown: " .. help .. ". Press for every kind again") or ("Show " .. help),
+    icon{ icon_name, size = 12, color = tone },
+    text{ tostring(n), size = "sm", weight = "semibold", color = "text-bright" },
+    word and text{ word, size = "xs", color = "text-muted" } or false,
+    extra or false }
+end
+
+local function summary(s, ui, narrow)
+  local c = s.counts or {}
+  local head = { gap = 8, w = "full", wrap = true, key = "board-summary-team" }
+  -- (The team's state is beside the picker, in the title: not twice.)
+  head[#head + 1] = row{ key = "board-chip-lead", gap = 0, radius = "pill", h = 26, px = 0,
+    fill = ui.thread == "lead" and "active-bg" or "floor", border = ui.thread == "lead" and "accent" or "elevated",
+    row{ key = "board-thread-lead", on = "thread", arg = ui.thread == "lead" and "" or "lead", selected = ui.thread == "lead",
+      gap = 4, px = 8, h = 24, radius = "pill", hover = "hover-subtle",
+      help = ui.thread == "lead" and "Every thread again" or ("Only the lead in the conversation" .. (nz(s.lead) and (": " .. s.lead) or "")),
+      badge{ "lead", tone = "purple" },
+      text{ s.lead or "the sandbox's main session", size = "xs", color = "text-bright", truncate = true, max_w = narrow and 100 or 200 } } }
+  -- As many chips as the line holds (two lines when narrow); the rest
+  -- behind "+n", which opens Details (where every thread is listed and
+  -- pressable). A selected thread is always shown.
+  local room = (CONV_W - 24) * (narrow and 2 or 1) - 8 - math.min(narrow and 100 or 200, ulen(s.lead or "the sandbox's main session") * 6.8) - 60 - 70
+  local used, hidden = 0, 0
+  local threads = s.threads or {}
+  for i, t in ipairs(threads) do
+    local w = chip_w(t, ui, narrow) + 8
+    if t.selected or used + w <= room then
+      head[#head + 1] = thread_chip(t, ui, narrow)
+      used = used + w
+    else
+      hidden = hidden + 1
+    end
+  end
+  if hidden > 0 then
+    head[#head + 1] = row{ key = "board-chip-more", on = "expand", arg = "summary", h = 24, px = 8, radius = "pill", fill = "floor", border = "elevated", hover = "hover-subtle",
+      help = hidden .. " more thread" .. (hidden == 1 and "" or "s") .. ": Details lists them all", text{ "+" .. hidden, size = "xs", weight = "semibold", color = "text-muted" } }
+  end
+  local links = { gap = 2, key = "board-links" }
+  local function lnk(label, ic, what, key, help)
+    if narrow then return button{ icon = ic, variant = "ghost", dense = true, on = "open", arg = { what = what }, key = key, help = label .. (help and (": " .. help) or "") } end
+    return button{ label, variant = "ghost", tone = "blue", dense = true, on = "open", arg = { what = what }, key = key, help = help }
+  end
+  links[#links + 1] = lnk("Plan dialog", "leader", "plan", "board-plan", "Approve, follow or merge the plan there")
+  links[#links + 1] = lnk("Threads", "threads", "threads", "board-threads", "The Threads panel of " .. (s.sandbox or ""))
+  links[#links + 1] = lnk("Worktrees", "branch", "worktrees", "board-worktrees", "The worktrees of " .. (s.sandbox or ""))
+
+  local counts = { gap = 4, w = "full", wrap = true, key = "board-summary-counts" }
+  local function w(word) return (not narrow) and word or nil end
+  if (c.decisions or 0) > 0 then counts[#counts + 1] = counter(ui, "decisions", "notes", "check", "green", c.decisions, w(c.decisions == 1 and "decision" or "decisions"), c.decisions .. " standing decision" .. (c.decisions == 1 and "" or "s") .. " (Decisions and warnings)") end
+  if (c.warnings or 0) > 0 then counts[#counts + 1] = counter(ui, "warnings", "notes", "warning", "amber", c.warnings, w(c.warnings == 1 and "warning" or "warnings"), c.warnings .. " standing warning" .. (c.warnings == 1 and "" or "s") .. " (Decisions and warnings)") end
+  if (c.waiting or 0) > 0 then counts[#counts + 1] = counter(ui, "questions", "questions", "ask", "amber", c.waiting, w("waiting"), c.waiting .. " question" .. (c.waiting == 1 and "" or "s") .. " waiting for an answer in Requests (Questions)") end
+  if (c.commits or 0) > 0 then
+    counts[#counts + 1] = counter(ui, "commits", "commits", "history", "text-muted", c.commits, w(c.commits == 1 and "commit" or "commits"),
+      c.commits .. " commits, +" .. (c.added or 0) .. " -" .. (c.removed or 0) .. " lines (Commits)",
+      (not narrow) and row{ gap = 4, text{ "+" .. tostring(c.added or 0), size = "xs", mono = true, color = "green" }, text{ "-" .. tostring(c.removed or 0), size = "xs", mono = true, color = "red" } } or nil)
+  end
+  if #counts == 0 then counts[#counts + 1] = text{ "No standing decision or warning, no question waiting, no commit yet.", size = "xs", color = "text-dim" } end
+  counts[#counts + 1] = spacer{}
+  counts[#counts + 1] = row(links)
+  local open = ui.details
+  counts[#counts + 1] = button{ (not narrow) and (open and "Less" or "Details") or nil, icon = open and "chevron-down" or "chevron-right", variant = "ghost", dense = true, on = "expand", arg = "summary",
+    key = "board-summary-details", help = open and "Hide the threads' worktrees and models" or "The threads' worktrees and models" }
+
+  local kids = { gap = 8, w = "full", px = narrow and 8 or 12, py = narrow and 4 or 8, radius = "md", fill = "surface", border = "elevated", key = "board-summary", folds = true }
+  if narrow then
+    -- One wrapping line: chips, counts, link icons, Details.
+    for _, k in ipairs(counts) do head[#head + 1] = k end
+    kids[#kids + 1] = row(head)
+  else
+    kids[#kids + 1] = row(head)
+    kids[#kids + 1] = row(counts)
+  end
+  if open then
+    local d = { gap = 2, w = "full", key = "board-summary-more" }
+    for _, t in ipairs(s.threads or {}) do
+      d[#d + 1] = row{ gap = 8, w = "full", key = "board-detail-" .. t.name,
+        row{ key = "board-detail-thread-" .. t.name, on = "thread", arg = t.selected and "" or t.name, selected = t.selected, gap = 4, px = 4, h = 22, radius = "xs", hover = "hover-subtle",
+          help = t.selected and "Every thread again" or ("Only " .. t.name .. " in the conversation (" .. (t.state or "") .. ")"),
+          dot{ tone = t.tone },
+          text{ t.name, size = "xs", mono = true, weight = "semibold", color = t.color, truncate = true, max_w = narrow and 110 or 180 } },
+        text{ nz(t.meta) and t.meta or "no model set", size = "xs", mono = true, color = "text-muted", truncate = true, grow = 1, min_w = 0, help = t.meta },
+        narrow and term_link(t, false) or false,
+        narrow and mon_link(t, ui, false) or false }
+    end
+    if #(s.threads or {}) == 0 then d[#d + 1] = note("No thread yet.", "text-dim") end
+    kids[#kids + 1] = column(d)
+  end
+  return column(kids)
 end
 
 local function section(title, extra)
   return row{ gap = 8, w = "full", text{ title, size = "sm", weight = "semibold", color = "text-muted" }, extra or false }
-end
-
-local function team_view(s, ui)
-  local out = { gap = 8, w = "full" }
-  out[#out + 1] = section("Team", badge{ s.state or "", tone = s.tone or "neutral" })
-  out[#out + 1] = row{ gap = 8, w = "full", badge{ "lead", tone = "purple" }, text{ s.lead or "the sandbox's main session", size = "sm", color = "text-bright", truncate = true, grow = 1 } }
-  for _, t in ipairs(s.threads or {}) do
-    out[#out + 1] = row{ gap = 8, w = "full", px = 4, py = 4, radius = "xs", key = "board-thread-" .. t.name, on = "thread", arg = t.selected and "" or t.name,
-      selected = t.selected, fill = t.selected and "active-bg" or nil, hover_group = true,
-      help = t.selected and "Every thread again" or ("Only " .. t.name .. " in the conversation"),
-      dot{ tone = t.tone },
-      column{ gap = 2, grow = 1, min_w = 0,
-        row{ gap = 8, text{ t.name, size = "sm", weight = "semibold", color = t.color, truncate = true }, text{ t.state, size = "xs", color = t.tone == "neutral" and "text-muted" or t.tone } },
-        nz(t.meta) and text{ t.meta, size = "xs", color = "text-muted", truncate = true } or false },
-      button{ icon = "terminal", variant = "ghost", dense = true, on = "open", arg = { what = "terminal", thread = t.name }, key = "board-term-" .. t.name, help = "Its terminal" },
-      ui.monitor and button{ icon = "inbox", variant = "ghost", dense = true, on = "open", arg = { what = "monitor", thread = t.name }, key = "board-mon-" .. t.name, help = "Its session in Sessions" } or false,
-    }
-  end
-  out[#out + 1] = row{ gap = 4, w = "full", wrap = true,
-    button{ "Plan dialog", variant = "ghost", tone = "blue", dense = true, on = "open", arg = { what = "plan" }, key = "board-plan", help = "Approve, follow or merge the plan there" },
-    button{ "Threads", variant = "ghost", tone = "blue", dense = true, on = "open", arg = { what = "threads" }, key = "board-threads", help = "The Threads panel of " .. (s.sandbox or "") },
-    button{ "Worktrees", variant = "ghost", tone = "blue", dense = true, on = "open", arg = { what = "worktrees" }, key = "board-worktrees" },
-  }
-  return column(out)
-end
-
-local function notes_view(s, sb)
-  local out = { gap = 8, w = "full" }
-  out[#out + 1] = section("Decisions and warnings", #(s.notes or {}) > 0 and badge{ tostring(#s.notes), tone = "neutral" } or false)
-  if #(s.notes or {}) == 0 then out[#out + 1] = note("None on the board.") end
-  for _, n in ipairs(s.notes or {}) do
-    out[#out + 1] = column{ gap = 2, w = "full", px = 8, py = 4, radius = "sm", key = "board-pin-" .. n.id,
-      fill = n.tone == "amber" and "amber-tint" or "green-tint", border = n.tone,
-      row{ gap = 4, icon{ n.tone == "amber" and "warning" or "check", size = 12, color = n.tone }, text{ n.label, size = "xs", weight = "semibold", color = "text-bright" }, text{ n.who or "", size = "xs", color = n.who_color } },
-      words(n.text or "", sb, { size = "sm" }) }
-  end
-  return column(out)
 end
 
 local function lanes_view(g)
@@ -440,20 +608,21 @@ local function detailview(d)
   return column(kids)
 end
 
-local function commits_view(s, wide)
-  local out = { gap = 8, w = "full" }
-  out[#out + 1] = section("Commits")
+-- The Commits filter, a team shown: the lane graph on top, each thread's
+-- totals, its commits with their diff in place, the conversation's whole
+-- width (it was the side column's). In "All" the commits stay folded rows.
+local function commits_view(s)
+  local out = { gap = 8, w = "full", px = 4, key = "board-commits", folds = true }
   if s.commits_available == false then
     out[#out + 1] = note(nz(s.commits_why) and s.commits_why or "The commits cannot be read now.", "amber")
-    return column(out)
+    return scroll{ key = "board-commits-scroll", column(out) }
   end
-  local g = wide and s.lanes.wide or s.lanes.narrow
-  out[#out + 1] = lanes_view(g)
+  out[#out + 1] = lanes_view(s.lanes)
   for _, p in ipairs(s.commits or {}) do
     local tot = p.totals or {}
-    out[#out + 1] = row{ gap = 8, w = "full",
+    out[#out + 1] = row{ gap = 8, w = "full", py = 4, key = "board-commits-" .. p.thread,
       column{ w = 8, h = 8, radius = 4, fill = p.color },
-      text{ p.thread, size = "sm", weight = "semibold", color = p.color, truncate = true },
+      text{ p.thread, size = "sm", weight = "semibold", color = p.color, truncate = true, max_w = 240 },
       text{ (tot.commits or 0) .. " commits · " .. (tot.files or 0) .. " files · +" .. (tot.added or 0) .. " -" .. (tot.removed or 0), size = "xs", color = "text-muted", truncate = true, grow = 1 },
       p.merged and badge{ "merged", tone = "green", help = "Merged into the main checkout's branch" } or false }
     if #(p.commits or {}) == 0 then out[#out + 1] = note("No commits yet.", "text-dim") end
@@ -469,10 +638,8 @@ local function commits_view(s, wide)
       if c.open and c.detail then out[#out + 1] = detailview(c.detail) end
     end
   end
-  return column(out)
+  return scroll{ key = "board-commits-scroll", column(out) }
 end
-
-local TABS = { { "conversation", "Conversation" }, { "notes", "Team and notes" }, { "commits", "Commits" } }
 
 return {
   render = function(_, data)
@@ -481,9 +648,8 @@ return {
     local ov = (data.app or {}).overlay or {}
     local ow, oh = ov.w or 1000, ov.h or 600
     local s = ui.side
-    -- Beside the side column only when there is a team (All teams has the
-    -- whole overlay).
-    CONV_W = (wide and s) and (ow - 360 - 16 - 24) or (ow - 24)
+    -- One column: the conversation takes the overlay's width (model::conv_w).
+    CONV_W = ow - 24
     BUBBLE_MAX = wide and math.max(520, math.min(BUBBLE_CAP, math.floor(CONV_W * 0.62))) or 520
     local sb = s and s.sandbox or true
     local picker = picker_button(ui, s, ow, wide)
@@ -491,32 +657,14 @@ return {
     -- on a press anywhere else (and does nothing else).
     local menu = picker_menu(ui, ow, oh, wide)
     local dismiss = menu and column{ pin = { left = 0, top = 0, right = 0, bottom = 0 }, key = "board-picker-dismiss", on = "picker_close", opacity = 0.01, help = "Close the list of teams" } or false
-    local function page(kids)
-      kids.h = "full"; kids.gap = 8; kids.w = "full"
-      kids[#kids + 1] = dismiss
-      kids[#kids + 1] = menu
-      return column(kids)
-    end
-    if not s then
-      return page{ picker, filters(ui, wide), conversation(ui, true) }
-    end
-    local side = column{ gap = 16, w = "full", team_view(s, ui), notes_view(s, sb), commits_view(s, wide) }
-    if wide then
-      return page{ picker, filters(ui, wide),
-        row{ h = "full", gap = 16, w = "full", align = "stretch",
-          column{ grow = 1, h = "full", min_w = 0, conversation(ui, sb) },
-          column{ w = 360, h = "full", scroll{ key = "board-side", side } } } }
-    end
-    local tabs = { gap = 4, w = "full" }
-    for _, t in ipairs(TABS) do
-      local on_it = ui.tab == t[1]
-      tabs[#tabs + 1] = button{ t[2], variant = on_it and "neutral" or "ghost", color = on_it and "text-bright" or "text-muted", dense = true, on = "tab", arg = t[1], key = "board-tab-" .. t[1] }
-    end
     local body
-    if ui.tab == "notes" then body = scroll{ key = "board-side", column{ gap = 16, w = "full", team_view(s, ui), notes_view(s, sb) } }
-    elseif ui.tab == "commits" then body = scroll{ key = "board-side", commits_view(s, false) }
-    else body = conversation(ui, sb) end
-    return page{ picker, row(tabs), ui.tab == "conversation" and filters(ui, wide) or false, body }
+    if s and ui.group == "commits" then body = commits_view(s) else body = conversation(ui, sb) end
+    return column{ h = "full", gap = 8, w = "full",
+      picker,
+      s and summary(s, ui, not wide) or false,
+      filters(ui, wide),
+      body,
+      dismiss, menu }
   end,
   actions = {
     team = function(_, a, id) return intent("board_team", { id = id or a or "all" }) end,
@@ -530,7 +678,6 @@ return {
     expand = function(_, id) return intent("board_expand", { id = id }) end,
     commit = function(_, h) return intent("board_commit", { hash = h }) end,
     file = function(_, p) return intent("board_file", { path = p }) end,
-    tab = function(_, t) return intent("board_tab", { tab = t }) end,
     open = function(_, a) return intent("board_open", { what = a.what, thread = a.thread, relay = a.relay }) end,
   },
 }

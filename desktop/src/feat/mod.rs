@@ -401,6 +401,11 @@ pub enum Action {
     /// Moves the keyboard focus to the element of that key (an input's
     /// `id`, a surface's `surface-<id>`).
     Focus(String),
+    /// Scrolls the nearest viewport so the element of that key shows
+    /// (Rune's `Tx::scroll_into_view`), once this change is drawn. Only a
+    /// scroll: the keyboard focus stays where it is; a key not drawn does
+    /// nothing. (The Board: a bubble folded from the end of its text.)
+    ScrollIntoView(String),
     /// A download written by the core. Direct only to the Downloads folder
     /// and without opening ([`Download::direct`]); else refused: use
     /// [`Download::call`] as a [`Confirm`]'s call. The answer

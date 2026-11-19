@@ -29,12 +29,20 @@ pub const BUBBLE_CAP: f32 = 720.0;
 pub const BUBBLE_SHARE: f32 = 0.62;
 /// The width the fold counts with when the view does not say (a bubble at 520 pt).
 pub const DEFAULT_CPL: usize = 82;
+/// Characters a line of the narrowest bubble holds (about 264 pt): a text
+/// that would not fold there never gets a fold.
+pub const FOLD_CPL: usize = 40;
 
-/// The conversation column's width in an overlay `ow` pt wide: whole in one
-/// column and in All teams, less the side column (360 pt, its gap and padding)
-/// beside a team.
-pub fn conv_w(ow: f32, side: bool) -> f32 {
-    if ow >= 760.0 && side { ow - 360.0 - 16.0 - 24.0 } else { ow - 24.0 }
+/// The conversation column's width in an overlay `ow` pt wide: the whole
+/// overlay less its padding (one column; the summary sits above it).
+pub fn conv_w(ow: f32) -> f32 {
+    ow - 24.0
+}
+
+/// The Commits filter's lane graph: the conversation's width, 260 to 960 pt
+/// (past that the dots spread too far apart to read as one history).
+pub fn lanes_w(ow: f32) -> f32 {
+    (conv_w(ow) - 16.0).clamp(260.0, 960.0)
 }
 
 /// A bubble's widest in a conversation column `conv` pt wide in an overlay
@@ -159,6 +167,30 @@ pub fn state_word(state: &str) -> (&'static str, &'static str) {
     }
 }
 
+/// Where a team's state puts it in a list: what still needs the person
+/// first (proposed: waits for their approval; running; done: waits for its
+/// merge), then the finished ones (merged, closed), refused last. From
+/// [`FINISHED`] on, a team is finished.
+pub fn team_rank(state: &str) -> u8 {
+    match state {
+        "proposed" => 0,
+        "running" => 1,
+        "done" => 2,
+        "merged" => 3,
+        "closed" => 4,
+        "refused" => 5,
+        _ => 6,
+    }
+}
+pub const FINISHED: u8 = 3;
+
+/// The teams as every Board list shows them: by [`team_rank`], then the most
+/// recent first.
+pub fn order_teams(teams: &mut [J]) {
+    let last = |t: &J| t["last_ms"].as_u64().or(t["updated_ms"].as_u64()).or(t["created_ms"].as_u64()).unwrap_or(0);
+    teams.sort_by_key(|t| (team_rank(t["state"].as_str().unwrap_or("")), std::cmp::Reverse(last(t))));
+}
+
 /// A team's state's tone.
 pub fn team_tone(state: &str) -> &'static str {
     match state {
@@ -263,14 +295,11 @@ pub struct Opts<'a> {
     pub now_s: u64,
     /// Pending relay requests still waiting (ids), for "answer it in Requests".
     pub waiting: Option<&'a BTreeSet<String>>,
-    /// Characters of prose on a line of a bubble at the width drawn (0: `DEFAULT_CPL`).
-    pub cpl: usize,
+    /// The decisions and warnings that still stand (their ids): marked in the flow.
+    pub standing: Option<&'a BTreeSet<String>>,
 }
 
 impl Opts<'_> {
-    fn cpl(&self) -> usize {
-        if self.cpl == 0 { DEFAULT_CPL } else { self.cpl }
-    }
     fn open(&self, id: &str) -> bool {
         self.expanded.is_some_and(|e| e.contains(id))
     }
@@ -293,14 +322,16 @@ fn base(ev: &J, o: &Opts) -> J {
     })
 }
 
+/// The whole text, always; `fold` when it could fold at the narrowest
+/// bubble drawn (`FOLD_CPL`). Whether it folds is the screen's to say, at the
+/// width it draws now (board.luau's `folded` and `head` mirror the ones
+/// here): a width known only when the data was built would refold other
+/// bubbles at the next press.
 fn with_text(row: &mut J, id: &str, text: Option<&str>, o: &Opts) {
     let Some(t) = text.filter(|t| !t.trim().is_empty()) else { return };
-    if folded(t, o.cpl()) {
-        let open = o.open(id);
-        row["text"] = breakable(&if open { t.to_string() } else { head(t, o.cpl()) }).into();
-        row["fold"] = json!({ "open": open, "key": id });
-    } else {
-        row["text"] = breakable(t).into();
+    row["text"] = breakable(t).into();
+    if folded(t, FOLD_CPL) {
+        row["fold"] = json!({ "open": o.open(id), "key": id });
     }
 }
 
@@ -352,6 +383,7 @@ pub fn row(ev: &J, o: &Opts) -> J {
             r["type"] = "note".into();
             with_text(&mut r, &id, text, o);
             r["files"] = files(&data["files"]);
+            r["standing"] = o.standing.is_some_and(|s| s.contains(&id)).into();
         }
         "direct_message" => {
             // Claude Code's own `SendMessage` between the team's sessions, as
@@ -372,6 +404,7 @@ pub fn row(ev: &J, o: &Opts) -> J {
             r["tone"] = tone.into();
             r["look"] = look.into();
             r["note_via"] = "team note".into();
+            r["standing"] = o.standing.is_some_and(|s| s.contains(&id)).into();
             with_text(&mut r, &id, text, o);
         }
         "user_question" | "user_answer" | "relay_question" | "relay_drafted" | "relay_answer" | "screenshot_asked" | "screenshot_given" | "relay_refused" | "relay_routed" | "board_question_reply" => {
@@ -652,7 +685,7 @@ mod tests {
         let mut e = json!({ "id": "s1", "at": null, "kind": "board_warning", "from": "t1", "text": long, "data": {} });
         let r = row(&e, &Opts::default());
         assert_eq!(r["fold"]["open"], false);
-        assert!(r["text"].as_str().unwrap().ends_with('…'));
+        assert_eq!(r["text"].as_str().unwrap(), long.as_str(), "the whole text: the screen folds it at its width");
         assert_eq!(r["when"], "time unknown");
         e["text"] = "short".into();
         assert!(row(&e, &Opts::default())["fold"].is_null());
@@ -672,6 +705,15 @@ mod tests {
     }
 
     #[test]
+    fn teams_list_by_what_needs_the_person_then_the_most_recent() {
+        let t = |id: &str, state: &str, last: u64| json!({ "id": id, "state": state, "last_ms": last });
+        let mut v = vec![t("m-new", "merged", 900), t("r-old", "running", 100), t("x", "refused", 999), t("p", "proposed", 50), t("r-new", "running", 800), t("d", "done", 700), t("m-old", "merged", 10), t("c", "closed", 950)];
+        order_teams(&mut v);
+        let ids: Vec<&str> = v.iter().map(|t| t["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["p", "r-new", "r-old", "d", "m-new", "m-old", "c", "x"]);
+    }
+
+    #[test]
     fn a_bubble_follows_its_column_between_520_and_the_cap() {
         // (column, overlay): one column under 760 pt, the side column beside a team.
         let w = |conv: f32, ow: f32| bubble_max(conv, ow);
@@ -683,9 +725,10 @@ mod tests {
         assert_eq!(w(1000.0, 1400.0), 620.0, "62 percent of the column");
         assert_eq!(w(1284.0, 1700.0), BUBBLE_CAP);
         assert_eq!(w(2000.0, 2024.0), BUBBLE_CAP, "a wide window never grows past the cap");
-        assert_eq!(conv_w(2000.0, false), 1976.0);
-        assert_eq!(conv_w(1284.0, true), 884.0);
-        assert_eq!(conv_w(720.0, true), 696.0);
+        assert_eq!(conv_w(2000.0), 1976.0);
+        assert_eq!(conv_w(1284.0), 1260.0);
+        assert_eq!(conv_w(720.0), 696.0);
+        assert_eq!((lanes_w(420.0), lanes_w(1000.0), lanes_w(2000.0)), (380.0, 960.0, 960.0));
     }
 
     #[test]

@@ -530,7 +530,7 @@
       }
      },
      {
-      "id": "l8",
+      "id": "b8",
       "at": 1795024860000,
       "kind": "board_decision",
       "group": "notes",
@@ -542,7 +542,7 @@
       }
      },
      {
-      "id": "l7",
+      "id": "b7",
       "at": 1795024680000,
       "kind": "board_warning",
       "group": "notes",
@@ -743,6 +743,17 @@
      }
     ],
     "standing": [
+     {
+      "id": "l26",
+      "at": 1795027320000,
+      "kind": "decision",
+      "by": "lead",
+      "to": "team",
+      "text": "Everyone: the merge goes in the order api-routes, web-page, docs-update. Say so if that breaks something of yours.",
+      "files": [],
+      "guess": false,
+      "team_note": true
+     },
      {
       "id": "b8",
       "at": 1795024860000,
@@ -1018,7 +1029,7 @@
       }
      },
      {
-      "id": "l30",
+      "id": "b30",
       "at": 1794912300000,
       "kind": "board_decision",
       "group": "notes",
@@ -1159,7 +1170,7 @@
     ],
     "standing": [
      {
-      "id": "b90",
+      "id": "b30",
       "at": 1794912300000,
       "kind": "decision",
       "by": "guide-search",
@@ -1280,7 +1291,7 @@
       }
      },
      {
-      "id": "l44",
+      "id": "b44",
       "at": 1795086720000,
       "kind": "board_warning",
       "group": "notes",
@@ -1365,7 +1376,19 @@
       }
      }
     ],
-    "standing": [],
+    "standing": [
+     {
+      "id": "b44",
+      "at": 1795086720000,
+      "kind": "warning",
+      "by": "storage-migration",
+      "text": "Do not touch storage/src/nested_folder_level_1/nested_folder_level_2/nested_folder_level_3/nested_folder_level_4/nested_folder_level_5/nested_folder_level_6/migrate_uploads_to_the_new_bucket_layout.rs before the copy ends.",
+      "files": [
+       "storage/src/nested_folder_level_1/nested_folder_level_2/nested_folder_level_3/nested_folder_level_4/nested_folder_level_5/nested_folder_level_6/migrate_uploads_to_the_new_bucket_layout.rs"
+      ],
+      "guess": false
+     }
+    ],
     "commits": {
      "available": true,
      "list": [],
