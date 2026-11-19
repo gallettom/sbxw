@@ -522,6 +522,13 @@ impl LuauHost {
         self.budget.deadline.set(None);
     }
 
+    /// Tests only: the interrupts the last render, act or load counted (the
+    /// count the instruction budget is checked against; kept after the call).
+    #[cfg(test)]
+    pub fn interrupts_used(&self) -> u64 {
+        self.budget.count.get()
+    }
+
     fn guarded<R>(&self, f: impl FnOnce(&Lua) -> mlua::Result<R>) -> Result<R, String> {
         self.arm();
         let r = f(&self.lua).map_err(|e| e.to_string());

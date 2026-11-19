@@ -1225,3 +1225,218 @@ fn the_picker_lists_live_teams_first_then_finished_under_a_heading_and_no_needle
     assert_eq!(help("board-row-team-all"), None);
     assert_eq!(help("board-row-team-p-run"), None, "Orders v2's summary fits its two lines");
 }
+
+// ── The render budget: real-sized data (BOARD.md, "Render budget") ───────
+
+/// A small deterministic generator (no crate): the same fixture every run.
+struct Gen(u64);
+impl Gen {
+    fn n(&mut self, m: u64) -> u64 {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (self.0 >> 33) % m.max(1)
+    }
+    fn pick<'a>(&mut self, v: &[&'a str]) -> &'a str {
+        v[self.n(v.len() as u64) as usize]
+    }
+}
+
+const WORDS: &[&str] = &["the", "route", "page", "handler", "test", "review", "branch", "merge", "order", "table", "field", "change", "before", "after", "check", "shared", "helper", "screen", "width", "fold", "event", "thread", "lead", "commit", "status", "config", "value", "list", "filter", "search"];
+
+/// Invented prose with numbered lists, cut at the cap (2000 characters).
+fn prose(g: &mut Gen, cap: usize) -> String {
+    let mut s = String::new();
+    let mut item = 0;
+    while s.chars().count() < cap {
+        if g.n(4) == 0 {
+            item += 1;
+            s.push_str(&format!("\n{item}. "));
+        } else if g.n(9) == 0 {
+            s.push_str("\n\n");
+            item = 0;
+        }
+        let n = 6 + g.n(14);
+        let words: Vec<&str> = (0..n).map(|_| g.pick(WORDS)).collect();
+        s.push_str(&words.join(" "));
+        s.push_str(". ");
+    }
+    s.chars().take(cap).collect()
+}
+
+/// Invented technical text: paths, hashes, a 200-character unbroken run, code.
+fn tech(g: &mut Gen, cap: usize) -> String {
+    let mut s = String::new();
+    while s.chars().count() < cap {
+        match g.n(5) {
+            0 => s.push_str(&format!("See src/feature_area_{}/module_{}/handler_for_the_{}_route.rs:{} ", g.n(40), g.n(90), g.pick(WORDS), g.n(900))),
+            1 => s.push_str(&format!("commit {:016x}{:016x}{:08x} ", g.n(u64::MAX), g.n(u64::MAX), g.n(u32::MAX as u64))),
+            2 => {
+                let run: String = (0..200).map(|i| (b'a' + ((i * 7 + g.n(26) as usize) % 26) as u8) as char).collect();
+                s.push_str(&run);
+                s.push(' ');
+            }
+            3 => s.push_str(&format!("\n```\nfn check_{}(x: &str) -> Result<(), String> {{ Ok(()) }}\n```\n", g.pick(WORDS))),
+            _ => s.push_str(&format!("{} {} {} the {} ", g.pick(WORDS), g.pick(WORDS), g.pick(WORDS), g.pick(WORDS))),
+        }
+    }
+    s.chars().take(cap).collect()
+}
+
+/// One team's events, newest first (as the daemon sends them): direct
+/// messages both ways, notes, status reports, commit rows, texts at the cap.
+fn real_events(g: &mut Gen, team: usize, threads: &[String], n: usize, t0: u64) -> Vec<J> {
+    let mut out = vec![];
+    for i in 0..n {
+        let at = t0 + i as u64 * 47_000;
+        let t = threads[i % threads.len()].clone();
+        let text = |g: &mut Gen| if g.n(2) == 0 { prose(g, 2000) } else { tech(g, 2000) };
+        let id = format!("e{team}-{i}");
+        let e = match i % 8 {
+            0 | 1 => json!({ "id": id, "at": at, "kind": "direct_message", "group": "messages", "from": "lead", "to": t, "text": text(g), "data": {} }),
+            2 | 3 => json!({ "id": id, "at": at, "kind": "direct_message", "group": "messages", "from": t, "to": "lead", "text": text(g), "data": {} }),
+            4 => json!({ "id": format!("b{team}-{i}"), "at": at, "kind": if g.n(2) == 0 { "board_decision" } else { "board_warning" }, "group": "notes", "from": t, "text": text(g), "data": { "files": [format!("src/area_{}/a_rather_long_file_name_for_wrapping_{}.rs", g.n(9), g.n(99))] } }),
+            5 => json!({ "id": id, "at": at, "kind": "team_note", "group": "notes", "from": t, "to": "team", "text": text(g), "data": { "kind": "info" } }),
+            6 => json!({ "id": id, "at": at, "kind": "thread_status", "group": "status", "from": t, "to": "lead", "text": text(g), "data": { "thread": t, "state": if g.n(3) == 0 { "blocked" } else { "working" } } }),
+            _ => {
+                let h = format!("{:016x}{:016x}{:08x}", g.n(u64::MAX), g.n(u64::MAX), g.n(u32::MAX as u64));
+                json!({ "id": format!("c{h}"), "at": at, "kind": "commit", "group": "commits", "from": t, "text": format!("{}: {}", t, prose(g, 70)), "data": { "hash": h, "short": &h[..7], "added": g.n(200), "removed": g.n(60), "files": 1 + g.n(9), "thread": t, "merged": false } })
+            }
+        };
+        out.push(e);
+    }
+    out.reverse();
+    out
+}
+
+/// The person's data, shaped: 25 teams of today with 600 events between
+/// them, and one team of 500 events (`p-huge`). Invented content only.
+fn real(d: &mut J) {
+    let mut g = Gen(7);
+    let t0 = 1_795_000_000_000u64;
+    let mut teams = vec![];
+    let mut add = |d: &mut J, id: String, sandbox: String, threads: Vec<String>, n: usize, g: &mut Gen, k: usize| {
+        let th: Vec<J> = threads.iter().map(|t| json!({ "name": t, "state": "working" })).collect();
+        let team = json!({ "id": id, "sandbox": sandbox, "summary": format!("Team {k}: {}", prose(g, 90)), "state": "running", "variant": "split", "lead": format!("lead-of-{k}"), "threads": th, "last_ms": t0 + 30_000_000 + k as u64 });
+        let events = real_events(g, k, &threads, n, t0 + k as u64 * 1000);
+        let standing: Vec<J> = events.iter().filter(|e| e["group"] == "notes" && e["kind"] != "team_note").take(4).map(|e| json!({ "id": e["id"], "kind": if e["kind"] == "board_warning" { "warning" } else { "decision" }, "text": e["text"], "by": e["from"] })).collect();
+        d["board_timelines"][id.as_str()] = json!({ "team": team, "events": events, "standing": standing, "commits": { "available": true, "list": [], "totals": [] } });
+        teams.push(team);
+    };
+    add(d, "p-huge".into(), "web-app".into(), (1..=6).map(|i| format!("huge-thread-{i}")).collect(), 500, &mut g, 0);
+    for k in 1..=25 {
+        add(d, format!("p-real-{k}"), if k % 2 == 0 { "web-app".into() } else { "docs".into() }, (1..=3).map(|i| format!("t{k}-part-{i}")).collect(), 24, &mut g, k);
+    }
+    let list = d["board_teams"].as_array_mut().unwrap();
+    for (i, t) in teams.into_iter().enumerate() {
+        list.insert(i, t);
+    }
+}
+
+/// The board screen alone, with the interrupts each render counts.
+fn board_host() -> crate::luau::LuauHost {
+    let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+    h.load(SCREEN, include_str!("../../../screens/board.luau")).unwrap();
+    h
+}
+
+/// Renders `v` (a `board_ui`) at `w` pt wide; the interrupts it took.
+fn cost(h: &crate::luau::LuauHost, v: &J, w: f32) -> Result<u64, String> {
+    let d = json!({ "board_ui": v, "app": { "overlay": { "screen": "board", "w": w, "h": 816 } } });
+    h.render(&d).map(|_| h.interrupts_used())
+}
+
+/// The view after each input the person makes, at overlay width `w` (the
+/// model's `ow`), and the screen's cost of drawing it.
+fn costs_of(team: &str, w: f32) -> Vec<(String, Result<u64, String>)> {
+    let mut d = data();
+    real(&mut d);
+    d["app"]["overlay"]["w"] = w.into();
+    let h = board_host();
+    let mut st = State::default();
+    let mut out = vec![];
+    let v = show(&mut st, &mut d, json!({ "team": team }));
+    out.push(("open".to_string(), cost(&h, &v, w)));
+    for g in ["notes", "questions", "messages", "commits", "status", "all"] {
+        let (v, _) = run(&mut st, &mut d, "board_filter", json!({ "group": g }));
+        out.push((format!("filter {g}"), cost(&h, &v, w)));
+    }
+    if team != "all" {
+        let (v, _) = run(&mut st, &mut d, "board_filter", json!({ "group": "notes" }));
+        out.push(("counter decisions".to_string(), cost(&h, &v, w)));
+        let (v, _) = run(&mut st, &mut d, "board_filter", json!({ "group": "all" }));
+        out.push(("counter again".to_string(), cost(&h, &v, w)));
+    }
+    // Show more on the newest long text drawn.
+    let (v, _) = run(&mut st, &mut d, "board_filter", json!({ "group": "all" }));
+    if let Some(k) = v["rows"].as_array().unwrap().iter().rev().find_map(|r| r["fold"]["key"].as_str()) {
+        let (v, _) = run(&mut st, &mut d, "board_expand", json!({ "id": k }));
+        out.push(("show more".to_string(), cost(&h, &v, w)));
+    }
+    let (v, _) = run(&mut st, &mut d, "board_more", json!({}));
+    out.push(("show earlier".to_string(), cost(&h, &v, w)));
+    let (v, _) = run(&mut st, &mut d, "board_more", json!({}));
+    out.push(("show earlier twice".to_string(), cost(&h, &v, w)));
+    for (i, s) in ["t", "th", "the"].iter().enumerate() {
+        let (v, _) = run(&mut st, &mut d, "board_filter", json!({ "text": s }));
+        out.push((format!("search keystroke {}", i + 1), cost(&h, &v, w)));
+    }
+    out
+}
+
+#[test]
+#[ignore = "a measure: cargo test board_render_costs -- --ignored --nocapture"]
+fn board_render_costs() {
+    for team in ["all", "p-huge"] {
+        for w in [1284.0, 2000.0, 760.0, 420.0] {
+            for (what, c) in costs_of(team, w) {
+                println!("{team:7} {w:5} {what:24} {c:?}");
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "a measure: which part of board.luau spends the interrupts"]
+fn board_render_cost_parts() {
+    let mut d = data();
+    real(&mut d);
+    d["app"]["overlay"]["w"] = 1284.0.into();
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, json!({ "team": "all" }));
+    let rows = v["rows"].as_array().unwrap();
+    let texts: usize = rows.iter().filter_map(|r| r["text"].as_str()).map(|t| t.lines().count()).sum();
+    println!("rows {} folds {} lines in texts {}", rows.len(), rows.iter().filter(|r| !r["fold"].is_null()).count(), texts);
+    let src = include_str!("../../../screens/board.luau");
+    let variants = [
+        ("as is", src.to_string()),
+        ("no at_width", src.replace("  r = at_width(r)\n", "")),
+        ("drawn only", src.replace("elseif not r.fold.open then\n    v.text = head(r.text, c)", "elseif false then")),
+        ("no rowview", src.replace("    local v = rowview(r, sb)\n", "    local v = false\n")),
+    ];
+    for (name, s) in variants {
+        let mut h = crate::luau::LuauHost::new(crate::luau::Limits { interrupts: 50_000_000, ..Default::default() }).unwrap();
+        h.load(SCREEN, &s).unwrap();
+        println!("{name:12} {:?}", cost(&h, &v, 1284.0));
+    }
+}
+
+/// The guard: on the person's sizes of data (25 teams and 600 events; one
+/// team of 500; texts at the 2000-character cap, prose and paths), every
+/// input renders with no screen error, and at 1284 and 2000 pt it takes under
+/// half the instruction budget.
+#[test]
+fn real_sized_data_renders_in_every_filter_under_half_the_budget() {
+    let half = crate::luau::Limits::default().interrupts / 2;
+    let mut worst = 0;
+    for team in ["all", "p-huge"] {
+        for w in [1284.0, 2000.0, 760.0, 420.0] {
+            for (what, c) in costs_of(team, w) {
+                let n = c.unwrap_or_else(|e| panic!("{team} at {w} pt, {what}: {e}"));
+                if w >= 1284.0 {
+                    assert!(n < half, "{team} at {w} pt, {what}: {n} interrupts, over half the budget ({half})");
+                }
+                worst = worst.max(n);
+            }
+        }
+    }
+    println!("the worst render: {worst} interrupts");
+}
