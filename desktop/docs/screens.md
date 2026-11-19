@@ -89,11 +89,12 @@ unchanged.
 | `surface.release`, `surface.focused` | The key that gives the keyboard back from a picture surface (`⌘Esc`, `Ctrl+Esc`); the id of the surface that has the keyboard, or nil |
 | `platform` | `macos`, `linux`, `windows` |
 | `window` | `w`, `h`: the window's size in points (the plan dialog moves its header into the scrolling part on a short window) |
-| `groups` | Each sandbox's group colour (`#rrggbb`), by name; absent for a sandbox in no group. The web UI's hue first (chats share one, a workspace folder's from its path), then made distinct: a group within 40° of a hue already taken (chats first, then workspaces by path) moves to the nearest free hue, so two groups never share a background; it can then differ from the web UI's (`theme::group_colors`) |
+| `groups` | Each sandbox's group colour (`#rrggbb`), by name; absent for a sandbox in no group (a sandbox in no group and no workspace takes a hue of its own while the list draws a session block for it, several sessions: `App::own_hues`). The web UI's hue first (chats share one, a workspace folder's from its path), then made distinct: a group within 40° of a hue already taken (chats first, then workspaces by path) moves to the nearest free hue, so two groups never share a background; it can then differ from the web UI's (`theme::group_colors`) |
 | `group_look` | By group colour (as `groups` gives it): `{ tint, hover, label }`, the list's block, its header hovered and the group's label, in the theme drawn now (`theme::group_tints`) |
 | `theme` | The theme drawn: `dark` or `graphite` |
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
 | `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
+| `sidebar_menu` | A menu of the sandbox list (a row's ⋯) is open: the list holds its order until it shuts |
 | `covered` | Something sits over the panes and over any overlay: the core's dialog, a modal, Jarvis's proposal or the palette (read only; `App::panes_covered` without the overlay itself). Sessions draws its send controls disabled then; its Rust refuses to send whatever the screen draws |
 | `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |
 
