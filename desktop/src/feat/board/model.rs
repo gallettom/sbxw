@@ -58,6 +58,9 @@ pub fn chars_per_line(bubble: f32) -> usize {
 }
 /// Conversation rows drawn a page (the newest first kept), and commits a lane draws.
 pub const ROWS_PAGE: usize = 80;
+/// Pages drawn at most (240 rows, about 3,000 elements of the 5,000 a render
+/// may return): older rows are found with a filter or a search.
+pub const MAX_PAGES: usize = 3;
 pub const LANE_DOTS: usize = 12;
 
 /// Who an author is, as the view names and colours them.

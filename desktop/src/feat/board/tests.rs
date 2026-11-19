@@ -1455,3 +1455,38 @@ fn the_screen_folds_and_cuts_as_the_model_does_at_every_width() {
         }
     }
 }
+
+/// Show earlier, again and again, on the 500-event team: every page renders
+/// (the instructions and the elements stay within the screen's limits).
+#[test]
+fn show_earlier_to_the_first_event_stays_within_the_screen_s_limits() {
+    let mut d = data();
+    real(&mut d);
+    d["app"]["overlay"]["w"] = 1284.0.into();
+    let h = board_host();
+    let mut st = State::default();
+    let mut v = show(&mut st, &mut d, json!({ "team": "p-huge" }));
+    let mut pages = 1;
+    while v["older"] == true && v["capped"] != true && pages < 12 {
+        v = run(&mut st, &mut d, "board_more", json!({})).0;
+        pages += 1;
+        let n = cost(&h, &v, 1284.0).unwrap_or_else(|e| panic!("page {pages}, {} rows: {e}", v["rows"].as_array().unwrap().len()));
+        println!("page {pages}: {} rows, {n} interrupts", v["rows"].as_array().unwrap().len());
+    }
+    assert_eq!(pages, model::MAX_PAGES, "Show earlier until the cap");
+    assert_eq!(v["capped"], true);
+    // Pressed again at the cap: nothing more drawn, nothing read.
+    let (again, paths) = run(&mut st, &mut d, "board_more", json!({}));
+    assert_eq!(again["rows"].as_array().unwrap().len(), v["rows"].as_array().unwrap().len());
+    assert!(paths.is_empty(), "{paths:?}");
+    // With every row open (long texts, commit groups), the cap still draws.
+    let keys: Vec<String> = v["rows"].as_array().unwrap().iter().filter_map(|r| r["fold"]["key"].as_str().or(r["key"].as_str()).map(str::to_string)).collect();
+    for k in &keys {
+        st.expanded.insert(k.clone());
+    }
+    let v = ui(&[st.ui(&Ctx { data: &d })]);
+    let n = cost(&h, &v, 1284.0).unwrap_or_else(|e| panic!("every row open at the cap: {e}"));
+    println!("at the cap, every row open: {} rows, {n} interrupts", v["rows"].as_array().unwrap().len());
+    let n = cost(&h, &v, 420.0).unwrap_or_else(|e| panic!("at 420 pt: {e}"));
+    assert!(n < crate::luau::Limits::default().interrupts / 2);
+}

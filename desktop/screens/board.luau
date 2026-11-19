@@ -395,7 +395,10 @@ end
 
 local function conversation(ui, sb)
   local list = { gap = 4, w = "full", px = 4, folds = true, key = "board-rows" }
-  if ui.older then
+  if ui.capped then
+    -- As many rows as one view draws: older ones through a filter or a search.
+    list[#list + 1] = row{ w = "full", justify = "center", key = "board-capped", note("The newest " .. #(ui.rows or {}) .. " rows are drawn. A filter, a thread or a search finds earlier ones.", "text-dim") }
+  elseif ui.older then
     list[#list + 1] = row{ w = "full", justify = "center", button{ "Show earlier", variant = "ghost", tone = "blue", on = "more", key = "board-more", help = ui.hidden > 0 and (ui.hidden .. " earlier rows read") or "Read older events" } }
   end
   for _, r in ipairs(ui.rows or {}) do

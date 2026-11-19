@@ -266,6 +266,10 @@ impl State {
             }
             "board_more" => {
                 // Rows already read but not drawn come first; then an older page.
+                if self.pages.max(1) >= model::MAX_PAGES {
+                    // As many rows as a render can draw: the screen says to narrow.
+                    return Ok(vec![self.ui(cx)]);
+                }
                 let drawn = model::ROWS_PAGE * self.pages.max(1);
                 let rows = self.rows(cx).len();
                 self.pages += 1;
@@ -605,6 +609,7 @@ impl State {
         let mut v = json!({
             "teams": teams, "team": current, "all": self.team.is_none(), "picker": picker, "popup": self.picker,
             "rows": rows[cut..], "older": older, "held": self.held, "hidden": cut, "total": total,
+            "capped": older && self.pages.max(1) >= model::MAX_PAGES,
             "group": if self.group.is_empty() { "all" } else { self.group.as_str() }, "thread": self.thread, "text": self.text,
             "details": self.expanded.contains("summary"),
             "loading": loading, "errors": errors, "monitor": crate::feat::intent("monitor_open").is_some(),
