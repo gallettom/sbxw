@@ -46,6 +46,7 @@ pub mod sysbin;
 pub mod table;
 pub mod templates;
 pub mod terminal;
+pub mod team;
 pub mod tooling;
 pub mod usage;
 pub mod voice;

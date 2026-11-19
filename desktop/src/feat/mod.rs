@@ -756,6 +756,7 @@ macro_rules! features {
 features! {
     browser,
     commits,
+    board,
     create,
     emphasis,
     envfile,

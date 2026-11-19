@@ -78,6 +78,10 @@ pub struct Entry {
     pub files: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash: Option<String>,
+    /// The plan the entry was written under (entries from before this field
+    /// have none: a timeline then infers it, see `team`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
 }
 
 /// A file someone else holds.
@@ -170,11 +174,20 @@ pub struct Board {
     /// The files each session has read: claims on them reach its delta.
     #[serde(default)]
     reads: HashMap<String, BTreeSet<String>>,
+    /// The plan of the call being served, written on its entries.
+    #[serde(skip)]
+    call_plan: Option<String>,
 }
 
 impl Board {
     pub fn new(sandbox: &str) -> Self {
         Self { sandbox: sandbox.to_string(), ..Self::default() }
+    }
+
+    /// The plan of the call about to be served (the caller's, else the
+    /// sandbox's shared plan at work): its entries name it.
+    pub fn set_call_plan(&mut self, plan: Option<&str>) {
+        self.call_plan = plan.map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
     }
 
     /// The plan the board is for, as the latest caller said.
@@ -196,6 +209,7 @@ impl Board {
             text: text.filter(|t| !t.is_empty()),
             files,
             hash,
+            plan: self.call_plan.clone(),
         };
         self.entries.push(e.clone());
         if self.entries.len() > MAX_ENTRIES {

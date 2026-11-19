@@ -413,3 +413,19 @@ fn an_approved_plan_opens_every_thread_and_shows_the_first_ones_page() {
         }
     }
 }
+
+/// One `Set` of the panel's state per intent: the Worktrees tab, which also
+/// reads the worktrees, keeps the tab it chose (a second `Set` built from
+/// the state before the intent used to drop it, and the panel stayed on
+/// Sessions). The whole-window press is in `tests/tab_presses.rs`.
+#[test]
+fn the_worktrees_tab_is_kept_while_it_reads_the_worktrees() {
+    let mut data = fixture("basic");
+    let acts = run(&data, "threads_show", json!({ "sandbox": "web-app", "tab": "worktrees" })).unwrap();
+    let sets = acts.iter().filter(|a| matches!(a, Action::Set { key, .. } if key == UI)).count();
+    assert_eq!(sets, 1, "{acts:?}");
+    apply(&mut data, &acts);
+    assert_eq!(data[UI]["tab"], "worktrees");
+    assert_eq!(data[UI]["worktrees_for"], "web-app");
+    assert!(acts.iter().any(|a| matches!(a, Action::Fetch { key, .. } if key == "worktrees")));
+}

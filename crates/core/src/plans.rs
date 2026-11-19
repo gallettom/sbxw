@@ -12,8 +12,10 @@
 //! launches the sessions.
 
 use crate::names::{is_valid_model_id, is_valid_thread_name, normalize_repo_path};
+use crate::team::{self, EventKind, TeamLog};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub const MAX_THREADS: usize = 8;
 pub const MAX_TEXT: usize = 4000;
@@ -342,6 +344,9 @@ pub fn lead_address(name: Option<&str>) -> Option<String> {
 #[derive(Default, Debug)]
 pub struct PlanBook {
     plans: HashMap<String, Plan>,
+    /// Each plan's history, for its timeline (`team`): kept apart from the
+    /// plan, which reaches the lead's tools whole.
+    logs: HashMap<String, TeamLog>,
 }
 
 impl PlanBook {
@@ -353,7 +358,57 @@ impl PlanBook {
     pub fn load(plans: impl IntoIterator<Item = Plan>) -> Self {
         Self {
             plans: plans.into_iter().map(|p| (p.id.clone(), p)).collect(),
+            logs: HashMap::new(),
         }
+    }
+
+    /// The logs read back from disk; those of plans no longer here are dropped.
+    pub fn load_logs(&mut self, logs: impl IntoIterator<Item = (String, TeamLog)>) {
+        for (id, log) in logs {
+            if self.plans.contains_key(&id) {
+                self.logs.insert(id, log);
+            }
+        }
+    }
+
+    /// Plan `id`'s log (empty for a plan from before logs).
+    pub fn log_of(&self, id: &str) -> TeamLog {
+        self.logs.get(id).cloned().unwrap_or_default()
+    }
+
+    /// `sandbox`'s logs, by plan id: what is written to its log file.
+    pub fn logs_of(&self, sandbox: &str) -> BTreeMap<String, TeamLog> {
+        self.logs
+            .iter()
+            .filter(|(id, _)| self.plans.get(*id).is_some_and(|p| p.sandbox == sandbox))
+            .map(|(id, l)| (id.clone(), l.clone()))
+            .collect()
+    }
+
+    /// A line on plan `id`'s log.
+    #[allow(clippy::too_many_arguments)]
+    pub fn note(&mut self, id: &str, at: u64, kind: EventKind, from: &str, to: Option<&str>, text: Option<&str>, data: Value) {
+        if self.plans.contains_key(id) {
+            self.logs.entry(id.to_string()).or_default().push(at, kind, from, to, text, data);
+        }
+    }
+
+    /// The plan a relay request of `sandbox` belongs to: its thread's, or for
+    /// the lead, the sandbox's latest plan still pending or at work.
+    pub fn plan_for_request(&self, sandbox: &str, thread: Option<&str>) -> Option<String> {
+        if let Some(t) = thread {
+            return self.plan_of_thread(sandbox, t);
+        }
+        self.plans
+            .values()
+            .filter(|p| p.sandbox == sandbox && !p.closed)
+            .filter(|p| match p.state {
+                PlanState::Pending => true,
+                PlanState::Approved => !p.merge.as_ref().is_some_and(|m| m.state == MergeState::Merged),
+                PlanState::Refused => false,
+            })
+            .max_by_key(|p| p.created_ms)
+            .map(|p| p.id.clone())
     }
 
     pub fn list(&self) -> Vec<Plan> {
@@ -445,7 +500,8 @@ impl PlanBook {
             created_ms: now,
             updated_ms: now,
         };
-        self.plans.insert(id, plan.clone());
+        self.plans.insert(id.clone(), plan.clone());
+        self.note(&id, now, EventKind::PlanProposed, team::LEAD, Some(team::USER), Some(&plan.summary), team::proposal_data(&plan));
         Ok(plan)
     }
 
@@ -516,6 +572,10 @@ impl PlanBook {
             p.state = PlanState::Approved;
             Ok(())
         })
+        .inspect(|p| {
+            let names: Vec<&str> = p.threads.iter().map(|t| t.name.as_str()).collect();
+            self.note(id, now, EventKind::PlanApproved, team::USER, Some(team::LEAD), None, json!({ "variant": p.variant, "threads": names }));
+        })
     }
 
     pub fn refuse(&mut self, id: &str, note: Option<String>, now: u64) -> Result<Plan, String> {
@@ -524,11 +584,13 @@ impl PlanBook {
             p.note = note.map(|n| clip(&n)).filter(|n| !n.is_empty());
             Ok(())
         })
+        .inspect(|p| self.note(id, now, EventKind::PlanRefused, team::USER, Some(team::LEAD), p.note.as_deref(), Value::Null))
     }
 
     /// Team mode ended: the pending plan is refused, approved ones closed.
     pub fn end_lead(&mut self, sandbox: &str, now: u64) -> Vec<Plan> {
-        self.plans
+        let ended: Vec<Plan> = self
+            .plans
             .values_mut()
             .filter(|p| p.sandbox == sandbox)
             .filter_map(|p| {
@@ -543,7 +605,14 @@ impl PlanBook {
                 p.updated_ms = now;
                 Some(p.clone())
             })
-            .collect()
+            .collect();
+        for p in &ended {
+            match p.state {
+                PlanState::Refused => self.note(&p.id, now, EventKind::PlanRefused, team::SBXW, Some(team::LEAD), p.note.as_deref(), Value::Null),
+                _ => self.note(&p.id, now, EventKind::TeamClosed, team::USER, Some(team::LEAD), Some("Team mode ended"), Value::Null),
+            }
+        }
+        ended
     }
 
     /// The lead proposes merging finished threads, in order. A shared plan has
@@ -609,6 +678,10 @@ impl PlanBook {
             });
             Ok(())
         })
+        .inspect(|p| {
+            let m = p.merge.as_ref().expect("just proposed");
+            self.note(id, now, EventKind::MergeProposed, team::LEAD, Some(team::USER), Some(&m.note), json!({ "order": m.order, "distillate": m.distillate.len() }));
+        })
     }
 
     /// A person clicked Merge, keeping `distillate` (`None`: as proposed).
@@ -633,9 +706,15 @@ impl PlanBook {
             }
             Ok(())
         })
+        .inspect(|p| {
+            let m = p.merge.as_ref().expect("merging");
+            self.note(id, now, EventKind::MergeStarted, team::USER, None, None, json!({ "order": m.order, "base": m.base }));
+        })
     }
 
     pub fn merge_result(&mut self, id: &str, result: MergeResult, now: u64) -> Result<Plan, String> {
+        let data = team::merge_result_data(&result);
+        let text = result.error.clone().or(result.note.clone());
         self.mutate(id, now, |p| {
             p.merge
                 .as_mut()
@@ -644,6 +723,7 @@ impl PlanBook {
                 .push(result);
             Ok(())
         })
+        .inspect(|_| self.note(id, now, EventKind::MergeResult, team::SBXW, None, text.as_deref(), data))
     }
 
     /// Merged when every result is in and ok: one per thread, or the one
@@ -655,6 +735,10 @@ impl PlanBook {
             let all = m.results.len() == expected && m.results.iter().all(|r| r.ok);
             m.state = if all { MergeState::Merged } else { MergeState::Failed };
             Ok(())
+        })
+        .inspect(|p| {
+            let m = p.merge.as_ref().expect("merged");
+            self.note(id, now, EventKind::MergeFinished, team::SBXW, None, None, json!({ "state": m.state, "order": m.order }));
         })
     }
 
@@ -692,7 +776,9 @@ impl PlanBook {
             p.note = Some("every thread was closed".into());
         }
         p.updated_ms = now;
-        Some(p.clone())
+        let p = p.clone();
+        self.note(&id, now, EventKind::ThreadClosed, team::USER, None, None, json!({ "thread": thread }));
+        Some(p)
     }
 
     /// The sandbox's shared plan at work: latest approved, shared, not merged.
@@ -735,6 +821,15 @@ impl PlanBook {
                 t.set_by = by_daemon.then_some(SetBy::Sbxw);
             }
             Ok(())
+        })
+        .inspect(|p| {
+            let text = p.threads.iter().find(|t| t.name == thread).map(|t| t.summary.clone()).unwrap_or_default();
+            let data = json!({ "thread": thread, "state": state });
+            if by_daemon {
+                self.note(&p.id, now, EventKind::ThreadFailed, team::SBXW, None, Some(&text), data);
+            } else {
+                self.note(&p.id, now, EventKind::ThreadStatus, thread, Some(team::LEAD), Some(&text), data);
+            }
         })
     }
 
@@ -824,6 +919,10 @@ impl PlanBook {
             }
             Ok(())
         })
+        .inspect(|p| {
+            let text = p.threads.iter().find(|t| t.name == thread).map(|t| t.summary.clone());
+            self.note(id, now, EventKind::MarkedDone, team::LEAD, Some(thread), text.as_deref(), json!({ "thread": thread, "state": ThreadState::Done }));
+        })
     }
 
     /// Forget old settled plans whose threads all finished. Returns the
@@ -839,6 +938,8 @@ impl PlanBook {
             }
             keep
         });
+        let plans = &self.plans;
+        self.logs.retain(|id, _| plans.contains_key(id));
         touched.sort();
         touched.dedup();
         touched

@@ -30,10 +30,15 @@ pub fn agent_routes() -> Router<Arc<App>> {
         .route("/api/board/after", post(after))
         .route("/api/board/force_release", post(force_release))
         .route("/api/board/approve_extension", post(approve_extension))
+        .route("/api/team/note", post(team_note))
+        .route("/api/team/notes", post(team_notes))
 }
 
 pub fn ui_routes() -> Router<Arc<App>> {
-    Router::new().route("/api/sandboxes/:name/board", get(board))
+    Router::new()
+        .route("/api/sandboxes/:name/board", get(board))
+        .route("/api/teams", get(teams))
+        .route("/api/teams/:id/timeline", get(timeline))
 }
 
 #[derive(Deserialize, Default)]
@@ -166,9 +171,86 @@ async fn approve_extension(State(app): S, Agent(me): Agent, Json(b): Json<Body>)
     Ok(ok_with(json!({ "extended": extended })))
 }
 
+#[derive(Deserialize)]
+struct TeamNoteBody {
+    #[serde(default)]
+    thread: Option<String>,
+    to: String,
+    kind: String,
+    text: String,
+}
+
+fn thread_name(raw: &Option<String>) -> Result<Option<ThreadName>, ApiError> {
+    Ok(raw.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(ThreadName::parse).transpose()?)
+}
+
+/// `team_note`: a lead or thread writes to its team; recorded on the
+/// timeline, the addressees told a note waits.
+async fn team_note(State(app): S, Agent(me): Agent, Json(b): Json<TeamNoteBody>) -> ApiResult {
+    let thread = thread_name(&b.thread)?;
+    let (note, told) = app.team_note(&me, thread.as_ref(), &b.to, &b.kind, &b.text).map_err(ApiError::bad)?;
+    Ok(ok_with(json!({ "note": note, "told": told })))
+}
+
+/// `read_team_notes`: the notes for the caller not handed yet.
+async fn team_notes(State(app): S, Agent(me): Agent, Json(b): Json<Body>) -> ApiResult {
+    let thread = thread_name(&b.thread)?;
+    let notes = app.team_notes_read(&me, thread.as_ref()).map_err(ApiError::bad)?;
+    Ok(ok_with(json!({ "notes": notes })))
+}
+
 async fn board(State(app): S, Path(name): Path<String>) -> ApiResult {
     let name = SandboxRef::parse(&name)?;
     Ok(Json(app.board_ui_view(&name)))
+}
+
+/// `GET /api/teams`: every plan as a team (its sandbox, state, lead and
+/// threads), the latest active first. Read-only.
+async fn teams(State(app): S) -> ApiResult {
+    Ok(ok_with(json!({ "teams": app.teams() })))
+}
+
+#[derive(Deserialize, Default)]
+struct TimelineQuery {
+    #[serde(default)]
+    before: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    /// `notes`, `questions`, `commits`, `status`, `claims`, `conversation`
+    /// (all but claims).
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    thread: Option<String>,
+    #[serde(default)]
+    q: Option<String>,
+}
+
+const GROUPS: &[&str] = &["notes", "questions", "commits", "status", "claims", "messages", "conversation"];
+
+/// `GET /api/teams/:id/timeline`: a page of one team's events, newest first
+/// (`before`: an event id from the previous page), filtered by group,
+/// thread or words. Read-only; texts capped; no author emails.
+async fn timeline(State(app): S, Path(id): Path<String>, axum::extract::Query(q): axum::extract::Query<TimelineQuery>) -> ApiResult {
+    use sbxw_core::team;
+    let blank = |s: &Option<String>| s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let limit = q.limit.unwrap_or(team::PAGE_DEFAULT);
+    if !(1..=team::PAGE_MAX).contains(&limit) {
+        return Err(ApiError::bad(format!("limit is 1 to {}", team::PAGE_MAX)));
+    }
+    let group = blank(&q.group).filter(|g| g != "all");
+    if let Some(g) = &group {
+        if !GROUPS.contains(&g.as_str()) {
+            return Err(ApiError::bad(format!("group is one of {}", GROUPS.join(", "))));
+        }
+    }
+    let (thread, words, before) = (blank(&q.thread), blank(&q.q), blank(&q.before));
+    if words.as_ref().is_some_and(|w| w.chars().count() > 200) || before.as_ref().is_some_and(|b| b.len() > 100) {
+        return Err(ApiError::bad("search words or cursor too long"));
+    }
+    let filter = team::Filter { group: group.as_deref(), thread: thread.as_deref(), q: words.as_deref() };
+    let v = app.team_timeline(&id, &filter, before.as_deref(), limit).await.map_err(ApiError::not_found)?;
+    Ok(ok_with(v))
 }
 
 #[cfg(test)]

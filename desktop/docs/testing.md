@@ -20,6 +20,7 @@ root; the first build takes about a minute, later ones a few seconds.
 | Show another window (the web UI) taking the PTY's size, and typing taking it back | `desktop/scripts/demo-shared-size.sh` (`OTHER=200x60` for a larger one) |
 | Two live terminals: scrollback, selection, focus, a dead key | `desktop/scripts/shot.sh shots/x.png --script desktop/scripts/headless/two-panes-live.json` |
 | Run the unit and link tests | `cd desktop && CARGO_PROFILE_DEV_DEBUG=0 cargo test -j1` |
+| Check every tab-like control (tabs, locations, rows, Show more) changes what is drawn | `cd desktop && cargo test --test tab_presses` (add a case for a new screen's tabs) |
 | Measure the app's memory, and check its ceiling and leaks | `desktop/scripts/memory.sh` (see "Memory" below) |
 
 Shots and logs go to the checkout's root artifacts folder
@@ -46,6 +47,7 @@ Every demo (each writes its shots and says what they show in its header):
 | `demo-pills.sh` | keyword pills in a terminal (each tone, a selection, the switch off live, a light theme, the scaled view) |
 | `demo-reconnect.sh`, `demo-reload.sh`, `demo-shared-size.sh` | a daemon restart; hot reload; one PTY and two clients |
 | `demo-relay.sh`, `demo-setup.sh`, `demo-threads.sh` | the relay; the Setup dialog; threads, plans and the lead |
+| `demo-board.sh` | the Board: a team at work, a merged one, all teams, a commit's diff, a thread's commits, the narrow layout, both themes |
 
 ## `screen.sh`: one screen, one fixture
 

@@ -604,6 +604,53 @@ pub async fn commits(host: &Host, workspace: &Path, ask: &CommitAsk<'_>) -> Resu
     Ok(CommitPage { repos: roots.into_iter().map(|(r, _)| r).collect(), commits: rows, more })
 }
 
+/// A team's commits: each `(thread, revision range, merged)` read in every
+/// repository of the workspace (a range names its own repo's refs; the
+/// others answer nothing), newest first, at most `limit` per range. The
+/// ranges come from sbxw's own names (`HEAD..sbxw/<thread>`, a recorded
+/// merge commit's `<hash>^1..<hash>^2`), each checked here again.
+pub async fn range_commits(host: &Host, workspace: &Path, ranges: &[(Option<String>, String, bool)], limit: usize) -> Result<Vec<CommitRow>, String> {
+    let roots = repo_roots(host, workspace).await;
+    if roots.is_empty() {
+        return Err("the workspace is not a git repository, or git on the host cannot read it".into());
+    }
+    let n = format!("-n{}", limit.clamp(1, hist::WALK_MAX));
+    let mut out: Vec<CommitRow> = vec![];
+    for (thread, range, merged) in ranges {
+        if !valid_range(range) {
+            continue;
+        }
+        for (rel, root) in &roots {
+            let args = ["log", "--no-merges", "--shortstat", "--no-renames", "--no-color", n.as_str(), hist::LIST_FORMAT, "--end-of-options", range.as_str()];
+            let Some(raw) = git(host, root, &args).await else { continue };
+            for mut r in hist::parse_list(&raw) {
+                if out.iter().any(|o| o.hash == r.hash) {
+                    continue;
+                }
+                r.thread = thread.clone();
+                r.merged = *merged;
+                r.branch = thread.as_ref().map(|t| format!("sbxw/{t}")).unwrap_or_default();
+                r.repo = rel.clone();
+                out.push(r);
+            }
+        }
+    }
+    out.sort_by_key(|r| std::cmp::Reverse(r.at));
+    Ok(out)
+}
+
+/// `A..B` where each side is `HEAD`, a valid branch, or a hash with `^1`
+/// or `^2`: nothing an option or a path could be read from.
+fn valid_range(range: &str) -> bool {
+    let Some((a, b)) = range.split_once("..") else { return false };
+    let side = |x: &str| {
+        x == "HEAD"
+            || hist::valid_branch(x).is_ok()
+            || x.strip_suffix("^1").or_else(|| x.strip_suffix("^2")).is_some_and(|h| hist::valid_hash(h).is_ok())
+    };
+    !b.contains("..") && side(a) && side(b)
+}
+
 /// One commit with its files and its patch, capped.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq, Default)]
 pub struct CommitDetail {

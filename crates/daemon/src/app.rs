@@ -133,6 +133,8 @@ impl AppBuilder {
     pub fn build(self) -> Arc<App> {
         let store = Store::open(self.paths);
         let plans = load_plans(&store.paths.plans());
+        let mut plan_book = PlanBook::load(plans);
+        plan_book.load_logs(load_team_logs(&store.paths.plans().join("team")));
         let daemon_kits = Mutex::new(self.cfg.kits.clone());
         let emphasis = Mutex::new(self.cfg.emphasis.clone());
         let jarvis = sbxw_core::jarvis::Book::load(crate::svc::jarvis::load(&store.paths.state().join("jarvis.json")));
@@ -153,7 +155,7 @@ impl AppBuilder {
             agents: Mutex::new(AgentBook::new()),
             relay: Mutex::new(RelayBook::new()),
             relay_waiters: Mutex::new(HashMap::new()),
-            plans: Mutex::new(PlanBook::load(plans)),
+            plans: Mutex::new(plan_book),
             boards: Mutex::new(HashMap::new()),
             codemap: Mutex::new(RunBook::new()),
             usage: Mutex::new(Usage::default()),
@@ -199,6 +201,26 @@ fn load_plans(dir: &Path) -> Vec<Plan> {
         {
             Ok(list) => out.extend(list),
             Err(e) => tracing::warn!("plans: skipping {}: {e}", p.display()),
+        }
+    }
+    out
+}
+
+/// The plans' logs (`plans/team/<sandbox>.json`: `{plan id: log}`), for
+/// their timelines. A file that cannot be read is skipped: the plans
+/// themselves are elsewhere, and their timelines fall back to their state.
+fn load_team_logs(dir: &Path) -> Vec<(String, sbxw_core::team::TeamLog)> {
+    let mut out = Vec::new();
+    for p in std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()) {
+        if p.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        match std::fs::read_to_string(&p)
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str::<std::collections::BTreeMap<String, sbxw_core::team::TeamLog>>(&t).map_err(|e| e.to_string()))
+        {
+            Ok(m) => out.extend(m),
+            Err(e) => tracing::warn!("team logs: skipping {}: {e}", p.display()),
         }
     }
     out

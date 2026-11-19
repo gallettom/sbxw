@@ -53,6 +53,11 @@ pub struct CommitRow {
     pub merged: bool,
     /// Files it changed (against its first parent).
     pub files: u32,
+    /// Lines added and removed (against its first parent).
+    #[serde(default)]
+    pub added: u64,
+    #[serde(default)]
+    pub removed: u64,
     /// The repository, relative to the workspace (`""`: the workspace).
     pub repo: String,
 }
@@ -126,6 +131,7 @@ pub fn parse_list(raw: &str) -> Vec<CommitRow> {
             if line.starts_with(' ') && line.contains("changed") {
                 if let (Some(prev), Some(n)) = (out.last_mut(), files_changed(line)) {
                     prev.files = n;
+                    (prev.added, prev.removed) = lines_changed(line);
                 }
                 rest = &rest[line.len()..];
             } else {
@@ -150,6 +156,8 @@ pub fn parse_list(raw: &str) -> Vec<CommitRow> {
             thread: None,
             merged: false,
             files: 0,
+            added: 0,
+            removed: 0,
             repo: String::new(),
         });
     }
@@ -160,6 +168,22 @@ pub fn parse_list(raw: &str) -> Vec<CommitRow> {
 fn files_changed(stat: &str) -> Option<u32> {
     let l = stat.lines().find(|l| l.contains("changed"))?;
     l.split_whitespace().next()?.parse().ok()
+}
+
+/// `(added, removed)` of a shortstat line (` 3 files changed, 10
+/// insertions(+), 2 deletions(-)`); a part git leaves out is 0.
+fn lines_changed(stat: &str) -> (u64, u64) {
+    let (mut a, mut r) = (0, 0);
+    for part in stat.split(',') {
+        let mut w = part.split_whitespace();
+        let (Some(n), Some(what)) = (w.next().and_then(|n| n.parse::<u64>().ok()), w.next()) else { continue };
+        if what.starts_with("insertion") {
+            a = n;
+        } else if what.starts_with("deletion") {
+            r = n;
+        }
+    }
+    (a, r)
 }
 
 /// Parse `--numstat -z`-less output (`added\tremoved\tpath` per line;
@@ -317,6 +341,9 @@ mod tests {
         assert_eq!(v.len(), 2);
         assert_eq!((v[0].author.as_str(), v[0].files, v[0].body.as_str()), ("Ada", 3, "Line one\nLine two"));
         assert_eq!((v[1].subject.as_str(), v[1].files, v[1].at), ("First", 1, 1690000000));
+        assert_eq!((v[0].added, v[0].removed, v[1].added), (4, 0, 1));
+        assert_eq!(lines_changed(" 2 files changed, 5 insertions(+), 3 deletions(-)"), (5, 3));
+        assert_eq!(lines_changed(" 1 file changed, 1 deletion(-)"), (0, 1));
         assert!(!LIST_FORMAT.contains("%ae") && !LIST_FORMAT.contains("%ce") && !WALK_FORMAT.contains('e'));
         let json = serde_json::to_string(&v).unwrap();
         assert!(!json.contains("email") && !json.contains('@'));

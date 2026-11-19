@@ -309,17 +309,25 @@ return {
     end
     local items = {}
     for _, s in ipairs(data.sandboxes or {}) do table.insert(items, { id = s.name, label = s.name .. (s.status == "running" and "" or " (" .. s.status .. ")") }) end
+    -- Quiet tabs, as Setup's: the current one on a neutral tint, the others
+    -- plain. A tab is where you look, not the view's primary action.
     local trow = { gap = 4, w = "full" }
     for _, t in ipairs(tabs) do
-      table.insert(trow, button{ t[2], variant = t[1] == tab and "primary" or "ghost", on = "tab", arg = { tab = t[1], sandbox = sb }, key = "tab-" .. t[1] })
+      local on_it = t[1] == tab
+      table.insert(trow, button{ t[2], variant = on_it and "neutral" or "ghost", color = on_it and "text-bright" or "text-muted",
+        on = "tab", arg = { tab = t[1], sandbox = sb }, key = "tab-" .. t[1] })
     end
     local body
     if tab == "worktrees" then body = worktrees_tab(data, sb)
     elseif tab == "board" then body = board_tab(state, data, sb)
     else body = sessions_tab(data, sb, sbx) end
     return column{ h = "full", gap = 8, pad = 12,
-      select{ id = "threads-sandbox", items = items, value = sb, on = "pick" },
+      -- The compact sandbox picker (its colour square, then the select), as
+      -- the explorer and the configure panels draw it.
+      row{ gap = 8, w = "full", text{ "Sandbox", size = "sm", color = "text-muted" },
+        sandbox_picker(data, { id = "threads-sandbox", items = items, value = sb, on = "pick" }) },
       row(trow),
+      divider{},
       scroll{ gap = 8, body },
     }
   end,

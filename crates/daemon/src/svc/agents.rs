@@ -52,6 +52,8 @@ impl App {
             workspace: workspace.as_ref().and_then(|p| p.to_str()),
             thread: ev.thread(),
         });
+        // A lead's or thread's `SendMessage` to its team: on the team's timeline.
+        self.direct_message_noted(sandbox, &body);
         let has_pty = self.sessions.is_live(&SessionKey::agent(sandbox));
         let infos = self.agents.lock().unwrap().apply(&sandbox.to_string(), &ev, origin, has_pty, now_ms());
         for info in infos {

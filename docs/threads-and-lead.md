@@ -266,6 +266,57 @@ web UI) refuses a pending plan and closes approved ones: their threads keep
 running, but their reports no longer reach the main session. Restarting the
 lead's session also removes the mark.
 
+### The team's timeline
+
+Each plan is a **team** (its sandbox, lead and threads), and sbxw keeps its
+history as one timeline: the proposal, your approval or refusal and its
+reason, every status report (not only the latest), a thread that could not
+start, the lead marking a thread done, the merge proposal, your Merge click
+and each result, the board's notes and claims, the relay requests the team
+opened, and the commits of the team's branches. The desktop app's **Board**
+shows it as a conversation.
+
+It shows only what went through sbxw: what you type in a terminal never
+reaches it. The messages the lead and its threads send each other with Claude
+Code's own `SendMessage` are shown as **direct messages**: sbxw's status hook
+already reports each tool call to the daemon, and for a delivered
+`SendMessage` between two sessions of one team the daemon keeps only the
+addressee and the words (2000 characters at most), pruned with the plan.
+Nothing else of any tool call is kept, no transcript is read, and messages
+sent before the daemon had this version are not recovered.
+
+- `GET /api/teams`: every team, the latest active first, with its state
+  (`proposed`, `running`, `done`, `merged`, `refused`, `closed`).
+- `GET /api/teams/<plan>/timeline?limit=&before=&group=&thread=&q=` (groups
+  also `messages`, the direct messages): a page
+  of events, newest first (`before` is the last event id of the previous
+  page; `limit` 1 to 500, 100 by default). Each event has `id`, `at` (ms, or
+  null when not known), `kind`, `group` (`notes`, `questions`, `commits`,
+  `status`, `claims`; `group=conversation` is all but claims), `from` (`user`, `lead`, `sbxw` or a thread), `to`,
+  `text` (2000 characters at most) and a small `data`. The first page adds
+  the team's commits per thread with their totals, and the board's
+  decisions and warnings that still stand.
+- The history is kept from this version on, in
+  `~/.sbxw/state/plans/team/<sandbox>.json` (the plans' 0700 folder), and is
+  pruned with its plan. A plan from before shows what its state holds, with
+  "time unknown" where sbxw never recorded one.
+- Relay requests appear as who asked whom, the outcome and the times, with
+  their question and answer texts (2000 characters at most), kept with the
+  plan and pruned with it. An image never is.
+- **Team notes.** The lead and its threads have two relay tools for what
+  you should be able to follow: `team_note {to, kind, text}` (`to`: `lead`,
+  a thread, or `team`; `kind`: `info`, `warning` or `decision`) records the
+  note on the team's timeline and types one line of sbxw's own into each
+  addressee's open session saying a note waits (never the note's words);
+  `read_team_notes` hands the caller its notes once, framed as another
+  agent's data. Their decisions and warnings stand pinned beside the board's.
+- Commits: each thread's branch against the main checkout, or once merged,
+  the recorded merge commit's other side, so a thread's commits stay its own
+  after the merge deletes its branch. No author email. A shared plan's
+  commits are attributed to threads by the board's commit entries.
+- New board entries carry their plan id; an older one is attributed by its
+  time and author and marked as a guess.
+
 ### Trust
 
 - **A person decides the plan and the merge.** Approve, refuse and merge exist

@@ -93,6 +93,10 @@ icons! {
     LEADER "leader" concat!(r#"<path d="M4.25 5 3.75 1.25 6.25 3 8 0.75 9.75 3 12.25 1.25 11.75 5z" fill="currentColor"/>"#, st!("circle", r#"cx="8" cy="8" r="1.9""#), st!("path", r#"d="M3.25 15.25c0-2.2 2.1-3.5 4.75-3.5s4.75 1.3 4.75 3.5""#));
     // A keyword pill: a rounded label with a dot (keyword pills, emphasis.rs).
     TAG "tag" concat!(st!("rect", r#"x="1.75" y="4.75" width="12.5" height="6.5" rx="3.25""#), st!("line", r#"x1="5.5" y1="8" x2="10.5" y2="8""#));
+    // The Board (the rail's activity zone, its overlay): two speech bubbles
+    // answering each other, one from the left and one from the right (a
+    // conversation, not the agents' single question bubble or the Monitor's list).
+    BOARD "board" concat!(st!("path", r#"d="M1.75 3.25a1 1 0 0 1 1-1h6.5a1 1 0 0 1 1 1v3.5a1 1 0 0 1-1 1H4.5l-2.75 2z""#), st!("path", r#"d="M14.25 9.25a1 1 0 0 0-1-1h-6.5a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h4.75l2.75 2z""#));
     // The configure zone's views out of Setup, one mark each wherever it
     // shows: MCP servers a plug (a connector, not the network's shield);
     // Skills an open book (not the agent's sparkle, the team's people or
