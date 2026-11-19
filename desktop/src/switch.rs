@@ -16,7 +16,8 @@ use crate::theme::{self, c, hex};
 use rune::{el, row, text, Cursor, El};
 use std::rc::Rc;
 
-/// The track's inner padding, the thumb's travel time.
+/// The track's inner padding, the thumb's travel time. The track is inset
+/// (`bg` with a hairline), the thumb raised (`elevated`, a soft shadow).
 pub const PAD: f32 = 2.0;
 pub const TRAVEL: rune::Spring = rune::Spring::new(0.16, 0.0);
 /// A label slot: px 10, icon 14, gap 6, the word at 13/500; icons alone 28.
@@ -54,15 +55,16 @@ pub fn view<S: 'static>(n: &Node, key: String, flip: Rc<dyn Fn(&mut S, &str)>) -
     let ids: [String; 2] = [items[0].id.clone(), items[1].id.clone()];
     let other = ids[1 - on].clone();
     let label = format!("{}: {}", items.iter().map(|i| i.label.as_str()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" | "), items[on].label);
-    // The thumb: the raised surface (today's lit segment), under the chosen label.
+    // The thumb: a raised knob, lighter than the inset track, a soft shadow
+    // under it (no outline), under the chosen label.
     let thumb = el()
         .key(format!("{key}-thumb"))
         .pin(Some(PAD), Some(PAD), None, None)
         .w(w)
         .h(h - PAD * 2.0)
         .radius(theme::radius("pill").unwrap())
-        .fill(c("bg"))
-        .border(1.0, c("border"))
+        .fill(c("elevated"))
+        .shadow(1.0, 3.0, crate::theme::shadow())
         .offset(on as f32 * w, 0.0)
         .offset_motion(TRAVEL);
     let mut track = row()
@@ -74,7 +76,8 @@ pub fn view<S: 'static>(n: &Node, key: String, flip: Rc<dyn Fn(&mut S, &str)>) -
         .gap(0.0)
         .items_center()
         .radius(theme::radius("pill").unwrap())
-        .fill(c("surface-alt"))
+        .fill(c("bg"))
+        .border(1.0, c("border"))
         .focus_ring(2.0, 2.0, c("focus"))
         .child(thumb);
     if let Some(help) = &n.help {
@@ -118,7 +121,7 @@ pub fn view<S: 'static>(n: &Node, key: String, flip: Rc<dyn Fn(&mut S, &str)>) -
     track
         .focusable(true)
         .cursor(Cursor::Pointer)
-        .hover(hex(theme::over(theme::color_value("text").unwrap(), 0.04, theme::color_value("surface-alt").unwrap())))
+        .hover(hex(theme::over(theme::color_value("text").unwrap(), 0.04, theme::color_value("bg").unwrap())))
         .on_press(move |s: &mut S| f1(s, &o1))
         .on_key(move |s: &mut S, ev: &rune::KeyEvent, _tx: &mut rune::Tx| {
             if ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo {
