@@ -3015,13 +3015,15 @@ fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
     if let Some(ic) = it.icon.as_deref().and_then(crate::icons::get) {
         b = b.child(rune::icon(ic, bar::CHIP_ICON).color(theme::hex(icon_fg)));
     }
-    let label = it.text();
+    let label = it.chip_text();
     if !label.is_empty() {
         b = b.child(text(label).font(small(bar::CHIP_TEXT, 500.0)).color(theme::hex(fg)));
     }
     if let Some((name, args)) = it.intent.clone() {
         let hover = if quiet { theme::hex(theme::over(meaning_fg, 0.12, quiet_tint)) } else { c("active-bg") };
-        b = b.role("button").label(if it.text().is_empty() { it.help.clone() } else { it.text() }).expanded(active).hover(hover).focusable(true).focus_ring(2.0, 1.0, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+        // A chip with words is named by them; a bare icon or number by its tooltip.
+        let named = if it.chip_text() == it.text() && !it.text().is_empty() { it.text() } else { it.help.clone() };
+        b = b.role("button").label(named).expanded(active).hover(hover).focusable(true).focus_ring(2.0, 1.0, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
             s.press_extra("pane", &name, &args);
             s.push_data();
         });

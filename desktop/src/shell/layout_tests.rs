@@ -1018,10 +1018,19 @@ fn the_overlays_rows_wrap_and_never_overlap_when_narrow() {
             }
             assert_eq!(rt.state.feats.panels, ["relay"], "{feat} at {want}: the Requests panel alone is docked");
             super::tests::tap(&mut rt, &format!("rail-{feat}"));
-            for _ in 0..40 {
+            // Until the overlay has landed: its screen may load a few frames
+            // late under load, and its rect is then on its way.
+            let (mut last, mut still) = (None, 0);
+            for _ in 0..400 {
                 rt.frame(0.016);
+                let now = rt.presented(&format!("overlay-{feat}")).map(|p| p.0);
+                still = if now.is_some() && now == last { still + 1 } else { 0 };
+                last = now;
+                if still >= 10 {
+                    break;
+                }
             }
-            let o = rt.presented(&format!("overlay-{feat}")).unwrap_or_else(|| panic!("{feat} at {want}: no overlay")).0;
+            let o = last.unwrap_or_else(|| panic!("{feat} at {want}: no overlay"));
             assert!((o[2] - want).abs() <= 6.0, "{feat}: the overlay is {} wide, not {want} (the Requests panel docked beside it)", o[2]);
             let inside = |r: [f32; 4]| r[0] >= o[0] - 0.5 && r[0] + r[2] <= o[0] + o[2] + 0.5;
             let close = rt.presented("overlay-close").unwrap().0;
