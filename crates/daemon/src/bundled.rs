@@ -13,7 +13,7 @@ include!(concat!(env!("OUT_DIR"), "/bundled_kits.rs"));
 
 /// The kits that fill the shared cache: each drops `.filled-<name>` there
 /// once its startup has downloaded into it.
-pub const CACHING: [&str; 3] = ["agent-skills", "md-to-pdf-tools", "k8s-tools"];
+pub const CACHING: [&str; 4] = ["agent-skills", "md-to-pdf-tools", "k8s-tools", "firecrawl"];
 
 /// `kits` with every `sbxw:<name>` replaced by its written-out directory.
 pub fn resolve(paths: &Paths, kits: &[String]) -> Result<Vec<String>> {
@@ -189,5 +189,151 @@ mod tests {
         let rels: Vec<&str> = files.iter().map(|(r, _, _)| *r).collect();
         assert_eq!(rels.len(), 2, "the spec and the server, nothing else: {rels:?}");
         assert!(!sbxw_core::kits::BUNDLED.contains(&sbxw_core::kits::JARVIS), "never offered to a project");
+    }
+
+    fn firecrawl_file(rel: &str) -> &'static [u8] {
+        let (_, files) = KITS.iter().find(|(n, _)| *n == "firecrawl").expect("embedded");
+        files.iter().find(|(r, _, _)| *r == rel).unwrap_or_else(|| panic!("{rel}")).2
+    }
+
+    #[test]
+    fn the_firecrawl_kit_installs_from_the_cache_and_widens_nothing() {
+        let spec: serde_norway::Value = serde_norway::from_slice(firecrawl_file("spec.yaml")).unwrap();
+        let caps = spec["capabilities"].as_sequence().unwrap();
+        let kinds: Vec<&str> = caps.iter().filter_map(|c| c["type"].as_str()).collect();
+        // No network rule, port, credential or grant: what it fetches goes
+        // through the sandbox's own policy.
+        assert_eq!(kinds, ["com.docker.sandbox/lifecycle@1", "com.docker.sandbox/agent-context@2"], "{kinds:?}");
+        let ctx = caps.iter().find(|c| c["type"] == "com.docker.sandbox/agent-context@2").unwrap();
+        assert_eq!(ctx["config"]["content"].as_str(), Some(sbxw_core::tooling::firecrawl_guidance().as_str()), "edit both, or neither");
+        let startup = caps[0]["config"]["startup"][0]["command"].as_sequence().unwrap();
+        assert_eq!(startup[1].as_str(), Some("/home/agent/.sbxw/firecrawl/install.sh"));
+        assert!(CACHING.contains(&"firecrawl") && sbxw_core::kits::BUNDLED.contains(&"firecrawl"));
+        assert!(sbxw_core::kits::DEFAULT_KITS.contains(&"sbxw:firecrawl"), "the default tool for the web");
+        // The front script is the MCP server's command, and executable.
+        let (_, files) = KITS.iter().find(|(n, _)| *n == "firecrawl").unwrap();
+        for exe in ["files/home/agent/.sbxw/firecrawl/install.sh", "files/home/agent/.sbxw/firecrawl/shim/npx", &format!("files{}", sbxw_core::tooling::FIRECRAWL_PATH)] {
+            let (_, mode, _) = files.iter().find(|(r, _, _)| *r == exe).unwrap_or_else(|| panic!("{exe}"));
+            assert_eq!(*mode, 0o755, "{exe}");
+        }
+        // Pinned: the version and the crate's sha256, rustup-init by hash for
+        // each architecture, the MCP package by its lock.
+        let script = std::str::from_utf8(firecrawl_file("files/home/agent/.sbxw/firecrawl/install.sh")).unwrap();
+        let pin = |k: &str| script.lines().find_map(|l| l.trim().strip_prefix(&format!("{k}="))).map(|v| v.split_whitespace().next().unwrap().to_string());
+        assert!(pin("FIRECRAWL_VERSION").is_some_and(|v| v.split('.').count() == 3));
+        assert!(pin("FIRECRAWL_CRATE_SHA256").is_some_and(|v| v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit())));
+        assert_eq!(script.matches("RUSTUP_SHA256=").count(), 3, "x86_64, aarch64, and none");
+        assert!(script.contains("--locked") && script.contains("npm ci"), "the locks are what is installed");
+        let lock: serde_json::Value = serde_json::from_slice(firecrawl_file("files/home/agent/.sbxw/firecrawl/mcp/package-lock.json")).unwrap();
+        let mcp = &lock["packages"]["node_modules/firecrawl-mcp"];
+        assert_eq!(mcp["version"].as_str(), pin("MCP_VERSION").as_deref());
+        for (path, p) in lock["packages"].as_object().unwrap().iter().filter(|(k, _)| !k.is_empty()) {
+            assert!(p["integrity"].as_str().is_some_and(|i| i.starts_with("sha512-")), "{path}");
+        }
+        // Nothing in the kit starts a listener.
+        for (rel, _, bytes) in files.iter() {
+            assert!(!String::from_utf8_lossy(bytes).contains("firecrawl-local serve"), "{rel}");
+        }
+    }
+
+    /// The kit's startup, run for real (bash) against a fake home and cache.
+    #[cfg(unix)]
+    #[test]
+    fn the_firecrawl_startup_copies_from_the_cache_and_never_fails() {
+        use std::process::Command;
+        if Command::new("bash").arg("--version").output().is_err() || Command::new("sha256sum").arg("--version").output().is_err() {
+            eprintln!("bash or sha256sum not found — skipping");
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let p = Paths::under(&d.path().join("sbxw"));
+        let kit = std::path::PathBuf::from(resolve(&p, &["sbxw:firecrawl".into()]).unwrap().remove(0));
+        let script_text = std::fs::read_to_string(kit.join("files/home/agent/.sbxw/firecrawl/install.sh")).unwrap();
+        let pin = |k: &str| script_text.lines().find_map(|l| l.strip_prefix(&format!("{k}="))).unwrap().split_whitespace().next().unwrap().to_string();
+        let (version, mcp) = (pin("FIRECRAWL_VERSION"), format!("mcp-{}", pin("MCP_VERSION")));
+        let flavour = {
+            let arch = Command::new("dpkg").arg("--print-architecture").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+            let codename = std::fs::read_to_string("/etc/os-release").ok().and_then(|t| t.lines().find_map(|l| l.strip_prefix("VERSION_CODENAME=").map(|v| v.trim_matches('"').to_string()))).unwrap_or_default();
+            format!("{arch}-{codename}")
+        };
+        let cache = d.path().join("cache");
+        let store = cache.join(&flavour).join("firecrawl");
+        let fake_bin = |dir: &std::path::Path, sum: Option<&str>| {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("firecrawl-local"), "#!/bin/sh\necho fake\n").unwrap();
+            let real = String::from_utf8(Command::new("sha256sum").arg(dir.join("firecrawl-local")).output().unwrap().stdout).unwrap();
+            std::fs::write(dir.join("firecrawl-local.sha256"), sum.unwrap_or(real.split(' ').next().unwrap())).unwrap();
+            std::fs::write(dir.join(".complete"), "").unwrap();
+        };
+        let fake_mcp = |dir: &std::path::Path| {
+            std::fs::create_dir_all(dir.join("node_modules/firecrawl-mcp/dist")).unwrap();
+            std::fs::write(dir.join("node_modules/firecrawl-mcp/dist/index.js"), "").unwrap();
+            std::fs::write(dir.join(".complete"), "").unwrap();
+        };
+        // A home holding the kit's image content, as sbx's build leaves it.
+        let home_with_kit = |name: &str| {
+            let h = d.path().join(name);
+            let out = Command::new("cp").arg("-a").arg(kit.join("files/home/agent")).arg(&h).output().unwrap();
+            assert!(out.status.success());
+            std::fs::create_dir_all(h.join(".claude/kits-agent-context")).unwrap();
+            std::fs::write(h.join(".claude/kits-agent-context/firecrawl.md"), "# firecrawl\n\nwhat sbx wrote\n").unwrap();
+            h
+        };
+        let run = |h: &std::path::Path, with_cache: bool| {
+            let mut c = Command::new("bash");
+            c.arg(h.join(".sbxw/firecrawl/install.sh")).env("HOME", h).env_remove("SBXW_CACHE_FILL").env_remove("SBXW_CACHE");
+            if with_cache {
+                c.env("SBXW_CACHE", &cache);
+            }
+            let out = c.output().unwrap();
+            assert!(out.status.success(), "never fails the start: {out:?}");
+            let marker = h.join(".sbxw/startup").join(format!("{}.done", h.join(".sbxw/firecrawl/install.sh").display().to_string().replace('/', "_")));
+            assert!(marker.is_file(), "the end marker");
+            let context = std::fs::read_to_string(h.join(".claude/kits-agent-context/firecrawl.md")).unwrap();
+            (String::from_utf8_lossy(&out.stdout).into_owned(), context)
+        };
+        let installed = |h: &std::path::Path| std::fs::read_to_string(h.join(".sbxw/firecrawl/lib/binary.version")).ok().map(|v| v.trim().to_string());
+
+        // No cache at all, and no network used: a note, and nothing else.
+        let h = home_with_kit("a");
+        let (_, ctx) = run(&h, false);
+        assert!(ctx.starts_with("# firecrawl\n\nwhat sbx wrote\n"), "{ctx}");
+        assert_eq!(ctx.matches("Firecrawl is not installed").count(), 1, "{ctx}");
+        // A cache not filled yet: the note says sbxw is preparing it, once.
+        std::fs::create_dir_all(cache.join(&flavour)).unwrap();
+        run(&h, true);
+        let (_, ctx) = run(&h, true);
+        assert_eq!(ctx.matches("Firecrawl is not installed yet: sbxw is preparing it; use WebFetch meanwhile.").count(), 1, "{ctx}");
+        assert_eq!(installed(&h), None);
+
+        // Filled with an older version only: that one is used meanwhile.
+        fake_bin(&store.join("0.0.1"), None);
+        fake_mcp(&store.join("mcp-0.0.1"));
+        let (_, ctx) = run(&h, true);
+        assert_eq!(installed(&h).as_deref(), Some("0.0.1"));
+        assert!(!ctx.contains("not installed"), "the note goes: {ctx}");
+
+        // The pinned version arrives: it replaces the older one.
+        fake_bin(&store.join(&version), None);
+        fake_mcp(&store.join(&mcp));
+        run(&h, true);
+        assert_eq!(installed(&h).as_deref(), Some(version.as_str()));
+        assert!(!h.join(".sbxw/firecrawl/lib/0.0.1").exists() && !h.join(".sbxw/firecrawl/lib/mcp-0.0.1").exists());
+        let (out, ctx) = run(&h, true);
+        assert!(out.contains("already installed"), "idempotent: {out}");
+        assert_eq!(ctx, "# firecrawl\n\nwhat sbx wrote\n");
+        // The front script finds it and keeps the cloud off.
+        let shown = Command::new("bash").arg(h.join(".local/bin/firecrawl-local")).arg("--version").env("HOME", &h).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&shown.stdout), "fake\n");
+        let refused = Command::new("bash").arg(h.join(".local/bin/firecrawl-local")).arg("login").env("HOME", &h).output().unwrap();
+        assert_eq!(refused.status.code(), Some(64), "no login under sbxw");
+
+        // A copy that does not match the hash the filler recorded is refused.
+        std::fs::remove_dir_all(store.join(&version)).unwrap();
+        fake_bin(&store.join(&version), Some(&"0".repeat(64)));
+        let h2 = home_with_kit("b");
+        let (_, ctx) = run(&h2, true);
+        assert_eq!(installed(&h2), None);
+        assert!(ctx.contains("Firecrawl is not installed yet"), "{ctx}");
     }
 }

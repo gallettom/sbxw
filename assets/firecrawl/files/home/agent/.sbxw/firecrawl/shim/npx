@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# `firecrawl-local mcp` starts its MCP server as `npx -y <package>`. Under
+# sbxw the package is the pinned copy installed from the kit cache
+# (mcp/package-lock.json, every package checked by its integrity hash), run
+# from disk: no download at a start, and no other version can come in.
+# On PATH only for firecrawl-local (see ~/.local/bin/firecrawl-local).
+set -uo pipefail
+LIB=$HOME/.sbxw/firecrawl/lib
+if [ "$#" = 2 ] && [ "$1" = -y ] && [ "$2" = sbxw-firecrawl-mcp ]; then
+  have=""; read -r have 2>/dev/null < "$LIB/mcp.version"
+  entry="$LIB/$have/node_modules/firecrawl-mcp/dist/index.js"
+  if [ -n "$have" ] && [ -f "$entry" ]; then exec node "$entry"; fi
+  echo "the Firecrawl MCP package is not installed yet: sbxw copies it from its kit cache at the sandbox's next start" >&2
+  exit 69
+fi
+echo "npx is not available to firecrawl-local under sbxw (asked: $*)" >&2
+exit 64

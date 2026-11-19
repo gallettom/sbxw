@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 
 /// The kits that ship inside sbxw, referred to as `sbxw:<name>` in `kits`.
-pub const BUNDLED: [&str; 9] = ["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent", "terminal-mac", "dev-ports"];
+pub const BUNDLED: [&str; 10] = ["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent", "terminal-mac", "dev-ports", "firecrawl"];
 
 /// sbxw's own kit, applied to every sandbox before the project's: Node.js,
 /// which sbx 0.51's Claude Code image lacks and every in-sandbox piece of sbxw
@@ -46,8 +46,17 @@ pub fn with_base(kits: &[String]) -> Vec<String> {
 /// What a project without a `kits` list gets. k8s-tools is opt-in: only
 /// Kubernetes projects need kubectl, k3d and skaffold. So are git-identity and
 /// ssh-agent (v3 capability kits): each hands the sandbox something of the
-/// person's — their name and email, their SSH keys' signatures.
-pub const DEFAULT_KITS: [&str; 4] = ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools", "sbxw:retro"];
+/// person's — their name and email, their SSH keys' signatures. firecrawl is
+/// a default, as the agents' tool for reading the web; it cannot fail a
+/// create (its startup only copies from the kit cache, and says so when
+/// there is nothing to copy yet), and the Kits dialog takes it off.
+pub const DEFAULT_KITS: [&str; 5] = ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools", "sbxw:retro", "sbxw:firecrawl"];
+
+/// Does this kit list apply `sbxw:firecrawl`: whether the tooling registers
+/// its MCP server and guidance ([`crate::tooling::Tooling::firecrawl`]).
+pub fn uses_firecrawl(kits: &[String]) -> bool {
+    kits.iter().any(|k| bundled_name(k) == Some("firecrawl"))
+}
 
 /// One line per bundled kit, for the web UI's Kits dialog.
 pub fn about(name: &str) -> &'static str {
@@ -60,6 +69,7 @@ pub fn about(name: &str) -> &'static str {
         "git-identity" => "your host's Git user.name and user.email in the sandbox",
         "ssh-agent" => "your host's SSH agent, restricted to signing commits and the common Git hosts",
         "dev-ports" => "the agent publishes a dev server on a loopback port sbx picks, without a prompt (sbx 0.53; at creation only)",
+        "firecrawl" => "Firecrawl Local: agents read, crawl and map web pages as markdown, through an MCP server, cloud off",
         "terminal-mac" => "a virtual Mac the agent drives (Safari, Mac apps) through the host's terminal-mac; Apple silicon hosts",
         _ => "",
     }

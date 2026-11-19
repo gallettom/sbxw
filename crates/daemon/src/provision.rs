@@ -593,6 +593,9 @@ impl App {
             true => crate::svc::jarvis_sandbox::with_jarvis_tooling(batch, &agent_port),
             false => batch.lead_command().emphasis(self.emphasis_guidance(name).as_deref()),
         };
+        // The firecrawl MCP server and its guidance follow the kit: taken out
+        // again at the next bring-up once the kit is off the list.
+        let batch = batch.firecrawl(!jarvis && kits::uses_firecrawl(&cfg.kits));
         if up {
             run.step(progress::TOOLING);
         }
