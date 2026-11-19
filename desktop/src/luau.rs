@@ -406,6 +406,124 @@ sandbox_picker = function(data, o)
     column{ w = 8, h = 8, radius = 2, fill = (o.value and groups[o.value]) or "text-dim", key = id .. "-color" },
     select{ id = id, value = o.value or "", items = o.items or {}, on = o.on, placeholder = o.placeholder, disabled = o.disabled } }
 end
+-- STAGE1 THROWAWAY: scope variants (SBXW_SCOPE_VARIANT = 1, 2 or 3).
+local function sc_hex(h)
+  h = tostring(h or "000000000")
+  return tonumber(string.sub(h, 2, 3), 16) or 0, tonumber(string.sub(h, 4, 5), 16) or 0, tonumber(string.sub(h, 6, 7), 16) or 0
+end
+scope_mix = function(a, t, b)
+  local r1, g1, b1 = sc_hex(a)
+  local r2, g2, b2 = sc_hex(b)
+  local f = function(x, y) return math.floor(x * t + y * (1 - t) + 0.5) end
+  return string.format(string.char(35) .. "%02x%02x%02x", f(r1, r2), f(g1, g2), f(b1, b2))
+end
+local function sc_tone(st)
+  if st == "running" then return "green" elseif st == "stopped" then return "neutral" elseif st == "failed" then return "red" end
+  return "blue"
+end
+local function sc_group(sb)
+  if not sb then return "" end
+  if sb.chat then return "Chats" end
+  local ws = sb.workspace or ""
+  return string.match(ws, "([^/]+)/*$") or ws
+end
+scope_info = function(data, name)
+  for _, s in ipairs((data or {}).sandboxes or {}) do if s.name == name then return s end end
+  return nil
+end
+scope_look = function(data, name)
+  local groups = ((data or {}).app or {}).groups or {}
+  local g = name and groups[name]
+  if not g then return nil end
+  local bg = theme.color.bg
+  return { color = g, fill = scope_mix(g, 0.22, bg), border = scope_mix(g, 0.60, bg), wash = scope_mix(g, 0.10, bg), strip = g }
+end
+-- The capsule. o: id, value ("" for all), all (label or nil), on (toggle action), open, prefix ("in")
+scope_capsule = function(data, o)
+  local v = o.value or ""
+  local sb = v ~= "" and scope_info(data, v) or nil
+  local look = v ~= "" and scope_look(data, v) or nil
+  local kids = { key = o.id, on = o.toggle or "scope_toggle", h = 28, px = 8, gap = 8, radius = "pill",
+    fill = look and look.fill or "surface", border = o.open and "accent" or (look and look.border or "control-border"),
+    help = (not o.open) and (v ~= "" and (v .. ": pick another sandbox") or "Every sandbox: pick one") or nil, max_w = o.max_w or 280 }
+  if v == "" then
+    kids[#kids + 1] = icon{ "grid", size = 14, color = "text-muted" }
+    kids[#kids + 1] = text{ o.all or "All sandboxes", size = "md", weight = "medium", color = "text-bright", truncate = true }
+  else
+    kids[#kids + 1] = dot{ tone = sc_tone(sb and sb.status) }
+    kids[#kids + 1] = text{ v, size = "md", weight = "medium", color = "text-bright", truncate = true }
+  end
+  kids[#kids + 1] = icon{ "chevron-down", size = 12, color = "text-muted" }
+  return row(kids)
+end
+-- V3: the scope bar's first element.
+scope_block = function(data, o)
+  local v = o.value or ""
+  local sb = v ~= "" and scope_info(data, v) or nil
+  local look = v ~= "" and scope_look(data, v) or nil
+  local initial = v ~= "" and string.upper(string.sub(v, 1, 1)) or ""
+  local sub = v ~= "" and ((sb and sb.status or "") .. "  ·  " .. sc_group(sb) .. (o.narrow and ("  ·  " .. o.narrow) or "")) or "every sandbox, newest first"
+  return row{ key = o.id, on = o.toggle or "scope_toggle", gap = 10, px = 6, py = 4, radius = "md", hover = "hover-subtle",
+    fill = look and look.wash or nil, border = o.open and "accent" or (look and look.border or "control-border"), max_w = 360,
+    help = (not o.open) and (v ~= "" and (v .. ": pick another sandbox") or "Every sandbox: pick one") or nil,
+    column{ w = 36, h = 36, radius = "sm", fill = look and look.color or "surface", border = look and nil or "control-border", align = "center", justify = "center",
+      v ~= "" and text{ initial, size = "lg", weight = "bold", color = "floor" } or icon{ "grid", size = 20, color = "text-muted" } },
+    column{ gap = 2, min_w = 0,
+      row{ gap = 6, v ~= "" and dot{ tone = sc_tone(sb and sb.status) } or false, text{ v ~= "" and v or (o.all or "All sandboxes"), size = "lg", weight = "semibold", color = "text-bright", truncate = true }, icon{ "chevron-down", size = 12, color = "text-muted" } },
+      text{ sub, size = "xs", color = "text-muted", truncate = true } } }
+end
+-- The open list. o: value, all, pick (action), left, filter (text), w
+scope_menu = function(data, o)
+  if not o.open then return false end
+  local v = o.value or ""
+  local groups = ((data or {}).app or {}).groups or {}
+  local looks = ((data or {}).app or {}).group_look or {}
+  local list = { gap = 2, w = "full" }
+  if o.all then
+    list[#list + 1] = row{ key = "scope-row-all", on = o.pick, arg = "", gap = 8, px = 8, h = 32, w = "full", radius = "xs", hover = "hover-subtle", fill = v == "" and "active-bg" or nil,
+      icon{ "grid", size = 14, color = "text-muted" }, text{ o.all, size = "sm", weight = "medium", color = "text-bright", grow = 1 },
+      text{ "no filter", size = "xs", color = "text-dim" }, v == "" and icon{ "check", size = 12, color = "accent" } or false }
+  end
+  -- Grouped by workspace.
+  local order, by = {}, {}
+  local n = 0
+  for _, s in ipairs((data or {}).sandboxes or {}) do
+    local okf = not o.filter or o.filter == "" or string.find(string.lower(s.name), string.lower(o.filter), 1, true)
+    if okf then
+      local gname = sc_group(s)
+      if not by[gname] then by[gname] = {}; order[#order + 1] = gname end
+      table.insert(by[gname], s); n = n + 1
+    end
+  end
+  for _, gname in ipairs(order) do
+    local first = by[gname][1]
+    local gc = groups[first.name]
+    local lk = gc and looks[gc] or {}
+    list[#list + 1] = row{ gap = 6, px = 8, h = 22, w = "full", radius = "xs", fill = lk.tint,
+      column{ w = 8, h = 8, radius = 2, fill = gc or "text-dim" },
+      text{ gname, size = "xs", weight = "semibold", color = lk.label or "text-muted", truncate = true } }
+    for _, s in ipairs(by[gname]) do
+      local cur = s.name == v
+      list[#list + 1] = row{ key = "scope-row-" .. s.name, on = o.pick, arg = s.name, gap = 8, px = 8, h = 32, w = "full", radius = "xs", hover = "hover-subtle",
+        fill = cur and "active-bg" or nil, help = s.name,
+        column{ w = 3, h = 18, radius = 2, fill = gc or "text-dim" },
+        dot{ tone = sc_tone(s.status) },
+        text{ s.name, size = "sm", weight = "medium", color = "text-bright", truncate = true, grow = 1 },
+        text{ s.status or "", size = "xs", color = "text-muted", w = 56 },
+        text{ s.agent or "", size = "xs", mono = true, color = "text-dim", w = 48 },
+        cur and icon{ "check", size = 12, color = "accent" } or column{ w = 12 } }
+    end
+  end
+  local ow = (((data or {}).app or {}).overlay or {}).w or 1000
+  local mw = math.min(o.w or 340, ow - 24)
+  local left = math.max(0, math.min(o.left or 0, ow - 24 - mw))
+  local kids = { pin = { left = left, top = o.top or 0 }, w = mw, key = "scope-menu", fill = "surface", border = "elevated", radius = "md", pad = 6, gap = 6 }
+  if o.show_filter then
+    kids[#kids + 1] = input{ id = "scope-filter", value = o.filter or "", placeholder = "Filter sandboxes", on = "scope_filter" }
+  end
+  kids[#kids + 1] = column(list)
+  return column(kids)
+end
 -- An overlay over the pane area wide enough for two columns (760 pt and
 -- more, data.app.overlay.w; a screen drawn alone counts as wide).
 overlay_wide = function(data)

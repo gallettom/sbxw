@@ -395,7 +395,7 @@ local function preview(ui, narrow)
   }
 end
 
-return {
+local M = {
   init = function()
     -- Narrow (the overlay under 760 pt): the tree or the reader, one at a time.
     return { pane = "tree" }
@@ -427,11 +427,28 @@ return {
     local three = (over.w or 1000) >= 900
     -- The sandbox picker beside the overlay's title ("Files  [web-app v]"):
     -- the core's header draws this row (screen.rs, TITLE_SLOT).
+    local V = (data.app or {}).scope_variant or ""
+    local thread
+    for _, w in ipairs(ui.worktrees or {}) do if w.here then thread = w.thread end end
+    local offline = ui.offline and badge{ "stopped: workspace only", tone = "amber", help = "Read from this computer; the sandbox is not started to list a folder" } or false
+    if V == "" then
     top[#top + 1] = row{ key = "title-slot", gap = 8,
       sandbox_picker(data, { id = "files-sandbox", value = ui.sandbox, items = ui.sandboxes or {}, on = "sandbox" }),
       button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", dense = true, help = "Read the lists again" },
-      ui.offline and badge{ "stopped: workspace only", tone = "amber", help = "Read from this computer; the sandbox is not started to list a folder" } or false,
+      offline,
     }
+    elseif V == "3" then
+      table.insert(top, 1, row{ gap = 12, w = "full", key = "scope-bar",
+        scope_block(data, { id = "files-sandbox", value = ui.sandbox, open = state.scope_open, narrow = thread and ("thread " .. thread) }),
+        offline, spacer{},
+        button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", dense = true, help = "Read the lists again" } })
+    else
+      top[#top + 1] = row{ key = "title-slot", gap = 6,
+        text{ "in", size = "lg", color = "text-muted" },
+        scope_capsule(data, { id = "files-sandbox", value = ui.sandbox, open = state.scope_open }),
+        thread and row{ gap = 4, icon{ "chevron-right", size = 12, color = "text-muted" }, icon{ "branch", size = 12, color = "text-muted" }, text{ thread, size = "sm", color = "text-bright", truncate = true, max_w = 160 } } or false,
+        offline }
+    end
     local list_head = nz(ui.artifacts_dir) and ui.tab == "artifacts" and text{ ui.artifacts_dir, size = "xs", color = "text-dim", mono = true, truncate = true, help = ui.artifacts_dir } or false
     if narrow then
       if state.pane == "reader" and ui.selected then
@@ -519,6 +536,20 @@ return {
     link = function(_, _, url) return intent("files_link", { url = url }) end,
     worktree = function(_, a) return intent("files_open", { sandbox = a.sandbox, worktree = a.thread }) end,
     sandbox = function(_, _, id) if id and id ~= "" then return intent("files_open", { sandbox = id }) end end,
+    scope_toggle = function(state) state.scope_open = not state.scope_open end,
+    scope_filter = function(state, _, t) state.scope_filter = t end,
+    scope_pick = function(state, id) state.scope_open = false; if id and id ~= "" then return intent("files_open", { sandbox = id }) end end,
     outline = function(_, i) if i ~= nil then return intent("files_outline", { index = i }) end return intent("files_outline", {}) end,
   },
 }
+-- STAGE1 THROWAWAY: the scope list on top of everything.
+local inner = M.render
+M.render = function(state, data)
+  local r = inner(state, data)
+  local V = (data.app or {}).scope_variant or ""
+  local ui = data.files_ui or {}
+  if V == "" or not state.scope_open then return r end
+  return column{ h = "full", w = "full", r,
+    scope_menu(data, { open = true, value = ui.sandbox, all = nil, pick = "scope_pick", left = V == "3" and 0 or 68, top = V == "3" and 50 or 0, filter = state.scope_filter, show_filter = #(data.sandboxes or {}) > ((data.app or {}).scope_filter_min or 8) }) }
+end
+return M

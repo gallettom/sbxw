@@ -852,6 +852,7 @@ pub fn view_slot<S: Host>(s: &ScreenState) -> (El, Vec<El>, Option<El>) {
 /// The screen's view; with `slot`, its [`TITLE_SLOT`] row apart (else in place).
 fn build_view<S: Host>(s: &ScreenState, slot: bool) -> (El, Vec<El>, Option<El>) {
     let name: Rc<str> = s.name.as_str().into();
+    if slot { SLOT_LOOK.with(|l| l.set(None)); } // STAGE1 THROWAWAY
     let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![], slot: None, take_slot: slot, nav: HashMap::new() };
     // The top bar is one line: what the core adds goes beside it, not under it.
     let mut panel = if s.name == "topbar" { row().items_center() } else { col() }.key(format!("screen-{}", s.name)).w_full().h_full().min_h(0.0).gap(8.0);
@@ -1029,6 +1030,7 @@ impl ScreenState {
 /// right after the overlay's title (a sandbox picker beside "Files"), not
 /// where it sits in the screen's tree.
 pub const TITLE_SLOT: &str = "title-slot";
+thread_local! { pub static SLOT_LOOK: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) }; } // STAGE1 THROWAWAY
 
 struct Build<'a> {
     name: Rc<str>,
@@ -1272,6 +1274,11 @@ impl Build<'_> {
                 }
                 for k in n.children.iter() {
                     if self.take_slot && k.key.as_deref() == Some(TITLE_SLOT) && self.slot.is_none() {
+                        // STAGE1 THROWAWAY: the capsule's border, for V2's frame.
+                        let cb = theme::color_value("control-border");
+                        let ac = theme::color_value("accent");
+                        let surf = theme::color_value("surface");
+                        SLOT_LOOK.with(|l| l.set(k.children.iter().find_map(|x| x.style.border.filter(|b| x.style.fill.is_some() && x.style.fill != surf && Some(*b) != cb && Some(*b) != ac))));
                         self.slot = Some(self.node::<S>(k));
                         continue;
                     }
