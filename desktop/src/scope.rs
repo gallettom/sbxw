@@ -387,7 +387,7 @@ pub struct ListCtx<S> {
 }
 
 /// The key of a choice's row: `<select key>-<sandbox>`, and `<key>-` for All
-/// (as the core's select rows, `<id>-<item>`, which `wait:` marks know).
+/// (as the core's select rows, `<id>-<item>`). A script waits on `<id>-list`, then taps a row.
 pub fn row_key(key: &str, c: &Choice) -> String {
     format!("{key}-{}", c.id)
 }

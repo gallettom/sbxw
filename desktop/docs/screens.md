@@ -535,7 +535,7 @@ row{ key = "title-slot", gap = 8,
 - **Open**: the list under the capsule (`<id>-list`, 300 to 420 pt, never
   wider than the window): All first, then each group under a heading in
   the sidebar's tint and label colour, a row per sandbox (`<id>-<name>`,
-  All `<id>-`): the group's bar, status, name, open sessions, state,
+  All `<id>-`; a script's `wait:` knows `<id>-list`, then taps a row): the group's bar, status, name, open sessions, state,
   agent, a check on the current one. Above 8 sandboxes a filter field
   (`<id>-filter`) that matches names and group names. The keyboard starts
   in the field, else on the current row; Up and Down move, Enter picks
