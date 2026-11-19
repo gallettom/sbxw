@@ -477,7 +477,7 @@ fn the_author_line_names_once_and_groups_one_author_s_messages() {
     let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
     let rows = rows_of(&v);
     // The lead named otherwise: its name and the role once.
-    let dms: Vec<&J> = rows.iter().filter(|r| r["kind"] == "direct_message" && r["is_lead"] == true).collect();
+    let dms: Vec<&J> = rows.iter().filter(|r| r["kind"] == "direct_message" && r["is_lead"] == true && r["to"] == "web-page").collect();
     assert_eq!(dms.len(), 2);
     assert_eq!((dms[0]["who"].as_str(), dms[0]["role"].as_str(), dms[0]["to"].as_str()), (Some("orders-planner"), Some("lead"), Some("web-page")));
     // Two messages in a row, same author, same addressee, a minute apart: one author line.

@@ -1849,7 +1849,10 @@ the role chip "lead" only when the name does not already say it, "to" the
 addressee ("the team", "you", a thread, the lead's name), the time; the
 person's on the right with "You". The same author to the same addressee
 within 5 minutes shares one author line, the bubbles stacked under it. A
-bubble hugs its content up to 520 pt (about 72 characters of prose) and holds
+bubble hugs its content up to a width that follows the conversation column
+(62 percent of it, at least 520 pt, at most 720 pt, about 112 characters of
+prose; under 760 pt, one column, 520 pt: `model::bubble_max`, mirrored in
+`board.luau`; cards, notes and tinted reports share it) and holds
 only the content: a small quiet kind line ("direct message", "Decision team
 note", a state chip with "status report"), the words (prose face, pills),
 Show more. A run of more than 32 characters without a space gets a break
@@ -1867,8 +1870,8 @@ round of questions with each answer marked; a team note (`team_note`) as a
 note labelled Info, Warning or Decision with "team note"; a direct message
 (the agents' own `SendMessage`, as sbxw's hook saw it) as a bubble labelled
 "direct message"; a thread's consecutive commits one row ("api-routes made
-4 commits") that opens. Long texts fold (Show
-more); day separators; relative times, the exact UTC time in the tooltip.
+4 commits") that opens. A text drawn on more than 8 lines at the bubble's width folds (Show more,
+6 lines shown: `model::FOLD_DRAWN`); on a wide window a few lines are not folded; day separators; relative times, the exact UTC time in the tooltip.
 A filter row (All, Decisions and warnings, Questions, Messages, Commits, Status), a
 thread and words, applied by the daemon before paging. From 760 pt a side
 column: **Team** (the lead, each thread with its state, worktree and model;
