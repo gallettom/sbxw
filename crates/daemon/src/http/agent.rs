@@ -214,7 +214,7 @@ struct ProposeBody {
 async fn propose(State(app): S, Agent(me): Agent, Json(b): Json<ProposeBody>) -> ApiResult {
     let plan = app.plan_propose(&me, &b.summary, b.threads, b.variant, &b.justification, b.lead.as_deref()).await?;
     let plan = app.plan_wait(&plan.id, &me, wait_bound(b.timeout)).await?;
-    Ok(ok_with(json!({ "plan": app.plan_view(&plan) })))
+    Ok(ok_with(json!({ "plan": app.plan_view(&plan), "ticket_notes": app.ticket_link_notes(&plan) })))
 }
 
 #[derive(Deserialize)]
@@ -227,7 +227,7 @@ struct PlanIdBody {
 async fn plan_wait(State(app): S, Agent(me): Agent, Json(b): Json<PlanIdBody>) -> ApiResult {
     app.plan_led(&b.id, &me)?;
     let plan = app.plan_wait(&b.id, &me, wait_bound(b.timeout)).await?;
-    Ok(ok_with(json!({ "plan": app.plan_view(&plan) })))
+    Ok(ok_with(json!({ "plan": app.plan_view(&plan), "ticket_notes": app.ticket_link_notes(&plan) })))
 }
 
 async fn plan_status(State(app): S, Agent(me): Agent, Json(b): Json<PlanIdBody>) -> ApiResult {

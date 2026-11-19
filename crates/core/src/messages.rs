@@ -297,6 +297,7 @@ pub fn thread_briefing(plan: &Plan, t: &PlanThread) -> String {
          session in this sandbox, which split the work and will review it.\n\n\
          Whole plan: {summary}\n\n\
          Your goal: {goal}\n\n\
+         {ticket}\
          Your scope (the files or areas you own): {scope}\n\n\
          Rules:\n\
          {worktree}\n\
@@ -309,6 +310,7 @@ pub fn thread_briefing(plan: &Plan, t: &PlanThread) -> String {
         name = t.name,
         summary = if plan.summary.is_empty() { "(none given)" } else { &plan.summary },
         goal = t.goal,
+        ticket = t.ticket.map(|n| format!("Your ticket: {}. Read it with the ticket_read tool: it is the person's request for this work.\n\n", crate::tickets::num(n))).unwrap_or_default(),
     )
 }
 
@@ -500,6 +502,16 @@ mod tests {
         let b = thread_briefing(&shared, &t);
         assert!(b.contains("branch sbxw/team-p") && b.contains("git commit -- <paths>"));
         assert!(!b.contains("your own git worktree"));
+    }
+
+    #[test]
+    fn a_briefing_names_the_thread_s_ticket_when_it_has_one() {
+        let (p, t) = plan(Some("lead-7"));
+        assert!(!thread_briefing(&p, &t).contains("Your ticket"));
+        let t = PlanThread { ticket: Some(12), ..t };
+        let b = thread_briefing(&p, &t);
+        assert!(b.contains("Your goal: build it\n\nYour ticket: T-12. Read it with the ticket_read tool: it is the person's request for this work.\n\nYour scope"), "{b}");
+        assert!(b.len() < 3000, "{}", b.len());
     }
 
     #[test]

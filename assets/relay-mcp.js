@@ -754,6 +754,7 @@ function planText(res) {
   } else {
     lines.push(`Plan ${p.id} is approved${p.summary ? `: ${p.summary}` : "."}`);
   }
+  for (const n of res.ticket_notes || []) lines.push(`Note: ${n}.`);
   for (const t of p.threads || []) {
     const run = p.state === "approved" ? (t.running ? ", session running" : ", session not running") : "";
     lines.push("");
@@ -762,6 +763,7 @@ function planText(res) {
     if (t.scope) lines.push(`  scope: ${t.scope}`);
     if (t.repo !== undefined && t.repo !== null) lines.push(`  repo: ${t.repo || "(the workspace)"}`);
     if (t.model) lines.push(`  model: ${t.model}`);
+    if (t.ticket) lines.push(`  ticket: T-${t.ticket}`);
     if (t.summary && t.set_by === "lead") {
       lines.push(`  marked done by the lead: ${t.summary}`);
     } else if (t.summary && t.set_by === "sbxw") {

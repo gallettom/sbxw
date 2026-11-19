@@ -723,15 +723,21 @@ impl Book {
     /// Follows the plans: links a ticket to the thread a plan names for it,
     /// records where each linked thread stands, unlinks a refused plan's.
     /// Returns whether anything changed.
-    pub fn follow(&mut self, plan: &Plan, now: u64) -> bool {
+    /// `busy`: whether a link's thread is still at work in its plan (see
+    /// [`busy_in`]); a ticket whose thread works is never taken over.
+    pub fn follow(&mut self, plan: &Plan, now: u64, busy: &dyn Fn(&Link) -> bool) -> bool {
         let mut changed = false;
         for th in &plan.threads {
             let Some(n) = th.ticket else { continue };
             let Ok(t) = self.get_mut(n) else { continue };
+            if t.source != Source::Person {
+                continue;
+            }
             let link = Link { plan: plan.id.clone(), thread: th.name.clone() };
             if t.link.as_ref() != Some(&link) {
-                // A newer plan takes a ticket over; a refused one does not.
-                if plan.state == PlanState::Refused {
+                // A newer plan takes a ticket over only from a plan refused,
+                // failed or merged (or gone); a refused one never.
+                if plan.state == PlanState::Refused || t.link.as_ref().is_some_and(|l| busy(l)) {
                     continue;
                 }
                 t.link = Some(link);
@@ -759,6 +765,24 @@ impl Book {
             }
         }
         changed
+    }
+
+    /// What a proposal's links come to, one line each for the lead: a ticket
+    /// that does not exist, or one a thread of another plan still works on.
+    pub fn link_notes(&self, plan: &Plan, busy: &dyn Fn(&Link) -> bool) -> Vec<String> {
+        let mut out = vec![];
+        for th in &plan.threads {
+            let Some(n) = th.ticket else { continue };
+            match self.get(n).filter(|t| t.source == Source::Person) {
+                None => out.push(format!("ticket {} is not a ticket of this sandbox: thread {} is not linked", num(n), th.name)),
+                Some(t) => {
+                    if let Some(l) = t.link.as_ref().filter(|l| l.plan != plan.id && busy(l)) {
+                        out.push(format!("ticket {} is worked on by thread {} of a running plan: thread {} is not linked", num(n), l.thread, th.name));
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// A merged thread with no ticket is recorded (Q4), so Merged keeps it
@@ -791,6 +815,15 @@ impl Book {
         }
         changed
     }
+}
+
+/// Whether `l`'s thread still works in its plan (among `plans`): its plan
+/// is approved and kept, the thread neither failed nor merged.
+pub fn busy_in(plans: &[Plan], l: &Link) -> bool {
+    plans.iter().find(|p| p.id == l.plan).filter(|p| p.state == PlanState::Approved).and_then(|p| p.threads.iter().find(|t| t.name == l.thread).map(|t| (p, t))).is_some_and(|(p, t)| {
+        let (c, _) = column_of(p, t);
+        t.state != ThreadState::Failed && c != Column::Merged
+    })
 }
 
 /// A thread's card title when it has no ticket: its name and its goal's

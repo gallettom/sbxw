@@ -111,15 +111,17 @@ test('tickets_list and ticket_read read through the agent routes and name no san
 });
 
 test('the ticket tools are read only, and propose_plan carries a thread\'s ticket', async () => {
-  const d = await fakeDaemon(() => [200, { ok: true, id: 'p-1', state: 'pending' }]);
+  const d = await fakeDaemon(() => [200, { ok: true, plan: { id: 'p-1', state: 'pending', threads: [{ name: 'pages', goal: 'g', ticket: 12 }] }, ticket_notes: ['ticket T-99 is not a ticket of this sandbox: thread ghost is not linked'] }]);
   const home = sandbox(d.port);
   const names = (await tools(home)).map((t) => t.name);
   assert.ok(names.includes('tickets_list') && names.includes('ticket_read'));
   assert.ok(!names.some((n) => /ticket/.test(n) && /(create|edit|move|delete|write)/.test(n)), names.join(','));
   const plan = (await tools(home)).find((t) => t.name === 'propose_plan');
   assert.ok(plan.inputSchema.properties.threads.items.properties.ticket);
-  await call(home, 'propose_plan', { summary: 's', justification: 'j', threads: [{ name: 'pages', goal: 'g', scope: 's', ticket: 'T-12' }], timeout_seconds: 1 });
+  const r = await call(home, 'propose_plan', { summary: 's', justification: 'j', threads: [{ name: 'pages', goal: 'g', scope: 's', ticket: 'T-12' }], timeout_seconds: 1 });
   const p = d.seen.find((s) => s.path === '/api/plans/propose');
   assert.equal(p.body.threads[0].ticket, 'T-12');
+  assert.match(r.content[0].text, /Note: ticket T-99 is not a ticket of this sandbox: thread ghost is not linked\./);
+  assert.match(r.content[0].text, /ticket: T-12/);
   d.server.close();
 });

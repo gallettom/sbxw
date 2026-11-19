@@ -29,7 +29,6 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 
 /// The books, each read from disk the first time its sandbox is asked for.
@@ -103,8 +102,9 @@ impl App {
             let plans = self.plans.lock().unwrap().of(sb);
             let now = now_ms();
             let mut changed = false;
+            let busy = |l: &tickets::Link| tickets::busy_in(&plans, l);
             for p in &plans {
-                changed |= b.follow(p, now);
+                changed |= b.follow(p, now, &busy);
                 changed |= b.record_threads(p, now);
             }
             if changed {
@@ -339,7 +339,7 @@ impl App {
                 Sent::Typed
             }
             team::Delivery::Hold => {
-                self.ticket_hold_line(sb.clone(), line);
+                self.hold_note_line(sb.clone(), team::LEAD.to_string(), line);
                 Sent::Held
             }
         };
@@ -351,38 +351,6 @@ impl App {
         });
         tracing::info!("tickets: {} sent to the lead of {s} ({sent:?})", tickets::num(n));
         Ok(sent)
-    }
-
-    /// The line waits while the lead waits on a question or a prompt (the
-    /// team note's rule, `note_targets`), and is typed once it is idle or at
-    /// work again; dropped if the session ends, or after 30 minutes.
-    fn ticket_hold_line(self: &Arc<Self>, sb: SandboxRef, line: String) {
-        let app = self.clone();
-        tokio::spawn(async move {
-            let mut rx = app.bus.subscribe();
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(30 * 60);
-            let who = vec![team::LEAD.to_string()];
-            loop {
-                let d = app.note_targets(&sb, &who, |k| app.sessions.is_live(k)).into_iter().next().map(|(_, d)| d).unwrap_or(team::Delivery::Drop);
-                match d {
-                    team::Delivery::Type => {
-                        app.spawn_push(sb.clone(), sbxw_core::session::SessionKind::Agent, line.clone(), None);
-                        return;
-                    }
-                    team::Delivery::Drop => return,
-                    team::Delivery::Hold => {}
-                }
-                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-                if left.is_zero() {
-                    return;
-                }
-                match tokio::time::timeout(left, rx.recv()).await {
-                    Ok(Ok(Event::Session(i))) if i.sandbox == sb.to_string() => {}
-                    Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
-                    _ => return,
-                }
-            }
-        });
     }
 
     // ── The plans ────────────────────────────────────────────────────────
@@ -413,9 +381,11 @@ impl App {
             return;
         }
         let now = now_ms();
+        let plans = self.plans_of(Some(&p.sandbox));
+        let busy = |l: &tickets::Link| tickets::busy_in(&plans, l);
         let res = self.tickets_with(&p.sandbox, |b| {
             let mut next = b.clone();
-            let changed = next.follow(p, now) | next.record_threads(p, now);
+            let changed = next.follow(p, now, &busy) | next.record_threads(p, now);
             if changed {
                 self.tickets_save(&next)?;
                 *b = next;
@@ -426,6 +396,17 @@ impl App {
             Ok(_) => self.tickets_changed(&p.sandbox, None, "followed"),
             Err(e) => tracing::warn!("tickets of {}: could not follow plan {}: {e}", p.sandbox, p.id),
         }
+    }
+
+    /// For the lead's `propose_plan` and `check_plan` answer: each ticket the
+    /// plan names that will not be linked, and why.
+    pub fn ticket_link_notes(&self, p: &Plan) -> Vec<String> {
+        if p.threads.iter().all(|t| t.ticket.is_none()) {
+            return vec![];
+        }
+        let plans = self.plans_of(Some(&p.sandbox));
+        let busy = |l: &tickets::Link| tickets::busy_in(&plans, l);
+        self.tickets_with(&p.sandbox, |b| b.link_notes(p, &busy))
     }
 
     // ── Agents (the sandbox is the token's; read only) ────────────────────

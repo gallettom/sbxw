@@ -239,3 +239,30 @@ fn a_plan_with_no_ticket_makes_no_book() {
     // Its thread is still a card.
     assert_eq!(app.tickets_board(Some(&sb("web")), false).columns[0].cards[0].num, "thread");
 }
+
+#[test]
+fn the_lead_is_told_of_a_ticket_it_cannot_link_and_a_working_thread_keeps_its_own() {
+    let (_d, app) = app();
+    let me = sb("web");
+    let n = app.ticket_create(&me, draft("a")).unwrap()["n"].as_u64().unwrap() as u32;
+    let now = crate::app::now_ms();
+    app.plans.lock().unwrap().propose("p-1".into(), "web", "s", vec![th("first", Some(n))], Variant::Split, "why", None, now).unwrap();
+    let p1 = app.plans.lock().unwrap().approve("p-1", vec![th("first", Some(n))], None, None, now).unwrap();
+    app.tickets_follow(&p1);
+    assert!(app.ticket_link_notes(&p1).is_empty());
+    let p2 = app.plans.lock().unwrap().propose("p-2".into(), "web", "s", vec![th("second", Some(n)), th("ghost", Some(99)), th("plain", None)], Variant::Split, "why", None, now + 1).unwrap();
+    app.tickets_follow(&p2);
+    assert_eq!(
+        app.ticket_link_notes(&p2),
+        vec![
+            "ticket T-1 is worked on by thread first of a running plan: thread second is not linked".to_string(),
+            "ticket T-99 is not a ticket of this sandbox: thread ghost is not linked".to_string()
+        ]
+    );
+    assert_eq!(app.ticket_view(&me, n).unwrap()["link"]["thread"], "first");
+    // The first thread failed: the second plan may take the ticket.
+    let p1 = app.plans.lock().unwrap().set_thread("web", "first", ThreadState::Failed, "", true, now + 2).unwrap();
+    app.tickets_follow(&p1);
+    app.tickets_follow(&p2);
+    assert_eq!(app.ticket_view(&me, n).unwrap()["link"]["thread"], "second");
+}

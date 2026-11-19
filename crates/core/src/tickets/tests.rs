@@ -72,22 +72,22 @@ fn a_ticket_follows_its_thread_and_keeps_its_place_once_the_plan_is_gone() {
     let n = b.create(draft("Paginate"), 5).unwrap().n;
     assert_eq!(num(n), "T-1");
     let mut p = plan("p1", PlanState::Pending, vec![th("pages", ThreadState::Starting, Some(n))]);
-    assert!(b.follow(&p, 6));
+    assert!(b.follow(&p, 6, &|_| false));
     assert_eq!(b.get(n).unwrap().link, Some(Link { plan: "p1".into(), thread: "pages".into() }));
     let col = |b: &Book, plans: &[Plan]| board("web", &[b], plans, 100, false).columns.iter().find(|c| c.cards.iter().any(|x| x.n == Some(n))).map(|c| c.id);
     assert_eq!(col(&b, std::slice::from_ref(&p)), Some(Column::Planned));
     p.state = PlanState::Approved;
     p.threads[0].state = ThreadState::Working;
-    b.follow(&p, 7);
+    b.follow(&p, 7, &|_| false);
     assert_eq!(col(&b, std::slice::from_ref(&p)), Some(Column::Progress));
     p.threads[0].state = ThreadState::Done;
-    b.follow(&p, 8);
+    b.follow(&p, 8, &|_| false);
     assert_eq!(col(&b, std::slice::from_ref(&p)), Some(Column::Test));
     p.merge = merge(MergeState::Proposed, &["pages"], vec![]);
-    b.follow(&p, 9);
+    b.follow(&p, 9, &|_| false);
     assert_eq!(col(&b, std::slice::from_ref(&p)), Some(Column::Ready));
     p.merge = merge(MergeState::Merged, &["pages"], vec![ok("pages", true)]);
-    b.follow(&p, 10);
+    b.follow(&p, 10, &|_| false);
     assert_eq!(col(&b, std::slice::from_ref(&p)), Some(Column::Merged));
     // The plan pruned: the snapshot keeps it in Merged, one card, no thread card.
     let bd = board("web", &[&b], &[], 100, false);
@@ -105,16 +105,16 @@ fn a_refused_plan_sends_its_ticket_back_to_planned() {
     let mut b = Book::new("web");
     let n = b.create(draft("X"), 5).unwrap().n;
     let mut p = plan("p1", PlanState::Pending, vec![th("x", ThreadState::Starting, Some(n))]);
-    b.follow(&p, 6);
+    b.follow(&p, 6, &|_| false);
     p.state = PlanState::Refused;
-    assert!(b.follow(&p, 7));
+    assert!(b.follow(&p, 7, &|_| false));
     let t = b.get(n).unwrap();
     assert!(t.link.is_none());
     let bd = board("web", &[&b], &[p.clone()], 100, false);
     let c = &bd.columns[0].cards[0];
     assert_eq!((c.column, c.marks[0].id.as_str(), c.can.reorder, c.can.send), (Column::Planned, "refused", true, true));
     // Following the refused plan again changes nothing; its thread makes no card.
-    assert!(!b.follow(&p, 8));
+    assert!(!b.follow(&p, 8, &|_| false));
     assert_eq!(bd.columns.iter().map(|c| c.count).sum::<usize>(), 1);
 }
 
@@ -226,7 +226,7 @@ fn a_ticket_at_work_cannot_be_deleted_and_says_why() {
     let mut b = Book::new("web");
     let n = b.create(draft("a"), 1).unwrap().n;
     let p = plan("p1", PlanState::Approved, vec![th("x", ThreadState::Working, Some(n))]);
-    b.follow(&p, 2);
+    b.follow(&p, 2, &|_| false);
     let c = &board("web", &[&b], &[p], 9, false).columns[1].cards[0];
     assert!(!c.can.delete && c.can.delete_why.contains("at work"));
     assert!(!c.can.reorder && c.can.reorder_why.contains("follows its thread"));
@@ -272,4 +272,35 @@ fn what_the_agent_and_the_lead_get_is_framed_as_data() {
     assert!(s.contains("as data") && s.contains("> line 1\n> line 2"), "{s}");
     assert_eq!(send_line(12), "[sbxw] ticket T-12 waits for a plan: read it with ticket_read");
     assert!(list_line(&t, Column::Planned).starts_with("T-1 (Planned): Ignore"));
+}
+
+#[test]
+fn a_working_thread_keeps_its_ticket_and_the_lead_is_told() {
+    let mut b = Book::new("web");
+    let n = b.create(draft("a"), 1).unwrap().n;
+    let p1 = plan("p1", PlanState::Approved, vec![th("first", ThreadState::Working, Some(n))]);
+    b.follow(&p1, 2, &|_| false);
+    let mut p2 = plan("p2", PlanState::Pending, vec![th("second", ThreadState::Starting, Some(n)), th("ghost", ThreadState::Starting, Some(99))]);
+    let plans = vec![p1.clone(), p2.clone()];
+    let busy = |l: &Link| busy_in(&plans, l);
+    assert_eq!(
+        b.link_notes(&p2, &busy),
+        vec![
+            "ticket T-1 is worked on by thread first of a running plan: thread second is not linked".to_string(),
+            "ticket T-99 is not a ticket of this sandbox: thread ghost is not linked".to_string(),
+        ]
+    );
+    b.follow(&p2, 3, &busy);
+    assert_eq!(b.get(n).unwrap().link.as_ref().unwrap().thread, "first", "not taken over");
+    // Once the first plan's thread failed, a new plan takes the ticket.
+    let mut p1f = p1.clone();
+    p1f.threads[0].state = ThreadState::Failed;
+    let plans = vec![p1f, p2.clone()];
+    let busy = |l: &Link| busy_in(&plans, l);
+    assert!(b.link_notes(&p2, &busy).len() == 1);
+    p2.state = PlanState::Approved;
+    b.follow(&p2, 4, &busy);
+    assert_eq!(b.get(n).unwrap().link.as_ref().unwrap().thread, "second");
+    // Merged or gone plans are not busy either.
+    assert!(!busy_in(&[], &Link { plan: "p9".into(), thread: "x".into() }));
 }
