@@ -50,15 +50,21 @@ fn keys(v: &J) -> Vec<String> {
     v["rows"].as_array().unwrap().iter().map(|r| r["key"].as_str().unwrap().to_string()).collect()
 }
 
-/// Anything that would reach an agent: a daemon call, a dialog, a pick.
+/// The actions without Sessions' history reads and its subscription's delete
+/// (they reach the daemon's history store, never an agent).
+fn no_hist(acts: Vec<Action>) -> Vec<Action> {
+    acts.into_iter().filter(|a| !matches!(a, Action::Call(c) if c.tag.starts_with("hist:"))).collect()
+}
+
+/// Anything that would reach an agent: a daemon call (not a history read), a dialog, a pick.
 fn sends(acts: &[Action]) -> bool {
-    acts.iter().any(|a| matches!(a, Action::Call(_) | Action::Confirm(_) | Action::Prepare(_)) || matches!(a, Action::Intent { name, .. } if name == "agent_pick" || name == "approve_proposal"))
+    acts.iter().any(|a| matches!(a, Action::Call(c) if !c.tag.starts_with("hist:")) || matches!(a, Action::Confirm(_) | Action::Prepare(_)) || matches!(a, Action::Intent { name, .. } if name == "agent_pick" || name == "approve_proposal"))
 }
 
 fn host() -> LuauHost {
     let mut h = LuauHost::new(Limits::default()).unwrap();
     // The rows built so far, drawn as a last text the test reads.
-    let src = SRC.replace("return screen\n", "local r = screen.render\nscreen.render = function(s, d) return column{ r(s, d), text{ \"built \" .. built, key = \"test-built\" } } end\nreturn screen\n");
+    let src = SRC.replace("return screen\n", "local r = screen.render\nscreen.render = function(s, d) return column{ r(s, d), text{ \"built \" .. built, key = \"test-built\" }, text{ \"conv \" .. cbuilt, key = \"test-conv-built\" } } end\nreturn screen\n");
     h.load("monitor", &src).unwrap();
     h
 }
@@ -141,11 +147,11 @@ fn an_event_changes_one_card_and_the_screen_builds_one_row_again() {
     walk(row, &mut all);
     assert!(all.iter().any(|x| x.text == "Edit guides/install.md"));
     // The same report again changes nothing, and hands no view over.
-    assert!(on_event(&Ctx { data: &d }, "session", &info).is_empty());
+    assert!(no_hist(on_event(&Ctx { data: &d }, "session", &info)).is_empty());
     // While the view is closed, the card changes but no view is pushed.
     d["app"]["overlay"] = J::Null;
     info["activity"] = "Edit guides/faq.md".into();
-    assert!(on_event(&Ctx { data: &d }, "session", &info).is_empty());
+    assert!(no_hist(on_event(&Ctx { data: &d }, "session", &info)).is_empty());
     assert_eq!(STATE().lock().unwrap().cards["docs-site:s-docs-main"].info["activity"], "Edit guides/faq.md");
 }
 
@@ -226,17 +232,17 @@ fn the_links_go_through_the_intents_that_own_them() {
     assert_eq!(run(&d, "monitor_commits", k.clone()).unwrap(), [i("commits_show", json!({ "sandbox": "shop-web", "branch": "sbxw/tax-rules" }))]);
     assert_eq!(run(&d, "monitor_files", k.clone()).unwrap(), [i("files_open", json!({ "sandbox": "shop-web", "worktree": "tax-rules" }))]);
     assert_eq!(run(&d, "monitor_worktrees", k.clone()).unwrap(), [i("worktrees_show", json!({})), i("worktrees_filter", json!({ "text": "tax-rules" }))]);
-    assert_eq!(run(&d, "monitor_terminal", k).unwrap(), [Action::ClosePanel("monitor".into()), i("thread_open", json!({ "sandbox": "shop-web", "name": "tax-rules" }))]);
+    assert_eq!(no_hist(run(&d, "monitor_terminal", k).unwrap()), [Action::ClosePanel("monitor".into()), i("thread_open", json!({ "sandbox": "shop-web", "name": "tax-rules" }))]);
     // The main session: the sandbox's own.
     let k = json!({ "key": "billing-api:s-bill-main" });
     assert_eq!(run(&d, "monitor_commits", k.clone()).unwrap(), [i("commits_show", json!({ "sandbox": "billing-api" }))]);
     assert_eq!(run(&d, "monitor_files", k.clone()).unwrap(), [i("files_open", json!({ "sandbox": "billing-api" }))]);
     assert_eq!(run(&d, "monitor_worktrees", k.clone()).unwrap(), [i("worktrees_show", json!({})), i("worktrees_filter", json!({ "text": "billing-api" }))]);
-    assert_eq!(run(&d, "monitor_terminal", k.clone()).unwrap(), [Action::ClosePanel("monitor".into()), i("open_terminal", json!({ "sandbox": "billing-api", "pane": "spare" }))]);
+    assert_eq!(no_hist(run(&d, "monitor_terminal", k.clone()).unwrap()), [Action::ClosePanel("monitor".into()), i("open_terminal", json!({ "sandbox": "billing-api", "pane": "spare" }))]);
     // Already in a pane: that pane's page and the keyboard, nothing opened again.
     d["app"]["panes"] = json!([{ "index": 1, "sandbox": "shop-web", "mode": "agent", "thread": null }, { "index": 2, "sandbox": "billing-api", "mode": "agent", "thread": null }]);
     d["app"]["pages"]["panes"] = json!([[1], [2]]);
-    assert_eq!(run(&d, "monitor_terminal", k).unwrap(), [Action::ClosePanel("monitor".into()), i("page_show", json!({ "page": 2 })), Action::Focus("grid-2".into())]);
+    assert_eq!(no_hist(run(&d, "monitor_terminal", k).unwrap()), [Action::ClosePanel("monitor".into()), i("page_show", json!({ "page": 2 })), Action::Focus("grid-2".into())]);
     // Every intent they hand on exists, with these arguments.
     for (n, a) in [("commits_show", json!({ "sandbox": "x", "branch": "sbxw/t" })), ("files_open", json!({ "sandbox": "x", "worktree": "t" })), ("worktrees_filter", json!({ "text": "t" })), ("thread_open", json!({ "sandbox": "x", "name": "t" })), ("agent_pick", json!({ "sandbox": "x", "thread": "t", "step": 1, "option": 2 }))] {
         assert!(crate::intent::parse(&json!({ "kind": "intent", "name": n, "args": a })).is_ok(), "{n}");
@@ -1185,4 +1191,388 @@ fn the_view_is_called_sessions_and_an_older_stored_base_still_restores() {
     a.kept_base();
     assert_eq!((a.feats.base.as_deref(), a.feats.base_restore), (Some("monitor"), true), "the stored value still restores the view");
     let _ = std::fs::remove_file(&p);
+}
+
+// ---- Part 3: the conversation (conv.rs) ----
+
+/// The stand-in answers every history call in `acts` (from `d`'s
+/// `history`), each answer handed to `on_answer`; what that returns, with
+/// the answers to the reads it asks in turn.
+fn serve(d: &mut J, acts: Vec<Action>) -> Vec<Action> {
+    let mut out = vec![];
+    let mut todo = acts;
+    for _ in 0..8 {
+        let mut next = vec![];
+        for a in todo {
+            match a {
+                Action::Call(c) if c.tag.starts_with("hist:") => {
+                    let m = match c.method {
+                        crate::feat::Method::Get => "GET",
+                        crate::feat::Method::Delete => "DELETE",
+                        _ => "POST",
+                    };
+                    let (code, body) = crate::feat::answer_from(d, m, &c.path, &J::Null, &mut |_, _| {});
+                    next.extend(on_answer(&Ctx { data: d }, &c, Ok((code, body))));
+                }
+                Action::Set { key, value } if key == KEY => {
+                    d["monitor"] = value.clone();
+                    out.push(Action::Set { key, value });
+                }
+                other => out.push(other),
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        todo = next;
+    }
+    out
+}
+
+/// The history calls the stand-in saw, and forgets them.
+fn calls(d: &mut J) -> Vec<String> {
+    let v = d["history_calls"].as_array().cloned().unwrap_or_default();
+    d["history_calls"] = json!([]);
+    v.iter().map(|x| x.as_str().unwrap_or("").to_string()).collect()
+}
+
+/// Opened on the fixture with `key` selected and its conversation read.
+fn on_session(key: &str) -> (J, J) {
+    let mut d = data_of("basic");
+    *STATE().lock().unwrap() = Model::default();
+    let a = run(&d, "monitor_open", json!({})).unwrap();
+    serve(&mut d, a);
+    let a = run(&d, "monitor_select", json!({ "key": key })).unwrap();
+    serve(&mut d, a);
+    let v = d["monitor"].clone();
+    (d, v)
+}
+
+fn conv_rows(v: &J) -> Vec<J> {
+    v["detail"]["conv"]["rows"].as_array().cloned().unwrap_or_default()
+}
+
+fn it(seq: u64, kind: &str, extra: J) -> J {
+    let mut i = json!({ "seq": seq, "at": 1763462000000u64 + seq * 1000, "kind": kind });
+    for (k, v) in extra.as_object().unwrap() {
+        i[k] = v.clone();
+    }
+    i
+}
+
+fn put_log(d: &mut J, sb: &str, sid: &str, log: J) {
+    d["history"][format!("{sb}/{sid}")] = log;
+}
+
+#[test]
+fn the_conversation_reads_in_the_terminal_s_order_and_injected_is_never_you() {
+    let (d, v) = on_session("billing-api:s-bill-main");
+    assert_eq!(v["detail"]["conv"]["state"], "ready");
+    let rows = conv_rows(&v);
+    let kinds: Vec<&str> = rows.iter().map(|r| r["t"].as_str().unwrap()).collect();
+    assert_eq!(kinds.first(), Some(&"day"), "a day separator first");
+    assert!(kinds.contains(&"you") && kinds.contains(&"claude") && kinds.contains(&"group") && kinds.contains(&"system") && kinds.contains(&"from"), "{kinds:?}");
+    assert_eq!(kinds.iter().filter(|k| **k == "day").count(), 2, "two days: yesterday and today");
+    // The newest last: the reply.
+    assert_eq!(rows.last().unwrap()["t"], "claude");
+    let from = rows.iter().find(|r| r["t"] == "from").unwrap();
+    assert_eq!(from["name"], "lead");
+    assert_eq!(from["long"], true, "a long message is folded");
+    assert!(from["text"].as_str().unwrap().len() < 400);
+    // Drawn: "From lead", never "You", for it.
+    let h = host();
+    let n = h.render(&d).unwrap();
+    let f = find(&n, &format!("monitor-from-{}", from["id"].as_str().unwrap())).expect("the injected message");
+    let mut all = vec![];
+    walk(f, &mut all);
+    let texts: Vec<&str> = all.iter().map(|x| x.text.as_str()).collect();
+    assert!(texts.contains(&"From lead") && !texts.contains(&"You"), "{texts:?}");
+    // A raw harness tag in an injected item is not drawn either.
+    let mut m = model::Model::default();
+    let _ = &mut m;
+    let rows = conv::build([it(1, "injected", json!({ "text": "<cross-session-message from-name=\"lead\">Rebase on main</cross-session-message>", "from": "lead" }))].iter(), &Default::default(), 1763462000);
+    assert_eq!(rows[1]["text"], "Rebase on main");
+    assert!(!rows[1]["text"].as_str().unwrap().contains('<'));
+}
+
+#[test]
+fn steps_fold_into_a_group_that_opens_and_a_step_opens_to_its_output() {
+    let (mut d, v) = on_session("billing-api:s-bill-main");
+    let g = conv_rows(&v).into_iter().filter(|r| r["t"] == "group").last().unwrap();
+    assert_eq!(g["n"], 12);
+    assert_eq!(g["summary"], "CHANGELOG.md", "the last step's summary");
+    assert!(g.get("steps").is_none(), "folded: its steps are not sent");
+    let id = g["id"].as_str().unwrap().to_string();
+    let h = host();
+    let before = h.render(&d).unwrap();
+    assert!(find(&before, &format!("monitor-steps-{id}")).is_some());
+    let a = run(&d, "monitor_expand", json!({ "key": "billing-api:s-bill-main", "id": id })).unwrap();
+    assert!(!sends(&a), "unfolding sends nothing");
+    serve(&mut d, a);
+    let g = conv_rows(&d["monitor"]).into_iter().find(|r| r["id"] == id.as_str()).unwrap();
+    assert_eq!(g["open"], true);
+    let steps = g["steps"].as_array().unwrap().clone();
+    assert_eq!(steps.len(), 12);
+    let n = h.render(&d).unwrap();
+    let first = steps[0]["id"].as_str().unwrap().to_string();
+    assert!(find(&n, &format!("monitor-step-{first}")).is_some(), "its steps are drawn");
+    // A step opens to the head of its result, in the mono face.
+    let a = run(&d, "monitor_expand", json!({ "key": "billing-api:s-bill-main", "id": first })).unwrap();
+    serve(&mut d, a);
+    let n = h.render(&d).unwrap();
+    let out = find(&n, &format!("monitor-out-{first}")).expect("its output");
+    assert!(out.children[0].text.starts_with("output of step 1") && out.children[0].style.mono, "{:?}", out.children[0].text);
+    // A failed step is marked: the group of yesterday has one.
+    let g1 = conv_rows(&d["monitor"]).into_iter().find(|r| r["t"] == "group" && r["status"] == "error").expect("a group with a failed step");
+    assert_eq!(g1["errors"], 1);
+}
+
+#[test]
+fn a_provisional_reply_is_replaced_and_a_reset_restarts() {
+    let mut h = conv::Hist { window: conv::WINDOW, ..Default::default() };
+    let p = |items: Vec<J>, latest: u64| json!({ "items": items, "latest_seq": latest, "truncated_before": false, "partial": false, "ended": false });
+    h.merge(&p(vec![it(1, "user_prompt", json!({ "text": "Go" })), it(2, "assistant_text", json!({ "text": "Done, probably.", "provisional": true }))], 3), true);
+    let ids = |h: &mut conv::Hist| h.rows(1763462000)["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(ids(&mut h), ["day-20410", "1", "2"]);
+    // The transcript's reply arrives: the provisional one is gone, the new one drawn in its place.
+    h.merge(&p(vec![it(1, "user_prompt", json!({ "text": "Go" })), it(3, "assistant_text", json!({ "text": "Done." }))], 4), true);
+    assert_eq!(ids(&mut h), ["day-20410", "1", "3"]);
+    // A reset (the log restarted lower): what was known goes.
+    h.merge(&p(vec![it(1, "user_prompt", json!({ "text": "Again" }))], 2), true);
+    assert_eq!(ids(&mut h), ["day-20410", "1"]);
+    assert_eq!(h.items[&1]["text"], "Again");
+}
+
+#[test]
+fn earlier_pages_come_on_request_and_keep_the_newest_rows() {
+    let mut d = data_of("basic");
+    // 250 items: three pages of 100.
+    let items: Vec<J> = (1..=250).map(|s| if s % 2 == 0 { it(s, "assistant_text", json!({ "text": format!("Reply {s}") })) } else { it(s, "user_prompt", json!({ "text": format!("Prompt {s}") })) }).collect();
+    put_log(&mut d, "chat-research", "s-chat", json!({ "items": items }));
+    *STATE().lock().unwrap() = Model::default();
+    let a = run(&d, "monitor_open", json!({})).unwrap();
+    serve(&mut d, a);
+    let a = run(&d, "monitor_select", json!({ "key": "chat-research:s-chat" })).unwrap();
+    serve(&mut d, a);
+    let seen = calls(&mut d);
+    assert!(seen.iter().any(|c| c == "GET chat-research/s-chat before=- limit=100"), "{seen:?}");
+    let c = &d["monitor"]["detail"]["conv"];
+    assert_eq!(c["earlier"], true);
+    let last = |d: &J| conv_rows(&d["monitor"]).last().unwrap()["id"].clone();
+    let newest = last(&d);
+    assert_eq!(newest, "250");
+    // Show earlier: the rows already read first (60 drawn of 101), then the page before.
+    let mut drawn = conv_rows(&d["monitor"]).len();
+    let mut pages = 0;
+    for _ in 0..8 {
+        let a = run(&d, "monitor_earlier", json!({ "key": "chat-research:s-chat" })).unwrap();
+        serve(&mut d, a);
+        pages += calls(&mut d).iter().filter(|c| c.contains("before=")).filter(|c| !c.contains("before=-")).count();
+        let now = conv_rows(&d["monitor"]).len();
+        assert!(now >= drawn, "never fewer rows");
+        assert_eq!(last(&d), newest, "the newest row stays the last one (the place the person reads from)");
+        drawn = now;
+    }
+    assert_eq!(pages, 2, "two older pages read, each once");
+    let ids: Vec<u64> = conv_rows(&d["monitor"]).iter().filter_map(|r| r["id"].as_str().and_then(|i| i.parse().ok())).collect();
+    assert_eq!(ids.first(), Some(&1), "back to the first item");
+    assert_eq!(d["monitor"]["detail"]["conv"]["earlier"], false);
+}
+
+#[test]
+fn only_the_selected_session_is_read_and_its_subscription_follows_the_selection() {
+    let (mut d, _) = on_session("billing-api:s-bill-main");
+    let seen = calls(&mut d);
+    assert!(seen.contains(&"GET billing-api/s-bill-main before=- limit=100".to_string()), "{seen:?}");
+    // A nudge for another session: nothing read.
+    let a = on_event(&Ctx { data: &d }, "history", &json!({ "sandbox": "shop-web", "session_id": "s-shop-main", "seq": 9 }));
+    assert!(a.is_empty(), "never fetched for a session not selected");
+    // A nudge for the selected one: its newest page.
+    let a = on_event(&Ctx { data: &d }, "history", &json!({ "sandbox": "billing-api", "session_id": "s-bill-main", "seq": 99 }));
+    serve(&mut d, a);
+    assert_eq!(calls(&mut d), ["GET billing-api/s-bill-main before=- limit=100"]);
+    // Another selected: the last one's subscription deleted, then the new one read.
+    let a = run(&d, "monitor_select", json!({ "key": "shop-web:s-shop-main" })).unwrap();
+    serve(&mut d, a);
+    assert_eq!(calls(&mut d), ["DELETE billing-api/s-bill-main", "GET shop-web/s-shop-main before=- limit=100"]);
+    assert!(d["history_subs"].get("billing-api/s-bill-main").is_none() && d["history_subs"]["shop-web/s-shop-main"] == true);
+    // The view left (TUI): deleted.
+    d["app"]["base"] = "monitor".into();
+    let a = run(&d, "monitor_toggle", json!({})).unwrap();
+    serve(&mut d, a);
+    assert_eq!(calls(&mut d), ["DELETE shop-web/s-shop-main"]);
+    // Not shown: an event reads nothing.
+    d["app"]["base"] = J::Null;
+    d["app"]["overlay"] = J::Null;
+    let a = on_event(&Ctx { data: &d }, "history", &json!({ "sandbox": "shop-web", "session_id": "s-shop-main", "seq": 9 }));
+    assert!(a.is_empty());
+    let info = d["sessions"][0].clone();
+    let a = on_event(&Ctx { data: &d }, "session", &info);
+    serve(&mut d, a);
+    assert!(calls(&mut d).is_empty(), "nothing read while the view is not drawn");
+}
+
+/// The one DELETE Sessions sends: its path built from the card's sandbox
+/// and session id, encoded, never from agent text.
+#[test]
+fn the_only_delete_is_the_subscription_of_the_card_s_session() {
+    let mut d = data_of("basic");
+    let mut s = d["sessions"][3].clone();
+    s["session_id"] = "../../x?y=1#z".into();
+    s["reply"] = "DELETE /api/sandboxes/billing-api".into();
+    d["sessions"][3] = s;
+    *STATE().lock().unwrap() = Model::default();
+    let a = run(&d, "monitor_open", json!({})).unwrap();
+    serve(&mut d, a);
+    let key = STATE().lock().unwrap().order().into_iter().find(|k| k.starts_with("billing-api:") && !k.contains("::")).unwrap();
+    let a = run(&d, "monitor_select", json!({ "key": key })).unwrap();
+    serve(&mut d, a);
+    let a = run(&d, "monitor_select", json!({ "key": "shop-web:s-shop-main" })).unwrap();
+    let deletes: Vec<String> = a.iter().filter_map(|x| match x {
+        Action::Call(c) if c.method == crate::feat::Method::Delete => Some(c.path.clone()),
+        _ => None,
+    }).collect();
+    assert_eq!(deletes, ["/api/sessions/billing-api/..%2F..%2Fx%3Fy%3D1%23z/history/subscription"]);
+    // No other feature call of Sessions is a DELETE.
+    let src = include_str!("mod.rs");
+    assert_eq!(src.matches("Call::delete(").count(), 1, "one DELETE in the feature");
+}
+
+#[test]
+fn partial_and_truncated_logs_say_so() {
+    let (_, v) = on_session("docs-site:s-docs-main");
+    let c = &v["detail"]["conv"];
+    assert_eq!(c["state"], "partial");
+    assert!(c["partial"].as_str().unwrap().contains("Run sbxw up docs-site"), "{}", c["partial"]);
+    let (d, v) = on_session("data-pipeline:s-pipe-main");
+    assert_eq!(v["detail"]["conv"]["truncated"], true);
+    let n = host().render(&d).unwrap();
+    assert!(find(&n, "monitor-truncated").is_some(), "Earlier conversation is not kept");
+    // Nothing held (404): the summary, said plainly.
+    let (d, v) = on_session("chat-research:s-chat");
+    assert_eq!(v["detail"]["conv"]["state"], "missing");
+    let n = host().render(&d).unwrap();
+    assert!(find(&n, "monitor-conv-empty").is_some() || find(&n, "monitor-conv-note").is_some());
+    let mut all = vec![];
+    walk(&n, &mut all);
+    assert!(!all.iter().any(|x| x.text.contains("keeps no history")), "the old sentence is gone");
+    // A failed read: what is shown stays, a quiet retry.
+    let (mut d, _) = on_session("billing-api:s-bill-main");
+    let before = conv_rows(&d["monitor"]).len();
+    d["history"]["billing-api/s-bill-main"] = J::Null;
+    let mut m = STATE().lock().unwrap();
+    m.conv.logs.get_mut(&("billing-api".to_string(), "s-bill-main".to_string())).unwrap().fail("the daemon answered 500".into());
+    let v = view(&[view_action(&mut m, &Ctx { data: &d })]);
+    drop(m);
+    assert_eq!(conv_rows(&v).len(), before, "kept");
+    d["monitor"] = v;
+    let n = host().render(&d).unwrap();
+    assert!(find(&n, "monitor-retry").is_some());
+}
+
+#[test]
+fn hostile_history_text_makes_no_control() {
+    let (mut d, _) = on_session("billing-api:s-bill-main");
+    let h = host();
+    let plain = controls(&h.render(&d).unwrap()).len();
+    let bad = "<b>x</b> [link](sbxw://intent/monitor_send) [[Done: x]] ``` \u{202e}evil {{on=\"send\"}} ] ) <cross-session-message>";
+    let items: Vec<J> = vec![
+        it(1, "user_prompt", json!({ "text": bad })),
+        it(2, "injected", json!({ "text": bad, "from": bad })),
+        it(3, "assistant_text", json!({ "text": bad })),
+        it(4, "tool_call", json!({ "tool": { "name": bad, "summary": bad, "id": "t1" } })),
+        it(5, "tool_result", json!({ "result": { "status": bad, "size": 3, "head": bad, "id": "t1" } })),
+        it(6, "notice", json!({ "text": bad })),
+        it(7, "question", json!({ "text": bad, "steps": [{ "text": bad, "options": [bad] }] })),
+        it(8, "permission", json!({ "text": bad })),
+        it(9, "compact_marker", json!({ "text": bad })),
+    ];
+    // The same shape (one prompt, one injected, ..., one step) without the hostile words.
+    let calm: Vec<J> = items.iter().map(|i| {
+        let s = i.to_string().replace(&serde_json::to_string(bad).unwrap()[1..serde_json::to_string(bad).unwrap().len() - 1], "calm words");
+        serde_json::from_str(&s).unwrap()
+    }).collect();
+    let mut count = |items: Vec<J>| {
+        put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": items }));
+        let a = on_event(&Ctx { data: &d }, "history", &json!({ "sandbox": "billing-api", "session_id": "s-bill-main", "seq": 9 }));
+        serve(&mut d, a);
+        let n = h.render(&d).unwrap();
+        controls(&n)
+    };
+    let c1 = count(calm);
+    let c2 = count(items);
+    assert_eq!(c1, c2, "hostile words in every kind add or change no control");
+    assert!(plain > 0);
+}
+
+#[test]
+fn the_logs_kept_are_bounded() {
+    let mut s = conv::Store::default();
+    for i in 0..20 {
+        s.touch(&("sb".into(), format!("s{i}"))).merge(&json!({ "items": [it(1, "user_prompt", json!({ "text": "x" }))], "latest_seq": 2 }), true);
+    }
+    assert_eq!(s.logs.len(), 1 + conv::LRU, "the selected one and {} recent", conv::LRU);
+    assert!(s.logs.contains_key(&("sb".to_string(), "s19".to_string())) && !s.logs.contains_key(&("sb".to_string(), "s0".to_string())));
+    // A session's page bound is the daemon's (400 items kept); a page is this many.
+    assert_eq!(conv::PAGE, 100);
+}
+
+/// 400 items (the daemon's most for one session): the rows are built once,
+/// only the newest window is drawn, a render stays within the budget, and
+/// a new item builds a handful of rows again, not 400.
+#[test]
+fn four_hundred_items_render_within_budget() {
+    let mut d = data_of("basic");
+    let mut items = vec![];
+    let mut s = 1;
+    while items.len() < 400 {
+        items.push(it(s, "user_prompt", json!({ "text": format!("Prompt number {s}, with a few words to wrap.") })));
+        s += 1;
+        for k in 0..3 {
+            items.push(it(s, "tool_call", json!({ "tool": { "name": "Bash", "summary": format!("$ step {s} {k}"), "id": format!("t{s}") } })));
+            items.push(it(s + 1, "tool_result", json!({ "result": { "status": "ok", "size": 120, "head": "ok", "id": format!("t{s}") } })));
+            s += 2;
+        }
+        items.push(it(s, "assistant_text", json!({ "text": format!("Reply {s}: **done**, see `src/lib.rs`.\n\n- one\n- two") })));
+        s += 1;
+    }
+    items.truncate(400);
+    put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": items.clone() }));
+    *STATE().lock().unwrap() = Model::default();
+    let a = run(&d, "monitor_open", json!({})).unwrap();
+    serve(&mut d, a);
+    let t = std::time::Instant::now();
+    let a = run(&d, "monitor_select", json!({ "key": "billing-api:s-bill-main" })).unwrap();
+    serve(&mut d, a);
+    let built_ms = t.elapsed().as_secs_f64() * 1000.0;
+    // Read all 400 in (four pages), drawn whole.
+    for _ in 0..10 {
+        let a = run(&d, "monitor_earlier", json!({ "key": "billing-api:s-bill-main" })).unwrap();
+        serve(&mut d, a);
+    }
+    let rows = conv_rows(&d["monitor"]);
+    assert_eq!(STATE().lock().unwrap().conv.logs.values().map(|h| h.items.len()).max(), Some(400));
+    let h = host();
+    let t = std::time::Instant::now();
+    let n = h.render(&d).unwrap();
+    let first_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let mut all = vec![];
+    walk(&n, &mut all);
+    let conv_built = |n: &Node| find(n, "test-conv-built").unwrap().text.trim_start_matches("conv ").parse::<f64>().unwrap();
+    let b1 = conv_built(&n);
+    // One more item: the rows are memoised by id and content.
+    let mut more = items.clone();
+    more.push(it(s + 1, "assistant_text", json!({ "text": "One more." })));
+    put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": more }));
+    let a = on_event(&Ctx { data: &d }, "history", &json!({ "sandbox": "billing-api", "session_id": "s-bill-main", "seq": s + 1 }));
+    serve(&mut d, a);
+    let t = std::time::Instant::now();
+    let n2 = h.render(&d).unwrap();
+    let next_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let b2 = conv_built(&n2);
+    eprintln!("400 items: {} rows, {} elements; read+build {built_ms:.1} ms, first render {first_ms:.1} ms, next {next_ms:.1} ms, rows built {b1} then {}", rows.len(), all.len(), b2 - b1);
+    assert!(all.len() < 5000, "under the element cap: {}", all.len());
+    assert!(b2 - b1 <= 4.0, "a new item builds a few rows again, not all: {}", b2 - b1);
+    // Debug build, a loaded machine: generous bounds (PERF.md's are for release, in perf.sh).
+    assert!(first_ms < 400.0 && next_ms < 200.0, "render {first_ms:.1} ms, then {next_ms:.1} ms");
 }

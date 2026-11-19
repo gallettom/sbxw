@@ -64,7 +64,7 @@ pub struct Hist {
     pub rev: u64,
     /// When the last read was asked (ms), to renew the subscription.
     pub read_ms: u64,
-    built: Option<(u64, u64, J)>,
+    pub(crate) built: Option<(u64, u64, J)>,
 }
 
 /// The logs in memory and the session followed.

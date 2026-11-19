@@ -560,7 +560,7 @@ mod tests {
     }
 
     /// Lead Mode wears the `leader` mark (a crown over one person) in the
-    /// top bar, the palette and the pager, never the team's `people` the
+    /// top bar and the palette, never the team's `people` the
     /// pane bar's Team keeps; it is not a rail entry any more (the rail
     /// shows more, the top bar switches views).
     #[test]
@@ -572,7 +572,7 @@ mod tests {
         assert!(crate::icons::exists("leader") && crate::icons::exists("people"));
         assert_ne!(crate::icons::get("leader").unwrap().body, crate::icons::get("people").unwrap().body);
         assert!(include_str!("palette.rs").contains("hint, \"leader\""), "the palette's Lead Mode uses the mark");
-        assert!(include_str!("pager.rs").contains("small_icon(\"leader\""), "the pager's Lead Mode mark too");
+        assert!(!include_str!("pager.rs").contains("pager-leads"), "one place only: the top bar's toggle, not a pager chip");
         assert!(include_str!("../../screens/topbar.luau").contains("icon = \"leader\", key = \"top-lead\""), "the top bar's Lead Mode too");
     }
 

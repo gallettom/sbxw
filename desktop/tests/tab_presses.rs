@@ -31,7 +31,10 @@ fn settle(rt: &mut Runtime<App>) {
 /// a screen returns them).
 fn window(fixture: &str, open: &[J]) -> Runtime<App> {
     let path = format!("{}/fixtures/{fixture}.json", env!("CARGO_MANIFEST_DIR"));
-    let a = App::new(Args { fixture: Some(path), ..Args::default() });
+    let mut a = App::new(Args { fixture: Some(path), ..Args::default() });
+    // In memory: a press here (GUI, Lead Mode, a layout) must not reach the
+    // state file the next window, or the person's app, starts from.
+    a.store = sbxw_desktop::shell::store::Store::memory();
     let mut rt = Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
     settle(&mut rt);
     for o in open {
@@ -89,6 +92,8 @@ fn every_tab_like_control_changes_what_is_drawn() {
         ("board/basic", vec![intent("board_show", json!({ "team": "p-run" }))], vec!["board-group-notes", "board-group-questions", "board-group-all", "board-thread-web-page"]),
         // The pager's Tabs and Grid.
         ("shell/finish-grid", vec![], vec!["pager-view-tabs", "pager-view-grid"]),
+        // The top bar's GUI | TUI and Lead Mode (two-state: each press must switch).
+        ("monitor/basic", vec![], vec!["top-view-gui", "top-view-tui", "top-lead", "top-lead", "top-view-gui", "top-lead", "top-view-tui", "top-lead"]),
     ];
     let mut bad = vec![];
     for (fixture, open, keys) in &cases {
@@ -110,4 +115,30 @@ fn a_commit_row_expands() {
     rt.pointer_up(x, y);
     settle(&mut rt);
     assert_ne!(drawn(&rt), before, "pressing {key} changed nothing drawn");
+}
+
+/// Sessions: a folded group of steps opens to its steps, and a step to its
+/// output (the conversation from the fixture's history).
+#[test]
+fn a_step_group_and_a_step_unfold_in_sessions() {
+    let mut rt = window("monitor/basic", &[intent("monitor_open", json!({})), intent("monitor_select", json!({ "key": "billing-api:s-bill-main" }))]);
+    // The last one drawn: the conversation opens at its end (the first ones are scrolled out of view).
+    let key_of = |rt: &Runtime<App>, prefix: &str| drawn(rt).into_iter().rev().find_map(|d| d.split('|').next().and_then(|k| k.strip_prefix(&format!("Some(\"{prefix}"))).map(|k| format!("{prefix}{}", k.trim_end_matches("\")"))));
+    let group = key_of(&rt, "monitor-steps-g").expect("a folded group of steps is drawn");
+    // (Pressed once: opened, its steps push its head up, out of a short view.)
+    for k in [group.clone()] {
+        let before = drawn(&rt);
+        let (x, y) = rt.find(&k).unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        settle(&mut rt);
+        assert_ne!(drawn(&rt), before, "pressing {k} changed nothing drawn");
+    }
+    let step = key_of(&rt, "monitor-step-s").expect("a step is drawn");
+    let before = drawn(&rt);
+    let (x, y) = rt.find(&step).unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(&mut rt);
+    assert_ne!(drawn(&rt), before, "pressing {step} changed nothing drawn");
 }
