@@ -42,7 +42,9 @@ elif m == "busy":
 else:
     step("rail-monitor", "monitor-row-shop-web::checkout-copy")
 if m == "choice":
-    add(type="type", every=0.02, text="n"); add(type="mark", name="wait:monitor-opt-1-1")
+    # N: the next session that needs you; then its row (a narrow view opens it).
+    add(type="type", every=0.02, text="n"); add(type="mark", name="hold:300")
+    step("monitor-row-shop-web:s-shop-main", "monitor-opt-1-1")
 if m in ("reply", "send"):
     step("monitor-row-billing-api:s-bill-main", "monitor-reply")
 if m == "send":

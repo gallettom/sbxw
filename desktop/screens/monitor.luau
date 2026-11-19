@@ -141,7 +141,7 @@ local function composer(state, d, data)
   local draft = draft_of(state, d)
   return column{ gap = 8, px = 24, py = 12, w = "full",
     textarea{ id = "monitor-compose", rows = 2, value = draft, disabled = not c.can,
-      placeholder = c.can and ("Write to " .. c.target .. "…") or (c.why or ""),
+      placeholder = c.can and ("Write to " .. c.target .. "…") or "",
       on = "typed", on_submit = "submit", arg = { key = d.key, gen = d.sent } },
     row{ gap = 8, w = "full",
       icon{ "send", size = 12, color = "text-dim" },
@@ -212,17 +212,27 @@ local screen = {
         help = "The next session that needs you", keys = { "N" } }
         or text{ "Nothing needs you", key = "monitor-calm", size = "sm", color = "text-dim" } }
     local left = column{ gap = 0, w = "full", h = "full", top, scroll{ grow = 1, column(rows) } }
+    local middle = d and column{ h = "full", grow = 1, key = "monitor-detail",
+      header(d, data), divider{}, feed(d, now, data), divider{}, composer(state, d, data) }
     if not overlay_wide(data) or not d then
+      -- Narrow: the list, or the session a press opened, with the way back.
+      if d and state.open == d.key then
+        return column{ h = "full", w = "full",
+          row{ px = 12, py = 4, w = "full", button{ "All sessions", key = "monitor-back", icon = "threads", variant = "ghost", dense = true, on = "back" } },
+          middle }
+      end
       return column{ h = "full", w = "full", left }
     end
-    local middle = column{ h = "full", grow = 1, key = "monitor-detail",
-      header(d, data), divider{}, feed(d, now, data), divider{}, composer(state, d, data) }
     local wide = ((data.app or {}).overlay or {}).w or 1000
     return split{ id = "monitor-split", vertical = true, ratio = wide >= 1100 and 0.3 or 0.38, left, middle }
   end,
   actions = {
     load = function() return intent("monitor_open", {}) end,
-    pick = function(_, key) return intent("monitor_select", { key = key }) end,
+    pick = function(state, key)
+      state.open = key
+      return intent("monitor_select", { key = key })
+    end,
+    back = function(state) state.open = nil end,
     next = function() return intent("monitor_next", {}) end,
     more = function() return intent("monitor_more", {}) end,
     link = function(_, a) return intent(a.name, { key = a.key }) end,

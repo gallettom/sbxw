@@ -33,6 +33,9 @@
 //! `session` event per session of the sandbox, with `session_id` and
 //! `started_ms`, as the daemon does; `--stale-session yes` keeps an older
 //! session left as `working`. `--clients N` reports N stream clients.
+//! A fixture's `daemon.session_events` (`[{after, session}]`, the Monitor's
+//! demo) replace a session's report `after` seconds from the first stream
+//! client and publish it as a `session` event.
 //!
 //! Terminal size, as the daemon: the PTY has one size, the client used last
 //! sets it, and a socket opened with `size=1` hears
