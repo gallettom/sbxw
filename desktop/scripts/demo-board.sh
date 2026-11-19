@@ -9,13 +9,19 @@
 #   running  the rail's Board on web-app's team at work: a warning and a
 #            decision on the board, a round of questions answered, a question
 #            to another sandbox answered, a screenshot waiting, two threads
-#            committing, a start that failed
+#            committing, a start that failed; at the bottom a run of bare
+#            changes of state (one line, x3), a decision to the whole team and
+#            a long done report (green bubble)
+#   picker   the team picker open: thread names, summaries, states and ages
+#   long     a team with long unbroken words (a path, hashes, 200 characters
+#            without a space) and a failed report (red bubble)
 #   merged   the team on docs, merged (the picker in the title)
 #   all      every team at once, each row with its team
 #   commit   a commit opened in the Commits column, a file's diff under it
 #   folded   the conversation filtered to api-routes (its row in Team), its four commits opened
 #   narrow   the window at 720x480: one column, the Commits tab
-#   messages the Messages filter: the lead's and threads' direct messages, a team note beside them (Decisions and warnings)
+#   messages the Messages filter: the lead's and threads' direct messages
+#            (the lead's two in a row share one author line)
 # Out: $SBXW_SHOTS/board/board-<theme>-<size>-<mark>.png and its element tree.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -38,11 +44,16 @@ def step(key, until):
 add(type="mark", name="wait:row-web-app")
 step("rail-board", "board-convo")
 if m in ("merged",):
-    step("board-team", "board-team-p-old")
-    step("board-team-p-old", "board-convo")
+    step("board-row-picker", "board-row-team-p-old")
+    step("board-row-team-p-old", "board-convo")
 if m == "all":
-    step("board-team", "board-team-all")
-    step("board-team-all", "board-convo")
+    step("board-row-picker", "board-row-team-all")
+    step("board-row-team-all", "board-convo")
+if m == "picker":
+    step("board-row-picker", "board-picker")
+if m == "long":
+    step("board-row-picker", "board-row-team-p-long")
+    step("board-row-team-p-long", "board-convo")
 if m == "commit":
     if narrow:
         step("board-tab-commits", "board-side-commit-" + h)
@@ -68,7 +79,7 @@ PY
 }
 for theme in ${THEMES:-dark graphite}; do
   for size in ${SIZES:-1284x816 720x480}; do
-    for m in ${MARKS:-running merged all commit folded messages narrow}; do
+    for m in ${MARKS:-running picker merged all long commit folded messages narrow}; do
       [ "$m" = narrow ] && [ "$size" != 720x480 ] && continue
       script "$m" "$size" >"$shots/script-$m.json"
       THEME="$theme" SHOT_SIZE="$size" run_app "$shots/board-$theme-$size-$m.log" --fixture "$fx" --script "$shots/script-$m.json" \

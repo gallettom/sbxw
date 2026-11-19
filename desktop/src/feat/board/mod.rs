@@ -36,6 +36,9 @@ pub const ALL_PAGE: usize = 40;
 
 const GROUPS: &[&str] = &["all", "notes", "questions", "messages", "commits", "status"];
 const TABS: &[&str] = &["conversation", "notes", "commits"];
+const KEYS: &[&str] = &["up", "down", "enter", "escape"];
+/// Teams the picker lists a page (then "Show more").
+pub const PICKER_PAGE: usize = 20;
 const LINKS: &[&str] = &["terminal", "monitor", "commits", "worktrees", "plan", "requests", "threads"];
 
 pub const FEATURE: Feature = Feature {
@@ -66,6 +69,8 @@ pub const INTENTS: &[Spec] = &[
     d("board_tab", &[("tab", Arg::OneOf(TABS), true)], "On a narrow window, which column shows: the conversation, the team and its notes, or the commits."),
     d("board_open", &[("what", Arg::OneOf(LINKS), true), ("thread", Arg::Text, false), ("relay", Arg::Str, false)], "Goes where one acts or reads more: a thread's terminal, the Monitor on it, its commits or worktrees, the plan dialog, the Requests panel (on a request), the Threads panel."),
     d("board_refresh", &[], "Reads the teams and the conversation again."),
+    d("board_picker", &[("open", Arg::Bool, false), ("more", Arg::Bool, false)], "Opens or closes the team picker's list (`open`; none: toggles), or lists more teams in it (`more`). View state only."),
+    d("board_key", &[("key", Arg::OneOf(KEYS), true)], "The Board's keys while its team picker is open: Up and Down move through the teams, Enter shows the one marked, Escape closes the list."),
 ];
 
 #[derive(Debug, Default, Clone)]
@@ -118,6 +123,11 @@ pub struct State {
     detail: J,
     detail_error: Option<String>,
     files_open: BTreeSet<String>,
+    /// The team picker's list: open, the row marked by the keys (0: All
+    /// teams), the pages of teams it lists.
+    picker: bool,
+    picker_hl: usize,
+    picker_pages: usize,
 }
 
 crate::feat::relay::per_thread!(STATE, State);
@@ -216,12 +226,17 @@ impl State {
                 self.text.clear();
                 self.group.clear();
                 self.commit = None;
+                self.picker = false;
                 out.push(Action::OpenPanel(SCREEN.into()));
                 out.push(self.read_teams());
                 out.extend(self.read_shown());
             }
             "board_team" => {
                 let id = a.req("id");
+                if id != "all" && !self.teams.iter().any(|t| t["id"] == id) && !self.teams.is_empty() {
+                    return Err(format!("{id} is not a team sbxw lists"));
+                }
+                self.picker = false;
                 self.team = (id != "all").then(|| id.to_string());
                 self.thread.clear();
                 self.commit = None;
@@ -290,10 +305,44 @@ impl State {
                 out.push(self.read_teams());
                 out.extend(self.read_shown());
             }
+            "board_picker" => {
+                if a.b("more") == Some(true) {
+                    self.picker_pages = self.picker_pages.max(1) + 1;
+                } else {
+                    let open = a.b("open").unwrap_or(!self.picker);
+                    if open && !self.picker {
+                        // Marked: the team shown.
+                        self.picker_hl = self.picker_ids().iter().position(|i| Some(i.as_str()) == self.team.as_deref().or(Some("all"))).unwrap_or(0);
+                        self.picker_pages = 1;
+                    }
+                    self.picker = open;
+                }
+            }
+            "board_key" => {
+                if !self.picker {
+                    return Ok(vec![]);
+                }
+                let ids = self.picker_ids();
+                match a.req("key") {
+                    "up" => self.picker_hl = self.picker_hl.saturating_sub(1),
+                    "down" => self.picker_hl = (self.picker_hl + 1).min(ids.len().saturating_sub(1)),
+                    "enter" => {
+                        let id = ids.get(self.picker_hl).cloned().unwrap_or_else(|| "all".into());
+                        return self.act(cx, &Asked { name: "board_team", args: json!({ "id": id }).as_object().cloned().unwrap_or_default() });
+                    }
+                    _ => self.picker = false,
+                }
+            }
             other => return Err(format!("{other}: not a board intent")),
         }
         out.push(self.ui(cx));
         Ok(out)
+    }
+
+    /// The picker's rows, in order: "all", then the teams it lists now.
+    fn picker_ids(&self) -> Vec<String> {
+        let n = PICKER_PAGE * self.picker_pages.max(1);
+        std::iter::once("all".to_string()).chain(self.teams.iter().take(n).filter_map(|t| t["id"].as_str().map(str::to_string))).collect()
     }
 
     /// The sandbox a commit of the team shown is in (from the daemon's answer).
@@ -435,17 +484,31 @@ impl State {
 
     /// Every event shown, oldest first; for every team, each tagged with its team.
     fn events(&self) -> Vec<J> {
-        if self.team.is_some() {
-            return self.team.as_ref().and_then(|id| self.timelines.get(id)).map(|t| t.events.clone()).unwrap_or_default();
+        let lead_of = |id: &str, t: &Timeline| -> J {
+            let team = if t.team.is_null() { self.team_row(id).cloned().unwrap_or(J::Null) } else { t.team.clone() };
+            team["lead"].clone()
+        };
+        if let Some(id) = &self.team {
+            let Some(t) = self.timelines.get(id) else { return vec![] };
+            let lead = lead_of(id, t);
+            return t.events.iter().map(|e| {
+                let mut e = e.clone();
+                e["lead_name"] = lead.clone();
+                e
+            }).collect();
         }
         let mut all: Vec<J> = vec![];
         for (id, t) in &self.timelines {
             let row = self.team_row(id).cloned().unwrap_or_else(|| t.team.clone());
+            let (lead, names) = (lead_of(id, t), model::team_names(&row));
             for e in &t.events {
                 let mut e = e.clone();
                 e["team"] = id.as_str().into();
-                e["team_label"] = row["summary"].clone();
+                // Named by its threads, the summary in the tooltip: never a cut sentence.
+                e["team_label"] = names.clone().into();
+                e["team_help"] = row["summary"].clone();
                 e["team_sandbox"] = row["sandbox"].clone();
+                e["lead_name"] = lead.clone();
                 all.push(e);
             }
         }
@@ -480,15 +543,22 @@ impl State {
     /// `data.board_ui`: what the screen draws.
     fn ui(&self, cx: &Ctx) -> Action {
         let groups = cx.get("app")["groups"].clone();
+        let now = crate::feat::files::view::now_secs();
+        let listed = PICKER_PAGE * self.picker_pages.max(1);
         let teams: Vec<J> = self
             .teams
             .iter()
+            .take(listed)
             .map(|t| {
                 let sb = t["sandbox"].as_str().unwrap_or("");
                 let state = t["state"].as_str().unwrap_or("");
-                json!({ "id": t["id"], "label": format!("{} · {}", t["summary"].as_str().filter(|s| !s.is_empty()).unwrap_or("(no summary)"), sb), "sandbox": sb, "color": groups[sb], "state": state, "tone": model::team_tone(state) })
+                let last = t["last_ms"].as_u64().or(t["updated_ms"].as_u64()).or(t["created_ms"].as_u64());
+                json!({ "id": t["id"], "names": model::team_names(t), "summary": t["summary"].as_str().filter(|s| !s.is_empty()).map(model::breakable).unwrap_or_else(|| "(no summary)".into()),
+                    "sandbox": sb, "color": groups[sb], "state": state, "tone": model::team_tone(state), "when": last.map(|l| crate::feat::files::view::ago(l / 1000, now)).unwrap_or_default() })
             })
             .collect();
+        let current = self.team.clone().unwrap_or_else(|| "all".into());
+        let picker = json!({ "open": self.picker, "hl": self.picker_hl, "more": self.teams.len().saturating_sub(listed), "current": current });
         let rows = self.rows(cx);
         let keep = model::ROWS_PAGE * self.pages.max(1);
         let total = rows.len();
@@ -498,7 +568,7 @@ impl State {
         let loading = self.teams_loading || self.timelines.values().any(|t| t.loading);
         let errors: Vec<String> = self.timelines.values().filter_map(|t| t.error.clone()).chain(self.teams_error.clone()).collect();
         let mut v = json!({
-            "teams": teams, "team": self.team.clone().unwrap_or_else(|| "all".into()), "all": self.team.is_none(),
+            "teams": teams, "team": current, "all": self.team.is_none(), "picker": picker, "popup": self.picker,
             "rows": rows[cut..], "older": older, "hidden": cut, "total": total,
             "group": if self.group.is_empty() { "all" } else { self.group.as_str() }, "thread": self.thread, "text": self.text,
             "tab": if self.tab.is_empty() { "conversation" } else { self.tab.as_str() },
@@ -569,7 +639,7 @@ impl State {
         let lanes_w = model::lanes(&lane_names, &list, 320.0);
         let lanes_n = model::lanes(&lane_names, &list, 260.0);
         json!({
-            "id": team["id"], "sandbox": sb, "color": groups[sb], "summary": team["summary"], "state": team["state"], "tone": model::team_tone(team["state"].as_str().unwrap_or("")),
+            "id": team["id"], "sandbox": sb, "color": groups[sb], "summary": team["summary"], "names": model::team_names(team), "state": team["state"], "tone": model::team_tone(team["state"].as_str().unwrap_or("")),
             "lead": team["lead"], "variant": team["variant"], "threads": threads, "notes": notes,
             "commits": per, "commits_available": t.commits["available"].as_bool().unwrap_or(t.commits.is_null()), "commits_why": t.commits["why"],
             "lanes": { "wide": lanes_w, "narrow": lanes_n },
