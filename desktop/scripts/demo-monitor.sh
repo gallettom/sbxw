@@ -25,6 +25,8 @@
 #   attach   two files dropped on billing-api's session: their chips under the box;
 #   attach-dialog  a third, named like a secret (amber), words typed, Send:
 #            the core's one dialog (words, each file, the total, its box);
+#   attach-sent  its box ticked and Send pressed: the stand-in takes the
+#            uploads, then the push of the words and the daemon's paths;
 #   fold     fixtures/monitor/folding.json: one row per place (studio's main
 #            checkout reported by three sessions shows once, its last prompt
 #            another session's message shown as such; lab's two live terminals).
@@ -67,7 +69,7 @@ if m == "choice":
     # N: the next session that needs you; then its row (a narrow view opens it).
     add(type="type", every=0.02, text="n"); add(type="mark", name="hold:300")
     step("monitor-row-shop-web:s-shop-main", "monitor-opt-1-1")
-if m in ("reply", "send", "attach", "attach-dialog"):
+if m in ("reply", "send", "attach", "attach-dialog", "attach-sent"):
     # A short window: the idle rows are below the fold of the list.
     add(type="wheel", key="monitor-row-shop-web:s-shop-main", dy=-600); add(type="mark", name="hold:300")
     step("monitor-row-billing-api:s-bill-main", "monitor-reply")
@@ -76,16 +78,20 @@ if m == "send":
     text = "Also add a test with an empty invoice, then stop."
     add(type="type", every=0.02, text=text); t += 0.02 * len(text)
     step("monitor-send", "cf-confirm")
-if m in ("attach", "attach-dialog"):
+if m in ("attach", "attach-dialog", "attach-sent"):
     D = os.environ["DROP"]
     add(drop_files={"paths": [f"{D}/brief.md", f"{D}/order list.csv"], "key": "monitor-detail", "hover": 0.2})
     add(type="mark", name="wait:monitor-attached")
-if m == "attach-dialog":
+if m in ("attach-dialog", "attach-sent"):
     add(drop_files={"paths": [f"{D}/.env.local"], "key": "monitor-detail", "hover": 0.2}); add(type="mark", name="hold:300")
     add(type="tap", key="monitor-compose")
     text = "Use these for the export test."
     add(type="type", every=0.02, text=text); t += 0.02 * len(text)
     step("monitor-send", "cf-confirm")
+if m == "attach-sent":
+    add(type="tap", key="cf-ack"); add(type="mark", name="hold:200")
+    add(type="tap", key="cf-confirm"); add(type="mark", name="wait-gone:cf-dialog")
+    add(type="mark", name="hold:1500")
 if m in ("under", "back"):
     # A narrow window lists the sessions: a row opens one, with its links.
     if os.environ.get("SIZE", "").startswith("720"):
@@ -104,7 +110,7 @@ PY
 }
 theme="${THEME:-dark}"
 for size in ${SIZES:-1284x816 720x480}; do
-  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back attach attach-dialog fold}; do
+  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back attach attach-dialog attach-sent fold}; do
     case "$m" in empty|idle|busy) fx="$m" ;; fold) fx=folding ;; *) fx=basic ;; esac
     out="$shots/monitor-$size-$theme-$m"
     SIZE="$size" script "$m" >"$out-script.json"
