@@ -352,6 +352,7 @@ impl App {
         // Where each thread merges, read first so the base is known from the
         // first broadcast. A retry skips the threads already merged.
         let done: std::collections::HashSet<&str> = merge.results.iter().filter(|r| r.ok).map(|r| r.thread.as_str()).collect();
+        let done_before: Vec<String> = done.iter().map(|t| t.to_string()).collect();
         let mut dirs: Vec<(String, Result<String, String>)> = Vec::new();
         for t in merge.order.iter().filter(|t| !done.contains(t.as_str())) {
             let planned = plan.threads.iter().find(|p| &p.name == t).and_then(|p| p.repo.clone());
@@ -400,6 +401,13 @@ impl App {
         let plan = self.plan_changed(plan);
         let merge = plan.merge.clone().unwrap_or(merge);
         let mut summary = messages::merge_summary(&merge);
+        // The other threads of the sandbox hear that their base moved.
+        let all_merged: Vec<String> = merge.results.iter().filter(|r| r.ok).map(|r| r.thread.clone()).collect();
+        let merged_now: Vec<String> = all_merged.iter().filter(|t| !done_before.contains(*t)).cloned().collect();
+        let told = self.tell_main_moved(&sandbox, &merged_now, &all_merged, merge.base.as_deref());
+        if !told.is_empty() {
+            summary.push_str(&format!(" Told that {} moved: {}.", merge.base.as_deref().unwrap_or("main"), told.join(", ")));
+        }
         if close_threads && merge.state == MergeState::Merged {
             let mut unclosed = Vec::new();
             for t in &merge.order {
@@ -504,6 +512,12 @@ impl App {
         let mut summary = messages::merge_summary(&merge);
         if let (Some(dir), MergeState::Merged) = (&dir, merge.state) {
             summary = format!("[sbxw] Merged sbxw/{team} (threads {}).", merge.order.join(", "));
+            // Threads of the sandbox's other plans hear that their base moved.
+            let mine: Vec<String> = plan.threads.iter().map(|t| t.name.clone()).chain(std::iter::once(team.to_string())).collect();
+            let told = self.tell_main_moved(sandbox, &[team.to_string()], &mine, merge.base.as_deref());
+            if !told.is_empty() {
+                summary.push_str(&format!(" Told that {} moved: {}.", merge.base.as_deref().unwrap_or("main"), told.join(", ")));
+            }
             if let Some((file, body, index)) = plan.distillate_memory() {
                 match self.write_memory(sandbox, dir, &file, &body, &index).await {
                     Ok(path) => summary.push_str(&format!(" Distillate saved to auto memory: {path}.")),

@@ -272,6 +272,19 @@ deleted. The lead is told the result in one line, e.g.
 `[sbxw] Merged: a, b. Failed: c (conflict in X).` A failed merge can be retried
 after fixing the cause.
 
+**Main moved.** Once a merge has merged at least one thread, every other
+thread of the sandbox with an open session (of this plan or another) is told
+in one fixed line written by sbxw, e.g. ``[sbxw] main moved: a, b merged.
+Check `git merge-tree --write-tree main HEAD` before you go on.`` (the branch
+is the one merged into). It follows a team note's delivery rule: typed when
+the thread is idle or working, held while it waits on a question or a
+permission prompt, dropped when its session ended. The merged threads are not
+told, and nothing is typed into a session of another sandbox. The lead's
+merge line then ends with `Told that main moved: <threads>.` sbxw does not
+say which of those branches now conflict: its merge checks look at the main
+checkout against the paths a merge changes, not at one branch against
+another, so the lead runs `scripts/lead-review.sh --after-merge` for that.
+
 A **shared** plan has one branch: once every thread is done, **Merge** runs
 `git merge --no-ff sbxw/team-<plan>` once, with the same checks. The lead's
 proposal also carries a **distillate**: the decisions and warnings from the

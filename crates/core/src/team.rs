@@ -636,6 +636,20 @@ pub enum Delivery {
     Drop,
 }
 
+/// The line typed into a thread's session when other threads were merged
+/// into `base` (sbxw's own words: thread names and a branch name, nothing an
+/// agent wrote). `None` when nothing was merged.
+pub fn main_moved_line(merged: &[String], base: Option<&str>) -> Option<String> {
+    if merged.is_empty() {
+        return None;
+    }
+    let base = base.filter(|b| !b.is_empty() && !b.contains(char::is_whitespace)).unwrap_or("main");
+    Some(format!(
+        "[sbxw] {base} moved: {} merged. Check `git merge-tree --write-tree {base} HEAD` before you go on.",
+        merged.join(", ")
+    ))
+}
+
 /// A session waiting on a question or a permission prompt would take a typed
 /// line as an answer (a menu's pick): never typed then.
 pub fn note_delivery(state: Option<crate::agents::SessionState>) -> Delivery {
@@ -779,5 +793,15 @@ mod tests {
         let all = timeline(&p, &log, &[], &[], &[], 1000);
         let (talk, _) = page(&all, &Filter { group: Some("conversation"), ..Default::default() }, None, 100);
         assert!(talk.iter().all(|e| e.kind != EventKind::Claim) && talk.len() == all.len() - 1, "all but claims");
+    }
+
+    #[test]
+    fn the_main_moved_line_names_the_threads_and_the_base_only() {
+        assert_eq!(main_moved_line(&[], Some("main")), None);
+        let l = main_moved_line(&["a".into(), "b".into()], Some("dev")).unwrap();
+        assert_eq!(l, "[sbxw] dev moved: a, b merged. Check `git merge-tree --write-tree dev HEAD` before you go on.");
+        assert!(main_moved_line(&["a".into()], None).unwrap().starts_with("[sbxw] main moved: a merged."));
+        assert!(main_moved_line(&["a".into()], Some("x y")).unwrap().contains("--write-tree main HEAD"));
+        assert!(!l.contains('\n'));
     }
 }

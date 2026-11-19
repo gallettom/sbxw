@@ -170,7 +170,10 @@ merge once every thread is done: leave the order empty, and add a
 session that knows nothing of this plan. The user approves them with the
 merge, and sbxw writes them to this repo's Claude Code auto memory. The user merges with one click in
 the plan dialog, so do not print git merge commands; you never merge yourself.
-sbxw tells you how the merge went, in a line prefixed with `[sbxw]`.
+sbxw tells you how the merge went, in a line prefixed with `[sbxw]`, and tells
+the other running threads that main moved; you do not need to. Which of their
+branches now conflict, sbxw does not say: when the repository has
+`scripts/lead-review.sh`, run it with `--after-merge`.
 
 Closing a thread (its worktree and branch, or a shared plan's worktree) is
 also the user's call: they use

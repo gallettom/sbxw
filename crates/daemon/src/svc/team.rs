@@ -318,6 +318,31 @@ impl App {
             .collect()
     }
 
+    /// After a merge into `base`: each thread of `sandbox` with an open
+    /// session, other than those in `exclude` (every thread the plan merged,
+    /// now or before), is told in one fixed line that `base` moved, under a
+    /// team note's delivery rule (typed when idle or working, held while it
+    /// waits on a question or a prompt, dropped when ended). Threads of
+    /// another sandbox are never looked at. Returns who was told or will be.
+    pub(crate) fn tell_main_moved(self: &std::sync::Arc<Self>, sandbox: &SandboxRef, merged: &[String], exclude: &[String], base: Option<&str>) -> Vec<String> {
+        let Some(line) = team::main_moved_line(merged, base) else { return vec![] };
+        let mut others: Vec<String> = self.sessions.open_threads(&sandbox.to_string()).into_iter().filter(|t| !exclude.contains(t) && !merged.contains(t)).collect();
+        others.sort();
+        others.dedup();
+        let mut told = vec![];
+        for (w, d) in self.note_targets(sandbox, &others, |k| self.sessions.is_live(k)) {
+            let Some(k @ SessionKind::Thread(_)) = session_kind(&w) else { continue };
+            match d {
+                team::Delivery::Type => self.spawn_push(sandbox.clone(), k, line.clone(), None),
+                team::Delivery::Hold => self.hold_note_line(sandbox.clone(), w.clone(), line.clone()),
+                team::Delivery::Drop => continue,
+            }
+            told.push(w);
+        }
+        tracing::info!("team: '{sandbox}' main moved, {} other thread(s) told", told.len());
+        told
+    }
+
     /// The line waits while `who` waits on a question or a prompt, and is
     /// typed once it is idle or at work again; dropped if it ends, or after
     /// 30 minutes (the note stays for `read_team_notes`).
