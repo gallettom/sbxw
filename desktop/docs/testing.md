@@ -20,6 +20,7 @@ root; the first build takes about a minute, later ones a few seconds.
 | Show another window (the web UI) taking the PTY's size, and typing taking it back | `desktop/scripts/demo-shared-size.sh` (`OTHER=200x60` for a larger one) |
 | Two live terminals: scrollback, selection, focus, a dead key | `desktop/scripts/shot.sh shots/x.png --script desktop/scripts/headless/two-panes-live.json` |
 | Run the unit and link tests | `cd desktop && CARGO_PROFILE_DEV_DEBUG=0 cargo test -j1` |
+| Measure the app's memory, and check its ceiling and leaks | `desktop/scripts/memory.sh` (see "Memory" below) |
 
 Shots and logs go to the checkout's root artifacts folder
 (`.sbxw-artifacts/desktop/shots/`, git-ignored), or `$SBXW_SHOTS`; never into
@@ -283,6 +284,36 @@ regression check on a loaded machine, not a benchmark) or a data push
 renders more than the screens drawn. `src/perf.rs` says what the probes
 cost when off (one cached flag). Numbers and causes: the checkout's
 `.sbxw-artifacts/desktop/PERF.md`.
+
+## Memory
+
+`desktop/scripts/memory.sh` (Linux or macOS, one command) builds the
+release binary and runs a fixed scenario headless against the stand-in: 12
+running sandboxes, 8 terminals over 3 pages each fed 30,000 lines of
+agent-like output (`scripts/memory-output.py`: colours, wide characters,
+redraws), every rail overlay and panel opened once, a commit's diff, the
+3,000-entry folder, 4 pictures previewed; then everything closed, an idle
+period, and 200 open/close cycles (an overlay, a panel, a terminal pane,
+the explorer with pictures). A `mem:<label>` mark in a script logs the
+report (`src/shell/memory.rs`): resident size, the heap's live bytes and
+each owner (every terminal's grid, each Luau VM, element trees, data,
+pictures, surfaces). `scripts/memory-summary.py` prints the table.
+
+- `SBXW_DESKTOP_MEM=1` (set by the script) makes the binary's allocator
+  count (`src/mem.rs`); off, it costs one relaxed load per allocation.
+- It exits 1 over the heap ceiling (`MEM_HEAP_CEILING_MB`, 420), the RSS
+  ceiling (`MEM_CEILING_MB`, 1000) or a growth over the cycles
+  (`MEM_LEAK_MB`, 10).
+- `SBXW_DESKTOP_TRIM=0` turns off handing freed memory back to the system,
+  to compare; `MEM_GC=1` and `MEM_TRIM=1` add what a full Luau collection
+  and a trim would leave.
+- `tests/memory.rs` (the app's counting allocator in its own binary): a
+  terminal's history stays within its width's cost, a narrowed terminal's
+  rows are compacted, `terminal_scrollback` bounds the history; `cargo test
+  --release --test memory -- --ignored --nocapture costs` times a scroll
+  through 10,000 lines, a compaction and a full screen of pills.
+
+Numbers and causes: the checkout's `.sbxw-artifacts/desktop/MEMORY.md`.
 
 ## Jarvis
 
