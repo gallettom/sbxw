@@ -49,6 +49,8 @@ pub struct App {
     pub initial_sandbox: Mutex<String>,
 
     pub(crate) agents: Mutex<AgentBook>,
+    /// Each session's conversation (see `svc::history`): in memory only.
+    pub(crate) history: Mutex<sbxw_core::history::HistoryBook>,
     pub(crate) relay: Mutex<RelayBook>,
     /// Parked `wait`s per request: an approval with none is typed into the
     /// asking session instead, or it is never read.
@@ -153,6 +155,7 @@ impl AppBuilder {
             ui_token: crate::http::token::mint(),
             initial_sandbox: Mutex::new(String::new()),
             agents: Mutex::new(AgentBook::new()),
+            history: Mutex::new(sbxw_core::history::HistoryBook::new()),
             relay: Mutex::new(RelayBook::new()),
             relay_waiters: Mutex::new(HashMap::new()),
             plans: Mutex::new(plan_book),
@@ -246,6 +249,9 @@ impl App {
         let ev = match ev {
             Event::Session(mut info) => {
                 self.fill_model(&mut info);
+                if info.ended {
+                    self.history_ended(&info);
+                }
                 Event::Session(info)
             }
             other => other,

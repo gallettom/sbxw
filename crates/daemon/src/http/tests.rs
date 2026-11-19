@@ -867,3 +867,115 @@ async fn commits_check_their_arguments_and_say_when_history_is_not_available() {
     assert_eq!(d["limits"]["file"], sbxw_core::commits::PATCH_FILE_MAX);
     assert_eq!(call(signed_in(app.clone()), get("/api/sandboxes/web/commits/abcdef0")).await.0, StatusCode::NOT_FOUND);
 }
+
+/// A session's history: posted by the hook of the sandbox the token proves,
+/// bounded, masked before it is stored, read only on the UI listener.
+/// Every text is invented; the token-shaped strings are fakes.
+#[tokio::test]
+async fn a_sessions_history_is_its_own_sandboxs_bounded_masked_and_ui_only() {
+    use sbxw_core::SandboxRef;
+    let (_d, app) = app();
+    let token_of = |n: &str| app.store.token(SandboxRef::parse(n).unwrap()).unwrap();
+    let (shop, other) = (token_of("shop"), token_of("other"));
+    let agent = |path: &str, token: &str, body: Value| {
+        json_req(post(path, body.clone()).header("authorization", format!("Bearer {token}")), body)
+    };
+    let get = |path: &str| Request::builder().uri(path).header("host", HOST).body(Body::empty()).unwrap();
+    let fake = "ghp_FAKEfake0123456789abcdefABCDEF0000";
+
+    let start = json!({"hook_event_name": "SessionStart", "session_id": "s1", "hook_version": 3, "history": "transcript"});
+    assert_eq!(call(agent_router(app.clone()), agent("/api/hook", &shop, start)).await.0, StatusCode::OK);
+    let items = json!([
+        {"t": "user", "text": format!("deploy with {fake}")},
+        {"t": "thinking", "text": "never"},
+        {"t": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+    ]);
+    let body = json!({"session_id": "s1", "from": 0, "to": 300, "items": items, "sandbox": "other"});
+    let (s, v) = call(agent_router(app.clone()), agent("/api/hook/history", &shop, body)).await;
+    assert_eq!((s, v["next"].as_u64()), (StatusCode::OK, Some(300)));
+
+    // The UI reads it, masked; never on the agent listener, never without the UI token.
+    let path = "/api/sessions/shop/s1/history";
+    let (s, v) = call(signed_in(app.clone()), get(path)).await;
+    assert_eq!(s, StatusCode::OK);
+    let all = v.to_string();
+    assert!(!all.contains(fake) && all.contains("[secret]") && !all.contains("never"), "{all}");
+    assert_eq!(v["page"]["items"].as_array().unwrap().len(), 3, "the start notice, the prompt, the call");
+    assert_eq!(v["page"]["partial"], false);
+    assert_eq!(call(agent_router(app.clone()), agent(path, &shop, json!({}))).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(crate::http::ui_router(app.clone()), get(path)).await.0, StatusCode::UNAUTHORIZED);
+
+    // A post cannot speak for another sandbox: the "sandbox" field above was
+    // ignored, and another sandbox's post for the same id is its own.
+    assert_eq!(call(signed_in(app.clone()), get("/api/sessions/other/s1/history")).await.0, StatusCode::NOT_FOUND);
+    let theirs = json!({"session_id": "s1", "from": 300, "to": 400, "items": [{"t": "user", "text": "hijack"}]});
+    assert_eq!(call(agent_router(app.clone()), agent("/api/hook/history", &other, theirs)).await.0, StatusCode::CONFLICT);
+    let (_, v) = call(signed_in(app.clone()), get(path)).await;
+    assert!(!v.to_string().contains("hijack"));
+
+    // Out of step: told where to start again.
+    let dup = json!({"session_id": "s1", "from": 100, "to": 400, "items": []});
+    let (s, v) = call(agent_router(app.clone()), agent("/api/hook/history", &shop, dup)).await;
+    assert_eq!((s, v["next"].as_u64()), (StatusCode::CONFLICT, Some(300)));
+
+    // Too large: by items, and by bytes.
+    let many: Vec<Value> = (0..sbxw_core::history::limits::POST_ITEMS_MAX + 1).map(|_| json!({"t": "user", "text": "x"})).collect();
+    let big = json!({"session_id": "s1", "from": 300, "to": 400, "items": many});
+    assert_eq!(call(agent_router(app.clone()), agent("/api/hook/history", &shop, big)).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+    let huge = json!({"session_id": "s1", "from": 300, "to": 400, "items": [{"t": "user", "text": "x".repeat(sbxw_core::history::limits::POST_MAX_BYTES)}]});
+    assert_eq!(call(agent_router(app.clone()), agent("/api/hook/history", &shop, huge)).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+    let (_, v) = call(signed_in(app.clone()), get(path)).await;
+    assert_eq!(v["page"]["latest_seq"], 3, "nothing of the refused posts was stored");
+
+    // The nudge: while subscribed (the GETs above), and not after the DELETE.
+    let mut bus = app.bus.subscribe();
+    let next = json!({"session_id": "s1", "from": 300, "to": 350, "items": [{"t": "assistant", "text": "ok"}]});
+    call(agent_router(app.clone()), agent("/api/hook/history", &shop, next)).await;
+    match bus.try_recv() {
+        Ok(crate::bus::Event::History(n)) => {
+            assert_eq!((n.sandbox.as_str(), n.session_id.as_str(), n.seq), ("shop", "s1", 4));
+            assert_eq!(crate::bus::Event::History(n).data(), r#"{"sandbox":"shop","session_id":"s1","seq":4}"#);
+        }
+        other => panic!("expected a history nudge, got {other:?}"),
+    }
+    let del = Request::builder().method("DELETE").uri("/api/sessions/shop/s1/history/subscription").header("host", HOST).body(Body::empty()).unwrap();
+    assert_eq!(call(signed_in(app.clone()), del).await.0, StatusCode::OK);
+    let after = json!({"session_id": "s1", "from": 350, "to": 360, "items": [{"t": "assistant", "text": "again"}]});
+    call(agent_router(app.clone()), agent("/api/hook/history", &shop, after)).await;
+    assert!(!std::iter::from_fn(|| bus.try_recv().ok()).any(|e| matches!(e, crate::bus::Event::History(_))));
+
+    // An old hook: events only, and the route says so.
+    let old = json!({"hook_event_name": "UserPromptSubmit", "session_id": "o1", "hook_version": 2, "prompt": "hello"});
+    call(agent_router(app.clone()), agent("/api/hook", &other, old)).await;
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions/other/o1/history")).await;
+    assert_eq!(v["page"]["partial"], true);
+    assert!(v["page"]["partial_reason"].as_str().unwrap().starts_with("old_hook"));
+    assert_eq!(v["page"]["items"][0]["kind"], "user_prompt");
+
+    // A session's end starts its expiry; its sandbox's removal is not
+    // exercised here (sbx rm), see the core tests for `drop_sandbox`.
+    let end = json!({"hook_event_name": "SessionEnd", "session_id": "s1", "hook_version": 3, "reason": "other"});
+    call(agent_router(app.clone()), agent("/api/hook", &shop, end)).await;
+    let (_, v) = call(signed_in(app.clone()), get(path)).await;
+    assert_eq!(v["page"]["ended"], true);
+}
+
+/// A hook of one sandbox retires nothing in another, and a restarted main
+/// session is answerable again once its dead record is retired.
+#[tokio::test]
+async fn retiring_dead_records_stays_within_the_posting_sandbox() {
+    use sbxw_core::SandboxRef;
+    let (_d, app) = app();
+    let token_of = |n: &str| app.store.token(SandboxRef::parse(n).unwrap()).unwrap();
+    let (a, b) = (token_of("alpha"), token_of("beta"));
+    let hook = |token: &str, body: Value| json_req(post("/api/hook", body.clone()).header("authorization", format!("Bearer {token}")), body);
+    let start = |id: &str, proc: &str, live: &[&str]| {
+        json!({"hook_event_name": "SessionStart", "session_id": id, "hook_version": 3, "agent_proc": proc, "live_procs": live})
+    };
+    call(agent_router(app.clone()), hook(&a, start("a1", "10:1", &["10:1"]))).await;
+    call(agent_router(app.clone()), hook(&b, start("b1", "20:1", &[]))).await;
+    let ids = |app: &std::sync::Arc<crate::app::App>| app.session_infos().iter().filter_map(|i| i.session_id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(&app), vec!["a1", "b1"], "beta's empty list retires nothing of alpha's");
+    call(agent_router(app.clone()), hook(&a, start("a2", "11:1", &["11:1"]))).await;
+    assert_eq!(ids(&app), vec!["a2", "b1"]);
+}

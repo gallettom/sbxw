@@ -26,6 +26,10 @@ type S = State<Arc<App>>;
 pub fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/api/hook", post(hook))
+        .route(
+            "/api/hook/history",
+            post(hook_history).layer(axum::extract::DefaultBodyLimit::max(sbxw_core::history::limits::POST_MAX_BYTES)),
+        )
         .route("/api/usage", post(usage))
         .route("/api/relay/ask", post(ask))
         .route("/api/relay/shot", post(shot))
@@ -57,6 +61,21 @@ async fn hook(State(app): S, Agent(me): Agent, Json(body): Json<Value>) -> Json<
             "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": note }
         })),
         None => Json(json!({})),
+    }
+}
+
+/// The status hook's summarised transcript tail, for its own session (the
+/// sandbox is the token's). 200 `{next}`: accepted up to that byte offset;
+/// 409 `{next}`: out of step, start again from there (0: from the tail, with
+/// `reset`); 413: too large (also past the body limit).
+async fn hook_history(State(app): S, Agent(me): Agent, Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    use crate::svc::history::PostError;
+    use sbxw_core::history::Posted;
+    match app.history_post(&me, &body) {
+        Ok(Posted::Accepted { next, .. }) => (StatusCode::OK, Json(json!({ "ok": true, "next": next }))),
+        Ok(Posted::OutOfStep { next }) => (StatusCode::CONFLICT, Json(json!({ "ok": false, "next": next }))),
+        Err(PostError::TooLarge) => (StatusCode::PAYLOAD_TOO_LARGE, Json(json!({ "ok": false, "error": "too many items" }))),
+        Err(PostError::NoSession) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": "no session_id" }))),
     }
 }
 

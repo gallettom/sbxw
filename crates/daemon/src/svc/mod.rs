@@ -6,6 +6,7 @@ pub mod board;
 pub mod browser;
 pub mod codemap;
 pub mod emphasis;
+pub mod history;
 pub mod hosts;
 pub mod jarvis;
 pub mod jarvis_sandbox;
