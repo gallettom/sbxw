@@ -78,13 +78,19 @@ if "--ceiling" in opt:
     peak = max((mk["rows"].get("RSS") or 0) for mk in marks)
     print(f"guard: highest RSS {peak:.1f} MB, ceiling {ceil:.0f} MB: {'FAIL' if peak > ceil else 'ok'}")
     fail |= peak > ceil
+if "--heap-ceiling" in opt and any(mk["rows"].get("heap live") is not None for mk in marks):
+    ceil = float(opt["--heap-ceiling"])
+    peak = max((mk["rows"].get("heap live") or 0) for mk in marks)
+    print(f"guard: highest heap {peak:.1f} MB, ceiling {ceil:.0f} MB: {'FAIL' if peak > ceil else 'ok'}")
+    fail |= peak > ceil
 if "--leak" in opt:
     allow = float(opt["--leak"])
-    a, b = by.get("cycles-0"), by.get("cycles-200")
+    ends = [mk["label"] for mk in marks if mk["label"].startswith("cycles-") and mk["label"] != "cycles-0"]
+    a, b = by.get("cycles-0"), (by.get(ends[-1]) if ends else None)
     if a and b and a.get("heap live") is not None:
         grew = b["heap live"] - a["heap live"]
-        print(f"guard: heap grew {grew:.1f} MB over 200 open/close cycles, allowance {allow:.0f} MB: {'FAIL' if grew > allow else 'ok'}")
+        print(f"guard: heap grew {grew:.1f} MB over the open/close cycles ({ends[-1]}), allowance {allow:.0f} MB: {'FAIL' if grew > allow else 'ok'}")
         fail |= grew > allow
     else:
-        print("guard: no cycles-0 / cycles-200 marks with the heap counted: leak check skipped")
+        print("guard: no cycles-0 / cycles-N marks with the heap counted: leak check skipped")
 sys.exit(1 if fail else 0)

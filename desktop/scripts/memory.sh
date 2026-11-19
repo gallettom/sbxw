@@ -14,8 +14,10 @@
 # A `mem:<label>` mark writes the report in the log (shell/memory.rs):
 # resident size (RSS), the heap's live bytes (SBXW_DESKTOP_MEM=1, a counting
 # allocator) and the bytes each owner holds. memory-summary.py prints the
-# table and checks the guard: the highest RSS under MEM_CEILING_MB, and the
-# heap's growth over the cycles under MEM_LEAK_MB.
+# table and checks the guard (MEMORY.md, "The guard"): the highest heap
+# under MEM_HEAP_CEILING_MB (420, twice this run's 210), the highest RSS
+# under MEM_CEILING_MB (1000; this sandbox's software renderer alone holds
+# about 165), and the heap's growth over the cycles under MEM_LEAK_MB (10).
 #
 #   desktop/scripts/memory.sh                   # Linux or macOS, one command
 #
@@ -126,14 +128,27 @@ hold(1500)
 mem("closed")
 hold(idle)
 mem("idle")
-# Open/close cycles: an overlay, a panel, a terminal pane.
-mem("cycles-0")
-for c in range(cycles):
+# Open/close cycles: an overlay, a panel, and every tenth a terminal pane
+# and the explorer with two pictures previewed. A few first, so what a first
+# open makes once (a screen's VM) is not counted as growth.
+def cycle(c):
     add(type="tap", key="rail-commits"); add(type="tap", key="rail-commits")
     add(type="tap", key="rail-requests"); add(type="tap", key="panel-close-relay")
     if c % 10 == 0:
-        hold(50)
-hold(1000)
+        add(type="tap", key="add-chat-research"); hold(500)
+        add(type="tap", key="page-1-close"); hold(200)
+        add(type="tap", key="rail-files"); wait("files-loc-artifacts", 3000)
+        add(type="tap", key="files-loc-artifacts"); wait("files-row-shot-1.png", 3000)
+        add(type="tap", key="files-row-shot-1.png"); hold(400)
+        add(type="tap", key="files-row-shot-2.png"); hold(400)
+        add(type="tap", key="rail-files"); hold(200)
+for c in range(3):
+    cycle(c * 10)
+hold(1500)
+mem("cycles-0")
+for c in range(cycles):
+    cycle(c)
+hold(1500)
 mem(f"cycles-{cycles}")
 add(type="mark", name="end")
 print(json.dumps({"events": ev}))
@@ -142,4 +157,4 @@ start_daemon "$out/standin" --fixture "$out/fixture.json"
 bin=${MEM_BIN_DIR:-$bin}
 SBXW_DESKTOP_MEM=${MEM_COUNT:-1} SHOT_SIZE=${SHOT_SIZE:-1440x900} run_app "$out/memory.log" --script "$out/script.json" --snap "$out/end.png" --tree "$out/tree.json" --at "${MEM_AT:-mark:end+0.2}" || true
 cleanup; pids=()
-python3 "$here/scripts/memory-summary.py" "$out/memory.log" --json "$out/marks.json" --ceiling "${MEM_CEILING_MB:-0}" --leak "${MEM_LEAK_MB:-0}" | tee "$out/table.md"
+python3 "$here/scripts/memory-summary.py" "$out/memory.log" --json "$out/marks.json" --ceiling "${MEM_CEILING_MB:-1000}" --heap-ceiling "${MEM_HEAP_CEILING_MB:-420}" --leak "${MEM_LEAK_MB:-10}" | tee "$out/table.md"
