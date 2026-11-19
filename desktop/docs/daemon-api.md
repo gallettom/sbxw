@@ -153,7 +153,7 @@ when the manifest lists them. Every answer is `{ok, ...}`.
 |---|---|---|
 | `GET /api/canvas` | | `canvases` (newest first: `id, sandbox, title, created_ms, updated_ms, shots, rounds, reviews, bytes, draft`), `total_bytes`, `max_canvas_bytes` |
 | `POST /api/canvas` | `{sandbox, title}` | `canvas` (a new manifest) |
-| `GET /api/canvas/:id` | | `canvas` (the manifest: `shots, assets, pins, notes, rounds, reviews`), `bytes` |
+| `GET /api/canvas/:id` | | `canvas` (the manifest: `shots, assets, pins, notes, rounds, reviews`), `bytes`. A shot has `moved` (placed by the person) and `cell` (`[row, column, slot]` in its round's grid); a round `cols`, `cell_w`, `slot_w` |
 | `GET /api/canvas/:id/images/:file` | | the picture's bytes, its type (PNG, JPEG, WebP), `nosniff`; 404 for a name the manifest does not list |
 | `POST /api/canvas/:id/rename` | `{title}` | `title` |
 | `POST /api/canvas/:id/edit` | `{pins?, notes?, remove_assets, layout: [{id, x, y, w, h}]}`: the unsent pins and notes whole; sent ones never change | `updated_ms, draft` |
