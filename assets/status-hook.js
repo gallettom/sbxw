@@ -373,6 +373,15 @@ function readTail(tp, st, sid, limits) {
   }
 }
 
+function readable(p) {
+  try {
+    fs.accessSync(p, fs.constants.R_OK);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 // What to keep after the daemon answered a post: its status and `next`.
 function stateAfter(status, body, piece) {
   const next = body && typeof body.next === "number" ? body.next : null;
@@ -439,7 +448,9 @@ process.stdin.on("end", () => {
     else {
       const st = loadState(HISTORY_DIR, evt.session_id);
       piece = readTail(evt.transcript_path, st, evt.session_id);
-      evt.history = piece ? "transcript" : fs.existsSync(evt.transcript_path) ? "transcript" : "none:unreadable";
+      // Not written yet (a session's first prompt) is catching up, not a
+      // failure: the daemon must not fill the log from events meanwhile.
+      evt.history = piece || !fs.existsSync(evt.transcript_path) || readable(evt.transcript_path) ? "transcript" : "none:unreadable";
       if (piece && !(piece.to > piece.from || piece.reset)) piece = null;
     }
   }
