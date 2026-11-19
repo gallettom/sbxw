@@ -12,11 +12,11 @@ local function note(t, color)
   return text{ t, size = "sm", color = color or "text-muted", wrap = true }
 end
 
-local function filters(ui, V)
+local function filters(ui)
   local items = { { id = "", label = "All sandboxes", icon = "grid" } }
   for _, s in ipairs(ui.sandboxes or {}) do items[#items + 1] = { id = s.id, label = s.label } end
   return row{ gap = 8, w = "full",
-    V == "" and select{ id = "commits-sandbox", value = ui.sandbox or "", on = "sandbox", items = items, w = 180 } or false,
+    select{ id = "commits-sandbox", value = ui.sandbox or "", on = "sandbox", items = items, w = 180 },
     -- The field grows and never goes under its placeholder; when the row
     -- has no room for it, the row wraps (the controls keep their width).
     input{ id = "commits-filter", value = ui.filter or "", placeholder = "Filter by subject or author", on = "filter", grow = 1, min_w = 220 },
@@ -100,11 +100,9 @@ local function rowview(r)
   }
 end
 
-local M = {
-  init = function() return {} end,
-  render = function(state, data)
+return {
+  render = function(_, data)
     local ui = data.commits_ui or {}
-    local V = (data.app or {}).scope_variant or ""
     local list = { gap = 2, w = "full", folds = true, group = "list", key = "commits-list" }
     for _, r in ipairs(ui.rows or {}) do
       list[#list + 1] = rowview(r)
@@ -118,27 +116,13 @@ local M = {
     for _, n in ipairs(ui.notes or {}) do
       list[#list + 1] = note(n.text, n.tone == "red" and "red" or "text-dim")
     end
-    local out = { h = "full", gap = 8, w = "full" }
-    if V == "3" then
-      out[#out + 1] = row{ gap = 12, w = "full", key = "scope-bar",
-        scope_block(data, { id = "commits-sandbox", value = ui.sandbox or "", open = state.scope_open, narrow = nz(ui.branch) and ("branch " .. ui.branch) or nil, all = "All sandboxes" }),
-        column{ grow = 1, min_w = 0, filters(ui, V) } }
-    else
-      if V ~= "" then
-        out[#out + 1] = row{ key = "title-slot", gap = 6,
-          text{ "in", size = "lg", color = "text-muted" },
-          scope_capsule(data, { id = "commits-sandbox", value = ui.sandbox or "", open = state.scope_open, all = "All sandboxes" }) }
-      end
-      out[#out + 1] = filters(ui, V)
-    end
-    out[#out + 1] = scroll{ key = "commits-scroll", column(list) }
-    return column(out)
+    return column{ h = "full", gap = 8, w = "full",
+      filters(ui),
+      scroll{ key = "commits-scroll", column(list) },
+    }
   end,
   actions = {
     sandbox = function(_, _, id) return intent("commits_sandbox", { sandbox = id or "" }) end,
-    scope_toggle = function(state) state.scope_open = not state.scope_open end,
-    scope_filter = function(state, _, t) state.scope_filter = t end,
-    scope_pick = function(state, id) state.scope_open = false; return intent("commits_sandbox", { sandbox = id or "" }) end,
     filter = function(_, _, t) return intent("commits_filter", { text = t or "" }) end,
     unmerged = function(_, _, on) return intent("commits_unmerged", { on = on }) end,
     branch_clear = function() return intent("commits_branch_clear", {}) end,
@@ -149,14 +133,3 @@ local M = {
     copy = function(_, id) return intent("commits_copy", { id = id }) end,
   },
 }
--- STAGE1 THROWAWAY: the scope list on top of everything.
-local inner = M.render
-M.render = function(state, data)
-  local r = inner(state, data)
-  local V = (data.app or {}).scope_variant or ""
-  local ui = data.commits_ui or {}
-  if V == "" or not state.scope_open then return r end
-  return column{ h = "full", w = "full", r,
-    scope_menu(data, { open = true, value = ui.sandbox or "", all = "All sandboxes", pick = "scope_pick", left = V == "3" and 0 or 104, top = V == "3" and 50 or 0, filter = state.scope_filter, show_filter = #(data.sandboxes or {}) > ((data.app or {}).scope_filter_min or 8) }) }
-end
-return M

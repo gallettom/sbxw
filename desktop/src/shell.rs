@@ -683,8 +683,6 @@ impl App {
             .collect::<serde_json::Map<_, _>>()
             .into();
         data["app"]["theme"] = J::String(theme::mode().name().into());
-        data["app"]["scope_variant"] = J::String(std::env::var("SBXW_SCOPE_VARIANT").unwrap_or_default()); // STAGE1 THROWAWAY
-        data["app"]["scope_filter_min"] = std::env::var("SBXW_SCOPE_FILTER_MIN").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(8).into(); // STAGE1 THROWAWAY
         data["app"]["groups"] = groups.into_iter().map(|(n, c)| (n, J::String(format!("#{c:06x}")))).collect::<serde_json::Map<_, _>>().into();
         data["app"]["sidebar"] = serde_json::json!({ "w": self.sidebar_w(), "shown": self.sidebar_shown() });
         // The pages of terminals: which shows, how many, per page, the view.

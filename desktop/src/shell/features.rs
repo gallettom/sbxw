@@ -819,17 +819,8 @@ impl App {
                     .child(rune::icon(crate::icons::get("close").unwrap(), crate::theme::icon::MEDIUM).color(c("text-muted"))),
             );
         }
-        // STAGE1 THROWAWAY: V2's frame in the scope's colour.
-        let v2 = std::env::var("SBXW_SCOPE_VARIANT").is_ok_and(|v| v == "2");
-        let look = crate::screen::SLOT_LOOK.with(|l| l.get()).filter(|_| v2);
-        let bgv = crate::theme::color_value("bg").unwrap();
-        let wash = look.map(|b| el().pin(Some(0.0), Some(0.0), Some(0.0), None).h(12.0 + layout::CONTROL_H + 6.0).fill(crate::theme::hex(crate::theme::over(b, 0.16, bgv))));
-        let strip = look.map(|b| el().pin(Some(0.0), Some(0.0), Some(0.0), None).h(4.0).fill(crate::theme::hex(b)));
-        let border = look.map(|b| crate::theme::hex(crate::theme::over(b, 0.55, bgv))).unwrap_or(c("elevated"));
         Some(
             col()
-                .children(wash)
-                .children(strip)
                 .key(format!("overlay-{name}"))
                 .role("dialog")
                 .label(title)
@@ -837,7 +828,7 @@ impl App {
                 .padding(12.0)
                 .gap(8.0)
                 .fill(c("bg"))
-                .border(1.0, border)
+                .border(1.0, c("elevated"))
                 .radius(radius("md").unwrap())
                 .clip_rounded(radius("md").unwrap())
                 .focus_group()
