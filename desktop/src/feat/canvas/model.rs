@@ -2,6 +2,7 @@
 //! view's data, the texts of a send, and the stand-in's routes.
 
 use super::State;
+use crate::feat::monitor::model::{who, Group};
 use crate::feat::files::view::{ago, now_secs, size_label};
 use crate::feat::monitor::attach::{clipped, clipped_text};
 use crate::feat::Standin;
@@ -323,6 +324,15 @@ pub fn view(s: &State, snap: &J) -> J {
         .collect();
     canvases.push(json!({ "divider": true }));
     canvases.push(json!({ "id": "new", "label": "New canvas", "icon": "plus" }));
+    // The scope picker offers only the sandboxes that exist: a removed
+    // one's canvases are reached from here.
+    let elsewhere: Vec<&String> = gone.iter().filter(|g| **g != sb).collect();
+    if !elsewhere.is_empty() {
+        canvases.push(json!({ "divider": true }));
+        for g in elsewhere {
+            canvases.push(json!({ "id": format!("sb:{g}"), "label": format!("Canvases of {g} (removed)"), "icon": "canvas" }));
+        }
+    }
     let cur = s.list.iter().find(|c| Some(c["id"].as_str().unwrap_or("")) == s.current.as_deref());
     let storage = format!(
         "This canvas {} · all canvases {} ({})",
@@ -386,46 +396,115 @@ pub fn view(s: &State, snap: &J) -> J {
     v
 }
 
+/// The sessions of `sb` a send or an ask may go to, one per place as the
+/// Sessions view folds them (`monitor::model::Model`: the newest report of
+/// a place wins, two live sessions in one main checkout are two places):
+/// `(key, label, info)`, main first. Ended sessions are not offered.
+pub fn places(snap: &J, sb: &str) -> Vec<(String, String, J)> {
+    let mine: Vec<J> = snap["sessions"].as_array().into_iter().flatten().filter(|i| i["sandbox"] == sb).cloned().collect();
+    let mut m = crate::feat::monitor::model::Model::default();
+    m.seed(&J::Array(mine));
+    let cards: Vec<(String, J)> = m.cards.iter().filter(|(_, c)| Group::of(c.info["state"].as_str().unwrap_or("")) != Group::Ended).map(|(k, c)| (k.clone(), c.info.clone())).collect();
+    let mains = cards.iter().filter(|(_, i)| thread_of(i).is_none()).count();
+    let mut v: Vec<(String, String, J)> = cards
+        .into_iter()
+        .map(|(k, i)| {
+            let label = match thread_of(&i) {
+                Some(t) => who(sb, Some(t)),
+                None if mains > 1 => {
+                    let sid: Vec<char> = i["session_id"].as_str().unwrap_or("").chars().collect();
+                    format!("{} · {}", who(sb, None), sid[sid.len().saturating_sub(4)..].iter().collect::<String>())
+                }
+                None => who(sb, None),
+            };
+            (k, label, i)
+        })
+        .collect();
+    v.sort_by_key(|(_, l, i)| (thread_of(i).is_some(), std::cmp::Reverse(i["ts"].as_u64().unwrap_or(0)), l.clone()));
+    v
+}
+
+fn thread_of(i: &J) -> Option<&str> {
+    i["thread"].as_str().filter(|t| !t.is_empty())
+}
+
+/// Why one session cannot take typed words, if it cannot.
+fn session_refusal(label: &str, info: &J) -> Option<String> {
+    match Group::of(info["state"].as_str().unwrap_or("")) {
+        Group::You => return Some(format!("{label} waits on a question or a permission; answer that first")),
+        Group::Ended => return Some(format!("{label} has ended")),
+        _ => {}
+    }
+    if thread_of(info).is_none() && info["answerable"] != true {
+        return Some(format!("sbxw cannot tell which terminal is {label}'s; answer in its terminal"));
+    }
+    None
+}
+
+/// Where a send or an ask goes, or why it cannot, and the sessions to pick
+/// from. ONE verdict for the button (the view) and the press (`target`), so
+/// the two never disagree.
+pub struct Verdict {
+    pub places: Vec<(String, String, J)>,
+    /// The place chosen: the one picked, else the main session that can be
+    /// asked, else the first.
+    pub key: Option<String>,
+    pub label: Option<String>,
+    pub info: J,
+    /// Why not, in plain words that say what to do (no "Not sent" prefix).
+    pub why: Option<String>,
+}
+
+/// `snap`: `{sessions, sandboxes, covered, jarvis}` (the app's data).
+/// `held`: also refuse while something is over the canvas or a Jarvis
+/// proposal waits (the button; a press checks those first itself).
+pub fn verdict(snap: &J, sandbox: Option<&str>, picked: Option<&str>, held: bool) -> Verdict {
+    let sb = sandbox.unwrap_or("");
+    let places = if sb.is_empty() { vec![] } else { places(snap, sb) };
+    let fine = |(_, l, i): &(String, String, J)| session_refusal(l, i).is_none();
+    let key = picked
+        .filter(|k| places.iter().any(|(x, _, _)| x == k))
+        .map(str::to_string)
+        // Not picked: the main checkout's session that can be asked (a stale
+        // one waiting on an old question beside it is not chosen), else the
+        // first. Never a thread on its own: that is the person's pick.
+        .or_else(|| places.iter().find(|p| thread_of(&p.2).is_none() && fine(p)).or(places.first()).map(|(k, _, _)| k.clone()));
+    let chosen = key.as_ref().and_then(|k| places.iter().find(|(x, _, _)| x == k));
+    let label = chosen.map(|(_, l, _)| l.clone());
+    let info = chosen.map(|(_, _, i)| i.clone()).unwrap_or(J::Null);
+    let running = snap["sandboxes"].as_array().into_iter().flatten().any(|x| x["name"] == sb && x["status"] == "running");
+    let why = if held && snap["covered"] != false && !snap["covered"].is_null() {
+        Some("Something is open over the canvas (a dialog or a menu); close it first".to_string())
+    } else if held && snap["jarvis"].as_array().is_some_and(|p| !p.is_empty()) {
+        Some("A Jarvis proposal waits for you; approve or refuse it first".to_string())
+    } else if sb.is_empty() {
+        Some("No sandbox is shown; pick one first".to_string())
+    } else if !running {
+        Some(format!("{sb} is not running; start it first"))
+    } else if let Some((_, l, i)) = chosen {
+        session_refusal(l, i).map(|w| {
+            let others: Vec<&str> = places.iter().filter(|p| p.0 != *key.as_deref().unwrap_or("") && fine(p)).map(|(_, l, _)| l.as_str()).collect();
+            if others.is_empty() { w } else { format!("{w}. Or pick {} instead", others.join(" or ")) }
+        })
+    } else {
+        Some(format!("{sb} has no open agent session; open one first"))
+    };
+    Verdict { places, key, label, info, why }
+}
+
 fn send_view(s: &State, snap: &J, new: usize) -> J {
     let sb = s.sandbox.clone().unwrap_or_default();
-    let sessions: Vec<(String, String, J)> = {
-        let mut l: Vec<(String, String, J)> = snap["sessions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|i| i["sandbox"] == sb.as_str() && i["state"] != "exited")
-            .map(|i| {
-                let t = i["thread"].as_str().filter(|t| !t.is_empty());
-                (t.map_or_else(|| sb.clone(), |t| format!("{sb}::{t}")), crate::feat::monitor::model::who(&sb, t), i.clone())
-            })
-            .collect();
-        l.sort_by_key(|(k, _, _)| (k.contains("::"), k.clone()));
-        l
-    };
-    let key = s.session.clone().filter(|k| sessions.iter().any(|(x, _, _)| x == k)).or_else(|| sessions.first().map(|(k, _, _)| k.clone()));
-    let label = key.as_ref().and_then(|k| sessions.iter().find(|(x, _, _)| x == k)).map(|(_, l, _)| l.clone());
-    let running = snap["sandboxes"].as_array().into_iter().flatten().any(|x| x["name"] == sb.as_str() && x["status"] == "running");
-    let info = key.as_ref().and_then(|k| sessions.iter().find(|(x, _, _)| x == k)).map(|(_, _, i)| i.clone()).unwrap_or(J::Null);
-    let why = if snap["covered"] != false && !snap["covered"].is_null() {
-        Some("Close what is open over the canvas first")
-    } else if snap["jarvis"].as_array().is_some_and(|p| !p.is_empty()) {
-        Some("A Jarvis proposal waits for you")
-    } else if !running {
-        Some("The sandbox is not running")
-    } else if label.is_none() {
-        Some("No agent session is open in this sandbox")
-    } else if info["state"] == "attention" {
-        Some("The session waits on a question or a permission")
-    } else {
-        None
-    };
+    let v = verdict(snap, s.sandbox.as_deref(), s.session.as_deref(), true);
     let busy = s.job.as_ref().is_some_and(|j| j.sent);
-    let to = label.clone().unwrap_or_else(|| format!("{sb} · no session"));
+    let to = v.label.clone().unwrap_or_else(|| format!("{sb} · no session"));
+    let why = v.why.as_ref().map(|w| format!("{w}."));
     json!({
         "label": format!("Send remarks to {to}"), "to": to, "new": new,
         "ok": new > 0 && why.is_none() && !busy, "ask_ok": why.is_none(),
-        "why": if busy { Some("Sending…") } else if new == 0 { Some("No new pin, note or picture since the last round") } else { why },
-        "sessions": sessions.iter().map(|(k, l, _)| json!({ "id": k, "label": l })).collect::<Vec<_>>(), "session": key,
+        "why": if busy { Some("Sending…".to_string()) } else if new == 0 { Some("No new pin, note or picture since the last round".to_string()) } else { why.clone() },
+        // The Ask button's own reason: independent of what is new.
+        "ask_why": why,
+        "sessions": v.places.iter().map(|(k, l, _)| json!({ "id": k, "label": l })).collect::<Vec<_>>(), "session": v.key,
     })
 }
 
