@@ -1133,7 +1133,7 @@ marks those that do not fit `more` (above).
 
 A feature puts an entry in the left rail with `Place::Rail { zone, order }`.
 `zone` is a `feat::Zone`: `Activity` (what happens now: Requests 10,
-Network 20, Team leads 30, Board 35), `Browse` (views to read: Commits 10,
+Network 20, Team leads 30), `Browse` (views to read: Commits 10,
 Worktrees 20, Files 30) or `Configure` (what is set up: MCP 10, Skills 20,
 Kits 30; Settings is always its last). `order` sorts within the zone, lower
 first. The rail draws the activity and browse zones at its top, the
@@ -1819,39 +1819,6 @@ background. `data.commits_ui`: `sandbox` (nil: every one), `branch`,
 
 Commit messages are drawn as plain text: no pills, no Markdown, no links.
 
-### worktrees
-
-An overlay (`src/feat/worktrees.rs`, `screens/worktrees.luau`): one block
-per sandbox, one row per worktree (path, thread and its state, ahead,
-behind, uncommitted changes, merged, the last commit; Terminal, Commits,
-Files). Above a block's rows, the **branch graph** of its unmerged
-worktrees, one per repository (`src/feat/worktrees_graph.rs`, the web UI's
-`wtLayout` mapping): the base branch as the top lane, each unmerged thread
-(a tip with commits of its own) forking from its merge-base and running to
-its tip, a dot per commit; merged worktrees and branches with nothing of
-their own are not drawn (their rows keep the "merged" chip). Lanes go by
-fork, the newest first (no link crosses a lane above it), then by name;
-each lane's colour comes from the thread's name (`lane_color`, a stable
-palette; the row's branch icon wears it), its label from the thread's
-state. Ahead is the lane's dots, behind the base's dots after the fork.
-Caps: 24 base commits and 10 per thread from 760 pt, 10 and 4 under it (a
-"+N" chip for a thread's older commits, a faint "earlier" edge for the
-base's); the same lanes at both widths. The layout is in columns and rows,
-deterministic and tested (`the_branch_graph_lays_out_unmerged_lanes_by_fork_with_caps`);
-the screen turns it into points and draws it with the `paint` prop
-(Rune's `Shape`). A lane's label (`worktrees-lane-<id>`) selects its row
-(`worktrees_select`); a dot (`worktrees-dot-<sandbox>-<short>`) opens that
-commit in Commits (`commits_show {sandbox, branch, hash}`).
-
-| Intent | Args | Effect |
-|---|---|---|
-| `worktrees_show` | | Opens the view and reads every sandbox's worktrees |
-| `worktrees_refresh` | | Reads again |
-| `worktrees_filter` | `text` | By sandbox, thread, branch or path |
-| `worktrees_more` | | The next page of rows |
-| `worktrees_terminal`, `worktrees_commits`, `worktrees_files` | `id` | The row's thread terminal, its branch in Commits, the explorer at it |
-| `worktrees_select` | `id?` | Marks a row (a lane pressed), or none; view state |
-
 ### board
 
 An overlay (`src/feat/board/`, `screens/board.luau`), the rail's activity
@@ -1895,6 +1862,39 @@ again.
 | `board_tab` | `tab` | The narrow layout's column |
 | `board_open` | `what`, `thread?`, `relay?` | Where one acts: terminal, monitor, commits, worktrees, plan, requests, threads |
 | `board_refresh` | | Reads again |
+
+### worktrees
+
+An overlay (`src/feat/worktrees.rs`, `screens/worktrees.luau`): one block
+per sandbox, one row per worktree (path, thread and its state, ahead,
+behind, uncommitted changes, merged, the last commit; Terminal, Commits,
+Files). Above a block's rows, the **branch graph** of its unmerged
+worktrees, one per repository (`src/feat/worktrees_graph.rs`, the web UI's
+`wtLayout` mapping): the base branch as the top lane, each unmerged thread
+(a tip with commits of its own) forking from its merge-base and running to
+its tip, a dot per commit; merged worktrees and branches with nothing of
+their own are not drawn (their rows keep the "merged" chip). Lanes go by
+fork, the newest first (no link crosses a lane above it), then by name;
+each lane's colour comes from the thread's name (`lane_color`, a stable
+palette; the row's branch icon wears it), its label from the thread's
+state. Ahead is the lane's dots, behind the base's dots after the fork.
+Caps: 24 base commits and 10 per thread from 760 pt, 10 and 4 under it (a
+"+N" chip for a thread's older commits, a faint "earlier" edge for the
+base's); the same lanes at both widths. The layout is in columns and rows,
+deterministic and tested (`the_branch_graph_lays_out_unmerged_lanes_by_fork_with_caps`);
+the screen turns it into points and draws it with the `paint` prop
+(Rune's `Shape`). A lane's label (`worktrees-lane-<id>`) selects its row
+(`worktrees_select`); a dot (`worktrees-dot-<sandbox>-<short>`) opens that
+commit in Commits (`commits_show {sandbox, branch, hash}`).
+
+| Intent | Args | Effect |
+|---|---|---|
+| `worktrees_show` | | Opens the view and reads every sandbox's worktrees |
+| `worktrees_refresh` | | Reads again |
+| `worktrees_filter` | `text` | By sandbox, thread, branch or path |
+| `worktrees_more` | | The next page of rows |
+| `worktrees_terminal`, `worktrees_commits`, `worktrees_files` | `id` | The row's thread terminal, its branch in Commits, the explorer at it |
+| `worktrees_select` | `id?` | Marks a row (a lane pressed), or none; view state |
 
 ### Overlays
 
