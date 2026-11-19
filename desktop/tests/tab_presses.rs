@@ -85,6 +85,8 @@ fn every_tab_like_control_changes_what_is_drawn() {
         ("relay/basic", vec![], vec!["relay-req-r-2", "relay-req-r-3", "relay-req-r-1"]),
         // The plan dialog's "Show more" on a long goal and on many scope chips, and back.
         ("threads/plan-long", vec![], vec!["pt-1-more", "pt-1-owns-more", "pt-1-more"]),
+        // The Board: its kind filter and the narrow tabs' content (wide here: the filter).
+        ("board/basic", vec![intent("board_show", json!({ "team": "p-run" }))], vec!["board-group-notes", "board-group-questions", "board-group-all", "board-thread-web-page"]),
         // The pager's Tabs and Grid.
         ("shell/finish-grid", vec![], vec!["pager-view-tabs", "pager-view-grid"]),
     ];

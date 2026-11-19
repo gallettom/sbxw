@@ -286,7 +286,7 @@ terminal, never reach the daemon and are not in it.
   of events, newest first (`before` is the last event id of the previous
   page; `limit` 1 to 500, 100 by default). Each event has `id`, `at` (ms, or
   null when not known), `kind`, `group` (`notes`, `questions`, `commits`,
-  `status`, `claims`), `from` (`user`, `lead`, `sbxw` or a thread), `to`,
+  `status`, `claims`; `group=conversation` is all but claims), `from` (`user`, `lead`, `sbxw` or a thread), `to`,
   `text` (2000 characters at most) and a small `data`. The first page adds
   the team's commits per thread with their totals, and the board's
   decisions and warnings that still stand.

@@ -1133,7 +1133,7 @@ marks those that do not fit `more` (above).
 
 A feature puts an entry in the left rail with `Place::Rail { zone, order }`.
 `zone` is a `feat::Zone`: `Activity` (what happens now: Requests 10,
-Network 20, Team leads 30), `Browse` (views to read: Commits 10,
+Network 20, Team leads 30, Board 35), `Browse` (views to read: Commits 10,
 Worktrees 20, Files 30) or `Configure` (what is set up: MCP 10, Skills 20,
 Kits 30; Settings is always its last). `order` sorts within the zone, lower
 first. The rail draws the activity and browse zones at its top, the
@@ -1851,6 +1851,50 @@ commit in Commits (`commits_show {sandbox, branch, hash}`).
 | `worktrees_more` | | The next page of rows |
 | `worktrees_terminal`, `worktrees_commits`, `worktrees_files` | `id` | The row's thread terminal, its branch in Commits, the explorer at it |
 | `worktrees_select` | `id?` | Marks a row (a lane pressed), or none; view state |
+
+### board
+
+An overlay (`src/feat/board/`, `screens/board.luau`), the rail's activity
+zone (order 35, icon `board`, purple: the team) and each sandbox's row menu
+(opened on that sandbox's team). A **team** is a plan with its sandbox, lead
+and threads; the title's picker lists every team, most recent first, with
+its sandbox's colour and state, and "All teams". The main column is the
+team's timeline (`GET /api/teams/:id/timeline`) as a **conversation**,
+oldest at the top, opening at the newest: the person's acts on the right,
+the lead (marked) and threads (their lane colour) on the left, sbxw's own
+events as centred lines. A plan is a card (why, its threads as chips, Show
+goals); a status report a line with its state; the board's decisions
+(green), warnings (amber), questions (blue) and handoffs labelled notes; a
+round of questions with each answer marked; a thread's consecutive commits
+one row ("api-routes made 4 commits") that opens. Long texts fold (Show
+more); day separators; relative times, the exact UTC time in the tooltip.
+A filter row (All, Decisions and warnings, Questions, Commits, Status), a
+thread and words, applied by the daemon before paging. From 760 pt a side
+column: **Team** (the lead, each thread with its state, worktree and model;
+pressing one filters the conversation; its terminal and the Monitor on it),
+**Decisions and warnings** that still stand, **Commits** per thread (totals,
+merged, a lane graph drawn with `paint`, a commit opened in place with the
+Commits view's diff groups, `commits::diff_groups`). Under 760 pt one
+column with Conversation, Team and notes, Commits.
+
+Read only: every intent is Direct and reads; links go to the plan dialog,
+the Requests panel, a terminal, Commits, Worktrees, the Threads panel, the
+Monitor. Agent text is drawn in the prose face with pills, never as a
+control. 80 rows a page drawn (Show earlier, then an older page of 100
+events). Data only while it shows; the `team` event reads the newest page
+again.
+
+| Intent | Args | Effect |
+|---|---|---|
+| `board_show` | `sandbox?`, `team?` | Opens it on that team (`all`: every team), else on that sandbox's team, else the last shown or the selected sandbox's |
+| `board_team` | `id` | Another team, or `all` |
+| `board_filter` | `group?`, `thread?`, `text?` | Filters (applied by the daemon) |
+| `board_more` | | Earlier rows, then an older page |
+| `board_expand` | `id` | Opens or folds a row (long text, goals, commits) |
+| `board_commit`, `board_file` | `hash`; `path` | A team commit opened in the Commits column; a file's diff |
+| `board_tab` | `tab` | The narrow layout's column |
+| `board_open` | `what`, `thread?`, `relay?` | Where one acts: terminal, monitor, commits, worktrees, plan, requests, threads |
+| `board_refresh` | | Reads again |
 
 ### Overlays
 

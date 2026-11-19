@@ -547,7 +547,8 @@ fn order(e: &Event) -> (u8, u64) {
 }
 
 /// What a UI asks for: a group (`notes`, `questions`, `commits`, `status`,
-/// `claims`; none: all), one author or addressee, words in the text.
+/// `claims`, or `conversation`: all but claims; none: all), one author or
+/// addressee, words in the text.
 #[derive(Default, Debug, Clone)]
 pub struct Filter<'a> {
     pub group: Option<&'a str>,
@@ -557,10 +558,13 @@ pub struct Filter<'a> {
 
 impl Filter<'_> {
     pub fn keeps(&self, e: &Event) -> bool {
-        if let Some(g) = self.group {
-            if e.group != g {
-                return false;
-            }
+        match self.group {
+            // Everything people and agents said and did: claims and releases
+            // are the board's bookkeeping, shown apart.
+            Some("conversation") if e.group == "claims" => return false,
+            Some("conversation") | None => {}
+            Some(g) if e.group != g => return false,
+            Some(_) => {}
         }
         if let Some(t) = self.thread {
             let about = e.data["thread"].as_str() == Some(t) || e.data["order"].as_array().is_some_and(|o| o.iter().any(|x| x == t));
@@ -674,5 +678,9 @@ mod tests {
         assert_eq!(only_a.len(), 5);
         let (found, _) = page(&all, &Filter { q: Some("STEP 3"), ..Default::default() }, None, 100);
         assert_eq!(found.len(), 1);
+        log.push(200, EventKind::Claim, "a", None, None, json!({ "files": ["x.rs"] }));
+        let all = timeline(&p, &log, &[], &[], &[], 1000);
+        let (talk, _) = page(&all, &Filter { group: Some("conversation"), ..Default::default() }, None, 100);
+        assert!(talk.iter().all(|e| e.kind != EventKind::Claim) && talk.len() == all.len() - 1, "all but claims");
     }
 }

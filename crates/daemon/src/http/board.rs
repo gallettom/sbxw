@@ -186,7 +186,8 @@ struct TimelineQuery {
     before: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
-    /// `notes`, `questions`, `commits`, `status`, `claims`.
+    /// `notes`, `questions`, `commits`, `status`, `claims`, `conversation`
+    /// (all but claims).
     #[serde(default)]
     group: Option<String>,
     #[serde(default)]
@@ -195,7 +196,7 @@ struct TimelineQuery {
     q: Option<String>,
 }
 
-const GROUPS: &[&str] = &["notes", "questions", "commits", "status", "claims"];
+const GROUPS: &[&str] = &["notes", "questions", "commits", "status", "claims", "conversation"];
 
 /// `GET /api/teams/:id/timeline`: a page of one team's events, newest first
 /// (`before`: an event id from the previous page), filtered by group,

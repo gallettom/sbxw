@@ -47,6 +47,7 @@ Every demo (each writes its shots and says what they show in its header):
 | `demo-pills.sh` | keyword pills in a terminal (each tone, a selection, the switch off live, a light theme, the scaled view) |
 | `demo-reconnect.sh`, `demo-reload.sh`, `demo-shared-size.sh` | a daemon restart; hot reload; one PTY and two clients |
 | `demo-relay.sh`, `demo-setup.sh`, `demo-threads.sh` | the relay; the Setup dialog; threads, plans and the lead |
+| `demo-board.sh` | the Board: a team at work, a merged one, all teams, a commit's diff, a thread's commits, the narrow layout, both themes |
 
 ## `screen.sh`: one screen, one fixture
 
