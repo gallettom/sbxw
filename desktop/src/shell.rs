@@ -26,6 +26,8 @@ mod layout_tests;
 mod gate_tests;
 #[cfg(test)]
 mod resize_tests;
+#[cfg(test)]
+mod sidebar_tests;
 
 use crate::approval;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
@@ -258,6 +260,9 @@ pub struct App {
     pub copy_offer: Option<approval::CopyOffer>,
     /// Sandboxes whose start is being watched: name, next recheck step.
     expect: Vec<(String, usize, Instant)>,
+    /// Whether a menu of the sandbox list was open at the last push (its
+    /// order holds while one is: `data.app.sidebar_menu`).
+    sidebar_menu: bool,
     marks: Vec<(f64, Mark)>,
     dump_text: Option<PathBuf>,
     solo: Option<String>,
@@ -406,6 +411,7 @@ impl App {
             approvals: vec![],
             copy_offer: None,
             expect: vec![],
+            sidebar_menu: false,
             marks: vec![],
             dump_text: a.dump_text.clone(),
             solo: a.solo.clone(),
@@ -683,13 +689,16 @@ impl App {
             .values()
             .map(|&g| {
                 let (tint, hover, label) = theme::group_tints(g);
-                (format!("#{g:06x}"), serde_json::json!({ "tint": format!("#{tint:06x}"), "hover": format!("#{hover:06x}"), "label": format!("#{label:06x}") }))
+                let inner = theme::group_inner(g);
+                (format!("#{g:06x}"), serde_json::json!({ "tint": format!("#{tint:06x}"), "hover": format!("#{hover:06x}"), "label": format!("#{label:06x}"), "inner": format!("#{inner:06x}") }))
             })
             .collect::<serde_json::Map<_, _>>()
             .into();
         data["app"]["theme"] = J::String(theme::mode().name().into());
         data["app"]["groups"] = groups.into_iter().map(|(n, c)| (n, J::String(format!("#{c:06x}")))).collect::<serde_json::Map<_, _>>().into();
         data["app"]["sidebar"] = serde_json::json!({ "w": self.sidebar_w(), "shown": self.sidebar_shown() });
+        // A menu of the list is open: its order holds (sandboxes.luau, "The order").
+        data["app"]["sidebar_menu"] = J::Bool(self.sidebar_menu_open());
         // The pages of terminals: which shows, how many, per page, the view.
         data["app"]["pages"] = serde_json::json!({
             "current": self.pages.current + 1,
@@ -1140,6 +1149,13 @@ impl App {
             if let Some(t) = s.ui.zones.due() {
                 tx.wake_after(t.saturating_duration_since(zone_now));
             }
+        }
+        // A menu of the list opened or shut: the list learns it (its order
+        // holds while one is open, and lands when it shuts).
+        if self.sidebar_menu_open() != self.sidebar_menu {
+            self.sidebar_menu = !self.sidebar_menu;
+            self.push_data();
+            changed = true;
         }
         if zoned {
             changed = true;
@@ -2742,6 +2758,11 @@ impl App {
         w.min(room).clamp(layout::SIDEBAR_MIN, layout::SIDEBAR_MAX)
     }
 
+    /// Whether a menu of the sandbox list is open now (a row's ⋯).
+    pub fn sidebar_menu_open(&self) -> bool {
+        self.screens.iter().any(|s| s.name == "sandboxes" && s.ui.open.is_some())
+    }
+
     /// Whether the sidebar shows (Cmd/Ctrl+B hides it; remembered).
     pub fn sidebar_shown(&self) -> bool {
         self.store.get("sidebar")["hidden"] != J::Bool(true)
@@ -2762,6 +2783,15 @@ impl App {
         // No focus moves: a pane or the Monitor's list keeps the keyboard;
         // a control of the sidebar that had it is gone, so nothing has it
         // (never a terminal by surprise).
+        if !show {
+            // Hidden, the list's rows are gone: the pointer rests on none and
+            // no menu of it stays open, so its order never stays held.
+            if let Some(sc) = self.screens.iter_mut().find(|s| s.name == "sandboxes") {
+                sc.ui.zones = Default::default();
+                sc.ui.open = None;
+            }
+            self.sidebar_menu = false;
+        }
         self.push_data();
     }
 

@@ -669,6 +669,96 @@ local function matches(sb, filter)
   return filter == "" or string.find(string.lower(sb.name), string.lower(filter), 1, true) ~= nil
 end
 
+-- The order: sandboxes with a live agent session first. Three tiers, from
+-- slow facts only (a sandbox starting or stopping, a session opening or
+-- ending), never from working, idle or wants-you, which flicker:
+--   1  running, with at least one live session (not ended; a session busy
+--      on its own background work counts, whatever its state word)
+--   2  running without one, or on its way up ("starting…")
+--   3  stopped, stopping, failed, unreachable
+-- Inside a tier, the daemon's order (by name). A group ranks by its best
+-- member; groups and ungrouped sandboxes are ordered together by rank, a
+-- group before a sandbox of the same tier (groups first, as before).
+local ENDED = { done = true, exited = true, failed = true, stopped = true, ended = true }
+
+local function live_sessions(sb, data)
+  local n = 0
+  for _, s in ipairs(data.sessions or {}) do
+    if s.sandbox == sb.name and not s.ended and (s.background or not ENDED[s.state or ""]) then n = n + 1 end
+  end
+  return n
+end
+
+local function tier_of(sb, data)
+  if sb.unreachable_since then return 3 end
+  local st = sb.status or ""
+  if st == "running" then return live_sessions(sb, data) > 0 and 1 or 2 end
+  if st == "stopped" or string.sub(st, 1, 4) == "stop" then return 3 end
+  if string.find(st, "…$") or string.find(st, "%.%.%.$") or string.find(st, "ing$") then return 2 end
+  return 3
+end
+
+-- The tiers the list last applied, by sandbox. Stability first: while the
+-- pointer rests on the list (any hover zone of this screen: a sandbox's
+-- rows, a group's header) or a row's menu is open (app.sidebar_menu, the
+-- core's), a sandbox keeps the tier it was drawn with; the new order lands
+-- when the pointer leaves (the zone's close delay) or the menu shuts. A
+-- sandbox drawn for the first time takes its tier at once. Kept outside
+-- `state` (render must not change it): a reload starts afresh, which is the
+-- order anyway.
+local applied = {}
+
+local function tiers(list, data)
+  local hold = data.app.hover_zone ~= nil or data.app.sidebar_menu == true
+  local seen = {}
+  for _, sb in ipairs(list) do
+    seen[sb.name] = true
+    if not hold or applied[sb.name] == nil then applied[sb.name] = tier_of(sb, data) end
+  end
+  if not hold then
+    for n in pairs(applied) do
+      if not seen[n] then applied[n] = nil end
+    end
+  end
+  return applied
+end
+
+-- The top-level entries in order: each group (its members sorted too) and
+-- each ungrouped sandbox, by (tier, group before sandbox, former order).
+local function ordered(gs, rank, index)
+  local function by_rank(a, b)
+    local ra, rb = rank[a.name] or 3, rank[b.name] or 3
+    if ra ~= rb then return ra < rb end
+    return index[a.name] < index[b.name]
+  end
+  local out = {}
+  for gi, g in ipairs(gs) do
+    local items = {}
+    for _, sb in ipairs(g.items) do table.insert(items, sb) end
+    table.sort(items, by_rank)
+    if g.label then
+      local best = 3
+      for _, sb in ipairs(items) do best = math.min(best, rank[sb.name] or 3) end
+      table.insert(out, { rank = best, kind = 0, at = gi, group = g, items = items })
+    else
+      for _, sb in ipairs(items) do
+        table.insert(out, { rank = rank[sb.name] or 3, kind = 1, at = index[sb.name], sb = sb })
+      end
+    end
+  end
+  table.sort(out, function(a, b)
+    if a.rank ~= b.rank then return a.rank < b.rank end
+    if a.kind ~= b.kind then return a.kind < b.kind end
+    return a.at < b.at
+  end)
+  return out
+end
+
+-- How many session lines a sandbox shows under it (features' rows).
+local function session_count(sb, app)
+  return #(((app.extras or {}).rows or {})[sb.name] or {})
+end
+
 -- The create feature's "New" (a top bar extra), for the empty list's action.
 local function new_extra(app)
   for _, e in ipairs((app.extras or {}).topbar or {}) do
@@ -694,16 +784,53 @@ return {
     -- over its darker floor), all in a folding column: what opens or shuts
     -- glides (docs/screens.md, `folds`).
     local body = { gap = 4, group = "list", w = "full" }
-    -- A sandbox in its group's block: its row, then its sessions line and
-    -- block, side by side in the block's folding stack (one level of folds:
-    -- what changes height is always a row of the stack that glides it).
-    local function sandbox_rows(sb, blk)
-      table.insert(blk, item(sb, app, data))
-      sessions_block(sb, app, data, state, blk, (model_of(sb, data)))
+    -- Each sandbox is its own folding stack, `sb-<name>`: its row, then its
+    -- sessions line and block (what changes height is a row of that stack,
+    -- which glides it). A sandbox with several sessions gets a block of its
+    -- own around them, so they read as its: ungrouped, a tinted block in a
+    -- group's language (its colour's tint, as its terminal header's; grey
+    -- `surface-alt` when it has none); in a group, no second strong block,
+    -- a slightly stronger fill of the group's tint (`inner`). The stack's
+    -- room is always there (ungrouped: 4 pt each side, taken from the
+    -- list's block), so the block comes and goes without moving a word.
+    local function sandbox_rows(sb, blk, look)
+      local multi = session_count(sb, app) >= 2
+      local stack = { key = "sb-" .. sb.name, gap = 2, w = "full", folds = true, radius = look and "sm" or "md", px = look and 0 or 4 }
+      if multi then
+        if look then
+          stack.fill = look.inner or look.hover
+        else
+          local gc = colors[sb.name]
+          local own = gc and (app.group_look or {})[gc]
+          stack.fill = own and own.tint or "surface-alt"
+        end
+      end
+      table.insert(stack, item(sb, app, data))
+      sessions_block(sb, app, data, state, stack, (model_of(sb, data)))
+      table.insert(blk, column(stack))
     end
-    for _, g in ipairs(groups(shown)) do
-      local gk = g.label or ""
-      if g.label then
+    local index = {}
+    for i, sb in ipairs(data.sandboxes) do index[sb.name] = i end
+    local rank = tiers(data.sandboxes, data)
+    -- Ungrouped sandboxes between two groups share a plain block (the
+    -- first one keyed block-ungrouped, the next block-ungrouped-2, ...).
+    local run, runs, run_at = nil, 0, {}
+    for _, e in ipairs(ordered(groups(shown), rank, index)) do
+      local g = e.group
+      if not g then
+        if not run then
+          runs = runs + 1
+          run = { key = runs == 1 and "block-ungrouped" or ("block-ungrouped-" .. runs), gap = 4, w = "full", py = 4 }
+          table.insert(body, run)
+          table.insert(run_at, #body)
+        end
+        sandbox_rows(e.sb, run, nil)
+      else
+        run = nil
+        g = { label = g.label, help = g.help, color = g.color, items = e.items }
+      end
+      local gk = g and g.label or ""
+      if g then
         local closed = collapsed[gk] == true
         local waiting = 0
         for _, sb in ipairs(g.items) do
@@ -715,7 +842,8 @@ return {
         local look = gc and (app.group_look or {})[gc] or {}
         local blk = { key = "block-" .. gk, gap = 2, w = "full", radius = "md", pad = 4, folds = true, clip = true,
           fill = gc and look.tint or nil,
-          row{ key = "group-" .. gk, on = "toggle_group", arg = gk, h = 28, gap = 8, w = "full", px = 4, radius = "sm",
+          -- Its own hover zone: the pointer on a header holds the order too.
+          row{ key = "group-" .. gk, on = "toggle_group", arg = gk, h = 28, gap = 8, w = "full", px = 4, radius = "sm", hover_zone = "group:" .. gk,
             hover = gc and look.hover or "hover-subtle", help = (closed and "Show " or "Hide ") .. (g.help or g.label),
             icon{ closed and "chevron-right" or "chevron-down", size = 12, color = "text-muted" },
             gc and column{ w = 8, h = 8, radius = 2, fill = gc } or false,
@@ -726,17 +854,12 @@ return {
           },
         }
         if not closed then
-          for _, sb in ipairs(g.items) do sandbox_rows(sb, blk) end
-        end
-        table.insert(body, column(blk))
-      else
-        local blk = { key = "block-ungrouped", gap = 2, w = "full", px = 4, py = 4, folds = true }
-        for _, sb in ipairs(g.items) do
-          sandbox_rows(sb, blk)
+          for _, sb in ipairs(g.items) do sandbox_rows(sb, blk, look) end
         end
         table.insert(body, column(blk))
       end
     end
+    for _, i in ipairs(run_at) do body[i] = column(body[i]) end
 
     local header_extra = new_extra(app)
     local header_new = header_extra ~= nil

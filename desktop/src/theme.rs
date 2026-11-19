@@ -586,6 +586,13 @@ pub fn group_tints(g: u32) -> (u32, u32, u32) {
     (over(g, look.tint, surface), over(g, look.tint_hover, surface), over(to, look.label, g))
 }
 
+/// A sandbox with several sessions inside a group (sandboxes.luau): no
+/// second strong block, the group's colour a little stronger than its
+/// block's tint, behind that sandbox's rows ([`GROUP_TINT_INNER`]).
+pub fn group_inner(g: u32) -> u32 {
+    over(g, GROUP_TINT_INNER, color_value("surface").unwrap())
+}
+
 fn hue_dist(a: f32, b: f32) -> f32 {
     let d = (a - b).rem_euclid(360.0);
     d.min(360.0 - d)
@@ -679,6 +686,9 @@ pub fn contrast(a: u32, b: u32) -> f64 {
 /// a little more. Its label is the colour lightened toward white.
 pub const GROUP_TINT: f32 = 0.10;
 pub const GROUP_TINT_HOVER: f32 = 0.16;
+/// Behind a sandbox's rows in its group when it has several sessions: a
+/// step over the block's tint, under the header's hover.
+pub const GROUP_TINT_INNER: f32 = 0.15;
 pub const GROUP_LABEL_LIGHT: f32 = 0.40;
 
 /// A pane bar's tint of its group's colour (focused, unfocused) over the
@@ -1145,6 +1155,14 @@ mod tests {
             for m in ["green", "blue", "amber", "red", "text-muted"] {
                 note(&format!("`{m}` on a tint (rail)"), contrast(color_value(m).unwrap(), tint), 3.0);
             }
+            // A sandbox with several sessions in its group (sandboxes.luau): its rows on `inner`.
+            let inner = group_inner(g);
+            for t in ["text-bright", "text", "text-muted", "amber", "blue", "red-text", "vendor-anthropic", "vendor-openai", "vendor-google"] {
+                note(&format!("`{t}` on a group's inner tint (text)"), contrast(color_value(t).unwrap(), inner), 4.5);
+            }
+            for m in ["green", "blue", "amber", "red", "text-muted"] {
+                note(&format!("`{m}` on a group's inner tint (rail)"), contrast(color_value(m).unwrap(), inner), 3.0);
+            }
             note("group label on its tint (text)", contrast(label, tint), 4.5);
             note("group label on its hover tint (text)", contrast(label, hover), 4.5);
             note("group square on its tint (mark)", contrast(g, tint), 3.0);
@@ -1152,6 +1170,14 @@ mod tests {
             // The bubble's number on its fill, and the selected row over a tint (opaque).
             note("`bg` on `blue` (the bubble)", contrast(color_value("bg").unwrap(), color_value("blue").unwrap()), 4.5);
             note("`bg` on `amber` (the bubble)", contrast(color_value("bg").unwrap(), color_value("amber").unwrap()), 4.5);
+        }
+        // An ungrouped sandbox with several sessions and no colour: its block is `surface-alt`.
+        let alt = color_value("surface-alt").unwrap();
+        for t in ["text-bright", "text", "text-muted", "amber", "blue", "red-text", "vendor-anthropic", "vendor-openai", "vendor-google"] {
+            note(&format!("`{t}` on the neutral session block (text)"), contrast(color_value(t).unwrap(), alt), 4.5);
+        }
+        for m in ["green", "blue", "amber", "red", "text-muted"] {
+            note(&format!("`{m}` on the neutral session block (rail)"), contrast(color_value(m).unwrap(), alt), 3.0);
         }
         println!("| Over every group tint | Worst | Needs |\n|---|---|---|");
         for (w, r, need) in &worst {
