@@ -212,3 +212,45 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::testing::app;
+    use sbxw_core::agents::SessionState;
+    use sbxw_core::SandboxRef;
+    use serde_json::json;
+
+    fn state(app: &crate::app::App, sid: &str) -> SessionState {
+        let snap = app.agents.lock().unwrap().snapshot(|_| true, crate::app::now_ms());
+        snap.into_iter().find(|i| i.session_id.as_deref() == Some(sid)).map(|i| i.state).expect("a session")
+    }
+
+    /// The reported case, end to end through `ingest_hook`: a thread's
+    /// foreground `cargo test`, its lead's message arriving, a notice from
+    /// Claude Code meanwhile. Never "wants you"; a real prompt still is.
+    #[test]
+    fn a_thread_at_work_is_not_shown_wanting_you() {
+        let (_d, app) = app();
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let post = |mut ev: serde_json::Value| {
+            ev["session_id"] = "sid-a".into();
+            ev["hook_version"] = 3.into();
+            ev["sbxw_thread"] = "a".into();
+            app.ingest_hook(&sb, ev);
+        };
+        post(json!({"hook_event_name": "SessionStart"}));
+        post(json!({"hook_event_name": "UserPromptSubmit", "prompt": "fix the status"}));
+        post(json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "cargo test"}}));
+        post(json!({"hook_event_name": "Notification", "notification_type": "agent_completed", "message": "MCP sbxw et concierge Jarvis finished"}));
+        assert_eq!(state(&app, "sid-a"), SessionState::Working);
+        post(json!({"hook_event_name": "Notification", "notification_type": "a_type_from_next_year", "message": "news"}));
+        assert_eq!(state(&app, "sid-a"), SessionState::Working);
+        post(json!({"hook_event_name": "PostToolUse", "tool_name": "Bash"}));
+        assert_eq!(state(&app, "sid-a"), SessionState::Working);
+        post(json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "git push"}}));
+        post(json!({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"}));
+        assert_eq!(state(&app, "sid-a"), SessionState::Attention, "a real prompt still summons");
+        post(json!({"hook_event_name": "PostToolUse", "tool_name": "Bash"}));
+        assert_eq!(state(&app, "sid-a"), SessionState::Working, "answered");
+    }
+}

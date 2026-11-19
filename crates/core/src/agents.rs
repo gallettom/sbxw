@@ -1069,6 +1069,173 @@ mod tests {
         assert_eq!(out[0].state, SessionState::Idle, "an interrupted turn settles");
     }
 
+    /// A `Notification` as Claude Code 2.1 posts it (`message`, and
+    /// `notification_type` unless `kind` is empty: an older Claude Code, or one
+    /// of its dialogs that names no type).
+    fn note(kind: &str, message: &str) -> Value {
+        let mut v = json!({"hook_event_name": "Notification", "session_id": "s1", "message": message});
+        if !kind.is_empty() {
+            v["notification_type"] = kind.into();
+        }
+        v
+    }
+
+    fn state_after(book: &mut AgentBook, e: &Value, now: u64) -> SessionInfo {
+        book.apply("n", &ev(e), SessionOrigin::Tty, true, now).remove(0)
+    }
+
+    /// The reported case: a thread runs `cargo test` in the foreground, a
+    /// message from its lead arrives, Claude Code posts notices meanwhile;
+    /// none of them asks anything of the person.
+    #[test]
+    fn a_notice_while_working_is_not_a_summons() {
+        let mut book = AgentBook::new();
+        let prompt = json!({"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": "run the tests"});
+        let bash = json!({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "cargo test"}});
+        let done = json!({"hook_event_name": "PostToolUse", "session_id": "s1", "tool_name": "Bash"});
+        state_after(&mut book, &prompt, 1);
+        state_after(&mut book, &bash, 2);
+        let notices = [
+            note("agent_completed", "Lead session finished"),
+            note("elicitation_complete", "MCP server \"x\" confirmed elicitation 1 complete"),
+            note("elicitation_response", "Elicitation response for server \"x\": accept"),
+            note("push_notification", "Tests are running"),
+            note("plugin_notification", "Plugin says hi"),
+            note("computer_use_exit", "Claude is done using your computer"),
+            note("quota_auto_resume_fired", "Usage limit reset, Claude is continuing your task"),
+            note("model_refusal_fallback", "Retrying on another model"),
+            note("auth_storage_failure", "Claude Code login needs attention"),
+            note("auth_success", "Claude Code login successful"),
+            note("a_type_from_next_year", "Something happened"),
+        ];
+        for (i, n) in notices.iter().enumerate() {
+            let out = state_after(&mut book, n, 3 + i as u64);
+            assert_eq!(out.state, SessionState::Working, "{n}");
+            assert_eq!(out.activity.as_deref(), Some("$ cargo test"), "a notice does not replace the activity: {n}");
+        }
+        assert_eq!(state_after(&mut book, &done, 20).state, SessionState::Working);
+    }
+
+    #[test]
+    fn what_needs_the_person_still_summons_at_once_and_holds_until_answered() {
+        let bash = json!({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "rm -rf build"}});
+        let done = json!({"hook_event_name": "PostToolUse", "session_id": "s1", "tool_name": "Bash"});
+        for n in [
+            note("permission_prompt", "Claude needs your permission to use Bash"),
+            note("elicitation_dialog", "Claude Code needs your input"),
+            note("elicitation_url_dialog", "An MCP server needs your input"),
+            note("worker_permission_prompt", "worker needs permission for Bash"),
+            note("agent_needs_input", "Teammate setup needs your input"),
+            // No type: an older Claude Code, or a dialog of today's that names
+            // none ("Claude needs your permission", a plan to approve).
+            note("", "Claude needs your permission"),
+            note("", "Claude Code needs your approval for the plan"),
+        ] {
+            let mut book = AgentBook::new();
+            state_after(&mut book, &bash, 1);
+            let out = state_after(&mut book, &n, 2);
+            assert_eq!(out.state, SessionState::Attention, "{n}");
+            // A notice meanwhile does not answer it.
+            let out = state_after(&mut book, &note("agent_completed", "Lead session finished"), 3);
+            assert_eq!(out.state, SessionState::Attention, "a notice does not clear a summons: {n}");
+            assert_eq!(state_after(&mut book, &done, 4).state, SessionState::Working, "answered: {n}");
+        }
+    }
+
+    #[test]
+    fn an_idle_reminder_then_a_message_starts_a_turn() {
+        let stop = json!({"hook_event_name": "Stop", "session_id": "s1", "last_assistant_message": "Waiting for the lead."});
+        let idle = note("idle_prompt", "Claude is waiting for your input");
+        let perm = note("permission_prompt", "Claude needs your permission to use Bash");
+        let injected = json!({"hook_event_name": "UserPromptSubmit", "session_id": "s1",
+            "prompt": "<cross-session-message from=\"Lead session\">Go on with the routes.</cross-session-message>"});
+        let tool = json!({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Read", "tool_input": {"file_path": "/w/a.rs"}});
+        // After a finished turn, the reminder is idle, not "wants you".
+        let mut book = AgentBook::new();
+        state_after(&mut book, &stop, 1);
+        assert_eq!(state_after(&mut book, &idle, 2).state, SessionState::Idle);
+        let out = state_after(&mut book, &injected, 3);
+        assert_eq!(out.state, SessionState::Working, "an injected message starts a turn");
+        assert_eq!(out.last_input_from, Some("injected"));
+        // A real summons, then the message: the first evidence of work clears it,
+        // whether the turn opens with the prompt or straight with a tool.
+        for first in [&injected, &tool] {
+            let mut book = AgentBook::new();
+            state_after(&mut book, &stop, 1);
+            assert_eq!(state_after(&mut book, &perm, 2).state, SessionState::Attention);
+            assert_eq!(state_after(&mut book, first, 3).state, SessionState::Working, "{first}");
+        }
+    }
+
+    #[test]
+    fn a_question_holds_through_notices_until_answered() {
+        let mut book = AgentBook::new();
+        let mut q = ask(&[("Which?", &["A", "B"])]);
+        q["session_id"] = "s1".into();
+        let out = state_after(&mut book, &q, 1);
+        assert_eq!(out.state, SessionState::Attention);
+        let out = state_after(&mut book, &note("agent_completed", "Lead session finished"), 2);
+        assert_eq!(out.state, SessionState::Attention);
+        assert_eq!(out.question.as_ref().map(|q| q.text.as_str()), Some("Which?"));
+        assert_eq!(out.activity.as_deref(), Some("Which?"), "the question stays the activity");
+        let answered = json!({"hook_event_name": "PostToolUse", "session_id": "s1", "tool_name": "AskUserQuestion"});
+        let out = state_after(&mut book, &answered, 3);
+        assert_eq!(out.state, SessionState::Working);
+        assert!(out.question.is_none());
+    }
+
+    /// A subagent's tool calls come under its parent's `session_id`, marked
+    /// with `agent_id` (Claude Code's hook input: "present only when the hook
+    /// fires from within a subagent"). A background subagent goes on after
+    /// its parent's `Stop`.
+    #[test]
+    fn a_subagent_s_tools_do_not_move_its_parent() {
+        let sub = |name: &str, tool: &str| json!({"hook_event_name": name, "session_id": "s1", "agent_id": "a1", "agent_type": "Explore", "tool_name": tool, "tool_input": {"file_path": "/w/x.rs"}});
+        let stop = json!({"hook_event_name": "Stop", "session_id": "s1"});
+        let bash = json!({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "cargo test"}});
+        let mut book = AgentBook::new();
+        state_after(&mut book, &stop, 1);
+        let out = state_after(&mut book, &sub("PreToolUse", "Read"), 2);
+        assert_eq!(out.state, SessionState::Idle, "the person can type: a background helper works");
+        assert_eq!(out.activity, None);
+        state_after(&mut book, &sub("PostToolUse", "Read"), 3);
+        assert_eq!(state_after(&mut book, &sub("PostToolUse", "Read"), 3).state, SessionState::Idle);
+        let out = state_after(&mut book, &bash, 4);
+        assert_eq!(out.activity.as_deref(), Some("$ cargo test"));
+        let out = state_after(&mut book, &sub("PreToolUse", "Read"), 5);
+        assert_eq!(out.activity.as_deref(), Some("$ cargo test"), "the parent's own tool stays the activity");
+        // A subagent's tool waits on a permission, then runs: answered.
+        assert_eq!(state_after(&mut book, &note("permission_prompt", "Claude needs your permission to use Write"), 6).state, SessionState::Attention);
+        assert_eq!(state_after(&mut book, &sub("PostToolUse", "Write"), 7).state, SessionState::Working);
+        // A question pending in the parent is not answered by a helper's tool.
+        let mut q = ask(&[("Which?", &["A", "B"])]);
+        q["session_id"] = "s1".into();
+        state_after(&mut book, &q, 8);
+        assert_eq!(state_after(&mut book, &sub("PostToolUse", "Read"), 9).state, SessionState::Attention);
+    }
+
+    #[test]
+    fn a_replaced_record_s_summons_is_not_carried_over() {
+        let mut book = AgentBook::new();
+        let v3 = |mut v: Value, sid: &str| {
+            v["session_id"] = sid.into();
+            v["hook_version"] = 3.into();
+            v["agent_proc"] = "42:100".into();
+            v
+        };
+        book.apply("n", &ev(&v3(json!({"hook_event_name": "SessionStart", "live_procs": ["42:100"]}), "old")), SessionOrigin::Tty, true, 1);
+        book.apply("n", &ev(&v3(ask(&[("Which?", &["A", "B"])]), "old")), SessionOrigin::Tty, true, 2);
+        book.apply("n", &ev(&v3(note("permission_prompt", "Claude needs your permission to use Bash"), "old")), SessionOrigin::Tty, true, 3);
+        // `/clear`: the same process starts a new session.
+        let out = book.apply("n", &ev(&v3(json!({"hook_event_name": "SessionStart", "live_procs": ["42:100"]}), "new")), SessionOrigin::Tty, true, 4);
+        let new = out.iter().rev().find(|i| i.session_id.as_deref() == Some("new")).unwrap();
+        assert_eq!(new.state, SessionState::Idle);
+        assert!(new.question.is_none() && new.steps.is_none());
+        assert_eq!(new.continues.as_deref(), Some("old"));
+        let snap = book.snapshot(|_| true, 5);
+        assert!(snap.iter().all(|i| i.state != SessionState::Attention), "{snap:?}");
+    }
+
     #[test]
     fn an_ask_enters_attention_and_an_end_removes() {
         let mut book = AgentBook::new();
