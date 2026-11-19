@@ -46,6 +46,8 @@ if m == "choice":
     add(type="type", every=0.02, text="n"); add(type="mark", name="hold:300")
     step("monitor-row-shop-web:s-shop-main", "monitor-opt-1-1")
 if m in ("reply", "send"):
+    # A short window: the idle rows are below the fold of the list.
+    add(type="wheel", key="monitor-row-shop-web:s-shop-main", dy=-600); add(type="mark", name="hold:300")
     step("monitor-row-billing-api:s-bill-main", "monitor-reply")
 if m == "send":
     add(type="tap", key="monitor-compose")
