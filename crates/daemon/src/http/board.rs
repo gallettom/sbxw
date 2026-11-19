@@ -226,7 +226,7 @@ struct TimelineQuery {
     q: Option<String>,
 }
 
-const GROUPS: &[&str] = &["notes", "questions", "commits", "status", "claims", "conversation"];
+const GROUPS: &[&str] = &["notes", "questions", "commits", "status", "claims", "messages", "conversation"];
 
 /// `GET /api/teams/:id/timeline`: a page of one team's events, newest first
 /// (`before`: an event id from the previous page), filtered by group,

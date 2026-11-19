@@ -107,6 +107,8 @@ fn the_conversation_puts_each_act_on_its_side_with_its_kind() {
     let warn = find("board_warning");
     assert_eq!((warn["type"].as_str(), warn["label"].as_str(), warn["tone"].as_str()), (Some("note"), Some("Warning"), Some("amber")));
     assert_eq!(find("board_decision")["tone"], "green");
+    let dm = find("direct_message");
+    assert_eq!((dm["type"].as_str(), dm["label"].as_str(), dm["side"].as_str(), dm["is_lead"].as_bool()), (Some("message"), Some("direct message"), Some("left"), Some(true)));
     let note = find("team_note");
     assert_eq!((note["type"].as_str(), note["label"].as_str(), note["tone"].as_str(), note["note_via"].as_str()), (Some("note"), Some("Info"), Some("blue"), Some("team note")));
     let answer = find("user_answer");
@@ -353,6 +355,11 @@ fn hostile_agent_text_makes_no_control() {
     append(&mut rt, note_event("l990", "A plain note."));
     let before = count(&rt);
     append(&mut rt, note_event("l991", hostile));
+    let mut dm = note_event("l992", hostile);
+    dm["kind"] = "direct_message".into();
+    dm["group"] = "messages".into();
+    dm["to"] = "web-page".into();
+    append(&mut rt, dm);
     assert_eq!(count(&rt), before, "the same controls, no more");
     assert!(rt.elements().iter().filter_map(|e| e.text.clone()).any(|t| t.contains("<button on=x>")), "drawn as its characters");
 }

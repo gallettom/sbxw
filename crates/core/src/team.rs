@@ -90,6 +90,10 @@ pub enum EventKind {
     /// A note an agent of the team sent another, or the whole team, through
     /// sbxw (`team_note`): `data.kind` is info, warning or decision.
     TeamNote,
+    /// A message a session of the team sent another with Claude Code's own
+    /// `SendMessage`, as the status hook reported the call (sender side,
+    /// delivered). Only its addressee and words are kept.
+    DirectMessage,
 }
 
 impl EventKind {
@@ -102,6 +106,7 @@ impl EventKind {
             BoardDecision | BoardWarning | BoardHandoff | Conflict | TeamNote => "notes",
             BoardQuestion | RelayQuestion | RelayRouted | RelayDrafted | RelayAnswer | UserQuestion | UserAnswer | ScreenshotAsked | ScreenshotGiven | RelayRefused => "questions",
             Commit => "commits",
+            DirectMessage => "messages",
             Claim | Release => "claims",
             _ => "status",
         }
@@ -618,6 +623,77 @@ pub fn standing_notes(p: &Plan, board: &[BoardEntry], log: &TeamLog, now: u64) -
     out.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
     out.truncate(50);
     out.into_iter().map(|(_, v)| v).collect()
+}
+
+/// What becomes of the line telling a session a team note waits, by the
+/// state its hooks last reported: typed now, held until it is idle or at
+/// work again, or dropped (its session ended: it reads its notes with
+/// `read_team_notes` when it is back, its briefing says so).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Delivery {
+    Type,
+    Hold,
+    Drop,
+}
+
+/// A session waiting on a question or a permission prompt would take a typed
+/// line as an answer (a menu's pick): never typed then.
+pub fn note_delivery(state: Option<crate::agents::SessionState>) -> Delivery {
+    use crate::agents::SessionState::*;
+    match state {
+        Some(Idle | Working) => Delivery::Type,
+        Some(Attention) => Delivery::Hold,
+        Some(Exited) | None => Delivery::Drop,
+    }
+}
+
+/// A `SendMessage` the status hook reported (`PostToolUse`): the addressee
+/// and the words, when the send went through. `None` for any other tool, a
+/// failed send, or nothing to say. Nothing else of the call is read.
+pub fn sent_message(event: &Value) -> Option<(String, String)> {
+    if event["hook_event_name"] != "PostToolUse" || event["tool_name"] != "SendMessage" {
+        return None;
+    }
+    let resp = &event["tool_response"];
+    let parsed;
+    let resp = match resp.as_str() {
+        Some(s) => {
+            parsed = serde_json::from_str::<Value>(s).unwrap_or(Value::Null);
+            &parsed
+        }
+        None => resp,
+    };
+    if resp["success"] != true {
+        return None;
+    }
+    let to = event["tool_input"]["to"].as_str()?.trim();
+    let text = event["tool_input"]["message"].as_str()?.trim();
+    if to.is_empty() || text.is_empty() {
+        return None;
+    }
+    // A reply to a `from` address (`uds:...`) names no session: the
+    // delivery's own words say whom it reached (`→ <name> (`).
+    let to = if to.starts_with("uds:") {
+        let m = resp["message"].as_str()?;
+        let after = m.split_once("→ ")?.1;
+        after.split_once(" (").map(|(n, _)| n).unwrap_or(after).trim().to_string()
+    } else {
+        // `name [ref]`: the name.
+        match to.rsplit_once(" [") {
+            Some((n, r)) if r.ends_with(']') => n.trim().to_string(),
+            _ => to.to_string(),
+        }
+    };
+    Some((to, text.to_string()))
+}
+
+/// Who a session name is in plan `p`: `lead` (its lead's name), a thread, or
+/// nobody of the team.
+pub fn member(p: &Plan, name: &str) -> Option<String> {
+    if p.lead.as_deref() == Some(name) {
+        return Some(LEAD.to_string());
+    }
+    p.threads.iter().find(|t| t.name == name).map(|t| t.name.clone())
 }
 
 /// The team notes addressed to `me` (by name, or to the whole team, not its

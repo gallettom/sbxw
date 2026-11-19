@@ -1833,10 +1833,13 @@ the lead (marked) and threads (their lane colour) on the left, sbxw's own
 events as centred lines. A plan is a card (why, its threads as chips, Show
 goals); a status report a line with its state; the board's decisions
 (green), warnings (amber), questions (blue) and handoffs labelled notes; a
-round of questions with each answer marked; a thread's consecutive commits
-one row ("api-routes made 4 commits") that opens. Long texts fold (Show
+round of questions with each answer marked; a team note (`team_note`) as a
+note labelled Info, Warning or Decision with "team note"; a direct message
+(the agents' own `SendMessage`, as sbxw's hook saw it) as a bubble labelled
+"direct message"; a thread's consecutive commits one row ("api-routes made
+4 commits") that opens. Long texts fold (Show
 more); day separators; relative times, the exact UTC time in the tooltip.
-A filter row (All, Decisions and warnings, Questions, Commits, Status), a
+A filter row (All, Decisions and warnings, Questions, Messages, Commits, Status), a
 thread and words, applied by the daemon before paging. From 760 pt a side
 column: **Team** (the lead, each thread with its state, worktree and model;
 pressing one filters the conversation; its terminal and the Monitor on it),

@@ -210,6 +210,13 @@ pub fn row(ev: &J, o: &Opts) -> J {
             with_text(&mut r, &id, text, o);
             r["files"] = data["files"].clone();
         }
+        "direct_message" => {
+            // Claude Code's own `SendMessage` between the team's sessions, as
+            // sbxw's hook saw it: not approved by anyone, said so.
+            r["type"] = "message".into();
+            r["label"] = "direct message".into();
+            with_text(&mut r, &id, text, o);
+        }
         "team_note" => {
             // Sent through sbxw (`team_note`): labelled by what it says it is.
             r["type"] = "note".into();

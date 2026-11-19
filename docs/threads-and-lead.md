@@ -277,13 +277,18 @@ opened, and the commits of the team's branches. The desktop app's **Board**
 shows it as a conversation.
 
 It shows only what went through sbxw: what you type in a terminal never
-reaches it. Messages the lead and its threads send each other with Claude
-Code's own `SendMessage` go from session to session; `team_note` (below) is
-the way an agent puts a message where you can follow it.
+reaches it. The messages the lead and its threads send each other with Claude
+Code's own `SendMessage` are shown as **direct messages**: sbxw's status hook
+already reports each tool call to the daemon, and for a delivered
+`SendMessage` between two sessions of one team the daemon keeps only the
+addressee and the words (2000 characters at most), pruned with the plan.
+Nothing else of any tool call is kept, no transcript is read, and messages
+sent before the daemon had this version are not recovered.
 
 - `GET /api/teams`: every team, the latest active first, with its state
   (`proposed`, `running`, `done`, `merged`, `refused`, `closed`).
-- `GET /api/teams/<plan>/timeline?limit=&before=&group=&thread=&q=`: a page
+- `GET /api/teams/<plan>/timeline?limit=&before=&group=&thread=&q=` (groups
+  also `messages`, the direct messages): a page
   of events, newest first (`before` is the last event id of the previous
   page; `limit` 1 to 500, 100 by default). Each event has `id`, `at` (ms, or
   null when not known), `kind`, `group` (`notes`, `questions`, `commits`,

@@ -151,6 +151,12 @@ local function rowview(r, sb)
     if nz(r.hidden_text) then kids[#kids + 1] = note(r.hidden_text, "text-dim") end
     kids[#kids + 1] = link(r.link, "board-link-" .. (r.id or ""))
     return bubble(r, kids)
+  elseif r.type == "message" then
+    return bubble(r, {
+      row{ gap = 4, icon{ "chat", size = 12, color = "text-muted" }, text{ r.label, size = "xs", color = "text-muted", help = "Sent with SendMessage between the team's sessions; sbxw shows what its hook saw" } },
+      words(r.text or "", sb, { size = "sm" }),
+      fold_button(r),
+    })
   elseif r.type == "merge" then
     local order = {}
     for i, t in ipairs(r.order or {}) do order[#order + 1] = i .. ". " .. t end
@@ -186,13 +192,14 @@ local function rowview(r, sb)
   return false
 end
 
-local GROUPS = { { "all", "All" }, { "notes", "Decisions and warnings" }, { "questions", "Questions" }, { "commits", "Commits" }, { "status", "Status" } }
+local GROUPS = { { "all", "All" }, { "notes", "Decisions and warnings" }, { "questions", "Questions" }, { "messages", "Messages" }, { "commits", "Commits" }, { "status", "Status" } }
+local GROUP_HELP = { messages = "What the lead and threads sent each other with SendMessage, as sbxw saw it: from the day the daemon had this version, none from before" }
 
 local function filters(ui, wide)
   local seg = { gap = 4, w = "full", wrap = true }
   for _, g in ipairs(GROUPS) do
     local on_it = ui.group == g[1]
-    seg[#seg + 1] = button{ g[2], variant = on_it and "neutral" or "ghost", color = on_it and "text-bright" or "text-muted", dense = true, on = "group", arg = g[1], key = "board-group-" .. g[1] }
+    seg[#seg + 1] = button{ g[2], variant = on_it and "neutral" or "ghost", color = on_it and "text-bright" or "text-muted", dense = true, on = "group", arg = g[1], key = "board-group-" .. g[1], help = GROUP_HELP[g[1]] }
   end
   local threads = { { id = "", label = "Every thread" } }
   if ui.side then
@@ -214,7 +221,7 @@ local function conversation(ui, sb)
     if v then list[#list + 1] = v end
   end
   if #(ui.rows or {}) == 0 then
-    list[#list + 1] = note(ui.loading and "Reading the conversation…" or ((#(ui.teams or {}) == 0) and "No team yet: a lead's plan makes one (Team mode on a sandbox)." or "Nothing here matches."))
+    list[#list + 1] = note(ui.loading and "Reading the conversation…" or ((#(ui.teams or {}) == 0) and "No team yet: a lead's plan makes one (Team mode on a sandbox)." or (ui.group == "messages" and "No direct message. They show from the day the daemon had this version; none from before is recovered." or "Nothing here matches.")))
   end
   for _, e in ipairs(ui.errors or {}) do list[#list + 1] = note(e, "red") end
   return scroll{ key = "board-convo", stick_bottom = true, column(list) }

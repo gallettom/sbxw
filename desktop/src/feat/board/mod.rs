@@ -34,7 +34,7 @@ pub const PAGE: usize = 100;
 pub const ALL_TEAMS: usize = 8;
 pub const ALL_PAGE: usize = 40;
 
-const GROUPS: &[&str] = &["all", "notes", "questions", "commits", "status"];
+const GROUPS: &[&str] = &["all", "notes", "questions", "messages", "commits", "status"];
 const TABS: &[&str] = &["conversation", "notes", "commits"];
 const LINKS: &[&str] = &["terminal", "monitor", "commits", "worktrees", "plan", "requests", "threads"];
 
@@ -58,7 +58,7 @@ const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: 
 pub const INTENTS: &[Spec] = &[
     d("board_show", &[("sandbox", Arg::Text, false), ("team", Arg::Str, false)], "Opens the Board over the panes: a team's conversation between you, its lead and its threads (what went through sbxw), its notes and its commits. On a team (`team`, a plan id; `all` for every team), else on that sandbox's current team, else the latest. Read only."),
     d("board_team", &[("id", Arg::Str, true)], "Shows that team's conversation (`all`: every team's latest events)."),
-    d("board_filter", &[("group", Arg::OneOf(GROUPS), false), ("thread", Arg::Text, false), ("text", Arg::Text, false)], "Filters the conversation: by kind (all, notes: decisions and warnings, questions, commits, status), by thread (empty: every one), by words; give the words on every edit."),
+    d("board_filter", &[("group", Arg::OneOf(GROUPS), false), ("thread", Arg::Text, false), ("text", Arg::Text, false)], "Filters the conversation: by kind (all, notes: decisions and warnings, questions, messages: the agents' direct messages, commits, status), by thread (empty: every one), by words; give the words on every edit."),
     d("board_more", &[], "Reads and shows older events of the team's conversation."),
     d("board_expand", &[("id", Arg::Str, true)], "Opens or folds a row in place: a long message, a plan's goals, a thread's commits. View state only."),
     d("board_commit", &[("hash", Arg::Str, true)], "Opens a commit of the team in the Commits column, its files and their diff, or folds it."),

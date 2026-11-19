@@ -312,3 +312,83 @@ async fn the_live_event_goes_out_only_while_a_ui_listens() {
     app.plan_report(&sb, &ThreadName::parse("a").unwrap(), ThreadState::Blocked, "y").unwrap();
     assert_eq!(teams(&mut rx), 0);
 }
+
+/// A hook event as the status hook posts it, from thread `t` (none: the lead).
+fn hook(app: &std::sync::Arc<crate::app::App>, sb: &SandboxRef, t: Option<&str>, mut ev: Value) {
+    ev["session_id"] = format!("sid-{}", t.unwrap_or("lead")).into();
+    ev["hook_version"] = 2.into();
+    if let Some(t) = t {
+        ev["sbxw_thread"] = t.into();
+    }
+    app.ingest_hook(sb, ev);
+}
+
+fn sent(to: &str, message: &str, ok: bool) -> Value {
+    serde_json::json!({
+        "hook_event_name": "PostToolUse", "tool_name": "SendMessage",
+        "tool_input": { "to": to, "message": message, "summary": "a label" },
+        "tool_response": { "success": ok, "message": format!("\"a label\" → {to} (another Claude session on this machine)") },
+    })
+}
+
+#[tokio::test]
+async fn the_team_s_direct_messages_are_on_its_timeline_and_nothing_else_of_the_hooks() {
+    let (_d, app) = app();
+    let sb = SandboxRef::parse("myapp").unwrap();
+    let p = app.plan_propose(&sb, "Talk", vec![t("a"), t("b")], Variant::Split, "x", Some("Lead session")).await.unwrap();
+    app.plans.lock().unwrap().approve(&p.id, vec![t("a"), t("b")], None, None, crate::app::now_ms()).unwrap();
+    // The lead to a; a back to the lead by name, then to its `from` address.
+    hook(&app, &sb, None, sent("a", "Start with the routes, the page waits on them.", true));
+    tick();
+    hook(&app, &sb, Some("a"), sent("Lead session", "Routes done, tests green.", true));
+    tick();
+    let mut reply = sent("uds:/run/user/1000/cc-socks/1.sock", "One more question on the totals.", true);
+    reply["tool_response"]["message"] = "\"q\" → Lead session (another Claude session on this machine)".into();
+    hook(&app, &sb, Some("a"), reply);
+    // Not recorded: twice the same send, a session outside the team, a
+    // failed send, another tool's input, a hook without a response.
+    hook(&app, &sb, Some("a"), sent("Lead session", "Routes done, tests green.", true));
+    hook(&app, &sb, Some("a"), sent("someone-else", "Outside the team.", true));
+    hook(&app, &sb, None, sent("b", "Never delivered.", false));
+    hook(&app, &sb, Some("b"), serde_json::json!({ "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": { "to": "a", "message": "a command's words", "command": "echo hi" }, "tool_response": { "success": true } }));
+    hook(&app, &sb, Some("b"), serde_json::json!({ "hook_event_name": "PreToolUse", "tool_name": "SendMessage", "tool_input": { "to": "a", "message": "Not sent yet." } }));
+    let (_, v) = get(app.clone(), &format!("/api/teams/{}/timeline?group=messages", p.id)).await;
+    let msgs: Vec<(String, String, String)> = v["events"].as_array().unwrap().iter().rev().map(|e| (e["from"].as_str().unwrap().into(), e["to"].as_str().unwrap().into(), e["text"].as_str().unwrap().into())).collect();
+    assert_eq!(
+        msgs,
+        [
+            ("lead".into(), "a".into(), "Start with the routes, the page waits on them.".into()),
+            ("a".into(), "lead".into(), "Routes done, tests green.".into()),
+            ("a".into(), "lead".into(), "One more question on the totals.".into()),
+        ]
+    );
+    assert!(v["events"].as_array().unwrap().iter().all(|e| e["kind"] == "direct_message" && e["data"].is_null()), "only the addressee and the words");
+    let file = std::fs::read_to_string(app.store.paths.plans().join("team").join("myapp.json")).unwrap();
+    assert!(!file.contains("a label") && !file.contains("echo hi") && !file.contains("Not sent yet") && !file.contains("Never delivered"));
+}
+
+#[tokio::test]
+async fn a_note_s_line_waits_while_its_session_is_asked_something_and_is_dropped_when_it_ended() {
+    use sbxw_core::team::Delivery;
+    let (_d, app) = app();
+    let sb = SandboxRef::parse("myapp").unwrap();
+    let p = app.plan_propose(&sb, "Lines", vec![t("a"), t("b"), t("c")], Variant::Split, "x", Some("Lead")).await.unwrap();
+    app.plans.lock().unwrap().approve(&p.id, vec![t("a"), t("b"), t("c")], None, None, crate::app::now_ms()).unwrap();
+    // a waits on a question (its menu would take a typed line as a pick); b is
+    // idle; c's session ended; the lead works.
+    hook(&app, &sb, Some("a"), serde_json::json!({ "hook_event_name": "SessionStart" }));
+    hook(&app, &sb, Some("a"), serde_json::json!({ "hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "tool_input": { "questions": [{ "question": "Which?", "options": [{ "label": "A" }, { "label": "B" }] }] } }));
+    hook(&app, &sb, Some("b"), serde_json::json!({ "hook_event_name": "SessionStart" }));
+    hook(&app, &sb, Some("b"), serde_json::json!({ "hook_event_name": "Stop", "last_assistant_message": "Done." }));
+    hook(&app, &sb, Some("c"), serde_json::json!({ "hook_event_name": "SessionStart" }));
+    hook(&app, &sb, Some("c"), serde_json::json!({ "hook_event_name": "SessionEnd" }));
+    hook(&app, &sb, None, serde_json::json!({ "hook_event_name": "UserPromptSubmit", "prompt": "go" }));
+    let who: Vec<String> = ["a", "b", "c", "lead"].iter().map(|s| s.to_string()).collect();
+    let got: Vec<(String, Delivery)> = app.note_targets(&sb, &who, |_| true);
+    assert_eq!(got, [("a".into(), Delivery::Hold), ("b".into(), Delivery::Type), ("c".into(), Delivery::Drop), ("lead".into(), Delivery::Type)]);
+    // A session not open: never typed, the note waits for read_team_notes.
+    assert!(app.note_targets(&sb, &who, |_| false).iter().all(|(_, d)| *d == Delivery::Drop));
+    // a answered: idle again, the held line goes.
+    hook(&app, &sb, Some("a"), serde_json::json!({ "hook_event_name": "Stop", "last_assistant_message": "Picked." }));
+    assert_eq!(app.note_targets(&sb, &who[..1], |_| true), [("a".into(), Delivery::Type)]);
+}
