@@ -1100,8 +1100,10 @@ impl App {
             self.restore_layout();
             changed = true;
         }
-        // Lead Mode of the last run, once the layout is back and the teams are read.
-        if self.leads_restore && self.restore.is_none() && self.listed && self.feats.data.contains_key("leads") {
+        // Lead Mode of the last run, once the layout is back and the teams are
+        // read: both lists, since a team is known by either (`leading`), and
+        // they arrive on threads of their own in any order.
+        if self.leads_restore && self.restore.is_none() && self.listed && self.feats.data.contains_key("leads") && self.feats.data.contains_key("plans") {
             self.leads_restore = false;
             if !self.leads_on() && !self.leaders().is_empty() {
                 self.toggle_leads();
