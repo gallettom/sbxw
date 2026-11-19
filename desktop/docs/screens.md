@@ -288,6 +288,7 @@ screen hears it through its actions.
 | `arg` | any value | Passed to both |
 | `secure` | bool | Bullets instead of characters (no copy, no undo) |
 | `disabled` | bool | Read only |
+| `tone` | `compose` or `plain` | `compose`: a chat input, where the person writes to an agent (the Sessions composer, Jarvis's input, Canvas's ask and remarks, a request's answer). It gets the `compose` ground, raised above the panel, and dictation (F9 held, or the `dictate` intent) writes there. Filters, searches and forms stay `plain` (the default) |
 
 ```lua
 input{ id = "filter", value = state.filter, placeholder = "Filter", on = "filter" }
@@ -309,6 +310,7 @@ off macOS) submits. The core holds the text, as for `input`.
 | `on_submit` | action name | Called on Cmd/Ctrl+Return, `value` = the text |
 | `arg` | any value | Passed to both |
 | `disabled` | bool | Read only |
+| `tone` | `compose` or `plain` | `compose`: a chat input, where the person writes to an agent (the Sessions composer, Jarvis's input, Canvas's ask and remarks, a request's answer). It gets the `compose` ground, raised above the panel, and dictation (F9 held, or the `dictate` intent) writes there. Filters, searches and forms stay `plain` (the default) |
 
 ```lua
 textarea{ id = "answer", value = state.answer, rows = 5, placeholder = "Your answer", on = "typed", on_submit = "send" }
@@ -728,6 +730,7 @@ terminal keeps its socket, history and size owner wherever its pane goes
 | `start_jarvis` | none | Creates Jarvis's sandbox the first time (a minute or two), or starts it, and opens its session; `data.jarvis.status` follows |
 | `send_to_jarvis` | `input` (the `id` of this screen's input, required) | Sends what the person typed there to Jarvis, masked first. **The core reads the text itself**, from its own copy of the input: a screen cannot pass words of its own. Emptied once sent; kept, with the reason in the log, when it could not leave. A `yes` / `oui` or `no` / `non` typed and submitted with Enter answers the waiting proposal instead: a yes approves only a low-risk one, else the log says a click is needed |
 | `talk_start`, `talk_stop` | none | Push-to-talk from a button: start recording; stop, transcribe, send to Jarvis (as `send_to_jarvis`, spoken) |
+| `dictate` | `input` (the `id` of this screen's chat input, `tone = "compose"`, required) | The microphone beside a chat input: starts dictating into it, or stops. The words are transcribed and masked by the daemon, then put in the field at its caret as if typed (its `on` action fires): never sent. Refused in Rust under a dialog, a modal, Jarvis's proposal or the palette, while Jarvis listens, without voice, or into a disabled field; Escape cancels. The screen reads `data.app.dictation` (`recording`, `transcribing`, `notice`, each with `screen` and `input`; `key`, `available`) |
 | `read_aloud` | `id` (a `log` entry's id) | Reads that message aloud |
 | `stop_reading` | none | Stops reading aloud |
 | `approve_proposal` | `id` (string) | **Risk: approval.** Opens the core's dialog for that proposal. It approves nothing: only the person's click on the dialog does |

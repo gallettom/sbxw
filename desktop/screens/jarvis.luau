@@ -194,7 +194,7 @@ return {
       v.recording and progress{ value = v.level, tone = "red" } or false,
       note,
       row{ w = "full", gap = 8,
-        column{ grow = 1, input{ id = "jarvis-input", on_submit = "send", on = "edited",
+        column{ grow = 1, input{ id = "jarvis-input", on_submit = "send", on = "edited", tone = "compose",
           placeholder = target and ("Message " .. target .. " (you confirm it first)") or (running and "Ask Jarvis" or "Ask Jarvis (start it first)") } },
         talk,
         button{ icon = "send", on = "send", key = "jarvis-send", variant = "ghost", keys = { "Enter" }, help = "Send" },

@@ -111,7 +111,8 @@ pub const DARK: &[(&str, u32)] = &[
     // input, Canvas's ask and remarks, a request's answer): raised a step
     // above the panels it sits in, as surfaces rise toward light here (a
     // modal over the page, a card over a panel). See `compose_stands_out`.
-    ("compose", 0x222b38),
+    ("compose", 0x252f3e),
+    ("compose-edge", 0x7d8796),
 ];
 
 /// Graphite: the same names on neutral dark greys (a ground near #202124,
@@ -181,7 +182,8 @@ pub const GRAPHITE: &[(&str, u32)] = &[
     ("file-image", 0xe38bb5),
     ("file-data", 0x9cc26a),
     ("file-archive", 0xc9a36b),
-    ("compose", 0x33363c),
+    ("compose", 0x3a3e46),
+    ("compose-edge", 0x90969c),
 ];
 
 /// Pure white and black: the ends that "move toward white or black" math
@@ -904,12 +906,13 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("group-2", "surface", Need::Mark),
     ("group-3", "surface", Need::Mark),
     ("group-4", "surface", Need::Mark),
-    // A chat input's ground (`compose`): typed words, the placeholder, its
-    // edge and the focus ring on it (disabled, it is drawn on `bg` at
+    // A chat input's ground (`compose`): typed words, the placeholder
+    // (`text-muted` there: `text-dim` falls under 4.5:1), its edge
+    // (`compose-edge`) and the focus ring on it (disabled, it is drawn on `bg` at
     // DISABLED_OPACITY: `text-bright` on `bg`, Disabled, below).
     ("text-bright", "compose", Need::Text),
-    ("text-dim", "compose", Need::Text),
-    ("control-border", "compose", Need::Mark),
+    ("text-muted", "compose", Need::Text),
+    ("compose-edge", "compose", Need::Mark),
     ("focus", "compose", Need::Mark),
     // Disabled labels (see Need::Disabled).
     ("text", "elevated", Need::Disabled),
@@ -943,6 +946,9 @@ pub fn to_hsl(c: u32) -> (f32, f32, f32) {
 /// (a card over a panel steps about 1.1 here).
 pub const COMPOSE_STEP_BG: f64 = 1.3;
 pub const COMPOSE_STEP_SURFACE: f64 = 1.15;
+/// And from `elevated`, the agents' message bubbles in the conversation
+/// above it: a field is never taken for a message.
+pub const COMPOSE_STEP_ELEVATED: f64 = 1.1;
 
 /// The accent, amber and the vendor terracotta: at least this far apart in
 /// hue (degrees) and in lightness (HSL points), pairwise, in each theme.
@@ -1336,7 +1342,8 @@ mod tests {
     /// A chat input's ground reads apart from the panels it sits in at rest,
     /// without its focus ring: lighter than `bg` (the views' and panels'
     /// ground) by a luminance ratio of [`COMPOSE_STEP_BG`] and than `surface`
-    /// (a request's card) by [`COMPOSE_STEP_SURFACE`], in both themes, while
+    /// (a request's card) by [`COMPOSE_STEP_SURFACE`] and than `elevated` (a
+    /// message bubble) by [`COMPOSE_STEP_ELEVATED`], in both themes, while
     /// its text, placeholder, edge and focus ring keep their own ratios
     /// (`PAIRS`).
     #[test]
@@ -1349,7 +1356,9 @@ mod tests {
             println!("{m:?}: compose #{comp:06x} {sb:.2}:1 on bg, {ss:.2}:1 on surface");
             assert!(sb >= COMPOSE_STEP_BG, "{m:?}: {sb:.2} on bg");
             assert!(ss >= COMPOSE_STEP_SURFACE, "{m:?}: {ss:.2} on surface");
-            for (fg, need) in [("text-bright", 4.5), ("text-dim", 4.5), ("control-border", 3.0), ("focus", 3.0)] {
+            let se = contrast(comp, v("elevated"));
+            assert!(luminance(comp) > luminance(v("elevated")) && se >= COMPOSE_STEP_ELEVATED, "{m:?}: {se:.2} from a message bubble");
+            for (fg, need) in [("text-bright", 4.5), ("text-muted", 4.5), ("compose-edge", 3.0), ("focus", 3.0)] {
                 assert!(contrast(v(fg), comp) >= need, "{m:?}: {fg} on compose");
             }
         }

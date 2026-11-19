@@ -1110,7 +1110,7 @@ fn fire<S: Host>(s: &mut S, screen: &str, action: &str, arg: &J, value: &J) {
 /// closed rather than as a place to write.
 fn field_ground(e: El, n: &Node) -> El {
     match (n.tone.as_deref() == Some("compose"), n.disabled) {
-        (true, false) => e.fill(c("compose")).border(1.0, c("control-border")),
+        (true, false) => e.fill(c("compose")).border(1.0, c("compose-edge")),
         (true, true) => e.fill(c("bg")).border(1.0, c("border")).opacity(theme::DISABLED_OPACITY),
         _ => e.fill(c("bg")).border(1.0, c("control-border")),
     }
@@ -1468,7 +1468,7 @@ impl Build<'_> {
                     .single_line()
                     .key(key.clone().unwrap_or_default())
                     .color(c("text-bright"))
-                    .placeholder(n.placeholder.clone().unwrap_or_default(), c("text-dim"))
+                    .placeholder(n.placeholder.clone().unwrap_or_default(), c(if is_compose(n) && !n.disabled { "text-muted" } else { "text-dim" }))
                     .w_full()
                     .on_edit(move |s: &mut S| &mut s.screen(&name).ui.edits.get_mut(&id2).expect("input synced").0);
                 if n.secure {
@@ -1575,7 +1575,7 @@ impl Build<'_> {
                 let mut t = text_input(&edit, body(size, 400.0))
                     .key(key.clone().unwrap_or_default())
                     .color(c("text-bright"))
-                    .placeholder(n.placeholder.clone().unwrap_or_default(), c("text-dim"))
+                    .placeholder(n.placeholder.clone().unwrap_or_default(), c(if is_compose(n) && !n.disabled { "text-muted" } else { "text-dim" }))
                     .w_full()
                     .on_edit(move |s: &mut S| &mut s.screen(&name).ui.edits.get_mut(&id2).expect("textarea synced").0);
                 if let Some(on) = n.on.clone() {
