@@ -904,10 +904,10 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `tag` | keyword pills |
 | `monitor` | the virtual Mac (rail, its panel, the palette) |
 | `inbox` | the Monitor: every session, who needs you first (rail, its overlay) |
+| `history` | commits (the Commits view, its rail entry, a pane's menu) |
 | `canvas` | Canvas: shots of an agent's screens to review (rail, its overlay) |
 | `pointer`, `pin`, `note`, `image` | Canvas's tools: select, a numbered pin, a note card, an example picture |
 | `minus`, `fit` | zoom out; show everything (Canvas) |
-| `history` | commits (the Commits view, its rail entry, a pane's menu) |
 
 ## Where screens live
 
