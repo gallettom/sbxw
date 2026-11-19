@@ -31,7 +31,10 @@ fn settle(rt: &mut Runtime<App>) {
 /// a screen returns them).
 fn window(fixture: &str, open: &[J]) -> Runtime<App> {
     let path = format!("{}/fixtures/{fixture}.json", env!("CARGO_MANIFEST_DIR"));
-    let a = App::new(Args { fixture: Some(path), ..Args::default() });
+    let mut a = App::new(Args { fixture: Some(path), ..Args::default() });
+    // In memory: a press here (GUI, Lead Mode, a layout) must not reach the
+    // state file the next window, or the person's app, starts from.
+    a.store = sbxw_desktop::shell::store::Store::memory();
     let mut rt = Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
     settle(&mut rt);
     for o in open {
@@ -89,6 +92,8 @@ fn every_tab_like_control_changes_what_is_drawn() {
         ("board/basic", vec![intent("board_show", json!({ "team": "p-run" }))], vec!["board-group-notes", "board-group-questions", "board-group-all", "board-thread-web-page"]),
         // The pager's Tabs and Grid.
         ("shell/finish-grid", vec![], vec!["pager-view-tabs", "pager-view-grid"]),
+        // The top bar's GUI | TUI and Lead Mode (two-state: each press must switch).
+        ("monitor/basic", vec![], vec!["top-view-gui", "top-view-tui", "top-lead", "top-lead", "top-view-gui", "top-lead", "top-view-tui", "top-lead"]),
     ];
     let mut bad = vec![];
     for (fixture, open, keys) in &cases {
@@ -110,4 +115,75 @@ fn a_commit_row_expands() {
     rt.pointer_up(x, y);
     settle(&mut rt);
     assert_ne!(drawn(&rt), before, "pressing {key} changed nothing drawn");
+}
+
+/// Sessions: a folded group of steps opens to its steps, and a step to its
+/// output (the conversation from the fixture's history).
+#[test]
+fn a_step_group_and_a_step_unfold_in_sessions() {
+    let mut rt = window("monitor/basic", &[intent("monitor_open", json!({})), intent("monitor_select", json!({ "key": "billing-api:s-bill-main" }))]);
+    // The last one drawn: the conversation opens at its end (the first ones are scrolled out of view).
+    let key_of = |rt: &Runtime<App>, prefix: &str| drawn(rt).into_iter().rev().find_map(|d| d.split('|').next().and_then(|k| k.strip_prefix(&format!("Some(\"{prefix}"))).map(|k| format!("{prefix}{}", k.trim_end_matches("\")"))));
+    let group = key_of(&rt, "monitor-steps-g").expect("a folded group of steps is drawn");
+    // (Pressed once: opened, its steps push its head up, out of a short view.)
+    for k in [group.clone()] {
+        let before = drawn(&rt);
+        let (x, y) = rt.find(&k).unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        settle(&mut rt);
+        assert_ne!(drawn(&rt), before, "pressing {k} changed nothing drawn");
+    }
+    let step = key_of(&rt, "monitor-step-s").expect("a step is drawn");
+    let before = drawn(&rt);
+    let (x, y) = rt.find(&step).unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(&mut rt);
+    assert_ne!(drawn(&rt), before, "pressing {step} changed nothing drawn");
+}
+
+/// What the rail opens, and which entries are lit.
+fn opened(rt: &Runtime<App>) -> String {
+    let d = rt.state.screen_data();
+    let lit: Vec<String> = { let (a, b) = rt.state.rail_layout_keys(); a.into_iter().chain(b).filter(|(_, on)| *on).map(|(k, _)| k).collect() };
+    format!("overlay {} modal {} panels {} lit {lit:?}", d["app"]["overlay"]["screen"], d["app"]["modal"]["screen"], d["app"]["panels"]["shown"])
+}
+
+/// Every rail entry that opens a view, pressed twice, puts back what was
+/// there before the first press (the panel, overlay or dialog it opened
+/// closes; nothing else stays lit).
+#[test]
+fn every_rail_entry_pressed_twice_puts_back_what_was_there() {
+    let mut rt = window("shell/two-panes", &[]);
+    let keys = ["rail-requests", "rail-network", "jarvis-toggle", "rail-board", "rail-commits", "rail-worktrees", "rail-files", "rail-mac", "rail-mcp", "rail-skills", "rail-kits"];
+    // (Settings opens a dialog whose backdrop covers the rail: a second press
+    // on the rail does not reach it; Escape, its Cancel or a press outside close it.)
+    let mut bad = vec![];
+    let mut seen = 0;
+    for k in keys {
+        if rt.find(k).is_none() {
+            continue;
+        }
+        seen += 1;
+        let before = opened(&rt);
+        for n in 0..2 {
+            let Some((x, y)) = rt.find(k) else {
+                bad.push(format!("{k}: not drawn for press {}", n + 1));
+                break;
+            };
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            settle(&mut rt);
+            if n == 0 && opened(&rt) == before {
+                bad.push(format!("{k}: the first press opened nothing"));
+            }
+        }
+        let after = opened(&rt);
+        if after != before {
+            bad.push(format!("{k}: pressed twice: {after}, before: {before}"));
+        }
+    }
+    assert!(seen >= 9, "only {seen} rail entries drawn");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }

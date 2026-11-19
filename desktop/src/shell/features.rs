@@ -711,14 +711,6 @@ impl App {
         true
     }
 
-    /// The base view a feature declares (`Slot::Base`): its screen, title and icon.
-    pub(super) fn base_screen() -> Option<(&'static str, &'static str, &'static str)> {
-        feat::FEATURES.iter().flat_map(|f| f.screens.iter()).find_map(|d| match d.slot {
-            Slot::Base { title, icon, .. } => Some((d.name, title, icon)),
-            _ => None,
-        })
-    }
-
     /// The pane area's base view changes (`None`: the terminals), kept for the next run.
     fn set_base(&mut self, base: Option<&str>) {
         self.feats.base = base.map(str::to_string);
@@ -803,10 +795,8 @@ impl App {
             head = head.child(el().w(4.0)).child(e);
         }
         head = head.child(el().grow(1.0).min_w(0.0));
-        // A base view is not closed: the view switch takes the place of the cross.
-        if base {
-            head = head.child(super::pager::view_switch(self, "base-view"));
-        } else {
+        // A base view is not closed: the top bar's GUI | TUI leaves it.
+        if !base {
             head = head
             // The hint only where there is room for it (the cross's tooltip says it too).
             .children(self.rects.overlay.is_none_or(|r| r[2] >= OVERLAY_HINT_MIN).then(|| text("Esc closes").font(crate::screen::body(12.0, 400.0)).color(c("text-muted"))))

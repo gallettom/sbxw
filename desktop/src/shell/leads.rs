@@ -1,6 +1,7 @@
-//! The team leads view: the rail's "Team leads" entry shows only the team
-//! leaders' terminals, and pressed again puts back exactly the layout that
-//! was there before.
+//! Lead Mode (the team leads view): the top bar's "Lead Mode" shows only
+//! the team leaders' terminals, and pressed again puts back exactly the
+//! layout that was there before. Sessions, as the base view, shows only the
+//! leaders' sessions under the same state.
 //!
 //! * A leader is the main session of a running sandbox that leads a team:
 //!   the daemon's `GET /api/leads` (`data.leads`, a list of sandbox names),
@@ -16,9 +17,16 @@
 //!   is dropped. A pane of the kept layout closed in the view is opened
 //!   again when its sandbox still runs, else left out.
 //! * Quitting in the view: the state file holds the kept layout
-//!   (`App::save_layout`), never the view.
+//!   (`App::save_layout`), never the view's, and `lead_mode: true`; at the
+//!   next start Lead Mode comes back over that layout once the teams are
+//!   read (and only if a team runs then).
+//! * The top bar's Lead Mode (topbar.luau, the `team_leads` intent) and the
+//!   palette turn it on and off; Sessions filters its list by the same state.
 
 use super::*;
+
+/// The state file's key: Lead Mode was on when the app quit (comes back at start).
+pub const LEAD_KEY: &str = "lead_mode";
 
 /// The view while it shows.
 pub struct LeadsView {
@@ -49,6 +57,16 @@ impl App {
             self.leave_leads();
         } else {
             self.enter_leads();
+        }
+        self.leads_restore = false;
+        self.store.set(LEAD_KEY, if self.leads_on() { J::Bool(true) } else { J::Null });
+        // The base view drawn instead of the terminals (Sessions) filters by
+        // the same state: it reads `data.app.leads` again (`<base>_refresh`).
+        if let Some(b) = self.feats.base.clone() {
+            let refresh = format!("{b}_refresh");
+            if crate::intent::all().any(|s| s.name == refresh) {
+                self.press_extra("leads", &refresh, &serde_json::json!({}));
+            }
         }
     }
 
@@ -206,7 +224,109 @@ mod tests {
         let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
         r.rt.update(|s, _| s.toggle_leads());
         assert!(!r.rt.state.leads_on());
-        let e = r.rt.state.rail_entries().0.into_iter().find(|e| e.key == "rail-leads").unwrap();
-        assert!(e.disabled && e.help.contains("No team is running"));
+        assert_eq!(r.rt.state.screen_data()["app"]["leads"], serde_json::json!({ "on": false, "can": false }), "the top bar draws Lead Mode disabled");
+        r.rt.update(|s, _| s.run_intent("x", Intent::TeamLeads { show: Some(true) }));
+        assert!(!r.rt.state.leads_on(), "nothing to show: it stays off");
+    }
+
+    fn sess(sb: &str, thread: Option<&str>, id: &str, ts: u64) -> J {
+        serde_json::json!({ "sandbox": sb, "thread": thread, "session_id": id, "state": "idle", "started_ms": 1, "ts": ts, "mode": "claude", "reply": "Done." })
+    }
+
+    fn rows(r: &Rig) -> Vec<String> {
+        r.rt.state.screen_data()["monitor"]["rows"].as_array().map(|v| v.iter().map(|x| x["key"].as_str().unwrap_or("").to_string()).collect()).unwrap_or_default()
+    }
+
+    /// Lead Mode is one state for both base views: on from the top bar in
+    /// Sessions, the list keeps the leaders, each with its threads under it
+    /// (indented), and a selection filtered out moves to the first leader;
+    /// the terminals behind show only the leaders' panes; TUI and back keep
+    /// it; off, the full list and the selection come back. Kept in the state
+    /// file while on. The leaders gone while it is on: the empty state.
+    #[test]
+    fn lead_mode_is_one_state_for_the_terminals_and_sessions() {
+        use super::super::tests::tap;
+        let mut r = rig();
+        r.rt.update(|s, _| {
+            s.feats.data.insert("sessions".into(), serde_json::json!([sess("a", None, "sa", 5), sess("a", Some("t1"), "sat", 4), sess("b", None, "sb", 9), sess("c", None, "sc", 3), sess("d", None, "sd", 8)]));
+            s.push_data();
+        });
+        r.settle();
+        tap(&mut r.rt, "top-view-gui");
+        r.settle();
+        assert_eq!(r.rt.state.feats.base.as_deref(), Some("monitor"));
+        r.rt.update(|s, _| s.press_extra("test", "monitor_select", &serde_json::json!({ "key": "b:sb" })));
+        r.settle();
+        let all = rows(&r);
+        assert_eq!(all.len(), 5);
+        assert_eq!(r.rt.state.screen_data()["monitor"]["sel"], "b:sb");
+        tap(&mut r.rt, "top-lead");
+        r.settle();
+        assert!(r.rt.state.leads_on(), "Lead Mode on from the top bar");
+        assert_eq!(rows(&r), ["a:sa", "a::t1", "c:sc"], "each leader (the core's order), then its threads");
+        let v = r.rt.state.screen_data()["monitor"].clone();
+        assert_eq!(v["rows"][1]["indent"], true, "a thread under its leader");
+        assert!(v["rows"][0].get("indent").is_none());
+        assert_eq!(v["sel"], "a:sa", "b is not a leader: the first leader is selected");
+        assert_eq!(r.rt.state.store.get(LEAD_KEY), &J::Bool(true), "kept for the next start");
+        // The terminals behind: only the leaders'.
+        let shown: std::collections::BTreeSet<String> = r.names().concat().into_iter().collect();
+        assert_eq!(shown, ["a", "c", "e"].iter().map(|s| s.to_string()).collect(), "the TUI shows the leaders' panes");
+        tap(&mut r.rt, "top-view-tui");
+        r.settle();
+        assert!(r.rt.state.leads_on() && r.rt.state.feats.base.is_none(), "TUI keeps Lead Mode");
+        tap(&mut r.rt, "top-view-gui");
+        r.settle();
+        assert_eq!(rows(&r), ["a:sa", "a::t1", "c:sc"], "back in GUI: still filtered");
+        tap(&mut r.rt, "top-lead");
+        r.settle();
+        assert!(!r.rt.state.leads_on());
+        assert_eq!(rows(&r), all, "the full list again");
+        assert_eq!(r.rt.state.screen_data()["monitor"]["sel"], "b:sb", "the selection from before");
+        assert_eq!(r.rt.state.store.get(LEAD_KEY), &J::Null);
+        // On again, then no team runs any more: the empty state, the filter still on.
+        tap(&mut r.rt, "top-lead");
+        r.settle();
+        r.rt.update(|s, _| {
+            s.feats.data.insert("leads".into(), serde_json::json!([]));
+            s.press_extra("test", "monitor_refresh", &serde_json::json!({}));
+        });
+        r.settle();
+        assert!(r.rt.state.leads_on());
+        assert!(rows(&r).is_empty());
+        assert!(r.rt.find("monitor-leads-empty").is_some(), "No team leader is running");
+        assert!(r.rt.find("monitor-empty").is_none(), "not the no-session state");
+    }
+
+    /// Lead Mode on when the app quit comes back at the next start, once the
+    /// teams are read, over the layout kept; with no team running then it
+    /// stays off (and does not wait for one).
+    #[test]
+    fn lead_mode_comes_back_at_start_when_a_team_still_runs() {
+        let mut r = rig();
+        // The fixture's first lists in, then the running sandboxes again.
+        r.rt.update(|s, tx| {
+            s.poll(0.5, tx);
+            s.sandboxes = ["a", "b", "c", "d", "e"].iter().map(|n| crate::client::Sandbox::new(n, "claude", "running")).collect();
+        });
+        r.rt.update(|s, tx| {
+            s.store.set(LEAD_KEY, J::Bool(true));
+            s.leads_restore = true;
+            s.listed = true;
+            s.poll(1.0, tx);
+        });
+        assert!(r.rt.state.leads_on() && !r.rt.state.leads_restore);
+        let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
+        r.rt.update(|s, tx| {
+            s.leads_restore = true;
+            s.listed = true;
+            s.poll(1.0, tx);
+        });
+        assert!(r.rt.state.leads_restore, "the teams are not read yet: it waits");
+        r.rt.update(|s, tx| {
+            s.feats.data.insert("leads".into(), serde_json::json!([]));
+            s.poll(2.0, tx);
+        });
+        assert!(!r.rt.state.leads_on() && !r.rt.state.leads_restore, "no team: off, and it waits no more");
     }
 }

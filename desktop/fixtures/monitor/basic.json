@@ -1,6 +1,10 @@
 {
- "about": "Five sandboxes, eight sessions in every state: a multiple-choice question (shop-web main, answerable), a permission prompt (shop-web checkout-copy), three working, three idle with replies. Invented content. `session_events`: the stand-in's live changes (docs-site edits, tax-rules finishes, retry-queue asks a permission).",
+ "about": "Five sandboxes, eight sessions in every state: a multiple-choice question (shop-web main, answerable), a permission prompt (shop-web checkout-copy), three working, three idle with replies. Invented content. `session_events`: the stand-in's live changes (docs-site edits, tax-rules finishes, retry-queue asks a permission). `leads`: shop-web and billing-api lead a team (Lead Mode). `history`: invented conversations (billing-api main: two days, step groups, a message from the lead, a compaction; shop-web main: its question; docs-site: partial, old hook; data-pipeline: truncated; chat-research: none). `history_events`: retry-queue's test result, a provisional reply, then the transcript's.",
  "daemon": {
+  "leads": [
+   "shop-web",
+   "billing-api"
+  ],
   "sandboxes": [
    {
     "name": "shop-web",
@@ -347,6 +351,774 @@
      "lines_added": 77,
      "lines_removed": 4
     }
+   }
+  ],
+  "history": {
+   "billing-api/s-bill-main": {
+    "items": [
+     {
+      "seq": 1,
+      "at": 1763365720000,
+      "kind": "user_prompt",
+      "text": "Add a CSV export of the invoices, one row per line item, and keep the totals in a last row."
+     },
+     {
+      "seq": 2,
+      "at": 1763365740000,
+      "kind": "assistant_text",
+      "text": "I will look at how invoices are built first, then add the export next to the PDF one."
+     },
+     {
+      "seq": 3,
+      "at": 1763365748000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Grep",
+       "summary": "invoice_total in src/",
+       "id": "toolu_001"
+      }
+     },
+     {
+      "seq": 4,
+      "at": 1763365749500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 120,
+       "head": "src/invoice.rs:41: pub fn invoice_total(\nsrc/report.rs:12: use crate::invoice_total;",
+       "id": "toolu_001"
+      }
+     },
+     {
+      "seq": 5,
+      "at": 1763365757500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Read",
+       "summary": "src/invoice.rs",
+       "id": "toolu_002"
+      }
+     },
+     {
+      "seq": 6,
+      "at": 1763365759000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 4200,
+       "head": "pub struct Invoice {\n    pub lines: Vec<Line>,\n    pub currency: Currency,\n}",
+       "id": "toolu_002"
+      }
+     },
+     {
+      "seq": 7,
+      "at": 1763365767000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Read",
+       "summary": "src/export/pdf.rs",
+       "id": "toolu_003"
+      }
+     },
+     {
+      "seq": 8,
+      "at": 1763365768500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 3100,
+       "head": "pub fn export_pdf(inv: &Invoice) -> Vec<u8> {",
+       "id": "toolu_003"
+      }
+     },
+     {
+      "seq": 9,
+      "at": 1763365788500,
+      "kind": "assistant_text",
+      "text": "The PDF export walks `Invoice::lines`. A CSV export can do the same with a writer per line item."
+     },
+     {
+      "seq": 10,
+      "at": 1763365796500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Write",
+       "summary": "src/export/csv.rs (+64 lines)",
+       "id": "toolu_004"
+      }
+     },
+     {
+      "seq": 11,
+      "at": 1763365798000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 0,
+       "head": "",
+       "id": "toolu_004"
+      }
+     },
+     {
+      "seq": 12,
+      "at": 1763365806000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Edit",
+       "summary": "src/export/mod.rs (+2 −0)",
+       "id": "toolu_005"
+      }
+     },
+     {
+      "seq": 13,
+      "at": 1763365807500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 0,
+       "head": "",
+       "id": "toolu_005"
+      }
+     },
+     {
+      "seq": 14,
+      "at": 1763365815500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Bash",
+       "summary": "$ cargo test export",
+       "id": "toolu_006"
+      }
+     },
+     {
+      "seq": 15,
+      "at": 1763365817000,
+      "kind": "tool_result",
+      "result": {
+       "status": "error",
+       "size": 900,
+       "head": "running 6 tests\ntest export::csv::totals ... FAILED\n\nfailures:\n    expected 3 rows, got 2",
+       "id": "toolu_006"
+      }
+     },
+     {
+      "seq": 16,
+      "at": 1763365837000,
+      "kind": "assistant_text",
+      "text": "One test fails: the totals row is missing when an invoice has a single line. I will fix the loop."
+     },
+     {
+      "seq": 17,
+      "at": 1763365845000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Edit",
+       "summary": "src/export/csv.rs (+3 −1)",
+       "id": "toolu_007"
+      }
+     },
+     {
+      "seq": 18,
+      "at": 1763365846500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 0,
+       "head": "",
+       "id": "toolu_007"
+      }
+     },
+     {
+      "seq": 19,
+      "at": 1763365854500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Bash",
+       "summary": "$ cargo test export",
+       "id": "toolu_008"
+      }
+     },
+     {
+      "seq": 20,
+      "at": 1763365856000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 400,
+       "head": "running 6 tests\ntest result: ok. 6 passed; 0 failed",
+       "id": "toolu_008"
+      }
+     },
+     {
+      "seq": 21,
+      "at": 1763365876000,
+      "kind": "assistant_text",
+      "text": "[[Done]] The CSV export is in `src/export/csv.rs`: one row per line item and a totals row. All 6 export tests pass."
+     },
+     {
+      "seq": 22,
+      "at": 1763459900000,
+      "kind": "injected",
+      "text": "Please also stream the export instead of building it in memory: some customers have very large invoices. Keep the same columns and the totals row at the end. When it is done, tell me how long a 50,000-line invoice takes, and stop there; the reviewer will look at it before anything else changes. If the streaming writer needs a new dependency, ask first instead of adding it, because the build has to stay offline for now.",
+      "from": "lead"
+     },
+     {
+      "seq": 23,
+      "at": 1763459920000,
+      "kind": "assistant_text",
+      "text": "Understood. I will stream rows through the writer and keep the columns as they are."
+     },
+     {
+      "seq": 24,
+      "at": 1763459928000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Read",
+       "summary": "src/export/csv.rs",
+       "id": "toolu_009"
+      }
+     },
+     {
+      "seq": 25,
+      "at": 1763459929500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 300,
+       "head": "output of step 1\nall good",
+       "id": "toolu_009"
+      }
+     },
+     {
+      "seq": 26,
+      "at": 1763459937500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Grep",
+       "summary": "fn write_row",
+       "id": "toolu_010"
+      }
+     },
+     {
+      "seq": 27,
+      "at": 1763459939000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 350,
+       "head": "output of step 2\nall good",
+       "id": "toolu_010"
+      }
+     },
+     {
+      "seq": 28,
+      "at": 1763459947000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Edit",
+       "summary": "src/export/csv.rs (+18 −9)",
+       "id": "toolu_011"
+      }
+     },
+     {
+      "seq": 29,
+      "at": 1763459948500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 400,
+       "head": "output of step 3\nall good",
+       "id": "toolu_011"
+      }
+     },
+     {
+      "seq": 30,
+      "at": 1763459956500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Edit",
+       "summary": "src/export/csv.rs (+4 −2)",
+       "id": "toolu_012"
+      }
+     },
+     {
+      "seq": 31,
+      "at": 1763459958000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 450,
+       "head": "output of step 4\nall good",
+       "id": "toolu_012"
+      }
+     },
+     {
+      "seq": 32,
+      "at": 1763459966000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Bash",
+       "summary": "$ cargo test export",
+       "id": "toolu_013"
+      }
+     },
+     {
+      "seq": 33,
+      "at": 1763459967500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 500,
+       "head": "output of step 5\nall good",
+       "id": "toolu_013"
+      }
+     },
+     {
+      "seq": 34,
+      "at": 1763459975500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Bash",
+       "summary": "$ cargo bench export_50k",
+       "id": "toolu_014"
+      }
+     },
+     {
+      "seq": 35,
+      "at": 1763459977000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 550,
+       "head": "output of step 6\nall good",
+       "id": "toolu_014"
+      }
+     },
+     {
+      "seq": 36,
+      "at": 1763459985000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Read",
+       "summary": "target/criterion/report.txt",
+       "id": "toolu_015"
+      }
+     },
+     {
+      "seq": 37,
+      "at": 1763459986500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 600,
+       "head": "output of step 7\nall good",
+       "id": "toolu_015"
+      }
+     },
+     {
+      "seq": 38,
+      "at": 1763459994500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Edit",
+       "summary": "README.md (+6 −0)",
+       "id": "toolu_016"
+      }
+     },
+     {
+      "seq": 39,
+      "at": 1763459996000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 650,
+       "head": "output of step 8\nall good",
+       "id": "toolu_016"
+      }
+     },
+     {
+      "seq": 40,
+      "at": 1763460004000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Bash",
+       "summary": "$ cargo fmt",
+       "id": "toolu_017"
+      }
+     },
+     {
+      "seq": 41,
+      "at": 1763460005500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 700,
+       "head": "output of step 9\nall good",
+       "id": "toolu_017"
+      }
+     },
+     {
+      "seq": 42,
+      "at": 1763460013500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Bash",
+       "summary": "$ cargo clippy -q",
+       "id": "toolu_018"
+      }
+     },
+     {
+      "seq": 43,
+      "at": 1763460015000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 750,
+       "head": "output of step 10\nall good",
+       "id": "toolu_018"
+      }
+     },
+     {
+      "seq": 44,
+      "at": 1763460023000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Bash",
+       "summary": "$ cargo test",
+       "id": "toolu_019"
+      }
+     },
+     {
+      "seq": 45,
+      "at": 1763460024500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 800,
+       "head": "output of step 11\nall good",
+       "id": "toolu_019"
+      }
+     },
+     {
+      "seq": 46,
+      "at": 1763460032500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Read",
+       "summary": "CHANGELOG.md",
+       "id": "toolu_020"
+      }
+     },
+     {
+      "seq": 47,
+      "at": 1763460034000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 850,
+       "head": "output of step 12\nall good",
+       "id": "toolu_020"
+      }
+     },
+     {
+      "seq": 48,
+      "at": 1763460054000,
+      "kind": "compact_marker",
+      "text": ""
+     },
+     {
+      "seq": 49,
+      "at": 1763460074000,
+      "kind": "notice",
+      "text": "An image was here (not kept)"
+     },
+     {
+      "seq": 50,
+      "at": 1763460094000,
+      "kind": "user_prompt",
+      "text": "Thanks. How long does the 50,000-line invoice take now?"
+     },
+     {
+      "seq": 51,
+      "at": 1763460114000,
+      "kind": "assistant_text",
+      "text": "About **1.8 s** and a flat 12 MB of memory, against 9 s and 600 MB before.\n\n- rows are written as they are read\n- the totals row is still last\n\n[[Done: streaming export]]"
+     }
+    ]
+   },
+   "shop-web/s-shop-main": {
+    "items": [
+     {
+      "seq": 1,
+      "at": 1763461700000,
+      "kind": "user_prompt",
+      "text": "Rework the checkout form so that the address and the payment fit on one screen on a laptop."
+     },
+     {
+      "seq": 2,
+      "at": 1763461720000,
+      "kind": "assistant_text",
+      "text": "Let me measure the form first."
+     },
+     {
+      "seq": 3,
+      "at": 1763461728000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Read",
+       "summary": "src/checkout/Form.tsx",
+       "id": "toolu_001"
+      }
+     },
+     {
+      "seq": 4,
+      "at": 1763461729500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 5200,
+       "head": "export function CheckoutForm() {",
+       "id": "toolu_001"
+      }
+     },
+     {
+      "seq": 5,
+      "at": 1763461737500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Bash",
+       "summary": "$ npm run measure -- checkout",
+       "id": "toolu_002"
+      }
+     },
+     {
+      "seq": 6,
+      "at": 1763461739000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 200,
+       "head": "form height: 1460 px at 1280x800",
+       "id": "toolu_002"
+      }
+     },
+     {
+      "seq": 7,
+      "at": 1763461759000,
+      "kind": "assistant_text",
+      "text": "The form is 1460 px tall at 1280x800. There are three ways to make it fit; I will ask which one you prefer."
+     },
+     {
+      "seq": 8,
+      "at": 1763461767000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "AskUserQuestion",
+       "summary": "Which layout should the checkout form use?",
+       "id": "toolu_003"
+      }
+     },
+     {
+      "seq": 9,
+      "at": 1763461768000,
+      "kind": "question",
+      "text": "Which layout should the checkout form use?",
+      "steps": [
+       {
+        "text": "Which layout should the checkout form use?",
+        "options": [
+         "One page",
+         "Two steps",
+         "Keep the current one"
+        ],
+        "context": []
+       }
+      ]
+     }
+    ]
+   },
+   "docs-site/s-docs-main": {
+    "items": [
+     {
+      "seq": 1,
+      "at": 1763462720000,
+      "kind": "user_prompt",
+      "text": "Fix the broken links in the guides."
+     },
+     {
+      "seq": 2,
+      "at": 1763462728000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Read",
+       "summary": "guides/getting-started.md",
+       "id": "toolu_001"
+      }
+     }
+    ],
+    "partial": true,
+    "partial_reason": "old_hook: this sandbox's status hook (v2) does not read the transcript: events only, no assistant text between tool calls, nothing from before the daemon saw the session; `sbxw up <sandbox>` installs v3"
+   },
+   "billing-api/s-bill-retry": {
+    "items": [
+     {
+      "seq": 1,
+      "at": 1763462020000,
+      "kind": "user_prompt",
+      "text": "Make the retry queue back off exponentially, capped at five minutes."
+     },
+     {
+      "seq": 2,
+      "at": 1763462040000,
+      "kind": "assistant_text",
+      "text": "I will start from the queue's scheduler."
+     },
+     {
+      "seq": 3,
+      "at": 1763462048000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Read",
+       "summary": "src/queue.rs",
+       "id": "toolu_001"
+      }
+     },
+     {
+      "seq": 4,
+      "at": 1763462049500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 2900,
+       "head": "pub struct RetryQueue {",
+       "id": "toolu_001"
+      }
+     },
+     {
+      "seq": 5,
+      "at": 1763462057500,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Edit",
+       "summary": "src/queue.rs (+22 −6)",
+       "id": "toolu_002"
+      }
+     },
+     {
+      "seq": 6,
+      "at": 1763462059000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 0,
+       "head": "",
+       "id": "toolu_002"
+      }
+     },
+     {
+      "seq": 7,
+      "at": 1763462067000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Bash",
+       "summary": "$ cargo test queue",
+       "id": "toolu_003"
+      }
+     }
+    ]
+   },
+   "data-pipeline/s-pipe-main": {
+    "items": [
+     {
+      "seq": 341,
+      "at": 1763460020000,
+      "kind": "assistant_text",
+      "text": "The nightly job now skips empty partitions."
+     },
+     {
+      "seq": 342,
+      "at": 1763460040000,
+      "kind": "user_prompt",
+      "text": "Good. Add a log line when one is skipped."
+     },
+     {
+      "seq": 343,
+      "at": 1763460048000,
+      "kind": "tool_call",
+      "tool": {
+       "name": "Edit",
+       "summary": "jobs/nightly.py (+2 −0)",
+       "id": "toolu_001"
+      }
+     },
+     {
+      "seq": 344,
+      "at": 1763460049500,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 0,
+       "head": "",
+       "id": "toolu_001"
+      }
+     },
+     {
+      "seq": 345,
+      "at": 1763460069500,
+      "kind": "assistant_text",
+      "text": "[[Done]] Added: `skipped empty partition <date>` at info level."
+     }
+    ],
+    "truncated_before": true
+   }
+  },
+  "history_events": [
+   {
+    "after": 3.0,
+    "sandbox": "billing-api",
+    "session_id": "s-bill-retry",
+    "items": [
+     {
+      "seq": 8,
+      "at": 1763463565000,
+      "kind": "tool_result",
+      "result": {
+       "status": "ok",
+       "size": 380,
+       "head": "test result: ok. 9 passed",
+       "id": "toolu_003"
+      }
+     }
+    ]
+   },
+   {
+    "after": 5.0,
+    "sandbox": "billing-api",
+    "session_id": "s-bill-retry",
+    "items": [
+     {
+      "seq": 9,
+      "at": 1763463570000,
+      "kind": "assistant_text",
+      "text": "Backoff is exponential now, capped at 5 min.",
+      "provisional": true
+     }
+    ]
+   },
+   {
+    "after": 7.0,
+    "sandbox": "billing-api",
+    "session_id": "s-bill-retry",
+    "drop": [
+     9
+    ],
+    "items": [
+     {
+      "seq": 10,
+      "at": 1763463571000,
+      "kind": "assistant_text",
+      "text": "[[Done]] Backoff is exponential now, capped at 5 min; 9 queue tests pass."
+     }
+    ]
    }
   ]
  },

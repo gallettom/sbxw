@@ -94,7 +94,7 @@ unchanged.
 | `theme` | The theme drawn: `dark` or `graphite` |
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
 | `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
-| `covered` | Something sits over the panes and over any overlay: the core's dialog, a modal, Jarvis's proposal or the palette (read only; `App::panes_covered` without the overlay itself). The Monitor draws its send controls disabled then; its Rust refuses to send whatever the screen draws |
+| `covered` | Something sits over the panes and over any overlay: the core's dialog, a modal, Jarvis's proposal or the palette (read only; `App::panes_covered` without the overlay itself). Sessions draws its send controls disabled then; its Rust refuses to send whatever the screen draws |
 | `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |
 
 `data.jarvis` (every screen gets it; the `jarvis` screen draws it):
@@ -613,7 +613,8 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `start_sandbox` | `sandbox` (required), `pane` | Starts a stopped sandbox by opening its agent, as the web UI's Connect does |
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
-| `sidebar` | `show`: `show`, `hide` or `toggle` | The sandboxes sidebar shown or hidden, remembered across launches (`data.app.sidebar.shown`); the pane area, terminals or Monitor, takes its width (each terminal resized once). Its header's `sidebar-hide` runs it; while it is hidden the rail's first entry `rail-sidebar` ("Show sandboxes") brings it back, its badge the sessions that want the person (amber). A `select` of a sandbox pressed elsewhere (the palette, Worktrees, the create jobs; not one a feature runs from its data) shows it first. No focus moves |
+| `sidebar` | `show`: `show`, `hide` or `toggle` | The sandboxes sidebar shown or hidden, remembered across launches (`data.app.sidebar.shown`); the pane area, terminals or Sessions, takes its width (each terminal resized once). Its header's `sidebar-hide` runs it; while it is hidden the rail's first entry `rail-sidebar` ("Show sandboxes") brings it back, its badge the sessions that want the person (amber). A `select` of a sandbox pressed elsewhere (the palette, Worktrees, the create jobs; not one a feature runs from its data) shows it first. No focus moves |
+| `team_leads` | `show`: `show`, `hide` or `toggle` | Lead Mode on or off, the top bar's `top-lead` (`data.app.leads`: `on`, `can` (a team runs), `leaders` while on). On: the terminals show only the team leaders' panes (the layout before comes back when it goes off) and Sessions only the leaders' sessions, each followed by its threads'. One state for both base views, kept in the state file (`lead_mode`) and restored at start when a team still runs. Nothing happens while no team runs |
 | `set_theme` | `theme`: `dark`, `graphite` or `toggle` (the next one) | The app's theme, remembered across launches; every surface switches at once (`data.app.theme` and `theme.mode` say which palette is drawn) |
 | `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | The old layout picker's: that many terminals per page, and the current page that many panes (empty ones added) in the old arrangement |
 | `page_show` | `page` (from 1, required) | Shows that page of terminals |
@@ -861,7 +862,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
 `coin`, `help`, `moon`, `appearance`, `branch`, `globe`, `remote`, `key`, `people`, `leader`, `threads`,
-`shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `inbox` (the Monitor: a list of sessions, the first dot filled), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
+`shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `inbox` (Sessions: a list of sessions, the first dot filled), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
 ">", for the top bar's logo).
 
 One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
@@ -883,7 +884,7 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `stop` | interrupt or stop |
 | `tag` | keyword pills |
 | `monitor` | the virtual Mac (rail, its panel, the palette) |
-| `inbox` | the Monitor: every session, who needs you first (rail, its overlay) |
+| `inbox` | Sessions: every session, who needs you first (the top bar's GUI) |
 | `history` | commits (the Commits view, its rail entry, a pane's menu) |
 
 ## Where screens live
@@ -1044,8 +1045,11 @@ What a feature declares:
 | `on_dismiss` | `fn(&Ctx, tag)`: one of its core dialogs closed without its call going out (Cancel, close, Escape, a press outside, replaced, a failed `Prepare` closed); `tag` is the dialog's call tag |
 
 Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
-`Call::post(path, body, what)` / `Call::get`, `.then(&[keys])`,
-`.store(key)`, `.timeout(secs)`, `.tag(t)`, `.quiet()`), `Confirm`,
+`Call::post(path, body, what)` / `Call::get` / `Call::delete`, `.then(&[keys])`,
+`.store(key)`, `.timeout(secs)`, `.tag(t)`, `.quiet()`; a `DELETE` is a
+removal: sent directly only for what undoes nothing the person made,
+today Sessions' own history subscription; any other DELETE from a feature
+goes through `Confirm`, like every destructive call), `Confirm`,
 `Prepare`, `Refresh(key)`, `Fetch { key, path }`, `Set { key, value }`,
 `OpenModal { screen, arg }`, `CloseModal`, `OpenPanel(screen)`,
 `ClosePanel(screen)`, `Notice { text, error, then }` (`then`: an intent a
@@ -1137,7 +1141,7 @@ marks those that do not fit `more` (above).
 ### A rail entry
 
 A feature puts an entry in the left rail with `Place::Rail { zone, order }`.
-`zone` is a `feat::Zone`: `Activity` (what happens now: Monitor 5, Requests 10,
+`zone` is a `feat::Zone`: `Activity` (what happens now: Requests 10,
 Network 20, Team leads 30), `Browse` (views to read: Commits 10,
 Worktrees 20, Files 30) or `Configure` (what is set up: MCP 10, Skills 20,
 Kits 30; Settings is always its last). `order` sorts within the zone, lower
@@ -1935,29 +1939,37 @@ commit in Commits (`commits_show {sandbox, branch, hash}`).
 | `worktrees_terminal`, `worktrees_commits`, `worktrees_files` | `id` | The row's thread terminal, its branch in Commits, the explorer at it |
 | `worktrees_select` | `id?` | Marks a row (a lane pressed), or none; view state |
 
-### monitor
+### monitor (Sessions)
 
-Every Claude session of every sandbox in one view, who needs the person
-first, the selected one as a short feed and a composer (the "Inbox and
-detail" concept of `.sbxw-artifacts/desktop/MONITOR.md`). Files:
-`src/feat/monitor/` (`mod.rs` intents and the gate, `model.rs` the cards
-and the view, `tests.rs`), `screens/monitor.luau`, `fixtures/monitor/`
-(`basic`, `empty`, `idle`, `busy`, `gate`), `scripts/demo-monitor.sh`.
+**Sessions**, the feature `monitor`: every Claude session of every
+sandbox in one view, who needs the person first, the selected one's
+conversation as the terminal shows it, and a composer (the "Inbox and
+detail" concept of `.sbxw-artifacts/desktop/MONITOR.md`; SESSIONS.md there
+for the conversation). Files: `src/feat/monitor/` (`mod.rs` intents, the
+gate and the history reads, `model.rs` the cards and the view, `conv.rs`
+the conversation, `attach.rs`, `tests.rs`), `screens/monitor.luau`,
+`fixtures/monitor/` (`basic` with `history` and `history_events`, `empty`,
+`idle`, `busy`, `gate`, `folding`), `scripts/demo-monitor.sh`. The names
+code, tests and the state file use stay `monitor` (`monitor_*` intents,
+`monitor-*` keys, `base_view: "monitor"`).
 
-**Screen.** `monitor` (a base view, `Slot::Base` "Monitor": the pane
-area shows it instead of the terminals, see "Base views" below; rail entry
-`rail-monitor`, activity zone, order 5, lit while it is the base, no count
-badge: Requests counts what waits; shortcut Ctrl+Option+I on macOS, Alt+I
-elsewhere, `monitor_toggle`). Left:
-the sessions, grouped Needs you (the longest waiting first), Working, Idle,
+**Screen.** `monitor` (a base view, `Slot::Base` "Sessions": the pane
+area shows it instead of the terminals, see "Base views" below; the top
+bar's GUI | TUI switch, `top-view-gui` and `top-view-tui`; shortcut
+Ctrl+Option+I on macOS, Alt+I elsewhere, `monitor_toggle`, "Switch between
+GUI and TUI"; no rail entry). Left: the count ("8 sessions"), then the
+sessions, grouped Needs you (the longest waiting first), Working, Idle,
 Ended (the latest first), rows `monitor-row-<key>`, 50 a page
-(`monitor-more`), `monitor-next` ("2 need you", N). Middle (from 760 pt;
+(`monitor-more`), `monitor-next` ("2 need you", N). With Lead Mode on
+(`data.app.leads.on`, the top bar's `top-lead`): no group headings; each
+leader's main session, then its threads' sessions one step in
+(`indent`), "Team leaders and their threads" for the count, and
+`monitor-leads-empty` ("No team leader is running") when none is listed.
+Middle (from 760 pt;
 under it, the list, and a row pressed opens its session with
 `monitor-back`): the header (state, colour square, model, cost; worktree,
 lines, time; `monitor-terminal`, `-commits`, `-files`, `-worktrees`), the
-feed (the last prompt, `monitor-now`, `monitor-reply` with keyword pills,
-`monitor-question` with `monitor-opt-<step>-<option>` or "Answer in its
-terminal", `monitor-permission`), then the composer (`monitor-compose`,
+conversation (below), then the composer (`monitor-compose`,
 the attached files' chips `monitor-attached` with `monitor-file-<id>` and its
 cross `monitor-file-remove-<id>`, `monitor-target` "To ■ sandbox ·
 session", `monitor-attach` ("Attach", the icon alone under 640 pt),
@@ -1967,11 +1979,58 @@ along the rows, Enter shows one, N goes to the next session that needs you;
 Escape does not leave it (a base view). With nothing of the view focused, Up and Down move the
 selection and Enter gives the keyboard to the list.
 
+**The conversation** (`detail.conv`, `conv.rs`), from the daemon's
+history (`GET /api/sessions/:sandbox/:session_id/history`, newest page of
+100 first; docs/session-history.md), in the scroll `monitor-conv-<key>`
+(`stick_bottom`: it opens at the newest and follows it while scrolled to
+the end). Oldest at the top: a day separator (`monitor-day-<n>`, Today,
+Yesterday, a date), the person's prompts (`monitor-you-<seq>`, "You"),
+what another session or the harness typed in (`injected`,
+`monitor-from-<seq>`, "From <sender>", quiet, folded past 360 characters
+or 5 lines with `monitor-fold-<seq>`; never "You", never the raw tag),
+Claude's text (`monitor-claude-<seq>`, the prose face with pills), a tool
+call and its result as one step (`monitor-step-s<seq>`: its family's icon,
+the one-line summary in mono, the result's size, a status mark; pressed,
+its result's head in mono, `monitor-out-s<seq>`), consecutive steps folded
+into a group (`monitor-steps-g<seq>`: "12 steps", the last one's summary,
+its status, failed ones counted; pressed, its steps), a compaction, a
+notice, a past question or permission as a centred quiet line
+(`monitor-sys-<seq>`). Then "Now" (`monitor-now`) while it works, and the
+question or permission card, the only rows with controls. A tool call of
+`AskUserQuestion` is left out when the log has the question. Only the
+newest 60 rows are drawn; `monitor-earlier` ("Show earlier") draws 60 more,
+then reads the page before (`before`). At the start of the log:
+`monitor-truncated` ("Earlier conversation is not kept") when the daemon
+dropped older items, `monitor-continues` when the session continues an
+earlier one (its log is not merged in). States: `loading`, `ready`,
+`missing` (404: the summary, "sbxw has no conversation for this session"),
+`partial` (an old hook, no transcript, catching up: the summary of the last
+prompt, now and reply, and `monitor-conv-note` saying why and what to do,
+"Run sbxw up <sandbox> to get it"), `error` (what is shown stays, a quiet
+`monitor-retry`). Rows are built in Rust once per change of the log or of
+what is open, each with a `sig`; the screen memoises a row by session, id
+and sig.
+
+**Reads and the subscription.** Only the selected session is read, and
+only while Sessions is drawn or the base under an overlay: selecting a
+session reads its newest page (which subscribes it for 120 s); the
+`history` event (`{sandbox, session_id, seq}`, a nudge without text) for
+it reads the newest page again (merged by `seq`: a provisional reply is
+replaced, a reset restarts the log); a `session` event for it renews the
+subscription when the last read is over 90 s old. Another session
+selected, the view left (TUI, its terminal link) or an event while it is
+not drawn: `DELETE .../history/subscription` of the one followed (quiet).
+On quit the subscription expires by itself. A nudge for any other session
+reads nothing. The selected log and three recently viewed ones stay in
+memory (`conv::LRU`); nothing is logged or written to disk.
+
 **Data.** `data.monitor`, built in Rust: `now`, `rows` (`{key, rev,
 sandbox, name, thread, group, tone, line, mono, ts, ask}`), `count` (the
 paging block), `counts` (`you`, `working`, `idle`, `ended`, `total`),
-`sel`, `detail` (the selected session: `strip`, `last_input`, `now`,
-`reply`, `question {answerable, steps: [{text, options: [{label, desc}]}]}`,
+`sel`, `leads` (`{on, leaders, running}`), `detail` (the selected session: `strip`, `last_input`, `now`,
+`reply`, `conv` (above: `state`, `rows`, `hidden`, `total`, `earlier`,
+`older_loading`, `truncated`, `continues`, `partial`, `error`, `rev`),
+`question {answerable, steps: [{text, options: [{label, desc}]}]}`,
 `permission`, `compose {can, why, target}`, `sent`, `pane`, `files`
 (`[{id, name, size, state: ok|look|refused|uploaded, why, sending,
 progress}]`, the name already cut by the Rust), `sending`, `attach_max`). Started from
@@ -1991,8 +2050,12 @@ a `Set` renders only drawn screens). Also read: `data.relay_ui.picks` and
 
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
-| `monitor_open` | none | direct | Reads the list again and makes the Monitor the base view (the sidebar's sandbox's most urgent session selected); an overlay over it closes |
-| `monitor_toggle` | none | direct | The Terminals or the Monitor, whichever is not the base now |
+| `monitor_open` | none | direct | Reads the list again and makes Sessions the base view (the sidebar's sandbox's most urgent session selected, its conversation read); an overlay over it closes. The top bar's GUI |
+| `monitor_toggle` | none | direct | GUI (Sessions) or TUI (the terminals), whichever is not the base now; leaving deletes the history subscription |
+| `monitor_refresh` | none | direct | Draws Sessions again (the core runs it when Lead Mode changes) |
+| `monitor_expand` | `key` (the session shown), `id` | direct | Unfolds or folds a row of its conversation: a group of steps, a step's output, a long message |
+| `monitor_earlier` | `key` | direct | 60 more rows, then the page before (`GET ...history?before=`) |
+| `monitor_retry` | `key` | direct | Reads its newest page again after a failed read |
 | `monitor_select`, `monitor_next`, `monitor_more` | `key` / none / none | direct | View state: a session shown, the next that needs you, the next page |
 | `monitor_key` | `key` (`up`, `down`, `enter`, `type`), `text` | direct | The view's keys when none of its rows has the keyboard; N (`type`) from anywhere in it |
 | `monitor_terminal`, `monitor_commits`, `monitor_files`, `monitor_worktrees` | `key` | direct | `thread_open` or `open_terminal` (spare pane; the pane that shows it, when one does), `commits_show` on its branch, `files_open` at its worktree, `worktrees_show` filtered to it |
@@ -2005,14 +2068,16 @@ a `Set` renders only drawn screens). Also read: `data.relay_ui.picks` and
 target is always drawn next to Send. The composer is disabled while the
 session waits on a question or a permission (typed words would land in its
 menu). `monitor_pick` and `monitor_send` refuse while `data.app.covered` is
-not false (which includes another view, such as Files, drawn over the
-Monitor) or a Jarvis proposal waits (`data.jarvis.pending`). Agent text is
+not false (which includes another view, such as Files, drawn over
+Sessions) or a Jarvis proposal waits (`data.jarvis.pending`). Agent text is
 drawn as text and Markdown, never as a control; an option sends its index.
+Everything from the history is data too: a step row's press only folds
+it, by its own id.
 A permission prompt is answered in its terminal: sbxw does not see the
 command.
 
 **Attach.** A local path only comes from the core: the file dialog, files
-dropped on the Monitor (any part of it, while it is drawn), a picture pasted
+dropped on Sessions (any part of it, while it is drawn), a picture pasted
 while it shows (`on_files`); never from Luau or agent text. Files belong to
 the session they were attached to; another session shows its own, a send
 takes only its own. Attaching refuses in Rust in the composer's states
@@ -2052,20 +2117,26 @@ to it.
 ### Base views
 
 `Slot::Base { title, icon, open }`: a view of the pane area equal to the
-terminals (the Monitor is the one). One base is current: the Terminals
-(the pages, in Tabs or Grid) or it. The view switch is drawn in two places,
-three segments each: the pager's (`pager-view-tabs`, `-grid`, `-monitor`)
-while the terminals show, and the base view's own header (`base-view-tabs`,
-`-grid`, `-monitor`, where an overlay has its "Esc closes" and ×) while it
-shows. Tabs or Grid there go back to the terminals in that layout, the
-keyboard on the pane that had it; the base never changes the pages' layout
-nor any terminal's size (drawn absolute, as an overlay). Its rail entry is
-lit while it is the base and, pressed while it shows, goes back to the
-terminals; pressed while an overlay is over it, shows it. `open` is the
-feature's intent the switch runs (it reads its data, then `open_panel`);
-`close_panel` of it goes back to the terminals; Escape never leaves it.
-The choice is kept in the app's state file (`base_view`) and comes back at
-start, its `open` run once the first lists and `data.sessions` are in.
+terminals (Sessions is the one). One base is current: TUI, the terminals
+(the pages, in Tabs or Grid), or GUI, it. The switch is the top bar's
+(`topbar.luau`): `top-view-gui` runs the base's `open` (also from under an
+overlay over it), `top-view-tui` its `<name>_toggle` while it is the base;
+icons alone under the compact width, the words and the shortcut in the
+tooltips. The pager keeps Tabs | Grid (`pager-view-tabs`, `-grid`), the
+terminals' layouts, and is not drawn under the base; the base's header has
+its title only (no switch, no ×). The base never changes the pages' layout
+nor any terminal's size (drawn absolute, as an overlay). `open` is the
+feature's intent (it reads its data, then `open_panel`); `close_panel` of
+it goes back to the terminals; Escape never leaves it. The choice is kept
+in the app's state file (`base_view`) and comes back at start, its `open`
+run once the first lists and `data.sessions` are in.
+
+Lead Mode, beside the switch (`top-lead`, "Lead Mode On" purple on its
+tint / "Lead Mode Off" quiet, the `leader` mark; disabled while no team
+runs), is the `team_leads` intent: one state for both views (TUI: only the
+leaders' panes, the layout before back when it goes off; GUI: only their
+sessions). Kept in the state file (`lead_mode`), restored at start when a
+team still runs. `data.app.leads`: `on`, `can`, `leaders`.
 
 The gate: while it is the base, `App::panes_covered()` is true, so no
 terminal takes a key, a paste, a press, a drop or the focus. `data.app.base`

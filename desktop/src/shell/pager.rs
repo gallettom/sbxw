@@ -90,14 +90,7 @@ pub fn fit_tabs(widths: &[f32], current: usize, avail: f32) -> (usize, usize) {
 /// The right group's width: Tabs, Grid, the per-page menu.
 fn controls_w(per: usize) -> f32 {
     let seg = |l: &str| bar::measure(l, TAB_TEXT, 500.0) + 16.0 + 14.0 + 4.0;
-    seg("Tabs") + seg("Grid") + App::base_screen().map_or(0.0, |(_, t, _)| seg(t) + 2.0) + GAP + bar::measure(&per_label(per), TAB_TEXT, 500.0) + 16.0 + 12.0 + 4.0 + GAP
-}
-
-/// The leads view's mark at the pager's left.
-const LEADS_LABEL: &str = "Team leads";
-
-fn leads_w() -> f32 {
-    16.0 + 14.0 + 6.0 + bar::measure(LEADS_LABEL, TAB_TEXT, 600.0) + GAP
+    seg("Tabs") + seg("Grid") + GAP + bar::measure(&per_label(per), TAB_TEXT, 500.0) + 16.0 + 12.0 + 4.0 + GAP
 }
 
 /// The "Gather" button beside the per-page menu.
@@ -169,7 +162,7 @@ impl App {
     pub fn pager_fit_as(&self) -> (usize, usize, bool) {
         let n = self.pages.list.len();
         let w = if self.pager_w > 0.0 { self.pager_w } else { self.window.0 - self.left_w() - layout::GUTTER * 2.0 };
-        let fixed = PLUS_W + GAP + controls_w(self.pages.per) + GAP + if self.gather_would_move() { gather_w() + GAP } else { 0.0 } + if self.leads_on() { leads_w() } else { 0.0 };
+        let fixed = PLUS_W + GAP + controls_w(self.pages.per) + GAP + if self.gather_would_move() { gather_w() + GAP } else { 0.0 };
         let widths = |compact: bool| -> Vec<f32> {
             (0..n).map(|k| {
                 let t = self.tab_info_as(k, compact);
@@ -193,8 +186,7 @@ impl App {
     pub(super) fn pager_drawn(&self, key: &str) -> bool {
         let n = self.pages.list.len();
         let (a, b) = self.pager_fit();
-        let base = key.strip_prefix("pager-view-").is_some_and(|b| App::base_screen().is_some_and(|(n, ..)| n == b));
-        let fixed = base || matches!(key, "pager" | "page-new" | "pager-view" | "pager-view-tabs" | "pager-view-grid" | "pager-per") || (key == "pager-gather-now" && self.gather_would_move()) || (key == "pager-leads" && self.leads_on());
+        let fixed = matches!(key, "pager" | "page-new" | "pager-view" | "pager-view-tabs" | "pager-view-grid" | "pager-per") || (key == "pager-gather-now" && self.gather_would_move());
         let more = (a > 0 || b < n) && key == "pager-more";
         let tab = key.strip_prefix("page-").and_then(|r| r.strip_suffix("-close").unwrap_or(r).parse::<usize>().ok()).is_some_and(|k| k >= 1 && k <= n && ((a..b).contains(&(k - 1)) || (!key.ends_with("-close") && self.pager_menu.as_deref() == Some("more"))));
         let per = self.pager_menu.as_deref() == Some("per") && (key == "pager-per-list" || key == "pager-gather" || PER_CHOICES.iter().any(|c| key == format!("pager-per-{c}")));
@@ -398,18 +390,16 @@ fn segment(key: &str, label: &str, icon: &str, on: bool, help: &str, keys: Vec<S
         .child(text(label.to_string()).font(small(TAB_TEXT, 500.0)).color(c(if on { "text-bright" } else { "text-muted" })))
 }
 
-/// The view switch: Tabs and Grid (the terminals, in that layout), then
-/// the base view (`Slot::Base`: the Monitor). In the pager (`key`
-/// `pager-view`) and in the base view's own header (`base-view`), so the
-/// person switches back from where they switched. Tabs or Grid from the
-/// base go back to the terminals in that layout; the base never changes
-/// the pages' layout.
+/// The view switch: Tabs and Grid, the terminals' layouts (the pager's
+/// `pager-view`). GUI (Sessions) or TUI is the top bar's switch; Tabs or
+/// Grid pressed while Sessions is the base (a script, a test) go back to the
+/// terminals in that layout; the base never changes the pages' layout.
 pub fn view_switch(s: &App, key: &str) -> El {
     let on_base = s.feats.base.is_some();
     let tabs_on = s.pages.tabs() && !on_base;
     let grid_on = !s.pages.tabs() && !on_base;
     let grid_n = s.pages.grid_per;
-    let mut sw = row()
+    let sw = row()
         .key(key.to_string())
         .role("radiogroup")
         .label("View")
@@ -425,11 +415,7 @@ pub fn view_switch(s: &App, key: &str) -> El {
             s.run_intent("pager", Intent::Pages(PageOp::View(false)));
             s.switch_base("pager", None);
         }));
-    if let Some((name, title, icon)) = App::base_screen() {
-        let toggle = format!("{name}_toggle");
-        let keys = crate::feat::FEATURES.iter().flat_map(|f| f.shortcuts.iter()).find(|sc| sc.intent == toggle).map(|sc| palette::shortcut_keys(sc.key)).unwrap_or_default();
-        sw = sw.child(segment(&format!("{key}-{name}"), title, icon, on_base, &format!("{title}: every session in one view, instead of the terminals"), keys, move |s: &mut App| s.switch_base("pager", Some(name))));
-    }
+    // GUI (Sessions) or TUI (these terminals) is the top bar's switch.
     sw
 }
 
@@ -443,31 +429,6 @@ pub fn view(s: &App) -> El {
         tabs = tabs.child(tab(s, k, compact));
     }
     let mut left = row().gap(GAP).items_center().grow(1.0).min_w(0.0);
-    // The team leads view says so before its tabs (leads.rs).
-    if s.leads_on() {
-        let (fg, tint) = crate::screen::action_tone("purple");
-        left = left.child(
-            row()
-                .key("pager-leads")
-                .role("button")
-                .label("Team leads view: press for the layout before")
-                .help("Only the team leaders' terminals. Press (or the rail's Team leads) for the layout before")
-                .h(H - 6.0)
-                .px(8.0)
-                .gap(6.0)
-                .items_center()
-                .radius(theme::radius("xs").unwrap())
-                .fill(theme::hex(tint))
-                .hover(theme::hex(theme::over(fg, 0.12, tint)))
-                .cursor(Cursor::Pointer)
-                .on_press(|s: &mut App| {
-                    s.toggle_leads();
-                    s.push_data();
-                })
-                .child(small_icon("leader", theme::icon::MEDIUM, theme::hex(fg)))
-                .child(text(LEADS_LABEL).font(small(TAB_TEXT, 600.0)).color(theme::hex(fg))),
-        );
-    }
     if a > 0 || b < n {
         let hidden = n - (b - a);
         let open = s.pager_menu.as_deref() == Some("more");

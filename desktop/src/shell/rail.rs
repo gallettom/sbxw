@@ -2,9 +2,10 @@
 //! bar, always shown (Cmd/Ctrl+B hides the sidebar, not the rail).
 //!
 //! Top: Requests and Network, with their counts as small badges (amber when
-//! something holds on the person), then Team leads (the leads view,
-//! `leads.rs`; disabled when no team runs). The view switch (Tabs | Grid)
-//! is the pager's alone. Bottom: Jarvis and
+//! something holds on the person). Every entry shows more about sessions
+//! and sandboxes; what changes the view (GUI | TUI, Lead Mode) is the top
+//! bar's (topbar.luau), Tabs | Grid the pager's. New (a sandbox) is under
+//! Files while the sidebar is hidden. Bottom: Jarvis and
 //! Settings (Setup). Each entry runs the intent its old top bar button ran
 //! (`relay_open`, `network_show`, `toggle_jarvis_panel`, Setup's
 //! `open_modal`); nothing new is asked of the daemon.
@@ -16,7 +17,7 @@
 //! What moved here leaves the top bar (shell.rs, `top_layout`, marks those
 //! extras `in_rail`): no entry is shown twice.
 //!
-//! Keys: `rail`, `rail-requests`, `rail-network`, `rail-leads`,
+//! Keys: `rail`, `rail-requests`, `rail-network`, `rail-new`,
 //! `jarvis-toggle` (Jarvis's button keeps its key), `rail-setup`; a badge is
 //! `<key>-badge`.
 
@@ -106,8 +107,6 @@ pub enum RailRun {
     /// A feature's entry: its intent, or, while its screen shows (a panel,
     /// an overlay, a modal), closing that screen.
     Toggle { name: String, args: J, screen: String },
-    /// The team leads view on and off (leads.rs).
-    Leads,
     /// The "More" entry: the folded entries' menu.
     More,
     /// The sandboxes sidebar shown again (its entry exists only while it is hidden).
@@ -152,21 +151,12 @@ impl App {
         // The feature's own sentence ("Agents wait for you: ...") is the line; it is not said twice.
         let help = if help.starts_with("Agents wait for you") { "Agents waiting for your answer: questions, screenshots, choices".to_string() } else { help };
         let tone = if count.is_some() && badge == "amber" { "amber" } else if count.is_some() { "blue" } else { "quiet-blue" };
-        all.push(Entry { key: "rail-requests".into(), icon: "ask".into(), help: format!("Requests\n{help}"), keys: App::shortcut_for("relay_open"), tone: tone.into(), on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Intent("relay_open".into(), serde_json::json!({})), disabled: false, zone: Some(Zone::Activity), order: 10, dot: None });
+        // Pressed again while its panel shows: the panel closes (as every entry that opens a view).
+        all.push(Entry { key: "rail-requests".into(), icon: "ask".into(), help: format!("Requests\n{help}"), keys: App::shortcut_for("relay_open"), tone: tone.into(), on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Toggle { name: "relay_open".into(), args: serde_json::json!({}), screen: "relay".into() }, disabled: false, zone: Some(Zone::Activity), order: 10, dot: None });
         let net = self.top_extra("approvals");
         let (count, badge) = badge_of(&net);
         let help = net.as_ref().and_then(|e| e["help"].as_str().map(str::to_string)).filter(|h| !h.is_empty()).unwrap_or_else(|| "What sbx asks you to allow, the hosts sandboxes reach".into());
-        all.push(Entry { key: "rail-network".into(), icon: "shield".into(), help: format!("Network\n{help}"), keys: App::shortcut_for("network_show"), tone: "blue".into(), on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Intent("network_show".into(), serde_json::json!({})), disabled: false, zone: Some(Zone::Activity), order: 20, dot: None });
-        // The team leads view (leads.rs): only the leaders' terminals.
-        let leaders = self.leaders();
-        let help = if self.leads_on() {
-            "Team leads\nShowing only the team leaders' terminals. Press for the layout before".to_string()
-        } else if leaders.is_empty() {
-            "Team leads\nNo team is running".to_string()
-        } else {
-            format!("Team leads\nOnly the {} team leader{}' terminals; press again for this layout", leaders.len(), if leaders.len() == 1 { "" } else { "s" })
-        };
-        all.push(Entry { key: "rail-leads".into(), icon: "leader".into(), help, keys: vec![], tone: "purple".into(), on: self.leads_on(), count: None, badge: "", run: RailRun::Leads, disabled: leaders.is_empty() && !self.leads_on(), zone: Some(Zone::Activity), order: 30, dot: None });
+        all.push(Entry { key: "rail-network".into(), icon: "shield".into(), help: format!("Network\n{help}"), keys: App::shortcut_for("network_show"), tone: "blue".into(), on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Toggle { name: "network_show".into(), args: serde_json::json!({}), screen: "network".into() }, disabled: false, zone: Some(Zone::Activity), order: 20, dot: None });
         // The sidebar hidden: the way back, at the top, with the sessions that
         // want the person (the Monitor's "need you", the same reports) as its badge.
         if !self.sidebar_shown() {
@@ -189,9 +179,15 @@ impl App {
             let dot = self.feats.pane_extras.iter().find(|d| d.place == Place::RailStatus(e.id.clone())).map(|d| d.tone.clone());
             all.push(Entry { key: format!("rail-{}", e.id), icon: e.icon.clone().unwrap_or_else(|| "single".into()), help, keys: shortcut, tone: if e.tone.is_empty() { "neutral".into() } else { e.tone.clone() }, on, count: e.count.filter(|n| *n > 0), badge, run: RailRun::Toggle { name, args, screen }, disabled: false, zone: Some(zone), order, dot });
         }
+        // New (a sandbox), under Files, while the sidebar (whose header has it) is hidden.
+        if let Some(e) = self.top_extra("create").filter(|_| !self.sidebar_shown()) {
+            if let Some(name) = e["intent"]["name"].as_str() {
+                all.push(Entry { key: "rail-new".into(), icon: "plus".into(), help: "New sandbox\nCreate a sandbox, or start a chat in one".into(), keys: App::shortcut_for(name), tone: "green".into(), on: false, count: None, badge: "", run: RailRun::Intent(name.to_string(), e["intent"]["args"].clone()), disabled: false, zone: Some(Zone::Browse), order: 40, dot: None });
+            }
+        }
         if let Some(e) = self.top_extra("setup") {
             if let Some(name) = e["intent"]["name"].as_str() {
-                all.push(Entry { key: "rail-setup".into(), icon: "gear".into(), help: format!("Settings\n{}", e["help"].as_str().unwrap_or("Setup")), keys: App::shortcut_for(name), tone: "neutral".into(), on: self.feats.modal.as_ref().is_some_and(|m| m.0 == "setup"), count: None, badge: "", run: RailRun::Intent(name.to_string(), e["intent"]["args"].clone()), disabled: false, zone: Some(Zone::Configure), order: u16::MAX, dot: None });
+                all.push(Entry { key: "rail-setup".into(), icon: "gear".into(), help: format!("Settings\n{}", e["help"].as_str().unwrap_or("Setup")), keys: App::shortcut_for(name), tone: "neutral".into(), on: self.feats.modal.as_ref().is_some_and(|m| m.0 == "setup"), count: None, badge: "", run: RailRun::Toggle { name: name.to_string(), args: e["intent"]["args"].clone(), screen: "setup".into() }, disabled: false, zone: Some(Zone::Configure), order: u16::MAX, dot: None });
             }
         }
         let pending = self.jarvis.pending_list().len();
@@ -252,6 +248,13 @@ impl App {
             bottom.insert(0, more);
         }
         RailLayout { top, bottom, folded }
+    }
+
+    /// The rail's drawn entries as `(key, lit)`, top block then bottom (tests).
+    pub fn rail_layout_keys(&self) -> (Vec<(String, bool)>, Vec<(String, bool)>) {
+        let l = self.rail_layout();
+        let f = |v: Vec<Entry>| v.into_iter().map(|e| (e.key, e.on)).collect();
+        (f(l.top), f(l.bottom))
     }
 
     /// Whether the rail draws an element of that key (`wait:` marks).
@@ -318,7 +321,6 @@ impl App {
                     self.press_extra("rail", &name, &args);
                 }
             }
-            RailRun::Leads => self.toggle_leads(),
             RailRun::Sidebar => self.set_sidebar(true),
             RailRun::More => self.rail_menu = !self.rail_menu,
         }
@@ -514,22 +516,72 @@ mod tests {
         }
     }
 
-    /// Team leads wears the `leader` mark (a crown over one person) in the
-    /// rail and the palette, never the team's `people` the pane bar's Team
-    /// keeps; its tooltip's second line stays in words.
+    /// The top bar's modes (GUI | TUI, Lead Mode) after the mark: as wide
+    /// as `bar::modes_w` says (the bar's fit counts on it), icons alone in
+    /// a narrow window, clear of the macOS window buttons, and overlapping
+    /// nothing else of the bar, windowed and full screen, Lead Mode on and
+    /// off, in GUI and in TUI.
     #[test]
-    fn team_leads_has_its_own_mark() {
+    fn the_modes_fit_the_top_bar_at_every_width() {
+        use super::super::tests::tap;
+        for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+            for inset in [0.0, 76.0] {
+                for (lead, gui) in [(false, false), (true, false), (false, true), (true, true)] {
+                    let mut r = Rig::new(&["a", "b"], w, h);
+                    r.rt.update(|s, _| {
+                        s.sandboxes = ["a", "b"].iter().map(|n| crate::client::Sandbox::new(n, "claude", "running")).collect();
+                        s.feats.data.insert("leads".into(), serde_json::json!(["a"]));
+                        s.push_data();
+                    });
+                    r.rt.set_titlebar_inset(inset);
+                    r.settle();
+                    if lead {
+                        tap(&mut r.rt, "top-lead");
+                    }
+                    if gui {
+                        tap(&mut r.rt, "top-view-gui");
+                    }
+                    r.settle();
+                    let what = format!("{w}x{h} inset {inset} lead {lead} gui {gui}");
+                    assert_eq!(r.rt.state.leads_on(), lead, "{what}");
+                    assert_eq!(r.rt.state.feats.base.is_some(), gui, "{what}");
+                    let compact = r.rt.state.screen_data()["app"]["topbar"]["compact"] == true;
+                    assert_eq!(compact, w < 1000.0, "{what}: compact only when narrow");
+                    let m = r.rt.presented("top-modes").expect("the modes").0;
+                    assert!((m[2] - crate::shell::bar::modes_w(compact, lead)).abs() <= 1.0, "{what}: drawn {} wide, measured {}", m[2], crate::shell::bar::modes_w(compact, lead));
+                    let lead_w = r.rt.presented("top-lead").unwrap().0[2];
+                    if compact {
+                        assert!(lead_w <= 28.5, "{what}: Lead Mode is its icon alone ({lead_w})");
+                    }
+                    assert!(m[0] >= inset + 12.0 - 1.5, "{what}: clear of the window buttons (x {})", m[0]);
+                    if let Some((mark, _)) = r.rt.presented("app-mark") {
+                        assert!(m[0] >= mark[0] + mark[2], "{what}: after the mark");
+                    }
+                    for k in ["daemon-state", "extra-topbar-help", "extra-topbar-usage", "extra-topbar-mac", "extra-topbar"] {
+                        if let Some((o, _)) = r.rt.presented(k) {
+                            assert!(m[0] + m[2] <= o[0] || o[0] + o[2] <= m[0], "{what}: the modes overlap {k}: {m:?} {o:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Lead Mode wears the `leader` mark (a crown over one person) in the
+    /// top bar and the palette, never the team's `people` the
+    /// pane bar's Team keeps; it is not a rail entry any more (the rail
+    /// shows more, the top bar switches views).
+    #[test]
+    fn lead_mode_has_its_own_mark_and_no_rail_entry() {
         let r = Rig::new(&["a"], 1284.0, 816.0);
         let s = &r.rt.state;
         let l = s.rail_layout();
-        let e = l.top.iter().find(|e| e.key == "rail-leads").expect("the leads entry");
-        assert_eq!(e.icon, "leader");
+        assert!(l.top.iter().chain(&l.bottom).all(|e| e.key != "rail-leads" && e.key != "rail-monitor"));
         assert!(crate::icons::exists("leader") && crate::icons::exists("people"));
         assert_ne!(crate::icons::get("leader").unwrap().body, crate::icons::get("people").unwrap().body);
-        assert!(e.help.chars().any(|c| c.is_alphabetic()), "line 2 in words: {:?}", e.help);
-        let src = include_str!("palette.rs");
-        assert!(src.contains("hint, \"leader\""), "the palette's Team leads uses the same mark");
-        assert!(include_str!("pager.rs").contains("small_icon(\"leader\""), "the pager's Team leads mark too");
+        assert!(include_str!("palette.rs").contains("hint, \"leader\""), "the palette's Lead Mode uses the mark");
+        assert!(!include_str!("pager.rs").contains("pager-leads"), "one place only: the top bar's toggle, not a pager chip");
+        assert!(include_str!("../../screens/topbar.luau").contains("icon = \"leader\", key = \"top-lead\""), "the top bar's Lead Mode too");
     }
 
     /// Zones in order (activity, browse; then configure with Settings last,
@@ -547,11 +599,11 @@ mod tests {
         let keys = |v: &[Entry]| v.iter().map(|e| e.key.clone()).collect::<Vec<_>>();
         s.rects.rail = Some([0.0, 0.0, W, 2000.0]);
         let l = s.rail_layout();
-        assert_eq!(keys(&l.top), ["rail-requests", "rail-network", "rail-leads", "rail-commits", "rail-files"]);
+        assert_eq!(keys(&l.top), ["rail-requests", "rail-network", "rail-commits", "rail-files"]);
         assert_eq!(keys(&l.bottom), ["rail-mcp", "rail-kits", "rail-setup", "jarvis-toggle"]);
         assert!(l.folded.is_empty());
-        // Exactly the room for all of it (9 entries, 2 hairlines, the spacer's gap): nothing folds.
-        let all = height_for(9, 2) + 6.0;
+        // Exactly the room for all of it (8 entries, 2 hairlines, the spacer's gap): nothing folds.
+        let all = height_for(8, 2) + 6.0;
         s.rects.rail = Some([0.0, 0.0, W, all]);
         assert!(s.rail_layout().folded.is_empty());
         // A point less: the configure zone folds (not Settings).
@@ -559,12 +611,12 @@ mod tests {
         let l = s.rail_layout();
         assert_eq!(keys(&l.folded), ["rail-mcp", "rail-kits"]);
         assert_eq!(keys(&l.bottom), ["rail-more", "rail-setup", "jarvis-toggle"]);
-        assert_eq!(keys(&l.top).len(), 5, "browse stays while it fits");
+        assert_eq!(keys(&l.top).len(), 4, "browse stays while it fits");
         // Much shorter: browse folds too; activity, Settings and Jarvis never.
         s.rects.rail = Some([0.0, 0.0, W, 200.0]);
         let l = s.rail_layout();
         assert_eq!(keys(&l.folded), ["rail-commits", "rail-files", "rail-mcp", "rail-kits"]);
-        assert_eq!(keys(&l.top), ["rail-requests", "rail-network", "rail-leads"]);
+        assert_eq!(keys(&l.top), ["rail-requests", "rail-network"]);
         assert_eq!(keys(&l.bottom), ["rail-more", "rail-setup", "jarvis-toggle"]);
         // "More" opens its menu, a folded entry in it opens its panel's intent.
         s.rects.rail = Some([0.0, 0.0, W, 200.0]);

@@ -225,6 +225,9 @@ pub struct App {
     pub grid_saved: Option<Vec<pages::Page>>,
     /// The team leads view while it shows, with the layout it replaced (leads.rs).
     pub leads: Option<leads::LeadsView>,
+    /// Lead Mode was on when the app last quit: it comes back once the
+    /// layout is restored and the teams are read (leads.rs).
+    pub leads_restore: bool,
     /// The last pane id given.
     next_uid: Uid,
     /// Each split's length as laid out (points), by its path, for its divider.
@@ -384,6 +387,7 @@ impl App {
             pages: Pages::new(1),
             grid_saved: None,
             leads: None,
+            leads_restore: false,
             next_uid: 1,
             split_len: HashMap::new(),
             rects: Rects::default(),
@@ -500,6 +504,7 @@ impl App {
         }
         if a.fixture.is_none() && !headless() {
             app.restore = Some(app.store.get("layout").clone()).filter(|v| !v.is_null());
+            app.leads_restore = app.store.get(leads::LEAD_KEY) == &J::Bool(true);
         }
         if let Target::Fixture(f) = &app.target {
             app.sandboxes = f.sandboxes().unwrap_or_default();
@@ -708,6 +713,10 @@ impl App {
         // The pane area's base view (the Monitor), or null: the terminals.
         data["app"]["base"] = self.feats.base.clone().map_or(J::Null, J::String);
         data["app"]["covered"] = self.covered().into();
+        // The team leads view (leads.rs), which Sessions filters by too.
+        // `can`: a team runs (Lead Mode can go on); `leaders` while it is on.
+        let leaders = self.leaders();
+        data["app"]["leads"] = if self.leads_on() { serde_json::json!({ "on": true, "can": true, "leaders": leaders }) } else { serde_json::json!({ "on": false, "can": !leaders.is_empty() }) };
         data
     }
 
@@ -722,11 +731,11 @@ impl App {
             return serde_json::json!({ "w": w, "compact": w < bar::TOP_COMPACT, "more": 0 });
         };
         // "New" lives in the sidebar's header while the sidebar shows
-        // (sandboxes.luau); the top bar has it only when the sidebar is hidden.
+        // (sandboxes.luau), on the rail under Files while it is hidden (rail.rs).
         let in_sidebar = self.sidebar_shown();
         for e in list.iter_mut() {
-            if e["id"] == "create" && in_sidebar {
-                e["in_sidebar"] = J::Bool(true);
+            if e["id"] == "create" {
+                e[if in_sidebar { "in_sidebar" } else { "in_rail" }] = J::Bool(true);
             }
             // Requests, Network and Setup are the left rail's (rail.rs).
             if e["id"].as_str().is_some_and(|id| rail::IN_RAIL.contains(&id)) {
@@ -764,8 +773,9 @@ impl App {
         // The bars only where they cost nothing else: the same parts inline
         // as with the words alone, and the bar not compact (they go before
         // the title and the layout's words do).
-        let plain = bar::top_fit(w, None, word, &measured);
-        let barred = bar::top_fit(w, None, word, &with_bars(&measured));
+        let lead = self.leads_on();
+        let plain = bar::top_fit(w, None, word, lead, &measured);
+        let barred = bar::top_fit(w, None, word, lead, &with_bars(&measured));
         let usage_shown = order.iter().take(plain.1).any(|&i| list[i]["id"] == "usage");
         let usage_bars = bars_w.is_some() && usage_shown && barred == plain && !plain.0;
         let (compact, k) = plain;
@@ -1071,6 +1081,14 @@ impl App {
             self.restore_layout();
             changed = true;
         }
+        // Lead Mode of the last run, once the layout is back and the teams are read.
+        if self.leads_restore && self.restore.is_none() && self.listed && self.feats.data.contains_key("leads") {
+            self.leads_restore = false;
+            if !self.leads_on() && !self.leaders().is_empty() {
+                self.toggle_leads();
+                changed = true;
+            }
+        }
         // The base view of the last run, once the sessions it shows are read.
         if self.feats.base_restore && self.listed && self.feats.data.contains_key("sessions") {
             self.restore_base();
@@ -1354,8 +1372,8 @@ impl App {
         // The overlay over the pane area and its close button.
         if let Some((n, _)) = &self.feats.overlay {
             let base = self.feats.base.as_ref() == Some(n);
-            // A base view has the view switch where an overlay has its ×.
-            let head = if base { key.starts_with("base-view") } else { key == "overlay-close" };
+            // A base view has no ×: the top bar's GUI | TUI leaves it.
+            let head = !base && key == "overlay-close";
             if head || key == format!("overlay-{n}") || key == format!("overlay-head-{n}") {
                 return true;
             }
@@ -2022,6 +2040,11 @@ impl App {
             Intent::Sidebar { show } => {
                 let show = show.unwrap_or(!self.sidebar_shown());
                 self.set_sidebar(show);
+            }
+            Intent::TeamLeads { show } => {
+                if show.unwrap_or(!self.leads_on()) != self.leads_on() {
+                    self.toggle_leads();
+                }
             }
             Intent::SetTheme { theme: t } => {
                 let t = t.unwrap_or(self.theme_choice.next());
@@ -3757,10 +3780,11 @@ mod tests {
         }
     }
 
-    /// New sits in the sidebar's header; with the sidebar hidden it is back
-    /// in the top bar, so it is never only in the palette.
+    /// New sits in the sidebar's header; with the sidebar hidden it is on
+    /// the rail, under Files, so it is never only in the palette; the top
+    /// bar never has it. Its press opens the create flow.
     #[test]
-    fn new_is_in_the_sidebar_and_in_the_top_bar_when_the_sidebar_is_hidden() {
+    fn new_is_in_the_sidebar_and_on_the_rail_when_the_sidebar_is_hidden() {
         let mut rt = runtime("shell/design-2.json", 1284.0, 816.0);
         for _ in 0..10 {
             rt.frame(0.016);
@@ -3774,7 +3798,19 @@ mod tests {
         for _ in 0..40 {
             rt.frame(0.016);
         }
-        assert!(rt.presented("sidebar-new").is_none() && rt.presented("extra-topbar-create").is_some());
+        assert!(rt.presented("sidebar-new").is_none() && rt.presented("extra-topbar-create").is_none() && rt.presented("rail-new").is_some());
+        let l = rt.state.rail_layout();
+        let keys: Vec<&str> = l.top.iter().map(|e| e.key.as_str()).collect();
+        let (files, new) = (keys.iter().position(|k| *k == "rail-files"), keys.iter().position(|k| *k == "rail-new"));
+        assert!(files.is_some() && new == files.map(|f| f + 1), "New right under Files: {keys:?}");
+        let e = l.top.iter().find(|e| e.key == "rail-new").unwrap();
+        assert_eq!((e.icon.as_str(), e.tone.as_str()), ("plus", "green"));
+        assert!(e.help.starts_with("New sandbox"));
+        tap(&mut rt, "rail-new");
+        for _ in 0..4 {
+            rt.frame(0.016);
+        }
+        assert!(rt.state.feats.modal.as_ref().is_some_and(|m| m.0 == "create"), "it opens the create flow: {:?}", rt.state.feats.modal);
     }
 
     fn chords() -> Vec<KeyEvent> {
@@ -4444,31 +4480,27 @@ mod tests {
         let pane_before = rt.presented("pane-1").unwrap().0;
         let base = |rt: &rune::Runtime<App>| rt.state.feats.base.clone();
         let over = |rt: &rune::Runtime<App>| rt.state.feats.overlay.as_ref().map(|o| o.0.clone());
-        // The pager's switch: Monitor.
-        tap(&mut rt, "pager-view-monitor");
+        // The top bar's switch: GUI (Sessions).
+        tap(&mut rt, "top-view-gui");
         frames(&mut rt, 6);
         assert_eq!(base(&rt).as_deref(), Some("monitor"));
         assert_eq!(over(&rt).as_deref(), Some("monitor"), "drawn where an overlay is");
         assert!(rt.presented("overlay-monitor").is_some() && rt.presented("overlay-close").is_none(), "no cross on a base view");
-        assert!(rt.find("base-view-monitor").is_some() && rt.find("base-view-tabs").is_some(), "its header has the view switch");
+        assert!(rt.find("base-view-tabs").is_none() && rt.find("pager-view-monitor").is_none() && rt.find("top-view-tui").is_some(), "the switch is the top bar's alone: neither the header nor the pager repeats it");
         assert!(rt.state.panes_covered() && !rt.state.covered(), "the panes are covered; nothing is over the Monitor");
         assert_eq!(rt.state.screen_data()["app"]["base"], "monitor");
-        assert!(rt.state.rail_entries().0.iter().any(|e| e.key == "rail-monitor" && e.on), "its rail entry is lit");
+        assert!(rt.state.rail_entries().0.iter().all(|e| e.key != "rail-monitor"), "no rail entry: the rail shows more, it does not switch views");
         assert_eq!(rt.state.store.get("base_view"), "monitor", "kept for the next run");
         frames(&mut rt, 10);
         assert_eq!(resizes(&rx), 0, "switching to the Monitor resized no terminal");
-        // Tabs in its header: the terminals in Tabs, the keyboard on the pane that had it.
-        tap(&mut rt, "base-view-tabs");
+        // TUI: the terminals in their layout, the keyboard on the pane that had it.
+        tap(&mut rt, "top-view-tui");
         frames(&mut rt, 6);
         assert_eq!((base(&rt), over(&rt)), (None, None));
-        assert!(rt.state.pages.tabs() && !rt.state.panes_covered());
+        assert!(rt.state.pages.tabs() == tabs_before && !rt.state.panes_covered());
         rt.update(|_, tx| assert_eq!(tx.focused(), Some("grid-1"), "the keyboard is back on the pane that had it"));
-        if !tabs_before {
-            tap(&mut rt, "pager-view-grid");
-            frames(&mut rt, 10);
-            resizes(&rx);
-        }
-        tap(&mut rt, "pager-view-monitor");
+        assert_eq!(resizes(&rx), 0, "back to the terminals resized none");
+        tap(&mut rt, "top-view-gui");
         frames(&mut rt, 6);
         assert_eq!(base(&rt).as_deref(), Some("monitor"));
         // Keys, chords, a paste, a press: none reaches the terminal (its grid still had Rune's focus).
@@ -4495,7 +4527,7 @@ mod tests {
             frames(&mut rt, 4);
             assert_eq!(over(&rt).as_deref(), Some("commits"), "{close}: Commits over the Monitor");
             assert!(rt.state.covered() && rt.state.screen_data()["app"]["covered"] == true, "{close}: something is over the Monitor");
-            assert!(rt.state.rail_entries().0.iter().any(|e| e.key == "rail-monitor" && e.on), "{close}: still the base");
+            assert_eq!(base(&rt).as_deref(), Some("monitor"), "{close}: still the base");
             match close {
                 "escape" => rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() }),
                 "cross" => tap(&mut rt, "overlay-close"),
@@ -4505,10 +4537,10 @@ mod tests {
             assert_eq!(over(&rt).as_deref(), Some("monitor"), "{close}: back to the Monitor");
             assert!(!rt.state.covered(), "{close}");
         }
-        // The rail entry pressed while the Monitor is under an overlay shows the Monitor.
+        // GUI pressed while Sessions is under an overlay shows Sessions.
         tap(&mut rt, "rail-worktrees");
         frames(&mut rt, 4);
-        tap(&mut rt, "rail-monitor");
+        tap(&mut rt, "top-view-gui");
         frames(&mut rt, 4);
         assert_eq!((base(&rt).as_deref(), over(&rt).as_deref()), (Some("monitor"), Some("monitor")));
         assert_eq!(resizes(&rx), 0, "no terminal was resized while the Monitor was the base");
@@ -4518,21 +4550,27 @@ mod tests {
         b.store = store::Store::at(Some(p.clone()));
         b.kept_base();
         assert_eq!((b.feats.base.as_deref(), b.feats.base_restore), (Some("monitor"), true), "the base survives a restart");
-        // Grid in its header: the terminals in Grid, as they were.
-        tap(&mut rt, "base-view-grid");
+        // TUI: the terminals, as they were.
+        tap(&mut rt, "top-view-tui");
         frames(&mut rt, 6);
         assert_eq!((base(&rt), over(&rt)), (None, None));
-        assert!(!rt.state.pages.tabs() && !rt.state.panes_covered());
+        assert!(rt.state.pages.tabs() == tabs_before && !rt.state.panes_covered());
         assert_eq!(rt.state.store.get("base_view"), &J::Null);
-        // The Monitor by its rail entry, off by it again.
+        // GUI, GUI again (it stays), then TUI.
         frames(&mut rt, 10);
         resizes(&rx);
-        tap(&mut rt, "rail-monitor");
+        tap(&mut rt, "top-view-gui");
         frames(&mut rt, 4);
         assert_eq!(base(&rt).as_deref(), Some("monitor"));
-        tap(&mut rt, "rail-monitor");
+        tap(&mut rt, "top-view-gui");
         frames(&mut rt, 4);
-        assert_eq!((base(&rt), over(&rt)), (None, None), "pressed again: back to the terminals");
+        assert_eq!(base(&rt).as_deref(), Some("monitor"), "GUI pressed in GUI stays");
+        tap(&mut rt, "top-view-tui");
+        frames(&mut rt, 4);
+        assert_eq!((base(&rt), over(&rt)), (None, None), "TUI: back to the terminals");
+        tap(&mut rt, "top-view-tui");
+        frames(&mut rt, 4);
+        assert_eq!(base(&rt), None, "TUI pressed in TUI stays");
         // An overlay over the terminals closes back to them.
         tap(&mut rt, "rail-commits");
         frames(&mut rt, 4);
@@ -4560,7 +4598,7 @@ mod tests {
     #[test]
     fn escape_goes_to_the_drawn_view_s_popup_first() {
         let (mut rt, _rx, _clip) = window_with_terminal();
-        tap(&mut rt, "pager-view-monitor");
+        tap(&mut rt, "top-view-gui");
         rt.frame(0.05);
         assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"));
         // No popup: Escape finds nothing to close on the base.

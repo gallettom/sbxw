@@ -36,6 +36,10 @@
 //! A fixture's `daemon.session_events` (`[{after, session}]`, the Monitor's
 //! demo) replace a session's report `after` seconds from the first stream
 //! client and publish it as a `session` event.
+//! Sessions' history (`GET /api/sessions/:sb/:sid/history`, `DELETE
+//! .../history/subscription`) is the monitor feature's stand-in, from the
+//! fixture's `daemon.history`; its `history_events` change a log later and
+//! send the `history` nudge while that log is subscribed.
 //!
 //! Terminal size, as the daemon: the PTY has one size, the client used last
 //! sets it, and a socket opened with `size=1` hears
@@ -410,6 +414,36 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
                                 }
                             }
                             publish(&st, "session", &info.to_string());
+                        });
+                    }
+                    // The fixture's `history_events` (Sessions' demo): each
+                    // `{after, sandbox, session_id, items, drop}` changes that
+                    // session's history `after` seconds from the first stream
+                    // client (`drop`: seqs that go, a provisional reply
+                    // replaced), then nudges, as the daemon does, only while
+                    // a read has subscribed to it (`history_subs`).
+                    for e in g.raw["history_events"].as_array().cloned().unwrap_or_default() {
+                        let st = st.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(Duration::from_secs_f64(e["after"].as_f64().unwrap_or(1.0)));
+                            let (sb, sid) = (e["sandbox"].as_str().unwrap_or("").to_string(), e["session_id"].as_str().unwrap_or("").to_string());
+                            let k = format!("{sb}/{sid}");
+                            let (subscribed, seq) = {
+                                let mut g = st.lock().unwrap();
+                                let log = &mut g.raw["history"][&k];
+                                if !log["items"].is_array() {
+                                    log["items"] = serde_json::json!([]);
+                                }
+                                let list = log["items"].as_array_mut().unwrap();
+                                let drop: Vec<u64> = e["drop"].as_array().map(|d| d.iter().filter_map(|x| x.as_u64()).collect()).unwrap_or_default();
+                                list.retain(|i| !drop.contains(&i["seq"].as_u64().unwrap_or(0)));
+                                list.extend(e["items"].as_array().cloned().unwrap_or_default());
+                                let seq = list.iter().filter_map(|i| i["seq"].as_u64()).max().unwrap_or(0);
+                                (g.raw["history_subs"][&k] == true, seq)
+                            };
+                            if subscribed {
+                                publish(&st, "history", &serde_json::json!({ "sandbox": sb, "session_id": sid, "seq": seq }).to_string());
+                            }
                         });
                     }
                     if let Some(list) = changes.lock().unwrap().take() {

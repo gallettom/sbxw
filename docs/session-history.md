@@ -3,7 +3,7 @@
 What a session said and did, in order, for a UI that shows the conversation
 as the terminal does: the person's prompts, the agent's replies, the steps
 (tool calls and their results) between them, the pending question at the
-end. The daemon holds it; the desktop Monitor draws it.
+end. The daemon holds it; the desktop app's Sessions view draws it.
 
 Code: `crates/core/src/history.rs` (kinds, bounds, masking, classification),
 `crates/daemon/src/svc/history.rs`, the routes in `http/ui.rs` and
@@ -116,7 +116,7 @@ sizes at most (`tracing::debug!`), never a text.
 
 Every text field (`text`, the tool `summary`, the result `head`, `from`,
 question steps) is masked **on ingest, before it is stored**, with the same
-rules as dictation and the Monitor's sends (`sbxw_core::anonymise`): the
+rules as dictation and the desktop Sessions view's sends (`sbxw_core::anonymise`): the
 names the person listed in `anonymise.toml` become their aliases, and email
 addresses, phone numbers, IBANs and key-shaped strings become `[email]`,
 `[phone]`, `[iban]`, `[secret]`. A file that does not parse falls back to

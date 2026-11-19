@@ -346,6 +346,21 @@ pub fn state_w(word: &str) -> f32 {
     16.0 + 8.0 + 8.0 + measure(word, 12.0, 400.0)
 }
 
+/// The modes at the top bar's left (topbar.luau `modes`): the GUI | TUI
+/// switch (two buttons on one track, 2 apart), 8, then the Lead
+/// Mode button. Compact (a narrow window): icons alone, their words in the
+/// tooltips.
+pub fn modes_w(compact: bool, lead_on: bool) -> f32 {
+    let (gui, tui, lead) = if compact { ("", "", "") } else { ("GUI", "TUI", if lead_on { LEAD_ON } else { LEAD_OFF }) };
+    // Their icons are the medium size (14), where `button_w` counts 16.
+    let b = |l: &str| if l.is_empty() { button_w(l, true) } else { button_w(l, true) - 2.0 };
+    b(gui) + 2.0 + b(tui) + 8.0 + b(lead)
+}
+
+/// Lead Mode's words (topbar.luau draws the same).
+pub const LEAD_ON: &str = "Lead Mode On";
+pub const LEAD_OFF: &str = "Lead Mode Off";
+
 /// One top bar extra, as the core sees it before the screen draws it.
 #[derive(Clone, Debug)]
 pub struct TopExtra {
@@ -378,9 +393,10 @@ impl TopExtra {
 /// Compact or not, and how many of `extras` (in priority order) show
 /// inline; the rest go into its menu. Exact: every part is measured the way
 /// the element draws it (tested against the laid out bar).
-pub fn top_fit(width: f32, jarvis: Option<&str>, state_word: &str, extras: &[TopExtra]) -> (bool, usize) {
-    // The sbxw mark (topbar.luau, `app-mark`): the prompt (15) and the cursor (11), 2 apart.
-    let left = |compact: bool| if compact { 0.0 } else { 28.0 };
+pub fn top_fit(width: f32, jarvis: Option<&str>, state_word: &str, lead_on: bool, extras: &[TopExtra]) -> (bool, usize) {
+    // The sbxw mark (topbar.luau, `app-mark`): the prompt (15) and the cursor (11), 2 apart;
+    // then, 12 after it, the modes (the GUI | TUI switch and Lead Mode).
+    let left = |compact: bool| if compact { modes_w(true, lead_on) } else { 28.0 + 12.0 + modes_w(false, lead_on) };
     // left, spacer, centre, spacer, right: four gaps; inside the right group
     // Jarvis and the state, and the gap before Jarvis when a tool precedes it.
     let fixed = |compact: bool| left(compact) + TOP_GAP * 4.0 + jarvis.map_or(0.0, |j| button_w(j, true) + TOP_RIGHT_GAP) + state_w(state_word);
@@ -574,11 +590,11 @@ mod tests {
     fn the_top_bar_goes_compact_then_overflows() {
         let x = |l: &str, tool: bool| TopExtra { label: l.into(), icon: true, button: true, tool, drawn_w: None };
         let extras = vec![x("New", false), x("sbx asks 88", false), x("Plan waiting", false), x("", true), x("", true), x("Mac", true), x("Requests 3", false)];
-        let (c, k) = top_fit(1300.0, Some("Jarvis"), "connected", &extras);
+        let (c, k) = top_fit(1300.0, Some("Jarvis"), "connected", false, &extras);
         assert!(!c && k == extras.len(), "wide: all inline ({c}, {k})");
-        let (c, k) = top_fit(700.0, Some("Jarvis"), "connected", &extras);
+        let (c, k) = top_fit(700.0, Some("Jarvis"), "connected", false, &extras);
         assert!(c && k < extras.len(), "narrow: compact and an overflow ({c}, {k})");
-        let (c, k) = top_fit(330.0, Some("Jarvis · 2 to review"), "connected", &extras);
+        let (c, k) = top_fit(330.0, Some("Jarvis · 2 to review"), "connected", false, &extras);
         assert!(c && k == 0, "the smallest window with a notice: everything in the menu ({c}, {k})");
     }
 }
