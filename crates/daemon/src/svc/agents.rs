@@ -326,9 +326,9 @@ mod tests {
         assert_eq!(infos.len(), 6, "five terminals' sessions and the spare");
         let of = |sid: &str| infos.iter().find(|i| i.session_id.as_deref() == Some(sid)).unwrap().clone();
         assert_eq!(of("lead").state, SessionState::Working);
-        assert_eq!(of("lead").unanswerable.map(|u| u.reason), Some("no_terminal"), "the daemon restarted: it holds no terminal");
-        assert_eq!(of("spare").kind, Some("background"));
-        assert_eq!(of("spare").unanswerable.map(|u| u.reason), Some("background"));
+        assert_eq!(of("lead").unanswerable.as_deref().map(|u| u.reason), Some("no_terminal"), "the daemon restarted: it holds no terminal");
+        assert_eq!(of("spare").kind, Some(sbxw_core::agents::RecordKind::Background));
+        assert_eq!(of("spare").unanswerable.as_deref().map(|u| u.reason), Some("background"));
         let wire = serde_json::to_value(of("lead")).unwrap();
         assert_eq!(wire["unanswerable"]["sessions"], 5);
         assert!(wire.get("kind").is_none());

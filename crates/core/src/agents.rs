@@ -63,9 +63,9 @@ pub struct Question {
 pub struct SessionInfo {
     pub sandbox: String,
     /// Always `"claude"` — only agents report hooks.
-    pub mode: String,
+    pub mode: &'static str,
     pub state: SessionState,
-    pub agent: String,
+    pub agent: &'static str,
     pub started_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity: Option<String>,
@@ -150,7 +150,7 @@ pub struct SessionInfo {
     /// sbxw's terminal's session: it is never answerable and does not count
     /// among the sessions of its place. Absent for any other session.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<&'static str>,
+    pub kind: Option<RecordKind>,
     /// When this session last reported an event of its own (ms), unlike
     /// `ts`, which is when this payload was built: every event of a sandbox
     /// re-sends all its sessions with the same `ts`. 0 when not known.
@@ -160,7 +160,16 @@ pub struct SessionInfo {
     /// false and it is not over. Absent for a thread's session (its own
     /// terminal is how sbxw reaches it) and for an answerable one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub unanswerable: Option<Unanswerable>,
+    /// Boxed, like `background`: every bus event carries a `SessionInfo`.
+    pub unanswerable: Option<Box<Unanswerable>>,
+}
+
+/// What a record is, when it is not an ordinary session ([`SessionInfo::kind`]).
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordKind {
+    /// A Claude Code background session: no terminal of its own.
+    Background,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -1276,9 +1285,9 @@ fn build(key: &AgentKey, st: &Status, why: Result<(), Unanswerable>, now: u64) -
     let answerable = why.is_ok();
     SessionInfo {
         sandbox: key.sandbox.clone(),
-        mode: "claude".into(),
+        mode: "claude",
         state: st.state,
-        agent: "claude".into(),
+        agent: "claude",
         started_ms: st.started_ms,
         activity: st.activity.clone(),
         last_input: st.last_input.clone(),
@@ -1303,9 +1312,9 @@ fn build(key: &AgentKey, st: &Status, why: Result<(), Unanswerable>, now: u64) -
         ended: false,
         end_reason: None,
         background: st.background.filter(|_| st.state == SessionState::Working).map(Box::new),
-        kind: st.bg.then_some("background"),
+        kind: st.bg.then_some(RecordKind::Background),
         event_ms: st.event_ms,
-        unanswerable: why.err().filter(|_| st.thread.is_none()),
+        unanswerable: why.err().filter(|_| st.thread.is_none()).map(Box::new),
     }
 }
 
@@ -2165,12 +2174,12 @@ mod tests {
         let snap = book.snapshot(|_| true, 4);
         assert_eq!(snap.len(), 6, "five interactive and the spare");
         let spare = info_of(&snap, "spare");
-        assert_eq!(spare.kind, Some("background"));
+        assert_eq!(spare.kind, Some(RecordKind::Background));
         assert!(!spare.answerable);
-        assert_eq!(spare.unanswerable.map(|u| u.reason), Some("background"));
+        assert_eq!(spare.unanswerable.as_deref().map(|u| u.reason), Some("background"));
         let lead = info_of(&snap, "lead");
         assert_eq!(lead.kind, None);
-        assert_eq!(lead.unanswerable.map(|u| (u.reason, u.sessions, u.tty)), Some(("several_sessions", 5, 5)), "five terminals: nobody's, and it says how many");
+        assert_eq!(lead.unanswerable.as_deref().map(|u| (u.reason, u.sessions, u.tty)), Some(("several_sessions", 5, 5)), "five terminals: nobody's, and it says how many");
         assert!(lead.event_ms > 0 && spare.event_ms > lead.event_ms, "each says when it last reported");
         // The lead alone beside the spare: answerable, the spare not counted.
         let mut book = AgentBook::new();
@@ -2192,11 +2201,11 @@ mod tests {
         v["hook_version"] = 4.into();
         v["session_kind"] = "bg".into();
         let out = book.apply("n", &ev(&v), SessionOrigin::Tty, true, 1);
-        assert_eq!(out[0].kind, Some("background"));
-        assert_eq!(out[0].unanswerable.map(|u| u.reason), Some("background"));
+        assert_eq!(out[0].kind, Some(RecordKind::Background));
+        assert_eq!(out[0].unanswerable.as_deref().map(|u| u.reason), Some("background"));
         // Sticky: a later event without the word does not make it a terminal's.
         let out = book.apply("n", &ev(&term("Stop", "job", "400:1")), SessionOrigin::Tty, true, 2);
-        assert_eq!(out[0].kind, Some("background"));
+        assert_eq!(out[0].kind, Some(RecordKind::Background));
         // An interactive session's v4 event says nothing of the kind.
         let mut v = term("SessionStart", "me", "401:1");
         v["hook_version"] = 4.into();
@@ -2215,7 +2224,7 @@ mod tests {
         v["ancestry"] = json!(["node", "bash", "2.1.300"]);
         let out = book.apply("n", &ev(&v), SessionOrigin::Tty, true, 1);
         assert_eq!(out.len(), 1, "listed, its own record");
-        assert_eq!(out[0].kind, Some("background"));
+        assert_eq!(out[0].kind, Some(RecordKind::Background));
         assert!(!out[0].answerable);
         assert!(book.answerable("n").is_err());
         assert_eq!(book.can_type_into("n"), Ok(()), "nothing to type into: the main session is brought up");
@@ -2226,7 +2235,7 @@ mod tests {
         let mut book = AgentBook::new();
         let out = book.apply("n", &ev(&bg_start("spare", "300:7", &["300:7"])), SessionOrigin::Tty, true, 1);
         assert!(!out[0].answerable, "even with sbxw's terminal open, it is not that terminal's");
-        let u = out[0].unanswerable.unwrap();
+        let u = out[0].unanswerable.as_deref().copied().unwrap();
         assert_eq!((u.reason, u.sessions, u.tty), ("background", 0, 0));
         assert!(book.answerable("n").is_err());
         let wire = serde_json::to_value(&out[0]).unwrap();
@@ -2242,7 +2251,7 @@ mod tests {
         }
         let snap = book.snapshot(|_| true, 9);
         for i in &snap {
-            let u = i.unanswerable.expect("a reason");
+            let u = i.unanswerable.as_deref().copied().expect("a reason");
             assert_eq!((u.reason, u.sessions, u.tty, u.hook_version), ("several_sessions", 3, 3, 3));
         }
         // A thread's session carries none: its own terminal reaches it.
@@ -2250,7 +2259,7 @@ mod tests {
         t["sbxw_thread"] = "t1".into();
         let out = book.apply("n", &ev(&t), SessionOrigin::Remote, true, 10);
         assert_eq!(info_of(&out, "t").unanswerable, None);
-        assert_eq!(info_of(&out, "a").unanswerable.unwrap().sessions, 3, "a thread is not in the main checkout");
+        assert_eq!(info_of(&out, "a").unanswerable.as_deref().copied().unwrap().sessions, 3, "a thread is not in the main checkout");
     }
 
     #[test]
@@ -2258,7 +2267,7 @@ mod tests {
         let mut book = AgentBook::new();
         book.apply("n", &ev(&term("SessionStart", "a", "10:1")), SessionOrigin::Tty, false, 1);
         let snap = book.snapshot(|_| false, 2);
-        let u = snap[0].unanswerable.unwrap();
+        let u = snap[0].unanswerable.as_deref().copied().unwrap();
         assert_eq!((u.reason, u.sessions, u.tty), ("no_terminal", 1, 1));
         // The terminal opened: answerable, no reason.
         let snap = book.snapshot(|_| true, 3);
@@ -2272,13 +2281,13 @@ mod tests {
         book.apply("n", &ev(&s("a")), SessionOrigin::Tty, true, 1);
         book.apply("n", &ev(&s("b")), SessionOrigin::Tty, true, 2);
         let snap = book.snapshot(|_| true, 3);
-        let u = snap[0].unanswerable.unwrap();
+        let u = snap[0].unanswerable.as_deref().copied().unwrap();
         assert_eq!((u.reason, u.sessions, u.hook_version), ("old_hook", 2, 2));
         // A remote session beside the one terminal session says it is remote.
         let mut book = AgentBook::new();
         book.apply("n", &ev(&term("SessionStart", "a", "10:1")), SessionOrigin::Tty, true, 1);
         let out = book.apply("n", &ev(&term("SessionStart", "ssh", "11:1")), SessionOrigin::Remote, true, 2);
-        assert_eq!(info_of(&out, "ssh").unanswerable.map(|u| u.reason), Some("remote"));
+        assert_eq!(info_of(&out, "ssh").unanswerable.as_deref().map(|u| u.reason), Some("remote"));
         assert!(info_of(&out, "a").answerable);
     }
 
