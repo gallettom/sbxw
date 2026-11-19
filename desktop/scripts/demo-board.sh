@@ -65,10 +65,6 @@ if m == "commit":
     step("board-file-src/part_0.rs", "board-diff-src/part_0.rs")
 if m == "folded":
     step("board-thread-api-routes", "board-msg-" + g)
-    if narrow:
-        # 480 pt tall: only the status reports and commits, so their row is in view to press.
-        step("board-group-status", "board-convo")
-        step("board-group-all", "board-msg-" + g)
     add(type="mark", name="hold:300")
     step("board-msg-" + g, "board-commit-" + h)
 if m == "messages":
@@ -93,6 +89,8 @@ for theme in ${THEMES:-dark graphite}; do
   for size in ${SIZES:-1284x816 720x480}; do
     for m in ${MARKS:-running picker merged all long commit folded messages narrow notes details}; do
       [ "$m" = narrow ] && [ "$size" != 720x480 ] && continue
+      # 480 pt tall: the commits' row is out of view to press (the narrow mark shows the Commits filter).
+      [ "$m" = folded ] && [ "$size" = 720x480 ] && continue
       [ "$m" = wide ] && [ "$size" = 720x480 ] && continue
       script "$m" "$size" >"$shots/script-$m.json"
       THEME="$theme" SHOT_SIZE="$size" run_app "$shots/board-$theme-$size-$m.log" --fixture "$fx" --script "$shots/script-$m.json" \
