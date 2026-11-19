@@ -1725,7 +1725,7 @@ impl Build<'_> {
         let key = key.unwrap_or_else(|| id.clone());
         let open = self.ui.open.as_deref() == Some(id.as_str());
         let value = n.value.as_str().unwrap_or("").to_string();
-        let choices = scope::choices(self.data, &n.items, &sp);
+        let choices = scope::offered(self.data, &n.items, &sp, &value);
         let has_all = scope::offers_all(&sp, &n.items);
         let all_label = n.items.iter().find(|i| i.id.is_empty()).map(|i| i.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| "All sandboxes".into());
         let empty_label = if has_all { all_label.clone() } else { n.placeholder.clone().unwrap_or_else(|| "Pick a sandbox".into()) };
@@ -1750,6 +1750,7 @@ impl Build<'_> {
                 all_label: all_label.clone(),
                 window_w: self.data["app"]["window"]["w"].as_f64().filter(|w| *w > 0.0).unwrap_or(1284.0) as f32,
                 filter,
+                spec: sp.clone(),
                 edit: Rc::new(move |s: &mut S| &mut s.screen(&n1).ui.edits.entry(fid2.clone()).or_insert_with(|| (TextEdit::new(""), None)).0),
                 pick: Rc::new(move |s: &mut S, v: &str| {
                     s.screen(&n2).ui.open = None;

@@ -507,3 +507,201 @@ return {
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(extra, [2, 2, 2], "one render for the push, one for the single push after it");
 }
+
+/// The open list stays inside its panel: with twenty sandboxes in nine
+/// groups the panel is bounded (LIST_MAX_H, the window's room), its rows
+/// scroll inside it under the pinned filter and "All sandboxes", the current
+/// row is in view on open and the arrows keep the focused row in view.
+#[test]
+fn a_long_list_scrolls_inside_its_panel_and_never_leaves_it() {
+    let mut bad = vec![];
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+        for (intent, args, sel, current) in [
+            ("commits_show", json!({}), "commits-sandbox", ""),
+            ("files_open", json!({ "sandbox": "chat-0519" }), "files-sandbox", "chat-0519"),
+        ] {
+            let mut rt = window("scope/twenty", w, h);
+            run(&mut rt, intent, args.clone());
+            press(&mut rt, sel);
+            let at = format!("{sel} at {w}x{h}");
+            let (p, _) = rt.presented(&format!("{sel}-list")).unwrap_or_else(|| panic!("{at}: no list"));
+            let (v, _) = rt.presented(&format!("{sel}-rows")).unwrap_or_else(|| panic!("{at}: no rows"));
+            let inside = |r: [f32; 4], o: [f32; 4]| r[0] >= o[0] - 0.5 && r[1] >= o[1] - 0.5 && r[0] + r[2] <= o[0] + o[2] + 0.5 && r[1] + r[3] <= o[1] + o[3] + 0.5;
+            if !inside(p, [0.0, 0.0, w, h]) {
+                bad.push(format!("{at}: the panel {p:?} leaves the window"));
+            }
+            if p[3] > LIST_MAX_H + 0.5 {
+                bad.push(format!("{at}: the panel is {} tall", p[3]));
+            }
+            if !inside(v, p) {
+                bad.push(format!("{at}: the rows' viewport {v:?} leaves the panel {p:?}"));
+            }
+            // The pinned parts: inside the panel, above the viewport.
+            for k in [format!("{sel}-filter"), format!("{sel}-")] {
+                if let Some((r, _)) = rt.presented(&k) {
+                    if !inside(r, p) || r[1] + r[3] > v[1] + 0.5 {
+                        bad.push(format!("{at}: {k} {r:?} is not pinned above the rows {v:?}"));
+                    }
+                }
+            }
+            // Every sandbox row: what shows of it is inside the viewport (the
+            // rest is clipped), and a row the viewport shows is what a press there finds.
+            let rows: Vec<(String, [f32; 4])> = rt.elements().into_iter().filter(|e| !e.exiting && e.role == "menuitem").filter_map(|e| Some((e.key?, e.rect))).filter(|(k, _)| k.starts_with(&format!("{sel}-")) && k != &format!("{sel}-")).collect();
+            if rows.len() != 20 {
+                bad.push(format!("{at}: {} sandbox rows", rows.len()));
+            }
+            for (k, r) in &rows {
+                if inside(*r, v) && !inside(*r, p) {
+                    bad.push(format!("{at}: {k} {r:?} out of the panel"));
+                }
+            }
+            if rows.iter().all(|(_, r)| inside(*r, v)) {
+                bad.push(format!("{at}: every row in view: twenty sandboxes should overflow"));
+            }
+            // The current row is in view on open.
+            if !current.is_empty() {
+                let (r, _) = rt.presented(&format!("{sel}-{current}")).unwrap();
+                if !inside(r, v) {
+                    bad.push(format!("{at}: the current row {r:?} is not in view {v:?} on open"));
+                }
+            }
+            // The arrows keep the focused row in view, down to the last.
+            if focused(&rt).as_deref() == Some(&format!("{sel}-filter")) {
+                key(&mut rt, Key::Down);
+            }
+            for _ in 0..24 {
+                key(&mut rt, Key::Down);
+                let Some(f) = focused(&rt) else { bad.push(format!("{at}: focus lost")); break };
+                let (r, _) = rt.presented(&f).unwrap();
+                let (v, _) = rt.presented(&format!("{sel}-rows")).unwrap();
+                if f != format!("{sel}-") && !inside(r, v) {
+                    bad.push(format!("{at}: the focused {f} {r:?} is out of view {v:?}"));
+                    break;
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// The title band's vertical rhythm: the capsule (and the whole title row)
+/// has as much room over it, under the strip, as under it, within 1 pt; the
+/// title, the "in", the capsule's name and the cross share one centre line.
+/// Worktrees, Files and Commits, scoped and All, at 1284 and 720, both themes.
+#[test]
+fn the_title_band_centres_its_row() {
+    
+    let mut bad = vec![];
+    for m in Mode::ALL {
+        for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+            for (intent, args, screen, title) in [
+                ("worktrees_show", json!({ "sandbox": "web-app" }), "worktrees", "Worktrees"),
+                ("worktrees_show", json!({}), "worktrees", "Worktrees"),
+                ("files_open", json!({ "sandbox": "web-app" }), "files", "Files"),
+                ("commits_show", json!({ "sandbox": "web-app", "branch": "sbxw/t2" }), "commits", "Commits"),
+                ("commits_show", json!({}), "commits", "Commits"),
+            ] {
+                let mut rt = window("scope/twenty", w, h);
+                rt.update(|s, _| s.set_theme(m));
+                run(&mut rt, intent, args.clone());
+                let at = format!("{screen} {args} at {w} in {m:?}");
+                let (o, _) = rt.presented(&format!("overlay-{screen}")).unwrap_or_else(|| panic!("{at}: no overlay"));
+                // The band: the wash when scoped, else where it would be.
+                let band = rt.presented(&format!("overlay-wash-{screen}")).map(|(r, _)| r).unwrap_or([o[0], o[1], o[2], BAND_H]);
+                if (band[3] - BAND_H).abs() > 0.5 {
+                    bad.push(format!("{at}: the band is {} tall, not {BAND_H}", band[3]));
+                }
+                let (top, bottom) = (band[1] + crate::scope::STRIP_H, band[1] + band[3]);
+                let (cap, _) = rt.presented(&format!("{screen}-sandbox")).unwrap_or_else(|| panic!("{at}: no capsule"));
+                let (above, below) = (cap[1] - top, bottom - (cap[1] + cap[3]));
+                if (above - below).abs() > 1.0 || above < 4.0 {
+                    bad.push(format!("{at}: the capsule has {above} over it and {below} under it"));
+                }
+                if (cap[1] - (o[1] + HEAD_TOP)).abs() > 1.0 {
+                    bad.push(format!("{at}: the capsule's top {} is not at {}", cap[1], o[1] + HEAD_TOP));
+                }
+                // One centre line for the row's texts, the capsule and the cross.
+                let mid = cap[1] + cap[3] / 2.0;
+                let (head, _) = rt.presented(&format!("overlay-head-{screen}")).unwrap();
+                for e in rt.elements().into_iter().filter(|e| !e.exiting && e.text.is_some()) {
+                    let r = e.rect;
+                    let t = e.text.clone().unwrap();
+                    let in_head = r[1] >= head[1] - 1.0 && r[1] + r[3] <= head[1] + head[3] + 1.0 && r[0] >= o[0] && r[0] <= o[0] + o[2];
+                    if in_head && [title, "in", "All sandboxes", "web-app", "Esc closes"].contains(&t.as_str()) && (r[1] + r[3] / 2.0 - mid).abs() > 1.0 {
+                        bad.push(format!("{at}: \"{t}\" centred at {} not {mid}", r[1] + r[3] / 2.0));
+                    }
+                }
+                if let Some((x, _)) = rt.presented("overlay-close") {
+                    if (x[1] + x[3] / 2.0 - mid).abs() > 1.0 {
+                        bad.push(format!("{at}: the cross is off the row's centre"));
+                    }
+                }
+            }
+        }
+    }
+    theme::set_mode(Mode::Dark);
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+fn list_rows(rt: &Runtime<App>, sel: &str) -> Vec<(String, [f32; 4])> {
+    let mut r: Vec<(String, [f32; 4])> = rt.elements().into_iter().filter(|e| !e.exiting && e.role == "menuitem").filter_map(|e| Some((e.key?, e.rect))).filter(|(k, _)| k.starts_with(&format!("{sel}-"))).collect();
+    r.sort_by(|a, b| a.1[1].total_cmp(&b.1[1]));
+    r
+}
+
+/// The option `only = "counted"`, `order = "count"` (Worktrees): All, then
+/// only the sandboxes that have worktrees, the most first, ties by name, no
+/// group headings (each row names its group), the count in a chip whose
+/// tooltip says what it counts; no filter field for 8 listed sandboxes.
+#[test]
+fn worktrees_lists_the_sandboxes_with_worktrees_the_most_first() {
+    let mut rt = window("scope/twenty", 1284.0, 816.0);
+    run(&mut rt, "worktrees_show", json!({}));
+    press(&mut rt, "worktrees-sandbox");
+    let order: Vec<String> = list_rows(&rt, "worktrees-sandbox").into_iter().map(|(k, _)| k["worktrees-sandbox-".len()..].to_string()).collect();
+    assert_eq!(order, ["", "data-etl", "web-app", "mobile-ios", "billing", "infra-dns", "chat-0412", "docs", "search"]);
+    assert!(rt.find("worktrees-sandbox-filter").is_none(), "8 listed sandboxes: no filter field");
+    assert!(!rt.elements().iter().any(|e| !e.exiting && e.key.as_deref().is_some_and(|k| k.starts_with("worktrees-sandbox-group-"))), "no group headings in the order of the count");
+    let tip = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("worktrees-sandbox-web-app-count")).and_then(|e| e.help);
+    assert_eq!(tip.as_deref(), Some("4 worktrees"));
+    let tip = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("worktrees-sandbox-docs-count")).and_then(|e| e.help);
+    assert_eq!(tip.as_deref(), Some("1 worktree"));
+    assert!(rt.elements().iter().any(|e| e.text.as_deref() == Some("billing")), "the group is named in its rows");
+    // Commits keeps its grouped list of every sandbox and its sessions.
+    run(&mut rt, "commits_show", json!({}));
+    press(&mut rt, "commits-sandbox");
+    assert_eq!(list_rows(&rt, "commits-sandbox").len(), 21);
+    assert!(rt.find("commits-sandbox-group-web").is_some());
+}
+
+/// The current sandbox with no worktree stays listed, marked; with none
+/// anywhere the list says so under All.
+#[test]
+fn worktrees_keeps_the_current_one_and_says_when_none_has_any() {
+    let mut rt = window("scope/twenty", 1284.0, 816.0);
+    run(&mut rt, "worktrees_show", json!({ "sandbox": "web-admin" }));
+    press(&mut rt, "worktrees-sandbox");
+    let order: Vec<String> = list_rows(&rt, "worktrees-sandbox").into_iter().map(|(k, _)| k["worktrees-sandbox-".len()..].to_string()).collect();
+    assert_eq!(order.last().map(String::as_str), Some("web-admin"), "{order:?}");
+    assert!(rt.elements().iter().any(|e| e.key.as_deref() == Some("worktrees-sandbox-web-admin-count") && e.text.as_deref() == Some("no worktree")));
+
+    let mut rt = window("scope/no-worktrees", 1284.0, 816.0);
+    run(&mut rt, "worktrees_show", json!({}));
+    press(&mut rt, "worktrees-sandbox");
+    assert_eq!(list_rows(&rt, "worktrees-sandbox").len(), 1, "All only");
+    assert!(rt.elements().iter().any(|e| e.text.as_deref() == Some("No sandbox has a worktree")));
+}
+
+#[test]
+fn the_count_options_are_read_and_ordered() {
+    let sp = spec(&json!({ "kind": "sandbox", "all": true, "counts": { "web-app": 2, "docs": 5 }, "only": "counted", "order": "count", "noun": "worktree" })).unwrap();
+    assert!(sp.only_counted && sp.by_count && sp.noun == "worktree");
+    let ids = |v: &str| offered(&data(), &[], &sp, v).into_iter().map(|c| c.id).collect::<Vec<_>>();
+    assert_eq!(ids(""), ["", "docs", "web-app"]);
+    assert_eq!(ids("loose"), ["", "docs", "web-app", "loose"], "the current one stays");
+    // Without counts, `only` and `order` mean nothing.
+    let sp = spec(&json!({ "kind": "sandbox", "only": "counted", "order": "count" })).unwrap();
+    assert!(!sp.only_counted && !sp.by_count);
+    let sp = spec(&json!({ "kind": "sandbox", "counts": [] })).unwrap();
+    assert_eq!(sp.counts, Some(Default::default()));
+}

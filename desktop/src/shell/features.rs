@@ -799,7 +799,9 @@ impl App {
             _ => return None,
         };
         let n1 = name.clone();
-        let mut head = row().key(format!("overlay-head-{name}")).w_full().h(layout::CONTROL_H).gap(8.0).items_center();
+        // The title row sits in the middle of the title band: as much room
+        // over it (under the strip, which is not the band's) as under it.
+        let mut head = row().key(format!("overlay-head-{name}")).w_full().h(layout::CONTROL_H).mb(HEAD_AFTER).gap(8.0).items_center();
         if let Some(i) = crate::icons::get(icon) {
             head = head.child(rune::icon(i, crate::theme::icon::MEDIUM).color(c("text-bright")));
         }
@@ -846,7 +848,7 @@ impl App {
             );
         }
         // The frame's wash under the title band, its strip along the top edge.
-        let band = frame.wash.map(|w| el().key(format!("overlay-wash-{name}")).pin(Some(0.0), Some(0.0), Some(0.0), None).h(12.0 + layout::CONTROL_H + 4.0).fill(crate::theme::hex(w)));
+        let band = frame.wash.map(|w| el().key(format!("overlay-wash-{name}")).pin(Some(0.0), Some(0.0), Some(0.0), None).h(crate::scope::BAND_H).fill(crate::theme::hex(w)));
         let strip = frame.strip.map(|g| el().key(format!("overlay-strip-{name}")).pin(Some(0.0), Some(0.0), Some(0.0), None).h(crate::scope::STRIP_H).fill(crate::theme::hex(g)));
         Some(
             col()
@@ -857,6 +859,7 @@ impl App {
                 .label(title)
                 .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
                 .padding(12.0)
+                .pt(crate::scope::HEAD_TOP)
                 .gap(8.0)
                 .fill(c("bg"))
                 .border(1.0, crate::theme::hex(frame.edge))
@@ -1541,6 +1544,8 @@ impl DropGrant {
 /// The store's key for uploads, and its one entry.
 /// The overlay's header says "Esc closes" from this width (points).
 const OVERLAY_HINT_MIN: f32 = 560.0;
+/// Between the title band and the screen under it (the column's gap adds 8).
+const HEAD_AFTER: f32 = crate::scope::BAND_PAD - 4.0;
 const UPLOADS_KEY: &str = "uploads";
 const SKIP_DROP_DIALOG: &str = "skip_drop_dialog";
 /// The store's key for the pane area's base view (`"monitor"`; absent: the terminals).

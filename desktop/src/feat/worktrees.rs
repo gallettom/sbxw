@@ -259,6 +259,17 @@ impl State {
         out
     }
 
+    /// Each sandbox's number of worktrees, as read (the threads' own
+    /// worktrees; the main checkout is not one), whatever the filter: the
+    /// scope list offers the sandboxes that have some, the most first.
+    fn counts(&self) -> J {
+        let m: serde_json::Map<String, J> = self.per.iter().filter(|(_, p)| !p.loading).map(|(n, p)| {
+            let k: usize = p.answer["repos"].as_array().into_iter().flatten().map(|r| r["threads"].as_array().map_or(0, Vec::len)).sum();
+            (n.clone(), J::from(k))
+        }).collect();
+        J::Object(m)
+    }
+
     /// `data.worktrees_ui`: blocks by sandbox over the page of rows.
     fn ui(&self, cx: &Ctx) -> Action {
         let (rows, count) = crate::screen::paged(self.rows(cx), PAGE, self.pages.max(1), "worktrees");
@@ -310,7 +321,7 @@ impl State {
         }
         Action::Set {
             key: UI.into(),
-            value: json!({ "blocks": blocks, "count": count, "filter": self.filter, "sandbox": self.sandbox, "notes": notes, "none": none, "loading": self.per.values().any(|p| p.loading) }),
+            value: json!({ "blocks": blocks, "count": count, "filter": self.filter, "sandbox": self.sandbox, "notes": notes, "none": none, "loading": self.per.values().any(|p| p.loading), "counts": self.counts() }),
         }
     }
 }
