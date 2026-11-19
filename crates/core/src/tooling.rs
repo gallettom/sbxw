@@ -27,6 +27,9 @@ pub const USAGE_STATUSLINE_CHAIN_PATH: &str = "/home/agent/.sbxw/usage-statuslin
 pub const RELAY_TOOL_PATH: &str = "/home/agent/.sbxw/relay.js";
 pub const RELAY_MCP_PATH: &str = "/home/agent/.sbxw/relay-mcp.js";
 pub const TEAM_GUARD_PATH: &str = "/home/agent/.sbxw/team-guard.js";
+/// The `SessionStart` hook that tells a thread the state of its worktree at
+/// every start (it does nothing outside a thread).
+pub const THREAD_START_PATH: &str = "/home/agent/.sbxw/thread-start.js";
 /// The tools Team mode's guard checks before they run.
 pub const TEAM_GUARD_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash";
 pub const TOKEN_PATH: &str = "/home/agent/.sbxw/token";
@@ -79,6 +82,7 @@ const USAGE_STATUSLINE: &str = include_str!("../../../assets/usage-statusline.js
 const RELAY_TOOL: &str = include_str!("../../../assets/relay-tool.js");
 const RELAY_MCP: &str = include_str!("../../../assets/relay-mcp.js");
 const TEAM_GUARD: &str = include_str!("../../../assets/team-guard.js");
+const THREAD_START: &str = include_str!("../../../assets/thread-start.js");
 pub const LEAD_COMMAND: &str = include_str!("../../../assets/lead.md");
 /// The `sbxw:jarvis` kit's server, the file the daemon's `build.rs` embeds in
 /// the kit too: one source, so a refresh writes what a creation would copy.
@@ -408,7 +412,9 @@ impl Tooling {
 
     /// The relay: CLI, MCP server (user scope) and the fenced memory section;
     /// and Team mode's guard, a hook beside it that uses the relay to reach the
-    /// board and does nothing outside a shared plan's threads. Installed here
+    /// board and does nothing outside a shared plan's threads; and the thread
+    /// start hook, which tells a thread its worktree's state at every session
+    /// start and does nothing outside a thread. Installed here
     /// rather than with the status hooks so that Lead refreshes it too.
     pub fn relay(self, agent_port: &str) -> Self {
         let body = format!(
@@ -420,7 +426,10 @@ impl Tooling {
              for(const [ev,matcher] of [['PreToolUse',{matcher}],['PostToolUse',undefined]]){{\
              st.hooks[ev]=(st.hooks[ev]||[]).filter(e=>!(e.hooks||[]).some(h=>(h.args||[]).includes(guard)));\
              const entry={{hooks:[{{type:'command',command:'node',args:[guard]}}]}};if(matcher)entry.matcher=matcher;\
-             st.hooks[ev].push(entry);}}",
+             st.hooks[ev].push(entry);}}\
+             const ts={ts_path};put(ts,{ts});\
+             st.hooks.SessionStart=(st.hooks.SessionStart||[]).filter(e=>!(e.hooks||[]).some(h=>(h.args||[]).includes(ts)));\
+             st.hooks.SessionStart.push({{hooks:[{{type:'command',command:'node',args:[ts],timeout:5}}]}});",
             tool_path = js(RELAY_TOOL_PATH),
             tool = js(&RELAY_TOOL.replace("__PORT__", agent_port)),
             mcp_path = js(RELAY_MCP_PATH),
@@ -436,6 +445,8 @@ impl Tooling {
             guard = js(TEAM_GUARD),
             settings = js(SETTINGS_PATH),
             matcher = js(TEAM_GUARD_MATCHER),
+            ts_path = js(THREAD_START_PATH),
+            ts = js(THREAD_START),
         );
         self.piece(piece::RELAY, body)
     }
@@ -733,6 +744,10 @@ mod tests {
         assert_eq!(s["hooks"]["PreToolUse"].as_array().unwrap().len(), 4, "the user's, artifacts, status, team guard");
         assert_eq!(s["hooks"]["PostToolUse"].as_array().unwrap().len(), 2, "status, team guard");
         assert!(read(".sbxw/team-guard.js").contains("SBXW_TEAM"));
+        let starts = s["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(starts.len(), 2, "status, thread start: once, however often the batch runs");
+        assert!(starts.iter().any(|e| e["hooks"][0]["args"][0].as_str().unwrap().ends_with(".sbxw/thread-start.js") && e["hooks"][0]["timeout"] == 5));
+        assert!(read(".sbxw/thread-start.js").contains("SBXW_THREAD"));
         let c: serde_json::Value = serde_json::from_str(&first.1).unwrap();
         assert_eq!(c["projects"]["/work"]["hasTrustDialogAccepted"], true);
         assert_eq!(c["mcpServers"][RELAY_MCP_NAME]["command"], "node");

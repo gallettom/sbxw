@@ -179,6 +179,15 @@ approval. A repository's own rules (build commands, what not to touch) go in
 its root `CLAUDE.md`, which every session reads by itself; sbxw's own is the
 example. The lead's goal then says only what is specific to the thread.
 
+- **A thread knows its state at every session start.** Sessions restart (a
+  daemon restart, a compaction). sbxw installs a `SessionStart` hook,
+  `~/.sbxw/thread-start.js`, that acts only in a thread (`SBXW_THREAD` set) and
+  gives the session, as context: its name, branch and tip, `git status
+  --short` (30 lines at most), scratch worktrees registered under its
+  worktree, leftover `target*` dirs, whether main has commits the branch
+  lacks, and "commit before long builds". Read-only git, about 2 seconds at
+  most, silent on any error. It is written with the relay at each bring-up:
+  an existing sandbox gets it with `sbxw up <sandbox>`.
 - **Threads report to sbxw** with `report_thread_status`. The chip shows the
   state: `…` starting, `●` working, `?` blocked, `✓` done, `✕` failed. Hover for
   the report.
