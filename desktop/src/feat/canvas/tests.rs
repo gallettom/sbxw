@@ -144,7 +144,7 @@ fn it_opens_on_the_sandboxes_latest_canvas_and_draws_every_round() {
     assert_eq!(ui["history"][0]["n"], 1);
     // The picker: the sandbox's canvases, newest first, then New; the removed sandbox listed by name.
     let labels: Vec<&str> = ui["canvases"].as_array().unwrap().iter().filter_map(|c| c["label"].as_str()).collect();
-    assert!(labels[0].starts_with("Checkout review ·") && labels[1].starts_with("Settings pages ·") && labels.last() == Some(&"New canvas"), "{labels:?}");
+    assert!(labels[0].starts_with("Checkout review ·") && labels[1].starts_with("Settings pages ·") && labels.contains(&"New canvas") && labels.last().unwrap().starts_with("Storage: This canvas"), "{labels:?}");
     assert!(ui["sandboxes"].as_array().unwrap().iter().any(|s| s["label"] == "old-shop (removed)"));
     assert!(ui["storage"].as_str().unwrap().contains("all canvases"));
 }
