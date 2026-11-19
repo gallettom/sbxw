@@ -1245,6 +1245,13 @@ impl App {
             self.push_data();
             return true;
         }
+        // A popup of the view drawn over the pane area (an overlay or the
+        // base): its feature closes it (`<name>_key {key: "escape"}`), the view stays.
+        if let Some(intent) = self.popup_escape() {
+            self.press_extra("keys", &intent, &serde_json::json!({ "key": "escape" }));
+            self.push_data();
+            return true;
+        }
         // Then the overlay over the pane area.
         if self.close_overlay() {
             self.push_data();
@@ -1452,6 +1459,19 @@ impl App {
     /// Something is over the panes: the core's dialog, a modal, a feature's
     /// overlay, Jarvis's dialog, the palette. No terminal takes input then,
     /// by the window's path (`terminal_may_take_keys`) or its grid's (`lens`).
+    /// The intent Escape goes to first when the view drawn over the pane
+    /// area (an overlay, or the base view) shows a popup of its own: its
+    /// `<name>_ui.popup` is true and its `<name>_key` takes `escape`.
+    pub fn popup_escape(&self) -> Option<String> {
+        let (name, _) = self.feats.overlay.as_ref()?;
+        if self.feats.data.get(&format!("{name}_ui")).is_none_or(|u| u["popup"] != true) {
+            return None;
+        }
+        let intent = format!("{name}_key");
+        let takes = crate::intent::spec(&intent).is_some_and(|sp| sp.args.iter().any(|(n, a, _)| *n == "key" && matches!(a, crate::intent::Arg::OneOf(l) if l.contains(&"escape"))));
+        takes.then_some(intent)
+    }
+
     /// A base view (the Monitor) instead of the terminals covers them too.
     pub fn panes_covered(&self) -> bool {
         self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.feats.base.is_some() || self.jarvis.shown.is_some() || self.palette.is_some()
@@ -4504,6 +4524,42 @@ mod tests {
         rt.frame(0.02);
         assert_eq!(sent(&rx), b"b", "the terminal types again");
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// A popup of the view drawn over the pane area takes Escape first: with
+    /// `<name>_ui.popup` true and a `<name>_key` that takes `escape`, the
+    /// key goes to it and the view stays; with none, Escape is as before
+    /// (an overlay closes, the base stays); a dialog above takes it first.
+    #[test]
+    fn escape_goes_to_the_drawn_view_s_popup_first() {
+        let (mut rt, _rx, _clip) = window_with_terminal();
+        tap(&mut rt, "pager-view-monitor");
+        rt.frame(0.05);
+        assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"));
+        // No popup: Escape finds nothing to close on the base.
+        assert!(rt.state.popup_escape().is_none());
+        assert!(!rt.state.escape());
+        // A popup: the Monitor's key intent gets `escape`; the base stays.
+        rt.update(|s, _| {
+            s.feats.data.insert("monitor_ui".into(), serde_json::json!({ "popup": true }));
+        });
+        assert_eq!(rt.state.popup_escape().as_deref(), Some("monitor_key"));
+        assert!(rt.state.escape(), "Escape was taken by the popup");
+        assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("monitor"));
+        // A dialog above takes Escape first.
+        rt.update(|s, _| s.open_modal("templates", J::Null));
+        assert!(rt.state.feats.modal.is_some());
+        assert!(rt.state.escape());
+        assert!(rt.state.feats.modal.is_none(), "the modal closed, not the popup");
+        // An overlay whose key intent takes no `escape`: today's rule, it closes back to the base.
+        tap(&mut rt, "rail-commits");
+        rt.frame(0.05);
+        rt.update(|s, _| {
+            s.feats.data.insert("commits_ui".into(), serde_json::json!({ "popup": true }));
+        });
+        assert!(rt.state.popup_escape().is_none(), "commits_key takes no escape");
+        assert!(rt.state.escape());
+        assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("monitor"));
     }
 
     #[test]
