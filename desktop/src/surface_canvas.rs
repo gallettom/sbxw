@@ -855,9 +855,15 @@ pub fn view<S: 'static>(id: &str, scale: f32, sink: fn(&mut S, &str, CanvasEvent
         .clip_soft(0.0)
         .cursor(Cursor::Default)
         .pointer_buttons([PointerButton::Middle])
-        .on_layout_tx(move |_s: &mut S, r: [f32; 4], tx: &mut Tx| {
+        .on_layout_tx(move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
+            let before = camera(&i1).zoom;
             if laid_out(&i1, [r[2], r[3]]) {
                 tx.wake_after(std::time::Duration::from_millis(1));
+                // The first fit changes the zoom the readout shows.
+                let after = camera(&i1).zoom;
+                if (before * 100.0).round() != (after * 100.0).round() {
+                    sink(s, &i1, CanvasEvent::Zoomed { zoom: after }, tx);
+                }
             }
         })
         .on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
