@@ -154,8 +154,9 @@ local function composer(s, data)
       icon{ "send", size = 12, color = "text-dim" },
       text{ "To", size = "sm", color = "text-dim" }, square(data, s.sandbox),
       text{ who(s), size = "sm", weight = "medium", color = "text", truncate = true, grow = 1 },
-      why and text{ why, size = "sm", color = "text-dim", truncate = true } or text{ "⌘↩", size = "sm", color = "text-dim" },
-      button{ "Send…", icon = "send", tone = "green", on = "send", disabled = not can, help = "Opens the core's dialog with the text and the session it goes to" } } }
+      can and text{ "⌘↩", size = "sm", color = "text-dim" } or false,
+      button{ "Send…", icon = "send", tone = "green", on = "send", disabled = not can, help = "Opens the core's dialog with the text and the session it goes to" } },
+    why and text{ why, size = "sm", color = "text-dim", wrap = true } or false }
 end
 
 local function fact(k, v, mono)
