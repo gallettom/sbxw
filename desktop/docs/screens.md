@@ -1027,6 +1027,7 @@ What a feature declares:
 | `events` | Stream events handed to `on_event`, which answers actions |
 | `screens` | `ScreenDecl { name, src: include_str!(..), slot }`; `Slot::Modal { width }` (a dialog over the window) or `Slot::Panel { title, icon, width }` (docked on the right, beside Jarvis; several open show as tabs) or `Slot::Overlay { title, icon }` (a full view over the pane area, below) or `Slot::Base { title, icon, open }` (a base view of the pane area instead of the terminals, below) |
 | `intents` | Rows of the closed list (`intent::Spec`: name, typed arguments, risk, doc). Exported to `intents.json` |
+| `<screen>_key` and `<screen>_ui.popup` | By name, for an overlay or base view: its `<screen>_key` intent gets Up, Down, Enter (and what its `key` list takes) while none of its controls has the keyboard; while the feature's data `<screen>_ui.popup` is true and that list takes `escape`, Escape goes to it (`{key: "escape"}`) before the view is closed (below) |
 | `act` | `fn(&Ctx, &Asked) -> Result<Vec<Action>, String>`: runs one of its intents, already checked |
 | `on_answer` | Optional: gets every answer of its calls, status and JSON body, non-2xx included; then the core says nothing itself |
 | `extras` | Buttons and badges in others' slots: `Extra { place, id, label, icon, tone, help, count, intent }`; `place`: `Topbar`, `Sandbox(name)` (on its row), `SandboxRow(name)` (a sub-row under it: one per session), `Pane(sandbox)` (every pane bar of that sandbox), `Session { sandbox, thread }` (the pane bars of that session only; `thread: None` is the main one), `Rail { zone, order }` (an entry of the left rail, see below) |
@@ -1877,7 +1878,10 @@ lines, time; `monitor-terminal`, `-commits`, `-files`, `-worktrees`), the
 feed (the last prompt, `monitor-now`, `monitor-reply` with keyword pills,
 `monitor-question` with `monitor-opt-<step>-<option>` or "Answer in its
 terminal", `monitor-permission`), then the composer (`monitor-compose`,
-`monitor-target` "To ■ sandbox · session", `monitor-send`). Keys: the
+the attached files' chips `monitor-attached` with `monitor-file-<id>` and its
+cross `monitor-file-remove-<id>`, `monitor-target` "To ■ sandbox ·
+session", `monitor-attach` ("Attach", the icon alone under 640 pt),
+`monitor-send`). Keys: the
 view opens with the keyboard on the shown session's row; Up and Down move
 along the rows, Enter shows one, N goes to the next session that needs you;
 Escape does not leave it (a base view). With nothing of the view focused, Up and Down move the
@@ -1888,7 +1892,9 @@ sandbox, name, thread, group, tone, line, mono, ts, ask}`), `count` (the
 paging block), `counts` (`you`, `working`, `idle`, `ended`, `total`),
 `sel`, `detail` (the selected session: `strip`, `last_input`, `now`,
 `reply`, `question {answerable, steps: [{text, options: [{label, desc}]}]}`,
-`permission`, `compose {can, why, target}`, `sent`, `pane`). Started from
+`permission`, `compose {can, why, target}`, `sent`, `pane`, `files`
+(`[{id, name, size, state: ok|look|refused|uploaded, why, sending,
+progress}]`, the name already cut by the Rust), `sending`, `attach_max`). Started from
 `data.sessions` when the view opens (`monitor_open`), then kept from each
 `session` event, one card at a time: a card's `rev` moves only when its
 report changed, the screen memoises a row by key and rev, and the view is
@@ -1905,7 +1911,9 @@ a `Set` renders only drawn screens). Also read: `data.relay_ui.picks` and
 | `monitor_key` | `key` (`up`, `down`, `enter`, `type`), `text` | direct | The view's keys when none of its rows has the keyboard; N (`type`) from anywhere in it |
 | `monitor_terminal`, `monitor_commits`, `monitor_files`, `monitor_worktrees` | `key` | direct | `thread_open` or `open_terminal` (spare pane; the pane that shows it, when one does), `commits_show` on its branch, `files_open` at its worktree, `worktrees_show` filtered to it |
 | `monitor_pick` | `key`, `step`, `option` | direct | The relay's `agent_pick`, only for a session the daemon lists as waiting and answerable |
-| `monitor_send` | `key`, `text` | approval | Masked (`/api/voice/anonymise`), then the core's dialog with the words in full and the session; Send there posts `/api/chat/push {text, name, thread}` |
+| `monitor_attach` | `key` (the session shown) | direct | The core's file dialog (`Action::PickFiles`, from a press only); the file comes back through `on_files` and waits as a chip of that session |
+| `monitor_attach_remove` | `key`, `id` | direct | Takes that file off the session's chips; the core forgets its path |
+| `monitor_send` | `key`, `text?` | approval | Masked (`/api/voice/anonymise`), then ONE core dialog: the words in full, each attached file (local path, size, "look" reasons), the total, the session; a "look" file needs its box ticked. Send there: without files, `/api/chat/push {text, name, thread}`; with files, `core:uploads` (then each pasted picture's `paste-image`), then the push of the words followed by the daemon's paths. A failure pushes nothing |
 
 **The rules.** Only a press (or Cmd+Return in the composer) sends. The
 target is always drawn next to Send. The composer is disabled while the
@@ -1916,6 +1924,23 @@ Monitor) or a Jarvis proposal waits (`data.jarvis.pending`). Agent text is
 drawn as text and Markdown, never as a control; an option sends its index.
 A permission prompt is answered in its terminal: sbxw does not see the
 command.
+
+**Attach.** A local path only comes from the core: the file dialog, files
+dropped on the Monitor (any part of it, while it is drawn), a picture pasted
+while it shows (`on_files`); never from Luau or agent text. Files belong to
+the session they were attached to; another session shows its own, a send
+takes only its own. Attaching refuses in Rust in the composer's states
+(`data.app.covered`, a Jarvis proposal waiting, a session waiting on a
+menu, ended, or a sandbox not running). The guardrails are
+`feat::files::drops`' (a secret-looking name, a `.ssh`/`.aws`/`.gnupg`
+folder, more than 25 MB in all: "look", the dialog's box), an empty file or
+one over 128 MB is refused (Send off and refused). "Do not ask again for
+files I drop" never applies: words to an agent always get the dialog (the
+core grants it to the files feature's pane drops only). A file uploaded by a
+send that stopped keeps its daemon path and goes with the next Send (the core
+forgets a local path once uploaded). Names: cut in a chip, control and
+direction characters as `?`; whole in the dialog, those characters written
+out; the log gets counts and `what` lines without names.
 
 ### Overlays
 
@@ -1930,7 +1955,11 @@ absolute over them); none takes a key, a paste, a press, a drag or the wheel
 while it shows (`App::terminal_may_take_keys` and the panes' handlers);
 files dropped on it go to its feature's `on_files`. Up, Down and Enter, when
 none of its controls has the keyboard, run its feature's `<screen>_key`
-intent if it declares one. Opened while a base view is current, it goes
+intent if it declares one. A popup of its own (a menu, a picker drawn by
+the screen) gets Escape first: while its feature's `<screen>_ui.popup` is
+true and its `<screen>_key` takes `escape`, Escape runs `<screen>_key {key:
+"escape"}` and the view stays (the core's dialog, a modal, Jarvis's
+proposal and the palette still come before it; a base view too). Opened while a base view is current, it goes
 over that view, and closing it (Escape, its ×, its rail entry) comes back
 to it.
 

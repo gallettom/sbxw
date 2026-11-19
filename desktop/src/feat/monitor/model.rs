@@ -122,6 +122,16 @@ pub struct Model {
     pub sent: HashMap<String, u64>,
     /// Built from the daemon's list at least once (the view was opened).
     pub seeded: bool,
+    /// Files attached for each card, by its key ([`super::attach`]).
+    pub att: HashMap<String, Vec<super::attach::Att>>,
+    /// The next attachment's id, and pasted pictures so far (their names).
+    pub att_seq: u64,
+    pub pastes: u64,
+    /// The card whose Attach opened the file dialog.
+    pub pick_for: Option<String>,
+    /// Sends with files under way, by number (`attach:<n>`).
+    pub jobs: BTreeMap<u64, super::attach::Job>,
+    pub job_seq: u64,
 }
 
 impl Model {
