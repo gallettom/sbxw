@@ -65,6 +65,8 @@ if m == "folded":
     step("board-thread-api-routes", "board-tab-conversation" if narrow else "board-msg-" + g)
     if narrow:
         step("board-tab-conversation", "board-msg-" + g)
+        # 480 pt tall: only the commits, so their row is in view to press.
+        step("board-group-commits", "board-msg-" + g)
     add(type="mark", name="hold:300")
     step("board-msg-" + g, "board-commit-" + h)
 if m == "messages":
