@@ -124,4 +124,25 @@ mod tests {
         assert!(t.history_len() >= 470, "the output is in its history: {}", t.history_len());
         assert!(t.visible_text().contains("line 499"));
     }
+
+    /// A feature's screen has no Luau VM until it is first drawn; opened,
+    /// it renders from the latest data; the shell's own screens load at start.
+    #[test]
+    fn a_screen_s_vm_is_made_when_it_is_first_drawn() {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/two-panes.json");
+        let mut a = App::new(Args { fixture: Some(fixture.into()), ..Args::default() });
+        let vm = |a: &App, n: &str| a.screens.iter().find(|s| s.name == n).map(|s| (s.has_vm(), s.last_good.is_some())).unwrap();
+        assert_eq!(vm(&a, "sandboxes"), (true, true));
+        assert_eq!(vm(&a, "topbar"), (true, true));
+        assert_eq!(vm(&a, "commits"), (false, false), "never drawn: no VM");
+        assert_eq!(vm(&a, "network"), (false, false));
+        a.push_data();
+        assert_eq!(vm(&a, "commits"), (false, false), "new data does not make it");
+        a.run_intent("test", crate::intent::Intent::OpenPanel { screen: "commits".into() });
+        a.push_data();
+        assert_eq!(vm(&a, "commits"), (true, true), "opened: made and rendered");
+        let sc = a.screens.iter().find(|s| s.name == "commits").unwrap();
+        assert!(sc.error.is_none(), "{:?}", sc.error);
+        assert_eq!(vm(&a, "network"), (false, false));
+    }
 }

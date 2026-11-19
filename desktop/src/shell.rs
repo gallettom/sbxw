@@ -524,7 +524,9 @@ impl App {
             app.drain(Some(Duration::from_millis(1500)), true);
         }
         let data = app.screen_data();
-        app.screens = names.iter().map(|n| ScreenState::new(n, &dir, data.clone())).collect();
+        // The shell's own screens load now; a feature's when first drawn
+        // (a screen never opened costs no Luau VM: MEMORY.md).
+        app.screens = names.iter().map(|n| if SCREENS.contains(&n.as_str()) || app.solo.is_some() { ScreenState::new(n, &dir, data.clone()) } else { ScreenState::lazy(n, &dir, data.clone()) }).collect();
         app.marks = rune::tooling::headless_run()
             .map(|r| {
                 r.marks()
@@ -575,9 +577,12 @@ impl App {
             for ev in app.raw["provision"].as_array().cloned().unwrap_or_default() {
                 app.feats_bus("provision", &ev.to_string());
             }
-            let data = app.screen_data();
+            // One copy for every screen; those not drawn render when shown.
+            let shown = app.shown_screens();
+            let data = std::rc::Rc::new(app.screen_data());
             for s in &mut app.screens {
-                s.set_data(data.clone());
+                let on = shown.contains(&s.name);
+                s.set_data_shown(data.clone(), on);
             }
         }
         app
