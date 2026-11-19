@@ -106,7 +106,9 @@ fn prefs_path() -> std::path::PathBuf {
 }
 
 pub fn load_prefs(j: &mut jarvis::Jarvis) {
-    if headless() {
+    // Never the person's file from a test: tests side by side would read
+    // what another wrote (an open Jarvis panel narrows every view).
+    if headless() || cfg!(test) {
         return;
     }
     if let Ok(v) = std::fs::read_to_string(prefs_path()).map(|t| serde_json::from_str::<J>(&t).unwrap_or_default()) {
@@ -120,7 +122,7 @@ pub fn load_prefs(j: &mut jarvis::Jarvis) {
 }
 
 fn save_prefs(j: &jarvis::Jarvis) {
-    if headless() {
+    if headless() || cfg!(test) {
         return;
     }
     let p = prefs_path();

@@ -976,6 +976,7 @@ impl App {
         let mut changed = false;
         if self.theme_seen != theme::generation() {
             self.theme_seen = theme::generation();
+            crate::screen::invalidate_renders();
             self.push_data();
             changed = true;
         }
@@ -1360,7 +1361,7 @@ impl App {
                 if key == format!("pane-{n}-more") || (open && key == format!("pane-{n}-more-list")) {
                     return true;
                 }
-                if open && self.pane_moves(i).iter().any(|m| m.key == key) {
+                if open && (self.pane_moves(i).iter().any(|m| m.key == key) || (key == format!("pane-{n}-redraw") && p.term.is_some())) {
                     return true;
                 }
             }
@@ -2426,18 +2427,86 @@ fn panes_view(s: &App) -> El {
     col().key("panes").grow(1.0).h_full().min_w(0.0).min_h(0.0).gap(0.0).child(pager::view(s)).child(area)
 }
 
-/// The pane the current page's tab is joined to: the one at the pane
-/// area's top-left corner, while that tab starts at the area's left edge
-/// (not after the leads view's mark or the hidden tabs' menu). Its top-left
-/// corner is drawn square so tab and pane make one shape.
+/// The current page's tab and the pane under it make one shape (pager.rs,
+/// `tab`): the tab's outline is this wide, the same as a pane's top line,
+/// so its sides run on into that line with no step.
+pub const JOIN_W: f32 = 2.0;
+
+impl App {
+    /// The pane under the current page's tab's left side: on the current
+    /// page, at the pane area's top, its x range holding the tab's left
+    /// edge. The tab takes its look (group colour, bar tint) so the two meet
+    /// in one colour. Laid-out rects (the frame before; a layout report runs
+    /// the view again, so it settles on the next frame).
+    pub fn foot_pane(&self) -> Option<usize> {
+        let area = self.rects.area?;
+        let tab = self.rects.tabs.get(&self.pages.current)?;
+        let on_page = self.pages.cur().tile.order();
+        let x = tab[0] + JOIN_W / 2.0;
+        let uid = on_page.into_iter().find(|u| self.rects.panes.get(u).is_some_and(|r| (r[1] - area[1]).abs() < 1.0 && r[0] - 0.5 <= x && x < r[0] + r[2]))?;
+        self.panes.iter().position(|p| p.uid == uid)
+    }
+
+    /// The colour a pane's top line (and the current tab's outline over
+    /// it) takes: its sandbox's group colour, else the neutral hairline.
+    pub fn pane_line(&self, i: usize) -> u32 {
+        self.pane_group(i).unwrap_or_else(|| theme::color_value("border").unwrap())
+    }
+
+    /// Pane `i`'s sandbox's group colour, if it is in a group.
+    pub fn pane_group(&self, i: usize) -> Option<u32> {
+        self.panes.get(i).and_then(|p| p.sandbox.as_deref()).and_then(|n| self.group_colors().get(n).copied())
+    }
+}
+
+impl App {
+    /// "Redraw terminal" (the pane's "⋯" menu, the palette): the program in
+    /// pane `i`'s terminal draws its whole screen again (TerminalState::redraw:
+    /// one column narrower, then the size back). For a screen left in pieces
+    /// by a reconnect's replay that the automatic nudge did not mend (another
+    /// window owned the size then).
+    pub fn redraw_terminal(&mut self, i: usize) {
+        if let Some(t) = self.panes.get_mut(i).and_then(|p| p.term.as_mut()) {
+            t.redraw();
+        }
+    }
+}
+
+/// The pane whose top-left corner is drawn square: the one under the
+/// current tab's left side when that side is the pane's own left edge (the
+/// first tab, not after the leads view's mark or the hidden tabs' menu), so
+/// the tab's left side and the pane's are one straight line.
 fn joined_pane(s: &App) -> Option<Uid> {
+    let tab = s.rects.tabs.get(&s.pages.current)?;
+    let i = s.foot_pane()?;
+    let uid = s.panes.get(i)?.uid;
+    let r = s.rects.panes.get(&uid)?;
+    ((tab[0] - r[0]).abs() <= 0.5).then_some(uid)
+}
+
+/// Where the current page's tab stands on pane `uid`'s top edge, in the
+/// pane's own x: the run between the tab's two sides, where the pane's top
+/// line opens into the tab (no line under the tab: the tab's fill runs on
+/// into the bar). None when the tab is not over this pane.
+fn tab_foot(s: &App, uid: Uid) -> Option<(f32, f32)> {
     let area = s.rects.area?;
     let tab = s.rects.tabs.get(&s.pages.current)?;
-    if (tab[0] - area[0]).abs() > 1.0 {
+    let p = s.rects.panes.get(&uid)?;
+    if (p[1] - area[1]).abs() > 1.0 || !s.pages.cur().tile.order().contains(&uid) {
         return None;
     }
-    let on_page = s.pages.cur().tile.order();
-    s.rects.panes.iter().find(|(u, r)| on_page.contains(u) && (r[0] - area[0]).abs() < 1.0 && (r[1] - area[1]).abs() < 1.0).map(|(u, _)| *u)
+    let x0 = (tab[0] + JOIN_W).max(p[0]) - p[0];
+    let x1 = (tab[0] + tab[2] - JOIN_W).min(p[0] + p[2]) - p[0];
+    (x1 > x0 + 0.5).then_some((x0, x1))
+}
+
+/// A pane's top line, `JOIN_W` high in its line colour; under the current
+/// page's tab (`foot`, in the pane's x) it opens: the bar's own ground
+/// there, so the tab's fill runs on into the bar and the tab's sides turn
+/// into the line at a square foot.
+fn top_line(key: String, line: rune::Color, ground: rune::Color, foot: Option<(f32, f32)>) -> El {
+    let Some((x0, x1)) = foot else { return el().key(key).h(JOIN_W).w_full().fill(line) };
+    row().key(key.clone()).h(JOIN_W).w_full().child(el().w(x0).h_full().fill(line)).child(el().key(format!("{key}-foot")).w(x1 - x0).h_full().fill(ground)).child(el().grow(1.0).h_full().fill(line))
 }
 
 /// A split's element key: `panes` for the page's first split, then the
@@ -2505,6 +2574,9 @@ impl App {
         self.theme_choice = t;
         self.store.set("theme", J::String(t.name().into()));
         theme::set_mode(t);
+        // Every drawn screen renders again: the skip on unchanged reads
+        // would otherwise keep a screen in the old palette.
+        crate::screen::invalidate_renders();
         self.theme_seen = theme::generation();
         for p in &mut self.panes {
             if let Some(term) = &mut p.term {
@@ -2659,7 +2731,7 @@ impl App {
             .iter()
             .map(|m| screen::MenuRow { key: m.key.clone(), label: &m.label, icon: Some(m.icon), tone: None, help: Some(m.help.as_str()), keys: &[], count: None, chosen: false, disabled: m.op.is_none() })
             .collect();
-        let w = screen::menu_width(&rows).max(screen::menu_width(&move_rows));
+        let w = screen::menu_width(&rows).max(screen::menu_width(&move_rows)).max(screen::menu_width(&[redraw_row(n)]));
         let surface = screen::menu_surface(format!("pane-{n}-more-list"), format!("pane-{n}-more"), rune::Align::End, w);
         // Extras and moves can be more than a small window's height: the list scrolls.
         let top = self.panes.get(i).and_then(|p| self.rects.panes.get(&p.uid)).map_or(120.0, |r| r[1]);
@@ -2678,6 +2750,15 @@ impl App {
             });
         }
         if !rows.is_empty() {
+            list = list.child(screen::menu_divider());
+        }
+        if self.panes.get(i).is_some_and(|p| p.term.is_some()) {
+            list = list.child(
+                screen::menu_row(&redraw_row(n)).on_press(move |s: &mut App| {
+                    s.bar_menu = None;
+                    s.redraw_terminal(i);
+                }),
+            );
             list = list.child(screen::menu_divider());
         }
         for (m, r) in moves.iter().zip(&move_rows) {
@@ -2956,13 +3037,15 @@ fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
     if let Some(ic) = it.icon.as_deref().and_then(crate::icons::get) {
         b = b.child(rune::icon(ic, bar::CHIP_ICON).color(theme::hex(icon_fg)));
     }
-    let label = it.text();
+    let label = it.chip_text();
     if !label.is_empty() {
         b = b.child(text(label).font(small(bar::CHIP_TEXT, 500.0)).color(theme::hex(fg)));
     }
     if let Some((name, args)) = it.intent.clone() {
         let hover = if quiet { theme::hex(theme::over(meaning_fg, 0.12, quiet_tint)) } else { c("active-bg") };
-        b = b.role("button").label(if it.text().is_empty() { it.help.clone() } else { it.text() }).expanded(active).hover(hover).focusable(true).focus_ring(2.0, 1.0, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+        // A chip with words is named by them; a bare icon or number by its tooltip.
+        let named = if it.chip_text() == it.text() && !it.text().is_empty() { it.text() } else { it.help.clone() };
+        b = b.role("button").label(named).expanded(active).hover(hover).focusable(true).focus_ring(2.0, 1.0, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
             s.press_extra("pane", &name, &args);
             s.push_data();
         });
@@ -3029,6 +3112,21 @@ fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
         b = b.child(el().w(bar::MORE_DOT).h(bar::MORE_DOT).radius(bar::MORE_DOT / 2.0).fill(theme::hex(crate::screen::tone(t).0)));
     }
     b
+}
+
+/// The "⋯" menu's "Redraw terminal" row (key `pane-<n>-redraw`).
+fn redraw_row(n: usize) -> screen::MenuRow<'static> {
+    screen::MenuRow {
+        key: format!("pane-{n}-redraw"),
+        label: "Redraw terminal",
+        icon: Some("reload"),
+        tone: None,
+        help: Some("The program draws its whole screen again: for a screen left in pieces after a reconnect"),
+        keys: &[],
+        count: None,
+        chosen: false,
+        disabled: false,
+    }
 }
 
 /// The grip a pane is dragged by: two columns of three dots.
@@ -3196,7 +3294,7 @@ fn pane_view(s: &App, i: usize) -> El {
                 s.pane_drop(i, files)
             }
         })
-        .child(el().key(format!("pane-{}-accent", i + 1)).h(2.0).w_full().fill(accent))
+        .child(top_line(format!("pane-{}-accent", i + 1), accent, theme::hex(bar_ground), tab_foot(s, uid)))
         .child(bar)
         .child(el().h(1.0).w_full().fill(c("elevated")))
         .child(body)

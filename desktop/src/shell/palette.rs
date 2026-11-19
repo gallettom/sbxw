@@ -37,6 +37,8 @@ pub enum Run {
     Leads,
     /// The focused pane between its agent and a shell (`App::switch_mode`).
     SwitchMode,
+    /// The focused pane's program draws its screen again (`App::redraw_terminal`).
+    Redraw,
 }
 
 /// One row of the palette.
@@ -235,7 +237,7 @@ impl App {
             v.push(core("create-jobs", "Show the new sandboxes", &format!("{n} being created or just done"), "plus", vec![], Run::Intents(vec![("open_panel".into(), serde_json::json!({ "screen": feat::create::JOBS }))])));
         }
         v.push(core("sidebar", if self.sidebar_shown() { "Hide the sidebar" } else { "Show the sidebar" }, "", "columns", chord_keys("B"), Run::Sidebar));
-        v.push(core("jarvis", if self.jarvis.open { "Close Jarvis" } else { "Open Jarvis" }, "", "sparkle", if mac() { chord_keys("J") } else { vec!["F7".into()] }, Run::Jarvis));
+        v.push(core("jarvis", if self.jarvis.open { "Close Jarvis" } else { "Open Jarvis" }, "", "jarvis", if mac() { chord_keys("J") } else { vec!["F7".into()] }, Run::Jarvis));
         let shown = self.shown();
         for (k, i) in shown.clone().enumerate() {
             let what = self.panes.get(i).and_then(|p| p.sandbox.clone()).unwrap_or_else(|| "empty".into());
@@ -269,6 +271,9 @@ impl App {
         if self.leads_on() || !self.leaders().is_empty() {
             let (label, hint) = if self.leads_on() { ("Leave the team leads view", "The layout before it") } else { ("Team leads view", "Only the team leaders' terminals") };
             v.push(core("leads", label, hint, "leader", vec![], Run::Leads));
+        }
+        if self.panes.get(self.focused).is_some_and(|p| p.term.is_some()) {
+            v.push(core("redraw", "Redraw terminal", "The focused pane's program draws its whole screen again", "reload", vec![], Run::Redraw));
         }
         v.push(core("rotate", "Rotate split", "The focused pane and its neighbour: side by side or stacked", "rows", vec![], i("pane_rotate", J::Null)));
         v.push(core("equalise", "Make the panes equal", "This page's splits share their room equally", "grid", vec![], i("panes_equalise", J::Null)));
@@ -337,6 +342,10 @@ impl App {
             Run::SwitchMode => {
                 let i = self.focused;
                 self.switch_mode(i);
+            }
+            Run::Redraw => {
+                let i = self.focused;
+                self.redraw_terminal(i);
             }
         }
         self.push_data();

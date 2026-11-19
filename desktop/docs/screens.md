@@ -900,6 +900,18 @@ panel's resize handle, the status bar at the window's foot (bring-ups,
 total CPU, the sessions' cost, Help: `src/shell/statusbar.rs`) and every
 approval dialog are drawn by the core.
 
+The current page's tab and the pane under its left side are one shape: the
+tab stands on the pane's top edge, its outline (2 pt, `JOIN_W`) in that
+pane's line colour (its group's colour, else `border`) and its fill that
+pane's bar tint; the pane's top line opens under the tab and carries on
+from its sides. On the first tab the pane's top-left corner is square and
+the two left edges are one line; further right (a later tab, the leads
+view's mark or the hidden tabs' menu before it) the pane keeps its rounded
+corner and the tab's sides meet its top line at a square foot. In Grid view
+the tab takes the look of the pane under its left side; a pane of another
+group further under it keeps its own line (test
+`the_current_tab_and_its_pane_are_one_shape`).
+
 Jarvis can propose changes to these screens (the daemon writes the file in
 `~/.sbxw/desktop/screens/` once the person approves). With
 `$SBXW_DESKTOP_SCREENS` set (tests), the app reads that folder instead and

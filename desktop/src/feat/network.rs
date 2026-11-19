@@ -494,6 +494,17 @@ fn on_data(cx: &Ctx, key: &str, old: &J, new: &J) -> Vec<Action> {
     }
 }
 
+/// What a pane bar's shield and number say in full: `n` requests from sbx
+/// for `name`, `held` of them waiting on a decision.
+fn pane_help(name: &str, n: u64, held: usize) -> String {
+    let req = if n == 1 { "network request" } else { "network requests" };
+    match held {
+        0 => format!("{n} {req} sbx refused for {name}: open them"),
+        h if h as u64 >= n => format!("{n} {req} from {name} wait for your decision: open them"),
+        h => format!("{n} {req} for {name}, {h} waiting for your decision: open them"),
+    }
+}
+
 fn extras(cx: &Ctx) -> Vec<Extra> {
     let all = waiting(cx);
     let known = cx.get("approvals")["approvals"].is_array();
@@ -544,10 +555,13 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
             v.push(Extra {
                 place: Place::Pane(name.clone()),
                 id: "approvals".into(),
+                // The words stay for the overflow menu; inline the chip is
+                // the shield and the number (shell/bar.rs, `COUNT_ONLY`),
+                // the whole sentence in its tooltip.
                 label: "sbx asks".into(),
                 icon: Some("shield".into()),
                 tone: tone.into(),
-                help: format!("Answer in the Network panel: {name}'s requests"),
+                help: pane_help(&name, n, if known { mine.iter().filter(|a| holds(a)).count() } else { n as usize }),
                 count: Some(n),
                 intent: Some(("network_show".into(), json!({ "sandbox": name }))),
             });

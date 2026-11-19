@@ -940,3 +940,183 @@ fn the_plan_dialog_keeps_long_threads_inside_and_its_footer_at_the_bottom() {
         }
     }
 }
+
+/// FINISH.md item 1: the current page's tab and the pane under it are one
+/// shape, in the Tabs and the Grid view, on the first tab and a later one.
+/// The tab's foot stands on the pane's top edge (no ground between them);
+/// the pane's top line opens exactly between the tab's two sides (its fill
+/// runs on into the bar); on the first tab the tab's left edge is the
+/// pane's left edge and that pane's top-left corner is square.
+#[test]
+fn the_current_tab_and_its_pane_are_one_shape() {
+    for tabs in [true, false] {
+        for page in [0usize, 1] {
+            let mut r = Rig::new(&["a", "b", "c"], 1284.0, 816.0);
+            r.op(PageOp::Per(if tabs { 1 } else { 2 }));
+            r.op(PageOp::View(tabs));
+            r.op(PageOp::Show(page));
+            r.settle();
+            let what = format!("{} view, page {}", if tabs { "Tabs" } else { "Grid" }, page + 1);
+            let tab = r.rect(&format!("page-{}", page + 1));
+            let area = r.rt.state.rects.area.unwrap();
+            assert!((tab[1] + tab[3] - area[1]).abs() <= 0.5, "{what}: the tab's foot {tab:?} stands on the pane area's top {area:?}");
+            let s = &r.rt.state;
+            let i = s.foot_pane().unwrap_or_else(|| panic!("{what}: a pane under the tab's foot"));
+            let n = i + 1;
+            let pane = r.rect(&format!("pane-{n}"));
+            assert!((pane[1] - area[1]).abs() <= 0.5, "{what}: the pane under the foot is at the area's top");
+            let gap = r.rect(&format!("pane-{n}-accent-foot"));
+            let w = super::JOIN_W;
+            assert!((gap[0] - (tab[0] + w)).abs() <= 0.5 && (gap[0] + gap[2] - (tab[0] + tab[2] - w)).abs() <= 0.5, "{what}: the line opens between the tab's sides: {gap:?} under {tab:?}");
+            assert!((gap[1] - pane[1]).abs() <= 0.5, "{what}: the opening is the pane's top line");
+            // What is drawn just under the tab's left side, and under its middle.
+            let side = r.rt.element_at(tab[0] + w / 2.0, tab[1] + tab[3] + 0.5).map(|p| p.path().to_string()).unwrap_or_default();
+            assert!(side.contains(&format!("pane-{n}-accent")), "{what}: under the tab's left side: {side}");
+            let mid = r.rt.element_at(tab[0] + tab[2] / 2.0, tab[1] + tab[3] + 0.5).and_then(|p| p.key().map(str::to_string)).unwrap_or_default();
+            assert_eq!(mid, format!("pane-{n}-accent-foot"), "{what}: under the tab's middle");
+            if page == 0 {
+                assert!((tab[0] - pane[0]).abs() <= 0.5, "{what}: the first tab's left edge {} is its pane's {}", tab[0], pane[0]);
+                assert_eq!(super::joined_pane(s), Some(s.panes[i].uid), "{what}: the pane's top-left corner is square");
+            } else {
+                assert!(tab[0] > pane[0] + 1.0, "{what}: a later tab stands further right");
+                assert_eq!(super::joined_pane(s), None, "{what}: the pane keeps its rounded corner");
+            }
+        }
+    }
+}
+
+/// The overlays' header and filter rows at the widths a docked panel
+/// leaves them (500 and 420 pt, the Requests panel open beside): nothing
+/// out of the overlay, no two controls on top of each other (a row that
+/// does not fit wraps: fields grow, controls keep their width), and no
+/// field's placeholder wider than the field (it would run under the next
+/// control). Commits, Worktrees, Files, MCP servers, Skills, Kits.
+#[test]
+fn the_overlays_rows_wrap_and_never_overlap_when_narrow() {
+    fn nodes<'a>(n: &'a crate::luau::Node, out: &mut Vec<&'a crate::luau::Node>) {
+        out.push(n);
+        n.children.iter().for_each(|c| nodes(c, out));
+    }
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/finish-tabs.json");
+    let mut bad = vec![];
+    for (win, want) in [(1268.0, 500.0), (1188.0, 420.0)] {
+        for feat in ["commits", "worktrees", "files", "mcp", "skills", "kits"] {
+            let a = App::new(Args { fixture: Some(fixture.into()), ..Args::default() });
+            let mut rt = rune::Runtime::new(a, view, (win, 800.0), rune::Env::new(true, 1.0));
+            for _ in 0..20 {
+                rt.frame(0.016);
+            }
+            // The Requests panel docked beside, alone, as a person has it.
+            rt.update(|s, _| {
+                if s.feats.panel.as_deref() != Some("relay") {
+                    s.rail_run(super::rail::RailRun::Intent("relay_open".into(), serde_json::json!({})));
+                }
+                s.push_data();
+            });
+            for _ in 0..20 {
+                rt.frame(0.016);
+            }
+            assert_eq!(rt.state.feats.panels, ["relay"], "{feat} at {want}: the Requests panel alone is docked");
+            super::tests::tap(&mut rt, &format!("rail-{feat}"));
+            // Until the overlay has landed: its screen may load a few frames
+            // late under load, and its rect is then on its way.
+            let (mut last, mut still) = (None, 0);
+            for _ in 0..400 {
+                rt.frame(0.016);
+                let now = rt.presented(&format!("overlay-{feat}")).map(|p| p.0);
+                still = if now.is_some() && now == last { still + 1 } else { 0 };
+                last = now;
+                if still >= 10 {
+                    break;
+                }
+            }
+            let o = last.unwrap_or_else(|| panic!("{feat} at {want}: no overlay"));
+            assert!((o[2] - want).abs() <= 6.0, "{feat}: the overlay is {} wide, not {want} (the Requests panel docked beside it)", o[2]);
+            let inside = |r: [f32; 4]| r[0] >= o[0] - 0.5 && r[0] + r[2] <= o[0] + o[2] + 0.5;
+            let close = rt.presented("overlay-close").unwrap().0;
+            if !inside(close) {
+                bad.push(format!("{feat} at {want}: the header's cross {close:?} out of the overlay {o:?}"));
+            }
+            let node = rt.state.screens.iter().find(|s| s.name == feat).and_then(|s| s.last_good.clone()).unwrap_or_else(|| panic!("{feat}: not drawn"));
+            let mut all = vec![];
+            nodes(&node, &mut all);
+            // Controls only: their boxes, as drawn.
+            let mut boxes: Vec<(String, [f32; 4])> = vec![];
+            for n in &all {
+                use crate::luau::Kind;
+                if !matches!(n.kind, Kind::Button | Kind::Checkbox | Kind::Menu | Kind::Select | Kind::Input | Kind::Badge) {
+                    continue;
+                }
+                let Some(k) = crate::screen::key_of(n) else { continue };
+                let Some((r, op)) = rt.presented(&k) else { continue };
+                if op <= 0.01 || r[2] <= 0.0 || r[1] > o[1] + 200.0 {
+                    continue;
+                }
+                if !inside(r) {
+                    bad.push(format!("{feat} at {want}: {k} {r:?} out of the overlay {o:?}"));
+                }
+                if n.kind == Kind::Input {
+                    if let Some(ph) = n.placeholder.as_deref().filter(|p| !p.is_empty()) {
+                        let pw = super::bar::measure(ph, n.style.size.unwrap_or(13.0), 400.0);
+                        if pw > r[2] + 0.5 {
+                            bad.push(format!("{feat} at {want}: {k}'s placeholder ({pw:.0} pt) is wider than the field ({:.0} pt)", r[2]));
+                        }
+                    }
+                }
+                boxes.push((k, r));
+            }
+            for (i, (ka, a)) in boxes.iter().enumerate() {
+                for (kb, b) in &boxes[i + 1..] {
+                    let w = (a[0] + a[2]).min(b[0] + b[2]) - a[0].max(b[0]);
+                    let h = (a[1] + a[3]).min(b[1] + b[3]) - a[1].max(b[1]);
+                    if w > 1.0 && h > 1.0 {
+                        bad.push(format!("{feat} at {want}: {ka} {a:?} overlaps {kb} {b:?}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// "Redraw terminal": the PTY one column narrower, then its size back after
+/// the resize debounce, once, so a program that draws only what changed
+/// draws its whole screen again (FINISH.md item 3). The pane keeps its
+/// size; an empty pane has no such item.
+#[test]
+fn redraw_terminal_nudges_the_size_and_gives_it_back() {
+    let mut r = Rig::new(&["a"], 1284.0, 816.0);
+    let (uid, want) = {
+        let p = &r.rt.state.panes[0];
+        (p.uid, p.term.as_ref().unwrap().wanted_size().unwrap())
+    };
+    let (c, rows) = (want.0 as u16, want.1 as u16);
+    // From the pane's "⋯" menu, as a person does it.
+    super::tests::tap(&mut r.rt, "pane-1-more");
+    r.settle();
+    assert!(r.rt.presented("pane-1-redraw").is_some(), "in the pane's menu");
+    super::tests::tap(&mut r.rt, "pane-1-redraw");
+    // The app's poll, as the window's loop runs it (the rig draws only).
+    let mut polls = |r: &mut Rig| {
+        for _ in 0..20 {
+            r.clock += 0.03;
+            let clock = r.clock;
+            r.rt.update(|s, tx| {
+                s.poll(clock, tx);
+            });
+            r.rt.frame(0.03);
+        }
+    };
+    polls(&mut r);
+    assert_eq!(r.take()[&uid], vec![(c - 1, rows), (c, rows)], "one column narrower, then the size back, once");
+    polls(&mut r);
+    assert_eq!(r.take()[&uid], vec![], "nothing more");
+    assert_eq!(r.rt.state.panes[0].term.as_ref().unwrap().wanted_size(), Some(want));
+    assert!(r.rt.state.palette_cmds().iter().any(|c| c.id == "redraw"), "in the palette");
+    r.rt.update(|s, _| {
+        s.bar_menu = None;
+        s.panes[0].term = None;
+    });
+    r.settle();
+    assert!(!r.rt.state.palette_cmds().iter().any(|c| c.id == "redraw"), "no terminal, no redraw");
+}

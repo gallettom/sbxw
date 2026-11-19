@@ -113,6 +113,16 @@ impl Item {
         rank(&self.tone, self.count)
     }
 
+    /// The text its chip shows inline: the count alone for an extra whose
+    /// icon says what it counts ([`COUNT_ONLY`]), else [`Self::text`]. Its
+    /// tooltip says the whole thing; the overflow menu keeps the words.
+    pub fn chip_text(&self) -> String {
+        match self.count {
+            Some(n) if self.icon.is_some() && COUNT_ONLY.contains(&self.id.as_str()) => n.to_string(),
+            _ => self.text(),
+        }
+    }
+
     /// The text shown: the label with its count.
     pub fn text(&self) -> String {
         match self.count {
@@ -127,6 +137,11 @@ impl Item {
         if self.core { format!("pane-{n}-{}", self.id) } else { format!("pane-{n}-x-{}", self.id) }
     }
 }
+
+/// Extras whose chip is their icon and their number, no words (the shield
+/// and how many requests sbx made): the icon is the label, the tooltip
+/// the sentence.
+pub const COUNT_ONLY: &[&str] = &["approvals"];
 
 /// Extras that always sit in the "⋯" menu, never inline: a view setting
 /// of the pane (keyword pills), not something to act on at a glance.
@@ -158,7 +173,7 @@ pub const MORE_DOT: f32 = 6.0;
 
 /// A pane bar chip's width, as laid out (at least 24 pt square).
 pub fn chip_w(it: &Item) -> f32 {
-    let t = it.text();
+    let t = it.chip_text();
     let icon = it.icon.is_some() as u8 as f32 * CHIP_ICON;
     let gap = if it.icon.is_some() && !t.is_empty() { CHIP_GAP } else { 0.0 };
     (CHIP_PX * 2.0 + icon + gap + measure(&t, CHIP_TEXT, 500.0)).max(24.0)
@@ -525,6 +540,18 @@ mod tests {
         // The name keeps its floor even with nothing else drawn.
         let long = pane_fit(210.0, "a-very-long-sandbox-name-for-tests", Some("Claude"), many(), true);
         assert_eq!(long.name_min, NAME_MIN);
+    }
+
+    /// The pane bar's sbx chip is the shield and the number (the tooltip
+    /// says the sentence); in the overflow menu its words stay.
+    #[test]
+    fn the_sbx_chip_is_its_shield_and_its_number() {
+        let a = ex("approvals", "sbx asks", "muted", Some(24));
+        assert_eq!(a.chip_text(), "24");
+        assert_eq!(a.text(), "sbx asks 24", "the menu row keeps the words");
+        assert!(chip_w(&a) + 40.0 < CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP + measure("sbx asks 24", CHIP_TEXT, 500.0), "room back for the others");
+        let other = ex("relay", "asks you", "amber", Some(2));
+        assert_eq!(other.chip_text(), "asks you 2", "only the counts whose icon says it lose their words");
     }
 
     #[test]

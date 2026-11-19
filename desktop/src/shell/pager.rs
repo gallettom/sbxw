@@ -296,29 +296,38 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
             s.run_intent("pager", Intent::Pages(PageOp::Show(k)));
             s.push_data();
         });
-    // Its group's colour as a tint (stronger for the current page); the
-    // current one also has a 1 pt border and a 2 pt line at its foot in that
-    // colour (the focus blue when it has none) and a heavier label, so it
-    // reads without the colour too.
-    let ground = theme::tab_ground(t.group, on);
-    let line = theme::hex(t.group.unwrap_or_else(|| theme::color_value("focus").unwrap()));
+    // Its group's colour as a tint (stronger for the current page) and a
+    // heavier label, so the current one reads without the colour too.
+    let mut ground = theme::tab_ground(t.group, on);
     e = e.fill(theme::hex(ground)).hover(theme::hex(theme::over(theme::color_value("text").unwrap(), 0.08, ground)));
     if on {
-        // The current tab is joined to the page under it, as a browser tab
-        // to its page: full height down to the pane area (no gap), square at
-        // its foot, its sides and top in the group's colour, which carries on
-        // as the pane's 2 pt top line; the pane under it squares its corner
-        // (shell.rs, `joined_pane`). In Tabs view it takes the pane bar's
-        // own tint, so tab and header read as one shape.
+        // The current tab and the pane under it are one shape, as a browser
+        // tab and its page: full height down to the pane area (no gap),
+        // square at its foot, its sides and top `JOIN_W` wide in the line
+        // colour of the pane under its left side, which carries on as that
+        // pane's top line; the line opens under the tab, whose fill is that
+        // pane's bar tint, so the tab runs on into the bar (shell.rs,
+        // `top_line`). On the first tab the pane's top-left corner is square
+        // (`joined_pane`); further right the pane keeps its rounded corner
+        // and the tab's sides meet its top line at a square butt. With no
+        // pane under it yet (the first frame), its page's own colour.
         let r = theme::radius("sm").unwrap();
-        let fill = if s.pages.tabs() { theme::bar_ground(t.group, true) } else { ground };
-        e = e.h(H).corners([r, r, 0.0, 0.0]).fill(theme::hex(fill)).hover(theme::hex(theme::over(theme::color_value("text").unwrap(), 0.06, fill))).border_sides([1.0, 1.0, 0.0, 1.0], line);
+        let foot = s.foot_pane();
+        let line = foot.map(|i| s.pane_line(i)).unwrap_or_else(|| t.group.unwrap_or_else(|| theme::color_value("border").unwrap()));
+        ground = match foot {
+            Some(i) => theme::bar_ground(s.pane_group(i), i == s.focused),
+            None => theme::bar_ground(t.group, true),
+        };
+        let w = crate::shell::JOIN_W;
+        let side = if target { theme::color_value("blue").unwrap() } else { line };
+        // No hover tint: the fill must stay the bar's at the join.
+        e = e.h(H).corners([r, r, 0.0, 0.0]).fill(theme::hex(ground)).hover(theme::hex(ground)).border_sides([w, w, 0.0, w], theme::hex(side));
     } else {
         // The others stay detached and quieter, off the pane area.
         e = e.mb(4.0);
-    }
-    if target {
-        e = e.border(1.5, c("blue"));
+        if target {
+            e = e.border(1.5, c("blue"));
+        }
     }
     if let Some(tone) = t.tone {
         // A dark ring keeps the dot clear on any tint.

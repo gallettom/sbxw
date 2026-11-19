@@ -1265,3 +1265,106 @@ fn unchanged_rows_are_not_matched_again() {
     assert_eq!(t.pills.matched, matched, "no [[ on it: the pre-check stops there");
     assert_eq!(pieces(&t, 0).len(), 1);
 }
+
+// ---- Redraw: the nudge that makes a program draw its whole screen ----
+
+/// Polls with the app clock from `from` to `to` in 30 ms frames.
+fn polls(t: &mut TerminalState, from: f64, to: f64) {
+    let mut tx = Tx::default();
+    let mut c = from;
+    while c <= to {
+        t.poll_tx(None, c, &mut tx);
+        c += 0.03;
+    }
+}
+
+#[test]
+fn a_new_socket_nudges_once_when_this_client_owns_the_size() {
+    let (mut t, ev, rx) = client(40, 5);
+    let _ = resizes(&rx);
+    // The daemon: this client owns the PTY at its size; the replay follows.
+    ev.send(TermEvent::Size { cols: 40, rows: 5, owner: true }).unwrap();
+    ev.send(TermEvent::Output(b"stale diffs".to_vec())).unwrap();
+    polls(&mut t, 0.0, 0.1);
+    assert_eq!(resizes(&rx), vec![], "not before the replay had its moment");
+    polls(&mut t, 0.13, 1.0);
+    assert_eq!(resizes(&rx), vec![(39, 5), (40, 5)], "one column narrower, then the size back");
+    polls(&mut t, 1.03, 3.0);
+    assert_eq!(resizes(&rx), vec![], "once a socket");
+}
+
+#[test]
+fn no_nudge_while_another_window_owns_the_size() {
+    let (mut t, ev, rx) = client(40, 5);
+    let _ = resizes(&rx);
+    ev.send(TermEvent::Size { cols: 100, rows: 30, owner: false }).unwrap();
+    polls(&mut t, 0.0, 6.0);
+    assert_eq!(resizes(&rx), vec![], "an automatic nudge never takes the size");
+    assert!(t.sized_elsewhere());
+    // Then this client owns it again: the socket's chance has passed.
+    ev.send(TermEvent::Size { cols: 40, rows: 5, owner: true }).unwrap();
+    polls(&mut t, 6.03, 8.0);
+    assert_eq!(resizes(&rx), vec![]);
+    // The person's Redraw, while another window owns it: takes it back, once.
+    ev.send(TermEvent::Size { cols: 100, rows: 30, owner: false }).unwrap();
+    t.poll(None);
+    assert!(t.redraw());
+    assert_eq!(resizes(&rx), vec![(40, 5)]);
+}
+
+#[test]
+fn redraw_sends_two_sizes_in_order_once() {
+    let (mut t, ev, rx) = client(40, 5);
+    ev.send(TermEvent::Size { cols: 40, rows: 5, owner: true }).unwrap();
+    polls(&mut t, 0.0, 1.0);
+    let _ = resizes(&rx);
+    assert!(t.redraw());
+    polls(&mut t, 1.03, 2.0);
+    assert_eq!(resizes(&rx), vec![(39, 5), (40, 5)]);
+    assert_eq!(t.wanted_size(), Some((40, 5)), "the pane keeps its size");
+    polls(&mut t, 2.03, 4.0);
+    assert_eq!(resizes(&rx), vec![]);
+}
+
+#[test]
+fn reconnects_nudge_once_per_socket() {
+    // Three sockets in a row (a daemon restarting): one nudge each, none in between.
+    let conns: Vec<(Sender<TermEvent>, Receiver<TermInput>, TerminalConn)> = (0..3)
+        .map(|_| {
+            let (ev_tx, ev_rx) = mpsc::channel();
+            let (in_tx, in_rx) = mpsc::channel();
+            (ev_tx, in_rx, TerminalConn { events: ev_rx, input: in_tx })
+        })
+        .collect();
+    let mut evs = vec![];
+    let mut ins = vec![];
+    let mut next = vec![];
+    for (e, i, c) in conns {
+        evs.push(e);
+        ins.push(i);
+        next.push(c);
+    }
+    let first = next.remove(0);
+    let queue = std::sync::Mutex::new(next);
+    let reopen: Reconnect = Arc::new(move || {
+        let mut q = queue.lock().unwrap();
+        if q.is_empty() { Err(anyhow::anyhow!("no more")) } else { Ok(q.remove(0)) }
+    });
+    let mut t = TerminalState::with_reconnect(first, reopen);
+    let (w, h) = pane_for(40, 5);
+    t.fit(w, h);
+    let mut clock = 0.0;
+    for k in 0..3 {
+        evs[k].send(TermEvent::Size { cols: 40, rows: 5, owner: true }).unwrap();
+        polls(&mut t, clock, clock + 1.0);
+        clock += 1.03;
+        let sizes = resizes(&ins[k]);
+        assert_eq!(sizes.iter().filter(|s| **s == (39, 5)).count(), 1, "socket {k}: one nudge: {sizes:?}");
+        if k < 2 {
+            evs[k].send(TermEvent::Closed("daemon restarted".into())).unwrap();
+            t.poll(None);
+            t.settle_reconnect(Duration::from_secs(5));
+            t.poll(None);
+        }
+    }
+}
