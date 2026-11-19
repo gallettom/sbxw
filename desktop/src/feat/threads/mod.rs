@@ -185,12 +185,16 @@ fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
             if let Some(t) = q.s("tab") {
                 u["tab"] = json!(t);
             }
+            // One `Set` of the panel's state: a second one built from the
+            // state before this intent would drop the tab just chosen.
+            let fetch = match (&sb, q.s("tab")) {
+                (Some(s), Some("worktrees")) => load_worktrees(&mut u, s),
+                _ => vec![],
+            };
             let mut out = vec![set_ui(u), Action::OpenPanel("threads".into())];
+            out.extend(fetch);
             if let Some(s) = sb {
                 out.insert(0, Action::Intent { name: "select".into(), args: json!({ "sandbox": s }) });
-                if q.s("tab") == Some("worktrees") {
-                    out.extend(load_worktrees(ctx, &s));
-                }
             }
             Ok(out)
         }
@@ -246,7 +250,12 @@ fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
             .labels("Switch to a login", "Cancel")
             .into_action()])
         }
-        "worktrees_load" => Ok(load_worktrees(ctx, q.req("sandbox"))),
+        "worktrees_load" => {
+            let mut u = ui(ctx);
+            let mut out = load_worktrees(&mut u, q.req("sandbox"));
+            out.insert(0, set_ui(u));
+            Ok(out)
+        }
         "lead_start" => {
             let sb = q.req("sandbox");
             Ok(vec![Action::Call(Call::post(format!("{}/lead", sb_path(sb)), json!({}), format!("Team mode for {sb}")).then(&["leads"]).tag(&format!("lead:{sb}")))])
@@ -326,10 +335,11 @@ fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
     }
 }
 
-fn load_worktrees(ctx: &Ctx, sb: &str) -> Vec<Action> {
-    let mut u = ui(ctx);
+/// Notes in the panel's state `u` (set by the caller, once) which sandbox the
+/// worktrees are read for, and reads them.
+fn load_worktrees(u: &mut J, sb: &str) -> Vec<Action> {
     u["worktrees_for"] = json!(sb);
-    vec![set_ui(u), Action::Set { key: "worktrees".into(), value: J::Null }, Action::Fetch { key: "worktrees".into(), path: format!("{}/worktrees", sb_path(sb)) }]
+    vec![Action::Set { key: "worktrees".into(), value: J::Null }, Action::Fetch { key: "worktrees".into(), path: format!("{}/worktrees", sb_path(sb)) }]
 }
 
 /// The pane already showing that session, from 1.
