@@ -77,8 +77,12 @@ impl List {
         assert!(s.error.is_none(), "{:?}", s.error);
         List { s }
     }
+    /// A push of `d`: the core's tiers computed again from it (screen_data's
+    /// `app.tiers`), as each push does.
     fn draw(&mut self, d: &J) -> Node {
-        self.s.set_data_shown(Rc::new(d.clone()), true);
+        let mut d = d.clone();
+        d["app"]["tiers"] = crate::scope::tiers_json(&d);
+        self.s.set_data_shown(Rc::new(d), true);
         assert!(self.s.error.is_none(), "{:?}", self.s.error);
         self.s.last_good.clone().unwrap()
     }
