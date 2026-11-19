@@ -81,13 +81,15 @@ impl App {
     }
 
     /// Send the cost changes held back for 30 s: the last cent of a session
-    /// that went quiet. On the background tick.
+    /// that went quiet. On the background tick, which also shows idle a
+    /// session left waiting on background work past its bound
+    /// ([`agents::BACKGROUND_MAX_MS`]: a missed wake-up never leaves it at
+    /// work for ever).
     pub fn flush_session_costs(&self) {
         let sessions = self.sessions.clone();
-        let infos = self.agents.lock().unwrap().flush_costs(
-            |sb| SandboxName::parse(sb).map(|n| sessions.is_live(&SessionKey::agent(&n))).unwrap_or(false),
-            now_ms(),
-        );
+        let live = |sb: &str| SandboxName::parse(sb).map(|n| sessions.is_live(&SessionKey::agent(&n))).unwrap_or(false);
+        let mut infos = self.agents.lock().unwrap().expire_background(live, now_ms());
+        infos.extend(self.agents.lock().unwrap().flush_costs(live, now_ms()));
         for info in infos {
             self.send(Event::Session(info));
         }
@@ -281,7 +283,7 @@ mod tests {
             "session_crons": []}));
         let i = info();
         assert_eq!(i.state, SessionState::Working, "busy, not attention, not idle");
-        assert_eq!(i.background.map(|b| b.shells), Some(1));
+        assert_eq!(i.background.as_ref().map(|b| b.shells), Some(1));
         assert_eq!(i.activity.as_deref(), Some("Waiting for its background command"));
         let wire = serde_json::to_value(&i).unwrap();
         assert_eq!(wire["state"], "working", "a client that ignores `background` still reads it at work");

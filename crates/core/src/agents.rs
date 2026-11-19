@@ -17,6 +17,7 @@
 //! | `Notification` any other type | unchanged (a notice) |
 //! | a subagent's (`agent_id`) `PreToolUse` / `PostToolUse` | unchanged, but answers a permission prompt |
 //! | `Stop` | idle (captures the reply) |
+//! | `Stop` listing background work of its own | working, [`Background`] set, until a turn or [`BACKGROUND_MAX_MS`] |
 //! | `SessionEnd` | exited, dropped |
 
 use serde::Serialize;
@@ -139,8 +140,9 @@ pub struct SessionInfo {
     /// and will wake it (a background shell, a background agent, a one-shot
     /// scheduled wakeup): then `state` is `working` and `activity` says what
     /// it waits for. Nobody is asked anything.
+    /// Boxed: every bus event carries a `SessionInfo`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub background: Option<Background>,
+    pub background: Option<Box<Background>>,
 }
 
 /// A session's own pending background work, as its last `Stop` listed it
@@ -168,6 +170,20 @@ pub struct Background {
 /// hour is most likely a server or a watcher that will not end on its own,
 /// and the session is then as good as idle.
 pub const BACKGROUND_MAX_MS: u64 = 60 * 60 * 1000;
+
+impl Background {
+    /// What the session waits for, in words: its `activity`.
+    pub fn words(&self) -> String {
+        let one = |n: u32, what: &str, whats: &str| if n == 1 { format!("Waiting for its {what}") } else { format!("Waiting for its {n} {whats}") };
+        match (self.shells, self.agents, self.other, self.wakeups) {
+            (n, 0, 0, 0) => one(n, "background command", "background commands"),
+            (0, n, 0, 0) => one(n, "background agent", "background agents"),
+            (0, 0, n, 0) => one(n, "background task", "background tasks"),
+            (0, 0, 0, n) => one(n, "scheduled wakeup", "scheduled wakeups"),
+            _ => "Waiting for its background work".into(),
+        }
+    }
+}
 
 /// The model a session says it runs: an id, and a display name when given.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -352,6 +368,31 @@ impl<'a> HookEvent<'a> {
         self.body.get("live_procs")?.as_array()?;
         Some(self.strings("live_procs"))
     }
+    /// The session's own background work a `Stop` lists: `background_tasks`
+    /// (in flight: running or pending, and backgrounded) and the one-shot
+    /// `session_crons` (a recurring cron keeps no turn going: between its
+    /// runs the session is idle). `None` when nothing is pending, and from a
+    /// Claude Code that sends neither field.
+    pub fn background_work(&self, now: u64) -> Option<Background> {
+        let mut b = Background { since_ms: now, until_ms: now.saturating_add(BACKGROUND_MAX_MS), ..Background::default() };
+        for t in self.body.get("background_tasks").and_then(Value::as_array).into_iter().flatten() {
+            if !matches!(t.get("status").and_then(Value::as_str), None | Some("running" | "pending")) {
+                continue;
+            }
+            // Claude Code's display names, and its internal ones in case.
+            match t.get("type").and_then(Value::as_str).unwrap_or("") {
+                "shell" | "local_bash" => b.shells += 1,
+                "subagent" | "teammate" | "workflow" | "cloud session" | "local_agent" | "in_process_teammate" | "local_workflow" | "remote_agent" => b.agents += 1,
+                _ => b.other += 1,
+            }
+        }
+        for c in self.body.get("session_crons").and_then(Value::as_array).into_iter().flatten() {
+            if !c.get("recurring").and_then(Value::as_bool).unwrap_or(false) {
+                b.wakeups += 1;
+            }
+        }
+        (b.shells + b.agents + b.other + b.wakeups > 0).then_some(b)
+    }
     pub fn hook_version(&self) -> u64 {
         self.body.get("hook_version").and_then(Value::as_u64).unwrap_or(0)
     }
@@ -514,18 +555,27 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
     if event.subagent() && matches!(event.event(), "PreToolUse" | "PostToolUse") && event.tool() != "AskUserQuestion" {
         if st.state == SessionState::Attention && st.prompt.is_empty() {
             st.state = SessionState::Working;
+            // Answered while the parent's turn is over: back to waiting on
+            // its background work.
+            if let Some(b) = st.background {
+                st.activity = Some(b.words());
+            }
         }
         return false;
     }
     match event.event() {
         "SessionStart" => {
             st.state = SessionState::Idle;
+            st.background = None;
             st.started_ms = now;
             st.prompt.clear();
             st.activity = None;
             st.reply = None;
         }
         "UserPromptSubmit" => {
+            // A turn: the person's, or the one Claude Code starts itself
+            // when background work ends. Waiting on it is over either way.
+            st.background = None;
             st.state = SessionState::Working;
             st.prompt.clear();
             st.activity = None;
@@ -540,6 +590,7 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
             }
         }
         "PreToolUse" if event.tool() == "AskUserQuestion" => {
+            st.background = None;
             let steps = questions_from_ask(body);
             match steps.first() {
                 Some(first) => {
@@ -551,11 +602,13 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
             }
         }
         "PreToolUse" => {
+            st.background = None;
             st.state = SessionState::Working;
             st.prompt.clear();
             st.activity = Some(describe_tool(event.tool(), body.get("tool_input")));
         }
         "PostToolUse" => {
+            st.background = None;
             if event.tool() == "AskUserQuestion" {
                 st.prompt.clear();
             }
@@ -567,10 +620,21 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
         // without it the session reads as working (or, after a rejected
         // permission prompt, as wanting you) until the next prompt.
         "Notification" => match notice(event.str("notification_type")) {
+            // Claude Code waits for background agents and wakeups before
+            // it reminds, not for background shells: a reminder is not the
+            // end of the session's background work.
             Notice::Idle => {
-                st.state = SessionState::Idle;
                 st.prompt.clear();
-                st.activity = None;
+                match st.background {
+                    Some(b) => {
+                        st.state = SessionState::Working;
+                        st.activity = Some(b.words());
+                    }
+                    None => {
+                        st.state = SessionState::Idle;
+                        st.activity = None;
+                    }
+                }
             }
             Notice::Summons => {
                 st.state = SessionState::Attention;
@@ -585,9 +649,21 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
             Notice::Info => {}
         },
         "Stop" => {
-            st.state = SessionState::Idle;
             st.prompt.clear();
-            st.activity = None;
+            // The turn is over. With background work of its own still
+            // running (a shell, an agent, a wakeup), Claude Code wakes the
+            // session itself when it ends: at work, nobody is asked anything.
+            st.background = event.background_work(now);
+            match st.background {
+                Some(b) => {
+                    st.state = SessionState::Working;
+                    st.activity = Some(b.words());
+                }
+                None => {
+                    st.state = SessionState::Idle;
+                    st.activity = None;
+                }
+            }
             // Claude Code hands the finished turn's prose to `Stop` itself; the
             // transcript lags and is never read.
             if let Some(text) = body.get("last_assistant_message").and_then(Value::as_str) {
@@ -829,8 +905,24 @@ impl AgentBook {
     /// Sessions shown at work on background work for [`BACKGROUND_MAX_MS`]
     /// with no event since: shown idle now. Their sandboxes' payloads. For a
     /// periodic tick.
-    pub fn expire_background(&mut self, _has_pty: impl Fn(&str) -> bool, _now: u64) -> Vec<SessionInfo> {
-        Vec::new()
+    pub fn expire_background(&mut self, has_pty: impl Fn(&str) -> bool, now: u64) -> Vec<SessionInfo> {
+        let mut due = std::collections::BTreeSet::new();
+        for (k, st) in self.statuses.iter_mut() {
+            if st.background.is_some_and(|b| now >= b.until_ms) {
+                st.background = None;
+                if st.state == SessionState::Working {
+                    st.state = SessionState::Idle;
+                    st.activity = None;
+                    due.insert(k.sandbox.clone());
+                }
+            }
+        }
+        due.into_iter()
+            .flat_map(|sb| {
+                let pty = has_pty(&sb);
+                self.emit(&sb, pty, now)
+            })
+            .collect()
     }
 
     /// The model a session reports (its status line). Returns the payloads to
@@ -1074,7 +1166,7 @@ fn build(key: &AgentKey, st: &Status, answerable: bool, now: u64) -> SessionInfo
         continues: st.continues.clone(),
         ended: false,
         end_reason: None,
-        background: None,
+        background: st.background.filter(|_| st.state == SessionState::Working).map(Box::new),
     }
 }
 
