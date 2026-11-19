@@ -1,0 +1,3135 @@
+{
+  "about": "The Kanban (feat/kanban/), invented: web-app with tickets in every column (a P1 with two files, a blocked thread, a failed thread with no ticket, one in test, two waiting for the merge, three merged, one validated, a proposed plan), docs with one ticket and a merged thread. Written by sbxw-core's write_kanban_fixtures from the daemon's own board.",
+  "app": {
+    "selected": "web-app"
+  },
+  "daemon": {
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "running"
+      },
+      {
+        "agent": "claude",
+        "name": "docs",
+        "status": "running"
+      }
+    ],
+    "sessions": [
+      {
+        "answerable": true,
+        "sandbox": "web-app",
+        "session_id": "s-web-app",
+        "state": "idle",
+        "ts": 1794996000
+      },
+      {
+        "answerable": true,
+        "sandbox": "docs",
+        "session_id": "s-docs",
+        "state": "idle",
+        "ts": 1794996000
+      }
+    ],
+    "tickets_boards": {
+      "all": {
+        "bytes": 2058400,
+        "columns": [
+          {
+            "cards": [
+              {
+                "age": "1d",
+                "bytes": 1652000,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794906000000,
+                "files": 2,
+                "key": "t:web-app:1",
+                "marks": [
+                  {
+                    "help": "Priority P1",
+                    "id": "priority",
+                    "label": "P1",
+                    "tone": "red"
+                  },
+                  {
+                    "help": "2 attached, 1.6 MB",
+                    "id": "files",
+                    "label": "2 files",
+                    "tone": "neutral"
+                  }
+                ],
+                "n": 1,
+                "num": "T-1",
+                "plan": null,
+                "priority": "p1",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Export the weekly report as a PDF with the logo on the first page",
+                "title_long": "Export the weekly report as a PDF with the logo on the first page",
+                "title_short": "Export the weekly report as a PDF with the logo on the first pa…",
+                "updated_ms": 1794906000000,
+                "validated": false
+              },
+              {
+                "age": "23h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794913200000,
+                "files": 0,
+                "key": "t:web-app:3",
+                "marks": [
+                  {
+                    "help": "Priority P2",
+                    "id": "priority",
+                    "label": "P2",
+                    "tone": "amber"
+                  }
+                ],
+                "n": 3,
+                "num": "T-3",
+                "plan": null,
+                "priority": "p2",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Retry failed uploads three times before showing an error",
+                "title_long": "Retry failed uploads three times before showing an error",
+                "title_short": "Retry failed uploads three times before showing an error",
+                "updated_ms": 1794913200000,
+                "validated": false
+              },
+              {
+                "age": "23h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794913200000,
+                "files": 0,
+                "key": "t:docs:1",
+                "marks": [],
+                "n": 1,
+                "num": "T-1",
+                "plan": null,
+                "priority": "none",
+                "sandbox": "docs",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Rewrite the install page for the new installer",
+                "title_long": "Rewrite the install page for the new installer",
+                "title_short": "Rewrite the install page for the new installer",
+                "updated_ms": 1794913200000,
+                "validated": false
+              },
+              {
+                "age": "1d",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794909600000,
+                "files": 0,
+                "key": "t:web-app:2",
+                "marks": [],
+                "n": 2,
+                "num": "T-2",
+                "plan": null,
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Dark mode for the settings dialog",
+                "title_long": "Dark mode for the settings dialog",
+                "title_short": "Dark mode for the settings dialog",
+                "updated_ms": 1794909600000,
+                "validated": false
+              },
+              {
+                "age": "55m",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-11 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794942000000,
+                "files": 0,
+                "key": "t:web-app:11",
+                "marks": [
+                  {
+                    "help": "In a plan that waits for your approval (the plan dialog)",
+                    "id": "proposed",
+                    "label": "proposed",
+                    "tone": "blue"
+                  }
+                ],
+                "n": 11,
+                "num": "T-11",
+                "plan": "p-new",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "search-index",
+                "thread_state": "starting",
+                "thread_tone": "blue",
+                "title": "Index the archive by date for the search page",
+                "title_long": "Index the archive by date for the search page",
+                "title_short": "Index the archive by date for the search page",
+                "updated_ms": 1794992700000,
+                "validated": false
+              }
+            ],
+            "count": 5,
+            "empty": "No ticket planned: add one.",
+            "help": "Tickets no thread works on yet, and threads of a plan that waits for your approval",
+            "id": "planned",
+            "older": 0,
+            "title": "Planned",
+            "tone": "neutral"
+          },
+          {
+            "cards": [
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "A thread, not a ticket",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794974400000,
+                "files": 0,
+                "key": "p:p-run:api-routes",
+                "marks": [
+                  {
+                    "help": "The thread failed or could not start: its report says why",
+                    "id": "failed",
+                    "label": "failed",
+                    "tone": "red"
+                  }
+                ],
+                "n": null,
+                "num": "thread",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "thread",
+                "thread": "api-routes",
+                "thread_state": "failed",
+                "thread_tone": "red",
+                "title": "api-routes: Add the REST routes for the archive.",
+                "title_long": "api-routes: Add the REST routes for the archive.",
+                "title_short": "api-routes: Add the REST routes for the archive.",
+                "updated_ms": 1794974700000,
+                "validated": false
+              },
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-4 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794916800000,
+                "files": 0,
+                "key": "t:web-app:4",
+                "marks": [],
+                "n": 4,
+                "num": "T-4",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "otp-login",
+                "thread_state": "working",
+                "thread_tone": "blue",
+                "title": "Sign-in with a one-time code sent by email",
+                "title_long": "Sign-in with a one-time code sent by email",
+                "title_short": "Sign-in with a one-time code sent by email",
+                "updated_ms": 1794974700000,
+                "validated": false
+              },
+              {
+                "age": "5h",
+                "bytes": 406400,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-5 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794920400000,
+                "files": 2,
+                "key": "t:web-app:5",
+                "marks": [
+                  {
+                    "help": "Priority P1",
+                    "id": "priority",
+                    "label": "P1",
+                    "tone": "red"
+                  },
+                  {
+                    "help": "The thread is blocked: it asks something (its terminal, or Requests)",
+                    "id": "blocked",
+                    "label": "blocked",
+                    "tone": "amber"
+                  },
+                  {
+                    "help": "2 attached, 397 KB",
+                    "id": "files",
+                    "label": "2 files",
+                    "tone": "neutral"
+                  }
+                ],
+                "n": 5,
+                "num": "T-5",
+                "plan": "p-run",
+                "priority": "p1",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "members-page",
+                "thread_state": "blocked",
+                "thread_tone": "amber",
+                "title": "Paginate the members list (50 a page) and keep the filter in the URL",
+                "title_long": "Paginate the members list (50 a page) and keep the filter in the URL",
+                "title_short": "Paginate the members list (50 a page) and keep the filter in th…",
+                "updated_ms": 1794974700000,
+                "validated": false
+              }
+            ],
+            "count": 3,
+            "empty": "Nothing in progress.",
+            "help": "Threads starting, working or blocked",
+            "id": "progress",
+            "older": 0,
+            "title": "In progress",
+            "tone": "blue"
+          },
+          {
+            "cards": [
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-6 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "test",
+                "created_ms": 1794924000000,
+                "files": 0,
+                "key": "t:web-app:6",
+                "marks": [],
+                "n": 6,
+                "num": "T-6",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "date-picker",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Fix the date picker on narrow screens",
+                "title_long": "Fix the date picker on narrow screens",
+                "title_short": "Fix the date picker on narrow screens",
+                "updated_ms": 1794974700000,
+                "validated": false
+              }
+            ],
+            "count": 1,
+            "empty": "Nothing waits for the lead's review.",
+            "help": "Threads that reported done: the lead reviews and checks them before proposing the merge",
+            "id": "test",
+            "older": 0,
+            "title": "In test",
+            "tone": "purple"
+          },
+          {
+            "cards": [
+              {
+                "age": "3h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-7 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "ready",
+                "created_ms": 1794927600000,
+                "files": 0,
+                "key": "t:web-app:7",
+                "marks": [],
+                "n": 7,
+                "num": "T-7",
+                "plan": "p-merge",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "emails-i18n",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Translate the onboarding emails into French and German",
+                "title_long": "Translate the onboarding emails into French and German",
+                "title_short": "Translate the onboarding emails into French and German",
+                "updated_ms": 1794981900000,
+                "validated": false
+              },
+              {
+                "age": "3h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-8 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "ready",
+                "created_ms": 1794931200000,
+                "files": 0,
+                "key": "t:web-app:8",
+                "marks": [
+                  {
+                    "help": "Priority P2",
+                    "id": "priority",
+                    "label": "P2",
+                    "tone": "amber"
+                  }
+                ],
+                "n": 8,
+                "num": "T-8",
+                "plan": "p-merge",
+                "priority": "p2",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "dash-perf",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Speed up the dashboard's first load",
+                "title_long": "Speed up the dashboard's first load",
+                "title_short": "Speed up the dashboard's first load",
+                "updated_ms": 1794981900000,
+                "validated": false
+              }
+            ],
+            "count": 2,
+            "empty": "No merge waits for you.",
+            "help": "A merge is proposed and waits for your click",
+            "id": "ready",
+            "older": 0,
+            "title": "Ready to merge",
+            "tone": "amber"
+          },
+          {
+            "cards": [
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-10 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794938400000,
+                "files": 0,
+                "key": "t:web-app:10",
+                "marks": [],
+                "n": 10,
+                "num": "T-10",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "footer-build",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Show the build number in the footer",
+                "title_long": "Show the build number in the footer",
+                "title_short": "Show the build number in the footer",
+                "updated_ms": 1794945900000,
+                "validated": false
+              },
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Recorded from a thread",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794945600000,
+                "files": 0,
+                "key": "t:web-app:12",
+                "marks": [],
+                "n": null,
+                "num": "thread",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "thread",
+                "thread": "docs-links",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "docs-links: Fix the dead links in the help pages.",
+                "title_long": "docs-links: Fix the dead links in the help pages.",
+                "title_short": "docs-links: Fix the dead links in the help pages.",
+                "updated_ms": 1794945900000,
+                "validated": false
+              },
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-9 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794934800000,
+                "files": 0,
+                "key": "t:web-app:9",
+                "marks": [
+                  {
+                    "help": "You validated it on your machine",
+                    "id": "validated",
+                    "label": "✓ validated",
+                    "tone": "green"
+                  }
+                ],
+                "n": 9,
+                "num": "T-9",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "flags-cleanup",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Remove the old feature flags",
+                "title_long": "Remove the old feature flags",
+                "title_short": "Remove the old feature flags",
+                "updated_ms": 1794945900000,
+                "validated": true
+              },
+              {
+                "age": "21h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Recorded from a thread",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794916800000,
+                "files": 0,
+                "key": "t:docs:2",
+                "marks": [],
+                "n": null,
+                "num": "thread",
+                "plan": "p-docs",
+                "priority": "none",
+                "sandbox": "docs",
+                "source": "thread",
+                "thread": "docs-install",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "docs-install: Rewrite the install page.",
+                "title_long": "docs-install: Rewrite the install page.",
+                "title_short": "docs-install: Rewrite the install page.",
+                "updated_ms": 1794917100000,
+                "validated": false
+              }
+            ],
+            "count": 4,
+            "empty": "Nothing merged yet.",
+            "help": "Merged into the main checkout",
+            "id": "merged",
+            "older": 0,
+            "title": "Merged",
+            "tone": "green"
+          }
+        ],
+        "counts_line": "5 planned · 3 in progress · 1 in test · 2 ready to merge · 4 merged",
+        "limits": {
+          "description": 8000,
+          "file_bytes": 20971520,
+          "files": 20,
+          "ticket_bytes": 104857600,
+          "title": 160
+        },
+        "now": 1794996000000,
+        "scope": "all",
+        "tickets": 14
+      },
+      "all|older": {
+        "bytes": 2058400,
+        "columns": [
+          {
+            "cards": [
+              {
+                "age": "1d",
+                "bytes": 1652000,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794906000000,
+                "files": 2,
+                "key": "t:web-app:1",
+                "marks": [
+                  {
+                    "help": "Priority P1",
+                    "id": "priority",
+                    "label": "P1",
+                    "tone": "red"
+                  },
+                  {
+                    "help": "2 attached, 1.6 MB",
+                    "id": "files",
+                    "label": "2 files",
+                    "tone": "neutral"
+                  }
+                ],
+                "n": 1,
+                "num": "T-1",
+                "plan": null,
+                "priority": "p1",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Export the weekly report as a PDF with the logo on the first page",
+                "title_long": "Export the weekly report as a PDF with the logo on the first page",
+                "title_short": "Export the weekly report as a PDF with the logo on the first pa…",
+                "updated_ms": 1794906000000,
+                "validated": false
+              },
+              {
+                "age": "23h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794913200000,
+                "files": 0,
+                "key": "t:web-app:3",
+                "marks": [
+                  {
+                    "help": "Priority P2",
+                    "id": "priority",
+                    "label": "P2",
+                    "tone": "amber"
+                  }
+                ],
+                "n": 3,
+                "num": "T-3",
+                "plan": null,
+                "priority": "p2",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Retry failed uploads three times before showing an error",
+                "title_long": "Retry failed uploads three times before showing an error",
+                "title_short": "Retry failed uploads three times before showing an error",
+                "updated_ms": 1794913200000,
+                "validated": false
+              },
+              {
+                "age": "23h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794913200000,
+                "files": 0,
+                "key": "t:docs:1",
+                "marks": [],
+                "n": 1,
+                "num": "T-1",
+                "plan": null,
+                "priority": "none",
+                "sandbox": "docs",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Rewrite the install page for the new installer",
+                "title_long": "Rewrite the install page for the new installer",
+                "title_short": "Rewrite the install page for the new installer",
+                "updated_ms": 1794913200000,
+                "validated": false
+              },
+              {
+                "age": "1d",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794909600000,
+                "files": 0,
+                "key": "t:web-app:2",
+                "marks": [],
+                "n": 2,
+                "num": "T-2",
+                "plan": null,
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Dark mode for the settings dialog",
+                "title_long": "Dark mode for the settings dialog",
+                "title_short": "Dark mode for the settings dialog",
+                "updated_ms": 1794909600000,
+                "validated": false
+              },
+              {
+                "age": "55m",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-11 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794942000000,
+                "files": 0,
+                "key": "t:web-app:11",
+                "marks": [
+                  {
+                    "help": "In a plan that waits for your approval (the plan dialog)",
+                    "id": "proposed",
+                    "label": "proposed",
+                    "tone": "blue"
+                  }
+                ],
+                "n": 11,
+                "num": "T-11",
+                "plan": "p-new",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "search-index",
+                "thread_state": "starting",
+                "thread_tone": "blue",
+                "title": "Index the archive by date for the search page",
+                "title_long": "Index the archive by date for the search page",
+                "title_short": "Index the archive by date for the search page",
+                "updated_ms": 1794992700000,
+                "validated": false
+              }
+            ],
+            "count": 5,
+            "empty": "No ticket planned: add one.",
+            "help": "Tickets no thread works on yet, and threads of a plan that waits for your approval",
+            "id": "planned",
+            "older": 0,
+            "title": "Planned",
+            "tone": "neutral"
+          },
+          {
+            "cards": [
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "A thread, not a ticket",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794974400000,
+                "files": 0,
+                "key": "p:p-run:api-routes",
+                "marks": [
+                  {
+                    "help": "The thread failed or could not start: its report says why",
+                    "id": "failed",
+                    "label": "failed",
+                    "tone": "red"
+                  }
+                ],
+                "n": null,
+                "num": "thread",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "thread",
+                "thread": "api-routes",
+                "thread_state": "failed",
+                "thread_tone": "red",
+                "title": "api-routes: Add the REST routes for the archive.",
+                "title_long": "api-routes: Add the REST routes for the archive.",
+                "title_short": "api-routes: Add the REST routes for the archive.",
+                "updated_ms": 1794974700000,
+                "validated": false
+              },
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-4 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794916800000,
+                "files": 0,
+                "key": "t:web-app:4",
+                "marks": [],
+                "n": 4,
+                "num": "T-4",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "otp-login",
+                "thread_state": "working",
+                "thread_tone": "blue",
+                "title": "Sign-in with a one-time code sent by email",
+                "title_long": "Sign-in with a one-time code sent by email",
+                "title_short": "Sign-in with a one-time code sent by email",
+                "updated_ms": 1794974700000,
+                "validated": false
+              },
+              {
+                "age": "5h",
+                "bytes": 406400,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-5 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794920400000,
+                "files": 2,
+                "key": "t:web-app:5",
+                "marks": [
+                  {
+                    "help": "Priority P1",
+                    "id": "priority",
+                    "label": "P1",
+                    "tone": "red"
+                  },
+                  {
+                    "help": "The thread is blocked: it asks something (its terminal, or Requests)",
+                    "id": "blocked",
+                    "label": "blocked",
+                    "tone": "amber"
+                  },
+                  {
+                    "help": "2 attached, 397 KB",
+                    "id": "files",
+                    "label": "2 files",
+                    "tone": "neutral"
+                  }
+                ],
+                "n": 5,
+                "num": "T-5",
+                "plan": "p-run",
+                "priority": "p1",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "members-page",
+                "thread_state": "blocked",
+                "thread_tone": "amber",
+                "title": "Paginate the members list (50 a page) and keep the filter in the URL",
+                "title_long": "Paginate the members list (50 a page) and keep the filter in the URL",
+                "title_short": "Paginate the members list (50 a page) and keep the filter in th…",
+                "updated_ms": 1794974700000,
+                "validated": false
+              }
+            ],
+            "count": 3,
+            "empty": "Nothing in progress.",
+            "help": "Threads starting, working or blocked",
+            "id": "progress",
+            "older": 0,
+            "title": "In progress",
+            "tone": "blue"
+          },
+          {
+            "cards": [
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-6 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "test",
+                "created_ms": 1794924000000,
+                "files": 0,
+                "key": "t:web-app:6",
+                "marks": [],
+                "n": 6,
+                "num": "T-6",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "date-picker",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Fix the date picker on narrow screens",
+                "title_long": "Fix the date picker on narrow screens",
+                "title_short": "Fix the date picker on narrow screens",
+                "updated_ms": 1794974700000,
+                "validated": false
+              }
+            ],
+            "count": 1,
+            "empty": "Nothing waits for the lead's review.",
+            "help": "Threads that reported done: the lead reviews and checks them before proposing the merge",
+            "id": "test",
+            "older": 0,
+            "title": "In test",
+            "tone": "purple"
+          },
+          {
+            "cards": [
+              {
+                "age": "3h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-7 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "ready",
+                "created_ms": 1794927600000,
+                "files": 0,
+                "key": "t:web-app:7",
+                "marks": [],
+                "n": 7,
+                "num": "T-7",
+                "plan": "p-merge",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "emails-i18n",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Translate the onboarding emails into French and German",
+                "title_long": "Translate the onboarding emails into French and German",
+                "title_short": "Translate the onboarding emails into French and German",
+                "updated_ms": 1794981900000,
+                "validated": false
+              },
+              {
+                "age": "3h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-8 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "ready",
+                "created_ms": 1794931200000,
+                "files": 0,
+                "key": "t:web-app:8",
+                "marks": [
+                  {
+                    "help": "Priority P2",
+                    "id": "priority",
+                    "label": "P2",
+                    "tone": "amber"
+                  }
+                ],
+                "n": 8,
+                "num": "T-8",
+                "plan": "p-merge",
+                "priority": "p2",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "dash-perf",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Speed up the dashboard's first load",
+                "title_long": "Speed up the dashboard's first load",
+                "title_short": "Speed up the dashboard's first load",
+                "updated_ms": 1794981900000,
+                "validated": false
+              }
+            ],
+            "count": 2,
+            "empty": "No merge waits for you.",
+            "help": "A merge is proposed and waits for your click",
+            "id": "ready",
+            "older": 0,
+            "title": "Ready to merge",
+            "tone": "amber"
+          },
+          {
+            "cards": [
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-10 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794938400000,
+                "files": 0,
+                "key": "t:web-app:10",
+                "marks": [],
+                "n": 10,
+                "num": "T-10",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "footer-build",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Show the build number in the footer",
+                "title_long": "Show the build number in the footer",
+                "title_short": "Show the build number in the footer",
+                "updated_ms": 1794945900000,
+                "validated": false
+              },
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Recorded from a thread",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794945600000,
+                "files": 0,
+                "key": "t:web-app:12",
+                "marks": [],
+                "n": null,
+                "num": "thread",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "thread",
+                "thread": "docs-links",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "docs-links: Fix the dead links in the help pages.",
+                "title_long": "docs-links: Fix the dead links in the help pages.",
+                "title_short": "docs-links: Fix the dead links in the help pages.",
+                "updated_ms": 1794945900000,
+                "validated": false
+              },
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-9 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794934800000,
+                "files": 0,
+                "key": "t:web-app:9",
+                "marks": [
+                  {
+                    "help": "You validated it on your machine",
+                    "id": "validated",
+                    "label": "✓ validated",
+                    "tone": "green"
+                  }
+                ],
+                "n": 9,
+                "num": "T-9",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "flags-cleanup",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Remove the old feature flags",
+                "title_long": "Remove the old feature flags",
+                "title_short": "Remove the old feature flags",
+                "updated_ms": 1794945900000,
+                "validated": true
+              },
+              {
+                "age": "21h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Recorded from a thread",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794916800000,
+                "files": 0,
+                "key": "t:docs:2",
+                "marks": [],
+                "n": null,
+                "num": "thread",
+                "plan": "p-docs",
+                "priority": "none",
+                "sandbox": "docs",
+                "source": "thread",
+                "thread": "docs-install",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "docs-install: Rewrite the install page.",
+                "title_long": "docs-install: Rewrite the install page.",
+                "title_short": "docs-install: Rewrite the install page.",
+                "updated_ms": 1794917100000,
+                "validated": false
+              }
+            ],
+            "count": 4,
+            "empty": "Nothing merged yet.",
+            "help": "Merged into the main checkout",
+            "id": "merged",
+            "older": 0,
+            "title": "Merged",
+            "tone": "green"
+          }
+        ],
+        "counts_line": "5 planned · 3 in progress · 1 in test · 2 ready to merge · 4 merged",
+        "limits": {
+          "description": 8000,
+          "file_bytes": 20971520,
+          "files": 20,
+          "ticket_bytes": 104857600,
+          "title": 160
+        },
+        "now": 1794996000000,
+        "scope": "all",
+        "tickets": 14
+      },
+      "docs": {
+        "bytes": 0,
+        "columns": [
+          {
+            "cards": [
+              {
+                "age": "23h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794913200000,
+                "files": 0,
+                "key": "t:docs:1",
+                "marks": [],
+                "n": 1,
+                "num": "T-1",
+                "plan": null,
+                "priority": "none",
+                "sandbox": "docs",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Rewrite the install page for the new installer",
+                "title_long": "Rewrite the install page for the new installer",
+                "title_short": "Rewrite the install page for the new installer",
+                "updated_ms": 1794913200000,
+                "validated": false
+              }
+            ],
+            "count": 1,
+            "empty": "No ticket planned: add one.",
+            "help": "Tickets no thread works on yet, and threads of a plan that waits for your approval",
+            "id": "planned",
+            "older": 0,
+            "title": "Planned",
+            "tone": "neutral"
+          },
+          {
+            "cards": [],
+            "count": 0,
+            "empty": "Nothing in progress.",
+            "help": "Threads starting, working or blocked",
+            "id": "progress",
+            "older": 0,
+            "title": "In progress",
+            "tone": "blue"
+          },
+          {
+            "cards": [],
+            "count": 0,
+            "empty": "Nothing waits for the lead's review.",
+            "help": "Threads that reported done: the lead reviews and checks them before proposing the merge",
+            "id": "test",
+            "older": 0,
+            "title": "In test",
+            "tone": "purple"
+          },
+          {
+            "cards": [],
+            "count": 0,
+            "empty": "No merge waits for you.",
+            "help": "A merge is proposed and waits for your click",
+            "id": "ready",
+            "older": 0,
+            "title": "Ready to merge",
+            "tone": "amber"
+          },
+          {
+            "cards": [
+              {
+                "age": "21h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Recorded from a thread",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794916800000,
+                "files": 0,
+                "key": "t:docs:2",
+                "marks": [],
+                "n": null,
+                "num": "thread",
+                "plan": "p-docs",
+                "priority": "none",
+                "sandbox": "docs",
+                "source": "thread",
+                "thread": "docs-install",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "docs-install: Rewrite the install page.",
+                "title_long": "docs-install: Rewrite the install page.",
+                "title_short": "docs-install: Rewrite the install page.",
+                "updated_ms": 1794917100000,
+                "validated": false
+              }
+            ],
+            "count": 1,
+            "empty": "Nothing merged yet.",
+            "help": "Merged into the main checkout",
+            "id": "merged",
+            "older": 0,
+            "title": "Merged",
+            "tone": "green"
+          }
+        ],
+        "counts_line": "1 planned · 0 in progress · 0 in test · 0 ready to merge · 1 merged",
+        "limits": {
+          "description": 8000,
+          "file_bytes": 20971520,
+          "files": 20,
+          "ticket_bytes": 104857600,
+          "title": 160
+        },
+        "now": 1794996000000,
+        "scope": "docs",
+        "tickets": 2
+      },
+      "docs|older": {
+        "bytes": 0,
+        "columns": [
+          {
+            "cards": [
+              {
+                "age": "23h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794913200000,
+                "files": 0,
+                "key": "t:docs:1",
+                "marks": [],
+                "n": 1,
+                "num": "T-1",
+                "plan": null,
+                "priority": "none",
+                "sandbox": "docs",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Rewrite the install page for the new installer",
+                "title_long": "Rewrite the install page for the new installer",
+                "title_short": "Rewrite the install page for the new installer",
+                "updated_ms": 1794913200000,
+                "validated": false
+              }
+            ],
+            "count": 1,
+            "empty": "No ticket planned: add one.",
+            "help": "Tickets no thread works on yet, and threads of a plan that waits for your approval",
+            "id": "planned",
+            "older": 0,
+            "title": "Planned",
+            "tone": "neutral"
+          },
+          {
+            "cards": [],
+            "count": 0,
+            "empty": "Nothing in progress.",
+            "help": "Threads starting, working or blocked",
+            "id": "progress",
+            "older": 0,
+            "title": "In progress",
+            "tone": "blue"
+          },
+          {
+            "cards": [],
+            "count": 0,
+            "empty": "Nothing waits for the lead's review.",
+            "help": "Threads that reported done: the lead reviews and checks them before proposing the merge",
+            "id": "test",
+            "older": 0,
+            "title": "In test",
+            "tone": "purple"
+          },
+          {
+            "cards": [],
+            "count": 0,
+            "empty": "No merge waits for you.",
+            "help": "A merge is proposed and waits for your click",
+            "id": "ready",
+            "older": 0,
+            "title": "Ready to merge",
+            "tone": "amber"
+          },
+          {
+            "cards": [
+              {
+                "age": "21h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Recorded from a thread",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794916800000,
+                "files": 0,
+                "key": "t:docs:2",
+                "marks": [],
+                "n": null,
+                "num": "thread",
+                "plan": "p-docs",
+                "priority": "none",
+                "sandbox": "docs",
+                "source": "thread",
+                "thread": "docs-install",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "docs-install: Rewrite the install page.",
+                "title_long": "docs-install: Rewrite the install page.",
+                "title_short": "docs-install: Rewrite the install page.",
+                "updated_ms": 1794917100000,
+                "validated": false
+              }
+            ],
+            "count": 1,
+            "empty": "Nothing merged yet.",
+            "help": "Merged into the main checkout",
+            "id": "merged",
+            "older": 0,
+            "title": "Merged",
+            "tone": "green"
+          }
+        ],
+        "counts_line": "1 planned · 0 in progress · 0 in test · 0 ready to merge · 1 merged",
+        "limits": {
+          "description": 8000,
+          "file_bytes": 20971520,
+          "files": 20,
+          "ticket_bytes": 104857600,
+          "title": 160
+        },
+        "now": 1794996000000,
+        "scope": "docs",
+        "tickets": 2
+      },
+      "web-app": {
+        "bytes": 2058400,
+        "columns": [
+          {
+            "cards": [
+              {
+                "age": "1d",
+                "bytes": 1652000,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794906000000,
+                "files": 2,
+                "key": "t:web-app:1",
+                "marks": [
+                  {
+                    "help": "Priority P1",
+                    "id": "priority",
+                    "label": "P1",
+                    "tone": "red"
+                  },
+                  {
+                    "help": "2 attached, 1.6 MB",
+                    "id": "files",
+                    "label": "2 files",
+                    "tone": "neutral"
+                  }
+                ],
+                "n": 1,
+                "num": "T-1",
+                "plan": null,
+                "priority": "p1",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Export the weekly report as a PDF with the logo on the first page",
+                "title_long": "Export the weekly report as a PDF with the logo on the first page",
+                "title_short": "Export the weekly report as a PDF with the logo on the first pa…",
+                "updated_ms": 1794906000000,
+                "validated": false
+              },
+              {
+                "age": "23h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794913200000,
+                "files": 0,
+                "key": "t:web-app:3",
+                "marks": [
+                  {
+                    "help": "Priority P2",
+                    "id": "priority",
+                    "label": "P2",
+                    "tone": "amber"
+                  }
+                ],
+                "n": 3,
+                "num": "T-3",
+                "plan": null,
+                "priority": "p2",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Retry failed uploads three times before showing an error",
+                "title_long": "Retry failed uploads three times before showing an error",
+                "title_short": "Retry failed uploads three times before showing an error",
+                "updated_ms": 1794913200000,
+                "validated": false
+              },
+              {
+                "age": "1d",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794909600000,
+                "files": 0,
+                "key": "t:web-app:2",
+                "marks": [],
+                "n": 2,
+                "num": "T-2",
+                "plan": null,
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Dark mode for the settings dialog",
+                "title_long": "Dark mode for the settings dialog",
+                "title_short": "Dark mode for the settings dialog",
+                "updated_ms": 1794909600000,
+                "validated": false
+              },
+              {
+                "age": "55m",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-11 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794942000000,
+                "files": 0,
+                "key": "t:web-app:11",
+                "marks": [
+                  {
+                    "help": "In a plan that waits for your approval (the plan dialog)",
+                    "id": "proposed",
+                    "label": "proposed",
+                    "tone": "blue"
+                  }
+                ],
+                "n": 11,
+                "num": "T-11",
+                "plan": "p-new",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "search-index",
+                "thread_state": "starting",
+                "thread_tone": "blue",
+                "title": "Index the archive by date for the search page",
+                "title_long": "Index the archive by date for the search page",
+                "title_short": "Index the archive by date for the search page",
+                "updated_ms": 1794992700000,
+                "validated": false
+              }
+            ],
+            "count": 4,
+            "empty": "No ticket planned: add one.",
+            "help": "Tickets no thread works on yet, and threads of a plan that waits for your approval",
+            "id": "planned",
+            "older": 0,
+            "title": "Planned",
+            "tone": "neutral"
+          },
+          {
+            "cards": [
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "A thread, not a ticket",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794974400000,
+                "files": 0,
+                "key": "p:p-run:api-routes",
+                "marks": [
+                  {
+                    "help": "The thread failed or could not start: its report says why",
+                    "id": "failed",
+                    "label": "failed",
+                    "tone": "red"
+                  }
+                ],
+                "n": null,
+                "num": "thread",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "thread",
+                "thread": "api-routes",
+                "thread_state": "failed",
+                "thread_tone": "red",
+                "title": "api-routes: Add the REST routes for the archive.",
+                "title_long": "api-routes: Add the REST routes for the archive.",
+                "title_short": "api-routes: Add the REST routes for the archive.",
+                "updated_ms": 1794974700000,
+                "validated": false
+              },
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-4 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794916800000,
+                "files": 0,
+                "key": "t:web-app:4",
+                "marks": [],
+                "n": 4,
+                "num": "T-4",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "otp-login",
+                "thread_state": "working",
+                "thread_tone": "blue",
+                "title": "Sign-in with a one-time code sent by email",
+                "title_long": "Sign-in with a one-time code sent by email",
+                "title_short": "Sign-in with a one-time code sent by email",
+                "updated_ms": 1794974700000,
+                "validated": false
+              },
+              {
+                "age": "5h",
+                "bytes": 406400,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-5 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794920400000,
+                "files": 2,
+                "key": "t:web-app:5",
+                "marks": [
+                  {
+                    "help": "Priority P1",
+                    "id": "priority",
+                    "label": "P1",
+                    "tone": "red"
+                  },
+                  {
+                    "help": "The thread is blocked: it asks something (its terminal, or Requests)",
+                    "id": "blocked",
+                    "label": "blocked",
+                    "tone": "amber"
+                  },
+                  {
+                    "help": "2 attached, 397 KB",
+                    "id": "files",
+                    "label": "2 files",
+                    "tone": "neutral"
+                  }
+                ],
+                "n": 5,
+                "num": "T-5",
+                "plan": "p-run",
+                "priority": "p1",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "members-page",
+                "thread_state": "blocked",
+                "thread_tone": "amber",
+                "title": "Paginate the members list (50 a page) and keep the filter in the URL",
+                "title_long": "Paginate the members list (50 a page) and keep the filter in the URL",
+                "title_short": "Paginate the members list (50 a page) and keep the filter in th…",
+                "updated_ms": 1794974700000,
+                "validated": false
+              }
+            ],
+            "count": 3,
+            "empty": "Nothing in progress.",
+            "help": "Threads starting, working or blocked",
+            "id": "progress",
+            "older": 0,
+            "title": "In progress",
+            "tone": "blue"
+          },
+          {
+            "cards": [
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-6 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "test",
+                "created_ms": 1794924000000,
+                "files": 0,
+                "key": "t:web-app:6",
+                "marks": [],
+                "n": 6,
+                "num": "T-6",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "date-picker",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Fix the date picker on narrow screens",
+                "title_long": "Fix the date picker on narrow screens",
+                "title_short": "Fix the date picker on narrow screens",
+                "updated_ms": 1794974700000,
+                "validated": false
+              }
+            ],
+            "count": 1,
+            "empty": "Nothing waits for the lead's review.",
+            "help": "Threads that reported done: the lead reviews and checks them before proposing the merge",
+            "id": "test",
+            "older": 0,
+            "title": "In test",
+            "tone": "purple"
+          },
+          {
+            "cards": [
+              {
+                "age": "3h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-7 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "ready",
+                "created_ms": 1794927600000,
+                "files": 0,
+                "key": "t:web-app:7",
+                "marks": [],
+                "n": 7,
+                "num": "T-7",
+                "plan": "p-merge",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "emails-i18n",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Translate the onboarding emails into French and German",
+                "title_long": "Translate the onboarding emails into French and German",
+                "title_short": "Translate the onboarding emails into French and German",
+                "updated_ms": 1794981900000,
+                "validated": false
+              },
+              {
+                "age": "3h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-8 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "ready",
+                "created_ms": 1794931200000,
+                "files": 0,
+                "key": "t:web-app:8",
+                "marks": [
+                  {
+                    "help": "Priority P2",
+                    "id": "priority",
+                    "label": "P2",
+                    "tone": "amber"
+                  }
+                ],
+                "n": 8,
+                "num": "T-8",
+                "plan": "p-merge",
+                "priority": "p2",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "dash-perf",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Speed up the dashboard's first load",
+                "title_long": "Speed up the dashboard's first load",
+                "title_short": "Speed up the dashboard's first load",
+                "updated_ms": 1794981900000,
+                "validated": false
+              }
+            ],
+            "count": 2,
+            "empty": "No merge waits for you.",
+            "help": "A merge is proposed and waits for your click",
+            "id": "ready",
+            "older": 0,
+            "title": "Ready to merge",
+            "tone": "amber"
+          },
+          {
+            "cards": [
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-10 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794938400000,
+                "files": 0,
+                "key": "t:web-app:10",
+                "marks": [],
+                "n": 10,
+                "num": "T-10",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "footer-build",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Show the build number in the footer",
+                "title_long": "Show the build number in the footer",
+                "title_short": "Show the build number in the footer",
+                "updated_ms": 1794945900000,
+                "validated": false
+              },
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Recorded from a thread",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794945600000,
+                "files": 0,
+                "key": "t:web-app:12",
+                "marks": [],
+                "n": null,
+                "num": "thread",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "thread",
+                "thread": "docs-links",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "docs-links: Fix the dead links in the help pages.",
+                "title_long": "docs-links: Fix the dead links in the help pages.",
+                "title_short": "docs-links: Fix the dead links in the help pages.",
+                "updated_ms": 1794945900000,
+                "validated": false
+              },
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-9 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794934800000,
+                "files": 0,
+                "key": "t:web-app:9",
+                "marks": [
+                  {
+                    "help": "You validated it on your machine",
+                    "id": "validated",
+                    "label": "✓ validated",
+                    "tone": "green"
+                  }
+                ],
+                "n": 9,
+                "num": "T-9",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "flags-cleanup",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Remove the old feature flags",
+                "title_long": "Remove the old feature flags",
+                "title_short": "Remove the old feature flags",
+                "updated_ms": 1794945900000,
+                "validated": true
+              }
+            ],
+            "count": 3,
+            "empty": "Nothing merged yet.",
+            "help": "Merged into the main checkout",
+            "id": "merged",
+            "older": 0,
+            "title": "Merged",
+            "tone": "green"
+          }
+        ],
+        "counts_line": "4 planned · 3 in progress · 1 in test · 2 ready to merge · 3 merged",
+        "limits": {
+          "description": 8000,
+          "file_bytes": 20971520,
+          "files": 20,
+          "ticket_bytes": 104857600,
+          "title": 160
+        },
+        "now": 1794996000000,
+        "scope": "web-app",
+        "tickets": 12
+      },
+      "web-app|older": {
+        "bytes": 2058400,
+        "columns": [
+          {
+            "cards": [
+              {
+                "age": "1d",
+                "bytes": 1652000,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794906000000,
+                "files": 2,
+                "key": "t:web-app:1",
+                "marks": [
+                  {
+                    "help": "Priority P1",
+                    "id": "priority",
+                    "label": "P1",
+                    "tone": "red"
+                  },
+                  {
+                    "help": "2 attached, 1.6 MB",
+                    "id": "files",
+                    "label": "2 files",
+                    "tone": "neutral"
+                  }
+                ],
+                "n": 1,
+                "num": "T-1",
+                "plan": null,
+                "priority": "p1",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Export the weekly report as a PDF with the logo on the first page",
+                "title_long": "Export the weekly report as a PDF with the logo on the first page",
+                "title_short": "Export the weekly report as a PDF with the logo on the first pa…",
+                "updated_ms": 1794906000000,
+                "validated": false
+              },
+              {
+                "age": "23h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794913200000,
+                "files": 0,
+                "key": "t:web-app:3",
+                "marks": [
+                  {
+                    "help": "Priority P2",
+                    "id": "priority",
+                    "label": "P2",
+                    "tone": "amber"
+                  }
+                ],
+                "n": 3,
+                "num": "T-3",
+                "plan": null,
+                "priority": "p2",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Retry failed uploads three times before showing an error",
+                "title_long": "Retry failed uploads three times before showing an error",
+                "title_short": "Retry failed uploads three times before showing an error",
+                "updated_ms": 1794913200000,
+                "validated": false
+              },
+              {
+                "age": "1d",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": true,
+                  "reorder_why": "",
+                  "send": true,
+                  "send_why": "",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794909600000,
+                "files": 0,
+                "key": "t:web-app:2",
+                "marks": [],
+                "n": 2,
+                "num": "T-2",
+                "plan": null,
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": null,
+                "thread_state": null,
+                "thread_tone": "neutral",
+                "title": "Dark mode for the settings dialog",
+                "title_long": "Dark mode for the settings dialog",
+                "title_short": "Dark mode for the settings dialog",
+                "updated_ms": 1794909600000,
+                "validated": false
+              },
+              {
+                "age": "55m",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-11 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "planned",
+                "created_ms": 1794942000000,
+                "files": 0,
+                "key": "t:web-app:11",
+                "marks": [
+                  {
+                    "help": "In a plan that waits for your approval (the plan dialog)",
+                    "id": "proposed",
+                    "label": "proposed",
+                    "tone": "blue"
+                  }
+                ],
+                "n": 11,
+                "num": "T-11",
+                "plan": "p-new",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "search-index",
+                "thread_state": "starting",
+                "thread_tone": "blue",
+                "title": "Index the archive by date for the search page",
+                "title_long": "Index the archive by date for the search page",
+                "title_short": "Index the archive by date for the search page",
+                "updated_ms": 1794992700000,
+                "validated": false
+              }
+            ],
+            "count": 4,
+            "empty": "No ticket planned: add one.",
+            "help": "Tickets no thread works on yet, and threads of a plan that waits for your approval",
+            "id": "planned",
+            "older": 0,
+            "title": "Planned",
+            "tone": "neutral"
+          },
+          {
+            "cards": [
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "A thread, not a ticket",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794974400000,
+                "files": 0,
+                "key": "p:p-run:api-routes",
+                "marks": [
+                  {
+                    "help": "The thread failed or could not start: its report says why",
+                    "id": "failed",
+                    "label": "failed",
+                    "tone": "red"
+                  }
+                ],
+                "n": null,
+                "num": "thread",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "thread",
+                "thread": "api-routes",
+                "thread_state": "failed",
+                "thread_tone": "red",
+                "title": "api-routes: Add the REST routes for the archive.",
+                "title_long": "api-routes: Add the REST routes for the archive.",
+                "title_short": "api-routes: Add the REST routes for the archive.",
+                "updated_ms": 1794974700000,
+                "validated": false
+              },
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-4 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794916800000,
+                "files": 0,
+                "key": "t:web-app:4",
+                "marks": [],
+                "n": 4,
+                "num": "T-4",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "otp-login",
+                "thread_state": "working",
+                "thread_tone": "blue",
+                "title": "Sign-in with a one-time code sent by email",
+                "title_long": "Sign-in with a one-time code sent by email",
+                "title_short": "Sign-in with a one-time code sent by email",
+                "updated_ms": 1794974700000,
+                "validated": false
+              },
+              {
+                "age": "5h",
+                "bytes": 406400,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-5 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "progress",
+                "created_ms": 1794920400000,
+                "files": 2,
+                "key": "t:web-app:5",
+                "marks": [
+                  {
+                    "help": "Priority P1",
+                    "id": "priority",
+                    "label": "P1",
+                    "tone": "red"
+                  },
+                  {
+                    "help": "The thread is blocked: it asks something (its terminal, or Requests)",
+                    "id": "blocked",
+                    "label": "blocked",
+                    "tone": "amber"
+                  },
+                  {
+                    "help": "2 attached, 397 KB",
+                    "id": "files",
+                    "label": "2 files",
+                    "tone": "neutral"
+                  }
+                ],
+                "n": 5,
+                "num": "T-5",
+                "plan": "p-run",
+                "priority": "p1",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "members-page",
+                "thread_state": "blocked",
+                "thread_tone": "amber",
+                "title": "Paginate the members list (50 a page) and keep the filter in the URL",
+                "title_long": "Paginate the members list (50 a page) and keep the filter in the URL",
+                "title_short": "Paginate the members list (50 a page) and keep the filter in th…",
+                "updated_ms": 1794974700000,
+                "validated": false
+              }
+            ],
+            "count": 3,
+            "empty": "Nothing in progress.",
+            "help": "Threads starting, working or blocked",
+            "id": "progress",
+            "older": 0,
+            "title": "In progress",
+            "tone": "blue"
+          },
+          {
+            "cards": [
+              {
+                "age": "5h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-6 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "test",
+                "created_ms": 1794924000000,
+                "files": 0,
+                "key": "t:web-app:6",
+                "marks": [],
+                "n": 6,
+                "num": "T-6",
+                "plan": "p-run",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "date-picker",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Fix the date picker on narrow screens",
+                "title_long": "Fix the date picker on narrow screens",
+                "title_short": "Fix the date picker on narrow screens",
+                "updated_ms": 1794974700000,
+                "validated": false
+              }
+            ],
+            "count": 1,
+            "empty": "Nothing waits for the lead's review.",
+            "help": "Threads that reported done: the lead reviews and checks them before proposing the merge",
+            "id": "test",
+            "older": 0,
+            "title": "In test",
+            "tone": "purple"
+          },
+          {
+            "cards": [
+              {
+                "age": "3h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-7 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "ready",
+                "created_ms": 1794927600000,
+                "files": 0,
+                "key": "t:web-app:7",
+                "marks": [],
+                "n": 7,
+                "num": "T-7",
+                "plan": "p-merge",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "emails-i18n",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Translate the onboarding emails into French and German",
+                "title_long": "Translate the onboarding emails into French and German",
+                "title_short": "Translate the onboarding emails into French and German",
+                "updated_ms": 1794981900000,
+                "validated": false
+              },
+              {
+                "age": "3h",
+                "bytes": 0,
+                "can": {
+                  "delete": false,
+                  "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-8 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": false
+                },
+                "column": "ready",
+                "created_ms": 1794931200000,
+                "files": 0,
+                "key": "t:web-app:8",
+                "marks": [
+                  {
+                    "help": "Priority P2",
+                    "id": "priority",
+                    "label": "P2",
+                    "tone": "amber"
+                  }
+                ],
+                "n": 8,
+                "num": "T-8",
+                "plan": "p-merge",
+                "priority": "p2",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "dash-perf",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Speed up the dashboard's first load",
+                "title_long": "Speed up the dashboard's first load",
+                "title_short": "Speed up the dashboard's first load",
+                "updated_ms": 1794981900000,
+                "validated": false
+              }
+            ],
+            "count": 2,
+            "empty": "No merge waits for you.",
+            "help": "A merge is proposed and waits for your click",
+            "id": "ready",
+            "older": 0,
+            "title": "Ready to merge",
+            "tone": "amber"
+          },
+          {
+            "cards": [
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-10 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794938400000,
+                "files": 0,
+                "key": "t:web-app:10",
+                "marks": [],
+                "n": 10,
+                "num": "T-10",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "footer-build",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Show the build number in the footer",
+                "title_long": "Show the build number in the footer",
+                "title_short": "Show the build number in the footer",
+                "updated_ms": 1794945900000,
+                "validated": false
+              },
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": false,
+                  "reorder": false,
+                  "reorder_why": "This card follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Recorded from a thread",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794945600000,
+                "files": 0,
+                "key": "t:web-app:12",
+                "marks": [],
+                "n": null,
+                "num": "thread",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "thread",
+                "thread": "docs-links",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "docs-links: Fix the dead links in the help pages.",
+                "title_long": "docs-links: Fix the dead links in the help pages.",
+                "title_short": "docs-links: Fix the dead links in the help pages.",
+                "updated_ms": 1794945900000,
+                "validated": false
+              },
+              {
+                "age": "13h",
+                "bytes": 0,
+                "can": {
+                  "delete": true,
+                  "delete_why": "",
+                  "edit": true,
+                  "reorder": false,
+                  "reorder_why": "T-9 follows its thread: only tickets no thread works on move, inside Planned",
+                  "send": false,
+                  "send_why": "Already in a plan",
+                  "validate": true
+                },
+                "column": "merged",
+                "created_ms": 1794934800000,
+                "files": 0,
+                "key": "t:web-app:9",
+                "marks": [
+                  {
+                    "help": "You validated it on your machine",
+                    "id": "validated",
+                    "label": "✓ validated",
+                    "tone": "green"
+                  }
+                ],
+                "n": 9,
+                "num": "T-9",
+                "plan": "p-old",
+                "priority": "none",
+                "sandbox": "web-app",
+                "source": "person",
+                "thread": "flags-cleanup",
+                "thread_state": "done",
+                "thread_tone": "green",
+                "title": "Remove the old feature flags",
+                "title_long": "Remove the old feature flags",
+                "title_short": "Remove the old feature flags",
+                "updated_ms": 1794945900000,
+                "validated": true
+              }
+            ],
+            "count": 3,
+            "empty": "Nothing merged yet.",
+            "help": "Merged into the main checkout",
+            "id": "merged",
+            "older": 0,
+            "title": "Merged",
+            "tone": "green"
+          }
+        ],
+        "counts_line": "4 planned · 3 in progress · 1 in test · 2 ready to merge · 3 merged",
+        "limits": {
+          "description": 8000,
+          "file_bytes": 20971520,
+          "files": 20,
+          "ticket_bytes": 104857600,
+          "title": 160
+        },
+        "now": 1794996000000,
+        "scope": "web-app",
+        "tickets": 12
+      }
+    },
+    "tickets_files": {
+      "web-app/1/a-00000001": {
+        "$raw_hex": "89504e470d0a1a0a0000000d494844520000000c000000080802000000428689a6000000994944415478da0dca110244410c44c13de7e7e1e1c7e17073381c6eceb1768aebf7b187bd2c6cb0c98a2db6d961cd2efbfbf0c117830327162edc78b0f1e297e630978109261931c534338c99655eea435f1a3ae8a44517ddf4d0a6977ea90e7529a8a0921255545343995aea251d7411285022a1428d06192d7a290f7949c8209314596493439a5cf2a538c4252082484244114d0c6162893f8a99a141fc307f840000000049454e44ae426082",
+        "$type": "image/png"
+      },
+      "web-app/1/a-00000002": {
+        "$raw": "Invented reference text.\n",
+        "$type": "application/pdf"
+      },
+      "web-app/5/a-00000003": {
+        "$raw_hex": "89504e470d0a1a0a0000000d494844520000000c000000080802000000428689a6000000994944415478da0dca110244410c44c13de7e7e1e1c7e17073381c6eceb1768aebf7b187bd2c6cb0c98a2db6d961cd2efbfbf0c117830327162edc78b0f1e297e630978109261931c534338c99655eea435f1a3ae8a44517ddf4d0a6977ea90e7529a8a0921255545343995aea251d7411285022a1428d06192d7a290f7949c8209314596493439a5cf2a538c4252082484244114d0c6162893f8a99a141fc307f840000000049454e44ae426082",
+        "$type": "image/png"
+      },
+      "web-app/5/a-00000004": {
+        "$raw": "Invented reference text.\n",
+        "$type": "text/plain; charset=utf-8"
+      }
+    },
+    "tickets_views": {
+      "docs/1": {
+        "bytes": 0,
+        "card": {
+          "age": "23h",
+          "bytes": 0,
+          "can": {
+            "delete": true,
+            "delete_why": "",
+            "edit": true,
+            "reorder": true,
+            "reorder_why": "",
+            "send": true,
+            "send_why": "",
+            "validate": false
+          },
+          "column": "planned",
+          "created_ms": 1794913200000,
+          "files": 0,
+          "key": "t:docs:1",
+          "marks": [],
+          "n": 1,
+          "num": "T-1",
+          "plan": null,
+          "priority": "none",
+          "sandbox": "docs",
+          "source": "person",
+          "thread": null,
+          "thread_state": null,
+          "thread_tone": "neutral",
+          "title": "Rewrite the install page for the new installer",
+          "title_long": "Rewrite the install page for the new installer",
+          "title_short": "Rewrite the install page for the new installer",
+          "updated_ms": 1794913200000,
+          "validated": false
+        },
+        "created_ms": 1794913200000,
+        "description": "",
+        "files": [],
+        "files_label": "",
+        "history": [
+          {
+            "at": 1794913200000,
+            "text": "Created by you",
+            "tone": "neutral",
+            "when": "23h"
+          }
+        ],
+        "link": null,
+        "n": 1,
+        "num": "T-1",
+        "priority": "none",
+        "source": "person",
+        "title": "Rewrite the install page for the new installer",
+        "updated_ms": 1794913200000,
+        "validated_ms": null
+      },
+      "web-app/1": {
+        "bytes": 1652000,
+        "card": {
+          "age": "1d",
+          "bytes": 1652000,
+          "can": {
+            "delete": true,
+            "delete_why": "",
+            "edit": true,
+            "reorder": true,
+            "reorder_why": "",
+            "send": true,
+            "send_why": "",
+            "validate": false
+          },
+          "column": "planned",
+          "created_ms": 1794906000000,
+          "files": 2,
+          "key": "t:web-app:1",
+          "marks": [
+            {
+              "help": "Priority P1",
+              "id": "priority",
+              "label": "P1",
+              "tone": "red"
+            },
+            {
+              "help": "2 attached, 1.6 MB",
+              "id": "files",
+              "label": "2 files",
+              "tone": "neutral"
+            }
+          ],
+          "n": 1,
+          "num": "T-1",
+          "plan": null,
+          "priority": "p1",
+          "sandbox": "web-app",
+          "source": "person",
+          "thread": null,
+          "thread_state": null,
+          "thread_tone": "neutral",
+          "title": "Export the weekly report as a PDF with the logo on the first page",
+          "title_long": "Export the weekly report as a PDF with the logo on the first page",
+          "title_short": "Export the weekly report as a PDF with the logo on the first pa…",
+          "updated_ms": 1794906000000,
+          "validated": false
+        },
+        "created_ms": 1794906000000,
+        "description": "The report is HTML only today. People print it to PDF by hand and the logo moves.\n\n1. A PDF button beside Print.\n2. The logo on the first page only.\n3. [[Note]] A4 and Letter.",
+        "files": [
+          {
+            "added_ms": 1794906000000,
+            "bytes": 412000,
+            "icon": "image",
+            "id": "a-00000001",
+            "kind": "png",
+            "name": "report-today.png",
+            "picture": true,
+            "size": "402 KB"
+          },
+          {
+            "added_ms": 1794906000000,
+            "bytes": 1240000,
+            "icon": "file",
+            "id": "a-00000002",
+            "kind": "pdf",
+            "name": "brand-guide.pdf",
+            "picture": false,
+            "size": "1.2 MB"
+          }
+        ],
+        "files_label": "Files · 2 · 1.6 MB",
+        "history": [
+          {
+            "at": 1794906000000,
+            "text": "Created by you",
+            "tone": "neutral",
+            "when": "1d"
+          },
+          {
+            "at": 1794906000000,
+            "text": "A file attached",
+            "tone": "neutral",
+            "when": "1d"
+          }
+        ],
+        "link": null,
+        "n": 1,
+        "num": "T-1",
+        "priority": "p1",
+        "source": "person",
+        "title": "Export the weekly report as a PDF with the logo on the first page",
+        "updated_ms": 1794906000000,
+        "validated_ms": null
+      },
+      "web-app/2": {
+        "bytes": 0,
+        "card": {
+          "age": "1d",
+          "bytes": 0,
+          "can": {
+            "delete": true,
+            "delete_why": "",
+            "edit": true,
+            "reorder": true,
+            "reorder_why": "",
+            "send": true,
+            "send_why": "",
+            "validate": false
+          },
+          "column": "planned",
+          "created_ms": 1794909600000,
+          "files": 0,
+          "key": "t:web-app:2",
+          "marks": [],
+          "n": 2,
+          "num": "T-2",
+          "plan": null,
+          "priority": "none",
+          "sandbox": "web-app",
+          "source": "person",
+          "thread": null,
+          "thread_state": null,
+          "thread_tone": "neutral",
+          "title": "Dark mode for the settings dialog",
+          "title_long": "Dark mode for the settings dialog",
+          "title_short": "Dark mode for the settings dialog",
+          "updated_ms": 1794909600000,
+          "validated": false
+        },
+        "created_ms": 1794909600000,
+        "description": "The settings dialog stays light when the app is dark.",
+        "files": [],
+        "files_label": "",
+        "history": [
+          {
+            "at": 1794909600000,
+            "text": "Created by you",
+            "tone": "neutral",
+            "when": "1d"
+          }
+        ],
+        "link": null,
+        "n": 2,
+        "num": "T-2",
+        "priority": "none",
+        "source": "person",
+        "title": "Dark mode for the settings dialog",
+        "updated_ms": 1794909600000,
+        "validated_ms": null
+      },
+      "web-app/5": {
+        "bytes": 406400,
+        "card": {
+          "age": "5h",
+          "bytes": 406400,
+          "can": {
+            "delete": false,
+            "delete_why": "Its thread is at work: delete it once merged, or once its plan is refused",
+            "edit": true,
+            "reorder": false,
+            "reorder_why": "T-5 follows its thread: only tickets no thread works on move, inside Planned",
+            "send": false,
+            "send_why": "Already in a plan",
+            "validate": false
+          },
+          "column": "progress",
+          "created_ms": 1794920400000,
+          "files": 2,
+          "key": "t:web-app:5",
+          "marks": [
+            {
+              "help": "Priority P1",
+              "id": "priority",
+              "label": "P1",
+              "tone": "red"
+            },
+            {
+              "help": "The thread is blocked: it asks something (its terminal, or Requests)",
+              "id": "blocked",
+              "label": "blocked",
+              "tone": "amber"
+            },
+            {
+              "help": "2 attached, 397 KB",
+              "id": "files",
+              "label": "2 files",
+              "tone": "neutral"
+            }
+          ],
+          "n": 5,
+          "num": "T-5",
+          "plan": "p-run",
+          "priority": "p1",
+          "sandbox": "web-app",
+          "source": "person",
+          "thread": "members-page",
+          "thread_state": "blocked",
+          "thread_tone": "amber",
+          "title": "Paginate the members list (50 a page) and keep the filter in the URL",
+          "title_long": "Paginate the members list (50 a page) and keep the filter in the URL",
+          "title_short": "Paginate the members list (50 a page) and keep the filter in th…",
+          "updated_ms": 1794974700000,
+          "validated": false
+        },
+        "created_ms": 1794920400000,
+        "description": "The members list loads every row at once and takes 4 s with 3,000 members.\n\n1. 50 rows a page, with Next and Previous.\n2. The filter (name, role) stays in the URL so a link can be shared.\n3. Keep the current sort.",
+        "files": [
+          {
+            "added_ms": 1794920400000,
+            "bytes": 388000,
+            "icon": "image",
+            "id": "a-00000003",
+            "kind": "png",
+            "name": "members-slow.png",
+            "picture": true,
+            "size": "379 KB"
+          },
+          {
+            "added_ms": 1794920400000,
+            "bytes": 18400,
+            "icon": "file",
+            "id": "a-00000004",
+            "kind": "text",
+            "name": "sample-members.csv",
+            "picture": false,
+            "size": "18 KB"
+          }
+        ],
+        "files_label": "Files · 2 · 397 KB",
+        "history": [
+          {
+            "at": 1794920400000,
+            "text": "Created by you",
+            "tone": "neutral",
+            "when": "21h"
+          },
+          {
+            "at": 1794920400000,
+            "text": "A file attached",
+            "tone": "neutral",
+            "when": "21h"
+          },
+          {
+            "at": 1794974700000,
+            "text": "Taken into a plan as thread members-page",
+            "tone": "blue",
+            "when": "5h"
+          },
+          {
+            "at": 1794974700000,
+            "text": "members-page: In progress",
+            "tone": "blue",
+            "when": "5h"
+          }
+        ],
+        "link": {
+          "plan": "p-run",
+          "thread": "members-page"
+        },
+        "n": 5,
+        "num": "T-5",
+        "priority": "p1",
+        "source": "person",
+        "title": "Paginate the members list (50 a page) and keep the filter in the URL",
+        "updated_ms": 1794974700000,
+        "validated_ms": null
+      },
+      "web-app/9": {
+        "bytes": 0,
+        "card": {
+          "age": "13h",
+          "bytes": 0,
+          "can": {
+            "delete": true,
+            "delete_why": "",
+            "edit": true,
+            "reorder": false,
+            "reorder_why": "T-9 follows its thread: only tickets no thread works on move, inside Planned",
+            "send": false,
+            "send_why": "Already in a plan",
+            "validate": true
+          },
+          "column": "merged",
+          "created_ms": 1794934800000,
+          "files": 0,
+          "key": "t:web-app:9",
+          "marks": [
+            {
+              "help": "You validated it on your machine",
+              "id": "validated",
+              "label": "✓ validated",
+              "tone": "green"
+            }
+          ],
+          "n": 9,
+          "num": "T-9",
+          "plan": "p-old",
+          "priority": "none",
+          "sandbox": "web-app",
+          "source": "person",
+          "thread": "flags-cleanup",
+          "thread_state": "done",
+          "thread_tone": "green",
+          "title": "Remove the old feature flags",
+          "title_long": "Remove the old feature flags",
+          "title_short": "Remove the old feature flags",
+          "updated_ms": 1794945900000,
+          "validated": true
+        },
+        "created_ms": 1794934800000,
+        "description": "",
+        "files": [],
+        "files_label": "",
+        "history": [
+          {
+            "at": 1794934800000,
+            "text": "Created by you",
+            "tone": "neutral",
+            "when": "17h"
+          },
+          {
+            "at": 1794945900000,
+            "text": "Taken into a plan as thread flags-cleanup",
+            "tone": "blue",
+            "when": "13h"
+          },
+          {
+            "at": 1794945900000,
+            "text": "flags-cleanup: Merged",
+            "tone": "blue",
+            "when": "13h"
+          },
+          {
+            "at": 1794967200000,
+            "text": "Validated on your machine",
+            "tone": "green",
+            "when": "8h"
+          }
+        ],
+        "link": {
+          "plan": "p-old",
+          "thread": "flags-cleanup"
+        },
+        "n": 9,
+        "num": "T-9",
+        "priority": "none",
+        "source": "person",
+        "title": "Remove the old feature flags",
+        "updated_ms": 1794945900000,
+        "validated_ms": 1794967200000
+      }
+    }
+  }
+}

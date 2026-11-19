@@ -304,3 +304,231 @@ fn a_working_thread_keeps_its_ticket_and_the_lead_is_told() {
     // Merged or gone plans are not busy either.
     assert!(!busy_in(&[], &Link { plan: "p9".into(), thread: "x".into() }));
 }
+
+// ── The desktop's fixtures, made by this module's own board ───────────────
+//
+// `SBXW_WRITE_KANBAN_FIXTURES=desktop/fixtures/kanban cargo test -p sbxw-core
+// write_kanban_fixtures -- --ignored` writes basic.json and big.json there:
+// the daemon's answers as the stand-in serves them, so the desktop draws
+// exactly what the daemon sends. Invented, neutral content.
+
+const T0: u64 = 1_794_902_400_000; // 2026-11-17 08:00 UTC
+const MIN: u64 = 60_000;
+const PNG_HEX: &str = "89504e470d0a1a0a0000000d494844520000000c000000080802000000428689a6000000994944415478da0dca110244410c44c13de7e7e1e1c7e17073381c6eceb1768aebf7b187bd2c6cb0c98a2db6d961cd2efbfbf0c117830327162edc78b0f1e297e630978109261931c534338c99655eea435f1a3ae8a44517ddf4d0a6977ea90e7529a8a0921255545343995aea251d7411285022a1428d06192d7a290f7949c8209314596493439a5cf2a538c4252082484244114d0c6162893f8a99a141fc307f840000000049454e44ae426082";
+
+struct Fx {
+    books: Vec<Book>,
+    plans: Vec<Plan>,
+    now: u64,
+}
+
+impl Fx {
+    fn book(&mut self, sb: &str) -> &mut Book {
+        if !self.books.iter().any(|b| b.sandbox == sb) {
+            self.books.push(Book::new(sb));
+        }
+        self.books.iter_mut().find(|b| b.sandbox == sb).unwrap()
+    }
+    fn ticket(&mut self, sb: &str, title: &str, desc: &str, prio: Priority, at: u64) -> u32 {
+        let b = self.book(sb);
+        let n = b.create(Draft { title: Some(title.into()), description: Some(desc.into()), priority: Some(prio) }, at).unwrap().n;
+        n
+    }
+    fn file(&mut self, sb: &str, n: u32, k: u32, name: &str, kind: FileKind, bytes: u64, at: u64) {
+        let f = TicketFile { id: format!("a-{k:08x}"), file: format!("f-{k:016x}.{}", kind.ext()), name: name.into(), bytes, kind, added_ms: at };
+        self.book(sb).add_file(n, f, at).unwrap();
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn plan(&mut self, id: &str, sb: &str, state: PlanState, threads: Vec<(&str, ThreadState, Option<u32>, &str)>, merge: Option<Merge>, at: u64) {
+        let p = Plan {
+            sandbox: sb.into(),
+            created_ms: at,
+            updated_ms: at + 5 * MIN,
+            merge,
+            ..plan(id, state, threads.iter().map(|(n, s, t, g)| PlanThread { goal: g.to_string(), updated_ms: at + 5 * MIN, ..th(n, *s, *t) }).collect())
+        };
+        let busy_plans = self.plans.clone();
+        for b in self.books.iter_mut().filter(|b| b.sandbox == sb) {
+            b.follow(&p, at + 5 * MIN, &|l| busy_in(&busy_plans, l));
+            b.record_threads(&p, at + 5 * MIN);
+        }
+        self.plans.push(p);
+    }
+    fn write(&self, about: &str, sandboxes: &[&str], views: &[(&str, u32)], path: &std::path::Path) {
+        let mut boards = serde_json::Map::new();
+        let all: Vec<&Book> = self.books.iter().collect();
+        boards.insert("all".into(), serde_json::to_value(board("all", &all, &self.plans, self.now, false)).unwrap());
+        boards.insert("all|older".into(), serde_json::to_value(board("all", &all, &self.plans, self.now, true)).unwrap());
+        for sb in sandboxes {
+            let mine: Vec<&Book> = self.books.iter().filter(|b| b.sandbox == *sb).collect();
+            let plans: Vec<Plan> = self.plans.iter().filter(|p| p.sandbox == *sb).cloned().collect();
+            boards.insert(sb.to_string(), serde_json::to_value(board(sb, &mine, &plans, self.now, false)).unwrap());
+            boards.insert(format!("{sb}|older"), serde_json::to_value(board(sb, &mine, &plans, self.now, true)).unwrap());
+        }
+        let mut tv = serde_json::Map::new();
+        let mut files = serde_json::Map::new();
+        for (sb, n) in views {
+            let b = self.books.iter().find(|b| b.sandbox == *sb).unwrap();
+            let t = b.get(*n).unwrap();
+            let plans: Vec<Plan> = self.plans.iter().filter(|p| p.sandbox == *sb).cloned().collect();
+            tv.insert(format!("{sb}/{n}"), ticket_view(sb, t, &plans, None, self.now));
+            for f in &t.files {
+                let raw = if f.kind.is_picture() { json!({ "$raw_hex": PNG_HEX, "$type": "image/png" }) } else { json!({ "$raw": "Invented reference text.\n", "$type": f.kind.mime() }) };
+                files.insert(format!("{sb}/{n}/{}", f.id), raw);
+            }
+        }
+        let sbs: Vec<Value> = sandboxes.iter().map(|s| json!({ "name": s, "agent": "claude", "status": "running" })).collect();
+        let sessions: Vec<Value> = sandboxes.iter().map(|s| json!({ "sandbox": s, "session_id": format!("s-{s}"), "state": "idle", "answerable": true, "ts": self.now / 1000 })).collect();
+        let out = json!({
+            "about": about,
+            "daemon": { "sandboxes": sbs, "sessions": sessions, "tickets_boards": boards, "tickets_views": tv, "tickets_files": files },
+            "app": { "selected": sandboxes[0] },
+        });
+        std::fs::write(path, serde_json::to_string_pretty(&out).unwrap() + "\n").unwrap();
+    }
+}
+
+fn basic_fx() -> Fx {
+    let mut f = Fx { books: vec![], plans: vec![], now: T0 + 26 * 60 * MIN };
+    let t = |h: u64| T0 + h * 60 * MIN;
+    let a = f.ticket("web-app", "Export the weekly report as a PDF with the logo on the first page", "The report is HTML only today. People print it to PDF by hand and the logo moves.\n\n1. A PDF button beside Print.\n2. The logo on the first page only.\n3. [[Note]] A4 and Letter.", Priority::P1, t(1));
+    f.file("web-app", a, 1, "report-today.png", FileKind::Png, 412_000, t(1));
+    f.file("web-app", a, 2, "brand-guide.pdf", FileKind::Pdf, 1_240_000, t(1));
+    f.ticket("web-app", "Dark mode for the settings dialog", "The settings dialog stays light when the app is dark.", Priority::None, t(2));
+    f.ticket("web-app", "Retry failed uploads three times before showing an error", "", Priority::P2, t(3));
+    let b = f.ticket("web-app", "Sign-in with a one-time code sent by email", "Codes of six digits, valid ten minutes.", Priority::None, t(4));
+    let c = f.ticket("web-app", "Paginate the members list (50 a page) and keep the filter in the URL", "The members list loads every row at once and takes 4 s with 3,000 members.\n\n1. 50 rows a page, with Next and Previous.\n2. The filter (name, role) stays in the URL so a link can be shared.\n3. Keep the current sort.", Priority::P1, t(5));
+    f.file("web-app", c, 3, "members-slow.png", FileKind::Png, 388_000, t(5));
+    f.file("web-app", c, 4, "sample-members.csv", FileKind::Text, 18_400, t(5));
+    let d = f.ticket("web-app", "Fix the date picker on narrow screens", "", Priority::None, t(6));
+    let e = f.ticket("web-app", "Translate the onboarding emails into French and German", "", Priority::None, t(7));
+    let g = f.ticket("web-app", "Speed up the dashboard's first load", "", Priority::P2, t(8));
+    let h = f.ticket("web-app", "Remove the old feature flags", "", Priority::None, t(9));
+    let i = f.ticket("web-app", "Show the build number in the footer", "", Priority::None, t(10));
+    let s = f.ticket("web-app", "Index the archive by date for the search page", "", Priority::None, t(11));
+    f.ticket("docs", "Rewrite the install page for the new installer", "", Priority::None, t(3));
+    f.plan("p-old", "web-app", PlanState::Approved, vec![("flags-cleanup", ThreadState::Done, Some(h), "Remove the flags."), ("footer-build", ThreadState::Done, Some(i), "Footer."), ("docs-links", ThreadState::Done, None, "Fix the dead links in the help pages.")], merge(MergeState::Merged, &["flags-cleanup", "footer-build", "docs-links"], vec![ok("flags-cleanup", true), ok("footer-build", true), ok("docs-links", true)]), t(12));
+    f.book("web-app").validate(h, true, Column::Merged, t(18)).unwrap();
+    f.plan("p-run", "web-app", PlanState::Approved, vec![("otp-login", ThreadState::Working, Some(b), "Codes."), ("members-page", ThreadState::Blocked, Some(c), "Pages."), ("api-routes", ThreadState::Failed, None, "Add the REST routes for the archive."), ("date-picker", ThreadState::Done, Some(d), "Picker.")], None, t(20));
+    f.plan("p-merge", "web-app", PlanState::Approved, vec![("emails-i18n", ThreadState::Done, Some(e), "Emails."), ("dash-perf", ThreadState::Done, Some(g), "Dashboard.")], merge(MergeState::Proposed, &["emails-i18n", "dash-perf"], vec![]), t(22));
+    f.plan("p-new", "web-app", PlanState::Pending, vec![("search-index", ThreadState::Starting, Some(s), "Index.")], None, t(25));
+    f.plan("p-docs", "docs", PlanState::Approved, vec![("docs-install", ThreadState::Done, None, "Rewrite the install page.")], merge(MergeState::Merged, &["docs-install"], vec![ok("docs-install", true)]), t(4));
+    f
+}
+
+fn big_fx() -> Fx {
+    // 60 tickets with titles at the cap, 40 threads over 25 plans, every
+    // state, two sandboxes; Merged pages past its first 12.
+    let mut f = Fx { books: vec![], plans: vec![], now: T0 + 30 * 24 * 60 * MIN };
+    let words = ["export", "members", "report", "upload", "search", "settings", "invoice", "calendar", "billing", "profile", "archive", "dashboard"];
+    let title = |k: usize| {
+        let mut s = format!("T{k}: ");
+        let mut i = k;
+        while s.chars().count() < MAX_TITLE + 20 {
+            s.push_str(words[i % words.len()]);
+            s.push(' ');
+            i += 7;
+        }
+        s
+    };
+    let mut nums = vec![];
+    for k in 0..60usize {
+        let sb = if k % 3 == 0 { "docs" } else { "web-app" };
+        let prio = [Priority::None, Priority::P1, Priority::P2, Priority::P3][k % 4];
+        let n = f.ticket(sb, &title(k), &"A paragraph of invented words for the description. ".repeat(40), prio, T0 + k as u64 * 30 * MIN);
+        if k % 5 == 0 {
+            f.file(sb, n, 100 + k as u32, "screen.png", FileKind::Png, 300_000, T0);
+        }
+        nums.push((sb, n));
+    }
+    let states = [ThreadState::Working, ThreadState::Blocked, ThreadState::Done, ThreadState::Failed, ThreadState::Starting];
+    let mut used = 0usize;
+    let mut threads_made = 0usize;
+    for p in 0..25usize {
+        let sb = if p % 3 == 0 { "docs" } else { "web-app" };
+        let count = if p < 15 { 2 } else { 1 };
+        let mut ths = vec![];
+        let mut names = vec![];
+        for j in 0..count {
+            if threads_made >= 40 {
+                break;
+            }
+            threads_made += 1;
+            let name: &'static str = Box::leak(format!("t{p}-part-{j}").into_boxed_str());
+            let ticket = nums.iter().skip(used).find(|(s, _)| *s == sb).map(|(_, n)| *n);
+            if ticket.is_some() {
+                used += 1;
+            }
+            let ticket = if j == 1 { None } else { ticket };
+            ths.push((name, states[(p + j) % states.len()], ticket, "Invented goal: change the part it names and test it."));
+            names.push(name);
+        }
+        let (state, merge) = match p % 6 {
+            0 => (PlanState::Pending, None),
+            1 | 2 => (PlanState::Approved, None),
+            3 => {
+                for t in ths.iter_mut() {
+                    t.1 = ThreadState::Done;
+                }
+                (PlanState::Approved, merge(MergeState::Proposed, &names, vec![]))
+            }
+            _ => {
+                for t in ths.iter_mut() {
+                    t.1 = ThreadState::Done;
+                }
+                let res = names.iter().map(|n| ok(n, true)).collect();
+                (PlanState::Approved, merge(MergeState::Merged, &names, res))
+            }
+        };
+        f.plan(&format!("p-big-{p:02}"), sb, state, ths, merge, T0 + p as u64 * 24 * 60 * MIN);
+    }
+    // Merged by plans pruned since: their snapshots only.
+    let mut k = 0;
+    for b in f.books.iter_mut() {
+        for t in b.tickets.iter_mut().filter(|t| t.link.is_none() && t.source == Source::Person).rev().take(8) {
+            k += 1;
+            t.link = Some(Link { plan: format!("p-gone-{k}"), thread: format!("old-part-{k}") });
+            t.last = Some(Last { column: Column::Merged, marks: vec![], state: Some(ThreadState::Done), at: T0 + k * 60 * MIN });
+            t.updated_ms = T0 + k * 60 * MIN;
+            if k % 3 == 0 {
+                t.validated_ms = Some(T0 + k * 61 * MIN);
+            }
+        }
+    }
+    f
+}
+
+#[test]
+#[ignore]
+fn write_kanban_fixtures() {
+    let Ok(dir) = std::env::var("SBXW_WRITE_KANBAN_FIXTURES") else { return };
+    let dir = std::path::Path::new(&dir);
+    std::fs::create_dir_all(dir).unwrap();
+    basic_fx().write(
+        "The Kanban (feat/kanban/), invented: web-app with tickets in every column (a P1 with two files, a blocked thread, a failed thread with no ticket, one in test, two waiting for the merge, three merged, one validated, a proposed plan), docs with one ticket and a merged thread. Written by sbxw-core's write_kanban_fixtures from the daemon's own board.",
+        &["web-app", "docs"],
+        &[("web-app", 1), ("web-app", 5), ("web-app", 2), ("web-app", 9), ("docs", 1)],
+        &dir.join("basic.json"),
+    );
+    big_fx().write(
+        "The Kanban at real sizes, invented: 60 tickets with titles past the cap (cut to 160), descriptions of 2000 characters, 40 threads over 25 plans in every state, two sandboxes. Written by sbxw-core's write_kanban_fixtures.",
+        &["web-app", "docs"],
+        &[("web-app", 1)],
+        &dir.join("big.json"),
+    );
+}
+
+#[test]
+fn the_fixtures_boards_hold_every_column() {
+    let f = basic_fx();
+    let all: Vec<&Book> = f.books.iter().collect();
+    let b = board("all", &all, &f.plans, f.now, false);
+    assert!(b.columns.iter().all(|c| c.count > 0), "{:?}", b.columns.iter().map(|c| c.count).collect::<Vec<_>>());
+    let f = big_fx();
+    let all: Vec<&Book> = f.books.iter().collect();
+    let b = board("all", &all, &f.plans, f.now, false);
+    assert_eq!(f.books.iter().flat_map(|b| &b.tickets).filter(|t| t.source == Source::Person).count(), 60);
+    assert!(b.columns.iter().all(|c| c.count > 0));
+    assert_eq!(f.plans.len(), 25);
+    assert_eq!(f.plans.iter().map(|p| p.threads.len()).sum::<usize>(), 40);
+}
