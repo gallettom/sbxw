@@ -491,6 +491,7 @@ A picker showing the current choice. Same list as `menu`.
 | `arg` | any value | Passed too |
 | `disabled` | bool | |
 | `scope` | `"sandbox"` or a table | A scope picker, drawn by the core (below) |
+| `switch` | bool | With exactly two items: a two-position switch drawn by the core (`src/switch.rs`): one track, both labels, a thumb that slides under the chosen one (the top bar's GUI \| TUI). A press on a label picks it, Space or Enter flips, Left and Right move, the thumb drags; `on` gets the picked id. Any other number of items: the plain select |
 
 ```lua
 select{ id = "layout", value = "2c", on = "layout",

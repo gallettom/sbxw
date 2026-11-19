@@ -117,17 +117,14 @@ local function modes(app, compact)
   local gui = app.base ~= nil and app.base ~= false
   local lead = app.leads or {}
   local on = lead.on == true
-  local keys = app.platform == "macos" and { "⌃", "⌥", "I" } or { "Alt", "I" }
-  local seg = function(id, label, ic, lit, help)
-    return button{ (not compact) and label or nil, icon = ic, key = "top-view-" .. id, on = "view", arg = id,
-      variant = lit and "neutral" or "ghost", color = lit and "text-bright" or "text-muted", fill = lit and "bg" or nil,
-      help = help, keys = keys }
-  end
+  local keys = app.platform == "macos" and "⌃⌥I" or "Alt+I"
+  -- One switch (switch.rs): a track with both labels, a thumb that slides
+  -- under the chosen one; a press anywhere flips it.
   return row{ key = "top-modes", gap = 8,
-    row{ key = "top-view", gap = 2, radius = "sm", fill = "surface-alt",
-      seg("gui", "GUI", "inbox", gui, "GUI: Sessions, every session's conversation in one view"),
-      seg("tui", "TUI", "terminal", not gui, "TUI: the terminals") },
-    button{ (not compact) and (on and "Lead Mode On" or "Lead Mode Off") or nil, icon = "leader", key = "top-lead", on = "lead",
+    select{ id = "top-view", switch = true, value = gui and "gui" or "tui", on = "view",
+      items = { { id = "gui", label = (not compact) and "GUI" or "", icon = "inbox" }, { id = "tui", label = (not compact) and "TUI" or "", icon = "terminal" } },
+      help = (gui and "GUI: Sessions, every session's conversation in one view" or "TUI: the terminals") .. ". Press, or " .. keys .. ", for the other" },
+    button{ (not compact) and (on and "Lead Mode On" or "Lead Mode Off") or nil, icon = "leader", key = "top-lead", on = "lead", radius = "pill",
       tone = "purple", variant = on and "neutral" or "ghost", color = on and "purple" or "text-muted", fill = on and "purple-tint" or nil,
       disabled = (not on) and lead.can ~= true,
       help = on and "Lead Mode On: only the team leaders (their terminals, their sessions and threads). Press for everything again"
@@ -190,7 +187,8 @@ return {
 
   actions = {
     -- GUI or TUI: TUI in TUI does nothing (the shortcut toggles).
-    view = function(_, id)
+    view = function(_, a, v)
+      local id = v or a
       local app = (last or {}).app or {}
       local gui = app.base ~= nil and app.base ~= false
       -- GUI also brings Sessions back from under a view drawn over it.

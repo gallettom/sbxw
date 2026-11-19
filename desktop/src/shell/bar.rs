@@ -347,14 +347,17 @@ pub fn state_w(word: &str) -> f32 {
 }
 
 /// The modes at the top bar's left (topbar.luau `modes`): the GUI | TUI
-/// switch (two buttons on one track, 2 apart), 8, then the Lead
+/// switch (switch.rs: one track, two equal slots), 8, then the Lead
 /// Mode button. Compact (a narrow window): icons alone, their words in the
 /// tooltips.
 pub fn modes_w(compact: bool, lead_on: bool) -> f32 {
     let (gui, tui, lead) = if compact { ("", "", "") } else { ("GUI", "TUI", if lead_on { LEAD_ON } else { LEAD_OFF }) };
-    // Their icons are the medium size (14), where `button_w` counts 16.
+    // The switch (switch.rs): two equal slots on one track.
+    let items = [crate::luau::Item::plain("gui", gui, Some("inbox")), crate::luau::Item::plain("tui", tui, Some("terminal"))];
+    let switch = crate::switch::width(&items.iter().collect::<Vec<_>>());
+    // Lead Mode's icon is the medium size (14), where `button_w` counts 16.
     let b = |l: &str| if l.is_empty() { button_w(l, true) } else { button_w(l, true) - 2.0 };
-    b(gui) + 2.0 + b(tui) + 8.0 + b(lead)
+    switch + 8.0 + b(lead)
 }
 
 /// Lead Mode's words (topbar.luau draws the same).

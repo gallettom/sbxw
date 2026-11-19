@@ -1179,7 +1179,7 @@ pub const INPUT_MIN: f32 = 160.0;
 /// A field (an input or a select) whose screen set no width of its own.
 /// A scope picker is not a field: it is as wide as its sandbox's name.
 fn free_input(n: &Node) -> bool {
-    matches!(n.kind, Kind::Input | Kind::Select) && n.style.w.is_none() && n.style.grow.is_none() && n.style.min_w.is_none() && crate::scope::spec(&n.scope).is_none()
+    matches!(n.kind, Kind::Input | Kind::Select) && n.style.w.is_none() && n.style.grow.is_none() && n.style.min_w.is_none() && crate::scope::spec(&n.scope).is_none() && !crate::switch::is_switch(n)
 }
 
 /// A row holding a control (a button, a checkbox, a field, a menu) whose
@@ -1468,6 +1468,12 @@ impl Build<'_> {
                 }
             }
             Kind::Select if crate::scope::spec(&n.scope).is_some() => self.scope::<S>(n, key.clone()),
+            Kind::Select if crate::switch::is_switch(n) => {
+                // A two-position switch (switch.rs): its action gets the other item's id.
+                let (name, on, arg) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone());
+                let k = key.clone().unwrap_or_else(|| n.id.clone().unwrap_or_default());
+                crate::switch::view::<S>(n, k, Rc::new(move |s: &mut S, v: &str| fire(s, &name, &on, &arg, &J::String(v.to_string()))))
+            }
             Kind::Menu | Kind::Select => self.menu::<S>(n, key.clone()),
             Kind::Checkbox => {
                 let on = n.value.as_bool().unwrap_or(false);
