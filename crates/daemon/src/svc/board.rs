@@ -45,12 +45,19 @@ impl App {
     /// Run `f` on `sandbox`'s board, then persist and broadcast. Every change
     /// comes through here.
     pub(crate) fn with_board<T>(&self, sandbox: &str, plan: Option<&str>, f: impl FnOnce(&mut Board) -> T) -> T {
-        let (out, bytes) = {
+        // The plan the entries of this call are written under: the caller's,
+        // else the sandbox's shared plan at work (the lead names none).
+        let call_plan = plan.map(str::to_string).or_else(|| self.plans.lock().unwrap().team_plan(sandbox).map(|p| p.id.clone()));
+        let (out, bytes, grew) = {
             let mut boards = self.boards.lock().unwrap();
             let board = boards.entry(sandbox.to_string()).or_insert_with(|| self.load_board(sandbox));
             board.set_plan(plan);
+            board.set_call_plan(call_plan.as_deref());
+            let last = board.entries.last().map(|e| e.id);
             let out = f(board);
-            (out, serde_json::to_vec_pretty(&*board))
+            board.set_call_plan(None);
+            let grew = board.entries.last().map(|e| e.id) != last;
+            (out, serde_json::to_vec_pretty(&*board), grew)
         };
         let path = self.board_path(sandbox);
         if let Err(e) = bytes.map_err(anyhow::Error::from).and_then(|b| write_atomic(&path, &b)) {
@@ -59,7 +66,18 @@ impl App {
         if let Ok(r) = SandboxRef::parse(sandbox) {
             self.send(Event::Board(r));
         }
+        if let (true, Some(p)) = (grew, &call_plan) {
+            self.team_changed(p);
+        }
         out
+    }
+
+    /// The board's entries as they are, without making a board.
+    pub(crate) fn with_board_read(&self, sandbox: &str) -> Option<Vec<Entry>> {
+        if let Some(entries) = self.boards.lock().unwrap().get(sandbox).map(|b| b.entries.clone()) {
+            return Some(entries);
+        }
+        self.board_path(sandbox).exists().then(|| self.load_board(sandbox).entries)
     }
 
     /// Whether `sandbox` has a board at all, without making one.

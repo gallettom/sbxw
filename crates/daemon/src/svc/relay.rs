@@ -22,6 +22,7 @@ pub fn wait_bound(requested: Option<u64>) -> Duration {
 impl App {
     fn relay_changed(&self, req: RelayRequest) -> RelayRequest {
         self.send(Event::Relay(req.clone()));
+        self.relay_noted(&req);
         req
     }
 

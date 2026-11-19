@@ -29,6 +29,7 @@ impl App {
     fn plan_changed(&self, plan: Plan) -> Plan {
         self.persist_plans(&plan.sandbox);
         self.send(Event::Plan(plan.clone()));
+        self.team_changed(&plan.id);
         plan
     }
 
@@ -48,6 +49,7 @@ impl App {
         if let Err(e) = res {
             tracing::warn!("plans: could not save {}: {e:#}", path.display());
         }
+        self.persist_team_logs(sandbox);
     }
 
     pub fn plans_list(&self) -> Vec<Plan> {

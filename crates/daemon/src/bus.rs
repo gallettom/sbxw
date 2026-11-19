@@ -35,6 +35,9 @@ pub enum Event {
     LeadEnd(SandboxRef),
     /// A sandbox's Team-mode board changed.
     Board(SandboxRef),
+    /// A team's timeline grew (its plan's id): re-read
+    /// `/api/teams/:id/timeline`. Sent only while a UI listens.
+    Team(String),
     /// The virtual Mac's lease or state changed: re-read `/api/mac`.
     Mac,
     /// The voice models or their download moved: `/api/voice`'s answer.
@@ -66,6 +69,7 @@ impl Event {
             Event::Lead(_) => "lead",
             Event::LeadEnd(_) => "lead-end",
             Event::Board(_) => "board",
+            Event::Team(_) => "team",
             Event::Mac => "mac",
             Event::Voice(_) => "voice",
             Event::Browser(_) => "browser",
@@ -86,6 +90,7 @@ impl Event {
             Event::Codemap(v) => json(v),
             Event::Plan(v) => json(v),
             Event::Focus(s) | Event::Watching(s) | Event::Lead(s) | Event::LeadEnd(s) | Event::Board(s) => s.to_string(),
+            Event::Team(id) => serde_json::json!({ "plan": id }).to_string(),
             Event::Mac => String::new(),
             Event::Voice(v) | Event::Emphasis(v) => v.to_string(),
             Event::Browser(v) => json(v),
