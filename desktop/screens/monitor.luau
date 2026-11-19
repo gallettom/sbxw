@@ -45,7 +45,7 @@ local function list_row(r, sel, now, color)
   built = built + 1
   local nested = r.indent
   local el = row{ key = "monitor-row-" .. r.key, on = "pick", arg = r.key, selected = sel, help = r.help,
-    fill = sel and "active-bg" or nil, hover = "hover-subtle", radius = "sm", px = 8, py = 6, gap = 8, w = "full", align = "start",
+    fill = sel and "active-bg" or nil, hover = "hover-subtle", radius = "sm", px = 8, py = 4, gap = 8, w = "full", align = "start",
     -- Team leads on: a leader's thread, one step in under its leader.
     nested and column{ w = 16, h = 1 } or false,
     column{ py = 4, dot{ tone = r.tone } },
@@ -204,7 +204,10 @@ local function conv_row(r, d, now)
   return false
 end
 
-local function feed(d, now, data)
+-- `stick`: the conversation follows its end (it opens there). Once a fold
+-- is pressed it stops following until the next selection: opening a block
+-- near the end would otherwise slide everything above it up.
+local function feed(d, now, data, stick)
   local kids = { gap = 12, px = 24, py = 16, w = "full" }
   local c = d.conv
   local seen = {}
@@ -264,7 +267,7 @@ local function feed(d, now, data)
   if #kids == 0 then
     kids[#kids + 1] = text{ "Nothing to read yet: the session has not reported a prompt or a reply.", color = "text-muted", wrap = true }
   end
-  return scroll{ grow = 1, fade = 12, stick_bottom = true, key = "monitor-conv-" .. d.key, column(kids) }
+  return scroll{ grow = 1, fade = 12, stick_bottom = stick ~= false, key = "monitor-conv-" .. d.key, column(kids) }
 end
 
 local function draft_of(state, d)
@@ -392,7 +395,7 @@ local screen = {
     local side = overlay_wide(data) and d
     local left = column{ gap = 0, w = side and LIST_W or "full", h = "full", min_w = 0, key = "monitor-list-col", top, scroll{ grow = 1, column(rows) } }
     local middle = d and column{ h = "full", grow = 1, key = "monitor-detail",
-      header(d, data), divider{}, feed(d, now, data), divider{}, composer(state, d, data) }
+      header(d, data), divider{}, feed(d, now, data, state.unstuck ~= d.key), divider{}, composer(state, d, data) }
     if not overlay_wide(data) or not d then
       -- Narrow: the list, or the session a press opened, with the way back.
       if d and state.open == d.key then
@@ -409,6 +412,7 @@ local screen = {
     load = function() return intent("monitor_open", {}) end,
     pick = function(state, key)
       state.open = key
+      state.unstuck = nil
       return intent("monitor_select", { key = key })
     end,
     back = function(state) state.open = nil end,
@@ -434,7 +438,10 @@ local screen = {
       return intent("monitor_send", { key = a.key, text = string.find(text or "", "%S") and text or nil })
     end,
     attach = function(_, a) return intent("monitor_attach", { key = a.key }) end,
-    expand = function(_, a) return intent("monitor_expand", { key = a.key, id = a.id }) end,
+    expand = function(state, a)
+      state.unstuck = a.key
+      return intent("monitor_expand", { key = a.key, id = a.id })
+    end,
     earlier = function(_, a) return intent("monitor_earlier", { key = a.key }) end,
     retry = function(_, a) return intent("monitor_retry", { key = a.key }) end,
     unattach = function(_, a) return intent("monitor_attach_remove", { key = a.key, id = a.id }) end,

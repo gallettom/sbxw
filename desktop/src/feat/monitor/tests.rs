@@ -1728,3 +1728,81 @@ fn nothing_of_the_list_leaves_its_column_at_any_width_in_either_mode() {
     assert!(checked > 40, "{checked} checked");
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+/// The whole window: a fold pressed near the conversation's end opens
+/// downwards. The pressed block's top edge and every block above it stay
+/// where they were (within 1 pt), its width too, opening and folding again.
+#[test]
+fn a_fold_opens_downwards_and_nothing_above_it_moves() {
+    use crate::shell::{view as shell_view, App};
+    let frames = |rt: &mut rune::Runtime<App>, n: usize| {
+        for _ in 0..n {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+        }
+    };
+    let quiet = |rt: &mut rune::Runtime<App>| {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+            if rt.state.link_quiet() {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "the fixture's link never settled");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        for _ in 0..8 {
+            rt.frame(0.05);
+        }
+    };
+    // At 720x480 the conversation is 116 pt tall and shows only the reply
+    // at its end: the narrow case is checked at 720x700.
+    for (w, h) in [(1284.0, 816.0), (720.0, 700.0)] {
+        let fx = format!("{}/fixtures/monitor/basic.json", env!("CARGO_MANIFEST_DIR"));
+        let a = App::new(crate::shell::Args { fixture: Some(fx), ..Default::default() });
+        let mut rt = rune::Runtime::new(a, shell_view, (w, h), rune::Env::new(true, 1.0));
+        quiet(&mut rt);
+        if w < 1000.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+        }
+        let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_open", "args": {} })).unwrap();
+        rt.update(|s, _| l.into_iter().for_each(|i| s.run_intent("test", i)));
+        quiet(&mut rt);
+        let (x, y) = rt.find("monitor-row-billing-api:s-bill-main").expect("billing-api's row");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        quiet(&mut rt);
+        // The last fold the view shows, near the end the conversation opened at.
+        let conv = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("monitor-conv-billing-api:s-bill-main")).map(|e| e.visible).expect("the conversation");
+        let folds: Vec<(String, [f32; 4])> = rt
+            .elements()
+            .into_iter()
+            .filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("monitor-steps-")) && e.visible[3] > 1.0 && e.visible[1] >= conv[1] && e.visible[1] + 12.0 <= conv[1] + conv[3])
+            .map(|e| (e.key.clone().unwrap(), e.rect))
+            .collect();
+        let all: Vec<(String, [f32; 4])> = rt.elements().into_iter().filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("monitor-steps-"))).map(|e| (e.key.clone().unwrap(), e.visible)).collect();
+        let (key, before) = folds.last().cloned().unwrap_or_else(|| panic!("{w}: a fold in view: conv {conv:?}, folds {all:?}"));
+        let above = |rt: &rune::Runtime<App>, top: f32| -> Vec<(String, f32)> {
+            rt.elements().into_iter().filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("monitor-claude-") || k.starts_with("monitor-group-") || k.starts_with("monitor-from-")) && e.rect[1] + e.rect[3] <= top + 0.5 && e.visible[3] > 1.0).map(|e| (e.key.clone().unwrap(), e.rect[1])).collect()
+        };
+        let was = above(&rt, before[1]);
+        for press in ["open", "fold"] {
+            let (x, y) = rt.find(&key).unwrap();
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            quiet(&mut rt);
+            let now = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key.as_str())).map(|e| e.rect).unwrap();
+            assert!((now[1] - before[1]).abs() <= 1.0, "{w} {press}: the block's top moved {} -> {}", before[1], now[1]);
+            assert!((now[2] - before[2]).abs() <= 1.0, "{w} {press}: its width changed");
+            for (k, y0) in &was {
+                let y1 = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k.as_str())).map(|e| e.rect[1]).unwrap();
+                assert!((y1 - y0).abs() <= 1.0, "{w} {press}: {k} above it moved {y0} -> {y1}");
+            }
+        }
+    }
+}
