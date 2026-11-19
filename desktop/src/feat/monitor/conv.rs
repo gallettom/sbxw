@@ -372,12 +372,15 @@ pub fn build<'a>(items: impl Iterator<Item = &'a J>, open: &HashSet<String>, now
     out
 }
 
-/// The line under a partial log: why, and what to do.
-pub fn partial_line(code: &str, sandbox: &str) -> String {
+/// The line under a partial log: why, and what to do. `background`: the
+/// daemon lists it as a Claude Code background session.
+pub fn partial_line(code: &str, sandbox: &str, background: bool) -> String {
     match code {
         "old_hook" => format!("Only the last prompt and reply: this sandbox's status hook is older and does not read the conversation. Run sbxw up {sandbox} to get it."),
         "no_transcript" => "Only the last prompt and reply: the hook could not read this session's transcript, so sbxw keeps its events only.".into(),
-        "catching_up" => "The conversation is on its way: the hook has not sent this session's transcript yet.".into(),
+        // A spare Claude Code keeps ready writes no transcript until it is given work.
+        "catching_up" if background => "A background session of Claude Code: it has no conversation yet, and none shows until it is given work.".into(),
+        "catching_up" => "No conversation here yet: the hook sends it with this session's next event.".into(),
         _ => "Only the last prompt and reply: sbxw does not have the whole conversation of this session.".into(),
     }
 }

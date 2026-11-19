@@ -441,10 +441,8 @@ fn session_refusal(label: &str, info: &J) -> Option<String> {
         Group::Ended => return Some(format!("{label} has ended")),
         _ => {}
     }
-    if thread_of(info).is_none() && info["answerable"] != true {
-        return Some(format!("sbxw cannot tell which terminal is {label}'s; answer in its terminal"));
-    }
-    None
+    // The daemon's reason, worded as the Sessions composer words it.
+    crate::feat::monitor::model::unreachable_line(info).map(|w| format!("{label}: {w}"))
 }
 
 /// Where a send or an ask goes, or why it cannot, and the sessions to pick

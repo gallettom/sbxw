@@ -358,7 +358,7 @@ local function header(d, data)
       badge{ d.word, tone = d.tone },
       spacer{},
       d.model and text{ d.model, size = "sm", color = "vendor-anthropic" } or false,
-      text{ d.cost or "no cost yet", size = "sm", color = "text-muted" } },
+      text{ d.cost or "–", size = "sm", color = "text-muted", help = d.cost_help } },
     row{ gap = 4, w = "full",
       text{ d.strip, size = "sm", color = "text-dim", truncate = true, grow = 1 },
       button{ icon = "terminal", key = "monitor-terminal", tone = "green", variant = "ghost", dense = true, on = "link", arg = { name = "monitor_terminal", key = d.key },
