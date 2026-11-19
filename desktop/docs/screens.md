@@ -522,6 +522,17 @@ row{ key = "title-slot", gap = 8,
   select), `narrow` (a second level drawn after the capsule: a thread's
   worktree, a branch), `narrow_icon` (an icon name, default `branch`),
   `clear` (the screen's action its cross calls; no cross without it).
+- **Counts and order** (Worktrees: `scope = { kind = "sandbox", all = true,
+  counts = ui.counts, noun = "worktree", only = "counted", order = "count",
+  counting = ui.loading }`): `counts` (`{ [sandbox] = n }`, the screen's
+  number; the row's chip shows it in place of the open sessions, its
+  tooltip "4 worktrees" from `noun`), `only = "counted"` (only the
+  sandboxes counted above 0; the current one stays, its chip "no worktree"),
+  `order = "count"` (the largest first, ties by name; no group headings,
+  each row keeps its group bar and names its group in dim text), `counting`
+  (while the counts are read, an empty list says "Counting the worktrees…"
+  instead of "No sandbox has a worktree"). `only` and `order` need `counts`.
+  The filter field shows above 8 listed sandboxes.
 - **Closed**: a capsule in the sandbox's group colour (its fill the colour
   at 32% over `surface`, its edge the colour itself), the status dot (a
   ring when stopped), the name (clipped at 220 pt, whole in the tooltip),
@@ -534,7 +545,9 @@ row{ key = "title-slot", gap = 8,
   band in a focused pane header's tint (`theme::bar_ground`), its edge.
   All, or a sandbox in no group: today's neutral frame.
 - **Open**: the list under the capsule (`<id>-list`, 300 to 420 pt, never
-  wider than the window): All first, then each group under a heading in
+  wider than the window; at most 420 pt tall and never past the window: its
+  rows, `<id>-rows`, scroll inside under the pinned filter and All, the
+  current row in view on open): All first, then each group under a heading in
   the sidebar's tint and label colour, a row per sandbox (`<id>-<name>`,
   All `<id>-`; a script's `wait:` knows `<id>-list`, then taps a row): the group's bar, status, name, open sessions, state,
   agent, a check on the current one. Above 8 sandboxes a filter field
