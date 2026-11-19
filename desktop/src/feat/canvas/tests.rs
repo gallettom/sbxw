@@ -437,7 +437,8 @@ mod window {
     }
 
     pub fn runtime_of(fixture: &str, w: f32, h: f32) -> rune::Runtime<App> {
-        let f = format!("{}/fixtures/canvas/{fixture}.json", env!("CARGO_MANIFEST_DIR"));
+        // A name under fixtures/canvas, or a path (a fixture a test changed).
+        let f = if fixture.contains('/') { fixture.to_string() } else { format!("{}/fixtures/canvas/{fixture}.json", env!("CARGO_MANIFEST_DIR")) };
         let a = App::new(Args { fixture: Some(f.into()), ..Args::default() });
         let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
         rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut Tx| s.on_key(ev, tx));
@@ -901,4 +902,101 @@ fn the_add_example_tool_says_what_it_does() {
     // The list and the send name it Example 1.
     let ui = w.ui().to_string();
     assert!(ui.contains("Example 1 · empty-cart-example.png") && !ui.contains("Asset 1"), "{ui}");
+}
+
+/// The title band at 1284, 950, 760 and 720 with a long canvas title: the
+/// capsule and the canvas menu centred in the band under its strip, nothing
+/// of the title row outside the band or over another; the storage line on
+/// one line, in the band only on a wide overlay (else beside Rename and Delete).
+#[test]
+fn the_title_band_holds_its_row_at_every_width_with_a_long_title() {
+    use crate::scope::{BAND_H, HEAD_TOP, STRIP_H};
+    let long = "sbxw desktop: main screens after the second round of remarks";
+    let mut fx: J = serde_json::from_str(&std::fs::read_to_string(format!("{}/fixtures/canvas/basic.json", env!("CARGO_MANIFEST_DIR"))).unwrap()).unwrap();
+    fx["daemon"]["canvas"]["canvases"]["c-00000000000000c1"]["title"] = long.into();
+    let path = std::env::temp_dir().join(format!("sbxw-canvas-long-title-{}.json", std::process::id()));
+    std::fs::write(&path, fx.to_string()).unwrap();
+    let mut bad = vec![];
+    for (w, h) in [(1284.0, 816.0), (950.0, 700.0), (760.0, 560.0), (720.0, 480.0)] {
+        let mut rt = window::opened_of(path.to_str().unwrap(), "s-1-0", w, h);
+        // Motion settled (a control that moved slides to its place).
+        window::settle(&mut rt, 30);
+        let at = format!("{w}");
+        let (o, _) = rt.presented("overlay-canvas").expect("the overlay");
+        let band = rt.presented("overlay-wash-canvas").map(|(r, _)| r).unwrap_or([o[0], o[1], o[2], BAND_H]);
+        let (top, bottom) = (band[1] + STRIP_H, band[1] + band[3]);
+        let (cap, _) = rt.presented("canvas-sandbox").expect("the capsule");
+        let (above, below) = (cap[1] - top, bottom - (cap[1] + cap[3]));
+        if (above - below).abs() > 1.0 || (cap[1] - (o[1] + HEAD_TOP)).abs() > 1.0 {
+            bad.push(format!("{at}: the capsule has {above} over it and {below} under it"));
+        }
+        let mid = cap[1] + cap[3] / 2.0;
+        let mut row: Vec<(&str, [f32; 4])> = vec![("canvas-sandbox", cap)];
+        for k in ["canvas-pick", "canvas-storage", "overlay-close"] {
+            if let Some((r, _)) = rt.presented(k) {
+                row.push((k, r));
+            }
+        }
+        assert!(row.iter().any(|(k, _)| *k == "canvas-pick"), "{at}: the canvas menu");
+        for (k, r) in &row {
+            if r[1] < top - 0.5 || r[1] + r[3] > bottom + 0.5 || r[0] < o[0] - 0.5 || r[0] + r[2] > o[0] + o[2] + 0.5 {
+                bad.push(format!("{at}: {k} {r:?} leaves the band {band:?}"));
+            }
+            if (r[1] + r[3] / 2.0 - mid).abs() > 1.0 {
+                bad.push(format!("{at}: {k} {r:?} is off the row's centre {mid}"));
+            }
+        }
+        for (i, (a, r)) in row.iter().enumerate() {
+            for (b, q) in &row[i + 1..] {
+                let apart = r[0] + r[2] <= q[0] + 0.5 || q[0] + q[2] <= r[0] + 0.5;
+                if !apart {
+                    bad.push(format!("{at}: {a} {r:?} overlaps {b} {q:?}"));
+                }
+            }
+        }
+        // The storage line: one line, in the band on a wide overlay, else under it.
+        let line = rt.presented("canvas-storage").or_else(|| rt.presented("canvas-storage-line"));
+        match line {
+            Some((r, _)) if r[3] > 20.0 => bad.push(format!("{at}: the storage line wraps ({r:?})")),
+            Some(_) => {}
+            None => bad.push(format!("{at}: no storage line")),
+        }
+        if o[2] < 1100.0 && rt.presented("canvas-storage").is_some() {
+            bad.push(format!("{at}: the storage line is in the title of a {} pt overlay", o[2]));
+        }
+        // The long title: cut, its full text in the menu's tooltip.
+        let menu = rt.elements().into_iter().find(|e| !e.exiting && e.key.as_deref() == Some("canvas-pick")).unwrap();
+        if menu.help.as_deref() != Some(long) {
+            bad.push(format!("{at}: the menu's tooltip is {:?}", menu.help));
+        }
+    }
+    let _ = std::fs::remove_file(&path);
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// The audit on the grid: a round of 12 at Fit, a shot selected, the Add
+/// example hint up: everything the view draws inside the overlay, at 1284 and 720.
+#[test]
+fn the_grid_view_draws_nothing_outside_the_overlay() {
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+        let mut rt = window::opened_of("grid12", "s-1-80", w, h);
+        window::settle(&mut rt, 30);
+        let r = window::rect(&rt, "canvas-s-1-85").unwrap();
+        rt.pointer_down(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        rt.pointer_up(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        window::settle(&mut rt, 4);
+        window::tap(&mut rt, "canvas-tool-asset");
+        window::settle(&mut rt, 20);
+        assert!(window::rect(&rt, "canvas-asset-hint").is_some(), "{w}: the hint");
+        assert!(window::rect(&rt, "canvas-ring-s-1-85").is_some(), "{w}: the ring (selected {:?}, shot {r:?})", STATE().lock().unwrap().selected);
+        let ov = window::rect(&rt, "overlay-canvas").unwrap();
+        for e in rt.elements() {
+            let k = e.key.clone().unwrap_or_default();
+            let r = e.visible;
+            if !k.starts_with("canvas") || r[2] <= 0.5 || r[3] <= 0.5 {
+                continue;
+            }
+            assert!(r[0] >= ov[0] - 0.5 && r[1] >= ov[1] - 0.5 && r[0] + r[2] <= ov[0] + ov[2] + 0.5 && r[1] + r[3] <= ov[1] + ov[3] + 0.5, "{w}x{h}: {k} {r:?} outside {ov:?}");
+        }
+    }
 }

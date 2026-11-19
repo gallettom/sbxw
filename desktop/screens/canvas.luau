@@ -8,15 +8,30 @@ local function note(t, color)
   return text{ t, size = "sm", color = color or "text-muted", wrap = true }
 end
 
+-- The storage line sits in the title band only on a wide overlay (1100 pt
+-- and more); else beside Rename and Delete. It never wraps.
+local function storage_in_title(data)
+  return ((((data.app or {}).overlay or {}).w) or 1000) >= 1100
+end
+
+-- A title cut to `n` characters with an ellipsis (the menu keeps a sane width).
+local function clip(t, n)
+  local len = utf8.len(t)
+  if not len or len <= n then return t end
+  return string.sub(t, 1, utf8.offset(t, n) - 1) .. "…"
+end
+
 -- The pickers beside the overlay's title, in ONE function so a shared
 -- scope picker can replace them: the sandbox, then the canvas.
 local function pickers(data, ui)
   local cur = ui.current or {}
   local w = (((data.app or {}).overlay or {}).w or 1000)
+  local label = "No canvas"
+  if cur.title then label = (w >= 600) and clip(cur.title, w >= 1100 and 40 or 24) or "Canvas" end
   return row{ key = "title-slot", gap = 8,
     select{ id = "canvas-sandbox", value = ui.sandbox or "", on = "sandbox", scope = "sandbox", placeholder = "Pick a sandbox" },
-    menu{ cur.title and (w >= 600 and cur.title or "Canvas") or "No canvas", id = "canvas-pick", items = ui.canvases or {}, on = "pick", icon = "canvas" },
-    w >= 900 and text{ ui.storage or "", size = "xs", color = "text-muted", key = "canvas-storage" } or false,
+    menu{ label, id = "canvas-pick", items = ui.canvases or {}, on = "pick", icon = "canvas", help = cur.title },
+    storage_in_title(data) and text{ ui.storage or "", size = "xs", color = "text-muted", key = "canvas-storage", truncate = true } or false,
   }
 end
 
@@ -149,7 +164,7 @@ return {
         { id = "7", label = "Delete canvases older than 7 days…" },
         { id = "30", label = "Delete canvases older than 30 days…" },
         { id = "90", label = "Delete canvases older than 90 days…" } } },
-      (not wide) and text{ ui.storage or "", size = "xs", color = "text-muted", truncate = true } or false }
+      (not storage_in_title(data)) and text{ ui.storage or "", size = "xs", color = "text-muted", truncate = true, key = "canvas-storage-line" } or false }
     local surface = column{ grow = 1, h = "full", min_w = 0, min_h = 0, gap = 8, key = "canvas-surface-col",
       toolbar(ui, wide),
       ui.empty == "shots" and ask_block(ui, data, false) or false,

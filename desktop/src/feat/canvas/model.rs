@@ -712,7 +712,7 @@ pub fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(
         "standin-shots" => {
             let cv = &mut data["canvases"][id.as_str()];
             let round = cv["rounds"].as_array().map_or(0, Vec::len) as u64 + 1;
-            let top = cv["shots"].as_array().into_iter().flatten().map(|s| s["y"].as_f64().unwrap_or(0.0) + s["h"].as_f64().unwrap_or(0.0)).fold(-320.0, f64::max) + 320.0;
+            let top = cv["shots"].as_array().into_iter().flatten().map(|s| s["y"].as_f64().unwrap_or(0.0) + s["h"].as_f64().unwrap_or(0.0)).fold(-480.0, f64::max) + 480.0;
             // A grid as the daemon lays one (crates/core/src/canvas.rs), for same-sized shots.
             let list: Vec<J> = body["shots"].as_array().cloned().unwrap_or_default();
             let size = |s: &J| {

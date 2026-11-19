@@ -38,8 +38,13 @@ pub const MAX_NAME: usize = 120;
 pub const MAX_PINS: usize = 500;
 pub const MAX_NOTES: usize = 300;
 pub const MAX_ASSETS: usize = 200;
-/// World points between two rounds' rows, and between two shots of a row.
+/// World points between two rounds' rows in the one-row layout before
+/// grids (kept to recognise a canvas laid out so), and between two shots of a row.
 pub const ROW_GAP: f32 = 320.0;
+/// World points between two rounds' grids: the last row's titles and the
+/// next round's band, each at most 100 world points tall (they keep a fixed
+/// size on screen), both fit at any zoom.
+pub const ROUND_GAP: f32 = 480.0;
 pub const COL_GAP: f32 = 120.0;
 /// World points between two rows of one round's grid: the titles under a row sit in it.
 pub const GRID_ROW_GAP: f32 = 200.0;
@@ -622,7 +627,7 @@ impl Canvas {
         if idx.is_empty() {
             return vec![];
         }
-        let top = self.shots.iter().filter(|s| s.round < round).map(|s| s.y + s.h).fold(None, |m: Option<f32>, v| Some(m.map_or(v, |m| m.max(v)))).map_or(0.0, |b| b + ROW_GAP);
+        let top = self.shots.iter().filter(|s| s.round < round).map(|s| s.y + s.h).fold(None, |m: Option<f32>, v| Some(m.map_or(v, |m| m.max(v)))).map_or(0.0, |b| b + ROUND_GAP);
         let keys: Vec<&str> = idx.iter().filter_map(|&i| self.shots[i].screen.as_deref()).collect();
         // The earlier grid this round compares with: the latest with a screen of this round.
         let rref = self.shots.iter().filter(|s| s.round < round && s.cell.is_some() && s.screen.as_deref().is_some_and(|k| keys.contains(&k))).map(|s| s.round).max();
@@ -1203,7 +1208,7 @@ mod tests {
         let new = r2.iter().find(|s| s.screen.as_deref() == Some("new")).unwrap();
         assert_eq!(new.cell, Some([3, 0, WHOLE]));
         let top = r2.iter().map(|s| s.y).fold(f32::MAX, f32::min);
-        assert_eq!(top, r1_bottom + ROW_GAP, "newest round below");
+        assert_eq!(top, r1_bottom + ROUND_GAP, "newest round below");
         // Round 3 of two screens of round 2 and one new: round 2 left (0,0) empty, the new one takes it.
         round_of(&mut c, "b3", &[(1284, 816, "new"), (1284, 816, "z")]);
         let r3 = cells(&c, 3);

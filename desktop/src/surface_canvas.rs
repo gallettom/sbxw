@@ -576,7 +576,8 @@ fn pic_error(id: &str, image: &str) -> Option<String> {
 pub const PIN_R: f32 = 11.0;
 /// A caption's or a band's text: a fixed size on screen, as map labels,
 /// but at most this tall in world points, so a row's titles and the next
-/// row's band fit in the gap between rows (`ROW_GAP`, 320) at any zoom.
+/// round's band fit in the gap between rounds (`ROUND_GAP`, 480) and a
+/// row's titles in the gap between rows (`GRID_ROW_GAP`, 200) at any zoom.
 const CAPTION_MAX: f32 = 100.0;
 /// The resize handle: a square on the selected item's bottom-right corner,
 /// its side a share ([`HANDLE_SHARE`]) of the item's drawn size, at most

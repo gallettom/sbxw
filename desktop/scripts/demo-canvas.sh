@@ -19,10 +19,16 @@
 #   picker   the canvas picker open: canvases with date, shots and size, New
 #   delete   Delete this canvas: the core dialog naming what goes
 #   empty    a sandbox with no canvas: what the view says, Ask the agent
+#   grid12   fixtures/canvas/grid12.json: a round of 12 dark desktop shots at
+#            1284, at Fit (a 4 x 3 grid, each shot on its mat)
+#   grid2    fixtures/canvas/grid2.json: that round and a second of six
+#            shots, five of the same screens in the same cells, a new one after
+#   lowzoom  grid12 zoomed out once, a shot selected: its ring, no handle
+#   example  grid12 with the Add example tool chosen: the hint above the surface
 # Out: $SBXW_SHOTS/canvas/canvas-<theme>-<size>-<mark>.png and its element tree.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$shots_root/canvas"; mkdir -p "$shots"
+shots="${CANVAS_SHOTS:-$shots_root/canvas}"; mkdir -p "$shots"
 build
 script() { # mark size
   MARK="$1" SIZE="$2" python3 - <<'PY'
@@ -44,6 +50,15 @@ step("rail-canvas", "canvas-sandbox")
 if m != "empty":
     add(type="mark", name="wait:canvas")
     add(type="mark", name="hold:2500")
+if m == "lowzoom":
+    step("canvas-zoom-out"); add(type="mark", name="hold:300")
+    step("canvas-s-1-84"); add(type="mark", name="hold:600")
+if m == "example":
+    step("canvas-tool-asset", "canvas-asset-hint")
+if m in ("grid12", "grid2", "lowzoom", "example"):
+    # The pointer off the rail and the tools: no tooltip over the shot.
+    w, h = (int(v) for v in os.environ["SIZE"].split("x"))
+    add(type="move", x=w - 160, y=h // 2); add(type="mark", name="hold:400")
 if m in ("zoom", "asset"):
     if narrow:
         step("canvas-tab-remarks", "canvas-row-pin-4")
@@ -73,6 +88,7 @@ for theme in ${THEMES:-dark graphite}; do
       [ "$m" = remarks ] && [ "$size" != 720x480 ] && continue
       fx="$here/fixtures/canvas/basic.json"
       [ "$m" = empty ] && fx="$here/fixtures/canvas/empty.json"
+      case "$m" in grid12|lowzoom|example) fx="$here/fixtures/canvas/grid12.json" ;; grid2) fx="$here/fixtures/canvas/grid2.json" ;; esac
       script "$m" "$size" >"$shots/script-$m.json"
       THEME="$theme" SHOT_SIZE="$size" run_app "$shots/canvas-$theme-$size-$m.log" --fixture "$fx" --script "$shots/script-$m.json" \
         --snap "$shots/canvas-$theme-$size-$m.png" --tree "$shots/canvas-$theme-$size-$m.json" --at "mark:$m+0.2"

@@ -11,7 +11,7 @@ sandbox with no canvas. grid12.json: one round of 12 desktop shots at
 five of the same screens (same cells) and a new one.
 Positions follow the core's grid (crates/core/src/canvas.rs, layout_round):
 cells as wide as the widest shot, phones three to a cell, columns from
-grid_cols, rows GRID_ROW_GAP apart, rounds ROW_GAP apart, an empty row of a
+grid_cols, rows GRID_ROW_GAP apart, rounds ROUND_GAP apart, an empty row of a
 later round taking no room.
 Run: python3 desktop/fixtures/canvas/gen.py
 """
@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 NOW = 1763460000000
 DAY = 86400000
 
-COL_GAP, GRID_ROW_GAP, ROW_GAP, NARROW_GAP = 120, 200, 320, 48
+COL_GAP, GRID_ROW_GAP, ROUND_GAP, NARROW_GAP = 120, 200, 480, 48
 WHOLE = 4294967295
 
 def grid_cols(cells, cw, ch):
@@ -81,7 +81,7 @@ def checkout(pictures):
     # Six whole cells and one cell of two phones: 3 columns.
     assert grid_cols(7, 1440, 900) == 3
     bottom = place(r1, [[k // 3, k % 3, WHOLE] for k in range(6)] + [[2, 0, 0], [2, 0, 1]], 0, 1440, 390)
-    row2 = bottom + ROW_GAP
+    row2 = bottom + ROUND_GAP
     r2 = [shot(pictures, 2, k, t, "After round 1's remarks", key, 0, 0, at=NOW + 50 * 60000) for k, (t, key) in enumerate([("Cart (after)", "cart"), ("Checkout: address (after)", "address"), ("Checkout: payment (after)", "payment")])]
     # The same screens in the same cells (row 1); row 0 is empty in round 2 and takes no room.
     place(r2, [[1, 0, WHOLE], [1, 1, WHOLE], [1, 2, WHOLE]], row2, 1440)
@@ -136,7 +136,7 @@ def grid(pictures, second):
         r2 = [shot(pictures, 2, 100 + k, t, "After round 1's remarks", key, 0, 0, w=1284, pw=2568, ph=1632, at=NOW + 30 * 60000, dark=True) for k, (t, key, _) in enumerate(again)]
         # Round 1 filled its 12 cells: the new screen goes after them (row 3).
         cells = [[c[0], c[1], WHOLE] if c else [3, 0, WHOLE] for _, _, c in again]
-        place(r2, cells, bottom + ROW_GAP, 1284)
+        place(r2, cells, bottom + ROUND_GAP, 1284)
         rounds.append({"n": 2, "at_ms": NOW + 30 * 60000, "shots": 6, "cols": 4, "cell_w": 1284})
         shots = r1 + r2
     title = "Mail app, two rounds" if second else "Mail app"
