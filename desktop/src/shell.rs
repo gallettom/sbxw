@@ -989,6 +989,7 @@ impl App {
 
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         let mut changed = false;
+        self.memory_tick();
         if self.theme_seen != theme::generation() {
             self.theme_seen = theme::generation();
             self.push_data();

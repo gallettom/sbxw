@@ -8,7 +8,34 @@ use super::App;
 use crate::mem;
 use std::rc::Rc;
 
+/// `SBXW_DESKTOP_MEM_EVERY=<seconds>`: the report every so often in a real
+/// run (with `SBXW_DESKTOP_MEM=1` for the heap's numbers), labelled by the
+/// minutes since start; `memory-summary.py` reads the log as a script's.
+fn every() -> Option<std::time::Duration> {
+    static EVERY: std::sync::OnceLock<Option<std::time::Duration>> = std::sync::OnceLock::new();
+    *EVERY.get_or_init(|| std::env::var("SBXW_DESKTOP_MEM_EVERY").ok().and_then(|v| v.parse::<u64>().ok()).filter(|s| *s > 0).map(std::time::Duration::from_secs))
+}
+
+thread_local! {
+    static NEXT: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+    static START: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
 impl App {
+    /// The periodic report when asked for ([`every`]); nothing otherwise
+    /// (one cached check).
+    pub(crate) fn memory_tick(&self) {
+        let Some(every) = every() else { return };
+        let now = std::time::Instant::now();
+        let start = START.with(|s| *s.get().get_or_insert(now));
+        START.with(|s| s.set(Some(start)));
+        if NEXT.with(|n| n.get().is_some_and(|t| now < t)) {
+            return;
+        }
+        NEXT.with(|n| n.set(Some(now + every)));
+        self.memory_report(&format!("{} min", now.duration_since(start).as_secs() / 60));
+    }
+
     /// Logs the report under `label`.
     pub(crate) fn memory_report(&self, label: &str) {
         let (rss, hwm) = mem::rss();
