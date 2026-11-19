@@ -40,9 +40,14 @@ local function fold_button(r)
 end
 
 -- The conversation column's width, set by render from the overlay's, and a
--- bubble's widest (about 72 characters of prose).
+-- bubble's widest. The rule (the same as model::bubble_max, which the fold
+-- reads; a test holds the two together): in one column (under 760 pt) 520 pt;
+-- with room, 62 percent of the column, at least 520 pt and at most BUBBLE_CAP,
+-- never past the column less its gutters. Notes, cards and tinted reports use
+-- it too, so the column reads as one system.
 local CONV_W = 620
 local BUBBLE_MAX = 520
+local BUBBLE_CAP = 720
 local function bubble_w() return math.max(120, math.min(BUBBLE_MAX, CONV_W - 24)) end
 
 -- A team in "All teams": its colour and its threads' names (its summary in
@@ -361,7 +366,7 @@ local function team_view(s, ui)
         row{ gap = 8, text{ t.name, size = "sm", weight = "semibold", color = t.color, truncate = true }, text{ t.state, size = "xs", color = t.tone == "neutral" and "text-muted" or t.tone } },
         nz(t.meta) and text{ t.meta, size = "xs", color = "text-muted", truncate = true } or false },
       button{ icon = "terminal", variant = "ghost", dense = true, on = "open", arg = { what = "terminal", thread = t.name }, key = "board-term-" .. t.name, help = "Its terminal" },
-      ui.monitor and button{ icon = "inbox", variant = "ghost", dense = true, on = "open", arg = { what = "monitor", thread = t.name }, key = "board-mon-" .. t.name, help = "The Monitor on it" } or false,
+      ui.monitor and button{ icon = "inbox", variant = "ghost", dense = true, on = "open", arg = { what = "monitor", thread = t.name }, key = "board-mon-" .. t.name, help = "Its session in Sessions" } or false,
     }
   end
   out[#out + 1] = row{ gap = 4, w = "full", wrap = true,
@@ -472,9 +477,11 @@ return {
     local wide = overlay_wide(data)
     local ov = (data.app or {}).overlay or {}
     local ow, oh = ov.w or 1000, ov.h or 600
-    CONV_W = wide and (ow - 360 - 16 - 24) or (ow - 24)
-    BUBBLE_MAX = 520
     local s = ui.side
+    -- Beside the side column only when there is a team (All teams has the
+    -- whole overlay).
+    CONV_W = (wide and s) and (ow - 360 - 16 - 24) or (ow - 24)
+    BUBBLE_MAX = wide and math.max(520, math.min(BUBBLE_CAP, math.floor(CONV_W * 0.62))) or 520
     local sb = s and s.sandbox or true
     local picker = picker_button(ui, s, ow, wide)
     -- The picker's list over the body, and under it a layer that closes it

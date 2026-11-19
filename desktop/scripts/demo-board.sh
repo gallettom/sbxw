@@ -22,6 +22,9 @@
 #   narrow   the window at 720x480: one column, the Commits tab
 #   messages the Messages filter: the lead's and threads' direct messages
 #            (the lead's two in a row share one author line)
+#   wide     All teams, the Messages filter, for a large window (try
+#            SIZES=2000x1100): bubbles up to 720 pt (62 percent of the
+#            column), a long direct message from the lead not folded
 # Out: $SBXW_SHOTS/board/board-<theme>-<size>-<mark>.png and its element tree.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -71,6 +74,10 @@ if m == "folded":
     step("board-msg-" + g, "board-commit-" + h)
 if m == "messages":
     step("board-group-messages", "board-convo")
+if m == "wide":
+    step("board-row-picker", "board-row-team-all")
+    step("board-row-team-all", "board-convo")
+    step("board-group-messages", "board-convo")
 if m == "narrow":
     step("board-tab-commits", "board-side-commit-" + h)
 add(type="mark", name="hold:500")
@@ -83,6 +90,7 @@ for theme in ${THEMES:-dark graphite}; do
   for size in ${SIZES:-1284x816 720x480}; do
     for m in ${MARKS:-running picker merged all long commit folded messages narrow}; do
       [ "$m" = narrow ] && [ "$size" != 720x480 ] && continue
+      [ "$m" = wide ] && [ "$size" = 720x480 ] && continue
       script "$m" "$size" >"$shots/script-$m.json"
       THEME="$theme" SHOT_SIZE="$size" run_app "$shots/board-$theme-$size-$m.log" --fixture "$fx" --script "$shots/script-$m.json" \
         --snap "$shots/board-$theme-$size-$m.png" --tree "$shots/board-$theme-$size-$m.json" --at "mark:$m+0.2"

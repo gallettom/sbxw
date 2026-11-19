@@ -1872,7 +1872,7 @@ more); day separators; relative times, the exact UTC time in the tooltip.
 A filter row (All, Decisions and warnings, Questions, Messages, Commits, Status), a
 thread and words, applied by the daemon before paging. From 760 pt a side
 column: **Team** (the lead, each thread with its state, worktree and model;
-pressing one filters the conversation; its terminal and the Monitor on it),
+pressing one filters the conversation; its terminal and its session in Sessions),
 **Decisions and warnings** that still stand, **Commits** per thread (totals,
 merged, a lane graph drawn with `paint`, a commit opened in place with the
 Commits view's diff groups, `commits::diff_groups`). Under 760 pt one
@@ -1880,7 +1880,7 @@ column with Conversation, Team and notes, Commits.
 
 Read only: every intent is Direct and reads; links go to the plan dialog,
 the Requests panel, a terminal, Commits, Worktrees, the Threads panel, the
-Monitor. Agent text is drawn in the prose face with pills, never as a
+Sessions. Agent text is drawn in the prose face with pills, never as a
 control. 80 rows a page drawn (Show earlier, then an older page of 100
 events). Data only while it shows; the `team` event reads the newest page
 again.
