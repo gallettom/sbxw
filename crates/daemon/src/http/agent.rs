@@ -49,6 +49,7 @@ pub fn routes() -> Router<Arc<App>> {
         .merge(super::mac::agent_routes())
         .merge(super::browser::agent_routes())
         .merge(super::canvas::agent_routes())
+        .merge(super::tickets::agent_routes())
 }
 
 /// Answered with what the hook should print: on a prompt from a Remote

@@ -21,5 +21,6 @@ pub mod remote;
 pub mod sandboxes;
 pub mod stats;
 pub mod team;
+pub mod tickets;
 pub mod usage;
 pub mod voice;
