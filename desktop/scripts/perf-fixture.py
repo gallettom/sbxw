@@ -7,7 +7,8 @@ fixtures so the routes answer as they do.
 - 200 commits on web-app (and the other repos' few), each with its detail: 12 files of ~40 diff lines;
 - a 3,000-entry folder in the Files explorer (files/standin.json's workspace, `/Users/me/web/big`);
 - 113 pending network requests over the sandboxes;
-- the worktrees of fixtures/worktrees/standin.json.
+- the worktrees of fixtures/worktrees/standin.json;
+- Sessions: web-app's main session with a 400-item conversation (the daemon's most for one session).
 
     python3 desktop/scripts/perf-fixture.py > big.json   (about 5 MB: generated, not kept in git)
 """
@@ -97,4 +98,18 @@ team = {"id": "p-perf", "sandbox": "web-app", "summary": "Eight parts at once", 
         "threads": [{"name": t, "state": "working"} for t in threads], "created_ms": T, "updated_ms": T + 500 * 90_000, "last_ms": T + 500 * 90_000}
 d["board_teams"] = [team]
 d["board_timelines"] = {"p-perf": {"team": team, "events": events, "standing": [], "commits": {"available": True, "list": clist, "totals": [], "merged": False}}}
+# Sessions: web-app's main session and its conversation, 400 items (the
+# daemon's ring): prompts, runs of three steps, replies (invented text).
+TS = T + 500 * 90_000
+d.setdefault("sessions", []).append({"sandbox": "web-app", "session_id": "s-perf", "state": "idle", "mode": "claude", "started_ms": TS - 3_600_000, "ts": TS,
+                                     "last_input": "Tidy the payment step", "reply": "Done: the payment step is tidy.", "origin": "tty", "answerable": True})
+items, seq = [], 1
+while len(items) < 400:
+    at = TS - (400 - len(items)) * 20_000
+    items.append({"seq": seq, "at": at, "kind": "user_prompt", "text": f"Prompt {seq}: tidy the next part of the payment step, then run the tests."}); seq += 1
+    for k in range(3):
+        items.append({"seq": seq, "at": at + 1000 * k, "kind": "tool_call", "tool": {"name": ["Read", "Edit", "Bash"][k], "summary": [f"src/pay/step{seq}.ts", f"src/pay/step{seq}.ts (+4 -2)", "$ npm test pay"][k], "id": f"t{seq}"}})
+        items.append({"seq": seq + 1, "at": at + 1000 * k + 500, "kind": "tool_result", "result": {"status": "ok", "size": 400, "head": "ok\n" * 10, "id": f"t{seq}"}}); seq += 2
+    items.append({"seq": seq, "at": at + 5000, "kind": "assistant_text", "text": f"Step {seq} is **done**: the copy reads better and `npm test pay` passes.\n\n- one change\n- [[Done]]"}); seq += 1
+d["history"] = {"web-app/s-perf": {"items": items[:400]}}
 json.dump(out, sys.stdout)

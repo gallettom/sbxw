@@ -2,7 +2,7 @@
 # Where an input's time goes, headless, in a RELEASE build, against the
 # stand-in daemon with realistic sizes (scripts/perf-fixture.py: 11
 # sandboxes, 200 commits with their details, a 3,000-entry folder, 113
-# network requests). Each step of the script is announced in the log with a
+# network requests, a 400-item conversation in Sessions). Each step of the script is announced in the log with a
 # `perf:` mark; SBXW_DESKTOP_PERF=1 logs every Luau render, the data handed
 # to the screens, the core's view and each daemon request with its time.
 #
@@ -38,6 +38,11 @@ step("open a menu (a sandbox row's)", "extra-sandbox-web-app", "extra-sandbox-we
 add(type="key", name="Escape"); add(type="mark", name="hold:200")
 # Sessions (GUI) as the base view, with an overlay over it, then back to the terminals (TUI).
 step("make the Monitor the base view", "top-view-gui", "overlay-monitor")
+# Sessions: web-app's 400-item conversation (perf-fixture.py), its steps, its earlier part.
+step("Sessions: the 400-item conversation", "monitor-row-web-app:s-perf", "monitor-conv-web-app:s-perf")
+step("Sessions: open its last group of steps", "monitor-steps-g394")
+step("Sessions: show earlier", "monitor-earlier")
+step("Sessions: show earlier (the page before)", "monitor-earlier")
 step("open Commits over the Monitor", "rail-commits", "commits-row-" + row)
 step("expand a commit over the Monitor", "commits-row-" + row, "commits-file-src/area0/File0.tsx")
 add(type="mark", name="perf:close Commits: back to the Monitor"); add(type="key", name="Escape"); add(type="mark", name="wait-gone:overlay-commits"); add(type="mark", name="hold:300")
