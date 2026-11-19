@@ -5,6 +5,7 @@
 - [Why](#why)
 - [Questions between sandboxes](#questions-between-sandboxes)
 - [Screenshot requests](#screenshot-requests)
+- [Canvas reviews](#canvas-reviews)
 - [Virtual Mac requests](#virtual-mac-requests)
 - [What a sandbox cannot do](#what-a-sandbox-cannot-do)
 
@@ -28,7 +29,7 @@ the asker without someone clicking.
 
 ### The agent's side
 
-Every sandbox gets an MCP server, `sbxw-relay`, with three tools:
+Every sandbox gets an MCP server, `sbxw-relay`, with these tools:
 `ask_other_sandbox`, `ask_user_for_screenshot`, `ask_user_questions` and `check_sandbox_question`.
 The same is available as a CLI:
 
@@ -107,6 +108,45 @@ sandbox's own CLI writes the files.
 
 The [browser side panel](chat.md#the-browser-side-panel) can answer a
 screenshot request with a capture of the app's tab.
+
+## Canvas reviews
+
+A canvas is one review session of one sandbox. The agent adds screenshots
+of the app it works on; you zoom and pan over them in the desktop app's
+**Canvas** view, pin numbered remarks on points of a shot, place notes and
+example pictures, then press **Send remarks**. The agent reads the round
+with a tool and works on it. Everything stays on this computer's disk until
+you delete it.
+
+| Tool | What it does |
+|---|---|
+| `canvas_add_shots {canvas?, title?, shots: [{file, title, note?, width?, screen?}]}` | Reads each file inside the sandbox and posts it; returns the canvas id, how many were kept, and why any was refused. One call is one round. |
+| `canvas_read {canvas?}` | The remarks of the review rounds not read yet: pins with their number, the shot's title, the position (percentages and a hint such as `top-left`) and the text; notes; each example picture's path inside the sandbox. Each round is handed over once. |
+| `canvas_list` | The sandbox's canvases: id, title, shots, rounds, unread review rounds. |
+
+An agent reaches only its own sandbox's canvases (its token says which
+sandbox it is; a body field never does). It cannot delete a canvas, edit a
+remark or read another sandbox's canvas.
+
+**Limits.** PNG, JPEG or WebP, checked by content, never by name (animated
+pictures refused); 20 MB and 8192 px a side per picture; 24 shots a round;
+500 MB of pictures a canvas; titles 120 characters, notes and remarks 2000.
+
+**On disk.** `~/.sbxw/state/canvas/<id>/`: `canvas.json` and the pictures,
+each under a name sbxw generates (`s-<12 hex>.png`). Nothing an agent or a
+person types is used as a path. Folders 0700, files 0600, atomic writes.
+The daemon's log has ids, counts and sizes, never a title, a remark or a
+picture. Canvases are never deleted on their own, not even with their
+sandbox: the Canvas view shows each one's size and the total, and deletes
+one canvas or every canvas older than a date, each after one confirmation.
+
+**Sending.** One confirmation lists the target session, every remark in
+full and each example picture (local path, size, a box to tick for a file
+that looks secret). On Send, sbxw copies the pictures into the sandbox
+(`/tmp/sbxw-uploads/...`, as dropped files), records the round and types
+one fixed line: `[sbxw canvas · c-…] review round 1 is ready: run
+canvas_read to read the person's remarks`. A session started before this
+version has no `canvas_read` until `sbxw up <sandbox>`.
 
 ## Virtual Mac requests
 

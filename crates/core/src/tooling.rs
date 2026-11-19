@@ -152,7 +152,22 @@ pub fn relay_guidance() -> String {
          is an ordinary answer, not a setback: carry on, say what you changed\n\
          and what you expect it to look like, and let them correct you. Don't\n\
          ask twice for the same view, and don't ask at all for something you can\n\
-         run and capture yourself.\n"
+         run and capture yourself.\n\
+         \n\
+         ## Canvas reviews\n\
+         \n\
+         The person can review screenshots of the app you build on a canvas in\n\
+         sbxw's desktop app: they zoom in, pin numbered remarks on points of each\n\
+         shot, add example pictures, and send you a round of remarks. When they ask\n\
+         for screenshots or a visual review, take the shots yourself (a headless\n\
+         browser against your dev server at a fixed viewport, the project's own\n\
+         screenshot script, or the virtual Mac) and add them with the\n\
+         **`canvas_add_shots`** tool. A good set: the main screens only, one state\n\
+         per shot, the viewport width stated, a short title and a one-line note\n\
+         each, no secrets, tokens or personal data on screen, about 12 per round\n\
+         (24 at most). Give the same `screen` key to the same screen in every round\n\
+         so before and after line up. When sbxw types that a canvas review round is\n\
+         ready, read it with **`canvas_read`** and work on the remarks.\n"
     )
 }
 
