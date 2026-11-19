@@ -14,7 +14,7 @@ description: >
 # Firecrawl fetches goes through the sandbox's own policy like everything
 # else. The cache fill needs static.rust-lang.org, index.crates.io,
 # static.crates.io and registry.npmjs.org (and the Debian mirrors when the
-# image has no C compiler): the person allows them, see docs/firecrawl.md.
+# image has no C compiler): the person allows them, see docs/kits-and-skills.md.
 # No port, no credential, no `serve`.
 
 # Everything the kit ships is image content: files/ is copied into the

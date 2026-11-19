@@ -235,10 +235,36 @@ or installed until you pick a candidate. Needs no network. See
 the sandbox, registered for Claude Code as the MCP server `firecrawl`
 (`--public-only`), with a fenced block in `~/.claude/CLAUDE.md` telling the
 agent to use it first to read, crawl or map web pages. Firecrawl Cloud is off
-unless `SBXW_FIRECRAWL_CLOUD` is set in `[env]`. Upstream ships no binary, so
-the daemon's cache filler builds a pinned version once (static.rust-lang.org,
-index.crates.io and static.crates.io must be allowed); sandboxes copy it from
-the cache and never build it. See [Firecrawl in sandboxes](firecrawl.md).
+unless `SBXW_FIRECRAWL_CLOUD` is set in `[env]`.
+
+- **Where it comes from.** Upstream ships no binary (crates.io only), so the
+  daemon's cache filler builds a pinned version once: rustup-init and the
+  crate checked by sha256, `cargo install --locked`, and the MCP package
+  `firecrawl-mcp` installed with `npm ci` from the kit's lock. Sandboxes copy
+  both from the read-only cache at each start and never build or download
+  them. Until the cache has them, the kit's context says "Firecrawl is not
+  installed yet: sbxw is preparing it; use WebFetch meanwhile" and the sandbox
+  starts normally.
+- **Hosts to allow for the fill** (the kit declares no network rule):
+  `static.rust-lang.org`, `index.crates.io`, `static.crates.io`, and
+  `registry.npmjs.org` (already allowed by `sbxw:agent-skills`).
+- **Safety.** It runs inside the sandbox, through its network policy. The MCP
+  server refuses localhost, private addresses and local names
+  (`host.docker.internal`); a host the proxy refuses comes back as a page
+  with `statusCode` 403. No API key, no `login`, no listener.
+- **Firecrawl Cloud.** `SBXW_FIRECRAWL_CLOUD = "auto"` (or `"search"`) in
+  `[env]` turns it on: search and a fallback for blocked pages, with a random
+  install id sent. That fallback can fetch, through Firecrawl's servers, a
+  page your network policy refused.
+- **Off.** Untick it in the Kits dialog, or leave it out of `kits`; the next
+  `sbxw up <sandbox>` takes the server and the guidance out.
+- **Updating.** The pins are the first lines of
+  `assets/firecrawl/files/home/agent/.sbxw/firecrawl/install.sh` (version and
+  crate sha256, toolchain, MCP version with `mcp/package-lock.json`). A cache
+  holding the older version keeps serving it until `sbxw cache clear`.
+
+Firecrawl Local is AGPL-3.0, `firecrawl-mcp` is MIT; sbxw ships neither (they
+are downloaded and built on your machine).
 
 ### `sbxw:k8s-tools`
 

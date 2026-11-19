@@ -27,7 +27,6 @@
 |---|---|
 | [Configuration](configuration.md) | Every `sbxw.toml` key, models, environment variables |
 | [Kits and skills](kits-and-skills.md) | Bundled kits, the kit cache, the shared skill store |
-| [Firecrawl in sandboxes](firecrawl.md) | The default tool for reading the web: where its binary comes from, hosts, cloud, safety |
 | [Environment files](environment-files.md) | `sbxw env run` / `sbxw env export` with `sbxenv.yaml` |
 
 ## Understand it
@@ -44,5 +43,5 @@ Component READMEs: [macOS island](../macos/README.md),
 [md-to-pdf kit](../assets/md-to-pdf-tools/README.md),
 [retro kit](../assets/retro/README.md),
 [k8s kit](../assets/k8s-tools/README.md),
-[Firecrawl kit](firecrawl.md),
+[Firecrawl kit](kits-and-skills.md#sbxwfirecrawl),
 [virtual Mac kit](../assets/terminal-mac/README.md).

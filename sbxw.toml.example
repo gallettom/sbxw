@@ -179,7 +179,7 @@ env_files = []
 #                        (MCP server `firecrawl`, cloud off). Built once into
 #                        the kit cache: that fill needs static.rust-lang.org,
 #                        index.crates.io and static.crates.io allowed
-#                        (docs/firecrawl.md). Cloud on: SBXW_FIRECRAWL_CLOUD.
+#                        (docs/kits-and-skills.md). Cloud on: SBXW_FIRECRAWL_CLOUD.
 #   sbxw:k8s-tools       kubectl + k3d + skaffold — opt-in, add it yourself.
 # Each other kit declares the egress it needs; nothing to add to network_allow.
 # Writing `kits` replaces the defaults, so list them again to keep them:
