@@ -1849,7 +1849,10 @@ the role chip "lead" only when the name does not already say it, "to" the
 addressee ("the team", "you", a thread, the lead's name), the time; the
 person's on the right with "You". The same author to the same addressee
 within 5 minutes shares one author line, the bubbles stacked under it. A
-bubble hugs its content up to 520 pt (about 72 characters of prose) and holds
+bubble hugs its content up to a width that follows the conversation column
+(62 percent of it, at least 520 pt, at most 720 pt, about 112 characters of
+prose; under 760 pt, one column, 520 pt: `model::bubble_max`, mirrored in
+`board.luau`; cards, notes and tinted reports share it) and holds
 only the content: a small quiet kind line ("direct message", "Decision team
 note", a state chip with "status report"), the words (prose face, pills),
 Show more. A run of more than 32 characters without a space gets a break
@@ -1867,12 +1870,12 @@ round of questions with each answer marked; a team note (`team_note`) as a
 note labelled Info, Warning or Decision with "team note"; a direct message
 (the agents' own `SendMessage`, as sbxw's hook saw it) as a bubble labelled
 "direct message"; a thread's consecutive commits one row ("api-routes made
-4 commits") that opens. Long texts fold (Show
-more); day separators; relative times, the exact UTC time in the tooltip.
+4 commits") that opens. A text drawn on more than 8 lines at the bubble's width folds (Show more,
+6 lines shown: `model::FOLD_DRAWN`); on a wide window a few lines are not folded; day separators; relative times, the exact UTC time in the tooltip.
 A filter row (All, Decisions and warnings, Questions, Messages, Commits, Status), a
 thread and words, applied by the daemon before paging. From 760 pt a side
 column: **Team** (the lead, each thread with its state, worktree and model;
-pressing one filters the conversation; its terminal and the Monitor on it),
+pressing one filters the conversation; its terminal and its session in Sessions),
 **Decisions and warnings** that still stand, **Commits** per thread (totals,
 merged, a lane graph drawn with `paint`, a commit opened in place with the
 Commits view's diff groups, `commits::diff_groups`). Under 760 pt one
@@ -1880,7 +1883,7 @@ column with Conversation, Team and notes, Commits.
 
 Read only: every intent is Direct and reads; links go to the plan dialog,
 the Requests panel, a terminal, Commits, Worktrees, the Threads panel, the
-Monitor. Agent text is drawn in the prose face with pills, never as a
+Sessions. Agent text is drawn in the prose face with pills, never as a
 control. 80 rows a page drawn (Show earlier, then an older page of 100
 events). Data only while it shows; the `team` event reads the newest page
 again.

@@ -67,7 +67,7 @@ pub const INTENTS: &[Spec] = &[
     d("board_commit", &[("hash", Arg::Str, true)], "Opens a commit of the team in the Commits column, its files and their diff, or folds it."),
     d("board_file", &[("path", Arg::Str, true)], "Shows or hides a changed file's diff in the open commit (`path`: as the commit lists it)."),
     d("board_tab", &[("tab", Arg::OneOf(TABS), true)], "On a narrow window, which column shows: the conversation, the team and its notes, or the commits."),
-    d("board_open", &[("what", Arg::OneOf(LINKS), true), ("thread", Arg::Text, false), ("relay", Arg::Str, false)], "Goes where one acts or reads more: a thread's terminal, the Monitor on it, its commits or worktrees, the plan dialog, the Requests panel (on a request), the Threads panel."),
+    d("board_open", &[("what", Arg::OneOf(LINKS), true), ("thread", Arg::Text, false), ("relay", Arg::Str, false)], "Goes where one acts or reads more: a thread's terminal, its session in Sessions, its commits or worktrees, the plan dialog, the Requests panel (on a request), the Threads panel."),
     d("board_refresh", &[], "Reads the teams and the conversation again."),
     d("board_picker", &[("open", Arg::Bool, false), ("more", Arg::Bool, false)], "Opens or closes the team picker's list (`open`; none: toggles), or lists more teams in it (`more`). View state only."),
     d("board_key", &[("key", Arg::OneOf(KEYS), true)], "The Board's keys while its team picker is open: Up and Down move through the teams, Enter shows the one marked, Escape closes the list."),
@@ -382,9 +382,9 @@ impl State {
         Ok(match a.req("what") {
             "terminal" => [close, vec![go("open_terminal", json!({ "sandbox": sb, "thread": thread, "pane": "spare" }))]].concat(),
             "monitor" => {
-                // The Monitor (thread desktop-monitor), when the app has it.
+                // Sessions (the monitor feature), when the app has it.
                 if crate::feat::intent("monitor_open").is_none() {
-                    return Err("the Monitor is not in this build".into());
+                    return Err("Sessions is not in this build".into());
                 }
                 let key = match &thread {
                     Some(t) => format!("{sb}::{t}"),
@@ -539,9 +539,18 @@ impl State {
         list.into_iter().flatten().filter(|r| r["state"] == "pending" || r["state"] == "answered").filter_map(|r| r["id"].as_str().map(str::to_string)).collect()
     }
 
+    /// Characters a line of a bubble holds at the overlay's width now: the
+    /// fold counts lines as drawn.
+    fn cpl(&self, cx: &Ctx) -> usize {
+        let ov = &cx.get("app")["overlay"];
+        let Some(ow) = ov["w"].as_f64().map(|w| w as f32) else { return 0 };
+        let conv = model::conv_w(ow, self.team.is_some());
+        model::chars_per_line(model::bubble_max(conv, ow))
+    }
+
     fn rows(&self, cx: &Ctx) -> Vec<J> {
         let waiting = Self::waiting(cx);
-        let o = model::Opts { expanded: Some(&self.expanded), all: self.team.is_none(), now_s: crate::feat::files::view::now_secs(), waiting: Some(&waiting) };
+        let o = model::Opts { expanded: Some(&self.expanded), all: self.team.is_none(), now_s: crate::feat::files::view::now_secs(), waiting: Some(&waiting), cpl: self.cpl(cx) };
         let groups = &cx.get("app")["groups"];
         let events = self.events();
         let mut rows = model::rows(&events, &o);

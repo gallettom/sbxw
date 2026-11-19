@@ -14,9 +14,40 @@ use std::collections::BTreeSet;
 
 /// Same author, same addressee, within this many seconds: one author line.
 pub const GROUP_SECS: u64 = 5 * 60;
-/// Over this many characters (or lines), a message is folded with "Show more".
-pub const FOLD_CHARS: usize = 320;
-pub const FOLD_LINES: usize = 5;
+/// A message drawn on more than `FOLD_DRAWN` lines (as drawn at the bubble's
+/// width, a blank line counting as one) is folded with "Show more"; folded,
+/// it shows its first `SHOW_DRAWN`.
+pub const FOLD_DRAWN: usize = 8;
+pub const SHOW_DRAWN: usize = 6;
+/// The prose face at 12 pt: about this many points a character (measured: 5.7 at 12 pt, 6.2 at 13 pt).
+pub const CHAR_W: f32 = 6.0;
+/// A bubble's widest in one column (under 760 pt), and in two: the share of the
+/// conversation column, at least `BUBBLE_MIN` and at most `BUBBLE_CAP`
+/// (mirrored in screens/board.luau, which draws it).
+pub const BUBBLE_MIN: f32 = 520.0;
+pub const BUBBLE_CAP: f32 = 720.0;
+pub const BUBBLE_SHARE: f32 = 0.62;
+/// The width the fold counts with when the view does not say (a bubble at 520 pt).
+pub const DEFAULT_CPL: usize = 82;
+
+/// The conversation column's width in an overlay `ow` pt wide: whole in one
+/// column and in All teams, less the side column (360 pt, its gap and padding)
+/// beside a team.
+pub fn conv_w(ow: f32, side: bool) -> f32 {
+    if ow >= 760.0 && side { ow - 360.0 - 16.0 - 24.0 } else { ow - 24.0 }
+}
+
+/// A bubble's widest in a conversation column `conv` pt wide in an overlay
+/// `ow` wide; never past the column less its gutters.
+pub fn bubble_max(conv: f32, ow: f32) -> f32 {
+    let w = if ow >= 760.0 { (conv * BUBBLE_SHARE).floor().clamp(BUBBLE_MIN, BUBBLE_CAP) } else { BUBBLE_MIN };
+    w.min(conv - 24.0).max(120.0)
+}
+
+/// Characters of prose a line of such a bubble holds (its 12 pt padding off).
+pub fn chars_per_line(bubble: f32) -> usize {
+    (((bubble - 24.0) / CHAR_W).floor() as usize).max(16)
+}
 /// Conversation rows drawn a page (the newest first kept), and commits a lane draws.
 pub const ROWS_PAGE: usize = 80;
 pub const LANE_DOTS: usize = 12;
@@ -156,17 +187,34 @@ pub fn day_label(ms: u64, now_s: u64) -> String {
     }
 }
 
-fn folded(text: &str) -> bool {
-    text.chars().count() > FOLD_CHARS || text.lines().count() > FOLD_LINES
+/// Lines a text takes drawn `cpl` characters wide: each of its lines wraps on
+/// `cpl`, an empty one counts as one.
+fn drawn_lines(text: &str, cpl: usize) -> usize {
+    text.lines().map(|l| l.chars().count().div_ceil(cpl).max(1)).sum()
 }
 
-/// The first part of a long text, cut on a word, for its folded view.
-pub fn head(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().take(FOLD_LINES).collect();
-    let mut s = lines.join("\n");
-    if let Some((i, _)) = s.char_indices().nth(FOLD_CHARS) {
-        let cut = s[..i].rfind(' ').filter(|c| *c > i / 2).unwrap_or(i);
-        s.truncate(cut);
+fn folded(text: &str, cpl: usize) -> bool {
+    drawn_lines(text, cpl) > FOLD_DRAWN
+}
+
+/// The first part of a long text, its first `SHOW_DRAWN` drawn lines, cut on a word.
+pub fn head(text: &str, cpl: usize) -> String {
+    let mut s = String::new();
+    let mut left = SHOW_DRAWN;
+    for l in text.lines() {
+        let n = l.chars().count().div_ceil(cpl).max(1);
+        if n > left {
+            let i = l.char_indices().nth(left * cpl).map_or(l.len(), |(i, _)| i);
+            let cut = l[..i].rfind(' ').filter(|c| *c > i / 2).unwrap_or(i);
+            s.push_str(&l[..cut]);
+            break;
+        }
+        s.push_str(l);
+        s.push('\n');
+        left -= n;
+        if left == 0 {
+            break;
+        }
     }
     format!("{}…", s.trim_end())
 }
@@ -215,9 +263,14 @@ pub struct Opts<'a> {
     pub now_s: u64,
     /// Pending relay requests still waiting (ids), for "answer it in Requests".
     pub waiting: Option<&'a BTreeSet<String>>,
+    /// Characters of prose on a line of a bubble at the width drawn (0: `DEFAULT_CPL`).
+    pub cpl: usize,
 }
 
 impl Opts<'_> {
+    fn cpl(&self) -> usize {
+        if self.cpl == 0 { DEFAULT_CPL } else { self.cpl }
+    }
     fn open(&self, id: &str) -> bool {
         self.expanded.is_some_and(|e| e.contains(id))
     }
@@ -242,9 +295,9 @@ fn base(ev: &J, o: &Opts) -> J {
 
 fn with_text(row: &mut J, id: &str, text: Option<&str>, o: &Opts) {
     let Some(t) = text.filter(|t| !t.trim().is_empty()) else { return };
-    if folded(t) {
+    if folded(t, o.cpl()) {
         let open = o.open(id);
-        row["text"] = breakable(&if open { t.to_string() } else { head(t) }).into();
+        row["text"] = breakable(&if open { t.to_string() } else { head(t, o.cpl()) }).into();
         row["fold"] = json!({ "open": open, "key": id });
     } else {
         row["text"] = breakable(t).into();
@@ -616,5 +669,41 @@ mod tests {
         for d in g["paint"]["dots"].as_array().unwrap() {
             assert!(d["x"].as_f64().unwrap() <= 300.0);
         }
+    }
+
+    #[test]
+    fn a_bubble_follows_its_column_between_520_and_the_cap() {
+        // (column, overlay): one column under 760 pt, the side column beside a team.
+        let w = |conv: f32, ow: f32| bubble_max(conv, ow);
+        assert_eq!(w(396.0, 420.0), 372.0, "a narrow column: less its gutters");
+        assert_eq!(w(536.0, 560.0), 512.0);
+        assert_eq!(w(696.0, 720.0), 520.0, "one column under 760: today's 520");
+        assert_eq!(w(360.0, 760.0), 336.0, "760 with its side column: the column less its gutters");
+        assert_eq!(w(760.0, 1150.0), 520.0, "62 percent would be under 520");
+        assert_eq!(w(1000.0, 1400.0), 620.0, "62 percent of the column");
+        assert_eq!(w(1284.0, 1700.0), BUBBLE_CAP);
+        assert_eq!(w(2000.0, 2024.0), BUBBLE_CAP, "a wide window never grows past the cap");
+        assert_eq!(conv_w(2000.0, false), 1976.0);
+        assert_eq!(conv_w(1284.0, true), 884.0);
+        assert_eq!(conv_w(720.0, true), 696.0);
+    }
+
+    #[test]
+    fn a_text_folds_by_the_lines_it_is_drawn_on() {
+        let words = |n: usize| "word ".repeat(n).trim_end().to_string();
+        // 500 characters: nine lines at 62 a line, five at 116.
+        let t = words(100);
+        assert!(folded(&t, chars_per_line(396.0)));
+        assert!(!folded(&t, chars_per_line(720.0)), "fits a few lines at the wide width");
+        assert!(!folded(&words(60), DEFAULT_CPL));
+        // Truly long ones fold at any width, and show the first lines drawn.
+        let long = words(600);
+        assert!(folded(&long, chars_per_line(720.0)));
+        let h = head(&long, chars_per_line(720.0));
+        assert!(h.ends_with('…') && drawn_lines(&h, chars_per_line(720.0)) <= SHOW_DRAWN, "{}", h.len());
+        assert!(h.chars().count() > 400, "six wide lines, not a stub");
+        // Paragraphs count: blank lines are drawn.
+        assert!(folded(&"a\n\n".repeat(5), 100));
+        assert!(!folded("a\n\nb\n\nc", 100));
     }
 }

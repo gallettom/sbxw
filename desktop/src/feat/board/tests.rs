@@ -295,7 +295,7 @@ fn keys(n: &crate::luau::Node, out: &mut Vec<String>) {
 fn nothing_of_the_board_is_drawn_outside_its_overlay_at_any_width() {
     let mut bad = vec![];
     let mut checked = 0;
-    for (w, h) in [(1284.0, 816.0), (760.0, 600.0), (500.0, 600.0), (420.0, 700.0)] {
+    for (w, h) in [(2000.0, 1000.0), (1284.0, 816.0), (760.0, 600.0), (500.0, 600.0), (420.0, 700.0)] {
         for tab in ["conversation", "notes", "commits"] {
             let mut rt = window(w, h);
             // A narrow window is used with the sidebar hidden (at 500 pt it
@@ -477,7 +477,7 @@ fn the_author_line_names_once_and_groups_one_author_s_messages() {
     let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
     let rows = rows_of(&v);
     // The lead named otherwise: its name and the role once.
-    let dms: Vec<&J> = rows.iter().filter(|r| r["kind"] == "direct_message" && r["is_lead"] == true).collect();
+    let dms: Vec<&J> = rows.iter().filter(|r| r["kind"] == "direct_message" && r["is_lead"] == true && r["to"] == "web-page").collect();
     assert_eq!(dms.len(), 2);
     assert_eq!((dms[0]["who"].as_str(), dms[0]["role"].as_str(), dms[0]["to"].as_str()), (Some("orders-planner"), Some("lead"), Some("web-page")));
     // Two messages in a row, same author, same addressee, a minute apart: one author line.
@@ -539,7 +539,7 @@ fn no_text_leaves_its_bubble_or_the_overlay_with_long_unbroken_words() {
     let long = format!("{} {} {}", "y".repeat(200), "src/".repeat(30) + "file.rs", "0123456789abcdef".repeat(5));
     let mut bad = vec![];
     let mut inside = 0;
-    for (w, h) in [(1284.0, 816.0), (760.0, 600.0), (500.0, 600.0), (420.0, 700.0)] {
+    for (w, h) in [(2000.0, 1000.0), (1284.0, 816.0), (760.0, 600.0), (500.0, 600.0), (420.0, 700.0)] {
         for team in ["p-long", "p-run"] {
             let mut rt = window(w, h);
             if w < 700.0 {
@@ -733,4 +733,47 @@ fn the_picker_answers_up_down_and_enter() {
     }
     assert!(rt.presented("board-picker").is_none(), "Enter picks and closes");
     assert_eq!(shown_team(&rt), "p-old", "All teams, p-run, p-new, p-old: two down from p-run");
+}
+
+#[test]
+fn escape_closes_the_picker_list_first_and_the_board_on_the_second_press() {
+    use rune::{Key, KeyEvent, Mods};
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    tap(&mut rt, "board-row-picker");
+    assert!(rt.presented("board-picker").is_some(), "the list is open");
+    rt.key(KeyEvent { key: Key::Escape, mods: Mods::default() });
+    settle(&mut rt);
+    assert!(rt.presented("board-picker").is_none(), "Escape closes the list");
+    assert!(rt.presented("overlay-board").is_some(), "the Board stays");
+    rt.key(KeyEvent { key: Key::Escape, mods: Mods::default() });
+    settle(&mut rt);
+    assert!(rt.presented("overlay-board").is_none(), "a second Escape closes the Board");
+}
+
+/// The widest of the conversation's bubbles, drawn, follows the column.
+#[test]
+fn bubbles_are_as_wide_as_the_column_allows_and_never_leave_it() {
+    let prose = "The route handlers are split from the validation layer, so each endpoint reads its input once and returns a typed error the page can show. ".repeat(12);
+    for (w, h, team) in [(2000.0, 1000.0, "all"), (2000.0, 1000.0, "p-run"), (1284.0, 816.0, "p-run"), (760.0, 600.0, "p-run"), (420.0, 700.0, "p-run")] {
+        let mut rt = window(w, h);
+        if w < 700.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            settle(&mut rt);
+        }
+        open(&mut rt, json!({ "team": team }));
+        append(&mut rt, note_event("l990", &prose));
+        let (p, _) = rt.presented("overlay-board").unwrap();
+        let (c, _) = rt.presented("board-convo").unwrap();
+        let conv = model::conv_w(p[2], team != "all");
+        let max = model::bubble_max(conv, p[2]);
+        let widest = rt.elements().iter().filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("board-bubble-"))).map(|e| e.rect[2]).fold(0.0, f32::max);
+        assert!((widest - max).abs() <= 1.0, "{team} at {w}: widest bubble {widest}, rule {max} (overlay {}, column {})", p[2], c[2]);
+        assert!(widest <= c[2] + 0.5, "{team} at {w}: a bubble of {widest} in a column of {}", c[2]);
+        if p[2] >= 760.0 {
+            assert!(max >= model::BUBBLE_MIN.min(conv - 24.0) && max <= model::BUBBLE_CAP);
+        } else {
+            assert!(max <= model::BUBBLE_MIN);
+        }
+    }
 }
