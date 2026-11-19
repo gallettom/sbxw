@@ -324,6 +324,10 @@ impl State {
                         out.push(Action::Focus(format!("board-row-team-{id}")));
                         return Ok(out);
                     }
+                    // Closed: the keyboard back on its button, as a menu does.
+                    out.push(self.ui(cx));
+                    out.push(Action::Focus("board-row-picker".into()));
+                    return Ok(out);
                 }
             }
             "board_key" => {
@@ -338,7 +342,12 @@ impl State {
                         let id = ids.get(self.picker_hl).cloned().unwrap_or_else(|| "all".into());
                         return self.act(cx, &Asked { name: "board_team", args: json!({ "id": id }).as_object().cloned().unwrap_or_default() });
                     }
-                    _ => self.picker = false,
+                    _ => {
+                        self.picker = false;
+                        out.push(self.ui(cx));
+                        out.push(Action::Focus("board-row-picker".into()));
+                        return Ok(out);
+                    }
                 }
             }
             other => return Err(format!("{other}: not a board intent")),
