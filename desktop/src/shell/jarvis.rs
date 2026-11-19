@@ -58,6 +58,9 @@ pub struct Wiring {
     pub spoken: bool,
     /// The keys terminals leave to the shell (push-to-talk, the panel's F7).
     pub reserved: &'static [Key],
+    /// What terminals leave to the shell: those, and the dictate key
+    /// (`[voice] dictate_key`) when the daemon has voice (dictate.rs).
+    pub term_reserved: &'static [Key],
     /// The panel's width while its handle is dragged.
     pub drag_from: f32,
     /// The current reading; bumped by every new reading and every stop.
@@ -82,6 +85,7 @@ impl Wiring {
             key_held: false,
             spoken: false,
             reserved: reserved_for("F8"),
+            term_reserved: reserved_for("F8"),
             drag_from: 0.0,
             read_gen: 0,
             read_stop: None,
@@ -295,7 +299,12 @@ impl App {
             log::warn!("{}", self.jarvis.key_note.as_deref().unwrap_or(""));
         }
         self.wiring.reserved = reserved_for(&code);
-        let r = self.wiring.reserved;
+        let mut keys = self.wiring.reserved.to_vec();
+        if let Some(k) = v.as_ref().and_then(|v| jarvis::key_of(v["dictate_key"].as_str().unwrap_or(super::dictate::DEFAULT_KEY)).ok()) {
+            keys.extend(k.iter().cloned());
+        }
+        self.wiring.term_reserved = Box::leak(keys.into_boxed_slice());
+        let r = self.wiring.term_reserved;
         for p in &mut self.panes {
             if let Some(t) = &mut p.term {
                 t.keys.reserved = r;
@@ -337,6 +346,7 @@ impl App {
     /// Drains the calls' answers and the audio's events; checks Jarvis's
     /// status while it is being created or started.
     pub(super) fn poll_jarvis(&mut self, tx: &mut Tx) -> bool {
+        self.dictate_watch(tx);
         let mut changed = self.relay_speech() | self.follow_check();
         // Headless: the virtual clock does not wait for the daemon.
         let until = headless().then(|| Instant::now() + Duration::from_millis(1500));

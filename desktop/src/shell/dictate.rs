@@ -49,6 +49,9 @@ pub struct Take {
     /// The field did not have the keyboard: the words go at its end.
     pub at_end: bool,
     pub started: Instant,
+    /// Into a terminal: its pane (index) and the terminal's id. `screen` is
+    /// then "terminal" and `input` the grid's key.
+    pub term: Option<(usize, String)>,
 }
 
 #[derive(Default)]
@@ -64,6 +67,8 @@ pub struct Dictation {
     pub key_name: Option<String>,
     /// The last refusal or failure, for the field it was about.
     pub notice: Option<(String, String, String)>,
+    /// What had Rune's keyboard at the last poll (`dictate_watch`).
+    pub seen: Option<String>,
 }
 
 /// Whether `key` is an `input` or `textarea` of tree `n`.
@@ -144,7 +149,7 @@ impl App {
                 self.dictation.gen += 1;
                 self.dictation.level = 0.0;
                 self.dictation.notice = None;
-                self.dictation.on = Some(Take { screen: screen.into(), input: input.into(), arg, held, at_end, started: Instant::now() });
+                self.dictation.on = Some(Take { screen: screen.into(), input: input.into(), arg, held, at_end, started: Instant::now(), term: None });
                 log::info!("dictation: recording into {screen}");
                 true
             }
@@ -152,6 +157,74 @@ impl App {
                 self.dictate_notice(screen, input, format!("Cannot record: {e}"), true);
                 false
             }
+        }
+    }
+
+    /// Why no dictation may go into a terminal now (the voice side only:
+    /// the keyboard gate is checked by the caller and again on arrival).
+    fn terminal_refusal(&self) -> Option<String> {
+        if self.jarvis.recording {
+            return Some("Not dictating: Jarvis is listening. Release its key first.".into());
+        }
+        if !self.audio.available() {
+            return Some("Not dictating: this build of the app has no audio.".into());
+        }
+        match &self.jarvis.voice {
+            Some(v) if v["ready"] != true => Some("Not dictating: voice is not installed. Install it in Setup, Voice (or run sbxw voice install).".into()),
+            None => Some("Not dictating: the daemon's voice is not reachable.".into()),
+            _ => None,
+        }
+    }
+
+    /// Starts a held dictation into the terminal of pane `pane` (grid `grid`).
+    fn dictate_terminal(&mut self, pane: usize, grid: &str) {
+        let Some(id) = self.panes.get(pane).and_then(|p| p.term.as_ref()).map(|t| t.id.clone()) else { return };
+        if let Some(why) = self.terminal_refusal() {
+            log::info!("dictation refused");
+            self.dictate_notice("terminal", grid, why, false);
+            return;
+        }
+        self.stop_reading();
+        match self.audio.start_capture() {
+            Ok(()) => {
+                self.dictation.gen += 1;
+                self.dictation.level = 0.0;
+                self.dictation.notice = None;
+                self.dictation.seen = Some(grid.to_string());
+                self.dictation.on = Some(Take { screen: "terminal".into(), input: grid.into(), arg: J::Null, held: true, at_end: false, started: Instant::now(), term: Some((pane, id)) });
+                log::info!("dictation: recording into pane {}", pane + 1);
+            }
+            Err(e) => self.dictate_notice("terminal", grid, format!("Cannot record: {e}"), true),
+        }
+    }
+
+    /// Masked words typed into the terminal the dictation began in, as a
+    /// paste (bracketed when its program asked), with every control
+    /// character turned into a space first: no Return, no escape, so the
+    /// words can never submit or run anything. Only while that pane still
+    /// has the keyboard and the gate lets keys reach it.
+    fn type_into_terminal(&mut self, take: &Take, words: &str) -> Result<usize, &'static str> {
+        let (pane, id) = take.term.clone().ok_or("no terminal")?;
+        let seen = self.dictation.seen.clone();
+        if self.focused != pane || seen.as_deref() != Some(take.input.as_str()) || !self.terminal_may_take_keys(seen.as_deref()) {
+            return Err("the terminal no longer has the keyboard");
+        }
+        let t = self.panes.get_mut(pane).and_then(|p| p.term.as_mut()).filter(|t| t.id == id).ok_or("the terminal is gone")?;
+        let clean: String = words.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+        let clean = clean.trim();
+        t.paste(clean);
+        Ok(clean.chars().count())
+    }
+
+    /// Each poll: what has the keyboard. A terminal dictation whose pane
+    /// lost it, or whose gate closed, is cancelled.
+    pub(super) fn dictate_watch(&mut self, tx: &Tx) {
+        self.dictation.seen = tx.focused().map(str::to_string);
+        let Some(t) = &self.dictation.on else { return };
+        let Some((pane, _)) = t.term else { return };
+        let ok = self.focused == pane && self.dictation.seen.as_deref() == Some(t.input.as_str()) && self.terminal_may_take_keys(self.dictation.seen.as_deref());
+        if !ok {
+            self.dictate_cancel(Some("Dictation cancelled: the terminal lost the keyboard."));
         }
     }
 
@@ -204,6 +277,10 @@ impl App {
         }
         match result {
             Ok(words) if words.trim().is_empty() => self.dictate_notice(&take.screen, &take.input, "Nothing heard.".into(), false),
+            Ok(words) if take.term.is_some() => match self.type_into_terminal(&take, &words) {
+                Ok(n) => log::info!("dictation: {n} characters typed into pane {}", take.term.as_ref().map_or(0, |t| t.0 + 1)),
+                Err(why) => self.dictate_notice(&take.screen, &take.input, format!("Not typed: {why}; the words were dropped."), true),
+            },
             Ok(words) => match screen::type_into(self, &take.screen, &take.input, &take.arg, &words, take.at_end) {
                 Ok(n) => log::info!("dictation: {n} characters inserted"),
                 Err(why) => self.dictate_notice(&take.screen, &take.input, format!("Not inserted: {why}."), true),
@@ -249,7 +326,18 @@ impl App {
                 return true;
             }
         }
-        // A terminal, or another field (a filter, a form), keeps its key.
+        // The terminal that has the keyboard (the gate open): dictation
+        // into it. With no voice at all (a daemon without it), it keeps F9.
+        if let Some(k) = focused.as_deref().filter(|k| k.starts_with("grid") && self.terminal_may_take_keys(Some(k))) {
+            let has_term = self.panes.get(self.focused).is_some_and(|p| p.term.is_some());
+            if !has_term || self.jarvis.voice.is_none() {
+                return false;
+            }
+            let (pane, k) = (self.focused, k.to_string());
+            self.dictate_terminal(pane, &k);
+            return true;
+        }
+        // A terminal behind a layer, or another field (a filter, a form), keeps its key.
         if let Some(k) = &focused {
             let field = self.screens.iter().any(|s| s.last_good.as_ref().is_some_and(|t| is_field(t, k)));
             if k.starts_with("grid") || field || crate::surface::focused().is_some() {
@@ -529,19 +617,5 @@ mod tests {
         frames(&mut rt, 4);
         assert_eq!(draft(&mut rt), "", "nothing in the other session's draft");
         assert!(notice(&rt).contains("session changed") || notice(&rt).contains("takes no words"), "{}", notice(&rt));
-    }
-
-    /// A terminal with the keyboard keeps F9 (the panes, no base view): no
-    /// dictation starts.
-    #[test]
-    fn f9_in_a_terminal_is_not_a_chat_dictation() {
-        let fx = format!("{}/fixtures/monitor/dictate.json", env!("CARGO_MANIFEST_DIR"));
-        let a = App::new(Args { fixture: Some(fx), ..Default::default() });
-        let mut rt = rune::Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
-        rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut Tx| s.on_key(ev, tx));
-        frames(&mut rt, 4);
-        rt.update(|_, tx| tx.focus("grid-1", false));
-        press(&mut rt, F9);
-        assert!(rt.state.dictation.on.is_none());
     }
 }

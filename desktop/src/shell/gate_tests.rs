@@ -505,3 +505,144 @@ fn a_drop_with_the_monitor_as_the_base_reaches_no_pane() {
     settle(&mut rt, 2);
     assert_eq!(sent(&rx), b"", "a key reached the terminal under the Monitor and the proposal");
 }
+
+// ---------------------------------------------------------------------------
+// Dictation into a terminal (dictate.rs): F9 held in the pane that has the
+// keyboard, the daemon's masked words typed there at release, never Enter.
+
+const F9: Key = Key::Function(9);
+
+/// Two terminals (panes 1 and 2), voice ready, a fake microphone; the grid
+/// of pane 1 has the keyboard.
+fn voice_window() -> (rune::Runtime<App>, std::sync::mpsc::Receiver<crate::client::TermInput>, std::sync::mpsc::Receiver<crate::client::TermInput>) {
+    let (mut rt, rx) = window_on("shell/two-panes-voice");
+    let (ev_tx, ev_rx) = std::sync::mpsc::channel();
+    std::mem::forget(ev_tx);
+    let (in_tx, rx2) = std::sync::mpsc::channel();
+    rt.update(move |s, _| {
+        let mut t = TerminalState::new(crate::client::TerminalConn { events: ev_rx, input: in_tx });
+        t.resize(40, 5);
+        t.id = "2".into();
+        if s.panes.len() < 2 {
+            let id = s.fresh();
+            s.panes.push(Pane::empty(id));
+        }
+        s.panes[1].sandbox = Some("web-app".into());
+        s.panes[1].term = Some(t);
+        // As the shell gives every terminal it opens (shell.rs).
+        for p in &mut s.panes {
+            if let Some(t) = &mut p.term {
+                t.keys.reserved = s.wiring.term_reserved;
+            }
+        }
+    });
+    rt.frame(0.02);
+    rt.update(|_, tx| tx.focus("grid-1", false));
+    settle(&mut rt, 1);
+    (rt, rx, rx2)
+}
+
+fn f9(rt: &mut rune::Runtime<App>, down: bool) {
+    let ev = KeyEvent { key: F9, mods: rune::Mods::default() };
+    if down {
+        rt.key(ev);
+    } else {
+        rt.key_up(ev);
+    }
+    settle(rt, 4);
+}
+
+fn dictation_notice(rt: &rune::Runtime<App>) -> String {
+    rt.state.dictation.notice.as_ref().map(|n| n.2.clone()).unwrap_or_default()
+}
+
+#[test]
+fn dictated_words_reach_the_focused_terminal_only_and_never_press_enter() {
+    let (mut rt, rx, rx2) = voice_window();
+    f9(&mut rt, true);
+    assert!(rt.state.dictation.on.as_ref().is_some_and(|t| t.term.is_some()), "recording into pane 1: {} focused {}", dictation_notice(&rt), rt.state.focused);
+    assert_eq!(sent(&rx), b"", "F9 itself is not sent to the program");
+    f9(&mut rt, false);
+    let got = String::from_utf8(sent(&rx)).unwrap();
+    assert!(got.contains("please send the report to [email] today"), "{got:?}");
+    assert!(!got.contains('\r') && !got.contains('\n'), "no Enter: {got:?}");
+    assert_eq!(sent(&rx2), b"", "the other terminal gets nothing");
+}
+
+#[test]
+fn a_cover_or_a_focus_change_during_the_capture_drops_the_words() {
+    type Cover = fn(&mut App);
+    let covers: [(&str, Cover); 5] = [
+        ("a modal", |s| s.open_modal("templates", J::Null)),
+        ("the palette", |s| s.palette_open()),
+        ("Jarvis's proposal", |s| s.jarvis.shown = Some("p1".into())),
+        ("the Sessions base view", |s| s.feats.base = Some("monitor".into())),
+        ("an overlay", |s| s.feats.overlay = Some(("commits".into(), J::Null))),
+    ];
+    for (what, cover) in covers {
+        let (mut rt, rx, _rx2) = voice_window();
+        f9(&mut rt, true);
+        assert!(rt.state.dictation.on.is_some(), "{what}: recording");
+        rt.update(move |s, _| cover(s));
+        settle(&mut rt, 2);
+        f9(&mut rt, false);
+        assert_eq!(sent(&rx), b"", "{what}: nothing typed");
+        assert!(rt.state.dictation.on.is_none() && rt.state.dictation.pending.is_none(), "{what}");
+        assert!(dictation_notice(&rt).contains("cancelled"), "{what}: {}", dictation_notice(&rt));
+    }
+    // The keyboard moves to the other pane meanwhile.
+    let (mut rt, rx, rx2) = voice_window();
+    f9(&mut rt, true);
+    rt.update(|s, tx| {
+        s.focused = 1;
+        tx.focus("grid-2", false);
+    });
+    settle(&mut rt, 2);
+    f9(&mut rt, false);
+    assert_eq!(sent(&rx), b"");
+    assert_eq!(sent(&rx2), b"", "not the pane that got the keyboard either");
+}
+
+#[test]
+fn the_gate_closed_when_the_words_arrive_drops_them() {
+    let (mut rt, rx, _rx2) = voice_window();
+    f9(&mut rt, true);
+    // Released, then a dialog before the words are typed: the words find
+    // the gate closed (the capture was over, so nothing cancelled it).
+    rt.update(|s, _| {
+        s.dictate_stop();
+        let f = App::feature_of("network").unwrap();
+        let c = crate::feat::Confirm::new("Save a secret", crate::feat::Call::post("/api/x", serde_json::json!({}), "x"));
+        s.feature_actions(f, "network", vec![c.into_action()]);
+    });
+    settle(&mut rt, 4);
+    assert_eq!(sent(&rx), b"", "nothing under the dialog");
+    assert!(dictation_notice(&rt).starts_with("Not typed:"), "{}", dictation_notice(&rt));
+}
+
+#[test]
+fn f9_under_a_layer_starts_nothing_and_types_nothing() {
+    let (mut rt, rx, _rx2) = voice_window();
+    rt.update(|s, _| s.open_modal("templates", J::Null));
+    rt.frame(0.02);
+    rt.update(|_, tx| tx.focus("grid-1", false));
+    f9(&mut rt, true);
+    f9(&mut rt, false);
+    assert!(rt.state.dictation.on.is_none());
+    assert_eq!(sent(&rx), b"");
+}
+
+#[test]
+fn without_voice_f9_stays_the_programs_key() {
+    let (mut rt, rx) = window();
+    rt.update(|s, tx| {
+        let r = s.wiring.term_reserved;
+        s.panes[0].term.as_mut().unwrap().keys.reserved = r;
+        tx.focus("grid-1", false);
+    });
+    rt.frame(0.02);
+    rt.key(KeyEvent { key: F9, mods: rune::Mods::default() });
+    rt.frame(0.02);
+    assert_eq!(sent(&rx), b"\x1b[20~", "a daemon without voice: F9 goes to the program");
+    assert!(rt.state.dictation.on.is_none());
+}

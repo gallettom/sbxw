@@ -1661,7 +1661,7 @@ impl App {
                 // Element keys `grid-N`, `terminal-N` (N the pane's number).
                 t.id = (i + 1).to_string();
                 // Push-to-talk and the panel's key are the shell's, even with a terminal focused.
-                t.keys.reserved = self.wiring.reserved;
+                t.keys.reserved = self.wiring.term_reserved;
                 // Headless shots: a steady cursor, so a PNG does not catch it off.
                 t.cursor_blink = !headless();
                 self.panes[i].term = Some(t);
