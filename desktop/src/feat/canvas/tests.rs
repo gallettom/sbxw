@@ -658,6 +658,8 @@ fn the_title_row_does_not_overlap_at_1284_or_720() {
             }
         }
     }
+}
+
 /// Canvas drawn over the Sessions base view (GUI): the base is covered
 /// (`covered`), Canvas is not (`covered_top`): its Ask and Send are its
 /// own to refuse; a dialog, a modal, a proposal or the palette (all
