@@ -49,6 +49,7 @@ pub mod table;
 pub mod templates;
 pub mod terminal;
 pub mod team;
+pub mod tickets;
 pub mod tooling;
 pub mod usage;
 pub mod voice;
