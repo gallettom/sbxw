@@ -97,7 +97,7 @@ add(type="tap", key="filter")
 for _ in range(7):
     add(type="key", name="Backspace")
 hold(300)
-RAIL = ["rail-commits", "rail-files", "rail-worktrees", "rail-mcp", "rail-skills", "rail-kits", "rail-network", "rail-requests", "rail-leads", "jarvis-toggle", "rail-setup"]
+RAIL = ["rail-commits", "rail-files", "rail-worktrees", "rail-board", "rail-mcp", "rail-skills", "rail-kits", "rail-network", "rail-requests", "rail-leads", "jarvis-toggle", "rail-setup"]
 PICTURES = [f"shot-{i}.png" for i in range(1, 5)]
 # Every overlay and panel of the rail once (the keys come from the run's own
 # tree: rail-*), each left open until the next.

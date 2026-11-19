@@ -66,4 +66,35 @@ d["approvals"] = {"ok": True, "approvals": reqs}
 
 wt = load("worktrees/standin.json")["daemon"]
 d["worktrees_of"] = wt["worktrees_of"]
+
+# The Board: a team of 8 threads on web-app with 500 events (invented text),
+# 120 of them commits, and the details of a few.
+import hashlib
+T = 1794_902_400_000
+threads = [f"part-{i}" for i in range(1, 9)]
+kinds = ["thread_status", "board_warning", "commit", "commit", "direct_message", "board_decision", "commit", "user_question", "thread_status", "team_note"]
+events, clist = [], []
+for i in range(500):
+    th = threads[i % 8]
+    k = kinds[i % len(kinds)]
+    at = T + i * 90_000
+    if k == "commit":
+        h = hashlib.sha1(f"perf-board-{i}".encode()).hexdigest()
+        events.append({"id": "c" + h, "at": at, "kind": "commit", "group": "commits", "from": th, "to": None, "text": f"{th}: step {i} of the change",
+                       "data": {"hash": h, "short": h[:7], "author": "Agent", "branch": "sbxw/" + th, "merged": False, "files": 2, "added": 20 + i % 30, "removed": i % 7, "repo": "", "thread": th}})
+        clist.append({"hash": h, "short": h[:7], "subject": f"{th}: step {i} of the change", "author": "Agent", "at": at // 1000, "thread": th, "branch": "sbxw/" + th, "merged": False, "files": 2, "added": 20 + i % 30, "removed": i % 7, "repo": ""})
+        if len(clist) <= 4:
+            d["commit_details"][h] = {"hash": h, "short": h[:7], "author": "Agent", "at": at // 1000, "subject": f"{th}: step {i}", "body": "", "repo": "",
+                                      "files": [{"path": "src/part.rs", "added": 20, "removed": 2, "binary": False, "patch": "@@ -1,2 +1,3 @@\n a\n-b\n+c\n+d\n"}], "files_more": 0, "truncated": False}
+        continue
+    group = {"board_warning": "notes", "board_decision": "notes", "team_note": "notes", "direct_message": "messages", "user_question": "questions"}.get(k, "status")
+    data = {"thread": th, "state": "working"} if k == "thread_status" else ({"kind": "info"} if k == "team_note" else {"files": []})
+    events.append({"id": f"l{i}", "at": at, "kind": k, "group": group, "from": th if i % 3 else "lead", "to": "lead" if i % 3 else th,
+                   "text": f"Step {i}: a sentence or two about the work, as an agent writes them, long enough to wrap once on a narrow window.", "data": data})
+events.reverse()
+clist.reverse()
+team = {"id": "p-perf", "sandbox": "web-app", "summary": "Eight parts at once", "state": "running", "variant": "split", "lead": "Perf lead",
+        "threads": [{"name": t, "state": "working"} for t in threads], "created_ms": T, "updated_ms": T + 500 * 90_000, "last_ms": T + 500 * 90_000}
+d["board_teams"] = [team]
+d["board_timelines"] = {"p-perf": {"team": team, "events": events, "standing": [], "commits": {"available": True, "list": clist, "totals": [], "merged": False}}}
 json.dump(out, sys.stdout)

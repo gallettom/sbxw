@@ -385,6 +385,15 @@ impl State {
                 Ok(b) => {
                     self.teams = b["teams"].as_array().cloned().unwrap_or_default();
                     self.teams_error = None;
+                    // A team the list no longer has (pruned since): the latest one.
+                    if let Some(id) = self.team.clone() {
+                        if !self.teams.is_empty() && !self.teams.iter().any(|t| t["id"] == id.as_str()) {
+                            self.team = self.teams[0]["id"].as_str().map(str::to_string);
+                            let mut out = self.read_shown();
+                            out.push(self.ui(cx));
+                            return out;
+                        }
+                    }
                     // Every team, opened before the list was read: read them now.
                     if self.team.is_none() && self.timelines.is_empty() && !self.teams.is_empty() {
                         let mut out = self.read_shown();
