@@ -54,6 +54,8 @@ impl App {
         });
         // A lead's or thread's `SendMessage` to its team: on the team's timeline.
         self.direct_message_noted(sandbox, &body);
+        // Which agent process each session runs in: whether it can read a team note.
+        self.note_reader_seen(sandbox, ev.thread(), ev.agent_proc());
         let has_pty = self.sessions.is_live(&SessionKey::agent(sandbox));
         let infos = self.agents.lock().unwrap().apply(&sandbox.to_string(), &ev, origin, has_pty, now_ms());
         for info in infos {

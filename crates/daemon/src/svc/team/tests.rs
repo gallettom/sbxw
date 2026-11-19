@@ -228,7 +228,7 @@ async fn a_team_note_is_on_the_timeline_and_read_once_by_its_addressees() {
     app.plans.lock().unwrap().approve(&p.id, vec![t("a"), t("b")], None, None, crate::app::now_ms()).unwrap();
     let a = ThreadName::parse("a").unwrap();
     // The lead to a; a to the whole team.
-    let (_, told) = app.team_note(&sb, None, "a", "info", "The fixtures moved to tests/data.").unwrap();
+    let (_, told, _) = app.team_note(&sb, None, "a", "info", "The fixtures moved to tests/data.").unwrap();
     assert!(told.is_empty(), "no session open: recorded, nobody typed to");
     tick();
     app.team_note(&sb, Some(&a), "team", "warning", "Do not touch the money helper today.").unwrap();
@@ -472,4 +472,65 @@ async fn a_line_held_for_a_thread_that_ends_is_dropped() {
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     assert!(!shown(&asked).contains("main moved"), "ended: dropped, never typed");
     asked.kill();
+}
+
+async fn agent_post(app: &std::sync::Arc<crate::app::App>, sb: &str, path: &str, body: Value) -> (StatusCode, Value) {
+    let token = app.store.token(SandboxRef::parse(sb).unwrap()).unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let res = crate::http::agent_router(app.clone()).oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn a_note_s_line_says_what_to_do_when_its_reader_may_lack_the_tool() {
+    let (_d, app) = app();
+    // Sandbox names of this test's own: the readers' table is the process's.
+    let sb = SandboxRef::parse("hello-team").unwrap();
+    let p = app.plan_propose(&sb, "Hello", vec![t("a"), t("b")], Variant::Split, "x", Some("Lead")).await.unwrap();
+    app.plans.lock().unwrap().approve(&p.id, vec![t("a"), t("b")], None, None, crate::app::now_ms()).unwrap();
+    let a = echo_session(&app, &sb, "a").await;
+    let b = echo_session(&app, &sb, "b").await;
+    // a's session runs in process 100:5, b's in 200:7; both idle.
+    for (t, proc) in [("a", "100:5"), ("b", "200:7")] {
+        hook(&app, &sb, Some(t), serde_json::json!({ "hook_event_name": "SessionStart", "agent_proc": proc }));
+        hook(&app, &sb, Some(t), serde_json::json!({ "hook_event_name": "Stop", "agent_proc": proc, "last_assistant_message": "ok" }));
+    }
+    // a's relay server says hello with read_team_notes. b's never does (it
+    // started before its relay could). Another sandbox says hello for b's
+    // process: it must not count for b.
+    let tools = serde_json::json!(["team_note", "read_team_notes", "report_thread_status"]);
+    assert_eq!(agent_post(&app, "hello-team", "/api/relay/hello", serde_json::json!({ "thread": "a", "agent_proc": "100:5", "tools": tools })).await.0, StatusCode::OK);
+    assert_eq!(agent_post(&app, "hello-other", "/api/relay/hello", serde_json::json!({ "agent_proc": "200:7", "tools": tools })).await.0, StatusCode::OK);
+    // A body that is not a hello is refused.
+    assert_eq!(agent_post(&app, "hello-team", "/api/relay/hello", serde_json::json!({ "agent_proc": "100:5; rm", "tools": [] })).await.0, StatusCode::BAD_REQUEST);
+    let many: Vec<String> = (0..300).map(|i| format!("t{i}")).collect();
+    assert_eq!(agent_post(&app, "hello-team", "/api/relay/hello", serde_json::json!({ "agent_proc": "100:5", "tools": many })).await.0, StatusCode::BAD_REQUEST);
+    assert!(app.can_read_notes(&sb, "a") && !app.can_read_notes(&sb, "b"));
+
+    let (status, v) = agent_post(&app, "hello-team", "/api/team/note", serde_json::json!({ "to": "team", "kind": "info", "text": "SECRET-WORDS of the note" })).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["told"], serde_json::json!(["a", "b"]));
+    assert_eq!(v["unsure"], serde_json::json!(["b"]), "the sender hears whom to send it by SendMessage");
+    assert!(until(|| shown(&a).contains("[sbxw team note") && shown(&b).contains("[sbxw team note")).await);
+    assert!(until(|| shown(&b).contains("ask lead to resend it by SendMessage.")).await, "{}", shown(&b));
+    assert!(!shown(&a).contains("resend"), "a can read it: the plain line");
+    assert!(!shown(&a).contains("SECRET") && !shown(&b).contains("SECRET"), "never the note's words");
+
+    // A hello without the tool (an older relay) does not make a reader.
+    assert_eq!(agent_post(&app, "hello-team", "/api/relay/hello", serde_json::json!({ "thread": "b", "agent_proc": "200:7", "tools": ["team_note"] })).await.0, StatusCode::OK);
+    assert!(!app.can_read_notes(&sb, "b"));
+    // b restarts in a new process whose relay has the tool: now a reader.
+    hook(&app, &sb, Some("b"), serde_json::json!({ "hook_event_name": "SessionStart", "agent_proc": "300:9" }));
+    agent_post(&app, "hello-team", "/api/relay/hello", serde_json::json!({ "thread": "b", "agent_proc": "300:9", "tools": tools })).await;
+    assert!(app.can_read_notes(&sb, "b"));
+    a.kill();
+    b.kill();
 }

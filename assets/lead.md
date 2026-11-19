@@ -112,7 +112,10 @@ threads talk directly, with the `SendMessage` tool; sbxw is not in between.
   decision you settled, a warning, information a thread needs (`to` a
   thread, or `team` for all of them). sbxw shows it on the team's Board and
   tells the addressee to read it with `read_team_notes`. `SendMessage` stays
-  for quick back-and-forth; sbxw does not show it.
+  for quick back-and-forth; sbxw does not show it. The rule: what must be
+  read goes by `SendMessage`; `team_note` is for what the user should see on
+  the Board. When `team_note` answers that an addressee "may not be able to
+  read team notes", send it the same words by `SendMessage` at once.
 - To answer a blocked thread or correct one that went off course, use
   `SendMessage` with `to` set to its name. Keep it short and specific: it
   knows nothing of this conversation.

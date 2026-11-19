@@ -16,18 +16,27 @@ const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a
 
 function fakeDaemon(answer) {
   const seen = [];
+  const hellos = [];
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (c) => (raw += c));
     req.on('end', () => {
       const body = JSON.parse(raw || '{}');
+      // The relay server's hello at start (see assets/relay-mcp.js): kept
+      // apart from the calls a test is about.
+      if (req.url === '/api/relay/hello') {
+        hellos.push({ auth: req.headers.authorization, body });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"ok":true}');
+        return;
+      }
       seen.push({ path: req.url, auth: req.headers.authorization, body });
       const [status, out] = answer(req.url, body, seen.length);
       res.writeHead(status, { 'content-type': 'application/json' });
       res.end(JSON.stringify(out));
     });
   });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, seen, port: server.address().port })));
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, seen, hellos, port: server.address().port })));
 }
 
 function sandbox(port) {
@@ -116,3 +125,28 @@ test('canvas_read and canvas_list hand back the daemon text', async () => {
   assert.match(r.content[0].text, /Pin 1 on shot "Home"/);
   assert.match(l.content[0].text, /c-0123456789abcdef: "R", 3 shot\(s\) in 1 round\(s\).*1 not read yet/);
 });
+
+test('the relay server says hello with its agent process and tool names only', async () => {
+  const d = await fakeDaemon(() => [200, { ok: true, notes: [] }]);
+  const home = sandbox(d.port);
+  await call(home, 'read_team_notes', {});
+  for (let i = 0; i < 50 && !d.hellos.length; i++) await new Promise((r) => setTimeout(r, 20));
+  d.server.close();
+  assert.equal(d.hellos.length, 1);
+  const h = d.hellos[0];
+  assert.equal(h.auth, 'Bearer sbxw_testtoken');
+  assert.match(h.body.agent_proc, /^\d+:\d+$/);
+  assert.ok(h.body.tools.includes('read_team_notes') && h.body.tools.includes('team_note'));
+  assert.ok(h.body.tools.every((t) => typeof t === 'string' && t.length < 80), 'names, not descriptions');
+  assert.deepEqual(Object.keys(h.body).sort(), ['agent_proc', 'tools']);
+});
+
+test("team_note's answer names who may not be able to read it", async () => {
+  const d = await fakeDaemon((url) => [200, url === '/api/team/note' ? { ok: true, note: 7, told: ['a', 'b'], unsure: ['b'] } : { ok: true }]);
+  const home = sandbox(d.port);
+  const r = await call(home, 'team_note', { to: 'team', kind: 'info', text: 'x' });
+  d.server.close();
+  const text = r.content[0].text;
+  assert.match(text, /Sent \(note 7\)\. It is on the team's Board\. a, b told\. b may not be able to read team notes: send it by SendMessage too\./);
+});
+

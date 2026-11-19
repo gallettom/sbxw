@@ -191,6 +191,34 @@ with Jarvis's voice: the intro, then each question with its
 recommendation. Click again to stop. Nothing is read in full on its own;
 with the voice on, a short spoken cue says a round has arrived.
 
+## Team notes and the relay server's hello
+
+A lead and its threads leave each other team notes (`team_note`,
+`read_team_notes`, see [threads-and-lead.md](threads-and-lead.md)). sbxw
+types one fixed line into the addressee's session saying a note waits, never
+the note's words. A session reads a note only if its relay MCP server has
+`read_team_notes`; one started before the relay had it does not, and the
+line would leave the note unread.
+
+So each relay server says hello: at start and every 2 minutes it posts
+`/api/relay/hello` on the agent listener with `{thread, agent_proc, tools}`,
+where `agent_proc` is `<pid>:<start>` of the Claude process it serves (found
+as the status hook finds it) and `tools` the tool *names* it offers. The
+sandbox is the token's, never the body's; the body is capped at 16 KB and 200
+names. The daemon keeps, in memory only, whether each process offers
+`read_team_notes`, and, from the status hook's events, which process each
+session (`lead` or a thread) runs in. An addressee is a sure reader only when
+its current process said hello with the tool within 6 minutes. Any other
+(an old session never says hello, and after a daemon restart nobody has
+until the next hello and hook event) gets the cautious line, which tells it
+to ask the sender to resend by `SendMessage`, and the sender's answer says
+to send it that way too. A hello is logged as counts, never its content; a
+failed hello is silent.
+
+Why this signal: the hook version says what is on disk, not what a running
+session loaded; the daemon does not record when it wrote the relay into a
+sandbox; a session's own relay server is the one thing that knows its tools.
+
 ## What a sandbox cannot do
 
 - name its own recipient;

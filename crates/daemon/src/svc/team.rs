@@ -232,14 +232,88 @@ fn note_cursors() -> &'static NoteCursors {
     C.get_or_init(Default::default)
 }
 
+/// The tool a note's addressee reads it with.
+pub const READ_NOTES_TOOL: &str = "read_team_notes";
+/// A relay server says hello at start and every 2 minutes: one not heard
+/// from for longer is taken as gone.
+const HELLO_FRESH_MS: u64 = 6 * 60 * 1000;
+/// What a hello may carry.
+pub const HELLO_MAX_TOOLS: usize = 200;
+const HELLO_MAX_NAME: usize = 80;
+
+/// The agent process each session of a sandbox ran in at its latest hook
+/// event, by (sandbox, `lead` or thread); and the relay servers that said
+/// hello, by (sandbox, agent process): whether they offer `read_team_notes`,
+/// and when they last said so. In memory: after a daemon restart a session
+/// is unknown until its next hook event and its server's next hello.
+#[derive(Default)]
+struct Readers {
+    procs: HashMap<(String, String), String>,
+    hellos: HashMap<(String, String), (bool, u64)>,
+}
+
+fn readers() -> &'static Mutex<Readers> {
+    static C: OnceLock<Mutex<Readers>> = OnceLock::new();
+    C.get_or_init(Default::default)
+}
+
+fn valid_proc(p: &str) -> bool {
+    !p.is_empty() && p.len() <= 40 && p.bytes().all(|b| b.is_ascii_digit() || b == b':')
+}
+
 impl App {
+    /// A hook event's agent process, for [`App::can_read_notes`]: the
+    /// session `lead` (no thread) or the thread it names runs in it now.
+    pub(crate) fn note_reader_seen(&self, sandbox: &SandboxRef, thread: Option<&str>, proc: Option<&str>) {
+        let Some(proc) = proc.filter(|p| valid_proc(p)) else { return };
+        let who = thread.map(str::trim).filter(|t| !t.is_empty()).unwrap_or(team::LEAD).to_string();
+        readers().lock().unwrap().procs.insert((sandbox.to_string(), who), proc.to_string());
+    }
+
+    /// `/api/relay/hello`: the relay server of the agent process `proc` in
+    /// `sandbox` (from its token, never from the body) offers `tools`. Only
+    /// whether `read_team_notes` is among them is kept. Returns whether the
+    /// hello was taken.
+    pub fn relay_hello(&self, sandbox: &SandboxRef, proc: &str, tools: &[String]) -> bool {
+        if !valid_proc(proc) || tools.len() > HELLO_MAX_TOOLS || tools.iter().any(|t| t.len() > HELLO_MAX_NAME) {
+            return false;
+        }
+        let reads = tools.iter().any(|t| t == READ_NOTES_TOOL);
+        let now = now_ms();
+        let n = {
+            let mut r = readers().lock().unwrap();
+            r.hellos.retain(|_, (_, at)| now.saturating_sub(*at) < HELLO_FRESH_MS);
+            r.hellos.insert((sandbox.to_string(), proc.to_string()), (reads, now));
+            r.hellos.len()
+        };
+        tracing::debug!("relay: hello from '{sandbox}' ({} tool(s)); {n} relay server(s) known", tools.len());
+        true
+    }
+
+    /// Whether `who`'s session can read a team note: its agent process (from
+    /// its hooks) has a relay server that said, lately, it offers
+    /// `read_team_notes`. False when anything is unknown: a session started
+    /// before its relay could say hello never does.
+    pub(crate) fn can_read_notes(&self, sandbox: &SandboxRef, who: &str) -> bool {
+        let r = readers().lock().unwrap();
+        let Some(proc) = r.procs.get(&(sandbox.to_string(), who.to_string())) else { return false };
+        r.hellos
+            .get(&(sandbox.to_string(), proc.clone()))
+            .is_some_and(|(reads, at)| *reads && now_ms().saturating_sub(*at) < HELLO_FRESH_MS)
+    }
+
     /// `team_note`: an agent of a team (`thread`, or the lead) writes to
     /// `to` (`lead`, a thread of its plan, or `team`). Recorded on the
     /// team's timeline, then each addressee whose session is open is typed
     /// one line of sbxw's own that says a note waits (never the note's
     /// words), as a relay question is announced; it reads the note with
-    /// `read_team_notes`. Returns the note's line on the log and who was told.
-    pub fn team_note(self: &std::sync::Arc<Self>, sandbox: &SandboxRef, thread: Option<&ThreadName>, to: &str, kind: &str, text: &str) -> Result<(u64, Vec<String>), String> {
+    /// `read_team_notes`. An addressee whose session sbxw cannot tell has
+    /// that tool (see [`App::can_read_notes`]) is told, in the same line, to
+    /// ask the sender to resend by `SendMessage` if it has not; it is also
+    /// named in the third value, so the sender can send it that way at once.
+    /// Returns the note's line on the log, who was told, and who of them may
+    /// not be able to read it.
+    pub fn team_note(self: &std::sync::Arc<Self>, sandbox: &SandboxRef, thread: Option<&ThreadName>, to: &str, kind: &str, text: &str) -> Result<(u64, Vec<String>, Vec<String>), String> {
         if !team::NOTE_KINDS.contains(&kind) {
             return Err(format!("kind is one of {}", team::NOTE_KINDS.join(", ")));
         }
@@ -271,10 +345,18 @@ impl App {
         };
         self.persist_team_logs(&sandbox.to_string());
         self.team_changed(&id);
-        let line = format!("[sbxw team note · {seq}] A {kind} from {me} for you: read it with the read_team_notes tool (MCP sbxw-relay).");
+        let line = team::note_line(seq, kind, &me, true);
+        let unsure_line = team::note_line(seq, kind, &me, false);
         let mut told = vec![];
+        let mut unsure = vec![];
         for (w, d) in self.note_targets(sandbox, &sessions, |k| self.sessions.is_live(k)) {
             let Some(k) = session_kind(&w) else { continue };
+            let line = if d != team::Delivery::Drop && !self.can_read_notes(sandbox, &w) {
+                unsure.push(w.clone());
+                unsure_line.clone()
+            } else {
+                line.clone()
+            };
             match d {
                 team::Delivery::Type => self.spawn_push(sandbox.clone(), k, line.clone(), None),
                 team::Delivery::Hold => self.hold_note_line(sandbox.clone(), w.clone(), line.clone()),
@@ -282,8 +364,8 @@ impl App {
             }
             told.push(w);
         }
-        tracing::info!("team: {me} of '{sandbox}' wrote note {seq} ({kind}) to {to}");
-        Ok((seq, told))
+        tracing::info!("team: {me} of '{sandbox}' wrote note {seq} ({kind}) to {to}; {} told, {} may not read it", told.len(), unsure.len());
+        Ok((seq, told, unsure))
     }
 
     /// The state its hooks last reported of `who` (`lead`: the sandbox's

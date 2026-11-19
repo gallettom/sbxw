@@ -32,6 +32,7 @@ pub fn agent_routes() -> Router<Arc<App>> {
         .route("/api/board/approve_extension", post(approve_extension))
         .route("/api/team/note", post(team_note))
         .route("/api/team/notes", post(team_notes))
+        .route("/api/relay/hello", post(relay_hello).layer(axum::extract::DefaultBodyLimit::max(HELLO_MAX_BYTES)))
 }
 
 pub fn ui_routes() -> Router<Arc<App>> {
@@ -188,8 +189,8 @@ fn thread_name(raw: &Option<String>) -> Result<Option<ThreadName>, ApiError> {
 /// timeline, the addressees told a note waits.
 async fn team_note(State(app): S, Agent(me): Agent, Json(b): Json<TeamNoteBody>) -> ApiResult {
     let thread = thread_name(&b.thread)?;
-    let (note, told) = app.team_note(&me, thread.as_ref(), &b.to, &b.kind, &b.text).map_err(ApiError::bad)?;
-    Ok(ok_with(json!({ "note": note, "told": told })))
+    let (note, told, unsure) = app.team_note(&me, thread.as_ref(), &b.to, &b.kind, &b.text).map_err(ApiError::bad)?;
+    Ok(ok_with(json!({ "note": note, "told": told, "unsure": unsure })))
 }
 
 /// `read_team_notes`: the notes for the caller not handed yet.
@@ -304,4 +305,26 @@ mod tests {
         let (s, v) = call(agent_router(app.clone()), agent("/api/board/force_release", json!({"files": ["src/cart.ts"], "reason": "stuck"}))).await;
         assert_eq!((s, &v["released"]), (StatusCode::OK, &json!(["src/cart.ts"])));
     }
+}
+
+/// A hello is a thread name, a process key and tool names: a few KB at most.
+const HELLO_MAX_BYTES: usize = 16 * 1024;
+
+#[derive(Deserialize)]
+struct HelloBody {
+    #[serde(default)]
+    thread: Option<String>,
+    agent_proc: String,
+    #[serde(default)]
+    tools: Vec<String>,
+}
+
+/// `/api/relay/hello`: a session's relay server says which tools it offers.
+/// The sandbox is the token's; the body cannot name another.
+async fn relay_hello(State(app): S, Agent(me): Agent, Json(b): Json<HelloBody>) -> ApiResult {
+    thread_name(&b.thread)?;
+    if !app.relay_hello(&me, &b.agent_proc, &b.tools) {
+        return Err(ApiError::bad("agent_proc is <pid>:<start>, tools at most 200 names".to_string()));
+    }
+    Ok(ok_with(json!({})))
 }

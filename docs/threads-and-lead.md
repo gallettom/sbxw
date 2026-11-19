@@ -355,6 +355,13 @@ sent before the daemon had this version are not recovered.
   addressee's open session saying a note waits (never the note's words);
   `read_team_notes` hands the caller its notes once, framed as another
   agent's data. Their decisions and warnings stand pinned beside the board's.
+  A session that started before its relay had `read_team_notes` cannot read
+  a note, so sbxw only uses the plain line for an addressee whose relay
+  server said, lately, that it offers the tool (see `/api/relay/hello` in
+  [relay.md](relay.md#team-notes-and-the-relay-servers-hello)). For any other
+  the line adds "If your session has no such tool, ask <sender> to resend it
+  by SendMessage", and the sender's `team_note` answer names it: "<addressee>
+  may not be able to read team notes: send it by SendMessage too".
 - Commits: each thread's branch against the main checkout, or once merged,
   the recorded merge commit's other side, so a thread's commits stay its own
   after the merge deletes its branch. No author email. A shared plan's
