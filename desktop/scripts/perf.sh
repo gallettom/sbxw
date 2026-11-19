@@ -65,6 +65,7 @@ add(type="mark", name="hold:1500")
 add(type="mark", name="perf:the Canvas: pan (wheel)"); add(type="wheel", x=560, y=450, dx=-40, dy=-30); add(type="mark", name="hold:300")
 add(type="mark", name="perf:the Canvas: pinch"); add(type="magnify", x=560, y=450, delta=0.6); add(type="mark", name="hold:300")
 step("the Canvas: the Pin tool", "canvas-tool-pin")
+step("the Canvas: back to Select (Escape would leave the tool first)", "canvas-tool-select")
 step("the Canvas: fit", "canvas-zoom-fit")
 add(type="mark", name="perf:the Canvas: closed"); add(type="key", name="Escape"); add(type="mark", name="wait-gone:overlay-canvas"); add(type="mark", name="hold:300")
 # Beside the Requests panel the explorer is narrow: its locations are a menu.
