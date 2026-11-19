@@ -601,3 +601,17 @@ fn the_keyboard_walks_the_list() {
     frames(&mut rt, 2);
     assert!(rt.state.feats.overlay.is_none(), "Escape closes the view");
 }
+
+#[test]
+fn the_intent_log_never_carries_the_words() {
+    let marker = "MARKER-7f3a secret words";
+    let a = Asked { name: "monitor_send", args: json!({ "key": "billing-api:s-bill-main", "text": marker }).as_object().cloned().unwrap() };
+    let line = crate::shell::intent_log_line("monitor", &crate::intent::Intent::Feature(a));
+    assert!(!line.contains("MARKER"), "{line}");
+    assert!(!line.contains("billing-api"), "no value at all: {line}");
+    assert_eq!(line, "intent from monitor: monitor_send(key, text)");
+    // A core intent: its name only.
+    let core = crate::intent::parse(&json!({ "kind": "intent", "name": "copy_text", "args": { "text": marker } })).unwrap();
+    let line = crate::shell::intent_log_line("x", &core[0]);
+    assert_eq!(line, "intent from x: copy_text");
+}
