@@ -193,3 +193,22 @@ fn pills_cost() {
         eprintln!("pills, a full 200x60 screen, {name}: {:.1} us", t0.elapsed().as_secs_f64() * 1e6 / n as f64);
     }
 }
+
+/// `terminal_scrollback`: a terminal opened after it is set keeps that many
+/// lines, the oldest going first; the bounds hold.
+#[test]
+fn the_scrollback_setting_bounds_the_history() {
+    use sbxw_desktop::terminal::{scrollback, set_scrollback, SCROLLBACK, SCROLLBACK_RANGE};
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    set_scrollback(2_000);
+    let (mut t, tx, _rx) = term(80, 24);
+    feed(&mut t, &tx, output(3_000));
+    assert_eq!(t.history_len(), 2_000);
+    t.scroll_lines(2_000);
+    assert!(t.visible_text().contains("  1000 "), "the oldest kept is line 1,000 (3,000 + the prompt-less screen - 2,000): {}", t.visible_text());
+    set_scrollback(1);
+    assert_eq!(scrollback(), *SCROLLBACK_RANGE.start());
+    set_scrollback(10_000_000);
+    assert_eq!(scrollback(), *SCROLLBACK_RANGE.end());
+    set_scrollback(SCROLLBACK);
+}

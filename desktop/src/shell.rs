@@ -431,6 +431,10 @@ impl App {
         app.theme_choice = forced.or_else(|| app.store.get("theme").as_str().and_then(theme::Mode::parse)).unwrap_or(theme::DEFAULT_MODE);
         theme::set_mode(app.theme_choice);
         app.theme_seen = theme::generation();
+        // Lines of history per terminal: the person's number, else the default.
+        if let Some(n) = app.store.get("terminal_scrollback").as_u64() {
+            terminal::set_scrollback(n as usize);
+        }
         if init.jarvis_open {
             app.jarvis.open = true;
         }
@@ -1171,6 +1175,14 @@ impl App {
                 let _ = std::fs::write(path, format!("{}x{} offset {} selection {:?}\n{}\n", t.size.0, t.size.1, t.display_offset(), t.selection_text(), t.visible_text().trim_end()));
             }
             changed |= ch;
+        }
+        // Panes the Team leads view parked: their output is parsed as it
+        // comes, as a hidden page's is (it waited in the socket's channel,
+        // unbounded, while the view showed); their events wait for their return.
+        if let Some(l) = &mut self.leads {
+            for t in l.parked.iter_mut().filter_map(|p| p.term.as_mut()) {
+                t.poll(None);
+            }
         }
         for (i, name, text) in copies {
             self.osc_copy(i, &name, text, now, tx);

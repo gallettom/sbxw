@@ -91,3 +91,37 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::*;
+    use crate::client::{TermEvent, TerminalConn};
+    use std::sync::mpsc;
+
+    /// A pane the Team leads view parked keeps taking its output in: parsed
+    /// into its history as it comes, not left waiting in the socket's
+    /// channel (unbounded) until the view closes.
+    #[test]
+    fn a_parked_pane_takes_its_output_in() {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/two-panes.json");
+        let mut a = App::new(Args { fixture: Some(fixture.into()), ..Args::default() });
+        let (ev_tx, ev_rx) = mpsc::channel();
+        let (in_tx, _in_rx) = mpsc::channel();
+        let mut t = TerminalState::new(TerminalConn { events: ev_rx, input: in_tx });
+        ev_tx.send(TermEvent::Size { cols: 80, rows: 24, owner: true }).unwrap();
+        t.poll(None);
+        let mut p = Pane::empty(a.fresh());
+        p.sandbox = Some("docs".into());
+        p.term = Some(t);
+        a.leads = Some(leads::LeadsView { saved: a.pages.clone(), focus: None, parked: vec![p], opened: vec![], sessions: HashMap::new() });
+        let mut rt = rune::Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+        let lines: String = (0..500).map(|i| format!("line {i}\r\n")).collect();
+        ev_tx.send(TermEvent::Output(lines.into_bytes())).unwrap();
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        let t = rt.state.leads.as_ref().unwrap().parked[0].term.as_ref().unwrap();
+        assert!(t.history_len() >= 470, "the output is in its history: {}", t.history_len());
+        assert!(t.visible_text().contains("line 499"));
+    }
+}

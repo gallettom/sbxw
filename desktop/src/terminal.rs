@@ -116,8 +116,27 @@ pub const MIN_SCALE: f32 = 0.5;
 /// Font sizes of a scaled grid go by this step (points), so few sizes are
 /// measured and shaped.
 const SCALE_STEP: f32 = 0.25;
-/// Lines of history, as the web UI's panes (`scrollback: 10000`).
+/// Lines of history by default, as the web UI's panes (`scrollback: 10000`).
+/// The person's own number, when set: `terminal_scrollback` in the state
+/// file ([`set_scrollback`]). What they cost: MEMORY.md (a line is its
+/// columns x 24 bytes + 32: 10,000 lines at 200 columns, about 48 MB).
 pub const SCROLLBACK: usize = 10_000;
+/// The bounds of `terminal_scrollback`.
+pub const SCROLLBACK_RANGE: std::ops::RangeInclusive<usize> = 100..=100_000;
+static SCROLLBACK_LINES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(SCROLLBACK);
+
+/// Lines of history for terminals opened from now on (kept within
+/// [`SCROLLBACK_RANGE`]). At the limit the oldest line goes as a new one
+/// comes, as always.
+pub fn set_scrollback(lines: usize) {
+    let n = lines.clamp(*SCROLLBACK_RANGE.start(), *SCROLLBACK_RANGE.end());
+    SCROLLBACK_LINES.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Lines of history a terminal opened now keeps.
+pub fn scrollback() -> usize {
+    SCROLLBACK_LINES.load(std::sync::atomic::Ordering::Relaxed)
+}
 /// How long a size must hold before the daemon is told (a window drag sends
 /// one resize, not one a frame).
 pub const RESIZE_DEBOUNCE: f64 = 0.08;
@@ -443,7 +462,7 @@ fn new_term(size: (usize, usize), input: &Input, events: &mpsc::Sender<TermEv>) 
     // cannot change under us). The read form (`52;c;?`) would hand the
     // person's clipboard to whatever runs in the sandbox; alacritty drops it
     // before it becomes an event (term/mod.rs, `clipboard_load`).
-    let config = Config { scrolling_history: SCROLLBACK, osc52: Osc52::OnlyCopy, ..Config::default() };
+    let config = Config { scrolling_history: scrollback(), osc52: Osc52::OnlyCopy, ..Config::default() };
     Term::new(config, &Size { cols: size.0, rows: size.1 }, Listener { input: input.clone(), events: events.clone() })
 }
 
@@ -706,6 +725,10 @@ impl TerminalState {
             TermEvent::Output(bytes) => {
                 if let Some(t) = self.key_sent.take() {
                     let ms = t.elapsed().as_secs_f64() * 1000.0;
+                    // The last 1,000 (it grew with every key typed, for good).
+                    if self.echo_ms.len() >= 1_000 {
+                        self.echo_ms.drain(..500);
+                    }
                     self.echo_ms.push(ms);
                     log::debug!("key to echo: {ms:.1} ms");
                 }
