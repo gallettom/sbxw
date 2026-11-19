@@ -876,15 +876,15 @@ fn the_configure_panels_open_on_the_sandbox_they_are_opened_for() {
     }
 }
 
-/// MCP servers, Skills and Kits over the pane area use its width: MCP one
-/// column at every width (the form on top, the servers under it); two
-/// columns from 760 pt for Kits (the line | the selected kit) and Skills
-/// (kept | the sandbox's), one column under it; the scope picker in the
-/// header beside the title, inside the overlay.
+/// MCP servers, Skills and Kits over the pane area use its width: MCP and
+/// Skills one column at every width (the form or the sandbox's skills on
+/// top, the list under it); two columns from 760 pt for Kits (the line |
+/// the selected kit), one column under it; the scope picker in the header
+/// beside the title, inside the overlay.
 #[test]
 fn the_configure_overlays_use_the_width_with_the_picker_in_the_header() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
-    for (feat, wide_split) in [("mcp", false), ("skills", true), ("kits", true)] {
+    for (feat, wide_split) in [("mcp", false), ("skills", false), ("kits", true)] {
         for (w, h, two) in [(1284.0, 816.0, true), (720.0, 480.0, false)] {
             let path = root.join(feat).join("basic.json");
             let a = App::new(Args { fixture: Some(path.to_string_lossy().to_string().into()), ..Args::default() });

@@ -1485,9 +1485,10 @@ The palette lists the same extras. They were docked panels until the
 person asked for them over the panes, as Commits and Worktrees: a docked
 panel was one narrow column with most of the room empty. Over the pane area
 they use the width (MCP: one column at every width, the add form on top,
-the registered servers under it, a server's details under its row; Kits: from 760 pt two columns, the picker, what waits for you and the kits line | the
-selected kit's description, `kits-about`; Skills: the picker and the kept
-skills | that sandbox's skills to look at and keep), one column under it.
+the registered servers under it, a server's details under its row; Skills:
+one column, the picked sandbox's skills with Look and Keep on top, your kept
+skills under it; Kits: from 760 pt two columns, the picker, what waits for you and the kits line | the
+selected kit's description, `kits-about`, one column under it).
 The `<screen>_view` convention (view state dropped on close) holds for
 overlays too: closing one drops its `<screen>_view`.
 

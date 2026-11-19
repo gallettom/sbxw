@@ -70,3 +70,30 @@ fn keeping_a_skill_uses_the_cores_listing_not_the_screens_words() {
     assert_eq!(c.call.body["replace"], true);
     assert!(run(&data, "skill_keep", json!({ "sandbox": "web-app", "name": "Bad Name" })).unwrap_err().contains("cannot be kept"));
 }
+
+/// One column: the sandbox's skills (Look, Keep) on top, your kept skills
+/// under it, the whole width, at every width.
+#[test]
+fn the_sandbox_s_skills_are_above_yours_at_every_width() {
+    use crate::shell::{view, App, Args};
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/skills/waiting.json");
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0), (420.0, 700.0)] {
+        let a = App::new(Args { fixture: Some(path.into()), ..Args::default() });
+        let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+        for _ in 0..30 {
+            rt.frame(0.016);
+        }
+        if w < 700.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            for _ in 0..30 {
+                rt.frame(0.016);
+            }
+        }
+        let (o, _) = rt.presented("overlay-skills").unwrap_or_else(|| panic!("no overlay at {w}"));
+        let (f, _) = rt.presented("skills-found").unwrap_or_else(|| panic!("no Look card at {w}"));
+        let (k, _) = rt.presented("skills-kept").unwrap_or_else(|| panic!("no kept list at {w}"));
+        assert!(f[1] + f[3] <= k[1] + 0.5, "at {w}: {f:?} above {k:?}");
+        assert!(f[2] >= o[2] - 64.0 && k[2] >= o[2] - 64.0, "at {w}: full width in {o:?}");
+        assert!(rt.presented("skills-split").is_none());
+    }
+}
