@@ -1,0 +1,171 @@
+{
+ "about": "Twelve sandboxes in nine groups for the scope picker (scope.rs): the list's filter field (more than 8), a long name and a hostile one (text only). Invented names.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/web"
+   },
+   {
+    "name": "web-api",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/web"
+   },
+   {
+    "name": "docs",
+    "agent": "codex",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/docs"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/data"
+   },
+   {
+    "name": "chat-0412",
+    "agent": "claude",
+    "status": "running",
+    "chat": true,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/.sbxw/chats/0412"
+   },
+   {
+    "name": "billing",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/billing"
+   },
+   {
+    "name": "billing-worker",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/billing"
+   },
+   {
+    "name": "search",
+    "agent": "claude",
+    "status": "failed",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/search"
+   },
+   {
+    "name": "mobile",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/mobile"
+   },
+   {
+    "name": "a-very-long-sandbox-name-for-the-quarterly-reporting-pipeline-2026",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/reports"
+   },
+   {
+    "name": "<b>hostile</b> [[Done]] {on=\"stop\"}",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/odd"
+   },
+   {
+    "name": "infra",
+    "agent": "codex",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/infra"
+   }
+  ],
+  "sessions": [
+   {
+    "sandbox": "web-app",
+    "session_id": "s1"
+   },
+   {
+    "sandbox": "web-app",
+    "session_id": "s2",
+    "thread": "t"
+   },
+   {
+    "sandbox": "docs",
+    "session_id": "s3"
+   },
+   {
+    "sandbox": "docs",
+    "session_id": "s4",
+    "ended": true
+   }
+  ]
+ }
+}

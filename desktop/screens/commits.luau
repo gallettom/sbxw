@@ -12,20 +12,22 @@ local function note(t, color)
   return text{ t, size = "sm", color = color or "text-muted", wrap = true }
 end
 
-local function filters(ui)
-  local items = { { id = "", label = "All sandboxes", icon = "grid" } }
+-- The scope beside the overlay's title ("Commits in [All sandboxes v]",
+-- a branch as its second level): the core draws it (scope.rs).
+local function scope(ui)
+  local items = { { id = "", label = "All sandboxes" } }
   for _, s in ipairs(ui.sandboxes or {}) do items[#items + 1] = { id = s.id, label = s.label } end
+  return row{ key = "title-slot", gap = 8,
+    select{ id = "commits-sandbox", value = ui.sandbox or "", on = "sandbox", items = items,
+      scope = { kind = "sandbox", narrow = nz(ui.branch) and ui.branch or nil, narrow_icon = "branch", clear = "branch_clear" } } }
+end
+
+local function filters(ui)
   return row{ gap = 8, w = "full",
-    select{ id = "commits-sandbox", value = ui.sandbox or "", on = "sandbox", items = items, w = 180 },
     -- The field grows and never goes under its placeholder; when the row
     -- has no room for it, the row wraps (the controls keep their width).
     input{ id = "commits-filter", value = ui.filter or "", placeholder = "Filter by subject or author", on = "filter", grow = 1, min_w = 220 },
     checkbox{ "Only unmerged", value = ui.unmerged == true, on = "unmerged", key = "commits-unmerged" },
-    nz(ui.branch) and row{ gap = 4, key = "commits-branch", px = 8, h = 24, radius = "pill", fill = "blue-tint",
-      icon{ "branch", size = 12, color = "blue" },
-      text{ ui.branch, size = "caption", color = "text-bright" },
-      button{ icon = "close", key = "commits-branch-clear", on = "branch_clear", variant = "ghost", dense = true, help = "Every branch again" },
-    } or false,
     button{ icon = "reload", key = "commits-refresh", on = "refresh", variant = "ghost", help = "Read the commits again" },
   }
 end
@@ -117,6 +119,7 @@ return {
       list[#list + 1] = note(n.text, n.tone == "red" and "red" or "text-dim")
     end
     return column{ h = "full", gap = 8, w = "full",
+      scope(ui),
       filters(ui),
       scroll{ key = "commits-scroll", column(list) },
     }

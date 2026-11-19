@@ -33,6 +33,7 @@ pub mod mem;
 pub mod perf;
 pub mod picture;
 pub mod safe;
+pub mod scope;
 pub mod screen;
 pub mod shell;
 pub mod socket;

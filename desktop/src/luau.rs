@@ -162,6 +162,9 @@ pub struct Node {
     pub value: J,
     pub placeholder: Option<String>,
     pub items: Vec<Item>,
+    /// `select`: a scope picker (scope.rs): `"sandbox"`, or a table
+    /// `{ kind = "sandbox", narrow = ..., narrow_icon = ..., clear = ... }`.
+    pub scope: J,
     /// `button`: neutral, primary, danger, ghost. `badge`/`dot`/`progress`: a tone.
     pub variant: Option<String>,
     pub icon: Option<String>,
@@ -256,6 +259,7 @@ impl Node {
             value: J::Null,
             placeholder: None,
             items: vec![],
+            scope: J::Null,
             variant: None,
             icon: None,
             disabled: false,
@@ -326,7 +330,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("spacer", Kind::Spacer, Positional::None, &[]),
     ("divider", Kind::Divider, Positional::None, &["vertical", "color"]),
     ("menu", Kind::Menu, Positional::Text, &["id", "items", "on", "arg", "icon", "variant", "disabled", "dense", "keys", "tab_stop", "tone"]),
-    ("select", Kind::Select, Positional::None, &["id", "items", "value", "on", "arg", "placeholder", "disabled"]),
+    ("select", Kind::Select, Positional::None, &["id", "items", "value", "on", "arg", "placeholder", "disabled", "scope"]),
     ("checkbox", Kind::Checkbox, Positional::Text, &["value", "on", "arg", "disabled"]),
     ("progress", Kind::Progress, Positional::None, &["value", "tone"]),
     ("markdown", Kind::Markdown, Positional::Text, &["color", "size", "on", "arg", "pills"]),
@@ -1082,6 +1086,7 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         }
         "ratio" => n.value = J::from(num_of(v)?.clamp(0.1, 0.9) as f64),
         "placeholder" => n.placeholder = Some(string_of(v)?),
+        "scope" => n.scope = lua_to_json(v, 0)?,
         "variant" => n.variant = Some(one_of(v, VARIANTS)?),
         "tone" if matches!(n.kind, Kind::Button | Kind::Menu) => n.tone = Some(one_of(v, TONES)?),
         "tone" => n.variant = Some(one_of(v, TONES)?),
