@@ -39,7 +39,7 @@ pub const MAX_PINS: usize = 500;
 pub const MAX_NOTES: usize = 300;
 pub const MAX_ASSETS: usize = 200;
 /// World points between two rounds' rows, and between two shots of a row.
-pub const ROW_GAP: f32 = 240.0;
+pub const ROW_GAP: f32 = 320.0;
 pub const COL_GAP: f32 = 120.0;
 /// A note card's default size (world points).
 pub const NOTE_W: f32 = 240.0;

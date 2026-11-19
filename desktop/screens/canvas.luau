@@ -35,6 +35,7 @@ local function toolbar(ui, wide)
       variant = on_it and "neutral" or "ghost", color = on_it and "text-bright" or "text-muted", help = t[4], keys = { t[5] } }
   end
   out[#out + 1] = spacer{}
+  out[#out + 1] = text{ ui.zoom or "", size = "xs", color = "text-muted", key = "canvas-zoom-readout", help = "The zoom: 100% shows one CSS pixel of a shot per point" }
   out[#out + 1] = button{ icon = "minus", key = "canvas-zoom-out", on = "zoom", arg = "out", variant = "ghost", dense = true, help = "Zoom out (pinch, or ⌘ and scroll)" }
   out[#out + 1] = button{ icon = "plus", key = "canvas-zoom-in", on = "zoom", arg = "in", variant = "ghost", dense = true, help = "Zoom in" }
   out[#out + 1] = button{ icon = "fit", key = "canvas-zoom-fit", on = "zoom", arg = "fit", variant = "ghost", dense = true, help = "Every shot in view" }

@@ -335,7 +335,7 @@ pub fn view(s: &State, snap: &J) -> J {
         "tool": s.tool.name(), "selected": s.selected, "renaming": s.renaming, "loading": s.loading, "error": s.error,
         "tab": if s.tab.is_empty() { "canvas" } else { s.tab.as_str() },
         "ask": { "text": s.ask_text.clone().unwrap_or_else(|| super::ASK_PROMPT.to_string()) },
-        "popup": s.tool != Tool::Select,
+        "popup": s.tool != Tool::Select, "zoom": format!("{:.0}%", crate::surface_canvas::camera(super::SURF).zoom * 100.0),
     });
     let Some(c) = &s.canvas else {
         v["empty"] = if s.current.is_none() { "none".into() } else { "loading".into() };
@@ -602,7 +602,7 @@ pub fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(
         "standin-shots" => {
             let cv = &mut data["canvases"][id.as_str()];
             let round = cv["rounds"].as_array().map_or(0, Vec::len) as u64 + 1;
-            let top = cv["shots"].as_array().into_iter().flatten().map(|s| s["y"].as_f64().unwrap_or(0.0) + s["h"].as_f64().unwrap_or(0.0)).fold(-240.0, f64::max) + 240.0;
+            let top = cv["shots"].as_array().into_iter().flatten().map(|s| s["y"].as_f64().unwrap_or(0.0) + s["h"].as_f64().unwrap_or(0.0)).fold(-320.0, f64::max) + 320.0;
             let mut x = 0.0;
             let mut files = vec![];
             for (k, s) in body["shots"].as_array().into_iter().flatten().enumerate() {

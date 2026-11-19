@@ -585,6 +585,8 @@ impl State {
                 out.push(Action::PickFiles { title: "Add an example picture to the canvas".into(), extensions: vec!["png".into(), "jpg".into(), "jpeg".into(), "webp".into()], multiple: false });
             }
             CanvasEvent::NeedFull { image } => self.want(&image, true),
+            // Only the readout changes (the screen's, beside the zoom buttons).
+            CanvasEvent::Zoomed { .. } => {}
         }
         self.push_scene();
         out.extend(self.levels());

@@ -134,6 +134,8 @@ pub enum CanvasEvent {
     AssetAt { x: f32, y: f32 },
     /// This picture is drawn larger than its preview: send its full bytes to [`load`].
     NeedFull { image: String },
+    /// The zoom changed by a gesture (its readout, beside the zoom buttons, is the screen's).
+    Zoomed { zoom: f32 },
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +338,7 @@ pub fn show(id: &str, r: [f32; 4], max: f32) {
 /// Forgets canvas `id`: its scene, camera and every picture level.
 pub fn close(id: &str) {
     CANVASES.with(|m| m.borrow_mut().remove(id));
-    let pre = format!("{id}/");
+    let pre = prefix(id);
     pics(|m| m.retain(|k, _| !k.starts_with(&pre)));
 }
 
@@ -369,8 +371,26 @@ fn pics<R>(f: impl FnOnce(&mut HashMap<String, Pic>) -> R) -> R {
     f(g.get_or_insert_with(HashMap::new))
 }
 
+thread_local! {
+    /// This UI thread's own space in [`PICS`] (decodes land from worker
+    /// threads; each test thread is a UI thread of its own).
+    static SPACE: u64 = {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    };
+}
+
+fn space() -> u64 {
+    SPACE.with(|s| *s)
+}
+
 fn pkey(id: &str, image: &str) -> String {
-    format!("{id}/{image}")
+    format!("{}/{id}/{image}", space())
+}
+
+/// The prefix of canvas `id`'s pictures in [`PICS`].
+fn prefix(id: &str) -> String {
+    format!("{}/{id}/", space())
 }
 
 /// What decoding gave, or why not.
@@ -442,12 +462,16 @@ fn empty_pic(size: (u32, u32)) -> Pic {
 
 /// Pixels held by every canvas's pictures, and how many pictures (MEMORY.md).
 pub fn mem() -> (u64, usize) {
-    pics(|m| (m.values().map(|p| p.bytes).sum(), m.len()))
+    let pre = format!("{}/", space());
+    pics(|m| {
+        let mine: Vec<&Pic> = m.iter().filter(|(k, _)| k.starts_with(&pre)).map(|(_, p)| p).collect();
+        (mine.iter().map(|p| p.bytes).sum(), mine.len())
+    })
 }
 
 /// Full levels held now (tests).
 pub fn full_levels(id: &str) -> usize {
-    let pre = format!("{id}/");
+    let pre = prefix(id);
     pics(|m| m.iter().filter(|(k, p)| k.starts_with(&pre) && p.full.is_some()).count())
 }
 
@@ -482,7 +506,7 @@ fn plan_levels(id: &str, cv: &Canvas, scale: f32) -> Vec<CanvasEvent> {
     want.sort_by(|a, b| b.0.total_cmp(&a.0));
     want.truncate(MAX_FULL);
     let keep: Vec<String> = want.iter().map(|(_, k)| pkey(id, k)).collect();
-    let pre = format!("{id}/");
+    let pre = prefix(id);
     let mut out = vec![];
     pics(|m| {
         for (k, p) in m.iter_mut() {
@@ -532,9 +556,10 @@ fn pic_error(id: &str, image: &str) -> Option<String> {
 
 /// A pin's radius on screen, points.
 pub const PIN_R: f32 = 11.0;
-/// A caption's or a band's text, at most this tall in world points: rows
-/// are `ROW_GAP` (240) apart, and both fit in it at any zoom.
-const CAPTION_MAX: f32 = 64.0;
+/// A caption's or a band's text: a fixed size on screen, as map labels,
+/// but at most this tall in world points, so a row's titles and the next
+/// row's band fit in the gap between rows (`ROW_GAP`, 320) at any zoom.
+const CAPTION_MAX: f32 = 100.0;
 /// The resize handle's half size on screen, points.
 const HANDLE: f32 = 7.0;
 
@@ -737,6 +762,7 @@ fn on_wheel(id: &str, w: &WheelEvent) -> bool {
         if zooming {
             cam.zoom_about([w.x, w.y], cam.zoom * (-w.dy * 0.01).exp());
             cv.dirty = true;
+            zoomed(cv.cam.zoom, cam.zoom);
         } else {
             cam.pan = [cam.pan[0] + w.dx, cam.pan[1] + w.dy];
         }
@@ -749,9 +775,21 @@ fn on_magnify(id: &str, m: &MagnifyEvent) {
     with(id, |cv| {
         let mut cam = cv.cam;
         cam.zoom_about([m.x, m.y], cam.zoom * (1.0 + m.delta));
+        zoomed(cv.cam.zoom, cam.zoom);
         cv.set_cam(cam);
         cv.dirty = true;
     })
+}
+
+/// A gesture moved the zoom across a whole percent: the feature hears it.
+fn zoomed(before: f32, after: f32) {
+    if (before * 100.0).round() != (after * 100.0).round() {
+        PENDING.with(|p| {
+            let mut p = p.borrow_mut();
+            p.retain(|e| !matches!(e, CanvasEvent::Zoomed { .. }));
+            p.push(CanvasEvent::Zoomed { zoom: after });
+        });
+    }
 }
 
 /// The view was laid out at `size`: the first time, fit the scene.
@@ -851,16 +889,6 @@ pub fn view<S: 'static>(id: &str, scale: f32, sink: fn(&mut S, &str, CanvasEvent
             true
         })
         .child(world)
-        .child(
-            // The zoom readout, drawn by the core so a pinch updates it.
-            el().key(format!("canvas-zoom-{id}"))
-                .pin(Some(8.0), None, None, Some(8.0))
-                .px(6.0)
-                .py(2.0)
-                .radius(4.0)
-                .fill(c("elevated"))
-                .child(text(zoom_label(id)).font(small(11.0, 500.0)).color(c("text-muted"))),
-        )
 }
 
 thread_local! {

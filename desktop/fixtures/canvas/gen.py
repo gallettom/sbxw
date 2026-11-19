@@ -38,10 +38,10 @@ def checkout(pictures):
     screens = [("Home", "home"), ("Product list", "products"), ("Product page", "product"), ("Cart", "cart"), ("Checkout: address", "address"), ("Checkout: payment", "payment")]
     shots = []
     for k, (t, key) in enumerate(screens):
-        shots.append(shot(pictures, 1, k, t, "Logged in, light theme", key, (k % 3) * 1560, (k // 3) * 1140))
+        shots.append(shot(pictures, 1, k, t, "Logged in, light theme", key, (k % 3) * 1560, (k // 3) * 1220))
     for k, (t, key) in enumerate([("Home, phone", "home-phone"), ("Cart, phone", "cart-phone")]):
         shots.append(shot(pictures, 1, 6 + k, t, "390 wide", key, 3 * 1560 + k * 510, 0, w=390, pw=390, ph=844))
-    row2 = 2 * 1140 + 240
+    row2 = 2 * 1220 + 320
     for k, (t, key, x) in enumerate([("Cart (after)", "cart", 0), ("Checkout: address (after)", "address", 1560), ("Checkout: payment (after)", "payment", 3120)]):
         shots.append(shot(pictures, 2, k, t, "After round 1's remarks", key, x, row2, at=NOW + 50 * 60000))
     pins = [
@@ -51,13 +51,14 @@ def checkout(pictures):
         {"n": 4, "on": "s-2-2", "fx": 0.68, "fy": 0.62, "text": "Better. Make the button full width on narrow screens.", "sent": None},
         {"n": 5, "on": "s-2-0", "fx": 0.2, "fy": 0.3, "text": "Use the example below for the empty cart.", "sent": None},
     ]
+    row2 = 2 * 1220 + 320
     notes = [
         {"id": "n-0000aa01", "n": 1, "x": 4680, "y": 1000, "w": 260, "h": 150, "text": "Overall: fewer borders, more space between groups.", "sent": 1},
-        {"id": "n-0000aa02", "n": 2, "x": 4680, "y": 2620, "w": 260, "h": 150, "text": "Round 2 looks closer. Two details left on the payment step.", "sent": None},
+        {"id": "n-0000aa02", "n": 2, "x": 4680, "y": row2, "w": 260, "h": 150, "text": "Round 2 looks closer. Two details left on the payment step.", "sent": None},
     ]
     pictures["a-00000000a001.png"] = {"w": 640, "h": 400, "seed": 9}
     assets = [{"id": "a-1", "n": 1, "file": "a-00000000a001.png", "name": "empty-cart-example.png", "px_w": 640, "px_h": 400, "bytes": 52000,
-               "x": 0, "y": row2 + 1140, "w": 480, "h": 300, "sent": None}]
+               "x": 4680, "y": row2 + 300, "w": 480, "h": 300, "sent": None}]
     return {"id": "c-00000000000000c1", "sandbox": "web-app", "title": "Checkout review", "created_ms": NOW, "updated_ms": NOW + 55 * 60000,
             "shots": shots, "assets": assets, "pins": pins, "notes": notes,
             "rounds": [{"n": 1, "at_ms": NOW, "shots": 8}, {"n": 2, "at_ms": NOW + 50 * 60000, "shots": 3}],
@@ -71,7 +72,7 @@ def small(pictures, cid, sb, title, at, n=2):
 def big(pictures):
     shots = []
     for k in range(12):
-        shots.append(shot(pictures, 1, 40 + k, "Screen %d" % (k + 1), "", "b%d" % k, (k % 4) * 1560, (k // 4) * 1140))
+        shots.append(shot(pictures, 1, 40 + k, "Screen %d" % (k + 1), "", "b%d" % k, (k % 4) * 1560, (k // 4) * 1220))
     for k in range(3):
         shots.append(shot(pictures, 1, 60 + k, "Phone %d" % (k + 1), "", "p%d" % k, 4 * 1560 + k * 510, 0, w=390, pw=390, ph=844))
     return {"id": "c-00000000000000b1", "sandbox": "web-app", "title": "Fifteen screens", "created_ms": NOW, "updated_ms": NOW + DAY,
