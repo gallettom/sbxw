@@ -219,36 +219,103 @@ pub fn day_label(ms: u64, now_s: u64) -> String {
     }
 }
 
-/// Lines a text takes drawn `cpl` characters wide: each of its lines wraps on
-/// `cpl`, an empty one counts as one.
+/// Lines a text takes drawn `cpl` characters wide: each of its lines (split
+/// on `\n`, as the screen splits) wraps on `cpl`, an empty one counts as one.
 fn drawn_lines(text: &str, cpl: usize) -> usize {
-    text.lines().map(|l| l.chars().count().div_ceil(cpl).max(1)).sum()
+    text.split('\n').map(|l| l.chars().count().div_ceil(cpl.max(1)).max(1)).sum()
+}
+
+/// [`drawn_lines`], for the tests that hold the screen to the model.
+#[cfg(test)]
+pub fn drawn_lines_at(text: &str, cpl: usize) -> usize {
+    drawn_lines(text, cpl)
 }
 
 fn folded(text: &str, cpl: usize) -> bool {
     drawn_lines(text, cpl) > FOLD_DRAWN
 }
 
-/// The first part of a long text, its first `SHOW_DRAWN` drawn lines, cut on a word.
+/// Bytes a cut looks back for a space, at most (the head ends on a word).
+pub const HEAD_BACK: usize = 48;
+
+/// The first part of a long text, its first `SHOW_DRAWN` drawn lines at
+/// `cpl` characters a line, cut on a word when a space is near. The screen
+/// cuts the same (board.luau's `head`, from [`drawing`]'s `lines`, in
+/// constant steps; a test holds the two together).
 pub fn head(text: &str, cpl: usize) -> String {
-    let mut s = String::new();
+    let mut end = 0;
+    let mut start = 0;
     let mut left = SHOW_DRAWN;
-    for l in text.lines() {
+    for l in text.split('\n') {
         let n = l.chars().count().div_ceil(cpl).max(1);
         if n > left {
-            let i = l.char_indices().nth(left * cpl).map_or(l.len(), |(i, _)| i);
-            let cut = l[..i].rfind(' ').filter(|c| *c > i / 2).unwrap_or(i);
-            s.push_str(&l[..cut]);
+            let mut i = l.char_indices().nth(left * cpl).map_or(l.len(), |(i, _)| i);
+            let low = (i / 2 + 1).max(i.saturating_sub(HEAD_BACK));
+            if let Some(p) = (low..i).rev().find(|p| l.as_bytes()[*p] == b' ') {
+                i = p;
+            }
+            end = start + i;
             break;
         }
-        s.push_str(l);
-        s.push('\n');
+        end = start + l.len();
+        start += l.len() + 1;
         left -= n;
         if left == 0 {
             break;
         }
     }
-    format!("{}…", s.trim_end())
+    format!("{}…", text[..end].trim_end_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']))
+}
+
+/// What drawing a text takes, computed once per event when it arrives (the
+/// screen never walks a text): the text with its long runs breakable, and
+/// when it could fold (at [`FOLD_CPL`]) its `fold`: `cpl`, the fewest
+/// characters a line at which it no longer folds (the screen folds it when
+/// the line it draws holds fewer: one comparison), and `lines`, its first
+/// `SHOW_DRAWN` lines as [byte start (from 1, as Luau counts), bytes,
+/// characters], all the screen's `head` reads.
+pub fn drawing(text: &str) -> J {
+    let t = breakable(text);
+    if !folded(&t, FOLD_CPL) {
+        return json!({ "text": t });
+    }
+    let longest = t.split('\n').map(|l| l.chars().count()).max().unwrap_or(1).max(1);
+    // Folded at every width: more lines than fold, however wide.
+    let cpl = if folded(&t, longest) {
+        usize::MAX >> 12
+    } else {
+        // drawn_lines falls as cpl grows: the first cpl that does not fold.
+        let (mut lo, mut hi) = (FOLD_CPL, longest);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if folded(&t, mid) { lo = mid + 1 } else { hi = mid }
+        }
+        lo
+    };
+    let mut lines = vec![];
+    let mut b = 0;
+    for l in t.split('\n').take(SHOW_DRAWN) {
+        lines.push(json!([b + 1, l.len(), l.chars().count()]));
+        b += l.len() + 1;
+    }
+    json!({ "text": t, "fold": { "cpl": cpl, "lines": lines } })
+}
+
+/// [`drawing`] of an event's own text: the one computed when it arrived
+/// (`_draw`, [`prepare`]), else now.
+fn drawing_of(ev: &J, text: &str) -> J {
+    match &ev["_draw"] {
+        d if !d.is_null() && ev["text"].as_str() == Some(text) => d.clone(),
+        _ => drawing(text),
+    }
+}
+
+/// An event as it arrives: what drawing its text takes, once (`_draw`,
+/// never sent to the screen as such).
+pub fn prepare(ev: &mut J) {
+    if let Some(t) = ev["text"].as_str().filter(|t| !t.trim().is_empty()) {
+        ev["_draw"] = drawing(t);
+    }
 }
 
 /// What a kind says, its label and its tone, for notes and system lines.
@@ -322,16 +389,19 @@ fn base(ev: &J, o: &Opts) -> J {
     })
 }
 
-/// The whole text, always; `fold` when it could fold at the narrowest
-/// bubble drawn (`FOLD_CPL`). Whether it folds is the screen's to say, at the
-/// width it draws now (board.luau's `folded` and `head` mirror the ones
-/// here): a width known only when the data was built would refold other
-/// bubbles at the next press.
-fn with_text(row: &mut J, id: &str, text: Option<&str>, o: &Opts) {
+/// The whole text, always (breakable); `fold` when it could fold at the
+/// narrowest bubble drawn (`FOLD_CPL`), with what the screen needs to fold
+/// it ([`drawing`]). Whether it folds is the screen's to say, at the width it
+/// draws now, by one comparison: a width known only when the data was built
+/// would refold other bubbles at the next press.
+fn with_text(row: &mut J, ev: &J, id: &str, text: Option<&str>, o: &Opts) {
     let Some(t) = text.filter(|t| !t.trim().is_empty()) else { return };
-    row["text"] = breakable(t).into();
-    if folded(t, FOLD_CPL) {
-        row["fold"] = json!({ "open": o.open(id), "key": id });
+    let mut d = drawing_of(ev, t);
+    row["text"] = d["text"].take();
+    if let J::Object(mut f) = d["fold"].take() {
+        f.insert("open".into(), o.open(id).into());
+        f.insert("key".into(), id.into());
+        row["fold"] = J::Object(f);
     }
 }
 
@@ -348,7 +418,7 @@ pub fn row(ev: &J, o: &Opts) -> J {
     match kind {
         "plan_proposed" => {
             r["type"] = "card".into();
-            with_text(&mut r, &id, text, o);
+            with_text(&mut r, ev, &id, text, o);
             r["why"] = data["justification"].clone();
             r["variant"] = data["variant"].clone();
             let threads: Vec<J> = data["threads"].as_array().into_iter().flatten().map(|t| {
@@ -361,7 +431,7 @@ pub fn row(ev: &J, o: &Opts) -> J {
         "thread_status" => {
             let (w, t) = state_word(data["state"].as_str().unwrap_or(""));
             r["state"] = json!({ "word": w, "tone": t });
-            with_text(&mut r, &id, text, o);
+            with_text(&mut r, ev, &id, text, o);
             if r["text"].is_null() {
                 // A bare change of state is not a message: one quiet line.
                 r["type"] = "transition".into();
@@ -381,7 +451,7 @@ pub fn row(ev: &J, o: &Opts) -> J {
         }
         "board_decision" | "board_warning" | "board_question" | "board_handoff" | "conflict" => {
             r["type"] = "note".into();
-            with_text(&mut r, &id, text, o);
+            with_text(&mut r, ev, &id, text, o);
             r["files"] = files(&data["files"]);
             r["standing"] = o.standing.is_some_and(|s| s.contains(&id)).into();
         }
@@ -390,7 +460,7 @@ pub fn row(ev: &J, o: &Opts) -> J {
             // sbxw's hook saw it: not approved by anyone, said so.
             r["type"] = "message".into();
             r["label"] = "direct message".into();
-            with_text(&mut r, &id, text, o);
+            with_text(&mut r, ev, &id, text, o);
         }
         "team_note" => {
             // Sent through sbxw (`team_note`): labelled by what it says it is.
@@ -405,11 +475,11 @@ pub fn row(ev: &J, o: &Opts) -> J {
             r["look"] = look.into();
             r["note_via"] = "team note".into();
             r["standing"] = o.standing.is_some_and(|s| s.contains(&id)).into();
-            with_text(&mut r, &id, text, o);
+            with_text(&mut r, ev, &id, text, o);
         }
         "user_question" | "user_answer" | "relay_question" | "relay_drafted" | "relay_answer" | "screenshot_asked" | "screenshot_given" | "relay_refused" | "relay_routed" | "board_question_reply" => {
             r["type"] = "question".into();
-            with_text(&mut r, &id, text, o);
+            with_text(&mut r, ev, &id, text, o);
             if let Some(qs) = data["questions"].as_array() {
                 r["questions"] = J::Array(qs.iter().map(|q| {
                     let mut q = q.clone();
@@ -438,7 +508,7 @@ pub fn row(ev: &J, o: &Opts) -> J {
         }
         "merge_proposed" => {
             r["type"] = "merge".into();
-            with_text(&mut r, &id, text, o);
+            with_text(&mut r, ev, &id, text, o);
             r["order"] = data["order"].clone();
         }
         "merge_started" => {
@@ -479,7 +549,7 @@ pub fn row(ev: &J, o: &Opts) -> J {
         _ => {
             // Approvals, refusals, marked done, closings, the person's other acts.
             r["type"] = if r["side"] == "center" { "system" } else { "status" }.into();
-            with_text(&mut r, &id, text, o);
+            with_text(&mut r, ev, &id, text, o);
             if kind == "plan_refused" && text.is_none() {
                 r["text"] = "No reason given".into();
             }
@@ -489,7 +559,8 @@ pub fn row(ev: &J, o: &Opts) -> J {
     if r["side"] == "right" && r["text"].is_null() && r["questions"].is_null() {
         r["text"] = r["label"].clone();
     }
-    if let Some(t) = r["text"].as_str() {
+    // A text made here (not the event's own, already breakable).
+    if let Some(t) = r["text"].as_str().filter(|t| ev["_draw"]["text"].as_str() != Some(*t)) {
         r["text"] = breakable(t).into();
     }
     r
@@ -748,5 +819,20 @@ mod tests {
         // Paragraphs count: blank lines are drawn.
         assert!(folded(&"a\n\n".repeat(5), 100));
         assert!(!folded("a\n\nb\n\nc", 100));
+    }
+
+    #[test]
+    fn a_text_s_fold_width_is_the_first_that_does_not_fold() {
+        for t in ["word ".repeat(100), "word ".repeat(600), "a\n\n".repeat(5), format!("{}\n{}", "x".repeat(300), "y ".repeat(200))] {
+            let d = drawing(&t);
+            let Some(cpl) = d["fold"]["cpl"].as_u64() else {
+                assert!(!folded(&t, FOLD_CPL));
+                continue;
+            };
+            for c in 16..200usize {
+                assert_eq!(folded(d["text"].as_str().unwrap(), c), (c as u64) < cpl, "{c} against {cpl}");
+            }
+            assert!(d["fold"]["lines"].as_array().unwrap().len() <= SHOW_DRAWN);
+        }
     }
 }

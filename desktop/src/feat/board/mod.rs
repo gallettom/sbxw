@@ -93,6 +93,8 @@ impl Timeline {
         if add.is_empty() {
             return;
         }
+        // What drawing each text takes, once, here (never per render).
+        add.iter_mut().for_each(model::prepare);
         add.reverse();
         self.events.extend(add);
         // Pages arrive newest or oldest; one order: time, then the daemon's.

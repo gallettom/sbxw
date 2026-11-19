@@ -35,39 +35,38 @@ local function when(r)
   return text{ r.when or "", size = "xs", color = "text-dim", help = r.exact }
 end
 
--- The fold, decided here at the width drawn now (model.rs's `folded` and
--- `head` mirror these; the data holds the whole text): a text drawn on more
--- than FOLD_DRAWN lines at the bubble's width shows its first SHOW_DRAWN,
--- cut on a word, and "Show more". Decided per frame, so a resize or a
--- press elsewhere never refolds a bubble from a width known earlier.
-local FOLD_DRAWN, SHOW_DRAWN, CHAR_W = 8, 6, 6.0
+-- The fold, decided here at the width drawn now, in constant steps (the
+-- model computed, once per text, what this needs: model.rs's `drawing`,
+-- whose `head` this mirrors): a text drawn on more than FOLD_DRAWN lines at
+-- the bubble's width (fewer characters a line than its `fold.cpl`) shows
+-- its first SHOW_DRAWN, cut on a word when a space is near, and "Show
+-- more". Decided per frame, so a resize or a press elsewhere never refolds a
+-- bubble from a width known earlier. Never a walk over a text here: a
+-- string pattern costs the instruction budget a step per character.
+local FOLD_DRAWN, SHOW_DRAWN, CHAR_W, HEAD_BACK = 8, 6, 6.0, 48
 local function ulen(s) return utf8.len(s) or #s end
-local function lines_of(t)
-  local out = {}
-  for l in string.gmatch(t .. "\n", "(.-)\n") do out[#out + 1] = l end
-  return out
-end
-local function drawn(t, c)
-  local n = 0
-  for _, l in ipairs(lines_of(t)) do n += math.max(1, math.ceil(ulen(l) / c)) end
-  return n
-end
-local function head(t, c)
-  local s, left = {}, SHOW_DRAWN
-  for _, l in ipairs(lines_of(t)) do
-    local n = math.max(1, math.ceil(ulen(l) / c))
+local WS = { [9] = true, [10] = true, [11] = true, [12] = true, [13] = true, [32] = true }
+local function head(t, f, c)
+  local left, stop = SHOW_DRAWN, 0
+  for _, l in ipairs(f.lines or {}) do
+    local s, nb, nc = l[1], l[2], l[3]
+    local n = math.max(1, math.ceil(nc / c))
     if n > left then
-      local cut = string.sub(l, 1, (utf8.offset(l, left * c + 1) or (#l + 1)) - 1)
-      local sp = string.find(cut, " [^ ]*$")
-      if sp and sp > #cut / 2 then cut = string.sub(cut, 1, sp - 1) end
-      s[#s + 1] = cut
+      local i = math.min(nb, (utf8.offset(t, left * c + 1, s) or (s + nb)) - s)
+      local p, low = i - 1, math.max(math.floor(i / 2) + 1, i - HEAD_BACK)
+      while p >= low do
+        if string.byte(t, s + p) == 32 then i = p break end
+        p -= 1
+      end
+      stop = s + i - 1
       break
     end
-    s[#s + 1] = l
+    stop = s + nb - 1
     left -= n
     if left == 0 then break end
   end
-  return (string.gsub(table.concat(s, "\n"), "%s+$", "")) .. "…"
+  while stop > 0 and WS[string.byte(t, stop)] do stop -= 1 end
+  return string.sub(t, 1, stop) .. "…"
 end
 
 local function fold_button(r)
@@ -165,19 +164,16 @@ local NOTE_LOOK = {
 -- A report's tint by its state: done green, blocked amber, failed red.
 local TINT = { green = { "green-tint", "green" }, amber = { "amber-tint", "amber" }, red = { "red-tint", "red-border" } }
 
--- A row as drawn now: a long text folded at this width (a shallow copy:
--- the data is not touched).
+-- A row as drawn now: a long text folded at this width (a view over the
+-- row: the data is not touched). CPL, characters a line of a bubble holds
+-- now, is set by render.
+local CPL = 82
 local function at_width(r)
-  if not r.fold or not nz(r.text) then return r end
-  local c = math.max(16, math.floor((bubble_w() - 24) / CHAR_W))
-  local v = {}
-  for k, x in pairs(r) do v[k] = x end
-  if drawn(r.text, c) <= FOLD_DRAWN then
-    v.fold = nil
-  elseif not r.fold.open then
-    v.text = head(r.text, c)
-  end
-  return v
+  local f = r.fold
+  if not f or not nz(r.text) then return r end
+  if CPL >= (f.cpl or 0) then return setmetatable({ fold = false }, { __index = r }) end
+  if f.open then return r end
+  return setmetatable({ text = head(r.text, f, CPL) }, { __index = r })
 end
 
 local function rowview(r, sb)
@@ -651,6 +647,7 @@ return {
     -- One column: the conversation takes the overlay's width (model::conv_w).
     CONV_W = ow - 24
     BUBBLE_MAX = wide and math.max(520, math.min(BUBBLE_CAP, math.floor(CONV_W * 0.62))) or 520
+    CPL = math.max(16, math.floor((bubble_w() - 24) / CHAR_W))
     local sb = s and s.sandbox or true
     local picker = picker_button(ui, s, ow, wide)
     -- The picker's list over the body, and under it a layer that closes it

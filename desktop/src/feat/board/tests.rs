@@ -1371,6 +1371,9 @@ fn costs_of(team: &str, w: f32) -> Vec<(String, Result<u64, String>)> {
         let (v, _) = run(&mut st, &mut d, "board_expand", json!({ "id": k }));
         out.push(("show more".to_string(), cost(&h, &v, w)));
     }
+    let (v, _) = run(&mut st, &mut d, "board_picker", json!({}));
+    out.push(("picker open".to_string(), cost(&h, &v, w)));
+    let (_, _) = run(&mut st, &mut d, "board_picker", json!({ "open": false }));
     let (v, _) = run(&mut st, &mut d, "board_more", json!({}));
     out.push(("show earlier".to_string(), cost(&h, &v, w)));
     let (v, _) = run(&mut st, &mut d, "board_more", json!({}));
@@ -1394,31 +1397,6 @@ fn board_render_costs() {
     }
 }
 
-#[test]
-#[ignore = "a measure: which part of board.luau spends the interrupts"]
-fn board_render_cost_parts() {
-    let mut d = data();
-    real(&mut d);
-    d["app"]["overlay"]["w"] = 1284.0.into();
-    let mut st = State::default();
-    let v = show(&mut st, &mut d, json!({ "team": "all" }));
-    let rows = v["rows"].as_array().unwrap();
-    let texts: usize = rows.iter().filter_map(|r| r["text"].as_str()).map(|t| t.lines().count()).sum();
-    println!("rows {} folds {} lines in texts {}", rows.len(), rows.iter().filter(|r| !r["fold"].is_null()).count(), texts);
-    let src = include_str!("../../../screens/board.luau");
-    let variants = [
-        ("as is", src.to_string()),
-        ("no at_width", src.replace("  r = at_width(r)\n", "")),
-        ("drawn only", src.replace("elseif not r.fold.open then\n    v.text = head(r.text, c)", "elseif false then")),
-        ("no rowview", src.replace("    local v = rowview(r, sb)\n", "    local v = false\n")),
-    ];
-    for (name, s) in variants {
-        let mut h = crate::luau::LuauHost::new(crate::luau::Limits { interrupts: 50_000_000, ..Default::default() }).unwrap();
-        h.load(SCREEN, &s).unwrap();
-        println!("{name:12} {:?}", cost(&h, &v, 1284.0));
-    }
-}
-
 /// The guard: on the person's sizes of data (25 teams and 600 events; one
 /// team of 500; texts at the 2000-character cap, prose and paths), every
 /// input renders with no screen error, and at 1284 and 2000 pt it takes under
@@ -1439,4 +1417,41 @@ fn real_sized_data_renders_in_every_filter_under_half_the_budget() {
         }
     }
     println!("the worst render: {worst} interrupts");
+}
+
+/// The screen's fold (board.luau: one comparison and `head` from the
+/// model's `drawing`) and the model's agree, at every width a bubble takes.
+#[test]
+fn the_screen_folds_and_cuts_as_the_model_does_at_every_width() {
+    let mut g = Gen(11);
+    let mut texts: Vec<String> = (0..12).map(|i| if i % 2 == 0 { prose(&mut g, 300 + i * 150) } else { tech(&mut g, 300 + i * 150) }).collect();
+    texts.push("a\n\n".repeat(6));
+    texts.push(format!("{}\n{}", "word ".repeat(40), "é".repeat(900)));
+    texts.push(format!("  {}   \n\n\n", "x".repeat(1200)));
+    let h = board_host();
+    for w in [420.0, 560.0, 760.0, 1000.0, 1284.0, 2000.0] {
+        let conv = model::conv_w(w);
+        let c = model::chars_per_line(model::bubble_max(conv, w));
+        for (i, t) in texts.iter().enumerate() {
+            let mut ev = json!({ "id": format!("x{i}"), "at": 1_795_000_000_000u64, "kind": "direct_message", "from": "lead", "to": "t1", "text": t, "data": {} });
+            model::prepare(&mut ev);
+            let row = model::row(&ev, &model::Opts::default());
+            let drawn = row["text"].as_str().unwrap().to_string();
+            let folds = model::drawn_lines_at(&drawn, c) > model::FOLD_DRAWN;
+            let want = if folds { model::head(&drawn, c) } else { drawn.clone() };
+            let v = json!({ "rows": [row], "group": "all", "teams": [], "picker": {} });
+            let d = json!({ "board_ui": v, "app": { "overlay": { "screen": "board", "w": w, "h": 816 } } });
+            let n = h.render(&d).unwrap();
+            let mut all = vec![];
+            fn walk<'a>(n: &'a crate::luau::Node, out: &mut Vec<&'a crate::luau::Node>) {
+                out.push(n);
+                n.children.iter().for_each(|c| walk(c, out));
+            }
+            walk(&n, &mut all);
+            let got = all.iter().find(|x| x.text == want).map(|x| x.text.clone());
+            assert_eq!(got.as_deref(), Some(want.as_str()), "text {i} at {w} pt ({c} a line): the screen drew another cut");
+            let more = all.iter().any(|x| x.key.as_deref() == Some(&format!("board-fold-x{i}")));
+            assert_eq!(more, folds, "text {i} at {w} pt: Show more drawn {more}, the model folds {folds}");
+        }
+    }
 }
