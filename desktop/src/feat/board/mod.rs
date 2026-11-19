@@ -316,6 +316,14 @@ impl State {
                         self.picker_pages = 1;
                     }
                     self.picker = open;
+                    if open {
+                        // The keyboard on the marked row: Up and Down move
+                        // through the list (its rows are one), Enter picks.
+                        let id = self.picker_ids().get(self.picker_hl).cloned().unwrap_or_else(|| "all".into());
+                        out.push(self.ui(cx));
+                        out.push(Action::Focus(format!("board-row-team-{id}")));
+                        return Ok(out);
+                    }
                 }
             }
             "board_key" => {

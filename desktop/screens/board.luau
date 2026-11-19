@@ -270,7 +270,8 @@ local function picker_button(ui, s, ow, wide)
   local bw = picker_w(ow, wide)
   return row{ key = "title-slot", gap = 8,
     row{ key = "board-row-picker", on = "picker", w = bw, h = 28, px = 8, gap = 8, radius = "sm", border = p.open and "accent" or "elevated", fill = "surface",
-      help = (nz(summary) and summary or "Pick a team") .. " (pick another team)",
+      -- No tooltip while its list is open: it would cover the first rows.
+      help = (not p.open) and ((nz(summary) and summary or "Pick a team") .. " (pick another team)") or nil,
       column{ w = 8, h = 8, radius = 2, fill = color or "text-dim", key = "board-team-color" },
       text{ names or "", size = "sm", mono = true, color = "text-bright", truncate = true, max_w = math.floor(bw * 0.55) },
       nz(summary) and wide and text{ summary, size = "xs", color = "text-muted", truncate = true, grow = 1 } or spacer{},
@@ -282,7 +283,7 @@ local function picker_row(t, i, p, mw)
   local hl = (p.hl or 0) == i
   local current = p.current == t.id
   return column{ key = "board-row-team-" .. t.id, on = "team", arg = t.id, gap = 2, px = 8, py = 6, radius = "xs", w = "full",
-    fill = hl and "active-bg" or nil, hover = "hover-subtle", selected = current, help = t.summary,
+    fill = (hl or current) and "active-bg" or nil, hover = "hover-subtle", selected = current, help = t.summary,
     row{ gap = 8, w = "full",
       column{ w = 8, h = 8, radius = 2, fill = t.color or "text-dim" },
       text{ t.names or "", size = "sm", mono = true, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
@@ -296,7 +297,7 @@ local function picker_menu(ui, ow, oh, wide)
   local p = ui.picker or {}
   if not p.open then return false end
   local mw = menu_w(ow, wide)
-  local list = { gap = 2, w = "full", key = "board-picker-list" }
+  local list = { gap = 2, w = "full", key = "board-picker-list", group = "list" }
   list[#list + 1] = picker_row({ id = "all", names = "All teams", summary = "Every team's latest messages, each with its team", color = "text-dim" }, 0, p, mw)
   for i, t in ipairs(ui.teams or {}) do list[#list + 1] = picker_row(t, i, p, mw) end
   if (p.more or 0) > 0 then
