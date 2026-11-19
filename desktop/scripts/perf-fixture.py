@@ -101,6 +101,66 @@ team = {"id": "p-perf", "sandbox": "web-app", "summary": "Eight parts at once", 
         "threads": [{"name": t, "state": "working"} for t in threads], "created_ms": T, "updated_ms": T + 500 * 90_000, "last_ms": T + 500 * 90_000}
 d["board_teams"] = [team]
 d["board_timelines"] = {"p-perf": {"team": team, "events": events, "standing": [], "commits": {"available": True, "list": clist, "totals": [], "merged": False}}}
+
+# The Board at the person's sizes (BOARD.md, "Render budget"): 25 teams of
+# today with 600 events between them, and one team of 500 (p-huge); texts at
+# the 2000-character cap, half prose with numbered lists, half paths,
+# hashes, 200-character unbroken runs and code; direct messages both ways,
+# notes, status reports, commits. Invented, from a fixed seed. p-perf stays
+# the most recent, so the picker lists it first.
+import random
+rnd = random.Random(7)
+WORDS = "the route page handler test review branch merge order table field change before after check shared helper screen width fold event thread lead commit status config value list filter search".split()
+def prose(cap=2000):
+    s, item = "", 0
+    while len(s) < cap:
+        r = rnd.random()
+        if r < 0.25: item += 1; s += f"\n{item}. "
+        elif r < 0.33: s += "\n\n"; item = 0
+        s += " ".join(rnd.choice(WORDS) for _ in range(rnd.randint(6, 19))) + ". "
+    return s[:cap]
+def tech(cap=2000):
+    s = ""
+    while len(s) < cap:
+        k = rnd.randrange(5)
+        if k == 0: s += f"See src/feature_area_{rnd.randrange(40)}/module_{rnd.randrange(90)}/handler_for_the_{rnd.choice(WORDS)}_route.rs:{rnd.randrange(900)} "
+        elif k == 1: s += "commit " + "%040x" % rnd.getrandbits(160) + " "
+        elif k == 2: s += "".join(rnd.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(200)) + " "
+        elif k == 3: s += f"\n```\nfn check_{rnd.choice(WORDS)}(x: &str) -> Result<(), String> {{ Ok(()) }}\n```\n"
+        else: s += " ".join(rnd.choice(WORDS) for _ in range(4)) + " "
+    return s[:cap]
+def real_events(k, threads, n, t0):
+    out = []
+    for i in range(n):
+        at, th = t0 + i * 47_000, threads[i % len(threads)]
+        text = prose() if rnd.random() < 0.5 else tech()
+        m = i % 8
+        if m < 4:
+            e = {"id": f"e{k}-{i}", "kind": "direct_message", "group": "messages", "from": "lead" if m < 2 else th, "to": th if m < 2 else "lead", "text": text, "data": {}}
+        elif m == 4:
+            e = {"id": f"b{k}-{i}", "kind": rnd.choice(["board_decision", "board_warning"]), "group": "notes", "from": th, "text": text, "data": {"files": [f"src/area_{rnd.randrange(9)}/a_rather_long_file_name_for_wrapping_{rnd.randrange(99)}.rs"]}}
+        elif m == 5:
+            e = {"id": f"e{k}-{i}", "kind": "team_note", "group": "notes", "from": th, "to": "team", "text": text, "data": {"kind": "info"}}
+        elif m == 6:
+            e = {"id": f"e{k}-{i}", "kind": "thread_status", "group": "status", "from": th, "to": "lead", "text": text, "data": {"thread": th, "state": rnd.choice(["working", "working", "blocked"])}}
+        else:
+            h = "%040x" % rnd.getrandbits(160)
+            e = {"id": "c" + h, "kind": "commit", "group": "commits", "from": th, "text": f"{th}: {prose(70)}", "data": {"hash": h, "short": h[:7], "added": rnd.randrange(200), "removed": rnd.randrange(60), "files": 1 + rnd.randrange(9), "thread": th, "merged": False}}
+        e["at"] = at
+        out.append(e)
+    out.reverse()
+    return out
+def real_team(id, k, sb, threads, n):
+    t0 = T + k * 1000
+    tm = {"id": id, "sandbox": sb, "summary": f"Team {k}: " + prose(90), "state": "running", "variant": "split", "lead": f"lead-of-{k}",
+          "threads": [{"name": t, "state": "working"} for t in threads], "created_ms": t0, "updated_ms": t0 + n * 47_000, "last_ms": t0 + n * 47_000}
+    evs = real_events(k, threads, n, t0)
+    standing = [{"id": e["id"], "kind": "warning" if e["kind"] == "board_warning" else "decision", "text": e["text"], "by": e["from"]} for e in evs if e["kind"] in ("board_decision", "board_warning")][:4]
+    d["board_teams"].append(tm)
+    d["board_timelines"][id] = {"team": tm, "events": evs, "standing": standing, "commits": {"available": True, "list": [], "totals": []}}
+real_team("p-huge", 0, "web-app", [f"huge-thread-{i}" for i in range(1, 7)], 500)
+for k in range(1, 26):
+    real_team(f"p-real-{k}", k, names[k % len(names)], [f"t{k}-part-{i}" for i in range(1, 4)], 24)
 # Sessions: web-app's main session and its conversation, 400 items (the
 # daemon's ring): prompts, runs of three steps, replies (invented text).
 TS = T + 500 * 90_000
