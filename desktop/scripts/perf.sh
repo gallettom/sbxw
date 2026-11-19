@@ -70,7 +70,7 @@ step("the Board: every kind again", "board-group-all")
 step("the Board: the Commits counter (lanes, full width)", "board-count-commits", "board-lanes")
 step("the Board: the counter again (every kind)", "board-count-commits", "board-convo")
 step("the Board: the summary's details", "board-summary-details", "board-detail-part-1")
-# Canvas: web-app's canvas of 15 shots (a 4 x 4 grid), a pan and a pinch, the tools, Fit, then closed.
+# Canvas: web-app's canvas of 15 shots, a pan and a pinch, the tools, Fit, then closed.
 step("open the Canvas", "rail-canvas", "canvas-sandbox")
 step("the Canvas: the sandbox picker", "canvas-sandbox", "canvas-sandbox-list")
 # The scope list is bounded and scrolls (11 sandboxes): web-app is below its
