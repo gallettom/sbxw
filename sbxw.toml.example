@@ -257,6 +257,9 @@ env_files = []
 # API_URL = "http://api.myapp.local:8000"
 # SBXW_FIRECRAWL_CLOUD = "auto"   # sbxw:firecrawl: Firecrawl Cloud on (search,
 #                                 # blocked-page fallback); unset = off
+# SBXW_FIRECRAWL_BROWSER = "auto" # sbxw:firecrawl: JavaScript pages with the
+#                                 # agent-skills Chromium, which connects to
+#                                 # sites directly, not through the proxy
 
 # Apps to expose — none by default: a project without [[ports]] publishes
 # nothing and adds no hostname (only sbxw.localhost, the web UI's own name).
