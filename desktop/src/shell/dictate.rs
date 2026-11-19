@@ -618,4 +618,32 @@ mod tests {
         assert_eq!(draft(&mut rt), "", "nothing in the other session's draft");
         assert!(notice(&rt).contains("session changed") || notice(&rt).contains("takes no words"), "{}", notice(&rt));
     }
+
+    /// Every chat input is `tone = "compose"` (its ground, and dictation
+    /// writes there); filters, searches and forms are not. Read from the
+    /// built-in screens' sources, line by line. Canvas's ask prompt waits
+    /// for sbxw/followups (COMPOSER.md).
+    #[test]
+    fn chat_inputs_and_only_they_are_compose() {
+        let src = [
+            include_str!("../../screens/monitor.luau"),
+            include_str!("../../screens/jarvis.luau"),
+            include_str!("../../screens/canvas.luau"),
+            include_str!("../../screens/relay.luau"),
+            include_str!("../../screens/board.luau"),
+            include_str!("../../screens/mcp.luau"),
+            include_str!("../../screens/setup.luau"),
+            include_str!("../../screens/files.luau"),
+            include_str!("../../screens/sandboxes.luau"),
+            include_str!("../../screens/network.luau"),
+        ]
+        .join("\n");
+        let line = |id: &str| src.lines().find(|l| l.contains(&format!("id = \"{id}")) && (l.contains("textarea{") || l.contains("input{"))).unwrap_or_else(|| panic!("{id} found")).to_string();
+        for id in ["monitor-compose", "jarvis-input", "canvas-text-", "relay-ans-", "relay-caption-", "relay-own-", "relay-review-"] {
+            assert!(line(id).contains("tone = \"compose\""), "{id} is a chat input");
+        }
+        for id in ["board-search", "mcp-name", "secret-hosts", "files-filter", "filter", "rule-filter", "canvas-title"] {
+            assert!(!line(id).contains("compose"), "{id} keeps the plain field");
+        }
+    }
 }
