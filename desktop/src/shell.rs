@@ -1361,7 +1361,7 @@ impl App {
                 if key == format!("pane-{n}-more") || (open && key == format!("pane-{n}-more-list")) {
                     return true;
                 }
-                if open && self.pane_moves(i).iter().any(|m| m.key == key) {
+                if open && (self.pane_moves(i).iter().any(|m| m.key == key) || (key == format!("pane-{n}-redraw") && p.term.is_some())) {
                     return true;
                 }
             }
@@ -2459,6 +2459,19 @@ impl App {
     }
 }
 
+impl App {
+    /// "Redraw terminal" (the pane's "⋯" menu, the palette): the program in
+    /// pane `i`'s terminal draws its whole screen again (TerminalState::redraw:
+    /// one column narrower, then the size back). For a screen left in pieces
+    /// by a reconnect's replay that the automatic nudge did not mend (another
+    /// window owned the size then).
+    pub fn redraw_terminal(&mut self, i: usize) {
+        if let Some(t) = self.panes.get_mut(i).and_then(|p| p.term.as_mut()) {
+            t.redraw();
+        }
+    }
+}
+
 /// The pane whose top-left corner is drawn square: the one under the
 /// current tab's left side when that side is the pane's own left edge (the
 /// first tab, not after the leads view's mark or the hidden tabs' menu), so
@@ -2718,7 +2731,7 @@ impl App {
             .iter()
             .map(|m| screen::MenuRow { key: m.key.clone(), label: &m.label, icon: Some(m.icon), tone: None, help: Some(m.help.as_str()), keys: &[], count: None, chosen: false, disabled: m.op.is_none() })
             .collect();
-        let w = screen::menu_width(&rows).max(screen::menu_width(&move_rows));
+        let w = screen::menu_width(&rows).max(screen::menu_width(&move_rows)).max(screen::menu_width(&[redraw_row(n)]));
         let surface = screen::menu_surface(format!("pane-{n}-more-list"), format!("pane-{n}-more"), rune::Align::End, w);
         // Extras and moves can be more than a small window's height: the list scrolls.
         let top = self.panes.get(i).and_then(|p| self.rects.panes.get(&p.uid)).map_or(120.0, |r| r[1]);
@@ -2737,6 +2750,15 @@ impl App {
             });
         }
         if !rows.is_empty() {
+            list = list.child(screen::menu_divider());
+        }
+        if self.panes.get(i).is_some_and(|p| p.term.is_some()) {
+            list = list.child(
+                screen::menu_row(&redraw_row(n)).on_press(move |s: &mut App| {
+                    s.bar_menu = None;
+                    s.redraw_terminal(i);
+                }),
+            );
             list = list.child(screen::menu_divider());
         }
         for (m, r) in moves.iter().zip(&move_rows) {
@@ -3090,6 +3112,21 @@ fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
         b = b.child(el().w(bar::MORE_DOT).h(bar::MORE_DOT).radius(bar::MORE_DOT / 2.0).fill(theme::hex(crate::screen::tone(t).0)));
     }
     b
+}
+
+/// The "⋯" menu's "Redraw terminal" row (key `pane-<n>-redraw`).
+fn redraw_row(n: usize) -> screen::MenuRow<'static> {
+    screen::MenuRow {
+        key: format!("pane-{n}-redraw"),
+        label: "Redraw terminal",
+        icon: Some("reload"),
+        tone: None,
+        help: Some("The program draws its whole screen again: for a screen left in pieces after a reconnect"),
+        keys: &[],
+        count: None,
+        chosen: false,
+        disabled: false,
+    }
 }
 
 /// The grip a pane is dragged by: two columns of three dots.

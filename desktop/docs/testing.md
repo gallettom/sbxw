@@ -112,7 +112,7 @@ Rune replays a JSON script on the virtual clock (`--script s.json`):
   `top-bar`, `sidebar`, `rail` and its entries (`rail-requests`,
   `rail-network`, `rail-leads`, `jarvis-toggle`, `rail-setup`), `pager`,
   `page-N`, `pager-view-tabs`, `pager-view-grid`, `pager-per`, `pane-N`,
-  `pane-N-bar`, `pane-N-more`, `pane-N-close`, `pane-N-mode-agent`,
+  `pane-N-bar`, `pane-N-more` (its menu: `pane-N-redraw`, the moves), `pane-N-close`, `pane-N-mode-agent`,
   `pane-N-mode-bash`, `terminal-N`, `grid-N`, `notice`, `modal`.
 - Every key a script names must exist on the **first frame**. In a run
   against a daemon the app waits up to 1.5 s for the first list before that

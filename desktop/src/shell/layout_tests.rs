@@ -1078,3 +1078,45 @@ fn the_overlays_rows_wrap_and_never_overlap_when_narrow() {
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+/// "Redraw terminal": the PTY one column narrower, then its size back after
+/// the resize debounce, once, so a program that draws only what changed
+/// draws its whole screen again (FINISH.md item 3). The pane keeps its
+/// size; an empty pane has no such item.
+#[test]
+fn redraw_terminal_nudges_the_size_and_gives_it_back() {
+    let mut r = Rig::new(&["a"], 1284.0, 816.0);
+    let (uid, want) = {
+        let p = &r.rt.state.panes[0];
+        (p.uid, p.term.as_ref().unwrap().wanted_size().unwrap())
+    };
+    let (c, rows) = (want.0 as u16, want.1 as u16);
+    // From the pane's "⋯" menu, as a person does it.
+    super::tests::tap(&mut r.rt, "pane-1-more");
+    r.settle();
+    assert!(r.rt.presented("pane-1-redraw").is_some(), "in the pane's menu");
+    super::tests::tap(&mut r.rt, "pane-1-redraw");
+    // The app's poll, as the window's loop runs it (the rig draws only).
+    let mut polls = |r: &mut Rig| {
+        for _ in 0..20 {
+            r.clock += 0.03;
+            let clock = r.clock;
+            r.rt.update(|s, tx| {
+                s.poll(clock, tx);
+            });
+            r.rt.frame(0.03);
+        }
+    };
+    polls(&mut r);
+    assert_eq!(r.take()[&uid], vec![(c - 1, rows), (c, rows)], "one column narrower, then the size back, once");
+    polls(&mut r);
+    assert_eq!(r.take()[&uid], vec![], "nothing more");
+    assert_eq!(r.rt.state.panes[0].term.as_ref().unwrap().wanted_size(), Some(want));
+    assert!(r.rt.state.palette_cmds().iter().any(|c| c.id == "redraw"), "in the palette");
+    r.rt.update(|s, _| {
+        s.bar_menu = None;
+        s.panes[0].term = None;
+    });
+    r.settle();
+    assert!(!r.rt.state.palette_cmds().iter().any(|c| c.id == "redraw"), "no terminal, no redraw");
+}

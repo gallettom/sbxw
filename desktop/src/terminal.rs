@@ -121,6 +121,11 @@ pub const SCROLLBACK: usize = 10_000;
 /// How long a size must hold before the daemon is told (a window drag sends
 /// one resize, not one a frame).
 pub const RESIZE_DEBOUNCE: f64 = 0.08;
+/// A new socket's redraw nudge waits this long (app clock, seconds) for the
+/// daemon's replay, as the web UI's REPAINT_DELAY_MS, and gives up after
+/// NUDGE_GIVE_UP without owning the size.
+const NUDGE_AFTER: f64 = 0.15;
+const NUDGE_GIVE_UP: f64 = 5.0;
 /// Half a blink period, in seconds.
 pub const BLINK: f64 = 0.53;
 
@@ -325,6 +330,9 @@ pub struct TerminalState {
     /// set (app clock; `Some(None)`: send on the next poll).
     sent_size: Option<(usize, usize)>,
     resize_at: Option<Option<f64>>,
+    /// A new socket's one redraw nudge ([`Self::redraw`]), due from this app
+    /// clock once this client owns the PTY's size at its wanted size.
+    nudge_at: Option<f64>,
     reconnect: Option<Reconnect>,
     attempt: Option<mpsc::Receiver<anyhow::Result<TerminalConn>>>,
     retry_at: Option<Instant>,
@@ -452,6 +460,7 @@ impl TerminalState {
             pty: None,
             sent_size: None,
             resize_at: None,
+            nudge_at: Some(0.0),
             reconnect: None,
             attempt: None,
             retry_at: None,
@@ -582,6 +591,7 @@ impl TerminalState {
             None => {}
         }
         let changed = self.poll_inner(settle, Some(tx));
+        self.step_nudge(Some(tx));
         // Blink while the cursor shows; it stays lit for a period after activity.
         let blinking = self.cursor_blink || self.term.cursor_style().blinking;
         if blinking && self.focused && self.cursor.is_some() {
@@ -833,6 +843,7 @@ impl TerminalState {
         self.sent_size = None;
         self.pty = None;
         self.flush_resize();
+        self.nudge_at = Some(self.clock);
         self.force_all = true;
         self.dirty = true;
     }
@@ -846,6 +857,49 @@ impl TerminalState {
             self.sent_size = Some(want);
             log::info!("terminal wants {}x{}", want.0, want.1);
             self.input.send(TermInput::Resize { cols: want.0 as u16, rows: want.1 as u16 });
+        }
+    }
+
+    /// The program draws its whole screen again: the PTY one column narrower
+    /// now, the wanted size back after the resize debounce (two SIGWINCHes).
+    /// A program that draws only what changed leaves a screen of pieces after
+    /// a replay, and the daemon sends no SIGWINCH for a size the PTY has.
+    /// While another window owns the size, taking it back is the redraw (a
+    /// person's act: the menu, the palette). False when there is no size yet.
+    pub fn redraw(&mut self) -> bool {
+        self.nudge_at = None;
+        if self.sized_elsewhere() {
+            self.claim();
+            return true;
+        }
+        let Some((c, r)) = self.want.filter(|w| w.0 > 10) else { return false };
+        log::info!("terminal redraws: {}x{r} then {c}x{r}", c - 1);
+        self.input.send(TermInput::Resize { cols: (c - 1) as u16, rows: r as u16 });
+        self.sent_size = Some((c - 1, r));
+        self.resize_at = Some(Some(self.clock));
+        true
+    }
+
+    /// A new socket's nudge, once: when it is due and this client owns the
+    /// PTY's size at its wanted size (never taking the size from another
+    /// window: then nothing, and the menu's Redraw is the person's). Given
+    /// up after a few seconds without a size (a daemon that announces none).
+    fn step_nudge(&mut self, tx: Option<&mut Tx>) {
+        let Some(at) = self.nudge_at else { return };
+        let since = self.clock - at;
+        if since < NUDGE_AFTER {
+            if let Some(tx) = tx {
+                tx.wake_after(Duration::from_secs_f64(NUDGE_AFTER - since));
+            }
+            return;
+        }
+        match self.pty {
+            Some((_, _, false)) => self.nudge_at = None,
+            Some((c, r, true)) if self.want == Some((c, r)) && self.sent_size == self.want && self.resize_at.is_none() => {
+                self.redraw();
+            }
+            _ if since > NUDGE_GIVE_UP => self.nudge_at = None,
+            _ => {}
         }
     }
 
