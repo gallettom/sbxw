@@ -4,6 +4,7 @@ pub mod agents;
 pub mod awake;
 pub mod board;
 pub mod browser;
+pub mod canvas;
 pub mod codemap;
 pub mod emphasis;
 pub mod history;

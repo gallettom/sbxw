@@ -37,6 +37,7 @@ pub mod screen;
 pub mod shell;
 pub mod socket;
 pub mod surface;
+pub mod surface_canvas;
 pub mod terminal;
 pub mod theme;
 pub mod voice;
