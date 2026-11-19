@@ -793,7 +793,7 @@ return {
     -- which glides it). A sandbox with several sessions gets a block of its
     -- own around them, so they read as its: ungrouped, a tinted block in a
     -- group's language (its colour's tint, as its terminal header's; with
-    -- no workspace, a hue of its own, app.own_colors); in a group, no second block (a
+    -- no workspace, a hue of its own while it draws the block); in a group, no second block (a
     -- stronger tint would take `text-muted` under 4.5:1), a 2 pt bar in the
     -- group's colour down the group's gutter beside its rows. The stack's
     -- room is always there (ungrouped: 4 pt each side, taken from the
@@ -803,10 +803,9 @@ return {
       local stack = { key = "sb-" .. sb.name, gap = 2, w = "full", folds = true, radius = look and "sm" or "md", px = look and 0 or 4 }
       local gc = colors[sb.name]
       if multi and not look then
-        -- No colour of its own (no workspace): the hue the core gives it for
-        -- this block only (app.own_colors, distinct from every group's).
-        local c = gc or (app.own_colors or {})[sb.name]
-        local own = c and (app.group_look or {})[c]
+        -- With no workspace, the core gives it a hue of its own while it
+        -- draws this block (App::own_hues, in app.groups like any colour).
+        local own = gc and (app.group_look or {})[gc]
         stack.fill = own and own.tint or "surface-alt"
       end
       inset = look and 4 or 0

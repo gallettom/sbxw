@@ -263,6 +263,10 @@ pub struct App {
     /// Whether a menu of the sandbox list was open at the last push (its
     /// order holds while one is: `data.app.sidebar_menu`).
     sidebar_menu: bool,
+    /// The colour of each sandbox in no group and no workspace that draws
+    /// a session block in the list ([`App::own_hues`]): its one colour
+    /// everywhere while it does (the block, its pane header, the capsule).
+    own_colors: HashMap<String, u32>,
     marks: Vec<(f64, Mark)>,
     dump_text: Option<PathBuf>,
     solo: Option<String>,
@@ -412,6 +416,7 @@ impl App {
             copy_offer: None,
             expect: vec![],
             sidebar_menu: false,
+            own_colors: HashMap::new(),
             marks: vec![],
             dump_text: a.dump_text.clone(),
             solo: a.solo.clone(),
@@ -693,29 +698,6 @@ impl App {
             })
             .collect::<serde_json::Map<_, _>>()
             .into();
-        // A sandbox in no group and no workspace (no colour above) with
-        // several sessions gets a hue of its own for its session block in the list (sandboxes.luau): the
-        // same rule, after every group's (keys sort after the paths), so it
-        // is distinct from them and from each other while the wheel holds.
-        // Only those that draw a block (several session lines): fewer hues taken.
-        let rows = data["app"]["extras"]["rows"].clone();
-        let own: Vec<(String, String)> = self.sandboxes.iter().filter(|sb| !sb.chat && sb.workspace.as_deref().is_none_or(str::is_empty) && rows[sb.name.as_str()].as_array().is_some_and(|r| r.len() >= 2)).map(|sb| (sb.name.clone(), format!("~sandbox:{}", sb.name))).collect();
-        if !own.is_empty() {
-            let keyed: Vec<(String, Option<String>, bool)> = self.sandboxes.iter().map(|sb| {
-                let k = own.iter().find(|(n, _)| *n == sb.name).map(|(_, k)| k.clone()).or_else(|| sb.workspace.clone());
-                (sb.name.clone(), k, sb.chat)
-            }).collect();
-            let hues = theme::group_colors(keyed.iter().map(|(n, w, c)| (n.as_str(), w.as_deref(), *c)));
-            let mut out = serde_json::Map::new();
-            for (n, _) in &own {
-                if let Some(&g) = hues.get(n) {
-                    let (tint, hover, label) = theme::group_tints(g);
-                    data["app"]["group_look"][format!("#{g:06x}")] = serde_json::json!({ "tint": format!("#{tint:06x}"), "hover": format!("#{hover:06x}"), "label": format!("#{label:06x}") });
-                    out.insert(n.clone(), J::String(format!("#{g:06x}")));
-                }
-            }
-            data["app"]["own_colors"] = out.into();
-        }
         data["app"]["theme"] = J::String(theme::mode().name().into());
         data["app"]["groups"] = groups.into_iter().map(|(n, c)| (n, J::String(format!("#{c:06x}")))).collect::<serde_json::Map<_, _>>().into();
         data["app"]["sidebar"] = serde_json::json!({ "w": self.sidebar_w(), "shown": self.sidebar_shown() });
@@ -893,7 +875,14 @@ impl App {
     /// once more (never from that second push: one extra push at most).
     fn push_data_once(&mut self, again: bool) {
         let t = crate::perf::start();
-        let d = self.screen_data();
+        let mut d = self.screen_data();
+        // A sandbox's own colour follows its session block (the list's rows,
+        // just built): when that changed, every reader takes it from this push.
+        let own = self.own_hues(&d["app"]["extras"]["rows"]);
+        if own != self.own_colors {
+            self.own_colors = own;
+            d = self.screen_data();
+        }
         let built = crate::perf::ms(t);
         self.feats.pane_extras = self.feats_app(&d).3;
         let extras = crate::perf::ms(t) - built;
@@ -2769,7 +2758,25 @@ impl App {
 
     /// Each sandbox's group colour, distinct per group (theme::group_colors).
     pub fn group_colors(&self) -> HashMap<String, u32> {
-        theme::group_colors(self.sandboxes.iter().map(|sb| (sb.name.as_str(), sb.workspace.as_deref(), sb.chat)))
+        let mut m = theme::group_colors(self.sandboxes.iter().map(|sb| (sb.name.as_str(), sb.workspace.as_deref(), sb.chat)));
+        m.extend(self.own_colors.iter().filter(|(n, _)| self.sandboxes.iter().any(|sb| &sb.name == *n)).map(|(n, c)| (n.clone(), *c)));
+        m
+    }
+
+    /// A colour for each sandbox in no group and no workspace with several
+    /// session lines (`rows`: the list's, by sandbox), for its session block:
+    /// the group rule again with those sandboxes as keys that sort after
+    /// every workspace path, so each group keeps its hue and these take free
+    /// hues 40 degrees apart. Only those that draw a block take one.
+    fn own_hues(&self, rows: &J) -> HashMap<String, u32> {
+        let own = |sb: &Sandbox| !sb.chat && sb.workspace.as_deref().is_none_or(str::is_empty) && rows[sb.name.as_str()].as_array().is_some_and(|r| r.len() >= 2);
+        if !self.sandboxes.iter().any(own) {
+            return HashMap::new();
+        }
+        let keyed: Vec<(String, Option<String>, bool)> = self.sandboxes.iter().map(|sb| (sb.name.clone(), if own(sb) { Some(format!("~sandbox:{}", sb.name)) } else { sb.workspace.clone() }, sb.chat)).collect();
+        let mut hues = theme::group_colors(keyed.iter().map(|(n, w, c)| (n.as_str(), w.as_deref(), *c)));
+        hues.retain(|n, _| self.sandboxes.iter().any(|sb| &sb.name == n && own(sb)));
+        hues
     }
 
     /// The sidebar's width: dragged, else remembered, else the default.

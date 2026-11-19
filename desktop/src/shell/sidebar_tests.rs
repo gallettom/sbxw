@@ -231,7 +231,9 @@ fn the_order_holds_under_the_pointer_and_an_open_menu() {
 
 #[test]
 fn several_sessions_get_a_block_and_one_keeps_todays_look() {
-    let a = app();
+    let mut a = app();
+    // The first push learns which sandboxes draw a block (their own colour).
+    a.push_data();
     let mut d = a.screen_data();
     let groups = d["app"]["groups"].clone();
     let look = d["app"]["group_look"].clone();
@@ -243,7 +245,7 @@ fn several_sessions_get_a_block_and_one_keeps_todays_look() {
     let ivy = hex(&groups["ivy"]);
     assert_eq!(fill(&n, "sb-ivy"), Some(hex(&look[groups["ivy"].as_str().unwrap()]["tint"])), "ivy's block, colour {ivy:06x}");
     // Ungrouped with no workspace: a hue of its own, distinct from every group's.
-    let own = &d["app"]["own_colors"]["fjord"];
+    let own = &groups["fjord"];
     assert_eq!(fill(&n, "sb-fjord"), Some(hex(&look[own.as_str().unwrap()]["tint"])));
     let hue = |c: u32| {
         let (r, g, b) = (((c >> 16) & 255) as f32, ((c >> 8) & 255) as f32, (c & 255) as f32);
@@ -251,12 +253,14 @@ fn several_sessions_get_a_block_and_one_keeps_todays_look() {
         let dd = mx - mn;
         if dd == 0.0 { 0.0 } else if mx == r { 60.0 * (((g - b) / dd).rem_euclid(6.0)) } else if mx == g { 60.0 * ((b - r) / dd + 2.0) } else { 60.0 * ((r - g) / dd + 4.0) }
     };
-    for (n, c) in groups.as_object().unwrap() {
+    for (n, c) in groups.as_object().unwrap().iter().filter(|(n, _)| *n != "fjord") {
         let dist = (hue(hex(own)) - hue(hex(c))).rem_euclid(360.0);
         assert!(dist.min(360.0 - dist) >= 39.0, "fjord's hue near {n}'s: {own} {c}");
     }
     // Only a sandbox that draws a block takes a hue (cobalt, aurora: none).
-    assert_eq!(d["app"]["own_colors"].as_object().unwrap().keys().collect::<Vec<_>>(), ["fjord"]);
+    for k in ["cobalt", "aurora", "birch", "delta", "granite"] {
+        assert!(groups[k].is_null(), "{k} has no colour");
+    }
     // In a group: no second block, a bar in the group's colour beside its rows.
     assert_eq!(fill(&n, "sb-atlas-web"), None);
     let bar = find(&n, "sb-bar-atlas-web").expect("the bar");
@@ -495,3 +499,28 @@ fn the_hold_ends_when_the_pointer_leaves_a_menu_shuts_or_the_sidebar_hides() {
 }
 
 
+
+/// One colour everywhere: a sandbox with no workspace that draws a session
+/// block has its hue in the list's block, its pane header and the scope
+/// capsule (all from `App::group_colors` / `app.groups`); with one session
+/// left, the hue goes from all of them at once.
+#[test]
+fn a_sandboxs_own_colour_is_the_same_everywhere_and_goes_with_its_block() {
+    let open = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/order-open.json");
+    let mut a = App::new(Args { fixture: Some(open.into()), ..Args::default() });
+    a.push_data();
+    let d = a.screen_data();
+    let c = a.group_colors()["fjord"];
+    let pane = a.panes.iter().position(|p| p.sandbox.as_deref() == Some("fjord")).expect("fjord in a pane");
+    assert_eq!(a.pane_group(pane), Some(c), "its pane header");
+    assert_eq!(d["app"]["groups"]["fjord"], format!("#{c:06x}"), "the capsule, Sessions and the Board read app.groups");
+    let n = List::new(&d).draw(&d);
+    let (tint, _, _) = crate::theme::group_tints(c);
+    assert_eq!(find(&n, "sb-fjord").unwrap().style.fill, Some(tint), "its block");
+    // One session left: no block, no colour, anywhere.
+    let mut rows = d["app"]["extras"]["rows"].clone();
+    rows["fjord"] = J::Array(rows["fjord"].as_array().unwrap()[..1].to_vec());
+    a.own_colors = a.own_hues(&rows);
+    assert!(a.group_colors().get("fjord").is_none());
+    assert_eq!(a.pane_group(pane), None);
+}
