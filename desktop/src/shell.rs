@@ -683,6 +683,8 @@ impl App {
             (Some((n, _)), None) => serde_json::json!({ "screen": n }),
             _ => J::Null,
         };
+        // Something over the panes and over any overlay: the core's dialog, a modal, Jarvis's proposal, the palette.
+        data["app"]["covered"] = (self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some()).into();
         data
     }
 
