@@ -689,8 +689,7 @@ impl App {
             .values()
             .map(|&g| {
                 let (tint, hover, label) = theme::group_tints(g);
-                let inner = theme::group_inner(g);
-                (format!("#{g:06x}"), serde_json::json!({ "tint": format!("#{tint:06x}"), "hover": format!("#{hover:06x}"), "label": format!("#{label:06x}"), "inner": format!("#{inner:06x}") }))
+                (format!("#{g:06x}"), serde_json::json!({ "tint": format!("#{tint:06x}"), "hover": format!("#{hover:06x}"), "label": format!("#{label:06x}") }))
             })
             .collect::<serde_json::Map<_, _>>()
             .into();

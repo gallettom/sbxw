@@ -244,10 +244,11 @@ fn several_sessions_get_a_block_and_one_keeps_todays_look() {
     assert_eq!(fill(&n, "sb-ivy"), Some(hex(&look[groups["ivy"].as_str().unwrap()]["tint"])), "ivy's block, colour {ivy:06x}");
     // Ungrouped with no workspace: the neutral block.
     assert_eq!(fill(&n, "sb-fjord"), crate::theme::color_value("surface-alt"));
-    // In a group: the lighter treatment (the group's tint a step stronger), not a second block.
-    let atlas = &groups["atlas-web"];
-    assert_eq!(fill(&n, "sb-atlas-web"), Some(hex(&look[atlas.as_str().unwrap()]["inner"])));
-    assert_ne!(fill(&n, "sb-atlas-web"), fill(&n, "block-atlas"));
+    // In a group: no second block, a bar in the group's colour beside its rows.
+    assert_eq!(fill(&n, "sb-atlas-web"), None);
+    let bar = find(&n, "sb-bar-atlas-web").expect("the bar");
+    assert_eq!(bar.style.fill, Some(hex(&groups["atlas-web"])));
+    assert!(find(&n, "sb-bar-atlas-api").is_none() && find(&n, "sb-bar-ivy").is_none());
     // One session (ember), none (cobalt), stopped (aurora): no block.
     for k in ["sb-ember", "sb-cobalt", "sb-aurora", "sb-atlas-api"] {
         assert_eq!(fill(&n, k), None, "{k}");
@@ -257,6 +258,8 @@ fn several_sessions_get_a_block_and_one_keeps_todays_look() {
     let px = |n: &Node, k: &str| find(n, k).unwrap().style.px;
     assert_eq!(px(&n, "sb-ivy"), px(&n, "sb-ember"));
     assert_eq!(px(&n, "sb-atlas-web"), px(&n, "sb-atlas-api"));
+    // In a group the bar's slot is there for every sandbox, drawn or not.
+    assert_eq!(find(&n, "sb-row-atlas-api").unwrap().children.len(), 2);
     // Down to one session: the block goes.
     let rows_of = d["app"]["extras"]["rows"]["ivy"].as_array().unwrap()[..1].to_vec();
     d["app"]["extras"]["rows"]["ivy"] = J::Array(rows_of);

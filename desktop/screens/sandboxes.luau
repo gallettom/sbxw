@@ -789,25 +789,32 @@ return {
     -- which glides it). A sandbox with several sessions gets a block of its
     -- own around them, so they read as its: ungrouped, a tinted block in a
     -- group's language (its colour's tint, as its terminal header's; grey
-    -- `surface-alt` when it has none); in a group, no second strong block,
-    -- a slightly stronger fill of the group's tint (`inner`). The stack's
+    -- `surface-alt` when it has none); in a group, no second block (a
+    -- stronger tint would take `text-muted` under 4.5:1), a 2 pt bar in the
+    -- group's colour down the group's gutter beside its rows. The stack's
     -- room is always there (ungrouped: 4 pt each side, taken from the
     -- list's block), so the block comes and goes without moving a word.
     local function sandbox_rows(sb, blk, look)
       local multi = session_count(sb, app) >= 2
       local stack = { key = "sb-" .. sb.name, gap = 2, w = "full", folds = true, radius = look and "sm" or "md", px = look and 0 or 4 }
-      if multi then
-        if look then
-          stack.fill = look.inner or look.hover
-        else
-          local gc = colors[sb.name]
-          local own = gc and (app.group_look or {})[gc]
-          stack.fill = own and own.tint or "surface-alt"
-        end
+      local gc = colors[sb.name]
+      if multi and not look then
+        local own = gc and (app.group_look or {})[gc]
+        stack.fill = own and own.tint or "surface-alt"
       end
       table.insert(stack, item(sb, app, data))
       sessions_block(sb, app, data, state, stack, (model_of(sb, data)))
-      table.insert(blk, column(stack))
+      if look then
+        -- In a group: a 4 pt slot before every sandbox's stack, so the bar
+        -- comes and goes without moving a word; drawn only with several sessions.
+        stack.w = nil
+        stack.grow = 1
+        table.insert(blk, row{ key = "sb-row-" .. sb.name, w = "full", gap = 2, align = "stretch",
+          column{ key = multi and ("sb-bar-" .. sb.name) or nil, w = 2, radius = 1, fill = multi and (gc or "text-muted") or nil },
+          column(stack) })
+      else
+        table.insert(blk, column(stack))
+      end
     end
     local index = {}
     for i, sb in ipairs(data.sandboxes) do index[sb.name] = i end
