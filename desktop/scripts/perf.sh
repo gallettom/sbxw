@@ -2,7 +2,8 @@
 # Where an input's time goes, headless, in a RELEASE build, against the
 # stand-in daemon with realistic sizes (scripts/perf-fixture.py: 11
 # sandboxes, 200 commits with their details, a 3,000-entry folder, 113
-# network requests, a 400-item conversation in Sessions). Each step of the script is announced in the log with a
+# network requests, a 400-item conversation in Sessions, the Board's
+# 500-event team and All teams over 26 teams with texts at the cap). Each step of the script is announced in the log with a
 # `perf:` mark; SBXW_DESKTOP_PERF=1 logs every Luau render, the data handed
 # to the screens, the core's view and each daemon request with its time.
 #
@@ -70,6 +71,21 @@ step("the Board: every kind again", "board-group-all")
 step("the Board: the Commits counter (lanes, full width)", "board-count-commits", "board-lanes")
 step("the Board: the counter again (every kind)", "board-count-commits", "board-convo")
 step("the Board: the summary's details", "board-summary-details", "board-detail-part-1")
+# The person's sizes (perf-fixture.py): a team of 500 events with texts at
+# the 2000-character cap, then All teams (26 more teams).
+step("the Board (real sizes): open the team picker", "board-row-picker", "board-row-team-p-huge")
+step("the Board (real sizes): a team of 500 events at the cap", "board-row-team-p-huge", "board-fold-e0-499")
+step("the Board (real sizes): Show more", "board-fold-e0-499")
+step("the Board (real sizes): show earlier", "board-more")
+step("the Board (real sizes): Messages", "board-group-messages")
+step("the Board (real sizes): open the team picker again", "board-row-picker", "board-row-team-all")
+step("the Board (real sizes): All teams", "board-row-team-all", "board-convo")
+add(type="mark", name="perf:the Board (real sizes): All teams, type 3 characters in the search")
+add(type="tap", key="board-search"); add(type="type", text="the", every=0.05); t += 0.3
+add(type="mark", name="hold:300")
+# (A button last: the search field gives up the keyboard before the Canvas.)
+step("the Board (real sizes): All teams, Decisions and warnings", "board-group-notes")
+step("the Board (real sizes): All teams, every kind", "board-group-all")
 # Canvas: web-app's canvas of 15 shots, a pan and a pinch, the tools, Fit, then closed.
 step("open the Canvas", "rail-canvas", "canvas-sandbox")
 step("the Canvas: the sandbox picker", "canvas-sandbox")
