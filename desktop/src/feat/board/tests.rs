@@ -1490,3 +1490,47 @@ fn show_earlier_to_the_first_event_stays_within_the_screen_s_limits() {
     let n = cost(&h, &v, 420.0).unwrap_or_else(|e| panic!("at 420 pt: {e}"));
     assert!(n < crate::luau::Limits::default().interrupts / 2);
 }
+
+// ── The state chip sits at a report's top right ──────────────────────────
+
+#[test]
+fn drawn_a_report_s_state_chip_is_at_its_top_right_and_its_label_at_the_top_left() {
+    let long = "The routes now answer with the new shape. ".repeat(12);
+    for (w, h) in [(1284.0, 816.0), (760.0, 600.0), (500.0, 700.0), (420.0, 700.0)] {
+        let mut rt = window(w, h);
+        open(&mut rt, json!({ "team": "p-run" }));
+        if w < 700.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            settle(&mut rt);
+        }
+        for (id, text, state) in [("l970", "Done.", "done"), ("l971", long.as_str(), "blocked"), ("l972", "Reading it.", "working")] {
+            let mut st = note_event(id, text);
+            st["kind"] = "thread_status".into();
+            st["group"] = "status".into();
+            st["to"] = "lead".into();
+            st["data"] = json!({ "thread": "api-routes", "state": state });
+            append(&mut rt, st);
+        }
+        let mut seen = 0;
+        for id in ["l970", "l971", "l972"] {
+            let (b, _) = rt.presented(&format!("board-bubble-{id}")).unwrap_or_else(|| panic!("{id} at {w}: no bubble"));
+            let (k, _) = rt.presented(&format!("board-kind-{id}")).unwrap_or_else(|| panic!("{id} at {w}: no label"));
+            let (c, _) = rt.presented(&format!("board-state-{id}")).unwrap_or_else(|| panic!("{id} at {w}: no chip"));
+            // Padding is 12 across and 8 down.
+            assert!((k[0] - (b[0] + 12.0)).abs() <= 1.5, "{id} at {w}: label {k:?} not at the left of {b:?}");
+            assert!((c[0] + c[2] - (b[0] + b[2] - 12.0)).abs() <= 1.5, "{id} at {w}: chip {c:?} not at the right of {b:?}");
+            assert!(c[1] <= b[1] + 8.0 + 6.0 && k[1] <= b[1] + 8.0 + 6.0, "{id} at {w}: not on the top line");
+            assert!(k[0] + k[2] + 8.0 <= c[0], "{id} at {w}: label {k:?} and chip {c:?} need a gap");
+            assert!(c[0] >= b[0] && c[0] + c[2] <= b[0] + b[2], "{id} at {w}: chip outside the bubble");
+            // The text starts under them.
+            for e in rt.elements() {
+                let inside = e.rect[0] >= b[0] && e.rect[0] <= b[0] + b[2] && e.rect[1] > c[1] + c[3] - 1.0 && e.rect[1] < b[1] + b[3];
+                if inside && e.text.as_deref().is_some_and(|t| t.starts_with("Done.") || t.starts_with("Reading") || t.starts_with("The routes")) {
+                    assert!(e.rect[1] >= c[1] + c[3] - 0.5 && e.rect[1] >= k[1] + k[3] - 0.5, "{id} at {w}: text over the head line");
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen >= 1, "at {w}: the text was never found under the head line");
+    }
+}
