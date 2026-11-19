@@ -46,7 +46,7 @@ fn the_scope_prop_is_read_and_an_unknown_kind_is_a_plain_select() {
 #[test]
 fn choices_come_from_the_core_s_data_grouped_with_all_first() {
     let d = data();
-    let c = choices(&d, &items(&["docs", "web-app", "", "nobody", "chat-1", "web-api", "web-app", "loose"]));
+    let c = choices(&d, &items(&["docs", "web-app", "", "nobody", "chat-1", "web-api", "web-app", "loose"]), &Spec::default());
     let ids: Vec<&str> = c.iter().map(|c| c.id.as_str()).collect();
     // All first; a sandbox the core does not know is left out; a repeat once;
     // web-api joins web-app's group (the group's place is its first sandbox's).
@@ -59,13 +59,18 @@ fn choices_come_from_the_core_s_data_grouped_with_all_first() {
     assert_eq!(c.iter().find(|c| c.id == "chat-1").unwrap().group.as_deref(), Some("Chats"));
     assert_eq!(c.iter().find(|c| c.id == "loose").unwrap().group, None);
     // No "" item: no All.
-    assert!(choices(&d, &items(&["docs"])).iter().all(|c| !c.all()));
+    assert!(choices(&d, &items(&["docs"]), &Spec::default()).iter().all(|c| !c.all()));
+    // No items: every sandbox the core knows, All with `all = true`, only the running ones with `running = true`.
+    let every = |sp: Spec| choices(&d, &[], &sp).iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+    assert_eq!(every(spec(&json!("sandbox")).unwrap()), ["web-app", "web-api", "docs", "chat-1", "loose"]);
+    assert_eq!(every(spec(&json!({ "kind": "sandbox", "all": true })).unwrap())[0], "");
+    assert!(!every(spec(&json!({ "kind": "sandbox", "running": true })).unwrap()).contains(&"docs".to_string()));
 }
 
 #[test]
 fn the_filter_matches_names_and_groups_and_keeps_all() {
     let d = data();
-    let c = choices(&d, &items(&["", "web-app", "docs", "web-api"]));
+    let c = choices(&d, &items(&["", "web-app", "docs", "web-api"]), &Spec::default());
     let ids = |q: &str| filter(&c, q).iter().map(|c| c.id.clone()).collect::<Vec<_>>();
     assert_eq!(ids("API"), ["", "web-api"]);
     assert_eq!(ids("web"), ["", "web-app", "web-api"]);
@@ -197,7 +202,7 @@ fn files_shows_its_sandbox_in_its_title_and_the_list_picks_another() {
     let mut rt = window("scope/many", 1284.0, 816.0);
     run(&mut rt, "files_open", json!({ "sandbox": "web-app" }));
     // Pre-scoped: the capsule says web-app, in the overlay's header, after "Files in".
-    assert_eq!(label_of(&rt, "files-sandbox").as_deref(), Some("Scope: web-app"));
+    assert_eq!(label_of(&rt, "files-sandbox").as_deref(), Some("Scope: web-app (running)"));
     let (cap, _) = rt.presented("files-sandbox").unwrap();
     let (head, _) = rt.presented("overlay-head-files").unwrap();
     assert!(cap[1] >= head[1] && cap[1] + cap[3] <= head[1] + head[3] + 0.5, "the capsule is in the title row: {cap:?} {head:?}");
@@ -216,7 +221,7 @@ fn files_shows_its_sandbox_in_its_title_and_the_list_picks_another() {
     assert!(rt.find("files-sandbox-docs").is_some() && rt.find("files-sandbox-web-app").is_none());
     key(&mut rt, Key::Enter);
     assert!(rt.find("files-sandbox-list").is_none(), "a pick closes the list");
-    assert_eq!(label_of(&rt, "files-sandbox").as_deref(), Some("Scope: docs"));
+    assert_eq!(label_of(&rt, "files-sandbox").as_deref(), Some("Scope: docs (running)"));
     assert!(rt.state.feats.overlay.as_ref().is_some_and(|o| o.0 == "files"));
     // Reopened: the filter is empty again.
     press(&mut rt, "files-sandbox");
@@ -249,7 +254,7 @@ fn a_press_outside_closes_the_list_and_does_nothing_else() {
     settle(&mut rt);
     assert!(rt.find("files-sandbox-list").is_none());
     assert_eq!(rt.state.selected, before, "the press went nowhere else");
-    assert_eq!(label_of(&rt, "files-sandbox").as_deref(), Some("Scope: web-app"));
+    assert_eq!(label_of(&rt, "files-sandbox").as_deref(), Some("Scope: web-app (running)"));
 }
 
 #[test]
@@ -268,7 +273,7 @@ fn commits_offers_all_and_the_keyboard_moves_and_picks() {
     assert!(to.starts_with("commits-sandbox-") && to != "commits-sandbox-", "{to}");
     key(&mut rt, Key::Enter);
     let sb = to.trim_start_matches("commits-sandbox-").to_string();
-    assert_eq!(label_of(&rt, "commits-sandbox"), Some(format!("Scope: {sb}")));
+    assert!(label_of(&rt, "commits-sandbox").is_some_and(|l| l.starts_with(&format!("Scope: {sb} ("))), "{sb}");
     assert!(rt.find("overlay-strip-commits").is_some(), "scoped: the frame takes its colour at once");
     // Back to All with the pointer.
     press(&mut rt, "commits-sandbox");
@@ -280,11 +285,11 @@ fn commits_offers_all_and_the_keyboard_moves_and_picks() {
 fn a_branch_shows_as_the_second_level_and_its_cross_clears_it() {
     let mut rt = window("shell/two-panes", 1284.0, 816.0);
     run(&mut rt, "commits_show", json!({ "sandbox": "web-app", "branch": "checkout-copy" }));
-    assert_eq!(label_of(&rt, "commits-sandbox").as_deref(), Some("Scope: web-app"));
+    assert_eq!(label_of(&rt, "commits-sandbox").as_deref(), Some("Scope: web-app (running)"));
     assert!(rt.find("commits-sandbox-narrow").is_some(), "the branch after the capsule");
     press(&mut rt, "commits-sandbox-narrow-clear");
     assert!(rt.find("commits-sandbox-narrow").is_none());
-    assert_eq!(label_of(&rt, "commits-sandbox").as_deref(), Some("Scope: web-app"), "the sandbox stays");
+    assert_eq!(label_of(&rt, "commits-sandbox").as_deref(), Some("Scope: web-app (running)"), "the sandbox stays");
 }
 
 #[test]
@@ -294,7 +299,7 @@ fn the_scope_is_remembered_per_screen() {
     key(&mut rt, Key::Escape);
     // Opened again from the rail (no sandbox): the last one.
     run(&mut rt, "files_show", json!({}));
-    assert_eq!(label_of(&rt, "files-sandbox").as_deref(), Some("Scope: docs"));
+    assert_eq!(label_of(&rt, "files-sandbox").as_deref(), Some("Scope: docs (running)"));
 }
 
 #[test]
@@ -304,7 +309,7 @@ fn hostile_and_long_names_are_text_only_and_clipped() {
     for name in [hostile, long] {
         let mut rt = window("scope/many", 1284.0, 816.0);
         run(&mut rt, "files_open", json!({ "sandbox": name }));
-        assert_eq!(label_of(&rt, "files-sandbox"), Some(format!("Scope: {name}")));
+        assert_eq!(label_of(&rt, "files-sandbox"), Some(format!("Scope: {name} (running)")));
         let (cap, _) = rt.presented("files-sandbox").unwrap();
         assert!(cap[2] <= NAME_MAX_W + 80.0, "{name}: the capsule is clipped: {cap:?}");
         // Its whole name in a tooltip-bearing element; no pill, no control made from it.
@@ -363,4 +368,67 @@ fn the_title_row_fits_and_the_list_stays_in_the_window_at_every_width() {
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+fn renders(rt: &Runtime<App>, screen: &str) -> u64 {
+    rt.state.screens.iter().find(|s| s.name == screen).map_or(0, |s| s.renders)
+}
+
+fn fill_of(rt: &Runtime<App>, key: &str) -> Option<rune::Color> {
+    rt.elements().into_iter().find(|e| !e.exiting && e.key.as_deref() == Some(key)).map(|e| e.fill)
+}
+
+/// The capsule and the list read the core's data when the view is built
+/// (screen.rs `Build::data`, the data every push hands the screen), not
+/// through the screen's Luau reads: a change of what they show is drawn
+/// at once without the screen's script running again, and a push that
+/// changes nothing they show runs nothing.
+#[test]
+fn the_scope_follows_the_core_s_data_without_running_the_screen_again() {
+    let mut rt = window("scope/many", 1284.0, 816.0);
+    run(&mut rt, "files_open", json!({ "sandbox": "web-app" }));
+    press(&mut rt, "files-sandbox");
+    key(&mut rt, Key::Escape);
+    // (A push: the screens' data again, as any intent a screen returns. Each
+    // below selects another sandbox in the sidebar, which the scope does not show.)
+    rt.update(|s, _| crate::screen::Host::intents(s, "test", vec![crate::intent::Intent::Select { sandbox: Some("docs".into()) }]));
+    settle(&mut rt);
+    let r0 = renders(&rt, "files");
+    let strip0 = fill_of(&rt, "overlay-strip-files");
+    // A push that changes nothing the scope shows: nothing renders, nothing changes.
+    rt.update(|s, _| crate::screen::Host::intents(s, "test", vec![crate::intent::Intent::Select { sandbox: Some("infra".into()) }]));
+    settle(&mut rt);
+    assert_eq!(renders(&rt, "files"), r0, "an unchanged push renders nothing");
+    // Its state: the label (and the dot) follow at once; the script did not run.
+    rt.update(|s, _| {
+        s.sandboxes.iter_mut().find(|x| x.name == "web-app").unwrap().status = "stopped".into();
+        crate::screen::Host::intents(s, "test", vec![crate::intent::Intent::Select { sandbox: Some("billing".into()) }]);
+    });
+    settle(&mut rt);
+    assert_eq!(label_of(&rt, "files-sandbox").as_deref(), Some("Scope: web-app (stopped)"));
+    // Its group: another workspace, another colour on the frame.
+    rt.update(|s, _| {
+        s.sandboxes.iter_mut().find(|x| x.name == "web-app").unwrap().workspace = Some("/Users/ana/dev/elsewhere".into());
+        crate::screen::Host::intents(s, "test", vec![crate::intent::Intent::Select { sandbox: Some("search".into()) }]);
+    });
+    settle(&mut rt);
+    assert_ne!(fill_of(&rt, "overlay-strip-files"), strip0, "the frame takes the new group's colour");
+    // A sandbox added: in the open list.
+    rt.update(|s, _| {
+        let mut x = s.sandboxes[0].clone();
+        x.name = "fresh-one".into();
+        s.sandboxes.push(x);
+        crate::screen::Host::intents(s, "test", vec![crate::intent::Intent::Select { sandbox: Some("mobile".into()) }]);
+    });
+    settle(&mut rt);
+    press(&mut rt, "files-sandbox");
+    // (At the end of the list: in it, maybe scrolled out of view.)
+    assert!(rt.elements().iter().any(|e| !e.exiting && e.key.as_deref() == Some("files-sandbox-fresh-one")), "a new sandbox is offered");
+    key(&mut rt, Key::Escape);
+    // The theme: the capsule's colours switch with it.
+    let cap0 = fill_of(&rt, "files-sandbox");
+    rt.update(|s, _| s.set_theme(Mode::Graphite));
+    settle(&mut rt);
+    assert_ne!(fill_of(&rt, "files-sandbox"), cap0, "the capsule follows the theme");
+    rt.update(|s, _| s.set_theme(Mode::Dark));
 }

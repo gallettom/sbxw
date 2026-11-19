@@ -149,8 +149,8 @@ return {
     if not contains(sb_ids, on_sb) then on_sb = kept.sandbox end
     if not contains(sb_ids, on_sb) then on_sb = nil end
     -- Beside the overlay's title (the core's header draws it: TITLE_SLOT).
-    table.insert(out, 1, row{ key = "title-slot", gap = 8, (((data.app or {}).overlay or {}).w or 1000) >= 480 and text{ "Sandbox", size = "sm", color = "text-muted" } or false,
-      sandbox_picker(data, { id = "kits-sandbox", value = on_sb, items = sbs, on = "pick_sandbox", placeholder = "No sandbox", disabled = #sbs == 0 }) })
+    table.insert(out, 1, row{ key = "title-slot", gap = 8,
+      select{ id = "kits-sandbox", value = on_sb or "", on = "pick_sandbox", scope = "sandbox", placeholder = "No sandbox", disabled = #sbs == 0 } })
     local items = {}
     for _, x in ipairs(files) do items[#items + 1] = { id = x.path, label = x.path } end
     local cur = kits_list(k, state, f)

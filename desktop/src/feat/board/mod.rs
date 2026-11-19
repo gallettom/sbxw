@@ -667,6 +667,8 @@ impl State {
         json!({
             "id": team["id"], "sandbox": sb, "color": groups[sb], "summary": team["summary"], "names": model::team_names(team), "state": team["state"], "tone": model::team_tone(team["state"].as_str().unwrap_or("")),
             "lead": team["lead"], "variant": team["variant"], "threads": threads, "notes": notes,
+            // The picker's capsule in the team sandbox's colours (scope.rs, as every scoped screen).
+            "look": crate::scope::look_json(groups[sb].as_str().and_then(crate::scope::parse_hex)),
             "commits": per, "commits_available": t.commits["available"].as_bool().unwrap_or(t.commits.is_null()), "commits_why": t.commits["why"],
             "lanes": { "wide": lanes_w, "narrow": lanes_n },
             "loading": t.loading,

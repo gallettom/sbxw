@@ -433,7 +433,7 @@ return {
     local thread
     for _, w in ipairs(ui.worktrees or {}) do if w.here then thread = w.thread end end
     top[#top + 1] = row{ key = "title-slot", gap = 8,
-      select{ id = "files-sandbox", value = ui.sandbox, items = ui.sandboxes or {}, on = "sandbox",
+      select{ id = "files-sandbox", value = ui.sandbox, on = "sandbox",
         scope = { kind = "sandbox", narrow = thread, narrow_icon = "branch" } },
       ui.offline and badge{ "stopped: workspace only", tone = "amber", help = "Read from this computer; the sandbox is not started to list a folder" } or false,
     }

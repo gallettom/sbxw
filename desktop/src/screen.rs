@@ -1719,12 +1719,14 @@ impl Build<'_> {
         let key = key.unwrap_or_else(|| id.clone());
         let open = self.ui.open.as_deref() == Some(id.as_str());
         let value = n.value.as_str().unwrap_or("").to_string();
-        let choices = scope::choices(self.data, &n.items);
+        let choices = scope::choices(self.data, &n.items, &sp);
+        let has_all = scope::offers_all(&sp, &n.items);
         let all_label = n.items.iter().find(|i| i.id.is_empty()).map(|i| i.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| "All sandboxes".into());
+        let empty_label = if has_all { all_label.clone() } else { n.placeholder.clone().unwrap_or_else(|| "Pick a sandbox".into()) };
         let current = choices.iter().find(|c| c.id == value);
         let (name, id2) = (self.name.clone(), id.clone());
         let fid = format!("{id}-filter");
-        let cap = scope::capsule::<S>(&key, &value, current, &all_label, open, n.disabled, move |s: &mut S| {
+        let cap = scope::capsule::<S>(&key, &value, current, (&empty_label, has_all), open, n.disabled, move |s: &mut S| {
             let ui = &mut s.screen(&name).ui;
             ui.open = if ui.open.as_deref() == Some(id2.as_str()) { None } else { Some(id2.clone()) };
             // A list opens with an empty filter.

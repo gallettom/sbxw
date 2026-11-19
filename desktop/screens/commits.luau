@@ -15,11 +15,9 @@ end
 -- The scope beside the overlay's title ("Commits in [All sandboxes v]",
 -- a branch as its second level): the core draws it (scope.rs).
 local function scope(ui)
-  local items = { { id = "", label = "All sandboxes" } }
-  for _, s in ipairs(ui.sandboxes or {}) do items[#items + 1] = { id = s.id, label = s.label } end
   return row{ key = "title-slot", gap = 8,
-    select{ id = "commits-sandbox", value = ui.sandbox or "", on = "sandbox", items = items,
-      scope = { kind = "sandbox", narrow = nz(ui.branch) and ui.branch or nil, narrow_icon = "branch", clear = "branch_clear" } } }
+    select{ id = "commits-sandbox", value = ui.sandbox or "", on = "sandbox",
+      scope = { kind = "sandbox", all = true, narrow = nz(ui.branch) and ui.branch or nil, narrow_icon = "branch", clear = "branch_clear" } } }
 end
 
 local function filters(ui)

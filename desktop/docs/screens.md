@@ -490,11 +490,62 @@ A picker showing the current choice. Same list as `menu`.
 | `on` | action name | Required unless `disabled`; `value` = the picked id |
 | `arg` | any value | Passed too |
 | `disabled` | bool | |
+| `scope` | `"sandbox"` or a table | A scope picker, drawn by the core (below) |
 
 ```lua
 select{ id = "layout", value = "2c", on = "layout",
   items = { { id = "1", label = "1 terminal", icon = "single" }, { id = "2c", label = "2 side by side", icon = "columns" } } }
 ```
+
+#### Scope pickers (`scope`)
+
+Which sandbox a screen shows is its most important fact, so every scoped
+screen draws it the same way, with one component the core draws
+(`src/scope.rs`): `select{ ..., scope = "sandbox" }`.
+
+```lua
+-- In an overlay's title row ("Files in [web-app v] > thread-a x"):
+row{ key = "title-slot", gap = 8,
+  select{ id = "files-sandbox", value = ui.sandbox, items = ui.sandboxes, on = "sandbox",
+    scope = { kind = "sandbox", narrow = thread, narrow_icon = "branch", clear = "branch_clear" } } }
+```
+
+- **The data shape**: `items` only says which sandboxes the screen offers
+  (`{ id = <sandbox name> }`; labels are ignored); an item with `id = ""`
+  is **All sandboxes** (its label, if any, is the text), listed first, and
+  only a screen that has it offers it. Everything a row shows comes from
+  the core's own data: status, group, group colour (the sidebar's), agent,
+  open sessions. A name the core does not know is left out. `on` gets the
+  picked id (`""` for All), as a `select`.
+- **`scope` table**: `kind` (`"sandbox"`; another kind draws the plain
+  select), `narrow` (a second level drawn after the capsule: a thread's
+  worktree, a branch), `narrow_icon` (an icon name, default `branch`),
+  `clear` (the screen's action its cross calls; no cross without it).
+- **Closed**: a capsule in the sandbox's group colour (its fill the colour
+  at 32% over `surface`, its edge the colour itself), the status dot (a
+  ring when stopped), the name (clipped at 220 pt, whole in the tooltip),
+  a chevron. All is neutral with a grid glyph; an empty value with no All
+  shows the `placeholder`. A change of value plays one short pop of the
+  name (none under reduced motion). It is a Tab stop (`combobox`).
+- **In an overlay's title** (a `title-slot` row): the title reads "Files in
+  [web-app]" ("in" dropped under 560 pt) and the overlay's frame takes the
+  scope's colour: a 3 pt strip on its top edge (the group colour), the title
+  band in a focused pane header's tint (`theme::bar_ground`), its edge.
+  All, or a sandbox in no group: today's neutral frame.
+- **Open**: the list under the capsule (`<id>-list`, 300 to 420 pt, never
+  wider than the window): All first, then each group under a heading in
+  the sidebar's tint and label colour, a row per sandbox (`<id>-<name>`,
+  All `<id>-`): the group's bar, status, name, open sessions, state,
+  agent, a check on the current one. Above 8 sandboxes a filter field
+  (`<id>-filter`) that matches names and group names. The keyboard starts
+  in the field, else on the current row; Up and Down move, Enter picks
+  (in the field: the first match), Escape closes only the list and gives
+  the keyboard back to the capsule; a press outside closes it and reaches
+  nothing else.
+- **Names are data**: text only, clipped, never a pill or a control.
+- A picker a screen must draw itself (the Board's two-line team rows) takes
+  the same colours from `scope::look_json` (`fill`, `border`, `text`,
+  `muted`, as `#rrggbb`) in its view model.
 
 ### `checkbox`
 
@@ -987,13 +1038,13 @@ the cap with many sessions, threads or requests are listed in VIEWS.md.
 
 ### Overlay helpers
 
-- `sandbox_picker(data, { id, value, items, on, placeholder, disabled })`:
-  the sandbox's colour square (`data.app.groups`, key `<id>-color`) then the
-  select (`<id>`), in a row keyed `<id>-row`. The explorer, MCP servers,
-  Skills and Kits draw it at their top left.
-- A row keyed `title-slot` in an overlay's screen (a sandbox picker) is
+- A sandbox picker is a `select` with `scope = "sandbox"` (see `select`,
+  "Scope pickers"). `sandbox_picker(data, opts)` (a colour square and a
+  plain select) is kept for overrides written before it; no built-in
+  screen uses it.
+- A row keyed `title-slot` in an overlay's screen (its scope picker) is
   drawn by the core in the overlay's header, right after its title
-  ("Files  [web-app v]"), not where it sits in the tree; in a panel or a
+  ("Files in [web-app v]"), not where it sits in the tree; in a panel or a
   modal it stays in place. Its keys and actions are the screen's as usual.
 - `overlay_wide(data)`: true when the overlay over the pane area is 760 pt
   wide or more (`data.app.overlay.w`; a screen drawn alone counts as wide).
@@ -1612,8 +1663,9 @@ pin it `files-star`, **Go to…** `files-goto` (the typed path `files-path`),
 then **Upload** `files-upload` (the upload card `files-drop` under the
 header: open, while files wait, or while files are dragged over the
 explorer, `data.app.overlay.drop_over`) and the "…" menu `files-actions`
-(read again, the code map). **Left**: the sandbox picker `files-sandbox`
-with its colour, the **Locations** (`files_ui.locations`, `view::locations`:
+(read again, the code map), read again `files-refresh`. **In the title**:
+the scope picker `files-sandbox` (its second level the worktree the list is
+in). **Left**: the **Locations** (`files_ui.locations`, `view::locations`:
 "This sandbox": Home (the agent's home, `/home/agent`), Workspace (the
 project, this computer's folder mounted at the same path; Code map
 `files-codemap` beside it), Temporary files (`/tmp`), File system root,
@@ -1825,6 +1877,10 @@ background. `data.commits_ui`: `sandbox` (nil: every one), `branch`,
 | `commits_copy` | `id` | The full hash on the clipboard |
 | `commits_refresh` | | Reads again |
 | `commits_key` | `key` (`up`, `down`, `enter`) | The view's keys when none of its controls has the keyboard |
+
+The scope picker `commits-sandbox` is in the title ("Commits in [All
+sandboxes v]"), a branch as its second level (`commits-sandbox-narrow`, its
+cross `commits-sandbox-narrow-clear` runs `commits_branch_clear`).
 
 Commit messages are drawn as plain text: no pills, no Markdown, no links.
 

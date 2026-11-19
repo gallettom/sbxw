@@ -64,6 +64,10 @@ pub struct Spec {
     pub narrow_icon: String,
     /// The screen's action that clears the second level (its cross).
     pub clear: Option<String>,
+    /// `all = true`: "All sandboxes" is offered (as an item with id "").
+    pub all: bool,
+    /// `running = true`: only the running sandboxes (when `items` names none).
+    pub running: bool,
 }
 
 /// The `scope` prop read, when its kind is one the core knows.
@@ -78,7 +82,8 @@ pub fn spec(v: &J) -> Option<Spec> {
     }
     let s = |k: &str| t.and_then(|o| o.get(k)).and_then(J::as_str).filter(|x| !x.is_empty()).map(str::to_string);
     let icon = s("narrow_icon").filter(|i| crate::icons::get(i).is_some()).unwrap_or_else(|| "branch".into());
-    Some(Spec { kind, narrow: s("narrow"), narrow_icon: icon, clear: s("clear") })
+    let b = |k: &str| t.and_then(|o| o.get(k)).and_then(J::as_bool).unwrap_or(false);
+    Some(Spec { kind, narrow: s("narrow"), narrow_icon: icon, clear: s("clear"), all: b("all"), running: b("running") })
 }
 
 /// One choice of the list: "All" (`id` empty) or a sandbox the core knows.
@@ -115,17 +120,36 @@ pub fn group_name(sb: &J) -> Option<String> {
     ws.rsplit('/').next().filter(|s| !s.is_empty()).map(str::to_string)
 }
 
-/// The choices a screen offers (its items' ids), from the core's data: the
-/// item "" is All (kept first), a sandbox the core does not know is left
-/// out. Grouped: the groups in the order their first sandbox comes, each
-/// group's sandboxes in the screen's order.
-pub fn choices(data: &J, items: &[Item]) -> Vec<Choice> {
+/// Whether the picker offers All: `all = true`, or an item with id "".
+pub fn offers_all(sp: &Spec, items: &[Item]) -> bool {
+    sp.all || items.iter().any(|i| i.id.is_empty() && !i.divider)
+}
+
+/// The choices a screen offers, from the core's data: every sandbox the
+/// core knows (only the running ones with `running = true`) when the
+/// screen's `items` name none, else those items' sandboxes in their order
+/// (one the core does not know is left out). All first when offered.
+/// Grouped: the groups in the order their first sandbox comes.
+pub fn choices(data: &J, items: &[Item], sp: &Spec) -> Vec<Choice> {
     let sbs = data["sandboxes"].as_array().cloned().unwrap_or_default();
+    let named = items.iter().any(|i| !i.id.is_empty() && !i.divider);
+    let every: Vec<Item>;
+    let items: &[Item] = if named {
+        items
+    } else {
+        every = offers_all(sp, items).then(|| Item::plain("", "", None)).into_iter()
+            .chain(sbs.iter().filter(|s| !sp.running || s["status"] == "running").filter_map(|s| s["name"].as_str()).map(|n| Item::plain(n, n, None)))
+            .collect();
+        &every
+    };
     let groups = &data["app"]["groups"];
     let sessions = data["sessions"].as_array();
     let mut all = None;
     let mut list: Vec<Choice> = vec![];
     for it in items.iter().filter(|i| !i.divider) {
+        if it.id.is_empty() && !offers_all(sp, items) {
+            continue;
+        }
         if it.id.is_empty() {
             all.get_or_insert(Choice { id: String::new(), status: String::new(), group: None, color: None, agent: String::new(), sessions: 0 });
             continue;
@@ -189,6 +213,14 @@ pub fn look(color: Option<u32>) -> Look {
         }
         None => Look { fill: v("surface"), border: v("control-border"), text: v("text-bright"), muted: theme::muted_on(v("surface")) },
     }
+}
+
+/// [`look`] as a screen reads it (`#rrggbb` strings): for a picker a screen
+/// draws itself (the Board's team picker, two lines a row).
+pub fn look_json(color: Option<u32>) -> J {
+    let l = look(color);
+    let h = |c: u32| J::String(format!("#{c:06x}"));
+    serde_json::json!({ "fill": h(l.fill), "border": h(l.border), "text": h(l.text), "muted": h(l.muted) })
 }
 
 /// A scoped overlay's frame: the strip along its top edge, the wash of its
@@ -269,12 +301,17 @@ pub fn describe(ch: Option<&Choice>, value: &str) -> String {
 /// The closed capsule. `key` is the select's key (scripts and tests press
 /// it); a change of `value` plays one short pop of its face (none under
 /// reduced motion): the person sees the scope changed.
-pub fn capsule<S: 'static>(key: &str, value: &str, ch: Option<&Choice>, all_label: &str, open: bool, disabled: bool, toggle: impl Fn(&mut S) + 'static) -> El {
+/// `empty`: what an empty value says, and whether it is All (the grid
+/// glyph) or no sandbox at all (a screen with none to offer: its placeholder).
+pub fn capsule<S: 'static>(key: &str, value: &str, ch: Option<&Choice>, empty: (&str, bool), open: bool, disabled: bool, toggle: impl Fn(&mut S) + 'static) -> El {
     let lk = look(ch.and_then(|c| c.color));
     let all = value.is_empty();
+    let (all_label, is_all) = empty;
     let mut face = row().key(format!("{key}-face-{value}")).gap(8.0).items_center().shrink();
-    if all {
+    if all && is_all {
         face = face.child(icon("grid", theme::icon::MEDIUM, lk.muted)).child(text(all_label.to_string()).font(crate::screen::body(13.0, 500.0)).color(hex(lk.text)));
+    } else if all {
+        face = face.child(text(all_label.to_string()).font(crate::screen::body(13.0, 400.0)).color(hex(lk.muted)));
     } else {
         face = face.child(status_mark(ch.map_or("", |c| c.status.as_str()), lk.fill)).child(text(value.to_string()).font(crate::screen::body(13.0, 500.0)).color(hex(lk.text)).truncate().shrink().max_w(NAME_MAX_W));
     }
@@ -285,11 +322,14 @@ pub fn capsule<S: 'static>(key: &str, value: &str, ch: Option<&Choice>, all_labe
     let mut t = row()
         .key(key.to_string())
         .role("combobox")
-        .label(format!("Scope: {name}"))
+        .label(match ch.filter(|c| !c.all() && !c.status.is_empty()) {
+            Some(c) => format!("Scope: {name} ({})", c.status),
+            None => format!("Scope: {name}"),
+        })
         .help(describe(ch, value))
         .expanded(open)
         .h(theme::layout::CONTROL_H)
-        .px(10.0)
+        .px(12.0)
         .gap(8.0)
         .items_center()
         .shrink()

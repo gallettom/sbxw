@@ -273,14 +273,17 @@ local function picker_button(ui, s, ow, wide)
   elseif ui.all then names, summary = "All teams", "every team's latest messages"
   else names = "Pick a team" end
   local bw = picker_w(ow, wide)
+  -- The scope's capsule (scope.rs's look, the team sandbox's group colour),
+  -- as every scoped screen draws it; neutral for All teams.
+  local lk = (s and s.look) or {}
   return row{ key = "title-slot", gap = 8,
-    row{ key = "board-row-picker", on = "picker", w = bw, h = 28, px = 8, gap = 8, radius = "sm", border = p.open and "accent" or "elevated", fill = "surface",
+    row{ key = "board-row-picker", on = "picker", w = bw, h = 28, px = 12, gap = 8, radius = "pill", border = lk.border or "control-border", fill = lk.fill or "surface",
       -- No tooltip while its list is open: it would cover the first rows.
       help = (not p.open) and ((nz(summary) and summary or "Pick a team") .. " (pick another team)") or nil,
-      column{ w = 8, h = 8, radius = 2, fill = color or "text-dim", key = "board-team-color" },
-      text{ names or "", size = "sm", mono = true, color = "text-bright", truncate = true, max_w = math.floor(bw * 0.55) },
-      nz(summary) and wide and text{ summary, size = "xs", color = "text-muted", truncate = true, grow = 1 } or spacer{},
-      icon{ "chevron-down", size = 12, color = "text-muted" } },
+      (s or not ui.all) and column{ w = 8, h = 8, radius = 2, fill = color or "text-dim", key = "board-team-color" } or icon{ "grid", size = 14, color = lk.muted or "text-muted", key = "board-team-color" },
+      text{ names or "", size = "sm", weight = "medium", mono = true, color = lk.text or "text-bright", truncate = true, max_w = math.floor(bw * 0.55) },
+      nz(summary) and wide and text{ summary, size = "xs", color = lk.muted or "text-muted", truncate = true, grow = 1 } or spacer{},
+      icon{ "chevron-down", size = 12, color = lk.muted or "text-muted" } },
     s and badge{ s.state or "", tone = s.tone or "neutral" } or false }
 end
 

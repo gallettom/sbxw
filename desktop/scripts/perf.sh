@@ -53,6 +53,11 @@ step("open the Commits overlay", "rail-commits", "commits-row-" + row)
 step("expand a commit", "commits-row-" + row, "commits-file-src/area0/File0.tsx")
 step("expand its first file's diff", "commits-file-src/area0/File0.tsx", "commits-diff-src/area0/File0.tsx")
 step("fold the commit", "commits-row-" + row)
+# The scope picker (scope.rs): its list with the filter (11 sandboxes), a pick, then All again.
+step("Commits: open the scope picker", "commits-sandbox", "commits-sandbox-list")
+step("Commits: pick a sandbox", "commits-sandbox-web-app", "commits-row-" + row)
+step("Commits: All sandboxes again", "commits-sandbox", "commits-sandbox-list")
+step("Commits: pick All", "commits-sandbox-", "commits-row-" + row)
 add(type="mark", name="perf:type 6 characters in the filter")
 add(type="tap", key="commits-filter"); add(type="type", text="change", every=0.05); t += 0.5
 add(type="mark", name="hold:300")
