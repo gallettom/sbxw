@@ -1,0 +1,529 @@
+//! Canvas: the feature driven as the core drives it, against the fixture
+//! daemon's routes (`model::standin`), and the window with the overlay.
+
+use super::*;
+use crate::feat::Method;
+use crate::luau::{LuauHost, Limits, Node};
+use serde_json::json;
+
+fn fixture(name: &str) -> J {
+    let p = format!("{}/fixtures/canvas/{name}.json", env!("CARGO_MANIFEST_DIR"));
+    serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+}
+
+/// The app's data as a feature sees it: the fixture's daemon, the overlay shown, nothing over it.
+struct World {
+    data: J,
+    /// The fixture daemon's state (its routes change it).
+    daemon: J,
+    /// Every call that went out, in order.
+    calls: Vec<Call>,
+    /// Calls the test answers itself (not the stand-in), by tag prefix.
+    hold: Vec<&'static str>,
+    held: Vec<Call>,
+}
+
+impl World {
+    fn new(name: &str) -> World {
+        *STATE().lock().unwrap() = State::default();
+        crate::surface_canvas::close(SURF);
+        let fx = fixture(name);
+        let mut data = fx["daemon"].clone();
+        data["app"] = json!({ "covered": false, "overlay": { "screen": "canvas", "w": 1200, "h": 700 }, "selected": "web-app", "groups": {} });
+        data["jarvis"] = json!({ "pending": [] });
+        World { data, daemon: fx["daemon"].clone(), calls: vec![], hold: vec![], held: vec![] }
+    }
+    fn cx(&self) -> Ctx<'_> {
+        Ctx { data: &self.data }
+    }
+    fn intent(&mut self, name: &'static str, args: J) -> Result<Vec<Action>, String> {
+        let a = Asked { name, args: args.as_object().cloned().unwrap_or_default() };
+        let r = act(&self.cx(), &a);
+        // The core's rule: an approval answers with its one dialog.
+        let risk = INTENTS.iter().find(|s| s.name == name).unwrap().risk;
+        if let (Risk::Approval(_), Ok(acts)) = (risk, &r) {
+            assert!(matches!(acts.as_slice(), [Action::Confirm(_)]), "{name}: an approval answers with one Confirm: {acts:?}");
+        }
+        r
+    }
+    /// Runs the actions as the core would: calls answered by the fixture
+    /// daemon (pictures as bytes), until nothing is left; a Confirm is left
+    /// for the test. Returns the Sets of the view and the other actions.
+    fn run(&mut self, acts: Vec<Action>) -> Vec<Action> {
+        let mut todo: std::collections::VecDeque<Action> = acts.into();
+        let mut rest = vec![];
+        while let Some(a) = todo.pop_front() {
+            match a {
+                Action::Call(c) if c.method != Method::Core => {
+                    self.calls.push(c.clone());
+                    if self.hold.iter().any(|h| c.tag.starts_with(h)) {
+                        self.held.push(c);
+                        continue;
+                    }
+                    let body = if let Some((ct, b)) = &c.bytes { json!({ "$bytes": b.len(), "$type": ct }) } else { c.body.clone() };
+                    let method = if matches!(c.method, Method::Get) { "GET" } else { "POST" };
+                    let (code, v) = crate::feat::answer_from(&mut self.daemon, method, &c.path, &body, &mut |_, _| {});
+                    let cx = Ctx { data: &self.data };
+                    let more = if c.raw.is_some() {
+                        let (b, ct) = crate::client::raw_of(&v);
+                        on_bytes(&cx, &c, Ok((code, b, ct)))
+                    } else if c.path.starts_with("/api/chat/push") || c.path.contains("/upload?") {
+                        // Routes of other features: a plain answer.
+                        let ans = if c.path.contains("/upload?") { json!({ "ok": true, "path": format!("/tmp/sbxw-uploads/1/{}", c.path.rsplit('=').next().unwrap()) }) } else { json!({ "ok": true }) };
+                        on_answer(&cx, &c, Ok((200, ans)))
+                    } else {
+                        on_answer(&cx, &c, Ok((code, v)))
+                    };
+                    todo.extend(more);
+                }
+                Action::Set { key, value } => {
+                    self.data[key.as_str()] = value.clone();
+                    rest.push(Action::Set { key, value });
+                }
+                other => rest.push(other),
+            }
+        }
+        rest
+    }
+    fn ui(&self) -> &J {
+        &self.data[UI]
+    }
+    /// Opens the view; its pictures decode on worker threads.
+    fn open(&mut self) {
+        let a = self.intent("canvas_show", json!({})).unwrap();
+        self.run(a);
+    }
+    /// Waits until every picture of the canvas shown is decoded.
+    fn decoded(&self) {
+        let want = STATE().lock().unwrap().canvas.as_ref().map_or(0, |c| c.shots.len() + c.assets.len());
+        for _ in 0..1000 {
+            if crate::surface_canvas::mem().1 >= want {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("{want} pictures not decoded: {:?}", crate::surface_canvas::mem());
+    }
+    fn surface(&mut self, ev: CanvasEvent) -> Vec<Action> {
+        let a = on_surface(&crate::surface::SurfaceEvent::Canvas { surface: SURF.into(), ev });
+        self.run(a)
+    }
+    fn confirm(&mut self, acts: &[Action]) -> Confirm {
+        acts.iter().find_map(|a| match a {
+            Action::Confirm(c) => Some((**c).clone()),
+            _ => None,
+        }).expect("a Confirm")
+    }
+    /// The person pressed the dialog's Confirm: its call goes out.
+    fn press(&mut self, c: &Confirm) -> Vec<Action> {
+        self.run(vec![Action::Call(c.call.clone())])
+    }
+    fn pushed(&self) -> Vec<String> {
+        self.calls.iter().filter(|c| c.path == "/api/chat/push").map(|c| c.body["text"].as_str().unwrap_or("").to_string()).collect()
+    }
+}
+
+#[test]
+fn it_opens_on_the_sandboxes_latest_canvas_and_draws_every_round() {
+    let mut w = World::new("basic");
+    w.open();
+    let ui = w.ui().clone();
+    assert_eq!(ui["current"]["title"], "Checkout review");
+    assert_eq!(ui["current"]["shots"], 11);
+    let scene = crate::surface_canvas::scene(SURF);
+    let bands: Vec<&str> = scene.items.iter().filter_map(|i| match &i.body { crate::surface_canvas::Body::Band { label } => Some(label.as_str()), _ => None }).collect();
+    assert_eq!(bands.len(), 2, "{bands:?}");
+    // The newer round is below the older one, the same screen in the same column.
+    let at = |id: &str| scene.items.iter().find(|i| i.id == id).map(|i| (i.x, i.y)).unwrap();
+    assert_eq!(at("s-2-0").0, at("s-1-3").0);
+    assert!(at("s-2-0").1 > at("s-1-3").1);
+    // Sent pins muted, draft pins live; the side list holds the draft, the sent round apart.
+    assert_eq!(scene.pins.iter().filter(|p| p.sent).count(), 3);
+    assert_eq!(scene.pins.iter().filter(|p| !p.sent).count(), 2);
+    assert_eq!(ui["draft"].as_array().unwrap().len(), 4);
+    assert_eq!(ui["history"][0]["n"], 1);
+    // The picker: the sandbox's canvases, newest first, then New; the removed sandbox listed by name.
+    let labels: Vec<&str> = ui["canvases"].as_array().unwrap().iter().filter_map(|c| c["label"].as_str()).collect();
+    assert!(labels[0].starts_with("Checkout review ·") && labels[1].starts_with("Settings pages ·") && labels.contains(&"New canvas") && labels.last().unwrap().starts_with("Storage: This canvas"), "{labels:?}");
+    assert!(ui["sandboxes"].as_array().unwrap().iter().any(|s| s["label"] == "old-shop (removed)"));
+    assert!(ui["storage"].as_str().unwrap().contains("all canvases"));
+}
+
+#[test]
+fn pins_are_numbered_per_canvas_and_linked_to_the_list_both_ways() {
+    let mut w = World::new("basic");
+    w.open();
+    let acts = w.surface(CanvasEvent::PinAt { item: "s-2-1".into(), fx: 0.25, fy: 0.75 });
+    // After every pin, sent or not (1..5): 6; selected, its field focused, saved.
+    assert!(acts.iter().any(|a| matches!(a, Action::Focus(k) if k == "canvas-text-pin-6")));
+    assert!(w.calls.iter().any(|c| c.tag.starts_with("cv-save:") && c.body["pins"].as_array().unwrap().iter().any(|p| p["n"] == 6)));
+    let row = w.ui()["draft"].as_array().unwrap().iter().find(|d| d["key"] == "pin-6").cloned().unwrap();
+    assert_eq!(row["selected"], true);
+    assert!(row["label"].as_str().unwrap().contains("Checkout: address (after)") && row["label"].as_str().unwrap().contains("bottom-left"));
+    // The list's row: the surface selects it and brings the pin into view.
+    let a = w.intent("canvas_select", json!({ "target": "pin-2" })).unwrap();
+    w.run(a);
+    assert_eq!(crate::surface_canvas::scene(SURF).selected.as_deref(), Some("pin-2"));
+    let cam = crate::surface_canvas::camera(SURF);
+    let shot = crate::surface_canvas::scene(SURF).items.into_iter().find(|i| i.id == "s-1-4").unwrap();
+    let p = cam.screen([shot.x + 0.3 * shot.w, shot.y + 0.55 * shot.h]);
+    assert!(p[0] >= 0.0 && p[1] >= 0.0 && p[0] <= cam.view[0] && p[1] <= cam.view[1], "pin 2 in view: {p:?}");
+    // The surface's press on a pin selects its row.
+    w.surface(CanvasEvent::Select { target: Some("pin-4".into()) });
+    assert!(w.ui()["draft"].as_array().unwrap().iter().any(|d| d["key"] == "pin-4" && d["selected"] == true));
+}
+
+#[test]
+fn a_pin_keeps_its_point_on_its_shot_at_any_zoom_and_pan() {
+    use crate::surface_canvas::{Camera, ZoomCmd};
+    let mut w = World::new("basic");
+    w.open();
+    let shot = crate::surface_canvas::scene(SURF).items.into_iter().find(|i| i.id == "s-2-2").unwrap();
+    let pin = |cam: &Camera| cam.screen([shot.x + 0.68 * shot.w, shot.y + 0.62 * shot.h]);
+    let corner = |cam: &Camera| cam.screen([shot.x, shot.y]);
+    for cmd in [ZoomCmd::In, ZoomCmd::In, ZoomCmd::Actual, ZoomCmd::Out, ZoomCmd::Fit] {
+        crate::surface_canvas::zoom(SURF, cmd);
+        let cam = crate::surface_canvas::camera(SURF);
+        let (p, c) = (pin(&cam), corner(&cam));
+        // On screen, the pin is at 68 % and 62 % of the shot as drawn.
+        let fx = (p[0] - c[0]) / (shot.w * cam.zoom);
+        let fy = (p[1] - c[1]) / (shot.h * cam.zoom);
+        assert!((fx - 0.68).abs() < 1e-3 && (fy - 0.62).abs() < 1e-3, "{cmd:?}: {fx} {fy}");
+    }
+}
+
+#[test]
+fn edits_are_saved_one_request_at_a_time_and_nothing_is_lost() {
+    let mut w = World::new("basic");
+    w.open();
+    w.hold = vec!["cv-save:"];
+    let a = w.intent("canvas_text", json!({ "target": "pin-4", "text": "One" })).unwrap();
+    w.run(a);
+    let a = w.intent("canvas_text", json!({ "target": "pin-4", "text": "One two" })).unwrap();
+    w.run(a);
+    assert_eq!(w.held.len(), 1, "one save in flight");
+    // Its answer sends the rest: the newest text.
+    w.hold.clear();
+    let first = w.held.remove(0);
+    let cx = Ctx { data: &w.data };
+    let more = on_answer(&cx, &first, Ok((200, json!({ "ok": true }))));
+    w.run(more);
+    let last = w.calls.iter().rev().find(|c| c.tag.starts_with("cv-save:")).unwrap();
+    assert!(last.body["pins"].as_array().unwrap().iter().any(|p| p["n"] == 4 && p["text"] == "One two"));
+    // A sent pin does not change.
+    assert!(w.intent("canvas_text", json!({ "target": "pin-1", "text": "x" })).is_err());
+    assert!(w.intent("canvas_remove", json!({ "target": "pin-1" })).is_err());
+    // A note placed with the Note tool, then moved: saved with its place.
+    w.surface(CanvasEvent::NoteAt { x: 100.0, y: 200.0 });
+    let id = w.ui()["selected"].as_str().unwrap().to_string();
+    w.surface(CanvasEvent::Moved { item: id.clone(), x: 300.0, y: 400.0 });
+    let last = w.calls.iter().rev().find(|c| c.tag.starts_with("cv-save:")).unwrap();
+    assert!(last.body["notes"].as_array().unwrap().iter().any(|n| n["id"] == id.as_str() && n["x"] == 300.0));
+}
+
+#[test]
+fn an_asset_comes_only_from_the_core_and_no_intent_takes_a_path() {
+    for s in INTENTS {
+        for (n, _, _) in s.args {
+            assert!(!["path", "file", "files", "local"].contains(n), "{} takes {n}", s.name);
+        }
+    }
+    let mut w = World::new("basic");
+    w.open();
+    let png = super::model::mock_png(80, 60, 1);
+    let a = on_files(&w.cx(), Incoming::Png(png));
+    w.run(a);
+    let c = w.calls.iter().find(|c| c.tag.starts_with("cv-asset:")).expect("the picture posted");
+    assert!(c.path.starts_with("/api/canvas/c-00000000000000c1/assets?name=pasted-"));
+    // A file that is not a picture: refused, nothing posted.
+    let dir = std::env::temp_dir().join(format!("sbxw-canvas-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("notes.svg");
+    std::fs::write(&f, "<svg xmlns='http://www.w3.org/2000/svg'><script/></svg>").unwrap();
+    let n = w.calls.len();
+    let a = on_files(&w.cx(), Incoming::Files(vec![f]));
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { error: true, text, .. } if text.contains("not a PNG"))));
+    assert_eq!(w.calls.len(), n);
+    let _ = std::fs::remove_dir_all(dir);
+    // Under a dialog nothing is added.
+    w.data["app"]["covered"] = true.into();
+    let a = on_files(&w.cx(), Incoming::Png(super::model::mock_png(8, 8, 1)));
+    assert!(a.iter().all(|x| !matches!(x, Action::Call(_))));
+}
+
+#[test]
+fn a_send_is_one_dialog_then_the_uploads_then_the_round_then_one_fixed_line() {
+    let mut w = World::new("basic");
+    w.open();
+    w.decoded();
+    let a = w.intent("canvas_send", json!({})).unwrap();
+    let c = w.confirm(&a);
+    assert_eq!(c.title, "Send 4 remarks to web-app · main?");
+    let all = format!("{}\n{}", c.lines.join("\n"), c.preview.as_ref().unwrap().text);
+    for t in ["Better. Make the button full width on narrow screens.", "Use the example below for the empty cart.", "Round 2 looks closer.", "Asset 1", "empty-cart-example.png"] {
+        assert!(all.contains(t), "the dialog shows {t}: {all}");
+    }
+    // Nothing went yet.
+    assert!(w.pushed().is_empty() && !w.calls.iter().any(|c| c.tag.starts_with("cv-up:") || c.tag.starts_with("cv-submit:")));
+    // The first call is the asset's upload; then the round; then the line.
+    assert!(c.call.tag.starts_with("cv-up:") && c.call.path.starts_with("/api/sandboxes/web-app/upload?name=canvas-asset-1.png"));
+    w.press(&c);
+    let order: Vec<&str> = w.calls.iter().map(|c| c.tag.as_str()).filter(|t| t.starts_with("cv-up") || t.starts_with("cv-submit") || t.starts_with("cv-push")).collect();
+    assert_eq!(order.len(), 3, "{order:?}");
+    assert!(order[0].starts_with("cv-up:") && order[1].starts_with("cv-submit:") && order[2].starts_with("cv-push:"));
+    let submit = w.calls.iter().find(|c| c.tag.starts_with("cv-submit:")).unwrap();
+    assert_eq!(submit.body["assets"]["a-1"], "/tmp/sbxw-uploads/1/canvas-asset-1.png");
+    // ONE line, sbxw's own: the remarks travel by canvas_read (the main session started after the shots).
+    let p = w.pushed();
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0], "[sbxw canvas · c-00000000000000c1] review round 2 is ready: run canvas_read to read the person's remarks");
+    // The round is history now; nothing new to send.
+    assert_eq!(w.ui()["history"].as_array().unwrap().len(), 2);
+    assert_eq!(w.ui()["send"]["ok"], false);
+    assert!(w.intent("canvas_send", json!({})).is_err());
+}
+
+#[test]
+fn a_session_without_canvas_read_gets_the_plain_list_after_the_line() {
+    let mut w = World::new("basic");
+    // The main session started before the first shot: it may lack the tool.
+    w.data["sessions"][0]["started_ms"] = 1.into();
+    w.open();
+    let a = w.intent("canvas_send", json!({})).unwrap();
+    let c = w.confirm(&a);
+    assert!(c.lines.iter().any(|l| l.contains("plain numbered list")));
+    w.press(&c);
+    let p = w.pushed();
+    assert_eq!(p.len(), 1);
+    assert!(p[0].starts_with("[sbxw canvas · ") && p[0].contains("\n1. Pin 4 on shot \"Checkout: payment (after)\""), "{}", p[0]);
+}
+
+#[test]
+fn a_failed_upload_records_and_types_nothing() {
+    let mut w = World::new("basic");
+    w.open();
+    let a = w.intent("canvas_send", json!({})).unwrap();
+    let c = w.confirm(&a);
+    let cx = Ctx { data: &w.data };
+    let more = on_answer(&cx, &c.call, Ok((500, json!({ "ok": false, "error": "disk full" }))));
+    assert!(more.iter().any(|x| matches!(x, Action::Notice { error: true, text, .. } if text.contains("Not sent") && text.contains("disk full"))));
+    let more = w.run(more);
+    assert!(more.iter().all(|x| !matches!(x, Action::Call(_))));
+    assert!(w.pushed().is_empty() && !w.calls.iter().any(|c| c.tag.starts_with("cv-submit:")));
+    // The remarks are still the draft.
+    assert_eq!(w.ui()["draft"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn every_refusal_holds_in_rust() {
+    let cases: Vec<(&str, Box<dyn Fn(&mut J)>, &str)> = vec![
+        ("covered", Box::new(|d: &mut J| d["app"]["covered"] = true.into()), "open over the canvas"),
+        ("jarvis", Box::new(|d: &mut J| d["jarvis"]["pending"] = json!([{ "id": "j1" }])), "Jarvis proposal"),
+        ("question", Box::new(|d: &mut J| d["sessions"][0]["state"] = "attention".into()), "question or a permission"),
+        ("ended", Box::new(|d: &mut J| d["sessions"] = json!([{ "sandbox": "web-app", "state": "exited", "answerable": true }])), "no open agent session"),
+        ("stopped", Box::new(|d: &mut J| d["sandboxes"][0]["status"] = "stopped".into()), "not running"),
+        ("none", Box::new(|d: &mut J| d["sessions"] = json!([])), "no open agent session"),
+    ];
+    for (what, f, why) in cases {
+        let mut w = World::new("basic");
+        w.open();
+        f(&mut w.data);
+        let n = w.calls.len();
+        let e = w.intent("canvas_send", json!({})).unwrap_err();
+        assert!(e.contains(why), "{what}: {e}");
+        let e = w.intent("canvas_ask", json!({})).unwrap_err();
+        assert!(e.contains(why), "{what} (ask): {e}");
+        assert_eq!(w.calls.len(), n, "{what}: nothing went");
+        // The button says why too.
+        let a = w.intent("canvas_tool", json!({ "tool": "select" })).unwrap();
+        w.run(a);
+        assert_eq!(w.ui()["send"]["ok"], false, "{what}");
+    }
+}
+
+#[test]
+fn ask_for_screenshots_is_one_dialog_with_the_prompt_in_full() {
+    let mut w = World::new("empty");
+    let a = w.intent("canvas_show", json!({})).unwrap();
+    w.run(a);
+    assert_eq!(w.ui()["empty"], "none");
+    let a = w.intent("canvas_ask_text", json!({ "text": "Shots of the login page, please." })).unwrap();
+    w.run(a);
+    let a = w.intent("canvas_ask", json!({})).unwrap();
+    let c = w.confirm(&a);
+    assert_eq!(c.preview.as_ref().unwrap().text, "Shots of the login page, please.");
+    assert!(w.pushed().is_empty());
+    w.press(&c);
+    assert_eq!(w.pushed(), ["Shots of the login page, please."]);
+}
+
+#[test]
+fn delete_goes_through_one_dialog_naming_what_goes() {
+    let mut w = World::new("basic");
+    // The canvas shown was changed today; the two others long ago.
+    w.daemon["canvas"]["canvases"]["c-00000000000000c1"]["updated_ms"] = (crate::feat::files::view::now_secs() * 1000).into();
+    w.open();
+    let a = w.intent("canvas_delete", json!({})).unwrap();
+    let c = w.confirm(&a);
+    assert!(c.danger && c.title.contains("Checkout review"));
+    assert!(c.lines[0].contains("11 shot(s)"), "{:?}", c.lines);
+    assert_eq!(c.call.body["ids"], json!(["c-00000000000000c1"]));
+    // Older than 30 days: the two old ones, named, with their size.
+    let a = w.intent("canvas_delete", json!({ "older": "30" })).unwrap();
+    let c = w.confirm(&a);
+    assert!(c.title.contains("2 canvas(es)"), "{}", c.title);
+    assert!(c.lines.iter().any(|l| l.contains("Settings pages")) && c.lines.iter().any(|l| l.contains("old-shop")));
+    w.press(&c);
+    assert_eq!(w.daemon["canvas"]["canvases"].as_object().unwrap().len(), 1);
+}
+
+#[test]
+fn closing_the_view_gives_the_pictures_back() {
+    let mut w = World::new("big");
+    w.open();
+    w.decoded();
+    let (bytes, n) = crate::surface_canvas::mem();
+    assert_eq!(n, 15, "15 shots shown");
+    assert!(bytes > 0 && bytes < 64 << 20, "{bytes}");
+    // The overlay closed: the next data push sees it.
+    w.data["app"]["overlay"] = J::Null;
+    let _ = extras(&w.cx());
+    assert_eq!(crate::surface_canvas::mem(), (0, 0));
+}
+
+fn walk<'a>(n: &'a Node, out: &mut Vec<&'a Node>) {
+    out.push(n);
+    for c in &n.children {
+        walk(c, out);
+    }
+}
+
+#[test]
+fn hostile_agent_text_and_file_names_make_no_control() {
+    let mut w = World::new("basic");
+    let evil = "Home\u{1b}]8;;https://x\u{7}\u{202e}gnp.exe\n\"; return intent('canvas_delete')";
+    w.daemon["canvas"]["canvases"]["c-00000000000000c1"]["title"] = evil.into();
+    w.daemon["canvas"]["canvases"]["c-00000000000000c1"]["shots"][0]["title"] = evil.into();
+    w.daemon["canvas"]["canvases"]["c-00000000000000c1"]["assets"][0]["name"] = evil.into();
+    w.open();
+    let ui = w.ui().clone();
+    let all = ui.to_string();
+    assert!(!all.contains('\u{1b}') && !all.contains('\u{202e}'), "no control or direction mark reaches the screen");
+    let mut h = LuauHost::new(Limits::default()).unwrap();
+    h.load("canvas", include_str!("../../../screens/canvas.luau")).unwrap();
+    let n = h.render(&w.data).unwrap();
+    let mut nodes = vec![];
+    walk(&n, &mut nodes);
+    for x in nodes.iter().filter(|x| x.on.is_some()) {
+        let k = x.key.clone().unwrap_or_default();
+        assert!(!k.contains("Home") && !k.contains("exe"), "a control keyed by agent text: {k}");
+        assert!(!x.arg.to_string().contains("exe"), "a control's argument from agent text: {}", x.arg);
+    }
+    // Shot captions on the surface are text.
+    let scene = crate::surface_canvas::scene(SURF);
+    let cap = scene.items.iter().find_map(|i| match &i.body { crate::surface_canvas::Body::Picture { caption, asset: false, .. } => Some(caption[0].clone()), _ => None }).unwrap();
+    assert!(!cap.contains('\u{1b}') && !cap.contains('\n'));
+}
+
+// ---------------------------------------------------------------------------
+// The window
+
+mod window {
+    use crate::shell::{view, App, Args};
+    use rune::{KeyEvent, Tx};
+
+    pub fn runtime(w: f32, h: f32) -> rune::Runtime<App> {
+        let f = format!("{}/fixtures/canvas/basic.json", env!("CARGO_MANIFEST_DIR"));
+        let a = App::new(Args { fixture: Some(f.into()), ..Args::default() });
+        let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+        rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut Tx| s.on_key(ev, tx));
+        settle(&mut rt, 6);
+        rt
+    }
+
+    pub fn settle(rt: &mut rune::Runtime<App>, frames: usize) {
+        for _ in 0..frames {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+        }
+    }
+
+    pub fn tap(rt: &mut rune::Runtime<App>, key: &str) {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        settle(rt, 4);
+    }
+
+    /// An intent as a press runs it (checked as any).
+    pub fn intent(rt: &mut rune::Runtime<App>, name: &str) {
+        let list = crate::intent::parse(&serde_json::json!({ "kind": "intent", "name": name, "args": {} })).unwrap();
+        rt.update(|s, _| {
+            for i in list {
+                s.run_intent("test", i);
+            }
+        });
+        settle(rt, 4);
+    }
+
+    pub fn rect(rt: &rune::Runtime<App>, key: &str) -> Option<[f32; 4]> {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).map(|e| e.rect)
+    }
+
+    /// Opened from the rail, the canvas read and laid out.
+    pub fn opened(w: f32, h: f32) -> rune::Runtime<App> {
+        *super::STATE().lock().unwrap() = super::State::default();
+        crate::surface_canvas::close(super::SURF);
+        let mut rt = runtime(w, h);
+        intent(&mut rt, "canvas_show");
+        for _ in 0..100 {
+            settle(&mut rt, 2);
+            if rect(&rt, "canvas-s-1-0").is_some() {
+                break;
+            }
+        }
+        assert!(rect(&rt, "canvas-s-1-0").is_some(), "the shots are drawn");
+        rt
+    }
+}
+
+#[test]
+fn under_a_dialog_the_canvas_neither_pans_nor_zooms_and_nothing_is_drawn_outside_the_overlay() {
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+        let mut rt = window::opened(w, h);
+        // The audit: every element the view draws (its visible part, what the
+        // surface's clip leaves) inside the overlay's box.
+        let ov = window::rect(&rt, "overlay-canvas").expect("the overlay");
+        for e in rt.elements() {
+            let k = e.key.clone().unwrap_or_default();
+            if !k.starts_with("canvas") {
+                continue;
+            }
+            let r = e.visible;
+            if r[2] <= 0.5 || r[3] <= 0.5 {
+                continue;
+            }
+            assert!(r[0] >= ov[0] - 0.5 && r[1] >= ov[1] - 0.5 && r[0] + r[2] <= ov[0] + ov[2] + 0.5 && r[1] + r[3] <= ov[1] + ov[3] + 0.5, "{w}x{h}: {k} {r:?} outside {ov:?}");
+        }
+        // A pan by the wheel moves the camera...
+        let c = window::rect(&rt, "canvas-canvas").unwrap();
+        let (x, y) = (c[0] + c[2] / 2.0, c[1] + c[3] / 2.0);
+        let before = crate::surface_canvas::camera(super::SURF);
+        rt.wheel_event(rune::WheelEvent::new(-30.0, -20.0).at(x, y).precise(true));
+        window::settle(&mut rt, 2);
+        let panned = crate::surface_canvas::camera(super::SURF);
+        assert_ne!(before.pan, panned.pan, "the wheel pans");
+        // ...not under the core's dialog (Delete this canvas).
+        window::intent(&mut rt, "canvas_delete");
+        assert!(rt.elements().iter().any(|e| e.role == "dialog"), "the dialog is up");
+        rt.wheel_event(rune::WheelEvent::new(-30.0, -20.0).at(x, y).precise(true));
+        rt.magnify_event(rune::MagnifyEvent::new(0.5).at(x, y));
+        rt.pointer_down(x, y);
+        rt.pointer_move(x - 60.0, y - 40.0);
+        rt.pointer_up(x - 60.0, y - 40.0);
+        window::settle(&mut rt, 2);
+        assert_eq!(crate::surface_canvas::camera(super::SURF), panned, "{w}x{h}: nothing moved under the dialog");
+    }
+}

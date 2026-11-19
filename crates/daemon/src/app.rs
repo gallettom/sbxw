@@ -120,6 +120,8 @@ pub struct App {
     pub(crate) own_cpu: Mutex<sbxw_core::stats::OwnCpu>,
     /// How the daemon reads its CPU time; tests put a script here.
     pub cpu_probe: Mutex<crate::svc::stats::CpuProbe>,
+    /// The canvases on disk, read once (see `svc::canvas`).
+    pub(crate) canvas: Mutex<crate::svc::canvas::Book>,
 }
 
 pub struct AppBuilder {
@@ -186,6 +188,7 @@ impl AppBuilder {
             stats: Mutex::new(Default::default()),
             own_cpu: Mutex::new(Default::default()),
             cpu_probe: Mutex::new(crate::svc::stats::CpuProbe::Os),
+            canvas: Mutex::new(Default::default()),
         })
     }
 }

@@ -57,6 +57,9 @@ pub enum Event {
     /// /api/sessions/:sandbox/:session_id/history`. A nudge, no text; sent
     /// only while a UI reads that session (see `svc::history`).
     History(HistoryNudge),
+    /// A canvas changed (shots added, an edit, a review, deleted): re-read
+    /// `GET /api/canvas/:id` (see `svc::canvas`).
+    Canvas(crate::svc::canvas::CanvasNudge),
 }
 
 /// What the `history` event says: whose log, and its newest seq.
@@ -89,6 +92,7 @@ impl Event {
             Event::Stats(_) => "stats",
             Event::Emphasis(_) => "emphasis",
             Event::History(_) => "history",
+            Event::Canvas(_) => "canvas",
         }
     }
 
@@ -110,6 +114,7 @@ impl Event {
             Event::Jarvis(v) => v.ui_view().to_string(),
             Event::Stats(v) => json(v),
             Event::History(v) => json(v),
+            Event::Canvas(v) => json(v),
         }
     }
 }

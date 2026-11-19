@@ -1,0 +1,415 @@
+{
+ "about": "Canvas: invented sandboxes and mock screens (gen.py).",
+ "app": {
+  "selected": "web-app",
+  "panes": 1,
+  "split": "columns",
+  "open": [
+   "web-app"
+  ],
+  "focused": 1
+ },
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/work/web",
+    "created_at": "2026-11-10T09:12:00Z",
+    "approvals": 0,
+    "kits_waiting": 0
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": "/work/docs",
+    "created_at": "2026-11-11T09:12:00Z",
+    "approvals": 0,
+    "kits_waiting": 0
+   }
+  ],
+  "sessions": [
+   {
+    "sandbox": "web-app",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763460300000,
+    "ts": 1763463600000,
+    "answerable": true,
+    "origin": "sbxw",
+    "session_id": "s-main"
+   },
+   {
+    "sandbox": "web-app",
+    "mode": "claude",
+    "state": "working",
+    "agent": "claude",
+    "started_ms": 1763460420000,
+    "ts": 1763463600000,
+    "answerable": true,
+    "thread": "checkout-ui",
+    "origin": "sbxw",
+    "session_id": "s-thread"
+   }
+  ],
+  "canvas": {
+   "canvases": {
+    "c-00000000000000b1": {
+     "id": "c-00000000000000b1",
+     "sandbox": "web-app",
+     "title": "Fifteen screens",
+     "created_ms": 1763460000000,
+     "updated_ms": 1763546400000,
+     "shots": [
+      {
+       "id": "s-1-40",
+       "file": "s-000001000028.png",
+       "round": 1,
+       "title": "Screen 1",
+       "note": "",
+       "width": 1440,
+       "screen": "b0",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 220000,
+       "added_ms": 1763460000000,
+       "x": 0,
+       "y": 0,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-41",
+       "file": "s-000001000029.png",
+       "round": 1,
+       "title": "Screen 2",
+       "note": "",
+       "width": 1440,
+       "screen": "b1",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 221000,
+       "added_ms": 1763460000000,
+       "x": 1560,
+       "y": 0,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-42",
+       "file": "s-00000100002a.png",
+       "round": 1,
+       "title": "Screen 3",
+       "note": "",
+       "width": 1440,
+       "screen": "b2",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 222000,
+       "added_ms": 1763460000000,
+       "x": 3120,
+       "y": 0,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-43",
+       "file": "s-00000100002b.png",
+       "round": 1,
+       "title": "Screen 4",
+       "note": "",
+       "width": 1440,
+       "screen": "b3",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 223000,
+       "added_ms": 1763460000000,
+       "x": 4680,
+       "y": 0,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-44",
+       "file": "s-00000100002c.png",
+       "round": 1,
+       "title": "Screen 5",
+       "note": "",
+       "width": 1440,
+       "screen": "b4",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 224000,
+       "added_ms": 1763460000000,
+       "x": 0,
+       "y": 1220,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-45",
+       "file": "s-00000100002d.png",
+       "round": 1,
+       "title": "Screen 6",
+       "note": "",
+       "width": 1440,
+       "screen": "b5",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 225000,
+       "added_ms": 1763460000000,
+       "x": 1560,
+       "y": 1220,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-46",
+       "file": "s-00000100002e.png",
+       "round": 1,
+       "title": "Screen 7",
+       "note": "",
+       "width": 1440,
+       "screen": "b6",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 226000,
+       "added_ms": 1763460000000,
+       "x": 3120,
+       "y": 1220,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-47",
+       "file": "s-00000100002f.png",
+       "round": 1,
+       "title": "Screen 8",
+       "note": "",
+       "width": 1440,
+       "screen": "b7",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 227000,
+       "added_ms": 1763460000000,
+       "x": 4680,
+       "y": 1220,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-48",
+       "file": "s-000001000030.png",
+       "round": 1,
+       "title": "Screen 9",
+       "note": "",
+       "width": 1440,
+       "screen": "b8",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 228000,
+       "added_ms": 1763460000000,
+       "x": 0,
+       "y": 2440,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-49",
+       "file": "s-000001000031.png",
+       "round": 1,
+       "title": "Screen 10",
+       "note": "",
+       "width": 1440,
+       "screen": "b9",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 229000,
+       "added_ms": 1763460000000,
+       "x": 1560,
+       "y": 2440,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-50",
+       "file": "s-000001000032.png",
+       "round": 1,
+       "title": "Screen 11",
+       "note": "",
+       "width": 1440,
+       "screen": "b10",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 230000,
+       "added_ms": 1763460000000,
+       "x": 3120,
+       "y": 2440,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-51",
+       "file": "s-000001000033.png",
+       "round": 1,
+       "title": "Screen 12",
+       "note": "",
+       "width": 1440,
+       "screen": "b11",
+       "px_w": 1440,
+       "px_h": 900,
+       "bytes": 231000,
+       "added_ms": 1763460000000,
+       "x": 4680,
+       "y": 2440,
+       "w": 1440,
+       "h": 900.0
+      },
+      {
+       "id": "s-1-60",
+       "file": "s-00000100003c.png",
+       "round": 1,
+       "title": "Phone 1",
+       "note": "",
+       "width": 390,
+       "screen": "p0",
+       "px_w": 390,
+       "px_h": 844,
+       "bytes": 240000,
+       "added_ms": 1763460000000,
+       "x": 6240,
+       "y": 0,
+       "w": 390,
+       "h": 844.0
+      },
+      {
+       "id": "s-1-61",
+       "file": "s-00000100003d.png",
+       "round": 1,
+       "title": "Phone 2",
+       "note": "",
+       "width": 390,
+       "screen": "p1",
+       "px_w": 390,
+       "px_h": 844,
+       "bytes": 241000,
+       "added_ms": 1763460000000,
+       "x": 6750,
+       "y": 0,
+       "w": 390,
+       "h": 844.0
+      },
+      {
+       "id": "s-1-62",
+       "file": "s-00000100003e.png",
+       "round": 1,
+       "title": "Phone 3",
+       "note": "",
+       "width": 390,
+       "screen": "p2",
+       "px_w": 390,
+       "px_h": 844,
+       "bytes": 242000,
+       "added_ms": 1763460000000,
+       "x": 7260,
+       "y": 0,
+       "w": 390,
+       "h": 844.0
+      }
+     ],
+     "assets": [],
+     "pins": [],
+     "notes": [],
+     "rounds": [
+      {
+       "n": 1,
+       "at_ms": 1763460000000,
+       "shots": 15
+      }
+     ],
+     "reviews": []
+    }
+   },
+   "pictures": {
+    "s-000001000028.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 47
+    },
+    "s-000001000029.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 48
+    },
+    "s-00000100002a.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 49
+    },
+    "s-00000100002b.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 50
+    },
+    "s-00000100002c.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 51
+    },
+    "s-00000100002d.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 52
+    },
+    "s-00000100002e.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 53
+    },
+    "s-00000100002f.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 54
+    },
+    "s-000001000030.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 55
+    },
+    "s-000001000031.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 56
+    },
+    "s-000001000032.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 57
+    },
+    "s-000001000033.png": {
+     "w": 1440,
+     "h": 900,
+     "seed": 58
+    },
+    "s-00000100003c.png": {
+     "w": 390,
+     "h": 844,
+     "seed": 67
+    },
+    "s-00000100003d.png": {
+     "w": 390,
+     "h": 844,
+     "seed": 68
+    },
+    "s-00000100003e.png": {
+     "w": 390,
+     "h": 844,
+     "seed": 69
+    }
+   }
+  }
+ }
+}

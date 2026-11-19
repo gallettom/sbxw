@@ -163,6 +163,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/codemap", get(codemap_runs))
         .merge(super::board::ui_routes())
         .merge(super::jarvis::ui_routes())
+        .merge(super::canvas::ui_routes())
         // The voice concierge.
         .route("/api/voice", get(voice_status))
         .route("/api/emphasis", get(emphasis))

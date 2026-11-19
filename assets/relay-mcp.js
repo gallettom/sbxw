@@ -1004,6 +1004,155 @@ const MAC_TOOLS = [
 
 if (MAC) TOOLS.push(...MAC_TOOLS);
 
+// ── Canvas ────────────────────────────────────────────────────────────────
+//
+// The person reviews screenshots of what you build on a canvas in sbxw's
+// desktop app: you add the shots (files you made inside this sandbox), they
+// pin remarks on them and send a round back, which you read with
+// `canvas_read`. Pictures are read here and posted one by one; the daemon
+// checks each again (PNG, JPEG or WebP by content, 20 MB, 8192 px a side).
+
+const CANVAS_MAX_BYTES = 20 * 1024 * 1024;
+const CANVAS_MAX_SHOTS = 24;
+
+const CANVAS_TOOLS = [
+  {
+    name: "canvas_add_shots",
+    description:
+      "Put screenshots of the app you are working on onto a canvas in sbxw, where the person " +
+      "reviews them: they zoom in, pin numbered remarks on points of each shot, add example " +
+      "pictures, then send you a round of remarks (read it with `canvas_read`).\n" +
+      "\n" +
+      "Use it when the person asks for screenshots or a visual review, or after a visual change " +
+      "they will want to look at. Take the shots yourself first (a headless browser against your " +
+      "dev server at a fixed viewport, the project's own screenshot script, or the virtual Mac), " +
+      "as PNG, JPEG or WebP files inside this sandbox. A good set: the main screens only, one " +
+      "state per shot, the viewport width stated, a short title and a one-line note each, no " +
+      "secrets, tokens or personal data on screen, about 12 per round (24 at most). Shots added " +
+      "in one call form one round, shown as a row below the earlier rounds; give the same " +
+      "`screen` key to the same screen in every round so before and after line up.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        canvas: { type: "string", description: "A canvas id from canvas_list. Leave it out for this sandbox's current canvas (a new one is made if there is none, or if you give a title)." },
+        title: { type: "string", description: "A title for a NEW canvas (e.g. \"Checkout redesign\")." },
+        shots: {
+          type: "array",
+          description: "The shots, at most 24.",
+          items: {
+            type: "object",
+            properties: {
+              file: { type: "string", description: "The picture's path inside this sandbox (PNG, JPEG or WebP)." },
+              title: { type: "string", description: "What it shows, short (\"Settings, dark theme\")." },
+              note: { type: "string", description: "One line: the state shown, what changed." },
+              width: { type: "number", description: "The viewport width in CSS pixels it was taken at (e.g. 1440, 390)." },
+              screen: { type: "string", description: "A stable key for this screen across rounds (\"settings\")." },
+            },
+            required: ["file", "title"],
+          },
+        },
+      },
+      required: ["shots"],
+    },
+  },
+  {
+    name: "canvas_read",
+    description:
+      "Read the remarks the person sent you from a canvas review in sbxw: numbered pins on your " +
+      "shots (with where on the shot), notes, and example pictures they added (copied into this " +
+      "sandbox, with their paths). Call it when sbxw types that a canvas review round is ready, " +
+      "or when the person says they left remarks. Each round is handed to you once.",
+    inputSchema: {
+      type: "object",
+      properties: { canvas: { type: "string", description: "A canvas id; leave it out for every canvas of this sandbox." } },
+    },
+  },
+  {
+    name: "canvas_list",
+    description: "This sandbox's canvases in sbxw: id, title, shots, rounds, and review rounds you have not read yet.",
+    inputSchema: { type: "object", properties: {} },
+  },
+];
+
+TOOLS.push(...CANVAS_TOOLS);
+
+/// The first bytes say what a picture is; the name never does.
+function canvasKind(buf) {
+  if (buf.length >= 8 && buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "png";
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpeg";
+  if (buf.length >= 12 && buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP") return "webp";
+  return "";
+}
+
+async function callCanvasTool(name, args) {
+  if (name === "canvas_list") {
+    const res = await relay.request("/api/canvas/list", {}, 15000);
+    const list = Array.isArray(res.canvases) ? res.canvases : [];
+    if (!list.length) return textResult("This sandbox has no canvas yet. canvas_add_shots makes one.", false);
+    const lines = list.map(c => `${c.id}: "${c.title}", ${c.shots} shot(s) in ${c.rounds} round(s), ${c.reviews} review round(s)${c.unread_reviews ? `, ${c.unread_reviews} not read yet (canvas_read)` : ""}`);
+    return textResult(lines.join("\n"), false);
+  }
+  if (name === "canvas_read") {
+    const body = {};
+    if (args.canvas) body.canvas = String(args.canvas);
+    const res = await relay.request("/api/canvas/read", body, 15000);
+    return textResult(String(res.text || ""), false);
+  }
+  if (name !== "canvas_add_shots") return null;
+  const shots = Array.isArray(args.shots) ? args.shots : [];
+  if (!shots.length) return textResult("No shots given.", true);
+  const refused = [];
+  const batch = require("crypto").randomBytes(8).toString("hex");
+  let canvas = args.canvas ? String(args.canvas) : "";
+  let title = canvas ? "" : String(args.title || "");
+  let kept = 0;
+  let canvasTitle = "";
+  let round = 0;
+  for (let i = 0; i < shots.length; i++) {
+    const s = shots[i] || {};
+    const label = String(s.file || `shot ${i + 1}`);
+    if (i >= CANVAS_MAX_SHOTS) {
+      refused.push(`${label}: a round holds at most ${CANVAS_MAX_SHOTS} shots`);
+      continue;
+    }
+    let buf;
+    try {
+      const file = path.resolve(String(s.file || ""));
+      const st = fs.statSync(file);
+      if (!st.isFile()) throw new Error("not a file");
+      if (st.size > CANVAS_MAX_BYTES) throw new Error(`${Math.round(st.size / 1048576)} MB, more than 20 MB`);
+      buf = fs.readFileSync(file);
+    } catch (e) {
+      refused.push(`${label}: ${(e && e.message) || e}`);
+      continue;
+    }
+    if (!canvasKind(buf)) {
+      refused.push(`${label}: not a PNG, JPEG or WebP picture`);
+      continue;
+    }
+    const shot = { b64: buf.toString("base64"), title: String(s.title || ""), note: String(s.note || "") };
+    if (Number.isFinite(Number(s.width)) && Number(s.width) > 0) shot.width = Math.round(Number(s.width));
+    if (s.screen) shot.screen = String(s.screen);
+    const body = { batch, shot, title };
+    if (canvas) body.canvas = canvas;
+    try {
+      const res = await relay.request("/api/canvas/shots", body, 60000);
+      canvas = res.canvas;
+      canvasTitle = res.title;
+      round = res.round;
+      title = "";
+      kept++;
+    } catch (e) {
+      refused.push(`${label}: ${(e && e.message) || e}`);
+    }
+  }
+  const head = kept
+    ? `${kept} shot(s) added to canvas ${canvas} ("${canvasTitle}"), round ${round}. The person sees them in sbxw's Canvas view.`
+    : "No shot was added.";
+  const tail = refused.length ? `\nRefused:\n- ${refused.join("\n- ")}` : "";
+  return textResult(head + tail, kept === 0);
+}
+
 /// The daemon's answer as a tool result: its text, and the screenshot when
 /// there is one — inline so the agent looks at it, and saved for later turns.
 /// Where a screenshot of the guest is kept: in the workspace's
@@ -1193,6 +1342,9 @@ async function callTool(name, args) {
 
   const mac = await callMacTool(name, args);
   if (mac) return mac;
+
+  const canvasRes = await callCanvasTool(name, args);
+  if (canvasRes) return canvasRes;
 
   return textResult(`Unknown tool "${name}".`, true);
 }

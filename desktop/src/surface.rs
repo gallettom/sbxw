@@ -154,6 +154,8 @@ pub enum SurfaceEvent {
     F6 { surface: String },
     /// The shown area's size in points, logical pixels (debounced).
     Resized { surface: String, w: f32, h: f32 },
+    /// What the person did on a canvas (`crate::surface_canvas`).
+    Canvas { surface: String, ev: crate::surface_canvas::CanvasEvent },
 }
 
 impl SurfaceEvent {
@@ -168,7 +170,8 @@ impl SurfaceEvent {
             | SurfaceEvent::Paste { surface, .. }
             | SurfaceEvent::Focus { surface, .. }
             | SurfaceEvent::F6 { surface }
-            | SurfaceEvent::Resized { surface, .. } => surface,
+            | SurfaceEvent::Resized { surface, .. }
+            | SurfaceEvent::Canvas { surface, .. } => surface,
         }
     }
 }

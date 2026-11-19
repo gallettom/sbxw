@@ -10,6 +10,7 @@ pub mod agents;
 pub mod anonymise;
 pub mod approvals;
 pub mod board;
+pub mod canvas;
 pub mod artifacts;
 pub mod carve;
 pub mod codemap;

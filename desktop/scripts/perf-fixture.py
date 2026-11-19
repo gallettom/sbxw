@@ -46,6 +46,9 @@ for sb, n in [("web-app", 200)] + [(s, 20) for s in names[1:4]]:
 d["commits"] = commits
 d["commit_details"] = details
 
+# Canvas: web-app's 15 shots (12 at 1440x900, 3 at 390x844), drawn by the stand-in (fixtures/canvas/big.json).
+d["canvas"] = load("canvas/big.json")["daemon"]["canvas"]
+
 # Files: the explorer's standin data, plus a 3,000-entry folder.
 for k in ["artifacts", "files_dir", "files_recent", "codemap", "files_tree", "files_content"]:
     d[k] = copy.deepcopy(fs[k])

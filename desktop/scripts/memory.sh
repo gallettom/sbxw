@@ -116,6 +116,12 @@ for k in RAIL:
         add(type="tap", key="files-loc-/Users/me/web"); wait("files-row-/Users/me/web/big", 5000)
         add(type="tap", key="files-row-/Users/me/web/big"); hold(1500)
 mem("everything open")
+# The Canvas over the rest: web-app's 15 shots decoded and drawn, then closed.
+add(type="key", name="Escape"); hold(300)
+add(type="tap", key="rail-canvas"); wait("canvas-sandbox", 5000)
+add(type="tap", key="canvas-sandbox"); hold(600)
+add(type="tap", key="canvas-sandbox-web-app"); wait("canvas", 5000); hold(4000)
+mem("canvas open")
 # Close: the overlay or panel open, then every pane.
 add(type="key", name="Escape"); hold(300)
 add(type="key", name="Escape"); hold(300)
@@ -142,6 +148,9 @@ def cycle(c):
         add(type="tap", key="files-row-shot-1.png"); hold(400)
         add(type="tap", key="files-row-shot-2.png"); hold(400)
         add(type="tap", key="rail-files"); hold(200)
+        # The Canvas open (15 shots decoded) and closed: its pictures go back.
+        add(type="tap", key="rail-canvas"); wait("canvas", 5000); hold(2500)
+        add(type="tap", key="rail-canvas"); hold(500)
 for c in range(3):
     cycle(c * 10)
 hold(1500)
