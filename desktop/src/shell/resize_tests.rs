@@ -30,6 +30,7 @@ fn rig() -> Rig {
     r.rt.update(|s, _| {
         s.sandboxes = ["a", "b", "c", "d"].iter().map(|n| crate::client::Sandbox::new(n, "claude", "running")).collect();
         s.feats.data.insert("leads".into(), serde_json::json!(["a"]));
+        s.feats.data.entry("plans").or_insert(serde_json::json!([]));
         s.push_data();
     });
     settle(&mut r);

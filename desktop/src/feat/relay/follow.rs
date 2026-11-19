@@ -120,12 +120,15 @@ impl Follow {
         let from = who(&target, thread.as_deref());
         let last_input = info["last_input"].as_str().unwrap_or("");
         let mut out = vec![];
+        let in_turn = prev == "working" || prev == "attention";
+        // A turn's end with a reply: at idle, or while the session waits on
+        // background work of its own (the interim reply), once each.
+        let ready = crate::jarvis::reply_ready(in_turn, info, c.shown.as_deref());
         match state.as_str() {
-            "working" => c.asked = None,
-            "idle" if prev == "working" || prev == "attention" => {
-                let Some(reply) = info["reply"].as_str().filter(|r| !r.trim().is_empty()) else { return out };
-                if c.shown.as_deref() == Some(reply) {
-                    return out;
+            "working" | "idle" if ready.is_some() => {
+                let reply = ready.unwrap_or_default();
+                if state == "working" {
+                    c.asked = None;
                 }
                 c.shown = Some(reply.to_string());
                 if is_grill_reply(reply) {
@@ -137,6 +140,7 @@ impl Follow {
                     self.reply_to = Some((target.clone(), thread.clone()));
                 }
             }
+            "working" => c.asked = None,
             "attention" if prev != "attention" => {
                 let steps: Vec<J> = match info["steps"].as_array() {
                     Some(s) if !s.is_empty() => s.clone(),
@@ -287,6 +291,28 @@ mod tests {
         assert!(f.ingest(&json!({ "sandbox": "api", "state": "idle", "reply": "x" })).is_empty());
         f.ingest(&sess("working", json!({ "origin": "remote" })));
         assert!(f.ingest(&sess("idle", json!({ "origin": "remote", "reply": "from an editor" }))).is_empty());
+    }
+
+    #[test]
+    fn an_interim_reply_at_a_busy_stop_and_the_final_one_are_each_relayed_once() {
+        let mut f = Follow { target: Some("web-app".into()), on: true, ..Follow::default() };
+        let bg = json!({ "shells": 1, "agents": 0, "other": 0, "wakeups": 0 });
+        let say = |t: &str| vec![News::Say { from: "web-app".into(), text: t.into(), read: true }];
+        f.ingest(&sess("working", json!({})));
+        assert_eq!(f.ingest(&sess("working", json!({ "reply": "Build started.", "background": bg }))), say("Build started."));
+        // A flicker of events of the same wait: nothing.
+        assert!(f.ingest(&sess("working", json!({ "reply": "Build started.", "background": bg }))).is_empty());
+        assert!(f.ingest(&sess("working", json!({ "reply": "Build started.", "background": { "shells": 2, "agents": 0, "other": 0, "wakeups": 0 } }))).is_empty());
+        // The wake-up, then the final reply, once.
+        assert!(f.ingest(&sess("working", json!({}))).is_empty());
+        assert_eq!(f.ingest(&sess("idle", json!({ "reply": "Build passed." }))), say("Build passed."));
+        assert!(f.ingest(&sess("idle", json!({ "reply": "Build passed." }))).is_empty());
+        // The wait running out is idle with the same words: not again.
+        f.ingest(&sess("working", json!({})));
+        assert_eq!(f.ingest(&sess("working", json!({ "reply": "Still going.", "background": bg }))).len(), 1);
+        assert!(f.ingest(&sess("idle", json!({ "reply": "Still going." }))).is_empty());
+        // Without `background`, a working event with words is not a reply.
+        assert!(f.ingest(&sess("working", json!({ "reply": "x" }))).is_empty());
     }
 
     #[test]

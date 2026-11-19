@@ -558,6 +558,9 @@ impl Model {
             "last_input": opt(i, "last_input").filter(|_| from_of(i).is_none()),
             "from": from_of(i).map(|(from, body)| json!({ "name": from, "text": crate::feat::monitor::attach::clipped_text(&body, 600) })),
             "now": if g == Group::Working { Some(opt(i, "activity").unwrap_or("Working")) } else { None },
+            // A tool's line is a command (mono); waiting on its own
+            // background work is a sentence.
+            "now_mono": i["background"].is_null(),
             "reply": opt(i, "reply"),
             "ts": i["ts"].as_u64().unwrap_or(0),
             "question": question,
@@ -590,6 +593,19 @@ pub fn took(ms: u64) -> String {
     }
 }
 
+/// The first status marker of a line, as a chip: `[[Word]]` (its word only).
+fn chip_of(line: &str) -> Option<String> {
+    let start = line.find("[[")? + 2;
+    let end = start + line[start..].find("]]")?;
+    let word: String = line[start..end].split(':').next()?.trim().chars().take(12).collect();
+    (!word.is_empty() && word.chars().all(|c| c.is_alphabetic() || c == ' ')).then(|| format!("[[{word}]]"))
+}
+
+#[cfg(test)]
+pub fn chip_of_for_tests(line: &str) -> Option<String> {
+    chip_of(line)
+}
+
 /// One row of the list, from a report.
 fn row_of(key: &str, rev: u64, i: &J) -> J {
     let g = Group::of(s(i, "state"));
@@ -601,7 +617,10 @@ fn row_of(key: &str, rev: u64, i: &J) -> J {
     });
     let (line, mono) = match g {
         Group::You => (st.first().and_then(|q| opt(q, "text")).or(opt(i, "activity")).unwrap_or("Waiting for you"), false),
-        Group::Working => (opt(i, "activity").unwrap_or("Working"), true),
+        // A tool's line is a command (mono); a session waiting on its own
+        // background work says a sentence ("Waiting for its background
+        // command"), drawn in prose.
+        Group::Working => (opt(i, "activity").unwrap_or("Working"), i["background"].is_null()),
         Group::Ended => ("Ended", false),
         Group::Idle => (reply.or(prompt.as_deref()).unwrap_or("Idle"), false),
     };
@@ -615,6 +634,13 @@ fn row_of(key: &str, rev: u64, i: &J) -> J {
     m.insert("tone".into(), g.tone().into());
     m.insert("line".into(), line.into());
     m.insert("mono".into(), mono.into());
+    // One line a row: the whole line is its tooltip, and a status marker of
+    // an idle reply (`[[Done]]`, `[[Failed: 2 tests]]`) a small chip, its
+    // word only.
+    m.insert("help".into(), line.into());
+    if let Some(c) = chip_of(line).filter(|_| g == Group::Idle) {
+        m.insert("chip".into(), c.into());
+    }
     m.insert("ts".into(), i["ts"].as_u64().unwrap_or(0).into());
     if g == Group::You {
         m.insert("ask".into(), if st.is_empty() { "Wants permission" } else { "Asks you a question" }.into());

@@ -948,6 +948,13 @@ impl App {
     /// Takes what the link sent. Headless (`wait`), first waits up to `wait`
     /// while the first connection or list is on its way, or (`pending`) while
     /// a background job runs: the virtual clock does not wait for the daemon.
+    /// Tests: the link's first list is in and nothing asked of it is still
+    /// under way (its answers wait in the channel for the next poll).
+    #[cfg(test)]
+    pub(crate) fn link_quiet(&self) -> bool {
+        self.listed && self.link.as_ref().is_some_and(|l| l.pending.load(std::sync::atomic::Ordering::SeqCst) == 0)
+    }
+
     fn drain(&mut self, wait: Option<Duration>, pending: bool) -> bool {
         let mut changed = false;
         let deadline = wait.map(|w| Instant::now() + w);
@@ -1120,8 +1127,10 @@ impl App {
             self.restore_layout();
             changed = true;
         }
-        // Lead Mode of the last run, once the layout is back and the teams are read.
-        if self.leads_restore && self.restore.is_none() && self.listed && self.feats.data.contains_key("leads") {
+        // Lead Mode of the last run, once the layout is back and the teams are
+        // read: both lists, since a team is known by either (`leading`), and
+        // they arrive on threads of their own in any order.
+        if self.leads_restore && self.restore.is_none() && self.listed && self.feats.data.contains_key("leads") && self.feats.data.contains_key("plans") {
             self.leads_restore = false;
             if !self.leads_on() && !self.leaders().is_empty() {
                 self.toggle_leads();

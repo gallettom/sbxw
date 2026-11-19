@@ -125,7 +125,7 @@ fn a_step_group_and_a_step_unfold_in_sessions() {
     // The last one drawn: the conversation opens at its end (the first ones are scrolled out of view).
     let key_of = |rt: &Runtime<App>, prefix: &str| drawn(rt).into_iter().rev().find_map(|d| d.split('|').next().and_then(|k| k.strip_prefix(&format!("Some(\"{prefix}"))).map(|k| format!("{prefix}{}", k.trim_end_matches("\")"))));
     let group = key_of(&rt, "monitor-steps-g").expect("a folded group of steps is drawn");
-    // (Pressed once: opened, its steps push its head up, out of a short view.)
+    // (Pressed once: it opens downwards, its head stays where it was.)
     for k in [group.clone()] {
         let before = drawn(&rt);
         let (x, y) = rt.find(&k).unwrap();
@@ -134,7 +134,8 @@ fn a_step_group_and_a_step_unfold_in_sessions() {
         settle(&mut rt);
         assert_ne!(drawn(&rt), before, "pressing {k} changed nothing drawn");
     }
-    let step = key_of(&rt, "monitor-step-s").expect("a step is drawn");
+    // Its first step, right under its head (the last ones run below the view).
+    let step = drawn(&rt).into_iter().find_map(|d| d.split('|').next().and_then(|k| k.strip_prefix("Some(\"monitor-step-s")).map(|k| format!("monitor-step-s{}", k.trim_end_matches("\")")))).expect("a step is drawn");
     let before = drawn(&rt);
     let (x, y) = rt.find(&step).unwrap();
     rt.pointer_down(x, y);
