@@ -769,6 +769,23 @@ impl App {
         }
     }
 
+    /// The sandbox the overlay over the pane area is scoped to, as its
+    /// screen last drew its scope picker (scope.rs), with the overlay's
+    /// title: `{sandbox, title}`, or null (no overlay, not scoped, All).
+    /// `data.app.overlay.scope`: the sidebar marks that sandbox's row.
+    pub(super) fn overlay_scope(&self) -> J {
+        let Some((name, _)) = self.feats.overlay.as_ref() else { return J::Null };
+        let title = match feat::screen(name).map(|(_, d)| d.slot) {
+            Some(Slot::Overlay { title, .. }) | Some(Slot::Base { title, .. }) => title,
+            _ => return J::Null,
+        };
+        let scoped = self.screens.iter().find(|x| &x.name == name).and_then(|x| x.last_good.as_ref()).and_then(crate::scope::in_slot);
+        match scoped {
+            Some((_, v)) if !v.is_empty() => json!({ "sandbox": v, "title": title }),
+            _ => J::Null,
+        }
+    }
+
     /// The overlay view over the pane area: the core's header (icon, title,
     /// ×) and the screen under it, on the app's floor, covering the pager
     /// and the panes (absolute: nothing under it moves or resizes). A press

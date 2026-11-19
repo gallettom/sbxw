@@ -44,6 +44,7 @@ icons! {
     COLUMNS "columns" concat!(st!("rect", r#"x="1.5" y="2.5" width="13" height="11" rx="1.5""#), st!("line", r#"x1="8" y1="2.5" x2="8" y2="13.5""#));
     ROWS "rows" concat!(st!("rect", r#"x="1.5" y="2.5" width="13" height="11" rx="1.5""#), st!("line", r#"x1="1.5" y1="8" x2="14.5" y2="8""#));
     GRID "grid" concat!(st!("rect", r#"x="1.5" y="2.5" width="13" height="11" rx="1.5""#), st!("line", r#"x1="8" y1="2.5" x2="8" y2="13.5""#), st!("line", r#"x1="1.5" y1="8" x2="14.5" y2="8""#));
+    EYE "eye" concat!(st!("path", r#"d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z""#), st!("circle", r#"cx="8" cy="8" r="2""#));
     SINGLE "single" st!("rect", r#"x="1.5" y="2.5" width="13" height="11" rx="1.5""#);
     CHAT "chat" st!("path", r#"d="M2 3.5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H7l-3 2.5v-2.5H3a1 1 0 0 1-1-1z""#);
     MIC "mic" concat!(st!("rect", r#"x="5.5" y="1.5" width="5" height="8" rx="2.5""#), st!("path", r#"d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2""#));

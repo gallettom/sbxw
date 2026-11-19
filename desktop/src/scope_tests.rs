@@ -432,3 +432,35 @@ fn the_scope_follows_the_core_s_data_without_running_the_screen_again() {
     assert_ne!(fill_of(&rt, "files-sandbox"), cap0, "the capsule follows the theme");
     rt.update(|s, _| s.set_theme(Mode::Dark));
 }
+
+fn in_view(rt: &Runtime<App>) -> Vec<String> {
+    rt.elements().into_iter().filter(|e| !e.exiting).filter_map(|e| e.key).filter_map(|k| k.strip_prefix("in-view-").map(str::to_string)).collect()
+}
+
+/// The sidebar's "in view" eye: on the row of the sandbox the overlay is
+/// scoped to, at once on a pick, none for All, gone when the overlay closes.
+#[test]
+fn the_sidebar_marks_the_sandbox_in_view() {
+    let mut rt = window("scope/many", 1284.0, 816.0);
+    assert!(in_view(&rt).is_empty());
+    run(&mut rt, "files_open", json!({ "sandbox": "web-app" }));
+    assert_eq!(in_view(&rt), ["web-app"]);
+    press(&mut rt, "files-sandbox");
+    press(&mut rt, "files-sandbox-docs");
+    assert_eq!(in_view(&rt), ["docs"], "it follows the scope at once");
+    key(&mut rt, Key::Escape);
+    assert!(in_view(&rt).is_empty(), "gone with the overlay");
+    run(&mut rt, "commits_show", json!({}));
+    assert!(in_view(&rt).is_empty(), "nothing for All sandboxes");
+}
+
+/// Worktrees: All by default, one sandbox from a sandbox's link.
+#[test]
+fn worktrees_has_the_scope_all_by_default() {
+    let mut rt = window("worktrees/standin", 1284.0, 816.0);
+    run(&mut rt, "worktrees_show", json!({}));
+    assert_eq!(label_of(&rt, "worktrees-sandbox").as_deref(), Some("Scope: All sandboxes"));
+    run(&mut rt, "worktrees_show", json!({ "sandbox": "web-app" }));
+    assert!(label_of(&rt, "worktrees-sandbox").is_some_and(|l| l.starts_with("Scope: web-app")));
+    assert!(rt.find("overlay-strip-worktrees").is_some());
+}

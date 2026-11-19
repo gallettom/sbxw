@@ -164,6 +164,9 @@ return {
     end
     for _, n in ipairs(ui.notes or {}) do list[#list + 1] = note(n.text, n.tone == "red" and "red" or "text-dim") end
     return column{ h = "full", gap = 8, w = "full",
+      -- The scope beside the title ("Worktrees in [All sandboxes v]"): scope.rs.
+      row{ key = "title-slot", gap = 8,
+        select{ id = "worktrees-sandbox", value = ui.sandbox or "", on = "sandbox", scope = { kind = "sandbox", all = true } } },
       row{ gap = 8, w = "full",
         input{ id = "worktrees-filter", value = ui.filter or "", placeholder = "Filter by sandbox, thread, branch or path", on = "filter" },
         button{ icon = "reload", key = "worktrees-refresh", on = "refresh", variant = "ghost", help = "Read the worktrees again" },
@@ -173,6 +176,7 @@ return {
   end,
   actions = {
     filter = function(_, _, t) return intent("worktrees_filter", { text = t or "" }) end,
+    sandbox = function(_, _, id) return intent("worktrees_sandbox", { sandbox = id or "" }) end,
     refresh = function() return intent("worktrees_refresh", {}) end,
     more = function() return intent("worktrees_more", {}) end,
     terminal = function(_, id) return intent("worktrees_terminal", { id = id }) end,

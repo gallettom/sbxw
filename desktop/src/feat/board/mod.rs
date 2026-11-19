@@ -393,7 +393,7 @@ impl State {
                 vec![go("monitor_open", json!({})), go("monitor_select", json!({ "key": key }))]
             }
             "commits" => vec![go("commits_show", json!({ "sandbox": sb, "branch": thread.map(|t| format!("sbxw/{t}")) }))],
-            "worktrees" => vec![go("worktrees_show", json!({}))],
+            "worktrees" => vec![go("worktrees_show", json!({ "sandbox": sb }))],
             "plan" => vec![go("plan_review", json!({ "id": id }))],
             "requests" => vec![go("relay_open", json!({ "id": a.s("relay") }))],
             "threads" => vec![go("threads_show", json!({ "sandbox": sb }))],

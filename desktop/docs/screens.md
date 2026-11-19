@@ -542,6 +542,11 @@ row{ key = "title-slot", gap = 8,
   (in the field: the first match), Escape closes only the list and gives
   the keyboard back to the capsule; a press outside closes it and reaches
   nothing else.
+- **The sidebar**: while an overlay is scoped to a sandbox, that
+  sandbox's row shows an eye before its buttons ("Shown in Files",
+  `in-view-<name>`), from `data.app.overlay.scope` (`{sandbox, title}`,
+  null for All or no scope). It follows a pick at once (the core pushes
+  again when the overlay's scope moved) and goes when the overlay closes.
 - **Names are data**: text only, clipped, never a pill or a control.
 - A picker a screen must draw itself (the Board's two-line team rows) takes
   the same colours from `scope::look_json` (`fill`, `border`, `text`,
@@ -910,7 +915,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `icon{ name }`, and the `icon` prop of `button`, `menu` and items:
 `play`, `stop`, `reload`, `plus`, `close`, `terminal`, `chevron-down`,
 `chevron-right`, `check`, `warning`, `info`, `gear`, `search`, `folder`,
-`file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
+`file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`, `eye`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
 `coin`, `help`, `moon`, `appearance`, `branch`, `globe`, `remote`, `key`, `people`, `leader`, `threads`,
 `shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `inbox` (Sessions: a list of sessions, the first dot filled), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
@@ -1965,7 +1970,9 @@ again.
 ### worktrees
 
 An overlay (`src/feat/worktrees.rs`, `screens/worktrees.luau`): one block
-per sandbox, one row per worktree (path, thread and its state, ahead,
+per sandbox (the scope picker `worktrees-sandbox` in the title: All
+sandboxes from the rail, one sandbox with `worktrees_show {sandbox}` or a
+pick, `worktrees_sandbox {sandbox?}`), one row per worktree (path, thread and its state, ahead,
 behind, uncommitted changes, merged, the last commit; Terminal, Commits,
 Files). Above a block's rows, the **branch graph** of its unmerged
 worktrees, one per repository (`src/feat/worktrees_graph.rs`, the web UI's

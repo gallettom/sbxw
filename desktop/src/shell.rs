@@ -710,6 +710,9 @@ impl App {
             (Some((n, _)), None) => serde_json::json!({ "screen": n }),
             _ => J::Null,
         };
+        if data["app"]["overlay"].is_object() {
+            data["app"]["overlay"]["scope"] = self.overlay_scope();
+        }
         // The pane area's base view (the Monitor), or null: the terminals.
         data["app"]["base"] = self.feats.base.clone().map_or(J::Null, J::String);
         data["app"]["covered"] = self.covered().into();
@@ -862,6 +865,11 @@ impl App {
             rendered += (s.renders != before) as usize;
         }
         crate::perf::done(t, || format!("push_data (screen_data {built:.2} ms, extras {extras:.2} ms, {} bytes; {rendered} of {} screens rendered)", d.to_string().len(), self.screens.len()));
+        // The overlay's scope as its screen has just drawn it (a pick, a
+        // pre-scoped open): when it moved, the sidebar's "in view" mark follows now.
+        if d["app"]["overlay"].is_object() && d["app"]["overlay"]["scope"] != self.overlay_scope() {
+            self.push_data();
+        }
     }
 
     /// The screens drawn now, as `view` draws them: the top bar, the list,

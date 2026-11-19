@@ -235,3 +235,28 @@ fn the_graph_selects_a_row_and_opens_a_commit() {
         }
     }
 }
+
+/// The scope picker: All by default (the rail), one sandbox on a pick or
+/// from a sandbox's link, All again; "none" and notes follow the scope.
+#[test]
+fn the_scope_narrows_to_one_sandbox_and_back_to_all() {
+    let d = data();
+    let cx = Ctx { data: &d };
+    let mut st = State::default();
+    let out = st.act(&cx, &asked("worktrees_show", json!({}))).unwrap();
+    let v = answer(&mut st, &cx, out);
+    let sbs = |v: &J| v["blocks"].as_array().unwrap().iter().map(|b| b["sandbox"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!((sbs(&v), v["sandbox"].clone()), (vec!["web-app".to_string(), "docs".into()], J::Null));
+    let v = ui(&st.act(&cx, &asked("worktrees_sandbox", json!({ "sandbox": "docs" }))).unwrap());
+    assert_eq!((sbs(&v), v["sandbox"].as_str()), (vec!["docs".to_string()], Some("docs")));
+    assert!(v["none"].as_array().unwrap().is_empty(), "only docs' own: {v}");
+    let v = ui(&st.act(&cx, &asked("worktrees_sandbox", json!({ "sandbox": "" }))).unwrap());
+    assert_eq!(sbs(&v).len(), 2);
+    // Pre-scoped from a link, then the rail again: every sandbox.
+    let out = st.act(&cx, &asked("worktrees_show", json!({ "sandbox": "web-app" }))).unwrap();
+    let v = answer(&mut st, &cx, out);
+    assert_eq!(sbs(&v), ["web-app"]);
+    let out = st.act(&cx, &asked("worktrees_show", json!({}))).unwrap();
+    let v = answer(&mut st, &cx, out);
+    assert_eq!(sbs(&v).len(), 2);
+}
