@@ -613,6 +613,7 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `start_sandbox` | `sandbox` (required), `pane` | Starts a stopped sandbox by opening its agent, as the web UI's Connect does |
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
+| `sidebar` | `show`: `show`, `hide` or `toggle` | The sandboxes sidebar shown or hidden, remembered across launches (`data.app.sidebar.shown`); the pane area, terminals or Monitor, takes its width (each terminal resized once). Its header's `sidebar-hide` runs it; while it is hidden the rail's first entry `rail-sidebar` ("Show sandboxes") brings it back, its badge the sessions that want the person (amber). A `select` of a sandbox from anywhere but a feature's data (a status bar or Board link) shows it first. No focus moves |
 | `set_theme` | `theme`: `dark`, `graphite` or `toggle` (the next one) | The app's theme, remembered across launches; every surface switches at once (`data.app.theme` and `theme.mode` say which palette is drawn) |
 | `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | The old layout picker's: that many terminals per page, and the current page that many panes (empty ones added) in the old arrangement |
 | `page_show` | `page` (from 1, required) | Shows that page of terminals |
@@ -678,8 +679,8 @@ core's: a terminal with the focus does not receive them.
 The core owns the app's chords (`src/shell/palette.rs`), and screens never
 see them: Cmd/Ctrl+K the command palette (every sandbox, every top bar extra
 and feature shortcut, the core's actions; a pick runs the same intents your
-buttons run, through the same checks), Cmd/Ctrl+B the sidebar (the left
-rail stays), Cmd/Ctrl+1 to 9 a pane of the current page, Ctrl+Tab and
+buttons run, through the same checks), Cmd/Ctrl+B the sandboxes sidebar
+(the left rail stays and shows "Show sandboxes"; its header's button hides it too), Cmd/Ctrl+1 to 9 a pane of the current page, Ctrl+Tab and
 Ctrl+Shift+Tab the next and previous page (also Cmd+Option+Right/Left on
 macOS; in a terminal Ctrl+Tab was a plain Tab, so nothing is lost), Cmd/Ctrl+Shift+W closes the focused pane, Cmd/Ctrl with + − 0 zooms the
 app (in a terminal: its text), Escape closes the top-most menu, palette,

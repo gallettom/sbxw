@@ -99,7 +99,7 @@ pub fn page_step(ev: &rune::KeyEvent) -> Option<i32> {
 pub fn shortcuts(ptt: &str) -> Vec<(Vec<String>, String)> {
     let mut v: Vec<(Vec<String>, String)> = vec![
         (chord_keys("K"), "Open the command palette".into()),
-        (chord_keys("B"), "Show or hide the sidebar".into()),
+        (chord_keys("B"), "Show or hide the sandboxes sidebar".into()),
         (if mac() { chord_keys("J") } else { vec!["F7".into()] }, "Open or close Jarvis".into()),
         (chord_keys("1…9"), "Give the page's pane 1 to 9 the keyboard".into()),
         (page_keys(true), "Next page of terminals".into()),
@@ -241,7 +241,7 @@ impl App {
             let n = self.status.jobs.len();
             v.push(core("create-jobs", "Show the new sandboxes", &format!("{n} being created or just done"), "plus", vec![], Run::Intents(vec![("open_panel".into(), serde_json::json!({ "screen": feat::create::JOBS }))])));
         }
-        v.push(core("sidebar", if self.sidebar_shown() { "Hide the sidebar" } else { "Show the sidebar" }, "", "columns", chord_keys("B"), Run::Sidebar));
+        v.push(core("sidebar", if self.sidebar_shown() { "Hide sandboxes" } else { "Show sandboxes" }, "", "columns", chord_keys("B"), Run::Sidebar));
         v.push(core("jarvis", if self.jarvis.open { "Close Jarvis" } else { "Open Jarvis" }, "", "jarvis", if mac() { chord_keys("J") } else { vec!["F7".into()] }, Run::Jarvis));
         let shown = self.shown();
         for (k, i) in shown.clone().enumerate() {

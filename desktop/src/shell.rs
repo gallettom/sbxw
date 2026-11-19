@@ -2011,7 +2011,18 @@ impl App {
                 let name = sandbox.clone();
                 l.run(d, format!("stop {sandbox}"), move |d| d.stop_sandbox(&name));
             }
-            Intent::Select { sandbox } => self.selected = sandbox,
+            Intent::Select { sandbox } => {
+                // A link elsewhere that shows a sandbox's row (a status bar's,
+                // the Board's) shows the sidebar first; its own rows never hide it.
+                if sandbox.is_some() && !self.sidebar_shown() && !from.starts_with("feature:") {
+                    self.set_sidebar(true);
+                }
+                self.selected = sandbox
+            }
+            Intent::Sidebar { show } => {
+                let show = show.unwrap_or(!self.sidebar_shown());
+                self.set_sidebar(show);
+            }
             Intent::SetTheme { theme: t } => {
                 let t = t.unwrap_or(self.theme_choice.next());
                 self.set_theme(t)
@@ -2687,8 +2698,20 @@ impl App {
     }
 
     pub fn toggle_sidebar(&mut self) {
-        let hidden = self.sidebar_shown();
-        self.store.set_in("sidebar", "hidden", if hidden { J::Bool(true) } else { J::Null });
+        self.set_sidebar(!self.sidebar_shown());
+    }
+
+    /// Shows or hides the sandboxes sidebar, remembered (the state file is
+    /// memory only in tests). The pane area takes its width at the next
+    /// layout: one size change for each terminal, not an animation.
+    pub fn set_sidebar(&mut self, show: bool) {
+        if show == self.sidebar_shown() {
+            return;
+        }
+        self.store.set_in("sidebar", "hidden", if show { J::Null } else { J::Bool(true) });
+        // No focus moves: a pane or the Monitor's list keeps the keyboard;
+        // a control of the sidebar that had it is gone, so nothing has it
+        // (never a terminal by surprise).
         self.push_data();
     }
 
@@ -4402,11 +4425,15 @@ mod tests {
             }
             n
         };
+        // The terminals' clock moves with the frames, so a debounced resize goes out.
+        let clock = std::cell::Cell::new(0.0f64);
         let frames = |rt: &mut rune::Runtime<App>, n: usize| {
             for _ in 0..n {
                 rt.frame(0.05);
+                clock.set(clock.get() + 0.05);
+                let c = clock.get();
                 rt.update(|s, tx| {
-                    s.poll(0.0, tx);
+                    s.poll(c, tx);
                 });
             }
         };
@@ -4560,6 +4587,98 @@ mod tests {
         assert!(rt.state.popup_escape().is_none(), "commits_key takes no escape");
         assert!(rt.state.escape());
         assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("monitor"));
+    }
+
+    /// The sandboxes sidebar hides from its header's button, Cmd/Ctrl+B,
+    /// the palette or the `sidebar` intent, and comes back from the rail's
+    /// first entry (which carries the sessions that want the person) or the
+    /// same keys. The pane area takes its width; each terminal is resized
+    /// once; no key reaches a terminal by it; the choice is kept.
+    #[test]
+    fn the_sidebar_collapses_and_comes_back() {
+        let (mut rt, rx, _clip) = window_with_terminal();
+        let p = std::env::temp_dir().join(format!("sbxw-sidebar-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        rt.update(|s, _| s.store = store::Store::at(Some(p.clone())));
+        // The terminals' clock moves with the frames, so a debounced resize goes out.
+        let clock = std::cell::Cell::new(0.0f64);
+        let frames = |rt: &mut rune::Runtime<App>, n: usize| {
+            for _ in 0..n {
+                rt.frame(0.05);
+                clock.set(clock.get() + 0.05);
+                let c = clock.get();
+                rt.update(|s, tx| {
+                    s.poll(c, tx);
+                });
+            }
+        };
+        let resizes = |rx: &std::sync::mpsc::Receiver<crate::client::TermInput>| {
+            let mut n = 0;
+            while let Ok(i) = rx.try_recv() {
+                match i {
+                    crate::client::TermInput::Resize { .. } => n += 1,
+                    crate::client::TermInput::Bytes(b) => panic!("bytes reached the terminal: {b:?}"),
+                }
+            }
+            n
+        };
+        frames(&mut rt, 20);
+        resizes(&rx);
+        let area = |rt: &rune::Runtime<App>| rt.presented("panes").unwrap().0[2];
+        let before = area(&rt);
+        assert!(rt.presented("sidebar").is_some() && rt.find("rail-sidebar").is_none());
+        // Its header's button.
+        tap(&mut rt, "sidebar-hide");
+        frames(&mut rt, 20);
+        assert!(rt.presented("sidebar").is_none(), "hidden");
+        assert!(area(&rt) > before + 100.0, "the pane area takes its width: {before} -> {}", area(&rt));
+        assert_eq!(resizes(&rx), 1, "one resize of the terminal, not one per frame");
+        assert!(rt.find("rail-sidebar").is_some(), "the rail's way back");
+        assert_eq!(rt.state.store.get("sidebar")["hidden"], true, "kept");
+        rt.update(|_, tx| assert_ne!(tx.focused(), Some("grid-1"), "the keyboard did not land in the terminal"));
+        // The sessions that want the person show on the rail's entry.
+        rt.update(|s, _| {
+            s.feats.data.insert("sessions".into(), serde_json::json!([{ "sandbox": "web-app", "state": "attention", "session_id": "a", "ts": 1 }, { "sandbox": "web-app", "state": "idle", "session_id": "b", "ts": 1 }]));
+        });
+        let e = rt.state.rail_entries().0.into_iter().find(|e| e.key == "rail-sidebar").unwrap();
+        assert_eq!((e.count, e.tone.as_str()), (Some(1), "amber"));
+        // The rail's entry shows it again.
+        tap(&mut rt, "rail-sidebar");
+        frames(&mut rt, 20);
+        assert!(rt.presented("sidebar").is_some() && rt.find("rail-sidebar").is_none());
+        assert!((area(&rt) - before).abs() < 1.0);
+        assert_eq!(resizes(&rx), 1);
+        // Cmd/Ctrl+B, both ways (the palette's chords; with a terminal's grid
+        // focused, Ctrl+Shift+B off macOS, as the chords test holds).
+        rt.update(|_, tx| tx.blur());
+        let mac = cfg!(target_os = "macos");
+        let chord = KeyEvent { key: Key::Command('b'), mods: rune::Mods { cmd: true, ctrl: !mac, logo: mac, ..Default::default() } };
+        rt.key(chord.clone());
+        frames(&mut rt, 2);
+        assert!(!rt.state.sidebar_shown());
+        rt.key(chord.clone());
+        frames(&mut rt, 2);
+        assert!(rt.state.sidebar_shown());
+        let in_grid = KeyEvent { key: Key::Command('b'), mods: rune::Mods { cmd: true, ctrl: !mac, logo: mac, shift: !mac, ..Default::default() } };
+        rt.update(|s, _| assert!(s.app_key(&in_grid, Some("grid-1"))));
+        assert!(!rt.state.sidebar_shown());
+        rt.update(|s, _| assert!(s.app_key(&in_grid, Some("grid-1"))));
+        assert!(rt.state.sidebar_shown());
+        assert_eq!(sent(&rx), b"", "the chord reached the terminal");
+        // The palette's command and the intent.
+        rt.update(|s, _| s.run_cmd(palette::Run::Sidebar));
+        assert!(!rt.state.sidebar_shown());
+        rt.update(|s, _| s.run_intent("x", Intent::Sidebar { show: Some(true) }));
+        assert!(rt.state.sidebar_shown());
+        // A link that shows a sandbox's row shows the sidebar first.
+        rt.update(|s, _| s.set_sidebar(false));
+        rt.update(|s, _| s.run_intent("statusbar", Intent::Select { sandbox: Some("web-app".into()) }));
+        assert!(rt.state.sidebar_shown(), "select from elsewhere shows it");
+        // A restart: as it was left.
+        rt.update(|s, _| s.set_sidebar(false));
+        let b = store::Store::at(Some(p.clone()));
+        assert_eq!(b.get("sidebar")["hidden"], true, "the next run starts with it hidden");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
