@@ -24,6 +24,12 @@
 #   top-gui  the top bar in GUI (Sessions), Lead Mode Off;
 #   lead-tui Lead Mode On in TUI: only the team leaders' terminals;
 #   lead-gui Lead Mode On in GUI: Sessions lists the leaders and their threads;
+#   reply    (also) billing-api main's conversation: two days, a folded step group,
+#            the lead's message, a compaction, the reply with pills;
+#   steps    its last group of steps unfolded, then one step's output;
+#   injected the lead's long message unfolded (a "From lead" card);
+#   partial  docs-site main: an older hook, the summary and what to do;
+#   conv-live retry-queue's history changes live (a result, a provisional reply replaced);
 #   under    the Monitor's Files link: the explorer over the Monitor;
 #   back     Escape there: back to the Monitor, the same session;
 #   attach   two files dropped on billing-api's session: their chips under the box;
@@ -86,10 +92,27 @@ if m == "choice":
     # N: the next session that needs you; then its row (a narrow view opens it).
     add(type="type", every=0.02, text="n"); add(type="mark", name="hold:300")
     step("monitor-row-shop-web:s-shop-main", "monitor-opt-1-1")
-if m in ("reply", "send", "attach", "attach-dialog", "attach-sent"):
+if m in ("reply", "send", "attach", "attach-dialog", "attach-sent", "steps", "injected"):
     # A short window: the idle rows are below the fold of the list.
     add(type="wheel", key="monitor-row-shop-web:s-shop-main", dy=-600); add(type="mark", name="hold:300")
-    step("monitor-row-billing-api:s-bill-main", "monitor-reply")
+    step("monitor-row-billing-api:s-bill-main", "monitor-conv-billing-api:s-bill-main")
+if m == "steps":
+    # Its last group of steps unfolded, then one step's output.
+    step("monitor-steps-g24", "monitor-step-s34")
+    step("monitor-step-s34", "monitor-out-s34")
+if m == "injected":
+    # The lead's message, unfolded in full (it is a "From lead" card, never "You").
+    add(type="wheel", key="monitor-conv-billing-api:s-bill-main", dy=-300); add(type="mark", name="hold:300")
+    step("monitor-fold-22", "monitor-from-22")
+if m == "partial":
+    # docs-site's hook is older: the summary, and the line that says what to do.
+    if os.environ.get("SIZE", "").startswith("720"):
+        add(type="wheel", key="monitor-row-shop-web:s-shop-main", dy=-300); add(type="mark", name="hold:300")
+    step("monitor-row-docs-site:s-docs-main", "monitor-conv-note")
+if m == "conv-live":
+    # retry-queue: its test result comes in, then a provisional reply, replaced by the transcript's.
+    step("monitor-row-billing-api::retry-queue", "monitor-conv-billing-api::retry-queue")
+    add(type="mark", name="hold:8000")
 if m == "send":
     add(type="tap", key="monitor-compose")
     text = "Also add a test with an empty invoice, then stop."
@@ -127,7 +150,7 @@ PY
 }
 theme="${THEME:-dark}"
 for size in ${SIZES:-1284x816 720x480}; do
-  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back attach attach-dialog attach-sent fold hidden hidden-terms top-tui top-gui lead-tui lead-gui}; do
+  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back attach attach-dialog attach-sent fold hidden hidden-terms top-tui top-gui lead-tui lead-gui steps injected partial conv-live}; do
     case "$m" in empty|idle|busy) fx="$m" ;; fold) fx=folding ;; *) fx=basic ;; esac
     out="$shots/monitor-$size-$theme-$m"
     SIZE="$size" script "$m" >"$out-script.json"

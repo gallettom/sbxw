@@ -1576,3 +1576,24 @@ fn four_hundred_items_render_within_budget() {
     // Debug build, a loaded machine: generous bounds (PERF.md's are for release, in perf.sh).
     assert!(first_ms < 400.0 && next_ms < 200.0, "render {first_ms:.1} ms, then {next_ms:.1} ms");
 }
+
+/// The subscription lasts 120 s from each read: a report of the session
+/// followed renews it once the last read is over 90 s old, not before; a
+/// report of another session reads nothing.
+#[test]
+fn a_report_of_the_followed_session_renews_an_old_subscription() {
+    let (mut d, _) = on_session("billing-api:s-bill-main");
+    calls(&mut d);
+    let info = d["sessions"].as_array().unwrap().iter().find(|i| i["session_id"] == "s-bill-main").unwrap().clone();
+    let a = on_event(&Ctx { data: &d }, "session", &info);
+    serve(&mut d, a);
+    assert!(calls(&mut d).is_empty(), "read a moment ago: nothing to renew");
+    STATE().lock().unwrap().conv.logs.get_mut(&("billing-api".to_string(), "s-bill-main".to_string())).unwrap().read_ms = 0;
+    let other = d["sessions"].as_array().unwrap().iter().find(|i| i["session_id"] == "s-docs-main").unwrap().clone();
+    let a = on_event(&Ctx { data: &d }, "session", &other);
+    serve(&mut d, a);
+    assert!(calls(&mut d).is_empty(), "another session's report reads nothing");
+    let a = on_event(&Ctx { data: &d }, "session", &info);
+    serve(&mut d, a);
+    assert_eq!(calls(&mut d), ["GET billing-api/s-bill-main before=- limit=100"], "renewed by a read");
+}

@@ -1,14 +1,17 @@
-//! Monitor: every Claude session of every sandbox in one view, who needs
-//! the person first, the selected one as a short feed (the last prompt,
-//! what it does now, its last reply, the question it waits on), and a
-//! composer to answer it. An overlay over the pane area, opened from the
-//! rail's activity zone (MONITOR.md in the artifacts has the design).
+//! Sessions (the feature `monitor`; the name code, tests and the state
+//! file use): every Claude session of every sandbox in one view, who needs
+//! the person first, the selected one's conversation as the terminal shows
+//! it (its prompts, steps and replies, then the question it waits on), and
+//! a composer to answer it. A base view of the pane area, the top bar's
+//! GUI (SESSIONS.md and MONITOR.md in the artifacts have the design).
 //!
-//! * **Data.** What the daemon serves today: the hook reports of
-//!   `GET /api/sessions` (`data.sessions`, the threads feature's key) to
-//!   start from when the view opens, then each `session` event, which
-//!   changes one card ([`model::Model::upsert`]). No transcript, no history:
-//!   a working session shows one "Now" line.
+//! * **Data.** The hook reports of `GET /api/sessions` (`data.sessions`,
+//!   the threads feature's key) to start from when the view opens, then
+//!   each `session` event, which changes one card ([`model::Model::upsert`]).
+//!   The selected session's conversation is read from the daemon's history
+//!   ([`conv`]): only that session, only while the view is drawn; the
+//!   `history` nudge reads its newest page again; another selected or the
+//!   view left deletes its subscription.
 //! * **Answering.** An option press is the relay's `agent_pick` (the
 //!   Requests panel's path, the same picks), only for a session the daemon
 //!   can answer. Typed words are `monitor_send`, of risk Approval like
@@ -19,8 +22,9 @@
 //!   the overlay (`data.app.covered`: the core's dialog, a modal, Jarvis's
 //!   proposal, the palette) or while a Jarvis proposal waits: checked here,
 //!   whatever the screen draws.
-//! * **Agent text is data.** Prompts, replies, questions and options are
-//!   drawn as text; an option's act is its index, never its words.
+//! * **Agent text is data.** Prompts, replies, steps, questions and options
+//!   are drawn as text; an option's act is its index, never its words; a
+//!   conversation row's only act is its own fold, by its id.
 
 pub mod attach;
 pub mod conv;

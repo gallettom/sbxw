@@ -19,6 +19,7 @@ terminal's `size=1` frames and one PTY size for all clients, real bells only
 | Token | `--token`, `--token-file`, else `~/.sbxw/run/ui-token` (`$HOME/.sbxw`, as `crates/daemon/src/store.rs`). The daemon mints a new one at every start, so the file is read again on every reconnect |
 | Proof | `GET /api/health?nonce=<32 hex>` must answer `proof = sha256(token ‖ nonce)` before any request carries the token (`guard.rs`, `token.rs`). A process on the port that cannot prove it never sees the token |
 | Requests | `Authorization: Bearer <token>`, no `Origin`, `Host` = the address (allowed by `allowed_hosts`) |
+| Methods | `GET` and `POST` (`Daemon::request`), and `DELETE` for one route only: Sessions' `DELETE /api/sessions/:sandbox/:session_id/history/subscription`, sent directly because it removes nothing the person made. Any other `DELETE` a feature sends goes through the core's dialog (`Confirm`), as every destructive call |
 | Down | Retries every 0.25 s, doubling to 3 s; the window shows one line (`No sbxw daemon at 127.0.0.1:7681. Start it with \`sbxw up\`; retrying.`) |
 | Restart | The event stream ends; the link reconnects (new token from the file), reads the list again, and panes whose terminal closed open again (the daemon keeps the PTY and replays its last 256 KB) |
 
@@ -149,7 +150,7 @@ each group, so a later thread can read what it expects.
 
 | Area (web UI file) | Routes |
 |---|---|
-| Session history, for the Monitor (no web UI caller; docs/session-history.md) | `GET /api/sessions/:sandbox/:session_id/history?before=&limit=` (newest page first; reading subscribes for 120 s), `DELETE /api/sessions/:sandbox/:session_id/history/subscription`, bus event `history` `{sandbox, session_id, seq}` (a nudge without text, only while subscribed); `GET /api/sessions` items gain `ended`, `end_reason`, `continues`, `last_input_from`, `last_input_sender` |
+| Session history, for Sessions (the feature `monitor`; no web UI caller; docs/session-history.md) | `GET /api/sessions/:sandbox/:session_id/history?before=&limit=` (newest page first; reading subscribes for 120 s), `DELETE /api/sessions/:sandbox/:session_id/history/subscription`, bus event `history` `{sandbox, session_id, seq}` (a nudge without text, only while subscribed); `GET /api/sessions` items gain `ended`, `end_reason`, `continues`, `last_input_from`, `last_input_sender` |
 | Sessions and agents (`main.js`, `panes.js`) | `GET /api/ptys`, `GET /api/hook/log`, `POST /api/focus`, `POST /api/watching`, `GET /api/events` (sessions only), `GET /api/watch-events`, `POST /api/sandboxes/:name/up` |
 | Relay events (`relay.js`) | `GET /api/relay/events` (the app reads `GET /api/relay` after the bus event `relay` instead) |
 | SSH card (`ssh.js`) | its routes |

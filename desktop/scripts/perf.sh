@@ -41,7 +41,10 @@ step("make the Monitor the base view", "top-view-gui", "overlay-monitor")
 # Sessions: web-app's 400-item conversation (perf-fixture.py), its steps, its earlier part.
 step("Sessions: the 400-item conversation", "monitor-row-web-app:s-perf", "monitor-conv-web-app:s-perf")
 step("Sessions: open its last group of steps", "monitor-steps-g394")
+# "Show earlier" is at the top: the conversation opens at its end.
+add(type="wheel", key="monitor-conv-web-app:s-perf", dy=-30000); add(type="mark", name="hold:400")
 step("Sessions: show earlier", "monitor-earlier")
+add(type="wheel", key="monitor-conv-web-app:s-perf", dy=-30000); add(type="mark", name="hold:400")
 step("Sessions: show earlier (the page before)", "monitor-earlier")
 step("open Commits over the Monitor", "rail-commits", "commits-row-" + row)
 step("expand a commit over the Monitor", "commits-row-" + row, "commits-file-src/area0/File0.tsx")
