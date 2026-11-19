@@ -549,11 +549,24 @@ row{ key = "title-slot", gap = 8,
   number; the row's chip shows it in place of the open sessions, its
   tooltip "4 worktrees" from `noun`), `only = "counted"` (only the
   sandboxes counted above 0; the current one stays, its chip "no worktree"),
-  `order = "count"` (the largest first, ties by name; no group headings,
+  `order = "count"` (the largest first, ties by tier, then by name; no group headings,
   each row keeps its group bar and names its group in dim text), `counting`
   (while the counts are read, an empty list says "Counting the worktrees…"
   instead of "No sandbox has a worktree"). `only` and `order` need `counts`.
   The filter field shows above 8 listed sandboxes.
+- **Order** (every screen, by default): the Sandboxes sidebar's. Each
+  sandbox's tier is the core's `scope::tier` (1 running with a live
+  session, a session busy on background work included; 2 running without
+  one, or starting; 3 stopped, stopping, failed, unreachable), the one rule
+  the sidebar reads too (as `data.app.tiers`, `{ [sandbox] = 1 | 2 | 3 }`).
+  A heading per sidebar block (Chats, a workspace of two or more), the block
+  ranked by its best member and before an ungrouped sandbox of the same
+  tier; a workspace of one is ungrouped, and ungrouped sandboxes after a
+  group get a hairline (`<id>-ungrouped-<n>`). Inside a tier, the daemon's
+  order (by name). The order is taken when the list opens and holds while it
+  is open (a state change updates the dot and the word, never the row's
+  place); the filter keeps it. `order = "name"` asks for the daemon's order
+  grouped by workspace instead (no built-in screen does).
 - **Closed**: a capsule in the sandbox's group colour (its fill the colour
   at 32% over `surface`, its edge the colour itself), the status dot (a
   ring when stopped), the name (clipped at 220 pt, whole in the tooltip),

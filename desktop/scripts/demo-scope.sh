@@ -10,8 +10,11 @@
 # most first), `empty` (Worktrees' list when none has one), `scroll`
 # (Commits' list of twenty, scrolling under its pinned filter and All),
 # `band-worktrees`, `band-files`, `band-commits` (each title band, scoped to
-# web-app; Commits on a branch, its second level).
-# Out: $SBXW_SHOTS/scope/<mark>-<theme>-<size>.png
+# web-app; Commits on a branch, its second level); `order-canvas`,
+# `order-files` (fixtures/scope/order.json, every tier: Canvas's and Files'
+# lists in the sidebar's order, live sessions first).
+#   MARKS="order-canvas order-files" SIZES=1284x816 desktop/scripts/demo-scope.sh
+# Out: $SBXW_SHOTS/scope/<mark>-<theme>-<size>.png (order-*: scope/order/)
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 shots="$shots_root/scope"; mkdir -p "$shots"
@@ -26,8 +29,14 @@ def add(**e):
     e["t"] = round(t, 2); ev.append(e); t += 0.25
 def step(key, until):
     add(type="tap", key=key); add(type="mark", name="wait:" + until)
-add(type="mark", name="wait:row-web-app")
-if m in ("ordered", "empty"):
+add(type="mark", name="wait:" + ("row-atlas-web" if m.startswith("order-") else "row-web-app"))
+if m == "order-canvas":
+    step("rail-canvas", "canvas-sandbox")
+    step("canvas-sandbox", "canvas-sandbox-list")
+elif m == "order-files":
+    step("rail-files", "files-sandbox")
+    step("files-sandbox", "files-sandbox-list")
+elif m in ("ordered", "empty"):
     step("rail-worktrees", "worktrees-sandbox")
     add(type="mark", name="hold:600")
     step("worktrees-sandbox", "worktrees-sandbox-list")
@@ -57,14 +66,16 @@ for theme in ${THEMES:-dark graphite}; do
     for m in ${MARKS:-ordered empty scroll band-worktrees band-files band-commits}; do
       fx="$here/fixtures/scope/twenty.json"
       [ "$m" = empty ] && fx="$here/fixtures/scope/no-worktrees.json"
+      out="$shots"
+      case "$m" in order-*) fx="$here/fixtures/scope/order.json"; out="$shots/order"; mkdir -p "$out" ;; esac
       name="$m-$theme-$size"
       script "$m" >"$shots/script-$m.json"
       start_daemon "$shots/standin-$name" --fixture "$fx"
       THEME="$theme" SHOT_SIZE="$size" run_app "$shots/$name.log" --script "$shots/script-$m.json" \
-        --snap "$shots/$name.png" --tree "$shots/$name.json" --at "mark:$m+0.2"
+        --snap "$out/$name.png" --tree "$out/$name.json" --at "mark:$m+0.2"
       cleanup; pids=()
       grep -hE "gave up|no element|script:" "$shots/$name.log" | sed 's/^\[[^]]*\] //' || true
-      echo "$shots/$name.png"
+      echo "$out/$name.png"
     done
   done
 done
