@@ -330,7 +330,7 @@ impl Model {
                     "text": s(q, "text"),
                     "options": q["options"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().enumerate().map(|(n, o)| {
                         let label = o.as_str().unwrap_or("");
-                        // "label — description": the decision table's line for this option.
+                        // "label, em dash, description" (the daemon's decision table): the description.
                         let desc = q["context"][n].as_str().and_then(|c| c.split_once(" \u{2014} ")).map(|(_, d)| d.trim().to_string());
                         json!({ "label": label, "desc": desc })
                     }).collect::<Vec<_>>(),
