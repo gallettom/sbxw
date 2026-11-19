@@ -151,11 +151,12 @@ impl App {
         // The feature's own sentence ("Agents wait for you: ...") is the line; it is not said twice.
         let help = if help.starts_with("Agents wait for you") { "Agents waiting for your answer: questions, screenshots, choices".to_string() } else { help };
         let tone = if count.is_some() && badge == "amber" { "amber" } else if count.is_some() { "blue" } else { "quiet-blue" };
-        all.push(Entry { key: "rail-requests".into(), icon: "ask".into(), help: format!("Requests\n{help}"), keys: App::shortcut_for("relay_open"), tone: tone.into(), on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Intent("relay_open".into(), serde_json::json!({})), disabled: false, zone: Some(Zone::Activity), order: 10, dot: None });
+        // Pressed again while its panel shows: the panel closes (as every entry that opens a view).
+        all.push(Entry { key: "rail-requests".into(), icon: "ask".into(), help: format!("Requests\n{help}"), keys: App::shortcut_for("relay_open"), tone: tone.into(), on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Toggle { name: "relay_open".into(), args: serde_json::json!({}), screen: "relay".into() }, disabled: false, zone: Some(Zone::Activity), order: 10, dot: None });
         let net = self.top_extra("approvals");
         let (count, badge) = badge_of(&net);
         let help = net.as_ref().and_then(|e| e["help"].as_str().map(str::to_string)).filter(|h| !h.is_empty()).unwrap_or_else(|| "What sbx asks you to allow, the hosts sandboxes reach".into());
-        all.push(Entry { key: "rail-network".into(), icon: "shield".into(), help: format!("Network\n{help}"), keys: App::shortcut_for("network_show"), tone: "blue".into(), on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Intent("network_show".into(), serde_json::json!({})), disabled: false, zone: Some(Zone::Activity), order: 20, dot: None });
+        all.push(Entry { key: "rail-network".into(), icon: "shield".into(), help: format!("Network\n{help}"), keys: App::shortcut_for("network_show"), tone: "blue".into(), on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Toggle { name: "network_show".into(), args: serde_json::json!({}), screen: "network".into() }, disabled: false, zone: Some(Zone::Activity), order: 20, dot: None });
         // The sidebar hidden: the way back, at the top, with the sessions that
         // want the person (the Monitor's "need you", the same reports) as its badge.
         if !self.sidebar_shown() {
@@ -186,7 +187,7 @@ impl App {
         }
         if let Some(e) = self.top_extra("setup") {
             if let Some(name) = e["intent"]["name"].as_str() {
-                all.push(Entry { key: "rail-setup".into(), icon: "gear".into(), help: format!("Settings\n{}", e["help"].as_str().unwrap_or("Setup")), keys: App::shortcut_for(name), tone: "neutral".into(), on: self.feats.modal.as_ref().is_some_and(|m| m.0 == "setup"), count: None, badge: "", run: RailRun::Intent(name.to_string(), e["intent"]["args"].clone()), disabled: false, zone: Some(Zone::Configure), order: u16::MAX, dot: None });
+                all.push(Entry { key: "rail-setup".into(), icon: "gear".into(), help: format!("Settings\n{}", e["help"].as_str().unwrap_or("Setup")), keys: App::shortcut_for(name), tone: "neutral".into(), on: self.feats.modal.as_ref().is_some_and(|m| m.0 == "setup"), count: None, badge: "", run: RailRun::Toggle { name: name.to_string(), args: e["intent"]["args"].clone(), screen: "setup".into() }, disabled: false, zone: Some(Zone::Configure), order: u16::MAX, dot: None });
             }
         }
         let pending = self.jarvis.pending_list().len();
@@ -247,6 +248,13 @@ impl App {
             bottom.insert(0, more);
         }
         RailLayout { top, bottom, folded }
+    }
+
+    /// The rail's drawn entries as `(key, lit)`, top block then bottom (tests).
+    pub fn rail_layout_keys(&self) -> (Vec<(String, bool)>, Vec<(String, bool)>) {
+        let l = self.rail_layout();
+        let f = |v: Vec<Entry>| v.into_iter().map(|e| (e.key, e.on)).collect();
+        (f(l.top), f(l.bottom))
     }
 
     /// Whether the rail draws an element of that key (`wait:` marks).

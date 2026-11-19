@@ -142,3 +142,48 @@ fn a_step_group_and_a_step_unfold_in_sessions() {
     settle(&mut rt);
     assert_ne!(drawn(&rt), before, "pressing {step} changed nothing drawn");
 }
+
+/// What the rail opens, and which entries are lit.
+fn opened(rt: &Runtime<App>) -> String {
+    let d = rt.state.screen_data();
+    let lit: Vec<String> = { let (a, b) = rt.state.rail_layout_keys(); a.into_iter().chain(b).filter(|(_, on)| *on).map(|(k, _)| k).collect() };
+    format!("overlay {} modal {} panels {} lit {lit:?}", d["app"]["overlay"]["screen"], d["app"]["modal"]["screen"], d["app"]["panels"]["shown"])
+}
+
+/// Every rail entry that opens a view, pressed twice, puts back what was
+/// there before the first press (the panel, overlay or dialog it opened
+/// closes; nothing else stays lit).
+#[test]
+fn every_rail_entry_pressed_twice_puts_back_what_was_there() {
+    let mut rt = window("shell/two-panes", &[]);
+    let keys = ["rail-requests", "rail-network", "jarvis-toggle", "rail-board", "rail-commits", "rail-worktrees", "rail-files", "rail-mac", "rail-mcp", "rail-skills", "rail-kits"];
+    // (Settings opens a dialog whose backdrop covers the rail: a second press
+    // on the rail does not reach it; Escape, its Cancel or a press outside close it.)
+    let mut bad = vec![];
+    let mut seen = 0;
+    for k in keys {
+        if rt.find(k).is_none() {
+            continue;
+        }
+        seen += 1;
+        let before = opened(&rt);
+        for n in 0..2 {
+            let Some((x, y)) = rt.find(k) else {
+                bad.push(format!("{k}: not drawn for press {}", n + 1));
+                break;
+            };
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            settle(&mut rt);
+            if n == 0 && opened(&rt) == before {
+                bad.push(format!("{k}: the first press opened nothing"));
+            }
+        }
+        let after = opened(&rt);
+        if after != before {
+            bad.push(format!("{k}: pressed twice: {after}, before: {before}"));
+        }
+    }
+    assert!(seen >= 9, "only {seen} rail entries drawn");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
