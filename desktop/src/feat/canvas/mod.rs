@@ -20,7 +20,8 @@
 //!   daemon records the round, then ONE fixed line written by sbxw is typed
 //!   into the session (`/api/chat/push`). A failure stops there; nothing is typed.
 //! * **Refusals** are checked here in Rust, not only greyed: something over
-//!   the view (`data.app.covered`), a Jarvis proposal, no session, a session
+//!   the view (`data.app.covered_top`: Canvas is an overlay, so a base view
+//!   under it does not hold it), a Jarvis proposal, no session, a session
 //!   asked something, ended, a sandbox not running.
 //! * **Memory.** The surface's pictures are dropped when the overlay closes
 //!   (`surface_canvas::close`, from `extras`, which runs on every data push).
@@ -202,7 +203,7 @@ pub fn shown(cx: &Ctx) -> bool {
 
 /// Why nothing may be sent now: something over the view, or a Jarvis proposal.
 pub fn held(cx: &Ctx) -> Option<String> {
-    if cx.data["app"]["covered"] != false {
+    if cx.data["app"]["covered_top"] != false {
         return Some("Not sent: something is open over the canvas (a dialog or a menu). Close it first.".into());
     }
     if cx.data["jarvis"]["pending"].as_array().is_some_and(|p| !p.is_empty()) {
@@ -215,7 +216,7 @@ pub fn held(cx: &Ctx) -> Option<String> {
 fn snap_of(cx: &Ctx) -> J {
     json!({
         "sessions": cx.get("sessions"), "sandboxes": cx.get("sandboxes"), "groups": cx.get("app")["groups"],
-        "covered": cx.get("app")["covered"], "jarvis": cx.get("jarvis")["pending"],
+        "covered": cx.get("app")["covered_top"], "jarvis": cx.get("jarvis")["pending"],
     })
 }
 

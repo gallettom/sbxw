@@ -8,6 +8,7 @@
 //! per pane, each with a 32 pt bar over its terminal.
 
 mod bar;
+mod dictate;
 mod drag;
 mod features;
 mod jarvis;
@@ -24,6 +25,8 @@ pub mod tiling;
 mod layout_tests;
 #[cfg(test)]
 mod gate_tests;
+#[cfg(test)]
+mod notice_tests;
 #[cfg(test)]
 mod resize_tests;
 #[cfg(test)]
@@ -285,6 +288,8 @@ pub struct App {
     pub jarvis: crate::jarvis::Jarvis,
     /// Native audio (`audio::Audio` in a window; `NullAudio` headless and in fixtures).
     pub audio: Box<dyn crate::voice::AudioIo>,
+    /// Dictation into a chat input (dictate.rs).
+    pub dictation: dictate::Dictation,
     wiring: jarvis::Wiring,
     /// The window's size in points (the root's layout).
     pub window: (f32, f32),
@@ -428,6 +433,7 @@ impl App {
             refocus: true,
             jarvis: crate::jarvis::Jarvis::default(),
             audio: Box::new(crate::voice::NullAudio::default()),
+            dictation: Default::default(),
             wiring: jarvis::Wiring::new(),
             window: (1280.0, 800.0),
             feats: features::Feats::default(),
@@ -734,6 +740,8 @@ impl App {
         // The pane area's base view (the Monitor), or null: the terminals.
         data["app"]["base"] = self.feats.base.clone().map_or(J::Null, J::String);
         data["app"]["covered"] = self.covered().into();
+        data["app"]["covered_top"] = self.covered_top().into();
+        data["app"]["dictation"] = self.dictation_data();
         // The team leads view (leads.rs), which Sessions filters by too.
         // `can`: a team runs (Lead Mode can go on); `leaders` while it is on.
         let leaders = self.leaders();
@@ -1296,6 +1304,11 @@ impl App {
     /// the core's dialog, then the modal under it. False when nothing was
     /// open (the key goes on: a field, a terminal).
     pub fn escape(&mut self) -> bool {
+        // A dictation first: nothing recorded is kept or inserted.
+        if self.dictate_cancel(Some("Dictation cancelled: nothing was inserted.")) {
+            self.push_data();
+            return true;
+        }
         if self.statusbar_escape() {
             return true;
         }
@@ -1392,7 +1405,7 @@ impl App {
             self.push_data();
             return true;
         }
-        if self.jarvis_key(ev, tx) {
+        if self.jarvis_key(ev, tx) || self.dictate_key(ev, tx) {
             self.push_data();
             return true;
         }
@@ -1563,7 +1576,14 @@ impl App {
     /// an overlay drawn over the base view (the Monitor under Files).
     pub fn covered(&self) -> bool {
         let over_base = self.feats.base.is_some() && self.feats.overlay.as_ref().map(|o| &o.0) != self.feats.base.as_ref();
-        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || over_base
+        self.covered_top() || over_base
+    }
+
+    /// `data.app.covered_top`: something over whatever view is on top (an
+    /// overlay such as Canvas, a panel, or the base view when it is the one
+    /// drawn): the core's dialog, a modal, Jarvis's proposal, the palette.
+    pub fn covered_top(&self) -> bool {
+        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some()
     }
 
     /// The input method (dead keys, CJK, emoji): to the focused pane.
@@ -1687,7 +1707,7 @@ impl App {
                 // Element keys `grid-N`, `terminal-N` (N the pane's number).
                 t.id = (i + 1).to_string();
                 // Push-to-talk and the panel's key are the shell's, even with a terminal focused.
-                t.keys.reserved = self.wiring.reserved;
+                t.keys.reserved = self.wiring.term_reserved;
                 // Headless shots: a steady cursor, so a PNG does not catch it off.
                 t.cursor_blink = !headless();
                 self.panes[i].term = Some(t);
@@ -2281,7 +2301,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .fill(c("floor"))
         .on_layout(|s: &mut App, r: [f32; 4]| s.window = (r[2], r[3]))
         .on_key_up(|s: &mut App, ev: &KeyEvent, _tx: &mut Tx| {
-            let took = s.jarvis_key_up(ev);
+            let took = s.jarvis_key_up(ev) || s.dictate_key_up(ev);
             if took {
                 s.push_data();
             }
@@ -2295,6 +2315,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             // A key held while the window loses focus never comes up here.
             if !focused {
                 s.talk_stop();
+                if s.dictation.on.as_ref().is_some_and(|t| t.held) {
+                    s.dictate_stop();
+                }
             }
         });
     // A root `on_paste` makes Rune take the primary modifier + V as a paste
@@ -2540,9 +2563,12 @@ fn notice_view(s: &App) -> Option<El> {
         "screen_restore" => "Click to see the file and restore the built-in",
         _ => "Click to open",
     });
+    // Its kind, by meaning, from what it is: an error, an offer to act
+    // (needs you), or news.
+    let (kind, ground, icon) = notice_kind(*err, what.is_some());
     let mut body = col().gap(1.0).grow(1.0).min_w(0.0).child(text(t.clone()).font(small(13.0, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
     if let Some(w) = what {
-        body = body.child(text(w).font(small(12.0, 500.0)).color(c("link")).truncate().min_w(0.0));
+        body = body.child(row().gap(2.0).items_center().child(text(w).font(small(12.0, 600.0)).color(c("text-bright")).truncate().min_w(0.0)).child(rune::icon(crate::icons::get("chevron-right").unwrap(), theme::icon::SMALL).color(c("text-bright"))));
     }
     let close = el()
         .key("notice-close")
@@ -2561,22 +2587,24 @@ fn notice_view(s: &App) -> Option<El> {
             s.feats.notice_then = None;
             s.push_data();
         })
-        .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text-muted")));
+        .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text")));
     Some(
         row()
             .key("notice")
             .role("status")
             .help(t.clone())
-            .gap(6.0)
+            .gap(8.0)
             .items_center()
             .max_w(380.0f32.min(s.window.0 * 0.35))
             .min_w(0.0)
             .mr(8.0)
-            .px(8.0)
+            .pl(11.0)
+            .pr(8.0)
             .py(4.0)
             .radius(theme::radius("sm").unwrap())
-            .fill(c(if *err { "red-tint" } else { "bg" }))
-            .border(1.0, c(if *err { "red" } else { "border" }))
+            .fill(c(ground))
+            .border_sides([0.0, 0.0, 0.0, 3.0], c(kind))
+            .shadow(2.0, 8.0, crate::theme::shadow())
             .cursor(Cursor::Pointer)
             .on_press(|s: &mut App| {
                 s.notice = None;
@@ -2586,9 +2614,21 @@ fn notice_view(s: &App) -> Option<El> {
                 }
                 s.push_data();
             })
+            .child(rune::icon(crate::icons::get(icon).unwrap(), theme::icon::MEDIUM).color(c(kind)))
             .child(body)
             .child(close),
     )
+}
+
+/// A notice's kind by meaning: red for an error, amber when
+/// it offers something to do (it needs you), blue for news.
+/// Its colour, its ground and its icon.
+pub fn notice_kind(error: bool, offer: bool) -> (&'static str, &'static str, &'static str) {
+    match (error, offer) {
+        (true, _) => ("red", "notice-error", "warning"),
+        (false, true) => ("amber", "notice-ask", "ask"),
+        _ => ("blue", "notice-info", "info"),
+    }
 }
 
 /// The pane area: the pager, then the current page's tiling.

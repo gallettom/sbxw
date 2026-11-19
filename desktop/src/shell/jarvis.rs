@@ -35,6 +35,8 @@ pub enum JEvent {
     Approved { id: String, via: &'static str, result: Result<J, (Option<u16>, String)> },
     Refused { id: String, result: Result<J, String> },
     Transcribed(Result<String, String>),
+    /// A dictation's words, masked by the daemon (`dictate.rs`).
+    Dictated { gen: u64, result: Result<String, String> },
     /// The speech of message `msg` for reading `gen` (a newer reading, a stop
     /// or the microphone makes it stale: it is then dropped, never played).
     Speech { msg: u64, gen: u64, result: Result<(u32, crate::voice::Chain), String> },
@@ -56,6 +58,9 @@ pub struct Wiring {
     pub spoken: bool,
     /// The keys terminals leave to the shell (push-to-talk, the panel's F7).
     pub reserved: &'static [Key],
+    /// What terminals leave to the shell: those, and the dictate key
+    /// (`[voice] dictate_key`) when the daemon has voice (dictate.rs).
+    pub term_reserved: &'static [Key],
     /// The panel's width while its handle is dragged.
     pub drag_from: f32,
     /// The current reading; bumped by every new reading and every stop.
@@ -80,6 +85,7 @@ impl Wiring {
             key_held: false,
             spoken: false,
             reserved: reserved_for("F8"),
+            term_reserved: reserved_for("F8"),
             drag_from: 0.0,
             read_gen: 0,
             read_stop: None,
@@ -293,12 +299,18 @@ impl App {
             log::warn!("{}", self.jarvis.key_note.as_deref().unwrap_or(""));
         }
         self.wiring.reserved = reserved_for(&code);
-        let r = self.wiring.reserved;
+        let mut keys = self.wiring.reserved.to_vec();
+        if let Some(k) = v.as_ref().and_then(|v| jarvis::key_of(v["dictate_key"].as_str().unwrap_or(super::dictate::DEFAULT_KEY)).ok()) {
+            keys.extend(k.iter().cloned());
+        }
+        self.wiring.term_reserved = Box::leak(keys.into_boxed_slice());
+        let r = self.wiring.term_reserved;
         for p in &mut self.panes {
             if let Some(t) = &mut p.term {
                 t.keys.reserved = r;
             }
         }
+        self.dictation.key_name = v.as_ref().and_then(|v| v["dictate_key"].as_str()).map(str::to_string);
         self.jarvis.voice = v;
     }
 
@@ -334,6 +346,7 @@ impl App {
     /// Drains the calls' answers and the audio's events; checks Jarvis's
     /// status while it is being created or started.
     pub(super) fn poll_jarvis(&mut self, tx: &mut Tx) -> bool {
+        self.dictate_watch(tx);
         let mut changed = self.relay_speech() | self.follow_check();
         // Headless: the virtual clock does not wait for the daemon.
         let until = headless().then(|| Instant::now() + Duration::from_millis(1500));
@@ -349,6 +362,9 @@ impl App {
         }
         for ev in self.audio.events() {
             changed = true;
+            if self.dictate_audio(&ev) {
+                continue;
+            }
             match ev {
                 AudioEvent::CaptureStarted => self.jarvis.recording = true,
                 AudioEvent::CaptureLevel(l) => self.jarvis.level = l.clamp(0.0, 1.0),
@@ -483,6 +499,7 @@ impl App {
                     self.hear(&text, true, None);
                 }
             }
+            JEvent::Dictated { gen, result } => self.dictated(gen, result),
             JEvent::Transcribed(Err(e)) => {
                 self.jarvis.say(Who::Error, format!("Could not transcribe: {e}"));
             }
@@ -696,6 +713,8 @@ impl App {
         if let Some(n) = &self.jarvis.key_note {
             log::info!("{n}");
         }
+        // Push-to-talk comes first: a dictation under way is dropped.
+        self.dictate_cancel(Some("Dictation stopped: Jarvis is listening."));
         // The microphone must not hear Jarvis: the reading ends for good,
         // including speech still being made for it.
         self.stop_reading();
@@ -792,6 +811,7 @@ impl App {
             Intent::ToggleJarvisPanel { open } => self.toggle_panel(open),
             Intent::TalkStart => self.talk_start(),
             Intent::TalkStop => self.talk_stop(),
+            Intent::Dictate { input } => self.dictate_press(from, &input),
             Intent::ReadAloud { id } => {
                 if self.jarvis.reading == Some(id) {
                     self.stop_reading();

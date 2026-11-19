@@ -95,7 +95,8 @@ unchanged.
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
 | `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
 | `sidebar_menu` | A menu of the sandbox list (a row's ⋯) is open: the list holds its order until it shuts |
-| `covered` | Something sits over the panes and over any overlay: the core's dialog, a modal, Jarvis's proposal or the palette (read only; `App::panes_covered` without the overlay itself). Sessions draws its send controls disabled then; its Rust refuses to send whatever the screen draws |
+| `covered` | Something sits over the view drawn in the pane area: the core's dialog, a modal, Jarvis's proposal, the palette, or an overlay drawn over the base view (read only, `App::covered`). What the BASE view reads: Sessions draws its send controls disabled then, and its Rust refuses to send whatever the screen draws |
+| `covered_top` | Something sits over whatever view is on top: the core's dialog, a modal, Jarvis's proposal or the palette, never an overlay (read only, `App::covered_top`). What an OVERLAY reads for its own actions: Canvas (Ask, Send, its files) is drawn over the Sessions base in GUI and must not take the base's `covered` for its own. The core's dictation uses the same split: `covered` for the Sessions composer, `covered_top` for a field of an overlay or a panel (Requests, Jarvis) |
 | `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |
 
 `data.jarvis` (every screen gets it; the `jarvis` screen draws it):
@@ -289,6 +290,7 @@ screen hears it through its actions.
 | `arg` | any value | Passed to both |
 | `secure` | bool | Bullets instead of characters (no copy, no undo) |
 | `disabled` | bool | Read only |
+| `tone` | `compose` or `plain` | `compose`: a chat input, where the person writes to an agent (the Sessions composer, Jarvis's input, Canvas's ask and remarks, a request's answer). It gets the `compose` ground, raised above the panel, and dictation (F9 held, or the `dictate` intent) writes there. Filters, searches and forms stay `plain` (the default) |
 
 ```lua
 input{ id = "filter", value = state.filter, placeholder = "Filter", on = "filter" }
@@ -310,6 +312,7 @@ off macOS) submits. The core holds the text, as for `input`.
 | `on_submit` | action name | Called on Cmd/Ctrl+Return, `value` = the text |
 | `arg` | any value | Passed to both |
 | `disabled` | bool | Read only |
+| `tone` | `compose` or `plain` | `compose`: a chat input, where the person writes to an agent (the Sessions composer, Jarvis's input, Canvas's ask and remarks, a request's answer). It gets the `compose` ground, raised above the panel, and dictation (F9 held, or the `dictate` intent) writes there. Filters, searches and forms stay `plain` (the default) |
 
 ```lua
 textarea{ id = "answer", value = state.answer, rows = 5, placeholder = "Your answer", on = "typed", on_submit = "send" }
@@ -729,6 +732,7 @@ terminal keeps its socket, history and size owner wherever its pane goes
 | `start_jarvis` | none | Creates Jarvis's sandbox the first time (a minute or two), or starts it, and opens its session; `data.jarvis.status` follows |
 | `send_to_jarvis` | `input` (the `id` of this screen's input, required) | Sends what the person typed there to Jarvis, masked first. **The core reads the text itself**, from its own copy of the input: a screen cannot pass words of its own. Emptied once sent; kept, with the reason in the log, when it could not leave. A `yes` / `oui` or `no` / `non` typed and submitted with Enter answers the waiting proposal instead: a yes approves only a low-risk one, else the log says a click is needed |
 | `talk_start`, `talk_stop` | none | Push-to-talk from a button: start recording; stop, transcribe, send to Jarvis (as `send_to_jarvis`, spoken) |
+| `dictate` | `input` (the `id` of this screen's chat input, `tone = "compose"`, required) | The microphone beside a chat input: starts dictating into it, or stops. The words are transcribed and masked by the daemon, then put in the field at its caret as if typed (its `on` action fires): never sent. Refused in Rust under a dialog, a modal, Jarvis's proposal or the palette, while Jarvis listens, without voice, or into a disabled field; Escape cancels. The screen reads `data.app.dictation` (`recording`, `transcribing`, `notice`, each with `screen` and `input`; `key`, `available`) |
 | `read_aloud` | `id` (a `log` entry's id) | Reads that message aloud |
 | `stop_reading` | none | Stops reading aloud |
 | `approve_proposal` | `id` (string) | **Risk: approval.** Opens the core's dialog for that proposal. It approves nothing: only the person's click on the dialog does |
@@ -2275,7 +2279,8 @@ The gate: while it is the base, `App::panes_covered()` is true, so no
 terminal takes a key, a paste, a press, a drop or the focus. `data.app.base`
 is its screen name (null: the terminals). `data.app.covered` is computed in
 one place (`App::covered`): the core's dialog, a modal, Jarvis's proposal,
-the palette, or an overlay drawn over the base. Drops and pasted pictures on
+the palette, or an overlay drawn over the base. An overlay drawn over it
+reads `data.app.covered_top` instead (the same without its own overlay). Drops and pasted pictures on
 it go to its feature's `on_files`, as an overlay's.
 
 ### mac

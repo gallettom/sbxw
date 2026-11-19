@@ -72,7 +72,10 @@ step("the Board: the counter again (every kind)", "board-count-commits", "board-
 step("the Board: the summary's details", "board-summary-details", "board-detail-part-1")
 # Canvas: web-app's canvas of 15 shots, a pan and a pinch, the tools, Fit, then closed.
 step("open the Canvas", "rail-canvas", "canvas-sandbox")
-step("the Canvas: the sandbox picker", "canvas-sandbox")
+step("the Canvas: the sandbox picker", "canvas-sandbox", "canvas-sandbox-list")
+# The scope list is bounded and scrolls (11 sandboxes): web-app is below its
+# fold, so the filter (which has the keyboard) narrows it first, as a person would.
+add(type="type", text="web-app", every=0.03); t += 0.3; add(type="mark", name="hold:300")
 step("the Canvas: web-app's 15 shots", "canvas-sandbox-web-app", "canvas")
 add(type="mark", name="hold:1500")
 add(type="mark", name="perf:the Canvas: pan (wheel)"); add(type="wheel", x=560, y=450, dx=-40, dy=-30); add(type="mark", name="hold:300")

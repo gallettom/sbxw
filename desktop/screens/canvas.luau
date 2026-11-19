@@ -49,7 +49,7 @@ local function ask_block(ui, data, pick)
   local sessions = s.sessions or {}
   return column{ gap = 8, w = "full", key = "canvas-ask",
     note("Shots come from the agent: it takes screenshots of the app it works on and adds them with its canvas_add_shots tool. You can ask it here; the prompt goes only after you press Ask and confirm."),
-    textarea{ id = "canvas-ask-text", value = (ui.ask or {}).text or "", rows = 4, on = "ask_text" },
+    textarea{ id = "canvas-ask-text", value = (ui.ask or {}).text or "", rows = 4, on = "ask_text", tone = "compose" },
     (pick and #sessions > 1) and select{ id = "canvas-ask-session", value = s.session or "", items = sessions, on = "session" } or false,
     row{ gap = 8, w = "full",
       button{ "Ask the agent for screenshots", icon = "send", key = "canvas-ask-go", on = "ask", variant = "primary", disabled = not s.ask_ok,
@@ -68,7 +68,7 @@ local function remark(d)
     button{ icon = "trash", key = "canvas-remove-" .. d.key, on = "remove", arg = d.key, variant = "ghost", dense = true, tab_stop = false, help = "Remove it (it was not sent)" } }
   if d.kind == "asset" then return head end
   return column{ gap = 4, w = "full", key = "canvas-remark-" .. d.key, head,
-    textarea{ id = "canvas-text-" .. d.key, value = d.text or "", rows = d.selected and 4 or 2, on = "text", arg = d.key,
+    textarea{ id = "canvas-text-" .. d.key, value = d.text or "", rows = d.selected and 4 or 2, on = "text", arg = d.key, tone = "compose",
       placeholder = d.kind == "pin" and "What should change here?" or "A remark about the screens" } }
 end
 

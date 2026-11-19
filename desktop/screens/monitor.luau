@@ -305,10 +305,30 @@ local function composer(state, d, data)
   local refused = false
   for _, f in ipairs(files) do if f.state == "refused" then refused = true end end
   local narrow = ((data.app or {}).overlay or {}).w or 1000
+  -- Dictation (the core's, dictate.rs): what it does in this field now.
+  local dict = (data.app or {}).dictation or {}
+  local function here(x) return x and x.screen == "monitor" and x.input == "monitor-compose" end
+  local rec = here(dict.recording) and dict.recording or nil
+  local writing = here(dict.transcribing)
+  local note = here(dict.notice) and dict.notice.text or nil
+  local listening = false
+  if rec then
+    listening = row{ gap = 8, w = "full", key = "monitor-dictating",
+      dot{ tone = "red" },
+      text{ string.format("Listening %d:%02d", rec.secs // 60, rec.secs % 60), size = "sm", weight = "medium", color = "red-text" },
+      column{ w = 80, progress{ value = rec.level, tone = "red" } },
+      text{ rec.held and ("Release " .. dict.key .. " to put the words in the field. Escape cancels.") or "Press the microphone again to put the words in the field. Escape cancels.",
+        size = "sm", color = "text-muted", truncate = true, grow = 1 } }
+  elseif writing then
+    listening = text{ "Writing down your words, masked first…", size = "sm", color = "text-muted", key = "monitor-dictating" }
+  elseif note then
+    listening = text{ note, size = "sm", color = "text-muted", wrap = true, key = "monitor-dictate-note" }
+  end
   return column{ gap = 8, px = 24, py = 12, w = "full",
-    textarea{ id = "monitor-compose", rows = 2, value = draft, disabled = not c.can,
+    textarea{ id = "monitor-compose", rows = 2, value = draft, disabled = not c.can, tone = "compose",
       placeholder = c.can and ("Write to " .. c.target .. "…") or "",
       on = "typed", on_submit = "submit", arg = { key = d.key, gen = d.sent } },
+    listening,
     chips(d),
     row{ gap = 8, w = "full",
       icon{ "send", size = 12, color = "text-dim" },
@@ -317,6 +337,12 @@ local function composer(state, d, data)
       button{ narrow >= 640 and "Attach" or nil, key = "monitor-attach", icon = "plus", variant = "ghost", dense = true, on = "attach", arg = { key = d.key },
         disabled = not can or d.attach_max == true,
         help = "Attach a file to what you send (the system's file dialog); you can also drop files here or paste a picture" },
+      button{ key = "monitor-dictate", icon = "mic", variant = rec and "danger" or "ghost", dense = true, on = "dictate",
+        disabled = not rec and not can,
+        keys = (not rec and can) and { dict.key or "F9" } or nil,
+        help = rec and "Listening: press again to put the words in the field, Escape cancels"
+          or (not c.can and c.why)
+          or ("Dictate: press, speak, press again (or hold " .. (dict.key or "F9") .. "). The words are masked and put in the field; nothing is sent") },
       button{ "Send…", key = "monitor-send", icon = "send", tone = "green", on = "send", arg = { key = d.key, gen = d.sent },
         disabled = not can or refused or (draft == "" and #files == 0),
         help = "Opens the core's dialog with your words in full, the files and the session they go to", keys = { (data.app or {}).platform == "macos" and "⌘" or "Ctrl", "↩" } } },
@@ -418,6 +444,7 @@ local screen = {
     back = function(state) state.open = nil end,
     next = function() return intent("monitor_next", {}) end,
     more = function() return intent("monitor_more", {}) end,
+    dictate = function() return intent("dictate", { input = "monitor-compose" }) end,
     link = function(_, a) return intent(a.name, { key = a.key }) end,
     choose = function(_, a) return intent("monitor_pick", { key = a.key, step = a.step, option = a.option }) end,
     -- Typing sends nothing: the draft is kept, by session.

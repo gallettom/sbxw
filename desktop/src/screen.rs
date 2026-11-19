@@ -1104,6 +1104,67 @@ fn fire<S: Host>(s: &mut S, screen: &str, action: &str, arg: &J, value: &J) {
     s.screen(screen).render_if_stale();
 }
 
+/// The ground and edge of an `input` or `textarea`: a chat input
+/// (`tone = "compose"`) on its own raised ground, the rest plain. Disabled,
+/// a chat input keeps the panel's ground under a quiet edge, so it reads as
+/// closed rather than as a place to write.
+fn field_ground(e: El, n: &Node) -> El {
+    match (n.tone.as_deref() == Some("compose"), n.disabled) {
+        (true, false) => e.fill(c("compose")).border(1.0, c("compose-edge")),
+        (true, true) => e.fill(c("bg")).border(1.0, c("border")).opacity(theme::DISABLED_OPACITY),
+        _ => e.fill(c("bg")).border(1.0, c("control-border")),
+    }
+}
+
+/// Whether node `n` is a chat input: where dictation may write.
+pub fn is_compose(n: &Node) -> bool {
+    matches!(n.kind, Kind::Input | Kind::Textarea) && n.tone.as_deref() == Some("compose")
+}
+
+/// The chat input of tree `n` whose key is `key`, or with `key` `None` the
+/// first one drawn (the Sessions composer when F9 finds nothing focused).
+pub fn find_compose<'a>(n: &'a Node, key: Option<&str>) -> Option<&'a Node> {
+    if is_compose(n) && key.is_none_or(|k| key_of(n).as_deref() == Some(k)) {
+        return Some(n);
+    }
+    n.children.iter().find_map(|c| find_compose(c, key))
+}
+
+/// Dictated words, already masked by the daemon, put into screen
+/// `screen`'s chat input `key` at its caret (at its end with `at_end`), a
+/// space apart from what is there, then its `on` action fired as if typed:
+/// the words become the screen's draft, nothing is sent. Refused when the
+/// input is gone, is not a chat input, is disabled, or its `arg` is no
+/// longer `arg` (the Sessions composer moved to another session).
+pub fn type_into<S: Host>(s: &mut S, screen: &str, key: &str, arg: &J, words: &str, at_end: bool) -> Result<usize, &'static str> {
+    let st = s.screen(screen);
+    let n = st.last_good.as_ref().and_then(|t| find_compose(t, Some(key))).ok_or("the field is gone")?;
+    if n.disabled {
+        return Err("the field takes no words now");
+    }
+    if &n.arg != arg {
+        return Err("the session changed while you spoke");
+    }
+    let (id, on, value) = (n.id.clone().unwrap_or_default(), n.on.clone(), n.value.as_str().unwrap_or("").to_string());
+    let edit = &mut st.ui.edits.entry(id.clone()).or_insert_with(|| (TextEdit::new(value.clone()), Some(value))).0;
+    if at_end {
+        edit.set_caret(edit.text.len());
+    }
+    let caret = edit.range().0;
+    let before = edit.text[..caret].chars().next_back();
+    let words = words.trim();
+    let gap = if before.is_some_and(|c| !c.is_whitespace()) { " " } else { "" };
+    edit.insert(&format!("{gap}{words}"));
+    let text = edit.text.clone();
+    if let Some(on) = on {
+        let arg = arg.clone();
+        s.screen(screen).ui.editing = true;
+        fire(s, screen, &on, &arg, &J::String(text));
+        s.screen(screen).ui.editing = false;
+    }
+    Ok(words.chars().count())
+}
+
 fn apply(mut e: El, st: &Style, help: &Option<String>) -> El {
     match st.w {
         Some(Size::Pt(w)) => e = e.w(w),
@@ -1407,7 +1468,7 @@ impl Build<'_> {
                     .single_line()
                     .key(key.clone().unwrap_or_default())
                     .color(c("text-bright"))
-                    .placeholder(n.placeholder.clone().unwrap_or_default(), c("text-dim"))
+                    .placeholder(n.placeholder.clone().unwrap_or_default(), c(if is_compose(n) && !n.disabled { "text-muted" } else { "text-dim" }))
                     .w_full()
                     .on_edit(move |s: &mut S| &mut s.screen(&name).ui.edits.get_mut(&id2).expect("input synced").0);
                 if n.secure {
@@ -1432,7 +1493,7 @@ impl Build<'_> {
                 if n.disabled {
                     t = t.read_only(true);
                 }
-                el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(theme::radius("sm").unwrap()).focus_within_ring(2.0, 1.0, c("focus")).child(t)
+                field_ground(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center(), n).radius(theme::radius("sm").unwrap()).focus_within_ring(2.0, 1.0, c("focus")).child(t)
             }
             Kind::Icon => {
                 let i = crate::icons::get(&n.text).expect("checked icon");
@@ -1514,7 +1575,7 @@ impl Build<'_> {
                 let mut t = text_input(&edit, body(size, 400.0))
                     .key(key.clone().unwrap_or_default())
                     .color(c("text-bright"))
-                    .placeholder(n.placeholder.clone().unwrap_or_default(), c("text-dim"))
+                    .placeholder(n.placeholder.clone().unwrap_or_default(), c(if is_compose(n) && !n.disabled { "text-muted" } else { "text-dim" }))
                     .w_full()
                     .on_edit(move |s: &mut S| &mut s.screen(&name).ui.edits.get_mut(&id2).expect("textarea synced").0);
                 if let Some(on) = n.on.clone() {
@@ -1543,7 +1604,7 @@ impl Build<'_> {
                     t = t.read_only(true);
                 }
                 let h = n.rows as f32 * (size * theme::LINE_HEIGHT).round() + 16.0;
-                col().w_full().h(h).px(8.0).py(8.0).fill(c("bg")).border(1.0, c("control-border")).radius(theme::radius("sm").unwrap()).focus_within_ring(2.0, 1.0, c("focus")).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
+                field_ground(col().w_full().h(h).px(8.0).py(8.0), n).radius(theme::radius("sm").unwrap()).focus_within_ring(2.0, 1.0, c("focus")).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
             }
             Kind::Image => match crate::picture::shown(key.as_deref().unwrap_or("")) {
                 Some((px, (w, h))) => {
