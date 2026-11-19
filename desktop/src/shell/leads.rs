@@ -160,11 +160,37 @@ mod tests {
     use super::super::layout_tests::Rig;
     use super::*;
 
+    /// The fixture's link answers on threads of its own (the first list, the
+    /// first reads of every data key). Wait, on those threads and not on a
+    /// clock, until they all landed, then detach the link: nothing arrives
+    /// after the data a test sets, however loaded the machine (an `Up` or a
+    /// list landing late used to undo `listed` and `sandboxes`).
+    fn quiet(r: &mut Rig) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let clock = r.clock;
+            r.rt.update(|s, tx| {
+                s.poll(clock, tx);
+            });
+            if r.rt.state.link_quiet() {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "the fixture's link never settled");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        r.rt.update(|s, _| {
+            s.drain(None, false);
+            s.link = None;
+        });
+    }
+
     fn rig() -> Rig {
         let mut r = Rig::new(&["a", "b", "c", "d"], 1284.0, 816.0);
+        quiet(&mut r);
         r.rt.update(|s, _| {
             s.sandboxes = ["a", "b", "c", "d", "e"].iter().map(|n| crate::client::Sandbox::new(n, "claude", "running")).collect();
             s.feats.data.insert("leads".into(), serde_json::json!(["a", "c", "e"]));
+            s.feats.data.insert("plans".into(), serde_json::json!([]));
         });
         r.settle();
         r
@@ -317,7 +343,10 @@ mod tests {
         });
         assert!(r.rt.state.leads_on() && !r.rt.state.leads_restore);
         let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
+        quiet(&mut r);
         r.rt.update(|s, tx| {
+            s.feats.data.remove("leads");
+            s.feats.data.remove("plans");
             s.leads_restore = true;
             s.listed = true;
             s.poll(1.0, tx);
@@ -325,8 +354,32 @@ mod tests {
         assert!(r.rt.state.leads_restore, "the teams are not read yet: it waits");
         r.rt.update(|s, tx| {
             s.feats.data.insert("leads".into(), serde_json::json!([]));
+            s.feats.data.insert("plans".into(), serde_json::json!([]));
             s.poll(2.0, tx);
         });
         assert!(!r.rt.state.leads_on() && !r.rt.state.leads_restore, "no team: off, and it waits no more");
+    }
+
+    /// A team known only by its plan (a thread still at work, the sandbox
+    /// not made lead): the made-lead list read first must not decide alone.
+    #[test]
+    fn lead_mode_waits_for_the_plans_as_well_as_the_leads() {
+        let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
+        quiet(&mut r);
+        r.rt.update(|s, tx| {
+            s.sandboxes = ["a", "b"].iter().map(|n| crate::client::Sandbox::new(n, "claude", "running")).collect();
+            s.feats.data.remove("plans");
+            s.feats.data.insert("leads".into(), serde_json::json!([]));
+            s.store.set(LEAD_KEY, J::Bool(true));
+            s.leads_restore = true;
+            s.listed = true;
+            s.poll(1.0, tx);
+        });
+        assert!(r.rt.state.leads_restore && !r.rt.state.leads_on(), "the plans are not read yet: it waits");
+        r.rt.update(|s, tx| {
+            s.feats.data.insert("plans".into(), serde_json::json!([{ "id": "p", "sandbox": "a", "state": "approved", "threads": [{ "state": "working" }] }]));
+            s.poll(2.0, tx);
+        });
+        assert!(r.rt.state.leads_on() && !r.rt.state.leads_restore, "a team still runs by its plan: Lead Mode is back");
     }
 }

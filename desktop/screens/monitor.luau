@@ -29,25 +29,35 @@ local function square(data, sb)
   return c and column{ w = 8, h = 8, radius = 2, fill = c } or column{ w = 8, h = 8, radius = 2, border = "text-dim" }
 end
 
+-- One line a row: the status dot, the names, a chip and the time. Nested
+-- under its leader (Lead Mode), a thread row names the thread alone. Each
+-- name clips on its own (the thread keeps about 8 characters); the whole
+-- activity line is the row's tooltip, and why a session needs the person
+-- stays on the row, under it.
+-- The list's width beside the detail (the names, not the activity).
+local LIST_W = 280
+
 local function list_row(r, sel, now, color)
   local when = ago(r.ts, now)
   local sig = tostring(r.rev) .. "|" .. when .. "|" .. tostring(sel) .. "|" .. tostring(color) .. "|" .. tostring(r.indent)
   local m = memo[r.key]
   if m and m.sig == sig then return m.el end
   built = built + 1
-  local el = row{ key = "monitor-row-" .. r.key, on = "pick", arg = r.key, selected = sel,
-    fill = sel and "active-bg" or nil, hover = "hover-subtle", radius = "sm", px = 8, py = 8, gap = 8, w = "full", align = "start",
+  local nested = r.indent
+  local el = row{ key = "monitor-row-" .. r.key, on = "pick", arg = r.key, selected = sel, help = r.help,
+    fill = sel and "active-bg" or nil, hover = "hover-subtle", radius = "sm", px = 8, py = 4, gap = 8, w = "full", align = "start",
     -- Team leads on: a leader's thread, one step in under its leader.
-    r.indent and column{ w = 16, h = 1 } or false,
+    nested and column{ w = 16, h = 1 } or false,
     column{ py = 4, dot{ tone = r.tone } },
-    column{ grow = 1, gap = 2,
-      row{ gap = 4, w = "full",
-        color and column{ w = 8, h = 8, radius = 2, fill = color } or false,
-        text{ r.sandbox, weight = "medium", color = "text-bright", truncate = true },
-        text{ r.name, size = "sm", color = r.thread and "text-muted" or "text-dim", truncate = true, grow = 1 },
-        text{ when, size = "sm", color = "text-dim" } },
-      r.ask and text{ r.ask, size = "sm", weight = "medium", color = "amber" } or false,
-      text{ r.line, size = "sm", color = "text-muted", truncate = true, mono = r.mono, pills = r.sandbox } } }
+    column{ grow = 1, gap = 2, min_w = 0,
+      row{ gap = 4, w = "full", min_w = 0,
+        (not nested and color) and column{ py = 4, column{ w = 8, h = 8, radius = 2, fill = color } } or false,
+        (not nested) and text{ r.sandbox, key = "monitor-row-sb-" .. r.key, weight = "medium", color = "text-bright", truncate = true, min_w = r.chip and 56 or 72, max_w = 150, help = r.sandbox } or false,
+        text{ r.name, key = "monitor-row-name-" .. r.key, size = "sm", color = nested and "text-bright" or (r.thread and "text-muted" or "text-dim"),
+          weight = nested and "medium" or nil, truncate = true, grow = 1, min_w = r.chip and 48 or 56, help = r.name },
+        r.chip and text{ r.chip, size = "sm", pills = r.sandbox, key = "monitor-row-chip-" .. r.key } or false,
+        text{ when, size = "sm", color = "text-dim", key = "monitor-row-when-" .. r.key } },
+      r.ask and text{ r.ask, size = "sm", weight = "medium", color = "amber", truncate = true } or false } }
   memo[r.key] = { sig = sig, el = el }
   return el
 end
@@ -194,7 +204,10 @@ local function conv_row(r, d, now)
   return false
 end
 
-local function feed(d, now, data)
+-- `stick`: the conversation follows its end (it opens there). Once a fold
+-- is pressed it stops following until the next selection: opening a block
+-- near the end would otherwise slide everything above it up.
+local function feed(d, now, data, stick)
   local kids = { gap = 12, px = 24, py = 16, w = "full" }
   local c = d.conv
   local seen = {}
@@ -244,7 +257,7 @@ local function feed(d, now, data)
   if d.now then
     kids[#kids + 1] = row{ gap = 8, px = 12, py = 8, radius = "sm", border = "elevated", w = "full", key = "monitor-now",
       icon{ "sparkle", size = 12, color = "blue" }, text{ "Now", size = "sm", weight = "medium", color = "blue" },
-      text{ d.now, mono = true, size = "sm", color = "text", truncate = true, grow = 1 }, text{ ago(d.ts, now), size = "sm", color = "text-dim" } }
+      text{ d.now, mono = d.now_mono ~= false, size = "sm", color = "text", truncate = true, grow = 1 }, text{ ago(d.ts, now), size = "sm", color = "text-dim" } }
   end
   if d.question then
     kids[#kids + 1] = question_card(d, data)
@@ -254,7 +267,7 @@ local function feed(d, now, data)
   if #kids == 0 then
     kids[#kids + 1] = text{ "Nothing to read yet: the session has not reported a prompt or a reply.", color = "text-muted", wrap = true }
   end
-  return scroll{ grow = 1, fade = 12, stick_bottom = true, key = "monitor-conv-" .. d.key, column(kids) }
+  return scroll{ grow = 1, fade = 12, stick_bottom = stick ~= false, key = "monitor-conv-" .. d.key, column(kids) }
 end
 
 local function draft_of(state, d)
@@ -395,15 +408,20 @@ local screen = {
     local more = more_rows(v.count, { key = "monitor-more", on = "more", what = "sessions" })
     if more then rows[#rows + 1] = more end
     local you = counts.you or 0
-    local top = row{ px = 12, py = 8, gap = 8, w = "full",
-      -- The view's title says "Sessions" already: the list's head is its count.
-      text{ leads and "Team leaders and their threads" or (counts.total or 0) .. " session" .. ((counts.total or 0) == 1 and "" or "s"), key = "monitor-count", size = "sm", weight = "medium", color = "text-muted" }, spacer{},
+    local head_text = leads and "Team leaders and their threads" or (counts.total or 0) .. " session" .. ((counts.total or 0) == 1 and "" or "s")
+    local top = row{ px = 12, py = 8, gap = 8, w = "full", min_w = 0,
+      -- The view's title says "Sessions" already: the list's head is its
+      -- count. It clips (whole in its tooltip); what needs you never does.
+      text{ head_text, key = "monitor-count", size = "sm", weight = "medium", color = "text-muted", truncate = true, grow = 1, help = head_text },
       you > 0 and button{ you .. " need" .. (you == 1 and "s" or "") .. " you", key = "monitor-next", tone = "amber", dense = true, on = "next",
         help = "The next session that needs you", keys = { "N" } }
         or text{ "Nothing needs you", key = "monitor-calm", size = "sm", color = "text-dim" } }
-    local left = column{ gap = 0, w = "full", h = "full", top, scroll{ grow = 1, column(rows) } }
+    -- Wide (beside the detail): a fixed width, enough for a sandbox and a
+    -- thread name (each clips on its own); the detail takes the rest.
+    local side = overlay_wide(data) and d
+    local left = column{ gap = 0, w = side and LIST_W or "full", h = "full", min_w = 0, key = "monitor-list-col", top, scroll{ grow = 1, column(rows) } }
     local middle = d and column{ h = "full", grow = 1, key = "monitor-detail",
-      header(d, data), divider{}, feed(d, now, data), divider{}, composer(state, d, data) }
+      header(d, data), divider{}, feed(d, now, data, state.unstuck ~= d.key), divider{}, composer(state, d, data) }
     if not overlay_wide(data) or not d then
       -- Narrow: the list, or the session a press opened, with the way back.
       if d and state.open == d.key then
@@ -413,13 +431,14 @@ local screen = {
       end
       return column{ h = "full", w = "full", left }
     end
-    local wide = ((data.app or {}).overlay or {}).w or 1000
-    return split{ id = "monitor-split", vertical = true, ratio = wide >= 1100 and 0.3 or 0.38, left, middle }
+    return row{ h = "full", w = "full", gap = 0, align = "stretch", key = "monitor-columns",
+      left, column{ w = 1, h = "full", fill = "border", key = "monitor-divider" }, column{ grow = 1, h = "full", min_w = 0, middle } }
   end,
   actions = {
     load = function() return intent("monitor_open", {}) end,
     pick = function(state, key)
       state.open = key
+      state.unstuck = nil
       return intent("monitor_select", { key = key })
     end,
     back = function(state) state.open = nil end,
@@ -446,7 +465,10 @@ local screen = {
       return intent("monitor_send", { key = a.key, text = string.find(text or "", "%S") and text or nil })
     end,
     attach = function(_, a) return intent("monitor_attach", { key = a.key }) end,
-    expand = function(_, a) return intent("monitor_expand", { key = a.key, id = a.id }) end,
+    expand = function(state, a)
+      state.unstuck = a.key
+      return intent("monitor_expand", { key = a.key, id = a.id })
+    end,
     earlier = function(_, a) return intent("monitor_earlier", { key = a.key }) end,
     retry = function(_, a) return intent("monitor_retry", { key = a.key }) end,
     unattach = function(_, a) return intent("monitor_attach_remove", { key = a.key, id = a.id }) end,

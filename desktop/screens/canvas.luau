@@ -14,7 +14,7 @@ local function pickers(data, ui)
   local cur = ui.current or {}
   local w = (((data.app or {}).overlay or {}).w or 1000)
   return row{ key = "title-slot", gap = 8,
-    sandbox_picker(data, { id = "canvas-sandbox", value = ui.sandbox, items = ui.sandboxes or {}, on = "sandbox", placeholder = "pick a sandbox" }),
+    select{ id = "canvas-sandbox", value = ui.sandbox or "", on = "sandbox", scope = "sandbox", placeholder = "Pick a sandbox" },
     menu{ cur.title and (w >= 600 and cur.title or "Canvas") or "No canvas", id = "canvas-pick", items = ui.canvases or {}, on = "pick", icon = "canvas" },
     w >= 900 and text{ ui.storage or "", size = "xs", color = "text-muted", key = "canvas-storage" } or false,
   }
@@ -43,15 +43,20 @@ local function toolbar(ui, wide)
   return row(out)
 end
 
-local function ask_block(ui, data)
+-- `pick`: offer the session picker here (the empty view has no send bar).
+local function ask_block(ui, data, pick)
   local s = ui.send or {}
+  local sessions = s.sessions or {}
   return column{ gap = 8, w = "full", key = "canvas-ask",
     note("Shots come from the agent: it takes screenshots of the app it works on and adds them with its canvas_add_shots tool. You can ask it here; the prompt goes only after you press Ask and confirm."),
     textarea{ id = "canvas-ask-text", value = (ui.ask or {}).text or "", rows = 4, on = "ask_text" },
+    (pick and #sessions > 1) and select{ id = "canvas-ask-session", value = s.session or "", items = sessions, on = "session" } or false,
     row{ gap = 8, w = "full",
       button{ "Ask the agent for screenshots", icon = "send", key = "canvas-ask-go", on = "ask", variant = "primary", disabled = not s.ask_ok,
-        help = s.ask_ok and ("Types this prompt into " .. (s.to or "the session") .. " after one confirmation") or (s.why or "") },
-      text{ s.to or "", size = "xs", color = "text-muted", truncate = true, grow = 1 } } }
+        help = s.ask_ok and ("Types this prompt into " .. (s.to or "the session") .. " after one confirmation") or (s.ask_why or "") },
+      text{ s.to or "", size = "xs", color = "text-muted", truncate = true, grow = 1 } },
+    -- A disabled Ask says why, on screen (a tooltip alone is not seen).
+    (not s.ask_ok and s.ask_why) and text{ s.ask_why, size = "xs", color = "text-muted", wrap = true, key = "canvas-ask-why" } or false }
 end
 
 local function remark(d)
@@ -120,8 +125,9 @@ return {
       head[#head + 1] = scroll{ key = "canvas-empty-scroll", column{ gap = 12, w = "full", py = 24, key = "canvas-empty",
         text{ ui.empty == "loading" and "Reading the canvas…" or "No canvas for this sandbox yet", weight = "semibold", color = "text-bright" },
         note("A canvas collects screenshots of the app an agent works on. Zoom and move over them, pin remarks on a point, add notes and example pictures, then send your remarks: the agent reads them with its canvas_read tool."),
-        row{ gap = 8, button{ "New canvas", icon = "plus", key = "canvas-new", on = "pick", arg = "new", disabled = (ui.sandbox or "") == "" } },
-        ask_block(ui, data) } }
+        row{ gap = 8, button{ "New canvas", icon = "plus", key = "canvas-new", on = "pick", arg = "new", disabled = (ui.sandbox or "") == "" },
+          (ui.sandbox or "") == "" and text{ "Pick a sandbox first, in the title", size = "xs", color = "text-muted", key = "canvas-new-why" } or false },
+        ask_block(ui, data, true) } }
       head.h = "full"
       return column(head)
     end
@@ -136,7 +142,7 @@ return {
       (not wide) and text{ ui.storage or "", size = "xs", color = "text-muted", truncate = true } or false }
     local surface = column{ grow = 1, h = "full", min_w = 0, min_h = 0, gap = 8, key = "canvas-surface-col",
       toolbar(ui, wide),
-      ui.empty == "shots" and ask_block(ui, data) or false,
+      ui.empty == "shots" and ask_block(ui, data, false) or false,
       canvas{ id = "canvas" } }
     local panel = column{ w = wide and 320 or "full", h = "full", gap = 8,
       column{ grow = 1, min_h = 0, w = "full", scroll{ key = "canvas-side", side(ui, data) } }, sendbar(ui) }
@@ -156,7 +162,13 @@ return {
   end,
   actions = {
     sandbox = function(_, _, v) return intent("canvas_sandbox", { name = v }) end,
-    pick = function(_, a, v) return intent("canvas_pick", { id = v or a }) end,
+    pick = function(_, a, v)
+      local id = v or a
+      -- A removed sandbox's canvases (the scope picker lists only the
+      -- sandboxes that exist): offered in the canvas menu.
+      if type(id) == "string" and string.sub(id, 1, 3) == "sb:" then return intent("canvas_sandbox", { name = string.sub(id, 4) }) end
+      return intent("canvas_pick", { id = id })
+    end,
     rename_open = function() return intent("canvas_rename", { open = true }) end,
     rename_close = function() return intent("canvas_rename", { open = false }) end,
     rename = function(_, _, v) return intent("canvas_rename", { title = v or "" }) end,

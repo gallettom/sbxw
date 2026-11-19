@@ -12,6 +12,9 @@
 //!   turn ends (`state` goes from `working` or `attention` to `idle`) with a
 //!   `reply`, that reply is Jarvis's answer (chat-core.js, `chatIngest`). The
 //!   first look comes from `GET /api/sessions` (last prompt and reply).
+//!   A turn that ends while the session still has background work of its
+//!   own stays `working` with `background` set and its reply: that interim
+//!   reply is an answer too, once ([`reply_ready`]).
 //! * **Proposals.** `GET /api/jarvis` and the `jarvis` bus event (one
 //!   proposal's `ui_view`). A new pending one opens the dialog and arms the
 //!   next yes or no: a low-risk one is approved by a spoken or typed yes
@@ -27,6 +30,33 @@ pub const SANDBOX: &str = "sbxw-jarvis";
 pub const MIN_W: f32 = 280.0;
 pub const MAX_W: f32 = 720.0;
 pub const DEFAULT_W: f32 = 380.0;
+
+/// The one rule for "this session event brings a reply to announce", shared
+/// by Jarvis, the relay's follow (`feat/relay/follow.rs`) and the web UI
+/// (`chatReplyReady` in assets/js/chat-core.js; both are checked against
+/// tests/fixtures/reply-ready.json). `in_turn`: the reader last saw the
+/// session `working` or `attention`. `last`: the reply it last handled.
+///
+/// A reply is ready when a turn ends with one (`idle`, or `exited`), or when
+/// a turn ends while the session waits on background work of its own
+/// (`working` with `background` set and a reply): the interim reply. Either
+/// way only when it differs from `last`, so a later event of the same wait,
+/// or its fall back to idle with the same words, announces nothing.
+pub fn reply_ready<'a>(in_turn: bool, info: &'a J, last: Option<&str>) -> Option<&'a str> {
+    let reply = info["reply"].as_str().filter(|r| !r.trim().is_empty())?;
+    let ended = match info["state"].as_str().unwrap_or("") {
+        "idle" | "exited" => true,
+        "working" => info["background"].is_object(),
+        _ => false,
+    };
+    (in_turn && ended && last != Some(reply)).then_some(reply)
+}
+
+/// `working` with `background` set: the turn is over, the session waits on
+/// work of its own (a background command, agent or wakeup).
+pub fn busy(info: &J) -> bool {
+    info["state"] == "working" && info["background"].is_object()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Who {
@@ -332,17 +362,26 @@ impl Jarvis {
         let in_turn = prev == "working" || prev == "attention";
         let mut show = None;
         match state.as_str() {
+            "working" if busy(info) => {
+                // The turn ended on background work: its words are an
+                // answer now, once; the final one comes at idle.
+                show = reply_ready(in_turn || (!known && awaiting), info, s.reply.as_deref()).map(str::to_string);
+                if let Some(r) = info["reply"].as_str().filter(|r| !r.trim().is_empty()) {
+                    s.reply = Some(r.to_string());
+                }
+                s.question = None;
+                if show.is_some() {
+                    self.awaiting = false;
+                }
+            }
             "working" => {
                 // A new turn: the same words later are a new answer.
                 s.reply = None;
                 s.question = None;
             }
             "idle" => {
-                let reply = info["reply"].as_str().filter(|r| !r.trim().is_empty());
-                if let Some(r) = reply {
-                    if (in_turn || (!known && awaiting)) && s.reply.as_deref() != Some(r) {
-                        show = Some(r.to_string());
-                    }
+                show = reply_ready(in_turn || (!known && awaiting), info, s.reply.as_deref()).map(str::to_string);
+                if let Some(r) = info["reply"].as_str().filter(|r| !r.trim().is_empty()) {
                     s.reply = Some(r.to_string());
                 }
                 s.question = None;
@@ -647,6 +686,42 @@ mod tests {
         let mut j = Jarvis::default();
         j.seed_sessions(&[json!({ "sandbox": SANDBOX, "state": "idle", "last_input": "hi", "reply": "Hello." })]);
         assert_eq!(j.log.len(), 2);
+    }
+
+    #[test]
+    fn the_reply_rule_matches_the_shared_cases() {
+        let t: J = serde_json::from_str(include_str!("../../tests/fixtures/reply-ready.json")).unwrap();
+        for c in t["cases"].as_array().unwrap() {
+            let got = reply_ready(c["in_turn"] == true, &c["info"], c["last"].as_str());
+            assert_eq!(got, c["ready"].as_str(), "{}", c["name"]);
+        }
+    }
+
+    #[test]
+    fn an_interim_reply_at_a_busy_stop_and_the_final_one_are_each_said_once() {
+        let mut j = Jarvis::default();
+        let bg = json!({ "shells": 1, "agents": 0, "other": 0, "wakeups": 0 });
+        let busy = |reply: &str, bg: &J| json!({ "sandbox": SANDBOX, "session_id": "s", "state": "working", "reply": reply, "background": bg });
+        j.sent();
+        j.ingest_session(&json!({ "sandbox": SANDBOX, "session_id": "s", "state": "working" }));
+        assert!(j.ingest_session(&busy("Build started, I will tell you.", &bg)).is_some(), "the interim reply");
+        assert!(!j.awaiting, "answered");
+        // Later events of the same wait (the idle reminder, a subagent's
+        // tool, a second shell): nothing new.
+        assert_eq!(j.ingest_session(&busy("Build started, I will tell you.", &bg)), None);
+        assert_eq!(j.ingest_session(&busy("Build started, I will tell you.", &json!({ "shells": 2, "agents": 0, "other": 0, "wakeups": 0 }))), None);
+        // The wake-up starts a turn; its end is the final reply, once.
+        j.ingest_session(&json!({ "sandbox": SANDBOX, "session_id": "s", "state": "working" }));
+        assert!(j.ingest_session(&json!({ "sandbox": SANDBOX, "session_id": "s", "state": "idle", "reply": "Build passed." })).is_some());
+        assert_eq!(j.ingest_session(&json!({ "sandbox": SANDBOX, "session_id": "s", "state": "idle", "reply": "Build passed." })), None);
+        let said: Vec<&str> = j.log.iter().filter(|m| m.who == Who::Jarvis).map(|m| m.text.as_str()).collect();
+        assert_eq!(said, vec!["Build started, I will tell you.", "Build passed."]);
+        // The wait running out (an hour, no event) is idle with the same
+        // words: not said again.
+        let mut j = Jarvis::default();
+        j.ingest_session(&json!({ "sandbox": SANDBOX, "session_id": "s", "state": "working" }));
+        assert!(j.ingest_session(&busy("Waiting.", &bg)).is_some());
+        assert_eq!(j.ingest_session(&json!({ "sandbox": SANDBOX, "session_id": "s", "state": "idle", "reply": "Waiting." })), None);
     }
 
     #[test]

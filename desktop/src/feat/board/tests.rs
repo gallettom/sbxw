@@ -267,12 +267,24 @@ fn window(w: f32, h: f32) -> Runtime<App> {
     rt
 }
 
+/// Frames until the fixture's link has answered everything asked (its
+/// calls run on threads of their own: a loaded machine answers after a fixed
+/// count of frames, and the drawing checked was the one before), then a
+/// few more for the drawing to follow.
 fn settle(rt: &mut Runtime<App>) {
-    for _ in 0..12 {
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut quiet = 0;
+    while quiet < 12 {
         rt.frame(0.05);
         rt.update(|s, tx| {
             s.poll(0.0, tx);
         });
+        let busy = !rt.state.link_quiet();
+        quiet = if busy { 0 } else { quiet + 1 };
+        if busy {
+            assert!(std::time::Instant::now() < end, "the fixture's link never settled");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 }
 

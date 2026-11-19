@@ -1197,6 +1197,8 @@ mod tests {
             for m in ["green", "blue", "amber", "red", "text-muted"] {
                 note(&format!("`{m}` on a tint (rail)"), contrast(color_value(m).unwrap(), tint), 3.0);
             }
+            // A sandbox with several sessions in its group (sandboxes.luau): its bar, the group's colour, on the tint.
+            note("a sandbox's session bar on its group's tint (mark)", contrast(g, tint), 3.0);
             note("group label on its tint (text)", contrast(label, tint), 4.5);
             note("group label on its hover tint (text)", contrast(label, hover), 4.5);
             note("group square on its tint (mark)", contrast(g, tint), 3.0);
@@ -1204,6 +1206,14 @@ mod tests {
             // The bubble's number on its fill, and the selected row over a tint (opaque).
             note("`bg` on `blue` (the bubble)", contrast(color_value("bg").unwrap(), color_value("blue").unwrap()), 4.5);
             note("`bg` on `amber` (the bubble)", contrast(color_value("bg").unwrap(), color_value("amber").unwrap()), 4.5);
+        }
+        // An ungrouped sandbox with several sessions and no colour: its block is `surface-alt`.
+        let alt = color_value("surface-alt").unwrap();
+        for t in ["text-bright", "text", "text-muted", "amber", "blue", "red-text", "vendor-anthropic", "vendor-openai", "vendor-google"] {
+            note(&format!("`{t}` on the neutral session block (text)"), contrast(color_value(t).unwrap(), alt), 4.5);
+        }
+        for m in ["green", "blue", "amber", "red", "text-muted"] {
+            note(&format!("`{m}` on the neutral session block (rail)"), contrast(color_value(m).unwrap(), alt), 3.0);
         }
         println!("| Over every group tint | Worst | Needs |\n|---|---|---|");
         for (w, r, need) in &worst {

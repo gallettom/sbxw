@@ -636,6 +636,31 @@ pub enum Delivery {
     Drop,
 }
 
+/// The line typed into an addressee's session when a team note waits for it:
+/// sbxw's words, never the note's. When sbxw cannot tell the session has the
+/// tool to read it (`known` false), the line says what to do without it.
+pub fn note_line(seq: u64, kind: &str, from: &str, known: bool) -> String {
+    let mut line = format!("[sbxw team note · {seq}] A {kind} from {from} for you: read it with the read_team_notes tool (MCP sbxw-relay).");
+    if !known {
+        line.push_str(&format!(" If your session has no such tool, ask {from} to resend it by SendMessage."));
+    }
+    line
+}
+
+/// The line typed into a thread's session when other threads were merged
+/// into `base` (sbxw's own words: thread names and a branch name, nothing an
+/// agent wrote). `None` when nothing was merged.
+pub fn main_moved_line(merged: &[String], base: Option<&str>) -> Option<String> {
+    if merged.is_empty() {
+        return None;
+    }
+    let base = base.filter(|b| !b.is_empty() && !b.contains(char::is_whitespace)).unwrap_or("main");
+    Some(format!(
+        "[sbxw] {base} moved: {} merged. Check `git merge-tree --write-tree {base} HEAD` before you go on.",
+        merged.join(", ")
+    ))
+}
+
 /// A session waiting on a question or a permission prompt would take a typed
 /// line as an answer (a menu's pick): never typed then.
 pub fn note_delivery(state: Option<crate::agents::SessionState>) -> Delivery {
@@ -779,5 +804,24 @@ mod tests {
         let all = timeline(&p, &log, &[], &[], &[], 1000);
         let (talk, _) = page(&all, &Filter { group: Some("conversation"), ..Default::default() }, None, 100);
         assert!(talk.iter().all(|e| e.kind != EventKind::Claim) && talk.len() == all.len() - 1, "all but claims");
+    }
+
+    #[test]
+    fn the_main_moved_line_names_the_threads_and_the_base_only() {
+        assert_eq!(main_moved_line(&[], Some("main")), None);
+        let l = main_moved_line(&["a".into(), "b".into()], Some("dev")).unwrap();
+        assert_eq!(l, "[sbxw] dev moved: a, b merged. Check `git merge-tree --write-tree dev HEAD` before you go on.");
+        assert!(main_moved_line(&["a".into()], None).unwrap().starts_with("[sbxw] main moved: a merged."));
+        assert!(main_moved_line(&["a".into()], Some("x y")).unwrap().contains("--write-tree main HEAD"));
+        assert!(!l.contains('\n'));
+    }
+
+    #[test]
+    fn a_note_line_never_carries_the_note_and_says_what_to_do_without_the_tool() {
+        let known = note_line(4, "warning", "api", true);
+        assert_eq!(known, "[sbxw team note · 4] A warning from api for you: read it with the read_team_notes tool (MCP sbxw-relay).");
+        let unsure = note_line(4, "warning", "api", false);
+        assert!(unsure.starts_with(&known) && unsure.ends_with("ask api to resend it by SendMessage."));
+        assert!(!unsure.contains('\n'));
     }
 }

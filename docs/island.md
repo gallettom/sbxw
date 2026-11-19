@@ -159,6 +159,18 @@ end by itself. Nothing about answering or typing into the session changes:
 to any working session. A Claude Code that sends neither field gives the old
 reading (`idle`).
 
+The turn's `reply` is recorded at that busy `Stop`, so a reader that
+announces replies (Jarvis, the relay's follow, the web chat) treats two
+moments as "a reply is ready": a move to `idle` with a reply, and a
+`working` event with `background` set and a reply; each only when the reply
+differs from the last one it handled. The interim reply ("the build runs, I
+will tell you") is announced at the busy `Stop`, the final one at the real
+`idle`, each once: later events of the same wait, or its fall back to `idle`
+after an hour with the same words, announce nothing. The rule is written
+once per language (`reply_ready` in desktop/src/jarvis.rs, `chatReplyReady`
+in assets/js/chat-core.js), both checked against
+tests/fixtures/reply-ready.json.
+
 A session's last payload says `ended: true` with an `end_reason`, and a new
 session says which one it `continues` when the daemon can tell (the same
 claude process after `/clear`, or a resumed transcript). From hook v3, a

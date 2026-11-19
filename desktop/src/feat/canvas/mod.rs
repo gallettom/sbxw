@@ -30,7 +30,7 @@ pub mod model;
 #[cfg(test)]
 mod tests;
 
-use crate::feat::monitor::model::{who, Group};
+use crate::feat::monitor::model::who;
 use crate::feat::{Action, Asked, Call, Confirm, Ctx, Extra, Feature, Incoming, Place, ScreenDecl, Slot, Zone};
 use crate::intent::{Arg, Risk, Spec};
 use crate::surface_canvas::{self as sc, CanvasEvent, Tool, ZoomCmd};
@@ -212,21 +212,12 @@ pub fn held(cx: &Ctx) -> Option<String> {
     None
 }
 
-/// The sessions of `sb` a send may go to, main first: `(key, label, info)`.
-pub fn sessions_of<'a>(cx: &'a Ctx, sb: &str) -> Vec<(String, String, &'a J)> {
-    let mut v: Vec<(String, String, &J)> = cx
-        .get("sessions")
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|i| i["sandbox"] == sb && Group::of(i["state"].as_str().unwrap_or("")) != Group::Ended)
-        .map(|i| {
-            let t = i["thread"].as_str().filter(|t| !t.is_empty());
-            (t.map_or_else(|| sb.to_string(), |t| format!("{sb}::{t}")), who(sb, t), i)
-        })
-        .collect();
-    v.sort_by_key(|(k, _, _)| (k.contains("::"), k.clone()));
-    v
+/// What the view and the verdict read of the app's data.
+fn snap_of(cx: &Ctx) -> J {
+    json!({
+        "sessions": cx.get("sessions"), "sandboxes": cx.get("sandboxes"), "groups": cx.get("app")["groups"],
+        "covered": cx.get("app")["covered_top"], "jarvis": cx.get("jarvis")["pending"],
+    })
 }
 
 fn wake() {
@@ -238,10 +229,7 @@ fn wake() {
 
 impl State {
     fn snap(&mut self, cx: &Ctx) {
-        self.snap = json!({
-            "sessions": cx.get("sessions"), "sandboxes": cx.get("sandboxes"), "groups": cx.get("app")["groups"],
-            "covered": cx.get("app")["covered_top"], "jarvis": cx.get("jarvis")["pending"],
-        });
+        self.snap = snap_of(cx);
     }
 
     fn read_list(&self) -> Action {
@@ -310,6 +298,9 @@ impl State {
             "canvas_sandbox" => {
                 let sb = a.req("name").to_string();
                 self.sandbox = Some(sb.clone());
+                // A new scope: the list read again (another sandbox's canvases
+                // may have come since).
+                out.push(self.read_list());
                 let latest = self.latest_of(&sb);
                 out.extend(self.show_canvas(latest));
             }
@@ -388,7 +379,7 @@ impl State {
             "canvas_session" => {
                 let k = a.req("key");
                 let sb = self.sandbox.clone().unwrap_or_default();
-                if !sessions_of(cx, &sb).iter().any(|(key, _, _)| key == k) {
+                if !model::places(&snap_of(cx), &sb).iter().any(|(key, _, _)| key == k) {
                     return Err(format!("{k} is not a live session of {sb}"));
                 }
                 self.session = Some(k.to_string());
@@ -785,22 +776,13 @@ impl State {
     /// The session a send goes to, checked now: `(sandbox, thread, its info)`.
     pub fn target(&self, cx: &Ctx) -> Result<(String, Option<String>, J), String> {
         let sb = self.sandbox.clone().ok_or("Not sent: no sandbox is shown")?;
-        let list = sessions_of(cx, &sb);
-        let key = self.session.clone().filter(|k| list.iter().any(|(x, _, _)| x == k)).or_else(|| list.first().map(|(k, _, _)| k.clone())).ok_or_else(|| format!("Not sent: {sb} has no open agent session. Open one first."))?;
-        let (_, label, info) = list.iter().find(|(k, _, _)| *k == key).cloned().unwrap();
-        let thread = info["thread"].as_str().filter(|t| !t.is_empty()).map(str::to_string);
-        match Group::of(info["state"].as_str().unwrap_or("")) {
-            Group::You => return Err(format!("Not sent: {label} waits on a question or a permission; answer that first.")),
-            Group::Ended => return Err(format!("Not sent: {label} has ended.")),
-            _ => {}
+        // The view's own verdict (`model::verdict`), on the data as it is now.
+        let v = model::verdict(&snap_of(cx), Some(&sb), self.session.as_deref(), false);
+        if let Some(why) = v.why {
+            return Err(format!("Not sent: {why}."));
         }
-        if thread.is_none() && info["answerable"] != true {
-            return Err(format!("Not sent: sbxw cannot tell which terminal is {label}'s. Answer in its terminal."));
-        }
-        if cx.sandbox(&sb).is_some_and(|x| x["status"] != "running") || cx.sandbox(&sb).is_none() {
-            return Err(format!("Not sent: {sb} is not running."));
-        }
-        Ok((sb, thread, info.clone()))
+        let thread = v.info["thread"].as_str().filter(|t| !t.is_empty()).map(str::to_string);
+        Ok((sb, thread, v.info))
     }
 
     fn send(&mut self, cx: &Ctx) -> Result<Vec<Action>, String> {
@@ -1016,7 +998,7 @@ impl State {
     /// what the last action saw of the app.
     pub fn ui(&self, cx: Option<&Ctx>) -> Action {
         let snap = match cx {
-            Some(cx) => json!({ "sessions": cx.get("sessions"), "sandboxes": cx.get("sandboxes"), "groups": cx.get("app")["groups"], "covered": cx.get("app")["covered_top"], "jarvis": cx.get("jarvis")["pending"] }),
+            Some(cx) => snap_of(cx),
             None => self.snap.clone(),
         };
         Action::Set { key: UI.into(), value: model::view(self, &snap) }

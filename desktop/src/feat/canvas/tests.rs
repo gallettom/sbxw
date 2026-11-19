@@ -528,6 +528,136 @@ fn under_a_dialog_the_canvas_neither_pans_nor_zooms_and_nothing_is_drawn_outside
     }
 }
 
+// ---------------------------------------------------------------------------
+// Who the Ask and the send go to: one verdict for the button and the press.
+
+/// An empty canvas: the Ask button's reason is its own (not the send bar's
+/// "No new pin"), and every refusal reads the same on the button and on the press.
+#[test]
+fn ask_says_its_own_reason_and_the_button_and_the_press_agree() {
+    let mut w = World::new("empty");
+    let a = w.intent("canvas_show", json!({})).unwrap();
+    w.run(a);
+    assert_eq!(w.ui()["send"]["ask_ok"], true, "{}", w.ui()["send"]);
+    assert!(w.ui()["send"]["why"].as_str().unwrap().contains("No new pin"), "the send bar's reason stays the send bar's");
+    assert!(w.ui()["send"]["ask_why"].is_null());
+    let cases: Vec<(&str, Box<dyn Fn(&mut J)>, &str)> = vec![
+        ("jarvis", Box::new(|d: &mut J| d["jarvis"]["pending"] = json!([{ "id": "j1" }])), "A Jarvis proposal waits"),
+        ("covered", Box::new(|d: &mut J| d["app"]["covered_top"] = true.into()), "open over the canvas"),
+        ("question", Box::new(|d: &mut J| d["sessions"][0]["state"] = "attention".into()), "waits on a question or a permission"),
+        ("unanswerable", Box::new(|d: &mut J| d["sessions"][0]["answerable"] = false.into()), "cannot tell which terminal"),
+        ("stopped", Box::new(|d: &mut J| d["sandboxes"][0]["status"] = "stopped".into()), "is not running"),
+        ("none", Box::new(|d: &mut J| d["sessions"] = json!([])), "no open agent session"),
+    ];
+    for (what, f, why) in cases {
+        let mut w = World::new("empty");
+        let a = w.intent("canvas_show", json!({})).unwrap();
+        w.run(a);
+        f(&mut w.data);
+        let a = w.intent("canvas_tool", json!({ "tool": "select" })).unwrap();
+        w.run(a);
+        let shown = w.ui()["send"]["ask_why"].as_str().unwrap_or_else(|| panic!("{what}: no reason shown")).to_string();
+        assert!(shown.contains(why), "{what}: {shown}");
+        assert_eq!(w.ui()["send"]["ask_ok"], false, "{what}");
+        let e = w.intent("canvas_ask", json!({})).unwrap_err();
+        // The press says what the button said (the held checks are the
+        // press's own first words, the same rule).
+        if what == "jarvis" || what == "covered" {
+            assert!(e.contains(if what == "jarvis" { "Jarvis proposal" } else { "open over the canvas" }), "{what}: {e}");
+        } else {
+            assert_eq!(e, format!("Not asked: {shown}"), "{what}");
+        }
+        // A session's own refusal names who can be asked instead.
+        if what == "question" || what == "unanswerable" {
+            assert!(shown.contains("Or pick web-app · checkout-ui instead"), "{what}: {shown}");
+            let a = w.intent("canvas_session", json!({ "key": "web-app::checkout-ui" })).unwrap();
+            w.run(a);
+            assert_eq!(w.ui()["send"]["ask_ok"], true, "{what}: the thread picked can be asked");
+            assert!(w.intent("canvas_ask", json!({})).is_ok());
+        }
+    }
+}
+
+/// A sandbox's main checkout with an old session waiting on a question and
+/// the live one working: the live one is asked; the label and the push are
+/// that session's.
+#[test]
+fn a_stale_question_beside_the_live_main_session_does_not_hold_the_ask() {
+    let mut w = World::new("empty");
+    let a = w.intent("canvas_show", json!({})).unwrap();
+    w.run(a);
+    w.data["sessions"] = json!([
+        { "sandbox": "web-app", "mode": "claude", "state": "attention", "started_ms": 1, "ts": 100, "answerable": false, "session_id": "old-aaaa" },
+        { "sandbox": "web-app", "mode": "claude", "state": "working", "started_ms": 2, "ts": 200, "answerable": true, "session_id": "live-bbbb" },
+    ]);
+    let a = w.intent("canvas_tool", json!({ "tool": "select" })).unwrap();
+    w.run(a);
+    let s = w.ui()["send"].clone();
+    assert_eq!(s["ask_ok"], true, "{s}");
+    assert_eq!(s["sessions"].as_array().unwrap().len(), 2, "two live sessions in one checkout: two to pick from");
+    assert_eq!(s["to"], "web-app · main · bbbb", "{s}");
+    let a = w.intent("canvas_ask", json!({})).unwrap();
+    let c = w.confirm(&a);
+    w.press(&c);
+    let push = w.calls.iter().find(|c| c.path == "/api/chat/push").unwrap();
+    assert_eq!(push.body["name"], "web-app");
+    assert!(push.body["thread"].is_null());
+}
+
+/// The scope picker in the title: the capsule names the sandbox, the overlay
+/// takes its frame, a pick reads the list again and shows that sandbox's
+/// canvas, a pre-scoped open selects its sandbox; on the empty view a
+/// disabled Ask says why on screen and the session picker is there.
+#[test]
+fn the_title_carries_the_scope_capsule_and_a_disabled_ask_says_why_on_screen() {
+    let mut rt = window::opened(1284.0, 816.0);
+    let label = |rt: &rune::Runtime<crate::shell::App>| rt.elements().into_iter().find(|e| !e.exiting && e.key.as_deref() == Some("canvas-sandbox")).and_then(|e| e.label).unwrap_or_default();
+    assert_eq!(label(&rt), "Scope: web-app (running)");
+    assert!(window::rect(&rt, "overlay-strip-canvas").is_some(), "the overlay's coloured frame");
+    // A pick: the list read again, the other sandbox's canvas (none: empty view).
+    window::tap(&mut rt, "canvas-sandbox");
+    window::tap(&mut rt, "canvas-sandbox-docs");
+    window::settle(&mut rt, 8);
+    assert_eq!(STATE().lock().unwrap().sandbox.as_deref(), Some("docs"));
+    assert!(label(&rt).starts_with("Scope: docs"), "{}", label(&rt));
+    assert!(window::rect(&rt, "canvas-empty").is_some(), "docs has no canvas");
+    // docs has no session: the Ask is disabled and says why, visibly.
+    let why = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("canvas-ask-why")).expect("the reason on screen");
+    assert!(why.visible[2] > 1.0 && why.visible[3] > 1.0, "visible: {:?}", why.visible);
+    // A pre-scoped open (a pane's menu, Sessions) selects its sandbox.
+    let list = crate::intent::parse(&json!({ "kind": "intent", "name": "canvas_show", "args": { "sandbox": "web-app" } })).unwrap();
+    rt.update(|s, _| list.into_iter().for_each(|i| s.run_intent("test", i)));
+    window::settle(&mut rt, 8);
+    assert_eq!(STATE().lock().unwrap().sandbox.as_deref(), Some("web-app"), "the open's sandbox");
+    assert!(window::rect(&rt, "overlay-canvas").is_some(), "still open");
+    for _ in 0..50 {
+        if label(&rt) == "Scope: web-app (running)" {
+            break;
+        }
+        window::settle(&mut rt, 2);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(label(&rt), "Scope: web-app (running)");
+}
+
+/// The title row at 1284 and 720: the capsule, the canvas menu, the storage
+/// line, Rename and Delete side by side, none over another, all in the overlay.
+#[test]
+fn the_title_row_does_not_overlap_at_1284_or_720() {
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+        let rt = window::opened(w, h);
+        let ov = window::rect(&rt, "overlay-canvas").expect("the overlay");
+        let keys = ["canvas-sandbox", "canvas-pick", "canvas-storage", "canvas-rename-open", "canvas-delete"];
+        let rects: Vec<(&str, [f32; 4])> = keys.iter().filter_map(|k| window::rect(&rt, k).map(|r| (*k, r))).collect();
+        assert!(rects.iter().any(|(k, _)| *k == "canvas-sandbox") && rects.iter().any(|(k, _)| *k == "canvas-pick"), "{w}: {rects:?}");
+        for (i, (a, r)) in rects.iter().enumerate() {
+            assert!(r[0] >= ov[0] - 0.5 && r[0] + r[2] <= ov[0] + ov[2] + 0.5, "{w}: {a} {r:?} leaves {ov:?}");
+            for (b, q) in &rects[i + 1..] {
+                let apart = r[0] + r[2] <= q[0] + 0.5 || q[0] + q[2] <= r[0] + 0.5 || r[1] + r[3] <= q[1] + 0.5 || q[1] + q[3] <= r[1] + 0.5;
+                assert!(apart, "{w}: {a} {r:?} overlaps {b} {q:?}");
+            }
+        }
+    }
 /// Canvas drawn over the Sessions base view (GUI): the base is covered
 /// (`covered`), Canvas is not (`covered_top`): its Ask and Send are its
 /// own to refuse; a dialog, a modal, a proposal or the palette (all

@@ -671,7 +671,12 @@ async function callTeamTool(name, args) {
       15000,
     );
     const told = Array.isArray(res.told) && res.told.length ? ` ${res.told.join(", ")} told.` : " Nobody's session is open to tell now: they read it when they next call read_team_notes.";
-    return textResult(`Sent (note ${res.note}). It is on the team's Board.${told}`, false);
+    // sbxw cannot tell these sessions have read_team_notes (one started
+    // before its relay had it never says so): send them the words directly.
+    const unsure = Array.isArray(res.unsure) && res.unsure.length
+      ? ` ${res.unsure.join(", ")} may not be able to read team notes: send it by SendMessage too.`
+      : "";
+    return textResult(`Sent (note ${res.note}). It is on the team's Board.${told}${unsure}`, false);
   }
   if (name === "read_team_notes") {
     const res = await relay.request("/api/team/notes", { from: relay.me, thread: THREAD || undefined }, 15000);
@@ -1369,6 +1374,44 @@ async function handle(msg) {
       return { __error: { code: -32601, message: `Method not found: ${msg.method}` } };
   }
 }
+
+// ── Hello ─────────────────────────────────────────────────────────────────
+//
+// Tells sbxw which tools this server offers, keyed by the Claude process it
+// serves (`<pid>:<start>`, found as status-hook.js finds it): how the daemon
+// knows a session can read a team note before it types that one waits. Tool
+// names only. Said at start and every 2 minutes (a daemon restart forgets it),
+// silent on any error, and the timer never keeps the process alive.
+
+function agentProc() {
+  const LAUNCHERS = new Set(["sh", "bash", "dash", "zsh", "fish", "env", "timeout"]);
+  let pid = process.pid;
+  for (let depth = 0; depth < 24 && pid > 1; depth++) {
+    let stat;
+    try {
+      stat = fs.readFileSync("/proc/" + pid + "/stat", "utf8");
+    } catch (_) {
+      return null;
+    }
+    const open = stat.indexOf("("), close = stat.lastIndexOf(")");
+    if (open < 0 || close < open) return null;
+    const after = stat.slice(close + 1).trim().split(/\s+/);
+    if (depth > 0 && !LAUNCHERS.has(stat.slice(open + 1, close))) return after[19] ? `${pid}:${after[19]}` : null;
+    pid = parseInt(after[1], 10);
+    if (!Number.isFinite(pid)) return null;
+  }
+  return null;
+}
+
+function hello() {
+  const proc = agentProc();
+  if (!proc) return;
+  relay
+    .request("/api/relay/hello", { thread: THREAD || undefined, agent_proc: proc, tools: TOOLS.map((t) => t.name) }, 5000)
+    .catch(() => {});
+}
+hello();
+setInterval(hello, 2 * 60 * 1000).unref();
 
 // ── stdio loop ────────────────────────────────────────────────────────────
 

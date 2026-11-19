@@ -1,0 +1,401 @@
+{
+ "about": "order.json with fjord and ivy in panes 1 and 2: their session blocks open (the grey block of a sandbox with no workspace, ivy's own tint), atlas-web's open in its group (a session wants you), with its bar.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "aurora",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": null,
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "birch",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": null,
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "chat-ideas",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": null,
+    "chat": true,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "chat-notes",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": null,
+    "chat": true,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "atlas-api",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": "/Users/me/dev/atlas",
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "atlas-ops",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": "/Users/me/dev/atlas",
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "atlas-web",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/dev/atlas",
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "cobalt",
+    "agent": "claude",
+    "status": "running",
+    "workspace": null,
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "delta",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": null,
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "ember",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/dev/ember",
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "fjord",
+    "agent": "claude",
+    "status": "running",
+    "workspace": null,
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "granite",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": null,
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "harbor-a",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": "/Users/me/dev/harbor",
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "harbor-b",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": "/Users/me/dev/harbor",
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   },
+   {
+    "name": "ivy",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/dev/ivy",
+    "chat": false,
+    "created_at": null,
+    "detached": false,
+    "remote_control": false,
+    "old_sbx": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "unreachable_since": null
+   }
+  ],
+  "sessions": [
+   {
+    "sandbox": "atlas-web",
+    "mode": "claude",
+    "state": "working",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001,
+    "model": "claude-opus-5-5"
+   },
+   {
+    "sandbox": "atlas-web",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001,
+    "thread": "copy",
+    "cwd": "/Users/me/dev/atlas",
+    "model": "claude-opus-5-5"
+   },
+   {
+    "sandbox": "atlas-web",
+    "mode": "claude",
+    "state": "attention",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001,
+    "thread": "search",
+    "cwd": "/Users/me/dev/atlas/.sbxw-worktrees/search",
+    "model": "claude-opus-5-5"
+   },
+   {
+    "sandbox": "ember",
+    "mode": "claude",
+    "state": "working",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001,
+    "model": "claude-opus-5-5"
+   },
+   {
+    "sandbox": "fjord",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001,
+    "model": "claude-opus-5-5"
+   },
+   {
+    "sandbox": "fjord",
+    "mode": "claude",
+    "state": "working",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001,
+    "thread": "parser",
+    "cwd": "/workspace",
+    "model": "claude-opus-5-5"
+   },
+   {
+    "sandbox": "fjord",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001,
+    "thread": "lexer",
+    "cwd": "/workspace",
+    "model": "claude-opus-5-5"
+   },
+   {
+    "sandbox": "ivy",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001,
+    "model": "claude-opus-5-5"
+   },
+   {
+    "sandbox": "ivy",
+    "mode": "claude",
+    "state": "working",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001,
+    "thread": "styles",
+    "cwd": "/Users/me/dev/ivy/.sbxw-worktrees/styles",
+    "model": "claude-opus-5-5"
+   }
+  ],
+  "threads": {
+   "atlas-web": {
+    "ok": true,
+    "threads": [
+     {
+      "name": "copy",
+      "open": true,
+      "repo": "",
+      "model": "claude-sonnet-5-5",
+      "worktree": "same"
+     },
+     {
+      "name": "search",
+      "open": true,
+      "repo": "",
+      "model": "claude-sonnet-5-5",
+      "worktree": "own"
+     }
+    ],
+    "open": 3,
+    "max": 5
+   },
+   "ember": {
+    "ok": true,
+    "threads": [],
+    "open": 1,
+    "max": 5
+   },
+   "fjord": {
+    "ok": true,
+    "threads": [
+     {
+      "name": "parser",
+      "open": true,
+      "repo": "",
+      "model": "claude-sonnet-5-5",
+      "worktree": "same"
+     },
+     {
+      "name": "lexer",
+      "open": true,
+      "repo": "",
+      "model": "claude-sonnet-5-5",
+      "worktree": "same"
+     }
+    ],
+    "open": 3,
+    "max": 5
+   },
+   "ivy": {
+    "ok": true,
+    "threads": [
+     {
+      "name": "styles",
+      "open": true,
+      "repo": "",
+      "model": "claude-sonnet-5-5",
+      "worktree": "own"
+     }
+    ],
+    "open": 2,
+    "max": 5
+   }
+  },
+  "plans": []
+ },
+ "app": {
+  "panes": 2,
+  "open": [
+   "fjord",
+   "ivy"
+  ],
+  "split": "columns"
+ }
+}
