@@ -146,7 +146,7 @@ pub(crate) static PANE_DROPS: std::sync::atomic::AtomicUsize = std::sync::atomic
 /// under a dialog or a modal, so a window resized behind one still fits;
 /// not under an overlay, which keeps the panes' sizes as they were.
 fn layout_lens(i: usize) -> impl Fn(&mut App) -> Option<&mut TerminalState> + Clone + 'static {
-    move |s: &mut App| if s.feats.overlay.is_some() { None } else { s.panes.get_mut(i).and_then(|p| p.term.as_mut()) }
+    move |s: &mut App| if s.feats.overlay.is_some() || s.feats.base.is_some() { None } else { s.panes.get_mut(i).and_then(|p| p.term.as_mut()) }
 }
 
 /// Headless script marks the app acts on.
@@ -458,8 +458,15 @@ impl App {
                 Err(e) => log::warn!("could not write {}: {e}", dir.display()),
             }
         }
+        app.kept_base();
         for p in &init.panels {
-            // An overlay screen (MCP servers, Skills, Kits, Commits...) opens over the pane area.
+            // A base view (the Monitor): the pane area shows it instead of the terminals.
+            if crate::feat::screen(p).is_some_and(|(_, s)| matches!(s.slot, crate::feat::Slot::Base { .. })) {
+                app.feats.base = Some(p.clone());
+                app.feats.overlay = Some((p.clone(), J::Null));
+                continue;
+            }
+            // An overlay screen (MCP servers, Skills, Kits, Commits...) opens over the pane area (over the base, if any).
             if crate::feat::screen(p).is_some_and(|(_, s)| matches!(s.slot, crate::feat::Slot::Overlay { .. })) {
                 app.feats.overlay = Some((p.clone(), J::Null));
                 continue;
@@ -698,8 +705,9 @@ impl App {
             (Some((n, _)), None) => serde_json::json!({ "screen": n }),
             _ => J::Null,
         };
-        // Something over the panes and over any overlay: the core's dialog, a modal, Jarvis's proposal, the palette.
-        data["app"]["covered"] = (self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some()).into();
+        // The pane area's base view (the Monitor), or null: the terminals.
+        data["app"]["base"] = self.feats.base.clone().map_or(J::Null, J::String);
+        data["app"]["covered"] = self.covered().into();
         data
     }
 
@@ -1063,6 +1071,11 @@ impl App {
             self.restore_layout();
             changed = true;
         }
+        // The base view of the last run, once the sessions it shows are read.
+        if self.feats.base_restore && self.listed && self.feats.data.contains_key("sessions") {
+            self.restore_base();
+            changed = true;
+        }
         changed |= self.poll_jarvis(tx);
         if self.screens.iter().any(|s| s.loads != s.checked) {
             self.check_overrides();
@@ -1232,6 +1245,13 @@ impl App {
             self.push_data();
             return true;
         }
+        // A popup of the view drawn over the pane area (an overlay or the
+        // base): its feature closes it (`<name>_key {key: "escape"}`), the view stays.
+        if let Some(intent) = self.popup_escape() {
+            self.press_extra("keys", &intent, &serde_json::json!({ "key": "escape" }));
+            self.push_data();
+            return true;
+        }
         // Then the overlay over the pane area.
         if self.close_overlay() {
             self.push_data();
@@ -1333,7 +1353,10 @@ impl App {
         }
         // The overlay over the pane area and its close button.
         if let Some((n, _)) = &self.feats.overlay {
-            if key == "overlay-close" || key == format!("overlay-{n}") || key == format!("overlay-head-{n}") {
+            let base = self.feats.base.as_ref() == Some(n);
+            // A base view has the view switch where an overlay has its ×.
+            let head = if base { key.starts_with("base-view") } else { key == "overlay-close" };
+            if head || key == format!("overlay-{n}") || key == format!("overlay-head-{n}") {
                 return true;
             }
         }
@@ -1436,8 +1459,30 @@ impl App {
     /// Something is over the panes: the core's dialog, a modal, a feature's
     /// overlay, Jarvis's dialog, the palette. No terminal takes input then,
     /// by the window's path (`terminal_may_take_keys`) or its grid's (`lens`).
+    /// The intent Escape goes to first when the view drawn over the pane
+    /// area (an overlay, or the base view) shows a popup of its own: its
+    /// `<name>_ui.popup` is true and its `<name>_key` takes `escape`.
+    pub fn popup_escape(&self) -> Option<String> {
+        let (name, _) = self.feats.overlay.as_ref()?;
+        if self.feats.data.get(&format!("{name}_ui")).is_none_or(|u| u["popup"] != true) {
+            return None;
+        }
+        let intent = format!("{name}_key");
+        let takes = crate::intent::spec(&intent).is_some_and(|sp| sp.args.iter().any(|(n, a, _)| *n == "key" && matches!(a, crate::intent::Arg::OneOf(l) if l.contains(&"escape"))));
+        takes.then_some(intent)
+    }
+
+    /// A base view (the Monitor) instead of the terminals covers them too.
     pub fn panes_covered(&self) -> bool {
-        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.jarvis.shown.is_some() || self.palette.is_some()
+        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.feats.base.is_some() || self.jarvis.shown.is_some() || self.palette.is_some()
+    }
+
+    /// `data.app.covered`: something over the panes and over the view drawn
+    /// there: the core's dialog, a modal, Jarvis's proposal, the palette, or
+    /// an overlay drawn over the base view (the Monitor under Files).
+    pub fn covered(&self) -> bool {
+        let over_base = self.feats.base.is_some() && self.feats.overlay.as_ref().map(|o| &o.0) != self.feats.base.as_ref();
+        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || over_base
     }
 
     /// The input method (dead keys, CJK, emoji): to the focused pane.
@@ -1966,7 +2011,18 @@ impl App {
                 let name = sandbox.clone();
                 l.run(d, format!("stop {sandbox}"), move |d| d.stop_sandbox(&name));
             }
-            Intent::Select { sandbox } => self.selected = sandbox,
+            Intent::Select { sandbox } => {
+                // A link elsewhere that shows a sandbox's row (a status bar's,
+                // the Board's) shows the sidebar first; its own rows never hide it.
+                if sandbox.is_some() && !self.sidebar_shown() && !from.starts_with("feature:") {
+                    self.set_sidebar(true);
+                }
+                self.selected = sandbox
+            }
+            Intent::Sidebar { show } => {
+                let show = show.unwrap_or(!self.sidebar_shown());
+                self.set_sidebar(show);
+            }
             Intent::SetTheme { theme: t } => {
                 let t = t.unwrap_or(self.theme_choice.next());
                 self.set_theme(t)
@@ -2642,8 +2698,20 @@ impl App {
     }
 
     pub fn toggle_sidebar(&mut self) {
-        let hidden = self.sidebar_shown();
-        self.store.set_in("sidebar", "hidden", if hidden { J::Bool(true) } else { J::Null });
+        self.set_sidebar(!self.sidebar_shown());
+    }
+
+    /// Shows or hides the sandboxes sidebar, remembered (the state file is
+    /// memory only in tests). The pane area takes its width at the next
+    /// layout: one size change for each terminal, not an animation.
+    pub fn set_sidebar(&mut self, show: bool) {
+        if show == self.sidebar_shown() {
+            return;
+        }
+        self.store.set_in("sidebar", "hidden", if show { J::Null } else { J::Bool(true) });
+        // No focus moves: a pane or the Monitor's list keeps the keyboard;
+        // a control of the sidebar that had it is gone, so nothing has it
+        // (never a terminal by surprise).
         self.push_data();
     }
 
@@ -4331,6 +4399,286 @@ mod tests {
         rt.frame(0.05);
         assert!(rt.state.feats.overlay.is_none(), "Escape closes Kits");
         assert_eq!(resizes(&rx), 0, "no terminal was resized");
+    }
+
+    /// The Monitor is a base view of the pane area, equal to the terminals
+    /// (`Slot::Base`): while it is the base no terminal takes a key, a
+    /// paste, a press or a drop, and none is resized; an overlay opened over
+    /// it closes back to it, one opened over the terminals back to them;
+    /// Escape never leaves it; Tabs in its header goes back to the
+    /// terminals, the keyboard on the pane that had it; the rail entry is
+    /// lit while it is the base and its press switches it off; the choice
+    /// is kept for the next run.
+    #[test]
+    fn the_monitor_is_a_base_view_and_no_terminal_takes_input_under_it() {
+        let (mut rt, rx, _clip) = window_with_terminal();
+        let p = std::env::temp_dir().join(format!("sbxw-base-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        rt.update(|s, _| s.store = store::Store::at(Some(p.clone())));
+        let resizes = |rx: &std::sync::mpsc::Receiver<crate::client::TermInput>| {
+            let mut n = 0;
+            while let Ok(i) = rx.try_recv() {
+                match i {
+                    crate::client::TermInput::Resize { .. } => n += 1,
+                    crate::client::TermInput::Bytes(b) => panic!("bytes reached the terminal under the Monitor: {b:?}"),
+                }
+            }
+            n
+        };
+        // The terminals' clock moves with the frames, so a debounced resize goes out.
+        let clock = std::cell::Cell::new(0.0f64);
+        let frames = |rt: &mut rune::Runtime<App>, n: usize| {
+            for _ in 0..n {
+                rt.frame(0.05);
+                clock.set(clock.get() + 0.05);
+                let c = clock.get();
+                rt.update(|s, tx| {
+                    s.poll(c, tx);
+                });
+            }
+        };
+        let tabs_before = rt.state.pages.tabs();
+        tap(&mut rt, "grid-1");
+        frames(&mut rt, 20);
+        resizes(&rx);
+        let pane_before = rt.presented("pane-1").unwrap().0;
+        let base = |rt: &rune::Runtime<App>| rt.state.feats.base.clone();
+        let over = |rt: &rune::Runtime<App>| rt.state.feats.overlay.as_ref().map(|o| o.0.clone());
+        // The pager's switch: Monitor.
+        tap(&mut rt, "pager-view-monitor");
+        frames(&mut rt, 6);
+        assert_eq!(base(&rt).as_deref(), Some("monitor"));
+        assert_eq!(over(&rt).as_deref(), Some("monitor"), "drawn where an overlay is");
+        assert!(rt.presented("overlay-monitor").is_some() && rt.presented("overlay-close").is_none(), "no cross on a base view");
+        assert!(rt.find("base-view-monitor").is_some() && rt.find("base-view-tabs").is_some(), "its header has the view switch");
+        assert!(rt.state.panes_covered() && !rt.state.covered(), "the panes are covered; nothing is over the Monitor");
+        assert_eq!(rt.state.screen_data()["app"]["base"], "monitor");
+        assert!(rt.state.rail_entries().0.iter().any(|e| e.key == "rail-monitor" && e.on), "its rail entry is lit");
+        assert_eq!(rt.state.store.get("base_view"), "monitor", "kept for the next run");
+        frames(&mut rt, 10);
+        assert_eq!(resizes(&rx), 0, "switching to the Monitor resized no terminal");
+        // Tabs in its header: the terminals in Tabs, the keyboard on the pane that had it.
+        tap(&mut rt, "base-view-tabs");
+        frames(&mut rt, 6);
+        assert_eq!((base(&rt), over(&rt)), (None, None));
+        assert!(rt.state.pages.tabs() && !rt.state.panes_covered());
+        rt.update(|_, tx| assert_eq!(tx.focused(), Some("grid-1"), "the keyboard is back on the pane that had it"));
+        if !tabs_before {
+            tap(&mut rt, "pager-view-grid");
+            frames(&mut rt, 10);
+            resizes(&rx);
+        }
+        tap(&mut rt, "pager-view-monitor");
+        frames(&mut rt, 6);
+        assert_eq!(base(&rt).as_deref(), Some("monitor"));
+        // Keys, chords, a paste, a press: none reaches the terminal (its grid still had Rune's focus).
+        rt.update(|_, tx| tx.focus("grid-1", false));
+        for ev in chords().into_iter().filter(|e| e.key != Key::Escape) {
+            rt.key(ev.clone());
+            rt.frame(0.02);
+            assert_eq!(base(&rt).as_deref(), Some("monitor"), "{ev:?} left the Monitor");
+        }
+        rt.paste("rm -rf ~");
+        rt.frame(0.02);
+        assert!(!rt.state.terminal_may_take_keys(Some("grid-1")), "the gate holds with the Monitor as the base");
+        let (x, y) = (pane_before[0] + pane_before[2] / 2.0, pane_before[1] + pane_before[3] / 2.0);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        // (A drop: gate_tests.rs, `a_drop_with_the_monitor_as_the_base_reaches_no_pane`.)
+        // Escape never leaves it.
+        rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+        frames(&mut rt, 2);
+        assert_eq!(base(&rt).as_deref(), Some("monitor"), "Escape does not leave the base");
+        // An overlay over it: covered; closing it (Escape, its cross, its rail entry) comes back to the Monitor.
+        for close in ["escape", "cross", "rail"] {
+            tap(&mut rt, "rail-commits");
+            frames(&mut rt, 4);
+            assert_eq!(over(&rt).as_deref(), Some("commits"), "{close}: Commits over the Monitor");
+            assert!(rt.state.covered() && rt.state.screen_data()["app"]["covered"] == true, "{close}: something is over the Monitor");
+            assert!(rt.state.rail_entries().0.iter().any(|e| e.key == "rail-monitor" && e.on), "{close}: still the base");
+            match close {
+                "escape" => rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() }),
+                "cross" => tap(&mut rt, "overlay-close"),
+                _ => tap(&mut rt, "rail-commits"),
+            }
+            frames(&mut rt, 4);
+            assert_eq!(over(&rt).as_deref(), Some("monitor"), "{close}: back to the Monitor");
+            assert!(!rt.state.covered(), "{close}");
+        }
+        // The rail entry pressed while the Monitor is under an overlay shows the Monitor.
+        tap(&mut rt, "rail-worktrees");
+        frames(&mut rt, 4);
+        tap(&mut rt, "rail-monitor");
+        frames(&mut rt, 4);
+        assert_eq!((base(&rt).as_deref(), over(&rt).as_deref()), (Some("monitor"), Some("monitor")));
+        assert_eq!(resizes(&rx), 0, "no terminal was resized while the Monitor was the base");
+        assert_eq!(rt.presented("pane-1").unwrap().0, pane_before, "the pane under it is not moved nor resized");
+        // A restart: the Monitor again, from the state file.
+        let mut b = app();
+        b.store = store::Store::at(Some(p.clone()));
+        b.kept_base();
+        assert_eq!((b.feats.base.as_deref(), b.feats.base_restore), (Some("monitor"), true), "the base survives a restart");
+        // Grid in its header: the terminals in Grid, as they were.
+        tap(&mut rt, "base-view-grid");
+        frames(&mut rt, 6);
+        assert_eq!((base(&rt), over(&rt)), (None, None));
+        assert!(!rt.state.pages.tabs() && !rt.state.panes_covered());
+        assert_eq!(rt.state.store.get("base_view"), &J::Null);
+        // The Monitor by its rail entry, off by it again.
+        frames(&mut rt, 10);
+        resizes(&rx);
+        tap(&mut rt, "rail-monitor");
+        frames(&mut rt, 4);
+        assert_eq!(base(&rt).as_deref(), Some("monitor"));
+        tap(&mut rt, "rail-monitor");
+        frames(&mut rt, 4);
+        assert_eq!((base(&rt), over(&rt)), (None, None), "pressed again: back to the terminals");
+        // An overlay over the terminals closes back to them.
+        tap(&mut rt, "rail-commits");
+        frames(&mut rt, 4);
+        rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+        frames(&mut rt, 4);
+        assert_eq!((base(&rt), over(&rt)), (None, None), "Commits over the terminals closes back to them");
+        // The shortcut's intent switches both ways.
+        rt.update(|s, _| s.press_extra("keys", "monitor_toggle", &serde_json::json!({})));
+        frames(&mut rt, 2);
+        assert_eq!(base(&rt).as_deref(), Some("monitor"));
+        rt.update(|s, _| s.press_extra("keys", "monitor_toggle", &serde_json::json!({})));
+        frames(&mut rt, 2);
+        assert_eq!(base(&rt), None);
+        tap(&mut rt, "grid-1");
+        rt.key(KeyEvent { key: Key::Text("b".into()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"b", "the terminal types again");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// A popup of the view drawn over the pane area takes Escape first: with
+    /// `<name>_ui.popup` true and a `<name>_key` that takes `escape`, the
+    /// key goes to it and the view stays; with none, Escape is as before
+    /// (an overlay closes, the base stays); a dialog above takes it first.
+    #[test]
+    fn escape_goes_to_the_drawn_view_s_popup_first() {
+        let (mut rt, _rx, _clip) = window_with_terminal();
+        tap(&mut rt, "pager-view-monitor");
+        rt.frame(0.05);
+        assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"));
+        // No popup: Escape finds nothing to close on the base.
+        assert!(rt.state.popup_escape().is_none());
+        assert!(!rt.state.escape());
+        // A popup: the Monitor's key intent gets `escape`; the base stays.
+        rt.update(|s, _| {
+            s.feats.data.insert("monitor_ui".into(), serde_json::json!({ "popup": true }));
+        });
+        assert_eq!(rt.state.popup_escape().as_deref(), Some("monitor_key"));
+        assert!(rt.state.escape(), "Escape was taken by the popup");
+        assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("monitor"));
+        // A dialog above takes Escape first.
+        rt.update(|s, _| s.open_modal("templates", J::Null));
+        assert!(rt.state.feats.modal.is_some());
+        assert!(rt.state.escape());
+        assert!(rt.state.feats.modal.is_none(), "the modal closed, not the popup");
+        // An overlay whose key intent takes no `escape`: today's rule, it closes back to the base.
+        tap(&mut rt, "rail-commits");
+        rt.frame(0.05);
+        rt.update(|s, _| {
+            s.feats.data.insert("commits_ui".into(), serde_json::json!({ "popup": true }));
+        });
+        assert!(rt.state.popup_escape().is_none(), "commits_key takes no escape");
+        assert!(rt.state.escape());
+        assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("monitor"));
+    }
+
+    /// The sandboxes sidebar hides from its header's button, Cmd/Ctrl+B,
+    /// the palette or the `sidebar` intent, and comes back from the rail's
+    /// first entry (which carries the sessions that want the person) or the
+    /// same keys. The pane area takes its width; each terminal is resized
+    /// once; no key reaches a terminal by it; the choice is kept.
+    #[test]
+    fn the_sidebar_collapses_and_comes_back() {
+        let (mut rt, rx, _clip) = window_with_terminal();
+        let p = std::env::temp_dir().join(format!("sbxw-sidebar-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        rt.update(|s, _| s.store = store::Store::at(Some(p.clone())));
+        // The terminals' clock moves with the frames, so a debounced resize goes out.
+        let clock = std::cell::Cell::new(0.0f64);
+        let frames = |rt: &mut rune::Runtime<App>, n: usize| {
+            for _ in 0..n {
+                rt.frame(0.05);
+                clock.set(clock.get() + 0.05);
+                let c = clock.get();
+                rt.update(|s, tx| {
+                    s.poll(c, tx);
+                });
+            }
+        };
+        let resizes = |rx: &std::sync::mpsc::Receiver<crate::client::TermInput>| {
+            let mut n = 0;
+            while let Ok(i) = rx.try_recv() {
+                match i {
+                    crate::client::TermInput::Resize { .. } => n += 1,
+                    crate::client::TermInput::Bytes(b) => panic!("bytes reached the terminal: {b:?}"),
+                }
+            }
+            n
+        };
+        frames(&mut rt, 20);
+        resizes(&rx);
+        let area = |rt: &rune::Runtime<App>| rt.presented("panes").unwrap().0[2];
+        let before = area(&rt);
+        assert!(rt.presented("sidebar").is_some() && rt.find("rail-sidebar").is_none());
+        // Its header's button.
+        tap(&mut rt, "sidebar-hide");
+        frames(&mut rt, 20);
+        assert!(rt.presented("sidebar").is_none(), "hidden");
+        assert!(area(&rt) > before + 100.0, "the pane area takes its width: {before} -> {}", area(&rt));
+        assert_eq!(resizes(&rx), 1, "one resize of the terminal, not one per frame");
+        assert!(rt.find("rail-sidebar").is_some(), "the rail's way back");
+        assert_eq!(rt.state.store.get("sidebar")["hidden"], true, "kept");
+        rt.update(|_, tx| assert_ne!(tx.focused(), Some("grid-1"), "the keyboard did not land in the terminal"));
+        // The sessions that want the person show on the rail's entry.
+        rt.update(|s, _| {
+            s.feats.data.insert("sessions".into(), serde_json::json!([{ "sandbox": "web-app", "state": "attention", "session_id": "a", "ts": 1 }, { "sandbox": "web-app", "state": "idle", "session_id": "b", "ts": 1 }]));
+        });
+        let e = rt.state.rail_entries().0.into_iter().find(|e| e.key == "rail-sidebar").unwrap();
+        assert_eq!((e.count, e.tone.as_str()), (Some(1), "amber"));
+        // The rail's entry shows it again.
+        tap(&mut rt, "rail-sidebar");
+        frames(&mut rt, 20);
+        assert!(rt.presented("sidebar").is_some() && rt.find("rail-sidebar").is_none());
+        assert!((area(&rt) - before).abs() < 1.0);
+        assert_eq!(resizes(&rx), 1);
+        // Cmd/Ctrl+B, both ways (the palette's chords; with a terminal's grid
+        // focused, Ctrl+Shift+B off macOS, as the chords test holds).
+        rt.update(|_, tx| tx.blur());
+        let mac = cfg!(target_os = "macos");
+        let chord = KeyEvent { key: Key::Command('b'), mods: rune::Mods { cmd: true, ctrl: !mac, logo: mac, ..Default::default() } };
+        rt.key(chord.clone());
+        frames(&mut rt, 2);
+        assert!(!rt.state.sidebar_shown());
+        rt.key(chord.clone());
+        frames(&mut rt, 2);
+        assert!(rt.state.sidebar_shown());
+        let in_grid = KeyEvent { key: Key::Command('b'), mods: rune::Mods { cmd: true, ctrl: !mac, logo: mac, shift: !mac, ..Default::default() } };
+        rt.update(|s, _| assert!(s.app_key(&in_grid, Some("grid-1"))));
+        assert!(!rt.state.sidebar_shown());
+        rt.update(|s, _| assert!(s.app_key(&in_grid, Some("grid-1"))));
+        assert!(rt.state.sidebar_shown());
+        assert_eq!(sent(&rx), b"", "the chord reached the terminal");
+        // The palette's command and the intent.
+        rt.update(|s, _| s.run_cmd(palette::Run::Sidebar));
+        assert!(!rt.state.sidebar_shown());
+        rt.update(|s, _| s.run_intent("x", Intent::Sidebar { show: Some(true) }));
+        assert!(rt.state.sidebar_shown());
+        // A link that shows a sandbox's row shows the sidebar first.
+        rt.update(|s, _| s.set_sidebar(false));
+        rt.update(|s, _| s.run_intent("statusbar", Intent::Select { sandbox: Some("web-app".into()) }));
+        assert!(rt.state.sidebar_shown(), "select from elsewhere shows it");
+        // A restart: as it was left.
+        rt.update(|s, _| s.set_sidebar(false));
+        let b = store::Store::at(Some(p.clone()));
+        assert_eq!(b.get("sidebar")["hidden"], true, "the next run starts with it hidden");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

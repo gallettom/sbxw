@@ -110,6 +110,8 @@ pub enum RailRun {
     Leads,
     /// The "More" entry: the folded entries' menu.
     More,
+    /// The sandboxes sidebar shown again (its entry exists only while it is hidden).
+    Sidebar,
 }
 
 impl App {
@@ -165,6 +167,13 @@ impl App {
             format!("Team leads\nOnly the {} team leader{}' terminals; press again for this layout", leaders.len(), if leaders.len() == 1 { "" } else { "s" })
         };
         all.push(Entry { key: "rail-leads".into(), icon: "leader".into(), help, keys: vec![], tone: "purple".into(), on: self.leads_on(), count: None, badge: "", run: RailRun::Leads, disabled: leaders.is_empty() && !self.leads_on(), zone: Some(Zone::Activity), order: 30, dot: None });
+        // The sidebar hidden: the way back, at the top, with the sessions that
+        // want the person (the Monitor's "need you", the same reports) as its badge.
+        if !self.sidebar_shown() {
+            let you = self.feats.data.get("sessions").and_then(J::as_array).map_or(0, |l| l.iter().filter(|i| i["state"] == "attention" && i["sandbox"] != crate::feat::monitor::model::JARVIS).count() as u64);
+            let help = if you > 0 { format!("Show sandboxes\n{you} session{} want{} you", if you == 1 { "" } else { "s" }, if you == 1 { "s" } else { "" }) } else { "Show sandboxes\nThe sandboxes and their sessions, beside the panes".to_string() };
+            all.push(Entry { key: "rail-sidebar".into(), icon: "columns".into(), help, keys: palette::chord_keys("B"), tone: if you > 0 { "amber".into() } else { "neutral".into() }, on: false, count: (you > 0).then_some(you), badge: "amber", run: RailRun::Sidebar, disabled: false, zone: Some(Zone::Activity), order: 0, dot: None });
+        }
         // The features' entries (`Place::Rail`).
         for e in &self.feats.pane_extras {
             let Place::Rail { zone, order } = e.place else { continue };
@@ -172,7 +181,8 @@ impl App {
             // The screen it shows: its `open_panel`/`open_modal` argument, else
             // the screen named as the entry (a feature's own opening intent).
             let screen = args["screen"].as_str().unwrap_or(&e.id).to_string();
-            let on = self.screen_shown(&screen);
+            // Lit while it shows, and while it is the base view under an overlay.
+            let on = self.screen_shown(&screen) || self.feats.base.as_deref() == Some(screen.as_str());
             let help = if e.help.is_empty() { e.label.clone() } else { format!("{}\n{}", e.label, e.help) };
             let badge = if e.tone == "amber" || e.tone == "red" { "amber" } else { "blue" };
             let shortcut = App::shortcut_for(&name);
@@ -309,6 +319,7 @@ impl App {
                 }
             }
             RailRun::Leads => self.toggle_leads(),
+            RailRun::Sidebar => self.set_sidebar(true),
             RailRun::More => self.rail_menu = !self.rail_menu,
         }
     }

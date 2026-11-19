@@ -771,6 +771,9 @@ return {
           on = "new", key = "sidebar-new", help = "New sandbox",
           keys = app.platform == "macos" and { "⌃", "⌥", "N" } or { "Alt", "N" } } or false,
         header_new and column{ w = 0 } or false,
+        -- Hide the sidebar (the rail's first entry brings it back; Cmd/Ctrl+B both ways).
+        button{ icon = "columns", key = "sidebar-hide", dense = true, variant = "ghost", on = "hide_sidebar", help = "Hide sandboxes",
+          keys = app.platform == "macos" and { "⌘", "B" } or { "Ctrl", "B" } },
       },
       app.connection.state ~= "up" and row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "amber-tint",
         icon{ "warning", size = 14, color = "amber" },
@@ -782,6 +785,7 @@ return {
   end,
 
   actions = {
+    hide_sidebar = function() return intent("sidebar", { show = "hide" }) end,
     more_lines = function(state, key) state.line_pages = state.line_pages or {}; state.line_pages[key] = (state.line_pages[key] or 1) + 1 end,
     filter = function(state, _, text) state.filter = text or "" end,
     clear_filter = function(state) state.filter = "" end,

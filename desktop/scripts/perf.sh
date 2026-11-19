@@ -36,6 +36,12 @@ add(type="mark", name="perf:idle (a pointer move over the panes)"); add(type="mo
 step("select a sandbox (tap its row)", "row-web-app")
 step("open a menu (a sandbox row's)", "extra-sandbox-web-app", "extra-sandbox-web-app-list")
 add(type="key", name="Escape"); add(type="mark", name="hold:200")
+# The Monitor as the base view, with an overlay over it, then back to the terminals.
+step("make the Monitor the base view", "rail-monitor", "overlay-monitor")
+step("open Commits over the Monitor", "rail-commits", "commits-row-" + row)
+step("expand a commit over the Monitor", "commits-row-" + row, "commits-file-src/area0/File0.tsx")
+add(type="mark", name="perf:close Commits: back to the Monitor"); add(type="key", name="Escape"); add(type="mark", name="wait-gone:overlay-commits"); add(type="mark", name="hold:300")
+add(type="mark", name="perf:back to the terminals"); add(type="tap", key="rail-monitor"); add(type="mark", name="wait-gone:overlay-monitor"); add(type="mark", name="hold:300")
 step("open the Commits overlay", "rail-commits", "commits-row-" + row)
 step("expand a commit", "commits-row-" + row, "commits-file-src/area0/File0.tsx")
 step("expand its first file's diff", "commits-file-src/area0/File0.tsx", "commits-diff-src/area0/File0.tsx")

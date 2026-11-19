@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The Monitor (an overlay over the pane area, the rail's activity zone),
+# The Monitor (a base view of the pane area, instead of the terminals; the
+# rail's activity zone, the pager's view switch),
 # headless, against the stand-in daemon with fixtures/monitor/<fixture>.json:
 #
 #   desktop/scripts/demo-monitor.sh
@@ -16,14 +17,34 @@
 #            moves, tax-rules finishes, retry-queue asks a permission;
 #   empty    fixtures/monitor/empty.json: no session yet;
 #   idle     fixtures/monitor/idle.json: nothing needs you;
-#   busy     fixtures/monitor/busy.json: 64 sessions, 9 need you, paged.
+#   busy     fixtures/monitor/busy.json: 64 sessions, 9 need you, paged;
+#   switch   the pager's view switch (Tabs | Grid | Monitor) over the terminals;
+#   base     the Monitor as the base: its header's view switch, no cross;
+#   under    the Monitor's Files link: the explorer over the Monitor;
+#   back     Escape there: back to the Monitor, the same session;
+#   attach   two files dropped on billing-api's session: their chips under the box;
+#   attach-dialog  a third, named like a secret (amber), words typed, Send:
+#            the core's one dialog (words, each file, the total, its box);
+#   attach-sent  its box ticked and Send pressed: the stand-in takes the
+#            uploads, then the push of the words and the daemon's paths;
+#   hidden-terms  the sidebar hidden (its header's button) over the terminals;
+#   hidden   the sidebar hidden with the Monitor as the base (the rail's
+#            "Show sandboxes" at the top, its amber badge);
+#   fold     fixtures/monitor/folding.json: one row per place (studio's main
+#            checkout reported by three sessions shows once, its last prompt
+#            another session's message shown as such; lab's two live terminals).
 # Out: $SBXW_SHOTS/monitor/monitor-<size>-<theme>-<mark>.png, its element tree and log.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 shots="$shots_root/monitor"; mkdir -p "$shots"
 build
+# Invented files to attach (never this machine's own).
+drop=/tmp/sbxw-demo/attach; mkdir -p "$drop"
+printf '# Brief\n\nThe invoice export, as agreed.\n' >"$drop/brief.md"
+printf 'name,qty\nmug,2\n' >"$drop/order list.csv"
+printf 'EXAMPLE=1\n' >"$drop/.env.local"
 script() {
-  MARK="$1" python3 - <<'PY'
+  DROP="$drop" MARK="$1" python3 - <<'PY'
 import json, os
 m = os.environ["MARK"]
 ev = []; t = 0.6
@@ -33,19 +54,29 @@ def add(**e):
 def step(key, until):
     add(type="tap", key=key); add(type="mark", name="wait:" + until)
 add(type="mark", name="wait:rail-monitor")
-if m in ("empty",):
+if m in ("hidden", "hidden-terms"):
+    step("sidebar-hide", "rail-sidebar")
+if m == "hidden-terms":
+    pass
+elif m == "switch":
+    add(type="mark", name="wait:pager-view-monitor")
+elif m == "fold":
+    step("rail-monitor", "monitor-row-studio:s-studio-1")
+    if not os.environ.get("SIZE", "").startswith("720"):
+        step("monitor-row-studio:s-studio-1", "monitor-from")
+elif m in ("empty",):
     step("rail-monitor", "monitor-empty")
 elif m == "idle":
     step("rail-monitor", "monitor-calm")
 elif m == "busy":
     step("rail-monitor", "monitor-more")
-else:
+elif m != "hidden-terms":
     step("rail-monitor", "monitor-row-shop-web::checkout-copy")
 if m == "choice":
     # N: the next session that needs you; then its row (a narrow view opens it).
     add(type="type", every=0.02, text="n"); add(type="mark", name="hold:300")
     step("monitor-row-shop-web:s-shop-main", "monitor-opt-1-1")
-if m in ("reply", "send"):
+if m in ("reply", "send", "attach", "attach-dialog", "attach-sent"):
     # A short window: the idle rows are below the fold of the list.
     add(type="wheel", key="monitor-row-shop-web:s-shop-main", dy=-600); add(type="mark", name="hold:300")
     step("monitor-row-billing-api:s-bill-main", "monitor-reply")
@@ -54,6 +85,27 @@ if m == "send":
     text = "Also add a test with an empty invoice, then stop."
     add(type="type", every=0.02, text=text); t += 0.02 * len(text)
     step("monitor-send", "cf-confirm")
+if m in ("attach", "attach-dialog", "attach-sent"):
+    D = os.environ["DROP"]
+    add(drop_files={"paths": [f"{D}/brief.md", f"{D}/order list.csv"], "key": "monitor-detail", "hover": 0.2})
+    add(type="mark", name="wait:monitor-attached")
+if m in ("attach-dialog", "attach-sent"):
+    add(drop_files={"paths": [f"{D}/.env.local"], "key": "monitor-detail", "hover": 0.2}); add(type="mark", name="hold:300")
+    add(type="tap", key="monitor-compose")
+    text = "Use these for the export test."
+    add(type="type", every=0.02, text=text); t += 0.02 * len(text)
+    step("monitor-send", "cf-confirm")
+if m == "attach-sent":
+    add(type="tap", key="cf-ack"); add(type="mark", name="hold:200")
+    add(type="tap", key="cf-confirm"); add(type="mark", name="wait-gone:cf-dialog")
+    add(type="mark", name="hold:1500")
+if m in ("under", "back"):
+    # A narrow window lists the sessions: a row opens one, with its links.
+    if os.environ.get("SIZE", "").startswith("720"):
+        step("monitor-row-shop-web::checkout-copy", "monitor-back")
+    step("monitor-files", "overlay-files")
+if m == "back":
+    add(type="key", name="Escape"); add(type="mark", name="wait-gone:overlay-files")
 if m == "live":
     add(type="tap", key="monitor-row-docs-site:s-docs-main")
     add(type="mark", name="hold:6500")
@@ -65,10 +117,10 @@ PY
 }
 theme="${THEME:-dark}"
 for size in ${SIZES:-1284x816 720x480}; do
-  for m in ${MARKS:-ask choice reply send live empty idle busy}; do
-    case "$m" in empty|idle|busy) fx="$m" ;; *) fx=basic ;; esac
+  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back attach attach-dialog attach-sent fold hidden hidden-terms}; do
+    case "$m" in empty|idle|busy) fx="$m" ;; fold) fx=folding ;; *) fx=basic ;; esac
     out="$shots/monitor-$size-$theme-$m"
-    script "$m" >"$out-script.json"
+    SIZE="$size" script "$m" >"$out-script.json"
     start_daemon "$out-standin" --fixture "$here/fixtures/monitor/$fx.json"
     SHOT_SIZE="$size" run_app "$out.log" --script "$out-script.json" \
       --snap "$out.png" --tree "$out.json" --at "mark:$m+0.2"

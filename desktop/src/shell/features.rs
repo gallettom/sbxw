@@ -54,6 +54,13 @@ pub struct Feats {
     /// The overlay view shown over the pane area, one at a time
     /// (`feat::Slot::Overlay`), and its argument.
     pub overlay: Option<(String, J)>,
+    /// The base view of the pane area when it is not the terminals
+    /// (`feat::Slot::Base`: the Monitor). Drawn through `overlay` when no
+    /// overlay is over it; an overlay closed comes back to it.
+    pub base: Option<String>,
+    /// The base came back from the last run: its `open` intent runs once the
+    /// first lists are in.
+    pub base_restore: bool,
     pub dialog: Option<Dialog>,
     /// Data keys to read again at that time (bursts of events merged).
     due: HashMap<String, Instant>,
@@ -625,9 +632,23 @@ impl App {
     fn open_panel(&mut self, screen: &str) {
         match feat::screen(screen) {
             // An overlay over the pane area: one at a time.
+            // A base view: it becomes the base, and whatever overlay was over the pane area closes.
+            Some((_, s)) if matches!(s.slot, Slot::Base { .. }) => {
+                if let Some((old, _)) = self.feats.overlay.take() {
+                    if old != screen && self.feats.base.as_deref() != Some(old.as_str()) {
+                        self.feats.data.remove(&format!("{old}_view"));
+                    }
+                }
+                self.set_base(Some(screen));
+                self.feats.overlay = Some((screen.to_string(), J::Null));
+                self.bar_menu = None;
+                self.pager_menu = None;
+                self.rail_menu = false;
+            }
             Some((_, s)) if matches!(s.slot, Slot::Overlay { .. }) => {
                 if let Some((old, _)) = self.feats.overlay.take() {
-                    if old != screen {
+                    // The base under it keeps its view state.
+                    if old != screen && self.feats.base.as_deref() != Some(old.as_str()) {
                         self.feats.data.remove(&format!("{old}_view"));
                     }
                 }
@@ -649,6 +670,11 @@ impl App {
     }
 
     fn close_panel(&mut self, screen: &str) {
+        // The base view: back to the terminals.
+        if self.feats.base.as_deref() == Some(screen) {
+            self.leave_base();
+            return;
+        }
         if self.feats.overlay.as_ref().is_some_and(|o| o.0 == screen) {
             self.close_overlay();
             return;
@@ -664,13 +690,91 @@ impl App {
 
     /// Closes the overlay over the pane area, if one shows; the focused
     /// pane's terminal gets the keyboard back.
+    /// The base view (`Slot::Base`) is never closed here: an overlay over it
+    /// closes back to it, and false when the base itself is what shows.
     pub(super) fn close_overlay(&mut self) -> bool {
         let Some((name, _)) = self.feats.overlay.take() else { return false };
+        if self.feats.base.as_deref() == Some(name.as_str()) {
+            self.feats.overlay = Some((name, J::Null));
+            return false;
+        }
         // Its view state (`<screen>_view`: the sandbox it was opened for) goes with it, as a panel's.
         self.feats.data.remove(&format!("{name}_view"));
         crate::mem::trim_soon();
+        if let Some(b) = self.feats.base.clone() {
+            // Back to the base under it, drawn from its data as it is now.
+            self.feats.overlay = Some((b, J::Null));
+            self.render_shown();
+            return true;
+        }
         self.feats.asks.push(("core", Ask::Focus(format!("grid-{}", self.focused + 1))));
         true
+    }
+
+    /// The base view a feature declares (`Slot::Base`): its screen, title and icon.
+    pub(super) fn base_screen() -> Option<(&'static str, &'static str, &'static str)> {
+        feat::FEATURES.iter().flat_map(|f| f.screens.iter()).find_map(|d| match d.slot {
+            Slot::Base { title, icon, .. } => Some((d.name, title, icon)),
+            _ => None,
+        })
+    }
+
+    /// The pane area's base view changes (`None`: the terminals), kept for the next run.
+    fn set_base(&mut self, base: Option<&str>) {
+        self.feats.base = base.map(str::to_string);
+        self.feats.base_restore = false;
+        self.store.set(BASE_KEY, base.map_or(J::Null, |b| J::String(b.into())));
+    }
+
+    /// Back to the terminals: the base view (and an overlay over it, if it
+    /// is what shows) goes; the pages and their sizes are as they were; the
+    /// pane that had the keyboard gets it back.
+    pub(super) fn leave_base(&mut self) {
+        let Some(b) = self.feats.base.clone() else { return };
+        self.set_base(None);
+        if self.feats.overlay.as_ref().is_some_and(|o| o.0 == b) {
+            self.feats.overlay = None;
+        }
+        crate::mem::trim_soon();
+        self.feats.asks.push(("core", Ask::Focus(format!("grid-{}", self.focused + 1))));
+    }
+
+    /// Switches the pane area to that base view by its `open` intent (the
+    /// feature reads its data first), or back to the terminals (`None`).
+    pub(super) fn switch_base(&mut self, from: &str, to: Option<&str>) {
+        match to {
+            None => {
+                self.leave_base();
+                self.render_shown();
+            }
+            Some(screen) => match feat::screen(screen).map(|(_, d)| d.slot) {
+                Some(Slot::Base { open, .. }) => self.press_extra(from, open, &json!({})),
+                _ => self.notify(format!("{screen} is not a base view"), true),
+            },
+        }
+    }
+
+    /// The base view of the last run (the Monitor), from the state file: the
+    /// pane area shows it at once, its data read once the first lists are in.
+    pub(crate) fn kept_base(&mut self) {
+        let kept = self.store.get(BASE_KEY).as_str().map(str::to_string);
+        if let Some(b) = kept.filter(|b| feat::screen(b).is_some_and(|(_, s)| matches!(s.slot, Slot::Base { .. }))) {
+            self.feats.base = Some(b.clone());
+            self.feats.overlay = Some((b, J::Null));
+            self.feats.base_restore = true;
+        }
+    }
+
+    /// The base view kept from the last run, once its data can be read:
+    /// its `open` intent, as the switch would.
+    pub(super) fn restore_base(&mut self) {
+        if !self.feats.base_restore {
+            return;
+        }
+        self.feats.base_restore = false;
+        if let Some(b) = self.feats.base.clone() {
+            self.switch_base("restore", Some(&b));
+        }
     }
 
     /// The overlay view over the pane area: the core's header (icon, title,
@@ -680,7 +784,11 @@ impl App {
     pub(super) fn overlay_view(&self, screen: El, slot: Option<El>) -> Option<El> {
         let (name, _) = self.feats.overlay.as_ref()?;
         let (_, decl) = feat::screen(name)?;
-        let Slot::Overlay { title, icon } = decl.slot else { return None };
+        let (title, icon, base) = match decl.slot {
+            Slot::Overlay { title, icon } => (title, icon, false),
+            Slot::Base { title, icon, .. } => (title, icon, true),
+            _ => return None,
+        };
         let n1 = name.clone();
         let mut head = row().key(format!("overlay-head-{name}")).w_full().h(layout::CONTROL_H).gap(8.0).items_center();
         if let Some(i) = crate::icons::get(icon) {
@@ -694,8 +802,12 @@ impl App {
         if let Some(e) = slot {
             head = head.child(el().w(4.0)).child(e);
         }
-        head = head
-            .child(el().grow(1.0).min_w(0.0))
+        head = head.child(el().grow(1.0).min_w(0.0));
+        // A base view is not closed: the view switch takes the place of the cross.
+        if base {
+            head = head.child(super::pager::view_switch(self, "base-view"));
+        } else {
+            head = head
             // The hint only where there is room for it (the cross's tooltip says it too).
             .children(self.rects.overlay.is_none_or(|r| r[2] >= OVERLAY_HINT_MIN).then(|| text("Esc closes").font(crate::screen::body(12.0, 400.0)).color(c("text-muted"))))
             .child(
@@ -716,6 +828,7 @@ impl App {
                     })
                     .child(rune::icon(crate::icons::get("close").unwrap(), crate::theme::icon::MEDIUM).color(c("text-muted"))),
             );
+        }
         Some(
             col()
                 .key(format!("overlay-{name}"))
@@ -1409,6 +1522,8 @@ impl DropGrant {
 const OVERLAY_HINT_MIN: f32 = 560.0;
 const UPLOADS_KEY: &str = "uploads";
 const SKIP_DROP_DIALOG: &str = "skip_drop_dialog";
+/// The store's key for the pane area's base view (`"monitor"`; absent: the terminals).
+pub(super) const BASE_KEY: &str = "base_view";
 
 impl App {
     /// The person chose not to be asked about files they drop.

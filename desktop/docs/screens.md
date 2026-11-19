@@ -613,6 +613,7 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `start_sandbox` | `sandbox` (required), `pane` | Starts a stopped sandbox by opening its agent, as the web UI's Connect does |
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
+| `sidebar` | `show`: `show`, `hide` or `toggle` | The sandboxes sidebar shown or hidden, remembered across launches (`data.app.sidebar.shown`); the pane area, terminals or Monitor, takes its width (each terminal resized once). Its header's `sidebar-hide` runs it; while it is hidden the rail's first entry `rail-sidebar` ("Show sandboxes") brings it back, its badge the sessions that want the person (amber). A `select` of a sandbox pressed elsewhere (the palette, Worktrees, the create jobs; not one a feature runs from its data) shows it first. No focus moves |
 | `set_theme` | `theme`: `dark`, `graphite` or `toggle` (the next one) | The app's theme, remembered across launches; every surface switches at once (`data.app.theme` and `theme.mode` say which palette is drawn) |
 | `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | The old layout picker's: that many terminals per page, and the current page that many panes (empty ones added) in the old arrangement |
 | `page_show` | `page` (from 1, required) | Shows that page of terminals |
@@ -678,8 +679,8 @@ core's: a terminal with the focus does not receive them.
 The core owns the app's chords (`src/shell/palette.rs`), and screens never
 see them: Cmd/Ctrl+K the command palette (every sandbox, every top bar extra
 and feature shortcut, the core's actions; a pick runs the same intents your
-buttons run, through the same checks), Cmd/Ctrl+B the sidebar (the left
-rail stays), Cmd/Ctrl+1 to 9 a pane of the current page, Ctrl+Tab and
+buttons run, through the same checks), Cmd/Ctrl+B the sandboxes sidebar
+(the left rail stays and shows "Show sandboxes"; its header's button hides it too), Cmd/Ctrl+1 to 9 a pane of the current page, Ctrl+Tab and
 Ctrl+Shift+Tab the next and previous page (also Cmd+Option+Right/Left on
 macOS; in a terminal Ctrl+Tab was a plain Tab, so nothing is lost), Cmd/Ctrl+Shift+W closes the focused pane, Cmd/Ctrl with + − 0 zooms the
 app (in a terminal: its text), Escape closes the top-most menu, palette,
@@ -1026,8 +1027,9 @@ What a feature declares:
 | `name` | Short name, the notices' prefix |
 | `data` | `Data { key, path, on, every, lazy }`: a `GET` route read into `data.<key>` at connection, again 300 ms after a stream event in `on`, every `every` seconds, or when an action asks (`lazy`: only then). `{sandbox}` in the path: read for each running sandbox, `data.<key>` is then an object by sandbox name. A fixture holds the same key in its `daemon` object |
 | `events` | Stream events handed to `on_event`, which answers actions |
-| `screens` | `ScreenDecl { name, src: include_str!(..), slot }`; `Slot::Modal { width }` (a dialog over the window) or `Slot::Panel { title, icon, width }` (docked on the right, beside Jarvis; several open show as tabs) or `Slot::Overlay { title, icon }` (a full view over the pane area, below) |
+| `screens` | `ScreenDecl { name, src: include_str!(..), slot }`; `Slot::Modal { width }` (a dialog over the window) or `Slot::Panel { title, icon, width }` (docked on the right, beside Jarvis; several open show as tabs) or `Slot::Overlay { title, icon }` (a full view over the pane area, below) or `Slot::Base { title, icon, open }` (a base view of the pane area instead of the terminals, below) |
 | `intents` | Rows of the closed list (`intent::Spec`: name, typed arguments, risk, doc). Exported to `intents.json` |
+| `<screen>_key` and `<screen>_ui.popup` | By name, for an overlay or base view: its `<screen>_key` intent gets Up, Down, Enter (and what its `key` list takes) while none of its controls has the keyboard; while the feature's data `<screen>_ui.popup` is true and that list takes `escape`, Escape goes to it (`{key: "escape"}`) before the view is closed (below) |
 | `act` | `fn(&Ctx, &Asked) -> Result<Vec<Action>, String>`: runs one of its intents, already checked |
 | `on_answer` | Optional: gets every answer of its calls, status and JSON body, non-2xx included; then the core says nothing itself |
 | `extras` | Buttons and badges in others' slots: `Extra { place, id, label, icon, tone, help, count, intent }`; `place`: `Topbar`, `Sandbox(name)` (on its row), `SandboxRow(name)` (a sub-row under it: one per session), `Pane(sandbox)` (every pane bar of that sandbox), `Session { sandbox, thread }` (the pane bars of that session only; `thread: None` is the main one), `Rail { zone, order }` (an entry of the left rail, see below) |
@@ -1911,8 +1913,11 @@ detail" concept of `.sbxw-artifacts/desktop/MONITOR.md`). Files:
 and the view, `tests.rs`), `screens/monitor.luau`, `fixtures/monitor/`
 (`basic`, `empty`, `idle`, `busy`, `gate`), `scripts/demo-monitor.sh`.
 
-**Screen.** `monitor` (overlay "Monitor", rail entry `rail-monitor`,
-activity zone, order 5, no count badge: Requests counts what waits). Left:
+**Screen.** `monitor` (a base view, `Slot::Base` "Monitor": the pane
+area shows it instead of the terminals, see "Base views" below; rail entry
+`rail-monitor`, activity zone, order 5, lit while it is the base, no count
+badge: Requests counts what waits; shortcut Ctrl+Option+I on macOS, Alt+I
+elsewhere, `monitor_toggle`). Left:
 the sessions, grouped Needs you (the longest waiting first), Working, Idle,
 Ended (the latest first), rows `monitor-row-<key>`, 50 a page
 (`monitor-more`), `monitor-next` ("2 need you", N). Middle (from 760 pt;
@@ -1922,10 +1927,13 @@ lines, time; `monitor-terminal`, `-commits`, `-files`, `-worktrees`), the
 feed (the last prompt, `monitor-now`, `monitor-reply` with keyword pills,
 `monitor-question` with `monitor-opt-<step>-<option>` or "Answer in its
 terminal", `monitor-permission`), then the composer (`monitor-compose`,
-`monitor-target` "To ■ sandbox · session", `monitor-send`). Keys: the
+the attached files' chips `monitor-attached` with `monitor-file-<id>` and its
+cross `monitor-file-remove-<id>`, `monitor-target` "To ■ sandbox ·
+session", `monitor-attach` ("Attach", the icon alone under 640 pt),
+`monitor-send`). Keys: the
 view opens with the keyboard on the shown session's row; Up and Down move
-along the rows, Enter shows one, N goes to the next session that needs you,
-Escape closes. With nothing of the view focused, Up and Down move the
+along the rows, Enter shows one, N goes to the next session that needs you;
+Escape does not leave it (a base view). With nothing of the view focused, Up and Down move the
 selection and Enter gives the keyboard to the list.
 
 **Data.** `data.monitor`, built in Rust: `now`, `rows` (`{key, rev,
@@ -1933,31 +1941,61 @@ sandbox, name, thread, group, tone, line, mono, ts, ask}`), `count` (the
 paging block), `counts` (`you`, `working`, `idle`, `ended`, `total`),
 `sel`, `detail` (the selected session: `strip`, `last_input`, `now`,
 `reply`, `question {answerable, steps: [{text, options: [{label, desc}]}]}`,
-`permission`, `compose {can, why, target}`, `sent`, `pane`). Started from
+`permission`, `compose {can, why, target}`, `sent`, `pane`, `files`
+(`[{id, name, size, state: ok|look|refused|uploaded, why, sending,
+progress}]`, the name already cut by the Rust), `sending`, `attach_max`). Started from
 `data.sessions` when the view opens (`monitor_open`), then kept from each
-`session` event, one card at a time: a card's `rev` moves only when its
+`session` event, one card per place (a sandbox's thread, or its main
+checkout, as the sidebar folds them: a new session there takes the card and
+its key over, a late report or the end of an older session changes nothing,
+two live sessions in one main checkout make two cards named `main · <end of
+session id>`; the daemon's `continues` and `ended` are followed when it
+serves them). A `last_input` the harness typed (a cross-session message, a
+task notification) is `detail.from {name, text}`, never `last_input`: a card's `rev` moves only when its
 report changed, the screen memoises a row by key and rev, and the view is
-handed over only while it shows. Also read: `data.relay_ui.picks` and
+handed over while it shows or is the base under an overlay (`data.app.base`;
+a `Set` renders only drawn screens). Also read: `data.relay_ui.picks` and
 `sending` (the same picks as the Requests panel), `data.app.groups`,
 `data.app.covered`.
 
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
-| `monitor_open` | none | direct | Reads the list again and opens the view (the sidebar's sandbox's most urgent session selected) |
+| `monitor_open` | none | direct | Reads the list again and makes the Monitor the base view (the sidebar's sandbox's most urgent session selected); an overlay over it closes |
+| `monitor_toggle` | none | direct | The Terminals or the Monitor, whichever is not the base now |
 | `monitor_select`, `monitor_next`, `monitor_more` | `key` / none / none | direct | View state: a session shown, the next that needs you, the next page |
 | `monitor_key` | `key` (`up`, `down`, `enter`, `type`), `text` | direct | The view's keys when none of its rows has the keyboard; N (`type`) from anywhere in it |
 | `monitor_terminal`, `monitor_commits`, `monitor_files`, `monitor_worktrees` | `key` | direct | `thread_open` or `open_terminal` (spare pane; the pane that shows it, when one does), `commits_show` on its branch, `files_open` at its worktree, `worktrees_show` filtered to it |
 | `monitor_pick` | `key`, `step`, `option` | direct | The relay's `agent_pick`, only for a session the daemon lists as waiting and answerable |
-| `monitor_send` | `key`, `text` | approval | Masked (`/api/voice/anonymise`), then the core's dialog with the words in full and the session; Send there posts `/api/chat/push {text, name, thread}` |
+| `monitor_attach` | `key` (the session shown) | direct | The core's file dialog (`Action::PickFiles`, from a press only); the file comes back through `on_files` and waits as a chip of that session |
+| `monitor_attach_remove` | `key`, `id` | direct | Takes that file off the session's chips; the core forgets its path |
+| `monitor_send` | `key`, `text?` | approval | Masked (`/api/voice/anonymise`), then ONE core dialog: the words in full, each attached file (local path, size, "look" reasons), the total, the session; a "look" file needs its box ticked. Send there: without files, `/api/chat/push {text, name, thread}`; with files, `core:uploads` (then each pasted picture's `paste-image`), then the push of the words followed by the daemon's paths. A failure pushes nothing |
 
 **The rules.** Only a press (or Cmd+Return in the composer) sends. The
 target is always drawn next to Send. The composer is disabled while the
 session waits on a question or a permission (typed words would land in its
 menu). `monitor_pick` and `monitor_send` refuse while `data.app.covered` is
-not false or a Jarvis proposal waits (`data.jarvis.pending`). Agent text is
+not false (which includes another view, such as Files, drawn over the
+Monitor) or a Jarvis proposal waits (`data.jarvis.pending`). Agent text is
 drawn as text and Markdown, never as a control; an option sends its index.
 A permission prompt is answered in its terminal: sbxw does not see the
 command.
+
+**Attach.** A local path only comes from the core: the file dialog, files
+dropped on the Monitor (any part of it, while it is drawn), a picture pasted
+while it shows (`on_files`); never from Luau or agent text. Files belong to
+the session they were attached to; another session shows its own, a send
+takes only its own. Attaching refuses in Rust in the composer's states
+(`data.app.covered`, a Jarvis proposal waiting, a session waiting on a
+menu, ended, or a sandbox not running). The guardrails are
+`feat::files::drops`' (a secret-looking name, a `.ssh`/`.aws`/`.gnupg`
+folder, more than 25 MB in all: "look", the dialog's box), an empty file or
+one over 128 MB is refused (Send off and refused). "Do not ask again for
+files I drop" never applies: words to an agent always get the dialog (the
+core grants it to the files feature's pane drops only). A file uploaded by a
+send that stopped keeps its daemon path and goes with the next Send (the core
+forgets a local path once uploaded). Names: cut in a chip, control and
+direction characters as `?`; whole in the dialog, those characters written
+out; the log gets counts and `what` lines without names.
 
 ### Overlays
 
@@ -1972,7 +2010,38 @@ absolute over them); none takes a key, a paste, a press, a drag or the wheel
 while it shows (`App::terminal_may_take_keys` and the panes' handlers);
 files dropped on it go to its feature's `on_files`. Up, Down and Enter, when
 none of its controls has the keyboard, run its feature's `<screen>_key`
-intent if it declares one.
+intent if it declares one. A popup of its own (a menu, a picker drawn by
+the screen) gets Escape first: while its feature's `<screen>_ui.popup` is
+true and its `<screen>_key` takes `escape`, Escape runs `<screen>_key {key:
+"escape"}` and the view stays (the core's dialog, a modal, Jarvis's
+proposal and the palette still come before it; a base view too). Opened while a base view is current, it goes
+over that view, and closing it (Escape, its ×, its rail entry) comes back
+to it.
+
+### Base views
+
+`Slot::Base { title, icon, open }`: a view of the pane area equal to the
+terminals (the Monitor is the one). One base is current: the Terminals
+(the pages, in Tabs or Grid) or it. The view switch is drawn in two places,
+three segments each: the pager's (`pager-view-tabs`, `-grid`, `-monitor`)
+while the terminals show, and the base view's own header (`base-view-tabs`,
+`-grid`, `-monitor`, where an overlay has its "Esc closes" and ×) while it
+shows. Tabs or Grid there go back to the terminals in that layout, the
+keyboard on the pane that had it; the base never changes the pages' layout
+nor any terminal's size (drawn absolute, as an overlay). Its rail entry is
+lit while it is the base and, pressed while it shows, goes back to the
+terminals; pressed while an overlay is over it, shows it. `open` is the
+feature's intent the switch runs (it reads its data, then `open_panel`);
+`close_panel` of it goes back to the terminals; Escape never leaves it.
+The choice is kept in the app's state file (`base_view`) and comes back at
+start, its `open` run once the first lists and `data.sessions` are in.
+
+The gate: while it is the base, `App::panes_covered()` is true, so no
+terminal takes a key, a paste, a press, a drop or the focus. `data.app.base`
+is its screen name (null: the terminals). `data.app.covered` is computed in
+one place (`App::covered`): the core's dialog, a modal, Jarvis's proposal,
+the palette, or an overlay drawn over the base. Drops and pasted pictures on
+it go to its feature's `on_files`, as an overlay's.
 
 ### mac
 

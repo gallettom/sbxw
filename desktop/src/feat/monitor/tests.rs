@@ -587,11 +587,12 @@ fn the_keyboard_walks_the_list() {
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     frames(&mut rt, 3);
-    assert!(rt.state.feats.overlay.is_none(), "the terminal opened and the view closed");
+    assert!(rt.state.feats.overlay.is_none() && rt.state.feats.base.is_none(), "the terminal opened: back to the terminals");
     let last = sel(&rt);
     let (sb, th) = last.split_once("::").map(|(a, b)| (a.to_string(), Some(b.to_string()))).unwrap_or_else(|| (last.split(':').next().unwrap().to_string(), None));
     assert!(rt.state.panes.iter().any(|p| p.sandbox.as_deref() == Some(sb.as_str()) && p.thread == th), "its terminal is in a pane: {last}");
-    // Back from the rail: the same session; Escape closes.
+    // Back from the rail: the same session; Escape does not leave it (a
+    // base view), its rail entry pressed again does.
     let (x, y) = rt.find("rail-monitor").unwrap();
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
@@ -599,7 +600,12 @@ fn the_keyboard_walks_the_list() {
     assert_eq!(sel(&rt), last, "the view comes back on the same session");
     key(&mut rt, Key::Escape);
     frames(&mut rt, 2);
-    assert!(rt.state.feats.overlay.is_none(), "Escape closes the view");
+    assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"), "Escape does not leave the Monitor");
+    let (x, y) = rt.find("rail-monitor").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    frames(&mut rt, 2);
+    assert!(rt.state.feats.overlay.is_none() && rt.state.feats.base.is_none(), "its rail entry again: the terminals");
 }
 
 #[test]
@@ -614,4 +620,553 @@ fn the_intent_log_never_carries_the_words() {
     let core = crate::intent::parse(&json!({ "kind": "intent", "name": "copy_text", "args": { "text": marker } })).unwrap();
     let line = crate::shell::intent_log_line("x", &core[0]);
     assert_eq!(line, "intent from x: copy_text");
+}
+
+/// The Monitor under another view (Files, opened from its links): it is
+/// still the base, but covered: words and picks refuse in Rust; the view
+/// closed, the Monitor is back with the same session and the same draft,
+/// and they work again.
+#[test]
+fn under_files_the_monitor_sends_nothing_and_comes_back_as_it_was() {
+    use crate::shell::{view as shell_view, App};
+    use rune::{Key, KeyEvent};
+    let fx = format!("{}/fixtures/monitor/basic.json", env!("CARGO_MANIFEST_DIR"));
+    let a = App::new(crate::shell::Args { fixture: Some(fx), ..Default::default() });
+    let mut rt = rune::Runtime::new(a, shell_view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut rune::Tx| s.on_key(ev, tx));
+    rt.frame(0.0);
+    let frames = |rt: &mut rune::Runtime<App>, n: usize| {
+        for _ in 0..n {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+        }
+    };
+    let tap = |rt: &mut rune::Runtime<App>, key: &str| {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.016);
+    };
+    let sel = |rt: &rune::Runtime<App>| rt.state.screen_data()["monitor"]["sel"].as_str().unwrap_or("").to_string();
+    let typed = |rt: &rune::Runtime<App>| rt.state.screens.iter().find(|x| x.name == "monitor").and_then(|sc| sc.ui.edits.get("monitor-compose").map(|e| e.0.text.clone()));
+    frames(&mut rt, 4);
+    tap(&mut rt, "rail-monitor");
+    frames(&mut rt, 6);
+    tap(&mut rt, "monitor-row-billing-api:s-bill-main");
+    frames(&mut rt, 4);
+    rt.update(|_, tx| tx.focus("monitor-compose", false));
+    for c in "draft".chars() {
+        rt.key(KeyEvent { key: Key::Text(c.to_string()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+    }
+    assert_eq!(typed(&rt).as_deref(), Some("draft"));
+    let send = |rt: &mut rune::Runtime<App>| {
+        rt.update(|s, _| {
+            s.notice = None;
+            let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_send", "args": { "key": "billing-api:s-bill-main", "text": "draft" } })).unwrap();
+            crate::screen::Host::intents(s, "monitor", l);
+        });
+    };
+    let pick = |rt: &mut rune::Runtime<App>| {
+        rt.update(|s, _| {
+            s.notice = None;
+            let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_pick", "args": { "key": "shop-web:s-shop-main", "step": 1, "option": 1 } })).unwrap();
+            crate::screen::Host::intents(s, "monitor", l);
+        });
+    };
+    let refused = |rt: &rune::Runtime<App>| rt.state.notice.as_ref().is_some_and(|n| n.0.contains("Not sent"));
+    // Files over the Monitor, from its link.
+    tap(&mut rt, "monitor-files");
+    frames(&mut rt, 4);
+    assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("files"));
+    assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"), "still the base");
+    assert_eq!(rt.state.screen_data()["app"]["covered"], true);
+    send(&mut rt);
+    frames(&mut rt, 1);
+    assert!(refused(&rt) && rt.state.feats.dialog.is_none(), "words under Files: {:?}", rt.state.notice);
+    pick(&mut rt);
+    frames(&mut rt, 1);
+    assert!(refused(&rt) && rt.state.feats.dialog.is_none(), "a pick under Files: {:?}", rt.state.notice);
+    // Files closed: the Monitor as it was, and both work again.
+    rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+    frames(&mut rt, 4);
+    assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("monitor"), "back to the Monitor");
+    assert_eq!(sel(&rt), "billing-api:s-bill-main", "the same session");
+    assert_eq!(typed(&rt).as_deref(), Some("draft"), "the same draft");
+    assert_eq!(rt.state.screen_data()["app"]["covered"], false);
+    pick(&mut rt);
+    frames(&mut rt, 1);
+    assert!(!refused(&rt), "the pick goes again: {:?}", rt.state.notice);
+    send(&mut rt);
+    frames(&mut rt, 1);
+    assert!(rt.state.feats.dialog.is_some(), "the words go to the core's dialog again: {:?}", rt.state.notice);
+}
+
+// ---------------------------------------------------------------------------
+// Attach
+
+/// A file of invented content under this test's own folder.
+fn file_in(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let p = dir.join(name);
+    std::fs::write(&p, bytes).unwrap();
+    p
+}
+
+fn tmp_dir(tag: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("sbxw-monitor-attach-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    d
+}
+
+/// The view after an action list (the last `Set` of `data.monitor`).
+fn last_view(acts: &[Action]) -> J {
+    acts.iter().rev().find_map(|a| match a {
+        Action::Set { key, value } if key == KEY => Some(value.clone()),
+        _ => None,
+    }).expect("the view")
+}
+
+fn shown_on(d: &mut J, key: &str) {
+    run(d, "monitor_select", json!({ "key": key })).map(|a| d["monitor"] = view(&a)).unwrap();
+}
+
+/// Attach's press asks the core for its file dialog, and adds nothing: a
+/// chip comes only from what the core hands in (`on_files`). A chip is the
+/// shown session's: another session has none, and keeps its own.
+#[test]
+fn a_chip_comes_only_from_the_core_and_belongs_to_its_session() {
+    let dir = tmp_dir("chip");
+    let brief = file_in(&dir, "brief.md", b"# Brief");
+    let mut d = data_of("basic");
+    opened(&mut d);
+    shown_on(&mut d, "billing-api:s-bill-main");
+    let a = run(&d, "monitor_attach", json!({ "key": "billing-api:s-bill-main" })).unwrap();
+    assert!(matches!(a.as_slice(), [Action::PickFiles { .. }]), "{a:?}");
+    assert!(STATE().lock().unwrap().att.is_empty(), "the press itself attaches nothing");
+    // Not the session shown: refused.
+    assert!(run(&d, "monitor_attach", json!({ "key": "docs-site:s-docs-main" })).is_err());
+    // The dialog's answer, from the core.
+    let out = on_files(&Ctx { data: &d }, Incoming::Files(vec![brief.clone()]));
+    let v = last_view(&out);
+    let files = v["detail"]["files"].as_array().unwrap().clone();
+    assert_eq!(files.len(), 1);
+    assert_eq!((files[0]["name"].as_str(), files[0]["state"].as_str(), files[0]["size"].as_str()), (Some("brief.md"), Some("ok"), Some("7 B")));
+    // Its chip is drawn with its size and a remove cross; Send works with no words.
+    d["monitor"] = v;
+    let n = host().render(&d).unwrap();
+    let id = files[0]["id"].as_u64().unwrap();
+    assert!(find(&n, &format!("monitor-file-{id}")).is_some());
+    assert!(find(&n, &format!("monitor-file-remove-{id}")).is_some());
+    assert!(!find(&n, "monitor-send").unwrap().disabled, "files alone may be sent");
+    assert!(!find(&n, "monitor-attach").unwrap().disabled);
+    // Another session: none of it.
+    shown_on(&mut d, "docs-site:s-docs-main");
+    assert_eq!(d["monitor"]["detail"]["files"], json!([]));
+    let n = host().render(&d).unwrap();
+    assert!(find(&n, &format!("monitor-file-{id}")).is_none());
+    // A send to it takes no file of billing-api's.
+    let a = run(&d, "monitor_send", json!({ "key": "docs-site:s-docs-main", "text": "go" })).unwrap();
+    let Action::Prepare(p) = &a[0] else { panic!("{a:?}") };
+    let c = (p.build)(&Ctx { data: &d }, &p.asked, &json!({ "ok": true, "text": "go" })).unwrap();
+    assert_eq!(c.call.path, "/api/chat/push", "no upload for another session's file");
+    // Back on billing-api: its file waits; remove takes it away and the core forgets its path.
+    shown_on(&mut d, "billing-api:s-bill-main");
+    assert_eq!(d["monitor"]["detail"]["files"].as_array().unwrap().len(), 1);
+    let out = run(&d, "monitor_attach_remove", json!({ "key": "billing-api:s-bill-main", "id": id })).unwrap();
+    assert_eq!(last_view(&out)["detail"]["files"], json!([]));
+    assert!(out.iter().any(|a| matches!(a, Action::ForgetFiles(p) if p == &vec![brief.clone()])), "{out:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Files with words: ONE core dialog (never a call before it), listing the
+/// words, each file with its local path and size, the total, the target;
+/// its call is the core's batch upload. Once every file is in, the words
+/// and the daemon's paths (never the local ones) go as one message.
+#[test]
+fn one_dialog_then_the_uploads_then_the_words_with_the_daemons_paths() {
+    let dir = tmp_dir("send");
+    let a1 = file_in(&dir, "notes.txt", b"some notes");
+    let a2 = file_in(&dir, "chart.csv", b"a,b\n1,2\n");
+    let mut d = data_of("basic");
+    opened(&mut d);
+    shown_on(&mut d, "billing-api:s-bill-main");
+    let key = "billing-api:s-bill-main";
+    on_files(&Ctx { data: &d }, Incoming::Files(vec![a1.clone(), a2.clone()]));
+    let a = run(&d, "monitor_send", json!({ "key": key, "text": "Read these" })).unwrap();
+    let a = admit(Risk::Approval("x"), "monitor_send", a).expect("only the core's dialog");
+    assert!(!a.iter().any(|x| matches!(x, Action::Call(_))));
+    let Action::Prepare(p) = &a[0] else { panic!("{a:?}") };
+    let c = (p.build)(&Ctx { data: &d }, &p.asked, &json!({ "ok": true, "text": "Read these", "masked": 0 })).unwrap();
+    assert_eq!(c.call.path, "core:uploads");
+    assert!(c.dont_ask.is_none(), "no \"Do not ask again\" on a Monitor send");
+    assert_eq!(c.preview.as_ref().unwrap().text, "Read these");
+    let lines = c.lines.join("\n");
+    assert!(lines.contains(&a1.display().to_string()) && lines.contains(&a2.display().to_string()), "{lines}");
+    assert!(lines.contains("2 files, 18 B in all"), "{lines}");
+    assert!(c.title.contains("billing-api · main"));
+    let items = c.call.body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert!(items[0]["route"].as_str().unwrap().starts_with("/api/sandboxes/billing-api/upload?name="));
+    // Send there: the core runs the batch and answers.
+    let up = |i: usize| items[i]["tag"].as_str().unwrap().to_string();
+    let body = json!({ "results": [
+        { "tag": up(0), "code": 200, "body": { "ok": true, "path": "/tmp/sbxw-uploads/1700000000001/notes.txt" } },
+        { "tag": up(1), "code": 200, "body": { "ok": true, "path": "/tmp/sbxw-uploads/1700000000002/chart.csv" } } ] });
+    let out = on_answer(&Ctx { data: &d }, &c.call, Ok((200, body)));
+    let push = out.iter().find_map(|a| match a {
+        Action::Call(c) if c.path == "/api/chat/push" => Some(c.clone()),
+        _ => None,
+    }).expect("the push");
+    let text = push.body["text"].as_str().unwrap();
+    assert_eq!(text, "Read these /tmp/sbxw-uploads/1700000000001/notes.txt /tmp/sbxw-uploads/1700000000002/chart.csv");
+    assert!(!text.contains(&dir.display().to_string()), "no local path is typed");
+    assert_eq!(push.body["name"], "billing-api");
+    // The push answered: the chips go with the draft.
+    let back = on_answer(&Ctx { data: &d }, &push, Ok((200, json!({ "ok": true }))));
+    assert_eq!(last_view(&back)["detail"]["files"], json!([]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The second file fails: nothing is pushed, the notice says what went and
+/// what did not, the draft stays (no `sent` move) and so do the chips; the
+/// first file keeps its daemon path and goes with the next Send, which
+/// uploads only the rest.
+#[test]
+fn a_failed_upload_pushes_nothing_and_keeps_the_draft() {
+    let dir = tmp_dir("fail");
+    let a1 = file_in(&dir, "one.txt", b"1");
+    let a2 = file_in(&dir, "two.txt", b"22");
+    let mut d = data_of("basic");
+    opened(&mut d);
+    let key = "billing-api:s-bill-main";
+    shown_on(&mut d, key);
+    on_files(&Ctx { data: &d }, Incoming::Files(vec![a1, a2]));
+    let a = run(&d, "monitor_send", json!({ "key": key })).unwrap();
+    let Action::Confirm(c) = &a[0] else { panic!("files alone: the dialog at once, {a:?}") };
+    let items = c.call.body["items"].as_array().unwrap().clone();
+    let body = json!({ "results": [
+        { "tag": items[0]["tag"], "code": 200, "body": { "ok": true, "path": "/tmp/sbxw-uploads/1/one.txt" } },
+        { "tag": items[1]["tag"], "code": 507, "body": { "ok": false, "error": "no space left" } } ] });
+    let sent_before = STATE().lock().unwrap().sent.get(key).copied();
+    let out = on_answer(&Ctx { data: &d }, &c.call, Ok((200, body)));
+    assert!(!out.iter().any(|a| matches!(a, Action::Call(_))), "nothing pushed: {out:?}");
+    let note = out.iter().find_map(|a| match a {
+        Action::Notice { text, error: true, .. } => Some(text.clone()),
+        _ => None,
+    }).unwrap();
+    assert!(note.contains("two.txt was not uploaded: no space left") && note.contains("In the sandbox already") && note.contains("one.txt"), "{note}");
+    assert_eq!(STATE().lock().unwrap().sent.get(key).copied(), sent_before, "the draft stays");
+    let v = last_view(&out);
+    let st: Vec<&str> = v["detail"]["files"].as_array().unwrap().iter().map(|f| f["state"].as_str().unwrap()).collect();
+    assert_eq!(st, ["uploaded", "ok"]);
+    // The next Send uploads only the second, then pushes both paths.
+    let a = run(&d, "monitor_send", json!({ "key": key })).unwrap();
+    let Action::Confirm(c) = &a[0] else { panic!() };
+    let items = c.call.body["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 1);
+    let out = on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "results": [{ "tag": items[0]["tag"], "code": 200, "body": { "ok": true, "path": "/tmp/sbxw-uploads/2/two.txt" } }] }))));
+    let push = out.iter().find_map(|a| match a { Action::Call(c) => Some(c.clone()), _ => None }).unwrap();
+    assert_eq!(push.body["text"], "/tmp/sbxw-uploads/1/one.txt /tmp/sbxw-uploads/2/two.txt", "no words: the message is the paths");
+    // A daemon path that is not one of its upload folders is never typed.
+    on_answer(&Ctx { data: &d }, &push, Ok((200, json!({ "ok": true }))));
+    let a3 = file_in(&dir, "three.txt", b"3");
+    on_files(&Ctx { data: &d }, Incoming::Files(vec![a3]));
+    let a = run(&d, "monitor_send", json!({ "key": key })).unwrap();
+    let Action::Confirm(c) = &a[0] else { panic!() };
+    let items = c.call.body["items"].as_array().unwrap().clone();
+    let out = on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "results": [{ "tag": items[0]["tag"], "code": 200, "body": { "ok": true, "path": "/etc/passwd; rm -rf ~" } }] }))));
+    assert!(!out.iter().any(|a| matches!(a, Action::Call(_))), "{out:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An empty file, or one the daemon cannot take, cannot be sent: the Send
+/// is refused before any dialog, the button is off. A file whose name looks
+/// like a secret needs the dialog's box ticked.
+#[test]
+fn a_refused_file_blocks_the_send_and_a_secret_looking_one_needs_the_box() {
+    let dir = tmp_dir("refused");
+    let empty = file_in(&dir, "empty.txt", b"");
+    let env = file_in(&dir, ".env.local", b"NAME=value");
+    let mut d = data_of("basic");
+    opened(&mut d);
+    let key = "billing-api:s-bill-main";
+    shown_on(&mut d, key);
+    let out = on_files(&Ctx { data: &d }, Incoming::Files(vec![empty]));
+    d["monitor"] = last_view(&out);
+    assert_eq!(d["monitor"]["detail"]["files"][0]["state"], "refused");
+    let e = run(&d, "monitor_send", json!({ "key": key, "text": "hi" })).unwrap_err();
+    assert!(e.starts_with("Not sent: empty.txt cannot go"), "{e}");
+    let h = host();
+    let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+    h.act("typed", &ta.arg, &"hi".into()).unwrap();
+    assert!(find(&h.render(&d).unwrap(), "monitor-send").unwrap().disabled, "a refused file greys Send");
+    let id = d["monitor"]["detail"]["files"][0]["id"].as_u64().unwrap();
+    run(&d, "monitor_attach_remove", json!({ "key": key, "id": id })).unwrap();
+    on_files(&Ctx { data: &d }, Incoming::Files(vec![env]));
+    let a = run(&d, "monitor_send", json!({ "key": key })).unwrap();
+    let Action::Confirm(c) = &a[0] else { panic!() };
+    assert!(c.ack.is_some(), "a secret-looking name: the box must be ticked");
+    assert!(c.lines.iter().any(|l| l.contains("looks like a secret")), "{:?}", c.lines);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Nothing is attached, picked or sent while something covers the Monitor
+/// or a Jarvis proposal waits, nor for a session that waits on a menu.
+#[test]
+fn nothing_is_attached_under_a_dialog_a_proposal_or_a_menu() {
+    let dir = tmp_dir("held");
+    let f = file_in(&dir, "a.txt", b"a");
+    let mut d = data_of("basic");
+    opened(&mut d);
+    shown_on(&mut d, "billing-api:s-bill-main");
+    for g in [(|d: &mut J| d["app"]["covered"] = true.into()) as fn(&mut J), |d: &mut J| d["jarvis"]["pending"] = json!([{ "id": "p-1" }])] {
+        let mut d2 = d.clone();
+        g(&mut d2);
+        assert!(run(&d2, "monitor_attach", json!({ "key": "billing-api:s-bill-main" })).unwrap_err().starts_with("Nothing attached"));
+        let out = on_files(&Ctx { data: &d2 }, Incoming::Files(vec![f.clone()]));
+        assert!(out.iter().any(|a| matches!(a, Action::ForgetFiles(_))) && !out.iter().any(|a| matches!(a, Action::Set { .. })), "{out:?}");
+        let out = on_files(&Ctx { data: &d2 }, Incoming::Png(vec![1, 2, 3]));
+        assert!(!out.iter().any(|a| matches!(a, Action::Set { .. })));
+    }
+    assert!(STATE().lock().unwrap().att.is_empty());
+    shown_on(&mut d, "shop-web::checkout-copy");
+    assert!(run(&d, "monitor_attach", json!({ "key": "shop-web::checkout-copy" })).unwrap_err().contains("answer that first"));
+    let n = host().render(&d).unwrap();
+    assert!(find(&n, "monitor-attach").unwrap().disabled);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Hostile names (control characters, direction marks, very long, a
+/// backslash) make no control and no key: the chip shows them cut, the
+/// hidden characters as `?`; the dialog shows the whole path, those
+/// characters written out; the upload route encodes the name.
+#[test]
+fn hostile_file_names_are_cut_in_the_chip_and_whole_in_the_dialog() {
+    let dir = tmp_dir("names");
+    let long = format!("{}.txt", "x".repeat(240));
+    let names = ["evil\nname\u{1b}[31m.txt".to_string(), "invoice\u{202e}txt.exe".to_string(), long.clone(), "a\\b \"c\".md".to_string()];
+    let paths: Vec<_> = names.iter().map(|n| file_in(&dir, n, b"x")).collect();
+    let mut d = data_of("basic");
+    opened(&mut d);
+    let key = "billing-api:s-bill-main";
+    shown_on(&mut d, key);
+    let out = on_files(&Ctx { data: &d }, Incoming::Files(paths.clone()));
+    d["monitor"] = last_view(&out);
+    let chips = d["monitor"]["detail"]["files"].as_array().unwrap().clone();
+    assert_eq!(chips.len(), 4);
+    for c in &chips {
+        let n = c["name"].as_str().unwrap();
+        assert!(n.chars().count() <= attach::CHIP_CHARS && !n.chars().any(|ch| ch.is_control() || ch == '\u{202e}'), "{n:?}");
+    }
+    assert_eq!(chips[0]["name"], "evil?name?[31m.txt");
+    // Drawn: each chip makes one control, its cross, keyed by id only.
+    let n = host().render(&d).unwrap();
+    let ctl = controls(find(&n, "monitor-attached").unwrap());
+    assert_eq!(ctl.len(), 4, "{ctl:?}");
+    assert!(ctl.iter().all(|k| k.split(' ').nth(1).is_some_and(|key| key.strip_prefix("monitor-file-remove-").is_some_and(|id| id.parse::<u64>().is_ok()))), "{ctl:?}");
+    // The dialog: the whole path of each, hidden characters written out.
+    let a = run(&d, "monitor_send", json!({ "key": key })).unwrap();
+    let Action::Confirm(c) = &a[0] else { panic!() };
+    let lines = c.lines.join("\n");
+    assert!(lines.contains("evil\\u{a}name\\u{1b}[31m.txt") && lines.contains("invoice\\u{202e}txt.exe") && lines.contains(&long), "{lines}");
+    assert!(!lines.contains('\u{1b}') && !lines.contains('\u{202e}'));
+    for it in c.call.body["items"].as_array().unwrap() {
+        let r = it["route"].as_str().unwrap();
+        assert!(!r.contains('\n') && !r.contains(' ') && !r.contains('\\'), "{r}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The whole window: the person chose "Do not ask again for files I drop"
+/// (the core's store), and still a Monitor send with files opens the
+/// core's dialog; under Jarvis's proposal the Attach press asks no file
+/// dialog and a drop on the Monitor attaches nothing.
+#[test]
+fn the_skip_dialog_choice_never_skips_a_monitor_send_and_the_gate_holds() {
+    use crate::shell::{view as shell_view, App};
+    use rune::KeyEvent;
+    let dir = tmp_dir("window");
+    let f = file_in(&dir, "plan.md", b"# Plan");
+    let fx = format!("{}/fixtures/monitor/gate.json", env!("CARGO_MANIFEST_DIR"));
+    let mut a = App::new(crate::shell::Args { fixture: Some(fx), ..Default::default() });
+    a.store.set_in("uploads", "skip_drop_dialog", J::Bool(true));
+    let mut rt = rune::Runtime::new(a, shell_view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut rune::Tx| s.on_key(ev, tx));
+    rt.frame(0.0);
+    let frames = |rt: &mut rune::Runtime<App>, n: usize| {
+        for _ in 0..n {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+        }
+    };
+    let tap = |rt: &mut rune::Runtime<App>, key: &str| {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.016);
+    };
+    rt.update(|s, _| s.jarvis.shown = None);
+    frames(&mut rt, 4);
+    tap(&mut rt, "rail-monitor");
+    frames(&mut rt, 6);
+    tap(&mut rt, "monitor-row-billing-api:s-bill-main");
+    frames(&mut rt, 4);
+    // Jarvis's proposal up: Attach asks for no file dialog, a drop attaches nothing.
+    rt.update(|s, _| s.jarvis.shown = Some("p-high-1".into()));
+    frames(&mut rt, 2);
+    rt.update(|s, _| {
+        let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_attach", "args": { "key": "billing-api:s-bill-main" } })).unwrap();
+        crate::screen::Host::intents(s, "monitor", l);
+    });
+    assert!(rt.state.feats.asks.is_empty(), "a file dialog was asked under the proposal");
+    let det = rt.presented("monitor-detail").map(|r| r.0);
+    if let Some(r) = det {
+        rt.drop_files(vec![f.clone()], Some((r[0] + 20.0, r[1] + 20.0)));
+        frames(&mut rt, 2);
+    }
+    assert!(rt.state.screen_data()["monitor"]["detail"]["files"].as_array().is_none_or(|v| v.is_empty()), "a drop attached a file under the proposal");
+    // Nothing waits for the person (another window, the basic fixture): a
+    // drop on the Monitor attaches it to the session shown.
+    let fx = format!("{}/fixtures/monitor/basic.json", env!("CARGO_MANIFEST_DIR"));
+    let mut a = App::new(crate::shell::Args { fixture: Some(fx), ..Default::default() });
+    a.store.set_in("uploads", "skip_drop_dialog", J::Bool(true));
+    let mut rt = rune::Runtime::new(a, shell_view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    rt.frame(0.0);
+    frames(&mut rt, 4);
+    tap(&mut rt, "rail-monitor");
+    frames(&mut rt, 6);
+    tap(&mut rt, "monitor-row-billing-api:s-bill-main");
+    frames(&mut rt, 4);
+    let r = rt.presented("monitor-detail").unwrap().0;
+    rt.drop_files(vec![f.clone()], Some((r[0] + 20.0, r[1] + 20.0)));
+    frames(&mut rt, 3);
+    assert_eq!(rt.state.screen_data()["monitor"]["detail"]["files"].as_array().map(Vec::len), Some(1), "the drop is the shown session's");
+    assert!(rt.state.feats.dialog.is_none(), "a drop on the Monitor uploads nothing by itself");
+    // Send: the core's dialog, even with "Do not ask again" chosen.
+    rt.update(|s, _| {
+        let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_send", "args": { "key": "billing-api:s-bill-main" } })).unwrap();
+        crate::screen::Host::intents(s, "monitor", l);
+    });
+    frames(&mut rt, 2);
+    let d = rt.state.feats.dialog.as_ref().expect("the core's dialog");
+    assert_eq!(d.confirm.as_ref().map(|c| c.call.path.as_str()), Some("core:uploads"));
+    assert!(d.confirm.as_ref().is_some_and(|c| c.dont_ask.is_none()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// One row per session (place)
+
+/// The daemon lists a session per hook `session_id`; one terminal that was
+/// restarted or resumed leaves several, the old ones idle for ever (no
+/// `SessionEnd`). The list folds them by place, as the sidebar does: one
+/// row per thread, one per main checkout, the latest report; two live
+/// sessions in one main checkout are two rows. The header counts the rows.
+#[test]
+fn one_row_per_place_and_a_new_session_takes_its_place() {
+    let mut d = data_of("folding");
+    let v = opened(&mut d);
+    let ks = keys(&v);
+    let studio_main: Vec<&String> = ks.iter().filter(|k| k.starts_with("studio:") && !k.contains("::")).collect();
+    assert_eq!(studio_main.len(), 1, "studio's main checkout once: {ks:?}");
+    assert_eq!(ks.iter().filter(|k| k.starts_with("studio::paint")).count(), 1, "{ks:?}");
+    assert_eq!(ks.iter().filter(|k| k.starts_with("lab:")).count(), 2, "two live terminals on lab's checkout: {ks:?}");
+    assert_eq!(v["counts"]["total"], ks.len(), "the header counts the rows");
+    let paint = v["rows"].as_array().unwrap().iter().find(|r| r["key"] == "studio::paint").unwrap().clone();
+    assert_eq!(paint["group"], "working", "the thread's latest session: {paint}");
+    // The selected main row: the latest report, its last prompt an agent's message.
+    let main = studio_main[0].clone();
+    shown_on(&mut d, &main);
+    let det = d["monitor"]["detail"].clone();
+    assert_eq!(det["reply"], "Noted: I merge the palette thread next.");
+    assert!(det["last_input"].is_null(), "a cross-session message is not You: {det}");
+    assert_eq!(det["from"]["name"], "paint-thread");
+    assert_eq!(det["from"]["text"], "The palette step is done; tests pass.");
+    let row = d["monitor"]["rows"].as_array().unwrap().iter().find(|r| r["key"] == main.as_str()).unwrap().clone();
+    assert!(!row["line"].as_str().unwrap().contains('<'), "{row}");
+    // Drawn: no raw tag anywhere, and the message makes no control.
+    let n = host().render(&d).unwrap();
+    let mut all = vec![];
+    walk(&n, &mut all);
+    assert!(all.iter().all(|x| !x.text.contains("cross-session-message")), "a raw tag is drawn");
+    let from = find(&n, "monitor-from").expect("the message, as data");
+    assert!(controls(from).is_empty());
+    // A new session in the same place (a resume): the same row, its draft and files with it.
+    let dir = tmp_dir("fold");
+    let f = file_in(&dir, "note.txt", b"n");
+    on_files(&Ctx { data: &d }, Incoming::Files(vec![f]));
+    let mut next = d["sessions"].as_array().unwrap().iter().find(|i| i["session_id"] == "s-studio-3").unwrap().clone();
+    next["session_id"] = "s-studio-4".into();
+    next["started_ms"] = (next["ts"].as_u64().unwrap() + 1000).into();
+    next["ts"] = (next["ts"].as_u64().unwrap() + 2000).into();
+    next["last_input"] = "Go on with the export.".into();
+    let out = on_event(&Ctx { data: &d }, "session", &next);
+    let v = last_view(&out);
+    assert_eq!(keys(&v).iter().filter(|k| k.starts_with("studio:") && !k.contains("::")).count(), 1, "still one row");
+    assert_eq!(v["sel"], main.as_str(), "the selection stays on the place");
+    assert_eq!(v["detail"]["last_input"], "Go on with the export.");
+    assert_eq!(v["detail"]["files"].as_array().map(Vec::len), Some(1), "its attached file stays");
+    // An old session's report coming late changes nothing.
+    let mut late = d["sessions"][0].clone();
+    late["ts"] = (late["ts"].as_u64().unwrap() + 1).into();
+    assert!(on_event(&Ctx { data: &d }, "session", &late).is_empty());
+    // lab's two rows say which session each is.
+    let names: Vec<String> = d["monitor"]["rows"].as_array().unwrap().iter().filter(|r| r["sandbox"] == "lab").map(|r| r["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names.len(), 2);
+    assert!(names[0] != names[1] && names.iter().all(|n| n.starts_with("main \u{b7} ")), "{names:?}");
+    // The end of paint's older session (the stand-in's event) leaves paint as it is.
+    let ended_old = d["session_events"][0]["session"].clone();
+    assert!(on_event(&Ctx { data: &d }, "session", &ended_old).is_empty(), "an older session's end changes nothing");
+    // One of lab's two ends: its row leaves; the other stays.
+    let mut gone = d["sessions"].as_array().unwrap().iter().find(|i| i["session_id"] == "s-lab-a").unwrap().clone();
+    gone["state"] = "exited".into();
+    gone["ts"] = (gone["ts"].as_u64().unwrap() + 5).into();
+    let v = last_view(&on_event(&Ctx { data: &d }, "session", &gone));
+    assert_eq!(keys(&v).iter().filter(|k| k.starts_with("lab:")).count(), 1, "{:?}", keys(&v));
+    assert_eq!(v["counts"]["total"], keys(&v).len());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn harness_text_is_told_from_the_person_s_prompt() {
+    use super::model::injected;
+    assert_eq!(injected("Fix the build"), None);
+    assert_eq!(injected("<b>bold</b> is mine"), None);
+    let (from, body) = injected("<\\cross-session-message from=\"uds:/x\" from-name=\"lead\" from-mode=\"bypass\">Hi there</cross-session-message>").unwrap();
+    assert_eq!((from.as_deref(), body.as_str()), (Some("lead"), "Hi there"));
+    let (from, _) = injected("  <task-notification>\n<task-id>b1</task-id></task-notification>").unwrap();
+    assert_eq!(from.as_deref(), Some("sbxw"));
+    // The daemon's word, when it gives it, comes first.
+    use super::model::from_of;
+    let r = |extra: J| { let mut i = json!({ "last_input": "<cross-session-message from-name=\"x\">hi</cross-session-message>" }); for (k, v) in extra.as_object().unwrap() { i[k] = v.clone(); } i };
+    assert_eq!(from_of(&r(json!({}))), Some(("x".into(), "hi".into())));
+    assert_eq!(from_of(&r(json!({ "last_input_from": "person" }))), None, "the person typed it, tags and all");
+    assert_eq!(from_of(&r(json!({ "last_input_from": "injected", "last_input_sender": "lead" }))), Some(("lead".into(), "hi".into())));
+    assert_eq!(from_of(&json!({ "last_input": "plain words", "last_input_from": "injected", "last_input_sender": "task" })), Some(("task".into(), "plain words".into())));
+}
+
+/// When the daemon says so (`continues`, `ended`: fields it may serve), the
+/// list follows it: a session that continues another takes its card, even
+/// in another place's order; `ended: true` is an end. Absent, nothing changes.
+#[test]
+fn the_daemon_s_continues_and_ended_are_followed_when_served() {
+    let mut m = Model::default();
+    let base = |sid: &str, ts: u64, state: &str| json!({ "sandbox": "lab", "mode": "claude", "state": state, "started_ms": 1, "ts": ts, "session_id": sid });
+    m.upsert(&base("a", 10, "working"));
+    m.upsert(&base("b", 20, "attention"));
+    assert_eq!(m.cards.len(), 2, "two live sessions: two cards");
+    let mut c = base("c", 30, "working");
+    c["continues"] = "a".into();
+    m.upsert(&c);
+    assert_eq!(m.cards.len(), 2, "c continues a: a's card");
+    assert!(m.cards.values().any(|x| x.info["session_id"] == "c") && !m.cards.values().any(|x| x.info["session_id"] == "a"));
+    let mut e = base("b", 40, "idle");
+    e["ended"] = true.into();
+    m.upsert(&e);
+    assert_eq!(m.cards.len(), 1, "b ended: its card leaves (another holds the place)");
 }

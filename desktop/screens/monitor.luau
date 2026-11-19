@@ -106,6 +106,12 @@ local function feed(d, now, data)
     kids[#kids + 1] = bubble("You", "prompt", "text-muted", nil,
       column{ pad = 12, radius = "md", fill = "elevated", w = "full", text{ d.last_input, wrap = true, color = "text-bright" } })
   end
+  if d.from then
+    -- Another session's message (or the harness's): its words as data, quietly; never "You".
+    kids[#kids + 1] = bubble("From " .. d.from.name, "people", "text-dim", nil,
+      column{ pad = 12, radius = "md", border = "elevated", w = "full", key = "monitor-from",
+        text{ d.from.text ~= "" and d.from.text or "A message from another session.", wrap = true, size = "sm", color = "text-muted" } })
+  end
   if d.now then
     kids[#kids + 1] = row{ gap = 8, px = 12, py = 8, radius = "sm", border = "elevated", w = "full", key = "monitor-now",
       icon{ "sparkle", size = 12, color = "blue" }, text{ "Now", size = "sm", weight = "medium", color = "blue" },
@@ -120,7 +126,7 @@ local function feed(d, now, data)
   elseif d.permission then
     kids[#kids + 1] = permission_card(d)
   end
-  if not d.last_input and not d.now and not d.reply and not d.question and not d.permission then
+  if not d.last_input and not d.from and not d.now and not d.reply and not d.question and not d.permission then
     kids[#kids + 1] = text{ "Nothing to read yet: the session has not reported a prompt or a reply.", color = "text-muted", wrap = true }
   end
   kids[#kids + 1] = text{ "The last prompt, what it does now and its last reply: sbxw keeps no history of the conversation.", size = "sm", color = "text-dim", wrap = true }
@@ -134,22 +140,49 @@ local function draft_of(state, d)
   return ""
 end
 
+-- The files attached to this session's next Send: name (cut by the core),
+-- size, why it needs a look or cannot go, a remove cross.
+local function chips(d)
+  local files = d.files or {}
+  if #files == 0 then return false end
+  local kids = { gap = 8, w = "full", wrap = true, key = "monitor-attached" }
+  for _, f in ipairs(files) do
+    local tone = f.state == "refused" and "red" or f.state == "look" and "amber" or f.state == "uploaded" and "green" or "text-muted"
+    local ic = f.state == "refused" and "close" or f.state == "look" and "shield" or f.state == "uploaded" and "check" or "file"
+    kids[#kids + 1] = row{ gap = 4, px = 8, h = 24, radius = "sm", border = f.state == "ok" and "elevated" or tone, key = "monitor-file-" .. f.id, help = f.why,
+      icon{ ic, size = 12, color = tone },
+      text{ f.name, size = "sm", color = "text", truncate = true, max_w = 260 },
+      text{ f.sending and string.format("%d%%", math.floor((f.progress or 0) * 100)) or f.size, size = "sm", color = "text-dim" },
+      button{ icon = "close", key = "monitor-file-remove-" .. f.id, variant = "ghost", dense = true, on = "unattach", arg = { key = d.key, id = f.id },
+        disabled = d.sending == true, help = "Remove it: it is not sent" } }
+  end
+  return row(kids)
+end
+
 local function composer(state, d, data)
   local c = d.compose
   local covered = (data.app or {}).covered == true
-  local can = c.can and not covered
+  local can = c.can and not covered and not d.sending
   local draft = draft_of(state, d)
+  local files = d.files or {}
+  local refused = false
+  for _, f in ipairs(files) do if f.state == "refused" then refused = true end end
+  local narrow = ((data.app or {}).overlay or {}).w or 1000
   return column{ gap = 8, px = 24, py = 12, w = "full",
     textarea{ id = "monitor-compose", rows = 2, value = draft, disabled = not c.can,
       placeholder = c.can and ("Write to " .. c.target .. "…") or "",
       on = "typed", on_submit = "submit", arg = { key = d.key, gen = d.sent } },
+    chips(d),
     row{ gap = 8, w = "full",
       icon{ "send", size = 12, color = "text-dim" },
       text{ "To", size = "sm", color = "text-dim" }, square(data, d.sandbox),
       text{ c.target, size = "sm", weight = "medium", color = "text", truncate = true, grow = 1, key = "monitor-target" },
+      button{ narrow >= 640 and "Attach" or nil, key = "monitor-attach", icon = "plus", variant = "ghost", dense = true, on = "attach", arg = { key = d.key },
+        disabled = not can or d.attach_max == true,
+        help = "Attach a file to what you send (the system's file dialog); you can also drop files here or paste a picture" },
       button{ "Send…", key = "monitor-send", icon = "send", tone = "green", on = "send", arg = { key = d.key, gen = d.sent },
-        disabled = not can or draft == "",
-        help = "Opens the core's dialog with your words in full and the session they go to", keys = { (data.app or {}).platform == "macos" and "⌘" or "Ctrl", "↩" } } },
+        disabled = not can or refused or (draft == "" and #files == 0),
+        help = "Opens the core's dialog with your words in full, the files and the session they go to", keys = { (data.app or {}).platform == "macos" and "⌘" or "Ctrl", "↩" } } },
     (not c.can) and text{ c.why, size = "sm", color = "text-dim", wrap = true } or false }
 end
 
@@ -242,17 +275,20 @@ local screen = {
       state.drafts = state.drafts or {}
       state.drafts[a.key] = { text = text or "", gen = a.gen }
     end,
+    -- Words, files, or both: the core's Rust checks what may go.
     send = function(state, a)
       local dr = (state.drafts or {})[a.key]
-      if not dr or dr.gen ~= a.gen or not string.find(dr.text, "%S") then return nil end
-      return intent("monitor_send", { key = a.key, text = dr.text })
+      local text = (dr and dr.gen == a.gen) and dr.text or ""
+      -- No words: no `text` (files alone; the Rust says when nothing would go).
+      return intent("monitor_send", { key = a.key, text = string.find(text, "%S") and text or nil })
     end,
     submit = function(state, a, text)
       state.drafts = state.drafts or {}
       state.drafts[a.key] = { text = text or "", gen = a.gen }
-      if not string.find(text or "", "%S") then return nil end
-      return intent("monitor_send", { key = a.key, text = text })
+      return intent("monitor_send", { key = a.key, text = string.find(text or "", "%S") and text or nil })
     end,
+    attach = function(_, a) return intent("monitor_attach", { key = a.key }) end,
+    unattach = function(_, a) return intent("monitor_attach_remove", { key = a.key, id = a.id }) end,
   },
 }
 

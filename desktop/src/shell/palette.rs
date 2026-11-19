@@ -69,6 +69,12 @@ pub fn close_keys() -> Vec<String> {
     if mac() { vec!["⌘".into(), "⇧".into(), "W".into()] } else { vec!["Ctrl".into(), "Shift".into(), "W".into()] }
 }
 
+/// A feature shortcut's keycaps ([`feat::Shortcut`]): ⌃⌥ and the key on macOS, Alt and the key elsewhere.
+pub fn shortcut_keys(key: char) -> Vec<String> {
+    let k = key.to_ascii_uppercase().to_string();
+    if mac() { vec!["⌃".into(), "⌥".into(), k] } else { vec!["Alt".into(), k] }
+}
+
 /// The next page's keys (`back`: the previous one's). Ctrl+Tab everywhere:
 /// in a terminal it is a plain Tab (terminal/keys.rs sends `\t` for it), so
 /// taking it costs a program nothing; on macOS also ⌘⌥→ and ⌘⌥←.
@@ -93,7 +99,7 @@ pub fn page_step(ev: &rune::KeyEvent) -> Option<i32> {
 pub fn shortcuts(ptt: &str) -> Vec<(Vec<String>, String)> {
     let mut v: Vec<(Vec<String>, String)> = vec![
         (chord_keys("K"), "Open the command palette".into()),
-        (chord_keys("B"), "Show or hide the sidebar".into()),
+        (chord_keys("B"), "Show or hide the sandboxes sidebar".into()),
         (if mac() { chord_keys("J") } else { vec!["F7".into()] }, "Open or close Jarvis".into()),
         (chord_keys("1…9"), "Give the page's pane 1 to 9 the keyboard".into()),
         (page_keys(true), "Next page of terminals".into()),
@@ -108,8 +114,7 @@ pub fn shortcuts(ptt: &str) -> Vec<(Vec<String>, String)> {
         (vec!["Tab".into()], "Go to the next control".into()),
     ];
     for sc in feat::FEATURES.iter().flat_map(|f| f.shortcuts.iter()) {
-        let k = sc.key.to_ascii_uppercase().to_string();
-        v.push((if mac() { vec!["⌃".into(), "⌥".into(), k] } else { vec!["Alt".into(), k] }, sc.help.to_string()));
+        v.push((shortcut_keys(sc.key), sc.help.to_string()));
     }
     v.push((if mac() { vec!["⌘".into(), "V".into()] } else { vec!["Ctrl".into(), "Shift".into(), "V".into()] }, "Paste into the focused terminal".into()));
     v.push((vec!["Shift".into(), "PageUp".into()], "Scroll a terminal's history".into()));
@@ -236,7 +241,7 @@ impl App {
             let n = self.status.jobs.len();
             v.push(core("create-jobs", "Show the new sandboxes", &format!("{n} being created or just done"), "plus", vec![], Run::Intents(vec![("open_panel".into(), serde_json::json!({ "screen": feat::create::JOBS }))])));
         }
-        v.push(core("sidebar", if self.sidebar_shown() { "Hide the sidebar" } else { "Show the sidebar" }, "", "columns", chord_keys("B"), Run::Sidebar));
+        v.push(core("sidebar", if self.sidebar_shown() { "Hide sandboxes" } else { "Show sandboxes" }, "", "columns", chord_keys("B"), Run::Sidebar));
         v.push(core("jarvis", if self.jarvis.open { "Close Jarvis" } else { "Open Jarvis" }, "", "jarvis", if mac() { chord_keys("J") } else { vec!["F7".into()] }, Run::Jarvis));
         let shown = self.shown();
         for (k, i) in shown.clone().enumerate() {
