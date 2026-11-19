@@ -698,6 +698,8 @@ impl App {
             (Some((n, _)), None) => serde_json::json!({ "screen": n }),
             _ => J::Null,
         };
+        // Something over the panes and over any overlay: the core's dialog, a modal, Jarvis's proposal, the palette.
+        data["app"]["covered"] = (self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some()).into();
         data
     }
 
@@ -1934,7 +1936,7 @@ impl App {
 
     /// Runs one checked intent.
     pub fn run_intent(&mut self, from: &str, intent: Intent) {
-        log::info!("intent from {from}: {intent:?}");
+        log::info!("{}", intent_log_line(from, &intent));
         match intent {
             Intent::OpenTerminal { sandbox, mode, thread, pane, start } => {
                 let i = self.pane_for(&pane);
@@ -2089,6 +2091,16 @@ pub fn lights_room(inset: f32) -> f32 {
 
 pub const fn window_chrome() -> rune::Chrome {
     rune::Chrome { full_size_content: true, traffic_lights: Some(LIGHTS), drag_regions: true }
+}
+
+/// What the log says of an intent: who asked, its name and, for a feature's,
+/// the names of the arguments it was given. Never a value: a value can be
+/// what the person typed (`monitor_send`, `follow_send`, `relay_set`).
+pub(crate) fn intent_log_line(from: &str, intent: &Intent) -> String {
+    match intent {
+        Intent::Feature(a) => format!("intent from {from}: {}({})", a.name, a.args.keys().map(String::as_str).collect::<Vec<_>>().join(", ")),
+        other => format!("intent from {from}: {}", other.name()),
+    }
 }
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {

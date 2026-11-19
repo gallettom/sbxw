@@ -100,6 +100,9 @@ icons! {
     PLUG "plug" concat!(st!("path", r#"d="M5.5 1.75v3M10.5 1.75v3""#), st!("path", r#"d="M3.5 4.75h9v2.5a4.5 4.5 0 0 1-9 0z""#), st!("path", r#"d="M8 11.75v2.5""#));
     BOOK "book" concat!(st!("path", r#"d="M8 4.25C6.5 3 4.5 2.75 1.75 2.75v9.5c2.75 0 4.75.25 6.25 1.5 1.5-1.25 3.5-1.5 6.25-1.5v-9.5C11.5 2.75 9.5 3 8 4.25z""#), st!("line", r#"x1="8" y1="4.25" x2="8" y2="13.75""#));
     BOX "box" concat!(st!("path", r#"d="M8 1.75l6 3v6.5l-6 3-6-3v-6.5z""#), st!("path", r#"d="M2 4.75l6 3 6-3M8 7.75v6.5""#));
+    // The Monitor (the rail's activity zone, its overlay): a list of
+    // sessions, the first one's dot filled (the one that needs you).
+    INBOX "inbox" concat!(r#"<circle cx="3.25" cy="4" r="1.75" fill="currentColor"/>"#, st!("circle", r#"cx="3.25" cy="8.5" r="1""#), st!("circle", r#"cx="3.25" cy="12.5" r="1""#), st!("line", r#"x1="6.75" y1="4" x2="14.25" y2="4""#), st!("line", r#"x1="6.75" y1="8.5" x2="14.25" y2="8.5""#), st!("line", r#"x1="6.75" y1="12.5" x2="11.75" y2="12.5""#));
 }
 
 pub fn get(name: &str) -> Option<&'static Icon> {

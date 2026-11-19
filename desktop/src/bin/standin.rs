@@ -33,6 +33,9 @@
 //! `session` event per session of the sandbox, with `session_id` and
 //! `started_ms`, as the daemon does; `--stale-session yes` keeps an older
 //! session left as `working`. `--clients N` reports N stream clients.
+//! A fixture's `daemon.session_events` (`[{after, session}]`, the Monitor's
+//! demo) replace a session's report `after` seconds from the first stream
+//! client and publish it as a `session` event.
 //!
 //! Terminal size, as the daemon: the PTY has one size, the client used last
 //! sets it, and a socket opened with `size=1` hears
@@ -385,6 +388,28 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
                         std::thread::spawn(move || {
                             std::thread::sleep(Duration::from_secs_f64(t));
                             new_approval(&st);
+                        });
+                    }
+                    // The fixture's `session_events` (the Monitor's demo): each
+                    // `{after, session}` replaces that session's report in the
+                    // list `after` seconds from the first stream client, then
+                    // goes out as a `session` event, as the daemon's hooks do.
+                    for e in g.raw["session_events"].as_array().cloned().unwrap_or_default() {
+                        let st = st.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(Duration::from_secs_f64(e["after"].as_f64().unwrap_or(1.0)));
+                            let info = e["session"].clone();
+                            {
+                                let mut g = st.lock().unwrap();
+                                if let Some(list) = g.raw["sessions"].as_array_mut() {
+                                    let same = |i: &serde_json::Value| i["sandbox"] == info["sandbox"] && i["session_id"] == info["session_id"];
+                                    match list.iter_mut().find(|i| same(i)) {
+                                        Some(i) => *i = info.clone(),
+                                        None => list.push(info.clone()),
+                                    }
+                                }
+                            }
+                            publish(&st, "session", &info.to_string());
                         });
                     }
                     if let Some(list) = changes.lock().unwrap().take() {

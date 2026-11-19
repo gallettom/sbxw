@@ -1,0 +1,103 @@
+{
+ "about": "No session at all: the Monitor's empty state.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "shop-web",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 1,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/shop",
+    "model": "claude-opus-5-5",
+    "model_name": "Opus 5.5",
+    "cost_usd": 6.12
+   },
+   {
+    "name": "billing-api",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/billing",
+    "model": "claude-sonnet-5-5",
+    "model_name": "Sonnet 5.5",
+    "cost_usd": 1.94
+   },
+   {
+    "name": "docs-site",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/docs",
+    "model": "claude-sonnet-5-5",
+    "model_name": "Sonnet 5.5",
+    "cost_usd": 0.41
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/pipeline",
+    "model": "claude-opus-5-5",
+    "model_name": "Opus 5.5",
+    "cost_usd": 2.75
+   },
+   {
+    "name": "chat-research",
+    "agent": "claude",
+    "status": "running",
+    "chat": true,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": null,
+    "cost_usd": 0.18
+   },
+   {
+    "name": "old-prototype",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/proto"
+   }
+  ],
+  "sessions": []
+ },
+ "app": {
+  "selected": "shop-web",
+  "panes": 2,
+  "split": "columns",
+  "open": [
+   "shop-web",
+   "billing-api"
+  ],
+  "focused": 1
+ }
+}

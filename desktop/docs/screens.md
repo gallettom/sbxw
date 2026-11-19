@@ -94,6 +94,7 @@ unchanged.
 | `theme` | The theme drawn: `dark` or `graphite` |
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
 | `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
+| `covered` | Something sits over the panes and over any overlay: the core's dialog, a modal, Jarvis's proposal or the palette (read only; `App::panes_covered` without the overlay itself). The Monitor draws its send controls disabled then; its Rust refuses to send whatever the screen draws |
 | `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |
 
 `data.jarvis` (every screen gets it; the `jarvis` screen draws it):
@@ -859,7 +860,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
 `coin`, `help`, `moon`, `appearance`, `branch`, `globe`, `remote`, `key`, `people`, `leader`, `threads`,
-`shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
+`shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `inbox` (the Monitor: a list of sessions, the first dot filled), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
 ">", for the top bar's logo).
 
 One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
@@ -880,6 +881,7 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `stop` | interrupt or stop |
 | `tag` | keyword pills |
 | `monitor` | the virtual Mac (rail, its panel, the palette) |
+| `inbox` | the Monitor: every session, who needs you first (rail, its overlay) |
 | `history` | commits (the Commits view, its rail entry, a pane's menu) |
 
 ## Where screens live
@@ -1132,7 +1134,7 @@ marks those that do not fit `more` (above).
 ### A rail entry
 
 A feature puts an entry in the left rail with `Place::Rail { zone, order }`.
-`zone` is a `feat::Zone`: `Activity` (what happens now: Requests 10,
+`zone` is a `feat::Zone`: `Activity` (what happens now: Monitor 5, Requests 10,
 Network 20, Team leads 30), `Browse` (views to read: Commits 10,
 Worktrees 20, Files 30) or `Configure` (what is set up: MCP 10, Skills 20,
 Kits 30; Settings is always its last). `order` sorts within the zone, lower
@@ -1851,6 +1853,63 @@ commit in Commits (`commits_show {sandbox, branch, hash}`).
 | `worktrees_more` | | The next page of rows |
 | `worktrees_terminal`, `worktrees_commits`, `worktrees_files` | `id` | The row's thread terminal, its branch in Commits, the explorer at it |
 | `worktrees_select` | `id?` | Marks a row (a lane pressed), or none; view state |
+
+### monitor
+
+Every Claude session of every sandbox in one view, who needs the person
+first, the selected one as a short feed and a composer (the "Inbox and
+detail" concept of `.sbxw-artifacts/desktop/MONITOR.md`). Files:
+`src/feat/monitor/` (`mod.rs` intents and the gate, `model.rs` the cards
+and the view, `tests.rs`), `screens/monitor.luau`, `fixtures/monitor/`
+(`basic`, `empty`, `idle`, `busy`, `gate`), `scripts/demo-monitor.sh`.
+
+**Screen.** `monitor` (overlay "Monitor", rail entry `rail-monitor`,
+activity zone, order 5, no count badge: Requests counts what waits). Left:
+the sessions, grouped Needs you (the longest waiting first), Working, Idle,
+Ended (the latest first), rows `monitor-row-<key>`, 50 a page
+(`monitor-more`), `monitor-next` ("2 need you", N). Middle (from 760 pt;
+under it, the list, and a row pressed opens its session with
+`monitor-back`): the header (state, colour square, model, cost; worktree,
+lines, time; `monitor-terminal`, `-commits`, `-files`, `-worktrees`), the
+feed (the last prompt, `monitor-now`, `monitor-reply` with keyword pills,
+`monitor-question` with `monitor-opt-<step>-<option>` or "Answer in its
+terminal", `monitor-permission`), then the composer (`monitor-compose`,
+`monitor-target` "To ■ sandbox · session", `monitor-send`). Keys: the
+view opens with the keyboard on the shown session's row; Up and Down move
+along the rows, Enter shows one, N goes to the next session that needs you,
+Escape closes. With nothing of the view focused, Up and Down move the
+selection and Enter gives the keyboard to the list.
+
+**Data.** `data.monitor`, built in Rust: `now`, `rows` (`{key, rev,
+sandbox, name, thread, group, tone, line, mono, ts, ask}`), `count` (the
+paging block), `counts` (`you`, `working`, `idle`, `ended`, `total`),
+`sel`, `detail` (the selected session: `strip`, `last_input`, `now`,
+`reply`, `question {answerable, steps: [{text, options: [{label, desc}]}]}`,
+`permission`, `compose {can, why, target}`, `sent`, `pane`). Started from
+`data.sessions` when the view opens (`monitor_open`), then kept from each
+`session` event, one card at a time: a card's `rev` moves only when its
+report changed, the screen memoises a row by key and rev, and the view is
+handed over only while it shows. Also read: `data.relay_ui.picks` and
+`sending` (the same picks as the Requests panel), `data.app.groups`,
+`data.app.covered`.
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `monitor_open` | none | direct | Reads the list again and opens the view (the sidebar's sandbox's most urgent session selected) |
+| `monitor_select`, `monitor_next`, `monitor_more` | `key` / none / none | direct | View state: a session shown, the next that needs you, the next page |
+| `monitor_key` | `key` (`up`, `down`, `enter`, `type`), `text` | direct | The view's keys when none of its rows has the keyboard; N (`type`) from anywhere in it |
+| `monitor_terminal`, `monitor_commits`, `monitor_files`, `monitor_worktrees` | `key` | direct | `thread_open` or `open_terminal` (spare pane; the pane that shows it, when one does), `commits_show` on its branch, `files_open` at its worktree, `worktrees_show` filtered to it |
+| `monitor_pick` | `key`, `step`, `option` | direct | The relay's `agent_pick`, only for a session the daemon lists as waiting and answerable |
+| `monitor_send` | `key`, `text` | approval | Masked (`/api/voice/anonymise`), then the core's dialog with the words in full and the session; Send there posts `/api/chat/push {text, name, thread}` |
+
+**The rules.** Only a press (or Cmd+Return in the composer) sends. The
+target is always drawn next to Send. The composer is disabled while the
+session waits on a question or a permission (typed words would land in its
+menu). `monitor_pick` and `monitor_send` refuse while `data.app.covered` is
+not false or a Jarvis proposal waits (`data.jarvis.pending`). Agent text is
+drawn as text and Markdown, never as a control; an option sends its index.
+A permission prompt is answered in its terminal: sbxw does not see the
+command.
 
 ### Overlays
 
