@@ -75,7 +75,14 @@ impl App {
                     continue;
                 }
                 match std::fs::read_to_string(e.path().join("canvas.json")).map_err(|e| e.to_string()).and_then(|t| serde_json::from_str::<Canvas>(&t).map_err(|e| e.to_string())) {
-                    Ok(c) if c.id == name => {
+                    Ok(mut c) if c.id == name => {
+                        // Saved before grids: rounds nobody arranged become grids now.
+                        if c.relayout_legacy() {
+                            match self.canvas_save(&c) {
+                                Ok(()) => tracing::info!("canvas {name}: laid out again as a grid ({} shots)", c.shots.len()),
+                                Err(e) => tracing::warn!("canvas {name}: laid out again as a grid, not saved: {e}"),
+                            }
+                        }
                         g.by_id.insert(name, c);
                     }
                     Ok(_) => tracing::warn!("canvas {name}: its manifest names another id; skipped"),
@@ -391,6 +398,40 @@ mod tests {
         assert!(again.canvas_image(&a.canvas, "../canvas.json").is_err());
         assert!(again.canvas_image(&a.canvas, "s-000000000000.png").is_err(), "a name the manifest does not list");
         assert!(again.canvas_image("../..", "canvas.json").is_err());
+    }
+
+    /// A manifest as the one-row layout wrote it: `n` shots of 1284 in a row.
+    fn one_row(id: &str, n: usize, moved: Option<usize>) -> String {
+        let shots: Vec<serde_json::Value> = (0..n)
+            .map(|k| {
+                let y = if moved == Some(k) { 700.0 } else { 0.0 };
+                serde_json::json!({ "id": format!("s-{k:04}"), "file": format!("s-{k:012}.png"), "round": 1, "title": format!("Screen {k}"), "screen": format!("screen-{k}"), "width": 1284, "px_w": 2568, "px_h": 1632, "x": k as f32 * (1284.0 + canvas::COL_GAP), "y": y, "w": 1284.0, "h": 816.0 })
+            })
+            .collect();
+        serde_json::json!({ "version": 1, "id": id, "sandbox": "web", "title": "Old", "shots": shots, "rounds": [{ "n": 1, "shots": n, "batch": "b" }] }).to_string()
+    }
+
+    #[test]
+    fn an_old_canvas_in_one_row_is_a_grid_once_loaded() {
+        let (d, _app) = app();
+        let (plain, arranged) = ("c-00000000000000a1", "c-00000000000000a2");
+        for (id, moved) in [(plain, None), (arranged, Some(3))] {
+            let dir = d.path().join(".sbxw/state/canvas").join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("canvas.json"), one_row(id, 12, moved)).unwrap();
+        }
+        let app = crate::testing::app_in(d.path());
+        let c = app.canvas_get(plain).unwrap();
+        assert_eq!(c.rounds[0].cols, 4, "12 shots: 4 columns");
+        assert_eq!(c.shots[5].cell, Some([1, 1, canvas::WHOLE]));
+        assert_eq!((c.shots[5].x, c.shots[5].y), (1284.0 + canvas::COL_GAP, 816.0 + canvas::GRID_ROW_GAP));
+        // Saved as a grid: read again from disk, it is the same.
+        let saved: Canvas = serde_json::from_str(&std::fs::read_to_string(d.path().join(".sbxw/state/canvas").join(plain).join("canvas.json")).unwrap()).unwrap();
+        assert_eq!(saved, c);
+        // The canvas where the person had moved a shot is as it was.
+        let a = app.canvas_get(arranged).unwrap();
+        assert_eq!(a.rounds[0].cols, 0);
+        assert_eq!((a.shots[3].y, a.shots[11].x), (700.0, 11.0 * (1284.0 + canvas::COL_GAP)));
     }
 
     #[test]
