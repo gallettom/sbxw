@@ -26,7 +26,7 @@ pub mod model;
 #[cfg(test)]
 mod tests;
 
-use super::{Action, Asked, Call, Confirm, Ctx, Extra, Feature, Place, Prepare, ScreenDecl, Slot, Zone};
+use super::{Action, Asked, Call, Confirm, Ctx, Extra, Feature, Place, Prepare, ScreenDecl, Shortcut, Slot, Zone};
 use crate::intent::{Arg, Risk, Spec};
 use model::{Group, Model};
 use serde_json::{json, Map, Value as J};
@@ -40,7 +40,8 @@ const KEYS: &[&str] = &["up", "down", "enter", "type"];
 pub const FEATURE: Feature = Feature {
     name: "monitor",
     events: &["session"],
-    screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/monitor.luau"), slot: Slot::Overlay { title: "Monitor", icon: "inbox" } }],
+    screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/monitor.luau"), slot: Slot::Base { title: "Monitor", icon: "inbox", open: "monitor_open" } }],
+    shortcuts: &[Shortcut { key: 'i', intent: "monitor_toggle", args: "{}", help: "Switch between the Terminals and the Monitor" }],
     intents: INTENTS,
     act,
     on_event: Some(on_event),
@@ -54,7 +55,8 @@ const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: 
 }
 
 pub const INTENTS: &[Spec] = &[
-    d("monitor_open", &[], "Opens the Monitor over the panes: every session, who needs you first, read again from the daemon's list."),
+    d("monitor_open", &[], "Makes the Monitor the base view of the pane area (instead of the terminals): every session, who needs you first, read again from the daemon's list. An overlay over it closes."),
+    d("monitor_toggle", &[], "Switches the pane area between the Terminals and the Monitor."),
     d("monitor_select", &[("key", Arg::Str, true)], "Shows that session (a row's `key`) in the middle. View state only."),
     d("monitor_key", &[("key", Arg::OneOf(KEYS), true), ("text", Arg::Text, false)], "The view's keys while none of its rows has the keyboard: Up and Down move the selection, Enter puts the keyboard on the list, N goes to the next session that needs you (rows: Up and Down move along them, Enter shows one)."),
     d("monitor_next", &[], "Selects the next session that needs you (round)."),
@@ -87,15 +89,17 @@ pub fn view_action(m: &Model, cx: &Ctx) -> Action {
     Action::Set { key: KEY.into(), value: m.view(model::now_for(m, wall_ms()), &cx.data["app"]["panes"]) }
 }
 
+/// Drawn, or the base view under an overlay: its view is kept current
+/// (a `Set` renders only screens that are drawn).
 fn shown(cx: &Ctx) -> bool {
-    cx.data["app"]["overlay"]["screen"] == SCREEN
+    cx.data["app"]["overlay"]["screen"] == SCREEN || cx.data["app"]["base"] == SCREEN
 }
 
 /// Why nothing may be sent now, or `None`: something over the panes and the
 /// overlay (`data.app.covered`), or a Jarvis proposal waiting for the person.
 pub fn held(cx: &Ctx) -> Option<String> {
     if cx.data["app"]["covered"] != false {
-        return Some("Not sent: a dialog is open over the monitor. Close it first.".into());
+        return Some("Not sent: something is open over the monitor (a dialog, or a view such as Files). Close it first.".into());
     }
     if cx.data["jarvis"]["pending"].as_array().is_some_and(|p| !p.is_empty()) {
         return Some("Not sent: a Jarvis proposal waits for you. Approve or refuse it first.".into());
@@ -172,6 +176,12 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
                 out.push(Action::Focus(format!("monitor-row-{k}")));
             }
             Ok(out)
+        }
+        // The Monitor is the base: back to the terminals; else it becomes the base.
+        "monitor_toggle" if cx.data["app"]["base"] == SCREEN => Ok(vec![Action::ClosePanel(SCREEN.into())]),
+        "monitor_toggle" => {
+            drop(m);
+            act(cx, &Asked { name: "monitor_open", args: Map::new() })
         }
         "monitor_select" => {
             let k = a.req("key");

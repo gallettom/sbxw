@@ -172,7 +172,8 @@ impl App {
             // The screen it shows: its `open_panel`/`open_modal` argument, else
             // the screen named as the entry (a feature's own opening intent).
             let screen = args["screen"].as_str().unwrap_or(&e.id).to_string();
-            let on = self.screen_shown(&screen);
+            // Lit while it shows, and while it is the base view under an overlay.
+            let on = self.screen_shown(&screen) || self.feats.base.as_deref() == Some(screen.as_str());
             let help = if e.help.is_empty() { e.label.clone() } else { format!("{}\n{}", e.label, e.help) };
             let badge = if e.tone == "amber" || e.tone == "red" { "amber" } else { "blue" };
             let shortcut = App::shortcut_for(&name);

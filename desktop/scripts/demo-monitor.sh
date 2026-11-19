@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The Monitor (an overlay over the pane area, the rail's activity zone),
+# The Monitor (a base view of the pane area, instead of the terminals; the
+# rail's activity zone, the pager's view switch),
 # headless, against the stand-in daemon with fixtures/monitor/<fixture>.json:
 #
 #   desktop/scripts/demo-monitor.sh
@@ -16,7 +17,11 @@
 #            moves, tax-rules finishes, retry-queue asks a permission;
 #   empty    fixtures/monitor/empty.json: no session yet;
 #   idle     fixtures/monitor/idle.json: nothing needs you;
-#   busy     fixtures/monitor/busy.json: 64 sessions, 9 need you, paged.
+#   busy     fixtures/monitor/busy.json: 64 sessions, 9 need you, paged;
+#   switch   the pager's view switch (Tabs | Grid | Monitor) over the terminals;
+#   base     the Monitor as the base: its header's view switch, no cross;
+#   under    the Monitor's Files link: the explorer over the Monitor;
+#   back     Escape there: back to the Monitor, the same session.
 # Out: $SBXW_SHOTS/monitor/monitor-<size>-<theme>-<mark>.png, its element tree and log.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -33,7 +38,9 @@ def add(**e):
 def step(key, until):
     add(type="tap", key=key); add(type="mark", name="wait:" + until)
 add(type="mark", name="wait:rail-monitor")
-if m in ("empty",):
+if m == "switch":
+    add(type="mark", name="wait:pager-view-monitor")
+elif m in ("empty",):
     step("rail-monitor", "monitor-empty")
 elif m == "idle":
     step("rail-monitor", "monitor-calm")
@@ -54,6 +61,10 @@ if m == "send":
     text = "Also add a test with an empty invoice, then stop."
     add(type="type", every=0.02, text=text); t += 0.02 * len(text)
     step("monitor-send", "cf-confirm")
+if m in ("under", "back"):
+    step("monitor-files", "overlay-files")
+if m == "back":
+    add(type="key", name="Escape"); add(type="mark", name="wait-gone:overlay-files")
 if m == "live":
     add(type="tap", key="monitor-row-docs-site:s-docs-main")
     add(type="mark", name="hold:6500")
@@ -65,7 +76,7 @@ PY
 }
 theme="${THEME:-dark}"
 for size in ${SIZES:-1284x816 720x480}; do
-  for m in ${MARKS:-ask choice reply send live empty idle busy}; do
+  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back}; do
     case "$m" in empty|idle|busy) fx="$m" ;; *) fx=basic ;; esac
     out="$shots/monitor-$size-$theme-$m"
     script "$m" >"$out-script.json"

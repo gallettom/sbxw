@@ -290,6 +290,16 @@ pub enum Slot {
     /// top and status bars stay; the pager is covered. No terminal gets a key
     /// or a press while it shows (`App::terminal_may_take_keys`).
     Overlay { title: &'static str, icon: &'static str },
+    /// A base view of the pane area, equal to the terminals: the person
+    /// switches between Terminals and it (the pager's view switch, its own
+    /// header's, its rail entry, `open`'s shortcut), and the choice is kept
+    /// across runs. Drawn where an overlay is; an overlay opened while it is
+    /// the base goes OVER it, and closing that overlay comes back to it.
+    /// Escape never leaves it; `close_panel` of it does (back to Terminals).
+    /// No terminal gets a key, a paste, a drop or the focus while it is the
+    /// base (`App::panes_covered`). `open`: the feature's intent that opens
+    /// it (run by the switch and once at start when it was the last base).
+    Base { title: &'static str, icon: &'static str, open: &'static str },
 }
 
 /// One of a feature's intents, checked against its [`Spec`].

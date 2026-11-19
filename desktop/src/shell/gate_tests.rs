@@ -470,3 +470,38 @@ fn an_overlay_under_jarvis_s_proposal_takes_no_key_or_file_for_a_terminal() {
         let _ = std::fs::remove_file(&file);
     }
 }
+
+/// The Monitor as the base view of the pane area (`Slot::Base`): a file
+/// dropped where a terminal is goes to the Monitor (its own drop, never an
+/// upload without its dialog), never to the pane under it; with Jarvis's
+/// high-risk proposal over the Monitor, nothing is sent and no key reaches
+/// the terminal.
+#[test]
+fn a_drop_with_the_monitor_as_the_base_reaches_no_pane() {
+    let _one = one_drop_test_at_a_time();
+    let drops = || super::PANE_DROPS.load(std::sync::atomic::Ordering::SeqCst);
+    let before = drops();
+    let (mut rt, rx) = window_on("jarvis/proposal-high");
+    rt.update(|s, _| s.jarvis.shown = None);
+    settle(&mut rt, 2);
+    let grid = rt.presented("grid-1").unwrap().0;
+    tap(&mut rt, "rail-monitor");
+    settle(&mut rt, 5);
+    assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"));
+    let file = std::env::temp_dir().join(format!("sbxw-gate-base-drop-{}.txt", std::process::id()));
+    std::fs::write(&file, "x").unwrap();
+    rt.drop_files(vec![file.clone()], Some((grid[0] + 10.0, grid[1] + 10.0)));
+    settle(&mut rt, 3);
+    let _ = std::fs::remove_file(&file);
+    assert_eq!(drops(), before, "a drop on the Monitor reached the pane under it");
+    assert!(rt.state.feats.dialog.is_none(), "a drop on the Monitor opened an upload dialog by itself");
+    // Jarvis's proposal over the Monitor: covered; no key reaches the terminal.
+    rt.update(|s, _| s.jarvis.shown = Some("p-high-1".into()));
+    settle(&mut rt, 2);
+    assert!(rt.state.covered() && rt.state.panes_covered());
+    rt.update(|_, tx| tx.focus("grid-1", false));
+    rt.key(KeyEvent { key: Key::Text("y".into()), mods: rune::Mods::default() });
+    rt.key(KeyEvent { key: Key::Enter, mods: rune::Mods::default() });
+    settle(&mut rt, 2);
+    assert_eq!(sent(&rx), b"", "a key reached the terminal under the Monitor and the proposal");
+}

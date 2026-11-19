@@ -90,7 +90,7 @@ pub fn fit_tabs(widths: &[f32], current: usize, avail: f32) -> (usize, usize) {
 /// The right group's width: Tabs, Grid, the per-page menu.
 fn controls_w(per: usize) -> f32 {
     let seg = |l: &str| bar::measure(l, TAB_TEXT, 500.0) + 16.0 + 14.0 + 4.0;
-    seg("Tabs") + seg("Grid") + GAP + bar::measure(&per_label(per), TAB_TEXT, 500.0) + 16.0 + 12.0 + 4.0 + GAP
+    seg("Tabs") + seg("Grid") + App::base_screen().map_or(0.0, |(_, t, _)| seg(t) + 2.0) + GAP + bar::measure(&per_label(per), TAB_TEXT, 500.0) + 16.0 + 12.0 + 4.0 + GAP
 }
 
 /// The leads view's mark at the pager's left.
@@ -373,7 +373,7 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
 }
 
 /// A segment of the view switch.
-fn segment(key: &str, label: &str, icon: &str, on: bool, help: &str, keys: Vec<String>, op: PageOp) -> El {
+fn segment(key: &str, label: &str, icon: &str, on: bool, help: &str, keys: Vec<String>, press: impl Fn(&mut App) + 'static) -> El {
     row()
         .key(key.to_string())
         .role("radio")
@@ -390,11 +390,46 @@ fn segment(key: &str, label: &str, icon: &str, on: bool, help: &str, keys: Vec<S
         .hover(c("elevated"))
         .cursor(Cursor::Pointer)
         .on_press(move |s: &mut App| {
-            s.run_intent("pager", Intent::Pages(op.clone()));
+            press(s);
             s.push_data();
         })
         .child(small_icon(icon, theme::icon::MEDIUM, c(if on { "blue" } else { "text-muted" })))
         .child(text(label.to_string()).font(small(TAB_TEXT, 500.0)).color(c(if on { "text-bright" } else { "text-muted" })))
+}
+
+/// The view switch: Tabs and Grid (the terminals, in that layout), then
+/// the base view (`Slot::Base`: the Monitor). In the pager (`key`
+/// `pager-view`) and in the base view's own header (`base-view`), so the
+/// person switches back from where they switched. Tabs or Grid from the
+/// base go back to the terminals in that layout; the base never changes
+/// the pages' layout.
+pub fn view_switch(s: &App, key: &str) -> El {
+    let on_base = s.feats.base.is_some();
+    let tabs_on = s.pages.tabs() && !on_base;
+    let grid_on = !s.pages.tabs() && !on_base;
+    let grid_n = s.pages.grid_per;
+    let mut sw = row()
+        .key(key.to_string())
+        .role("radiogroup")
+        .label("View")
+        .gap(2.0)
+        .padding(1.0)
+        .radius(theme::radius("xs").unwrap())
+        .fill(c("surface-alt"))
+        .child(segment(&format!("{key}-tabs"), "Tabs", "single", tabs_on, "Tabs: one terminal per page, the pager as its tab strip", palette::page_keys(true), |s: &mut App| {
+            s.run_intent("pager", Intent::Pages(PageOp::View(true)));
+            s.switch_base("pager", None);
+        }))
+        .child(segment(&format!("{key}-grid"), "Grid", "grid", grid_on, &format!("Grid: up to {grid_n} terminals per page"), vec![], |s: &mut App| {
+            s.run_intent("pager", Intent::Pages(PageOp::View(false)));
+            s.switch_base("pager", None);
+        }));
+    if let Some((name, title, icon)) = App::base_screen() {
+        let toggle = format!("{name}_toggle");
+        let keys = crate::feat::FEATURES.iter().flat_map(|f| f.shortcuts.iter()).find(|sc| sc.intent == toggle).map(|sc| palette::shortcut_keys(sc.key)).unwrap_or_default();
+        sw = sw.child(segment(&format!("{key}-{name}"), title, icon, on_base, &format!("{title}: every session in one view, instead of the terminals"), keys, move |s: &mut App| s.switch_base("pager", Some(name))));
+    }
+    sw
 }
 
 /// The pager strip.
@@ -487,18 +522,7 @@ pub fn view(s: &App) -> El {
         plus = plus.border(1.5, c("blue"));
     }
     left = left.child(plus);
-    let tabs_on = s.pages.tabs();
-    let grid_n = s.pages.grid_per;
-    let view_switch = row()
-        .key("pager-view")
-        .role("radiogroup")
-        .label("View")
-        .gap(2.0)
-        .padding(1.0)
-        .radius(theme::radius("xs").unwrap())
-        .fill(c("surface-alt"))
-        .child(segment("pager-view-tabs", "Tabs", "single", tabs_on, "Tabs: one terminal per page, the pager as its tab strip", palette::page_keys(true), PageOp::View(true)))
-        .child(segment("pager-view-grid", "Grid", "grid", !tabs_on, &format!("Grid: up to {grid_n} terminals per page"), vec![], PageOp::View(false)));
+    let view_switch = view_switch(s, "pager-view");
     let per_open = s.pager_menu.as_deref() == Some("per");
     let per = row()
         .key("pager-per")

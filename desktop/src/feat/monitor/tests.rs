@@ -587,11 +587,12 @@ fn the_keyboard_walks_the_list() {
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     frames(&mut rt, 3);
-    assert!(rt.state.feats.overlay.is_none(), "the terminal opened and the view closed");
+    assert!(rt.state.feats.overlay.is_none() && rt.state.feats.base.is_none(), "the terminal opened: back to the terminals");
     let last = sel(&rt);
     let (sb, th) = last.split_once("::").map(|(a, b)| (a.to_string(), Some(b.to_string()))).unwrap_or_else(|| (last.split(':').next().unwrap().to_string(), None));
     assert!(rt.state.panes.iter().any(|p| p.sandbox.as_deref() == Some(sb.as_str()) && p.thread == th), "its terminal is in a pane: {last}");
-    // Back from the rail: the same session; Escape closes.
+    // Back from the rail: the same session; Escape does not leave it (a
+    // base view), its rail entry pressed again does.
     let (x, y) = rt.find("rail-monitor").unwrap();
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
@@ -599,7 +600,12 @@ fn the_keyboard_walks_the_list() {
     assert_eq!(sel(&rt), last, "the view comes back on the same session");
     key(&mut rt, Key::Escape);
     frames(&mut rt, 2);
-    assert!(rt.state.feats.overlay.is_none(), "Escape closes the view");
+    assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"), "Escape does not leave the Monitor");
+    let (x, y) = rt.find("rail-monitor").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    frames(&mut rt, 2);
+    assert!(rt.state.feats.overlay.is_none() && rt.state.feats.base.is_none(), "its rail entry again: the terminals");
 }
 
 #[test]
@@ -614,4 +620,86 @@ fn the_intent_log_never_carries_the_words() {
     let core = crate::intent::parse(&json!({ "kind": "intent", "name": "copy_text", "args": { "text": marker } })).unwrap();
     let line = crate::shell::intent_log_line("x", &core[0]);
     assert_eq!(line, "intent from x: copy_text");
+}
+
+/// The Monitor under another view (Files, opened from its links): it is
+/// still the base, but covered: words and picks refuse in Rust; the view
+/// closed, the Monitor is back with the same session and the same draft,
+/// and they work again.
+#[test]
+fn under_files_the_monitor_sends_nothing_and_comes_back_as_it_was() {
+    use crate::shell::{view as shell_view, App};
+    use rune::{Key, KeyEvent};
+    let fx = format!("{}/fixtures/monitor/basic.json", env!("CARGO_MANIFEST_DIR"));
+    let a = App::new(crate::shell::Args { fixture: Some(fx), ..Default::default() });
+    let mut rt = rune::Runtime::new(a, shell_view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut rune::Tx| s.on_key(ev, tx));
+    rt.frame(0.0);
+    let frames = |rt: &mut rune::Runtime<App>, n: usize| {
+        for _ in 0..n {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+        }
+    };
+    let tap = |rt: &mut rune::Runtime<App>, key: &str| {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.016);
+    };
+    let sel = |rt: &rune::Runtime<App>| rt.state.screen_data()["monitor"]["sel"].as_str().unwrap_or("").to_string();
+    let typed = |rt: &rune::Runtime<App>| rt.state.screens.iter().find(|x| x.name == "monitor").and_then(|sc| sc.ui.edits.get("monitor-compose").map(|e| e.0.text.clone()));
+    frames(&mut rt, 4);
+    tap(&mut rt, "rail-monitor");
+    frames(&mut rt, 6);
+    tap(&mut rt, "monitor-row-billing-api:s-bill-main");
+    frames(&mut rt, 4);
+    rt.update(|_, tx| tx.focus("monitor-compose", false));
+    for c in "draft".chars() {
+        rt.key(KeyEvent { key: Key::Text(c.to_string()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+    }
+    assert_eq!(typed(&rt).as_deref(), Some("draft"));
+    let send = |rt: &mut rune::Runtime<App>| {
+        rt.update(|s, _| {
+            s.notice = None;
+            let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_send", "args": { "key": "billing-api:s-bill-main", "text": "draft" } })).unwrap();
+            crate::screen::Host::intents(s, "monitor", l);
+        });
+    };
+    let pick = |rt: &mut rune::Runtime<App>| {
+        rt.update(|s, _| {
+            s.notice = None;
+            let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_pick", "args": { "key": "shop-web:s-shop-main", "step": 1, "option": 1 } })).unwrap();
+            crate::screen::Host::intents(s, "monitor", l);
+        });
+    };
+    let refused = |rt: &rune::Runtime<App>| rt.state.notice.as_ref().is_some_and(|n| n.0.contains("Not sent"));
+    // Files over the Monitor, from its link.
+    tap(&mut rt, "monitor-files");
+    frames(&mut rt, 4);
+    assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("files"));
+    assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"), "still the base");
+    assert_eq!(rt.state.screen_data()["app"]["covered"], true);
+    send(&mut rt);
+    frames(&mut rt, 1);
+    assert!(refused(&rt) && rt.state.feats.dialog.is_none(), "words under Files: {:?}", rt.state.notice);
+    pick(&mut rt);
+    frames(&mut rt, 1);
+    assert!(refused(&rt) && rt.state.feats.dialog.is_none(), "a pick under Files: {:?}", rt.state.notice);
+    // Files closed: the Monitor as it was, and both work again.
+    rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+    frames(&mut rt, 4);
+    assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("monitor"), "back to the Monitor");
+    assert_eq!(sel(&rt), "billing-api:s-bill-main", "the same session");
+    assert_eq!(typed(&rt).as_deref(), Some("draft"), "the same draft");
+    assert_eq!(rt.state.screen_data()["app"]["covered"], false);
+    pick(&mut rt);
+    frames(&mut rt, 1);
+    assert!(!refused(&rt), "the pick goes again: {:?}", rt.state.notice);
+    send(&mut rt);
+    frames(&mut rt, 1);
+    assert!(rt.state.feats.dialog.is_some(), "the words go to the core's dialog again: {:?}", rt.state.notice);
 }
