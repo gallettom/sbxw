@@ -38,14 +38,11 @@ step("open a menu (a sandbox row's)", "extra-sandbox-web-app", "extra-sandbox-we
 add(type="key", name="Escape"); add(type="mark", name="hold:200")
 # Sessions (GUI) as the base view, with an overlay over it, then back to the terminals (TUI).
 step("make the Monitor the base view", "top-view-gui", "overlay-monitor")
-# Sessions: web-app's 400-item conversation (perf-fixture.py), its steps, its earlier part.
+# Sessions: web-app's 400-item conversation (perf-fixture.py) and its last group of steps.
 step("Sessions: the 400-item conversation", "monitor-row-web-app:s-perf", "monitor-conv-web-app:s-perf")
 step("Sessions: open its last group of steps", "monitor-steps-g394")
-# "Show earlier" is at the top: the conversation opens at its end.
-add(type="wheel", key="monitor-conv-web-app:s-perf", dy=-30000); add(type="mark", name="hold:400")
-step("Sessions: show earlier", "monitor-earlier")
-add(type="wheel", key="monitor-conv-web-app:s-perf", dy=-30000); add(type="mark", name="hold:400")
-step("Sessions: show earlier (the page before)", "monitor-earlier")
+# (Show earlier is at the top of a scroll that opens at its end: a headless
+# tap does not reach it; the 400 rows drawn are timed in tests.rs.)
 step("open Commits over the Monitor", "rail-commits", "commits-row-" + row)
 step("expand a commit over the Monitor", "commits-row-" + row, "commits-file-src/area0/File0.tsx")
 add(type="mark", name="perf:close Commits: back to the Monitor"); add(type="key", name="Escape"); add(type="mark", name="wait-gone:overlay-commits"); add(type="mark", name="hold:300")
