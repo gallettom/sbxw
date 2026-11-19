@@ -149,6 +149,7 @@ each group, so a later thread can read what it expects.
 
 | Area (web UI file) | Routes |
 |---|---|
+| Session history, for the Monitor (no web UI caller; docs/session-history.md) | `GET /api/sessions/:sandbox/:session_id/history?before=&limit=` (newest page first; reading subscribes for 120 s), `DELETE /api/sessions/:sandbox/:session_id/history/subscription`, bus event `history` `{sandbox, session_id, seq}` (a nudge without text, only while subscribed); `GET /api/sessions` items gain `ended`, `end_reason`, `continues`, `last_input_from`, `last_input_sender` |
 | Sessions and agents (`main.js`, `panes.js`) | `GET /api/ptys`, `GET /api/hook/log`, `POST /api/focus`, `POST /api/watching`, `GET /api/events` (sessions only), `GET /api/watch-events`, `POST /api/sandboxes/:name/up` |
 | Relay events (`relay.js`) | `GET /api/relay/events` (the app reads `GET /api/relay` after the bus event `relay` instead) |
 | SSH card (`ssh.js`) | its routes |
