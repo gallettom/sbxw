@@ -705,3 +705,51 @@ fn the_count_options_are_read_and_ordered() {
     let sp = spec(&json!({ "kind": "sandbox", "counts": [] })).unwrap();
     assert_eq!(sp.counts, Some(Default::default()));
 }
+
+/// A plain select's list (menu_surface) is bounded too: forty items at
+/// 720x480 stay in the window, scroll inside the panel, the chosen one in
+/// view on open, the arrows keep the focused one in view.
+#[test]
+fn a_plain_select_with_forty_items_scrolls_inside_the_window() {
+    let dir = std::env::temp_dir().join(format!("sbxw-select-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("commits.luau");
+    std::fs::write(&path, r#"
+return {
+  render = function()
+    local items = {}
+    for i = 1, 40 do items[#items + 1] = { id = "i" .. i, label = "Item " .. i } end
+    return column{ select{ id = "many", value = "i30", on = "x", items = items } }
+  end,
+  actions = { x = function() end },
+}"#).unwrap();
+    let (w, h) = (720.0, 480.0);
+    let mut rt = window("scope/many", w, h);
+    run(&mut rt, "commits_show", json!({}));
+    rt.update(|s, _| s.screens.iter_mut().find(|x| x.name == "commits").unwrap().load_file(path.clone()));
+    settle(&mut rt);
+    press(&mut rt, "many");
+    std::fs::remove_dir_all(&dir).ok();
+    let inside = |r: [f32; 4], o: [f32; 4]| r[0] >= o[0] - 0.5 && r[1] >= o[1] - 0.5 && r[0] + r[2] <= o[0] + o[2] + 0.5 && r[1] + r[3] <= o[1] + o[3] + 0.5;
+    let (p, _) = rt.presented("many-list").expect("the list");
+    let (v, _) = rt.presented("many-items").expect("its rows");
+    assert!(inside(p, [0.0, 0.0, w, h]), "the panel {p:?} leaves the window");
+    assert!(inside(v, p), "the rows {v:?} leave the panel {p:?}");
+    let (r, _) = rt.presented("many-i30").unwrap();
+    assert!(inside(r, v), "the chosen row {r:?} is not in view {v:?}");
+    assert!(!inside(rt.presented("many-i1").unwrap().0, v) || !inside(rt.presented("many-i40").unwrap().0, v), "forty items overflow");
+    // The list does not take the keyboard on open (a plain select, as
+    // before); once a row has it, the arrows move it and keep it in view.
+    rt.update(|_, tx| tx.focus("many-i1", true));
+    settle(&mut rt);
+    let mut seen = 0;
+    for _ in 0..45 {
+        key(&mut rt, Key::Down);
+        let Some(f) = focused(&rt).filter(|f| f.starts_with("many-i")) else { continue };
+        seen += 1;
+        let (r, _) = rt.presented(&f).unwrap();
+        let (v, _) = rt.presented("many-items").unwrap();
+        assert!(inside(r, v), "the focused {f} {r:?} is out of view {v:?}");
+    }
+    assert!(seen > 10, "the arrows move through the rows ({seen})");
+}
