@@ -1041,7 +1041,7 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
         }
     }
     vec![Extra {
-        place: Place::Rail { zone: Zone::Browse, order: 40 },
+        place: Place::Rail { zone: Zone::Browse, order: 25 },
         id: SCREEN.into(),
         label: "Canvas".into(),
         icon: Some("canvas".into()),
