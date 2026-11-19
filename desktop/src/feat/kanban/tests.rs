@@ -192,7 +192,7 @@ fn the_form_takes_paths_only_from_the_core_and_asks_once_for_a_file_that_looks_l
     // The secret-looking file: ONE Confirm with the ack box, its call the save.
     let out = st.act(&Ctx { data: &d }, &asked("kanban_save", json!({}))).unwrap();
     let Some(Action::Confirm(c)) = out.iter().find(|a| matches!(a, Action::Confirm(_))) else { panic!("no confirm: {out:?}") };
-    assert!(c.ack.is_some());
+    assert!(c.ack.as_deref() == Some("I have looked at these files and want to attach them"));
     assert!(c.lines.iter().any(|l| l.contains("id_rsa")));
     assert_eq!(c.call.path, "/api/tickets/web-app");
     // Confirmed: the ticket, then each file in turn, then the panel on it.
@@ -463,4 +463,49 @@ fn a_real_sized_board_renders_in_every_state_under_half_the_budget_and_the_eleme
         }
     }
     eprintln!("kanban: the worst render took {} interrupts and {} elements ({})", worst.0, worst.1, worst.2);
+}
+
+#[test]
+fn a_flagged_file_is_attached_only_through_the_ack_confirm_and_a_refused_kind_never() {
+    let mut d = data();
+    let mut st = State::default();
+    show(&mut st, &mut d, "web-app");
+    run(&mut st, &mut d, "kanban_new", json!({}));
+    d["app"]["modal"] = json!({ "screen": FORM });
+    let dir = std::env::temp_dir().join(format!("sbxw-kanban-ack-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (secret, zip, elf) = (dir.join(".env"), dir.join("notes.zip"), dir.join("tool"));
+    std::fs::write(&secret, "A=1").unwrap();
+    std::fs::write(&zip, b"PK\x03\x04rest").unwrap();
+    std::fs::write(&elf, b"\x7fELF\x02\x01").unwrap();
+    let out = st.on_files(&Ctx { data: &d }, Incoming::Files(vec![secret.clone(), zip.clone(), elf.clone()]));
+    let f = last_set(&out, FORM_UI);
+    assert_eq!(f["files"].as_array().unwrap().len(), 1, "the archive and the program are refused at once: {f}");
+    assert!(out.iter().any(|a| matches!(a, Action::Notice { text, error: true, .. } if text.contains("notes.zip: an archive") && text.contains("tool: a program"))));
+    st.act(&Ctx { data: &d }, &asked("kanban_form", json!({ "title": "x" }))).unwrap();
+    // Save: no call goes out on its own; only the core's Confirm, with the ack box, carries it.
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_save", json!({}))).unwrap();
+    assert!(!out.iter().any(|a| matches!(a, Action::Call(_))), "nothing saved before the acknowledgement");
+    let confirms: Vec<&Confirm> = out.iter().filter_map(|a| if let Action::Confirm(c) = a { Some(c.as_ref()) } else { None }).collect();
+    assert_eq!(confirms.len(), 1);
+    assert!(confirms[0].ack.is_some());
+    // Saved again while that Confirm is up: refused, still one.
+    assert!(st.act(&Ctx { data: &d }, &asked("kanban_save", json!({}))).is_err());
+    // Cancelled (the core's on_dismiss): Save may ask again, never without the box.
+    st.form.as_mut().unwrap().saving = false;
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_save", json!({}))).unwrap();
+    assert!(!out.iter().any(|a| matches!(a, Action::Call(_))) && out.iter().any(|a| matches!(a, Action::Confirm(c) if c.ack.is_some())));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_panel_says_the_files_go_to_the_agent_that_reads_the_ticket() {
+    let mut d = data();
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, "web-app");
+    let (v, _) = run(&mut st, &mut d, "kanban_open", json!({ "id": card_id(&v, "T-1") }));
+    assert!(v["ticket"]["files_note"].as_str().unwrap().contains("copied into web-app when an agent reads this ticket"));
+    let id = card_id(&v, "T-2");
+    let (v, _) = run(&mut st, &mut d, "kanban_open", json!({ "id": id }));
+    assert!(v["ticket"]["files_note"].is_null(), "no file, no line");
 }

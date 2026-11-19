@@ -117,7 +117,8 @@ local function panel(t, ow)
         text{ f.size or "", size = "xs", color = "text-dim" },
         t.editable and button{ icon = "close", variant = "ghost", compact = true, on = "remove_file", arg = f.id, key = f.el_remove, help = "Remove this file", tab_stop = false } or false }
     end
-    kids[#kids + 1] = column{ gap = 8, w = "full", text{ t.files_label or "Files", size = "xs", color = "text-muted" }, #pics > 0 and row(pics) or false, row(chips) }
+    kids[#kids + 1] = column{ gap = 8, w = "full", text{ t.files_label or "Files", size = "xs", color = "text-muted" }, #pics > 0 and row(pics) or false, row(chips),
+      t.files_note and text{ t.files_note, size = "xs", color = "text-dim", wrap = true, key = "kanban-files-note" } or false }
   end
   if t.priorities or t.movable or t.validate then
     local r = { gap = 8, w = "full", wrap = true }

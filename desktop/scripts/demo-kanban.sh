@@ -16,6 +16,7 @@
 #   planned  T-1 open: P1, two files, Move up and down, Send to the lead
 #   form     the new-ticket form with two files dropped on it (one named
 #            like a secret, marked "look first")
+#   form-ack Save pressed on that form: the core's Confirm with the ack box
 #   narrow   the window at 720 pt wide: one column at a time, its picker
 # Out: $SBXW_SHOTS/kanban/kanban-<theme>-<size>-<mark>.png and its element tree.
 set -euo pipefail
@@ -50,10 +51,12 @@ if m == "ticket":
     step("kanban-row-t-web-app-5", "kanban-panel")
 if m == "planned":
     step("kanban-row-t-web-app-1", "kanban-panel")
-if m == "form":
+if m in ("form", "form-ack"):
     step("kanban-new", "kanban-form")
     add(type="tap", key="kanban-form-title"); add(type="type", text="Export the members list as CSV", every=0.01); t += 0.6
     step({"drop_files": {"paths": [f"{S}/drop/members-notes.txt", f"{S}/drop/id_rsa"], "key": "kanban-form", "hover": 0.2}}, "kanban-form-file-1")
+if m == "form-ack":
+    step("kanban-form-save", "cf-confirm")
 if m == "narrow":
     step("kanban-colpick", "kanban-colpick-list")
     step("kanban-colpick-progress", "kanban-lane-progress")
@@ -65,7 +68,7 @@ PY
 }
 for theme in ${THEMES:-dark graphite}; do
   for size in ${SIZES:-1284x816 1900x950 720x600}; do
-    for m in ${MARKS:-board all ticket planned form narrow}; do
+    for m in ${MARKS:-board all ticket planned form form-ack narrow}; do
       [ "$m" = narrow ] && [ "$size" != 720x600 ] && continue
       [ "$m" != narrow ] && [ "$size" = 720x600 ] && continue
       script "$m" >"$shots/script-$m.json"

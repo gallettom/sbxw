@@ -266,3 +266,18 @@ fn the_lead_is_told_of_a_ticket_it_cannot_link_and_a_working_thread_keeps_its_ow
     app.tickets_follow(&p2);
     assert_eq!(app.ticket_view(&me, n).unwrap()["link"]["thread"], "second");
 }
+
+#[test]
+fn files_reach_a_sandbox_only_on_the_agent_s_own_read_of_that_ticket() {
+    let (_d, app, fake) = app_with(sbx_answer);
+    let wrote = |fake: &sbxw_sbx::runner::Fake| fake.log().iter().filter(|c| c.contains("/tmp/sbxw-uploads/")).count();
+    let n = app.ticket_create(&sb("alpha"), draft("a")).unwrap()["n"].as_u64().unwrap() as u32;
+    app.ticket_attach(&sb("alpha"), n, "x.png", &png()).unwrap();
+    app.ticket_edit(&sb("alpha"), n, draft("b"), None).unwrap();
+    let _ = app.ticket_send(&sb("alpha"), n);
+    app.tickets_agent_list(&sb("alpha"));
+    assert_eq!(wrote(&fake), 0, "not on create, attach, edit, send or list: {:?}", fake.log());
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    rt.block_on(app.tickets_agent_read(&sb("alpha"), "T-1")).unwrap();
+    assert_eq!(wrote(&fake), 1, "one file, one copy, on the read");
+}

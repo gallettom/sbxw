@@ -832,6 +832,7 @@ impl State {
                     match std::fs::metadata(&p) {
                         Ok(m) if !m.is_file() => refused.push(format!("{name}: a folder, not a file")),
                         Ok(m) if m.len() > MAX_FILE_BYTES => refused.push(format!("{name}: {}, more than 20 MB", crate::feat::files::view::size_label(m.len()))),
+                        Ok(_) if refused_kind(&p).is_some() => refused.push(format!("{name}: {}", refused_kind(&p).unwrap_or_default())),
                         Ok(m) => {
                             let look = crate::feat::files::drops::guardrails(std::slice::from_ref(&p), many);
                             f.files.push(Handed { path: Some(p), name, size: m.len(), bytes: None, look });
@@ -913,6 +914,24 @@ impl State {
         });
         Action::Set { key: FORM_UI.into(), value: v }
     }
+}
+
+/// What the daemon refuses by content (`sbxw_core::tickets::sniff`), said
+/// at once when the file is handed in: archives and native programs.
+pub fn refused_kind(p: &std::path::Path) -> Option<&'static str> {
+    use std::io::Read;
+    let mut b = [0u8; 264];
+    let n = std::fs::File::open(p).and_then(|mut f| f.read(&mut b)).unwrap_or(0);
+    let b = &b[..n];
+    let starts = |m: &[u8]| b.len() >= m.len() && &b[..m.len()] == m;
+    let archive = starts(b"PK\x03\x04") || starts(b"PK\x05\x06") || starts(b"\x1f\x8b") || starts(b"7z\xbc\xaf\x27\x1c") || starts(b"Rar!\x1a\x07") || starts(b"\xfd7zXZ\x00") || starts(b"BZh") || starts(b"\x28\xb5\x2f\xfd") || (b.len() > 262 && &b[257..262] == b"ustar");
+    if archive {
+        return Some("an archive: attach the files themselves");
+    }
+    if starts(b"\x7fELF") || starts(b"MZ") || starts(b"\xcf\xfa\xed\xfe") || starts(b"\xce\xfa\xed\xfe") || starts(b"\xca\xfe\xba\xbe") {
+        return Some("a program: a ticket's files are reference material");
+    }
+    None
 }
 
 /// A handed file's bytes, at most 20 MB.

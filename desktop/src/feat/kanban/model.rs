@@ -176,6 +176,10 @@ pub fn panel(card: &J, view: Option<&J>, previews: &std::collections::BTreeSet<S
     if let Some(t) = view {
         v["description"] = t["description"].clone();
         v["files_label"] = t["files_label"].clone();
+        // Where the files go: one quiet line, so attaching is never a surprise later.
+        if t["files"].as_array().is_some_and(|f| !f.is_empty()) {
+            v["files_note"] = format!("These files are copied into {sb} when an agent reads this ticket (ticket_read), as the lead does when it takes it.").into();
+        }
         v["files"] = t["files"]
             .as_array()
             .into_iter()
