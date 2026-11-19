@@ -231,13 +231,13 @@ fn the_links_go_through_the_intents_that_own_them() {
     let k = json!({ "key": "shop-web::tax-rules" });
     assert_eq!(run(&d, "monitor_commits", k.clone()).unwrap(), [i("commits_show", json!({ "sandbox": "shop-web", "branch": "sbxw/tax-rules" }))]);
     assert_eq!(run(&d, "monitor_files", k.clone()).unwrap(), [i("files_open", json!({ "sandbox": "shop-web", "worktree": "tax-rules" }))]);
-    assert_eq!(run(&d, "monitor_worktrees", k.clone()).unwrap(), [i("worktrees_show", json!({})), i("worktrees_filter", json!({ "text": "tax-rules" }))]);
+    assert_eq!(run(&d, "monitor_worktrees", k.clone()).unwrap(), [i("worktrees_show", json!({ "sandbox": "shop-web" })), i("worktrees_filter", json!({ "text": "tax-rules" }))]);
     assert_eq!(no_hist(run(&d, "monitor_terminal", k).unwrap()), [Action::ClosePanel("monitor".into()), i("thread_open", json!({ "sandbox": "shop-web", "name": "tax-rules" }))]);
     // The main session: the sandbox's own.
     let k = json!({ "key": "billing-api:s-bill-main" });
     assert_eq!(run(&d, "monitor_commits", k.clone()).unwrap(), [i("commits_show", json!({ "sandbox": "billing-api" }))]);
     assert_eq!(run(&d, "monitor_files", k.clone()).unwrap(), [i("files_open", json!({ "sandbox": "billing-api" }))]);
-    assert_eq!(run(&d, "monitor_worktrees", k.clone()).unwrap(), [i("worktrees_show", json!({})), i("worktrees_filter", json!({ "text": "billing-api" }))]);
+    assert_eq!(run(&d, "monitor_worktrees", k.clone()).unwrap(), [i("worktrees_show", json!({ "sandbox": "billing-api" })), i("worktrees_filter", json!({ "text": "" }))]);
     assert_eq!(no_hist(run(&d, "monitor_terminal", k.clone()).unwrap()), [Action::ClosePanel("monitor".into()), i("open_terminal", json!({ "sandbox": "billing-api", "pane": "spare" }))]);
     // Already in a pane: that pane's page and the keyboard, nothing opened again.
     d["app"]["panes"] = json!([{ "index": 1, "sandbox": "shop-web", "mode": "agent", "thread": null }, { "index": 2, "sandbox": "billing-api", "mode": "agent", "thread": null }]);

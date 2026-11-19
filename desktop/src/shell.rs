@@ -850,6 +850,12 @@ impl App {
     }
 
     fn push_data(&mut self) {
+        self.push_data_once(true);
+    }
+
+    /// [`Self::push_data`]; `again`: whether a moved overlay scope may push
+    /// once more (never from that second push: one extra push at most).
+    fn push_data_once(&mut self, again: bool) {
         let t = crate::perf::start();
         let d = self.screen_data();
         let built = crate::perf::ms(t);
@@ -867,8 +873,8 @@ impl App {
         crate::perf::done(t, || format!("push_data (screen_data {built:.2} ms, extras {extras:.2} ms, {} bytes; {rendered} of {} screens rendered)", d.to_string().len(), self.screens.len()));
         // The overlay's scope as its screen has just drawn it (a pick, a
         // pre-scoped open): when it moved, the sidebar's "in view" mark follows now.
-        if d["app"]["overlay"].is_object() && d["app"]["overlay"]["scope"] != self.overlay_scope() {
-            self.push_data();
+        if again && d["app"]["overlay"].is_object() && d["app"]["overlay"]["scope"] != self.overlay_scope() {
+            self.push_data_once(false);
         }
     }
 

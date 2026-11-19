@@ -422,7 +422,14 @@ fn the_scope_follows_the_core_s_data_without_running_the_screen_again() {
     });
     settle(&mut rt);
     press(&mut rt, "files-sandbox");
-    // (At the end of the list: in it, maybe scrolled out of view.)
+    // (At the end of the list: in it, maybe scrolled out of view. A loaded
+    // machine may take a few more frames.)
+    for _ in 0..5 {
+        if rt.elements().iter().any(|e| !e.exiting && e.key.as_deref() == Some("files-sandbox-fresh-one")) {
+            break;
+        }
+        settle(&mut rt);
+    }
     assert!(rt.elements().iter().any(|e| !e.exiting && e.key.as_deref() == Some("files-sandbox-fresh-one")), "a new sandbox is offered");
     key(&mut rt, Key::Escape);
     // The theme: the capsule's colours switch with it.
@@ -463,4 +470,40 @@ fn worktrees_has_the_scope_all_by_default() {
     run(&mut rt, "worktrees_show", json!({ "sandbox": "web-app" }));
     assert!(label_of(&rt, "worktrees-sandbox").is_some_and(|l| l.starts_with("Scope: web-app")));
     assert!(rt.find("overlay-strip-worktrees").is_some());
+}
+
+/// The extra push that carries a moved scope to the sidebar is one-shot by
+/// construction: a screen whose drawn scope changes on every render (and
+/// reads it back) costs exactly one more render per push, never a loop.
+#[test]
+fn a_scope_that_moves_on_every_render_pushes_once_more_and_no_more() {
+    let dir = std::env::temp_dir().join(format!("sbxw-scope-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("commits.luau");
+    std::fs::write(&path, r#"
+local n = 0
+return {
+  render = function(_, data)
+    n = n + 1
+    local _ = ((data.app or {}).overlay or {}).scope
+    return column{ row{ key = "title-slot",
+      select{ id = "commits-sandbox", value = (n % 2 == 0) and "web-app" or "docs", on = "x", scope = "sandbox" } } }
+  end,
+  actions = { x = function() end },
+}
+"#).unwrap();
+    let mut rt = window("scope/many", 1284.0, 816.0);
+    run(&mut rt, "commits_show", json!({}));
+    rt.update(|s, _| s.screens.iter_mut().find(|x| x.name == "commits").unwrap().load_file(path.clone()));
+    settle(&mut rt);
+    let mut extra = vec![];
+    for sb in ["billing", "search", "mobile"] {
+        rt.update(|s, _| {
+            let r0 = s.screens.iter().find(|x| x.name == "commits").unwrap().renders;
+            crate::screen::Host::intents(s, "test", vec![crate::intent::Intent::Select { sandbox: Some(sb.into()) }]);
+            extra.push(s.screens.iter().find(|x| x.name == "commits").unwrap().renders - r0);
+        });
+    }
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(extra, [2, 2, 2], "one render for the push, one for the single push after it");
 }
