@@ -654,6 +654,8 @@ impl App {
             return;
         }
         self.feats.data.remove(&format!("{screen}_view"));
+        // What it held is freed: handed back to the system (off the UI thread).
+        crate::mem::trim_soon();
         self.feats.panels.retain(|p| p != screen);
         if self.feats.panel.as_deref() == Some(screen) {
             self.feats.panel = self.feats.panels.last().cloned();
@@ -666,6 +668,7 @@ impl App {
         let Some((name, _)) = self.feats.overlay.take() else { return false };
         // Its view state (`<screen>_view`: the sandbox it was opened for) goes with it, as a panel's.
         self.feats.data.remove(&format!("{name}_view"));
+        crate::mem::trim_soon();
         self.feats.asks.push(("core", Ask::Focus(format!("grid-{}", self.focused + 1))));
         true
     }
