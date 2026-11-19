@@ -148,6 +148,14 @@ git diff <base>...sbxw/<name>
 In a shared plan there is one branch, `sbxw/team-<plan>`; review each thread's
 commits on it (`git log --oneline <base>..sbxw/team-<plan> -- <its scope>`).
 
+When the repository has `scripts/lead-review.sh` (sbxw's own does), run it
+before proposing a merge: `scripts/lead-review.sh <name> --scope <paths...>`
+prints in one call the commits, the diff stat, CLEAN or the conflicting files
+against the base and every other live `sbxw/*` branch, the files outside the
+scope, a dirty worktree, leftovers in it (`.sbxw-artifacts/`, `target*` dirs,
+scratch worktrees) and the added lines that log. It decides nothing: read what
+it prints, then read the diff.
+
 Check it did what its goal said, stayed in its scope, and does not collide with
 another thread's branch. When every thread is done, give the user one report:
 

@@ -230,6 +230,21 @@ example. The lead's goal then says only what is specific to the thread.
 
 ### 3. One-click merge
 
+Before proposing a merge, the lead runs `scripts/lead-review.sh <thread>
+[--scope <path>...]` in this repository (read-only, no build, a fraction of a
+second). For branch `sbxw/<thread>` it prints, in a stable order: the commits
+on top of main, `git diff --stat main...`, CLEAN or the conflicting files
+against main and against every other live `sbxw/*` branch with commits of its
+own (`git merge-tree --write-tree`), the files changed outside the scope
+paths, whether the thread's worktree is dirty, leftovers in it
+(`.sbxw-artifacts/` content, `target*` dirs, registered scratch worktrees),
+and the added lines that log (`log::`, `tracing::`, `console.log`), so the
+lead can check nothing sensitive is logged. It decides nothing; its exit code
+is 0 except for a missing branch (2). `--main <ref>` picks another base.
+`scripts/lead-review.sh --after-merge` lists the live thread branches with
+how far ahead and behind main they are and their merge state against it. The
+test is `tests/js/lead-review.test.mjs`, on a temporary repository.
+
 When every thread is done, the lead calls `propose_merge` with an order and a
 note. The plan dialog offers **Merge all**. For each thread, in order, sbxw:
 
