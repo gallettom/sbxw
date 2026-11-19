@@ -984,3 +984,88 @@ fn the_current_tab_and_its_pane_are_one_shape() {
         }
     }
 }
+
+/// The overlays' header and filter rows at the widths a docked panel
+/// leaves them (500 and 420 pt, the Requests panel open beside): nothing
+/// out of the overlay, no two controls on top of each other (a row that
+/// does not fit wraps: fields grow, controls keep their width), and no
+/// field's placeholder wider than the field (it would run under the next
+/// control). Commits, Worktrees, Files, MCP servers, Skills, Kits.
+#[test]
+fn the_overlays_rows_wrap_and_never_overlap_when_narrow() {
+    fn nodes<'a>(n: &'a crate::luau::Node, out: &mut Vec<&'a crate::luau::Node>) {
+        out.push(n);
+        n.children.iter().for_each(|c| nodes(c, out));
+    }
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/finish-tabs.json");
+    let mut bad = vec![];
+    for (win, want) in [(1268.0, 500.0), (1188.0, 420.0)] {
+        for feat in ["commits", "worktrees", "files", "mcp", "skills", "kits"] {
+            let a = App::new(Args { fixture: Some(fixture.into()), ..Args::default() });
+            let mut rt = rune::Runtime::new(a, view, (win, 800.0), rune::Env::new(true, 1.0));
+            for _ in 0..20 {
+                rt.frame(0.016);
+            }
+            // The Requests panel docked beside, alone, as a person has it.
+            rt.update(|s, _| {
+                if s.feats.panel.as_deref() != Some("relay") {
+                    s.rail_run(super::rail::RailRun::Intent("relay_open".into(), serde_json::json!({})));
+                }
+                s.push_data();
+            });
+            for _ in 0..20 {
+                rt.frame(0.016);
+            }
+            assert_eq!(rt.state.feats.panels, ["relay"], "{feat} at {want}: the Requests panel alone is docked");
+            super::tests::tap(&mut rt, &format!("rail-{feat}"));
+            for _ in 0..40 {
+                rt.frame(0.016);
+            }
+            let o = rt.presented(&format!("overlay-{feat}")).unwrap_or_else(|| panic!("{feat} at {want}: no overlay")).0;
+            assert!((o[2] - want).abs() <= 6.0, "{feat}: the overlay is {} wide, not {want} (the Requests panel docked beside it)", o[2]);
+            let inside = |r: [f32; 4]| r[0] >= o[0] - 0.5 && r[0] + r[2] <= o[0] + o[2] + 0.5;
+            let close = rt.presented("overlay-close").unwrap().0;
+            if !inside(close) {
+                bad.push(format!("{feat} at {want}: the header's cross {close:?} out of the overlay {o:?}"));
+            }
+            let node = rt.state.screens.iter().find(|s| s.name == feat).and_then(|s| s.last_good.clone()).unwrap_or_else(|| panic!("{feat}: not drawn"));
+            let mut all = vec![];
+            nodes(&node, &mut all);
+            // Controls only: their boxes, as drawn.
+            let mut boxes: Vec<(String, [f32; 4])> = vec![];
+            for n in &all {
+                use crate::luau::Kind;
+                if !matches!(n.kind, Kind::Button | Kind::Checkbox | Kind::Menu | Kind::Select | Kind::Input | Kind::Badge) {
+                    continue;
+                }
+                let Some(k) = crate::screen::key_of(n) else { continue };
+                let Some((r, op)) = rt.presented(&k) else { continue };
+                if op <= 0.01 || r[2] <= 0.0 || r[1] > o[1] + 200.0 {
+                    continue;
+                }
+                if !inside(r) {
+                    bad.push(format!("{feat} at {want}: {k} {r:?} out of the overlay {o:?}"));
+                }
+                if n.kind == Kind::Input {
+                    if let Some(ph) = n.placeholder.as_deref().filter(|p| !p.is_empty()) {
+                        let pw = super::bar::measure(ph, n.style.size.unwrap_or(13.0), 400.0);
+                        if pw > r[2] + 0.5 {
+                            bad.push(format!("{feat} at {want}: {k}'s placeholder ({pw:.0} pt) is wider than the field ({:.0} pt)", r[2]));
+                        }
+                    }
+                }
+                boxes.push((k, r));
+            }
+            for (i, (ka, a)) in boxes.iter().enumerate() {
+                for (kb, b) in &boxes[i + 1..] {
+                    let w = (a[0] + a[2]).min(b[0] + b[2]) - a[0].max(b[0]);
+                    let h = (a[1] + a[3]).min(b[1] + b[3]) - a[1].max(b[1]);
+                    if w > 1.0 && h > 1.0 {
+                        bad.push(format!("{feat} at {want}: {ka} {a:?} overlaps {kb} {b:?}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}

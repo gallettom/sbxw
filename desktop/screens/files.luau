@@ -27,16 +27,19 @@ end
 
 -- The code map's button: "Code map" when the sandbox has one, else
 -- "Generate code map" (or the run's progress). In the header, beside Upload.
-local function codemap_button(ui)
+local function codemap_button(ui, narrow)
   local label = "Code map"
   if ui.run and ui.run.phase == "writing" then
     label = ui.run.label
   elseif not ui.has_map then
     label = "Generate code map"
   end
-  return button{ label, key = "files-codemap", icon = "sparkle", on = "codemap", arg = { sandbox = ui.sandbox, has_map = ui.has_map == true }, variant = "ghost", dense = true,
+  -- Narrow: the icon alone (its words in the tooltip), as Upload beside it.
+  local help = ui.has_map and "Read the code map" or "Ask this sandbox's agent to write one, in a background session"
+  if narrow then help = label .. ": " .. help end
+  return button{ (not narrow) and label or nil, key = "files-codemap", icon = "sparkle", on = "codemap", arg = { sandbox = ui.sandbox, has_map = ui.has_map == true }, variant = "ghost", dense = true,
     disabled = ui.run and ui.run.phase == "writing" and not ui.has_map,
-    help = ui.has_map and "Read the code map" or "Ask this sandbox's agent to write one, in a background session" }
+    help = help }
 end
 
 -- A location's icon colour: folders blue (the explorer's one folder
@@ -414,7 +417,7 @@ return {
     }
     local head = row{ gap = 8, w = "full", key = "files-head",
       crumbs(state, ui, narrow),
-      codemap_button(ui),
+      codemap_button(ui, narrow),
       button{ (not narrow) and "Upload" or nil, key = "files-upload", icon = "plus", on = "upload", variant = open_up and "neutral" or "ghost", dense = true,
         help = "Upload into " .. ui.sandbox .. ": drop files on the explorer, choose them or paste a picture" },
       menu{ "", id = "files-actions", icon = "more", items = actions, on = "action", arg = { sandbox = ui.sandbox, has_map = ui.has_map == true } },

@@ -17,7 +17,9 @@ local function filters(ui)
   for _, s in ipairs(ui.sandboxes or {}) do items[#items + 1] = { id = s.id, label = s.label } end
   return row{ gap = 8, w = "full",
     select{ id = "commits-sandbox", value = ui.sandbox or "", on = "sandbox", items = items, w = 180 },
-    input{ id = "commits-filter", value = ui.filter or "", placeholder = "Filter by subject or author", on = "filter" },
+    -- The field grows and never goes under its placeholder; when the row
+    -- has no room for it, the row wraps (the controls keep their width).
+    input{ id = "commits-filter", value = ui.filter or "", placeholder = "Filter by subject or author", on = "filter", grow = 1, min_w = 220 },
     checkbox{ "Only unmerged", value = ui.unmerged == true, on = "unmerged", key = "commits-unmerged" },
     nz(ui.branch) and row{ gap = 4, key = "commits-branch", px = 8, h = 24, radius = "pill", fill = "blue-tint",
       icon{ "branch", size = 12, color = "blue" },

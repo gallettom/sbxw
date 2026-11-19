@@ -693,7 +693,8 @@ impl App {
         }
         head = head
             .child(el().grow(1.0).min_w(0.0))
-            .child(text("Esc closes").font(crate::screen::body(12.0, 400.0)).color(c("text-muted")))
+            // The hint only where there is room for it (the cross's tooltip says it too).
+            .children(self.rects.overlay.is_none_or(|r| r[2] >= OVERLAY_HINT_MIN).then(|| text("Esc closes").font(crate::screen::body(12.0, 400.0)).color(c("text-muted"))))
             .child(
                 el().key("overlay-close")
                     .role("button")
@@ -1401,6 +1402,8 @@ impl DropGrant {
 }
 
 /// The store's key for uploads, and its one entry.
+/// The overlay's header says "Esc closes" from this width (points).
+const OVERLAY_HINT_MIN: f32 = 560.0;
 const UPLOADS_KEY: &str = "uploads";
 const SKIP_DROP_DIALOG: &str = "skip_drop_dialog";
 
