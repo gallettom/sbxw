@@ -41,7 +41,11 @@ Read enough of the repository to split the work along real seams. A good thread:
   directories it owns, and keep the scopes disjoint.
 - **has a goal another agent can act on cold.** The thread knows nothing of
   this conversation. Say what to change, where, and how to tell it is done
-  (the test to run, the behaviour to see).
+  (the test to run, the behaviour to see). Do not re-type standing rules:
+  sbxw's briefing already carries the ones for every repository (commit often,
+  check `git merge-tree` before done, stop at a refused hook or a blocked host,
+  send what you must read by SendMessage), and the repository's root
+  `CLAUDE.md`, when it has one, carries its own. Say only what is specific.
 
 Use few threads. Two or three is usually right; the user's sandbox allows four
 Claude sessions by default, you included. If the work does not split cleanly,
@@ -108,7 +112,10 @@ threads talk directly, with the `SendMessage` tool; sbxw is not in between.
   decision you settled, a warning, information a thread needs (`to` a
   thread, or `team` for all of them). sbxw shows it on the team's Board and
   tells the addressee to read it with `read_team_notes`. `SendMessage` stays
-  for quick back-and-forth; sbxw does not show it.
+  for quick back-and-forth; sbxw does not show it. The rule: what must be
+  read goes by `SendMessage`; `team_note` is for what the user should see on
+  the Board. When `team_note` answers that an addressee "may not be able to
+  read team notes", send it the same words by `SendMessage` at once.
 - To answer a blocked thread or correct one that went off course, use
   `SendMessage` with `to` set to its name. Keep it short and specific: it
   knows nothing of this conversation.
@@ -144,6 +151,14 @@ git diff <base>...sbxw/<name>
 In a shared plan there is one branch, `sbxw/team-<plan>`; review each thread's
 commits on it (`git log --oneline <base>..sbxw/team-<plan> -- <its scope>`).
 
+When the repository has `scripts/lead-review.sh` (sbxw's own does), run it
+before proposing a merge: `scripts/lead-review.sh <name> --scope <paths...>`
+prints in one call the commits, the diff stat, CLEAN or the conflicting files
+against the base and every other live `sbxw/*` branch, the files outside the
+scope, a dirty worktree, leftovers in it (`.sbxw-artifacts/`, `target*` dirs,
+scratch worktrees) and the added lines that log. It decides nothing: read what
+it prints, then read the diff.
+
 Check it did what its goal said, stayed in its scope, and does not collide with
 another thread's branch. When every thread is done, give the user one report:
 
@@ -158,7 +173,10 @@ merge once every thread is done: leave the order empty, and add a
 session that knows nothing of this plan. The user approves them with the
 merge, and sbxw writes them to this repo's Claude Code auto memory. The user merges with one click in
 the plan dialog, so do not print git merge commands; you never merge yourself.
-sbxw tells you how the merge went, in a line prefixed with `[sbxw]`.
+sbxw tells you how the merge went, in a line prefixed with `[sbxw]`, and tells
+the other running threads that main moved; you do not need to. Which of their
+branches now conflict, sbxw does not say: when the repository has
+`scripts/lead-review.sh`, run it with `--after-merge`.
 
 Closing a thread (its worktree and branch, or a shared plan's worktree) is
 also the user's call: they use

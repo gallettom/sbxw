@@ -169,8 +169,25 @@ refused if the threads wouldn't fit under `max_agent_sessions`.
 
 On approval, sbxw opens each thread with a **briefing** as its first message:
 its goal, its scope, and the rules (commit on your branch, never merge or push,
-report your state).
+report your state). The briefing also carries the standing rules that hold in
+every repository (`STANDING_RULES` in `crates/core/src/messages.rs`, about 440
+characters): commit at each stable point, check `git merge-tree --write-tree`
+against main before reporting done, do nothing if another session of the same
+name already works in the worktree, send what the lead must read by
+`SendMessage`, and stop at a refused hook, a blocked host or a pending
+approval. A repository's own rules (build commands, what not to touch) go in
+its root `CLAUDE.md`, which every session reads by itself; sbxw's own is the
+example. The lead's goal then says only what is specific to the thread.
 
+- **A thread knows its state at every session start.** Sessions restart (a
+  daemon restart, a compaction). sbxw installs a `SessionStart` hook,
+  `~/.sbxw/thread-start.js`, that acts only in a thread (`SBXW_THREAD` set) and
+  gives the session, as context: its name, branch and tip, `git status
+  --short` (30 lines at most), scratch worktrees registered under its
+  worktree, leftover `target*` dirs, whether main has commits the branch
+  lacks, and "commit before long builds". Read-only git, about 2 seconds at
+  most, silent on any error. It is written with the relay at each bring-up:
+  an existing sandbox gets it with `sbxw up <sandbox>`.
 - **Threads report to sbxw** with `report_thread_status`. The chip shows the
   state: `…` starting, `●` working, `?` blocked, `✓` done, `✕` failed. Hover for
   the report.
@@ -222,6 +239,21 @@ report your state).
 
 ### 3. One-click merge
 
+Before proposing a merge, the lead runs `scripts/lead-review.sh <thread>
+[--scope <path>...]` in this repository (read-only, no build, a fraction of a
+second). For branch `sbxw/<thread>` it prints, in a stable order: the commits
+on top of main, `git diff --stat main...`, CLEAN or the conflicting files
+against main and against every other live `sbxw/*` branch with commits of its
+own (`git merge-tree --write-tree`), the files changed outside the scope
+paths, whether the thread's worktree is dirty, leftovers in it
+(`.sbxw-artifacts/` content, `target*` dirs, registered scratch worktrees),
+and the added lines that log (`log::`, `tracing::`, `console.log`), so the
+lead can check nothing sensitive is logged. It decides nothing; its exit code
+is 0 except for a missing branch (2). `--main <ref>` picks another base.
+`scripts/lead-review.sh --after-merge` lists the live thread branches with
+how far ahead and behind main they are and their merge state against it. The
+test is `tests/js/lead-review.test.mjs`, on a temporary repository.
+
 When every thread is done, the lead calls `propose_merge` with an order and a
 note. The plan dialog offers **Merge all**. For each thread, in order, sbxw:
 
@@ -248,6 +280,19 @@ With **close threads** ticked, merged threads are then closed and their branches
 deleted. The lead is told the result in one line, e.g.
 `[sbxw] Merged: a, b. Failed: c (conflict in X).` A failed merge can be retried
 after fixing the cause.
+
+**Main moved.** Once a merge has merged at least one thread, every other
+thread of the sandbox with an open session (of this plan or another) is told
+in one fixed line written by sbxw, e.g. ``[sbxw] main moved: a, b merged.
+Check `git merge-tree --write-tree main HEAD` before you go on.`` (the branch
+is the one merged into). It follows a team note's delivery rule: typed when
+the thread is idle or working, held while it waits on a question or a
+permission prompt, dropped when its session ended. The merged threads are not
+told, and nothing is typed into a session of another sandbox. The lead's
+merge line then ends with `Told that main moved: <threads>.` sbxw does not
+say which of those branches now conflict: its merge checks look at the main
+checkout against the paths a merge changes, not at one branch against
+another, so the lead runs `scripts/lead-review.sh --after-merge` for that.
 
 A **shared** plan has one branch: once every thread is done, **Merge** runs
 `git merge --no-ff sbxw/team-<plan>` once, with the same checks. The lead's
@@ -310,6 +355,13 @@ sent before the daemon had this version are not recovered.
   addressee's open session saying a note waits (never the note's words);
   `read_team_notes` hands the caller its notes once, framed as another
   agent's data. Their decisions and warnings stand pinned beside the board's.
+  A session that started before its relay had `read_team_notes` cannot read
+  a note, so sbxw only uses the plain line for an addressee whose relay
+  server said, lately, that it offers the tool (see `/api/relay/hello` in
+  [relay.md](relay.md#team-notes-and-the-relay-servers-hello)). For any other
+  the line adds "If your session has no such tool, ask <sender> to resend it
+  by SendMessage", and the sender's `team_note` answer names it: "<addressee>
+  may not be able to read team notes: send it by SendMessage too".
 - Commits: each thread's branch against the main checkout, or once merged,
   the recorded merge commit's other side, so a thread's commits stay its own
   after the merge deletes its branch. No author email. A shared plan's

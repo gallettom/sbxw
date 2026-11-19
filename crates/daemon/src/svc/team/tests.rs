@@ -228,7 +228,7 @@ async fn a_team_note_is_on_the_timeline_and_read_once_by_its_addressees() {
     app.plans.lock().unwrap().approve(&p.id, vec![t("a"), t("b")], None, None, crate::app::now_ms()).unwrap();
     let a = ThreadName::parse("a").unwrap();
     // The lead to a; a to the whole team.
-    let (_, told) = app.team_note(&sb, None, "a", "info", "The fixtures moved to tests/data.").unwrap();
+    let (_, told, _) = app.team_note(&sb, None, "a", "info", "The fixtures moved to tests/data.").unwrap();
     assert!(told.is_empty(), "no session open: recorded, nobody typed to");
     tick();
     app.team_note(&sb, Some(&a), "team", "warning", "Do not touch the money helper today.").unwrap();
@@ -391,4 +391,146 @@ async fn a_note_s_line_waits_while_its_session_is_asked_something_and_is_dropped
     // a answered: idle again, the held line goes.
     hook(&app, &sb, Some("a"), serde_json::json!({ "hook_event_name": "Stop", "last_assistant_message": "Picked." }));
     assert_eq!(app.note_targets(&sb, &who[..1], |_| true), [("a".into(), Delivery::Type)]);
+}
+
+/// A thread session that echoes what is typed into it, as a terminal would.
+async fn echo_session(app: &std::sync::Arc<crate::app::App>, sb: &SandboxRef, thread: &str) -> std::sync::Arc<crate::pty::PtySession> {
+    use sbxw_core::session::SessionKey;
+    let key = SessionKey::thread(sb, &ThreadName::parse(thread).unwrap());
+    let (s, _) = app
+        .sessions
+        .get_or_open(&key, 0, || async { Ok(crate::pty::Spawn { program: "sh".into(), args: vec!["-c".into(), "stty -echo 2>/dev/null; cat".into()], env: vec![] }) })
+        .await
+        .unwrap();
+    s
+}
+
+fn shown(s: &crate::pty::PtySession) -> String {
+    String::from_utf8_lossy(&s.replay()).into_owned()
+}
+
+async fn until(what: impl Fn() -> bool) -> bool {
+    for _ in 0..100 {
+        if what() {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    false
+}
+
+#[tokio::test]
+async fn after_a_merge_the_other_threads_of_the_sandbox_hear_main_moved_once() {
+    let (_d, app) = app();
+    let sb = SandboxRef::parse("myapp").unwrap();
+    let other = SandboxRef::parse("elsewhere").unwrap();
+    // `done` was merged; `idle` waits for work; `asked` waits on a question;
+    // `ended` has no session open; `far` is a thread of another sandbox.
+    let idle = echo_session(&app, &sb, "idle").await;
+    let asked = echo_session(&app, &sb, "asked").await;
+    let done = echo_session(&app, &sb, "done").await;
+    let far = echo_session(&app, &other, "far").await;
+    for (s, t) in [(&sb, "idle"), (&sb, "asked"), (&sb, "done"), (&other, "far")] {
+        hook(&app, s, Some(t), serde_json::json!({ "hook_event_name": "SessionStart" }));
+        hook(&app, s, Some(t), serde_json::json!({ "hook_event_name": "Stop", "last_assistant_message": "ok" }));
+    }
+    hook(&app, &sb, Some("asked"), serde_json::json!({ "hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "tool_input": { "questions": [{ "question": "Which?", "options": [{ "label": "A" }, { "label": "B" }] }] } }));
+    hook(&app, &sb, Some("ended"), serde_json::json!({ "hook_event_name": "SessionStart" }));
+
+    let told = app.tell_main_moved(&sb, &["done".into()], &["done".into(), "older".into()], Some("main"));
+    assert_eq!(told, ["asked", "idle"], "the open threads but the merged one; held counts as told");
+    let line = "[sbxw] main moved: done merged. Check `git merge-tree --write-tree main HEAD` before you go on.";
+    assert!(until(|| shown(&idle).contains(line)).await, "typed into the idle thread: {:?}", shown(&idle));
+    assert_eq!(shown(&idle).matches("main moved").count(), 1, "once");
+    assert!(!shown(&asked).contains("main moved"), "held while it waits on a question");
+    assert!(!shown(&done).contains("main moved"), "the merged thread is not told");
+    assert!(!shown(&far).contains("main moved"), "another sandbox's thread is never typed into");
+
+    // Answered: the held line goes, once.
+    hook(&app, &sb, Some("asked"), serde_json::json!({ "hook_event_name": "Stop", "last_assistant_message": "Picked." }));
+    assert!(until(|| shown(&asked).contains(line)).await, "typed once it answered: {:?}", shown(&asked));
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(shown(&asked).matches("main moved").count(), 1);
+    assert_eq!(shown(&idle).matches("main moved").count(), 1);
+
+    // Nothing merged: nobody told.
+    assert!(app.tell_main_moved(&sb, &[], &[], Some("main")).is_empty());
+    for s in [idle, asked, done, far] {
+        s.kill();
+    }
+}
+
+#[tokio::test]
+async fn a_line_held_for_a_thread_that_ends_is_dropped() {
+    let (_d, app) = app();
+    let sb = SandboxRef::parse("myapp").unwrap();
+    let asked = echo_session(&app, &sb, "asked").await;
+    hook(&app, &sb, Some("asked"), serde_json::json!({ "hook_event_name": "SessionStart" }));
+    hook(&app, &sb, Some("asked"), serde_json::json!({ "hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "tool_input": { "questions": [{ "question": "Which?", "options": [{ "label": "A" }, { "label": "B" }] }] } }));
+    assert_eq!(app.tell_main_moved(&sb, &["x".into()], &["x".into()], None), ["asked"]);
+    hook(&app, &sb, Some("asked"), serde_json::json!({ "hook_event_name": "SessionEnd" }));
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    assert!(!shown(&asked).contains("main moved"), "ended: dropped, never typed");
+    asked.kill();
+}
+
+async fn agent_post(app: &std::sync::Arc<crate::app::App>, sb: &str, path: &str, body: Value) -> (StatusCode, Value) {
+    let token = app.store.token(SandboxRef::parse(sb).unwrap()).unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let res = crate::http::agent_router(app.clone()).oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn a_note_s_line_says_what_to_do_when_its_reader_may_lack_the_tool() {
+    let (_d, app) = app();
+    // Sandbox names of this test's own: the readers' table is the process's.
+    let sb = SandboxRef::parse("hello-team").unwrap();
+    let p = app.plan_propose(&sb, "Hello", vec![t("a"), t("b")], Variant::Split, "x", Some("Lead")).await.unwrap();
+    app.plans.lock().unwrap().approve(&p.id, vec![t("a"), t("b")], None, None, crate::app::now_ms()).unwrap();
+    let a = echo_session(&app, &sb, "a").await;
+    let b = echo_session(&app, &sb, "b").await;
+    // a's session runs in process 100:5, b's in 200:7; both idle.
+    for (t, proc) in [("a", "100:5"), ("b", "200:7")] {
+        hook(&app, &sb, Some(t), serde_json::json!({ "hook_event_name": "SessionStart", "agent_proc": proc }));
+        hook(&app, &sb, Some(t), serde_json::json!({ "hook_event_name": "Stop", "agent_proc": proc, "last_assistant_message": "ok" }));
+    }
+    // a's relay server says hello with read_team_notes. b's never does (it
+    // started before its relay could). Another sandbox says hello for b's
+    // process: it must not count for b.
+    let tools = serde_json::json!(["team_note", "read_team_notes", "report_thread_status"]);
+    assert_eq!(agent_post(&app, "hello-team", "/api/relay/hello", serde_json::json!({ "thread": "a", "agent_proc": "100:5", "tools": tools })).await.0, StatusCode::OK);
+    assert_eq!(agent_post(&app, "hello-other", "/api/relay/hello", serde_json::json!({ "agent_proc": "200:7", "tools": tools })).await.0, StatusCode::OK);
+    // A body that is not a hello is refused.
+    assert_eq!(agent_post(&app, "hello-team", "/api/relay/hello", serde_json::json!({ "agent_proc": "100:5; rm", "tools": [] })).await.0, StatusCode::BAD_REQUEST);
+    let many: Vec<String> = (0..300).map(|i| format!("t{i}")).collect();
+    assert_eq!(agent_post(&app, "hello-team", "/api/relay/hello", serde_json::json!({ "agent_proc": "100:5", "tools": many })).await.0, StatusCode::BAD_REQUEST);
+    assert!(app.can_read_notes(&sb, "a") && !app.can_read_notes(&sb, "b"));
+
+    let (status, v) = agent_post(&app, "hello-team", "/api/team/note", serde_json::json!({ "to": "team", "kind": "info", "text": "SECRET-WORDS of the note" })).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["told"], serde_json::json!(["a", "b"]));
+    assert_eq!(v["unsure"], serde_json::json!(["b"]), "the sender hears whom to send it by SendMessage");
+    assert!(until(|| shown(&a).contains("[sbxw team note") && shown(&b).contains("[sbxw team note")).await);
+    assert!(until(|| shown(&b).contains("ask lead to resend it by SendMessage.")).await, "{}", shown(&b));
+    assert!(!shown(&a).contains("resend"), "a can read it: the plain line");
+    assert!(!shown(&a).contains("SECRET") && !shown(&b).contains("SECRET"), "never the note's words");
+
+    // A hello without the tool (an older relay) does not make a reader.
+    assert_eq!(agent_post(&app, "hello-team", "/api/relay/hello", serde_json::json!({ "thread": "b", "agent_proc": "200:7", "tools": ["team_note"] })).await.0, StatusCode::OK);
+    assert!(!app.can_read_notes(&sb, "b"));
+    // b restarts in a new process whose relay has the tool: now a reader.
+    hook(&app, &sb, Some("b"), serde_json::json!({ "hook_event_name": "SessionStart", "agent_proc": "300:9" }));
+    agent_post(&app, "hello-team", "/api/relay/hello", serde_json::json!({ "thread": "b", "agent_proc": "300:9", "tools": tools })).await;
+    assert!(app.can_read_notes(&sb, "b"));
+    a.kill();
+    b.kill();
 }
