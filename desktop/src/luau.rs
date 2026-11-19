@@ -217,7 +217,7 @@ pub struct Node {
     pub keys: Vec<String>,
     /// `button`, `menu`: its colour by meaning (the action colour code,
     /// docs/screens.md "Colour by meaning"): the icon in it, a tint under it
-    /// on hover and focus.
+    /// on hover and focus. `input`, `textarea`: `compose` for a chat input.
     pub tone: Option<String>,
     /// `button`: one text line tall (20 pt drawn, a 24 pt target).
     pub compact: bool,
@@ -328,7 +328,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("list", Kind::List, Positional::Children, &["gap"]),
     ("scroll", Kind::Scroll, Positional::Children, &["gap", "stick_bottom", "fade"]),
     ("button", Kind::Button, Positional::Text, &["on", "arg", "variant", "icon", "disabled", "color", "dense", "keys", "tab_stop", "hover", "tone", "compact"]),
-    ("input", Kind::Input, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "secure", "disabled"]),
+    ("input", Kind::Input, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "secure", "disabled", "tone"]),
     ("icon", Kind::Icon, Positional::Text, &["color", "size"]),
     ("badge", Kind::Badge, Positional::Text, &["tone", "pill"]),
     ("dot", Kind::Dot, Positional::None, &["tone"]),
@@ -340,11 +340,15 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("checkbox", Kind::Checkbox, Positional::Text, &["value", "on", "arg", "disabled"]),
     ("progress", Kind::Progress, Positional::None, &["value", "tone"]),
     ("markdown", Kind::Markdown, Positional::Text, &["color", "size", "on", "arg", "pills"]),
-    ("textarea", Kind::Textarea, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "disabled", "rows"]),
+    ("textarea", Kind::Textarea, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "disabled", "rows", "tone"]),
     ("image", Kind::Image, Positional::None, &["fit"]),
     ("surface", Kind::Surface, Positional::None, &["id"]),
     ("canvas", Kind::Canvas, Positional::None, &["id"]),
 ];
+
+/// Tones of `input` and `textarea`: `compose` is where a person writes to
+/// an agent (its own ground, and dictation goes there); `plain` the rest.
+pub const FIELD_TONES: &[&str] = &["plain", "compose"];
 
 /// Tones of `badge`, `dot` and `progress`.
 pub const TONES: &[&str] = &["neutral", "blue", "green", "amber", "red", "purple"];
@@ -1097,6 +1101,7 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "switch" => n.switch = bool_of(v)?,
         "variant" => n.variant = Some(one_of(v, VARIANTS)?),
         "tone" if matches!(n.kind, Kind::Button | Kind::Menu) => n.tone = Some(one_of(v, TONES)?),
+        "tone" if matches!(n.kind, Kind::Input | Kind::Textarea) => n.tone = Some(one_of(v, FIELD_TONES)?),
         "tone" => n.variant = Some(one_of(v, TONES)?),
         "compact" => n.compact = bool_of(v)?,
         "pill" => n.pill = bool_of(v)?,

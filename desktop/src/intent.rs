@@ -83,6 +83,10 @@ pub enum Intent {
     /// Push-to-talk from a button: start recording, then stop and send.
     TalkStart,
     TalkStop,
+    /// The microphone beside a chat input: starts dictating into this
+    /// screen's input `input` (`tone = "compose"`), or stops. The words are
+    /// put in the field, masked; never sent.
+    Dictate { input: String },
     /// Reads one of the conversation's messages aloud (`data.jarvis.log[i].id`).
     ReadAloud { id: u64 },
     StopReading,
@@ -276,6 +280,12 @@ pub const REGISTRY: &[Spec] = &[
     Spec { name: "toggle_jarvis_panel", risk: Risk::Direct, args: &[("open", Arg::Bool, false)], doc: "Opens or closes the Jarvis panel docked on the right (no `open`: toggles)." },
     Spec { name: "talk_start", risk: Risk::Direct, args: &[], doc: "Starts recording for Jarvis (push-to-talk from a button)." },
     Spec { name: "talk_stop", risk: Risk::Direct, args: &[], doc: "Stops recording; the words are transcribed and sent to Jarvis." },
+    Spec {
+        name: "dictate",
+        risk: Risk::Direct,
+        args: &[("input", Arg::Str, true)],
+        doc: "Starts dictating into this screen's chat input `input` (an input or textarea with `tone = \"compose\"`), or stops. The words are transcribed and masked by the daemon, then put in the field at its caret: never sent.",
+    },
     Spec { name: "read_aloud", risk: Risk::Direct, args: &[("id", Arg::Int(1, i64::MAX), true)], doc: "Reads one message of the conversation aloud (`data.jarvis.log[i].id`)." },
     Spec { name: "stop_reading", risk: Risk::Direct, args: &[], doc: "Stops reading aloud." },
     Spec {
@@ -320,6 +330,7 @@ impl Intent {
             Intent::ToggleJarvisPanel { .. } => "toggle_jarvis_panel",
             Intent::TalkStart => "talk_start",
             Intent::TalkStop => "talk_stop",
+            Intent::Dictate { .. } => "dictate",
             Intent::ReadAloud { .. } => "read_aloud",
             Intent::StopReading => "stop_reading",
             Intent::ApproveProposal { .. } => "approve_proposal",
@@ -438,6 +449,7 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
         "toggle_jarvis_panel" => Intent::ToggleJarvisPanel { open: m.get("open").and_then(Value::as_bool) },
         "talk_start" => Intent::TalkStart,
         "talk_stop" => Intent::TalkStop,
+        "dictate" => Intent::Dictate { input: s("input").unwrap() },
         "read_aloud" => Intent::ReadAloud { id: m.get("id").and_then(Value::as_f64).unwrap_or(0.0) as u64 },
         "stop_reading" => Intent::StopReading,
         "approve_proposal" => Intent::ApproveProposal { id: s("id").unwrap() },

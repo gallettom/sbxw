@@ -8,6 +8,7 @@
 //! per pane, each with a 32 pt bar over its terminal.
 
 mod bar;
+mod dictate;
 mod drag;
 mod features;
 mod jarvis;
@@ -276,6 +277,8 @@ pub struct App {
     pub jarvis: crate::jarvis::Jarvis,
     /// Native audio (`audio::Audio` in a window; `NullAudio` headless and in fixtures).
     pub audio: Box<dyn crate::voice::AudioIo>,
+    /// Dictation into a chat input (dictate.rs).
+    pub dictation: dictate::Dictation,
     wiring: jarvis::Wiring,
     /// The window's size in points (the root's layout).
     pub window: (f32, f32),
@@ -417,6 +420,7 @@ impl App {
             refocus: true,
             jarvis: crate::jarvis::Jarvis::default(),
             audio: Box::new(crate::voice::NullAudio::default()),
+            dictation: Default::default(),
             wiring: jarvis::Wiring::new(),
             window: (1280.0, 800.0),
             feats: features::Feats::default(),
@@ -721,6 +725,7 @@ impl App {
         // The pane area's base view (the Monitor), or null: the terminals.
         data["app"]["base"] = self.feats.base.clone().map_or(J::Null, J::String);
         data["app"]["covered"] = self.covered().into();
+        data["app"]["dictation"] = self.dictation_data();
         // The team leads view (leads.rs), which Sessions filters by too.
         // `can`: a team runs (Lead Mode can go on); `leaders` while it is on.
         let leaders = self.leaders();
@@ -1260,6 +1265,11 @@ impl App {
     /// the core's dialog, then the modal under it. False when nothing was
     /// open (the key goes on: a field, a terminal).
     pub fn escape(&mut self) -> bool {
+        // A dictation first: nothing recorded is kept or inserted.
+        if self.dictate_cancel(Some("Dictation cancelled: nothing was inserted.")) {
+            self.push_data();
+            return true;
+        }
         if self.statusbar_escape() {
             return true;
         }
@@ -1356,7 +1366,7 @@ impl App {
             self.push_data();
             return true;
         }
-        if self.jarvis_key(ev, tx) {
+        if self.jarvis_key(ev, tx) || self.dictate_key(ev, tx) {
             self.push_data();
             return true;
         }
@@ -2245,7 +2255,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .fill(c("floor"))
         .on_layout(|s: &mut App, r: [f32; 4]| s.window = (r[2], r[3]))
         .on_key_up(|s: &mut App, ev: &KeyEvent, _tx: &mut Tx| {
-            let took = s.jarvis_key_up(ev);
+            let took = s.jarvis_key_up(ev) || s.dictate_key_up(ev);
             if took {
                 s.push_data();
             }
@@ -2259,6 +2269,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             // A key held while the window loses focus never comes up here.
             if !focused {
                 s.talk_stop();
+                if s.dictation.on.as_ref().is_some_and(|t| t.held) {
+                    s.dictate_stop();
+                }
             }
         });
     // A root `on_paste` makes Rune take the primary modifier + V as a paste

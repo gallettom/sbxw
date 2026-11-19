@@ -35,6 +35,8 @@ pub enum JEvent {
     Approved { id: String, via: &'static str, result: Result<J, (Option<u16>, String)> },
     Refused { id: String, result: Result<J, String> },
     Transcribed(Result<String, String>),
+    /// A dictation's words, masked by the daemon (`dictate.rs`).
+    Dictated { gen: u64, result: Result<String, String> },
     /// The speech of message `msg` for reading `gen` (a newer reading, a stop
     /// or the microphone makes it stale: it is then dropped, never played).
     Speech { msg: u64, gen: u64, result: Result<(u32, crate::voice::Chain), String> },
@@ -299,6 +301,7 @@ impl App {
                 t.keys.reserved = r;
             }
         }
+        self.dictation.key_name = v.as_ref().and_then(|v| v["dictate_key"].as_str()).map(str::to_string);
         self.jarvis.voice = v;
     }
 
@@ -349,6 +352,9 @@ impl App {
         }
         for ev in self.audio.events() {
             changed = true;
+            if self.dictate_audio(&ev) {
+                continue;
+            }
             match ev {
                 AudioEvent::CaptureStarted => self.jarvis.recording = true,
                 AudioEvent::CaptureLevel(l) => self.jarvis.level = l.clamp(0.0, 1.0),
@@ -483,6 +489,7 @@ impl App {
                     self.hear(&text, true, None);
                 }
             }
+            JEvent::Dictated { gen, result } => self.dictated(gen, result),
             JEvent::Transcribed(Err(e)) => {
                 self.jarvis.say(Who::Error, format!("Could not transcribe: {e}"));
             }
@@ -696,6 +703,8 @@ impl App {
         if let Some(n) = &self.jarvis.key_note {
             log::info!("{n}");
         }
+        // Push-to-talk comes first: a dictation under way is dropped.
+        self.dictate_cancel(Some("Dictation stopped: Jarvis is listening."));
         // The microphone must not hear Jarvis: the reading ends for good,
         // including speech still being made for it.
         self.stop_reading();
@@ -792,6 +801,7 @@ impl App {
             Intent::ToggleJarvisPanel { open } => self.toggle_panel(open),
             Intent::TalkStart => self.talk_start(),
             Intent::TalkStop => self.talk_stop(),
+            Intent::Dictate { input } => self.dictate_press(from, &input),
             Intent::ReadAloud { id } => {
                 if self.jarvis.reading == Some(id) {
                     self.stop_reading();

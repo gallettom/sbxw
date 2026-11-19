@@ -107,6 +107,11 @@ pub const DARK: &[(&str, u32)] = &[
     ("file-image", 0xe38bb5),
     ("file-data", 0x9cc26a),
     ("file-archive", 0xc9a36b),
+    // Where the person writes to an agent (the Sessions composer, Jarvis's
+    // input, Canvas's ask and remarks, a request's answer): raised a step
+    // above the panels it sits in, as surfaces rise toward light here (a
+    // modal over the page, a card over a panel). See `compose_stands_out`.
+    ("compose", 0x222b38),
 ];
 
 /// Graphite: the same names on neutral dark greys (a ground near #202124,
@@ -176,6 +181,7 @@ pub const GRAPHITE: &[(&str, u32)] = &[
     ("file-image", 0xe38bb5),
     ("file-data", 0x9cc26a),
     ("file-archive", 0xc9a36b),
+    ("compose", 0x33363c),
 ];
 
 /// Pure white and black: the ends that "move toward white or black" math
@@ -898,6 +904,13 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("group-2", "surface", Need::Mark),
     ("group-3", "surface", Need::Mark),
     ("group-4", "surface", Need::Mark),
+    // A chat input's ground (`compose`): typed words, the placeholder, its
+    // edge and the focus ring on it (disabled, it is drawn on `bg` at
+    // DISABLED_OPACITY: `text-bright` on `bg`, Disabled, below).
+    ("text-bright", "compose", Need::Text),
+    ("text-dim", "compose", Need::Text),
+    ("control-border", "compose", Need::Mark),
+    ("focus", "compose", Need::Mark),
     // Disabled labels (see Need::Disabled).
     ("text", "elevated", Need::Disabled),
     ("text-muted", "surface", Need::Disabled),
@@ -924,6 +937,12 @@ pub fn to_hsl(c: u32) -> (f32, f32, f32) {
     let h = if mx == r { 60.0 * ((g - b) / d).rem_euclid(6.0) } else if mx == g { 60.0 * ((b - r) / d + 2.0) } else { 60.0 * ((r - g) / d + 4.0) };
     (h, s, l)
 }
+
+/// How far a chat input's ground (`compose`) steps from `bg` and from
+/// `surface`, as a luminance ratio: enough to read in a squint on a shot
+/// (a card over a panel steps about 1.1 here).
+pub const COMPOSE_STEP_BG: f64 = 1.3;
+pub const COMPOSE_STEP_SURFACE: f64 = 1.15;
 
 /// The accent, amber and the vendor terracotta: at least this far apart in
 /// hue (degrees) and in lightness (HSL points), pairwise, in each theme.
@@ -1310,6 +1329,28 @@ mod tests {
                     assert!(dh >= ORANGE_MIN_HUE, "{m:?}: {a} and {b} {dh:.0} degrees apart");
                     assert!(dl >= ORANGE_MIN_LIGHT, "{m:?}: {a} and {b} {dl:.1} points of lightness apart");
                 }
+            }
+        }
+    }
+
+    /// A chat input's ground reads apart from the panels it sits in at rest,
+    /// without its focus ring: lighter than `bg` (the views' and panels'
+    /// ground) by a luminance ratio of [`COMPOSE_STEP_BG`] and than `surface`
+    /// (a request's card) by [`COMPOSE_STEP_SURFACE`], in both themes, while
+    /// its text, placeholder, edge and focus ring keep their own ratios
+    /// (`PAIRS`).
+    #[test]
+    fn compose_stands_out() {
+        for m in MODES {
+            let v = |n| color_in(m, n).unwrap();
+            let (comp, bg, surface) = (v("compose"), v("bg"), v("surface"));
+            assert!(luminance(comp) > luminance(surface) && luminance(surface) > luminance(bg), "{m:?}: raised, as surfaces rise");
+            let (sb, ss) = (contrast(comp, bg), contrast(comp, surface));
+            println!("{m:?}: compose #{comp:06x} {sb:.2}:1 on bg, {ss:.2}:1 on surface");
+            assert!(sb >= COMPOSE_STEP_BG, "{m:?}: {sb:.2} on bg");
+            assert!(ss >= COMPOSE_STEP_SURFACE, "{m:?}: {ss:.2} on surface");
+            for (fg, need) in [("text-bright", 4.5), ("text-dim", 4.5), ("control-border", 3.0), ("focus", 3.0)] {
+                assert!(contrast(v(fg), comp) >= need, "{m:?}: {fg} on compose");
             }
         }
     }
