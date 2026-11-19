@@ -1896,7 +1896,13 @@ paging block), `counts` (`you`, `working`, `idle`, `ended`, `total`),
 (`[{id, name, size, state: ok|look|refused|uploaded, why, sending,
 progress}]`, the name already cut by the Rust), `sending`, `attach_max`). Started from
 `data.sessions` when the view opens (`monitor_open`), then kept from each
-`session` event, one card at a time: a card's `rev` moves only when its
+`session` event, one card per place (a sandbox's thread, or its main
+checkout, as the sidebar folds them: a new session there takes the card and
+its key over, a late report or the end of an older session changes nothing,
+two live sessions in one main checkout make two cards named `main · <end of
+session id>`; the daemon's `continues` and `ended` are followed when it
+serves them). A `last_input` the harness typed (a cross-session message, a
+task notification) is `detail.from {name, text}`, never `last_input`: a card's `rev` moves only when its
 report changed, the screen memoises a row by key and rev, and the view is
 handed over while it shows or is the base under an overlay (`data.app.base`;
 a `Set` renders only drawn screens). Also read: `data.relay_ui.picks` and
