@@ -21,7 +21,10 @@
 #   switch   the pager's view switch (Tabs | Grid | Monitor) over the terminals;
 #   base     the Monitor as the base: its header's view switch, no cross;
 #   under    the Monitor's Files link: the explorer over the Monitor;
-#   back     Escape there: back to the Monitor, the same session.
+#   back     Escape there: back to the Monitor, the same session;
+#   fold     fixtures/monitor/folding.json: one row per place (studio's main
+#            checkout reported by three sessions shows once, its last prompt
+#            another session's message shown as such; lab's two live terminals).
 # Out: $SBXW_SHOTS/monitor/monitor-<size>-<theme>-<mark>.png, its element tree and log.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -40,6 +43,10 @@ def step(key, until):
 add(type="mark", name="wait:rail-monitor")
 if m == "switch":
     add(type="mark", name="wait:pager-view-monitor")
+elif m == "fold":
+    step("rail-monitor", "monitor-row-studio:s-studio-1")
+    if not os.environ.get("SIZE", "").startswith("720"):
+        step("monitor-row-studio:s-studio-1", "monitor-from")
 elif m in ("empty",):
     step("rail-monitor", "monitor-empty")
 elif m == "idle":
@@ -80,7 +87,7 @@ PY
 theme="${THEME:-dark}"
 for size in ${SIZES:-1284x816 720x480}; do
   for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back}; do
-    case "$m" in empty|idle|busy) fx="$m" ;; *) fx=basic ;; esac
+    case "$m" in empty|idle|busy) fx="$m" ;; fold) fx=folding ;; *) fx=basic ;; esac
     out="$shots/monitor-$size-$theme-$m"
     SIZE="$size" script "$m" >"$out-script.json"
     start_daemon "$out-standin" --fixture "$here/fixtures/monitor/$fx.json"

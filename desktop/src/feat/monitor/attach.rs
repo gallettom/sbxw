@@ -121,6 +121,16 @@ pub fn clipped(s: &str) -> String {
     out
 }
 
+/// Agent text cut to `max` characters, controls but new lines and tabs
+/// dropped (drawn as plain text).
+pub fn clipped_text(s: &str, max: usize) -> String {
+    let mut out: String = s.chars().filter(|c| !hidden(*c) || *c == '\n' || *c == '\t').take(max).collect();
+    if s.chars().count() > max {
+        out.push('\u{2026}');
+    }
+    out
+}
+
 /// The look reasons of a set of files: each file's, then their total.
 pub fn look_all(files: &[Att]) -> Vec<String> {
     let mut why: Vec<String> = files.iter().filter(|a| a.uploaded.is_none()).flat_map(|a| a.look.iter().cloned()).map(|w| written_out(&w)).collect();

@@ -1,0 +1,162 @@
+{
+ "about": "One row per place: studio's main checkout reported by three sessions (a restart, a resume) shows once, its last prompt a message from another session; its thread paint by two; lab's main checkout by two live sessions (two terminals). Invented content. s-studio-3 is answerable (the daemon can tell its terminal); the older studio reports are not.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "studio",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/studio",
+    "model": "claude-opus-5-5",
+    "model_name": "Opus 5.5",
+    "cost_usd": 1.0
+   },
+   {
+    "name": "lab",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/lab",
+    "model": "claude-opus-5-5",
+    "model_name": "Opus 5.5",
+    "cost_usd": 1.0
+   }
+  ],
+  "sessions": [
+   {
+    "sandbox": "studio",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763465800000,
+    "ts": 1763466400000,
+    "session_id": "s-studio-1",
+    "cwd": "/Users/me/dev/studio",
+    "origin": "pty",
+    "answerable": false,
+    "last_input": "Plan the export feature.",
+    "reply": "Here is the plan."
+   },
+   {
+    "sandbox": "studio",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763467600000,
+    "ts": 1763468200000,
+    "session_id": "s-studio-2",
+    "cwd": "/Users/me/dev/studio",
+    "origin": "pty",
+    "answerable": false
+   },
+   {
+    "sandbox": "studio",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763469340000,
+    "ts": 1763469940000,
+    "session_id": "s-studio-3",
+    "cwd": "/Users/me/dev/studio",
+    "origin": "pty",
+    "answerable": true,
+    "last_input": "<cross-session-message from=\"uds:/run/user/1000/cc-socks/1.sock\" from-name=\"paint-thread\" from-mode=\"bypass\">\nThe palette step is done; tests pass.\n</cross-session-message>",
+    "reply": "Noted: I merge the palette thread next."
+   },
+   {
+    "sandbox": "studio",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763462200000,
+    "ts": 1763462800000,
+    "session_id": "s-paint-1",
+    "cwd": "/Users/me/dev/studio/.sbxw-worktrees/paint",
+    "origin": "pty",
+    "answerable": false,
+    "thread": "paint",
+    "last_input": "Start the palette."
+   },
+   {
+    "sandbox": "studio",
+    "mode": "claude",
+    "state": "working",
+    "agent": "claude",
+    "started_ms": 1763469370000,
+    "ts": 1763469970000,
+    "session_id": "s-paint-2",
+    "cwd": "/Users/me/dev/studio/.sbxw-worktrees/paint",
+    "origin": "pty",
+    "answerable": false,
+    "thread": "paint",
+    "last_input": "Add the dark palette.",
+    "activity": "Edit palette.rs"
+   },
+   {
+    "sandbox": "lab",
+    "mode": "claude",
+    "state": "working",
+    "agent": "claude",
+    "started_ms": 1763469380000,
+    "ts": 1763469980000,
+    "session_id": "s-lab-a",
+    "cwd": "/Users/me/dev/lab",
+    "origin": "pty",
+    "answerable": false,
+    "last_input": "Run the benchmarks.",
+    "activity": "$ cargo bench"
+   },
+   {
+    "sandbox": "lab",
+    "mode": "claude",
+    "state": "attention",
+    "agent": "claude",
+    "started_ms": 1763469390000,
+    "ts": 1763469990000,
+    "session_id": "s-lab-b",
+    "cwd": "/Users/me/dev/lab",
+    "origin": "pty",
+    "answerable": false,
+    "last_input": "Clean the cache?",
+    "activity": "Claude needs your permission to use Bash"
+   }
+  ],
+  "session_events": [
+   {
+    "after": 1.0,
+    "session": {
+     "sandbox": "studio",
+     "mode": "claude",
+     "state": "exited",
+     "agent": "claude",
+     "started_ms": 1763469401000,
+     "ts": 1763470001000,
+     "session_id": "s-paint-1",
+     "cwd": "/Users/me/dev/studio/.sbxw-worktrees/paint",
+     "origin": "pty",
+     "answerable": false,
+     "thread": "paint"
+    }
+   }
+  ]
+ },
+ "app": {
+  "selected": "studio",
+  "panes": 1,
+  "open": [
+   "studio"
+  ],
+  "focused": 1
+ }
+}

@@ -106,6 +106,12 @@ local function feed(d, now, data)
     kids[#kids + 1] = bubble("You", "prompt", "text-muted", nil,
       column{ pad = 12, radius = "md", fill = "elevated", w = "full", text{ d.last_input, wrap = true, color = "text-bright" } })
   end
+  if d.from then
+    -- Another session's message (or the harness's): its words as data, quietly; never "You".
+    kids[#kids + 1] = bubble("From " .. d.from.name, "people", "text-dim", nil,
+      column{ pad = 12, radius = "md", border = "elevated", w = "full", key = "monitor-from",
+        text{ d.from.text ~= "" and d.from.text or "A message from another session.", wrap = true, size = "sm", color = "text-muted" } })
+  end
   if d.now then
     kids[#kids + 1] = row{ gap = 8, px = 12, py = 8, radius = "sm", border = "elevated", w = "full", key = "monitor-now",
       icon{ "sparkle", size = 12, color = "blue" }, text{ "Now", size = "sm", weight = "medium", color = "blue" },
@@ -120,7 +126,7 @@ local function feed(d, now, data)
   elseif d.permission then
     kids[#kids + 1] = permission_card(d)
   end
-  if not d.last_input and not d.now and not d.reply and not d.question and not d.permission then
+  if not d.last_input and not d.from and not d.now and not d.reply and not d.question and not d.permission then
     kids[#kids + 1] = text{ "Nothing to read yet: the session has not reported a prompt or a reply.", color = "text-muted", wrap = true }
   end
   kids[#kids + 1] = text{ "The last prompt, what it does now and its last reply: sbxw keeps no history of the conversation.", size = "sm", color = "text-dim", wrap = true }

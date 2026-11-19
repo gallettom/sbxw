@@ -74,6 +74,33 @@ fn opt<'a>(v: &'a J, k: &str) -> Option<&'a str> {
     v[k].as_str().map(str::trim).filter(|t| !t.is_empty())
 }
 
+/// Text the harness typed into a session, not the person: a message from
+/// another session (`<cross-session-message from-name="lead">...`), a task
+/// notification, a system reminder, a slash command's echo. `Some((from,
+/// body))`: who sent it, when it says, and its words without the tags.
+pub fn injected(text: &str) -> Option<(Option<String>, String)> {
+    const TAGS: &[&str] = &["cross-session-message", "task-notification", "system-reminder", "local-command-stdout", "local-command-caveat", "command-name", "command-message", "user-prompt-submit-hook"];
+    let t = text.trim_start();
+    let rest = t.strip_prefix('<')?;
+    let rest = rest.strip_prefix('\\').unwrap_or(rest);
+    let tag = TAGS.iter().find(|g| rest.starts_with(**g) && rest[g.len()..].starts_with(|c: char| c == ' ' || c == '>' || c == '\n'))?;
+    let head_end = rest.find('>').unwrap_or(rest.len());
+    let head = &rest[..head_end];
+    let from = head.split("from-name=\"").nth(1).and_then(|x| x.split('"').next()).map(|x| x.chars().filter(|c| !c.is_control()).take(60).collect::<String>()).filter(|x| !x.is_empty());
+    let body = rest.get(head_end + 1..).unwrap_or("");
+    let body = body.split(&format!("</{tag}")).next().unwrap_or("").split(&format!("<\\/{tag}")).next().unwrap_or("").trim().to_string();
+    Some((from.or_else(|| (*tag != "cross-session-message").then(|| "sbxw".to_string())), body))
+}
+
+/// A report the daemon marks `ended: true` (when it serves that field) is an end.
+fn ended_as_exited(info: &J) -> J {
+    let mut i = info.clone();
+    if i["ended"] == true {
+        i["state"] = "exited".into();
+    }
+    i
+}
+
 /// The session's thread, when it is one.
 pub fn thread_of(info: &J) -> Option<&str> {
     opt(info, "thread")
@@ -137,35 +164,75 @@ pub struct Model {
 impl Model {
     /// The card a report belongs to: the same thread of the same sandbox,
     /// else the same session id, else the sandbox's session without a thread.
-    fn key_for(&self, info: &J) -> Option<String> {
+    /// The card a report belongs to, and whether it is news for it (a
+    /// report older than what the card shows, from another session in the
+    /// same place, is not). One card per place, as the sidebar folds them: a
+    /// sandbox's thread, or its main checkout. A new session in the same
+    /// place (resumed, restarted, a session the daemon never saw end) takes
+    /// that card over: its key, so the selection, the draft and the attached
+    /// files stay with the place. Only two sessions both live (working or
+    /// waiting on the person) in one main checkout make two cards.
+    fn card_for(&self, info: &J) -> Option<(String, bool)> {
         let sb = opt(info, "sandbox")?;
         if sb == JARVIS {
             return None;
         }
         let thread = thread_of(info);
         let sid = opt(info, "session_id");
-        let found = self.cards.iter().find(|(_, c)| {
-            s(&c.info, "sandbox") == sb
-                && match thread {
-                    Some(t) => thread_of(&c.info) == Some(t),
-                    None => thread_of(&c.info).is_none() && (sid.is_none() || opt(&c.info, "session_id").is_none() || opt(&c.info, "session_id") == sid),
-                }
-        });
-        Some(match found {
-            Some((k, _)) => k.clone(),
-            None => match (thread, sid) {
-                (Some(t), _) => format!("{sb}::{t}"),
-                (None, Some(id)) => format!("{sb}:{id}"),
-                (None, None) => sb.to_string(),
-            },
-        })
+        let ts = info["ts"].as_u64().unwrap_or(0);
+        let live = |i: &J| matches!(s(i, "state"), "working" | "attention");
+        let place: Vec<(&String, &Card)> = self.cards.iter().filter(|(_, c)| s(&c.info, "sandbox") == sb && thread_of(&c.info) == thread).collect();
+        if let Some((k, _)) = place.iter().find(|(_, c)| sid.is_some() && opt(&c.info, "session_id") == sid) {
+            return Some(((*k).clone(), true));
+        }
+        // The daemon says which session this one continues (`continues`, when it serves it).
+        if let Some(prev) = opt(info, "continues") {
+            if let Some((k, _)) = self.cards.iter().find(|(_, c)| s(&c.info, "sandbox") == sb && opt(&c.info, "session_id") == Some(prev)) {
+                return Some((k.clone(), true));
+            }
+        }
+        // The end of a session no card shows (an older one of the place): nothing to change.
+        if sid.is_some() && s(info, "state") == "exited" {
+            return place.first().map(|(k, _)| ((*k).clone(), false));
+        }
+        let fresh = |_: &str| match (thread, sid) {
+            (Some(t), _) => format!("{sb}::{t}"),
+            (None, Some(id)) => format!("{sb}:{id}"),
+            (None, None) => sb.to_string(),
+        };
+        // Two live sessions in one main checkout: two terminals, two cards.
+        if thread.is_none() && live(info) && !place.is_empty() && place.iter().all(|(_, c)| live(&c.info)) {
+            return Some((fresh(""), true));
+        }
+        match place.iter().max_by_key(|(_, c)| c.info["ts"].as_u64().unwrap_or(0)) {
+            // An end that names no session ends the place's.
+            Some((k, c)) => Some(((*k).clone(), ts >= c.info["ts"].as_u64().unwrap_or(0) || (sid.is_none() && s(info, "state") == "exited"))),
+            None => Some((fresh(""), true)),
+        }
     }
 
     /// A `session` event: that one card changes (a whole report replaces
     /// what was known; a partial one, without `started_ms`, is merged into
-    /// it). True when something the view shows changed.
+    /// it). An ended session's card leaves when another card holds its
+    /// place; the place's last card stays, ended, for the next session there.
     pub fn upsert(&mut self, info: &J) -> bool {
-        let Some(key) = self.key_for(info) else { return false };
+        let info = &ended_as_exited(info);
+        let Some((key, news)) = self.card_for(info) else { return false };
+        if !news {
+            return false;
+        }
+        if s(info, "state") == "exited" {
+            let (sb, thread) = (s(info, "sandbox").to_string(), thread_of(info).map(str::to_string));
+            let others = self.cards.iter().filter(|(k, c)| **k != key && s(&c.info, "sandbox") == sb && thread_of(&c.info) == thread.as_deref()).count();
+            if others > 0 && opt(&self.cards.get(&key).map(|c| c.info.clone()).unwrap_or(J::Null), "session_id") == opt(info, "session_id") {
+                self.cards.remove(&key);
+                if self.sel.as_deref() == Some(key.as_str()) {
+                    self.sel = None;
+                }
+                self.next += 1;
+                return true;
+            }
+        }
         let merged = match (self.cards.get(&key), info.get("started_ms").is_some()) {
             (Some(c), false) => {
                 let mut m = c.info.clone();
@@ -196,10 +263,18 @@ impl Model {
     pub fn seed(&mut self, list: &J) -> bool {
         let mut seen = vec![];
         let mut changed = false;
-        for info in list.as_array().map(Vec::as_slice).unwrap_or(&[]) {
-            let Some(key) = self.key_for(info) else { continue };
-            // Two reports for one card in one list: the later one counts.
-            changed |= self.put(key.clone(), info.clone());
+        // The oldest first: in each place, the latest report is the one shown.
+        let mut list: Vec<&J> = list.as_array().map(|v| v.iter().collect()).unwrap_or_default();
+        list.sort_by_key(|i| i["ts"].as_u64().unwrap_or(0));
+        for info in list {
+            let info = &ended_as_exited(info);
+            if info["state"] == "exited" {
+                continue;
+            }
+            let Some((key, news)) = self.card_for(info) else { continue };
+            if news {
+                changed |= self.put(key.clone(), info.clone());
+            }
             seen.push(key);
         }
         let before = self.cards.len();
@@ -291,12 +366,31 @@ impl Model {
         let sel = self.selected();
         json!({
             "now": now,
-            "rows": rows.iter().map(|k| self.cards[k].row.clone()).collect::<Vec<_>>(),
+            "rows": rows.iter().map(|k| {
+                let mut r = self.cards[k].row.clone();
+                if let Some(n) = self.told_apart(k) {
+                    r["name"] = n.into();
+                }
+                r
+            }).collect::<Vec<_>>(),
             "count": count,
             "counts": { "you": you, "working": working, "idle": idle, "ended": ended, "total": self.cards.len() },
             "sel": sel,
             "detail": sel.as_ref().map(|k| self.detail(k, panes)).unwrap_or(J::Null),
         })
+    }
+
+    /// Two live sessions in one main checkout: each row's name says which
+    /// (`main · 3f2a`, the end of its session id).
+    fn told_apart(&self, key: &str) -> Option<String> {
+        let c = self.cards.get(key)?;
+        if thread_of(&c.info).is_some() {
+            return None;
+        }
+        let sb = s(&c.info, "sandbox");
+        let n = self.cards.values().filter(|o| s(&o.info, "sandbox") == sb && thread_of(&o.info).is_none()).count();
+        let sid: Vec<char> = opt(&c.info, "session_id")?.chars().filter(|ch| ch.is_ascii_alphanumeric()).collect();
+        (n > 1).then(|| format!("main \u{b7} {}", sid[sid.len().saturating_sub(4)..].iter().collect::<String>()))
     }
 
     /// What the middle shows for one card.
@@ -352,7 +446,7 @@ impl Model {
             "rev": c.rev,
             "sandbox": sb,
             "thread": thread,
-            "name": thread.unwrap_or("main"),
+            "name": self.told_apart(key).unwrap_or_else(|| thread.unwrap_or("main").to_string()),
             "session": session_key(sb, thread),
             "state": s(i, "state"),
             "word": g.word(),
@@ -360,7 +454,10 @@ impl Model {
             "model": opt(i, "model_name").map(str::to_string).or_else(|| opt(i, "model").map(|m| m.trim_start_matches("claude-").to_string())),
             "cost": i["cost_usd"].as_f64().map(|c| format!("${c:.2}")),
             "strip": strip.join("  \u{b7}  "),
-            "last_input": opt(i, "last_input"),
+            // The person's last prompt only: a message another session or
+            // the harness typed in is shown as that, quietly, never as "You".
+            "last_input": opt(i, "last_input").filter(|t| injected(t).is_none()),
+            "from": opt(i, "last_input").and_then(injected).map(|(from, body)| json!({ "name": from.unwrap_or_else(|| "another session".into()), "text": crate::feat::monitor::attach::clipped_text(&body, 600) })),
             "now": if g == Group::Working { Some(opt(i, "activity").unwrap_or("Working")) } else { None },
             "reply": opt(i, "reply"),
             "ts": i["ts"].as_u64().unwrap_or(0),
@@ -399,11 +496,15 @@ fn row_of(key: &str, rev: u64, i: &J) -> J {
     let g = Group::of(s(i, "state"));
     let st = steps(i);
     let reply = opt(i, "reply").and_then(first_line);
+    let prompt: Option<String> = opt(i, "last_input").map(|t| match injected(t) {
+        Some((from, _)) => format!("From {}", from.unwrap_or_else(|| "another session".into())),
+        None => t.to_string(),
+    });
     let (line, mono) = match g {
         Group::You => (st.first().and_then(|q| opt(q, "text")).or(opt(i, "activity")).unwrap_or("Waiting for you"), false),
         Group::Working => (opt(i, "activity").unwrap_or("Working"), true),
         Group::Ended => ("Ended", false),
-        Group::Idle => (reply.or(opt(i, "last_input")).unwrap_or("Idle"), false),
+        Group::Idle => (reply.or(prompt.as_deref()).unwrap_or("Idle"), false),
     };
     let mut m = Map::new();
     m.insert("key".into(), key.into());

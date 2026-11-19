@@ -1058,3 +1058,108 @@ fn the_skip_dialog_choice_never_skips_a_monitor_send_and_the_gate_holds() {
     assert!(d.confirm.as_ref().is_some_and(|c| c.dont_ask.is_none()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------------------
+// One row per session (place)
+
+/// The daemon lists a session per hook `session_id`; one terminal that was
+/// restarted or resumed leaves several, the old ones idle for ever (no
+/// `SessionEnd`). The list folds them by place, as the sidebar does: one
+/// row per thread, one per main checkout, the latest report; two live
+/// sessions in one main checkout are two rows. The header counts the rows.
+#[test]
+fn one_row_per_place_and_a_new_session_takes_its_place() {
+    let mut d = data_of("folding");
+    let v = opened(&mut d);
+    let ks = keys(&v);
+    let studio_main: Vec<&String> = ks.iter().filter(|k| k.starts_with("studio:") && !k.contains("::")).collect();
+    assert_eq!(studio_main.len(), 1, "studio's main checkout once: {ks:?}");
+    assert_eq!(ks.iter().filter(|k| k.starts_with("studio::paint")).count(), 1, "{ks:?}");
+    assert_eq!(ks.iter().filter(|k| k.starts_with("lab:")).count(), 2, "two live terminals on lab's checkout: {ks:?}");
+    assert_eq!(v["counts"]["total"], ks.len(), "the header counts the rows");
+    let paint = v["rows"].as_array().unwrap().iter().find(|r| r["key"] == "studio::paint").unwrap().clone();
+    assert_eq!(paint["group"], "working", "the thread's latest session: {paint}");
+    // The selected main row: the latest report, its last prompt an agent's message.
+    let main = studio_main[0].clone();
+    shown_on(&mut d, &main);
+    let det = d["monitor"]["detail"].clone();
+    assert_eq!(det["reply"], "Noted: I merge the palette thread next.");
+    assert!(det["last_input"].is_null(), "a cross-session message is not You: {det}");
+    assert_eq!(det["from"]["name"], "paint-thread");
+    assert_eq!(det["from"]["text"], "The palette step is done; tests pass.");
+    let row = d["monitor"]["rows"].as_array().unwrap().iter().find(|r| r["key"] == main.as_str()).unwrap().clone();
+    assert!(!row["line"].as_str().unwrap().contains('<'), "{row}");
+    // Drawn: no raw tag anywhere, and the message makes no control.
+    let n = host().render(&d).unwrap();
+    let mut all = vec![];
+    walk(&n, &mut all);
+    assert!(all.iter().all(|x| !x.text.contains("cross-session-message")), "a raw tag is drawn");
+    let from = find(&n, "monitor-from").expect("the message, as data");
+    assert!(controls(from).is_empty());
+    // A new session in the same place (a resume): the same row, its draft and files with it.
+    let dir = tmp_dir("fold");
+    let f = file_in(&dir, "note.txt", b"n");
+    on_files(&Ctx { data: &d }, Incoming::Files(vec![f]));
+    let mut next = d["sessions"].as_array().unwrap().iter().find(|i| i["session_id"] == "s-studio-3").unwrap().clone();
+    next["session_id"] = "s-studio-4".into();
+    next["started_ms"] = (next["ts"].as_u64().unwrap() + 1000).into();
+    next["ts"] = (next["ts"].as_u64().unwrap() + 2000).into();
+    next["last_input"] = "Go on with the export.".into();
+    let out = on_event(&Ctx { data: &d }, "session", &next);
+    let v = last_view(&out);
+    assert_eq!(keys(&v).iter().filter(|k| k.starts_with("studio:") && !k.contains("::")).count(), 1, "still one row");
+    assert_eq!(v["sel"], main.as_str(), "the selection stays on the place");
+    assert_eq!(v["detail"]["last_input"], "Go on with the export.");
+    assert_eq!(v["detail"]["files"].as_array().map(Vec::len), Some(1), "its attached file stays");
+    // An old session's report coming late changes nothing.
+    let mut late = d["sessions"][0].clone();
+    late["ts"] = (late["ts"].as_u64().unwrap() + 1).into();
+    assert!(on_event(&Ctx { data: &d }, "session", &late).is_empty());
+    // lab's two rows say which session each is.
+    let names: Vec<String> = d["monitor"]["rows"].as_array().unwrap().iter().filter(|r| r["sandbox"] == "lab").map(|r| r["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names.len(), 2);
+    assert!(names[0] != names[1] && names.iter().all(|n| n.starts_with("main \u{b7} ")), "{names:?}");
+    // The end of paint's older session (the stand-in's event) leaves paint as it is.
+    let ended_old = d["session_events"][0]["session"].clone();
+    assert!(on_event(&Ctx { data: &d }, "session", &ended_old).is_empty(), "an older session's end changes nothing");
+    // One of lab's two ends: its row leaves; the other stays.
+    let mut gone = d["sessions"].as_array().unwrap().iter().find(|i| i["session_id"] == "s-lab-a").unwrap().clone();
+    gone["state"] = "exited".into();
+    gone["ts"] = (gone["ts"].as_u64().unwrap() + 5).into();
+    let v = last_view(&on_event(&Ctx { data: &d }, "session", &gone));
+    assert_eq!(keys(&v).iter().filter(|k| k.starts_with("lab:")).count(), 1, "{:?}", keys(&v));
+    assert_eq!(v["counts"]["total"], keys(&v).len());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn harness_text_is_told_from_the_person_s_prompt() {
+    use super::model::injected;
+    assert_eq!(injected("Fix the build"), None);
+    assert_eq!(injected("<b>bold</b> is mine"), None);
+    let (from, body) = injected("<\\cross-session-message from=\"uds:/x\" from-name=\"lead\" from-mode=\"bypass\">Hi there</cross-session-message>").unwrap();
+    assert_eq!((from.as_deref(), body.as_str()), (Some("lead"), "Hi there"));
+    let (from, _) = injected("  <task-notification>\n<task-id>b1</task-id></task-notification>").unwrap();
+    assert_eq!(from.as_deref(), Some("sbxw"));
+}
+
+/// When the daemon says so (`continues`, `ended`: fields it may serve), the
+/// list follows it: a session that continues another takes its card, even
+/// in another place's order; `ended: true` is an end. Absent, nothing changes.
+#[test]
+fn the_daemon_s_continues_and_ended_are_followed_when_served() {
+    let mut m = Model::default();
+    let base = |sid: &str, ts: u64, state: &str| json!({ "sandbox": "lab", "mode": "claude", "state": state, "started_ms": 1, "ts": ts, "session_id": sid });
+    m.upsert(&base("a", 10, "working"));
+    m.upsert(&base("b", 20, "attention"));
+    assert_eq!(m.cards.len(), 2, "two live sessions: two cards");
+    let mut c = base("c", 30, "working");
+    c["continues"] = "a".into();
+    m.upsert(&c);
+    assert_eq!(m.cards.len(), 2, "c continues a: a's card");
+    assert!(m.cards.values().any(|x| x.info["session_id"] == "c") && !m.cards.values().any(|x| x.info["session_id"] == "a"));
+    let mut e = base("b", 40, "idle");
+    e["ended"] = true.into();
+    m.upsert(&e);
+    assert_eq!(m.cards.len(), 1, "b ended: its card leaves (another holds the place)");
+}
