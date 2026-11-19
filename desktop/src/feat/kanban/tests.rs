@@ -109,7 +109,7 @@ fn five_columns_with_their_counts_and_each_card_where_the_daemon_put_it() {
     let (v, _) = run(&mut st, &mut d, "kanban_scope", json!({ "sandbox": "" }));
     assert_eq!(v["scope"], "");
     assert_eq!(col(&v, "planned")["count"], 5);
-    assert!(col(&v, "planned")["cards"].as_array().unwrap().iter().any(|c| c["team_color"] == "#61afef"));
+    assert!(col(&v, "planned")["cards"].as_array().unwrap().iter().any(|c| c["team_color"] == "#61afef" && c["sandbox_label"] == "docs"));
 }
 
 #[test]

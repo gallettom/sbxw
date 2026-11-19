@@ -384,7 +384,9 @@ impl Fx {
             "daemon": { "sandboxes": sbs, "sessions": sessions, "tickets_boards": boards, "tickets_views": tv, "tickets_files": files },
             "app": { "selected": sandboxes[0] },
         });
-        std::fs::write(path, serde_json::to_string_pretty(&out).unwrap() + "\n").unwrap();
+        // The real-sized one compact: it is data, not read by people.
+        let text = if path.ends_with("big.json") { serde_json::to_string(&out).unwrap() } else { serde_json::to_string_pretty(&out).unwrap() };
+        std::fs::write(path, text + "\n").unwrap();
     }
 }
 

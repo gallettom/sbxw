@@ -73,6 +73,8 @@ pub fn card(c: &J, groups: &J, all: bool, focus: Option<&str>) -> J {
         // The sandbox's colour mark, in All sandboxes (one sandbox: its scope says it).
         "team_color": if all { groups[sb].clone() } else { J::Null },
         "team_help": if all { sb.into() } else { J::Null },
+        // In All sandboxes the sandbox's name too: a colour alone is never the only signal, and a sandbox in no group has none.
+        "sandbox_label": if all { sb.into() } else { J::Null },
         "marks": marks,
         "age": c["age"],
         "border": if red { "red-border" } else { "elevated" },

@@ -698,7 +698,15 @@ impl State {
                 }
                 Err(e) => self.error = Some(e),
             }
-            return self.views(cx);
+            let mut out = vec![];
+            // A ticket opened before its card was on the board (just saved): read it now.
+            if self.view.is_none() {
+                if let Ok((sb, n, _)) = self.open_ticket() {
+                    out.push(self.read_ticket(&sb, n));
+                }
+            }
+            out.extend(self.views(cx));
+            return out;
         }
         if let Some(which) = tag.strip_prefix("kb-ticket:") {
             let mine = self.open_ticket().ok().map(|(sb, n, _)| format!("{sb}/{n}"));

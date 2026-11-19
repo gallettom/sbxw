@@ -84,7 +84,8 @@ impl App {
                     Book::new(sb)
                 }
                 Err(e) => {
-                    tracing::warn!("tickets of {sb}: unreadable, started empty (the file is left as it was): {e}");
+                    // Where it broke only: serde's words can quote a title.
+                    tracing::warn!("tickets of {sb}: unreadable at line {} column {}; set aside, started empty", e.line(), e.column());
                     let _ = std::fs::rename(dir.join("tickets.json"), dir.join(format!("tickets.unreadable-{}.json", now_ms())));
                     Book::new(sb)
                 }
