@@ -812,7 +812,7 @@ impl Canvas {
                 }
             }
         }
-        let moves: Vec<(String, f32, f32)> = before.iter().zip(&self.shots).filter_map(|((id, x, y), s)| (s.x != *x || s.y != *y).then(|| (id.clone(), s.x - x, s.y - y))).collect();
+        let moves: Vec<(String, f32, f32)> = before.iter().zip(&self.shots).filter(|((_, x, y), s)| s.x != *x || s.y != *y).map(|((id, x, y), s)| (id.clone(), s.x - x, s.y - y)).collect();
         self.follow(&near, &moves);
         !moves.is_empty()
     }
