@@ -71,7 +71,7 @@ return {
     -- Where the words go (feat/relay, follow): Jarvis, or a running sandbox's agent.
     local f = (data.relay_ui and data.relay_ui.follow) or {}
     local target = f.target
-    local items = { { id = "sbxw-jarvis", label = "Jarvis", icon = "sparkle" } }
+    local items = { { id = "sbxw-jarvis", label = "Jarvis", icon = "jarvis" } }
     local listed = false
     for _, sb in ipairs(data.sandboxes or {}) do
       if sb.status == "running" and not sb.unreachable_since and sb.name ~= "sbxw-jarvis" then
@@ -81,9 +81,10 @@ return {
     end
     if target and not listed then items[#items + 1] = { id = target, label = target .. " (stopped)", icon = "terminal" } end
 
-    -- With a sandbox picked, its state, not Jarvis's: its newest session
-    -- waiting on the person, working, or the sandbox's own status.
-    local tstate
+    -- The state shown in the header, in the sidebar's words and dots: the
+    -- picked sandbox's (its newest session waiting on the person, working,
+    -- or the sandbox's status), else Jarvis's own.
+    local st
     if target then
       local newest
       for _, i in ipairs(data.sessions or {}) do
@@ -91,28 +92,53 @@ return {
       end
       local status = "gone"
       for _, sb in ipairs(data.sandboxes or {}) do if sb.name == target then status = sb.status end end
-      if status == "running" and newest and newest.state == "attention" then tstate = { "wants you", "amber" }
-      elseif status == "running" and newest and newest.state == "working" then tstate = { "working", "blue" }
-      else tstate = { status, status == "running" and "green" or "red" } end
+      if status == "running" and newest and newest.state == "attention" then st = { "wants you", "amber" }
+      elseif status == "running" and newest and newest.state == "working" then st = { "working", "blue", ring = true }
+      elseif status == "running" then st = { "running", "green" }
+      elseif status == "stopped" then st = { "stopped", "text-muted", ring = true }
+      else st = { status, "red" } end
+    else
+      local s0 = j.status
+      if s0 == "running" and j.working then st = { "working", "blue", ring = true }
+      elseif s0 == "running" then st = { "running", "green" }
+      elseif s0 == "starting" or s0 == "creating" or s0 == "unknown" then st = { s0, "blue", ring = true }
+      elseif s0 == "failed" then st = { "failed", "red" }
+      else st = { s0 == "absent" and "not created" or s0, "text-muted", ring = true } end
     end
-
-    local head = row{ w = "full", gap = 8, h = 28,
-      icon{ "sparkle", color = "blue" },
-      -- The title is the picker once there is a sandbox to pick: where the words go.
-      #items > 1 and select{ id = "jarvis-target", items = items, value = target or "sbxw-jarvis", on = "target",
-        help = "Where your words go: Jarvis, or a running sandbox's agent (you confirm each message)" }
-        or text{ "Jarvis", weight = "semibold", color = "text-bright" },
-      (not target and not running) and text{ j.status, size = "sm", color = "text-muted" } or false,
-      spacer{},
-      #j.pending > 0 and button{ #j.pending == 1 and "1 to review" or (#j.pending .. " to review"),
-        on = "review", arg = j.pending[1].id, variant = "primary",
-        help = "Jarvis proposes: " .. j.pending[1].summary } or false,
-      button{ icon = "close", variant = "ghost", on = "close", help = "Close the Jarvis panel" },
+    -- The dot as the sidebar draws it: filled, or a ring for stopped and for a state in progress.
+    local state = row{ gap = 8, min_w = 0, clip = true, key = target and "jarvis-target-state" or "jarvis-state",
+      help = target and (target .. "'s agent: " .. st[1]) or ("Jarvis: " .. st[1]),
+      column{ w = 8, h = 8, radius = 4, fill = (not st.ring) and st[2] or nil, border = st.ring and st[2] or nil },
+      -- With a proposal waiting its button needs the room: the dot alone (its tooltip says the word).
+      #j.pending == 0 and text{ st[1], size = "sm", color = st[2], truncate = true } or false,
     }
 
-    -- The picked sandbox: its state and Follow, on a line of their own.
+    -- The shared panel header: the mark and the title at the left, where the
+    -- words go (a compact picker, sized to its label, only when there is
+    -- more than Jarvis to pick), the state; what waits and the cross at the
+    -- right. The state's word gives way first (it truncates; its dot stays).
+    local head = row{ w = "full", gap = 8, h = 28,
+      row{ gap = 8, grow = 1, min_w = 0, clip = true,
+        icon{ "jarvis", color = "purple-alt" },
+        text{ "Jarvis", size = "title", weight = "semibold", color = "text-bright" },
+        #items > 1 and row{ gap = 4,
+          icon{ "send", size = 12, color = "text-muted", help = "Where your words go" },
+          -- A sandbox picked: its colour square, as the overlays' sandbox picker.
+          target and column{ w = 8, h = 8, radius = 2, key = "jarvis-target-color",
+            fill = (((data.app or {}).groups or {})[target]) or "text-dim" } or false,
+          select{ id = "jarvis-target", items = items, value = target or "sbxw-jarvis", on = "target", min_w = 0,
+            help = "Where your words go: Jarvis, or a running sandbox's agent (you confirm each message)" },
+        } or false,
+        state,
+      },
+      #j.pending > 0 and button{ #j.pending == 1 and "1 to review" or (#j.pending .. " to review"),
+        on = "review", arg = j.pending[1].id, tone = "amber", key = "jarvis-review",
+        help = "Jarvis proposes: " .. j.pending[1].summary } or false,
+      button{ icon = "close", variant = "ghost", on = "close", key = "jarvis-close", help = "Close the Jarvis panel" },
+    }
+
+    -- The picked sandbox: Follow, on a line of its own.
     local sub = target and row{ w = "full", gap = 8,
-      badge{ tstate[1], tone = tstate[2], key = "jarvis-target-state", help = target .. "'s agent" },
       checkbox{ "Follow", value = f.follow == true, on = "follow", key = "jarvis-follow" },
       text{ f.follow and "every turn shown and read" or "rounds only", size = "sm", color = "text-muted", truncate = true, grow = 1 },
     } or false
@@ -143,19 +169,27 @@ return {
     log.stick_bottom = true
     log.key = "jarvis-log"
 
+    -- The composer: the app's input, then its icon buttons (14 pt in a
+    -- 24 pt target, ghost, their keys in the tooltip). While Jarvis is
+    -- stopped the placeholder says so; typing still works (the send offers
+    -- to start it), so nothing is disabled.
     local talk = false
     if v.hears then
-      talk = button{ icon = "mic", on = "talk", arg = v.recording,
+      talk = button{ icon = "mic", on = "talk", arg = v.recording, key = "jarvis-talk",
         variant = v.recording and "danger" or "ghost",
+        keys = (not v.recording and not v.key_note) and { v.key } or nil,
         help = v.recording and "Recording: click again to send"
-          or (v.key_note or ("Hold " .. v.key .. " to talk, or click to start and again to send")) }
+          or (v.key_note or "Hold to talk, or click to start and again to send") }
     end
-
     return column{ w = "full", h = "full", gap = 8,
       head,
       sub,
-      (j.others or 0) > 0 and text{ "sbxw is also open in another window or browser tab: Jarvis may be read aloud there too.",
-        wrap = true, size = "sm", color = "text-muted" } or false,
+      -- An inline notice, as the app's: quiet, an info mark, its own line.
+      (j.others or 0) > 0 and row{ w = "full", gap = 8, key = "jarvis-others",
+        icon{ "info", size = 12, color = "text-muted" },
+        text{ "sbxw is also open in another window or browser tab: Jarvis may be read aloud there too.",
+          wrap = true, size = "sm", color = "text-muted", grow = 1 },
+      } or false,
       scroll(log),
       v.recording and progress{ value = v.level, tone = "red" } or false,
       note,
@@ -163,7 +197,7 @@ return {
         column{ grow = 1, input{ id = "jarvis-input", on_submit = "send", on = "edited",
           placeholder = target and ("Message " .. target .. " (you confirm it first)") or (running and "Ask Jarvis" or "Ask Jarvis (start it first)") } },
         talk,
-        button{ icon = "send", on = "send", help = "Send (Enter)" },
+        button{ icon = "send", on = "send", key = "jarvis-send", variant = "ghost", keys = { "Enter" }, help = "Send" },
       },
     }
   end,
