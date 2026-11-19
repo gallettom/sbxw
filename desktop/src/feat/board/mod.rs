@@ -117,6 +117,11 @@ pub struct State {
     expanded: BTreeSet<String>,
     /// Pages of [`model::ROWS_PAGE`] rows drawn.
     pages: usize,
+    /// A fold was opened or closed since the conversation was read: its
+    /// view stops following its end, so what grows or shrinks moves only
+    /// what is under it (the pressed bubble's top stays put). A new team,
+    /// filter or search follows the end again.
+    held: bool,
     tab: String,
     /// The commit open in the Commits column, and its detail.
     commit: Option<(String, String)>,
@@ -182,6 +187,7 @@ impl State {
         self.gen += 1;
         self.timelines.clear();
         self.pages = 1;
+        self.held = false;
         let ids: Vec<String> = match &self.team {
             Some(id) => vec![id.clone()],
             None => self.teams.iter().take(ALL_TEAMS).filter_map(|t| t["id"].as_str().map(str::to_string)).collect(),
@@ -272,12 +278,20 @@ impl State {
                 }
             }
             "board_expand" => {
+                self.held = true;
                 let id = a.req("id").to_string();
-                if !self.expanded.remove(&id) {
-                    self.expanded.insert(id);
+                if self.expanded.remove(&id) {
+                    // Folded from the end of a text taller than the view, its
+                    // top would be above the view: bring it back in sight (a
+                    // bubble already in view does not move).
+                    out.push(self.ui(cx));
+                    out.push(Action::ScrollIntoView(fold_element(&id)));
+                    return Ok(out);
                 }
+                self.expanded.insert(id);
             }
             "board_commit" => {
+                self.held = true;
                 let hash = a.req("hash").to_string();
                 if self.commit.as_ref().is_some_and(|(_, h)| *h == hash) {
                     self.commit = None;
@@ -291,6 +305,7 @@ impl State {
                 }
             }
             "board_file" => {
+                self.held = true;
                 let p = a.req("path").to_string();
                 if !self.detail["files"].as_array().into_iter().flatten().any(|f| f["path"] == p.as_str()) {
                     return Err(format!("{p} is not a file of the open commit"));
@@ -595,7 +610,7 @@ impl State {
         let errors: Vec<String> = self.timelines.values().filter_map(|t| t.error.clone()).chain(self.teams_error.clone()).collect();
         let mut v = json!({
             "teams": teams, "team": current, "all": self.team.is_none(), "picker": picker, "popup": self.picker,
-            "rows": rows[cut..], "older": older, "hidden": cut, "total": total,
+            "rows": rows[cut..], "older": older, "held": self.held, "hidden": cut, "total": total,
             "group": if self.group.is_empty() { "all" } else { self.group.as_str() }, "thread": self.thread, "text": self.text,
             "tab": if self.tab.is_empty() { "conversation" } else { self.tab.as_str() },
             "loading": loading, "errors": errors, "monitor": crate::feat::intent("monitor_open").is_some(),
@@ -703,6 +718,20 @@ impl State {
             })
             .collect();
         json!({ "body": self.detail["body"], "files": files, "files_more": self.detail["files_more"], "truncated": self.detail["truncated"] })
+    }
+}
+
+/// The element a fold key opens: a bubble, a plan card's goals (its
+/// bubble), a thread's commits (its row), the summary.
+fn fold_element(id: &str) -> String {
+    if id == "summary" {
+        "board-summary".into()
+    } else if let Some(card) = id.strip_suffix(":goals") {
+        format!("board-bubble-{card}")
+    } else if id.starts_with("commits-") {
+        format!("board-msg-{id}")
+    } else {
+        format!("board-bubble-{id}")
     }
 }
 

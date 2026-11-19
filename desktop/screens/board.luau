@@ -349,7 +349,9 @@ local function conversation(ui, sb)
     list[#list + 1] = note(ui.loading and "Reading the conversation…" or ((#(ui.teams or {}) == 0) and "No team yet: a lead's plan makes one (Team mode on a sandbox)." or (ui.group == "messages" and "No direct message. They show from the day the daemon had this version; none from before is recovered." or "Nothing here matches.")))
   end
   for _, e in ipairs(ui.errors or {}) do list[#list + 1] = note(e, "red") end
-  return scroll{ key = "board-convo", stick_bottom = true, column(list) }
+  -- Follows its end (new events), until a fold is pressed: then growing or
+  -- shrinking a bubble moves only what is under it (see `held`, mod.rs).
+  return scroll{ key = "board-convo", stick_bottom = not ui.held, column(list) }
 end
 
 local function section(title, extra)

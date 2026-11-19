@@ -91,6 +91,8 @@ pub enum Ask {
     Copy(String),
     /// Move Rune's keyboard focus to that element key.
     Focus(String),
+    /// Scroll the nearest viewport so that element key shows.
+    ScrollIntoView(String),
     /// A surface's paste chord off macOS: the clipboard's text to that surface.
     PasteText(String),
     /// A download to a place the person picks: the save dialog, then the
@@ -215,6 +217,7 @@ impl App {
                 Action::OpenSocket { id, path, opts } => self.open_socket(f, id, path, opts),
                 Action::CloseSocket(id) => crate::socket::close(&id),
                 Action::Focus(key) => self.feats.asks.push((f.name, Ask::Focus(key))),
+                Action::ScrollIntoView(key) => self.feats.asks.push((f.name, Ask::ScrollIntoView(key))),
                 Action::Download(d) => {
                     if d.direct() {
                         let call = d.call(format!("download {}", crate::safe::file_name(&d.name)));
@@ -367,6 +370,7 @@ impl App {
                     self.notify(line, false);
                 }
                 Ask::Focus(key) => tx.focus(key, true),
+                Ask::ScrollIntoView(key) => tx.scroll_into_view(key),
                 Ask::SaveAs { id, call } => {
                     let suggested = crate::safe::file_name(call.body["name"].as_str().unwrap_or(""));
                     let o = rune::FileDialogOptions { title: format!("Save {suggested}"), file_name: Some(suggested), directory: crate::files::downloads_dir().ok(), ..Default::default() };

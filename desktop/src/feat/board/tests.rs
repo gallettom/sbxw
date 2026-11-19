@@ -140,9 +140,9 @@ fn notes_stand_pinned_and_a_commit_opens_with_its_diff() {
     let mut st = State::default();
     let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
     let notes = v["side"]["notes"].as_array().unwrap();
-    assert_eq!(notes.len(), 2);
+    assert_eq!(notes.len(), 3, "the board's decision and warning, and the lead's decision sent as a team note");
     assert_eq!((notes[0]["label"].as_str(), notes[0]["tone"].as_str()), (Some("Decision"), Some("green")));
-    assert_eq!(notes[1]["tone"], "amber");
+    assert_eq!(notes[2]["tone"], "amber");
     let per = v["side"]["commits"].as_array().unwrap();
     let api = per.iter().find(|p| p["thread"] == "api-routes").unwrap();
     assert_eq!(api["totals"]["commits"], 4);
@@ -776,4 +776,183 @@ fn bubbles_are_as_wide_as_the_column_allows_and_never_leave_it() {
             assert!(max <= model::BUBBLE_MIN);
         }
     }
+}
+
+// ── The fold holds the page (A6) ─────────────────────────────────────────
+
+/// Where the pressed bubble and every row above it are drawn, in the window.
+fn rows_at(rt: &Runtime<App>, id: &str) -> (Option<[f32; 4]>, Vec<(String, f32)>) {
+    let b = rt.presented(&format!("board-bubble-{id}")).map(|(r, _)| r);
+    let (c, _) = rt.presented("board-convo").unwrap();
+    let above: Vec<(String, f32)> = rt
+        .elements()
+        .into_iter()
+        .filter_map(|e| e.key.clone().map(|k| (k, e.rect)))
+        .filter(|(k, _)| k.starts_with("board-msg-") || k.starts_with("board-author-"))
+        .filter(|(_, r)| b.is_some_and(|b| r[1] + r[3] <= b[1] + 0.5) && r[1] + r[3] > c[1] && r[1] < c[1] + c[3])
+        .map(|(k, r)| (k, r[1]))
+        .collect();
+    (b, above)
+}
+
+/// Presses `key` and checks the fold rule: the bubble's top edge and every
+/// row above it stay where they were (within 1 pt) on every frame, its
+/// width is the same. Returns what moved.
+/// Scrolls with the wheel until `key` is wholly in the conversation's view,
+/// as a person reaches a control before pressing it.
+fn reach(rt: &mut Runtime<App>, key: &str) {
+    let (c, _) = rt.presented("board-convo").unwrap();
+    for _ in 0..80 {
+        let Some((r, _)) = rt.presented(key) else { return };
+        let dy = if r[1] < c[1] { 30.0 } else if r[1] + r[3] > c[1] + c[3] { -30.0 } else { return };
+        rt.wheel(c[0] + c[2] / 2.0, c[1] + c[3] / 2.0, dy);
+        settle(rt);
+    }
+}
+
+fn press_holds(rt: &mut Runtime<App>, key: &str, id: &str, folding: bool) -> Vec<String> {
+    reach(rt, key);
+    let (b0, above0) = rows_at(rt, id);
+    let b0 = b0.unwrap_or_else(|| panic!("{id} not drawn"));
+    let (c, _) = rt.presented("board-convo").unwrap();
+    if folding && b0[1] < c[1] - 0.5 {
+        // Its top above the view: folding brings it back into the view
+        // (Action::ScrollIntoView) instead of holding it out of sight.
+        tap(rt, key);
+        let (b, _) = rt.presented(&format!("board-bubble-{id}")).unwrap();
+        return if b[1] >= c[1] - 0.5 && b[1] < c[1] + c[3] { vec![] } else { vec![format!("{key}: folded from above the view, its top {b:?} is not in {c:?}")] };
+    }
+    let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{key} not drawn"));
+    let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    let mut bad = vec![];
+    for f in 0..24 {
+        rt.frame(0.025);
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        let (b, above) = rows_at(rt, id);
+        let Some(b) = b else { bad.push(format!("frame {f}: the bubble is gone")); continue };
+        if (b[1] - b0[1]).abs() > 1.0 {
+            bad.push(format!("frame {f}: {key}: the bubble's top moved {} -> {}", b0[1], b[1]));
+        }
+        if (b[2] - b0[2]).abs() > 1.0 {
+            bad.push(format!("frame {f}: {key}: the bubble's width changed {} -> {}", b0[2], b[2]));
+        }
+        for (k, y0) in &above0 {
+            if let Some((_, y1)) = above.iter().find(|(k1, _)| k1 == k) {
+                if (y1 - y0).abs() > 1.0 {
+                    bad.push(format!("frame {f}: {key}: {k} above moved {y0} -> {y1}"));
+                }
+            }
+        }
+    }
+    bad.dedup();
+    bad
+}
+
+fn long_note(id: &str, at: u64) -> J {
+    let text = "The handler reads its input once, checks it against the schema, and returns a typed error the page can show without parsing a message. ".repeat(14);
+    let mut e = note_event(id, &text);
+    e["at"] = at.into();
+    e
+}
+
+#[test]
+fn show_more_and_show_less_keep_the_bubble_and_the_rows_above_in_place() {
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+        let mut rt = window(w, h);
+        if w < 760.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            settle(&mut rt);
+        }
+        open(&mut rt, json!({ "team": "p-run" }));
+        append(&mut rt, long_note("l980", 1_795_100_000_000));
+        // At the end of a conversation longer than the window (the view
+        // follows its end): the newest bubble folded.
+        let mut bad = press_holds(&mut rt, "board-fold-l980", "l980", false);
+        settle(&mut rt);
+        bad.extend(press_holds(&mut rt, "board-fold-l980", "l980", true));
+        settle(&mut rt);
+        // In the middle: rows after it, the view scrolled so it shows.
+        for i in 0..6 {
+            append(&mut rt, note_event(&format!("l98{}", i + 1), "A short note after the long one."));
+        }
+        let (c, _) = rt.presented("board-convo").unwrap();
+        for _ in 0..40 {
+            let Some((b, _)) = rt.presented("board-fold-l980") else { break };
+            if b[1] > c[1] + c[3] * 0.35 {
+                break;
+            }
+            rt.wheel(c[0] + c[2] / 2.0, c[1] + c[3] / 2.0, 40.0);
+            settle(&mut rt);
+        }
+        for _ in 0..40 {
+            let Some((b, _)) = rt.presented("board-fold-l980") else { break };
+            if b[1] < c[1] + c[3] * 0.7 {
+                break;
+            }
+            rt.wheel(c[0] + c[2] / 2.0, c[1] + c[3] / 2.0, -40.0);
+            settle(&mut rt);
+        }
+        bad.extend(press_holds(&mut rt, "board-fold-l980", "l980", false));
+        settle(&mut rt);
+        // Show less: the bubble's top is in view after. An open bubble whose
+        // top is above the view comes back into it (Action::ScrollIntoView); one in
+        // view holds.
+        bad.extend(press_holds(&mut rt, "board-fold-l980", "l980", true));
+        settle(&mut rt);
+        let (b, _) = rt.presented("board-bubble-l980").unwrap();
+        assert!(b[1] >= c[1] - 0.5 && b[1] < c[1] + c[3], "at {w}: after Show less the bubble's top is in view: {b:?} in {c:?}");
+        assert!(bad.is_empty(), "at {w}:\n{}", bad.join("\n"));
+    }
+}
+
+#[test]
+fn show_less_from_the_end_of_a_tall_bubble_brings_its_top_into_view() {
+    let mut rt = window(720.0, 480.0);
+    rt.update(|s, _| s.toggle_sidebar());
+    settle(&mut rt);
+    open(&mut rt, json!({ "team": "p-run" }));
+    append(&mut rt, long_note("l980", 1_795_100_000_000));
+    tap(&mut rt, "board-fold-l980");
+    let (c, _) = rt.presented("board-convo").unwrap();
+    // Down to its end: its Show less in view, its top above the view.
+    for _ in 0..60 {
+        if rt.presented("board-fold-l980").is_some_and(|(f, _)| f[1] + f[3] <= c[1] + c[3] && f[1] >= c[1]) && rt.presented("board-bubble-l980").is_some_and(|(b, _)| b[1] < c[1]) {
+            break;
+        }
+        rt.wheel(c[0] + c[2] / 2.0, c[1] + c[3] / 2.0, -30.0);
+        settle(&mut rt);
+    }
+    let (b, _) = rt.presented("board-bubble-l980").unwrap();
+    assert!(b[1] < c[1], "the open bubble's top is above the view: {b:?} in {c:?}");
+    tap(&mut rt, "board-fold-l980");
+    let (b, _) = rt.presented("board-bubble-l980").unwrap();
+    assert!(b[1] >= c[1] - 0.5 && b[1] < c[1] + c[3], "after Show less its top is in view: {b:?} in {c:?}");
+}
+
+#[test]
+fn scrolling_to_a_key_not_drawn_does_nothing() {
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    let (c0, _) = rt.presented("board-convo").unwrap();
+    let before: Vec<(Option<String>, [f32; 4])> = rt.elements().into_iter().map(|e| (e.key, e.rect)).collect();
+    let focus0 = rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key);
+    // Opened then folded: a fold key with no bubble drawn asks to scroll to "board-bubble-nowhere".
+    for _ in 0..2 {
+        let v = json!({ "kind": "intent", "name": "board_expand", "args": { "id": "nowhere" } });
+        for i in crate::intent::parse(&v).unwrap() {
+            rt.update(|s, _| s.run_intent("test", i));
+        }
+        settle(&mut rt);
+    }
+    let after: Vec<(Option<String>, [f32; 4])> = rt.elements().into_iter().map(|e| (e.key, e.rect)).collect();
+    assert_eq!(before.len(), after.len());
+    for ((ka, a), (kb, b)) in before.iter().zip(&after) {
+        assert!(ka == kb && (0..4).all(|i| (a[i] - b[i]).abs() < 0.5), "nothing moved: {ka:?} {a:?} -> {kb:?} {b:?}");
+    }
+    assert_eq!(rt.presented("board-convo").unwrap().0, c0);
+    assert_eq!(rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key), focus0, "the keyboard focus stays");
 }

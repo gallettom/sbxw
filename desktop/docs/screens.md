@@ -1149,7 +1149,10 @@ goes through `Confirm`, like every destructive call), `Confirm`,
 click on the notice runs), `OpenLink(url)`, `Intent { name, args }` (checked
 exactly as from a screen), `Remember { key, value }` (kept across runs in the
 app's state file, read back as `data.app.kept.<feature>.<key>`; null forgets).
-`OpenSocket`, `CloseSocket(id)`, `Focus(element key)`. A `Call` of method
+`OpenSocket`, `CloseSocket(id)`, `Focus(element key)`, `ScrollIntoView(element key)`
+(scrolls the nearest viewport so that element shows, once the change is
+drawn; it never moves the keyboard focus, and a key not drawn does nothing:
+the Board's Show less on a bubble taller than its view). A `Call` of method
 `Core` is one of the core's own operations: restoring a screen (from the
 core's dialog only), and the file operations of `src/files.rs` built with
 `feat::core_call(op, body, what, tag)`: `inspect {path}` and `reveal {path}`
