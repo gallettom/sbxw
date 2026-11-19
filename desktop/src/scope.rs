@@ -42,6 +42,16 @@ pub const CAPSULE_TINT: f32 = 0.32;
 pub const EDGE_TINT: f32 = 0.55;
 /// The strip along a scoped overlay's top edge, in points.
 pub const STRIP_H: f32 = 3.0;
+/// The overlay's title band: the scope's strip along the top edge
+/// (`scope::STRIP_H`), then the same room over the title row as under it,
+/// so the row (icon, title, "in", the capsule, the cross: all centred on
+/// `CONTROL_H`) sits in the middle of the band below the strip.
+pub const BAND_PAD: f32 = 8.0;
+/// Where the title row starts: under the strip, then [`BAND_PAD`].
+pub const HEAD_TOP: f32 = STRIP_H + BAND_PAD;
+/// The title band's height (the wash): the strip, the row, its room both sides.
+pub const BAND_H: f32 = HEAD_TOP + theme::layout::CONTROL_H + BAND_PAD;
+
 /// Under this overlay width the title drops its "in" ("Files [web-app]").
 pub const PHRASE_MIN: f32 = 560.0;
 /// The open list: at least this wide (names read in full), at most [`LIST_MAX_W`].
@@ -53,6 +63,14 @@ pub const NAME_MAX_W: f32 = 220.0;
 pub const NARROW_MAX_W: f32 = 160.0;
 pub const ROW_H: f32 = 30.0;
 pub const HEAD_H: f32 = 22.0;
+/// The group's name in a row of a list ordered by count clips past this.
+pub const GROUP_W: f32 = 90.0;
+/// The open list's panel is never taller than this (and never more than the
+/// window's room beside the capsule, 8 pt in: `anchored_fit`). Its rows
+/// scroll inside it; the filter and "All sandboxes" stay pinned above them.
+pub const LIST_MAX_H: f32 = 420.0;
+/// The fade at the rows' scrolling edges, and the room a revealed row keeps from it.
+pub const LIST_FADE: f32 = 16.0;
 
 /// What a screen asked for: `scope = "sandbox"` or `scope = { kind =
 /// "sandbox", narrow = "thread-a", narrow_icon = "branch", clear = "action" }`.
@@ -68,6 +86,21 @@ pub struct Spec {
     pub all: bool,
     /// `running = true`: only the running sandboxes (when `items` names none).
     pub running: bool,
+    /// `counts = { [sandbox] = n }`: a number per sandbox the screen holds
+    /// (Worktrees: its worktrees), shown in each row's chip in place of the
+    /// open sessions, its tooltip "<n> <noun>s". None: the sessions.
+    pub counts: Option<std::collections::BTreeMap<String, u64>>,
+    /// `noun = "worktree"`: what a count counts (singular), for the tooltip.
+    pub noun: String,
+    /// `only = "counted"`: only the sandboxes whose count is above 0 (the
+    /// current one stays, marked, so the capsule never names a missing row).
+    pub only_counted: bool,
+    /// `order = "count"`: the largest count first, ties by name, no group
+    /// headings (each row keeps its group bar and names its group quietly).
+    pub by_count: bool,
+    /// `counting = true`: the counts are still being read (the empty list
+    /// says so instead of "none").
+    pub counting: bool,
 }
 
 /// The `scope` prop read, when its kind is one the core knows.
@@ -83,7 +116,25 @@ pub fn spec(v: &J) -> Option<Spec> {
     let s = |k: &str| t.and_then(|o| o.get(k)).and_then(J::as_str).filter(|x| !x.is_empty()).map(str::to_string);
     let icon = s("narrow_icon").filter(|i| crate::icons::get(i).is_some()).unwrap_or_else(|| "branch".into());
     let b = |k: &str| t.and_then(|o| o.get(k)).and_then(J::as_bool).unwrap_or(false);
-    Some(Spec { kind, narrow: s("narrow"), narrow_icon: icon, clear: s("clear"), all: b("all"), running: b("running") })
+    // `counts`: a table of names to numbers (an empty Lua table may come as `[]`).
+    let counts = t.and_then(|o| o.get("counts")).and_then(|c| match c {
+        J::Object(m) => Some(m.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64().filter(|n| *n >= 0.0)? as u64))).collect()),
+        J::Array(a) if a.is_empty() => Some(Default::default()),
+        _ => None,
+    });
+    Some(Spec {
+        kind,
+        narrow: s("narrow"),
+        narrow_icon: icon,
+        clear: s("clear"),
+        all: b("all"),
+        running: b("running"),
+        noun: s("noun").unwrap_or_else(|| "item".into()),
+        only_counted: s("only").as_deref() == Some("counted") && counts.is_some(),
+        by_count: s("order").as_deref() == Some("count") && counts.is_some(),
+        counts,
+        counting: b("counting"),
+    })
 }
 
 /// One choice of the list: "All" (`id` empty) or a sandbox the core knows.
@@ -97,6 +148,8 @@ pub struct Choice {
     pub color: Option<u32>,
     pub agent: String,
     pub sessions: usize,
+    /// The screen's count for it (`counts`), when it passed them.
+    pub count: Option<u64>,
 }
 
 impl Choice {
@@ -151,7 +204,7 @@ pub fn choices(data: &J, items: &[Item], sp: &Spec) -> Vec<Choice> {
             continue;
         }
         if it.id.is_empty() {
-            all.get_or_insert(Choice { id: String::new(), status: String::new(), group: None, color: None, agent: String::new(), sessions: 0 });
+            all.get_or_insert(Choice { id: String::new(), status: String::new(), group: None, color: None, agent: String::new(), sessions: 0, count: None });
             continue;
         }
         let Some(sb) = sbs.iter().find(|s| s["name"].as_str() == Some(it.id.as_str())) else { continue };
@@ -166,6 +219,7 @@ pub fn choices(data: &J, items: &[Item], sp: &Spec) -> Vec<Choice> {
             color: groups[it.id.as_str()].as_str().and_then(parse_hex),
             agent: sb["agent"].as_str().unwrap_or("").to_string(),
             sessions: n,
+            count: sp.counts.as_ref().map(|m| m.get(&it.id).copied().unwrap_or(0)),
         });
     }
     // Stable grouping: by the first index of each group.
@@ -173,6 +227,26 @@ pub fn choices(data: &J, items: &[Item], sp: &Spec) -> Vec<Choice> {
     let snapshot = list.clone();
     list.sort_by_key(|c| first(&c.group, &snapshot));
     all.into_iter().chain(list).collect()
+}
+
+/// The choices the list offers for `value` (the current one): [`choices`],
+/// then `only = "counted"` (those counted above 0, and the current one
+/// always) and `order = "count"` (the largest count first, ties by name).
+pub fn offered(data: &J, items: &[Item], sp: &Spec, value: &str) -> Vec<Choice> {
+    let mut list = choices(data, items, sp);
+    if sp.only_counted {
+        list.retain(|c| c.all() || c.count.unwrap_or(0) > 0 || c.id == value);
+    }
+    if sp.by_count {
+        // All stays first (its count is none: rank it above every number).
+        list.sort_by(|a, b| b.all().cmp(&a.all()).then(b.count.unwrap_or(0).cmp(&a.count.unwrap_or(0))).then_with(|| a.id.cmp(&b.id)));
+    }
+    list
+}
+
+/// "4 worktrees", "1 worktree".
+pub fn count_words(n: u64, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
 /// The choices whose name (or group's name) holds `q`, any case. All stays.
@@ -366,10 +440,14 @@ pub fn narrow_chip<S: 'static>(key: &str, sp: &Spec, clear: Option<Box<dyn Fn(&m
 }
 
 /// The list's width: the longest name in full, between the bounds.
-pub fn list_width(list: &[Choice]) -> f32 {
+pub fn list_width(list: &[Choice], sp: &Spec) -> f32 {
+    (list_width_of(list) + if sp.by_count { GROUP_W } else { 0.0 }).clamp(LIST_MIN_W, LIST_MAX_W)
+}
+
+fn list_width_of(list: &[Choice]) -> f32 {
     let longest = list.iter().map(|c| c.id.chars().count().max(c.group.as_deref().map_or(0, |g| g.chars().count()))).max().unwrap_or(0) as f32;
     // name at 13 pt (0.6 em a character), mark, state, agent, sessions, check.
-    (longest * 13.0 * 0.6 + 8.0 + 3.0 + 8.0 + 8.0 + 64.0 + 56.0 + 28.0 + 20.0 + 16.0 + 40.0).clamp(LIST_MIN_W, LIST_MAX_W)
+    longest * 13.0 * 0.6 + 8.0 + 3.0 + 8.0 + 8.0 + 64.0 + 56.0 + 28.0 + 20.0 + 16.0 + 40.0
 }
 
 /// What the open list needs from the screen: its keys, the filter's edit
@@ -381,6 +459,8 @@ pub struct ListCtx<S> {
     /// The window's width: the list never leaves it.
     pub window_w: f32,
     pub filter: Option<TextEdit>,
+    /// What the screen asked for: counts, `only`, `order`.
+    pub spec: Spec,
     pub edit: Rc<dyn Fn(&mut S) -> &mut TextEdit>,
     pub pick: Rc<dyn Fn(&mut S, &str)>,
     pub close: Rc<dyn Fn(&mut S)>,
@@ -398,14 +478,17 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
     let shown = filter(choices, &q);
     let keys: Vec<String> = shown.iter().map(|c| row_key(&cx.key, c)).collect();
     let filter_key = format!("{}-filter", cx.key);
-    let w = list_width(choices).min((cx.window_w - 16.0).max(200.0));
+    let w = list_width(choices, &cx.spec).min((cx.window_w - 16.0).max(200.0));
     // Modal while open: the keyboard starts in it (the filter, else the
     // current row), Escape closes only the list, then the keyboard goes
     // back to the capsule. A press outside closes it and does nothing else.
     let close0 = cx.close.clone();
+    // Sized to the window (`anchored_fit`): at most LIST_MAX_H, at most the
+    // room under (or over) the capsule; the rows' viewport shrinks and scrolls.
     let mut l = crate::screen::menu_surface(format!("{}-list", cx.key), cx.key.clone(), rune::Align::Start, w)
+        .anchored_fit(cx.key.clone(), rune::Side::Bottom, rune::Align::Start, 4.0)
         .gap(2.0)
-        .max_h(480.0)
+        .max_h(LIST_MAX_H)
         .modal(true, move |s: &mut S| close0(s))
         .focus_return(cx.key.clone());
     // The field, when there are many: typed text narrows the rows; Down goes
@@ -426,6 +509,7 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
                 rune::Key::Down => {
                     if let Some(k) = &first {
                         tx.focus(k.clone(), true);
+                        tx.scroll_into_view(k.clone());
                     }
                     true
                 }
@@ -443,17 +527,38 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
             });
         l = l.child(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(theme::radius("sm").unwrap()).focus_within_ring(2.0, 1.0, c("focus")).child(input));
     }
-    let mut rows = col().key(format!("{}-rows", cx.key)).w_full().gap(2.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false });
+    // The rows scroll inside the panel (it never grows past LIST_MAX_H or the
+    // window): `shrink` and `min_h(0)` let the viewport be shorter than its
+    // content. "All sandboxes" stays pinned above it, as the filter does.
+    let mut rows = col().key(format!("{}-rows", cx.key)).w_full().gap(2.0).shrink().min_h(0.0)
+        .scroll(rune::ScrollSpec { stick_bottom: false }).scroll_edge_fade(LIST_FADE).scroll_margin(LIST_FADE);
+    // The current row in view on open (the keyboard may be in the filter):
+    // on the viewport's first layout, and again only if its size changes.
+    if let Some(cur) = shown.iter().find(|c| !c.all() && c.id == cx.value) {
+        let k = row_key(&cx.key, cur);
+        rows = rows.on_layout_tx(move |_s: &mut S, _r: [f32; 4], tx: &mut rune::Tx| tx.scroll_into_view(k.clone()));
+    }
     let mut last_group: Option<Option<String>> = None;
     for (i, ch) in shown.iter().enumerate() {
-        if !ch.all() && last_group.as_ref() != Some(&ch.group) {
-            rows = rows.child(heading(ch));
+        // Ordered by count, no headings: they would break the order (each
+        // row keeps its group bar and names its group).
+        if !ch.all() && !cx.spec.by_count && last_group.as_ref() != Some(&ch.group) {
+            rows = rows.child(heading(&cx.key, ch));
             last_group = Some(ch.group.clone());
         }
         let prev = if i == 0 { cx.filter.as_ref().map(|_| filter_key.clone()) } else { Some(keys[i - 1].clone()) };
         let next = keys.get(i + 1).cloned();
         let focus_me = cx.filter.is_none() && (ch.id == cx.value || (i == 0 && !shown.iter().any(|c| c.id == cx.value)));
-        rows = rows.child(choice_row(&cx, ch, &keys[i], prev, next, focus_me));
+        let r = choice_row(&cx, ch, &keys[i], prev, next, focus_me);
+        if ch.all() {
+            l = l.child(r);
+        } else {
+            rows = rows.child(r);
+        }
+    }
+    if shown.iter().all(|c| c.all()) && q.trim().is_empty() && cx.spec.only_counted {
+        let line = if cx.spec.counting { format!("Counting the {}s\u{2026}", cx.spec.noun) } else { format!("No sandbox has a {}", cx.spec.noun) };
+        rows = rows.child(el().key(format!("{}-none", cx.key)).w_full().px(8.0).py(6.0).child(text(line).font(crate::screen::body(12.0, 400.0)).color(c("text-muted")).truncate().min_w(0.0)));
     }
     if shown.iter().all(|c| c.all()) && !q.trim().is_empty() {
         rows = rows.child(el().w_full().px(8.0).py(6.0).child(text(format!("No sandbox matches \u{201c}{}\u{201d}", q.trim())).font(crate::screen::body(12.0, 400.0)).color(c("text-muted")).truncate().min_w(0.0)));
@@ -462,7 +567,7 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
 }
 
 /// A group's heading in the list: its tint and label colour, as the sidebar heads its block.
-fn heading(ch: &Choice) -> El {
+fn heading(key: &str, ch: &Choice) -> El {
     let name = ch.group.clone().unwrap_or_else(|| "No group".into());
     let (tint, label) = match ch.color {
         Some(g) => {
@@ -476,9 +581,26 @@ fn heading(ch: &Choice) -> El {
         Some(g) => sq.fill(hex(g)),
         None => sq.border(1.0, c("text-dim")),
     };
-    row().w_full().h(HEAD_H).px(8.0).gap(6.0).items_center().radius(theme::radius("xs").unwrap()).fill(hex(tint)).help(name.clone())
+    row().key(format!("{key}-group-{name}")).w_full().h(HEAD_H).px(8.0).gap(6.0).items_center().radius(theme::radius("xs").unwrap()).fill(hex(tint)).help(name.clone())
         .child(sq)
         .child(text(name).font(crate::screen::body(12.0, 600.0)).color(hex(label)).truncate().min_w(0.0))
+}
+
+/// A row's count: the screen's count (`counts`: "4 worktrees") or, without,
+/// its open sessions. None at 0, except the current row of an `only =
+/// "counted"` list, which says it has none any more.
+fn chip(sp: &Spec, ch: &Choice, key: &str) -> Option<El> {
+    let k = format!("{key}-count");
+    let (n, tip) = match ch.count {
+        Some(n) => (n, count_words(n, &sp.noun)),
+        None => (ch.sessions as u64, count_words(ch.sessions as u64, "session")),
+    };
+    if n == 0 {
+        return (sp.only_counted && ch.count.is_some()).then(|| {
+            text(format!("no {}", sp.noun)).key(k).font(crate::screen::body(12.0, 400.0)).color(c("text-dim")).help(format!("No {} any more: shown because it is the current one", sp.noun))
+        });
+    }
+    Some(el().key(k).px(6.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).help(tip).child(text(n.to_string()).font(crate::screen::body(12.0, 500.0)).color(c("text"))))
 }
 
 fn choice_row<S: 'static>(cx: &ListCtx<S>, ch: &Choice, key: &str, prev: Option<String>, next: Option<String>, focus_me: bool) -> El {
@@ -501,14 +623,21 @@ fn choice_row<S: 'static>(cx: &ListCtx<S>, ch: &Choice, key: &str, prev: Option<
         if !ch.agent.is_empty() {
             tip.push_str(&format!(", {}", ch.agent));
         }
+        if let Some(g) = ch.group.as_ref().filter(|_| cx.spec.by_count) {
+            tip.push_str(&format!(", group {g}"));
+        }
+        if let Some(n) = ch.count {
+            tip.push_str(&format!(", {}", count_words(n, &cx.spec.noun)));
+        }
         r = r.label(format!("{}, {}", ch.id, if ch.status.is_empty() { "unknown" } else { &ch.status })).help(tip)
             .child(bar)
             .child(status_mark(&ch.status, surface))
             .child(text(ch.id.clone()).font(crate::screen::body(13.0, if current { 600.0 } else { 500.0 })).color(c("text-bright")).grow(1.0).min_w(0.0).truncate())
-            .children((ch.sessions > 0).then(|| {
-                el().px(6.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).help(format!("{} session{}", ch.sessions, if ch.sessions == 1 { "" } else { "s" }))
-                    .child(text(ch.sessions.to_string()).font(crate::screen::body(12.0, 500.0)).color(c("text")))
+            // In the order of the count, the group is named here (no headings).
+            .children(cx.spec.by_count.then(|| {
+                text(ch.group.clone().unwrap_or_default()).font(crate::screen::body(12.0, 400.0)).color(c("text-dim")).truncate().shrink().max_w(GROUP_W)
             }))
+            .children(chip(&cx.spec, ch, &key))
             .child(el().w(64.0).child(text(ch.status.clone()).font(crate::screen::body(12.0, 400.0)).color(c("text-muted")).truncate().min_w(0.0)))
             .child(el().w(56.0).child(text(ch.agent.clone()).font(crate::screen::body(12.0, 400.0)).color(c("text-dim")).truncate().min_w(0.0)));
     }
@@ -531,6 +660,8 @@ fn choice_row<S: 'static>(cx: &ListCtx<S>, ch: &Choice, key: &str, prev: Option<
                 rune::Key::Up | rune::Key::Down => {
                     if let Some(k) = if ev.key == rune::Key::Up { &prev } else { &next } {
                         tx.focus(k.clone(), true);
+                        // The focused row stays in the scrolling part's view.
+                        tx.scroll_into_view(k.clone());
                     }
                     true
                 }

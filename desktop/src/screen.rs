@@ -692,6 +692,10 @@ pub fn menu_width(rows: &[MenuRow]) -> f32 {
 
 /// The list's surface, anchored under (or beside) `anchor`, `w` wide; it
 /// fades in over 0.1 s (at once under reduced motion).
+/// A select's or a menu's list is never taller than this (nor the window's
+/// room beside its trigger); its rows scroll inside.
+pub const MENU_MAX_H: f32 = 420.0;
+
 pub fn menu_surface(key: String, anchor: String, align: rune::Align, w: f32) -> El {
     let e = col()
         .key(key)
@@ -1702,10 +1706,20 @@ impl Build<'_> {
         });
         if open {
             let rows: Vec<MenuRow> = n.items.iter().filter(|i| !i.divider).map(|it| self.menu_row_of(n, &id, it)).collect();
-            let mut list = menu_surface(format!("{id}-list"), key.clone(), rune::Align::Start, menu_width(&rows));
-            for it in &n.items {
-                list = list.child(if it.divider { menu_divider() } else { self.item::<S>(n, &id, it) });
+            // Bounded by the window (`anchored_fit`, MENU_MAX_H): a long list
+            // scrolls inside, the chosen row in view on open.
+            let list = menu_surface(format!("{id}-list"), key.clone(), rune::Align::Start, menu_width(&rows))
+                .anchored_fit(key.clone(), Side::Bottom, rune::Align::Start, 4.0)
+                .max_h(MENU_MAX_H);
+            let mut items = col().key(format!("{id}-items")).w_full().shrink().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).scroll_edge_fade(12.0).scroll_margin(12.0);
+            if let Some(v) = n.value.as_str().filter(|v| n.kind == Kind::Select && n.items.iter().any(|i| i.id == *v)) {
+                let k = format!("{id}-{v}");
+                items = items.on_layout_tx(move |_s: &mut S, _r: [f32; 4], tx: &mut rune::Tx| tx.scroll_into_view(k.clone()));
             }
+            for it in &n.items {
+                items = items.child(if it.divider { menu_divider() } else { self.item::<S>(n, &id, it) });
+            }
+            let list = list.child(items);
             // A press outside closes the menu, and only that (light dismiss).
             let (name, id3) = (self.name.clone(), id.clone());
             self.overlays.push(menu_scrim(format!("{id}-scrim"), move |s: &mut S| {
@@ -1728,7 +1742,7 @@ impl Build<'_> {
         let key = key.unwrap_or_else(|| id.clone());
         let open = self.ui.open.as_deref() == Some(id.as_str());
         let value = n.value.as_str().unwrap_or("").to_string();
-        let choices = scope::choices(self.data, &n.items, &sp);
+        let choices = scope::offered(self.data, &n.items, &sp, &value);
         let has_all = scope::offers_all(&sp, &n.items);
         let all_label = n.items.iter().find(|i| i.id.is_empty()).map(|i| i.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| "All sandboxes".into());
         let empty_label = if has_all { all_label.clone() } else { n.placeholder.clone().unwrap_or_else(|| "Pick a sandbox".into()) };
@@ -1753,6 +1767,7 @@ impl Build<'_> {
                 all_label: all_label.clone(),
                 window_w: self.data["app"]["window"]["w"].as_f64().filter(|w| *w > 0.0).unwrap_or(1284.0) as f32,
                 filter,
+                spec: sp.clone(),
                 edit: Rc::new(move |s: &mut S| &mut s.screen(&n1).ui.edits.entry(fid2.clone()).or_insert_with(|| (TextEdit::new(""), None)).0),
                 pick: Rc::new(move |s: &mut S, v: &str| {
                     s.screen(&n2).ui.open = None;

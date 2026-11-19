@@ -1,0 +1,537 @@
+{
+ "about": "Twenty sandboxes in nine groups, none with a worktree: the Worktrees scope list's empty case. Invented names.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "codex",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/web"
+   },
+   {
+    "name": "web-api",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/web"
+   },
+   {
+    "name": "web-admin",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/web"
+   },
+   {
+    "name": "docs",
+    "agent": "codex",
+    "status": "failed",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/docs"
+   },
+   {
+    "name": "docs-site",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/docs"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/data"
+   },
+   {
+    "name": "data-lake",
+    "agent": "codex",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/data"
+   },
+   {
+    "name": "data-etl",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/data"
+   },
+   {
+    "name": "billing",
+    "agent": "claude",
+    "status": "failed",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/billing"
+   },
+   {
+    "name": "billing-worker",
+    "agent": "codex",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/billing"
+   },
+   {
+    "name": "search",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/search"
+   },
+   {
+    "name": "search-index",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/search"
+   },
+   {
+    "name": "mobile",
+    "agent": "codex",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/mobile"
+   },
+   {
+    "name": "mobile-ios",
+    "agent": "claude",
+    "status": "failed",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/mobile"
+   },
+   {
+    "name": "infra",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/infra"
+   },
+   {
+    "name": "infra-dns",
+    "agent": "codex",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/infra"
+   },
+   {
+    "name": "reports",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/reports"
+   },
+   {
+    "name": "reports-q4",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/dev/reports"
+   },
+   {
+    "name": "chat-0412",
+    "agent": "codex",
+    "status": "failed",
+    "chat": true,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/.sbxw/chats/0412"
+   },
+   {
+    "name": "chat-0519",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": true,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/ana/.sbxw/chats/0519"
+   }
+  ],
+  "worktrees_of": {
+   "web-app": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/web",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "web-api": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/web",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "web-admin": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/web",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "docs": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/docs",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "docs-site": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/docs",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "data-pipeline": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/data",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "data-lake": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/data",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "data-etl": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/data",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "billing": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/billing",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "billing-worker": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/billing",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "search": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/search",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "search-index": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/search",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "mobile": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/mobile",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "mobile-ios": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/mobile",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "infra": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/infra",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "infra-dns": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/infra",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "reports": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/reports",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "reports-q4": {
+    "ok": true,
+    "workspace": "/Users/ana/dev/reports",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "chat-0412": {
+    "ok": true,
+    "workspace": "/Users/ana/.sbxw/chats/0412",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   },
+   "chat-0519": {
+    "ok": true,
+    "workspace": "/Users/ana/.sbxw/chats/0519",
+    "repos": [
+     {
+      "path": "",
+      "base": "main",
+      "head": "0000000000000000000000000000000000000000",
+      "dirty": 0,
+      "threads": [],
+      "error": null
+     }
+    ]
+   }
+  },
+  "sessions": [
+   {
+    "sandbox": "web-app",
+    "thread": "t1",
+    "state": "working",
+    "cwd": "/Users/ana/dev/web/.sbxw-worktrees/t1"
+   }
+  ]
+ }
+}

@@ -165,8 +165,10 @@ return {
     for _, n in ipairs(ui.notes or {}) do list[#list + 1] = note(n.text, n.tone == "red" and "red" or "text-dim") end
     return column{ h = "full", gap = 8, w = "full",
       -- The scope beside the title ("Worktrees in [All sandboxes v]"): scope.rs.
+      -- Its list offers the sandboxes that have worktrees, the most first.
       row{ key = "title-slot", gap = 8,
-        select{ id = "worktrees-sandbox", value = ui.sandbox or "", on = "sandbox", scope = { kind = "sandbox", all = true } } },
+        select{ id = "worktrees-sandbox", value = ui.sandbox or "", on = "sandbox",
+          scope = { kind = "sandbox", all = true, counts = ui.counts or {}, noun = "worktree", only = "counted", order = "count", counting = ui.loading == true } } },
       row{ gap = 8, w = "full",
         input{ id = "worktrees-filter", value = ui.filter or "", placeholder = "Filter by sandbox, thread, branch or path", on = "filter" },
         button{ icon = "reload", key = "worktrees-refresh", on = "refresh", variant = "ghost", help = "Read the worktrees again" },
