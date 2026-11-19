@@ -2102,7 +2102,12 @@ pager and the panes); the rail, the sidebar, the top and status bars stay.
 entry pressed again close it. The core draws its header (icon, title,
 "Esc closes", ×, key `overlay-close`); the element is `overlay-<screen>`.
 The terminals keep running underneath and are not resized (it is drawn
-absolute over them); none takes a key, a paste, a press, a drag or the wheel
+absolute over them; while an overlay or a base view is drawn, `App::panes_held`,
+a terminal's room has no layout handler, `terminal::pane_held`). When the
+panes show again, each shown terminal is fitted to its rect then: one resize
+for each one whose room changed meanwhile (Lead Mode, pages, Tabs or Grid,
+the sidebar, the window), none for the others; one sized by another window
+whose room did not change stays scaled, unsent. None takes a key, a paste, a press, a drag or the wheel
 while it shows (`App::terminal_may_take_keys` and the panes' handlers);
 files dropped on it go to its feature's `on_files`. Up, Down and Enter, when
 none of its controls has the keyboard, run its feature's `<screen>_key`

@@ -89,7 +89,7 @@ pub use attention::{session_for, SessionSeen};
 pub use keys::{key_bytes, key_bytes_with, paste_bytes, KeyOpts, Shortcut};
 pub use render::{rgb, CursorDraw};
 pub use theme::Theme;
-pub use view::{pane, pane_with, view};
+pub use view::{pane, pane_held, pane_with, view};
 
 use crate::client::{TermEvent, TermInput, TerminalConn};
 use alacritty_terminal::event::{Event as TermEv, EventListener, WindowSize};

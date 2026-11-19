@@ -110,6 +110,21 @@ where
     L: Fn(&mut S) -> Option<&mut TerminalState> + Clone + 'static,
     F: Fn(&mut S) -> Option<&mut TerminalState> + Clone + 'static,
 {
+    pane_held(t, lens, layout, false)
+}
+
+/// [`pane_with`], `held` while something is drawn over the pane area (the
+/// base view, an overlay): the room then has no layout handler, so the
+/// terminal keeps its size whatever moves under it (a layout change, a
+/// window resize). Rune reports a rect to a handler that was not there on
+/// the frame before, so the first frame the panes show again fits each
+/// terminal to its rect at that moment: one resize for a terminal whose
+/// room changed meanwhile, none for the others (RESIZE.md).
+pub fn pane_held<S: 'static, L, F>(t: &TerminalState, lens: L, layout: F, held: bool) -> El
+where
+    L: Fn(&mut S) -> Option<&mut TerminalState> + Clone + 'static,
+    F: Fn(&mut S) -> Option<&mut TerminalState> + Clone + 'static,
+{
     let (cols, rows) = t.size;
     let theme = t.theme();
     let dim = rgb(super::theme::mix(theme.foreground, theme.background, 0.45));
@@ -121,6 +136,30 @@ where
         (false, _) => "",
         (true, false) => ", sized by another window (type or click here to take it)",
         (true, true) => ", sized by another window, too large to show whole (type or click here to take it)",
+    };
+    // The room the grid has. Its layout fits the terminal: keyed per
+    // terminal, so a terminal replacing another in this pane (same keys,
+    // same rect) still hears its first layout. The grid has the PTY's size,
+    // which may be larger than the room when another window sets it: drawn
+    // with smaller cells to fit (`metrics`), top-left, and clipped only
+    // below the floor (`MIN_SCALE`).
+    let room = col().key(t.fit_key()).grow(1.0).min_w(0.0).min_h(0.0).clip_rounded(0.0);
+    let room = if held {
+        room
+    } else {
+        room.on_layout_tx({
+            move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
+                let clock = tx.clock();
+                if let Some(t) = layout(s) {
+                    let before = t.wanted_size();
+                    // fit_at takes the whole pane: add back the padding and the status line.
+                    t.fit_at(r[2] + 2.0 * PAD, r[3] + 2.0 * PAD + STATUS_H, clock);
+                    if t.wanted_size() != before {
+                        tx.wake_after(std::time::Duration::from_secs_f64(super::RESIZE_DEBOUNCE));
+                    }
+                }
+            }
+        })
     };
     col()
         .key(t.key("terminal"))
@@ -135,32 +174,5 @@ where
                 .h(STATUS_H)
                 .child(text(format!("terminal {cols}x{rows}{owner}  {}{scrolled}", t.status)).font(TextStyle::new(12.0, 400.0)).color(dim)),
         )
-        .child(
-            // The room the grid has. Its layout fits the terminal: keyed per
-            // terminal, so a terminal replacing another in this pane (same
-            // keys, same rect) still hears its first layout. The grid has
-            // the PTY's size, which may be larger than the room when another
-            // window sets it: drawn with smaller cells to fit (`metrics`),
-            // top-left, and clipped only below the floor (`MIN_SCALE`).
-            col()
-                .key(t.fit_key())
-                .grow(1.0)
-                .min_w(0.0)
-                .min_h(0.0)
-                .clip_rounded(0.0)
-                .on_layout_tx({
-                    move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
-                        let clock = tx.clock();
-                        if let Some(t) = layout(s) {
-                            let before = t.wanted_size();
-                            // fit_at takes the whole pane: add back the padding and the status line.
-                            t.fit_at(r[2] + 2.0 * PAD, r[3] + 2.0 * PAD + STATUS_H, clock);
-                            if t.wanted_size() != before {
-                                tx.wake_after(std::time::Duration::from_secs_f64(super::RESIZE_DEBOUNCE));
-                            }
-                        }
-                    }
-                })
-                .child(view(t, lens)),
-        )
+        .child(room.child(view(t, lens)))
 }
