@@ -323,8 +323,28 @@ mod tests {
         assert!(out.contains("already installed"), "idempotent: {out}");
         assert_eq!(ctx, "# firecrawl\n\nwhat sbx wrote\n");
         // The front script finds it and keeps the cloud off.
-        let shown = Command::new("bash").arg(h.join(".local/bin/firecrawl-local")).arg("--version").env("HOME", &h).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&shown.stdout), "fake\n");
+        let front = |proxy: Option<&str>| {
+            let mut c = Command::new("bash");
+            c.arg(h.join(".local/bin/firecrawl-local")).arg("--version").env("HOME", &h);
+            for v in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+                match proxy {
+                    Some(p) if v.starts_with('H') => c.env(v, p),
+                    _ => c.env_remove(v),
+                };
+            }
+            c.output().unwrap()
+        };
+        let shown = front(Some("http://127.0.0.1:3128"));
+        assert_eq!(String::from_utf8_lossy(&shown.stdout), "fake\n", "{shown:?}");
+        let shown = front(Some("http://[fddc::12]:3128"));
+        assert_eq!(String::from_utf8_lossy(&shown.stdout), "fake\n", "{shown:?}");
+        // Fails closed: no proxy, or one whose address cannot be found, and
+        // Firecrawl is not started at all.
+        for proxy in [None, Some("http://sbxw-no-such-proxy.invalid:3128")] {
+            let out = front(proxy);
+            assert_eq!(out.status.code(), Some(69), "{proxy:?}: {out:?}");
+            assert!(out.stdout.is_empty(), "{proxy:?}: not started");
+        }
         let refused = Command::new("bash").arg(h.join(".local/bin/firecrawl-local")).arg("login").env("HOME", &h).output().unwrap();
         assert_eq!(refused.status.code(), Some(64), "no login under sbxw");
 

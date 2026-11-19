@@ -41,10 +41,19 @@ export FIRECRAWL_CLI_CREDENTIALS=/dev/null
 if [ "$cloud" = off ]; then unset FIRECRAWL_API_KEY FIRECRAWL_API_URL; fi
 # No credential lives here: only the install id, written on a cloud call.
 export FIRECRAWL_LOCAL_HOME="$KIT/home"
-# The agent-skills kit's Chromium, when it is there; without one,
-# pages that need JavaScript come back with a warning saying so.
-if [ -x "$HOME/.local/bin/chromium" ]; then export FIRECRAWL_CHROME_PATH="$HOME/.local/bin/chromium"; fi
-export FIRECRAWL_LOCAL_BROWSER=auto
+# No browser unless the person asks for one (SBXW_FIRECRAWL_BROWSER=auto in
+# sbxw.toml's [env]). Firecrawl sends its Chrome through a SOCKS guard of its
+# own that connects straight to the site, not through the sandbox's HTTP
+# proxy; without it every request goes through that proxy. Pages that need
+# JavaScript then come back with a warning saying so.
+unset FIRECRAWL_CHROME_PATH
+export FIRECRAWL_LOCAL_BROWSER=never
+case "$(printenv SBXW_FIRECRAWL_BROWSER)" in
+  auto|always)
+    if [ -x "$HOME/.local/bin/chromium" ]; then
+      export FIRECRAWL_CHROME_PATH="$HOME/.local/bin/chromium" FIRECRAWL_LOCAL_BROWSER="$(printenv SBXW_FIRECRAWL_BROWSER)"
+    fi ;;
+esac
 # The MCP package is the pinned copy from the cache, run by the `npx` shim
 # (firecrawl-local runs `npx -y <package>`): never fetched at a start.
 export FIRECRAWL_MCP_PACKAGE=sbxw-firecrawl-mcp
@@ -68,5 +77,25 @@ for var in HTTPS_PROXY https_proxy HTTP_PROXY http_proxy; do
   [ -n "$addr" ] || continue
   case "$addr" in *:*) addr="[$addr]" ;; esac
   export "$var=http://$auth$addr$([ -n "$port" ] && printf ':%s' "$port")"
+done
+# Fails closed: Firecrawl starts only with both proxy variables set, and set
+# to an address. Without them it would go straight to the network, and with
+# a name it could not be looked up under --public-only.
+literal='^http://([^/@]*@)?(\[[0-9a-fA-F:]+\]|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)(:[0-9]+)?/?$'
+for pair in "HTTPS_PROXY https_proxy" "HTTP_PROXY http_proxy"; do
+  found=""
+  for var in $pair; do
+    url="$(printenv "$var")"
+    [ -n "$url" ] || continue
+    if ! printf '%s' "$url" | grep -qE "$literal"; then
+      echo "firecrawl-local: the sandbox proxy ($var) could not be resolved to an address; Firecrawl is not started" >&2
+      exit 69
+    fi
+    found=1
+  done
+  if [ -z "$found" ]; then
+    echo "firecrawl-local: no sandbox proxy ($pair) in the environment; Firecrawl is not started rather than going straight to the network" >&2
+    exit 69
+  fi
 done
 exec "$BIN" "$@"

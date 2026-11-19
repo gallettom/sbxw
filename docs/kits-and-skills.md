@@ -251,7 +251,12 @@ unless `SBXW_FIRECRAWL_CLOUD` is set in `[env]`.
 - **Safety.** It runs inside the sandbox, through its network policy. The MCP
   server refuses localhost, private addresses and local names
   (`host.docker.internal`); a host the proxy refuses comes back as a page
-  with `statusCode` 403. No API key, no `login`, no listener.
+  with `statusCode` 403. No API key, no `login`, no listener. Every request
+  goes through the sandbox proxy, and Firecrawl does not start without one.
+- **No browser by default.** `SBXW_FIRECRAWL_BROWSER = "auto"` in `[env]`
+  lets it render JavaScript pages with the agent-skills Chromium, but that
+  Chromium connects to sites directly, not through the sandbox proxy (sbx
+  still filters direct traffic: only allowed names resolve).
 - **Firecrawl Cloud.** `SBXW_FIRECRAWL_CLOUD = "auto"` (or `"search"`) in
   `[env]` turns it on: search and a fallback for blocked pages, with a random
   install id sent. That fallback can fetch, through Firecrawl's servers, a
