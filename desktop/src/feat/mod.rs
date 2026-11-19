@@ -786,6 +786,7 @@ features! {
     emphasis,
     envfile,
     files,
+    kanban,
     network,
     relay,
     setup,
