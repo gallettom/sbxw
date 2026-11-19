@@ -29,7 +29,7 @@ impl World {
         crate::surface_canvas::close(SURF);
         let fx = fixture(name);
         let mut data = fx["daemon"].clone();
-        data["app"] = json!({ "covered": false, "overlay": { "screen": "canvas", "w": 1200, "h": 700 }, "selected": "web-app", "groups": {} });
+        data["app"] = json!({ "covered": false, "covered_top": false, "overlay": { "screen": "canvas", "w": 1200, "h": 700 }, "selected": "web-app", "groups": {} });
         data["jarvis"] = json!({ "pending": [] });
         World { data, daemon: fx["daemon"].clone(), calls: vec![], hold: vec![], held: vec![] }
     }
@@ -246,7 +246,7 @@ fn an_asset_comes_only_from_the_core_and_no_intent_takes_a_path() {
     assert_eq!(w.calls.len(), n);
     let _ = std::fs::remove_dir_all(dir);
     // Under a dialog nothing is added.
-    w.data["app"]["covered"] = true.into();
+    w.data["app"]["covered_top"] = true.into();
     let a = on_files(&w.cx(), Incoming::Png(super::model::mock_png(8, 8, 1)));
     assert!(a.iter().all(|x| !matches!(x, Action::Call(_))));
 }
@@ -317,7 +317,7 @@ fn a_failed_upload_records_and_types_nothing() {
 #[test]
 fn every_refusal_holds_in_rust() {
     let cases: Vec<(&str, Box<dyn Fn(&mut J)>, &str)> = vec![
-        ("covered", Box::new(|d: &mut J| d["app"]["covered"] = true.into()), "open over the canvas"),
+        ("covered", Box::new(|d: &mut J| d["app"]["covered_top"] = true.into()), "open over the canvas"),
         ("jarvis", Box::new(|d: &mut J| d["jarvis"]["pending"] = json!([{ "id": "j1" }])), "Jarvis proposal"),
         ("question", Box::new(|d: &mut J| d["sessions"][0]["state"] = "attention".into()), "question or a permission"),
         ("ended", Box::new(|d: &mut J| d["sessions"] = json!([{ "sandbox": "web-app", "state": "exited", "answerable": true }])), "no open agent session"),
@@ -526,4 +526,59 @@ fn under_a_dialog_the_canvas_neither_pans_nor_zooms_and_nothing_is_drawn_outside
         window::settle(&mut rt, 2);
         assert_eq!(crate::surface_canvas::camera(super::SURF), panned, "{w}x{h}: nothing moved under the dialog");
     }
+}
+
+/// Canvas drawn over the Sessions base view (GUI): the base is covered
+/// (`covered`), Canvas is not (`covered_top`): its Ask and Send are its
+/// own to refuse; a dialog, a modal, a proposal or the palette (all
+/// `covered_top`) still holds them.
+#[test]
+fn over_the_sessions_view_the_canvas_is_not_covered() {
+    let mut w = World::new("basic");
+    w.open();
+    w.data["app"]["covered"] = true.into();
+    w.data["app"]["base"] = "monitor".into();
+    let a = w.intent("canvas_ask_text", json!({ "text": "Shots of the login page, please." })).unwrap();
+    w.run(a);
+    let a = w.intent("canvas_ask", json!({})).unwrap();
+    let c = w.confirm(&a);
+    assert_eq!(c.preview.as_ref().unwrap().text, "Shots of the login page, please.");
+    assert!(w.intent("canvas_send", json!({})).map_or_else(|e| !e.contains("open over the canvas"), |_| true), "Send is not held by the base under it");
+    w.data["app"]["covered_top"] = true.into();
+    let e = w.intent("canvas_ask", json!({})).unwrap_err();
+    assert!(e.contains("open over the canvas"), "{e}");
+}
+
+/// The window in GUI (Sessions as the base), Canvas opened over it: Ask
+/// gives the core's Confirm; the data says the base is covered and the top
+/// is not; under the palette Ask is refused.
+#[test]
+fn in_gui_mode_canvas_ask_reaches_its_confirm() {
+    *STATE().lock().unwrap() = State::default();
+    crate::surface_canvas::close(SURF);
+    let mut rt = window::runtime(1284.0, 816.0);
+    window::tap(&mut rt, "top-view-gui");
+    assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"));
+    window::intent(&mut rt, "canvas_show");
+    window::settle(&mut rt, 6);
+    let app = rt.state.screen_data()["app"].clone();
+    assert_eq!((app["covered"].clone(), app["covered_top"].clone()), (json!(true), json!(false)), "{app}");
+    let run = |rt: &mut rune::Runtime<crate::shell::App>, name: &str, args: J| {
+        let list = crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })).unwrap();
+        rt.update(move |s, _| {
+            for i in list {
+                s.run_intent("canvas", i);
+            }
+        });
+        window::settle(rt, 6);
+    };
+    run(&mut rt, "canvas_ask_text", json!({ "text": "Shots of the login page, please." }));
+    rt.update(|s, _| s.palette_open());
+    run(&mut rt, "canvas_ask", json!({}));
+    assert!(rt.state.feats.dialog.is_none(), "refused under the palette");
+    rt.update(|s, _| s.palette_close());
+    run(&mut rt, "canvas_ask", json!({}));
+    let d = rt.state.feats.dialog.as_ref().expect("the core's Confirm");
+    assert!(d.error.is_none(), "{:?}", d.error);
+    assert!(d.confirm.as_ref().is_some_and(|c| c.preview.as_ref().is_some_and(|p| p.text == "Shots of the login page, please.")), "the prompt in full");
 }

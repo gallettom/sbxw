@@ -94,7 +94,8 @@ unchanged.
 | `theme` | The theme drawn: `dark` or `graphite` |
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
 | `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
-| `covered` | Something sits over the panes and over any overlay: the core's dialog, a modal, Jarvis's proposal or the palette (read only; `App::panes_covered` without the overlay itself). Sessions draws its send controls disabled then; its Rust refuses to send whatever the screen draws |
+| `covered` | Something sits over the view drawn in the pane area: the core's dialog, a modal, Jarvis's proposal, the palette, or an overlay drawn over the base view (read only, `App::covered`). What the BASE view reads: Sessions draws its send controls disabled then, and its Rust refuses to send whatever the screen draws |
+| `covered_top` | Something sits over whatever view is on top: the core's dialog, a modal, Jarvis's proposal or the palette, never an overlay (read only, `App::covered_top`). What an OVERLAY reads for its own actions: Canvas (Ask, Send, its files) is drawn over the Sessions base in GUI and must not take the base's `covered` for its own. The core's dictation uses the same split: `covered` for the Sessions composer, `covered_top` for a field of an overlay or a panel (Requests, Jarvis) |
 | `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |
 
 `data.jarvis` (every screen gets it; the `jarvis` screen draws it):
@@ -2250,7 +2251,8 @@ The gate: while it is the base, `App::panes_covered()` is true, so no
 terminal takes a key, a paste, a press, a drop or the focus. `data.app.base`
 is its screen name (null: the terminals). `data.app.covered` is computed in
 one place (`App::covered`): the core's dialog, a modal, Jarvis's proposal,
-the palette, or an overlay drawn over the base. Drops and pasted pictures on
+the palette, or an overlay drawn over the base. An overlay drawn over it
+reads `data.app.covered_top` instead (the same without its own overlay). Drops and pasted pictures on
 it go to its feature's `on_files`, as an overlay's.
 
 ### mac

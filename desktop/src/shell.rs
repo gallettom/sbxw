@@ -727,6 +727,7 @@ impl App {
         // The pane area's base view (the Monitor), or null: the terminals.
         data["app"]["base"] = self.feats.base.clone().map_or(J::Null, J::String);
         data["app"]["covered"] = self.covered().into();
+        data["app"]["covered_top"] = self.covered_top().into();
         data["app"]["dictation"] = self.dictation_data();
         // The team leads view (leads.rs), which Sessions filters by too.
         // `can`: a team runs (Lead Mode can go on); `leaders` while it is on.
@@ -1539,7 +1540,14 @@ impl App {
     /// an overlay drawn over the base view (the Monitor under Files).
     pub fn covered(&self) -> bool {
         let over_base = self.feats.base.is_some() && self.feats.overlay.as_ref().map(|o| &o.0) != self.feats.base.as_ref();
-        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || over_base
+        self.covered_top() || over_base
+    }
+
+    /// `data.app.covered_top`: something over whatever view is on top (an
+    /// overlay such as Canvas, a panel, or the base view when it is the one
+    /// drawn): the core's dialog, a modal, Jarvis's proposal, the palette.
+    pub fn covered_top(&self) -> bool {
+        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some()
     }
 
     /// The input method (dead keys, CJK, emoji): to the focused pane.
