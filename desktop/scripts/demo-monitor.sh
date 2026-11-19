@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# The Monitor (a base view of the pane area, instead of the terminals; the
-# rail's activity zone, the pager's view switch),
+# Sessions, the feature `monitor` (a base view of the pane area, instead of
+# the terminals: the top bar's GUI | TUI; Lead Mode beside it),
 # headless, against the stand-in daemon with fixtures/monitor/<fixture>.json:
 #
 #   desktop/scripts/demo-monitor.sh
 #   MARKS="ask send" SIZES=720x480 THEME=graphite desktop/scripts/demo-monitor.sh
 #
 # Marks:
-#   ask      the rail's Monitor: shop-web's checkout-copy wants a permission
+#   ask      Sessions (the top bar's GUI): shop-web's checkout-copy wants a permission
 #            (selected first: the longest waiting), its card, its terminal button;
 #   choice   N (the next one that needs you): shop-web main's question, its options;
 #   reply    billing-api main: its last reply with keyword pills, the composer;
@@ -18,8 +18,12 @@
 #   empty    fixtures/monitor/empty.json: no session yet;
 #   idle     fixtures/monitor/idle.json: nothing needs you;
 #   busy     fixtures/monitor/busy.json: 64 sessions, 9 need you, paged;
-#   switch   the pager's view switch (Tabs | Grid | Monitor) over the terminals;
-#   base     the Monitor as the base: its header's view switch, no cross;
+#   switch   the pager's view switch (Tabs | Grid) over the terminals;
+#   base     Sessions as the base (GUI in the top bar): its header, no cross;
+#   top-tui  the top bar in TUI, Lead Mode Off (the terminals);
+#   top-gui  the top bar in GUI (Sessions), Lead Mode Off;
+#   lead-tui Lead Mode On in TUI: only the team leaders' terminals;
+#   lead-gui Lead Mode On in GUI: Sessions lists the leaders and their threads;
 #   under    the Monitor's Files link: the explorer over the Monitor;
 #   back     Escape there: back to the Monitor, the same session;
 #   attach   two files dropped on billing-api's session: their chips under the box;
@@ -53,25 +57,31 @@ def add(**e):
     e["t"] = round(t, 2); ev.append(e); t += 0.25
 def step(key, until):
     add(type="tap", key=key); add(type="mark", name="wait:" + until)
-add(type="mark", name="wait:rail-monitor")
+add(type="mark", name="wait:top-view-gui")
 if m in ("hidden", "hidden-terms"):
     step("sidebar-hide", "rail-sidebar")
 if m == "hidden-terms":
     pass
 elif m == "switch":
-    add(type="mark", name="wait:pager-view-monitor")
+    add(type="mark", name="wait:pager-view-tabs")
 elif m == "fold":
-    step("rail-monitor", "monitor-row-studio:s-studio-1")
+    step("top-view-gui", "monitor-row-studio:s-studio-1")
     if not os.environ.get("SIZE", "").startswith("720"):
         step("monitor-row-studio:s-studio-1", "monitor-from")
 elif m in ("empty",):
-    step("rail-monitor", "monitor-empty")
+    step("top-view-gui", "monitor-empty")
 elif m == "idle":
-    step("rail-monitor", "monitor-calm")
+    step("top-view-gui", "monitor-calm")
 elif m == "busy":
-    step("rail-monitor", "monitor-more")
+    step("top-view-gui", "monitor-more")
+elif m in ("top-tui", "lead-tui"):
+    pass
 elif m != "hidden-terms":
-    step("rail-monitor", "monitor-row-shop-web::checkout-copy")
+    step("top-view-gui", "monitor-row-shop-web::checkout-copy")
+if m in ("lead-tui", "lead-gui"):
+    # Lead Mode On from the top bar: the leaders' terminals, or their sessions.
+    add(type="mark", name="wait:top-lead"); add(type="mark", name="hold:600")
+    add(type="tap", key="top-lead"); add(type="mark", name="hold:800")
 if m == "choice":
     # N: the next session that needs you; then its row (a narrow view opens it).
     add(type="type", every=0.02, text="n"); add(type="mark", name="hold:300")
@@ -117,7 +127,7 @@ PY
 }
 theme="${THEME:-dark}"
 for size in ${SIZES:-1284x816 720x480}; do
-  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back attach attach-dialog attach-sent fold hidden hidden-terms}; do
+  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back attach attach-dialog attach-sent fold hidden hidden-terms top-tui top-gui lead-tui lead-gui}; do
     case "$m" in empty|idle|busy) fx="$m" ;; fold) fx=folding ;; *) fx=basic ;; esac
     out="$shots/monitor-$size-$theme-$m"
     SIZE="$size" script "$m" >"$out-script.json"

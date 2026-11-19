@@ -63,6 +63,10 @@ pub enum Intent {
     /// Shows or hides the sandboxes sidebar (`None`: the other way); kept in
     /// the state file. The pane area takes its width.
     Sidebar { show: Option<bool> },
+    /// The team leads view on or off (`None`: the other way): the terminals
+    /// show only the team leaders' panes, Sessions only their sessions
+    /// (shell/leads.rs). One state for both base views.
+    TeamLeads { show: Option<bool> },
     /// The app's theme by name; kept in the state file, applied at once
     /// (every surface, open terminals included). `None`: the next theme.
     SetTheme { theme: Option<crate::theme::Mode> },
@@ -236,7 +240,8 @@ pub const REGISTRY: &[Spec] = &[
         doc: "Empties the panes showing that sandbox's session (`thread`: that thread's; none: the sandbox's own), its terminals closed.",
     },
     Spec { name: "copy_text", risk: Risk::Direct, args: &[("text", Arg::Str, true)], doc: "Writes the text (up to 100 KB) to the person's clipboard, replacing what it held; only from the person's own press (never from typing, data or a feature), and a notice shows the size and the first characters, controls made visible. Screens can never read the clipboard." },
-    Spec { name: "sidebar", risk: Risk::Direct, args: &[("show", Arg::OneOf(&["show", "hide", "toggle"]), true)], doc: "Shows or hides the sandboxes sidebar (`toggle`: the other way); remembered across launches. The pane area, terminals or Monitor, takes its width. Cmd/Ctrl+B does the same." },
+    Spec { name: "sidebar", risk: Risk::Direct, args: &[("show", Arg::OneOf(&["show", "hide", "toggle"]), true)], doc: "Shows or hides the sandboxes sidebar (`toggle`: the other way); remembered across launches. The pane area, terminals or Sessions, takes its width. Cmd/Ctrl+B does the same." },
+    Spec { name: "team_leads", risk: Risk::Direct, args: &[("show", Arg::OneOf(&["show", "hide", "toggle"]), true)], doc: "The team leads view on or off (`toggle`: the other way), as the rail's Team leads: the terminals show only the team leaders' panes (the layout before comes back when it goes off), Sessions only the leaders' sessions and their threads'. One state for both views. Nothing happens while no team is running." },
     Spec { name: "set_theme", risk: Risk::Direct, args: &[("theme", Arg::OneOf(&["dark", "graphite", "toggle"]), true)], doc: "The app's theme: `dark` (the blue-black, the default), `graphite` (neutral greys, an orange accent), or `toggle` (the next one). Remembered across launches; every surface switches at once, open terminals included." },
     Spec { name: "select", risk: Risk::Direct, args: &[("sandbox", Arg::Str, false)], doc: "Marks a sandbox as selected (no `sandbox`: none)." },
     Spec {
@@ -306,6 +311,7 @@ impl Intent {
             Intent::Select { .. } => "select",
             Intent::SetTheme { .. } => "set_theme",
             Intent::Sidebar { .. } => "sidebar",
+            Intent::TeamLeads { .. } => "team_leads",
             Intent::SetLayout { .. } => "set_layout",
             Intent::ClosePanes { .. } => "close_panes",
             Intent::CopyText { .. } => "copy_text",
@@ -411,6 +417,11 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
         "stop_sandbox" => Intent::StopSandbox { sandbox: s("sandbox").unwrap() },
         "select" => Intent::Select { sandbox: s("sandbox") },
         "sidebar" => Intent::Sidebar { show: match s("show").as_deref() {
+            Some("show") => Some(true),
+            Some("hide") => Some(false),
+            _ => None,
+        } },
+        "team_leads" => Intent::TeamLeads { show: match s("show").as_deref() {
             Some("show") => Some(true),
             Some("hide") => Some(false),
             _ => None,

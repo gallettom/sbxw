@@ -97,10 +97,10 @@ add(type="tap", key="filter")
 for _ in range(7):
     add(type="key", name="Backspace")
 hold(300)
-RAIL = ["rail-commits", "rail-files", "rail-worktrees", "rail-board", "rail-mcp", "rail-skills", "rail-kits", "rail-network", "rail-requests", "rail-leads", "jarvis-toggle", "rail-setup"]
+RAIL = ["rail-commits", "rail-files", "rail-worktrees", "rail-board", "rail-mcp", "rail-skills", "rail-kits", "rail-network", "rail-requests", "top-lead", "jarvis-toggle", "rail-setup"]
 PICTURES = [f"shot-{i}.png" for i in range(1, 5)]
 # Every overlay and panel of the rail once (the keys come from the run's own
-# tree: rail-*), each left open until the next.
+# tree: rail-*), and the top bar's Lead Mode, each left open until the next.
 for k in RAIL:
     add(type="tap", key=k); hold(1200)
     if k == "rail-commits":
@@ -119,7 +119,7 @@ mem("everything open")
 # Close: the overlay or panel open, then every pane.
 add(type="key", name="Escape"); hold(300)
 add(type="key", name="Escape"); hold(300)
-for k in ["panel-close-relay", "panel-close-network", "jarvis-toggle", "rail-leads"]:
+for k in ["panel-close-relay", "panel-close-network", "jarvis-toggle", "top-lead"]:
     add(type="tap", key=k); hold(400)
 # Every page closed, first first: its terminals with it.
 for i in range(3):

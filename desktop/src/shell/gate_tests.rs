@@ -485,7 +485,7 @@ fn a_drop_with_the_monitor_as_the_base_reaches_no_pane() {
     rt.update(|s, _| s.jarvis.shown = None);
     settle(&mut rt, 2);
     let grid = rt.presented("grid-1").unwrap().0;
-    tap(&mut rt, "rail-monitor");
+    tap(&mut rt, "top-view-gui");
     settle(&mut rt, 5);
     assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"));
     let file = std::env::temp_dir().join(format!("sbxw-gate-base-drop-{}.txt", std::process::id()));

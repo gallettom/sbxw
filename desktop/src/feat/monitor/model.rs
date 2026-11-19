@@ -176,6 +176,20 @@ pub struct Model {
     /// Sends with files under way, by number (`attach:<n>`).
     pub jobs: BTreeMap<u64, super::attach::Job>,
     pub job_seq: u64,
+    /// The team leads filter while it is on ([`Model::sync_leads`]).
+    pub leads: Option<Leads>,
+}
+
+/// The rail's Team leads, applied to Sessions: the core's one state
+/// (`data.app.leads`, shell/leads.rs), so the terminals and Sessions are
+/// filtered together.
+#[derive(Debug, Clone, Default)]
+pub struct Leads {
+    /// The running sandboxes that lead a team, in the core's order (its
+    /// rule: `App::leaders`, the same as the terminals' view).
+    pub leaders: Vec<String>,
+    /// The selection before the filter went on, put back when it goes off.
+    pub before: Option<String>,
 }
 
 impl Model {
@@ -304,10 +318,71 @@ impl Model {
         changed
     }
 
+    /// The core's team leads state (`data.app.leads`: `{on, leaders}`),
+    /// followed: on, the list keeps the leaders' sessions, each followed by
+    /// its threads' (a leader with its team), and a selection filtered out
+    /// moves to the first leader; off, the selection from before comes back.
+    pub fn sync_leads(&mut self, app: &J) {
+        let on = app["leads"]["on"] == true;
+        match (on, self.leads.is_some()) {
+            (true, _) => {
+                let leaders: Vec<String> = app["leads"]["leaders"].as_array().map(|l| l.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                let before = match self.leads.take() {
+                    Some(l) => l.before,
+                    None => self.sel.clone(),
+                };
+                self.leads = Some(Leads { leaders, before });
+                let order = self.order();
+                if !self.sel.as_ref().is_some_and(|k| order.contains(k)) {
+                    self.sel = order.first().cloned();
+                }
+                self.pages = 1;
+            }
+            (false, true) => {
+                let before = self.leads.take().and_then(|l| l.before);
+                if before.as_ref().is_some_and(|k| self.cards.contains_key(k)) {
+                    self.sel = before;
+                }
+                // The selection kept on a drawn page.
+                let order = self.order();
+                if let Some(j) = self.sel.as_ref().and_then(|k| order.iter().position(|o| o == k)) {
+                    self.pages = self.pages.max(j / PAGE + 1);
+                }
+            }
+            (false, false) => {}
+        }
+    }
+
+    /// A card the team leads filter keeps: a leader's main session, or one
+    /// of its threads (`Some(true)`: a thread, drawn under its leader).
+    fn led(&self, key: &str) -> Option<bool> {
+        let l = self.leads.as_ref()?;
+        let c = self.cards.get(key)?;
+        l.leaders.iter().any(|x| x == s(&c.info, "sandbox")).then(|| thread_of(&c.info).is_some())
+    }
+
     /// Every card's key, in the list's order: those that need the person
     /// first (the longest waiting at the top), then working, idle and ended
-    /// (the latest report first).
+    /// (the latest report first). With the team leads filter on: each
+    /// leader (the core's order), its main session first, then its threads.
     pub fn order(&self) -> Vec<String> {
+        let all = self.order_all();
+        let Some(l) = &self.leads else { return all };
+        let mut out = vec![];
+        for sb in &l.leaders {
+            let of = |thread: bool| all.iter().filter(|k| s(&self.cards[*k].info, "sandbox") == sb && thread_of(&self.cards[*k].info).is_some() == thread).cloned().collect::<Vec<_>>();
+            let mains = of(false);
+            // A leader shows only while its main session is listed.
+            if mains.is_empty() {
+                continue;
+            }
+            out.extend(mains);
+            out.extend(of(true));
+        }
+        out
+    }
+
+    fn order_all(&self) -> Vec<String> {
         let mut v: Vec<(&String, &Card)> = self.cards.iter().collect();
         v.sort_by(|(ka, a), (kb, b)| {
             let (ga, gb) = (Group::of(s(&a.info, "state")), Group::of(s(&b.info, "state")));
@@ -319,7 +394,7 @@ impl Model {
 
     /// The selected card: the one picked, else the first in the list.
     pub fn selected(&self) -> Option<String> {
-        self.sel.clone().filter(|k| self.cards.contains_key(k)).or_else(|| self.order().into_iter().next())
+        self.sel.clone().filter(|k| self.cards.contains_key(k) && (self.leads.is_none() || self.led(k).is_some())).or_else(|| self.order().into_iter().next())
     }
 
     /// The card `by` rows from the selected one (Up -1, Down +1), stopping at the ends.
@@ -388,8 +463,13 @@ impl Model {
                 if let Some(n) = self.told_apart(k) {
                     r["name"] = n.into();
                 }
+                // Team leads on: a thread under its leader, one step in.
+                if self.led(k) == Some(true) {
+                    r["indent"] = true.into();
+                }
                 r
             }).collect::<Vec<_>>(),
+            "leads": self.leads.as_ref().map(|l| json!({ "on": true, "leaders": order.iter().filter(|k| self.led(k) == Some(false)).count(), "running": l.leaders.len() })).unwrap_or(json!({ "on": false })),
             "count": count,
             "counts": { "you": you, "working": working, "idle": idle, "ended": ended, "total": self.cards.len() },
             "sel": sel,

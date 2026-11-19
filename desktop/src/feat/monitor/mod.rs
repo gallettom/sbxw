@@ -27,7 +27,7 @@ pub mod model;
 #[cfg(test)]
 mod tests;
 
-use super::{core_call, Action, Asked, Call, Confirm, Ctx, Extra, Feature, Incoming, Place, Prepare, ScreenDecl, Shortcut, Slot, Zone};
+use super::{core_call, Action, Asked, Call, Confirm, Ctx, Feature, Incoming, Prepare, ScreenDecl, Shortcut, Slot};
 use attach::{Att, Job, Payload, Waiting};
 use crate::intent::{Arg, Risk, Spec};
 use model::{Group, Model};
@@ -44,13 +44,12 @@ const KEYS: &[&str] = &["up", "down", "enter", "type", "escape"];
 pub const FEATURE: Feature = Feature {
     name: "monitor",
     events: &["session"],
-    screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/monitor.luau"), slot: Slot::Base { title: "Monitor", icon: "inbox", open: "monitor_open" } }],
-    shortcuts: &[Shortcut { key: 'i', intent: "monitor_toggle", args: "{}", help: "Switch between the Terminals and the Monitor" }],
+    screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/monitor.luau"), slot: Slot::Base { title: "Sessions", icon: "inbox", open: "monitor_open" } }],
+    shortcuts: &[Shortcut { key: 'i', intent: "monitor_toggle", args: "{}", help: "Switch between GUI and TUI" }],
     intents: INTENTS,
     act,
     on_event: Some(on_event),
     on_answer: Some(on_answer),
-    extras: Some(extras),
     on_files: Some(on_files),
     on_dismiss: Some(on_dismiss),
     ..Feature::EMPTY
@@ -61,9 +60,10 @@ const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: 
 }
 
 pub const INTENTS: &[Spec] = &[
-    d("monitor_open", &[], "Makes the Monitor the base view of the pane area (instead of the terminals): every session, who needs you first, read again from the daemon's list. An overlay over it closes."),
-    d("monitor_toggle", &[], "Switches the pane area between the Terminals and the Monitor."),
+    d("monitor_open", &[], "Makes Sessions the base view of the pane area (instead of the terminals): every session, who needs you first, read again from the daemon's list. An overlay over it closes."),
+    d("monitor_toggle", &[], "Switches the pane area between the Terminals and Sessions."),
     d("monitor_select", &[("key", Arg::Str, true)], "Shows that session (a row's `key`) in the middle. View state only."),
+    d("monitor_refresh", &[], "Draws Sessions again from what the app knows (the core runs it when the Team leads filter changes). View state only."),
     d("monitor_key", &[("key", Arg::OneOf(KEYS), true), ("text", Arg::Text, false)], "The view's keys while none of its rows has the keyboard: Up and Down move the selection, Enter puts the keyboard on the list, N goes to the next session that needs you (rows: Up and Down move along them, Enter shows one)."),
     d("monitor_next", &[], "Selects the next session that needs you (round)."),
     d("monitor_more", &[], "Shows the next sessions of a long list."),
@@ -76,7 +76,7 @@ pub const INTENTS: &[Spec] = &[
         &[("key", Arg::Str, true), ("step", Arg::Int(1, 16), true), ("option", Arg::Int(1, 32), true)],
         "Picks option `option` of question `step` the session waits on: the relay's `agent_pick` (the Requests panel's path). Refused while anything covers the view or a Jarvis proposal waits.",
     ),
-    d("monitor_attach", &[("key", Arg::Str, true)], "The system's file dialog, to attach a file to what you write to that session (the one shown). The file waits as a chip under the box until Send; files dropped on the Monitor or a picture pasted there are attached the same way. Refused while the composer is."),
+    d("monitor_attach", &[("key", Arg::Str, true)], "The system's file dialog, to attach a file to what you write to that session (the one shown). The file waits as a chip under the box until Send; files dropped on Sessions or a picture pasted there are attached the same way. Refused while the composer is."),
     d("monitor_attach_remove", &[("key", Arg::Str, true), ("id", Arg::Int(1, 1_000_000_000), true)], "Removes attached file `id` from that session's waiting files."),
     Spec {
         name: "monitor_send",
@@ -116,7 +116,7 @@ fn shown(cx: &Ctx) -> bool {
 /// overlay (`data.app.covered`), or a Jarvis proposal waiting for the person.
 pub fn held(cx: &Ctx) -> Option<String> {
     if cx.data["app"]["covered"] != false {
-        return Some("Not sent: something is open over the monitor (a dialog, or a view such as Files). Close it first.".into());
+        return Some("Not sent: something is open over Sessions (a dialog, or a view such as Files). Close it first.".into());
     }
     if cx.data["jarvis"]["pending"].as_array().is_some_and(|p| !p.is_empty()) {
         return Some("Not sent: a Jarvis proposal waits for you. Approve or refuse it first.".into());
@@ -129,6 +129,7 @@ fn on_event(cx: &Ctx, name: &str, info: &J) -> Vec<Action> {
         return vec![];
     }
     let mut m = STATE().lock().unwrap();
+    m.sync_leads(&cx.data["app"]);
     // Only what changed is built again; the view is handed over only while it shows.
     if m.upsert(info) && shown(cx) {
         return vec![view_action(&m, cx)];
@@ -161,31 +162,12 @@ fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> 
     vec![if ok { Action::notice(format!("{}: done", call.what)) } else { Action::error(format!("{}: {why}", call.what)) }]
 }
 
-fn extras(cx: &Ctx) -> Vec<Extra> {
-    let (mut you, mut working, mut all) = (0, 0, 0);
-    for i in cx.get("sessions").as_array().map(Vec::as_slice).unwrap_or(&[]) {
-        if i["sandbox"] == model::JARVIS {
-            continue;
-        }
-        all += 1;
-        match Group::of(i["state"].as_str().unwrap_or("")) {
-            Group::You => you += 1,
-            Group::Working => working += 1,
-            _ => {}
-        }
-    }
-    let help = match (all, you, working) {
-        (0, _, _) => "Every session in one view. None is running".to_string(),
-        (_, 0, 0) => format!("Every session in one view. {all} idle, none needs you"),
-        _ => format!("Every session in one view. {you} need{} you, {working} working", if you == 1 { "s" } else { "" }),
-    };
-    // No count badge: the Requests entry already counts what waits.
-    vec![Extra { place: Place::Rail { zone: Zone::Activity, order: 5 }, id: SCREEN.into(), label: "Monitor".into(), icon: Some("inbox".into()), tone: "blue".into(), help, count: None, intent: Some(("monitor_open".into(), json!({}))) }]
-}
-
 fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
     let mut m = STATE().lock().unwrap();
+    // The rail's Team leads (the core's state) filters the list.
+    m.sync_leads(&cx.data["app"]);
     match a.name {
+        "monitor_refresh" => Ok(if shown(cx) { vec![view_action(&m, cx)] } else { vec![] }),
         "monitor_open" => {
             m.seed(cx.get("sessions"));
             // The sidebar's sandbox, its most urgent session, when nothing was picked yet.
@@ -209,8 +191,8 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
         }
         "monitor_select" => {
             let k = a.req("key");
-            if !m.cards.contains_key(k) {
-                return Err(format!("{k} is not a session the monitor lists"));
+            if !m.order().iter().any(|o| o == k) {
+                return Err(format!("{k} is not a session Sessions lists"));
             }
             m.sel = Some(k.to_string());
             Ok(vec![view_action(&m, cx)])
@@ -251,7 +233,7 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
                 return Err(why);
             }
             let k = a.req("key");
-            let c = m.cards.get(k).ok_or_else(|| format!("{k} is not a session the monitor lists"))?;
+            let c = m.cards.get(k).ok_or_else(|| format!("{k} is not a session Sessions lists"))?;
             let (sb, thread) = (c.info["sandbox"].as_str().unwrap_or(""), model::thread_of(&c.info));
             // The daemon's list as it stands, not the card: still waiting, still answerable.
             let live = cx.get("sessions").as_array().and_then(|l| l.iter().find(|i| i["sandbox"] == sb && model::thread_of(i) == thread && i["state"] == "attention").cloned());
@@ -295,13 +277,13 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
             out.extend(forget(std::slice::from_ref(&gone)));
             Ok(out)
         }
-        other => Err(format!("{other}: not a monitor intent")),
+        other => Err(format!("{other}: not a Sessions intent")),
     }
 }
 
 /// Why that card cannot take typed words now, or its target.
 fn reachable(m: &Model, cx: &Ctx, key: &str) -> Result<(String, Option<String>), String> {
-    let c = m.cards.get(key).ok_or_else(|| format!("Not sent: {key} is not a session the monitor lists any more."))?;
+    let c = m.cards.get(key).ok_or_else(|| format!("Not sent: {key} is not a session Sessions lists any more."))?;
     let sb = c.info["sandbox"].as_str().unwrap_or("").to_string();
     let thread = model::thread_of(&c.info).map(str::to_string);
     let to = model::who(&sb, thread.as_deref());
@@ -654,7 +636,7 @@ fn on_dismiss(_cx: &Ctx, tag: &str) -> Vec<Action> {
 /// The links of a card: its terminal, its commits, files and worktree, each
 /// through the intent that owns it.
 fn links(m: &Model, cx: &Ctx, name: &str, key: &str) -> Result<Vec<Action>, String> {
-    let c = m.cards.get(key).ok_or_else(|| format!("{key} is not a session the monitor lists"))?;
+    let c = m.cards.get(key).ok_or_else(|| format!("{key} is not a session Sessions lists"))?;
     let sb = c.info["sandbox"].as_str().unwrap_or("").to_string();
     let thread = model::thread_of(&c.info).map(str::to_string);
     let worktree = c.info["cwd"].as_str().is_some_and(|p| p.contains(".sbxw-worktrees/"));

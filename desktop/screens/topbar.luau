@@ -21,6 +21,8 @@ local tools = { usage = 1, setup = 2, help = 3, mac = 4 }
 -- Features' buttons and badges (data.app.extras.topbar): the intent of each
 -- by id, for the action (filled by render; actions do not get `data`).
 local extra_intents = {}
+-- The data of the last render (actions do not get it).
+local last = nil
 
 -- An extra's colour by meaning while quiet, inline or in the "⋯" menu.
 local function meaning_of(id)
@@ -105,8 +107,36 @@ local function more_menu(hidden)
   }
 end
 
+-- The modes, after the mark: GUI | TUI (Sessions, the readable view of
+-- every session, or the terminals) and Lead Mode (only the team leaders,
+-- in either). They change what the pane area shows, so they live here and
+-- not in the rail, whose entries show more. Compact (a narrow window):
+-- icons alone, the words in their tooltips. shell/bar.rs `modes_w`
+-- measures the same parts.
+local function modes(app, compact)
+  local gui = app.base ~= nil and app.base ~= false
+  local lead = app.leads or {}
+  local on = lead.on == true
+  local keys = app.platform == "macos" and { "⌃", "⌥", "I" } or { "Alt", "I" }
+  local seg = function(id, label, ic, lit, help)
+    return button{ (not compact) and label or nil, icon = ic, key = "top-view-" .. id, on = "view", arg = id,
+      variant = lit and "neutral" or "ghost", color = lit and "text-bright" or "text-muted", fill = lit and "bg" or nil,
+      help = help, keys = keys }
+  end
+  return row{ key = "top-modes", gap = 8,
+    row{ key = "top-view", gap = 2, radius = "sm", fill = "surface-alt",
+      seg("gui", "GUI", "inbox", gui, "GUI: Sessions, every session's conversation in one view"),
+      seg("tui", "TUI", "terminal", not gui, "TUI: the terminals") },
+    button{ (not compact) and (on and "Lead Mode On" or "Lead Mode Off") or nil, icon = "leader", key = "top-lead", on = "lead",
+      tone = "purple", variant = on and "neutral" or "ghost", color = on and "purple" or "text-muted", fill = on and "purple-tint" or nil,
+      disabled = (not on) and lead.can ~= true,
+      help = on and "Lead Mode On: only the team leaders (their terminals, their sessions and threads). Press for everything again"
+        or (lead.can == true and "Lead Mode Off: press to show only the team leaders, in the terminals and in Sessions" or "Lead Mode: no team is running") } }
+end
+
 return {
   render = function(_, data)
+    last = data
     local app = data.app
     local mac = app.platform == "macos"
     -- How the bar fits its width (the core measures it): compact drops the name.
@@ -149,6 +179,7 @@ return {
           column{ w = 13, h = 28, align = "start", justify = "center", icon{ "logo-mark", size = 24, color = "green" } },
           column{ w = 10, h = 28, justify = "end", py = 8, column{ w = 10, h = 3, radius = 1.5, fill = "blue" } },
         } or false,
+        modes(app, compact),
       },
       spacer{},
       row(centre),
@@ -158,6 +189,15 @@ return {
   end,
 
   actions = {
+    -- GUI or TUI: TUI in TUI does nothing (the shortcut toggles).
+    view = function(_, id)
+      local app = (last or {}).app or {}
+      local gui = app.base ~= nil and app.base ~= false
+      -- GUI also brings Sessions back from under a view drawn over it.
+      if id == "gui" then return intent("monitor_open", {}) end
+      if gui then return intent("monitor_toggle", {}) end
+    end,
+    lead = function() return intent("team_leads", { show = "toggle" }) end,
     extra = function(_, id)
       local i = extra_intents[id]
       if i then return intent(i.name, i.args) end

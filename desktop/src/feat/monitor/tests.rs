@@ -417,19 +417,6 @@ fn nothing_is_sent_under_a_dialog_or_a_proposal() {
     assert!(find(&h.render(&d2).unwrap(), "monitor-send").unwrap().disabled);
 }
 
-#[test]
-fn the_rail_entry_says_who_needs_you() {
-    let d = data_of("basic");
-    let x = extras(&Ctx { data: &d });
-    assert_eq!(x.len(), 1);
-    assert_eq!(x[0].place, Place::Rail { zone: Zone::Activity, order: 5 });
-    assert_eq!(x[0].help, "Every session in one view. 2 need you, 3 working");
-    assert_eq!(x[0].count, None, "the Requests entry counts what waits");
-    assert!(crate::icons::exists("inbox"));
-    let d = data_of("empty");
-    assert!(extras(&Ctx { data: &d })[0].help.contains("None is running"));
-}
-
 /// The whole window: with Jarvis's high-risk proposal up, Enter in the
 /// composer and a press on a choice send nothing.
 #[test]
@@ -458,7 +445,7 @@ fn with_a_jarvis_proposal_up_the_composer_and_the_choices_send_nothing() {
     // No proposal shown yet: the view opens, billing-api's main session selected, words typed.
     rt.update(|s, _| s.jarvis.shown = None);
     frames(&mut rt, 4);
-    tap(&mut rt, "rail-monitor");
+    tap(&mut rt, "top-view-gui");
     frames(&mut rt, 6);
     tap(&mut rt, "monitor-row-billing-api:s-bill-main");
     frames(&mut rt, 4);
@@ -550,7 +537,7 @@ fn the_keyboard_walks_the_list() {
     };
     let sel = |rt: &rune::Runtime<App>| rt.state.screen_data()["monitor"]["sel"].as_str().unwrap_or("").to_string();
     frames(&mut rt, 4);
-    let (x, y) = rt.find("rail-monitor").unwrap();
+    let (x, y) = rt.find("top-view-gui").unwrap();
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     frames(&mut rt, 6);
@@ -591,9 +578,9 @@ fn the_keyboard_walks_the_list() {
     let last = sel(&rt);
     let (sb, th) = last.split_once("::").map(|(a, b)| (a.to_string(), Some(b.to_string()))).unwrap_or_else(|| (last.split(':').next().unwrap().to_string(), None));
     assert!(rt.state.panes.iter().any(|p| p.sandbox.as_deref() == Some(sb.as_str()) && p.thread == th), "its terminal is in a pane: {last}");
-    // Back from the rail: the same session; Escape does not leave it (a
-    // base view), its rail entry pressed again does.
-    let (x, y) = rt.find("rail-monitor").unwrap();
+    // Back by GUI: the same session; Escape does not leave it (a base
+    // view), TUI does.
+    let (x, y) = rt.find("top-view-gui").unwrap();
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     frames(&mut rt, 6);
@@ -601,11 +588,11 @@ fn the_keyboard_walks_the_list() {
     key(&mut rt, Key::Escape);
     frames(&mut rt, 2);
     assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"), "Escape does not leave the Monitor");
-    let (x, y) = rt.find("rail-monitor").unwrap();
+    let (x, y) = rt.find("top-view-tui").unwrap();
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     frames(&mut rt, 2);
-    assert!(rt.state.feats.overlay.is_none() && rt.state.feats.base.is_none(), "its rail entry again: the terminals");
+    assert!(rt.state.feats.overlay.is_none() && rt.state.feats.base.is_none(), "TUI: the terminals");
 }
 
 #[test]
@@ -652,7 +639,7 @@ fn under_files_the_monitor_sends_nothing_and_comes_back_as_it_was() {
     let sel = |rt: &rune::Runtime<App>| rt.state.screen_data()["monitor"]["sel"].as_str().unwrap_or("").to_string();
     let typed = |rt: &rune::Runtime<App>| rt.state.screens.iter().find(|x| x.name == "monitor").and_then(|sc| sc.ui.edits.get("monitor-compose").map(|e| e.0.text.clone()));
     frames(&mut rt, 4);
-    tap(&mut rt, "rail-monitor");
+    tap(&mut rt, "top-view-gui");
     frames(&mut rt, 6);
     tap(&mut rt, "monitor-row-billing-api:s-bill-main");
     frames(&mut rt, 4);
@@ -1012,7 +999,7 @@ fn the_skip_dialog_choice_never_skips_a_monitor_send_and_the_gate_holds() {
     };
     rt.update(|s, _| s.jarvis.shown = None);
     frames(&mut rt, 4);
-    tap(&mut rt, "rail-monitor");
+    tap(&mut rt, "top-view-gui");
     frames(&mut rt, 6);
     tap(&mut rt, "monitor-row-billing-api:s-bill-main");
     frames(&mut rt, 4);
@@ -1038,7 +1025,7 @@ fn the_skip_dialog_choice_never_skips_a_monitor_send_and_the_gate_holds() {
     let mut rt = rune::Runtime::new(a, shell_view, (1284.0, 816.0), rune::Env::new(true, 1.0));
     rt.frame(0.0);
     frames(&mut rt, 4);
-    tap(&mut rt, "rail-monitor");
+    tap(&mut rt, "top-view-gui");
     frames(&mut rt, 6);
     tap(&mut rt, "monitor-row-billing-api:s-bill-main");
     frames(&mut rt, 4);
@@ -1169,4 +1156,33 @@ fn the_daemon_s_continues_and_ended_are_followed_when_served() {
     e["ended"] = true.into();
     m.upsert(&e);
     assert_eq!(m.cards.len(), 1, "b ended: its card leaves (another holds the place)");
+}
+
+/// Part 1 of SESSIONS.md: every name the person reads says "Sessions" (the
+/// view's title, the pager's switch, the rail entry, the palette, Help);
+/// the names code and the state file use stay `monitor`, so a `base_view`
+/// stored by an older build still brings the view back.
+#[test]
+fn the_view_is_called_sessions_and_an_older_stored_base_still_restores() {
+    use crate::shell::{App, Args};
+    let fx = format!("{}/fixtures/monitor/basic.json", env!("CARGO_MANIFEST_DIR"));
+    let mut a = App::new(Args { fixture: Some(fx), ..Default::default() });
+    assert!(matches!(crate::feat::screen("monitor").map(|(_, d)| &d.slot), Some(Slot::Base { title: "Sessions", icon: "inbox", .. })), "the view's title and its switch segment");
+    // GUI | TUI and Lead Mode are the top bar's: the rail has neither (it shows more, it does not switch views).
+    let (top, bottom) = a.rail_entries();
+    let keys: Vec<String> = top.iter().chain(&bottom).map(|e| e.key.clone()).collect();
+    assert!(!keys.iter().any(|k| k == "rail-monitor" || k == "rail-leads"), "no Sessions or Team leads entry on the rail: {keys:?}");
+    assert!(FEATURE.extras.is_none(), "Sessions puts nothing on the rail");
+    let cmds = a.palette_cmds();
+    assert!(cmds.iter().any(|c| c.label == "Switch between GUI and TUI"), "the palette's shortcut");
+    assert!(a.screen_data()["app"]["shortcuts"].as_array().unwrap().iter().any(|k| k["what"] == "Switch between GUI and TUI"), "Help lists the shortcut under its new name");
+    let all: String = cmds.iter().map(|c| format!("{} {}\n", c.label, c.hint)).collect();
+    assert!(!all.contains("Monitor"), "no palette text says Monitor: {all}");
+    // The state file of an older build: `base_view: "monitor"`.
+    let p = std::env::temp_dir().join(format!("sbxw-sessions-base-{}.json", std::process::id()));
+    std::fs::write(&p, r#"{"base_view":"monitor"}"#).unwrap();
+    a.store = crate::shell::store::Store::at(Some(p.clone()));
+    a.kept_base();
+    assert_eq!((a.feats.base.as_deref(), a.feats.base_restore), (Some("monitor"), true), "the stored value still restores the view");
+    let _ = std::fs::remove_file(&p);
 }

@@ -1,6 +1,6 @@
--- Monitor: every Claude session in one view, who needs you first (left), the
--- selected one as a short feed with its question and a composer (middle).
--- An overlay over the pane area, opened from the rail. Built by
+-- Sessions (the feature `monitor`): every Claude session in one view, who
+-- needs you first (left), the selected one's conversation with its question
+-- and a composer (middle). A base view of the pane area. Built by
 -- src/feat/monitor/: `data.monitor` is its view, kept from the daemon's
 -- `session` events one card at a time.
 --
@@ -31,12 +31,14 @@ end
 
 local function list_row(r, sel, now, color)
   local when = ago(r.ts, now)
-  local sig = tostring(r.rev) .. "|" .. when .. "|" .. tostring(sel) .. "|" .. tostring(color)
+  local sig = tostring(r.rev) .. "|" .. when .. "|" .. tostring(sel) .. "|" .. tostring(color) .. "|" .. tostring(r.indent)
   local m = memo[r.key]
   if m and m.sig == sig then return m.el end
   built = built + 1
   local el = row{ key = "monitor-row-" .. r.key, on = "pick", arg = r.key, selected = sel,
     fill = sel and "active-bg" or nil, hover = "hover-subtle", radius = "sm", px = 8, py = 8, gap = 8, w = "full", align = "start",
+    -- Team leads on: a leader's thread, one step in under its leader.
+    r.indent and column{ w = 16, h = 1 } or false,
     column{ py = 4, dot{ tone = r.tone } },
     column{ grow = 1, gap = 2,
       row{ gap = 4, w = "full",
@@ -216,7 +218,8 @@ local screen = {
   init = function() return { drafts = {} } end,
   render = function(state, data)
     local v = data.monitor
-    if not v or #(v.rows or {}) == 0 then
+    local leads = v and (v.leads or {}).on == true
+    if not v or (#(v.rows or {}) == 0 and not leads) then
       memo = {}
       return empty(v)
     end
@@ -226,7 +229,8 @@ local screen = {
     local last
     local seen = {}
     for _, r in ipairs(v.rows) do
-      if r.group ~= last then
+      -- Team leads on: each leader with its team, no state headings.
+      if not leads and r.group ~= last then
         local title = r.group == "you" and "Needs you" or r.group == "working" and "Working" or r.group == "idle" and "Idle" or "Ended"
         rows[#rows + 1] = heading(title, counts[r.group] or 0)
         last = r.group
@@ -235,12 +239,17 @@ local screen = {
       seen[r.key] = true
     end
     for k in pairs(memo) do if not seen[k] then memo[k] = nil end end
+    if leads and #v.rows == 0 then
+      rows[#rows + 1] = column{ key = "monitor-leads-empty", gap = 4, px = 8, py = 12, w = "full",
+        text{ "No team leader is running", weight = "medium", color = "text-bright" },
+        text{ "A sandbox whose lead runs a plan shows here with its threads. Lead Mode Off, in the top bar, shows every session.", size = "sm", color = "text-muted", wrap = true } }
+    end
     local more = more_rows(v.count, { key = "monitor-more", on = "more", what = "sessions" })
     if more then rows[#rows + 1] = more end
     local you = counts.you or 0
     local top = row{ px = 12, py = 8, gap = 8, w = "full",
-      text{ "Sessions", weight = "semibold", color = "text-bright" },
-      text{ tostring(counts.total or 0), size = "sm", color = "text-dim" }, spacer{},
+      -- The view's title says "Sessions" already: the list's head is its count.
+      text{ leads and "Team leaders and their threads" or (counts.total or 0) .. " session" .. ((counts.total or 0) == 1 and "" or "s"), key = "monitor-count", size = "sm", weight = "medium", color = "text-muted" }, spacer{},
       you > 0 and button{ you .. " need" .. (you == 1 and "s" or "") .. " you", key = "monitor-next", tone = "amber", dense = true, on = "next",
         help = "The next session that needs you", keys = { "N" } }
         or text{ "Nothing needs you", key = "monitor-calm", size = "sm", color = "text-dim" } }

@@ -1,6 +1,7 @@
 {
- "about": "Five sandboxes, eight sessions in every state: a multiple-choice question (shop-web main, answerable), a permission prompt (shop-web checkout-copy), three working, three idle with replies. Invented content. `session_events`: the stand-in's live changes (docs-site edits, tax-rules finishes, retry-queue asks a permission).",
+ "about": "Five sandboxes, eight sessions in every state: a multiple-choice question (shop-web main, answerable), a permission prompt (shop-web checkout-copy), three working, three idle with replies. Invented content. `session_events`: the stand-in's live changes (docs-site edits, tax-rules finishes, retry-queue asks a permission). `leads`: shop-web and billing-api lead a team (Lead Mode).",
  "daemon": {
+  "leads": ["shop-web", "billing-api"],
   "sandboxes": [
    {
     "name": "shop-web",
