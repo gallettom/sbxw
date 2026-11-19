@@ -433,7 +433,11 @@ mod window {
     use rune::{KeyEvent, Tx};
 
     pub fn runtime(w: f32, h: f32) -> rune::Runtime<App> {
-        let f = format!("{}/fixtures/canvas/basic.json", env!("CARGO_MANIFEST_DIR"));
+        runtime_of("basic", w, h)
+    }
+
+    pub fn runtime_of(fixture: &str, w: f32, h: f32) -> rune::Runtime<App> {
+        let f = format!("{}/fixtures/canvas/{fixture}.json", env!("CARGO_MANIFEST_DIR"));
         let a = App::new(Args { fixture: Some(f.into()), ..Args::default() });
         let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
         rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut Tx| s.on_key(ev, tx));
@@ -474,17 +478,23 @@ mod window {
 
     /// Opened from the rail, the canvas read and laid out.
     pub fn opened(w: f32, h: f32) -> rune::Runtime<App> {
+        opened_of("basic", "s-1-0", w, h)
+    }
+
+    /// [`opened`] on another fixture, until shot `first` is drawn.
+    pub fn opened_of(fixture: &str, first: &str, w: f32, h: f32) -> rune::Runtime<App> {
         *super::STATE().lock().unwrap() = super::State::default();
         crate::surface_canvas::close(super::SURF);
-        let mut rt = runtime(w, h);
+        let mut rt = runtime_of(fixture, w, h);
         intent(&mut rt, "canvas_show");
+        let key = format!("canvas-{first}");
         for _ in 0..100 {
             settle(&mut rt, 2);
-            if rect(&rt, "canvas-s-1-0").is_some() {
+            if rect(&rt, &key).is_some() {
                 break;
             }
         }
-        assert!(rect(&rt, "canvas-s-1-0").is_some(), "the shots are drawn");
+        assert!(rect(&rt, &key).is_some(), "the shots are drawn");
         rt
     }
 }
@@ -743,4 +753,152 @@ fn picking_a_sandbox_in_the_scope_list_shows_its_canvas() {
     }
     let keys: Vec<String> = rt.elements().iter().filter_map(|e| e.key.clone()).filter(|k| k.starts_with("canvas")).take(40).collect();
     assert!(window::rect(&rt, "canvas-s-1-0").is_some(), "web-app's canvas is drawn: {keys:?} ui {}", rt.state.screen_data()["canvas"]);
+}
+
+// ---------------------------------------------------------------------------
+// Rounds as a grid: fit, the handle, the Add example tool
+
+/// A round of `n` shots 1284 x 816 laid out as the core lays it (4 x 3 for 12...).
+fn grid_scene(n: usize) -> crate::surface_canvas::Scene {
+    use crate::surface_canvas::{Body, Item, Scene};
+    let cols = super::model::grid_cols(n, 1284.0, 816.0);
+    let mut items = vec![Item { id: "band-1".into(), x: 0.0, y: 0.0, w: 1284.0, h: 0.0, body: Body::Band { label: "Round 1".into() }, movable: false }];
+    for k in 0..n {
+        let (c, r) = ((k % cols) as f32, (k / cols) as f32);
+        items.push(Item { id: format!("s-g-{k}"), x: c * 1404.0, y: r * 1016.0, w: 1284.0, h: 816.0, body: Body::Picture { image: format!("none-{k}"), caption: vec![format!("Screen {k}")], asset: false }, movable: true });
+    }
+    Scene { items, ..Scene::default() }
+}
+
+#[test]
+fn the_stand_ins_columns_are_the_cores() {
+    // The same table as crates/core/src/canvas.rs (a_round_is_a_grid_whose_columns_follow_its_shots).
+    for (n, cols) in [(1, 1), (2, 2), (4, 2), (9, 3), (12, 4), (16, 4), (24, 5)] {
+        assert_eq!(super::model::grid_cols(n, 1284.0, 816.0), cols, "{n}");
+    }
+}
+
+/// Fit fills the surface with the content (the side list open where the
+/// window is wide), with room for the band above and the captions below.
+#[test]
+fn fit_fills_the_surface_at_every_size_and_count() {
+    use crate::surface_canvas::{camera, set_scene, zoom, ZoomCmd, FIT_PAD};
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0), (1900.0, 950.0)] {
+        let mut rt = window::opened_of("grid12", "s-1-80", w, h);
+        if w >= 1000.0 {
+            assert!(window::rect(&rt, "canvas-sendbar").is_some(), "{w}: the side list is open beside the surface");
+        }
+        let view = window::rect(&rt, "canvas-canvas").unwrap();
+        for n in [1, 4, 12, 24] {
+            set_scene(super::SURF, grid_scene(n));
+            zoom(super::SURF, ZoomCmd::Fit);
+            window::settle(&mut rt, 2);
+            let cam = camera(super::SURF);
+            assert_eq!(cam.view, [view[2], view[3]], "{w}x{h}");
+            let cols = super::model::grid_cols(n, 1284.0, 816.0) as f32;
+            let rows = (n as f32 / cols).ceil();
+            let (bw, bh) = (cols * 1284.0 + (cols - 1.0) * 120.0, rows * 816.0 + (rows - 1.0) * 200.0);
+            let (aw, ah) = (cam.view[0] - FIT_PAD[1] - FIT_PAD[3], cam.view[1] - FIT_PAD[0] - FIT_PAD[2]);
+            let (dw, dh) = (bw * cam.zoom, bh * cam.zoom);
+            assert!(dw <= aw + 0.5 && dh <= ah + 0.5, "{w}x{h}, {n} shots: {dw}x{dh} in {aw}x{ah}");
+            assert!(dw >= aw - 0.5 || dh >= ah - 0.5 || cam.zoom >= 1.0, "{w}x{h}, {n} shots: {dw}x{dh} does not fill {aw}x{ah}");
+            // The block, its band and its captions inside the view.
+            let tl = cam.screen([0.0, 0.0]);
+            let br = cam.screen([bw, bh]);
+            assert!(tl[1] >= FIT_PAD[0] - 0.5 && br[1] <= cam.view[1] - FIT_PAD[2] + 0.5 && tl[0] >= FIT_PAD[3] - 0.5 && br[0] <= cam.view[0] - FIT_PAD[1] + 0.5, "{w}x{h}, {n}: {tl:?} {br:?}");
+            eprintln!("fit {w}x{h} (surface {:.0}x{:.0}), {n} shots: zoom {:.1}%, a shot {:.0} pt wide", view[2], view[3], cam.zoom * 100.0, 1284.0 * cam.zoom);
+        }
+    }
+}
+
+/// The user's round of 12 shots at Fit: a 4 x 3 grid. In one row a shot
+/// was about 45 pt wide at 1284 x 816 and 90 at 1900 x 950; now about 126
+/// and 270 (the surface beside the side list is 588 x 591 and 1204 x 725).
+#[test]
+fn a_round_of_twelve_reads_at_fit() {
+    for (w, h, least) in [(1284.0, 816.0, 120.0), (1900.0, 950.0, 260.0)] {
+        let rt = window::opened_of("grid12", "s-1-80", w, h);
+        let first = window::rect(&rt, "canvas-s-1-80").unwrap();
+        let fifth = window::rect(&rt, "canvas-s-1-84").unwrap();
+        assert!(first[2] >= least, "{w}: a shot is {} pt wide", first[2]);
+        assert!((fifth[0] - first[0]).abs() < 0.5 && fifth[1] > first[1] + first[3], "{w}: the fifth shot starts the second row");
+        // Each shot on its mat, framed by a hairline.
+        assert!(window::rect(&rt, "canvas-mat-s-1-80").is_some());
+    }
+}
+
+#[test]
+fn the_handle_is_a_small_share_of_the_item_and_hidden_when_it_is_small() {
+    use crate::surface_canvas::{handle_side, HANDLE_MAX, HANDLE_SHARE};
+    // The user's case: a 1284 x 816 shot at 9 %: no handle (it was a 14 pt square on a 115 pt shot).
+    assert_eq!(handle_side(1284.0 * 0.09, 816.0 * 0.09), None);
+    for z in [0.15, 0.3, 0.5, 1.0, 3.0] {
+        let (dw, dh) = (1284.0 * z, 816.0 * z);
+        let s = handle_side(dw, dh).unwrap();
+        assert!(s <= HANDLE_MAX && s <= dh * HANDLE_SHARE + 0.01, "{z}: {s}");
+    }
+}
+
+#[test]
+fn a_selected_shot_at_low_zoom_has_a_ring_and_no_handle_and_at_100_a_small_handle_on_its_corner() {
+    let mut rt = window::opened_of("grid12", "s-1-80", 1284.0, 816.0);
+    crate::surface_canvas::zoom(super::SURF, crate::surface_canvas::ZoomCmd::Out);
+    crate::surface_canvas::zoom(super::SURF, crate::surface_canvas::ZoomCmd::Out);
+    crate::surface_canvas::zoom(super::SURF, crate::surface_canvas::ZoomCmd::Out);
+    window::settle(&mut rt, 2);
+    let r = window::rect(&rt, "canvas-s-1-84").unwrap();
+    rt.pointer_down(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+    rt.pointer_up(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+    window::settle(&mut rt, 4);
+    assert_eq!(STATE().lock().unwrap().selected.as_deref(), Some("s-1-84"));
+    let r = window::rect(&rt, "canvas-s-1-84").unwrap();
+    assert!(r[2] < 80.0, "drawn small: {r:?}");
+    assert!(window::rect(&rt, "canvas-handle-s-1-84").is_none(), "no handle on a shot drawn {} pt wide", r[2]);
+    let ring = window::rect(&rt, "canvas-ring-s-1-84").expect("the selection ring");
+    assert!(ring[0] < r[0] && ring[1] < r[1] && ring[0] + ring[2] > r[0] + r[2] && ring[1] + ring[3] > r[1] + r[3], "the ring around the shot");
+    // At 100 %: a handle, on the corner, at most 12 pt.
+    crate::surface_canvas::zoom(super::SURF, crate::surface_canvas::ZoomCmd::Actual);
+    crate::surface_canvas::show(super::SURF, [1284.0 - 300.0, 1016.0 + 816.0 - 200.0, 300.0, 200.0], 1.0);
+    window::settle(&mut rt, 2);
+    let r = window::rect(&rt, "canvas-s-1-84").unwrap();
+    let hd = window::rect(&rt, "canvas-handle-s-1-84").expect("a handle at 100%");
+    assert!(hd[2] <= crate::surface_canvas::HANDLE_MAX + 0.5, "{hd:?}");
+    let (cx, cy) = (hd[0] + hd[2] / 2.0, hd[1] + hd[3] / 2.0);
+    assert!((cx - (r[0] + r[2])).abs() < 1.0 && (cy - (r[1] + r[3])).abs() < 1.0, "on the corner: {hd:?} {r:?}");
+}
+
+#[test]
+fn the_add_example_tool_says_what_it_does() {
+    let mut w = World::new("basic");
+    w.open();
+    let mut h = LuauHost::new(Limits::default()).unwrap();
+    h.load("canvas", include_str!("../../../screens/canvas.luau")).unwrap();
+    let find = |n: &Node, key: &str| -> Option<Node> {
+        let mut all = vec![];
+        walk(n, &mut all);
+        all.into_iter().find(|x| x.key.as_deref() == Some(key)).cloned()
+    };
+    let n = h.render(&w.data).unwrap();
+    let b = find(&n, "canvas-tool-asset").expect("the tool");
+    assert_eq!(b.text, "Add example");
+    assert_eq!(b.icon.as_deref(), Some("image"));
+    assert_eq!(b.help.as_deref(), Some("Add a picture of yours as an example for the agent: pick a file, drop one, or paste"));
+    for (k, says) in [("canvas-tool-pin", "a numbered remark on a point of a shot"), ("canvas-tool-note", "a remark placed anywhere")] {
+        let help = find(&n, k).unwrap().help.unwrap();
+        assert!(help.contains(says), "{k}: {help}");
+    }
+    assert!(find(&n, "canvas-asset-hint").is_none(), "no hint until the tool is chosen");
+    // Chosen (A): the hint above the surface, with its own Pick a file.
+    let a = w.intent("canvas_key", json!({ "key": "type", "text": "a" })).unwrap();
+    w.run(a);
+    assert_eq!(w.ui()["tool"], "asset");
+    let n = h.render(&w.data).unwrap();
+    let hint = find(&n, "canvas-asset-hint").expect("the hint");
+    let mut all = vec![];
+    walk(&hint, &mut all);
+    assert!(all.iter().any(|x| x.text.contains("as an example for the agent") && x.text.contains("drop one here, or paste it")), "the hint's words");
+    assert_eq!(find(&n, "canvas-asset-pick").unwrap().on.as_deref(), Some("asset"));
+    // The list and the send name it Example 1.
+    let ui = w.ui().to_string();
+    assert!(ui.contains("Example 1 · empty-cart-example.png") && !ui.contains("Asset 1"), "{ui}");
 }

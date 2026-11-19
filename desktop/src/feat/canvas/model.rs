@@ -29,6 +29,8 @@ pub struct Shot {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+    /// Moved by the person (the daemon's flag): its round's band ignores it.
+    pub moved: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
@@ -192,11 +194,15 @@ pub fn scene(c: &Manifest, pins: &[PinD], notes: &[NoteD], layout: &BTreeMap<Str
     let mut rounds: BTreeMap<u32, [f32; 3]> = BTreeMap::new();
     for s in &c.shots {
         let r = item_rect(c, &s.id, layout).unwrap_or([s.x, s.y, s.w, s.h]);
-        // Bands sit at each round's original row (a moved shot does not move its row).
-        let e = rounds.entry(s.round).or_insert([s.x, s.y, s.x + s.w]);
-        e[0] = e[0].min(s.x);
-        e[1] = e[1].min(s.y);
-        e[2] = e[2].max(s.x + s.w);
+        // Bands sit above each round's grid: a shot the person moved (now
+        // or before) does not move or stretch it, unless all were moved.
+        let round_moved = c.shots.iter().filter(|o| o.round == s.round).all(|o| o.moved || layout.contains_key(&o.id));
+        if !(s.moved || layout.contains_key(&s.id)) || round_moved {
+            let e = rounds.entry(s.round).or_insert([s.x, s.y, s.x + s.w]);
+            e[0] = e[0].min(s.x);
+            e[1] = e[1].min(s.y);
+            e[2] = e[2].max(s.x + s.w);
+        }
         items.push(Item { id: s.id.clone(), x: r[0], y: r[1], w: r[2], h: r[3], body: Body::Picture { image: s.file.clone(), caption: caption(s), asset: false }, movable: true });
     }
     for (n, [x0, y0, x1]) in &rounds {
@@ -514,6 +520,11 @@ fn send_view(s: &State, snap: &J, new: usize) -> J {
 /// A drawn mock screen: a header bar, a side bar on a wide one, cards with
 /// lines. Neutral, invented; no real project.
 pub fn mock_png(w: u32, h: u32, seed: u32) -> Vec<u8> {
+    mock_png_of(w, h, seed, false)
+}
+
+/// [`mock_png`], light or dark (an app in its dark theme, close to the surface's ground).
+pub fn mock_png_of(w: u32, h: u32, seed: u32, dark: bool) -> Vec<u8> {
     let hue = [(52u8, 120u8, 200u8), (40, 160, 110), (180, 90, 60), (120, 80, 170)][(seed % 4) as usize];
     let img = image::RgbaImage::from_fn(w, h, |x, y| {
         let bar = y < (h / 14).max(24);
@@ -522,13 +533,15 @@ pub fn mock_png(w: u32, h: u32, seed: u32) -> Vec<u8> {
         let card = !side && !bar && (w <= 600 || x >= w / 6) && cx > 20 && cx < 280 && cy > 20 && cy < 200;
         let line = card && (cy - 40).rem_euclid(24) < 6 && cx < 220;
         let px = if bar {
-            [hue.0, hue.1, hue.2]
+            if dark { [hue.0 / 3, hue.1 / 3, hue.2 / 3] } else { [hue.0, hue.1, hue.2] }
         } else if side {
-            [36, 40, 48]
+            if dark { [18, 20, 24] } else { [36, 40, 48] }
         } else if line {
-            [150, 155, 165]
+            if dark { [70, 76, 86] } else { [150, 155, 165] }
         } else if card {
-            [250, 250, 252]
+            if dark { [30, 34, 40] } else { [250, 250, 252] }
+        } else if dark {
+            [16, 19, 24]
         } else {
             [232, 234, 238]
         };
@@ -548,6 +561,21 @@ fn summary(c: &J) -> J {
     let draft = c["pins"].as_array().into_iter().flatten().filter(|p| p["sent"].is_null()).count() + c["notes"].as_array().into_iter().flatten().filter(|p| p["sent"].is_null()).count();
     json!({ "id": c["id"], "sandbox": c["sandbox"], "title": c["title"], "created_ms": c["created_ms"], "updated_ms": c["updated_ms"],
         "shots": c["shots"].as_array().map_or(0, Vec::len), "rounds": c["rounds"].as_array().map_or(0, Vec::len), "reviews": c["reviews"].as_array().map_or(0, Vec::len), "bytes": bytes, "draft": draft })
+}
+
+/// The core's column rule (`sbxw_core::canvas::grid_cols`), for the stand-in:
+/// the count whose block is nearest 1.6 wide, an empty cell costing a little.
+pub fn grid_cols(cells: usize, cw: f64, ch: f64) -> usize {
+    let mut best = (f64::MAX, 1);
+    for c in 1..=cells.clamp(1, 8) {
+        let rows = cells.div_ceil(c).max(1);
+        let (w, h) = (c as f64 * cw + (c - 1) as f64 * 120.0, rows as f64 * ch + (rows - 1) as f64 * 200.0);
+        let cost = (w / h / 1.6).ln().abs() + 0.05 * (rows * c - cells) as f64;
+        if cost < best.0 - 1e-4 {
+            best = (cost, c);
+        }
+    }
+    best.1
 }
 
 /// The stand-in's canvas routes over the fixture's `canvas` object
@@ -594,7 +622,7 @@ pub fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(
             if f.is_null() {
                 return Some((404, json!({ "ok": false, "error": "no such picture" })));
             }
-            let png = mock_png(f["w"].as_u64().unwrap_or(800) as u32, f["h"].as_u64().unwrap_or(600) as u32, f["seed"].as_u64().unwrap_or(0) as u32);
+            let png = mock_png_of(f["w"].as_u64().unwrap_or(800) as u32, f["h"].as_u64().unwrap_or(600) as u32, f["seed"].as_u64().unwrap_or(0) as u32, f["dark"].as_bool().unwrap_or(false));
             return Some((200, json!({ "$raw_hex": hex(&png), "$type": "image/png" })));
         }
         if let Some(c) = match_path("/api/canvas/{id}", p) {
@@ -685,16 +713,22 @@ pub fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(
             let cv = &mut data["canvases"][id.as_str()];
             let round = cv["rounds"].as_array().map_or(0, Vec::len) as u64 + 1;
             let top = cv["shots"].as_array().into_iter().flatten().map(|s| s["y"].as_f64().unwrap_or(0.0) + s["h"].as_f64().unwrap_or(0.0)).fold(-320.0, f64::max) + 320.0;
-            let mut x = 0.0;
-            let mut files = vec![];
-            for (k, s) in body["shots"].as_array().into_iter().flatten().enumerate() {
+            // A grid as the daemon lays one (crates/core/src/canvas.rs), for same-sized shots.
+            let list: Vec<J> = body["shots"].as_array().cloned().unwrap_or_default();
+            let size = |s: &J| {
                 let (pw, ph) = (s["w"].as_u64().unwrap_or(1440), s["h"].as_u64().unwrap_or(900));
                 let w = s["width"].as_f64().unwrap_or(pw as f64);
-                let h = w * ph as f64 / pw as f64;
+                (pw, ph, w, w * ph as f64 / pw as f64)
+            };
+            let (cw, ch) = list.iter().map(size).fold((1.0f64, 1.0f64), |m, s| (m.0.max(s.2), m.1.max(s.3)));
+            let cols = grid_cols(list.len(), cw, ch);
+            let mut files = vec![];
+            for (k, s) in list.iter().enumerate() {
+                let (pw, ph, w, h) = size(s);
+                let (x, y) = ((k % cols) as f64 * (cw + 120.0), top + (k / cols) as f64 * (ch + 200.0));
                 let file = format!("s-{:06x}{:06x}.png", round, k);
-                files.push((file.clone(), json!({ "w": pw, "h": ph, "seed": round as usize + k })));
-                cv["shots"].as_array_mut()?.push(json!({ "id": format!("s-{round}-{k}"), "file": file, "round": round, "title": s["title"], "note": s["note"], "width": s["width"], "screen": s["screen"], "px_w": pw, "px_h": ph, "bytes": 200_000, "added_ms": now, "x": x, "y": top, "w": w, "h": h }));
-                x += w + 120.0;
+                files.push((file.clone(), json!({ "w": pw, "h": ph, "seed": round as usize + k, "dark": s["dark"] })));
+                cv["shots"].as_array_mut()?.push(json!({ "id": format!("s-{round}-{k}"), "file": file, "round": round, "title": s["title"], "note": s["note"], "width": s["width"], "screen": s["screen"], "px_w": pw, "px_h": ph, "bytes": 200_000, "added_ms": now, "x": x, "y": y, "w": w, "h": h }));
             }
             cv["rounds"].as_array_mut()?.push(json!({ "n": round, "at_ms": now, "shots": files.len() }));
             cv["updated_ms"] = now.into();
