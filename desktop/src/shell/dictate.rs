@@ -621,8 +621,7 @@ mod tests {
 
     /// Every chat input is `tone = "compose"` (its ground, and dictation
     /// writes there); filters, searches and forms are not. Read from the
-    /// built-in screens' sources, line by line. Canvas's ask prompt waits
-    /// for sbxw/followups (COMPOSER.md).
+    /// built-in screens' sources, line by line.
     #[test]
     fn chat_inputs_and_only_they_are_compose() {
         let src = [
@@ -639,7 +638,7 @@ mod tests {
         ]
         .join("\n");
         let line = |id: &str| src.lines().find(|l| l.contains(&format!("id = \"{id}")) && (l.contains("textarea{") || l.contains("input{"))).unwrap_or_else(|| panic!("{id} found")).to_string();
-        for id in ["monitor-compose", "jarvis-input", "canvas-text-", "relay-ans-", "relay-caption-", "relay-own-", "relay-review-"] {
+        for id in ["monitor-compose", "jarvis-input", "canvas-ask-text", "canvas-text-", "relay-ans-", "relay-caption-", "relay-own-", "relay-review-"] {
             assert!(line(id).contains("tone = \"compose\""), "{id} is a chat input");
         }
         for id in ["board-search", "mcp-name", "secret-hosts", "files-filter", "filter", "rule-filter", "canvas-title"] {
