@@ -928,6 +928,13 @@ impl App {
     /// Takes what the link sent. Headless (`wait`), first waits up to `wait`
     /// while the first connection or list is on its way, or (`pending`) while
     /// a background job runs: the virtual clock does not wait for the daemon.
+    /// Tests: the link's first list is in and nothing asked of it is still
+    /// under way (its answers wait in the channel for the next poll).
+    #[cfg(test)]
+    pub(crate) fn link_quiet(&self) -> bool {
+        self.listed && self.link.as_ref().is_some_and(|l| l.pending.load(std::sync::atomic::Ordering::SeqCst) == 0)
+    }
+
     fn drain(&mut self, wait: Option<Duration>, pending: bool) -> bool {
         let mut changed = false;
         let deadline = wait.map(|w| Instant::now() + w);

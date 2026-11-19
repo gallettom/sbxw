@@ -166,15 +166,13 @@ mod tests {
     /// after the data a test sets, however loaded the machine (an `Up` or a
     /// list landing late used to undo `listed` and `sandboxes`).
     fn quiet(r: &mut Rig) {
-        use std::sync::atomic::Ordering;
         let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
             let clock = r.clock;
             r.rt.update(|s, tx| {
                 s.poll(clock, tx);
             });
-            let s = &r.rt.state;
-            if s.listed && s.link.as_ref().is_some_and(|l| l.pending.load(Ordering::SeqCst) == 0) {
+            if r.rt.state.link_quiet() {
                 break;
             }
             assert!(std::time::Instant::now() < end, "the fixture's link never settled");
