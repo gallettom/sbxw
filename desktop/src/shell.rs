@@ -146,9 +146,12 @@ pub(crate) static PANE_DROPS: std::sync::atomic::AtomicUsize = std::sync::atomic
 
 /// Pane `i`'s terminal for its layout only (fitting it to the pane): kept
 /// under a dialog or a modal, so a window resized behind one still fits;
-/// not under an overlay, which keeps the panes' sizes as they were.
+/// not while the panes are held (`App::panes_held`: an overlay or the base
+/// view), which keeps the panes' sizes as they were. Held panes are drawn
+/// with no layout handler (`terminal::pane_held`), so the first frame they
+/// show again fits each terminal to its rect then (RESIZE.md).
 fn layout_lens(i: usize) -> impl Fn(&mut App) -> Option<&mut TerminalState> + Clone + 'static {
-    move |s: &mut App| if s.feats.overlay.is_some() || s.feats.base.is_some() { None } else { s.panes.get_mut(i).and_then(|p| p.term.as_mut()) }
+    move |s: &mut App| if s.panes_held() { None } else { s.panes.get_mut(i).and_then(|p| p.term.as_mut()) }
 }
 
 /// Headless script marks the app acts on.
@@ -1490,6 +1493,14 @@ impl App {
         let intent = format!("{name}_key");
         let takes = crate::intent::spec(&intent).is_some_and(|sp| sp.args.iter().any(|(n, a, _)| *n == "key" && matches!(a, crate::intent::Arg::OneOf(l) if l.contains(&"escape"))));
         takes.then_some(intent)
+    }
+
+    /// The pane area is drawn over by a view (a feature's overlay, or the
+    /// base view: Sessions in GUI): no terminal is fitted to its pane, so
+    /// nothing resizes under it; once it goes, each terminal fits its rect
+    /// again with one resize at most (RESIZE.md).
+    pub fn panes_held(&self) -> bool {
+        self.feats.overlay.is_some() || self.feats.base.is_some()
     }
 
     /// A base view (the Monitor) instead of the terminals covers them too.
@@ -3370,7 +3381,7 @@ fn pane_view(s: &App, i: usize) -> El {
     }
     let body = match pane {
         // The pane fills a row (its width grows, its height is the row's).
-        Some(Pane { term: Some(t), .. }) => row().w_full().grow(1.0).min_h(0.0).child(terminal::pane_with(t, lens(i), layout_lens(i))),
+        Some(Pane { term: Some(t), .. }) => row().w_full().grow(1.0).min_h(0.0).child(terminal::pane_held(t, lens(i), layout_lens(i), s.panes_held())),
         Some(Pane { sandbox: None, error: None, .. }) => empty_pane(s, i),
         Some(p) => {
             let msg = match (&p.sandbox, &p.error) {
