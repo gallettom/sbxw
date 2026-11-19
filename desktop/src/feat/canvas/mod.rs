@@ -365,7 +365,7 @@ impl State {
                 out.extend(self.save());
             }
             "canvas_remove" => {
-                let t = a.s("target").filter(|t| !t.is_empty()).map(str::to_string).or_else(|| self.selected.clone()).ok_or("Select an unsent pin, note or asset first")?;
+                let t = a.s("target").filter(|t| !t.is_empty()).map(str::to_string).or_else(|| self.selected.clone()).ok_or("Select an unsent pin, note or example first")?;
                 out.extend(self.remove(&t)?);
             }
             "canvas_asset" => {
@@ -446,7 +446,7 @@ impl State {
                 self.pins.retain(|p| p.on != t);
                 self.handed.remove(t);
             } else {
-                return Err("Only an unsent pin, note or asset can be removed".into());
+                return Err("Only an unsent pin, note or example can be removed".into());
             }
         } else {
             return Err("Nothing to remove".into());
@@ -804,7 +804,7 @@ impl State {
         let to = who(&sb, thread.as_deref());
         for a in &assets {
             if self.handed.get(&a.id).is_none_or(|h| h.bytes.is_empty()) {
-                return Err(format!("Not sent: asset {} is still loading. Try again in a moment.", a.n));
+                return Err(format!("Not sent: example {} is still loading. Try again in a moment.", a.n));
             }
         }
         let has_tool = model::session_has_tool(&c, &info);
@@ -826,7 +826,7 @@ impl State {
             let h = self.handed.get(&a.id).cloned().unwrap_or_default();
             let src = h.local.clone().unwrap_or_else(|| format!("{} (added earlier; kept by sbxw)", crate::feat::monitor::attach::written_out(&a.name)));
             let verdict = if h.look.is_empty() { String::new() } else { " · look before you send".into() };
-            conf = conf.line(format!("Asset {}: {src} · {}{verdict}", a.n, crate::feat::files::view::size_label(a.bytes)));
+            conf = conf.line(format!("Example {}: {src} · {}{verdict}", a.n, crate::feat::files::view::size_label(a.bytes)));
             look.extend(h.look.iter().map(|w| crate::feat::monitor::attach::written_out(w)));
         }
         if !assets.is_empty() {

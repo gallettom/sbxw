@@ -610,6 +610,8 @@ impl Canvas {
     /// * Columns: the count whose block is closest to [`GRID_ASPECT`]
     ///   ([`grid_cols`]): 12 desktop shots make 4 x 3, 9 make 3 x 3, 4 make
     ///   2 x 2, 24 make 5 x 5.
+    /// * Rows are as tall as their tallest shot; a row with nothing in this
+    ///   round takes no room (its order is kept).
     /// * A shot whose `screen` key was in an earlier grid takes the SAME
     ///   cell (row, column, slot) as its latest earlier shot, and the round
     ///   takes that round's columns and cell width, so before and after line
@@ -699,14 +701,17 @@ impl Canvas {
             taken.push(([cell[0], cell[1]], cell[2]));
             place.push((i, cell));
         }
-        // Rows as tall as their tallest shot.
+        // Rows as tall as their tallest shot; a row this round leaves empty
+        // (screens that did not come back) takes no room.
         let rows = place.iter().map(|(_, c)| c[0] + 1).max().unwrap_or(0);
         let mut row_y = Vec::with_capacity(rows as usize);
         let mut y = top;
         for r in 0..rows {
             row_y.push(y);
             let rh = place.iter().filter(|(_, c)| c[0] == r).map(|(i, _)| self.shots[*i].h).fold(0.0, f32::max);
-            y += if rh > 0.0 { rh } else { cell_h } + GRID_ROW_GAP;
+            if place.iter().any(|(_, c)| c[0] == r) {
+                y += rh + GRID_ROW_GAP;
+            }
         }
         let mut moves = vec![];
         for (i, c) in place {
@@ -909,7 +914,7 @@ impl Canvas {
         }
         for a in self.assets.iter().filter(|a| a.sent.is_none()) {
             if !paths.iter().any(|(id, _)| id == &a.id) {
-                return Err(format!("asset {} was not copied into the sandbox", a.n));
+                return Err(format!("example {} was not copied into the sandbox", a.n));
             }
         }
         let n = self.reviews.last().map_or(1, |r| r.n + 1);
@@ -942,14 +947,14 @@ impl Canvas {
     pub fn review_text(&self, n: u32) -> String {
         let mut out = String::new();
         let Some(r) = self.reviews.iter().find(|r| r.n == n) else { return out };
-        out.push_str(&format!("Review round {n} of canvas \"{}\" ({}): {} pin(s), {} note(s), {} asset(s).\n", self.title, self.id, r.pins, r.notes, r.assets));
+        out.push_str(&format!("Review round {n} of canvas \"{}\" ({}): {} pin(s), {} note(s), {} example picture(s).\n", self.title, self.id, r.pins, r.notes, r.assets));
         let mut pins: Vec<&Pin> = self.pins.iter().filter(|p| p.sent == Some(n)).collect();
         pins.sort_by_key(|p| p.n);
         for p in pins {
             let on = match self.shots.iter().find(|s| s.id == p.on) {
                 Some(s) => format!("shot \"{}\" (round {}{})", s.title, s.round, s.width.map(|w| format!(", {w} wide")).unwrap_or_default()),
                 None => match self.assets.iter().find(|a| a.id == p.on) {
-                    Some(a) => format!("asset {}", a.n),
+                    Some(a) => format!("example {}", a.n),
                     None => "a removed item".into(),
                 },
             };
@@ -963,7 +968,7 @@ impl Canvas {
         }
         for a in self.assets.iter().filter(|a| a.sent == Some(n)) {
             let near = self.nearest_shot(a.x + a.w / 2.0, a.y + a.h / 2.0).map(|s| format!(", placed next to shot \"{}\"", s.title)).unwrap_or_default();
-            out.push_str(&format!("\nAsset {}: an example picture the person added ({}x{} px{near}), copied to {}\n", a.n, a.px_w, a.px_h, a.sandbox_path.as_deref().unwrap_or("(not copied)")));
+            out.push_str(&format!("\nExample {}: a picture the person added as an example ({}x{} px{near}), copied to {}\n", a.n, a.px_w, a.px_h, a.sandbox_path.as_deref().unwrap_or("(not copied)")));
         }
         out
     }
@@ -1203,6 +1208,9 @@ mod tests {
         round_of(&mut c, "b3", &[(1284, 816, "new"), (1284, 816, "z")]);
         let r3 = cells(&c, 3);
         assert_eq!(r3, vec![[3, 0, WHOLE], [0, 0, WHOLE]]);
+        // Rows 1 and 2 hold nothing in round 3: they take no room.
+        let r3: Vec<&Shot> = c.shots.iter().filter(|s| s.round == 3).collect();
+        assert_eq!(r3[0].y - r3[1].y, 816.0 + GRID_ROW_GAP);
     }
 
     #[test]
@@ -1322,7 +1330,7 @@ mod tests {
         let e = Edit { pins: Some(vec![Pin { n: 1, on: shot.clone(), fx: 0.1, fy: 0.05, text: "Logo too big".into(), sent: None }]), notes: Some(vec![Note { n: 1, x: 10.0, y: 950.0, w: 240.0, h: 140.0, text: "Calmer colours".into(), ..Default::default() }]), ..Default::default() };
         c.apply(e, 3).unwrap();
         assert_eq!(c.draft(), 3);
-        assert!(c.submit("web · main", &[], 4).unwrap_err().contains("asset 1"), "an asset must have been copied");
+        assert!(c.submit("web · main", &[], 4).unwrap_err().contains("example 1"), "an example must have been copied");
         let r = c.submit("web · main", &[(a.clone(), "/tmp/sbxw-uploads/x/example.png".into())], 4).unwrap().clone();
         assert_eq!((r.n, r.pins, r.notes, r.assets), (1, 1, 1, 1));
         assert_eq!(c.draft(), 0);

@@ -209,7 +209,7 @@ pub fn scene(c: &Manifest, pins: &[PinD], notes: &[NoteD], layout: &BTreeMap<Str
     for a in &c.assets {
         let r = item_rect(c, &a.id, layout).unwrap_or([a.x, a.y, a.w, a.h]);
         let sent = a.sent.map(|n| format!(" · sent in review {n}")).unwrap_or_default();
-        items.push(Item { id: a.id.clone(), x: r[0], y: r[1], w: r[2], h: r[3], body: Body::Picture { image: a.file.clone(), caption: vec![format!("Asset {}", a.n), format!("{}{sent}", clipped(&a.name))], asset: true }, movable: true });
+        items.push(Item { id: a.id.clone(), x: r[0], y: r[1], w: r[2], h: r[3], body: Body::Picture { image: a.file.clone(), caption: vec![format!("Example {}", a.n), format!("{}{sent}", clipped(&a.name))], asset: true }, movable: true });
     }
     for n in c.notes.iter().filter(|n| n.sent.is_some()) {
         let r = layout.get(&n.id).copied().unwrap_or([n.x, n.y, n.w, n.h]);
@@ -236,7 +236,7 @@ pub fn session_has_tool(c: &Manifest, info: &J) -> bool {
 fn on_label(c: &Manifest, on: &str) -> String {
     match c.shots.iter().find(|s| s.id == on) {
         Some(s) => format!("shot \"{}\"", plain(&s.title)),
-        None => c.assets.iter().find(|a| a.id == on).map(|a| format!("asset {}", a.n)).unwrap_or_else(|| "a removed item".into()),
+        None => c.assets.iter().find(|a| a.id == on).map(|a| format!("example {}", a.n)).unwrap_or_else(|| "a removed item".into()),
     }
 }
 
@@ -250,7 +250,7 @@ pub fn remarks_text(c: &Manifest, pins: &[PinD], notes: &[NoteD], assets: &[&Ass
         out.push(format!("Note {}:\n{}", n.n, if n.text.trim().is_empty() { "(no text)" } else { n.text.trim() }));
     }
     for a in assets {
-        out.push(format!("Asset {}: {} ({}x{} px)", a.n, crate::feat::monitor::attach::written_out(&a.name), a.px_w, a.px_h));
+        out.push(format!("Example {}: {} ({}x{} px)", a.n, crate::feat::monitor::attach::written_out(&a.name), a.px_w, a.px_h));
     }
     out.join("\n\n")
 }
@@ -371,7 +371,7 @@ pub fn view(s: &State, snap: &J) -> J {
     }
     for a in c.assets.iter().filter(|a| a.sent.is_none() && !s.remove.contains(&a.id)) {
         let look = s.handed.get(&a.id).map(|h| !h.look.is_empty()).unwrap_or(false);
-        draft.push(json!({ "key": a.id, "kind": "asset", "n": a.n, "label": format!("Asset {} · {} · {}", a.n, clipped(&a.name), size_label(a.bytes)), "look": look, "selected": sel == Some(a.id.as_str()) }));
+        draft.push(json!({ "key": a.id, "kind": "asset", "n": a.n, "label": format!("Example {} · {} · {}", a.n, clipped(&a.name), size_label(a.bytes)), "look": look, "selected": sel == Some(a.id.as_str()) }));
     }
     let new = draft.len();
     v["draft"] = J::Array(draft);
@@ -386,7 +386,7 @@ pub fn view(s: &State, snap: &J) -> J {
             items.push(json!({ "key": n.id, "label": format!("Note {}", n.n), "text": clipped_text(&n.text, 2000) }));
         }
         for a in c.assets.iter().filter(|a| a.sent == Some(r.n)) {
-            items.push(json!({ "key": a.id, "label": format!("Asset {} · {}", a.n, clipped(&a.name)), "text": a.sandbox_path.clone().unwrap_or_default() }));
+            items.push(json!({ "key": a.id, "label": format!("Example {} · {}", a.n, clipped(&a.name)), "text": a.sandbox_path.clone().unwrap_or_default() }));
         }
         let read = if r.read_ms.is_some() { "read by the agent" } else { "not read yet" };
         history.push(json!({ "n": r.n, "line": format!("Review {} · {} · to {} · {}", r.n, when(r.at_ms), plain(&r.session), read), "items": items }));
@@ -501,7 +501,7 @@ fn send_view(s: &State, snap: &J, new: usize) -> J {
     json!({
         "label": format!("Send remarks to {to}"), "to": to, "new": new,
         "ok": new > 0 && why.is_none() && !busy, "ask_ok": why.is_none(),
-        "why": if busy { Some("Sending…".to_string()) } else if new == 0 { Some("No new pin, note or picture since the last round".to_string()) } else { why.clone() },
+        "why": if busy { Some("Sending…".to_string()) } else if new == 0 { Some("No new pin, note or example since the last round".to_string()) } else { why.clone() },
         // The Ask button's own reason: independent of what is new.
         "ask_why": why,
         "sessions": v.places.iter().map(|(k, l, _)| json!({ "id": k, "label": l })).collect::<Vec<_>>(), "session": v.key,

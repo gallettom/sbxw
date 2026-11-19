@@ -260,7 +260,7 @@ fn a_send_is_one_dialog_then_the_uploads_then_the_round_then_one_fixed_line() {
     let c = w.confirm(&a);
     assert_eq!(c.title, "Send 4 remarks to web-app · main?");
     let all = format!("{}\n{}", c.lines.join("\n"), c.preview.as_ref().unwrap().text);
-    for t in ["Better. Make the button full width on narrow screens.", "Use the example below for the empty cart.", "Round 2 looks closer.", "Asset 1", "empty-cart-example.png"] {
+    for t in ["Better. Make the button full width on narrow screens.", "Use the example below for the empty cart.", "Round 2 looks closer.", "Example 1", "empty-cart-example.png"] {
         assert!(all.contains(t), "the dialog shows {t}: {all}");
     }
     // Nothing went yet.
