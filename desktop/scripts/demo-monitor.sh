@@ -27,6 +27,9 @@
 #            the core's one dialog (words, each file, the total, its box);
 #   attach-sent  its box ticked and Send pressed: the stand-in takes the
 #            uploads, then the push of the words and the daemon's paths;
+#   hidden-terms  the sidebar hidden (its header's button) over the terminals;
+#   hidden   the sidebar hidden with the Monitor as the base (the rail's
+#            "Show sandboxes" at the top, its amber badge);
 #   fold     fixtures/monitor/folding.json: one row per place (studio's main
 #            checkout reported by three sessions shows once, its last prompt
 #            another session's message shown as such; lab's two live terminals).
@@ -51,7 +54,11 @@ def add(**e):
 def step(key, until):
     add(type="tap", key=key); add(type="mark", name="wait:" + until)
 add(type="mark", name="wait:rail-monitor")
-if m == "switch":
+if m in ("hidden", "hidden-terms"):
+    step("sidebar-hide", "rail-sidebar")
+if m == "hidden-terms":
+    pass
+elif m == "switch":
     add(type="mark", name="wait:pager-view-monitor")
 elif m == "fold":
     step("rail-monitor", "monitor-row-studio:s-studio-1")
@@ -63,7 +70,7 @@ elif m == "idle":
     step("rail-monitor", "monitor-calm")
 elif m == "busy":
     step("rail-monitor", "monitor-more")
-else:
+elif m != "hidden-terms":
     step("rail-monitor", "monitor-row-shop-web::checkout-copy")
 if m == "choice":
     # N: the next session that needs you; then its row (a narrow view opens it).
@@ -110,7 +117,7 @@ PY
 }
 theme="${THEME:-dark}"
 for size in ${SIZES:-1284x816 720x480}; do
-  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back attach attach-dialog attach-sent fold}; do
+  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back attach attach-dialog attach-sent fold hidden hidden-terms}; do
     case "$m" in empty|idle|busy) fx="$m" ;; fold) fx=folding ;; *) fx=basic ;; esac
     out="$shots/monitor-$size-$theme-$m"
     SIZE="$size" script "$m" >"$out-script.json"
