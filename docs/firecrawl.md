@@ -111,8 +111,21 @@ shows what was filled.
   (`10/8`, `172.16/12`, `192.168/16`) and local names (`host.docker.internal`)
   are refused, so a page's hidden instructions cannot steer the agent at the
   daemon's listeners or your machine's services. Link-local and cloud
-  metadata addresses are always refused. The shell's `firecrawl-local map` has
-  no `--public-only` upstream; the guidance does not offer it.
+  metadata addresses are always refused. `firecrawl_map` and `firecrawl_crawl`
+  on such an address return no page rather than an error. The shell's
+  `firecrawl-local map` has no `--public-only` upstream; the guidance does not
+  offer it.
+- **The proxy by address.** sbx's proxy is `gateway.docker.internal`, which
+  resolves to a private address, and `--public-only` checks every name it
+  resolves, the proxy's included, so by name every page would be refused. The
+  front script hands Firecrawl the proxy's address instead (for Firecrawl's
+  process only). Firecrawl then no longer resolves the pages' hosts itself: a
+  public name that points at a private address goes to the proxy, which
+  applies the sandbox's policy to it (checked: it asked for an approval).
+- **A refusal is quick and visible**: the proxy's 403 comes back as the page,
+  with `statusCode` 403, `blocked: true` and the proxy's text ("Approval
+  required for <host>", "Blocked by ..."); no hang, no fallback while the
+  cloud is off.
 - **No listener.** The kit never starts `firecrawl-local serve`. The MCP
   server starts Firecrawl's API on a loopback port of its own, inside the
   sandbox, for its own use; nothing is published.
@@ -140,7 +153,10 @@ SBXW_FIRECRAWL_CLOUD = "auto"     # or "search" for search only
 Alexandria to Firecrawl Cloud; cloud calls carry a random install id and the
 calling tool's name, and some need a Firecrawl account (an API key you would
 store with `sbx secret set`, never in `sbxw.toml`). Any other value, or none,
-is off. A `FIRECRAWL_CLOUD` variable set elsewhere is not used: the front
+is off. **With the cloud on, a page the sandbox's policy refused can be
+fetched by Firecrawl Cloud instead** (its blocked-page fallback), outside your
+network policy, as long as Firecrawl's own API host is allowed. A
+`FIRECRAWL_CLOUD` variable set elsewhere is not used: the front
 script reads only `SBXW_FIRECRAWL_CLOUD`. Reopen the agent pane after a
 change (`[env]` is passed again at every attach).
 
