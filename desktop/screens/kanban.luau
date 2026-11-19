@@ -38,16 +38,16 @@ end
 
 local function card(c, wide)
   return column{ key = c.id, on = "open", arg = c.id, selected = c.selected,
-    gap = 4, px = 10, py = 8, radius = "md", w = "full",
+    gap = 4, px = 12, py = 8, radius = "md", w = "full",
     fill = c.selected and "active-bg" or "surface", border = c.border or "elevated", hover = "hover-subtle",
     help = c.help,
-    row{ gap = 6, w = "full",
+    row{ gap = 8, w = "full",
       c.team_color and column{ w = 8, h = 8, radius = 2, fill = c.team_color, help = c.team_help } or false,
       text{ c.num or "", size = "xs", mono = true, color = c.thread_card and "text-dim" or "text-muted", help = c.thread_card and "A thread with no ticket: its plan's goal" or nil },
       spacer{},
       marks(c) },
     text{ wide and (c.title_long or "") or (c.title or ""), size = "sm", wrap = true, color = "text-bright" },
-    row{ gap = 6, w = "full",
+    row{ gap = 8, w = "full",
       c.thread and dot{ tone = c.thread_tone or "neutral" } or false,
       c.thread and text{ c.thread, size = "xs", mono = true, color = c.thread_color or "text-muted", truncate = true, grow = 1 } or spacer{},
       text{ c.age or "", size = "xs", color = "text-dim" } },
@@ -55,7 +55,7 @@ local function card(c, wide)
 end
 
 local function head(col, ui)
-  return row{ gap = 6, w = "full", px = 4, h = 28, key = col.el_head,
+  return row{ gap = 8, w = "full", px = 4, h = 28, key = col.el_head,
     dot{ tone = col.tone or "neutral" },
     text{ col.title or "", size = "sm", weight = "semibold", color = "text-bright", truncate = true },
     badge{ tostring(col.count or 0), tone = "neutral", help = col.count_help },
@@ -65,7 +65,7 @@ end
 
 local function lane(col, col_w, ui, narrow)
   local wide = col_w >= 300
-  local kids = { gap = 6, w = "full", group = "list" }
+  local kids = { gap = 8, w = "full", group = "list" }
   for _, c in ipairs(col.cards or {}) do kids[#kids + 1] = card(c, wide) end
   if #(col.cards or {}) == 0 then
     kids[#kids + 1] = column{ px = 8, py = 12, gap = 8, key = "kanban-empty-" .. col.id, note(col.empty or "Nothing here.", "text-dim"),
@@ -80,7 +80,7 @@ local function lane(col, col_w, ui, narrow)
   if col.older then
     kids[#kids + 1] = button{ col.older.label, variant = "ghost", tone = "blue", dense = true, on = "older", key = col.older.el, help = "Merged cards past the recent ones" }
   end
-  return column{ gap = 6, h = "full", grow = narrow and 1 or nil, w = (not narrow) and col_w or "full", pad = 6, radius = "md", fill = "floor", key = col.el_lane,
+  return column{ gap = 8, h = "full", grow = narrow and 1 or nil, w = (not narrow) and col_w or "full", pad = 8, radius = "md", fill = "floor", key = col.el_lane,
     head(col, ui),
     scroll{ key = col.el_scroll, fade = 12, column(kids) } }
 end
@@ -107,7 +107,7 @@ local function panel(t, ow)
   if nz(t.description) then kids[#kids + 1] = text{ t.description, wrap = true, pills = t.sandbox or true, key = "kanban-panel-description" } end
   if #(t.files or {}) > 0 then
     local pics = { gap = 8, wrap = true }
-    local chips = { gap = 6, wrap = true, w = "full" }
+    local chips = { gap = 8, wrap = true, w = "full" }
     for _, f in ipairs(t.files) do
       if f.img then pics[#pics + 1] = image{ key = f.img, max_w = 180, max_h = 120 } end
       chips[#chips + 1] = row{ gap = 4, px = 8, h = 24, radius = "pill", fill = "surface-alt", border = "elevated", key = f.el, on = "file", arg = f.id, help = f.help,
@@ -116,7 +116,7 @@ local function panel(t, ow)
         text{ f.size or "", size = "xs", color = "text-dim" },
         t.editable and button{ icon = "close", variant = "ghost", compact = true, on = "remove_file", arg = f.id, key = f.el_remove, help = "Remove this file", tab_stop = false } or false }
     end
-    kids[#kids + 1] = column{ gap = 6, w = "full", text{ t.files_label or "Files", size = "xs", color = "text-muted" }, #pics > 0 and row(pics) or false, row(chips) }
+    kids[#kids + 1] = column{ gap = 8, w = "full", text{ t.files_label or "Files", size = "xs", color = "text-muted" }, #pics > 0 and row(pics) or false, row(chips) }
   end
   if t.priorities or t.movable or t.validate then
     local r = { gap = 8, w = "full", wrap = true }

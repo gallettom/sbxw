@@ -29,7 +29,7 @@ return {
     kids[#kids + 1] = row{ gap = 8, w = "full",
       text{ "Priority", size = "sm", color = "text-muted" },
       select{ id = "kanban-form-priority", value = f.priority or "none", items = PRIOS, on = "priority" } }
-    local files = { gap = 6, w = "full", key = "kanban-form-files",
+    local files = { gap = 8, w = "full", key = "kanban-form-files",
       row{ gap = 8, w = "full",
         text{ "Files", size = "sm", color = "text-muted" },
         nz(f.files_label) and text{ f.files_label, size = "xs", color = "text-dim" } or false,
