@@ -252,6 +252,12 @@ fn with<R>(id: &str, f: impl FnOnce(&mut Entry) -> R) -> R {
     f(e)
 }
 
+/// Bytes of the surfaces' last frames, and how many surfaces (MEMORY.md).
+pub fn mem() -> (u64, usize) {
+    let g = SURFACES.lock().unwrap();
+    g.as_ref().map_or((0, 0), |m| (m.values().map(|e| e.pic.0 as u64 * e.pic.1 as u64 * 4).sum(), m.len()))
+}
+
 /// Shows a decoded frame (`w * h * 4` bytes of RGBA, rows top first). Any thread.
 pub fn set_rgba(id: &str, w: u32, h: u32, rgba: Vec<u8>) -> Result<(), String> {
     let l = frame_limits();

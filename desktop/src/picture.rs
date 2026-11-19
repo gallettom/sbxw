@@ -202,6 +202,14 @@ pub fn forget(key: &str) {
     ORDER.with(|o| o.borrow_mut().retain(|k| k != key));
 }
 
+/// Bytes of the registered pictures' pixels, and how many (MEMORY.md).
+pub fn mem() -> (u64, usize) {
+    SHOWN.with(|m| {
+        let m = m.borrow();
+        (m.values().map(|(_, (w, h))| *w as u64 * *h as u64 * 4).sum(), m.len())
+    })
+}
+
 /// The picture registered under `key`, and its size.
 pub fn shown(key: &str) -> Option<(rune::Pixels, (u32, u32))> {
     SHOWN.with(|m| m.borrow().get(key).cloned())

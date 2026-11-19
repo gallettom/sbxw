@@ -116,8 +116,27 @@ pub const MIN_SCALE: f32 = 0.5;
 /// Font sizes of a scaled grid go by this step (points), so few sizes are
 /// measured and shaped.
 const SCALE_STEP: f32 = 0.25;
-/// Lines of history, as the web UI's panes (`scrollback: 10000`).
+/// Lines of history by default, as the web UI's panes (`scrollback: 10000`).
+/// The person's own number, when set: `terminal_scrollback` in the state
+/// file ([`set_scrollback`]). What they cost: MEMORY.md (a line is its
+/// columns x 24 bytes + 32: 10,000 lines at 200 columns, about 48 MB).
 pub const SCROLLBACK: usize = 10_000;
+/// The bounds of `terminal_scrollback`.
+pub const SCROLLBACK_RANGE: std::ops::RangeInclusive<usize> = 100..=100_000;
+static SCROLLBACK_LINES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(SCROLLBACK);
+
+/// Lines of history for terminals opened from now on (kept within
+/// [`SCROLLBACK_RANGE`]). At the limit the oldest line goes as a new one
+/// comes, as always.
+pub fn set_scrollback(lines: usize) {
+    let n = lines.clamp(*SCROLLBACK_RANGE.start(), *SCROLLBACK_RANGE.end());
+    SCROLLBACK_LINES.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Lines of history a terminal opened now keeps.
+pub fn scrollback() -> usize {
+    SCROLLBACK_LINES.load(std::sync::atomic::Ordering::Relaxed)
+}
 /// How long a size must hold before the daemon is told (a window drag sends
 /// one resize, not one a frame).
 pub const RESIZE_DEBOUNCE: f64 = 0.08;
@@ -128,6 +147,9 @@ const NUDGE_AFTER: f64 = 0.15;
 const NUDGE_GIVE_UP: f64 = 5.0;
 /// Half a blink period, in seconds.
 pub const BLINK: f64 = 0.53;
+/// How long a narrower grid must hold before its rows are compacted (a
+/// window drag narrows it many times: one pass once it settles).
+pub const COMPACT_AFTER: Duration = Duration::from_secs(1);
 
 /// The web UI's default text and background (see [`Theme`]).
 pub const FG: u32 = theme::WEB_FOREGROUND;
@@ -164,6 +186,23 @@ pub fn cell_width_at(font: f32) -> f32 {
     }
     thread_local!(static W: std::cell::RefCell<std::collections::HashMap<u32, f32>> = Default::default());
     W.with(|w| *w.borrow_mut().entry(font.to_bits()).or_insert_with(|| rune::text::advance(&"m".repeat(100), style_at(font)) / 100.0))
+}
+
+/// A terminal's memory ([`TerminalState::mem`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TermMem {
+    /// Lines kept: history and screen.
+    pub lines: usize,
+    pub cols: usize,
+    /// alacritty's grids (history, screen, the other screen).
+    pub grid_bytes: u64,
+    /// The rows drawn now (Rune's rows, an estimate: Rune's shaped cells are
+    /// its own) and their pills.
+    pub drawn_bytes: u64,
+    /// The heap's growth while parsing and resizing (counting on; else 0).
+    pub measured: u64,
+    /// Output bytes parsed.
+    pub bytes_in: u64,
 }
 
 /// How the grid is drawn: font size, cell width and line height (points),
@@ -312,6 +351,14 @@ pub struct TerminalState {
     pub build_time: Duration,
     /// Output bytes parsed over the run.
     pub bytes_in: usize,
+    /// The heap's growth while parsing output and resizing (counting on,
+    /// `SBXW_DESKTOP_MEM=1`): what alacritty's grids really hold, measured.
+    pub grid_heap: i64,
+    /// A narrower grid since: its rows still hold the wider width's cells
+    /// (alacritty's `Row::shrink` keeps the capacity, and the history ring
+    /// reuses rows), so once the size has held [`COMPACT_AFTER`] they are
+    /// copied at their width ([`Self::compact_rows`]).
+    compact_at: Option<Instant>,
     wheel_acc: f32,
     gesture: Option<Gesture>,
     last_report_cell: Option<(usize, usize)>,
@@ -370,6 +417,14 @@ pub struct TerminalState {
     test_pills: Vec<Vec<(u16, u16, bool, bool)>>,
 }
 
+/// A closed terminal's grids are large (MEMORY.md): once they are freed,
+/// the allocator hands the memory back to the system.
+impl Drop for TerminalState {
+    fn drop(&mut self) {
+        crate::mem::trim_soon();
+    }
+}
+
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// `SBXW_DESKTOP_DEBUG_KEYS=1`: one line on stderr per key reaching a
@@ -415,7 +470,7 @@ fn new_term(size: (usize, usize), input: &Input, events: &mpsc::Sender<TermEv>) 
     // cannot change under us). The read form (`52;c;?`) would hand the
     // person's clipboard to whatever runs in the sandbox; alacritty drops it
     // before it becomes an event (term/mod.rs, `clipboard_load`).
-    let config = Config { scrolling_history: SCROLLBACK, osc52: Osc52::OnlyCopy, ..Config::default() };
+    let config = Config { scrolling_history: scrollback(), osc52: Osc52::OnlyCopy, ..Config::default() };
     Term::new(config, &Size { cols: size.0, rows: size.1 }, Listener { input: input.clone(), events: events.clone() })
 }
 
@@ -450,6 +505,8 @@ impl TerminalState {
             rebuilds: 0,
             build_time: Duration::ZERO,
             bytes_in: 0,
+            grid_heap: 0,
+            compact_at: None,
             wheel_acc: 0.0,
             gesture: None,
             last_report_cell: None,
@@ -606,6 +663,10 @@ impl TerminalState {
             self.blink_on = true;
             self.dirty = true;
         }
+        // Rows to compact once the narrower size has held (see `compact_at`).
+        if let Some(at) = self.compact_at {
+            tx.wake_after(at.saturating_duration_since(Instant::now()) + Duration::from_millis(1));
+        }
         if self.dirty {
             self.rebuild();
             return true;
@@ -659,6 +720,9 @@ impl TerminalState {
             }
         }
         changed |= self.drain_term_events();
+        if self.compact_at.is_some_and(|at| Instant::now() >= at) {
+            self.compact_rows();
+        }
         changed |= self.step_reconnect(tx);
         if changed || self.dirty {
             self.rebuild();
@@ -672,6 +736,10 @@ impl TerminalState {
             TermEvent::Output(bytes) => {
                 if let Some(t) = self.key_sent.take() {
                     let ms = t.elapsed().as_secs_f64() * 1000.0;
+                    // The last 1,000 (it grew with every key typed, for good).
+                    if self.echo_ms.len() >= 1_000 {
+                        self.echo_ms.drain(..500);
+                    }
                     self.echo_ms.push(ms);
                     log::debug!("key to echo: {ms:.1} ms");
                 }
@@ -680,7 +748,11 @@ impl TerminalState {
                 }
                 self.bytes_in += bytes.len();
                 self.blink_epoch = self.clock;
+                let before = crate::mem::live();
                 self.parser.advance(&mut self.term, &bytes);
+                if let (Some(a), Some(b)) = (before, crate::mem::live()) {
+                    self.grid_heap += b as i64 - a as i64;
+                }
             }
             TermEvent::Notice(t) => self.parser.advance(&mut self.term, t.as_bytes()),
             TermEvent::Attention => {
@@ -835,6 +907,9 @@ impl TerminalState {
         self.term = new_term(self.size, &self.input, &tev_tx);
         self.term_events = tev_rx;
         self.parser = Processor::new();
+        self.grid_heap = 0;
+        self.compact_at = None;
+        crate::mem::trim_soon();
         self.gesture = None;
         self.hover_link = None;
         self.backoff = Duration::from_millis(500);
@@ -1050,8 +1125,15 @@ impl TerminalState {
         if (cols, rows) == self.size {
             return;
         }
+        if cols < self.size.0 {
+            self.compact_at = Some(Instant::now() + COMPACT_AFTER);
+        }
         self.size = (cols, rows);
+        let before = crate::mem::live();
         self.term.resize(Size { cols, rows });
+        if let (Some(a), Some(b)) = (before, crate::mem::live()) {
+            self.grid_heap += b as i64 - a as i64;
+        }
         self.hover_link = None;
         self.metrics = self.scaled_metrics();
         self.force_all = true;
@@ -1224,6 +1306,50 @@ impl TerminalState {
     /// How many lines the view is scrolled up into the history.
     pub fn display_offset(&self) -> usize {
         self.term.grid().display_offset()
+    }
+
+    /// Copies every row (history and screen) at the grid's width: a row
+    /// that was wider keeps its old cells' room otherwise (MEMORY.md, "Rows
+    /// keep their widest width"). Nothing drawn changes: the same cells, in
+    /// the same rows. Then hands the freed memory back ([`crate::mem::trim_soon`]).
+    pub fn compact_rows(&mut self) {
+        use alacritty_terminal::grid::Row;
+        self.compact_at = None;
+        let t = crate::perf::start();
+        let before = crate::mem::live();
+        let grid = self.term.grid_mut();
+        let (history, screen) = (grid.history_size() as i32, grid.screen_lines() as i32);
+        for l in -history..screen {
+            let row = &mut grid[Line(l)];
+            // `occ` (how many cells may differ from the default) is the
+            // crate's own: all of them is always right, a reset just clears
+            // the whole row once.
+            let cells = row[..].to_vec();
+            let n = cells.len();
+            *row = Row::from_vec(cells, n);
+        }
+        if let (Some(a), Some(b)) = (before, crate::mem::live()) {
+            self.grid_heap += b as i64 - a as i64;
+        }
+        crate::perf::done(t, || format!("terminal rows compacted ({} lines)", history + screen));
+        crate::mem::trim_soon();
+    }
+
+    /// What this terminal holds (MEMORY.md): lines kept (history and
+    /// screen), their width, and the bytes of alacritty's grids counted from
+    /// those (a cell is `size_of::<Cell>()`, a row adds its `Vec` and its
+    /// occupancy); plus the rows drawn and their pills.
+    pub fn mem(&self) -> TermMem {
+        use alacritty_terminal::term::cell::Cell;
+        let g = self.term.grid();
+        let (lines, cols) = (g.total_lines(), g.columns());
+        let row = cols * std::mem::size_of::<Cell>() + std::mem::size_of::<Vec<Cell>>() + std::mem::size_of::<usize>();
+        // The other grid (the alternate screen when the primary shows, and
+        // back): the screen's size, no history.
+        let screens = g.screen_lines() * row;
+        let drawn = self.rows.len() * (std::mem::size_of::<rune::GridRow>() + cols * 48)
+            + self.row_pills.iter().chain(&self.line_pills).map(|p| p.capacity() * std::mem::size_of::<pills::Piece>()).sum::<usize>();
+        TermMem { lines, cols, grid_bytes: (lines * row + screens) as u64, drawn_bytes: drawn as u64, measured: self.grid_heap.max(0) as u64, bytes_in: self.bytes_in as u64 }
     }
 
     /// Lines of history kept above the screen.

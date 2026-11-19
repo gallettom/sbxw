@@ -12,6 +12,7 @@ mod drag;
 mod features;
 mod jarvis;
 mod leads;
+mod memory;
 mod pager;
 pub mod pages;
 mod palette;
@@ -163,6 +164,8 @@ enum Mark {
     Wait { key: String, ms: u64, gone: bool },
     /// `perf:<label>`: a line in the log, to read SBXW_DESKTOP_PERF's lines by step.
     Perf(String),
+    /// `mem:<label>`: the memory report in the log (shell/memory.rs).
+    Mem(String),
 }
 
 /// Parses `wait:<key>[:<ms>]` and `wait-gone:<key>[:<ms>]`.
@@ -428,6 +431,10 @@ impl App {
         app.theme_choice = forced.or_else(|| app.store.get("theme").as_str().and_then(theme::Mode::parse)).unwrap_or(theme::DEFAULT_MODE);
         theme::set_mode(app.theme_choice);
         app.theme_seen = theme::generation();
+        // Lines of history per terminal: the person's number, else the default.
+        if let Some(n) = app.store.get("terminal_scrollback").as_u64() {
+            terminal::set_scrollback(n as usize);
+        }
         if init.jarvis_open {
             app.jarvis.open = true;
         }
@@ -517,7 +524,9 @@ impl App {
             app.drain(Some(Duration::from_millis(1500)), true);
         }
         let data = app.screen_data();
-        app.screens = names.iter().map(|n| ScreenState::new(n, &dir, data.clone())).collect();
+        // The shell's own screens load now; a feature's when first drawn
+        // (a screen never opened costs no Luau VM: MEMORY.md).
+        app.screens = names.iter().map(|n| if SCREENS.contains(&n.as_str()) || app.solo.is_some() { ScreenState::new(n, &dir, data.clone()) } else { ScreenState::lazy(n, &dir, data.clone()) }).collect();
         app.marks = rune::tooling::headless_run()
             .map(|r| {
                 r.marks()
@@ -530,6 +539,9 @@ impl App {
                         }
                         if let Some(l) = n.strip_prefix("perf:") {
                             return Some((t, Mark::Perf(l.to_string())));
+                        }
+                        if let Some(l) = n.strip_prefix("mem:") {
+                            return Some((t, Mark::Mem(l.to_string())));
                         }
                         let (name, path) = n.strip_prefix("screen:")?.split_once('=')?;
                         Some((t, Mark::Screen(name.into(), path.into())))
@@ -565,9 +577,12 @@ impl App {
             for ev in app.raw["provision"].as_array().cloned().unwrap_or_default() {
                 app.feats_bus("provision", &ev.to_string());
             }
-            let data = app.screen_data();
+            // One copy for every screen; those not drawn render when shown.
+            let shown = app.shown_screens();
+            let data = std::rc::Rc::new(app.screen_data());
             for s in &mut app.screens {
-                s.set_data(data.clone());
+                let on = shown.contains(&s.name);
+                s.set_data_shown(data.clone(), on);
             }
         }
         app
@@ -974,6 +989,7 @@ impl App {
 
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         let mut changed = false;
+        self.memory_tick();
         if self.theme_seen != theme::generation() {
             self.theme_seen = theme::generation();
             crate::screen::invalidate_renders();
@@ -987,6 +1003,7 @@ impl App {
         while self.marks.first().is_some_and(|(t, _)| *t <= clock) {
             match self.marks.remove(0).1 {
                 Mark::Perf(l) => log::info!("perf: ---- {l}"),
+                Mark::Mem(l) => self.memory_report(&l),
                 Mark::Hold(ms) => {
                     log::info!("hold {ms} ms at {clock:.2}s");
                     let until = Instant::now() + Duration::from_millis(ms);
@@ -1165,6 +1182,14 @@ impl App {
                 let _ = std::fs::write(path, format!("{}x{} offset {} selection {:?}\n{}\n", t.size.0, t.size.1, t.display_offset(), t.selection_text(), t.visible_text().trim_end()));
             }
             changed |= ch;
+        }
+        // Panes the Team leads view parked: their output is parsed as it
+        // comes, as a hidden page's is (it waited in the socket's channel,
+        // unbounded, while the view showed); their events wait for their return.
+        if let Some(l) = &mut self.leads {
+            for t in l.parked.iter_mut().filter_map(|p| p.term.as_mut()) {
+                t.poll(None);
+            }
         }
         for (i, name, text) in copies {
             self.osc_copy(i, &name, text, now, tx);

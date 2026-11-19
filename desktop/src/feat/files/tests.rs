@@ -439,6 +439,21 @@ fn with_selection(name: &str, size: u64) -> State {
     st
 }
 
+/// A picture previewed, then another tab, place or folder: the picture is
+/// forgotten (its decoded pixels stayed registered otherwise: MEMORY.md).
+#[test]
+fn leaving_a_picture_forgets_it() {
+    let d = fixture("standin");
+    for (name, args) in [("files_tab", json!({ "tab": "recent" })), ("files_place", json!({ "id": "artifacts" })), ("files_back", json!({}))] {
+        let mut st = with_selection("wireframe.png", 0);
+        st.history = vec!["/Users/me/web".into()];
+        st.got_preview(7, &png(40, 30));
+        let a = run(&mut st, &d, name, args).unwrap();
+        assert!(a.iter().any(|x| matches!(x, Action::Image { key, bytes } if key == "files-preview-7" && bytes.is_empty())), "{name}: {a:?}");
+        assert!(st.preview.is_null());
+    }
+}
+
 #[test]
 fn pictures_go_through_the_cores_decoder_and_a_bad_one_is_said_not_drawn() {
     // A good one: decoded, scaled, re-encoded, registered under a key.

@@ -364,6 +364,15 @@ fn why(status: u16, body: &J) -> String {
 }
 
 impl State {
+    /// No preview any more; a picture it showed is forgotten (its decoded
+    /// pixels went on taking memory otherwise, up to `picture::MAX_SHOWN` of
+    /// them: MEMORY.md).
+    fn drop_preview(&mut self) -> Option<Action> {
+        let gone = self.preview["key"].as_str().map(|k| Action::Image { key: k.to_string(), bytes: vec![] });
+        self.preview = J::Null;
+        gone
+    }
+
     fn sandbox(&self) -> Result<String, String> {
         self.sandbox.clone().ok_or_else(|| "open the Project panel on a sandbox first".to_string())
     }
@@ -446,7 +455,7 @@ impl State {
                 self.tab = a.req("tab").into();
                 self.more = 0;
                 self.sel = None;
-                self.preview = J::Null;
+                out.extend(self.drop_preview());
                 out.push(Action::Remember { key: "tab".into(), value: self.tab.clone().into() });
             }
             "files_place" => {
@@ -456,7 +465,7 @@ impl State {
                     self.tab = id.into();
                     self.more = 0;
                     self.sel = None;
-                    self.preview = J::Null;
+                    out.extend(self.drop_preview());
                     self.cursor = None;
                 } else {
                     // A location (views2) or a former place: the same ids (paths).
@@ -492,7 +501,7 @@ impl State {
                 let sb = self.sandbox()?;
                 self.path = prev.clone();
                 self.sel = None;
-                self.preview = J::Null;
+                out.extend(self.drop_preview());
                 self.tab = "files".into();
                 self.expanded.clear();
                 self.children.clear();
@@ -704,11 +713,12 @@ impl State {
         self.filter.clear();
         self.more = 0;
         self.sel = None;
-        self.preview = J::Null;
+        let mut out: Vec<Action> = self.drop_preview().into_iter().collect();
         self.expanded.clear();
         self.children.clear();
         self.cursor = None;
-        Ok(vec![self.fetch_dir(&sb)])
+        out.push(self.fetch_dir(&sb));
+        Ok(out)
     }
 
     fn file_sel(&self) -> Result<Sel, String> {
@@ -1596,7 +1606,7 @@ impl State {
                 Ok((c, body)) if (200..300).contains(&c) && body["ok"] != false => {
                     out.push(Action::notice(format!("Deleted {}", body["path"].as_str().or(call.body["path"].as_str()).unwrap_or("it"))));
                     self.sel = None;
-                    self.preview = J::Null;
+                    out.extend(self.drop_preview());
                     if let Some(sb) = self.sandbox.clone() {
                         out.extend(self.fetch_all(&sb));
                     }

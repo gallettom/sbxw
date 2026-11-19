@@ -222,6 +222,19 @@ impl Ui {
     }
 }
 
+/// A screen's memory ([`ScreenState::mem`]).
+pub struct ScreenMem {
+    pub lua: u64,
+    pub data: Rc<J>,
+    /// Heap bytes of its last element tree (counting on; else 0).
+    pub tree: u64,
+    pub nodes: usize,
+}
+
+fn count_nodes(n: &Node) -> usize {
+    1 + n.children.iter().map(count_nodes).sum::<usize>()
+}
+
 pub struct ScreenState {
     pub name: String,
     /// The source that loaded last (its file name, its text) and the theme's
@@ -230,7 +243,11 @@ pub struct ScreenState {
     /// state kept) before it renders.
     loaded: Option<(String, String)>,
     theme_gen: u64,
-    host: LuauHost,
+    /// The screen's Luau VM: made when the screen is first drawn
+    /// ([`Self::lazy`]), or at once ([`Self::new`]).
+    host: Option<LuauHost>,
+    /// A lazy screen's source, loaded when it is first drawn.
+    pending: Option<(Source, Result<String, String>)>,
     pub source: Source,
     override_path: PathBuf,
     /// What the core hands the screen, as JSON (see `docs/screens.md`, "Data").
@@ -278,12 +295,26 @@ fn render_epoch() -> u64 {
 impl ScreenState {
     /// Loads screen `name`: the override file if there is one, else the built-in.
     pub fn new(name: &str, dir: &Path, data: J) -> Self {
+        Self::make(name, dir, data, false)
+    }
+
+    /// [`Self::new`], but a built-in screen's VM is made and its chunk
+    /// loaded only when it is first drawn ([`Self::render_if_stale`]): a
+    /// screen never opened costs no VM (about 0.8 MB each: MEMORY.md). An
+    /// override file present at start loads at once, as before, so a broken
+    /// or stale one is reported at start.
+    pub fn lazy(name: &str, dir: &Path, data: J) -> Self {
+        Self::make(name, dir, data, true)
+    }
+
+    fn make(name: &str, dir: &Path, data: J, lazy: bool) -> Self {
         let override_path = dir.join(format!("{name}.luau"));
         let mut v = Self {
             name: name.to_string(),
             loaded: None,
             theme_gen: theme::generation(),
-            host: LuauHost::new(Limits::default()).expect("Luau VM"),
+            host: None,
+            pending: None,
             source: Source::Builtin,
             override_path,
             data: Rc::new(data),
@@ -303,8 +334,23 @@ impl ScreenState {
         };
         v.seen = std::fs::metadata(&v.override_path).and_then(|m| m.modified()).ok();
         let (src, text) = read_source(name, &v.override_path);
-        v.load(src, text);
+        if lazy && matches!(src, Source::Builtin) && text.is_ok() {
+            v.pending = Some((src, text));
+            v.stale_view = true;
+        } else {
+            v.load(src, text);
+        }
         v
+    }
+
+    /// The VM, made now if it was not yet (a lazy screen's first use).
+    fn host(&mut self) -> &mut LuauHost {
+        self.host.get_or_insert_with(|| LuauHost::new(Limits::default()).expect("Luau VM"))
+    }
+
+    /// Whether the screen's VM exists (a lazy screen not drawn yet: false).
+    pub fn has_vm(&self) -> bool {
+        self.host.is_some()
     }
 
     /// Starts the watcher thread; `wake` asks the UI to call [`Self::poll`].
@@ -364,7 +410,12 @@ impl ScreenState {
             _ => None,
         };
         let text = src.as_ref().ok().cloned();
-        let loaded = src.map_err(|e| format!("{file}: {e}")).and_then(|src| self.host.load(&file, &src));
+        // A newer source replaces one still waiting.
+        self.pending = None;
+        let t = crate::perf::start();
+        let made = self.host.is_none();
+        let loaded = src.map_err(|e| format!("{file}: {e}")).and_then(|src| self.host().load(&file, &src));
+        crate::perf::done(t, || format!("load {}{}", self.name, if made { " (its Luau VM made)" } else { "" }));
         self.loads += 1;
         match loaded {
             Ok(()) => {
@@ -392,6 +443,21 @@ impl ScreenState {
         &self.override_path
     }
 
+    /// What this screen holds (MEMORY.md): its Luau VM's bytes, the data it
+    /// points at (shared with every screen: the caller counts it once), and
+    /// its last element tree.
+    pub fn mem(&self) -> ScreenMem {
+        let tree = self.last_good.as_ref().map_or(0, |n| crate::mem::heap_of(|| n.clone()).unwrap_or(0));
+        ScreenMem { lua: self.host.as_ref().map_or(0, |h| h.used_memory() as u64), data: self.data.clone(), tree, nodes: self.last_good.as_ref().map_or(0, count_nodes) }
+    }
+
+    /// A full collection of this screen's Luau VM (MEMORY.md).
+    pub fn collect(&self) {
+        if let Some(h) = &self.host {
+            h.collect();
+        }
+    }
+
     pub fn set_data(&mut self, data: J) {
         self.set_data_shown(Rc::new(data), true);
     }
@@ -409,7 +475,10 @@ impl ScreenState {
             self.epoch = epoch;
             self.stale_view = true;
         }
-        if !Rc::ptr_eq(&data, &self.data) {
+        if self.pending.is_some() {
+            // Never drawn: it renders from the latest data when first shown.
+            self.data = data;
+        } else if !Rc::ptr_eq(&data, &self.data) {
             // Only what the last render read decides: a change elsewhere in
             // the data (another feature's view, a sandbox's CPU) leaves
             // this screen's view as it is. Not known (no render yet, or it
@@ -448,14 +517,19 @@ impl ScreenState {
     }
 
     fn redraw(&mut self) {
+        // A lazy screen's first draw: loading renders it.
+        if let Some((src, text)) = self.pending.take() {
+            self.load(src, text);
+            return;
+        }
         self.stale_view = false;
         let with_zone;
         // The theme changed since the chunk loaded: load it again first.
         if self.theme_gen != theme::generation() {
             self.theme_gen = theme::generation();
-            self.host.sync_theme();
-            if let Some((file, text)) = &self.loaded {
-                if let Err(e) = self.host.load(file, text) {
+            self.host().sync_theme();
+            if let Some((file, text)) = self.loaded.clone() {
+                if let Err(e) = self.host().load(&file, &text) {
                     log::warn!("screen {}: {e}", self.name);
                 }
             }
@@ -471,7 +545,7 @@ impl ScreenState {
         };
         self.renders += 1;
         let t = crate::perf::start();
-        let out = self.host.render_tracked(data);
+        let out = self.host.get_or_insert_with(|| LuauHost::new(Limits::default()).expect("Luau VM")).render_tracked(data);
         crate::perf::done(t, || format!("render {}", self.name));
         match out {
             Ok((n, reads)) => {
@@ -500,7 +574,10 @@ impl ScreenState {
     /// for intents: their handling hands the screen new data and renders it
     /// once (`fire`), rather than once here and again with the data.
     pub fn act_deferred(&mut self, action: &str, arg: &J, value: &J) -> Option<Vec<Intent>> {
-        let out = self.host.act(action, arg, value).and_then(|v| intent::parse(&v).map_err(|e| format!("intent refused, nothing done: {e}")));
+        if let Some((src, text)) = self.pending.take() {
+            self.load(src, text);
+        }
+        let out = self.host().act(action, arg, value).and_then(|v| intent::parse(&v).map_err(|e| format!("intent refused, nothing done: {e}")));
         match out {
             Ok(i) => {
                 // The action may have changed the screen's own state.

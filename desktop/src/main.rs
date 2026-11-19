@@ -20,6 +20,11 @@ use rune::{AppSpec, Cx, El, KeyEvent, Tx, Waker};
 use sbxw_desktop::shell::{self, App, Args};
 use sbxw_desktop::terminal;
 
+/// The system allocator, counting only under `SBXW_DESKTOP_MEM=1`
+/// (sbxw_desktop::mem: off, one relaxed load of a flag per allocation).
+#[global_allocator]
+static ALLOC: sbxw_desktop::mem::Counting = sbxw_desktop::mem::Counting;
+
 fn init() -> App {
     App::new(Args::parse(rune::extra_args()))
 }
@@ -53,6 +58,7 @@ fn view(s: &App, cx: &mut Cx<App>) -> El {
 }
 
 fn main() {
+    sbxw_desktop::mem::start();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,wgpu=warn,naga=warn")).init();
     let spec = AppSpec::<App> {
         setup: Some(setup),
