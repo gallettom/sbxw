@@ -56,7 +56,7 @@ const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: 
 pub const INTENTS: &[Spec] = &[
     d("monitor_open", &[], "Opens the Monitor over the panes: every session, who needs you first, read again from the daemon's list."),
     d("monitor_select", &[("key", Arg::Str, true)], "Shows that session (a row's `key`) in the middle. View state only."),
-    d("monitor_key", &[("key", Arg::OneOf(KEYS), true), ("text", Arg::Text, false)], "The view's keys: Up and Down move the selection, Enter opens the selected session's terminal, N goes to the next session that needs you."),
+    d("monitor_key", &[("key", Arg::OneOf(KEYS), true), ("text", Arg::Text, false)], "The view's keys while none of its rows has the keyboard: Up and Down move the selection, Enter puts the keyboard on the list, N goes to the next session that needs you (rows: Up and Down move along them, Enter shows one)."),
     d("monitor_next", &[], "Selects the next session that needs you (round)."),
     d("monitor_more", &[], "Shows the next sessions of a long list."),
     d("monitor_terminal", &[("key", Arg::Str, true)], "Opens that session's terminal (the pane that shows it, else a spare one); the view closes."),
@@ -166,7 +166,12 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
                     m.sel = m.first_of(sb);
                 }
             }
-            Ok(vec![view_action(&m, cx), Action::OpenPanel(SCREEN.into())])
+            let mut out = vec![view_action(&m, cx), Action::OpenPanel(SCREEN.into())];
+            // The keyboard to the list, on the session shown: Up, Down and Enter from there.
+            if let Some(k) = m.selected() {
+                out.push(Action::Focus(format!("monitor-row-{k}")));
+            }
+            Ok(out)
         }
         "monitor_select" => {
             let k = a.req("key");
@@ -189,18 +194,19 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
         "monitor_key" => match a.req("key") {
             "up" | "down" => {
                 m.step(if a.req("key") == "up" { -1 } else { 1 });
-                Ok(vec![view_action(&m, cx)])
+                // The keyboard follows the selection (its row's focus ring).
+                let focus = m.selected().map(|k| Action::Focus(format!("monitor-row-{k}")));
+                Ok([Some(view_action(&m, cx)), focus].into_iter().flatten().collect())
             }
-            "enter" => {
-                let Some(k) = m.selected() else { return Ok(vec![]) };
-                links(&m, cx, "monitor_terminal", &k)
-            }
+            // Nothing of the view has the keyboard: Enter gives it to the list, on the session shown.
+            "enter" => Ok(m.selected().map(|k| Action::Focus(format!("monitor-row-{k}"))).into_iter().collect()),
             _ => match a.s("text") {
                 Some("n") | Some("N") => {
                     if !m.next_needing() {
                         return Ok(vec![Action::notice("No session needs you")]);
                     }
-                    Ok(vec![view_action(&m, cx)])
+                    let focus = m.selected().map(|k| Action::Focus(format!("monitor-row-{k}")));
+                    Ok([Some(view_action(&m, cx)), focus].into_iter().flatten().collect())
                 }
                 _ => Ok(vec![]),
             },

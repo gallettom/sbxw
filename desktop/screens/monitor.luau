@@ -166,7 +166,7 @@ local function header(d, data)
     row{ gap = 4, w = "full",
       text{ d.strip, size = "sm", color = "text-dim", truncate = true, grow = 1 },
       button{ icon = "terminal", key = "monitor-terminal", tone = "green", variant = "ghost", dense = true, on = "link", arg = { name = "monitor_terminal", key = d.key },
-        help = d.pane and ("Its terminal, in pane " .. d.pane .. " (the view closes)") or "Open its terminal (the view closes)", keys = { "↩" } },
+        help = d.pane and ("Its terminal, in pane " .. d.pane .. " (the view closes)") or "Open its terminal (the view closes)" },
       button{ icon = "history", key = "monitor-commits", tone = "blue", variant = "ghost", dense = true, on = "link", arg = { name = "monitor_commits", key = d.key }, help = "Its commits" },
       button{ icon = "folder", key = "monitor-files", tone = "blue", variant = "ghost", dense = true, on = "link", arg = { name = "monitor_files", key = d.key }, help = "Its files" },
       button{ icon = "branch", key = "monitor-worktrees", tone = "blue", variant = "ghost", dense = true, on = "link", arg = { name = "monitor_worktrees", key = d.key }, help = "Its worktree" } } }

@@ -1862,8 +1862,11 @@ lines, time; `monitor-terminal`, `-commits`, `-files`, `-worktrees`), the
 feed (the last prompt, `monitor-now`, `monitor-reply` with keyword pills,
 `monitor-question` with `monitor-opt-<step>-<option>` or "Answer in its
 terminal", `monitor-permission`), then the composer (`monitor-compose`,
-`monitor-target` "To ■ sandbox · session", `monitor-send`). Keys while
-none of its controls has the keyboard: Up, Down, Enter (its terminal), N.
+`monitor-target` "To ■ sandbox · session", `monitor-send`). Keys: the
+view opens with the keyboard on the shown session's row; Up and Down move
+along the rows, Enter shows one, N goes to the next session that needs you,
+Escape closes. With nothing of the view focused, Up and Down move the
+selection and Enter gives the keyboard to the list.
 
 **Data.** `data.monitor`, built in Rust: `now`, `rows` (`{key, rev,
 sandbox, name, thread, group, tone, line, mono, ts, ask}`), `count` (the
@@ -1882,7 +1885,7 @@ handed over only while it shows. Also read: `data.relay_ui.picks` and
 |---|---|---|---|
 | `monitor_open` | none | direct | Reads the list again and opens the view (the sidebar's sandbox's most urgent session selected) |
 | `monitor_select`, `monitor_next`, `monitor_more` | `key` / none / none | direct | View state: a session shown, the next that needs you, the next page |
-| `monitor_key` | `key` (`up`, `down`, `enter`, `type`), `text` | direct | The view's keys |
+| `monitor_key` | `key` (`up`, `down`, `enter`, `type`), `text` | direct | The view's keys when none of its rows has the keyboard; N (`type`) from anywhere in it |
 | `monitor_terminal`, `monitor_commits`, `monitor_files`, `monitor_worktrees` | `key` | direct | `thread_open` or `open_terminal` (spare pane; the pane that shows it, when one does), `commits_show` on its branch, `files_open` at its worktree, `worktrees_show` filtered to it |
 | `monitor_pick` | `key`, `step`, `option` | direct | The relay's `agent_pick`, only for a session the daemon lists as waiting and answerable |
 | `monitor_send` | `key`, `text` | approval | Masked (`/api/voice/anonymise`), then the core's dialog with the words in full and the session; Send there posts `/api/chat/push {text, name, thread}` |

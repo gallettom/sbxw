@@ -198,7 +198,7 @@ fn each_state_says_what_it_is() {
 }
 
 #[test]
-fn the_keys_move_the_selection_and_enter_opens_the_terminal() {
+fn the_keys_move_the_selection_and_enter_reaches_the_list() {
     let mut d = data_of("basic");
     let v = opened(&mut d);
     assert_eq!(v["sel"], "shop-web::checkout-copy");
@@ -208,9 +208,7 @@ fn the_keys_move_the_selection_and_enter_opens_the_terminal() {
     assert_eq!(w["sel"], "shop-web::checkout-copy");
     let w = view(&run(&d, "monitor_key", json!({ "key": "up" })).unwrap());
     assert_eq!(w["sel"], "shop-web::checkout-copy", "stops at the top");
-    let a = run(&d, "monitor_key", json!({ "key": "enter" })).unwrap();
-    assert_eq!(a[0], Action::ClosePanel("monitor".into()));
-    assert_eq!(a[1], Action::Intent { name: "thread_open".into(), args: json!({ "sandbox": "shop-web", "name": "checkout-copy" }) });
+    assert_eq!(run(&d, "monitor_key", json!({ "key": "enter" })).unwrap(), [Action::Focus("monitor-row-shop-web::checkout-copy".into())]);
     // The sidebar's sandbox picks its most urgent session when the view opens.
     *STATE().lock().unwrap() = Model::default();
     d["app"]["selected"] = "billing-api".into();
@@ -524,4 +522,82 @@ fn with_a_jarvis_proposal_up_the_composer_and_the_choices_send_nothing() {
     let picks = rt.state.screen_data()["relay_ui"]["picks"].clone();
     assert!(picks.as_object().is_none_or(|o| o.is_empty()), "a pick was made: {picks}");
     assert!(rt.state.feats.dialog.is_none());
+}
+
+/// The whole window: the rail opens the view with the keyboard on the list;
+/// Up and Down move along it, Enter shows the session, N goes to the next
+/// one that needs you, its terminal closes the view, Escape too.
+#[test]
+fn the_keyboard_walks_the_list() {
+    use crate::shell::{view as shell_view, App};
+    use rune::{Key, KeyEvent};
+    let fx = format!("{}/fixtures/monitor/basic.json", env!("CARGO_MANIFEST_DIR"));
+    let a = App::new(crate::shell::Args { fixture: Some(fx), ..Default::default() });
+    let mut rt = rune::Runtime::new(a, shell_view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut rune::Tx| s.on_key(ev, tx));
+    rt.frame(0.0);
+    let frames = |rt: &mut rune::Runtime<App>, n: usize| {
+        for _ in 0..n {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+        }
+    };
+    let key = |rt: &mut rune::Runtime<App>, k: Key| {
+        rt.key(KeyEvent { key: k, mods: rune::Mods::default() });
+        rt.frame(0.02);
+    };
+    let sel = |rt: &rune::Runtime<App>| rt.state.screen_data()["monitor"]["sel"].as_str().unwrap_or("").to_string();
+    frames(&mut rt, 4);
+    let (x, y) = rt.find("rail-monitor").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    frames(&mut rt, 6);
+    assert_eq!(sel(&rt), "shop-web::checkout-copy");
+    rt.update(|_, tx| assert_eq!(tx.focused(), Some("monitor-row-shop-web::checkout-copy"), "the keyboard is on the list"));
+    let focused = |rt: &mut rune::Runtime<App>| {
+        let mut f = String::new();
+        rt.update(|_, tx| f = tx.focused().unwrap_or("").to_string());
+        f
+    };
+    // Up and Down move the keyboard along the rows; Enter shows that session.
+    key(&mut rt, Key::Down);
+    frames(&mut rt, 2);
+    key(&mut rt, Key::Down);
+    frames(&mut rt, 2);
+    assert_eq!(focused(&mut rt), "monitor-row-docs-site:s-docs-main", "two rows down");
+    assert_eq!(sel(&rt), "shop-web::checkout-copy", "moving the keyboard shows nothing yet");
+    key(&mut rt, Key::Enter);
+    frames(&mut rt, 3);
+    assert_eq!(sel(&rt), "docs-site:s-docs-main", "Enter shows it");
+    key(&mut rt, Key::Up);
+    frames(&mut rt, 2);
+    assert_eq!(focused(&mut rt), "monitor-row-shop-web:s-shop-main");
+    // N: the next session that needs you, from anywhere in the list.
+    key(&mut rt, Key::Text("n".into()));
+    frames(&mut rt, 3);
+    assert_eq!(rt.state.screen_data()["monitor"]["detail"]["state"], "attention", "N: a session that needs you");
+    let n1 = sel(&rt);
+    key(&mut rt, Key::Text("n".into()));
+    frames(&mut rt, 3);
+    assert_ne!(sel(&rt), n1, "N again: the other one");
+    // Its terminal: the view gives way.
+    let (x, y) = rt.find("monitor-terminal").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    frames(&mut rt, 3);
+    assert!(rt.state.feats.overlay.is_none(), "the terminal opened and the view closed");
+    let last = sel(&rt);
+    let (sb, th) = last.split_once("::").map(|(a, b)| (a.to_string(), Some(b.to_string()))).unwrap_or_else(|| (last.split(':').next().unwrap().to_string(), None));
+    assert!(rt.state.panes.iter().any(|p| p.sandbox.as_deref() == Some(sb.as_str()) && p.thread == th), "its terminal is in a pane: {last}");
+    // Back from the rail: the same session; Escape closes.
+    let (x, y) = rt.find("rail-monitor").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    frames(&mut rt, 6);
+    assert_eq!(sel(&rt), last, "the view comes back on the same session");
+    key(&mut rt, Key::Escape);
+    frames(&mut rt, 2);
+    assert!(rt.state.feats.overlay.is_none(), "Escape closes the view");
 }

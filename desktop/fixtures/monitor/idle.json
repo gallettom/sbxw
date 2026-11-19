@@ -107,7 +107,7 @@
     "duration_ms": 3480000,
     "lines_added": 212,
     "lines_removed": 64,
-    "reply": "[[Done]] Finished: rework the checkout form so that the address and the payment fit on one screen o."
+    "reply": "[[Done]] Finished: rework the checkout form so that the address and the payment fit on one screen on a laptop."
    },
    {
     "sandbox": "shop-web",
@@ -149,7 +149,7 @@
     "duration_ms": 2690000,
     "lines_added": 142,
     "lines_removed": 18,
-    "reply": "[[Done]] Finished: implement the vat rounding rules in tax/src/round.rs and cover each country with."
+    "reply": "[[Done]] Finished: implement the VAT rounding rules in tax/src/round.rs and cover each country with a test."
    },
    {
     "sandbox": "billing-api",
@@ -190,7 +190,7 @@
     "duration_ms": 1560000,
     "lines_added": 77,
     "lines_removed": 4,
-    "reply": "[[Done]] Finished: add a retry queue for failed webhook deliveries, with exponential backoff and a ."
+    "reply": "[[Done]] Finished: add a retry queue for failed webhook deliveries, with exponential backoff and a cap of five tries."
    },
    {
     "sandbox": "docs-site",
@@ -210,7 +210,7 @@
     "duration_ms": 900000,
     "lines_added": 12,
     "lines_removed": 9,
-    "reply": "[[Done]] Finished: check every code sample in the guides against the current cli and fix the ones t."
+    "reply": "[[Done]] Finished: check every code sample in the guides against the current CLI and fix the ones that changed."
    },
    {
     "sandbox": "data-pipeline",
