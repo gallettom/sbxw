@@ -1484,9 +1484,8 @@ function, `rail_entry`, an extra whose intent is `open_panel {screen}`
 The palette lists the same extras. They were docked panels until the
 person asked for them over the panes, as Commits and Worktrees: a docked
 panel was one narrow column with most of the room empty. Over the pane area
-they use the width: from 760 pt two columns (MCP: the sandbox picker and the
-registered servers | the selected server, which pressing a row inspects, or
-the add form; Kits: the picker, what waits for you and the kits line | the
+they use the width (MCP: one column at every width, the add form on top,
+the registered servers under it, a server's details under its row; Kits: from 760 pt two columns, the picker, what waits for you and the kits line | the
 selected kit's description, `kits-about`; Skills: the picker and the kept
 skills | that sandbox's skills to look at and keep), one column under it.
 The `<screen>_view` convention (view state dropped on close) holds for
@@ -1511,9 +1510,16 @@ saying what to do.
 `mcp-<name>`, `mcp-load-<name>`, `mcp-unload-<name>`, `mcp-auth-<name>`
 (remote only), `mcp-inspect-<name>`, `mcp-rm-<name>`; `mcp-more`, the form
 `mcp-name`, `mcp-kind`, `mcp-url`, `mcp-headers`, `mcp-command`,
-`mcp-args`, `mcp-dir`, `mcp-save`, `mcp-clear`; `mcp-error`. The daemon
-lists no load state per sandbox, so a row shows its kind (remote blue,
-local command amber), not whether it is loaded.
+`mcp-args`, `mcp-dir`, `mcp-save`, `mcp-clear`; `mcp-error`; `mcp-about`
+(the quiet line under the title, its full text in the tooltip), `mcp-form`,
+`mcp-sel-<name>` (the row's name: opens its details, `mcp-inspect`, under
+the row). One column: the form on top (Name and Kind on one row when each
+keeps 240 pt, the fields that depend on Kind under them two by two, the
+hint and Add… on the last row), the servers under it, each a full-width
+row with Load, Unload, Sign in (remote), Inspect and the bin. The daemon
+lists no load state per sandbox (`sbx mcp ls` gives name and type), so a
+row shows its kind (remote blue, local command amber), not whether it is
+loaded, and the list keeps this machine's order; the list's heading says so.
 
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
