@@ -98,6 +98,9 @@ pub struct Spec {
     /// `order = "count"`: the largest count first, ties by name, no group
     /// headings (each row keeps its group bar and names its group quietly).
     pub by_count: bool,
+    /// `order = "name"`: the daemon's order (by name), grouped by workspace,
+    /// in place of the sidebar's tiers (the default). No screen asks today.
+    pub by_name: bool,
     /// `counting = true`: the counts are still being read (the empty list
     /// says so instead of "none").
     pub counting: bool,
@@ -132,6 +135,7 @@ pub fn spec(v: &J) -> Option<Spec> {
         noun: s("noun").unwrap_or_else(|| "item".into()),
         only_counted: s("only").as_deref() == Some("counted") && counts.is_some(),
         by_count: s("order").as_deref() == Some("count") && counts.is_some(),
+        by_name: s("order").as_deref() == Some("name"),
         counts,
         counting: b("counting"),
     })
@@ -144,6 +148,9 @@ pub struct Choice {
     pub status: String,
     /// The group's name: the workspace folder's last part, "Chats", or none.
     pub group: Option<String>,
+    /// The sidebar's block it sits in ([`block_of`]): its heading in the
+    /// list in the sidebar's order. None: ungrouped.
+    pub block: Option<String>,
     /// The group's colour, as the sidebar draws it (`data.app.groups`).
     pub color: Option<u32>,
     pub agent: String,
@@ -171,6 +178,116 @@ pub fn group_name(sb: &J) -> Option<String> {
     }
     let ws = sb["workspace"].as_str()?.trim_end_matches('/');
     ws.rsplit('/').next().filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+// ---------------------------------------------------------------------------
+// The order: the Sandboxes sidebar's tiers, one definition for the core
+
+/// A session's words that say it is over.
+const ENDED: &[&str] = &["done", "exited", "failed", "stopped", "ended"];
+
+/// A sandbox's tier, the one rule the sidebar (sandboxes.luau reads it as
+/// `data.app.tiers`) and the scope list both order by. From slow facts only
+/// (a start, a stop, a session opening or ending), never from working, idle
+/// or wants you, which flicker:
+///   1  running, with at least one live session (not ended; a session busy
+///      on its own background work counts, whatever its state word)
+///   2  running without one, or on its way up ("starting…")
+///   3  stopped, stopping, failed, unreachable
+pub fn tier(sb: &J, sessions: &[J]) -> u8 {
+    if !sb["unreachable_since"].is_null() && sb["unreachable_since"] != false {
+        return 3;
+    }
+    let st = sb["status"].as_str().unwrap_or("");
+    if st == "running" {
+        let name = sb["name"].as_str();
+        let live = sessions.iter().any(|s| {
+            s["sandbox"].as_str() == name && s["ended"] != true && (s["background"] == true || !ENDED.contains(&s["state"].as_str().unwrap_or("")))
+        });
+        return if live { 1 } else { 2 };
+    }
+    if st == "stopped" || st.starts_with("stop") {
+        return 3;
+    }
+    if st.ends_with('\u{2026}') || st.ends_with("...") || st.ends_with("ing") {
+        return 2;
+    }
+    3
+}
+
+/// Every sandbox's [`tier`], by name (`data.app.tiers`).
+pub fn tiers(data: &J) -> std::collections::HashMap<String, u8> {
+    let sessions = data["sessions"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    data["sandboxes"].as_array().into_iter().flatten().filter_map(|sb| Some((sb["name"].as_str()?.to_string(), tier(sb, sessions)))).collect()
+}
+
+/// [`tiers`] as the screens read it, `{ [sandbox] = 1 | 2 | 3 }`.
+pub fn tiers_json(data: &J) -> J {
+    tiers(data).into_iter().map(|(n, t)| (n, J::from(t))).collect::<serde_json::Map<_, _>>().into()
+}
+
+/// The sidebar's block of a sandbox: "Chats", a workspace with more than one
+/// sandbox (its folder's last part), or none (ungrouped: a workspace of one
+/// is not a group, as in the web UI). `sbs`: every sandbox the core knows.
+pub fn block_of(sb: &J, sbs: &[J]) -> Option<String> {
+    if sb["chat"] == true {
+        return Some("Chats".into());
+    }
+    let ws = sb["workspace"].as_str().filter(|w| !w.is_empty())?;
+    let n = sbs.iter().filter(|o| o["chat"] != true && o["workspace"].as_str() == Some(ws)).count();
+    (n > 1).then(|| group_name(sb)).flatten()
+}
+
+/// The choices in the sidebar's order: by tier; a group ranks by its best
+/// member and comes before an ungrouped sandbox of the same tier; groups of
+/// one tier in the sidebar's order (Chats, then by folder name); inside a
+/// group, and among ungrouped sandboxes, by tier then the daemon's order.
+/// All stays first. `tier`: the tier of each (one not known ranks 3).
+pub fn by_tier(list: Vec<Choice>, data: &J, tier: &dyn Fn(&str) -> u8) -> Vec<Choice> {
+    let sbs = data["sandboxes"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let index = |id: &str| sbs.iter().position(|s| s["name"].as_str() == Some(id)).unwrap_or(usize::MAX);
+    let (all, mut rest): (Vec<Choice>, Vec<Choice>) = list.into_iter().partition(Choice::all);
+    rest.sort_by_key(|c| (tier(&c.id), index(&c.id)));
+    // The groups' own order: Chats first, then by the folder's name.
+    let group_at = |b: &str| (b != "Chats", b.to_string());
+    let best = |b: &str, rest: &[Choice]| rest.iter().filter(|c| c.block.as_deref() == Some(b)).map(|c| tier(&c.id)).min().unwrap_or(3);
+    let snapshot = rest.clone();
+    rest.sort_by_cached_key(|c| match &c.block {
+        Some(b) => (best(b, &snapshot), 0, group_at(b), 0, 0),
+        None => (tier(&c.id), 1, (false, String::new()), index(&c.id), 0),
+    });
+    all.into_iter().chain(rest).collect()
+}
+
+// The order an open list keeps, by `<screen>/<select id>`: set when the
+// list opens, so rows never move under the pointer or the keyboard while
+// it is open (their status still updates); dropped when it closes.
+thread_local! {
+    static HELD: std::cell::RefCell<std::collections::HashMap<String, Vec<String>>> = Default::default();
+}
+
+/// `list` in the order held for `at` (taken from `list` the first time):
+/// a sandbox that left is gone, one that came goes last.
+pub fn hold(at: &str, list: Vec<Choice>) -> Vec<Choice> {
+    HELD.with(|h| {
+        let mut h = h.borrow_mut();
+        let order = h.entry(at.to_string()).or_insert_with(|| list.iter().map(|c| c.id.clone()).collect());
+        let mut list = list;
+        list.sort_by_key(|c| order.iter().position(|o| o == &c.id).unwrap_or(usize::MAX));
+        for c in &list {
+            if !order.contains(&c.id) {
+                order.push(c.id.clone());
+            }
+        }
+        list
+    })
+}
+
+/// The list at `at` is closed: the next open orders afresh.
+pub fn release(at: &str) {
+    HELD.with(|h| {
+        h.borrow_mut().remove(at);
+    });
 }
 
 /// Whether the picker offers All: `all = true`, or an item with id "".
@@ -204,7 +321,7 @@ pub fn choices(data: &J, items: &[Item], sp: &Spec) -> Vec<Choice> {
             continue;
         }
         if it.id.is_empty() {
-            all.get_or_insert(Choice { id: String::new(), status: String::new(), group: None, color: None, agent: String::new(), sessions: 0, count: None });
+            all.get_or_insert(Choice { id: String::new(), status: String::new(), group: None, block: None, color: None, agent: String::new(), sessions: 0, count: None });
             continue;
         }
         let Some(sb) = sbs.iter().find(|s| s["name"].as_str() == Some(it.id.as_str())) else { continue };
@@ -216,6 +333,7 @@ pub fn choices(data: &J, items: &[Item], sp: &Spec) -> Vec<Choice> {
             id: it.id.clone(),
             status: sb["status"].as_str().unwrap_or("").to_string(),
             group: group_name(sb),
+            block: block_of(sb, &sbs),
             color: groups[it.id.as_str()].as_str().and_then(parse_hex),
             agent: sb["agent"].as_str().unwrap_or("").to_string(),
             sessions: n,
@@ -231,17 +349,30 @@ pub fn choices(data: &J, items: &[Item], sp: &Spec) -> Vec<Choice> {
 
 /// The choices the list offers for `value` (the current one): [`choices`],
 /// then `only = "counted"` (those counted above 0, and the current one
-/// always) and `order = "count"` (the largest count first, ties by name).
+/// always), in the sidebar's order ([`by_tier`]), or with `order = "count"`
+/// the largest count first, ties by tier then name, or with `order =
+/// "name"` the daemon's order grouped by workspace ([`choices`]' own).
 pub fn offered(data: &J, items: &[Item], sp: &Spec, value: &str) -> Vec<Choice> {
     let mut list = choices(data, items, sp);
     if sp.only_counted {
         list.retain(|c| c.all() || c.count.unwrap_or(0) > 0 || c.id == value);
     }
+    let t = tiers(data);
+    let tier = |id: &str| t.get(id).copied().unwrap_or(3);
     if sp.by_count {
         // All stays first (its count is none: rank it above every number).
-        list.sort_by(|a, b| b.all().cmp(&a.all()).then(b.count.unwrap_or(0).cmp(&a.count.unwrap_or(0))).then_with(|| a.id.cmp(&b.id)));
+        list.sort_by(|a, b| {
+            b.all().cmp(&a.all()).then(b.count.unwrap_or(0).cmp(&a.count.unwrap_or(0))).then(tier(&a.id).cmp(&tier(&b.id))).then_with(|| a.id.cmp(&b.id))
+        });
+    } else if !sp.by_name {
+        list = by_tier(list, data, &tier);
     }
     list
+}
+
+/// The list's headings follow the sidebar's blocks (the default order).
+fn by_block(sp: &Spec) -> bool {
+    !sp.by_count && !sp.by_name
 }
 
 /// "4 worktrees", "1 worktree".
@@ -539,12 +670,22 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
         rows = rows.on_layout_tx(move |_s: &mut S, _r: [f32; 4], tx: &mut rune::Tx| tx.scroll_into_view(k.clone()));
     }
     let mut last_group: Option<Option<String>> = None;
+    let mut runs = 0;
     for (i, ch) in shown.iter().enumerate() {
         // Ordered by count, no headings: they would break the order (each
-        // row keeps its group bar and names its group).
-        if !ch.all() && !cx.spec.by_count && last_group.as_ref() != Some(&ch.group) {
-            rows = rows.child(heading(&cx.key, ch));
-            last_group = Some(ch.group.clone());
+        // row keeps its group bar and names its group). In the sidebar's
+        // order a heading per group block, as the sidebar's; ungrouped
+        // sandboxes after a group get a hairline, not a heading (the
+        // sidebar's plain block).
+        let g = if by_block(&cx.spec) { &ch.block } else { &ch.group };
+        if !ch.all() && !cx.spec.by_count && last_group.as_ref() != Some(g) {
+            if g.is_some() || !by_block(&cx.spec) {
+                rows = rows.child(heading(&cx.key, g, ch.color));
+            } else if last_group.is_some() {
+                runs += 1;
+                rows = rows.child(el().key(format!("{}-ungrouped-{runs}", cx.key)).w_full().py(3.0).child(el().w_full().h(1.0).fill(c("elevated"))));
+            }
+            last_group = Some(g.clone());
         }
         let prev = if i == 0 { cx.filter.as_ref().map(|_| filter_key.clone()) } else { Some(keys[i - 1].clone()) };
         let next = keys.get(i + 1).cloned();
@@ -567,9 +708,10 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
 }
 
 /// A group's heading in the list: its tint and label colour, as the sidebar heads its block.
-fn heading(key: &str, ch: &Choice) -> El {
-    let name = ch.group.clone().unwrap_or_else(|| "No group".into());
-    let (tint, label) = match ch.color {
+fn heading(key: &str, group: &Option<String>, color: Option<u32>) -> El {
+    let name = group.clone().unwrap_or_else(|| "No group".into());
+    let color = color.filter(|_| group.is_some());
+    let (tint, label) = match color {
         Some(g) => {
             let (t, _, l) = theme::group_tints(g);
             (t, l)
@@ -577,7 +719,7 @@ fn heading(key: &str, ch: &Choice) -> El {
         None => (theme::color_value("surface").unwrap(), theme::color_value("text-muted").unwrap()),
     };
     let sq = el().w(8.0).h(8.0).radius(2.0);
-    let sq = match ch.color {
+    let sq = match color {
         Some(g) => sq.fill(hex(g)),
         None => sq.border(1.0, c("text-dim")),
     };

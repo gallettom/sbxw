@@ -680,26 +680,13 @@ end
 --      on its own background work counts, whatever its state word)
 --   2  running without one, or on its way up ("starting…")
 --   3  stopped, stopping, failed, unreachable
+-- The core computes them (scope.rs `tier`, the one rule, which the scope
+-- picker's list orders by too) and hands them as `data.app.tiers`.
 -- Inside a tier, the daemon's order (by name). A group ranks by its best
 -- member; groups and ungrouped sandboxes are ordered together by rank, a
 -- group before a sandbox of the same tier (groups first, as before).
-local ENDED = { done = true, exited = true, failed = true, stopped = true, ended = true }
-
-local function live_sessions(sb, data)
-  local n = 0
-  for _, s in ipairs(data.sessions or {}) do
-    if s.sandbox == sb.name and not s.ended and (s.background or not ENDED[s.state or ""]) then n = n + 1 end
-  end
-  return n
-end
-
 local function tier_of(sb, data)
-  if sb.unreachable_since then return 3 end
-  local st = sb.status or ""
-  if st == "running" then return live_sessions(sb, data) > 0 and 1 or 2 end
-  if st == "stopped" or string.sub(st, 1, 4) == "stop" then return 3 end
-  if string.find(st, "…$") or string.find(st, "%.%.%.$") or string.find(st, "ing$") then return 2 end
-  return 3
+  return (data.app.tiers or {})[sb.name] or 3
 end
 
 -- The tiers the list last applied, by sandbox. Stability first: while the

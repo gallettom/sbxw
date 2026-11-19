@@ -1804,15 +1804,21 @@ impl Build<'_> {
         let open = self.ui.open.as_deref() == Some(id.as_str());
         let value = n.value.as_str().unwrap_or("").to_string();
         let choices = scope::offered(self.data, &n.items, &sp, &value);
+        // Open, the list keeps the order it opened with (rows never move
+        // under the pointer); closed, the next open orders afresh.
+        let held = format!("{}/{id}", self.name);
+        let choices = if open { scope::hold(&held, choices) } else { scope::release(&held); choices };
         let has_all = scope::offers_all(&sp, &n.items);
         let all_label = n.items.iter().find(|i| i.id.is_empty()).map(|i| i.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| "All sandboxes".into());
         let empty_label = if has_all { all_label.clone() } else { n.placeholder.clone().unwrap_or_else(|| "Pick a sandbox".into()) };
         let current = choices.iter().find(|c| c.id == value);
         let (name, id2) = (self.name.clone(), id.clone());
         let fid = format!("{id}-filter");
+        let held2 = held.clone();
         let cap = scope::capsule::<S>(&key, &value, current, (&empty_label, has_all), open, n.disabled, move |s: &mut S| {
             let ui = &mut s.screen(&name).ui;
             ui.open = if ui.open.as_deref() == Some(id2.as_str()) { None } else { Some(id2.clone()) };
+            scope::release(&held2);
             // A list opens with an empty filter.
             ui.edits.remove(&format!("{id2}-filter"));
         });

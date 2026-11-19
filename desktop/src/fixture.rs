@@ -175,7 +175,10 @@ pub fn screen_data(daemon: &serde_json::Value, app: &AppView) -> serde_json::Val
         d.insert("jarvis".into(), j.screen_data(false));
     }
     d.insert("app".into(), serde_json::to_value(app).expect("app view"));
-    serde_json::Value::Object(d)
+    let mut d = serde_json::Value::Object(d);
+    // Each sandbox's tier, the sidebar's order (scope.rs `tier`, the one rule).
+    d["app"]["tiers"] = crate::scope::tiers_json(&d);
+    d
 }
 
 /// Jarvis as a fixture's daemon keys describe it (`jarvis_status`,

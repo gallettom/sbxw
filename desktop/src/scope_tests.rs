@@ -659,7 +659,7 @@ fn worktrees_lists_the_sandboxes_with_worktrees_the_most_first() {
     run(&mut rt, "worktrees_show", json!({}));
     press(&mut rt, "worktrees-sandbox");
     let order: Vec<String> = list_rows(&rt, "worktrees-sandbox").into_iter().map(|(k, _)| k["worktrees-sandbox-".len()..].to_string()).collect();
-    assert_eq!(order, ["", "data-etl", "web-app", "mobile-ios", "billing", "infra-dns", "chat-0412", "docs", "search"]);
+    assert_eq!(order, ["", "web-app", "data-etl", "mobile-ios", "infra-dns", "billing", "search", "chat-0412", "docs"]);
     assert!(rt.find("worktrees-sandbox-filter").is_none(), "8 listed sandboxes: no filter field");
     assert!(!rt.elements().iter().any(|e| !e.exiting && e.key.as_deref().is_some_and(|k| k.starts_with("worktrees-sandbox-group-"))), "no group headings in the order of the count");
     let tip = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("worktrees-sandbox-web-app-count")).and_then(|e| e.help);
@@ -752,4 +752,123 @@ return {
         assert!(inside(r, v), "the focused {f} {r:?} is out of view {v:?}");
     }
     assert!(seen > 10, "the arrows move through the rows ({seen})");
+}
+
+// ── The order: the sidebar's tiers ────────────────────────────────────────
+
+/// fixtures/scope/order.json in the sidebar's order: tier 1 (a live
+/// session: the atlas group by atlas-web, then ember, fjord, ivy), tier 2
+/// (aurora starting, cobalt running with no session), tier 3 (the Chats,
+/// harbor with harbor-b stopping, then birch, delta failed, granite
+/// unreachable). A workspace of one (ember, ivy) is ungrouped, as there.
+const ORDER: &[&str] = &[
+    "atlas-web", "atlas-api", "atlas-ops", "ember", "fjord", "ivy",
+    "aurora", "cobalt",
+    "chat-ideas", "chat-notes", "harbor-a", "harbor-b", "birch", "delta", "granite",
+];
+
+fn ids(rt: &Runtime<App>, sel: &str) -> Vec<String> {
+    list_rows(rt, sel).into_iter().map(|(k, _)| k[sel.len() + 1..].to_string()).filter(|k| !k.is_empty()).collect()
+}
+
+/// The sidebar's rows, top to bottom (sandboxes.luau keys them `row-<name>`).
+fn sidebar(rt: &Runtime<App>, names: &[&str]) -> Vec<String> {
+    let mut r: Vec<(String, f32)> = rt.elements().into_iter().filter(|e| !e.exiting).filter_map(|e| Some((e.key?.strip_prefix("row-")?.to_string(), e.rect[1]))).filter(|(k, _)| names.contains(&k.as_str())).collect();
+    r.sort_by(|a, b| a.1.total_cmp(&b.1));
+    r.dedup_by(|a, b| a.0 == b.0);
+    r.into_iter().map(|(k, _)| k).collect()
+}
+
+#[test]
+fn the_tier_is_one_rule() {
+    let sb = |st: &str| json!({ "name": "x", "status": st });
+    let live = [json!({ "sandbox": "x", "state": "idle" })];
+    assert_eq!(tier(&sb("running"), &live), 1);
+    assert_eq!(tier(&sb("running"), &[]), 2);
+    assert_eq!(tier(&sb("running"), &[json!({ "sandbox": "x", "state": "done" })]), 2, "an ended word");
+    assert_eq!(tier(&sb("running"), &[json!({ "sandbox": "x", "state": "idle", "ended": true })]), 2);
+    assert_eq!(tier(&sb("running"), &[json!({ "sandbox": "x", "state": "done", "background": true })]), 1, "background work counts");
+    assert_eq!(tier(&sb("running"), &[json!({ "sandbox": "y", "state": "idle" })]), 2, "another sandbox's session");
+    for st in ["starting\u{2026}", "starting...", "creating"] {
+        assert_eq!(tier(&sb(st), &[]), 2, "{st}");
+    }
+    for st in ["stopped", "stopping\u{2026}", "failed", ""] {
+        assert_eq!(tier(&sb(st), &live), 3, "{st}");
+    }
+    assert_eq!(tier(&json!({ "name": "x", "status": "running", "unreachable_since": 5 }), &live), 3, "unreachable");
+}
+
+/// The list in the sidebar's order, and the very order the sidebar draws
+/// for the same data (one rule, scope.rs `tier`, read by both): headings per
+/// group block, a hairline before ungrouped sandboxes that follow a group.
+#[test]
+fn the_list_reads_in_the_sidebar_s_order() {
+    let mut rt = window("scope/order", 1284.0, 816.0);
+    assert_eq!(sidebar(&rt, ORDER), ORDER, "the sidebar's order for this fixture");
+    run(&mut rt, "commits_show", json!({}));
+    press(&mut rt, "commits-sandbox");
+    assert_eq!(list_rows(&rt, "commits-sandbox")[0].0, "commits-sandbox-", "All first");
+    assert_eq!(ids(&rt, "commits-sandbox"), ORDER);
+    assert_eq!(ids(&rt, "commits-sandbox"), sidebar(&rt, ORDER), "the same order as the sidebar");
+    let heads: Vec<String> = {
+        let mut v: Vec<(String, f32)> = rt.elements().into_iter().filter(|e| !e.exiting).filter_map(|e| Some((e.key?, e.rect[1]))).filter(|(k, _)| k.starts_with("commits-sandbox-group-") || k.starts_with("commits-sandbox-ungrouped-")).collect();
+        v.sort_by(|a, b| a.1.total_cmp(&b.1));
+        v.into_iter().map(|(k, _)| k["commits-sandbox-".len()..].to_string()).collect()
+    };
+    assert_eq!(heads, ["group-atlas", "ungrouped-1", "group-Chats", "group-harbor", "ungrouped-2"]);
+    // Files offers no All: the same order. The filter keeps it.
+    key(&mut rt, Key::Escape);
+    key(&mut rt, Key::Escape);
+    run(&mut rt, "files_show", json!({}));
+    press(&mut rt, "files-sandbox");
+    assert_eq!(ids(&rt, "files-sandbox"), ORDER);
+    rt.key(KeyEvent { key: Key::Text("a".into()), mods: rune::Mods::default() });
+    settle(&mut rt);
+    let a: Vec<String> = ORDER.iter().filter(|n| n.contains('a')).map(|n| n.to_string()).collect();
+    assert_eq!(ids(&rt, "files-sandbox"), a, "matches keep the tier order");
+}
+
+/// Open, the list keeps its order: a session that ends moves no row, the
+/// state word follows at once; the next open has the new order.
+#[test]
+fn the_order_stays_put_while_the_list_is_open() {
+    let mut rt = window("scope/order", 1284.0, 816.0);
+    run(&mut rt, "commits_show", json!({}));
+    press(&mut rt, "commits-sandbox");
+    assert_eq!(ids(&rt, "commits-sandbox"), ORDER);
+    rt.update(|s, _| {
+        s.sandboxes.iter_mut().find(|x| x.name == "ember").unwrap().status = "stopped".into();
+        s.sandboxes.iter_mut().find(|x| x.name == "birch").unwrap().status = "running".into();
+        crate::screen::Host::intents(s, "test", vec![crate::intent::Intent::Select { sandbox: Some("cobalt".into()) }]);
+    });
+    settle(&mut rt);
+    assert_eq!(ids(&rt, "commits-sandbox"), ORDER, "no row moves while open");
+    assert_eq!(label_of(&rt, "commits-sandbox-ember").as_deref(), Some("ember, stopped"), "the state follows");
+    assert_eq!(label_of(&rt, "commits-sandbox-birch").as_deref(), Some("birch, running"));
+    key(&mut rt, Key::Escape);
+    assert!(rt.find("commits-sandbox-list").is_none());
+    press(&mut rt, "commits-sandbox");
+    let r = ids(&rt, "commits-sandbox");
+    let at = |n: &str| r.iter().position(|x| x == n).unwrap();
+    assert!(at("birch") < at("cobalt") && at("ember") > at("chat-notes"), "the new order on the next open: {r:?}");
+}
+
+/// MCP offers the running sandboxes only, in the same tiers.
+#[test]
+fn mcp_lists_the_running_ones_in_tier_order() {
+    let mut rt = window("scope/order", 1284.0, 816.0);
+    run(&mut rt, "mcp_show", json!({ "sandbox": "cobalt" }));
+    press(&mut rt, "mcp-sandbox");
+    assert_eq!(ids(&rt, "mcp-sandbox"), ["atlas-web", "ember", "fjord", "ivy", "cobalt"]);
+}
+
+/// `order = "name"`: the daemon's order, grouped by workspace (no screen asks today).
+#[test]
+fn a_screen_may_ask_for_the_name_order() {
+    let d = data();
+    let ids = |sp: J| offered(&d, &[], &spec(&sp).unwrap(), "").into_iter().map(|c| c.id).collect::<Vec<_>>();
+    assert_eq!(ids(json!({ "kind": "sandbox", "order": "name" })), ["web-app", "web-api", "docs", "chat-1", "loose"]);
+    // The default: web-app's live sessions first with its group, then the
+    // running ones (Chats before an ungrouped one, docs alone is ungrouped).
+    assert_eq!(ids(json!("sandbox")), ["web-app", "web-api", "chat-1", "loose", "docs"]);
 }
