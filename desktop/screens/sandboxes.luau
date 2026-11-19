@@ -278,6 +278,10 @@ local function menu_label(e)
   return l
 end
 
+-- The points a sandbox's rows lose to their place (a grouped sandbox's
+-- bar slot), set by render before it draws each one.
+local inset = 0
+
 local function item(sb, app, data)
   local name = sb.name
   local selected = app.selected == name
@@ -329,7 +333,7 @@ local function item(sb, app, data)
   -- names them); the row's two buttons at its right end.
   -- The text column: the sidebar less its padding (24), the rail's column
   -- (7) and the row's two gaps (16).
-  local col_w = ((app.sidebar or {}).w or 264) - 47
+  local col_w = ((app.sidebar or {}).w or 264) - 47 - inset
   -- Under 240 pt of sidebar the + goes (it is the menu's "Open in new
   -- pane"), so the state and the model keep their room.
   local with_add = ((app.sidebar or {}).w or 264) >= 240
@@ -553,7 +557,7 @@ local function session_line(sb, e, data, base_model)
   local mw = m and (string.find(m, " ") and string.lower(m) or short_model(m)) or nil
   if mw == base_model then mw = nil end
   -- The name first; the model only where it fits beside the name and word.
-  local room = ((data.app.sidebar or {}).w or 264) - 24 - 8 - 32 - 16 - (chip and 32 or 0)
+  local room = ((data.app.sidebar or {}).w or 264) - 24 - 8 - 32 - 16 - (chip and 32 or 0) - inset
   -- A thread on its own worktree reads as the worktree's path (a branch
   -- glyph before it); its name too when the path does not end with it.
   local path, full = nil, nil
@@ -567,7 +571,7 @@ local function session_line(sb, e, data, base_model)
     -- line the glyph and its gap (20), the gaps around the word (16), and
     -- the P chip or the "+" with its gap (32). One cut at most: the label
     -- is made to fit, so `truncate` never cuts it a second time.
-    local line_room = ((data.app.sidebar or {}).w or 264) - 100 - (chip and 32 or 0)
+    local line_room = ((data.app.sidebar or {}).w or 264) - 100 - (chip and 32 or 0) - inset
     local avail = line_room - est(word) - 8 - (both and (est(name) + 8) or 0)
     label = middle(path, math.max(avail, 60))
     if both then label = name .. " · " .. label end
@@ -626,7 +630,7 @@ local function sessions_block(sb, app, data, state, into, base_model)
     column{ w = 12 },
     icon{ open and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
     text{ #rows .. " sessions", size = "caption", color = "text-muted" },
-    waiting > 0 and text{ "· " .. waiting .. (waiting == 1 and " wants you" or " want you"), size = "caption", weight = "semibold", color = "amber" } or false,
+    waiting > 0 and text{ "· " .. waiting .. (waiting == 1 and " wants you" or " want you"), size = "caption", weight = "semibold", color = "amber", truncate = true } or false,
     (not open and waiting == 0 and done > 0) and text{ "· " .. done .. " done", size = "caption", color = "text-muted" } or false,
   })
   -- The block stays in the tree with its height set: shut it is 0 tall,
@@ -788,8 +792,8 @@ return {
     -- sessions line and block (what changes height is a row of that stack,
     -- which glides it). A sandbox with several sessions gets a block of its
     -- own around them, so they read as its: ungrouped, a tinted block in a
-    -- group's language (its colour's tint, as its terminal header's; grey
-    -- `surface-alt` when it has none); in a group, no second block (a
+    -- group's language (its colour's tint, as its terminal header's; with
+    -- no workspace, a hue of its own, app.own_colors); in a group, no second block (a
     -- stronger tint would take `text-muted` under 4.5:1), a 2 pt bar in the
     -- group's colour down the group's gutter beside its rows. The stack's
     -- room is always there (ungrouped: 4 pt each side, taken from the
@@ -799,11 +803,16 @@ return {
       local stack = { key = "sb-" .. sb.name, gap = 2, w = "full", folds = true, radius = look and "sm" or "md", px = look and 0 or 4 }
       local gc = colors[sb.name]
       if multi and not look then
-        local own = gc and (app.group_look or {})[gc]
+        -- No colour of its own (no workspace): the hue the core gives it for
+        -- this block only (app.own_colors, distinct from every group's).
+        local c = gc or (app.own_colors or {})[sb.name]
+        local own = c and (app.group_look or {})[c]
         stack.fill = own and own.tint or "surface-alt"
       end
+      inset = look and 4 or 0
       table.insert(stack, item(sb, app, data))
       sessions_block(sb, app, data, state, stack, (model_of(sb, data)))
+      inset = 0
       if look then
         -- In a group: a 4 pt slot before every sandbox's stack, so the bar
         -- comes and goes without moving a word; drawn only with several sessions.

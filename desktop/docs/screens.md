@@ -94,6 +94,7 @@ unchanged.
 | `theme` | The theme drawn: `dark` or `graphite` |
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
 | `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
+| `own_colors` | A colour (`#rrggbb`) for each sandbox in no group and no workspace, by name: its session block's hue in the list, by the same distinct-hue rule after every group's (its tints are in `group_look`) |
 | `sidebar_menu` | A menu of the sandbox list (a row's ⋯) is open: the list holds its order until it shuts |
 | `covered` | Something sits over the panes and over any overlay: the core's dialog, a modal, Jarvis's proposal or the palette (read only; `App::panes_covered` without the overlay itself). Sessions draws its send controls disabled then; its Rust refuses to send whatever the screen draws |
 | `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |

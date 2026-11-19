@@ -693,6 +693,29 @@ impl App {
             })
             .collect::<serde_json::Map<_, _>>()
             .into();
+        // A sandbox in no group and no workspace (no colour above) with
+        // several sessions gets a hue of its own for its session block in the list (sandboxes.luau): the
+        // same rule, after every group's (keys sort after the paths), so it
+        // is distinct from them and from each other while the wheel holds.
+        // Only those that draw a block (several session lines): fewer hues taken.
+        let rows = data["app"]["extras"]["rows"].clone();
+        let own: Vec<(String, String)> = self.sandboxes.iter().filter(|sb| !sb.chat && sb.workspace.as_deref().is_none_or(str::is_empty) && rows[sb.name.as_str()].as_array().is_some_and(|r| r.len() >= 2)).map(|sb| (sb.name.clone(), format!("~sandbox:{}", sb.name))).collect();
+        if !own.is_empty() {
+            let keyed: Vec<(String, Option<String>, bool)> = self.sandboxes.iter().map(|sb| {
+                let k = own.iter().find(|(n, _)| *n == sb.name).map(|(_, k)| k.clone()).or_else(|| sb.workspace.clone());
+                (sb.name.clone(), k, sb.chat)
+            }).collect();
+            let hues = theme::group_colors(keyed.iter().map(|(n, w, c)| (n.as_str(), w.as_deref(), *c)));
+            let mut out = serde_json::Map::new();
+            for (n, _) in &own {
+                if let Some(&g) = hues.get(n) {
+                    let (tint, hover, label) = theme::group_tints(g);
+                    data["app"]["group_look"][format!("#{g:06x}")] = serde_json::json!({ "tint": format!("#{tint:06x}"), "hover": format!("#{hover:06x}"), "label": format!("#{label:06x}") });
+                    out.insert(n.clone(), J::String(format!("#{g:06x}")));
+                }
+            }
+            data["app"]["own_colors"] = out.into();
+        }
         data["app"]["theme"] = J::String(theme::mode().name().into());
         data["app"]["groups"] = groups.into_iter().map(|(n, c)| (n, J::String(format!("#{c:06x}")))).collect::<serde_json::Map<_, _>>().into();
         data["app"]["sidebar"] = serde_json::json!({ "w": self.sidebar_w(), "shown": self.sidebar_shown() });

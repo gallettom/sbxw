@@ -242,8 +242,21 @@ fn several_sessions_get_a_block_and_one_keeps_todays_look() {
     // Ungrouped, its own workspace's colour: that colour's tint (its terminal header's hue).
     let ivy = hex(&groups["ivy"]);
     assert_eq!(fill(&n, "sb-ivy"), Some(hex(&look[groups["ivy"].as_str().unwrap()]["tint"])), "ivy's block, colour {ivy:06x}");
-    // Ungrouped with no workspace: the neutral block.
-    assert_eq!(fill(&n, "sb-fjord"), crate::theme::color_value("surface-alt"));
+    // Ungrouped with no workspace: a hue of its own, distinct from every group's.
+    let own = &d["app"]["own_colors"]["fjord"];
+    assert_eq!(fill(&n, "sb-fjord"), Some(hex(&look[own.as_str().unwrap()]["tint"])));
+    let hue = |c: u32| {
+        let (r, g, b) = (((c >> 16) & 255) as f32, ((c >> 8) & 255) as f32, (c & 255) as f32);
+        let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+        let dd = mx - mn;
+        if dd == 0.0 { 0.0 } else if mx == r { 60.0 * (((g - b) / dd).rem_euclid(6.0)) } else if mx == g { 60.0 * ((b - r) / dd + 2.0) } else { 60.0 * ((r - g) / dd + 4.0) }
+    };
+    for (n, c) in groups.as_object().unwrap() {
+        let dist = (hue(hex(own)) - hue(hex(c))).rem_euclid(360.0);
+        assert!(dist.min(360.0 - dist) >= 39.0, "fjord's hue near {n}'s: {own} {c}");
+    }
+    // Only a sandbox that draws a block takes a hue (cobalt, aurora: none).
+    assert_eq!(d["app"]["own_colors"].as_object().unwrap().keys().collect::<Vec<_>>(), ["fjord"]);
     // In a group: no second block, a bar in the group's colour beside its rows.
     assert_eq!(fill(&n, "sb-atlas-web"), None);
     let bar = find(&n, "sb-bar-atlas-web").expect("the bar");
