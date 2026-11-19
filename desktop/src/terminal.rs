@@ -140,11 +140,11 @@ pub fn scrollback() -> usize {
 /// How long a size must hold before the daemon is told (a window drag sends
 /// one resize, not one a frame).
 pub const RESIZE_DEBOUNCE: f64 = 0.08;
+/// Half a blink period, in seconds.
+pub const BLINK: f64 = 0.53;
 /// How long a narrower grid must hold before its rows are compacted (a
 /// window drag narrows it many times: one pass once it settles).
 pub const COMPACT_AFTER: Duration = Duration::from_secs(1);
-/// Half a blink period, in seconds.
-pub const BLINK: f64 = 0.53;
 
 /// The web UI's default text and background (see [`Theme`]).
 pub const FG: u32 = theme::WEB_FOREGROUND;
@@ -639,9 +639,6 @@ impl TerminalState {
             None => {}
         }
         let changed = self.poll_inner(settle, Some(tx));
-        if let Some(at) = self.compact_at {
-            tx.wake_after(at.saturating_duration_since(Instant::now()) + Duration::from_millis(1));
-        }
         // Blink while the cursor shows; it stays lit for a period after activity.
         let blinking = self.cursor_blink || self.term.cursor_style().blinking;
         if blinking && self.focused && self.cursor.is_some() {
@@ -655,6 +652,10 @@ impl TerminalState {
         } else if !self.blink_on {
             self.blink_on = true;
             self.dirty = true;
+        }
+        // Rows to compact once the narrower size has held (see `compact_at`).
+        if let Some(at) = self.compact_at {
+            tx.wake_after(at.saturating_duration_since(Instant::now()) + Duration::from_millis(1));
         }
         if self.dirty {
             self.rebuild();
