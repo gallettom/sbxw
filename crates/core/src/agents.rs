@@ -468,7 +468,7 @@ impl<'a> HookEvent<'a> {
     /// terminal's `claude` runs. The second is a reading of the evidence
     /// that only ever takes a session out of the answerable ones.
     pub fn harness_background(&self) -> bool {
-        false // INERT: the failing tests' commit; the fix reads the evidence
+        self.session_kind() == Some("bg") || self.agent_name().is_some_and(|n| version_shaped(&n))
     }
     /// The hook's `live_procs` covers every Claude-like process (hook v4),
     /// not only those of the agent's own name.
@@ -864,8 +864,8 @@ impl AgentBook {
             let name = event.agent_name();
             let wide = event.live_scope_claude();
             let covers = |theirs: Option<&str>| match theirs {
-                // INERT: the old rule, any list speaks for every record.
-                _ => { let _ = (&name, wide, claude_like as fn(&str) -> bool); true }
+                Some(t) => name.as_deref() == Some(t) || (wide && claude_like(t)),
+                None => false,
             };
             // Records proven over: the same process now runs this session, or
             // their process is no longer alive. A record whose process is not

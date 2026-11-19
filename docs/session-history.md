@@ -220,12 +220,26 @@ Additive fields on `SessionInfo` (`GET /api/sessions`, `session` events):
 
 How records are retired: a v3 hook reports `agent_proc` (`<pid>:<start
 time>` of its nearest non-shell ancestor, the claude process) on every
-event, and on `SessionStart` `live_procs` (the same key for every process of
-that name alive in the sandbox, from `/proc`). On a `SessionStart`, the
-daemon retires, **in the same sandbox only**, the records whose process is
-known (reported by a v3 hook) and is either this one (`replaced`) or not in
-`live_procs` (`process_gone`). A record whose process is not known is never
-retired; when `/proc` cannot be read there is no list and nothing is
-retired; no time-out. A second live terminal on the same checkout keeps its
-row. Retiring a dead `tty` record is what makes a restarted main session
-answerable again: nothing becomes answerable otherwise.
+event, and on `SessionStart` `live_procs`: the same key for every process of
+the agent's name alive in the sandbox, from `/proc`. A v4 hook lists every
+Claude-like process (`claude`, and the versioned binary `2.1.328` that
+Claude Code's background sessions run as) and says so with `live_scope:
+"claude"`. On a `SessionStart`, the daemon retires, **in the same sandbox
+only**, the records whose process is known (reported by a v3 hook) and is
+either this one (`replaced`) or not in `live_procs` (`process_gone`), and
+the second **only when the list covers that record's process name**: the
+record's agent name is the name the list was made for, or, from a v4 hook,
+any Claude-like name. A background session's start (its process named
+`2.1.328`, its v3 list holding only that name) therefore never retires the
+terminals' `claude` sessions; before this rule it retired all of them. A
+record whose process or name is not known is never retired; when `/proc`
+cannot be read there is no list and nothing is retired; no time-out. A
+second live terminal on the same checkout keeps its row. Retiring a dead
+`tty` record is what makes a restarted main session answerable again:
+nothing becomes answerable otherwise.
+
+Claude Code's background sessions (`CLAUDE_CODE_SESSION_KIND=bg`, forwarded
+by hook v4 as `session_kind`; from a v3 hook, an agent process named like a
+version) are listed with `kind: "background"`. They have no terminal: never
+answerable, not counted among the main checkout's sessions, and not the
+sandbox's model. Their conversation is read like any other.
