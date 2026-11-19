@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 /// `SBXW_DESKTOP_MEM_EVERY=<seconds>`: the report every so often in a real
 /// run (with `SBXW_DESKTOP_MEM=1` for the heap's numbers), labelled by the
-/// minutes since start; `memory-summary.py` reads the log as a script's.
+/// seconds since start; `memory-summary.py` reads the log as a script's.
 fn every() -> Option<std::time::Duration> {
     static EVERY: std::sync::OnceLock<Option<std::time::Duration>> = std::sync::OnceLock::new();
     *EVERY.get_or_init(|| std::env::var("SBXW_DESKTOP_MEM_EVERY").ok().and_then(|v| v.parse::<u64>().ok()).filter(|s| *s > 0).map(std::time::Duration::from_secs))
@@ -33,7 +33,7 @@ impl App {
             return;
         }
         NEXT.with(|n| n.set(Some(now + every)));
-        self.memory_report(&format!("{} min", now.duration_since(start).as_secs() / 60));
+        self.memory_report(&format!("{} s", now.duration_since(start).as_secs()));
     }
 
     /// Logs the report under `label`.
