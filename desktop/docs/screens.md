@@ -869,6 +869,7 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `sparkle` | the agent (Claude, or another vendor's) |
 | `people` | the team (a session in team mode: the pane bar's Team) |
 | `leader` | the team leads (a crown over one person: the rail's Team leads, the pager's mark, the palette) |
+| `board` | a team's conversation: two bubbles answering each other (the rail's Board, its overlay, a sandbox's row menu) |
 | `jarvis` | Jarvis |
 | `threads` | a sandbox's sessions and threads (`branch` is one worktree) |
 | `globe` | the sandbox's browser |
