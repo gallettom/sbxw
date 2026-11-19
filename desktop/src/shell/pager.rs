@@ -193,7 +193,8 @@ impl App {
     pub(super) fn pager_drawn(&self, key: &str) -> bool {
         let n = self.pages.list.len();
         let (a, b) = self.pager_fit();
-        let fixed = matches!(key, "pager" | "page-new" | "pager-view-tabs" | "pager-view-grid" | "pager-per") || (key == "pager-gather-now" && self.gather_would_move()) || (key == "pager-leads" && self.leads_on());
+        let base = key.strip_prefix("pager-view-").is_some_and(|b| App::base_screen().is_some_and(|(n, ..)| n == b));
+        let fixed = base || matches!(key, "pager" | "page-new" | "pager-view" | "pager-view-tabs" | "pager-view-grid" | "pager-per") || (key == "pager-gather-now" && self.gather_would_move()) || (key == "pager-leads" && self.leads_on());
         let more = (a > 0 || b < n) && key == "pager-more";
         let tab = key.strip_prefix("page-").and_then(|r| r.strip_suffix("-close").unwrap_or(r).parse::<usize>().ok()).is_some_and(|k| k >= 1 && k <= n && ((a..b).contains(&(k - 1)) || (!key.ends_with("-close") && self.pager_menu.as_deref() == Some("more"))));
         let per = self.pager_menu.as_deref() == Some("per") && (key == "pager-per-list" || key == "pager-gather" || PER_CHOICES.iter().any(|c| key == format!("pager-per-{c}")));

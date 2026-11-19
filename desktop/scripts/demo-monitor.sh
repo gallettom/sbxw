@@ -62,6 +62,9 @@ if m == "send":
     add(type="type", every=0.02, text=text); t += 0.02 * len(text)
     step("monitor-send", "cf-confirm")
 if m in ("under", "back"):
+    # A narrow window lists the sessions: a row opens one, with its links.
+    if os.environ.get("SIZE", "").startswith("720"):
+        step("monitor-row-shop-web::checkout-copy", "monitor-back")
     step("monitor-files", "overlay-files")
 if m == "back":
     add(type="key", name="Escape"); add(type="mark", name="wait-gone:overlay-files")
@@ -79,7 +82,7 @@ for size in ${SIZES:-1284x816 720x480}; do
   for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back}; do
     case "$m" in empty|idle|busy) fx="$m" ;; *) fx=basic ;; esac
     out="$shots/monitor-$size-$theme-$m"
-    script "$m" >"$out-script.json"
+    SIZE="$size" script "$m" >"$out-script.json"
     start_daemon "$out-standin" --fixture "$here/fixtures/monitor/$fx.json"
     SHOT_SIZE="$size" run_app "$out.log" --script "$out-script.json" \
       --snap "$out.png" --tree "$out.json" --at "mark:$m+0.2"

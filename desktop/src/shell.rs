@@ -1346,7 +1346,10 @@ impl App {
         }
         // The overlay over the pane area and its close button.
         if let Some((n, _)) = &self.feats.overlay {
-            if key == "overlay-close" || key == format!("overlay-{n}") || key == format!("overlay-head-{n}") {
+            let base = self.feats.base.as_ref() == Some(n);
+            // A base view has the view switch where an overlay has its ×.
+            let head = if base { key.starts_with("base-view") } else { key == "overlay-close" };
+            if head || key == format!("overlay-{n}") || key == format!("overlay-head-{n}") {
                 return true;
             }
         }
