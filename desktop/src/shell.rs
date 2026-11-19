@@ -24,6 +24,8 @@ pub mod tiling;
 mod layout_tests;
 #[cfg(test)]
 mod gate_tests;
+#[cfg(test)]
+mod resize_tests;
 
 use crate::approval;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
