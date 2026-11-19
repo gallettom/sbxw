@@ -49,8 +49,8 @@ step("fold the commit", "commits-row-" + row)
 add(type="mark", name="perf:type 6 characters in the filter")
 add(type="tap", key="commits-filter"); add(type="type", text="change", every=0.05); t += 0.5
 add(type="mark", name="hold:300")
-step("switch to the Files overlay", "rail-files", "files-tab-files")
-step("the Workspace tab", "files-tab-files", "files-up")
+step("switch to the Files overlay", "rail-files", "files-loc-/Users/me/web")
+step("the Workspace location", "files-loc-/Users/me/web", "files-up")
 step("browse the workspace (the folder above)", "files-up", "files-row-/Users/me/web/big")
 step("open the 3,000-entry folder", "files-row-/Users/me/web/big")
 add(type="mark", name="hold:800")
@@ -77,3 +77,5 @@ sleep 0.3
 RUNE_PERF=1 RUNE_PERF_SLOW_MS=0.01 SBXW_DESKTOP_PERF=1 SHOT_SIZE=1284x816 run_app "$out/perf.log" --script "$out/script.json" --snap "$out/perf.png" --tree "$out/tree.json" --at "${PERF_AT:-mark:end+0.2}" || true
 cleanup; pids=()
 python3 "$here/scripts/perf-summary.py" "$out/perf.log" "$out/rune.jsonl"   # exits 1 over the budget
+# A step that waited in vain measured nothing: the run fails.
+if grep -q "gave up waiting" "$out/perf.log"; then grep "gave up waiting" "$out/perf.log" >&2; exit 1; fi
