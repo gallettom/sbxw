@@ -940,3 +940,47 @@ fn the_plan_dialog_keeps_long_threads_inside_and_its_footer_at_the_bottom() {
         }
     }
 }
+
+/// FINISH.md item 1: the current page's tab and the pane under it are one
+/// shape, in the Tabs and the Grid view, on the first tab and a later one.
+/// The tab's foot stands on the pane's top edge (no ground between them);
+/// the pane's top line opens exactly between the tab's two sides (its fill
+/// runs on into the bar); on the first tab the tab's left edge is the
+/// pane's left edge and that pane's top-left corner is square.
+#[test]
+fn the_current_tab_and_its_pane_are_one_shape() {
+    for tabs in [true, false] {
+        for page in [0usize, 1] {
+            let mut r = Rig::new(&["a", "b", "c"], 1284.0, 816.0);
+            r.op(PageOp::Per(if tabs { 1 } else { 2 }));
+            r.op(PageOp::View(tabs));
+            r.op(PageOp::Show(page));
+            r.settle();
+            let what = format!("{} view, page {}", if tabs { "Tabs" } else { "Grid" }, page + 1);
+            let tab = r.rect(&format!("page-{}", page + 1));
+            let area = r.rt.state.rects.area.unwrap();
+            assert!((tab[1] + tab[3] - area[1]).abs() <= 0.5, "{what}: the tab's foot {tab:?} stands on the pane area's top {area:?}");
+            let s = &r.rt.state;
+            let i = s.foot_pane().unwrap_or_else(|| panic!("{what}: a pane under the tab's foot"));
+            let n = i + 1;
+            let pane = r.rect(&format!("pane-{n}"));
+            assert!((pane[1] - area[1]).abs() <= 0.5, "{what}: the pane under the foot is at the area's top");
+            let gap = r.rect(&format!("pane-{n}-accent-foot"));
+            let w = super::JOIN_W;
+            assert!((gap[0] - (tab[0] + w)).abs() <= 0.5 && (gap[0] + gap[2] - (tab[0] + tab[2] - w)).abs() <= 0.5, "{what}: the line opens between the tab's sides: {gap:?} under {tab:?}");
+            assert!((gap[1] - pane[1]).abs() <= 0.5, "{what}: the opening is the pane's top line");
+            // What is drawn just under the tab's left side, and under its middle.
+            let side = r.rt.element_at(tab[0] + w / 2.0, tab[1] + tab[3] + 0.5).map(|p| p.path().to_string()).unwrap_or_default();
+            assert!(side.contains(&format!("pane-{n}-accent")), "{what}: under the tab's left side: {side}");
+            let mid = r.rt.element_at(tab[0] + tab[2] / 2.0, tab[1] + tab[3] + 0.5).and_then(|p| p.key().map(str::to_string)).unwrap_or_default();
+            assert_eq!(mid, format!("pane-{n}-accent-foot"), "{what}: under the tab's middle");
+            if page == 0 {
+                assert!((tab[0] - pane[0]).abs() <= 0.5, "{what}: the first tab's left edge {} is its pane's {}", tab[0], pane[0]);
+                assert_eq!(super::joined_pane(s), Some(s.panes[i].uid), "{what}: the pane's top-left corner is square");
+            } else {
+                assert!(tab[0] > pane[0] + 1.0, "{what}: a later tab stands further right");
+                assert_eq!(super::joined_pane(s), None, "{what}: the pane keeps its rounded corner");
+            }
+        }
+    }
+}

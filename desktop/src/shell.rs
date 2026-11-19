@@ -2427,18 +2427,73 @@ fn panes_view(s: &App) -> El {
     col().key("panes").grow(1.0).h_full().min_w(0.0).min_h(0.0).gap(0.0).child(pager::view(s)).child(area)
 }
 
-/// The pane the current page's tab is joined to: the one at the pane
-/// area's top-left corner, while that tab starts at the area's left edge
-/// (not after the leads view's mark or the hidden tabs' menu). Its top-left
-/// corner is drawn square so tab and pane make one shape.
+/// The current page's tab and the pane under it make one shape (pager.rs,
+/// `tab`): the tab's outline is this wide, the same as a pane's top line,
+/// so its sides run on into that line with no step.
+pub const JOIN_W: f32 = 2.0;
+
+impl App {
+    /// The pane under the current page's tab's left side: on the current
+    /// page, at the pane area's top, its x range holding the tab's left
+    /// edge. The tab takes its look (group colour, bar tint) so the two meet
+    /// in one colour. Laid-out rects (the frame before; a layout report runs
+    /// the view again, so it settles on the next frame).
+    pub fn foot_pane(&self) -> Option<usize> {
+        let area = self.rects.area?;
+        let tab = self.rects.tabs.get(&self.pages.current)?;
+        let on_page = self.pages.cur().tile.order();
+        let x = tab[0] + JOIN_W / 2.0;
+        let uid = on_page.into_iter().find(|u| self.rects.panes.get(u).is_some_and(|r| (r[1] - area[1]).abs() < 1.0 && r[0] - 0.5 <= x && x < r[0] + r[2]))?;
+        self.panes.iter().position(|p| p.uid == uid)
+    }
+
+    /// The colour a pane's top line (and the current tab's outline over
+    /// it) takes: its sandbox's group colour, else the neutral hairline.
+    pub fn pane_line(&self, i: usize) -> u32 {
+        self.pane_group(i).unwrap_or_else(|| theme::color_value("border").unwrap())
+    }
+
+    /// Pane `i`'s sandbox's group colour, if it is in a group.
+    pub fn pane_group(&self, i: usize) -> Option<u32> {
+        self.panes.get(i).and_then(|p| p.sandbox.as_deref()).and_then(|n| self.group_colors().get(n).copied())
+    }
+}
+
+/// The pane whose top-left corner is drawn square: the one under the
+/// current tab's left side when that side is the pane's own left edge (the
+/// first tab, not after the leads view's mark or the hidden tabs' menu), so
+/// the tab's left side and the pane's are one straight line.
 fn joined_pane(s: &App) -> Option<Uid> {
+    let tab = s.rects.tabs.get(&s.pages.current)?;
+    let i = s.foot_pane()?;
+    let uid = s.panes.get(i)?.uid;
+    let r = s.rects.panes.get(&uid)?;
+    ((tab[0] - r[0]).abs() <= 0.5).then_some(uid)
+}
+
+/// Where the current page's tab stands on pane `uid`'s top edge, in the
+/// pane's own x: the run between the tab's two sides, where the pane's top
+/// line opens into the tab (no line under the tab: the tab's fill runs on
+/// into the bar). None when the tab is not over this pane.
+fn tab_foot(s: &App, uid: Uid) -> Option<(f32, f32)> {
     let area = s.rects.area?;
     let tab = s.rects.tabs.get(&s.pages.current)?;
-    if (tab[0] - area[0]).abs() > 1.0 {
+    let p = s.rects.panes.get(&uid)?;
+    if (p[1] - area[1]).abs() > 1.0 || !s.pages.cur().tile.order().contains(&uid) {
         return None;
     }
-    let on_page = s.pages.cur().tile.order();
-    s.rects.panes.iter().find(|(u, r)| on_page.contains(u) && (r[0] - area[0]).abs() < 1.0 && (r[1] - area[1]).abs() < 1.0).map(|(u, _)| *u)
+    let x0 = (tab[0] + JOIN_W).max(p[0]) - p[0];
+    let x1 = (tab[0] + tab[2] - JOIN_W).min(p[0] + p[2]) - p[0];
+    (x1 > x0 + 0.5).then_some((x0, x1))
+}
+
+/// A pane's top line, `JOIN_W` high in its line colour; under the current
+/// page's tab (`foot`, in the pane's x) it opens: the bar's own ground
+/// there, so the tab's fill runs on into the bar and the tab's sides turn
+/// into the line at a square foot.
+fn top_line(key: String, line: rune::Color, ground: rune::Color, foot: Option<(f32, f32)>) -> El {
+    let Some((x0, x1)) = foot else { return el().key(key).h(JOIN_W).w_full().fill(line) };
+    row().key(key.clone()).h(JOIN_W).w_full().child(el().w(x0).h_full().fill(line)).child(el().key(format!("{key}-foot")).w(x1 - x0).h_full().fill(ground)).child(el().grow(1.0).h_full().fill(line))
 }
 
 /// A split's element key: `panes` for the page's first split, then the
@@ -3200,7 +3255,7 @@ fn pane_view(s: &App, i: usize) -> El {
                 s.pane_drop(i, files)
             }
         })
-        .child(el().key(format!("pane-{}-accent", i + 1)).h(2.0).w_full().fill(accent))
+        .child(top_line(format!("pane-{}-accent", i + 1), accent, theme::hex(bar_ground), tab_foot(s, uid)))
         .child(bar)
         .child(el().h(1.0).w_full().fill(c("elevated")))
         .child(body)
