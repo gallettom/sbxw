@@ -45,7 +45,7 @@ local TOOLS = {
 
 -- While Add example is chosen: what it does and how, above the surface.
 local function example_hint()
-  return row{ gap = 8, w = "full", key = "canvas-asset-hint", px = 8, py = 6, radius = "xs", fill = "elevated", align = "center",
+  return row{ gap = 8, w = "full", key = "canvas-asset-hint", px = 8, py = 8, radius = "xs", fill = "elevated", align = "center",
     icon{ "image", size = 14, color = "blue" },
     text{ "Add a picture of yours (a mock-up, a reference) as an example for the agent: press where it goes, then pick the file. Or drop one here, or paste it (⌘V). It is numbered (Example 1) and sent with your remarks.",
       size = "sm", color = "text", wrap = true, grow = 1 },
