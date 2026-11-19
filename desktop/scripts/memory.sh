@@ -120,6 +120,7 @@ mem("everything open")
 add(type="key", name="Escape"); hold(300)
 add(type="tap", key="rail-canvas"); wait("canvas-sandbox", 5000)
 add(type="tap", key="canvas-sandbox"); wait("canvas-sandbox-list", 5000); hold(300)
+add(type="type", text="web-app", every=0.03); t += 0.3; hold(300)  # the bounded list: web-app may be below its fold
 add(type="tap", key="canvas-sandbox-web-app"); wait("canvas", 5000); hold(4000)
 mem("canvas open")
 # Close: the overlay or panel open, then every pane.

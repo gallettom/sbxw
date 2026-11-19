@@ -714,3 +714,33 @@ fn in_gui_mode_canvas_ask_reaches_its_confirm() {
     assert!(d.error.is_none(), "{:?}", d.error);
     assert!(d.confirm.as_ref().is_some_and(|c| c.preview.as_ref().is_some_and(|p| p.text == "Shots of the login page, please.")), "the prompt in full");
 }
+
+/// Canvas's sandbox picker is the scope list: open it, narrow it by its
+/// filter (the list is bounded and scrolls, a row below its fold is not
+/// pressable), press web-app's row: its canvas's surface is drawn.
+#[test]
+fn picking_a_sandbox_in_the_scope_list_shows_its_canvas() {
+    *STATE().lock().unwrap() = State::default();
+    crate::surface_canvas::close(SURF);
+    let mut rt = window::runtime(1284.0, 816.0);
+    window::tap(&mut rt, "rail-canvas");
+    window::tap(&mut rt, "canvas-sandbox");
+    assert!(rt.find("canvas-sandbox-list").is_some(), "the scope list is open");
+    for c in "web-app".chars() {
+        rt.key(rune::KeyEvent { key: rune::Key::Text(c.to_string()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+    }
+    window::settle(&mut rt, 2);
+    let row = window::rect(&rt, "canvas-sandbox-web-app").expect("web-app's row");
+    let list = window::rect(&rt, "canvas-sandbox-list").expect("the list");
+    assert!(row[1] >= list[1] - 0.5 && row[1] + row[3] <= list[1] + list[3] + 0.5, "the row is inside the list: {row:?} {list:?}");
+    window::tap(&mut rt, "canvas-sandbox-web-app");
+    for _ in 0..100 {
+        window::settle(&mut rt, 2);
+        if window::rect(&rt, "canvas-s-1-0").is_some() {
+            break;
+        }
+    }
+    let keys: Vec<String> = rt.elements().iter().filter_map(|e| e.key.clone()).filter(|k| k.starts_with("canvas")).take(40).collect();
+    assert!(window::rect(&rt, "canvas-s-1-0").is_some(), "web-app's canvas is drawn: {keys:?} ui {}", rt.state.screen_data()["canvas"]);
+}
