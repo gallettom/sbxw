@@ -61,12 +61,12 @@ end
 local function author_line(r)
   local nw = math.max(60, math.min(260, CONV_W - 200))
   if r.side == "right" then
-    return row{ gap = 6, w = "full", justify = "end", key = "board-author-" .. (r.id or ""),
+    return row{ gap = 8, w = "full", justify = "end", key = "board-author-" .. (r.id or ""),
       team_tag(r), when(r),
       nz(r.to) and text{ "to " .. r.to, size = "xs", color = "text-muted", truncate = true, max_w = nw } or false,
       text{ "You", size = "sm", weight = "semibold", color = "text-bright" } }
   end
-  return row{ gap = 6, w = "full", key = "board-author-" .. (r.id or ""),
+  return row{ gap = 8, w = "full", key = "board-author-" .. (r.id or ""),
     column{ w = 8, h = 8, radius = 4, fill = r.who_color or "text-dim" },
     text{ r.who or "", size = "sm", mono = true, weight = "semibold", color = r.who_color or "text-bright", truncate = true, max_w = nw },
     nz(r.role) and badge{ r.role, tone = "purple", help = "The session that planned this team" } or false,
@@ -98,7 +98,7 @@ local function bubble(r, kids, opts)
   for _, k in ipairs(kids) do box[#box + 1] = k end
   return column{ gap = 2, w = "full", py = r.cont and 0 or 4, key = "board-msg-" .. (r.id or ""),
     (not r.cont) and author_line(r) or false,
-    row{ w = "full", justify = right and "end" or "start", px = right and 0 or 14, column(box) } }
+    row{ w = "full", justify = right and "end" or "start", px = right and 0 or 16, column(box) } }
 end
 
 local function questions(r, sb)
@@ -135,7 +135,7 @@ local function rowview(r, sb)
   elseif r.type == "transition" then
     -- A bare change of state: the agent, an arrow, the new state, no bubble.
     local n = r.count or 1
-    return row{ gap = 6, w = "full", px = 4, key = "board-msg-" .. (r.id or ""),
+    return row{ gap = 8, w = "full", px = 4, key = "board-msg-" .. (r.id or ""),
       help = n > 1 and (n .. " changes of state: " .. (r.trail or "") .. " (from " .. (r.first_when or "") .. ")") or nil,
       column{ w = 8, h = 8, radius = 4, fill = r.who_color or "text-dim" },
       text{ r.who or "", size = "sm", mono = true, color = r.who_color or "text-muted", truncate = true, max_w = math.max(60, math.min(260, CONV_W - 220)) },
@@ -176,7 +176,7 @@ local function rowview(r, sb)
   elseif r.type == "status" then
     local kids = {}
     if r.state then
-      kids[#kids + 1] = row{ gap = 6, badge{ r.state.word, tone = r.state.tone }, text{ "status report", size = "xs", color = "text-muted" } }
+      kids[#kids + 1] = row{ gap = 8, badge{ r.state.word, tone = r.state.tone }, text{ "status report", size = "xs", color = "text-muted" } }
       kids[#kids + 1] = words(r.text or "", sb, { size = "sm" })
     else
       if nz(r.label) and r.side ~= "right" then kids[#kids + 1] = kind_line(r.label, { color = r.tone == "neutral" and "text-muted" or r.tone }) end
@@ -282,7 +282,7 @@ end
 local function picker_row(t, i, p, mw)
   local hl = (p.hl or 0) == i
   local current = p.current == t.id
-  return column{ key = "board-row-team-" .. t.id, on = "team", arg = t.id, gap = 2, px = 8, py = 6, radius = "xs", w = "full",
+  return column{ key = "board-row-team-" .. t.id, on = "team", arg = t.id, gap = 2, px = 8, py = 8, radius = "xs", w = "full",
     fill = (hl or current) and "active-bg" or nil, hover = "hover-subtle", selected = current, help = t.summary,
     row{ gap = 8, w = "full",
       column{ w = 8, h = 8, radius = 2, fill = t.color or "text-dim" },
@@ -303,9 +303,9 @@ local function picker_menu(ui, ow, oh, wide)
   if (p.more or 0) > 0 then
     list[#list + 1] = row{ w = "full", justify = "center", button{ "Show " .. p.more .. " more", variant = "ghost", tone = "blue", dense = true, on = "picker_more", key = "board-picker-more" } }
   end
-  local est = 8 + 54 * (#(ui.teams or {}) + 1) + ((p.more or 0) > 0 and 32 or 0)
+  local est = 8 + 58 * (#(ui.teams or {}) + 1) + ((p.more or 0) > 0 and 32 or 0)
   local h = math.max(80, math.min(est, (oh or 600) - 24))
-  return column{ pin = { left = 0, top = 0 }, w = mw, key = "board-picker", fill = "surface", border = "elevated", radius = "md", pad = 6,
+  return column{ pin = { left = 0, top = 0 }, w = mw, key = "board-picker", fill = "surface", border = "elevated", radius = "md", pad = 4,
     scroll{ h = h, key = "board-picker-scroll", column(list) } }
 end
 

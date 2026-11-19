@@ -1827,13 +1827,39 @@ Commit messages are drawn as plain text: no pills, no Markdown, no links.
 An overlay (`src/feat/board/`, `screens/board.luau`), the rail's activity
 zone (order 35, icon `board`, purple: the team) and each sandbox's row menu
 (opened on that sandbox's team). A **team** is a plan with its sandbox, lead
-and threads; the title's picker lists every team, most recent first, with
-its sandbox's colour and state, and "All teams". The main column is the
-team's timeline (`GET /api/teams/:id/timeline`) as a **conversation**,
+and threads, and is named by its threads' names ("api-routes + web-page",
+past three "+ n more"; its sandbox when it has none), in the mono face with
+its sandbox's colour mark. The title's **picker** shows those names, then the
+summary when there is room; its list (drawn by the screen, not the core's
+320 pt menu) gives each team its names, its summary under them on up to two
+lines, its state chip and age at the right, "All teams" first, 20 teams a
+page ("Show n more"). The list is at least as wide as the button, up to
+560 pt, never wider than the overlay; a press outside closes it (and does
+nothing else), a pick closes it, its rows are one keyboard list (Up, Down,
+Enter; the keyboard lands on the team shown), Escape closes it through
+`board_key` (`board_ui.popup` is true while it is open). The main column is
+the team's timeline (`GET /api/teams/:id/timeline`) as a **conversation**,
 oldest at the top, opening at the newest: the person's acts on the right,
-the lead (marked) and threads (their lane colour) on the left, sbxw's own
-events as centred lines. A plan is a card (why, its threads as chips, Show
-goals); a status report a line with its state; the board's decisions
+the lead and threads on the left, sbxw's own events as centred lines. Each
+message has its **author line above its bubble**: the dot and the name (mono,
+the thread's colour; the lead by its name when the daemon has one, purple),
+the role chip "lead" only when the name does not already say it, "to" the
+addressee ("the team", "you", a thread, the lead's name), the time; the
+person's on the right with "You". The same author to the same addressee
+within 5 minutes shares one author line, the bubbles stacked under it. A
+bubble hugs its content up to 520 pt (about 72 characters of prose) and holds
+only the content: a small quiet kind line ("direct message", "Decision team
+note", a state chip with "status report"), the words (prose face, pills),
+Show more. A run of more than 32 characters without a space gets a break
+every 24 (zero-width spaces, drawing only), so a path, a hash or 200
+characters without a space wrap inside the bubble. A status report with
+words is tinted by its state: done green (`green-tint`, `green` border, as a
+Decision), blocked amber, failed red, others neutral; one with no words (or
+only spaces) is **one quiet line**, no bubble: dot, name, an arrow
+(`chevron-right`), the new state's chip, the time; one agent's consecutive
+bare changes fold into the last with "×n" and the trail in its tooltip. "All
+teams" tags each row with its team's names (its summary in the tooltip). A
+plan is a card (why, its threads as chips, Show goals); the board's decisions
 (green), warnings (amber), questions (blue) and handoffs labelled notes; a
 round of questions with each answer marked; a team note (`team_note`) as a
 note labelled Info, Warning or Decision with "team note"; a direct message
@@ -1868,6 +1894,8 @@ again.
 | `board_tab` | `tab` | The narrow layout's column |
 | `board_open` | `what`, `thread?`, `relay?` | Where one acts: terminal, monitor, commits, worktrees, plan, requests, threads |
 | `board_refresh` | | Reads again |
+| `board_picker` | `open?`, `more?` | Opens or closes the team picker's list (none: toggles), or lists 20 more teams in it |
+| `board_key` | `key` (`up`, `down`, `enter`, `escape`) | The picker's keys while its list is open; Escape closes the list only |
 
 ### worktrees
 
