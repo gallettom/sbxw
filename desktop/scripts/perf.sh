@@ -69,7 +69,7 @@ step("the Board: decisions and warnings", "board-group-notes")
 step("the Board: every kind again", "board-group-all")
 # Canvas: web-app's canvas of 15 shots, a pan and a pinch, the tools, Fit, then closed.
 step("open the Canvas", "rail-canvas", "canvas-sandbox")
-step("the Canvas: the sandbox picker", "canvas-sandbox")
+step("the Canvas: the sandbox picker", "canvas-sandbox", "canvas-sandbox-list")
 step("the Canvas: web-app's 15 shots", "canvas-sandbox-web-app", "canvas")
 add(type="mark", name="hold:1500")
 add(type="mark", name="perf:the Canvas: pan (wheel)"); add(type="wheel", x=560, y=450, dx=-40, dy=-30); add(type="mark", name="hold:300")

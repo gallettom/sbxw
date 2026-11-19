@@ -119,7 +119,7 @@ mem("everything open")
 # The Canvas over the rest: web-app's 15 shots decoded and drawn, then closed.
 add(type="key", name="Escape"); hold(300)
 add(type="tap", key="rail-canvas"); wait("canvas-sandbox", 5000)
-add(type="tap", key="canvas-sandbox"); hold(600)
+add(type="tap", key="canvas-sandbox"); wait("canvas-sandbox-list", 5000); hold(300)
 add(type="tap", key="canvas-sandbox-web-app"); wait("canvas", 5000); hold(4000)
 mem("canvas open")
 # Close: the overlay or panel open, then every pane.
