@@ -113,6 +113,14 @@ pub const DARK: &[(&str, u32)] = &[
     // modal over the page, a card over a panel). See `compose_stands_out`.
     ("compose", 0x252f3e),
     ("compose-edge", 0x7d8796),
+    // The core's notice in the top bar, by kind: the kind's colour mixed
+    // onto a raised ground (blue 26 %, amber 26 %, red 30 % over `surface`),
+    // lighter than the bar by NOTICE_STEP, with an edge and an icon in the
+    // kind's colour. Its text is `text-bright`, its offer too (a link
+    // colour falls under 4.5:1 on these).
+    ("notice-info", 0x273f5b),
+    ("notice-ask", 0x473c22),
+    ("notice-error", 0x5a2b2e),
 ];
 
 /// Graphite: the same names on neutral dark greys (a ground near #202124,
@@ -184,6 +192,9 @@ pub const GRAPHITE: &[(&str, u32)] = &[
     ("file-archive", 0xc9a36b),
     ("compose", 0x3a3e46),
     ("compose-edge", 0x90969c),
+    ("notice-info", 0x3a4d64),
+    ("notice-ask", 0x584a2d),
+    ("notice-error", 0x6a3838),
 ];
 
 /// Pure white and black: the ends that "move toward white or black" math
@@ -914,6 +925,17 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("text-muted", "compose", Need::Text),
     ("compose-edge", "compose", Need::Mark),
     ("focus", "compose", Need::Mark),
+    // The notice: its text, its offer ("Click to open"), the × and the
+    // kind's edge and icon on its ground.
+    ("text-bright", "notice-info", Need::Text),
+    ("text-bright", "notice-ask", Need::Text),
+    ("text-bright", "notice-error", Need::Text),
+    ("text", "notice-info", Need::Mark),
+    ("text", "notice-ask", Need::Mark),
+    ("text", "notice-error", Need::Mark),
+    ("blue", "notice-info", Need::Mark),
+    ("amber", "notice-ask", Need::Mark),
+    ("red", "notice-error", Need::Mark),
     // Disabled labels (see Need::Disabled).
     ("text", "elevated", Need::Disabled),
     ("text-muted", "surface", Need::Disabled),
@@ -949,6 +971,11 @@ pub const COMPOSE_STEP_SURFACE: f64 = 1.15;
 /// And from `elevated`, the agents' message bubbles in the conversation
 /// above it: a field is never taken for a message.
 pub const COMPOSE_STEP_ELEVATED: f64 = 1.1;
+
+/// How far a notice's ground steps from the top bar's `surface`, and how far
+/// above the views' card tint of the same kind (`blue-tint`...) it sits.
+pub const NOTICE_STEP: f64 = 1.4;
+pub const NOTICE_OVER_TINT: f64 = 1.2;
 
 /// The accent, amber and the vendor terracotta: at least this far apart in
 /// hue (degrees) and in lightness (HSL points), pairwise, in each theme.
@@ -1360,6 +1387,23 @@ mod tests {
             assert!(luminance(comp) > luminance(v("elevated")) && se >= COMPOSE_STEP_ELEVATED, "{m:?}: {se:.2} from a message bubble");
             for (fg, need) in [("text-bright", 4.5), ("text-muted", 4.5), ("compose-edge", 3.0), ("focus", 3.0)] {
                 assert!(contrast(v(fg), comp) >= need, "{m:?}: {fg} on compose");
+            }
+        }
+    }
+
+    /// The notice stands out from the bar it sits in, in both themes.
+    #[test]
+    fn notice_stands_out_from_the_bar() {
+        for m in MODES {
+            let s = color_in(m, "surface").unwrap();
+            for (kind, hue, tint) in [("notice-info", "blue", "blue-tint"), ("notice-ask", "amber", "amber-tint"), ("notice-error", "red", "red-tint")] {
+                let n = color_in(m, kind).unwrap();
+                assert!(luminance(n) > luminance(s), "{m:?} {kind}: raised");
+                assert!(contrast(n, s) >= NOTICE_STEP, "{m:?} {kind}: {:.2} on the bar", contrast(n, s));
+                assert!(contrast(n, color_in(m, tint).unwrap()) >= NOTICE_OVER_TINT, "{m:?} {kind}: too close to the cards' {tint}");
+                // Its hue is the kind's (within 25 degrees), and coloured.
+                let ((h, sat, _), (kh, _, _)) = (to_hsl(n), to_hsl(color_in(m, hue).unwrap()));
+                assert!(hue_dist(h, kh) <= 25.0 && sat >= 0.25, "{m:?} {kind}: hue {h:.0} against {kh:.0}, saturation {sat:.2}");
             }
         }
     }

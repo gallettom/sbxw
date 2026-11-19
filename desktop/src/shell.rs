@@ -26,6 +26,8 @@ mod layout_tests;
 #[cfg(test)]
 mod gate_tests;
 #[cfg(test)]
+mod notice_tests;
+#[cfg(test)]
 mod resize_tests;
 
 use crate::approval;
@@ -2517,9 +2519,12 @@ fn notice_view(s: &App) -> Option<El> {
         "screen_restore" => "Click to see the file and restore the built-in",
         _ => "Click to open",
     });
+    // Its kind, by meaning, from what it is: an error, an offer to act
+    // (needs you), or news.
+    let (kind, ground, icon) = notice_kind(*err, what.is_some());
     let mut body = col().gap(1.0).grow(1.0).min_w(0.0).child(text(t.clone()).font(small(13.0, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
     if let Some(w) = what {
-        body = body.child(text(w).font(small(12.0, 500.0)).color(c("link")).truncate().min_w(0.0));
+        body = body.child(row().gap(2.0).items_center().child(text(w).font(small(12.0, 600.0)).color(c("text-bright")).truncate().min_w(0.0)).child(rune::icon(crate::icons::get("chevron-right").unwrap(), theme::icon::SMALL).color(c("text-bright"))));
     }
     let close = el()
         .key("notice-close")
@@ -2538,22 +2543,24 @@ fn notice_view(s: &App) -> Option<El> {
             s.feats.notice_then = None;
             s.push_data();
         })
-        .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text-muted")));
+        .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text")));
     Some(
         row()
             .key("notice")
             .role("status")
             .help(t.clone())
-            .gap(6.0)
+            .gap(8.0)
             .items_center()
             .max_w(380.0f32.min(s.window.0 * 0.35))
             .min_w(0.0)
             .mr(8.0)
-            .px(8.0)
+            .pl(11.0)
+            .pr(8.0)
             .py(4.0)
             .radius(theme::radius("sm").unwrap())
-            .fill(c(if *err { "red-tint" } else { "bg" }))
-            .border(1.0, c(if *err { "red" } else { "border" }))
+            .fill(c(ground))
+            .border_sides([0.0, 0.0, 0.0, 3.0], c(kind))
+            .shadow(2.0, 8.0, crate::theme::shadow())
             .cursor(Cursor::Pointer)
             .on_press(|s: &mut App| {
                 s.notice = None;
@@ -2563,9 +2570,21 @@ fn notice_view(s: &App) -> Option<El> {
                 }
                 s.push_data();
             })
+            .child(rune::icon(crate::icons::get(icon).unwrap(), theme::icon::MEDIUM).color(c(kind)))
             .child(body)
             .child(close),
     )
+}
+
+/// A notice's kind by meaning: red for an error, amber when
+/// it offers something to do (it needs you), blue for news.
+/// Its colour, its ground and its icon.
+pub fn notice_kind(error: bool, offer: bool) -> (&'static str, &'static str, &'static str) {
+    match (error, offer) {
+        (true, _) => ("red", "notice-error", "warning"),
+        (false, true) => ("amber", "notice-ask", "ask"),
+        _ => ("blue", "notice-info", "info"),
+    }
 }
 
 /// The pane area: the pager, then the current page's tiling.
