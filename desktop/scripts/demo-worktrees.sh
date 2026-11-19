@@ -27,12 +27,12 @@ def step(key, until):
 add(type="mark", name="wait:row-web-app")
 step("rail-worktrees", "worktrees-row-web-app:checkout-copy")
 if m == "commits":
-    step("worktrees-commits-web-app:checkout-copy", "commits-branch")
+    step("worktrees-commits-web-app:checkout-copy", "commits-filter")
 if m == "lane":
     add(type="tap", key="worktrees-lane-web-app:api-cache")
 if m == "dot":
     # checkout-copy's tip (the same hash in fixtures/commits/standin.json).
-    step("worktrees-dot-web-app-b1b942e", "commits-branch")
+    step("worktrees-dot-web-app-b1b942e", "commits-filter")
 add(type="mark", name="hold:400")
 add(type="mark", name=m)
 add(type="mark", name="end")

@@ -420,16 +420,21 @@ return {
       codemap_button(ui, narrow),
       button{ (not narrow) and "Upload" or nil, key = "files-upload", icon = "plus", on = "upload", variant = open_up and "neutral" or "ghost", dense = true,
         help = "Upload into " .. ui.sandbox .. ": drop files on the explorer, choose them or paste a picture" },
+      button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", dense = true, help = "Read the lists again" },
       menu{ "", id = "files-actions", icon = "more", items = actions, on = "action", arg = { sandbox = ui.sandbox, has_map = ui.has_map == true } },
     }
     local top = { gap = 8, w = "full", head }
     if open_up then top[#top + 1] = uploads(ui, dragging) end
     local three = (over.w or 1000) >= 900
-    -- The sandbox picker beside the overlay's title ("Files  [web-app v]"):
-    -- the core's header draws this row (screen.rs, TITLE_SLOT).
+    -- The scope beside the overlay's title ("Files in [web-app v]"): the core
+    -- draws this row in its header (screen.rs, TITLE_SLOT) and the picker
+    -- itself (scope.rs).
+    -- The worktree the list is in, as the scope's second level ("› thread-a").
+    local thread
+    for _, w in ipairs(ui.worktrees or {}) do if w.here then thread = w.thread end end
     top[#top + 1] = row{ key = "title-slot", gap = 8,
-      sandbox_picker(data, { id = "files-sandbox", value = ui.sandbox, items = ui.sandboxes or {}, on = "sandbox" }),
-      button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", dense = true, help = "Read the lists again" },
+      select{ id = "files-sandbox", value = ui.sandbox, on = "sandbox",
+        scope = { kind = "sandbox", narrow = thread, narrow_icon = "branch" } },
       ui.offline and badge{ "stopped: workspace only", tone = "amber", help = "Read from this computer; the sandbox is not started to list a folder" } or false,
     }
     local list_head = nz(ui.artifacts_dir) and ui.tab == "artifacts" and text{ ui.artifacts_dir, size = "xs", color = "text-dim", mono = true, truncate = true, help = ui.artifacts_dir } or false

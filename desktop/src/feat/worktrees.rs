@@ -40,7 +40,8 @@ pub const FEATURE: Feature = Feature {
 };
 
 pub const INTENTS: &[Spec] = &[
-    Spec { name: "worktrees_show", risk: Risk::Direct, args: &[], doc: "Opens the Worktrees view over the panes: every sandbox's active worktrees, read again now." },
+    Spec { name: "worktrees_show", risk: Risk::Direct, args: &[("sandbox", Arg::Str, false)], doc: "Opens the Worktrees view over the panes: every sandbox's active worktrees (`sandbox`: that one's only), read again now." },
+    Spec { name: "worktrees_sandbox", risk: Risk::Direct, args: &[("sandbox", Arg::Str, false)], doc: "Shows one sandbox's worktrees (none or empty: every sandbox's), the view's scope picker." },
     Spec { name: "worktrees_refresh", risk: Risk::Direct, args: &[], doc: "Reads the worktrees again." },
     Spec { name: "worktrees_filter", risk: Risk::Direct, args: &[("text", Arg::Text, false)], doc: "Filters the worktrees by sandbox, thread, branch or path." },
     Spec { name: "worktrees_more", risk: Risk::Direct, args: &[], doc: "Shows the next worktrees of a long list." },
@@ -64,6 +65,8 @@ pub struct State {
     queue: Vec<String>,
     inflight: usize,
     filter: String,
+    /// The scope: one sandbox's worktrees, or every sandbox's (none).
+    sandbox: Option<String>,
     pages: usize,
     /// The row a branch of the graph selected.
     selected: Option<String>,
@@ -146,6 +149,9 @@ impl State {
         let mut out = vec![];
         for s in sandboxes(cx) {
             let Some(sb) = s["name"].as_str() else { continue };
+            if self.sandbox.as_deref().is_some_and(|x| x != sb) {
+                continue;
+            }
             let Some(p) = self.per.get(sb) else { continue };
             let ws = p.answer["workspace"].as_str().or(s["workspace"].as_str());
             let sessions = crate::feat::threads::model::sessions(cx.data, sb);
@@ -186,6 +192,9 @@ impl State {
         let mut out = vec![];
         match a.name {
             "worktrees_show" => {
+                // From the rail: every sandbox; from a sandbox's link: that one.
+                self.sandbox = a.s("sandbox").filter(|x| !x.is_empty()).map(str::to_string);
+                self.pages = 1;
                 out.push(Action::OpenPanel(SCREEN.into()));
                 out.extend(self.read_all(cx));
             }
@@ -195,6 +204,10 @@ impl State {
                 self.pages = 1;
             }
             "worktrees_more" => self.pages += 1,
+            "worktrees_sandbox" => {
+                self.sandbox = a.s("sandbox").filter(|x| !x.is_empty()).map(str::to_string);
+                self.pages = 1;
+            }
             "worktrees_select" => {
                 let id = a.s("id").filter(|x| !x.is_empty());
                 if let Some(id) = id {
@@ -281,7 +294,7 @@ impl State {
         }
         let mut notes = vec![];
         let mut none = vec![];
-        for (n, p) in &self.per {
+        for (n, p) in self.per.iter().filter(|(n, _)| self.sandbox.as_ref().is_none_or(|x| x == *n)) {
             if let Some(e) = &p.error {
                 notes.push(json!({ "text": format!("{n}: {e}"), "tone": "red" }));
             }
@@ -297,7 +310,7 @@ impl State {
         }
         Action::Set {
             key: UI.into(),
-            value: json!({ "blocks": blocks, "count": count, "filter": self.filter, "notes": notes, "none": none, "loading": self.per.values().any(|p| p.loading) }),
+            value: json!({ "blocks": blocks, "count": count, "filter": self.filter, "sandbox": self.sandbox, "notes": notes, "none": none, "loading": self.per.values().any(|p| p.loading) }),
         }
     }
 }

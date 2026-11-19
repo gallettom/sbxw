@@ -89,12 +89,13 @@ return {
       }
     end
 
-    local picker = sandbox_picker(data, { id = "mcp-sandbox", value = target, items = running, on = "pick",
-      placeholder = "no running sandbox", disabled = #running == 0 })
+    -- The scope (scope.rs): the running sandbox servers load into and are read from.
+    local picker = select{ id = "mcp-sandbox", value = target or "", on = "pick", scope = { kind = "sandbox", running = true },
+      placeholder = "No running sandbox", disabled = #running == 0 }
     local wide = overlay_wide(data)
     local sel = data.mcp_inspect_for
     -- Beside the overlay's title (the core's header draws it: TITLE_SLOT).
-    table.insert(out, 1, row{ key = "title-slot", gap = 8, (((data.app or {}).overlay or {}).w or 1000) >= 480 and text{ "Load into", size = "sm", color = "text-muted" } or false, picker })
+    table.insert(out, 1, row{ key = "title-slot", gap = 8, picker })
     if asked and asked ~= target then
       -- Opened for a stopped sandbox: the picker is on the first running one,
       -- and this line says so with the same name the picker and Load show.

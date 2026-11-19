@@ -351,7 +351,11 @@ local function item(sb, app, data)
   -- What is left after the state word, the model and the buttons, with
   -- every gap of the line (4 each) counted: the model is never cut for a
   -- badge; a badge that does not fit goes to the "+N" or the ⋯ menu.
-  local room = col_w - est(st.word) - (lead and 12 or 0) - 6 - est(model) - 6 - buttons_w - 16
+  -- "In view": the overlay over the panes is scoped to this sandbox (its
+  -- scope picker, scope.rs): an eye before the buttons, its room kept first.
+  local scope = (app.overlay or {}).scope
+  local in_view = type(scope) == "table" and scope.sandbox == name
+  local room = col_w - est(st.word) - (lead and 12 or 0) - 6 - est(model) - 6 - buttons_w - 16 - (in_view and 16 or 0)
   local line2 = { gap = 4, w = "full", first,
     text{ model, size = "caption", color = model_vendor or "text-muted", truncate = true, help = model_help, key = "model-" .. name },
   }
@@ -390,6 +394,10 @@ local function item(sb, app, data)
     table.insert(line2, badge{ "+" .. #rest, tone = #wants > 0 and "amber" or "neutral", help = table.concat(rest, ", ") .. " (all in the ⋯ menu)", key = "more-" .. name })
   end
   table.insert(line2, spacer{})
+  if in_view then
+    table.insert(line2, row{ key = "in-view-" .. name, h = 24, justify = "center", help = "Shown in " .. (scope.title or "the view over the panes"),
+      icon{ "eye", size = 12, color = "blue" } })
+  end
 
   -- The row's two buttons, one text line tall: start or stop, and "+" (the
   -- agent's terminal in a new pane; a stopped sandbox starts first).

@@ -852,7 +852,7 @@ pub fn view_slot<S: Host>(s: &ScreenState) -> (El, Vec<El>, Option<El>) {
 /// The screen's view; with `slot`, its [`TITLE_SLOT`] row apart (else in place).
 fn build_view<S: Host>(s: &ScreenState, slot: bool) -> (El, Vec<El>, Option<El>) {
     let name: Rc<str> = s.name.as_str().into();
-    let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![], slot: None, take_slot: slot, nav: HashMap::new() };
+    let mut b = Build { name: name.clone(), ui: &s.ui, data: &s.data, overlays: vec![], slot: None, take_slot: slot, nav: HashMap::new() };
     // The top bar is one line: what the core adds goes beside it, not under it.
     let mut panel = if s.name == "topbar" { row().items_center() } else { col() }.key(format!("screen-{}", s.name)).w_full().h_full().min_h(0.0).gap(8.0);
     if let Some(e) = &s.error {
@@ -1033,6 +1033,8 @@ pub const TITLE_SLOT: &str = "title-slot";
 struct Build<'a> {
     name: Rc<str>,
     ui: &'a Ui,
+    /// What the core handed the screen: a scope picker reads its sandboxes here.
+    data: &'a J,
     overlays: Vec<El>,
     /// The [`TITLE_SLOT`] row, built apart when `take_slot` (an overlay).
     slot: Option<El>,
@@ -1175,8 +1177,9 @@ pub fn paint_shape(p: &crate::luau::Paint) -> rune::Shape {
 pub const INPUT_MIN: f32 = 160.0;
 
 /// A field (an input or a select) whose screen set no width of its own.
+/// A scope picker is not a field: it is as wide as its sandbox's name.
 fn free_input(n: &Node) -> bool {
-    matches!(n.kind, Kind::Input | Kind::Select) && n.style.w.is_none() && n.style.grow.is_none() && n.style.min_w.is_none()
+    matches!(n.kind, Kind::Input | Kind::Select) && n.style.w.is_none() && n.style.grow.is_none() && n.style.min_w.is_none() && crate::scope::spec(&n.scope).is_none() && !crate::switch::is_switch(n)
 }
 
 /// A row holding a control (a button, a checkbox, a field, a menu) whose
@@ -1464,6 +1467,13 @@ impl Build<'_> {
                     el().h(1.0).w_full().fill(col_)
                 }
             }
+            Kind::Select if crate::scope::spec(&n.scope).is_some() => self.scope::<S>(n, key.clone()),
+            Kind::Select if crate::switch::is_switch(n) => {
+                // A two-position switch (switch.rs): its action gets the other item's id.
+                let (name, on, arg) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone());
+                let k = key.clone().unwrap_or_else(|| n.id.clone().unwrap_or_default());
+                crate::switch::view::<S>(n, k, Rc::new(move |s: &mut S, v: &str| fire(s, &name, &on, &arg, &J::String(v.to_string()))))
+            }
             Kind::Menu | Kind::Select => self.menu::<S>(n, key.clone()),
             Kind::Checkbox => {
                 let on = n.value.as_bool().unwrap_or(false);
@@ -1704,6 +1714,65 @@ impl Build<'_> {
             self.overlays.push(list);
         }
         t
+    }
+
+    /// A `select` with a `scope` the core knows: the scope picker (scope.rs),
+    /// drawn from the core's sandbox data; its list is the select's (`ui.open`).
+    fn scope<S: Host>(&mut self, n: &Node, key: Option<String>) -> El {
+        use crate::scope;
+        let sp = scope::spec(&n.scope).expect("checked");
+        let id = n.id.clone().unwrap_or_default();
+        let key = key.unwrap_or_else(|| id.clone());
+        let open = self.ui.open.as_deref() == Some(id.as_str());
+        let value = n.value.as_str().unwrap_or("").to_string();
+        let choices = scope::choices(self.data, &n.items, &sp);
+        let has_all = scope::offers_all(&sp, &n.items);
+        let all_label = n.items.iter().find(|i| i.id.is_empty()).map(|i| i.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| "All sandboxes".into());
+        let empty_label = if has_all { all_label.clone() } else { n.placeholder.clone().unwrap_or_else(|| "Pick a sandbox".into()) };
+        let current = choices.iter().find(|c| c.id == value);
+        let (name, id2) = (self.name.clone(), id.clone());
+        let fid = format!("{id}-filter");
+        let cap = scope::capsule::<S>(&key, &value, current, (&empty_label, has_all), open, n.disabled, move |s: &mut S| {
+            let ui = &mut s.screen(&name).ui;
+            ui.open = if ui.open.as_deref() == Some(id2.as_str()) { None } else { Some(id2.clone()) };
+            // A list opens with an empty filter.
+            ui.edits.remove(&format!("{id2}-filter"));
+        });
+        let cap = if n.skip_tab { cap.tab_index(-1) } else { cap };
+        if open {
+            let (n1, n2, n3, id3) = (self.name.clone(), self.name.clone(), self.name.clone(), id.clone());
+            let (on, arg) = (n.on.clone().unwrap_or_default(), n.arg.clone());
+            let filter = (choices.iter().filter(|c| !c.all()).count() > scope::FILTER_FROM).then(|| self.ui.edits.get(&fid).map(|e| e.0.clone()).unwrap_or_else(|| TextEdit::new("")));
+            let fid2 = fid.clone();
+            let cx = scope::ListCtx::<S> {
+                key: key.clone(),
+                value: value.clone(),
+                all_label: all_label.clone(),
+                window_w: self.data["app"]["window"]["w"].as_f64().filter(|w| *w > 0.0).unwrap_or(1284.0) as f32,
+                filter,
+                edit: Rc::new(move |s: &mut S| &mut s.screen(&n1).ui.edits.entry(fid2.clone()).or_insert_with(|| (TextEdit::new(""), None)).0),
+                pick: Rc::new(move |s: &mut S, v: &str| {
+                    s.screen(&n2).ui.open = None;
+                    fire(s, &n2, &on, &arg, &J::String(v.to_string()));
+                }),
+                close: Rc::new(move |s: &mut S| {
+                    let ui = &mut s.screen(&n3).ui;
+                    if ui.open.as_deref() == Some(id3.as_str()) {
+                        ui.open = None;
+                    }
+                }),
+            };
+            // Modal (scope.rs): a press outside closes it and reaches nothing else.
+            self.overlays.push(scope::list::<S>(cx, &choices));
+        }
+        let clear = sp.clear.clone().map(|a| {
+            let (name, arg) = (self.name.clone(), n.arg.clone());
+            Box::new(move |s: &mut S| fire(s, &name, &a, &arg, &J::Null)) as Box<dyn Fn(&mut S)>
+        });
+        match scope::narrow_chip::<S>(&key, &sp, clear) {
+            Some(chip) => row().gap(8.0).items_center().shrink().child(cap).child(chip),
+            None => cap,
+        }
     }
 
     fn menu_row_of<'a>(&self, n: &Node, id: &str, it: &'a Item) -> MenuRow<'a> {

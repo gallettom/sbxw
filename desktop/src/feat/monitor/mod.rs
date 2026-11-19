@@ -882,7 +882,9 @@ fn links(m: &Model, cx: &Ctx, name: &str, key: &str) -> Result<Vec<Action>, Stri
             }
             vec![intent("files_open", args)]
         }
-        _ => vec![intent("worktrees_show", json!({})), intent("worktrees_filter", json!({ "text": thread.unwrap_or(sb) }))],
+        // Scoped to the sandbox (its capsule, scope.rs); a thread's row
+        // also filters to that thread, a main session clears an old filter.
+        _ => vec![intent("worktrees_show", json!({ "sandbox": sb })), intent("worktrees_filter", json!({ "text": thread.unwrap_or_default() }))],
     })
 }
 

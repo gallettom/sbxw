@@ -490,11 +490,68 @@ A picker showing the current choice. Same list as `menu`.
 | `on` | action name | Required unless `disabled`; `value` = the picked id |
 | `arg` | any value | Passed too |
 | `disabled` | bool | |
+| `scope` | `"sandbox"` or a table | A scope picker, drawn by the core (below) |
+| `switch` | bool | With exactly two items: a two-position switch drawn by the core (`src/switch.rs`): one track, both labels, a thumb that slides under the chosen one (the top bar's GUI \| TUI). A press on a label picks it, Space or Enter flips, Left and Right move, the thumb drags; `on` gets the picked id. Any other number of items: the plain select |
 
 ```lua
 select{ id = "layout", value = "2c", on = "layout",
   items = { { id = "1", label = "1 terminal", icon = "single" }, { id = "2c", label = "2 side by side", icon = "columns" } } }
 ```
+
+#### Scope pickers (`scope`)
+
+Which sandbox a screen shows is its most important fact, so every scoped
+screen draws it the same way, with one component the core draws
+(`src/scope.rs`): `select{ ..., scope = "sandbox" }`.
+
+```lua
+-- In an overlay's title row ("Files in [web-app v] > thread-a x"):
+row{ key = "title-slot", gap = 8,
+  select{ id = "files-sandbox", value = ui.sandbox, items = ui.sandboxes, on = "sandbox",
+    scope = { kind = "sandbox", narrow = thread, narrow_icon = "branch", clear = "branch_clear" } } }
+```
+
+- **The data shape**: `items` only says which sandboxes the screen offers
+  (`{ id = <sandbox name> }`; labels are ignored); an item with `id = ""`
+  is **All sandboxes** (its label, if any, is the text), listed first, and
+  only a screen that has it offers it. Everything a row shows comes from
+  the core's own data: status, group, group colour (the sidebar's), agent,
+  open sessions. A name the core does not know is left out. `on` gets the
+  picked id (`""` for All), as a `select`.
+- **`scope` table**: `kind` (`"sandbox"`; another kind draws the plain
+  select), `narrow` (a second level drawn after the capsule: a thread's
+  worktree, a branch), `narrow_icon` (an icon name, default `branch`),
+  `clear` (the screen's action its cross calls; no cross without it).
+- **Closed**: a capsule in the sandbox's group colour (its fill the colour
+  at 32% over `surface`, its edge the colour itself), the status dot (a
+  ring when stopped), the name (clipped at 220 pt, whole in the tooltip),
+  a chevron. All is neutral with a grid glyph; an empty value with no All
+  shows the `placeholder`. A change of value plays one short pop of the
+  name (none under reduced motion). It is a Tab stop (`combobox`).
+- **In an overlay's title** (a `title-slot` row): the title reads "Files in
+  [web-app]" ("in" dropped under 560 pt) and the overlay's frame takes the
+  scope's colour: a 3 pt strip on its top edge (the group colour), the title
+  band in a focused pane header's tint (`theme::bar_ground`), its edge.
+  All, or a sandbox in no group: today's neutral frame.
+- **Open**: the list under the capsule (`<id>-list`, 300 to 420 pt, never
+  wider than the window): All first, then each group under a heading in
+  the sidebar's tint and label colour, a row per sandbox (`<id>-<name>`,
+  All `<id>-`; a script's `wait:` knows `<id>-list`, then taps a row): the group's bar, status, name, open sessions, state,
+  agent, a check on the current one. Above 8 sandboxes a filter field
+  (`<id>-filter`) that matches names and group names. The keyboard starts
+  in the field, else on the current row; Up and Down move, Enter picks
+  (in the field: the first match), Escape closes only the list and gives
+  the keyboard back to the capsule; a press outside closes it and reaches
+  nothing else.
+- **The sidebar**: while an overlay is scoped to a sandbox, that
+  sandbox's row shows an eye before its buttons ("Shown in Files",
+  `in-view-<name>`), from `data.app.overlay.scope` (`{sandbox, title}`,
+  null for All or no scope). It follows a pick at once (the core pushes
+  again when the overlay's scope moved) and goes when the overlay closes.
+- **Names are data**: text only, clipped, never a pill or a control.
+- A picker a screen must draw itself (the Board's two-line team rows) takes
+  the same colours from `scope::look_json` (`fill`, `border`, `text`,
+  `muted`, as `#rrggbb`) in its view model.
 
 ### `checkbox`
 
@@ -859,7 +916,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `icon{ name }`, and the `icon` prop of `button`, `menu` and items:
 `play`, `stop`, `reload`, `plus`, `close`, `terminal`, `chevron-down`,
 `chevron-right`, `check`, `warning`, `info`, `gear`, `search`, `folder`,
-`file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
+`file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`, `eye`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
 `coin`, `help`, `moon`, `appearance`, `branch`, `globe`, `remote`, `key`, `people`, `leader`, `threads`,
 `shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `inbox` (Sessions: a list of sessions, the first dot filled), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
@@ -987,13 +1044,13 @@ the cap with many sessions, threads or requests are listed in VIEWS.md.
 
 ### Overlay helpers
 
-- `sandbox_picker(data, { id, value, items, on, placeholder, disabled })`:
-  the sandbox's colour square (`data.app.groups`, key `<id>-color`) then the
-  select (`<id>`), in a row keyed `<id>-row`. The explorer, MCP servers,
-  Skills and Kits draw it at their top left.
-- A row keyed `title-slot` in an overlay's screen (a sandbox picker) is
+- A sandbox picker is a `select` with `scope = "sandbox"` (see `select`,
+  "Scope pickers"). `sandbox_picker(data, opts)` (a colour square and a
+  plain select) is kept for overrides written before it; no built-in
+  screen uses it.
+- A row keyed `title-slot` in an overlay's screen (its scope picker) is
   drawn by the core in the overlay's header, right after its title
-  ("Files  [web-app v]"), not where it sits in the tree; in a panel or a
+  ("Files in [web-app v]"), not where it sits in the tree; in a panel or a
   modal it stays in place. Its keys and actions are the screen's as usual.
 - `overlay_wide(data)`: true when the overlay over the pane area is 760 pt
   wide or more (`data.app.overlay.w`; a screen drawn alone counts as wide).
@@ -1612,8 +1669,9 @@ pin it `files-star`, **Go to…** `files-goto` (the typed path `files-path`),
 then **Upload** `files-upload` (the upload card `files-drop` under the
 header: open, while files wait, or while files are dragged over the
 explorer, `data.app.overlay.drop_over`) and the "…" menu `files-actions`
-(read again, the code map). **Left**: the sandbox picker `files-sandbox`
-with its colour, the **Locations** (`files_ui.locations`, `view::locations`:
+(read again, the code map), read again `files-refresh`. **In the title**:
+the scope picker `files-sandbox` (its second level the worktree the list is
+in). **Left**: the **Locations** (`files_ui.locations`, `view::locations`:
 "This sandbox": Home (the agent's home, `/home/agent`), Workspace (the
 project, this computer's folder mounted at the same path; Code map
 `files-codemap` beside it), Temporary files (`/tmp`), File system root,
@@ -1826,6 +1884,10 @@ background. `data.commits_ui`: `sandbox` (nil: every one), `branch`,
 | `commits_refresh` | | Reads again |
 | `commits_key` | `key` (`up`, `down`, `enter`) | The view's keys when none of its controls has the keyboard |
 
+The scope picker `commits-sandbox` is in the title ("Commits in [All
+sandboxes v]"), a branch as its second level (`commits-sandbox-narrow`, its
+cross `commits-sandbox-narrow-clear` runs `commits_branch_clear`).
+
 Commit messages are drawn as plain text: no pills, no Markdown, no links.
 
 ### board
@@ -1909,7 +1971,9 @@ again.
 ### worktrees
 
 An overlay (`src/feat/worktrees.rs`, `screens/worktrees.luau`): one block
-per sandbox, one row per worktree (path, thread and its state, ahead,
+per sandbox (the scope picker `worktrees-sandbox` in the title: All
+sandboxes from the rail, one sandbox with `worktrees_show {sandbox}` or a
+pick, `worktrees_sandbox {sandbox?}`), one row per worktree (path, thread and its state, ahead,
 behind, uncommitted changes, merged, the last commit; Terminal, Commits,
 Files). Above a block's rows, the **branch graph** of its unmerged
 worktrees, one per repository (`src/feat/worktrees_graph.rs`, the web UI's
@@ -2058,7 +2122,7 @@ a `Set` renders only drawn screens). Also read: `data.relay_ui.picks` and
 | `monitor_retry` | `key` | direct | Reads its newest page again after a failed read |
 | `monitor_select`, `monitor_next`, `monitor_more` | `key` / none / none | direct | View state: a session shown, the next that needs you, the next page |
 | `monitor_key` | `key` (`up`, `down`, `enter`, `type`), `text` | direct | The view's keys when none of its rows has the keyboard; N (`type`) from anywhere in it |
-| `monitor_terminal`, `monitor_commits`, `monitor_files`, `monitor_worktrees` | `key` | direct | `thread_open` or `open_terminal` (spare pane; the pane that shows it, when one does), `commits_show` on its branch, `files_open` at its worktree, `worktrees_show` filtered to it |
+| `monitor_terminal`, `monitor_commits`, `monitor_files`, `monitor_worktrees` | `key` | direct | `thread_open` or `open_terminal` (spare pane; the pane that shows it, when one does), `commits_show` on its branch, `files_open` at its worktree, `worktrees_show` scoped to its sandbox (a thread: filtered to it) |
 | `monitor_pick` | `key`, `step`, `option` | direct | The relay's `agent_pick`, only for a session the daemon lists as waiting and answerable |
 | `monitor_attach` | `key` (the session shown) | direct | The core's file dialog (`Action::PickFiles`, from a press only); the file comes back through `on_files` and waits as a chip of that session |
 | `monitor_attach_remove` | `key`, `id` | direct | Takes that file off the session's chips; the core forgets its path |

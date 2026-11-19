@@ -307,8 +307,6 @@ return {
     if not sb then
       return column{ h = "full", pad = 12, gap = 8, note("No sandbox to show: create one, or start one, first.") }
     end
-    local items = {}
-    for _, s in ipairs(data.sandboxes or {}) do table.insert(items, { id = s.name, label = s.name .. (s.status == "running" and "" or " (" .. s.status .. ")") }) end
     -- Quiet tabs, as Setup's: the current one on a neutral tint, the others
     -- plain. A tab is where you look, not the view's primary action.
     local trow = { gap = 4, w = "full" }
@@ -322,10 +320,9 @@ return {
     elseif tab == "board" then body = board_tab(state, data, sb)
     else body = sessions_tab(data, sb, sbx) end
     return column{ h = "full", gap = 8, pad = 12,
-      -- The compact sandbox picker (its colour square, then the select), as
-      -- the explorer and the configure panels draw it.
+      -- The scope picker (scope.rs), as every scoped screen draws it.
       row{ gap = 8, w = "full", text{ "Sandbox", size = "sm", color = "text-muted" },
-        sandbox_picker(data, { id = "threads-sandbox", items = items, value = sb, on = "pick" }) },
+        select{ id = "threads-sandbox", value = sb or "", on = "pick", scope = "sandbox" } },
       row(trow),
       divider{},
       scroll{ gap = 8, body },

@@ -769,6 +769,23 @@ impl App {
         }
     }
 
+    /// The sandbox the overlay over the pane area is scoped to, as its
+    /// screen last drew its scope picker (scope.rs), with the overlay's
+    /// title: `{sandbox, title}`, or null (no overlay, not scoped, All).
+    /// `data.app.overlay.scope`: the sidebar marks that sandbox's row.
+    pub(super) fn overlay_scope(&self) -> J {
+        let Some((name, _)) = self.feats.overlay.as_ref() else { return J::Null };
+        let title = match feat::screen(name).map(|(_, d)| d.slot) {
+            Some(Slot::Overlay { title, .. }) | Some(Slot::Base { title, .. }) => title,
+            _ => return J::Null,
+        };
+        let scoped = self.screens.iter().find(|x| &x.name == name).and_then(|x| x.last_good.as_ref()).and_then(crate::scope::in_slot);
+        match scoped {
+            Some((_, v)) if !v.is_empty() => json!({ "sandbox": v, "title": title }),
+            _ => J::Null,
+        }
+    }
+
     /// The overlay view over the pane area: the core's header (icon, title,
     /// ×) and the screen under it, on the app's floor, covering the pager
     /// and the panes (absolute: nothing under it moves or resizes). A press
@@ -791,8 +808,17 @@ impl App {
         // Whole when a slot follows it (the slot shrinks first); else it may truncate.
         let t = text(title).font(crate::screen::body(14.0, 600.0)).color(c("text-bright"));
         head = head.child(if slot.is_some() { t } else { t.truncate().min_w(0.0) });
+        // A scope picker in the slot (scope.rs): the title reads as a phrase,
+        // "Files in [web-app]", and the overlay's frame takes its colour.
+        let scope = self.screens.iter().find(|x| &x.name == name).and_then(|x| x.last_good.as_ref()).and_then(crate::scope::in_slot).filter(|_| slot.is_some());
+        let frame = crate::scope::frame(scope.as_ref().and_then(|(_, v)| self.group_colors().get(v).copied()));
         if let Some(e) = slot {
-            head = head.child(el().w(4.0)).child(e);
+            if scope.is_some() && self.rects.overlay.is_none_or(|r| r[2] >= crate::scope::PHRASE_MIN) {
+                let muted = frame.wash.map_or(c("text-muted"), |w| crate::theme::hex(crate::theme::muted_on(w)));
+                head = head.child(text("in").font(crate::screen::body(14.0, 400.0)).color(muted));
+            }
+            // The slot gives way first when the row is short (its name clips).
+            head = head.child(el().w(4.0)).child(if scope.is_some() { e.shrink() } else { e });
         }
         head = head.child(el().grow(1.0).min_w(0.0));
         // A base view is not closed: the top bar's GUI | TUI leaves it.
@@ -819,8 +845,13 @@ impl App {
                     .child(rune::icon(crate::icons::get("close").unwrap(), crate::theme::icon::MEDIUM).color(c("text-muted"))),
             );
         }
+        // The frame's wash under the title band, its strip along the top edge.
+        let band = frame.wash.map(|w| el().key(format!("overlay-wash-{name}")).pin(Some(0.0), Some(0.0), Some(0.0), None).h(12.0 + layout::CONTROL_H + 4.0).fill(crate::theme::hex(w)));
+        let strip = frame.strip.map(|g| el().key(format!("overlay-strip-{name}")).pin(Some(0.0), Some(0.0), Some(0.0), None).h(crate::scope::STRIP_H).fill(crate::theme::hex(g)));
         Some(
             col()
+                .children(band)
+                .children(strip)
                 .key(format!("overlay-{name}"))
                 .role("dialog")
                 .label(title)
@@ -828,7 +859,7 @@ impl App {
                 .padding(12.0)
                 .gap(8.0)
                 .fill(c("bg"))
-                .border(1.0, c("elevated"))
+                .border(1.0, crate::theme::hex(frame.edge))
                 .radius(radius("md").unwrap())
                 .clip_rounded(radius("md").unwrap())
                 .focus_group()
