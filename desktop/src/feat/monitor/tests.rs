@@ -1735,14 +1735,6 @@ fn nothing_of_the_list_leaves_its_column_at_any_width_in_either_mode() {
 #[test]
 fn a_fold_opens_downwards_and_nothing_above_it_moves() {
     use crate::shell::{view as shell_view, App};
-    let frames = |rt: &mut rune::Runtime<App>, n: usize| {
-        for _ in 0..n {
-            rt.frame(0.05);
-            rt.update(|s, tx| {
-                s.poll(0.0, tx);
-            });
-        }
-    };
     let quiet = |rt: &mut rune::Runtime<App>| {
         let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
