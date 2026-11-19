@@ -102,8 +102,9 @@ local function permission_card(d)
     row{ button{ "Open its terminal", key = "monitor-permission-terminal", icon = "terminal", tone = "green", on = "link", arg = { name = "monitor_terminal", key = d.key } } } }
 end
 
-local function feed(d, now, data)
-  local kids = { gap = 16, px = 24, py = 16, w = "full" }
+-- The summary of a session the daemon has no conversation for (yet): the
+-- last prompt, what it does now, its last reply.
+local function summary(d, now, kids)
   if d.last_input then
     kids[#kids + 1] = bubble("You", "prompt", "text-muted", nil,
       column{ pad = 12, radius = "md", fill = "elevated", w = "full", text{ d.last_input, wrap = true, color = "text-bright" } })
@@ -114,25 +115,146 @@ local function feed(d, now, data)
       column{ pad = 12, radius = "md", border = "elevated", w = "full", key = "monitor-from",
         text{ d.from.text ~= "" and d.from.text or "A message from another session.", wrap = true, size = "sm", color = "text-muted" } })
   end
+  if d.reply then
+    kids[#kids + 1] = bubble("Claude", "sparkle", "vendor-anthropic", text{ "· last reply, " .. ago(d.ts, now), size = "sm", color = "text-dim" },
+      column{ w = "full", max_w = 720, key = "monitor-reply", markdown{ d.reply, pills = d.sandbox } })
+  end
+end
+
+-- The conversation's rows, built once per row (by session, id and what it
+-- shows): an event about one step builds that row again, not the 400.
+local cmemo = {}
+local cbuilt = 0
+
+local STATUS = { ok = { "check", "green", "done" }, error = { "warning", "red", "failed" }, running = { "sparkle", "blue", "running" } }
+
+local function quiet_line(key, ic, t)
+  return row{ key = key, gap = 8, w = "full", justify = "center", py = 4,
+    icon{ ic, size = 12, color = "text-dim" }, text{ t, size = "sm", color = "text-muted", wrap = true, max_w = 560 } }
+end
+
+-- One step: its tool's icon, the one-line summary, the result's size, a
+-- status mark; pressed (when it has a result), the result's head below.
+local function step_row(st, skey, nested)
+  local m = STATUS[st.status] or STATUS.ok
+  local head = row{ gap = 8, w = "full", px = 8, py = 4, radius = "sm", hover = st.has_head and "hover-subtle" or nil,
+    key = "monitor-step-" .. st.id, on = st.has_head and "expand" or nil, arg = st.has_head and { key = skey, id = st.id } or nil,
+    help = st.has_head and (st.open and "Hide its output" or "Show the start of its output") or nil,
+    nested and column{ w = 16, h = 1 } or false,
+    icon{ st.icon, size = 12, color = "text-muted" },
+    text{ st.summary, size = "sm", mono = true, color = "text", truncate = true, grow = 1 },
+    st.size and text{ st.size, size = "sm", color = "text-dim" } or false,
+    icon{ m[1], size = 12, color = m[2], help = m[3] } }
+  if not (st.open and st.head) then return head end
+  return column{ gap = 4, w = "full", head,
+    column{ key = "monitor-out-" .. st.id, px = 12, py = 8, radius = "sm", fill = "floor", w = "full",
+      text{ st.head, mono = true, size = "sm", color = "text-muted", wrap = true } } }
+end
+
+local function conv_row(r, d, now)
+  if r.t == "day" then
+    return row{ gap = 8, w = "full", py = 4, key = "monitor-" .. r.id, column{ grow = 1, h = 1, fill = "elevated" }, text{ r.label, size = "xs", color = "text-muted" }, column{ grow = 1, h = 1, fill = "elevated" } }
+  elseif r.t == "you" then
+    return column{ key = "monitor-you-" .. r.id, w = "full",
+      bubble("You", "prompt", "text-muted", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" },
+        column{ pad = 12, radius = "md", fill = "elevated", w = "full", text{ r.text, wrap = true, color = "text-bright" } }) }
+  elseif r.t == "from" then
+    -- Typed in by another session or the harness: quiet, never "You".
+    local kids = { pad = 12, gap = 4, radius = "md", border = "elevated", w = "full",
+      text{ r.text ~= "" and r.text or "A message from another session.", wrap = true, size = "sm", color = "text-muted" } }
+    if r.long then
+      kids[#kids + 1] = row{ button{ r.open and "Show less" or "Show all", key = "monitor-fold-" .. r.id, variant = "ghost", dense = true, on = "expand", arg = { key = d.key, id = r.id } } }
+    end
+    return column{ key = "monitor-from-" .. r.id, w = "full",
+      bubble("From " .. r.name, "people", "text-dim", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" }, column(kids)) }
+  elseif r.t == "claude" then
+    return column{ key = "monitor-claude-" .. r.id, w = "full",
+      bubble("Claude", "sparkle", "vendor-anthropic", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" },
+        column{ w = "full", max_w = 720, markdown{ r.text, pills = d.sandbox } }) }
+  elseif r.t == "step" then
+    return step_row(r, d.key)
+  elseif r.t == "group" then
+    local m = STATUS[r.status] or STATUS.ok
+    local label = r.n .. " steps" .. ((r.errors or 0) > 0 and (" · " .. r.errors .. " failed") or "")
+    local kids = { gap = 2, w = "full", key = "monitor-group-" .. r.id,
+      row{ gap = 8, w = "full", px = 8, py = 4, radius = "sm", hover = "hover-subtle", key = "monitor-steps-" .. r.id, on = "expand", arg = { key = d.key, id = r.id },
+        help = r.open and "Fold the steps" or "Show each step",
+        icon{ r.open and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
+        text{ label, size = "sm", weight = "medium", color = "text" },
+        icon{ r.icon, size = 12, color = "text-dim" },
+        text{ r.summary, size = "sm", mono = true, color = "text-muted", truncate = true, grow = 1 },
+        icon{ m[1], size = 12, color = m[2], help = m[3] } } }
+    if r.open then
+      for _, st in ipairs(r.steps or {}) do kids[#kids + 1] = step_row(st, d.key, true) end
+    end
+    return column(kids)
+  elseif r.t == "system" then
+    return quiet_line("monitor-sys-" .. r.id, r.icon or "info", r.text)
+  end
+  return false
+end
+
+local function feed(d, now, data)
+  local kids = { gap = 12, px = 24, py = 16, w = "full" }
+  local c = d.conv
+  local seen = {}
+  if c and (c.state == "ready" or c.state == "missing") and c.rows then
+    if c.earlier then
+      kids[#kids + 1] = row{ w = "full", justify = "center",
+        button{ c.older_loading and "Reading…" or "Show earlier", key = "monitor-earlier", icon = "history", variant = "ghost", dense = true,
+          on = "earlier", arg = { key = d.key }, disabled = c.older_loading, help = "The earlier part of the conversation" } }
+    elseif c.truncated then
+      kids[#kids + 1] = quiet_line("monitor-truncated", "info", "Earlier conversation is not kept")
+    end
+    if c.continues and not c.earlier then
+      kids[#kids + 1] = quiet_line("monitor-continues", "history", "This session continues an earlier one, not shown here")
+    end
+    for _, r in ipairs(c.rows) do
+      local mk = d.key .. "|" .. r.id
+      local sig = r.sig .. "|" .. (r.at and ago(r.at, now) or "")
+      local m = cmemo[mk]
+      if not (m and m.sig == sig) then
+        cbuilt = cbuilt + 1
+        m = { sig = sig, el = conv_row(r, d, now) }
+        cmemo[mk] = m
+      end
+      seen[mk] = true
+      if m.el then kids[#kids + 1] = m.el end
+    end
+    if #c.rows == 0 then
+      kids[#kids + 1] = text{ "Nothing said yet in this session.", key = "monitor-conv-empty", color = "text-muted", wrap = true }
+    end
+  else
+    summary(d, now, kids)
+    local why = c and (c.state == "partial" and c.partial
+      or c.state == "loading" and "Reading the conversation…"
+      or c.state == "error" and ("The conversation could not be read: " .. tostring(c.error)))
+      or "sbxw has no conversation for this session: its last prompt, what it does now and its last reply."
+    kids[#kids + 1] = text{ why, key = "monitor-conv-note", size = "sm", color = "text-dim", wrap = true }
+  end
+  for k in pairs(cmemo) do if not seen[k] then cmemo[k] = nil end end
+  if c and c.error and c.state ~= "error" then
+    kids[#kids + 1] = row{ gap = 8, w = "full", key = "monitor-conv-error",
+      text{ "The last read failed; what is shown may be behind.", size = "sm", color = "text-dim", wrap = true, grow = 1 },
+      button{ "Try again", key = "monitor-retry", variant = "ghost", dense = true, on = "retry", arg = { key = d.key } } }
+  elseif c and c.state == "error" then
+    kids[#kids + 1] = row{ button{ "Try again", key = "monitor-retry", variant = "ghost", dense = true, on = "retry", arg = { key = d.key } } }
+  end
+  -- What it does now, pinned under the conversation while it works, then the cards.
   if d.now then
     kids[#kids + 1] = row{ gap = 8, px = 12, py = 8, radius = "sm", border = "elevated", w = "full", key = "monitor-now",
       icon{ "sparkle", size = 12, color = "blue" }, text{ "Now", size = "sm", weight = "medium", color = "blue" },
       text{ d.now, mono = true, size = "sm", color = "text", truncate = true, grow = 1 }, text{ ago(d.ts, now), size = "sm", color = "text-dim" } }
-  end
-  if d.reply then
-    kids[#kids + 1] = bubble("Claude", "sparkle", "vendor-anthropic", text{ "· last reply, " .. ago(d.ts, now), size = "sm", color = "text-dim" },
-      column{ w = "full", max_w = 720, key = "monitor-reply", markdown{ d.reply, pills = d.sandbox } })
   end
   if d.question then
     kids[#kids + 1] = question_card(d, data)
   elseif d.permission then
     kids[#kids + 1] = permission_card(d)
   end
-  if not d.last_input and not d.from and not d.now and not d.reply and not d.question and not d.permission then
+  if #kids == 0 then
     kids[#kids + 1] = text{ "Nothing to read yet: the session has not reported a prompt or a reply.", color = "text-muted", wrap = true }
   end
-  kids[#kids + 1] = text{ "The last prompt, what it does now and its last reply: sbxw keeps no history of the conversation.", size = "sm", color = "text-dim", wrap = true }
-  return scroll{ grow = 1, fade = 12, column(kids) }
+  return scroll{ grow = 1, fade = 12, stick_bottom = true, key = "monitor-conv-" .. d.key, column(kids) }
 end
 
 local function draft_of(state, d)
@@ -297,11 +419,15 @@ local screen = {
       return intent("monitor_send", { key = a.key, text = string.find(text or "", "%S") and text or nil })
     end,
     attach = function(_, a) return intent("monitor_attach", { key = a.key }) end,
+    expand = function(_, a) return intent("monitor_expand", { key = a.key, id = a.id }) end,
+    earlier = function(_, a) return intent("monitor_earlier", { key = a.key }) end,
+    retry = function(_, a) return intent("monitor_retry", { key = a.key }) end,
     unattach = function(_, a) return intent("monitor_attach_remove", { key = a.key, id = a.id }) end,
   },
 }
 
 -- What the tests read: rows built since the screen loaded.
 screen.built = function() return built end
+screen.conv_built = function() return cbuilt end
 
 return screen

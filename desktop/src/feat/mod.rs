@@ -431,6 +431,11 @@ impl Action {
 pub enum Method {
     Get,
     Post,
+    /// A removal. Only for what undoes nothing the person made: Sessions'
+    /// own history subscription (`.../history/subscription`). Any other
+    /// DELETE from a feature goes through the core's dialog, as every
+    /// destructive call does (docs/screens.md).
+    Delete,
     /// Run by the core itself, never sent: `path` names one of the core's
     /// own operations (`core:screen-restore/<screen>`: deletes that screen's
     /// override file). Only behind the core's dialog.
@@ -468,6 +473,10 @@ impl Call {
     }
     pub fn get(path: impl Into<String>, what: impl Into<String>) -> Call {
         Call { method: Method::Get, path: path.into(), body: J::Null, what: what.into(), then: vec![], store: None, notify: false, timeout: 30, tag: String::new(), raw: None, bytes: None }
+    }
+    /// A `DELETE` (see [`Method::Delete`]): quiet, short.
+    pub fn delete(path: impl Into<String>, what: impl Into<String>) -> Call {
+        Call { method: Method::Delete, timeout: 10, ..Call::get(path, what) }
     }
     /// Read these keys again after it answered.
     pub fn then(mut self, keys: &[&str]) -> Call {

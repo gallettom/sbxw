@@ -567,7 +567,8 @@ impl Daemon for HttpDaemon {
         let req = match method {
             "GET" => self.agent.get(&url),
             "POST" => self.agent.post(&url),
-            m => bail!("{m} {path}: only GET and POST"),
+            "DELETE" => self.agent.delete(&url),
+            m => bail!("{m} {path}: only GET, POST and DELETE"),
         }
         .set("Authorization", &self.auth())
         .timeout(timeout);
@@ -1094,6 +1095,7 @@ impl Link {
             let method = match call.method {
                 crate::feat::Method::Get => "GET",
                 crate::feat::Method::Post => "POST",
+                crate::feat::Method::Delete => "DELETE",
                 // The core runs those itself (shell/features.rs); never sent.
                 crate::feat::Method::Core => "CORE",
             };

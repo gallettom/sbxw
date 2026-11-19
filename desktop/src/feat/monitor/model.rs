@@ -178,6 +178,8 @@ pub struct Model {
     pub job_seq: u64,
     /// The team leads filter while it is on ([`Model::sync_leads`]).
     pub leads: Option<Leads>,
+    /// The conversations read (the selected session's and a few recent ones).
+    pub conv: super::conv::Store,
 }
 
 /// The rail's Team leads, applied to Sessions: the core's one state

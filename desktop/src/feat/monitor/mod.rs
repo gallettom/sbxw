@@ -23,6 +23,7 @@
 //!   drawn as text; an option's act is its index, never its words.
 
 pub mod attach;
+pub mod conv;
 pub mod model;
 #[cfg(test)]
 mod tests;
@@ -43,7 +44,7 @@ const KEYS: &[&str] = &["up", "down", "enter", "type", "escape"];
 
 pub const FEATURE: Feature = Feature {
     name: "monitor",
-    events: &["session"],
+    events: &["session", "history"],
     screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/monitor.luau"), slot: Slot::Base { title: "Sessions", icon: "inbox", open: "monitor_open" } }],
     shortcuts: &[Shortcut { key: 'i', intent: "monitor_toggle", args: "{}", help: "Switch between GUI and TUI" }],
     intents: INTENTS,
@@ -52,6 +53,7 @@ pub const FEATURE: Feature = Feature {
     on_answer: Some(on_answer),
     on_files: Some(on_files),
     on_dismiss: Some(on_dismiss),
+    standin: Some(standin),
     ..Feature::EMPTY
 };
 
@@ -63,7 +65,10 @@ pub const INTENTS: &[Spec] = &[
     d("monitor_open", &[], "Makes Sessions the base view of the pane area (instead of the terminals): every session, who needs you first, read again from the daemon's list. An overlay over it closes."),
     d("monitor_toggle", &[], "Switches the pane area between the Terminals and Sessions."),
     d("monitor_select", &[("key", Arg::Str, true)], "Shows that session (a row's `key`) in the middle. View state only."),
-    d("monitor_refresh", &[], "Draws Sessions again from what the app knows (the core runs it when the Team leads filter changes). View state only."),
+    d("monitor_refresh", &[], "Draws Sessions again from what the app knows (the core runs it when Lead Mode changes). View state only."),
+    d("monitor_expand", &[("key", Arg::Str, true), ("id", Arg::Str, true)], "Unfolds or folds again one row of the shown session's conversation (a group of steps, a step's result, a long message). View state only."),
+    d("monitor_earlier", &[("key", Arg::Str, true)], "Shows earlier parts of the shown session's conversation (reads the older page when needed)."),
+    d("monitor_retry", &[("key", Arg::Str, true)], "Reads the shown session's conversation again after a failed read."),
     d("monitor_key", &[("key", Arg::OneOf(KEYS), true), ("text", Arg::Text, false)], "The view's keys while none of its rows has the keyboard: Up and Down move the selection, Enter puts the keyboard on the list, N goes to the next session that needs you (rows: Up and Down move along them, Enter shows one)."),
     d("monitor_next", &[], "Selects the next session that needs you (round)."),
     d("monitor_more", &[], "Shows the next sessions of a long list."),
@@ -93,8 +98,13 @@ fn wall_ms() -> u64 {
 }
 
 /// `data.monitor` as the model stands.
-pub fn view_action(m: &Model, cx: &Ctx) -> Action {
-    let mut v = m.view(model::now_for(m, wall_ms()), &cx.data["app"]["panes"]);
+pub fn view_action(m: &mut Model, cx: &Ctx) -> Action {
+    let now = model::now_for(m, wall_ms());
+    let mut v = m.view(now, &cx.data["app"]["panes"]);
+    // The shown session's conversation, as far as it was read.
+    if let Some(k) = v["detail"]["key"].as_str().map(str::to_string) {
+        v["detail"]["conv"] = conv_view(m, &k, now);
+    }
     // The shown session's attached files, as chips, and whether a send of them runs.
     if let Some(k) = v["detail"]["key"].as_str().map(str::to_string) {
         let sending = m.jobs.values().any(|j| j.key == k && j.sent);
@@ -125,16 +135,134 @@ pub fn held(cx: &Ctx) -> Option<String> {
 }
 
 fn on_event(cx: &Ctx, name: &str, info: &J) -> Vec<Action> {
+    let mut m = STATE().lock().unwrap();
+    if name == "history" {
+        // A nudge (no text): only the session followed is read, never another.
+        let id = (info["sandbox"].as_str().unwrap_or("").to_string(), info["session_id"].as_str().unwrap_or("").to_string());
+        if !shown(cx) {
+            return leave(&mut m);
+        }
+        if m.conv.sub.as_ref() == Some(&id) {
+            return read_new(&mut m, &id).into_iter().collect();
+        }
+        return vec![];
+    }
     if name != "session" {
         return vec![];
     }
-    let mut m = STATE().lock().unwrap();
     m.sync_leads(&cx.data["app"]);
-    // Only what changed is built again; the view is handed over only while it shows.
-    if m.upsert(info) && shown(cx) {
-        return vec![view_action(&m, cx)];
+    if !shown(cx) {
+        m.upsert(info);
+        return leave(&mut m);
     }
-    vec![]
+    // Only what changed is built again; the view is handed over only while it shows.
+    let changed = m.upsert(info);
+    let mut out = follow(&mut m, cx, true);
+    // The session followed reported: its subscription renewed if the last read is old
+    // (an idle session's lapses; its next report comes before anything new).
+    let id = (info["sandbox"].as_str().unwrap_or("").to_string(), info["session_id"].as_str().unwrap_or("").to_string());
+    if m.conv.sub.as_ref() == Some(&id) && out.is_empty() && m.conv.get(&id).is_some_and(|h| wall_ms().saturating_sub(h.read_ms) > conv::RENEW_MS) {
+        out.extend(read_new(&mut m, &id));
+    }
+    if changed {
+        out.insert(0, view_action(&mut m, cx));
+    }
+    out
+}
+
+/// The selected card's session: `(sandbox, session_id)`, when its report names one.
+fn sid_of(m: &Model) -> Option<conv::Sid> {
+    let k = m.selected()?;
+    let i = &m.cards.get(&k)?.info;
+    Some((i["sandbox"].as_str()?.to_string(), i["session_id"].as_str().filter(|s| !s.is_empty())?.to_string()))
+}
+
+fn hist_path(id: &conv::Sid) -> String {
+    format!("/api/sessions/{}/{}/history", crate::client::enc(&id.0), crate::client::enc(&id.1))
+}
+
+fn tag_of(kind: &str, id: &conv::Sid) -> String {
+    format!("hist:{kind}:{}\t{}", id.0, id.1)
+}
+
+/// The newest page of that log (a read renews its subscription); a read
+/// under way is asked again once it answers.
+fn read_new(m: &mut Model, id: &conv::Sid) -> Option<Action> {
+    let h = m.conv.touch(id);
+    if h.loading {
+        h.again = true;
+        return None;
+    }
+    h.loading = true;
+    h.read_ms = wall_ms();
+    Some(Action::Call(Call::get(format!("{}?limit={}", hist_path(id), conv::PAGE), "read the conversation").tag(&tag_of("new", id))))
+}
+
+/// The page before what is read.
+fn read_old(m: &mut Model, id: &conv::Sid) -> Option<Action> {
+    let h = m.conv.touch(id);
+    let before = h.next_before?;
+    if h.older_loading {
+        return None;
+    }
+    h.older_loading = true;
+    h.read_ms = wall_ms();
+    Some(Action::Call(Call::get(format!("{}?before={before}&limit={}", hist_path(id), conv::PAGE), "read the earlier conversation").tag(&tag_of("old", id))))
+}
+
+/// The subscription of the session followed, deleted (the only DELETE
+/// Sessions sends: its path from the card's sandbox and session id).
+fn unsubscribe(id: &conv::Sid) -> Action {
+    Action::Call(Call::delete(format!("{}/subscription", hist_path(id)), "stop following the conversation").tag("hist:del"))
+}
+
+/// The view is left: no session is followed any more.
+fn leave(m: &mut Model) -> Vec<Action> {
+    m.conv.sub.take().map(|id| unsubscribe(&id)).into_iter().collect()
+}
+
+/// Follows the selected session while the view shows (`shown`): another
+/// selected, the last one's subscription is deleted and the new one read.
+fn follow(m: &mut Model, cx: &Ctx, shown_now: bool) -> Vec<Action> {
+    let _ = cx;
+    let target = if shown_now { sid_of(m) } else { None };
+    if m.conv.sub == target {
+        return vec![];
+    }
+    let mut out = leave(m);
+    if let Some(t) = target {
+        let h = m.conv.touch(&t);
+        h.window = conv::WINDOW;
+        out.extend(read_new(m, &t));
+        m.conv.sub = Some(t);
+    }
+    out
+}
+
+/// `detail.conv`: the shown session's conversation as the screen draws it.
+fn conv_view(m: &mut Model, key: &str, now: u64) -> J {
+    let Some(c) = m.cards.get(key) else { return J::Null };
+    let sb = c.info["sandbox"].as_str().unwrap_or("").to_string();
+    let Some(sid) = c.info["session_id"].as_str().filter(|s| !s.is_empty()).map(str::to_string) else { return J::Null };
+    let continues = c.info["continues"].as_str().is_some_and(|x| !x.is_empty());
+    let id = (sb.clone(), sid);
+    let Some(h) = m.conv.logs.get_mut(&id) else { return json!({ "state": "loading" }) };
+    if !h.loaded {
+        return json!({ "state": if h.error.is_some() { "error" } else { "loading" }, "error": h.error });
+    }
+    let state = if h.partial.is_some() { "partial" } else if h.missing { "missing" } else { "ready" };
+    let mut v = h.rows(now / 1000);
+    let at_start = h.next_before.is_none() && v["hidden"] == 0;
+    v["state"] = state.into();
+    v["key"] = key.into();
+    v["earlier"] = (v["hidden"].as_u64().unwrap_or(0) > 0 || h.next_before.is_some()).into();
+    v["older_loading"] = h.older_loading.into();
+    v["truncated"] = (h.truncated && at_start).into();
+    v["continues"] = (continues && at_start).into();
+    v["error"] = h.error.clone().map_or(J::Null, J::String);
+    v["partial"] = h.partial.as_deref().map_or(J::Null, |p| conv::partial_line(p, &sb).into());
+    v["rev"] = h.rev.into();
+    v
 }
 
 fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
@@ -144,6 +272,12 @@ fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> 
         Err(e) => e.clone(),
     };
     let mut m = STATE().lock().unwrap();
+    if call.tag == "hist:del" {
+        return vec![];
+    }
+    if let Some(rest) = call.tag.strip_prefix("hist:") {
+        return history_answer(&mut m, cx, rest, r);
+    }
     if let Some(n) = call.tag.strip_prefix("attach:").and_then(|n| n.parse::<u64>().ok()) {
         return uploaded(&mut m, cx, n, r);
     }
@@ -152,22 +286,94 @@ fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> 
             // The draft has left: the screen empties it, and its files went with it.
             *m.sent.entry(key.to_string()).or_insert(0) += 1;
             let gone = m.att.remove(key).unwrap_or_default();
-            let mut out = vec![Action::notice(format!("{}: sent", call.what)), view_action(&m, cx)];
+            let mut out = vec![Action::notice(format!("{}: sent", call.what)), view_action(&mut m, cx)];
             out.extend(forget(&gone));
             return out;
         }
         let kept = if m.att.get(key).is_some_and(|v| !v.is_empty()) { " Your words and files are still in the box; the files already uploaded go with the next Send." } else { " Your words are still in the box." };
-        return vec![Action::error(format!("{}: {why}.{kept}", call.what)), view_action(&m, cx)];
+        return vec![Action::error(format!("{}: {why}.{kept}", call.what)), view_action(&mut m, cx)];
     }
     vec![if ok { Action::notice(format!("{}: done", call.what)) } else { Action::error(format!("{}: {why}", call.what)) }]
 }
 
+/// A page of a conversation answered: merged; a nudge that came meanwhile
+/// reads the newest page again. A log evicted meanwhile is not brought back.
+fn history_answer(m: &mut Model, cx: &Ctx, rest: &str, r: Result<(u16, J), String>) -> Vec<Action> {
+    let Some((kind, id)) = rest.split_once(':') else { return vec![] };
+    let Some((sb, sid)) = id.split_once('\t') else { return vec![] };
+    let id = (sb.to_string(), sid.to_string());
+    let newest = kind == "new";
+    let Some(h) = m.conv.logs.get_mut(&id) else { return vec![] };
+    if newest {
+        h.loading = false;
+    } else {
+        h.older_loading = false;
+    }
+    match r {
+        Ok((c, b)) if (200..300).contains(&c) && b["page"].is_object() => h.merge(&b["page"], newest),
+        Ok((404, _)) if newest => h.none(),
+        Ok((c, b)) => h.fail(b["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("the daemon answered {c}"))),
+        Err(e) => h.fail(e),
+    }
+    let again = std::mem::take(&mut h.again) && newest;
+    let mut out = vec![];
+    if again && m.conv.sub.as_ref() == Some(&id) {
+        out.extend(read_new(m, &id));
+    }
+    if shown(cx) && m.conv.sub.as_ref() == Some(&id) {
+        out.insert(0, view_action(m, cx));
+    }
+    out
+}
+
 fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
+    let mut out = act_on(cx, a)?;
+    let mut m = STATE().lock().unwrap();
+    match a.name {
+        // Leaving the view: no session followed.
+        "monitor_toggle" if cx.data["app"]["base"] == SCREEN => out.extend(leave(&mut m)),
+        "monitor_terminal" => out.extend(leave(&mut m)),
+        "monitor_open" | "monitor_toggle" => out.extend(follow(&mut m, cx, true)),
+        n if n.starts_with("monitor_") => out.extend(follow(&mut m, cx, shown(cx))),
+        _ => {}
+    }
+    Ok(out)
+}
+
+fn act_on(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
     let mut m = STATE().lock().unwrap();
     // The rail's Team leads (the core's state) filters the list.
     m.sync_leads(&cx.data["app"]);
     match a.name {
-        "monitor_refresh" => Ok(if shown(cx) { vec![view_action(&m, cx)] } else { vec![] }),
+        "monitor_refresh" => Ok(if shown(cx) { vec![view_action(&mut m, cx)] } else { vec![] }),
+        "monitor_expand" | "monitor_earlier" | "monitor_retry" => {
+            let k = a.req("key");
+            if m.selected().as_deref() != Some(k) {
+                return Err("That session is not the one shown".into());
+            }
+            let Some(id) = sid_of(&m) else { return Ok(vec![]) };
+            let mut out = vec![];
+            match a.name {
+                "monitor_expand" => m.conv.touch(&id).toggle(a.req("id")),
+                "monitor_earlier" => {
+                    let h = m.conv.touch(&id);
+                    let hidden = h.rows(wall_ms() / 1000)["hidden"].as_u64().unwrap_or(0);
+                    h.window += conv::WINDOW;
+                    h.rev += 1;
+                    // Nothing more drawn here: the page before.
+                    if hidden == 0 {
+                        out.extend(read_old(&mut m, &id));
+                    }
+                }
+                _ => {
+                    if m.conv.sub.as_ref() == Some(&id) {
+                        out.extend(read_new(&mut m, &id));
+                    }
+                }
+            }
+            out.insert(0, view_action(&mut m, cx));
+            Ok(out)
+        }
         "monitor_open" => {
             m.seed(cx.get("sessions"));
             // The sidebar's sandbox, its most urgent session, when nothing was picked yet.
@@ -176,7 +382,7 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
                     m.sel = m.first_of(sb);
                 }
             }
-            let mut out = vec![view_action(&m, cx), Action::OpenPanel(SCREEN.into())];
+            let mut out = vec![view_action(&mut m, cx), Action::OpenPanel(SCREEN.into())];
             // The keyboard to the list, on the session shown: Up, Down and Enter from there.
             if let Some(k) = m.selected() {
                 out.push(Action::Focus(format!("monitor-row-{k}")));
@@ -195,24 +401,24 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
                 return Err(format!("{k} is not a session Sessions lists"));
             }
             m.sel = Some(k.to_string());
-            Ok(vec![view_action(&m, cx)])
+            Ok(vec![view_action(&mut m, cx)])
         }
         "monitor_more" => {
             m.pages = m.pages.max(1) + 1;
-            Ok(vec![view_action(&m, cx)])
+            Ok(vec![view_action(&mut m, cx)])
         }
         "monitor_next" => {
             if !m.next_needing() {
                 return Ok(vec![Action::notice("No session needs you")]);
             }
-            Ok(vec![view_action(&m, cx)])
+            Ok(vec![view_action(&mut m, cx)])
         }
         "monitor_key" => match a.req("key") {
             "up" | "down" => {
                 m.step(if a.req("key") == "up" { -1 } else { 1 });
                 // The keyboard follows the selection (its row's focus ring).
                 let focus = m.selected().map(|k| Action::Focus(format!("monitor-row-{k}")));
-                Ok([Some(view_action(&m, cx)), focus].into_iter().flatten().collect())
+                Ok([Some(view_action(&mut m, cx)), focus].into_iter().flatten().collect())
             }
             // Nothing of the view has the keyboard: Enter gives it to the list, on the session shown.
             "enter" => Ok(m.selected().map(|k| Action::Focus(format!("monitor-row-{k}"))).into_iter().collect()),
@@ -222,7 +428,7 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
                         return Ok(vec![Action::notice("No session needs you")]);
                     }
                     let focus = m.selected().map(|k| Action::Focus(format!("monitor-row-{k}")));
-                    Ok([Some(view_action(&m, cx)), focus].into_iter().flatten().collect())
+                    Ok([Some(view_action(&mut m, cx)), focus].into_iter().flatten().collect())
                 }
                 _ => Ok(vec![]),
             },
@@ -273,7 +479,7 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
             let list = m.att.get_mut(k).ok_or("no file is attached there")?;
             let i = list.iter().position(|x| x.id == id).ok_or("that file is not attached any more")?;
             let gone = list.remove(i);
-            let mut out = vec![view_action(&m, cx)];
+            let mut out = vec![view_action(&mut m, cx)];
             out.extend(forget(std::slice::from_ref(&gone)));
             Ok(out)
         }
@@ -618,7 +824,7 @@ fn on_files(cx: &Ctx, inc: Incoming) -> Vec<Action> {
     if !left.is_empty() {
         out.push(Action::ForgetFiles(left));
     }
-    out.push(view_action(&m, cx));
+    out.push(view_action(&mut m, cx));
     out
 }
 
@@ -674,4 +880,80 @@ fn links(m: &Model, cx: &Ctx, name: &str, key: &str) -> Result<Vec<Action>, Stri
         }
         _ => vec![intent("worktrees_show", json!({})), intent("worktrees_filter", json!({ "text": thread.unwrap_or(sb) }))],
     })
+}
+
+/// The stand-in daemon's history routes, from a fixture's
+/// `daemon.history` (`{"<sandbox>/<session_id>": {items, truncated_before,
+/// partial, partial_reason, ended}}`), as `crates/core/src/history.rs`
+/// pages them. Every read and delete is noted in `history_calls` (tests
+/// and demo marks read it); a read subscribes (`history_subs`), a delete
+/// ends it.
+fn standin(st: &mut super::Standin, method: &str, path: &str, _body: &J) -> Option<(u16, J)> {
+    let (p, query) = path.split_once('?').unwrap_or((path, ""));
+    let rest = p.strip_prefix("/api/sessions/")?;
+    let parts: Vec<String> = rest.split('/').map(pct_decode).collect();
+    let q = |k: &str| query.split('&').find_map(|kv| kv.strip_prefix(&format!("{k}="))).and_then(|v| v.parse::<u64>().ok());
+    let (sb, sid) = match parts.as_slice() {
+        [sb, sid, h] if h == "history" && method == "GET" => (sb.clone(), sid.clone()),
+        [sb, sid, h, s] if h == "history" && s == "subscription" && method == "DELETE" => {
+            let k = format!("{sb}/{sid}");
+            note(st.data, format!("DELETE {k}"));
+            if let Some(o) = st.data["history_subs"].as_object_mut() {
+                o.remove(&k);
+            }
+            return Some((200, json!({ "ok": true })));
+        }
+        _ => return None,
+    };
+    let k = format!("{sb}/{sid}");
+    note(st.data, format!("GET {k} before={} limit={}", q("before").map_or("-".into(), |b| b.to_string()), q("limit").unwrap_or(100)));
+    let log = st.data["history"][&k].clone();
+    if log.is_null() {
+        return Some((404, json!({ "ok": false, "error": format!("no history for {k}") })));
+    }
+    if !st.data["history_subs"].is_object() {
+        st.data["history_subs"] = json!({});
+    }
+    st.data["history_subs"][&k] = true.into();
+    let items = log["items"].as_array().cloned().unwrap_or_default();
+    let limit = q("limit").unwrap_or(100).clamp(1, 200) as usize;
+    let older: Vec<&J> = items.iter().filter(|i| q("before").is_none_or(|b| i["seq"].as_u64().unwrap_or(0) < b)).collect();
+    let start = older.len().saturating_sub(limit);
+    let page: Vec<J> = older[start..].iter().map(|i| (*i).clone()).collect();
+    let next_before = (start > 0).then(|| page.first().and_then(|i| i["seq"].as_u64())).flatten();
+    let latest = items.iter().filter_map(|i| i["seq"].as_u64()).max().map_or(0, |m| m + 1);
+    let mut out = json!({ "items": page, "latest_seq": latest, "truncated_before": log["truncated_before"] == true, "partial": log["partial"] == true, "ended": log["ended"] == true });
+    if let Some(b) = next_before {
+        out["next_before"] = b.into();
+    }
+    if let Some(r) = log["partial_reason"].as_str() {
+        out["partial_reason"] = r.into();
+    }
+    Some((200, json!({ "ok": true, "sandbox": sb, "session_id": sid, "page": out, "limits": { "page_max": 200 } })))
+}
+
+fn note(data: &mut J, line: String) {
+    if !data["history_calls"].is_array() {
+        data["history_calls"] = json!([]);
+    }
+    data["history_calls"].as_array_mut().unwrap().push(line.into());
+}
+
+/// `%XX` undone (the stand-in's paths).
+fn pct_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() + 1 {
+            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
