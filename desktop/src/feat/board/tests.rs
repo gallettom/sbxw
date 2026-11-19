@@ -71,9 +71,10 @@ fn opened_from_a_sandbox_it_shows_that_sandbox_s_team_and_the_picker_lists_every
     let v = show(&mut st, &mut d, json!({ "sandbox": "web-app" }));
     assert_eq!(v["team"], "p-run");
     let ids: Vec<&str> = v["teams"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["p-run", "p-new", "p-old", "p-long"], "as the daemon lists them");
-    assert_eq!(v["teams"][0]["color"], "#e06c75", "the sandbox's colour");
-    assert_eq!(v["teams"][0]["state"], "running");
+    assert_eq!(ids, ["p-new", "p-long", "p-run", "p-old"], "proposed, then running (the most recent first), then merged");
+    assert_eq!(v["teams"][2]["color"], "#e06c75", "the sandbox's colour");
+    assert_eq!(v["teams"][2]["state"], "running");
+    assert_eq!(v["teams"].as_array().unwrap().iter().map(|t| t["live"].as_bool().unwrap()).collect::<Vec<_>>(), [true, true, true, false]);
     // A merged team's sandbox: its latest plan.
     let v = show(&mut st, &mut d, json!({ "sandbox": "docs" }));
     assert_eq!(v["team"], "p-old");
@@ -424,7 +425,7 @@ fn the_picker_names_a_team_by_its_threads_with_its_summary_state_and_age() {
     let mut d = data();
     let mut st = State::default();
     let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
-    let t = &v["teams"][0];
+    let t = v["teams"].as_array().unwrap().iter().find(|t| t["id"] == "p-run").unwrap();
     assert_eq!(t["names"], "api-routes + web-page + docs-update", "thread names first");
     assert_eq!(t["summary"], "Orders v2: the API routes, the web page that uses them, and their docs", "the summary whole (the screen wraps it on two lines)");
     assert_eq!((t["state"].as_str(), t["tone"].as_str()), (Some("running"), Some("blue")));
@@ -443,12 +444,16 @@ fn the_picker_opens_moves_picks_and_closes_by_key_press_outside_and_reopen() {
     let mut st = State::default();
     show(&mut st, &mut d, json!({ "team": "p-run" }));
     let (v, _) = run(&mut st, &mut d, "board_picker", json!({}));
-    assert_eq!((v["popup"].as_bool(), v["picker"]["hl"].as_u64()), (Some(true), Some(1)), "open, the team shown marked (0 is All teams)");
+    assert_eq!((v["popup"].as_bool(), v["picker"]["hl"].as_u64()), (Some(true), Some(3)), "open, the team shown marked (0 is All teams; p-new, p-long, p-run)");
     let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "down" }));
-    assert_eq!(v["picker"]["hl"], 2);
+    assert_eq!(v["picker"]["hl"], 4);
+    let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "down" }));
+    assert_eq!(v["picker"]["hl"], 4, "stays on the last row");
     let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
     let (v2, _) = run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
-    assert_eq!((v["picker"]["hl"].as_u64(), v2["picker"]["hl"].as_u64()), (Some(1), Some(0)));
+    assert_eq!((v["picker"]["hl"].as_u64(), v2["picker"]["hl"].as_u64()), (Some(3), Some(2)));
+    run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
+    run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
     let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
     assert_eq!(v["picker"]["hl"], 0, "stays on the first row");
     // Escape closes the list only.
@@ -458,7 +463,7 @@ fn the_picker_opens_moves_picks_and_closes_by_key_press_outside_and_reopen() {
     run(&mut st, &mut d, "board_picker", json!({ "open": true }));
     run(&mut st, &mut d, "board_key", json!({ "key": "down" }));
     let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "enter" }));
-    assert_eq!((v["team"].as_str(), v["popup"].as_bool()), (Some("p-new"), Some(false)));
+    assert_eq!((v["team"].as_str(), v["popup"].as_bool()), (Some("p-old"), Some(false)));
     // A press outside (the dismiss layer's intent), a pick with the pointer.
     run(&mut st, &mut d, "board_picker", json!({}));
     let (v, _) = run(&mut st, &mut d, "board_picker", json!({ "open": false }));
@@ -755,7 +760,7 @@ fn the_picker_answers_up_down_and_enter() {
         settle(&mut rt);
     }
     assert!(rt.presented("board-picker").is_none(), "Enter picks and closes");
-    assert_eq!(shown_team(&rt), "p-old", "All teams, p-run, p-new, p-old: two down from p-run");
+    assert_eq!(shown_team(&rt), "p-old", "All teams, p-new, p-long, p-run, p-old: down from p-run stops at p-old");
 }
 
 #[test]
@@ -1190,4 +1195,21 @@ fn eight_threads_keep_the_summary_to_two_rows() {
         assert_eq!(ui_now(&rt)["thread"], "release-notes");
         assert!(rt.presented("board-chip-release-notes").is_some(), "a selected thread's chip is always shown");
     }
+}
+
+#[test]
+fn the_picker_lists_live_teams_first_then_finished_under_a_heading_and_no_needless_tooltip() {
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    tap(&mut rt, "board-row-picker");
+    let y = |k: &str| rt.presented(k).unwrap_or_else(|| panic!("{k}")).0[1];
+    let order = ["board-row-team-all", "board-row-team-p-new", "board-row-team-p-long", "board-row-team-p-run", "board-picker-finished", "board-row-team-p-old"];
+    for w in order.windows(2) {
+        assert!(y(w[0]) < y(w[1]), "{} above {}", w[0], w[1]);
+    }
+    // A row whose summary is shown whole has no tooltip; the All teams row neither.
+    let els = rt.elements();
+    let help = |k: &str| els.iter().find(|e| e.key.as_deref() == Some(k)).and_then(|e| e.help.clone());
+    assert_eq!(help("board-row-team-all"), None);
+    assert_eq!(help("board-row-team-p-run"), None, "Orders v2's summary fits its two lines");
 }

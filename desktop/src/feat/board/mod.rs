@@ -463,6 +463,7 @@ impl State {
             match body {
                 Ok(b) => {
                     self.teams = b["teams"].as_array().cloned().unwrap_or_default();
+                    model::order_teams(&mut self.teams);
                     self.teams_error = None;
                     // A team the list no longer has (pruned since): the latest one.
                     if let Some(id) = self.team.clone() {
@@ -585,7 +586,7 @@ impl State {
                 let sb = t["sandbox"].as_str().unwrap_or("");
                 let state = t["state"].as_str().unwrap_or("");
                 let last = t["last_ms"].as_u64().or(t["updated_ms"].as_u64()).or(t["created_ms"].as_u64());
-                json!({ "id": t["id"], "names": model::team_names(t), "summary": t["summary"].as_str().filter(|s| !s.is_empty()).map(model::breakable).unwrap_or_else(|| "(no summary)".into()),
+                json!({ "id": t["id"], "live": model::team_rank(state) < model::FINISHED, "names": model::team_names(t), "summary": t["summary"].as_str().filter(|s| !s.is_empty()).map(model::breakable).unwrap_or_else(|| "(no summary)".into()),
                     "sandbox": sb, "color": groups[sb], "state": state, "tone": model::team_tone(state), "when": last.map(|l| crate::feat::files::view::ago(l / 1000, now)).unwrap_or_default() })
             })
             .collect();

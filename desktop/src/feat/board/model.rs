@@ -167,6 +167,30 @@ pub fn state_word(state: &str) -> (&'static str, &'static str) {
     }
 }
 
+/// Where a team's state puts it in a list: what still needs the person
+/// first (proposed: waits for their approval; running; done: waits for its
+/// merge), then the finished ones (merged, closed), refused last. From
+/// [`FINISHED`] on, a team is finished.
+pub fn team_rank(state: &str) -> u8 {
+    match state {
+        "proposed" => 0,
+        "running" => 1,
+        "done" => 2,
+        "merged" => 3,
+        "closed" => 4,
+        "refused" => 5,
+        _ => 6,
+    }
+}
+pub const FINISHED: u8 = 3;
+
+/// The teams as every Board list shows them: by [`team_rank`], then the most
+/// recent first.
+pub fn order_teams(teams: &mut [J]) {
+    let last = |t: &J| t["last_ms"].as_u64().or(t["updated_ms"].as_u64()).or(t["created_ms"].as_u64()).unwrap_or(0);
+    teams.sort_by_key(|t| (team_rank(t["state"].as_str().unwrap_or("")), std::cmp::Reverse(last(t))));
+}
+
 /// A team's state's tone.
 pub fn team_tone(state: &str) -> &'static str {
     match state {
@@ -678,6 +702,15 @@ mod tests {
         for d in g["paint"]["dots"].as_array().unwrap() {
             assert!(d["x"].as_f64().unwrap() <= 300.0);
         }
+    }
+
+    #[test]
+    fn teams_list_by_what_needs_the_person_then_the_most_recent() {
+        let t = |id: &str, state: &str, last: u64| json!({ "id": id, "state": state, "last_ms": last });
+        let mut v = vec![t("m-new", "merged", 900), t("r-old", "running", 100), t("x", "refused", 999), t("p", "proposed", 50), t("r-new", "running", 800), t("d", "done", 700), t("m-old", "merged", 10), t("c", "closed", 950)];
+        order_teams(&mut v);
+        let ids: Vec<&str> = v.iter().map(|t| t["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["p", "r-new", "r-old", "d", "m-new", "m-old", "c", "x"]);
     }
 
     #[test]

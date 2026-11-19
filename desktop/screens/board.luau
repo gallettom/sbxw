@@ -345,15 +345,17 @@ end
 local function picker_row(t, i, p, mw)
   local hl = (p.hl or 0) == i
   local current = p.current == t.id
+  -- A tooltip only when the summary is cut here (none over a row that shows it all).
+  local shown = nz(t.summary) and two_lines(t.summary, mw) or nil
   return column{ key = "board-row-team-" .. t.id, on = "team", arg = t.id, gap = 2, px = 8, py = 8, radius = "xs", w = "full",
-    fill = (hl or current) and "active-bg" or nil, hover = "hover-subtle", selected = current, help = t.summary,
+    fill = (hl or current) and "active-bg" or nil, hover = "hover-subtle", selected = current, help = (shown and shown ~= t.summary) and t.summary or nil,
     row{ gap = 8, w = "full",
       column{ w = 8, h = 8, radius = 2, fill = t.color or "text-dim" },
       text{ t.names or "", size = "sm", mono = true, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
       current and icon{ "check", size = 12, color = "accent" } or false,
       nz(t.state) and badge{ t.state, tone = t.tone or "neutral" } or false,
       nz(t.when) and text{ t.when, size = "xs", color = "text-dim" } or false },
-    nz(t.summary) and text{ two_lines(t.summary, mw), size = "xs", color = "text-muted", wrap = true } or false }
+    shown and text{ shown, size = "xs", color = "text-muted", wrap = true } or false }
 end
 
 local function picker_menu(ui, ow, oh, wide)
@@ -362,11 +364,21 @@ local function picker_menu(ui, ow, oh, wide)
   local mw = menu_w(ow, wide)
   local list = { gap = 2, w = "full", key = "board-picker-list", group = "list" }
   list[#list + 1] = picker_row({ id = "all", names = "All teams", summary = "Every team's latest messages, each with its team", color = "text-dim" }, 0, p, mw)
-  for i, t in ipairs(ui.teams or {}) do list[#list + 1] = picker_row(t, i, p, mw) end
+  -- Teams that need you first (the core's order), then the finished ones
+  -- under a quiet heading.
+  local headed = false
+  for i, t in ipairs(ui.teams or {}) do
+    if t.live == false and not headed and i > 1 then
+      list[#list + 1] = row{ w = "full", gap = 8, px = 8, key = "board-picker-finished",
+        text{ "Finished", size = "xs", weight = "semibold", color = "text-dim" }, column{ grow = 1, h = 1, fill = "elevated" } }
+      headed = true
+    end
+    list[#list + 1] = picker_row(t, i, p, mw)
+  end
   if (p.more or 0) > 0 then
     list[#list + 1] = row{ w = "full", justify = "center", button{ "Show " .. p.more .. " more", variant = "ghost", tone = "blue", dense = true, on = "picker_more", key = "board-picker-more" } }
   end
-  local est = 8 + 58 * (#(ui.teams or {}) + 1) + ((p.more or 0) > 0 and 32 or 0)
+  local est = 8 + 58 * (#(ui.teams or {}) + 1) + ((p.more or 0) > 0 and 32 or 0) + 24
   local h = math.max(80, math.min(est, (oh or 600) - 24))
   return column{ pin = { left = 0, top = 0 }, w = mw, key = "board-picker", fill = "surface", border = "elevated", radius = "md", pad = 4,
     scroll{ h = h, key = "board-picker-scroll", column(list) } }
