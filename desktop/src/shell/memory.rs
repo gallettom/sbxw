@@ -55,6 +55,14 @@ impl App {
         lines.push(("terminals: grids, all".into(), terms, format!("{} terminals", self.panes.iter().chain(parked).filter(|p| p.term.is_some()).count())));
         lines.push(("terminals: rows drawn".into(), drawn, "estimate".into()));
         lines.push(("luau: all VMs".into(), lua, format!("{} screens", self.screens.len())));
+        // MEM_GC=1: what a full collection of every VM would leave (it runs it).
+        if std::env::var_os("MEM_GC").is_some() {
+            for s in &self.screens {
+                s.collect();
+            }
+            let after: u64 = self.screens.iter().map(|s| s.mem().lua).sum();
+            lines.push(("luau: all VMs after a full collection".into(), after, String::new()));
+        }
         per_lua.sort_by(|a, b| b.1.cmp(&a.1));
         for (n, b) in per_lua.iter().take(6) {
             lines.push((format!("luau: {n}"), *b, String::new()));
@@ -71,6 +79,11 @@ impl App {
             lines.push(("heap: rest (Rune's trees and caches, features' state, fonts)".into(), l.saturating_sub(known), String::new()));
         }
         log::info!("mem: ==== {label}");
+        // MEM_TRIM=1: the resident size once the allocator gave back what it keeps.
+        if std::env::var_os("MEM_TRIM").is_some() {
+            mem::trim();
+            log::info!("mem: rss after trim {} MB", mem::rss().0.map_or("-".into(), mem::mb));
+        }
         let fmt = |b: Option<u64>| b.map_or("-".to_string(), mem::mb);
         log::info!("mem: rss {} MB (peak {} MB), heap live {} MB, heap peak {} MB", fmt(rss), fmt(hwm), fmt(live), fmt(mem::peak().map(|p| p.0)));
         for (k, b, note) in lines {

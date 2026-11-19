@@ -460,6 +460,12 @@ impl LuauHost {
         self.lua.used_memory()
     }
 
+    /// A full collection now (MEMORY.md): garbage the incremental collector
+    /// has not reached yet goes. True when it ran.
+    pub fn collect(&self) -> bool {
+        self.lua.gc_collect().is_ok()
+    }
+
     pub fn new(limits: Limits) -> mlua::Result<Self> {
         let libs = StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8 | StdLib::BIT;
         let lua = Lua::new_with(libs, LuaOptions::default())?;

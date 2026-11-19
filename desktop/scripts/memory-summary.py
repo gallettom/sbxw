@@ -30,6 +30,9 @@ for line in open(log, errors="replace"):
         for k, v in zip(["RSS", "RSS peak", "heap live", "heap peak"], m.groups()):
             cur["rows"][k] = None if v == "-" else float(v)
         continue
+    m = re.search(r"mem: rss after trim (\S+) MB", line)
+    if m:
+        cur["rows"]["RSS after trim"] = float(m.group(1)); continue
     m = re.search(r"mem: \| (.*?) \| (\S+) \| (.*)$", line)
     if m:
         cur["rows"][m.group(1)] = float(m.group(2))

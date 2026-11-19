@@ -413,6 +413,11 @@ impl ScreenState {
         ScreenMem { lua: self.host.used_memory() as u64, data: self.data.clone(), tree, nodes: self.last_good.as_ref().map_or(0, count_nodes) }
     }
 
+    /// A full collection of this screen's Luau VM (MEMORY.md).
+    pub fn collect(&self) {
+        self.host.collect();
+    }
+
     pub fn set_data(&mut self, data: J) {
         self.set_data_shown(Rc::new(data), true);
     }

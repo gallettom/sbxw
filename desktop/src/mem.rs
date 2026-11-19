@@ -115,6 +115,32 @@ pub fn rss() -> (Option<u64>, Option<u64>) {
     }
 }
 
+/// Hands the allocator's free memory back to the system: glibc's
+/// `malloc_trim` on Linux, `malloc_zone_pressure_relief` on macOS (both in
+/// the C library the binary already links; no crate). Freed memory the
+/// allocator keeps for later still counts in the resident size (what
+/// Activity Monitor shows) until then.
+pub fn trim() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        extern "C" {
+            fn malloc_trim(pad: usize) -> i32;
+        }
+        unsafe {
+            malloc_trim(0);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+        }
+        unsafe {
+            malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+        }
+    }
+}
+
 /// An estimate of a JSON value's heap bytes, from its lengths (for when
 /// counting is off). Each value is `size_of::<J>()`; a map entry adds its
 /// key and about 16 bytes of the map's own bookkeeping.
