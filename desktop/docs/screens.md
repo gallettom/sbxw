@@ -1998,7 +1998,7 @@ bubble hugs its content up to a width that follows the conversation column
 prose; under 760 pt, one column, 520 pt: `model::bubble_max`, mirrored in
 `board.luau`; cards, notes and tinted reports share it) and holds
 only the content: a small quiet kind line ("direct message", "Decision team
-note", a state chip with "status report"), the words (prose face, pills),
+note", "status report" with the state chip at the bubble's top right: keys `board-kind-<id>` and `board-state-<id>`, a gap of at least 12 pt between them), the words (prose face, pills),
 Show more. A run of more than 32 characters without a space gets a break
 every 24 (zero-width spaces, drawing only), so a path, a hash or 200
 characters without a space wrap inside the bubble. A status report with
