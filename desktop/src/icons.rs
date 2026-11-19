@@ -107,6 +107,16 @@ icons! {
     // The Monitor (the rail's activity zone, its overlay): a list of
     // sessions, the first one's dot filled (the one that needs you).
     INBOX "inbox" concat!(r#"<circle cx="3.25" cy="4" r="1.75" fill="currentColor"/>"#, st!("circle", r#"cx="3.25" cy="8.5" r="1""#), st!("circle", r#"cx="3.25" cy="12.5" r="1""#), st!("line", r#"x1="6.75" y1="4" x2="14.25" y2="4""#), st!("line", r#"x1="6.75" y1="8.5" x2="14.25" y2="8.5""#), st!("line", r#"x1="6.75" y1="12.5" x2="11.75" y2="12.5""#));
+    // Canvas (the rail's browse zone, its overlay): a surface with two
+    // pictures on it, one of them pinned. Its tools: a pointer (select), a
+    // map pin, a sticky note with a folded corner, a picture; zoom out, fit.
+    CANVAS "canvas" concat!(st!("rect", r#"x="1.5" y="2.5" width="13" height="11" rx="1.5""#), st!("rect", r#"x="3.75" y="5" width="4.5" height="3.5" rx="0.5""#), st!("rect", r#"x="9" y="7.5" width="3.5" height="3.75" rx="0.5""#), r#"<circle cx="6" cy="5" r="1.1" fill="currentColor"/>"#);
+    POINTER "pointer" st!("path", r#"d="M4 2.5l8.5 5.75-3.75.75 2.25 4.25-1.75.9-2.25-4.25L4 12.5z""#);
+    PIN "pin" concat!(st!("path", r#"d="M8 14.5s-4.25-4.5-4.25-7.5a4.25 4.25 0 0 1 8.5 0c0 3-4.25 7.5-4.25 7.5z""#), st!("circle", r#"cx="8" cy="7" r="1.5""#));
+    NOTE "note" concat!(st!("path", r#"d="M2.5 2.5h11v7.5l-3.5 3.5h-7.5z""#), st!("path", r#"d="M13.5 10h-3.5v3.5""#));
+    IMAGE "image" concat!(st!("rect", r#"x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5""#), st!("path", r#"d="M2 12l4-4 3 3 2-2 3 3""#), r#"<circle cx="10.75" cy="5.75" r="1.1" fill="currentColor"/>"#);
+    MINUS "minus" st!("line", r#"x1="3" y1="8" x2="13" y2="8""#);
+    FIT "fit" concat!(st!("polyline", r#"points="2,5.5 2,2 5.5,2""#), st!("polyline", r#"points="10.5,2 14,2 14,5.5""#), st!("polyline", r#"points="14,10.5 14,14 10.5,14""#), st!("polyline", r#"points="5.5,14 2,14 2,10.5""#));
 }
 
 pub fn get(name: &str) -> Option<&'static Icon> {

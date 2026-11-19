@@ -353,6 +353,26 @@ Ctrl+Esc elsewhere, which gives the keyboard back: say it in the chrome
 surface{ id = "browser" }
 ```
 
+### `canvas`
+
+A feature's canvas (Canvas's review surface): pictures, numbered pins and
+note cards on an infinite surface, drawn by the core
+(`src/surface_canvas.rs`). The person pans (drag the ground, the wheel, two
+fingers, the middle button) and zooms (pinch, ⌘ or Ctrl with the wheel)
+without the screen running; presses that mean something (select, move,
+resize, place a pin, a note, a picture) go to the owning feature's Rust as
+`SurfaceEvent::Canvas`, never to the screen. It takes the space its parent
+leaves. An `id` no feature declares in `surfaces` draws nothing and hears
+nothing.
+
+| Prop | Value | Effect |
+|---|---|---|
+| `id` | string | Required. The canvas's id, as its feature declares it in `surfaces` |
+
+```lua
+canvas{ id = "canvas" }
+```
+
 ### `icon`
 
 Positional: an [icon](#icons) name.
@@ -884,6 +904,9 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `tag` | keyword pills |
 | `monitor` | the virtual Mac (rail, its panel, the palette) |
 | `inbox` | the Monitor: every session, who needs you first (rail, its overlay) |
+| `canvas` | Canvas: shots of an agent's screens to review (rail, its overlay) |
+| `pointer`, `pin`, `note`, `image` | Canvas's tools: select, a numbered pin, a note card, an example picture |
+| `minus`, `fit` | zoom out; show everything (Canvas) |
 | `history` | commits (the Commits view, its rail entry, a pane's menu) |
 
 ## Where screens live

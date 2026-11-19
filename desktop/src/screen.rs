@@ -1543,6 +1543,9 @@ impl Build<'_> {
             Kind::Surface if crate::feat::surface_owner(n.id.as_deref().unwrap_or("")).is_none() => {
                 el().grow(1.0).w_full().padding(8.0).fill(c("elevated")).child(text(format!("no feature owns a surface '{}'", n.id.as_deref().unwrap_or(""))).font(body(12.0, 400.0)).color(c("text-muted")))
             }
+            // A canvas no feature owns draws nothing and hears nothing.
+            Kind::Canvas if crate::feat::surface_owner(n.id.as_deref().unwrap_or("")).is_none() => el(),
+            Kind::Canvas => crate::surface_canvas::view::<S>(n.id.as_deref().unwrap_or(""), 2.0, |s: &mut S, id: &str, ev, tx| s.surface_event(crate::surface::SurfaceEvent::Canvas { surface: id.to_string(), ev }, tx)),
             Kind::Surface => crate::surface::view::<S>(n.id.as_deref().unwrap_or(""), |s: &mut S, ev, tx| s.surface_event(ev, tx), |s: &mut S, ev, down, tx| s.surface_key(ev, down, tx)),
             Kind::Progress => {
                 let v = n.value.as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32;

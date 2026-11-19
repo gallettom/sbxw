@@ -1,0 +1,63 @@
+{
+ "about": "Canvas: invented sandboxes and mock screens (gen.py).",
+ "app": {
+  "selected": "web-app",
+  "panes": 1,
+  "split": "columns",
+  "open": [
+   "web-app"
+  ],
+  "focused": 1
+ },
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/work/web",
+    "created_at": "2026-11-10T09:12:00Z",
+    "approvals": 0,
+    "kits_waiting": 0
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": "/work/docs",
+    "created_at": "2026-11-11T09:12:00Z",
+    "approvals": 0,
+    "kits_waiting": 0
+   }
+  ],
+  "sessions": [
+   {
+    "sandbox": "web-app",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763460300000,
+    "ts": 1763463600000,
+    "answerable": true,
+    "origin": "sbxw",
+    "session_id": "s-main"
+   },
+   {
+    "sandbox": "web-app",
+    "mode": "claude",
+    "state": "working",
+    "agent": "claude",
+    "started_ms": 1763460420000,
+    "ts": 1763463600000,
+    "answerable": true,
+    "thread": "checkout-ui",
+    "origin": "sbxw",
+    "session_id": "s-thread"
+   }
+  ],
+  "canvas": {
+   "canvases": {},
+   "pictures": {}
+  }
+ }
+}

@@ -233,11 +233,13 @@ struct Canvas {
     fitted: bool,
     /// A zoom that has not been rebuilt for yet (pins' size, levels).
     dirty: bool,
+    /// The view was laid out (its size is known).
+    sized: bool,
 }
 
 impl Canvas {
     fn new() -> Canvas {
-        Canvas { scene: Scene::default(), cam: Camera::default(), live_pan: Live::new([0.0, 0.0]), live_zoom: Live::new(1.0), grab: None, pin_at: None, fitted: false, dirty: false }
+        Canvas { scene: Scene::default(), cam: Camera::default(), live_pan: Live::new([0.0, 0.0]), live_zoom: Live::new(1.0), grab: None, pin_at: None, fitted: false, dirty: false, sized: false }
     }
     fn set_cam(&mut self, cam: Camera) {
         self.cam = cam;
@@ -269,11 +271,20 @@ fn with<R>(id: &str, f: impl FnOnce(&mut Canvas) -> R) -> R {
 /// Replaces what canvas `id` shows (the camera stays where it is).
 pub fn set_scene(id: &str, scene: Scene) {
     with(id, |c| {
-        if let Some(Grab::Move { idx, .. } | Grab::Resize { idx, .. } | Grab::Pin { idx }) = c.grab {
-            // A drag in progress keeps its own item; the new scene is taken at its end.
-            let _ = idx;
-        }
+        // The first items fit the view (a canvas laid out before its manifest came).
+        let first = c.scene.items.is_empty() && !scene.items.is_empty();
         c.scene = scene;
+        if first {
+            c.fitted = false;
+            if c.sized {
+                let mut cam = c.cam;
+                if let Some(b) = c.bounds() {
+                    cam.fit(b, 1.0);
+                    c.fitted = true;
+                }
+                c.set_cam(cam);
+            }
+        }
     });
 }
 
@@ -521,6 +532,9 @@ fn pic_error(id: &str, image: &str) -> Option<String> {
 
 /// A pin's radius on screen, points.
 pub const PIN_R: f32 = 11.0;
+/// A caption's or a band's text, at most this tall in world points: rows
+/// are `ROW_GAP` (240) apart, and both fit in it at any zoom.
+const CAPTION_MAX: f32 = 64.0;
 /// The resize handle's half size on screen, points.
 const HANDLE: f32 = 7.0;
 
@@ -746,6 +760,7 @@ fn laid_out(id: &str, size: [f32; 2]) -> bool {
         if cv.cam.view == size && cv.fitted {
             return false;
         }
+        cv.sized = true;
         let mut cam = cv.cam;
         // Keep the world centre where it was when the view changes size.
         let centre = cam.world(cam.c());
@@ -782,7 +797,7 @@ fn small(size: f32, weight: f32) -> rune::TextStyle {
 }
 
 /// The element for canvas `id`. `sink` gets what the person did (on the UI thread).
-pub fn view<S: 'static>(id: &str, scale: f32, sink: fn(&mut S, CanvasEvent, &mut Tx)) -> El {
+pub fn view<S: 'static>(id: &str, scale: f32, sink: fn(&mut S, &str, CanvasEvent, &mut Tx)) -> El {
     let (need, world) = with(id, |cv| {
         cv.dirty = false;
         let need = plan_levels(id, cv, scale);
@@ -813,10 +828,10 @@ pub fn view<S: 'static>(id: &str, scale: f32, sink: fn(&mut S, CanvasEvent, &mut
                 tx.live_only();
             }
             for ev in evs {
-                sink(s, ev, tx);
+                sink(s, &i2, ev, tx);
             }
             for ev in take_pending() {
-                sink(s, ev, tx);
+                sink(s, &i2, ev, tx);
             }
         })
         .on_wheel(move |s: &mut S, w: WheelEvent, tx: &mut Tx| {
@@ -824,18 +839,28 @@ pub fn view<S: 'static>(id: &str, scale: f32, sink: fn(&mut S, CanvasEvent, &mut
                 tx.live_only();
             }
             for ev in take_pending() {
-                sink(s, ev, tx);
+                sink(s, &i3, ev, tx);
             }
             true
         })
         .on_magnify(move |s: &mut S, m: MagnifyEvent, tx: &mut Tx| {
             on_magnify(&i4, &m);
             for ev in take_pending() {
-                sink(s, ev, tx);
+                sink(s, &i4, ev, tx);
             }
             true
         })
         .child(world)
+        .child(
+            // The zoom readout, drawn by the core so a pinch updates it.
+            el().key(format!("canvas-zoom-{id}"))
+                .pin(Some(8.0), None, None, Some(8.0))
+                .px(6.0)
+                .py(2.0)
+                .radius(4.0)
+                .fill(c("elevated"))
+                .child(text(zoom_label(id)).font(small(11.0, 500.0)).color(c("text-muted"))),
+        )
 }
 
 thread_local! {
@@ -856,10 +881,17 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
     let (mx, my) = (vis[2] * 0.5, vis[3] * 0.5);
     for i in &cv.scene.items {
         if let Body::Band { label } = &i.body {
+            // The label stays readable at any zoom and always sits above
+            // its row (`i.y` is the row's top): its height is taken above it.
+            let fs = (13.0 * inv).min(CAPTION_MAX);
+            let lh = (fs * 1.5).ceil();
             w = w.child(
-                el().key(format!("canvas-{}", i.id)).pin(Some(i.x), Some(i.y), None, None).w(i.w).h(i.h).child(
-                    el().pin(Some(0.0), Some(i.h - 2.0 * inv), None, None).w(i.w).h(1.0 * inv).fill(c("border")),
-                ).child(text(label.clone()).font(small(13.0 * inv, 600.0)).color(c("text-muted"))),
+                el().key(format!("canvas-{}", i.id))
+                    .pin(Some(i.x), Some(i.y - lh - (10.0 * inv).min(16.0)), None, None)
+                    .w(i.w)
+                    .h(lh + 4.0 * inv)
+                    .child(text(label.clone()).font(small(fs, 600.0)).color(c("text-muted")).truncate().w(i.w))
+                    .child(el().pin(Some(0.0), Some(lh + 2.0 * inv), None, None).w(i.w).h(inv).fill(c("border"))),
             );
             continue;
         }
@@ -878,25 +910,29 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
                 }
                 b = b.border(if selected { 2.0 * inv } else { 1.0 * inv }, if selected { c("accent") } else if *asset { c("amber") } else { c("border") });
                 // The caption under the picture, at a size that stays readable.
-                let mut cap = el().pin(Some(0.0), Some(i.h + 6.0 * inv), None, None).w(i.w);
-                let mut lines = rune::col().gap(2.0 * inv);
-                for (k, l) in caption.iter().enumerate() {
+                // Zoomed far out, the title alone, and never taller than the gap between rows.
+                let mut cap = el().pin(Some(0.0), Some(i.h + (6.0 * inv).min(16.0)), None, None).w(i.w);
+                let mut lines = rune::col().gap((2.0 * inv).min(6.0));
+                let far = z < 0.25;
+                for (k, l) in caption.iter().enumerate().take(if far { 1 } else { 2 }) {
                     let (sz, wt, col) = if k == 0 { (12.0, 600.0, "text") } else { (11.0, 400.0, "text-muted") };
-                    lines = lines.child(text(l.clone()).font(small(sz * inv, wt)).color(c(col)).truncate().w(i.w));
+                    lines = lines.child(text(l.clone()).font(small((sz * inv).min(CAPTION_MAX), wt)).color(c(col)).truncate().w(i.w));
                 }
                 cap = cap.child(lines);
                 b = b.child(cap);
             }
             Body::Note { text: t, n } => {
+                // A note is a thing on the surface: its text scales with it.
                 b = b
                     .fill(c("amber-tint"))
                     .border(if selected { 2.0 * inv } else { 1.0 * inv }, if selected { c("accent") } else { c("amber") })
-                    .radius(6.0 * inv)
-                    .padding(8.0 * inv)
-                    .child(text(match n {
-                        Some(n) => format!("Note {n}\n{t}"),
-                        None => t.clone(),
-                    }).font(small(12.0 * inv, 400.0)).color(c("text")).wrap().w(i.w - 16.0 * inv));
+                    .radius(6.0)
+                    .padding(10.0)
+                    .child(
+                        rune::col().gap(4.0).w(i.w - 20.0)
+                            .child(text(match n { Some(n) => format!("Note {n}"), None => "Note".into() }).font(small(12.0, 600.0)).color(c("text-muted")))
+                            .child(text(if t.trim().is_empty() { "(no text yet)".to_string() } else { t.clone() }).font(small(14.0, 400.0)).color(c("text")).wrap().w(i.w - 20.0)),
+                    );
             }
             Body::Band { .. } => {}
         }

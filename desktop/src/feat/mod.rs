@@ -765,6 +765,7 @@ macro_rules! features {
 
 features! {
     browser,
+    canvas,
     commits,
     board,
     create,

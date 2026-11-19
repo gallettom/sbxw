@@ -650,6 +650,8 @@ fn input(ev: &SurfaceEvent, now: Instant) -> (Option<String>, Vec<Action>) {
         }
         SurfaceEvent::F6 { .. } => (None, vec![Action::Focus(URL_INPUT.into())]),
         SurfaceEvent::Resized { w, h, .. } => (proto::size(*w, *h), vec![]),
+        // A canvas's events (surface_canvas.rs) are never the browser's.
+        SurfaceEvent::Canvas { .. } => (None, vec![]),
     }
 }
 
