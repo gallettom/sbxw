@@ -44,6 +44,8 @@ pub fn routes() -> Router<Arc<App>> {
     Router::new()
         // Sessions, hooks' view, terminals.
         .route("/api/sessions", get(sessions))
+        .route("/api/sessions/:sandbox/:session_id/history", get(session_history))
+        .route("/api/sessions/:sandbox/:session_id/history/subscription", axum::routing::delete(session_history_unsubscribe))
         .route("/api/ptys", get(ptys))
         .route("/api/input", post(input))
         .route("/api/answer", post(answer))
@@ -185,6 +187,45 @@ pub fn routes() -> Router<Arc<App>> {
 
 async fn sessions(State(app): S) -> Json<Value> {
     Json(json!(app.session_infos()))
+}
+
+#[derive(Deserialize)]
+struct HistoryQuery {
+    before: Option<u64>,
+    limit: Option<usize>,
+}
+
+/// A session's conversation, newest page first (see `docs/session-history.md`).
+/// Reading it subscribes this daemon's UIs to its `history` nudges for two
+/// minutes; each read renews that.
+async fn session_history(State(app): S, Path((name, session_id)): Path<(String, String)>, Query(q): Query<HistoryQuery>) -> ApiResult {
+    let sb = sandbox(&name)?;
+    match app.history_page(&sb, &session_id, q.before, q.limit) {
+        Some(page) => Ok(ok_with(json!({
+            "sandbox": sb.to_string(),
+            "session_id": session_id,
+            "page": page,
+            "limits": {
+                "page_default": sbxw_core::history::limits::PAGE_DEFAULT,
+                "page_max": sbxw_core::history::limits::PAGE_MAX,
+                "ring": sbxw_core::history::limits::RING_MAX,
+                "text": sbxw_core::history::limits::TEXT_MAX,
+                "result_head": sbxw_core::history::limits::RESULT_HEAD_MAX,
+                "subscription_ms": sbxw_core::history::limits::SUBSCRIPTION_MS,
+            },
+        }))),
+        None => Err(ApiError::not_found(format!("no history for session '{session_id}' of '{sb}'"))),
+    }
+}
+
+/// The UI no longer shows that session: no more nudges for it.
+async fn session_history_unsubscribe(State(app): S, Path((name, session_id)): Path<(String, String)>) -> ApiResult {
+    let sb = sandbox(&name)?;
+    if app.history_unsubscribe(&sb, &session_id) {
+        Ok(ok())
+    } else {
+        Err(ApiError::not_found(format!("no history for session '{session_id}' of '{sb}'")))
+    }
 }
 
 async fn ptys(State(app): S) -> Json<Value> {

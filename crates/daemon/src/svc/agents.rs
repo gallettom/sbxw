@@ -59,6 +59,7 @@ impl App {
         for info in infos {
             self.send(Event::Session(info));
         }
+        self.history_event(sandbox, &body);
     }
 
     /// The model a session's status line reports. Broadcast only when it

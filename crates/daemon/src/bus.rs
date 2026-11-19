@@ -53,6 +53,18 @@ pub enum Event {
     /// The status pills' vocabulary or a switch changed: `GET
     /// /api/emphasis`'s answer.
     Emphasis(serde_json::Value),
+    /// A session's history grew: re-read `GET
+    /// /api/sessions/:sandbox/:session_id/history`. A nudge, no text; sent
+    /// only while a UI reads that session (see `svc::history`).
+    History(HistoryNudge),
+}
+
+/// What the `history` event says: whose log, and its newest seq.
+#[derive(Clone, Serialize, Debug, PartialEq)]
+pub struct HistoryNudge {
+    pub sandbox: String,
+    pub session_id: String,
+    pub seq: u64,
 }
 
 impl Event {
@@ -76,6 +88,7 @@ impl Event {
             Event::Jarvis(_) => "jarvis",
             Event::Stats(_) => "stats",
             Event::Emphasis(_) => "emphasis",
+            Event::History(_) => "history",
         }
     }
 
@@ -96,6 +109,7 @@ impl Event {
             Event::Browser(v) => json(v),
             Event::Jarvis(v) => v.ui_view().to_string(),
             Event::Stats(v) => json(v),
+            Event::History(v) => json(v),
         }
     }
 }

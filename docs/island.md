@@ -98,6 +98,16 @@ sandbox's token.
 | `Stop` | `idle` (with Claude's reply) |
 | `SessionEnd` | `exited` |
 
+A session's last payload says `ended: true` with an `end_reason`, and a new
+session says which one it `continues` when the daemon can tell (the same
+claude process after `/clear`, or a resumed transcript). From hook v3, a
+`SessionStart` also retires the records of the same sandbox whose claude
+process is gone, so a killed terminal no longer leaves a row behind (and no
+longer makes the restarted main session unanswerable). `last_input_from`
+says whether the last prompt was the person's or one the harness injected
+(a message from another session, a task notification). The whole
+conversation, for the Monitor, is in [session-history.md](session-history.md).
+
 ### The model a session runs
 
 Each session in `GET /api/sessions` (and each `session` event) carries
