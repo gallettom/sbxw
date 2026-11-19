@@ -15,6 +15,7 @@
 #   commit   a commit opened in the Commits column, a file's diff under it
 #   folded   the conversation filtered to api-routes (its row in Team), its four commits opened
 #   narrow   the window at 720x480: one column, the Commits tab
+#   messages the Messages filter: the lead's and threads' direct messages, a team note beside them (Decisions and warnings)
 # Out: $SBXW_SHOTS/board/board-<theme>-<size>-<mark>.png and its element tree.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -55,6 +56,8 @@ if m == "folded":
         step("board-tab-conversation", "board-msg-" + g)
     add(type="mark", name="hold:300")
     step("board-msg-" + g, "board-commit-" + h)
+if m == "messages":
+    step("board-group-messages", "board-convo")
 if m == "narrow":
     step("board-tab-commits", "board-side-commit-" + h)
 add(type="mark", name="hold:500")
@@ -65,7 +68,7 @@ PY
 }
 for theme in ${THEMES:-dark graphite}; do
   for size in ${SIZES:-1284x816 720x480}; do
-    for m in ${MARKS:-running merged all commit folded narrow}; do
+    for m in ${MARKS:-running merged all commit folded messages narrow}; do
       [ "$m" = narrow ] && [ "$size" != 720x480 ] && continue
       script "$m" "$size" >"$shots/script-$m.json"
       THEME="$theme" SHOT_SIZE="$size" run_app "$shots/board-$theme-$size-$m.log" --fixture "$fx" --script "$shots/script-$m.json" \
