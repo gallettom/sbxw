@@ -17,14 +17,14 @@ network rules and startup commands. List them in `sbxw.toml`:
 ```toml
 kits = [
   "sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools",  # the defaults
-  "sbxw:retro",                                                 # default too
+  "sbxw:retro", "sbxw:firecrawl",                               # defaults too
   "sbxw:k8s-tools",                                             # opt-in
   "./my-kit",                   # relative paths resolve against sbxw.toml
 ]
 ```
 
 **Without a `kits` line**, a sandbox gets `sbxw:codemap`, `sbxw:agent-skills`,
-`sbxw:md-to-pdf-tools` and `sbxw:retro`. Writing `kits` replaces the defaults; `kits = []`
+`sbxw:md-to-pdf-tools`, `sbxw:retro` and `sbxw:firecrawl`. Writing `kits` replaces the defaults; `kits = []`
 means none.
 
 A kit reference is one of:
@@ -111,6 +111,7 @@ path, since sbx doesn't know `sbxw:` names.
 | `sbxw:agent-skills` | ✓ | `/archify`, `/brag`, `/brag-slim`, `/i-have-adhd`, `/handoff`, `/grill-me`, `/grilling`, `/frontend-design`, `/modern-web-guidance`, `/chrome-extensions`, plus headless Chromium and FFmpeg |
 | `sbxw:md-to-pdf-tools` | ✓ | `/md-to-pdf`, with WeasyPrint, poppler-utils and Pillow |
 | `sbxw:retro` | ✓ | `/retro`: reads past sessions and proposes what should become a script, hook, skill, rule or kit |
+| `sbxw:firecrawl` | ✓ | Firecrawl Local, the agents' tool for reading the web: MCP server `firecrawl` (public addresses only, Firecrawl Cloud off), built once into the kit cache |
 | `sbxw:k8s-tools` | | `kubectl`, `k3d` and `skaffold` in `~/.local/bin` |
 | `sbxw:git-identity` | | Your host's Git `user.name` and `user.email` in the sandbox |
 | `sbxw:ssh-agent` | | Your host's SSH agent, restricted to signing commits and the common Git hosts |
@@ -228,6 +229,48 @@ evidence for each candidate, goes to `.sbxw-artifacts/retro/`; nothing is built
 or installed until you pick a candidate. Needs no network. See
 [`assets/retro/README.md`](../assets/retro/README.md).
 
+### `sbxw:firecrawl`
+
+[Firecrawl Local](https://docs.firecrawl.dev/quickstarts/firecrawl-local) in
+the sandbox, registered for Claude Code as the MCP server `firecrawl`
+(`--public-only`), with a fenced block in `~/.claude/CLAUDE.md` telling the
+agent to use it first to read, crawl or map web pages. Firecrawl Cloud is off
+unless `SBXW_FIRECRAWL_CLOUD` is set in `[env]`.
+
+- **Where it comes from.** Upstream ships no binary (crates.io only), so the
+  daemon's cache filler builds a pinned version once: rustup-init and the
+  crate checked by sha256, `cargo install --locked`, and the MCP package
+  `firecrawl-mcp` installed with `npm ci` from the kit's lock. Sandboxes copy
+  both from the read-only cache at each start and never build or download
+  them. Until the cache has them, the kit's context says "Firecrawl is not
+  installed yet: sbxw is preparing it; use WebFetch meanwhile" and the sandbox
+  starts normally.
+- **Hosts to allow for the fill** (the kit declares no network rule):
+  `static.rust-lang.org`, `index.crates.io`, `static.crates.io`, and
+  `registry.npmjs.org` (already allowed by `sbxw:agent-skills`).
+- **Safety.** It runs inside the sandbox, through its network policy. The MCP
+  server refuses localhost, private addresses and local names
+  (`host.docker.internal`); a host the proxy refuses comes back as a page
+  with `statusCode` 403. No API key, no `login`, no listener. Every request
+  goes through the sandbox proxy, and Firecrawl does not start without one.
+- **No browser by default.** `SBXW_FIRECRAWL_BROWSER = "auto"` in `[env]`
+  lets it render JavaScript pages with the agent-skills Chromium, but that
+  Chromium connects to sites directly, not through the sandbox proxy (sbx
+  still filters direct traffic: only allowed names resolve).
+- **Firecrawl Cloud.** `SBXW_FIRECRAWL_CLOUD = "auto"` (or `"search"`) in
+  `[env]` turns it on: search and a fallback for blocked pages, with a random
+  install id sent. That fallback can fetch, through Firecrawl's servers, a
+  page your network policy refused.
+- **Off.** Untick it in the Kits dialog, or leave it out of `kits`; the next
+  `sbxw up <sandbox>` takes the server and the guidance out.
+- **Updating.** The pins are the first lines of
+  `assets/firecrawl/files/home/agent/.sbxw/firecrawl/install.sh` (version and
+  crate sha256, toolchain, MCP version with `mcp/package-lock.json`). A cache
+  holding the older version keeps serving it until `sbxw cache clear`.
+
+Firecrawl Local is AGPL-3.0, `firecrawl-mcp` is MIT; sbxw ships neither (they
+are downloaded and built on your machine).
+
 ### `sbxw:k8s-tools`
 
 `kubectl`, `k3d` and `skaffold`, each pinned to a version and checked against
@@ -338,9 +381,9 @@ accepted, and only at creation.
 
 ## The kit cache
 
-`agent-skills`, `md-to-pdf-tools` and `k8s-tools` spend their startup
-downloading: apt packages, a Playwright Chromium, skill tarballs, Python wheels,
-binaries. With `cache = true` (the default), sbxw mounts `~/.sbxw/cache` into
+`agent-skills`, `md-to-pdf-tools`, `k8s-tools` and `firecrawl` spend their
+startup downloading: apt packages, a Playwright Chromium, skill tarballs,
+Python wheels, binaries (firecrawl's is built, by the filler only). With `cache = true` (the default), sbxw mounts `~/.sbxw/cache` into
 every new sandbox and sets `SBXW_CACHE`. The kits copy from it and fall back to
 the network.
 

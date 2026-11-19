@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# sbxw's front for Firecrawl Local: the agent's `firecrawl-local` command
+# and the `firecrawl` MCP server both come through here, so the settings
+# below hold for both. The binary itself is under ~/.sbxw/firecrawl/lib,
+# copied from sbxw's kit cache by ~/.sbxw/firecrawl/install.sh.
+# No dollar-brace anywhere, like the kit's other scripts.
+set -uo pipefail
+KIT=$HOME/.sbxw/firecrawl
+LIB="$KIT/lib"
+
+ver=""; read -r ver 2>/dev/null < "$LIB/binary.version"
+BIN="$LIB/$ver/firecrawl-local"
+if [ -z "$ver" ] || [ ! -x "$BIN" ]; then
+  # The cache may have been filled since this sandbox started.
+  bash "$KIT/install.sh" >/dev/null 2>&1
+  ver=""; read -r ver 2>/dev/null < "$LIB/binary.version"
+  BIN="$LIB/$ver/firecrawl-local"
+fi
+if [ -z "$ver" ] || [ ! -x "$BIN" ]; then
+  echo "firecrawl-local is not installed yet: sbxw builds it once into its kit cache, and this sandbox copies it at its next start. Use WebFetch meanwhile." >&2
+  exit 69
+fi
+
+# What sbxw keeps to itself.
+sub=""
+for a in "$@"; do case "$a" in -*) ;; *) sub="$a"; break ;; esac; done
+case "$sub" in
+  login|init)
+    echo "firecrawl-local $sub: not in an sbxw sandbox. sbxw registers the MCP server itself, and Firecrawl Cloud stays off unless the person turns it on (SBXW_FIRECRAWL_CLOUD in sbxw.toml's [env])." >&2
+    exit 64 ;;
+esac
+
+# Firecrawl Cloud: off unless the person set SBXW_FIRECRAWL_CLOUD (auto or
+# search) in sbxw.toml's [env]. With it off, nothing goes to Firecrawl's
+# servers and no install id is written. A FIRECRAWL_CLOUD, key, URL or CLI
+# login found elsewhere is not used.
+cloud="$(printenv SBXW_FIRECRAWL_CLOUD)"
+case "$cloud" in auto|search) ;; *) cloud=off ;; esac
+export FIRECRAWL_CLOUD="$cloud"
+export FIRECRAWL_CLI_CREDENTIALS=/dev/null
+if [ "$cloud" = off ]; then unset FIRECRAWL_API_KEY FIRECRAWL_API_URL; fi
+# No credential lives here: only the install id, written on a cloud call.
+export FIRECRAWL_LOCAL_HOME="$KIT/home"
+# No browser unless the person asks for one (SBXW_FIRECRAWL_BROWSER=auto in
+# sbxw.toml's [env]). Firecrawl sends its Chrome through a SOCKS guard of its
+# own that connects straight to the site, not through the sandbox's HTTP
+# proxy; without it every request goes through that proxy. Pages that need
+# JavaScript then come back with a warning saying so.
+unset FIRECRAWL_CHROME_PATH
+export FIRECRAWL_LOCAL_BROWSER=never
+case "$(printenv SBXW_FIRECRAWL_BROWSER)" in
+  auto|always)
+    if [ -x "$HOME/.local/bin/chromium" ]; then
+      export FIRECRAWL_CHROME_PATH="$HOME/.local/bin/chromium" FIRECRAWL_LOCAL_BROWSER="$(printenv SBXW_FIRECRAWL_BROWSER)"
+    fi ;;
+esac
+# The MCP package is the pinned copy from the cache, run by the `npx` shim
+# (firecrawl-local runs `npx -y <package>`): never fetched at a start.
+export FIRECRAWL_MCP_PACKAGE=sbxw-firecrawl-mcp
+export PATH="$KIT/shim:$PATH"
+# The sandbox's proxy, by address. sbx names it gateway.docker.internal,
+# which resolves to a private address, and `--public-only` checks every
+# name it resolves, the proxy's included: by name, every page would be
+# refused. By address the proxy is not looked up; the pages' hosts still
+# are checked (local names, private addresses) and then the proxy applies
+# the sandbox's policy to them.
+for var in HTTPS_PROXY https_proxy HTTP_PROXY http_proxy; do
+  url="$(printenv "$var")"
+  case "$url" in http://*) ;; *) continue ;; esac
+  auth="$(printf '%s' "$url" | sed -nE 's#^http://([^/@]*@).*#\1#p')"
+  hostport="$(printf '%s' "$url" | sed -E 's#^http://([^/@]*@)?##; s#/.*$##')"
+  host="$(printf '%s' "$hostport" | sed -E 's#:[0-9]+$##')"
+  port="$(printf '%s' "$hostport" | sed -nE 's#.*:([0-9]+)$#\1#p')"
+  case "$host" in ''|\[*|*[!a-zA-Z0-9.-]*) continue ;; esac
+  printf '%s' "$host" | grep -qE '^[0-9.]+$' && continue
+  addr="$(getent ahosts "$host" 2>/dev/null | awk 'NR==1{print $1}')"
+  [ -n "$addr" ] || continue
+  case "$addr" in *:*) addr="[$addr]" ;; esac
+  export "$var=http://$auth$addr$([ -n "$port" ] && printf ':%s' "$port")"
+done
+# Fails closed: Firecrawl starts only with both proxy variables set, and set
+# to an address. Without them it would go straight to the network, and with
+# a name it could not be looked up under --public-only.
+literal='^http://([^/@]*@)?(\[[0-9a-fA-F:]+\]|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)(:[0-9]+)?/?$'
+for pair in "HTTPS_PROXY https_proxy" "HTTP_PROXY http_proxy"; do
+  found=""
+  for var in $pair; do
+    url="$(printenv "$var")"
+    [ -n "$url" ] || continue
+    if ! printf '%s' "$url" | grep -qE "$literal"; then
+      echo "firecrawl-local: the sandbox proxy ($var) could not be resolved to an address; Firecrawl is not started" >&2
+      exit 69
+    fi
+    found=1
+  done
+  if [ -z "$found" ]; then
+    echo "firecrawl-local: no sandbox proxy ($pair) in the environment; Firecrawl is not started rather than going straight to the network" >&2
+    exit 69
+  fi
+done
+exec "$BIN" "$@"

@@ -43,4 +43,5 @@ Component READMEs: [macOS island](../macos/README.md),
 [md-to-pdf kit](../assets/md-to-pdf-tools/README.md),
 [retro kit](../assets/retro/README.md),
 [k8s kit](../assets/k8s-tools/README.md),
+[Firecrawl kit](kits-and-skills.md#sbxwfirecrawl),
 [virtual Mac kit](../assets/terminal-mac/README.md).

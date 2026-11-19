@@ -856,7 +856,7 @@ mod tests {
 
     #[test]
     fn bundled_kits_are_on_by_default_and_checked() {
-        assert_eq!(Config::default().kits, ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools", "sbxw:retro"]);
+        assert_eq!(Config::default().kits, ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools", "sbxw:retro", "sbxw:firecrawl"]);
         let bad: Config = toml::from_str("kits = [\"sbxw:nope\"]").unwrap();
         assert!(bad.validate().is_err());
         let ok: Config = toml::from_str("kits = [\"sbxw:k8s-tools\", \"/abs/kit\"]").unwrap();
