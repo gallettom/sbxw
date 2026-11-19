@@ -5,6 +5,12 @@
 -- fold into one row. Beside it (760 pt and more): the team, the notes that
 -- still stand, and the commits per thread with their diff in place.
 --
+-- A message reads as a chat: the author line above the bubble (the
+-- thread's dot and name, the role when it adds something, "to" whom, the
+-- time), the bubble under it holding only the content; the same author to
+-- the same addressee within minutes shares one author line. A report that
+-- is only a change of state is one quiet line, no bubble.
+--
 -- Read only. Every text here was written by an agent, a person or git: it
 -- is drawn as words (the prose face, pills for agents' words), never as a
 -- control. Acting happens where it always does: the links go there.
@@ -33,22 +39,40 @@ local function fold_button(r)
   return button{ r.fold.open and "Show less" or "Show more", variant = "ghost", tone = "blue", dense = true, on = "expand", arg = r.fold.key, key = "board-fold-" .. r.fold.key }
 end
 
--- Who wrote it: the thread's colour, the lead marked as lead.
-local function author(r)
-  return row{ gap = 4,
-    column{ w = 8, h = 8, radius = 4, fill = r.who_color or "text-dim" },
-    text{ r.who or "", size = "sm", weight = "semibold", color = r.is_user and "text-bright" or (r.who_color or "text-bright") },
-    r.is_lead and badge{ "lead", tone = "purple", help = "The session that planned this team" } or false,
-    nz(r.to) and text{ "→ " .. r.to, size = "xs", color = "text-muted" } or false,
+-- The conversation column's width, set by render from the overlay's, and a
+-- bubble's widest (about 72 characters of prose).
+local CONV_W = 620
+local BUBBLE_MAX = 520
+local function bubble_w() return math.max(120, math.min(BUBBLE_MAX, CONV_W - 24)) end
+
+-- A team in "All teams": its colour and its threads' names (its summary in
+-- the tooltip), never a cut sentence.
+local function team_tag(r)
+  if not nz(r.team_label) then return false end
+  return row{ gap = 4, max_w = math.max(80, math.min(240, CONV_W - 220)), help = r.team_help,
+    column{ w = 8, h = 8, radius = 2, fill = r.team_color or "text-dim" },
+    text{ r.team_label, size = "xs", mono = true, color = "text-muted", truncate = true },
   }
 end
 
-local function team_tag(r)
-  if not nz(r.team_label) then return false end
-  return row{ gap = 4, max_w = 220,
-    column{ w = 8, h = 8, radius = 2, fill = r.team_color or "text-dim" },
-    text{ r.team_label, size = "xs", color = "text-muted", truncate = true },
-  }
+-- The author line, above the bubble: dot, name (mono, the thread's colour),
+-- the role only when the name does not say it, "to" whom, the time. The
+-- person's: on the right, "You" last.
+local function author_line(r)
+  local nw = math.max(60, math.min(260, CONV_W - 200))
+  if r.side == "right" then
+    return row{ gap = 8, w = "full", justify = "end", key = "board-author-" .. (r.id or ""),
+      team_tag(r), when(r),
+      nz(r.to) and text{ "to " .. r.to, size = "xs", color = "text-muted", truncate = true, max_w = nw } or false,
+      text{ "You", size = "sm", weight = "semibold", color = "text-bright" } }
+  end
+  return row{ gap = 8, w = "full", key = "board-author-" .. (r.id or ""),
+    column{ w = 8, h = 8, radius = 4, fill = r.who_color or "text-dim" },
+    text{ r.who or "", size = "sm", mono = true, weight = "semibold", color = r.who_color or "text-bright", truncate = true, max_w = nw },
+    nz(r.role) and badge{ r.role, tone = "purple", help = "The session that planned this team" } or false,
+    nz(r.to) and text{ "to " .. r.to, size = "xs", color = "text-muted", truncate = true, max_w = nw } or false,
+    r.guess and text{ "team inferred", size = "xs", color = "text-dim", help = "From before entries named their plan: placed by its time and author" } or false,
+    team_tag(r), when(r) }
 end
 
 local function link(l, key)
@@ -56,34 +80,37 @@ local function link(l, key)
   return button{ l.label, variant = "ghost", tone = "blue", dense = true, on = "open", arg = { what = l.what, thread = l.thread, relay = l.relay }, key = key }
 end
 
--- A message's box, on its side.
--- The conversation column's width, set by render from the overlay's.
-local CONV_W = 620
+-- The small quiet line at a bubble's top: what kind of message it is.
+local function kind_line(label, opts)
+  opts = opts or {}
+  return row{ gap = 4, opts.icon and icon{ opts.icon, size = 12, color = opts.icon_color or "text-muted" } or false,
+    text{ label, size = "xs", color = opts.color or "text-muted", weight = opts.weight, help = opts.help },
+    nz(opts.extra) and text{ opts.extra, size = "xs", color = "text-muted", help = opts.extra_help } or false }
+end
 
+-- A message: its author line (unless it follows the same author's), then
+-- its bubble, hugging its content up to the bubble's widest, on its side.
 local function bubble(r, kids, opts)
   opts = opts or {}
   local right = r.side == "right"
-  local box = { gap = 4, px = 12, py = 8, radius = "md", max_w = math.min(620, CONV_W - 24), key = "board-msg-" .. (r.id or ""),
+  local box = { gap = 4, px = 12, py = 8, radius = "md", max_w = bubble_w(), key = "board-bubble-" .. (r.id or ""),
     fill = opts.fill or (right and "surface-alt" or "surface"), border = opts.border or "elevated" }
-  local head = row{ gap = 8, w = "full", author(r), team_tag(r), r.guess and text{ "team inferred", size = "xs", color = "text-dim", help = "From before entries named their plan: placed by its time and author" } or false, spacer{}, when(r) }
-  if right then
-    head = row{ gap = 8, w = "full", when(r), spacer{}, team_tag(r), nz(r.to) and text{ "to " .. r.to, size = "xs", color = "text-muted" } or false, text{ "You", size = "sm", weight = "semibold", color = "text-bright" } }
-  end
-  box[#box + 1] = head
   for _, k in ipairs(kids) do box[#box + 1] = k end
-  return row{ w = "full", justify = right and "end" or "start", column(box) }
+  return column{ gap = 2, w = "full", py = r.cont and 0 or 4, key = "board-msg-" .. (r.id or ""),
+    (not r.cont) and author_line(r) or false,
+    row{ w = "full", justify = right and "end" or "start", px = right and 0 or 16, column(box) } }
 end
 
 local function questions(r, sb)
-  local out = { gap = 8, w = "full" }
+  local out = { gap = 8 }
   for _, q in ipairs(r.questions or {}) do
-    local kids = { gap = 2, w = "full", px = 8, py = 4, radius = "xs", fill = "floor",
-      text{ (q.id or "") .. (nz(q.title) and (" · " .. q.title) or ""), size = "sm", weight = "semibold", color = "text-bright" },
+    local kids = { gap = 2, px = 8, py = 4, radius = "xs", fill = "floor",
+      text{ (q.id or "") .. (nz(q.title) and (" · " .. q.title) or ""), size = "sm", weight = "semibold", color = "text-bright", wrap = true },
       words(q.text or "", sb, { size = "sm" }),
     }
     if nz(q.recommendation) then kids[#kids + 1] = text{ "Suggested: " .. q.recommendation, size = "sm", color = "text-muted", wrap = true } end
     if nz(q.answer) then
-      kids[#kids + 1] = row{ gap = 4, w = "full", icon{ "check", size = 12, color = "green" }, text{ "Answer: " .. q.answer, size = "sm", color = "text-bright", wrap = true, grow = 1 } }
+      kids[#kids + 1] = row{ gap = 4, align = "start", icon{ "check", size = 12, color = "green" }, text{ "Answer: " .. q.answer, size = "sm", color = "text-bright", wrap = true, grow = 1, min_w = 0 } }
     end
     out[#out + 1] = column(kids)
   end
@@ -94,6 +121,8 @@ local NOTE_LOOK = {
   board_decision = { "green-tint", "green" }, board_warning = { "amber-tint", "amber" },
   board_question = { "blue-tint", "blue" }, board_handoff = { "surface-alt", "elevated" }, conflict = { "red-tint", "red-border" },
 }
+-- A report's tint by its state: done green, blocked amber, failed red.
+local TINT = { green = { "green-tint", "green" }, amber = { "amber-tint", "amber" }, red = { "red-tint", "red-border" } }
 
 local function rowview(r, sb)
   if r.type == "day" then
@@ -101,13 +130,24 @@ local function rowview(r, sb)
   elseif r.type == "system" then
     return row{ gap = 8, w = "full", justify = "center", key = "board-msg-" .. (r.id or ""),
       icon{ ICON[r.tone] or "info", size = 12, color = r.tone == "neutral" and "text-muted" or r.tone },
-      text{ r.text or "", size = "sm", color = "text-muted", wrap = true, max_w = math.min(560, CONV_W - 160) },
+      text{ r.text or "", size = "sm", color = "text-muted", wrap = true, max_w = math.max(120, math.min(560, CONV_W - 200)) },
       team_tag(r), when(r), link(r.link, "board-link-" .. (r.id or "")) }
+  elseif r.type == "transition" then
+    -- A bare change of state: the agent, an arrow, the new state, no bubble.
+    local n = r.count or 1
+    return row{ gap = 8, w = "full", px = 4, key = "board-msg-" .. (r.id or ""),
+      help = n > 1 and (n .. " changes of state: " .. (r.trail or "") .. " (from " .. (r.first_when or "") .. ")") or nil,
+      column{ w = 8, h = 8, radius = 4, fill = r.who_color or "text-dim" },
+      text{ r.who or "", size = "sm", mono = true, color = r.who_color or "text-muted", truncate = true, max_w = math.max(60, math.min(260, CONV_W - 220)) },
+      icon{ "chevron-right", size = 12, color = "text-dim" },
+      badge{ r.state.word, tone = r.state.tone },
+      n > 1 and text{ "×" .. n, size = "xs", color = "text-muted" } or false,
+      team_tag(r), when(r) }
   elseif r.type == "note" then
     local look = NOTE_LOOK[r.look or r.kind] or { "surface", "elevated" }
     local kids = {
-      row{ gap = 4, icon{ ICON[r.tone] or "info", size = 12, color = r.tone == "neutral" and "text-muted" or r.tone }, text{ r.label, size = "sm", weight = "semibold", color = "text-bright" },
-        nz(r.note_via) and text{ r.note_via, size = "xs", color = "text-muted", help = "Sent through sbxw with team_note" } or false },
+      kind_line(r.label, { icon = ICON[r.tone] or "info", icon_color = r.tone == "neutral" and "text-muted" or r.tone, color = "text-bright", weight = "semibold",
+        extra = r.note_via, extra_help = "Sent through sbxw with team_note" }),
       words(r.text or "", sb),
       fold_button(r),
     }
@@ -115,9 +155,9 @@ local function rowview(r, sb)
     if #files > 0 then kids[#kids + 1] = text{ table.concat(files, ", "), size = "xs", mono = true, color = "text-muted", wrap = true } end
     return bubble(r, kids, { fill = look[1], border = look[2] })
   elseif r.type == "card" then
-    local chips = { gap = 4, wrap = true, w = "full" }
+    local chips = { gap = 4, wrap = true }
     for _, t in ipairs(r.threads or {}) do
-      chips[#chips + 1] = row{ gap = 4, px = 8, h = 24, radius = "pill", fill = "floor", column{ w = 8, h = 8, radius = 4, fill = t.color }, text{ t.name, size = "xs", color = "text-bright" } }
+      chips[#chips + 1] = row{ gap = 4, px = 8, h = 24, radius = "pill", fill = "floor", column{ w = 8, h = 8, radius = 4, fill = t.color }, text{ t.name, size = "xs", mono = true, color = "text-bright" } }
     end
     local kids = {
       row{ gap = 4, badge{ "Plan", tone = "purple" }, r.variant and text{ r.variant == "shared" and "one shared worktree" or "a worktree per thread", size = "xs", color = "text-muted" } or false },
@@ -129,22 +169,24 @@ local function rowview(r, sb)
     }
     if r.goals.open then
       for _, t in ipairs(r.threads or {}) do
-        kids[#kids + 1] = column{ gap = 2, w = "full", text{ t.name, size = "sm", weight = "semibold", color = t.color }, words(t.goal or "", sb, { size = "sm" }) }
+        kids[#kids + 1] = column{ gap = 2, text{ t.name, size = "sm", mono = true, weight = "semibold", color = t.color }, words(t.goal or "", sb, { size = "sm" }) }
       end
     end
     return bubble(r, kids, { fill = "surface-alt", border = "purple" })
   elseif r.type == "status" then
     local kids = {}
     if r.state then
-      kids[#kids + 1] = row{ gap = 8, w = "full", badge{ r.state.word, tone = r.state.tone }, nz(r.text) and words(r.text, sb, { size = "sm" }) or false }
+      kids[#kids + 1] = row{ gap = 8, badge{ r.state.word, tone = r.state.tone }, text{ "status report", size = "xs", color = "text-muted" } }
+      kids[#kids + 1] = words(r.text or "", sb, { size = "sm" })
     else
-      kids[#kids + 1] = row{ gap = 8, w = "full", nz(r.label) and r.side ~= "right" and text{ r.label, size = "sm", weight = "semibold", color = r.tone == "neutral" and "text-bright" or r.tone } or false,
-        nz(r.text) and (r.side == "right" and text{ r.text, size = "sm", wrap = true, color = "text" } or words(r.text, sb, { size = "sm" })) or false }
+      if nz(r.label) and r.side ~= "right" then kids[#kids + 1] = kind_line(r.label, { color = r.tone == "neutral" and "text-muted" or r.tone }) end
+      if nz(r.text) then kids[#kids + 1] = r.side == "right" and text{ r.text, size = "sm", wrap = true, color = "text" } or words(r.text, sb, { size = "sm" }) end
     end
     kids[#kids + 1] = fold_button(r)
-    return bubble(r, kids)
+    local t = TINT[r.tint or ""]
+    return bubble(r, kids, t and { fill = t[1], border = t[2] } or nil)
   elseif r.type == "question" then
-    local kids = { text{ r.label or "", size = "sm", weight = "semibold", color = r.tone == "neutral" and "text-bright" or r.tone } }
+    local kids = { kind_line(r.label or "", { color = r.tone == "neutral" and "text-bright" or r.tone, weight = "semibold" }) }
     if nz(r.text) then kids[#kids + 1] = r.side == "right" and text{ r.text, size = "sm", wrap = true, color = "text" } or words(r.text, sb, { size = "sm" }) end
     kids[#kids + 1] = fold_button(r)
     if r.questions then kids[#kids + 1] = questions(r, sb) end
@@ -153,7 +195,7 @@ local function rowview(r, sb)
     return bubble(r, kids)
   elseif r.type == "message" then
     return bubble(r, {
-      row{ gap = 4, icon{ "chat", size = 12, color = "text-muted" }, text{ r.label, size = "xs", color = "text-muted", help = "Sent with SendMessage between the team's sessions; sbxw shows what its hook saw" } },
+      kind_line(r.label, { icon = "chat", help = "Sent with SendMessage between the team's sessions; sbxw shows what its hook saw" }),
       words(r.text or "", sb, { size = "sm" }),
       fold_button(r),
     })
@@ -192,6 +234,81 @@ local function rowview(r, sb)
   return false
 end
 
+-- ── The team picker ─────────────────────────────────────────────────────
+-- A team is named by its threads (mono, its colour mark), its summary under
+-- it on up to two lines, its state and age at the right. The list is drawn
+-- here (the core's menus are one line, 320 pt): at least as wide as the
+-- button, up to 560 pt, never wider than the overlay. A press outside, a
+-- pick or Escape closes it; Up, Down and Enter go through `board_key`.
+
+local function picker_w(ow, wide)
+  if wide then return math.min(420, ow - 260) end
+  return math.max(140, math.min(300, ow - 220))
+end
+
+local function menu_w(ow, wide)
+  return math.max(picker_w(ow, wide), math.min(560, ow - 16))
+end
+
+-- About two lines of the summary at that width (the prose face, about 6.5
+-- pt a character at 12 pt), cut on a word.
+local function two_lines(s, w)
+  local n = math.max(24, math.floor((w - 48) / 6.5) * 2)
+  if utf8.len(s) == nil or utf8.len(s) <= n then return s end
+  local cut = string.sub(s, 1, (utf8.offset(s, n + 1) or (#s + 1)) - 1)
+  local sp = string.find(cut, " [^ ]*$")
+  if sp and sp > #cut / 2 then cut = string.sub(cut, 1, sp - 1) end
+  return cut .. "…"
+end
+
+local function picker_button(ui, s, ow, wide)
+  local p = ui.picker or {}
+  local names, summary, color
+  if s then names, summary, color = s.names, s.summary, s.color
+  elseif ui.all then names, summary = "All teams", "every team's latest messages"
+  else names = "Pick a team" end
+  local bw = picker_w(ow, wide)
+  return row{ key = "title-slot", gap = 8,
+    row{ key = "board-row-picker", on = "picker", w = bw, h = 28, px = 8, gap = 8, radius = "sm", border = p.open and "accent" or "elevated", fill = "surface",
+      -- No tooltip while its list is open: it would cover the first rows.
+      help = (not p.open) and ((nz(summary) and summary or "Pick a team") .. " (pick another team)") or nil,
+      column{ w = 8, h = 8, radius = 2, fill = color or "text-dim", key = "board-team-color" },
+      text{ names or "", size = "sm", mono = true, color = "text-bright", truncate = true, max_w = math.floor(bw * 0.55) },
+      nz(summary) and wide and text{ summary, size = "xs", color = "text-muted", truncate = true, grow = 1 } or spacer{},
+      icon{ "chevron-down", size = 12, color = "text-muted" } },
+    s and badge{ s.state or "", tone = s.tone or "neutral" } or false }
+end
+
+local function picker_row(t, i, p, mw)
+  local hl = (p.hl or 0) == i
+  local current = p.current == t.id
+  return column{ key = "board-row-team-" .. t.id, on = "team", arg = t.id, gap = 2, px = 8, py = 8, radius = "xs", w = "full",
+    fill = (hl or current) and "active-bg" or nil, hover = "hover-subtle", selected = current, help = t.summary,
+    row{ gap = 8, w = "full",
+      column{ w = 8, h = 8, radius = 2, fill = t.color or "text-dim" },
+      text{ t.names or "", size = "sm", mono = true, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
+      current and icon{ "check", size = 12, color = "accent" } or false,
+      nz(t.state) and badge{ t.state, tone = t.tone or "neutral" } or false,
+      nz(t.when) and text{ t.when, size = "xs", color = "text-dim" } or false },
+    nz(t.summary) and text{ two_lines(t.summary, mw), size = "xs", color = "text-muted", wrap = true } or false }
+end
+
+local function picker_menu(ui, ow, oh, wide)
+  local p = ui.picker or {}
+  if not p.open then return false end
+  local mw = menu_w(ow, wide)
+  local list = { gap = 2, w = "full", key = "board-picker-list", group = "list" }
+  list[#list + 1] = picker_row({ id = "all", names = "All teams", summary = "Every team's latest messages, each with its team", color = "text-dim" }, 0, p, mw)
+  for i, t in ipairs(ui.teams or {}) do list[#list + 1] = picker_row(t, i, p, mw) end
+  if (p.more or 0) > 0 then
+    list[#list + 1] = row{ w = "full", justify = "center", button{ "Show " .. p.more .. " more", variant = "ghost", tone = "blue", dense = true, on = "picker_more", key = "board-picker-more" } }
+  end
+  local est = 8 + 58 * (#(ui.teams or {}) + 1) + ((p.more or 0) > 0 and 32 or 0)
+  local h = math.max(80, math.min(est, (oh or 600) - 24))
+  return column{ pin = { left = 0, top = 0 }, w = mw, key = "board-picker", fill = "surface", border = "elevated", radius = "md", pad = 4,
+    scroll{ h = h, key = "board-picker-scroll", column(list) } }
+end
+
 local GROUPS = { { "all", "All" }, { "notes", "Decisions and warnings" }, { "questions", "Questions" }, { "messages", "Messages" }, { "commits", "Commits" }, { "status", "Status" } }
 local GROUP_HELP = { messages = "What the lead and threads sent each other with SendMessage, as sbxw saw it: from the day the daemon had this version, none from before" }
 
@@ -212,7 +329,7 @@ local function filters(ui, wide)
 end
 
 local function conversation(ui, sb)
-  local list = { gap = 8, w = "full", px = 4, folds = true, key = "board-rows" }
+  local list = { gap = 4, w = "full", px = 4, folds = true, key = "board-rows" }
   if ui.older then
     list[#list + 1] = row{ w = "full", justify = "center", button{ "Show earlier", variant = "ghost", tone = "blue", on = "more", key = "board-more", help = ui.hidden > 0 and (ui.hidden .. " earlier rows read") or "Read older events" } }
   end
@@ -353,24 +470,29 @@ return {
   render = function(_, data)
     local ui = data.board_ui or {}
     local wide = overlay_wide(data)
-    local ow = ((data.app or {}).overlay or {}).w or 1000
+    local ov = (data.app or {}).overlay or {}
+    local ow, oh = ov.w or 1000, ov.h or 600
     CONV_W = wide and (ow - 360 - 16 - 24) or (ow - 24)
-    local items = { { id = "all", label = "All teams", icon = "grid" } }
-    for _, t in ipairs(ui.teams or {}) do items[#items + 1] = { id = t.id, label = t.label .. " (" .. t.state .. ")" } end
+    BUBBLE_MAX = 520
     local s = ui.side
     local sb = s and s.sandbox or true
-    local picker = row{ key = "title-slot", gap = 8,
-      column{ w = 8, h = 8, radius = 2, fill = (s and s.color) or "text-dim", key = "board-team-color" },
-      select{ id = "board-team", value = ui.team or "all", items = items, on = "team", w = wide and 360 or math.max(120, math.min(220, ow - 200)) },
-      s and badge{ s.state or "", tone = s.tone or "neutral" } or false }
-    local head = { gap = 8, w = "full", picker, filters(ui, wide) }
+    local picker = picker_button(ui, s, ow, wide)
+    -- The picker's list over the body, and under it a layer that closes it
+    -- on a press anywhere else (and does nothing else).
+    local menu = picker_menu(ui, ow, oh, wide)
+    local dismiss = menu and column{ pin = { left = 0, top = 0, right = 0, bottom = 0 }, key = "board-picker-dismiss", on = "picker_close", opacity = 0.01, help = "Close the list of teams" } or false
+    local function page(kids)
+      kids.h = "full"; kids.gap = 8; kids.w = "full"
+      kids[#kids + 1] = dismiss
+      kids[#kids + 1] = menu
+      return column(kids)
+    end
     if not s then
-      head[#head + 1] = conversation(ui, true)
-      return column{ h = "full", gap = 8, w = "full", table.unpack(head) }
+      return page{ picker, filters(ui, wide), conversation(ui, true) }
     end
     local side = column{ gap = 16, w = "full", team_view(s, ui), notes_view(s, sb), commits_view(s, wide) }
     if wide then
-      return column{ h = "full", gap = 8, w = "full", picker, filters(ui, wide),
+      return page{ picker, filters(ui, wide),
         row{ h = "full", gap = 16, w = "full", align = "stretch",
           column{ grow = 1, h = "full", min_w = 0, conversation(ui, sb) },
           column{ w = 360, h = "full", scroll{ key = "board-side", side } } } }
@@ -384,10 +506,13 @@ return {
     if ui.tab == "notes" then body = scroll{ key = "board-side", column{ gap = 16, w = "full", team_view(s, ui), notes_view(s, sb) } }
     elseif ui.tab == "commits" then body = scroll{ key = "board-side", commits_view(s, false) }
     else body = conversation(ui, sb) end
-    return column{ h = "full", gap = 8, w = "full", picker, row(tabs), ui.tab == "conversation" and filters(ui, wide) or false, body }
+    return page{ picker, row(tabs), ui.tab == "conversation" and filters(ui, wide) or false, body }
   end,
   actions = {
-    team = function(_, _, id) return intent("board_team", { id = id or "all" }) end,
+    team = function(_, a, id) return intent("board_team", { id = id or a or "all" }) end,
+    picker = function() return intent("board_picker", {}) end,
+    picker_close = function() return intent("board_picker", { open = false }) end,
+    picker_more = function() return intent("board_picker", { more = true }) end,
     group = function(_, g) return intent("board_filter", { group = g }) end,
     thread = function(_, a, v) return intent("board_filter", { thread = v or a or "" }) end,
     search = function(_, _, t) return intent("board_filter", { text = t or "" }) end,

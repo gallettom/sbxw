@@ -43,6 +43,7 @@ run.append(ev(m(70), "user_answer", "user", None, "web-page", {"relay": "r-11", 
   "questions": [{"id": "Q1", "title": "Empty state", "text": "When a filter matches no order, show the empty state's illustration or only the sentence?", "recommendation": "Only the sentence: the page stays light.", "answer": "Only the sentence."},
                 {"id": "Q2", "title": "Page size", "text": "How many orders a page: 25 or 50?", "recommendation": "25, as the v1 list.", "answer": "50, people scroll anyway."}]}))
 run.append(ev(m(66), "direct_message", "lead", "Use the table component's own pagination; do not write a second one.", "web-page"))
+run.append(ev(m(67), "direct_message", "lead", "And keep the filters in the URL, so a reload keeps them.", "web-page"))
 run.append(ev(m(68), "direct_message", "web-page", "Understood. I will pass the page size through.", "lead"))
 run.append(ev(m(71), "team_note", "lead", "The table component takes a page size now: pass 50, as you were told.", "web-page", {"kind": "info"}))
 run.append(ev(m(72), "relay_question", "docs-update", "Where is the style guide for the API docs, and does it want one example per route?", None, {"relay": "r-12", "relay_created": m(72), "relay_kind": "question", "state": "pending", "live": True}))
@@ -55,10 +56,16 @@ run.append(ev(m(92), "thread_status", "web-page", "Waiting on a screenshot of th
 run.append(ev(m(93), "screenshot_asked", "web-page", "The orders page filters at 375 px wide, after the last change.", "user", {"relay": "r-13", "relay_created": m(93), "relay_kind": "screenshot", "state": "pending", "shots": 0, "live": True}))
 run.append(ev(m(96), "thread_status", "api-routes", "All routes in with their tests; the totals are in cents as noted on the board.", "lead", {"thread": "api-routes", "state": "done"}))
 run.append(commit((m(98))//1000*1000, "docs-update", "api guide: v2 orders routes", 1, 74, 0))
+# Bare changes of state (no words): one quiet line, folded with a count.
+run.append(ev(m(99), "thread_status", "docs-update", None, "lead", {"thread": "docs-update", "state": "blocked"}))
+run.append(ev(m(100), "thread_status", "docs-update", "", "lead", {"thread": "docs-update", "state": "working"}))
+run.append(ev(m(101), "thread_status", "docs-update", "  ", "lead", {"thread": "docs-update", "state": "working"}))
+run.append(ev(m(102), "team_note", "lead", "Everyone: the merge goes in the order api-routes, web-page, docs-update. Say so if that breaks something of yours.", "team", {"kind": "decision"}))
+run.append(ev(m(104), "thread_status", "docs-update", "The guide covers the v2 orders routes.\n\n1. One section per route, with a request and its answer.\n2. The totals are in cents: the guide says so next to `total_cents` and in the example.\n3. The pagination's `cursor` field is described once and linked from each list route.\n\nNot done: the changelog entry, which waits for the merge. Run `make docs` to see the pages.", "lead", {"thread": "docs-update", "state": "done"}))
 run.reverse()
 run_team = {"id": "p-run", "sandbox": "web-app", "summary": "Orders v2: the API routes, the web page that uses them, and their docs", "state": "running", "variant": "split",
-  "lead": "Orders lead", "threads": [{"name": "api-routes", "state": "done", "model": "claude-sonnet-5-5"}, {"name": "web-page", "state": "blocked"}, {"name": "docs-update", "state": "working"}],
-  "created_ms": m(0), "updated_ms": m(98), "last_ms": m(98)}
+  "lead": "orders-planner", "threads": [{"name": "api-routes", "state": "done", "model": "claude-sonnet-5-5"}, {"name": "web-page", "state": "blocked"}, {"name": "docs-update", "state": "done"}],
+  "created_ms": m(0), "updated_ms": m(104), "last_ms": m(104)}
 cl = [e for e in run if e["kind"] == "commit"]
 def totals(cs):
     t = {}
@@ -98,6 +105,25 @@ pro = [ev(P, "plan_proposed", "lead", "Rate limits: one thread for the middlewar
 pro_team = {"id": "p-new", "sandbox": "api", "summary": "Rate limits: one thread for the middleware and its tests", "state": "proposed", "variant": "split", "lead": "API lead",
   "threads": [{"name": "rate-limit", "state": "starting"}], "created_ms": P, "updated_ms": P, "last_ms": P}
 
+# ── A team whose words are long: unbroken paths, hashes, 200 characters without a space ──
+L = T0 + 2*DAY + 3*3600_000
+ll = lambda mins: L + mins*60_000
+LT = [{"name": "storage-migration", "goal": "Move the uploads to the new bucket layout.", "scope": "storage/", "model": None}]
+LONG_PATH = "storage/src/" + "/".join(["nested_folder_level_%d" % i for i in range(1, 7)]) + "/migrate_uploads_to_the_new_bucket_layout.rs"
+LONG_WORD = "x" * 200
+long_ev = [
+  ev(ll(0), "plan_proposed", "lead", "Storage: move the uploads to the new bucket layout.", "user", {"variant": "split", "justification": "One thread.", "threads": LT}),
+  ev(ll(1), "plan_approved", "user", None, "lead", {"variant": "split", "threads": ["storage-migration"]}),
+  ev(ll(5), "thread_status", "storage-migration", "Started in " + LONG_PATH + " with the checksum " + h("long") + h("long2") + ".", "lead", {"thread": "storage-migration", "state": "working"}),
+  ev(ll(9), "team_note", "lead", "A token without a space, as a log line can hold: " + LONG_WORD, "team", {"kind": "info"}),
+  ev(ll(10), "direct_message", "lead", "Paste the failing object key here: " + LONG_WORD[:120], "storage-migration"),
+  ev(ll(12), "board_warning", "storage-migration", "Do not touch " + LONG_PATH + " before the copy ends.", None, {"files": [LONG_PATH]}),
+  ev(ll(15), "thread_status", "storage-migration", "The copy failed at " + LONG_PATH + ": checksum mismatch " + h("x") + h("y") + h("z"), "lead", {"thread": "storage-migration", "state": "failed"}),
+]
+long_ev.reverse()
+long_team = {"id": "p-long", "sandbox": "docs", "summary": "Storage: move the uploads to the new bucket layout, with a checksum of every object and a dry run before the copy", "state": "running", "variant": "split",
+  "lead": "a-coordinating-session-with-a-rather-long-name", "threads": [{"name": "storage-migration", "state": "failed"}], "created_ms": ll(0), "updated_ms": ll(15), "last_ms": ll(15)}
+
 details = {}
 for c in cl + mcl:
     d = c["data"]
@@ -116,14 +142,15 @@ plans = [
 ]
 # p-new waits for approval: not in `plans`, or the app would open its dialog over the shots.
 fx = {
- "about": "The Board (feat/board/): three teams, invented (generated by gen.py beside it). p-run is at work on web-app (a warning and a decision on the board, a round of questions answered, a question to the docs sandbox answered, a screenshot still waiting, two threads committing, one start that failed); p-old on docs is merged; p-new on api waits for approval. The stand-in answers /api/teams from board_teams and /api/teams/:id/timeline from board_timelines; commit details through the Commits feature's stand-in (commit_details).",
+ "about": "The Board (feat/board/): three teams, invented (generated by gen.py beside it). p-run is at work on web-app (a warning and a decision on the board, a round of questions answered, a question to the docs sandbox answered, a screenshot still waiting, two threads committing, one start that failed); p-old on docs is merged; p-new on api waits for approval; p-long on docs has long unbroken words (a path, hashes, 200 characters without a space) and a failed report. The stand-in answers /api/teams from board_teams and /api/teams/:id/timeline from board_timelines; commit details through the Commits feature's stand-in (commit_details).",
  "app": {"selected": "web-app", "panes": 2, "split": "columns", "open": ["web-app", "docs"], "focused": 1},
  "daemon": {
   "sandboxes": sandboxes, "plans": plans,
-  "board_teams": [run_team, pro_team, mer_team],
+  "board_teams": [run_team, pro_team, mer_team, long_team],
   "board_timelines": {
     "p-run": {"team": run_team, "events": run, "standing": standing, "commits": {"available": True, "list": clist(sorted(cl, key=lambda c: -c["at"])), "totals": totals(cl), "merged": False}},
     "p-old": {"team": mer_team, "events": mer, "standing": [{"id": "b90", "at": mm(45), "kind": "decision", "by": "guide-search", "text": "The search index is built at deploy, never in the browser.", "files": [], "guess": False}], "commits": {"available": True, "list": clist(sorted(mcl, key=lambda c: -c["at"])), "totals": totals(mcl), "merged": True}},
+    "p-long": {"team": long_team, "events": long_ev, "standing": [], "commits": {"available": True, "list": [], "totals": [], "merged": False}},
     "p-new": {"team": pro_team, "events": pro, "standing": [], "commits": {"available": True, "list": [], "totals": [], "merged": False}},
   },
   "commits": {"web-app": [], "docs": []},

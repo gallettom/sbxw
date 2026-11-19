@@ -12,6 +12,8 @@ use crate::feat::worktrees::graph::lane_color;
 use serde_json::{json, Value as J};
 use std::collections::BTreeSet;
 
+/// Same author, same addressee, within this many seconds: one author line.
+pub const GROUP_SECS: u64 = 5 * 60;
 /// Over this many characters (or lines), a message is folded with "Show more".
 pub const FOLD_CHARS: usize = 320;
 pub const FOLD_LINES: usize = 5;
@@ -27,6 +29,78 @@ pub fn who(from: &str) -> (String, &'static str) {
         "sbxw" => ("sbxw".into(), "text-muted"),
         "team" => ("team".into(), "text-muted"),
         t => (t.to_string(), lane_color(t)),
+    }
+}
+
+/// An author as the conversation names them: the name, its colour, and a
+/// role chip only when the name does not already say it (the lead named
+/// "lead" is "lead" once, never "lead lead"). `lead` is the team's lead's
+/// name when the daemon knows one.
+pub fn author(from: &str, lead: Option<&str>) -> (String, &'static str, Option<&'static str>) {
+    if from == "lead" {
+        let name = lead.map(str::trim).filter(|n| !n.is_empty()).unwrap_or("lead");
+        let role = (!name.to_lowercase().contains("lead")).then_some("lead");
+        return (name.to_string(), "purple", role);
+    }
+    let (n, c) = who(from);
+    (n, c, None)
+}
+
+/// An addressee as the author line says it ("to the team", "to you").
+pub fn addressee(to: &str, lead: Option<&str>) -> String {
+    match to {
+        "team" => "the team".into(),
+        "user" => "you".into(),
+        t => author(t, lead).0,
+    }
+}
+
+/// A run of characters without a space longer than this gets break
+/// opportunities (zero-width spaces) every [`BREAK_EVERY`] characters, so a
+/// path, a hash or 200 characters without a space wrap inside their bubble
+/// instead of running out of it. Drawing only: the record is untouched.
+pub const BREAK_RUN: usize = 32;
+pub const BREAK_EVERY: usize = 24;
+
+pub fn breakable(text: &str) -> String {
+    let long = text.split_whitespace().any(|w| w.chars().count() > BREAK_RUN);
+    if !long {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len() + text.len() / 8);
+    let mut run = 0;
+    let mut pill = false;
+    let mut prev = ' ';
+    for ch in text.chars() {
+        // Not inside a keyword pill (`[[Word: detail]]`): its brackets must stay whole.
+        if prev == '[' && ch == '[' {
+            pill = true;
+        } else if prev == ']' && ch == ']' {
+            pill = false;
+        }
+        if ch.is_whitespace() || ch == '\u{200b}' {
+            run = 0;
+        } else {
+            if run >= BREAK_EVERY && !pill && ch != ']' && ch != '[' {
+                out.push('\u{200b}');
+                run = 0;
+            }
+            run += 1;
+        }
+        out.push(ch);
+        prev = ch;
+    }
+    out
+}
+
+/// A team named by its threads ("api-routes + web-page"), the concise thing
+/// sbxw has; past three, "+ n more". Its sandbox when it has no thread.
+pub fn team_names(team: &J) -> String {
+    let names: Vec<&str> = team["threads"].as_array().into_iter().flatten().filter_map(|t| t["name"].as_str()).collect();
+    match names.len() {
+        0 => team["sandbox"].as_str().unwrap_or("team").to_string(),
+        1..=3 => names.join(" + "),
+        n => format!("{} + {} more", names[..2].join(" + "), n - 2),
     }
 }
 
@@ -152,16 +226,17 @@ impl Opts<'_> {
 /// The base of every row: its id, side, author and times.
 fn base(ev: &J, o: &Opts) -> J {
     let from = ev["from"].as_str().unwrap_or("");
-    let (name, color) = who(from);
+    let lead = ev["lead_name"].as_str();
+    let (name, color, role) = author(from, lead);
     let at = ev["at"].as_u64();
-    let to = ev["to"].as_str().map(|t| who(t).0);
+    let to = ev["to"].as_str().filter(|t| !t.is_empty()).map(|t| addressee(t, lead));
     json!({
-        "id": ev["id"], "kind": ev["kind"], "side": side(ev), "who": name, "who_color": color,
+        "id": ev["id"], "kind": ev["kind"], "side": side(ev), "who": name, "who_color": color, "role": role,
         "is_lead": from == "lead", "is_user": from == "user", "to": to,
         "when": at.map(|a| ago(a / 1000, o.now_s)).unwrap_or_else(|| "time unknown".into()),
         "exact": at.map(exact).unwrap_or_else(|| "sbxw did not record when (a plan from before this version)".into()),
         "guess": ev["guess"].as_bool().unwrap_or(false),
-        "team": ev["team"], "team_label": ev["team_label"], "team_color": ev["team_color"],
+        "team": ev["team"], "team_label": ev["team_label"], "team_help": ev["team_help"], "team_color": ev["team_color"],
     })
 }
 
@@ -169,10 +244,10 @@ fn with_text(row: &mut J, id: &str, text: Option<&str>, o: &Opts) {
     let Some(t) = text.filter(|t| !t.trim().is_empty()) else { return };
     if folded(t) {
         let open = o.open(id);
-        row["text"] = (if open { t.to_string() } else { head(t) }).into();
+        row["text"] = breakable(&if open { t.to_string() } else { head(t) }).into();
         row["fold"] = json!({ "open": open, "key": id });
     } else {
-        row["text"] = t.into();
+        row["text"] = breakable(t).into();
     }
 }
 
@@ -200,15 +275,30 @@ pub fn row(ev: &J, o: &Opts) -> J {
             r["goals"] = json!({ "open": o.open(&format!("{id}:goals")), "key": format!("{id}:goals") });
         }
         "thread_status" => {
-            r["type"] = "status".into();
             let (w, t) = state_word(data["state"].as_str().unwrap_or(""));
             r["state"] = json!({ "word": w, "tone": t });
             with_text(&mut r, &id, text, o);
+            if r["text"].is_null() {
+                // A bare change of state is not a message: one quiet line.
+                r["type"] = "transition".into();
+                r["count"] = 1.into();
+                r["trail"] = w.into();
+            } else {
+                // Done is green, blocked amber, failed red; the rest neutral.
+                r["type"] = "status".into();
+                r["tint"] = match w {
+                    "done" => "green",
+                    "blocked" => "amber",
+                    "failed" => "red",
+                    _ => "",
+                }
+                .into();
+            }
         }
         "board_decision" | "board_warning" | "board_question" | "board_handoff" | "conflict" => {
             r["type"] = "note".into();
             with_text(&mut r, &id, text, o);
-            r["files"] = data["files"].clone();
+            r["files"] = files(&data["files"]);
         }
         "direct_message" => {
             // Claude Code's own `SendMessage` between the team's sessions, as
@@ -235,7 +325,15 @@ pub fn row(ev: &J, o: &Opts) -> J {
             r["type"] = "question".into();
             with_text(&mut r, &id, text, o);
             if let Some(qs) = data["questions"].as_array() {
-                r["questions"] = J::Array(qs.clone());
+                r["questions"] = J::Array(qs.iter().map(|q| {
+                    let mut q = q.clone();
+                    for k in ["text", "answer", "recommendation"] {
+                        if let Some(t) = q[k].as_str() {
+                            q[k] = breakable(t).into();
+                        }
+                    }
+                    q
+                }).collect());
             }
             if kind == "screenshot_given" {
                 let n = data["shots"].as_u64().unwrap_or(0);
@@ -305,7 +403,14 @@ pub fn row(ev: &J, o: &Opts) -> J {
     if r["side"] == "right" && r["text"].is_null() && r["questions"].is_null() {
         r["text"] = r["label"].clone();
     }
+    if let Some(t) = r["text"].as_str() {
+        r["text"] = breakable(t).into();
+    }
     r
+}
+
+fn files(v: &J) -> J {
+    J::Array(v.as_array().into_iter().flatten().filter_map(J::as_str).map(|f| J::from(breakable(f))).collect())
 }
 
 fn join(v: &J) -> String {
@@ -337,10 +442,47 @@ pub fn rows(events: &[J], o: &Opts) -> Vec<J> {
             i = j;
             continue;
         }
-        out.push(row(ev, o));
+        let r = row(ev, o);
+        // Bare changes of state one after the other by one agent: one line,
+        // the last state, the trail in its tooltip and a count.
+        if r["type"] == "transition" {
+            if let Some(last) = out.last_mut().filter(|l| l["type"] == "transition" && l["who"] == r["who"] && l["team"] == r["team"]) {
+                let n = last["count"].as_u64().unwrap_or(1) + 1;
+                let trail = format!("{} → {}", last["trail"].as_str().unwrap_or(""), r["trail"].as_str().unwrap_or(""));
+                let first = last["first_when"].as_str().or(last["when"].as_str()).unwrap_or("").to_string();
+                *last = r;
+                last["count"] = n.into();
+                last["trail"] = trail.into();
+                last["first_when"] = first.into();
+                i += 1;
+                continue;
+            }
+        }
+        out.push(group(r, ev, out.last(), events.get(i.wrapping_sub(1))));
         i += 1;
     }
     out
+}
+
+/// Kinds that are messages with an author line above their bubble.
+fn speaks(t: &J) -> bool {
+    matches!(t.as_str(), Some("status" | "note" | "card" | "question" | "message" | "merge"))
+}
+
+/// A message following one by the same author, to the same addressee, on
+/// the same side, within [`GROUP_SECS`]: it shares the author line above
+/// (`cont`), its bubble stacked under the previous one.
+fn group(mut r: J, ev: &J, prev_row: Option<&J>, prev_ev: Option<&J>) -> J {
+    let (Some(p), Some(pe)) = (prev_row, prev_ev) else { return r };
+    let near = match (ev["at"].as_u64(), pe["at"].as_u64()) {
+        (Some(a), Some(b)) => a.saturating_sub(b) <= GROUP_SECS * 1000,
+        _ => false,
+    };
+    let same = p["who"] == r["who"] && p["to"] == r["to"] && p["side"] == r["side"] && p["team"] == r["team"] && p["id"] == pe["id"];
+    if near && same && speaks(&r["type"]) && speaks(&p["type"]) {
+        r["cont"] = true.into();
+    }
+    r
 }
 
 fn commit_line(ev: &J) -> J {

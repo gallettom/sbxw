@@ -71,7 +71,7 @@ fn opened_from_a_sandbox_it_shows_that_sandbox_s_team_and_the_picker_lists_every
     let v = show(&mut st, &mut d, json!({ "sandbox": "web-app" }));
     assert_eq!(v["team"], "p-run");
     let ids: Vec<&str> = v["teams"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["p-run", "p-new", "p-old"], "most recent first, as the daemon lists them");
+    assert_eq!(ids, ["p-run", "p-new", "p-old", "p-long"], "as the daemon lists them");
     assert_eq!(v["teams"][0]["color"], "#e06c75", "the sandbox's colour");
     assert_eq!(v["teams"][0]["state"], "running");
     // A merged team's sandbox: its latest plan.
@@ -81,10 +81,14 @@ fn opened_from_a_sandbox_it_shows_that_sandbox_s_team_and_the_picker_lists_every
     // Every team: each row says whose it is.
     let (v, paths) = run(&mut st, &mut d, "board_team", json!({ "id": "all" }));
     assert!(v["all"].as_bool().unwrap());
-    assert_eq!(paths.len(), 3, "one read per team: {paths:?}");
+    assert_eq!(paths.len(), 4, "one read per team: {paths:?}");
     assert!(v["side"].is_null());
     let teams: BTreeSet<&str> = v["rows"].as_array().unwrap().iter().filter_map(|r| r["team"].as_str()).collect();
-    assert_eq!(teams.len(), 3);
+    assert_eq!(teams.len(), 4);
+    // Each row names its team by its threads, the summary in the tooltip: never a cut sentence.
+    let r = v["rows"].as_array().unwrap().iter().find(|r| r["team"] == "p-run").unwrap();
+    assert_eq!(r["team_label"], "api-routes + web-page + docs-update");
+    assert_eq!(r["team_help"], "Orders v2: the API routes, the web page that uses them, and their docs");
     // The rail's entry and a row's: both open it.
     let ex = extras(&Ctx { data: &d });
     assert!(ex.iter().any(|e| matches!(e.place, Place::Rail { zone: Zone::Activity, .. }) && e.icon.as_deref() == Some("board")));
@@ -171,7 +175,7 @@ fn filters_and_search_ask_the_daemon_and_the_rows_follow() {
     assert!(v["rows"].as_array().unwrap().iter().filter(|r| r["type"] != "day").all(|r| r["who"] == "web-page" || r["to"] == "web-page" || r["kind"] == "thread_status"));
     let (v, paths) = run(&mut st, &mut d, "board_filter", json!({ "thread": "", "text": "cents" }));
     assert!(paths[0].contains("q=cents"));
-    assert_eq!(v["rows"].as_array().unwrap().iter().filter(|r| r["type"] != "day").count(), 3, "the warning, the status and the commit that mention it");
+    assert_eq!(v["rows"].as_array().unwrap().iter().filter(|r| r["type"] != "day").count(), 4, "the warning, the two reports and the commit that mention it");
     assert!(st.act(&Ctx { data: &d }, &asked("board_filter", json!({ "thread": "not-a-thread" }))).is_err());
 }
 
@@ -360,6 +364,15 @@ fn hostile_agent_text_makes_no_control() {
     dm["group"] = "messages".into();
     dm["to"] = "web-page".into();
     append(&mut rt, dm);
+    // A report (its bubble tinted) and a bare change of state with only spaces.
+    let mut st = note_event("l993", hostile);
+    st["kind"] = "thread_status".into();
+    st["to"] = "lead".into();
+    st["data"] = json!({ "thread": "api-routes", "state": "done" });
+    append(&mut rt, st.clone());
+    st["id"] = "l994".into();
+    st["text"] = "   ".into();
+    append(&mut rt, st);
     assert_eq!(count(&rt), before, "the same controls, no more");
     assert!(rt.elements().iter().filter_map(|e| e.text.clone()).any(|t| t.contains("<button on=x>")), "drawn as its characters");
 }
@@ -379,4 +392,345 @@ fn one_event_appended_renders_once_and_keeps_the_rest() {
     assert!(r1 - r0 <= 3, "{} renders for one event", r1 - r0);
     assert!(k0.is_subset(&k1) && k1.contains("board-msg-l999"), "the rows already there stay, the new one is added");
     assert!(took < std::time::Duration::from_secs(3), "{took:?} in a debug build");
+}
+
+// ── The polish after the first Mac test ──────────────────────────────────
+
+#[test]
+fn the_picker_names_a_team_by_its_threads_with_its_summary_state_and_age() {
+    let mut d = data();
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
+    let t = &v["teams"][0];
+    assert_eq!(t["names"], "api-routes + web-page + docs-update", "thread names first");
+    assert_eq!(t["summary"], "Orders v2: the API routes, the web page that uses them, and their docs", "the summary whole (the screen wraps it on two lines)");
+    assert_eq!((t["state"].as_str(), t["tone"].as_str()), (Some("running"), Some("blue")));
+    assert!(t["when"].as_str().unwrap().ends_with("ago") || t["when"] == "just now", "{}", t["when"]);
+    assert_eq!(v["side"]["names"], "api-routes + web-page + docs-update", "the closed picker's too");
+    // A team with no thread: its sandbox. Past three: "+ n more".
+    assert_eq!(model::team_names(&json!({ "sandbox": "api", "threads": [] })), "api");
+    assert_eq!(model::team_names(&json!({ "threads": [{ "name": "a" }, { "name": "b" }, { "name": "c" }, { "name": "d" }] })), "a + b + 2 more");
+    // Closed until asked; the popup flag follows it.
+    assert_eq!((v["picker"]["open"].as_bool(), v["popup"].as_bool()), (Some(false), Some(false)));
+}
+
+#[test]
+fn the_picker_opens_moves_picks_and_closes_by_key_press_outside_and_reopen() {
+    let mut d = data();
+    let mut st = State::default();
+    show(&mut st, &mut d, json!({ "team": "p-run" }));
+    let (v, _) = run(&mut st, &mut d, "board_picker", json!({}));
+    assert_eq!((v["popup"].as_bool(), v["picker"]["hl"].as_u64()), (Some(true), Some(1)), "open, the team shown marked (0 is All teams)");
+    let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "down" }));
+    assert_eq!(v["picker"]["hl"], 2);
+    let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
+    let (v2, _) = run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
+    assert_eq!((v["picker"]["hl"].as_u64(), v2["picker"]["hl"].as_u64()), (Some(1), Some(0)));
+    let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "up" }));
+    assert_eq!(v["picker"]["hl"], 0, "stays on the first row");
+    // Escape closes the list only.
+    let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "escape" }));
+    assert_eq!((v["popup"].as_bool(), v["team"].as_str()), (Some(false), Some("p-run")));
+    // Enter picks the marked row.
+    run(&mut st, &mut d, "board_picker", json!({ "open": true }));
+    run(&mut st, &mut d, "board_key", json!({ "key": "down" }));
+    let (v, _) = run(&mut st, &mut d, "board_key", json!({ "key": "enter" }));
+    assert_eq!((v["team"].as_str(), v["popup"].as_bool()), (Some("p-new"), Some(false)));
+    // A press outside (the dismiss layer's intent), a pick with the pointer.
+    run(&mut st, &mut d, "board_picker", json!({}));
+    let (v, _) = run(&mut st, &mut d, "board_picker", json!({ "open": false }));
+    assert_eq!(v["popup"], false);
+    run(&mut st, &mut d, "board_picker", json!({}));
+    let (v, _) = run(&mut st, &mut d, "board_team", json!({ "id": "p-old" }));
+    assert_eq!((v["team"].as_str(), v["popup"].as_bool()), (Some("p-old"), Some(false)));
+    // Closed with the overlay, it opens closed again.
+    run(&mut st, &mut d, "board_picker", json!({}));
+    let v = show(&mut st, &mut d, json!({}));
+    assert_eq!(v["popup"], false);
+    // Keys while closed do nothing; a team sbxw does not list is refused.
+    assert!(st.act(&Ctx { data: &d }, &asked("board_key", json!({ "key": "enter" }))).unwrap().is_empty());
+    assert!(st.act(&Ctx { data: &d }, &asked("board_team", json!({ "id": "p-nope" }))).is_err());
+}
+
+#[test]
+fn many_teams_page_in_the_picker() {
+    let mut d = data();
+    for i in 0..45 {
+        d["board_teams"].as_array_mut().unwrap().push(json!({ "id": format!("p-x{i}"), "sandbox": "api", "summary": format!("Team {i}"), "state": "done", "threads": [{ "name": format!("t{i}") }] }));
+    }
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
+    assert_eq!(v["teams"].as_array().unwrap().len(), PICKER_PAGE);
+    assert_eq!(v["picker"]["more"], 49 - PICKER_PAGE);
+    let (v, _) = run(&mut st, &mut d, "board_picker", json!({ "more": true }));
+    assert_eq!(v["teams"].as_array().unwrap().len(), 2 * PICKER_PAGE);
+}
+
+fn rows_of(v: &J) -> Vec<J> {
+    v["rows"].as_array().unwrap().clone()
+}
+
+#[test]
+fn the_author_line_names_once_and_groups_one_author_s_messages() {
+    let mut d = data();
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
+    let rows = rows_of(&v);
+    // The lead named otherwise: its name and the role once.
+    let dms: Vec<&J> = rows.iter().filter(|r| r["kind"] == "direct_message" && r["is_lead"] == true).collect();
+    assert_eq!(dms.len(), 2);
+    assert_eq!((dms[0]["who"].as_str(), dms[0]["role"].as_str(), dms[0]["to"].as_str()), (Some("orders-planner"), Some("lead"), Some("web-page")));
+    // Two messages in a row, same author, same addressee, a minute apart: one author line.
+    assert!(dms[0]["cont"].is_null() && dms[1]["cont"] == true, "{:?}", dms.iter().map(|r| &r["cont"]).collect::<Vec<_>>());
+    // The reply goes to the lead by its name; the team note to the whole team.
+    let reply = rows.iter().find(|r| r["kind"] == "direct_message" && r["who"] == "web-page").unwrap();
+    assert_eq!((reply["to"].as_str(), reply["cont"].is_null()), (Some("orders-planner"), true));
+    let to_team = rows.iter().find(|r| r["kind"] == "team_note" && r["to"] == "the team").unwrap();
+    assert_eq!(to_team["label"], "Decision");
+    // No "lead lead": a lead without a name is "lead" with no role chip; one named "... lead" neither.
+    assert_eq!(model::author("lead", None), ("lead".into(), "purple", None));
+    assert_eq!(model::author("lead", Some("Orders lead")).2, None);
+    assert_eq!(model::author("lead", Some("  ")).0, "lead");
+    let v = show(&mut st, &mut d, json!({ "team": "p-old" }));
+    for r in rows_of(&v).iter().filter(|r| r["is_lead"] == true) {
+        assert_eq!((r["who"].as_str(), r["role"].is_null()), (Some("lead"), true));
+    }
+    // Not grouped: another addressee, another side, more than five minutes, a day apart.
+    let ev = |id: &str, at: u64, from: &str, to: &str| json!({ "id": id, "at": at, "kind": "direct_message", "from": from, "to": to, "text": "x", "data": {} });
+    let o = model::Opts::default();
+    let t = 1_795_000_000_000u64;
+    let r = model::rows(&[ev("a", t, "t1", "lead"), ev("b", t + 60_000, "t1", "lead"), ev("c", t + 120_000, "t1", "t2"), ev("d", t + 900_000, "t1", "t2")], &o);
+    let cont: Vec<bool> = r.iter().filter(|x| x["type"] != "day").map(|x| x["cont"] == true).collect();
+    assert_eq!(cont, [false, true, false, false]);
+}
+
+#[test]
+fn a_report_is_tinted_by_its_state_and_a_bare_change_of_state_is_one_line() {
+    let ev = |id: &str, min: u64, from: &str, state: &str, text: Option<&str>| json!({ "id": id, "at": 1_795_000_000_000u64 + min * 60_000, "kind": "thread_status", "from": from, "to": "lead", "text": text, "data": { "thread": from, "state": state } });
+    let o = model::Opts::default();
+    let r = model::rows(
+        &[
+            ev("a", 0, "t1", "done", Some("All in.")),
+            ev("b", 1, "t1", "blocked", Some("Waiting on a key.")),
+            ev("c", 2, "t1", "failed", Some("The build broke.")),
+            ev("d", 3, "t1", "working", Some("Going on.")),
+            ev("e", 4, "t2", "working", None),
+            ev("f", 5, "t2", "blocked", Some("   ")),
+            ev("g", 6, "t2", "working", Some("")),
+            ev("h", 7, "t1", "starting", None),
+        ],
+        &o,
+    );
+    let r: Vec<&J> = r.iter().filter(|x| x["type"] != "day").collect();
+    let tints: Vec<&str> = r[..4].iter().map(|x| x["tint"].as_str().unwrap()).collect();
+    assert_eq!(tints, ["green", "amber", "red", ""]);
+    assert!(r[..4].iter().all(|x| x["type"] == "status" && x["state"]["word"].is_string()), "the state chip stays");
+    // t2's three bare changes: one line, the last state, a count and the trail.
+    assert_eq!((r[4]["type"].as_str(), r[4]["count"].as_u64(), r[4]["state"]["word"].as_str()), (Some("transition"), Some(3), Some("working")));
+    assert_eq!(r[4]["trail"], "working → blocked → working");
+    assert_eq!((r[5]["type"].as_str(), r[5]["count"].as_u64()), (Some("transition"), Some(1)), "another agent's: its own line");
+    assert_eq!(r.len(), 6);
+}
+
+/// Every element drawn inside a bubble stays inside it, and nothing leaves
+/// the overlay, on the team with long words and on the team at work.
+#[test]
+fn no_text_leaves_its_bubble_or_the_overlay_with_long_unbroken_words() {
+    let long = format!("{} {} {}", "y".repeat(200), "src/".repeat(30) + "file.rs", "0123456789abcdef".repeat(5));
+    let mut bad = vec![];
+    let mut inside = 0;
+    for (w, h) in [(1284.0, 816.0), (760.0, 600.0), (500.0, 600.0), (420.0, 700.0)] {
+        for team in ["p-long", "p-run"] {
+            let mut rt = window(w, h);
+            if w < 700.0 {
+                rt.update(|s, _| s.toggle_sidebar());
+                settle(&mut rt);
+            }
+            open(&mut rt, json!({ "team": team }));
+            if team == "p-run" {
+                append(&mut rt, note_event("l995", &long));
+                let mut st = note_event("l996", &long);
+                st["kind"] = "thread_status".into();
+                st["group"] = "status".into();
+                st["to"] = "lead".into();
+                st["data"] = json!({ "thread": "api-routes", "state": "done" });
+                append(&mut rt, st);
+            }
+            let Some((p, _)) = rt.presented("overlay-board") else { panic!("no overlay at {w}") };
+            let els = rt.elements();
+            for e in els.iter() {
+                let r = e.rect;
+                if r[2] <= 0.0 || r[3] <= 0.0 || e.visible[2] <= 0.0 || e.visible[3] <= 0.0 {
+                    continue;
+                }
+                // Its bubble, if it is in one.
+                let mut up = e.parent;
+                let mut bubble = None;
+                while let Some(j) = up {
+                    if els[j].key.as_deref().is_some_and(|k| k.starts_with("board-bubble-")) {
+                        bubble = Some(j);
+                        break;
+                    }
+                    up = els[j].parent;
+                }
+                let in_overlay = e.path.contains("overlay") || bubble.is_some() || e.key.as_deref().is_some_and(|k| k.starts_with("board-"));
+                if let Some(b) = bubble {
+                    // A text's box is laid out to its parent; its ink is not. Its
+                    // widest unbreakable run (in the prose face and in mono, the
+                    // wider) must fit the box it was given (8 pt of slack: a chip's
+                    // word is measured here at 13 pt, drawn at 12).
+                    if let Some(t) = e.text.as_deref().filter(|_| e.role == "text") {
+                        let st = crate::screen::body(13.0, 400.0);
+                        let run = rune::text::content_widths(t, &[], st).0.max(rune::text::content_widths(t, &[], st.mono()).0);
+                        if run > r[2] + 8.0 {
+                            bad.push(format!("{team} at {w}: a run of {run} pt in a text {} wide ({:?})", r[2], t.chars().take(30).collect::<String>()));
+                        }
+                    }
+                    inside += 1;
+                    let br = els[b].rect;
+                    if r[0] < br[0] - 0.5 || r[0] + r[2] > br[0] + br[2] + 0.5 {
+                        bad.push(format!("{team} at {w}: {:?} {:?} ({:?}) at {r:?} leaves {:?} at {br:?}", e.key, e.role, e.text.as_deref().map(|t| t.chars().take(30).collect::<String>()), els[b].key));
+                    }
+                }
+                if in_overlay && (r[1] + r[3] > p[1] && r[1] < p[1] + p[3]) && (r[0] < p[0] - 0.5 || r[0] + r[2] > p[0] + p[2] + 0.5) {
+                    bad.push(format!("{team} at {w}: {:?} at {r:?} leaves the overlay {p:?}", e.key));
+                }
+            }
+        }
+    }
+    assert!(inside > 100, "{inside} elements in bubbles checked");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+#[test]
+fn drawn_the_author_line_sits_above_its_bubble_and_a_bare_change_has_none() {
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    let node = rt.state.screens.iter().find(|s| s.name == SCREEN).and_then(|s| s.last_good.clone()).unwrap();
+    let mut ks = vec![];
+    keys(&node, &mut ks);
+    let ks: BTreeSet<String> = ks.into_iter().collect();
+    let mut st = State::default();
+    let mut d = data();
+    let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
+    let mut seen = 0;
+    for r in rows_of(&v) {
+        let id = r["id"].as_str().unwrap_or("");
+        match r["type"].as_str().unwrap_or("") {
+            "transition" => {
+                assert!(!ks.contains(&format!("board-bubble-{id}")), "a bare change of state draws no bubble");
+                assert!(ks.contains(&format!("board-msg-{id}")));
+            }
+            "status" | "note" | "message" | "question" | "card" | "merge" => {
+                assert!(ks.contains(&format!("board-bubble-{id}")), "{id}");
+                let author = ks.contains(&format!("board-author-{id}"));
+                assert_eq!(author, r["cont"].is_null(), "{id}: an author line unless it follows the same author's");
+                if let (true, Some((a, _)), Some((b, _))) = (author, rt.presented(&format!("board-author-{id}")), rt.presented(&format!("board-bubble-{id}"))) {
+                    assert!(a[1] + a[3] <= b[1] + 0.5, "{id}: the author line above the bubble");
+                    seen += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(seen >= 3, "{seen} author lines measured");
+    // Bubbles hug their content: a short one is narrower than the column.
+    let short = rows_of(&v).into_iter().find(|r| r["kind"] == "direct_message" && r["who"] == "web-page").unwrap();
+    let (b, _) = rt.presented(&format!("board-bubble-{}", short["id"].as_str().unwrap())).unwrap_or(([0.0; 4], 0.0));
+    let (c, _) = rt.presented("board-convo").unwrap();
+    assert!(b[2] > 0.0 && b[2] < c[2] * 0.8, "{b:?} in {c:?}");
+}
+
+#[test]
+fn the_done_blocked_and_failed_tints_are_drawn_in_both_themes_with_readable_text() {
+    use crate::theme::{color_in, contrast, Mode};
+    for m in Mode::ALL {
+        for (fill, border) in [("green-tint", "green"), ("amber-tint", "amber"), ("red-tint", "red-border")] {
+            let (f, t) = (color_in(m, fill).unwrap(), color_in(m, "text").unwrap());
+            assert!(contrast(t, f) >= 4.5, "{m:?}: text on {fill} {}", contrast(t, f));
+            assert!(color_in(m, border).is_some());
+        }
+    }
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    let els = rt.elements();
+    let green = crate::theme::hex(crate::theme::color_value("green-tint").unwrap());
+    let near = |a: f32, b: f32| (a - b).abs() < 0.002;
+    let done = els.iter().filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("board-bubble-"))).filter(|e| near(e.fill.r, green.r) && near(e.fill.g, green.g) && near(e.fill.b, green.b)).count();
+    assert!(done >= 2, "the done reports (and the decision) on the green tint: {done}");
+}
+
+fn tap(rt: &mut Runtime<App>, key: &str) {
+    let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{key} not drawn"));
+    let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(rt);
+}
+
+fn shown_team(rt: &Runtime<App>) -> String {
+    rt.state.feats.data.get(UI).and_then(|v| v["team"].as_str().map(str::to_string)).unwrap_or_default()
+}
+
+#[test]
+fn drawn_the_picker_list_is_as_wide_as_its_button_or_more_and_fits_the_overlay() {
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+        let mut rt = window(w, h);
+        open(&mut rt, json!({ "team": "p-run" }));
+        tap(&mut rt, "board-row-picker");
+        let (o, _) = rt.presented("overlay-board").unwrap();
+        let (b, _) = rt.presented("board-row-picker").unwrap();
+        let (m, _) = rt.presented("board-picker").unwrap_or_else(|| panic!("the list is not open at {w}"));
+        assert!(m[2] + 0.5 >= b[2], "at {w}: the list {m:?} narrower than its button {b:?}");
+        assert!(m[2] <= 560.5 && m[0] >= o[0] - 0.5 && m[0] + m[2] <= o[0] + o[2] + 0.5, "at {w}: {m:?} in {o:?}");
+        if w < 1000.0 {
+            assert!(m[2] >= o[2] - 64.0, "at {w}: the list takes the room there is ({m:?} in {o:?})");
+        } else {
+            assert!(m[2] >= 540.0, "at {w}: wide enough for two lines of summary ({m:?})");
+        }
+        // Each row: the thread names first, the summary under them.
+        let els = rt.elements();
+        let row = els.iter().position(|e| e.key.as_deref() == Some("board-row-team-p-run")).unwrap();
+        let texts: Vec<(String, f32)> = els.iter().filter(|e| e.text.is_some() && {
+            let mut up = e.parent;
+            let mut found = false;
+            while let Some(j) = up {
+                if j == row { found = true; break; }
+                up = els[j].parent;
+            }
+            found
+        }).map(|e| (e.text.clone().unwrap(), e.rect[1])).collect();
+        assert_eq!(texts[0].0, "api-routes + web-page + docs-update", "{texts:?}");
+        let summary = texts.iter().find(|t| t.0.starts_with("Orders v2")).unwrap();
+        assert!(summary.1 > texts[0].1, "the summary under the names");
+        // A pick closes it and shows that team.
+        tap(&mut rt, "board-row-team-p-old");
+        assert!(rt.presented("board-picker").is_none());
+        assert_eq!(shown_team(&rt), "p-old");
+        // A press outside closes it and does nothing else.
+        tap(&mut rt, "board-row-picker");
+        assert!(rt.presented("board-picker").is_some());
+        let (d, _) = rt.presented("board-picker-dismiss").unwrap();
+        rt.pointer_down(d[0] + d[2] - 20.0, d[1] + d[3] - 20.0);
+        rt.pointer_up(d[0] + d[2] - 20.0, d[1] + d[3] - 20.0);
+        settle(&mut rt);
+        assert!(rt.presented("board-picker").is_none(), "light dismiss at {w}");
+        assert_eq!(shown_team(&rt), "p-old");
+    }
+}
+
+#[test]
+fn the_picker_answers_up_down_and_enter() {
+    use rune::{Key, KeyEvent, Mods};
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    tap(&mut rt, "board-row-picker");
+    let focused = rt.elements().iter().find(|e| e.focused).and_then(|e| e.key.clone());
+    assert_eq!(focused.as_deref(), Some("board-row-team-p-run"), "the keyboard on the team shown");
+    for k in [Key::Down, Key::Down, Key::Up, Key::Down, Key::Enter] {
+        rt.key(KeyEvent { key: k, mods: Mods::default() });
+        settle(&mut rt);
+    }
+    assert!(rt.presented("board-picker").is_none(), "Enter picks and closes");
+    assert_eq!(shown_team(&rt), "p-old", "All teams, p-run, p-new, p-old: two down from p-run");
 }

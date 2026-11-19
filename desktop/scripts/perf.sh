@@ -33,8 +33,10 @@ def step(label, key, until=None):
 add(type="mark", name="wait:row-web-app")
 add(type="mark", name="hold:500")
 add(type="mark", name="perf:idle (a pointer move over the panes)"); add(type="move", x=700, y=500); add(type="mark", name="hold:300")
-step("select a sandbox (tap its row)", "row-web-app")
-step("open a menu (a sandbox row's)", "extra-sandbox-web-app", "extra-sandbox-web-app-list")
+# The first sandbox of the list: web-app's row is below the fold at 816 pt
+# (11 sandboxes), and a row's menu shows on its selected or hovered row.
+step("select a sandbox (tap its row)", "row-chat-research")
+step("open a menu (a sandbox row's)", "extra-sandbox-chat-research", "extra-sandbox-chat-research-list")
 add(type="key", name="Escape"); add(type="mark", name="hold:200")
 # The Monitor as the base view, with an overlay over it, then back to the terminals.
 step("make the Monitor the base view", "rail-monitor", "overlay-monitor")
@@ -50,13 +52,15 @@ add(type="mark", name="perf:type 6 characters in the filter")
 add(type="tap", key="commits-filter"); add(type="type", text="change", every=0.05); t += 0.5
 add(type="mark", name="hold:300")
 step("open the Board (8 threads, 500 events)", "rail-board", "board-convo")
-step("the Board: pick the team", "board-team", "board-team-p-perf")
-step("the Board: its team", "board-team-p-perf", "board-more")
+step("the Board: open the team picker", "board-row-picker", "board-row-team-p-perf")
+step("the Board: its team", "board-row-team-p-perf", "board-more")
 step("the Board: show earlier", "board-more")
 step("the Board: decisions and warnings", "board-group-notes")
 step("the Board: every kind again", "board-group-all")
-step("switch to the Files overlay", "rail-files", "files-tab-files")
-step("the Workspace tab", "files-tab-files", "files-up")
+# Beside the Requests panel the explorer is narrow: its locations are a menu.
+step("switch to the Files overlay", "rail-files", "files-locations")
+step("the locations", "files-locations", "files-locations-/Users/me/web")
+step("the Workspace location", "files-locations-/Users/me/web", "files-up")
 step("browse the workspace (the folder above)", "files-up", "files-row-/Users/me/web/big")
 step("open the 3,000-entry folder", "files-row-/Users/me/web/big")
 add(type="mark", name="hold:800")
@@ -83,3 +87,5 @@ sleep 0.3
 RUNE_PERF=1 RUNE_PERF_SLOW_MS=0.01 SBXW_DESKTOP_PERF=1 SHOT_SIZE=1284x816 run_app "$out/perf.log" --script "$out/script.json" --snap "$out/perf.png" --tree "$out/tree.json" --at "${PERF_AT:-mark:end+0.2}" || true
 cleanup; pids=()
 python3 "$here/scripts/perf-summary.py" "$out/perf.log" "$out/rune.jsonl"   # exits 1 over the budget
+# A step that gave up waiting measured nothing: the run fails.
+if grep -q "gave up waiting" "$out/perf.log"; then grep "gave up waiting" "$out/perf.log" >&2; exit 1; fi
