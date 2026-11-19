@@ -142,6 +142,29 @@ The terminal (`/ws`, above) with `size=1`: `{"type":"size","cols","rows","owner"
 before the replay and on every change; the grid takes the PTY's size and is
 drawn smaller when another window owns a larger one (TERMINAL.md).
 
+### Canvas (`src/feat/canvas/`, CANVAS.md)
+
+UI listener, UI token. Ids are `c-` and 16 hex digits; picture files are
+names the daemon generated (`s-<12 hex>.png`, `a-<12 hex>.jpg`), served only
+when the manifest lists them. Every answer is `{ok, ...}`.
+
+| Route | Body or query | Answer |
+|---|---|---|
+| `GET /api/canvas` | | `canvases` (newest first: `id, sandbox, title, created_ms, updated_ms, shots, rounds, reviews, bytes, draft`), `total_bytes`, `max_canvas_bytes` |
+| `POST /api/canvas` | `{sandbox, title}` | `canvas` (a new manifest) |
+| `GET /api/canvas/:id` | | `canvas` (the manifest: `shots, assets, pins, notes, rounds, reviews`), `bytes` |
+| `GET /api/canvas/:id/images/:file` | | the picture's bytes, its type (PNG, JPEG, WebP), `nosniff`; 404 for a name the manifest does not list |
+| `POST /api/canvas/:id/rename` | `{title}` | `title` |
+| `POST /api/canvas/:id/edit` | `{pins?, notes?, remove_assets, layout: [{id, x, y, w, h}]}`: the unsent pins and notes whole; sent ones never change | `updated_ms, draft` |
+| `POST /api/canvas/:id/assets?name=&x=&y=` | the picture's bytes (20 MB at most; checked by content) | `asset` |
+| `POST /api/canvas/:id/submit` | `{session, assets: {asset id: path in the sandbox}}` (paths under `/tmp/sbxw-uploads/` only) | `review` (its number), `line` (the fixed line the app types) |
+| `POST /api/canvas/delete` | `{ids}` and/or `{before_ms}` | `deleted, bytes` |
+| bus event `canvas` | | `{id, sandbox, what}`: `created`, `shots` (the agent added some), `asset`, `edit`, `review`, `read`, `renamed`, `deleted` |
+
+Agent listener (the sandbox is the token's): `POST /api/canvas/shots`
+(`{canvas?, title?, batch, shot: {b64, title, note?, width?, screen?}}`),
+`POST /api/canvas/list`, `POST /api/canvas/read` (`{canvas?}`: `text`).
+
 ### Not covered yet
 
 Grouped by the area that will need them, with the web UI file that calls

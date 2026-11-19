@@ -485,11 +485,9 @@ impl State {
     fn rect_of(&self, t: &str) -> Option<[f32; 4]> {
         let c = self.canvas.as_ref()?;
         if let Some(n) = t.strip_prefix("pin-").and_then(|n| n.parse::<u32>().ok()) {
-            let (on, fx, fy) = self.pins.iter().find(|p| p.n == n).map(|p| (p.on.clone(), p.fx, p.fy)).or_else(|| c.pins.iter().find(|p| p.n == n).map(|p| (p.on.clone(), p.fx, p.fy)))?;
-            let r = model::item_rect(c, &on, &self.layout)?;
-            let (x, y) = (r[0] + fx * r[2], r[1] + fy * r[3]);
-            // The pin's shot, centred on the pin, as large as fits.
-            return Some([x - r[2] / 2.0, y - r[3] / 2.0, r[2], r[3]]);
+            let on = self.pins.iter().find(|p| p.n == n).map(|p| p.on.clone()).or_else(|| c.pins.iter().find(|p| p.n == n).map(|p| p.on.clone()))?;
+            // The pin's whole shot, the pin on it.
+            return model::item_rect(c, &on, &self.layout);
         }
         if let Some(x) = self.notes.iter().find(|x| x.id == t) {
             return Some([x.x, x.y, x.w, x.h]);

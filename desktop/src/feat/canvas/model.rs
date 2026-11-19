@@ -330,6 +330,9 @@ pub fn view(s: &State, snap: &J) -> J {
         size_label(s.total),
         s.list.len()
     );
+    // The storage line in the picker too (not pressable).
+    canvases.push(json!({ "divider": true }));
+    canvases.push(json!({ "id": "storage", "label": format!("Storage: {storage}"), "disabled": true, "help": "Delete a canvas, or every canvas older than a date, from Delete" }));
     let mut v = json!({
         "sandboxes": sb_items, "sandbox": sb, "removed": gone.contains(&sb), "canvases": canvases, "storage": storage, "count": s.list.len(),
         "tool": s.tool.name(), "selected": s.selected, "renaming": s.renaming, "loading": s.loading, "error": s.error,

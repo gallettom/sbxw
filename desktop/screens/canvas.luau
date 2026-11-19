@@ -117,11 +117,12 @@ return {
         button{ "Cancel", key = "canvas-rename-cancel", on = "rename_close", variant = "ghost" } }
     end
     if not ui.current then
-      head[#head + 1] = column{ gap = 12, w = "full", py = 24, key = "canvas-empty",
+      head[#head + 1] = scroll{ key = "canvas-empty-scroll", column{ gap = 12, w = "full", py = 24, key = "canvas-empty",
         text{ ui.empty == "loading" and "Reading the canvas…" or "No canvas for this sandbox yet", weight = "semibold", color = "text-bright" },
         note("A canvas collects screenshots of the app an agent works on. Zoom and move over them, pin remarks on a point, add notes and example pictures, then send your remarks: the agent reads them with its canvas_read tool."),
         row{ gap = 8, button{ "New canvas", icon = "plus", key = "canvas-new", on = "pick", arg = "new", disabled = (ui.sandbox or "") == "" } },
-        ask_block(ui, data) }
+        ask_block(ui, data) } }
+      head.h = "full"
       return column(head)
     end
     local actions = row{ gap = 4,
