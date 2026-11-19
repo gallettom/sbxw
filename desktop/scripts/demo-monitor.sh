@@ -22,6 +22,9 @@
 #   base     the Monitor as the base: its header's view switch, no cross;
 #   under    the Monitor's Files link: the explorer over the Monitor;
 #   back     Escape there: back to the Monitor, the same session;
+#   attach   two files dropped on billing-api's session: their chips under the box;
+#   attach-dialog  a third, named like a secret (amber), words typed, Send:
+#            the core's one dialog (words, each file, the total, its box);
 #   fold     fixtures/monitor/folding.json: one row per place (studio's main
 #            checkout reported by three sessions shows once, its last prompt
 #            another session's message shown as such; lab's two live terminals).
@@ -30,8 +33,13 @@ set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 shots="$shots_root/monitor"; mkdir -p "$shots"
 build
+# Invented files to attach (never this machine's own).
+drop=/tmp/sbxw-demo/attach; mkdir -p "$drop"
+printf '# Brief\n\nThe invoice export, as agreed.\n' >"$drop/brief.md"
+printf 'name,qty\nmug,2\n' >"$drop/order list.csv"
+printf 'EXAMPLE=1\n' >"$drop/.env.local"
 script() {
-  MARK="$1" python3 - <<'PY'
+  DROP="$drop" MARK="$1" python3 - <<'PY'
 import json, os
 m = os.environ["MARK"]
 ev = []; t = 0.6
@@ -59,13 +67,23 @@ if m == "choice":
     # N: the next session that needs you; then its row (a narrow view opens it).
     add(type="type", every=0.02, text="n"); add(type="mark", name="hold:300")
     step("monitor-row-shop-web:s-shop-main", "monitor-opt-1-1")
-if m in ("reply", "send"):
+if m in ("reply", "send", "attach", "attach-dialog"):
     # A short window: the idle rows are below the fold of the list.
     add(type="wheel", key="monitor-row-shop-web:s-shop-main", dy=-600); add(type="mark", name="hold:300")
     step("monitor-row-billing-api:s-bill-main", "monitor-reply")
 if m == "send":
     add(type="tap", key="monitor-compose")
     text = "Also add a test with an empty invoice, then stop."
+    add(type="type", every=0.02, text=text); t += 0.02 * len(text)
+    step("monitor-send", "cf-confirm")
+if m in ("attach", "attach-dialog"):
+    D = os.environ["DROP"]
+    add(drop_files={"paths": [f"{D}/brief.md", f"{D}/order list.csv"], "key": "monitor-detail", "hover": 0.2})
+    add(type="mark", name="wait:monitor-attached")
+if m == "attach-dialog":
+    add(drop_files={"paths": [f"{D}/.env.local"], "key": "monitor-detail", "hover": 0.2}); add(type="mark", name="hold:300")
+    add(type="tap", key="monitor-compose")
+    text = "Use these for the export test."
     add(type="type", every=0.02, text=text); t += 0.02 * len(text)
     step("monitor-send", "cf-confirm")
 if m in ("under", "back"):
@@ -86,7 +104,7 @@ PY
 }
 theme="${THEME:-dark}"
 for size in ${SIZES:-1284x816 720x480}; do
-  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back}; do
+  for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back attach attach-dialog fold}; do
     case "$m" in empty|idle|busy) fx="$m" ;; fold) fx=folding ;; *) fx=basic ;; esac
     out="$shots/monitor-$size-$theme-$m"
     SIZE="$size" script "$m" >"$out-script.json"

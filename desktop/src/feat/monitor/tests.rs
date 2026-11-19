@@ -1141,6 +1141,13 @@ fn harness_text_is_told_from_the_person_s_prompt() {
     assert_eq!((from.as_deref(), body.as_str()), (Some("lead"), "Hi there"));
     let (from, _) = injected("  <task-notification>\n<task-id>b1</task-id></task-notification>").unwrap();
     assert_eq!(from.as_deref(), Some("sbxw"));
+    // The daemon's word, when it gives it, comes first.
+    use super::model::from_of;
+    let r = |extra: J| { let mut i = json!({ "last_input": "<cross-session-message from-name=\"x\">hi</cross-session-message>" }); for (k, v) in extra.as_object().unwrap() { i[k] = v.clone(); } i };
+    assert_eq!(from_of(&r(json!({}))), Some(("x".into(), "hi".into())));
+    assert_eq!(from_of(&r(json!({ "last_input_from": "person" }))), None, "the person typed it, tags and all");
+    assert_eq!(from_of(&r(json!({ "last_input_from": "injected", "last_input_sender": "lead" }))), Some(("lead".into(), "hi".into())));
+    assert_eq!(from_of(&json!({ "last_input": "plain words", "last_input_from": "injected", "last_input_sender": "task" })), Some(("task".into(), "plain words".into())));
 }
 
 /// When the daemon says so (`continues`, `ended`: fields it may serve), the

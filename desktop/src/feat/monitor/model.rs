@@ -92,6 +92,23 @@ pub fn injected(text: &str) -> Option<(Option<String>, String)> {
     Some((from.or_else(|| (*tag != "cross-session-message").then(|| "sbxw".to_string())), body))
 }
 
+/// Who typed a report's `last_input` when it was not the person: the
+/// daemon's word when it gives it (`last_input_from`, `last_input_sender`),
+/// else the app's reading of the text ([`injected`]). `(name, words)`.
+pub fn from_of(info: &J) -> Option<(String, String)> {
+    let text = opt(info, "last_input")?;
+    let sniffed = injected(text);
+    match opt(info, "last_input_from") {
+        Some("person") => None,
+        Some("injected") => {
+            let name = opt(info, "last_input_sender").map(|n| n.chars().filter(|c| !c.is_control()).take(60).collect::<String>())
+                .or_else(|| sniffed.as_ref().and_then(|(f, _)| f.clone())).unwrap_or_else(|| "another session".into());
+            Some((name, sniffed.map(|(_, b)| b).unwrap_or_else(|| text.to_string())))
+        }
+        _ => sniffed.map(|(f, b)| (f.unwrap_or_else(|| "another session".into()), b)),
+    }
+}
+
 /// A report the daemon marks `ended: true` (when it serves that field) is an end.
 fn ended_as_exited(info: &J) -> J {
     let mut i = info.clone();
@@ -456,8 +473,8 @@ impl Model {
             "strip": strip.join("  \u{b7}  "),
             // The person's last prompt only: a message another session or
             // the harness typed in is shown as that, quietly, never as "You".
-            "last_input": opt(i, "last_input").filter(|t| injected(t).is_none()),
-            "from": opt(i, "last_input").and_then(injected).map(|(from, body)| json!({ "name": from.unwrap_or_else(|| "another session".into()), "text": crate::feat::monitor::attach::clipped_text(&body, 600) })),
+            "last_input": opt(i, "last_input").filter(|_| from_of(i).is_none()),
+            "from": from_of(i).map(|(from, body)| json!({ "name": from, "text": crate::feat::monitor::attach::clipped_text(&body, 600) })),
             "now": if g == Group::Working { Some(opt(i, "activity").unwrap_or("Working")) } else { None },
             "reply": opt(i, "reply"),
             "ts": i["ts"].as_u64().unwrap_or(0),
@@ -496,8 +513,8 @@ fn row_of(key: &str, rev: u64, i: &J) -> J {
     let g = Group::of(s(i, "state"));
     let st = steps(i);
     let reply = opt(i, "reply").and_then(first_line);
-    let prompt: Option<String> = opt(i, "last_input").map(|t| match injected(t) {
-        Some((from, _)) => format!("From {}", from.unwrap_or_else(|| "another session".into())),
+    let prompt: Option<String> = opt(i, "last_input").map(|t| match from_of(i) {
+        Some((from, _)) => format!("From {from}"),
         None => t.to_string(),
     });
     let (line, mono) = match g {
