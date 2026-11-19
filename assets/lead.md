@@ -41,7 +41,11 @@ Read enough of the repository to split the work along real seams. A good thread:
   directories it owns, and keep the scopes disjoint.
 - **has a goal another agent can act on cold.** The thread knows nothing of
   this conversation. Say what to change, where, and how to tell it is done
-  (the test to run, the behaviour to see).
+  (the test to run, the behaviour to see). Do not re-type standing rules:
+  sbxw's briefing already carries the ones for every repository (commit often,
+  check `git merge-tree` before done, stop at a refused hook or a blocked host,
+  send what you must read by SendMessage), and the repository's root
+  `CLAUDE.md`, when it has one, carries its own. Say only what is specific.
 
 Use few threads. Two or three is usually right; the user's sandbox allows four
 Claude sessions by default, you included. If the work does not split cleanly,

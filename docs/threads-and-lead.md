@@ -169,7 +169,15 @@ refused if the threads wouldn't fit under `max_agent_sessions`.
 
 On approval, sbxw opens each thread with a **briefing** as its first message:
 its goal, its scope, and the rules (commit on your branch, never merge or push,
-report your state).
+report your state). The briefing also carries the standing rules that hold in
+every repository (`STANDING_RULES` in `crates/core/src/messages.rs`, about 440
+characters): commit at each stable point, check `git merge-tree --write-tree`
+against main before reporting done, do nothing if another session of the same
+name already works in the worktree, send what the lead must read by
+`SendMessage`, and stop at a refused hook, a blocked host or a pending
+approval. A repository's own rules (build commands, what not to touch) go in
+its root `CLAUDE.md`, which every session reads by itself; sbxw's own is the
+example. The lead's goal then says only what is specific to the thread.
 
 - **Threads report to sbxw** with `report_thread_status`. The chip shows the
   state: `…` starting, `●` working, `?` blocked, `✓` done, `✕` failed. Hover for

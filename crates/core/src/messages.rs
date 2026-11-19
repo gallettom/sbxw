@@ -231,6 +231,19 @@ pub fn relay_delivery(req: &RelayRequest, thread_alive: impl Fn(&str) -> bool) -
     }
 }
 
+/// The rules every thread keeps, whatever the repository: written once here so
+/// a lead does not re-type them in each goal. A repository's own rules (build
+/// commands and the like) belong in its `CLAUDE.md`, which the session reads
+/// by itself.
+pub const STANDING_RULES: &str = "\
+- Commit at each stable point, so a restart costs little.\n\
+- Before reporting done, check `git merge-tree --write-tree <main> HEAD` is clean.\n\
+- If your pane is reopened and another session of your name already works in this worktree, \
+do nothing and tell the lead.\n\
+- Anything the lead must read goes by `SendMessage`.\n\
+- A hook that refuses a write, a blocked host or a pending network approval is a stop: tell \
+the lead, never work around it.";
+
 /// A thread's first message: the lead's words as a person approved them, and
 /// the daemon's rules around them.
 pub fn thread_briefing(plan: &Plan, t: &PlanThread) -> String {
@@ -290,7 +303,9 @@ pub fn thread_briefing(plan: &Plan, t: &PlanThread) -> String {
          - Report with the `report_thread_status` tool (MCP server sbxw-relay): \"working\" now, \
          \"blocked\" with your question whenever you need something, \"done\" with a short \
          summary of what you changed when you finish. That moves your mark in the sbxw window.\n\
-         {talk}",
+         {talk}\n\
+         {standing}",
+        standing = STANDING_RULES,
         name = t.name,
         summary = if plan.summary.is_empty() { "(none given)" } else { &plan.summary },
         goal = t.goal,
@@ -484,6 +499,19 @@ mod tests {
         let b = thread_briefing(&shared, &t);
         assert!(b.contains("branch sbxw/team-p") && b.contains("git commit -- <paths>"));
         assert!(!b.contains("your own git worktree"));
+    }
+
+    #[test]
+    fn a_briefing_carries_the_standing_rules_once_and_stays_short() {
+        let (p, t) = plan(Some("lead-7"));
+        let b = thread_briefing(&p, &t);
+        assert_eq!(b.matches(STANDING_RULES).count(), 1);
+        assert!(b.contains("git merge-tree --write-tree") && b.contains("by `SendMessage`"));
+        assert!(!b.contains('\u{2014}'), "no em dash in what sbxw types");
+        // The standing block is a small part of a briefing the goal (up to
+        // MAX_BRIEF) dominates.
+        assert!(STANDING_RULES.len() < 600, "{}", STANDING_RULES.len());
+        assert!(b.len() < 3000, "{}", b.len());
     }
 
     #[test]
