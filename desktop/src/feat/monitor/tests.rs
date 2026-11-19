@@ -1597,3 +1597,16 @@ fn a_report_of_the_followed_session_renews_an_old_subscription() {
     serve(&mut d, a);
     assert_eq!(calls(&mut d), ["GET billing-api/s-bill-main before=- limit=100"], "renewed by a read");
 }
+
+/// A tool's line is a command, drawn mono; a session waiting on its own
+/// background work says a sentence, drawn in prose.
+#[test]
+fn a_session_waiting_on_its_background_work_reads_as_prose() {
+    let mut m = Model::default();
+    let row = |m: &Model| m.cards.values().next().unwrap().row.clone();
+    m.upsert(&json!({ "sandbox": "lab", "mode": "claude", "state": "working", "started_ms": 1, "ts": 1, "session_id": "a", "activity": "Bash cargo test" }));
+    assert_eq!((row(&m)["line"].clone(), row(&m)["mono"].clone()), (json!("Bash cargo test"), json!(true)));
+    m.upsert(&json!({ "sandbox": "lab", "mode": "claude", "state": "working", "started_ms": 1, "ts": 2, "session_id": "a",
+        "activity": "Waiting for its background command", "background": { "shells": 1, "agents": 0, "other": 0, "wakeups": 0 } }));
+    assert_eq!((row(&m)["line"].clone(), row(&m)["mono"].clone()), (json!("Waiting for its background command"), json!(false)));
+}

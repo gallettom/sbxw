@@ -601,7 +601,10 @@ fn row_of(key: &str, rev: u64, i: &J) -> J {
     });
     let (line, mono) = match g {
         Group::You => (st.first().and_then(|q| opt(q, "text")).or(opt(i, "activity")).unwrap_or("Waiting for you"), false),
-        Group::Working => (opt(i, "activity").unwrap_or("Working"), true),
+        // A tool's line is a command (mono); a session waiting on its own
+        // background work says a sentence ("Waiting for its background
+        // command"), drawn in prose.
+        Group::Working => (opt(i, "activity").unwrap_or("Working"), i["background"].is_null()),
         Group::Ended => ("Ended", false),
         Group::Idle => (reply.or(prompt.as_deref()).unwrap_or("Idle"), false),
     };
