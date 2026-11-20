@@ -3,9 +3,9 @@
 //! height, it never covers a terminal).
 //!
 //! Left: the bring-ups in progress (create's jobs, `feat::create::bar_jobs`);
-//! a press opens the "New sandboxes" panel, as the top bar's "Creating"
-//! does. A failure stays in red until that press (or until it is retried or
-//! dismissed); a success says "created" for four seconds. Right, in this order: CPU, cost, the theme's switch
+//! a press lists them in a popover ([`jobs`]), with Retry and Dismiss. A
+//! failure stays in red until it is retried or dismissed; a success says
+//! "created" for four seconds. Nothing being created: nothing is drawn. Right, in this order: CPU, cost, the theme's switch
 //! (the theme's mark: a press goes to the next theme; its chevron lists
 //! them, Dark and Graphite), Help. Each entry runs an intent that exists
 //! already, or opens a read-only popover. Its code stays here so the
@@ -25,6 +25,7 @@ use rune::{el, row, text, Cursor, El};
 use serde_json::Value as J;
 use std::time::{Duration, Instant};
 
+pub mod jobs;
 pub mod numbers;
 use numbers::{Cost, Cpu};
 
@@ -70,10 +71,8 @@ pub fn item_w(t: &str) -> f32 {
 /// The bar's state between frames.
 #[derive(Default)]
 pub struct Status {
-    /// The bring-ups shown, most recent first (failures already looked at left out).
+    /// The bring-ups shown, most recent first.
     pub jobs: Vec<BarJob>,
-    /// Failures looked at in the "New sandboxes" panel: sandbox, job start.
-    seen: Vec<(String, Instant)>,
     /// The progress line's width now, and its glide: sandbox, from, to, start.
     pub frac: f32,
     glide: Option<(String, f32, f32, Instant)>,
@@ -103,11 +102,8 @@ pub enum Pop {
     Cost,
     /// The theme's three choices.
     Theme,
-}
-
-/// The bring-ups the bar shows from create's list: failures looked at go.
-pub fn shown_jobs(all: Vec<BarJob>, seen: &[(String, Instant)]) -> Vec<BarJob> {
-    all.into_iter().filter(|j| !(matches!(j.state, BarState::Failed(_)) && seen.iter().any(|(n, t)| *n == j.sandbox && *t == j.since))).collect()
+    /// The sandboxes being created ([`jobs`]).
+    Jobs,
 }
 
 /// The "+N" after the shown bring-up, and its colour: red when one of the
@@ -176,18 +172,10 @@ pub fn fit(width: f32, jobs: &[BarJob], cpu: &Cpu, cost: &Cost) -> Fit {
 }
 
 impl App {
-    /// The person pressed the bring-ups entry: the failures it showed are
-    /// looked at (the panel it opens has them, with Retry and Dismiss).
-    fn statusbar_seen(&mut self) {
-        for j in self.status.jobs.iter().filter(|j| matches!(j.state, BarState::Failed(_))) {
-            self.status.seen.push((j.sandbox.clone(), j.since));
-        }
-    }
-
     /// Whether the bar draws `key` now (the scripts' `wait:` marks), from
     /// create's list as it stands (a wait does not poll the bar).
     pub(super) fn statusbar_drawn(&self, key: &str) -> bool {
-        let jobs = shown_jobs(create::bar_jobs(), &self.status.seen);
+        let jobs = create::bar_jobs();
         let first = jobs.first();
         match key {
             "status-bar" | "status-left" | "status-right" | "status-cpu" | "status-cost" | "status-help" | "status-theme" | "status-theme-more" => true,
@@ -199,6 +187,7 @@ impl App {
                 fit(self.window.0, &jobs, &cpu, &cost).step
             },
             "status-pop-scrim" => self.status.pop.is_some(),
+            "status-jobs-pop" => self.status.pop == Some(Pop::Jobs),
             "status-cpu-pop" => self.status.pop == Some(Pop::Cpu),
             "status-cost-pop" => self.status.pop == Some(Pop::Cost),
             "status-theme-pop" | "status-theme-dark" | "status-theme-graphite" => self.status.pop == Some(Pop::Theme),
@@ -305,13 +294,16 @@ impl App {
     /// marked, the progress line's glide. Whether the bar changed, and when
     /// to look again (a "created" that expires, a glide's next frame).
     pub(super) fn statusbar_poll(&mut self, now: Instant) -> (bool, Option<Instant>) {
-        let all = create::bar_jobs();
-        // A failure dismissed or retried is forgotten.
-        self.status.seen.retain(|(n, t)| all.iter().any(|j| j.sandbox == *n && j.since == *t));
-        let jobs = shown_jobs(all, &self.status.seen);
+        let jobs = create::bar_jobs();
         let mut wake = jobs.iter().filter(|j| j.state == BarState::Created).map(|j| j.since + create::CREATED_FOR).min();
+        // Nothing left to list: the popover closes by itself.
+        let mut changed = false;
+        if self.status.pop == Some(Pop::Jobs) && jobs::listed().is_empty() {
+            self.status.pop = None;
+            changed = true;
+        }
         let st = &mut self.status;
-        let mut changed = jobs != st.jobs;
+        changed |= jobs != st.jobs;
         let target = jobs.first().map_or(0.0, |j| j.frac);
         let name = jobs.first().map(|j| j.sandbox.clone()).unwrap_or_default();
         let same = st.jobs.first().is_some_and(|j| j.sandbox == name);
@@ -382,7 +374,8 @@ pub fn view(s: &App) -> El {
 }
 
 /// The shown bring-up (key `status-jobs`): its mark, name, step, progress
-/// line and "+N"; a press opens the "New sandboxes" panel.
+/// line and "+N"; a press lists them ([`jobs::popover`]). A "created" alone
+/// lists nothing: it is not pressable.
 fn jobs_view(s: &App, f: Fit) -> Option<El> {
     let jobs = &s.status.jobs;
     let j = jobs.first()?;
@@ -409,10 +402,14 @@ fn jobs_view(s: &App, f: Fit) -> Option<El> {
     for o in &jobs[1..] {
         help.push_str(&format!("\n{}: {}", o.sandbox, job_words(o)));
     }
-    help.push_str("\nClick to see the new sandboxes");
+    let open = s.status.pop == Some(Pop::Jobs);
+    let listed = jobs.iter().any(|j| j.state != BarState::Created);
+    if listed {
+        help.push_str("\nClick for the details");
+    }
     let mut e = row()
         .key("status-jobs")
-        .role("button")
+        .role(if listed { "button" } else { "status" })
         .label(format!("{} {words}", j.sandbox))
         .help(help)
         .shrink()
@@ -420,16 +417,20 @@ fn jobs_view(s: &App, f: Fit) -> Option<El> {
         .px(ITEM_PX)
         .gap(INNER)
         .items_center()
-        .radius(theme::radius("xs").unwrap())
-        .hover(c("hover-subtle"))
-        .focus_ring(2.0, -2.0, c("focus"))
-        .cursor(Cursor::Pointer)
-        .on_press(|s: &mut App| {
-            s.statusbar_seen();
-            s.run_intent("statusbar", Intent::OpenPanel { screen: create::JOBS.into() });
-            s.push_data();
-        })
-        .child(
+        .radius(theme::radius("xs").unwrap());
+    if listed {
+        e = e.hover(c("hover-subtle")).focus_ring(2.0, -2.0, c("focus")).cursor(Cursor::Pointer).on_press(|s: &mut App| {
+            if s.status.pop == Some(Pop::Jobs) {
+                s.status.pop = None;
+            } else {
+                s.statusbar_open_jobs();
+            }
+        });
+    }
+    if open {
+        e = e.fill(c("hover-subtle"));
+    }
+    e = e.child(
             row()
                 .gap(ICON_GAP)
                 .items_center()
@@ -511,6 +512,7 @@ pub fn popover(s: &App) -> Vec<El> {
         Pop::Cpu => ("status-cpu-pop", "status-cpu", cpu_pop(&cpu, max_lines(s))),
         Pop::Cost => ("status-cost-pop", "status-cost", cost_pop(&cost, max_lines(s))),
         Pop::Theme => return theme_menu(s),
+        Pop::Jobs => return vec![screen::menu_scrim("status-pop-scrim".into(), |s: &mut App| s.status.pop = None), jobs::popover(s)],
     };
     let mut surface = rune::col()
         .key(key)

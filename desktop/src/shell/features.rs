@@ -634,6 +634,10 @@ impl App {
     }
 
     fn open_panel(&mut self, screen: &str) {
+        // The bring-ups' panel is gone: its name opens the status bar's popover.
+        if screen == "create-jobs" {
+            return self.statusbar_open_jobs();
+        }
         match feat::screen(screen) {
             // An overlay over the pane area: one at a time.
             // A base view: it becomes the base, and whatever overlay was over the pane area closes.

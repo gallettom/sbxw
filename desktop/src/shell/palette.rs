@@ -29,6 +29,8 @@ pub enum Run {
     Intents(Vec<(String, J)>),
     Sidebar,
     Jarvis,
+    /// The status bar's popover of bring-ups (statusbar/jobs.rs).
+    CreateJobs,
     /// The current page's pane `i` (from 0).
     FocusPane(usize),
     ClosePane,
@@ -236,10 +238,10 @@ impl App {
             v.push(Cmd { id: format!("key-{}", sc.key), label: sc.help.to_string(), hint: String::new(), icon: None, keys, run: Run::Intents(vec![(sc.intent.to_string(), serde_json::from_str(sc.args).unwrap_or(J::Null))]) });
         }
         let core = |id: &str, label: &str, hint: &str, icon: &str, keys: Vec<String>, run: Run| Cmd { id: id.into(), label: label.into(), hint: hint.into(), icon: Some(icon.into()), keys, run };
-        // The bring-ups' panel, while the status bar shows one.
-        if !self.status.jobs.is_empty() {
-            let n = self.status.jobs.len();
-            v.push(core("create-jobs", "Show the new sandboxes", &format!("{n} being created or just done"), "plus", vec![], Run::Intents(vec![("open_panel".into(), serde_json::json!({ "screen": feat::create::JOBS }))])));
+        // The status bar's popover of bring-ups, while there is one to list.
+        let n = crate::shell::statusbar::jobs::listed().len();
+        if n > 0 {
+            v.push(core("create-jobs", "Show the sandboxes being created", &format!("{n} being created or waiting for you"), "plus", vec![], Run::CreateJobs));
         }
         v.push(core("sidebar", if self.sidebar_shown() { "Hide sandboxes" } else { "Show sandboxes" }, "", "columns", chord_keys("B"), Run::Sidebar));
         v.push(core("jarvis", if self.jarvis.open { "Close Jarvis" } else { "Open Jarvis" }, "", "jarvis", if mac() { chord_keys("J") } else { vec!["F7".into()] }, Run::Jarvis));
@@ -331,6 +333,7 @@ impl App {
                 }
             }
             Run::Sidebar => self.toggle_sidebar(),
+            Run::CreateJobs => self.statusbar_open_jobs(),
             Run::Jarvis => self.toggle_panel(None),
             Run::FocusPane(k) => {
                 let r = self.shown();

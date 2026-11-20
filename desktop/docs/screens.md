@@ -1395,12 +1395,20 @@ one intent at a time, so what is sent and what the core's dialogs list is
 never text from a screen.
 
 **Screens.** `create` (modal, 640 pt): the chooser, the workspace form and
-the chat form, by `data.create.dialog`. `create-jobs` (panel "New
-sandboxes"): every bring-up in progress, failed or waiting for an answer.
+the chat form, by `data.create.dialog`. Bring-ups have no screen and no
+panel: the core's status bar shows them (key `status-jobs`), and its press
+lists each one in a read-only popover (`status-jobs-pop`; per sandbox
+`job-<name>`, its steps `job-<name>-step-<i>`, `job-<name>-error`, and the
+two actions `job-retry-<name>`, `job-dismiss-<name>`). Escape, a press
+outside, or nothing left to list close it. A failure stays in the bar, red,
+until retried or dismissed, and says so in an error notice. The palette's
+"Show the sandboxes being created" and `open_panel {screen: "create-jobs"}`
+(kept as an alias) open the same popover; with nothing listed, a notice
+says "Nothing is being created."
 
-**Extras.** In the top bar: `extra-topbar-create` ("New", opens the
-chooser), and `extra-topbar-create-jobs` ("Creating", with a count) while a
-bring-up runs.
+**Extras.** `create` ("New", opens the chooser): drawn in the sidebar's
+header (`sidebar-new`), on the rail under Files while the sidebar is hidden
+(`rail-new`), and in the palette (⌃⌥N / Alt+N).
 
 **Data.** `data.create` (set by the core, not read from a route):
 
