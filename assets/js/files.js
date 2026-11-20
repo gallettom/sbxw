@@ -261,6 +261,7 @@ async function fxOpen(path, { push = true, select = null } = {}) {
   };
   // A folder with a README opens on it, the way a repository page does: the
   // preview has something to say before anything is clicked.
+  const explicit = !!select;
   if (!select) select = fx.entries.find((e) => e.kind === 'file' && FX_README.test(e.name))?.name || null;
   fx.selected = select;
   const ro = fx.places.mounts.find((m) => m.readonly && (fx.path === m.path || fx.path.startsWith(m.path + '/')));
@@ -276,7 +277,12 @@ async function fxOpen(path, { push = true, select = null } = {}) {
   renderList();
   if (select) {
     const entry = fx.entries.find((e) => e.name === select);
-    if (entry) fxShow(entry); else fxPreviewEmpty();
+    if (entry) fxShow(entry);
+    else {
+      fxPreviewEmpty();
+      // A file asked for by name (a link in a chat) that this folder lacks.
+      if (explicit) fxNotice(`Not found in ${filesTarget}: ${fxJoin(fx.path, select)}`, 'error');
+    }
   } else {
     fxPreviewEmpty();
   }
@@ -732,7 +738,7 @@ async function fetchCodemapState(name) {
 
 /// Open onto `.sbxw-artifacts/`, as the panel always has: the first listing
 /// (the workspace) tells us where that is, and whether it exists yet.
-async function openFilesModal(name) {
+async function openFilesModal(name, { artifacts: landOnArtifacts = true } = {}) {
   filesTarget = name;
   filesNameEl.textContent = name;
   modalOpen(filesOverlay);
@@ -743,9 +749,35 @@ async function openFilesModal(name) {
   fxFetchRecent(name);
   document.getElementById('fx-list-wrap').focus({ preventScroll: true });
   await fxOpen('', { push: false });
-  if (filesTarget !== name) return;
+  if (filesTarget !== name || !landOnArtifacts) return;
   const artifacts = fx.entries.find((e) => e.name === '.sbxw-artifacts' && e.kind === 'dir');
   if (artifacts && fx.places.artifacts) fxOpen(fx.places.artifacts, { push: true });
+}
+
+/// The absolute path `path` (as an agent wrote it: absolute, `~/`, or relative
+/// to the workspace) names in `sandbox`, or null when its workspace is not
+/// known yet. Pure: it reads what the page already holds, never the sandbox.
+function fxResolvePath(sandbox, path) {
+  if (path.startsWith('/')) return path;
+  const open = filesTarget === sandbox && filesOverlay.open;
+  if (path.startsWith('~/')) return (open ? fx.places.home : '/home/agent') + path.slice(1);
+  const ws = (open && fx.places.workspace)
+    || (typeof sandboxes !== 'undefined' && sandboxes.find((x) => x.name === sandbox)?.workspace) || null;
+  return ws ? fxJoin(ws, path.replace(/^\.\//, '')) : null;
+}
+
+/// Open `path` (as an agent wrote it: absolute, `~/`, or relative to the
+/// workspace) in `sandbox`'s Files tab, in its folder, selected and previewed
+/// through the same listing and preview as a click. Called by a press on a
+/// file link in a chat (chat-core.js); the daemon decides what may be read.
+async function fxOpenPath(sandbox, path) {
+  if (typeof path !== 'string' || !path) return;
+  if (filesTarget !== sandbox || !filesOverlay.open) await openFilesModal(sandbox, { artifacts: false });
+  if (filesTarget !== sandbox) return;
+  const abs = fxResolvePath(sandbox, path);
+  if (!abs) { fxNotice(`Not found in ${sandbox}: ${path}`, 'error'); return; }
+  const cut = abs.lastIndexOf('/');
+  await fxOpen(cut > 0 ? abs.slice(0, cut) : '/', { select: abs.slice(cut + 1) });
 }
 
 function closeFilesModal() { filesOverlay.close(); filesTarget = null; fx.seq++; }

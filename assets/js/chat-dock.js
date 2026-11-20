@@ -159,7 +159,7 @@ function cdRenderLog() {
   }
   const c = cdChat(cdActive);
   if (!c.log.length) cdLog.appendChild(chatLine('ai', 'No messages in this tab yet. Earlier turns of this chat are in its pane.', cdLabel(cdActive)));
-  c.log.forEach(m => cdLog.appendChild(chatLine(m.who, m.text, m.who === 'ai' ? 'claude' : null)));
+  c.log.forEach(m => cdLog.appendChild(chatLine(m.who, m.text, m.who === 'ai' ? 'claude' : null, cdSplit(cdActive).sandbox)));
   const name = cdActive;
   const { sandbox, thread } = cdSplit(name);
   const tail = chatTail(c, {
