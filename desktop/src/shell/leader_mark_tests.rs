@@ -107,3 +107,44 @@ fn a_single_terminal_page_tab_carries_the_mark_too() {
     }
     assert!(singles >= 1);
 }
+
+#[test]
+fn a_tab_naming_several_terminals_has_a_crown_before_each_leader() {
+    let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
+    set(&mut r, serde_json::json!([]));
+    let t = r.rt.state.tab_info(0);
+    assert_eq!(t.label, "a, b");
+    assert!(!t.leader && t.crowns() == 0 && !marked(&r, "page-1-leader-1"));
+    set(&mut r, serde_json::json!(["b"]));
+    let t = r.rt.state.tab_info(0);
+    assert_eq!(t.parts, vec![("a".to_string(), false), ("b".to_string(), true)]);
+    assert!(t.leader && t.crowns() == 1);
+    assert!(!marked(&r, "page-1-leader-1") && marked(&r, "page-1-leader-2"));
+    set(&mut r, serde_json::json!(["a", "b"]));
+    assert!(marked(&r, "page-1-leader-1") && marked(&r, "page-1-leader-2"));
+    let (c1, _) = r.rt.presented("page-1-leader-1").unwrap();
+    let (c2, _) = r.rt.presented("page-1-leader-2").unwrap();
+    assert!(c1[0] + c1[2] <= c2[0], "crowns {c1:?} {c2:?} do not overlap");
+    // The tab's width counts the crowns: the strip's fit stays inside the pager.
+    let (first, end) = r.rt.state.pager_fit();
+    assert!(first == 0 && end >= 1);
+}
+
+#[test]
+fn a_count_label_gets_one_crown_when_any_terminal_leads() {
+    let mut r = Rig::new(&["a", "b", "c", "d"], 1284.0, 816.0);
+    set(&mut r, serde_json::json!(["c"]));
+    r.rt.update(|s, _| {
+        for p in s.panes.iter_mut() {
+            p.sandbox = p.sandbox.as_ref().map(|n| format!("{n}-with-a-rather-long-sandbox-name"));
+        }
+        let names: Vec<String> = s.panes.iter().filter_map(|p| p.sandbox.clone()).collect();
+        s.sandboxes = names.iter().map(|n| crate::client::Sandbox::new(n, "claude", "running")).collect();
+        s.feats.data.insert("leads".into(), serde_json::json!([names[2]]));
+        s.push_data();
+    });
+    r.settle();
+    let t = r.rt.state.tab_info(0);
+    assert!(t.label.starts_with("Page ") && t.parts.is_empty() && t.leader);
+    assert!(marked(&r, "page-1-leader"));
+}
