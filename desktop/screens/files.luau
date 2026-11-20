@@ -256,17 +256,17 @@ end
 
 -- The list's own bar: the filter (typing anywhere in the list filters too),
 -- Hidden files as a small toggle, the sort. `w` is the list column's width
--- as the screen estimates it (the core's split keeps it above 220): from 290
+-- as the screen estimates it (the core's split keeps it above 220): from 310
 -- the words stay (Hidden, the sort's name); under that Hidden is an eye
 -- button and the sort an icon, each with its words in the tooltip, and the
 -- placeholder shortens. A row that still does not fit wraps onto a second
 -- line (the core wraps a row of controls) rather than cutting a control.
 local function listbar(ui, w)
-  local full = w >= 290
+  local full = w >= 310
   local sort_name = ui.sort == "date" and "Date" or "Name"
   local sort_items = { { id = "name", label = "Sort by name" }, { id = "date", label = "Sort by date, newest first" } }
   local kids = { gap = 8, w = "full", key = "files-listbar", wrap = true,
-    input{ id = "files-filter", value = ui.filter or "", placeholder = w >= 230 and "Filter by name" or "Filter", on = "filter", grow = 1, min_w = full and 110 or 80 },
+    input{ id = "files-filter", value = ui.filter or "", placeholder = full and "Filter by name" or "Filter", on = "filter", grow = 1, min_w = full and 124 or 80 },
   }
   if full then
     kids[#kids + 1] = checkbox{ "Hidden", value = ui.hidden == true, on = "hidden", key = "files-hidden" }
