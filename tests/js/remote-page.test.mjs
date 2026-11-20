@@ -1686,35 +1686,53 @@ test('level 2: bidi and invisible controls in agent text and paths are shown, ne
 });
 
 // ── API-level2 v1.1 and v1.2 ──
-test('Face ID setup: a hidden page drops the request; a lost request starts again, never guessed', { skip }, async () => {
+test('Face ID setup: a hidden page keeps the request and carries on; a replaced request starts again, never guessed', { skip }, async () => {
   await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true, l2: { approvals: { passkey: false } }, pkStates: ['pending'] });
   const { ctx, page, problems } = await phone();
+  const vis = state => page.evaluate(v => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => v });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, state);
   await openApprovals(page);
   await page.tap('#ap-enable');
   await page.waitForSelector('#pk-check:not([hidden])');
-  await page.evaluate(() => {
-    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-    document.dispatchEvent(new Event('visibilitychange'));
-  });
-  await page.waitForSelector('#s-passkey[data-state="expired"]');
-  assert.equal(await page.textContent('#pk-text'), 'This request expired. Start again.');
+  await page.waitForFunction(async () => (await (await fetch('/__log')).json()).some(e => e.path === '/r/passkey/status'));
+  // The phone locks while the person types the digits at the Mac.
+  await vis('hidden');
+  await page.waitForTimeout(300);
   const n = (await calls('GET', '/r/passkey/status')).length;
-  await page.waitForTimeout(2500);
-  assert.equal((await calls('GET', '/r/passkey/status')).length, n, 'no more polling with a dropped id');
-  // Start again: a new request, a new id.
-  await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' }); });
   await ctl({ pkStates: ['granted'] });
-  await page.tap('#pk-again');
-  await page.waitForSelector('#pk-go:not([hidden])', { timeout: 10000 });
-  assert.equal((await calls('POST', '/r/passkey/start')).length, 2);
+  await page.waitForTimeout(3000);
+  assert.equal((await calls('GET', '/r/passkey/status')).length, n, 'no polling while hidden');
+  assert.equal(await page.getAttribute('#s-passkey', 'data-state'), 'pending', 'the ceremony is kept');
+  // Back: one look at once, with the same id, and on.
+  await vis('visible');
+  await page.waitForSelector('#pk-go:not([hidden])', { timeout: 1500 });
+  const st = await calls('GET', '/r/passkey/status');
+  assert.equal(st.length, n + 1, 'one look on return');
+  assert.equal(new Set(st.map(e => e.query)).size, 1, 'the same request_id throughout');
+  await page.tap('#pk-go');
+  await page.waitForSelector('#s-passkey[data-state="registered"]');
+  assert.equal((await calls('POST', '/r/passkey/register'))[0].body.request_id, st[0].query.slice('?request_id='.length));
+  assert.equal((await calls('POST', '/r/passkey/start')).length, 1, 'no new request was needed');
   // Another request replaced this one at the daemon: status says "none".
   await ctl({ l2Reset: true, l2: { approvals: { passkey: false } } });
   await page.tap('#back');
   await page.tap('#ap-enable');
   await page.waitForSelector('#pk-check:not([hidden])');
-  await fetch(`${base()}/r/passkey/start`, { method: 'POST', body: '{}' }); // a newer request (no cookie needed by the stand-in)
+  await fetch(`${base()}/r/passkey/start`, { method: 'POST', body: '{}' }); // a newer request
   await page.waitForSelector('#s-passkey[data-state="expired"]', { timeout: 10000 });
-  assert.equal((await calls('POST', '/r/passkey/register')).length, 0);
+  assert.equal(await page.textContent('#pk-text'), 'This request expired. Start again.');
+  assert.equal((await calls('POST', '/r/passkey/register')).length, 1);
+  // Leaving the Face ID screen drops the id: no more looks.
+  await page.tap('#pk-again');
+  await page.waitForSelector('#pk-check:not([hidden])');
+  await page.tap('#back');
+  await page.waitForSelector('#s-approvals:not([hidden])');
+  const m = (await calls('GET', '/r/passkey/status')).length;
+  await page.waitForTimeout(2500);
+  assert.equal((await calls('GET', '/r/passkey/status')).length, m, 'the id went with the screen');
+  await cleanSpy(page);
   assert.deepEqual(problems, []);
   await ctx.close();
 });

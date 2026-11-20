@@ -641,9 +641,12 @@ a standalone app named sbxw.
   No passkey on this device: the lists, read only, and "Enable Face ID on this device",
   which shows six digits to type at the Mac, waits for the grant, then creates the passkey
   on a tap (`navigator.credentials.create`, user verification required, attestation none).
-  The ceremony's `request_id` lives in memory only and goes with each step; it is dropped
-  when the ceremony ends or the page hides (then: "Start again"). Whether Face ID is set up
-  is read from `GET /r/approvals`.
+  The ceremony's `request_id` lives in memory only and goes with each step. It survives the
+  page being hidden (a phone that locks while the person types the digits at the Mac: the
+  page looks once on return and carries on), and goes when the ceremony ends, the Face ID
+  screen is left or the page is unloaded; a lost or replaced request says "Start again".
+  Whether Face ID is set up is read from `GET /r/approvals`. An approval's challenge and
+  assertion still go as soon as the sheet closes or the page hides.
   A detail shows its item as text (a plan's threads with long goals folded, a merge's
   branches with tips, commits and files as numbers and paths and never a diff, a network
   request with only the options the daemon lists and "Allowing this needs your Mac", a

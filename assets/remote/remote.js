@@ -1917,15 +1917,24 @@
 
   // ── Enabling Face ID on this device ──
   let pkPoll = null;
-  // The ceremony's request_id (v1.1): in this variable only, never stored,
-  // dropped when the ceremony ends, the screen is left or the page hides.
+  let pkPollNow = null; // the running ceremony's poll, to resume it
+  // The ceremony's request_id (v1.1): in this variable only, never stored
+  // or put in a URL. It survives the page being hidden (a phone that locks
+  // while the person types the digits at the Mac); it goes when the
+  // ceremony ends, the Face ID screen is left, or the page is unloaded.
   let pkReq = null;
-  function stopPasskeyPoll() { if (pkPoll) { clearTimeout(pkPoll); pkPoll = null; } pkReq = null; }
+  function stopPasskeyPoll() { if (pkPoll) { clearTimeout(pkPoll); pkPoll = null; } pkReq = null; pkPollNow = null; }
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'hidden' || !pkReq) return;
-    stopPasskeyPoll();
-    if (st.screen === 's-passkey') pkShow('expired');
+    if (!pkReq || !pkPollNow) return;
+    if (document.visibilityState === 'hidden') {
+      // Hidden: no polling, the id kept.
+      if (pkPoll) { clearTimeout(pkPoll); pkPoll = null; }
+    } else if (!pkPoll && st.screen === 's-passkey') {
+      // Back: look once now with the same id, and carry on.
+      pkPollNow();
+    }
   });
+  window.addEventListener('pagehide', stopPasskeyPoll);
   function pkShow(state, check) {
     $('pk-check').hidden = !check;
     if (check) $('pk-check').textContent = /^\d{6}$/.test(check) ? `${check.slice(0, 3)} ${check.slice(3)}` : check;
@@ -1957,6 +1966,7 @@
     const poll = async () => {
       pkPoll = null;
       if (st.screen !== 's-passkey' || !pkReq) return;
+      if (document.visibilityState === 'hidden') return; // resumed when visible
       if (Date.now() > until) { stopPasskeyPoll(); return pkShow('expired'); }
       const r = await l2.passkeyStatus(pkReq);
       if (st.screen !== 's-passkey' || !pkReq) return;
@@ -1966,8 +1976,9 @@
       // "none": this request is not the device's any more (expired, or a
       // newer one replaced it): start again, never guess.
       if (state === 'none') { stopPasskeyPoll(); return pkShow('expired'); }
-      pkPoll = setTimeout(poll, 2000);
+      if (document.visibilityState !== 'hidden') pkPoll = setTimeout(poll, 2000);
     };
+    pkPollNow = poll;
     pkPoll = setTimeout(poll, 1500);
   }
   $('ap-enable').addEventListener('click', startPasskey);
