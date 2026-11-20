@@ -247,6 +247,69 @@ Notes:
   (`CSI 6n`, `CSI c`) are stripped, so a reconnect doesn't type
   `37;3R37;3R…` onto your command line.
 
+### Files and terminal panes
+
+Two things work on a file, in every pane. The code is `assets/js/pane-files.js`;
+it adds no route, origin or permission, changes nothing in the CSP, the token,
+the WebSocket protocol or what the daemon accepts, and loads no new library
+(it uses xterm's own `registerLinkProvider`).
+
+**A file path in the terminal is a link.** Hover it: it is underlined, the
+pointer shows a hand, and a tooltip gives the resolved absolute path and the
+sandbox (and thread) a press would look in. **Cmd + click** (macOS) or
+**Ctrl + click** (elsewhere) opens the [Project panel's Files tab](#files) on
+that file, in that pane's sandbox, through the same `fxOpenPath` the
+[chat's file links](chat.md) use. A plain click and a text selection keep
+working. Terminal web links have no click gesture of their own here (plain URLs
+are not links; OSC 8 hyperlinks keep their behaviour, http and https only), so
+Cmd/Ctrl + click is the one this adds.
+
+- **What counts as a path** is the chat's rule (`chatFilePath`): an extension
+  from the same list, a slash in it, no scheme, no `..`, at most 300 characters,
+  an optional `:line` (the line is ignored by the preview).
+- **Relative paths** are relative to the shell's current directory, which the
+  page cannot know. They are read against the sandbox's workspace, as the Files
+  tab does; in a thread's pane (agent or shell) against that thread's worktree,
+  `<workspace>/.sbxw-worktrees/<thread>`, when the thread has a worktree of its
+  own. A session on the main checkout uses the workspace. A shared plan's
+  threads use a worktree whose folder name the page does not hold, so the
+  workspace is used there. A shell where you `cd` somewhere else can therefore
+  resolve a relative path to the wrong place: the tooltip shows where before you
+  press, and the Files tab says *Not found* when the file is not there. Absolute
+  and `~/` paths are exact.
+- **Wrapped lines**: a path the terminal cut across rows links as one when
+  xterm reports the rows as one wrapped line (up to 12 rows, 2,000 characters;
+  a longer line gives no link).
+- **Nothing is requested** on render or hover. The provider runs on demand for
+  the line under the pointer, in linear time. Terminal output is data: a path
+  is shown as text and passed as a value; it never enters HTML, an attribute or
+  a URL.
+
+**Dropping files on a pane.** Drag files over a pane and it shows *Drop to
+send to `<sandbox>`* (and the thread). A drag with no file (text, a link) does
+what it did. On drop, before any byte is sent, the same checks as the
+[chat attach](chat.md#attaching-files): empty files, over 128 MB, folders and
+more than 10 files are refused with a reason, and a name that looks like a
+secret waits for the tick *I have looked at these files and want to attach
+them*. The files then upload to that pane's sandbox through the sidebar Upload's
+route, with progress on the pane; a failure shows its message and **Retry**.
+When all are uploaded, the paths the daemon answered are typed at the pane's
+prompt, shell-quoted where needed and separated by spaces, with **no Return**:
+you read the line and press Enter. The line is built only from the daemon's
+answers, never from the dropped file's own name.
+
+If the pane cannot take keys at that moment, nothing is typed; a notice on the
+pane gives the reason, the line, and a **Copy** button. The cases: terminals
+held while you review a Jarvis high-risk proposal; the pane is not on screen;
+the pane shows another session now; the terminal is not connected
+(reconnecting or closed); a dialog is open over the terminals; a path with a
+control character. The sidebar Upload box uses the same function, so it no
+longer says *attached* when the paths were not typed.
+
+While Jarvis holds the terminals, the hold guard still stops a dropped or
+pasted file, anywhere. The window-level guard from the chat attach still stops
+the browser opening a file dropped outside any target, including over the panes.
+
 ## The Kanban
 
 The tickets of a sandbox, or of every sandbox, in five columns: **Planned**,
@@ -772,6 +835,7 @@ with the tab beside it.
 | Talk to Jarvis (hold) | F8 | F8 |
 | Dictate into the focused terminal (hold) | F9 | F9 |
 | Write the lens (in its dialog) | ⌘↩ | Ctrl+Enter |
+| Open a file path printed in a terminal (hover to see where) | ⌘ + click | Ctrl + click |
 
 On a Mac, Option alone types characters (⌥N is the `~` dead key), so the app
 uses ⌃⌥. Elsewhere Alt alone stays, because Ctrl+Alt is AltGr on many Windows
