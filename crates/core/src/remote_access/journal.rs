@@ -69,8 +69,8 @@ mod tests {
         let text = to_lines(&v[..2]);
         assert_eq!(text, "{\"at_ms\":5,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"message\"}\n{\"at_ms\":6,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"message\"}\n");
         let up = Entry { at_ms: 9, device_id: "d".into(), device_name: "n".into(), kind: Kind::Upload, size: Some(super::super::uploads::SizeClass::Over10Mb) };
-        assert_eq!(to_lines(&[up.clone()]), "{\"at_ms\":9,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"upload\",\"size\":\"over_10mb\"}\n");
-        assert_eq!(parse_lines(&to_lines(&[up.clone()])), [up]);
+        assert_eq!(to_lines(std::slice::from_ref(&up)), "{\"at_ms\":9,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"upload\",\"size\":\"over_10mb\"}\n");
+        assert_eq!(parse_lines(&to_lines(std::slice::from_ref(&up))), [up]);
         assert_eq!(parse_lines(&format!("{text}garbage\n{{\"at_ms\":1,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"message\",\"text\":\"x\"}}\n")).len(), 2, "no extra field is read back");
     }
 }
