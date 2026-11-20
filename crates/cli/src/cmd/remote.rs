@@ -40,7 +40,9 @@ pub enum RemoteCmd {
     Journal {
         #[arg(long, default_value_t = 50)]
         limit: usize,
-    },
+    },    /// Approving from the phone with Face ID (level 2): on, off, status, allow a device, revoke its passkey.
+    #[command(subcommand)]
+    Approvals(super::remote_approvals::ApprovalsCmd),
 }
 
 /// What `on` asks, in one sentence.
@@ -88,6 +90,7 @@ pub fn run(cmd: RemoteCmd, config: &Path) -> Result<()> {
             check(&daemon.post("/api/remote/tailnet/forget", json!({}))?)?;
             println!("the tailnet machine is forgotten. Remove `sbxw` from your tailnet's Machines page if it is still listed.");
         }
+        RemoteCmd::Approvals(cmd) => super::remote_approvals::run(&daemon, cmd, terminal)?,
         RemoteCmd::Journal { limit } => {
             let list = daemon.get(&format!("/api/remote/journal?limit={limit}"))?;
             for e in list.as_array().cloned().unwrap_or_default() {
@@ -98,23 +101,23 @@ pub fn run(cmd: RemoteCmd, config: &Path) -> Result<()> {
     Ok(())
 }
 
-fn s(v: &Value) -> String {
+pub(super) fn s(v: &Value) -> String {
     v.as_str().unwrap_or("").to_string()
 }
 
 /// A device id is hex; anything else is sent percent-encoded, never as a path.
-fn url_segment(id: &str) -> String {
+pub(super) fn url_segment(id: &str) -> String {
     id.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
-fn check(r: &Value) -> Result<()> {
+pub(super) fn check(r: &Value) -> Result<()> {
     if r["ok"].as_bool() == Some(false) {
         bail!("{}", r["error"].as_str().unwrap_or("the daemon refused"));
     }
     Ok(())
 }
 
-fn ago(ms: &Value) -> String {
+pub(super) fn ago(ms: &Value) -> String {
     let Some(ms) = ms.as_u64() else { return "-".into() };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let s = now.saturating_sub(ms) / 1000;
@@ -292,7 +295,7 @@ pub fn pair_intro(url: &str) -> Vec<String> {
 }
 
 /// The digits as typed: spaces dropped; anything but six digits asks again.
-fn read_digits(input: &mut impl BufRead) -> Result<String> {
+pub(super) fn read_digits(input: &mut impl BufRead) -> Result<String> {
     loop {
         eprint!("Digits on the phone: ");
         std::io::stderr().flush()?;
