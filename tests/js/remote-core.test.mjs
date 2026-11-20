@@ -720,6 +720,9 @@ test('dictation: a final text is inserted once', () => {
   // Re-delivered as the same, or as cumulative, within one round.
   assert.equal(plain(rc.rcSpeechRound(SR([['Hello there', true], ['hello there.', true]]))).final, 'hello there.');
   assert.equal(plain(rc.rcSpeechRound(SR([['Plan the table', true], ['Plan the table and the index', true]]))).final, 'Plan the table and the index');
+  // Each final carrying the whole text so far, after separate finals.
+  assert.equal(plain(rc.rcSpeechRound(SR([['add an', true], ['index', true], ['Add an index on the id', true]]))).final, 'Add an index on the id');
+  assert.equal(plain(rc.rcSpeechRound(SR([['add an index', true], ['add an index', true], ['on the id', true]]))).final, 'add an index on the id', 'A A B gives A B');
   // Distinct sentences stay; a one-word repeat is a person's.
   assert.equal(plain(rc.rcSpeechRound(SR([['one two', true], ['three four', true]]))).final, 'one two three four');
   assert.equal(plain(rc.rcSpeechRound(SR([['yes', true], ['yes', true]]))).final, 'yes yes');

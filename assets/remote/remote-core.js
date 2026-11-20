@@ -1056,7 +1056,10 @@ function rcFinalSegments(results) {
     if (!r || !r.isFinal) continue;
     const t = r[0] && typeof r[0].transcript === 'string' ? r[0].transcript.replace(/\s+/g, ' ').trim() : '';
     if (!t) continue;
-    if (out.length && rcRepeats(out[out.length - 1], t)) out[out.length - 1] = t; else out.push(t);
+    // The whole text so far, carried again: it replaces all of it.
+    if (out.length > 1 && rcRepeats(out.join(' '), t)) out.splice(0, out.length, t);
+    else if (out.length && rcRepeats(out[out.length - 1], t)) out[out.length - 1] = t;
+    else out.push(t);
   }
   return out;
 }
