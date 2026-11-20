@@ -545,8 +545,9 @@ A file from the phone is data handed to a leader, never an action:
   on the Mac the 6 digits the phone shows. The sidecar also lets only your own devices
   through (see "The Tailscale node").
 - *A stolen or lost phone.* Revoke it: access ends at once, including open pages. Unused
-  for 30 days, it is dropped anyway. The phone keeps no conversation (no storage, no
-  service worker).
+  for 30 days, it is dropped anyway. The phone keeps no conversation (no storage; its
+  service worker only shows one of two fixed notification texts, see "Notifications on a
+  locked phone").
 - *A web page you visit, on the phone or the Mac.* The token is an `HttpOnly; Secure;
   SameSite=Strict` cookie named `__Host-sbxw_device`, bound to the tailnet name. Every
   write must carry the page's own `Origin`; the `Host` must be the tailnet name. No CORS,
@@ -734,8 +735,8 @@ a standalone app named sbxw.
 Only two UI preferences, in `localStorage` under `sbxw-remote-prefs`: the device name, to
 prefill pairing, and the dictation mode when it is iPhone. No
 message, answer, transcription, audio, file name or conversation is stored on the phone (no
-`sessionStorage`, IndexedDB, Cache API or service worker), and nothing is written to the
-console. The device token is an HttpOnly cookie the page never sees.
+`sessionStorage`, IndexedDB or Cache API; the service worker `/sw.js` has no `fetch`
+handler and stores nothing), and nothing is written to the console. The device token is an HttpOnly cookie the page never sees.
 
 #### Agent text is data
 
@@ -885,6 +886,43 @@ fifth closes its oldest).
 **Not verified on real hardware:** Face ID on a real iPhone, Safari's WebAuthn on a
 `.ts.net` name, a real merge started from the phone, and whether sbx's Allow on a refused
 host writes a lasting rule.
+
+### Notifications on a locked phone
+
+A locked iPhone can only be woken by Apple's push service (Web Push), so this is the one
+place where something leaves the Mac for a third party. The person accepted it on these
+terms (remote-access-spec.md, D1 to D7); contract: `.sbxw-artifacts/remote/API.md` 2.8 and
+`API-push.md`.
+
+- **Off until the phone turns it on**, by a tap, per phone. The Mac turns one off with
+  `sbxw remote notifications-off <id>`; `sbxw remote off` stops all of them (the sidecar
+  that sends stops), and unpairing a phone deletes its subscription.
+- **What Apple sees:** the Mac's public IP, the phone's subscription address, the time, a
+  fixed size (134 bytes), a fixed `Topic`, and a token signed with the Mac's own push key
+  naming the public sbxw project URL. That is the timing of when agents wait for the
+  person. **What it cannot see:** anything else; the payload, a kind letter and a badge
+  number, is encrypted to the phone's key. No sandbox name, plan title, message or device
+  name is in it; the phone picks one of two fixed French texts.
+- **Who sends:** `sbxw-tailnet`, started with `--push` only while remote access is on and
+  a phone has a subscription. It takes jobs only from the daemon over a pipe (no socket),
+  posts only to `https://*.push.apple.com:443` after checking that the address is public,
+  builds the request itself, and follows no redirect: it is not a general door to the
+  Internet (tailnet/README.md, "Push").
+- **What causes a push:** only a change of state seen by one daemon task: a reachable
+  session starting to ask for the person, or more plans and merges waiting. No route causes
+  one, an agent can cause at most the same push as its own question would (a thread, a
+  background session or Jarvis cannot, as they are not reached), and a network request
+  never does. Per phone: one per kind per 2 minutes, 20 an hour. A phone whose page is open
+  gets none.
+- **A forged subscription** (a phone sending an endpoint that is not Apple's) is refused at
+  subscribe with the same allow-list the sidecar applies again before each send, and never
+  stored.
+- **Never logged or journaled:** the endpoint, the phone's keys, the Mac's push key
+  (`~/.sbxw/remote/push.json`, `0600`), a job. The journal says `push_on`, `push_off`,
+  `push_sent` (kind), `push_failed` (status class), `push_gone`.
+
+**Not verified on real hardware:** the permission prompt, delivery to a locked phone with
+the app closed, the badge, and that Apple accepts the project URL as the token's contact.
 
 ### The Tailscale node
 
