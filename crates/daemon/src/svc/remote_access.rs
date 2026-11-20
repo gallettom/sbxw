@@ -12,7 +12,7 @@ use sbxw_core::agents::SessionState;
 use sbxw_core::remote_access::devices::{DeviceBook, DeviceView};
 use sbxw_core::remote_access::journal::{self, Entry, Kind};
 use sbxw_core::remote_access::limits::Limiter;
-use sbxw_core::remote_access::pairing::{PairingBook, RequestView, StartError, Status};
+use sbxw_core::remote_access::pairing::{ApproveError, PairingBook, RequestView, StartError, Status};
 use sbxw_core::remote_access::view::{phone_activity, phone_page, phone_question, phone_state, PhonePage, PhoneQuestion};
 use sbxw_core::remote_access::{self as rules, State, TailnetStatus};
 use sbxw_core::session::{SessionKey, SessionKind};
@@ -63,6 +63,9 @@ pub struct RemoteRuntime {
     pair_limit: Limiter,
     status_limit: Limiter,
     bad_token_limit: Limiter,
+    /// Each paired device's own rate, keyed by device id: protects the
+    /// daemon's work without letting one client starve another.
+    device_limit: Limiter,
     listener: Option<Listener>,
     sidecar: Option<tokio::process::Child>,
     pub sidecar_program: Sidecar,
@@ -72,6 +75,8 @@ pub struct RemoteRuntime {
     /// Tests: bind here instead of `remote_addr` (port 0 picks one).
     pub addr_override: Option<String>,
     kicks: tokio::sync::broadcast::Sender<Kick>,
+    /// One phone message typed at a time, so two never interleave.
+    typing: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl RemoteRuntime {
@@ -100,6 +105,7 @@ impl RemoteRuntime {
             pair_limit: Limiter::new(60_000, 5, 20),
             status_limit: Limiter::new(60_000, 120, 600),
             bad_token_limit: Limiter::new(60_000, 10, 30),
+            device_limit: Limiter::new(60_000, 600, u32::MAX),
             listener: None,
             sidecar: None,
             sidecar_program: Sidecar::Beside,
@@ -107,6 +113,7 @@ impl RemoteRuntime {
             tailnet_override: None,
             addr_override: None,
             kicks,
+            typing: Arc::new(tokio::sync::Mutex::new(())),
         };
         rt.expire(now_ms());
         rt
@@ -252,10 +259,69 @@ pub enum AuthError {
     Limited(u64),
 }
 
+/// The fixed refusals of a message, each with a code the page can show.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Reason {
+    /// The leader waits for an answer at the Mac (a permission, a question,
+    /// a dialog), or its state is not known: 409.
+    NeedsMac,
+    /// The leader announced a tool call in the last seconds; a permission
+    /// prompt may be on its way: 409.
+    Busy,
+    /// The leader's terminal has bracketed paste off: 409, fail closed.
+    NoPaste,
+    /// Typed, but the leader started asking something before the Return:
+    /// the text waits unsent in the leader's input: 409.
+    NotSubmitted,
+    /// A line starts with `!`, `/` or `#`: 400.
+    Command,
+    /// A control character other than a line feed: 400.
+    Control,
+    /// Empty: 400.
+    Empty,
+}
+
+impl Reason {
+    pub fn code(self) -> &'static str {
+        match self {
+            Reason::NeedsMac => "needs_mac",
+            Reason::Busy => "busy",
+            Reason::NoPaste => "no_paste",
+            Reason::NotSubmitted => "not_submitted",
+            Reason::Command => "command",
+            Reason::Control => "control",
+            Reason::Empty => "empty",
+        }
+    }
+    pub fn status_conflict(self) -> bool {
+        matches!(self, Reason::NeedsMac | Reason::Busy | Reason::NoPaste | Reason::NotSubmitted)
+    }
+    pub fn sentence(self) -> &'static str {
+        match self {
+            Reason::NeedsMac => "This needs your Mac: the leader is waiting for an answer there.",
+            Reason::Busy => "The leader is starting a step. Try again in a few seconds.",
+            Reason::NoPaste => "The leader's terminal does not take a paste right now. Send it from the Mac.",
+            Reason::NotSubmitted => "Not sent: the leader started asking something at the Mac while the text was typed. It waits, unsent, in the leader's input.",
+            Reason::Command => "A message from the phone cannot have a line starting with !, / or #: shell and slash commands are for the Mac.",
+            Reason::Control => "The message holds a control character. Only plain text and line breaks are sent.",
+            Reason::Empty => "The message is empty.",
+        }
+    }
+}
+
+/// A tool call announced this recently may still bring a permission prompt
+/// whose hook has not arrived: no message is typed meanwhile.
+pub const TOOL_CALL_QUIET_MS: u64 = 3_000;
+/// After the paste has echoed, how long to wait for a late hook before the
+/// state is checked again and the Return sent.
+pub const HOOK_GRACE: Duration = Duration::from_millis(600);
+
 /// What a phone is refused, and why, in a status the route maps.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Refusal {
     NotFound,
+    /// A refusal the page shows by its fixed code (`reason` in the answer).
+    Reason(Reason),
     Forbidden(String),
     Conflict(String),
     Unavailable(String),
@@ -279,6 +345,8 @@ pub struct LeaderView {
 #[derive(Serialize, Debug)]
 pub struct PairingCode {
     pub code: String,
+    /// What the requests made with this code carry (`code_id`).
+    pub code_id: String,
     pub url: String,
     pub expires_ms: u64,
 }
@@ -430,8 +498,10 @@ impl App {
         if let Some(l) = listener {
             let _ = l.shutdown.send(true);
             // Streams were told to end; a connection that lingers is cut.
-            if tokio::time::timeout(Duration::from_secs(2), &mut { l.task }).await.is_err() {
-                tracing::debug!("remote access: listener did not drain in 2 s");
+            let mut task = l.task;
+            if tokio::time::timeout(Duration::from_secs(2), &mut task).await.is_err() {
+                tracing::debug!("remote access: listener did not drain in 2 s, aborted");
+                task.abort();
             }
         }
         if let Some(mut c) = sidecar {
@@ -496,21 +566,30 @@ impl App {
         let Some(name) = rt.serving_name() else {
             return Err("the tailnet is not serving yet: wait until the sidecar says running".into());
         };
-        let (code, expires_ms) = rt.pairing.new_code(now_ms());
-        tracing::info!("remote access: new pairing code (valid 5 minutes)");
-        Ok(PairingCode { url: format!("https://{name}/#pair={code}"), code, expires_ms })
+        let (code, code_id, expires_ms) = rt.pairing.new_code(now_ms());
+        tracing::info!("remote access: new pairing code (valid 5 minutes; earlier requests voided)");
+        Ok(PairingCode { url: format!("https://{name}/#pair={code}"), code, code_id, expires_ms })
     }
 
     pub fn remote_pairing_requests(&self) -> Vec<RequestView> {
         self.remote_access.lock().unwrap().pairing.pending(now_ms())
     }
 
-    pub fn remote_pairing_approve(&self, id: &str) -> bool {
-        let ok = self.remote_access.lock().unwrap().pairing.approve(id, now_ms());
-        if ok {
-            tracing::info!("remote access: pairing request approved on the Mac");
+    /// The person approves on the Mac with the six digits the phone shows.
+    pub fn remote_pairing_approve(&self, id: &str, check: &str) -> Result<(), ApproveError> {
+        let mut rt = self.remote_access.lock().unwrap();
+        match rt.pairing.approve(id, check, now_ms()) {
+            Ok(_) => {
+                tracing::info!("remote access: pairing request approved on the Mac");
+                Ok(())
+            }
+            Err(ApproveError::Refused) => {
+                rt.record("", "", Kind::Refused);
+                tracing::info!("remote access: pairing request refused after wrong digits");
+                Err(ApproveError::Refused)
+            }
+            Err(e) => Err(e),
         }
-        ok
     }
 
     pub fn remote_pairing_refuse(&self, id: &str) -> bool {
@@ -527,10 +606,18 @@ impl App {
 
     // ── Pairing (the phone's side) ───────────────────────────────────────
 
+    /// A phone starts pairing. The code is compared first: the request that
+    /// holds the valid code is never limited by other clients' failures;
+    /// only failures are counted and limited.
     pub fn remote_pair_start(&self, source: &str, code: &str, device_name: &str) -> Result<RequestView, Refusal> {
         let mut rt = self.remote_access.lock().unwrap();
         let now = now_ms();
-        rt.pair_limit.hit(source, now).map_err(Refusal::Limited)?;
+        if !rt.pairing.code_valid(code, now) {
+            rt.pair_limit.check(source, now).map_err(Refusal::Limited)?;
+            let _ = rt.pair_limit.hit(source, now);
+            tracing::info!("remote access: pairing start with a code that is not valid");
+            return Err(Refusal::Forbidden("this pairing code is not valid".into()));
+        }
         let name = rules::clean_device_name(device_name).ok_or_else(|| Refusal::Bad("device_name must be 1 to 64 plain characters".into()))?;
         match rt.pairing.start(code, &name, now) {
             Ok(v) => {
@@ -550,7 +637,12 @@ impl App {
     pub fn remote_pair_status(&self, source: &str, id: &str) -> Result<(Status, Option<(DeviceView, String)>), Refusal> {
         let mut rt = self.remote_access.lock().unwrap();
         let now = now_ms();
-        rt.status_limit.hit(source, now).map_err(Refusal::Limited)?;
+        // A request id a phone was given is never limited; unknown ones are.
+        if !rt.pairing.knows(id, now) {
+            rt.status_limit.check(source, now).map_err(Refusal::Limited)?;
+            let _ = rt.status_limit.hit(source, now);
+            return Ok((Status::Expired, None));
+        }
         match rt.pairing.status(id, now) {
             Status::Approved { device_name } => match rt.devices.mint(&device_name, now) {
                 Some((d, token)) => {
@@ -568,22 +660,28 @@ impl App {
     // ── Devices ──────────────────────────────────────────────────────────
 
     /// The device a presented cookie belongs to.
+    /// The device a presented cookie belongs to. The token is looked up
+    /// first (a hash and at most 32 comparisons): a paired device is limited
+    /// only by its own rate (`device_limit`), never by other clients'
+    /// failures. Only failures are counted against their source and in all.
     pub fn remote_auth(&self, source: &str, token: Option<&str>) -> Result<DeviceCtx, AuthError> {
         let mut rt = self.remote_access.lock().unwrap();
         let now = now_ms();
-        rt.bad_token_limit.check(source, now).map_err(AuthError::Limited)?;
         let Some(token) = token.filter(|t| !t.is_empty()) else {
             return Err(AuthError::NotPaired);
         };
         rt.expire(now);
         match rt.devices.find(token, now).map(|d| DeviceCtx { id: d.id.clone(), name: d.name.clone() }) {
             Some(d) => {
+                let id = d.id.clone();
+                rt.device_limit.hit(&id, now).map_err(AuthError::Limited)?;
                 if rt.devices.touch(&d.id, now) {
                     rt.save();
                 }
                 Ok(d)
             }
             None => {
+                rt.bad_token_limit.check(source, now).map_err(AuthError::Limited)?;
                 let _ = rt.bad_token_limit.hit(source, now);
                 tracing::info!("remote access: a device cookie that matches no device");
                 Err(AuthError::NotPaired)
@@ -715,34 +813,99 @@ impl App {
 
     // ── Acting on a leader ───────────────────────────────────────────────
 
-    /// Type `text` into the leader as the person: masked first, then the
-    /// refusals `chat_push` applies to a named sandbox; never creates one.
-    pub async fn remote_message(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, text: &str) -> Result<usize, Refusal> {
-        let text = text.trim();
-        if text.is_empty() {
-            return Err(Refusal::Bad("empty message".into()));
+    /// Whether typed text would land in the leader's prompt right now, and
+    /// its terminal. Refused (fail closed) when the leader is not a leader any
+    /// more, its state is unknown, it waits for the person (attention, a
+    /// question, a permission prompt), it announced a tool call in the last
+    /// [`TOOL_CALL_QUIET_MS`] (a permission prompt may be drawn before its
+    /// hook arrives), or its terminal has bracketed paste off.
+    fn remote_can_type(&self, sb: &SandboxRef) -> Result<Arc<crate::pty::PtySession>, Reason> {
+        if !self.leading().contains(&sb.to_string()) {
+            return Err(Reason::NeedsMac);
         }
-        let safe = self.anonymise(text).map_err(Refusal::Unavailable)?;
+        let info = self.leader_info(sb).ok_or(Reason::NeedsMac)?;
+        if !matches!(info.state, SessionState::Idle | SessionState::Working) {
+            return Err(Reason::NeedsMac);
+        }
+        if info.question.is_some() || info.steps.as_ref().is_some_and(|s| !s.is_empty()) {
+            return Err(Reason::NeedsMac);
+        }
+        {
+            let book = self.agents.lock().unwrap();
+            if let Ok(key) = book.answerable(&sb.to_string()) {
+                if !book.prompt_sizes(&key).is_empty() {
+                    return Err(Reason::NeedsMac);
+                }
+            }
+        }
+        let sid = info.session_id.as_deref().ok_or(Reason::NeedsMac)?;
+        if let Some(last) = self.history_page(sb, sid, None, Some(1)).and_then(|p| p.items.last().cloned()) {
+            use sbxw_core::history::Kind as H;
+            match last.kind {
+                H::Permission | H::Question => return Err(Reason::NeedsMac),
+                H::ToolCall if now_ms().saturating_sub(last.at) < TOOL_CALL_QUIET_MS => return Err(Reason::Busy),
+                _ => {}
+            }
+        }
+        let s = self.sessions.live(&SessionKey::agent(sb)).ok_or(Reason::NeedsMac)?;
+        if !sbxw_core::terminal::bracketed_paste_enabled(&s.replay()) {
+            return Err(Reason::NoPaste);
+        }
+        Ok(s)
+    }
+
+    /// Type `text` into the leader as the person (F1, F6 of the review):
+    /// 1. refuse a text with a command line or a control character;
+    /// 2. mask it; the refusals `chat_push` applies to a named sandbox;
+    /// 3. refuse unless typed text lands in the prompt now ([`Self::remote_can_type`]);
+    /// 4. send it as ONE bracketed paste (a dialog does not read a paste as key
+    ///    presses), wait for the echo and [`HOOK_GRACE`] for a late hook;
+    /// 5. check the same state again: changed, no Return (`not_submitted`);
+    /// 6. only then the Return.
+    ///
+    /// Residual window: a dialog whose hook reaches the daemon later than
+    /// about a second after it is drawn, or one drawn between step 5 and 6.
+    pub async fn remote_message(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, text: &str) -> Result<usize, Refusal> {
+        use sbxw_core::remote_access::MessageRefusal as M;
+        if let Err(m) = rules::check_message(text) {
+            return Err(Refusal::Reason(match m {
+                M::Empty => Reason::Empty,
+                M::Command => Reason::Command,
+                M::Control => Reason::Control,
+            }));
+        }
+        let safe = self.anonymise(text.trim()).map_err(Refusal::Unavailable)?;
         if let Err(e) = self.agents.lock().unwrap().can_type_into(&sb.to_string()) {
             self.remote_record(d, Kind::Refused);
             return Err(Refusal::Conflict(format!("'{sb}': {e}")));
         }
-        if !self.sessions.is_live(&SessionKey::agent(sb)) {
-            self.remote_record(d, Kind::Refused);
-            return Err(Refusal::Conflict(format!("'{sb}' has no live agent session")));
-        }
-        let n = safe.text.len();
-        match self.push_as_person(sb, SessionKind::Agent, &safe.text).await {
-            Ok(()) => {
-                tracing::info!("remote access: device {} sent a message to '{sb}' ({n} bytes, {} masked)", d.id, safe.count);
-                self.remote_record(d, Kind::Message);
-                Ok(safe.count)
-            }
-            Err(e) => {
+        let lock = self.remote_access.lock().unwrap().typing.clone();
+        let _one_at_a_time = lock.lock().await;
+        let session = match self.remote_can_type(sb) {
+            Ok(s) => s,
+            Err(r) => {
                 self.remote_record(d, Kind::Refused);
-                Err(Refusal::Conflict(e))
+                return Err(Refusal::Reason(r));
+            }
+        };
+        let typed = sbxw_core::terminal::sanitize_typed(&safe.text);
+        let mut rx = session.subscribe();
+        session.write(&[sbxw_core::terminal::PASTE_START, typed.as_bytes(), sbxw_core::terminal::PASTE_END]).await;
+        crate::typing::settle(&mut rx, Some(crate::typing::ECHO_TIMEOUT), crate::typing::ECHO_QUIET).await;
+        tokio::time::sleep(HOOK_GRACE).await;
+        match self.remote_can_type(sb) {
+            Ok(again) if Arc::ptr_eq(&again, &session) => {}
+            _ => {
+                tracing::info!("remote access: device {}: message not submitted (the leader's state changed)", d.id);
+                self.remote_record(d, Kind::Refused);
+                return Err(Refusal::Reason(Reason::NotSubmitted));
             }
         }
+        session.write(&[b"\r"]).await;
+        tracing::info!("remote access: device {}: message", d.id);
+        tracing::debug!("remote access: message to '{sb}' ({} bytes, {} masked)", typed.len(), safe.count);
+        self.remote_record(d, Kind::Message);
+        Ok(safe.count)
     }
 
     pub async fn remote_answer(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, indices: Vec<u32>) -> Result<(), Refusal> {
@@ -760,7 +923,7 @@ impl App {
         }
         match self.answer(sb, SessionKind::Agent, indices).await {
             Ok(()) => {
-                tracing::info!("remote access: device {} answered '{sb}'", d.id);
+                tracing::info!("remote access: device {}: answer", d.id);
                 self.remote_record(d, Kind::Answer);
                 Ok(())
             }
@@ -777,7 +940,8 @@ impl App {
     /// interrupt Claude Code. Nothing else is typed.
     pub async fn remote_interrupt(&self, d: &DeviceCtx, sb: &SandboxRef) -> Result<(), Refusal> {
         if self.input(sb, SessionKind::Agent, b"\x1b").await {
-            tracing::info!("remote access: device {} interrupted '{sb}'", d.id);
+            tracing::info!("remote access: device {}: interrupt", d.id);
+            tracing::debug!("remote access: interrupt of '{sb}'");
             self.remote_record(d, Kind::Interrupt);
             Ok(())
         } else {
@@ -789,7 +953,7 @@ impl App {
         let samples = crate::svc::voice::samples_of(body).map_err(|e| Refusal::Bad(e.to_string()))?;
         let text = self.voice_transcribe(samples).await.map_err(Refusal::Unavailable)?;
         let safe = self.anonymise(text.trim()).map_err(Refusal::Unavailable)?;
-        tracing::info!("remote access: device {} transcribed {} bytes of audio", d.id, body.len());
+        tracing::info!("remote access: device {}: transcribe", d.id);
         self.remote_record(d, Kind::Transcribe);
         Ok(safe)
     }

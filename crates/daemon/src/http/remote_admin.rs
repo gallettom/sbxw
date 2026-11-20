@@ -61,18 +61,35 @@ async fn disable(State(app): S) -> Json<Value> {
 
 async fn pairing(State(app): S) -> ApiResult {
     let p = app.remote_pairing_code().map_err(ApiError::conflict)?;
-    Ok(Json(json!({ "ok": true, "code": p.code, "url": p.url, "expires_ms": p.expires_ms })))
+    Ok(Json(json!({ "ok": true, "code": p.code, "code_id": p.code_id, "url": p.url, "expires_ms": p.expires_ms })))
 }
 
+/// Pending requests WITHOUT their check digits: the Mac never shows them,
+/// so the person reads them on the phone and types them to approve.
 async fn requests(State(app): S) -> Json<Value> {
-    Json(json!(app.remote_pairing_requests()))
+    let list: Vec<Value> = app
+        .remote_pairing_requests()
+        .into_iter()
+        .map(|r| json!({ "id": r.id, "code_id": r.code_id, "device_name": r.device_name, "created_ms": r.created_ms, "expires_ms": r.expires_ms }))
+        .collect();
+    Json(json!(list))
 }
 
-async fn approve(State(app): S, Path(id): Path<String>) -> ApiResult {
-    if app.remote_pairing_approve(&id) {
-        Ok(ok())
-    } else {
-        Err(ApiError::not_found("no pending pairing request with that id (it may have expired)"))
+#[derive(Deserialize)]
+struct ApproveBody {
+    /// The six digits the phone shows, typed by the person.
+    check: String,
+}
+
+/// The Mac's yes binds to the phone in hand: it carries the digits the
+/// phone shows. Three wrong tries refuse the request.
+async fn approve(State(app): S, Path(id): Path<String>, Json(b): Json<ApproveBody>) -> ApiResult {
+    use sbxw_core::remote_access::pairing::ApproveError;
+    match app.remote_pairing_approve(&id, &b.check) {
+        Ok(()) => Ok(ok()),
+        Err(ApproveError::Unknown) => Err(ApiError::not_found("no pending pairing request with that id (it may have expired or been replaced by a new code)")),
+        Err(ApproveError::WrongCheck { left }) => Err(ApiError::forbidden(format!("those are not the digits the phone shows ({left} tries left)"))),
+        Err(ApproveError::Refused) => Err(ApiError::forbidden("wrong digits three times: the request is refused. Start pairing again")),
     }
 }
 

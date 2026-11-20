@@ -3,7 +3,8 @@
 //! listener (`/api/remote*`, see `docs/security.md#remote-access`).
 //!
 //! `pair` prints the link only: drawing a QR code in the terminal would need
-//! a new crate. The y/N prompt after the check is the confirmation on the Mac.
+//! a new crate. The confirmation on the Mac is the person TYPING the six
+//! digits the phone shows: the Mac never prints them, so they must compare.
 
 use super::{config_path, load_config};
 use crate::client::Daemon;
@@ -167,35 +168,63 @@ fn print_status(st: &Value) {
 /// Show the link, wait for the phone, show its name and check, ask.
 fn pair(daemon: &Daemon, terminal: bool) -> Result<()> {
     if !terminal {
-        bail!("pairing needs your yes in a terminal");
+        bail!("pairing needs you at a terminal");
     }
     let r = daemon.post("/api/remote/pairing", json!({}))?;
     check(&r)?;
+    let code_id = s(&r["code_id"]);
     println!("Open this link on the phone (valid 5 minutes, once):\n\n  {}\n", s(&r["url"]));
     println!("(No QR code: drawing one in the terminal would need a new library.)");
     println!("Waiting for the phone…");
     let deadline = Instant::now() + Duration::from_secs(5 * 60);
+    // Only a request made with THIS link: an older one died with the new code.
     let req = loop {
         if Instant::now() > deadline {
             bail!("no phone used the link in 5 minutes: run `sbxw remote pair` again");
         }
         let list = daemon.get("/api/remote/pairing/requests")?;
-        if let Some(first) = list.as_array().and_then(|l| l.first()) {
-            break first.clone();
+        if let Some(mine) = list.as_array().and_then(|l| l.iter().find(|q| s(&q["code_id"]) == code_id)) {
+            break mine.clone();
         }
         std::thread::sleep(Duration::from_secs(1));
     };
     println!("\nA phone asks to pair: \"{}\"", s(&req["device_name"]).chars().filter(|c| !c.is_control()).collect::<String>());
-    println!("Check that the phone shows the same number: {}\n", s(&req["check"]));
+    println!("The phone shows six digits. Type them here to pair it (Enter alone refuses).\n");
     let id = s(&req["id"]);
-    if ask("Pair this phone? [y/N] ", true, &mut std::io::stdin().lock())? {
-        check(&daemon.post(&format!("/api/remote/pairing/requests/{}/approve", url_segment(&id)), json!({}))?)?;
-        println!("paired. `sbxw remote devices` lists it; `sbxw remote revoke <id>` unpairs it.");
-    } else {
-        check(&daemon.post(&format!("/api/remote/pairing/requests/{}/refuse", url_segment(&id)), json!({}))?)?;
-        println!("refused: the phone is not paired.");
+    loop {
+        let digits = read_digits(&mut std::io::stdin().lock())?;
+        if digits.is_empty() {
+            check(&daemon.post(&format!("/api/remote/pairing/requests/{}/refuse", url_segment(&id)), json!({}))?)?;
+            println!("refused: the phone is not paired.");
+            return Ok(());
+        }
+        match daemon.post(&format!("/api/remote/pairing/requests/{}/approve", url_segment(&id)), json!({ "check": digits })) {
+            Ok(r) => {
+                check(&r)?;
+                println!("paired. `sbxw remote devices` lists it; `sbxw remote revoke <id>` unpairs it.");
+                return Ok(());
+            }
+            Err(e) if e.to_string().contains("tries left") => println!("{e:#}"),
+            Err(e) => bail!("{e:#}"),
+        }
     }
-    Ok(())
+}
+
+/// The digits as typed: spaces dropped; anything but six digits asks again.
+fn read_digits(input: &mut impl BufRead) -> Result<String> {
+    loop {
+        eprint!("Digits on the phone: ");
+        std::io::stderr().flush()?;
+        let mut line = String::new();
+        if input.read_line(&mut line)? == 0 {
+            return Ok(String::new());
+        }
+        let d: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        if d.is_empty() || (d.len() == 6 && d.bytes().all(|b| b.is_ascii_digit())) {
+            return Ok(d);
+        }
+        eprintln!("six digits, please (Enter alone refuses)");
+    }
 }
 
 #[cfg(test)]
@@ -210,6 +239,14 @@ mod tests {
         assert!(!ask("? ", true, &mut "n\n".as_bytes()).unwrap());
         assert!(ask("? ", false, &mut "y\n".as_bytes()).is_err(), "no terminal, no yes");
         assert!(ON_QUESTION.contains("phone") && ON_QUESTION.ends_with("[y/N] "));
+    }
+
+    #[test]
+    fn digits_are_six_or_nothing() {
+        assert_eq!(read_digits(&mut "12 34 56\n".as_bytes()).unwrap(), "123456");
+        assert_eq!(read_digits(&mut "\n".as_bytes()).unwrap(), "");
+        assert_eq!(read_digits(&mut "abc\n1234567\n654321\n".as_bytes()).unwrap(), "654321");
+        assert_eq!(read_digits(&mut "".as_bytes()).unwrap(), "", "end of input refuses");
     }
 
     #[test]

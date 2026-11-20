@@ -93,6 +93,10 @@ async fn not_found() -> ApiError {
 fn refusal(r: Refusal) -> Response {
     match r {
         Refusal::NotFound => ApiError::not_found("not found").into_response(),
+        Refusal::Reason(r) => {
+            let status = if r.status_conflict() { StatusCode::CONFLICT } else { StatusCode::BAD_REQUEST };
+            (status, Json(json!({ "ok": false, "error": r.sentence(), "reason": r.code() }))).into_response()
+        }
         Refusal::Conflict(m) => ApiError::conflict(m).into_response(),
         Refusal::Forbidden(m) => ApiError::forbidden(m).into_response(),
         Refusal::Unavailable(m) => ApiError::new(StatusCode::SERVICE_UNAVAILABLE, m).into_response(),

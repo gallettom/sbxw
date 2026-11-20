@@ -81,7 +81,8 @@ async fn pair(app: &Arc<App>, router: &Router, name: &str) -> String {
     let r = call(router, "POST", "/r/pair/start", None, json!({ "code": code, "device_name": name })).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     let id = r.json()["request_id"].as_str().unwrap().to_string();
-    assert!(app.remote_pairing_approve(&id));
+    let check = r.json()["check"].as_str().unwrap().to_string();
+    app.remote_pairing_approve(&id, &check).unwrap();
     let r = call(router, "GET", &format!("/r/pair/status?request_id={id}"), None, json!({})).await;
     assert_eq!(r.json()["state"], "paired", "{}", r.text());
     let cookie = r.headers[header::SET_COOKIE].to_str().unwrap().to_string();
@@ -300,7 +301,10 @@ async fn failed_tokens_are_rate_limited_and_the_global_cap_holds() {
     for _ in 0..10 {
         assert_eq!(me("100.64.0.1", "sbxw_dev_wrong").await, StatusCode::UNAUTHORIZED);
     }
-    assert_eq!(me("100.64.0.1", &token).await, StatusCode::TOO_MANY_REQUESTS, "the guessing source is held back, even with a good token");
+    assert_eq!(me("100.64.0.1", "sbxw_dev_wrong").await, StatusCode::TOO_MANY_REQUESTS, "the guessing source is held back");
+    // Since review F2 (status changed): a good token is looked up first and
+    // never limited by failures, even from the same source.
+    assert_eq!(me("100.64.0.1", &token).await, StatusCode::OK);
     assert_eq!(me("100.64.0.2", &token).await, StatusCode::OK);
     for i in 0..20 {
         let _ = me(&format!("100.64.2.{i}"), "sbxw_dev_wrong").await;
@@ -545,12 +549,19 @@ async fn path_tricks_find_nothing() {
 async fn leader(app: &Arc<App>, dir: &std::path::Path, name: &str) -> (SandboxRef, PathBuf) {
     let sb = SandboxRef::parse(name).unwrap();
     let file = dir.join(format!("{name}.typed"));
-    let script = format!("stty raw -echo 2>/dev/null; exec cat > '{}'", file.display());
+    // Claude Code turns bracketed paste on at its prompt; so does the fake.
+    let script = format!("printf '\\033[?2004h'; stty raw -echo 2>/dev/null; exec cat > '{}'", file.display());
     let (s, _) = app
         .sessions
         .get_or_open(&SessionKey::agent(&sb), 0, || async move { Ok(crate::pty::Spawn { program: "sh".into(), args: vec!["-c".into(), script], env: vec![] }) })
         .await
         .unwrap();
+    for _ in 0..100 {
+        if sbxw_core::terminal::bracketed_paste_enabled(&s.replay()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     app.leads.lock().unwrap().insert(sb.clone(), Arc::as_ptr(&s) as usize);
     hook(app, &sb, "s1", json!({"hook_event_name": "SessionStart"}));
     (sb, file)
@@ -635,7 +646,7 @@ impl tracing::Subscriber for Capture {
     fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
     fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
     fn event(&self, e: &tracing::Event<'_>) {
-        let mut line = String::new();
+        let mut line = format!("{} ", e.metadata().level());
         e.record(&mut Fields(&mut line));
         let mut all = self.0.lock().unwrap();
         all.push_str(&line);
@@ -672,7 +683,7 @@ async fn a_message_is_typed_as_the_person_and_never_logged_or_journaled() {
     let journal = std::fs::read_to_string(app.remote_dir_for_tests().join("journal.jsonl")).unwrap();
     assert!(!journal.contains("PINEAPPLE") && !journal.contains("someone@"), "{journal}");
     let logged = logs.0.lock().unwrap().clone();
-    assert!(logged.contains("sent a message"), "the capture works: {logged}");
+    assert!(logged.contains(": message"), "the capture works: {logged}");
     for leak in ["PINEAPPLE", "usual place", "someone@example.org", &token[..]] {
         assert!(!logged.contains(leak), "{leak} in the logs:\n{logged}");
     }
@@ -924,4 +935,149 @@ async fn the_admin_routes_answer_on_the_ui_listener_with_the_ui_token() {
     // Without the UI token: refused like every UI route.
     let bare = crate::http::ui_router(app.clone());
     assert_eq!(send(&bare, get("/api/remote")).await.status, StatusCode::UNAUTHORIZED);
+}
+
+
+// ── Review fixes: F1 (message only into a prompt), F4, F5 ───────────────
+
+async fn message(router: &Router, token: &str, text: &str) -> Reply {
+    call(router, "POST", "/r/leaders/lead1/message", Some(token), json!({ "text": text })).await
+}
+
+#[tokio::test]
+async fn a_message_is_refused_unless_it_lands_in_the_prompt() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
+    // A pending question: answered by /answer only.
+    hook(&app, &sb, "s1", json!({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion",
+        "tool_input": {"questions": [{"question": "Which?", "options": [{"label": "A"}, {"label": "B"}]}]}}));
+    let r = message(&router, &token, "A").await;
+    assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::CONFLICT, json!("needs_mac")), "{}", r.text());
+    hook(&app, &sb, "s1", json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion"}));
+    // A tool call just announced: its permission prompt may be on its way.
+    hook(&app, &sb, "s1", json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "cargo test"}}));
+    let r = message(&router, &token, "hello").await;
+    assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::CONFLICT, json!("busy")), "{}", r.text());
+    hook(&app, &sb, "s1", json!({"hook_event_name": "PostToolUse", "tool_name": "Bash"}));
+    hook(&app, &sb, "s1", json!({"hook_event_name": "Stop", "stop_hook_active": false, "last_assistant_message": "done"}));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(std::fs::read(&file).unwrap_or_default().is_empty(), "nothing typed so far");
+    // Idle: typed as one paste, then one Return.
+    let r = message(&router, &token, "hello there").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(typed(&file, b"\x1b[201~\r").await, b"\x1b[200~hello there\x1b[201~\r");
+}
+
+#[tokio::test]
+async fn without_bracketed_paste_nothing_is_typed() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let sb = SandboxRef::parse("lead1").unwrap();
+    let file = d.path().join("plain.typed");
+    let script = format!("stty raw -echo 2>/dev/null; exec cat > '{}'", file.display());
+    let (s, _) = app
+        .sessions
+        .get_or_open(&SessionKey::agent(&sb), 0, || async move { Ok(crate::pty::Spawn { program: "sh".into(), args: vec!["-c".into(), script], env: vec![] }) })
+        .await
+        .unwrap();
+    app.leads.lock().unwrap().insert(sb.clone(), Arc::as_ptr(&s) as usize);
+    hook(&app, &sb, "s1", json!({"hook_event_name": "SessionStart"}));
+    let r = message(&router, &token, "1").await;
+    assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::CONFLICT, json!("no_paste")), "{}", r.text());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(std::fs::read(&file).unwrap_or_default().is_empty());
+}
+
+#[tokio::test]
+async fn a_prompt_that_appears_while_typing_stops_the_return() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
+    let late = app.clone();
+    let sb2 = sb.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        hook(&late, &sb2, "s1", json!({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"}));
+    });
+    let r = message(&router, &token, "keep going").await;
+    assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::CONFLICT, json!("not_submitted")), "{}", r.text());
+    let got = typed(&file, b"\x1b[201~").await;
+    assert_eq!(got, b"\x1b[200~keep going\x1b[201~", "the paste, never the Return: {got:?}");
+    assert_eq!(app.remote_journal(10).last().map(|e| e.kind), Some(Kind::Refused));
+}
+
+#[tokio::test]
+async fn command_lines_and_controls_are_refused_with_a_reason() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (_sb, file) = leader(&app, d.path(), "lead1").await;
+    for (text, reason) in [("!ls", "command"), ("/mcp", "command"), ("# note", "command"), ("ok\n/login", "command"), ("a\tb", "control"), ("a\u{202e}b", "control"), ("  ", "empty")] {
+        let r = message(&router, &token, text).await;
+        assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::BAD_REQUEST, json!(reason)), "{text:?}: {}", r.text());
+        assert!(r.json()["error"].as_str().is_some_and(|e| !e.is_empty()));
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(std::fs::read(&file).unwrap_or_default().is_empty());
+    // Two lines of plain text: one paste, one Return.
+    let r = message(&router, &token, "first line\nsecond line").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(typed(&file, b"\x1b[201~\r").await, b"\x1b[200~first line\nsecond line\x1b[201~\r");
+}
+
+#[tokio::test]
+async fn harness_output_never_reaches_the_phone_messages_do() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, _) = leader(&app, d.path(), "lead1").await;
+    let folded = [
+        ("shell", "<bash-stdout>LEAK-SHELL</bash-stdout>"),
+        ("shell stderr", "<bash-stderr>LEAK-SHELLERR</bash-stderr>"),
+        ("slash command", "<local-command-stdout>LEAK-COMMAND</local-command-stdout>"),
+        ("command caveat", "Caveat: The messages below were generated by the user while running local commands. LEAK-CAVEAT"),
+        ("task", "<task-notification>LEAK-TASK</task-notification>"),
+        ("system", "<system-reminder>LEAK-SYSTEM</system-reminder>"),
+        ("hook", "<user-prompt-submit-hook>LEAK-HOOK</user-prompt-submit-hook>"),
+        ("other wrapper", "<some-wrapper>LEAK-WRAPPER</some-wrapper>"),
+    ];
+    for (_, prompt) in folded {
+        hook(&app, &sb, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": prompt}));
+    }
+    hook(&app, &sb, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": "<cross-session-message from=\"x\" from-name=\"remote-page\">KEPT-PEER</cross-session-message>"}));
+    app.note_typed("lead1", "[sbxw] KEPT-SBXW main moved");
+    hook(&app, &sb, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": "[sbxw] KEPT-SBXW main moved"}));
+    let r = call(&router, "GET", "/r/leaders/lead1/history", Some(&token), json!({})).await;
+    let body = r.text();
+    for (kind, _) in folded {
+        assert!(!body.contains("LEAK-"), "{kind}: {body}");
+    }
+    assert!(body.contains("KEPT-PEER") && body.contains("\"from\":\"remote-page\""), "{body}");
+    assert!(body.contains("KEPT-SBXW") && body.contains("\"from\":\"sbxw\""), "{body}");
+    assert!(body.contains("\"kind\":\"steps\""), "{body}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn info_logs_name_a_device_and_a_kind_only() {
+    let logs = Capture::default();
+    let _guard = tracing::subscriber::set_default(logs.clone());
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, _) = leader(&app, d.path(), "lead1").await;
+    hook(&app, &sb, "s1", json!({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion",
+        "tool_input": {"questions": [{"question": "Which way?", "options": [{"label": "Left"}, {"label": "Right"}, {"label": "Back"}]}]}}));
+    assert_eq!(call(&router, "POST", "/r/leaders/lead1/answer", Some(&token), json!({"indices": [3]})).await.status, StatusCode::OK);
+    assert_eq!(call(&router, "POST", "/r/leaders/lead1/interrupt", Some(&token), json!({})).await.status, StatusCode::OK);
+    let all = logs.0.lock().unwrap().clone();
+    assert!(!all.contains("indices") && !all.contains("[3]"), "no answer at any level:\n{all}");
+    let info: Vec<&str> = all.lines().filter(|l| l.starts_with("INFO") || l.starts_with("WARN")).filter(|l| l.contains("remote access: device")).collect();
+    assert!(info.iter().any(|l| l.contains(": answer")) && info.iter().any(|l| l.contains(": interrupt")), "{all}");
+    for l in info {
+        assert!(!l.contains("lead1"), "no sandbox beside the action at info: {l}");
+    }
 }
