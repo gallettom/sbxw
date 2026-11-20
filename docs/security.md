@@ -551,8 +551,11 @@ a standalone app named sbxw.
   microphone, Send, and below them Interrupt, which asks "Interrupt <leader>?" and acts
   only on a second tap. Enter is a new line: only Send sends. A message takes 1 to 4 s
   (the daemon waits for the echo before the Return): Send reads "Sending…" and a second tap
-  does nothing. A line starting with `!`, `/` or `#`, or a control character, is warned
-  about in place while typing; the daemon stays the judge. Each refusal reason has its own
+  does nothing. A message is typed only into an idle leader: while it works, Send is
+  disabled with "The leader is working: Send comes back at its prompt.", the text stays in
+  the field and nothing is queued; Interrupt stays available. A line starting with `!`, `/`
+  or `#`, a control character or an invisible one (zero-width space, soft hyphen...) is
+  warned about in place while typing; the daemon stays the judge. Each refusal reason has its own
   sentence, with the daemon's words beside it as text; "not_submitted" says plainly that
   the text waits unsent in the leader's input on the Mac, keeps it in the field, and
   nothing is resent.
