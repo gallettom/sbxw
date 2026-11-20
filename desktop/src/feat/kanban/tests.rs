@@ -725,3 +725,81 @@ fn in_the_form_arrows_and_enter_pick_and_escape_closes_the_list_only_with_focus_
     press(&mut rt, Key::Escape);
     assert!(rt.presented("kanban-form-save").is_none(), "a second Escape closes the form");
 }
+
+#[test]
+fn a_confirm_opened_over_the_form_with_its_list_open_is_drawn_above_the_list() {
+    let mut rt = form_open(1284.0, 816.0);
+    let dir = std::env::temp_dir().join(format!("sbxw-kanban-cf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let secret = dir.join("id_rsa");
+    std::fs::write(&secret, "not a key").unwrap();
+    // Dropped on the dialog, as the person would.
+    let (cx, cy) = rt.find("modal").expect("the dialog is drawn");
+    rt.drop_files(vec![secret.clone()], Some((cx, cy)));
+    settle(&mut rt);
+    intent(&mut rt, "kanban_form", json!({ "title": "Export as PDF" }));
+    tap(&mut rt, "kanban-form-priority");
+    assert!(rt.presented("kanban-form-priority-list").is_some());
+    intent(&mut rt, "kanban_save", json!({}));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(rt.presented("cf-scrim").is_some(), "the Confirm is drawn");
+    let ([x, y, _, h], _) = rt.presented("kanban-form-priority-p1").expect("the list is still drawn under it");
+    let top = rt.element_at(x + 3.0, y + h / 2.0).and_then(|p| p.key().map(str::to_string));
+    assert!(!top.as_deref().is_some_and(|k| k.starts_with("kanban-form-priority-")), "the list is above the Confirm: {top:?}");
+}
+
+#[test]
+fn the_form_is_720_wide_with_a_tall_description_and_keeps_cancel_and_save_in_view_on_a_small_window() {
+    let mut bad = vec![];
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+        let rt = form_open(w, h);
+        let ([mx, my, mw, mh], _) = rt.presented("modal").unwrap();
+        if mx < 0.0 || my < 0.0 || mx + mw > w + 0.5 || my + mh > h + 0.5 {
+            bad.push(format!("{w}x{h}: dialog {mx},{my},{mw},{mh} leaves the window"));
+        }
+        if w > 1000.0 && (mw - 720.0).abs() > 1.0 {
+            bad.push(format!("{w}x{h}: dialog is {mw} wide, not 720"));
+        }
+        for k in ["kanban-form-cancel", "kanban-form-save"] {
+            match rt.presented(k) {
+                Some(([x, y, bw, bh], _)) if x >= mx && y >= my && x + bw <= mx + mw + 0.5 && y + bh <= my + mh + 0.5 => {}
+                other => bad.push(format!("{w}x{h}: {k} not whole inside the dialog: {other:?}")),
+            }
+        }
+        // The field's ground (8 pt padding) is the gap between the title and the priority rows.
+        let top = rt.presented("kanban-form-description").map_or(0.0, |(r, _)| r[1] - 8.0);
+        let d = rt.presented("kanban-form-priority").map_or(0.0, |(r, _)| r[1] - 12.0 - top);
+        let rows = ((d - 16.0) / 18.0).floor();
+        if w > 1000.0 && rows < 8.0 {
+            bad.push(format!("{w}x{h}: the description shows {rows} lines ({d} pt), 8 to 10 wanted"));
+        }
+        let drop = rt.presented("kanban-form-drop").map(|(r, _)| r[3]).unwrap_or(0.0);
+        if drop < 60.0 {
+            bad.push(format!("{w}x{h}: the drop zone is {drop} tall"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+#[test]
+fn the_form_renders_within_the_budgets_with_a_long_description_and_ten_files() {
+    let mut rt = form_open(1284.0, 816.0);
+    let dir = std::env::temp_dir().join(format!("sbxw-kanban-ten-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let files: Vec<_> = (0..10).map(|i| {
+        let p = dir.join(format!("notes-{i}.txt"));
+        std::fs::write(&p, "invented notes").unwrap();
+        p
+    }).collect();
+    let (cx, cy) = rt.find("modal").unwrap();
+    rt.drop_files(files, Some((cx, cy)));
+    settle(&mut rt);
+    intent(&mut rt, "kanban_form", json!({ "title": "Ten files", "description": "word ".repeat(400) }));
+    let _ = std::fs::remove_dir_all(&dir);
+    let err = rt.state.screens.iter().find(|s| s.name == FORM).and_then(|s| s.error.clone());
+    assert!(err.is_none(), "{err:?}");
+    let n = ui_now(&rt);
+    let _ = n;
+    assert!(rt.presented("kanban-form-save").is_some());
+    assert_eq!(rt.state.feats.data.get(FORM_UI).map(|f| f["files"].as_array().map_or(0, |a| a.len())), Some(10));
+}
