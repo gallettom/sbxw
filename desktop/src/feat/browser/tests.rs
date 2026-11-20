@@ -382,6 +382,24 @@ fn the_pane_bar_offers_the_browser_green_while_the_agent_uses_it() {
     assert_eq!(names, vec![(Place::Pane("web-app".into()), "green".to_string()), (Place::Pane("docs".into()), "muted".to_string())]);
 }
 
+#[test]
+fn the_browser_chip_says_in_use_per_sandbox_and_follows_the_state() {
+    let _t = turn();
+    with(|s| *s = None);
+    let mut d = fixture("basic");
+    let help = |d: &J, name: &str| extras(&Ctx { data: d }).into_iter().find(|x| x.place == Place::Pane(name.into())).map(|x| (x.tone, x.help)).unwrap();
+    let (tone, tip) = help(&d, "web-app");
+    assert!(tone == "green" && tip.starts_with("Browser: in use"), "{tone} {tip}");
+    let (tone, tip) = help(&d, "docs");
+    assert!(tone == "muted" && !tip.contains("in use"), "two sandboxes differ: {tone} {tip}");
+    // The agent starts using docs' browser and stops using web-app's.
+    d["browser_active"]["sandboxes"] = json!(["docs"]);
+    assert_eq!(help(&d, "web-app").0, "muted");
+    assert_eq!(help(&d, "docs").0, "green");
+    d["browser_active"]["sandboxes"] = json!([]);
+    assert_eq!(help(&d, "docs").0, "muted");
+}
+
 // ---------------------------------------------------------------------------
 // The stand-in
 
