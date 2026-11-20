@@ -6,14 +6,14 @@
 # The sidebar's New, the workspace form (a folder browsed to, a name typed,
 # an extra folder added), the core's confirmation of what the extra folder
 # grants, the daemon's host-access question (its lines, Allow), the bring-up's
-# steps arriving on the stream, a failure at the kits step with its reason,
-# Retry, and at the end the new sandbox's agent in a spare pane. The stand-in
+# steps arriving on the stream, a failure at the kits step (red in the status
+# bar; its press lists the reason with Retry and Dismiss), Retry, and at the end the new sandbox's agent in a spare pane. The stand-in
 # fixture is fixtures/create/standin.json (create_consent, create_fail).
 #
 # The stand-in's state changes during a run, so each picture is its own run
 # against a fresh stand-in, up to that mark. A headless run waits for the
 # app's own pending calls before drawing on, so the steps in between are not
-# pictured here (fixtures/create-jobs/basic.json shows a bring-up mid-way). Out: $SBXW_SHOTS/create/window-<mark>.png,
+# pictured here (fixtures/shell/statusbar-many.json shows bring-ups mid-way). Out: $SBXW_SHOTS/create/window-<mark>.png,
 # the element tree and the app log beside each.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -48,6 +48,8 @@ add(type="tap", key="cf-confirm")
 mark("consent", 600)
 add(type="tap", key="cf-confirm")
 mark("failed", 600)
+add(type="tap", key="status-jobs")
+mark("failed-details", 300)
 add(type="tap", key="job-retry-shop")
 mark("consent-again", 600)
 add(type="tap", key="cf-confirm")
@@ -55,7 +57,7 @@ mark("ready", 600)
 mark("end", 300)
 print(json.dumps({"events": ev}, indent=1))
 PY
-marks=(${MARKS:-chooser form filled confirm-grants consent failed consent-again ready end})
+marks=(${MARKS:-chooser form filled confirm-grants consent failed failed-details consent-again ready end})
 build
 for m in "${marks[@]}"; do
   start_daemon "$shots/standin-$m" --fixture "$here/fixtures/create/standin.json"

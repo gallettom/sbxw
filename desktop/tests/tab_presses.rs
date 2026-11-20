@@ -191,3 +191,47 @@ fn every_rail_entry_pressed_twice_puts_back_what_was_there() {
     assert!(seen >= 9, "only {seen} rail entries drawn");
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+/// Creating a sandbox starts from three places, each opening the create
+/// form: the sidebar's "+ New", the rail's New while the sidebar is hidden,
+/// and the palette. None docks a panel (the "New sandboxes" panel is gone);
+/// the status bar's bring-up, pressed twice, opens its popover and puts
+/// back what was there.
+#[test]
+fn the_three_ways_to_create_open_the_form_and_no_panel() {
+    let modal = |rt: &Runtime<App>| rt.state.screen_data()["app"]["modal"]["screen"].clone();
+    let press = |rt: &mut Runtime<App>, k: &str| {
+        let (x, y) = rt.find(k).unwrap_or_else(|| panic!("{k} is not drawn"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        settle(rt);
+    };
+    // The sidebar's New.
+    let mut rt = window("shell/two-panes", &[]);
+    press(&mut rt, "sidebar-new");
+    assert_eq!(modal(&rt), "create", "sidebar-new opens the form");
+    assert!(rt.state.feats.panel.is_none());
+    // The rail's New, the sidebar hidden.
+    let mut rt = window("shell/two-panes", &[intent("sidebar", json!({ "show": "hide" }))]);
+    assert!(rt.find("sidebar-new").is_none());
+    press(&mut rt, "rail-new");
+    assert_eq!(modal(&rt), "create", "rail-new opens the form");
+    assert!(rt.state.feats.panel.is_none());
+    // The palette's New sandbox.
+    let mut rt = window("shell/two-panes", &[]);
+    rt.update(|s, _| s.palette_open());
+    let i = rt.state.palette_shown().iter().position(|c| c.id == "key-n").expect("the palette lists New sandbox");
+    rt.update(|s, _| s.palette_run(Some(i)));
+    settle(&mut rt);
+    assert_eq!(modal(&rt), "create", "the palette opens the form");
+    assert!(rt.state.feats.panel.is_none());
+    // The status bar's bring-up: its popover, twice.
+    let mut rt = window("shell/statusbar-many", &[]);
+    let docked = rt.state.feats.panels.clone();
+    assert!(!docked.iter().any(|p| p.contains("create")), "a bring-up docks nothing: {docked:?}");
+    press(&mut rt, "status-jobs");
+    assert!(rt.find("status-jobs-pop").is_some(), "the press opens the details");
+    press(&mut rt, "status-jobs");
+    assert!(rt.find("status-jobs-pop").is_none(), "pressed again, it closes");
+    assert_eq!(rt.state.feats.panels, docked, "what was docked before");
+}
