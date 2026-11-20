@@ -63,6 +63,18 @@ pub enum Event {
     /// A sandbox's tickets or the plans they follow changed: re-read `GET
     /// /api/tickets` (see `svc::tickets`). `{sandbox, n?, what}`, no text.
     Tickets(crate::svc::tickets::TicketsNudge),
+    /// A thread was closed for good (its session ended, its worktree or
+    /// record removed): `{ "sandbox", "thread" }`, names only. Every client
+    /// drops that thread's panes and row. Sent once per close, by
+    /// `App::close_thread`, whatever asked for it.
+    ThreadClosed(ThreadClosed),
+}
+
+/// What the `thread-closed` event says: which thread of which sandbox.
+#[derive(Clone, Serialize, Debug, PartialEq)]
+pub struct ThreadClosed {
+    pub sandbox: String,
+    pub thread: String,
 }
 
 /// What the `history` event says: whose log, and its newest seq.
@@ -97,6 +109,7 @@ impl Event {
             Event::History(_) => "history",
             Event::Canvas(_) => "canvas",
             Event::Tickets(_) => "tickets",
+            Event::ThreadClosed(_) => "thread-closed",
         }
     }
 
@@ -120,6 +133,7 @@ impl Event {
             Event::History(v) => json(v),
             Event::Canvas(v) => json(v),
             Event::Tickets(v) => json(v),
+            Event::ThreadClosed(v) => json(v),
         }
     }
 }

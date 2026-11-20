@@ -253,13 +253,16 @@ function cdOpenInPane(key) {
 async function cdCloseSession(key) {
   const { sandbox, thread } = cdSplit(key);
   if (cdChat(key).state === 'working' && !confirm(`${thread} is still answering. Close it anyway?`)) return;
+  closingHere.add(`${sandbox}::${thread}`);
   const res = await postJsonOrError(`/api/sandboxes/${encodeURIComponent(sandbox)}/threads/${encodeURIComponent(thread)}/close`, { discard: true, delete_branch: true });
   if (!res.ok) {
+    closingHere.delete(`${sandbox}::${thread}`);
     cdChat(key).log.push({ who: 'err', text: `Not closed: ${res.error || 'no answer from the daemon'}` });
   } else {
     cdChats.delete(key);
     if (cdActive === key) cdActive = sandbox;
     afterThreadClosed(sandbox, thread);
+    closingHere.delete(`${sandbox}::${thread}`);
   }
   cdSave();
   cdRender();

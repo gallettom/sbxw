@@ -455,3 +455,40 @@ fn the_name_intent_keeps_what_the_field_becomes() {
     let draft = &d[UI]["draft"];
     assert_eq!((draft["raw"].as_str(), draft["typing"].as_str(), draft["full"].as_str()), (Some("Fix_Login "), Some("fix-login-"), Some("fix-login")));
 }
+
+#[test]
+fn a_thread_closed_elsewhere_drops_its_panes_and_says_so_once_and_one_never_shown_is_ignored() {
+    let mut data = fixture("basic");
+    data["app"]["panes"][1] = json!({ "index": 2, "sandbox": "web-app", "mode": "agent", "thread": "t2", "focused": false, "status": "connected" });
+    let ev = json!({ "sandbox": "web-app", "thread": "t2" });
+    let acts = on_event(&Ctx { data: &data }, "thread-closed", &ev);
+    assert!(acts.contains(&Action::Intent { name: "close_panes".into(), args: json!({ "sandbox": "web-app", "thread": "t2" }) }), "{acts:?}");
+    assert!(acts.contains(&Action::Refresh("threads")) && acts.contains(&Action::Refresh("sessions")), "the rows leave: {acts:?}");
+    assert!(acts.iter().any(|a| matches!(a, Action::Notice { text, error: false, .. } if text == "Thread t2 of web-app was closed")), "quiet notice: {acts:?}");
+    // Not a thread this app showed (no pane, not listed): nothing, and not an event of another name.
+    assert!(on_event(&Ctx { data: &data }, "thread-closed", &json!({ "sandbox": "web-app", "thread": "ghost" })).is_empty());
+    assert!(on_event(&Ctx { data: &data }, "thread-closed", &json!({ "sandbox": "other", "thread": "t2" })).is_empty());
+    assert!(on_event(&Ctx { data: &data }, "thread-closed", &json!({ "sandbox": "web-app" })).is_empty());
+    assert!(on_event(&Ctx { data: &data }, "thread-closed", &json!({ "sandbox": "web-app", "thread": "../x" })).is_empty());
+    assert!(on_event(&Ctx { data: &data }, "plan", &ev).is_empty());
+    // An event only drops views and reads lists: it never asks the daemon to close anything,
+    // so a client never closes a thread because another one closed a pane.
+    assert!(acts.iter().all(|a| !matches!(a, Action::Call(_) | Action::Confirm(_) | Action::Prepare(_))), "{acts:?}");
+}
+
+#[test]
+fn the_close_this_app_asked_for_hears_the_event_without_a_notice_and_its_answer_still_closes_once() {
+    let data = fixture("basic");
+    let p = prepare(run(&data, "thread_close", json!({ "sandbox": "web-app", "thread": "t1" })).unwrap());
+    let st = json!({ "ok": true, "status": { "worktree": "/w/t1", "branch": "sbxw/t1", "base": "main", "has_branch": true, "dirty": 0, "ahead": 0 } });
+    (p.build)(&Ctx { data: &data }, &p.asked, &st).unwrap();
+    // The daemon's event comes before the answer: panes go, no "closed elsewhere".
+    let acts = on_event(&Ctx { data: &data }, "thread-closed", &json!({ "sandbox": "web-app", "thread": "t1" }));
+    assert!(acts.contains(&Action::Intent { name: "close_panes".into(), args: json!({ "sandbox": "web-app", "thread": "t1" }) }));
+    assert!(!acts.iter().any(|a| matches!(a, Action::Notice { .. })), "{acts:?}");
+    // A second event of that close is not ours any more, and nobody showed it: ignored.
+    let mut d = data.clone();
+    d["threads"]["web-app"]["threads"] = json!([]);
+    d["sessions"] = json!([]);
+    assert!(on_event(&Ctx { data: &d }, "thread-closed", &json!({ "sandbox": "web-app", "thread": "t1" })).is_empty());
+}

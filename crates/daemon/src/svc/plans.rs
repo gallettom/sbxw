@@ -2,7 +2,7 @@
 //! approved plan's threads, the one-click merge, and lead mode itself.
 
 use crate::app::{now_ms, App};
-use crate::bus::Event;
+use crate::bus::{Event, ThreadClosed};
 use crate::git;
 use crate::store::write_atomic;
 use sbxw_core::messages;
@@ -616,6 +616,9 @@ impl App {
         }) {
             tracing::warn!("threads: could not forget the repo of '{thread}': {e:#}");
         }
+        // Last, once the thread is gone for the daemon: every client drops its
+        // panes and its row. Every way a thread ends comes through here.
+        self.send(Event::ThreadClosed(ThreadClosed { sandbox: sandbox.to_string(), thread: thread.to_string() }));
         Ok(())
     }
 
@@ -692,6 +695,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use crate::bus::{Event, ThreadClosed};
     use crate::testing::{app, app_with, ls, sbx_answer};
     use sbxw_core::plans::{DistillItem, DistillKind, MergeState, PlanState, PlanThread, ThreadState, Variant};
     use sbxw_sbx::runner::Output;
@@ -711,8 +715,18 @@ mod tests {
                 r.threads.entry("chat-2".into()).or_default();
             })
             .unwrap();
+        let mut rx = app.bus.subscribe();
         app.close_thread(&name, &thread, true, true).await.unwrap();
         assert!(!app.store.get(&name).threads.contains_key("chat-2"), "the record is forgotten");
+        let mut closed = vec![];
+        while let Ok(ev) = rx.try_recv() {
+            if let Event::ThreadClosed(c) = ev {
+                closed.push(c);
+            }
+        }
+        assert_eq!(closed, vec![ThreadClosed { sandbox: "ephemeral-chat".into(), thread: "chat-2".into() }], "one event, names only");
+        assert_eq!(Event::ThreadClosed(closed[0].clone()).name(), "thread-closed");
+        assert_eq!(Event::ThreadClosed(closed[0].clone()).data(), r#"{"sandbox":"ephemeral-chat","thread":"chat-2"}"#);
 
         let other = SandboxRef::parse("myapp").unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -849,8 +863,17 @@ mod tests {
         }
         let d = vec![DistillItem { kind: DistillKind::Decision, text: "prices in cents".into() }];
         app.plan_propose_merge(&p.id, &sb, vec![], "", d).unwrap();
+        let mut rx = app.bus.subscribe();
         let merge = app.plan_merge(&p.id, true, None).await.unwrap();
         assert_eq!(merge.state, MergeState::Merged);
+        let mut closed = vec![];
+        while let Ok(ev) = rx.try_recv() {
+            if let Event::ThreadClosed(c) = ev {
+                closed.push(c.thread);
+            }
+        }
+        closed.sort();
+        assert_eq!(closed, ["api", "web"], "a merge that closes the threads publishes each close once");
         assert_eq!(merge.results.len(), 1);
         assert_eq!(merge.results[0].thread, team);
 

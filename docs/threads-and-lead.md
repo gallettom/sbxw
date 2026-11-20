@@ -87,6 +87,19 @@ default; one with unmerged commits is kept unless you tick it. Closing stops
 every process in the worktree, then runs `git worktree remove` and, if asked,
 `git branch -D`.
 
+**Both clients follow.** However a thread ends (the Close dialog of the web
+or the desktop app, the chat dock's ×, a [one-click merge](#3-one-click-merge)
+that closes the threads), the daemon publishes one `thread-closed` event on
+`/api/stream`, `{ "sandbox", "thread" }`, names only, once per thread, when
+`App::close_thread` is done. Every client open at the time drops that
+thread's panes and its row (the web: `afterThreadClosed` in `panes.js`; the
+desktop: the threads feature's `on_event`, Lead Mode's parked panes
+included) and says "Thread X was closed" quietly when the close was not its
+own. Closing only a **pane** is a change of view: it stays in that client and
+the thread keeps running. Ending the lead's mode, a session that exits by
+itself and stopping a sandbox do not close threads and publish no such
+event.
+
 **Nothing is removed for you.** Closing is always a click, and merging is yours
 to do (or the lead's [one-click merge](#3-one-click-merge)).
 

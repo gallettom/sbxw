@@ -33,6 +33,12 @@ events. The app does the same:
 - 300 ms after any `session`, `provision`, `lead`, `lead-end` or `codemap`
   event on `/api/stream` (a burst makes one read; `client::REFRESH_ON`);
   features read their own keys again on the events they name (`feat::Data::on`);
+- on `thread-closed` `{sandbox, thread}` (a thread closed for good, by either
+  client, a plan merge, or the chat dock): the threads feature closes that
+  thread's panes (on every page, and the ones Lead Mode parks), reads
+  `threads` and `sessions` again, and says so in a notice unless this app
+  asked for the close. A thread the app never showed is ignored; a pane
+  closed alone sends nothing;
 - after opening the agent of a sandbox that is not running: at 1.5, 3, 6, 12
   and 24 s until it shows as running (`RUNNING_RECHECK_MS` in
   `assets/js/sandboxes.js`);

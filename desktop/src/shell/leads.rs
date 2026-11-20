@@ -263,6 +263,36 @@ mod tests {
         r.rt.state.screen_data()["monitor"]["rows"].as_array().map(|v| v.iter().map(|x| x["key"].as_str().unwrap_or("").to_string()).collect()).unwrap_or_default()
     }
 
+    /// A thread closed elsewhere while Lead Mode parks its pane: the pane is
+    /// dropped from the parked ones and from the layout to come back to, so
+    /// leaving the view opens no dead terminal for it.
+    #[test]
+    fn a_thread_closed_elsewhere_leaves_no_parked_pane_behind() {
+        let mut r = rig();
+        r.rt.update(|s, _| {
+            let i = s.panes.iter().position(|p| p.sandbox.as_deref() == Some("b")).unwrap();
+            s.panes[i].thread = Some("t1".into());
+            s.feats.data.insert("threads".into(), serde_json::json!({ "b": { "threads": [{ "name": "t1" }] } }));
+            s.push_data();
+        });
+        r.settle();
+        r.rt.update(|s, _| s.toggle_leads());
+        r.settle();
+        assert!(r.rt.state.leads_on());
+        assert!(r.rt.state.leads.as_ref().unwrap().parked.iter().any(|p| p.thread.as_deref() == Some("t1")), "b's thread pane is parked");
+        r.rt.update(|s, _| {
+            s.feats_bus("thread-closed", r#"{"sandbox":"b","thread":"t1"}"#);
+        });
+        r.settle();
+        assert!(r.rt.state.leads.as_ref().unwrap().parked.iter().all(|p| p.thread.as_deref() != Some("t1")), "dropped from the parked panes");
+        r.rt.update(|s, _| s.toggle_leads());
+        r.settle();
+        assert!(!r.rt.state.leads_on());
+        assert!(r.rt.state.panes.iter().all(|p| p.thread.as_deref() != Some("t1")), "no pane for the closed thread once back");
+        let in_pages = r.rt.state.pages.all().len();
+        assert_eq!(in_pages, r.rt.state.panes.len(), "the layout and the panes agree");
+    }
+
     /// Lead Mode is one state for both base views: on from the top bar in
     /// Sessions, the list keeps the leaders, each with its threads under it
     /// (indented), and a selection filtered out moves to the first leader;

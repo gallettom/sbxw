@@ -1404,11 +1404,13 @@ closeConfirm.addEventListener('click', async () => {
   closeConfirm.disabled = true;
   closeConfirm.textContent = 'Closing…';
   setCloseError('');
+  closingHere.add(`${ask.sandbox}::${ask.thread}`);
   const res = await postJsonOrError(`${ask.base}/close`, {
     discard: discardBox.checked,
     delete_branch: branchBox.checked,
   });
   if (!res.ok) {
+    closingHere.delete(`${ask.sandbox}::${ask.thread}`);
     setCloseError(res.error || 'could not close the thread');
     closeConfirm.textContent = ask.st.same_worktree ? 'Close session' : 'Close thread';
     updateCloseConfirm();
@@ -1417,6 +1419,7 @@ closeConfirm.addEventListener('click', async () => {
   closeCloseModal();
   // The pane may have moved while the dialog was open: found again by name.
   afterThreadClosed(ask.sandbox, ask.thread);
+  closingHere.delete(`${ask.sandbox}::${ask.thread}`);
 });
 
 // A closed thread leaves the screen: its pane, its row under the sandbox, and
@@ -1428,6 +1431,26 @@ function afterThreadClosed(sandbox, thread) {
   agentStates.delete(`${sandbox}::thread:${thread}`);
   refreshThreadList(sandbox);
 }
+// BEGIN thread-closed rules
+// The daemon says `thread-closed` `{sandbox, thread}` once per thread closed
+// for good, whoever asked (this page, the desktop app, a plan merge). This
+// page then does what its own close does. Closing a PANE says nothing: a pane
+// is a view, the thread is the thing. The close this page asked for is in
+// `closingHere`: it also hears the event, removes nothing twice and says
+// nothing about it.
+const closingHere = new Set();
+function onThreadClosed(raw) {
+  let d;
+  try { d = JSON.parse(raw); } catch (_) { return false; }
+  if (!d || typeof d.sandbox !== 'string' || typeof d.thread !== 'string') return false;
+  // A thread this page never showed (no pane, no row, no state) is none of its business.
+  if (!knownThreads(d.sandbox).includes(d.thread)) return false;
+  const mine = closingHere.has(`${d.sandbox}::${d.thread}`);
+  afterThreadClosed(d.sandbox, d.thread);
+  if (!mine) showToast(`Thread ${d.thread} was closed`);
+  return true;
+}
+// END thread-closed rules
 document.getElementById('thread-close-x').addEventListener('click', closeCloseModal);
 document.getElementById('thread-close-cancel').addEventListener('click', closeCloseModal);
 wireModal(closeOverlay, closeCloseModal);
