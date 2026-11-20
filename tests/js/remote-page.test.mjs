@@ -56,6 +56,30 @@ function spies() {
   const stop = MediaStreamTrack.prototype.stop;
   MediaStreamTrack.prototype.stop = function () { spy.stopped++; return stop.call(this); };
   if (localStorage.getItem('__noAnalyser')) AudioContext.prototype.createAnalyser = undefined;
+  // A fake passkey: `__cred` = cancel | wrong | nosupport, `__nouv` no
+  // platform authenticator. Each ceremony is recorded (no secret in it).
+  spy.creds = [];
+  const cred = localStorage.getItem('__cred') || 'ok';
+  const buf = t => new TextEncoder().encode(t).buffer;
+  const fail = () => {
+    if (cred === 'cancel') throw new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError');
+    if (cred === 'nosupport') throw new DOMException('Not supported', 'NotSupportedError');
+  };
+  if (window.PublicKeyCredential) PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = async () => !localStorage.getItem('__nouv');
+  if (navigator.credentials) {
+    navigator.credentials.create = async ({ publicKey: o }) => {
+      spy.creds.push({ op: 'create', uv: o.authenticatorSelection.userVerification, attestation: o.attestation, challenge: [...new Uint8Array(o.challenge)], user: [...new Uint8Array(o.user.id)], rp: o.rp.id });
+      fail();
+      if (cred === 'wrong') return { type: 'public-key', rawId: 'not-bytes', response: {} };
+      return { type: 'public-key', rawId: buf('cred-id-12345678'), response: { clientDataJSON: buf('{"type":"webauthn.create"}'), attestationObject: buf('attestation') } };
+    };
+    navigator.credentials.get = async ({ publicKey: o, signal }) => {
+      spy.creds.push({ op: 'get', uv: o.userVerification, rpId: o.rpId, allow: o.allowCredentials.map(c => [...new Uint8Array(c.id)]), challenge: [...new Uint8Array(o.challenge)], signal: !!signal });
+      fail();
+      if (cred === 'wrong') return { type: 'public-key', rawId: buf('x'), response: { clientDataJSON: buf('{}') } };
+      return { type: 'public-key', rawId: buf('cred-id-12345678'), response: { clientDataJSON: buf('{"type":"webauthn.get"}'), authenticatorData: buf('authdata-authdata-authdata-authdata-1'), signature: buf('sig') } };
+    };
+  }
   navigator.mediaDevices.getUserMedia = async () => {
     const ctx = new AudioContext();
     const osc = ctx.createOscillator();
@@ -84,7 +108,7 @@ async function phone(width = 390, height = 844, opts = {}) {
   const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: IPHONE_UA, reducedMotion: opts.reducedMotion || 'no-preference' });
   // Test levers for the fake microphone, set before the page's scripts (they
   // are the test's, never the page's: cleanSpy ignores keys starting __).
-  if (opts.flags) await ctx.addInitScript(f => { for (const k of f) localStorage.setItem(k, '1'); }, opts.flags);
+  if (opts.flags) await ctx.addInitScript(f => { for (const x of f) { const [k, v] = x.split(':'); localStorage.setItem(k, v || '1'); } }, opts.flags);
   await ctx.addInitScript(spies);
   const page = await ctx.newPage();
   const problems = [];
@@ -749,4 +773,378 @@ test('the conversation at rest, at 430x932, and the screens at three widths', { 
     assert.deepEqual(problems, []);
     await ctx.close();
   }
+});
+
+// ══ Level 2: approving with Face ID ═══════════════════════════════════════
+const L2 = FX.level2;
+const l2calls = async () => (await log()).filter(e => /^\/r\/(approvals|passkey|plans|merges|network|stopped)/.test(e.path));
+const actCalls = async () => (await log()).filter(e => e.method === 'POST' && /\/(approve|refuse|merge|respond|remove)$/.test(e.path));
+const creds = page => page.evaluate(() => window.__spy.creds);
+const b64 = t => Buffer.from(t).toString('base64url');
+async function openApprovals(page, from = 'leaders') {
+  await page.goto(`${base()}/`);
+  await page.waitForSelector('.rc-leader');
+  if (from !== 'leaders') { await page.tap(`.rc-leader >> text=${from}`); await page.waitForSelector('#s-chat:not([hidden])'); }
+  await page.tap('#approvals-btn');
+  await page.waitForSelector('#s-approvals:not([hidden])');
+}
+
+test('level 2: the Approvals entry, its badge, and one sentence when it cannot act', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.waitForSelector('#badge:not([hidden])');
+  assert.equal(await page.textContent('#badge'), '4');
+  assert.equal(await page.getAttribute('#approvals-btn', 'aria-label'), 'Approvals, 4 waiting');
+  await ctl({ emit: { event: 'approvals', data: { plans: 2, merges: 1, network: 0, stopped: 3 } } });
+  await page.waitForSelector('#badge:text("6")');
+  await shot(page, '40-approvals-entry');
+  // From a leader's bar too.
+  await page.tap('.rc-leader >> text=website');
+  assert.equal(await page.isVisible('#approvals-btn'), true);
+  await page.tap('#approvals-btn');
+  await page.waitForSelector('.rc-ap-row');
+  assert.deepEqual(await page.$$eval('.rc-ap-h', h => h.map(e => e.textContent)), ['Plans to approve 1', 'Merges proposed 1', 'Network requests 1', 'Stopped sandboxes 1']);
+  await shot(page, '41-approvals-list');
+  await page.tap('#back');
+  await page.waitForSelector('#s-chat:not([hidden])');
+  assert.equal(await page.textContent('#title'), 'website', 'back to the conversation it came from');
+  assert.equal((await actCalls()).length, 0);
+  await ctx.close();
+  // Off: one sentence, nothing else.
+  await ctl({ reset: true, l2Reset: true, l2: { approvals: { level2: false } } });
+  {
+    const { ctx, page } = await phone();
+    await openApprovals(page);
+    await page.waitForSelector('#ap-block:not([hidden])');
+    assert.equal(await page.textContent('#ap-block-text'), 'Approving is turned off on your Mac.');
+    assert.equal(await page.isVisible('#ap-enable'), false);
+    assert.equal(await page.$$eval('.rc-ap-row', r => r.length), 0);
+    assert.equal(await page.isVisible('#badge'), false);
+    assert.deepEqual((await l2calls()).map(e => e.path), ['/r/approvals', '/r/approvals'], 'no list is read while it is off');
+    await ctx.close();
+  }
+  // No passkey: the lists, read only, and Enable Face ID.
+  await ctl({ reset: true, l2Reset: true, l2: { approvals: { passkey: false } } });
+  {
+    const { ctx, page, problems: p2 } = await phone();
+    await openApprovals(page);
+    await page.waitForSelector('.rc-ap-row');
+    assert.equal(await page.textContent('#ap-block-text'), 'Approving needs Face ID: enable it from your Mac.');
+    assert.equal(await page.isVisible('#ap-enable'), true);
+    await shot(page, '42-approvals-no-passkey');
+    await page.tap('.rc-ap-plans');
+    await page.waitForSelector('.rc-thread');
+    assert.equal(await page.$$eval('#item-acts button', b => b.length), 0, 'no decision without a passkey');
+    assert.equal(await page.textContent('#item-acts'), 'Approving needs Face ID: enable it from your Mac.');
+    await cleanSpy(page);
+    assert.deepEqual(p2, []);
+    await ctx.close();
+  }
+  assert.deepEqual(problems, []);
+});
+
+test('level 2: enabling Face ID: the digits, the grant, create, register; and each way it stops', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true, l2: { approvals: { passkey: false } }, pkStates: ['pending', 'granted'] });
+  const { ctx, page, problems } = await phone();
+  await openApprovals(page);
+  await page.tap('#ap-enable');
+  await page.waitForSelector('#pk-check:not([hidden])');
+  assert.equal(await page.textContent('#pk-check'), '305 718');
+  assert.equal(await page.textContent('#pk-title'), 'Type this number on your Mac');
+  await shot(page, '43-faceid-digits');
+  await page.waitForSelector('#pk-go:not([hidden])', { timeout: 10000 });
+  assert.equal((await creds(page)).length, 0, 'the key is created on a tap only');
+  await page.tap('#pk-go');
+  await page.waitForSelector('#s-passkey[data-state="registered"]');
+  const [c] = await creds(page);
+  assert.equal(c.op, 'create');
+  assert.equal(c.uv, 'required');
+  assert.equal(c.attestation, 'none');
+  assert.deepEqual(c.challenge, [...Array(32).keys()], 'the challenge decoded from base64url');
+  assert.deepEqual(c.user, [...Buffer.from('dev-1')]);
+  const reg = (await calls('POST', '/r/passkey/register'))[0].body;
+  assert.deepEqual(reg, { id: b64('cred-id-12345678'), client_data_json: b64('{"type":"webauthn.create"}'), attestation_object: b64('attestation') });
+  for (const v of Object.values(reg)) assert.match(v, /^[A-Za-z0-9_-]+$/, 'base64url, no padding');
+  await shot(page, '44-faceid-ready');
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+  for (const [flags, states, want] of [
+    [['__cred:cancel'], ['granted'], 'cancelled'],
+    [['__nouv'], ['granted'], 'no_authenticator'],
+    [['__cred:nosupport'], ['granted'], 'no_authenticator'],
+    [['__cred:wrong'], ['granted'], 'failed'],
+    [[], ['refused'], 'refused'],
+  ]) {
+    await ctl({ reset: true, l2Reset: true, l2: { approvals: { passkey: false } }, pkStates: states });
+    const { ctx, page } = await phone(390, 844, { flags });
+    await openApprovals(page);
+    await page.tap('#ap-enable');
+    if (states[0] === 'granted') { await page.waitForSelector('#pk-go:not([hidden])', { timeout: 10000 }); await page.tap('#pk-go'); }
+    await page.waitForSelector(`#s-passkey[data-state="${want}"]`, { timeout: 10000 });
+    assert.equal(await page.textContent('#pk-text'), want === 'failed' ? 'The browser gave an answer this page cannot read. Nothing was saved.' : await page.evaluate(w => RC_PASSKEY_TEXT[w], want));
+    assert.equal((await calls('POST', '/r/passkey/register')).length, 0, `${flags} ${states}: nothing registered`);
+    assert.equal(await page.isVisible('#pk-again'), true);
+    await ctx.close();
+  }
+});
+
+async function openItemOf(page, cls) {
+  await page.tap(`.rc-ap-${cls}`);
+  await page.waitForSelector('#item-acts button');
+}
+async function viaSheet(page, button) {
+  await page.tap(button);
+  await page.waitForSelector('#sheet:not([hidden])');
+  await page.tap('#sheet-go');
+}
+
+test('level 2: a plan folded and unfolded, the sheet first, then Face ID, then the action', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
+  const { ctx, page, problems } = await phone();
+  await openApprovals(page);
+  await openItemOf(page, 'plans');
+  assert.equal(await page.textContent('.rc-item-title'), 'Orders table, then the checkout flow');
+  assert.equal(await page.$$eval('.rc-folded', e => e.length), 1, 'the long goal is folded');
+  assert.match(await page.textContent('.rc-item-warn'), /^2 uncommitted changes in the main checkout\.$/);
+  await shot(page, '45-plan-folded');
+  await page.tap('.rc-fold');
+  assert.equal(await page.$$eval('.rc-folded', e => e.length), 0);
+  assert.equal(await page.textContent('.rc-fold'), 'Fold');
+  await page.evaluate(() => document.getElementById('s-item').scrollTo(0, 200));
+  await shot(page, '46-plan-unfolded');
+  const before = (await l2calls()).length;
+  // A tap on Approve only opens the sheet: no request.
+  await page.tap('[data-kind="plan_approve"]');
+  await page.waitForSelector('#sheet:not([hidden])');
+  assert.equal(await page.textContent('#sheet-line'), 'Approve the plan of shop as it is: it starts 2 threads.');
+  assert.equal(await page.textContent('#sheet-go'), 'Approve with Face ID');
+  assert.equal((await l2calls()).length, before, 'opening the sheet sends nothing');
+  await shot(page, '47-approve-sheet');
+  await page.tap('#sheet-cancel');
+  await page.waitForSelector('#sheet', { state: 'hidden' });
+  assert.equal((await l2calls()).length, before, 'cancel sends nothing');
+  // Refuse is a different, red sheet.
+  await page.tap('[data-kind="plan_refuse"]');
+  assert.match(await page.getAttribute('#sheet-go', 'class'), /rc-danger-solid/);
+  await page.tap('#sheet-cancel');
+  // Approve: challenge, Face ID, the action, in that order.
+  await viaSheet(page, '[data-kind="plan_approve"]');
+  await page.waitForSelector('#ap-done:not([hidden])');
+  assert.equal(await page.textContent('#ap-done'), 'Plan approved: its threads are starting.');
+  const seq = (await l2calls()).slice(before).filter(e => e.method === 'POST').map(e => e.path);
+  assert.deepEqual(seq, ['/r/approvals/challenge', `/r/plans/p-${'1'.repeat(32)}/approve`]);
+  const ch = (await calls('POST', '/r/approvals/challenge')).at(-1).body;
+  assert.deepEqual(ch, { kind: 'plan_approve', target: `p-${'1'.repeat(32)}`, digest: 'a'.repeat(64) });
+  const g = (await creds(page)).at(-1);
+  assert.equal(g.op, 'get');
+  assert.equal(g.uv, 'required');
+  assert.equal(g.rpId, 'sbxw.tail1234.ts.net');
+  assert.deepEqual(g.allow, [[...Buffer.from('cred-id-12345678')]], 'the device\'s credential only');
+  assert.equal(g.challenge.length, 32);
+  const act = (await actCalls()).at(-1).body;
+  assert.deepEqual(act, { assertion: { id: b64('cred-id-12345678'), client_data_json: b64('{"type":"webauthn.get"}'), authenticator_data: b64('authdata-authdata-authdata-authdata-1'), signature: b64('sig') } });
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('level 2: a merge in numbers and paths, its result in the daemon\'s words', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
+  const { ctx, page, problems } = await phone();
+  await openApprovals(page);
+  await openItemOf(page, 'merges');
+  assert.deepEqual(await page.$$eval('.rc-order li', l => l.map(e => e.textContent)), ['footer', 'contact-form']);
+  assert.equal(await page.textContent('.rc-branch .rc-thread-meta'), '1a2b3c4');
+  assert.match(await page.textContent('.rc-branch-stat'), /^3 commits · 3 files \+120 −8$/);
+  await page.tap('.rc-files-box summary');
+  assert.deepEqual(await page.$$eval('.rc-file-path', l => l.slice(0, 3).map(e => e.textContent)), ['src/components/Footer.tsx', 'src/pages/legal/index.tsx', 'public/logo.png']);
+  assert.equal(await page.textContent('.rc-files li:nth-child(3) .rc-file-n'), 'binary');
+  assert.deepEqual(await page.$$eval('.rc-branch .rc-item-warn', w => w.map(e => e.textContent)), ['An earlier attempt stopped at a conflict on this branch.']);
+  await shot(page, '48-merge-detail');
+  await viaSheet(page, '[data-kind="merge"]');
+  await page.waitForSelector('#ap-done:not([hidden])');
+  assert.equal(await page.textContent('#ap-done'), 'Merged: footer, contact-form.');
+  await ctl({ l2Replies: { merge: [{ status: 200, body: L2.merge_conflict }] } });
+  await openItemOf(page, 'merges');
+  await viaSheet(page, '[data-kind="merge"]');
+  await page.waitForSelector('#ap-done:text-matches("^Stopped")');
+  assert.equal(await page.textContent('#ap-done'), 'Stopped at contact-form: conflict in src/pages/contact.tsx, src/components/Footer.tsx');
+  await shot(page, '49-merge-conflict');
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('level 2: a network request offers only the daemon\'s options; a stopped sandbox shows its own sentences', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
+  const { ctx, page, problems } = await phone();
+  await openApprovals(page);
+  await openItemOf(page, 'network');
+  assert.deepEqual(await page.$$eval('#item-acts button', b => b.map(e => e.textContent)), ['Dismiss'], 'dismiss only');
+  assert.equal(await page.textContent('.rc-item-note'), 'Allowing this needs your Mac.');
+  assert.match(await page.getAttribute('#item-acts button', 'class'), /rc-danger/);
+  await shot(page, '50-network-dismiss-only');
+  await viaSheet(page, '#item-acts button');
+  await page.waitForSelector('#ap-done:text("Answered.")');
+  assert.deepEqual((await actCalls()).at(-1).body.option, 'dismiss');
+  assert.deepEqual((await calls('POST', '/r/approvals/challenge')).at(-1).body.option, 'dismiss');
+  await openItemOf(page, 'stopped');
+  assert.deepEqual(await page.$$eval('.rc-confirm-lines p', l => l.map(e => e.textContent)), L2.stopped_one.confirm, 'verbatim');
+  await page.tap('[data-kind="sandbox_remove"]');
+  await page.waitForSelector('#sheet:not([hidden])');
+  assert.equal(await page.textContent('#sheet-line'), 'Remove the stopped sandbox old-experiment. This cannot be undone.');
+  assert.match(await page.getAttribute('#sheet-go', 'class'), /rc-danger-solid/);
+  await shot(page, '51-remove-sheet');
+  await page.tap('#sheet-go');
+  await page.waitForSelector('#ap-done:text("Sandbox removed.")');
+  assert.equal((await actCalls()).at(-1).path, '/r/stopped/old-experiment/remove');
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('level 2: "changed", every refusal, a cancelled or odd Face ID: nothing done, said plainly', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
+  const { ctx, page, problems } = await phone();
+  await openApprovals(page);
+  await openItemOf(page, 'plans');
+  // Changed: the detail moved on since it was opened.
+  await ctl({ l2Digest: { plans: 'f'.repeat(64) } });
+  const details = async () => (await l2calls()).filter(e => e.method === 'GET' && e.path.startsWith('/r/plans/p-')).length;
+  const d0 = await details();
+  await viaSheet(page, '[data-kind="plan_approve"]');
+  await page.waitForSelector('#item-status:not([hidden])');
+  assert.equal(await page.textContent('#item-status'), 'This changed since you opened it: read it again.');
+  assert.equal(await page.isVisible('#sheet'), false);
+  await page.waitForSelector('#item-acts button');
+  assert.equal(await details(), d0 + 1, 'the detail is read again');
+  assert.equal((await actCalls()).length, 0);
+  assert.equal((await creds(page)).length, 0, 'no Face ID for a changed item');
+  await shot(page, '52-changed');
+  // Now with the new digest it goes through the challenge.
+  const RE = [
+    ['challenge', { status: 403, body: { ok: false, reason: 'level2_off' } }, 'Approving is turned off on your Mac. Nothing was done.'],
+    ['challenge', { status: 403, body: { ok: false, reason: 'no_passkey' } }, /^This device has no Face ID key/],
+    ['challenge', { status: 429, body: { ok: false } }, /^Too many failed tries/],
+    ['plan_approve', { status: 403, body: { ok: false, reason: 'passkey' } }, 'Face ID could not be checked by the Mac. Nothing was done.'],
+    ['plan_approve', { status: 409, body: { ok: false, reason: 'refused', error: 'the plan has a thread named <b>x</b> already' } }, 'The Mac refused it: the plan has a thread named <b>x</b> already'],
+  ];
+  for (const [route, reply, want] of RE) {
+    await ctl({ l2Replies: { [route]: [reply] } });
+    await viaSheet(page, '[data-kind="plan_approve"]');
+    await page.waitForFunction(() => /Nothing was done|refused/.test(document.getElementById('sheet-status').textContent));
+    const t = await page.textContent('#sheet-status');
+    if (typeof want === 'string') assert.equal(t, want); else assert.match(t, want);
+    assert.equal(await page.$$eval('#sheet b', b => b.length), 0, 'the daemon\'s words are text');
+    await page.tap('#sheet-cancel');
+  }
+  assert.equal((await actCalls()).filter(e => !e.path.endsWith('/approve')).length, 0);
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+  // Face ID cancelled, or an answer of the wrong shape: no action route.
+  for (const [mode, want] of [['cancel', 'Face ID was cancelled. Nothing was done.'], ['wrong', 'Face ID gave an answer this page cannot read. Nothing was done.']]) {
+    await ctl({ reset: true, l2Reset: true });
+    const { ctx, page } = await phone(390, 844, { flags: [`__cred:${mode}`] });
+    await openApprovals(page);
+    await openItemOf(page, 'stopped');
+    await viaSheet(page, '[data-kind="sandbox_remove"]');
+    await page.waitForSelector(`#sheet-status:text("${want}")`);
+    assert.equal((await actCalls()).length, 0, `${mode}: nothing done`);
+    assert.equal((await calls('POST', '/r/approvals/challenge')).length, 1);
+    await ctx.close();
+  }
+});
+
+test('level 2: hostile text in a plan and in file paths stays text; the sheet closes when the page hides', { skip }, async () => {
+  const evil = '<img src=x onerror="window.__pwned=1"> [tap](javascript:window.__pwned=2) **bold** <a href="https://evil.example">x</a>';
+  const L = structuredClone(L2);
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
+  // The stand-in reads the fixtures it was started with; hostile text goes in through its state.
+  const { ctx, page, problems } = await phone(320, 568);
+  await page.route('**/r/plans/p-*', async route => {
+    const plan = structuredClone(L.plan);
+    plan.plan.summary = evil;
+    plan.plan.threads[0].goal = evil.repeat(5);
+    plan.plan.threads[0].name = evil;
+    plan.plan.justification = evil;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...plan, digest: 'a'.repeat(64) }) });
+  });
+  await page.route('**/r/merges/p-*', async route => {
+    const m = structuredClone(L.merge);
+    m.merge.branches[0].files[0].path = '<script>window.__pwned=3</script>/../../etc/passwd';
+    m.merge.note = evil;
+    m.merge.distillate[0].text = evil;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(m) });
+  });
+  await openApprovals(page);
+  await openItemOf(page, 'plans');
+  await page.tap('.rc-fold >> nth=0').catch(() => {});
+  const check = () => page.evaluate(() => ({
+    pwned: window.__pwned,
+    bad: document.querySelectorAll('#item img, #item script, #item a, #item strong, #item iframe, #item [onerror], #item [href]').length,
+  }));
+  assert.deepEqual(await check(), { pwned: undefined, bad: 0 });
+  assert.ok((await page.textContent('.rc-item-title')).includes('<img src=x'), 'shown as text');
+  assert.ok(await noHScroll(page));
+  await shot(page, '53-plan-hostile-320');
+  await page.tap('#back');
+  await openItemOf(page, 'merges');
+  await page.tap('.rc-files-box summary >> nth=0');
+  assert.deepEqual(await check(), { pwned: undefined, bad: 0 });
+  assert.equal(await page.textContent('.rc-file-path'), '<script>window.__pwned=3</script>/../../etc/passwd');
+  assert.ok(await noHScroll(page));
+  // The sheet, then the page hides: everything of it is dropped.
+  await page.tap('[data-kind="merge"]');
+  await page.waitForSelector('#sheet:not([hidden])');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForSelector('#sheet', { state: 'hidden' });
+  assert.equal((await calls('POST', '/r/approvals/challenge')).length, 0);
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('level 2 screens at 320x568', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true, pkStates: ['pending'] });
+  const { ctx, page, problems } = await phone(320, 568);
+  await page.goto(`${base()}/`);
+  await page.waitForSelector('#badge:not([hidden])');
+  await shot(page, '60-approvals-entry-320');
+  await page.tap('#approvals-btn');
+  await page.waitForSelector('.rc-ap-row');
+  assert.ok(await noHScroll(page));
+  await shot(page, '61-approvals-list-320');
+  for (const [cls, name, btn] of [['plans', 'plan', '[data-kind="plan_approve"]'], ['merges', 'merge', '[data-kind="merge"]'], ['network', 'network', '#item-acts button'], ['stopped', 'stopped', '[data-kind="sandbox_remove"]']]) {
+    await openItemOf(page, cls);
+    assert.ok(await noHScroll(page), name);
+    await shot(page, `62-${name}-320`);
+    await page.tap(btn);
+    await page.waitForSelector('#sheet:not([hidden])');
+    await shot(page, `63-${name}-sheet-320`);
+    await page.tap('#sheet-cancel');
+    await page.tap('#back');
+    await page.waitForSelector('.rc-ap-row');
+  }
+  await ctl({ l2: { approvals: { passkey: false } } });
+  await page.tap('#back');
+  await page.tap('#approvals-btn');
+  await page.waitForSelector('#ap-enable:not([hidden])');
+  await page.tap('#ap-enable');
+  await page.waitForSelector('#pk-check:not([hidden])');
+  await shot(page, '64-faceid-digits-320');
+  await ctl({ l2Reset: true });
+  await page.tap('#back');
+  await page.waitForSelector('.rc-ap-row');
+  await openItemOf(page, 'plans');
+  await ctl({ l2Digest: { plans: 'f'.repeat(64) } });
+  await viaSheet(page, '[data-kind="plan_approve"]');
+  await page.waitForSelector('#item-status:not([hidden])');
+  await shot(page, '65-changed-320');
+  assert.deepEqual(problems, []);
+  await ctx.close();
 });

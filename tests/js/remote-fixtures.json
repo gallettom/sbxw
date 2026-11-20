@@ -213,5 +213,309 @@
     "request_id": "0123456789abcdef0123456789abcdef",
     "check": "482913",
     "expires_ms": 1763650300000
+  },
+  "level2": {
+    "approvals": {
+      "level2": true,
+      "passkey": true,
+      "rp_ok": true,
+      "counts": {
+        "plans": 1,
+        "merges": 1,
+        "network": 1,
+        "stopped": 1
+      }
+    },
+    "plans": {
+      "plans": [
+        {
+          "id": "p-11111111111111111111111111111111",
+          "sandbox": "shop",
+          "summary": "Orders table, then the checkout flow",
+          "threads": 2,
+          "created_ms": 1763650000000
+        }
+      ]
+    },
+    "plan": {
+      "plan": {
+        "id": "p-11111111111111111111111111111111",
+        "sandbox": "shop",
+        "summary": "Orders table, then the checkout flow",
+        "justification": "Two threads on separate branches: the schema and the checkout do not touch the same files.",
+        "variant": "split",
+        "main_uncommitted": 2,
+        "threads": [
+          {
+            "name": "db-schema",
+            "model": "opus",
+            "repo": ".",
+            "scope": "migrations/, src/db/",
+            "goal": "Design the orders table for the shop: columns for the customer id, the total in cents, the currency, the state (pending, paid, shipped, refunded), created and updated times. Write the migration with sqlx, make it reversible, and add an index on the customer id and on the state. Keep the existing carts table as it is: the cart becomes an order at checkout only.\n\nTests: a migration up and down on an empty database, and one on a copy of the seed data.\nCommit on your branch when the tests pass; do not touch the payments module.",
+            "ticket": "T-4"
+          },
+          {
+            "name": "checkout",
+            "model": "sonnet",
+            "repo": ".",
+            "scope": "src/checkout/",
+            "goal": "Turn a cart into an order at checkout, using the new table.",
+            "ticket": ""
+          }
+        ]
+      },
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "merges": {
+      "merges": [
+        {
+          "id": "p-22222222222222222222222222222222",
+          "sandbox": "website",
+          "variant": "split",
+          "branches": 2
+        }
+      ]
+    },
+    "merge": {
+      "merge": {
+        "id": "p-22222222222222222222222222222222",
+        "sandbox": "website",
+        "variant": "split",
+        "order": [
+          "footer",
+          "contact-form"
+        ],
+        "note": "Footer first: the contact form links to the new legal page.",
+        "distillate": [
+          {
+            "kind": "decision",
+            "text": "Legal pages live under /legal, one file per page."
+          },
+          {
+            "kind": "warning",
+            "text": "The contact form posts to a stub until the mail service exists."
+          }
+        ],
+        "branches": [
+          {
+            "thread": "footer",
+            "branch": "sbxw/footer",
+            "repo": ".",
+            "tip": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+            "base": {
+              "branch": "main",
+              "tip": "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432"
+            },
+            "ahead": 3,
+            "files_changed": 3,
+            "insertions": 120,
+            "deletions": 8,
+            "files": [
+              {
+                "path": "src/components/Footer.tsx",
+                "insertions": 64,
+                "deletions": 8
+              },
+              {
+                "path": "src/pages/legal/index.tsx",
+                "insertions": 56,
+                "deletions": 0
+              },
+              {
+                "path": "public/logo.png",
+                "insertions": null,
+                "deletions": null
+              }
+            ],
+            "files_truncated": false,
+            "known_conflict": false
+          },
+          {
+            "thread": "contact-form",
+            "branch": "sbxw/contact-form",
+            "repo": ".",
+            "tip": "77aa88bb99cc00dd11ee22ff33aa44bb55cc66dd",
+            "base": {
+              "branch": "main",
+              "tip": "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432"
+            },
+            "ahead": 1,
+            "files_changed": 1,
+            "insertions": 40,
+            "deletions": 0,
+            "files": [
+              {
+                "path": "src/pages/contact.tsx",
+                "insertions": 40,
+                "deletions": 0
+              }
+            ],
+            "files_truncated": false,
+            "known_conflict": true
+          }
+        ]
+      },
+      "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "merge_done": {
+      "ok": true,
+      "merge": {
+        "order": [
+          "footer",
+          "contact-form"
+        ],
+        "note": "",
+        "state": "merged",
+        "results": [
+          {
+            "thread": "footer",
+            "ok": true,
+            "commit": "abc1234"
+          },
+          {
+            "thread": "contact-form",
+            "ok": true,
+            "commit": "def5678"
+          }
+        ]
+      }
+    },
+    "merge_conflict": {
+      "ok": true,
+      "merge": {
+        "order": [
+          "footer",
+          "contact-form"
+        ],
+        "note": "",
+        "state": "failed",
+        "results": [
+          {
+            "thread": "footer",
+            "ok": true,
+            "commit": "abc1234"
+          },
+          {
+            "thread": "contact-form",
+            "ok": false,
+            "error": "conflict in src/pages/contact.tsx, src/components/Footer.tsx"
+          }
+        ]
+      }
+    },
+    "network": {
+      "requests": [
+        {
+          "id": "network:abc123",
+          "sandbox": "docs",
+          "host": "registry.npmjs.org",
+          "created_at": "2026-11-20T17:30:00Z",
+          "options": [
+            {
+              "id": "dismiss",
+              "label": "dismiss"
+            }
+          ],
+          "mac_only": [
+            "allow"
+          ]
+        }
+      ]
+    },
+    "network_one": {
+      "request": {
+        "id": "network:abc123",
+        "sandbox": "docs",
+        "host": "registry.npmjs.org",
+        "detail": "GET https://registry.npmjs.org/left-pad (npm install)",
+        "created_at": "2026-11-20T17:30:00Z",
+        "options": [
+          {
+            "id": "dismiss",
+            "label": "dismiss"
+          }
+        ],
+        "mac_only": [
+          "allow"
+        ]
+      },
+      "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "stopped": {
+      "sandboxes": [
+        {
+          "name": "old-experiment",
+          "agent": "claude",
+          "chat": false,
+          "workspace": "/Users/me/dev/old-experiment",
+          "created_at": "2026-10-02T09:12:00Z"
+        }
+      ]
+    },
+    "stopped_one": {
+      "sandbox": {
+        "name": "old-experiment",
+        "agent": "claude",
+        "chat": false,
+        "workspace": "/Users/me/dev/old-experiment",
+        "created_at": "2026-10-02T09:12:00Z"
+      },
+      "confirm": [
+        "Remove old-experiment?",
+        "Sandbox: old-experiment (claude).",
+        "This is irreversible: everything inside the sandbox is lost (installed packages, files outside its workspace, its thread records). Its terminals close.",
+        "Its workspace folder stays on this machine: /Users/me/dev/old-experiment"
+      ],
+      "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "passkey_start": {
+      "request_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "check": "305718",
+      "expires_ms": 0
+    },
+    "passkey_options": {
+      "public_key": {
+        "rp": {
+          "id": "sbxw.tail1234.ts.net",
+          "name": "sbxw"
+        },
+        "user": {
+          "id": "ZGV2LTE",
+          "name": "Test iPhone",
+          "displayName": "Test iPhone"
+        },
+        "challenge": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "pubKeyCredParams": [
+          {
+            "type": "public-key",
+            "alg": -7
+          }
+        ],
+        "authenticatorSelection": {
+          "authenticatorAttachment": "platform",
+          "residentKey": "preferred",
+          "userVerification": "required"
+        },
+        "attestation": "none",
+        "timeout": 120000,
+        "excludeCredentials": []
+      },
+      "expires_ms": 0
+    },
+    "challenge": {
+      "public_key": {
+        "challenge": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+        "rpId": "sbxw.tail1234.ts.net",
+        "allowCredentials": [
+          {
+            "type": "public-key",
+            "id": "Y3JlZC1pZC0xMjM0NTY3OA"
+          }
+        ],
+        "userVerification": "required",
+        "timeout": 60000
+      },
+      "expires_ms": 0
+    }
   }
 }

@@ -14,6 +14,11 @@
 // {uploadSlow: ms} a pause after each 64 KiB read (so progress shows),
 // {uploadHold: true} uploads wait until {uploadHold: false},
 // {transcribeDelay: ms} how long a transcription takes.
+// Level 2 (API-level2.md): {l2: {approvals: {...}}} the state GET /r/approvals
+// answers, {l2Digest: {plans|merges|network|stopped: hex}} a detail's new
+// digest (a challenge with the old one is "changed"), {l2Replies: {kind:
+// [{status, body}]}} how the next challenge or action is answered,
+// {pkStates: [...]} the next passkey/status answers, {l2Reset: true}.
 // Uploads follow API.md 2.6.1: the raw body, an id of 32 hex back, no path.
 // Usage: node tests/js/remote-standin.mjs [port]
 import http from 'node:http';
@@ -70,8 +75,86 @@ export function startStandin(port = 0) {
     uploadSlow: 0,
     uploadHold: false,
     transcribeDelay: 0,
+    l2: null,
     holds: [],
   };
+  const l2Fresh = () => {
+    const L = structuredClone(fx.level2);
+    return {
+      approvals: L.approvals, L,
+      digest: { plans: L.plan.digest, merges: L.merge.digest, network: L.network_one.digest, stopped: L.stopped_one.digest },
+      replies: {}, pkStates: [], pk: 'none', chal: null, done: [],
+    };
+  };
+  s.l2 = l2Fresh();
+  const B64U = /^[A-Za-z0-9_-]+$/;
+  const L2_ACT = /^\/r\/(plans|merges|network|stopped)\/([^/]+)\/(approve|refuse|merge|respond|remove)$/;
+  const L2_DETAIL = /^\/r\/(plans|merges|network|stopped)\/([^/]+)$/;
+  const KIND = { approve: 'plan_approve', refuse: 'plan_refuse', merge: 'merge', respond: 'network_respond', remove: 'sandbox_remove' };
+  const WHAT = { plan_approve: 'plans', plan_refuse: 'plans', merge: 'merges', network_respond: 'network', sandbox_remove: 'stopped' };
+  function level2(req, p, body, res) {
+    const L = s.l2.L;
+    const A = s.l2.approvals;
+    const off = () => send(res, 403, { ok: false, error: 'level 2 is off', reason: 'level2_off' });
+    if (p === '/r/approvals' && req.method === 'GET') return send(res, 200, A.level2 ? A : { level2: false, passkey: A.passkey, rp_ok: A.rp_ok, counts: null });
+    if (!A.level2) return off();
+    if (p === '/r/passkey/start') { s.l2.pk = 'pending'; return send(res, 200, { ...L.passkey_start, expires_ms: Date.now() + 300000 }); }
+    if (p === '/r/passkey/status') {
+      if (s.l2.pkStates.length) s.l2.pk = s.l2.pkStates.shift();
+      return send(res, 200, { state: s.l2.pk, expires_ms: Date.now() + 200000 });
+    }
+    if (p === '/r/passkey/options') {
+      if (s.l2.pk !== 'granted') return send(res, 403, { ok: false, error: 'no grant', reason: 'no_grant' });
+      return send(res, 200, { ...L.passkey_options, expires_ms: Date.now() + 120000 });
+    }
+    if (p === '/r/passkey/register') {
+      const ok = body && ['id', 'client_data_json', 'attestation_object'].every(k => typeof body[k] === 'string' && B64U.test(body[k])) && Object.keys(body).length === 3;
+      s.l2.pk = 'none';
+      if (!ok) return send(res, 403, { ok: false, error: 'passkey', reason: 'passkey' });
+      s.l2.pk = 'registered';
+      A.passkey = true;
+      A.rp_ok = true;
+      return send(res, 200, { ok: true });
+    }
+    if (p === '/r/plans') return send(res, 200, L.plans);
+    if (p === '/r/merges') return send(res, 200, L.merges);
+    if (p === '/r/network') return send(res, 200, L.network);
+    if (p === '/r/stopped') return send(res, 200, L.stopped);
+    if (p === '/r/approvals/challenge') {
+      if (!A.passkey || A.rp_ok === false) return send(res, 403, { ok: false, error: 'no passkey', reason: 'no_passkey' });
+      const q = s.l2.replies.challenge?.shift();
+      if (q) return send(res, q.status, q.body);
+      const what = WHAT[body?.kind];
+      if (!what) return send(res, 400, { ok: false, error: 'kind' });
+      if (body.digest !== s.l2.digest[what]) return send(res, 409, { ok: false, error: 'changed', reason: 'changed' });
+      s.l2.chal = { kind: body.kind, target: body.target, option: body.option || null };
+      return send(res, 200, { ...L.challenge, expires_ms: Date.now() + 60000 });
+    }
+    const act = L2_ACT.exec(p);
+    if (act && req.method === 'POST') {
+      const kind = KIND[act[3]];
+      const target = decodeURIComponent(act[2]);
+      const chal = s.l2.chal;
+      s.l2.chal = null; // taken, success or failure
+      const a = body?.assertion;
+      const shaped = a && ['id', 'client_data_json', 'authenticator_data', 'signature'].every(k => typeof a[k] === 'string' && B64U.test(a[k]));
+      if (!chal || chal.kind !== kind || chal.target !== target || (kind === 'network_respond' && chal.option !== body.option) || !shaped) {
+        return send(res, 403, { ok: false, error: 'passkey', reason: 'passkey' });
+      }
+      const q = s.l2.replies[kind]?.shift();
+      if (q) return send(res, q.status, q.body);
+      s.l2.done.push({ kind, target, option: body.option || null });
+      if (kind === 'merge') return send(res, 200, L.merge_done);
+      return send(res, 200, { ok: true });
+    }
+    const det = L2_DETAIL.exec(p);
+    if (det && req.method === 'GET') {
+      const what = det[1];
+      const one = { plans: L.plan, merges: L.merge, network: L.network_one, stopped: L.stopped_one }[what];
+      return send(res, 200, { ...one, digest: s.l2.digest[what] });
+    }
+    return null;
+  }
   const UPLOAD = /^\/r\/leaders\/([^/]+)\/upload$/;
   const UPLOAD_ID = /^\/r\/leaders\/([^/]+)\/upload\/([^/]+)$/;
   // The daemon's name rule (upload_name): last component, [A-Za-z0-9._-],
@@ -108,6 +191,11 @@ export function startStandin(port = 0) {
       if (c.history) Object.assign(s.history, c.history);
       if (c.uploadReplies) s.uploadReplies = c.uploadReplies;
       if ('transcribeDelay' in c) s.transcribeDelay = c.transcribeDelay;
+      if (c.l2Reset || !s.l2) s.l2 = l2Fresh();
+      if (c.l2) Object.assign(s.l2.approvals, c.l2.approvals || {});
+      if (c.l2Digest) Object.assign(s.l2.digest, c.l2Digest);
+      if (c.l2Replies) Object.assign(s.l2.replies, c.l2Replies);
+      if (c.pkStates) s.l2.pkStates = c.pkStates;
       if ('uploadSlow' in c) s.uploadSlow = c.uploadSlow;
       if ('uploadHold' in c) { s.uploadHold = c.uploadHold; if (!c.uploadHold) s.holds.splice(0).forEach(r => r()); }
       if (c.emit) emit(c.emit.event, c.emit.data);
@@ -163,6 +251,9 @@ export function startStandin(port = 0) {
         return send(res, reply.status, reply.body);
       }
       return send(res, 200, { ok: true, masked: 0 });
+    }
+    if (/^\/r\/(approvals|passkey|plans|merges|network|stopped)(\/|$)/.test(p)) {
+      if (level2(req, p, entry.body, res) !== null) return;
     }
     const up = UPLOAD.exec(p);
     if (up && req.method === 'POST') {

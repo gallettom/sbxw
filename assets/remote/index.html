@@ -40,6 +40,10 @@
     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
     <span>Interrupt</span>
   </button>
+  <button id="approvals-btn" class="rc-icon-btn rc-ap-btn" type="button" aria-label="Approvals" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 5 6.2v5.3c0 4.3 2.9 7.6 7 9 4.1-1.4 7-4.7 7-9V6.2z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>
+    <span id="badge" class="rc-badge" hidden></span>
+  </button>
   <button id="menu-btn" class="rc-icon-btn" type="button" aria-label="Device menu" aria-haspopup="true" aria-expanded="false" hidden>
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18.5" cy="12" r="1.5"/></svg>
   </button>
@@ -57,6 +61,19 @@
   <p id="menu-device" class="rc-menu-device"></p>
   <button id="forget" class="rc-btn rc-danger" type="button" role="menuitem">Forget this device</button>
   <p class="rc-menu-note">Forgetting it means pairing again from the Mac.</p>
+</div>
+
+<!-- Level 2: every action opens this sheet first; nothing acts without it
+     and a successful Face ID. -->
+<div id="veil" class="rc-veil" hidden></div>
+<div id="sheet" class="rc-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+  <h2 id="sheet-title"></h2>
+  <p id="sheet-line" class="rc-sheet-line"></p>
+  <p id="sheet-status" class="rc-sheet-status" role="status" aria-live="polite"></p>
+  <div class="rc-sheet-row">
+    <button id="sheet-cancel" class="rc-btn rc-quiet" type="button">Cancel</button>
+    <button id="sheet-go" class="rc-btn rc-primary" type="button"></button>
+  </div>
 </div>
 
 <main id="screens">
@@ -97,6 +114,35 @@
   <section id="s-leaders" class="rc-screen" hidden>
     <ul id="leaders" class="rc-leaders"></ul>
     <p id="leaders-empty" class="rc-empty" hidden>No team leader is running</p>
+  </section>
+
+  <!-- Approvals (level 2): what waits, in four lists. -->
+  <section id="s-approvals" class="rc-screen" hidden>
+    <p id="ap-done" class="rc-ap-done" role="status" hidden></p>
+    <div id="ap-block" class="rc-ap-block" hidden>
+      <p id="ap-block-text"></p>
+      <button id="ap-enable" class="rc-btn rc-primary" type="button" hidden>Enable Face ID on this device</button>
+    </div>
+    <div id="ap-lists" class="rc-ap-lists"></div>
+    <p id="ap-empty" class="rc-empty" hidden>Nothing waits for you</p>
+  </section>
+
+  <!-- One item: everything the decision is about, as text. -->
+  <section id="s-item" class="rc-screen" hidden>
+    <p id="item-status" class="rc-item-status" role="status" hidden></p>
+    <div id="item" class="rc-item"></div>
+    <div id="item-acts" class="rc-item-acts"></div>
+  </section>
+
+  <!-- Enabling Face ID on this device (API-level2.md section 4). -->
+  <section id="s-passkey" class="rc-screen rc-center" hidden>
+    <div class="rc-card">
+      <h2 id="pk-title">Enable Face ID</h2>
+      <p id="pk-check" class="rc-check" aria-live="polite" hidden></p>
+      <p id="pk-text" class="rc-muted"></p>
+      <button id="pk-go" class="rc-btn rc-primary" type="button" hidden>Create the Face ID key</button>
+      <button id="pk-again" class="rc-btn" type="button" hidden>Start again</button>
+    </div>
   </section>
 
   <!-- A leader's conversation. -->

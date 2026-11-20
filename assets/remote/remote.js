@@ -62,6 +62,10 @@
     es: null,
     probe: null,
     paired: false,
+    screen: 's-loading',
+    l2: null,            // GET /r/approvals: { level2, passkey, rp_ok, counts }
+    l2From: null,        // where Approvals was opened: null (leaders) or a sandbox
+    item: null,          // the open detail: { what, id, data, digest }
   };
 
   const banner = $('unreachable');
@@ -71,11 +75,15 @@
   });
 
   // ── Screens ──
-  const SCREENS = ['s-loading', 's-pair', 's-unpaired', 's-leaders', 's-chat'];
+  const SCREENS = ['s-loading', 's-pair', 's-unpaired', 's-leaders', 's-chat', 's-approvals', 's-item', 's-passkey'];
+  const BACK = ['s-chat', 's-approvals', 's-item', 's-passkey'];
   function show(id) {
     for (const s of SCREENS) $(s).hidden = s !== id;
-    $('back').hidden = id !== 's-chat';
-    $('mark').hidden = id === 's-chat';
+    st.screen = id;
+    $('back').hidden = !BACK.includes(id);
+    $('mark').hidden = BACK.includes(id);
+    $('approvals-btn').hidden = !(id === 's-leaders' || id === 's-chat');
+    if (id !== 's-item') closeSheet();
     if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; disarmInterrupt(); }
     $('menu-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     closeMenu();
@@ -110,6 +118,9 @@
     for (const t of st.trays.values()) t.clear();
     st.trays.clear();
     stopRecording(true);
+    st.l2 = null;
+    st.item = null;
+    stopPasskeyPoll();
     $('field').value = '';
     banner.hidden = true;
     $('unpaired-title').textContent = title;
@@ -194,6 +205,7 @@
     startEvents();
     const res = await api.leaders();
     if (res.ok) setLeaders(res.data);
+    refreshL2();
   }
 
   // ── Events ──
@@ -207,6 +219,11 @@
     es.addEventListener('history', e => {
       const d = parse(e.data);
       if (d && d.sandbox === st.current) fetchNewer();
+    });
+    // Level 2's counts: numbers only.
+    es.addEventListener('approvals', e => {
+      const d = parse(e.data);
+      if (d && typeof d === 'object') { st.l2 = { ...(st.l2 || { level2: true }), counts: d }; renderBadge(); }
     });
     es.addEventListener('bye', e => {
       const d = parse(e.data);
@@ -254,7 +271,7 @@
   function setLeaders(data) {
     st.leaders = rcLeaders(data);
     renderLeaders();
-    if (st.current) {
+    if (st.current && st.screen === 's-chat') {
       renderTail();
       renderChatTitle();
     }
@@ -1041,12 +1058,468 @@
     }
   });
 
+  // ══ Level 2: approving with Face ID ═══════════════════════════════════
+  // Lists and details are read with the cookie; every action goes through
+  // the sheet, a challenge bound to what is shown (its digest), Face ID, and
+  // the assertion, in that order. The challenge, the options and the
+  // assertion live in the sheet's locals for the one request, and are
+  // dropped when the sheet closes or the page hides.
+  const l2 = rcL2Client(api);
+  const LISTS = [
+    { what: 'plans', key: 'plans', title: 'Plans to approve', count: 'plans' },
+    { what: 'merges', key: 'merges', title: 'Merges proposed', count: 'merges' },
+    { what: 'network', key: 'requests', title: 'Network requests', count: 'network' },
+    { what: 'stopped', key: 'sandboxes', title: 'Stopped sandboxes', count: 'stopped' },
+  ];
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = String(text);
+    return e;
+  };
+  const str = v => (typeof v === 'string' ? v : v === null || v === undefined ? '' : String(v));
+
+  async function refreshL2() {
+    const res = await l2.approvals();
+    if (res.ok && res.data && typeof res.data === 'object') st.l2 = res.data;
+    else if (res.status === 404) st.l2 = { level2: false };
+    renderBadge();
+    return res;
+  }
+  function renderBadge() {
+    const c = st.l2?.level2 && st.l2.counts && typeof st.l2.counts === 'object' ? st.l2.counts : null;
+    const n = c ? ['plans', 'merges', 'network', 'stopped'].reduce((t, k) => t + (Math.max(0, Math.floor(Number(c[k]))) || 0), 0) : 0;
+    const b = $('badge');
+    b.textContent = n > 99 ? '99+' : String(n);
+    b.hidden = !n;
+    $('approvals-btn').setAttribute('aria-label', n ? `Approvals, ${n} waiting` : 'Approvals');
+  }
+  $('approvals-btn').addEventListener('click', () => {
+    st.l2From = st.screen === 's-chat' ? st.current : null;
+    if (st.screen === 's-chat') { saveDraft(); stopRecording(false); disarmInterrupt(); }
+    showApprovals();
+  });
+  function leaveApprovals() {
+    const back = st.l2From;
+    st.l2From = null;
+    st.item = null;
+    if (back && st.current === back) {
+      show('s-chat');
+      renderChatTitle();
+      renderTail();
+      return;
+    }
+    showLeaders();
+  }
+
+  // ── The lists ──
+  async function showApprovals(done) {
+    st.item = null;
+    stopPasskeyPoll();
+    setTitle('Approvals', '');
+    show('s-approvals');
+    $('ap-done').textContent = done || '';
+    $('ap-done').hidden = !done;
+    const res = await refreshL2();
+    if (st.screen !== 's-approvals') return;
+    const a = st.l2;
+    const block = res.ok ? rcApprovalsBlock(a) : rcL2Fail(res);
+    $('ap-block').hidden = !block;
+    $('ap-block-text').textContent = block;
+    // Face ID is enabled from here once the Mac has level 2 on.
+    $('ap-enable').hidden = !(a?.level2 === true && (a.passkey !== true || a.rp_ok === false));
+    if (!a?.level2) { $('ap-lists').replaceChildren(); $('ap-empty').hidden = true; return; }
+    const got = await Promise.all(LISTS.map(L => l2.list(L.what)));
+    if (st.screen !== 's-approvals') return;
+    const sections = [];
+    LISTS.forEach((L, i) => {
+      const r = got[i];
+      const items = r.ok && r.data && Array.isArray(r.data[L.key]) ? r.data[L.key] : [];
+      if (!items.length) return;
+      const sec = el('section', 'rc-ap-sec');
+      const h = el('h2', 'rc-ap-h', L.title);
+      const n = el('span', 'rc-ap-n', items.length);
+      h.append(' ', n);
+      const ul = el('ul', 'rc-ap-list');
+      for (const it of items) ul.append(listRow(L.what, it));
+      sec.append(h, ul);
+      sections.push(sec);
+    });
+    $('ap-lists').replaceChildren(...sections);
+    $('ap-empty').hidden = sections.length > 0;
+  }
+  function listRow(what, it) {
+    const li = el('li');
+    const b = el('button', `rc-ap-row rc-ap-${what}`);
+    b.type = 'button';
+    let id, main, meta;
+    if (what === 'plans') { id = str(it.id); main = str(it.summary) || id; meta = `${str(it.sandbox)} · ${Number(it.threads) || 0} threads`; }
+    else if (what === 'merges') { id = str(it.id); main = `Merge of ${str(it.sandbox)}`; meta = `${str(it.variant)} · ${Number(it.branches) || 0} branches`; }
+    else if (what === 'network') { id = str(it.id); main = str(it.host); meta = str(it.sandbox); }
+    else { id = str(it.name); main = str(it.name); meta = [str(it.agent) || (it.chat ? 'chat' : ''), str(it.workspace)].filter(Boolean).join(' · '); }
+    b.append(el('span', 'rc-ap-main', main), el('span', 'rc-ap-meta', meta));
+    b.addEventListener('click', () => openItem(what, id));
+    li.append(b);
+    return li;
+  }
+
+  // ── A detail ──
+  async function openItem(what, id, said) {
+    closeSheet();
+    st.item = { what, id, data: null, digest: '' };
+    const titles = { plans: 'Plan', merges: 'Merge', network: 'Network request', stopped: 'Stopped sandbox' };
+    setTitle(titles[what], '');
+    show('s-item');
+    itemStatus(said || '');
+    $('item').replaceChildren(el('p', 'rc-muted', 'Loading…'));
+    $('item-acts').replaceChildren();
+    const res = await l2.detail(what, id);
+    if (st.item?.what !== what || st.item.id !== id) return;
+    if (!res.ok || !res.data) {
+      $('item').replaceChildren(el('p', 'rc-muted', res.status === 404 ? 'This is not waiting any more.' : rcL2Fail(res)));
+      return;
+    }
+    const d = res.data;
+    const key = { plans: 'plan', merges: 'merge', network: 'request', stopped: 'sandbox' }[what];
+    const data = d[key] && typeof d[key] === 'object' ? d[key] : {};
+    st.item.data = data;
+    st.item.digest = typeof d.digest === 'string' && /^[0-9a-f]{64}$/.test(d.digest) ? d.digest : '';
+    const body = what === 'plans' ? planView(data) : what === 'merges' ? mergeView(data) : what === 'network' ? networkView(data) : stoppedView(data, d.confirm);
+    $('item').replaceChildren(...body);
+    renderActs(what, data);
+  }
+  function itemStatus(text, tone) {
+    const p = $('item-status');
+    p.textContent = text;
+    p.className = `rc-item-status${tone ? ` rc-t-${tone}` : ''}`;
+    p.hidden = !text;
+  }
+  // A field: a quiet label and its value, as text. Long text folds.
+  function field_(label, value, opts = {}) {
+    const box = el('div', `rc-kv${opts.mono ? ' rc-kv-mono' : ''}`);
+    box.append(el('p', 'rc-kv-k', label));
+    const v = el('p', 'rc-kv-v', value);
+    box.append(v);
+    if (opts.fold && (value.length > 220 || value.split('\n').length > 4)) {
+      v.classList.add('rc-folded');
+      const t = el('button', 'rc-fold', 'Show all');
+      t.type = 'button';
+      t.setAttribute('aria-expanded', 'false');
+      t.addEventListener('click', () => {
+        const open = v.classList.toggle('rc-folded') === false;
+        t.textContent = open ? 'Fold' : 'Show all';
+        t.setAttribute('aria-expanded', String(open));
+      });
+      box.append(t);
+    }
+    return box;
+  }
+  function head(title, sub) {
+    const h = el('div', 'rc-item-head');
+    h.append(el('h2', 'rc-item-title', title));
+    if (sub) h.append(el('p', 'rc-item-sub', sub));
+    return h;
+  }
+  function planView(p) {
+    const out = [head(str(p.summary) || 'A plan', `${str(p.sandbox)} · ${str(p.variant) === 'shared' ? 'one shared branch' : 'a branch per thread'}`)];
+    if (str(p.justification)) out.push(field_('Why this way', str(p.justification), { fold: true }));
+    const dirty = Number(p.main_uncommitted) || 0;
+    if (dirty) out.push(el('p', 'rc-item-warn', `${dirty} uncommitted ${dirty === 1 ? 'change' : 'changes'} in the main checkout.`));
+    const threads = Array.isArray(p.threads) ? p.threads : [];
+    out.push(el('h3', 'rc-item-h', threads.length === 1 ? '1 thread' : `${threads.length} threads`));
+    for (const t of threads) {
+      const card = el('div', 'rc-thread');
+      const top = el('div', 'rc-thread-top');
+      top.append(el('span', 'rc-thread-name', str(t.name)));
+      const meta = [str(t.model), str(t.repo) && str(t.repo) !== '.' ? str(t.repo) : '', str(t.ticket)].filter(Boolean).join(' · ');
+      if (meta) top.append(el('span', 'rc-thread-meta', meta));
+      card.append(top);
+      if (str(t.scope)) card.append(field_('Scope', str(t.scope), { fold: true }));
+      if (str(t.goal)) card.append(field_('Goal', str(t.goal), { fold: true }));
+      out.push(card);
+    }
+    return out;
+  }
+  const short = h => str(h).slice(0, 7);
+  function mergeView(m) {
+    const out = [head(`Merge of ${str(m.sandbox)}`, str(m.variant) === 'shared' ? 'one shared branch' : 'a branch per thread')];
+    const order = Array.isArray(m.order) ? m.order.map(str) : [];
+    if (order.length) {
+      const ol = el('ol', 'rc-order');
+      for (const o of order) ol.append(el('li', null, o));
+      const box = el('div', 'rc-kv');
+      box.append(el('p', 'rc-kv-k', 'In this order'), ol);
+      out.push(box);
+    }
+    if (str(m.note)) out.push(field_('The lead\'s note', str(m.note), { fold: true }));
+    const dist = Array.isArray(m.distillate) ? m.distillate : [];
+    if (dist.length) {
+      const ul = el('ul', 'rc-dist');
+      for (const d of dist) {
+        const li = el('li', `rc-dist-${d?.kind === 'warning' ? 'warning' : 'decision'}`);
+        li.append(el('span', 'rc-dist-k', d?.kind === 'warning' ? 'Warning' : 'Decision'), el('span', null, str(d?.text)));
+        ul.append(li);
+      }
+      const box = el('div', 'rc-kv');
+      box.append(el('p', 'rc-kv-k', 'Kept for later sessions'), ul);
+      out.push(box);
+    }
+    for (const b of Array.isArray(m.branches) ? m.branches : []) {
+      const card = el('div', 'rc-branch');
+      const top = el('div', 'rc-thread-top');
+      top.append(el('span', 'rc-thread-name', str(b.branch) || str(b.thread)));
+      top.append(el('span', 'rc-thread-meta', b.tip ? short(b.tip) : 'unreadable'));
+      card.append(top);
+      const base = b.base && typeof b.base === 'object' ? b.base : {};
+      const ins = Number(b.insertions) || 0, del = Number(b.deletions) || 0;
+      card.append(el('p', 'rc-branch-line', `into ${str(base.branch)} at ${base.tip ? short(base.tip) : 'unreadable'}${str(b.repo) && str(b.repo) !== '.' ? ` (${str(b.repo)})` : ''}`));
+      const stat = el('p', 'rc-branch-stat');
+      stat.append(el('span', null, `${Number(b.ahead) || 0} ${Number(b.ahead) === 1 ? 'commit' : 'commits'} · ${Number(b.files_changed) || 0} files `), el('span', 'rc-ins', `+${ins}`), ' ', el('span', 'rc-del', `−${del}`));
+      card.append(stat);
+      if (b.known_conflict === true) card.append(el('p', 'rc-item-warn', 'An earlier attempt stopped at a conflict on this branch.'));
+      const files = Array.isArray(b.files) ? b.files : [];
+      if (files.length) {
+        const ul = el('ul', 'rc-files');
+        for (const f of files) {
+          const li = el('li');
+          li.append(el('span', 'rc-file-path', str(f?.path)));
+          const n = el('span', 'rc-file-n');
+          if (f?.insertions === null || f?.deletions === null) n.textContent = 'binary';
+          else n.append(el('span', 'rc-ins', `+${Number(f?.insertions) || 0}`), ' ', el('span', 'rc-del', `−${Number(f?.deletions) || 0}`));
+          li.append(n);
+          ul.append(li);
+        }
+        const fold = el('details', 'rc-files-box');
+        const sum = el('summary', null, files.length === 1 ? '1 file' : `${files.length} files`);
+        fold.append(sum, ul);
+        if (b.files_truncated === true) fold.append(el('p', 'rc-muted rc-small-text', 'More files changed than are listed here: see them on your Mac.'));
+        card.append(fold);
+      }
+      out.push(card);
+    }
+    return out;
+  }
+  function networkView(r) {
+    const out = [head(str(r.host), `asked by ${str(r.sandbox)}`)];
+    if (str(r.detail)) out.push(field_('What sbx says', str(r.detail), { fold: true, mono: true }));
+    if (str(r.created_at)) out.push(field_('Asked at', str(r.created_at)));
+    const opts = Array.isArray(r.options) ? r.options : [];
+    const macOnly = Array.isArray(r.mac_only) ? r.mac_only.map(str).filter(Boolean) : [];
+    const allowHere = opts.some(o => /allow/i.test(`${str(o?.id)} ${str(o?.label)}`));
+    if (!opts.length) out.push(el('p', 'rc-item-note', 'Answer this on your Mac.'));
+    else if (!allowHere) out.push(el('p', 'rc-item-note', 'Allowing this needs your Mac.'));
+    if (macOnly.length) out.push(el('p', 'rc-muted rc-small-text', `On your Mac only: ${macOnly.join(', ')}.`));
+    return out;
+  }
+  function stoppedView(sb, confirm) {
+    const out = [head(str(sb.name), [str(sb.agent) || (sb.chat ? 'chat' : ''), str(sb.created_at)].filter(Boolean).join(' · '))];
+    const lines = Array.isArray(confirm) ? confirm.map(str).filter(Boolean) : [];
+    const box = el('div', 'rc-confirm-lines');
+    // The daemon's own sentences, verbatim, as text.
+    for (const l of lines) box.append(el('p', null, l));
+    out.push(box);
+    return out;
+  }
+  // The decisions of an item: each opens the sheet; nothing acts on a tap.
+  const DANGER = /\b(deny|dismiss|refuse|block)\b/i;
+  function renderActs(what, data) {
+    const acts = $('item-acts');
+    const can = st.l2?.level2 === true && st.l2.passkey === true && st.l2.rp_ok !== false && !!st.item?.digest;
+    if (!can) {
+      acts.replaceChildren(el('p', 'rc-item-note', rcApprovalsBlock(st.l2) || 'This cannot be approved from the phone.'));
+      return;
+    }
+    const btn = (label, kind, cls, option) => {
+      const b = el('button', `rc-btn ${cls}`, label);
+      b.type = 'button';
+      b.dataset.kind = kind;
+      b.addEventListener('click', () => openSheet(kind, option));
+      return b;
+    };
+    const list = [];
+    if (what === 'plans') list.push(btn('Refuse', 'plan_refuse', 'rc-danger'), btn('Approve', 'plan_approve', 'rc-primary'));
+    else if (what === 'merges') list.push(btn('Merge', 'merge', 'rc-primary'));
+    else if (what === 'stopped') list.push(btn('Remove', 'sandbox_remove', 'rc-danger'));
+    else for (const o of Array.isArray(data.options) ? data.options : []) {
+      if (!o || typeof o.id !== 'string') continue;
+      const label = str(o.label) || o.id;
+      list.push(btn(label.charAt(0).toUpperCase() + label.slice(1), 'network_respond', DANGER.test(`${o.id} ${label}`) ? 'rc-danger' : 'rc-primary', { id: o.id, label }));
+    }
+    acts.replaceChildren(...list);
+  }
+
+  // ── The sheet: what will happen, to what; then Face ID ──
+  let sheet = null; // { kind, option, ctl, token } while open
+  let sheetSeq = 0;
+  const GO = { plan_approve: 'Approve with Face ID', plan_refuse: 'Refuse with Face ID', merge: 'Merge with Face ID', network_respond: 'Answer with Face ID', sandbox_remove: 'Remove with Face ID' };
+  const SHEET_TITLE = { plan_approve: 'Approve this plan?', plan_refuse: 'Refuse this plan?', merge: 'Run this merge?', network_respond: 'Answer this request?', sandbox_remove: 'Remove this sandbox?' };
+  function openSheet(kind, option) {
+    if (!st.item?.data || !RC_KINDS.includes(kind)) return;
+    closeSheet();
+    sheet = { kind, option: option || null, ctl: null, token: ++sheetSeq };
+    $('sheet-title').textContent = kind === 'network_respond' ? `Answer "${option?.label ?? ''}"?` : SHEET_TITLE[kind];
+    $('sheet-line').textContent = rcActLine(kind, st.item.data, option);
+    $('sheet-status').textContent = '';
+    const go = $('sheet-go');
+    go.textContent = GO[kind];
+    const danger = kind === 'plan_refuse' || kind === 'sandbox_remove' || (kind === 'network_respond' && DANGER.test(`${option?.id} ${option?.label}`));
+    go.className = `rc-btn ${danger ? 'rc-danger-solid' : 'rc-primary'}`;
+    go.disabled = false;
+    $('sheet').dataset.sheet = kind;
+    $('sheet').hidden = false;
+    $('veil').hidden = false;
+    go.focus({ preventScroll: true });
+  }
+  // Closing drops everything of the ceremony: an outstanding Face ID prompt
+  // is aborted, a late answer is ignored.
+  function closeSheet() {
+    if (!sheet) return;
+    sheet.ctl?.abort();
+    sheet = null;
+    $('sheet').hidden = true;
+    $('veil').hidden = true;
+  }
+  $('sheet-cancel').addEventListener('click', closeSheet);
+  $('veil').addEventListener('click', closeSheet);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') closeSheet(); });
+  window.addEventListener('pagehide', closeSheet);
+
+  $('sheet-go').addEventListener('click', async () => {
+    const s = sheet;
+    const item = st.item;
+    if (!s || !item?.digest || $('sheet-go').disabled) return;
+    const live = () => sheet === s && st.item === item;
+    const say = (text, tone) => { if (live()) { $('sheet-status').textContent = text; $('sheet-status').className = `rc-sheet-status${tone ? ` rc-t-${tone}` : ''}`; } };
+    const target = item.what === 'stopped' ? str(item.data.name) : item.id;
+    $('sheet-go').disabled = true;
+    say('Asking the Mac…', 'busy');
+    const ch = await l2.challenge(s.kind, target, item.digest, s.option?.id);
+    if (!live()) return;
+    if (!ch.ok) return failed(ch, s);
+    const publicKey = rcGetOptions(ch.data?.public_key);
+    if (!publicKey) { $('sheet-go').disabled = false; return say('The Mac sent a request this page cannot use. Nothing was done.', 'err'); }
+    say('Waiting for Face ID…', 'busy');
+    s.ctl = new AbortController();
+    let cred;
+    try {
+      cred = await navigator.credentials.get({ publicKey, signal: s.ctl.signal });
+    } catch (e) {
+      if (!live()) return;
+      $('sheet-go').disabled = false;
+      const why = rcCeremonyError(e);
+      return say(why === 'cancelled' ? 'Face ID was cancelled. Nothing was done.' : why === 'no_authenticator' ? 'Face ID is not available here. Nothing was done.' : 'Face ID did not finish. Nothing was done.', 'err');
+    }
+    if (!live()) return;
+    const assertion = rcAssertionBody(cred);
+    if (!assertion) { $('sheet-go').disabled = false; return say('Face ID gave an answer this page cannot read. Nothing was done.', 'err'); }
+    say('Sending…', 'busy');
+    const res = await l2.act(s.kind, target, assertion, s.option?.id);
+    if (!live()) return;
+    if (!res.ok) return failed(res, s);
+    closeSheet();
+    showApprovals(rcActDone(s.kind, res.data));
+  });
+  function failed(res, s) {
+    if (res.data?.reason === 'changed') {
+      // Read it again: the detail is fetched anew, the sheet closes.
+      const it = st.item;
+      closeSheet();
+      if (it) openItem(it.what, it.id, RC_L2_REASON.changed);
+      return;
+    }
+    if (sheet !== s) return;
+    $('sheet-status').textContent = rcL2Fail(res);
+    $('sheet-status').className = 'rc-sheet-status rc-t-err';
+    $('sheet-go').disabled = false;
+    if (res.data?.reason === 'no_passkey' || res.data?.reason === 'level2_off') { $('sheet-go').disabled = true; refreshL2(); }
+  }
+
+  // ── Enabling Face ID on this device ──
+  let pkPoll = null;
+  function stopPasskeyPoll() { if (pkPoll) { clearTimeout(pkPoll); pkPoll = null; } }
+  function pkShow(state, check) {
+    $('pk-check').hidden = !check;
+    if (check) $('pk-check').textContent = /^\d{6}$/.test(check) ? `${check.slice(0, 3)} ${check.slice(3)}` : check;
+    $('pk-title').textContent = state === 'pending' ? 'Type this number on your Mac' : state === 'registered' ? 'Face ID is ready' : 'Enable Face ID';
+    $('pk-text').textContent = RC_PASSKEY_TEXT[state] || RC_PASSKEY_TEXT.failed;
+    $('pk-go').hidden = state !== 'granted';
+    $('pk-go').disabled = false;
+    $('pk-again').hidden = !['refused', 'expired', 'cancelled', 'failed', 'rejected', 'no_authenticator', 'exists'].includes(state);
+    $('s-passkey').dataset.state = state;
+  }
+  async function startPasskey() {
+    stopPasskeyPoll();
+    setTitle('Face ID', '');
+    show('s-passkey');
+    pkShow('starting');
+    $('pk-text').textContent = 'Asking the Mac…';
+    const res = await l2.passkeyStart();
+    if (st.screen !== 's-passkey') return;
+    if (!res.ok || typeof res.data?.request_id !== 'string') {
+      if (res.data?.reason === 'level2_off') return pkShow('off');
+      pkShow('failed');
+      $('pk-text').textContent = rcL2Fail(res);
+      return;
+    }
+    pkShow('pending', String(res.data.check || ''));
+    const until = Date.now() + 6 * 60 * 1000;
+    const poll = async () => {
+      pkPoll = null;
+      if (st.screen !== 's-passkey') return;
+      if (Date.now() > until) return pkShow('expired');
+      const r = await l2.passkeyStatus();
+      if (st.screen !== 's-passkey') return;
+      const state = r.ok ? r.data?.state : null;
+      if (state === 'granted') return pkShow('granted');
+      if (state === 'refused') return pkShow('refused');
+      if (state === 'registered') return pkShow('registered');
+      if (state === 'none') return pkShow('expired');
+      pkPoll = setTimeout(poll, 2000);
+    };
+    pkPoll = setTimeout(poll, 1500);
+  }
+  $('ap-enable').addEventListener('click', startPasskey);
+  $('pk-again').addEventListener('click', startPasskey);
+  // Safari asks for Face ID only from a tap: the key is created on this one.
+  $('pk-go').addEventListener('click', async () => {
+    const go = $('pk-go');
+    if (go.disabled) return;
+    go.disabled = true;
+    if (!window.PublicKeyCredential || !navigator.credentials?.create) return pkShow('no_authenticator');
+    try {
+      if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function'
+        && !(await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable())) return pkShow('no_authenticator');
+    } catch (_) { /* unknown: let create() say */ }
+    const o = await l2.passkeyOptions();
+    if (st.screen !== 's-passkey') return;
+    if (!o.ok) { pkShow(o.data?.reason === 'no_grant' ? 'expired' : 'failed'); if (o.data?.reason) $('pk-text').textContent = rcL2Fail(o); return; }
+    const publicKey = rcCreateOptions(o.data?.public_key);
+    if (!publicKey) { pkShow('failed'); $('pk-text').textContent = 'The Mac sent options this page cannot use. Nothing was saved.'; return; }
+    let cred;
+    try {
+      cred = await navigator.credentials.create({ publicKey });
+    } catch (e) {
+      if (st.screen === 's-passkey') pkShow(rcCeremonyError(e));
+      return;
+    }
+    if (st.screen !== 's-passkey') return;
+    const body = rcRegistrationBody(cred);
+    if (!body) { pkShow('failed'); $('pk-text').textContent = 'The browser gave an answer this page cannot read. Nothing was saved.'; return; }
+    const r = await l2.passkeyRegister(body);
+    if (st.screen !== 's-passkey') return;
+    if (!r.ok) return pkShow(r.data?.reason === 'passkey' ? 'rejected' : 'failed');
+    pkShow('registered');
+    refreshL2();
+  });
+
   // ── Navigation ──
   $('back').addEventListener('click', () => {
+    if (st.screen === 's-item' || st.screen === 's-passkey') return showApprovals();
+    if (st.screen === 's-approvals') return leaveApprovals();
     if (history.state && history.state.leader) history.back();
     else showLeaders();
   });
-  window.addEventListener('popstate', () => { if (st.current) showLeaders(); });
+  window.addEventListener('popstate', () => { if (st.current && st.screen === 's-chat') showLeaders(); });
 
   // ── The keyboard must not hide the composer ──
   // The body is fixed to the visual viewport; with the keyboard up, the

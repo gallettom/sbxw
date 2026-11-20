@@ -336,6 +336,9 @@ function rcClient(fetchImpl, hooks = {}) {
     answer: (s, indices) => call('POST', `${at(s)}/answer`, { indices }),
     interrupt: s => call('POST', `${at(s)}/interrupt`, {}),
     transcribe: pcm => call('POST', '/r/voice/transcribe', undefined, pcm),
+    // For the level-2 routes (rcL2Client): the same call, nothing more.
+    get: path => call('GET', path),
+    post: (path, body) => call('POST', path, body),
   };
 }
 
@@ -653,4 +656,209 @@ function rcClock(seconds) {
 function rcWaveMode(hasAnalyser, reducedMotion) {
   if (!hasAnalyser) return 'pulse';
   return reducedMotion ? 'meter' : 'bars';
+}
+
+// ══ Level 2: approving from the phone with a passkey ═════════════════════
+// The contract is .sbxw-artifacts/remote/API-level2.md. Everything below is
+// pure: the page wires it to navigator.credentials and the document.
+// What it never does: keep a challenge, an assertion or a credential id
+// beyond the one request (they live in the caller's locals), or turn
+// agent-written text into markup.
+
+// ── base64url without padding (API-level2.md section 2) ──
+const RC_B64U = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+function rcB64u(buf) {
+  const b = buf instanceof Uint8Array ? buf : ArrayBuffer.isView(buf) ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength) : new Uint8Array(buf);
+  let out = '';
+  for (let i = 0; i < b.length; i += 3) {
+    const n = (b[i] << 16) | ((b[i + 1] ?? 0) << 8) | (b[i + 2] ?? 0);
+    out += RC_B64U[(n >> 18) & 63] + RC_B64U[(n >> 12) & 63];
+    if (i + 1 < b.length) out += RC_B64U[(n >> 6) & 63];
+    if (i + 2 < b.length) out += RC_B64U[n & 63];
+  }
+  return out;
+}
+// Strict: only the alphabet, no padding, a valid length; else null.
+function rcFromB64u(s) {
+  if (typeof s !== 'string' || !/^[A-Za-z0-9_-]*$/.test(s) || s.length % 4 === 1) return null;
+  const out = new Uint8Array(Math.floor(s.length * 3 / 4));
+  let o = 0;
+  for (let i = 0; i < s.length; i += 4) {
+    const c = [0, 1, 2, 3].map(k => (i + k < s.length ? RC_B64U.indexOf(s[i + k]) : 0));
+    const n = (c[0] << 18) | (c[1] << 12) | (c[2] << 6) | c[3];
+    out[o++] = (n >> 16) & 255;
+    if (i + 2 < s.length) out[o++] = (n >> 8) & 255;
+    if (i + 3 < s.length) out[o++] = n & 255;
+  }
+  return out;
+}
+
+// ── The two ceremonies' options, from the daemon's JSON ──
+// Only the fields the contract names pass, the binary ones decoded; the
+// page always asks for user verification, whatever came.
+function rcCreateOptions(pk) {
+  if (!pk || typeof pk !== 'object') return null;
+  const challenge = rcFromB64u(pk.challenge);
+  const userId = rcFromB64u(pk.user?.id);
+  if (!challenge || challenge.length < 16 || !userId || !userId.length) return null;
+  if (typeof pk.rp?.id !== 'string' || !pk.rp.id) return null;
+  const exclude = Array.isArray(pk.excludeCredentials) ? pk.excludeCredentials.map(c => rcFromB64u(c?.id)) : [];
+  if (exclude.some(x => !x)) return null;
+  const params = (Array.isArray(pk.pubKeyCredParams) ? pk.pubKeyCredParams : []).filter(p => p && p.type === 'public-key' && p.alg === -7);
+  if (!params.length) return null;
+  return {
+    rp: { id: pk.rp.id, name: typeof pk.rp.name === 'string' ? pk.rp.name : 'sbxw' },
+    user: { id: userId, name: String(pk.user.name ?? ''), displayName: String(pk.user.displayName ?? pk.user.name ?? '') },
+    challenge,
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'preferred', userVerification: 'required' },
+    attestation: 'none',
+    timeout: Math.min(Number(pk.timeout) || 120000, 300000),
+    excludeCredentials: exclude.map(id => ({ type: 'public-key', id })),
+  };
+}
+function rcGetOptions(pk) {
+  if (!pk || typeof pk !== 'object') return null;
+  const challenge = rcFromB64u(pk.challenge);
+  if (!challenge || challenge.length < 16 || typeof pk.rpId !== 'string' || !pk.rpId) return null;
+  const allow = Array.isArray(pk.allowCredentials) ? pk.allowCredentials.map(c => rcFromB64u(c?.id)) : [];
+  // The device's credential only: an empty list would let any passkey answer.
+  if (!allow.length || allow.some(x => !x)) return null;
+  return {
+    challenge,
+    rpId: pk.rpId,
+    allowCredentials: allow.map(id => ({ type: 'public-key', id })),
+    userVerification: 'required',
+    timeout: Math.min(Number(pk.timeout) || 60000, 120000),
+  };
+}
+// The browser's answers as the daemon's JSON; null for any other shape.
+const rcIsBuf = v => v instanceof ArrayBuffer || ArrayBuffer.isView(v) || Object.prototype.toString.call(v) === '[object ArrayBuffer]';
+function rcRegistrationBody(cred) {
+  const r = cred && cred.response;
+  if (!cred || cred.type !== 'public-key' || !rcIsBuf(cred.rawId) || !r || !rcIsBuf(r.clientDataJSON) || !rcIsBuf(r.attestationObject)) return null;
+  return { id: rcB64u(cred.rawId), client_data_json: rcB64u(r.clientDataJSON), attestation_object: rcB64u(r.attestationObject) };
+}
+function rcAssertionBody(cred) {
+  const r = cred && cred.response;
+  if (!cred || cred.type !== 'public-key' || !rcIsBuf(cred.rawId) || !r || !rcIsBuf(r.clientDataJSON) || !rcIsBuf(r.authenticatorData) || !rcIsBuf(r.signature)) return null;
+  return { id: rcB64u(cred.rawId), client_data_json: rcB64u(r.clientDataJSON), authenticator_data: rcB64u(r.authenticatorData), signature: rcB64u(r.signature) };
+}
+// A ceremony that did not finish, as one state: the person cancelled (or the
+// sheet timed out), no platform authenticator, or something else.
+function rcCeremonyError(e) {
+  const n = e && e.name;
+  if (n === 'NotAllowedError' || n === 'AbortError') return 'cancelled';
+  if (n === 'NotSupportedError' || n === 'SecurityError') return 'no_authenticator';
+  if (n === 'InvalidStateError') return 'exists';
+  return 'failed';
+}
+
+// ── Sentences ──
+// The Approvals entry, when it cannot act: one sentence, nothing else.
+function rcApprovalsBlock(a) {
+  if (!a || a.level2 !== true) return 'Approving is turned off on your Mac.';
+  if (a.passkey !== true) return 'Approving needs Face ID: enable it from your Mac.';
+  if (a.rp_ok === false) return 'The tailnet name changed: enable Face ID again from your Mac.';
+  return '';
+}
+const RC_L2_REASON = {
+  level2_off: 'Approving is turned off on your Mac. Nothing was done.',
+  no_passkey: 'This device has no Face ID key for sbxw (or the tailnet name changed): enable Face ID from your Mac. Nothing was done.',
+  no_grant: 'The Mac has not allowed this device yet, or the permission expired. Start again.',
+  passkey: 'Face ID could not be checked by the Mac. Nothing was done.',
+  changed: 'This changed since you opened it: read it again.',
+  refused: 'The Mac refused it.',
+};
+function rcL2Fail(res) {
+  if (!res || res.unreachable || res.status === 0) return 'sbxw is unreachable (is the Mac awake?). Nothing was done.';
+  const reason = res.data && typeof res.data.reason === 'string' && Object.hasOwn(RC_L2_REASON, res.data.reason) ? res.data.reason : null;
+  const err = res.data && typeof res.data.error === 'string' && res.data.error.trim() ? res.data.error.trim().slice(0, 300) : '';
+  if (reason === 'refused') return err ? `The Mac refused it: ${err}` : RC_L2_REASON.refused;
+  if (reason) return RC_L2_REASON[reason];
+  if (res.status === 429) return 'Too many failed tries. Wait a minute, then try again. Nothing was done.';
+  if (res.status === 404) return 'This is not waiting any more. Nothing was done.';
+  return `Nothing was done: the Mac answered ${res.status}${err ? ` (${err})` : ''}.`;
+}
+// The states of enabling Face ID on this device, each in a sentence.
+const RC_PASSKEY_TEXT = {
+  pending: 'In sbxw on your Mac, run "sbxw remote approvals allow" for this device and type these six digits.',
+  granted: 'Allowed on the Mac. Create the Face ID key now.',
+  refused: 'Refused on the Mac (or the number was typed wrong three times).',
+  expired: 'This request expired. Start again.',
+  registered: 'Face ID is ready on this device.',
+  no_authenticator: 'This device cannot create a passkey (no Face ID or Touch ID for this site).',
+  cancelled: 'Face ID was cancelled. Nothing was saved.',
+  exists: 'This device already has a passkey for sbxw.',
+  failed: 'The Face ID key could not be created. Start again.',
+  rejected: 'The Mac did not accept this Face ID key. Start again from the Mac.',
+  off: 'Approving is turned off on your Mac.',
+};
+
+// ── The actions ──
+const RC_KINDS = ['plan_approve', 'plan_refuse', 'merge', 'network_respond', 'sandbox_remove'];
+// The route of each action, the target encoded.
+function rcActPath(kind, target) {
+  const t = encodeURIComponent(String(target));
+  switch (kind) {
+    case 'plan_approve': return `/r/plans/${t}/approve`;
+    case 'plan_refuse': return `/r/plans/${t}/refuse`;
+    case 'merge': return `/r/merges/${t}/merge`;
+    case 'network_respond': return `/r/network/${t}/respond`;
+    case 'sandbox_remove': return `/r/stopped/${t}/remove`;
+    default: return null;
+  }
+}
+// One line: WHAT will happen, to WHAT. Names are the daemon's data, as text.
+function rcActLine(kind, item, option) {
+  const sb = String(item?.sandbox ?? '');
+  switch (kind) {
+    case 'plan_approve': {
+      const n = Array.isArray(item?.threads) ? item.threads.length : 0;
+      return `Approve the plan of ${sb} as it is: it starts ${n === 1 ? '1 thread' : `${n} threads`}.`;
+    }
+    case 'plan_refuse': return `Refuse the plan of ${sb}: no thread starts.`;
+    case 'merge': {
+      const n = Array.isArray(item?.branches) ? item.branches.length : 0;
+      return `Merge ${n === 1 ? '1 branch' : `${n} branches`} of ${sb} in the order shown, stopping at the first conflict.`;
+    }
+    case 'network_respond': return `Answer "${String(option?.label ?? option?.id ?? '')}" to ${sb}'s request for ${String(item?.host ?? '')}.`;
+    case 'sandbox_remove': return `Remove the stopped sandbox ${String(item?.name ?? '')}. This cannot be undone.`;
+    default: return '';
+  }
+}
+// What was done, in the daemon's words.
+function rcActDone(kind, data) {
+  if (kind === 'merge') {
+    const m = data && typeof data.merge === 'object' && data.merge ? data.merge : null;
+    const results = Array.isArray(m?.results) ? m.results : [];
+    const failed = results.find(r => r && r.ok === false);
+    if (failed || m?.state === 'failed') {
+      const why = failed && typeof failed.error === 'string' ? failed.error : 'the merge stopped';
+      return `Stopped at ${String(failed?.thread ?? 'a branch')}: ${why}`;
+    }
+    const done = results.filter(r => r && r.ok).map(r => String(r.thread));
+    const notes = results.filter(r => r && r.ok && typeof r.note === 'string' && r.note).map(r => `${r.thread}: ${r.note}`);
+    return `Merged${done.length ? `: ${done.join(', ')}` : ''}.${notes.length ? ` ${notes.join(' ')}` : ''}`;
+  }
+  return { plan_approve: 'Plan approved: its threads are starting.', plan_refuse: 'Plan refused.', network_respond: 'Answered.', sandbox_remove: 'Sandbox removed.' }[kind] || 'Done.';
+}
+
+// The level-2 routes, on the same client rules (same origin, JSON, once).
+function rcL2Client(api) {
+  return {
+    approvals: () => api.get('/r/approvals'),
+    passkeyStart: () => api.post('/r/passkey/start', {}),
+    passkeyStatus: () => api.get('/r/passkey/status'),
+    passkeyOptions: () => api.post('/r/passkey/options', {}),
+    passkeyRegister: body => api.post('/r/passkey/register', body),
+    list: what => api.get(`/r/${what}`),
+    detail: (what, id) => api.get(`/r/${what}/${encodeURIComponent(id)}`),
+    challenge: (kind, target, digest, option) => api.post('/r/approvals/challenge', option ? { kind, target, digest, option } : { kind, target, digest }),
+    act: (kind, target, assertion, option) => {
+      const path = rcActPath(kind, target);
+      if (!path) throw new Error('not an action');
+      return api.post(path, kind === 'network_respond' ? { option, assertion } : { assertion });
+    },
+  };
 }
