@@ -144,14 +144,16 @@
     $('pair-text').textContent = RC_PAIR_TEXT.pending;
     $('pair-form').hidden = true;
     $('pair-wait').hidden = false;
-    pollPairing(res.data.request_id, Number(res.data.expires_ms) || Date.now() + 5 * 60 * 1000);
+    // The Mac says when it expired; the phone's own clock only bounds the wait
+    // (the two clocks may differ), a little past the five minutes of a request.
+    pollPairing(res.data.request_id, Date.now() + 6 * 60 * 1000);
   });
 
   async function pollPairing(id, until) {
     let misses = 0;
     for (;;) {
       await new Promise(r => setTimeout(r, 1500));
-      if (Date.now() > until + 5000) return pairEnd('expired');
+      if (Date.now() > until) return pairEnd('expired');
       const res = await api.pairStatus(id);
       const state = rcPairState(res, 'status');
       if (state === 'pending') { misses = 0; continue; }
