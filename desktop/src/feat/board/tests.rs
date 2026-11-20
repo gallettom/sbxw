@@ -1550,10 +1550,12 @@ fn the_board_is_called_dashboard_wherever_the_person_reads_it() {
     assert!(entry.help.starts_with("Dashboard\n"), "{}", entry.help);
     bad.extend(top.iter().chain(&bottom).filter(|e| board(&e.help)).map(|e| format!("rail {}: {}", e.key, e.help)));
     // The features' extras: a sandbox row's menu, the rail.
-    let rows: Vec<&crate::feat::Extra> = rt.state.feats.pane_extras.iter().filter(|e| e.intent.as_ref().is_some_and(|i| i.0 == "board_show")).collect();
-    assert!(rows.len() >= 2, "the rail and at least one sandbox row");
+    let d = json!({ "plans": [{ "id": "p-1", "sandbox": "web-app", "state": "approved" }] });
+    let rows = super::extras(&Ctx { data: &d });
+    assert!(rows.iter().any(|e| matches!(e.place, Place::Sandbox(_))), "a sandbox row's entry");
     for e in &rows {
         assert_eq!(e.label, "Dashboard", "{:?}", e.place);
+        assert!(!board(&e.help), "{}", e.help);
     }
     bad.extend(rt.state.feats.pane_extras.iter().filter(|e| board(&e.label) || board(&e.help)).map(|e| format!("extra {}: {} / {}", e.id, e.label, e.help)));
     // The palette.

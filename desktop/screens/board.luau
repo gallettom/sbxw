@@ -301,9 +301,11 @@ end
 -- button, up to 560 pt, never wider than the overlay. A press outside, a
 -- pick or Escape closes it; Up, Down and Enter go through `board_key`.
 
+-- The room it leaves keeps the title ("Dashboard", 14/600, about 76 pt)
+-- and the overlay's cross on the row at every width.
 local function picker_w(ow, wide)
-  if wide then return math.min(420, ow - 260) end
-  return math.max(140, math.min(300, ow - 220))
+  if wide then return math.min(420, ow - 296) end
+  return math.max(104, math.min(300, ow - 256))
 end
 
 local function menu_w(ow, wide)

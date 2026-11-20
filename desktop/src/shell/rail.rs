@@ -581,6 +581,42 @@ mod tests {
         }
     }
 
+    /// The top bar's Kanban button over live terminals: pressed twice, the
+    /// pane that had the keyboard has it back, the panes are as they were,
+    /// and nothing was typed into any terminal (it is covered meanwhile).
+    #[test]
+    fn the_kanban_button_gives_the_keyboard_back_and_types_nothing() {
+        use super::super::tests::tap;
+        let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
+        r.rt.update(|s, _| s.focus_pane(1));
+        r.settle();
+        // (The app's own loop: polls between frames, as the window does.)
+        let focused = |r: &mut Rig| {
+            for _ in 0..6 {
+                r.rt.update(|s, tx| {
+                    s.poll(0.0, tx);
+                });
+                r.rt.frame(0.03);
+            }
+            let mut f = String::new();
+            r.rt.update(|_, tx| f = tx.focused().unwrap_or("").to_string());
+            f
+        };
+        assert_eq!(focused(&mut r), "grid-2");
+        let gens = r.generations();
+        r.take();
+        tap(&mut r.rt, "top-kanban");
+        r.settle();
+        assert!(r.rt.state.screen_shown("kanban") && r.rt.state.panes_covered(), "the Kanban over covered terminals");
+        tap(&mut r.rt, "top-kanban");
+        r.settle();
+        assert!(!r.rt.state.screen_shown("kanban"));
+        assert_eq!((r.rt.state.focused, focused(&mut r)), (1, "grid-2".to_string()), "the keyboard back where it was");
+        assert_eq!(r.generations(), gens, "the same terminals");
+        let typed: Vec<usize> = r.inputs.iter().map(|(_, rx)| rx.try_iter().filter(|i| matches!(i, crate::client::TermInput::Bytes(_))).count()).collect();
+        assert!(typed.iter().all(|n| *n == 0), "nothing typed: {typed:?}");
+    }
+
     /// Lead Mode wears the `leader` mark (a crown over one person) in the
     /// top bar and the palette, never the team's `people` the
     /// pane bar's Team keeps; it is not a rail entry any more (the rail
