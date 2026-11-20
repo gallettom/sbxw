@@ -50,6 +50,18 @@ It uses the same calls as the [island](island.md)'s composer
 only one reply per session, so the transcript lives in the tab's
 `sessionStorage`: it survives a reload, not a closed tab.
 
+### How a message is typed in
+
+`POST /api/chat/push` does everything server-side: create the sandbox if
+missing, attach the agent, wait for its UI, type, submit. Details that matter:
+
+- It **waits for the terminal to go quiet** before typing, and again before
+  pressing Return. Silence is measured on the session's output stream.
+- **Return is sent as its own keystroke.** Claude Code reads a fast burst of
+  bytes as a paste, and a newline inside a paste is inserted, not sent.
+- **A warm session is fast.** If the agent is already attached and drawn, sbxw
+  skips the existence check and waits ~180 ms of silence instead of 900 ms.
+
 ### Attaching files
 
 Drop files anywhere on the dock's panel (a dashed "Drop to attach to
@@ -81,18 +93,6 @@ button, drop anywhere on the chat).
 - A file dropped just outside the panel no longer makes the browser open it.
   A dragged text selection, link or image from another page is not a file and
   behaves as before.
-
-### How a message is typed in
-
-`POST /api/chat/push` does everything server-side: create the sandbox if
-missing, attach the agent, wait for its UI, type, submit. Details that matter:
-
-- It **waits for the terminal to go quiet** before typing, and again before
-  pressing Return. Silence is measured on the session's output stream.
-- **Return is sent as its own keystroke.** Claude Code reads a fast burst of
-  bytes as a paste, and a newline inside a paste is inserted, not sent.
-- **A warm session is fast.** If the agent is already attached and drawn, sbxw
-  skips the existence check and waits ~180 ms of silence instead of 900 ms.
 
 ## The browser side panel
 
