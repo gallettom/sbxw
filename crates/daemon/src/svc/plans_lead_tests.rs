@@ -52,7 +52,7 @@ async fn led(app: &Arc<App>, dir: &Path, name: &str) -> SandboxRef {
 
 fn leads_again(rx: &mut tokio::sync::broadcast::Receiver<Event>, name: &str) -> bool {
     while let Ok(ev) = rx.try_recv() {
-        if matches!(&ev, Event::Lead(s) if s.to_string() == name) {
+        if matches!(&ev, Event::Lead(s) if *s == *name) {
             return true;
         }
     }
@@ -122,7 +122,7 @@ async fn a_stopped_or_removed_sandbox_leads_no_more() {
     let mut rx = app.bus.subscribe();
     app.lead_gone(&sb);
     assert!(app.leading().is_empty());
-    assert!(matches!(rx.try_recv(), Ok(Event::LeadEnd(s)) if s.to_string() == "lead1"));
+    assert!(matches!(rx.try_recv(), Ok(Event::LeadEnd(s)) if s == "lead1"));
     assert_eq!(app.store.get(&sb).lead, None);
     // A removed sandbox's record is not written back by its lead.
     app.store.forget(&sb);

@@ -805,7 +805,7 @@ impl App {
         }
         for sb in rebound {
             tracing::info!("plans: '{sb}' leads again, its main session is the one made lead");
-            self.send(Event::Lead(sb.into()));
+            self.send(Event::Lead(sb));
         }
         out
     }
