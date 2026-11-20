@@ -187,6 +187,7 @@ async function sendUpload() {
   if (idx < 0) { showToast(`Could not open a pane for ${name}`, 'error'); return; }
   const pane = panes[idx];
   setFocusedPane(idx);
+  const want = { sandbox: name, mode: pane.mode, thread: pane.thread || null };
   showToast(cold ? `Opening ${name}…` : `Uploading to ${name}…`, 'progress');
   try {
     // The sandbox runs once its pane has drawn, and `sbx exec` needs it running.
@@ -195,11 +196,13 @@ async function sendUpload() {
     const paths = [];
     for (const f of files) paths.push(await uploadWhenUp(pane, name, f, cold));
     await paneSettled(pane, name, false);
-    if (pane.ws?.readyState !== WebSocket.OPEN) throw new Error(`${name}'s terminal disconnected`);
-    // Trailing space, no Return: the cursor waits after the path for context.
-    pane.ws.send(new TextEncoder().encode(paths.join(' ') + ' '));
-    pane.term.focus();
-    showToast('📎 ' + paths.join('  '), 'ok');
+    // One function for this and a drop on a pane (pane-files.js): the paths
+    // quoted, a trailing space, no Return, so the cursor waits after them for
+    // context. When the pane cannot take keys (held, covered, another session,
+    // not connected) it shows the paths with a Copy button and returns false:
+    // the toast must not say attached then.
+    if (paneTypePaths(pane, want, paths)) showToast('📎 ' + paths.join('  '), 'ok');
+    else showToast('Uploaded; the paths are on the pane, not typed', 'error');
   } catch (e) {
     showToast(`Upload failed: ${e.message}`, 'error');
   }
