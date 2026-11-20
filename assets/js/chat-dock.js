@@ -216,6 +216,7 @@ document.addEventListener('focusin', e => {
 
 function cdRender() {
   cdRenderLauncher();
+  if (cdOpen) cdAttach.render();
   if (!cdOpen) return;
   // Pruned only while open: the list is refreshed on every open, and before
   // main.js's first load it is empty, which would drop a restored tab.
@@ -264,15 +265,41 @@ async function cdCloseSession(key) {
   cdRender();
 }
 
+// ── Attachments ───────────────────────────────────────────────────────────
+// Files dropped on the panel, or picked with Attach, upload to the tab's own
+// sandbox and wait as chips until Send (chat-core.js, "Files dropped on a
+// chat"). The "＋ New chat" tab has no sandbox yet, so it takes none.
+const cdTrays = new Map(); // tab key → tray
+function cdCurrent() {
+  if (cdActive === null) return { tray: null, why: 'a new chat has no sandbox yet. Send a first message, then attach the file.' };
+  const { sandbox } = cdSplit(cdActive);
+  if (!sandboxes.some(s => s.name === sandbox)) return { tray: null, why: `${sandbox} is not in the list of sandboxes.` };
+  const key = cdActive;
+  if (!cdTrays.has(key)) cdTrays.set(key, chatAttachTray({ sandbox: () => sandbox, onChange: () => cdAttach.render() }));
+  return { tray: cdTrays.get(key), sandbox };
+}
+const cdAttachBtn = document.createElement('button');
+cdAttachBtn.type = 'button';
+cdAttachBtn.className = 'cd-to-pane cd-attach-btn';
+cdAttachBtn.textContent = '📎 Attach files';
+cdAttachBtn.title = 'Attach files to the next message (or drop them on this panel)';
+cdEl('cd-hint').before(cdAttachBtn);
+const cdAttach = chatAttachMount({ form: cdForm, panel: cdPanel, button: cdAttachBtn, current: cdCurrent, focus: () => cdInput.focus() });
+
 // ── Sending ───────────────────────────────────────────────────────────────
-async function cdSend(text) {
+async function cdSend(shown) {
   const target = cdActive;
+  const tray = target === null ? null : cdCurrent().tray;
+  const chips = tray ? tray.take() : [];
+  // The person's words first, then one fixed block of the daemon's paths.
+  const text = chatWithAttachments(shown, chips.map(c => c.path));
+  const note = chips.length ? `${shown ? shown + '\n' : ''}📎 ${chips.map(c => chatShortName(c.name)).join(', ')}` : shown;
   if (target === null) {
     if (cdSendingNew) return; // one sandbox at a time
     cdSendingNew = text;
   } else {
     const c = cdChat(target);
-    c.log.push({ who: 'me', text });
+    c.log.push({ who: 'me', text: note });
     c.state = 'working';
     c.activity = null;
   }
@@ -284,7 +311,7 @@ async function cdSend(text) {
     if (res.ok && res.name) {
       const key = cdKey(res.name, res.thread);
       const c = cdChat(key);
-      c.log.push({ who: 'me', text });
+      c.log.push({ who: 'me', text: note });
       if (c.state !== 'idle' || !c.log.some(m => m.who === 'ai')) c.state = 'working';
       // Only follow it if nobody switched tabs while it booted.
       if (cdActive === null) cdActive = key;
@@ -296,14 +323,23 @@ async function cdSend(text) {
     const c = cdChat(target);
     c.state = 'idle';
     c.log.push({ who: 'err', text: `Not sent: ${res.error || 'no answer from the daemon'}` });
-    if (!cdInput.value) cdInput.value = text;
+    if (!cdInput.value) cdInput.value = shown;
+    if (tray) tray.restore(chips);
   }
   cdSave();
   cdRender();
   if (target === null && !res.ok && cdActive === null && cdOpen) cdLog.appendChild(chatLine('err', `Chat not started: ${res.error || 'no answer from the daemon'}`));
 }
 
-chatComposer(cdForm, cdInput, cdSend);
+chatComposer(cdForm, cdInput, cdSend, {
+  gate: () => {
+    const tray = cdCurrent().tray;
+    const why = tray ? tray.problem() : '';
+    if (why) cdAttach.say(why);
+    return why;
+  },
+  allowEmpty: () => (cdCurrent().tray?.count() || 0) > 0,
+});
 
 // ── Session events ────────────────────────────────────────────────────────
 // A chat's agents — its own and its sessions (a worktree cwd) — but not a

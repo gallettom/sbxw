@@ -3677,6 +3677,44 @@
     color: var(--c-text-muted); font: inherit; text-decoration: underline; text-underline-offset: 2px;
   }
   .cd-to-pane:hover { color: var(--c-text-bright); }
+  /* Files dropped on a chat (chat-core.js, "Files dropped on a chat"): the
+     target over the whole panel, the chips above the text field. */
+  .cd-panel, .sp-chat { position: relative; }
+  .cd-drop {
+    position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; padding: 1rem;
+    pointer-events: none; text-align: center; overflow-wrap: anywhere;
+    background: rgba(var(--c-shadow-rgb), .72); color: var(--c-text-bright);
+    border: 2px dashed var(--c-blue); border-radius: inherit; font: 600 13px var(--font-mono);
+  }
+  .cd-drop.refuse { border-color: var(--c-amber); color: var(--c-amber); }
+  .cd-attach-box { display: flex; flex-direction: column; gap: .3rem; padding: .35rem .5rem 0; font-size: 12px; }
+  .sp-composer .cd-attach-box { padding: .45rem .45rem 0; }
+  .cd-attach-box[hidden] { display: none; }
+  .cd-attach-note { margin: 0; color: var(--c-text-muted); overflow-wrap: anywhere; }
+  .cd-attach-note.err { color: var(--c-amber); }
+  .cd-attach-stays { margin: 0; color: var(--c-text-dim); font-size: 11px; }
+  .cd-attach-held { padding: .4rem .5rem; border: 1px solid var(--c-amber); border-radius: var(--r-sm); }
+  .cd-attach-held p, .cd-attach-held ul { margin: 0 0 .3rem; }
+  .cd-attach-held ul { padding-left: 1.1rem; overflow-wrap: anywhere; }
+  .cd-attach-tick { display: flex; align-items: flex-start; gap: .4rem; margin-bottom: .35rem; cursor: pointer; }
+  .cd-attach-row { display: flex; gap: .4rem; }
+  .cd-attach-row button, .cd-chip-btn {
+    padding: .15rem .5rem; cursor: pointer; background: var(--c-surface); color: var(--c-text);
+    border: 1px solid var(--c-border); border-radius: var(--r-sm); font: 12px var(--font-mono);
+  }
+  .cd-attach-row button:disabled { opacity: .5; cursor: default; }
+  .cd-attach-row button:focus-visible, .cd-chip-btn:focus-visible, .cd-attach-btn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
+  .cd-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .25rem; max-height: 9rem; overflow-y: auto; }
+  .cd-chip {
+    display: flex; align-items: center; gap: .4rem; padding: .25rem .4rem;
+    background: var(--c-bg); border: 1px solid var(--c-border); border-radius: var(--r-sm);
+  }
+  .cd-chip.failed { border-color: var(--c-amber); }
+  .cd-chip-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .cd-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-bright); }
+  .cd-chip-meta { color: var(--c-text-muted); font-size: 11px; overflow-wrap: anywhere; }
+  .cd-chip.failed .cd-chip-meta { color: var(--c-amber); }
+  .cd-chip progress { width: 52px; height: 6px; flex-shrink: 0; }
   @media (prefers-reduced-motion: reduce) {
     .cd-panel, .cd-peek, .cd-bar, .cd-cursor { animation: none !important; }
   }

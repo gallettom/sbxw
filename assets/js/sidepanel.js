@@ -44,6 +44,7 @@ const spFramed = window.parent !== window;
 // Line icons, drawn in the text colour so hover and disabled states follow it.
 const SP_ICON = {
   camera: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M1.75 5.25h2.5l1.5-2h4.5l1.5 2h2.5v7.5H1.75z"/><circle cx="8" cy="8.75" r="2.4"/></svg>',
+  clip: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m13.2 7.6-4.9 4.9a3 3 0 0 1-4.2-4.2l5.2-5.2a2 2 0 0 1 2.8 2.8L6.9 11.1a1 1 0 0 1-1.4-1.4l4.6-4.6"/></svg>',
   send: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13.25V2.75M3.5 7.25 8 2.75l4.5 4.5"/></svg>',
   reload: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.25 8A5.25 5.25 0 1 1 11.7 4.3"/><path d="M13.25 2.25v3.5h-3.5"/></svg>',
   more: '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><circle cx="3.25" cy="8" r="1.35"/><circle cx="8" cy="8" r="1.35"/><circle cx="12.75" cy="8" r="1.35"/></svg>',
@@ -349,6 +350,7 @@ function spRender() {
   spShow('chat');
   spRenderHead();
   spRenderLog();
+  spAttach.render();
 }
 
 function spRenderPicker() {
@@ -561,13 +563,16 @@ async function spSend(text) {
   const url = spUrl;
   const shot = spShot;
   spShot = null;
+  // Files dropped or attached: already in the sandbox, named by their paths.
+  const tray = spCurrent().tray;
+  const chips = tray ? tray.take() : [];
   // A message sent mid-turn waits in Claude Code's queue for the next one.
   const queued = c.state === 'working';
   // The page, when it says more than the header's URL already does.
   let path = '';
   try { path = new URL(url).pathname + new URL(url).search; } catch (_) {}
   if (path === '/') path = '';
-  const meta = [path ? `on ${path}` : null, shot ? 'with a screenshot' : null, queued ? 'queued' : null];
+  const meta = [path ? `on ${path}` : null, shot ? 'with a screenshot' : null, chips.length ? `with ${chips.length} file${chips.length === 1 ? '' : 's'}: ${chips.map(f => chatShortName(f.name)).join(', ')}` : null, queued ? 'queued' : null];
   c.log.push({ who: 'me', text, meta: meta.filter(Boolean).join(', ') });
   c.state = 'working';
   c.activity = null;
@@ -582,12 +587,13 @@ async function spSend(text) {
       c.log.push({ who: 'err', text: `Screenshot not attached: ${e.message}. The message goes without it.` });
     }
   }
-  const body = { text: spCompose(text, url, shotPath), name: sandbox };
+  const body = { text: spCompose(chatWithAttachments(text, chips.map(f => f.path)), url, shotPath), name: sandbox };
   if (thread) body.thread = thread;
   const res = await spJson('/api/chat/push', body);
   if (!res.ok) {
     c.state = 'idle';
     c.log.push({ who: 'err', text: `Not sent: ${res.error || 'no answer from sbxw'}` });
+    if (tray) tray.restore(chips);
     if (!spInput.value) {
       spInput.value = text;
       spInput.dispatchEvent(new Event('input')); // grow the box to fit it again
@@ -596,6 +602,29 @@ async function spSend(text) {
   spSave();
   spRender();
 }
+
+// ── Files dropped on the panel ────────────────────────────────────────────
+// The same behaviour as the chat dock's (chat-core.js, "Files dropped on a
+// chat"): checked here, uploaded to this panel's sandbox through the same
+// origin as everything else on this page, and sent as paths with the next
+// message. No extension permission is involved: the extension only frames
+// this page.
+const spTrays = new Map(); // "<sandbox>::<thread>" → tray
+function spCurrent() {
+  if (!spSandbox) return { tray: null, why: 'sbxw does not know which sandbox serves this tab yet. Pick one first.' };
+  const sandbox = spSandbox;
+  const key = spKey();
+  if (!spTrays.has(key)) spTrays.set(key, chatAttachTray({ sandbox: () => sandbox, onChange: () => spAttach.render() }));
+  return { tray: spTrays.get(key), sandbox };
+}
+const spAttachBtn = document.createElement('button');
+spAttachBtn.type = 'button';
+spAttachBtn.className = 'sp-icon';
+spAttachBtn.title = 'Attach files (or drop them on this panel)';
+spAttachBtn.setAttribute('aria-label', 'Attach files');
+spAttachBtn.innerHTML = SP_ICON.clip;
+spEl('sp-capture').after(spAttachBtn);
+const spAttach = chatAttachMount({ form: spEl('sp-composer'), panel: spEl('sp-chat'), button: spAttachBtn, current: spCurrent, focus: () => spInput.focus() });
 
 // ── Screenshots Claude asks for ───────────────────────────────────────────
 // `ask_user_for_screenshot` opens a screenshot request on the daemon's relay
@@ -729,7 +758,15 @@ new EventSource('/api/events').onmessage = ev => {
 };
 
 // ── Wiring ────────────────────────────────────────────────────────────────
-chatComposer(spEl('sp-composer'), spInput, spSend);
+chatComposer(spEl('sp-composer'), spInput, spSend, {
+  gate: () => {
+    const tray = spCurrent().tray;
+    const why = tray ? tray.problem() : '';
+    if (why) spAttach.say(why);
+    return why;
+  },
+  allowEmpty: () => (spCurrent().tray?.count() || 0) > 0,
+});
 spTarget.addEventListener('change', () => { spThread = spTarget.value || null; spRender(); spInput.focus(); });
 spTarget.addEventListener('focus', spLoadThreads);
 // Back from sbxw, where a sandbox may just have been started: ask again.

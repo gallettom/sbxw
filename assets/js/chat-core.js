@@ -317,11 +317,14 @@ function chatQuestion(c, { sandbox, mode = 'claude', openLabel, onOpen, onChange
 
 // Enter sends, Shift+Enter is a new line, and the box grows with its text up
 // to its max-height. `onSend` gets the trimmed text; the box is already cleared.
-function chatComposer(form, input, onSend) {
+function chatComposer(form, input, onSend, { gate, allowEmpty } = {}) {
   form.addEventListener('submit', e => {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text) return;
+    // `gate()` is the reason a message cannot go yet ('' when it can): the
+    // typed text stays. `allowEmpty()`: files alone make a message.
+    if (gate && gate()) return;
+    if (!text && !(allowEmpty && allowEmpty())) return;
     input.value = '';
     input.style.height = '';
     onSend(text);
@@ -365,3 +368,367 @@ function chatParseRound(text) {
   }
   return { intro, questions };
 }
+
+// ── Files dropped on a chat ───────────────────────────────────────────────
+// BEGIN chat attach: the pure part (no DOM, no fetch of its own) is what
+// tests/js/chat-drop.test.mjs runs; the DOM part below it is a thin skin.
+//
+// A file dropped on the chat dock or the side panel (or picked with its
+// Attach button) is checked in the page, uploaded to the chat's own sandbox
+// with the existing `POST /api/sandboxes/:name/upload` (the sidebar Upload
+// box's route: same folder, same 128 MB ceiling, same refusal of an empty
+// file) and shown as a chip in the composer. NOTHING is typed to the agent by
+// the drop: on Send the message carries the paths the daemon answered, in one
+// fixed block after the person's own words. A removed chip leaves its file in
+// the sandbox: no route deletes one.
+//
+// File names are data: they reach the page only through textContent and
+// setAttribute, and the daemon alone decides the name on disk. File contents
+// are never read here, only handed to the upload.
+const CHAT_ATTACH_MAX_FILES = 10;                 // per message (a page cap; the daemon has none)
+const CHAT_ATTACH_MAX_BYTES = 128 * 1024 * 1024;  // UPLOAD_MAX in http/ui.rs
+const CHAT_ATTACH_STAYS = '/tmp/sbxw-uploads';    // where a removed chip's file stays
+// File names that look like a secret: kanban.js's KB_SECRET_NAMES, the
+// desktop's SECRET_NAMES (the side panel loads neither, so the list is here too;
+// tests/js/chat-drop.test.mjs keeps it equal to kanban.js's).
+const CHAT_SECRET_NAMES = ['.env*', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*', '*.p12', '*.pfx', 'credentials*', '.npmrc', '.netrc', '*.kdbx'];
+
+function chatSecretName(name) {
+  const n = String(name || '').toLowerCase();
+  return CHAT_SECRET_NAMES.some(p => (p.startsWith('*') ? n.endsWith(p.slice(1))
+    : p.endsWith('*') ? n.startsWith(p.slice(0, -1)) : n === p));
+}
+
+function chatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let v = bytes / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+// A name for a message to the person: no control characters, at most 60
+// characters, a long one cut in the middle so its extension stays visible.
+function chatShortName(name) {
+  const s = [...String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '?')];
+  return s.length <= 60 ? s.join('') : `${s.slice(0, 40).join('')}…${s.slice(-16).join('')}`;
+}
+
+// The name sent as `?name=`: the last path component, no control characters,
+// kept short with its extension (the daemon cuts at 120 and keeps only
+// [A-Za-z0-9._-]; it alone decides the name on disk).
+function chatUploadName(name) {
+  const base = String(name ?? '').split(/[\/\\]/).pop().replace(/[\u0000-\u001f\u007f]/g, '');
+  const s = [...base];
+  if (s.length <= 100) return s.join('');
+  const ext = /\.[A-Za-z0-9]{1,10}$/.exec(base)?.[0] || '';
+  return s.slice(0, 90).join('') + ext;
+}
+
+const chatUploadUrl = (sandbox, name) =>
+  `/api/sandboxes/${encodeURIComponent(sandbox)}/upload?name=${encodeURIComponent(chatUploadName(name))}`;
+
+// The block added after the person's text when files go with it; paths are
+// the daemon's answers, never rebuilt from names.
+function chatAttachBlock(paths) {
+  if (!paths.length) return '';
+  return `Attached files (uploaded to this sandbox):\n${paths.map(p => `- ${p}`).join('\n')}`;
+}
+function chatWithAttachments(text, paths) {
+  const block = chatAttachBlock(paths);
+  return block ? (text ? `${text}\n\n${block}` : block) : text;
+}
+
+// Files of a drop, read synchronously (the browser empties a DataTransfer once
+// the handler returns). `null`: not files at all (a text selection, a link, an
+// image from a page): left to the browser as today. A folder is named, never
+// read. Nothing is fetched.
+function chatDroppedFiles(dt) {
+  if (!dt || ![...(dt.types || [])].includes('Files')) return null;
+  const files = [], folders = [];
+  if (dt.items && dt.items.length) {
+    for (const it of dt.items) {
+      if (it.kind !== 'file') continue;
+      const entry = typeof it.webkitGetAsEntry === 'function' ? it.webkitGetAsEntry() : null;
+      if (entry && entry.isDirectory) { folders.push(entry.name); continue; }
+      const f = it.getAsFile();
+      if (f) files.push(f);
+    }
+  } else {
+    files.push(...(dt.files || []));
+  }
+  return { files, folders };
+}
+
+// The checks, before any byte is sent. `held`: files already in the tray.
+// → { take, refused: [{name, why}], ask: [reason] }
+function chatCheckAttach(held, incoming, folders = []) {
+  const take = [], refused = [];
+  for (const name of folders) refused.push({ name, why: 'a folder is not attached; drop the files in it instead' });
+  for (const f of incoming) {
+    let why = '';
+    if (!f.size) why = 'the file is empty';
+    else if (f.size > CHAT_ATTACH_MAX_BYTES) why = `over ${chatSize(CHAT_ATTACH_MAX_BYTES)}, the most one upload takes`;
+    else if (held + take.length >= CHAT_ATTACH_MAX_FILES) why = `a message takes ${CHAT_ATTACH_MAX_FILES} files at most`;
+    if (why) refused.push({ name: f.name, why }); else take.push(f);
+  }
+  const ask = take.filter(f => chatSecretName(f.name)).map(f => `${chatShortName(f.name)}: its name looks like a secret (keys, tokens, credentials)`);
+  return { take, refused, ask };
+}
+
+// XMLHttpRequest, not fetch: it reports how much of the body has gone.
+function chatUploadXhr(sandbox, file, onProgress, signal) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open('POST', chatUploadUrl(sandbox, file.name));
+    x.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    x.upload.onprogress = e => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    x.onload = () => {
+      let d = null;
+      try { d = JSON.parse(x.responseText); } catch (_) {}
+      if (x.status === 401) reject(new Error('signed out of sbxw: reload the page'));
+      else if (d && d.ok && typeof d.path === 'string') resolve(d.path);
+      else reject(new Error((d && d.error) || `HTTP ${x.status}`));
+    };
+    x.onerror = () => reject(new Error('sbxw did not answer'));
+    x.onabort = () => reject(new Error('cancelled'));
+    signal.addEventListener('abort', () => x.abort());
+    x.send(file);
+  });
+}
+
+// One chat's attachments: chips (queued → sending → done | failed), at most
+// one upload at a time, and the drop held back while a ticked review is due.
+// `sandbox()` names the chat's sandbox; `send(sandbox, file, onProgress, signal)`
+// resolves the path the daemon answered; `onChange` redraws.
+function chatAttachTray({ sandbox, send = chatUploadXhr, onChange = () => {} }) {
+  const t = {
+    chips: [], held: null, note: '', seq: 0, active: null,
+    offer(files, folders = []) {
+      const { take, refused, ask } = chatCheckAttach(t.chips.length + (t.held ? t.held.files.length : 0), files, folders);
+      t.note = refused.map(r => `Not attached: ${chatShortName(r.name)} (${r.why}).`).join(' ');
+      if (!take.length) { onChange(); return; }
+      // More files held means a new look: the tick starts again.
+      if (ask.length) t.held = { files: [...(t.held ? t.held.files : []), ...take], reasons: [...(t.held ? t.held.reasons : []), ...ask], ticked: false };
+      else t.start(take);
+      onChange();
+    },
+    // Only an explicit tick sends what was held.
+    confirmHeld(ticked) {
+      if (!t.held) return false;
+      if (ticked !== true) { t.note = 'Tick "I have looked at these files and want to attach them" first: nothing is sent before.'; onChange(); return false; }
+      const files = t.held.files;
+      t.held = null;
+      t.note = '';
+      t.start(files);
+      onChange();
+      return true;
+    },
+    discardHeld() { t.held = null; onChange(); },
+    start(files) {
+      for (const file of files) t.chips.push({ id: ++t.seq, file, name: file.name, size: file.size, state: 'queued', pct: 0, path: null, error: '' });
+      t.pump();
+    },
+    pump() {
+      if (t.active || !sandbox()) return;
+      const chip = t.chips.find(c => c.state === 'queued');
+      if (!chip) return;
+      const target = sandbox();
+      const ctl = new AbortController();
+      chip.state = 'sending';
+      chip.pct = 0;
+      t.active = { chip, ctl };
+      Promise.resolve().then(() => send(target, chip.file, p => { chip.pct = p; onChange(); }, ctl.signal)).then(path => {
+        if (t.active?.chip !== chip) return;
+        chip.state = 'done';
+        chip.pct = 1;
+        chip.path = path;
+      }, e => {
+        if (t.active?.chip !== chip) return;
+        chip.state = 'failed';
+        chip.error = String(e && e.message || 'upload failed');
+      }).then(() => {
+        if (t.active?.chip === chip) t.active = null;
+        t.pump();
+        onChange();
+      });
+    },
+    remove(id) {
+      const i = t.chips.findIndex(c => c.id === id);
+      if (i < 0) return;
+      const [chip] = t.chips.splice(i, 1);
+      if (t.active?.chip === chip) { const a = t.active; t.active = null; a.ctl.abort(); t.pump(); }
+      onChange();
+    },
+    retry(id) {
+      const chip = t.chips.find(c => c.id === id);
+      if (!chip || chip.state !== 'failed') return;
+      chip.state = 'queued';
+      chip.error = '';
+      t.pump();
+      onChange();
+    },
+    // What stops Send, or ''.
+    problem() {
+      if (t.held) return 'Review the files waiting for your tick first, or cancel them.';
+      if (t.chips.some(c => c.state === 'queued' || c.state === 'sending')) return 'Files are still uploading. Wait, or remove them.';
+      if (t.chips.some(c => c.state === 'failed')) return 'An upload failed: retry it or remove it.';
+      return '';
+    },
+    count() { return t.chips.length; },
+    // Take the done chips for a message; `restore` puts them back if it fails.
+    take() { const done = t.chips.splice(0); onChange(); return done; },
+    restore(chips) { t.chips.unshift(...chips); onChange(); },
+    clear() { t.chips.forEach(c => { if (t.active?.chip === c) t.active.ctl.abort(); }); t.chips = []; t.held = null; t.note = ''; t.active = null; onChange(); },
+  };
+  return t;
+}
+
+// ── The DOM part ──────────────────────────────────────────────────────────
+function chatEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+// Draw a tray into `box` (replaced whole). Every name goes through
+// textContent or setAttribute.
+function chatRenderTray(box, tray, flash) {
+  box.replaceChildren();
+  const say = (text, cls) => { if (text) { const p = chatEl('p', `cd-attach-note ${cls || ''}`, text); box.appendChild(p); } };
+  say(flash, 'err');
+  say(tray && tray.note, 'err');
+  if (!tray) return;
+  if (tray.held) {
+    const held = chatEl('div', 'cd-attach-held');
+    held.appendChild(chatEl('p', null, 'Check these before they are sent to the sandbox:'));
+    const ul = chatEl('ul');
+    tray.held.reasons.forEach(r => ul.appendChild(chatEl('li', null, r)));
+    held.appendChild(ul);
+    const label = chatEl('label', 'cd-attach-tick');
+    const tick = chatEl('input');
+    tick.type = 'checkbox';
+    label.append(tick, chatEl('span', null, 'I have looked at these files and want to attach them'));
+    const row = chatEl('div', 'cd-attach-row');
+    const go = chatEl('button', null, 'Attach');
+    go.type = 'button';
+    // The tick lives on the tray: a redraw (a session event) must not lose it.
+    tick.checked = !!tray.held.ticked;
+    go.disabled = !tick.checked;
+    tick.addEventListener('change', () => { tray.held.ticked = tick.checked; go.disabled = !tick.checked; });
+    go.addEventListener('click', () => tray.confirmHeld(tick.checked));
+    const no = chatEl('button', null, 'Cancel');
+    no.type = 'button';
+    no.addEventListener('click', () => tray.discardHeld());
+    row.append(go, no);
+    held.append(label, row);
+    box.appendChild(held);
+  }
+  if (!tray.chips.length) return;
+  const list = chatEl('ul', 'cd-chips');
+  tray.chips.forEach(c => {
+    const li = chatEl('li', `cd-chip ${c.state}`);
+    li.appendChild(chatEl('span', 'cd-chip-icon', '📎'));
+    const name = chatEl('span', 'cd-chip-name', chatShortName(c.name));
+    name.setAttribute('title', chatShortName(c.name));
+    const meta = chatEl('span', 'cd-chip-meta', c.state === 'failed' ? `Failed: ${c.error}`
+      : c.state === 'done' ? `${chatSize(c.size)} · attached`
+      : c.state === 'sending' ? `${chatSize(c.size)} · ${Math.round(c.pct * 100)}%` : `${chatSize(c.size)} · waiting`);
+    const info = chatEl('span', 'cd-chip-info');
+    info.append(name, meta);
+    li.appendChild(info);
+    if (c.state === 'sending' || c.state === 'queued') {
+      const bar = chatEl('progress');
+      bar.max = 100;
+      bar.value = Math.round(c.pct * 100);
+      bar.setAttribute('aria-label', 'Upload progress');
+      li.appendChild(bar);
+    }
+    if (c.state === 'failed') {
+      const r = chatEl('button', 'cd-chip-btn', 'Retry');
+      r.type = 'button';
+      r.addEventListener('click', () => tray.retry(c.id));
+      li.appendChild(r);
+    }
+    const x = chatEl('button', 'cd-chip-btn', '✕');
+    x.type = 'button';
+    x.setAttribute('aria-label', `Remove ${chatShortName(c.name)}`);
+    x.setAttribute('title', c.state === 'done' ? `Remove from the message; the file stays in the sandbox under ${CHAT_ATTACH_STAYS}` : 'Remove');
+    x.addEventListener('click', () => tray.remove(c.id));
+    li.appendChild(x);
+    list.appendChild(li);
+  });
+  box.appendChild(list);
+  if (tray.chips.some(c => c.state === 'done')) box.appendChild(chatEl('p', 'cd-attach-stays', `A removed file stays in the sandbox under ${CHAT_ATTACH_STAYS}.`));
+}
+
+// Wire a chat's composer: the chips and notes above its text field, an Attach
+// button (`button`, made by the caller so it matches its surroundings), and a
+// drop target over the whole `panel`. `current()` → { tray, sandbox, why }:
+// the tray of the chat on screen, and when it has none (no sandbox known) the
+// reason a drop is refused. Returns { render, say }.
+function chatAttachMount({ form, panel, button, current, focus = () => {} }) {
+  const box = chatEl('div', 'cd-attach-box');
+  box.setAttribute('aria-live', 'polite');
+  form.insertBefore(box, form.firstChild);
+  const input = chatEl('input');
+  input.type = 'file';
+  input.multiple = true;
+  input.hidden = true;
+  button.after(input);
+  let flash = '';
+  const render = () => { chatRenderTray(box, current().tray, flash); box.hidden = !box.childNodes.length; };
+  const take = (files, folders) => {
+    const cur = current();
+    flash = '';
+    if (!cur.tray) { flash = cur.why || 'There is no sandbox to attach to yet.'; render(); return; }
+    cur.tray.offer(files, folders);
+    render();
+  };
+  button.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => { take([...input.files], []); input.value = ''; focus(); });
+
+  const veil = chatEl('div', 'cd-drop');
+  veil.setAttribute('aria-hidden', 'true');
+  veil.hidden = true;
+  panel.appendChild(veil);
+  let depth = 0;
+  const hide = () => { depth = 0; veil.hidden = true; };
+  const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+  panel.addEventListener('dragenter', e => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth++;
+    const cur = current();
+    veil.textContent = cur.tray ? `Drop to attach to ${cur.sandbox}` : `Cannot attach here: ${cur.why}`;
+    veil.classList.toggle('refuse', !cur.tray);
+    veil.hidden = false;
+  });
+  panel.addEventListener('dragover', e => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = current().tray ? 'copy' : 'none';
+  });
+  panel.addEventListener('dragleave', e => { if (hasFiles(e) && --depth <= 0) hide(); });
+  panel.addEventListener('drop', e => {
+    const got = chatDroppedFiles(e.dataTransfer);
+    hide();
+    if (!got) return; // text, a link, an image from a page: as before
+    e.preventDefault();
+    take(got.files, got.folders);
+    focus();
+  });
+  return { render, say(msg) { flash = msg || ''; render(); } };
+}
+
+// A file dropped just outside a chat must not make the browser open it and
+// leave the app. Once per page; a target that took the drop has already
+// prevented it.
+if (typeof window !== 'undefined' && !window.__chatDropGuard) {
+  window.__chatDropGuard = true;
+  const files = e => [...(e.dataTransfer?.types || [])].includes('Files');
+  window.addEventListener('dragover', e => { if (files(e) && !e.defaultPrevented) { e.preventDefault(); e.dataTransfer.dropEffect = 'none'; } });
+  window.addEventListener('drop', e => { if (files(e) && !e.defaultPrevented) e.preventDefault(); });
+}
+// END chat attach
