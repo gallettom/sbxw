@@ -14,7 +14,7 @@ use crate::app::App;
 use axum::body::Body;
 use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::Router;
-use sbxw_core::plans::{MergeState, PlanState, PlanThread, ThreadState, Variant};
+use sbxw_core::plans::{PlanState, PlanThread, ThreadState, Variant};
 use sbxw_core::remote_access::cbor;
 use sbxw_core::remote_access::level2;
 use sbxw_core::remote_access::webauthn::soft::{Authenticator, Twist};
@@ -364,6 +364,7 @@ fn finding_p4_phone_option_reads_substrings() {
 #[test]
 fn finding_p5_the_path_filter_misses_paths_inside_a_word() {
     let s = super::remote_kanban::scrub;
+    // FIXED (P5): a path that starts inside a word is cut from there.
     for (raw, leaked) in [
         ("open file:///Users/someone/.ssh/id_rsa", "/Users/someone"),
         ("path=/Users/someone/secret", "/Users/someone"),
@@ -371,7 +372,7 @@ fn finding_p5_the_path_filter_misses_paths_inside_a_word() {
         ("at \\\\server\\share\\x", "\\\\server"),
         ("in $HOME/.aws/credentials", "/.aws"),
     ] {
-        assert!(s(raw).contains(leaked), "FIXED? {raw:?} -> {:?}", s(raw));
+        assert!(!s(raw).contains(leaked), "{raw:?} -> {:?}", s(raw));
     }
     // What holds.
     assert_eq!(s("fix /api route"), "fix [path] route");

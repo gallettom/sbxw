@@ -1045,6 +1045,6 @@ async fn the_desktop_merge_is_unpinned_and_the_phones_is_pinned() {
         id
     };
     let _ = w.app.plan_merge(&id2, false, None).await;
-    let last = w.fake.log().into_iter().filter(|c| c.contains("sbxw-thread-merge")).last().unwrap();
+    let last = w.fake.log().into_iter().rfind(|c| c.contains("sbxw-thread-merge")).unwrap();
     assert!(last.ends_with(&format!("sbxw-thread-merge ={} =alpha", ws4.display())), "{last}");
 }

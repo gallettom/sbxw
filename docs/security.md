@@ -690,7 +690,7 @@ From a leader's screen the phone can read that leader's sandbox Kanban and open 
 - **Which sandbox.** Only a running team leader's, by the rule `/r/leaders` uses. A stopped sandbox, one that leads no team, an unknown name and a malformed one all get the same 404, so the answer does not say whether a sandbox exists. The name and the ticket id are checked for length and characters before any lookup. A ticket of another sandbox is the same 404.
 - **What it shows.** What the Mac's board shows for that one sandbox: columns, cards with their marks, the linked thread and its state, age, and for a ticket its title, description, history and the names, sizes and kinds of its files.
 - **What it cannot do.** It cannot add, move, edit, delete or send a ticket. It cannot read a file's content: there is no file route, and no file id, no on-disk name and no path leaves the Mac. It shows no other sandbox and no "all sandboxes" view. It has no write permission field at all.
-- **Text is data.** Ticket titles and descriptions are the person's words; thread titles and reports are agent text. They travel as JSON strings, bounded (title 160 characters, description 8,000, file name 120, history 60 lines of 200), and the page escapes them. A word that starts like an absolute path (`/x`, `~/x`, `C:\x`) is replaced by `[path]`, so a path of the Mac or of the sandbox does not leave in free text. This is a filter on the shape of a word, not a guarantee: a path written some other way in a ticket is the person's own text, shown to their own paired phone.
+- **Text is data.** Ticket titles and descriptions are the person's words; thread titles and reports are agent text. They travel as JSON strings, bounded (title 160 characters, description 8,000, file name 120, history 60 lines of 200), and the page escapes them. Where something shaped like an absolute path starts in a word (`/x`, `~/x`, `C:\x`, `\\server`, `$HOME/x`, also after `=`, `:`, `file://`, a quote or a bracket), the rest of the word is replaced by `[path]`. This is a best-effort filter on the shape of a word, not a guarantee: a path written some other way in a ticket is the person's own text, shown to their own paired phone.
 - **Not journaled, not logged.** Reads are not actions, so the journal has nothing for them, and no log line names a ticket's title or text.
 
 ### Approving from the phone
@@ -705,7 +705,7 @@ the Mac, and turned off with remote access. Contract:
 | Action | What the phone shows before you decide | What runs |
 |---|---|---|
 | Approve or refuse a plan, as it is | its sandbox, summary, justification, variant, and each thread's name, model, repo, scope, whole goal and ticket | the desktop's approve (the plan's own threads, nothing edited) or refuse (no note) |
-| Run a merge a lead proposed | the sandbox, the order, the lead's note and distillate, and per branch its tip, commits ahead of the base, files changed with insertions and deletions (numbers and paths, never diff content), and whether an earlier try of this merge failed on it | the desktop's merge: same order, stops at the first conflict, threads kept, distillate as proposed |
+| Run a merge a lead proposed | the sandbox, the order, the lead's note and distillate, and per branch its tip, commits ahead of the base, files changed with insertions and deletions (numbers and paths, never diff content), and whether an earlier try of this merge failed on it | the desktop's merge: same order, stops at the first conflict, threads kept, distillate as proposed; and each branch merged as the exact commit shown, checked again just before its merge: a branch or base that moved stops the merge as "changed" |
 | Answer a pending network request | the sandbox, the host and port, sbx's detail, the options the phone may use and those it may not | sbx's own answer, with one of that request's options |
 | Remove a stopped sandbox | the desktop's sentences: what is lost, that the workspace folder stays | the desktop's removal |
 
@@ -723,11 +723,10 @@ your anonymise rules, and the page shows it as text.
   Mac", and there is no route for it.
 - Editing a plan's threads, writing a note on a refusal, closing threads after a merge,
   editing a merge's distillate.
-- A network option that may leave a lasting rule. The phone offers only an option that says
-  it is one-time ("once") or that refuses or dismisses the request without "always" or
-  "rule". sbx 0.51 offers **Allow** and **Dismiss** for a refused host, and whether its Allow
-  writes a lasting rule has not been checked, so today the phone can only **dismiss**: Allow
-  is answered at the Mac. A host port request (`port:`) is port publishing and is never
+- A network option that may leave a lasting rule. The phone offers only options on an exact
+  list of ids, today **Dismiss** alone. sbx 0.51 offers **Allow** and **Dismiss** for a
+  refused host, and whether its Allow writes a lasting rule has not been checked, so Allow is
+  answered at the Mac. A host port request (`port:`) is port publishing and is never
   listed on the phone.
 - Starting or stopping a sandbox, removing a running one, removing the Jarvis sandbox.
 - Everything level 3 already kept: secrets and the GitHub token, permanent network rules,
@@ -798,6 +797,10 @@ device's passkey with it. `sbxw remote off` turns level 2 off too.
 `passkey_registered`, `passkey_failed`, `changed`, `refused`) and what was acted on by name
 only (a plan id, a sandbox name, a host). Never a goal, a note, a diff or a path; the
 daemon's info log says only "device <id>: <kind>".
+
+**Load.** The approvals badge on the phone comes from one count the daemon refreshes at
+most every 5 s for all open pages, and one phone holds at most 4 open event streams (a
+fifth closes its oldest).
 
 **Not verified on real hardware:** Face ID on a real iPhone, Safari's WebAuthn on a
 `.ts.net` name, a real merge started from the phone, and whether sbx's Allow on a refused

@@ -62,25 +62,53 @@ fn ticket_number(raw: &str) -> Option<u32> {
 
 // ── What is dropped from free text ───────────────────────────────────────
 
-/// `s` with each word that starts like an absolute path (`/x`, `~/x`,
-/// `C:\x`, `C:/x`) replaced by `[path]`, after an opening quote or bracket.
+/// Whether `rest` starts like an absolute path: `/x`, `~/`, a drive
+/// (`C:\`, `C:/`), a UNC share (`\\server`), `$VAR/`. After a `:`, a `//`
+/// is a URL's authority (`https://host/...`), not a path, unless a third
+/// slash follows (`file:///Users/...`).
+fn starts_path(rest: &str, after_colon: bool) -> bool {
+    let b = rest.as_bytes();
+    if after_colon && rest.starts_with("//") {
+        return rest[2..].starts_with('/');
+    }
+    let drive = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/');
+    let unc = rest.starts_with("\\\\") && b.len() >= 3 && b[2].is_ascii_alphanumeric();
+    let var = b.first() == Some(&b'$') && b.get(1).is_some_and(|c| c.is_ascii_uppercase() || *c == b'_') && {
+        let name: usize = b[1..].iter().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || **c == b'_').count();
+        name > 0 && b.get(1 + name) == Some(&b'/')
+    };
+    (b.len() >= 2 && b[0] == b'/') || rest.starts_with("~/") || drive || unc || var
+}
+
+/// `s` with every word that holds something shaped like an absolute path
+/// cut from where that path starts: at the word's start or after `://`,
+/// `=`, `:`, a quote, a bracket, `*` or `,` (`file:///Users/x` becomes
+/// `file:[path]`, `key=/Users/x` becomes `key=[path]`). A best-effort filter
+/// on the shape of a word, not a guarantee that no path leaves.
 pub fn scrub(s: &str) -> String {
+    const BEFORE: &[char] = &['(', '[', '{', '<', '"', '\'', '`', '=', ':', '*', ','];
     let mut out = String::with_capacity(s.len());
     let mut word = String::new();
     let flush = |word: &mut String, out: &mut String| {
         if word.is_empty() {
             return;
         }
-        let body = word.trim_start_matches(['(', '[', '{', '<', '"', '\'', '`', '=']);
-        let lead = word.len() - body.len();
-        let b = body.as_bytes();
-        let drive = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/');
-        let path = (b.len() >= 2 && b[0] == b'/') || body.starts_with("~/") || drive;
-        if path {
-            out.push_str(&word[..lead]);
-            out.push_str("[path]");
-        } else {
-            out.push_str(word);
+        let mut cut = None;
+        let mut prev: Option<char> = None;
+        for (i, c) in word.char_indices() {
+            let candidate = prev.is_none_or(|p| BEFORE.contains(&p));
+            if candidate && starts_path(&word[i..], prev == Some(':')) {
+                cut = Some(i);
+                break;
+            }
+            prev = Some(c);
+        }
+        match cut {
+            Some(i) => {
+                out.push_str(&word[..i]);
+                out.push_str("[path]");
+            }
+            None => out.push_str(word),
         }
         word.clear();
     };
@@ -385,6 +413,21 @@ mod tests {
         assert_eq!(scrub(r"C:\Users\me and D:/x"), "[path] and [path]");
         assert_eq!(scrub("https://example.org/a and a/b and 1 / 2"), "https://example.org/a and a/b and 1 / 2");
         assert_eq!(scrub("line one\n  /etc/passwd\nend"), "line one\n  [path]\nend");
+        // Inside a word (review P5), and the shapes it now knows.
+        for (raw, want) in [
+            ("open file:///Users/someone/.ssh/id_rsa", "open file:[path]"),
+            ("path=/Users/someone/secret", "path=[path]"),
+            ("see *~/notes/plan.md*", "see *[path]"),
+            ("at \\\\server\\share\\x", "at [path]"),
+            ("in $HOME/.aws/credentials", "in [path]"),
+            ("key:/var/x and a,/tmp/y", "key:[path] and a,[path]"),
+        ] {
+            assert_eq!(scrub(raw), want, "{raw:?}");
+        }
+        // Not paths: URLs, ratios, plain words with a slash, prices.
+        for keep in ["https://example.org/a/b", "http://x.y:8080/z", "10:30", "a=b", "and/or", "$5/month", "1/2"] {
+            assert_eq!(scrub(keep), keep);
+        }
     }
 
     #[test]
