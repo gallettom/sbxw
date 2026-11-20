@@ -2380,7 +2380,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         let crate::feat::Slot::Modal { width, light_dismiss } = decl.slot else { return None };
         let sc = s.screens.iter().find(|x| &x.name == name)?;
         let fits = sc.last_good.as_ref().is_some_and(screen::sized_by_content);
-        Some(s.modal_view(screen::view::<App>(sc), width, light_dismiss, fits))
+        // Its open lists are drawn beside the card, not in it: the card clips.
+        let (panel, lists) = screen::view_parts::<App>(sc);
+        Some(s.modal_view(panel, lists, width, light_dismiss, fits))
     });
     let panel = match s.screens.iter().find(|x| x.name == "jarvis") {
         Some(j) if s.jarvis.open => {

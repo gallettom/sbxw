@@ -651,10 +651,11 @@ fn form_open(w: f32, h: f32) -> Runtime<App> {
     rt
 }
 
-/// The key the topmost element at the centre of `key`'s rect has, if any.
+/// The key the topmost element just inside `key`'s rect has, if any.
 fn picked_at(rt: &Runtime<App>, key: &str) -> Option<String> {
-    let ([x, y, w, h], _) = rt.presented(key)?;
-    rt.element_at(x + w / 2.0, y + h / 2.0).and_then(|p| p.key().map(str::to_string))
+    let ([x, y, _, h], _) = rt.presented(key)?;
+    // Just inside the row's own padding, where no keyless child sits.
+    rt.element_at(x + 3.0, y + h / 2.0).and_then(|p| p.key().map(str::to_string))
 }
 
 #[test]
@@ -678,7 +679,7 @@ fn the_priority_list_is_whole_inside_the_window_and_not_clipped_by_the_dialog() 
             let k = format!("kanban-form-priority-{id}");
             match picked_at(&rt, &k) {
                 Some(p) if p.starts_with("kanban-form-priority-") => {}
-                other => bad.push(format!("{w}x{h}: {k} is not what shows at its centre ({other:?}): cut by the dialog")),
+                other => bad.push(format!("{w}x{h}: {k} is not what shows in its row ({other:?}): cut by the dialog")),
             }
         }
     }

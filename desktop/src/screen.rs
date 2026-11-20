@@ -1769,7 +1769,12 @@ impl Build<'_> {
             let rows: Vec<MenuRow> = n.items.iter().filter(|i| !i.divider).map(|it| self.menu_row_of(n, &id, it)).collect();
             // Bounded by the window (`anchored_fit`, MENU_MAX_H): a long list
             // scrolls inside, the chosen row in view on open.
-            let list = menu_surface(format!("{id}-list"), key.clone(), rune::Align::Start, menu_width(&rows))
+            // At least as wide as its field when the screen gave the field a width.
+            let field_w = match n.style.w {
+                Some(crate::luau::Size::Pt(w)) if n.kind == Kind::Select => w,
+                _ => 0.0,
+            };
+            let list = menu_surface(format!("{id}-list"), key.clone(), rune::Align::Start, menu_width(&rows).max(field_w))
                 .anchored_fit(key.clone(), Side::Bottom, rune::Align::Start, 4.0)
                 .max_h(MENU_MAX_H);
             let mut items = col().key(format!("{id}-items")).w_full().shrink().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).scroll_edge_fade(12.0).scroll_margin(12.0);
