@@ -58,7 +58,7 @@ pub const FEATURE: Feature = Feature {
     name: "kanban",
     screens: &[
         ScreenDecl { name: SCREEN, src: include_str!("../../../screens/kanban.luau"), slot: Slot::Overlay { title: TITLE, icon: "board" } },
-        ScreenDecl { name: FORM, src: include_str!("../../../screens/kanban-form.luau"), slot: Slot::Modal { width: 600.0, light_dismiss: false } },
+        ScreenDecl { name: FORM, src: include_str!("../../../screens/kanban-form.luau"), slot: Slot::Modal { width: 720.0, light_dismiss: false } },
     ],
     events: &["tickets", "plan"],
     intents: INTENTS,

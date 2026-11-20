@@ -1245,8 +1245,9 @@ impl App {
     }
 
     /// The modal screen over a dimmed window.
+    /// `lists`: the screen's open lists ([`crate::screen::view_parts`]).
     /// `fits`: the screen's height is its content's ([`crate::screen::sized_by_content`]).
-    pub(super) fn modal_view(&self, screen: El, width: f32, light_dismiss: bool, fits: bool) -> El {
+    pub(super) fn modal_view(&self, screen: El, lists: Vec<El>, width: f32, light_dismiss: bool, fits: bool) -> El {
         let w = width.min(self.window.0 - 32.0);
         let side = ((self.window.0 - w) / 2.0).max(16.0);
         let top = layout::GUTTER * 2.0 + layout::TOP_BAR_H + 16.0;
@@ -1279,10 +1280,19 @@ impl App {
                 }
             })
             .child(body);
-        super::scrim_with("modal-scrim", card, |s: &mut App| {
+        let scrim = super::scrim_with("modal-scrim", card, |s: &mut App| {
+            // An open list takes the first Escape (and the first outside press): it closes, the dialog stays.
+            if let Some(name) = s.feats.modal.as_ref().map(|(n, _)| n.clone()) {
+                if crate::screen::Host::screen(s, &name).ui.open.take().is_some() {
+                    return;
+                }
+            }
             s.feats.modal = None;
             s.push_data();
-        }, light_dismiss)
+        }, light_dismiss);
+        // The screen's open select and menu lists: beside the card, over it
+        // (the card clips what it holds), fitted against the window.
+        lists.into_iter().fold(scrim, |scrim, l| scrim.child(l))
     }
 
     /// The docked feature panel: tabs when more than one is open, the screen below.
