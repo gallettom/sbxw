@@ -1106,8 +1106,8 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
             }
         }
         "ratio" => n.value = J::from(num_of(v)?.clamp(0.1, 0.9) as f64),
-        "min_a" => n.split_min[0] = num_of(v)?.clamp(0.0, 2000.0) as f32,
-        "min_b" => n.split_min[1] = num_of(v)?.clamp(0.0, 2000.0) as f32,
+        "min_a" => n.split_min[0] = num_of(v)?.clamp(0.0, 2000.0),
+        "min_b" => n.split_min[1] = num_of(v)?.clamp(0.0, 2000.0),
         "placeholder" => n.placeholder = Some(string_of(v)?),
         "scope" => n.scope = lua_to_json(v, 0)?,
         "switch" => n.switch = bool_of(v)?,
