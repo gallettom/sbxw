@@ -195,7 +195,7 @@ fn each_view_has_its_rule_and_the_focus_moves_it() {
 #[test]
 fn a_scoped_screen_gives_its_sandbox_and_all_gives_nothing() {
     use crate::intent::Intent;
-        let mut rt = rig(1284.0);
+        let mut rt = rig(1800.0);
     run_real(&mut rt, 1.0);
     let ask = |sb: Option<&str>| {
         let args = match sb {
@@ -216,7 +216,7 @@ fn a_scoped_screen_gives_its_sandbox_and_all_gives_nothing() {
 #[test]
 fn reads_are_rare_and_never_for_a_hidden_window_or_a_stopped_sandbox() {
     let t0 = Instant::now();
-    let mut rt = rig(1284.0);
+    let mut rt = rig(1800.0);
     let at = |rt: &rune::Runtime<App>, sb: &str| rt.state.status.git.cache.get(sb).map(|e| e.1);
     run(&mut rt, t0, 0.0, 0.2);
     assert_eq!(at(&rt, "better-checkout"), None, "debounced: nothing in the first 300 ms");
@@ -251,7 +251,7 @@ fn reads_are_rare_and_never_for_a_hidden_window_or_a_stopped_sandbox() {
 #[test]
 fn a_failed_read_keeps_the_last_value_and_says_nothing() {
     let t0 = Instant::now();
-    let mut rt = rig(1284.0);
+    let mut rt = rig(1800.0);
     run_real(&mut rt, 1.0);
     assert_eq!(shown(&rt).as_deref(), Some("shop/main"));
     rt.update(|s, _| s.git_data(&format!("{KEY_PREFIX}better-checkout"), Err("the daemon answered 502".into()), t0 + Duration::from_secs(2)));

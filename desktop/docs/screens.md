@@ -601,6 +601,11 @@ row{ key = "title-slot", gap = 8,
   `in-view-<name>`), from `data.app.overlay.scope` (`{sandbox, title}`,
   null for All or no scope). It follows a pick at once (the core pushes
   again when the overlay's scope moved) and goes when the overlay closes.
+- **The status bar**: its git item (`status-git`, `src/shell/statusbar/git.rs`)
+  names the repository and branch of the scope's sandbox, as
+  `<repository>/<branch>` (its main checkout's branch, from the daemon's
+  worktrees read). With scope All, or a screen about no sandbox, it is
+  absent. Read only; no press.
 - **Names are data**: text only, clipped, never a pill or a control.
 - A picker a screen must draw itself (the Board's two-line team rows) takes
   the same colours from `scope::look_json` (`fill`, `border`, `text`,
