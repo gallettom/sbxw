@@ -528,3 +528,103 @@ fn a_sandboxs_own_colour_is_the_same_everywhere_and_goes_with_its_block() {
     assert!(a.group_colors().get("fjord").is_none());
     assert_eq!(a.pane_group(pane), None);
 }
+
+/// A copy of the order fixture where `aurora` (stopped) has another name.
+fn fixture_renamed(to: &str) -> String {
+    let text = std::fs::read_to_string(FIXTURE).unwrap().replace("\"aurora\"", &format!("\"{to}\""));
+    let path = std::env::temp_dir().join(format!("sbxw-remove-stopped-{}-{}.json", std::process::id(), to.len()));
+    std::fs::write(&path, text).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+/// A stopped row has a Remove button; no other row has one.
+#[test]
+fn only_stopped_rows_have_a_remove_button() {
+    let a = app();
+    let d = a.screen_data();
+    let n = List::new(&d).draw(&d);
+    let (mut stopped, mut other) = (0, 0);
+    for sb in d["sandboxes"].as_array().unwrap() {
+        let name = sb["name"].as_str().unwrap();
+        let has = find(&n, &format!("remove-{name}")).is_some();
+        if sb["status"] == "stopped" {
+            assert!(has, "{name} is stopped");
+            stopped += 1;
+        } else {
+            assert!(!has, "{name} is not stopped");
+            other += 1;
+        }
+    }
+    assert!(stopped > 0 && other > 0, "the fixture has both ({stopped}, {other})");
+}
+
+/// One press raises the removal intent for that sandbox: the core's
+/// Confirm names it, and nothing runs until Confirm is pressed.
+#[test]
+fn a_press_asks_for_the_confirmation_and_removes_nothing() {
+    use super::tests::tap;
+    let mut rt = rune::Runtime::new(app(), view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    for _ in 0..30 {
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(rt.state.feats.dialog.is_none());
+    tap(&mut rt, "remove-atlas-ops");
+    for _ in 0..6 {
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        rt.frame(1.0 / 60.0);
+    }
+    let d = rt.state.feats.dialog.as_ref().expect("the core's confirmation opened");
+    assert_eq!(d.title, "Remove atlas-ops?");
+    assert!(d.running.is_none(), "nothing runs on the first press");
+    assert!(rt.state.screen_data()["sandboxes"].as_array().unwrap().iter().any(|s| s["name"] == "atlas-ops"), "atlas-ops is still listed");
+}
+
+/// A 60-character name ends in an ellipsis; the buttons stay inside the
+/// row and the row inside the sidebar, at the narrowest width and the default.
+#[test]
+fn a_long_name_never_pushes_the_remove_button_out() {
+    let long = "a".repeat(60);
+    let fx = fixture_renamed(&long);
+    for w in [200.0_f32, crate::theme::layout::SIDEBAR_W] {
+        let mut a = App::new(Args { fixture: Some(fx.clone()), ..Args::default() });
+        a.sidebar_live = Some(w);
+        let mut rt = rune::Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+        for _ in 0..30 {
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+            rt.frame(1.0 / 60.0);
+        }
+        let (list, _) = rt.presented("sidebar").expect("the sidebar drawn");
+        let (row, _) = rt.presented(&format!("row-{long}")).expect("the long row drawn");
+        let (rm, _) = rt.presented(&format!("remove-{long}")).unwrap_or_else(|| panic!("remove button drawn at {w}"));
+        assert!(row[0] >= list[0] - 0.5 && row[0] + row[2] <= list[0] + list[2] + 0.5, "row {row:?} in sidebar {list:?} at {w}");
+        assert!(rm[0] >= row[0] - 0.5 && rm[0] + rm[2] <= row[0] + row[2] + 0.5, "button {rm:?} in row {row:?} at {w}");
+        assert!(rm[2] > 8.0, "the button keeps its size: {rm:?}");
+    }
+    let _ = std::fs::remove_file(fx);
+}
+
+/// Twenty sandboxes, stopped ones included, draw within the Luau budgets.
+#[test]
+fn twenty_sandboxes_draw_within_the_budgets() {
+    let a = app();
+    let mut d = a.screen_data();
+    let mut extra = vec![];
+    for i in 0..20 - d["sandboxes"].as_array().unwrap().len().min(20) {
+        let mut sb = d["sandboxes"].as_array().unwrap().iter().find(|s| s["status"] == "stopped").unwrap().clone();
+        sb["name"] = format!("filler-{i}").into();
+        extra.push(sb);
+    }
+    d["sandboxes"].as_array_mut().unwrap().extend(extra);
+    assert!(d["sandboxes"].as_array().unwrap().len() >= 20);
+    let n = List::new(&d).draw(&d);
+    let mut r = vec![];
+    keys(&n, "remove-", &mut r);
+    assert!(r.len() >= 10, "{}", r.len());
+}
