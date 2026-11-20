@@ -234,6 +234,16 @@ function setPaneInputHold(on, focusTo) {
 }
 function paneInputHoldActive() { return paneInputHeld; }
 
+// The pane files feature (pane-files.js) must never stop a pane from being
+// built: a failure there is reported once, with a fixed message (no pane text,
+// no path), and the terminal still works.
+let paneFilesFailed = false;
+function paneFilesTry(fn) {
+  try { fn(); } catch {
+    if (!paneFilesFailed) { paneFilesFailed = true; console.error('sbxw: pane file links and drop are unavailable'); }
+  }
+}
+
 function createPane(index) {
   const el = document.createElement('div');
   el.className = 'pane';
@@ -315,7 +325,7 @@ function createPane(index) {
   // instance can never fix.
   setupTerminal(pane);
   // Files dropped on the pane are uploaded and their paths typed (pane-files.js).
-  paneDropMount(pane);
+  paneFilesTry(() => paneDropMount(pane));
 
   // Focus pane on click inside it
   el.addEventListener('mousedown', () => setFocusedPane(index));
@@ -480,7 +490,7 @@ function setupTerminal(pane) {
   term.open(pane.termEl);
   // File paths in the output: Cmd/Ctrl + click opens them in the Files tab
   // (pane-files.js).
-  paneLinksAttach(term, pane);
+  paneFilesTry(() => paneLinksAttach(term, pane));
   // Status pills over `[[Done]]` and its kind, for the sandbox shown now.
   pane.emphasis = window.sbxwEmphasis?.attach(term, () => pane.sandbox) || null;
 

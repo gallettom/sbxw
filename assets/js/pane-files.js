@@ -282,8 +282,9 @@ function paneDropMount(pane) {
   let flash = '';
   let want = null; // the session the files in the tray are for
   let finishing = false;
+  let tray = null; // built on the first real drop: chat-core.js loads after this file
   const finish = () => {
-    if (finishing || !tray.chips.length || tray.held) return;
+    if (finishing || !tray || !tray.chips.length || tray.held) return;
     if (!tray.chips.every(c => c.state === 'done')) return;
     finishing = true;
     const paths = tray.take().map(c => c.path);
@@ -294,13 +295,21 @@ function paneDropMount(pane) {
     if (paneTypePaths(pane, w, paths)) showToast(`📎 ${paths.join('  ')}`, 'ok');
   };
   const render = () => {
-    chatRenderTray(box, tray, flash);
-    box.hidden = !box.childNodes.length;
+    if (typeof chatRenderTray === 'function' && tray) chatRenderTray(box, tray, flash);
+    else { box.textContent = flash; }
+    box.hidden = !box.childNodes.length && !box.textContent;
   };
-  const tray = chatAttachTray({
-    sandbox: () => (want ? want.sandbox : null),
-    onChange: () => { render(); finish(); },
-  });
+  // The tray, built when a file is really dropped, or null when chat-core.js is absent.
+  const getTray = () => {
+    if (tray) return tray;
+    if (typeof chatAttachTray !== 'function' || typeof chatRenderTray !== 'function') return null;
+    tray = chatAttachTray({
+      sandbox: () => (want ? want.sandbox : null),
+      onChange: () => { render(); finish(); },
+    });
+    pane.dropTray = tray;
+    return tray;
+  };
 
   const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
   const held = () => typeof paneInputHeld !== 'undefined' && paneInputHeld;
@@ -308,7 +317,7 @@ function paneDropMount(pane) {
   const hide = () => { depth = 0; veil.hidden = true; };
   const refusal = () => {
     if (!pane.sandbox) return 'this pane has no sandbox yet';
-    const busy = tray.chips.length || tray.held;
+    const busy = tray && (tray.chips.length || tray.held);
     if (busy && want && (want.sandbox !== pane.sandbox || want.mode !== pane.mode || want.thread !== (pane.thread || null))) {
       return 'finish or remove the files already waiting in this pane first';
     }
@@ -333,15 +342,24 @@ function paneDropMount(pane) {
   pane.el.addEventListener('dragleave', e => { if (hasFiles(e) && --depth <= 0) hide(); });
   pane.el.addEventListener('drop', e => {
     if (held()) return; // the window's hold guard has stopped it already
+    if (typeof chatDroppedFiles !== 'function') {
+      hide();
+      if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
+      e.preventDefault();
+      flash = 'File drop is not available on this page';
+      render();
+      return;
+    }
     const got = chatDroppedFiles(e.dataTransfer);
     hide();
     if (!got) return; // text, a link: as before
     e.preventDefault();
     const why = refusal();
     if (why) { flash = `Not sent: ${why}.`; render(); return; }
+    const t = getTray();
+    if (!t) { flash = 'File drop is not available on this page'; render(); return; }
     flash = '';
-    if (!tray.chips.length && !tray.held) want = { sandbox: pane.sandbox, mode: pane.mode, thread: pane.thread || null };
-    tray.offer(got.files, got.folders);
+    if (!t.chips.length && !t.held) want = { sandbox: pane.sandbox, mode: pane.mode, thread: pane.thread || null };
+    t.offer(got.files, got.folders);
   });
-  pane.dropTray = tray;
 }

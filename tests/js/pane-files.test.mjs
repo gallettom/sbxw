@@ -49,7 +49,7 @@ function makeBuf(rows, cols = 80) {
   return { getLine: i => lines[i] };
 }
 
-function load(extra = {}) {
+function load(extra = {}, core = 'with') {
   const calls = { open: [], toasts: [], xhr: [], tips: [] };
   const document = {
     createElement: t => new El(t),
@@ -83,8 +83,10 @@ function load(extra = {}) {
     paneCount: 2, window: { innerWidth: 1000, innerHeight: 800, addEventListener() {} },
     ...extra,
   });
-  vm.runInContext(`${fileRules}\n${attach}\n${holdRules}\n${paneFiles}\nglobalThis.api = { chatFilePath, chatFileTokens, paneLogicalLine, paneFileLinksAt, paneLinkTarget, paneLinkTip, paneLinkProvider, paneLinksAttach, paneShellQuote, paneTypeLine, paneTypeBlocker, paneTypePaths, paneDropMount, paneShowPathNotice, paneFrameAllowed };`, ctx);
-  return { api: ctx.api, ctx, calls, document };
+  vm.runInContext(`${core === 'with' ? `${fileRules}\n${attach}\n` : ''}${holdRules}\n${paneFiles}\nglobalThis.api = { chatFilePath: globalThis.chatFilePath, chatFileTokens: globalThis.chatFileTokens, paneLogicalLine, paneFileLinksAt, paneLinkTarget, paneLinkTip, paneLinkProvider, paneLinksAttach, paneShellQuote, paneTypeLine, paneTypeBlocker, paneTypePaths, paneDropMount, paneShowPathNotice, paneFrameAllowed };`, ctx);
+  // chat-core.js comes after pane-files.js on the page: `late` evaluates it now.
+  const late = () => vm.runInContext(`${fileRules}\n${attach}\nglobalThis.chatFilePath = chatFilePath; globalThis.chatFileTokens = chatFileTokens;`, ctx);
+  return { api: ctx.api, ctx, calls, document, late };
 }
 
 const links = (buf, y, api) => new Promise(res => api.paneLinkProvider({ buffer: { active: buf } }, {
@@ -388,4 +390,49 @@ test('the pane code logs nothing and builds no markup from data', () => {
   const code = paneFiles.replace(/\/\/.*$/gm, '');
   assert.ok(!/console\./.test(code));
   assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML/.test(code));
+});
+
+// ── The tray is built on the first drop, not at mount ────────────────────
+// pane-files.js loads before chat-core.js (singleton.js), and panes are built
+// at load: mounting must not need chat-core.js.
+test('mount needs nothing from chat-core.js; the tray is built on the first drop', async () => {
+  const { api, calls, late } = load({}, 'without');
+  const { pane, sent } = fakePane();
+  api.paneDropMount(pane); // chat-core.js is not loaded yet: must not throw
+  assert.equal(pane.dropTray, undefined, 'no tray at mount');
+  late(); // now every script is loaded
+  pane.el.fire('drop', { dataTransfer: dt(file('a.png')) });
+  assert.ok(pane.dropTray, 'the tray exists after the first drop');
+  await settle();
+  assert.equal(calls.xhr.length, 1);
+  assert.equal(sent.length, 1);
+});
+
+test('without chat-core.js a file drop is refused with a plain notice, nothing throws', () => {
+  const { api, calls } = load({}, 'without');
+  const { pane, sent } = fakePane();
+  api.paneDropMount(pane);
+  const ev = pane.el.fire('drop', { dataTransfer: dt(file('a.png')) });
+  assert.equal(ev.defaultPrevented, true);
+  assert.match(pane.el.find('pane-drop-box').textContent, /File drop is not available on this page/);
+  assert.equal(pane.el.find('pane-drop-box').hidden, false);
+  assert.equal(calls.xhr.length, 0);
+  assert.equal(sent.length, 0);
+  // A text drag is left alone.
+  const txt = pane.el.fire('drop', { dataTransfer: { types: ['text/plain'], items: [], files: [] } });
+  assert.equal(txt.defaultPrevented, false);
+});
+
+test('panes.js reports a failure of pane-files.js once, fixed message, and goes on', () => {
+  const src = panes.slice(panes.indexOf('let paneFilesFailed'), panes.indexOf('function createPane'));
+  const errors = [];
+  const ctx = vm.createContext({ console: { error: (...a) => errors.push(a.join(' ')) } });
+  vm.runInContext(`${src}\nglobalThis.t = paneFilesTry;`, ctx);
+  ctx.t(() => { throw new Error('/secret/path'); });
+  ctx.t(() => { throw new Error('/secret/path'); });
+  ctx.t(() => {});
+  assert.equal(errors.length, 1);
+  assert.ok(!/secret/.test(errors[0]));
+  assert.match(panes, /paneFilesTry\(\(\) => paneDropMount\(pane\)\)/);
+  assert.match(panes, /paneFilesTry\(\(\) => paneLinksAttach\(term, pane\)\)/);
 });
