@@ -1397,7 +1397,7 @@ mod tests {
             button{ "Stop", on = "stop", arg = { name = "x", n = 2 }, variant = "danger", icon = "stop", help = "Stop it" },
             input{ id = "q", value = "abc", placeholder = "Search", on = "typed", on_submit = "go" },
             select{ id = "s", items = { "a", { id = "b", label = "Bee", icon = "check" } }, value = "b", on = "pick" },
-            split{ id = "sp", ratio = 0.3, vertical = true, text"l", text"r" },
+            split{ id = "sp", ratio = 0.3, min_a = 120, min_b = 200, vertical = true, text"l", text"r" },
         }"#)
         .unwrap();
         assert_eq!(n.kind, Kind::Row);
@@ -1409,6 +1409,7 @@ mod tests {
         assert_eq!(n.children[1].arg, serde_json::json!({ "name": "x", "n": 2 }));
         assert_eq!(n.children[3].items[1], Item::plain("b", "Bee", Some("check")));
         assert_eq!(n.children[4].value, serde_json::json!(0.30000001192092896));
+        assert_eq!(n.children[4].split_min, [120.0, 200.0]);
 
         for (src, want) in [
             ("text{ 'a', colour = 'red' }", "text: unknown prop 'colour'"),

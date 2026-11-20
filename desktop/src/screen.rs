@@ -1990,6 +1990,27 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[test]
+    fn a_split_keeps_the_least_sizes_and_the_old_range_without_them() {
+        // Without them: 0.1 to 0.9, as before, at any length (and unknown).
+        for len in [0.0, 300.0, 720.0, 860.0, 1284.0] {
+            assert_eq!(split_range(len, [0.0, 0.0]), (0.1, 0.9), "{len}");
+        }
+        // With them: each side keeps its minimum (the 8 pt handle is not shared out).
+        for len in [1284.0f32, 860.0, 720.0] {
+            let (lo, hi) = split_range(len, [220.0, 340.0]);
+            let room = len - theme::layout::GUTTER;
+            assert!(lo * room >= 220.0 - 0.01 && (1.0 - hi) * room >= 340.0 - 0.01, "{len}: {lo} {hi}");
+            assert!(lo <= hi);
+        }
+        // Too short for both: the first keeps its minimum, the second takes the rest.
+        let (lo, hi) = split_range(500.0, [220.0, 340.0]);
+        assert_eq!(lo, hi);
+        assert!((lo * (500.0 - theme::layout::GUTTER) - 220.0).abs() < 0.01);
+        // A minimum wider than the whole: all to the first, never above 1.
+        assert_eq!(split_range(300.0, [900.0, 0.0]), (1.0, 1.0));
+    }
+
     const SCREEN: &str = r#"
 return {
   init = function() return { n = 0 } end,

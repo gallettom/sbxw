@@ -254,3 +254,42 @@ fn the_dragged_columns_stay_usable() {
     let acts = rt.presented("files-acts").unwrap().0;
     assert!(acts[2] >= 320.0, "the reader keeps 340 pt: {acts:?}");
 }
+
+/// The handle, dragged with the pointer to either end, stops where the list
+/// and the reader keep their least size; a ratio stored out of range shows
+/// inside it; a split without minimums elsewhere keeps 0.1 to 0.9 (see
+/// `screen::tests`).
+#[test]
+fn the_handle_stops_at_the_least_sizes() {
+    for (w, h, sidebar) in [(1284.0, 816.0, true), (1284.0, 816.0, false), (900.0, 600.0, false), (860.0, 600.0, false)] {
+        let mut rt = scene(Case { w, h, sidebar, reader: true, extra: 0, long: false, ratio: None, deep: false, offline: false });
+        for to in [-2000.0, 2000.0] {
+            let handle = rt.presented("files-split-handle").unwrap().0;
+            let (x, y) = (handle[0] + handle[2] / 2.0, handle[1] + 100.0);
+            rt.pointer_down(x, y);
+            rt.frame(0.02);
+            rt.pointer_move(x + to / 2.0, y);
+            rt.frame(0.02);
+            rt.pointer_move(x + to, y);
+            rt.frame(0.02);
+            rt.pointer_up(x + to, y);
+            settle(&mut rt);
+            let list = rt.presented("files-listbar").unwrap().0;
+            let reader = rt.presented("files-acts").unwrap().0;
+            assert!(list[2] >= 219.0, "{w} sidebar {sidebar}: dragged to {to}: the list is {} wide", list[2]);
+            assert!(reader[2] >= 320.0, "{w} sidebar {sidebar}: dragged to {to}: the reader is {} wide", reader[2]);
+            // The drag moved it, and it stopped at the minimum.
+            if to < 0.0 {
+                assert!(list[2] < 232.0, "{w} sidebar {sidebar}: the list went to its least ({})", list[2]);
+            } else {
+                assert!(reader[2] < 352.0, "{w} sidebar {sidebar}: the reader went to its least ({})", reader[2]);
+            }
+            let v = violations(&rt, (w, h));
+            assert!(v.is_empty(), "{w} sidebar {sidebar} dragged to {to}: {v:?}");
+        }
+    }
+    // An old stored ratio, out of range (0.05), is shown inside it.
+    let mut rt = scene(Case { w: 1284.0, h: 816.0, sidebar: true, reader: true, extra: 0, long: false, ratio: Some(0.05), deep: false, offline: false });
+    settle(&mut rt);
+    assert!(rt.presented("files-listbar").unwrap().0[2] >= 219.0);
+}

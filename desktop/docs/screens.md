@@ -431,6 +431,7 @@ between them that the person drags. The core keeps the ratio from then on.
 | `id` | string | Required. The handle's key is `<id>-handle` |
 | `vertical` | bool | true: side by side (a vertical handle); false (default): one above the other |
 | `ratio` | 0.1 to 0.9 | The first child's share when the split first shows (default 0.5) |
+| `min_a`, `min_b` | points | The least length the first, the second child keeps (default 0: only the 0.1 to 0.9 range). The handle stops there, a ratio stored before (or in a larger window) shows inside it, and the layout never gives less. When both cannot be kept, the first keeps its minimum and the second takes what is left |
 
 ```lua
 split{ id = "detail", vertical = true, ratio = 0.35, column{ text"list" }, column{ text"detail" } }
