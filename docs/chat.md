@@ -69,6 +69,38 @@ missing, attach the agent, wait for its UI, type, submit. Details that matter:
 - **A warm session is fast.** If the agent is already attached and drawn, sbxw
   skips the existence check and waits ~180 ms of silence instead of 900 ms.
 
+### Attaching files
+
+Drop files anywhere on the dock's panel (a dashed "Drop to attach to
+`<sandbox>`" target shows), or press **📎 Attach files** under the text field.
+The same works in the [browser side panel](#the-browser-side-panel) (paperclip
+button, drop anywhere on the chat).
+
+- Each file is checked **before any byte is sent**: an empty file or one over
+  128 MB is refused, a folder is refused ("drop the files in it instead"), and
+  a message takes 10 files at most. Other kinds, archives included, go through
+  as the upload box's route accepts them.
+- A file whose **name looks like a secret** (`.env*`, `*.pem`, `*.key`,
+  `id_rsa*`, `credentials*`, ...: the Kanban's and the desktop's list) is held
+  until you tick "I have looked at these files and want to attach them".
+  Nothing of that drop is uploaded before.
+- Accepted files upload one at a time to the chat's own sandbox with the
+  Upload box's route (`POST /api/sandboxes/:name/upload`), into
+  `/tmp/sbxw-uploads/<time>/<name>`, and show as chips with progress. A failed
+  upload stays with its reason and a **Retry**; Send waits until none is
+  pending or failed. The text you typed is never touched.
+- **Nothing is typed to the agent by the drop.** On Send the message carries
+  your own words first, then one fixed block listing the paths the daemon
+  answered:
+  `Attached files (uploaded to this sandbox):` and one `- <path>` per file.
+- The **＋ New chat** tab has no sandbox yet, so it takes no file: send a first
+  message, then attach.
+- Removing a chip removes the file from the message only. It **stays in the
+  sandbox under `/tmp/sbxw-uploads`**: no route deletes one.
+- A file dropped just outside the panel no longer makes the browser open it.
+  A dragged text selection, link or image from another page is not a file and
+  behaves as before.
+
 ## The browser side panel
 
 A Chrome/Edge extension that opens a chat **beside the app you're testing**.
