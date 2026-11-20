@@ -428,7 +428,7 @@ impl App {
     /// The line waits while `who` waits on a question or a prompt, and is
     /// typed once it is idle or at work again; dropped if it ends, or after
     /// 30 minutes (the note stays for `read_team_notes`).
-    fn hold_note_line(self: &std::sync::Arc<Self>, sandbox: SandboxRef, who: String, line: String) {
+    pub(crate) fn hold_note_line(self: &std::sync::Arc<Self>, sandbox: SandboxRef, who: String, line: String) {
         let app = self.clone();
         tokio::spawn(async move {
             let mut rx = app.bus.subscribe();

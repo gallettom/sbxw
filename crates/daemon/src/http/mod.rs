@@ -14,6 +14,7 @@ pub mod assets;
 pub mod board;
 pub mod browser;
 pub mod canvas;
+pub mod tickets;
 pub mod error;
 pub mod guard;
 pub mod jarvis;

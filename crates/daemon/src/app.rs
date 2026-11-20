@@ -122,6 +122,8 @@ pub struct App {
     pub cpu_probe: Mutex<crate::svc::stats::CpuProbe>,
     /// The canvases on disk, read once (see `svc::canvas`).
     pub(crate) canvas: Mutex<crate::svc::canvas::Book>,
+    /// The tickets on disk, per sandbox, read on first use (see `svc::tickets`).
+    pub(crate) tickets: Mutex<crate::svc::tickets::Store>,
 }
 
 pub struct AppBuilder {
@@ -189,6 +191,7 @@ impl AppBuilder {
             own_cpu: Mutex::new(Default::default()),
             cpu_probe: Mutex::new(crate::svc::stats::CpuProbe::Os),
             canvas: Mutex::new(Default::default()),
+            tickets: Mutex::new(Default::default()),
         })
     }
 }
@@ -287,6 +290,7 @@ impl App {
         self.start_stats_ticker();
         self.start_keep_awake();
         self.start_board_listener();
+        self.start_tickets_listener();
         self.start_mac_lifecycle();
     }
 

@@ -175,4 +175,9 @@ while len(items) < 400:
         items.append({"seq": seq + 1, "at": at + 1000 * k + 500, "kind": "tool_result", "result": {"status": "ok", "size": 400, "head": "ok\n" * 10, "id": f"t{seq}"}}); seq += 2
     items.append({"seq": seq, "at": at + 5000, "kind": "assistant_text", "text": f"Step {seq} is **done**: the copy reads better and `npm test pay` passes.\n\n- one change\n- [[Done]]"}); seq += 1
 d["history"] = {"web-app/s-perf": {"items": items[:400]}}
+# The Kanban at real sizes: the daemon's own answers (sbxw-core's write_kanban_fixtures).
+import os
+k = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fixtures", "kanban", "big.json")))["daemon"]
+for key in ("tickets_boards", "tickets_views", "tickets_files"):
+    d[key] = k[key]
 json.dump(out, sys.stdout)

@@ -25,6 +25,7 @@ fn t(name: &str) -> PlanThread {
         summary: String::new(),
         updated_ms: 0,
         set_by: None,
+        ticket: None,
     }
 }
 

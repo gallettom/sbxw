@@ -126,6 +126,11 @@ pub struct PlanThread {
     /// marked done). Absent for the thread's own reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set_by: Option<SetBy>,
+    /// The person's ticket this thread works on (`T-<n>` of the plan's
+    /// sandbox), given by the lead in `propose_plan`. Additive: a plan without
+    /// tickets is as before. See `tickets.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::tickets::de_ticket")]
+    pub ticket: Option<u32>,
 }
 
 /// Who set a thread's state, when not the thread.
@@ -328,6 +333,7 @@ pub fn validate(threads: Vec<PlanThread>) -> Result<Vec<PlanThread>, String> {
                 summary: String::new(),
                 updated_ms: 0,
                 set_by: None,
+                ticket: t.ticket,
             })
         })
         .collect()
@@ -546,8 +552,15 @@ impl PlanBook {
         worktree: Option<String>,
         now: u64,
     ) -> Result<Plan, String> {
-        let threads = validate(threads)?;
+        let mut threads = validate(threads)?;
         let sandbox = self.plans.get(id).map(|p| p.sandbox.clone()).unwrap_or_default();
+        // A dialog that does not know tickets sends threads without them:
+        // each keeps the proposal's link by name.
+        if let Some(p) = self.plans.get(id) {
+            for t in threads.iter_mut().filter(|t| t.ticket.is_none()) {
+                t.ticket = p.threads.iter().find(|o| o.name == t.name).and_then(|o| o.ticket);
+            }
+        }
         let taken: HashSet<String> = self
             .approved_threads(&sandbox)
             .into_iter()
@@ -961,6 +974,7 @@ mod tests {
             summary: String::new(),
             updated_ms: 0,
             set_by: None,
+            ticket: None,
         }
     }
 

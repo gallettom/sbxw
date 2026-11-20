@@ -166,6 +166,42 @@ Agent listener (the sandbox is the token's): `POST /api/canvas/shots`
 (`{canvas?, title?, batch, shot: {b64, title, note?, width?, screen?}}`),
 `POST /api/canvas/list`, `POST /api/canvas/read` (`{canvas?}`: `text`).
 
+### Tickets and the Kanban (`src/feat/kanban/`, KANBAN.md)
+
+UI listener, UI token. A ticket is `T-<n>` per sandbox (`:n` takes `12` or
+`T-12`); file ids are `a-` and 8 hex digits, the files on disk names the
+daemon generated. The column of every card, its labels, marks and counts are
+the daemon's (`sbxw_core::tickets`): the app lays them out. Every answer is
+`{ok, ...}`; an error is `{ok: false, error}` with 400, 404 or 409.
+
+| Route | Body or query | Answer |
+|---|---|---|
+| `GET /api/tickets` | `?sandbox=<name>` (`all` or none: every sandbox), `&older=1` (Merged in full) | `board`: `scope, now, columns: [{id (planned, progress, test, ready, merged), title, tone, help, empty, count, cards, older}], counts_line, tickets, bytes, limits` |
+| `GET /api/tickets/:sandbox/:n` | | `ticket`: `card, n, num, title, description, priority, source, created_ms, updated_ms, validated_ms, link {plan, thread}, files [{id, name, bytes, size, kind, picture, icon, added_ms}], files_label, bytes, history [{at, when, text, tone}]` |
+| `POST /api/tickets/:sandbox` | `{title, description?, priority? (none, p1, p2, p3)}` | `ticket` |
+| `POST /api/tickets/:sandbox/:n/edit` | `{title?, description?, priority?, validated?}` (over a cap: refused) | `ticket` |
+| `POST /api/tickets/:sandbox/:n/files?name=` | the file's bytes (20 MB; archives and programs refused by content) | `ticket` |
+| `GET /api/tickets/:sandbox/:n/files/:file` | | the bytes, the type sniffed (text as `text/plain`), `nosniff`, `Content-Security-Policy: sandbox`, `attachment` |
+| `POST /api/tickets/:sandbox/:n/files/:file/remove` | | `ticket` |
+| `POST /api/tickets/:sandbox/:n/move` | `{to: up, down, top, bottom}` (Planned, no thread) | `{}` |
+| `POST /api/tickets/:sandbox/:n/delete` | | `deleted, files, bytes`; 400 while its thread works |
+| `POST /api/tickets/:sandbox/:n/send` | (nothing read from the body) | `sent` (`typed` or `held`), `line`; 409 when no session is open or the ticket is in a plan |
+| bus event `tickets` | | `{sandbox, n?, what}`: `created`, `edited`, `file`, `moved`, `deleted`, `followed` (a plan changed), `sent` |
+
+A card: `key` (`t:<sandbox>:<n>` or `p:<plan>:<thread>`), `sandbox`, `n`
+(null for a thread with no ticket), `num` (`T-12` or `thread`), `column`,
+`title`, `title_short` (64 characters), `title_long` (110), `source`
+(`person`, `thread`), `priority`, `thread`, `thread_state`, `thread_tone`,
+`plan`, `marks [{id, label, tone, help}]`, `files`, `bytes`, `validated`,
+`created_ms`, `updated_ms`, `age`, `can {reorder, validate, edit, delete,
+send, reorder_why, delete_why, send_why}`.
+
+Agent listener (the sandbox is the token's, read only): `POST
+/api/tickets/list` (`text`), `POST /api/tickets/read {id}` (`text`; the
+files copied into the sandbox on this read). `POST /api/plans/propose` and
+`/api/plans/wait` answer `ticket_notes` (each ticket a thread names that is
+not linked, and why).
+
 ### Not covered yet
 
 Grouped by the area that will need them, with the web UI file that calls

@@ -90,6 +90,9 @@ fn every_tab_like_control_changes_what_is_drawn() {
         ("threads/plan-long", vec![], vec!["pt-1-more", "pt-1-owns-more", "pt-1-more"]),
         // The Board: its kind filter and the narrow tabs' content (wide here: the filter).
         ("board/basic", vec![intent("board_show", json!({ "team": "p-run" }))], vec!["board-group-notes", "board-group-questions", "board-group-all", "board-thread-web-page"]),
+        // The Board's Conversation | Kanban switch, both ways; a Kanban card opens its ticket.
+        ("board/basic", vec![intent("board_show", json!({ "team": "p-run" }))], vec!["board-view-kanban", "kanban-view-conversation"]),
+        ("kanban/basic", vec![intent("kanban_show", json!({ "sandbox": "web-app" }))], vec!["kanban-row-t-web-app-2", "kanban-close", "kanban-view-conversation"]),
         // The pager's Tabs and Grid.
         ("shell/finish-grid", vec![], vec!["pager-view-tabs", "pager-view-grid"]),
         // The top bar's GUI | TUI and Lead Mode (two-state: each press must switch).

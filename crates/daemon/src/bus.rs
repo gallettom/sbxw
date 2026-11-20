@@ -60,6 +60,9 @@ pub enum Event {
     /// A canvas changed (shots added, an edit, a review, deleted): re-read
     /// `GET /api/canvas/:id` (see `svc::canvas`).
     Canvas(crate::svc::canvas::CanvasNudge),
+    /// A sandbox's tickets or the plans they follow changed: re-read `GET
+    /// /api/tickets` (see `svc::tickets`). `{sandbox, n?, what}`, no text.
+    Tickets(crate::svc::tickets::TicketsNudge),
 }
 
 /// What the `history` event says: whose log, and its newest seq.
@@ -93,6 +96,7 @@ impl Event {
             Event::Emphasis(_) => "emphasis",
             Event::History(_) => "history",
             Event::Canvas(_) => "canvas",
+            Event::Tickets(_) => "tickets",
         }
     }
 
@@ -115,6 +119,7 @@ impl Event {
             Event::Stats(v) => json(v),
             Event::History(v) => json(v),
             Event::Canvas(v) => json(v),
+            Event::Tickets(v) => json(v),
         }
     }
 }

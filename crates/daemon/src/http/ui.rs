@@ -164,6 +164,7 @@ pub fn routes() -> Router<Arc<App>> {
         .merge(super::board::ui_routes())
         .merge(super::jarvis::ui_routes())
         .merge(super::canvas::ui_routes())
+        .merge(super::tickets::ui_routes())
         // The voice concierge.
         .route("/api/voice", get(voice_status))
         .route("/api/emphasis", get(emphasis))

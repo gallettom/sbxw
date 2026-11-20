@@ -3,7 +3,8 @@
 # stand-in daemon with realistic sizes (scripts/perf-fixture.py: 11
 # sandboxes, 200 commits with their details, a 3,000-entry folder, 113
 # network requests, a 400-item conversation in Sessions, the Board's
-# 500-event team and All teams over 26 teams with texts at the cap). Each step of the script is announced in the log with a
+# 500-event team and All teams over 26 teams with texts at the cap, the
+# Kanban's 60 tickets and 40 threads). Each step of the script is announced in the log with a
 # `perf:` mark; SBXW_DESKTOP_PERF=1 logs every Luau render, the data handed
 # to the screens, the core's view and each daemon request with its time.
 #
@@ -86,6 +87,22 @@ add(type="mark", name="hold:300")
 # (A button last: the search field gives up the keyboard before the Canvas.)
 step("the Board (real sizes): All teams, Decisions and warnings", "board-group-notes")
 step("the Board (real sizes): All teams, every kind", "board-group-all")
+# The Kanban at real sizes (fixtures/kanban/big.json: 60 tickets, 40 threads over 25 plans).
+step("the Kanban: the switch from the Board", "board-view-kanban", "kanban-lane-planned")
+step("the Kanban: open the scope picker", "kanban-sandbox", "kanban-sandbox-list")
+# (Beside the Requests panel the overlay is under 900 pt: one column at a time.)
+step("the Kanban: All sandboxes", "kanban-sandbox-", "kanban-colpick")
+step("the Kanban: the column picker", "kanban-colpick", "kanban-colpick-list")
+step("the Kanban: Merged", "kanban-colpick-merged", "kanban-lane-merged")
+step("the Kanban: Show older (Merged in full)", "kanban-older", "kanban-lane-merged")
+step("the Kanban: the column picker again", "kanban-colpick", "kanban-colpick-list")
+step("the Kanban: Planned", "kanban-colpick-planned", "kanban-lane-planned")
+step("the Kanban: open the scope picker again", "kanban-sandbox", "kanban-sandbox-list")
+add(type="type", text="web-app", every=0.03); t += 0.3; add(type="mark", name="hold:300")
+step("the Kanban: web-app", "kanban-sandbox-web-app", "kanban-row-t-web-app-1")
+step("the Kanban: open a ticket (its panel)", "kanban-row-t-web-app-1", "kanban-panel")
+step("the Kanban: close it", "kanban-close")
+step("the Kanban: back to the conversation", "kanban-view-conversation", "board-convo")
 # Canvas: web-app's canvas of 15 shots, a pan and a pinch, the tools, Fit, then closed.
 step("open the Canvas", "rail-canvas", "canvas-sandbox")
 step("the Canvas: the sandbox picker", "canvas-sandbox", "canvas-sandbox-list")

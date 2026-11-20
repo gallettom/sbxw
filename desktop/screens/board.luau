@@ -385,6 +385,8 @@ local GROUP_HELP = { messages = "What the lead and threads sent each other with 
 
 local function filters(ui, wide)
   local seg = { gap = 4, w = "full", wrap = true }
+  -- The Board's two views; the Kanban is its own screen (kanban.luau).
+  seg[#seg + 1] = select{ id = "board-view", value = "conversation", items = { { id = "conversation", label = "Conversation" }, { id = "kanban", label = "Kanban" } }, on = "view", switch = true }
   for _, g in ipairs(GROUPS) do
     local on_it = ui.group == g[1]
     seg[#seg + 1] = button{ g[2], variant = on_it and "neutral" or "ghost", color = on_it and "text-bright" or "text-muted", dense = true, on = "group", arg = g[1], key = "board-group-" .. g[1], help = GROUP_HELP[g[1]] }
@@ -679,5 +681,6 @@ return {
     commit = function(_, h) return intent("board_commit", { hash = h }) end,
     file = function(_, p) return intent("board_file", { path = p }) end,
     open = function(_, a) return intent("board_open", { what = a.what, thread = a.thread, relay = a.relay }) end,
+    view = function(_, _, v) if v == "kanban" then return intent("kanban_show", {}) end end,
   },
 }
