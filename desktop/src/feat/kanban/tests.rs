@@ -636,3 +636,51 @@ fn the_shortcut_and_the_palette_open_the_kanban() {
     let help = rt.state.screen_data()["app"]["shortcuts"].as_array().unwrap().iter().any(|s| s["what"] == SHOW && s["keys"].as_array().unwrap().last() == Some(&json!("K")));
     assert!(help, "listed in Help with its key");
 }
+
+// ── The new-ticket form: its select list and its size ─────────────────────
+
+fn form_open(w: f32, h: f32) -> Runtime<App> {
+    let mut rt = window(BASIC, w, h);
+    if w < 1000.0 {
+        rt.update(|s, _| s.toggle_sidebar());
+        settle(&mut rt);
+    }
+    intent(&mut rt, "kanban_show", json!({ "sandbox": "web-app" }));
+    intent(&mut rt, "kanban_new", json!({}));
+    assert!(rt.presented("kanban-form-priority").is_some(), "the form is drawn at {w}x{h}");
+    rt
+}
+
+/// The key the topmost element at the centre of `key`'s rect has, if any.
+fn picked_at(rt: &Runtime<App>, key: &str) -> Option<String> {
+    let ([x, y, w, h], _) = rt.presented(key)?;
+    rt.element_at(x + w / 2.0, y + h / 2.0).and_then(|p| p.key().map(str::to_string))
+}
+
+#[test]
+fn the_priority_list_is_whole_inside_the_window_and_not_clipped_by_the_dialog() {
+    let mut bad = vec![];
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+        let mut rt = form_open(w, h);
+        let field = rt.presented("kanban-form-priority").unwrap().0;
+        tap(&mut rt, "kanban-form-priority");
+        let Some((list, _)) = rt.presented("kanban-form-priority-list") else {
+            bad.push(format!("{w}x{h}: no open list"));
+            continue;
+        };
+        if list[0] < 0.0 || list[1] < 0.0 || list[0] + list[2] > w || list[1] + list[3] > h {
+            bad.push(format!("{w}x{h}: list {list:?} leaves the window"));
+        }
+        if list[2] + 0.5 < field[2].min(220.0) {
+            bad.push(format!("{w}x{h}: list {} wide, field {}", list[2], field[2]));
+        }
+        for id in ["none", "p1", "p2", "p3"] {
+            let k = format!("kanban-form-priority-{id}");
+            match picked_at(&rt, &k) {
+                Some(p) if p.starts_with("kanban-form-priority-") => {}
+                other => bad.push(format!("{w}x{h}: {k} is not what shows at its centre ({other:?}): cut by the dialog")),
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
