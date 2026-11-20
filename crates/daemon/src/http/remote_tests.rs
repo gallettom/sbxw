@@ -175,6 +175,10 @@ async fn every_remote_data_route_refuses_the_ui_token_and_no_token() {
         // One source per route: the bad-cookie limit (10 per source) must
         // not be what answers once the list passes ten data routes.
         let src = format!("100.64.0.{}", i + 1);
+        // And the global failure cap (30 a minute, whatever the source) must
+        // not be either, once the list passes thirty data routes: it has its
+        // own test (`failed_tokens_are_rate_limited_and_the_global_cap_holds`).
+        app.remote_reset_limits_for_tests();
         let tries: Vec<(&str, Option<String>, Option<String>)> = vec![
             ("none", None, None),
             ("bearer", Some(format!("Bearer {ui}")), None),

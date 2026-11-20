@@ -1260,6 +1260,16 @@ impl App {
         rt.save();
     }
 
+    /// Tests only: forget every failure counted by the remote limiters, so
+    /// a walk over every route is not answered by the global failure cap.
+    pub(crate) fn remote_reset_limits_for_tests(&self) {
+        let mut rt = self.remote_access.lock().unwrap();
+        rt.pair_limit.clear();
+        rt.status_limit.clear();
+        rt.bad_token_limit.clear();
+        rt.device_limit.clear();
+    }
+
     /// Tests: where the listener is bound, while it is.
     pub(crate) fn remote_listen_addr(&self) -> Option<std::net::SocketAddr> {
         self.remote_access.lock().unwrap().listener.as_ref().map(|l| l.addr)

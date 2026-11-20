@@ -53,6 +53,12 @@ impl Limiter {
         Ok(())
     }
 
+    /// Forget every hit (tests only: the daemon calls it from no route).
+    pub fn clear(&mut self) {
+        self.total = 0;
+        self.by_source.clear();
+    }
+
     /// Whether a hit now would be refused, without counting one.
     pub fn check(&mut self, source: &str, now: u64) -> Result<(), u64> {
         self.roll(now);

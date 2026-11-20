@@ -912,3 +912,48 @@ async fn the_event_stream_carries_a_badge_of_numbers() {
     assert!(seen.contains("\"plans\":1"), "{seen}");
     assert!(!seen.contains("GOAL-TEXT"), "numbers only");
 }
+
+/// The badge and the Kanban nudge share one stream: each arrives, neither
+/// holds the other back, and `bye` still ends the stream.
+#[tokio::test]
+async fn approvals_and_kanban_events_share_the_stream() {
+    use futures_util::StreamExt;
+    use sbxw_core::session::SessionKey;
+    let w = world();
+    let p = pair(&w, "phone").await;
+    let sb = sbxw_core::SandboxRef::parse("web").unwrap();
+    let script = "printf '\\033[?2004h'; stty raw -echo 2>/dev/null; exec cat > /dev/null".to_string();
+    let (s, _) = w.app.sessions.get_or_open(&SessionKey::agent(&sb), 0, || async move { Ok(crate::pty::Spawn { program: "sh".into(), args: vec!["-c".into(), script], env: vec![] }) }).await.unwrap();
+    w.app.leads.lock().unwrap().insert(sb.clone(), Arc::as_ptr(&s) as usize);
+    w.app.ingest_hook(&sb, json!({"hook_event_name": "SessionStart", "session_id": "s1", "hook_version": 2}));
+    let req = Request::builder().uri("/r/events").header(header::HOST, TN).header(header::COOKIE, format!("{COOKIE}={}", p.token)).body(Body::empty()).unwrap();
+    let mut body = w.router.clone().oneshot(req).await.unwrap().into_body().into_data_stream();
+    let mut seen = String::new();
+    assert!(until(&mut body, &mut seen, "\"plans\":0").await, "the badge at connect");
+    // A plan arrives (a plan event), then a ticket on the leader (a kanban event).
+    let id = pending_plan(&w, "web", "g");
+    let plan = w.app.plan(&id).unwrap();
+    w.app.bus.send(crate::bus::Event::Plan(plan));
+    w.app.ticket_create(&sb, sbxw_core::tickets::Draft { title: Some("t".into()), description: None, priority: None }).unwrap();
+    assert!(until(&mut body, &mut seen, "event: kanban").await, "the kanban nudge");
+    assert!(until(&mut body, &mut seen, "\"plans\":1").await, "the badge moved");
+    // Revoked: bye, and the stream ends although the badge task holds a sender.
+    w.app.remote_revoke(&p.id, Kind::Revoked);
+    assert!(until(&mut body, &mut seen, "event: bye").await);
+    let ended = tokio::time::timeout(Duration::from_secs(5), async { while let Some(Ok(_)) = body.next().await {} }).await;
+    assert!(ended.is_ok(), "the stream ended after bye");
+}
+
+async fn until(body: &mut (impl futures_util::Stream<Item = Result<axum::body::Bytes, axum::Error>> + Unpin), seen: &mut String, want: &str) -> bool {
+    use futures_util::StreamExt;
+    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+        while !seen.contains(want) {
+            match body.next().await {
+                Some(Ok(b)) => seen.push_str(&String::from_utf8_lossy(&b)),
+                _ => break,
+            }
+        }
+    })
+    .await;
+    seen.contains(want)
+}
