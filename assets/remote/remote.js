@@ -9,6 +9,10 @@
 //   name, to prefill pairing (`sbxw-remote-prefs`);
 // * send before a tap: the composer sends on Send only, an answer on "Send
 //   answer" only, Interrupt on its second tap; dictation fills the field;
+//   a file goes up only once picked (and ticked, for a secret-looking name),
+//   and reaches the leader only with a message the person sends;
+// * keep audio: the wave reads levels from an AnalyserNode, nothing else;
+//   the recording lives in memory until it is transcribed, then is dropped;
 // * queue or retry: a request the Mac did not answer is reported, and the
 //   typed text stays in the field for the person to send again;
 // * hold a credential: the device token is an HttpOnly cookie;
@@ -50,7 +54,11 @@
     newer: null,         // the in-flight ?after= read
     newerAgain: false,
     drafts: new Map(),   // per leader: what was typed and not sent (memory only)
+    trays: new Map(),    // per leader: the files picked for its next message
     sending: false,
+    note: null,          // the status line's last outcome: { text, tone }
+    hint: '',            // a quieter line (dictation's results)
+    shownSeq: 0,         // rows up to here are on screen: newer ones arrive
     es: null,
     probe: null,
     paired: false,
@@ -67,6 +75,8 @@
   function show(id) {
     for (const s of SCREENS) $(s).hidden = s !== id;
     $('back').hidden = id !== 's-chat';
+    $('mark').hidden = id === 's-chat';
+    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; disarmInterrupt(); }
     $('menu-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     closeMenu();
   }
@@ -97,6 +107,9 @@
     st.current = null;
     st.items = [];
     st.drafts.clear();
+    for (const t of st.trays.values()) t.clear();
+    st.trays.clear();
+    stopRecording(true);
     $('field').value = '';
     banner.hidden = true;
     $('unpaired-title').textContent = title;
@@ -249,6 +262,7 @@
 
   function showLeaders() {
     saveDraft();
+    stopRecording(false);
     st.current = null;
     disarmInterrupt();
     setTitle('Team leaders', st.me?.name ? `on ${st.me.name}` : '');
@@ -292,21 +306,45 @@
   function leader() {
     return st.leaders.find(l => l.sandbox === st.current) || null;
   }
+  // The bar: the leader's name, its state as a small pill, and Interrupt
+  // while it works (one tap, then the confirmation strip).
   function renderChatTitle() {
     const l = leader();
-    const sub = !l ? 'not running' : l.asks ? 'needs you' : rcStateLabel(l.state);
-    setTitle(l?.name || st.current, sub);
-    $('interrupt').dataset.name = l?.name || st.current;
-    if (!$('interrupt').classList.contains('rc-armed')) $('interrupt').textContent = 'Interrupt';
+    const state = !l ? 'stopped' : l.asks ? 'attention' : RC_RANK[l.state] !== undefined ? l.state : 'stopped';
+    setTitle(l?.name || st.current, '');
+    const pill = $('state');
+    pill.textContent = !l ? 'not running' : l.asks ? 'needs you' : rcStateLabel(l.state);
+    pill.className = `rc-pill rc-pill-${state}`;
+    pill.hidden = false;
+    const canStop = l?.state === 'working';
+    $('interrupt').hidden = !canStop;
+    if (!canStop && !$('confirm').hidden) disarmInterrupt();
     gateSend();
   }
-  // Send waits while the leader works; the typed text stays where it is.
+  // Send waits while the leader works, while a file uploads, while the
+  // recorder runs; the typed text and the files stay where they are.
   function gateSend() {
     const why = st.current ? rcSendGate(leader()) : '';
-    const g = $('send-gate');
-    g.textContent = why;
-    g.hidden = !why;
-    $('send').disabled = !!why || st.sending;
+    const t = tray();
+    const nothing = !field.value.trim() && !(t && t.ids().length);
+    $('send').disabled = !!why || st.sending || !!(t && (t.pending() || t.held)) || rec.state !== 'idle' || nothing;
+    renderStatus(why);
+  }
+  function renderStatus(gate = st.current ? rcSendGate(leader()) : '') {
+    const t = tray();
+    const s = rcStatus({
+      note: st.note,
+      rec: rec.state,
+      gate,
+      held: t?.held ? t.held.files.length : 0,
+      pending: t ? t.pending() : 0,
+      failed: t ? t.failed() : 0,
+      files: t ? t.chips.length : 0,
+      hint: st.hint,
+    });
+    const el = $('status');
+    el.textContent = s.text;
+    el.className = `rc-status rc-t-${s.tone}`;
   }
 
   async function openLeader(sandbox) {
@@ -315,9 +353,11 @@
     st.nextBefore = null;
     st.latestSeq = 0;
     $('field').value = st.drafts.get(sandbox) || '';
-    note('');
-    $('mic-note').textContent = '';
+    st.note = null;
+    st.hint = '';
+    st.shownSeq = Infinity;
     disarmInterrupt();
+    renderTray();
     history.pushState({ leader: true }, '', location.pathname);
     renderChatTitle();
     $('log-top').textContent = 'Loading…';
@@ -335,6 +375,7 @@
     st.nextBefore = page.next_before;
     st.latestSeq = Math.max(page.latest_seq, ...st.items.map(i => Number(i.seq)));
     renderRows();
+    st.shownSeq = st.latestSeq;
     scrollToEnd();
   }
 
@@ -353,6 +394,7 @@
         st.items = rcMerge(st.items, page.items);
         st.latestSeq = Math.max(st.latestSeq, page.latest_seq, ...page.items.map(i => Number(i.seq) || 0));
         renderRows();
+        st.shownSeq = Math.max(st.shownSeq, st.latestSeq);
         if (atEnd) scrollToEnd();
       }
     }
@@ -407,7 +449,12 @@
   function renderRows() {
     const rows = rcRows(st.items);
     $('log-top').textContent = st.nextBefore != null ? '' : rows.length ? 'Start of the conversation' : 'No messages yet';
-    $('rows').replaceChildren(...rows.map(rowEl));
+    $('rows').replaceChildren(...rows.map(r => {
+      const el = rowEl(r);
+      // Only what arrived since the last look rises in; a re-render is still.
+      if (r.seq > st.shownSeq && (r.kind === 'agent' || r.kind === 'me')) el.classList.add('rc-new');
+      return el;
+    }));
   }
 
   function rowEl(r) {
@@ -434,7 +481,7 @@
       d.append(b, document.createElement('br'), r.text);
     } else if (r.kind === 'steps') {
       d.className = 'rc-steps';
-      d.textContent = r.count === 1 ? '1 step' : `${r.count} steps`;
+      d.append(document.createTextNode(r.count === 1 ? '1 step' : `${r.count} steps`));
     } else if (r.kind === 'asked') {
       d.className = 'rc-note';
       d.textContent = `Asked: ${r.text}`;
@@ -536,20 +583,22 @@
 
   // ── Composer ──
   const field = $('field');
-  function note(text, ok, warn) {
-    const n = $('composer-note');
-    n.textContent = text;
-    n.classList.toggle('rc-ok', !!ok);
-    n.classList.toggle('rc-warn', !!warn);
-    n.hidden = !text;
+  // The status line's outcome: a refusal (err), a warning (warn), "Sent." (ok).
+  function note(text, tone = 'err') {
+    st.note = text ? { text, tone } : null;
+    renderStatus();
   }
   // Warn in place about what the daemon will refuse; Send stays the person's.
-  let warned = false;
   field.addEventListener('input', () => {
-    if (st.sending) return;
-    const why = rcMessageCheck(field.value);
-    if (why === 'command' || why === 'control') { note(RC_MSG_REASON[why], false, true); warned = true; }
-    else if (warned) { note(''); warned = false; }
+    if (!st.sending) {
+      const why = field.value.trim() ? rcMessageCheck(field.value) : null;
+      // The typing check's own warning comes and goes with the text; a
+      // refusal from the daemon stays until the next action.
+      const typed = st.note && (st.note.text === RC_MSG_REASON.command || st.note.text === RC_MSG_REASON.control);
+      if (why === 'command' || why === 'control') note(RC_MSG_REASON[why], 'warn');
+      else if (typed) note('');
+    }
+    gateSend();
   });
   function saveDraft() {
     if (st.current) {
@@ -569,71 +618,190 @@
     e.preventDefault();
     // Only Send submits: a textarea's Enter is a new line, never a send.
   });
+  const sendLabel = $('send-label');
   $('send').addEventListener('click', async () => {
     const sandbox = st.current;
     const raw = field.value;
     const text = raw.trim();
-    if (!sandbox || !text || st.sending || rcSendGate(leader())) return;
+    const t = tray();
+    const ids = t ? t.ids() : [];
+    if (!sandbox || (!text && !ids.length) || st.sending || rcSendGate(leader())) return;
+    if (t && (t.pending() || t.held) || rec.state !== 'idle') return;
     // A message takes 1 to 4 s (the daemon waits for the echo before the
     // Return): the composer says so, and a second tap does nothing.
     st.sending = true;
     const send = $('send');
     send.disabled = true;
-    send.textContent = 'Sending…';
+    send.setAttribute('aria-busy', 'true');
+    sendLabel.textContent = 'Sending…';
     $('composer').setAttribute('aria-busy', 'true');
     note('');
-    warned = false;
-    const res = await api.message(sandbox, text);
+    // The ids, never a path: the daemon adds the paths itself.
+    const res = await api.message(sandbox, text, ids);
     st.sending = false;
-    send.textContent = 'Send';
-    gateSend();
+    send.removeAttribute('aria-busy');
+    sendLabel.textContent = 'Send';
     $('composer').removeAttribute('aria-busy');
-    // Refused or not submitted: the text stays, nothing is resent.
-    if (!res.ok) { note(rcFailText('Message', res), false, res.data?.reason === 'not_submitted'); return; }
+    // Refused or not submitted: the text and the files stay, nothing is resent.
+    if (!res.ok) { note(rcFailText('Message', res), res.data?.reason === 'not_submitted' ? 'warn' : 'err'); gateSend(); return; }
+    if (t) t.sent(ids);
     // Sent: what was sent leaves the field; anything typed meanwhile stays.
     if (st.current === sandbox) {
       if (field.value === raw) field.value = '';
       else if (field.value.startsWith(raw)) field.value = field.value.slice(raw.length).replace(/^\s+/, '');
       field.dispatchEvent(new Event('input'));
-      note('Sent.', true);
-      setTimeout(() => { if ($('composer-note').textContent === 'Sent.') note(''); }, 2500);
+      st.hint = '';
+      note('Sent.', 'ok');
+      setTimeout(() => { if (st.note?.text === 'Sent.') note(''); }, 2500);
     } else {
       st.drafts.delete(sandbox);
     }
+    gateSend();
   });
 
-  // ── Interrupt: two taps ──
+  // ── Interrupt: in the bar while the leader works, then a second tap ──
   let armTimer = null;
   function disarmInterrupt() {
     clearTimeout(armTimer);
-    const b = $('interrupt');
-    b.classList.remove('rc-armed');
-    b.textContent = 'Interrupt';
-    $('interrupt-cancel').hidden = true;
+    $('interrupt').classList.remove('rc-armed');
+    $('interrupt').setAttribute('aria-expanded', 'false');
+    $('confirm').hidden = true;
   }
-  $('interrupt').addEventListener('click', async () => {
-    const b = $('interrupt');
+  $('interrupt').addEventListener('click', () => {
+    if (!st.current) return;
+    if (!$('confirm').hidden) { disarmInterrupt(); return; }
+    const l = leader();
+    $('confirm-text').textContent = `Interrupt ${l?.name || st.current}?`;
+    $('interrupt').classList.add('rc-armed');
+    $('interrupt').setAttribute('aria-expanded', 'true');
+    $('confirm').hidden = false;
+    armTimer = setTimeout(disarmInterrupt, 6000);
+  });
+  $('interrupt-go').addEventListener('click', async () => {
     const sandbox = st.current;
-    if (!sandbox) return;
-    if (!b.classList.contains('rc-armed')) {
-      b.classList.add('rc-armed');
-      b.textContent = `Interrupt ${b.dataset.name || sandbox}?`;
-      $('interrupt-cancel').hidden = false;
-      armTimer = setTimeout(disarmInterrupt, 6000);
-      return;
-    }
+    if (!sandbox || $('confirm').hidden) return;
     disarmInterrupt();
-    b.disabled = true;
+    $('interrupt').disabled = true;
     const res = await api.interrupt(sandbox);
-    b.disabled = false;
-    note(res.ok ? 'Interrupt sent.' : rcFailText('Interrupt', res), res.ok);
+    $('interrupt').disabled = false;
+    note(res.ok ? 'Interrupt sent.' : rcFailText('Interrupt', res), res.ok ? 'ok' : 'err');
   });
   $('interrupt-cancel').addEventListener('click', disarmInterrupt);
 
-  // ── Dictation: into the field, never sent ──
+  // ── Files: picked, checked, uploaded one at a time, sent with a message ──
+  function tray(sandbox = st.current) {
+    if (!sandbox) return null;
+    let t = st.trays.get(sandbox);
+    if (!t) {
+      t = rcTray({
+        upload: (file, onProgress, signal) => rcUploadXhr(XMLHttpRequest, sandbox, file, onProgress, signal),
+        // A file removed before sending leaves the Mac too (best effort:
+        // unsent files expire there by themselves).
+        drop: id => { api.dropUpload(sandbox, id); },
+        onChange: () => { if (st.current === sandbox) renderTray(); },
+      });
+      st.trays.set(sandbox, t);
+    }
+    return t;
+  }
+  const fileInput = $('file');
+  $('attach').addEventListener('click', () => {
+    if (!st.current || rec.state !== 'idle') return;
+    fileInput.value = '';
+    fileInput.click();
+  });
+  fileInput.addEventListener('change', () => {
+    const t = tray();
+    const files = [...(fileInput.files || [])];
+    fileInput.value = '';
+    if (!t || !files.length) return;
+    if (st.note?.tone !== 'warn') note('');
+    $('tick').checked = false;
+    t.offer(files);
+  });
+  $('held-go').addEventListener('click', () => { const t = tray(); if (t) t.confirmHeld($('tick').checked === true); });
+  $('held-cancel').addEventListener('click', () => { const t = tray(); if (t) { t.note = ''; t.discardHeld(); } });
+
+  const ICON_FILE = 'M7 3.5h6.5L18 8v11.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1zM13.5 3.5V8H18';
+  const ICON_X = 'M7 7l10 10M17 7 7 17';
+  const ICON_RETRY = 'M19 12a7 7 0 1 1-2.05-4.95M19 4.5V8h-3.5';
+  const SVG = 'http://www.w3.org/2000/svg';
+  function icon(d) {
+    const svg = document.createElementNS(SVG, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS(SVG, 'path');
+    path.setAttribute('d', d);
+    svg.append(path);
+    return svg;
+  }
+  function iconButton(d, label, onClick, cls = '') {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `rc-icon-btn ${cls}`.trim();
+    b.setAttribute('aria-label', label);
+    b.append(icon(d));
+    b.addEventListener('click', onClick);
+    return b;
+  }
+  function renderTray() {
+    const t = tray();
+    const box = $('tray');
+    const ul = $('chips');
+    if (!t) { box.hidden = true; ul.replaceChildren(); return; }
+    // The held files, waiting for the tick: nothing of them is sent yet.
+    const held = $('held');
+    held.hidden = !t.held;
+    if (t.held) $('held-why').textContent = t.held.reasons.join('\n');
+    ul.replaceChildren(...t.chips.map(c => {
+      const li = document.createElement('li');
+      li.className = `rc-fchip rc-f-${c.state}`;
+      li.dataset.state = c.state;
+      const ic = document.createElement('span');
+      ic.className = 'rc-fchip-icon';
+      ic.append(icon(ICON_FILE));
+      const tx = document.createElement('span');
+      tx.className = 'rc-fchip-text';
+      const name = document.createElement('span');
+      name.className = 'rc-fchip-name';
+      name.textContent = chatShortName(c.name);
+      const meta = document.createElement('span');
+      meta.className = 'rc-fchip-meta';
+      meta.textContent = c.state === 'sending' ? `${chatSize(c.size)} · ${Math.round(c.pct * 100)} %`
+        : c.state === 'queued' ? `${chatSize(c.size)} · waiting`
+          : c.state === 'done' ? `${chatSize(c.size)} · ready`
+            : c.error;
+      tx.append(name, meta);
+      const acts = document.createElement('span');
+      acts.className = 'rc-fchip-acts';
+      if (c.state === 'failed') acts.append(iconButton(ICON_RETRY, `Retry ${chatShortName(c.name)}`, () => t.retry(c.key), 'rc-retry'));
+      acts.append(iconButton(ICON_X, `Remove ${chatShortName(c.name)}`, () => t.remove(c.key), 'rc-remove'));
+      li.append(ic, tx, acts);
+      if (c.state === 'sending' || c.state === 'queued') {
+        const bar = document.createElement('span');
+        bar.className = 'rc-fchip-bar';
+        bar.setAttribute('role', 'progressbar');
+        bar.setAttribute('aria-label', `Uploading ${chatShortName(c.name)}`);
+        bar.setAttribute('aria-valuemin', '0');
+        bar.setAttribute('aria-valuemax', '100');
+        bar.setAttribute('aria-valuenow', String(Math.round(c.pct * 100)));
+        const fill = document.createElement('i');
+        fill.style.width = `${Math.round(c.pct * 100)}%`; // CSSOM: allowed by the CSP
+        bar.append(fill);
+        li.append(bar);
+      }
+      return li;
+    }));
+    box.hidden = !t.held && !t.chips.length;
+    // A check's refusal ("Not attached: ...") is said once, in the status line.
+    if (t.note) { const n = t.note; t.note = ''; note(n, 'err'); }
+    gateSend();
+  }
+
+  // ── Dictation: a live wave while it records, then into the field ──
   const mic = $('mic');
-  const micNote = $('mic-note');
-  const rec = { stream: null, recorder: null, chunks: [], timer: null, started: 0, busy: false };
+  const composer = $('composer');
+  const rec = { state: 'idle', stream: null, recorder: null, chunks: [], timer: null, started: 0, audio: null, analyser: null, frame: 0, levels: [], mode: 'pulse', discard: false };
   const micWhy = !window.isSecureContext
     ? 'Dictation needs the HTTPS address of sbxw.'
     : !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) || typeof MediaRecorder === 'undefined'
@@ -643,62 +811,180 @@
     mic.classList.add('rc-off');
     mic.setAttribute('aria-label', `Dictate (unavailable: ${micWhy})`);
   }
+  const reducedMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  function setRec(state) {
+    rec.state = state;
+    composer.dataset.rec = state;
+    $('rec').hidden = state === 'idle';
+    mic.setAttribute('aria-label', state === 'recording' ? 'Stop dictation' : micWhy ? `Dictate (unavailable: ${micWhy})` : 'Dictate');
+    mic.setAttribute('aria-pressed', String(state === 'recording'));
+    mic.disabled = state === 'transcribing';
+    gateSend();
+  }
   mic.addEventListener('click', async () => {
-    if (micWhy) { micNote.textContent = micWhy; return; }
-    if (rec.busy) return;
+    if (micWhy) { st.hint = micWhy; renderStatus(); return; }
+    if (rec.state === 'transcribing' || rec.starting) return;
     if (rec.recorder) { rec.recorder.stop(); return; }
+    rec.starting = true;
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
     } catch (e) {
-      micNote.textContent = e && e.name === 'NotAllowedError'
+      rec.starting = false;
+      st.hint = e && e.name === 'NotAllowedError'
         ? 'Microphone refused. Allow it for this site in Settings, then try again.'
         : e && e.name === 'NotFoundError' ? 'No microphone found.' : 'The microphone could not start.';
+      renderStatus();
       return;
     }
+    rec.starting = false;
+    if (!st.current || document.visibilityState === 'hidden') { stream.getTracks().forEach(t => t.stop()); return; }
     const recorder = new MediaRecorder(stream);
-    Object.assign(rec, { stream, recorder, chunks: [], started: Date.now() });
+    Object.assign(rec, { stream, recorder, chunks: [], started: Date.now(), discard: false, sandbox: st.current });
     recorder.addEventListener('dataavailable', e => { if (e.data && e.data.size) rec.chunks.push(e.data); });
     recorder.addEventListener('stop', () => finishRecording(recorder.mimeType));
     recorder.start();
-    mic.classList.add('rc-recording');
-    mic.setAttribute('aria-label', 'Stop dictation');
+    st.hint = '';
+    if (st.note?.tone !== 'warn') st.note = null;
+    startWave(stream);
+    setRec('recording');
     const tick = () => {
       const s = Math.floor((Date.now() - rec.started) / 1000);
-      micNote.textContent = `Recording ${s} s · tap the mic to stop`;
-      if (s >= RC_VOICE_MAX_S) recorder.stop();
+      $('rec-time').textContent = rcClock(s);
+      if (s >= RC_VOICE_MAX_S && rec.recorder) rec.recorder.stop();
     };
     tick();
-    rec.timer = setInterval(tick, 500);
+    rec.timer = setInterval(tick, 250);
   });
+
+  // The wave: levels from an AnalyserNode on the same stream, drawn on a
+  // canvas (no data: or blob: URL). Recording never depends on it: without
+  // an analyser, a steady pulse; with reduced motion, a plain level meter.
+  function startWave(stream) {
+    let analyser = null;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx) {
+        rec.audio = new Ctx();
+        const src = rec.audio.createMediaStreamSource(stream);
+        analyser = rec.audio.createAnalyser();
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = 0.6;
+        src.connect(analyser);
+        rec.audio.resume?.().catch(() => {});
+      }
+    } catch (_) {
+      analyser = null;
+    }
+    rec.analyser = analyser;
+    rec.levels = [];
+    rec.mode = rcWaveMode(!!analyser, !!reducedMotion?.matches);
+    composer.dataset.wave = rec.mode;
+    $('rec').dataset.level = '0';
+    if (!analyser) return;
+    const buf = new Uint8Array(analyser.fftSize);
+    let last = 0;
+    const step = now => {
+      if (!rec.analyser) return;
+      rec.frame = requestAnimationFrame(step);
+      // About 30 levels a second for the bars; 8 for the plain meter.
+      if (now - last < (rec.mode === 'meter' ? 125 : 33)) return;
+      last = now;
+      rec.analyser.getByteTimeDomainData(buf);
+      const level = rcLevel(buf);
+      rec.levels.push(level);
+      if (rec.levels.length > 240) rec.levels.splice(0, rec.levels.length - 240);
+      $('rec').dataset.level = level.toFixed(2);
+      drawWave();
+    };
+    rec.frame = requestAnimationFrame(step);
+  }
+  function drawWave(dim) {
+    const c = $('wave');
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const w = Math.max(1, Math.round(c.clientWidth * dpr));
+    const h = Math.max(1, Math.round(c.clientHeight * dpr));
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    const g = c.getContext('2d');
+    if (!g) return;
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = dim ? '#6e7681' : '#3fb950';
+    const mid = h / 2;
+    if (rec.mode === 'meter') {
+      // A level meter: one bar from the left, no scrolling.
+      const v = rec.levels.at(-1) || 0;
+      g.globalAlpha = 0.25;
+      g.fillRect(0, mid - 2 * dpr, w, 4 * dpr);
+      g.globalAlpha = 1;
+      g.fillRect(0, mid - 2 * dpr, Math.max(4 * dpr, v * w), 4 * dpr);
+      return;
+    }
+    // Bars, newest at the right, flat (a dot) when silent.
+    const bar = 3 * dpr, gap = 2 * dpr, n = Math.floor(w / (bar + gap));
+    const lv = rec.levels.slice(-n);
+    for (let i = 0; i < n; i++) {
+      const v = lv[lv.length - n + i] ?? 0;
+      const bh = Math.max(bar, v * h * 0.95);
+      const x = w - (n - i) * (bar + gap) + gap;
+      g.globalAlpha = 0.35 + 0.65 * Math.min(1, v * 1.6);
+      g.beginPath();
+      if (g.roundRect) g.roundRect(x, mid - bh / 2, bar, bh, bar / 2); else g.rect(x, mid - bh / 2, bar, bh);
+      g.fill();
+    }
+    g.globalAlpha = 1;
+  }
+  // Every end of a recording: the analyser stops, the AudioContext closes,
+  // the microphone's tracks stop.
+  function stopWave() {
+    cancelAnimationFrame(rec.frame);
+    rec.analyser = null;
+    const a = rec.audio;
+    rec.audio = null;
+    if (a && a.state !== 'closed') a.close().catch(() => {});
+  }
+  // `discard`: the page hid or the device was forgotten: stop and keep nothing.
+  function stopRecording(discard) {
+    if (!rec.recorder) return;
+    rec.discard = !!discard;
+    try { rec.recorder.stop(); } catch (_) { finishRecording(''); }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && rec.recorder) stopRecording(true);
+  });
+  window.addEventListener('pagehide', () => stopRecording(true));
 
   async function finishRecording(type) {
     clearInterval(rec.timer);
+    stopWave();
     rec.stream?.getTracks().forEach(t => t.stop());
     const blob = new Blob(rec.chunks, { type: type || 'audio/mp4' });
-    Object.assign(rec, { stream: null, recorder: null, chunks: [], busy: true });
-    mic.classList.remove('rc-recording');
-    mic.setAttribute('aria-label', 'Dictate');
-    const sandbox = st.current;
-    micNote.textContent = 'Transcribing…';
+    const discard = rec.discard;
+    const sandbox = rec.sandbox;
+    Object.assign(rec, { stream: null, recorder: null, chunks: [], discard: false });
+    if (discard) {
+      setRec('idle');
+      st.hint = 'Recording stopped: the page was hidden. Nothing was sent.';
+      renderStatus();
+      return;
+    }
+    drawWave(true);
+    setRec('transcribing');
     let res;
     try {
       res = await api.transcribe(await toPcm(blob));
     } catch (_) {
       res = null;
     }
-    rec.busy = false;
-    if (!res) { micNote.textContent = 'This recording could not be read.'; return; }
-    if (!res.ok) {
-      micNote.textContent = res.status === 503 ? 'Dictation is not installed on the Mac.' : rcFailText('Recording', res).replace('not sent', 'not transcribed');
-      return;
-    }
+    setRec('idle');
+    const say = text => { st.hint = text; renderStatus(); };
+    if (!res) return say('This recording could not be read.');
+    if (!res.ok) return say(res.status === 503 ? 'Dictation is not installed on the Mac.' : rcFailText('Recording', res).replace('not sent', 'not transcribed'));
     const words = typeof res.data?.text === 'string' ? res.data.text : '';
-    if (!words.trim()) { micNote.textContent = 'No words heard.'; return; }
+    if (!words.trim()) return say('No words heard.');
     if (st.current === sandbox) {
       field.value = rcWithDictation(field.value, words);
       field.dispatchEvent(new Event('input'));
-      micNote.textContent = 'Added to the field: read it, then Send.';
+      say('Added to the field: read it, then Send.');
     } else if (sandbox) {
       st.drafts.set(sandbox, rcWithDictation(st.drafts.get(sandbox) || '', words));
     }

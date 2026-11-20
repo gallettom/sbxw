@@ -151,6 +151,7 @@ function rcRows(items) {
     if (!row) continue;
     steps = null;
     row.at = at;
+    row.seq = Number(it.seq) || 0;
     rows.push(row);
   }
   return rows;
@@ -327,7 +328,11 @@ function rcClient(fetchImpl, hooks = {}) {
       const qs = p.toString();
       return call('GET', `${at(s)}/history${qs ? `?${qs}` : ''}`);
     },
-    message: (s, text) => call('POST', `${at(s)}/message`, { text }),
+    // Attachments are the daemon's upload ids, never a path: the daemon adds
+    // the paths itself. Without attachments the body is exactly { text }.
+    message: (s, text, attachments) => call('POST', `${at(s)}/message`,
+      Array.isArray(attachments) && attachments.length ? { text, attachments: attachments.map(String) } : { text }),
+    dropUpload: (s, id) => call('DELETE', `${at(s)}/upload/${encodeURIComponent(id)}`),
     answer: (s, indices) => call('POST', `${at(s)}/answer`, { indices }),
     interrupt: s => call('POST', `${at(s)}/interrupt`, {}),
     transcribe: pcm => call('POST', '/r/voice/transcribe', undefined, pcm),
@@ -343,6 +348,8 @@ const RC_MSG_REASON = {
   needs_mac: 'This needs your Mac: the leader is waiting for you there.',
   busy: 'The leader is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.',
   no_paste: 'Send it from your Mac: this leader\'s terminal cannot take a message from the phone.',
+  attachment: 'Not sent: a file of this message is no longer on the Mac (it expires 30 minutes after its upload). Remove it, choose it again, then Send.',
+  too_many: 'Not sent: a message takes 5 files at most. Remove some, then Send.',
   not_submitted: 'NOT SENT: the text was typed into the leader\'s input on the Mac but not submitted, because the leader changed meanwhile. It waits there unsent; it is also still in this field. Check on your Mac before sending again.',
 };
 
@@ -395,4 +402,247 @@ function rcWithDictation(field, words) {
   const w = String(words || '').trim();
   if (!w) return field;
   return field && !/\s$/.test(field) ? `${field} ${w}` : `${field}${w}`;
+}
+
+// ── Files: the attach rules ──────────────────────────────────────────────
+// The list of secret-looking names and the helpers between the COPY markers
+// are copied verbatim from assets/js/chat-core.js's "chat attach" block (a
+// test keeps them equal). The page checks before any byte is sent; the
+// daemon stays the judge. A file's CONTENT is never read here, only handed
+// to the upload; a file's NAME is data, shown with textContent only.
+// ── COPY from assets/js/chat-core.js (chat attach): begin ──
+const CHAT_SECRET_NAMES = ['.env*', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*', '*.p12', '*.pfx', 'credentials*', '.npmrc', '.netrc', '*.kdbx'];
+
+function chatSecretName(name) {
+  const n = String(name || '').toLowerCase();
+  return CHAT_SECRET_NAMES.some(p => (p.startsWith('*') ? n.endsWith(p.slice(1))
+    : p.endsWith('*') ? n.startsWith(p.slice(0, -1)) : n === p));
+}
+
+function chatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let v = bytes / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+function chatShortName(name) {
+  const s = [...String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '?')];
+  return s.length <= 60 ? s.join('') : `${s.slice(0, 40).join('')}…${s.slice(-16).join('')}`;
+}
+
+function chatUploadName(name) {
+  const base = String(name ?? '').split(/[\/\\]/).pop().replace(/[\u0000-\u001f\u007f]/g, '');
+  const s = [...base];
+  if (s.length <= 100) return s.join('');
+  const ext = /\.[A-Za-z0-9]{1,10}$/.exec(base)?.[0] || '';
+  return s.slice(0, 90).join('') + ext;
+}
+// ── COPY from assets/js/chat-core.js (chat attach): end ──
+
+// The limits the page checks, API.md 2.6.1 (the daemon enforces them too):
+// 25 MiB a file, 5 files waiting per device and leader, 60 MiB together.
+const RC_UPLOAD_MAX_FILES = 5;
+const RC_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+const RC_UPLOAD_MAX_TOTAL = 60 * 1024 * 1024;
+const RC_TICK = 'I have looked at these files and want to attach them';
+
+// The checks, before any byte is sent. `held`: how many files are already
+// attached or waiting, `heldBytes` their size together.
+// → { take, refused: [{name, why}], ask: [sentence] }
+function rcCheckAttach(held, incoming, heldBytes = 0) {
+  const take = [], refused = [];
+  let bytes = Number(heldBytes) || 0;
+  for (const f of Array.isArray(incoming) ? incoming : []) {
+    if (!f || typeof f !== 'object') continue;
+    const size = Number(f.size);
+    let why = '';
+    if (!(size > 0)) why = 'the file is empty';
+    else if (size > RC_UPLOAD_MAX_BYTES) why = `over ${chatSize(RC_UPLOAD_MAX_BYTES)}, the most one file takes`;
+    else if (held + take.length >= RC_UPLOAD_MAX_FILES) why = `a message takes ${RC_UPLOAD_MAX_FILES} files at most`;
+    else if (bytes + size > RC_UPLOAD_MAX_TOTAL) why = `the files of one message take ${chatSize(RC_UPLOAD_MAX_TOTAL)} together at most`;
+    if (why) refused.push({ name: String(f.name ?? ''), why }); else { take.push(f); bytes += size; }
+  }
+  const ask = take.filter(f => chatSecretName(f.name)).map(f => `${chatShortName(f.name)}: its name looks like a secret (keys, tokens, credentials)`);
+  return { take, refused, ask };
+}
+
+// An upload's refusal reasons (API.md 2.6.1), each as a short sentence for
+// its chip.
+const RC_UPLOAD_REASON = {
+  too_large: `Too large: one file takes ${chatSize(RC_UPLOAD_MAX_BYTES)} at most.`,
+  too_many: `Too many files wait on the Mac (${RC_UPLOAD_MAX_FILES} at most, ${chatSize(RC_UPLOAD_MAX_TOTAL)} together). Remove one, or send them first.`,
+  empty: 'The file is empty.',
+  kind: 'Programs and archives are not accepted (zip, gzip, executables...).',
+  name: 'The Mac could not read this file\'s name. Rename it, then choose it again.',
+  busy: 'Another upload from this phone is under way. Retry once it is done.',
+  timeout: 'The upload took too long (a slow network?). Retry it.',
+};
+function rcUploadFail(res) {
+  if (!res || res.unreachable || res.status === 0) return 'Not uploaded: sbxw is unreachable (is the Mac awake?).';
+  const reason = res.data && typeof res.data.reason === 'string' && Object.hasOwn(RC_UPLOAD_REASON, res.data.reason) ? res.data.reason : null;
+  if (reason) return RC_UPLOAD_REASON[reason];
+  if (res.status === 413) return RC_UPLOAD_REASON.too_large;
+  if (res.status === 429) return 'Not uploaded: too many uploads in a short time. Retry in a few minutes.';
+  if (res.status === 404) return 'Not uploaded: this leader does not take files from the phone.';
+  return `Not uploaded: the Mac answered ${res.status}.`;
+}
+// The daemon's answer, checked: an id (no path, ever), its own name, a size.
+const RC_UPLOAD_ID = /^[0-9a-f]{32}$/;
+function rcUploadDone(data) {
+  if (!data || typeof data.id !== 'string' || !RC_UPLOAD_ID.test(data.id)) return null;
+  return { id: data.id, name: typeof data.name === 'string' ? data.name : '', size: Number(data.size) || 0 };
+}
+
+// One file as the raw body, by XMLHttpRequest (it reports how much of the
+// body has gone; fetch does not). Same origin, the cookie, nothing in the URL
+// but the sandbox and the name. Resolves like the client: { ok, status,
+// unreachable, data }; never rejects, never retried.
+function rcUploadXhr(Xhr, sandbox, file, onProgress, signal) {
+  return new Promise(resolve => {
+    const x = new Xhr();
+    x.open('POST', `/r/leaders/${encodeURIComponent(sandbox)}/upload?name=${encodeURIComponent(chatUploadName(file.name))}`);
+    x.setRequestHeader('Content-Type', 'application/octet-stream');
+    if (x.upload) x.upload.onprogress = e => { if (e.lengthComputable && e.total) onProgress(Math.min(1, e.loaded / e.total)); };
+    x.onload = () => {
+      let data = null;
+      try { data = JSON.parse(x.responseText); } catch (_) {}
+      const unreachable = x.status === 502 || x.status === 504;
+      resolve({ ok: x.status >= 200 && x.status < 300, status: x.status, unreachable, data });
+    };
+    x.onerror = () => resolve({ ok: false, status: 0, unreachable: true, data: null });
+    x.onabort = () => resolve({ ok: false, status: 0, aborted: true, data: null });
+    signal?.addEventListener('abort', () => x.abort());
+    x.send(file);
+  });
+}
+
+// The composer's files: chips (queued → sending → done | failed), one upload
+// at a time, and secret-looking names held back until an explicit tick.
+// `upload(file, onProgress, signal)` resolves like rcUploadXhr; `drop(id)`
+// tells the daemon a done file is not wanted any more; `onChange` redraws.
+// A message carries the ids of the done chips only.
+function rcTray({ upload, drop = () => {}, onChange = () => {} }) {
+  const t = {
+    chips: [], held: null, note: '', seq: 0, active: null,
+    offer(files) {
+      const waiting = [...t.chips.filter(c => c.state !== 'failed'), ...(t.held ? t.held.files : [])];
+      const { take, refused, ask } = rcCheckAttach(waiting.length, files, waiting.reduce((n, c) => n + (Number(c.size) || 0), 0));
+      t.note = refused.map(r => `Not attached: ${chatShortName(r.name)} (${r.why}).`).join(' ');
+      if (take.length && ask.length) {
+        // More files held means a new look: the tick starts again.
+        t.held = { files: [...(t.held ? t.held.files : []), ...take], reasons: [...(t.held ? t.held.reasons : []), ...ask] };
+      } else if (take.length) t.start(take);
+      onChange();
+    },
+    // Only an explicit tick sends what was held.
+    confirmHeld(ticked) {
+      if (!t.held) return false;
+      if (ticked !== true) { t.note = `Tick "${RC_TICK}" first: nothing is sent before.`; onChange(); return false; }
+      const files = t.held.files;
+      t.held = null;
+      t.note = '';
+      t.start(files);
+      onChange();
+      return true;
+    },
+    discardHeld() { t.held = null; onChange(); },
+    start(files) {
+      for (const file of files) t.chips.push({ key: ++t.seq, file, name: String(file.name ?? ''), size: Number(file.size) || 0, state: 'queued', pct: 0, id: null, error: '' });
+      t.pump();
+    },
+    pump() {
+      if (t.active) return;
+      const chip = t.chips.find(c => c.state === 'queued');
+      if (!chip) return;
+      const ctl = new AbortController();
+      chip.state = 'sending';
+      chip.pct = 0;
+      t.active = { chip, ctl };
+      Promise.resolve()
+        .then(() => upload(chip.file, p => { if (t.active?.chip === chip) { chip.pct = p; onChange(); } }, ctl.signal))
+        .then(res => {
+          if (t.active?.chip !== chip) return;
+          const done = res && res.ok ? rcUploadDone(res.data) : null;
+          if (done) Object.assign(chip, { state: 'done', pct: 1, id: done.id, size: done.size || chip.size });
+          else Object.assign(chip, { state: 'failed', error: res && res.ok ? 'Not uploaded: the Mac gave no file id.' : rcUploadFail(res) });
+        }, () => {
+          if (t.active?.chip === chip) Object.assign(chip, { state: 'failed', error: rcUploadFail(null) });
+        })
+        .then(() => {
+          if (t.active?.chip === chip) t.active = null;
+          t.pump();
+          onChange();
+        });
+    },
+    remove(key) {
+      const i = t.chips.findIndex(c => c.key === key);
+      if (i < 0) return;
+      const [chip] = t.chips.splice(i, 1);
+      if (t.active?.chip === chip) { const a = t.active; t.active = null; a.ctl.abort(); t.pump(); }
+      if (chip.state === 'done' && chip.id) drop(chip.id);
+      onChange();
+    },
+    retry(key) {
+      const chip = t.chips.find(c => c.key === key);
+      if (!chip || chip.state !== 'failed') return;
+      chip.state = 'queued';
+      chip.error = '';
+      t.pump();
+      onChange();
+    },
+    pending() { return t.chips.filter(c => c.state === 'queued' || c.state === 'sending').length; },
+    failed() { return t.chips.filter(c => c.state === 'failed').length; },
+    ids() { return t.chips.filter(c => c.state === 'done' && c.id).map(c => c.id); },
+    // After a message went: the files it carried leave the tray.
+    sent(ids) { t.chips = t.chips.filter(c => !(c.state === 'done' && ids.includes(c.id))); onChange(); },
+    // Leaving the leader: drop everything not sent (aborting an upload).
+    clear() {
+      if (t.active) { t.active.ctl.abort(); t.active = null; }
+      for (const c of t.chips) if (c.state === 'done' && c.id) drop(c.id);
+      t.chips = []; t.held = null; t.note = '';
+      onChange();
+    },
+  };
+  return t;
+}
+
+// ── The status line under the field ───────────────────────────────────────
+// One line says what the composer waits on, the most urgent first: the
+// outcome of the last action (a refusal, "Sent."), then the recorder, the
+// files, why Send waits, and last a hint. → { text, tone }: tone is err,
+// warn, ok, busy or info.
+function rcStatus({ note = null, rec = 'idle', gate = '', held = 0, pending = 0, failed = 0, files = 0, hint = '' } = {}) {
+  if (note && note.text) return { text: note.text, tone: note.tone || 'info' };
+  if (rec === 'recording') return { text: 'Recording. Tap stop when you are done: the words go into the field, nothing is sent.', tone: 'busy' };
+  if (rec === 'transcribing') return { text: 'Transcribing on your Mac…', tone: 'busy' };
+  if (held) return { text: `Tick the box to attach ${held === 1 ? 'the file whose name looks' : `the ${held} files whose names look`} like a secret, or cancel.`, tone: 'warn' };
+  if (pending) return { text: `Uploading ${pending === 1 ? '1 file' : `${pending} files`}: Send waits until ${pending === 1 ? 'it is' : 'they are'} done.`, tone: 'busy' };
+  if (gate) return { text: files ? `${gate.replace(/\.$/, '')}. Your files wait here.` : gate, tone: 'info' };
+  if (failed) return { text: `${failed === 1 ? 'An upload' : `${failed} uploads`} failed: retry or remove. The rest can be sent.`, tone: 'err' };
+  return { text: hint || '', tone: 'info' };
+}
+
+// ── The recorder's helpers ────────────────────────────────────────────────
+// How loud a frame of time-domain samples is (an AnalyserNode's bytes, 128 is
+// silence), as 0 to 1 for the wave. Levels only: the samples are not kept.
+function rcLevel(bytes) {
+  const n = bytes && bytes.length ? bytes.length : 0;
+  if (!n) return 0;
+  let sum = 0;
+  for (let i = 0; i < n; i++) { const v = (bytes[i] - 128) / 128; sum += v * v; }
+  const rms = Math.sqrt(sum / n);
+  return rms < 0.004 ? 0 : Math.min(1, Math.sqrt(rms * 3.5));
+}
+// "0:07", "1:42": the running time of a recording.
+function rcClock(seconds) {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+// The wave a recorder shows: bars that move with the voice, a plain level
+// meter with reduced motion, a steady pulse without an analyser.
+function rcWaveMode(hasAnalyser, reducedMotion) {
+  if (!hasAnalyser) return 'pulse';
+  return reducedMotion ? 'meter' : 'bars';
 }

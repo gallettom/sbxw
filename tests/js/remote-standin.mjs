@@ -9,9 +9,14 @@
 // {pair: [...states]} the next pair/status answers, {pairStart: 429} the
 // status of pair/start, {messageDelay: ms, messageReplies: [{status, body}]}
 // how the next messages are answered, {emit: {event, data}}
-// pushes one server-sent event, {leaders}, {history: {sandbox: page}}.
+// pushes one server-sent event, {leaders}, {history: {sandbox: page}},
+// {uploadReplies: [{status, body}]} how the next uploads are answered,
+// {uploadSlow: ms} a pause after each 64 KiB read (so progress shows),
+// {uploadHold: true} uploads wait until {uploadHold: false}.
+// Uploads follow API.md 2.6.1: the raw body, an id of 32 hex back, no path.
 // Usage: node tests/js/remote-standin.mjs [port]
 import http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -59,7 +64,17 @@ export function startStandin(port = 0) {
     newer: { shop: fx.history.shop_newer },
     streams: new Set(),
     transcript: 'please also add an index on the customer id',
+    uploads: new Map(),  // id -> { sandbox, name, size }
+    uploadReplies: [],
+    uploadSlow: 0,
+    uploadHold: false,
+    holds: [],
   };
+  const UPLOAD = /^\/r\/leaders\/([^/]+)\/upload$/;
+  const UPLOAD_ID = /^\/r\/leaders\/([^/]+)\/upload\/([^/]+)$/;
+  // The daemon's name rule (upload_name): last component, [A-Za-z0-9._-],
+  // no leading dot, 120 at most, `upload` when nothing is left.
+  const cleanName = n => (String(n).split(/[\/\\]/).pop().replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '').slice(0, 120)) || 'upload';
   const send = (res, status, body, extra = {}) => {
     res.writeHead(status, { ...HEADERS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...extra });
     res.end(body === undefined ? '' : JSON.stringify(body));
@@ -70,7 +85,11 @@ export function startStandin(port = 0) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const chunks = [];
-    for await (const c of req) chunks.push(c);
+    const slow = req.method === 'POST' && UPLOAD.test(url.pathname) && s.uploadSlow;
+    for await (const c of req) {
+      chunks.push(c);
+      if (slow) { req.pause(); await new Promise(r => setTimeout(r, s.uploadSlow)); req.resume(); }
+    }
     const raw = Buffer.concat(chunks);
     if (url.pathname === '/__ctl') {
       const c = JSON.parse(raw.toString() || '{}');
@@ -85,6 +104,9 @@ export function startStandin(port = 0) {
       if ('messageDelay' in c) s.messageDelay = c.messageDelay;
       if (c.messageReplies) s.messageReplies = c.messageReplies;
       if (c.history) Object.assign(s.history, c.history);
+      if (c.uploadReplies) s.uploadReplies = c.uploadReplies;
+      if ('uploadSlow' in c) s.uploadSlow = c.uploadSlow;
+      if ('uploadHold' in c) { s.uploadHold = c.uploadHold; if (!c.uploadHold) s.holds.splice(0).forEach(r => r()); }
       if (c.emit) emit(c.emit.event, c.emit.data);
       if (c.reset) s.log.length = 0;
       return send(res, 200, { ok: true });
@@ -138,6 +160,21 @@ export function startStandin(port = 0) {
         return send(res, reply.status, reply.body);
       }
       return send(res, 200, { ok: true, masked: 0 });
+    }
+    const up = UPLOAD.exec(p);
+    if (up && req.method === 'POST') {
+      if (s.uploadHold) await new Promise(r => s.holds.push(r));
+      if (ct !== 'application/octet-stream') return send(res, 415, { ok: false, error: 'not octet-stream', reason: 'kind' });
+      if (s.uploadReplies.length) { const r = s.uploadReplies.shift(); return send(res, r.status, r.body); }
+      if (!raw.length) return send(res, 400, { ok: false, error: 'empty', reason: 'empty' });
+      const id = randomBytes(16).toString('hex');
+      const name = cleanName(url.searchParams.get('name') || '');
+      s.uploads.set(id, { sandbox: decodeURIComponent(up[1]), name, size: raw.length });
+      return send(res, 200, { id, name, size: raw.length, expires_ms: Date.now() + 30 * 60000 });
+    }
+    const upId = UPLOAD_ID.exec(p);
+    if (upId && req.method === 'DELETE') {
+      return s.uploads.delete(decodeURIComponent(upId[2])) ? send(res, 200, { ok: true }) : send(res, 404, { ok: false, error: 'not found' });
     }
     if (p === '/r/voice/transcribe') return send(res, 200, { text: s.transcript, masked: 0 });
     return send(res, 404, { ok: false, error: 'not found' });

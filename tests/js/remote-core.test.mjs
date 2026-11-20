@@ -289,6 +289,8 @@ test('each refusal reason has its own sentence, with the daemon\'s words as text
     busy: [409, /The leader is working\. A message can be sent once it is back at its prompt/],
     no_paste: [409, /Send it from your Mac/],
     not_submitted: [409, /NOT SENT: the text was typed into the leader's input on the Mac but not submitted/],
+    attachment: [400, /a file of this message is no longer on the Mac.*choose it again/],
+    too_many: [400, /a message takes 5 files at most/],
   };
   for (const [reason, [status, words]] of Object.entries(want)) {
     const s = rc.rcFailText('Message', r(status, reason));
