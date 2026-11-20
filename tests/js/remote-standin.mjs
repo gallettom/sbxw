@@ -168,7 +168,12 @@ export function startStandin(port = 0) {
     if (up && req.method === 'POST') {
       if (s.uploadHold) await new Promise(r => s.holds.push(r));
       if (ct !== 'application/octet-stream') return send(res, 415, { ok: false, error: 'not octet-stream', reason: 'kind' });
-      if (s.uploadReplies.length) { const r = s.uploadReplies.shift(); return send(res, r.status, r.body); }
+      if (s.uploadReplies.length) {
+        const r = s.uploadReplies.shift();
+        // `raw`: a body that is not JSON (the sidecar's own error page).
+        if (r.raw !== undefined) { res.writeHead(r.status, { ...HEADERS, 'Content-Type': 'text/plain' }); return res.end(r.raw); }
+        return send(res, r.status, r.body);
+      }
       if (!raw.length) return send(res, 400, { ok: false, error: 'empty', reason: 'empty' });
       const id = randomBytes(16).toString('hex');
       const name = cleanName(url.searchParams.get('name') || '');

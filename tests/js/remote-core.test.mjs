@@ -361,10 +361,16 @@ test('the checks before any byte: empty, size, count, total, secret-looking name
 test('each upload refusal has its own sentence', () => {
   const r = (status, reason) => ({ ok: false, status, data: { ok: false, reason, error: '<b>x</b>' } });
   const want = { too_large: [413, /25 MB at most/], too_many: [409, /5 at most, 60 MB together/], empty: [400, /empty/], kind: [400, /Programs and archives/],
-    name: [400, /could not read this file's name/], busy: [409, /Another upload from this phone/], timeout: [408, /took too long/] };
+    name: [400, /could not read this file's name/], busy: [409, /Another upload from this phone/], timeout: [408, /^The connection was too slow for this file\./] };
   for (const [reason, [status, words]] of Object.entries(want)) assert.match(rc.rcUploadFail(r(status, reason)), words, reason);
   assert.deepEqual(Object.keys(rc.RC_UPLOAD_REASON).sort(), Object.keys(want).sort());
-  assert.match(rc.rcUploadFail({ ok: false, status: 0, unreachable: true }), /unreachable/);
+  // A body cut on a slow link: no answer, the sidecar's error (no JSON), the daemon's 400.
+  const SLOW = 'The connection was too slow for this file. Try again on a better connection, or send a smaller file.';
+  assert.equal(rc.rcUploadFail({ ok: false, status: 0, unreachable: true, data: null }), SLOW);
+  assert.equal(rc.rcUploadFail({ ok: false, status: 502, unreachable: true, data: null }), SLOW);
+  assert.equal(rc.rcUploadFail({ ok: false, status: 500, data: null }), SLOW);
+  assert.equal(rc.rcUploadFail({ ok: false, status: 400, data: { ok: false, error: 'the upload was cut off' } }), SLOW);
+  assert.equal(rc.rcUploadFail(null), SLOW);
   assert.match(rc.rcUploadFail(r(413, 'nope')), /25 MB at most/);
   assert.match(rc.rcUploadFail(r(429)), /too many uploads/);
   assert.match(rc.rcUploadFail(r(500, '__proto__')), /^Not uploaded: the Mac answered 500\.$/);

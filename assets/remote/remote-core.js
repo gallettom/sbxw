@@ -477,12 +477,20 @@ const RC_UPLOAD_REASON = {
   kind: 'Programs and archives are not accepted (zip, gzip, executables...).',
   name: 'The Mac could not read this file\'s name. Rename it, then choose it again.',
   busy: 'Another upload from this phone is under way. Retry once it is done.',
-  timeout: 'The upload took too long (a slow network?). Retry it.',
+  timeout: 'The connection was too slow for this file. Try again on a better connection, or send a smaller file.',
 };
+// A body the network did not carry in time (the Tailscale node gives a whole
+// body 120 s: a 25 MiB file needs about 1.7 Mbit/s): no answer at all, the
+// sidecar's error (no JSON, no reason), the daemon's 400 "cut off" or its
+// `timeout`. One sentence for all, and Retry stays the person's: each try
+// counts toward the daemon's 20 uploads per 10 minutes.
+const RC_UPLOAD_SLOW = 'The connection was too slow for this file. Try again on a better connection, or send a smaller file.';
 function rcUploadFail(res) {
-  if (!res || res.unreachable || res.status === 0) return 'Not uploaded: sbxw is unreachable (is the Mac awake?).';
+  if (!res || res.unreachable || res.status === 0) return RC_UPLOAD_SLOW;
   const reason = res.data && typeof res.data.reason === 'string' && Object.hasOwn(RC_UPLOAD_REASON, res.data.reason) ? res.data.reason : null;
   if (reason) return RC_UPLOAD_REASON[reason];
+  if (!res.ok && (!res.data || typeof res.data !== 'object')) return RC_UPLOAD_SLOW;
+  if (res.status === 400 && /cut off/i.test(String(res.data.error || ''))) return RC_UPLOAD_SLOW;
   if (res.status === 413) return RC_UPLOAD_REASON.too_large;
   if (res.status === 429) return 'Not uploaded: too many uploads in a short time. Retry in a few minutes.';
   if (res.status === 404) return 'Not uploaded: this leader does not take files from the phone.';

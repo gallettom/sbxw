@@ -543,6 +543,19 @@ test('files: checked before any byte, the tick, progress, failure and retry, rem
   await shot(page, '23-files-refused');
   await page.tap('.rc-f-failed .rc-retry');
   await page.waitForFunction(() => document.querySelectorAll('.rc-fchip[data-state="done"]').length === 3);
+  // A body cut on a slow link, in its two shapes: one sentence, Retry, never by itself.
+  const SLOW = 'The connection was too slow for this file. Try again on a better connection, or send a smaller file.';
+  await ctl({ uploadReplies: [{ status: 400, body: { ok: false, error: 'the upload was cut off' } }, { status: 502, raw: 'Bad Gateway' }] });
+  for (const name of ['cut.mov', 'sidecar.mov']) {
+    const n = (await uploads()).length;
+    await pick(page, [fileOf(name, 100)]);
+    await page.waitForSelector('.rc-fchip[data-state="failed"]');
+    assert.equal(await page.textContent('.rc-f-failed .rc-fchip-meta'), SLOW, name);
+    await page.waitForTimeout(400);
+    assert.equal((await uploads()).length, n + 1, 'no automatic retry');
+    await page.tap('.rc-f-failed .rc-remove');
+    await page.waitForSelector('.rc-fchip[data-state="failed"]', { state: 'detached' });
+  }
   // Remove one that went up: the Mac drops it.
   const before = (await uploads()).length;
   await page.tap('.rc-fchip >> nth=1 >> .rc-remove');
