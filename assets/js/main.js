@@ -352,6 +352,9 @@ sbxwStream.addEventListener('session', ev => {
   try { ingestSession(JSON.parse(ev.data)); } catch (_) {}
 });
 
+// A thread closed for good, by whoever: its panes and row go (panes.js).
+sbxwStream.addEventListener('thread-closed', ev => { onThreadClosed(ev.data); });
+
 // A sandbox started, finished or failed to write its code map — the one piece
 // of agent work sbxw starts itself, in a session with no pane to watch. Painted
 // by `applyCodemapRun` (in /js/sandboxes.js) onto the sandbox's row and a
