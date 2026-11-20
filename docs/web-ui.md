@@ -691,6 +691,23 @@ and a round of questions for you from `ask_user_questions`, answered on one
 form (or routed to another sandbox for a draft you review), with a **Read
 aloud** button when Jarvis's voice is set up.
 
+## Files dropped on a chat
+
+The chat dock and the browser side panel take files by drop or by their
+**Attach** button (see [Attaching files](chat.md#attaching-files)). The code is
+one block at the end of `assets/js/chat-core.js` (`chatAttachTray`,
+`chatAttachMount`), shared by both pages: it uses the Upload box's route, adds
+no route, origin or permission, and changes nothing in the CSP, the token or
+the Origin and Host checks.
+
+- File names are data: shown with `textContent`, never in HTML; the name sent
+  is encoded and cut (last path component, control characters dropped) and the
+  daemon's own sanitising decides the name on disk. Contents are never read
+  or logged, and no preview is drawn.
+- The secret-name list is `kanban.js`'s (the side panel does not load it);
+  `tests/js/chat-drop.test.mjs` keeps the two equal.
+- The page also stops the browser opening a file dropped outside a chat.
+
 ## Screenshots from the browser side panel
 
 When the agent beside your app's tab calls `ask_user_for_screenshot`, the
