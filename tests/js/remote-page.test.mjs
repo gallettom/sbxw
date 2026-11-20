@@ -1555,7 +1555,7 @@ const D = {
   hidden: 'Dictation stopped: the page was hidden.',
   kept: 'The words heard are in the field.',
   quietMac: 'The microphone hears nothing. Speak closer, or check that no other app (a call) is using it.',
-  quietIphone: 'Nothing heard yet. Speak, or tap stop.',
+  quietIphone: 'Nothing heard for a few seconds. Speak, or tap stop, then the microphone again.',
   macShort: 'Too short to transcribe. Tap the microphone, speak, then tap stop.',
   macSilent: 'Nothing was heard: the recording is silent. Check the microphone and try again.',
   macNoWords: 'The Mac heard no words. Speak closer to the phone and try again.',
@@ -1645,6 +1645,23 @@ test('iPhone dictation: every end or error says a sentence and returns to idle',
     assert.deepEqual(problems, [], flag);
     await ctx.close();
   }
+});
+
+test('iPhone dictation: a recogniser gone deaf after words is said, not shown as listening in silence', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+  const { ctx, page, problems } = await phone();
+  await iphoneListening(page);
+  await page.evaluate(() => window.__srLast.say([['some words', true]]));
+  assert.match(await page.textContent('#status'), /^Listening/);
+  // No event at all for 8 s (WebKit bug 321436): the person is told.
+  await page.waitForSelector(`#status:text("${D.quietIphone}")`, { timeout: 10000 });
+  assert.equal(await page.getAttribute('#rec', 'data-quiet'), 'true');
+  await page.evaluate(() => window.__srLast.say([['some words', true], ['more', false]]));
+  await page.waitForSelector('#status:text-matches("^Listening")');
+  await page.tap('#mic');
+  await idleWith(page, D.added, 'stop');
+  assert.deepEqual(problems, []);
+  await ctx.close();
 });
 
 test('iPhone dictation: an end by itself restarts at most twice, the words once each', { skip }, async () => {

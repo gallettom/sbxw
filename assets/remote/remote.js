@@ -871,6 +871,7 @@
   const reducedMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   // About 3 s of a level at zero, or of no word from the recogniser: said.
   const QUIET_MS = 3000;
+  const HEARD_QUIET_MS = 8000;
   function setRec(state) {
     rec.state = state;
     if (state === 'idle') { rec.quiet = false; $('rec').dataset.quiet = 'false'; $('rec').dataset.hear = 'off'; }
@@ -984,7 +985,7 @@
   }
   const speech = {
     r: null, base: '', caret: 0, done: '', final: '', carry: '', heard: false, sandbox: null, fellBack: false,
-    error: '', reason: '', restarts: 0, roundAt: 0, guard: 0, last: '', heardRound: false, startedOk: false,
+    error: '', reason: '', restarts: 0, roundAt: 0, guard: 0, last: '', heardRound: false, heardAt: 0, startedOk: false,
     // Words of this dictation so far: the rounds before, then this one.
     words() { return [speech.done, speech.final].filter(Boolean).join(' '); },
     start() {
@@ -1010,7 +1011,9 @@
         $('rec-time').textContent = rcClock(s);
         if (s >= RC_VOICE_MAX_S) speech.stop('time');
         // Nothing heard for a while after the start of a round: said.
-        if (speech.r) setQuiet(!speech.heardRound && Date.now() - speech.roundAt >= QUIET_MS);
+        // After words, a longer pause: a recogniser can go deaf without any
+        // event (WebKit bug 321436); the person is told, it is not ended.
+        if (speech.r) setQuiet(speech.heardRound ? Date.now() - speech.heardAt >= HEARD_QUIET_MS : Date.now() - speech.roundAt >= QUIET_MS);
       }, 250);
       return true;
     },
@@ -1035,7 +1038,7 @@
       r.onresult = e => {
         if (speech.r !== r) return;
         const t = rcSpeechRound(e.results, speech.carry);
-        if (t.final || t.interim) { speech.heard = true; speech.heardRound = true; setQuiet(false); }
+        if (t.final || t.interim) { speech.heard = true; speech.heardRound = true; speech.heardAt = Date.now(); setQuiet(false); }
         speech.final = t.final;
         speech.last = t.last;
         // The field holds what is final, at the caret; the bar shows both,

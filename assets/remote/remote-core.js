@@ -998,7 +998,7 @@ const RC_DICT_TEXT = {
   time: 'Two minutes is the longest dictation. Tap the microphone to go on.',
   kept: 'The words heard are in the field.',
   quietMac: 'The microphone hears nothing. Speak closer, or check that no other app (a call) is using it.',
-  quietIphone: 'Nothing heard yet. Speak, or tap stop.',
+  quietIphone: 'Nothing heard for a few seconds. Speak, or tap stop, then the microphone again.',
   macEmpty: 'Nothing was recorded. Tap the microphone and try again.',
   macShort: 'Too short to transcribe. Tap the microphone, speak, then tap stop.',
   macSilent: 'Nothing was heard: the recording is silent. Check the microphone and try again.',
