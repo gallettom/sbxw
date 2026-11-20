@@ -15,6 +15,9 @@
 //! never cuts a number. Under a width it drops, in this order, the
 //! bring-up's step label, the word "CPU", the word "Help"; past that the
 //! sandbox's name truncates (its tooltip has it whole).
+//!
+//! After the bring-ups, the git item ([`git`]): the repository and branch of
+//! what is on screen; it shortens, then hides, before any entry above is touched.
 
 use super::{bar, App};
 use crate::feat::create::{self, model::BarJob, model::BarState};
@@ -25,6 +28,7 @@ use rune::{el, row, text, Cursor, El};
 use serde_json::Value as J;
 use std::time::{Duration, Instant};
 
+pub mod git;
 pub mod jobs;
 pub mod numbers;
 use numbers::{Cost, Cpu};
@@ -94,6 +98,8 @@ pub struct Status {
     pub hot: bool,
     /// The read-only popover open over the bar.
     pub pop: Option<Pop>,
+    /// The git item's reads ([`git`]).
+    pub git: git::Git,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,6 +178,21 @@ pub fn fit(width: f32, jobs: &[BarJob], cpu: &Cpu, cost: &Cost) -> Fit {
 }
 
 impl App {
+    /// The git item as drawn at this fit: item, its text, its sandbox.
+    fn statusbar_git_shown(&self, f: Fit, cpu: &Cpu, cost: &Cost) -> Option<(git::Item, String, String)> {
+        let i = self.git_item()?;
+        let t = git::fit_text(&i, self.git_avail(f, cpu, cost))?;
+        let sb = self.git_want()?.sandbox;
+        Some((i, t, sb))
+    }
+
+    /// The git item when the bar draws it.
+    fn statusbar_git(&self) -> Option<(git::Item, String, String)> {
+        let (cpu, cost) = self.statusbar_numbers();
+        let f = fit(self.window.0, &self.status.jobs, &cpu, &cost);
+        self.statusbar_git_shown(f, &cpu, &cost)
+    }
+
     /// Whether the bar draws `key` now (the scripts' `wait:` marks), from
     /// create's list as it stands (a wait does not poll the bar).
     pub(super) fn statusbar_drawn(&self, key: &str) -> bool {
@@ -180,6 +201,7 @@ impl App {
         match key {
             "status-bar" | "status-left" | "status-right" | "status-cpu" | "status-cost" | "status-help" | "status-theme" | "status-theme-more" => true,
             "status-jobs" => first.is_some(),
+            "status-git" => self.statusbar_git().is_some(),
             "status-jobs-track" | "status-jobs-fill" => first.is_some_and(|j| j.state != BarState::Created),
             "status-jobs-more" => more(&jobs).is_some(),
             "status-jobs-step" => first.is_some() && {
@@ -332,11 +354,9 @@ impl App {
             }
         }
         let (more, w2) = self.statusbar_poll_numbers(now);
-        let wake = match (wake, w2) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
-        (changed || more, wake)
+        let (git, w3) = self.git_poll(now);
+        let wake = [wake, w2, w3].into_iter().flatten().min();
+        (changed || more || git, wake)
     }
 }
 
@@ -358,6 +378,9 @@ pub fn view(s: &App) -> El {
     let mut left = row().key("status-left").grow(1.0).min_w(0.0).h_full().items_center();
     if let Some(j) = jobs_view(s, f) {
         left = left.child(j);
+    }
+    if let Some((i, t, sb)) = s.statusbar_git_shown(f, &cpu, &cost) {
+        left = left.child(git::view(&i, t, &sb));
     }
     row()
         .key("status-bar")

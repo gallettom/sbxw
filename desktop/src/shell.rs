@@ -1049,6 +1049,10 @@ impl App {
                 self.statusbar_stats(result, Instant::now());
                 return false;
             }
+            LinkEvent::Data { key, result } if key.starts_with(statusbar::git::KEY_PREFIX) => {
+                self.git_data(&key, result, Instant::now());
+                return true;
+            }
             LinkEvent::Bus(ev) => {
                 log::debug!("event {} {}", ev.name, ev.data);
                 let f = self.feats_bus(&ev.name, &ev.data);
