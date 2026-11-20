@@ -48,6 +48,8 @@ mod remote_review3_tests;
 mod remote_approvals_tests;
 #[cfg(test)]
 mod phone_review_tests;
+#[cfg(test)]
+mod phone_review2_tests;
 
 use crate::app::App;
 use axum::http::{header, HeaderValue};
