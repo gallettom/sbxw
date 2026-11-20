@@ -833,6 +833,14 @@ impl App {
                         rebound.push(sb.clone());
                         true
                     }
+                    // Another conversation shows now: not a leader, but the
+                    // record waits (as an unbound one does) until
+                    // LEAD_UNBOUND_MAX_MS, so a wrong pick is never permanent.
+                    // Debug only: `leading()` runs often.
+                    (Some(_), Some(_)) if fresh => {
+                        tracing::debug!("plans: '{sb}' runs another conversation than the one made lead: waiting for that one");
+                        true
+                    }
                     (Some(_), Some(_)) => {
                         tracing::info!("plans: '{sb}' runs another conversation than the one made lead: lead mode dropped");
                         saves.push((sb.clone(), None));
