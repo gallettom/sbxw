@@ -276,7 +276,31 @@ pub struct SandboxRecord {
     /// machine's sandboxes, so their records are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_status: Option<String>,
+    /// Its main session was put in lead mode by the person (Team on), and
+    /// which conversation: how a leader is found again after a daemon
+    /// restart (see `svc::plans`). `None` in a record older than this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead: Option<LeadRecord>,
 }
+
+/// A sandbox's lead, as it is kept on disk.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LeadRecord {
+    /// When the person turned the team on.
+    pub since_ms: u64,
+    /// The agent session (Claude Code's `session_id`) that was the main
+    /// session then: the only one a restarted daemon makes lead again.
+    /// `None` until the daemon has seen it; a lead without it is not
+    /// restored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// The last time a live terminal of the daemon was bound to it: a lead
+    /// left unbound for [`LEAD_UNBOUND_MAX_MS`] after that is dropped.
+    pub bound_ms: u64,
+}
+
+/// How long a lead stays on disk with no terminal bound to it.
+pub const LEAD_UNBOUND_MAX_MS: u64 = 7 * 24 * 3600 * 1000;
 
 #[derive(Debug)]
 pub struct Store {
@@ -547,6 +571,7 @@ impl Store {
             chrome: false,
             created_by_sbx: None,
             last_status: None,
+            lead: None,
         }
     }
 

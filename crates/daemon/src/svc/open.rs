@@ -71,8 +71,11 @@ impl App {
                 .sessions
                 .get_or_open(key, now_ms(), move || async move { app.spawn_for(&k).await })
                 .await?;
-            if let (true, Some(sb), SessionKind::Thread(t)) = (opened.1, &key.sandbox, &key.kind) {
-                self.watch_thread_start(sb.clone(), t.clone(), opened.0.clone());
+            match (opened.1, &key.sandbox, &key.kind) {
+                (true, Some(sb), SessionKind::Thread(t)) => self.watch_thread_start(sb.clone(), t.clone(), opened.0.clone()),
+                // A new main terminal: a leader from before a restart may be in it.
+                (true, Some(sb), SessionKind::Agent) => self.rebind_lead(sb),
+                _ => {}
             }
             Ok(opened)
         })

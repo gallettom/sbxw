@@ -728,6 +728,8 @@ async fn recreate(State(app): S, Path(name): Path<String>) -> ApiResult {
 async fn stop(State(app): S, Path(name): Path<String>) -> ApiResult {
     let sb = sandbox(&name)?;
     app.sbx_for(&sb).await?.stop(&sb.name).await?;
+    // Its agent stopped with it: a later start is a new conversation.
+    app.lead_gone(&sb);
     // Its Chromium stopped with it.
     app.browser_set_active(&sb, false);
     Ok(ok())
