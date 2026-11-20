@@ -87,7 +87,7 @@ test('a file path stays plain text (no Files tab on the phone)', () => {
   assert.match(html, /<code>src\/main.rs:12<\/code>/);
 });
 test('20,000 characters render quickly and stay safe', () => {
-  for (const s of ['x'.repeat(20000), '*'.repeat(20000), '<'.repeat(20000), '[a]('.repeat(5000), '`*'.repeat(10000), ('**a* '.repeat(4000))]) {
+  for (const s of ['x'.repeat(20000), '*'.repeat(20000), '<'.repeat(20000), '[a]('.repeat(5000), '`*'.repeat(10000), ('**a* '.repeat(4000)), '`'.repeat(20000), '['.repeat(20000)]) {
     const t = Date.now();
     const html = rc.rcAgentHtml(s);
     assert.ok(Date.now() - t < 1500, `took ${Date.now() - t} ms`);
