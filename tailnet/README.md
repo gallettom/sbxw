@@ -191,8 +191,41 @@ scripts/build-tailnet.sh darwin/amd64    # an Intel Mac
 ```
 
 The output is `target/tailnet/<goos>-<goarch>/sbxw-tailnet`. The daemon looks
-for it **next to its own executable** (no `PATH` lookup): copy it beside
-`sbxw`.
+for it **next to its own executable** (no `PATH` lookup). The script never
+copies it there itself; its last lines say where that is and how:
+
+```
+sbxw looks for it next to the sbxw on your PATH, in /Users/you/dev/sbxw/target/debug. Put it there:
+  cp /Users/you/dev/sbxw/target/tailnet/darwin-arm64/sbxw-tailnet /Users/you/dev/sbxw/target/debug/
+```
+
+or `sbxw looks for it at <path>: already in place.` when OUT is that place, or,
+with no `sbxw` on `PATH`, the `cp` with "the folder of your sbxw binary". A
+build for another machine says to put it next to that machine's `sbxw`.
+
+If it is missing, `sbxw remote on` and `sbxw remote status` name the path the
+daemon looked at and the one command that builds it there:
+
+```
+sbxw-tailnet is missing: sbxw looks for it at /Users/you/dev/sbxw/target/debug/sbxw-tailnet
+It is built by scripts/build-tailnet.sh. From the sbxw source folder, build it in place:
+  scripts/build-tailnet.sh darwin/arm64 '/Users/you/dev/sbxw/target/debug/sbxw-tailnet'
+```
+
+Set-up, in order (the full steps: [docs/security.md, Remote access](../docs/security.md#remote-access)):
+
+1. **(Mac)** Build it and put it next to `sbxw`, as above.
+2. **(Mac)** `sbxw remote on`, then `sbxw remote status`: its `state:` line goes
+   `starting`, then `waiting for login` with a `login link:` to open in any
+   browser (the Mac's is fine), or `waiting for approval` (approve `sbxw` on the
+   Machines page of the admin console), or `https unavailable` (turn on MagicDNS
+   and HTTPS Certificates on the DNS page of the admin console), then
+   `running at sbxw.<tailnet>.ts.net`.
+3. **(Mac)** `sbxw remote pair` prints the link. It opens **only on the phone**:
+   the Mac itself is not on the tailnet (only this node is), unless it also
+   runs the Tailscale app.
+4. **(phone)** Tailscale on, same account; open the whole link (with the part
+   after `#`), then type the six digits it shows at the Mac's prompt.
 
 - Go version: the `go` line of `go.mod`, with `GOTOOLCHAIN=local` (no
   toolchain download).

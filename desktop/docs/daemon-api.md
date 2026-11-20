@@ -157,7 +157,7 @@ UI token. The contract is `.sbxw-artifacts/remote/API.md` section 5; the CLI
 
 | Route | Answer |
 |---|---|
-| `GET /api/remote` | `{enabled, remote_addr, listening, tailnet: {state, name, serving, login_url, detail} \| null, devices, pending_requests, keep_awake: "holding"\|"on_battery"\|"not_macos"\|"off"}` |
+| `GET /api/remote` | `{enabled, remote_addr, listening, tailnet: {state, name, serving, login_url, detail} \| null, devices, pending_requests, keep_awake: "holding"\|"on_battery"\|"not_macos"\|"off", sidecar_missing: <path> \| null, leaders: [<sandbox>]}`. `sidecar_missing` is the path the daemon looked at when `sbxw-tailnet` is not there (enable then fails with a sentence naming it and the build command); `leaders` are the names of the team leaders a paired phone sees now (the same list as `GET /r/leaders`, names only) |
 | `POST /api/remote/enable` / `disable` `{}` | `{ok, status}`; both idempotent. Enable is `409` with a sentence when the listener or the sidecar cannot start. A screen must ask the person first, saying what it exposes |
 | `POST /api/remote/pairing` `{}` | `{ok, code, code_id, url, expires_ms}`; `409` when off or the tailnet is not serving. Show `url` as a QR code and a link. A new code voids every pending request |
 | `GET /api/remote/pairing/requests` | `[{id, code_id, device_name, created_ms, expires_ms}]`: show only the request whose `code_id` is the code on screen, with its `device_name`. No digits: the person reads them on the phone |
