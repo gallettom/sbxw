@@ -112,6 +112,9 @@ func run(cfg *runConfig, logf func(string, ...any)) int {
 		logf("status file: %v", err)
 		return 1
 	}
+	if cfg.push {
+		startPush(ctx, logf)
+	}
 	n := &node{cfg: cfg, status: sw, logf: logf}
 	err := n.run(ctx)
 	cancel()

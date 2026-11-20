@@ -26,6 +26,7 @@ type runConfig struct {
 	parentPID  int
 	controlURL string        // tests only: a loopback http URL
 	loginWait  time.Duration // how long to wait for a login link before saying so
+	push       bool          // read push jobs on stdin, answer on stdout (push.go)
 }
 
 type forgetConfig struct {
@@ -113,6 +114,7 @@ func parseRun(args []string, stderr io.Writer) (*runConfig, error) {
 	fs.IntVar(&c.parentPID, "parent-pid", 0, "exit when this process is no longer the parent")
 	fs.StringVar(&c.controlURL, "test-control-url", "", "tests only: a loopback control URL")
 	fs.DurationVar(&c.loginWait, "login-wait", 60*time.Second, "how long to wait for a login link")
+	fs.BoolVar(&c.push, "push", false, "read Web Push jobs on stdin and answer on stdout (API-push.md)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
