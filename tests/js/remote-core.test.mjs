@@ -745,6 +745,7 @@ test('the Mac path: a format the phone records, no empty or tiny clip, the answe
   assert.equal(rc.rcRecMime(() => { throw new Error('x'); }), '');
   assert.equal(rc.rcRecMime(undefined), '');
   assert.equal(rc.rcClipCheck(0, 3000), T.macEmpty);
+  assert.equal(rc.rcClipCheck(0, 100), T.macShort, 'stopped before the first chunk');
   assert.equal(rc.rcClipCheck(1200, 300), T.macShort);
   assert.equal(rc.rcClipCheck(1200, 500), '');
   assert.equal(rc.rcSilentPcm(new Float32Array(1600)), true);

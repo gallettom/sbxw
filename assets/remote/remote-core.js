@@ -1100,8 +1100,8 @@ function rcRecMime(isSupported) {
 }
 // A clip worth sending: not empty, at least half a second. → '' or why not.
 function rcClipCheck(bytes, ms) {
-  if (!(bytes > 0)) return RC_DICT_TEXT.macEmpty;
   if (!(ms >= 500)) return RC_DICT_TEXT.macShort;
+  if (!(bytes > 0)) return RC_DICT_TEXT.macEmpty;
   return '';
 }
 // Samples that are all silence (peak under -54 dBFS): not sent.

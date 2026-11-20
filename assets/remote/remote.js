@@ -1029,7 +1029,7 @@
       speech.heardRound = false;
       speech.startedOk = false;
       speech.roundAt = Date.now();
-      r.onstart = r.onaudiostart = () => { if (speech.r === r) { speech.startedOk = true; $('rec').dataset.hear = 'on'; } };
+      r.onstart = r.onaudiostart = () => { if (speech.r === r) { speech.startedOk = true; if ($('rec').dataset.hear === 'off') $('rec').dataset.hear = 'on'; } };
       r.onsoundstart = r.onspeechstart = () => { if (speech.r === r) { speech.startedOk = true; $('rec').dataset.hear = 'sound'; } };
       r.onsoundend = () => { if (speech.r === r) $('rec').dataset.hear = 'on'; };
       r.onresult = e => {
