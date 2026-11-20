@@ -41,7 +41,7 @@
   --c-hair-strong: rgba(240, 246, 252, 0.14);
   --c-press: rgba(240, 246, 252, 0.09);
   --c-agent: rgba(63, 185, 80, 0.075);
-  --c-agent-edge: rgba(63, 185, 80, 0.16);
+  --c-agent-edge: rgba(63, 185, 80, 0.1);
   --c-you: rgba(88, 166, 255, 0.13);
   --c-composer: #11161d;
   --c-box: #1a2029;
@@ -550,7 +550,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-i-stop { display: none; }
 [data-rec="recording"] .rc-field, [data-rec="recording"] #attach,
 [data-rec="transcribing"] .rc-field, [data-rec="transcribing"] #attach { display: none; }
-[data-rec="recording"] .rc-box { border-color: rgba(248, 81, 73, 0.45); box-shadow: 0 0 0 3px rgba(248, 81, 73, 0.1); padding-left: 10px; }
+[data-rec="recording"] .rc-box { border-color: rgba(248, 81, 73, 0.5); box-shadow: none; padding-left: 10px; }
 [data-rec="transcribing"] .rc-box { padding-left: 10px; }
 [data-rec="recording"] .rc-mic { color: #fff; }
 [data-rec="recording"] .rc-mic::before { background: var(--c-red); }
@@ -571,17 +571,17 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-fchip {
   position: relative;
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 10px;
-  min-height: 48px;
-  padding: 6px 2px 6px 8px;
+  min-height: 44px;
+  padding: 3px 0 3px 6px;
   background: var(--c-box);
   border: 1px solid var(--c-hair);
   border-radius: 14px;
   overflow: hidden;
 }
-.rc-fchip-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; background: rgba(110, 118, 129, 0.16); color: var(--c-text-muted); }
+.rc-fchip-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: rgba(110, 118, 129, 0.16); color: var(--c-text-muted); }
 .rc-fchip-icon svg { width: 18px; height: 18px; }
 .rc-fchip-text { min-width: 0; display: grid; }
 .rc-fchip-name { font-size: var(--fs-sm); color: var(--c-text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -596,14 +596,14 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-fchip.rc-f-failed .rc-fchip-meta { color: #ff7b72; font-family: var(--font-ui); white-space: normal; }
 .rc-held {
   display: grid;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 2px;
+  padding: 10px 6px 6px 12px;
   background: var(--c-amber-tint);
   border-radius: 14px;
   box-shadow: inset 0 0 0 1px rgba(210, 153, 34, 0.45);
 }
 .rc-held-why { font-size: var(--fs-sm); color: var(--c-text-bright); overflow-wrap: anywhere; white-space: pre-line; }
-.rc-tick { display: flex; align-items: flex-start; gap: 10px; min-height: var(--tap); padding: 10px 0; font-size: var(--fs-sm); cursor: pointer; }
+.rc-tick { display: flex; align-items: center; gap: 10px; min-height: var(--tap); padding: 4px 0; font-size: var(--fs-sm); cursor: pointer; }
 .rc-tick input { flex: none; width: 20px; height: 20px; margin: 0; accent-color: var(--c-green); }
 .rc-held-row { display: flex; justify-content: flex-end; gap: 6px; }
 

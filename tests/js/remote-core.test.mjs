@@ -479,7 +479,7 @@ test('the status line: one sentence, the most urgent first', () => {
   assert.equal(s({ gate: 'The leader is working: Send comes back at its prompt.', files: 2 }).text, 'The leader is working: Send comes back at its prompt. Your files wait here.');
   assert.deepEqual(s({ pending: 2, gate: 'g' }), { text: 'Uploading 2 files: Send waits until they are done.', tone: 'busy' });
   assert.equal(s({ pending: 1 }).text, 'Uploading 1 file: Send waits until it is done.');
-  assert.equal(s({ held: 1, pending: 1 }).tone, 'warn');
+  assert.match(s({ held: 1, pending: 1 }).text, /^Tick the box/);
   assert.equal(s({ failed: 1 }).text, 'An upload failed: retry or remove. The rest can be sent.');
   assert.match(s({ rec: 'recording', held: 1 }).text, /^Recording\. .*nothing is sent\.$/);
   assert.equal(s({ rec: 'transcribing' }).text, 'Transcribing on your Mac…');

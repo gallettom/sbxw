@@ -767,7 +767,7 @@
       name.textContent = chatShortName(c.name);
       const meta = document.createElement('span');
       meta.className = 'rc-fchip-meta';
-      meta.textContent = c.state === 'sending' ? `${chatSize(c.size)} · ${Math.round(c.pct * 100)} %`
+      meta.textContent = c.state === 'sending' ? `${chatSize(c.size)} · ${c.pct < 1 ? `${Math.round(c.pct * 100)} %` : 'the Mac checks it'}`
         : c.state === 'queued' ? `${chatSize(c.size)} · waiting`
           : c.state === 'done' ? `${chatSize(c.size)} · ready`
             : c.error;

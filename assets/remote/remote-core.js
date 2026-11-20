@@ -617,7 +617,7 @@ function rcStatus({ note = null, rec = 'idle', gate = '', held = 0, pending = 0,
   if (note && note.text) return { text: note.text, tone: note.tone || 'info' };
   if (rec === 'recording') return { text: 'Recording. Tap stop when you are done: the words go into the field, nothing is sent.', tone: 'busy' };
   if (rec === 'transcribing') return { text: 'Transcribing on your Mac…', tone: 'busy' };
-  if (held) return { text: `Tick the box to attach ${held === 1 ? 'the file whose name looks' : `the ${held} files whose names look`} like a secret, or cancel.`, tone: 'warn' };
+  if (held) return { text: `Tick the box to attach ${held === 1 ? 'the file whose name looks' : `the ${held} files whose names look`} like a secret, or cancel.`, tone: 'info' };
   if (pending) return { text: `Uploading ${pending === 1 ? '1 file' : `${pending} files`}: Send waits until ${pending === 1 ? 'it is' : 'they are'} done.`, tone: 'busy' };
   if (gate) return { text: files ? `${gate.replace(/\.$/, '')}. Your files wait here.` : gate, tone: 'info' };
   if (failed) return { text: `${failed === 1 ? 'An upload' : `${failed} uploads`} failed: retry or remove. The rest can be sent.`, tone: 'err' };

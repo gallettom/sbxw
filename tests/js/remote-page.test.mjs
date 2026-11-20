@@ -96,7 +96,7 @@ const base = () => `http://127.0.0.1:${sb.port}`;
 const ctl = body => fetch(`${base()}/__ctl`, { method: 'POST', body: JSON.stringify(body) });
 const log = async () => (await fetch(`${base()}/__log`)).json();
 const calls = async (method, path) => (await log()).filter(e => e.method === method && e.path === path);
-const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png` }); };
+const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png`, animations: 'disabled' }); };
 const noHScroll = page => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth && document.body.scrollWidth <= window.innerWidth);
 async function cleanSpy(page) {
   const spy = await page.evaluate(() => window.__spy);
@@ -525,9 +525,9 @@ test('files: checked before any byte, the tick, progress, failure and retry, rem
   // Progress: a slow body, Send waits.
   await ctl({ uploadSlow: 40 });
   await page.fill('#field', 'see these');
-  await pick(page, [fileOf('photo.jpg', 3 * MB, 'image/jpeg'), fileOf('scan.pdf', 2 * MB, 'application/pdf')]);
+  await pick(page, [fileOf('photo.jpg', 18 * MB, 'image/jpeg'), fileOf('scan.pdf', 2 * MB, 'application/pdf')]);
   await page.waitForSelector('.rc-fchip[data-state="sending"]');
-  await page.waitForFunction(() => Number(document.querySelector('.rc-fchip-bar')?.getAttribute('aria-valuenow')) > 0, null, { timeout: 15000 });
+  await page.waitForFunction(() => Number(document.querySelector('.rc-fchip-bar')?.getAttribute('aria-valuenow')) > 20, null, { timeout: 15000 });
   assert.equal(await page.isDisabled('#send'), true, 'Send waits for the uploads');
   assert.match(await page.textContent('#status'), /^Uploading 2 files: Send waits until they are done\.$/);
   await shot(page, '21-files-progress');
