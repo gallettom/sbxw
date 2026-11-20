@@ -4,9 +4,15 @@
 use super::layout_tests::Rig;
 use super::*;
 
+fn marked(r: &Rig, key: &str) -> bool {
+    r.rt.presented(key).is_some()
+}
+
 fn set(r: &mut Rig, leads: serde_json::Value) {
     r.rt.update(|s, _| {
-        s.sandboxes = ["a", "b", "c"].iter().map(|n| crate::client::Sandbox::new(n, "claude", "running")).collect();
+        let mut names: Vec<String> = ["a", "b", "c"].iter().map(|n| n.to_string()).collect();
+        names.extend(s.panes.iter().filter_map(|p| p.sandbox.clone()));
+        s.sandboxes = names.iter().map(|n| crate::client::Sandbox::new(n, "claude", "running")).collect();
         s.feats.data.insert("leads".into(), leads);
         s.feats.data.entry("plans").or_insert(serde_json::json!([]));
         s.push_data();
@@ -26,12 +32,12 @@ fn rig(w: f32) -> Rig {
 fn a_leader_pane_has_the_mark_a_thread_and_a_plain_session_do_not() {
     let mut r = rig(1284.0);
     for n in 1..=4 {
-        assert!(!r.rt.state.drawn(&format!("pane-{n}-leader")), "no team: pane {n} has no mark");
+        assert!(!marked(&r, &format!("pane-{n}-leader")), "no team: pane {n} has no mark");
     }
     set(&mut r, serde_json::json!(["a"]));
-    assert!(r.rt.state.drawn("pane-1-leader"));
+    assert!(marked(&r, "pane-1-leader"));
     for n in 2..=4 {
-        assert!(!r.rt.state.drawn(&format!("pane-{n}-leader")), "pane {n} is not a leader");
+        assert!(!marked(&r, &format!("pane-{n}-leader")), "pane {n} is not a leader");
     }
     // Before the name, inside the bar, not touching the name.
     let (m, _) = r.rt.presented("pane-1-leader").unwrap();
@@ -44,22 +50,22 @@ fn a_leader_pane_has_the_mark_a_thread_and_a_plain_session_do_not() {
 fn the_mark_follows_the_team_starting_and_ending() {
     let mut r = rig(1284.0);
     set(&mut r, serde_json::json!(["a"]));
-    assert!(r.rt.state.drawn("pane-1-leader"));
+    assert!(marked(&r, "pane-1-leader"));
     set(&mut r, serde_json::json!(["b"]));
-    assert!(!r.rt.state.drawn("pane-1-leader") && r.rt.state.drawn("pane-2-leader"));
+    assert!(!marked(&r, "pane-1-leader") && marked(&r, "pane-2-leader"));
     set(&mut r, serde_json::json!([]));
-    assert!(!r.rt.state.drawn("pane-2-leader"));
+    assert!(!marked(&r, "pane-2-leader"));
 }
 
 #[test]
 fn the_mark_shows_with_lead_mode_off_and_on() {
     let mut r = rig(1284.0);
     set(&mut r, serde_json::json!(["a"]));
-    assert!(!r.rt.state.leads_on() && r.rt.state.drawn("pane-1-leader"));
+    assert!(!r.rt.state.leads_on() && marked(&r, "pane-1-leader"));
     r.rt.update(|s, _| s.toggle_leads());
     r.settle();
     assert!(r.rt.state.leads_on());
-    assert!(r.rt.state.drawn("pane-1-leader"));
+    assert!(marked(&r, "pane-1-leader"));
 }
 
 #[test]
@@ -88,10 +94,7 @@ fn at_a_narrow_pane_the_mark_stays_whole_and_nothing_overlaps() {
 
 #[test]
 fn a_single_terminal_page_tab_carries_the_mark_too() {
-    let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
-    r.rt.update(|s, _| {
-        s.pages.per = 1;
-    });
+    let mut r = Rig::new(&["a"], 1284.0, 816.0);
     set(&mut r, serde_json::json!(["a"]));
     let mut singles = 0;
     for k in 0..r.rt.state.pages.list.len() {

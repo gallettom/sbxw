@@ -333,7 +333,7 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
         e = e.child(small_icon("prompt", TAB_PROMPT, theme::hex(theme::muted_on(ground))));
     }
     if t.leader {
-        e = e.child(small_icon("leader", TAB_PROMPT, c("text-bright")).key(format!("page-{}-leader", k + 1)).label("Team leader").help("Team leader"));
+        e = e.child(el().key(format!("page-{}-leader", k + 1)).label("Team leader").help("Team leader").w(TAB_PROMPT).h(TAB_PROMPT).child(small_icon("leader", TAB_PROMPT, c("text-bright"))));
     }
     // A session's tab: the sandbox muted, what tells it apart (the thread)
     // bright; the cut falls on the second part.

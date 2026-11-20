@@ -3463,7 +3463,7 @@ fn pane_view(s: &App, i: usize) -> El {
     let mut mid = row().grow(1.0).min_w(0.0).h_full().gap(bar::PANE_GAP).items_center().clip_rounded(0.0);
     // The team leader's crown, before the name so a cut name never takes it.
     if pane.is_some_and(|p| s.pane_leads(p)) {
-        mid = mid.child(rune::icon(crate::icons::get("leader").unwrap(), LEADER_MARK).key(format!("pane-{}-leader", i + 1)).label("Team leader").help("Team leader").color(c(if focused { "text-bright" } else { "text" })));
+        mid = mid.child(el().key(format!("pane-{}-leader", i + 1)).label("Team leader").help("Team leader").w(LEADER_MARK).h(LEADER_MARK).child(rune::icon(crate::icons::get("leader").unwrap(), LEADER_MARK).color(c(if focused { "text-bright" } else { "text" }))));
     }
     mid = mid.child(
         text(label.clone()).key(format!("pane-{}-name", i + 1)).help(label).font(small(bar::NAME_TEXT, 500.0)).color(c(if focused { "text-bright" } else { "text" })).truncate().min_w(name_min),
