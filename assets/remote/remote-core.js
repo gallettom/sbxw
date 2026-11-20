@@ -151,6 +151,7 @@ function rcRows(items) {
     if (!row) continue;
     steps = null;
     row.at = at;
+    row.seq = Number(it.seq) || 0;
     rows.push(row);
   }
   return rows;
@@ -327,10 +328,17 @@ function rcClient(fetchImpl, hooks = {}) {
       const qs = p.toString();
       return call('GET', `${at(s)}/history${qs ? `?${qs}` : ''}`);
     },
-    message: (s, text) => call('POST', `${at(s)}/message`, { text }),
+    // Attachments are the daemon's upload ids, never a path: the daemon adds
+    // the paths itself. Without attachments the body is exactly { text }.
+    message: (s, text, attachments) => call('POST', `${at(s)}/message`,
+      Array.isArray(attachments) && attachments.length ? { text, attachments: attachments.map(String) } : { text }),
+    dropUpload: (s, id) => call('DELETE', `${at(s)}/upload/${encodeURIComponent(id)}`),
     answer: (s, indices) => call('POST', `${at(s)}/answer`, { indices }),
     interrupt: s => call('POST', `${at(s)}/interrupt`, {}),
     transcribe: pcm => call('POST', '/r/voice/transcribe', undefined, pcm),
+    // For the level-2 routes (rcL2Client): the same call, nothing more.
+    get: path => call('GET', path),
+    post: (path, body) => call('POST', path, body),
   };
 }
 
@@ -343,6 +351,8 @@ const RC_MSG_REASON = {
   needs_mac: 'This needs your Mac: the leader is waiting for you there.',
   busy: 'The leader is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.',
   no_paste: 'Send it from your Mac: this leader\'s terminal cannot take a message from the phone.',
+  attachment: 'Not sent: a file of this message is no longer on the Mac (it expires 30 minutes after its upload). Remove it, choose it again, then Send.',
+  too_many: 'Not sent: a message takes 5 files at most. Remove some, then Send.',
   not_submitted: 'NOT SENT: the text was typed into the leader\'s input on the Mac but not submitted, because the leader changed meanwhile. It waits there unsent; it is also still in this field. Check on your Mac before sending again.',
 };
 
@@ -395,4 +405,628 @@ function rcWithDictation(field, words) {
   const w = String(words || '').trim();
   if (!w) return field;
   return field && !/\s$/.test(field) ? `${field} ${w}` : `${field}${w}`;
+}
+
+// ── Files: the attach rules ──────────────────────────────────────────────
+// The list of secret-looking names and the helpers between the COPY markers
+// are copied verbatim from assets/js/chat-core.js's "chat attach" block (a
+// test keeps them equal). The page checks before any byte is sent; the
+// daemon stays the judge. A file's CONTENT is never read here, only handed
+// to the upload; a file's NAME is data, shown with textContent only.
+// ── COPY from assets/js/chat-core.js (chat attach): begin ──
+const CHAT_SECRET_NAMES = ['.env*', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*', '*.p12', '*.pfx', 'credentials*', '.npmrc', '.netrc', '*.kdbx'];
+
+function chatSecretName(name) {
+  const n = String(name || '').toLowerCase();
+  return CHAT_SECRET_NAMES.some(p => (p.startsWith('*') ? n.endsWith(p.slice(1))
+    : p.endsWith('*') ? n.startsWith(p.slice(0, -1)) : n === p));
+}
+
+function chatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let v = bytes / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+function chatShortName(name) {
+  const s = [...String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '?')];
+  return s.length <= 60 ? s.join('') : `${s.slice(0, 40).join('')}…${s.slice(-16).join('')}`;
+}
+
+function chatUploadName(name) {
+  const base = String(name ?? '').split(/[\/\\]/).pop().replace(/[\u0000-\u001f\u007f]/g, '');
+  const s = [...base];
+  if (s.length <= 100) return s.join('');
+  const ext = /\.[A-Za-z0-9]{1,10}$/.exec(base)?.[0] || '';
+  return s.slice(0, 90).join('') + ext;
+}
+// ── COPY from assets/js/chat-core.js (chat attach): end ──
+
+// The limits the page checks, API.md 2.6.1 (the daemon enforces them too):
+// 25 MiB a file, 5 files waiting per device and leader, 60 MiB together.
+const RC_UPLOAD_MAX_FILES = 5;
+const RC_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+const RC_UPLOAD_MAX_TOTAL = 60 * 1024 * 1024;
+const RC_TICK = 'I have looked at these files and want to attach them';
+
+// The checks, before any byte is sent. `held`: how many files are already
+// attached or waiting, `heldBytes` their size together.
+// → { take, refused: [{name, why}], ask: [sentence] }
+function rcCheckAttach(held, incoming, heldBytes = 0) {
+  const take = [], refused = [];
+  let bytes = Number(heldBytes) || 0;
+  for (const f of Array.isArray(incoming) ? incoming : []) {
+    if (!f || typeof f !== 'object') continue;
+    const size = Number(f.size);
+    let why = '';
+    if (!(size > 0)) why = 'the file is empty';
+    else if (size > RC_UPLOAD_MAX_BYTES) why = `over ${chatSize(RC_UPLOAD_MAX_BYTES)}, the most one file takes`;
+    else if (held + take.length >= RC_UPLOAD_MAX_FILES) why = `a message takes ${RC_UPLOAD_MAX_FILES} files at most`;
+    else if (bytes + size > RC_UPLOAD_MAX_TOTAL) why = `the files of one message take ${chatSize(RC_UPLOAD_MAX_TOTAL)} together at most`;
+    if (why) refused.push({ name: String(f.name ?? ''), why }); else { take.push(f); bytes += size; }
+  }
+  const ask = take.filter(f => chatSecretName(f.name)).map(f => `${chatShortName(f.name)}: its name looks like a secret (keys, tokens, credentials)`);
+  return { take, refused, ask };
+}
+
+// An upload's refusal reasons (API.md 2.6.1), each as a short sentence for
+// its chip.
+const RC_UPLOAD_REASON = {
+  too_large: `Too large: one file takes ${chatSize(RC_UPLOAD_MAX_BYTES)} at most.`,
+  too_many: `Too many files wait on the Mac (${RC_UPLOAD_MAX_FILES} at most, ${chatSize(RC_UPLOAD_MAX_TOTAL)} together). Remove one, or send them first.`,
+  empty: 'The file is empty.',
+  kind: 'Programs and archives are not accepted (zip, gzip, executables...).',
+  name: 'The Mac could not read this file\'s name. Rename it, then choose it again.',
+  busy: 'Another upload from this phone is under way. Retry once it is done.',
+  timeout: 'The connection was too slow for this file. Try again on a better connection, or send a smaller file.',
+};
+// A body the network did not carry in time (the Tailscale node gives a whole
+// body 120 s: a 25 MiB file needs about 1.7 Mbit/s): no answer at all, the
+// sidecar's error (no JSON, no reason), the daemon's 400 "cut off" or its
+// `timeout`. One sentence for all, and Retry stays the person's: each try
+// counts toward the daemon's 20 uploads per 10 minutes.
+const RC_UPLOAD_SLOW = 'The connection was too slow for this file. Try again on a better connection, or send a smaller file.';
+function rcUploadFail(res) {
+  if (!res || res.unreachable || res.status === 0) return RC_UPLOAD_SLOW;
+  const reason = res.data && typeof res.data.reason === 'string' && Object.hasOwn(RC_UPLOAD_REASON, res.data.reason) ? res.data.reason : null;
+  if (reason) return RC_UPLOAD_REASON[reason];
+  if (!res.ok && (!res.data || typeof res.data !== 'object')) return RC_UPLOAD_SLOW;
+  if (res.status === 400 && /cut off/i.test(String(res.data.error || ''))) return RC_UPLOAD_SLOW;
+  if (res.status === 413) return RC_UPLOAD_REASON.too_large;
+  if (res.status === 429) return 'Not uploaded: too many uploads in a short time. Retry in a few minutes.';
+  if (res.status === 404) return 'Not uploaded: this leader does not take files from the phone.';
+  return `Not uploaded: the Mac answered ${res.status}.`;
+}
+// The daemon's answer, checked: an id (no path, ever), its own name, a size.
+const RC_UPLOAD_ID = /^[0-9a-f]{32}$/;
+function rcUploadDone(data) {
+  if (!data || typeof data.id !== 'string' || !RC_UPLOAD_ID.test(data.id)) return null;
+  return { id: data.id, name: typeof data.name === 'string' ? data.name : '', size: Number(data.size) || 0 };
+}
+
+// One file as the raw body, by XMLHttpRequest (it reports how much of the
+// body has gone; fetch does not). Same origin, the cookie, nothing in the URL
+// but the sandbox and the name. Resolves like the client: { ok, status,
+// unreachable, data }; never rejects, never retried.
+function rcUploadXhr(Xhr, sandbox, file, onProgress, signal) {
+  return new Promise(resolve => {
+    const x = new Xhr();
+    x.open('POST', `/r/leaders/${encodeURIComponent(sandbox)}/upload?name=${encodeURIComponent(chatUploadName(file.name))}`);
+    x.setRequestHeader('Content-Type', 'application/octet-stream');
+    if (x.upload) x.upload.onprogress = e => { if (e.lengthComputable && e.total) onProgress(Math.min(1, e.loaded / e.total)); };
+    x.onload = () => {
+      let data = null;
+      try { data = JSON.parse(x.responseText); } catch (_) {}
+      const unreachable = x.status === 502 || x.status === 504;
+      resolve({ ok: x.status >= 200 && x.status < 300, status: x.status, unreachable, data });
+    };
+    x.onerror = () => resolve({ ok: false, status: 0, unreachable: true, data: null });
+    x.onabort = () => resolve({ ok: false, status: 0, aborted: true, data: null });
+    signal?.addEventListener('abort', () => x.abort());
+    x.send(file);
+  });
+}
+
+// The composer's files: chips (queued → sending → done | failed), one upload
+// at a time, and secret-looking names held back until an explicit tick.
+// `upload(file, onProgress, signal)` resolves like rcUploadXhr; `drop(id)`
+// tells the daemon a done file is not wanted any more; `onChange` redraws.
+// A message carries the ids of the done chips only.
+function rcTray({ upload, drop = () => {}, onChange = () => {} }) {
+  const t = {
+    chips: [], held: null, note: '', seq: 0, active: null,
+    offer(files) {
+      const waiting = [...t.chips.filter(c => c.state !== 'failed'), ...(t.held ? t.held.files : [])];
+      const { take, refused, ask } = rcCheckAttach(waiting.length, files, waiting.reduce((n, c) => n + (Number(c.size) || 0), 0));
+      t.note = refused.map(r => `Not attached: ${chatShortName(r.name)} (${r.why}).`).join(' ');
+      if (take.length && ask.length) {
+        // More files held means a new look: the tick starts again.
+        t.held = { files: [...(t.held ? t.held.files : []), ...take], reasons: [...(t.held ? t.held.reasons : []), ...ask] };
+      } else if (take.length) t.start(take);
+      onChange();
+    },
+    // Only an explicit tick sends what was held.
+    confirmHeld(ticked) {
+      if (!t.held) return false;
+      if (ticked !== true) { t.note = `Tick "${RC_TICK}" first: nothing is sent before.`; onChange(); return false; }
+      const files = t.held.files;
+      t.held = null;
+      t.note = '';
+      t.start(files);
+      onChange();
+      return true;
+    },
+    discardHeld() { t.held = null; onChange(); },
+    start(files) {
+      for (const file of files) t.chips.push({ key: ++t.seq, file, name: String(file.name ?? ''), size: Number(file.size) || 0, state: 'queued', pct: 0, id: null, error: '' });
+      t.pump();
+    },
+    pump() {
+      if (t.active) return;
+      const chip = t.chips.find(c => c.state === 'queued');
+      if (!chip) return;
+      const ctl = new AbortController();
+      chip.state = 'sending';
+      chip.pct = 0;
+      t.active = { chip, ctl };
+      Promise.resolve()
+        .then(() => upload(chip.file, p => { if (t.active?.chip === chip) { chip.pct = p; onChange(); } }, ctl.signal))
+        .then(res => {
+          if (t.active?.chip !== chip) return;
+          const done = res && res.ok ? rcUploadDone(res.data) : null;
+          if (done) Object.assign(chip, { state: 'done', pct: 1, id: done.id, size: done.size || chip.size });
+          else Object.assign(chip, { state: 'failed', error: res && res.ok ? 'Not uploaded: the Mac gave no file id.' : rcUploadFail(res) });
+        }, () => {
+          if (t.active?.chip === chip) Object.assign(chip, { state: 'failed', error: rcUploadFail(null) });
+        })
+        .then(() => {
+          if (t.active?.chip === chip) t.active = null;
+          t.pump();
+          onChange();
+        });
+    },
+    remove(key) {
+      const i = t.chips.findIndex(c => c.key === key);
+      if (i < 0) return;
+      const [chip] = t.chips.splice(i, 1);
+      if (t.active?.chip === chip) { const a = t.active; t.active = null; a.ctl.abort(); t.pump(); }
+      if (chip.state === 'done' && chip.id) drop(chip.id);
+      onChange();
+    },
+    retry(key) {
+      const chip = t.chips.find(c => c.key === key);
+      if (!chip || chip.state !== 'failed') return;
+      chip.state = 'queued';
+      chip.error = '';
+      t.pump();
+      onChange();
+    },
+    pending() { return t.chips.filter(c => c.state === 'queued' || c.state === 'sending').length; },
+    failed() { return t.chips.filter(c => c.state === 'failed').length; },
+    ids() { return t.chips.filter(c => c.state === 'done' && c.id).map(c => c.id); },
+    // After a message went: the files it carried leave the tray.
+    sent(ids) { t.chips = t.chips.filter(c => !(c.state === 'done' && ids.includes(c.id))); onChange(); },
+    // Leaving the leader: drop everything not sent (aborting an upload).
+    clear() {
+      if (t.active) { t.active.ctl.abort(); t.active = null; }
+      for (const c of t.chips) if (c.state === 'done' && c.id) drop(c.id);
+      t.chips = []; t.held = null; t.note = '';
+      onChange();
+    },
+  };
+  return t;
+}
+
+// ── The status line under the field ───────────────────────────────────────
+// One line says what the composer waits on, the most urgent first: the
+// outcome of the last action (a refusal, "Sent."), then the recorder, the
+// files, why Send waits, and last a hint. → { text, tone }: tone is err,
+// warn, ok, busy or info.
+function rcStatus({ note = null, rec = 'idle', gate = '', held = 0, pending = 0, failed = 0, files = 0, hint = '' } = {}) {
+  if (note && note.text) return { text: note.text, tone: note.tone || 'info' };
+  if (rec === 'recording') return { text: 'Recording. Tap stop when you are done: the words go into the field, nothing is sent.', tone: 'busy' };
+  if (rec === 'transcribing') return { text: 'Transcribing on your Mac…', tone: 'busy' };
+  if (rec === 'listening') return { text: 'Listening (iPhone dictation). Tap stop when you are done: the words go into the field, nothing is sent.', tone: 'busy' };
+  if (held) return { text: `Tick the box to attach ${held === 1 ? 'the file whose name looks' : `the ${held} files whose names look`} like a secret, or cancel.`, tone: 'info' };
+  if (pending) return { text: `Uploading ${pending === 1 ? '1 file' : `${pending} files`}: Send waits until ${pending === 1 ? 'it is' : 'they are'} done.`, tone: 'busy' };
+  if (gate) return { text: files ? `${gate.replace(/\.$/, '')}. Your files wait here.` : gate, tone: 'info' };
+  if (failed) return { text: `${failed === 1 ? 'An upload' : `${failed} uploads`} failed: retry or remove. The rest can be sent.`, tone: 'err' };
+  return { text: hint || '', tone: 'info' };
+}
+
+// ── The recorder's helpers ────────────────────────────────────────────────
+// How loud a frame of time-domain samples is (an AnalyserNode's bytes, 128 is
+// silence), as 0 to 1 for the wave. Levels only: the samples are not kept.
+function rcLevel(bytes) {
+  const n = bytes && bytes.length ? bytes.length : 0;
+  if (!n) return 0;
+  let sum = 0;
+  for (let i = 0; i < n; i++) { const v = (bytes[i] - 128) / 128; sum += v * v; }
+  const rms = Math.sqrt(sum / n);
+  return rms < 0.01 ? 0 : Math.min(1, Math.sqrt(rms * 3.5));
+}
+// "0:07", "1:42": the running time of a recording.
+function rcClock(seconds) {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+// The wave a recorder shows: bars that move with the voice, a plain level
+// meter with reduced motion, a steady pulse without an analyser.
+function rcWaveMode(hasAnalyser, reducedMotion) {
+  if (!hasAnalyser) return 'pulse';
+  return reducedMotion ? 'meter' : 'bars';
+}
+
+// ══ Level 2: approving from the phone with a passkey ═════════════════════
+// The contract is .sbxw-artifacts/remote/API-level2.md. Everything below is
+// pure: the page wires it to navigator.credentials and the document.
+// What it never does: keep a challenge, an assertion or a credential id
+// beyond the one request (they live in the caller's locals), or turn
+// agent-written text into markup.
+
+// ── base64url without padding (API-level2.md section 2) ──
+const RC_B64U = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+function rcB64u(buf) {
+  const b = buf instanceof Uint8Array ? buf : ArrayBuffer.isView(buf) ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength) : new Uint8Array(buf);
+  let out = '';
+  for (let i = 0; i < b.length; i += 3) {
+    const n = (b[i] << 16) | ((b[i + 1] ?? 0) << 8) | (b[i + 2] ?? 0);
+    out += RC_B64U[(n >> 18) & 63] + RC_B64U[(n >> 12) & 63];
+    if (i + 1 < b.length) out += RC_B64U[(n >> 6) & 63];
+    if (i + 2 < b.length) out += RC_B64U[n & 63];
+  }
+  return out;
+}
+// Strict: only the alphabet, no padding, a valid length; else null.
+function rcFromB64u(s) {
+  if (typeof s !== 'string' || !/^[A-Za-z0-9_-]*$/.test(s) || s.length % 4 === 1) return null;
+  const out = new Uint8Array(Math.floor(s.length * 3 / 4));
+  let o = 0;
+  for (let i = 0; i < s.length; i += 4) {
+    const c = [0, 1, 2, 3].map(k => (i + k < s.length ? RC_B64U.indexOf(s[i + k]) : 0));
+    const n = (c[0] << 18) | (c[1] << 12) | (c[2] << 6) | c[3];
+    out[o++] = (n >> 16) & 255;
+    if (i + 2 < s.length) out[o++] = (n >> 8) & 255;
+    if (i + 3 < s.length) out[o++] = n & 255;
+  }
+  return out;
+}
+
+// ── The two ceremonies' options, from the daemon's JSON ──
+// Only the fields the contract names pass, the binary ones decoded; the
+// page always asks for user verification, whatever came.
+function rcCreateOptions(pk) {
+  if (!pk || typeof pk !== 'object') return null;
+  const challenge = rcFromB64u(pk.challenge);
+  const userId = rcFromB64u(pk.user?.id);
+  if (!challenge || challenge.length < 16 || !userId || !userId.length) return null;
+  if (typeof pk.rp?.id !== 'string' || !pk.rp.id) return null;
+  const exclude = Array.isArray(pk.excludeCredentials) ? pk.excludeCredentials.map(c => rcFromB64u(c?.id)) : [];
+  if (exclude.some(x => !x)) return null;
+  const params = (Array.isArray(pk.pubKeyCredParams) ? pk.pubKeyCredParams : []).filter(p => p && p.type === 'public-key' && p.alg === -7);
+  if (!params.length) return null;
+  return {
+    rp: { id: pk.rp.id, name: typeof pk.rp.name === 'string' ? pk.rp.name : 'sbxw' },
+    user: { id: userId, name: String(pk.user.name ?? ''), displayName: String(pk.user.displayName ?? pk.user.name ?? '') },
+    challenge,
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'preferred', userVerification: 'required' },
+    attestation: 'none',
+    timeout: Math.min(Number(pk.timeout) || 120000, 300000),
+    excludeCredentials: exclude.map(id => ({ type: 'public-key', id })),
+  };
+}
+function rcGetOptions(pk) {
+  if (!pk || typeof pk !== 'object') return null;
+  const challenge = rcFromB64u(pk.challenge);
+  if (!challenge || challenge.length < 16 || typeof pk.rpId !== 'string' || !pk.rpId) return null;
+  const allow = Array.isArray(pk.allowCredentials) ? pk.allowCredentials.map(c => rcFromB64u(c?.id)) : [];
+  // The device's credential only: an empty list would let any passkey answer.
+  if (!allow.length || allow.some(x => !x)) return null;
+  return {
+    challenge,
+    rpId: pk.rpId,
+    allowCredentials: allow.map(id => ({ type: 'public-key', id })),
+    userVerification: 'required',
+    timeout: Math.min(Number(pk.timeout) || 60000, 120000),
+  };
+}
+// The browser's answers as the daemon's JSON; null for any other shape.
+const rcIsBuf = v => v instanceof ArrayBuffer || ArrayBuffer.isView(v) || Object.prototype.toString.call(v) === '[object ArrayBuffer]';
+function rcRegistrationBody(cred) {
+  const r = cred && cred.response;
+  if (!cred || cred.type !== 'public-key' || !rcIsBuf(cred.rawId) || !r || !rcIsBuf(r.clientDataJSON) || !rcIsBuf(r.attestationObject)) return null;
+  return { id: rcB64u(cred.rawId), client_data_json: rcB64u(r.clientDataJSON), attestation_object: rcB64u(r.attestationObject) };
+}
+function rcAssertionBody(cred) {
+  const r = cred && cred.response;
+  if (!cred || cred.type !== 'public-key' || !rcIsBuf(cred.rawId) || !r || !rcIsBuf(r.clientDataJSON) || !rcIsBuf(r.authenticatorData) || !rcIsBuf(r.signature)) return null;
+  return { id: rcB64u(cred.rawId), client_data_json: rcB64u(r.clientDataJSON), authenticator_data: rcB64u(r.authenticatorData), signature: rcB64u(r.signature) };
+}
+// A ceremony that did not finish, as one state: the person cancelled (or the
+// sheet timed out), no platform authenticator, or something else.
+function rcCeremonyError(e) {
+  const n = e && e.name;
+  if (n === 'NotAllowedError' || n === 'AbortError') return 'cancelled';
+  if (n === 'NotSupportedError' || n === 'SecurityError') return 'no_authenticator';
+  if (n === 'InvalidStateError') return 'exists';
+  return 'failed';
+}
+
+// ── Sentences ──
+// The Approvals entry, when it cannot act: one sentence, nothing else.
+function rcApprovalsBlock(a) {
+  if (!a || a.level2 !== true) return 'Approving is turned off on your Mac.';
+  if (a.passkey !== true) return 'Approving needs Face ID: enable it from your Mac.';
+  if (a.rp_ok === false) return 'The tailnet name changed: enable Face ID again from your Mac.';
+  return '';
+}
+const RC_L2_REASON = {
+  level2_off: 'Approving is turned off on your Mac. Nothing was done.',
+  no_passkey: 'This device has no Face ID key for sbxw (or the tailnet name changed): enable Face ID from your Mac. Nothing was done.',
+  no_grant: 'The Mac has not allowed this device yet, or the permission expired. Start again.',
+  passkey: 'Face ID could not be checked by the Mac. Nothing was done.',
+  changed: 'This changed since you opened it: read it again.',
+  refused: 'The Mac refused it.',
+  not_found: 'This is not waiting any more. Nothing was done.',
+  unavailable: 'The Mac cannot read this right now (sbx did not answer). Try again in a moment.',
+  bad: 'The Mac could not read this request. Nothing was done.',
+  limited: 'Too many tries. Wait a few minutes, then start again.',
+};
+function rcL2Fail(res) {
+  if (!res || res.unreachable || res.status === 0) return 'sbxw is unreachable (is the Mac awake?). Nothing was done.';
+  const reason = res.data && typeof res.data.reason === 'string' && Object.hasOwn(RC_L2_REASON, res.data.reason) ? res.data.reason : null;
+  const err = res.data && typeof res.data.error === 'string' && res.data.error.trim() ? res.data.error.trim().slice(0, 300) : '';
+  if (reason === 'refused') return err ? `The Mac refused it: ${err}` : RC_L2_REASON.refused;
+  if (reason) return RC_L2_REASON[reason];
+  if (res.status === 429) return 'Too many failed tries. Wait a minute, then try again. Nothing was done.';
+  if (res.status === 404) return 'This is not waiting any more. Nothing was done.';
+  return `Nothing was done: the Mac answered ${res.status}${err ? ` (${err})` : ''}.`;
+}
+// The states of enabling Face ID on this device, each in a sentence.
+const RC_PASSKEY_TEXT = {
+  pending: 'In sbxw on your Mac, run "sbxw remote approvals allow" for this device and type these six digits.',
+  granted: 'Allowed on the Mac. Create the Face ID key now.',
+  refused: 'Refused on the Mac (or the number was typed wrong three times).',
+  expired: 'This request expired. Start again.',
+  registered: 'Face ID is ready on this device.',
+  no_authenticator: 'This device cannot create a passkey (no Face ID or Touch ID for this site).',
+  cancelled: 'Face ID was cancelled. Nothing was saved.',
+  exists: 'This device already has a passkey for sbxw.',
+  failed: 'The Face ID key could not be created. Start again.',
+  rejected: 'The Mac did not accept this Face ID key. Start again from the Mac.',
+  off: 'Approving is turned off on your Mac.',
+};
+
+// ── The actions ──
+const RC_KINDS = ['plan_approve', 'plan_refuse', 'merge', 'network_respond', 'sandbox_remove'];
+// The route of each action, the target encoded.
+function rcActPath(kind, target) {
+  const t = encodeURIComponent(String(target));
+  switch (kind) {
+    case 'plan_approve': return `/r/plans/${t}/approve`;
+    case 'plan_refuse': return `/r/plans/${t}/refuse`;
+    case 'merge': return `/r/merges/${t}/merge`;
+    case 'network_respond': return `/r/network/${t}/respond`;
+    case 'sandbox_remove': return `/r/stopped/${t}/remove`;
+    default: return null;
+  }
+}
+// One line: WHAT will happen, to WHAT, as plain text (rcActParts draws it).
+function rcActLine(kind, item, option) {
+  return rcActParts(kind, item, option).map(p => (typeof p === 'string' ? p : p.data)).join('');
+}
+// What was done, in the daemon's words.
+function rcActDone(kind, data) {
+  if (kind === 'merge') {
+    const m = data && typeof data.merge === 'object' && data.merge ? data.merge : null;
+    const results = Array.isArray(m?.results) ? m.results : [];
+    const failed = results.find(r => r && r.ok === false);
+    if (failed || m?.state === 'failed') {
+      const why = failed && typeof failed.error === 'string' ? failed.error : 'the merge stopped';
+      return `Stopped at ${String(failed?.thread ?? 'a branch')}: ${why}`;
+    }
+    const done = results.filter(r => r && r.ok).map(r => String(r.thread));
+    const notes = results.filter(r => r && r.ok && typeof r.note === 'string' && r.note).map(r => `${r.thread}: ${r.note}`);
+    return `Merged${done.length ? `: ${done.join(', ')}` : ''}.${notes.length ? ` ${notes.join(' ')}` : ''}`;
+  }
+  return { plan_approve: 'Plan approved: its threads are starting.', plan_refuse: 'Plan refused.', network_respond: 'Answered.', sandbox_remove: 'Sandbox removed.' }[kind] || 'Done.';
+}
+
+// The level-2 routes, on the same client rules (same origin, JSON, once).
+function rcL2Client(api) {
+  return {
+    approvals: () => api.get('/r/approvals'),
+    passkeyStart: () => api.post('/r/passkey/start', {}),
+    // The request_id of /r/passkey/start binds the ceremony (v1.1): sent on
+    // status, options and register; the caller keeps it in memory only.
+    passkeyStatus: rid => api.get(`/r/passkey/status?request_id=${encodeURIComponent(rid)}`),
+    passkeyOptions: rid => api.post('/r/passkey/options', { request_id: rid }),
+    passkeyRegister: (rid, body) => api.post('/r/passkey/register', { request_id: rid, ...body }),
+    list: what => api.get(`/r/${what}`),
+    detail: (what, id) => api.get(`/r/${what}/${encodeURIComponent(id)}`),
+    challenge: (kind, target, digest, option) => api.post('/r/approvals/challenge', option ? { kind, target, digest, option } : { kind, target, digest }),
+    act: (kind, target, assertion, option) => {
+      const path = rcActPath(kind, target);
+      if (!path) throw new Error('not an action');
+      return api.post(path, kind === 'network_respond' ? { option, assertion } : { assertion });
+    },
+  };
+}
+
+// ══ The Kanban (read only) ═══════════════════════════════════════════════
+// The contract is .sbxw-artifacts/remote/API-kanban.md. The page draws the
+// route's answer in the daemon's order and computes nothing: no counting,
+// no sorting, no moving. Every string is data, set as text.
+const RC_KB_COLS = ['planned', 'progress', 'test', 'ready', 'merged'];
+const RC_KB_TONES = ['neutral', 'blue', 'green', 'amber', 'red', 'purple', 'gray', 'grey'];
+const rcKbTone = t => (RC_KB_TONES.includes(t) ? (t === 'grey' ? 'gray' : t) : 'neutral');
+const rcStr = v => (typeof v === 'string' ? v : '');
+// A card, its fields checked; anything unexpected becomes empty.
+function rcKbCard(c) {
+  if (!c || typeof c !== 'object' || typeof c.key !== 'string' || !c.key) return null;
+  const n = Number.isInteger(c.n) && c.n > 0 ? c.n : null;
+  return {
+    key: c.key,
+    n,
+    num: rcStr(c.num) || (n ? `T-${n}` : 'thread'),
+    title: rcStr(c.title_long) || rcStr(c.title) || rcStr(c.title_short),
+    priority: ['p1', 'p2', 'p3'].includes(c.priority) ? c.priority : 'none',
+    thread: rcStr(c.thread) || null,
+    thread_state: rcStr(c.thread_state) || null,
+    thread_tone: rcKbTone(c.thread_tone),
+    marks: (Array.isArray(c.marks) ? c.marks : []).filter(m => m && typeof m.label === 'string' && m.label).map(m => ({ label: m.label, tone: rcKbTone(m.tone) })),
+    files: Math.max(0, Math.floor(Number(c.files)) || 0),
+    age: rcStr(c.age),
+  };
+}
+// The board: the five columns in the daemon's order, with what it says.
+function rcKbBoard(data) {
+  const cols = Array.isArray(data?.columns) ? data.columns : [];
+  return {
+    latest: rcStr(data?.latest),
+    summary: rcStr(data?.summary),
+    columns: cols.filter(c => c && typeof c.id === 'string' && c.id).map(c => {
+      const cards = (Array.isArray(c.cards) ? c.cards : []).map(rcKbCard).filter(Boolean);
+      return {
+        id: c.id,
+        title: rcStr(c.title) || c.id,
+        tone: rcKbTone(c.tone),
+        empty: rcStr(c.empty) || 'Nothing here.',
+        count: Number.isFinite(Number(c.count)) ? Math.max(0, Math.floor(Number(c.count))) : cards.length,
+        older: Math.max(0, Math.floor(Number(c.older)) || 0),
+        cards,
+      };
+    }),
+  };
+}
+// The column to open first: active things first (in progress, in test,
+// ready to merge), then planned, then merged; the first if all are empty.
+function rcKbFirst(board) {
+  const cols = board?.columns || [];
+  for (const id of ['progress', 'test', 'ready', 'planned', 'merged']) {
+    const c = cols.find(x => x.id === id);
+    if (c && c.cards.length) return c.id;
+  }
+  return cols[0]?.id || null;
+}
+// A ticket's detail, its fields checked.
+function rcKbTicket(data) {
+  const t = data?.ticket;
+  if (!t || typeof t !== 'object') return null;
+  return {
+    num: rcStr(t.num) || (Number.isInteger(t.n) ? `T-${t.n}` : ''),
+    title: rcStr(t.title),
+    description: rcStr(t.description),
+    priority: ['p1', 'p2', 'p3'].includes(t.priority) ? t.priority : 'none',
+    column: rcStr(t.column),
+    card: rcKbCard(t.card),
+    files: (Array.isArray(t.files) ? t.files : []).filter(f => f && typeof f.name === 'string').map(f => ({ name: f.name, size: Math.max(0, Number(f.size) || 0), kind: rcStr(f.kind) || 'other' })),
+    history: (Array.isArray(t.history) ? t.history : []).filter(h => h && typeof h.text === 'string').map(h => ({ when: rcStr(h.when), text: h.text, tone: rcKbTone(h.tone) })),
+  };
+}
+const RC_KB_PRIORITY = { p1: 'Priority 1', p2: 'Priority 2', p3: 'Priority 3', none: 'No priority' };
+const RC_KB_THREAD = { starting: 'starting', working: 'working', blocked: 'blocked', done: 'done', failed: 'failed' };
+function rcKbPaths(sandbox, n) {
+  const at = `/r/leaders/${encodeURIComponent(sandbox)}/kanban`;
+  if (n === undefined) return at;
+  return Number.isInteger(n) && n > 0 && n < 1e9 ? `${at}/T-${n}` : null;
+}
+
+// ══ Dictation by the phone's own speech recognition (optional) ═══════════
+// Off by default: the Mac transcribes (audio to /r/voice/transcribe only).
+// With "iPhone" chosen in the menu, the Web Speech API listens instead; the
+// voice may then be processed by Apple. The words still only go INTO the
+// field; nothing is sent.
+const RC_DICTATION = { mac: 'mac', iphone: 'iphone' };
+const RC_SPEECH_NOTE = 'iPhone dictation is done by Apple\'s speech recognition; your voice may be sent to Apple.';
+const RC_SPEECH_FALLBACK_TEXT = 'iPhone dictation is not available here. Using your Mac.';
+// Errors that mean "this browser cannot do it": the Mac takes over.
+const RC_SPEECH_FALLBACK = ['not-allowed', 'service-not-allowed', 'network', 'audio-capture'];
+function rcSpeechFallback(error) {
+  return RC_SPEECH_FALLBACK.includes(String(error || ''));
+}
+// The recognition language: the browser's, else the page's, else English.
+function rcSpeechLang(browser, page) {
+  const ok = s => typeof s === 'string' && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(s);
+  return ok(browser) ? browser : ok(page) ? page : 'en-US';
+}
+// Words put into the field at the caret, with a space on each side where
+// the text there needs one.
+function rcInsertAt(text, caret, words) {
+  const t = String(text ?? '');
+  const w = String(words ?? '').trim();
+  if (!w) return { value: t, caret: Math.min(Math.max(0, caret | 0), t.length) };
+  const at = Number.isInteger(caret) && caret >= 0 && caret <= t.length ? caret : t.length;
+  const before = t.slice(0, at), after = t.slice(at);
+  const lead = before && !/\s$/.test(before) ? ' ' : '';
+  const tail = after && !/^\s/.test(after) ? ' ' : '';
+  const value = `${before}${lead}${w}${tail}${after}`;
+  return { value, caret: before.length + lead.length + w.length };
+}
+// The final and the interim text of a SpeechRecognition result list.
+function rcSpeechText(results) {
+  let final = '', interim = '';
+  for (let i = 0; i < (results?.length || 0); i++) {
+    const r = results[i];
+    const t = r && r[0] && typeof r[0].transcript === 'string' ? r[0].transcript : '';
+    if (r && r.isFinal) final += ` ${t}`; else interim += ` ${t}`;
+  }
+  return { final: final.replace(/\s+/g, ' ').trim(), interim: interim.replace(/\s+/g, ' ').trim() };
+}
+
+// ══ Text that is not the page's own, made unambiguous ════════════════════
+// (Security review P6.) A name, a path, a goal or a ticket written by an
+// agent may carry bidirectional controls or invisible characters that
+// reorder or hide what the person reads before approving. They are never
+// honoured: each becomes a visible code ("U+202E") the page draws in a box,
+// and the page isolates every such string (dir="auto", unicode-bidi:
+// isolate) so one cannot reorder its neighbours. Line feeds and tabs stay.
+// Format characters (bidi controls and isolates, zero-width space and
+// joiners, BOM, soft hyphen, word joiner, tags...), line and paragraph
+// separators, C0 and C1 controls but tab and line feed, and the characters
+// that draw nothing (combining grapheme joiner, Hangul fillers, Mongolian
+// selectors, variation selectors, interlinear annotation).
+const RC_INVISIBLE = /[\p{Cf}\p{Zl}\p{Zp}\u0000-\u0008\u000B-\u001F\u007F-\u009F\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u3164\uFE00-\uFE0F\uFFA0\uFFF9-\uFFFB]/u;
+// → [string | { code: 'U+202E' }]
+function rcMarked(s) {
+  const out = [];
+  let run = '';
+  for (const ch of String(s ?? '')) {
+    if (RC_INVISIBLE.test(ch)) {
+      if (run) { out.push(run); run = ''; }
+      out.push({ code: `U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}` });
+    } else run += ch;
+  }
+  if (run) out.push(run);
+  return out;
+}
+// A sheet's one line as parts: the page's words as strings, the daemon's
+// data (names, hosts, labels, branches) as { data } to draw isolated, in
+// monospace, with the codes visible.
+function rcActParts(kind, item, option) {
+  const d = v => ({ data: String(v ?? '') });
+  switch (kind) {
+    case 'plan_approve': {
+      const n = Array.isArray(item?.threads) ? item.threads.length : 0;
+      return ['Approve the plan of ', d(item?.sandbox), ` as it is: it starts ${n === 1 ? '1 thread' : `${n} threads`}.`];
+    }
+    case 'plan_refuse': return ['Refuse the plan of ', d(item?.sandbox), ': no thread starts.'];
+    case 'merge': {
+      const n = Array.isArray(item?.branches) ? item.branches.length : 0;
+      const order = Array.isArray(item?.order) ? item.order : [];
+      const parts = [`Merge ${n === 1 ? '1 branch' : `${n} branches`} of `, d(item?.sandbox), ' in the order shown, stopping at the first conflict.'];
+      if (order.length) {
+        parts.push(' Order: ');
+        order.forEach((o, i) => { if (i) parts.push(', '); parts.push(d(o)); });
+        parts.push('.');
+      }
+      return parts;
+    }
+    case 'network_respond': return ['Answer ', d(option?.label ?? option?.id), ' to the request of ', d(item?.sandbox), ' for ', d(item?.host), '.'];
+    case 'sandbox_remove': return ['Remove the stopped sandbox ', d(item?.name), '. This cannot be undone.'];
+    default: return [];
+  }
 }

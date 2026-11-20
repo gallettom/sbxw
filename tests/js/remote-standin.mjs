@@ -9,9 +9,22 @@
 // {pair: [...states]} the next pair/status answers, {pairStart: 429} the
 // status of pair/start, {messageDelay: ms, messageReplies: [{status, body}]}
 // how the next messages are answered, {emit: {event, data}}
-// pushes one server-sent event, {leaders}, {history: {sandbox: page}}.
+// pushes one server-sent event, {leaders}, {history: {sandbox: page}},
+// {uploadReplies: [{status, body}]} how the next uploads are answered,
+// {uploadSlow: ms} a pause after each 64 KiB read (so progress shows),
+// {uploadHold: true} uploads wait until {uploadHold: false},
+// {transcribeDelay: ms} how long a transcription takes.
+// Level 2 (API-level2.md): {l2: {approvals: {...}}} the state GET /r/approvals
+// answers, {l2Digest: {plans|merges|network|stopped: hex}} a detail's new
+// digest (a challenge with the old one is "changed"), {l2Replies: {kind:
+// [{status, body}]}} how the next challenge or action is answered,
+// {pkStates: [...]} the next passkey/status answers, {l2Reset: true}.
+// Kanban (API-kanban.md): {kanban: {sandbox: board | null}} a board (null:
+// 404, the leader stopped), {tickets: {"sandbox/n": detail}}.
+// Uploads follow API.md 2.6.1: the raw body, an id of 32 hex back, no path.
 // Usage: node tests/js/remote-standin.mjs [port]
 import http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -59,7 +72,113 @@ export function startStandin(port = 0) {
     newer: { shop: fx.history.shop_newer },
     streams: new Set(),
     transcript: 'please also add an index on the customer id',
+    uploads: new Map(),  // id -> { sandbox, name, size }
+    uploadReplies: [],
+    uploadSlow: 0,
+    uploadHold: false,
+    transcribeDelay: 0,
+    l2: null,
+    kanban: { shop: fx.kanban.board, website: fx.kanban.empty },
+    tickets: { 'shop/12': fx.kanban.ticket },
+    holds: [],
   };
+  const l2Fresh = () => {
+    const L = structuredClone(fx.level2);
+    return {
+      approvals: L.approvals, L,
+      digest: { plans: L.plan.digest, merges: L.merge.digest, network: L.network_one.digest, stopped: L.stopped_one.digest },
+      replies: {}, pkStates: [], pk: 'none', rid: null, chal: null, done: [],
+    };
+  };
+  s.l2 = l2Fresh();
+  const B64U = /^[A-Za-z0-9_-]+$/;
+  const L2_ACT = /^\/r\/(plans|merges|network|stopped)\/([^/]+)\/(approve|refuse|merge|respond|remove)$/;
+  const L2_DETAIL = /^\/r\/(plans|merges|network|stopped)\/([^/]+)$/;
+  const KIND = { approve: 'plan_approve', refuse: 'plan_refuse', merge: 'merge', respond: 'network_respond', remove: 'sandbox_remove' };
+  const WHAT = { plan_approve: 'plans', plan_refuse: 'plans', merge: 'merges', network_respond: 'network', sandbox_remove: 'stopped' };
+  function level2(req, p, body, res) {
+    const L = s.l2.L;
+    const A = s.l2.approvals;
+    const off = () => send(res, 403, { ok: false, error: 'level 2 is off', reason: 'level2_off' });
+    if (p === '/r/approvals' && req.method === 'GET') return send(res, 200, A.level2 ? A : { level2: false, passkey: A.passkey, rp_ok: A.rp_ok, counts: null });
+    if (!A.level2) return off();
+    // v1.1: the ceremony is bound to the request_id of start; any other id
+    // is "none" / no_grant; status never says "registered".
+    const ridOk = id => typeof id === 'string' && id === s.l2.rid;
+    if (p === '/r/passkey/start') {
+      s.l2.pk = 'pending';
+      s.l2.rid = randomBytes(16).toString('hex');
+      return send(res, 200, { ...L.passkey_start, request_id: s.l2.rid, expires_ms: Date.now() + 300000 });
+    }
+    if (p === '/r/passkey/status') {
+      if (!ridOk(new URL(req.url, 'http://x').searchParams.get('request_id'))) return send(res, 200, { state: 'none', expires_ms: null });
+      if (s.l2.pkStates.length) s.l2.pk = s.l2.pkStates.shift();
+      return send(res, 200, { state: s.l2.pk, expires_ms: Date.now() + 200000 });
+    }
+    if (p === '/r/passkey/options') {
+      if (!ridOk(body?.request_id) || s.l2.pk !== 'granted') return send(res, 403, { ok: false, error: 'no grant', reason: 'no_grant' });
+      return send(res, 200, { ...L.passkey_options, expires_ms: Date.now() + 120000 });
+    }
+    if (p === '/r/passkey/register') {
+      const q = s.l2.replies.register?.shift();
+      if (q) { s.l2.pk = 'none'; return send(res, q.status, q.body); }
+      if (!ridOk(body?.request_id) || s.l2.pk !== 'granted') return send(res, 403, { ok: false, error: 'no grant', reason: 'no_grant' });
+      const ok = body && ['id', 'client_data_json', 'attestation_object'].every(k => typeof body[k] === 'string' && B64U.test(body[k])) && Object.keys(body).length === 4;
+      s.l2.pk = 'none';
+      if (!ok) return send(res, 403, { ok: false, error: 'passkey', reason: 'passkey' });
+      s.l2.pk = 'none';
+      s.l2.rid = null;
+      A.passkey = true;
+      A.rp_ok = true;
+      return send(res, 200, { ok: true });
+    }
+    if (p === '/r/plans') return send(res, 200, L.plans);
+    if (p === '/r/merges') return send(res, 200, L.merges);
+    if (p === '/r/network') {
+      const q = s.l2.replies.network?.shift();
+      return q ? send(res, q.status, q.body) : send(res, 200, L.network);
+    }
+    if (p === '/r/stopped') return send(res, 200, L.stopped);
+    if (p === '/r/approvals/challenge') {
+      if (!A.passkey || A.rp_ok === false) return send(res, 403, { ok: false, error: 'no passkey', reason: 'no_passkey' });
+      const q = s.l2.replies.challenge?.shift();
+      if (q) return send(res, q.status, q.body);
+      const what = WHAT[body?.kind];
+      if (!what) return send(res, 400, { ok: false, error: 'kind' });
+      if (body.digest !== s.l2.digest[what]) return send(res, 409, { ok: false, error: 'changed', reason: 'changed' });
+      s.l2.chal = { kind: body.kind, target: body.target, option: body.option || null };
+      return send(res, 200, { ...L.challenge, expires_ms: Date.now() + 60000 });
+    }
+    const act = L2_ACT.exec(p);
+    if (act && req.method === 'POST') {
+      const kind = KIND[act[3]];
+      const target = decodeURIComponent(act[2]);
+      const chal = s.l2.chal;
+      s.l2.chal = null; // taken, success or failure
+      const a = body?.assertion;
+      const shaped = a && ['id', 'client_data_json', 'authenticator_data', 'signature'].every(k => typeof a[k] === 'string' && B64U.test(a[k]));
+      if (!chal || chal.kind !== kind || chal.target !== target || (kind === 'network_respond' && chal.option !== body.option) || !shaped) {
+        return send(res, 403, { ok: false, error: 'passkey', reason: 'passkey' });
+      }
+      const q = s.l2.replies[kind]?.shift();
+      if (q) return send(res, q.status, q.body);
+      s.l2.done.push({ kind, target, option: body.option || null });
+      if (kind === 'merge') return send(res, 200, L.merge_done);
+      return send(res, 200, { ok: true });
+    }
+    const det = L2_DETAIL.exec(p);
+    if (det && req.method === 'GET') {
+      const what = det[1];
+      const one = { plans: L.plan, merges: L.merge, network: L.network_one, stopped: L.stopped_one }[what];
+      return send(res, 200, { ...one, digest: s.l2.digest[what] });
+    }
+    return null;
+  }
+  const UPLOAD = /^\/r\/leaders\/([^/]+)\/upload$/;
+  const UPLOAD_ID = /^\/r\/leaders\/([^/]+)\/upload\/([^/]+)$/;
+  // The daemon's name rule (upload_name): last component, [A-Za-z0-9._-],
+  // no leading dot, 120 at most, `upload` when nothing is left.
+  const cleanName = n => (String(n).split(/[\/\\]/).pop().replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '').slice(0, 120)) || 'upload';
   const send = (res, status, body, extra = {}) => {
     res.writeHead(status, { ...HEADERS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...extra });
     res.end(body === undefined ? '' : JSON.stringify(body));
@@ -70,7 +189,11 @@ export function startStandin(port = 0) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const chunks = [];
-    for await (const c of req) chunks.push(c);
+    const slow = req.method === 'POST' && UPLOAD.test(url.pathname) && s.uploadSlow;
+    for await (const c of req) {
+      chunks.push(c);
+      if (slow) { req.pause(); await new Promise(r => setTimeout(r, s.uploadSlow)); req.resume(); }
+    }
     const raw = Buffer.concat(chunks);
     if (url.pathname === '/__ctl') {
       const c = JSON.parse(raw.toString() || '{}');
@@ -85,6 +208,18 @@ export function startStandin(port = 0) {
       if ('messageDelay' in c) s.messageDelay = c.messageDelay;
       if (c.messageReplies) s.messageReplies = c.messageReplies;
       if (c.history) Object.assign(s.history, c.history);
+      if (c.uploadReplies) s.uploadReplies = c.uploadReplies;
+      if ('transcribeDelay' in c) s.transcribeDelay = c.transcribeDelay;
+      if (c.l2Reset || !s.l2) s.l2 = l2Fresh();
+      if (c.l2) Object.assign(s.l2.approvals, c.l2.approvals || {});
+      if (c.l2Digest) Object.assign(s.l2.digest, c.l2Digest);
+      if (c.l2Replies) Object.assign(s.l2.replies, c.l2Replies);
+      if (c.pkStates) s.l2.pkStates = c.pkStates;
+      if (c.kanban) Object.assign(s.kanban, c.kanban);
+      if (c.tickets) Object.assign(s.tickets, c.tickets);
+      if (c.kanbanReset) { s.kanban = { shop: fx.kanban.board, website: fx.kanban.empty }; s.tickets = { 'shop/12': fx.kanban.ticket }; }
+      if ('uploadSlow' in c) s.uploadSlow = c.uploadSlow;
+      if ('uploadHold' in c) { s.uploadHold = c.uploadHold; if (!c.uploadHold) s.holds.splice(0).forEach(r => r()); }
       if (c.emit) emit(c.emit.event, c.emit.data);
       if (c.reset) s.log.length = 0;
       return send(res, 200, { ok: true });
@@ -123,6 +258,14 @@ export function startStandin(port = 0) {
       req.on('close', () => s.streams.delete(res));
       return;
     }
+    const kb = /^\/r\/leaders\/([^/]+)\/kanban(?:\/(?:T-)?([0-9]{1,9}))?$/.exec(p);
+    if (kb && req.method === 'GET') {
+      const sb = decodeURIComponent(kb[1]);
+      if (!s.kanban[sb]) return send(res, 404, { error: 'not found' });
+      if (!kb[2]) return send(res, 200, s.kanban[sb]);
+      const t = s.tickets[`${sb}/${Number(kb[2])}`];
+      return t ? send(res, 200, t) : send(res, 404, { error: 'not found' });
+    }
     const m = /^\/r\/leaders\/([^/]+)\/(history|message|answer|interrupt)$/.exec(p);
     if (m) {
       const sb = decodeURIComponent(m[1]);
@@ -139,7 +282,33 @@ export function startStandin(port = 0) {
       }
       return send(res, 200, { ok: true, masked: 0 });
     }
-    if (p === '/r/voice/transcribe') return send(res, 200, { text: s.transcript, masked: 0 });
+    if (/^\/r\/(approvals|passkey|plans|merges|network|stopped)(\/|$)/.test(p)) {
+      if (level2(req, p, entry.body, res) !== null) return;
+    }
+    const up = UPLOAD.exec(p);
+    if (up && req.method === 'POST') {
+      if (s.uploadHold) await new Promise(r => s.holds.push(r));
+      if (ct !== 'application/octet-stream') return send(res, 415, { ok: false, error: 'not octet-stream', reason: 'kind' });
+      if (s.uploadReplies.length) {
+        const r = s.uploadReplies.shift();
+        // `raw`: a body that is not JSON (the sidecar's own error page).
+        if (r.raw !== undefined) { res.writeHead(r.status, { ...HEADERS, 'Content-Type': 'text/plain' }); return res.end(r.raw); }
+        return send(res, r.status, r.body);
+      }
+      if (!raw.length) return send(res, 400, { ok: false, error: 'empty', reason: 'empty' });
+      const id = randomBytes(16).toString('hex');
+      const name = cleanName(url.searchParams.get('name') || '');
+      s.uploads.set(id, { sandbox: decodeURIComponent(up[1]), name, size: raw.length });
+      return send(res, 200, { id, name, size: raw.length, expires_ms: Date.now() + 30 * 60000 });
+    }
+    const upId = UPLOAD_ID.exec(p);
+    if (upId && req.method === 'DELETE') {
+      return s.uploads.delete(decodeURIComponent(upId[2])) ? send(res, 200, { ok: true }) : send(res, 404, { ok: false, error: 'not found' });
+    }
+    if (p === '/r/voice/transcribe') {
+      await new Promise(r => setTimeout(r, s.transcribeDelay));
+      return send(res, 200, { text: s.transcript, masked: 0 });
+    }
     return send(res, 404, { ok: false, error: 'not found' });
   });
   return new Promise(resolve => server.listen(port, '127.0.0.1', () => {

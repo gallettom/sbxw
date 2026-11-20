@@ -25,26 +25,64 @@
      subset of remote-core.js. Nothing in this file is inline script or style:
      the page runs under default-src 'self'. -->
 <div id="unreachable" class="rc-banner" role="status" hidden>sbxw is unreachable (is the Mac awake?)</div>
+<!-- Another view of this device holds the live stream: one tap takes it back. -->
+<button id="elsewhere" class="rc-banner rc-banner-btn" type="button" hidden>This page is open elsewhere on this device. Tap to reconnect here.</button>
 
 <header id="bar" class="rc-bar">
   <button id="back" class="rc-icon-btn" type="button" aria-label="Back to the leaders" hidden>
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
   </button>
-  <img class="rc-mark" src="/icon-192.png" alt="" width="28" height="28">
+  <img id="mark" class="rc-mark" src="/icon-192.png" alt="" width="28" height="28">
   <div class="rc-title">
     <h1 id="title">sbxw</h1>
     <p id="subtitle" class="rc-sub"></p>
+    <span id="state" class="rc-pill" hidden></span>
   </div>
+  <button id="interrupt" class="rc-chip-btn rc-chip-danger" type="button" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+    <span>Interrupt</span>
+  </button>
+  <button id="approvals-btn" class="rc-icon-btn rc-ap-btn" type="button" aria-label="Approvals" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 5 6.2v5.3c0 4.3 2.9 7.6 7 9 4.1-1.4 7-4.7 7-9V6.2z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>
+    <span id="badge" class="rc-badge" hidden></span>
+  </button>
   <button id="menu-btn" class="rc-icon-btn" type="button" aria-label="Device menu" aria-haspopup="true" aria-expanded="false" hidden>
-    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18.5" cy="12" r="1.5"/></svg>
   </button>
 </header>
+
+<!-- Interrupt's second tap: one Escape into the leader's session, only from here. -->
+<div id="confirm" class="rc-confirm" role="alertdialog" aria-labelledby="confirm-text" hidden>
+  <p id="confirm-text" class="rc-confirm-text"></p>
+  <button id="interrupt-cancel" class="rc-btn rc-quiet" type="button">Cancel</button>
+  <button id="interrupt-go" class="rc-btn rc-danger-solid" type="button">Interrupt</button>
+</div>
 
 <div id="menu" class="rc-menu" role="menu" hidden>
   <p class="rc-menu-label">This device</p>
   <p id="menu-device" class="rc-menu-device"></p>
+  <p class="rc-menu-label" id="dict-label">Dictation</p>
+  <div id="dict" class="rc-seg" role="radiogroup" aria-labelledby="dict-label">
+    <button id="dict-mac" class="rc-seg-opt" type="button" role="radio" aria-checked="true" data-mode="mac">Mac (private)</button>
+    <button id="dict-iphone" class="rc-seg-opt" type="button" role="radio" aria-checked="false" data-mode="iphone">iPhone</button>
+  </div>
+  <p class="rc-menu-note">iPhone dictation is done by Apple's speech recognition; your voice may be sent to Apple.</p>
+  <p id="dict-lang" class="rc-menu-note" hidden></p>
   <button id="forget" class="rc-btn rc-danger" type="button" role="menuitem">Forget this device</button>
   <p class="rc-menu-note">Forgetting it means pairing again from the Mac.</p>
+</div>
+
+<!-- Level 2: every action opens this sheet first; nothing acts without it
+     and a successful Face ID. -->
+<div id="veil" class="rc-veil" hidden></div>
+<div id="sheet" class="rc-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+  <h2 id="sheet-title"></h2>
+  <p id="sheet-line" class="rc-sheet-line"></p>
+  <p id="sheet-status" class="rc-sheet-status" role="status" aria-live="polite"></p>
+  <div class="rc-sheet-row">
+    <button id="sheet-cancel" class="rc-btn rc-quiet" type="button">Cancel</button>
+    <button id="sheet-go" class="rc-btn rc-primary" type="button"></button>
+  </div>
 </div>
 
 <main id="screens">
@@ -87,28 +125,90 @@
     <p id="leaders-empty" class="rc-empty" hidden>No team leader is running</p>
   </section>
 
+  <!-- Approvals (level 2): what waits, in four lists. -->
+  <section id="s-approvals" class="rc-screen" hidden>
+    <p id="ap-done" class="rc-ap-done" role="status" hidden></p>
+    <div id="ap-block" class="rc-ap-block" hidden>
+      <p id="ap-block-text"></p>
+      <button id="ap-enable" class="rc-btn rc-primary" type="button" hidden>Enable Face ID on this device</button>
+    </div>
+    <div id="ap-lists" class="rc-ap-lists"></div>
+    <p id="ap-empty" class="rc-empty" hidden>Nothing waits for you</p>
+  </section>
+
+  <!-- One item: everything the decision is about, as text. -->
+  <section id="s-item" class="rc-screen" hidden>
+    <p id="item-status" class="rc-item-status" role="status" hidden></p>
+    <div id="item" class="rc-item"></div>
+    <div id="item-acts" class="rc-item-acts"></div>
+  </section>
+
+  <!-- Enabling Face ID on this device (API-level2.md section 4). -->
+  <section id="s-passkey" class="rc-screen rc-center" hidden>
+    <div class="rc-card">
+      <h2 id="pk-title">Enable Face ID</h2>
+      <p id="pk-check" class="rc-check" aria-live="polite" hidden></p>
+      <p id="pk-text" class="rc-muted"></p>
+      <button id="pk-go" class="rc-btn rc-primary" type="button" hidden>Create the Face ID key</button>
+      <button id="pk-again" class="rc-btn" type="button" hidden>Start again</button>
+    </div>
+  </section>
+
   <!-- A leader's conversation. -->
   <section id="s-chat" class="rc-screen rc-chat" hidden>
+    <!-- Conversation | Kanban: each keeps its place when switching back. -->
+    <div id="views" class="rc-views" role="tablist" aria-label="View">
+      <button id="v-chat" class="rc-view" type="button" role="tab" aria-selected="true" aria-controls="log">Conversation</button>
+      <button id="v-kanban" class="rc-view" type="button" role="tab" aria-selected="false" aria-controls="board">Kanban</button>
+    </div>
+    <!-- The leader's board, read only: drawn from the route's answer. -->
+    <div id="board" class="rc-board" hidden>
+      <div id="kb-pick" class="rc-kb-pick" role="tablist" aria-label="Columns"></div>
+      <p id="kb-status" class="rc-kb-status" role="status" hidden></p>
+      <div id="kb-lanes" class="rc-kb-lanes"></div>
+      <div id="kb-ticket" class="rc-kb-ticket" hidden></div>
+    </div>
     <div id="log" class="rc-log" aria-live="polite">
       <p id="log-top" class="rc-log-top"></p>
       <div id="rows"></div>
       <div id="tail"></div>
     </div>
-    <form id="composer" class="rc-composer" novalidate>
-      <p id="composer-note" class="rc-composer-note" role="status" hidden></p>
-      <p id="send-gate" class="rc-gate" role="status" hidden></p>
-      <div class="rc-compose-row">
-        <textarea id="field" class="rc-field" rows="1" maxlength="16000" placeholder="Message the leader" autocomplete="off" aria-label="Message"></textarea>
-        <button id="mic" class="rc-icon-btn rc-mic" type="button" aria-label="Dictate">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+    <form id="composer" class="rc-composer" data-rec="idle" novalidate>
+      <!-- Files chosen for the next message: chips, and the tick for a name
+           that looks like a secret. Names are set as text. -->
+      <div id="tray" class="rc-tray" hidden>
+        <div id="held" class="rc-held" hidden>
+          <p id="held-why" class="rc-held-why"></p>
+          <label class="rc-tick"><input id="tick" type="checkbox"><span>I have looked at these files and want to attach them</span></label>
+          <div class="rc-held-row">
+            <button id="held-cancel" class="rc-btn rc-quiet rc-small" type="button">Cancel</button>
+            <button id="held-go" class="rc-btn rc-primary rc-small" type="button">Attach</button>
+          </div>
+        </div>
+        <ul id="chips" class="rc-chips"></ul>
+      </div>
+      <div class="rc-box">
+        <button id="attach" class="rc-icon-btn rc-in" type="button" aria-label="Attach files">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5 12.1 19.4a5 5 0 0 1-7.1-7.1l8.2-8.2a3.3 3.3 0 0 1 4.7 4.7l-8.1 8.1a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/></svg>
         </button>
-        <button id="send" class="rc-btn rc-primary rc-send" type="button" aria-live="polite">Send</button>
+        <input id="file" class="rc-file" type="file" multiple tabindex="-1" aria-hidden="true">
+        <textarea id="field" class="rc-field" rows="1" maxlength="16000" placeholder="Message the leader" autocomplete="off" aria-label="Message"></textarea>
+        <div id="rec" class="rc-rec" hidden>
+          <span id="rec-dot" class="rc-rec-dot" aria-hidden="true"></span>
+          <canvas id="wave" class="rc-wave" aria-hidden="true"></canvas>
+          <p id="rec-words" class="rc-rec-words" aria-live="polite" hidden><span id="rec-final"></span> <span id="rec-interim" class="rc-interim"></span></p>
+          <span id="rec-time" class="rc-rec-time" role="timer" aria-label="Recording time">0:00</span>
+        </div>
+        <button id="mic" class="rc-icon-btn rc-in rc-mic" type="button" aria-label="Dictate">
+          <svg class="rc-i-mic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3.5" width="6" height="10.5" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v3.5"/></svg>
+          <svg class="rc-i-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="7.5" y="7.5" width="9" height="9" rx="2"/></svg>
+        </button>
+        <button id="send" class="rc-send" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6.5 11.5 12 6l5.5 5.5"/></svg>
+          <span id="send-label" class="rc-vh">Send</span>
+        </button>
       </div>
-      <div class="rc-compose-row rc-actions">
-        <button id="interrupt" class="rc-btn rc-interrupt" type="button">Interrupt</button>
-        <button id="interrupt-cancel" class="rc-btn rc-quiet" type="button" hidden>Cancel</button>
-        <span id="mic-note" class="rc-mic-note" role="status"></span>
-      </div>
+      <p id="status" class="rc-status" role="status" aria-live="polite"></p>
     </form>
   </section>
 </main>

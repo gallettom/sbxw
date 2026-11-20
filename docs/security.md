@@ -636,22 +636,93 @@ a standalone app named sbxw.
   on the `history` nudge of `/r/events`. A pending multiple-choice question is a card: pick
   an option, then "Send answer". A permission prompt or anything else the phone cannot
   settle says "This needs your Mac."
-- **Composer.** At the bottom on its own ground: a field that grows to a few lines, the
-  microphone, Send, and below them Interrupt, which asks "Interrupt <leader>?" and acts
-  only on a second tap. Enter is a new line: only Send sends. A message takes 1 to 4 s
-  (the daemon waits for the echo before the Return): Send reads "Sending…" and a second tap
-  does nothing. A message is typed only into an idle leader: while it works, Send is
-  disabled with "The leader is working: Send comes back at its prompt.", the text stays in
-  the field and nothing is queued; Interrupt stays available. A line starting with `!`, `/`
-  or `#`, a control character or an invisible one (zero-width space, soft hyphen...) is
-  warned about in place while typing; the daemon stays the judge. Each refusal reason has its own
-  sentence, with the daemon's words beside it as text; "not_submitted" says plainly that
-  the text waits unsent in the leader's input on the Mac, keeps it in the field, and
-  nothing is resent.
-- **Dictation.** Tap the microphone to record, tap again to stop (two minutes at most).
-  The audio is turned into 16 kHz samples on the phone, sent to `/r/voice/transcribe`, and
-  the text is put INTO the field for the person to read and correct. It never sends.
-  Without HTTPS, without a microphone or with the permission refused, the page says why.
+- **The bar.** In a conversation: back, the leader's name, its state as a small coloured
+  pill (idle, working, needs you), and, only while the leader works, Interrupt. Interrupt
+  opens a strip under the bar, "Interrupt <leader>?", with Cancel and Interrupt: only that
+  second button sends the Escape, and the strip closes by itself after 6 s.
+- **Composer.** One object at the bottom, on a ground that runs to the screen's edge with
+  its controls above the home indicator: attach, a field that grows to a few lines, the
+  microphone and a round Send, with one status line under them for every hint, wait and
+  refusal. Enter is a new line: only Send sends. A message takes 1 to 4 s (the daemon waits
+  for the echo before the Return): Send is busy and a second tap does nothing. A message is
+  typed only into an idle leader: while it works, Send is disabled with "The leader is
+  working: Send comes back at its prompt.", the text and files stay and nothing is queued.
+  A line starting with `!`, `/` or `#`, a control character or an invisible one
+  (zero-width space, soft hyphen...) is warned about in place while typing; the daemon stays
+  the judge. Each refusal reason has its own sentence, with the daemon's words beside it as
+  text; "not_submitted" says plainly that the text waits unsent in the leader's input on the
+  Mac, keeps it in the field, and nothing is resent.
+- **Files.** Attach opens the system picker (on an iPhone: Photo Library, Take Photo,
+  Choose Files). Before any byte is sent the page refuses an empty file, a file over 25 MiB,
+  a sixth file and more than 60 MiB together (API.md 2.6.1; the daemon checks again), and
+  holds back a name that looks like a secret (`.env*`, `*.pem`, `id_rsa*`..., the web
+  chat's list, kept equal to it by a test) until the person ticks "I have looked at these
+  files and want to attach them" and taps Attach. Each file is a chip above the field: its
+  name (as text), size, a progress bar, a remove cross, and on a refusal its reason and a
+  Retry. Files go up one at a time, as the raw body of `POST /r/leaders/:sandbox/upload`;
+  the daemon answers an id and its own name, never a path. Send waits while a file uploads;
+  a failed one blocks nothing. Send carries `{text, attachments: [ids]}` (the text may be
+  empty when files go): the daemon builds the paths and the "Attached files" block itself.
+  A removed file is dropped on the Mac too (`DELETE .../upload/:id`). The page reads no
+  file's content and shows no preview.
+- **Dictation.** Tap the microphone to record (two minutes at most): the field gives its
+  place to a live wave drawn on a canvas from an AnalyserNode on the same stream (levels
+  only, flat when silent), a running time and a stop button. With reduced motion the wave is
+  a plain level meter; without an analyser, a steady pulse, and recording goes on. On stop:
+  "Transcribing on your Mac…", then the audio is turned into 16 kHz samples on the phone,
+  sent to `/r/voice/transcribe`, and the text is put INTO the field for the person to read
+  and correct. It never sends. The AudioContexts close and the microphone's tracks stop at
+  every end; when the page is hidden the recording stops and nothing is sent. Without HTTPS,
+  without a microphone or with the permission refused, the page says why.
+- **iPhone dictation (optional).** The menu's "Dictation: Mac (private) | iPhone", Mac by
+  default, with the line "iPhone dictation is done by Apple's speech recognition; your voice
+  may be sent to Apple." With iPhone chosen, the microphone uses the browser's Web Speech
+  API (in the browser's language, shown in the menu): the page opens no audio stream of its
+  own, so no wave, a steady dot and the time; the words appear as they come (interim ones
+  lighter) and the final ones go into the field at the caret. It never sends, and the
+  typing checks run on the words. A missing API, a start that throws, or a refusal before
+  any word (not-allowed, service-not-allowed, network, audio-capture) says "iPhone
+  dictation is not available here. Using your Mac." and records through the Mac. With Mac
+  chosen nothing changes: audio goes only to `/r/voice/transcribe`.
+- **Kanban.** Under a leader's bar, "Conversation | Kanban" switches views; each keeps its
+  place (the conversation's scroll, the board's column, scrolls and open ticket). The board
+  is `GET /r/leaders/:sandbox/kanban` drawn as it comes, in the daemon's order: on a phone
+  one column at a time, picked from pills with their counts or by a swipe (In progress
+  first when it has cards), from 700 px all five side by side. A card shows its number,
+  its title (two lines at most), its marks, its thread with a status dot and its age. A
+  tap opens the ticket (`.../kanban/T-<n>`; a thread's own card has no ticket and calls no
+  route): title, description with its line breaks, priority, column, thread, history, and
+  files as plain rows (name, size; "Files open on your Mac": no preview, no download, no
+  link). The `kanban` event re-reads the board, debounced and only when its hash moved.
+  Read only: no control adds, moves, edits or deletes. A stopped leader: "This leader is
+  no longer running."
+- **Approvals (level 2).** A shield in the bar, with a badge from the `approvals` event
+  (numbers only), opens four lists: plans to approve, merges proposed, network requests,
+  stopped sandboxes. Off at the Mac: "Approving is turned off on your Mac.", nothing else.
+  No passkey on this device: the lists, read only, and "Enable Face ID on this device",
+  which shows six digits to type at the Mac, waits for the grant, then creates the passkey
+  on a tap (`navigator.credentials.create`, user verification required, attestation none).
+  The ceremony's `request_id` lives in memory only and goes with each step. It survives the
+  page being hidden (a phone that locks while the person types the digits at the Mac: the
+  page looks once on return and carries on), and goes when the ceremony ends, the Face ID
+  screen is left or the page is unloaded; a lost or replaced request says "Start again".
+  Whether Face ID is set up is read from `GET /r/approvals`. An approval's challenge and
+  assertion still go as soon as the sheet closes or the page hides.
+  A detail shows its item as text (a plan's threads with long goals folded, a merge's
+  branches with tips, commits and files as numbers and paths and never a diff, a network
+  request with only the options the daemon lists and "Allowing this needs your Mac", a
+  stopped sandbox with the daemon's own confirmation sentences). Every decision opens a
+  sheet that says in one line what will happen to what; only its button asks the Mac for a
+  challenge bound to the item's digest, runs `navigator.credentials.get` (user
+  verification required, this device's credential only) and posts the assertion. Refuse
+  and Remove are red. "changed" closes the sheet and reads the item again ("This changed
+  since you opened it: read it again."); a cancelled Face ID and every refusal say that
+  nothing was done. Closing the sheet or hiding the page drops the challenge and aborts the
+  prompt. The page keeps no credential id, challenge or assertion. A tool permission
+  prompt stays on the Mac.
+- **Open elsewhere.** When a newer view of this device takes the live stream (`bye`
+  "too_many"), the page says "This page is open elsewhere on this device." and reconnects
+  only on a tap.
 - **Unreachable.** When sbxw does not answer: "sbxw is unreachable (is the Mac awake?)".
   The text being typed stays in the field. Nothing is queued: a message that did not go is
   reported, and the person presses Send again when sbxw is back.
@@ -660,8 +731,9 @@ a standalone app named sbxw.
 
 #### What the page keeps
 
-Only the device name, in `localStorage` under `sbxw-remote-prefs`, to prefill pairing. No
-message, answer, transcription or conversation is stored on the phone (no
+Only two UI preferences, in `localStorage` under `sbxw-remote-prefs`: the device name, to
+prefill pairing, and the dictation mode when it is iPhone. No
+message, answer, transcription, audio, file name or conversation is stored on the phone (no
 `sessionStorage`, IndexedDB, Cache API or service worker), and nothing is written to the
 console. The device token is an HttpOnly cookie the page never sees.
 

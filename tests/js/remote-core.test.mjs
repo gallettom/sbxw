@@ -15,8 +15,13 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcWithDictation', 'chatMarkdown'];
-const ctx = { URLSearchParams };
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcWithDictation', 'chatMarkdown',
+  'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
+  'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
+  'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
+  'rcL2Fail', 'RC_L2_REASON', 'rcActPath', 'rcActLine', 'rcActDone', 'rcL2Client',
+  'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback', 'rcMarked', 'rcActParts'];
+const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
 // Values made in the vm's realm compare by shape, not by prototype.
@@ -205,6 +210,11 @@ test('each action calls its route once, same origin, JSON, no credential in the 
   await api.logout();
   await api.me();
   await api.transcribe(new Float32Array(4));
+  await api.message('shop', '', ['0123456789abcdef0123456789abcdef']);
+  await api.dropUpload('shop', '0123456789abcdef0123456789abcdef');
+  assert.deepEqual(calls.slice(-2).map(c => `${c.method} ${c.path}`), ['POST /r/leaders/shop/message', 'DELETE /r/leaders/shop/upload/0123456789abcdef0123456789abcdef']);
+  assert.deepEqual(JSON.parse(calls.at(-2).body), { text: '', attachments: ['0123456789abcdef0123456789abcdef'] }, 'ids only, never a path');
+  calls.splice(-2);
   assert.deepEqual(calls.map(c => `${c.method} ${c.path}`), [
     'POST /r/leaders/shop/message',
     'POST /r/leaders/shop/answer',
@@ -289,6 +299,8 @@ test('each refusal reason has its own sentence, with the daemon\'s words as text
     busy: [409, /The leader is working\. A message can be sent once it is back at its prompt/],
     no_paste: [409, /Send it from your Mac/],
     not_submitted: [409, /NOT SENT: the text was typed into the leader's input on the Mac but not submitted/],
+    attachment: [400, /a file of this message is no longer on the Mac.*choose it again/],
+    too_many: [400, /a message takes 5 files at most/],
   };
   for (const [reason, [status, words]] of Object.entries(want)) {
     const s = rc.rcFailText('Message', r(status, reason));
@@ -316,4 +328,348 @@ test('Send waits while the leader works, and only then', () => {
   assert.match(rc.rcSendGate({ state: 'working' }), /The leader is working/);
   assert.match(rc.rcSendGate(null), /not running/);
   for (const l of [{ state: 'idle' }, { state: 'attention', asks: true }]) assert.equal(rc.rcSendGate(l), '');
+});
+
+// ── Files (API.md 2.6.1) ──
+const chatOnly = n => fnSource(chatSrc, n);
+test('the attach rules equal their source in assets/js/chat-core.js', () => {
+  for (const name of ['chatSecretName', 'chatSize', 'chatShortName', 'chatUploadName']) {
+    assert.equal(fnSource(coreSrc, name), chatOnly(name), `${name} drifted: copy it again from chat-core.js`);
+  }
+  const list = src => /const CHAT_SECRET_NAMES = (\[[^\]]*\]);/.exec(src)[1];
+  assert.equal(list(coreSrc), list(chatSrc), 'the secret-looking names drifted: copy the list again');
+});
+const F = (name, size) => ({ name, size });
+test('the checks before any byte: empty, size, count, total, secret-looking names', () => {
+  const MB = 1024 * 1024;
+  const r = rc.rcCheckAttach(0, [F('a.png', 10), F('empty.txt', 0), F('big.mov', 26 * MB), F('.env.local', 5), F('key.PEM', 9)]);
+  assert.deepEqual(plain(r.take.map(f => f.name)), ['a.png', '.env.local', 'key.PEM']);
+  assert.deepEqual(plain(r.refused), [{ name: 'empty.txt', why: 'the file is empty' }, { name: 'big.mov', why: 'over 25 MB, the most one file takes' }]);
+  assert.equal(r.ask.length, 2);
+  assert.match(r.ask[0], /^\.env\.local: its name looks like a secret/);
+  // Five at most, with what is already held.
+  const five = rc.rcCheckAttach(3, [F('1', 1), F('2', 1), F('3', 1)]);
+  assert.equal(five.take.length, 2);
+  assert.match(five.refused[0].why, /5 files at most/);
+  // 60 MB together.
+  const total = rc.rcCheckAttach(0, [F('a', 24 * MB), F('b', 24 * MB), F('c', 24 * MB)]);
+  assert.equal(total.take.length, 2);
+  assert.match(total.refused[0].why, /60 MB together/);
+  assert.equal(rc.rcCheckAttach(1, [F('d', 30 * MB)], 40 * MB).refused.length, 1);
+  for (const n of ['.env', 'id_rsa.pub', 'credentials.json', '.netrc', 'x.kdbx', 'y.p12']) assert.ok(rc.chatSecretName(n), n);
+  for (const n of ['photo.jpg', 'environment.md', 'notes.txt']) assert.ok(!rc.chatSecretName(n), n);
+  assert.equal(rc.rcCheckAttach(0, [null, 3, 'x']).take.length, 0, 'not a file: ignored');
+});
+
+test('each upload refusal has its own sentence', () => {
+  const r = (status, reason) => ({ ok: false, status, data: { ok: false, reason, error: '<b>x</b>' } });
+  const want = { too_large: [413, /25 MB at most/], too_many: [409, /5 at most, 60 MB together/], empty: [400, /empty/], kind: [400, /Programs and archives/],
+    name: [400, /could not read this file's name/], busy: [409, /Another upload from this phone/], timeout: [408, /^The connection was too slow for this file\./] };
+  for (const [reason, [status, words]] of Object.entries(want)) assert.match(rc.rcUploadFail(r(status, reason)), words, reason);
+  assert.deepEqual(Object.keys(rc.RC_UPLOAD_REASON).sort(), Object.keys(want).sort());
+  // A body cut on a slow link: no answer, the sidecar's error (no JSON), the daemon's 400.
+  const SLOW = 'The connection was too slow for this file. Try again on a better connection, or send a smaller file.';
+  assert.equal(rc.rcUploadFail({ ok: false, status: 0, unreachable: true, data: null }), SLOW);
+  assert.equal(rc.rcUploadFail({ ok: false, status: 502, unreachable: true, data: null }), SLOW);
+  assert.equal(rc.rcUploadFail({ ok: false, status: 500, data: null }), SLOW);
+  assert.equal(rc.rcUploadFail({ ok: false, status: 400, data: { ok: false, error: 'the upload was cut off' } }), SLOW);
+  assert.equal(rc.rcUploadFail(null), SLOW);
+  assert.match(rc.rcUploadFail(r(413, 'nope')), /25 MB at most/);
+  assert.match(rc.rcUploadFail(r(429)), /too many uploads/);
+  assert.match(rc.rcUploadFail(r(500, '__proto__')), /^Not uploaded: the Mac answered 500\.$/);
+  // The answer: an id of 32 hex, never a path; anything else is no upload.
+  assert.deepEqual(plain(rc.rcUploadDone({ id: '0123456789abcdef0123456789abcdef', name: 'photo.jpg', size: 3, path: '/tmp/x' })), { id: '0123456789abcdef0123456789abcdef', name: 'photo.jpg', size: 3 });
+  for (const d of [null, {}, { id: '../../etc' }, { id: 7 }, { id: '0123456789ABCDEF0123456789ABCDEF' }, { id: '/tmp/sbxw-uploads/1/a' }]) assert.equal(rc.rcUploadDone(d), null, JSON.stringify(d));
+});
+
+function fakeXhr(reply) {
+  const made = [];
+  class X {
+    constructor() { this.headers = {}; this.upload = {}; made.push(this); }
+    open(m, u) { this.method = m; this.url = u; }
+    setRequestHeader(k, v) { this.headers[k] = v; }
+    abort() { this.aborted = true; this.onabort?.(); }
+    send(body) {
+      this.body = body;
+      if (reply === 'hang') return;
+      queueMicrotask(() => {
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 2 });
+        if (reply === 'error') return this.onerror();
+        this.status = reply.status;
+        this.responseText = JSON.stringify(reply.body);
+        this.onload();
+      });
+    }
+  }
+  return { X, made };
+}
+test('an upload: the raw file, same origin, the name encoded, progress, no path', async () => {
+  const { X, made } = fakeXhr({ status: 200, body: { id: '0123456789abcdef0123456789abcdef', name: 'a_b.png', size: 2 } });
+  const seen = [];
+  const file = { name: '../../a b<img>.png', size: 2 };
+  const res = await rc.rcUploadXhr(X, 'my shop', file, p => seen.push(p));
+  assert.equal(made[0].method, 'POST');
+  assert.equal(made[0].url, '/r/leaders/my%20shop/upload?name=a%20b%3Cimg%3E.png', 'the last component only, encoded');
+  assert.equal(made[0].headers['Content-Type'], 'application/octet-stream');
+  assert.equal(made[0].body, file, 'the file itself is the body; its content is never read');
+  assert.deepEqual(seen, [0.5]);
+  assert.equal(res.ok, true);
+  for (const name of ['\u202egnp.exe', 'x\u0000y\nz', 'a'.repeat(300) + '.jpeg', '..', 'C:\\Users\\me\\secret.txt']) {
+    const { X: X2, made: m2 } = fakeXhr({ status: 200, body: {} });
+    await rc.rcUploadXhr(X2, 's', { name, size: 1 }, () => {});
+    const q = new URL(m2[0].url, 'https://x.example').searchParams.get('name');
+    assert.doesNotMatch(q, /[\u0000-\u001f\/\\]/, JSON.stringify(name));
+    assert.ok(q.length <= 100, 'kept short');
+  }
+  const { X: X3 } = fakeXhr('error');
+  assert.equal((await rc.rcUploadXhr(X3, 's', file, () => {})).unreachable, true);
+});
+
+test('the tray: one upload at a time, the tick, failure and retry, remove, the ids', async () => {
+  const ID = n => String(n).padStart(32, '0');
+  const answers = [];
+  let n = 0;
+  const started = [];
+  const dropped = [];
+  const upload = (file, onProgress) => {
+    started.push(file.name);
+    return new Promise(r => answers.push(v => { onProgress(1); r(v); }));
+  };
+  const t = rc.rcTray({ upload, drop: id => dropped.push(id) });
+  const flush = () => new Promise(r => setTimeout(r, 0));
+  t.offer([F('a.png', 1), F('b.pdf', 2), F('empty', 0)]);
+  await flush();
+  assert.match(t.note, /^Not attached: empty \(the file is empty\)\.$/);
+  assert.deepEqual(plain(started), ['a.png'], 'one at a time');
+  assert.equal(t.pending(), 2);
+  answers.shift()({ ok: true, status: 200, data: { id: ID(++n), name: 'a.png', size: 1 } });
+  await flush(); await flush();
+  assert.deepEqual(plain(started), ['a.png', 'b.pdf']);
+  answers.shift()({ ok: false, status: 400, data: { reason: 'kind' } });
+  await flush(); await flush();
+  assert.equal(t.failed(), 1);
+  assert.match(t.chips[1].error, /Programs and archives/);
+  assert.deepEqual(plain(t.ids()), [ID(1)], 'a failed file is not sent, and blocks nothing');
+  t.retry(t.chips[1].key);
+  await flush();
+  answers.shift()({ ok: true, status: 200, data: { id: ID(++n), name: 'b.pdf', size: 2 } });
+  await flush(); await flush();
+  assert.deepEqual(plain(t.ids()), [ID(1), ID(2)]);
+  // A secret-looking name waits for the tick: nothing is uploaded before.
+  t.offer([F('.env', 4)]);
+  assert.ok(t.held);
+  assert.equal(started.length, 3);
+  assert.equal(t.confirmHeld(false), false);
+  assert.match(t.note, /^Tick "I have looked at these files and want to attach them" first/);
+  assert.equal(started.length, 3);
+  assert.equal(t.confirmHeld(true), true);
+  await flush();
+  assert.equal(started.at(-1), '.env');
+  // Removing an uploading file aborts it; removing a done one tells the Mac.
+  t.remove(t.chips.at(-1).key);
+  t.remove(t.chips[0].key);
+  assert.deepEqual(plain(dropped), [ID(1)]);
+  assert.deepEqual(plain(t.ids()), [ID(2)]);
+  t.sent([ID(2)]);
+  assert.equal(t.chips.length, 0);
+  // A message's worth: five waiting at most.
+  t.offer([1, 2, 3, 4, 5, 6].map(i => F(`f${i}`, 1)));
+  assert.equal(t.chips.length, 5);
+  assert.match(t.note, /f6 \(a message takes 5 files at most\)/);
+  t.clear();
+  assert.equal(t.chips.length, 0);
+});
+
+test('the status line: one sentence, the most urgent first', () => {
+  const s = o => plain(rc.rcStatus(o));
+  assert.deepEqual(s({}), { text: '', tone: 'info' });
+  assert.deepEqual(s({ hint: 'Added to the field: read it, then Send.' }), { text: 'Added to the field: read it, then Send.', tone: 'info' });
+  assert.deepEqual(s({ gate: 'The leader is working: Send comes back at its prompt.', hint: 'x' }), { text: 'The leader is working: Send comes back at its prompt.', tone: 'info' });
+  assert.equal(s({ gate: 'The leader is working: Send comes back at its prompt.', files: 2 }).text, 'The leader is working: Send comes back at its prompt. Your files wait here.');
+  assert.deepEqual(s({ pending: 2, gate: 'g' }), { text: 'Uploading 2 files: Send waits until they are done.', tone: 'busy' });
+  assert.equal(s({ pending: 1 }).text, 'Uploading 1 file: Send waits until it is done.');
+  assert.match(s({ held: 1, pending: 1 }).text, /^Tick the box/);
+  assert.equal(s({ failed: 1 }).text, 'An upload failed: retry or remove. The rest can be sent.');
+  assert.match(s({ rec: 'recording', held: 1 }).text, /^Recording\. .*nothing is sent\.$/);
+  assert.equal(s({ rec: 'transcribing' }).text, 'Transcribing on your Mac…');
+  // The last action's outcome wins over everything.
+  const busy = rc.rcFailText('Message', { ok: false, status: 409, data: { reason: 'busy' } });
+  assert.deepEqual(s({ note: { text: busy, tone: 'err' }, rec: 'recording', pending: 1 }), { text: busy, tone: 'err' });
+  for (const reason of Object.keys(rc.RC_MSG_REASON)) {
+    const text = rc.rcFailText('Message', { ok: false, status: 409, data: { reason } });
+    assert.equal(s({ note: { text, tone: 'err' } }).text, rc.RC_MSG_REASON[reason], reason);
+  }
+});
+
+test('the recorder: a level from samples, a clock, a wave that degrades', () => {
+  const frame = f => Uint8Array.from({ length: 512 }, (_, i) => f(i));
+  assert.equal(rc.rcLevel(frame(() => 128)), 0, 'silence is flat');
+  assert.equal(rc.rcLevel(frame(i => 128 + (i % 2 ? 1 : 0))), 0, 'noise floor is flat');
+  const quiet = rc.rcLevel(frame(i => 128 + Math.round(10 * Math.sin(i / 5))));
+  const loud = rc.rcLevel(frame(i => 128 + Math.round(90 * Math.sin(i / 5))));
+  assert.ok(quiet > 0 && loud > quiet && loud <= 1, `${quiet} ${loud}`);
+  assert.equal(rc.rcLevel(frame(i => (i % 2 ? 255 : 0))), 1);
+  assert.equal(rc.rcLevel(null), 0);
+  assert.deepEqual([0, 7, 59.9, 60, 102, -3, 'x'].map(rc.rcClock), ['0:00', '0:07', '0:59', '1:00', '1:42', '0:00', '0:00']);
+  assert.equal(rc.rcWaveMode(true, false), 'bars');
+  assert.equal(rc.rcWaveMode(true, true), 'meter');
+  assert.equal(rc.rcWaveMode(false, false), 'pulse');
+  assert.equal(rc.rcWaveMode(false, true), 'pulse');
+});
+
+// ── Level 2 (API-level2.md) ──
+test('base64url without padding, strict both ways', () => {
+  for (let n = 0; n < 40; n++) {
+    const b = Uint8Array.from({ length: n }, (_, i) => (i * 37 + n) & 255);
+    const e = rc.rcB64u(b);
+    assert.equal(e, Buffer.from(b).toString('base64url'), `length ${n}`);
+    assert.deepEqual([...rc.rcFromB64u(e)], [...b]);
+  }
+  assert.equal(rc.rcB64u(new Uint8Array([251, 255]).buffer), '-_8');
+  for (const bad of ['a', 'ab==', 'a+b/', 'ab cd', 'é', 7, null, 'abcde']) assert.equal(rc.rcFromB64u(bad), null, JSON.stringify(bad));
+});
+test('ceremony options: only the contract\'s fields, user verification always required', () => {
+  const fx2 = fx.level2;
+  const c = rc.rcCreateOptions({ ...fx2.passkey_options.public_key, authenticatorSelection: { userVerification: 'discouraged' }, attestation: 'direct', extensions: { x: 1 } });
+  assert.equal(c.authenticatorSelection.userVerification, 'required');
+  assert.equal(c.attestation, 'none');
+  assert.equal(c.extensions, undefined);
+  assert.deepEqual([...c.challenge], [...Array(32).keys()]);
+  assert.deepEqual(plain(c.pubKeyCredParams), [{ type: 'public-key', alg: -7 }]);
+  for (const bad of [null, {}, { ...fx2.passkey_options.public_key, challenge: 'ab==' }, { ...fx2.passkey_options.public_key, pubKeyCredParams: [{ type: 'public-key', alg: -257 }] }, { ...fx2.passkey_options.public_key, rp: {} }]) {
+    assert.equal(rc.rcCreateOptions(bad), null);
+  }
+  const g = rc.rcGetOptions({ ...fx2.challenge.public_key, userVerification: 'preferred' });
+  assert.equal(g.userVerification, 'required');
+  assert.equal(g.allowCredentials.length, 1);
+  assert.equal(rc.rcGetOptions({ ...fx2.challenge.public_key, allowCredentials: [] }), null, 'never "any passkey"');
+  assert.equal(rc.rcGetOptions({ ...fx2.challenge.public_key, challenge: 'AA' }), null, 'a short challenge');
+  // The browser's answers: exact shapes, else nothing is sent.
+  const B = t => new TextEncoder().encode(t).buffer;
+  assert.deepEqual(plain(rc.rcAssertionBody({ type: 'public-key', rawId: B('id'), response: { clientDataJSON: B('c'), authenticatorData: B('a'), signature: B('s'), userHandle: B('u') } })),
+    { id: 'aWQ', client_data_json: 'Yw', authenticator_data: 'YQ', signature: 'cw' });
+  for (const bad of [null, {}, { type: 'x', rawId: B('i'), response: {} }, { type: 'public-key', rawId: 'id', response: { clientDataJSON: B('c'), authenticatorData: B('a'), signature: B('s') } }, { type: 'public-key', rawId: B('i'), response: { clientDataJSON: B('c'), authenticatorData: B('a') } }]) {
+    assert.equal(rc.rcAssertionBody(bad), null);
+  }
+  assert.equal(rc.rcRegistrationBody({ type: 'public-key', rawId: B('i'), response: { clientDataJSON: B('c') } }), null);
+  assert.equal(rc.rcCeremonyError({ name: 'NotAllowedError' }), 'cancelled');
+  assert.equal(rc.rcCeremonyError({ name: 'AbortError' }), 'cancelled');
+  assert.equal(rc.rcCeremonyError({ name: 'NotSupportedError' }), 'no_authenticator');
+  assert.equal(rc.rcCeremonyError(new Error('x')), 'failed');
+});
+test('level 2: the entry\'s sentence, each refusal, the routes, the sheet\'s line, the result', async () => {
+  assert.equal(rc.rcApprovalsBlock(null), 'Approving is turned off on your Mac.');
+  assert.equal(rc.rcApprovalsBlock({ level2: false }), 'Approving is turned off on your Mac.');
+  assert.equal(rc.rcApprovalsBlock({ level2: true, passkey: false }), 'Approving needs Face ID: enable it from your Mac.');
+  assert.match(rc.rcApprovalsBlock({ level2: true, passkey: true, rp_ok: false }), /tailnet name changed/);
+  assert.equal(rc.rcApprovalsBlock({ level2: true, passkey: true, rp_ok: true }), '');
+  const r = (status, reason, error) => ({ ok: false, status, data: { ok: false, reason, error } });
+  assert.equal(rc.rcL2Fail(r(409, 'changed')), 'This changed since you opened it: read it again.');
+  assert.match(rc.rcL2Fail(r(409, 'refused', 'a <b>conflict</b>')), /^The Mac refused it: a <b>conflict<\/b>$/);
+  for (const k of ['level2_off', 'no_passkey', 'passkey', 'no_grant', 'not_found', 'unavailable', 'bad', 'limited']) assert.equal(rc.rcL2Fail(r(403, k)), rc.RC_L2_REASON[k]);
+  assert.deepEqual(Object.keys(rc.RC_L2_REASON).sort(), ['bad', 'changed', 'level2_off', 'limited', 'no_grant', 'no_passkey', 'not_found', 'passkey', 'refused', 'unavailable']);
+  assert.match(rc.rcL2Fail(r(429)), /Too many failed tries/);
+  assert.match(rc.rcL2Fail({ ok: false, status: 0, unreachable: true }), /unreachable/);
+  assert.match(rc.rcL2Fail(r(500, '__proto__')), /^Nothing was done: the Mac answered 500/);
+  assert.equal(rc.rcActPath('plan_approve', 'p-1'), '/r/plans/p-1/approve');
+  assert.equal(rc.rcActPath('network_respond', 'network:a/b'), '/r/network/network%3Aa%2Fb/respond');
+  assert.equal(rc.rcActPath('sandbox_remove', '../x'), '/r/stopped/..%2Fx/remove');
+  assert.equal(rc.rcActPath('shutdown', 'x'), null);
+  assert.equal(rc.rcActLine('sandbox_remove', { name: 'old' }), 'Remove the stopped sandbox old. This cannot be undone.');
+  assert.equal(rc.rcActLine('network_respond', { sandbox: 'docs', host: 'x.org' }, { id: 'dismiss', label: 'dismiss' }), 'Answer dismiss to the request of docs for x.org.');
+  assert.equal(rc.rcActDone('merge', fx.level2.merge_done), 'Merged: footer, contact-form.');
+  assert.equal(rc.rcActDone('merge', fx.level2.merge_conflict), 'Stopped at contact-form: conflict in src/pages/contact.tsx, src/components/Footer.tsx');
+  assert.equal(rc.rcActDone('merge', null), 'Merged.');
+  // The client: same origin, JSON, the option only for a network answer.
+  const { f, calls } = fakeFetch({ status: 200, body: { ok: true } });
+  const l2 = rc.rcL2Client(rc.rcClient(f));
+  await l2.challenge('plan_approve', 'p-1', 'a'.repeat(64));
+  await l2.challenge('network_respond', 'network:x', 'b'.repeat(64), 'dismiss');
+  await l2.act('network_respond', 'network:x', { id: 'i' }, 'dismiss');
+  await l2.act('merge', 'p-2', { id: 'i' }, 'ignored');
+  const RID = '0123456789abcdef0123456789abcdef';
+  await l2.passkeyStatus(RID);
+  await l2.passkeyOptions(RID);
+  await l2.passkeyRegister(RID, { id: 'a', client_data_json: 'b', attestation_object: 'c' });
+  const pk = calls.splice(-3);
+  assert.equal(pk[0].path, `/r/passkey/status?request_id=${RID}`);
+  assert.deepEqual(JSON.parse(pk[1].body), { request_id: RID });
+  assert.deepEqual(JSON.parse(pk[2].body), { request_id: RID, id: 'a', client_data_json: 'b', attestation_object: 'c' });
+  assert.deepEqual(calls.map(c => [c.path, JSON.parse(c.body)]), [
+    ['/r/approvals/challenge', { kind: 'plan_approve', target: 'p-1', digest: 'a'.repeat(64) }],
+    ['/r/approvals/challenge', { kind: 'network_respond', target: 'network:x', digest: 'b'.repeat(64), option: 'dismiss' }],
+    ['/r/network/network%3Ax/respond', { option: 'dismiss', assertion: { id: 'i' } }],
+    ['/r/merges/p-2/merge', { assertion: { id: 'i' } }],
+  ]);
+  assert.throws(() => l2.act('nope', 'x', {}));
+});
+
+// ── The Kanban (API-kanban.md) ──
+test('the board is drawn as it comes: the daemon\'s order, fields checked, active first', () => {
+  const b = plain(rc.rcKbBoard(fx.kanban.board));
+  assert.deepEqual(b.columns.map(c => c.id), ['planned', 'progress', 'test', 'ready', 'merged']);
+  assert.deepEqual(b.columns[1].cards.map(c => c.key), ['t:12', 'th:checkout']);
+  assert.equal(b.columns[4].older, 2);
+  assert.equal(b.columns[1].cards[1].n, null, 'a thread\'s own card');
+  assert.equal(b.columns[1].cards[1].num, 'thread');
+  assert.equal(rc.rcKbFirst(rc.rcKbBoard(fx.kanban.board)), 'progress');
+  assert.equal(rc.rcKbFirst(rc.rcKbBoard(fx.kanban.empty)), 'planned');
+  const odd = plain(rc.rcKbBoard({ columns: [null, { id: 'planned', cards: [null, { key: 'k', n: '12', title: { x: 1 }, marks: [{ label: 'x', tone: 'javascript' }, 3], priority: 'p0', thread_tone: '"><' }] }] }));
+  assert.deepEqual(odd.columns[0].cards[0], { key: 'k', n: null, num: 'thread', title: '', priority: 'none', thread: null, thread_state: null, thread_tone: 'neutral', marks: [{ label: 'x', tone: 'neutral' }], files: 0, age: '' });
+  assert.deepEqual(plain(rc.rcKbBoard(null)), { latest: '', summary: '', columns: [] });
+  const t = plain(rc.rcKbTicket(fx.kanban.ticket));
+  assert.match(t.description, /\n\nThe migration must be reversible; see \[path\]/);
+  assert.deepEqual(t.files, [{ name: 'schema-sketch.png', size: 41234, kind: 'png' }, { name: 'notes.txt', size: 812, kind: 'text' }]);
+  assert.equal(rc.rcKbTicket({}), null);
+  assert.equal(rc.rcKbPaths('my shop'), '/r/leaders/my%20shop/kanban');
+  assert.equal(rc.rcKbPaths('shop', 12), '/r/leaders/shop/kanban/T-12');
+  for (const n of [null, 0, -1, 1.5, '12', 1e9]) assert.equal(rc.rcKbPaths('shop', n), null, String(n));
+});
+
+// ── iPhone dictation ──
+test('iPhone dictation: words at the caret, final and interim apart, the language, which errors fall back', () => {
+  const at = (t, c, w) => plain(rc.rcInsertAt(t, c, w));
+  assert.deepEqual(at('', 0, 'hello'), { value: 'hello', caret: 5 });
+  assert.deepEqual(at('Hello world', 5, 'big'), { value: 'Hello big world', caret: 9 });
+  assert.deepEqual(at('Hello ', 6, ' there '), { value: 'Hello there', caret: 11 });
+  assert.deepEqual(at('ab', 99, 'c'), { value: 'ab c', caret: 4 }, 'a caret out of range: the end');
+  assert.deepEqual(at('ab', 1, '  '), { value: 'ab', caret: 1 });
+  const R = list => Object.assign(list.map(([t, f]) => ({ 0: { transcript: t }, isFinal: f })), {});
+  assert.deepEqual(plain(rc.rcSpeechText(R([['one ', true], [' two', true], ['thr', false]]))), { final: 'one two', interim: 'thr' });
+  assert.deepEqual(plain(rc.rcSpeechText(null)), { final: '', interim: '' });
+  assert.deepEqual(plain(rc.rcSpeechText([{ 0: { transcript: 7 }, isFinal: true }])), { final: '', interim: '' });
+  assert.equal(rc.rcSpeechLang('fr-FR', 'en'), 'fr-FR');
+  assert.equal(rc.rcSpeechLang('', 'en'), 'en');
+  assert.equal(rc.rcSpeechLang('"><x', '!!'), 'en-US');
+  for (const e of ['not-allowed', 'service-not-allowed', 'network', 'audio-capture']) assert.equal(rc.rcSpeechFallback(e), true, e);
+  for (const e of ['no-speech', 'aborted', 'language-not-supported', '', undefined]) assert.equal(rc.rcSpeechFallback(e), false, String(e));
+  assert.match(plain(rc.rcStatus({ rec: 'listening' })).text, /^Listening \(iPhone dictation\)\. .*nothing is sent\.$/);
+});
+
+// ── Security review P6: invisible and bidi controls made visible ──
+const CONTROLS = [0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0xFEFF, 0x00AD,
+  0x2028, 0x2029, 0x061C, 0x034F, 0x115F, 0x1160, 0x3164, 0xFE0F, 0xFFA0, 0xFFF9, 0xE0001, 0xE0041, 0x001B, 0x007F, 0x0085];
+test('every invisible or bidi control becomes a visible code, nothing else does', () => {
+  for (const cp of CONTROLS) {
+    const parts = plain(rc.rcMarked(`a${String.fromCodePoint(cp)}b`));
+    assert.deepEqual(parts, ['a', { code: `U+${cp.toString(16).toUpperCase().padStart(4, '0')}` }, 'b'], cp.toString(16));
+  }
+  for (const ok of ['plain', 'é à ü', '日本語', 'עברית', 'العربية', '😀👍🏽', 'a\tb', 'line\nline', 'src/x.rs']) {
+    assert.deepEqual(plain(rc.rcMarked(ok)), [ok], ok);
+  }
+  assert.deepEqual(plain(rc.rcMarked('')), []);
+  assert.deepEqual(plain(rc.rcMarked(null)), []);
+  // A path that would read as another file: the reordering control is shown.
+  const trick = `src/\u202Etxt.exe`;
+  assert.deepEqual(plain(rc.rcMarked(trick)), ['src/', { code: 'U+202E' }, 'txt.exe']);
+});
+test('a sheet\'s line: the page\'s words and the daemon\'s data apart', () => {
+  const parts = plain(rc.rcActParts('merge', { sandbox: 'web\u202Esite', branches: [{}, {}], order: ['a', 'b\u200B'] }));
+  assert.deepEqual(parts, ['Merge 2 branches of ', { data: 'web\u202Esite' }, ' in the order shown, stopping at the first conflict.', ' Order: ', { data: 'a' }, ', ', { data: 'b\u200B' }, '.']);
+  for (const kind of ['plan_approve', 'plan_refuse', 'network_respond', 'sandbox_remove']) {
+    const p = plain(rc.rcActParts(kind, { sandbox: 's', name: 'n', host: 'h', threads: [] }, { id: 'dismiss', label: 'dismiss' }));
+    assert.ok(p.some(x => typeof x === 'object'), kind);
+    assert.ok(p.filter(x => typeof x === 'string').every(x => !/[\p{Cf}]/u.test(x)), 'the page\'s own words carry no control');
+  }
+  assert.deepEqual(plain(rc.rcActParts('nope', {})), []);
 });
