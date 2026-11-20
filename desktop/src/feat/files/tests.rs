@@ -1169,3 +1169,71 @@ fn the_tree_opens_folders_in_place_and_takes_the_keys() {
         assert!(matches!(spec(n).risk, Risk::Direct), "{n}");
     }
 }
+
+#[test]
+fn a_path_from_a_terminal_opens_the_explorer_on_it_and_nothing_else() {
+    let mut d = fixture("standin");
+    let mut st = State::default();
+    let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "src/main.ts" })).unwrap();
+    admit("files_open_path", &a).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::OpenPanel(s) if s == "files")));
+    // Only the explorer: no download, no system open, no dialog, no delete, no link.
+    let quiet = |acts: &[Action]| acts.iter().all(|x| !matches!(x, Action::Download(_) | Action::Reveal(_) | Action::Confirm(_) | Action::Prepare(_) | Action::OpenLink(_) | Action::PickFiles { .. } | Action::Intent { .. }));
+    assert!(quiet(&a), "{a:?}");
+    let all = pump(&mut st, &mut d, a);
+    assert!(quiet(&all), "{all:?}");
+    // A relative path is read from the workspace: the folder listed, the file selected and previewed.
+    assert_eq!(d[UI]["tab"], "files");
+    assert_eq!(d[DIR]["path"], "/Users/me/web/src");
+    assert_eq!(d[UI]["selected"]["name"], "main.ts");
+    // An absolute path, and one under ~, the same.
+    let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "/Users/me/web/src/app.ts" })).unwrap();
+    pump(&mut st, &mut d, a);
+    assert_eq!(d[UI]["selected"]["name"], "app.ts");
+    let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "~/scratch/notes.md" })).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::Fetch { path, .. } if path.ends_with("/fs?path=%2Fhome%2Fagent%2Fscratch"))), "{a:?}");
+}
+
+#[test]
+fn a_file_that_is_not_there_says_so_and_selects_no_readme() {
+    let mut d = fixture("standin");
+    let mut st = State::default();
+    let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "./nope.md" })).unwrap();
+    let all = pump(&mut st, &mut d, a);
+    assert!(all.iter().any(|x| matches!(x, Action::Notice { text, .. } if text.contains("not in this folder"))), "{all:?}");
+    assert_eq!(d[UI]["selected"], J::Null, "the folder's README is not put in its place");
+}
+
+#[test]
+fn the_intent_refuses_a_path_outside_the_terminal_link_rule() {
+    let d = fixture("standin");
+    for p in [
+        "../x.md", "a/../b.md", "/etc/../etc/passwd.md", "http://x.com/a.md", "file:///etc/a.md", "javascript:a/b.md", "a/b.exe", "src/main.ts:12", "~root/a.md", "a/b c.md", "a//b.md", "foo.md",
+        "a/.env", "a/b.md\n", "a/\u{430}.md", "a/b.md/", "", "/",
+    ] {
+        let mut st = State::default();
+        let r = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": p }));
+        assert!(r.is_err(), "{p:?} was accepted");
+        assert_eq!(st.sandbox, None, "{p:?} opened the explorer");
+    }
+    assert!(run(&mut State::default(), &d, "files_open_path", json!({ "sandbox": "nobody", "path": "a/b.md" })).is_err());
+    assert!(matches!(spec("files_open_path").risk, Risk::Direct));
+}
+
+#[test]
+fn a_thread_pane_resolves_a_relative_path_in_its_worktree() {
+    let mut d = fixture("standin");
+    // The places are not read yet: the path waits for them, and nothing is listed before.
+    let mut st = State::default();
+    let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "./README.md", "thread": "checkout" })).unwrap();
+    assert!(!a.iter().any(|x| matches!(x, Action::Fetch { path, .. } if path.contains("checkout"))), "{a:?}");
+    let listing = d["__daemon"]["files_dir"].clone();
+    let b = st.on_data(&Ctx { data: &d }, DIR, &J::Null, &listing);
+    assert!(b.iter().any(|x| matches!(x, Action::Fetch { path, .. } if path.ends_with("/fs?path=%2FUsers%2Fme%2Fweb%2F.sbxw-worktrees%2Fcheckout"))), "{b:?}");
+    // Places already read: at once; an unknown thread falls back to the workspace.
+    let mut st = opened_pumped(&mut d);
+    let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "./README.md", "thread": "checkout" })).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::Fetch { path, .. } if path.ends_with("%2F.sbxw-worktrees%2Fcheckout"))), "{a:?}");
+    let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "src/main.ts", "thread": "unknown" })).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::Fetch { path, .. } if path.ends_with("%2FUsers%2Fme%2Fweb%2Fsrc"))), "{a:?}");
+}

@@ -27,7 +27,7 @@ where
         .w(cols as f32 * cw)
         .h(rows as f32 * lh)
         .focusable(true)
-        .cursor(if t.hovering_link() { Cursor::Pointer } else { Cursor::Text })
+        .cursor(if t.hovering_link() || t.file_hover_path().is_some() { Cursor::Pointer } else { Cursor::Text })
         .pointer_buttons([PointerButton::Middle])
         .on_key({
             let lens = lens.clone();
@@ -65,6 +65,9 @@ where
                 t.on_secondary_click(p.x, p.y, mods);
             }
         });
+    if let Some(p) = t.file_hover_path() {
+        g = g.help(format!("Open {p} in Files (resolved in the workspace or thread folder)"));
+    }
     if let Some((c, r)) = t.cursor {
         g = g.grid_caret(c, r);
         let (x, y) = (c as f32 * cw, r as f32 * lh);

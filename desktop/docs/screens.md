@@ -1862,6 +1862,7 @@ panel and its Upload button opens its own dialog.
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
 | `files_open` | `sandbox`, `tab` (`artifacts`, `files`, `recent`) | direct | Opens the panel on that sandbox (the last tab, else Artifacts) and reads its lists |
+| `files_open_path` | `sandbox` / `path` / `thread?` | direct | A path read from a terminal pane (⌘ or Ctrl + click): that sandbox's Files, the file's folder listed, the file selected. Re-checks the terminal-link rule (ASCII, a slash, no `..`, no scheme, a previewable extension, 300 characters); relative paths resolve in the thread's worktree, else the workspace; a file not there says so. Only opens the explorer. |
 | `files_tab`, `files_place`, `files_browse`, `files_up`, `files_back` | `tab` / `id` / `path` (`~` is home) / none | direct | Tabs, places, folders |
 | `files_filter`, `files_hidden` | `text` / `on` | direct | The filter, dotfiles |
 | `files_more` | | direct | 200 more rows of a long list |
@@ -1888,6 +1889,26 @@ panel and its Upload button opens its own dialog.
 | `codemap_generate` | `sandbox` | direct | `/codemap` in a background session (the daemon refuses a stopped sandbox, no codemap kit, one already running) |
 | `codemap_lens_set`, `codemap_lens` | `text` / `sandbox` | direct | The reader (400 characters at most); `/codemap-lens` in the background |
 | `codemap_diagram` | none | approval | The map's Archify diagram is HTML the app does not draw: saved into Downloads, judged by the core, opened in the browser after its dialog |
+
+#### Terminal links (file paths in a pane)
+
+Holding ⌘ (macOS) or Ctrl over a terminal pane, a file path in its text is
+underlined, the cursor is the pointer, and a tooltip names the path; ⌘ or
+Ctrl + click opens the Files screen on it in that pane's sandbox
+(`files_open_path`). Rule: `src/terminal/filelink.rs`, the web's
+`chatFilePath` (ASCII path characters, a slash or a leading `./` `~/` `/`, no
+`..`, no scheme, an extension from the web's list, an optional `:line` that is
+ignored, 300 characters). A test reads the web's allow-list and cap from
+`assets/js/chat-core.js`, so the two cannot drift silently. Detection runs only
+for the row under the pointer (and the rows a soft wrap joins, 3 each way) and
+only while the modifier is held. An OSC 8 link keeps priority; its text is
+never a file link. With mouse reports on, ⌘ + click goes to the program as
+before; ⌘ + Shift + click opens the path. Relative paths resolve in the
+thread's worktree (a thread pane) or the workspace: the shell's real current
+folder is unknown. The one standing rule that changed: a path read from
+terminal text may reach the Files screen, only after that gesture, only as a
+request to open the Files screen; nothing is executed, typed, downloaded or
+opened outside the app. Demo: `scripts/demo-ttylinks.sh`.
 
 ### browser
 

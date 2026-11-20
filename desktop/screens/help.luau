@@ -48,6 +48,7 @@ return {
         divider{},
         text{ "Keyboard shortcuts", weight = "semibold", color = "text-bright" },
         list(shortcut_rows(data.app.shortcuts or {})),
+        list{ gap = 8, key({ mac and "⌘" or "Ctrl", "Click" }, "On a file path in a terminal: open it in Files (a link opens in the browser). Add Shift when the program uses the mouse.") },
         divider{},
         text{ "sbxw " .. (v.sbxw or "?") .. " · sbx " .. (v.sbx or "?") .. " · " .. (data.app.connection.text or ""), size = "sm", color = "text-muted", wrap = true },
       },

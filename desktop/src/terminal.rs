@@ -78,6 +78,7 @@
 //! `Rc<GridRow>`, so Rune neither shapes nor paints it again.
 
 pub mod attention;
+pub mod filelink;
 pub mod keys;
 pub mod mouse;
 pub mod pills;
@@ -302,6 +303,14 @@ impl Dimensions for Size {
 
 /// One phase of a pointer gesture on the grid, in the grid's points (what
 /// Rune's `Drag` carries).
+/// A detected file path under the pointer: `(row, from column, to column)`
+/// for each row it covers (a soft-wrapped path covers several), and the path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileHover {
+    rows: Vec<(usize, usize, usize)>,
+    path: String,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct DragInput {
     pub phase: rune::Phase,
@@ -363,6 +372,14 @@ pub struct TerminalState {
     gesture: Option<Gesture>,
     last_report_cell: Option<(usize, usize)>,
     hover_link: Option<(usize, usize, usize, String)>,
+    /// A file path under the pointer with the primary modifier held
+    /// (terminal/filelink.rs): the cells it covers, row by row.
+    file_hover: Option<FileHover>,
+    /// A path the person clicked (modifier + click), until the shell takes it.
+    file_click: Option<String>,
+    /// Times the file-path detection ran (a test reads it: it must not run
+    /// without the modifier).
+    pub file_probes: u64,
     /// The size this pane wants (its layout), once it has one.
     want: Option<(usize, usize)>,
     /// The room the grid has in the pane (points), once laid out.
@@ -511,6 +528,9 @@ impl TerminalState {
             gesture: None,
             last_report_cell: None,
             hover_link: None,
+            file_hover: None,
+            file_click: None,
+            file_probes: 0,
             want: None,
             room: None,
             metrics: Metrics::normal(),
@@ -912,6 +932,7 @@ impl TerminalState {
         crate::mem::trim_soon();
         self.gesture = None;
         self.hover_link = None;
+        self.file_hover = None;
         self.backoff = Duration::from_millis(500);
         self.status = "connected".into();
         // A new socket has been told nothing: the wanted size goes again.
@@ -1037,6 +1058,7 @@ impl TerminalState {
         if m != self.metrics {
             self.metrics = m;
             self.hover_link = None;
+            self.file_hover = None;
             self.force_all = true;
             self.dirty = true;
             self.rebuild();
@@ -1135,6 +1157,7 @@ impl TerminalState {
             self.grid_heap += b as i64 - a as i64;
         }
         self.hover_link = None;
+        self.file_hover = None;
         self.metrics = self.scaled_metrics();
         self.force_all = true;
         self.dirty = true;
@@ -1363,6 +1386,7 @@ impl TerminalState {
         self.term.scroll_display(Scroll::Delta(n));
         if self.display_offset() != before {
             self.hover_link = None;
+            self.file_hover = None;
             self.dirty = true;
         }
     }
@@ -1528,7 +1552,13 @@ impl TerminalState {
                 Some(Gesture::Select) => {
                     let moved = d.dx.abs() > 2.0 || d.dy.abs() > 2.0;
                     if !moved && d.clicks <= 1 && mods.cmd {
-                        return self.link_at(d.x, d.y).map(|(_, _, _, uri)| uri);
+                        // An OSC 8 link first; else a file path in the text,
+                        // handed on (as a value) for the shell to open in Files.
+                        if let Some((_, _, _, uri)) = self.link_at(d.x, d.y) {
+                            return Some(uri);
+                        }
+                        self.file_probes += 1;
+                        self.file_click = self.file_link_at(d.x, d.y).map(|f| f.path);
                     }
                 }
                 None => {}
@@ -1561,6 +1591,73 @@ impl TerminalState {
             self.hover_link = link;
             self.dirty = true;
         }
+        // File paths: only with the modifier, only the row under the pointer.
+        let file = if mods.cmd {
+            self.file_probes += 1;
+            self.file_link_at(x, y)
+        } else {
+            None
+        };
+        if file != self.file_hover {
+            self.file_hover = file;
+            self.dirty = true;
+        }
+    }
+
+    /// The path of the file link under the pointer, as the tooltip says it.
+    pub fn file_hover_path(&self) -> Option<&str> {
+        self.file_hover.as_ref().map(|f| f.path.as_str())
+    }
+
+    /// The path the person clicked with the modifier, once (the shell raises
+    /// `files_open_path` with it: filelink.rs says what it may do).
+    pub fn take_file_click(&mut self) -> Option<String> {
+        self.file_click.take()
+    }
+
+    /// The file path at (`x`, `y`): the word under it, across the rows a soft
+    /// wrap joins (at most 3 each way); cells of an OSC 8 link are not text
+    /// for this (that link is that link).
+    fn file_link_at(&self, x: f32, y: f32) -> Option<FileHover> {
+        use alacritty_terminal::term::cell::Flags;
+        let (col, row) = self.cell_at(x, y);
+        let (ncols, off) = (self.size.0, self.display_offset() as i32);
+        let at_line = row as i32 - off;
+        let grid = self.term.grid();
+        let (top, bottom) = (self.term.topmost_line().0, self.term.bottommost_line().0);
+        let wraps = |l: i32| grid[Line(l)][Column(ncols - 1)].flags.contains(Flags::WRAPLINE);
+        let mut first = at_line;
+        while first > top && at_line - first < 3 && wraps(first - 1) {
+            first -= 1;
+        }
+        let mut last = at_line;
+        while last < bottom && last - at_line < 3 && wraps(last) {
+            last += 1;
+        }
+        let mut cells = Vec::with_capacity((last - first + 1) as usize * ncols);
+        for l in first..=last {
+            for c in 0..ncols {
+                let cell = &grid[Line(l)][Column(c)];
+                cells.push(if cell.hyperlink().is_some() {
+                    ' '
+                } else if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    '\u{fffd}'
+                } else {
+                    cell.c
+                });
+            }
+        }
+        let (a, b, f) = filelink::find_at(&cells, (at_line - first) as usize * ncols + col)?;
+        let mut rows = vec![];
+        for l in first..=last {
+            let base = (l - first) as usize * ncols;
+            let (from, to) = (a.max(base), b.min(base + ncols));
+            let vr = l + off;
+            if from < to && vr >= 0 && (vr as usize) < self.size.1 {
+                rows.push((vr as usize, from - base, to - base));
+            }
+        }
+        Some(FileHover { rows, path: f.path })
     }
 
     /// Whether the pointer is over an OSC 8 link.
@@ -1736,7 +1833,7 @@ impl TerminalState {
                 let b = if line == s.end.line { s.end.column.0 + 1 } else { ncols };
                 Some((a, b))
             });
-            let link = self.hover_link.as_ref().filter(|l| l.0 == r).map(|l| (l.1, l.2));
+            let link = self.hover_link.as_ref().filter(|l| l.0 == r).map(|l| (l.1, l.2)).or_else(|| self.file_hover.as_ref().and_then(|f| f.rows.iter().find(|x| x.0 == r).map(|x| (x.1, x.2))));
             let mut h = std::collections::hash_map::DefaultHasher::new();
             (cursor, selection, link).hash(&mut h);
             let extra = h.finish();

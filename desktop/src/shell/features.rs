@@ -285,6 +285,25 @@ impl App {
         self.push_data();
     }
 
+    /// A file path read from pane `i`'s terminal text and clicked with the
+    /// modifier: asks the Files screen to open on it in that pane's sandbox
+    /// and nothing else (terminal/filelink.rs holds the rule and its bounds).
+    /// Never while something covers the panes; the path is a value, not logged.
+    pub(super) fn pane_file_open(&mut self, i: usize, path: String) {
+        if self.panes_covered() {
+            return;
+        }
+        let Some(p) = self.panes.get(i) else { return };
+        let Some(sandbox) = p.sandbox.clone() else { return };
+        let mut args = Map::new();
+        args.insert("sandbox".into(), J::String(sandbox));
+        args.insert("path".into(), J::String(path));
+        if let Some(t) = &p.thread {
+            args.insert("thread".into(), J::String(t.clone()));
+        }
+        self.feature_intent("pane-link", Asked { name: "files_open_path", args });
+    }
+
     /// Files dropped on pane `i`: handed in, to the first feature that takes pane drops.
     pub(super) fn pane_drop(&mut self, i: usize, paths: &[std::path::PathBuf]) {
         let Some(p) = self.panes.get(i) else { return };
@@ -1661,6 +1680,46 @@ mod tests {
     /// and only that very drop can: an unconfirmed batch from anything else
     /// is refused, a guardrail still asks, no intent nor Remember sets the
     /// choice, and Setup's intent turns the asking back on.
+    /// A file path clicked in a pane's terminal asks for the Files screen on
+    /// that pane's sandbox and nothing else; a pane with no sandbox, or
+    /// anything over the panes, asks for nothing.
+    #[test]
+    fn a_clicked_terminal_path_opens_the_panes_sandbox_in_files_only() {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/files/standin.json");
+        let mut a = App::new(super::super::Args { fixture: Some(fixture.into()), ..Default::default() });
+        a.drain(Some(Duration::from_secs(3)), true);
+        if a.panes.is_empty() {
+            let id = a.fresh();
+            a.panes.push(super::super::Pane::empty(id));
+        }
+        a.feats.overlay = None;
+        a.feats.base = None;
+        a.feats.modal = None;
+        a.feats.dialog = None;
+        a.feats.panel = None;
+        a.panes[0].sandbox = None;
+        a.pane_file_open(0, "src/main.ts".into());
+        // Covered panes (a dialog is up): nothing is asked, whatever was clicked.
+        assert!(!a.panes_covered());
+        assert_eq!(a.feats.panel, None, "a pane with no sandbox opens nothing");
+        a.panes[0].sandbox = Some("web-app".into());
+        a.panes[0].thread = Some("checkout".into());
+        a.pane_file_open(0, "src/main.ts".into());
+        assert_eq!((a.feats.overlay.as_ref().map(|o| o.0.as_str()), a.notice.clone().map(|n| n.0)), (Some("files"), None));
+        assert!(a.feats.dialog.is_none() && a.feats.modal.is_none(), "no dialog, no download, nothing outside the app");
+        // Not a path the rule accepts: refused with a notice, the panel not even opened.
+        a.feats.overlay = None;
+        a.pane_file_open(0, "../../etc/passwd.md".into());
+        assert!(a.feats.overlay.is_none());
+        // With the explorer (an overlay) already over the panes, a click reaches nothing.
+        a.pane_file_open(0, "src/main.ts".into());
+        assert!(a.feats.overlay.is_some());
+        a.feats.overlay = None;
+        a.feats.modal = Some(("help".into(), serde_json::Value::Null));
+        a.pane_file_open(0, "src/main.ts".into());
+        assert!(a.feats.overlay.is_none(), "under a modal nothing opens");
+    }
+
     #[test]
     fn dropped_files_skip_their_dialog_only_from_the_drop_itself_once_chosen() {
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/files/standin.json");
