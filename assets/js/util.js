@@ -482,3 +482,46 @@ function bindPopover(pop, { closeButton, onOpen, onClose } = {}) {
 
   return api;
 }
+
+// ── Session and thread names ──────────────────────────────────────────────
+// What a person types or pastes into a name field becomes a name the daemon
+// accepts (lower-case letters, digits and inner hyphens, 1 to 40 characters):
+// the dialogs fix the text instead of refusing it. The daemon checks the name
+// again when it creates the session, and stays the final word. The desktop
+// client has the same rule in Rust (desktop/src/feat/threads/model.rs); both
+// are tested on tests/js/name-cases.json.
+
+const NAME_MAX = 40;
+// Letters Unicode does not decompose into a base letter and a mark.
+const NAME_FOLD = { 'ß': 'ss', 'æ': 'ae', 'œ': 'oe', 'ø': 'o', 'ł': 'l', 'đ': 'd', 'ð': 'd', 'ħ': 'h', 'ı': 'i', 'ŀ': 'l', 'ŧ': 't', 'þ': 'th' };
+
+// `typing` false: the whole rule. True: what is done to a name as it is typed,
+// the ends left alone, so "fix-" keeps its hyphen while the next letter comes.
+function normalizeName(raw, typing = false) {
+  const s = String(raw ?? '')
+    .toLowerCase()
+    .replace(/[ßæœøłđðħıŀŧþ]/g, c => NAME_FOLD[c])
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-/, '')
+    .slice(0, NAME_MAX);
+  return typing ? s : s.replace(/-+$/, '');
+}
+
+// Apply the rule to a name <input> after an `input` event. A paste (and a drop
+// or an undo, whose `inputType` says so) is normalized whole; typing only
+// lower-cases and turns separators into hyphens. The caret goes where the text
+// before it now ends, so it does not jump. Returns the field's new value.
+function fixNameField(field, inputType = '') {
+  const whole = /^(insertFromPaste|insertFromDrop|insertFromYank|historyUndo|historyRedo|insertReplacementText)/.test(inputType);
+  const value = field.value;
+  const at = field.selectionEnd ?? value.length;
+  const next = normalizeName(value, !whole);
+  if (next !== value) {
+    field.value = next;
+    const caret = whole ? next.length : Math.min(normalizeName(value.slice(0, at), true).length, next.length);
+    if (field.setSelectionRange) field.setSelectionRange(caret, caret);
+  }
+  return next;
+}
