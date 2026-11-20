@@ -78,6 +78,20 @@ command's output or the caveat before it (`command`), a `!` command's output
 (`from` is the tag's name). The same classification sets `last_input_from`
 on the session.
 
+**`from: sbxw`** is a line the daemon typed itself (a team note, "main
+moved", a relay or canvas notice, a thread briefing, a merge summary…). It has
+no tag, so the text alone cannot say so: the daemon records every line it
+types (`App::note_typed`, before typing; the composer's text, which is the
+person's, is not recorded) and a user turn is `injected` from `sbxw` only
+when its whole text (whitespace folded) equals a recorded line of the same
+sandbox, typed within the last two hours. A prefix such as `[sbxw]` proves
+nothing. Limits: the match is per sandbox, not per session (the same text
+typed by the person in another session of that sandbox within two hours reads
+as sbxw's); the record is in memory (after a daemon restart, older lines stay
+the person's); the resume note the sbx start script passes to
+`claude --resume` is not recorded. `last_input_from` and `last_input_sender`
+follow the same rule.
+
 **Tool summaries**, one line, at most 160 characters: Bash `$ <command>`
 (first line, `…` when there are more); Read the path and the line range;
 Edit the path and `-old +new lines`; Write the path and its line count;
