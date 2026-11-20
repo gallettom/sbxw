@@ -26,7 +26,9 @@ def add(**e):
 add(type="mark", name="wait:row-web-app")
 add(type="mark", name="hold:400")
 if m == "lit":
-    add(type="tap", key="top-kanban"); add(type="mark", name="wait:kanban-view-conversation")
+    add(type="tap", key="top-kanban"); add(type="mark", name="wait:kanban-lane-planned")
+    # The pointer off the button: its tooltip would cover the title.
+    add(type="move", x=700, y=500); add(type="mark", name="hold:800")
 if m == "convo":
     add(type="tap", key="rail-board"); add(type="mark", name="wait:board-convo")
 if m == "tooltip":
@@ -43,7 +45,7 @@ if m == "tooltip":
                 r = find(v)
                 if r: return r
     e = find(json.load(open(os.environ["TREE"])))
-    r = e.get("rect") or e.get("frame") or [e["x"], e["y"], e["w"], e["h"]]
+    r = e["bounds"]
     add(type="move", x=r[0] + r[2] / 2, y=r[1] + r[3] / 2)
     add(type="mark", name="hold:1500")
 add(type="mark", name="hold:600")
