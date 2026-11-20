@@ -282,6 +282,7 @@ impl App {
                     crate::svc::jarvis_sandbox::forget(&self.store.paths);
                 }
                 self.sessions.drop_sandbox(&n.to_string());
+                self.lead_gone(n);
                 self.history_forget(n);
                 self.browser_forget(n);
                 self.store.forget(*n);

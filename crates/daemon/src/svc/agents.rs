@@ -62,6 +62,8 @@ impl App {
             self.send(Event::Session(info));
         }
         self.history_event(sandbox, &body);
+        // A leader from before a daemon restart is found again by its session.
+        self.rebind_lead(sandbox);
     }
 
     /// The model a session's status line reports. Broadcast only when it
