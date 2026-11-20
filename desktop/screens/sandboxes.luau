@@ -22,7 +22,7 @@
 -- that fit whole, and two buttons one text line tall: + (the agent's terminal
 -- in a new pane; a stopped sandbox starts) and start or stop.
 --
--- Keys: row-<name>, start-<name>, stop-<name>, add-<name>, model-<name>,
+-- Keys: row-<name>, start-<name>, stop-<name>, remove-<name> (stopped only), add-<name>, model-<name>,
 -- pane-of-<name>; the row's menu extra-sandbox-<name> (its list
 -- extra-sandbox-<name>-list), whose items are keyed as the inline extras
 -- were: extra-sandbox-<name>-<id> (network, threads, more, ...), plus
@@ -337,7 +337,9 @@ local function item(sb, app, data)
   -- Under 240 pt of sidebar the + goes (it is the menu's "Open in new
   -- pane"), so the state and the model keep their room.
   local with_add = ((app.sidebar or {}).w or 264) >= 240
-  local buttons_w = (busy and 0 or 28) + (with_add and not busy and 28 or 0)
+  local stopped = sb.status == "stopped"
+  -- Start or stop, "+", and on a stopped sandbox a Remove (last).
+  local buttons_w = (busy and 0 or 28) + (with_add and not busy and 28 or 0) + (stopped and 28 or 0)
   -- When what wants you is a request with words of its own ("asks you 1",
   -- "2 kits wait"), it takes the state word's place, as an amber badge that
   -- opens it: the same meaning, said precisely, in the same room.
@@ -413,6 +415,11 @@ local function item(sb, app, data)
     table.insert(line2, button{ icon = "stop", compact = true, tone = "red", on = "stop", arg = name, help = "Stop " .. name, keys = { "Space" }, key = "stop-" .. name, tab_stop = false })
   elseif not busy then
     table.insert(line2, button{ icon = "play", compact = true, tone = "green", on = "start", arg = name, help = "Start " .. name, keys = { "Space" }, key = "start-" .. name, tab_stop = false })
+  end
+  -- Remove: only on a stopped sandbox, after start. It raises the same
+  -- intent as the actions dialog; the core draws the Confirm.
+  if stopped then
+    table.insert(line2, button{ icon = "trash", compact = true, tone = "red", on = "remove", arg = name, help = "Remove this sandbox", key = "remove-" .. name, tab_stop = false })
   end
 
   -- Line 1: the name (it truncates, nothing is drawn over it), the network
@@ -941,6 +948,8 @@ return {
     end,
     start = function(_, name) return intent("start_sandbox", { sandbox = name }) end,
     stop = function(_, name) return intent("stop_sandbox", { sandbox = name }) end,
+    -- Only raises the removal intent: the core's Confirm does the rest.
+    remove = function(_, name) return intent("sandbox_remove", { sandbox = name }) end,
     -- Space on a row: stop a running sandbox, start a stopped one.
     toggle = function(_, name)
       if statuses[name] == "running" then return intent("stop_sandbox", { sandbox = name }) end
