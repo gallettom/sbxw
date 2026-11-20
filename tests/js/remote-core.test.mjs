@@ -15,8 +15,10 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcWithDictation', 'chatMarkdown'];
-const ctx = { URLSearchParams };
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcWithDictation', 'chatMarkdown',
+  'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
+  'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode'];
+const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
 // Values made in the vm's realm compare by shape, not by prototype.
@@ -205,6 +207,11 @@ test('each action calls its route once, same origin, JSON, no credential in the 
   await api.logout();
   await api.me();
   await api.transcribe(new Float32Array(4));
+  await api.message('shop', '', ['0123456789abcdef0123456789abcdef']);
+  await api.dropUpload('shop', '0123456789abcdef0123456789abcdef');
+  assert.deepEqual(calls.slice(-2).map(c => `${c.method} ${c.path}`), ['POST /r/leaders/shop/message', 'DELETE /r/leaders/shop/upload/0123456789abcdef0123456789abcdef']);
+  assert.deepEqual(JSON.parse(calls.at(-2).body), { text: '', attachments: ['0123456789abcdef0123456789abcdef'] }, 'ids only, never a path');
+  calls.splice(-2);
   assert.deepEqual(calls.map(c => `${c.method} ${c.path}`), [
     'POST /r/leaders/shop/message',
     'POST /r/leaders/shop/answer',
@@ -318,4 +325,185 @@ test('Send waits while the leader works, and only then', () => {
   assert.match(rc.rcSendGate({ state: 'working' }), /The leader is working/);
   assert.match(rc.rcSendGate(null), /not running/);
   for (const l of [{ state: 'idle' }, { state: 'attention', asks: true }]) assert.equal(rc.rcSendGate(l), '');
+});
+
+// ── Files (API.md 2.6.1) ──
+const chatOnly = n => fnSource(chatSrc, n);
+test('the attach rules equal their source in assets/js/chat-core.js', () => {
+  for (const name of ['chatSecretName', 'chatSize', 'chatShortName', 'chatUploadName']) {
+    assert.equal(fnSource(coreSrc, name), chatOnly(name), `${name} drifted: copy it again from chat-core.js`);
+  }
+  const list = src => /const CHAT_SECRET_NAMES = (\[[^\]]*\]);/.exec(src)[1];
+  assert.equal(list(coreSrc), list(chatSrc), 'the secret-looking names drifted: copy the list again');
+});
+const F = (name, size) => ({ name, size });
+test('the checks before any byte: empty, size, count, total, secret-looking names', () => {
+  const MB = 1024 * 1024;
+  const r = rc.rcCheckAttach(0, [F('a.png', 10), F('empty.txt', 0), F('big.mov', 26 * MB), F('.env.local', 5), F('key.PEM', 9)]);
+  assert.deepEqual(plain(r.take.map(f => f.name)), ['a.png', '.env.local', 'key.PEM']);
+  assert.deepEqual(plain(r.refused), [{ name: 'empty.txt', why: 'the file is empty' }, { name: 'big.mov', why: 'over 25 MB, the most one file takes' }]);
+  assert.equal(r.ask.length, 2);
+  assert.match(r.ask[0], /^\.env\.local: its name looks like a secret/);
+  // Five at most, with what is already held.
+  const five = rc.rcCheckAttach(3, [F('1', 1), F('2', 1), F('3', 1)]);
+  assert.equal(five.take.length, 2);
+  assert.match(five.refused[0].why, /5 files at most/);
+  // 60 MB together.
+  const total = rc.rcCheckAttach(0, [F('a', 24 * MB), F('b', 24 * MB), F('c', 24 * MB)]);
+  assert.equal(total.take.length, 2);
+  assert.match(total.refused[0].why, /60 MB together/);
+  assert.equal(rc.rcCheckAttach(1, [F('d', 30 * MB)], 40 * MB).refused.length, 1);
+  for (const n of ['.env', 'id_rsa.pub', 'credentials.json', '.netrc', 'x.kdbx', 'y.p12']) assert.ok(rc.chatSecretName(n), n);
+  for (const n of ['photo.jpg', 'environment.md', 'notes.txt']) assert.ok(!rc.chatSecretName(n), n);
+  assert.equal(rc.rcCheckAttach(0, [null, 3, 'x']).take.length, 0, 'not a file: ignored');
+});
+
+test('each upload refusal has its own sentence', () => {
+  const r = (status, reason) => ({ ok: false, status, data: { ok: false, reason, error: '<b>x</b>' } });
+  const want = { too_large: [413, /25 MB at most/], too_many: [409, /5 at most, 60 MB together/], empty: [400, /empty/], kind: [400, /Programs and archives/],
+    name: [400, /could not read this file's name/], busy: [409, /Another upload from this phone/], timeout: [408, /took too long/] };
+  for (const [reason, [status, words]] of Object.entries(want)) assert.match(rc.rcUploadFail(r(status, reason)), words, reason);
+  assert.deepEqual(Object.keys(rc.RC_UPLOAD_REASON).sort(), Object.keys(want).sort());
+  assert.match(rc.rcUploadFail({ ok: false, status: 0, unreachable: true }), /unreachable/);
+  assert.match(rc.rcUploadFail(r(413, 'nope')), /25 MB at most/);
+  assert.match(rc.rcUploadFail(r(429)), /too many uploads/);
+  assert.match(rc.rcUploadFail(r(500, '__proto__')), /^Not uploaded: the Mac answered 500\.$/);
+  // The answer: an id of 32 hex, never a path; anything else is no upload.
+  assert.deepEqual(plain(rc.rcUploadDone({ id: '0123456789abcdef0123456789abcdef', name: 'photo.jpg', size: 3, path: '/tmp/x' })), { id: '0123456789abcdef0123456789abcdef', name: 'photo.jpg', size: 3 });
+  for (const d of [null, {}, { id: '../../etc' }, { id: 7 }, { id: '0123456789ABCDEF0123456789ABCDEF' }, { id: '/tmp/sbxw-uploads/1/a' }]) assert.equal(rc.rcUploadDone(d), null, JSON.stringify(d));
+});
+
+function fakeXhr(reply) {
+  const made = [];
+  class X {
+    constructor() { this.headers = {}; this.upload = {}; made.push(this); }
+    open(m, u) { this.method = m; this.url = u; }
+    setRequestHeader(k, v) { this.headers[k] = v; }
+    abort() { this.aborted = true; this.onabort?.(); }
+    send(body) {
+      this.body = body;
+      if (reply === 'hang') return;
+      queueMicrotask(() => {
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 2 });
+        if (reply === 'error') return this.onerror();
+        this.status = reply.status;
+        this.responseText = JSON.stringify(reply.body);
+        this.onload();
+      });
+    }
+  }
+  return { X, made };
+}
+test('an upload: the raw file, same origin, the name encoded, progress, no path', async () => {
+  const { X, made } = fakeXhr({ status: 200, body: { id: '0123456789abcdef0123456789abcdef', name: 'a_b.png', size: 2 } });
+  const seen = [];
+  const file = { name: '../../a b<img>.png', size: 2 };
+  const res = await rc.rcUploadXhr(X, 'my shop', file, p => seen.push(p));
+  assert.equal(made[0].method, 'POST');
+  assert.equal(made[0].url, '/r/leaders/my%20shop/upload?name=a%20b%3Cimg%3E.png', 'the last component only, encoded');
+  assert.equal(made[0].headers['Content-Type'], 'application/octet-stream');
+  assert.equal(made[0].body, file, 'the file itself is the body; its content is never read');
+  assert.deepEqual(seen, [0.5]);
+  assert.equal(res.ok, true);
+  for (const name of ['\u202egnp.exe', 'x\u0000y\nz', 'a'.repeat(300) + '.jpeg', '..', 'C:\\Users\\me\\secret.txt']) {
+    const { X: X2, made: m2 } = fakeXhr({ status: 200, body: {} });
+    await rc.rcUploadXhr(X2, 's', { name, size: 1 }, () => {});
+    const q = new URL(m2[0].url, 'https://x.example').searchParams.get('name');
+    assert.doesNotMatch(q, /[\u0000-\u001f\/\\]/, JSON.stringify(name));
+    assert.ok(q.length <= 100, 'kept short');
+  }
+  const { X: X3 } = fakeXhr('error');
+  assert.equal((await rc.rcUploadXhr(X3, 's', file, () => {})).unreachable, true);
+});
+
+test('the tray: one upload at a time, the tick, failure and retry, remove, the ids', async () => {
+  const ID = n => String(n).padStart(32, '0');
+  const answers = [];
+  let n = 0;
+  const started = [];
+  const dropped = [];
+  const upload = (file, onProgress) => {
+    started.push(file.name);
+    return new Promise(r => answers.push(v => { onProgress(1); r(v); }));
+  };
+  const t = rc.rcTray({ upload, drop: id => dropped.push(id) });
+  const flush = () => new Promise(r => setTimeout(r, 0));
+  t.offer([F('a.png', 1), F('b.pdf', 2), F('empty', 0)]);
+  await flush();
+  assert.match(t.note, /^Not attached: empty \(the file is empty\)\.$/);
+  assert.deepEqual(plain(started), ['a.png'], 'one at a time');
+  assert.equal(t.pending(), 2);
+  answers.shift()({ ok: true, status: 200, data: { id: ID(++n), name: 'a.png', size: 1 } });
+  await flush(); await flush();
+  assert.deepEqual(plain(started), ['a.png', 'b.pdf']);
+  answers.shift()({ ok: false, status: 400, data: { reason: 'kind' } });
+  await flush(); await flush();
+  assert.equal(t.failed(), 1);
+  assert.match(t.chips[1].error, /Programs and archives/);
+  assert.deepEqual(plain(t.ids()), [ID(1)], 'a failed file is not sent, and blocks nothing');
+  t.retry(t.chips[1].key);
+  await flush();
+  answers.shift()({ ok: true, status: 200, data: { id: ID(++n), name: 'b.pdf', size: 2 } });
+  await flush(); await flush();
+  assert.deepEqual(plain(t.ids()), [ID(1), ID(2)]);
+  // A secret-looking name waits for the tick: nothing is uploaded before.
+  t.offer([F('.env', 4)]);
+  assert.ok(t.held);
+  assert.equal(started.length, 3);
+  assert.equal(t.confirmHeld(false), false);
+  assert.match(t.note, /^Tick "I have looked at these files and want to attach them" first/);
+  assert.equal(started.length, 3);
+  assert.equal(t.confirmHeld(true), true);
+  await flush();
+  assert.equal(started.at(-1), '.env');
+  // Removing an uploading file aborts it; removing a done one tells the Mac.
+  t.remove(t.chips.at(-1).key);
+  t.remove(t.chips[0].key);
+  assert.deepEqual(plain(dropped), [ID(1)]);
+  assert.deepEqual(plain(t.ids()), [ID(2)]);
+  t.sent([ID(2)]);
+  assert.equal(t.chips.length, 0);
+  // A message's worth: five waiting at most.
+  t.offer([1, 2, 3, 4, 5, 6].map(i => F(`f${i}`, 1)));
+  assert.equal(t.chips.length, 5);
+  assert.match(t.note, /f6 \(a message takes 5 files at most\)/);
+  t.clear();
+  assert.equal(t.chips.length, 0);
+});
+
+test('the status line: one sentence, the most urgent first', () => {
+  const s = o => plain(rc.rcStatus(o));
+  assert.deepEqual(s({}), { text: '', tone: 'info' });
+  assert.deepEqual(s({ hint: 'Added to the field: read it, then Send.' }), { text: 'Added to the field: read it, then Send.', tone: 'info' });
+  assert.deepEqual(s({ gate: 'The leader is working: Send comes back at its prompt.', hint: 'x' }), { text: 'The leader is working: Send comes back at its prompt.', tone: 'info' });
+  assert.equal(s({ gate: 'The leader is working: Send comes back at its prompt.', files: 2 }).text, 'The leader is working: Send comes back at its prompt. Your files wait here.');
+  assert.deepEqual(s({ pending: 2, gate: 'g' }), { text: 'Uploading 2 files: Send waits until they are done.', tone: 'busy' });
+  assert.equal(s({ pending: 1 }).text, 'Uploading 1 file: Send waits until it is done.');
+  assert.equal(s({ held: 1, pending: 1 }).tone, 'warn');
+  assert.equal(s({ failed: 1 }).text, 'An upload failed: retry or remove. The rest can be sent.');
+  assert.match(s({ rec: 'recording', held: 1 }).text, /^Recording\. .*nothing is sent\.$/);
+  assert.equal(s({ rec: 'transcribing' }).text, 'Transcribing on your Mac…');
+  // The last action's outcome wins over everything.
+  const busy = rc.rcFailText('Message', { ok: false, status: 409, data: { reason: 'busy' } });
+  assert.deepEqual(s({ note: { text: busy, tone: 'err' }, rec: 'recording', pending: 1 }), { text: busy, tone: 'err' });
+  for (const reason of Object.keys(rc.RC_MSG_REASON)) {
+    const text = rc.rcFailText('Message', { ok: false, status: 409, data: { reason } });
+    assert.equal(s({ note: { text, tone: 'err' } }).text, rc.RC_MSG_REASON[reason], reason);
+  }
+});
+
+test('the recorder: a level from samples, a clock, a wave that degrades', () => {
+  const frame = f => Uint8Array.from({ length: 512 }, (_, i) => f(i));
+  assert.equal(rc.rcLevel(frame(() => 128)), 0, 'silence is flat');
+  assert.equal(rc.rcLevel(frame(i => 128 + (i % 2 ? 1 : 0))), 0, 'noise floor is flat');
+  const quiet = rc.rcLevel(frame(i => 128 + Math.round(10 * Math.sin(i / 5))));
+  const loud = rc.rcLevel(frame(i => 128 + Math.round(90 * Math.sin(i / 5))));
+  assert.ok(quiet > 0 && loud > quiet && loud <= 1, `${quiet} ${loud}`);
+  assert.equal(rc.rcLevel(frame(i => (i % 2 ? 255 : 0))), 1);
+  assert.equal(rc.rcLevel(null), 0);
+  assert.deepEqual([0, 7, 59.9, 60, 102, -3, 'x'].map(rc.rcClock), ['0:00', '0:07', '0:59', '1:00', '1:42', '0:00', '0:00']);
+  assert.equal(rc.rcWaveMode(true, false), 'bars');
+  assert.equal(rc.rcWaveMode(true, true), 'meter');
+  assert.equal(rc.rcWaveMode(false, false), 'pulse');
+  assert.equal(rc.rcWaveMode(false, true), 'pulse');
 });

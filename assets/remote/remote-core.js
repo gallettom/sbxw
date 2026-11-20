@@ -633,7 +633,7 @@ function rcLevel(bytes) {
   let sum = 0;
   for (let i = 0; i < n; i++) { const v = (bytes[i] - 128) / 128; sum += v * v; }
   const rms = Math.sqrt(sum / n);
-  return rms < 0.004 ? 0 : Math.min(1, Math.sqrt(rms * 3.5));
+  return rms < 0.01 ? 0 : Math.min(1, Math.sqrt(rms * 3.5));
 }
 // "0:07", "1:42": the running time of a recording.
 function rcClock(seconds) {

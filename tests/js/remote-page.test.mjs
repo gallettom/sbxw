@@ -47,12 +47,24 @@ function spies() {
   document.addEventListener('securitypolicyviolation', e => spy.csp.push(`${e.violatedDirective} ${e.blockedURI}`));
   // A fake microphone: a tone through a real MediaRecorder, so the page's
   // decoding and resampling run as on a phone.
+  // `window.__silent`: a muted tone; `window.__noAnalyser`: no AnalyserNode.
+  spy.closed = 0;
+  spy.stopped = 0;
+  spy.tracks = 0;
+  const close = AudioContext.prototype.close;
+  AudioContext.prototype.close = function () { spy.closed++; return close.call(this); };
+  const stop = MediaStreamTrack.prototype.stop;
+  MediaStreamTrack.prototype.stop = function () { spy.stopped++; return stop.call(this); };
+  if (localStorage.getItem('__noAnalyser')) AudioContext.prototype.createAnalyser = undefined;
   navigator.mediaDevices.getUserMedia = async () => {
     const ctx = new AudioContext();
     const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    gain.gain.value = localStorage.getItem('__silent') ? 0 : 0.8;
     const dest = ctx.createMediaStreamDestination();
-    osc.connect(dest);
+    osc.connect(gain).connect(dest);
     osc.start();
+    spy.tracks += dest.stream.getTracks().length;
     return dest.stream;
   };
 }
@@ -68,8 +80,11 @@ after(async () => {
   await sb?.close();
 });
 
-async function phone(width = 390, height = 844) {
-  const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: IPHONE_UA });
+async function phone(width = 390, height = 844, opts = {}) {
+  const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: IPHONE_UA, reducedMotion: opts.reducedMotion || 'no-preference' });
+  // Test levers for the fake microphone, set before the page's scripts (they
+  // are the test's, never the page's: cleanSpy ignores keys starting __).
+  if (opts.flags) await ctx.addInitScript(f => { for (const k of f) localStorage.setItem(k, '1'); }, opts.flags);
   await ctx.addInitScript(spies);
   const page = await ctx.newPage();
   const problems = [];
@@ -88,12 +103,12 @@ async function cleanSpy(page) {
   assert.deepEqual(spy.csp, [], 'no CSP violation');
   assert.deepEqual(spy.console, [], 'no console output');
   assert.equal(spy.idb + spy.caches + spy.sw, 0, 'no IndexedDB, Cache API or service worker');
-  for (const [area, key, value] of spy.storage) {
+  for (const [area, key, value] of spy.storage.filter(([, k]) => !k.startsWith('__'))) {
     assert.equal(`${area} ${key}`, 'local sbxw-remote-prefs', 'only the device name is stored');
     assert.deepEqual(Object.keys(JSON.parse(value)), ['device_name']);
     for (const w of SECRET_WORDS) assert.ok(!value.includes(w));
   }
-  const stored = await page.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }));
+  const stored = await page.evaluate(() => JSON.stringify(Object.fromEntries(Object.entries(localStorage).filter(([k]) => !k.startsWith('__')))) + JSON.stringify({ ...sessionStorage }));
   for (const w of SECRET_WORDS) assert.ok(!stored.includes(w), `"${w}" stored`);
 }
 
@@ -471,6 +486,253 @@ test('every screen at 320x568 and 390x844: no horizontal scroll, the composer in
       await page.evaluate(() => document.getElementById('log').scrollTo(0, 1e6));
       await shot(page, '13-conversation-320');
     }
+    assert.deepEqual(problems, []);
+    await ctx.close();
+  }
+});
+
+// ── Files ──
+const MB = 1024 * 1024;
+const fileOf = (name, size, mimeType = 'application/octet-stream') => ({ name, mimeType, buffer: Buffer.alloc(size, 7) });
+async function pick(page, files) {
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.tap('#attach')]);
+  assert.equal(chooser.isMultiple(), true, 'several files at once');
+  await chooser.setFiles(files);
+}
+const uploads = async () => (await log()).filter(e => e.method === 'POST' && /\/upload$/.test(e.path));
+
+test('files: checked before any byte, the tick, progress, failure and retry, remove, Send carries the ids', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website }, uploadSlow: 0, uploadReplies: [] });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.tap('.rc-leader >> text=website');
+  await page.waitForSelector('#s-chat:not([hidden])');
+  // Empty: refused in the page, nothing sent.
+  await pick(page, [fileOf('empty.txt', 0)]);
+  await page.waitForSelector('#status:text("Not attached: empty.txt (the file is empty).")');
+  assert.equal((await uploads()).length, 0, 'no byte for an empty file');
+  // A secret-looking name waits for the tick.
+  await pick(page, [fileOf('.env', 64)]);
+  await page.waitForSelector('#held:not([hidden])');
+  assert.match(await page.textContent('#held-why'), /^\.env: its name looks like a secret/);
+  await shot(page, '22-files-tick');
+  await page.tap('#held-go');
+  await page.waitForSelector('#status:text-matches("^Tick \\"I have looked")');
+  assert.equal((await uploads()).length, 0, 'no byte before the tick');
+  await page.tap('#held-cancel');
+  await page.waitForSelector('#held', { state: 'hidden' });
+  assert.equal((await uploads()).length, 0);
+  // Progress: a slow body, Send waits.
+  await ctl({ uploadSlow: 40 });
+  await page.fill('#field', 'see these');
+  await pick(page, [fileOf('photo.jpg', 3 * MB, 'image/jpeg'), fileOf('scan.pdf', 2 * MB, 'application/pdf')]);
+  await page.waitForSelector('.rc-fchip[data-state="sending"]');
+  await page.waitForFunction(() => Number(document.querySelector('.rc-fchip-bar')?.getAttribute('aria-valuenow')) > 0, null, { timeout: 15000 });
+  assert.equal(await page.isDisabled('#send'), true, 'Send waits for the uploads');
+  assert.match(await page.textContent('#status'), /^Uploading 2 files: Send waits until they are done\.$/);
+  await shot(page, '21-files-progress');
+  await ctl({ uploadSlow: 0 });
+  await page.waitForFunction(() => document.querySelectorAll('.rc-fchip[data-state="done"]').length === 2, null, { timeout: 30000 });
+  // A refusal on the chip, with Retry; the typed text is untouched.
+  await ctl({ uploadReplies: [{ status: 400, body: { ok: false, reason: 'kind', error: 'an archive' } }] });
+  await pick(page, [fileOf('bundle.zip', 100)]);
+  await page.waitForSelector('.rc-fchip[data-state="failed"]');
+  assert.match(await page.textContent('.rc-f-failed .rc-fchip-meta'), /Programs and archives are not accepted/);
+  assert.equal(await page.inputValue('#field'), 'see these');
+  assert.equal(await page.isDisabled('#send'), false, 'a failed file never blocks the rest');
+  await shot(page, '23-files-refused');
+  await page.tap('.rc-f-failed .rc-retry');
+  await page.waitForFunction(() => document.querySelectorAll('.rc-fchip[data-state="done"]').length === 3);
+  // Remove one that went up: the Mac drops it.
+  const before = (await uploads()).length;
+  await page.tap('.rc-fchip >> nth=1 >> .rc-remove');
+  await page.waitForFunction(() => document.querySelectorAll('.rc-fchip').length === 2);
+  await page.waitForTimeout(200);
+  assert.equal((await log()).filter(e => e.method === 'DELETE').length, 1);
+  assert.equal((await uploads()).length, before, 'removing uploads nothing');
+  // Uploads: raw octet-stream, the name in the query, no JSON, no path back.
+  for (const u of await uploads()) {
+    assert.equal(u.ct, 'application/octet-stream');
+    assert.match(u.query, /^\?name=[^&]+$/);
+  }
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 0, 'attaching sends no message');
+  await page.tap('#send');
+  await page.waitForSelector('#status:text("Sent.")');
+  const msg = (await calls('POST', '/r/leaders/website/message'))[0];
+  assert.deepEqual(Object.keys(msg.body).sort(), ['attachments', 'text']);
+  assert.equal(msg.body.text, 'see these');
+  assert.equal(msg.body.attachments.length, 2);
+  for (const id of msg.body.attachments) assert.match(id, /^[0-9a-f]{32}$/, 'an id, never a path');
+  assert.doesNotMatch(JSON.stringify(msg.body), /\/tmp|photo|scan|bundle/, 'no path and no name in the message');
+  await page.waitForSelector('#tray', { state: 'hidden' });
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('files while the leader works: attaching allowed, sending not, and only files can be sent', { skip }, async () => {
+  const working = structuredClone(FX.leaders);
+  working.leaders.find(l => l.sandbox === 'website').state = 'working';
+  await ctl({ reset: true, paired: true, leaders: working, history: { website: FX.history.website }, uploadSlow: 0, uploadReplies: [] });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.tap('.rc-leader >> text=website');
+  await pick(page, [fileOf('notes.txt', 300, 'text/plain')]);
+  await page.waitForSelector('.rc-fchip[data-state="done"]');
+  assert.equal(await page.textContent('#status'), 'The leader is working: Send comes back at its prompt. Your files wait here.');
+  assert.equal(await page.isDisabled('#send'), true);
+  await ctl({ emit: { event: 'leaders', data: FX.leaders } });
+  await page.waitForFunction(() => !document.getElementById('send').disabled);
+  await page.tap('#send');
+  await page.waitForSelector('#status:text("Sent.")');
+  const msg = (await calls('POST', '/r/leaders/website/message'))[0];
+  assert.equal(msg.body.text, '', 'files alone may go');
+  assert.equal(msg.body.attachments.length, 1);
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('hostile file names stay text', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website }, uploadSlow: 0, uploadReplies: [] });
+  const { ctx, page, problems } = await phone(320, 568);
+  await page.goto(`${base()}/`);
+  await page.tap('.rc-leader >> text=website');
+  const evil = ['<img src=x onerror="window.__pwned=1">.png', '"><svg onload=window.__pwned=2>.txt', '‮gnp.exe', 'a'.repeat(400) + '.jpeg'];
+  await pick(page, evil.map(n => fileOf(n, 10)));
+  await page.waitForFunction(() => document.querySelectorAll('.rc-fchip[data-state="done"]').length === 4, null, { timeout: 10000 });
+  const r = await page.evaluate(() => ({
+    pwned: window.__pwned,
+    bad: document.querySelectorAll('#tray img, #tray script, #tray iframe, #chips svg[onload], [onerror], [onload]').length,
+    names: [...document.querySelectorAll('.rc-fchip-name')].map(e => e.textContent),
+  }));
+  assert.equal(r.pwned, undefined);
+  assert.equal(r.bad, 0);
+  assert.equal(r.names[0], evil[0]);
+  assert.equal(r.names[2], '?gnp.exe', 'a bidi control is shown as ?');
+  assert.ok(r.names[3].length <= 60, 'a long name is cut in the middle');
+  assert.ok(await noHScroll(page));
+  for (const u of await uploads()) assert.doesNotMatch(decodeURIComponent(u.query), /[\u0000-\u001f]/);
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+// ── The recorder ──
+async function recordOnce(page, { hold = 900 } = {}) {
+  await page.tap('#mic');
+  await page.waitForSelector('#composer[data-rec="recording"]');
+  await page.waitForTimeout(hold);
+}
+test('the recorder: a live wave, a clock, stop, transcribing, filled; the context and tracks closed', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website }, transcribeDelay: 800 });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.tap('.rc-leader >> text=website');
+  await recordOnce(page, { hold: 1300 });
+  assert.equal(await page.getAttribute('#composer', 'data-wave'), 'bars');
+  assert.ok(Number(await page.getAttribute('#rec', 'data-level')) > 0.1, 'the wave moves with the sound');
+  assert.match(await page.textContent('#rec-time'), /^0:0[1-2]$/);
+  assert.equal(await page.getAttribute('#mic', 'aria-label'), 'Stop dictation');
+  assert.equal(await page.getAttribute('#mic', 'aria-pressed'), 'true');
+  assert.equal(await page.isVisible('#field'), false, 'the wave takes the field\'s place');
+  assert.equal(await page.isDisabled('#send'), true, 'nothing is sent while it records');
+  assert.match(await page.textContent('#status'), /^Recording\./);
+  await shot(page, '17-recording-wave');
+  await page.tap('#mic');
+  await page.waitForSelector('#composer[data-rec="transcribing"]');
+  assert.equal(await page.textContent('#status'), 'Transcribing on your Mac…');
+  await shot(page, '18-transcribing');
+  await page.waitForSelector('#composer[data-rec="idle"]', { timeout: 8000 });
+  assert.equal(await page.inputValue('#field'), 'please also add an index on the customer id');
+  assert.equal(await page.textContent('#status'), 'Added to the field: read it, then Send.');
+  await shot(page, '19-dictation-filled');
+  const spy = await page.evaluate(() => window.__spy);
+  assert.ok(spy.stopped >= spy.tracks && spy.tracks >= 1, `tracks stopped: ${spy.stopped} of ${spy.tracks}`);
+  assert.ok(spy.closed >= 2, `the wave's AudioContext and the decoder's closed: ${spy.closed}`);
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 0, 'dictation never sends');
+  await ctl({ transcribeDelay: 0 });
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('the recorder: silence is flat; reduced motion draws a meter; no analyser still records', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+  {
+    const { ctx, page } = await phone(390, 844, { flags: ['__silent'] });
+    await page.goto(`${base()}/`);
+    await page.tap('.rc-leader >> text=website');
+    await recordOnce(page);
+    assert.equal(await page.getAttribute('#rec', 'data-level'), '0.00', 'flat when silent');
+    await page.tap('#mic');
+    await page.waitForSelector('#composer[data-rec="idle"]', { timeout: 8000 });
+    await ctx.close();
+  }
+  {
+    const { ctx, page, problems } = await phone(390, 844, { reducedMotion: 'reduce' });
+    await page.goto(`${base()}/`);
+    await page.tap('.rc-leader >> text=website');
+    await recordOnce(page);
+    assert.equal(await page.getAttribute('#composer', 'data-wave'), 'meter');
+    assert.ok(Number(await page.getAttribute('#rec', 'data-level')) > 0.1);
+    await shot(page, '20-recording-reduced-motion');
+    await page.tap('#mic');
+    await page.waitForSelector('text=Added to the field: read it, then Send.', { timeout: 8000 });
+    assert.deepEqual(problems, []);
+    await ctx.close();
+  }
+  {
+    const { ctx, page, problems } = await phone(390, 844, { flags: ['__noAnalyser'] });
+    await page.goto(`${base()}/`);
+    await page.tap('.rc-leader >> text=website');
+    await recordOnce(page);
+    assert.equal(await page.getAttribute('#composer', 'data-wave'), 'pulse');
+    await page.tap('#mic');
+    await page.waitForSelector('text=Added to the field: read it, then Send.', { timeout: 8000 });
+    assert.match(await page.inputValue('#field'), /customer id/, 'recording never depends on the wave');
+    const spy = await page.evaluate(() => window.__spy);
+    assert.ok(spy.stopped >= spy.tracks);
+    assert.deepEqual(problems, []);
+    await ctx.close();
+  }
+});
+
+test('the recorder: a hidden page stops it and sends nothing', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.tap('.rc-leader >> text=website');
+  await recordOnce(page);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForSelector('#composer[data-rec="idle"]');
+  await page.waitForTimeout(500);
+  assert.equal((await calls('POST', '/r/voice/transcribe')).length, 0, 'no audio leaves the phone');
+  assert.match(await page.textContent('#status'), /page was hidden\. Nothing was sent\./);
+  const spy = await page.evaluate(() => window.__spy);
+  assert.ok(spy.stopped >= spy.tracks && spy.closed >= 1);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('the conversation at rest, at 430x932, and the screens at three widths', { skip }, async () => {
+  for (const [w, h] of [[430, 932], [390, 844], [320, 568]]) {
+    await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { shop: FX.history.shop, website: FX.history.website } });
+    const { ctx, page, problems } = await phone(w, h);
+    await page.goto(`${base()}/`);
+    await page.waitForSelector('.rc-leader');
+    await shot(page, `30-leaders-${w}`);
+    await page.tap('.rc-leader >> text=website');
+    await page.waitForSelector('.rc-agent');
+    await page.evaluate(() => document.getElementById('log').scrollTo(0, 1e6));
+    await page.waitForTimeout(300);
+    assert.ok(await noHScroll(page));
+    const box = await page.$eval('#composer', el => el.getBoundingClientRect().bottom);
+    assert.ok(Math.abs(box - h) < 1, `the composer's ground runs to the bottom edge: ${box} of ${h}`);
+    await shot(page, `31-conversation-${w}`);
     assert.deepEqual(problems, []);
     await ctx.close();
   }

@@ -12,7 +12,8 @@
 // pushes one server-sent event, {leaders}, {history: {sandbox: page}},
 // {uploadReplies: [{status, body}]} how the next uploads are answered,
 // {uploadSlow: ms} a pause after each 64 KiB read (so progress shows),
-// {uploadHold: true} uploads wait until {uploadHold: false}.
+// {uploadHold: true} uploads wait until {uploadHold: false},
+// {transcribeDelay: ms} how long a transcription takes.
 // Uploads follow API.md 2.6.1: the raw body, an id of 32 hex back, no path.
 // Usage: node tests/js/remote-standin.mjs [port]
 import http from 'node:http';
@@ -68,6 +69,7 @@ export function startStandin(port = 0) {
     uploadReplies: [],
     uploadSlow: 0,
     uploadHold: false,
+    transcribeDelay: 0,
     holds: [],
   };
   const UPLOAD = /^\/r\/leaders\/([^/]+)\/upload$/;
@@ -105,6 +107,7 @@ export function startStandin(port = 0) {
       if (c.messageReplies) s.messageReplies = c.messageReplies;
       if (c.history) Object.assign(s.history, c.history);
       if (c.uploadReplies) s.uploadReplies = c.uploadReplies;
+      if ('transcribeDelay' in c) s.transcribeDelay = c.transcribeDelay;
       if ('uploadSlow' in c) s.uploadSlow = c.uploadSlow;
       if ('uploadHold' in c) { s.uploadHold = c.uploadHold; if (!c.uploadHold) s.holds.splice(0).forEach(r => r()); }
       if (c.emit) emit(c.emit.event, c.emit.data);
@@ -176,7 +179,10 @@ export function startStandin(port = 0) {
     if (upId && req.method === 'DELETE') {
       return s.uploads.delete(decodeURIComponent(upId[2])) ? send(res, 200, { ok: true }) : send(res, 404, { ok: false, error: 'not found' });
     }
-    if (p === '/r/voice/transcribe') return send(res, 200, { text: s.transcript, masked: 0 });
+    if (p === '/r/voice/transcribe') {
+      await new Promise(r => setTimeout(r, s.transcribeDelay));
+      return send(res, 200, { text: s.transcript, masked: 0 });
+    }
     return send(res, 404, { ok: false, error: 'not found' });
   });
   return new Promise(resolve => server.listen(port, '127.0.0.1', () => {
