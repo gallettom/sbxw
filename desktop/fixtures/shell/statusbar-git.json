@@ -400,18 +400,7 @@
    ]
   },
   "relay": {
-   "requests": [
-    {
-     "id": "r-1",
-     "from": "sbxw-desktop-design",
-     "kind": "question",
-     "question": "Which colour should the focused pane's border take: the group colour or the blue token?",
-     "shot_count": 0,
-     "state": "pending",
-     "created_ms": 1000,
-     "updated_ms": 1000
-    }
-   ]
+   "requests": []
   },
   "approvals": {
    "ok": true,
@@ -594,8 +583,8 @@
       "error": null,
       "threads": [
        {
-        "name": "tax-rules",
-        "branch": "sbxw/tax-rules",
+        "name": "checkout-v2",
+        "branch": "sbxw/checkout-v2",
         "worktree": "/x/.sbxw-worktrees/tax-rules",
         "tip": "f00ba12",
         "fork": "a1b2c3d",
@@ -605,7 +594,7 @@
         "commits": []
        },
        {
-        "name": "long",
+        "name": "payments",
         "branch": "feature/very-long-branch-name-very-long-branch-name-very-long-branch-name-very-long-branch-name-very-long-branch-name-very-long-branch-name-very-long-branch-name-very-long-branch-name-end-of-it",
         "worktree": "/x/.sbxw-worktrees/long",
         "tip": "f00ba12",

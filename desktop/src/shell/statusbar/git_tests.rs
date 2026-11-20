@@ -137,9 +137,9 @@ fn each_view_has_its_rule_and_the_focus_moves_it() {
     run(&mut rt, t0, 0.2, 1.0);
     assert_eq!(shown(&rt).as_deref(), Some("shop/main"), "TUI: the focused pane's main checkout");
     // The focused pane is a thread's: its own branch (from the data).
-    point(&mut rt, "better-checkout", Some("tax-rules"));
+    point(&mut rt, "better-checkout", Some("checkout-v2"));
     run(&mut rt, t0, 1.0, 1.3);
-    assert_eq!(shown(&rt).as_deref(), Some("shop/sbxw/tax-rules"));
+    assert_eq!(shown(&rt).as_deref(), Some("shop/sbxw/checkout-v2"));
     point(&mut rt, "better-checkout", Some("loose"));
     run(&mut rt, t0, 1.3, 1.6);
     assert_eq!(shown(&rt).as_deref(), Some("shop/9f8e7d6"), "a detached thread worktree: the short commit id");
