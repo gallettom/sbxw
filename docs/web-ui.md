@@ -426,8 +426,31 @@ such as `public/`, `src/` or `templates/`, or one beside web code.
 
 - **Navigate:** breadcrumb (click its empty space to type a path, `~` works),
   back and up, a filter, and a **Hidden** toggle for dotfiles.
-- **Preview:** text, images, and HTML (in a sandboxed iframe), with
-  **Download** and **Copy path**. A folder with a README opens on it.
+- **Preview:** text, images, Markdown (rendered, see below), and HTML (in a
+  sandboxed iframe), with **Download** and **Copy path**. A folder with a
+  README opens on it.
+- **Markdown:** a `.md` or `.markdown` file opens rendered, with a
+  **Rendered | Source** switch in the preview's header (the choice holds for
+  the browser session; Source is the plain text view). The preview widens
+  while a document is read; the text keeps a readable width, tables and code
+  blocks scroll sideways inside themselves, and an **outline** of the headings
+  sits beside the text when there is room (a menu above it otherwise). The
+  renderer (`assets/js/markdown.js`) covers headings, paragraphs, emphasis,
+  strikethrough, code spans and blocks (the language as a label), quotes,
+  lists and task lists, tables with alignment, rules, links and images. Raw
+  HTML and entities are shown as typed, never interpreted. A file past the
+  preview's 1 MB cap is rendered from its head and says so at its end.
+- **Links in a document** act only on a press. `http`/`https` links open in a
+  new tab (`noopener noreferrer`) and show their address on hover. A relative
+  link (`web-ui.md`, `./chat.md#the-chat-dock`, `../README.md`) opens that
+  file in this Files tab, resolved against the document's folder (never above
+  `/`), and lands on the heading it names; `#anchor` scrolls this document.
+  Any other scheme (`javascript:`, `data:`, `file:`, `mailto:`…) is not a
+  link: its text and address are shown as text.
+- **Images in a document:** a relative image of this sandbox (png, jpg, gif,
+  webp, svg, bmp, ico, avif) is loaded through the same file route as the
+  preview, capped at 24 MB, at most 24 per document. A remote image is never
+  loaded: its description and address are shown as text.
 - **Keyboard:** ↑/↓ move and preview, Return opens a folder or downloads a
   file, Backspace goes up (in **Recent**, back to the previous view).
 - **Favourites:** `.sbxw-artifacts`, the workspace, the agent's home and `/` are

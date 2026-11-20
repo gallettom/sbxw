@@ -3519,6 +3519,145 @@
   }
   .fx-prev-frame { flex: 1; width: 100%; min-height: 320px; border: 1px solid var(--c-border); border-radius: var(--r-sm); background: #fff; }
 
+  /* ── Markdown in the Files preview (see js/markdown.js, fxPaintMd) ──
+     A rendered document is read, not glanced at: the preview takes more of
+     the panel. The text keeps a readable measure; the outline sits beside it
+     when there is room and folds into a menu above it when there is not. */
+  .fx-body.md-reading { grid-template-columns: 200px minmax(260px, 1fr) minmax(300px, min(62%, calc(100% - 460px))); }
+  .fx-md-switch {
+    display: inline-flex; border: 1px solid var(--c-border); border-radius: var(--r-xs); overflow: hidden;
+  }
+  .fx-md-switch button {
+    font: inherit; font-size: 11.5px; padding: .2rem .55rem; cursor: pointer;
+    background: var(--c-bg); color: var(--c-text-muted); border: none;
+  }
+  .fx-md-switch button + button { border-left: 1px solid var(--c-border); }
+  .fx-md-switch button[aria-pressed="true"] { background: var(--c-elevated); color: var(--c-text-bright); }
+  .fx-md-switch button:hover { color: var(--c-text-bright); }
+  .fx-md-switch button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+  .fx-prev-actions { flex-wrap: wrap; }
+  /* Reading a document: the list keeps room for its names by dropping the
+     Modified column (it is in the preview's header). */
+  .fx-body.md-reading .fx-list td:nth-child(3), .fx-body.md-reading .fx-list th:nth-child(3) { display: none; }
+  .fx-prev-body.fx-prev-md { display: block; padding: 0; scroll-padding-top: .8rem; }
+  .md-doc { container-type: inline-size; }
+  .md-doc-grid { padding: .9rem 1.1rem 2.5rem; }
+  .md-ol-menu {
+    margin: 0 0 1rem; border: 1px solid var(--c-border); border-radius: var(--r-sm); background: var(--c-surface-alt);
+  }
+  .md-ol-menu > summary {
+    cursor: pointer; padding: .35rem .7rem; font-size: 12px; color: var(--c-text-muted); user-select: none;
+  }
+  .md-ol-menu[open] > summary { border-bottom: 1px solid var(--c-elevated); }
+  .md-ol-menu .md-ol { max-height: 45vh; overflow: auto; padding: .3rem; }
+  .md-ol { display: flex; flex-direction: column; }
+  .md-ol-side { display: none; }
+  .md-ol-item {
+    display: block; width: 100%; text-align: left; font: inherit; font-size: 12px; line-height: 1.35;
+    color: var(--c-text-muted); background: none; border: none; border-radius: var(--r-xs);
+    padding: .22rem .5rem; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .md-ol-item:hover { background: var(--c-elevated); color: var(--c-text-bright); }
+  .md-ol-item:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+  .md-ol-l1 { color: var(--c-text); font-weight: 600; }
+  .md-ol-l2 { padding-left: 1.1rem; }
+  .md-ol-l3 { padding-left: 1.8rem; font-size: 11.5px; }
+  .md-ol-l4 { padding-left: 2.5rem; font-size: 11.5px; }
+  @container (min-width: 720px) {
+    .md-doc-grid.has-outline { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 1.2rem; align-items: start; }
+    .md-doc-grid.has-outline .md-ol-menu { display: none; }
+    .md-ol-side {
+      display: flex; position: sticky; top: .9rem; max-height: calc(94vh - 14rem); overflow: auto;
+      border-right: 1px solid var(--c-elevated); padding-right: .5rem;
+    }
+  }
+  .md-body {
+    max-width: 78ch; min-width: 0; color: var(--c-text); font-family: var(--font-prose);
+    font-size: 14px; line-height: 1.65; overflow-wrap: anywhere;
+  }
+  .md-body > :first-child { margin-top: 0; }
+  .md-body h1, .md-body h2, .md-body h3, .md-body h4, .md-body h5, .md-body h6 {
+    color: var(--c-text-bright); line-height: 1.3; margin: 1.6em 0 .55em; font-weight: 600; scroll-margin-top: .8rem;
+  }
+  .md-body h1 { font-size: 1.75em; padding-bottom: .3em; border-bottom: 1px solid var(--c-elevated); }
+  .md-body h2 { font-size: 1.4em; padding-bottom: .25em; border-bottom: 1px solid var(--c-elevated); }
+  .md-body h3 { font-size: 1.17em; }
+  .md-body h4 { font-size: 1em; }
+  .md-body h5 { font-size: .92em; }
+  .md-body h6 { font-size: .85em; color: var(--c-text-muted); }
+  .md-body .md-flash { animation: md-flash 1.4s ease-out; }
+  @keyframes md-flash { from { background: var(--c-blue-tint); } to { background: transparent; } }
+  .md-body p { margin: 0 0 .9em; }
+  .md-body ul, .md-body ol { margin: 0 0 .9em; padding-left: 1.6em; }
+  .md-body li { margin: .2em 0; }
+  .md-body li > ul, .md-body li > ol { margin: .2em 0 .2em; }
+  .md-body li > p { margin: 0 0 .5em; }
+  .md-body li.md-task { list-style: none; }
+  .md-body li.md-task > input { margin: 0 .35em 0 -1.3em; vertical-align: -.1em; accent-color: var(--c-green); }
+  .md-body code {
+    font-family: var(--font-mono); font-size: .86em; background: var(--c-elevated);
+    padding: .12em .38em; border-radius: var(--r-xs); color: var(--c-text-bright);
+  }
+  .md-body .md-code {
+    margin: 0 0 1em; border: 1px solid var(--c-border); border-radius: var(--r-sm); background: var(--c-bg); overflow: hidden;
+  }
+  .md-body .md-code-lang {
+    font-family: var(--font-mono); font-size: 11px; color: var(--c-text-dim);
+    padding: .3rem .75rem; border-bottom: 1px solid var(--c-elevated); background: var(--c-surface-alt);
+  }
+  .md-body pre { margin: 0; padding: .7rem .85rem; overflow-x: auto; line-height: 1.5; }
+  .md-body pre code { background: none; padding: 0; font-size: 12px; color: var(--c-text); white-space: pre; overflow-wrap: normal; }
+  .md-body blockquote {
+    margin: 0 0 1em; padding: .1em 1em; border-left: 3px solid var(--c-border); color: var(--c-text-soft);
+  }
+  .md-body blockquote > :last-child { margin-bottom: 0; }
+  .md-body hr { border: none; border-top: 1px solid var(--c-border); margin: 1.6em 0; }
+  .md-body .md-table-wrap { overflow-x: auto; margin: 0 0 1em; max-width: 100%; border: 1px solid var(--c-border); border-radius: var(--r-sm); }
+  .md-body table { border-collapse: collapse; font-size: 13px; line-height: 1.45; min-width: 100%; }
+  .md-body th, .md-body td { padding: .4rem .65rem; border-bottom: 1px solid var(--c-elevated); vertical-align: top; text-align: left; min-width: 6ch; overflow-wrap: normal; word-break: normal; }
+  .md-body td { overflow-wrap: break-word; }
+  .md-body th { color: var(--c-text-bright); background: var(--c-surface-alt); font-weight: 600; white-space: nowrap; }
+  .md-body tbody tr:last-child td { border-bottom: none; }
+  .md-body tbody tr:nth-child(even) td { background: #ffffff05; }
+  .md-body th + th, .md-body td + td { border-left: 1px solid var(--c-elevated); }
+  .md-body .md-al-left { text-align: left; }
+  .md-body .md-al-center { text-align: center; }
+  .md-body .md-al-right { text-align: right; }
+  .md-body a.md-link { color: var(--c-blue); text-decoration: none; cursor: pointer; border-radius: 2px; }
+  .md-body a.md-link:hover { text-decoration: underline; }
+  .md-body a.md-link:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
+  .md-body .md-ext-mark { font-size: .75em; margin-left: .15em; color: var(--c-text-muted); }
+  .md-body .md-url { color: var(--c-text-dim); font-family: var(--font-mono); font-size: .82em; }
+  .md-body .md-img-alt { color: var(--c-text-muted); font-style: italic; }
+  .md-body .md-img { max-width: 100%; height: auto; border-radius: var(--r-xs); vertical-align: middle; }
+  .md-body .md-cut {
+    margin-top: 2em; padding: .6rem .8rem; font-size: 12.5px; color: var(--c-amber-strong);
+    background: var(--c-amber-tint); border-radius: var(--r-sm);
+  }
+
+  /* A narrow Files panel (a phone, a small window): the toolbar wraps onto two
+     lines, the favourites become a strip, and the list and the preview stack. */
+  @media (max-width: 760px) {
+    .fx-toolbar { flex-wrap: wrap; padding: .45rem .6rem; }
+    .fx-crumbs, .fx-path-input { flex: 1 1 calc(100% - 4.5rem); }
+    .fx-filter { flex: 1 1 8rem; width: auto; min-width: 6rem; }
+    .fx-body, .fx-body.md-reading {
+      grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) minmax(0, 1.6fr);
+    }
+    .fx-body.no-preview { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    .fx-side {
+      display: flex; gap: .2rem; overflow-x: auto; overflow-y: hidden; padding: .3rem .5rem;
+      border-right: none; border-bottom: 1px solid var(--c-elevated);
+    }
+    .fx-side .cm-side-label { display: none; }
+    #fx-favourites { display: flex; gap: .2rem; }
+    .fx-fav { flex-shrink: 0; white-space: nowrap; }
+    .fx-preview { border-left: none; border-top: 1px solid var(--c-elevated); }
+    .fx-list td:nth-child(3), .fx-list th:nth-child(3) { display: none; }
+    .files-modal .modal-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .files-modal .proj-tabs { margin-left: .6rem; min-width: 0; flex-shrink: 1; overflow-x: auto; scrollbar-width: none; }
+  }
+
   /* ── Chat dock (see js/chat-dock.js) ── */
   /* Under the modals (200) and over the panes: a chat is something you glance
      at while a terminal runs, never something that should cover a dialog. */

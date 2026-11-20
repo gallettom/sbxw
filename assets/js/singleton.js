@@ -38,6 +38,8 @@ const SBXW_APP_SCRIPTS = [
   '/js/create.js',
   '/js/ports.js',
   '/js/browser.js',
+  // Before files.js, whose preview renders Markdown with it (only on a click).
+  '/js/markdown.js',
   '/js/files.js',
   '/js/codemap.js',
   '/js/ssh.js',

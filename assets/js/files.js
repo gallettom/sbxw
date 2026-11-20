@@ -35,6 +35,10 @@ const fx = {
   fresh: null,
   places: { workspace: null, artifacts: null, home: '/home/agent', mounts: [], worktrees: [] },
   seq: 0,              // the newest listing request; older answers are dropped
+  // The Markdown document on screen (see fxPaintMd), and a heading a link
+  // from another document asked to land on once this one opens.
+  md: null,
+  mdAnchor: null,
 };
 
 function humanSize(bytes) {
@@ -535,6 +539,8 @@ function fxDownload(entry) {
 /// opening them, as well as by the README a folder opens on.
 function fxShow(entry) {
   if (entry.kind === 'file') { fxPreview(entry); return; }
+  fx.md = null;
+  fxReading(false);
   fx.selected = fxKey(entry);
   renderList();
   setPreviewOpen(true);
@@ -568,21 +574,29 @@ function setPreviewOpen(open) {
 }
 
 function fxPreviewEmpty() {
+  fx.md = null;
+  fxReading(false);
   document.getElementById('fx-preview').innerHTML = '';
   setPreviewOpen(false);
 }
 
 async function fxPreview(entry) {
   fx.selected = fxKey(entry);
+  fx.md = null;
   renderList();
   setPreviewOpen(true);
   const path = fxPathOf(entry);
+  const md = entry.kind === 'file' && FX_MD.test(entry.name);
+  fxReading(md && fxMdView() === 'rendered');
   const host = document.getElementById('fx-preview');
   host.innerHTML = `
     <div class="fx-prev-head">
       <div class="fx-prev-name" title="${escHtml(path)}">${escHtml(entry.name)}</div>
       <div class="fx-prev-meta">${humanSize(entry.size)} · ${escHtml(fullTime(entry.modified))}</div>
       <div class="fx-prev-actions">
+        ${md ? `<span class="fx-md-switch" role="group" aria-label="Show as">
+          <button type="button" data-md-view="rendered" aria-pressed="${fxMdView() === 'rendered'}">Rendered</button>
+          <button type="button" data-md-view="source" aria-pressed="${fxMdView() === 'source'}">Source</button></span>` : ''}
         <a class="dl-link" href="${fxFileUrl(path, '&download=1')}" download="${escHtml(entry.name)}">⬇ Download</a>
         <button class="fx-copy" data-copy="${escHtml(path)}" title="Copy the path">Copy path</button>
         ${fx.recent ? `<button class="fx-copy" data-reveal="${escHtml(path)}"
@@ -635,9 +649,119 @@ async function fxPreview(entry) {
     body.querySelector('iframe').srcdoc = text;
     return;
   }
+  if (md) {
+    fx.md = { key: fxKey(entry), path, text, truncated, size: entry.size, max, render: null };
+    fxPaintMd(body);
+    return;
+  }
+  fxPaintSource(body, text, truncated, max, entry.size);
+}
+
+function fxPaintSource(body, text, truncated, max, size) {
+  body.classList.remove('fx-prev-md');
   body.innerHTML = `<pre class="fx-prev-text"></pre>${truncated
-    ? `<p class="cm-empty-small">First ${humanSize(max)} of ${humanSize(entry.size)} — download it for the rest.</p>` : ''}`;
+    ? `<p class="cm-empty-small">First ${humanSize(max)} of ${humanSize(size)} — download it for the rest.</p>` : ''}`;
   body.querySelector('pre').textContent = text;
+}
+
+/* ── Markdown ──
+   A .md file opens rendered by markdown.js (loaded before this file), with a
+   Rendered | Source switch kept for the session. The renderer writes escaped
+   text only; links to files and headings carry an index into its `links`,
+   images an index into `images`, and this file gives them behaviour: nothing
+   is followed before a press, and only images of this sandbox, by path, are
+   loaded, through the same capped file route as the preview. */
+const FX_MD = /\.(md|markdown)$/i;
+const FX_MD_VIEW_KEY = 'sbxw.files.mdView';
+let fxMdViewMem = null;
+
+function fxMdView() {
+  if (fxMdViewMem) return fxMdViewMem;
+  let v = null;
+  try { v = sessionStorage.getItem(FX_MD_VIEW_KEY); } catch (_) { /* storage off: the default */ }
+  fxMdViewMem = v === 'source' ? 'source' : 'rendered';
+  return fxMdViewMem;
+}
+
+function fxSetMdView(v) {
+  fxMdViewMem = v === 'source' ? 'source' : 'rendered';
+  try { sessionStorage.setItem(FX_MD_VIEW_KEY, fxMdViewMem); } catch (_) { /* kept in memory only */ }
+}
+
+/// A rendered document gets more of the panel than a plain preview: it is
+/// read, not glanced at.
+function fxReading(on) {
+  document.querySelector('.fx-body').classList.toggle('md-reading', !!on);
+}
+
+function fxPaintMd(body) {
+  const doc = fx.md;
+  if (!doc) return;
+  const tail = doc.truncated
+    ? `<p class="md-cut">The file is ${humanSize(doc.size)}; this is its first ${humanSize(doc.max)}. Download it for the rest.</p>` : '';
+  if (fxMdView() === 'source') { fxReading(false); fxPaintSource(body, doc.text, doc.truncated, doc.max, doc.size); return; }
+  if (typeof mdRender !== 'function') {
+    fxReading(false);
+    fxPaintSource(body, doc.text, doc.truncated, doc.max, doc.size);
+    body.insertAdjacentHTML('afterbegin', '<p class="cm-empty-small">The Markdown reader did not load: showing the source.</p>');
+    return;
+  }
+  fxReading(true);
+  const dir = doc.path.slice(0, doc.path.lastIndexOf('/')) || '/';
+  const r = mdRender(doc.text, { base: dir });
+  doc.render = r;
+  const outline = r.headings.length >= 2 ? mdOutlineHtml(r.headings) : '';
+  body.classList.add('fx-prev-md');
+  body.scrollTop = 0;
+  body.innerHTML = `<div class="md-doc"><div class="md-doc-grid${outline ? ' has-outline' : ''}">
+    ${outline ? `<details class="md-ol-menu"><summary>Outline · ${r.headings.length}</summary><nav class="md-ol" aria-label="Outline">${outline}</nav></details>
+    <nav class="md-ol md-ol-side" aria-label="Outline">${outline}</nav>` : ''}
+    <article class="md-body">${r.html}${tail}</article></div></div>`;
+  body.querySelectorAll('img[data-md-img]').forEach((img) => {
+    const p = r.images[Number(img.dataset.mdImg)];
+    if (!p) { img.remove(); return; }
+    img.loading = 'lazy';
+    img.addEventListener('error', () => {
+      const t = document.createElement('span');
+      t.className = 'md-img-alt';
+      t.textContent = `[image: ${img.alt || 'no description'}] (${p})`;
+      img.replaceWith(t);
+    }, { once: true });
+    img.src = fxFileUrl(p, `&max=${FX_IMAGE_MAX}`);
+  });
+  // A link from another document asked for a heading of this one.
+  const want = fx.mdAnchor;
+  fx.mdAnchor = null;
+  if (want && want.path === doc.path && want.anchor) fxMdScroll(body, want.anchor);
+}
+
+function fxMdScroll(body, anchorOrId, isId = false) {
+  const r = fx.md?.render;
+  if (!r) return;
+  const h = isId ? r.headings.find((x) => x.id === anchorOrId) : mdFindHeading(r.headings, anchorOrId);
+  const el = h && document.getElementById(h.id);
+  if (!el || !body.contains(el)) {
+    if (!isId) fxNotice(`No heading "${anchorOrId}" in this document`, 'error');
+    return;
+  }
+  el.scrollIntoView({ block: 'start' });
+  el.classList.remove('md-flash');
+  void el.offsetWidth;
+  el.classList.add('md-flash');
+}
+
+/// A press on a link to a heading or a file of this sandbox.
+function fxMdFollow(body, idx) {
+  const doc = fx.md;
+  const link = doc?.render?.links[idx];
+  if (!link) return;
+  if (link.kind === 'anchor') { fxMdScroll(body, link.anchor); return; }
+  if (link.kind !== 'file') return;
+  if (link.path === doc.path) { if (link.anchor) fxMdScroll(body, link.anchor); return; }
+  if (link.dir) { fxOpen(link.path); return; }
+  fx.mdAnchor = link.anchor ? { path: link.path, anchor: link.anchor } : null;
+  const cut = link.path.lastIndexOf('/');
+  fxOpen(cut > 0 ? link.path.slice(0, cut) : '/', { select: link.path.slice(cut + 1) });
 }
 
 /// Paint the footer's map button for what this project has, or is getting.
@@ -907,7 +1031,33 @@ document.getElementById('fx-list-wrap').addEventListener('keydown', (e) => {
   }
 });
 
+// A document's links to files and headings are role="link" anchors without
+// an address: Return follows them, as it would a real link.
+document.getElementById('fx-preview').addEventListener('keydown', (e) => {
+  const mdLink = isEnterKey(e) && e.target.closest?.('a[data-md-link]');
+  if (!mdLink) return;
+  e.preventDefault();
+  fxMdFollow(document.getElementById('fx-prev-body'), Number(mdLink.dataset.mdLink));
+});
 document.getElementById('fx-preview').addEventListener('click', (e) => {
+  const view = e.target.closest('[data-md-view]');
+  if (view) {
+    if (view.dataset.mdView === fxMdView()) return;
+    fxSetMdView(view.dataset.mdView);
+    document.querySelectorAll('#fx-preview [data-md-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mdView === fxMdView())));
+    const body = document.getElementById('fx-prev-body');
+    if (body && fx.md) fxPaintMd(body);
+    return;
+  }
+  const go = e.target.closest('[data-md-goto]');
+  if (go) {
+    const body = document.getElementById('fx-prev-body');
+    fxMdScroll(body, go.dataset.mdGoto, true);
+    go.closest('details')?.removeAttribute('open');
+    return;
+  }
+  const mdLink = e.target.closest('a[data-md-link]');
+  if (mdLink) { e.preventDefault(); fxMdFollow(document.getElementById('fx-prev-body'), Number(mdLink.dataset.mdLink)); return; }
   if (e.target.closest('[data-delete]')) {
     const entry = fx.entries.find((x) => fxKey(x) === fx.selected);
     if (entry) fxDelete(entry);
