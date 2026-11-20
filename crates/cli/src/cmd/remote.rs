@@ -34,6 +34,8 @@ pub enum RemoteCmd {
     Devices,
     /// Unpair a device now (its open pages lose access at once).
     Revoke { id: String },
+    /// Turn a device's notifications off (it stays paired; the phone can turn them on again).
+    NotificationsOff { id: String },
     /// Log the tailnet machine out and delete its state (remote access must be off).
     ForgetNode,
     /// What paired devices did, and when (never what they wrote).
@@ -79,12 +81,17 @@ pub fn run(cmd: RemoteCmd, config: &Path) -> Result<()> {
                 println!("no paired device");
             }
             for d in list {
-                println!("{}  {}  paired {}  last seen {}", s(&d["id"]), s(&d["name"]), ago(&d["created_ms"]), ago(&d["last_seen_ms"]));
+                let push = if d["notifications"].as_bool().unwrap_or(false) { "  notifications on" } else { "" };
+                println!("{}  {}  paired {}  last seen {}{push}", s(&d["id"]), s(&d["name"]), ago(&d["created_ms"]), ago(&d["last_seen_ms"]));
             }
         }
         RemoteCmd::Revoke { id } => {
             check(&daemon.delete(&format!("/api/remote/devices/{}", url_segment(&id)))?)?;
             println!("device {id} is unpaired");
+        }
+        RemoteCmd::NotificationsOff { id } => {
+            check(&daemon.delete(&format!("/api/remote/devices/{}/push", url_segment(&id)))?)?;
+            println!("notifications are off for device {id}");
         }
         RemoteCmd::ForgetNode => {
             check(&daemon.post("/api/remote/tailnet/forget", json!({}))?)?;
@@ -197,6 +204,8 @@ pub fn render_status(st: &Value) -> (Vec<String>, Vec<String>) {
     }
     out.push(format!("listener:      {} ({})", if st["listening"].as_bool().unwrap_or(false) { "listening" } else { "not listening" }, s(&st["remote_addr"])));
     out.push(format!("devices:       {} paired, {} waiting", st["devices"].as_u64().unwrap_or(0), st["pending_requests"].as_u64().unwrap_or(0)));
+    let push = st["push_devices"].as_u64().unwrap_or(0);
+    out.push(format!("notifications: on for {push} device{}", if push == 1 { "" } else { "s" }));
     let leaders: Vec<String> = st["leaders"].as_array().map(|l| l.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
     out.push(format!("team leaders:  {}", if leaders.is_empty() { "none".to_string() } else { leaders.join(", ") }));
     let awake = match st["keep_awake"].as_str().unwrap_or("") {
@@ -351,9 +360,18 @@ mod tests {
         v["leaders"] = json!([]);
         assert_eq!(
             render(v),
-            "remote access: off\nstate:         off\nlistener:      not listening (127.0.0.1:7683)\ndevices:       0 paired, 0 waiting\n\
+            "remote access: off\nstate:         off\nlistener:      not listening (127.0.0.1:7683)\ndevices:       0 paired, 0 waiting\nnotifications: on for 0 devices\n\
              team leaders:  none\nkeep awake:    kept awake (on mains power)\n--\nTurn it on: sbxw remote on"
         );
+    }
+
+    #[test]
+    fn status_counts_devices_with_notifications_on() {
+        let mut v = base();
+        v["push_devices"] = 1.into();
+        assert!(render(v.clone()).contains("\nnotifications: on for 1 device\n"), "{}", render(v.clone()));
+        v["push_devices"] = 2.into();
+        assert!(render(v).contains("\nnotifications: on for 2 devices\n"));
     }
 
     #[test]
@@ -390,7 +408,7 @@ mod tests {
         assert_eq!(
             render(v),
             "remote access: on\nstate:         waiting for login\nlogin link:    https://login.tailscale.com/a/xyz\n\
-             listener:      listening (127.0.0.1:7683)\ndevices:       0 paired, 0 waiting\nteam leaders:  lead1\nkeep awake:    kept awake (on mains power)\n--\n\
+             listener:      listening (127.0.0.1:7683)\ndevices:       0 paired, 0 waiting\nnotifications: on for 0 devices\nteam leaders:  lead1\nkeep awake:    kept awake (on mains power)\n--\n\
              Next: open the login link in any browser (on this Mac is fine) and add the machine to your tailnet."
         );
     }

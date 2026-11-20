@@ -1399,6 +1399,11 @@ impl App {
         self.remote_access.lock().unwrap().listener.as_ref().map(|l| l.addr)
     }
 
+    /// Tests: the hourly drop of idle devices, at `now`.
+    pub(crate) fn remote_expire_for_tests(&self, now: u64) {
+        self.remote_access.lock().unwrap().expire(now);
+    }
+
     pub(crate) fn remote_dir_for_tests(&self) -> PathBuf {
         self.remote_access.lock().unwrap().dir.clone()
     }

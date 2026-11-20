@@ -26,6 +26,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/remote/pairing/requests/:id/refuse"),
     ("GET", "/api/remote/devices"),
     ("DELETE", "/api/remote/devices/:id"),
+    ("DELETE", "/api/remote/devices/:id/push"),
     ("GET", "/api/remote/journal"),
     ("POST", "/api/remote/tailnet/forget"),
 ];
@@ -41,6 +42,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/remote/pairing/requests/:id/refuse", post(refuse))
         .route("/api/remote/devices", get(devices))
         .route("/api/remote/devices/:id", delete(revoke))
+        .route("/api/remote/devices/:id/push", delete(push_off))
         .route("/api/remote/journal", get(journal))
         .route("/api/remote/tailnet/forget", post(forget))
 }
@@ -101,8 +103,29 @@ async fn refuse(State(app): S, Path(id): Path<String>) -> ApiResult {
     }
 }
 
+/// Each device, with `notifications`: whether it has a push subscription.
 async fn devices(State(app): S) -> Json<Value> {
-    Json(json!(app.remote_devices()))
+    let list: Vec<Value> = app
+        .remote_devices()
+        .into_iter()
+        .map(|d| {
+            let on = app.remote_push_on(&d.id);
+            let mut v = json!(d);
+            v["notifications"] = on.into();
+            v
+        })
+        .collect();
+    Json(json!(list))
+}
+
+/// The Mac turns a device's notifications off (D6). The device stays
+/// paired; it can turn them on again from the phone.
+async fn push_off(State(app): S, Path(id): Path<String>) -> ApiResult {
+    if app.remote_device(&id).is_none() {
+        return Err(ApiError::not_found(format!("no paired device '{id}'")));
+    }
+    app.remote_push_off(&id);
+    Ok(ok())
 }
 
 async fn revoke(State(app): S, Path(id): Path<String>) -> ApiResult {
