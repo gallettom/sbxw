@@ -75,8 +75,6 @@ pub struct RemoteRuntime {
     /// Tests: bind here instead of `remote_addr` (port 0 picks one).
     pub addr_override: Option<String>,
     kicks: tokio::sync::broadcast::Sender<Kick>,
-    /// One phone message typed at a time, so two never interleave.
-    typing: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl RemoteRuntime {
@@ -113,7 +111,6 @@ impl RemoteRuntime {
             tailnet_override: None,
             addr_override: None,
             kicks,
-            typing: Arc::new(tokio::sync::Mutex::new(())),
         };
         rt.expire(now_ms());
         rt
@@ -265,8 +262,8 @@ pub enum Reason {
     /// The leader waits for an answer at the Mac (a permission, a question,
     /// a dialog), or its state is not known: 409.
     NeedsMac,
-    /// The leader announced a tool call in the last seconds; a permission
-    /// prompt may be on its way: 409.
+    /// The leader is working (or announced a tool call in the last
+    /// seconds): only an idle leader is written to: 409.
     Busy,
     /// The leader's terminal has bracketed paste off: 409, fail closed.
     NoPaste,
@@ -299,7 +296,7 @@ impl Reason {
     pub fn sentence(self) -> &'static str {
         match self {
             Reason::NeedsMac => "This needs your Mac: the leader is waiting for an answer there.",
-            Reason::Busy => "The leader is starting a step. Try again in a few seconds.",
+            Reason::Busy => "The leader is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.",
             Reason::NoPaste => "The leader's terminal does not take a paste right now. Send it from the Mac.",
             Reason::NotSubmitted => "Not sent: the leader started asking something at the Mac while the text was typed. It waits, unsent, in the leader's input.",
             Reason::Command => "A message from the phone cannot have a line starting with !, / or #: shell and slash commands are for the Mac.",
@@ -814,18 +811,23 @@ impl App {
     // ── Acting on a leader ───────────────────────────────────────────────
 
     /// Whether typed text would land in the leader's prompt right now, and
-    /// its terminal. Refused (fail closed) when the leader is not a leader any
-    /// more, its state is unknown, it waits for the person (attention, a
-    /// question, a permission prompt), it announced a tool call in the last
-    /// [`TOOL_CALL_QUIET_MS`] (a permission prompt may be drawn before its
-    /// hook arrives), or its terminal has bracketed paste off.
+    /// its terminal. Only an IDLE leader is typed into (review S2): at its
+    /// prompt, its turn over, nothing running; Claude Code does not open a
+    /// permission dialog on its own while it waits for input. Refused (fail
+    /// closed) when the leader is not a leader any more, is working (`busy`:
+    /// it can be read and interrupted, not written to), waits for the person
+    /// or its state is unknown (`needs_mac`), its last history item is a
+    /// prompt or a tool call under [`TOOL_CALL_QUIET_MS`], or its terminal has
+    /// bracketed paste off.
     fn remote_can_type(&self, sb: &SandboxRef) -> Result<Arc<crate::pty::PtySession>, Reason> {
         if !self.leading().contains(&sb.to_string()) {
             return Err(Reason::NeedsMac);
         }
         let info = self.leader_info(sb).ok_or(Reason::NeedsMac)?;
-        if !matches!(info.state, SessionState::Idle | SessionState::Working) {
-            return Err(Reason::NeedsMac);
+        match info.state {
+            SessionState::Idle => {}
+            SessionState::Working => return Err(Reason::Busy),
+            SessionState::Attention | SessionState::Exited => return Err(Reason::NeedsMac),
         }
         if info.question.is_some() || info.steps.as_ref().is_some_and(|s| !s.is_empty()) {
             return Err(Reason::NeedsMac);
@@ -879,16 +881,37 @@ impl App {
             self.remote_record(d, Kind::Refused);
             return Err(Refusal::Conflict(format!("'{sb}': {e}")));
         }
-        let lock = self.remote_access.lock().unwrap().typing.clone();
-        let _one_at_a_time = lock.lock().await;
+        // The session's typing lock (shared with every other line writer:
+        // chat push, sbxw's own lines, answers, Interrupt), then the state.
+        let Some(live) = self.sessions.live(&SessionKey::agent(sb)) else {
+            self.remote_record(d, Kind::Refused);
+            return Err(Refusal::Reason(Reason::NeedsMac));
+        };
+        let _one_at_a_time = live.typing.lock().await;
         let session = match self.remote_can_type(sb) {
-            Ok(s) => s,
+            Ok(s) if Arc::ptr_eq(&s, &live) => s,
+            Ok(_) => {
+                self.remote_record(d, Kind::Refused);
+                return Err(Refusal::Reason(Reason::NeedsMac));
+            }
             Err(r) => {
                 self.remote_record(d, Kind::Refused);
                 return Err(Refusal::Reason(r));
             }
         };
+        // The last check runs on the EXACT string typed: after masking (an
+        // alias could start with `/`) and after `sanitize_typed`.
         let typed = sbxw_core::terminal::sanitize_typed(&safe.text);
+        if typed != safe.text {
+            return Err(Refusal::Reason(Reason::Control));
+        }
+        if let Err(m) = rules::check_message(&typed) {
+            return Err(Refusal::Reason(match m {
+                M::Empty => Reason::Empty,
+                M::Command => Reason::Command,
+                M::Control => Reason::Control,
+            }));
+        }
         let mut rx = session.subscribe();
         session.write(&[sbxw_core::terminal::PASTE_START, typed.as_bytes(), sbxw_core::terminal::PASTE_END]).await;
         crate::typing::settle(&mut rx, Some(crate::typing::ECHO_TIMEOUT), crate::typing::ECHO_QUIET).await;
@@ -939,6 +962,12 @@ impl App {
     /// One Escape into the leader's main session: what a person presses to
     /// interrupt Claude Code. Nothing else is typed.
     pub async fn remote_interrupt(&self, d: &DeviceCtx, sb: &SandboxRef) -> Result<(), Refusal> {
+        // Under the session's typing lock: an Escape never lands between a
+        // phone message's paste and its Return.
+        let Some(live) = self.sessions.live(&SessionKey::agent(sb)) else {
+            return Err(Refusal::NotFound);
+        };
+        let _line = live.typing.lock().await;
         if self.input(sb, SessionKind::Agent, b"\x1b").await {
             tracing::info!("remote access: device {}: interrupt", d.id);
             tracing::debug!("remote access: interrupt of '{sb}'");

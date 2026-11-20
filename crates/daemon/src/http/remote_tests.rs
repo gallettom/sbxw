@@ -1081,3 +1081,54 @@ async fn info_logs_name_a_device_and_a_kind_only() {
         assert!(!l.contains("lead1"), "no sandbox beside the action at info: {l}");
     }
 }
+
+
+// ── Second review: S1 (masking), S2 (idle only), S4 (one typing lock) ───
+
+#[tokio::test]
+async fn an_alias_that_would_make_a_command_is_refused() {
+    let (d, app) = on();
+    std::fs::write(app.store.paths.anonymise(), "[replace]\n\"Bobby\" = \"/permissions\"\n").unwrap();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (_sb, file) = leader(&app, d.path(), "lead1").await;
+    let r = message(&router, &token, "Bobby says hi").await;
+    assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::BAD_REQUEST, json!("command")), "{}", r.text());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(std::fs::read(&file).unwrap_or_default().is_empty());
+}
+
+#[tokio::test]
+async fn a_working_leader_is_read_and_interrupted_not_written_to() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
+    hook(&app, &sb, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": "build it"}));
+    let r = message(&router, &token, "and also this").await;
+    assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::CONFLICT, json!("busy")), "{}", r.text());
+    assert_eq!(call(&router, "GET", "/r/leaders/lead1/history", Some(&token), json!({})).await.status, StatusCode::OK);
+    assert_eq!(call(&router, "POST", "/r/leaders/lead1/interrupt", Some(&token), json!({})).await.status, StatusCode::OK);
+    assert_eq!(typed(&file, b"\x1b").await, b"\x1b", "only the Escape");
+}
+
+#[tokio::test]
+async fn sbxw_lines_wait_for_a_phone_message_to_finish() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
+    let other = app.clone();
+    let sb2 = sb.clone();
+    let note = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        other.push_text(&sb2, sbxw_core::session::SessionKind::Agent, "[sbxw] main moved").await
+    });
+    let r = message(&router, &token, "PHONE TEXT").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    note.await.unwrap().unwrap();
+    let got = String::from_utf8_lossy(&typed(&file, b"main moved").await).into_owned();
+    let got = { let mut g = got; for _ in 0..40 { if g.matches('\r').count() >= 2 { break; } tokio::time::sleep(Duration::from_millis(100)).await; g = String::from_utf8_lossy(&std::fs::read(&file).unwrap_or_default()).into_owned(); } g };
+    assert!(got.starts_with("\u{1b}[200~PHONE TEXT\u{1b}[201~\r"), "the phone's paste and its Return first, whole: {got:?}");
+    assert!(got.ends_with('\r') && got.contains("main moved"), "{got:?}");
+}

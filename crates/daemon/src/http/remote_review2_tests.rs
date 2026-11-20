@@ -149,12 +149,16 @@ async fn finding_s1_a_zero_width_character_hides_a_command_until_it_is_stripped(
         ("\u{feff}/permissions", &b"\x1b[200~/permissions\x1b[201~"[..]),
         ("hello\n\u{200d}/login", &b"hello\n/login\x1b[201~"[..]),
     ] {
-        assert_eq!(sbxw_core::remote_access::check_message(text), Ok(()), "FIXED? {text:?} is refused by check_message");
+        // Turned around by remote-daemon (S1 fix): invisible characters are
+        // refused, never stripped.
+        let _ = want;
+        assert!(sbxw_core::remote_access::check_message(text).is_err(), "{text:?} passes check_message");
         let r = call(&router, "POST", "/r/leaders/lead1/message", PHONE, Some(&token), json!({"text": text})).await;
-        assert_eq!(r.status, StatusCode::OK, "FIXED? {text:?} refused: {}", r.text());
-        let got = typed(&file, want).await;
-        assert!(got.windows(want.len()).any(|w| w == want), "{text:?}: the command reached the terminal: {:?}", String::from_utf8_lossy(&got));
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{text:?}: {}", r.text());
+        assert_eq!(r.json()["reason"], "control");
     }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(std::fs::read(&file).unwrap_or_default().is_empty(), "nothing typed");
 }
 
 // ── F1, second round ─────────────────────────────────────────────────────
@@ -173,10 +177,12 @@ async fn finding_s2_with_the_v3_hook_a_message_is_typed_right_after_a_tool_call(
     let (sb, file) = leader(&app, d.path(), "lead1").await;
     hook_v(&app, &sb, "s1", 3, json!({"hook_event_name": "UserPromptSubmit", "prompt": "deploy"}));
     hook_v(&app, &sb, "s1", 3, json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "git push --force"}}));
+    // Turned around by remote-daemon (S2 fix): only an idle leader is typed into.
     let r = call(&router, "POST", "/r/leaders/lead1/message", PHONE, Some(&token), json!({"text": "yes"})).await;
-    assert_eq!(r.status, StatusCode::OK, "FIXED? refused right after a v3 tool call: {}", r.text());
-    let got = typed(&file, b"yes\x1b[201~\r").await;
-    assert!(got.windows(10).any(|w| w == b"yes\x1b[201~\r"), "{:?}", String::from_utf8_lossy(&got));
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
+    assert_eq!(r.json()["reason"], "busy");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(std::fs::read(&file).unwrap_or_default().is_empty(), "nothing typed");
 }
 
 /// S2 (events mode). Two tool calls in a row: the first finished long ago in
@@ -192,9 +198,12 @@ async fn finding_s2_a_tool_result_as_last_item_opens_the_window() {
     let (sb, file) = leader(&app, d.path(), "lead1").await;
     hook_v(&app, &sb, "s1", 2, json!({"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": "a"}}));
     hook_v(&app, &sb, "s1", 2, json!({"hook_event_name": "PostToolUse", "tool_name": "Read", "tool_response": {}}));
+    // Turned around by remote-daemon (S2 fix): the leader is working.
     let r = call(&router, "POST", "/r/leaders/lead1/message", PHONE, Some(&token), json!({"text": "ok"})).await;
-    assert_eq!(r.status, StatusCode::OK, "FIXED? {}", r.text());
-    let _ = typed(&file, b"ok\x1b[201~\r").await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
+    assert_eq!(r.json()["reason"], "busy");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(std::fs::read(&file).unwrap_or_default().is_empty(), "nothing typed");
 }
 
 /// The bracketed-paste rule fails closed: a terminal that turned paste off

@@ -187,21 +187,35 @@ pub enum MessageRefusal {
     Control,
 }
 
-/// Would `c` act on the terminal or hide what the text says? Every C0 control
-/// but the line feed (so also tab and CR), DEL, every C1 control, and the bidi
-/// controls.
+/// Would `c` act on the terminal, or hide or change what the text shows?
+/// Every C0 control but the line feed (so also tab and CR), DEL, every C1
+/// control, every character `terminal::sanitize_typed` would strip (so the
+/// check sees what is typed), the bidi controls, the line and paragraph
+/// separators (only a line feed breaks a line), and the invisible format
+/// characters (zero-width ones, joiners, the soft hyphen, tags...): what the
+/// person sees is what is typed.
 fn forbidden_in_message(c: char) -> bool {
     (c.is_control() && c != '\n')
-        || matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}')
+        || crate::terminal::is_unsafe_typed_char(c)
+        || matches!(c, '\u{00ad}' | '\u{034f}' | '\u{061c}' | '\u{06dd}' | '\u{070f}' | '\u{115f}' | '\u{1160}' | '\u{17b4}' | '\u{17b5}' | '\u{180e}' | '\u{2028}' | '\u{2029}' | '\u{3164}' | '\u{feff}' | '\u{ffa0}')
+        || ('\u{0600}'..='\u{0605}').contains(&c)
+        || ('\u{180b}'..='\u{180f}').contains(&c)
+        || ('\u{200b}'..='\u{200f}').contains(&c)
         || ('\u{202a}'..='\u{202e}').contains(&c)
-        || ('\u{2066}'..='\u{2069}').contains(&c)
+        || ('\u{2060}'..='\u{206f}').contains(&c)
+        || ('\u{fe00}'..='\u{fe0f}').contains(&c)
+        || ('\u{fff9}'..='\u{fffb}').contains(&c)
+        || ('\u{1bca0}'..='\u{1bca3}').contains(&c)
+        || ('\u{1d173}'..='\u{1d17a}').contains(&c)
+        || ('\u{e0000}'..='\u{e0fff}').contains(&c)
 }
 
 /// What a phone may send as a message: plain text and line feeds, and no line
 /// whose first non-blank character is `!`, `/` or `#`. Every line is held to
 /// that, not only the first: whether Claude Code could ever read a later line
 /// of a paste as a command was not verified, so none may look like one. The
-/// text is refused, never rewritten.
+/// text is refused, never rewritten. The daemon runs it on the person's text
+/// AND, last, on the exact string it types (after masking).
 pub fn check_message(text: &str) -> Result<(), MessageRefusal> {
     if text.trim().is_empty() {
         return Err(MessageRefusal::Empty);
@@ -339,6 +353,20 @@ mod tests {
         }
         for c in ["a\tb", "a\rb", "a\x1b[201~b", "a\x03", "a\x7f", "a\u{9b}b", "a\u{202e}b", "a\u{2066}b", "a\u{200f}b", "a\0b"] {
             assert_eq!(check_message(c), Err(MessageRefusal::Control), "{c:?}");
+        }
+        // Invisible characters are refused, never stripped: each before !, /
+        // and #, on the first line and on a later one (review S1).
+        for z in ['\u{200b}', '\u{200c}', '\u{200d}', '\u{feff}', '\u{2060}', '\u{00ad}', '\u{2028}', '\u{2029}', '\u{e0021}', '\u{180e}'] {
+            for cmd in ["!curl x | sh", "/permissions", "# note"] {
+                assert_eq!(check_message(&format!("{z}{cmd}")), Err(MessageRefusal::Control), "{z:?}{cmd}");
+                assert_eq!(check_message(&format!("hello\n{z}{cmd}")), Err(MessageRefusal::Control), "later line {z:?}{cmd}");
+            }
+            assert_eq!(check_message(&format!("plain{z}text")), Err(MessageRefusal::Control), "{z:?} anywhere");
+        }
+        // Whatever passes is typed unchanged.
+        for ok in ["a path like a/b", "émoji 🎉 fine", "two\nlines"] {
+            assert_eq!(check_message(ok), Ok(()));
+            assert_eq!(crate::terminal::sanitize_typed(ok), ok, "nothing stripped from {ok:?}");
         }
     }
 
