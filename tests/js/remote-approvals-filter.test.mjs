@@ -207,3 +207,43 @@ test('toast: only when plans or merges go up, once, and a tap opens Approvals on
   assert.deepEqual((await chips(page)).filter(c => c.on).map(c => c.name), ['website']);
   await ctx.close();
 });
+
+test('network detail: a request sbx issued again under a new id opens under the new id', { skip }, async () => {
+  await setup();
+  const { ctx, page } = await phone();
+  await open(page);
+  // The sandbox retried: sbx now lists pypi.org under a new id; the page still holds the old one.
+  const re = LISTS().network.requests.map(r => (r.id === 'network:a3' ? { ...r, id: 'network:b9' } : r));
+  await ctl({ l2Lists: { network: { requests: re } }, l2Gone: ['network:a3'] });
+  await page.tap('#ap-filter [data-sandbox="shop"]');
+  await page.tap('.rc-ap-network');
+  await page.waitForSelector('#item-acts button');
+  const gets = (await log()).filter(e => e.method === 'GET' && e.path.startsWith('/r/network/')).map(e => decodeURIComponent(e.path.slice(11)));
+  assert.deepEqual(gets, ['network:a3', 'network:b9']);
+  assert.notEqual(await page.textContent('#item'), 'This is not waiting any more.');
+  await ctx.close();
+});
+
+test('network detail: really gone says so; a request with nothing the phone may answer says the Mac decides', { skip }, async () => {
+  await setup();
+  const { ctx, page } = await phone();
+  await open(page);
+  await ctl({ l2Gone: ['network:a3'] });
+  await page.tap('#ap-filter [data-sandbox="shop"]');
+  await page.tap('.rc-ap-network');
+  await page.waitForFunction(() => document.querySelector('#item')?.textContent.includes('not waiting any more'));
+  await ctx.close();
+});
+
+test('network detail: nothing the phone may answer says the Mac decides', { skip }, async () => {
+  const one = structuredClone(FX.level2.network_one);
+  one.request.options = [];
+  await setup();
+  await ctl({ l2Lists: { network_one: one } });
+  const { ctx, page } = await phone();
+  await open(page);
+  await page.tap('.rc-ap-network');
+  await page.waitForFunction(() => document.querySelector('#item-acts')?.textContent.includes('Only the Mac can allow this request.'));
+  assert.equal(await page.$$eval('#item-acts button', b => b.length), 0);
+  await ctx.close();
+});

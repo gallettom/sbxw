@@ -1745,13 +1745,13 @@
     else if (what === 'network') { id = str(it.id); main = str(it.host); meta = str(it.sandbox); }
     else { id = str(it.name); main = str(it.name); meta = [str(it.agent) || (it.chat ? 'chat' : ''), str(it.workspace)].filter(Boolean).join(' · '); }
     b.append(dataEl('span', 'rc-ap-main', main, what === 'network'), dataEl('span', 'rc-ap-meta', meta));
-    b.addEventListener('click', () => openItem(what, id));
+    b.addEventListener('click', () => openItem(what, id, '', what === 'network' ? { sandbox: str(it.sandbox), host: str(it.host) } : null));
     li.append(b);
     return li;
   }
 
   // ── A detail ──
-  async function openItem(what, id, said) {
+  async function openItem(what, id, said, hint) {
     closeSheet();
     st.item = { what, id, data: null, digest: '' };
     const titles = { plans: 'Plan', merges: 'Merge', network: 'Network request', stopped: 'Stopped sandbox' };
@@ -1763,6 +1763,17 @@
     const res = await l2.detail(what, id);
     if (st.item?.what !== what || st.item.id !== id) return;
     if (!res.ok || !res.data) {
+      // sbx may issue a pending request again under a new id (the sandbox
+      // retries); the list in hand then names an id that is gone. Read the
+      // list once more and, for the same sandbox and host, open the new id.
+      // The detail, its digest and Face ID are the new item's own.
+      if (res.status === 404 && what === 'network' && hint) {
+        const fresh = await l2.list('network');
+        if (st.item?.what !== what || st.item.id !== id) return;
+        const rows = fresh.ok && Array.isArray(fresh.data?.requests) ? fresh.data.requests : [];
+        const again = rows.find(r => r && str(r.id) !== id && str(r.sandbox) === hint.sandbox && str(r.host) === hint.host);
+        if (again) return openItem(what, str(again.id), said, null);
+      }
       $('item').replaceChildren(el('p', 'rc-muted', res.status === 404 ? 'This is not waiting any more.' : rcL2Fail(res)));
       return;
     }
@@ -1943,6 +1954,8 @@
       const label = str(o.label) || o.id;
       list.push(btn(label.charAt(0).toUpperCase() + label.slice(1), 'network_respond', DANGER.test(`${o.id} ${label}`) ? 'rc-danger' : 'rc-primary', { id: o.id, label }));
     }
+    // A request the phone may not answer (only "Allow" is left): say so.
+    if (what === 'network' && !list.length) list.push(el('p', 'rc-item-note', 'Only the Mac can allow this request.'));
     acts.replaceChildren(...list);
   }
 
