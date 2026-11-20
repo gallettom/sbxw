@@ -188,9 +188,12 @@ function rcLeaders(data) {
   return list
     .filter(l => l && typeof l.sandbox === 'string' && l.sandbox)
     .map(l => ({ ...l, name: typeof l.name === 'string' && l.name ? l.name : l.sandbox }))
-    .sort((a, b) => (RC_RANK[a.state] ?? 3) - (RC_RANK[b.state] ?? 3)
+    .sort((a, b) => rcRank(a) - rcRank(b)
       || (Number(b.last_at) || 0) - (Number(a.last_at) || 0)
       || a.name.localeCompare(b.name));
+}
+function rcRank(l) {
+  return l.asks ? 0 : RC_RANK[l.state] ?? 3;
 }
 function rcStateLabel(state) {
   return RC_STATE[state] || 'stopped';
