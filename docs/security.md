@@ -388,7 +388,7 @@ does the same as a revoke.
 |---|---|
 | List the running team leaders (the main session of a running sandbox that leads a team), and see which needs you | See any other session: threads, other sandboxes, Jarvis |
 | Read a leader's conversation: your prompts, its replies, messages from other sessions and from sbxw, questions. Its replies are sent as written (masked by your anonymise rules only), so a reply that quotes a file reaches the phone | See any tool's input or output, a file, a diff, a terminal, or the harness's own output (a `!` command's, a slash command's, hooks', task notifications, system reminders). These are shown as "3 steps" and nothing more |
-| Send it text, typed or dictated, as your own words (masked first by your anonymise rules), when it is at its prompt (see "What a message can do" below) | Type raw keys, open a terminal, create a sandbox or a thread; send a line starting with `!` (a shell command), `/` (a slash command) or `#`; send a control character; type while the leader waits for an answer at the Mac |
+| Send it text, typed or dictated, as your own words (masked first by your anonymise rules), when it is idle at its prompt (see "What a message can do" below) | Type raw keys, open a terminal, create a sandbox or a thread; send a line starting with `!` (a shell command), `/` (a slash command) or `#`; send a control or invisible character; write to a leader that is working or waits for an answer at the Mac |
 | Answer a multiple-choice question (`AskUserQuestion`) | Allow a tool (a permission prompt): "This needs your Mac" |
 | Interrupt it (one Escape, as at the keyboard) | Approve or refuse a plan, a merge, a network request; remove anything |
 | Dictate (the Mac transcribes; the text comes back to the phone to correct) | Touch secrets, the GitHub token, network rules, ports, kits, MCP servers, configuration, the relay, Jarvis, the daemon |
@@ -404,22 +404,31 @@ what lands in the leader's prompt and nothing else:
 - **Only plain text.** A message with any line starting with `!`, `/` or `#` is refused
   (Claude Code would run a `!` line as a shell command at once, and a `/` line is a slash
   command such as `/permissions` or `/mcp`). So is any control character except a line
-  break (tab, Return, Escape and the like) and any bidi control. The text is refused, never
-  rewritten. Every line is checked, not only the first: whether Claude Code could read a
-  later line of a paste as a command was not verified, so none may look like one.
-- **Only into the prompt.** It is refused ("This needs your Mac") while the leader waits for
-  you: a permission prompt, a question (the phone answers a question with its own button,
-  never by typing), any other dialog, or when sbxw does not know the leader's state. It is
-  also refused for 3 seconds after the leader announces a tool call, since a permission
-  prompt may be drawn before its notice reaches sbxw.
-- **As one paste, Return last.** The text goes as a single bracketed paste (a dialog does
-  not read a paste as key presses), then sbxw waits for the echo and 600 ms more, checks
-  the leader's state again, and only then presses Return. If the leader started asking
-  something meanwhile, there is no Return: the phone is told "not sent" and the text waits
+  break (tab, Return, Escape and the like), any bidi control, and any invisible character
+  (zero-width spaces and joiners, a byte order mark, a soft hyphen...): what you see is
+  exactly what is typed. The text is refused, never rewritten. Every line is checked, not
+  only the first: whether Claude Code could read a later line of a paste as a command was
+  not verified, so none may look like one. The check runs again on the exact text typed,
+  after your anonymise rules: an alias that would start a line with `/` is refused too.
+- **Only into an idle leader.** A message is typed only while the leader is idle: at its
+  prompt, its turn over, nothing running. A leader at work can be read and interrupted
+  from the phone, not written to ("The leader is working"). A message is also refused
+  ("This needs your Mac") while the leader waits for you (a permission prompt, a question,
+  which the phone answers with its own button and never by typing, any other dialog) or
+  when sbxw does not know its state.
+- **As one paste, Return last.** The text goes as a single bracketed paste, then sbxw waits
+  for the echo and 600 ms more, checks that the leader is still idle, and only then presses
+  Return. If it is not, there is no Return: the phone is told "not sent" and the text waits
   in the leader's input. If the leader's terminal has bracketed paste off, nothing is typed.
-- **Residual window.** A dialog whose notice reaches sbxw more than about a second after it
-  is drawn, or one drawn between the second check and the Return (microseconds), could
-  still receive that Return. It is small, not zero.
+  Nothing else sbxw types into that session (a composer's message, sbxw's own lines, an
+  answer, Interrupt) can land between the paste and the Return.
+- **Design assumption, not verified:** that a Claude Code dialog does not read a paste as
+  key presses. It matters only if a dialog is on screen when the paste arrives, which the
+  idle rule is there to prevent.
+- **Residual window.** Claude Code opening a dialog on its own while idle, in the moment
+  between sbxw's idle check and the paste, or between the second check and the Return,
+  would receive that paste or that Return. An idle Claude Code waits for input and is not
+  known to open dialogs by itself, so this window is small, not zero.
 - **Not verified on a real Mac:** that Claude Code turns bracketed paste on at its prompt.
   If it does not, every message from the phone is refused (the safe failure).
 - A message already being typed when you revoke the phone or turn remote access off
@@ -429,6 +438,8 @@ what lands in the leader's prompt and nothing else:
 
 1. Pair the phone with `sbxw remote pair` and type the digits it shows.
 2. Send one message from the phone to an idle leader and see it submitted in its terminal.
+   While the leader works, check that the phone says "The leader is working" and types
+   nothing.
 3. Make a leader ask for a permission and check that a message from the phone is refused
    ("This needs your Mac") and nothing reaches the terminal.
 4. On mains power with remote access on, check the Mac does not idle to sleep
