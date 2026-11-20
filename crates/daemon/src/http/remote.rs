@@ -134,14 +134,15 @@ pub async fn remote_guard(State(app): S, mut req: Request, next: Next) -> Respon
     let data = path.starts_with("/r/");
     let res = match guarded(&app, &mut req, &path, data).await {
         Ok(()) => next.run(req).await,
-        Err(r) => r,
+        Err(r) => *r,
     };
     with_headers(res, data)
 }
 
-async fn guarded(app: &Arc<App>, req: &mut Request, path: &str, data: bool) -> Result<(), Response> {
+/// `Err` is the refusal to send, boxed (a response is large).
+async fn guarded(app: &Arc<App>, req: &mut Request, path: &str, data: bool) -> Result<(), Box<Response>> {
     if !app.remote_enabled() {
-        return Err(ApiError::not_found("not found").into_response());
+        return Err(Box::new(ApiError::not_found("not found").into_response()));
     }
     let h = req.headers();
     let host = h.get(header::HOST).and_then(|v| v.to_str().ok());
@@ -150,10 +151,10 @@ async fn guarded(app: &Arc<App>, req: &mut Request, path: &str, data: bool) -> R
     let (allowed, tailnet) = app.remote_hosts();
     if let Err(why) = rules::check_host_origin(&allowed, tailnet.as_deref(), host, origin, safe) {
         tracing::info!("remote access: refused {} (host {host:?}): {why}", req.method());
-        return Err(ApiError::forbidden(why).into_response());
+        return Err(Box::new(ApiError::forbidden(why).into_response()));
     }
     if tricky(path) {
-        return Err(ApiError::not_found("not found").into_response());
+        return Err(Box::new(ApiError::not_found("not found").into_response()));
     }
     if !data || UNPAIRED.contains(&path) {
         return Ok(());
@@ -164,8 +165,8 @@ async fn guarded(app: &Arc<App>, req: &mut Request, path: &str, data: bool) -> R
             req.extensions_mut().insert(d);
             Ok(())
         }
-        Err(AuthError::Limited(ms)) => Err(limited(ms)),
-        Err(AuthError::NotPaired) => Err(ApiError::unauthorized("not paired").into_response()),
+        Err(AuthError::Limited(ms)) => Err(Box::new(limited(ms))),
+        Err(AuthError::NotPaired) => Err(Box::new(ApiError::unauthorized("not paired").into_response())),
     }
 }
 

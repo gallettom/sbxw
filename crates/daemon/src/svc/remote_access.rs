@@ -786,7 +786,7 @@ impl App {
     }
 
     pub async fn remote_transcribe(self: &Arc<Self>, d: &DeviceCtx, body: &[u8]) -> Result<sbxw_core::anonymise::Masked, Refusal> {
-        let samples = crate::svc::voice::samples_of(body).map_err(|e| Refusal::Bad(format!("{e}")))?;
+        let samples = crate::svc::voice::samples_of(body).map_err(|e| Refusal::Bad(e.to_string()))?;
         let text = self.voice_transcribe(samples).await.map_err(Refusal::Unavailable)?;
         let safe = self.anonymise(text.trim()).map_err(Refusal::Unavailable)?;
         tracing::info!("remote access: device {} transcribed {} bytes of audio", d.id, body.len());
