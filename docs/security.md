@@ -355,7 +355,7 @@ what it protects.
 ```
 sbxw remote on          # asks first, says what it exposes
 sbxw remote status      # on/off, the tailnet machine, devices, keeping awake
-sbxw remote pair        # prints a one-time link, then asks you to confirm the phone
+sbxw remote pair        # prints a one-time link, then asks for the digits the phone shows
 sbxw remote devices     # paired devices
 sbxw remote revoke <id> # unpair one, at once
 sbxw remote journal     # what devices did, never what they wrote
@@ -371,7 +371,10 @@ sbxw remote forget-node # (when off) log the tailnet machine out and delete its 
    code is good once, for 5 minutes. The CLI prints the link only: drawing a QR code in
    the terminal would need a new library.
 3. The phone asks for a device name and shows a 6-digit number. The terminal shows the
-   same name and number: if they match, answer `y`. The phone is paired.
+   name and asks you to TYPE the six digits you see on the phone (it never prints them):
+   right digits pair it, Enter alone refuses, three wrong tries refuse it. A new link
+   voids any request still waiting, and the terminal only asks about a phone that used the
+   link it just printed.
 4. Add the page to the phone's home screen if you like.
 
 **To cut access**: `sbxw remote revoke <id>` (one phone, at once: its open page loses
@@ -384,14 +387,52 @@ does the same as a revoke.
 | A paired phone can | A paired phone cannot |
 |---|---|
 | List the running team leaders (the main session of a running sandbox that leads a team), and see which needs you | See any other session: threads, other sandboxes, Jarvis |
-| Read a leader's conversation: your prompts, its replies, messages from other sessions, questions | See any tool's input or output, a file, a diff, a terminal. Tool work is shown as "3 steps" and nothing more |
-| Send it text, typed or dictated, as your own words (masked first by your anonymise rules) | Type raw keys, open a terminal, create a sandbox or a thread |
+| Read a leader's conversation: your prompts, its replies, messages from other sessions and from sbxw, questions. Its replies are sent as written (masked by your anonymise rules only), so a reply that quotes a file reaches the phone | See any tool's input or output, a file, a diff, a terminal, or the harness's own output (a `!` command's, a slash command's, hooks', task notifications, system reminders). These are shown as "3 steps" and nothing more |
+| Send it text, typed or dictated, as your own words (masked first by your anonymise rules), when it is at its prompt (see "What a message can do" below) | Type raw keys, open a terminal, create a sandbox or a thread; send a line starting with `!` (a shell command), `/` (a slash command) or `#`; send a control character; type while the leader waits for an answer at the Mac |
 | Answer a multiple-choice question (`AskUserQuestion`) | Allow a tool (a permission prompt): "This needs your Mac" |
 | Interrupt it (one Escape, as at the keyboard) | Approve or refuse a plan, a merge, a network request; remove anything |
 | Dictate (the Mac transcribes; the text comes back to the phone to correct) | Touch secrets, the GitHub token, network rules, ports, kits, MCP servers, configuration, the relay, Jarvis, the daemon |
 
 These limits are enforced by the daemon, not by the page: the routes for everything in
 the right column do not exist on the remote listener at all.
+
+### What a message can do
+
+A message is typed into the leader's terminal as your words, so the daemon holds it to
+what lands in the leader's prompt and nothing else:
+
+- **Only plain text.** A message with any line starting with `!`, `/` or `#` is refused
+  (Claude Code would run a `!` line as a shell command at once, and a `/` line is a slash
+  command such as `/permissions` or `/mcp`). So is any control character except a line
+  break (tab, Return, Escape and the like) and any bidi control. The text is refused, never
+  rewritten. Every line is checked, not only the first: whether Claude Code could read a
+  later line of a paste as a command was not verified, so none may look like one.
+- **Only into the prompt.** It is refused ("This needs your Mac") while the leader waits for
+  you: a permission prompt, a question (the phone answers a question with its own button,
+  never by typing), any other dialog, or when sbxw does not know the leader's state. It is
+  also refused for 3 seconds after the leader announces a tool call, since a permission
+  prompt may be drawn before its notice reaches sbxw.
+- **As one paste, Return last.** The text goes as a single bracketed paste (a dialog does
+  not read a paste as key presses), then sbxw waits for the echo and 600 ms more, checks
+  the leader's state again, and only then presses Return. If the leader started asking
+  something meanwhile, there is no Return: the phone is told "not sent" and the text waits
+  in the leader's input. If the leader's terminal has bracketed paste off, nothing is typed.
+- **Residual window.** A dialog whose notice reaches sbxw more than about a second after it
+  is drawn, or one drawn between the second check and the Return (microseconds), could
+  still receive that Return. It is small, not zero.
+- **Not verified on a real Mac:** that Claude Code turns bracketed paste on at its prompt.
+  If it does not, every message from the phone is refused (the safe failure).
+- A message already being typed when you revoke the phone or turn remote access off
+  finishes (a few seconds).
+
+### Check on your Mac before relying on it
+
+1. Pair the phone with `sbxw remote pair` and type the digits it shows.
+2. Send one message from the phone to an idle leader and see it submitted in its terminal.
+3. Make a leader ask for a permission and check that a message from the phone is refused
+   ("This needs your Mac") and nothing reaches the terminal.
+4. On mains power with remote access on, check the Mac does not idle to sleep
+   (`pmset -g assertions` shows `caffeinate`); on battery, that it may.
 
 ### The threat model, in plain words
 
@@ -402,8 +443,9 @@ the right column do not exist on the remote listener at all.
   `sbxw-tailnet` reaches it, and it only serves your tailnet. There is no public address.
 - *Someone else on your tailnet* (a shared tailnet, a compromised device of yours). Being
   on the tailnet is not enough: every data route needs a **paired device token**. Pairing
-  needs a one-time code shown on the Mac (192 bits, 5 minutes, single use) AND your `y` on
-  the Mac after comparing a 6-digit number.
+  needs a one-time code shown on the Mac (192 bits, 5 minutes, single use) AND you typing
+  on the Mac the 6 digits the phone shows. The sidecar also lets only your own devices
+  through (see "The Tailscale node").
 - *A stolen or lost phone.* Revoke it: access ends at once, including open pages. Unused
   for 30 days, it is dropped anyway. The phone keeps no conversation (no storage, no
   service worker).
@@ -412,14 +454,17 @@ the right column do not exist on the remote listener at all.
   write must carry the page's own `Origin`; the `Host` must be the tailnet name. No CORS,
   no framing, a strict Content-Security-Policy (`default-src 'self'`).
 - *Another process on the Mac.* It can reach the loopback listener, but without a device
-  token it gets only the page and the two pairing calls, rate-limited per source and in
-  total (the global limits hold whatever source it claims). It cannot read the token: the
-  daemon stores only a SHA-256 of it, in `~/.sbxw/remote/state.json` (`0600`).
+  token it gets only the page and the two pairing calls. Its failures (wrong codes, unknown
+  tokens) are rate-limited per source and in total, and the global limits hold whatever
+  source it claims; a paired phone, the valid pairing code and a request the phone was
+  given are looked up first and never held back by those failures. It cannot read the
+  token: the daemon stores only a SHA-256 of it, in `~/.sbxw/remote/state.json` (`0600`).
 - *The UI token leaking to the phone, or the device token to the UI.* Neither listener
   accepts the other's token. The phone's token has no other power than the list above.
 - *Your words in logs.* The journal records which device did which kind of thing and when,
   never the text of a message, an answer or a transcription; neither do the daemon's logs
-  (a test captures them).
+  (tests capture them), which at info level name only a device and a kind of action. No
+  Tailscale user, login or machine name is read or kept.
 
 **What it does not protect against**
 
