@@ -30,6 +30,8 @@ pub mod codemap;
 pub mod drops;
 pub mod explorer;
 #[cfg(test)]
+mod narrow_tests;
+#[cfg(test)]
 mod scroll_tests;
 mod standin;
 #[cfg(test)]

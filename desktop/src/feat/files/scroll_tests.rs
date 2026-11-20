@@ -18,7 +18,7 @@ fn fixture_with(text: &str) -> String {
     p.to_string_lossy().to_string()
 }
 
-fn settle(rt: &mut Runtime<App>) {
+pub(super) fn settle(rt: &mut Runtime<App>) {
     let end = std::time::Instant::now() + std::time::Duration::from_secs(240);
     let mut quiet = 0;
     while quiet < 12 {
@@ -35,7 +35,7 @@ fn settle(rt: &mut Runtime<App>) {
     }
 }
 
-fn intent(rt: &mut Runtime<App>, name: &str, args: J) {
+pub(super) fn intent(rt: &mut Runtime<App>, name: &str, args: J) {
     for i in crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })).unwrap() {
         rt.update(|s, _| s.run_intent("test", i));
     }

@@ -178,6 +178,8 @@ pub struct Node {
     /// `split` and `divider`: true for side by side (a vertical divider).
     pub vertical: bool,
     pub stick_bottom: bool,
+    /// `split`: the least length, in points, each side keeps (0: no least).
+    pub split_min: [f32; 2],
     /// `scroll`: its edges fade over this many points where content is hidden under them.
     pub fade: Option<f32>,
     /// `textarea`: visible lines (default 4).
@@ -272,6 +274,7 @@ impl Node {
             secure: false,
             vertical: false,
             stick_bottom: false,
+            split_min: [0.0, 0.0],
             fade: None,
             rows: 4,
             fill_image: false,
@@ -332,7 +335,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("icon", Kind::Icon, Positional::Text, &["color", "size"]),
     ("badge", Kind::Badge, Positional::Text, &["tone", "pill"]),
     ("dot", Kind::Dot, Positional::None, &["tone"]),
-    ("split", Kind::Split, Positional::Two, &["id", "vertical", "ratio"]),
+    ("split", Kind::Split, Positional::Two, &["id", "vertical", "ratio", "min_a", "min_b"]),
     ("spacer", Kind::Spacer, Positional::None, &[]),
     ("divider", Kind::Divider, Positional::None, &["vertical", "color"]),
     ("menu", Kind::Menu, Positional::Text, &["id", "items", "on", "arg", "icon", "variant", "disabled", "dense", "keys", "tab_stop", "tone"]),
@@ -1103,6 +1106,8 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
             }
         }
         "ratio" => n.value = J::from(num_of(v)?.clamp(0.1, 0.9) as f64),
+        "min_a" => n.split_min[0] = num_of(v)?.clamp(0.0, 2000.0) as f32,
+        "min_b" => n.split_min[1] = num_of(v)?.clamp(0.0, 2000.0) as f32,
         "placeholder" => n.placeholder = Some(string_of(v)?),
         "scope" => n.scope = lua_to_json(v, 0)?,
         "switch" => n.switch = bool_of(v)?,
