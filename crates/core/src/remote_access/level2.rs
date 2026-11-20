@@ -304,6 +304,14 @@ impl Challenges {
         self.by_device.len()
     }
 
+    /// Tests: move a device's challenge's expiry.
+    #[cfg(any(test, feature = "test-authenticator"))]
+    pub fn age_for_tests(&mut self, device_id: &str, expires_ms: u64) {
+        if let Some(c) = self.by_device.get_mut(device_id) {
+            c.expires_ms = expires_ms;
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.by_device.is_empty()
     }
