@@ -1,0 +1,35 @@
+# Tailscale features compiled OUT of sbxw-tailnet (go build -tags).
+# One tag per line. scripts/build-tailnet.sh and the tests read this file.
+# Each removes code the program must never run; see README.md.
+ts_omit_logtail
+ts_omit_ssh
+ts_omit_taildrop
+ts_omit_drive
+ts_omit_webclient
+ts_omit_advertiseexitnode
+ts_omit_useexitnode
+ts_omit_advertiseroutes
+ts_omit_useroutes
+ts_omit_appconnectors
+ts_omit_relayserver
+ts_omit_netlog
+ts_omit_capture
+ts_omit_clientupdate
+ts_omit_remoteconfig
+ts_omit_portlist
+ts_omit_wakeonlan
+ts_omit_outboundproxy
+ts_omit_kube
+ts_omit_aws
+ts_omit_tap
+ts_omit_bird
+ts_omit_posture
+ts_omit_conn25
+ts_omit_identityfederation
+ts_omit_oauthkey
+ts_omit_c2n
+ts_omit_peerapiserver
+ts_omit_peerapiclient
+ts_omit_portmapper
+ts_omit_captiveportal
+ts_omit_doctor
