@@ -1007,3 +1007,44 @@ async fn a_copy_of_the_cookie_cannot_use_or_burn_the_persons_grant() {
         assert!(w.app.remote_passkey_allow(&person.id, &digits).is_err());
     }
 }
+
+/// Review P2, both callers of the merge: the desktop's and web UI's
+/// `plan_merge` call the script exactly as before (by name, no pins); the
+/// phone's passes the approved tip and base.
+#[tokio::test]
+async fn the_desktop_merge_is_unpinned_and_the_phones_is_pinned() {
+    let w = world();
+    let mut p = enrolled(&w, "phone").await;
+    let ws = w._dir.path().join("ws3");
+    let id = proposed_merge(&w, &ws);
+    let tip = git(&ws, &["rev-parse", "sbxw/alpha"]);
+    let base = git(&ws, &["rev-parse", "main"]);
+    let ch = challenge(&w, &p, "merge", &id, &format!("/r/merges/{id}"), None).await.unwrap();
+    let a = assertion(&mut p, &ch, &Twist::default());
+    let _ = act(&w, &p, &format!("/r/merges/{id}/merge"), a, None).await;
+    let calls: Vec<String> = w.fake.log().into_iter().filter(|c| c.contains("sbxw-thread-merge")).collect();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert!(calls[0].ends_with(&format!("sbxw-thread-merge ={} =alpha ={tip} ={base}", ws.display())), "{}", calls[0]);
+    // The desktop's merge of another proposed merge: by name only.
+    let ws4 = w._dir.path().join("ws4");
+    let id2 = {
+        let sb = sbxw_core::SandboxRef::parse("other").unwrap();
+        std::fs::create_dir_all(&ws4).unwrap();
+        git(&ws4, &["init", "-q", "-b", "main"]);
+        std::fs::write(ws4.join("a"), "a").unwrap();
+        git(&ws4, &["add", "."]);
+        git(&ws4, &["commit", "-qm", "base"]);
+        git(&ws4, &["branch", "sbxw/alpha"]);
+        w.app.store.update(&sb, |r| r.workspace = Some(ws4.clone())).unwrap();
+        let id = pending_plan(&w, "other", "g");
+        let mut book = w.app.plans.lock().unwrap();
+        let threads = book.get(&id).unwrap().threads.clone();
+        book.approve(&id, threads, None, None, 2).unwrap();
+        book.set_thread("other", "alpha", ThreadState::Done, "done", false, 3).unwrap();
+        book.propose_merge(&id, "other", vec!["alpha".into()], "n", vec![], 4).unwrap();
+        id
+    };
+    let _ = w.app.plan_merge(&id2, false, None).await;
+    let last = w.fake.log().into_iter().filter(|c| c.contains("sbxw-thread-merge")).last().unwrap();
+    assert!(last.ends_with(&format!("sbxw-thread-merge ={} =alpha", ws4.display())), "{last}");
+}

@@ -59,6 +59,16 @@ fn world() -> World {
                 git(ws, &["add", "."]);
                 git(ws, &["commit", "-qm", "late work"]);
                 git(ws, &["checkout", "-q", "main"]);
+                // Then the real merge script runs, as in the sandbox (P2 fix).
+                let at = a.iter().position(|x| x == "sbxw-thread-merge").unwrap();
+                let out = std::process::Command::new("bash")
+                    .arg("-c")
+                    .arg(&a[at - 1])
+                    .args(&a[at..])
+                    .envs([("GIT_AUTHOR_NAME", "t"), ("GIT_COMMITTER_NAME", "t"), ("GIT_AUTHOR_EMAIL", "t@t"), ("GIT_COMMITTER_EMAIL", "t@t")])
+                    .output()
+                    .unwrap();
+                return Output::ok(&String::from_utf8_lossy(&out.stdout));
             }
         }
         match (a.first().map(String::as_str), a.get(1).map(String::as_str), a.get(2).map(String::as_str)) {
@@ -286,12 +296,15 @@ async fn finding_p2_a_merge_runs_on_a_branch_that_moved_after_the_last_check() {
     w.sbx.lock().unwrap().late_commit_in = Some(ws.clone());
     let a = assertion(&mut p, &ch);
     let r = call(&w.router, "POST", &format!("/r/merges/{id}/merge"), Some(&p.token), json!({ "assertion": a })).await;
-    assert_ne!(r.json()["reason"], "changed", "FIXED? the merge noticed the branch moved: {}", r.text());
+    // FIXED (P2): the merge is pinned to the commit shown; the late commit
+    // makes it stop as "changed", and nothing is merged.
+    assert_eq!((r.status, r.json()["reason"].as_str()), (StatusCode::CONFLICT, Some("changed")), "{}", r.text());
+    assert!(r.json()["error"].as_str().unwrap().contains("Nothing was merged"), "{}", r.text());
     let merge_call = w.fake.log().into_iter().find(|c| c.contains("sbxw-thread-merge")).expect("the merge script ran");
-    assert!(!merge_call.contains(&shown_tip), "FIXED? the merge names the commit shown: {merge_call}");
-    let tip_at_merge = git(&ws, &["rev-parse", "sbxw/alpha"]);
-    assert_ne!(tip_at_merge, shown_tip, "the branch the script merges is not the one the phone approved");
-    assert_ne!(w.app.plan(&id).unwrap().merge.unwrap().state, MergeState::Proposed);
+    assert!(merge_call.contains(&shown_tip), "the merge names the commit shown: {merge_call}");
+    assert_ne!(git(&ws, &["rev-parse", "sbxw/alpha"]), shown_tip, "the branch did move");
+    assert!(!ws.join("late.rs").exists(), "the late commit was not merged into main");
+    assert_eq!(git(&ws, &["log", "-1", "--format=%s", "main"]), "base", "main untouched");
 }
 
 // ── P3: each open event stream runs sbx on its own ───────────────────────

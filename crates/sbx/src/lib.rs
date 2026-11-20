@@ -1143,6 +1143,14 @@ impl Sbx {
         Ok(scripts::MergeOutcome::from_fields(&f))
     }
 
+    /// [`Self::thread_merge`] pinned to the commit ids approved (the phone's
+    /// merge): the branch must still point at `tip` and the main checkout at
+    /// `base`, else `changed: ...` and nothing is merged.
+    pub async fn thread_merge_pinned(&self, name: &SandboxName, dir: &str, thread: &ThreadName, tip: &str, base: &str) -> Result<scripts::MergeOutcome> {
+        let f = self.thread_script(scripts::thread_merge_pinned_args(name, dir, thread, tip, base)).await?;
+        Ok(scripts::MergeOutcome::from_fields(&f))
+    }
+
     pub async fn setup_ssh(&self) -> Result<()> {
         self.checked(Invocation::new(s(&["setup", "ssh"]))).await.map(drop)
     }

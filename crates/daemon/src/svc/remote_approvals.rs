@@ -165,6 +165,8 @@ pub struct Shown {
     pub options: Vec<String>,
     /// What the journal names: a plan id, a sandbox name, a host.
     pub journal_target: String,
+    /// A merge: the commit ids the digest covers, which the merge must take.
+    pub pins: Option<crate::svc::plans::MergePins>,
 }
 
 fn journal_kind(a: Action) -> Kind {
@@ -528,7 +530,7 @@ impl App {
                 list.iter().find(|a| a.id == target && a.kind == "network").map(|a| {
                     let options: Vec<String> = a.options.iter().filter(|o| l2::phone_option(&o.id, &o.label)).map(|o| o.id.clone()).collect();
                     let digest = l2::digest(&json!({ "id": a.id, "sandbox": a.sandbox, "host": a.title, "options": options }));
-                    Shown { view: network_view(a, &m, true), digest, actionable: !options.is_empty(), options, journal_target: a.title.clone() }
+                    Shown { view: network_view(a, &m, true), digest, actionable: !options.is_empty(), options, journal_target: a.title.clone(), pins: None }
                 })
             }
             Action::SandboxRemove => {
@@ -544,7 +546,7 @@ impl App {
                         confirm.push(format!("Its workspace folder stays on this machine: {w}"));
                     }
                     let view = json!({ "sandbox": { "name": s.name, "agent": s.agent, "chat": chat, "workspace": ws, "created_at": s.created_at }, "confirm": confirm });
-                    Shown { view, digest, actionable: true, options: vec![], journal_target: s.name.clone() }
+                    Shown { view, digest, actionable: true, options: vec![], journal_target: s.name.clone(), pins: None }
                 })
             }
         })
@@ -560,7 +562,7 @@ impl App {
             .map(|t| json!({ "name": t.name, "model": t.model, "repo": t.repo, "scope": m(&t.scope), "goal": m(&t.goal), "ticket": t.ticket.map(|n| format!("T-{n}")) }))
             .collect();
         let view = json!({ "plan": { "id": p.id, "sandbox": p.sandbox, "summary": m(&p.summary), "justification": m(&p.justification), "variant": p.variant, "main_uncommitted": p.main_uncommitted, "threads": shown } });
-        Shown { view, digest, actionable: true, options: vec![], journal_target: p.id.clone() }
+        Shown { view, digest, actionable: true, options: vec![], journal_target: p.id.clone(), pins: None }
     }
 
     async fn merge_shown(&self, p: &Plan) -> Shown {
@@ -590,7 +592,8 @@ impl App {
             .collect();
         let dist_shown: Vec<Value> = merge.distillate.iter().map(|i| json!({ "kind": i.kind, "text": m(&i.text) })).collect();
         let view = json!({ "merge": { "id": p.id, "sandbox": p.sandbox, "variant": p.variant, "order": merge.order, "note": m(&merge.note), "distillate": dist_shown, "branches": shown } });
-        Shown { view, digest, actionable, options: vec![], journal_target: p.id.clone() }
+        let pins = actionable.then(|| branches.iter().filter_map(|b| Some((b.thread.clone(), (b.tip.clone()?, b.base_tip.clone()?)))).collect());
+        Shown { view, digest, actionable, options: vec![], journal_target: p.id.clone(), pins }
     }
 
     /// Each branch a merge would take, read on the host (git, read only):
@@ -772,7 +775,20 @@ impl App {
                 }
             },
             Action::PlanRefuse => self.plan_refuse(target, None).map(|p| json!({ "plan": p })),
-            Action::Merge => self.plan_merge(target, false, None).await.map(|m| json!({ "merge": m })),
+            // Pinned to the commits the digest covers (review P2): a branch or
+            // base that moves after this check stops the merge as "changed".
+            Action::Merge => match self.plan_merge_pinned(target, false, None, shown.pins.as_ref()).await {
+                Ok(m) => match m.results.iter().find(|r| r.error.as_deref().is_some_and(|e| e.starts_with("changed:"))) {
+                    Some(r) => {
+                        let merged: Vec<&str> = m.results.iter().filter(|x| x.ok).map(|x| x.thread.as_str()).collect();
+                        self.l2_journal(d, Kind::Changed, &jt);
+                        let already = if merged.is_empty() { "Nothing was merged.".to_string() } else { format!("Already merged: {}.", merged.join(", ")) };
+                        return Err(L2Error::new(409, "changed", format!("sbxw/{} changed since it was approved: the merge stopped there. {already}", r.thread)));
+                    }
+                    None => Ok(json!({ "merge": m })),
+                },
+                Err(e) => Err(e),
+            },
             Action::NetworkRespond => {
                 let o = option.unwrap_or_default();
                 match self.approval_answer(target, o).await {

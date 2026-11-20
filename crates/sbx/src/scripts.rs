@@ -559,6 +559,15 @@ pub fn thread_end_args(
 /// index plus the merge, and the index still holds them. Their counts come
 /// back as `edits=` and `absent=` so the result can say so.
 ///
+/// Pinned (`$3`, `$4`, optional, given only by a merge approved from the
+/// phone): `$3` is the full commit id the branch must point at and `$4` the
+/// one the main checkout's branch must be on, checked immediately before the
+/// merge; either moved is `error=changed: ...` (nothing merged), and the
+/// merge then takes the commit `$3`, not whatever the branch name points at
+/// a moment later. Without them (the desktop's and the web UI's merge) the
+/// script is exactly what it was. A merge prints `head=` (the full id of
+/// the new commit) so the next pinned merge in the same repo knows its base.
+///
 /// A failed merge is aborted (`git merge --abort`), so the checkout is as it
 /// was, and the conflicting files are named. Prints `key=value` lines like
 /// `THREAD_END_SCRIPT`: `commit=` on success, `error=` otherwise. Everything
@@ -577,8 +586,25 @@ pub const THREAD_MERGE_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), mer
         echo "error=there is no branch $br in $root"; exit 5
     fi
     sbxw_merge_check "$root" "$common" "$br" || exit 6
-    if out=$(git -C "$root" merge --no-ff --no-edit "$br" 2>&1); then
+    what="$br"; how="--no-edit"
+    if [ -n "$3" ]; then
+        tip=$(git -C "$root" rev-parse --verify --quiet "refs/heads/$br^{commit}")
+        if [ "$tip" != "$3" ]; then
+            echo "error=changed: $br moved since it was approved"; exit 8
+        fi
+        if [ -n "$4" ] && [ "$(git -C "$root" rev-parse --verify --quiet HEAD^{commit})" != "$4" ]; then
+            echo "error=changed: $base moved since the merge was approved"; exit 8
+        fi
+        what="$3"; how="-m"
+    fi
+    if [ "$how" = -m ]; then
+        out=$(git -C "$root" merge --no-ff -m "Merge branch '$br'" "$what" 2>&1); merged=$?
+    else
+        out=$(git -C "$root" merge --no-ff --no-edit "$what" 2>&1); merged=$?
+    fi
+    if [ "$merged" = 0 ]; then
         echo "base=$base"
+        echo "head=$(git -C "$root" rev-parse HEAD)"
         echo "commit=$(git -C "$root" rev-parse --short HEAD)"
         echo "absent=$absent_n"
         echo "edits=$edits_n"
@@ -601,11 +627,22 @@ pub fn thread_merge_args(name: &SandboxName, workspace: &str, thread: &ThreadNam
     args
 }
 
+/// Argv for `THREAD_MERGE_SCRIPT`, pinned: the branch must point at `tip`
+/// and the main checkout at `base` when the merge runs, and `tip` is what is
+/// merged. Only the phone's approved merge uses it.
+pub fn thread_merge_pinned_args(name: &SandboxName, workspace: &str, thread: &ThreadName, tip: &str, base: &str) -> Vec<String> {
+    let mut args = thread_merge_args(name, workspace, thread);
+    args.extend([tip, base].map(pos));
+    args
+}
+
 /// What a merge that went through has to say besides its commit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MergeOutcome {
     /// The merge commit, short.
     pub commit: String,
+    /// The merge commit, full (empty from a script older than this field).
+    pub head: String,
     /// Tracked files missing from the main checkout's working tree that the
     /// merge did not touch: left alone, still in the commit.
     pub absent: u32,
@@ -618,7 +655,7 @@ impl MergeOutcome {
     /// From the `key=value` lines `THREAD_MERGE_SCRIPT` prints.
     pub fn from_fields(f: &std::collections::HashMap<String, String>) -> Self {
         let num = |k: &str| f.get(k).and_then(|v| v.parse().ok()).unwrap_or(0);
-        MergeOutcome { commit: f.get("commit").cloned().unwrap_or_default(), absent: num("absent"), edits: num("edits") }
+        MergeOutcome { commit: f.get("commit").cloned().unwrap_or_default(), head: f.get("head").cloned().unwrap_or_default(), absent: num("absent"), edits: num("edits") }
     }
 
     /// What the person should know about the checkout after the merge, or
@@ -912,6 +949,10 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
             let (_, out) = self.run(THREAD_MERGE_SCRIPT, &[self.root.to_str().unwrap(), thread]);
             script_fields(&out).map(|f| MergeOutcome::from_fields(&f))
         }
+        fn merge_pinned(&self, thread: &str, tip: &str, base: &str) -> Result<MergeOutcome, String> {
+            let (_, out) = self.run(THREAD_MERGE_SCRIPT, &[self.root.to_str().unwrap(), thread, tip, base]);
+            script_fields(&out).map(|f| MergeOutcome::from_fields(&f))
+        }
     }
 
     impl Drop for Repo {
@@ -937,6 +978,56 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
         assert_eq!(r.git(&["show", "HEAD:src/d"]), "changed on the branch");
         assert!(!r.root.join("a").exists(), "and nothing written back where it was absent");
         assert_eq!(r.git(&["rev-list", "--parents", "-n1", "HEAD"]).split_whitespace().count(), 3, "a merge commit");
+    }
+
+    /// The phone's merge (review P2): the commit approved, or nothing.
+    #[test]
+    fn a_pinned_merge_takes_the_approved_commit_or_nothing() {
+        let Some(r) = Repo::new("merge-pinned") else { return };
+        r.with_branch("api", "src/d");
+        let id = |rev: &str| r.git(&["rev-parse", rev]).trim().to_string();
+        let tip = id("sbxw/api");
+        let base = id("HEAD");
+        // The branch moves after the approval: changed, nothing merged.
+        r.git(&["checkout", "-q", "sbxw/api"]);
+        r.write("late", "not shown on the phone");
+        r.git(&["add", "-A"]);
+        r.git(&["commit", "-q", "-m", "late"]);
+        r.git(&["checkout", "-q", "main"]);
+        let err = r.merge_pinned("api", &tip, &base).unwrap_err();
+        assert!(err.starts_with("changed:") && err.contains("sbxw/api"), "{err}");
+        assert_eq!(id("HEAD"), base, "nothing merged");
+        // The base moves: changed too.
+        let tip = id("sbxw/api");
+        r.write("b", "base moved");
+        r.git(&["commit", "-q", "-am", "base moved"]);
+        let err = r.merge_pinned("api", &tip, &base).unwrap_err();
+        assert!(err.starts_with("changed:") && err.contains("main"), "{err}");
+        // As approved: merged, the merge commit's second parent is the pinned
+        // tip, its message the usual one, and `head` is the full new id.
+        let base = id("HEAD");
+        let m = r.merge_pinned("api", &tip, &base).unwrap();
+        assert_eq!(m.head, id("HEAD"));
+        assert_eq!(id("HEAD^2"), tip);
+        assert_eq!(r.git(&["log", "-1", "--format=%s"]).trim(), "Merge branch 'sbxw/api'");
+        assert!(r.root.join("late").exists());
+        // A malformed pin is a mismatch, never a guess.
+        r.with_branch("web", "docs/c");
+        let base = id("HEAD");
+        assert!(r.merge_pinned("web", "HEAD", &base).unwrap_err().starts_with("changed:"));
+        assert!(r.merge_pinned("web", "sbxw/web", &base).unwrap_err().starts_with("changed:"), "a name is not an id");
+    }
+
+    /// The desktop's and web UI's merge: the same argv as before, by name.
+    #[test]
+    fn the_unpinned_merge_argv_is_unchanged() {
+        let n = SandboxName::parse("myapp").unwrap();
+        let t = ThreadName::parse("api").unwrap();
+        let a = thread_merge_args(&n, "/w", &t);
+        assert_eq!(&a[a.len() - 3..], ["sbxw-thread-merge", "=/w", "=api"]);
+        let p = thread_merge_pinned_args(&n, "/w", &t, "abc", "def");
+        assert_eq!(&p[..a.len()], &a[..]);
+        assert_eq!(&p[a.len()..], ["=abc", "=def"]);
     }
 
     #[test]

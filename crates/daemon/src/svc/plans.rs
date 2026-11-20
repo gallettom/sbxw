@@ -17,6 +17,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 
+/// The commits a merge approved from the phone must take, per thread (a
+/// shared plan: its team branch's name): `(branch tip, base tip)`, full ids.
+pub type MergePins = HashMap<String, (String, String)>;
+
 impl App {
     /// [`App::sbx_for`], its error as the plain text these services return.
     async fn sbx_of(&self, sb: &SandboxRef) -> Result<sbxw_sbx::Sbx, String> {
@@ -347,13 +351,26 @@ impl App {
     /// lead hears how it went in one line. A shared plan has one branch,
     /// merged once ([`App::plan_merge_shared`]).
     pub async fn plan_merge(self: &Arc<Self>, id: &str, close_threads: bool, distillate: Option<Vec<DistillItem>>) -> Result<sbxw_core::plans::Merge, String> {
+        self.plan_merge_pinned(id, close_threads, distillate, None).await
+    }
+
+    /// [`App::plan_merge`], and with `pins` (the phone's approved merge,
+    /// review P2) each branch is merged only if it still points at the
+    /// commit approved and its repo's main checkout at the base approved
+    /// (then at the commit the previous merge in that repo made), and the
+    /// commit id is what is merged; otherwise that thread's result is
+    /// `changed: ...` and the merge stops there, as at a conflict. `None`
+    /// is the desktop's and web UI's merge, unchanged.
+    pub async fn plan_merge_pinned(self: &Arc<Self>, id: &str, close_threads: bool, distillate: Option<Vec<DistillItem>>, pins: Option<&MergePins>) -> Result<sbxw_core::plans::Merge, String> {
         let plan = self.plan(id).ok_or_else(|| format!("no plan '{id}'"))?;
         let merge = plan.merge.clone().ok_or_else(|| format!("plan {id} has no merge proposed"))?;
         let sandbox = SandboxRef::parse(&plan.sandbox).map_err(|e| e.to_string())?;
         if plan.variant == Variant::Shared {
             self.refuse_while_claimed(&plan)?;
-            return self.plan_merge_shared(plan, merge, &sandbox, close_threads, distillate).await;
+            return self.plan_merge_shared(plan, merge, &sandbox, close_threads, distillate, pins).await;
         }
+        // Per repo directory, the base the next pinned merge must find.
+        let mut pinned_base: HashMap<String, String> = HashMap::new();
         // Where each thread merges, read first so the base is known from the
         // first broadcast. A retry skips the threads already merged.
         let done: std::collections::HashSet<&str> = merge.results.iter().filter(|r| r.ok).map(|r| r.thread.as_str()).collect();
@@ -389,7 +406,29 @@ impl App {
                 (Err(e), _, _) => Err(format!("the sandbox could not be started: {e}")),
                 (Ok(()), Err(e), _) => Err(e),
                 (Ok(()), Ok(_), Err(e)) => Err(e.to_string()),
-                (Ok(()), Ok(dir), Ok(name)) => self.sbx_of(&sandbox).await?.thread_merge(&sandbox.name, &dir, &name).await.map_err(|e| self.with_split_note(&sandbox, format!("{e:#}"))),
+                (Ok(()), Ok(dir), Ok(name)) => match pins {
+                    None => self.sbx_of(&sandbox).await?.thread_merge(&sandbox.name, &dir, &name).await.map_err(|e| self.with_split_note(&sandbox, format!("{e:#}"))),
+                    Some(pins) => match pins.get(&thread) {
+                        None => Err(format!("changed: sbxw/{thread} was not in the approved merge")),
+                        Some((tip, base)) => {
+                            let want = pinned_base.get(&dir).cloned().unwrap_or_else(|| base.clone());
+                            let m = self.sbx_of(&sandbox).await?.thread_merge_pinned(&sandbox.name, &dir, &name, tip, &want).await.map_err(|e| self.with_split_note(&sandbox, format!("{e:#}")));
+                            match &m {
+                                Ok(o) if !o.head.is_empty() => {
+                                    pinned_base.insert(dir.clone(), o.head.clone());
+                                }
+                                // A script that says nothing of its new head: the next
+                                // pinned merge in this repo cannot be checked, so it is
+                                // refused rather than guessed.
+                                Ok(_) => {
+                                    pinned_base.insert(dir.clone(), String::from("unknown"));
+                                }
+                                Err(_) => {}
+                            }
+                            m
+                        }
+                    },
+                },
             };
             let ok = outcome.is_ok();
             let result = match outcome {
@@ -480,6 +519,7 @@ impl App {
         sandbox: &SandboxRef,
         close_threads: bool,
         distillate: Option<Vec<DistillItem>>,
+        pins: Option<&MergePins>,
     ) -> Result<sbxw_core::plans::Merge, String> {
         let id = plan.id.as_str();
         let team = ThreadName::parse(&plan.team_name()).map_err(|e| e.to_string())?;
@@ -504,7 +544,17 @@ impl App {
         let outcome = match (self.ensure_running_for_thread(sandbox).await, dir) {
             (Err(e), _) => Err(format!("the sandbox could not be started: {e:#}")),
             (Ok(()), Err(e)) => Err(e),
-            (Ok(()), Ok(dir)) => self.sbx_of(sandbox).await?.thread_merge(&sandbox.name, &dir, &team).await.map(|c| (c, dir)).map_err(|e| self.with_split_note(sandbox, format!("{e:#}"))),
+            (Ok(()), Ok(dir)) => {
+                let sbx = self.sbx_of(sandbox).await?;
+                let m = match pins {
+                    None => sbx.thread_merge(&sandbox.name, &dir, &team).await,
+                    Some(pins) => match pins.get(team.as_str()) {
+                        Some((tip, base)) => sbx.thread_merge_pinned(&sandbox.name, &dir, &team, tip, base).await,
+                        None => Err(anyhow::anyhow!("changed: sbxw/{team} was not in the approved merge")),
+                    },
+                };
+                m.map(|c| (c, dir)).map_err(|e| self.with_split_note(sandbox, format!("{e:#}")))
+            }
         };
         let (result, dir) = match outcome {
             Ok((m, dir)) => (MergeResult { thread: team.to_string(), ok: true, note: m.note(), commit: Some(m.commit).filter(|c| !c.is_empty()), error: None }, Some(dir)),
