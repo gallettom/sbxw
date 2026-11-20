@@ -285,6 +285,25 @@ impl App {
         self.push_data();
     }
 
+    /// A file path read from pane `i`'s terminal text and clicked with the
+    /// modifier: asks the Files screen to open on it in that pane's sandbox
+    /// and nothing else (terminal/filelink.rs holds the rule and its bounds).
+    /// Never while something covers the panes; the path is a value, not logged.
+    pub(super) fn pane_file_open(&mut self, i: usize, path: String) {
+        if self.panes_covered() {
+            return;
+        }
+        let Some(p) = self.panes.get(i) else { return };
+        let Some(sandbox) = p.sandbox.clone() else { return };
+        let mut args = Map::new();
+        args.insert("sandbox".into(), J::String(sandbox));
+        args.insert("path".into(), J::String(path));
+        if let Some(t) = &p.thread {
+            args.insert("thread".into(), J::String(t.clone()));
+        }
+        self.feature_intent("pane-link", Asked { name: "files_open_path", args });
+    }
+
     /// Files dropped on pane `i`: handed in, to the first feature that takes pane drops.
     pub(super) fn pane_drop(&mut self, i: usize, paths: &[std::path::PathBuf]) {
         let Some(p) = self.panes.get(i) else { return };

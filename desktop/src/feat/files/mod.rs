@@ -91,6 +91,7 @@ pub const FEATURE: Feature = Feature {
 
 pub const INTENTS: &[Spec] = &[
     Spec { name: "files_open", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true), ("tab", Arg::OneOf(TABS), false), ("worktree", Arg::Str, false)], doc: "Opens the file explorer over the panes on that sandbox (its deliverables first, or `tab`; `worktree`: at that thread's worktree, as the daemon lists it)." },
+    Spec { name: "files_open_path", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true), ("path", Arg::Str, true), ("thread", Arg::Str, false)], doc: "Opens the file explorer on a file path read from a terminal pane: that sandbox, the file's folder listed, the file selected and previewed. Only a path the terminal-link rule accepts (ASCII, a slash, no `..`, no scheme, a previewable extension); relative paths resolve in the thread's worktree (`thread`) or the workspace. Only opens the explorer: nothing is downloaded, opened outside the app, or deleted." },
     Spec { name: "files_show", risk: Risk::Direct, args: &[], doc: "Opens the file explorer on the sandbox used last, else the focused pane's, else the selected one." },
     Spec { name: "files_link", risk: Risk::Direct, args: &[("url", Arg::Url, true)], doc: "A link pressed in a file read in the explorer: a relative link or a `[[wiki link]]` is followed in the explorer (its folder listed, the file selected), any other opens in the browser." },
     Spec { name: "files_outline", risk: Risk::Direct, args: &[("index", Arg::Int(0, 10_000), false)], doc: "Scrolls the Markdown file read to one heading (`index` in its outline) and marks it, or back to the top (none)." },
@@ -267,6 +268,11 @@ pub struct State {
     map: MapState,
     /// A thread's worktree to list once the sandbox's places are read.
     want_worktree: Option<String>,
+    /// `files_open_path` on a relative path of a thread's worktree, before the
+    /// sandbox's places are read: (the path, the thread).
+    want_open: Option<(String, String)>,
+    /// The row to select was named by a path (`files_open_path`): no README in its place.
+    exact: bool,
     /// The Markdown heading last pressed in the Outline (`files_outline`), by index: the one marked.
     section: Option<usize>,
     /// Folders of the list opened in place (absolute paths), and what the
@@ -423,6 +429,37 @@ impl State {
                 }
                 out.push(Action::OpenPanel(SCREEN.into()));
                 out.push(Action::Remember { key: "last".into(), value: sb.into() });
+            }
+            "files_open_path" => {
+                let sb = a.req("sandbox").to_string();
+                cx.sandbox(&sb).ok_or("that is not a sandbox sbxw knows")?;
+                // The terminal-link rule again, whoever asks: nothing else is opened.
+                let raw = a.req("path");
+                crate::terminal::filelink::file_path(raw).filter(|f| f.path == raw && f.line.is_none()).ok_or("that is not a file path the explorer opens")?;
+                let thread = a.s("thread").filter(|t| !t.is_empty() && t.len() < 200 && !t.contains('/'));
+                let listed = self.sandbox.as_deref() == Some(sb.as_str()) && self.asked_for.get(DIR) == Some(&sb);
+                let relative = !raw.starts_with('/') && !raw.starts_with("~/");
+                let wanted = thread.filter(|_| relative && !listed);
+                let base = thread.filter(|_| listed).and_then(|t| worktree_path(cx.get(DIR), t));
+                let abs = if raw.starts_with('/') {
+                    Some(raw.to_string())
+                } else if let Some(r) = raw.strip_prefix("~/") {
+                    let home = Some(cx.get(DIR)["home"].as_str()).flatten().filter(|_| listed).unwrap_or("/home/agent");
+                    Some(view::join(home, r))
+                } else {
+                    let ws = base.or_else(|| cx.sandbox(&sb)?["workspace"].as_str().filter(|w| w.starts_with('/')).map(str::to_string));
+                    ws.map(|w| view::join(&w, raw.strip_prefix("./").unwrap_or(raw)))
+                };
+                out.extend(self.act(cx, &Asked { name: "files_open", args: json!({ "sandbox": sb }).as_object().cloned().unwrap_or_default() })?);
+                match (wanted, abs) {
+                    (Some(t), _) => {
+                        // The worktree's folder is in the listing still to come.
+                        self.want_open = Some((raw.to_string(), t.to_string()));
+                        self.first = false;
+                    }
+                    (None, Some(abs)) => out.extend(self.open_file(&abs)?),
+                    (None, None) => return Err("this sandbox has no workspace to resolve the path in".into()),
+                }
             }
             "files_show" => {
                 let app = cx.get("app");
@@ -706,12 +743,23 @@ impl State {
         vec![self.fetch(ARTIFACTS, sb, "/artifacts"), self.fetch_dir(sb), self.fetch(RECENT, sb, "/fs/recent")]
     }
 
+    /// The folder of `abs` listed with the file selected, once the listing is here.
+    fn open_file(&mut self, abs: &str) -> Result<Vec<Action>, String> {
+        let (dir, name) = abs.rsplit_once('/').ok_or("not a path")?;
+        self.first = false;
+        let out = self.browse(if dir.is_empty() { "/" } else { dir })?;
+        self.select_next = Some(name.to_string());
+        self.exact = true;
+        Ok(out)
+    }
+
     fn browse(&mut self, path: &str) -> Result<Vec<Action>, String> {
         let sb = self.sandbox()?;
         if !self.path.is_empty() && self.path != path {
             self.history.push(self.path.clone());
         }
         self.path = path.to_string();
+        self.exact = false;
         self.tab = "files".into();
         self.filter.clear();
         self.more = 0;
@@ -1684,6 +1732,17 @@ impl State {
                     }
                 }
             }
+            // Opened on a thread's relative path before its worktree was known.
+            if let Some((p, t)) = self.want_open.take() {
+                let ws = cx.sandbox(self.sandbox.as_deref().unwrap_or("")).and_then(|s| s["workspace"].as_str()).filter(|w| w.starts_with('/')).map(str::to_string);
+                if let Some(base) = worktree_path(new, &t).or(ws) {
+                    if let Ok(a) = self.open_file(&view::join(&base, p.strip_prefix("./").unwrap_or(&p))) {
+                        out.extend(a);
+                        out.extend(self.ui_action(cx));
+                        return out;
+                    }
+                }
+            }
             // The first listing (the workspace) goes on to its deliverables
             // folder, when it has one, as the web UI's panel opens.
             if std::mem::take(&mut self.first) && self.path.is_empty() {
@@ -1696,10 +1755,23 @@ impl State {
                 }
             }
             // A row asked for (Kit logs, Show in folder), else a README.
-            let want = self.select_next.take();
+            // Opened on a path: only the listing of that folder answers (the
+            // sandbox's first listing may still be on its way).
+            if self.exact && new["path"].as_str() != Some(self.path.as_str()) && self.select_next.is_some() {
+                out.extend(self.ui_action(cx));
+                return out;
+            }
+            // `exact` stays until the person goes elsewhere: a second answer for the same folder must not pick a README either.
+            let (want, exact) = (self.select_next.take(), self.exact);
+            if exact && want.is_some() && self.sel.is_none() {
+                let listed = new["entries"].as_array().into_iter().flatten().any(|e| e["kind"] == "file" && e["name"].as_str() == want.as_deref());
+                if !listed {
+                    out.push(Action::Notice { text: "That file is not in this folder (the terminal's own folder is not known, so a relative path is read from the workspace or the thread's folder)".into(), error: false, then: None });
+                }
+            }
             if self.tab() == "files" && self.sel.is_none() {
                 let names: Vec<&str> = new["entries"].as_array().into_iter().flatten().filter(|e| e["kind"] == "file").filter_map(|e| e["name"].as_str()).collect();
-                let pick = want.as_deref().filter(|w| names.contains(w)).or_else(|| names.iter().copied().find(|n| n.eq_ignore_ascii_case("readme.md")));
+                let pick = want.as_deref().filter(|w| names.contains(w)).or_else(|| names.iter().copied().filter(|_| !exact).find(|n| n.eq_ignore_ascii_case("readme.md")));
                 if let (Some(p), Some(base)) = (pick, new["path"].as_str()) {
                     if let Ok(a) = self.select(cx, &view::join(base, p)) {
                         out.extend(a);

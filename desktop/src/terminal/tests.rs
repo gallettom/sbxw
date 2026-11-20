@@ -1368,3 +1368,154 @@ fn reconnects_nudge_once_per_socket() {
         }
     }
 }
+
+// ---- file paths in terminal text (terminal/filelink.rs) ----
+
+fn cmd() -> Mods {
+    Mods { cmd: true, ..Mods::default() }
+}
+
+fn click(t: &mut TerminalState, cell: (usize, usize), mods: Mods) -> Option<String> {
+    drag(t, Phase::Down, cell, cell, 1, mods);
+    drag(t, Phase::Up, cell, cell, 1, mods)
+}
+
+#[test]
+fn a_file_path_is_underlined_and_clickable_only_with_the_modifier() {
+    let (mut t, _ev, _rx) = term();
+    t.feed(b"see src/main.rs:42 ok");
+    let (x, y) = at(6, 0);
+    // No modifier: nothing is detected, no work done, plain clicks do as before.
+    t.on_pointer_move(x, y, Mods::default());
+    assert_eq!((t.file_hover_path(), t.file_probes), (None, 0));
+    assert_eq!(click(&mut t, (6, 0), Mods::default()), None);
+    assert_eq!((t.take_file_click(), t.file_probes), (None, 0));
+    // With it: the path (not the :line) is hovered, on this row only.
+    t.on_pointer_move(x, y, cmd());
+    assert_eq!(t.file_hover_path(), Some("src/main.rs"));
+    assert_eq!(t.file_probes, 1);
+    assert_eq!(t.file_hover.as_ref().unwrap().rows, vec![(0, 4, 18)]);
+    let (x2, y2) = at(1, 0);
+    t.on_pointer_move(x2, y2, cmd());
+    assert_eq!(t.file_hover_path(), None);
+    // Back to the path, then the modifier released at the next move: gone.
+    t.on_pointer_move(x, y, cmd());
+    t.on_pointer_move(x, y, Mods::default());
+    assert_eq!(t.file_hover_path(), None);
+    assert_eq!(t.file_probes, 3);
+}
+
+#[test]
+fn a_modifier_click_hands_the_path_on_once() {
+    let (mut t, _ev, _rx) = term();
+    t.feed(b"see src/main.rs:42 ok");
+    assert_eq!(click(&mut t, (6, 0), cmd()), None, "no URL: a path is not opened as one");
+    assert_eq!(t.take_file_click().as_deref(), Some("src/main.rs"));
+    assert_eq!(t.take_file_click(), None, "once");
+    // On other text, nothing; a drag is a selection, not a click.
+    click(&mut t, (1, 0), cmd());
+    assert_eq!(t.take_file_click(), None);
+    drag(&mut t, Phase::Down, (4, 0), (4, 0), 1, cmd());
+    drag(&mut t, Phase::Move, (4, 0), (12, 0), 1, cmd());
+    drag(&mut t, Phase::Up, (4, 0), (12, 0), 1, cmd());
+    assert_eq!(t.take_file_click(), None);
+}
+
+#[test]
+fn an_osc8_link_keeps_priority_over_a_path_in_it() {
+    let (mut t, _ev, _rx) = term();
+    t.feed(b"\x1b]8;;https://example.org/x\x07a/b.md\x1b]8;;\x07 \x1b]8;;file:///etc/passwd\x07c/d.md\x1b]8;;\x07 e/f.md");
+    assert_eq!(click(&mut t, (2, 0), cmd()).as_deref(), Some("https://example.org/x"));
+    assert_eq!(t.take_file_click(), None);
+    // A link that is not a web link is inert, and its text is not a file link either.
+    assert_eq!(click(&mut t, (9, 0), cmd()), None);
+    assert_eq!(t.take_file_click(), None);
+    t.on_pointer_move(at(9, 0).0, at(9, 0).1, cmd());
+    assert_eq!(t.file_hover_path(), None);
+    // The plain path after them still links.
+    assert_eq!(click(&mut t, (15, 0), cmd()), None);
+    assert_eq!(t.take_file_click().as_deref(), Some("e/f.md"));
+}
+
+#[test]
+fn with_mouse_reports_on_only_modifier_shift_click_opens_a_path() {
+    let (mut t, _ev, rx) = term();
+    t.feed(b"\x1b[?1000h\x1b[?1006hsee src/main.rs ok");
+    let shift_cmd = Mods { shift: true, ..cmd() };
+    // Cmd + click goes to the program, as today (and never to Files).
+    assert_eq!(click(&mut t, (6, 0), cmd()), None);
+    assert_eq!(t.take_file_click(), None);
+    assert!(!written(&rx).is_empty(), "the program heard the press and release");
+    // Cmd + Shift + click is the selection gesture: it opens the path (and an OSC 8 link).
+    assert_eq!(click(&mut t, (6, 0), shift_cmd), None);
+    assert_eq!(t.take_file_click().as_deref(), Some("src/main.rs"));
+    assert!(written(&rx).is_empty(), "the program heard nothing");
+    t.feed(b"\r\n\x1b]8;;https://example.org/x\x07link\x1b]8;;\x07");
+    assert_eq!(click(&mut t, (1, 1), shift_cmd).as_deref(), Some("https://example.org/x"));
+}
+
+#[test]
+fn a_path_wrapped_by_the_terminal_is_one_link_a_hard_break_is_not() {
+    let (mut t, _ev, _rx) = term();
+    // 40 columns: the path starts at column 30 and wraps into the next row.
+    t.feed(format!("{}docs/guides/long-name.md end", " ".repeat(30)).as_bytes());
+    for cell in [(32, 0), (3, 1)] {
+        t.on_pointer_move(at(cell.0, cell.1).0, at(cell.0, cell.1).1, cmd());
+        assert_eq!(t.file_hover_path(), Some("docs/guides/long-name.md"), "{cell:?}");
+        assert_eq!(t.file_hover.as_ref().unwrap().rows, vec![(0, 30, 40), (1, 0, 14)]);
+    }
+    assert_eq!(click(&mut t, (3, 1), cmd()), None);
+    assert_eq!(t.take_file_click().as_deref(), Some("docs/guides/long-name.md"));
+    // A line break the program wrote is a break: two words, no path.
+    let (mut t, _ev, _rx) = term();
+    t.feed(format!("{}docs/guides/\r\nlong-name.md", " ".repeat(30)).as_bytes());
+    t.on_pointer_move(at(32, 0).0, at(32, 0).1, cmd());
+    assert_eq!(t.file_hover_path(), None);
+}
+
+#[test]
+fn hostile_output_yields_no_link_or_one_inert_one() {
+    let (mut t, _ev, _rx) = term();
+    let mut hostile: Vec<Vec<u8>> = vec![
+        b"\x1b[31ma/b.md\x1b[0m".to_vec(),
+        "a/\u{430}.md \u{202e}x/y.md a∕b.md".as_bytes().to_vec(),
+        b"\x07\x08a/b\x00.md \x1b]52;c;aGk=\x07 \x1b[2Jc/d.md".to_vec(),
+        "a/".repeat(5000).into_bytes(),
+        vec![b'x'; 10_000],
+        format!("{}a/b.md", "/".repeat(9000)).into_bytes(),
+        b"javascript:alert(1)//a/b.md 'a/b.md' http://x.com/a/b.md".to_vec(),
+    ];
+    hostile.push(b"\xff\xfe a/b.md \xc3\x28".to_vec());
+    for h in hostile {
+        t.feed(&h);
+        t.feed(b"\r\n");
+        for row in 0..5 {
+            for col in (0..40).step_by(3) {
+                let (x, y) = at(col, row);
+                t.on_pointer_move(x, y, cmd());
+                if let Some(p) = t.file_hover_path() {
+                    assert!(p.len() <= 300 && p.chars().all(|c| c.is_ascii_alphanumeric() || "_.+@%-/~".contains(c)) && !p.contains(".."), "{p}");
+                }
+                click(&mut t, (col, row), cmd());
+                if let Some(p) = t.take_file_click() {
+                    assert!(!p.contains("..") && p.len() <= 300, "{p}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn five_thousand_lines_cost_one_row_per_pointer_move() {
+    let (mut t, _ev, _rx) = term();
+    let body: String = (0..5000).map(|i| format!("{i} src/dir{i}/file.rs:{i} done\r\n")).collect();
+    t.feed(body.as_bytes());
+    let t0 = std::time::Instant::now();
+    for i in 0..1000 {
+        let (x, y) = at(8 + i % 10, i % 5);
+        t.on_pointer_move(x, y, cmd());
+    }
+    // 1000 moves, a row (and its wraps) each: far below a frame budget apiece.
+    assert!(t0.elapsed().as_millis() < 500, "{:?}", t0.elapsed());
+    assert_eq!(t.file_probes, 1000);
+}

@@ -1251,6 +1251,7 @@ impl App {
         changed |= self.render_shown();
         let settle = headless().then_some(Duration::from_millis(1500));
         let mut copies = vec![];
+        let mut file_clicks = vec![];
         for (i, p) in self.panes.iter_mut().enumerate() {
             let Some(t) = &mut p.term else { continue };
             // Only the pane with the keyboard shows a solid cursor and gets
@@ -1278,6 +1279,10 @@ impl App {
                 }
             }
             // "wants you": this pane's own session (terminal/attention.rs).
+            // A file path clicked with the modifier (terminal/filelink.rs).
+            if let Some(path) = t.take_file_click() {
+                file_clicks.push((i, path));
+            }
             let wants = t.wants_you(terminal::session_for(self.feats.data.get("sessions"), p.sandbox.as_deref(), p.thread.as_deref(), p.mode == Mode::Agent).as_ref());
             ch |= std::mem::replace(&mut p.attention, wants) != wants;
             if let (true, true, Some(path)) = (ch, i == self.focused, &self.dump_text) {
@@ -1292,6 +1297,10 @@ impl App {
             for t in l.parked.iter_mut().filter_map(|p| p.term.as_mut()) {
                 t.poll(None);
             }
+        }
+        for (i, path) in file_clicks {
+            self.pane_file_open(i, path);
+            changed = true;
         }
         for (i, name, text) in copies {
             self.osc_copy(i, &name, text, now, tx);

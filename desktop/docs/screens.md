@@ -1862,6 +1862,7 @@ panel and its Upload button opens its own dialog.
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
 | `files_open` | `sandbox`, `tab` (`artifacts`, `files`, `recent`) | direct | Opens the panel on that sandbox (the last tab, else Artifacts) and reads its lists |
+| `files_open_path` | `sandbox` / `path` / `thread?` | direct | A path read from a terminal pane (⌘ or Ctrl + click): that sandbox's Files, the file's folder listed, the file selected. Re-checks the terminal-link rule (ASCII, a slash, no `..`, no scheme, a previewable extension, 300 characters); relative paths resolve in the thread's worktree, else the workspace; a file not there says so. Only opens the explorer. |
 | `files_tab`, `files_place`, `files_browse`, `files_up`, `files_back` | `tab` / `id` / `path` (`~` is home) / none | direct | Tabs, places, folders |
 | `files_filter`, `files_hidden` | `text` / `on` | direct | The filter, dotfiles |
 | `files_more` | | direct | 200 more rows of a long list |
