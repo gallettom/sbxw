@@ -4,6 +4,9 @@
 //! [`Item`] reaches the phone only once it is added here. Tool calls and tool
 //! results never do: each run of them becomes one `steps` item that says how
 //! many there were, with no tool name, no input, no result, no file content.
+//! The harness's own output (an injected turn that is not a message from a
+//! session or from sbxw: a `!` command's output, a slash command's, a hook's,
+//! a task notification, a system reminder, a meta turn) is folded the same way.
 
 use crate::agents::{Question, SessionState};
 use crate::history::{Item, Kind, Page};
@@ -61,7 +64,14 @@ pub fn phone_page(page: &Page, after: Option<u64>) -> PhonePage {
     let mut items: Vec<PhoneItem> = Vec::new();
     let mut run: Option<PhoneItem> = None;
     for it in page.items.iter().filter(|i| after.is_none_or(|a| i.seq > a)) {
+        let harness = it.kind == Kind::Injected && !it.message;
         match it.kind {
+            _ if harness => {
+                let r = run.get_or_insert_with(|| PhoneItem { count: Some(0), ..plain(it, "steps") });
+                r.seq = it.seq;
+                r.at = it.at;
+                continue;
+            }
             Kind::ToolCall | Kind::ToolResult => {
                 let r = run.get_or_insert_with(|| PhoneItem { count: Some(0), ..plain(it, "steps") });
                 r.seq = it.seq;
@@ -145,6 +155,7 @@ mod tests {
             steps: None,
             clipped: false,
             provisional: false,
+            message: false,
         }
     }
 
@@ -177,6 +188,30 @@ mod tests {
         assert_eq!(out.items[5].count, Some(1), "a lone result still counts as a step");
         assert_eq!(out.items[4].steps.as_ref().unwrap()[0].options, ["A", "B"]);
         assert_eq!(out.next_before, Some(1));
+    }
+
+    #[test]
+    fn harness_output_is_folded_messages_are_kept() {
+        let mut msg = item(2, Kind::Injected, "please look at the tests");
+        msg.from = Some("lead".into());
+        msg.message = true;
+        let mut sbxw = item(3, Kind::Injected, "[sbxw] main moved");
+        sbxw.from = Some("sbxw".into());
+        sbxw.message = true;
+        let mut harness = vec![];
+        for (i, from) in ["shell", "command", "task", "system", "hook", "meta", "some-wrapper"].iter().enumerate() {
+            let mut h = item(10 + i as u64, Kind::Injected, &format!("SECRET OUTPUT {from}"));
+            h.from = Some(from.to_string());
+            harness.push(h);
+        }
+        let mut items = vec![item(1, Kind::UserPrompt, "hi"), msg, sbxw];
+        items.extend(harness);
+        let out = phone_page(&page(items), None);
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(!json.contains("SECRET OUTPUT"), "{json}");
+        let kinds: Vec<&str> = out.items.iter().map(|i| i.kind).collect();
+        assert_eq!(kinds, ["user_prompt", "injected", "injected", "steps"]);
+        assert_eq!(out.items[3].seq, 16);
     }
 
     #[test]

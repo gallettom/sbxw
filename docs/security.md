@@ -536,7 +536,8 @@ Remote access reaches the Mac through `sbxw-tailnet`, a small program shipped be
 - **The name is public.** Certificate names go to the public Certificate Transparency logs, so keep the neutral `sbxw`.
 - **Only your tailnet.** Funnel (public Internet), SSH, Taildrop, exit node and routes are never enabled, and most are compiled out. Tailscale's log upload is off.
 - **Its state** (`~/.sbxw/remote/tailnet`, private to you) holds the node's keys and certificate. "Forget this node" logs it out and deletes that folder; then remove `sbxw` from the Machines page of the admin console if it is still listed.
-- **Headers:** the daemon may receive the peer's tailnet address and machine name, as hints for rate limits and a later journal, never as proof of anything. A phone is trusted only once paired.
+- **Only your own devices.** The node lets through only untagged devices logged in with the same Tailscale account that added it, and not shared in from elsewhere. Other people's devices on a shared tailnet, tagged servers and shared-in machines get a plain refusal before anything reaches the daemon.
+- **Headers:** the daemon may receive the peer's tailnet address, as a hint for rate limits, never as proof of anything. No user, login or machine name is passed on. A phone is trusted only once paired.
 
 ## Known edges
 

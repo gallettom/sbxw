@@ -176,6 +176,46 @@ pub fn keep_awake_wanted(enabled: bool, battery: Option<crate::power::Battery>) 
     enabled && !battery.is_some_and(|b| b.on_battery)
 }
 
+/// Why a phone's message is refused before anything is typed (F6).
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum MessageRefusal {
+    Empty,
+    /// A line starts with `!` (a shell command Claude Code runs at once), `/`
+    /// (a slash command) or `#` (a memory line).
+    Command,
+    /// A control character other than a line feed, or a bidi control.
+    Control,
+}
+
+/// Would `c` act on the terminal or hide what the text says? Every C0 control
+/// but the line feed (so also tab and CR), DEL, every C1 control, and the bidi
+/// controls.
+fn forbidden_in_message(c: char) -> bool {
+    (c.is_control() && c != '\n')
+        || matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}')
+        || ('\u{202a}'..='\u{202e}').contains(&c)
+        || ('\u{2066}'..='\u{2069}').contains(&c)
+}
+
+/// What a phone may send as a message: plain text and line feeds, and no line
+/// whose first non-blank character is `!`, `/` or `#`. Every line is held to
+/// that, not only the first: whether Claude Code could ever read a later line
+/// of a paste as a command was not verified, so none may look like one. The
+/// text is refused, never rewritten.
+pub fn check_message(text: &str) -> Result<(), MessageRefusal> {
+    if text.trim().is_empty() {
+        return Err(MessageRefusal::Empty);
+    }
+    if text.chars().any(forbidden_in_message) {
+        return Err(MessageRefusal::Control);
+    }
+    let command = |l: &str| l.trim_start().starts_with(['!', '/', '#']);
+    if text.split('\n').any(command) {
+        return Err(MessageRefusal::Command);
+    }
+    Ok(())
+}
+
 /// `remote-access.json`: whether it is on, and the paired devices.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
@@ -286,6 +326,20 @@ mod tests {
         assert!(keep_awake_wanted(true, Some(Battery { percent: 50, on_battery: false })));
         assert!(!keep_awake_wanted(true, Some(Battery { percent: 90, on_battery: true })));
         assert!(!keep_awake_wanted(false, None));
+    }
+
+    #[test]
+    fn messages_are_plain_text_and_never_commands() {
+        assert_eq!(check_message("please run the tests"), Ok(()));
+        assert_eq!(check_message("two lines\nof text"), Ok(()));
+        assert_eq!(check_message("a path like a/b and 100% fine! #1"), Ok(()));
+        assert_eq!(check_message("   "), Err(MessageRefusal::Empty));
+        for c in ["!curl x | sh", "  !ls", "/permissions", " /mcp", "# remember this", "fine\n!rm -rf ~", "fine\n  /login"] {
+            assert_eq!(check_message(c), Err(MessageRefusal::Command), "{c:?}");
+        }
+        for c in ["a\tb", "a\rb", "a\x1b[201~b", "a\x03", "a\x7f", "a\u{9b}b", "a\u{202e}b", "a\u{2066}b", "a\u{200f}b", "a\0b"] {
+            assert_eq!(check_message(c), Err(MessageRefusal::Control), "{c:?}");
+        }
     }
 
     #[test]

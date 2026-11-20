@@ -150,11 +150,18 @@ pub struct Item {
     /// is replaced by the transcript's own items when they arrive.
     #[serde(skip_serializing_if = "is_false")]
     pub provisional: bool,
+    /// An injected turn that is a message: from another session (a lead, a
+    /// thread, an agent: `<cross-session-message>`) or a line sbxw typed. Every
+    /// other injected turn is the harness's own output (a `!` command's, a
+    /// slash command's, a hook's, a task notification, a system reminder).
+    /// Not on the wire: the remote view keeps messages and folds the rest.
+    #[serde(skip)]
+    pub message: bool,
 }
 
 impl Item {
     fn new(kind: Kind, at: u64) -> Self {
-        Item { seq: 0, at, kind, text: String::new(), tool: None, result: None, from: None, steps: None, clipped: false, provisional: false }
+        Item { seq: 0, at, kind, text: String::new(), tool: None, result: None, from: None, steps: None, clipped: false, provisional: false, message: false }
     }
     /// Roughly what it holds, for the memory ceiling.
     fn weight(&self) -> usize {
@@ -801,12 +808,16 @@ fn user_items(text: &str, meta: bool, at: u64, typed: &dyn Fn(&str) -> bool) -> 
         return out;
     }
     let mut c = classify_user_text(&rest);
+    let cross_session = c.kind == Kind::Injected && leading_tag(rest.trim()).is_some_and(|t| t.name == "cross-session-message");
+    let mut by_sbxw = false;
     if c.kind == Kind::UserPrompt && typed(&c.text) {
         c = UserText { kind: Kind::Injected, text: c.text, from: Some(crate::typed::SENDER.to_string()) };
+        by_sbxw = true;
     }
     let mut i = Item::new(c.kind, at);
     i.text = c.text;
     i.from = c.from;
+    i.message = cross_session || by_sbxw;
     if meta && i.kind == Kind::UserPrompt {
         i.kind = Kind::Injected;
         i.from = Some("meta".into());
