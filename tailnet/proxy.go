@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -90,6 +91,28 @@ type proxy struct {
 	name     func() string // the tailnet name of this node; "" until running
 	whoIs    whoIsFunc
 	rp       *httputil.ReverseProxy
+
+	// onRefuse, if set, is told of a refused peer, at most once a minute,
+	// without the peer's name or address.
+	onRefuse    func()
+	refuseMu    sync.Mutex
+	lastRefused time.Time
+}
+
+func (p *proxy) noteRefused() {
+	if p.onRefuse == nil {
+		return
+	}
+	p.refuseMu.Lock()
+	now := time.Now()
+	due := p.lastRefused.IsZero() || now.Sub(p.lastRefused) >= time.Minute
+	if due {
+		p.lastRefused = now
+	}
+	p.refuseMu.Unlock()
+	if due {
+		p.onRefuse()
+	}
 }
 
 func newProxy(upstream string, name func() string, whoIs whoIsFunc) *proxy {
@@ -167,8 +190,9 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := p.whoIs(r.Context(), r.RemoteAddr)
 	if err != nil || node == "" {
-		// Not a known tailnet peer: nothing to forward.
-		plain(w, http.StatusForbidden, "Unknown device.")
+		// Not one of the person's own devices: nothing to forward.
+		p.noteRefused()
+		plain(w, http.StatusForbidden, "Forbidden.")
 		return
 	}
 	peerIP, _, err := net.SplitHostPort(r.RemoteAddr)

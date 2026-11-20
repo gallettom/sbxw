@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
 
@@ -89,6 +91,15 @@ func (n *node) run(ctx context.Context) error {
 	}
 	n.setName(name)
 
+	// The owner of this node: only that user's own devices may connect (F7).
+	var self tailcfg.UserID
+	if st.Self != nil && (st.Self.Tags == nil || st.Self.Tags.Len() == 0) {
+		self = st.Self.UserID
+	}
+	if self.IsZero() {
+		return errors.New("this node has no owning user (tagged or unknown): refusing to serve")
+	}
+
 	// HTTPS is required: without it the phone's microphone does not work,
 	// so there is no plain-HTTP fallback.
 	if st.CurrentTailnet == nil || !st.CurrentTailnet.MagicDNSEnabled {
@@ -130,7 +141,8 @@ func (n *node) run(ctx context.Context) error {
 		NextProtos:     []string{"http/1.1"},
 		GetCertificate: lc.GetCertificate,
 	})
-	px := newProxy(n.cfg.forward, n.tailnetName, whoIsVia(lc))
+	px := newProxy(n.cfg.forward, n.tailnetName, whoIsVia(lc, self))
+	px.onRefuse = func() { n.logf("refused a connection from a device that is not the node owner's") }
 	hs := newHTTPServer(px)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- hs.Serve(ln) }()
@@ -271,29 +283,46 @@ func (n *node) watchLater(ctx context.Context, lc *local.Client) {
 	}
 }
 
-// whoIsVia names the peer node of a connection. It is information for the
-// daemon's journal, never authentication.
-func whoIsVia(lc *local.Client) whoIsFunc {
+// whoIsVia admits only the person's own devices (see admitPeer) and names
+// the peer node. The name is information for the daemon, never
+// authentication; the refusal is the only decision taken here.
+func whoIsVia(lc *local.Client, self tailcfg.UserID) whoIsFunc {
 	return func(ctx context.Context, remoteAddr string) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		who, err := lc.WhoIs(ctx, remoteAddr)
 		if err != nil {
-			return "", err
+			return "", errNotOwnDevice
 		}
-		if who == nil || who.Node == nil {
-			return "", errors.New("unknown peer")
-		}
-		name := strings.ToLower(strings.TrimSuffix(who.Node.Name, "."))
-		if !validTailnetName(name) {
-			// A node with no usable name still gets through, named by its id.
-			name = "node-" + string(who.Node.StableID)
-			if !validTailnetName(name) {
-				return "", errors.New("unnamed peer")
-			}
-		}
-		return name, nil
+		return admitPeer(self, who)
 	}
+}
+
+var errNotOwnDevice = errors.New("not one of the node owner's own devices")
+
+// admitPeer accepts a peer only when it is a device of the same Tailscale
+// user as this node: an untagged node whose owner (Node.User) and profile
+// (UserProfile.ID) are this node's user, by stable numeric user id, and that
+// was not shared into the tailnet (Node.Sharer zero). Tagged nodes, nodes of
+// other users of the tailnet, shared-in nodes and anything WhoIs cannot fully
+// identify are refused.
+func admitPeer(self tailcfg.UserID, who *apitype.WhoIsResponse) (string, error) {
+	if self.IsZero() || who == nil || who.Node == nil || who.UserProfile == nil {
+		return "", errNotOwnDevice
+	}
+	nd := who.Node
+	if nd.IsTagged() || nd.Sharer != 0 || nd.User.IsZero() {
+		return "", errNotOwnDevice
+	}
+	if nd.User != self || who.UserProfile.ID != self {
+		return "", errNotOwnDevice
+	}
+	name := strings.ToLower(strings.TrimSuffix(nd.Name, "."))
+	if !validTailnetName(name) {
+		// One of the person's devices with no usable name: let it in, unnamed.
+		name = "unnamed"
+	}
+	return name, nil
 }
 
 // validTailnetName accepts a plain DNS name: letters, digits, '-' and '.',

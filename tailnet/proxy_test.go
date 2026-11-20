@@ -57,7 +57,11 @@ func fakeWhoIs(node string, err error) whoIsFunc {
 // tailnet listener (no real tailnet in tests).
 func newFront(t *testing.T, upstream string, who whoIsFunc) *httptest.Server {
 	t.Helper()
-	px := newProxy(upstream, func() string { return testName }, who)
+	return newFrontWith(t, newProxy(upstream, func() string { return testName }, who))
+}
+
+func newFrontWith(t *testing.T, px *proxy) *httptest.Server {
+	t.Helper()
 	front := httptest.NewUnstartedServer(px)
 	front.Config = newHTTPServer(px)
 	front.Start()
