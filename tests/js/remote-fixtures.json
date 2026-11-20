@@ -1,0 +1,52 @@
+{
+  "_about": "Recorded answers of the remote listener, shaped as .sbxw-artifacts/remote/API.md (contract v1) says. Read by tests/js/remote-core.test.mjs and served by tests/js/remote-standin.mjs.",
+  "me": { "device": { "id": "a1b2c3d4e5f60718", "name": "Test iPhone", "created_ms": 1763600000000, "last_seen_ms": 1763650000000 } },
+  "leaders": {
+    "leaders": [
+      { "sandbox": "website", "name": "website", "state": "idle", "activity": null, "last_at": 1763649000000, "asks": false },
+      { "sandbox": "payments-service-with-a-very-long-sandbox-name", "name": "payments-service-with-a-very-long-sandbox-name", "state": "working", "activity": "Running the test suite of the payments crate with a long activity line", "last_at": 1763649900000, "asks": false },
+      { "sandbox": "shop", "name": "shop", "state": "attention", "activity": "Which database?", "last_at": 1763649800000, "asks": true, "answerable": true,
+        "steps": [ { "text": "Which database should the shop use for orders?", "options": ["PostgreSQL (Recommended)", "SQLite", "Keep the current one"] } ] },
+      { "sandbox": "docs", "name": "docs", "state": "attention", "activity": "Allow Bash?", "last_at": 1763649700000, "asks": true, "answerable": false }
+    ]
+  },
+  "history": {
+    "shop": {
+      "sandbox": "shop", "session_id": "s1",
+      "page": {
+        "items": [
+          { "seq": 101, "at": 1763649000000, "kind": "notice", "text": "Session started" },
+          { "seq": 102, "at": 1763649010000, "kind": "user_prompt", "text": "Plan the orders table and split the work in two threads." },
+          { "seq": 105, "at": 1763649050000, "kind": "steps", "count": 3 },
+          { "seq": 106, "at": 1763649060000, "kind": "assistant_text", "text": "Here is the plan:\n\n1. **Schema** for `orders`\n2. A migration\n\nSee [the guide](https://example.org/guide?a=1&b=2) before we start." },
+          { "seq": 107, "at": 1763649070000, "kind": "injected", "from": "sbxw", "text": "Thread db-schema reported done." },
+          { "seq": 108, "at": 1763649080000, "kind": "injected", "from": "db-schema", "text": "Schema committed on sbxw/db-schema." },
+          { "seq": 110, "at": 1763649090000, "kind": "steps", "count": 1 },
+          { "seq": 111, "at": 1763649100000, "kind": "permission" },
+          { "seq": 112, "at": 1763649110000, "kind": "question", "text": "", "steps": [ { "text": "Which database should the shop use for orders?", "options": ["PostgreSQL (Recommended)", "SQLite", "Keep the current one"] } ] }
+        ],
+        "next_before": 101, "latest_seq": 112, "truncated_before": false, "partial": false, "ended": false
+      }
+    },
+    "shop_older": {
+      "sandbox": "shop", "session_id": "s1",
+      "page": {
+        "items": [
+          { "seq": 90, "at": 1763648000000, "kind": "user_prompt", "text": "Earlier: read the README." },
+          { "seq": 91, "at": 1763648010000, "kind": "assistant_text", "text": "Read it." }
+        ],
+        "latest_seq": 112, "truncated_before": true, "partial": false, "ended": false
+      }
+    },
+    "shop_newer": {
+      "sandbox": "shop", "session_id": "s1",
+      "page": {
+        "items": [
+          { "seq": 113, "at": 1763649200000, "kind": "assistant_text", "text": "PostgreSQL it is.", "provisional": true }
+        ],
+        "latest_seq": 113, "truncated_before": false, "partial": false, "ended": false
+      }
+    }
+  },
+  "pair_start": { "request_id": "0123456789abcdef0123456789abcdef", "check": "482913", "expires_ms": 1763650300000 }
+}

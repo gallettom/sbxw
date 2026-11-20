@@ -265,7 +265,7 @@ function rcDeviceName(ua, platform) {
 }
 const RC_NAME_MAX = 40;
 function rcCleanName(s) {
-  return String(s || '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, RC_NAME_MAX);
+  return String(s || '').replace(/\s+/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, RC_NAME_MAX);
 }
 
 // ── The client ────────────────────────────────────────────────────────────
