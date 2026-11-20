@@ -166,7 +166,14 @@ pub fn popover(s: &App) -> El {
     for j in &jobs {
         list = list.child(card(j));
     }
-    let title = if jobs.len() == 1 { "1 sandbox being created".to_string() } else { format!("{} sandboxes being created", jobs.len()) };
+    let failed = jobs.iter().filter(|j| j["state"] == "failed").count();
+    let title = match (jobs.len() - failed, failed) {
+        (0, 1) => "1 sandbox not created".to_string(),
+        (0, n) => format!("{n} sandboxes not created"),
+        (1, 0) => "1 sandbox being created".to_string(),
+        (n, 0) => format!("{n} sandboxes being created"),
+        (n, f) => format!("{n} being created, {f} not created"),
+    };
     let mut surface = rune::col()
         .key("status-jobs-pop")
         .role("dialog")
