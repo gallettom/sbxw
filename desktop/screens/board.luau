@@ -232,7 +232,11 @@ local function rowview(r, sb)
   elseif r.type == "status" then
     local kids = {}
     if r.state then
-      kids[#kids + 1] = row{ gap = 8, badge{ r.state.word, tone = r.state.tone }, text{ "status report", size = "xs", color = "text-muted" } }
+      -- The kind label at the left, the state chip at the right, a gap of at least 12 between.
+      kids[#kids + 1] = row{ gap = 4, w = "full", align = "center", key = "board-head-" .. (r.id or ""),
+        text{ "status report", size = "xs", color = "text-muted", key = "board-kind-" .. (r.id or "") },
+        column{ grow = 1, min_w = 12, h = 1 },
+        badge{ r.state.word, tone = r.state.tone, key = "board-state-" .. (r.id or "") } }
       kids[#kids + 1] = words(r.text or "", sb, { size = "sm" })
     else
       if nz(r.label) and r.side ~= "right" then kids[#kids + 1] = kind_line(r.label, { color = r.tone == "neutral" and "text-muted" or r.tone }) end
