@@ -602,7 +602,7 @@ row{ key = "title-slot", gap = 8,
   null for All or no scope). It follows a pick at once (the core pushes
   again when the overlay's scope moved) and goes when the overlay closes.
 - **Names are data**: text only, clipped, never a pill or a control.
-- A picker a screen must draw itself (the Board's two-line team rows) takes
+- A picker a screen must draw itself (the Dashboard's two-line team rows) takes
   the same colours from `scope::look_json` (`fill`, `border`, `text`,
   `muted`, as `#rrggbb`) in its view model.
 
@@ -973,7 +973,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`, `eye`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
 `coin`, `help`, `moon`, `appearance`, `branch`, `globe`, `remote`, `key`, `people`, `leader`, `threads`,
-`shield`, `prompt`, `ask`, `jarvis`, `tag`, `monitor` (the virtual Mac: a desktop screen on its stand), `inbox` (Sessions: a list of sessions, the first dot filled), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
+`shield`, `prompt`, `ask`, `jarvis`, `tag`, `kanban`, `monitor` (the virtual Mac: a desktop screen on its stand), `inbox` (Sessions: a list of sessions, the first dot filled), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
 ">", for the top bar's logo).
 
 One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
@@ -983,7 +983,8 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `sparkle` | the agent (Claude, or another vendor's) |
 | `people` | the team (a session in team mode: the pane bar's Team) |
 | `leader` | the team leads (a crown over one person: the rail's Team leads, the pager's mark, the palette) |
-| `board` | a team's conversation: two bubbles answering each other (the rail's Board, its overlay, a sandbox's row menu) |
+| `board` | the Dashboard, a team's conversation: two bubbles answering each other (the rail's Dashboard, its overlays, a sandbox's row menu) |
+| `kanban` | the Kanban: three columns of cards hung from one line, each shorter than the one before (the top bar's Kanban button) |
 | `jarvis` | Jarvis |
 | `threads` | a sandbox's sessions and threads (`branch` is one worktree) |
 | `globe` | the sandbox's browser |
@@ -1173,7 +1174,7 @@ app's state file, read back as `data.app.kept.<feature>.<key>`; null forgets).
 `OpenSocket`, `CloseSocket(id)`, `Focus(element key)`, `ScrollIntoView(element key)`
 (scrolls the nearest viewport so that element shows, once the change is
 drawn; it never moves the keyboard focus, and a key not drawn does nothing:
-the Board's Show less on a bubble taller than its view). A `Call` of method
+the Dashboard's Show less on a bubble taller than its view). A `Call` of method
 `Core` is one of the core's own operations: restoring a screen (from the
 core's dialog only), and the file operations of `src/files.rs` built with
 `feat::core_call(op, body, what, tag)`: `inspect {path}` and `reveal {path}`
@@ -1597,7 +1598,7 @@ Threads, plans and the lead (the web UI's thread parts of `panes.js`,
 `fixtures/threads/`. Report: `.sbxw-artifacts/desktop/THREADS.md` in the main checkout.
 
 **Screens.** `threads` (panel "Threads"): one sandbox's sessions, Team
-mode, its plans, and the Worktrees and Board tabs. `plans` (modal, `arg` =
+mode, its plans, and the Worktrees and Board tabs (the Board tab is the shared plan's claims board, not the Dashboard). `plans` (modal, `arg` =
 a plan id): the review while it waits, its threads' state once approved,
 the merge once proposed. `threads-new` (modal, `arg` = the sandbox): New
 thread, or a session on the main checkout.
@@ -1959,9 +1960,17 @@ Commit messages are drawn as plain text: no pills, no Markdown, no links.
 
 ### board
 
+Shown to the person as the **Dashboard** (`board::TITLE`): the rail entry,
+the overlay's title (both screens: the conversation and the Kanban), the
+sandbox row's menu, the palette. The feature, its intents (`board_*`), its
+element keys (`rail-board`, `board-*`) and its files keep the name `board`,
+so scripts and a stored state keep working. Not the shared plan's claims
+board (the Threads panel's Board tab, `read_board`), another thing.
+
 An overlay (`src/feat/board/`, `screens/board.luau`), the rail's activity
-zone (order 35, icon `board`, purple: the team) and each sandbox's row menu
-(opened on that sandbox's team). A **team** is a plan with its sandbox, lead
+zone (order 35, icon `board`, purple: the team; the entry "Dashboard" always
+opens the conversation, the top bar's Kanban button the Kanban) and each
+sandbox's row menu (opened on that sandbox's team). A **team** is a plan with its sandbox, lead
 and threads, and is named by its threads' names ("api-routes + web-page",
 past three "+ n more"; its sandbox when it has none), in the mono face with
 its sandbox's colour mark. The title's **picker** shows those names, then the
@@ -2057,8 +2066,9 @@ The filter row starts with the **Conversation | Kanban** switch
 
 ### kanban
 
-The Board's second view (`src/feat/kanban/`, `screens/kanban.luau`, the
-form `screens/kanban-form.luau`): an overlay titled "Board" (icon `board`)
+The Dashboard's second view (`src/feat/kanban/`, `screens/kanban.luau`, the
+form `screens/kanban-form.luau`): an overlay titled "Dashboard" (icon `board`),
+opened by the switch or by the top bar's Kanban button (`kanban_toggle`),
 with the same switch (`kanban-view`) and the sandbox's scope capsule in its
 title (`kanban-sandbox`, All sandboxes first). Five columns side by side
 (`kanban-lane-<id>`: planned, progress, test, ready, merged), each with its
@@ -2092,7 +2102,8 @@ about once, with the ack box, at Save), Save (Cmd+Return).
 
 | Intent | Args | Effect |
 |---|---|---|
-| `kanban_show` | `sandbox?` | Opens it (empty: every sandbox) |
+| `kanban_show` | `sandbox?` | Opens it (empty: every sandbox; none: the last scope, else the selected sandbox) |
+| `kanban_toggle` | | The top bar's button, ⌃⌥K / Alt+K, the palette's "Show the Kanban": opens it on the sandbox in context (TUI: the focused pane's; else the selected one; else the last scope; else every sandbox), or closes it while it shows |
 | `kanban_scope` | `sandbox` | Another sandbox, or every one (`""`) |
 | `kanban_open` | `id` | Opens a card's ticket (`""`: closes it) |
 | `kanban_column`, `kanban_more`, `kanban_older` | `column`; `column`; | The narrow column; more cards of a column; Merged in full |
@@ -2344,6 +2355,18 @@ runs), is the `team_leads` intent: one state for both views (TUI: only the
 leaders' panes, the layout before back when it goes off; GUI: only their
 sessions). Kept in the state file (`lead_mode`), restored at start when a
 team still runs. `data.app.leads`: `on`, `can`, `leaders`.
+
+The Kanban, after Lead Mode (`top-kanban`, the same pill: height, radius,
+8 pt gap; the `kanban` mark; "Kanban", its icon alone in a compact bar with
+the words in its tooltip), is `kanban_toggle` (also ⌃⌥K / Alt+K and the
+palette's "Show the Kanban"). Quiet at rest; lit (purple on its tint) only
+while the Kanban is the screen drawn (`data.app.overlay.screen ==
+"kanban"`), not while the Dashboard's conversation shows. A press opens the
+Kanban overlay on the sandbox in context: in TUI the focused pane's
+sandbox, else the selected sandbox (in GUI, the selected one), else the
+last sandbox the Kanban showed, else All sandboxes. A press while it shows
+closes it as Escape does: in TUI the focused terminal gets the keyboard
+back, in GUI Sessions shows again. The width is `bar::modes_w`'s.
 
 The gate: while it is the base, `App::panes_covered()` is true, so no
 terminal takes a key, a paste, a press, a drop or the focus. `data.app.base`

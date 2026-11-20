@@ -318,7 +318,7 @@ history as one timeline: the proposal, your approval or refusal and its
 reason, every status report (not only the latest), a thread that could not
 start, the lead marking a thread done, the merge proposal, your Merge click
 and each result, the board's notes and claims, the relay requests the team
-opened, and the commits of the team's branches. The desktop app's **Board**
+opened, and the commits of the team's branches. The desktop app's **Dashboard**
 shows it as a conversation.
 
 It shows only what went through sbxw: what you type in a terminal never
@@ -386,7 +386,8 @@ sent before the daemon had this version are not recovered.
 
 A **ticket** is a unit of work the person writes for one sandbox's
 repository: a title, a description, attached files. The **Kanban** is the
-Board's second view (the "Conversation | Kanban" switch): the tickets and the
+Dashboard's second view (the "Conversation | Kanban" switch, or the top bar's
+Kanban button): the tickets and the
 threads that exist, in five columns. sbxw places every card from its own
 state; nobody drags a card past what sbxw knows.
 
