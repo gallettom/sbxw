@@ -12,6 +12,8 @@ pub const STAGED_MAX: usize = 10;
 pub const TEXT_MAX: u64 = 1024 * 1024;
 /// Text drawn: the rest is said, not drawn (a long log costs every frame).
 pub const TEXT_SHOWN: usize = 128 * 1024;
+/// Headings listed in a Markdown file's Outline; the rest is said.
+pub const OUTLINE_MAX: usize = 150;
 /// A picture previewed (`FX_IMAGE_MAX`), before the core's own limits.
 pub const IMAGE_MAX: u64 = 24 * 1024 * 1024;
 /// Recent: the badge counts the last hour's files.

@@ -350,9 +350,8 @@ local function preview(ui, narrow)
     body = note("Loading…")
   elseif p.state == "markdown" then
     -- About 70 characters a line, the prose face; links followed inside.
-    local md = column{ w = "full", max_w = 640, gap = 8,
-      nz(p.section ~= nil and "x" or "") and row{ gap = 8, button{ "Whole file", key = "files-whole", on = "outline", variant = "ghost", tone = "blue" } } or false,
-      markdown{ p.text or "", on = "link", size = 14 }, nz(p.note) and note(p.note) or false }
+    local md = column{ key = "files-md", w = "full", max_w = 640, gap = 8,
+      markdown{ p.text or "", key = "files-text", on = "link", size = 14 }, nz(p.note) and note(p.note) or false }
     local outline = p.outline or {}
     if #outline > 1 and not narrow then
       local o = { gap = 2, w = 200, key = "files-outline", text{ "Outline", size = "caption", weight = "semibold", color = "text-muted" } }
@@ -362,16 +361,18 @@ local function preview(ui, narrow)
           spacer{ w = 8 * ((h.level or 1) - 1), grow = 0 },
           text{ h.text, size = "xs", color = h.on and "text-bright" or "text-muted", truncate = true, grow = 1 } }
       end
-      body = row{ gap = 16, w = "full", h = "full", align = "start", scroll{ grow = 1, md }, scroll{ w = 200, h = "full", column(o) } }
+      if (p.outline_more or 0) > 0 then o[#o + 1] = note(p.outline_more .. " more headings: scroll the text") end
+      body = row{ gap = 16, w = "full", grow = 1, min_h = 0, align = "start", scroll{ key = "files-doc", grow = 1, h = "full", md }, scroll{ key = "files-outline-scroll", w = 200, h = "full", column(o) } }
     elseif #outline > 1 then
       -- Narrow: the outline is a menu above the text.
       local items = {}
       for _, h in ipairs(outline) do items[#items + 1] = { id = tostring(h.index), label = string.rep("  ", (h.level or 1) - 1) .. h.text } end
-      body = column{ gap = 8, w = "full", h = "full",
+      if (p.outline_more or 0) > 0 then items[#items + 1] = { id = "-1", label = p.outline_more .. " more headings: scroll the text", disabled = true } end
+      body = column{ gap = 8, w = "full", grow = 1, min_h = 0,
         menu{ "Outline", id = "files-outline", icon = "rows", items = items, on = "outline_pick" },
-        scroll{ md } }
+        scroll{ key = "files-doc", md } }
     else
-      body = scroll{ md }
+      body = scroll{ key = "files-doc", md }
     end
   elseif p.state == "text" or p.state == "html" then
     body = scroll{
@@ -384,8 +385,8 @@ local function preview(ui, narrow)
   else
     body = note(p.text or "")
   end
-  body = column{ key = "files-preview-" .. (p.state == "html" and "text" or p.state or "note"), w = "full", grow = 1, body }
-  return column{ gap = 8, h = "full", pad = 8,
+  body = column{ key = "files-preview-" .. (p.state == "html" and "text" or p.state or "note"), w = "full", grow = 1, min_h = 0, body }
+  return column{ gap = 8, h = "full", min_h = 0, pad = 8,
     text{ s.name, weight = "semibold", truncate = true, color = "text-bright" },
     text{ s.type .. (isfile and (" · " .. s.size .. " · " .. s.modified) or ""), size = "xs", color = "text-muted", truncate = true },
     text{ s.path or "", size = "xs", mono = true, color = "text-dim", truncate = true, help = s.path },
@@ -452,24 +453,26 @@ return {
     -- From 900 pt: three columns, the Locations on their own at the left
     -- (scrolling on their own, the picker above), the tree the full height,
     -- the reader. From 760: two, the Locations folded into one line.
-    local tree = column{ h = "full", gap = 8, w = "full",
+    local tree = column{ h = "full", min_h = 0, gap = 8, w = "full",
       (not three) and locations(ui, true) or false,
       listing_head(ui),
       list_head,
       listbar(ui),
       rows(ui),
     }
-    local reading = split{ id = "files-split", vertical = true, ratio = three and 0.44 or 0.4, tree, preview(ui) }
+    -- The Outline beside the text needs a reader of about 560 pt; under that (an overlay under 1200 pt) it is a menu above the text.
+    local reading = split{ id = "files-split", vertical = true, ratio = three and 0.44 or 0.4, tree, preview(ui, (over.w or 1000) < 1200) }
     if three then
-      top[#top + 1] = row{ gap = 12, w = "full", grow = 1, align = "stretch", key = "files-columns",
-        column{ w = 224, h = "full", gap = 8, key = "files-left",
+      top[#top + 1] = row{ gap = 12, w = "full", grow = 1, min_h = 0, align = "stretch", key = "files-columns",
+        column{ w = 224, h = "full", min_h = 0, gap = 8, key = "files-left",
           scroll{ key = "files-locations-scroll", locations(ui, false) } },
         divider{ vertical = true },
-        column{ grow = 1, min_w = 0, h = "full", reading } }
+        column{ grow = 1, min_w = 0, h = "full", min_h = 0, reading } }
     else
       top[#top + 1] = reading
     end
     top.h = "full"
+    top.min_h = 0
     return column(top)
   end,
   actions = {

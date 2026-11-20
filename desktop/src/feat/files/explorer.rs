@@ -1,6 +1,6 @@
 //! The explorer's reader: what a Markdown file becomes for the `markdown`
 //! element (its relative links and `[[wiki links]]` turned into links the
-//! explorer follows itself), its outline, one section of it, and a text
+//! explorer follows itself), its outline, the block of a heading, and a text
 //! file with its line numbers.
 //!
 //! A followed link is a path the reader computed from the file the daemon
@@ -98,7 +98,7 @@ pub fn rewrite(text: &str, dir: &str) -> String {
             !t2.is_empty() && !t2.starts_with(['#', '-', '*', '+', '>', '|']) && !t2.chars().next().is_some_and(|c| c.is_ascii_digit()) && !t.starts_with("    ") && !t.starts_with('\t')
         };
         match out.last_mut() {
-            Some(prev) if plain(&l) && !prev.trim().is_empty() && !prev.ends_with("  ") && !fence(prev) && !prev.trim_start().starts_with('#') && !prev.trim_start().starts_with('|') && joined_ok(prev) => {
+            Some(prev) if plain(&l) && !prev.trim().is_empty() && !prev.ends_with("  ") && !fence(prev) && !prev.trim_start().starts_with('#') && !prev.trim_start().starts_with('|') && !prev.contains('|') && !l.contains('|') && joined_ok(prev) => {
                 prev.push(' ');
                 prev.push_str(l.trim_start());
             }
@@ -200,36 +200,24 @@ pub fn outline(text: &str) -> Vec<J> {
     v
 }
 
-/// Heading `index` and what follows it, up to the next heading of its level
-/// or above.
-pub fn section(text: &str, index: usize) -> Option<String> {
-    let mut in_fence = false;
-    let mut n = 0;
-    let mut start: Option<(usize, usize)> = None;
-    let mut out = vec![];
-    for line in text.split('\n') {
-        let f = fence(line);
-        if f {
-            in_fence = !in_fence;
+/// The block of the `markdown` element (`<key>-b<N>`) that draws heading
+/// `index` of the outline of `text`: headings are matched in order by their
+/// drawn text, so a line the outline and the element read differently
+/// (an indented `#`) cannot shift the others.
+pub fn heading_block(text: &str, index: usize) -> Option<usize> {
+    use crate::markdown::{inline, parse, Block};
+    let drawn = |runs: &[crate::markdown::Run]| runs.iter().map(|r| r.text.as_str()).collect::<String>();
+    let blocks = parse(text);
+    let mut at = 0;
+    for (k, h) in outline(text).iter().enumerate() {
+        let want = drawn(&inline(h["text"].as_str().unwrap_or("")));
+        let found = (at..blocks.len()).find(|&i| matches!(&blocks[i], Block::Heading(_, r) if drawn(r) == want))?;
+        if k == index {
+            return Some(found);
         }
-        let level = if in_fence || f { 0 } else { line.bytes().take_while(|b| *b == b'#').count() };
-        let heading = (1..=6).contains(&level) && line.as_bytes().get(level) == Some(&b' ') && !line[level..].trim().is_empty();
-        if heading {
-            if let Some((_, l)) = start {
-                if level <= l {
-                    break;
-                }
-            }
-            if n == index {
-                start = Some((n, level));
-            }
-            n += 1;
-        }
-        if start.is_some() {
-            out.push(line);
-        }
+        at = found + 1;
     }
-    start.map(|_| out.join("\n"))
+    None
 }
 
 /// A text file with its line numbers, right-aligned (`  12  code`).
@@ -267,8 +255,9 @@ mod tests {
         let t = "# A\nintro\n## B\nb\n```\n# not\n```\n## C\nc\n# D\n";
         let o = outline(t);
         assert_eq!(o.iter().map(|h| h["text"].as_str().unwrap()).collect::<Vec<_>>(), ["A", "B", "C", "D"]);
-        assert_eq!(section(t, 1).unwrap(), "## B\nb\n```\n# not\n```");
-        assert!(section(t, 0).unwrap().contains("## C") && !section(t, 0).unwrap().contains("# D"));
+        // Blocks: A, intro, B, b, code, C, c, D.
+        assert_eq!([0, 1, 2, 3].map(|i| heading_block(t, i)), [Some(0), Some(2), Some(5), Some(7)]);
+        assert_eq!(heading_block(t, 4), None);
         assert_eq!(numbered("a\nb"), "1  a\n2  b");
         assert!(numbered(&"x\n".repeat(12)).starts_with(" 1  x"));
     }

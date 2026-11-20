@@ -952,7 +952,7 @@ fn the_explorer_opens_where_it_is_asked_and_reads_markdown_and_code() {
     let mut st2 = opened(&d);
     run(&mut st2, &d, "files_open", json!({ "sandbox": "web-app", "worktree": "nope" })).unwrap();
     assert_ne!(st2.path, "nope");
-    // Markdown: outline, section, links.
+    // Markdown: outline, heading, links.
     let mut st = opened(&d);
     let a = run(&mut st, &d, "files_browse", json!({ "path": "/Users/me/web" })).unwrap();
     pump(&mut st, &mut d, a);
@@ -965,9 +965,13 @@ fn the_explorer_opens_where_it_is_asked_and_reads_markdown_and_code() {
     assert_eq!(p["outline"].as_array().unwrap().len(), 3);
     let t = p["text"].as_str().unwrap();
     assert!(t.contains(&explorer::url("/Users/me/web/docs/notes.md")) && t.contains(&explorer::url("/Users/me/web/CHANGELOG.md")) && t.contains("(https://example.org)"), "{t}");
-    run(&mut st, &d, "files_outline", json!({ "index": 1 })).unwrap();
-    let t = st.ui(&Ctx { data: &d })["preview"]["text"].as_str().unwrap().to_string();
-    assert!(t.starts_with("## Run") && !t.contains("npm test"), "{t}");
+    // An Outline entry scrolls to its heading (the whole text stays) and is the one marked.
+    let a = run(&mut st, &d, "files_outline", json!({ "index": 1 })).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::ScrollIntoView(k) if k == "files-text-b2")), "{a:?}");
+    let p = st.ui(&Ctx { data: &d })["preview"].clone();
+    assert!(p["text"].as_str().unwrap().starts_with("# Web") && p["text"].as_str().unwrap().contains("npm test"));
+    assert_eq!(p["outline"][1]["on"], true);
+    assert_eq!(p["outline"][0]["on"], false);
     assert!(run(&mut st, &d, "files_outline", json!({ "index": 9 })).is_err());
     run(&mut st, &d, "files_outline", json!({})).unwrap();
     // A relative link: its folder listed, the file selected when it comes.
