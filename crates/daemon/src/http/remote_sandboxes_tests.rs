@@ -383,8 +383,11 @@ async fn the_shown_session_is_the_terminals_one_or_the_entry_is_read_only() {
 // After a daemon restart a lead is unbound and waits in `lead_recs` for its
 // recorded session; `leading()` (plans.rs) re-binds it only when
 // `main_session` (the newest thread-less live session) IS that id. These
-// reproduce the two ways that fails; ignored until plans.rs is fixed
-// (outside this thread's scope). Run with `--ignored`.
+// reproduce the two ways that failed. The background spare is fixed (the
+// shared main-session rule). The resumed conversation stays refused: whether
+// a session that continues the recorded one may lead again is the person's
+// decision (lead-persist's trust limit), still open; after a resume the
+// person turns Team on again. Run it with `--ignored`.
 
 /// The daemon restarted: the lead is on disk, its terminal not bound yet.
 async fn restarted_lead(app: &Arc<App>, dir: &std::path::Path, name: &str) -> SandboxRef {
@@ -403,7 +406,6 @@ async fn control_a_restarted_lead_with_its_own_session_leads_again() {
 }
 
 #[tokio::test]
-#[ignore = "defect: plans.rs main_session counts a harness background session"]
 async fn defect_a_background_spare_drops_a_restarted_lead() {
     let (d, app) = on();
     let sb = restarted_lead(&app, d.path(), "sbxw2").await;
@@ -411,11 +413,11 @@ async fn defect_a_background_spare_drops_a_restarted_lead() {
     b["session_kind"] = "bg".into();
     hook(&app, &sb, "s5", b);
     hook(&app, &sb, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": "hi"}));
-    assert!(app.leading().contains(&"sbxw2".to_string()), "the spare is newer, so main_session is not s1: lead dropped");
+    assert!(app.leading().contains(&"sbxw2".to_string()), "a newer background spare is not the main session");
 }
 
 #[tokio::test]
-#[ignore = "defect: a resumed conversation has a new session id; the re-bind refuses it"]
+#[ignore = "open decision: a resumed conversation has a new session id and is not re-bound (lead-persist trust limit); the person turns Team on again"]
 async fn defect_a_resumed_main_session_drops_a_restarted_lead() {
     let (d, app) = on();
     let sb = restarted_lead(&app, d.path(), "sbxw2").await;

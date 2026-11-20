@@ -901,8 +901,19 @@ impl App {
     fn remote_reachable(&self) -> Vec<(SandboxRef, ReachKind, sbxw_core::agents::SessionInfo)> {
         let leading = self.leading();
         let infos = self.session_infos();
-        // Which session sbxw's terminal types into, per sandbox, by the rule
-        // of `can_type_into` (never relaxed here): that one is shown.
+        let cands = self.reach_candidates(&infos);
+        reach::reachable(&cands, &leading)
+            .into_iter()
+            .filter_map(|r| Some((SandboxRef::parse(&r.sandbox).ok()?, r.kind, infos[r.index].clone())))
+            .collect()
+    }
+
+    /// `infos` as the reach rule sees them, each marked when it is the
+    /// session sbxw's terminal types into (`AgentBook::terminal_session`,
+    /// the rule of `can_type_into`, never relaxed here). Shared with
+    /// `plans::main_session`, so the phone and Lead Mode agree on which
+    /// session is a sandbox's main one.
+    pub(crate) fn reach_candidates<'a>(&self, infos: &'a [sbxw_core::agents::SessionInfo]) -> Vec<reach::Candidate<'a>> {
         let terminal: std::collections::HashMap<String, String> = {
             let book = self.agents.lock().unwrap();
             let mut names: Vec<&str> = infos.iter().map(|i| i.sandbox.as_str()).collect();
@@ -910,13 +921,9 @@ impl App {
             names.dedup();
             names.into_iter().filter_map(|n| book.terminal_session(n).map(|k| (n.to_string(), k.session_id))).collect()
         };
-        let cands: Vec<reach::Candidate> = infos
+        infos
             .iter()
             .map(|i| reach::Candidate { terminal: i.session_id.is_some() && terminal.get(&i.sandbox) == i.session_id.as_ref(), ..reach::Candidate::from(i) })
-            .collect();
-        reach::reachable(&cands, &leading)
-            .into_iter()
-            .filter_map(|r| Some((SandboxRef::parse(&r.sandbox).ok()?, r.kind, infos[r.index].clone())))
             .collect()
     }
 
