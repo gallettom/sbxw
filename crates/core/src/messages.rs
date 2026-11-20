@@ -383,6 +383,33 @@ pub const LEAD_COMMAND: &str = "/lead";
 pub const LEAD_END: &str = "[sbxw] The user ended lead mode. Stop leading: no new plan and no \
      follow-up of the threads. Go back to working normally in this session.";
 
+/// Typed once after `/lead` when Team mode comes back on with plans its end
+/// had closed: which plans the lead follows again, with ids, threads and
+/// states (names are validated thread names; no agent text). `None` when
+/// none came back.
+pub fn lead_resumed(plans: &[Plan]) -> Option<String> {
+    if plans.is_empty() {
+        return None;
+    }
+    let each: Vec<String> = plans
+        .iter()
+        .map(|p| {
+            let threads: Vec<String> = p
+                .threads
+                .iter()
+                .map(|t| format!("{} {}", t.name, format!("{:?}", t.state).to_lowercase()))
+                .collect();
+            format!("plan {} ({})", p.id, threads.join(", "))
+        })
+        .collect();
+    Some(format!(
+        "[sbxw] Lead mode is on again, and you follow again the open plans of this sandbox \
+         from before: {}. Read each with plan_status and its id, review done threads as usual, \
+         and propose their merge with propose_merge; the user still clicks Merge.",
+        each.join("; ")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

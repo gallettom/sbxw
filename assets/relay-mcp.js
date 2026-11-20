@@ -764,6 +764,12 @@ function planText(res) {
     if (t.repo !== undefined && t.repo !== null) lines.push(`  repo: ${t.repo || "(the workspace)"}`);
     if (t.model) lines.push(`  model: ${t.model}`);
     if (t.ticket) lines.push(`  ticket: T-${t.ticket}`);
+    if (t.merged_outside) {
+      lines.push(
+        `  already in ${t.merged_outside}: merged outside sbxw, or no commit of its own. ` +
+          "Nothing to merge; leave it out of propose_merge.",
+      );
+    }
     if (t.summary && t.set_by === "lead") {
       lines.push(`  marked done by the lead: ${t.summary}`);
     } else if (t.summary && t.set_by === "sbxw") {

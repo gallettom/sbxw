@@ -19,6 +19,20 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub const MAX_THREADS: usize = 8;
 pub const MAX_TEXT: usize = 4000;
+/// What the lead's plan tools answer once the user ended lead mode: about
+/// plan `id`, or about leading at all.
+pub fn lead_ended(id: Option<&str>) -> String {
+    match id {
+        Some(id) => format!(
+            "the user ended lead mode, so plan {id} is no longer yours to follow. \
+             Stop leading: no new plan and no follow-up of its threads."
+        ),
+        None => "the user ended lead mode (or never turned it on in this sandbox). \
+                 Stop leading: no new plan and no follow-up of its threads."
+            .into(),
+    }
+}
+
 /// Goal and scope are a brief, not a note: over this a proposal is refused,
 /// not cut, since a cut goal reaches the thread looking whole.
 pub const MAX_BRIEF: usize = 16000;
@@ -447,10 +461,7 @@ impl PlanBook {
     pub fn led(&self, id: &str, sandbox: &str) -> Result<&Plan, String> {
         let plan = self.owned(id, sandbox)?;
         if plan.closed {
-            return Err(format!(
-                "the user ended lead mode, so plan {id} is no longer yours to follow. \
-                 Stop leading: no new plan and no follow-up of its threads."
-            ));
+            return Err(lead_ended(Some(id)));
         }
         Ok(plan)
     }
@@ -626,6 +637,26 @@ impl PlanBook {
             }
         }
         ended
+    }
+
+    /// Team mode on again in `sandbox`: the approved plans its end closed come
+    /// back to the sandbox's lead, oldest first. Only `end_lead` sets `closed`,
+    /// so a closed plan is always one whose lead ended, never one the person
+    /// settled: refused plans and merged ones stay as they are.
+    pub fn resume_lead(&mut self, sandbox: &str, now: u64) -> Vec<Plan> {
+        let mut out: Vec<Plan> = self
+            .plans
+            .values_mut()
+            .filter(|p| p.sandbox == sandbox && p.closed && p.state == PlanState::Approved)
+            .filter(|p| !p.merge.as_ref().is_some_and(|m| m.state == MergeState::Merged))
+            .map(|p| {
+                p.closed = false;
+                p.updated_ms = now;
+                p.clone()
+            })
+            .collect();
+        out.sort_by(|a, b| a.created_ms.cmp(&b.created_ms).then(a.id.cmp(&b.id)));
+        out
     }
 
     /// The lead proposes merging finished threads, in order. A shared plan has
@@ -1136,6 +1167,42 @@ mod tests {
         assert_eq!(b.get(&q.id).unwrap().state, PlanState::Refused);
         assert!(b.get(&p.id).unwrap().closed);
         assert!(b.led(&p.id, "n").is_err());
+    }
+
+    #[test]
+    fn team_on_again_gives_back_only_the_plans_its_end_closed() {
+        let mut b = PlanBook::new();
+        // Open at Team off: comes back.
+        let open = proposed(&mut b, "n", &["a"]);
+        b.approve(&open.id, vec![t("a")], None, None, 2).unwrap();
+        // Merged before Team off: stays merged and closed.
+        let merged = b.propose("p-m".into(), "n", "", vec![t("m")], Variant::Split, "why", None, 3).unwrap();
+        b.approve(&merged.id, vec![t("m")], None, None, 3).unwrap();
+        b.set_thread("n", "m", ThreadState::Done, "ok", false, 3).unwrap();
+        b.propose_merge(&merged.id, "n", vec!["m".into()], "", vec![], 3).unwrap();
+        b.start_merge(&merged.id, None, None, 3).unwrap();
+        b.merge_result(&merged.id, MergeResult { thread: "m".into(), ok: true, commit: None, error: None, note: None }, 3).unwrap();
+        b.finish_merge(&merged.id, 3).unwrap();
+        // Refused by the person: stays refused.
+        let refused = b.propose("p-r".into(), "n", "", vec![t("r")], Variant::Split, "why", None, 4).unwrap();
+        b.refuse(&refused.id, Some("no".into()), 4).unwrap();
+        // Pending at Team off: refused by the end, stays refused.
+        let pending = b.propose("p-p".into(), "n", "", vec![t("p")], Variant::Split, "why", None, 5).unwrap();
+        // Another sandbox's closed plan: not this sandbox's to reopen.
+        let other = b.propose("p-o".into(), "o", "", vec![t("a")], Variant::Split, "why", None, 5).unwrap();
+        b.approve(&other.id, vec![t("a")], None, None, 5).unwrap();
+        b.end_lead("o", 5);
+
+        b.end_lead("n", 6);
+        assert!(b.led(&open.id, "n").unwrap_err().contains("no longer yours"), "lead mode off still refuses");
+        let back = b.resume_lead("n", 7);
+        assert_eq!(back.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec![open.id.as_str()]);
+        assert!(b.led(&open.id, "n").is_ok());
+        assert_eq!(b.plan_for_request("n", None).as_deref(), Some(open.id.as_str()), "read_team_notes finds it again");
+        assert_eq!(b.get(&refused.id).unwrap().state, PlanState::Refused);
+        assert_eq!(b.get(&pending.id).unwrap().state, PlanState::Refused);
+        assert!(b.get(&other.id).unwrap().closed);
+        assert!(b.resume_lead("n", 8).is_empty(), "nothing twice");
     }
 
     #[test]

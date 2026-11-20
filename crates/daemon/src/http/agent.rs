@@ -212,6 +212,7 @@ struct ProposeBody {
 }
 
 async fn propose(State(app): S, Agent(me): Agent, Json(b): Json<ProposeBody>) -> ApiResult {
+    app.require_leading(&me, None)?;
     let plan = app.plan_propose(&me, &b.summary, b.threads, b.variant, &b.justification, b.lead.as_deref()).await?;
     let plan = app.plan_wait(&plan.id, &me, wait_bound(b.timeout)).await?;
     Ok(ok_with(json!({ "plan": app.plan_view(&plan), "ticket_notes": app.ticket_link_notes(&plan) })))
@@ -225,14 +226,16 @@ struct PlanIdBody {
 }
 
 async fn plan_wait(State(app): S, Agent(me): Agent, Json(b): Json<PlanIdBody>) -> ApiResult {
+    app.require_leading(&me, Some(&b.id))?;
     app.plan_led(&b.id, &me)?;
     let plan = app.plan_wait(&b.id, &me, wait_bound(b.timeout)).await?;
     Ok(ok_with(json!({ "plan": app.plan_view(&plan), "ticket_notes": app.ticket_link_notes(&plan) })))
 }
 
 async fn plan_status(State(app): S, Agent(me): Agent, Json(b): Json<PlanIdBody>) -> ApiResult {
+    app.require_leading(&me, Some(&b.id))?;
     let plan = app.plan_led(&b.id, &me)?;
-    Ok(ok_with(json!({ "plan": app.plan_view(&plan) })))
+    Ok(ok_with(json!({ "plan": app.plan_view_checked(&plan).await })))
 }
 
 #[derive(Deserialize)]
@@ -248,7 +251,8 @@ struct MergeProposeBody {
 }
 
 async fn propose_merge(State(app): S, Agent(me): Agent, Json(b): Json<MergeProposeBody>) -> ApiResult {
-    let plan = app.plan_propose_merge(&b.id, &me, b.order, &b.note, b.distillate)?;
+    app.require_leading(&me, Some(&b.id))?;
+    let plan = app.plan_propose_merge_checked(&b.id, &me, b.order, &b.note, b.distillate).await?;
     Ok(ok_with(json!({ "plan": app.plan_view(&plan) })))
 }
 
@@ -263,6 +267,7 @@ struct MarkDoneBody {
 /// The lead marks a thread it reviewed done: the plan id is its capability,
 /// as for `propose_merge`.
 async fn mark_done(State(app): S, Agent(me): Agent, Json(b): Json<MarkDoneBody>) -> ApiResult {
+    app.require_leading(&me, Some(&b.id))?;
     let plan = app.plan_mark_done(&b.id, &me, &b.thread, &b.note)?;
     Ok(ok_with(json!({ "plan": app.plan_view(&plan) })))
 }
