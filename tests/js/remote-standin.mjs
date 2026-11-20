@@ -14,6 +14,10 @@
 // {uploadSlow: ms} a pause after each 64 KiB read (so progress shows),
 // {uploadHold: true} uploads wait until {uploadHold: false},
 // {transcribeDelay: ms} how long a transcription takes.
+// Live replies (thread phone-live): {newer: {sandbox: page}} what a
+// `?after=` read answers, {newerHold: true} such reads wait until
+// {newerHold: false}, {mute: true} open streams stay open but get nothing
+// more (a stream that died without a word, as after a phone's sleep).
 // Level 2 (API-level2.md): {l2: {approvals: {...}}} the state GET /r/approvals
 // answers, {l2Digest: {plans|merges|network|stopped: hex}} a detail's new
 // digest (a challenge with the old one is "changed"), {l2Replies: {kind:
@@ -208,6 +212,9 @@ export function startStandin(port = 0) {
       if ('messageDelay' in c) s.messageDelay = c.messageDelay;
       if (c.messageReplies) s.messageReplies = c.messageReplies;
       if (c.history) Object.assign(s.history, c.history);
+      if (c.newer) Object.assign(s.newer, c.newer);
+      if ('newerHold' in c) { s.newerHold = c.newerHold; if (!c.newerHold) (s.newerHolds || []).splice(0).forEach(r => r()); }
+      if (c.mute) s.streams.clear();
       if (c.uploadReplies) s.uploadReplies = c.uploadReplies;
       if ('transcribeDelay' in c) s.transcribeDelay = c.transcribeDelay;
       if (c.l2Reset || !s.l2) s.l2 = l2Fresh();
@@ -271,7 +278,10 @@ export function startStandin(port = 0) {
       const sb = decodeURIComponent(m[1]);
       if (m[2] === 'history') {
         if (url.searchParams.has('before')) return send(res, 200, s.older[sb] || { page: { items: [], latest_seq: 0 } });
-        if (url.searchParams.has('after')) return send(res, 200, s.newer[sb] || { page: { items: [], latest_seq: 0 } });
+        if (url.searchParams.has('after')) {
+          if (s.newerHold) await new Promise(r => (s.newerHolds ||= []).push(r));
+          return send(res, 200, s.newer[sb] || { page: { items: [], latest_seq: 0 } });
+        }
         return s.history[sb] ? send(res, 200, s.history[sb]) : send(res, 404, { ok: false, error: 'not a leader' });
       }
       if (m[2] === 'message') {

@@ -63,8 +63,10 @@
     nextBefore: null,
     latestSeq: 0,
     loadingOlder: false,
-    newer: null,         // the in-flight ?after= read
+    newer: null,         // the in-flight ?after= read: { at } (its start)
     newerAgain: false,
+    loaded: null,        // the leader whose first page is drawn
+    hiddenAt: 0,         // when the page was last hidden (0: visible)
     drafts: new Map(),   // per leader: what was typed and not sent (memory only)
     trays: new Map(),    // per leader: the files picked for its next message
     sending: false,
@@ -230,7 +232,9 @@
     if (!st.paired) return;
     const es = new EventSource('/r/events');
     st.es = es;
-    es.addEventListener('open', () => { banner.hidden = true; });
+    // Each (re)opened stream catches up on what it may have missed while
+    // it was down: one read, then the nudges take over.
+    es.addEventListener('open', () => { banner.hidden = true; if (st.current) fetchNewer(); });
     es.addEventListener('leaders', e => setLeaders(parse(e.data)));
     es.addEventListener('history', e => {
       const d = parse(e.data);
@@ -297,8 +301,18 @@
       }
     }, ms);
   }
+  // Back from a locked screen or another app: the stream may have died
+  // without a word (iOS suspends the page and its connection), so after
+  // RC_AWAY_MS away it is opened again, and the conversation is read once
+  // whatever the stream's state. No polling: the stream stays the trigger.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && st.paired && !st.es) scheduleProbe(10);
+    if (document.visibilityState !== 'visible') { st.hiddenAt = Date.now(); return; }
+    const away = st.hiddenAt ? Date.now() - st.hiddenAt : 0;
+    st.hiddenAt = 0;
+    if (!st.paired || st.elsewhere) return;
+    if (!st.es) { scheduleProbe(10); return; }
+    if (away >= RC_AWAY_MS || st.es.readyState === 2) startEvents();
+    else if (st.current) fetchNewer();
   });
   function parse(s) {
     try { return JSON.parse(s); } catch (_) { return null; }
@@ -403,6 +417,7 @@
 
   async function openLeader(sandbox) {
     st.current = sandbox;
+    st.loaded = null;
     st.items = [];
     st.nextBefore = null;
     st.latestSeq = 0;
@@ -432,15 +447,25 @@
     renderRows();
     st.shownSeq = st.latestSeq;
     scrollToEnd();
+    st.loaded = sandbox;
+    // A nudge that came while the first page loaded: read past it now.
+    if (st.newerAgain) { st.newerAgain = false; fetchNewer(); }
   }
 
+  // One ?after= read at a time; a nudge meanwhile reads once more after it.
+  // A read the phone never got an answer to (its screen went off with the
+  // request in the air) stops holding the others back after RC_STUCK_MS.
   async function fetchNewer() {
-    if (st.newer) { st.newerAgain = true; return; }
     const sandbox = st.current;
+    if (!sandbox) return;
+    if (st.loaded !== sandbox || (st.newer && Date.now() - st.newer.at < RC_STUCK_MS)) { st.newerAgain = true; return; }
     const log = $('log');
     const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
-    st.newer = api.history(sandbox, { after: st.latestSeq, limit: 200 });
-    const res = await st.newer;
+    const mine = { at: Date.now() };
+    st.newer = mine;
+    st.newerAgain = false;
+    const res = await api.history(sandbox, { after: st.latestSeq, limit: 200 });
+    if (st.newer !== mine) return;
     st.newer = null;
     if (st.current !== sandbox) return;
     if (res.ok) {
