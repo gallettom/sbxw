@@ -582,6 +582,13 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-rec-words { flex: 1; min-width: 0; margin: 0; max-height: 2.8em; overflow: hidden; font-size: var(--fs-sm); line-height: 1.4; color: var(--c-text-bright); overflow-wrap: anywhere; }
 .rc-rec-words:empty, .rc-rec-words:has(span:empty + span:empty)::before { content: "Listening…"; color: var(--c-text-dim); }
 .rc-interim { color: var(--c-text-dim); font-style: italic; }
+/* The preview shows the END of what is said: the page cuts older words at
+   the start ("…") until two lines hold the rest. */
+/* Whether the microphone hears: the dot turns green and pulses while the
+   iPhone's recogniser hears sound; amber when nothing has been heard for
+   about 3 seconds (the status line says it too). */
+[data-hear="sound"] .rc-rec-dot { background: var(--c-green); box-shadow: 0 0 0 4px rgba(63, 185, 80, 0.18); animation: rc-pulse 0.9s ease-in-out infinite; }
+[data-quiet="true"] .rc-rec-dot { background: var(--c-amber); box-shadow: 0 0 0 4px rgba(210, 153, 34, 0.18); animation: none; }
 [data-rec="listening"] .rc-field, [data-rec="listening"] #attach, [data-rec="listening"] .rc-wave { display: none; }
 [data-rec="listening"] .rc-box { border-color: rgba(248, 81, 73, 0.5); padding-left: 10px; }
 [data-rec="listening"] .rc-mic { color: #fff; }

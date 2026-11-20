@@ -13,7 +13,8 @@
 // {uploadReplies: [{status, body}]} how the next uploads are answered,
 // {uploadSlow: ms} a pause after each 64 KiB read (so progress shows),
 // {uploadHold: true} uploads wait until {uploadHold: false},
-// {transcribeDelay: ms} how long a transcription takes.
+// {transcribeDelay: ms} how long a transcription takes, {transcribeReplies:
+// [{status, body}]} how the next transcriptions are answered.
 // Level 2 (API-level2.md): {l2: {approvals: {...}}} the state GET /r/approvals
 // answers, {l2Digest: {plans|merges|network|stopped: hex}} a detail's new
 // digest (a challenge with the old one is "changed"), {l2Replies: {kind:
@@ -78,6 +79,7 @@ export function startStandin(port = 0) {
     uploadSlow: 0,
     uploadHold: false,
     transcribeDelay: 0,
+    transcribeReplies: [],
     l2: null,
     kanban: { shop: fx.kanban.board, website: fx.kanban.empty },
     tickets: { 'shop/12': fx.kanban.ticket },
@@ -212,6 +214,8 @@ export function startStandin(port = 0) {
       if (c.history) Object.assign(s.history, c.history);
       if (c.uploadReplies) s.uploadReplies = c.uploadReplies;
       if ('transcribeDelay' in c) s.transcribeDelay = c.transcribeDelay;
+      if (c.reset) s.transcribeReplies = [];
+      if (c.transcribeReplies) s.transcribeReplies = c.transcribeReplies;
       if (c.l2Reset || !s.l2) s.l2 = l2Fresh();
       if (c.l2) Object.assign(s.l2.approvals, c.l2.approvals || {});
       if (c.l2Gone) s.l2.gone = c.l2Gone;
@@ -311,6 +315,8 @@ export function startStandin(port = 0) {
     }
     if (p === '/r/voice/transcribe') {
       await new Promise(r => setTimeout(r, s.transcribeDelay));
+      const r = s.transcribeReplies.shift();
+      if (r) return send(res, r.status, r.body);
       return send(res, 200, { text: s.transcript, masked: 0 });
     }
     return send(res, 404, { ok: false, error: 'not found' });

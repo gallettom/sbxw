@@ -81,20 +81,26 @@ function spies() {
     };
   }
   // A fake SpeechRecognition: `__sr` = ok (default) | missing | ctor | start
-  // | err:<code>. The test says words with window.__srLast.say([[text, final]]).
+  // | err:<code> | dead (never says it started) | deaf (stop() never ends).
+  // The test says words with window.__srLast.say([[text, final]]); endSelf()
+  // ends it as iOS does after a pause. spy.srMade counts the recognisers.
   spy.sr = [];
+  spy.srMade = 0;
   const sr = localStorage.getItem('__sr') || 'ok';
   delete window.SpeechRecognition;
   delete window.webkitSpeechRecognition;
   if (sr !== 'missing') {
     window.webkitSpeechRecognition = class {
-      constructor() { if (sr === 'ctor') throw new Error('no'); window.__srLast = this; }
+      constructor() { if (sr === 'ctor') throw new Error('no'); window.__srLast = this; spy.srMade++; }
       start() {
         spy.sr.push(`start ${this.lang} ${this.interimResults} ${this.continuous}`);
         if (sr === 'start') throw new DOMException('no', 'InvalidStateError');
+        if (sr !== 'dead') setTimeout(() => { this.onstart?.(); this.onaudiostart?.(); }, 10);
         if (sr.startsWith('err:')) setTimeout(() => { this.onerror?.({ error: sr.slice(4) }); this.onend?.(); }, 60);
       }
-      stop() { spy.sr.push('stop'); setTimeout(() => this.onend?.(), 20); }
+      stop() { spy.sr.push('stop'); if (sr !== 'deaf') setTimeout(() => this.onend?.(), 20); }
+      endSelf() { this.onend?.(); }
+      sound() { this.onsoundstart?.(); }
       abort() { spy.sr.push('abort'); setTimeout(() => this.onend?.(), 0); }
       say(list) {
         const results = list.map(([t, f]) => ({ 0: { transcript: t }, length: 1, isFinal: f }));
@@ -113,6 +119,7 @@ function spies() {
     osc.connect(gain).connect(dest);
     osc.start();
     spy.tracks += dest.stream.getTracks().length;
+    window.__stream = dest.stream;
     return dest.stream;
   };
 }
@@ -1498,7 +1505,7 @@ test('iPhone dictation: interim then final words into the field at the caret, st
   await page.tap('#mic');
   await page.waitForSelector('#composer[data-rec="listening"]');
   await page.evaluate(() => window.__srLast.fail('no-speech'));
-  await page.waitForSelector('#status:text("No words heard.")');
+  await page.waitForSelector('#status:text("Nothing was heard. Tap the microphone and speak.")');
   assert.equal((await calls('POST', '/r/voice/transcribe')).length, 0);
   await cleanSpy(page);
   assert.deepEqual(problems, []);
@@ -1539,6 +1546,221 @@ test('iPhone dictation falls back to the Mac, with one sentence, never a dead bu
   assert.equal(await page.inputValue('#field'), 'kept words');
   assert.equal((await calls('POST', '/r/voice/transcribe')).length, 0);
   await ctx.close();
+});
+
+// ══ Dictation never stops or stays deaf in silence (phone-dictation) ═══════
+const D = {
+  added: 'Added to the field: read it, then Send.',
+  nothing: 'Nothing was heard. Tap the microphone and speak.',
+  stoppedSelf: 'The iPhone stopped listening: tap the microphone to go on.',
+  taken: 'The microphone was taken by another app (a call?). Tap the microphone to try again.',
+  network: 'The iPhone\'s speech recognition lost its connection. Tap the microphone to try again, or choose Mac in the menu.',
+  noStart: 'The iPhone did not start listening. Tap the microphone to try again.',
+  hidden: 'Dictation stopped: the page was hidden.',
+  kept: 'The words heard are in the field.',
+  quietMac: 'The microphone hears nothing. Speak closer, or check that no other app (a call) is using it.',
+  quietIphone: 'Nothing heard for a few seconds. Speak, or tap stop, then the microphone again.',
+  macShort: 'Too short to transcribe. Tap the microphone, speak, then tap stop.',
+  macSilent: 'Nothing was heard: the recording is silent. Check the microphone and try again.',
+  macNoWords: 'The Mac heard no words. Speak closer to the phone and try again.',
+  macFailed: 'The Mac could not transcribe this: try again.',
+};
+async function iphoneListening(page) {
+  await page.goto(`${base()}/`);
+  await chooseIphone(page);
+  await page.tap('.rc-leader >> text=website');
+  await page.tap('#mic');
+  await page.waitForSelector('#composer[data-rec="listening"]');
+}
+async function idleWith(page, text, what) {
+  await page.waitForSelector('#composer[data-rec="idle"]', { timeout: 5000 });
+  assert.equal(await page.textContent('#status'), text, what);
+  assert.equal(await page.getAttribute('#mic', 'aria-pressed'), 'false', `${what}: not "listening"`);
+  assert.equal(await page.isVisible('#rec'), false, `${what}: the bar is gone`);
+}
+const LONG = 'First sentence about the orders table that should scroll away. Second sentence about the index on the customer id. Third sentence asks for a migration file. Fourth and last sentence says ship it today';
+
+test('iPhone dictation: the preview shows the END of a long text, newest words in view', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+  const { ctx, page, problems } = await phone();
+  await iphoneListening(page);
+  await page.evaluate(t => { window.__srLast.sound(); window.__srLast.say([[t, true], ['and the newest interim words', false]]); }, LONG);
+  const r = await page.evaluate(() => {
+    const box = document.getElementById('rec-words').getBoundingClientRect();
+    const i = document.getElementById('rec-interim');
+    const rr = i.getClientRects();
+    const last = rr[rr.length - 1];
+    const w = document.getElementById('rec-words');
+    return { fits: w.scrollHeight <= w.clientHeight + 1, lastIn: last.bottom <= box.bottom + 1 && last.top >= box.top - 1, final: document.getElementById('rec-final').textContent };
+  });
+  assert.ok(r.fits, 'two lines hold the preview');
+  assert.ok(r.lastIn, 'the newest words are in view');
+  assert.ok(r.final.startsWith('…'), `cut at the start: ${r.final}`);
+  assert.ok(r.final.endsWith('ship it today'), 'the last final words are shown');
+  assert.ok(!r.final.includes('First sentence'), 'the first words are not');
+  assert.equal(await page.inputValue('#field'), LONG, 'the field holds all of it');
+  assert.equal(await page.getAttribute('#rec', 'data-hear'), 'sound', 'the dot says it hears');
+  await shot(page, '84-iphone-long-text');
+  await page.tap('#mic');
+  await idleWith(page, D.added, 'stop');
+  assert.equal(await page.inputValue('#field'), LONG);
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('iPhone dictation: every end or error says a sentence and returns to idle', { skip }, async () => {
+  const cases = [
+    ['no-speech', p => p.evaluate(() => window.__srLast.fail('no-speech')), D.nothing, ''],
+    ['ended alone, nothing heard', p => p.evaluate(() => window.__srLast.endSelf()), D.nothing, ''],
+    ['ended alone after words (short round: no restart)', p => p.evaluate(() => { window.__srLast.say([['kept words', true]]); window.__srLast.endSelf(); }), `${D.stoppedSelf} ${D.kept}`, 'kept words'],
+    ['audio-capture after words', p => p.evaluate(() => { window.__srLast.say([['kept words', true]]); window.__srLast.fail('audio-capture'); }), `${D.taken} ${D.kept}`, 'kept words'],
+    ['network after words', p => p.evaluate(() => { window.__srLast.say([['kept words', true]]); window.__srLast.fail('network'); }), `${D.network} ${D.kept}`, 'kept words'],
+    ['aborted', p => p.evaluate(() => window.__srLast.fail('aborted')), D.nothing, ''],
+    ['page hidden', p => p.evaluate(() => {
+      window.__srLast.say([['kept words', true]]);
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }), `${D.hidden} ${D.kept}`, 'kept words'],
+  ];
+  for (const [what, act, text, field] of cases) {
+    await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+    const { ctx, page, problems } = await phone();
+    await iphoneListening(page);
+    await act(page);
+    await idleWith(page, text, what);
+    assert.equal(await page.inputValue('#field'), field, what);
+    if (what === 'audio-capture after words') await shot(page, '85-iphone-error-sentence');
+    assert.equal((await calls('POST', '/r/voice/transcribe')).length, 0, what);
+    assert.deepEqual(problems, [], what);
+    await ctx.close();
+  }
+  // A recogniser that never says it started, one that never ends after stop.
+  for (const [flag, text] of [['dead', D.noStart], ['deaf', D.nothing]]) {
+    await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+    const { ctx, page, problems } = await phone(390, 844, { flags: [`__sr:${flag}`] });
+    await iphoneListening(page);
+    if (flag === 'dead') {
+      await page.waitForSelector(`#status:text("${D.quietIphone}")`, { timeout: 5000 });
+      await shot(page, '86-iphone-nothing-heard-yet');
+    } else await page.tap('#mic');
+    await page.waitForSelector('#composer[data-rec="idle"]', { timeout: 6000 });
+    await idleWith(page, text, flag);
+    assert.deepEqual(problems, [], flag);
+    await ctx.close();
+  }
+});
+
+test('iPhone dictation: a recogniser gone deaf after words is said, not shown as listening in silence', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+  const { ctx, page, problems } = await phone();
+  await iphoneListening(page);
+  await page.evaluate(() => window.__srLast.say([['some words', true]]));
+  assert.match(await page.textContent('#status'), /^Listening/);
+  // No event at all for 8 s (WebKit bug 321436): the person is told.
+  await page.waitForSelector(`#status:text("${D.quietIphone}")`, { timeout: 10000 });
+  assert.equal(await page.getAttribute('#rec', 'data-quiet'), 'true');
+  await page.evaluate(() => window.__srLast.say([['some words', true], ['more', false]]));
+  await page.waitForSelector('#status:text-matches("^Listening")');
+  await page.tap('#mic');
+  await idleWith(page, D.added, 'stop');
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('iPhone dictation: an end by itself restarts at most twice, the words once each', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+  const { ctx, page, problems } = await phone();
+  await iphoneListening(page);
+  // Round 1: words, then iOS ends it after a pause.
+  await page.evaluate(() => window.__srLast.say([['add an index', true]]));
+  await page.waitForTimeout(2100);
+  await page.evaluate(() => window.__srLast.endSelf());
+  await page.waitForTimeout(100);
+  assert.equal(await page.getAttribute('#composer', 'data-rec'), 'listening', 'restarted');
+  assert.equal(await page.evaluate(() => window.__spy.srMade), 2);
+  // Round 2 re-delivers the last words of round 1, then new ones.
+  await page.evaluate(() => window.__srLast.say([['Add an index', true], ['on the id', true]]));
+  assert.equal(await page.inputValue('#field'), 'add an index on the id', 'nothing twice');
+  await page.waitForTimeout(2100);
+  await page.evaluate(() => window.__srLast.endSelf());
+  await page.waitForTimeout(100);
+  assert.equal(await page.evaluate(() => window.__spy.srMade), 3, 'a second restart');
+  await page.evaluate(() => window.__srLast.say([['please', true]]));
+  await page.waitForTimeout(2100);
+  // A third end: no more restarts. It says so, and keeps every word once.
+  await page.evaluate(() => window.__srLast.endSelf());
+  await idleWith(page, `${D.stoppedSelf} ${D.kept}`, 'third end');
+  assert.equal(await page.evaluate(() => window.__spy.srMade), 3, 'no restart loop');
+  assert.equal(await page.inputValue('#field'), 'add an index on the id please');
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 0, 'dictation never sends');
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('the Mac path: a tiny or silent clip is not sent; the Mac\'s failure or empty answer is a sentence; the mic taken away', { skip }, async () => {
+  const open = async (flags = []) => {
+    const o = await phone(390, 844, { flags });
+    await o.page.goto(`${base()}/`);
+    await o.page.tap('.rc-leader >> text=website');
+    return o;
+  };
+  // Too short.
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+  {
+    const { ctx, page, problems } = await open();
+    await page.tap('#mic');
+    await page.waitForSelector('#composer[data-rec="recording"]');
+    await page.tap('#mic');
+    await idleWith(page, D.macShort, 'short');
+    assert.equal((await calls('POST', '/r/voice/transcribe')).length, 0, 'a tiny clip is not sent');
+    assert.deepEqual(problems, []);
+    await ctx.close();
+  }
+  // Silent: the meter says so while it records, and nothing is sent.
+  {
+    const { ctx, page, problems } = await open(['__silent']);
+    await page.tap('#mic');
+    await page.waitForSelector('#composer[data-rec="recording"]');
+    await page.waitForSelector(`#status:text("${D.quietMac}")`, { timeout: 6000 });
+    assert.equal(await page.getAttribute('#rec', 'data-quiet'), 'true');
+    await shot(page, '87-mac-nothing-heard');
+    await page.tap('#mic');
+    await idleWith(page, D.macSilent, 'silent');
+    assert.equal((await calls('POST', '/r/voice/transcribe')).length, 0, 'silence is not sent');
+    assert.deepEqual(problems, []);
+    await ctx.close();
+  }
+  // The level meter while it hears; then the Mac fails, then answers empty.
+  for (const [reply, text] of [[{ status: 500, body: { ok: false, error: 'boom' } }, D.macFailed], [{ status: 200, body: { text: ' ', masked: 0 } }, D.macNoWords]]) {
+    await ctl({ reset: true, transcribeReplies: [reply] });
+    const { ctx, page, problems } = await open();
+    await recordOnce(page, { hold: 1200 });
+    assert.ok(Number(await page.getAttribute('#rec', 'data-level')) > 0.1, 'the meter moves');
+    assert.notEqual(await page.getAttribute('#rec', 'data-quiet'), 'true');
+    if (reply.status === 500) await shot(page, '88-mac-level-meter');
+    await page.tap('#mic');
+    await idleWith(page, text, `reply ${reply.status}`);
+    if (reply.status === 500) await shot(page, '89-mac-failed-sentence');
+    assert.equal(await page.inputValue('#field'), '');
+    assert.equal((await calls('POST', '/r/voice/transcribe')).length, 1);
+    assert.deepEqual(problems, []);
+    await ctx.close();
+  }
+  // The microphone taken away mid-recording: what was recorded is kept.
+  await ctl({ reset: true });
+  {
+    const { ctx, page, problems } = await open();
+    await recordOnce(page, { hold: 1000 });
+    await page.evaluate(() => window.__stream.getAudioTracks()[0].dispatchEvent(new Event('ended')));
+    await idleWith(page, `${D.taken} ${D.kept}`, 'taken');
+    assert.match(await page.inputValue('#field'), /customer id/);
+    assert.equal((await calls('POST', '/r/voice/transcribe')).length, 1, 'transcribed once');
+    const spy = await page.evaluate(() => window.__spy);
+    assert.ok(spy.stopped >= spy.tracks, 'the microphone is released');
+    assert.deepEqual(problems, []);
+    await ctx.close();
+  }
 });
 
 // ── The bar under an iPhone status bar (home-screen app) ──
