@@ -1776,16 +1776,36 @@ impl Build<'_> {
             };
             let list = menu_surface(format!("{id}-list"), key.clone(), rune::Align::Start, menu_width(&rows).max(field_w))
                 .anchored_fit(key.clone(), Side::Bottom, rune::Align::Start, 4.0)
-                .max_h(MENU_MAX_H);
+                .max_h(MENU_MAX_H)
+                .focus_return(key.clone());
             let mut items = col().key(format!("{id}-items")).w_full().shrink().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).scroll_edge_fade(12.0).scroll_margin(12.0);
             if let Some(v) = n.value.as_str().filter(|v| n.kind == Kind::Select && n.items.iter().any(|i| i.id == *v)) {
                 let k = format!("{id}-{v}");
                 items = items.on_layout_tx(move |_s: &mut S, _r: [f32; 4], tx: &mut rune::Tx| tx.scroll_into_view(k.clone()));
             }
+            // A select's keyboard starts on its chosen row, else its first.
+            let start = n.value.as_str().and_then(|v| n.items.iter().find(|i| i.id == v && !i.divider && !i.disabled)).or_else(|| n.items.iter().find(|i| !i.divider && !i.disabled)).map(|i| i.id.clone());
             for it in &n.items {
-                items = items.child(if it.divider { menu_divider() } else { self.item::<S>(n, &id, it) });
+                items = items.child(if it.divider {
+                    menu_divider()
+                } else {
+                    let row = self.item::<S>(n, &id, it);
+                    if n.kind == Kind::Select && start.as_deref() == Some(it.id.as_str()) { row.autofocus() } else { row }
+                });
             }
-            let list = list.child(items);
+            let mut list = list.child(items);
+            // A select's list is modal like the sandbox picker's: the keyboard
+            // goes into it when it opens, Escape or a press outside closes it
+            // and only it, and focus returns to the field.
+            if n.kind == Kind::Select {
+                let (name, id4) = (self.name.clone(), id.clone());
+                list = list.modal(true, move |s: &mut S| {
+                    let ui = &mut s.screen(&name).ui;
+                    if ui.open.as_deref() == Some(id4.as_str()) {
+                        ui.open = None;
+                    }
+                });
+            }
             // A press outside closes the menu, and only that (light dismiss).
             let (name, id3) = (self.name.clone(), id.clone());
             self.overlays.push(menu_scrim(format!("{id}-scrim"), move |s: &mut S| {

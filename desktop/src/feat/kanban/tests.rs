@@ -685,3 +685,43 @@ fn the_priority_list_is_whole_inside_the_window_and_not_clipped_by_the_dialog() 
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+fn press(rt: &mut Runtime<App>, k: rune::Key) {
+    rt.key(rune::KeyEvent { key: k, mods: rune::Mods::default() });
+    settle(rt);
+}
+
+fn focused_key(rt: &Runtime<App>) -> Option<String> {
+    rt.elements().iter().find(|e| e.focused).and_then(|e| e.key.clone())
+}
+
+#[test]
+fn in_the_form_arrows_and_enter_pick_and_escape_closes_the_list_only_with_focus_back_on_the_field() {
+    use rune::Key;
+    let mut rt = form_open(1284.0, 816.0);
+    let prio = |rt: &Runtime<App>| rt.state.feats.data.get(FORM_UI).map(|f| f["priority"].clone()).unwrap_or(J::Null);
+    tap(&mut rt, "kanban-form-priority");
+    assert!(rt.presented("kanban-form-priority-list").is_some());
+    // Escape: the list only.
+    press(&mut rt, Key::Escape);
+    assert!(rt.presented("kanban-form-priority-list").is_none(), "Escape closes the list");
+    assert!(rt.presented("kanban-form-priority").is_some(), "the form stays");
+    assert_eq!(focused_key(&rt).as_deref(), Some("kanban-form-priority"), "focus is back on the field");
+    // Arrows and Enter pick.
+    tap(&mut rt, "kanban-form-priority");
+    let start = focused_key(&rt);
+    assert!(start.as_deref().is_some_and(|k| k.starts_with("kanban-form-priority-")), "the keyboard is in the list: {start:?}");
+    // The first arrow of a pointer-opened list shows the highlight, the next moves it.
+    press(&mut rt, Key::Down);
+    press(&mut rt, Key::Down);
+    let moved = focused_key(&rt);
+    assert_eq!(moved.as_deref(), Some("kanban-form-priority-p1"), "Down from {start:?}");
+    press(&mut rt, Key::Enter);
+    assert!(rt.presented("kanban-form-priority-list").is_none(), "Enter closes the list (focus was {start:?}, then {moved:?}, now {:?})", focused_key(&rt));
+    assert_eq!(prio(&rt).as_str(), Some("p1"));
+    assert_eq!(focused_key(&rt).as_deref(), Some("kanban-form-priority"), "focus back on the field after Enter");
+    assert!(rt.presented("kanban-form-save").is_some(), "the form stays");
+    // A second Escape, with no list open, closes the form.
+    press(&mut rt, Key::Escape);
+    assert!(rt.presented("kanban-form-save").is_none(), "a second Escape closes the form");
+}

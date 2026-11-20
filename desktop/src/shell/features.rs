@@ -1280,6 +1280,12 @@ impl App {
             })
             .child(body);
         let scrim = super::scrim_with("modal-scrim", card, |s: &mut App| {
+            // An open list takes the first Escape (and the first outside press): it closes, the dialog stays.
+            if let Some(name) = s.feats.modal.as_ref().map(|(n, _)| n.clone()) {
+                if crate::screen::Host::screen(s, &name).ui.open.take().is_some() {
+                    return;
+                }
+            }
             s.feats.modal = None;
             s.push_data();
         }, light_dismiss);
