@@ -1310,7 +1310,7 @@ function rcPushSupport(env, ua) {
 // it is a plain lower-case word.
 function rcPushFail(why, reason) {
   const base = RC_PUSH_TEXT[Object.hasOwn(RC_PUSH_TEXT, why) ? why : 'browser'];
-  if (why === 'mac' && typeof reason === 'string' && /^[a-z_]{1,24}$/.test(reason)) return `${base} (${reason.replace(/_/g, ' ')})`;
+  if (why === 'mac' && typeof reason === 'string' && /^[a-z_]{1,24}$/.test(reason)) return `${base.replace(/\.$/, '')} (${reason.replace(/_/g, ' ')}).`;
   return base;
 }
 

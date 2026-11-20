@@ -280,9 +280,12 @@ test('no storage but the device name, no console, no eval, no innerHTML of raw t
   // Code only: the comments may name what is not used.
   const code = s => s.replace(/^\s*\/\/.*$/gm, '');
   for (const [name, src] of [['remote-core.js', code(coreSrc)], ['remote.js', code(pageSrc)]]) {
-    assert.doesNotMatch(src, /sessionStorage|indexedDB|caches\.|serviceWorker|console\.|eval\(|new Function|document\.write|outerHTML|insertAdjacentHTML/, name);
+    assert.doesNotMatch(src, /sessionStorage|indexedDB|caches\.|console\.|eval\(|new Function|document\.write|outerHTML|insertAdjacentHTML/, name);
   }
   assert.doesNotMatch(code(coreSrc), /localStorage/);
+  // The one worker (push-page thread): registered only as /sw.js, only from the switch's tap.
+  assert.deepEqual([...code(coreSrc).matchAll(/\.register\(([^,)]*)/g)].map(m => m[1]), ["'/sw.js'"]);
+  assert.doesNotMatch(code(pageSrc), /\.register\(/);
   // localStorage: one key, read and written by `prefs` only.
   assert.deepEqual([...pageSrc.matchAll(/localStorage\.(\w+)\(([^,)]*)/g)].map(m => `${m[1]} ${m[2]}`), ['getItem PREFS', 'setItem PREFS']);
   // innerHTML: once, with the core's escaped Markdown.
