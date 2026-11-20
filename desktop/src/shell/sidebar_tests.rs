@@ -571,15 +571,17 @@ fn a_press_asks_for_the_confirmation_and_removes_nothing() {
         rt.frame(1.0 / 60.0);
     }
     assert!(rt.state.feats.dialog.is_none());
-    tap(&mut rt, "remove-aurora");
-    rt.update(|s, tx| {
-        s.poll(0.0, tx);
-    });
-    rt.frame(1.0 / 60.0);
+    tap(&mut rt, "remove-atlas-ops");
+    for _ in 0..6 {
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        rt.frame(1.0 / 60.0);
+    }
     let d = rt.state.feats.dialog.as_ref().expect("the core's confirmation opened");
-    assert_eq!(d.title, "Remove aurora?");
+    assert_eq!(d.title, "Remove atlas-ops?");
     assert!(d.running.is_none(), "nothing runs on the first press");
-    assert!(rt.state.screen_data()["sandboxes"].as_array().unwrap().iter().any(|s| s["name"] == "aurora"), "aurora is still listed");
+    assert!(rt.state.screen_data()["sandboxes"].as_array().unwrap().iter().any(|s| s["name"] == "atlas-ops"), "atlas-ops is still listed");
 }
 
 /// A 60-character name ends in an ellipsis; the buttons stay inside the
