@@ -216,6 +216,15 @@ const RC_READ_ONLY = {
   several_sessions: 'Read only: several sessions are open in this sandbox and sbxw cannot tell which one its terminal shows. Write from the Mac.',
   no_terminal: 'Read only: sbxw has no terminal open on this sandbox. Write from the Mac.',
 };
+// The picker's short form of the same reason.
+const RC_READ_ONLY_SHORT = {
+  several_sessions: 'Read only: several sessions open',
+  no_terminal: 'Read only: no sbxw terminal on it',
+};
+function rcReadOnlyShort(l) {
+  if (!l || typeof l.read_only !== 'string' || !l.read_only) return '';
+  return Object.hasOwn(RC_READ_ONLY_SHORT, l.read_only) ? RC_READ_ONLY_SHORT[l.read_only] : 'Read only';
+}
 function rcReadOnly(l) {
   if (!l || typeof l.read_only !== 'string' || !l.read_only) return '';
   return Object.hasOwn(RC_READ_ONLY, l.read_only) ? RC_READ_ONLY[l.read_only] : 'Read only: write from the Mac.';

@@ -369,7 +369,7 @@
     if (l.read_only) {
       const ro = document.createElement('span');
       ro.className = 'rc-leader-ro';
-      ro.textContent = rcReadOnly(l);
+      ro.textContent = rcReadOnlyShort(l);
       b.append(ro);
     }
     b.addEventListener('click', () => openLeader(l.sandbox));
