@@ -354,8 +354,8 @@ what it protects.
 
 ```
 sbxw remote on          # asks first, says what it exposes
-sbxw remote status      # on/off, the tailnet machine, devices, keeping awake
-sbxw remote pair        # prints a one-time link, then asks for the digits the phone shows
+sbxw remote status      # where the set-up stands, what to do next, devices, team leaders
+sbxw remote pair        # prints a one-time link to open on the phone, then asks for its digits
 sbxw remote devices     # paired devices
 sbxw remote revoke <id> # unpair one, at once
 sbxw remote journal     # what devices did, never what they wrote
@@ -363,19 +363,40 @@ sbxw remote off         # stop everything; paired devices are kept
 sbxw remote forget-node # (when off) log the tailnet machine out and delete its state
 ```
 
-1. `sbxw remote on`. The daemon opens its remote listener and starts `sbxw-tailnet`, which
-   joins your tailnet as a machine named `sbxw` (the first time, `sbxw remote status`
-   shows a Tailscale login link).
-2. `sbxw remote pair` prints a link `https://sbxw.<your tailnet>.ts.net/#pair=<code>`. Open
-   it on the phone (the phone must be on the same tailnet, with the Tailscale app). The
-   code is good once, for 5 minutes. The CLI prints the link only: drawing a QR code in
-   the terminal would need a new library.
-3. The phone asks for a device name and shows a 6-digit number. The terminal shows the
-   name and asks you to TYPE the six digits you see on the phone (it never prints them):
-   right digits pair it, Enter alone refuses, three wrong tries refuse it. A new link
-   voids any request still waiting, and the terminal only asks about a phone that used the
-   link it just printed.
-4. Add the page to the phone's home screen if you like.
+Set-up, the first time. **(Mac)** is a step at the Mac's terminal, **(phone)** one on the
+phone. `sbxw remote status` says where you are in one line (`state:`), then what to do next.
+
+1. **(Mac)** Install the Tailscale node: `scripts/build-tailnet.sh` in the sbxw source folder
+   builds `sbxw-tailnet`. Its last lines say where sbxw looks for it (next to the `sbxw`
+   binary) and give the `cp` that puts it there, or say "already in place". If it is not
+   there, `sbxw remote on` and `sbxw remote status` (`state: sidecar missing`) name the
+   exact path and the one command that builds it in place.
+2. **(Mac)** `sbxw remote on`. It asks first, then opens the remote listener and starts
+   `sbxw-tailnet`, which joins your tailnet as a machine named `sbxw`
+   (`state: starting`).
+3. **(Mac)** `sbxw remote status` a few seconds later. The first time it shows
+   `state: waiting for login` and a `login link:`. Open it in any browser (on the Mac is
+   fine) and add the machine to your tailnet. If device approval is on in your tailnet it
+   shows `state: waiting for approval`: approve `sbxw` on the Machines page of the admin
+   console (login.tailscale.com). If it shows `state: https unavailable`: in the admin
+   console, on the DNS page, turn on MagicDNS and HTTPS Certificates, then
+   `sbxw remote off` and `sbxw remote on`.
+4. **(Mac)** When `sbxw remote status` says `state: running at sbxw.<your tailnet>.ts.net`,
+   check its `team leaders:` line: the phone only shows running team leaders. "none" means
+   no sandbox leads a team now: turn the team on in one (the Team button of its pane, or
+   `/lead`).
+5. **(Mac)** `sbxw remote pair` prints a link `https://sbxw.<your tailnet>.ts.net/#pair=<code>`,
+   good once, for 5 minutes. **It does not open on the Mac**: only sbxw's own node is on
+   the tailnet, not the Mac (unless the Mac also runs the Tailscale app). The CLI prints the link only (no QR code: the workspace has no
+   QR encoder); send it to the phone whole, including the part after `#` (AirDrop, or a
+   note that syncs).
+6. **(phone)** With the Tailscale app on and signed in to the same account, open the link.
+   The phone asks for a device name and shows a 6-digit number.
+7. **(Mac)** The terminal shows the phone's name and asks you to TYPE the six digits you
+   see on the phone (it never prints them): right digits pair it, Enter alone refuses,
+   three wrong tries refuse it. A new link voids any request still waiting, and the
+   terminal only asks about a phone that used the link it just printed.
+8. **(phone)** Add the page to the home screen if you like.
 
 **To cut access**: `sbxw remote revoke <id>` (one phone, at once: its open page loses
 access immediately), or `sbxw remote off` (everything: the listener and the tailnet machine
@@ -604,7 +625,7 @@ stay plain text.
 
 Remote access reaches the Mac through `sbxw-tailnet`, a small program shipped beside `sbxw` and started by the daemon while remote access is on. It joins your tailnet as its own machine, named `sbxw`, and serves only HTTPS on that machine's port 443, forwarded to the daemon's remote listener on loopback. It is not the Mac's own Tailscale: nothing else on the Mac is reachable through it, and nothing needs installing besides sbxw. Details: [tailnet/README.md](../tailnet/README.md).
 
-- **First join:** sbxw shows a Tailscale login link; open it and add the machine. No auth key is asked for or stored.
+- **First join:** `sbxw remote status` shows a Tailscale login link; open it in any browser (the Mac's is fine) and add the machine. No auth key is asked for or stored.
 - **HTTPS is required.** Turn on MagicDNS and HTTPS Certificates on the DNS page of the admin console (login.tailscale.com/admin/dns). Without them sbxw says what is missing and serves nothing: the phone's microphone needs HTTPS, so there is no plain-HTTP fallback.
 - **The name is public.** Certificate names go to the public Certificate Transparency logs, so keep the neutral `sbxw`.
 - **Only your tailnet.** Funnel (public Internet), SSH, Taildrop, exit node and routes are never enabled, and most are compiled out. Tailscale's log upload is off.

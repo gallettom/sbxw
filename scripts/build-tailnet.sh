@@ -5,8 +5,9 @@
 #
 # GOOS/GOARCH defaults to this machine (darwin/arm64 on an Apple-silicon Mac).
 # OUT defaults to target/tailnet/<goos>-<goarch>/sbxw-tailnet. The daemon looks
-# for the binary next to its own executable: copy it there, for example
-#   cp target/tailnet/darwin-arm64/sbxw-tailnet "$(dirname "$(command -v sbxw)")/"
+# for the binary next to its own executable; the last lines printed say where
+# that is and the `cp` that puts it there (this script never copies by itself).
+# `sbxw remote status` names the exact path the daemon looks at.
 #
 # Reproducible: the Go version is pinned by tailnet/go.mod (GOTOOLCHAIN=local:
 # no toolchain download), modules by tailnet/go.sum (-mod=readonly), CGO off,
@@ -38,3 +39,21 @@ mkdir -p "$(dirname "$out")"
     go build -trimpath -tags "$tags" -ldflags "-s -w -buildid=" -o "$out" .
 )
 ls -l "$out"
+
+# Where the daemon will look: next to the `sbxw` on PATH. On Linux the daemon
+# sees its executable with links resolved; on macOS as it was started.
+if [ "$goos/$goarch" != "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" ]; then
+  echo "Built for another machine: on that $goos/$goarch machine, put it next to its sbxw binary."
+elif sbxw="$(command -v sbxw 2>/dev/null)" && [ -n "$sbxw" ]; then
+  if [ "$(uname -s)" != Darwin ]; then sbxw="$(readlink -f "$sbxw" 2>/dev/null || echo "$sbxw")"; fi
+  dir="$(cd "$(dirname "$sbxw")" && pwd)"
+  if [ "$out" = "$dir/sbxw-tailnet" ]; then
+    echo "sbxw looks for it at $dir/sbxw-tailnet: already in place."
+  else
+    echo "sbxw looks for it next to the sbxw on your PATH, in $dir. Put it there:"
+    printf '  cp %q %q/\n' "$out" "$dir"
+  fi
+else
+  echo "sbxw looks for it next to your sbxw binary (none on PATH). Put it there:"
+  printf '  cp %q <the folder of your sbxw binary>/\n' "$out"
+fi

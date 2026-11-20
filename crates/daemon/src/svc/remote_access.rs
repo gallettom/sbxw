@@ -25,6 +25,31 @@ use std::time::Duration;
 /// The sidecar, next to the daemon's own executable (no PATH lookup).
 pub const SIDECAR_NAME: &str = "sbxw-tailnet";
 
+/// Where the daemon looks for the sidecar: next to its own executable.
+pub fn sidecar_beside() -> Option<PathBuf> {
+    std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(SIDECAR_NAME)))
+}
+
+/// What to say when the sidecar is not at `path`: the path looked at and
+/// the one command that builds it there (from the sbxw source folder).
+pub fn sidecar_missing_message(path: &Path) -> String {
+    let goos = match std::env::consts::OS {
+        "macos" => "darwin",
+        os => os,
+    };
+    let goarch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "amd64",
+        a => a,
+    };
+    format!(
+        "{SIDECAR_NAME} is missing: sbxw looks for it at {p}\n\
+         It is built by scripts/build-tailnet.sh. From the sbxw source folder, build it in place:\n  \
+         scripts/build-tailnet.sh {goos}/{goarch} '{p}'",
+        p = path.display()
+    )
+}
+
 /// How long a read of `tailnet.json` answers for.
 const TAILNET_TTL_MS: u64 = 2_000;
 
@@ -230,6 +255,10 @@ pub struct RemoteStatus {
     pub devices: usize,
     pub pending_requests: usize,
     pub keep_awake: &'static str,
+    /// The path looked at, when the sidecar is not there.
+    pub sidecar_missing: Option<String>,
+    /// The team leaders a paired phone can see now (sandbox names).
+    pub leaders: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -368,7 +397,13 @@ impl App {
     }
 
     pub fn remote_status(&self) -> RemoteStatus {
+        // Before the remote-access lock: the leaders take their own.
+        let leaders = self.remote_leader_names();
         let mut rt = self.remote_access.lock().unwrap();
+        let sidecar_missing = match rt.sidecar_program {
+            Sidecar::Beside => sidecar_beside().filter(|p| !p.is_file()).map(|p| p.display().to_string()),
+            _ => None,
+        };
         let st = rt.tailnet_status();
         let serving = rt.serving_name();
         let tailnet = st.map(|s| TailnetView { serving: serving.is_some() && s.name == serving, state: s.state, name: s.name, login_url: s.login_url, detail: s.detail });
@@ -381,6 +416,8 @@ impl App {
             devices: rt.devices.len(),
             pending_requests: rt.pairing.pending(now_ms()).len(),
             keep_awake: self.remote_keep_awake(rt.enabled),
+            sidecar_missing,
+            leaders,
         }
     }
 
@@ -426,10 +463,9 @@ impl App {
         }
         let sidecar_bin = match &program {
             Sidecar::Beside => {
-                let exe = std::env::current_exe().map_err(|e| format!("cannot find the sbxw executable: {e}"))?;
-                let p = exe.parent().map(|d| d.join(SIDECAR_NAME)).ok_or("cannot find the sbxw executable's folder")?;
+                let p = sidecar_beside().ok_or("cannot find the sbxw executable's folder")?;
                 if !p.is_file() {
-                    return Err(format!("{SIDECAR_NAME} is not installed next to sbxw ({}): remote access needs it", p.display()));
+                    return Err(sidecar_missing_message(&p));
                 }
                 Some(p)
             }
@@ -527,13 +563,14 @@ impl App {
             return Err("turn remote access off first".into());
         }
         let bin = match program {
-            Sidecar::Beside => std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(SIDECAR_NAME))).filter(|p| p.is_file()),
+            Sidecar::Beside => sidecar_beside().filter(|p| p.is_file()),
             Sidecar::Program(p) => Some(p),
             Sidecar::None => None,
         };
         let Some(bin) = bin else {
             if state_dir.exists() {
-                return Err(format!("{SIDECAR_NAME} is not installed next to sbxw: it is needed to log the node out"));
+                let p = sidecar_beside().unwrap_or_else(|| PathBuf::from(SIDECAR_NAME));
+                return Err(format!("{}\nIt is needed to log the node out.", sidecar_missing_message(&p)));
             }
             return Ok(());
         };
@@ -561,7 +598,7 @@ impl App {
             return Err("remote access is off: turn it on first".into());
         }
         let Some(name) = rt.serving_name() else {
-            return Err("the tailnet is not serving yet: wait until the sidecar says running".into());
+            return Err("the tailnet machine is not serving yet: `sbxw remote status` says what it waits for".into());
         };
         let (code, code_id, expires_ms) = rt.pairing.new_code(now_ms());
         tracing::info!("remote access: new pairing code (valid 5 minutes; earlier requests voided)");
@@ -759,6 +796,11 @@ impl App {
         let rules = self.anonymise_rules().unwrap_or_default();
         let m = |t: &str| sbxw_core::anonymise::mask(t, &rules).text;
         Some(steps.iter().map(phone_question).map(|q| PhoneQuestion { text: m(&q.text), options: q.options.iter().map(|o| m(o)).collect() }).collect())
+    }
+
+    /// The names of the leaders `remote_leaders` lists, without their pages.
+    pub fn remote_leader_names(&self) -> Vec<String> {
+        self.leading().into_iter().filter(|n| SandboxRef::parse(n).ok().and_then(|sb| self.leader_info(&sb)).is_some()).collect()
     }
 
     pub fn remote_leaders(&self) -> Vec<LeaderView> {
@@ -1062,5 +1104,52 @@ impl App {
 
     pub(crate) fn remote_dir_for_tests(&self) -> PathBuf {
         self.remote_access.lock().unwrap().dir.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sbxw_core::session::SessionKey;
+
+    #[test]
+    fn the_sidecar_missing_message_names_the_path_and_the_command() {
+        let p = Path::new("/Users/x/dev/sbxw/target/debug/sbxw-tailnet");
+        let m = sidecar_missing_message(p);
+        assert!(m.contains("looks for it at /Users/x/dev/sbxw/target/debug/sbxw-tailnet"), "{m}");
+        assert!(m.contains("scripts/build-tailnet.sh "), "{m}");
+        assert!(m.ends_with(" '/Users/x/dev/sbxw/target/debug/sbxw-tailnet'"), "{m}");
+        assert!(m.lines().count() <= 3, "{m}");
+        assert!(!m.contains('\u{2014}'), "no em dash");
+    }
+
+    #[tokio::test]
+    async fn turning_on_without_the_sidecar_says_where_and_how() {
+        let (_d, app) = crate::testing::app();
+        let err = app.remote_enable().await.unwrap_err();
+        let beside = sidecar_beside().unwrap();
+        assert_eq!(err, sidecar_missing_message(&beside));
+        assert!(!app.remote_enabled(), "nothing changed");
+        let st = app.remote_status();
+        assert_eq!(st.sidecar_missing.as_deref(), Some(beside.display().to_string().as_str()));
+        assert!(app.remote_listen_addr().is_none(), "no listener bound");
+    }
+
+    #[tokio::test]
+    async fn status_lists_the_leaders_a_phone_sees() {
+        let (_d, app) = crate::testing::app();
+        app.remote_test_on("sbxw.tail1.ts.net");
+        assert!(app.remote_status().leaders.is_empty());
+        assert_eq!(app.remote_status().sidecar_missing, None, "a test sidecar is never missing");
+        let sb = SandboxRef::parse("lead1").unwrap();
+        let (s, _) = app
+            .sessions
+            .get_or_open(&SessionKey::agent(&sb), 0, || async move { Ok(crate::pty::Spawn { program: "sh".into(), args: vec!["-c".into(), "sleep 30".into()], env: vec![] }) })
+            .await
+            .unwrap();
+        app.leads.lock().unwrap().insert(sb.clone(), Arc::as_ptr(&s) as usize);
+        app.ingest_hook(&sb, serde_json::json!({"hook_event_name": "SessionStart", "session_id": "s1", "hook_version": 2}));
+        assert_eq!(app.remote_status().leaders, vec!["lead1".to_string()]);
+        assert_eq!(serde_json::to_value(app.remote_status()).unwrap()["leaders"], serde_json::json!(["lead1"]));
     }
 }
