@@ -121,6 +121,13 @@ pub const DARK: &[(&str, u32)] = &[
     ("notice-info", 0x273f5b),
     ("notice-ask", 0x473c22),
     ("notice-error", 0x5a2b2e),
+    // The Sessions conversation's message bubbles: the agent's `green` and
+    // the person's `blue` at 12 % over `bg` (the fill) and 32 % (the edge).
+    // Text stays `text`, `text-bright` or `text-muted` on them.
+    ("bubble-agent", 0x13251e),
+    ("bubble-agent-edge", 0x1d4729),
+    ("bubble-you", 0x162333),
+    ("bubble-you-edge", 0x254161),
 ];
 
 /// Graphite: the same names on neutral dark greys (a ground near #202124,
@@ -195,6 +202,13 @@ pub const GRAPHITE: &[(&str, u32)] = &[
     ("notice-info", 0x3a4d64),
     ("notice-ask", 0x584a2d),
     ("notice-error", 0x6a3838),
+    // The Sessions conversation's message bubbles: the agent's `green` and
+    // the person's `blue` at 12 % over `bg` (the fill) and 32 % (the edge).
+    // Text stays `text`, `text-bright` or `text-muted` on them.
+    ("bubble-agent", 0x25342b),
+    ("bubble-agent-edge", 0x2e5536),
+    ("bubble-you", 0x29323e),
+    ("bubble-you-edge", 0x384f6a),
 ];
 
 /// Pure white and black: the ends that "move toward white or black" math
@@ -930,6 +944,12 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("text-bright", "notice-info", Need::Text),
     ("text-bright", "notice-ask", Need::Text),
     ("text-bright", "notice-error", Need::Text),
+    ("text", "bubble-agent", Need::Text),
+    ("text-bright", "bubble-agent", Need::Text),
+    ("text-muted", "bubble-agent", Need::Text),
+    ("text", "bubble-you", Need::Text),
+    ("text-bright", "bubble-you", Need::Text),
+    ("text-muted", "bubble-you", Need::Text),
     ("text", "notice-info", Need::Mark),
     ("text", "notice-ask", Need::Mark),
     ("text", "notice-error", Need::Mark),
@@ -968,8 +988,8 @@ pub fn to_hsl(c: u32) -> (f32, f32, f32) {
 /// (a card over a panel steps about 1.1 here).
 pub const COMPOSE_STEP_BG: f64 = 1.3;
 pub const COMPOSE_STEP_SURFACE: f64 = 1.15;
-/// And from `elevated`, the agents' message bubbles in the conversation
-/// above it: a field is never taken for a message.
+/// And from `elevated` and from the conversation's tinted bubbles
+/// (`bubble-agent`, `bubble-you`): a field is never taken for a message.
 pub const COMPOSE_STEP_ELEVATED: f64 = 1.1;
 
 /// How far a notice's ground steps from the top bar's `surface`, and how far
@@ -1395,6 +1415,11 @@ mod tests {
             assert!(ss >= COMPOSE_STEP_SURFACE, "{m:?}: {ss:.2} on surface");
             let se = contrast(comp, v("elevated"));
             assert!(luminance(comp) > luminance(v("elevated")) && se >= COMPOSE_STEP_ELEVATED, "{m:?}: {se:.2} from a message bubble");
+            for b in ["bubble-agent", "bubble-you"] {
+                let sb = contrast(comp, v(b));
+                println!("{m:?}: compose {sb:.2}:1 from {b}");
+                assert!(luminance(comp) > luminance(v(b)) && sb >= COMPOSE_STEP_ELEVATED, "{m:?}: {sb:.2} from {b}");
+            }
             for (fg, need) in [("text-bright", 4.5), ("text-muted", 4.5), ("compose-edge", 3.0), ("focus", 3.0)] {
                 assert!(contrast(v(fg), comp) >= need, "{m:?}: {fg} on compose");
             }

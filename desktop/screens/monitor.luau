@@ -66,6 +66,9 @@ local function heading(t, n)
   return row{ px = 8, py = 4, gap = 4, text{ t, size = "sm", weight = "semibold", color = "text-muted" }, text{ tostring(n), size = "sm", color = "text-dim" } }
 end
 
+-- A message's label row over its body. The callers tint the body: `bubble-you`
+-- (blue) for the person, `bubble-agent` (green) for Claude and any other agent,
+-- each with its `-edge` border (theme.rs).
 local function bubble(label, mark, ic, right, body)
   return column{ gap = 4, w = "full",
     row{ gap = 4, w = "full", icon{ mark, size = 12, color = ic }, text{ label, size = "sm", weight = "medium", color = "text-muted" }, right or false },
@@ -117,17 +120,17 @@ end
 local function summary(d, now, kids)
   if d.last_input then
     kids[#kids + 1] = bubble("You", "prompt", "text-muted", nil,
-      column{ pad = 12, radius = "md", fill = "elevated", w = "full", text{ d.last_input, wrap = true, color = "text-bright" } })
+      column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", w = "full", text{ d.last_input, wrap = true, color = "text-bright" } })
   end
   if d.from then
     -- Another session's message (or the harness's): its words as data, quietly; never "You".
     kids[#kids + 1] = bubble("From " .. d.from.name, "people", "text-dim", nil,
-      column{ pad = 12, radius = "md", border = "elevated", w = "full", key = "monitor-from",
+      column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", key = "monitor-from",
         text{ d.from.text ~= "" and d.from.text or "A message from another session.", wrap = true, size = "sm", color = "text-muted" } })
   end
   if d.reply then
     kids[#kids + 1] = bubble("Claude", "sparkle", "vendor-anthropic", text{ "· last reply, " .. ago(d.ts, now), size = "sm", color = "text-dim" },
-      column{ w = "full", max_w = 720, key = "monitor-reply", markdown{ d.reply, pills = d.sandbox } })
+      column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = 720, key = "monitor-reply", markdown{ d.reply, pills = d.sandbox } })
   end
 end
 
@@ -167,10 +170,10 @@ local function conv_row(r, d, now)
   elseif r.t == "you" then
     return column{ key = "monitor-you-" .. r.id, w = "full",
       bubble("You", "prompt", "text-muted", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" },
-        column{ pad = 12, radius = "md", fill = "elevated", w = "full", text{ r.text, wrap = true, color = "text-bright" } }) }
+        column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", w = "full", text{ r.text, wrap = true, color = "text-bright" } }) }
   elseif r.t == "from" then
     -- Typed in by another session or the harness: quiet, never "You".
-    local kids = { pad = 12, gap = 4, radius = "md", border = "elevated", w = "full",
+    local kids = { pad = 12, gap = 4, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full",
       text{ r.text ~= "" and r.text or "A message from another session.", wrap = true, size = "sm", color = "text-muted" } }
     if r.long then
       kids[#kids + 1] = row{ button{ r.open and "Show less" or "Show all", key = "monitor-fold-" .. r.id, variant = "ghost", dense = true, on = "expand", arg = { key = d.key, id = r.id } } }
@@ -180,7 +183,7 @@ local function conv_row(r, d, now)
   elseif r.t == "claude" then
     return column{ key = "monitor-claude-" .. r.id, w = "full",
       bubble("Claude", "sparkle", "vendor-anthropic", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" },
-        column{ w = "full", max_w = 720, markdown{ r.text, pills = d.sandbox } }) }
+        column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = 720, markdown{ r.text, pills = d.sandbox } }) }
   elseif r.t == "step" then
     return step_row(r, d.key)
   elseif r.t == "group" then
