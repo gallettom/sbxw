@@ -806,6 +806,13 @@ test('level 2: the Approvals entry, its badge, and one sentence when it cannot a
   await page.waitForSelector('.rc-ap-row');
   assert.deepEqual(await page.$$eval('.rc-ap-h', h => h.map(e => e.textContent)), ['Plans to approve 1', 'Merges proposed 1', 'Network requests 1', 'Stopped sandboxes 1']);
   await shot(page, '41-approvals-list');
+  // A list sbx cannot read says so in its place; the others stay.
+  await ctl({ l2Replies: { network: [{ status: 503, body: { ok: false, reason: 'unavailable' } }] } });
+  await page.tap('#back');
+  await page.tap('#approvals-btn');
+  await page.waitForSelector('.rc-ap-fail');
+  assert.equal(await page.textContent('.rc-ap-fail'), 'The Mac cannot read this right now (sbx did not answer). Try again in a moment.');
+  assert.equal(await page.$$eval('.rc-ap-row', r => r.length), 3);
   await page.tap('#back');
   await page.waitForSelector('#s-chat:not([hidden])');
   assert.equal(await page.textContent('#title'), 'website', 'back to the conversation it came from');
@@ -876,15 +883,19 @@ test('level 2: enabling Face ID: the digits, the grant, create, register; and ea
     [['__cred:nosupport'], ['granted'], 'no_authenticator'],
     [['__cred:wrong'], ['granted'], 'failed'],
     [[], ['refused'], 'refused'],
+    [['__reg:no_grant'], ['granted'], 'expired'],
+    [['__reg:passkey'], ['granted'], 'rejected'],
   ]) {
-    await ctl({ reset: true, l2Reset: true, l2: { approvals: { passkey: false } }, pkStates: states });
+    const reg = flags.find(f => f.startsWith('__reg:'))?.slice(6);
+    await ctl({ reset: true, l2Reset: true, l2: { approvals: { passkey: false } }, pkStates: states, ...(reg ? { l2Replies: { register: [{ status: 403, body: { ok: false, reason: reg } }] } } : {}) });
     const { ctx, page } = await phone(390, 844, { flags });
     await openApprovals(page);
     await page.tap('#ap-enable');
     if (states[0] === 'granted') { await page.waitForSelector('#pk-go:not([hidden])', { timeout: 10000 }); await page.tap('#pk-go'); }
     await page.waitForSelector(`#s-passkey[data-state="${want}"]`, { timeout: 10000 });
     assert.equal(await page.textContent('#pk-text'), want === 'failed' ? 'The browser gave an answer this page cannot read. Nothing was saved.' : await page.evaluate(w => RC_PASSKEY_TEXT[w], want));
-    assert.equal((await calls('POST', '/r/passkey/register')).length, 0, `${flags} ${states}: nothing registered`);
+    assert.equal((await calls('POST', '/r/passkey/register')).length, reg ? 1 : 0, `${flags} ${states}: nothing registered`);
+    assert.equal(await page.evaluate(() => window.__spy.creds.filter(c => c.op === 'create').length), states[0] === 'granted' && !flags.includes('__nouv') ? 1 : 0);
     assert.equal(await page.isVisible('#pk-again'), true);
     await ctx.close();
   }

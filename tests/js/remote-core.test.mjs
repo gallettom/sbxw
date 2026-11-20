@@ -566,7 +566,8 @@ test('level 2: the entry\'s sentence, each refusal, the routes, the sheet\'s lin
   const r = (status, reason, error) => ({ ok: false, status, data: { ok: false, reason, error } });
   assert.equal(rc.rcL2Fail(r(409, 'changed')), 'This changed since you opened it: read it again.');
   assert.match(rc.rcL2Fail(r(409, 'refused', 'a <b>conflict</b>')), /^The Mac refused it: a <b>conflict<\/b>$/);
-  for (const k of ['level2_off', 'no_passkey', 'passkey', 'no_grant']) assert.equal(rc.rcL2Fail(r(403, k)), rc.RC_L2_REASON[k]);
+  for (const k of ['level2_off', 'no_passkey', 'passkey', 'no_grant', 'not_found', 'unavailable', 'bad', 'limited']) assert.equal(rc.rcL2Fail(r(403, k)), rc.RC_L2_REASON[k]);
+  assert.deepEqual(Object.keys(rc.RC_L2_REASON).sort(), ['bad', 'changed', 'level2_off', 'limited', 'no_grant', 'no_passkey', 'not_found', 'passkey', 'refused', 'unavailable']);
   assert.match(rc.rcL2Fail(r(429)), /Too many failed tries/);
   assert.match(rc.rcL2Fail({ ok: false, status: 0, unreachable: true }), /unreachable/);
   assert.match(rc.rcL2Fail(r(500, '__proto__')), /^Nothing was done: the Mac answered 500/);

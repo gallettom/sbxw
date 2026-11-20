@@ -112,6 +112,9 @@ export function startStandin(port = 0) {
       return send(res, 200, { ...L.passkey_options, expires_ms: Date.now() + 120000 });
     }
     if (p === '/r/passkey/register') {
+      const q = s.l2.replies.register?.shift();
+      if (q) { s.l2.pk = 'none'; return send(res, q.status, q.body); }
+      if (s.l2.pk !== 'granted') return send(res, 403, { ok: false, error: 'no grant', reason: 'no_grant' });
       const ok = body && ['id', 'client_data_json', 'attestation_object'].every(k => typeof body[k] === 'string' && B64U.test(body[k])) && Object.keys(body).length === 3;
       s.l2.pk = 'none';
       if (!ok) return send(res, 403, { ok: false, error: 'passkey', reason: 'passkey' });
@@ -122,7 +125,10 @@ export function startStandin(port = 0) {
     }
     if (p === '/r/plans') return send(res, 200, L.plans);
     if (p === '/r/merges') return send(res, 200, L.merges);
-    if (p === '/r/network') return send(res, 200, L.network);
+    if (p === '/r/network') {
+      const q = s.l2.replies.network?.shift();
+      return q ? send(res, q.status, q.body) : send(res, 200, L.network);
+    }
     if (p === '/r/stopped') return send(res, 200, L.stopped);
     if (p === '/r/approvals/challenge') {
       if (!A.passkey || A.rp_ok === false) return send(res, 403, { ok: false, error: 'no passkey', reason: 'no_passkey' });

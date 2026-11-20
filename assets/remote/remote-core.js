@@ -769,6 +769,10 @@ const RC_L2_REASON = {
   passkey: 'Face ID could not be checked by the Mac. Nothing was done.',
   changed: 'This changed since you opened it: read it again.',
   refused: 'The Mac refused it.',
+  not_found: 'This is not waiting any more. Nothing was done.',
+  unavailable: 'The Mac cannot read this right now (sbx did not answer). Try again in a moment.',
+  bad: 'The Mac could not read this request. Nothing was done.',
+  limited: 'Too many tries. Wait a few minutes, then start again.',
 };
 function rcL2Fail(res) {
   if (!res || res.unreachable || res.status === 0) return 'sbxw is unreachable (is the Mac awake?). Nothing was done.';

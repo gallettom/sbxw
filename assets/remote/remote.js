@@ -1403,6 +1403,13 @@
     LISTS.forEach((L, i) => {
       const r = got[i];
       const items = r.ok && r.data && Array.isArray(r.data[L.key]) ? r.data[L.key] : [];
+      // A list the Mac could not read says so, quietly, in its place.
+      if (!r.ok && r.status !== 403) {
+        const sec = el('section', 'rc-ap-sec');
+        sec.append(el('h2', 'rc-ap-h', L.title), el('p', 'rc-muted rc-small-text rc-ap-fail', rcL2Fail(r)));
+        sections.push(sec);
+        return;
+      }
       if (!items.length) return;
       const sec = el('section', 'rc-ap-sec');
       const h = el('h2', 'rc-ap-h', L.title);
@@ -1775,7 +1782,8 @@
     if (!body) { pkShow('failed'); $('pk-text').textContent = 'The browser gave an answer this page cannot read. Nothing was saved.'; return; }
     const r = await l2.passkeyRegister(body);
     if (st.screen !== 's-passkey') return;
-    if (!r.ok) return pkShow(r.data?.reason === 'passkey' ? 'rejected' : 'failed');
+    // no_grant: the grant expired or was used (v1.0); passkey: a check failed.
+    if (!r.ok) return pkShow(r.data?.reason === 'passkey' ? 'rejected' : r.data?.reason === 'no_grant' ? 'expired' : 'failed');
     pkShow('registered');
     refreshL2();
   });
