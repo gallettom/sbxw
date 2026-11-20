@@ -5,8 +5,12 @@
 //! 2. The main session of every running sandbox that leads no team, kind
 //!    [`ReachKind::Sandbox`].
 //!
-//! A sandbox's main session is its newest session that is not a thread's and
-//! not a harness background session. Never reached: a thread (it is reached
+//! A sandbox's main session is the one sbxw's terminal types into, when the
+//! daemon knows it (the rule of `AgentBook::can_type_into`: the sandbox's one
+//! session, or the one started from sbxw's tty); else its newest session that
+//! is not a thread's and not a harness background session, and then, when
+//! there are several, the phone only reads it (`read_only`): it never shows
+//! one conversation and types into another. Never reached: a thread (it is reached
 //! through its leader), a background session, a stopped sandbox (its
 //! sessions are gone or exited), and the Jarvis sandbox, by name on any host
 //! (it has its own channel, decided by the person). Every route of the
@@ -32,6 +36,9 @@ pub struct Candidate<'a> {
     pub background: bool,
     pub exited: bool,
     pub started_ms: u64,
+    /// The session sbxw's terminal types into (`AgentBook::terminal_session`);
+    /// set by the daemon, `false` from a bare `SessionInfo`.
+    pub terminal: bool,
 }
 
 impl<'a> From<&'a SessionInfo> for Candidate<'a> {
@@ -42,6 +49,7 @@ impl<'a> From<&'a SessionInfo> for Candidate<'a> {
             background: i.kind == Some(RecordKind::Background),
             exited: i.state == SessionState::Exited,
             started_ms: i.started_ms,
+            terminal: false,
         }
     }
 }
@@ -65,15 +73,15 @@ pub fn excluded(sandbox: &str) -> bool {
     }
 }
 
-/// The main session of `sandbox`: the newest one that is not a thread's and
+/// The main session of `sandbox`: the terminal's when it is known and not a
+/// thread's or a background one; else the newest that is not a thread's and
 /// not a background session, a live one before an exited one.
 pub fn main_index(cands: &[Candidate], sandbox: &str) -> Option<usize> {
-    cands
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.sandbox == sandbox && !c.thread && !c.background)
-        .max_by_key(|(_, c)| (!c.exited, c.started_ms))
-        .map(|(i, _)| i)
+    let mains = || cands.iter().enumerate().filter(|(_, c)| c.sandbox == sandbox && !c.thread && !c.background);
+    if let Some((i, _)) = mains().find(|(_, c)| c.terminal && !c.exited) {
+        return Some(i);
+    }
+    mains().max_by_key(|(_, c)| (!c.exited, c.started_ms)).map(|(i, _)| i)
 }
 
 /// Every sandbox a phone reaches: the leaders (in `leading`'s order) first,
@@ -109,7 +117,7 @@ mod tests {
     use super::*;
 
     fn c(sandbox: &str, started_ms: u64) -> Candidate<'_> {
-        Candidate { sandbox, thread: false, background: false, exited: false, started_ms }
+        Candidate { sandbox, thread: false, background: false, exited: false, started_ms, terminal: false }
     }
 
     fn names(r: &[Reach]) -> Vec<(&str, ReachKind)> {
@@ -138,6 +146,19 @@ mod tests {
         // The same for a leader: its shown session is never a background one.
         let cands = [c("lead", 1), Candidate { background: true, ..c("lead", 5) }];
         assert_eq!(reachable(&cands, &["lead".into()])[0].index, 0);
+    }
+
+    #[test]
+    fn the_terminals_session_is_the_main_one_even_when_older() {
+        let cands = [Candidate { terminal: true, ..c("app", 1) }, c("app", 5)];
+        assert_eq!(reachable(&cands, &[])[0].index, 0, "the older one is the terminal's");
+        assert_eq!(reachable(&cands, &["app".into()])[0].index, 0, "the same for a leader");
+        // Unknown: the newest (the entry is then read only, by the daemon).
+        let cands = [c("app", 1), c("app", 5)];
+        assert_eq!(reachable(&cands, &[])[0].index, 1);
+        // A thread or background session marked as the terminal's is never main.
+        let cands = [c("app", 1), Candidate { terminal: true, thread: true, ..c("app", 5) }];
+        assert_eq!(reachable(&cands, &[])[0].index, 0);
     }
 
     #[test]

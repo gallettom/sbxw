@@ -344,3 +344,37 @@ async fn a_plain_sandbox_ticket_sends_no_kanban_frame() {
     let ev = crate::bus::Event::Tickets(crate::svc::tickets::TicketsNudge { sandbox: "lead1".into(), n: None, what: "created" });
     assert!(super::remote_kanban::changed(&app, &list, &ev, &mut seen).is_some(), "a leader's still does");
 }
+
+/// Two main sessions in one sandbox: the phone shows and types into the one
+/// sbxw's terminal types into (the rule of `can_type_into`), even when it is
+/// the older; when the daemon cannot tell, the entry is read only.
+#[tokio::test]
+async fn the_shown_session_is_the_terminals_one_or_the_entry_is_read_only() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    // A client session (an `ssh <name>.sbx`), newer than the terminal's.
+    let client = |words: &str| json!({"hook_event_name": "UserPromptSubmit", "prompt": words, "ancestry": ["sshd", "bash", "claude"]});
+    for lead in [false, true] {
+        let name = if lead { "lead2" } else { "app2" };
+        let (sb, file) = if lead { leader(&app, d.path(), name).await } else { plain(&app, d.path(), name).await };
+        hook(&app, &sb, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": "TERMINAL WORDS"}));
+        hook(&app, &sb, "s1", json!({"hook_event_name": "Stop", "stop_hook_active": false, "last_assistant_message": "ok"}));
+        hook(&app, &sb, "s2", client("CLIENT WORDS"));
+        hook(&app, &sb, "s2", json!({"hook_event_name": "Stop", "stop_hook_active": false, "last_assistant_message": "ok", "ancestry": ["sshd", "bash", "claude"]}));
+        let e = entry(&call(&router, "GET", "/r/leaders", Some(&token), json!({})).await.json(), name).unwrap();
+        assert!(e.get("read_only").is_none(), "{name}: {e}");
+        let r = call(&router, "GET", &format!("/r/leaders/{name}/history"), Some(&token), json!({})).await;
+        assert_eq!(r.json()["session_id"], "s1", "{name}: the terminal's, though older: {}", r.text());
+        assert!(r.text().contains("TERMINAL WORDS") && !r.text().contains("CLIENT WORDS"), "{name}");
+        let r = call(&router, "POST", &format!("/r/leaders/{name}/message"), Some(&token), json!({"text": "to the terminal"})).await;
+        assert_eq!(r.status, StatusCode::OK, "{name}: {}", r.text());
+        assert!(String::from_utf8_lossy(&typed(&file, b"to the terminal").await).contains("to the terminal"));
+        // A third, also from the terminal's place: the daemon cannot tell.
+        hook(&app, &sb, "s3", json!({"hook_event_name": "SessionStart"}));
+        let e = entry(&call(&router, "GET", "/r/leaders", Some(&token), json!({})).await.json(), name).unwrap();
+        assert_eq!(e["read_only"], "several_sessions", "{name}: {e}");
+        let r = call(&router, "POST", &format!("/r/leaders/{name}/message"), Some(&token), json!({"text": "hi"})).await;
+        assert_eq!(r.status, StatusCode::CONFLICT, "{name}: {}", r.text());
+    }
+}
