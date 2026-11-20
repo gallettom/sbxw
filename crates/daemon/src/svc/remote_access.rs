@@ -598,7 +598,7 @@ impl App {
             return Err("remote access is off: turn it on first".into());
         }
         let Some(name) = rt.serving_name() else {
-            return Err("the tailnet machine is not running yet: `sbxw remote status` says what it waits for".into());
+            return Err("the tailnet machine is not serving yet: `sbxw remote status` says what it waits for".into());
         };
         let (code, code_id, expires_ms) = rt.pairing.new_code(now_ms());
         tracing::info!("remote access: new pairing code (valid 5 minutes; earlier requests voided)");
