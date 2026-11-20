@@ -42,7 +42,19 @@ pub struct Level2 {
     fail_hour: Limiter,
     /// `passkey/start`, per device id: 5 per 10 minutes.
     start_limit: Limiter,
+    /// The sbx-backed counts of the badge, shared by every stream (review
+    /// P3): `(when, network, stopped)`. An async lock, so streams that look
+    /// at the same moment wait for one refresh instead of each running sbx.
+    pub(crate) counts: Arc<tokio::sync::Mutex<Option<(u64, usize, usize)>>>,
+    /// Open event streams per device, oldest first, with what closes each.
+    pub(crate) streams: std::collections::BTreeMap<String, std::collections::VecDeque<(u64, tokio::sync::oneshot::Sender<()>)>>,
+    pub(crate) next_stream: u64,
 }
+
+/// The sbx-backed counts are looked at again at most this often.
+pub const COUNTS_TTL_MS: u64 = 5_000;
+/// Event streams one device may hold open; one more closes the oldest.
+pub const MAX_STREAMS_PER_DEVICE: usize = 4;
 
 fn passkeys_path(dir: &Path) -> PathBuf {
     dir.join("passkeys.json")
@@ -67,6 +79,9 @@ impl Level2 {
             fail_minute: Limiter::new(60_000, 5, u32::MAX),
             fail_hour: Limiter::new(3_600_000, 20, u32::MAX),
             start_limit: Limiter::new(600_000, 5, u32::MAX),
+            counts: Arc::new(tokio::sync::Mutex::new(None)),
+            streams: Default::default(),
+            next_stream: 0,
         }
     }
 
@@ -426,12 +441,44 @@ impl App {
     }
 
     /// How many items wait, per kind: numbers only (the events' badge).
+    /// Plans and merges are read from memory each time; the two sbx-backed
+    /// counts are shared by every caller and refreshed at most every
+    /// [`COUNTS_TTL_MS`] (review P3), whatever the number of streams.
     pub async fn remote_approval_counts(self: &Arc<Self>) -> Value {
         let plans = self.l2_pending_plans().len();
         let merges = self.l2_proposed_merges().len();
-        let network = self.sbx.approvals().await.map(|l| l.iter().filter(|a| a.kind == "network").count()).unwrap_or(0);
-        let stopped = self.l2_stopped().await.len();
+        let cache = self.remote_access.lock().unwrap().level2.counts.clone();
+        let mut held = cache.lock().await;
+        let now = now_ms();
+        let (network, stopped) = match *held {
+            Some((at, n, s)) if now.saturating_sub(at) < COUNTS_TTL_MS => (n, s),
+            _ => {
+                let n = self.sbx.approvals().await.map(|l| l.iter().filter(|a| a.kind == "network").count()).unwrap_or(0);
+                let s = self.l2_stopped().await.len();
+                *held = Some((now_ms(), n, s));
+                (n, s)
+            }
+        };
         json!({ "plans": plans, "merges": merges, "network": network, "stopped": stopped })
+    }
+
+    /// Register one event stream of `device` (review P3): past
+    /// [`MAX_STREAMS_PER_DEVICE`], the oldest is told to close. The
+    /// receiver fires when THIS stream must close; dropping the slot
+    /// unregisters it.
+    pub fn remote_stream_slot(self: &Arc<Self>, device: &str) -> (StreamSlot, tokio::sync::oneshot::Receiver<()>) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut rt = self.remote_access.lock().unwrap();
+        let id = rt.level2.next_stream;
+        rt.level2.next_stream += 1;
+        let list = rt.level2.streams.entry(device.to_string()).or_default();
+        list.push_back((id, tx));
+        while list.len() > MAX_STREAMS_PER_DEVICE {
+            if let Some((_, close)) = list.pop_front() {
+                let _ = close.send(());
+            }
+        }
+        (StreamSlot { app: Arc::downgrade(self), device: device.to_string(), id }, rx)
     }
 
     fn l2_pending_plans(&self) -> Vec<Plan> {
@@ -824,6 +871,28 @@ impl App {
         rt.record_target(&d.id, &d.name, kind, Some(target.to_string()));
         let code = serde_json::to_value(kind).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
         tracing::info!("remote access: device {}: {code}", d.id);
+    }
+}
+
+/// One open event stream of a device; dropped when the stream ends.
+pub struct StreamSlot {
+    app: std::sync::Weak<App>,
+    device: String,
+    id: u64,
+}
+
+impl Drop for StreamSlot {
+    fn drop(&mut self) {
+        if let Some(app) = self.app.upgrade() {
+            if let Ok(mut rt) = app.remote_access.lock() {
+                if let Some(list) = rt.level2.streams.get_mut(&self.device) {
+                    list.retain(|(id, _)| *id != self.id);
+                    if list.is_empty() {
+                        rt.level2.streams.remove(&self.device);
+                    }
+                }
+            }
+        }
     }
 }
 

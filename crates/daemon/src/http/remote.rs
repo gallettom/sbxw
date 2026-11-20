@@ -478,6 +478,7 @@ async fn events(State(app): S, Extension(d): Extension<DeviceCtx>) -> Response {
     let mut kanban_seen = super::remote_kanban::baseline(&app, &last);
     let _ = tx.try_send(leaders_frame(&last));
     l2::spawn_badge(app.clone(), d.clone(), &tx);
+    let (app_for_cap, d_for_cap) = (app.clone(), d.id.clone());
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(RENEW);
         loop {
@@ -552,5 +553,6 @@ async fn events(State(app): S, Extension(d): Extension<DeviceCtx>) -> Response {
         }
     });
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<_, std::convert::Infallible>);
+    let stream = l2::capped(&app_for_cap, &d_for_cap, stream);
     axum::response::Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))).into_response()
 }

@@ -375,20 +375,17 @@ pub fn valid_digest(s: &str) -> bool {
 
 // ── Network options ──────────────────────────────────────────────────────
 
-/// Whether a phone may answer a network request with this option: only one
-/// that can be told to create no lasting allow rule. One-time ("once"), or a
-/// refusal or dismissal; never with "always", "forever", "permanent" or
-/// "rule". Anything else (a plain "Allow" included) is for the Mac. Fail
-/// closed: an option sbxw cannot classify stays on the Mac.
-pub fn phone_option(id: &str, label: &str) -> bool {
-    let words = format!("{} {}", id.to_lowercase(), label.to_lowercase());
-    let lasting = ["always", "forever", "permanent", "rule", "persist", "all "].iter().any(|w| words.contains(w));
-    if lasting {
-        return false;
-    }
-    let once = words.contains("once");
-    let refuse = ["deny", "dismiss", "refuse", "block", "reject", "ignore"].iter().any(|w| words.contains(w));
-    once || refuse
+/// Option ids a phone may send for a network request: exactly these, by
+/// id (review P4: never a word found inside an id or a label). `dismiss`
+/// closes sbx 0.51's request and writes no rule. Add an id only once its
+/// meaning in sbx is checked (one-time, no lasting rule) and a test says so.
+pub const PHONE_OPTIONS: &[&str] = &["dismiss"];
+
+/// Whether a phone may answer a network request with this option: its id is
+/// one of [`PHONE_OPTIONS`], exactly. The label is shown, never matched.
+/// Anything else, a plain "Allow" included, is for the Mac (fail closed).
+pub fn phone_option(id: &str, _label: &str) -> bool {
+    PHONE_OPTIONS.contains(&id)
 }
 
 /// A plan id as the routes take it: `p-` and 32 hex.
@@ -495,12 +492,25 @@ mod tests {
     }
 
     #[test]
-    fn only_options_that_leave_no_lasting_rule_reach_the_phone() {
-        for (id, label) in [("dismiss", "Dismiss"), ("deny", "Deny"), ("allow-once", "Allow once"), ("x", "Allow this time once"), ("refuse", "")] {
-            assert!(phone_option(id, label), "{id} {label}");
-        }
-        for (id, label) in [("allow", "Allow"), ("allow-always", "Allow always"), ("deny-always", "Deny always"), ("allow", "Add an allow rule"), ("block", "Block forever"), ("", ""), ("x", "Something new"), ("once", "Allow all hosts once")] {
-            assert!(!phone_option(id, label), "{id} {label}");
+    fn only_options_on_the_exact_list_reach_the_phone() {
+        assert!(phone_option("dismiss", "Dismiss"));
+        assert!(phone_option("dismiss", "anything sbx says"), "the id decides");
+        for (id, label) in [
+            ("allow", "Allow"),
+            ("allow-always", "Allow always"),
+            ("deny", "Deny"),
+            ("deny-always", "Deny always"),
+            ("allow-once", "Allow once"),
+            ("unblock", "Unblock this host"),
+            ("allow", "Allow (do not block)"),
+            ("denylist", "Add to the denylist"),
+            ("Dismiss", "Dismiss"),
+            ("dismiss ", "Dismiss"),
+            ("dismiss-always", "Dismiss"),
+            ("x", "dismiss"),
+            ("", ""),
+        ] {
+            assert!(!phone_option(id, label), "{id:?} {label:?}");
         }
     }
 

@@ -327,7 +327,20 @@ async fn finding_p3_every_event_stream_runs_sbx_itself() {
     tokio::time::sleep(Duration::from_millis(800)).await;
     let calls: Vec<String> = w.fake.log()[before..].to_vec();
     let lists = calls.iter().filter(|c| c.starts_with("policy approval ls")).count();
-    assert!(lists >= 25, "FIXED? one shared count for all streams: {lists} `policy approval ls` for 25 streams");
+    // FIXED (P3): one shared count for every stream, refreshed at most every 5 s.
+    assert!(lists <= 1, "{lists} `policy approval ls` for 25 streams");
+    // And at most 4 streams per device: the oldest ends with bye too_many.
+    use futures_util::StreamExt;
+    let mut first = held.remove(0).into_body().into_data_stream();
+    let mut seen = String::new();
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        while let Some(Ok(b)) = first.next().await {
+            seen.push_str(&String::from_utf8_lossy(&b));
+        }
+    })
+    .await;
+    assert!(seen.contains("event: bye") && seen.contains("too_many"), "{seen}");
+    assert_eq!(w.app.remote_access.lock().unwrap().level2.streams.get(&p.id).map(|l| l.len()), Some(4));
     drop(held);
 }
 
@@ -337,12 +350,13 @@ async fn finding_p3_every_event_stream_runs_sbx_itself() {
 /// refusal, "deny" also matches a lasting deny-list entry.
 #[test]
 fn finding_p4_phone_option_reads_substrings() {
-    assert!(level2::phone_option("unblock", "Unblock this host"), "FIXED? \"unblock\" is not a refusal");
-    assert!(level2::phone_option("allow", "Allow (do not block)"), "FIXED? an allow that says \"block\"");
-    assert!(level2::phone_option("denylist", "Add to the denylist"), "FIXED? a lasting deny entry");
-    // What holds: the lasting words.
+    // FIXED (P4): an exact list of ids; no word inside an id or label counts.
+    assert!(!level2::phone_option("unblock", "Unblock this host"));
+    assert!(!level2::phone_option("allow", "Allow (do not block)"));
+    assert!(!level2::phone_option("denylist", "Add to the denylist"));
     assert!(!level2::phone_option("allow-always", "Always allow"));
     assert!(!level2::phone_option("allow", "Allow"));
+    assert!(level2::phone_option("dismiss", "Dismiss"));
 }
 
 // ── P5: the Kanban's `[path]` filter ─────────────────────────────────────

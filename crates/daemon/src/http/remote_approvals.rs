@@ -201,6 +201,35 @@ pub async fn sandbox_remove(State(app): S, Extension(d): Extension<DeviceCtx>, P
     answer(app.remote_act(&d, Action::SandboxRemove, &name, None, &b.assertion).await)
 }
 
+// ── The badge on the event stream, and the cap on streams ────────────────
+
+/// A device's event stream, capped (review P3): it ends with
+/// `event: bye` `{"reason": "too_many"}` when the device opens more than
+/// `MAX_STREAMS_PER_DEVICE` streams and this one is the oldest.
+pub fn capped<St>(app: &Arc<App>, device: &str, s: St) -> impl futures_util::Stream<Item = Result<Sse, std::convert::Infallible>> + Send + 'static
+where
+    St: futures_util::Stream<Item = Result<Sse, std::convert::Infallible>> + Send + 'static,
+{
+    use futures_util::StreamExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (slot, closer) = app.remote_stream_slot(device);
+    let fired = Arc::new(AtomicBool::new(false));
+    let set = fired.clone();
+    let until = async move {
+        match closer.await {
+            Ok(()) => set.store(true, Ordering::SeqCst),
+            // Its sender went without a word: never closes the stream.
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    let last = futures_util::stream::once(async move {
+        let _slot = slot;
+        fired.load(Ordering::SeqCst).then(|| Ok(Sse::default().event("bye").data(json!({ "reason": "too_many" }).to_string())))
+    })
+    .filter_map(|x| async move { x });
+    s.take_until(until).chain(last)
+}
+
 // ── The badge on the event stream ────────────────────────────────────────
 
 /// How often the counts are looked at again (network requests have no event).
