@@ -1148,3 +1148,225 @@ test('level 2 screens at 320x568', { skip }, async () => {
   assert.deepEqual(problems, []);
   await ctx.close();
 });
+
+// ══ The Kanban (read only) ═══════════════════════════════════════════════
+const KB = FX.kanban;
+const kbGets = async (path) => (await log()).filter(e => e.method === 'GET' && e.path === path).length;
+async function openBoard(page, sandbox = 'shop') {
+  await page.goto(`${base()}/`);
+  await page.tap(`.rc-leader >> text=${sandbox}`);
+  await page.waitForSelector('#s-chat:not([hidden])');
+  await page.tap('#v-kanban');
+  await page.waitForSelector('.rc-kb-lane, #kb-status:not([hidden])');
+}
+const selected = page => page.$eval('.rc-kb-tab[aria-selected="true"]', t => t.dataset.col);
+const visibleCards = page => page.$$eval('.rc-kb-lane.rc-on .rc-kb-card', c => c.map(e => e.dataset.key));
+async function swipe(page, dx) {
+  await page.evaluate(dx => {
+    const el = document.getElementById('kb-lanes');
+    const t = (x, y) => new Touch({ identifier: 1, target: el, clientX: x, clientY: y });
+    el.dispatchEvent(new TouchEvent('touchstart', { touches: [t(200, 300)], changedTouches: [t(200, 300)], bubbles: true }));
+    el.dispatchEvent(new TouchEvent('touchend', { touches: [], changedTouches: [t(200 + dx, 310)], bubbles: true }));
+  }, dx);
+}
+
+test('kanban: the switch keeps each place; one column at a time, by picker or swipe; nothing writes', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { shop: FX.history.shop }, kanbanReset: true, l2Reset: true });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.tap('.rc-leader >> text=shop');
+  await page.waitForSelector('.rc-agent');
+  await page.evaluate(() => { document.getElementById('log').scrollTop = 40; });
+  const logTop = await page.$eval('#log', l => l.scrollTop);
+  await shot(page, '70-switch-conversation');
+  await page.tap('#v-kanban');
+  await page.waitForSelector('.rc-kb-lane.rc-on .rc-kb-card');
+  assert.equal(await page.getAttribute('#v-kanban', 'aria-selected'), 'true');
+  assert.equal(await page.isVisible('#composer'), false, 'the board has no composer');
+  assert.equal(await selected(page), 'progress', 'active things first');
+  assert.deepEqual(await visibleCards(page), ['t:12', 'th:checkout'], 'the daemon\'s order');
+  assert.deepEqual(await page.$$eval('.rc-kb-tab', t => t.map(e => e.textContent)), ['Planned2', 'In progress2', 'In test0', 'Ready to merge1', 'Merged14']);
+  assert.deepEqual(await page.$$eval('.rc-kb-lane.rc-on .rc-kb-mark', m => m.map(e => [e.textContent, e.className])), [['blocked', 'rc-kb-mark rc-tone-amber']]);
+  await shot(page, '71-kanban-in-progress');
+  await page.tap('.rc-kb-tab[data-col="test"]');
+  assert.equal(await page.textContent('.rc-kb-lane.rc-on .rc-kb-empty'), 'Nothing in test.');
+  await shot(page, '72-kanban-empty-column');
+  await page.tap('.rc-kb-tab[data-col="merged"]');
+  assert.equal(await page.textContent('.rc-kb-lane.rc-on .rc-kb-older'), 'and 2 older');
+  await shot(page, '73-kanban-merged');
+  await page.tap('.rc-kb-tab[data-col="planned"]');
+  // Long titles end in an ellipsis: two lines at most, nothing overflows.
+  const clamp = await page.$eval('.rc-kb-lane.rc-on .rc-kb-title', e => [getComputedStyle(e).webkitLineClamp, e.clientHeight <= 2 * parseFloat(getComputedStyle(e).lineHeight) + 1]);
+  assert.deepEqual(clamp, ['2', true]);
+  assert.ok(await noHScroll(page));
+  await shot(page, '74-kanban-planned');
+  await swipe(page, -120);
+  assert.equal(await selected(page), 'progress', 'a swipe left: the next column');
+  await swipe(page, 120);
+  assert.equal(await selected(page), 'planned');
+  await swipe(page, 120);
+  assert.equal(await selected(page), 'planned', 'no column before the first');
+  await swipe(page, -30);
+  assert.equal(await selected(page), 'planned', 'a small move is not a swipe');
+  // Read only: no control that writes, not even a disabled one.
+  const labels = await page.$$eval('#board button', b => b.map(e => `${e.textContent} ${e.getAttribute('aria-label') || ''}`.toLowerCase()));
+  for (const l of labels) assert.doesNotMatch(l, /\b(add|new|move|edit|delete|remove|send|drag)\b/, l);
+  assert.equal(await page.$$eval('#board input, #board textarea, #board [draggable="true"], #board [contenteditable]', e => e.length), 0);
+  // Back to the conversation: its place; back to the board: its column.
+  await page.tap('#v-chat');
+  assert.equal(await page.$eval('#log', l => l.scrollTop), logTop);
+  assert.equal(await page.isVisible('#composer'), true);
+  await page.tap('#v-kanban');
+  assert.equal(await selected(page), 'planned');
+  // Another leader has its own view; coming back to shop finds the board.
+  await page.tap('#back');
+  await page.tap('.rc-leader >> text=website');
+  await page.waitForSelector('#v-chat[aria-selected="true"]');
+  await page.tap('#back');
+  await page.tap('.rc-leader >> text=shop');
+  await page.waitForSelector('#v-kanban[aria-selected="true"]');
+  await page.waitForSelector('.rc-kb-lane.rc-on .rc-kb-card');
+  assert.equal(await selected(page), 'planned');
+  assert.equal((await log()).filter(e => e.method !== 'GET' && /kanban/.test(e.path)).length, 0, 'the board only reads');
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('kanban: a ticket as text, files as rows; a thread\'s own card calls no route', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, kanbanReset: true });
+  const { ctx, page, problems } = await phone();
+  await openBoard(page);
+  await page.tap('.rc-kb-card[data-key="t:12"]');
+  await page.waitForSelector('.rc-kb-desc');
+  assert.equal(await page.textContent('.rc-kb-ttitle'), 'Orders table and its migration');
+  assert.equal(await page.$eval('.rc-kb-desc', e => getComputedStyle(e).whiteSpace), 'pre-wrap', 'line breaks kept');
+  assert.equal(await page.textContent('.rc-kb-desc'), KB.ticket.ticket.description);
+  assert.deepEqual(await page.$$eval('.rc-kb-files li', l => l.map(e => e.textContent)), ['schema-sketch.png40 KB', 'notes.txt812 B']);
+  assert.ok(await page.isVisible('text=Files open on your Mac.'));
+  assert.equal(await page.$$eval('#kb-ticket a, #kb-ticket img, #kb-ticket [href], #kb-ticket [download]', e => e.length), 0, 'no preview, no download, no link');
+  assert.deepEqual(await page.$$eval('.rc-kb-hist li', l => l.map(e => e.textContent)), ['2hCreated by you', '1hPlanned in a plan of the lead', '40mThread db-schema started']);
+  assert.equal(await page.textContent('.rc-kb-tcol'), 'In progress');
+  await shot(page, '75-kanban-ticket');
+  await page.tap('.rc-kb-back');
+  await page.waitForSelector('.rc-kb-lane.rc-on');
+  assert.equal(await selected(page), 'progress');
+  const before = (await log()).length;
+  await page.tap('.rc-kb-card[data-key="th:checkout"]');
+  await page.waitForSelector('text=A thread of the plan, with no ticket of its own.');
+  await page.waitForTimeout(300);
+  assert.equal((await log()).slice(before).filter(e => /kanban\//.test(e.path)).length, 0, 'no ticket route for a thread\'s card');
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('kanban: the event re-reads the board, keeping the column, the scroll and an open ticket', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, kanbanReset: true });
+  const { ctx, page, problems } = await phone(320, 568);
+  await openBoard(page);
+  await page.tap('.rc-kb-tab[data-col="merged"]');
+  await page.$eval('.rc-kb-lane.rc-on .rc-kb-list', l => { l.scrollTop = 120; });
+  const top = await page.$eval('.rc-kb-lane.rc-on .rc-kb-list', l => l.scrollTop);
+  assert.ok(top > 50, `the merged list scrolls: ${top}`);
+  const reads = await kbGets('/r/leaders/shop/kanban');
+  // Same hash: nothing to read.
+  await ctl({ emit: { event: 'kanban', data: { sandbox: 'shop', latest: KB.board.latest } } });
+  await page.waitForTimeout(700);
+  assert.equal(await kbGets('/r/leaders/shop/kanban'), reads, 'an unchanged board is not read again');
+  // A new card in Merged, a burst of three events: one read.
+  const next = structuredClone(KB.board);
+  next.latest = '1111111111111111';
+  next.columns[4].cards.unshift({ ...next.columns[4].cards[0], key: 't:20', n: 20, num: 'T-20', title: 'Brand new merge' });
+  await ctl({ kanban: { shop: next } });
+  for (let i = 0; i < 3; i++) await ctl({ emit: { event: 'kanban', data: { sandbox: 'shop', latest: next.latest } } });
+  await page.waitForSelector('.rc-kb-card[data-key="t:20"]');
+  await page.waitForTimeout(600);
+  assert.equal(await kbGets('/r/leaders/shop/kanban'), reads + 1, `debounced: ${JSON.stringify((await log()).filter(e => /kanban/.test(e.path)))}`);
+  assert.equal(await selected(page), 'merged', 'the column is kept');
+  assert.equal(await page.$eval('.rc-kb-lane.rc-on .rc-kb-list', l => l.scrollTop), top, 'the scroll is kept');
+  // An open ticket stays open and is read again.
+  await page.tap('.rc-kb-tab[data-col="progress"]');
+  await page.tap('.rc-kb-card[data-key="t:12"]');
+  await page.waitForSelector('.rc-kb-desc');
+  const t2 = structuredClone(KB.ticket);
+  t2.ticket.history.push({ when: 'now', text: 'Thread db-schema reported done', tone: 'green' });
+  const n2 = structuredClone(next);
+  n2.latest = '2222222222222222';
+  await ctl({ kanban: { shop: n2 }, tickets: { 'shop/12': t2 } });
+  await ctl({ emit: { event: 'kanban', data: { sandbox: 'shop', latest: n2.latest } } });
+  await page.waitForSelector('text=Thread db-schema reported done');
+  assert.equal(await page.isVisible('#kb-ticket'), true, 'the ticket stays open');
+  // Another sandbox's event: nothing read.
+  const r2 = await kbGets('/r/leaders/shop/kanban');
+  await ctl({ emit: { event: 'kanban', data: { sandbox: 'website', latest: 'ffffffffffffffff' } } });
+  await page.waitForTimeout(600);
+  assert.equal(await kbGets('/r/leaders/shop/kanban'), r2);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('kanban: an empty board, a stopped leader, hostile titles and descriptions', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, kanbanReset: true });
+  {
+    const { ctx, page } = await phone();
+    await openBoard(page, 'website');
+    await page.waitForSelector('.rc-kb-lane.rc-on');
+    assert.equal(await selected(page), 'planned');
+    assert.equal(await page.textContent('.rc-kb-lane.rc-on .rc-kb-empty'), 'Nothing planned.');
+    await shot(page, '76-kanban-empty-board');
+    await ctx.close();
+  }
+  await ctl({ kanban: { shop: null } });
+  {
+    const { ctx, page } = await phone();
+    await openBoard(page);
+    await page.waitForSelector('#kb-status:text("This leader is no longer running.")');
+    await shot(page, '77-kanban-stopped');
+    await ctx.close();
+  }
+  const evil = '<img src=x onerror="window.__pwned=1"> [x](javascript:window.__pwned=2) **b** ' + 'W'.repeat(300);
+  const b = structuredClone(KB.board);
+  const c = b.columns[1].cards[0];
+  Object.assign(c, { title: evil, title_long: evil, thread: '<svg onload=window.__pwned=3>', marks: [{ id: 'x', label: '<b>mark</b>', tone: '"><script>' }] });
+  const t = structuredClone(KB.ticket);
+  Object.assign(t.ticket, { title: evil, description: `${evil}\n<script>window.__pwned=4</script>`, card: c });
+  t.ticket.files = [{ name: '<img src=x onerror=window.__pwned=5>.png', size: 3, kind: 'png' }];
+  t.ticket.history = [{ when: '<i>', text: evil, tone: 'red' }];
+  await ctl({ kanban: { shop: b }, tickets: { 'shop/12': t } });
+  const { ctx, page, problems } = await phone(320, 568);
+  await openBoard(page);
+  await page.waitForSelector('.rc-kb-lane.rc-on .rc-kb-card');
+  assert.ok(await noHScroll(page));
+  await page.tap('.rc-kb-card[data-key="t:12"]');
+  await page.waitForSelector('.rc-kb-desc');
+  const r = await page.evaluate(() => ({
+    pwned: window.__pwned,
+    bad: document.querySelectorAll('#board img, #board script, #board svg:not([aria-hidden]), #board a, #board b, #board i, #board strong, #board [onerror], #board [onload]').length,
+  }));
+  assert.deepEqual(r, { pwned: undefined, bad: 0 });
+  assert.ok((await page.textContent('.rc-kb-desc')).includes('<script>window.__pwned=4</script>'), 'shown as text');
+  assert.ok(await noHScroll(page));
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('kanban shots: 390x844, 320x568, and landscape 844x390 with the columns side by side', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, kanbanReset: true });
+  for (const [w, h] of [[320, 568], [844, 390]]) {
+    const { ctx, page, problems } = await phone(w, h);
+    await openBoard(page);
+    await page.waitForSelector('.rc-kb-lane.rc-on .rc-kb-card');
+    assert.ok(await noHScroll(page), `${w}`);
+    if (w > 700) {
+      assert.equal(await page.$$eval('.rc-kb-lane', l => l.filter(e => getComputedStyle(e).display !== 'none').length), 5, 'all five side by side');
+      assert.equal(await page.isVisible('#kb-pick'), false);
+    }
+    await shot(page, `78-kanban-${w}x${h}`);
+    await page.tap('.rc-kb-card[data-key="t:12"]');
+    await page.waitForSelector('.rc-kb-desc');
+    await shot(page, `79-kanban-ticket-${w}x${h}`);
+    assert.deepEqual(problems, []);
+    await ctx.close();
+  }
+});

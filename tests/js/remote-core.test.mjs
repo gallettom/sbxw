@@ -17,7 +17,10 @@ const fx = JSON.parse(read('./remote-fixtures.json'));
 const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcActivity', 'rcPairCode',
   'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcWithDictation', 'chatMarkdown',
   'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
-  'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode'];
+  'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
+  'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
+  'rcL2Fail', 'RC_L2_REASON', 'rcActPath', 'rcActLine', 'rcActDone', 'rcL2Client',
+  'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths'];
 const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
@@ -512,4 +515,104 @@ test('the recorder: a level from samples, a clock, a wave that degrades', () => 
   assert.equal(rc.rcWaveMode(true, true), 'meter');
   assert.equal(rc.rcWaveMode(false, false), 'pulse');
   assert.equal(rc.rcWaveMode(false, true), 'pulse');
+});
+
+// ── Level 2 (API-level2.md) ──
+test('base64url without padding, strict both ways', () => {
+  for (let n = 0; n < 40; n++) {
+    const b = Uint8Array.from({ length: n }, (_, i) => (i * 37 + n) & 255);
+    const e = rc.rcB64u(b);
+    assert.equal(e, Buffer.from(b).toString('base64url'), `length ${n}`);
+    assert.deepEqual([...rc.rcFromB64u(e)], [...b]);
+  }
+  assert.equal(rc.rcB64u(new Uint8Array([251, 255]).buffer), '-_8');
+  for (const bad of ['a', 'ab==', 'a+b/', 'ab cd', 'é', 7, null, 'abcde']) assert.equal(rc.rcFromB64u(bad), null, JSON.stringify(bad));
+});
+test('ceremony options: only the contract\'s fields, user verification always required', () => {
+  const fx2 = fx.level2;
+  const c = rc.rcCreateOptions({ ...fx2.passkey_options.public_key, authenticatorSelection: { userVerification: 'discouraged' }, attestation: 'direct', extensions: { x: 1 } });
+  assert.equal(c.authenticatorSelection.userVerification, 'required');
+  assert.equal(c.attestation, 'none');
+  assert.equal(c.extensions, undefined);
+  assert.deepEqual([...c.challenge], [...Array(32).keys()]);
+  assert.deepEqual(plain(c.pubKeyCredParams), [{ type: 'public-key', alg: -7 }]);
+  for (const bad of [null, {}, { ...fx2.passkey_options.public_key, challenge: 'ab==' }, { ...fx2.passkey_options.public_key, pubKeyCredParams: [{ type: 'public-key', alg: -257 }] }, { ...fx2.passkey_options.public_key, rp: {} }]) {
+    assert.equal(rc.rcCreateOptions(bad), null);
+  }
+  const g = rc.rcGetOptions({ ...fx2.challenge.public_key, userVerification: 'preferred' });
+  assert.equal(g.userVerification, 'required');
+  assert.equal(g.allowCredentials.length, 1);
+  assert.equal(rc.rcGetOptions({ ...fx2.challenge.public_key, allowCredentials: [] }), null, 'never "any passkey"');
+  assert.equal(rc.rcGetOptions({ ...fx2.challenge.public_key, challenge: 'AA' }), null, 'a short challenge');
+  // The browser's answers: exact shapes, else nothing is sent.
+  const B = t => new TextEncoder().encode(t).buffer;
+  assert.deepEqual(plain(rc.rcAssertionBody({ type: 'public-key', rawId: B('id'), response: { clientDataJSON: B('c'), authenticatorData: B('a'), signature: B('s'), userHandle: B('u') } })),
+    { id: 'aWQ', client_data_json: 'Yw', authenticator_data: 'YQ', signature: 'cw' });
+  for (const bad of [null, {}, { type: 'x', rawId: B('i'), response: {} }, { type: 'public-key', rawId: 'id', response: { clientDataJSON: B('c'), authenticatorData: B('a'), signature: B('s') } }, { type: 'public-key', rawId: B('i'), response: { clientDataJSON: B('c'), authenticatorData: B('a') } }]) {
+    assert.equal(rc.rcAssertionBody(bad), null);
+  }
+  assert.equal(rc.rcRegistrationBody({ type: 'public-key', rawId: B('i'), response: { clientDataJSON: B('c') } }), null);
+  assert.equal(rc.rcCeremonyError({ name: 'NotAllowedError' }), 'cancelled');
+  assert.equal(rc.rcCeremonyError({ name: 'AbortError' }), 'cancelled');
+  assert.equal(rc.rcCeremonyError({ name: 'NotSupportedError' }), 'no_authenticator');
+  assert.equal(rc.rcCeremonyError(new Error('x')), 'failed');
+});
+test('level 2: the entry\'s sentence, each refusal, the routes, the sheet\'s line, the result', async () => {
+  assert.equal(rc.rcApprovalsBlock(null), 'Approving is turned off on your Mac.');
+  assert.equal(rc.rcApprovalsBlock({ level2: false }), 'Approving is turned off on your Mac.');
+  assert.equal(rc.rcApprovalsBlock({ level2: true, passkey: false }), 'Approving needs Face ID: enable it from your Mac.');
+  assert.match(rc.rcApprovalsBlock({ level2: true, passkey: true, rp_ok: false }), /tailnet name changed/);
+  assert.equal(rc.rcApprovalsBlock({ level2: true, passkey: true, rp_ok: true }), '');
+  const r = (status, reason, error) => ({ ok: false, status, data: { ok: false, reason, error } });
+  assert.equal(rc.rcL2Fail(r(409, 'changed')), 'This changed since you opened it: read it again.');
+  assert.match(rc.rcL2Fail(r(409, 'refused', 'a <b>conflict</b>')), /^The Mac refused it: a <b>conflict<\/b>$/);
+  for (const k of ['level2_off', 'no_passkey', 'passkey', 'no_grant']) assert.equal(rc.rcL2Fail(r(403, k)), rc.RC_L2_REASON[k]);
+  assert.match(rc.rcL2Fail(r(429)), /Too many failed tries/);
+  assert.match(rc.rcL2Fail({ ok: false, status: 0, unreachable: true }), /unreachable/);
+  assert.match(rc.rcL2Fail(r(500, '__proto__')), /^Nothing was done: the Mac answered 500/);
+  assert.equal(rc.rcActPath('plan_approve', 'p-1'), '/r/plans/p-1/approve');
+  assert.equal(rc.rcActPath('network_respond', 'network:a/b'), '/r/network/network%3Aa%2Fb/respond');
+  assert.equal(rc.rcActPath('sandbox_remove', '../x'), '/r/stopped/..%2Fx/remove');
+  assert.equal(rc.rcActPath('shutdown', 'x'), null);
+  assert.equal(rc.rcActLine('sandbox_remove', { name: 'old' }), 'Remove the stopped sandbox old. This cannot be undone.');
+  assert.equal(rc.rcActLine('network_respond', { sandbox: 'docs', host: 'x.org' }, { id: 'dismiss', label: 'dismiss' }), 'Answer "dismiss" to docs\'s request for x.org.');
+  assert.equal(rc.rcActDone('merge', fx.level2.merge_done), 'Merged: footer, contact-form.');
+  assert.equal(rc.rcActDone('merge', fx.level2.merge_conflict), 'Stopped at contact-form: conflict in src/pages/contact.tsx, src/components/Footer.tsx');
+  assert.equal(rc.rcActDone('merge', null), 'Merged.');
+  // The client: same origin, JSON, the option only for a network answer.
+  const { f, calls } = fakeFetch({ status: 200, body: { ok: true } });
+  const l2 = rc.rcL2Client(rc.rcClient(f));
+  await l2.challenge('plan_approve', 'p-1', 'a'.repeat(64));
+  await l2.challenge('network_respond', 'network:x', 'b'.repeat(64), 'dismiss');
+  await l2.act('network_respond', 'network:x', { id: 'i' }, 'dismiss');
+  await l2.act('merge', 'p-2', { id: 'i' }, 'ignored');
+  assert.deepEqual(calls.map(c => [c.path, JSON.parse(c.body)]), [
+    ['/r/approvals/challenge', { kind: 'plan_approve', target: 'p-1', digest: 'a'.repeat(64) }],
+    ['/r/approvals/challenge', { kind: 'network_respond', target: 'network:x', digest: 'b'.repeat(64), option: 'dismiss' }],
+    ['/r/network/network%3Ax/respond', { option: 'dismiss', assertion: { id: 'i' } }],
+    ['/r/merges/p-2/merge', { assertion: { id: 'i' } }],
+  ]);
+  assert.throws(() => l2.act('nope', 'x', {}));
+});
+
+// ── The Kanban (API-kanban.md) ──
+test('the board is drawn as it comes: the daemon\'s order, fields checked, active first', () => {
+  const b = plain(rc.rcKbBoard(fx.kanban.board));
+  assert.deepEqual(b.columns.map(c => c.id), ['planned', 'progress', 'test', 'ready', 'merged']);
+  assert.deepEqual(b.columns[1].cards.map(c => c.key), ['t:12', 'th:checkout']);
+  assert.equal(b.columns[4].older, 2);
+  assert.equal(b.columns[1].cards[1].n, null, 'a thread\'s own card');
+  assert.equal(b.columns[1].cards[1].num, 'thread');
+  assert.equal(rc.rcKbFirst(rc.rcKbBoard(fx.kanban.board)), 'progress');
+  assert.equal(rc.rcKbFirst(rc.rcKbBoard(fx.kanban.empty)), 'planned');
+  const odd = plain(rc.rcKbBoard({ columns: [null, { id: 'planned', cards: [null, { key: 'k', n: '12', title: { x: 1 }, marks: [{ label: 'x', tone: 'javascript' }, 3], priority: 'p0', thread_tone: '"><' }] }] }));
+  assert.deepEqual(odd.columns[0].cards[0], { key: 'k', n: null, num: 'thread', title: '', priority: 'none', thread: null, thread_state: null, thread_tone: 'neutral', marks: [{ label: 'x', tone: 'neutral' }], files: 0, age: '' });
+  assert.deepEqual(plain(rc.rcKbBoard(null)), { latest: '', summary: '', columns: [] });
+  const t = plain(rc.rcKbTicket(fx.kanban.ticket));
+  assert.match(t.description, /\n\nThe migration must be reversible; see \[path\]/);
+  assert.deepEqual(t.files, [{ name: 'schema-sketch.png', size: 41234, kind: 'png' }, { name: 'notes.txt', size: 812, kind: 'text' }]);
+  assert.equal(rc.rcKbTicket({}), null);
+  assert.equal(rc.rcKbPaths('my shop'), '/r/leaders/my%20shop/kanban');
+  assert.equal(rc.rcKbPaths('shop', 12), '/r/leaders/shop/kanban/T-12');
+  for (const n of [null, 0, -1, 1.5, '12', 1e9]) assert.equal(rc.rcKbPaths('shop', n), null, String(n));
 });

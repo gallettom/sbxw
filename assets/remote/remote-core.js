@@ -862,3 +862,82 @@ function rcL2Client(api) {
     },
   };
 }
+
+// ══ The Kanban (read only) ═══════════════════════════════════════════════
+// The contract is .sbxw-artifacts/remote/API-kanban.md. The page draws the
+// route's answer in the daemon's order and computes nothing: no counting,
+// no sorting, no moving. Every string is data, set as text.
+const RC_KB_COLS = ['planned', 'progress', 'test', 'ready', 'merged'];
+const RC_KB_TONES = ['neutral', 'blue', 'green', 'amber', 'red', 'purple', 'gray', 'grey'];
+const rcKbTone = t => (RC_KB_TONES.includes(t) ? (t === 'grey' ? 'gray' : t) : 'neutral');
+const rcStr = v => (typeof v === 'string' ? v : '');
+// A card, its fields checked; anything unexpected becomes empty.
+function rcKbCard(c) {
+  if (!c || typeof c !== 'object' || typeof c.key !== 'string' || !c.key) return null;
+  const n = Number.isInteger(c.n) && c.n > 0 ? c.n : null;
+  return {
+    key: c.key,
+    n,
+    num: rcStr(c.num) || (n ? `T-${n}` : 'thread'),
+    title: rcStr(c.title_long) || rcStr(c.title) || rcStr(c.title_short),
+    priority: ['p1', 'p2', 'p3'].includes(c.priority) ? c.priority : 'none',
+    thread: rcStr(c.thread) || null,
+    thread_state: rcStr(c.thread_state) || null,
+    thread_tone: rcKbTone(c.thread_tone),
+    marks: (Array.isArray(c.marks) ? c.marks : []).filter(m => m && typeof m.label === 'string' && m.label).map(m => ({ label: m.label, tone: rcKbTone(m.tone) })),
+    files: Math.max(0, Math.floor(Number(c.files)) || 0),
+    age: rcStr(c.age),
+  };
+}
+// The board: the five columns in the daemon's order, with what it says.
+function rcKbBoard(data) {
+  const cols = Array.isArray(data?.columns) ? data.columns : [];
+  return {
+    latest: rcStr(data?.latest),
+    summary: rcStr(data?.summary),
+    columns: cols.filter(c => c && typeof c.id === 'string' && c.id).map(c => {
+      const cards = (Array.isArray(c.cards) ? c.cards : []).map(rcKbCard).filter(Boolean);
+      return {
+        id: c.id,
+        title: rcStr(c.title) || c.id,
+        tone: rcKbTone(c.tone),
+        empty: rcStr(c.empty) || 'Nothing here.',
+        count: Number.isFinite(Number(c.count)) ? Math.max(0, Math.floor(Number(c.count))) : cards.length,
+        older: Math.max(0, Math.floor(Number(c.older)) || 0),
+        cards,
+      };
+    }),
+  };
+}
+// The column to open first: active things first (in progress, in test,
+// ready to merge), then planned, then merged; the first if all are empty.
+function rcKbFirst(board) {
+  const cols = board?.columns || [];
+  for (const id of ['progress', 'test', 'ready', 'planned', 'merged']) {
+    const c = cols.find(x => x.id === id);
+    if (c && c.cards.length) return c.id;
+  }
+  return cols[0]?.id || null;
+}
+// A ticket's detail, its fields checked.
+function rcKbTicket(data) {
+  const t = data?.ticket;
+  if (!t || typeof t !== 'object') return null;
+  return {
+    num: rcStr(t.num) || (Number.isInteger(t.n) ? `T-${t.n}` : ''),
+    title: rcStr(t.title),
+    description: rcStr(t.description),
+    priority: ['p1', 'p2', 'p3'].includes(t.priority) ? t.priority : 'none',
+    column: rcStr(t.column),
+    card: rcKbCard(t.card),
+    files: (Array.isArray(t.files) ? t.files : []).filter(f => f && typeof f.name === 'string').map(f => ({ name: f.name, size: Math.max(0, Number(f.size) || 0), kind: rcStr(f.kind) || 'other' })),
+    history: (Array.isArray(t.history) ? t.history : []).filter(h => h && typeof h.text === 'string').map(h => ({ when: rcStr(h.when), text: h.text, tone: rcKbTone(h.tone) })),
+  };
+}
+const RC_KB_PRIORITY = { p1: 'Priority 1', p2: 'Priority 2', p3: 'Priority 3', none: 'No priority' };
+const RC_KB_THREAD = { starting: 'starting', working: 'working', blocked: 'blocked', done: 'done', failed: 'failed' };
+function rcKbPaths(sandbox, n) {
+  const at = `/r/leaders/${encodeURIComponent(sandbox)}/kanban`;
+  if (n === undefined) return at;
+  return Number.isInteger(n) && n > 0 && n < 1e9 ? `${at}/T-${n}` : null;
+}

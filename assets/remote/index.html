@@ -147,6 +147,18 @@
 
   <!-- A leader's conversation. -->
   <section id="s-chat" class="rc-screen rc-chat" hidden>
+    <!-- Conversation | Kanban: each keeps its place when switching back. -->
+    <div id="views" class="rc-views" role="tablist" aria-label="View">
+      <button id="v-chat" class="rc-view" type="button" role="tab" aria-selected="true" aria-controls="log">Conversation</button>
+      <button id="v-kanban" class="rc-view" type="button" role="tab" aria-selected="false" aria-controls="board">Kanban</button>
+    </div>
+    <!-- The leader's board, read only: drawn from the route's answer. -->
+    <div id="board" class="rc-board" hidden>
+      <div id="kb-pick" class="rc-kb-pick" role="tablist" aria-label="Columns"></div>
+      <p id="kb-status" class="rc-kb-status" role="status" hidden></p>
+      <div id="kb-lanes" class="rc-kb-lanes"></div>
+      <div id="kb-ticket" class="rc-kb-ticket" hidden></div>
+    </div>
     <div id="log" class="rc-log" aria-live="polite">
       <p id="log-top" class="rc-log-top"></p>
       <div id="rows"></div>

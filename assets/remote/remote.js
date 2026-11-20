@@ -66,6 +66,7 @@
     l2: null,            // GET /r/approvals: { level2, passkey, rp_ok, counts }
     l2From: null,        // where Approvals was opened: null (leaders) or a sandbox
     item: null,          // the open detail: { what, id, data, digest }
+    views: new Map(),    // per leader: 'chat' or 'kanban', and the board's place
   };
 
   const banner = $('unreachable');
@@ -120,6 +121,8 @@
     stopRecording(true);
     st.l2 = null;
     st.item = null;
+    for (const v of st.views.values()) clearTimeout(v.timer);
+    st.views.clear();
     stopPasskeyPoll();
     $('field').value = '';
     banner.hidden = true;
@@ -224,6 +227,11 @@
     es.addEventListener('approvals', e => {
       const d = parse(e.data);
       if (d && typeof d === 'object') { st.l2 = { ...(st.l2 || { level2: true }), counts: d }; renderBadge(); }
+    });
+    // A board changed: re-read it if it is the one on screen.
+    es.addEventListener('kanban', e => {
+      const d = parse(e.data);
+      if (d && d.sandbox === st.current) kbNudge(typeof d.latest === 'string' ? d.latest : '');
     });
     es.addEventListener('bye', e => {
       const d = parse(e.data);
@@ -381,6 +389,7 @@
     $('rows').replaceChildren();
     renderTail();
     show('s-chat');
+    setView(view().mode);
     const res = await api.history(sandbox);
     if (st.current !== sandbox) return;
     if (!res.ok) {
@@ -1058,6 +1067,264 @@
     }
   });
 
+  // ══ The Kanban: a leader's board, read only ═══════════════════════════
+  // Conversation | Kanban under the bar. The board is the route's answer
+  // drawn as it comes: one column at a time on a phone (a picker with the
+  // counts, or a swipe), all five side by side from 700 px. Nothing on it
+  // writes: no add, move, edit or delete. The selected column, each
+  // column's scroll and an open ticket survive a re-read.
+  function view(sandbox = st.current) {
+    let v = st.views.get(sandbox);
+    if (!v) { v = { mode: 'chat', board: null, col: null, scroll: {}, ticket: null, logTop: null, loading: false, again: false, timer: null }; st.views.set(sandbox, v); }
+    return v;
+  }
+  function setView(mode) {
+    const v = view();
+    const log = $('log');
+    if (mode === 'kanban' && v.mode === 'chat' && !log.hidden) v.logTop = log.scrollTop;
+    v.mode = mode;
+    const k = mode === 'kanban';
+    $('v-chat').setAttribute('aria-selected', String(!k));
+    $('v-kanban').setAttribute('aria-selected', String(k));
+    $('board').hidden = !k;
+    log.hidden = k;
+    $('composer').hidden = k;
+    if (k) {
+      saveDraft();
+      stopRecording(false);
+      if (v.board) renderBoard(); else $('kb-lanes').replaceChildren();
+      loadBoard();
+    } else if (v.logTop !== null) {
+      log.scrollTop = v.logTop;
+    }
+  }
+  $('v-chat').addEventListener('click', () => setView('chat'));
+  $('v-kanban').addEventListener('click', () => setView('kanban'));
+
+  function kbStatus(text) {
+    $('kb-status').textContent = text;
+    $('kb-status').hidden = !text;
+  }
+  async function loadBoard() {
+    const sandbox = st.current;
+    const v = view(sandbox);
+    if (v.loading) { v.again = true; return; }
+    v.loading = true;
+    if (!v.board) kbStatus('Loading the board…');
+    const res = await api.get(rcKbPaths(sandbox));
+    v.loading = false;
+    if (st.current !== sandbox) return;
+    if (!res.ok) {
+      kbStatus(res.status === 404 ? 'This leader is no longer running.' : rcFailText('Board', res).replace('Board not sent', 'The board could not be read'));
+      if (res.status === 404) { v.board = null; $('kb-lanes').replaceChildren(); $('kb-pick').replaceChildren(); }
+    } else {
+      kbStatus('');
+      const board = rcKbBoard(res.data);
+      const same = v.board && v.board.latest && v.board.latest === board.latest;
+      if (!same) {
+        v.board = board;
+        if (!v.col || !board.columns.some(c => c.id === v.col)) v.col = rcKbFirst(board);
+        if (view().mode === 'kanban') renderBoard();
+      }
+      if (v.ticket && view().mode === 'kanban') {
+        const key = v.ticket.card.key;
+        const fresh = v.board?.columns.flatMap(c => c.cards).find(c => c.key === key);
+        openTicket(fresh || v.ticket.card, true);
+      }
+    }
+    // A nudge that came during this read wants a newer board, unless this
+    // answer already is the one it named.
+    if (v.again) {
+      v.again = false;
+      if (!(v.want && v.board?.latest === v.want)) loadBoard();
+    }
+  }
+  // The `kanban` event: a short wait gathers a burst into one read.
+  function kbNudge(latest) {
+    const v = view();
+    if (v.board && latest && v.board.latest === latest) return;
+    v.want = latest;
+    clearTimeout(v.timer);
+    v.timer = setTimeout(() => { if (view().mode === 'kanban') loadBoard(); else v.board = null; }, 400);
+  }
+
+  const wide = window.matchMedia ? window.matchMedia('(min-width: 700px)') : { matches: false };
+  function renderBoard() {
+    const v = view();
+    const b = v.board;
+    if (!b) return;
+    const lanes = $('kb-lanes');
+    // Keep each column's scroll across a redraw.
+    for (const lane of lanes.querySelectorAll('.rc-kb-lane')) v.scroll[lane.dataset.col] = lane.querySelector('.rc-kb-list').scrollTop;
+    $('kb-pick').replaceChildren(...b.columns.map(c => {
+      const t = el('button', `rc-kb-tab rc-tone-${c.tone}`);
+      t.type = 'button';
+      t.setAttribute('role', 'tab');
+      t.setAttribute('aria-selected', String(c.id === v.col));
+      t.dataset.col = c.id;
+      t.append(el('span', null, c.title), el('span', 'rc-kb-count', c.count));
+      t.addEventListener('click', () => pickCol(c.id));
+      return t;
+    }));
+    lanes.replaceChildren(...b.columns.map(c => {
+      const lane = el('section', `rc-kb-lane rc-tone-${c.tone}${c.id === v.col ? ' rc-on' : ''}`);
+      lane.dataset.col = c.id;
+      const h = el('h3', 'rc-kb-h');
+      h.append(el('span', null, c.title), el('span', 'rc-kb-count', c.count));
+      const list = el('ul', 'rc-kb-list');
+      if (!c.cards.length) list.append(el('li', 'rc-kb-empty', c.empty));
+      for (const card of c.cards) list.append(cardEl(card));
+      if (c.older) list.append(el('li', 'rc-kb-older', `and ${c.older} older`));
+      lane.append(h, list);
+      return lane;
+    }));
+    for (const lane of lanes.querySelectorAll('.rc-kb-lane')) {
+      const top = v.scroll[lane.dataset.col];
+      if (top) lane.querySelector('.rc-kb-list').scrollTop = top;
+    }
+    $('kb-ticket').hidden = !v.ticket;
+    lanes.hidden = !!v.ticket;
+    $('kb-pick').hidden = !!v.ticket;
+    $('kb-pick').querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }
+  function pickCol(id) {
+    const v = view();
+    if (!v.board || v.col === id) return;
+    v.col = id;
+    renderBoard();
+  }
+  function cardEl(c) {
+    const li = el('li');
+    const b = el('button', `rc-kb-card${c.priority === 'p1' ? ' rc-kb-p1' : ''}`);
+    b.type = 'button';
+    b.dataset.key = c.key;
+    const top = el('span', 'rc-kb-top');
+    top.append(el('span', 'rc-kb-num', c.num));
+    if (c.priority !== 'none') top.append(el('span', `rc-kb-prio rc-kb-${c.priority}`, c.priority.toUpperCase()));
+    if (c.age) top.append(el('span', 'rc-kb-age', c.age));
+    b.append(top, el('span', 'rc-kb-title', c.title || c.num));
+    if (c.marks.length) {
+      const m = el('span', 'rc-kb-marks');
+      for (const x of c.marks) m.append(el('span', `rc-kb-mark rc-tone-${x.tone}`, x.label));
+      b.append(m);
+    }
+    if (c.thread) {
+      const t = el('span', `rc-kb-thread rc-tone-${c.thread_tone}`);
+      t.append(el('span', 'rc-kb-dot'), el('span', 'rc-kb-tname', c.thread));
+      if (c.thread_state) t.append(el('span', 'rc-kb-tstate', RC_KB_THREAD[c.thread_state] || c.thread_state));
+      b.append(t);
+    }
+    b.addEventListener('click', () => openTicket(c));
+    li.append(b);
+    return li;
+  }
+  // Swipe left or right on a phone: the next or the previous column.
+  let swipe = null;
+  $('kb-lanes').addEventListener('touchstart', e => {
+    if (wide.matches || e.touches.length !== 1) { swipe = null; return; }
+    swipe = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }, { passive: true });
+  $('kb-lanes').addEventListener('touchend', e => {
+    if (!swipe || !e.changedTouches.length) return;
+    const dx = e.changedTouches[0].clientX - swipe.x;
+    const dy = e.changedTouches[0].clientY - swipe.y;
+    swipe = null;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    const v = view();
+    const ids = v.board?.columns.map(c => c.id) || [];
+    const i = ids.indexOf(v.col) + (dx < 0 ? 1 : -1);
+    if (i >= 0 && i < ids.length) pickCol(ids[i]);
+  }, { passive: true });
+
+  // ── A ticket: what the card holds, and its detail when it has a number ──
+  async function openTicket(card, again) {
+    const v = view();
+    const sandbox = st.current;
+    v.ticket = { card };
+    const box = $('kb-ticket');
+    if (!again) {
+      box.replaceChildren(ticketView(card, null));
+      renderBoard();
+      $('s-chat').scrollTop = 0;
+    }
+    // A thread's own card has no ticket: the card is all there is.
+    if (!card.n) return;
+    const res = await api.get(rcKbPaths(sandbox, card.n));
+    if (st.current !== sandbox || v.ticket?.card.key !== card.key) return;
+    if (!res.ok) {
+      if (res.status === 404) { box.replaceChildren(ticketView(card, null, 'This ticket is not on the board any more.')); return; }
+      if (!again) box.replaceChildren(ticketView(card, null, rcFailText('Ticket', res).replace('Ticket not sent', 'The ticket could not be read')));
+      return;
+    }
+    const t = rcKbTicket(res.data);
+    const top = box.scrollTop;
+    box.replaceChildren(ticketView(t?.card || card, t));
+    box.scrollTop = top;
+  }
+  function closeTicket() {
+    const v = view();
+    v.ticket = null;
+    renderBoard();
+  }
+  function ticketView(card, t, note) {
+    const frag = document.createDocumentFragment();
+    const back = el('button', 'rc-kb-back');
+    back.type = 'button';
+    back.append(icon('M14.5 5.5 8 12l6.5 6.5'), el('span', null, 'Board'));
+    back.addEventListener('click', closeTicket);
+    frag.append(back);
+    const head_ = el('div', 'rc-kb-thead');
+    head_.append(el('span', 'rc-kb-num', t?.num || card.num));
+    const prio = t?.priority || card.priority;
+    if (prio !== 'none') head_.append(el('span', `rc-kb-prio rc-kb-${prio}`, RC_KB_PRIORITY[prio]));
+    const col = view().board?.columns.find(c => c.id === (t?.column || ''))?.title;
+    if (col) head_.append(el('span', 'rc-kb-tcol', col));
+    frag.append(head_, el('h2', 'rc-kb-ttitle', t?.title || card.title));
+    if (card.marks.length) {
+      const m = el('div', 'rc-kb-marks');
+      for (const x of card.marks) m.append(el('span', `rc-kb-mark rc-tone-${x.tone}`, x.label));
+      frag.append(m);
+    }
+    if (card.thread) {
+      const th = el('p', `rc-kb-thread rc-tone-${card.thread_tone}`);
+      th.append(el('span', 'rc-kb-dot'), el('span', 'rc-kb-tname', card.thread));
+      if (card.thread_state) th.append(el('span', 'rc-kb-tstate', RC_KB_THREAD[card.thread_state] || card.thread_state));
+      frag.append(th);
+    }
+    if (note) frag.append(el('p', 'rc-item-note', note));
+    if (!card.n) frag.append(el('p', 'rc-muted rc-small-text', 'A thread of the plan, with no ticket of its own.'));
+    if (t) {
+      if (t.description) frag.append(el('p', 'rc-kb-desc', t.description));
+      if (t.files.length) {
+        const box = el('div', 'rc-kv');
+        box.append(el('p', 'rc-kv-k', t.files.length === 1 ? '1 file' : `${t.files.length} files`));
+        const ul = el('ul', 'rc-kb-files');
+        for (const f of t.files) {
+          const li = el('li');
+          li.append(el('span', 'rc-file-path', f.name), el('span', 'rc-file-n', chatSize(f.size)));
+          ul.append(li);
+        }
+        box.append(ul, el('p', 'rc-muted rc-small-text', 'Files open on your Mac.'));
+        frag.append(box);
+      }
+      if (t.history.length) {
+        const box = el('div', 'rc-kv');
+        box.append(el('p', 'rc-kv-k', 'History'));
+        const ul = el('ul', 'rc-kb-hist');
+        for (const h of t.history) {
+          const li = el('li', `rc-tone-${h.tone}`);
+          li.append(el('span', 'rc-kb-when', h.when), el('span', null, h.text));
+          ul.append(li);
+        }
+        box.append(ul);
+        frag.append(box);
+      }
+    } else if (card.n && !note) {
+      frag.append(el('p', 'rc-muted', 'Loading…'));
+    }
+    return frag;
+  }
+
   // ══ Level 2: approving with Face ID ═══════════════════════════════════
   // Lists and details are read with the cookie; every action goes through
   // the sheet, a challenge bound to what is shown (its digest), Face ID, and
@@ -1107,6 +1374,7 @@
       show('s-chat');
       renderChatTitle();
       renderTail();
+      setView(view().mode);
       return;
     }
     showLeaders();

@@ -19,6 +19,8 @@
 // digest (a challenge with the old one is "changed"), {l2Replies: {kind:
 // [{status, body}]}} how the next challenge or action is answered,
 // {pkStates: [...]} the next passkey/status answers, {l2Reset: true}.
+// Kanban (API-kanban.md): {kanban: {sandbox: board | null}} a board (null:
+// 404, the leader stopped), {tickets: {"sandbox/n": detail}}.
 // Uploads follow API.md 2.6.1: the raw body, an id of 32 hex back, no path.
 // Usage: node tests/js/remote-standin.mjs [port]
 import http from 'node:http';
@@ -76,6 +78,8 @@ export function startStandin(port = 0) {
     uploadHold: false,
     transcribeDelay: 0,
     l2: null,
+    kanban: { shop: fx.kanban.board, website: fx.kanban.empty },
+    tickets: { 'shop/12': fx.kanban.ticket },
     holds: [],
   };
   const l2Fresh = () => {
@@ -196,6 +200,9 @@ export function startStandin(port = 0) {
       if (c.l2Digest) Object.assign(s.l2.digest, c.l2Digest);
       if (c.l2Replies) Object.assign(s.l2.replies, c.l2Replies);
       if (c.pkStates) s.l2.pkStates = c.pkStates;
+      if (c.kanban) Object.assign(s.kanban, c.kanban);
+      if (c.tickets) Object.assign(s.tickets, c.tickets);
+      if (c.kanbanReset) { s.kanban = { shop: fx.kanban.board, website: fx.kanban.empty }; s.tickets = { 'shop/12': fx.kanban.ticket }; }
       if ('uploadSlow' in c) s.uploadSlow = c.uploadSlow;
       if ('uploadHold' in c) { s.uploadHold = c.uploadHold; if (!c.uploadHold) s.holds.splice(0).forEach(r => r()); }
       if (c.emit) emit(c.emit.event, c.emit.data);
@@ -235,6 +242,14 @@ export function startStandin(port = 0) {
       s.streams.add(res);
       req.on('close', () => s.streams.delete(res));
       return;
+    }
+    const kb = /^\/r\/leaders\/([^/]+)\/kanban(?:\/(?:T-)?([0-9]{1,9}))?$/.exec(p);
+    if (kb && req.method === 'GET') {
+      const sb = decodeURIComponent(kb[1]);
+      if (!s.kanban[sb]) return send(res, 404, { error: 'not found' });
+      if (!kb[2]) return send(res, 200, s.kanban[sb]);
+      const t = s.tickets[`${sb}/${Number(kb[2])}`];
+      return t ? send(res, 200, t) : send(res, 404, { error: 'not found' });
     }
     const m = /^\/r\/leaders\/([^/]+)\/(history|message|answer|interrupt)$/.exec(p);
     if (m) {

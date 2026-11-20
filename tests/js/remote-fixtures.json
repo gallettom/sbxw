@@ -517,5 +517,432 @@
       },
       "expires_ms": 0
     }
+  },
+  "kanban": {
+    "board": {
+      "sandbox": "shop",
+      "latest": "9f3a0c51d27be4a8",
+      "summary": "2 planned · 2 in progress · 0 in test · 1 ready to merge · 14 merged",
+      "columns": [
+        {
+          "id": "planned",
+          "title": "Planned",
+          "tone": "neutral",
+          "help": "",
+          "empty": "Nothing planned.",
+          "count": 2,
+          "older": 0,
+          "cards": [
+            {
+              "key": "t:14",
+              "n": 14,
+              "num": "T-14",
+              "column": "planned",
+              "title": "Show the order total in the customer's currency on the receipt page and in the confirmation email",
+              "title_short": "Show the order total in the customer's currency on the receipt p",
+              "title_long": "Show the order total in the customer's currency on the receipt page and in the confirmation email",
+              "source": "person",
+              "priority": "p2",
+              "thread": null,
+              "thread_state": null,
+              "thread_tone": "neutral",
+              "marks": [],
+              "files": 0,
+              "validated": false,
+              "age": "1d"
+            },
+            {
+              "key": "t:15",
+              "n": 15,
+              "num": "T-15",
+              "column": "planned",
+              "title": "Refunds: a button for support",
+              "title_short": "Refunds: a button for support",
+              "title_long": "Refunds: a button for support",
+              "source": "person",
+              "priority": "none",
+              "thread": null,
+              "thread_state": null,
+              "thread_tone": "neutral",
+              "marks": [
+                {
+                  "id": "proposed",
+                  "label": "proposed",
+                  "tone": "blue",
+                  "help": ""
+                }
+              ],
+              "files": 0,
+              "validated": false,
+              "age": "3h"
+            }
+          ]
+        },
+        {
+          "id": "progress",
+          "title": "In progress",
+          "tone": "blue",
+          "help": "",
+          "empty": "Nothing in progress.",
+          "count": 2,
+          "older": 0,
+          "cards": [
+            {
+              "key": "t:12",
+              "n": 12,
+              "num": "T-12",
+              "column": "progress",
+              "title": "Orders table and its migration",
+              "title_short": "Orders table and its migration",
+              "title_long": "Orders table and its migration",
+              "source": "person",
+              "priority": "p1",
+              "thread": "db-schema",
+              "thread_state": "working",
+              "thread_tone": "blue",
+              "marks": [],
+              "files": 2,
+              "validated": false,
+              "age": "40m"
+            },
+            {
+              "key": "th:checkout",
+              "n": null,
+              "num": "thread",
+              "column": "progress",
+              "title": "checkout",
+              "title_short": "checkout",
+              "title_long": "checkout",
+              "source": "person",
+              "priority": "none",
+              "thread": "checkout",
+              "thread_state": "blocked",
+              "thread_tone": "amber",
+              "marks": [
+                {
+                  "id": "blocked",
+                  "label": "blocked",
+                  "tone": "amber",
+                  "help": ""
+                }
+              ],
+              "files": 0,
+              "validated": false,
+              "age": "12m"
+            }
+          ]
+        },
+        {
+          "id": "test",
+          "title": "In test",
+          "tone": "purple",
+          "help": "",
+          "empty": "Nothing in test.",
+          "count": 0,
+          "older": 0,
+          "cards": []
+        },
+        {
+          "id": "ready",
+          "title": "Ready to merge",
+          "tone": "amber",
+          "help": "",
+          "empty": "Nothing ready to merge.",
+          "count": 1,
+          "older": 0,
+          "cards": [
+            {
+              "key": "t:9",
+              "n": 9,
+              "num": "T-9",
+              "column": "ready",
+              "title": "Fix the footer links on [path] and the contact page",
+              "title_short": "Fix the footer links on [path] and the contact page",
+              "title_long": "Fix the footer links on [path] and the contact page",
+              "source": "person",
+              "priority": "none",
+              "thread": "footer",
+              "thread_state": "done",
+              "thread_tone": "green",
+              "marks": [],
+              "files": 0,
+              "validated": false,
+              "age": "5h"
+            }
+          ]
+        },
+        {
+          "id": "merged",
+          "title": "Merged",
+          "tone": "green",
+          "help": "",
+          "empty": "Nothing merged yet.",
+          "count": 14,
+          "older": 2,
+          "cards": [
+            {
+              "key": "t:8",
+              "n": 8,
+              "num": "T-8",
+              "column": "merged",
+              "title": "Merged ticket number 8",
+              "title_short": "Merged ticket number 8",
+              "title_long": "Merged ticket number 8",
+              "source": "person",
+              "priority": "none",
+              "thread": "thread-8",
+              "thread_state": "done",
+              "thread_tone": "green",
+              "marks": [],
+              "files": 0,
+              "validated": false,
+              "age": "8d"
+            },
+            {
+              "key": "t:7",
+              "n": 7,
+              "num": "T-7",
+              "column": "merged",
+              "title": "Merged ticket number 7",
+              "title_short": "Merged ticket number 7",
+              "title_long": "Merged ticket number 7",
+              "source": "person",
+              "priority": "none",
+              "thread": "thread-7",
+              "thread_state": "done",
+              "thread_tone": "green",
+              "marks": [],
+              "files": 0,
+              "validated": false,
+              "age": "7d"
+            },
+            {
+              "key": "t:6",
+              "n": 6,
+              "num": "T-6",
+              "column": "merged",
+              "title": "Merged ticket number 6",
+              "title_short": "Merged ticket number 6",
+              "title_long": "Merged ticket number 6",
+              "source": "person",
+              "priority": "none",
+              "thread": "thread-6",
+              "thread_state": "done",
+              "thread_tone": "green",
+              "marks": [],
+              "files": 0,
+              "validated": false,
+              "age": "6d"
+            },
+            {
+              "key": "t:5",
+              "n": 5,
+              "num": "T-5",
+              "column": "merged",
+              "title": "Merged ticket number 5",
+              "title_short": "Merged ticket number 5",
+              "title_long": "Merged ticket number 5",
+              "source": "person",
+              "priority": "none",
+              "thread": "thread-5",
+              "thread_state": "done",
+              "thread_tone": "green",
+              "marks": [],
+              "files": 0,
+              "validated": false,
+              "age": "5d"
+            },
+            {
+              "key": "t:4",
+              "n": 4,
+              "num": "T-4",
+              "column": "merged",
+              "title": "Merged ticket number 4",
+              "title_short": "Merged ticket number 4",
+              "title_long": "Merged ticket number 4",
+              "source": "person",
+              "priority": "none",
+              "thread": "thread-4",
+              "thread_state": "done",
+              "thread_tone": "green",
+              "marks": [],
+              "files": 0,
+              "validated": false,
+              "age": "4d"
+            },
+            {
+              "key": "t:3",
+              "n": 3,
+              "num": "T-3",
+              "column": "merged",
+              "title": "Merged ticket number 3",
+              "title_short": "Merged ticket number 3",
+              "title_long": "Merged ticket number 3",
+              "source": "person",
+              "priority": "none",
+              "thread": "thread-3",
+              "thread_state": "done",
+              "thread_tone": "green",
+              "marks": [],
+              "files": 0,
+              "validated": false,
+              "age": "3d"
+            },
+            {
+              "key": "t:2",
+              "n": 2,
+              "num": "T-2",
+              "column": "merged",
+              "title": "Merged ticket number 2",
+              "title_short": "Merged ticket number 2",
+              "title_long": "Merged ticket number 2",
+              "source": "person",
+              "priority": "none",
+              "thread": "thread-2",
+              "thread_state": "done",
+              "thread_tone": "green",
+              "marks": [],
+              "files": 0,
+              "validated": false,
+              "age": "2d"
+            },
+            {
+              "key": "t:1",
+              "n": 1,
+              "num": "T-1",
+              "column": "merged",
+              "title": "Merged ticket number 1",
+              "title_short": "Merged ticket number 1",
+              "title_long": "Merged ticket number 1",
+              "source": "person",
+              "priority": "none",
+              "thread": "thread-1",
+              "thread_state": "done",
+              "thread_tone": "green",
+              "marks": [],
+              "files": 0,
+              "validated": false,
+              "age": "1d"
+            }
+          ]
+        }
+      ]
+    },
+    "ticket": {
+      "sandbox": "shop",
+      "ticket": {
+        "n": 12,
+        "num": "T-12",
+        "title": "Orders table and its migration",
+        "description": "Columns: customer id, total in cents, currency, state.\nIndex on the customer id.\n\nThe migration must be reversible; see [path] for the old schema.",
+        "priority": "p1",
+        "source": "person",
+        "column": "progress",
+        "card": {
+          "key": "t:12",
+          "n": 12,
+          "num": "T-12",
+          "column": "progress",
+          "title": "Orders table and its migration",
+          "title_short": "Orders table and its migration",
+          "title_long": "Orders table and its migration",
+          "source": "person",
+          "priority": "p1",
+          "thread": "db-schema",
+          "thread_state": "working",
+          "thread_tone": "blue",
+          "marks": [],
+          "files": 2,
+          "validated": false,
+          "age": "40m"
+        },
+        "files": [
+          {
+            "name": "schema-sketch.png",
+            "size": 41234,
+            "kind": "png"
+          },
+          {
+            "name": "notes.txt",
+            "size": 812,
+            "kind": "text"
+          }
+        ],
+        "history": [
+          {
+            "when": "2h",
+            "text": "Created by you",
+            "tone": "neutral"
+          },
+          {
+            "when": "1h",
+            "text": "Planned in a plan of the lead",
+            "tone": "neutral"
+          },
+          {
+            "when": "40m",
+            "text": "Thread db-schema started",
+            "tone": "blue"
+          }
+        ]
+      }
+    },
+    "empty": {
+      "sandbox": "website",
+      "latest": "0000000000000000",
+      "summary": "",
+      "columns": [
+        {
+          "id": "planned",
+          "title": "Planned",
+          "tone": "neutral",
+          "help": "",
+          "empty": "Nothing planned.",
+          "count": 0,
+          "older": 0,
+          "cards": []
+        },
+        {
+          "id": "progress",
+          "title": "In progress",
+          "tone": "neutral",
+          "help": "",
+          "empty": "Nothing in progress.",
+          "count": 0,
+          "older": 0,
+          "cards": []
+        },
+        {
+          "id": "test",
+          "title": "In test",
+          "tone": "neutral",
+          "help": "",
+          "empty": "Nothing in test.",
+          "count": 0,
+          "older": 0,
+          "cards": []
+        },
+        {
+          "id": "ready",
+          "title": "Ready to merge",
+          "tone": "neutral",
+          "help": "",
+          "empty": "Nothing ready to merge.",
+          "count": 0,
+          "older": 0,
+          "cards": []
+        },
+        {
+          "id": "merged",
+          "title": "Merged",
+          "tone": "neutral",
+          "help": "",
+          "empty": "Nothing merged yet.",
+          "count": 0,
+          "older": 0,
+          "cards": []
+        }
+      ]
+    }
   }
 }
