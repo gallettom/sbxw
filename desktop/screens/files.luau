@@ -132,34 +132,67 @@ local function locations(ui, narrow)
   return column(kids)
 end
 
+-- A name shortened in the middle to `n` characters at most ("report…final.md"),
+-- so the end that says what it is stays.
+local function mid(t, n)
+  local len = utf8.len(t)
+  if not len then return t end
+  if n < 5 then n = 5 end
+  if len <= n then return t end
+  local keep = n - 1
+  local head = math.ceil(keep / 2)
+  local tail = keep - head
+  return string.sub(t, 1, utf8.offset(t, head + 1) - 1) .. "…" .. string.sub(t, utf8.offset(t, len - tail + 1))
+end
+
 -- WHERE AM I: the folder as pressable segments (the home as ~), long paths
--- folding in the middle (the hidden segments in a menu), with back, up,
--- copy and "Go to…" (a typed path).
-local function crumbs(state, ui, narrow)
+-- folding in the middle (the hidden segments in a menu) as far as `w` points
+-- allow (about 7.5 per character), a long name shortened in the middle, with
+-- back, up, copy and "Go to…" (a typed path). Wide: one row; narrow, the
+-- buttons first and the path on a row of its own under them.
+-- Returns the parts: back and up, the path row (or the typed path's field),
+-- the buttons that go after it, and "Go to…".
+local function crumbs(state, ui, narrow, w)
   local cs = ui.crumbs or {}
-  local kids = { gap = 4, grow = 1, min_w = 0, key = "files-crumbs",
-    button{ "←", key = "files-back", on = "back", variant = "ghost", dense = true, disabled = not ui.can_back, help = "Back to the folder before" },
-    button{ "↑", key = "files-up", on = "up", variant = "ghost", dense = true, disabled = not (ui.tab == "files" and ui.can_up), help = "The folder above" },
-  }
+  local back = button{ "←", key = "files-back", on = "back", variant = "ghost", dense = true, disabled = not ui.can_back, help = "Back to the folder before" }
+  local up = button{ "↑", key = "files-up", on = "up", variant = "ghost", dense = true, disabled = not (ui.tab == "files" and ui.can_up), help = "The folder above" }
   if state.goto then
-    kids[#kids + 1] = input{ id = "files-path", value = ui.path or "", placeholder = "/path or ~/path, then Return", on_submit = "go", grow = 1 }
-    kids[#kids + 1] = button{ icon = "close", key = "files-goto-close", on = "goto", variant = "ghost", dense = true, help = "Back to the path" }
-    return row(kids)
+    return { back, up },
+      { input{ id = "files-path", value = ui.path or "", placeholder = "/path or ~/path, then Return", on_submit = "go", grow = 1, min_w = 80 },
+        button{ icon = "close", key = "files-goto-close", on = "goto", variant = "ghost", dense = true, help = "Back to the path" } },
+      nil
   end
-  local max = narrow and 3 or 7
+  local max = narrow and 4 or 7
+  local budget = math.max(10, math.floor(w / 7.5))
+  local n = #cs
+  local function cost(i) return (utf8.len(cs[i].label) or #cs[i].label) + 3 end
+  -- The tail that fits beside the first segment and the "…" menu.
+  local total = 0
+  for i = 1, n do total = total + cost(i) end
+  local from = 1
+  if n > max or total > budget then
+    from = n
+    local used = cost(1) + 8 + math.min(cost(n), math.max(10, budget - cost(1) - 8))
+    while from > 2 and (n - from + 1) < (max - 1) and used + cost(from - 1) <= budget do
+      from = from - 1
+      used = used + cost(from)
+    end
+    if from <= 2 then from = 1 end
+  end
+  local last_cap = math.max(10, budget - (from > 1 and (cost(1) + 8) or 0) - 3)
+  -- Each part in a row of its own: the path row holds no control directly,
+  -- so it never wraps its segments onto lines (it clips at its edge).
+  local path = row{ gap = 0, grow = 1, min_w = 0, clip = true, key = "files-crumbs-path" }
+  local function add(x) path[#path + 1] = row{ x } end
   local function seg(i, c, last)
-    return button{ c.label, key = "files-crumb-" .. i, on = "crumb", arg = c.path, variant = last and "neutral" or "ghost", dense = true,
+    return button{ mid(c.label, last and last_cap or 16), key = "files-crumb-" .. i, on = "crumb", arg = c.path, variant = last and "neutral" or "ghost", dense = true,
       color = last and "text-bright" or "text-muted", disabled = c.path == nil or last, help = c.path }
   end
-  local n = #cs
-  local path = row{ gap = 0, grow = 1, min_w = 0, clip = true }
-  local function add(x) path[#path + 1] = x end
   for i, c in ipairs(cs) do
-    local fold_from, fold_to = 2, n - (max - 2)
-    if n > max and i >= fold_from and i <= fold_to then
-      if i == fold_from then
+    if from > 1 and i >= 2 and i < from then
+      if i == 2 then
         local items = {}
-        for j = fold_from, fold_to do items[#items + 1] = { id = cs[j].path, label = cs[j].label } end
+        for j = 2, from - 1 do items[#items + 1] = { id = cs[j].path, label = cs[j].label } end
         add(menu{ "…", id = "files-crumbs-more", items = items, on = "crumb_pick" })
         add(text{ "/", size = "sm", color = "text-dim" })
       end
@@ -168,14 +201,13 @@ local function crumbs(state, ui, narrow)
       if i < n and not (i == 1 and c.label == "/") then add(text{ "/", size = "sm", color = "text-dim" }) end
     end
   end
-  kids[#kids + 1] = path
+  local tail = {}
   if ui.tab == "files" and ui.path then
-    kids[#kids + 1] = button{ icon = "copy", key = "files-copy-folder", on = "copy_folder", arg = ui.path, variant = "ghost", dense = true, help = "Copy " .. ui.path }
-    kids[#kids + 1] = button{ icon = "flag", key = "files-star", on = "star", arg = ui.path, variant = "ghost", dense = true,
+    tail[#tail + 1] = button{ icon = "copy", key = "files-copy-folder", on = "copy_folder", arg = ui.path, variant = "ghost", dense = true, help = "Copy " .. ui.path }
+    tail[#tail + 1] = button{ icon = "flag", key = "files-star", on = "star", arg = ui.path, variant = "ghost", dense = true,
       color = ui.starred and "amber" or "text-muted", help = ui.starred and "Unpin this folder" or "Pin this folder among the Locations" }
   end
-  kids[#kids + 1] = button{ "Go to…", key = "files-goto", on = "goto", variant = "ghost", dense = true, help = "Type a path (~ is the agent's home)" }
-  return row(kids)
+  return { back, up }, { path }, tail, button{ "Go to…", key = "files-goto", on = "goto", variant = "ghost", dense = true, help = "Type a path (~ is the agent's home)" }
 end
 
 -- Upload: one header button; this card under the header while it is open,
@@ -223,14 +255,31 @@ local function uploads(ui, dragging)
 end
 
 -- The list's own bar: the filter (typing anywhere in the list filters too),
--- Hidden files as a small toggle, the sort.
-local function listbar(ui)
-  return row{ gap = 8, w = "full", key = "files-listbar",
-    input{ id = "files-filter", value = ui.filter or "", placeholder = "Filter by name", on = "filter", grow = 1, min_w = 90 },
-    checkbox{ "Hidden", value = ui.hidden == true, on = "hidden", key = "files-hidden" },
-    ui.tab == "files" and menu{ ui.sort == "date" and "Date" or "Name", id = "files-sort", icon = "rows", dense = true,
-      items = { { id = "name", label = "Sort by name" }, { id = "date", label = "Sort by date, newest first" } }, on = "sort" } or false,
+-- Hidden files as a small toggle, the sort. `w` is the list column's width
+-- as the screen estimates it (the core's split keeps it above 220): from 310
+-- the words stay (Hidden, the sort's name); under that Hidden is an eye
+-- button and the sort an icon, each with its words in the tooltip, and the
+-- placeholder shortens. A row that still does not fit wraps onto a second
+-- line (the core wraps a row of controls) rather than cutting a control.
+local function listbar(ui, w)
+  local full = w >= 310
+  local sort_name = ui.sort == "date" and "Date" or "Name"
+  local sort_items = { { id = "name", label = "Sort by name" }, { id = "date", label = "Sort by date, newest first" } }
+  local kids = { gap = 8, w = "full", key = "files-listbar", wrap = true,
+    input{ id = "files-filter", value = ui.filter or "", placeholder = full and "Filter by name" or "Filter", on = "filter", grow = 1, min_w = full and 124 or 80 },
   }
+  if full then
+    kids[#kids + 1] = checkbox{ "Hidden", value = ui.hidden == true, on = "hidden", key = "files-hidden" }
+  else
+    kids[#kids + 1] = button{ icon = "eye", key = "files-hidden", on = "hidden", arg = not (ui.hidden == true), variant = ui.hidden and "neutral" or "ghost", dense = true,
+      color = ui.hidden and "accent" or "text-muted",
+      help = ui.hidden and "Hidden files are shown: press to hide them" or "Hidden files (dotfiles) are not shown: press to show them" }
+  end
+  if ui.tab == "files" then
+    kids[#kids + 1] = menu{ full and sort_name or "", id = "files-sort", icon = "rows", dense = true, items = sort_items, on = "sort",
+      help = full and nil or ("Sort: " .. sort_name:lower()) }
+  end
+  return row(kids)
 end
 
 -- A folder of .sbxw-artifacts: one row with its file count, folded until
@@ -329,18 +378,22 @@ local function rows(ui, flat)
   return scroll{ column(list) }
 end
 
-local function preview(ui, narrow)
+-- `w`: the reader's width as the screen estimates it. Under 380 the action
+-- row is icons, each with its words in the tooltip (a row that still does
+-- not fit wraps onto a second line).
+local function preview(ui, narrow, w)
   local s = ui.selected
   if not s then
     return column{ h = "full", pad = 8, note("Pick a file to preview it.") }
   end
   local p = ui.preview or {}
   local isfile = s.kind == "file"
-  local acts = { gap = 4, w = "full",
-    isfile and button{ "Download", key = "files-download", icon = "chevron-down", on = "download", help = "Into Downloads (never over a file there)" } or false,
+  local words = w >= 380
+  local acts = { gap = 4, w = "full", key = "files-acts",
+    isfile and button{ words and "Download" or nil, key = "files-download", icon = "chevron-down", on = "download", help = words and "Into Downloads (never over a file there)" or "Download: into Downloads (never over a file there)" } or false,
     isfile and button{ icon = "folder", key = "files-reveal", on = "reveal", variant = "ghost", help = "Download it and show it in its folder" } or false,
-    isfile and button{ "Open", key = "files-open-with", on = "open_with", variant = "ghost", help = "With this computer's app; the app asks first, and never opens programs or scripts" } or false,
-    isfile and button{ "Save as…", key = "files-save-as", on = "save_as", variant = "ghost", help = "Choose where (the app asks first)" } or false,
+    isfile and button{ words and "Open" or nil, icon = (not words) and "play" or nil, key = "files-open-with", on = "open_with", variant = "ghost", help = (words and "" or "Open: ") .. "With this computer's app; the app asks first, and never opens programs or scripts" } or false,
+    isfile and button{ words and "Save as…" or nil, icon = (not words) and "file" or nil, key = "files-save-as", on = "save_as", variant = "ghost", help = (words and "" or "Save as: ") .. "Choose where (the app asks first)" } or false,
     button{ icon = "copy", key = "files-copy-path", on = "copy", variant = "ghost", help = "Copy the path, as the agent sees it" },
     spacer{},
     s.can_delete and button{ icon = "trash", key = "files-delete", on = "delete", variant = "ghost", color = "red", help = "Delete it (the app asks first)" } or false,
@@ -416,17 +469,47 @@ return {
       { id = "refresh", label = "Read the lists again", icon = "reload" },
       { id = "codemap", label = ui.has_map and "Code map" or "Generate code map", icon = "sparkle" },
     }
-    local head = row{ gap = 8, w = "full", key = "files-head",
-      crumbs(state, ui, narrow),
-      codemap_button(ui, narrow),
-      button{ (not narrow) and "Upload" or nil, key = "files-upload", icon = "plus", on = "upload", variant = open_up and "neutral" or "ghost", dense = true,
-        help = "Upload into " .. ui.sandbox .. ": drop files on the explorer, choose them or paste a picture" },
-      button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", dense = true, help = "Read the lists again" },
-      menu{ "", id = "files-actions", icon = "more", items = actions, on = "action", arg = { sandbox = ui.sandbox, has_map = ui.has_map == true } },
-    }
+    local ow = over.w or 1000
+    local three = ow >= 900
+    -- Widths as the screen estimates them, to choose between words and icons
+    -- (the core's split keeps the list over 220 pt and the reader over 340).
+    local body_w = ow - 24
+    local split_w = three and (body_w - 249) or body_w
+    local ratio = three and 0.44 or 0.4
+    local tree_w = narrow and body_w or math.max(220, split_w * ratio - 4)
+    local reader_w = narrow and body_w or math.max(340, split_w * (1 - ratio) - 4)
+    local codemap = codemap_button(ui, narrow)
+    local upload_btn = button{ (not narrow) and "Upload" or nil, key = "files-upload", icon = "plus", on = "upload", variant = open_up and "neutral" or "ghost", dense = true,
+      help = "Upload into " .. ui.sandbox .. ": drop files on the explorer, choose them or paste a picture" }
+    local refresh_btn = button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", dense = true, help = "Read the lists again" }
+    local more_menu = menu{ "", id = "files-actions", icon = "more", items = actions, on = "action", arg = { sandbox = ui.sandbox, has_map = ui.has_map == true } }
+    local head
+    if narrow then
+      -- Narrow: the buttons on one row, the path on a row of its own under it.
+      local lead, mid_row, tail, goto_btn = crumbs(state, ui, true, body_w - 24 * 2 - 16)
+      local buttons = { gap = 8, w = "full", key = "files-head-buttons" }
+      for _, x in ipairs(lead) do buttons[#buttons + 1] = x end
+      buttons[#buttons + 1] = spacer{}
+      if goto_btn then buttons[#buttons + 1] = goto_btn end
+      buttons[#buttons + 1] = codemap
+      buttons[#buttons + 1] = upload_btn
+      buttons[#buttons + 1] = refresh_btn
+      buttons[#buttons + 1] = more_menu
+      local path_row = { gap = 4, w = "full", key = "files-crumbs" }
+      for _, x in ipairs(mid_row) do path_row[#path_row + 1] = x end
+      for _, x in ipairs(tail or {}) do path_row[#path_row + 1] = x end
+      head = column{ gap = 4, w = "full", key = "files-head", row(buttons), row(path_row) }
+    else
+      local lead, mid_row, tail, goto_btn = crumbs(state, ui, false, ow - 465)
+      local c = { gap = 4, grow = 1, min_w = 0, key = "files-crumbs" }
+      for _, x in ipairs(lead) do c[#c + 1] = x end
+      for _, x in ipairs(mid_row) do c[#c + 1] = x end
+      for _, x in ipairs(tail or {}) do c[#c + 1] = x end
+      if goto_btn then c[#c + 1] = goto_btn end
+      head = row{ gap = 8, w = "full", key = "files-head", row(c), codemap, upload_btn, refresh_btn, more_menu }
+    end
     local top = { gap = 8, w = "full", head }
     if open_up then top[#top + 1] = uploads(ui, dragging) end
-    local three = (over.w or 1000) >= 900
     -- The scope beside the overlay's title ("Files in [web-app v]"): the core
     -- draws this row in its header (screen.rs, TITLE_SLOT) and the picker
     -- itself (scope.rs).
@@ -443,10 +526,10 @@ return {
       if state.pane == "reader" and ui.selected then
         return column{ h = "full", gap = 8, w = "full",
           row{ w = "full", button{ "← Files", key = "files-to-tree", on = "to_tree", variant = "ghost", tone = "blue", help = "Back to the list" }, spacer{} },
-          preview(ui, true) }
+          preview(ui, true, body_w) }
       end
       top[#top + 1] = scroll{ key = "files-tree-scroll", column{ gap = 8, w = "full",
-        locations(ui, true), listing_head(ui), list_head, listbar(ui), rows(ui, true) } }
+        locations(ui, true), listing_head(ui), list_head, listbar(ui, tree_w), rows(ui, true) } }
       top.h = "full"
       return column(top)
     end
@@ -457,11 +540,11 @@ return {
       (not three) and locations(ui, true) or false,
       listing_head(ui),
       list_head,
-      listbar(ui),
+      listbar(ui, tree_w),
       rows(ui),
     }
     -- The Outline beside the text needs a reader of about 560 pt; under that (an overlay under 1200 pt) it is a menu above the text.
-    local reading = split{ id = "files-split", vertical = true, ratio = three and 0.44 or 0.4, tree, preview(ui, (over.w or 1000) < 1200) }
+    local reading = split{ id = "files-split", vertical = true, ratio = ratio, min_a = 220, min_b = 340, tree, preview(ui, ow < 1200, reader_w) }
     if three then
       top[#top + 1] = row{ gap = 12, w = "full", grow = 1, min_h = 0, align = "stretch", key = "files-columns",
         column{ w = 224, h = "full", min_h = 0, gap = 8, key = "files-left",
@@ -510,7 +593,7 @@ return {
       local id = (type(v) == "string" and v ~= "") and v or a
       if id then return intent("files_place", { id = id }) end
     end,
-    hidden = function(_, _, on) return intent("files_hidden", { on = on }) end,
+    hidden = function(_, a, on) if on == nil then on = a end return intent("files_hidden", { on = on == true }) end,
     filter = function(_, _, t) return intent("files_filter", { text = t or "" }) end,
     more = function() return intent("files_more", {}) end,
     fold = function(_, id) return intent("files_fold", { id = id }) end,

@@ -178,6 +178,8 @@ pub struct Node {
     /// `split` and `divider`: true for side by side (a vertical divider).
     pub vertical: bool,
     pub stick_bottom: bool,
+    /// `split`: the least length, in points, each side keeps (0: no least).
+    pub split_min: [f32; 2],
     /// `scroll`: its edges fade over this many points where content is hidden under them.
     pub fade: Option<f32>,
     /// `textarea`: visible lines (default 4).
@@ -272,6 +274,7 @@ impl Node {
             secure: false,
             vertical: false,
             stick_bottom: false,
+            split_min: [0.0, 0.0],
             fade: None,
             rows: 4,
             fill_image: false,
@@ -332,7 +335,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("icon", Kind::Icon, Positional::Text, &["color", "size"]),
     ("badge", Kind::Badge, Positional::Text, &["tone", "pill"]),
     ("dot", Kind::Dot, Positional::None, &["tone"]),
-    ("split", Kind::Split, Positional::Two, &["id", "vertical", "ratio"]),
+    ("split", Kind::Split, Positional::Two, &["id", "vertical", "ratio", "min_a", "min_b"]),
     ("spacer", Kind::Spacer, Positional::None, &[]),
     ("divider", Kind::Divider, Positional::None, &["vertical", "color"]),
     ("menu", Kind::Menu, Positional::Text, &["id", "items", "on", "arg", "icon", "variant", "disabled", "dense", "keys", "tab_stop", "tone"]),
@@ -1103,6 +1106,8 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
             }
         }
         "ratio" => n.value = J::from(num_of(v)?.clamp(0.1, 0.9) as f64),
+        "min_a" => n.split_min[0] = num_of(v)?.clamp(0.0, 2000.0),
+        "min_b" => n.split_min[1] = num_of(v)?.clamp(0.0, 2000.0),
         "placeholder" => n.placeholder = Some(string_of(v)?),
         "scope" => n.scope = lua_to_json(v, 0)?,
         "switch" => n.switch = bool_of(v)?,
@@ -1392,7 +1397,7 @@ mod tests {
             button{ "Stop", on = "stop", arg = { name = "x", n = 2 }, variant = "danger", icon = "stop", help = "Stop it" },
             input{ id = "q", value = "abc", placeholder = "Search", on = "typed", on_submit = "go" },
             select{ id = "s", items = { "a", { id = "b", label = "Bee", icon = "check" } }, value = "b", on = "pick" },
-            split{ id = "sp", ratio = 0.3, vertical = true, text"l", text"r" },
+            split{ id = "sp", ratio = 0.3, min_a = 120, min_b = 200, vertical = true, text"l", text"r" },
         }"#)
         .unwrap();
         assert_eq!(n.kind, Kind::Row);
@@ -1404,6 +1409,7 @@ mod tests {
         assert_eq!(n.children[1].arg, serde_json::json!({ "name": "x", "n": 2 }));
         assert_eq!(n.children[3].items[1], Item::plain("b", "Bee", Some("check")));
         assert_eq!(n.children[4].value, serde_json::json!(0.30000001192092896));
+        assert_eq!(n.children[4].split_min, [120.0, 200.0]);
 
         for (src, want) in [
             ("text{ 'a', colour = 'red' }", "text: unknown prop 'colour'"),

@@ -1913,19 +1913,37 @@ impl Build<'_> {
 
     fn split<S: Host>(&mut self, n: &Node) -> El {
         let id = n.id.clone().unwrap_or_default();
-        let (ratio, _) = self.ui.splits.get(&id).copied().unwrap_or((0.5, 0.0));
+        let (ratio, len) = self.ui.splits.get(&id).copied().unwrap_or((0.5, 0.0));
+        let (lo, hi) = split_range(len, n.split_min);
+        // A ratio stored before the least sizes (or in a larger window) shows inside the range.
+        let ratio = ratio.clamp(lo, hi);
         let a = self.node::<S>(&n.children[0]);
         let b = self.node::<S>(&n.children[1]);
         let screen = self.name.clone();
-        split_view::<S, _>(n.vertical, ratio, a, b, &id, move |s: &mut S, id: &str| s.screen(&screen).ui.splits.entry(id.to_string()).or_insert((0.5, 0.0)))
+        split_view::<S, _>(n.vertical, ratio, n.split_min, a, b, &id, move |s: &mut S, id: &str| s.screen(&screen).ui.splits.entry(id.to_string()).or_insert((0.5, 0.0)))
     }
 }
 
+/// The range a split's ratio may take for a container `len` points long
+/// (0 while unknown): 0.1 to 0.9, narrowed so side A keeps `min[0]` points
+/// and side B `min[1]` (the handle's gutter left out). When both cannot be
+/// kept, A keeps its minimum and B takes what is left.
+pub fn split_range(len: f32, min: [f32; 2]) -> (f32, f32) {
+    let (mut lo, mut hi) = (0.1f32, 0.9f32);
+    let room = len - theme::layout::GUTTER;
+    if room > 0.0 {
+        lo = lo.max(min[0] / room).min(1.0);
+        hi = hi.min(1.0 - min[1] / room).max(lo);
+    }
+    (lo, hi)
+}
+
 /// Two children side by side (`vertical`) or stacked, the first taking
-/// `ratio` of the length, with a 6 pt handle between them that drags the ratio.
+/// `ratio` of the length, with a 6 pt handle between them that drags the ratio
+/// (never past `min`, the least length each side keeps: see [`split_range`]).
 /// `get` finds the `(ratio, length)` pair in the app's state. Used by the
 /// `split` element and by the core's pane area.
-pub fn split_view<S: 'static, F>(vertical: bool, ratio: f32, a: El, b: El, id: &str, get: F) -> El
+pub fn split_view<S: 'static, F>(vertical: bool, ratio: f32, min: [f32; 2], a: El, b: El, id: &str, get: F) -> El
 where
     F: for<'a> Fn(&'a mut S, &str) -> &'a mut (f32, f32) + 'static,
 {
@@ -1936,15 +1954,17 @@ where
     let handle = if vertical { el().w(theme::layout::GUTTER).h_full().cursor(Cursor::ResizeColumn) } else { el().h(theme::layout::GUTTER).w_full().cursor(Cursor::ResizeRow) };
     let handle = handle.key(handle_key).hover(c("border")).on_drag(move |s: &mut S, d: &mut rune::Drag, _tx| {
         let r = g1(s, &id1);
+        let (lo, hi) = split_range(r.1, min);
         if matches!(d.phase, rune::Phase::Down) {
-            d.data = r.0;
+            d.data = r.0.clamp(lo, hi);
         }
         let len = r.1.max(1.0);
         let moved = if vertical { d.dx } else { d.dy };
-        r.0 = (d.data + moved / len).clamp(0.1, 0.9);
+        r.0 = (d.data + moved / len).clamp(lo, hi);
     });
     // Flex basis 0, so the two take `ratio` and `1 - ratio` of what the handle leaves.
     let (first, second) = (a.grow(ratio).min_w(0.0).min_h(0.0), b.grow(1.0 - ratio).min_w(0.0).min_h(0.0));
+    let (first, second) = if vertical { (first.min_w(min[0]), second.min_w(min[1])) } else { (first.min_h(min[0]), second.min_h(min[1])) };
     let base = if vertical { row() } else { col() };
     base.w_full().h_full().min_w(0.0).min_h(0.0).items_stretch().child(first).child(handle).child(second).on_layout(move |s: &mut S, r: [f32; 4]| {
         let e = g2(s, &id2);
@@ -1969,6 +1989,27 @@ fn text_style(st: &Style, size: f32, weight: f32) -> TextStyle {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn a_split_keeps_the_least_sizes_and_the_old_range_without_them() {
+        // Without them: 0.1 to 0.9, as before, at any length (and unknown).
+        for len in [0.0, 300.0, 720.0, 860.0, 1284.0] {
+            assert_eq!(split_range(len, [0.0, 0.0]), (0.1, 0.9), "{len}");
+        }
+        // With them: each side keeps its minimum (the 8 pt handle is not shared out).
+        for len in [1284.0f32, 860.0, 720.0] {
+            let (lo, hi) = split_range(len, [220.0, 340.0]);
+            let room = len - theme::layout::GUTTER;
+            assert!(lo * room >= 220.0 - 0.01 && (1.0 - hi) * room >= 340.0 - 0.01, "{len}: {lo} {hi}");
+            assert!(lo <= hi);
+        }
+        // Too short for both: the first keeps its minimum, the second takes the rest.
+        let (lo, hi) = split_range(500.0, [220.0, 340.0]);
+        assert_eq!(lo, hi);
+        assert!((lo * (500.0 - theme::layout::GUTTER) - 220.0).abs() < 0.01);
+        // A minimum wider than the whole: all to the first, never above 1.
+        assert_eq!(split_range(300.0, [900.0, 0.0]), (1.0, 1.0));
+    }
 
     const SCREEN: &str = r#"
 return {
