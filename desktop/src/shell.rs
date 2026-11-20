@@ -1788,8 +1788,22 @@ impl App {
             if let Some(i) = self.index_of(u) {
                 self.remove_pane(i);
             }
+            self.refocus = true;
         }
-        self.refocus = true;
+        // Lead Mode keeps the other panes parked, and the layout to come back
+        // to: a closed thread's go from there too, or leaving the view would
+        // open a dead terminal for it.
+        if let Some(mut v) = self.leads.take() {
+            let hit = |p: &Pane| p.sandbox.as_deref() == Some(sandbox) && p.thread.as_deref() == thread;
+            let parked: Vec<Uid> = v.parked.iter().filter(|p| hit(p)).map(|p| p.uid).collect();
+            v.parked.retain(|p| !hit(p));
+            for u in parked {
+                v.sessions.remove(&u);
+                let fresh = self.fresh();
+                v.saved.remove(u, true, fresh);
+            }
+            self.leads = Some(v);
+        }
     }
 
     /// Closes pane `i`: its page re-tiles (the panes that remain take the
@@ -5143,6 +5157,33 @@ end, actions = {} }"#).unwrap();
         a.run_intent("test", Intent::ClosePanes { sandbox: "web-app".into(), thread: Some("t2".into()) });
         assert_eq!(a.panes.len(), 1);
         assert!(a.panes[0].sandbox.is_none(), "the last pane empties, it does not go");
+    }
+
+    /// The daemon's `thread-closed` event, through the bus: that thread's panes
+    /// go, the focus goes where a local close puts it, an event heard again
+    /// does nothing, and a pane closed on its own leaves the thread alone (nothing here sends a close).
+    #[test]
+    fn a_thread_closed_event_closes_its_panes_once_and_a_pane_close_alone_closes_no_thread() {
+        let mut a = app();
+        set_panes(&mut a, &[Some("web-app"), Some("web-app"), Some("web-app")]);
+        for (i, t) in [None, Some("t1"), Some("t2")].iter().enumerate() {
+            a.panes[i].thread = t.map(str::to_string);
+        }
+        a.focused = 1;
+        let ev = r#"{"sandbox":"web-app","thread":"t1"}"#;
+        assert!(a.feats_bus("thread-closed", ev), "the pane went");
+        let shown: Vec<_> = a.panes.iter().map(|p| p.thread.clone()).collect();
+        assert_eq!(shown, [None, Some("t2".to_string())]);
+        assert_eq!(a.panes[a.focused].thread.as_deref(), Some("t2"), "focus where a local close puts it: the next pane");
+        let n = a.panes.len();
+        a.feats_bus("thread-closed", ev);
+        assert_eq!(a.panes.len(), n, "heard twice, closed once");
+        a.feats_bus("thread-closed", r#"{"sandbox":"web-app","thread":"never"}"#);
+        a.feats_bus("thread-closed", "not json");
+        assert_eq!(a.panes.len(), n, "a thread never shown is ignored");
+        // A pane closed alone: the view goes, no call leaves for the daemon.
+        a.remove_pane(1);
+        assert!(a.panes.iter().all(|p| p.thread.as_deref() != Some("t2")));
     }
 
     /// A per-sandbox key's failed read: `errors[key][sandbox]`, the last good value kept.

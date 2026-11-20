@@ -35,6 +35,8 @@ use serde_json::{json, Map, Value as J};
 pub const FEATURE: Feature = Feature {
     name: "threads",
     data: DATA,
+    events: &["thread-closed"],
+    on_event: Some(on_event),
     screens: &[
         ScreenDecl { name: "threads", src: include_str!("../../../screens/threads.luau"), slot: Slot::Panel { title: "Threads", icon: "threads", width: 360.0 } },
         ScreenDecl { name: "plans", src: include_str!("../../../screens/plans.luau"), slot: Slot::Modal { width: 760.0, light_dismiss: false } },
@@ -623,6 +625,55 @@ fn plan_merge(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
     Ok(vec![c.labels(if m["state"] == "failed" { "Retry merge" } else { "Merge" }, "Cancel").into_action()])
 }
 
+/// The closes this app put to the person (the dialog is up or was answered),
+/// by `"sandbox\nthread"`: the `thread-closed` event of such a close is not
+/// news here, so it gets no notice. A mark nobody confirmed is forgotten
+/// after two minutes.
+static ASKED: std::sync::Mutex<Vec<(String, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
+
+fn asked_here(sb: &str, t: &str) {
+    let mut v = ASKED.lock().unwrap();
+    v.retain(|(_, at)| at.elapsed() < std::time::Duration::from_secs(120));
+    v.push((format!("{sb}\n{t}"), std::time::Instant::now()));
+}
+
+/// Whether this app asked for that close; the mark is used up.
+fn take_asked(sb: &str, t: &str) -> bool {
+    let key = format!("{sb}\n{t}");
+    let mut v = ASKED.lock().unwrap();
+    v.retain(|(_, at)| at.elapsed() < std::time::Duration::from_secs(120));
+    let n = v.len();
+    v.retain(|(k, _)| *k != key);
+    v.len() != n
+}
+
+/// `thread-closed` `{sandbox, thread}`: the daemon closed a thread for good,
+/// whoever asked. Its panes go (every page), the lists are read again, and a
+/// quiet notice says so when the close came from elsewhere. A thread this app
+/// never showed is ignored; a close it asked for does the same without the
+/// notice, and its own answer finds nothing left to close. A pane closed
+/// alone sends nothing, so nothing here ever closes a thread.
+fn on_event(ctx: &Ctx, name: &str, data: &J) -> Vec<Action> {
+    if name != "thread-closed" {
+        return vec![];
+    }
+    let (Some(sb), Some(t)) = (data["sandbox"].as_str(), data["thread"].as_str()) else { return vec![] };
+    if !model::valid_name(t) {
+        return vec![];
+    }
+    let mine = take_asked(sb, t);
+    let has = |v: &J, k: &str| v[k].as_array().is_some_and(|a| a.iter().any(|x| x["sandbox"] == sb && x["thread"] == t));
+    let listed = ctx.data["threads"][sb]["threads"].as_array().is_some_and(|a| a.iter().any(|x| x["name"] == t));
+    if !(mine || listed || has(&ctx.data["app"], "panes") || has(&ctx.data, "sessions")) {
+        return vec![];
+    }
+    let mut out = vec![Action::Intent { name: "close_panes".into(), args: json!({ "sandbox": sb, "thread": t }) }, Action::Refresh("threads"), Action::Refresh("sessions")];
+    if !mine {
+        out.insert(0, Action::notice(format!("Thread {t} of {sb} was closed")));
+    }
+    out
+}
+
 /// The close dialog, from what the daemon says closing would lose.
 fn close_build(_ctx: &Ctx, q: &Asked, v: &J) -> Result<Confirm, String> {
     let (sb, t) = (q.req("sandbox"), q.req("thread"));
@@ -630,6 +681,7 @@ fn close_build(_ctx: &Ctx, q: &Asked, v: &J) -> Result<Confirm, String> {
     if !st.is_object() {
         return Err(format!("Could not read thread {t}: {}", v["error"].as_str().unwrap_or("no status in the answer")));
     }
+    asked_here(sb, t);
     let wt = st["worktree"].as_str().unwrap_or("?");
     let url = format!("{}/threads/{}/close", sb_path(sb), enc(t));
     let what = format!("close {t} of {sb}");
@@ -825,6 +877,7 @@ fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action>
         }
         "close" => {
             let (sb, t) = rest.split_once('\n').unwrap_or((rest, ""));
+            take_asked(sb, t);
             match err {
                 Some(e) => vec![Action::error(format!("{t} of {sb} was not closed: {e}"))],
                 // Its panes go, as panes.js `afterThreadClosed` does.
