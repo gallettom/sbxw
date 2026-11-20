@@ -237,9 +237,17 @@ pub struct HistoryBook {
     logs: BTreeMap<(String, String), Log>,
     total: usize,
     bounds: Bounds,
+    /// What sbxw typed, so its lines are not shown as the person's.
+    typed: crate::typed::TypedLog,
 }
 
 impl HistoryBook {
+    /// Sbxw is about to type `text` into one of `sandbox`'s sessions: a user
+    /// turn with exactly that text is sbxw's, not the person's.
+    pub fn note_typed(&mut self, sandbox: &str, text: &str, now: u64) {
+        self.typed.note(sandbox, text, now);
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -300,7 +308,7 @@ impl HistoryBook {
                 }
             }
             "UserPromptSubmit" if events_only => {
-                new.extend(user_items(str_of("prompt"), false, now));
+                new.extend(user_items(str_of("prompt"), false, now, &|t| self.typed.typed(sandbox, t, now)));
             }
             "PreToolUse" if ev.tool() == "AskUserQuestion" => {
                 let steps = questions_from_ask(body);
@@ -407,7 +415,7 @@ impl HistoryBook {
         let removed = before != self.log(sandbox, session_id, now).items.len();
         let mut new = Vec::new();
         for raw in post.get("items").and_then(Value::as_array).into_iter().flatten().take(limits::POST_ITEMS_MAX) {
-            new.extend(transcript_items(raw, now));
+            new.extend(transcript_items(raw, now, &|t| self.typed.typed(sandbox, t, now)));
         }
         let mut nudge = self.push(sandbox, session_id, new, rules, now);
         if nudge.is_none() && (removed || reset) {
@@ -508,6 +516,7 @@ impl HistoryBook {
 
     /// A removed sandbox's logs go at once.
     pub fn drop_sandbox(&mut self, sandbox: &str) {
+        self.typed.drop_sandbox(sandbox);
         let mut freed = 0;
         self.logs.retain(|(sb, _), l| {
             let keep = sb != sandbox;
@@ -717,7 +726,7 @@ fn result_of_response(resp: &Value, id: Option<&Value>) -> ToolResult {
 }
 
 /// One item the hook posted, as the daemon's items. Unknown types: none.
-fn transcript_items(raw: &Value, now: u64) -> Vec<Item> {
+fn transcript_items(raw: &Value, now: u64, typed: &dyn Fn(&str) -> bool) -> Vec<Item> {
     let s = |k: &str| raw.get(k).and_then(Value::as_str).unwrap_or("");
     let at = raw.get("at").and_then(Value::as_u64).filter(|&a| a > 0).unwrap_or(now);
     let it = |kind: Kind| Item::new(kind, at);
@@ -729,7 +738,7 @@ fn transcript_items(raw: &Value, now: u64) -> Vec<Item> {
                 return vec![c];
             }
             let meta = raw.get("meta").and_then(Value::as_bool) == Some(true);
-            user_items(s("text"), meta, at)
+            user_items(s("text"), meta, at, typed)
         }
         "assistant" => {
             let text = s("text");
@@ -778,7 +787,7 @@ fn transcript_items(raw: &Value, now: u64) -> Vec<Item> {
 
 /// A user turn's text as items: the person's words, or what the harness
 /// wrote in their place. `meta` is the transcript's `isMeta`.
-fn user_items(text: &str, meta: bool, at: u64) -> Vec<Item> {
+fn user_items(text: &str, meta: bool, at: u64, typed: &dyn Fn(&str) -> bool) -> Vec<Item> {
     let mut out = Vec::new();
     // System reminders folded into a prompt are the harness's, not the person's.
     let (rest, reminders) = take_reminders(text);
@@ -791,7 +800,10 @@ fn user_items(text: &str, meta: bool, at: u64) -> Vec<Item> {
     if rest.trim().is_empty() {
         return out;
     }
-    let c = classify_user_text(&rest);
+    let mut c = classify_user_text(&rest);
+    if c.kind == Kind::UserPrompt && typed(&c.text) {
+        c = UserText { kind: Kind::Injected, text: c.text, from: Some(crate::typed::SENDER.to_string()) };
+    }
     let mut i = Item::new(c.kind, at);
     i.text = c.text;
     i.from = c.from;

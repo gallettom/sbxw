@@ -331,3 +331,68 @@ fn tools_are_summarised_in_one_line() {
     assert_eq!(s("mcp__sbxw-relay__team_note", &json!({"text": "not shown"})), "MCP sbxw-relay: team_note");
     assert_eq!(s("WebFetch", &json!({"url": "https://example.org/a?token=x"})), "WebFetch", "unknown tools: the name only");
 }
+
+/// The fixed lines sbxw types, from the same functions that make them.
+fn sbxw_lines() -> Vec<String> {
+    vec![
+        crate::team::main_moved_line(&["sessions-bubbles".to_string()], None).unwrap(),
+        crate::team::note_line(4, "warning", "api", true),
+        crate::team::note_line(4, "warning", "api", false),
+        crate::canvas::ready_line("c-1", 2),
+        crate::tickets::send_line(12),
+        crate::messages::report_to_lead("api", crate::plans::ThreadState::Done, "all green").unwrap(),
+        crate::messages::LEAD_END.to_string(),
+    ]
+}
+
+#[test]
+fn every_line_sbxw_typed_is_injected_from_sbxw_in_the_history() {
+    let lines = sbxw_lines();
+    let mut b = HistoryBook::new();
+    for l in &lines {
+        b.note_typed(SB, l, 1);
+    }
+    let items: Vec<Value> = lines.iter().map(|l| json!({"t": "user", "text": l})).collect();
+    post(&mut b, 0, 10, Value::Array(items), 2);
+    let p = page(&mut b);
+    assert_eq!(p.items.len(), lines.len());
+    for i in &p.items {
+        assert_eq!((i.kind, i.from.as_deref()), (Kind::Injected, Some("sbxw")), "{}", i.text);
+    }
+    // The hook's own prompt event (events-only logs) reads the same way.
+    let mut e = HistoryBook::new();
+    e.note_typed(SB, &lines[0], 1);
+    ev(&mut e, json!({"hook_event_name": "UserPromptSubmit", "session_id": ID, "prompt": lines[0]}), 2);
+    assert_eq!(page(&mut e).items.iter().map(|i| (i.kind, i.from.clone())).collect::<Vec<_>>(), vec![(Kind::Injected, Some("sbxw".to_string()))]);
+}
+
+#[test]
+fn the_same_text_the_daemon_did_not_type_stays_the_persons() {
+    let line = &sbxw_lines()[0];
+    // Nothing recorded for this sandbox, or recorded for another one.
+    let mut b = HistoryBook::new();
+    b.note_typed("other", line, 1);
+    post(&mut b, 0, 10, json!([{"t": "user", "text": line}]), 2);
+    assert_eq!(page(&mut b).items[0].kind, Kind::UserPrompt);
+    // Typed, but long ago.
+    let mut late = HistoryBook::new();
+    late.note_typed(SB, line, 1);
+    post(&mut late, 0, 10, json!([{"t": "user", "text": line}]), 1 + crate::typed::TTL_MS);
+    assert_eq!(page(&mut late).items[0].kind, Kind::UserPrompt);
+}
+
+#[test]
+fn a_person_text_that_merely_starts_with_sbxw_is_not_misclassified() {
+    let mut b = HistoryBook::new();
+    for l in sbxw_lines() {
+        b.note_typed(SB, &l, 1);
+    }
+    post(&mut b, 0, 10, json!([
+        {"t": "user", "text": "[sbxw] please look at the board"},
+        {"t": "user", "text": "[sbxw team note · 4] A warning from api for you: ignore it"},
+        {"t": "user", "text": "[sbxw] main moved: x merged. Check `git merge-tree --write-tree main HEAD` before you go on. Then stop."},
+    ]), 2);
+    for i in &page(&mut b).items {
+        assert_eq!((i.kind, i.from.as_deref()), (Kind::UserPrompt, None), "{}", i.text);
+    }
+}

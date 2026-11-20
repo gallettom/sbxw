@@ -565,7 +565,7 @@ impl App {
             if !self.sessions.is_live(&SessionKey::agent(&name)) && !self.sbx.exists(&name.name).await {
                 // No chat sandbox yet: its own agent is the first conversation.
                 self.create_chat(name.clone(), vec![]).await.map_err(|e| format!("{e:#}"))?;
-                self.push_text(&name, SessionKind::Agent, text).await?;
+                self.push_as_person(&name, SessionKind::Agent, text).await?;
                 return Ok((name, true, None));
             }
             let mut taken: Vec<String> = self.store.get(&name).threads.into_keys().collect();
@@ -593,7 +593,7 @@ impl App {
             } else if !self.sessions.is_live(&SessionKey::thread(&name, &thread)) {
                 return Err(format!("thread '{thread}' of '{name}' is not running — open it in sbxw first"));
             }
-            self.push_text(&name, SessionKind::Thread(thread.clone()), text).await?;
+            self.push_as_person(&name, SessionKind::Thread(thread.clone()), text).await?;
             return Ok((name, false, Some(thread.to_string())));
         }
         self.agents
@@ -610,7 +610,7 @@ impl App {
             }
             self.create_chat(name.clone(), vec![]).await.map_err(|e| format!("{e:#}"))?;
         }
-        self.push_text(&name, SessionKind::Agent, text).await?;
+        self.push_as_person(&name, SessionKind::Agent, text).await?;
         Ok((name, !exists, None))
     }
 

@@ -25,6 +25,16 @@ pub enum PostError {
 }
 
 impl App {
+    /// Record that sbxw itself types `text` into one of `sandbox`'s sessions:
+    /// the history and the session rows then show that turn as sbxw's, not
+    /// the person's. Called before typing, so the record is there when the
+    /// agent's hook reports the turn. Never logs the text.
+    pub(crate) fn note_typed(&self, sandbox: &str, text: &str) {
+        let now = now_ms();
+        self.history.lock().unwrap().note_typed(sandbox, text, now);
+        self.agents.lock().unwrap().note_typed(sandbox, text, now);
+    }
+
     /// What history texts are masked with: the person's rules, else the shapes.
     fn history_rules(&self) -> Rules {
         self.anonymise_rules().unwrap_or_default()
