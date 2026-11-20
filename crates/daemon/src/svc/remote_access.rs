@@ -103,6 +103,8 @@ pub struct RemoteRuntime {
     /// One copy into a sandbox at a time, for the whole daemon: a copy holds
     /// its file in memory (the sandbox writer takes bytes).
     pub(crate) copy_lock: Arc<tokio::sync::Mutex<()>>,
+    /// The longest gap between two chunks of an upload (tests shorten it).
+    pub(crate) upload_idle: Duration,
     sidecar: Option<tokio::process::Child>,
     pub sidecar_program: Sidecar,
     tailnet: Option<(u64, Option<TailnetStatus>)>,
@@ -148,6 +150,7 @@ impl RemoteRuntime {
             upload_limit: Limiter::new(sbxw_core::remote_access::uploads::RATE_WINDOW_MS, sbxw_core::remote_access::uploads::RATE_PER_DEVICE, u32::MAX),
             uploading: Default::default(),
             copy_lock: Default::default(),
+            upload_idle: crate::svc::remote_upload::CHUNK_IDLE,
             sidecar: None,
             sidecar_program: Sidecar::Beside,
             tailnet: None,

@@ -195,6 +195,14 @@ impl UploadBook {
         gone
     }
 
+    /// Tests of the daemon: make every handle `by_ms` older.
+    #[doc(hidden)]
+    pub fn age_all(&mut self, by_ms: u64) {
+        for u in &mut self.items {
+            u.expires_ms = u.expires_ms.saturating_sub(by_ms);
+        }
+    }
+
     /// Every spool file the book still owns (the rest of the folder is not).
     pub fn spools(&self) -> Vec<String> {
         self.items.iter().map(|u| u.spool.clone()).collect()

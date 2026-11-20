@@ -107,7 +107,7 @@ impl App {
         S: Stream<Item = Result<Bytes, E>> + Unpin,
     {
         let key = sb.to_string();
-        let (dir, _slot) = {
+        let (dir, idle, _slot) = {
             let mut rt = self.remote_access.lock().unwrap();
             let now = now_ms();
             // Every attempt counts, against this device only.
@@ -127,13 +127,13 @@ impl App {
             if !rt.uploading.insert(d.id.clone()) {
                 return Err(reason(Reason::Uploading));
             }
-            (rt.dir().to_path_buf(), Slot { app: self.clone(), device: d.id.clone() })
+            (rt.dir().to_path_buf(), rt.upload_idle, Slot { app: self.clone(), device: d.id.clone() })
         };
         let (mut file, mut spool, spool_name) = open_spool(&dir).await.map_err(|e| {
             tracing::warn!("remote access: cannot open an upload spool file: {e}");
             Refusal::Failed("the Mac could not store the file".into())
         })?;
-        let size = match tokio::time::timeout(BODY_DEADLINE, read_into(&mut file, body)).await {
+        let size = match tokio::time::timeout(BODY_DEADLINE, read_into(&mut file, body, idle)).await {
             Ok(r) => r?,
             Err(_) => return Err(reason(Reason::Timeout)),
         };
@@ -225,12 +225,22 @@ impl App {
         let rt = self.remote_access.lock().unwrap();
         (rt.uploads.len(), rt.dir().join(SPOOL_DIR))
     }
+
+    /// Tests: every waiting upload `by_ms` older; a shorter chunk gap.
+    #[cfg(test)]
+    pub(crate) fn remote_uploads_tune_for_tests(&self, age_ms: u64, idle: Option<Duration>) {
+        let mut rt = self.remote_access.lock().unwrap();
+        rt.uploads.age_all(age_ms);
+        if let Some(i) = idle {
+            rt.upload_idle = i;
+        }
+    }
 }
 
 /// Copy `body` into `file`, the cap counted on every chunk (whatever the
 /// request declared), the kind judged on the first bytes, no gap over
 /// [`CHUNK_IDLE`]. The size.
-async fn read_into<S, E>(file: &mut tokio::fs::File, mut body: S) -> Result<u64, Refusal>
+async fn read_into<S, E>(file: &mut tokio::fs::File, mut body: S, idle: Duration) -> Result<u64, Refusal>
 where
     S: Stream<Item = Result<Bytes, E>> + Unpin,
 {
@@ -240,7 +250,7 @@ where
     let mut judged = false;
     let store = |_| Refusal::Failed("the Mac could not store the file".into());
     loop {
-        let next = match tokio::time::timeout(CHUNK_IDLE, body.next()).await {
+        let next = match tokio::time::timeout(idle, body.next()).await {
             Ok(n) => n,
             Err(_) => return Err(reason(Reason::Timeout)),
         };

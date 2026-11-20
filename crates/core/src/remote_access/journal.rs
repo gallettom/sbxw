@@ -15,14 +15,14 @@ pub enum Kind {
     Answer,
     Interrupt,
     Transcribe,
-    /// A file handed to a leader (its size class only, never its name).
-    Upload,
     /// A pairing the person refused on the Mac, or an action the daemon refused.
     Refused,
     Revoked,
     Logout,
     /// Dropped after 30 days idle.
     Expired,
+    /// A file handed to a leader (its size class only, never its name).
+    Upload,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
