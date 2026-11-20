@@ -42,6 +42,8 @@ pub struct TabInfo {
     pub others: Vec<u32>,
     /// Its one terminal shows a shell, not the agent (a prompt glyph).
     pub bash: bool,
+    /// Its one terminal is a team leader's (the crown before the name).
+    pub leader: bool,
 }
 
 /// A name cut to about `n` characters.
@@ -54,8 +56,8 @@ fn short(name: &str, n: usize) -> String {
 }
 
 /// A tab's width (points) for its label.
-pub fn tab_w(label: &str, dot: bool, bash: bool) -> f32 {
-    TAB_PX * 2.0 + if dot { TAB_DOT + TAB_GAP } else { 0.0 } + if bash { TAB_PROMPT + TAB_GAP } else { 0.0 } + bar::measure(label, TAB_TEXT, 500.0).min(TAB_LABEL_MAX) + TAB_GAP + TAB_CLOSE
+pub fn tab_w(label: &str, dot: bool, bash: bool, leader: bool) -> f32 {
+    TAB_PX * 2.0 + if dot { TAB_DOT + TAB_GAP } else { 0.0 } + if leader { TAB_PROMPT + TAB_GAP } else { 0.0 } + if bash { TAB_PROMPT + TAB_GAP } else { 0.0 } + bar::measure(label, TAB_TEXT, 500.0).min(TAB_LABEL_MAX) + TAB_GAP + TAB_CLOSE
 }
 
 /// The prompt glyph of a tab whose terminal is a shell.
@@ -112,7 +114,7 @@ impl App {
     }
 
     pub fn tab_info_as(&self, k: usize, compact: bool) -> TabInfo {
-        let Some(page) = self.pages.list.get(k) else { return TabInfo { label: String::new(), help: String::new(), tone: None, group: None, others: vec![], bash: false } };
+        let Some(page) = self.pages.list.get(k) else { return TabInfo { label: String::new(), help: String::new(), tone: None, group: None, others: vec![], bash: false, leader: false } };
         let panes: Vec<&Pane> = page.tile.order().into_iter().filter_map(|u| self.pane_by_uid(u)).collect();
         let open: Vec<&&Pane> = panes.iter().filter(|p| p.sandbox.is_some()).collect();
         let names: Vec<String> = open.iter().map(|p| pane_name(p)).collect();
@@ -134,8 +136,9 @@ impl App {
         let mut others: Vec<u32> = groups.iter().flatten().copied().filter(|g| Some(*g) != group).collect();
         others.dedup();
         let bash = open.len() == 1 && open[0].mode == Mode::Bash;
+        let leader = open.len() == 1 && self.pane_leads(open[0]);
         let help = format!("Page {}: {what}{}{state}", k + 1, if bash { " (a shell)" } else { "" });
-        TabInfo { label, help, tone, group, others, bash }
+        TabInfo { label, help, tone, group, others, bash, leader }
     }
 
     /// Whether "Gather" would move something: terminals on more pages than
@@ -166,7 +169,7 @@ impl App {
         let widths = |compact: bool| -> Vec<f32> {
             (0..n).map(|k| {
                 let t = self.tab_info_as(k, compact);
-                tab_w(&t.label, t.tone.is_some(), t.bash)
+                tab_w(&t.label, t.tone.is_some(), t.bash, t.leader)
             }).collect()
         };
         let total = |v: &[f32]| v.iter().sum::<f32>() + GAP * n.saturating_sub(1) as f32;
@@ -328,6 +331,9 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
     }
     if t.bash {
         e = e.child(small_icon("prompt", TAB_PROMPT, theme::hex(theme::muted_on(ground))));
+    }
+    if t.leader {
+        e = e.child(small_icon("leader", TAB_PROMPT, c("text-bright")).key(format!("page-{}-leader", k + 1)).label("Team leader").help("Team leader"));
     }
     // A session's tab: the sandbox muted, what tells it apart (the thread)
     // bright; the cut falls on the second part.
