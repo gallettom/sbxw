@@ -386,7 +386,14 @@ async fn events(State(app): S, Extension(d): Extension<DeviceCtx>) -> Response {
                         let _ = tx.send(bye("revoked")).await;
                         break;
                     }
-                    _ => {}
+                    // Kicks were missed: look again rather than trust the gap.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        if !app.remote_enabled() || app.remote_device(&d.id).is_none() {
+                            let _ = tx.send(bye("revoked")).await;
+                            break;
+                        }
+                    }
+                    Ok(Kick::Device(_)) => {}
                 },
                 _ = tick.tick() => {
                     if !app.remote_enabled() || app.remote_device(&d.id).is_none() {

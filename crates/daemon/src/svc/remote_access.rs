@@ -656,7 +656,9 @@ impl App {
         let steps = info.steps.filter(|s| !s.is_empty())?;
         let book = self.agents.lock().unwrap();
         let key = book.answerable(&sb.to_string()).ok()?;
-        if book.prompt_sizes(&key).is_empty() {
+        // The session sbxw would type into must be the leader's main one,
+        // the one whose question the phone shows.
+        if info.session_id.as_deref() != Some(key.session_id.as_str()) || book.prompt_sizes(&key).is_empty() {
             return None;
         }
         let rules = self.anonymise_rules().unwrap_or_default();
