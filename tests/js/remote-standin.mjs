@@ -13,19 +13,21 @@
 // {uploadReplies: [{status, body}]} how the next uploads are answered,
 // {uploadSlow: ms} a pause after each 64 KiB read (so progress shows),
 // {uploadHold: true} uploads wait until {uploadHold: false},
-// {transcribeDelay: ms} how long a transcription takes.
-// Live replies (thread phone-live): {newer: {sandbox: page}} what a
-// `?after=` read answers, {newerHold: true} such reads wait until
-// {newerHold: false}, {mute: true} open streams stay open but get nothing
-// more (a stream that died without a word, as after a phone's sleep).
+// {transcribeDelay: ms} how long a transcription takes, {transcribeReplies:
+// [{status, body}]} how the next transcriptions are answered.
 // Level 2 (API-level2.md): {l2: {approvals: {...}}} the state GET /r/approvals
 // answers, {l2Digest: {plans|merges|network|stopped: hex}} a detail's new
 // digest (a challenge with the old one is "changed"), {l2Replies: {kind:
 // [{status, body}]}} how the next challenge or action is answered,
-// {pkStates: [...]} the next passkey/status answers, {l2Reset: true}.
+// {pkStates: [...]} the next passkey/status answers, {l2Reset: true},
+// {l2Gone: [ids]} whose detail answers 404, {l2Lists: {plans|merges|network|stopped: <the list's whole answer>}}.
 // Kanban (API-kanban.md): {kanban: {sandbox: board | null}} a board (null:
 // 404, the leader stopped), {tickets: {"sandbox/n": detail}}.
 // Uploads follow API.md 2.6.1: the raw body, an id of 32 hex back, no path.
+// Live replies (thread phone-live): {newer: {sandbox: page}} what a
+// `?after=` read answers, {newerHold: true} such reads wait until
+// {newerHold: false}, {mute: true} open streams stay open but get nothing
+// more (a stream that died without a word, as after a phone's sleep).
 // Usage: node tests/js/remote-standin.mjs [port]
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
@@ -81,6 +83,7 @@ export function startStandin(port = 0) {
     uploadSlow: 0,
     uploadHold: false,
     transcribeDelay: 0,
+    transcribeReplies: [],
     l2: null,
     kanban: { shop: fx.kanban.board, website: fx.kanban.empty },
     tickets: { 'shop/12': fx.kanban.ticket },
@@ -173,6 +176,7 @@ export function startStandin(port = 0) {
     const det = L2_DETAIL.exec(p);
     if (det && req.method === 'GET') {
       const what = det[1];
+      if (s.l2.gone?.includes(decodeURIComponent(det[2]))) return send(res, 404, { ok: false, error: 'not found', reason: 'not_found' });
       const one = { plans: L.plan, merges: L.merge, network: L.network_one, stopped: L.stopped_one }[what];
       return send(res, 200, { ...one, digest: s.l2.digest[what] });
     }
@@ -212,13 +216,14 @@ export function startStandin(port = 0) {
       if ('messageDelay' in c) s.messageDelay = c.messageDelay;
       if (c.messageReplies) s.messageReplies = c.messageReplies;
       if (c.history) Object.assign(s.history, c.history);
-      if (c.newer) Object.assign(s.newer, c.newer);
-      if ('newerHold' in c) { s.newerHold = c.newerHold; if (!c.newerHold) (s.newerHolds || []).splice(0).forEach(r => r()); }
-      if (c.mute) s.streams.clear();
       if (c.uploadReplies) s.uploadReplies = c.uploadReplies;
       if ('transcribeDelay' in c) s.transcribeDelay = c.transcribeDelay;
+      if (c.reset) s.transcribeReplies = [];
+      if (c.transcribeReplies) s.transcribeReplies = c.transcribeReplies;
       if (c.l2Reset || !s.l2) s.l2 = l2Fresh();
       if (c.l2) Object.assign(s.l2.approvals, c.l2.approvals || {});
+      if (c.l2Gone) s.l2.gone = c.l2Gone;
+      if (c.l2Lists) Object.assign(s.l2.L, c.l2Lists);
       if (c.l2Digest) Object.assign(s.l2.digest, c.l2Digest);
       if (c.l2Replies) Object.assign(s.l2.replies, c.l2Replies);
       if (c.pkStates) s.l2.pkStates = c.pkStates;
@@ -228,6 +233,9 @@ export function startStandin(port = 0) {
       if ('uploadSlow' in c) s.uploadSlow = c.uploadSlow;
       if ('uploadHold' in c) { s.uploadHold = c.uploadHold; if (!c.uploadHold) s.holds.splice(0).forEach(r => r()); }
       if (c.emit) emit(c.emit.event, c.emit.data);
+      if (c.newer) Object.assign(s.newer, c.newer);
+      if ('newerHold' in c) { s.newerHold = c.newerHold; if (!c.newerHold) (s.newerHolds || []).splice(0).forEach(r => r()); }
+      if (c.mute) s.streams.clear();
       if (c.reset) s.log.length = 0;
       return send(res, 200, { ok: true });
     }
@@ -317,6 +325,8 @@ export function startStandin(port = 0) {
     }
     if (p === '/r/voice/transcribe') {
       await new Promise(r => setTimeout(r, s.transcribeDelay));
+      const r = s.transcribeReplies.shift();
+      if (r) return send(res, r.status, r.body);
       return send(res, 200, { text: s.transcript, masked: 0 });
     }
     return send(res, 404, { ok: false, error: 'not found' });
