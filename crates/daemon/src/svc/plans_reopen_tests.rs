@@ -147,12 +147,12 @@ async fn while_team_is_off_every_gated_route_refuses_the_lead_and_a_thread_alike
     let sb = led(&app, d.path(), "reopen-off").await;
     let id = approved_done(&app, &sb).await;
     app.lead_end(&sb).await;
-    for thread in [None, Some("a")] {
-        let who = json!(thread);
-        for path in ["/api/plans/status", "/api/plans/propose_merge", "/api/plans/mark_done", "/api/plans/wait"] {
-            let (st, v) = post(&app, "reopen-off", path, json!({ "id": id, "order": ["a"], "thread": who, "timeout": 0 })).await;
-            assert_eq!(st, StatusCode::BAD_REQUEST, "{path} as {thread:?}: {v}");
-        }
+    // These posts carry nothing that tells the caller: the lead's own session
+    // and a thread send the same bytes, and both are refused.
+    for path in ["/api/plans/status", "/api/plans/propose_merge", "/api/plans/mark_done", "/api/plans/wait"] {
+        let (st, v) = post(&app, "reopen-off", path, json!({ "id": id, "order": ["a"], "thread": "a", "timeout": 0 })).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{path}: {v}");
+        assert!(text(&v).contains("the user ended lead mode"), "{path}: {v}");
     }
     let (st, v) = post(&app, "reopen-off", "/api/plans/propose", json!({ "threads": [t("c")], "justification": "x", "timeout": 0 })).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
