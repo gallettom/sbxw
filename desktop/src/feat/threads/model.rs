@@ -16,6 +16,82 @@ pub fn valid_name(n: &str) -> bool {
         && b[b.len() - 1] != b'-'
 }
 
+/// The longest thread name.
+pub const NAME_MAX: usize = 40;
+
+/// A lower-case letter folded to ASCII, for the letters with a diacritic or a
+/// stroke of Latin-1 and Latin Extended-A. The web client folds the same way
+/// (`normalizeName` in util.js: Unicode decomposition plus a short table); both
+/// are tested on `tests/js/name-cases.json`. A letter not listed here (Greek,
+/// Cyrillic, CJK...) is treated as any other character: a hyphen.
+fn fold(c: char) -> Option<&'static str> {
+    Some(match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => "a",
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => "c",
+        'ď' | 'đ' | 'ð' => "d",
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => "e",
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' => "g",
+        'ĥ' | 'ħ' => "h",
+        'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' => "i",
+        'ĵ' => "j",
+        'ķ' => "k",
+        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => "l",
+        'ñ' | 'ń' | 'ņ' | 'ň' => "n",
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => "o",
+        'ŕ' | 'ŗ' | 'ř' => "r",
+        'ś' | 'ŝ' | 'ş' | 'š' => "s",
+        'ţ' | 'ť' | 'ŧ' => "t",
+        'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => "u",
+        'ŵ' => "w",
+        'ý' | 'ÿ' | 'ŷ' => "y",
+        'ź' | 'ż' | 'ž' => "z",
+        'ß' => "ss",
+        'æ' => "ae",
+        'œ' => "oe",
+        'þ' => "th",
+        _ => return None,
+    })
+}
+
+/// A name as the dialogs make it from what was typed or pasted. `typing`
+/// false: the whole rule. Lower case, accents folded, every run of other
+/// characters one hyphen, hyphen runs one, no leading hyphen, cut to 40, no
+/// trailing hyphen. `typing` true: the same, but a trailing hyphen stands (the
+/// next letter is on its way). Empty stays empty. The web client has the same
+/// rule (`normalizeName` in util.js); the daemon's own check stays the last word.
+pub fn clean_name(raw: &str, typing: bool) -> String {
+    let mut out = String::new();
+    for c in raw.chars().flat_map(char::to_lowercase) {
+        // Combining marks (an accent typed as a separate character) vanish.
+        if ('\u{300}'..='\u{36f}').contains(&c) {
+            continue;
+        }
+        let folded;
+        let piece: &str = if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            folded = c.to_string();
+            &folded
+        } else {
+            fold(c).unwrap_or("-")
+        };
+        for p in piece.chars() {
+            if p == '-' && (out.is_empty() || out.ends_with('-')) {
+                continue;
+            }
+            out.push(p);
+        }
+    }
+    out.truncate(NAME_MAX);
+    if !typing {
+        out.truncate(out.trim_end_matches('-').len());
+    }
+    out
+}
+
+/// The whole rule, for a name about to be used.
+pub fn normalize_name(raw: &str) -> String {
+    clean_name(raw, false)
+}
+
 /// One session of a sandbox, as the sidebar, the panel and the pane bars
 /// show it.
 #[derive(Debug, Clone, PartialEq)]
@@ -462,6 +538,43 @@ pub fn merge_rows(plan: &J) -> (Vec<J>, String) {
 
 #[cfg(test)]
 mod tests {
+    /// The table the web client's tests use too (`tests/js/name-cases.json`).
+    const CASES: &str = include_str!("../../../../tests/js/name-cases.json");
+
+    #[test]
+    fn the_shared_table_of_names() {
+        let t: serde_json::Value = serde_json::from_str(CASES).unwrap();
+        for (key, typing) in [("full", false), ("typing", true)] {
+            let rows = t[key].as_array().unwrap();
+            assert!(rows.len() >= 8, "{key}");
+            for r in rows {
+                let (input, want) = (r[0].as_str().unwrap(), r[1].as_str().unwrap());
+                assert_eq!(clean_name(input, typing), want, "{key}: {input:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_paste_is_cut_to_40_without_a_trailing_hyphen() {
+        assert_eq!(normalize_name(&"a".repeat(200)).len(), 40);
+        let r = normalize_name(&"word ".repeat(40));
+        assert_eq!(r.len(), 39);
+        assert!(valid_name(&r));
+    }
+
+    #[test]
+    fn hostile_text_gives_a_valid_name_or_nothing() {
+        for h in ["<script>alert(1)</script>", "\"><img src=x onerror=1>", "'; rm -rf / #", "$(reboot)", "\u{0}\u{7}\u{1b}[31m", "😀😀😀", &"x".repeat(4000), &"<b>".repeat(2000), &"é".repeat(4000), "\u{202e}evil", "e\u{301}te\u{301}"] {
+            let r = normalize_name(h);
+            assert!(r.is_empty() || valid_name(&r), "{h:.20}");
+        }
+        assert_eq!(normalize_name("e\u{301}te\u{301} 2026"), "ete-2026");
+        for [input, _] in serde_json::from_str::<Vec<[String; 2]>>(&serde_json::from_str::<serde_json::Value>(CASES).unwrap()["full"].to_string()).unwrap() {
+            let r = normalize_name(&input);
+            assert_eq!(normalize_name(&r), r, "idempotent: {input:?}");
+        }
+    }
+
     use super::*;
 
     #[test]

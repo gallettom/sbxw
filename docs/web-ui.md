@@ -223,6 +223,21 @@ things about the **session** in the pane.
 | **↻** | Rebuild the terminal widget, then reconnect. Reconnect and ↻ both replay the last 256 KB of the session |
 | **Claude ↔ Bash** | Switch between the agent and a shell. Both keep running server-side, with their scrollback |
 
+**Names in the New thread and New session dialogs.** The name field fixes
+what is typed or pasted instead of refusing it: lower case, accents folded
+(`é` becomes `e`), every run of spaces, underscores, dots, slashes and other
+characters one hyphen, no hyphen at either end, at most 40 characters. Pasting
+normalizes the whole field at once. While you type, only capitals and
+separators change, and a hyphen at the end stays so `fix-` can become
+`fix-login`; the caret stays after the letter you typed. Leaving the field and
+opening the thread apply the full rule. A line under the field, *Will be
+created as `fix-login-bug`*, shows the name used when it differs from the
+field, and the worktree and branch lines use it. A name that normalizes to
+nothing (`!!!`) only keeps **Open** disabled; a name already taken by another
+kind of session is still refused. The daemon checks the name again. The rule is
+`normalizeName` in `assets/js/util.js`; sandbox names (the create form) keep
+their own stricter check.
+
 Notes:
 
 - **Bash on a stopped sandbox** starts it: `sbx exec` starts a stopped

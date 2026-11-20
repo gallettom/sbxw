@@ -429,3 +429,29 @@ fn the_worktrees_tab_is_kept_while_it_reads_the_worktrees() {
     assert_eq!(data[UI]["worktrees_for"], "web-app");
     assert!(acts.iter().any(|a| matches!(a, Action::Fetch { key, .. } if key == "worktrees")));
 }
+
+#[test]
+fn the_dialog_normalizes_its_name_and_every_other_caller_stays_strict() {
+    let data = fixture("basic");
+    // The dialog (`normalize`): a fixable name opens, as its normalized self.
+    let v = run(&data, "thread_open", json!({ "sandbox": "web-app", "name": "  Fix Login/Bug ", "normalize": true })).unwrap();
+    let open = v.iter().find_map(|a| if let Action::Intent { name, args } = a { (name == "open_terminal").then(|| args.clone()) } else { None }).unwrap();
+    assert_eq!(open["thread"], "fix-login-bug");
+    // Nothing left after the rule: asked for a name, not refused for its letters.
+    let e = run(&data, "thread_open", json!({ "sandbox": "web-app", "name": "!!!", "normalize": true })).unwrap_err();
+    assert!(e.contains("Give it a name"), "{e}");
+    // A name taken by the other kind is still said.
+    assert!(run(&data, "thread_open", json!({ "sandbox": "web-app", "name": "S1", "checkout": false, "normalize": true })).unwrap_err().contains("session on the main checkout"));
+    // Without `normalize` (chips, scripts, plans) the strict rule holds.
+    assert!(run(&data, "thread_open", json!({ "sandbox": "web-app", "name": "Fix Login" })).unwrap_err().contains("inner hyphens"));
+    assert!(run(&data, "thread_open", json!({ "sandbox": "web-app", "name": "fix-" })).is_err());
+}
+
+#[test]
+fn the_name_intent_keeps_what_the_field_becomes() {
+    let data = fixture("basic");
+    let mut d = data.clone();
+    apply(&mut d, &run(&data, "thread_name", json!({ "name": "Fix_Login " })).unwrap());
+    let draft = &d[UI]["draft"];
+    assert_eq!((draft["raw"].as_str(), draft["typing"].as_str(), draft["full"].as_str()), (Some("Fix_Login "), Some("fix-login-"), Some("fix-login")));
+}
