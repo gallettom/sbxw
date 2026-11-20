@@ -270,7 +270,7 @@ test('refusals: a sentence per reason, the text kept, nothing resent', { skip },
   await page.waitForTimeout(1500);
   assert.equal((await calls('POST', '/r/leaders/website/message')).length, 1, 'never resent by itself');
   await page.tap('#send');
-  await page.waitForSelector('text=/Try again in a few seconds/');
+  await page.waitForSelector('text=/once it is back at its prompt/');
   assert.equal(await page.inputValue('#field'), 'hello leader');
   // A command: warned in place while typing, still the person's to send; the daemon refuses it.
   await page.fill('#field', '/model opus');
@@ -282,6 +282,44 @@ test('refusals: a sentence per reason, the text kept, nothing resent', { skip },
   await page.waitForSelector('text=/a line starts with \\//');
   assert.equal(await page.inputValue('#field'), '/model opus');
   assert.equal((await calls('POST', '/r/leaders/website/message')).length, 3);
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('while the leader works Send waits, the text stays, nothing is queued', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.tap('.rc-leader >> text=website');
+  await page.waitForSelector('#s-chat:not([hidden])');
+  assert.equal(await page.isDisabled('#send'), false);
+  const working = structuredClone(FX.leaders);
+  working.leaders.find(l => l.sandbox === 'website').state = 'working';
+  working.leaders.find(l => l.sandbox === 'website').activity = 'Working';
+  await ctl({ emit: { event: 'leaders', data: working } });
+  await page.waitForSelector('#send-gate:not([hidden])');
+  assert.equal(await page.textContent('#send-gate'), 'The leader is working: Send comes back at its prompt.');
+  assert.equal(await page.isDisabled('#send'), true);
+  await page.fill('#field', 'hello leader');
+  await page.evaluate(() => document.getElementById('send').click());
+  assert.equal(await page.isDisabled('#interrupt'), false, 'it can still be interrupted');
+  await shot(page, '16-working-send-waits');
+  await ctl({ emit: { event: 'leaders', data: FX.leaders } });
+  await page.waitForSelector('#send-gate', { state: 'hidden' });
+  assert.equal(await page.isDisabled('#send'), false);
+  await page.waitForTimeout(800);
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 0, 'nothing queued while it worked');
+  assert.equal(await page.inputValue('#field'), 'hello leader', 'the text stayed');
+  // A daemon `busy` (it started working meanwhile): its sentence, the text kept.
+  await ctl({ messageReplies: [{ status: 409, body: { ok: false, reason: 'busy', error: 'the leader is working' } }] });
+  await page.tap('#send');
+  await page.waitForSelector('text=/meanwhile you can read it and interrupt it/');
+  assert.equal(await page.inputValue('#field'), 'hello leader');
+  // An invisible character: warned in place, with what to do.
+  await page.fill('#field', 'hello\u200bleader');
+  await page.waitForSelector('text=/Remove the invisible characters, or retype the text/');
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 1);
   await cleanSpy(page);
   assert.deepEqual(problems, []);
   await ctx.close();

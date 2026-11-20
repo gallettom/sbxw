@@ -298,6 +298,15 @@
     setTitle(l?.name || st.current, sub);
     $('interrupt').dataset.name = l?.name || st.current;
     if (!$('interrupt').classList.contains('rc-armed')) $('interrupt').textContent = 'Interrupt';
+    gateSend();
+  }
+  // Send waits while the leader works; the typed text stays where it is.
+  function gateSend() {
+    const why = st.current ? rcSendGate(leader()) : '';
+    const g = $('send-gate');
+    g.textContent = why;
+    g.hidden = !why;
+    $('send').disabled = !!why || st.sending;
   }
 
   async function openLeader(sandbox) {
@@ -564,7 +573,7 @@
     const sandbox = st.current;
     const raw = field.value;
     const text = raw.trim();
-    if (!sandbox || !text || st.sending) return;
+    if (!sandbox || !text || st.sending || rcSendGate(leader())) return;
     // A message takes 1 to 4 s (the daemon waits for the echo before the
     // Return): the composer says so, and a second tap does nothing.
     st.sending = true;
@@ -576,8 +585,8 @@
     warned = false;
     const res = await api.message(sandbox, text);
     st.sending = false;
-    send.disabled = false;
     send.textContent = 'Send';
+    gateSend();
     $('composer').removeAttribute('aria-busy');
     // Refused or not submitted: the text stays, nothing is resent.
     if (!res.ok) { note(rcFailText('Message', res), false, res.data?.reason === 'not_submitted'); return; }

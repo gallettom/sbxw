@@ -15,7 +15,7 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcWithDictation', 'chatMarkdown'];
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcWithDictation', 'chatMarkdown'];
 const ctx = { URLSearchParams };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
@@ -283,10 +283,10 @@ test('each refusal reason has its own sentence, with the daemon\'s words as text
   const r = (status, reason, error = 'the daemon said <b>so</b>') => ({ ok: false, status, unreachable: false, data: { ok: false, reason, error } });
   const want = {
     command: [400, /Commands cannot be sent from the phone/],
-    control: [400, /control character/],
+    control: [400, /control or invisible character/],
     empty: [400, /empty/],
     needs_mac: [409, /This needs your Mac/],
-    busy: [409, /Try again in a few seconds/],
+    busy: [409, /The leader is working\. A message can be sent once it is back at its prompt/],
     no_paste: [409, /Send it from your Mac/],
     not_submitted: [409, /NOT SENT: the text was typed into the leader's input on the Mac but not submitted/],
   };
@@ -302,7 +302,18 @@ test('each refusal reason has its own sentence, with the daemon\'s words as text
 });
 test('the check before sending matches the daemon\'s rule', () => {
   for (const s of ['/model', '!ls', '# remember', 'ok\n  /clear', 'a\n\t!x']) assert.equal(rc.rcMessageCheck(s), 'command', JSON.stringify(s));
-  for (const s of ['a\tb', 'a\rb', 'a\u001b[2J', 'a\u007f', 'a\u0085', 'a\u202eb', 'a\u2066b']) assert.equal(rc.rcMessageCheck(s), 'control', JSON.stringify(s));
+  for (const s of ['a\tb', 'a\rb', 'a\u001b[2J', 'a\u007f', 'a\u0085', 'a\u202eb', 'a\u2066b',
+    'a\u200bb', 'a\u200cb', 'a\u200db', '\ufeffa', 'soft\u00adhyphen', 'a\u2060b', 'a\u2028b', 'a\u2029b', 'tag\u{E0041}']) {
+    assert.equal(rc.rcMessageCheck(s), 'control', JSON.stringify(s));
+  }
+  assert.match(rc.RC_MSG_REASON.control, /Remove the invisible characters, or retype the text/);
+  assert.equal(rc.RC_MSG_REASON.busy, 'The leader is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.');
   for (const s of ['', '   ', '\n\n']) assert.equal(rc.rcMessageCheck(s), 'empty');
-  for (const s of ['hello', 'a/b and c#d', 'line one\nline two', 'see https://x.example/#a', 'Fix it! Now.']) assert.equal(rc.rcMessageCheck(s), null, JSON.stringify(s));
+  for (const s of ['hello', 'café ünïcödé 日本語 😀', 'a/b and c#d', 'line one\nline two', 'see https://x.example/#a', 'Fix it! Now.']) assert.equal(rc.rcMessageCheck(s), null, JSON.stringify(s));
+});
+
+test('Send waits while the leader works, and only then', () => {
+  assert.match(rc.rcSendGate({ state: 'working' }), /The leader is working/);
+  assert.match(rc.rcSendGate(null), /not running/);
+  for (const l of [{ state: 'idle' }, { state: 'attention', asks: true }]) assert.equal(rc.rcSendGate(l), '');
 });

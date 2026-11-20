@@ -338,19 +338,20 @@ function rcClient(fetchImpl, hooks = {}) {
 // daemon's own `error` is shown beside it, as text.
 const RC_MSG_REASON = {
   command: 'Commands cannot be sent from the phone: no line may start with !, / or #.',
-  control: 'The message holds a control character (a tab or an invisible mark). Remove it and send again.',
+  control: 'The message holds a control or invisible character (a tab, a zero-width space, a soft hyphen...). Remove the invisible characters, or retype the text.',
   empty: 'The message is empty.',
   needs_mac: 'This needs your Mac: the leader is waiting for you there.',
-  busy: 'The leader is in the middle of a step. Try again in a few seconds.',
+  busy: 'The leader is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.',
   no_paste: 'Send it from your Mac: this leader\'s terminal cannot take a message from the phone.',
   not_submitted: 'NOT SENT: the text was typed into the leader\'s input on the Mac but not submitted, because the leader changed meanwhile. It waits there unsent; it is also still in this field. Check on your Mac before sending again.',
 };
 
 // What the daemon will refuse, checked before sending so the person can fix
 // it in place (the daemon stays the judge): a line whose first non-blank
-// character is !, / or #, or a control character other than a line feed
-// (tab, CR, ESC, C0, DEL, C1) or a bidi control.
-const RC_CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+// character is !, / or #, or any control character but a line feed (tab, CR,
+// ESC, DEL, C1), a format character (bidi controls, zero-width space and
+// joiners, BOM, soft hyphen, word joiner, tags), a line or paragraph separator.
+const RC_CONTROL = /(?!\n)[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 function rcMessageCheck(text) {
   const s = String(text ?? '');
   if (!s.trim()) return 'empty';
@@ -372,6 +373,15 @@ function rcFailText(what, res) {
   if (res.status === 429) return `${what} not sent: too many at once. Try again in a moment.`;
   const err = res.data && typeof res.data.error === 'string' ? res.data.error.slice(0, 200) : `the Mac answered ${res.status}`;
   return `${what} not sent: ${err}.`;
+}
+
+// Why Send waits, or '' when it can go: a message is typed only while the
+// leader is idle at its prompt (API.md v1.3). Never a queue: the text stays
+// in the field until the person presses Send again.
+function rcSendGate(leader) {
+  if (!leader) return 'This leader is not running.';
+  if (leader.state === 'working') return 'The leader is working: Send comes back at its prompt.';
+  return '';
 }
 
 // Dictation: the longest recording the daemon accepts (MAX_SAMPLES at
