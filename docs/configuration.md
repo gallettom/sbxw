@@ -26,12 +26,13 @@ lists every key with its default.
 |---|---|---|
 | `web_addr` | `127.0.0.1:7681` | The **UI listener**: browser, island, extension and the `sbxw` CLI. Every client needs the UI token ([why](security.md#two-listeners)) |
 | `agent_addr` | `127.0.0.1:7682` | The **agent listener**, the only address sandboxes reach. Must differ from `web_addr` ([why](security.md#two-listeners)) |
+| `remote_addr` | `127.0.0.1:7683` | The **remote listener**, for a paired phone through the tailnet sidecar ([remote access](remote-access.md)). Loopback only (`127.0.0.0/8` or `[::1]`): any other address is refused. Its own port, not `web_addr`'s or `agent_addr`'s. Bound only while remote access is on (`sbxw remote on`), which is state, not a key: off by default, and Jarvis cannot change either |
 | `monitor_cmd` | `["sbx"]` | argv of the **Monitor Sandboxes** window, run on the host. `[]` hides the button |
 | `terminal_color` | `""` | Terminal background in the web UI, `#rrggbb`. Empty is the built-in `#0d1117`. The header's colour picker overrides it per browser |
 | `terminal_bar_color` | `""` | The bar above each terminal, `#rrggbb`. Empty is the built-in `darkslategrey`. Same picker, same override |
 | `terminal_text_color` | `""` | Terminal text: the default foreground and ANSI white / bright white, `#rrggbb` or `auto`. Empty is `auto` (light or dark, following the background). Same picker, same override. Text printed in an explicit 24-bit colour is not affected |
 | `max_agent_sessions` | `4` | Agent + [threads](threads-and-lead.md) one sandbox may hold open |
-| `keep_awake` | `remote` | macOS: hold the Mac awake with `caffeinate` — `remote` while Remote Control is on in some session, `always`, or `off` |
+| `keep_awake` | `remote` | macOS: hold the Mac awake with `caffeinate` — `remote` while Remote Control is on in some session, `always`, or `off`. [Remote access](remote-access.md), while on, also holds it on mains power, whatever this says |
 | `keep_awake_min_battery` | `5` | On battery at or below this percentage, the Mac is let go to sleep anyway |
 | `battery_warn_below` | `20` | On battery at or below this percentage, Remote Control agents are told on their next prompt (again every 5 % lost) |
 | `[voice]` | see below | Jarvis's voice: its local models, by catalog id: `stt` (`"parakeet-tdt-0.6b-v3-int8"`), `tts` (`"voxtral-tts-6bit"`, Voxtral TTS at 3.5 GB; also `"voxtral-tts-4bit"` at 2.5 GB and `"voxtral-tts-bf16"` at 8 GB), `tts_voice` (`"fr_male"`, one of Voxtral's 20 voices: `fr_female`, `casual_male`, `neutral_female`…), `push_to_talk_key` (`"F8"`, a `KeyboardEvent.code`), `dictate_key` (`"F9"`, dictation into the focused terminal), `[voice.words]` (how words are said aloud, see [below](#words-read-aloud)). Read from the daemon's config. Reading aloud needs a Mac with Apple Silicon and [uv](https://docs.astral.sh/uv/); `llm` and `retention_days` of an older sbxw are ignored. A table: write it after every root key |

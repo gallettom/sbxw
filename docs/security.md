@@ -52,8 +52,33 @@ The daemon listens twice, for two audiences:
 |---|---|---|---|
 | **UI** (`web_addr`) | `127.0.0.1:7681` | Browser, island, extension, `sbxw` CLI | Everything, including every decision that moves information between sandboxes or starts work: routing a question, releasing an answer, approving or merging a plan, pairing a host, opening a terminal |
 | **Agent** (`agent_addr`) | `127.0.0.1:7682` | Sandboxes | Hooks, usage, relay requests, plan proposals and reports. Nothing that approves anything |
+| **Remote** (`remote_addr`) | `127.0.0.1:7683`, only while remote access is on | A paired phone, through the `sbxw-tailnet` sidecar | Read a running team leader's conversation (no tool input or output), type or dictate to it, answer its multiple-choice question, interrupt it. Nothing that approves anything, nothing irreversible |
 
-Both addresses must be `IP:PORT` literals; a host name is refused.
+All addresses must be `IP:PORT` literals; a host name is refused. `remote_addr` must be
+loopback.
+
+### The remote listener
+
+Off by default; see [remote-access.md](remote-access.md) for the threat model in full.
+
+- **Its own router, built from an explicit list.** Nothing of the UI router is mounted on
+  it; any other path is `404`. A test reads every route of the UI router from the router
+  itself and checks each is `404` on the remote listener with a valid device token.
+- **Its own token.** A device token (256 bits) made at pairing, kept by the daemon as a
+  SHA-256 only, carried only by the `__Host-sbxw_device` cookie (`HttpOnly; Secure;
+  SameSite=Strict`). The remote listener never reads the UI token or the `sbxw_ui`
+  cookie; the UI listener never accepts a device token.
+- **Pairing needs the Mac twice**: a one-time code it shows (192 bits, 5 minutes, single
+  use) and the person's yes after comparing a 6-digit number shown on both screens.
+- **Guards**: `Host` must be the tailnet name the sidecar serves (or the listener's own
+  loopback address); `Origin` must be that page on every write; no CORS; no path
+  normalisation (`..`, `//`, encoded bytes: `404`); JSON bodies with size caps; rate limits
+  on pairing and on failed tokens, with global caps that hold whatever source a caller
+  claims; a strict Content-Security-Policy.
+- **No text in the journal or the logs**: device, time and kind of action only.
+- **The sidecar** is found next to the `sbxw` executable (never on `PATH`), started with a
+  fixed argv and a cleared environment, and its status file is read as untrusted input
+  (size cap, strict schema, hostname pattern, freshness, the daemon's own child pid).
 
 ### The agent listener
 
