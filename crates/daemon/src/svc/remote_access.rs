@@ -76,6 +76,8 @@ pub enum Sidecar {
 struct Listener {
     shutdown: tokio::sync::watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
+    /// Drops unsent uploads past their life, every minute.
+    sweeper: tokio::task::JoinHandle<()>,
     addr: std::net::SocketAddr,
 }
 
@@ -92,6 +94,15 @@ pub struct RemoteRuntime {
     /// daemon's work without letting one client starve another.
     device_limit: Limiter,
     listener: Option<Listener>,
+    /// Files phones handed to leaders, not yet sent (`remote_upload`).
+    pub(crate) uploads: sbxw_core::remote_access::uploads::UploadBook,
+    /// Each device's upload rate, keyed by device id.
+    pub(crate) upload_limit: Limiter,
+    /// Devices with an upload in progress (one at a time each).
+    pub(crate) uploading: std::collections::HashSet<String>,
+    /// One copy into a sandbox at a time, for the whole daemon: a copy holds
+    /// its file in memory (the sandbox writer takes bytes).
+    pub(crate) copy_lock: Arc<tokio::sync::Mutex<()>>,
     sidecar: Option<tokio::process::Child>,
     pub sidecar_program: Sidecar,
     tailnet: Option<(u64, Option<TailnetStatus>)>,
@@ -119,6 +130,9 @@ impl RemoteRuntime {
             .unwrap_or_default();
         let journal = std::fs::read_to_string(dir.join("journal.jsonl")).map(|t| journal::parse_lines(&t)).unwrap_or_default();
         let (kicks, _) = tokio::sync::broadcast::channel(16);
+        // Handles live in memory only: a spool left by an earlier run has
+        // no owner any more.
+        let _ = std::fs::remove_dir_all(dir.join(crate::svc::remote_upload::SPOOL_DIR));
         let mut rt = RemoteRuntime {
             dir,
             enabled: state.enabled,
@@ -130,6 +144,10 @@ impl RemoteRuntime {
             bad_token_limit: Limiter::new(60_000, 10, 30),
             device_limit: Limiter::new(60_000, 600, u32::MAX),
             listener: None,
+            uploads: Default::default(),
+            upload_limit: Limiter::new(sbxw_core::remote_access::uploads::RATE_WINDOW_MS, sbxw_core::remote_access::uploads::RATE_PER_DEVICE, u32::MAX),
+            uploading: Default::default(),
+            copy_lock: Default::default(),
             sidecar: None,
             sidecar_program: Sidecar::Beside,
             tailnet: None,
@@ -139,6 +157,15 @@ impl RemoteRuntime {
         };
         rt.expire(now_ms());
         rt
+    }
+
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Remote access is on and `id` is still a paired device.
+    pub(crate) fn has_device(&self, id: &str) -> bool {
+        self.enabled && self.devices.get(id).is_some()
     }
 
     fn state_path(&self) -> PathBuf {
@@ -162,7 +189,12 @@ impl RemoteRuntime {
     }
 
     fn record(&mut self, device_id: &str, device_name: &str, kind: Kind) {
-        self.journal.push(Entry { at_ms: now_ms(), device_id: device_id.into(), device_name: device_name.into(), kind });
+        self.record_sized(device_id, device_name, kind, None);
+    }
+
+    /// An entry with a size class (`upload` only): never a name or a size.
+    pub(crate) fn record_sized(&mut self, device_id: &str, device_name: &str, kind: Kind, size: Option<sbxw_core::remote_access::uploads::SizeClass>) {
+        self.journal.push(Entry { at_ms: now_ms(), device_id: device_id.into(), device_name: device_name.into(), kind, size });
         journal::bound(&mut self.journal);
         if let Err(e) = write_private(&self.dir, &self.dir.join("journal.jsonl"), journal::to_lines(&self.journal).as_bytes()) {
             tracing::warn!("remote access: cannot write the journal: {e}");
@@ -176,6 +208,8 @@ impl RemoteRuntime {
         }
         for d in &gone {
             tracing::info!("remote access: device {} dropped after 30 days idle", d.id);
+            let files = self.uploads.drop_device(&d.id);
+            crate::svc::remote_upload::remove_spools(&self.dir, files);
             self.record(&d.id, &d.name, Kind::Expired);
             let _ = self.kicks.send(Kick::Device(d.id.clone()));
         }
@@ -305,6 +339,24 @@ pub enum Reason {
     Control,
     /// Empty: 400.
     Empty,
+    /// An upload over the per-file cap: 413.
+    TooLarge,
+    /// No room for one more file, or more ids than a message takes: 409 on
+    /// an upload, 400 on a message.
+    TooMany,
+    /// A message names more files than it may: 400.
+    TooManyIds,
+    /// A refused kind of file (a program, an archive): 400.
+    FileKind,
+    /// A file name missing or far too long: 400.
+    Name,
+    /// An attachment id that is not this device's and leader's, spent,
+    /// expired or unknown: 400, one answer for all.
+    Attachment,
+    /// This device already has an upload in progress: 409.
+    Uploading,
+    /// The upload's body was too slow: 408.
+    Timeout,
 }
 
 impl Reason {
@@ -317,10 +369,26 @@ impl Reason {
             Reason::Command => "command",
             Reason::Control => "control",
             Reason::Empty => "empty",
+            Reason::TooLarge => "too_large",
+            Reason::TooMany | Reason::TooManyIds => "too_many",
+            Reason::FileKind => "kind",
+            Reason::Name => "name",
+            Reason::Attachment => "attachment",
+            Reason::Uploading => "busy",
+            Reason::Timeout => "timeout",
         }
     }
     pub fn status_conflict(self) -> bool {
-        matches!(self, Reason::NeedsMac | Reason::Busy | Reason::NoPaste | Reason::NotSubmitted)
+        matches!(self, Reason::NeedsMac | Reason::Busy | Reason::NoPaste | Reason::NotSubmitted | Reason::TooMany | Reason::Uploading)
+    }
+    /// The HTTP status the route answers with.
+    pub fn http_status(self) -> u16 {
+        match self {
+            Reason::TooLarge => 413,
+            Reason::Timeout => 408,
+            r if r.status_conflict() => 409,
+            _ => 400,
+        }
     }
     pub fn sentence(self) -> &'static str {
         match self {
@@ -331,6 +399,14 @@ impl Reason {
             Reason::Command => "A message from the phone cannot have a line starting with !, / or #: shell and slash commands are for the Mac.",
             Reason::Control => "The message holds a control character. Only plain text and line breaks are sent.",
             Reason::Empty => "The message is empty.",
+            Reason::TooLarge => "The file is too large: a phone can hand over files of up to 25 MB.",
+            Reason::TooMany => "No room for another file: at most 5 files (60 MB together) can wait to be sent. Send or remove one first.",
+            Reason::TooManyIds => "A message can carry at most 5 files.",
+            Reason::FileKind => "This kind of file is refused from a phone: programs and archives (zip, tar, gzip, 7z, rar...). Send the files themselves, or use the Mac.",
+            Reason::Name => "The file has no usable name.",
+            Reason::Attachment => "A file of this message is no longer there: choose it again.",
+            Reason::Uploading => "Another file is still being sent from this phone. Wait for it to finish.",
+            Reason::Timeout => "The file took too long to arrive. Try again on a better connection.",
         }
     }
 }
@@ -353,6 +429,8 @@ pub enum Refusal {
     Unavailable(String),
     Bad(String),
     Limited(u64),
+    /// Something on the Mac failed (a copy into the sandbox): 502.
+    Failed(String),
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -485,8 +563,17 @@ impl App {
                     tracing::warn!("remote access: listener ended: {e}");
                 }
             });
+            let me = Arc::downgrade(self);
+            let sweeper = tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_secs(60));
+                loop {
+                    tick.tick().await;
+                    let Some(app) = me.upgrade() else { break };
+                    app.remote_sweep_uploads();
+                }
+            });
             tracing::info!("remote access: listening on {local} (reached only through {SIDECAR_NAME})");
-            self.remote_access.lock().unwrap().listener = Some(Listener { shutdown: tx, task, addr: local });
+            self.remote_access.lock().unwrap().listener = Some(Listener { shutdown: tx, task, sweeper, addr: local });
         }
         let has_sidecar = self.remote_access.lock().unwrap().sidecar_pid().is_some();
         if let (Some(bin), false) = (sidecar_bin, has_sidecar) {
@@ -516,6 +603,8 @@ impl App {
                 tracing::info!("remote access: turned off");
             }
             rt.pairing.clear();
+            let files = rt.uploads.clear();
+            crate::svc::remote_upload::remove_spools(&rt.dir, files);
         }
         self.remote_stop().await;
         self.remote_awake_changed();
@@ -529,6 +618,7 @@ impl App {
         };
         let _ = kicks.send(Kick::All);
         if let Some(l) = listener {
+            l.sweeper.abort();
             let _ = l.shutdown.send(true);
             // Streams were told to end; a connection that lingers is cut.
             let mut task = l.task;
@@ -705,6 +795,8 @@ impl App {
             return Err(AuthError::NotPaired);
         };
         rt.expire(now);
+        let files = rt.uploads.expire(now);
+        crate::svc::remote_upload::remove_spools(&rt.dir, files);
         match rt.devices.find(token, now).map(|d| DeviceCtx { id: d.id.clone(), name: d.name.clone() }) {
             Some(d) => {
                 let id = d.id.clone();
@@ -739,6 +831,8 @@ impl App {
         let mut rt = self.remote_access.lock().unwrap();
         let Some(d) = rt.devices.revoke(id) else { return false };
         rt.save();
+        let files = rt.uploads.drop_device(&d.id);
+        crate::svc::remote_upload::remove_spools(&rt.dir, files);
         rt.record(&d.id, &d.name, kind);
         let _ = rt.kicks.send(Kick::Device(d.id.clone()));
         tracing::info!("remote access: device {} {}", d.id, if kind == Kind::Logout { "logged out" } else { "revoked" });
@@ -900,35 +994,65 @@ impl App {
 
     /// Type `text` into the leader as the person (F1, F6 of the review):
     /// 1. refuse a text with a command line or a control character;
-    /// 2. mask it; the refusals `chat_push` applies to a named sandbox;
-    /// 3. refuse unless typed text lands in the prompt now ([`Self::remote_can_type`]);
-    /// 4. send it as ONE bracketed paste (a dialog does not read a paste as key
-    ///    presses), wait for the echo and [`HOOK_GRACE`] for a late hook;
-    /// 5. check the same state again: changed, no Return (`not_submitted`);
-    /// 6. only then the Return.
+    /// 2. resolve the attachment ids (this device, this leader, live);
+    /// 3. mask the text; the refusals `chat_push` applies to a named sandbox;
+    /// 4. with files: check the leader takes text now, then copy each file
+    ///    into the sandbox ([`App::remote_copy_attachments`]);
+    /// 5. refuse unless typed text lands in the prompt now ([`Self::remote_can_type`]),
+    ///    under the session's typing lock;
+    /// 6. build the exact string typed (the masked text, then the fixed block
+    ///    of the daemon's own paths) and check it whole, last;
+    /// 7. send it as ONE bracketed paste, wait for the echo and [`HOOK_GRACE`];
+    /// 8. check the same state again: changed, no Return (`not_submitted`);
+    /// 9. only then the Return; the attachment ids are spent.
     ///
-    /// Residual window: a dialog whose hook reaches the daemon later than
-    /// about a second after it is drawn, or one drawn between step 5 and 6.
-    pub async fn remote_message(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, text: &str) -> Result<usize, Refusal> {
+    /// On every refusal the ids stay usable (with their first expiry).
+    /// Residual window: a dialog Claude Code opens on its own while idle,
+    /// between a check and the paste or the Return.
+    pub async fn remote_message(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, text: &str, attachments: &[String]) -> Result<usize, Refusal> {
         use sbxw_core::remote_access::MessageRefusal as M;
-        if let Err(m) = rules::check_message(text) {
-            return Err(Refusal::Reason(match m {
-                M::Empty => Reason::Empty,
-                M::Command => Reason::Command,
-                M::Control => Reason::Control,
-            }));
+        let reason = |m: M| match m {
+            M::Empty => Reason::Empty,
+            M::Command => Reason::Command,
+            M::Control => Reason::Control,
+        };
+        let files = !attachments.is_empty();
+        let words = !text.trim().is_empty();
+        // A message of files alone has no text of the person's to check;
+        // the whole typed string is checked below either way.
+        if words || !files {
+            rules::check_message(text).map_err(|m| Refusal::Reason(reason(m)))?;
         }
-        let safe = self.anonymise(text.trim()).map_err(Refusal::Unavailable)?;
+        if files {
+            self.remote_resolve_attachments(d, sb, attachments)?;
+        }
+        let (masked, count) = if words {
+            let safe = self.anonymise(text.trim()).map_err(Refusal::Unavailable)?;
+            (safe.text, safe.count)
+        } else {
+            (String::new(), 0)
+        };
         if let Err(e) = self.agents.lock().unwrap().can_type_into(&sb.to_string()) {
             self.remote_record(d, Kind::Refused);
             return Err(Refusal::Conflict(format!("'{sb}': {e}")));
         }
-        // The session's typing lock (shared with every other line writer:
-        // chat push, sbxw's own lines, answers, Interrupt), then the state.
         let Some(live) = self.sessions.live(&SessionKey::agent(sb)) else {
             self.remote_record(d, Kind::Refused);
             return Err(Refusal::Reason(Reason::NeedsMac));
         };
+        // Files only reach a sandbox whose leader takes a message now; the
+        // copy runs before the typing lock (it can take seconds).
+        let paths = if files {
+            if let Err(r) = self.remote_can_type(sb) {
+                self.remote_record(d, Kind::Refused);
+                return Err(Refusal::Reason(r));
+            }
+            self.remote_copy_attachments(d, sb, attachments).await?
+        } else {
+            vec![]
+        };
+        // The session's typing lock (shared with every other line writer:
+        // chat push, sbxw's own lines, answers, Interrupt), then the state.
         let _one_at_a_time = live.typing.lock().await;
         let session = match self.remote_can_type(sb) {
             Ok(s) if Arc::ptr_eq(&s, &live) => s,
@@ -941,19 +1065,19 @@ impl App {
                 return Err(Refusal::Reason(r));
             }
         };
+        if files {
+            // Dropped or expired while copying: nothing typed.
+            self.remote_resolve_attachments(d, sb, attachments)?;
+        }
         // The last check runs on the EXACT string typed: after masking (an
-        // alias could start with `/`) and after `sanitize_typed`.
-        let typed = sbxw_core::terminal::sanitize_typed(&safe.text);
-        if typed != safe.text {
+        // alias could start with `/`), with the block of paths, and after
+        // `sanitize_typed`.
+        let whole = sbxw_core::uploads::with_attachments(&masked, &paths);
+        let typed = sbxw_core::terminal::sanitize_typed(&whole);
+        if typed != whole {
             return Err(Refusal::Reason(Reason::Control));
         }
-        if let Err(m) = rules::check_message(&typed) {
-            return Err(Refusal::Reason(match m {
-                M::Empty => Reason::Empty,
-                M::Command => Reason::Command,
-                M::Control => Reason::Control,
-            }));
-        }
+        rules::check_message(&typed).map_err(|m| Refusal::Reason(reason(m)))?;
         let mut rx = session.subscribe();
         session.write(&[sbxw_core::terminal::PASTE_START, typed.as_bytes(), sbxw_core::terminal::PASTE_END]).await;
         crate::typing::settle(&mut rx, Some(crate::typing::ECHO_TIMEOUT), crate::typing::ECHO_QUIET).await;
@@ -967,10 +1091,13 @@ impl App {
             }
         }
         session.write(&[b"\r"]).await;
+        if files {
+            self.remote_spend_attachments(attachments);
+        }
         tracing::info!("remote access: device {}: message", d.id);
-        tracing::debug!("remote access: message to '{sb}' ({} bytes, {} masked)", typed.len(), safe.count);
+        tracing::debug!("remote access: message to '{sb}' ({} bytes, {} masked, {} files)", typed.len(), count, paths.len());
         self.remote_record(d, Kind::Message);
-        Ok(safe.count)
+        Ok(count)
     }
 
     pub async fn remote_answer(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, indices: Vec<u32>) -> Result<(), Refusal> {
