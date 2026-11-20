@@ -36,6 +36,18 @@ pub enum Kind {
     /// A phone asked to set up Face ID (no digits, no request id): a flood
     /// of these means another client holds a copy of the device's cookie.
     PasskeyRequested,
+    // Web Push (API.md section 2.8). Never the endpoint, a key or a payload:
+    // `push_sent` carries the kind (`p` or `n`) in `target`, `push_failed`
+    // its status class (`4xx`, `network`...).
+    /// The phone turned notifications on.
+    PushOn,
+    /// Turned off: by the phone, or from the Mac.
+    PushOff,
+    PushSent,
+    PushFailed,
+    /// Apple said the subscription is gone (404, 410) or the sidecar refused
+    /// it: deleted.
+    PushGone,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

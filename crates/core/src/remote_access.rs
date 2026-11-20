@@ -14,6 +14,8 @@
 //! * [`journal`]: what each device did, never what it said.
 //! * [`limits`]: fixed-window rate limits.
 //! * [`reach`]: which sandboxes a phone reaches (leaders and plain sandboxes).
+//! * [`push`]: Web Push: the subscription allow-list, the VAPID key, the
+//!   sidecar's pipe lines, the edges that cause a push and its limits.
 //! * Here: the Host and Origin rules, and the sidecar's status file, read as
 //!   untrusted input.
 //!
@@ -23,6 +25,7 @@ pub mod devices;
 pub mod journal;
 pub mod limits;
 pub mod pairing;
+pub mod push;
 pub mod reach;
 pub mod uploads;
 pub mod view;
