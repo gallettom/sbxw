@@ -814,23 +814,9 @@ function rcActPath(kind, target) {
     default: return null;
   }
 }
-// One line: WHAT will happen, to WHAT. Names are the daemon's data, as text.
+// One line: WHAT will happen, to WHAT, as plain text (rcActParts draws it).
 function rcActLine(kind, item, option) {
-  const sb = String(item?.sandbox ?? '');
-  switch (kind) {
-    case 'plan_approve': {
-      const n = Array.isArray(item?.threads) ? item.threads.length : 0;
-      return `Approve the plan of ${sb} as it is: it starts ${n === 1 ? '1 thread' : `${n} threads`}.`;
-    }
-    case 'plan_refuse': return `Refuse the plan of ${sb}: no thread starts.`;
-    case 'merge': {
-      const n = Array.isArray(item?.branches) ? item.branches.length : 0;
-      return `Merge ${n === 1 ? '1 branch' : `${n} branches`} of ${sb} in the order shown, stopping at the first conflict.`;
-    }
-    case 'network_respond': return `Answer "${String(option?.label ?? option?.id ?? '')}" to ${sb}'s request for ${String(item?.host ?? '')}.`;
-    case 'sandbox_remove': return `Remove the stopped sandbox ${String(item?.name ?? '')}. This cannot be undone.`;
-    default: return '';
-  }
+  return rcActParts(kind, item, option).map(p => (typeof p === 'string' ? p : p.data)).join('');
 }
 // What was done, in the daemon's words.
 function rcActDone(kind, data) {
@@ -987,4 +973,58 @@ function rcSpeechText(results) {
     if (r && r.isFinal) final += ` ${t}`; else interim += ` ${t}`;
   }
   return { final: final.replace(/\s+/g, ' ').trim(), interim: interim.replace(/\s+/g, ' ').trim() };
+}
+
+// ══ Text that is not the page's own, made unambiguous ════════════════════
+// (Security review P6.) A name, a path, a goal or a ticket written by an
+// agent may carry bidirectional controls or invisible characters that
+// reorder or hide what the person reads before approving. They are never
+// honoured: each becomes a visible code ("U+202E") the page draws in a box,
+// and the page isolates every such string (dir="auto", unicode-bidi:
+// isolate) so one cannot reorder its neighbours. Line feeds and tabs stay.
+// Format characters (bidi controls and isolates, zero-width space and
+// joiners, BOM, soft hyphen, word joiner, tags...), line and paragraph
+// separators, C0 and C1 controls but tab and line feed, and the characters
+// that draw nothing (combining grapheme joiner, Hangul fillers, Mongolian
+// selectors, variation selectors, interlinear annotation).
+const RC_INVISIBLE = /[\p{Cf}\p{Zl}\p{Zp}\u0000-\u0008\u000B-\u001F\u007F-\u009F\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u3164\uFE00-\uFE0F\uFFA0\uFFF9-\uFFFB]/u;
+// → [string | { code: 'U+202E' }]
+function rcMarked(s) {
+  const out = [];
+  let run = '';
+  for (const ch of String(s ?? '')) {
+    if (RC_INVISIBLE.test(ch)) {
+      if (run) { out.push(run); run = ''; }
+      out.push({ code: `U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}` });
+    } else run += ch;
+  }
+  if (run) out.push(run);
+  return out;
+}
+// A sheet's one line as parts: the page's words as strings, the daemon's
+// data (names, hosts, labels, branches) as { data } to draw isolated, in
+// monospace, with the codes visible.
+function rcActParts(kind, item, option) {
+  const d = v => ({ data: String(v ?? '') });
+  switch (kind) {
+    case 'plan_approve': {
+      const n = Array.isArray(item?.threads) ? item.threads.length : 0;
+      return ['Approve the plan of ', d(item?.sandbox), ` as it is: it starts ${n === 1 ? '1 thread' : `${n} threads`}.`];
+    }
+    case 'plan_refuse': return ['Refuse the plan of ', d(item?.sandbox), ': no thread starts.'];
+    case 'merge': {
+      const n = Array.isArray(item?.branches) ? item.branches.length : 0;
+      const order = Array.isArray(item?.order) ? item.order : [];
+      const parts = [`Merge ${n === 1 ? '1 branch' : `${n} branches`} of `, d(item?.sandbox), ' in the order shown, stopping at the first conflict.'];
+      if (order.length) {
+        parts.push(' Order: ');
+        order.forEach((o, i) => { if (i) parts.push(', '); parts.push(d(o)); });
+        parts.push('.');
+      }
+      return parts;
+    }
+    case 'network_respond': return ['Answer ', d(option?.label ?? option?.id), ' to the request of ', d(item?.sandbox), ' for ', d(item?.host), '.'];
+    case 'sandbox_remove': return ['Remove the stopped sandbox ', d(item?.name), '. This cannot be undone.'];
+    default: return [];
+  }
 }

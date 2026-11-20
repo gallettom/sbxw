@@ -800,9 +800,7 @@
       ic.append(icon(ICON_FILE));
       const tx = document.createElement('span');
       tx.className = 'rc-fchip-text';
-      const name = document.createElement('span');
-      name.className = 'rc-fchip-name';
-      name.textContent = chatShortName(c.name);
+      const name = dataEl('span', 'rc-fchip-name', chatShortName(c.name));
       const meta = document.createElement('span');
       meta.className = 'rc-fchip-meta';
       meta.textContent = c.state === 'sending' ? `${chatSize(c.size)} · ${c.pct < 1 ? `${Math.round(c.pct * 100)} %` : 'the Mac checks it'}`
@@ -1207,6 +1205,33 @@
     }
   });
 
+  // ── Text that is not the page's own (security review P6) ──
+  // Isolated (dir="auto", unicode-bidi: isolate) so it cannot reorder its
+  // neighbours, and every invisible or bidi control drawn as a boxed code.
+  function markInto(node, text) {
+    for (const part of rcMarked(text)) {
+      if (typeof part === 'string') node.append(part);
+      else {
+        const c = document.createElement('span');
+        c.className = 'rc-cc';
+        c.textContent = part.code;
+        node.append(c);
+      }
+    }
+    return node;
+  }
+  function dataEl(tag, cls, text, mono) {
+    const e = document.createElement(tag);
+    e.className = `rc-data${mono ? ' rc-mono' : ''}${cls ? ` ${cls}` : ''}`;
+    e.dir = 'auto';
+    return markInto(e, text === null || text === undefined ? '' : String(text));
+  }
+  // A line of the page's words and the daemon's data: [string | { data }].
+  function partsInto(node, list, mono = true) {
+    for (const p of list) node.append(typeof p === 'string' ? p : dataEl('span', null, p.data, mono));
+    return node;
+  }
+
   // ══ The Kanban: a leader's board, read only ═══════════════════════════
   // Conversation | Kanban under the bar. The board is the route's answer
   // drawn as it comes: one column at a time on a phone (a picker with the
@@ -1285,7 +1310,11 @@
     if (v.board && latest && v.board.latest === latest) return;
     v.want = latest;
     clearTimeout(v.timer);
-    v.timer = setTimeout(() => { if (view().mode === 'kanban') loadBoard(); else v.board = null; }, 400);
+    v.timer = setTimeout(() => {
+      // A read that ended meanwhile may already hold the board this named.
+      if (v.want && v.board?.latest === v.want) return;
+      if (view().mode === 'kanban') loadBoard(); else v.board = null;
+    }, 400);
   }
 
   const wide = window.matchMedia ? window.matchMedia('(min-width: 700px)') : { matches: false };
@@ -1339,18 +1368,18 @@
     b.type = 'button';
     b.dataset.key = c.key;
     const top = el('span', 'rc-kb-top');
-    top.append(el('span', 'rc-kb-num', c.num));
+    top.append(dataEl('span', 'rc-kb-num', c.num));
     if (c.priority !== 'none') top.append(el('span', `rc-kb-prio rc-kb-${c.priority}`, c.priority.toUpperCase()));
-    if (c.age) top.append(el('span', 'rc-kb-age', c.age));
-    b.append(top, el('span', 'rc-kb-title', c.title || c.num));
+    if (c.age) top.append(dataEl('span', 'rc-kb-age', c.age));
+    b.append(top, dataEl('span', 'rc-kb-title', c.title || c.num));
     if (c.marks.length) {
       const m = el('span', 'rc-kb-marks');
-      for (const x of c.marks) m.append(el('span', `rc-kb-mark rc-tone-${x.tone}`, x.label));
+      for (const x of c.marks) m.append(dataEl('span', `rc-kb-mark rc-tone-${x.tone}`, x.label));
       b.append(m);
     }
     if (c.thread) {
       const t = el('span', `rc-kb-thread rc-tone-${c.thread_tone}`);
-      t.append(el('span', 'rc-kb-dot'), el('span', 'rc-kb-tname', c.thread));
+      t.append(el('span', 'rc-kb-dot'), dataEl('span', 'rc-kb-tname', c.thread));
       if (c.thread_state) t.append(el('span', 'rc-kb-tstate', RC_KB_THREAD[c.thread_state] || c.thread_state));
       b.append(t);
     }
@@ -1414,34 +1443,34 @@
     back.addEventListener('click', closeTicket);
     frag.append(back);
     const head_ = el('div', 'rc-kb-thead');
-    head_.append(el('span', 'rc-kb-num', t?.num || card.num));
+    head_.append(dataEl('span', 'rc-kb-num', t?.num || card.num));
     const prio = t?.priority || card.priority;
     if (prio !== 'none') head_.append(el('span', `rc-kb-prio rc-kb-${prio}`, RC_KB_PRIORITY[prio]));
     const col = view().board?.columns.find(c => c.id === (t?.column || ''))?.title;
     if (col) head_.append(el('span', 'rc-kb-tcol', col));
-    frag.append(head_, el('h2', 'rc-kb-ttitle', t?.title || card.title));
+    frag.append(head_, dataEl('h2', 'rc-kb-ttitle', t?.title || card.title));
     if (card.marks.length) {
       const m = el('div', 'rc-kb-marks');
-      for (const x of card.marks) m.append(el('span', `rc-kb-mark rc-tone-${x.tone}`, x.label));
+      for (const x of card.marks) m.append(dataEl('span', `rc-kb-mark rc-tone-${x.tone}`, x.label));
       frag.append(m);
     }
     if (card.thread) {
       const th = el('p', `rc-kb-thread rc-tone-${card.thread_tone}`);
-      th.append(el('span', 'rc-kb-dot'), el('span', 'rc-kb-tname', card.thread));
+      th.append(el('span', 'rc-kb-dot'), dataEl('span', 'rc-kb-tname', card.thread));
       if (card.thread_state) th.append(el('span', 'rc-kb-tstate', RC_KB_THREAD[card.thread_state] || card.thread_state));
       frag.append(th);
     }
     if (note) frag.append(el('p', 'rc-item-note', note));
     if (!card.n) frag.append(el('p', 'rc-muted rc-small-text', 'A thread of the plan, with no ticket of its own.'));
     if (t) {
-      if (t.description) frag.append(el('p', 'rc-kb-desc', t.description));
+      if (t.description) frag.append(dataEl('p', 'rc-kb-desc', t.description));
       if (t.files.length) {
         const box = el('div', 'rc-kv');
         box.append(el('p', 'rc-kv-k', t.files.length === 1 ? '1 file' : `${t.files.length} files`));
         const ul = el('ul', 'rc-kb-files');
         for (const f of t.files) {
           const li = el('li');
-          li.append(el('span', 'rc-file-path', f.name), el('span', 'rc-file-n', chatSize(f.size)));
+          li.append(dataEl('span', 'rc-file-path', f.name), el('span', 'rc-file-n', chatSize(f.size)));
           ul.append(li);
         }
         box.append(ul, el('p', 'rc-muted rc-small-text', 'Files open on your Mac.'));
@@ -1453,7 +1482,7 @@
         const ul = el('ul', 'rc-kb-hist');
         for (const h of t.history) {
           const li = el('li', `rc-tone-${h.tone}`);
-          li.append(el('span', 'rc-kb-when', h.when), el('span', null, h.text));
+          li.append(dataEl('span', 'rc-kb-when', h.when), dataEl('span', null, h.text));
           ul.append(li);
         }
         box.append(ul);
@@ -1572,7 +1601,7 @@
     else if (what === 'merges') { id = str(it.id); main = `Merge of ${str(it.sandbox)}`; meta = `${str(it.variant)} · ${Number(it.branches) || 0} branches`; }
     else if (what === 'network') { id = str(it.id); main = str(it.host); meta = str(it.sandbox); }
     else { id = str(it.name); main = str(it.name); meta = [str(it.agent) || (it.chat ? 'chat' : ''), str(it.workspace)].filter(Boolean).join(' · '); }
-    b.append(el('span', 'rc-ap-main', main), el('span', 'rc-ap-meta', meta));
+    b.append(dataEl('span', 'rc-ap-main', main, what === 'network'), dataEl('span', 'rc-ap-meta', meta));
     b.addEventListener('click', () => openItem(what, id));
     li.append(b);
     return li;
@@ -1613,7 +1642,7 @@
   function field_(label, value, opts = {}) {
     const box = el('div', `rc-kv${opts.mono ? ' rc-kv-mono' : ''}`);
     box.append(el('p', 'rc-kv-k', label));
-    const v = el('p', 'rc-kv-v', value);
+    const v = dataEl('p', 'rc-kv-v', value, opts.mono);
     box.append(v);
     if (opts.fold && (value.length > 220 || value.split('\n').length > 4)) {
       v.classList.add('rc-folded');
@@ -1629,14 +1658,15 @@
     }
     return box;
   }
+  // A detail's head: its title (data) and a line of parts ([string | { data }]).
   function head(title, sub) {
     const h = el('div', 'rc-item-head');
-    h.append(el('h2', 'rc-item-title', title));
-    if (sub) h.append(el('p', 'rc-item-sub', sub));
+    h.append(dataEl('h2', 'rc-item-title', title));
+    if (sub && sub.length) h.append(partsInto(el('p', 'rc-item-sub'), sub));
     return h;
   }
   function planView(p) {
-    const out = [head(str(p.summary) || 'A plan', `${str(p.sandbox)} · ${str(p.variant) === 'shared' ? 'one shared branch' : 'a branch per thread'}`)];
+    const out = [head(str(p.summary) || 'A plan', [{ data: str(p.sandbox) }, ` · ${str(p.variant) === 'shared' ? 'one shared branch' : 'a branch per thread'}`])];
     if (str(p.justification)) out.push(field_('Why this way', str(p.justification), { fold: true }));
     const dirty = Number(p.main_uncommitted) || 0;
     if (dirty) out.push(el('p', 'rc-item-warn', `${dirty} uncommitted ${dirty === 1 ? 'change' : 'changes'} in the main checkout.`));
@@ -1645,9 +1675,9 @@
     for (const t of threads) {
       const card = el('div', 'rc-thread');
       const top = el('div', 'rc-thread-top');
-      top.append(el('span', 'rc-thread-name', str(t.name)));
+      top.append(dataEl('span', 'rc-thread-name', str(t.name), true));
       const meta = [str(t.model), str(t.repo) && str(t.repo) !== '.' ? str(t.repo) : '', str(t.ticket)].filter(Boolean).join(' · ');
-      if (meta) top.append(el('span', 'rc-thread-meta', meta));
+      if (meta) top.append(dataEl('span', 'rc-thread-meta', meta, true));
       card.append(top);
       if (str(t.scope)) card.append(field_('Scope', str(t.scope), { fold: true }));
       if (str(t.goal)) card.append(field_('Goal', str(t.goal), { fold: true }));
@@ -1655,13 +1685,14 @@
     }
     return out;
   }
-  const short = h => str(h).slice(0, 7);
+  // A tip is shown as 7 hex characters; anything else is data, shown marked.
+  const short = h => (/^[0-9a-f]{7,64}$/.test(str(h)) ? str(h).slice(0, 7) : str(h));
   function mergeView(m) {
-    const out = [head(`Merge of ${str(m.sandbox)}`, str(m.variant) === 'shared' ? 'one shared branch' : 'a branch per thread')];
+    const out = [head(`Merge of ${str(m.sandbox)}`, [str(m.variant) === 'shared' ? 'one shared branch' : 'a branch per thread'])];
     const order = Array.isArray(m.order) ? m.order.map(str) : [];
     if (order.length) {
       const ol = el('ol', 'rc-order');
-      for (const o of order) ol.append(el('li', null, o));
+      for (const o of order) ol.append(dataEl('li', null, o, true));
       const box = el('div', 'rc-kv');
       box.append(el('p', 'rc-kv-k', 'In this order'), ol);
       out.push(box);
@@ -1672,7 +1703,7 @@
       const ul = el('ul', 'rc-dist');
       for (const d of dist) {
         const li = el('li', `rc-dist-${d?.kind === 'warning' ? 'warning' : 'decision'}`);
-        li.append(el('span', 'rc-dist-k', d?.kind === 'warning' ? 'Warning' : 'Decision'), el('span', null, str(d?.text)));
+        li.append(el('span', 'rc-dist-k', d?.kind === 'warning' ? 'Warning' : 'Decision'), dataEl('span', null, str(d?.text)));
         ul.append(li);
       }
       const box = el('div', 'rc-kv');
@@ -1682,12 +1713,12 @@
     for (const b of Array.isArray(m.branches) ? m.branches : []) {
       const card = el('div', 'rc-branch');
       const top = el('div', 'rc-thread-top');
-      top.append(el('span', 'rc-thread-name', str(b.branch) || str(b.thread)));
-      top.append(el('span', 'rc-thread-meta', b.tip ? short(b.tip) : 'unreadable'));
+      top.append(dataEl('span', 'rc-thread-name', str(b.branch) || str(b.thread), true));
+      top.append(b.tip ? dataEl('span', 'rc-thread-meta', short(b.tip), true) : el('span', 'rc-thread-meta', 'unreadable'));
       card.append(top);
       const base = b.base && typeof b.base === 'object' ? b.base : {};
       const ins = Number(b.insertions) || 0, del = Number(b.deletions) || 0;
-      card.append(el('p', 'rc-branch-line', `into ${str(base.branch)} at ${base.tip ? short(base.tip) : 'unreadable'}${str(b.repo) && str(b.repo) !== '.' ? ` (${str(b.repo)})` : ''}`));
+      card.append(partsInto(el('p', 'rc-branch-line'), ['into ', { data: str(base.branch) }, ' at ', base.tip ? { data: short(base.tip) } : 'unreadable', ...(str(b.repo) && str(b.repo) !== '.' ? [' (', { data: str(b.repo) }, ')'] : [])]));
       const stat = el('p', 'rc-branch-stat');
       stat.append(el('span', null, `${Number(b.ahead) || 0} ${Number(b.ahead) === 1 ? 'commit' : 'commits'} · ${Number(b.files_changed) || 0} files `), el('span', 'rc-ins', `+${ins}`), ' ', el('span', 'rc-del', `−${del}`));
       card.append(stat);
@@ -1697,7 +1728,7 @@
         const ul = el('ul', 'rc-files');
         for (const f of files) {
           const li = el('li');
-          li.append(el('span', 'rc-file-path', str(f?.path)));
+          li.append(dataEl('span', 'rc-file-path', str(f?.path), true));
           const n = el('span', 'rc-file-n');
           if (f?.insertions === null || f?.deletions === null) n.textContent = 'binary';
           else n.append(el('span', 'rc-ins', `+${Number(f?.insertions) || 0}`), ' ', el('span', 'rc-del', `−${Number(f?.deletions) || 0}`));
@@ -1715,7 +1746,7 @@
     return out;
   }
   function networkView(r) {
-    const out = [head(str(r.host), `asked by ${str(r.sandbox)}`)];
+    const out = [head(str(r.host), ['asked by ', { data: str(r.sandbox) }])];
     if (str(r.detail)) out.push(field_('What sbx says', str(r.detail), { fold: true, mono: true }));
     if (str(r.created_at)) out.push(field_('Asked at', str(r.created_at)));
     const opts = Array.isArray(r.options) ? r.options : [];
@@ -1723,15 +1754,21 @@
     const allowHere = opts.some(o => /allow/i.test(`${str(o?.id)} ${str(o?.label)}`));
     if (!opts.length) out.push(el('p', 'rc-item-note', 'Answer this on your Mac.'));
     else if (!allowHere) out.push(el('p', 'rc-item-note', 'Allowing this needs your Mac.'));
-    if (macOnly.length) out.push(el('p', 'rc-muted rc-small-text', `On your Mac only: ${macOnly.join(', ')}.`));
+    if (macOnly.length) {
+      const p = el('p', 'rc-muted rc-small-text', 'On your Mac only: ');
+      macOnly.forEach((l, i) => { if (i) p.append(', '); p.append(dataEl('span', null, l, true)); });
+      p.append('.');
+      out.push(p);
+    }
     return out;
   }
   function stoppedView(sb, confirm) {
-    const out = [head(str(sb.name), [str(sb.agent) || (sb.chat ? 'chat' : ''), str(sb.created_at)].filter(Boolean).join(' · '))];
+    const sub = [str(sb.agent) || (sb.chat ? 'chat' : ''), str(sb.created_at)].filter(Boolean).flatMap((x, i) => (i ? [' · ', { data: x }] : [{ data: x }]));
+    const out = [head(str(sb.name), sub)];
     const lines = Array.isArray(confirm) ? confirm.map(str).filter(Boolean) : [];
     const box = el('div', 'rc-confirm-lines');
     // The daemon's own sentences, verbatim, as text.
-    for (const l of lines) box.append(el('p', null, l));
+    for (const l of lines) box.append(dataEl('p', null, l));
     out.push(box);
     return out;
   }
@@ -1745,7 +1782,8 @@
       return;
     }
     const btn = (label, kind, cls, option) => {
-      const b = el('button', `rc-btn ${cls}`, label);
+      const b = el('button', `rc-btn ${cls}`);
+      if (option) b.append(dataEl('span', null, label)); else b.textContent = label;
       b.type = 'button';
       b.dataset.kind = kind;
       b.addEventListener('click', () => openSheet(kind, option));
@@ -1772,8 +1810,14 @@
     if (!st.item?.data || !RC_KINDS.includes(kind)) return;
     closeSheet();
     sheet = { kind, option: option || null, ctl: null, token: ++sheetSeq };
-    $('sheet-title').textContent = kind === 'network_respond' ? `Answer "${option?.label ?? ''}"?` : SHEET_TITLE[kind];
-    $('sheet-line').textContent = rcActLine(kind, st.item.data, option);
+    const title = $('sheet-title');
+    title.replaceChildren();
+    if (kind === 'network_respond') partsInto(title, ['Answer ', { data: option?.label ?? option?.id ?? '' }, '?']);
+    else title.textContent = SHEET_TITLE[kind];
+    // What will happen, to what: the names isolated, in monospace, marked.
+    const line = $('sheet-line');
+    line.replaceChildren();
+    partsInto(line, rcActParts(kind, st.item.data, option));
     $('sheet-status').textContent = '';
     const go = $('sheet-go');
     go.textContent = GO[kind];

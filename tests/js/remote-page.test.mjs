@@ -661,7 +661,7 @@ test('hostile file names stay text', { skip }, async () => {
   const { ctx, page, problems } = await phone(320, 568);
   await page.goto(`${base()}/`);
   await page.tap('.rc-leader >> text=website');
-  const evil = ['<img src=x onerror="window.__pwned=1">.png', '"><svg onload=window.__pwned=2>.txt', '‮gnp.exe', 'a'.repeat(400) + '.jpeg'];
+  const evil = ['<img src=x onerror="window.__pwned=1">.png', '"><svg onload=window.__pwned=2>.txt', '\u202Egnp.exe', 'a'.repeat(400) + '.jpeg'];
   await pick(page, evil.map(n => fileOf(n, 10)));
   await page.waitForFunction(() => document.querySelectorAll('.rc-fchip[data-state="done"]').length === 4, null, { timeout: 10000 });
   const r = await page.evaluate(() => ({
@@ -1223,7 +1223,7 @@ test('kanban: the switch keeps each place; one column at a time, by picker or sw
   assert.equal(await selected(page), 'progress', 'active things first');
   assert.deepEqual(await visibleCards(page), ['t:12', 'th:checkout'], 'the daemon\'s order');
   assert.deepEqual(await page.$$eval('.rc-kb-tab', t => t.map(e => e.textContent)), ['Planned2', 'In progress2', 'In test0', 'Ready to merge1', 'Merged14']);
-  assert.deepEqual(await page.$$eval('.rc-kb-lane.rc-on .rc-kb-mark', m => m.map(e => [e.textContent, e.className])), [['blocked', 'rc-kb-mark rc-tone-amber']]);
+  assert.deepEqual(await page.$$eval('.rc-kb-lane.rc-on .rc-kb-mark', m => m.map(e => [e.textContent, e.className])), [['blocked', 'rc-data rc-kb-mark rc-tone-amber']]);
   await shot(page, '71-kanban-in-progress');
   await page.tap('.rc-kb-tab[data-col="test"]');
   assert.equal(await page.textContent('.rc-kb-lane.rc-on .rc-kb-empty'), 'Nothing in test.');
@@ -1606,6 +1606,72 @@ test('every bar under an emulated 59 pt status bar: solid, nothing over its text
     return hit?.id;
   });
   assert.equal(over, 'field');
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+// ── Security review P6: controls shown, strings isolated, the sheet unambiguous ──
+test('level 2: bidi and invisible controls in agent text and paths are shown, never honoured', { skip }, async () => {
+  const CC = ['\u202A', '\u202B', '\u202C', '\u202D', '\u202E', '\u2066', '\u2067', '\u2068', '\u2069', '\u200B', '\u200C', '\u200D', '\u200E', '\u200F', '\u2060', '\uFEFF', '\u00AD'];
+  const all = CC.join('');
+  const L = structuredClone(FX.level2);
+  const RAW = /[\p{Cf}\u2028\u2029]/u;
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
+  const { ctx, page, problems } = await phone();
+  await page.route('**/r/plans/p-*', async route => {
+    const p = structuredClone(L.plan);
+    p.plan.sandbox = `sh\u202Eop`;
+    p.plan.summary = `Approve ${all} this`;
+    p.plan.threads[0].name = `db\u200B-schema`;
+    p.plan.threads[0].goal = `Goal with \u2066isolate\u2069 and soft\u00ADhyphen`;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...p, digest: 'a'.repeat(64) }) });
+  });
+  await page.route('**/r/merges/p-*', async route => {
+    const m = structuredClone(L.merge);
+    m.merge.sandbox = 'web\u202Esite';
+    m.merge.order = ['foo\u202Bter', 'contact-form'];
+    m.merge.branches[0].branch = 'sbxw/foo\u200Fter';
+    m.merge.branches[0].files[0].path = 'src/\u202Etxt.exe';
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(m) });
+  });
+  await openApprovals(page);
+  await openItemOf(page, 'plans');
+  await page.tap('.rc-fold').catch(() => {});
+  const check = scope => page.evaluate(([sel, raw]) => {
+    const root = document.querySelector(sel);
+    const re = new RegExp(raw, 'u');
+    return {
+      raw: re.test(root.textContent),
+      codes: [...root.querySelectorAll('.rc-cc')].map(e => e.textContent),
+      isolated: [...root.querySelectorAll('.rc-data')].every(e => e.dir === 'auto' && getComputedStyle(e).unicodeBidi === 'isolate'),
+      data: root.querySelectorAll('.rc-data').length,
+    };
+  }, [scope, RAW.source]);
+  let r = await check('#item');
+  assert.equal(r.raw, false, 'no raw control in the DOM text');
+  for (const c of CC) assert.ok(r.codes.includes(`U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`), `marker for ${c.codePointAt(0).toString(16)}`);
+  assert.ok(r.isolated && r.data > 3, 'every data string isolated');
+  await page.tap('[data-kind="plan_approve"]');
+  await page.waitForSelector('#sheet:not([hidden])');
+  r = await check('#sheet');
+  assert.equal(r.raw, false);
+  assert.deepEqual(r.codes, ['U+202E']);
+  assert.equal(await page.textContent('#sheet-line'), 'Approve the plan of shU+202Eop as it is: it starts 2 threads.');
+  assert.equal(await page.$eval('#sheet-line .rc-data', e => getComputedStyle(e).fontFamily.includes('mono') || getComputedStyle(e).fontFamily.includes('Menlo')), true, 'the name in monospace');
+  await shot(page, '54-sheet-controls-shown');
+  await page.tap('#sheet-cancel');
+  await page.tap('#back');
+  await openItemOf(page, 'merges');
+  await page.tap('.rc-files-box summary >> nth=0');
+  r = await check('#item');
+  assert.equal(r.raw, false);
+  assert.equal(await page.textContent('.rc-file-path'), 'src/U+202Etxt.exe', 'the path cannot pass for another file');
+  assert.ok(r.codes.includes('U+202B') && r.codes.includes('U+200F'));
+  await shot(page, '55-merge-controls-shown');
+  await page.tap('[data-kind="merge"]');
+  assert.equal(await page.textContent('#sheet-line'), 'Merge 2 branches of webU+202Esite in the order shown, stopping at the first conflict. Order: fooU+202Bter, contact-form.');
+  assert.equal((await check('#sheet')).raw, false);
+  await cleanSpy(page);
   assert.deepEqual(problems, []);
   await ctx.close();
 });

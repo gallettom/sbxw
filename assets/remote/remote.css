@@ -886,6 +886,25 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .rc-views { max-width: 420px; margin-left: auto; margin-right: auto; width: calc(100% - 24px); }
 }
 
+/* ── Text that is not the page's own (security review P6) ── */
+.rc-data { unicode-bidi: isolate; }
+.rc-mono { font-family: var(--font-mono); font-size: 0.92em; }
+.rc-sheet-line .rc-data, .rc-sheet h2 .rc-data { padding: 0 3px; border-radius: 4px; background: rgba(110, 118, 129, 0.2); color: var(--c-text-bright); overflow-wrap: anywhere; }
+/* An invisible or bidi control, shown instead of honoured. */
+.rc-cc {
+  display: inline-block;
+  margin: 0 1px;
+  padding: 0 3px;
+  border: 1px solid var(--c-amber);
+  border-radius: 3px;
+  font: 600 10px/14px var(--font-mono);
+  color: var(--c-amber);
+  vertical-align: 1px;
+  direction: ltr;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+}
+
 /* ── Motion: short, and only where something changed ── */
 @keyframes rc-pulse { 50% { opacity: 0.3; } }
 @keyframes rc-rise { from { opacity: 0; transform: translateY(6px); } }

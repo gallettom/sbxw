@@ -20,7 +20,7 @@ const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcSta
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
   'rcL2Fail', 'RC_L2_REASON', 'rcActPath', 'rcActLine', 'rcActDone', 'rcL2Client',
-  'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback'];
+  'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback', 'rcMarked', 'rcActParts'];
 const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
@@ -576,7 +576,7 @@ test('level 2: the entry\'s sentence, each refusal, the routes, the sheet\'s lin
   assert.equal(rc.rcActPath('sandbox_remove', '../x'), '/r/stopped/..%2Fx/remove');
   assert.equal(rc.rcActPath('shutdown', 'x'), null);
   assert.equal(rc.rcActLine('sandbox_remove', { name: 'old' }), 'Remove the stopped sandbox old. This cannot be undone.');
-  assert.equal(rc.rcActLine('network_respond', { sandbox: 'docs', host: 'x.org' }, { id: 'dismiss', label: 'dismiss' }), 'Answer "dismiss" to docs\'s request for x.org.');
+  assert.equal(rc.rcActLine('network_respond', { sandbox: 'docs', host: 'x.org' }, { id: 'dismiss', label: 'dismiss' }), 'Answer dismiss to the request of docs for x.org.');
   assert.equal(rc.rcActDone('merge', fx.level2.merge_done), 'Merged: footer, contact-form.');
   assert.equal(rc.rcActDone('merge', fx.level2.merge_conflict), 'Stopped at contact-form: conflict in src/pages/contact.tsx, src/components/Footer.tsx');
   assert.equal(rc.rcActDone('merge', null), 'Merged.');
@@ -636,4 +636,32 @@ test('iPhone dictation: words at the caret, final and interim apart, the languag
   for (const e of ['not-allowed', 'service-not-allowed', 'network', 'audio-capture']) assert.equal(rc.rcSpeechFallback(e), true, e);
   for (const e of ['no-speech', 'aborted', 'language-not-supported', '', undefined]) assert.equal(rc.rcSpeechFallback(e), false, String(e));
   assert.match(plain(rc.rcStatus({ rec: 'listening' })).text, /^Listening \(iPhone dictation\)\. .*nothing is sent\.$/);
+});
+
+// ── Security review P6: invisible and bidi controls made visible ──
+const CONTROLS = [0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0xFEFF, 0x00AD,
+  0x2028, 0x2029, 0x061C, 0x034F, 0x115F, 0x1160, 0x3164, 0xFE0F, 0xFFA0, 0xFFF9, 0xE0001, 0xE0041, 0x001B, 0x007F, 0x0085];
+test('every invisible or bidi control becomes a visible code, nothing else does', () => {
+  for (const cp of CONTROLS) {
+    const parts = plain(rc.rcMarked(`a${String.fromCodePoint(cp)}b`));
+    assert.deepEqual(parts, ['a', { code: `U+${cp.toString(16).toUpperCase().padStart(4, '0')}` }, 'b'], cp.toString(16));
+  }
+  for (const ok of ['plain', 'é à ü', '日本語', 'עברית', 'العربية', '😀👍🏽', 'a\tb', 'line\nline', 'src/x.rs']) {
+    assert.deepEqual(plain(rc.rcMarked(ok)), [ok], ok);
+  }
+  assert.deepEqual(plain(rc.rcMarked('')), []);
+  assert.deepEqual(plain(rc.rcMarked(null)), []);
+  // A path that would read as another file: the reordering control is shown.
+  const trick = `src/\u202Etxt.exe`;
+  assert.deepEqual(plain(rc.rcMarked(trick)), ['src/', { code: 'U+202E' }, 'txt.exe']);
+});
+test('a sheet\'s line: the page\'s words and the daemon\'s data apart', () => {
+  const parts = plain(rc.rcActParts('merge', { sandbox: 'web\u202Esite', branches: [{}, {}], order: ['a', 'b\u200B'] }));
+  assert.deepEqual(parts, ['Merge 2 branches of ', { data: 'web\u202Esite' }, ' in the order shown, stopping at the first conflict.', ' Order: ', { data: 'a' }, ', ', { data: 'b\u200B' }, '.']);
+  for (const kind of ['plan_approve', 'plan_refuse', 'network_respond', 'sandbox_remove']) {
+    const p = plain(rc.rcActParts(kind, { sandbox: 's', name: 'n', host: 'h', threads: [] }, { id: 'dismiss', label: 'dismiss' }));
+    assert.ok(p.some(x => typeof x === 'object'), kind);
+    assert.ok(p.filter(x => typeof x === 'string').every(x => !/[\p{Cf}]/u.test(x)), 'the page\'s own words carry no control');
+  }
+  assert.deepEqual(plain(rc.rcActParts('nope', {})), []);
 });
