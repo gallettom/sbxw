@@ -3621,6 +3621,16 @@
   /* The Markdown of an answer (chatMarkdown in js/chat-core.js). */
   .cd-msg.ai strong { color: var(--c-text-bright); }
   .cd-msg.ai a { color: var(--c-blue); }
+  /* A file path in an answer: a button that opens it in the Project panel (chatWireFiles). */
+  .chat-file {
+    display: inline; padding: 0 .25rem; margin: 0; border: 0; border-radius: var(--r-xs);
+    background: var(--c-elevated); color: var(--c-blue); font: 12px var(--font-mono);
+    cursor: pointer; text-decoration: underline dotted; user-select: text; text-align: left;
+    overflow-wrap: anywhere;
+  }
+  .chat-file::before { content: "\1F4C4\FE0E\00a0"; font-size: 11px; }
+  .chat-file:hover { text-decoration: underline; }
+  .chat-file:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
   .cd-msg.ai code { padding: 0 .25rem; background: var(--c-elevated); border-radius: var(--r-xs); font: 12px var(--font-mono); }
   .cd-msg.ai pre {
     margin: 0 0 .6em; padding: .45rem .55rem; overflow-x: auto; white-space: pre;

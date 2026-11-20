@@ -88,34 +88,144 @@ function chatEscape(s) {
   return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ── File paths in an agent's reply ─────────────────────────────────────────
+// A token that looks like a path to a previewable file becomes a button that
+// opens it in the Project panel's Files tab (see `fxOpenPath` in files.js).
+// Detection is deliberately boring: ASCII path characters only, a slash (or a
+// leading ./ ~/ /), no `..`, no scheme, a file name with an extension from the
+// list below, an optional :line. The scan is linear: tokens are cut at
+// whitespace and quotes, and anything over CHAT_FILE_MAX is dropped before any
+// pattern runs on it. The path never enters the markup: the HTML carries a
+// button with an integer, and the path waits in the caller's `files.paths`.
+// Extensions the Files preview handles: images and video it draws, HTML in its
+// sandboxed frame, any other non-binary file as text.
+const CHAT_FILE_EXT = new Set([
+  'md', 'markdown', 'txt', 'html', 'htm', 'json', 'csv', 'log', 'pdf',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg',
+  'js', 'mjs', 'ts', 'tsx', 'jsx', 'py', 'rs', 'go', 'toml', 'yaml', 'yml', 'sh', 'css', 'xml', 'sql', 'rb', 'java', 'c', 'h', 'cpp',
+]);
+const CHAT_FILE_MAX = 300;
+const CHAT_FILE_NAME = /^[A-Za-z0-9_+@%-][A-Za-z0-9_.+@%-]*$/;
+const CHAT_FILE_CHARS = /^[A-Za-z0-9_.+@%\-\/~]+$/;
+
+// `token` as `{ path, line }` when it is a file path worth linking, else null.
+function chatFilePath(token) {
+  if (typeof token !== 'string' || token.length === 0 || token.length > CHAT_FILE_MAX) return null;
+  let t = token;
+  let line = null;
+  const m = /:(\d{1,7})(?::\d{1,7})?$/.exec(t);
+  if (m) { line = Number(m[1]); t = t.slice(0, m.index); }
+  if (!CHAT_FILE_CHARS.test(t)) return null;
+  const slash = t.indexOf('/');
+  if (slash < 0) return null;
+  if (t.startsWith('~') && !t.startsWith('~/')) return null;
+  if (t.endsWith('/')) return null;
+  const parts = t.split('/');
+  parts.forEach((seg, i) => { if (i === 0 && (seg === '' || seg === '~' || seg === '.')) parts[i] = null; });
+  const segs = parts.filter(x => x !== null);
+  for (const seg of segs) if (seg === '' || seg === '.' || seg === '..') return null;
+  const name = segs[segs.length - 1];
+  const dot = name.lastIndexOf('.');
+  if (dot < 1) return null;
+  if (!CHAT_FILE_NAME.test(name) || !CHAT_FILE_EXT.has(name.slice(dot + 1).toLowerCase())) return null;
+  return { path: t, line };
+}
+
+// The path inside `s` between whitespace and quotes: trailing punctuation and
+// emphasis stars are not part of it. `{ start, end, found }` or null.
+function chatFileTokens(s) {
+  const out = [];
+  const re = /[^\s"'`<>()\[\]{}|\uE000-\uE003]+/g;
+  let m;
+  while ((m = re.exec(s))) {
+    if (m[0].length > CHAT_FILE_MAX + 40) continue;
+    let a = m.index, b = m.index + m[0].length;
+    while (a < b && s[a] === '*') a++;
+    while (b > a && /[*.,;:!?]/.test(s[b - 1])) b--;
+    if (s.startsWith('](', b)) continue; // the label of a markdown link
+    const found = chatFilePath(s.slice(a, b));
+    if (found) out.push({ start: a, end: b, found });
+  }
+  return out;
+}
+
 // Code spans are lifted out first and replaced by a placeholder (private-use
 // characters, stripped from the input beforehand so the text cannot forge
 // one), so bold, italics and link labels can wrap a code span while its
 // content is never read as markdown. Placeholders are excluded from link URLs.
-function chatInline(s) {
+// With `files` ({ paths: [] }), a code span that is only a file path, and a
+// bare path in the text, become file buttons; the path goes to `files.paths`
+// and the button holds its index.
+function chatInline(s, files) {
   const codes = [];
-  const text = s
-    .replace(/[\uE000\uE001]/g, '')
-    .replace(/`([^`\n]+)`/g, (_, code) => `\uE000${codes.push(code) - 1}\uE001`);
+  const links = [];
+  const fileButton = (found, label) => {
+    const i = files.paths.push(found) - 1;
+    return `<button type="button" class="chat-file" data-file="${i}">${chatEscape(label)}</button>`;
+  };
+  let text = s
+    .replace(/[\uE000-\uE003]/g, '')
+    .replace(/`([^`\n]+)`/g, (_, code) => {
+      const found = files && chatFilePath(code.trim());
+      if (found) return `\uE002${links.push(fileButton(found, code.trim())) - 1}\uE003`;
+      return `\uE000${codes.push(code) - 1}\uE001`;
+    });
+  if (files) {
+    let out = '';
+    let at = 0;
+    for (const t of chatFileTokens(text)) {
+      out += text.slice(at, t.start) + `\uE002${links.push(fileButton(t.found, text.slice(t.start, t.end))) - 1}\uE003`;
+      at = t.end;
+    }
+    text = out + text.slice(at);
+  }
+  const plain = h => h.replace(/<button[^>]*>([^<]*)<\/button>/, '$1');
   return chatEscape(text)
     .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*\w])\*([^*\s][^*\n]*?)\*(?![\w*])/g, '$1<em>$2</em>')
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)\uE000\uE001]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-    .replace(/\uE000(\d+)\uE001/g, (_, n) => `<code>${chatEscape(codes[n])}</code>`);
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)\uE000-\uE003]+)\)/g, (_, label, url) =>
+      `<a href="${url}" target="_blank" rel="noopener noreferrer">${label.replace(/\uE002(\d+)\uE003/g, (_m, n) => plain(links[n]))}</a>`)
+    .replace(/\uE000(\d+)\uE001/g, (_, n) => `<code>${chatEscape(codes[n])}</code>`)
+    .replace(/\uE002(\d+)\uE003/g, (_, n) => links[n]);
 }
 
-function chatMarkdown(text) {
+function chatMarkdown(text, files) {
   return text.split(/```[^\n]*\n([\s\S]*?)```/).map((part, i) => {
     if (i % 2) return `<pre><code>${chatEscape(part.replace(/\n$/, ''))}</code></pre>`;
-    return part.split(/\n\s*\n/).map(chatBlock).join('');
+    return part.split(/\n\s*\n/).map(b => chatBlock(b, files)).join('');
   }).join('');
+}
+
+// `text` as chat markdown into `el`; its file paths open in `sandbox`'s Files
+// tab where this page has one (the extension's side panel has none: there
+// the path stays plain text).
+function chatMarkdownInto(el, text, sandbox) {
+  const canOpen = sandbox && typeof fxOpenPath === 'function';
+  const files = canOpen ? { paths: [] } : null;
+  el.innerHTML = chatMarkdown(text, files);
+  if (canOpen) chatWireFiles(el, files, sandbox, fxOpenPath, typeof fxResolvePath === 'function' ? fxResolvePath : null);
+}
+
+// Give the file buttons `root` holds their behaviour: a press calls
+// `open(sandbox, path)` once, with the path as the agent wrote it. Titles say
+// the full path that will open and the sandbox. `files` belongs to this one
+// rendering: a button can only reach the paths of its own message. Nothing
+// runs before a press.
+function chatWireFiles(root, files, sandbox, open, resolve) {
+  root.querySelectorAll('button.chat-file').forEach(btn => {
+    const found = files.paths[Number(btn.dataset.file)];
+    if (!found) return;
+    const abs = resolve ? resolve(sandbox, found.path) : null;
+    btn.title = `Open ${abs || `${found.path} (relative to its workspace)`} in ${sandbox}'s Project files`;
+    btn.addEventListener('click', () => open(sandbox, found.path));
+  });
 }
 
 // One blank-line-separated block: a run of `- ` or `1. ` lines is a list, a
 // `#` line a heading, anything else a paragraph that keeps its line breaks.
 // Lists are real lists so a long item wraps under its own text, not under
 // the bullet.
-function chatBlock(block) {
+function chatBlock(block, files) {
   let html = '';
   let para = [];
   let list = null; // { tag, start, items }
@@ -138,7 +248,7 @@ function chatBlock(block) {
     if (heading) {
       flushPara();
       flushList();
-      html += `<p><strong>${chatInline(heading[1])}</strong></p>`;
+      html += `<p><strong>${chatInline(heading[1], files)}</strong></p>`;
     } else if (bullet || numbered) {
       flushPara();
       const tag = bullet ? 'ul' : 'ol';
@@ -146,13 +256,13 @@ function chatBlock(block) {
         flushList();
         list = { tag, start: numbered ? Number(numbered[1]) : 1, items: [] };
       }
-      list.items.push(chatInline(bullet ? bullet[1] : numbered[2]));
+      list.items.push(chatInline(bullet ? bullet[1] : numbered[2], files));
     } else if (list && /^\s{2,}\S/.test(line)) {
       // An indented line under an item carries on that item.
-      list.items[list.items.length - 1] += ' ' + chatInline(line.trim());
+      list.items[list.items.length - 1] += ' ' + chatInline(line.trim(), files);
     } else {
       flushList();
-      para.push(chatInline(line));
+      para.push(chatInline(line, files));
     }
   }
   flushPara();
@@ -209,7 +319,9 @@ function chatGlyph(grid, host) {
   };
 }
 
-function chatLine(cls, text, meta) {
+// `sandbox`, when given and the Project panel exists in this page, makes the
+// file paths in an agent's reply open in that sandbox's Files tab.
+function chatLine(cls, text, meta, sandbox) {
   const el = document.createElement('div');
   el.className = 'cd-msg ' + cls;
   if (meta) {
@@ -220,7 +332,7 @@ function chatLine(cls, text, meta) {
   }
   if (cls === 'ai') {
     const body = document.createElement('div');
-    body.innerHTML = chatMarkdown(text);
+    chatMarkdownInto(body, text, sandbox);
     el.appendChild(body);
   } else {
     el.appendChild(document.createTextNode(text));

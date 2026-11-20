@@ -367,6 +367,30 @@ such as `public/`, `src/` or `templates/`, or one beside web code.
   `/tmp`, never on those folders themselves, `.sbxw-artifacts` or `.git`. The
   daemon re-checks the resolved path, so a symlink is no way out.
 
+**File paths in chat.** In an agent's reply, a path such as
+`.sbxw-artifacts/foo.md`, `./a/b.json:12`, `~/notes/x.txt` or `/var/log/y.log`
+becomes a small file button (dotted underline, 📄, monospace). Pressing it (Tab,
+Enter or click) opens this panel for **that message's sandbox**, in the file's
+folder, with the file selected and previewed: the same listing and preview as a
+click in the list (`fxOpenPath` in `files.js`). A file the folder lacks shows
+"Not found in <sandbox>: <path>" in the panel's notice line. Hovering shows the
+full resolved path and the sandbox. Nothing is requested until a press.
+
+Detection is strict: a token of ASCII path characters with a `/` (or a leading
+`./`, `~/`, `/`), no `..` or `//`, no scheme (`http:`, `file:`, `javascript:`),
+at most 300 characters, ending in a file name with an extension from a short
+list (md, markdown, txt, html, htm, json, csv, log, pdf, png, jpg, jpeg, gif,
+webp, svg, js, mjs, ts, tsx, jsx, py, rs, go, toml, yaml, yml, sh, css, xml,
+sql, rb, java, c, h, cpp), optionally `:line` (the preview does not scroll to
+it). It must stand alone in the text or be the whole content of a backtick
+span. Nothing inside a multi-line code fence, a markdown link label, or the
+person's own messages. Relative paths resolve against the sandbox's workspace,
+`~/` against its home. It works in the chat dock and in Jarvis's panel (agent
+cards and question rounds); the browser extension's side panel and the
+request popup show the path as plain text. The button carries only an index
+into the paths of its own message; the path is never put in markup, an
+attribute or a URL, and the daemon alone decides what may be read.
+
 A running sandbox is read through `sbx exec`, so you see what the agent sees. A
 stopped one shows its workspace from the host and says so, rather than being
 started to list a folder. Every file is served with

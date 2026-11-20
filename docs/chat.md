@@ -50,6 +50,13 @@ It uses the same calls as the [island](island.md)'s composer
 only one reply per session, so the transcript lives in the tab's
 `sessionStorage`: it survives a reload, not a closed tab.
 
+### File paths in answers
+
+A file path in an answer (`.sbxw-artifacts/report.md`, `src/a.rs:12`) is a
+button: pressing it opens that chat's sandbox in the Project panel on the file.
+The rule and its limits are in [Web UI](web-ui.md#files). Your own messages are
+never linked, and the browser side panel shows the path as text.
+
 ### How a message is typed in
 
 `POST /api/chat/push` does everything server-side: create the sandbox if

@@ -1081,7 +1081,7 @@ async function vcAgentMessage(sandbox, thread, text) {
     row.className = 'vc-msg vc-jarvis';
     const body = document.createElement('div');
     body.className = 'vc-md';
-    body.innerHTML = chatMarkdown(text);
+    chatMarkdownInto(body, text, sandbox);
     row.append(body, vcReadButton(text));
     vcLog.append(row);
     vcLog.scrollTop = vcLog.scrollHeight;
@@ -1093,7 +1093,7 @@ async function vcAgentMessage(sandbox, thread, text) {
   head.append(vcReadButton(text));
   const body = document.createElement('div');
   body.className = 'vc-agent-body vc-md';
-  body.innerHTML = chatMarkdown(text);
+  chatMarkdownInto(body, text, sandbox);
   card.insertBefore(body, foot);
   const hint = document.createElement('span');
   hint.className = 'vc-armed-hint';
@@ -1147,7 +1147,7 @@ function vcGrill(sandbox, thread, text, grill) {
     sum.textContent = 'Context';
     const b = document.createElement('div');
     b.className = 'vc-agent-body vc-md';
-    b.innerHTML = chatMarkdown(grill.intro);
+    chatMarkdownInto(b, grill.intro, sandbox);
     ctx.append(sum, b);
     card.insertBefore(ctx, foot);
   }
