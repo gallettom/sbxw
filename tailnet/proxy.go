@@ -29,7 +29,6 @@ const (
 // under any of the stripped prefixes, never reaches the daemon.
 const (
 	hdrForwardedFor = "X-Forwarded-For"
-	hdrTailnetNode  = "X-Sbxw-Tailnet-Node"
 )
 
 // strippedPrefixes are removed from every incoming request, compared on the
@@ -80,10 +79,12 @@ func stripHeaders(h http.Header) {
 
 type peerKey struct{}
 
-type peerID struct{ ip, node string }
+type peerID struct{ ip string }
 
-// whoIsFunc names the tailnet node behind a connection's remote address.
-type whoIsFunc func(ctx context.Context, remoteAddr string) (nodeName string, err error)
+// whoIsFunc decides whether the peer behind a connection's remote address may
+// connect: nil admits it. What it learns about the peer stays here: no
+// identity is forwarded or logged.
+type whoIsFunc func(ctx context.Context, remoteAddr string) error
 
 // proxy forwards requests from the tailnet to exactly one loopback upstream.
 type proxy struct {
@@ -141,7 +142,6 @@ func newProxy(upstream string, name func() string, whoIs whoIsFunc) *proxy {
 			// outgoing request, from what ServeHTTP checked.
 			if id, ok := pr.In.Context().Value(peerKey{}).(peerID); ok {
 				pr.Out.Header.Set(hdrForwardedFor, id.ip)
-				pr.Out.Header.Set(hdrTailnetNode, id.node)
 			}
 		},
 		Transport: transport,
@@ -188,8 +188,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusRequestEntityTooLarge, "Request too large.")
 		return
 	}
-	node, err := p.whoIs(r.Context(), r.RemoteAddr)
-	if err != nil || node == "" {
+	if err := p.whoIs(r.Context(), r.RemoteAddr); err != nil {
 		// Not one of the person's own devices: nothing to forward.
 		p.noteRefused()
 		plain(w, http.StatusForbidden, "Forbidden.")
@@ -206,7 +205,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stripHeaders(r.Header)
-	ctx := context.WithValue(r.Context(), peerKey{}, peerID{ip: peerIP, node: node})
+	ctx := context.WithValue(r.Context(), peerKey{}, peerID{ip: peerIP})
 	p.rp.ServeHTTP(w, r.WithContext(ctx))
 }
 

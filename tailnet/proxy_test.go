@@ -49,8 +49,8 @@ func newUpstream(t *testing.T, s *seen) *httptest.Server {
 	return up
 }
 
-func fakeWhoIs(node string, err error) whoIsFunc {
-	return func(context.Context, string) (string, error) { return node, err }
+func fakeWhoIs(_ string, err error) whoIsFunc {
+	return func(context.Context, string) error { return err }
 }
 
 // newFront serves the proxy on a plain local listener standing in for the
@@ -122,11 +122,10 @@ func TestStripAndSetHeaders(t *testing.T) {
 	if got := s.header.Values("X-Forwarded-For"); len(got) != 1 || got[0] != "127.0.0.1" {
 		t.Errorf("X-Forwarded-For = %q, want the peer IP only", got)
 	}
-	if got := s.header.Values("X-Sbxw-Tailnet-Node"); len(got) != 1 || got[0] != "phone.tail1234.ts.net" {
-		t.Errorf("X-Sbxw-Tailnet-Node = %q", got)
-	}
-	if s.header.Get("X-Sbxw-Tailnet-User") != "" {
-		t.Error("a user header was sent")
+	for name := range s.header {
+		if strings.HasPrefix(strings.ToLower(name), "x-sbxw-") || strings.HasPrefix(strings.ToLower(name), "tailscale-") {
+			t.Errorf("identity header reached upstream: %s", name)
+		}
 	}
 	if s.header.Get("Cookie") != "__Host-sbxw_device=abc" || s.header.Get("Origin") != "https://"+testName {
 		t.Error("cookie or origin not passed through")
@@ -162,13 +161,13 @@ func TestHostMustBeTheTailnetName(t *testing.T) {
 	up := newUpstream(t, &s)
 	front := newFront(t, strings.TrimPrefix(up.URL, "http://"), fakeWhoIs("p.ts.net", nil))
 	for host, want := range map[string]int{
-		testName:                 200,
-		testName + ":443":        200,
+		testName:                  200,
+		testName + ":443":         200,
 		strings.ToUpper(testName): 200,
-		"evil.example":           421,
-		"127.0.0.1:7683":         421,
-		testName + ":8443":       421,
-		"sbxw.localhost":         421,
+		"evil.example":            421,
+		"127.0.0.1:7683":          421,
+		testName + ":8443":        421,
+		"sbxw.localhost":          421,
 	} {
 		req := get(t, "/")
 		req.Host = host

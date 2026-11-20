@@ -283,16 +283,15 @@ func (n *node) watchLater(ctx context.Context, lc *local.Client) {
 	}
 }
 
-// whoIsVia admits only the person's own devices (see admitPeer) and names
-// the peer node. The name is information for the daemon, never
-// authentication; the refusal is the only decision taken here.
+// whoIsVia admits only the person's own devices (see admitPeer). The WhoIs
+// answer is used for that decision only: never forwarded, never logged.
 func whoIsVia(lc *local.Client, self tailcfg.UserID) whoIsFunc {
-	return func(ctx context.Context, remoteAddr string) (string, error) {
+	return func(ctx context.Context, remoteAddr string) error {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		who, err := lc.WhoIs(ctx, remoteAddr)
 		if err != nil {
-			return "", errNotOwnDevice
+			return errNotOwnDevice
 		}
 		return admitPeer(self, who)
 	}
@@ -306,23 +305,18 @@ var errNotOwnDevice = errors.New("not one of the node owner's own devices")
 // was not shared into the tailnet (Node.Sharer zero). Tagged nodes, nodes of
 // other users of the tailnet, shared-in nodes and anything WhoIs cannot fully
 // identify are refused.
-func admitPeer(self tailcfg.UserID, who *apitype.WhoIsResponse) (string, error) {
+func admitPeer(self tailcfg.UserID, who *apitype.WhoIsResponse) error {
 	if self.IsZero() || who == nil || who.Node == nil || who.UserProfile == nil {
-		return "", errNotOwnDevice
+		return errNotOwnDevice
 	}
 	nd := who.Node
 	if nd.IsTagged() || nd.Sharer != 0 || nd.User.IsZero() {
-		return "", errNotOwnDevice
+		return errNotOwnDevice
 	}
 	if nd.User != self || who.UserProfile.ID != self {
-		return "", errNotOwnDevice
+		return errNotOwnDevice
 	}
-	name := strings.ToLower(strings.TrimSuffix(nd.Name, "."))
-	if !validTailnetName(name) {
-		// One of the person's devices with no usable name: let it in, unnamed.
-		name = "unnamed"
-	}
-	return name, nil
+	return nil
 }
 
 // validTailnetName accepts a plain DNS name: letters, digits, '-' and '.',

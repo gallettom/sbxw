@@ -22,9 +22,8 @@ func peer(user tailcfg.UserID, mod func(*tailcfg.Node)) *apitype.WhoIsResponse {
 }
 
 func TestAdmitPeer(t *testing.T) {
-	name, err := admitPeer(owner, peer(owner, nil))
-	if err != nil || name != "phone.tail1234.ts.net" {
-		t.Fatalf("own device: %q, %v", name, err)
+	if err := admitPeer(owner, peer(owner, nil)); err != nil {
+		t.Fatalf("own device refused: %v", err)
 	}
 
 	mismatch := peer(owner, nil)
@@ -43,25 +42,21 @@ func TestAdmitPeer(t *testing.T) {
 		"nothing":                       nil,
 	}
 	for what, who := range refused {
-		if name, err := admitPeer(owner, who); err == nil {
-			t.Errorf("%s: admitted as %q", what, name)
+		if err := admitPeer(owner, who); err == nil {
+			t.Errorf("%s: admitted", what)
 		}
 	}
-	if _, err := admitPeer(0, peer(0, nil)); err == nil {
+	if err := admitPeer(0, peer(0, nil)); err == nil {
 		t.Error("admitted with no owner known")
-	}
-	// An own device with an odd name is admitted, unnamed.
-	if name, err := admitPeer(owner, peer(owner, func(n *tailcfg.Node) { n.Name = "Bad_Name" })); err != nil || name != "unnamed" {
-		t.Errorf("odd name: %q, %v", name, err)
 	}
 }
 
 // fakeWhoIsResp runs admitPeer on a canned WhoIs answer, as whoIsVia does on
 // the real one.
 func fakeWhoIsResp(who *apitype.WhoIsResponse, err error) whoIsFunc {
-	return func(context.Context, string) (string, error) {
+	return func(context.Context, string) error {
 		if err != nil {
-			return "", errNotOwnDevice
+			return errNotOwnDevice
 		}
 		return admitPeer(owner, who)
 	}
@@ -103,6 +98,13 @@ func TestProxyAdmitsOnlyOwnDevices(t *testing.T) {
 		if reached != (c.want == 200) {
 			t.Errorf("%s: reached upstream = %v", c.what, reached)
 		}
+		s.mu.Lock()
+		for name := range s.header {
+			if strings.HasPrefix(strings.ToLower(name), "x-sbxw-") {
+				t.Errorf("%s: identity header %s forwarded", c.what, name)
+			}
+		}
+		s.mu.Unlock()
 		// Three refusals within a minute: one log line.
 		if want := map[bool]int{true: 1, false: 0}[c.want == 403]; refusals != want {
 			t.Errorf("%s: %d refusal notes, want %d", c.what, refusals, want)

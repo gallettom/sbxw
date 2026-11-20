@@ -83,14 +83,13 @@ file only, never to stdout, stderr or a log. The file never holds a key.
 - **Stripped** from every request: `Forwarded`, every `X-Forwarded-*`,
   `X-Real-Ip`, `X-Client-Ip`, `True-Client-Ip`, every `X-Sbxw-*`, every
   `Tailscale-*`, and the hop-by-hop headers (and any header `Connection` names).
-- **Then set:** exactly one `X-Forwarded-For: <peer tailnet IP>` (the daemon
-  uses it for rate limits) and `X-Sbxw-Tailnet-Node: <peer node DNS name>`
-  (from Tailscale's WhoIs). Both are **information, never authentication**: the
-  daemon uses the first only as a rate-limit hint and, in step 1, does not read
-  the second (a later journal may). A device is trusted only
-  for its pairing cookie. The tailnet user's login (an email address) is not
-  forwarded.
-- A connection from an address WhoIs does not know gets `403`.
+- **Then set:** exactly one `X-Forwarded-For: <peer tailnet IP>`, which the
+  daemon uses only as a rate-limit hint, **never as authentication**: a device
+  is trusted only for its pairing cookie. **No identity is forwarded**: no
+  user, login (an email address) or machine name. What WhoIs says stays inside
+  this program, for the owner check below, and is never logged.
+- **Only the person's own devices get in** (see below). Any other peer gets
+  `403 Forbidden.` with no detail, before anything is forwarded.
 - No path rewriting, no normalisation: the daemon receives the path as sent.
 - `Upgrade` (websocket) and `CONNECT` get `400`.
 - **Limits:** request headers 16 KiB (`431` above), body 8 MiB (`413`; the
@@ -100,6 +99,43 @@ file only, never to stdout, stderr or a log. The file never holds a key.
   write timeout.
 - An upstream that does not answer gives `502` with a fixed sentence; no
   address, path or error text is returned or logged.
+
+## Only the person's own devices
+
+Being on the tailnet is not enough: a tailnet can hold other people's devices
+(a family or work tailnet), servers with tags, and machines shared in from
+other tailnets. On every request the program asks Tailscale's `WhoIs` who is
+behind the connection and forwards only when all of these hold:
+
+- WhoIs answers, with both a node and a user profile;
+- the node has **no ACL tag** (`Node.Tags` empty): a tagged node belongs to
+  the tailnet, not to a person;
+- the node was **not shared in** (`Node.Sharer` is zero);
+- the node's owner (`Node.User`) and the profile (`UserProfile.ID`) are both
+  the **same stable numeric user id** as this sbxw node's owner
+  (`Status.Self.UserID`, read once when the node comes up). Login names and
+  display names are never compared.
+
+The sbxw node itself is untagged and owned by whoever opened the login link;
+if it has no owner id (tagged, or unknown), it refuses to serve at all.
+
+"The person's own devices" therefore means, in Tailscale's terms: the
+untagged machines logged in with the same Tailscale account as the one that
+added sbxw. A refused request writes one stderr line at most once a minute,
+`refused a connection from a device that is not the node owner's`, without the
+peer's name or address.
+
+**Not verified without a real tailnet** (the tests use a fake WhoIs):
+
+- that Tailscale fills `Node.User`, `UserProfile.ID` and `Node.Sharer` this
+  way for a shared-in node, for a user of another tailnet who was invited as a
+  member, and for a tagged node in practice;
+- how a device behaves when the person logs it in with a second Tailscale
+  account: it is a different user id and is refused, which is intended.
+
+For defence in depth the person can also limit port 443 of `sbxw` to their own
+devices in the tailnet policy (an ACL grant from `autogroup:member` or their
+own login to `sbxw:443`); the program does not depend on it.
 
 ## Logs
 
