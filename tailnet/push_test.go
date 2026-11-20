@@ -525,7 +525,7 @@ func TestPushSendExactRequest(t *testing.T) {
 		t.Errorf("request %s %s host %s", r.method, r.path, r.host)
 	}
 	want := map[string]string{
-		"Ttl": "86400", "Urgency": "high", "Topic": "n", "Content-Encoding": "aes128gcm",
+		"Ttl": "86400", "Urgency": "high", "Topic": "sbxw", "Content-Encoding": "aes128gcm",
 		"Content-Type": "application/octet-stream", "User-Agent": "sbxw",
 		"Content-Length": strconv.Itoa(pushBodySize),
 	}
@@ -680,7 +680,11 @@ func TestPushRateCap(t *testing.T) {
 
 func TestPushOneRequestAtATime(t *testing.T) {
 	var cur, max atomic.Int32
+	var topics atomic.Int32
 	f := newFakeApple(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Topic") != pushTopic {
+			topics.Add(1)
+		}
 		n := cur.Add(1)
 		if n > max.Load() {
 			max.Store(n)
@@ -710,6 +714,9 @@ func TestPushOneRequestAtATime(t *testing.T) {
 	}
 	if max.Load() != 1 {
 		t.Errorf("%d requests at once", max.Load())
+	}
+	if topics.Load() != 0 {
+		t.Errorf("%d pushes with a Topic other than %q", topics.Load(), pushTopic)
 	}
 }
 
@@ -1014,5 +1021,69 @@ func TestBinaryPushPipes(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), key) {
 		t.Error("stderr shows the key")
+	}
+}
+
+// In push mode stdout carries answer lines and nothing else: tsnet's and Go's
+// own logging go to stderr, while the node tries a control plane that does
+// not answer for a few seconds.
+func TestBinaryPushStdoutOnlyAnswers(t *testing.T) {
+	bin := binary(t)
+	l := newLayout(t)
+	cmd := exec.Command(bin, "--push",
+		"--state-dir", l.stateDir, "--status-file", l.statusFile,
+		"--parent-pid", strconv.Itoa(os.Getpid()),
+		"--test-control-url", "http://"+closedPort(t), "--login-wait", "1s")
+	cmd.Env = cleanEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	stdin, _ := cmd.StdinPipe()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	defer cmd.Process.Kill()
+
+	cfg := testVapid(t)
+	ua, auth := newUA(t)
+	stdin.Write(configLine(t, cfg))
+	jobs := []struct{ line, id, status string }{
+		{"garbage", "", ansBadJob},
+		{string(jobLine("r1", "https://evil.example/abc", ua, auth, "p", 1, 60)), "r1", ansRefused},
+		{string(jobLine("k1", "https://web.push.apple.com/abc", ua, auth, "x", 1, 60)), "k1", ansBadJob},
+		{strings.Repeat("z", 5000), "", ansBadJob},
+		{string(jobLine("r2", "https://[::1]/abc", ua, auth, "n", 1, 60)), "r2", ansRefused},
+	}
+	for _, j := range jobs {
+		io.WriteString(stdin, j.line+"\n")
+		time.Sleep(700 * time.Millisecond) // let the node log in between
+	}
+	time.Sleep(2 * time.Second)
+	stdin.Close()
+	cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("exit: %v; stderr:\n%s", err, stderr.String())
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("did not stop within 20 s of SIGTERM")
+	}
+	if !strings.HasSuffix(stdout.String(), "\n") {
+		t.Errorf("stdout does not end with a newline: %q", stdout.String())
+	}
+	answers := parseAnswers(t, stdout.String()) // fails on any line that is not an answer
+	if len(answers) != len(jobs) {
+		t.Fatalf("%d stdout lines for %d jobs:\n%s", len(answers), len(jobs), stdout.String())
+	}
+	for i, j := range jobs {
+		if answers[i] != (pushAnswer{j.id, j.status}) {
+			t.Errorf("answer %d: %+v, want %q %q", i, answers[i], j.id, j.status)
+		}
+	}
+	if !strings.Contains(stderr.String(), "state ") || !strings.Contains(stderr.String(), "push: ready") {
+		t.Errorf("stderr lacks the state and push lines:\n%s", stderr.String())
 	}
 }

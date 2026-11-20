@@ -172,7 +172,8 @@ The phone shows a fixed text for the kind.
 
 **To whom:** Apple's push service only. Apple sees the Mac's public IP, the
 endpoint (which identifies the phone's subscription), the time, the fixed size,
-the TTL, the kind letter (as `Topic`, so it keeps one pending push per kind) and
+the TTL, a fixed `Topic: sbxw` (the same for every push, so Apple keeps one
+pending push per phone and learns nothing of the kind) and
 the VAPID token; it cannot read the payload.
 
 **What it refuses**, each with a test in `push_test.go`:
@@ -189,6 +190,10 @@ the VAPID token; it cannot read the payload.
   certificate (system roots; no switch to skip the check exists in the binary);
 - more than 10 s per push, more than one push at a time, more than 60 jobs an
   hour, a job line over 4 KiB.
+
+Ignoring proxies is deliberate (no general route to the Internet): on a
+network where the Internet is reachable only through a proxy, every push fails
+and is answered `network`.
 
 A malformed line is answered `bad_job`, never a crash. If the daemon closes
 either pipe, pushing stops and the proxy goes on. The VAPID key comes only on

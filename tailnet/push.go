@@ -49,21 +49,24 @@ import (
 
 // Limits of the push channel.
 const (
-	pushLineMax      = 4 << 10 // a job or config line, newline excluded
-	pushPathMax      = 512     // endpoint path, bytes
-	pushEndpointMax  = 1024    // whole endpoint URL, bytes
-	pushSubMax       = 256     // the VAPID sub URL, bytes
-	pushTTLMax       = 86400   // seconds
-	pushBadgeMax     = 99
-	pushRatePerHour  = 60
-	pushTimeout      = 10 * time.Second
-	pushRespReadMax  = 1 << 10
-	pushRecordSize   = 4096 // the rs field of the aes128gcm header
-	pushPlainPadded  = 32   // payload JSON + 0x02 delimiter + zero padding
-	pushJWTLife      = 12 * time.Hour
-	pushJWTReuse     = 11 * time.Hour // a token is reused until it is this old
-	pushJWTCacheMax  = 16
-	pushIDMax        = 64
+	pushLineMax     = 4 << 10 // a job or config line, newline excluded
+	pushPathMax     = 512     // endpoint path, bytes
+	pushEndpointMax = 1024    // whole endpoint URL, bytes
+	pushSubMax      = 256     // the VAPID sub URL, bytes
+	pushTTLMax      = 86400   // seconds
+	pushBadgeMax    = 99
+	pushRatePerHour = 60
+	pushTimeout     = 10 * time.Second
+	pushRespReadMax = 1 << 10
+	pushRecordSize  = 4096 // the rs field of the aes128gcm header
+	pushPlainPadded = 32   // payload JSON + 0x02 delimiter + zero padding
+	pushJWTLife     = 12 * time.Hour
+	pushJWTReuse    = 11 * time.Hour // a token is reused until it is this old
+	pushJWTCacheMax = 16
+	pushIDMax       = 64
+	// pushTopic is the same for every push: Apple keeps one pending push per
+	// phone and learns nothing of the kind, which stays inside the encryption.
+	pushTopic        = "sbxw"
 	pushHeaderLength = 16 + 4 + 1 + 65
 )
 
@@ -590,7 +593,7 @@ func (s *pushSender) send(ctx context.Context, job *pushJob) string {
 	req.Header = http.Header{}
 	req.Header.Set("TTL", strconv.Itoa(job.ttl))
 	req.Header.Set("Urgency", "high")
-	req.Header.Set("Topic", job.kind)
+	req.Header.Set("Topic", pushTopic)
 	req.Header.Set("Content-Encoding", "aes128gcm")
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Authorization", "vapid t="+jwt+", k="+s.cfg.pubB64)
