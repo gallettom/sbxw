@@ -60,11 +60,14 @@ pub struct App {
     pub(crate) boards: Mutex<HashMap<String, sbxw_core::board::Board>>,
     pub(crate) codemap: Mutex<RunBook>,
     pub(crate) usage: Mutex<Usage>,
-    /// Sandboxes whose main session was made lead, and *which* session: the
-    /// terminal's address while this daemon holds it (a restarted agent never
-    /// read `/lead`), and the agent session id kept on disk, which re-binds
-    /// it after a daemon restart (see `svc::plans`).
-    pub(crate) leads: Mutex<HashMap<SandboxRef, crate::svc::plans::Lead>>,
+    /// Sandboxes whose main session was made lead, and *which* session (its
+    /// address): a restarted agent never read `/lead`. Only the terminals
+    /// this daemon holds; see `lead_recs` for what survives a restart.
+    pub(crate) leads: Mutex<HashMap<SandboxRef, usize>>,
+    /// Every lead the person turned on and did not end, as kept in the
+    /// sandbox records: the agent session it was turned on in, which binds it
+    /// again after a daemon restart (see `svc::plans`). Locked after `leads`.
+    pub(crate) lead_recs: Mutex<HashMap<SandboxRef, crate::store::LeadRecord>>,
     pub(crate) hook_log: Mutex<VecDeque<serde_json::Value>>,
     pub(crate) stale_hooks: Mutex<HashSet<String>>,
     /// An approved plan's briefing, for a thread whose session has not
@@ -144,7 +147,7 @@ impl AppBuilder {
     pub fn build(self) -> Arc<App> {
         let store = Store::open(self.paths);
         let plans = load_plans(&store.paths.plans());
-        let leads = crate::svc::plans::load_leads(&store);
+        let lead_recs = crate::svc::plans::load_leads(&store);
         let mut plan_book = PlanBook::load(plans);
         plan_book.load_logs(load_team_logs(&store.paths.plans().join("team")));
         let daemon_kits = Mutex::new(self.cfg.kits.clone());
@@ -173,7 +176,8 @@ impl AppBuilder {
             boards: Mutex::new(HashMap::new()),
             codemap: Mutex::new(RunBook::new()),
             usage: Mutex::new(Usage::default()),
-            leads: Mutex::new(leads),
+            leads: Mutex::new(HashMap::new()),
+            lead_recs: Mutex::new(lead_recs),
             hook_log: Mutex::new(VecDeque::new()),
             stale_hooks: Mutex::new(HashSet::new()),
             briefings: Mutex::new(HashMap::new()),
