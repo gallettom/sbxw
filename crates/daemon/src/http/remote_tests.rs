@@ -875,3 +875,53 @@ async fn the_sidecar_is_started_with_a_fixed_argv_and_a_clean_environment() {
     assert!(app.remote_hosts().1.is_none());
     app.remote_disable().await;
 }
+
+#[tokio::test]
+async fn forget_node_needs_remote_access_off_and_runs_the_sidecar_forget() {
+    let (d, app) = on();
+    assert!(app.remote_forget_node().await.unwrap_err().contains("off first"));
+    app.remote_disable().await;
+    let state_dir = app.remote_dir_for_tests().join("tailnet");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let out = d.path().join("forget.txt");
+    let fake = d.path().join("fake-forget");
+    std::fs::write(&fake, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nrm -rf \"$3\"\n", out.display())).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    app.remote_access.lock().unwrap().sidecar_program = crate::svc::remote_access::Sidecar::Program(fake);
+    app.remote_forget_node().await.unwrap();
+    assert!(!state_dir.exists());
+    let argv = std::fs::read_to_string(&out).unwrap();
+    assert!(argv.starts_with(&format!("forget\n--state-dir\n{}\n--status-file\n", state_dir.display())), "{argv}");
+}
+
+#[tokio::test]
+async fn the_admin_routes_answer_on_the_ui_listener_with_the_ui_token() {
+    let (_d, app) = app();
+    {
+        let mut rt = app.remote_access.lock().unwrap();
+        rt.sidecar_program = crate::svc::remote_access::Sidecar::None;
+        rt.addr_override = Some("127.0.0.1:0".into());
+        rt.tailnet_override = Some(TN.into());
+    }
+    let ui = crate::testing::signed_in(app.clone());
+    let post = |p: &str| Request::builder().method("POST").uri(p).header(header::HOST, "127.0.0.1:7681").header(header::CONTENT_TYPE, "application/json").body(Body::from("{}")).unwrap();
+    let get = |p: &str| Request::builder().uri(p).header(header::HOST, "127.0.0.1:7681").body(Body::empty()).unwrap();
+    let st = send(&ui, get("/api/remote")).await.json();
+    assert_eq!(st["enabled"], false);
+    assert_eq!(send(&ui, post("/api/remote/pairing")).await.status, StatusCode::CONFLICT, "off: no code");
+    let r = send(&ui, post("/api/remote/enable")).await;
+    assert_eq!(r.json()["status"]["enabled"], true, "{}", r.text());
+    let r = send(&ui, post("/api/remote/pairing")).await.json();
+    assert!(r["url"].as_str().unwrap().starts_with(&format!("https://{TN}/#pair=")));
+    assert_eq!(send(&ui, get("/api/remote/devices")).await.json(), json!([]));
+    let del = Request::builder().method("DELETE").uri("/api/remote/devices/nope").header(header::HOST, "127.0.0.1:7681").body(Body::empty()).unwrap();
+    assert_eq!(send(&ui, del).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(send(&ui, post("/api/remote/disable")).await.json()["status"]["enabled"], false);
+    // Without the UI token: refused like every UI route.
+    let bare = crate::http::ui_router(app.clone());
+    assert_eq!(send(&bare, get("/api/remote")).await.status, StatusCode::UNAUTHORIZED);
+}

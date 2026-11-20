@@ -33,6 +33,8 @@ pub enum RemoteCmd {
     Devices,
     /// Unpair a device now (its open pages lose access at once).
     Revoke { id: String },
+    /// Log the tailnet machine out and delete its state (remote access must be off).
+    ForgetNode,
     /// What paired devices did, and when (never what they wrote).
     Journal {
         #[arg(long, default_value_t = 50)]
@@ -81,6 +83,10 @@ pub fn run(cmd: RemoteCmd, config: &Path) -> Result<()> {
         RemoteCmd::Revoke { id } => {
             check(&daemon.delete(&format!("/api/remote/devices/{}", url_segment(&id)))?)?;
             println!("device {id} is unpaired");
+        }
+        RemoteCmd::ForgetNode => {
+            check(&daemon.post("/api/remote/tailnet/forget", json!({}))?)?;
+            println!("the tailnet machine is forgotten. Remove `sbxw` from your tailnet's Machines page if it is still listed.");
         }
         RemoteCmd::Journal { limit } => {
             let list = daemon.get(&format!("/api/remote/journal?limit={limit}"))?;

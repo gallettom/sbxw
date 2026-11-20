@@ -27,6 +27,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/remote/devices"),
     ("DELETE", "/api/remote/devices/:id"),
     ("GET", "/api/remote/journal"),
+    ("POST", "/api/remote/tailnet/forget"),
 ];
 
 pub fn routes() -> Router<Arc<App>> {
@@ -41,6 +42,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/remote/devices", get(devices))
         .route("/api/remote/devices/:id", delete(revoke))
         .route("/api/remote/journal", get(journal))
+        .route("/api/remote/tailnet/forget", post(forget))
 }
 
 async fn status(State(app): S) -> Json<Value> {
@@ -101,4 +103,9 @@ struct JournalQuery {
 
 async fn journal(State(app): S, Query(q): Query<JournalQuery>) -> Json<Value> {
     Json(json!(app.remote_journal(q.limit.unwrap_or(200).min(sbxw_core::remote_access::journal::MAX_ENTRIES))))
+}
+
+async fn forget(State(app): S) -> ApiResult {
+    app.remote_forget_node().await.map_err(ApiError::conflict)?;
+    Ok(ok())
 }

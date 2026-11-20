@@ -435,12 +435,55 @@ impl App {
             }
         }
         if let Some(mut c) = sidecar {
-            let _ = c.start_kill();
-            let _ = tokio::time::timeout(Duration::from_secs(5), c.wait()).await;
+            // SIGTERM first (a clean stop writes `stopped`), SIGKILL after 5 s.
+            if let Some(pid) = c.id() {
+                let _ = tokio::process::Command::new(sbxw_core::sysbin::sys_bin("kill")).args(["-TERM", &pid.to_string()]).status().await;
+            }
+            if tokio::time::timeout(Duration::from_secs(5), c.wait()).await.is_err() {
+                let _ = c.start_kill();
+                let _ = tokio::time::timeout(Duration::from_secs(2), c.wait()).await;
+            }
             // No stale file: a missing one means "not serving".
             let _ = std::fs::remove_file(&status_path);
         }
         self.remote_access.lock().unwrap().tailnet = None;
+    }
+
+    /// "Forget this node" (Q24): with remote access off, the sidecar logs
+    /// the node out and deletes its state. Refused while on.
+    pub async fn remote_forget_node(&self) -> Result<(), String> {
+        let (enabled, program, state_dir, status_path) = {
+            let rt = self.remote_access.lock().unwrap();
+            (rt.enabled, rt.sidecar_program.clone(), rt.tailnet_state_dir(), rt.tailnet_status_path())
+        };
+        if enabled {
+            return Err("turn remote access off first".into());
+        }
+        let bin = match program {
+            Sidecar::Beside => std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(SIDECAR_NAME))).filter(|p| p.is_file()),
+            Sidecar::Program(p) => Some(p),
+            Sidecar::None => None,
+        };
+        let Some(bin) = bin else {
+            if state_dir.exists() {
+                return Err(format!("{SIDECAR_NAME} is not installed next to sbxw: it is needed to log the node out"));
+            }
+            return Ok(());
+        };
+        let mut cmd = tokio::process::Command::new(bin);
+        cmd.arg("forget").arg("--state-dir").arg(&state_dir).arg("--status-file").arg(&status_path).env_clear();
+        for key in ["HOME", "TMPDIR", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"] {
+            if let Some(v) = std::env::var_os(key) {
+                cmd.env(key, v);
+            }
+        }
+        cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
+        let status = tokio::time::timeout(Duration::from_secs(30), cmd.status()).await.map_err(|_| format!("{SIDECAR_NAME} forget took over 30 s"))?.map_err(|e| e.to_string())?;
+        if !status.success() || state_dir.exists() {
+            return Err(format!("{SIDECAR_NAME} forget did not finish (exit {:?}); the node state is still at {}", status.code(), state_dir.display()));
+        }
+        tracing::info!("remote access: the tailnet node was forgotten");
+        Ok(())
     }
 
     // ── Pairing (the Mac's side) ─────────────────────────────────────────
