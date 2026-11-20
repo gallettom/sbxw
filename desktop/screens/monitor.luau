@@ -68,11 +68,22 @@ end
 
 -- A message's label row over its body. The callers tint the body: `bubble-you`
 -- (blue) for the person, `bubble-agent` (green) for Claude and any other agent,
--- each with its `-edge` border (theme.rs).
-local function bubble(label, mark, ic, right, body)
-  return column{ gap = 4, w = "full",
-    row{ gap = 4, w = "full", icon{ mark, size = 12, color = ic }, text{ label, size = "sm", weight = "medium", color = "text-muted" }, right or false },
-    body }
+-- each with its `-edge` border (theme.rs). `mine` puts the person's message on
+-- the right (label and bubble hugging that edge), agents stay on the left.
+local GUTTER = 40
+local MAX_W = 720
+
+local function bubble(label, mark, ic, right, body, mine)
+  local head = row{ gap = 4, w = "full", justify = mine and "end" or nil, icon{ mark, size = 12, color = ic }, text{ label, size = "sm", weight = "medium", color = "text-muted" }, right or false }
+  if not mine then
+    return row{ gap = 0, w = "full",
+      column{ gap = 4, grow = 1, head, body },
+      column{ w = GUTTER, h = 1 } }
+  end
+  -- The person's side: a gutter on the left keeps the two sides apart at any width.
+  return row{ gap = 0, w = "full", justify = "end",
+    column{ w = GUTTER, h = 1 },
+    column{ gap = 4, align = "end", grow = 1, max_w = MAX_W, head, body } }
 end
 
 local function question_card(d, data)
@@ -120,7 +131,7 @@ end
 local function summary(d, now, kids)
   if d.last_input then
     kids[#kids + 1] = bubble("You", "prompt", "text-muted", nil,
-      column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", w = "full", text{ d.last_input, wrap = true, color = "text-bright" } })
+      column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = MAX_W, text{ d.last_input, wrap = true, color = "text-bright" } }, true)
   end
   if d.from then
     -- Another session's message (or the harness's): its words as data, quietly; never "You".
@@ -170,7 +181,7 @@ local function conv_row(r, d, now)
   elseif r.t == "you" then
     return column{ key = "monitor-you-" .. r.id, w = "full",
       bubble("You", "prompt", "text-muted", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" },
-        column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", w = "full", text{ r.text, wrap = true, color = "text-bright" } }) }
+        column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = MAX_W, key = "monitor-body-you-" .. r.id, text{ r.text, wrap = true, color = "text-bright" } }, true) }
   elseif r.t == "from" then
     -- Typed in by another session or the harness: quiet, never "You".
     local kids = { pad = 12, gap = 4, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full",
@@ -183,7 +194,7 @@ local function conv_row(r, d, now)
   elseif r.t == "claude" then
     return column{ key = "monitor-claude-" .. r.id, w = "full",
       bubble("Claude", "sparkle", "vendor-anthropic", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" },
-        column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = 720, markdown{ r.text, pills = d.sandbox } }) }
+        column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = MAX_W, key = "monitor-body-claude-" .. r.id, markdown{ r.text, pills = d.sandbox } }) }
   elseif r.t == "step" then
     return step_row(r, d.key)
   elseif r.t == "group" then

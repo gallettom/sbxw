@@ -1919,3 +1919,82 @@ fn the_partial_line_says_which_it_is() {
     assert!(!l.contains("on its way"), "{l}");
     assert!(l.contains("next event"));
 }
+
+/// The whole window: the person's messages sit on the right (a short one in
+/// a short bubble, a 2000-character one wrapped inside the panel, an unbroken
+/// string too), agents on the left, at the wide width and the narrowest, and
+/// nothing leaves the conversation's column.
+#[test]
+fn the_person_is_on_the_right_and_agents_on_the_left() {
+    use crate::shell::{view as shell_view, App};
+    let mut fx = fixture("basic");
+    let items = fx["daemon"]["history"]["billing-api/s-bill-main"]["items"].as_array_mut().unwrap();
+    let last = items.iter().map(|i| i["seq"].as_u64().unwrap()).max().unwrap();
+    let words = "word and more words to wrap ".repeat(72);
+    let unbroken = "u".repeat(2000);
+    for (n, (kind, text)) in [("user_prompt", "ok".to_string()), ("assistant_text", "Done, a short reply.".to_string()), ("user_prompt", words), ("user_prompt", unbroken), ("assistant_text", "Last reply.".to_string())].into_iter().enumerate() {
+        items.push(it(last + 1 + n as u64, kind, json!({ "text": text })));
+    }
+    let path = std::env::temp_dir().join(format!("sbxw-sessions-right-{}.json", std::process::id()));
+    std::fs::write(&path, serde_json::to_string(&fx).unwrap()).unwrap();
+    let quiet = |rt: &mut rune::Runtime<App>| {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+            if rt.state.link_quiet() {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "the fixture's link never settled");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        for _ in 0..8 {
+            rt.frame(0.05);
+        }
+    };
+    for (w, h) in [(1284.0, 816.0), (720.0, 700.0), (420.0, 700.0)] {
+        let a = App::new(crate::shell::Args { fixture: Some(path.to_string_lossy().into()), ..Default::default() });
+        let mut rt = rune::Runtime::new(a, shell_view, (w, h), rune::Env::new(true, 1.0));
+        quiet(&mut rt);
+        if w < 1000.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+        }
+        let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_open", "args": {} })).unwrap();
+        rt.update(|s, _| l.into_iter().for_each(|i| s.run_intent("test", i)));
+        quiet(&mut rt);
+        let (x, y) = rt.find("monitor-row-billing-api:s-bill-main").expect("billing-api's row");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        quiet(&mut rt);
+        let els = rt.elements();
+        let rect_of = |p: &str| -> Vec<(String, [f32; 4])> { els.iter().filter(|e| !e.exiting && e.key.as_deref().is_some_and(|k| k.starts_with(p))).map(|e| (e.key.clone().unwrap(), e.rect)).collect() };
+        let conv = els.iter().find(|e| e.key.as_deref() == Some("monitor-conv-billing-api:s-bill-main")).map(|e| e.rect).expect("the conversation");
+        let you = rect_of("monitor-body-you-");
+        let claude = rect_of("monitor-body-claude-");
+        assert!(you.len() >= 3 && claude.len() >= 2, "{w}: {} you, {} claude bubbles laid out", you.len(), claude.len());
+        let right = conv[0] + conv[2];
+        let mut by_w = you.clone();
+        by_w.sort_by(|a, b| a.1[2].total_cmp(&b.1[2]));
+        let (short, widest) = (&by_w[0].1, &by_w[by_w.len() - 1].1);
+        assert!(short[2] < conv[2] * 0.5, "{w}: a short message is a short bubble: {short:?} in {conv:?}");
+        for (k, r) in &you {
+            assert!(r[0] + r[2] > right - 20.0 && r[0] + r[2] <= right + 0.5, "{w}: {k} hugs the right edge: {r:?} in {conv:?}");
+            assert!(r[0] >= conv[0] + 40.0 - 0.5, "{w}: {k} keeps its gutter: {r:?}");
+        }
+        assert!(widest[2] <= conv[2] - 40.0 + 0.5 && widest[2] <= 720.5, "{w}: the long one stays inside the column: {widest:?} in {conv:?}");
+        for (k, r) in &claude {
+            assert!((r[0] - conv[0]).abs() <= 1.0, "{w}: {k} at the left: {r:?} in {conv:?}");
+            assert!(r[0] + r[2] <= right - 40.0 + 0.5, "{w}: {k} keeps its gutter on the right: {r:?} in {conv:?}");
+        }
+        // Two sides: no person's bubble starts left of an agent's right edge shrunk gutter-wide overlap is allowed only vertically.
+        for (ky, ry) in &you {
+            for (kc, rc) in &claude {
+                let overlap_y = ry[1] < rc[1] + rc[3] - 0.5 && rc[1] < ry[1] + ry[3] - 0.5;
+                assert!(!overlap_y, "{w}: {ky} {ry:?} overlaps {kc} {rc:?}");
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&path);
+}
