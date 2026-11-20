@@ -1,0 +1,104 @@
+//! Remote access, from the Mac: on the UI listener, behind the UI token like
+//! every UI route (`guard::ui_guard`). For the CLI now and the desktop later.
+//! None of these exists on the remote listener.
+
+use super::error::{ok, ApiError, ApiResult};
+use crate::app::App;
+use axum::extract::{Path, Query, State};
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
+use sbxw_core::remote_access::journal::Kind;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::sync::Arc;
+
+type S = State<Arc<App>>;
+
+/// Every admin route, `(method, path)`: the route-walk test checks that none
+/// answers on the remote listener.
+pub const ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api/remote"),
+    ("POST", "/api/remote/enable"),
+    ("POST", "/api/remote/disable"),
+    ("POST", "/api/remote/pairing"),
+    ("GET", "/api/remote/pairing/requests"),
+    ("POST", "/api/remote/pairing/requests/:id/approve"),
+    ("POST", "/api/remote/pairing/requests/:id/refuse"),
+    ("GET", "/api/remote/devices"),
+    ("DELETE", "/api/remote/devices/:id"),
+    ("GET", "/api/remote/journal"),
+];
+
+pub fn routes() -> Router<Arc<App>> {
+    Router::new()
+        .route("/api/remote", get(status))
+        .route("/api/remote/enable", post(enable))
+        .route("/api/remote/disable", post(disable))
+        .route("/api/remote/pairing", post(pairing))
+        .route("/api/remote/pairing/requests", get(requests))
+        .route("/api/remote/pairing/requests/:id/approve", post(approve))
+        .route("/api/remote/pairing/requests/:id/refuse", post(refuse))
+        .route("/api/remote/devices", get(devices))
+        .route("/api/remote/devices/:id", delete(revoke))
+        .route("/api/remote/journal", get(journal))
+}
+
+async fn status(State(app): S) -> Json<Value> {
+    Json(json!(app.remote_status()))
+}
+
+async fn enable(State(app): S) -> ApiResult {
+    let st = app.remote_enable().await.map_err(ApiError::conflict)?;
+    Ok(Json(json!({ "ok": true, "status": st })))
+}
+
+async fn disable(State(app): S) -> Json<Value> {
+    let st = app.remote_disable().await;
+    Json(json!({ "ok": true, "status": st }))
+}
+
+async fn pairing(State(app): S) -> ApiResult {
+    let p = app.remote_pairing_code().map_err(ApiError::conflict)?;
+    Ok(Json(json!({ "ok": true, "code": p.code, "url": p.url, "expires_ms": p.expires_ms })))
+}
+
+async fn requests(State(app): S) -> Json<Value> {
+    Json(json!(app.remote_pairing_requests()))
+}
+
+async fn approve(State(app): S, Path(id): Path<String>) -> ApiResult {
+    if app.remote_pairing_approve(&id) {
+        Ok(ok())
+    } else {
+        Err(ApiError::not_found("no pending pairing request with that id (it may have expired)"))
+    }
+}
+
+async fn refuse(State(app): S, Path(id): Path<String>) -> ApiResult {
+    if app.remote_pairing_refuse(&id) {
+        Ok(ok())
+    } else {
+        Err(ApiError::not_found("no pending pairing request with that id (it may have expired)"))
+    }
+}
+
+async fn devices(State(app): S) -> Json<Value> {
+    Json(json!(app.remote_devices()))
+}
+
+async fn revoke(State(app): S, Path(id): Path<String>) -> ApiResult {
+    if app.remote_revoke(&id, Kind::Revoked) {
+        Ok(ok())
+    } else {
+        Err(ApiError::not_found(format!("no paired device '{id}'")))
+    }
+}
+
+#[derive(Deserialize)]
+struct JournalQuery {
+    limit: Option<usize>,
+}
+
+async fn journal(State(app): S, Query(q): Query<JournalQuery>) -> Json<Value> {
+    Json(json!(app.remote_journal(q.limit.unwrap_or(200).min(sbxw_core::remote_access::journal::MAX_ENTRIES))))
+}

@@ -169,6 +169,13 @@ pub fn source_of(forwarded_for: Option<&str>) -> String {
     }
 }
 
+/// Hold the Mac awake for remote access (Q15): while it is on and the Mac is
+/// on mains power (a Mac with no battery is on mains). On battery it may
+/// sleep: no setting is changed, and a forgotten phone never drains it.
+pub fn keep_awake_wanted(enabled: bool, battery: Option<crate::power::Battery>) -> bool {
+    enabled && !battery.is_some_and(|b| b.on_battery)
+}
+
 /// `remote-access.json`: whether it is on, and the paired devices.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
@@ -270,6 +277,15 @@ mod tests {
         assert_eq!(source_of(None), "shared");
         assert_eq!(source_of(Some("1.2.3.4, 5.6.7.8")), "shared", "one value only");
         assert_eq!(source_of(Some("garbage")), "shared");
+    }
+
+    #[test]
+    fn awake_only_when_on_and_on_mains() {
+        use crate::power::Battery;
+        assert!(keep_awake_wanted(true, None));
+        assert!(keep_awake_wanted(true, Some(Battery { percent: 50, on_battery: false })));
+        assert!(!keep_awake_wanted(true, Some(Battery { percent: 90, on_battery: true })));
+        assert!(!keep_awake_wanted(false, None));
     }
 
     #[test]
