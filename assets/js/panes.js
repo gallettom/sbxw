@@ -1280,7 +1280,10 @@ function showThread(idx, sandbox, name, repo, model, checkout) {
 
 // Typing: lower case and hyphens as it goes, a trailing hyphen allowed to
 // stand. Paste: the whole field at once. Blur: the full rule (ends, 40 cut).
-threadInput.addEventListener('input', e => { fixNameField(threadInput, e.inputType); validateThreadName(); });
+// Not while an IME composes (Japanese, Chinese): rewriting the field then
+// would break the composition; compositionend fixes it.
+threadInput.addEventListener('input', e => { if (!e.isComposing) fixNameField(threadInput, e.inputType); validateThreadName(); });
+threadInput.addEventListener('compositionend', () => { fixNameField(threadInput, 'insertFromPaste'); validateThreadName(); });
 threadInput.addEventListener('blur', () => { threadInput.value = normalizeName(threadInput.value); validateThreadName(); });
 document.getElementById('thread-repos').addEventListener('change', e => {
   if (!threadAsk || e.target.name !== 'thread-repo') return;
