@@ -831,7 +831,7 @@ impl App {
             head = head.child(el().w(4.0)).child(if scope.is_some() { e.shrink() } else { e });
         }
         head = head.child(el().grow(1.0).min_w(0.0));
-        // A base view is not closed: the top bar's GUI | TUI leaves it.
+        // A base view has no head row at all (below); it is not closed: the top bar's GUI | TUI leaves it.
         if !base {
             head = head
             // The hint only where there is room for it (the cross's tooltip says it too).
@@ -867,7 +867,8 @@ impl App {
                 .label(title)
                 .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
                 .padding(12.0)
-                .pt(crate::scope::HEAD_TOP)
+                // A base view has no head row: its columns start at the panel padding.
+                .pt(if base { 12.0 } else { crate::scope::HEAD_TOP })
                 .gap(8.0)
                 .fill(c("bg"))
                 .border(1.0, crate::theme::hex(frame.edge))
@@ -892,7 +893,7 @@ impl App {
                         s.push_data();
                     }
                 })
-                .child(head)
+                .children((!base).then_some(head))
                 .child(col().key(format!("overlay-body-{name}")).grow(1.0).w_full().min_h(0.0).child(screen)),
         )
     }

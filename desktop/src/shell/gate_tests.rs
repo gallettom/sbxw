@@ -646,3 +646,42 @@ fn without_voice_f9_stays_the_programs_key() {
     assert_eq!(sent(&rx), b"\x1b[20~", "a daemon without voice: F9 goes to the program");
     assert!(rt.state.dictation.on.is_none());
 }
+
+/// Sessions (the base view) has no head band: both columns start at the
+/// panel's padding under its top edge, and nothing is drawn for a head row
+/// or a close cross. Another overlay (Files) keeps its head with title and
+/// close. The same with Lead Mode on.
+#[test]
+fn sessions_has_no_head_band_and_files_keeps_its_head() {
+    for lead in [false, true] {
+        let (mut rt, _rx) = window_on("monitor/basic");
+        settle(&mut rt, 2);
+        tap(&mut rt, "top-view-gui");
+        settle(&mut rt, 5);
+        if lead {
+            tap(&mut rt, "top-lead");
+            settle(&mut rt, 5);
+        }
+        assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"));
+        let over = rt.presented("overlay-monitor").unwrap().0;
+        assert!(rt.presented("overlay-head-monitor").is_none(), "lead {lead}: a head row over Sessions");
+        assert!(rt.presented("overlay-close").is_none(), "lead {lead}: a close cross over Sessions");
+        let list = rt.presented("monitor-list-col").unwrap().0;
+        let pad = list[1] - over[1];
+        assert!((11.0..=14.0).contains(&pad), "lead {lead}: the list starts {pad} under the panel's top");
+        if let Some((d, _)) = rt.presented("monitor-detail") {
+            assert!((d[1] - list[1]).abs() < 0.5, "lead {lead}: the detail starts with the list");
+        }
+    }
+    let (mut rt, _rx) = window_on("scope/many");
+    settle(&mut rt, 2);
+    let v = serde_json::json!({ "kind": "intent", "name": "files_open", "args": { "sandbox": "web-app" } });
+    for i in crate::intent::parse(&v).unwrap() {
+        rt.update(|s, _| s.run_intent("test", i));
+    }
+    settle(&mut rt, 5);
+    let over = rt.presented("overlay-files").expect("Files open").0;
+    let head = rt.presented("overlay-head-files").expect("Files keeps its head row").0;
+    assert!(head[1] - over[1] >= 8.0 && head[3] >= crate::theme::layout::CONTROL_H - 0.5, "{head:?} in {over:?}");
+    assert!(rt.presented("overlay-close").is_some(), "Files keeps its close cross");
+}
