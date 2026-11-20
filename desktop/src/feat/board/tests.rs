@@ -1534,3 +1534,58 @@ fn drawn_a_report_s_state_chip_is_at_its_top_right_and_its_label_at_the_top_left
         assert!(seen >= 1, "at {w}: the text was never found under the head line");
     }
 }
+
+/// "Dashboard" is the name the person reads (the rail entry and its
+/// tooltip, the sandbox row's menu, both overlays' title, the palette,
+/// Help); no "Board" is left for this feature. The internal names stay
+/// (`rail-board`, `board_show`, the screen `board`).
+#[test]
+fn the_board_is_called_dashboard_wherever_the_person_reads_it() {
+    let board = |t: &str| t.split(|c: char| !c.is_alphanumeric()).any(|w| w == "Board");
+    let mut rt = window(1284.0, 816.0);
+    let mut bad = vec![];
+    // The rail: the entry and its tooltip.
+    let (top, bottom) = rt.state.rail_entries();
+    let entry = top.iter().chain(&bottom).find(|e| e.key == "rail-board").expect("the rail's entry keeps its key");
+    assert!(entry.help.starts_with("Dashboard\n"), "{}", entry.help);
+    bad.extend(top.iter().chain(&bottom).filter(|e| board(&e.help)).map(|e| format!("rail {}: {}", e.key, e.help)));
+    // The features' extras: a sandbox row's menu, the rail.
+    let d = json!({ "plans": [{ "id": "p-1", "sandbox": "web-app", "state": "approved" }] });
+    let rows = super::extras(&Ctx { data: &d });
+    assert!(rows.iter().any(|e| matches!(e.place, Place::Sandbox(_))), "a sandbox row's entry");
+    for e in &rows {
+        assert_eq!(e.label, "Dashboard", "{:?}", e.place);
+        assert!(!board(&e.help), "{}", e.help);
+    }
+    bad.extend(rt.state.feats.pane_extras.iter().filter(|e| board(&e.label) || board(&e.help)).map(|e| format!("extra {}: {} / {}", e.id, e.label, e.help)));
+    // The palette.
+    let cmds = rt.state.palette_cmds();
+    assert!(cmds.iter().any(|c| c.label == "Dashboard"), "the rail's entry in the palette");
+    assert!(cmds.iter().any(|c| c.label == crate::feat::kanban::SHOW), "Show the Kanban");
+    bad.extend(cmds.iter().filter(|c| board(&c.label) || board(&c.hint)).map(|c| format!("palette {}: {} / {}", c.id, c.label, c.hint)));
+    // Both overlays: their title and everything drawn.
+    let texts = |rt: &Runtime<App>| -> Vec<String> { rt.elements().into_iter().filter(|e| !e.exiting).flat_map(|e| [e.text, e.label]).flatten().collect() };
+    open(&mut rt, json!({ "team": "p-run" }));
+    let t = texts(&rt);
+    assert!(t.iter().any(|x| x == "Dashboard"), "the conversation's title");
+    bad.extend(t.iter().filter(|x| board(x)).map(|x| format!("conversation: {x}")));
+    let v = json!({ "kind": "intent", "name": "kanban_show", "args": { "sandbox": "web-app" } });
+    for i in crate::intent::parse(&v).unwrap() {
+        rt.update(|s, _| s.run_intent("test", i));
+    }
+    settle(&mut rt);
+    assert_eq!(rt.state.screen_data()["app"]["overlay"]["screen"], "kanban");
+    let t = texts(&rt);
+    assert!(t.iter().any(|x| x == "Dashboard"), "the Kanban's title");
+    bad.extend(t.iter().filter(|x| board(x)).map(|x| format!("kanban: {x}")));
+    // Help, with the shortcuts.
+    for i in crate::intent::parse(&json!({ "kind": "intent", "name": "show_help", "args": {} })).unwrap() {
+        rt.update(|s, _| s.run_intent("test", i));
+    }
+    settle(&mut rt);
+    assert_eq!(rt.state.screen_data()["app"]["modal"]["screen"], "help");
+    let t = texts(&rt);
+    assert!(t.iter().any(|x| x.contains(crate::feat::kanban::SHOW)), "Help lists the shortcut");
+    bad.extend(t.iter().filter(|x| board(x)).map(|x| format!("help: {x}")));
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}

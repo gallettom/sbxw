@@ -1,4 +1,4 @@
--- The Kanban (feat/kanban/): the Board's second view. Five columns side by
+-- The Kanban (feat/kanban/): the Dashboard's second view. Five columns side by
 -- side (Planned, In progress, In test, Ready to merge, Merged), each with its
 -- count and its cards stacked and scrolling inside it; under 900 pt one
 -- column at a time with a column picker. Pressing a card opens its ticket
@@ -21,7 +21,7 @@ end
 
 local VIEWS = { { id = "conversation", label = "Conversation" }, { id = "kanban", label = "Kanban" } }
 
--- The sandbox beside the overlay's title ("Board in [web-app v]").
+-- The sandbox beside the overlay's title ("Dashboard in [web-app v]").
 local function scope(ui)
   return row{ key = "title-slot", gap = 8,
     select{ id = "kanban-sandbox", value = ui.scope or "", items = ui.sandboxes or {}, on = "scope",
@@ -196,7 +196,8 @@ return {
     return column{ h = "full", gap = 8, w = "full", px = 4,
       scope(ui),
       row{ gap = 8, w = "full", key = "kanban-summary",
-        select{ id = "kanban-view", value = "kanban", items = VIEWS, on = "view", switch = true },
+        select{ id = "kanban-view", value = "kanban", items = VIEWS, on = "view", switch = true,
+          help = "The Dashboard's two views: the team's conversation, or the Kanban of its tickets" },
         text{ ui.counts_line or "", size = "xs", color = "text-muted", truncate = true, grow = 1 },
         button{ "New ticket", icon = "plus", variant = "primary", dense = true, on = "new", key = "kanban-new", keys = { "N" }, disabled = ui.new_why ~= nil, help = ui.new_why or "A ticket for the sandbox shown: a title, a description, files" } },
       ui.error and note(ui.error, "red") or false,

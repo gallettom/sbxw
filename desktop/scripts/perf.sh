@@ -103,6 +103,9 @@ step("the Kanban: web-app", "kanban-sandbox-web-app", "kanban-row-t-web-app-1")
 step("the Kanban: open a ticket (its panel)", "kanban-row-t-web-app-1", "kanban-panel")
 step("the Kanban: close it", "kanban-close")
 step("the Kanban: back to the conversation", "kanban-view-conversation", "board-convo")
+# The top bar's Kanban button (kanban_toggle): over the Dashboard's conversation, then closed.
+step("the top bar's Kanban button", "top-kanban", "kanban-view-conversation")
+add(type="mark", name="perf:the top bar's Kanban button again (closed)"); add(type="tap", key="top-kanban"); add(type="mark", name="wait-gone:overlay-kanban"); add(type="mark", name="hold:300")
 # Canvas: web-app's canvas of 15 shots, a pan and a pinch, the tools, Fit, then closed.
 step("open the Canvas", "rail-canvas", "canvas-sandbox")
 step("the Canvas: the sandbox picker", "canvas-sandbox", "canvas-sandbox-list")

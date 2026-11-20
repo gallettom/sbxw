@@ -509,3 +509,130 @@ fn the_panel_says_the_files_go_to_the_agent_that_reads_the_ticket() {
     let (v, _) = run(&mut st, &mut d, "kanban_open", json!({ "id": id }));
     assert!(v["ticket"]["files_note"].is_null(), "no file, no line");
 }
+
+// ── The top bar's Kanban button (kanban_toggle) ───────────────────────────
+
+/// The sandbox in context: in the terminals the focused pane's, else the
+/// selected one (always in Sessions), else the last scope, else every
+/// sandbox. A sandbox sbxw does not list is not a context.
+#[test]
+fn the_toggle_opens_on_the_sandbox_in_context_then_the_last_scope_then_all() {
+    let mut d = data();
+    d["app"]["overlay"] = J::Null;
+    d["app"]["selected"] = "web-app".into();
+    d["app"]["panes"] = json!([{ "index": 1, "sandbox": "web-app", "focused": false }, { "index": 2, "sandbox": "docs", "focused": true }]);
+    let scope_after = |st: &mut State, d: &J| {
+        let out = st.act(&Ctx { data: d }, &asked("kanban_toggle", json!({}))).unwrap();
+        assert!(out.iter().any(|a| matches!(a, Action::OpenPanel(s) if s == SCREEN)), "it opens");
+        st.scope.clone()
+    };
+    let mut st = State::default();
+    assert_eq!(scope_after(&mut st, &d), Some("docs".into()), "TUI: the focused pane's sandbox");
+    d["app"]["base"] = "monitor".into();
+    assert_eq!(scope_after(&mut st, &d), Some("web-app".into()), "GUI: the selected sandbox");
+    d["app"]["base"] = J::Null;
+    d["app"]["panes"][1]["sandbox"] = J::Null;
+    assert_eq!(scope_after(&mut st, &d), Some("web-app".into()), "an empty pane: the selected sandbox");
+    d["app"]["selected"] = "gone".into();
+    let mut st = State { scope: Some("docs".into()), ..State::default() };
+    assert_eq!(scope_after(&mut st, &d), Some("docs".into()), "no sandbox in context: the last scope");
+    let mut st = State::default();
+    assert_eq!(scope_after(&mut st, &d), None, "nothing at all: every sandbox");
+    // Shown: the same intent closes it, and reads nothing.
+    d["app"]["overlay"] = json!({ "screen": SCREEN });
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_toggle", json!({}))).unwrap();
+    assert!(matches!(out.as_slice(), [Action::ClosePanel(s)] if s == SCREEN), "{out:?}");
+    // Direct, as kanban_show; the shortcut and the palette run it.
+    assert!(INTENTS.iter().any(|s| s.name == "kanban_toggle" && matches!(s.risk, Risk::Direct)));
+    assert_eq!(FEATURE.shortcuts.iter().map(|s| (s.key, s.intent, s.help)).collect::<Vec<_>>(), [('k', "kanban_toggle", SHOW)]);
+}
+
+/// The window with panes on web-app and docs (pane 2, docs, focused) and
+/// web-app selected, on the Kanban's fixture.
+fn two_panes() -> Runtime<App> {
+    let mut f = fx(BASIC);
+    f["app"] = json!({ "selected": "web-app", "panes": 2, "split": "columns", "open": ["web-app", "docs"], "focused": 2 });
+    let path = std::env::temp_dir().join(format!("sbxw-kanban-two-panes-{}-{:?}.json", std::process::id(), std::thread::current().id()));
+    std::fs::write(&path, serde_json::to_string(&f).unwrap()).unwrap();
+    let rt = window(&path.to_string_lossy(), 1284.0, 816.0);
+    let _ = std::fs::remove_file(&path);
+    rt
+}
+
+fn tap(rt: &mut Runtime<App>, key: &str) {
+    let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(rt);
+}
+
+/// The top bar's button as drawn: lit (`neutral` on its tint) or quiet (`ghost`).
+fn lit(rt: &Runtime<App>) -> bool {
+    fn find<'a>(n: &'a crate::luau::Node, key: &str) -> Option<&'a crate::luau::Node> {
+        if n.key.as_deref() == Some(key) {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| find(c, key))
+    }
+    let top = rt.state.screens.iter().find(|s| s.name == "topbar").and_then(|s| s.last_good.clone()).expect("the top bar drawn");
+    let b = find(&top, "top-kanban").expect("the Kanban button").clone();
+    b.variant.as_deref() == Some("neutral")
+}
+
+/// From the terminals: the first press opens the Kanban on the focused
+/// pane's sandbox and lights the button; the second closes it, the button
+/// quiet again, the focused pane's terminal has the keyboard, the panes as
+/// they were. From Sessions (GUI): the Kanban over it, closing back to
+/// Sessions, on the selected sandbox. The Dashboard's conversation does not
+/// light the button.
+#[test]
+fn the_top_bar_button_opens_and_closes_the_kanban_from_tui_and_gui() {
+    let mut rt = two_panes();
+    let before = (rt.state.focused, rt.state.panes.len(), rt.state.screen_data()["app"]["overlay"].clone());
+    assert!(!lit(&rt), "quiet at rest");
+    tap(&mut rt, "top-kanban");
+    assert_eq!(rt.state.screen_data()["app"]["overlay"]["screen"], SCREEN);
+    assert_eq!(ui_now(&rt)["scope"], "docs", "the focused pane's sandbox");
+    assert!(lit(&rt), "lit while the Kanban shows");
+    assert!(rt.state.panes_covered(), "the terminals are covered");
+    tap(&mut rt, "top-kanban");
+    assert!(!lit(&rt));
+    assert_eq!((rt.state.focused, rt.state.panes.len(), rt.state.screen_data()["app"]["overlay"].clone()), before, "pressed twice: as before");
+    // (This fixture's panes have no live terminal: the keyboard's return to
+    // the focused one is tested with live terminals, shell/rail.rs.)
+    // The conversation is not the Kanban: the button stays quiet; it switches to the Kanban.
+    intent(&mut rt, "board_show", json!({}));
+    assert_eq!(rt.state.screen_data()["app"]["overlay"]["screen"], "board");
+    assert!(!lit(&rt), "quiet over the conversation");
+    tap(&mut rt, "top-kanban");
+    assert_eq!(rt.state.screen_data()["app"]["overlay"]["screen"], SCREEN);
+    assert!(lit(&rt));
+    tap(&mut rt, "top-kanban");
+    assert!(rt.state.screen_data()["app"]["overlay"].is_null());
+    // GUI: over Sessions, back to Sessions, on the selected sandbox.
+    tap(&mut rt, "top-view-gui");
+    assert_eq!(rt.state.screen_data()["app"]["overlay"]["screen"], "monitor");
+    tap(&mut rt, "top-kanban");
+    assert_eq!(rt.state.screen_data()["app"]["overlay"]["screen"], SCREEN);
+    assert_eq!(ui_now(&rt)["scope"], "web-app", "GUI: the selected sandbox");
+    assert!(lit(&rt));
+    assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"), "Sessions stays the base under it");
+    tap(&mut rt, "top-kanban");
+    assert_eq!(rt.state.screen_data()["app"]["overlay"]["screen"], "monitor", "closes back to Sessions");
+    assert!(!lit(&rt));
+}
+
+/// The shortcut (⌃⌥K / Alt+K) and the palette's "Show the Kanban" run the same toggle.
+#[test]
+fn the_shortcut_and_the_palette_open_the_kanban() {
+    let mut rt = two_panes();
+    let row = rt.state.palette_cmds().into_iter().find(|c| c.label == SHOW).expect("the palette's row");
+    rt.update(|s, _| s.run_cmd(row.run.clone()));
+    settle(&mut rt);
+    assert_eq!(rt.state.screen_data()["app"]["overlay"]["screen"], SCREEN);
+    rt.update(|s, _| s.run_cmd(row.run.clone()));
+    settle(&mut rt);
+    assert!(rt.state.screen_data()["app"]["overlay"].is_null(), "run again: closed");
+    let help = rt.state.screen_data()["app"]["shortcuts"].as_array().unwrap().iter().any(|s| s["what"] == SHOW && s["keys"].as_array().unwrap().last() == Some(&json!("K")));
+    assert!(help, "listed in Help with its key");
+}

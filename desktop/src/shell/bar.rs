@@ -347,22 +347,24 @@ pub fn state_w(word: &str) -> f32 {
 }
 
 /// The modes at the top bar's left (topbar.luau `modes`): the GUI | TUI
-/// switch (switch.rs: one track, two equal slots), 8, then the Lead
-/// Mode button. Compact (a narrow window): icons alone, their words in the
-/// tooltips.
+/// switch (switch.rs: one track, two equal slots), 8, the Lead Mode
+/// button, 8, the Kanban button. Compact (a narrow window): icons alone,
+/// their words in the tooltips. The Kanban's width is the same lit or not.
 pub fn modes_w(compact: bool, lead_on: bool) -> f32 {
-    let (gui, tui, lead) = if compact { ("", "", "") } else { ("GUI", "TUI", if lead_on { LEAD_ON } else { LEAD_OFF }) };
+    let (gui, tui, lead, kanban) = if compact { ("", "", "", "") } else { ("GUI", "TUI", if lead_on { LEAD_ON } else { LEAD_OFF }, KANBAN) };
     // The switch (switch.rs): two equal slots on one track.
     let items = [crate::luau::Item::plain("gui", gui, Some("inbox")), crate::luau::Item::plain("tui", tui, Some("terminal"))];
     let switch = crate::switch::width(&items.iter().collect::<Vec<_>>());
-    // Lead Mode's icon is the medium size (14), where `button_w` counts 16.
+    // The pills' icons are the medium size (14), where `button_w` counts 16.
     let b = |l: &str| if l.is_empty() { button_w(l, true) } else { button_w(l, true) - 2.0 };
-    switch + 8.0 + b(lead)
+    switch + 8.0 + b(lead) + 8.0 + b(kanban)
 }
 
 /// Lead Mode's words (topbar.luau draws the same).
 pub const LEAD_ON: &str = "Lead Mode On";
 pub const LEAD_OFF: &str = "Lead Mode Off";
+/// The Kanban button's word (topbar.luau draws the same).
+pub const KANBAN: &str = "Kanban";
 
 /// One top bar extra, as the core sees it before the screen draws it.
 #[derive(Clone, Debug)]
@@ -398,7 +400,7 @@ impl TopExtra {
 /// the element draws it (tested against the laid out bar).
 pub fn top_fit(width: f32, jarvis: Option<&str>, state_word: &str, lead_on: bool, extras: &[TopExtra]) -> (bool, usize) {
     // The sbxw mark (topbar.luau, `app-mark`): the prompt (15) and the cursor (11), 2 apart;
-    // then, 12 after it, the modes (the GUI | TUI switch and Lead Mode).
+    // then, 12 after it, the modes (the GUI | TUI switch, Lead Mode and the Kanban).
     let left = |compact: bool| if compact { modes_w(true, lead_on) } else { 28.0 + 12.0 + modes_w(false, lead_on) };
     // left, spacer, centre, spacer, right: four gaps; inside the right group
     // Jarvis and the state, and the gap before Jarvis when a tool precedes it.

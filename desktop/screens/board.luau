@@ -1,4 +1,4 @@
--- The Board (an overlay over the pane area, feat/board/): a team's
+-- The Dashboard (the feature `board`: an overlay over the pane area, feat/board/): a team's
 -- conversation, as sbxw saw it. The person's acts on the right, the lead and
 -- the threads on the left, sbxw's own events in the middle; the board's
 -- decisions and warnings stand out as labelled notes; a thread's commits
@@ -203,7 +203,7 @@ local function rowview(r, sb)
         kind_line(r.label, { icon = ICON[r.tone] or "info", icon_color = r.tone == "neutral" and "text-muted" or r.tone, color = "text-bright", weight = "semibold",
           extra = r.note_via, extra_help = "Sent through sbxw with team_note" }),
         -- Still standing: the summary counts it, the filter finds it, this marks it.
-        r.standing and badge{ "standing", tone = r.tone == "amber" and "amber" or "green", key = "board-standing-" .. (r.id or ""), help = "Still standing on the team's board: the summary counts it" } or false },
+        r.standing and badge{ "standing", tone = r.tone == "amber" and "amber" or "green", key = "board-standing-" .. (r.id or ""), help = "Still standing: the summary counts it" } or false },
       words(r.text or "", sb),
       fold_button(r),
     }
@@ -301,9 +301,11 @@ end
 -- button, up to 560 pt, never wider than the overlay. A press outside, a
 -- pick or Escape closes it; Up, Down and Enter go through `board_key`.
 
+-- The room it leaves keeps the title ("Dashboard", 14/600, about 76 pt)
+-- and the overlay's cross on the row at every width.
 local function picker_w(ow, wide)
-  if wide then return math.min(420, ow - 260) end
-  return math.max(140, math.min(300, ow - 220))
+  if wide then return math.min(420, ow - 296) end
+  return math.max(104, math.min(300, ow - 256))
 end
 
 local function menu_w(ow, wide)
@@ -389,8 +391,9 @@ local GROUP_HELP = { messages = "What the lead and threads sent each other with 
 
 local function filters(ui, wide)
   local seg = { gap = 4, w = "full", wrap = true }
-  -- The Board's two views; the Kanban is its own screen (kanban.luau).
-  seg[#seg + 1] = select{ id = "board-view", value = "conversation", items = { { id = "conversation", label = "Conversation" }, { id = "kanban", label = "Kanban" } }, on = "view", switch = true }
+  -- The Dashboard's two views; the Kanban is its own screen (kanban.luau).
+  seg[#seg + 1] = select{ id = "board-view", value = "conversation", items = { { id = "conversation", label = "Conversation" }, { id = "kanban", label = "Kanban" } }, on = "view", switch = true,
+    help = "The Dashboard's two views: the team's conversation, or the Kanban of its tickets" }
   for _, g in ipairs(GROUPS) do
     local on_it = ui.group == g[1]
     seg[#seg + 1] = button{ g[2], variant = on_it and "neutral" or "ghost", color = on_it and "text-bright" or "text-muted", dense = true, on = "group", arg = g[1], key = "board-group-" .. g[1], help = GROUP_HELP[g[1]] }

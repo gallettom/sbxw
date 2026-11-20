@@ -1,5 +1,11 @@
-//! Board: a team's conversation, an overlay over the pane area opened from
-//! the rail (activity zone) or a sandbox's row. A team is a plan with its
+//! Board, shown to the person as the **Dashboard** ([`TITLE`]: the rail
+//! entry, the overlay's title, the palette, Help): a team's conversation,
+//! an overlay over the pane area opened from the rail (activity zone) or a
+//! sandbox's row. The feature, its intents (`board_*`), element keys
+//! (`board-*`, `rail-board`) and files keep the name `board`, so scripts
+//! and a stored state keep working. Not the shared plan's claims board
+//! (`feat/threads/`, the Threads panel's Board tab), another thing.
+//! A team is a plan with its
 //! sandbox, lead and threads; its timeline (the daemon's `GET
 //! /api/teams/:id/timeline`) is drawn as a conversation in time order: the
 //! person's acts on the right, the lead and threads on the left, sbxw's own
@@ -29,6 +35,9 @@ use serde_json::{json, Value as J};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const SCREEN: &str = "board";
+/// The name the person reads for this feature and the Kanban: the rail
+/// entry, both overlays' title, the palette.
+pub const TITLE: &str = "Dashboard";
 pub const UI: &str = "board_ui";
 /// Events a timeline page asks for.
 pub const PAGE: usize = 100;
@@ -44,7 +53,7 @@ const LINKS: &[&str] = &["terminal", "monitor", "commits", "worktrees", "plan", 
 
 pub const FEATURE: Feature = Feature {
     name: "board",
-    screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/board.luau"), slot: Slot::Overlay { title: "Board", icon: "board" } }],
+    screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/board.luau"), slot: Slot::Overlay { title: TITLE, icon: "board" } }],
     events: &["team", "plan"],
     intents: INTENTS,
     act,
@@ -60,7 +69,7 @@ const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: 
 }
 
 pub const INTENTS: &[Spec] = &[
-    d("board_show", &[("sandbox", Arg::Text, false), ("team", Arg::Str, false)], "Opens the Board over the panes: a team's conversation between you, its lead and its threads (what went through sbxw), its notes and its commits. On a team (`team`, a plan id; `all` for every team), else on that sandbox's current team, else the latest. Read only."),
+    d("board_show", &[("sandbox", Arg::Text, false), ("team", Arg::Str, false)], "Opens the Dashboard over the panes: a team's conversation between you, its lead and its threads (what went through sbxw), its notes and its commits. On a team (`team`, a plan id; `all` for every team), else on that sandbox's current team, else the latest. Read only."),
     d("board_team", &[("id", Arg::Str, true)], "Shows that team's conversation (`all`: every team's latest events)."),
     d("board_filter", &[("group", Arg::OneOf(GROUPS), false), ("thread", Arg::Text, false), ("text", Arg::Text, false)], "Filters the conversation: by kind (all, notes: decisions and warnings, questions, messages: the agents' direct messages, commits, status), by thread (empty: every one), by words; give the words on every edit."),
     d("board_more", &[], "Reads and shows older events of the team's conversation."),
@@ -70,7 +79,7 @@ pub const INTENTS: &[Spec] = &[
     d("board_open", &[("what", Arg::OneOf(LINKS), true), ("thread", Arg::Text, false), ("relay", Arg::Str, false)], "Goes where one acts or reads more: a thread's terminal, its session in Sessions, its commits or worktrees, the plan dialog, the Requests panel (on a request), the Threads panel."),
     d("board_refresh", &[], "Reads the teams and the conversation again."),
     d("board_picker", &[("open", Arg::Bool, false), ("more", Arg::Bool, false)], "Opens or closes the team picker's list (`open`; none: toggles), or lists more teams in it (`more`). View state only."),
-    d("board_key", &[("key", Arg::OneOf(KEYS), true)], "The Board's keys while its team picker is open: Up and Down move through the teams, Enter shows the one marked, Escape closes the list."),
+    d("board_key", &[("key", Arg::OneOf(KEYS), true)], "The Dashboard's keys while its team picker is open: Up and Down move through the teams, Enter shows the one marked, Escape closes the list."),
 ];
 
 #[derive(Debug, Default, Clone)]
@@ -416,7 +425,7 @@ impl State {
             "plan" => vec![go("plan_review", json!({ "id": id }))],
             "requests" => vec![go("relay_open", json!({ "id": a.s("relay") }))],
             "threads" => vec![go("threads_show", json!({ "sandbox": sb }))],
-            w => return Err(format!("{w}: not a place the Board links to")),
+            w => return Err(format!("{w}: not a place the Dashboard links to")),
         })
     }
 
@@ -745,13 +754,13 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
     let mut out = vec![Extra {
         place: Place::Rail { zone: Zone::Activity, order: 35 },
         id: SCREEN.into(),
-        label: "Board".into(),
+        label: TITLE.into(),
         icon: Some("board".into()),
         tone: "purple".into(),
         help: match at_work {
-            0 => "The teams' conversations: plans, reports, notes, questions and commits".into(),
-            1 => "The teams' conversations: 1 team at work".into(),
-            n => format!("The teams' conversations: {n} teams at work"),
+            0 => "The teams' conversations (plans, reports, notes, questions, commits) and the Kanban".into(),
+            1 => "The teams' conversations and the Kanban: 1 team at work".into(),
+            n => format!("The teams' conversations and the Kanban: {n} teams at work"),
         },
         count: None,
         intent: Some(("board_show".into(), json!({}))),
@@ -763,10 +772,10 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
         out.push(Extra {
             place: Place::Sandbox(sb.to_string()),
             id: "board".into(),
-            label: "Board".into(),
+            label: TITLE.into(),
             icon: Some("board".into()),
             tone: "purple".into(),
-            help: format!("The conversation of {sb}'s team"),
+            help: format!("The conversation of {sb}'s team, and its Kanban"),
             count: None,
             intent: Some(("board_show".into(), json!({ "sandbox": sb }))),
         });

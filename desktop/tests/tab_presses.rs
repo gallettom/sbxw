@@ -235,3 +235,34 @@ fn every_rail_entry_pressed_twice_puts_back_what_was_there() {
     assert!(seen >= 9, "only {seen} rail entries drawn");
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+/// The top bar's Kanban button, from the terminals and from Sessions: the
+/// first press opens the Kanban (drawn), the second puts back what was there.
+#[test]
+fn the_top_bar_kanban_button_pressed_twice_puts_back_what_was_there() {
+    let state = |rt: &Runtime<App>| {
+        let d = rt.state.screen_data();
+        format!("overlay {} base {} modal {}", d["app"]["overlay"]["screen"], d["app"]["base"], d["app"]["modal"]["screen"])
+    };
+    let mut bad = vec![];
+    for open in [vec![], vec![intent("monitor_open", json!({}))]] {
+        let mut rt = window("kanban/basic", &open);
+        let before = (state(&rt), drawn(&rt));
+        for n in 0..2 {
+            let Some((x, y)) = rt.find("top-kanban") else {
+                bad.push(format!("top-kanban not drawn for press {}", n + 1));
+                break;
+            };
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            settle(&mut rt);
+            if n == 0 && (state(&rt) == before.0 || rt.find("kanban-view-conversation").is_none()) {
+                bad.push(format!("{open:?}: the first press did not draw the Kanban: {}", state(&rt)));
+            }
+        }
+        if state(&rt) != before.0 {
+            bad.push(format!("{open:?}: pressed twice: {}, before: {}", state(&rt), before.0));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
