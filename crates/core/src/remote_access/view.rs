@@ -41,7 +41,39 @@ pub struct PhoneQuestion {
 }
 
 pub fn phone_question(q: &Question) -> PhoneQuestion {
-    PhoneQuestion { text: q.text.clone(), options: q.options.clone() }
+    PhoneQuestion { text: no_upload_paths(&q.text), options: q.options.iter().map(|o| no_upload_paths(o)).collect() }
+}
+
+/// No path of sbxw's upload folder reaches the phone (API.md 2.6.1): a
+/// prompt that carried files, or a reply that quotes one, shows the file's
+/// name only. `/tmp/sbxw-uploads/<ms>/name` becomes `name`; the bare folder
+/// becomes `sbxw-uploads`.
+pub fn no_upload_paths(text: &str) -> String {
+    let root = crate::uploads::UPLOAD_ROOT;
+    if !text.contains(root) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find(root) {
+        out.push_str(&rest[..i]);
+        let mut after = &rest[i + root.len()..];
+        match after.strip_prefix('/') {
+            Some(a) => {
+                after = a;
+                let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+                if digits > 0 {
+                    if let Some(a) = after[digits..].strip_prefix('/') {
+                        after = a;
+                    }
+                }
+            }
+            None => out.push_str("sbxw-uploads"),
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -88,15 +120,15 @@ pub fn phone_page(page: &Page, after: Option<u64>) -> PhonePage {
             items.push(r);
         }
         let shown = match it.kind {
-            Kind::UserPrompt => PhoneItem { text: it.text.clone(), clipped: it.clipped, ..plain(it, "user_prompt") },
-            Kind::AssistantText => PhoneItem { text: it.text.clone(), clipped: it.clipped, provisional: it.provisional, ..plain(it, "assistant_text") },
-            Kind::Injected => PhoneItem { text: it.text.clone(), clipped: it.clipped, from: it.from.clone(), ..plain(it, "injected") },
+            Kind::UserPrompt => PhoneItem { text: no_upload_paths(&it.text), clipped: it.clipped, ..plain(it, "user_prompt") },
+            Kind::AssistantText => PhoneItem { text: no_upload_paths(&it.text), clipped: it.clipped, provisional: it.provisional, ..plain(it, "assistant_text") },
+            Kind::Injected => PhoneItem { text: no_upload_paths(&it.text), clipped: it.clipped, from: it.from.clone(), ..plain(it, "injected") },
             Kind::Question => PhoneItem {
-                text: it.text.clone(),
+                text: no_upload_paths(&it.text),
                 steps: it.steps.as_ref().map(|s| s.iter().map(phone_question).collect()),
                 ..plain(it, "question")
             },
-            Kind::Notice => PhoneItem { text: it.text.clone(), ..plain(it, "notice") },
+            Kind::Notice => PhoneItem { text: no_upload_paths(&it.text), ..plain(it, "notice") },
             Kind::CompactMarker => plain(it, "compact_marker"),
             // What tool it asks for is the tool's input: left out.
             Kind::Permission => plain(it, "permission"),
@@ -142,6 +174,16 @@ pub fn phone_activity(state: SessionState, question: bool) -> &'static str {
 mod tests {
     use super::*;
     use crate::history::{ResultStatus, ToolCall, ToolResult};
+
+    #[test]
+    fn no_path_of_the_upload_folder_reaches_the_phone() {
+        assert_eq!(no_upload_paths("look\n\nAttached files (uploaded to this sandbox):\n- /tmp/sbxw-uploads/1763650000000/a.png\n- /tmp/sbxw-uploads/17/2-a.png"), "look\n\nAttached files (uploaded to this sandbox):\n- a.png\n- 2-a.png");
+        assert_eq!(no_upload_paths("I listed /tmp/sbxw-uploads and /tmp/sbxw-uploads/x/y"), "I listed sbxw-uploads and x/y");
+        assert_eq!(no_upload_paths("no path"), "no path");
+        let page = page(vec![item(1, Kind::UserPrompt, "see /tmp/sbxw-uploads/5/p.jpg"), item(2, Kind::AssistantText, "Read /tmp/sbxw-uploads/5/p.jpg.")]);
+        let text = serde_json::to_string(&phone_page(&page, None)).unwrap();
+        assert!(!text.contains("/tmp/sbxw-uploads") && text.contains("p.jpg"), "{text}");
+    }
 
     fn item(seq: u64, kind: Kind, text: &str) -> Item {
         Item {

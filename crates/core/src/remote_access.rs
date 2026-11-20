@@ -21,6 +21,7 @@ pub mod devices;
 pub mod journal;
 pub mod limits;
 pub mod pairing;
+pub mod uploads;
 pub mod view;
 pub mod cbor;
 pub mod level2;

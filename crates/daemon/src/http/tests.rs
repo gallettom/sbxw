@@ -169,7 +169,7 @@ async fn the_index_carries_its_versions_and_the_state_is_one_call() {
 
 #[test]
 fn an_upload_keeps_its_name_as_one_safe_component() {
-    use super::ui::upload_name;
+    use sbxw_core::uploads::upload_name;
     assert_eq!(upload_name("shot 1 (final).png"), "shot_1__final_.png");
     assert_eq!(upload_name("../../etc/passwd"), "passwd");
     assert_eq!(upload_name("C:\\Users\\me\\clip.mov"), "clip.mov");

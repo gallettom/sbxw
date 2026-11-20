@@ -20,32 +20,32 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tower::ServiceExt;
 
-const TN: &str = "sbxw.tail1.ts.net";
+pub(super) const TN: &str = "sbxw.tail1.ts.net";
 
-fn on() -> (tempfile::TempDir, Arc<App>) {
+pub(super) fn on() -> (tempfile::TempDir, Arc<App>) {
     let (d, app) = app();
     app.remote_test_on(TN);
     (d, app)
 }
 
-struct Reply {
-    status: StatusCode,
-    headers: HeaderMap,
-    body: Vec<u8>,
+pub(super) struct Reply {
+    pub(super) status: StatusCode,
+    pub(super) headers: HeaderMap,
+    pub(super) body: Vec<u8>,
 }
 
 impl Reply {
-    fn json(&self) -> Value {
+    pub(super) fn json(&self) -> Value {
         serde_json::from_slice(&self.body).unwrap_or(Value::Null)
     }
-    fn text(&self) -> String {
+    pub(super) fn text(&self) -> String {
         String::from_utf8_lossy(&self.body).into_owned()
     }
 }
 
 /// A request as the sidecar forwards it: Host the tailnet name, the page's
 /// Origin on writes, JSON bodies.
-fn req(method: &str, path: &str) -> axum::http::request::Builder {
+pub(super) fn req(method: &str, path: &str) -> axum::http::request::Builder {
     let m: Method = method.parse().unwrap();
     let mut b = Request::builder().method(m.clone()).uri(path).header(header::HOST, TN);
     if m != Method::GET && m != Method::HEAD {
@@ -54,7 +54,7 @@ fn req(method: &str, path: &str) -> axum::http::request::Builder {
     b
 }
 
-async fn send(router: &Router, r: Request<Body>) -> Reply {
+pub(super) async fn send(router: &Router, r: Request<Body>) -> Reply {
     let res = router.clone().oneshot(r).await.unwrap();
     let status = res.status();
     let headers = res.headers().clone();
@@ -66,7 +66,7 @@ async fn send(router: &Router, r: Request<Body>) -> Reply {
     Reply { status, headers, body }
 }
 
-async fn call(router: &Router, method: &str, path: &str, cookie: Option<&str>, body: Value) -> Reply {
+pub(super) async fn call(router: &Router, method: &str, path: &str, cookie: Option<&str>, body: Value) -> Reply {
     let mut b = req(method, path);
     if let Some(t) = cookie {
         b = b.header(header::COOKIE, format!("{COOKIE}={t}"));
@@ -76,7 +76,7 @@ async fn call(router: &Router, method: &str, path: &str, cookie: Option<&str>, b
 }
 
 /// Pair a phone through the routes; its token, from the cookie.
-async fn pair(app: &Arc<App>, router: &Router, name: &str) -> String {
+pub(super) async fn pair(app: &Arc<App>, router: &Router, name: &str) -> String {
     let code = app.remote_pairing_code().unwrap().code;
     let r = call(router, "POST", "/r/pair/start", None, json!({ "code": code, "device_name": name })).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
@@ -170,8 +170,11 @@ async fn every_remote_data_route_refuses_the_ui_token_and_no_token() {
     let (_d, app) = on();
     let router = remote_router(app.clone());
     let ui = app.ui_token.clone();
-    for (method, path) in ROUTES.iter().filter(|(_, p)| p.starts_with("/r/") && !p.starts_with("/r/pair/")) {
+    for (i, (method, path)) in ROUTES.iter().filter(|(_, p)| p.starts_with("/r/") && !p.starts_with("/r/pair/")).enumerate() {
         let p = concrete(path);
+        // One source per route: the bad-cookie limit (10 per source) must
+        // not be what answers once the list passes ten data routes.
+        let src = format!("100.64.0.{}", i + 1);
         let tries: Vec<(&str, Option<String>, Option<String>)> = vec![
             ("none", None, None),
             ("bearer", Some(format!("Bearer {ui}")), None),
@@ -180,7 +183,7 @@ async fn every_remote_data_route_refuses_the_ui_token_and_no_token() {
             ("agent-style token", Some("Bearer sbxw_0000".into()), None),
         ];
         for (what, auth, cookie) in tries {
-            let mut b = req(method, &p);
+            let mut b = req(method, &p).header("x-forwarded-for", &src);
             if let Some(a) = auth {
                 b = b.header(header::AUTHORIZATION, a);
             }
@@ -546,7 +549,7 @@ async fn path_tricks_find_nothing() {
 
 /// A leader with a fake agent: its PTY runs `cat` into a file, so what is
 /// typed into it can be read back; its hooks say what it did.
-async fn leader(app: &Arc<App>, dir: &std::path::Path, name: &str) -> (SandboxRef, PathBuf) {
+pub(super) async fn leader(app: &Arc<App>, dir: &std::path::Path, name: &str) -> (SandboxRef, PathBuf) {
     let sb = SandboxRef::parse(name).unwrap();
     let file = dir.join(format!("{name}.typed"));
     // Claude Code turns bracketed paste on at its prompt; so does the fake.
@@ -567,13 +570,13 @@ async fn leader(app: &Arc<App>, dir: &std::path::Path, name: &str) -> (SandboxRe
     (sb, file)
 }
 
-fn hook(app: &App, sb: &SandboxRef, sid: &str, mut ev: Value) {
+pub(super) fn hook(app: &App, sb: &SandboxRef, sid: &str, mut ev: Value) {
     ev["session_id"] = sid.into();
     ev["hook_version"] = 2.into();
     app.ingest_hook(sb, ev);
 }
 
-async fn typed(file: &std::path::Path, want: &[u8]) -> Vec<u8> {
+pub(super) async fn typed(file: &std::path::Path, want: &[u8]) -> Vec<u8> {
     for _ in 0..50 {
         let got = std::fs::read(file).unwrap_or_default();
         if got.windows(want.len()).any(|w| w == want) {
@@ -625,7 +628,7 @@ async fn only_leaders_are_listed_and_their_history_carries_no_tool_detail() {
 
 /// Every log line, as text, while it is the default subscriber.
 #[derive(Clone, Default)]
-struct Capture(Arc<Mutex<String>>);
+pub(super) struct Capture(pub(super) Arc<Mutex<String>>);
 
 struct Fields<'a>(&'a mut String);
 

@@ -14,14 +14,14 @@
 use super::error::ApiError;
 use super::remote_approvals as l2;
 use crate::app::App;
-use crate::svc::remote_access::{AuthError, DeviceCtx, Kick, Refusal};
+use crate::svc::remote_access::{AuthError, DeviceCtx, Kick, Reason, Refusal};
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::sse::{Event as Sse, KeepAlive};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
 use sbxw_core::remote_access::journal::Kind;
 use sbxw_core::remote_access::pairing::Status;
@@ -59,6 +59,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/r/leaders/:sandbox/answer"),
     ("POST", "/r/leaders/:sandbox/interrupt"),
     ("POST", "/r/voice/transcribe"),
+    ("POST", "/r/leaders/:sandbox/upload"),
+    ("DELETE", "/r/leaders/:sandbox/upload/:id"),
     // Level 2 (API-level2.md): approving with a passkey.
     ("GET", "/r/approvals"),
     ("POST", "/r/passkey/start"),
@@ -101,6 +103,10 @@ pub fn remote_router(app: Arc<App>) -> Router {
         .route("/r/leaders/:sandbox/answer", post(answer))
         .route("/r/leaders/:sandbox/interrupt", post(interrupt))
         .route("/r/voice/transcribe", post(transcribe).layer(DefaultBodyLimit::max(AUDIO_BODY_MAX)))
+        // The body is streamed and counted by `remote_upload` itself
+        // (25 MiB); no extractor buffers it.
+        .route("/r/leaders/:sandbox/upload", post(upload))
+        .route("/r/leaders/:sandbox/upload/:id", delete(upload_drop))
         // Level 2 (API-level2.md): approving with a passkey.
         .route("/r/approvals", get(l2::approvals))
         .route("/r/passkey/start", post(l2::passkey_start))
@@ -135,7 +141,7 @@ fn refusal(r: Refusal) -> Response {
     match r {
         Refusal::NotFound => ApiError::not_found("not found").into_response(),
         Refusal::Reason(r) => {
-            let status = if r.status_conflict() { StatusCode::CONFLICT } else { StatusCode::BAD_REQUEST };
+            let status = StatusCode::from_u16(r.http_status()).unwrap_or(StatusCode::BAD_REQUEST);
             (status, Json(json!({ "ok": false, "error": r.sentence(), "reason": r.code() }))).into_response()
         }
         Refusal::Conflict(m) => ApiError::conflict(m).into_response(),
@@ -143,6 +149,7 @@ fn refusal(r: Refusal) -> Response {
         Refusal::Unavailable(m) => ApiError::new(StatusCode::SERVICE_UNAVAILABLE, m).into_response(),
         Refusal::Bad(m) => ApiError::bad(m).into_response(),
         Refusal::Limited(ms) => limited(ms),
+        Refusal::Failed(m) => ApiError::new(StatusCode::BAD_GATEWAY, m).into_response(),
     }
 }
 
@@ -347,18 +354,25 @@ async fn history(State(app): S, Extension(_d): Extension<DeviceCtx>, Path(sandbo
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MessageBody {
+    #[serde(default)]
     text: String,
+    /// Ids from `upload` (API.md 2.6.1); the daemon resolves them.
+    #[serde(default)]
+    attachments: Vec<String>,
 }
 
 async fn message(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Json(b): Json<MessageBody>) -> Response {
     if b.text.len() > MESSAGE_MAX {
         return refusal(Refusal::Bad(format!("a message is at most {MESSAGE_MAX} bytes")));
     }
+    if b.attachments.len() > sbxw_core::remote_access::uploads::WAITING_MAX {
+        return refusal(Refusal::Reason(Reason::TooManyIds));
+    }
     let sb = match app.remote_leader(&sandbox) {
         Ok(sb) => sb,
         Err(e) => return refusal(e),
     };
-    match app.remote_message(&d, &sb, &b.text).await {
+    match app.remote_message(&d, &sb, &b.text, &b.attachments).await {
         Ok(masked) => Json(json!({ "ok": true, "masked": masked })).into_response(),
         Err(e) => refusal(e),
     }
@@ -399,6 +413,46 @@ async fn transcribe(State(app): S, Extension(d): Extension<DeviceCtx>, headers: 
     }
     match app.remote_transcribe(&d, &body).await {
         Ok(safe) => Json(json!({ "text": safe.text, "masked": safe.count })).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    #[serde(default)]
+    name: String,
+}
+
+/// A file from the phone: the raw bytes, streamed (API.md 2.6.1). Never a
+/// path in the answer.
+async fn upload(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Query(q): Query<UploadQuery>, req: Request) -> Response {
+    let headers = req.headers();
+    let octets = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|c| c == "application/octet-stream");
+    if !octets {
+        return ApiError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "a file is sent as application/octet-stream").into_response();
+    }
+    let declared = headers.get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+    let sb = match app.remote_leader(&sandbox) {
+        Ok(sb) => sb,
+        Err(e) => return refusal(e),
+    };
+    let body = req.into_body().into_data_stream();
+    match app.remote_upload(&d, &sb, &q.name, declared, body).await {
+        Ok(v) => Json(json!(v)).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+async fn upload_drop(State(app): S, Extension(d): Extension<DeviceCtx>, Path((sandbox, id)): Path<(String, String)>) -> Response {
+    let sb = match app.remote_leader(&sandbox) {
+        Ok(sb) => sb,
+        Err(e) => return refusal(e),
+    };
+    if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return refusal(Refusal::NotFound);
+    }
+    match app.remote_upload_drop(&d, &sb, &id) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => refusal(e),
     }
 }

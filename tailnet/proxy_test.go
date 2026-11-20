@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -244,6 +245,55 @@ func TestBodyLimit(t *testing.T) {
 	req.Host = testName
 	if res := do(t, front, req); res.StatusCode != 200 {
 		t.Fatalf("transcribe-sized body: status %d", res.StatusCode)
+	}
+}
+
+// A phone's 25 MiB upload passes, and it is streamed: the upstream reads its
+// first megabyte while the client has not yet sent the rest.
+func TestUploadBodyIsStreamed(t *testing.T) {
+	const fileMax = 25 << 20
+	gotFirst := make(chan struct{})
+	var total atomic.Int64
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := io.CopyN(io.Discard, r.Body, 1<<20)
+		if n == 1<<20 {
+			close(gotFirst)
+		}
+		m, _ := io.Copy(io.Discard, r.Body)
+		total.Store(n + m)
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(up.Close)
+	front := newFront(t, strings.TrimPrefix(up.URL, "http://"), fakeWhoIs("p.ts.net", nil))
+	pr, pw := io.Pipe()
+	go func() {
+		chunk := make([]byte, 1<<20)
+		_, _ = pw.Write(chunk)
+		select {
+		case <-gotFirst:
+		case <-time.After(10 * time.Second):
+			pw.CloseWithError(errors.New("the proxy held the body back"))
+			return
+		}
+		for i := 1; i < fileMax>>20; i++ {
+			if _, err := pw.Write(chunk); err != nil {
+				return
+			}
+		}
+		pw.Close()
+	}()
+	req, _ := http.NewRequest("POST", "http://x/r/leaders/myapp/upload?name=a.png", pr)
+	req.Host = testName
+	req.ContentLength = fileMax
+	res := do(t, front, req)
+	if res.StatusCode != 200 {
+		t.Fatalf("a 25 MiB upload: status %d", res.StatusCode)
+	}
+	if got := total.Load(); got != fileMax {
+		t.Fatalf("upstream received %d bytes, want %d", got, fileMax)
+	}
+	if maxBodyBytes < fileMax+(512<<10) {
+		t.Fatalf("the cap %d leaves no margin over the daemon's %d", maxBodyBytes, fileMax)
 	}
 }
 

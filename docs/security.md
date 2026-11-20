@@ -339,8 +339,8 @@ write; read it.
 ## Remote access
 
 Remote access lets a phone you pair talk to your **running team leaders** while you are
-away from the Mac: read their conversations, type or dictate to them, answer their
-multiple-choice questions, interrupt them. It goes through your own private Tailscale
+away from the Mac: read their conversations, type or dictate to them, hand them a file,
+answer their multiple-choice questions, interrupt them. It goes through your own private Tailscale
 network (a "tailnet"); nothing passes through a server of sbxw's or anyone else's, and no
 conversation leaves the Mac except to your phone.
 
@@ -413,6 +413,7 @@ does the same as a revoke.
 | Answer a multiple-choice question (`AskUserQuestion`) | Allow a tool (a permission prompt): "This needs your Mac" |
 | Interrupt it (one Escape, as at the keyboard; it may take a few seconds while a line is being typed into that session) | Approve or refuse a plan, a merge, a network request; remove anything |
 | Dictate (the Mac transcribes; the text comes back to the phone to correct) | Touch secrets, the GitHub token, network rules, ports, kits, MCP servers, configuration, the relay, Jarvis, the daemon |
+| Hand a file to a leader (a photo, a PDF, a text): up to 25 MB each, at most 5 waiting (60 MB together) per leader; it reaches the sandbox only with a message you send, under `/tmp/sbxw-uploads/`; an unsent one is deleted after 30 minutes (see "What a file can do") | Send a program or an archive (refused by their first bytes); read a file back, list the uploads folder or learn any path; hand a file to anything but a running team leader; have a file typed or opened by the upload itself |
 
 These limits are enforced by the daemon, not by the page: the routes for everything in
 the right column do not exist on the remote listener at all.
@@ -462,6 +463,57 @@ what lands in the leader's prompt and nothing else:
   a line sbxw types into a leader that is still starting), so an Escape never lands inside
   a paste.
 
+### What a file can do
+
+A file from the phone is data handed to a leader, never an action:
+
+- **Held on the Mac until you send it.** The phone streams the file to the Mac, where the
+  daemon keeps it in `~/.sbxw/remote/uploads/` (folder `0700`, file `0600`, random name)
+  and gives the phone an opaque handle bound to that phone and that leader. Nothing is
+  typed and nothing reaches the sandbox yet: the leader learns of a file only from a message
+  you send with it.
+- **Sent with a message.** When a message names the handle, the daemon copies the file into
+  the leader's sandbox with the web UI's own upload writer, to
+  `/tmp/sbxw-uploads/<time>/<name>`, and types after your text one fixed block of its own
+  paths ("Attached files (uploaded to this sandbox):" and one `- <path>` line per file), the
+  same block as the web chat. Everything "What a message can do" says holds for the whole
+  typed text, block included: only into an idle leader, one paste, the checks on the exact
+  text typed, Return last. A file is copied only if the leader takes a message at that
+  moment. The handle is spent only once the Return is sent; if the message is refused or
+  not sent, the handle stays usable for a retry (a file already copied is not copied again).
+- **Its name is the daemon's.** The phone's name is only a hint: the daemon keeps its last
+  part, turns every character outside `A-Z a-z 0-9 . _ -` into `_` (so no space, control,
+  invisible or look-alike character), drops leading dots (no hidden file, no `..`), keeps
+  120 characters at most. So no line of the block can start with `!`, `/` or `#`, and the
+  final check on the whole text would refuse it anyway. The daemon does not refuse a name
+  that looks like a secret (`.env`, `*.pem`): the files on your phone are yours, and the
+  name is never written to the journal or to the daemon's logs at info level and above.
+- **Refused kinds**, by their first bytes whatever the name: native programs (ELF, Windows
+  `MZ`, Mach-O) and archives (zip, tar, gzip, 7z, rar, xz, bzip2, zstd), and empty files.
+  Everything else is data: pictures, PDF, text (a script included: it is text an agent
+  reads, like a message), other bytes.
+- **Limits.** 25 MB per file (counted while it arrives, whatever the phone declares), at
+  most 5 files and 60 MB waiting per phone and leader, 200 MB for all phones, one upload at
+  a time per phone, 20 uploads per 10 minutes per phone (one phone's limit never holds
+  another back), the whole file within 180 s and no pause over 30 s. The Tailscale node
+  takes a body of 26 MB at most and gives it 120 s (the person's decision): a 25 MB file
+  needs about 1.7 Mbit/s of uplink. On a slower link the upload fails: the node cuts it at
+  120 s, the phone gets an error, nothing is kept on the Mac, and you retry on a better
+  connection or with a smaller file (each try counts toward the 20 per 10 minutes).
+- **How long.** An unsent file is deleted from the Mac 30 minutes after its upload, or when
+  you remove it on the phone, when the phone is revoked or logs out, when remote access is
+  turned off, and when the daemon restarts. A file sent with a message stays in the
+  sandbox, like the web chat's uploads; so does a file copied for a message that was then
+  not sent. No route of the phone removes a file from a sandbox.
+- **The phone never sees a path.** No answer names the uploads folder, and the
+  conversation shown on the phone shows `name` where the text said
+  `/tmp/sbxw-uploads/<time>/name`.
+- **Logs.** The journal records `upload` with a size class (under 1 MB, 1 to 10 MB, over
+  10 MB), never a name or a content. The daemon's info lines name a device and a size
+  class. Known gap: the `sbx` runner's own debug line prints every command it runs, so at
+  debug level the destination path (with the file's sanitised name) appears, as for every
+  web UI upload; the content never does.
+
 ### Check on your Mac before relying on it
 
 1. Pair the phone with `sbxw remote pair` and type the digits it shows.
@@ -470,7 +522,10 @@ what lands in the leader's prompt and nothing else:
    nothing.
 3. Make a leader ask for a permission and check that a message from the phone is refused
    ("This needs your Mac") and nothing reaches the terminal.
-4. On mains power with remote access on, check the Mac does not idle to sleep
+4. From the phone, hand a photo to an idle leader with a message: the leader's terminal
+   shows your text and the block with one `/tmp/sbxw-uploads/...` path, and the file is
+   there in the sandbox. A large photo or video over 25 MB is refused with "too large".
+5. On mains power with remote access on, check the Mac does not idle to sleep
    (`pmset -g assertions` shows `caffeinate`); on battery, that it may.
 
 ### The threat model, in plain words
@@ -501,8 +556,9 @@ what lands in the leader's prompt and nothing else:
 - *The UI token leaking to the phone, or the device token to the UI.* Neither listener
   accepts the other's token. The phone's token has no other power than the list above.
 - *Your words in logs.* The journal records which device did which kind of thing and when,
-  never the text of a message, an answer or a transcription; neither do the daemon's logs
-  (tests capture them), which at info level name only a device and a kind of action. No
+  never the text of a message, an answer or a transcription, nor a file's name or content;
+  neither do the daemon's logs (tests capture them), which at info level name only a
+  device and a kind of action (and a size class for a file). No
   Tailscale user, login or machine name is read or kept.
 
 **What it does not protect against**
@@ -537,7 +593,8 @@ phone (Safari, on your tailnet)
   daemon reads as untrusted input.
 - State under `~/.sbxw/remote/` (directory `0700`, files `0600`): `state.json` (on/off,
   devices with hashed tokens), `journal.jsonl` (the last 1000 entries), `tailnet.json`,
-  `tailnet/` (the node's keys).
+  `tailnet/` (the node's keys), `uploads/` (files a phone handed over and has not sent yet;
+  emptied at daemon start).
 - The Mac side is driven through admin routes on the UI listener (`/api/remote*`, UI
   token as for every UI route): the CLI now, the desktop app later. Jarvis cannot turn
   remote access on or move its listener.

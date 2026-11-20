@@ -36,6 +36,8 @@ mod tests;
 #[cfg(test)]
 mod remote_tests;
 #[cfg(test)]
+mod remote_upload_tests;
+#[cfg(test)]
 mod remote_review_tests;
 #[cfg(test)]
 mod remote_review2_tests;
