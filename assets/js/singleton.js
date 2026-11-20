@@ -29,6 +29,10 @@ const SBXW_APP_SCRIPTS = [
   // Before panes.js, which attaches it to each terminal it builds.
   '/js/emphasis.js',
   '/js/panes.js',
+  // After panes.js, whose terminals it links and whose panes it takes drops on;
+  // it calls chat-core.js and files.js only once a path is pressed or a file
+  // dropped, long after they have loaded.
+  '/js/pane-files.js',
   '/js/pane-controls.js',
   '/js/sandboxes.js',
   '/js/create.js',

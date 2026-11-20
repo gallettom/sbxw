@@ -37,6 +37,7 @@ const STATIC: &[(&str, &str, &str)] = &[
     js!("term-color.js"),
     js!("emphasis.js"),
     js!("panes.js"),
+    js!("pane-files.js"),
     js!("pane-controls.js"),
     js!("sandboxes.js"),
     js!("create.js"),
