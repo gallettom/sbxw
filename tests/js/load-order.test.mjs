@@ -111,7 +111,6 @@ test('scripts load in singleton.js order with no use of a later script', async (
     process.off('unhandledRejection', onReject);
   }
 
-  if (uncovered.length) console.log('UNCOVERED\n  ' + uncovered.join('\n  '));
   assert.deepEqual(violations, [], 'a script uses a global defined only by a later script');
   assert.deepEqual(errors.filter(e => /pane/.test(e.text)), [], 'a pane feature reported a failure at load');
   // main.js built at least one pane before the page awaited its first answer.
