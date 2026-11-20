@@ -18,6 +18,7 @@ and the newly printed address signs it in again. See
 - [Creating sandboxes](#creating-sandboxes)
 - [Remote hosts (experimental)](#remote-hosts-experimental)
 - [The pane bar](#the-pane-bar)
+- [The Kanban](#the-kanban)
 - [The Project panel: files and code map](#the-project-panel)
 - [Ports and network policy](#ports-and-network-policy)
 - [Environment file and SSH cards](#environment-file-and-ssh-cards)
@@ -29,7 +30,7 @@ and the newly printed address signs it in again. See
 
 | Area | What's there |
 |---|---|
-| **Header** | The terminal-count switch (1 to several panes), the terminal colour picker, for the background, the bar above it and the text (kept in this browser; the defaults come from [`terminal_color`, `terminal_bar_color` and `terminal_text_color`](configuration.md)), the relay badge when an agent's question waits for you, and your **Claude subscription usage** |
+| **Header** | The terminal-count switch (1 to several panes), the terminal colour picker, the [**Kanban**](#the-kanban) button, for the background, the bar above it and the text (kept in this browser; the defaults come from [`terminal_color`, `terminal_bar_color` and `terminal_text_color`](configuration.md)), the relay badge when an agent's question waits for you, and your **Claude subscription usage** |
 | **Sidebar** | Every sandbox `sbx ls` reports, grouped by workspace folder (and first by host, when [remote hosts](#remote-hosts-experimental) are registered). Chat sandboxes go under **💬 Chats**. In each group, and among the sandboxes outside any group, the ones on screen come first, in pane order. A sandbox's [threads](threads-and-lead.md) are listed under its row. Clicking a row opens it in the focused pane; a row that is in no pane has a **+** at its top right, which opens it in the first empty pane, or adds a pane for it |
 | **Panes** | One terminal each. A sandbox's panes sit next to each other in a shared colour |
 | **Bottom right** | Background-job cards (bring-ups, code maps, relay requests) and the [chat dock](chat.md#the-chat-dock) button |
@@ -230,6 +231,79 @@ Notes:
 - **Replays are repainted, never re-answered.** Terminal queries in the replay
   (`CSI 6n`, `CSI c`) are stripped, so a reconnect doesn't type
   `37;3R37;3R…` onto your command line.
+
+## The Kanban
+
+The tickets of a sandbox, or of every sandbox, in five columns: **Planned**,
+**In progress**, **In test**, **Ready to merge** and **Merged**. It is the
+same board as the desktop app's Kanban, drawn from the same daemon route; how
+a ticket moves between columns is in
+[Tickets and the Kanban](threads-and-lead.md#tickets-and-the-kanban).
+
+**Opening it.** The **Kanban** button in the header opens it on the focused
+pane's sandbox; the picker beside its title switches to another sandbox or to
+**All sandboxes** (each card then names its sandbox). The worktree graph (and a
+shared plan's claims board, the same dialog) has **Open the Kanban** in its
+footer, for that sandbox. The claims board keeps its name: it is the threads'
+file claims and feed, not the tickets.
+
+**The board.** Each column has its count and scrolls on its own, so its
+heading stays in view. The page draws what the daemon answers (the column of
+each card, its labels, marks, counts and the summary line) and works out none
+of it. A card shows its number (or *thread* for a thread with no ticket), its
+title (short or long, as the column's width allows; the whole title is its
+tooltip), its marks (a mark's tooltip says what it means), its thread with
+the thread's colour, and its age. A red left edge means failed or refused
+work. Merged shows its 12 newest; **Show n older** reads the rest. Under about
+700 px each column takes most of the width and the row scrolls sideways,
+snapping to a column. The board is read again (after 300 ms of quiet) on every
+`tickets` and `plan` event of the stream, keeping each column's scroll and an
+open ticket.
+
+**A ticket.** Pressing a card opens it in a panel on the right, over the
+board: its column, marks, title, description (plain text, line breaks kept),
+pictures (up to four, read from the daemon as blobs), its files as chips with
+name and size (a press downloads the file through the daemon, which serves it
+as an attachment), its thread with **Terminal**, **Plan** (while the plan
+waits for approval or a merge) and **Worktrees**, and its history. Escape or a
+press outside the panel closes it and gives the keyboard back to the card; a
+second Escape closes the Kanban.
+
+**A new ticket.** **＋ New ticket** opens a form: the sandbox, a title (160
+characters), a description (8,000), a priority, and files by **Attach…** or
+by dropping them on the form. Before anything is sent:
+
+- each file is checked against the daemon's limits (20 MB a file, 20 files and
+  100 MB a ticket) and by its first bytes: archives (zip, tar, gzip, 7z, rar,
+  xz, bzip2, zstd), native programs (ELF, Mach-O, PE) and empty files are
+  refused as they are handed in, with the reason, as the daemon would;
+- a file whose name looks like a secret (`.env*`, `*.pem`, `*.key`, `id_rsa*`,
+  `id_ed25519*`, `*.p12`, `*.pfx`, `credentials*`, `.npmrc`, `.netrc`,
+  `*.kdbx`, the desktop app's list), more than 10 files or more than 25 MB in
+  all need the box **I have looked at these files and want to attach them**
+  ticked: Save sends nothing until it is. A page is not told a file's folder,
+  so the desktop's check for `.ssh`, `.aws` and `.gnupg` folders is not made
+  here.
+
+Save creates the ticket, then attaches the files one at a time, each marked
+*sending*, *attached* or *refused*. A file the daemon refuses stops the run:
+the form stays open and says what was attached and what was not, the ticket
+keeps the files that went, and **Attach the rest** sends the remaining ones to
+the same ticket (it never makes a second). **Close, keep T-n** leaves the
+ticket as it is. Escape closes the form only while it is empty.
+
+**Not in the web view:** moving a ticket, changing its priority, editing it,
+marking it validated, removing a file, deleting a ticket and **Send to the
+lead**. They are in the desktop app, and the web view shows no control for
+them. A planned ticket's panel says: *Send it to the lead from the desktop app,
+or ask the lead to read the planned tickets.*
+
+**Text stays text.** Titles, descriptions, file names, marks and history lines
+go into the page escaped, never as markup; a file's link is built from the id
+the daemon gave, not its name; nothing of a ticket is logged.
+`tests/js/kanban.test.mjs` draws the board and tickets from the daemon's own
+answers (`desktop/fixtures/kanban/*.json`) and checks that hostile text adds
+no element or attribute.
 
 ## Status pills
 

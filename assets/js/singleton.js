@@ -65,6 +65,9 @@ const SBXW_APP_SCRIPTS = [
   '/js/board.js',
   // After plans.js: its lanes carry each thread's plan state.
   '/js/worktrees.js',
+  // After worktrees.js and plans.js, whose dialogs a ticket's thread opens;
+  // its own stream listeners (`tickets`, `plan`).
+  '/js/kanban.js',
   // Same reason: the chat dock follows chats on that stream.
   '/js/chat-dock.js',
   // Its own stream listener (`voice`); nothing depends on it.

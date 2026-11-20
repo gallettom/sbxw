@@ -334,7 +334,9 @@ impl Fx {
         let n = b.create(Draft { title: Some(title.into()), description: Some(desc.into()), priority: Some(prio) }, at).unwrap().n;
         n
     }
-    fn file(&mut self, sb: &str, n: u32, k: u32, name: &str, kind: FileKind, bytes: u64, at: u64) {
+    /// `what` is the file's shown name, kind and size.
+    fn file(&mut self, sb: &str, n: u32, k: u32, what: (&str, FileKind, u64), at: u64) {
+        let (name, kind, bytes) = what;
         let f = TicketFile { id: format!("a-{k:08x}"), file: format!("f-{k:016x}.{}", kind.ext()), name: name.into(), bytes, kind, added_ms: at };
         self.book(sb).add_file(n, f, at).unwrap();
     }
@@ -394,14 +396,14 @@ fn basic_fx() -> Fx {
     let mut f = Fx { books: vec![], plans: vec![], now: T0 + 26 * 60 * MIN };
     let t = |h: u64| T0 + h * 60 * MIN;
     let a = f.ticket("web-app", "Export the weekly report as a PDF with the logo on the first page", "The report is HTML only today. People print it to PDF by hand and the logo moves.\n\n1. A PDF button beside Print.\n2. The logo on the first page only.\n3. [[Note]] A4 and Letter.", Priority::P1, t(1));
-    f.file("web-app", a, 1, "report-today.png", FileKind::Png, 412_000, t(1));
-    f.file("web-app", a, 2, "brand-guide.pdf", FileKind::Pdf, 1_240_000, t(1));
+    f.file("web-app", a, 1, ("report-today.png", FileKind::Png, 412_000), t(1));
+    f.file("web-app", a, 2, ("brand-guide.pdf", FileKind::Pdf, 1_240_000), t(1));
     f.ticket("web-app", "Dark mode for the settings dialog", "The settings dialog stays light when the app is dark.", Priority::None, t(2));
     f.ticket("web-app", "Retry failed uploads three times before showing an error", "", Priority::P2, t(3));
     let b = f.ticket("web-app", "Sign-in with a one-time code sent by email", "Codes of six digits, valid ten minutes.", Priority::None, t(4));
     let c = f.ticket("web-app", "Paginate the members list (50 a page) and keep the filter in the URL", "The members list loads every row at once and takes 4 s with 3,000 members.\n\n1. 50 rows a page, with Next and Previous.\n2. The filter (name, role) stays in the URL so a link can be shared.\n3. Keep the current sort.", Priority::P1, t(5));
-    f.file("web-app", c, 3, "members-slow.png", FileKind::Png, 388_000, t(5));
-    f.file("web-app", c, 4, "sample-members.csv", FileKind::Text, 18_400, t(5));
+    f.file("web-app", c, 3, ("members-slow.png", FileKind::Png, 388_000), t(5));
+    f.file("web-app", c, 4, ("sample-members.csv", FileKind::Text, 18_400), t(5));
     let d = f.ticket("web-app", "Fix the date picker on narrow screens", "", Priority::None, t(6));
     let e = f.ticket("web-app", "Translate the onboarding emails into French and German", "", Priority::None, t(7));
     let g = f.ticket("web-app", "Speed up the dashboard's first load", "", Priority::P2, t(8));
@@ -439,7 +441,7 @@ fn big_fx() -> Fx {
         let prio = [Priority::None, Priority::P1, Priority::P2, Priority::P3][k % 4];
         let n = f.ticket(sb, &title(k), &"A paragraph of invented words for the description. ".repeat(40), prio, T0 + k as u64 * 30 * MIN);
         if k % 5 == 0 {
-            f.file(sb, n, 100 + k as u32, "screen.png", FileKind::Png, 300_000, T0);
+            f.file(sb, n, 100 + k as u32, ("screen.png", FileKind::Png, 300_000), T0);
         }
         nums.push((sb, n));
     }

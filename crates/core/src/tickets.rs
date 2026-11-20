@@ -736,7 +736,7 @@ impl Book {
             if t.link.as_ref() != Some(&link) {
                 // A newer plan takes a ticket over only from a plan refused,
                 // failed or merged (or gone); a refused one never.
-                if plan.state == PlanState::Refused || t.link.as_ref().is_some_and(|l| busy(l)) {
+                if plan.state == PlanState::Refused || t.link.as_ref().is_some_and(busy) {
                     continue;
                 }
                 t.link = Some(link);
