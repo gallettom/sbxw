@@ -883,17 +883,18 @@ struct ApprovalBody {
 
 /// Only an approval sbx still lists, with an option it offers: a stale page
 /// (a port request lapses after 45 s) gets told so rather than sbx's error.
+/// The same path as the phone's (`App::approval_answer`).
 async fn approval_respond(State(app): S, Json(b): Json<ApprovalBody>) -> ApiResult {
-    let pending = app.sbx.approvals().await?;
-    let Some(a) = pending.iter().find(|a| a.id == b.id) else {
-        return Err(ApiError::bad("this request is no longer pending — it was answered, or it lapsed"));
-    };
-    if !a.offers(&b.option) {
-        return Err(ApiError::bad(format!("“{}” is not one of this request's options", b.option)));
+    use crate::svc::remote_approvals::AnswerError;
+    match app.approval_answer(&b.id, &b.option).await {
+        Ok(a) => {
+            tracing::info!("web UI: approval {} for '{}' ({}) → {}", a.id, a.sandbox, a.title, b.option);
+            Ok(ok())
+        }
+        Err(AnswerError::Gone) => Err(ApiError::bad("this request is no longer pending — it was answered, or it lapsed")),
+        Err(AnswerError::NotOffered(o)) => Err(ApiError::bad(format!("“{o}” is not one of this request's options"))),
+        Err(AnswerError::Sbx(e)) => Err(e.into()),
     }
-    tracing::info!("web UI: approval {} for '{}' ({}) → {}", a.id, a.sandbox, a.title, b.option);
-    app.sbx.approval_respond(&a.id, &b.option).await?;
-    Ok(ok())
 }
 
 /// sbx's stored secrets, names and scopes only.

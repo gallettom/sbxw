@@ -80,9 +80,9 @@ struct Listener {
 }
 
 pub struct RemoteRuntime {
-    dir: PathBuf,
-    enabled: bool,
-    devices: DeviceBook,
+    pub(crate) dir: PathBuf,
+    pub(crate) enabled: bool,
+    pub(crate) devices: DeviceBook,
     journal: Vec<Entry>,
     pairing: PairingBook,
     pair_limit: Limiter,
@@ -100,6 +100,8 @@ pub struct RemoteRuntime {
     /// Tests: bind here instead of `remote_addr` (port 0 picks one).
     pub addr_override: Option<String>,
     kicks: tokio::sync::broadcast::Sender<Kick>,
+    /// Level 2: approving with a passkey (`svc::remote_approvals`).
+    pub(crate) level2: crate::svc::remote_approvals::Level2,
 }
 
 impl RemoteRuntime {
@@ -119,6 +121,7 @@ impl RemoteRuntime {
             .unwrap_or_default();
         let journal = std::fs::read_to_string(dir.join("journal.jsonl")).map(|t| journal::parse_lines(&t)).unwrap_or_default();
         let (kicks, _) = tokio::sync::broadcast::channel(16);
+        let level2 = crate::svc::remote_approvals::Level2::load(&dir, state.approvals && state.enabled);
         let mut rt = RemoteRuntime {
             dir,
             enabled: state.enabled,
@@ -136,7 +139,13 @@ impl RemoteRuntime {
             tailnet_override: None,
             addr_override: None,
             kicks,
+            level2,
         };
+        // A passkey whose device is gone goes too.
+        let RemoteRuntime { devices, level2, dir, .. } = &mut rt;
+        if level2.passkeys.retain_devices(|id| devices.get(id).is_some()) {
+            level2.save_passkeys(dir);
+        }
         rt.expire(now_ms());
         rt
     }
@@ -153,8 +162,8 @@ impl RemoteRuntime {
         self.dir.join("tailnet")
     }
 
-    fn save(&self) {
-        let state = State { enabled: self.enabled, devices: self.devices.devices().to_vec() };
+    pub(crate) fn save(&self) {
+        let state = State { enabled: self.enabled, devices: self.devices.devices().to_vec(), approvals: self.level2.enabled };
         let bytes = serde_json::to_vec_pretty(&state).expect("serialisable");
         if let Err(e) = write_private(&self.dir, &self.state_path(), &bytes) {
             tracing::warn!("remote access: cannot write state.json: {e}");
@@ -162,7 +171,13 @@ impl RemoteRuntime {
     }
 
     fn record(&mut self, device_id: &str, device_name: &str, kind: Kind) {
-        self.journal.push(Entry { at_ms: now_ms(), device_id: device_id.into(), device_name: device_name.into(), kind });
+        self.record_target(device_id, device_name, kind, None);
+    }
+
+    /// A journal entry naming what was acted on (a plan id, a sandbox name,
+    /// a host), never its content.
+    pub(crate) fn record_target(&mut self, device_id: &str, device_name: &str, kind: Kind, target: Option<String>) {
+        self.journal.push(Entry { at_ms: now_ms(), device_id: device_id.into(), device_name: device_name.into(), kind, target });
         journal::bound(&mut self.journal);
         if let Err(e) = write_private(&self.dir, &self.dir.join("journal.jsonl"), journal::to_lines(&self.journal).as_bytes()) {
             tracing::warn!("remote access: cannot write the journal: {e}");
@@ -175,6 +190,9 @@ impl RemoteRuntime {
             return;
         }
         for d in &gone {
+            if self.level2.forget_device(&d.id) {
+                self.level2.save_passkeys(&self.dir);
+            }
             tracing::info!("remote access: device {} dropped after 30 days idle", d.id);
             self.record(&d.id, &d.name, Kind::Expired);
             let _ = self.kicks.send(Kick::Device(d.id.clone()));
@@ -192,7 +210,7 @@ impl RemoteRuntime {
 
     /// The tailnet name the Host and Origin checks may use, if the sidecar
     /// serves one. Re-read at most every 2 s.
-    fn serving_name(&mut self) -> Option<String> {
+    pub(crate) fn serving_name(&mut self) -> Option<String> {
         if let Some(n) = &self.tailnet_override {
             return Some(n.clone());
         }
@@ -516,6 +534,12 @@ impl App {
                 tracing::info!("remote access: turned off");
             }
             rt.pairing.clear();
+            // Level 2 goes off with it.
+            let was = rt.level2.enabled;
+            rt.level2.turn_off();
+            if was {
+                rt.save();
+            }
         }
         self.remote_stop().await;
         self.remote_awake_changed();
@@ -738,6 +762,10 @@ impl App {
     pub fn remote_revoke(&self, id: &str, kind: Kind) -> bool {
         let mut rt = self.remote_access.lock().unwrap();
         let Some(d) = rt.devices.revoke(id) else { return false };
+        if rt.level2.forget_device(&d.id) {
+            let dir = rt.dir.clone();
+            rt.level2.save_passkeys(&dir);
+        }
         rt.save();
         rt.record(&d.id, &d.name, kind);
         let _ = rt.kicks.send(Kick::Device(d.id.clone()));

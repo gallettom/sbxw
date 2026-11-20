@@ -21,6 +21,16 @@ pub enum Kind {
     Logout,
     /// Dropped after 30 days idle.
     Expired,
+    // Level 2 (API-level2.md section 8).
+    PlanApprove,
+    PlanRefuse,
+    Merge,
+    NetworkRespond,
+    SandboxRemove,
+    PasskeyRegistered,
+    PasskeyFailed,
+    /// The item changed between the challenge and the action: nothing done.
+    Changed,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -30,6 +40,11 @@ pub struct Entry {
     pub device_id: String,
     pub device_name: String,
     pub kind: Kind,
+    /// Level 2: what was acted on, by NAME or id only (a plan id, a sandbox
+    /// name, a host), never a goal, a note, a diff or a message. Absent from
+    /// the line when there is none, so earlier lines read the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 /// Keep the newest [`MAX_ENTRIES`].
@@ -57,7 +72,7 @@ mod tests {
 
     #[test]
     fn bounded_and_round_trips() {
-        let mut v: Vec<Entry> = (0..MAX_ENTRIES as u64 + 5).map(|i| Entry { at_ms: i, device_id: "d".into(), device_name: "n".into(), kind: Kind::Message }).collect();
+        let mut v: Vec<Entry> = (0..MAX_ENTRIES as u64 + 5).map(|i| Entry { at_ms: i, device_id: "d".into(), device_name: "n".into(), kind: Kind::Message, target: None }).collect();
         bound(&mut v);
         assert_eq!(v.len(), MAX_ENTRIES);
         assert_eq!(v[0].at_ms, 5, "the oldest go");

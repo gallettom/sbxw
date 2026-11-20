@@ -24,6 +24,8 @@ pub mod jarvis;
 pub mod mac;
 pub mod remote;
 pub mod remote_admin;
+pub mod remote_approvals;
+pub mod remote_approvals_admin;
 pub mod stream;
 pub mod token;
 pub mod ui;
@@ -39,6 +41,8 @@ mod remote_review_tests;
 mod remote_review2_tests;
 #[cfg(test)]
 mod remote_review3_tests;
+#[cfg(test)]
+mod remote_approvals_tests;
 
 use crate::app::App;
 use axum::http::{header, HeaderValue};
@@ -55,6 +59,7 @@ pub fn ui_router(app: Arc<App>) -> Router {
         .merge(mac::ui_routes())
         .merge(browser::routes())
         .merge(remote_admin::routes())
+        .merge(remote_approvals_admin::routes())
         .route("/ws", get(ws::handler))
         .route("/api/hook", any(moved))
         .route("/api/relay/ask", any(moved))

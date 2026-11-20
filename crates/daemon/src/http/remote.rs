@@ -12,6 +12,7 @@
 //! read here.
 
 use super::error::ApiError;
+use super::remote_approvals as l2;
 use crate::app::App;
 use crate::svc::remote_access::{AuthError, DeviceCtx, Kick, Refusal};
 use axum::body::Bytes;
@@ -58,6 +59,26 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/r/leaders/:sandbox/answer"),
     ("POST", "/r/leaders/:sandbox/interrupt"),
     ("POST", "/r/voice/transcribe"),
+    // Level 2 (API-level2.md): approving with a passkey.
+    ("GET", "/r/approvals"),
+    ("POST", "/r/passkey/start"),
+    ("GET", "/r/passkey/status"),
+    ("POST", "/r/passkey/options"),
+    ("POST", "/r/passkey/register"),
+    ("GET", "/r/plans"),
+    ("GET", "/r/plans/:id"),
+    ("POST", "/r/plans/:id/approve"),
+    ("POST", "/r/plans/:id/refuse"),
+    ("GET", "/r/merges"),
+    ("GET", "/r/merges/:id"),
+    ("POST", "/r/merges/:id/merge"),
+    ("GET", "/r/network"),
+    ("GET", "/r/network/:id"),
+    ("POST", "/r/network/:id/respond"),
+    ("GET", "/r/stopped"),
+    ("GET", "/r/stopped/:sandbox"),
+    ("POST", "/r/stopped/:sandbox/remove"),
+    ("POST", "/r/approvals/challenge"),
 ];
 
 /// Data routes a phone may call before it is paired.
@@ -80,6 +101,26 @@ pub fn remote_router(app: Arc<App>) -> Router {
         .route("/r/leaders/:sandbox/answer", post(answer))
         .route("/r/leaders/:sandbox/interrupt", post(interrupt))
         .route("/r/voice/transcribe", post(transcribe).layer(DefaultBodyLimit::max(AUDIO_BODY_MAX)))
+        // Level 2 (API-level2.md): approving with a passkey.
+        .route("/r/approvals", get(l2::approvals))
+        .route("/r/passkey/start", post(l2::passkey_start))
+        .route("/r/passkey/status", get(l2::passkey_status))
+        .route("/r/passkey/options", post(l2::passkey_options))
+        .route("/r/passkey/register", post(l2::passkey_register).layer(DefaultBodyLimit::max(l2::REGISTER_BODY_MAX)))
+        .route("/r/plans", get(l2::plans))
+        .route("/r/plans/:id", get(l2::plan))
+        .route("/r/plans/:id/approve", post(l2::plan_approve))
+        .route("/r/plans/:id/refuse", post(l2::plan_refuse))
+        .route("/r/merges", get(l2::merges))
+        .route("/r/merges/:id", get(l2::merge))
+        .route("/r/merges/:id/merge", post(l2::merge_run))
+        .route("/r/network", get(l2::network))
+        .route("/r/network/:id", get(l2::network_one))
+        .route("/r/network/:id/respond", post(l2::network_respond))
+        .route("/r/stopped", get(l2::stopped))
+        .route("/r/stopped/:sandbox", get(l2::stopped_one))
+        .route("/r/stopped/:sandbox/remove", post(l2::sandbox_remove))
+        .route("/r/approvals/challenge", post(l2::challenge))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(BODY_MAX))
         .layer(axum::middleware::from_fn_with_state(app.clone(), remote_guard))
@@ -377,6 +418,7 @@ async fn events(State(app): S, Extension(d): Extension<DeviceCtx>) -> Response {
     let leaders_frame = |l: &Vec<crate::svc::remote_access::LeaderView>| Sse::default().event("leaders").data(json!({ "leaders": l }).to_string());
     let mut last = app.remote_leaders();
     let _ = tx.try_send(leaders_frame(&last));
+    l2::spawn_badge(app.clone(), d.clone(), &tx);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(RENEW);
         loop {
