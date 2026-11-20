@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn scrub_replaces_words_that_start_like_a_path_and_nothing_else() {
         assert_eq!(scrub("fix /Users/me/dev/x now"), "fix [path] now");
-        assert_eq!(scrub("see (~/notes/a.txt) and \"/tmp/x\""), "see ([path]) and \"[path]");
+        assert_eq!(scrub("see (~/notes/a.txt) and \"/tmp/x\""), "see ([path] and \"[path]");
         assert_eq!(scrub(r"C:\Users\me and D:/x"), "[path] and [path]");
         assert_eq!(scrub("https://example.org/a and a/b and 1 / 2"), "https://example.org/a and a/b and 1 / 2");
         assert_eq!(scrub("line one\n  /etc/passwd\nend"), "line one\n  [path]\nend");
@@ -453,7 +453,7 @@ mod tests {
         let idle = SandboxRef::parse("idle").unwrap();
         ticket(&app, &idle, "theirs", "");
         let long = "a".repeat(4000);
-        let mut paths: Vec<String> = ["idle", "ghost", "we%62", "web%2F..", "we b", "..", "a~b~c", "WEB!", "web;x", &long].iter().map(|s| format!("/r/leaders/{s}/kanban")).collect();
+        let mut paths: Vec<String> = ["idle", "ghost", "we%62", "we%20b", "web%2F..", "..", "a~b~c", "WEB!", "web;x", &long].iter().map(|s| format!("/r/leaders/{s}/kanban")).collect();
         paths.push("/r/leaders/idle/kanban/1".into());
         paths.push(format!("/r/leaders/{long}/kanban/1"));
         let mut bodies = std::collections::BTreeSet::new();

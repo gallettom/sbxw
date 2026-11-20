@@ -170,8 +170,10 @@ async fn every_remote_data_route_refuses_the_ui_token_and_no_token() {
     let (_d, app) = on();
     let router = remote_router(app.clone());
     let ui = app.ui_token.clone();
-    for (method, path) in ROUTES.iter().filter(|(_, p)| p.starts_with("/r/") && !p.starts_with("/r/pair/")) {
+    for (i, (method, path)) in ROUTES.iter().filter(|(_, p)| p.starts_with("/r/") && !p.starts_with("/r/pair/")).enumerate() {
         let p = concrete(path);
+        // One tailnet source a route: the failed-token limit is per source, and each route makes five failures.
+        let src = format!("100.64.1.{i}");
         let tries: Vec<(&str, Option<String>, Option<String>)> = vec![
             ("none", None, None),
             ("bearer", Some(format!("Bearer {ui}")), None),
@@ -180,7 +182,7 @@ async fn every_remote_data_route_refuses_the_ui_token_and_no_token() {
             ("agent-style token", Some("Bearer sbxw_0000".into()), None),
         ];
         for (what, auth, cookie) in tries {
-            let mut b = req(method, &p);
+            let mut b = req(method, &p).header("x-forwarded-for", &src);
             if let Some(a) = auth {
                 b = b.header(header::AUTHORIZATION, a);
             }
