@@ -240,10 +240,10 @@ function rcPairCode(hash) {
 
 // The words for each pairing state.
 const RC_PAIR_TEXT = {
-  pending: 'Compare with the number on your Mac, then confirm there.',
+  pending: 'In sbxw on your Mac, type these six digits to pair this device.',
   paired: 'Paired.',
-  refused: 'Pairing was refused on the Mac.',
-  expired: 'This pairing code has expired. Show a new one on the Mac.',
+  refused: 'Pairing was refused on the Mac (or the number was typed wrong three times).',
+  expired: 'This request expired. Open the new link from your Mac.',
   limited: 'Too many attempts. Wait a minute, then show a new code on the Mac.',
   invalid: 'This pairing link is not valid any more. Show a new one on the Mac.',
   unreachable: 'sbxw is unreachable (is the Mac awake?)',
@@ -334,9 +334,39 @@ function rcClient(fetchImpl, hooks = {}) {
   };
 }
 
+// A message's refusal reasons (API.md 2.6), each as a plain sentence. The
+// daemon's own `error` is shown beside it, as text.
+const RC_MSG_REASON = {
+  command: 'Commands cannot be sent from the phone: no line may start with !, / or #.',
+  control: 'The message holds a control character (a tab or an invisible mark). Remove it and send again.',
+  empty: 'The message is empty.',
+  needs_mac: 'This needs your Mac: the leader is waiting for you there.',
+  busy: 'The leader is in the middle of a step. Try again in a few seconds.',
+  no_paste: 'Send it from your Mac: this leader\'s terminal cannot take a message from the phone.',
+  not_submitted: 'NOT SENT: the text was typed into the leader\'s input on the Mac but not submitted, because the leader changed meanwhile. It waits there unsent; it is also still in this field. Check on your Mac before sending again.',
+};
+
+// What the daemon will refuse, checked before sending so the person can fix
+// it in place (the daemon stays the judge): a line whose first non-blank
+// character is !, / or #, or a control character other than a line feed
+// (tab, CR, ESC, C0, DEL, C1) or a bidi control.
+const RC_CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+function rcMessageCheck(text) {
+  const s = String(text ?? '');
+  if (!s.trim()) return 'empty';
+  if (s.split('\n').some(line => /^\s*[!/#]/.test(line))) return 'command';
+  if (RC_CONTROL.test(s)) return 'control';
+  return null;
+}
+
 // Why a request did not go through, in the person's words. `what`: "Message".
 function rcFailText(what, res) {
   if (res.unreachable || res.status === 0) return `${what} not sent: sbxw is unreachable (is the Mac awake?).`;
+  const reason = res.data && typeof res.data.reason === 'string' && Object.hasOwn(RC_MSG_REASON, res.data.reason) ? res.data.reason : null;
+  if (reason) {
+    const err = typeof res.data.error === 'string' && res.data.error.trim() ? ` (sbxw: ${res.data.error.trim().slice(0, 200)})` : '';
+    return `${RC_MSG_REASON[reason]}${err}`;
+  }
   if (res.status === 409) return `${what} not sent: the leader is not waiting for that any more.`;
   if (res.status === 413) return `${what} not sent: it is too long.`;
   if (res.status === 429) return `${what} not sent: too many at once. Try again in a moment.`;

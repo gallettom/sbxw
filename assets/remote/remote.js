@@ -527,12 +527,21 @@
 
   // ── Composer ──
   const field = $('field');
-  function note(text, ok) {
+  function note(text, ok, warn) {
     const n = $('composer-note');
     n.textContent = text;
     n.classList.toggle('rc-ok', !!ok);
+    n.classList.toggle('rc-warn', !!warn);
     n.hidden = !text;
   }
+  // Warn in place about what the daemon will refuse; Send stays the person's.
+  let warned = false;
+  field.addEventListener('input', () => {
+    if (st.sending) return;
+    const why = rcMessageCheck(field.value);
+    if (why === 'command' || why === 'control') { note(RC_MSG_REASON[why], false, true); warned = true; }
+    else if (warned) { note(''); warned = false; }
+  });
   function saveDraft() {
     if (st.current) {
       if (field.value) st.drafts.set(st.current, field.value);
@@ -556,13 +565,22 @@
     const raw = field.value;
     const text = raw.trim();
     if (!sandbox || !text || st.sending) return;
+    // A message takes 1 to 4 s (the daemon waits for the echo before the
+    // Return): the composer says so, and a second tap does nothing.
     st.sending = true;
-    $('send').disabled = true;
+    const send = $('send');
+    send.disabled = true;
+    send.textContent = 'Sending…';
+    $('composer').setAttribute('aria-busy', 'true');
     note('');
+    warned = false;
     const res = await api.message(sandbox, text);
     st.sending = false;
-    $('send').disabled = false;
-    if (!res.ok) { note(rcFailText('Message', res)); return; }
+    send.disabled = false;
+    send.textContent = 'Send';
+    $('composer').removeAttribute('aria-busy');
+    // Refused or not submitted: the text stays, nothing is resent.
+    if (!res.ok) { note(rcFailText('Message', res), false, res.data?.reason === 'not_submitted'); return; }
     // Sent: what was sent leaves the field; anything typed meanwhile stays.
     if (st.current === sandbox) {
       if (field.value === raw) field.value = '';
