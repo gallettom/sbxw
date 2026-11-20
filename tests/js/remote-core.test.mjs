@@ -15,7 +15,7 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcWithDictation', 'chatMarkdown',
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
   'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
@@ -297,9 +297,9 @@ test('each refusal reason has its own sentence, with the daemon\'s words as text
     control: [400, /control or invisible character/],
     empty: [400, /empty/],
     needs_mac: [409, /This needs your Mac/],
-    busy: [409, /The leader is working\. A message can be sent once it is back at its prompt/],
+    busy: [409, /The session is working\. A message can be sent once it is back at its prompt/],
     no_paste: [409, /Send it from your Mac/],
-    not_submitted: [409, /NOT SENT: the text was typed into the leader's input on the Mac but not submitted/],
+    not_submitted: [409, /NOT SENT: the text was typed into the session's input on the Mac but not submitted/],
     attachment: [400, /a file of this message is no longer on the Mac.*choose it again/],
     too_many: [400, /a message takes 5 files at most/],
   };
@@ -320,13 +320,13 @@ test('the check before sending matches the daemon\'s rule', () => {
     assert.equal(rc.rcMessageCheck(s), 'control', JSON.stringify(s));
   }
   assert.match(rc.RC_MSG_REASON.control, /Remove the invisible characters, or retype the text/);
-  assert.equal(rc.RC_MSG_REASON.busy, 'The leader is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.');
+  assert.equal(rc.RC_MSG_REASON.busy, 'The session is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.');
   for (const s of ['', '   ', '\n\n']) assert.equal(rc.rcMessageCheck(s), 'empty');
   for (const s of ['hello', 'café ünïcödé 日本語 😀', 'a/b and c#d', 'line one\nline two', 'see https://x.example/#a', 'Fix it! Now.']) assert.equal(rc.rcMessageCheck(s), null, JSON.stringify(s));
 });
 
-test('Send waits while the leader works, and only then', () => {
-  assert.match(rc.rcSendGate({ state: 'working' }), /The leader is working/);
+test('Send waits while the session works, and only then', () => {
+  assert.match(rc.rcSendGate({ state: 'working' }), /The session is working/);
   assert.match(rc.rcSendGate(null), /not running/);
   for (const l of [{ state: 'idle' }, { state: 'attention', asks: true }]) assert.equal(rc.rcSendGate(l), '');
 });
@@ -792,4 +792,37 @@ test('a sheet\'s line: the page\'s words and the daemon\'s data apart', () => {
     assert.ok(p.filter(x => typeof x === 'string').every(x => !/[\p{Cf}]/u.test(x)), 'the page\'s own words carry no control');
   }
   assert.deepEqual(plain(rc.rcActParts('nope', {})), []);
+});
+
+// ── Plan phone-sandboxes (API.md 2.4, v1.5) ──
+test('the picker: team leaders first, then sandboxes, those that need you first in each', () => {
+  const g = rc.rcGroups({ leaders: [
+    { sandbox: 'calm', kind: 'sandbox', state: 'idle', last_at: 9 },
+    { sandbox: 'web', kind: 'leader', state: 'idle', last_at: 5 },
+    { sandbox: 'asks', kind: 'sandbox', state: 'attention', asks: true, last_at: 1 },
+    { sandbox: 'old', state: 'working', last_at: 2 },
+  ] });
+  assert.deepEqual(plain(g.map(x => [x.title, x.items.map(i => i.sandbox)])), [['Team leaders', ['old', 'web']], ['Sandboxes', ['asks', 'calm']]],
+    'an entry with no kind is a leader (a daemon before v1.5)');
+  assert.deepEqual(plain(rc.rcGroups({ leaders: [{ sandbox: 'a', kind: 'sandbox', state: 'idle' }] }).map(x => x.title)), ['Sandboxes'], 'an empty group is left out');
+  assert.deepEqual(plain(rc.rcGroups({ leaders: [] })), []);
+});
+test('a read-only entry says why, and Send says it too', () => {
+  const two = { sandbox: 'a', kind: 'sandbox', state: 'idle', read_only: 'several_sessions' };
+  const bare = { sandbox: 'b', kind: 'sandbox', state: 'idle', read_only: 'no_terminal' };
+  assert.match(rc.rcReadOnly(two), /several sessions/);
+  assert.match(rc.rcReadOnly(bare), /no terminal/);
+  assert.equal(rc.rcReadOnlyShort(two), 'Read only: several sessions open');
+  assert.equal(rc.rcSendGate(two), rc.rcReadOnly(two), 'Send waits with the reason');
+  assert.equal(rc.rcSendGate({ ...two, state: 'working' }), rc.rcReadOnly(two), 'read only before working');
+  for (const odd of ['__proto__', 'toString', 'something new']) assert.match(rc.rcReadOnly({ read_only: odd }), /^Read only/);
+  assert.equal(rc.rcReadOnly({ state: 'idle' }), '');
+  assert.equal(rc.rcSendGate({ state: 'idle', kind: 'sandbox' }), '');
+});
+test('the page no longer says "leader" where it means either kind', () => {
+  const html = read('../../assets/remote/index.html');
+  assert.match(html, />No sandbox is running</);
+  assert.match(html, /placeholder="Write a message"/);
+  assert.doesNotMatch(html, /No team leader is running|Message the leader|Back to the leaders/);
+  for (const v of Object.values(rc.RC_MSG_REASON)) assert.doesNotMatch(v, /leader/i);
 });

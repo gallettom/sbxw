@@ -5,7 +5,7 @@ use crate::app::{now_ms, App};
 use crate::bus::{Event, ThreadClosed};
 use crate::git;
 use crate::store::{write_atomic, LeadRecord, Store, LEAD_UNBOUND_MAX_MS};
-use sbxw_core::agents::{SessionInfo, SessionState};
+use sbxw_core::agents::SessionInfo;
 use std::collections::HashMap;
 use sbxw_core::messages;
 use sbxw_core::plans::{DistillItem, MergeResult, MergeState, Plan, PlanState, PlanThread, ThreadState, Variant};
@@ -769,7 +769,7 @@ impl App {
 
     /// The id of the live session the phone shows for `sandbox`.
     fn main_session_id(&self, sandbox: &SandboxRef) -> Option<String> {
-        main_session(&self.session_infos(), sandbox)
+        main_session(self, &self.session_infos(), sandbox)
     }
 
     /// After a hook post or a new main terminal: a lead waiting to be found
@@ -809,7 +809,7 @@ impl App {
             // A bound lead whose conversation was not reported at Team on:
             // the one its own terminal shows now.
             for (sb, r) in recs.iter_mut().filter(|(sb, r)| leads.contains_key(*sb) && r.session_id.is_none()) {
-                if let Some(sid) = main_session(&infos, sb) {
+                if let Some(sid) = main_session(self, &infos, sb) {
                     r.session_id = Some(sid);
                     saves.push((sb.clone(), Some(r.clone())));
                 }
@@ -825,12 +825,20 @@ impl App {
                 };
                 let fresh = now.saturating_sub(r.bound_ms) <= LEAD_UNBOUND_MAX_MS;
                 let here = self.sessions.live(&SessionKey::agent(sb));
-                match (here, main_session(&infos, sb)) {
+                match (here, main_session(self, &infos, sb)) {
                     (Some(s), Some(sid)) if sid == want => {
                         leads.insert(sb.clone(), Arc::as_ptr(&s) as usize);
                         r.bound_ms = now;
                         saves.push((sb.clone(), Some(r.clone())));
                         rebound.push(sb.clone());
+                        true
+                    }
+                    // Another conversation shows now: not a leader, but the
+                    // record waits (as an unbound one does) until
+                    // LEAD_UNBOUND_MAX_MS, so a wrong pick is never permanent.
+                    // Debug only: `leading()` runs often.
+                    (Some(_), Some(_)) if fresh => {
+                        tracing::debug!("plans: '{sb}' runs another conversation than the one made lead: waiting for that one");
                         true
                     }
                     (Some(_), Some(_)) => {
@@ -861,17 +869,15 @@ impl App {
     }
 }
 
-/// The id of the session the phone shows for `sandbox`, when it is live: its
-/// newest session with no thread (the rule of `remote_access`'s
-/// `leader_info`).
-fn main_session(infos: &[SessionInfo], sandbox: &SandboxRef) -> Option<String> {
-    let key = sandbox.to_string();
-    infos
-        .iter()
-        .filter(|i| i.sandbox == key && i.thread.is_none())
-        .max_by_key(|i| (i.state != SessionState::Exited, i.started_ms))
-        .filter(|i| i.state != SessionState::Exited)
-        .and_then(|i| i.session_id.clone())
+/// The id of a sandbox's main session, when it is live: the rule of the
+/// phone's reach (`sbxw_core::remote_access::reach::main_index`): the session
+/// sbxw's terminal types into when the daemon knows it, never a thread's or
+/// a harness background session; else the newest such one.
+fn main_session(app: &App, infos: &[SessionInfo], sandbox: &SandboxRef) -> Option<String> {
+    let cands = app.reach_candidates(infos);
+    sbxw_core::remote_access::reach::main_index(&cands, &sandbox.to_string())
+        .filter(|&i| !cands[i].exited)
+        .and_then(|i| infos[i].session_id.clone())
 }
 
 /// The leads on disk, unbound: each waits for its own session.

@@ -345,7 +345,7 @@ struct HistoryQuery {
 }
 
 async fn history(State(app): S, Extension(_d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Query(q): Query<HistoryQuery>) -> Response {
-    let sb = match app.remote_leader(&sandbox) {
+    let sb = match app.remote_target(&sandbox) {
         Ok(sb) => sb,
         Err(e) => return refusal(e),
     };
@@ -372,7 +372,7 @@ async fn message(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox
     if b.attachments.len() > sbxw_core::remote_access::uploads::WAITING_MAX {
         return refusal(Refusal::Reason(Reason::TooManyIds));
     }
-    let sb = match app.remote_leader(&sandbox) {
+    let sb = match app.remote_target(&sandbox) {
         Ok(sb) => sb,
         Err(e) => return refusal(e),
     };
@@ -389,7 +389,7 @@ struct AnswerBody {
 }
 
 async fn answer(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Json(b): Json<AnswerBody>) -> Response {
-    let sb = match app.remote_leader(&sandbox) {
+    let sb = match app.remote_target(&sandbox) {
         Ok(sb) => sb,
         Err(e) => return refusal(e),
     };
@@ -400,7 +400,7 @@ async fn answer(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox)
 }
 
 async fn interrupt(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Json(_): Json<Empty>) -> Response {
-    let sb = match app.remote_leader(&sandbox) {
+    let sb = match app.remote_target(&sandbox) {
         Ok(sb) => sb,
         Err(e) => return refusal(e),
     };
@@ -436,7 +436,7 @@ async fn upload(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox)
         return ApiError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "a file is sent as application/octet-stream").into_response();
     }
     let declared = headers.get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
-    let sb = match app.remote_leader(&sandbox) {
+    let sb = match app.remote_target(&sandbox) {
         Ok(sb) => sb,
         Err(e) => return refusal(e),
     };
@@ -448,7 +448,7 @@ async fn upload(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox)
 }
 
 async fn upload_drop(State(app): S, Extension(d): Extension<DeviceCtx>, Path((sandbox, id)): Path<(String, String)>) -> Response {
-    let sb = match app.remote_leader(&sandbox) {
+    let sb = match app.remote_target(&sandbox) {
         Ok(sb) => sb,
         Err(e) => return refusal(e),
     };

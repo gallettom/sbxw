@@ -144,8 +144,8 @@ function rcRows(items) {
       row = from ? { kind: 'agent', from, text } : { kind: 'sbxw', text };
     } else if (kind === 'question') {
       const q = Array.isArray(it.steps) && it.steps[0] && typeof it.steps[0].text === 'string' ? it.steps[0].text : text;
-      row = { kind: 'asked', text: q || 'The leader asked a question.' };
-    } else if (kind === 'permission') row = { kind: 'mac', text: text || 'The leader asked to allow a tool.' };
+      row = { kind: 'asked', text: q || 'It asked a question.' };
+    } else if (kind === 'permission') row = { kind: 'mac', text: text || 'It asked to allow a tool.' };
     else if (kind === 'notice' && text) row = { kind: 'note', text };
     else if (kind === 'compact_marker') row = { kind: 'note', text: 'Conversation compacted' };
     if (!row) continue;
@@ -211,6 +211,39 @@ function rcLeaders(data) {
 function rcRank(l) {
   return l.asks ? 0 : RC_RANK[l.state] ?? 3;
 }
+
+// The picker's two groups (API.md 2.4, v1.5): the team leaders first, then
+// the running sandboxes with no team, each in rcLeaders' order. An entry
+// without a kind is a leader (a daemon from before v1.5). Empty groups are
+// left out.
+function rcGroups(data) {
+  const all = rcLeaders(data);
+  return [
+    { kind: 'leader', title: 'Team leaders', items: all.filter(l => l.kind !== 'sandbox') },
+    { kind: 'sandbox', title: 'Sandboxes', items: all.filter(l => l.kind === 'sandbox') },
+  ].filter(g => g.items.length);
+}
+
+// Why the phone can only read this one, when the daemon says so; '' else.
+// The daemon still refuses by its own rules: this only says it before the
+// person writes.
+const RC_READ_ONLY = {
+  several_sessions: 'Read only: several sessions are open in this sandbox and sbxw cannot tell which one its terminal shows. Write from the Mac.',
+  no_terminal: 'Read only: sbxw has no terminal open on this sandbox. Write from the Mac.',
+};
+// The picker's short form of the same reason.
+const RC_READ_ONLY_SHORT = {
+  several_sessions: 'Read only: several sessions open',
+  no_terminal: 'Read only: no sbxw terminal on it',
+};
+function rcReadOnlyShort(l) {
+  if (!l || typeof l.read_only !== 'string' || !l.read_only) return '';
+  return Object.hasOwn(RC_READ_ONLY_SHORT, l.read_only) ? RC_READ_ONLY_SHORT[l.read_only] : 'Read only';
+}
+function rcReadOnly(l) {
+  if (!l || typeof l.read_only !== 'string' || !l.read_only) return '';
+  return Object.hasOwn(RC_READ_ONLY, l.read_only) ? RC_READ_ONLY[l.read_only] : 'Read only: write from the Mac.';
+}
 function rcStateLabel(state) {
   return RC_STATE[state] || 'stopped';
 }
@@ -233,7 +266,7 @@ function rcPending(leader) {
   if (!leader || !(leader.asks || leader.state === 'attention')) return null;
   const steps = Array.isArray(leader.steps) ? leader.steps.filter(s => s && typeof s.text === 'string' && Array.isArray(s.options) && s.options.length) : [];
   if (steps.length && leader.answerable) return { kind: 'question', steps };
-  return { kind: 'mac', text: steps[0]?.text || 'The leader waits for something only the Mac can settle, such as allowing a tool.' };
+  return { kind: 'mac', text: steps[0]?.text || 'It waits for something only the Mac can settle, such as allowing a tool.' };
 }
 
 // A leader's activity: one of the daemon's fixed phrases ("Working", "Asks a
@@ -363,12 +396,12 @@ const RC_MSG_REASON = {
   command: 'Commands cannot be sent from the phone: no line may start with !, / or #.',
   control: 'The message holds a control or invisible character (a tab, a zero-width space, a soft hyphen...). Remove the invisible characters, or retype the text.',
   empty: 'The message is empty.',
-  needs_mac: 'This needs your Mac: the leader is waiting for you there.',
-  busy: 'The leader is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.',
-  no_paste: 'Send it from your Mac: this leader\'s terminal cannot take a message from the phone.',
+  needs_mac: 'This needs your Mac: the session is waiting for you there.',
+  busy: 'The session is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.',
+  no_paste: 'Send it from your Mac: this session\'s terminal cannot take a message from the phone.',
   attachment: 'Not sent: a file of this message is no longer on the Mac (it expires 30 minutes after its upload). Remove it, choose it again, then Send.',
   too_many: 'Not sent: a message takes 5 files at most. Remove some, then Send.',
-  not_submitted: 'NOT SENT: the text was typed into the leader\'s input on the Mac but not submitted, because the leader changed meanwhile. It waits there unsent; it is also still in this field. Check on your Mac before sending again.',
+  not_submitted: 'NOT SENT: the text was typed into the session\'s input on the Mac but not submitted, because the session changed meanwhile. It waits there unsent; it is also still in this field. Check on your Mac before sending again.',
 };
 
 // What the daemon will refuse, checked before sending so the person can fix
@@ -393,7 +426,7 @@ function rcFailText(what, res) {
     const err = typeof res.data.error === 'string' && res.data.error.trim() ? ` (sbxw: ${res.data.error.trim().slice(0, 200)})` : '';
     return `${RC_MSG_REASON[reason]}${err}`;
   }
-  if (res.status === 409) return `${what} not sent: the leader is not waiting for that any more.`;
+  if (res.status === 409) return `${what} not sent: the session is not waiting for that any more.`;
   if (res.status === 413) return `${what} not sent: it is too long.`;
   if (res.status === 429) return `${what} not sent: too many at once. Try again in a moment.`;
   const err = res.data && typeof res.data.error === 'string' ? res.data.error.slice(0, 200) : `the Mac answered ${res.status}`;
@@ -404,8 +437,10 @@ function rcFailText(what, res) {
 // leader is idle at its prompt (API.md v1.3). Never a queue: the text stays
 // in the field until the person presses Send again.
 function rcSendGate(leader) {
-  if (!leader) return 'This leader is not running.';
-  if (leader.state === 'working') return 'The leader is working: Send comes back at its prompt.';
+  if (!leader) return 'This sandbox is not running.';
+  const ro = rcReadOnly(leader);
+  if (ro) return ro;
+  if (leader.state === 'working') return 'The session is working: Send comes back at its prompt.';
   return '';
 }
 
@@ -511,7 +546,7 @@ function rcUploadFail(res) {
   if (res.status === 400 && /cut off/i.test(String(res.data.error || ''))) return RC_UPLOAD_SLOW;
   if (res.status === 413) return RC_UPLOAD_REASON.too_large;
   if (res.status === 429) return 'Not uploaded: too many uploads in a short time. Retry in a few minutes.';
-  if (res.status === 404) return 'Not uploaded: this leader does not take files from the phone.';
+  if (res.status === 404) return 'Not uploaded: this sandbox is not running any more.';
   return `Not uploaded: the Mac answered ${res.status}.`;
 }
 // The daemon's answer, checked: an id (no path, ever), its own name, a size.

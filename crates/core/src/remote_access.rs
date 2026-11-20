@@ -1,5 +1,6 @@
-//! Remote access: a paired phone talks to a running team leader over a
-//! private Tailscale network (see `docs/security.md#remote-access`).
+//! Remote access: a paired phone talks to a running team leader, or to the
+//! main session of a running sandbox with no team, over a private Tailscale
+//! network (see `docs/security.md#remote-access`).
 //!
 //! Not Remote Control (`crate::remote`): that is claude.ai driving a session.
 //! Here the daemon itself answers a second, reduced listener (`remote_addr`),
@@ -12,6 +13,7 @@
 //!   six-digit check both screens show.
 //! * [`journal`]: what each device did, never what it said.
 //! * [`limits`]: fixed-window rate limits.
+//! * [`reach`]: which sandboxes a phone reaches (leaders and plain sandboxes).
 //! * Here: the Host and Origin rules, and the sidecar's status file, read as
 //!   untrusted input.
 //!
@@ -21,6 +23,7 @@ pub mod devices;
 pub mod journal;
 pub mod limits;
 pub mod pairing;
+pub mod reach;
 pub mod uploads;
 pub mod view;
 pub mod cbor;

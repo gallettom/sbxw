@@ -35,7 +35,7 @@
 </div>
 
 <header id="bar" class="rc-bar">
-  <button id="back" class="rc-icon-btn" type="button" aria-label="Back to the leaders" hidden>
+  <button id="back" class="rc-icon-btn" type="button" aria-label="Back to the list" hidden>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
   </button>
   <img id="mark" class="rc-mark" src="/icon-192.png" alt="" width="28" height="28">
@@ -58,7 +58,7 @@
   </button>
 </header>
 
-<!-- Interrupt's second tap: one Escape into the leader's session, only from here. -->
+<!-- Interrupt's second tap: one Escape into the session, only from here. -->
 <div id="confirm" class="rc-confirm" role="alertdialog" aria-labelledby="confirm-text" hidden>
   <p id="confirm-text" class="rc-confirm-text"></p>
   <button id="interrupt-cancel" class="rc-btn rc-quiet" type="button">Cancel</button>
@@ -126,10 +126,11 @@
     </div>
   </section>
 
-  <!-- Leaders: the running team leaders, those that need you first. -->
+  <!-- The picker: the running team leaders, then the running sandboxes with no
+       team (API.md 2.4, v1.5); those that need you first in each group. -->
   <section id="s-leaders" class="rc-screen" hidden>
     <ul id="leaders" class="rc-leaders"></ul>
-    <p id="leaders-empty" class="rc-empty" hidden>No team leader is running</p>
+    <p id="leaders-empty" class="rc-empty" hidden>No sandbox is running</p>
   </section>
 
   <!-- Approvals (level 2): what waits, in four lists. -->
@@ -166,7 +167,7 @@
     </div>
   </section>
 
-  <!-- A leader's conversation. -->
+  <!-- A leader's or a sandbox's conversation. -->
   <section id="s-chat" class="rc-screen rc-chat" hidden>
     <!-- Conversation | Kanban: each keeps its place when switching back. -->
     <div id="views" class="rc-views" role="tablist" aria-label="View">
@@ -204,7 +205,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5 12.1 19.4a5 5 0 0 1-7.1-7.1l8.2-8.2a3.3 3.3 0 0 1 4.7 4.7l-8.1 8.1a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/></svg>
         </button>
         <input id="file" class="rc-file" type="file" multiple tabindex="-1" aria-hidden="true">
-        <textarea id="field" class="rc-field" rows="1" maxlength="16000" placeholder="Message the leader" autocomplete="off" aria-label="Message"></textarea>
+        <textarea id="field" class="rc-field" rows="1" maxlength="16000" placeholder="Write a message" autocomplete="off" aria-label="Message"></textarea>
         <div id="rec" class="rc-rec" hidden>
           <span id="rec-dot" class="rc-rec-dot" aria-hidden="true"></span>
           <canvas id="wave" class="rc-wave" aria-hidden="true"></canvas>

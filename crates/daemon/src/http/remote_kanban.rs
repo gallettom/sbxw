@@ -278,7 +278,7 @@ fn hash_of(app: &App, sandbox: &str) -> Option<String> {
 /// The state of every leader's board as a stream opens: no event is sent
 /// for it.
 pub fn baseline(app: &App, leaders: &[crate::svc::remote_access::LeaderView]) -> Seen {
-    leaders.iter().filter_map(|l| Some((l.sandbox.clone(), hash_of(app, &l.sandbox)?))).collect()
+    leaders.iter().filter(|l| l.kind == sbxw_core::remote_access::reach::ReachKind::Leader).filter_map(|l| Some((l.sandbox.clone(), hash_of(app, &l.sandbox)?))).collect()
 }
 
 /// The `kanban` frame for a bus event, when it is a change of a listed
@@ -289,7 +289,7 @@ pub fn changed(app: &App, leaders: &[crate::svc::remote_access::LeaderView], ev:
         Event::Plan(p) => p.sandbox.as_str(),
         _ => return None,
     };
-    if !leaders.iter().any(|l| l.sandbox == sandbox) {
+    if !leaders.iter().any(|l| l.sandbox == sandbox && l.kind == sbxw_core::remote_access::reach::ReachKind::Leader) {
         return None;
     }
     let now = hash_of(app, sandbox)?;

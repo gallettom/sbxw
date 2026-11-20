@@ -334,40 +334,62 @@
     stopRecording(false);
     st.current = null;
     disarmInterrupt();
-    setTitle('Team leaders', st.me?.name ? `on ${st.me.name}` : '');
+    setTitle('Sessions', st.me?.name ? `on ${st.me.name}` : '');
     show('s-leaders');
     renderLeaders();
   }
 
+  // Two groups (API.md 2.4, v1.5): the team leaders, then the running
+  // sandboxes with no team; those that need the person first in each. Names
+  // and the read-only reason are set as text.
   function renderLeaders() {
     const ul = $('leaders');
     const now = Date.now();
-    ul.replaceChildren(...st.leaders.map(l => {
-      const li = document.createElement('li');
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = `rc-leader rc-st-${RC_RANK[l.state] !== undefined ? l.state : 'other'}`;
-      const dot = document.createElement('span');
-      dot.className = 'rc-dot';
-      const name = document.createElement('span');
-      name.className = 'rc-leader-name';
-      name.textContent = l.name;
-      const ago = document.createElement('span');
-      ago.className = 'rc-leader-ago';
-      ago.textContent = rcAgo(l.last_at, now);
-      const line = document.createElement('span');
-      line.className = 'rc-leader-line';
-      const state = document.createElement('span');
-      state.className = 'rc-leader-state';
-      state.textContent = l.asks ? 'needs you' : rcStateLabel(l.state);
-      line.append(state);
-      if (rcActivity(l)) line.append(` · ${rcActivity(l)}`);
-      b.append(dot, name, ago, line);
-      b.addEventListener('click', () => openLeader(l.sandbox));
-      li.append(b);
-      return li;
-    }));
+    const groups = rcGroups(st.leaders);
+    const rows = [];
+    for (const g of groups) {
+      const head = document.createElement('li');
+      head.className = 'rc-group';
+      const h = document.createElement('h2');
+      h.className = 'rc-group-title';
+      h.textContent = g.title;
+      head.append(h);
+      rows.push(head);
+      for (const l of g.items) rows.push(leaderRow(l, now));
+    }
+    ul.replaceChildren(...rows);
     $('leaders-empty').hidden = st.leaders.length > 0;
+  }
+  function leaderRow(l, now) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `rc-leader rc-st-${RC_RANK[l.state] !== undefined ? l.state : 'other'}${l.read_only ? ' rc-ro' : ''}`;
+    const dot = document.createElement('span');
+    dot.className = 'rc-dot';
+    const name = document.createElement('span');
+    name.className = 'rc-leader-name';
+    name.textContent = l.name;
+    const ago = document.createElement('span');
+    ago.className = 'rc-leader-ago';
+    ago.textContent = rcAgo(l.last_at, now);
+    const line = document.createElement('span');
+    line.className = 'rc-leader-line';
+    const state = document.createElement('span');
+    state.className = 'rc-leader-state';
+    state.textContent = l.asks ? 'needs you' : rcStateLabel(l.state);
+    line.append(state);
+    if (rcActivity(l)) line.append(` · ${rcActivity(l)}`);
+    b.append(dot, name, ago, line);
+    if (l.read_only) {
+      const ro = document.createElement('span');
+      ro.className = 'rc-leader-ro';
+      ro.textContent = rcReadOnlyShort(l);
+      b.append(ro);
+    }
+    b.addEventListener('click', () => openLeader(l.sandbox));
+    li.append(b);
+    return li;
   }
   setInterval(() => { if (!$('s-leaders').hidden) renderLeaders(); }, 30000);
 
@@ -385,9 +407,15 @@
     pill.textContent = !l ? 'not running' : l.asks ? 'needs you' : rcStateLabel(l.state);
     pill.className = `rc-pill rc-pill-${state}`;
     pill.hidden = false;
-    const canStop = l?.state === 'working';
+    // A read-only entry is not interrupted from the phone: the daemon
+    // cannot tell which session the Escape would reach (it refuses too).
+    const canStop = l?.state === 'working' && !l.read_only;
     $('interrupt').hidden = !canStop;
     if (!canStop && !$('confirm').hidden) disarmInterrupt();
+    // A sandbox with no team has no board: no Kanban tab.
+    const board = !l || l.kind !== 'sandbox';
+    $('views').hidden = !board;
+    if (!board && st.screen === 's-chat' && view().mode === 'kanban') setView('chat');
     gateSend();
   }
   // Send waits while the leader works, while a file uploads, while the
@@ -435,11 +463,11 @@
     $('rows').replaceChildren();
     renderTail();
     show('s-chat');
-    setView(view().mode);
+    setView(leader()?.kind === 'sandbox' ? 'chat' : view().mode);
     const res = await api.history(sandbox);
     if (st.current !== sandbox) return;
     if (!res.ok) {
-      $('log-top').textContent = res.status === 404 ? 'This leader is not running any more.' : 'Could not load the conversation.';
+      $('log-top').textContent = res.status === 404 ? 'This sandbox is not running any more.' : 'Could not load the conversation.';
       return;
     }
     const page = rcPage(res.data);
@@ -1472,7 +1500,7 @@
     v.loading = false;
     if (st.current !== sandbox) return;
     if (!res.ok) {
-      kbStatus(res.status === 404 ? 'This leader is no longer running.' : rcFailText('Board', res).replace('Board not sent', 'The board could not be read'));
+      kbStatus(res.status === 404 ? 'This team leader is no longer running.' : rcFailText('Board', res).replace('Board not sent', 'The board could not be read'));
       if (res.status === 404) { v.board = null; $('kb-lanes').replaceChildren(); $('kb-pick').replaceChildren(); }
     } else {
       kbStatus('');

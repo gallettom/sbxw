@@ -1185,6 +1185,24 @@ impl AgentBook {
         Ok(())
     }
 
+    /// The session sbxw's terminal types into for `sandbox`, by the rule of
+    /// [`Self::can_type_into`]: the one session of the sandbox, or the one of
+    /// several that was started from sbxw's tty. `None` when there is none,
+    /// or several and none (or more than one) is known to be the tty's.
+    /// Background sessions do not count. Whenever this is `Some`,
+    /// `can_type_into` is `Ok`.
+    pub fn terminal_session(&self, sandbox: &str) -> Option<AgentKey> {
+        let keys = self.keys_of(sandbox);
+        if let [one] = keys.as_slice() {
+            return Some((*one).clone());
+        }
+        let tty: Vec<&&AgentKey> = keys.iter().filter(|k| self.statuses.get(**k).is_some_and(|s| s.origin == SessionOrigin::Tty)).collect();
+        match tty.as_slice() {
+            [one] => Some((**one).clone()),
+            _ => None,
+        }
+    }
+
     /// `key`'s transcript says it was resumed from `prior` (its first
     /// entries carry that session id): its `continues`, unless one is known.
     /// Returns the payloads to broadcast when it changed.
@@ -1808,6 +1826,25 @@ mod tests {
         let out = book.apply("n", &ev(&end), SessionOrigin::Tty, true, 2);
         assert_eq!(out[0].state, SessionState::Exited);
         assert!(book.snapshot(|_| true, 3).is_empty());
+    }
+
+    #[test]
+    fn the_terminal_session_follows_can_type_into() {
+        let mut book = AgentBook::new();
+        let s = |id: &str| json!({"hook_event_name": "SessionStart", "session_id": id});
+        let term = |b: &AgentBook| b.terminal_session("n").map(|k| k.session_id);
+        assert_eq!(term(&book), None, "no session");
+        book.apply("n", &ev(&s("a")), SessionOrigin::Unknown, true, 1);
+        assert_eq!(term(&book).as_deref(), Some("a"), "alone");
+        book.apply("n", &ev(&s("b")), SessionOrigin::Remote, true, 2);
+        assert_eq!(term(&book), None, "two, none tty");
+        assert!(book.can_type_into("n").is_err());
+        book.apply("n", &ev(&s("a")), SessionOrigin::Tty, true, 3);
+        assert_eq!(term(&book).as_deref(), Some("a"), "the older one is the tty's");
+        book.can_type_into("n").unwrap();
+        book.apply("n", &ev(&s("b")), SessionOrigin::Tty, true, 4);
+        assert_eq!(term(&book), None, "two tty: unknown");
+        assert!(book.can_type_into("n").is_err());
     }
 
     #[test]

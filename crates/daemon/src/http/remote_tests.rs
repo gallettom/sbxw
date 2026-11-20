@@ -371,7 +371,7 @@ async fn a_device_idle_for_30_days_is_dropped() {
 }
 
 /// Read SSE frames until one contains `want`, or the stream ends (None).
-async fn read_until(stream: &mut (impl futures_util::Stream<Item = Result<axum::body::Bytes, axum::Error>> + Unpin), want: &str) -> Option<String> {
+pub(super) async fn read_until(stream: &mut (impl futures_util::Stream<Item = Result<axum::body::Bytes, axum::Error>> + Unpin), want: &str) -> Option<String> {
     let mut seen = String::new();
     loop {
         match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
@@ -592,7 +592,7 @@ pub(super) async fn typed(file: &std::path::Path, want: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn only_leaders_are_listed_and_their_history_carries_no_tool_detail() {
+async fn leaders_and_running_sandboxes_are_listed_and_history_carries_no_tool_detail() {
     let (d, app) = on();
     let router = remote_router(app.clone());
     let token = pair(&app, &router, "phone").await;
@@ -610,8 +610,11 @@ async fn only_leaders_are_listed_and_their_history_carries_no_tool_detail() {
 
     let r = call(&router, "GET", "/r/leaders", Some(&token), json!({})).await;
     let list = r.json()["leaders"].as_array().unwrap().clone();
-    assert_eq!(list.len(), 1, "{list:?}");
-    assert_eq!(list[0]["sandbox"], "lead1");
+    // The leader, then the running sandbox with no team (plan
+    // phone-sandboxes); never the thread.
+    assert_eq!(list.len(), 2, "{list:?}");
+    assert_eq!((list[0]["sandbox"].clone(), list[0]["kind"].clone()), (json!("lead1"), json!("leader")));
+    assert_eq!((list[1]["sandbox"].clone(), list[1]["kind"].clone()), (json!("plain"), json!("sandbox")));
     assert!(!r.text().contains("cat /secret"), "no tool in the activity: {}", r.text());
 
     let r = call(&router, "GET", "/r/leaders/lead1/history", Some(&token), json!({})).await;
@@ -625,9 +628,12 @@ async fn only_leaders_are_listed_and_their_history_carries_no_tool_detail() {
     let latest = r.json()["page"]["latest_seq"].as_u64().unwrap();
     let r = call(&router, "GET", &format!("/r/leaders/lead1/history?after={latest}"), Some(&token), json!({})).await;
     assert_eq!(r.json()["page"]["items"].as_array().unwrap().len(), 0);
-    assert_eq!(call(&router, "GET", "/r/leaders/plain/history", Some(&token), json!({})).await.status, StatusCode::NOT_FOUND);
-    assert_eq!(call(&router, "POST", "/r/leaders/plain/message", Some(&token), json!({"text": "hi"})).await.status, StatusCode::NOT_FOUND);
-    assert_eq!(call(&router, "POST", "/r/leaders/plain/interrupt", Some(&token), json!({})).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(call(&router, "GET", "/r/leaders/nosuch/history", Some(&token), json!({})).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(call(&router, "POST", "/r/leaders/nosuch/message", Some(&token), json!({"text": "hi"})).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(call(&router, "POST", "/r/leaders/nosuch/interrupt", Some(&token), json!({})).await.status, StatusCode::NOT_FOUND);
+    // The plain sandbox's own history is its own words, not the leader's.
+    let r = call(&router, "GET", "/r/leaders/plain/history", Some(&token), json!({})).await;
+    assert!(r.text().contains("OTHER WORDS") && !r.text().contains("please read the notes"), "{}", r.text());
 }
 
 /// Every log line, as text, while it is the default subscriber.

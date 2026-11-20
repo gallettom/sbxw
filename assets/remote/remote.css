@@ -369,6 +369,13 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-st-attention .rc-leader-state { color: var(--c-amber); font-weight: 600; }
 .rc-st-working .rc-leader-state { color: var(--c-green); }
 .rc-empty { padding: 56px 24px; text-align: center; color: var(--c-text-muted); }
+/* The picker's groups: team leaders, then sandboxes with no team. The list
+   scrolls inside its screen (.rc-screen); a group title stays in view. */
+.rc-group { position: sticky; top: 0; z-index: 1; background: var(--c-bg); padding: 8px 2px 2px; }
+.rc-group:not(:first-child) { margin-top: 8px; }
+.rc-group-title { margin: 0; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c-text-dim); }
+.rc-leader-ro { grid-column: 2 / 4; font-size: var(--fs-xs); color: var(--c-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-ro .rc-leader-name { color: var(--c-text-muted); }
 
 /* ── Conversation ── */
 .rc-chat { display: flex; flex-direction: column; overflow: hidden; }

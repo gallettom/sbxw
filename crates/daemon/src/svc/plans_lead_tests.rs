@@ -96,10 +96,29 @@ async fn another_conversation_after_a_restart_is_not_a_leader() {
     hook(&again, &sb, "s2", "SessionStart");
     assert!(again.leading().is_empty());
     assert!(!leads_again(&mut rx, "lead1"));
-    assert_eq!(again.store.get(&sb).lead, None, "the stale lead is dropped, not kept");
-    // The old session showing up later does not bring it back.
+    // Changed by plan phone-sandboxes (lead's ruling): the record waits,
+    // unbound, until LEAD_UNBOUND_MAX_MS, so a wrong pick of the main session
+    // is never permanent. Only the recorded session leads again.
+    assert_eq!(again.store.get(&sb).lead.and_then(|r| r.session_id).as_deref(), Some("s1"), "kept, still for s1 only");
+    hook(&again, &sb, "s2", "UserPromptSubmit");
+    assert!(again.leading().is_empty(), "s2 is still not the one made lead");
+    // The recorded session showing again as the main one: it leads again.
+    hook(&again, &sb, "s2", "SessionEnd");
     hook(&again, &sb, "s1", "UserPromptSubmit");
+    assert_eq!(again.leading(), vec!["lead1".to_string()]);
+}
+
+#[tokio::test]
+async fn a_lead_kept_for_another_conversation_still_expires() {
+    let (d, app) = app();
+    let sb = led(&app, d.path(), "lead1").await;
+    let old = crate::app::now_ms() - LEAD_UNBOUND_MAX_MS - 1000;
+    app.store.update(&sb, |r| r.lead = Some(LeadRecord { since_ms: old, session_id: Some("s1".into()), bound_ms: old })).unwrap();
+    let again = app_in(d.path());
+    main_pty(&again, &sb, &d.path().join("lead1.typed")).await;
+    hook(&again, &sb, "s2", "SessionStart");
     assert!(again.leading().is_empty());
+    assert_eq!(again.store.get(&sb).lead, None, "past LEAD_UNBOUND_MAX_MS it is dropped");
 }
 
 #[tokio::test]

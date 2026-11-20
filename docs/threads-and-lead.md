@@ -332,15 +332,21 @@ or a main terminal closed and opened again, the sandbox leads again, without a
 click and without anything typed, as soon as both hold:
 
 - its main terminal is open in sbxw again, and
-- the session that terminal shows (the newest live session with no thread) is
-  the recorded one, as its next hook post says.
+- the sandbox's main session is the recorded one, as its next hook post says.
+  The main session is the one sbxw's terminal types into when sbxw can tell
+  (the sandbox's only session, or the one started from sbxw's terminal),
+  never a thread's or a Claude Code background session; else the newest
+  such one. The phone uses the same rule.
 
 The desktop, the web UI and the phone then get the `Lead` event and show the
-leader again. It does not come back, and the record is dropped, when:
+leader again. While the main terminal shows another conversation (a new
+`claude`, or a resumed one: a resume has a new session id), the sandbox is not
+a leader, but the record waits: if the recorded conversation becomes the main
+session again within 7 days, it leads again. A resumed conversation does not
+take the lead over; turn the team on again in it. It does not come back, and
+the record is dropped, when:
 
 - you ended lead mode (Team off);
-- the main terminal shows another conversation (a new `claude` started in
-  its place before it was found again): turn the team on again in that one;
 - the sandbox was stopped from sbxw, or removed;
 - the session was never known (no hook had reported when you turned it on, and
   none did before the restart);

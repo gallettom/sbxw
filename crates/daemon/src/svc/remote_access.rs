@@ -13,6 +13,7 @@ use sbxw_core::remote_access::devices::{DeviceBook, DeviceView};
 use sbxw_core::remote_access::journal::{self, Entry, Kind};
 use sbxw_core::remote_access::limits::Limiter;
 use sbxw_core::remote_access::pairing::{ApproveError, PairingBook, RequestView, StartError, Status};
+use sbxw_core::remote_access::reach::{self, ReachKind};
 use sbxw_core::remote_access::view::{phone_activity, phone_page, phone_question, phone_state, PhonePage, PhoneQuestion};
 use sbxw_core::remote_access::{self as rules, State, TailnetStatus};
 use sbxw_core::session::{SessionKey, SessionKind};
@@ -418,10 +419,10 @@ impl Reason {
     }
     pub fn sentence(self) -> &'static str {
         match self {
-            Reason::NeedsMac => "This needs your Mac: the leader is waiting for an answer there.",
-            Reason::Busy => "The leader is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.",
-            Reason::NoPaste => "The leader's terminal does not take a paste right now. Send it from the Mac.",
-            Reason::NotSubmitted => "Not sent: the leader started asking something at the Mac while the text was typed. It waits, unsent, in the leader's input.",
+            Reason::NeedsMac => "This needs your Mac: the session is waiting for an answer there.",
+            Reason::Busy => "The session is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.",
+            Reason::NoPaste => "The session's terminal does not take a paste right now. Send it from the Mac.",
+            Reason::NotSubmitted => "Not sent: the session started asking something at the Mac while the text was typed. It waits, unsent, in the session's input.",
             Reason::Command => "A message from the phone cannot have a line starting with !, / or #: shell and slash commands are for the Mac.",
             Reason::Control => "The message holds a control character. Only plain text and line breaks are sent.",
             Reason::Empty => "The message is empty.",
@@ -463,6 +464,14 @@ pub enum Refusal {
 pub struct LeaderView {
     pub sandbox: String,
     pub name: String,
+    /// `leader` (a team leader) or `sandbox` (a running sandbox with no team).
+    pub kind: ReachKind,
+    /// Why the phone can only read this one, when it can: `several_sessions`
+    /// (sbxw cannot tell which session its terminal shows) or `no_terminal`
+    /// (sbxw holds no terminal on it). The routes refuse by their own rules;
+    /// this only lets the page say so before the person writes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<&'static str>,
     pub state: &'static str,
     pub activity: &'static str,
     pub last_at: u64,
@@ -885,60 +894,123 @@ impl App {
         self.remote_access.lock().unwrap().record(&d.id, &d.name, kind);
     }
 
-    // ── Leaders ──────────────────────────────────────────────────────────
+    // ── Who a phone reaches ──────────────────────────────────────────────
 
-    /// A leader's main session: the newest live one with no thread.
-    fn leader_info(&self, sb: &SandboxRef) -> Option<sbxw_core::agents::SessionInfo> {
-        let key = sb.to_string();
-        self.session_infos()
+    /// Every sandbox a phone reaches now, each with its kind and the session
+    /// it shows and types into: the ONE rule, `sbxw_core::remote_access::reach`.
+    fn remote_reachable(&self) -> Vec<(SandboxRef, ReachKind, sbxw_core::agents::SessionInfo)> {
+        let leading = self.leading();
+        let infos = self.session_infos();
+        let cands = self.reach_candidates(&infos);
+        reach::reachable(&cands, &leading)
             .into_iter()
-            .filter(|i| i.sandbox == key && i.thread.is_none())
-            .max_by_key(|i| (i.state != SessionState::Exited, i.started_ms))
+            .filter_map(|r| Some((SandboxRef::parse(&r.sandbox).ok()?, r.kind, infos[r.index].clone())))
+            .collect()
     }
 
-    /// `:sandbox` as a current leader, or not found (the same answer as no
-    /// such sandbox).
+    /// `infos` as the reach rule sees them, each marked when it is the
+    /// session sbxw's terminal types into (`AgentBook::terminal_session`,
+    /// the rule of `can_type_into`, never relaxed here). Shared with
+    /// `plans::main_session`, so the phone and Lead Mode agree on which
+    /// session is a sandbox's main one.
+    pub(crate) fn reach_candidates<'a>(&self, infos: &'a [sbxw_core::agents::SessionInfo]) -> Vec<reach::Candidate<'a>> {
+        let terminal: std::collections::HashMap<String, String> = {
+            let book = self.agents.lock().unwrap();
+            let mut names: Vec<&str> = infos.iter().map(|i| i.sandbox.as_str()).collect();
+            names.sort_unstable();
+            names.dedup();
+            names.into_iter().filter_map(|n| book.terminal_session(n).map(|k| (n.to_string(), k.session_id))).collect()
+        };
+        infos
+            .iter()
+            .map(|i| reach::Candidate { terminal: i.session_id.is_some() && terminal.get(&i.sandbox) == i.session_id.as_ref(), ..reach::Candidate::from(i) })
+            .collect()
+    }
+
+    /// `sb` as the phone reaches it, or `None` (unknown, stopped, a thread's,
+    /// Jarvis's: all the same).
+    fn remote_reach(&self, sb: &SandboxRef) -> Option<(ReachKind, sbxw_core::agents::SessionInfo)> {
+        self.remote_reachable().into_iter().find(|(s, _, _)| s == sb).map(|(_, k, i)| (k, i))
+    }
+
+    /// The session the phone shows for a reachable `sb`.
+    fn reach_info(&self, sb: &SandboxRef) -> Option<sbxw_core::agents::SessionInfo> {
+        self.remote_reach(sb).map(|(_, i)| i)
+    }
+
+    /// `:sandbox` of every level 1 route: a sandbox the phone reaches, or not
+    /// found, the same answer as no such sandbox.
+    pub fn remote_target(&self, raw: &str) -> Result<SandboxRef, Refusal> {
+        let sb = SandboxRef::parse(raw).map_err(|_| Refusal::NotFound)?;
+        match self.remote_reach(&sb) {
+            Some(_) => Ok(sb),
+            None => Err(Refusal::NotFound),
+        }
+    }
+
+    /// `:sandbox` as a current team leader only (the Kanban's routes: a
+    /// sandbox with no team has no board), or not found.
     pub fn remote_leader(&self, raw: &str) -> Result<SandboxRef, Refusal> {
         let sb = SandboxRef::parse(raw).map_err(|_| Refusal::NotFound)?;
-        if self.leading().contains(&sb.to_string()) {
+        if self.remote_reach(&sb).is_some_and(|(k, _)| k == ReachKind::Leader) {
             Ok(sb)
         } else {
             Err(Refusal::NotFound)
         }
     }
 
-    /// Whether the leader's pending prompt is a question the phone may
-    /// answer: a multiple-choice `AskUserQuestion` in the one session sbxw
-    /// can type into. A permission prompt has no steps: never.
-    fn remote_question(&self, sb: &SandboxRef) -> Option<Vec<PhoneQuestion>> {
-        let info = self.leader_info(sb)?;
+    /// Whether the pending prompt of `info` (the session the phone shows) is
+    /// a question the phone may answer: a multiple-choice `AskUserQuestion`
+    /// in the one session sbxw can type into. A permission prompt has no
+    /// steps: never.
+    fn remote_question_of(&self, sb: &SandboxRef, info: &sbxw_core::agents::SessionInfo) -> Option<Vec<PhoneQuestion>> {
         if info.state != SessionState::Attention {
             return None;
         }
-        let steps = info.steps.filter(|s| !s.is_empty())?;
+        let steps = info.steps.as_ref().filter(|s| !s.is_empty())?;
         let book = self.agents.lock().unwrap();
         let key = book.answerable(&sb.to_string()).ok()?;
-        // The session sbxw would type into must be the leader's main one,
-        // the one whose question the phone shows.
+        // The session sbxw would type into must be the main one, the one
+        // whose question the phone shows.
         if info.session_id.as_deref() != Some(key.session_id.as_str()) || book.prompt_sizes(&key).is_empty() {
             return None;
         }
+        drop(book);
         let rules = self.anonymise_rules().unwrap_or_default();
         let m = |t: &str| sbxw_core::anonymise::mask(t, &rules).text;
         Some(steps.iter().map(phone_question).map(|q| PhoneQuestion { text: m(&q.text), options: q.options.iter().map(|o| m(o)).collect() }).collect())
     }
 
-    /// The names of the leaders `remote_leaders` lists, without their pages.
-    pub fn remote_leader_names(&self) -> Vec<String> {
-        self.leading().into_iter().filter(|n| SandboxRef::parse(n).ok().and_then(|sb| self.leader_info(&sb)).is_some()).collect()
+    fn remote_question(&self, sb: &SandboxRef) -> Option<Vec<PhoneQuestion>> {
+        let info = self.reach_info(sb)?;
+        self.remote_question_of(sb, &info)
     }
 
+    /// Why the phone can only read `sb`, if it can: the existing rules,
+    /// looked at ahead (`can_type_into`, a live terminal of sbxw's).
+    fn remote_read_only(&self, sb: &SandboxRef) -> Option<&'static str> {
+        if self.agents.lock().unwrap().can_type_into(&sb.to_string()).is_err() {
+            return Some("several_sessions");
+        }
+        if !self.sessions.is_live(&SessionKey::agent(sb)) {
+            return Some("no_terminal");
+        }
+        None
+    }
+
+    /// The names of the team leaders `remote_leaders` lists (for `sbxw
+    /// remote status` and the Kanban), without the other sandboxes.
+    pub fn remote_leader_names(&self) -> Vec<String> {
+        self.remote_reachable().into_iter().filter(|(_, k, _)| *k == ReachKind::Leader).map(|(s, _, _)| s.to_string()).collect()
+    }
+
+    /// `GET /r/leaders`: every sandbox a phone reaches (the route keeps its
+    /// name: leaders first, then running sandboxes with no team).
     pub fn remote_leaders(&self) -> Vec<LeaderView> {
         let mut out = Vec::new();
-        for name in self.leading() {
-            let Ok(sb) = SandboxRef::parse(&name) else { continue };
-            let Some(info) = self.leader_info(&sb) else { continue };
-            let steps = self.remote_question(&sb);
+        for (sb, kind, info) in self.remote_reachable() {
+            let name = sb.to_string();
+            let steps = self.remote_question_of(&sb, &info);
             let last_at = info
                 .session_id
                 .as_deref()
@@ -948,6 +1020,8 @@ impl App {
             out.push(LeaderView {
                 sandbox: name.clone(),
                 name,
+                kind,
+                read_only: self.remote_read_only(&sb),
                 state: phone_state(info.state),
                 activity: phone_activity(info.state, steps.is_some()),
                 last_at,
@@ -959,9 +1033,9 @@ impl App {
         out
     }
 
-    /// The leader's main session id, for its history.
+    /// The main session id the phone shows for `sb`, for its history.
     pub fn remote_leader_session(&self, sb: &SandboxRef) -> Option<String> {
-        self.leader_info(sb)?.session_id
+        self.reach_info(sb)?.session_id
     }
 
     pub fn remote_history(&self, sb: &SandboxRef, before: Option<u64>, after: Option<u64>, limit: Option<usize>) -> Result<(String, PhonePage), Refusal> {
@@ -992,10 +1066,9 @@ impl App {
     /// prompt or a tool call under [`TOOL_CALL_QUIET_MS`], or its terminal has
     /// bracketed paste off.
     fn remote_can_type(&self, sb: &SandboxRef) -> Result<Arc<crate::pty::PtySession>, Reason> {
-        if !self.leading().contains(&sb.to_string()) {
-            return Err(Reason::NeedsMac);
-        }
-        let info = self.leader_info(sb).ok_or(Reason::NeedsMac)?;
+        // Not reachable any more (stopped, or no longer a main session):
+        // nothing is typed.
+        let info = self.reach_info(sb).ok_or(Reason::NeedsMac)?;
         match info.state {
             SessionState::Idle => {}
             SessionState::Working => return Err(Reason::Busy),
@@ -1142,7 +1215,7 @@ impl App {
             return Err(Refusal::Bad("indices: one 1-based option per step".into()));
         }
         let Some(steps) = self.remote_question(sb) else {
-            let asks = self.leader_info(sb).is_some_and(|i| i.state == SessionState::Attention);
+            let asks = self.reach_info(sb).is_some_and(|i| i.state == SessionState::Attention);
             self.remote_record(d, Kind::Refused);
             return Err(if asks { Refusal::Conflict("this prompt can only be answered at the Mac".into()) } else { Refusal::NotFound });
         };
@@ -1167,10 +1240,20 @@ impl App {
     /// One Escape into the leader's main session: what a person presses to
     /// interrupt Claude Code. Nothing else is typed.
     pub async fn remote_interrupt(&self, d: &DeviceCtx, sb: &SandboxRef) -> Result<(), Refusal> {
+        // Only where the daemon can tell which session the Escape reaches
+        // (a read-only entry, API.md 2.6): several sessions none of which is
+        // known to be the terminal's, or no terminal of sbxw's at all. A
+        // sandbox with several sessions of which exactly one is the
+        // terminal's is interrupted as before.
+        if let Err(e) = self.agents.lock().unwrap().can_type_into(&sb.to_string()) {
+            self.remote_record(d, Kind::Refused);
+            return Err(Refusal::Conflict(format!("'{sb}': {e}")));
+        }
         // Under the session's typing lock: an Escape never lands between a
         // phone message's paste and its Return.
         let Some(live) = self.sessions.live(&SessionKey::agent(sb)) else {
-            return Err(Refusal::NotFound);
+            self.remote_record(d, Kind::Refused);
+            return Err(Refusal::Reason(Reason::NeedsMac));
         };
         let _line = live.typing.lock().await;
         if self.input(sb, SessionKind::Agent, b"\x1b").await {
