@@ -3279,13 +3279,16 @@ fn mode_switch(s: &App, i: usize, agent: &str, ground: u32) -> El {
 fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
     // Quiet: a muted chip is its icon in its colour by meaning and its words
     // in the bright text on the bar; a tone is its colour on its tint.
-    let quiet = it.tone == "muted" || it.tone.is_empty();
+    // The Browser chip in use keeps the quiet look (its words stay bright) and
+    // only its globe goes green.
+    let globe_in_use = it.id == "browser" && it.tone == "green";
+    let quiet = it.tone == "muted" || it.tone.is_empty() || globe_in_use;
     let (fg, tint) = crate::screen::tone(&it.tone);
     let fg = if quiet { theme::color_value("text-bright").unwrap() } else { fg };
     // A quiet chip's icon by meaning (docs/screens.md, "Colour by meaning"):
     // what it goes to blue, the team purple, stopping red, in its full tone.
     let (meaning_fg, meaning_tint) = crate::screen::action_tone(bar::meaning(&it.id));
-    let icon_fg = if quiet { theme::mark_on(meaning_fg, ground) } else { fg };
+    let icon_fg = if globe_in_use { theme::mark_on(crate::screen::tone("green").0, ground) } else if quiet { theme::mark_on(meaning_fg, ground) } else { fg };
     // Hover, focus and the active state: the meaning's tint (neutral: the elevated grey).
     let quiet_tint = if bar::meaning(&it.id) == "neutral" { theme::color_value("elevated").unwrap() } else { meaning_tint };
     let mut b = row().key(it.key(n)).gap(bar::CHIP_GAP).px(bar::CHIP_PX).h(layout::DENSE_H).min_w(layout::DENSE_H).justify_center().items_center().radius(theme::radius("xs").unwrap());

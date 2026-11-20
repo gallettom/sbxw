@@ -667,7 +667,7 @@ fn on_surface(ev: &SurfaceEvent) -> Vec<Action> {
 // ---------------------------------------------------------------------------
 // Extras
 
-/// On the pane bars of every running sandbox: Browser, blue while its agent
+/// On the pane bars of every running sandbox: Browser, its globe green while its agent
 /// is using it (the web UI's tab on the terminal's edge).
 fn extras(cx: &Ctx) -> Vec<Extra> {
     let active: Vec<&str> = cx.get(ACTIVE)["sandboxes"].as_array().into_iter().flatten().filter_map(J::as_str).collect();
@@ -686,10 +686,11 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
                 id: "browser".into(),
                 label: "Browser".into(),
                 icon: Some("globe".into()),
-                tone: if using { "blue".into() } else { "muted".into() },
+                tone: if using { "green".into() } else { "muted".into() },
                 help: match (open, using) {
-                    (true, _) => "Hide the browser: it keeps running".into(),
-                    (false, true) => format!("{name}'s agent is using its browser: watch it"),
+                    (true, true) => "Browser: in use. Hide it: it keeps running".into(),
+                    (true, false) => "Hide the browser: it keeps running".into(),
+                    (false, true) => format!("Browser: in use. {name}'s agent is using its browser: watch it"),
                     (false, false) => format!("Open {name}'s own browser"),
                 },
                 count: None,

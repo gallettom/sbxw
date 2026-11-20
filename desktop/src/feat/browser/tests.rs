@@ -373,13 +373,13 @@ fn opening_needs_a_running_sandbox_and_connects_without_reconnect() {
 }
 
 #[test]
-fn the_pane_bar_offers_the_browser_blue_while_the_agent_uses_it() {
+fn the_pane_bar_offers_the_browser_green_while_the_agent_uses_it() {
     let _t = turn();
     with(|s| *s = None);
     let d = fixture("basic");
     let e = extras(&Ctx { data: &d });
     let names: Vec<_> = e.iter().map(|x| (x.place.clone(), x.tone.clone())).collect();
-    assert_eq!(names, vec![(Place::Pane("web-app".into()), "blue".to_string()), (Place::Pane("docs".into()), "muted".to_string())]);
+    assert_eq!(names, vec![(Place::Pane("web-app".into()), "green".to_string()), (Place::Pane("docs".into()), "muted".to_string())]);
 }
 
 // ---------------------------------------------------------------------------
