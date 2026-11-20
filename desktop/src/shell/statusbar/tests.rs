@@ -22,18 +22,6 @@ fn several_bring_ups_show_the_latest_and_a_count() {
 }
 
 #[test]
-fn a_failure_stays_until_looked_at() {
-    let t = Instant::now();
-    let all = vec![job("a", BarState::Failed("x".into()), None, 0.2, t), job("b", BarState::Running, None, 0.2, t)];
-    assert_eq!(shown_jobs(all.clone(), &[]).len(), 2);
-    let seen = vec![("a".to_string(), t)];
-    assert_eq!(shown_jobs(all.clone(), &seen).iter().map(|j| j.sandbox.as_str()).collect::<Vec<_>>(), ["b"]);
-    // Retried (a new start), it fails again: shown again.
-    let again = vec![job("a", BarState::Failed("x".into()), None, 0.2, t + Duration::from_secs(1))];
-    assert_eq!(shown_jobs(again, &seen).len(), 1);
-}
-
-#[test]
 fn the_bar_drops_its_parts_in_order_and_never_wraps() {
     let t = Instant::now();
     let jobs = vec![job("better-api", BarState::Running, Some("Pulling image 63%"), 0.4, t), job("web", BarState::Running, None, 0.0, t)];
@@ -240,4 +228,66 @@ fn a_theme_switch_renders_the_screens_again() {
     assert_eq!(graphite.1, theme::color_in(Mode::Graphite, "text"), "a colour prop resolved again");
     assert_eq!(graphite.2, theme::color_in(Mode::Graphite, "surface"));
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The "New sandboxes" panel is gone: a press on the bar's bring-up lists
+/// them in a popover above it, inside the window at 1284 x 816 and 720 x
+/// 480, bounded, with the failure's reason and its Dismiss; Escape and a
+/// press outside close it; the old `open_panel create-jobs` opens the same
+/// popover and docks nothing.
+#[test]
+fn the_bring_ups_popover_replaces_the_panel() {
+    use crate::shell::{view, Args};
+    assert!(crate::feat::screen("create-jobs").is_none(), "no jobs panel screen");
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+        let a = App::new(Args { fixture: Some(format!("{}/fixtures/shell/statusbar-many.json", env!("CARGO_MANIFEST_DIR")).into()), ..Args::default() });
+        let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+        let settle = |rt: &mut rune::Runtime<App>| {
+            for _ in 0..8 {
+                rt.update(|s, _| {
+                    s.statusbar_poll(Instant::now());
+                });
+                rt.frame(0.016);
+            }
+        };
+        settle(&mut rt);
+        assert!(rt.state.feats.panel.is_none() && rt.state.feats.panels.is_empty(), "{w}: a bring-up opens no panel");
+        assert!(rt.find("status-jobs-pop").is_none(), "{w}: closed until pressed");
+        let tap = |rt: &mut rune::Runtime<App>, key: &str| {
+            let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+        };
+        tap(&mut rt, "status-jobs");
+        settle(&mut rt);
+        let (p, _) = rt.presented("status-jobs-pop").unwrap_or_else(|| panic!("{w}: the popover opens"));
+        assert!(p[0] >= -0.5 && p[1] >= -0.5 && p[0] + p[2] <= w + 0.5 && p[1] + p[3] <= h + 0.5, "{w}x{h}: the popover {p:?} inside the window");
+        let (bar, _) = rt.presented("status-bar").unwrap();
+        assert!(p[1] + p[3] <= bar[1] + 0.5, "{w}: above the bar");
+        for k in ["job-payments-v2", "job-payments-v2-error", "job-dismiss-payments-v2", "job-better-api"] {
+            assert!(rt.find(k).is_some(), "{w}: {k} listed");
+        }
+        assert!(rt.find("job-retry-payments-v2").is_none(), "{w}: started elsewhere, no Retry (it was never offered)");
+        assert!(rt.find("job-dismiss-better-api").is_none(), "{w}: a running one cannot be dismissed");
+        // Escape closes it; a second Escape is not taken (it goes to the terminal).
+        assert!(rt.state.statusbar_escape());
+        assert!(!rt.state.statusbar_escape());
+        settle(&mut rt);
+        assert!(rt.find("status-jobs-pop").is_none());
+        // A press outside closes it and does nothing else.
+        tap(&mut rt, "status-jobs");
+        settle(&mut rt);
+        assert!(rt.find("status-jobs-pop").is_some());
+        rt.pointer_down(w / 2.0, 60.0);
+        rt.pointer_up(w / 2.0, 60.0);
+        settle(&mut rt);
+        assert!(rt.find("status-jobs-pop").is_none(), "{w}: light dismiss");
+        // The old panel's intent: the same popover, nothing docked.
+        for i in crate::intent::parse(&serde_json::json!({ "kind": "intent", "name": "open_panel", "args": { "screen": "create-jobs" } })).unwrap() {
+            rt.update(|s, _| s.run_intent("test", i));
+        }
+        settle(&mut rt);
+        assert_eq!(rt.state.status.pop, Some(Pop::Jobs));
+        assert!(rt.state.feats.panel.is_none(), "{w}: nothing docked");
+    }
 }

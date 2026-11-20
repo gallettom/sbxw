@@ -107,13 +107,13 @@ fn a_workspace_sandbox_from_the_chooser_to_its_terminal() {
     assert_eq!(r.c()["can_create"], true);
     r.ask("create_submit", json!({})).unwrap();
     assert!(r.confirms.is_empty(), "the workspace alone asks nothing");
-    assert!(r.asked.contains(&Action::CloseModal) && r.asked.contains(&Action::OpenPanel(JOBS.into())));
+    assert!(r.asked.contains(&Action::CloseModal));
+    assert!(!r.asked.iter().any(|a| matches!(a, Action::OpenPanel(_) | Action::ClosePanel(_))), "no panel: the status bar shows the bring-up");
     let kinds: Vec<&str> = r.events.iter().filter_map(|e| e["kind"].as_str()).collect();
     assert_eq!(kinds.first(), Some(&"plan"));
     assert_eq!(kinds.last(), Some(&"done"));
     assert!(r.asked.contains(&Action::Intent { name: "open_terminal".into(), args: json!({ "sandbox": "shop", "pane": "spare" }) }));
     assert!(r.c()["jobs"].as_array().unwrap().is_empty(), "a ready sandbox's card goes");
-    assert!(r.asked.contains(&Action::ClosePanel(JOBS.into())));
 }
 
 #[test]
@@ -161,6 +161,14 @@ fn host_access_is_asked_with_the_daemons_lines_and_a_failure_can_be_retried() {
     assert!(c.danger);
     assert_eq!(c.call.body.get("approved"), None, "set by the core on Allow only");
     r.confirm();
+    assert!(
+        r.asked.iter().any(|a| matches!(a, Action::Notice { text, error: true, .. } if text.contains("docs was not created: sbx: no space left on device"))),
+        "a failure says so in a notice: {:?}",
+        r.asked
+    );
+    // It stays in the status bar, however long, until dismissed or retried.
+    let later = Instant::now() + Duration::from_secs(3600);
+    assert!(matches!(r.st.bar_jobs(later).first().map(|j| &j.state), Some(model::BarState::Failed(_))));
     let job = &r.c()["jobs"][0];
     assert_eq!(job["state"], "failed");
     assert_eq!(job["error"], "sbx: no space left on device");
@@ -244,7 +252,7 @@ fn approved_lines_only_ever_come_from_the_daemons_question() {
     assert!(r.daemon["sandboxes"].as_array().unwrap().is_empty());
 }
 
-/// Writes `fixtures/create/*.json` and `fixtures/create-jobs/*.json` from
+/// Writes `fixtures/create/*.json` from
 /// real runs through the stand-in routes, so fixtures match the code:
 /// `cargo test write_create_fixtures -- --ignored`.
 #[test]
@@ -346,34 +354,6 @@ fn write_create_fixtures() {
     save("create", "chat", &r);
     r.ask("create_set", json!({ "field": "chat_name", "value": "Docs" })).unwrap();
     save("create", "chat-taken", &r);
-
-    // Bring-ups: one running mid-way, one failed, one waiting for the person.
-    let mut r = Run::new(json!({ "sandboxes": sandboxes.clone() }));
-    let steps = r#"[{"id":"workspace","label":"Prepare the workspace"},{"id":"create","label":"Create the sandbox"},{"id":"boot","label":"Start it"},{"id":"kits","label":"Install kits"},{"id":"ports","label":"Publish ports"}]"#;
-    r.st.jobs.push(Job::new("shop", Some("create"), Some(json!({}))));
-    for e in [
-        format!(r#"{{"sandbox":"shop","kind":"plan","steps":{steps}}}"#),
-        r#"{"sandbox":"shop","kind":"started","id":"create"}"#.into(),
-        r#"{"sandbox":"shop","kind":"detail","text":"Pulling image docker/sandbox-templates:claude-code 63%"}"#.into(),
-    ] {
-        model::apply_provision(&mut r.st.jobs, &e);
-    }
-    let mut failed = Job::new("api", Some("create"), Some(json!({})));
-    model::apply_provision(&mut vec![], "{}");
-    failed.steps = vec![("workspace".into(), "Prepare the workspace".into()), ("create".into(), "Create the sandbox".into()), ("kits".into(), "Install kits".into())];
-    failed.at = 2;
-    failed.posting = false;
-    failed.state = JobState::Failed("sbx: kit sbxw:node: npm ERR! network request to registry.npmjs.org failed (ECONNRESET)".into());
-    r.st.jobs.push(failed);
-    let mut asking = Job::new("tools", Some("create"), Some(json!({})));
-    asking.posting = false;
-    asking.state = JobState::Asking("Waiting for your answer: /home/you/dev/tools/sbxw.toml asks for host access you have not approved yet.".into());
-    r.st.jobs.push(asking);
-    r.data[KEY] = r.st.view(&[]);
-    save("create-jobs", "basic", &r);
-    r.st.jobs.clear();
-    r.data[KEY] = r.st.view(&[]);
-    save("create-jobs", "empty", &r);
 }
 
 /// The status bar's view of bring-ups, from `provision` events alone (a
@@ -412,11 +392,14 @@ fn the_status_bar_follows_bring_ups_from_provision_events() {
     let b = st.bar_jobs(Instant::now());
     assert_eq!(b.iter().map(|j| j.sandbox.as_str()).collect::<Vec<_>>(), ["web", "better-api"]);
 
-    // better-api fails: it stays, in its failed state, with the reason.
-    ev(&mut st, json!({ "sandbox": "better-api", "kind": "done", "error": "sbx: kits failed" }));
+    // better-api fails: it stays, in its failed state, with the reason, and a notice says so once.
+    let out = st.on_event(&ctx, "provision", &J::String(json!({ "sandbox": "better-api", "kind": "done", "error": "sbx: kits failed" }).to_string()));
+    assert!(out.iter().any(|a| matches!(a, Action::Notice { error: true, text, .. } if text.starts_with("better-api was not created"))), "{out:?}");
     let b = st.bar_jobs(Instant::now());
     let f = b.iter().find(|j| j.sandbox == "better-api").unwrap();
     assert_eq!((&f.state, f.step.as_deref()), (&BarState::Failed("sbx: kits failed".into()), Some("Install kits failed")));
+
+    assert_eq!(st.view(&[])["jobs"].as_array().unwrap().len(), 2, "the popover lists both");
 
     // web succeeds: gone from the list, "created" for CREATED_FOR, then nothing.
     ev(&mut st, json!({ "sandbox": "web", "kind": "done" }));
@@ -425,6 +408,9 @@ fn the_status_bar_follows_bring_ups_from_provision_events() {
     let w = b.iter().find(|j| j.sandbox == "web").unwrap();
     assert_eq!((&w.state, w.frac), (&BarState::Created, 1.0));
     assert!(st.bar_jobs(t + CREATED_FOR).iter().all(|j| j.sandbox != "web"), "it clears");
+    // Dismissed, the failure goes from the bar.
+    let _ = st.act(&ctx, &Asked { name: "create_dismiss", args: json!({ "sandbox": "better-api" }).as_object().cloned().unwrap() });
+    assert!(st.bar_jobs(Instant::now() + Duration::from_secs(3600)).iter().all(|j| j.sandbox != "better-api"));
     // A done for a sandbox never seen says nothing.
     ev(&mut st, json!({ "sandbox": "ghost", "kind": "done" }));
     assert!(st.bar_jobs(Instant::now()).iter().all(|j| j.sandbox != "ghost"));

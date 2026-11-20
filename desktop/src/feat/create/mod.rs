@@ -32,10 +32,10 @@ use serde_json::{json, Value as J};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-/// The dialog's screen and the jobs' panel.
+/// The dialog's screen. The bring-ups have no screen: the status bar shows
+/// them, and its press lists them in a popover (shell/statusbar/jobs.rs).
 pub const SCREEN: &str = "create";
-pub const JOBS: &str = "create-jobs";
-/// `data.create`: the form and the jobs as the screens see them.
+/// `data.create`: the form (and the jobs, for the scripts) as the screens see them.
 pub const KEY: &str = "create";
 /// A bring-up can pull an image: give it half an hour.
 const BRING_UP_SECS: u64 = 1800;
@@ -50,7 +50,6 @@ pub const FEATURE: Feature = Feature {
     events: &["provision"],
     screens: &[
         ScreenDecl { name: SCREEN, src: include_str!("../../../screens/create.luau"), slot: Slot::Modal { width: 640.0, light_dismiss: false } },
-        ScreenDecl { name: JOBS, src: include_str!("../../../screens/create-jobs.luau"), slot: Slot::Panel { title: "New sandboxes", icon: "plus", width: 320.0 } },
     ],
     intents: &[
         Spec { name: "create_open", risk: Risk::Direct, args: &[("dialog", Arg::OneOf(DIALOGS), false)], doc: "Opens the New sandbox dialog: the chooser (default), the workspace form or the chat form." },
@@ -156,8 +155,9 @@ fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action>
     STATE.lock().unwrap().on_answer(ctx, call, r)
 }
 
-/// "New sandbox" in the top bar, always. Bring-ups in progress show in the
-/// status bar (shell/statusbar.rs), which opens the jobs' panel.
+/// "New sandbox" (the sidebar's header, or the rail when it is hidden).
+/// Bring-ups in progress show in the status bar (shell/statusbar.rs), whose
+/// press lists them in a popover.
 fn extras(_: &Ctx) -> Vec<super::Extra> {
     vec![super::Extra {
         place: super::Place::Topbar,
@@ -455,14 +455,10 @@ impl State {
                 let (Some(route), Some(body)) = (j.route, j.body.clone()) else { return Err(format!("{name} was started elsewhere: create it again from New sandbox.")) };
                 j.restart();
                 let clone = j.clone.clone();
-                out.push(Action::OpenPanel(JOBS.into()));
                 out.push(Action::Call(bring_up(route, name, body, vec![], clone)));
             }
             "create_dismiss" => {
                 self.jobs.retain(|j| j.sandbox != a.req("sandbox"));
-                if self.jobs.is_empty() {
-                    out.push(Action::ClosePanel(JOBS.into()));
-                }
             }
             other => return Err(format!("{other}: not a create intent")),
         }
@@ -493,15 +489,13 @@ impl State {
         let mut out = vec![Action::CloseModal];
         if grants.is_empty() {
             self.add_job(job);
-            out.push(Action::OpenPanel(JOBS.into()));
             out.push(Action::Call(call));
         } else {
-            // Shown in the panel as waiting for the answer: a Cancel leaves
-            // it there, with Retry (asks again) and Dismiss.
+            // Shown in the status bar as waiting for the answer: a Cancel
+            // leaves it there, its popover has Retry (asks again) and Dismiss.
             job.state = JobState::Asking("Waiting for your answer: the sandbox reaches more of this machine than its workspace.".into());
             job.posting = false;
             self.add_job(job);
-            out.push(Action::OpenPanel(JOBS.into()));
             let mut c = Confirm::new(format!("Create {name}?"), call).line(summary).line("It will also be able to:").labels("Create", "Cancel");
             for g in grants {
                 c = c.line(format!("• {g}"));
@@ -521,7 +515,7 @@ impl State {
         let body = json!({ "name": name });
         self.form.dialog = None;
         self.add_job(Job::new(&name, Some("chat"), Some(body.clone())));
-        Ok(vec![Action::CloseModal, Action::OpenPanel(JOBS.into()), Action::Call(bring_up("chat", &name, body, vec![], None))])
+        Ok(vec![Action::CloseModal, Action::Call(bring_up("chat", &name, body, vec![], None))])
     }
 
     fn add_job(&mut self, job: Job) {
@@ -533,13 +527,13 @@ impl State {
         if name != "provision" {
             return vec![];
         }
-        let before = self.jobs.len();
         let text = match data {
             J::String(s) => s.clone(),
             v => v.to_string(),
         };
         let ev: J = serde_json::from_str(&text).unwrap_or_default();
         let had = self.jobs.iter().any(|j| ev["sandbox"] == j.sandbox.as_str());
+        let failed_before = self.jobs.iter().any(|j| ev["sandbox"] == j.sandbox.as_str() && matches!(j.state, JobState::Failed(_)));
         let Some(sandbox) = model::apply_provision(&mut self.jobs, &text) else { return vec![] };
         // A watched bring-up that ended ready (a posted one ends with its answer).
         let done_ok = had && ev["kind"] == "done" && ev["error"].is_null();
@@ -554,8 +548,11 @@ impl State {
                 j.posting = true;
             }
         }
-        if self.jobs.len() > before {
-            out.push(Action::OpenPanel(JOBS.into()));
+        // One this app only watches failed: said once (one it posted says so with its answer).
+        if let Some(JobState::Failed(e)) = self.jobs.iter().find(|j| j.sandbox == sandbox).map(|j| &j.state) {
+            if !failed_before {
+                out.push(failed_notice(&sandbox, e));
+            }
         }
         out.push(self.set(&taken(ctx)));
         out
@@ -675,8 +672,10 @@ impl State {
                     Ok((s, v)) => v["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("the daemon answered {s}")),
                 };
                 j.posting = false;
-                j.state = JobState::Failed(format!("Could not clone {url} on {host}: {why}"));
-                vec![]
+                let e = format!("Could not clone {url} on {host}: {why}");
+                let n = failed_notice(name, &e);
+                j.state = JobState::Failed(e);
+                vec![n]
             }
         }
     }
@@ -701,21 +700,14 @@ impl State {
                     None => format!("Sandbox \"{real}\" is ready"),
                 };
                 let error = !warnings.is_empty();
-                j.warnings.extend(warnings);
                 self.mark_ready(&shown);
-                // Done: the card goes unless something beside it did not work.
-                if !error {
-                    self.jobs.retain(|j| j.sandbox != name);
-                }
-                let mut out = vec![
+                // Done: the job goes; a warning beside it is the notice's (in red).
+                self.jobs.retain(|j| j.sandbox != name);
+                vec![
                     Action::Notice { text, error, then: None },
                     Action::Intent { name: "select".into(), args: json!({ "sandbox": real }) },
                     Action::Intent { name: "open_terminal".into(), args: json!({ "sandbox": real, "pane": "spare" }) },
-                ];
-                if self.jobs.is_empty() {
-                    out.push(Action::ClosePanel(JOBS.into()));
-                }
-                out
+                ]
             }
             Answer::AskConsent(c) => {
                 j.state = JobState::Asking(format!("Waiting for your answer: {} asks for host access you have not approved yet.", c.config));
@@ -731,11 +723,23 @@ impl State {
                 vec![d.into_action()]
             }
             Answer::Failed(e) => {
+                let n = failed_notice(name, &e);
                 j.state = JobState::Failed(e);
-                vec![Action::OpenPanel(JOBS.into())]
+                vec![n]
             }
         }
     }
+}
+
+/// A creation failed: an error notice; the status bar keeps it in red until
+/// it is retried or dismissed (its popover has both).
+fn failed_notice(name: &str, why: &str) -> Action {
+    Action::Notice { text: format!("{name} was not created: {}. The status bar keeps it until you dismiss it.", why.trim_end_matches('.')), error: true, then: None }
+}
+
+/// The bring-ups as the status bar's popover lists them, oldest first.
+pub fn jobs_view() -> Vec<J> {
+    STATE.lock().unwrap().jobs.iter().map(model::job_view).collect()
 }
 
 /// `POST /api/sandboxes/<route>` with the approved lines, or the clone first.
