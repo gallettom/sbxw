@@ -408,24 +408,16 @@ impl HistoryBook {
         log.source = Source::Transcript;
         log.no_transcript = None;
         log.transcript_next = Some(to);
-        // The transcript has caught up with what `Stop` said early.
-        let before = log.items.len();
-        let mut freed = 0;
-        log.items.retain(|i| {
-            if i.provisional {
-                freed += i.weight();
-            }
-            !i.provisional
-        });
-        log.bytes -= freed;
-        self.total -= freed;
-        let removed = before != self.log(sandbox, session_id, now).items.len();
+        // `Stop`'s early reply stays until this transcript brings the same
+        // text (see `push`): a post without it (the reply not written yet
+        // when the hook read the file) must not take it away, or nothing
+        // shows the reply before the next hook event.
         let mut new = Vec::new();
         for raw in post.get("items").and_then(Value::as_array).into_iter().flatten().take(limits::POST_ITEMS_MAX) {
             new.extend(transcript_items(raw, now, &|t| self.typed.typed(sandbox, t, now)));
         }
         let mut nudge = self.push(sandbox, session_id, new, rules, now);
-        if nudge.is_none() && (removed || reset) {
+        if nudge.is_none() && reset {
             nudge = self.subscribed_seq(sandbox, session_id, now);
         }
         Posted::Accepted { next: to, nudge }
@@ -446,8 +438,30 @@ impl HistoryBook {
         let key = (sandbox.to_string(), session_id.to_string());
         let log = self.logs.entry(key.clone()).or_default();
         let mut added = 0;
+        let mut freed = 0;
+        let mut grew = false;
         for mut it in new {
             sanitize(&mut it, rules, text_max);
+            if it.kind == Kind::AssistantText {
+                if it.provisional {
+                    // The transcript already gave this turn's reply: no copy.
+                    let turn = log.items.iter().rev().take_while(|i| i.kind != Kind::UserPrompt);
+                    if turn.filter(|i| i.kind == Kind::AssistantText && !i.provisional).any(|i| same_reply(&i.text, &it.text)) {
+                        continue;
+                    }
+                }
+                // A newer `Stop` replaces an older early reply; the
+                // transcript's own copy settles the one it repeats.
+                let settles = |i: &Item| i.provisional && (it.provisional || same_reply(&i.text, &it.text));
+                log.items.retain(|i| {
+                    let gone = settles(i);
+                    if gone {
+                        freed += i.weight();
+                    }
+                    !gone
+                });
+            }
+            grew = true;
             log.next_seq += 1;
             it.seq = log.next_seq;
             let w = it.weight();
@@ -455,7 +469,11 @@ impl HistoryBook {
             added += w;
             log.items.push_back(it);
         }
-        let mut freed = 0;
+        if !grew {
+            log.bytes -= freed;
+            self.total -= freed;
+            return None;
+        }
         while log.items.len() > ring_max {
             if let Some(old) = log.items.pop_front() {
                 freed += old.weight();
@@ -608,6 +626,12 @@ fn cap_chars(s: &str, max: usize) -> String {
 
 /// Every text an item carries, capped then masked (masked again after the
 /// cap would be the same: the cap only shortens).
+/// Whether two replies are the same text, whitespace aside (`Stop`'s copy
+/// and the transcript's can differ in a trailing line feed).
+fn same_reply(a: &str, b: &str) -> bool {
+    a.split_whitespace().eq(b.split_whitespace())
+}
+
 fn sanitize(it: &mut Item, rules: &Rules, text_max: usize) {
     it.clipped |= cap_bytes(&mut it.text, text_max);
     it.text = mask(&it.text, rules).text;

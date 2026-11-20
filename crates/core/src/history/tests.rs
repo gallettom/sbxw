@@ -396,3 +396,61 @@ fn a_person_text_that_merely_starts_with_sbxw_is_not_misclassified() {
         assert_eq!((i.kind, i.from.as_deref()), (Kind::UserPrompt, None), "{}", i.text);
     }
 }
+
+/// The phone-live defect: at `Stop` the hook posts the transcript's tail and
+/// the event at once, and the transcript often does not hold the reply yet
+/// (Claude Code writes it a moment later). When the event lands first, the
+/// post that follows must not take the provisional reply away: nothing else
+/// brings the reply before the next hook event, the person's next message.
+#[test]
+fn a_post_without_the_reply_keeps_the_provisional_reply() {
+    let mut b = HistoryBook::new();
+    ev(&mut b, v3("UserPromptSubmit", json!({"prompt": "How is it going?"})), 1);
+    post(&mut b, 0, 100, json!([{"t": "user", "text": "How is it going?", "at": 1}]), 2);
+    page(&mut b);
+    // Stop: the event first, then the transcript's tail without the reply.
+    let n1 = ev(&mut b, v3("Stop", json!({"last_assistant_message": "All three threads are done."})), 3);
+    assert!(n1.is_some(), "a subscribed reader hears the reply");
+    let n2 = match post(&mut b, 100, 180, json!([{"t": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "true"}, "at": 2}, {"t": "tool_result", "id": "t1", "size": 1, "head": "", "at": 2}]), 4) {
+        Posted::Accepted { nudge, .. } => nudge,
+        other => panic!("{other:?}"),
+    };
+    assert!(n2.is_some());
+    let p = page(&mut b);
+    let replies: Vec<&Item> = p.items.iter().filter(|i| i.kind == Kind::AssistantText).collect();
+    assert_eq!(replies.len(), 1, "the reply stays until the transcript brings it");
+    assert!(replies[0].provisional);
+    assert_eq!(replies[0].text, "All three threads are done.");
+
+    // The next post carries it: the provisional copy gives way, no double.
+    post(&mut b, 180, 260, json!([{"t": "assistant", "text": "All three threads are done.", "at": 3}]), 5);
+    let p = page(&mut b);
+    let replies: Vec<&Item> = p.items.iter().filter(|i| i.kind == Kind::AssistantText).collect();
+    assert_eq!(replies.len(), 1);
+    assert!(!replies[0].provisional);
+}
+
+/// The transcript already had the reply when `Stop` came: no second copy.
+#[test]
+fn a_reply_already_posted_is_not_doubled_by_stop() {
+    let mut b = HistoryBook::new();
+    post(&mut b, 0, 100, json!([{"t": "user", "text": "Status?", "at": 1}, {"t": "assistant", "text": "Green.\n", "at": 2}]), 2);
+    ev(&mut b, v3("Stop", json!({"last_assistant_message": "Green."})), 3);
+    let p = page(&mut b);
+    assert_eq!(p.items.iter().filter(|i| i.kind == Kind::AssistantText).count(), 1);
+    assert!(p.items.iter().all(|i| !i.provisional));
+}
+
+/// A reply whose transcript copy never matches (written differently) does
+/// not stay forever: the next turn's own reply replaces it.
+#[test]
+fn a_provisional_reply_gives_way_to_the_next_one() {
+    let mut b = HistoryBook::new();
+    post(&mut b, 0, 100, json!([{"t": "user", "text": "One", "at": 1}]), 1);
+    ev(&mut b, v3("Stop", json!({"last_assistant_message": "First."})), 2);
+    post(&mut b, 100, 200, json!([{"t": "assistant", "text": "First, written otherwise.", "at": 2}, {"t": "user", "text": "Two", "at": 3}]), 3);
+    ev(&mut b, v3("Stop", json!({"last_assistant_message": "Second."})), 4);
+    let p = page(&mut b);
+    let prov: Vec<&str> = p.items.iter().filter(|i| i.provisional).map(|i| i.text.as_str()).collect();
+    assert_eq!(prov, vec!["Second."]);
+}

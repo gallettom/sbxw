@@ -158,14 +158,29 @@ function rcRows(items) {
 }
 
 // `have` and a newer or older page, by seq, oldest first. A provisional
-// reply (the Stop hook's copy) gives way once the transcript's items arrive.
+// reply (the Stop hook's copy) gives way to the transcript's copy of the same
+// text, or to a newer provisional reply: the daemon's own rule
+// (sbxw_core::history). Any other item leaves it: the transcript often does
+// not hold the reply yet when the turn ends, and the reply must stay shown.
 function rcMerge(have, incoming) {
   const fresh = (Array.isArray(incoming) ? incoming : []).filter(i => i && Number.isFinite(Number(i.seq)));
-  const settles = fresh.some(i => !i.provisional);
+  const replies = fresh.filter(i => i.kind === 'assistant_text');
+  const settled = p => replies.some(i => Number(i.seq) > Number(p.seq) && (i.provisional || rcSameReply(i.text, p.text)));
   const bySeq = new Map();
-  for (const i of have) if (!(settles && i.provisional)) bySeq.set(Number(i.seq), i);
+  for (const i of have) if (!(i.provisional && settled(i))) bySeq.set(Number(i.seq), i);
   for (const i of fresh) bySeq.set(Number(i.seq), i);
   return [...bySeq.values()].sort((a, b) => Number(a.seq) - Number(b.seq));
+}
+// The page catching up (remote.js): back after this long hidden, the event
+// stream is opened again (iOS may have dropped it without a word); a history
+// read with no answer after RC_STUCK_MS no longer holds the next one back.
+const RC_AWAY_MS = 5000;
+const RC_STUCK_MS = 15000;
+
+// Two replies are the same text, whitespace aside.
+function rcSameReply(a, b) {
+  const words = t => String(t ?? '').split(/\s+/).filter(Boolean).join(' ');
+  return words(a) === words(b);
 }
 
 // A history answer, as `{ items, next_before, latest_seq }`: the page may

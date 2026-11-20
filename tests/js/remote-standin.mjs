@@ -24,6 +24,10 @@
 // Kanban (API-kanban.md): {kanban: {sandbox: board | null}} a board (null:
 // 404, the leader stopped), {tickets: {"sandbox/n": detail}}.
 // Uploads follow API.md 2.6.1: the raw body, an id of 32 hex back, no path.
+// Live replies (thread phone-live): {newer: {sandbox: page}} what a
+// `?after=` read answers, {newerHold: true} such reads wait until
+// {newerHold: false}, {mute: true} open streams stay open but get nothing
+// more (a stream that died without a word, as after a phone's sleep).
 // Usage: node tests/js/remote-standin.mjs [port]
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
@@ -229,6 +233,9 @@ export function startStandin(port = 0) {
       if ('uploadSlow' in c) s.uploadSlow = c.uploadSlow;
       if ('uploadHold' in c) { s.uploadHold = c.uploadHold; if (!c.uploadHold) s.holds.splice(0).forEach(r => r()); }
       if (c.emit) emit(c.emit.event, c.emit.data);
+      if (c.newer) Object.assign(s.newer, c.newer);
+      if ('newerHold' in c) { s.newerHold = c.newerHold; if (!c.newerHold) (s.newerHolds || []).splice(0).forEach(r => r()); }
+      if (c.mute) s.streams.clear();
       if (c.reset) s.log.length = 0;
       return send(res, 200, { ok: true });
     }
@@ -279,7 +286,10 @@ export function startStandin(port = 0) {
       const sb = decodeURIComponent(m[1]);
       if (m[2] === 'history') {
         if (url.searchParams.has('before')) return send(res, 200, s.older[sb] || { page: { items: [], latest_seq: 0 } });
-        if (url.searchParams.has('after')) return send(res, 200, s.newer[sb] || { page: { items: [], latest_seq: 0 } });
+        if (url.searchParams.has('after')) {
+          if (s.newerHold) await new Promise(r => (s.newerHolds ||= []).push(r));
+          return send(res, 200, s.newer[sb] || { page: { items: [], latest_seq: 0 } });
+        }
         return s.history[sb] ? send(res, 200, s.history[sb]) : send(res, 404, { ok: false, error: 'not a leader' });
       }
       if (m[2] === 'message') {
