@@ -127,6 +127,7 @@
 
   function unpaired(title, text) {
     st.paired = false;
+    if (push) push.dropBrowser();
     stopEvents();
     elsewhere(false);
     st.current = null;
@@ -222,6 +223,7 @@
     $('menu-device').textContent = typeof device.name === 'string' ? device.name : '';
     showLeaders();
     startEvents();
+    refreshPush();
     const res = await api.leaders();
     if (res.ok) setLeaders(res.data);
     refreshL2();
@@ -1398,10 +1400,58 @@
     });
   }
   renderDictation();
+  // ── Notifications: a switch the person taps, per device (sw.js, API-push.md) ──
+  // Shown only where Web Push exists; on an iPhone that means the page was
+  // added to the Home Screen. The switch shows the truth: on only when the
+  // Mac and this browser both hold the subscription.
+  const pushNo = rcPushSupport({ serviceWorker: 'serviceWorker' in navigator, PushManager: 'PushManager' in window, Notification: 'Notification' in window }, navigator.userAgent);
+  const push = pushNo ? null : rcPush({ api, sw: navigator.serviceWorker, Notif: window.Notification });
+  const pushSt = { on: false, busy: false };
+  function renderPush(on, text) {
+    pushSt.on = on;
+    const b = $('push');
+    b.setAttribute('aria-checked', String(on));
+    b.disabled = pushSt.busy;
+    $('push-state').textContent = pushSt.busy ? 'Working…' : on ? 'On' : 'Off';
+    const note = $('push-note');
+    note.textContent = text || '';
+    note.hidden = !text;
+  }
+  if (pushNo) {
+    $('push').hidden = true;
+    $('push-note').textContent = RC_PUSH_TEXT[pushNo];
+    $('push-note').hidden = false;
+  } else {
+    $('push').hidden = false;
+  }
+  async function refreshPush() {
+    if (!push || pushSt.busy) return;
+    const r = await push.state();
+    if (!pushSt.busy) renderPush(r.state === 'on', r.text);
+  }
+  if (push) $('push').addEventListener('click', async e => {
+    e.stopPropagation();
+    if (pushSt.busy) return;
+    const turnOn = !pushSt.on;
+    pushSt.busy = true;
+    renderPush(pushSt.on, '');
+    // The tap's own call: nothing is awaited before the worker starts.
+    const r = await (turnOn ? push.enable() : push.disable());
+    pushSt.busy = false;
+    if (turnOn) renderPush(r.ok, r.ok ? '' : r.text);
+    else renderPush(false, r.ok ? '' : r.text);
+  });
+
+  // The person is looking at the page: the icon's badge has done its job.
+  const clearBadge = () => { if (document.visibilityState === 'visible') rcClearBadge(navigator); };
+  document.addEventListener('visibilitychange', clearBadge);
+  clearBadge();
+
   $('menu-btn').addEventListener('click', e => {
     e.stopPropagation();
     const open = $('menu').hidden;
     closeMenu();
+    if (open) refreshPush();
     $('menu').hidden = !open;
     $('menu-btn').setAttribute('aria-expanded', String(open));
   });

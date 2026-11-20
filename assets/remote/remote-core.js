@@ -368,6 +368,9 @@ function rcClient(fetchImpl, hooks = {}) {
     pairStart: (code, deviceName) => call('POST', '/r/pair/start', { code, device_name: deviceName }),
     pairStatus: id => call('GET', `/r/pair/status?request_id=${encodeURIComponent(id)}`),
     leaders: () => call('GET', '/r/leaders'),
+    pushKey: () => call('GET', '/r/push/key'),
+    pushSubscribe: sub => call('POST', '/r/push/subscribe', { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth }),
+    pushUnsubscribe: () => call('POST', '/r/push/unsubscribe', {}),
     history: (s, q = {}) => {
       const p = new URLSearchParams();
       if (q.before != null) p.set('before', String(q.before));
@@ -1280,4 +1283,103 @@ function rcActParts(kind, item, option) {
     case 'sandbox_remove': return ['Remove the stopped sandbox ', d(item?.name), '. This cannot be undone.'];
     default: return [];
   }
+}
+
+// ── Notifications (Web Push, API-push.md) ─────────────────────────────────
+// The page's own wording is English; the two notification texts are French
+// and live only in sw.js. A switch the person turns on by a tap, per device.
+// Nothing here logs a subscription, an endpoint or a key.
+const RC_PUSH_TEXT = {
+  unsupported: 'Notifications are not supported by this browser.',
+  home: 'To get notifications, first add sbxw to your Home Screen (Share, then Add to Home Screen) and open it from there.',
+  denied: 'Notifications are blocked for sbxw. To allow them again, open Settings, then Notifications, then sbxw on this iPhone, and turn Allow Notifications on.',
+  mac: 'The Mac refused to turn notifications on.',
+  unreachable: 'The Mac did not answer (is it awake?). Notifications stay off.',
+  browser: 'This browser could not turn notifications on. Try again.',
+  mac_off: 'Notifications are off on this phone, but the Mac did not answer, so it may still try to send one.',
+};
+
+// null when this browser can do Web Push, else the key of the one line to
+// show. `env`: { serviceWorker, PushManager, Notification } as booleans.
+function rcPushSupport(env, ua) {
+  if (env && env.serviceWorker && env.PushManager && env.Notification) return null;
+  return /\b(iPhone|iPad|iPod)\b/.test(String(ua || '')) ? 'home' : 'unsupported';
+}
+
+// The sentence for a failure; `reason` is the Mac's word, shown only when
+// it is a plain lower-case word.
+function rcPushFail(why, reason) {
+  const base = RC_PUSH_TEXT[Object.hasOwn(RC_PUSH_TEXT, why) ? why : 'browser'];
+  if (why === 'mac' && typeof reason === 'string' && /^[a-z_]{1,24}$/.test(reason)) return `${base} (${reason.replace(/_/g, ' ')})`;
+  return base;
+}
+
+// The switch's logic, with its world passed in: `api` (rcClient), `sw`
+// (navigator.serviceWorker), `Notif` (Notification). Every method answers,
+// none throws.
+function rcPush({ api, sw, Notif }) {
+  let key = null;
+  const sub = async () => {
+    try { const r = await sw.getRegistration(); return r ? await r.pushManager.getSubscription() : null; } catch (_) { return null; }
+  };
+  const fail = (why, reason) => ({ ok: false, why, text: rcPushFail(why, reason) });
+  const readKey = async () => {
+    const k = await api.pushKey();
+    if (k.ok && typeof k.data?.key === 'string' && rcFromB64u(k.data.key)) key = k.data.key;
+    return k;
+  };
+  return {
+    // 'on' only when the Mac and this browser both hold the subscription and
+    // the permission stands; any disagreement shows 'off' (a tap repairs it).
+    async state() {
+      const k = await readKey();
+      if (Notif.permission === 'denied') return { state: 'denied', text: RC_PUSH_TEXT.denied };
+      if (!k.ok) return { state: 'off', text: k.unreachable ? RC_PUSH_TEXT.unreachable : '' };
+      const mine = await sub();
+      return { state: k.data.on === true && !!mine && Notif.permission === 'granted' ? 'on' : 'off', text: '' };
+    },
+    // From the tap itself: the worker registers while the permission is
+    // asked (the prompt needs the tap, so nothing is awaited before it).
+    async enable() {
+      if (Notif.permission === 'denied') return fail('denied');
+      let reg;
+      try { reg = sw.register('/sw.js', { scope: '/' }); reg.catch(() => {}); } catch (_) { return fail('browser'); }
+      let perm;
+      try { perm = await Notif.requestPermission(); } catch (_) { return fail('browser'); }
+      if (perm !== 'granted') return fail('denied');
+      let s;
+      try {
+        await reg;
+        const ready = await sw.ready;
+        if (!key) await readKey();
+        const k = key && rcFromB64u(key);
+        if (!k) return fail('mac');
+        const old = await ready.pushManager.getSubscription();
+        if (old) await old.unsubscribe();
+        s = await ready.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: k });
+      } catch (_) { return fail('browser'); }
+      const res = await api.pushSubscribe({ endpoint: s.endpoint, p256dh: rcB64u(s.getKey('p256dh')), auth: rcB64u(s.getKey('auth')) });
+      if (res.ok && res.data?.ok === true) return { ok: true };
+      try { await s.unsubscribe(); } catch (_) {}
+      return res.unreachable || res.status === 0 ? fail('unreachable') : fail('mac', res.data?.reason ?? res.data?.error);
+    },
+    async disable() {
+      await this.dropBrowser();
+      const res = await api.pushUnsubscribe();
+      return res.ok ? { ok: true } : fail('mac_off');
+    },
+    // Browser side only (Forget this device, a `bye`): the Mac already
+    // dropped its copy. Never throws.
+    async dropBrowser() {
+      try { const s = await sub(); if (s) await s.unsubscribe(); } catch (_) {}
+    },
+  };
+}
+
+// The person is looking: clear the icon's badge, when the API exists.
+function rcClearBadge(nav) {
+  try {
+    if (nav && typeof nav.clearAppBadge === 'function') return Promise.resolve(nav.clearAppBadge()).catch(() => {});
+  } catch (_) {}
+  return Promise.resolve();
 }
