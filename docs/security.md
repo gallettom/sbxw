@@ -344,8 +344,9 @@ answer their multiple-choice questions, interrupt them. It goes through your own
 network (a "tailnet"); nothing passes through a server of sbxw's or anyone else's, and no
 conversation leaves the Mac except to your phone.
 
-It is **off by default**. This is step 1 of three: nothing irreversible can be done from a
-phone yet (no approval of a plan, a merge or a network request, no removal).
+It is **off by default**. Step 1 lets a phone do nothing irreversible. Step 2, also off
+until you turn it on at the Mac, lets it approve a short list of things with Face ID at each
+action: see "Approving from the phone" below.
 
 The wire contract is `.sbxw-artifacts/remote/API.md`; this section says what it is for and
 what it protects.
@@ -411,7 +412,7 @@ does the same as a revoke.
 | Read a leader's conversation: your prompts, its replies, messages from other sessions and from sbxw, questions. Its replies are sent as written (masked by your anonymise rules only), so a reply that quotes a file reaches the phone | See any tool's input or output, a file, a diff, a terminal, or the harness's own output (a `!` command's, a slash command's, hooks', task notifications, system reminders). These are shown as "3 steps" and nothing more |
 | Send it text, typed or dictated, as your own words (masked first by your anonymise rules), when it is idle at its prompt (see "What a message can do" below) | Type raw keys, open a terminal, create a sandbox or a thread; send a line starting with `!` (a shell command), `/` (a slash command) or `#`; send a control or invisible character; write to a leader that is working or waits for an answer at the Mac |
 | Answer a multiple-choice question (`AskUserQuestion`) | Allow a tool (a permission prompt): "This needs your Mac" |
-| Interrupt it (one Escape, as at the keyboard; it may take a few seconds while a line is being typed into that session) | Approve or refuse a plan, a merge, a network request; remove anything |
+| Interrupt it (one Escape, as at the keyboard; it may take a few seconds while a line is being typed into that session) | Approve or refuse a plan, a merge, a network request, or remove a sandbox, without Face ID at each action and level 2 turned on at the Mac (see "Approving from the phone") |
 | Dictate (the Mac transcribes; the text comes back to the phone to correct) | Touch secrets, the GitHub token, network rules, ports, kits, MCP servers, configuration, the relay, Jarvis, the daemon |
 | Hand a file to a leader (a photo, a PDF, a text): up to 25 MB each, at most 5 waiting (60 MB together) per leader; it reaches the sandbox only with a message you send, under `/tmp/sbxw-uploads/`; an unsent one is deleted after 30 minutes (see "What a file can do") | Send a program or an archive (refused by their first bytes); read a file back, list the uploads folder or learn any path; hand a file to anything but a running team leader; have a file typed or opened by the upload itself |
 
@@ -688,6 +689,102 @@ From a leader's screen the phone can read that leader's sandbox Kanban and open 
 - **What it cannot do.** It cannot add, move, edit, delete or send a ticket. It cannot read a file's content: there is no file route, and no file id, no on-disk name and no path leaves the Mac. It shows no other sandbox and no "all sandboxes" view. It has no write permission field at all.
 - **Text is data.** Ticket titles and descriptions are the person's words; thread titles and reports are agent text. They travel as JSON strings, bounded (title 160 characters, description 8,000, file name 120, history 60 lines of 200), and the page escapes them. A word that starts like an absolute path (`/x`, `~/x`, `C:\x`) is replaced by `[path]`, so a path of the Mac or of the sandbox does not leave in free text. This is a filter on the shape of a word, not a guarantee: a path written some other way in a ticket is the person's own text, shown to their own paired phone.
 - **Not journaled, not logged.** Reads are not actions, so the journal has nothing for them, and no log line names a ticket's title or text.
+
+### Approving from the phone
+
+Level 2: with Face ID (or Touch ID) at **each** action, a paired phone can approve a few
+things that otherwise wait for you at the Mac. It is **off by default**, turned on only at
+the Mac, and turned off with remote access. Contract:
+`.sbxw-artifacts/remote/API-level2.md`.
+
+**What a phone can approve, and what it is shown first**
+
+| Action | What the phone shows before you decide | What runs |
+|---|---|---|
+| Approve or refuse a plan, as it is | its sandbox, summary, justification, variant, and each thread's name, model, repo, scope, whole goal and ticket | the desktop's approve (the plan's own threads, nothing edited) or refuse (no note) |
+| Run a merge a lead proposed | the sandbox, the order, the lead's note and distillate, and per branch its tip, commits ahead of the base, files changed with insertions and deletions (numbers and paths, never diff content), and whether an earlier try of this merge failed on it | the desktop's merge: same order, stops at the first conflict, threads kept, distillate as proposed |
+| Answer a pending network request | the sandbox, the host and port, sbx's detail, the options the phone may use and those it may not | sbx's own answer, with one of that request's options |
+| Remove a stopped sandbox | the desktop's sentences: what is lost, that the workspace folder stays | the desktop's removal |
+
+What you see is what you approve: the daemon binds each Face ID check to a digest of exactly
+what was shown. If the plan, a branch tip, the base, the request or the sandbox changed in
+between (a plan edited, a branch moved, the request answered elsewhere, the sandbox started
+or created again under the same name), nothing is done and the phone says it changed.
+
+Agent text (goals, notes, the distillate, sbx's detail) reaches the phone as data, masked by
+your anonymise rules, and the page shows it as text.
+
+**What stays on the Mac**
+
+- A leader's tool permission prompt ("allow this command"): the phone says "This needs your
+  Mac", and there is no route for it.
+- Editing a plan's threads, writing a note on a refusal, closing threads after a merge,
+  editing a merge's distillate.
+- A network option that may leave a lasting rule. The phone offers only an option that says
+  it is one-time ("once") or that refuses or dismisses the request without "always" or
+  "rule". sbx 0.51 offers **Allow** and **Dismiss** for a refused host, and whether its Allow
+  writes a lasting rule has not been checked, so today the phone can only **dismiss**: Allow
+  is answered at the Mac. A host port request (`port:`) is port publishing and is never
+  listed on the phone.
+- Starting or stopping a sandbox, removing a running one, removing the Jarvis sandbox.
+- Everything level 3 already kept: secrets and the GitHub token, permanent network rules,
+  port publishing, kits, MCP servers, configuration, relay routing, Jarvis proposals, any
+  terminal, raw input, shutdown.
+
+**Turning it on and off, setting up Face ID, revoking**
+
+```
+sbxw remote approvals on              # asks first (y/N), says what it allows; needs remote access on
+sbxw remote approvals status          # on/off, and each device: Face ID set up or not
+sbxw remote approvals allow <device>  # let that phone set up Face ID once: type the six digits it shows
+sbxw remote approvals revoke <device> # that phone can no longer approve
+sbxw remote approvals off             # nothing can be approved from a phone; Face ID set-ups are kept
+```
+
+1. **(Mac)** `sbxw remote approvals on`.
+2. **(phone)** Tap "Enable Face ID". The phone shows six digits.
+3. **(Mac)** `sbxw remote approvals allow <device>` (the id from `sbxw remote devices`), then
+   type the six digits. That allows ONE set-up, for 5 minutes.
+4. **(phone)** Finish with Face ID. The phone now has a passkey for sbxw.
+
+A paired phone cannot set up Face ID by itself: a stolen device cookie on another phone
+would show its own digits, which you would never type. Jarvis and agents cannot turn level 2
+on, allow a device or set up a passkey: these are admin routes behind the UI token, level 2
+is remote state (not a `sbxw.toml` setting), and Jarvis's settings allowlist refuses it.
+
+`sbxw remote revoke <id>`, the phone's "Forget this device" and 30 days idle drop the
+device's passkey with it. `sbxw remote off` turns level 2 off too.
+
+**What a passkey is, and its limits**
+
+- The phone keeps a private key that Face ID or the phone's passcode unlocks; the Mac keeps
+  only its public key, its id and a counter (`~/.sbxw/remote/passkeys.json`, `0600`). No
+  secret is stored on the Mac.
+- **Anyone who can unlock the phone, by Face ID or by its passcode, can approve.** The
+  passkey proves the phone and an unlock, not who is holding it. If a passkey syncs through
+  iCloud Keychain, every device of that Apple account that can unlock it can approve too.
+- One passkey per device, made for one tailnet name. If the tailnet name changes (a new
+  tailnet, the machine renamed), the passkey stops working and the phone says to set up
+  Face ID again.
+- Each action needs a fresh Face ID check: a challenge from the Mac, good for 60 s, once,
+  for that action on that item. No PIN, no "confirm" button, no approval by the paired
+  cookie alone.
+- Five failed checks in a minute (twenty in an hour) pause that phone's approvals for the
+  rest of the window; other phones are not affected. A signature counter that goes back (a
+  sign the key was copied) drops the passkey: allow the phone again at the Mac.
+- sbxw asks the browser for the phone's built-in authenticator but cannot prove that is what
+  answered (no vendor attestation is asked for): the trust comes from your typing the six
+  digits at the Mac.
+
+**The journal** (`sbxw remote journal`) records each try: the device, the time, the kind
+(`plan_approve`, `plan_refuse`, `merge`, `network_respond`, `sandbox_remove`,
+`passkey_registered`, `passkey_failed`, `changed`, `refused`) and what was acted on by name
+only (a plan id, a sandbox name, a host). Never a goal, a note, a diff or a path; the
+daemon's info log says only "device <id>: <kind>".
+
+**Not verified on real hardware:** Face ID on a real iPhone, Safari's WebAuthn on a
+`.ts.net` name, a real merge started from the phone, and whether sbx's Allow on a refused
+host writes a lasting rule.
 
 ### The Tailscale node
 
