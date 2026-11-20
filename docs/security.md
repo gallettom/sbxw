@@ -794,9 +794,17 @@ device's passkey with it. `sbxw remote off` turns level 2 off too.
 
 **The journal** (`sbxw remote journal`) records each try: the device, the time, the kind
 (`plan_approve`, `plan_refuse`, `merge`, `network_respond`, `sandbox_remove`,
-`passkey_registered`, `passkey_failed`, `changed`, `refused`) and what was acted on by name
+`passkey_requested`, `passkey_registered`, `passkey_failed`, `changed`, `refused`) and what was acted on by name
 only (a plan id, a sandbox name, a host). Never a goal, a note, a diff or a path; the
 daemon's info log says only "device <id>: <kind>".
+
+**If Face ID keeps failing.** If the phone keeps saying a Face ID request "expired", "too
+many" tries or requests, or that it is "open elsewhere" (its live view closed by a newer
+one), another client may hold a copy of this device's cookie: it can void your request,
+use up the limits and close your page, though it cannot approve anything. `sbxw remote
+journal` then shows many `passkey_requested` or `passkey_failed` lines you did not cause.
+Revoke the device on the Mac (`sbxw remote revoke <id>`), pair the phone again, and enable
+Face ID again.
 
 **Load.** The approvals badge on the phone comes from one count the daemon refreshes at
 most every 5 s for all open pages, and one phone holds at most 4 open event streams (a

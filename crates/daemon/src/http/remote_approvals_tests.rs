@@ -1048,3 +1048,26 @@ async fn the_desktop_merge_is_unpinned_and_the_phones_is_pinned() {
     let last = w.fake.log().into_iter().rfind(|c| c.contains("sbxw-thread-merge")).unwrap();
     assert!(last.ends_with(&format!("sbxw-thread-merge ={} =alpha", ws4.display())), "{last}");
 }
+
+/// Review Q1: each Face ID request is journaled (device, time, kind), so a
+/// flood from a copy of the cookie shows on the Mac; it carries no digits,
+/// no request id, no target.
+#[tokio::test]
+async fn a_face_id_request_is_journaled_and_carries_nothing_else() {
+    let w = world();
+    let p = pair(&w, "phone").await;
+    let r = call(&w.router, "POST", "/r/passkey/start", Some(&p.token), json!({})).await;
+    let (rid, digits) = (r.json()["request_id"].as_str().unwrap().to_string(), r.json()["check"].as_str().unwrap().to_string());
+    let e = journal(&w).into_iter().rfind(|e| e.kind == Kind::PasskeyRequested).expect("journaled");
+    assert_eq!((e.device_id.as_str(), e.target.as_deref(), e.size), (p.id.as_str(), None, None));
+    let text = std::fs::read_to_string(w.app.remote_dir_for_tests().join("journal.jsonl")).unwrap();
+    let line = text.lines().rfind(|l| l.contains("passkey_requested")).unwrap();
+    let v: Value = serde_json::from_str(line).unwrap();
+    let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(keys, ["at_ms", "device_id", "device_name", "kind"], "{line}");
+    // Its only fields are the four above, so neither the digits nor the
+    // request id can be in it.
+    assert!(!text.contains(&rid), "{line}");
+    let _ = digits;
+}

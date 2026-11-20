@@ -33,6 +33,9 @@ pub enum Kind {
     PasskeyFailed,
     /// The item changed between the challenge and the action: nothing done.
     Changed,
+    /// A phone asked to set up Face ID (no digits, no request id): a flood
+    /// of these means another client holds a copy of the device's cookie.
+    PasskeyRequested,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

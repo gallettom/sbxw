@@ -323,6 +323,7 @@ impl App {
         let now = now_ms();
         rt.level2.start_limit.hit(&d.id, now).map_err(|ms| L2Error { retry_ms: Some(ms), ..L2Error::new(429, "limited", "Too many requests. Try again later.") })?;
         let r = rt.level2.enrol.start(&d.id, now);
+        rt.record_target(&d.id, &d.name, Kind::PasskeyRequested, None);
         tracing::info!("remote access: device {}: passkey requested", d.id);
         Ok(r)
     }
