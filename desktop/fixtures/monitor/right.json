@@ -847,31 +847,37 @@
       "seq": 52,
       "at": 1763460134000,
       "kind": "user_prompt",
-      "text": "ok, thanks. Also keep the totals row."
+      "text": "Please also check how the export behaves with a very large invoice. Please also check how the export behaves with a very large invoice. Please also check how the export behaves with a very large invoice. If it is slow, stream the rows instead of building the whole file in memory, and tell me what you measured before you change anything."
      },
      {
       "seq": 53,
       "at": 1763460154000,
       "kind": "assistant_text",
-      "text": "Done: the totals row is the last line of the CSV, with the sum of every column."
+      "text": "I will measure first, then decide."
      },
      {
       "seq": 54,
       "at": 1763460174000,
       "kind": "user_prompt",
-      "text": "Please also check how the export behaves with a very large invoice. Please also check how the export behaves with a very large invoice. Please also check how the export behaves with a very large invoice. Please also check how the export behaves with a very large invoice. Please also check how the export behaves with a very large invoice. Please also check how the export behaves with a very large invoice. Please also check how the export behaves with a very large invoice. If it is slow, stream the rows instead of building the whole file in memory, and tell me what you measured before you change anything."
+      "text": "/a-very-long-path-without-a-spacea-very-long-path-without-a-spacea-very-long-path-without-a-spacea-very-long-path-without-a-space"
      },
      {
       "seq": 55,
       "at": 1763460194000,
       "kind": "assistant_text",
-      "text": "I will measure first, then decide."
+      "text": "That path is one word to the reader, so it wraps inside the bubble."
      },
      {
       "seq": 56,
       "at": 1763460214000,
       "kind": "user_prompt",
-      "text": "/a-very-long-path-without-a-spacea-very-long-path-without-a-spacea-very-long-path-without-a-spacea-very-long-path-without-a-space"
+      "text": "ok, thanks."
+     },
+     {
+      "seq": 57,
+      "at": 1763460234000,
+      "kind": "assistant_text",
+      "text": "Done: the totals row is the last line of the CSV."
      }
     ]
    },
