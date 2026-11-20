@@ -58,6 +58,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/r/leaders/:sandbox/answer"),
     ("POST", "/r/leaders/:sandbox/interrupt"),
     ("POST", "/r/voice/transcribe"),
+    ("GET", "/r/leaders/:sandbox/kanban"),
+    ("GET", "/r/leaders/:sandbox/kanban/:ticket"),
 ];
 
 /// Data routes a phone may call before it is paired.
@@ -80,6 +82,8 @@ pub fn remote_router(app: Arc<App>) -> Router {
         .route("/r/leaders/:sandbox/answer", post(answer))
         .route("/r/leaders/:sandbox/interrupt", post(interrupt))
         .route("/r/voice/transcribe", post(transcribe).layer(DefaultBodyLimit::max(AUDIO_BODY_MAX)))
+        .route("/r/leaders/:sandbox/kanban", get(super::remote_kanban::board))
+        .route("/r/leaders/:sandbox/kanban/:ticket", get(super::remote_kanban::ticket))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(BODY_MAX))
         .layer(axum::middleware::from_fn_with_state(app.clone(), remote_guard))
@@ -376,6 +380,7 @@ async fn events(State(app): S, Extension(d): Extension<DeviceCtx>) -> Response {
     let mut kicks = app.remote_kicks();
     let leaders_frame = |l: &Vec<crate::svc::remote_access::LeaderView>| Sse::default().event("leaders").data(json!({ "leaders": l }).to_string());
     let mut last = app.remote_leaders();
+    let mut kanban_seen = super::remote_kanban::baseline(&app, &last);
     let _ = tx.try_send(leaders_frame(&last));
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(RENEW);
@@ -435,6 +440,13 @@ async fn events(State(app): S, Extension(d): Extension<DeviceCtx>) -> Response {
                             && sbxw_core::SandboxRef::parse(&n.sandbox).ok().and_then(|sb| app.remote_leader_session(&sb)).as_deref() == Some(n.session_id.as_str());
                         if ours && tx.send(Sse::default().event("history").data(json!({ "sandbox": n.sandbox, "seq": n.seq }).to_string())).await.is_err() {
                             break;
+                        }
+                    }
+                    Ok(ev @ (Event::Tickets(_) | Event::Plan(_))) => {
+                        if let Some(f) = super::remote_kanban::changed(&app, &last, &ev, &mut kanban_seen) {
+                            if tx.send(f).await.is_err() {
+                                break;
+                            }
                         }
                     }
                     Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}

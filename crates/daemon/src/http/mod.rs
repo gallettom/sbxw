@@ -24,6 +24,7 @@ pub mod jarvis;
 pub mod mac;
 pub mod remote;
 pub mod remote_admin;
+pub mod remote_kanban;
 pub mod stream;
 pub mod token;
 pub mod ui;
