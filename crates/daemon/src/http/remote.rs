@@ -1,6 +1,6 @@
 //! The remote listener (`remote_addr`): what a paired phone may do, and
 //! nothing else. The contract is `.sbxw-artifacts/remote/API.md`; the threat
-//! model is `docs/remote-access.md`.
+//! model is `docs/security.md#remote-access`.
 //!
 //! The router is built here from an explicit list ([`ROUTES`] is that list,
 //! for the route-walk test): nothing of the UI router is mounted, merged or

@@ -1,4 +1,4 @@
-//! Remote access (`docs/remote-access.md`): the state on disk, the remote
+//! Remote access (`docs/security.md#remote-access`): the state on disk, the remote
 //! listener's life, the tailnet sidecar, pairing, devices, the journal, and
 //! what a paired phone may do to a running team leader. The rules are
 //! `sbxw_core::remote_access`'s; the routes are `http::remote` (the phone)

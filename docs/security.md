@@ -59,26 +59,8 @@ loopback.
 
 ### The remote listener
 
-Off by default; see [remote-access.md](remote-access.md) for the threat model in full.
-
-- **Its own router, built from an explicit list.** Nothing of the UI router is mounted on
-  it; any other path is `404`. A test reads every route of the UI router from the router
-  itself and checks each is `404` on the remote listener with a valid device token.
-- **Its own token.** A device token (256 bits) made at pairing, kept by the daemon as a
-  SHA-256 only, carried only by the `__Host-sbxw_device` cookie (`HttpOnly; Secure;
-  SameSite=Strict`). The remote listener never reads the UI token or the `sbxw_ui`
-  cookie; the UI listener never accepts a device token.
-- **Pairing needs the Mac twice**: a one-time code it shows (192 bits, 5 minutes, single
-  use) and the person's yes after comparing a 6-digit number shown on both screens.
-- **Guards**: `Host` must be the tailnet name the sidecar serves (or the listener's own
-  loopback address); `Origin` must be that page on every write; no CORS; no path
-  normalisation (`..`, `//`, encoded bytes: `404`); JSON bodies with size caps; rate limits
-  on pairing and on failed tokens, with global caps that hold whatever source a caller
-  claims; a strict Content-Security-Policy.
-- **No text in the journal or the logs**: device, time and kind of action only.
-- **The sidecar** is found next to the `sbxw` executable (never on `PATH`), started with a
-  fixed argv and a cleared environment, and its status file is read as untrusted input
-  (size cap, strict schema, hostname pattern, freshness, the daemon's own child pid).
+Off by default. Its own router, its own token, pairing confirmed on the Mac: see
+[Remote access](#remote-access) below for the threat model in full.
 
 ### The agent listener
 
@@ -353,6 +335,208 @@ write; read it.
   removed first and the new one is created `O_EXCL`, so a symlink planted there
   is not followed. It is copied in with `/bin/cp`, which keeps `/etc/hosts`
   root-owned `644`, and removed afterwards.
+
+## Remote access
+
+Remote access lets a phone you pair talk to your **running team leaders** while you are
+away from the Mac: read their conversations, type or dictate to them, answer their
+multiple-choice questions, interrupt them. It goes through your own private Tailscale
+network (a "tailnet"); nothing passes through a server of sbxw's or anyone else's, and no
+conversation leaves the Mac except to your phone.
+
+It is **off by default**. This is step 1 of three: nothing irreversible can be done from a
+phone yet (no approval of a plan, a merge or a network request, no removal).
+
+The wire contract is `.sbxw-artifacts/remote/API.md`; this section says what it is for and
+what it protects.
+
+### Turning it on, pairing, turning it off
+
+```
+sbxw remote on          # asks first, says what it exposes
+sbxw remote status      # on/off, the tailnet machine, devices, keeping awake
+sbxw remote pair        # prints a one-time link, then asks you to confirm the phone
+sbxw remote devices     # paired devices
+sbxw remote revoke <id> # unpair one, at once
+sbxw remote journal     # what devices did, never what they wrote
+sbxw remote off         # stop everything; paired devices are kept
+sbxw remote forget-node # (when off) log the tailnet machine out and delete its state
+```
+
+1. `sbxw remote on`. The daemon opens its remote listener and starts `sbxw-tailnet`, which
+   joins your tailnet as a machine named `sbxw` (the first time, `sbxw remote status`
+   shows a Tailscale login link).
+2. `sbxw remote pair` prints a link `https://sbxw.<your tailnet>.ts.net/#pair=<code>`. Open
+   it on the phone (the phone must be on the same tailnet, with the Tailscale app). The
+   code is good once, for 5 minutes. The CLI prints the link only: drawing a QR code in
+   the terminal would need a new library.
+3. The phone asks for a device name and shows a 6-digit number. The terminal shows the
+   same name and number: if they match, answer `y`. The phone is paired.
+4. Add the page to the phone's home screen if you like.
+
+**To cut access**: `sbxw remote revoke <id>` (one phone, at once: its open page loses
+access immediately), or `sbxw remote off` (everything: the listener and the tailnet machine
+stop). A phone unused for 30 days is unpaired by itself. "Forget this device" on the phone
+does the same as a revoke.
+
+### What a phone can and cannot do
+
+| A paired phone can | A paired phone cannot |
+|---|---|
+| List the running team leaders (the main session of a running sandbox that leads a team), and see which needs you | See any other session: threads, other sandboxes, Jarvis |
+| Read a leader's conversation: your prompts, its replies, messages from other sessions, questions | See any tool's input or output, a file, a diff, a terminal. Tool work is shown as "3 steps" and nothing more |
+| Send it text, typed or dictated, as your own words (masked first by your anonymise rules) | Type raw keys, open a terminal, create a sandbox or a thread |
+| Answer a multiple-choice question (`AskUserQuestion`) | Allow a tool (a permission prompt): "This needs your Mac" |
+| Interrupt it (one Escape, as at the keyboard) | Approve or refuse a plan, a merge, a network request; remove anything |
+| Dictate (the Mac transcribes; the text comes back to the phone to correct) | Touch secrets, the GitHub token, network rules, ports, kits, MCP servers, configuration, the relay, Jarvis, the daemon |
+
+These limits are enforced by the daemon, not by the page: the routes for everything in
+the right column do not exist on the remote listener at all.
+
+### The threat model, in plain words
+
+**What sbxw protects against**
+
+- *Someone on the internet.* The remote listener binds to loopback only
+  (`remote_addr`, default `127.0.0.1:7683`; any other address is refused at load). Only
+  `sbxw-tailnet` reaches it, and it only serves your tailnet. There is no public address.
+- *Someone else on your tailnet* (a shared tailnet, a compromised device of yours). Being
+  on the tailnet is not enough: every data route needs a **paired device token**. Pairing
+  needs a one-time code shown on the Mac (192 bits, 5 minutes, single use) AND your `y` on
+  the Mac after comparing a 6-digit number.
+- *A stolen or lost phone.* Revoke it: access ends at once, including open pages. Unused
+  for 30 days, it is dropped anyway. The phone keeps no conversation (no storage, no
+  service worker).
+- *A web page you visit, on the phone or the Mac.* The token is an `HttpOnly; Secure;
+  SameSite=Strict` cookie named `__Host-sbxw_device`, bound to the tailnet name. Every
+  write must carry the page's own `Origin`; the `Host` must be the tailnet name. No CORS,
+  no framing, a strict Content-Security-Policy (`default-src 'self'`).
+- *Another process on the Mac.* It can reach the loopback listener, but without a device
+  token it gets only the page and the two pairing calls, rate-limited per source and in
+  total (the global limits hold whatever source it claims). It cannot read the token: the
+  daemon stores only a SHA-256 of it, in `~/.sbxw/remote/state.json` (`0600`).
+- *The UI token leaking to the phone, or the device token to the UI.* Neither listener
+  accepts the other's token. The phone's token has no other power than the list above.
+- *Your words in logs.* The journal records which device did which kind of thing and when,
+  never the text of a message, an answer or a transcription; neither do the daemon's logs
+  (a test captures them).
+
+**What it does not protect against**
+
+- Someone who holds your **unlocked, paired phone**: they can do what you can from it (the
+  left column). Revoke it from the Mac.
+- Someone who controls your **Mac user account**: they control sbxw anyway.
+- Someone who controls your **Tailscale account**: they can add a device to your tailnet,
+  but still cannot pair without your `y` on the Mac.
+- **Tailscale itself.** Traffic is end-to-end encrypted between your devices (WireGuard,
+  then HTTPS terminated by `sbxw-tailnet` on the Mac); Tailscale's coordination server
+  sees which devices exist, not the content. Check Tailscale's terms for your situation.
+- The **machine name is public**: HTTPS certificate names go to public Certificate
+  Transparency logs. Keep the neutral name `sbxw`.
+- **A closed lid.** While on and on mains power, sbxw keeps the Mac from idling to sleep
+  (`caffeinate`; no system setting is changed). On battery, or with the lid closed and no
+  external display, macOS may sleep, and the phone then says sbxw is unreachable.
+
+### How it fits together
+
+```
+phone (Safari, on your tailnet)
+  └─ HTTPS ─▶ sbxw-tailnet (on the Mac, machine "sbxw" of your tailnet; terminates TLS)
+                └─ HTTP, loopback ─▶ daemon remote listener 127.0.0.1:7683
+                                       (its own router; device token)
+             daemon UI listener 127.0.0.1:7681  ◀─ never reached from the phone
+```
+
+- The daemon starts `sbxw-tailnet` (found next to the `sbxw` executable, never on `PATH`)
+  when remote access is turned on, and at daemon start while it is on; it stops it when it
+  is turned off. The sidecar writes its state to `~/.sbxw/remote/tailnet.json`, which the
+  daemon reads as untrusted input.
+- State under `~/.sbxw/remote/` (directory `0700`, files `0600`): `state.json` (on/off,
+  devices with hashed tokens), `journal.jsonl` (the last 1000 entries), `tailnet.json`,
+  `tailnet/` (the node's keys).
+- The Mac side is driven through admin routes on the UI listener (`/api/remote*`, UI
+  token as for every UI route): the CLI now, the desktop app later. Jarvis cannot turn
+  remote access on or move its listener.
+- The remote listener's routes are built from one explicit list; a test walks every route
+  of the UI router and checks that each is absent from the remote listener, and that every
+  remote data route refuses the UI token and no token.
+
+### The phone page
+
+One page, made for a phone and usable on a tablet, served by the remote listener at the
+root of `https://<tailnet name>/`. It shares no script with the main web UI: its files are
+`assets/remote/` (`index.html`, `remote-core.js`, `remote.js`, `remote.css`,
+`manifest.webmanifest` and three icons made from the sbxw mark), plain JavaScript, no
+framework, no build step, no font, nothing from another origin. "Add to Home Screen" gives
+a standalone app named sbxw.
+
+#### Screens
+
+- **Pairing.** Opened from the link or QR code the Mac shows (`#pair=<code>`). The page
+  reads the code from the fragment and removes it from the address bar before any request,
+  so it is in no history entry, request line or `Referer`. It asks for a device name
+  (prefilled from the platform: "iPhone", "iPad"...), then shows the 6-digit check value
+  in large digits: "Compare with the number on your Mac, then confirm there." It polls
+  every 1.5 s until the Mac confirms or refuses. Refused, expired, invalid and rate-limited
+  each say so in a sentence; nothing is retried.
+- **Not paired.** No code and no device cookie, or a `401` anywhere, or the stream's
+  `bye`: "This device is not paired" / "no longer paired" / "Remote access is off".
+- **Leaders.** The running team leaders: name, state (needs you, working, idle) and the
+  last activity. Those that need the person come first, then those at work. One tap opens
+  one. An empty list says "No team leader is running".
+- **A conversation.** Like a chat: the leader and other agents on the left (green tint),
+  the person on the right (blue tint), "From sbxw" lines neutral, a run of tool steps as
+  one quiet line ("3 steps"). Older entries load when scrolled to the top; new ones arrive
+  on the `history` nudge of `/r/events`. A pending multiple-choice question is a card: pick
+  an option, then "Send answer". A permission prompt or anything else the phone cannot
+  settle says "This needs your Mac."
+- **Composer.** At the bottom on its own ground: a field that grows to a few lines, the
+  microphone, Send, and below them Interrupt, which asks "Interrupt <leader>?" and acts
+  only on a second tap. Enter is a new line: only Send sends.
+- **Dictation.** Tap the microphone to record, tap again to stop (two minutes at most).
+  The audio is turned into 16 kHz samples on the phone, sent to `/r/voice/transcribe`, and
+  the text is put INTO the field for the person to read and correct. It never sends.
+  Without HTTPS, without a microphone or with the permission refused, the page says why.
+- **Unreachable.** When sbxw does not answer: "sbxw is unreachable (is the Mac awake?)".
+  The text being typed stays in the field. Nothing is queued: a message that did not go is
+  reported, and the person presses Send again when sbxw is back.
+- **Menu.** The device's name and "Forget this device" (second tap confirms), which calls
+  `/r/logout`.
+
+#### What the page keeps
+
+Only the device name, in `localStorage` under `sbxw-remote-prefs`, to prefill pairing. No
+message, answer, transcription or conversation is stored on the phone (no
+`sessionStorage`, IndexedDB, Cache API or service worker), and nothing is written to the
+console. The device token is an HttpOnly cookie the page never sees.
+
+#### Agent text is data
+
+Every text from the Mac (an agent's reply, a leader's or sandbox's name, a question and
+its options) is set as text, except an agent's reply, which goes through the fixed
+Markdown subset of the main UI (`chatMarkdown`, copied into `remote-core.js` and kept equal
+by a test): escaped first, then only paragraphs, lists, code, bold, italics and links. A
+link shows its address beside its label, opens only on a tap, in a new context, and only
+for `http` and `https`; the page checks the elements once more after rendering. File paths
+stay plain text.
+
+#### Tests
+
+`node --test tests/js/remote-core.test.mjs` (no browser) and
+`tests/js/remote-page.test.mjs` (Chromium through Playwright, skipped without them:
+`PLAYWRIGHT_MODULE`, `CHROMIUM_PATH`), which runs the page against
+`tests/js/remote-standin.mjs`, a stand-in of the remote listener with the listener's CSP.
+
+### The Tailscale node
+
+Remote access reaches the Mac through `sbxw-tailnet`, a small program shipped beside `sbxw` and started by the daemon while remote access is on. It joins your tailnet as its own machine, named `sbxw`, and serves only HTTPS on that machine's port 443, forwarded to the daemon's remote listener on loopback. It is not the Mac's own Tailscale: nothing else on the Mac is reachable through it, and nothing needs installing besides sbxw. Details: [tailnet/README.md](../tailnet/README.md).
+
+- **First join:** sbxw shows a Tailscale login link; open it and add the machine. No auth key is asked for or stored.
+- **HTTPS is required.** Turn on MagicDNS and HTTPS Certificates on the DNS page of the admin console (login.tailscale.com/admin/dns). Without them sbxw says what is missing and serves nothing: the phone's microphone needs HTTPS, so there is no plain-HTTP fallback.
+- **The name is public.** Certificate names go to the public Certificate Transparency logs, so keep the neutral `sbxw`.
+- **Only your tailnet.** Funnel (public Internet), SSH, Taildrop, exit node and routes are never enabled, and most are compiled out. Tailscale's log upload is off.
+- **Its state** (`~/.sbxw/remote/tailnet`, private to you) holds the node's keys and certificate. "Forget this node" logs it out and deletes that folder; then remove `sbxw` from the Machines page of the admin console if it is still listed.
+- **Headers:** the daemon receives the peer's tailnet address and machine name as information for its journal and rate limits, never as proof of anything. A phone is trusted only once paired.
 
 ## Known edges
 

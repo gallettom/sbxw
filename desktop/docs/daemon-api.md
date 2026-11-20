@@ -145,7 +145,7 @@ drawn smaller when another window owns a larger one (TERMINAL.md).
 
 ### Remote access (admin, not covered yet by a screen)
 
-The Mac's side of [remote access](../../docs/remote-access.md), on the UI listener with the
+The Mac's side of [remote access](../../docs/security.md#remote-access), on the UI listener with the
 UI token. The contract is `.sbxw-artifacts/remote/API.md` section 5; the CLI
 (`sbxw remote`) uses these today.
 

@@ -26,7 +26,7 @@ pub struct Config {
     pub web_addr: String,
     /// The agent listener: the one address sandboxes are allowed to reach.
     pub agent_addr: String,
-    /// The remote listener (`docs/remote-access.md`): loopback only, bound only
+    /// The remote listener (`docs/security.md#remote-access`): loopback only, bound only
     /// while remote access is on, reached only through the tailnet sidecar.
     pub remote_addr: String,
     /// Attach this instead of the agent in the main pane (`sbx exec -it … <cmd>`).

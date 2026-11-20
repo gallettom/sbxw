@@ -1,6 +1,6 @@
 //! `sbxw remote`: remote access from a terminal, until the desktop app has a
 //! panel for it. Everything goes through the daemon's admin routes on the UI
-//! listener (`/api/remote*`, see `docs/remote-access.md`).
+//! listener (`/api/remote*`, see `docs/security.md#remote-access`).
 //!
 //! `pair` prints the link only: drawing a QR code in the terminal would need
 //! a new crate. The y/N prompt after the check is the confirmation on the Mac.

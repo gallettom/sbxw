@@ -1,5 +1,5 @@
 //! Remote access: a paired phone talks to a running team leader over a
-//! private Tailscale network (see `docs/remote-access.md`).
+//! private Tailscale network (see `docs/security.md#remote-access`).
 //!
 //! Not Remote Control (`crate::remote`): that is claude.ai driving a session.
 //! Here the daemon itself answers a second, reduced listener (`remote_addr`),
