@@ -35,6 +35,7 @@ sherpa-rs = { version = "0.6.8", default-features = false, features = ["static"]
 voice = ["dep:sherpa-rs"]
 
 [dev-dependencies]
+sbxw-core = { workspace = true, features = ["test-authenticator"] }
 tempfile.workspace = true
 serde_norway.workspace = true
 tower.workspace = true

@@ -32,6 +32,7 @@ futures-util = "0.3"
 portable-pty = "0.8"
 getrandom = "0.2"
 sha2 = "0.10"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 async-trait = "0.1"
 ureq = { version = "2", default-features = false, features = ["json"] }
 tempfile = "3"
