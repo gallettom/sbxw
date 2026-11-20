@@ -220,6 +220,13 @@ enum Cmd {
         #[arg(long, default_value = "sbxw.toml")]
         config: PathBuf,
     },
+    /// Remote access from a paired phone, over your tailnet (status, on, off, pair, devices, revoke, journal).
+    Remote {
+        #[command(subcommand)]
+        cmd: Option<cmd::remote::RemoteCmd>,
+        #[arg(long, default_value = "sbxw.toml")]
+        config: PathBuf,
+    },
     /// Jarvis's voice: its local models (status, install, cancel, rm).
     Voice {
         #[command(subcommand)]
@@ -410,6 +417,7 @@ fn main() -> Result<()> {
         Cmd::Template { cmd: TemplateCmd::Ls } => cmd::template::ls(),
         Cmd::Mac { cmd, config } => cmd::mac::run(cmd, &config),
         Cmd::Voice { cmd, config } => cmd::voice::run(cmd.unwrap_or_default(), &config),
+        Cmd::Remote { cmd, config } => cmd::remote::run(cmd.unwrap_or_default(), &config),
         Cmd::Cache { action, config } => cmd::cache(action.unwrap_or_default(), &config),
         Cmd::Down { name } => cmd::down(name),
         Cmd::Update { check, no_island } => update::run(check, no_island),

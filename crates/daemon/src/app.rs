@@ -124,6 +124,9 @@ pub struct App {
     pub(crate) canvas: Mutex<crate::svc::canvas::Book>,
     /// The tickets on disk, per sandbox, read on first use (see `svc::tickets`).
     pub(crate) tickets: Mutex<crate::svc::tickets::Store>,
+    /// Remote access: state, devices, pairing, the remote listener and the
+    /// tailnet sidecar (see `svc::remote_access`).
+    pub(crate) remote_access: Mutex<crate::svc::remote_access::RemoteRuntime>,
 }
 
 pub struct AppBuilder {
@@ -143,6 +146,7 @@ impl AppBuilder {
         plan_book.load_logs(load_team_logs(&store.paths.plans().join("team")));
         let daemon_kits = Mutex::new(self.cfg.kits.clone());
         let emphasis = Mutex::new(self.cfg.emphasis.clone());
+        let remote_access = Mutex::new(crate::svc::remote_access::RemoteRuntime::load(&store.paths.root));
         let jarvis = sbxw_core::jarvis::Book::load(crate::svc::jarvis::load(&store.paths.state().join("jarvis.json")));
         Arc::new(App {
             store,
@@ -192,6 +196,7 @@ impl AppBuilder {
             cpu_probe: Mutex::new(crate::svc::stats::CpuProbe::Os),
             canvas: Mutex::new(Default::default()),
             tickets: Mutex::new(Default::default()),
+            remote_access,
         })
     }
 }

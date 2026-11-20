@@ -11,6 +11,8 @@ bare address shows a page that says to run `sbxw web`. The token is new each
 time the daemon starts: after a restart an open tab reloads onto that page,
 and the newly printed address signs it in again. See
 [Security: two listeners](security.md#two-listeners).
+A paired phone has its own reduced page, over your tailnet: see
+[Remote access](security.md#remote-access).
 
 ![The web UI with one sandbox attached](images/overview.png)
 

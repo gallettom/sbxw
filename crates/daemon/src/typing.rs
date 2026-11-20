@@ -65,6 +65,7 @@ async fn until_dead(s: &PtySession) {
 /// for its first frame (racing its death, so an agent that cannot start does
 /// not cost the whole ready timeout).
 pub async fn type_and_submit(session: &Arc<PtySession>, text: &str, fresh: bool) -> Result<(), String> {
+    let _line = session.typing.lock().await;
     let mut rx = session.subscribe();
     if fresh {
         tokio::select! {
@@ -96,6 +97,7 @@ pub async fn type_and_submit(session: &Arc<PtySession>, text: &str, fresh: bool)
 
 /// Send keystrokes one at a time, letting the TUI redraw between them.
 pub async fn keys(session: &Arc<PtySession>, keys: &[&[u8]]) {
+    let _line = session.typing.lock().await;
     for k in keys {
         session.write(&[k]).await;
         tokio::time::sleep(KEY_DELAY).await;

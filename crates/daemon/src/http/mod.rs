@@ -5,6 +5,9 @@
 //!   user's UI token (see `guard`, `token`).
 //! * **Agent** (`agent_addr`): the only port a sandbox's policy allows, the
 //!   only calls an agent may make, each authenticated by its token.
+//! * **Remote** (`remote_addr`, see `remote`): a paired phone, through the
+//!   tailnet sidecar. Bound only while remote access is on, by
+//!   `svc::remote_access`, never here; its router shares nothing with these.
 //!
 //! An agent call that lands on the UI port — a sandbox still running tooling
 //! from before the split — gets a 410 that says how to fix it.
@@ -19,6 +22,8 @@ pub mod error;
 pub mod guard;
 pub mod jarvis;
 pub mod mac;
+pub mod remote;
+pub mod remote_admin;
 pub mod stream;
 pub mod token;
 pub mod ui;
@@ -26,6 +31,14 @@ pub mod ws;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod remote_tests;
+#[cfg(test)]
+mod remote_review_tests;
+#[cfg(test)]
+mod remote_review2_tests;
+#[cfg(test)]
+mod remote_review3_tests;
 
 use crate::app::App;
 use axum::http::{header, HeaderValue};
@@ -41,6 +54,7 @@ pub fn ui_router(app: Arc<App>) -> Router {
         .merge(ui::routes())
         .merge(mac::ui_routes())
         .merge(browser::routes())
+        .merge(remote_admin::routes())
         .route("/ws", get(ws::handler))
         .route("/api/hook", any(moved))
         .route("/api/relay/ask", any(moved))
@@ -95,6 +109,7 @@ pub async fn serve(app: Arc<App>) -> anyhow::Result<()> {
     token::write(&app.store.paths, &app.ui_token)
         .map_err(|e| anyhow::anyhow!("cannot write {} ({e})", token::path(&app.store.paths).display()))?;
     forget_token_on_signal(app.clone());
+    app.remote_boot().await;
     tracing::info!("web UI on http://{} (http://sbxw.localhost:{})", app.cfg.web_addr, app.cfg.web_port());
     tracing::info!("agent API on {} (sandboxes reach it as host.docker.internal)", app.cfg.agent_addr);
     let (u, a) = tokio::join!(

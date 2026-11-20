@@ -26,6 +26,9 @@ pub struct Config {
     pub web_addr: String,
     /// The agent listener: the one address sandboxes are allowed to reach.
     pub agent_addr: String,
+    /// The remote listener (`docs/security.md#remote-access`): loopback only, bound only
+    /// while remote access is on, reached only through the tailnet sidecar.
+    pub remote_addr: String,
     /// Attach this instead of the agent in the main pane (`sbx exec -it … <cmd>`).
     pub web_shell: String,
     pub network_allow: Vec<String>,
@@ -158,6 +161,7 @@ impl Default for Config {
         Self {
             web_addr: DEFAULT_WEB_ADDR.into(),
             agent_addr: DEFAULT_AGENT_ADDR.into(),
+            remote_addr: crate::remote_access::DEFAULT_REMOTE_ADDR.into(),
             web_shell: String::new(),
             // Restrictive-but-usable local-dev allowlist. NOT "**".
             network_allow: [
@@ -467,6 +471,18 @@ impl Config {
                  listener and nothing else, so they need two ports",
                 self.web_addr
             );
+        }
+        if !crate::remote_access::is_loopback_addr(&self.remote_addr) || !is_listen_addr(&self.remote_addr) {
+            bail!(
+                "remote_addr = {:?} — expected a loopback IP:PORT such as 127.0.0.1:7683: \
+                 the phone reaches it only through the tailnet sidecar, never directly",
+                self.remote_addr
+            );
+        }
+        for (key, other) in [("web_addr", &self.web_addr), ("agent_addr", &self.agent_addr)] {
+            if ports::port_of(&self.remote_addr) == ports::port_of(other) {
+                bail!("remote_addr and {key} share port {} — the remote listener needs its own", ports::port_of(other));
+            }
         }
         for (key, rules) in [("network_allow", &self.network_allow), ("network_deny", &self.network_deny)] {
             for r in rules {
@@ -861,6 +877,19 @@ mod tests {
         assert!(bad.validate().is_err());
         let ok: Config = toml::from_str("kits = [\"sbxw:k8s-tools\", \"/abs/kit\"]").unwrap();
         ok.validate().unwrap();
+    }
+
+    #[test]
+    fn remote_addr_is_loopback_and_its_own_port() {
+        let bad = |t: &str| Config::parse(t).is_err();
+        assert_eq!(Config::default().remote_addr, "127.0.0.1:7683");
+        assert!(!bad("remote_addr = \"127.0.0.1:9000\""));
+        assert!(!bad("remote_addr = \"[::1]:9000\""));
+        for addr in ["0.0.0.0:7683", "[::]:7683", "192.168.1.2:7683", "100.101.102.103:7683", "localhost:7683", "127.0.0.1", ""] {
+            assert!(bad(&format!("remote_addr = \"{addr}\"")), "{addr:?}");
+        }
+        assert!(bad("remote_addr = \"127.0.0.1:7681\""), "the UI's port");
+        assert!(bad("remote_addr = \"127.0.0.2:7682\""), "the agent's port");
     }
 
     #[test]

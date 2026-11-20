@@ -196,7 +196,9 @@ impl App {
             let sizes = book.prompt_sizes(&key);
             (key, sizes)
         };
-        tracing::info!("answer '{sandbox}': indices={indices:?}, sizes={sizes:?}");
+        // Never the indices: they are the person's answer (the remote
+        // journal's rule holds for every log line).
+        tracing::debug!("answer '{sandbox}': {} step(s)", sizes.len());
         typing::keys(&session, &answer_keystrokes(&indices, &sizes)).await;
         let infos = self.agents.lock().unwrap().answered(&key, true, now_ms());
         for i in infos {

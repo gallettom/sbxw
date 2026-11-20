@@ -143,6 +143,27 @@ The terminal (`/ws`, above) with `size=1`: `{"type":"size","cols","rows","owner"
 before the replay and on every change; the grid takes the PTY's size and is
 drawn smaller when another window owns a larger one (TERMINAL.md).
 
+### Remote access (admin, not covered yet by a screen)
+
+The Mac's side of [remote access](../../docs/security.md#remote-access), on the UI listener with the
+UI token. The contract is `.sbxw-artifacts/remote/API.md` section 5; the CLI
+(`sbxw remote`) uses these today.
+
+| Route | Answer |
+|---|---|
+| `GET /api/remote` | `{enabled, remote_addr, listening, tailnet: {state, name, serving, login_url, detail} \| null, devices, pending_requests, keep_awake: "holding"\|"on_battery"\|"not_macos"\|"off"}` |
+| `POST /api/remote/enable` / `disable` `{}` | `{ok, status}`; both idempotent. Enable is `409` with a sentence when the listener or the sidecar cannot start. A screen must ask the person first, saying what it exposes |
+| `POST /api/remote/pairing` `{}` | `{ok, code, code_id, url, expires_ms}`; `409` when off or the tailnet is not serving. Show `url` as a QR code and a link. A new code voids every pending request |
+| `GET /api/remote/pairing/requests` | `[{id, code_id, device_name, created_ms, expires_ms}]`: show only the request whose `code_id` is the code on screen, with its `device_name`. No digits: the person reads them on the phone |
+| `POST /api/remote/pairing/requests/:id/approve` `{check}` | `{ok}` when `check` is the six digits the person typed from the phone; `403` "N tries left", the third wrong try refuses; `404` unknown, expired or voided. This is the confirmation on the Mac: a core-drawn field, never from agent text |
+| `POST /api/remote/pairing/requests/:id/refuse` `{}` | `{ok}`; `404` unknown |
+| `GET /api/remote/devices` | `[{id, name, created_ms, last_seen_ms}]` |
+| `DELETE /api/remote/devices/:id` | `{ok}`; `404` unknown. Immediate |
+| `GET /api/remote/journal?limit=` | `[{at_ms, device_id, device_name, kind}]`, newest last; never text |
+| `POST /api/remote/tailnet/forget` `{}` | `{ok}`; `409` while on |
+
+No bus event yet: poll `GET /api/remote` (every few seconds while a pairing is shown).
+
 ### Canvas (`src/feat/canvas/`, CANVAS.md)
 
 UI listener, UI token. Ids are `c-` and 16 hex digits; picture files are

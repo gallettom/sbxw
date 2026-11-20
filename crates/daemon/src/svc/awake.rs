@@ -23,6 +23,8 @@ pub struct Awake {
     watched: HashSet<String>,
     caffeinate: Option<tokio::process::Child>,
     notices: NoticeBook,
+    /// Remote access is on (see `svc::remote_access`): hold while on mains.
+    remote_access: bool,
 }
 
 impl Awake {
@@ -81,8 +83,24 @@ impl App {
 
     fn reassess(&self, a: &mut Awake) {
         if cfg!(target_os = "macos") {
-            a.set_held(power::hold(self.cfg.keep_awake, !a.remote.is_empty(), a.battery, self.cfg.keep_awake_min_battery));
+            let held = power::hold(self.cfg.keep_awake, !a.remote.is_empty(), a.battery, self.cfg.keep_awake_min_battery)
+                || sbxw_core::remote_access::keep_awake_wanted(a.remote_access, a.battery);
+            a.set_held(held);
         }
+    }
+
+    /// Remote access was turned on or off: hold or let go now, not a poll
+    /// later. Never locks `remote_access` (that lock is taken before this one).
+    pub(crate) fn remote_awake_changed(&self) {
+        let on = self.remote_enabled();
+        let mut a = self.awake.lock().unwrap();
+        a.remote_access = on;
+        self.reassess(&mut a);
+    }
+
+    /// The last battery reading said "on battery".
+    pub(crate) fn awake_on_battery(&self) -> bool {
+        self.awake.lock().unwrap().battery.is_some_and(|b| b.on_battery)
     }
 
     /// Removed sandboxes: no longer looked at, and the Mac let go at once if

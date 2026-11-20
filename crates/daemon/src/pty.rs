@@ -147,6 +147,11 @@ pub struct PtySession {
     #[cfg(test)]
     applied: Mutex<Vec<(u16, u16)>>,
     pub started_ms: u64,
+    /// Held by every writer that types a whole line into this session (the
+    /// composers' chat push, sbxw's own lines, an answer, the phone's message
+    /// and Interrupt), so two never interleave: one's Return cannot submit
+    /// another's half-typed text. Raw terminal input does not take it.
+    pub typing: tokio::sync::Mutex<()>,
 }
 
 /// What to run, and where.
@@ -201,6 +206,7 @@ impl PtySession {
             #[cfg(test)]
             applied: Mutex::new(Vec::new()),
             started_ms: now_ms,
+            typing: tokio::sync::Mutex::new(()),
         });
         let me = Arc::downgrade(&session);
         std::thread::spawn(move || {

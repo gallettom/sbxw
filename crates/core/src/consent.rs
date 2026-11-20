@@ -102,6 +102,9 @@ pub fn daemon_grants(cfg: &Config) -> Vec<String> {
     if cfg.agent_addr != d.agent_addr {
         out.insert(format!("listener: agent_addr = {}", cfg.agent_addr));
     }
+    if cfg.remote_addr != d.remote_addr {
+        out.insert(format!("listener: remote_addr = {}", cfg.remote_addr));
+    }
     if cfg.monitor_cmd != d.monitor_cmd && !cfg.monitor_cmd.is_empty() {
         out.insert(format!("host command (Monitor pane): {}", shell_words(&cfg.monitor_cmd)));
     }
@@ -280,6 +283,7 @@ mod tests {
         assert_eq!(daemon_grants(&c), want);
         assert_eq!(grants(&c), want);
         assert!(lines("monitor_cmd = []").is_empty(), "hiding the pane grants nothing");
+        assert_eq!(daemon_grants(&cfg("remote_addr = \"127.0.0.1:9100\"")), ["listener: remote_addr = 127.0.0.1:9100"]);
     }
 
     #[test]
@@ -305,7 +309,7 @@ mod tests {
         // A field added to Config later must be classified here and in `grants`:
         // this fails when the default serialises a key the list does not name.
         let known = [
-            "web_addr", "agent_addr", "web_shell", "network_allow", "network_deny", "ip_per_app", "ports", "kits", "kit_mounts",
+            "web_addr", "agent_addr", "remote_addr", "web_shell", "network_allow", "network_deny", "ip_per_app", "ports", "kits", "kit_mounts",
             "workdir", "workspaces", "carve", "cpus", "memory", "fuse", "root_size", "docker_size", "volumes", "cache", "cache_ttl_days",
             "claude_model", "models", "skills", "pull", "template", "keep_running", "chrome", "max_agent_sessions", "keep_awake",
             "keep_awake_min_battery", "battery_warn_below", "monitor_cmd", "terminal_color", "terminal_bar_color",
