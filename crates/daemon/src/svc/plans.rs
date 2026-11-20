@@ -302,7 +302,10 @@ impl App {
                 // briefing as a start prompt — type it in instead.
                 let unread = self.briefings.lock().unwrap().remove(&(sandbox.into(), name.to_string()));
                 match unread {
-                    Some(b) => crate::typing::type_and_submit(&session, &b, false).await,
+                    Some(b) => {
+                        self.note_typed(&sandbox.to_string(), &b);
+                        crate::typing::type_and_submit(&session, &b, false).await
+                    }
                     None => Ok(()),
                 }
             }

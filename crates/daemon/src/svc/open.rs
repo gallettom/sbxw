@@ -278,6 +278,10 @@ impl App {
                 (restart, scripts::StartMode::Reopen)
             }
         };
+        // Passed to Claude Code as its first prompt: sbxw's words, not the person's.
+        if !prompt.is_empty() {
+            self.note_typed(&sandbox.to_string(), &prompt);
+        }
         Ok(Spawn::sbx(scripts::thread_run_args(&sandbox.name, &dir, thread, &prompt, model.as_ref(), team.as_ref(), mode)))
     }
 
@@ -405,9 +409,17 @@ impl App {
             .map_err(|e| format!("could not record the model of thread {thread}: {e:#}"))
     }
 
-    /// Type `text` into a session and submit it, opening the session first if
-    /// it is not running.
+    /// Type a line sbxw wrote itself into a session and submit it, opening the
+    /// session first if it is not running. The line is recorded as sbxw's, so
+    /// the conversation does not show it as the person's.
     pub async fn push_text(self: &Arc<Self>, sandbox: &SandboxRef, kind: SessionKind, text: &str) -> Result<(), String> {
+        self.note_typed(&sandbox.to_string(), text);
+        self.push_as_person(sandbox, kind, text).await
+    }
+
+    /// Type text into a session and submit it, recording nothing: the
+    /// person's own words (the composer), or a caller that recorded already.
+    pub async fn push_as_person(self: &Arc<Self>, sandbox: &SandboxRef, kind: SessionKind, text: &str) -> Result<(), String> {
         let key = SessionKey::new(sandbox.clone(), kind.clone());
         let cold = kind == SessionKind::Agent
             && !self.sessions.is_live(&key)

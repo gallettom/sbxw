@@ -316,6 +316,8 @@ impl App {
         }
         let (n, c) = self.canvas_update(id, "review", |c| c.submit(session, paths, now_ms()).map(|r| r.n))?;
         tracing::info!("canvas {id}: review round {n} recorded");
+        // The desktop types this line through the composer; it is sbxw's.
+        self.note_typed(&c.sandbox, &canvas::ready_line(&c.id, n));
         Ok((n, c))
     }
 

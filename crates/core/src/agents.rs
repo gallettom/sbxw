@@ -648,7 +648,7 @@ fn notice(kind: &str) -> Notice {
 }
 
 /// Fold an event into a status. `true` when the session ended.
-fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
+fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64, sbxw_typed: &dyn Fn(&str) -> bool) -> bool {
     let body = event.body;
     // A subagent's tool calls come under its parent's session, marked with
     // `agent_id`. They are not the parent's turn: an idle parent stays idle
@@ -685,7 +685,11 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
             // The previous answer is stale the moment a new turn starts.
             st.reply = None;
             if let Some(p) = body.get("prompt").and_then(Value::as_str) {
-                let said = crate::history::classify_user_text(p);
+                let mut said = crate::history::classify_user_text(p);
+                if said.kind == crate::history::Kind::UserPrompt && sbxw_typed(&said.text) {
+                    said.kind = crate::history::Kind::Injected;
+                    said.from = Some(crate::typed::SENDER.to_string());
+                }
                 let person = said.kind == crate::history::Kind::UserPrompt;
                 st.last_input = Some(clip(if person { &said.text } else { p }, 200));
                 st.last_input_from = Some(if person { "person" } else { "injected" });
@@ -821,6 +825,8 @@ pub struct AgentBook {
     /// new session of the same process continues (`/clear` ends one, then
     /// starts the next). Bounded by [`ENDED_MAX`].
     ended: std::collections::VecDeque<(String, String, String)>,
+    /// What sbxw typed: a turn with exactly that text is not the person's.
+    typed: crate::typed::TypedLog,
 }
 
 /// Bound on [`AgentBook::ended`].
@@ -839,6 +845,11 @@ const EARLY_MAX: usize = 64;
 impl AgentBook {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Sbxw is about to type `text` into one of `sandbox`'s sessions.
+    pub fn note_typed(&mut self, sandbox: &str, text: &str, now: u64) {
+        self.typed.note(sandbox, text, now);
     }
 
     /// Fold one event in. Returns the payloads to broadcast: the session itself
@@ -902,6 +913,7 @@ impl AgentBook {
                 out.extend(self.evict(now, reason, |kk, _| *kk == k));
             }
         }
+        let typed = &self.typed;
         let st = self.statuses.entry(key.clone()).or_default();
         if let Some(p) = proc {
             st.proc = Some(p.to_string());
@@ -937,7 +949,7 @@ impl AgentBook {
         if origin != SessionOrigin::Unknown {
             st.origin = origin;
         }
-        let ended = apply(event, st, now);
+        let ended = apply(event, st, now, &|t| typed.typed(sandbox, t, now));
         out.extend(self.emit(sandbox, has_pty, now));
         if ended {
             let reason = match event.str("reason") {
@@ -2323,5 +2335,25 @@ mod tests {
     fn version_shapes() {
         assert!(version_shaped("2.1.328") && version_shaped("10.0"));
         assert!(!version_shaped("claude") && !version_shaped("2") && !version_shaped("2..1") && !version_shaped("v2.1"));
+    }
+}
+
+#[cfg(test)]
+mod typed_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_line_sbxw_typed_is_not_the_person_answering() {
+        let mut book = AgentBook::new();
+        let line = crate::team::main_moved_line(&["a".to_string()], None).unwrap();
+        book.note_typed("sb", &line, 1);
+        let p = |t: &str| json!({"hook_event_name": "UserPromptSubmit", "session_id": "s", "prompt": t});
+        let out = book.apply("sb", &HookEvent::new(&p(&line)), SessionOrigin::Tty, true, 2);
+        assert_eq!(out[0].last_input_from, Some("injected"));
+        assert_eq!(out[0].last_input_sender.as_deref(), Some("sbxw"));
+        let out = book.apply("sb", &HookEvent::new(&p("[sbxw] hello")), SessionOrigin::Tty, true, 3);
+        assert_eq!(out[0].last_input_from, Some("person"));
+        assert_eq!(out[0].last_input_sender, None);
     }
 }

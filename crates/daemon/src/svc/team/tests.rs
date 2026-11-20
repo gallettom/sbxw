@@ -443,6 +443,12 @@ async fn after_a_merge_the_other_threads_of_the_sandbox_hear_main_moved_once() {
     let line = "[sbxw] main moved: done merged. Check `git merge-tree --write-tree main HEAD` before you go on.";
     assert!(until(|| shown(&idle).contains(line)).await, "typed into the idle thread: {:?}", shown(&idle));
     assert_eq!(shown(&idle).matches("main moved").count(), 1, "once");
+    // The daemon recorded the line as its own: the history shows it from sbxw.
+    let post = serde_json::json!({"session_id": "h1", "from": 0, "to": 5, "items": [{"t": "user", "text": line}, {"t": "user", "text": "[sbxw] a person's words"}]});
+    app.history_post(&sb, &post).unwrap();
+    let page = app.history.lock().unwrap().page(&sb.to_string(), "h1", None, None, 0).unwrap();
+    let who: Vec<_> = page.items.iter().map(|i| (i.kind, i.from.clone())).collect();
+    assert_eq!(who, [(sbxw_core::history::Kind::Injected, Some("sbxw".to_string())), (sbxw_core::history::Kind::UserPrompt, None)]);
     assert!(!shown(&asked).contains("main moved"), "held while it waits on a question");
     assert!(!shown(&done).contains("main moved"), "the merged thread is not told");
     assert!(!shown(&far).contains("main moved"), "another sandbox's thread is never typed into");

@@ -31,6 +31,7 @@ pub mod kits;
 pub mod mac;
 pub mod mcp;
 pub mod messages;
+pub mod typed;
 pub mod my_skills;
 pub mod names;
 pub mod plans;
