@@ -496,7 +496,10 @@ A file from the phone is data handed to a leader, never an action:
   most 5 files and 60 MB waiting per phone and leader, 200 MB for all phones, one upload at
   a time per phone, 20 uploads per 10 minutes per phone (one phone's limit never holds
   another back), the whole file within 180 s and no pause over 30 s. The Tailscale node
-  takes a body of 26 MB at most and gives it 120 s: a 25 MB file needs about 1.7 Mbit/s.
+  takes a body of 26 MB at most and gives it 120 s (the person's decision): a 25 MB file
+  needs about 1.7 Mbit/s of uplink. On a slower link the upload fails: the node cuts it at
+  120 s, the phone gets an error, nothing is kept on the Mac, and you retry on a better
+  connection or with a smaller file (each try counts toward the 20 per 10 minutes).
 - **How long.** An unsent file is deleted from the Mac 30 minutes after its upload, or when
   you remove it on the phone, when the phone is revoked or logs out, when remote access is
   turned off, and when the daemon restarts. A file sent with a message stays in the

@@ -95,7 +95,9 @@ file only, never to stdout, stderr or a log. The file never holds a key.
 - **Limits:** request headers 16 KiB (`431` above), body 26 MiB (`413`; the
   daemon's largest route, a phone's file upload, takes 25 MiB; it was 8 MiB
   before that route), streamed to the daemon, header read 10 s, body read
-  120 s (a 25 MiB file needs about 1.7 Mbit/s of uplink), idle connection
+  120 s (kept by the person's decision: a 25 MiB file needs about 1.7 Mbit/s
+  of uplink; on a slower link the upload is cut at 120 s, fails, and is
+  retried), idle connection
   120 s, upstream answer 5 min.
 - Server-sent events stream: responses are flushed at once, no buffering, no
   write timeout.
