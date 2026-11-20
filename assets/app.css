@@ -3523,7 +3523,7 @@
      A rendered document is read, not glanced at: the preview takes more of
      the panel. The text keeps a readable measure; the outline sits beside it
      when there is room and folds into a menu above it when there is not. */
-  .fx-body.md-reading { grid-template-columns: 200px minmax(0, 1fr) minmax(300px, 62%); }
+  .fx-body.md-reading { grid-template-columns: 200px minmax(260px, 1fr) minmax(300px, min(62%, calc(100% - 460px))); }
   .fx-md-switch {
     display: inline-flex; border: 1px solid var(--c-border); border-radius: var(--r-xs); overflow: hidden;
   }
@@ -3536,10 +3536,12 @@
   .fx-md-switch button:hover { color: var(--c-text-bright); }
   .fx-md-switch button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
   .fx-prev-actions { flex-wrap: wrap; }
+  /* Reading a document: the list keeps room for its names by dropping the
+     Modified column (it is in the preview's header). */
+  .fx-body.md-reading .fx-list td:nth-child(3), .fx-body.md-reading .fx-list th:nth-child(3) { display: none; }
   .fx-prev-body.fx-prev-md { display: block; padding: 0; scroll-padding-top: .8rem; }
   .md-doc { container-type: inline-size; }
   .md-doc-grid { padding: .9rem 1.1rem 2.5rem; }
-  .md-ol-side { display: none; }
   .md-ol-menu {
     margin: 0 0 1rem; border: 1px solid var(--c-border); border-radius: var(--r-sm); background: var(--c-surface-alt);
   }
@@ -3549,6 +3551,7 @@
   .md-ol-menu[open] > summary { border-bottom: 1px solid var(--c-elevated); }
   .md-ol-menu .md-ol { max-height: 45vh; overflow: auto; padding: .3rem; }
   .md-ol { display: flex; flex-direction: column; }
+  .md-ol-side { display: none; }
   .md-ol-item {
     display: block; width: 100%; text-align: left; font: inherit; font-size: 12px; line-height: 1.35;
     color: var(--c-text-muted); background: none; border: none; border-radius: var(--r-xs);
@@ -3560,8 +3563,8 @@
   .md-ol-l2 { padding-left: 1.1rem; }
   .md-ol-l3 { padding-left: 1.8rem; font-size: 11.5px; }
   .md-ol-l4 { padding-left: 2.5rem; font-size: 11.5px; }
-  @container (min-width: 760px) {
-    .md-doc-grid.has-outline { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 1.6rem; align-items: start; }
+  @container (min-width: 720px) {
+    .md-doc-grid.has-outline { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 1.2rem; align-items: start; }
     .md-doc-grid.has-outline .md-ol-menu { display: none; }
     .md-ol-side {
       display: flex; position: sticky; top: .9rem; max-height: calc(94vh - 14rem); overflow: auto;
@@ -3651,6 +3654,8 @@
     .fx-fav { flex-shrink: 0; white-space: nowrap; }
     .fx-preview { border-left: none; border-top: 1px solid var(--c-elevated); }
     .fx-list td:nth-child(3), .fx-list th:nth-child(3) { display: none; }
+    .files-modal .modal-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .files-modal .proj-tabs { margin-left: .6rem; min-width: 0; flex-shrink: 1; overflow-x: auto; scrollbar-width: none; }
   }
 
   /* ── Chat dock (see js/chat-dock.js) ── */
