@@ -278,3 +278,7 @@ pub fn view(i: &Item, shown: String, sandbox: &str) -> El {
         .child(rune::icon(crate::icons::get("branch").unwrap(), ICON).color(c("text-muted")))
         .child(text(shown).font(crate::screen::body(TEXT, 400.0)).color(c("text")).truncate().min_w(0.0))
 }
+
+#[cfg(test)]
+#[path = "git_tests.rs"]
+mod tests;
