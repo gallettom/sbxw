@@ -42,6 +42,13 @@ pub struct TabInfo {
     pub others: Vec<u32>,
     /// Its one terminal shows a shell, not the agent (a prompt glyph).
     pub bash: bool,
+    /// A terminal on it leads a team (the crown). With one name or a count
+    /// label: one crown before the label.
+    pub leader: bool,
+    /// When the label is the page's names joined (several terminals): each
+    /// name and whether it leads, a crown before each that does. Empty
+    /// otherwise.
+    pub parts: Vec<(String, bool)>,
 }
 
 /// A name cut to about `n` characters.
@@ -54,8 +61,8 @@ fn short(name: &str, n: usize) -> String {
 }
 
 /// A tab's width (points) for its label.
-pub fn tab_w(label: &str, dot: bool, bash: bool) -> f32 {
-    TAB_PX * 2.0 + if dot { TAB_DOT + TAB_GAP } else { 0.0 } + if bash { TAB_PROMPT + TAB_GAP } else { 0.0 } + bar::measure(label, TAB_TEXT, 500.0).min(TAB_LABEL_MAX) + TAB_GAP + TAB_CLOSE
+pub fn tab_w(label: &str, dot: bool, bash: bool, crowns: usize) -> f32 {
+    TAB_PX * 2.0 + if dot { TAB_DOT + TAB_GAP } else { 0.0 } + crowns as f32 * (TAB_PROMPT + TAB_GAP) + if bash { TAB_PROMPT + TAB_GAP } else { 0.0 } + bar::measure(label, TAB_TEXT, 500.0).min(TAB_LABEL_MAX) + TAB_GAP + TAB_CLOSE
 }
 
 /// The prompt glyph of a tab whose terminal is a shell.
@@ -102,6 +109,13 @@ fn per_label(per: usize) -> String {
     if per == 1 { "1 per page".into() } else { format!("{per} per page") }
 }
 
+impl TabInfo {
+    /// How many crowns the tab draws.
+    pub fn crowns(&self) -> usize {
+        if self.parts.is_empty() { usize::from(self.leader) } else { self.parts.iter().filter(|(_, l)| *l).count() }
+    }
+}
+
 impl App {
     /// Page `k`'s tab: the names of what is open on it, whole when they fit
     /// in a tab; else (or `compact`, when the pager is short of room) a
@@ -112,7 +126,7 @@ impl App {
     }
 
     pub fn tab_info_as(&self, k: usize, compact: bool) -> TabInfo {
-        let Some(page) = self.pages.list.get(k) else { return TabInfo { label: String::new(), help: String::new(), tone: None, group: None, others: vec![], bash: false } };
+        let Some(page) = self.pages.list.get(k) else { return TabInfo { label: String::new(), help: String::new(), tone: None, group: None, others: vec![], bash: false, leader: false, parts: vec![] } };
         let panes: Vec<&Pane> = page.tile.order().into_iter().filter_map(|u| self.pane_by_uid(u)).collect();
         let open: Vec<&&Pane> = panes.iter().filter(|p| p.sandbox.is_some()).collect();
         let names: Vec<String> = open.iter().map(|p| pane_name(p)).collect();
@@ -134,8 +148,11 @@ impl App {
         let mut others: Vec<u32> = groups.iter().flatten().copied().filter(|g| Some(*g) != group).collect();
         others.dedup();
         let bash = open.len() == 1 && open[0].mode == Mode::Bash;
+        let leads: Vec<bool> = open.iter().map(|p| self.pane_leads(p)).collect();
+        let leader = leads.iter().any(|l| *l);
+        let parts: Vec<(String, bool)> = if names.len() > 1 && label == names.join(", ") { names.iter().cloned().zip(leads.iter().copied()).collect() } else { vec![] };
         let help = format!("Page {}: {what}{}{state}", k + 1, if bash { " (a shell)" } else { "" });
-        TabInfo { label, help, tone, group, others, bash }
+        TabInfo { label, help, tone, group, others, bash, leader, parts }
     }
 
     /// Whether "Gather" would move something: terminals on more pages than
@@ -166,7 +183,7 @@ impl App {
         let widths = |compact: bool| -> Vec<f32> {
             (0..n).map(|k| {
                 let t = self.tab_info_as(k, compact);
-                tab_w(&t.label, t.tone.is_some(), t.bash)
+                tab_w(&t.label, t.tone.is_some(), t.bash, t.crowns())
             }).collect()
         };
         let total = |v: &[f32]| v.iter().sum::<f32>() + GAP * n.saturating_sub(1) as f32;
@@ -329,17 +346,34 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
     if t.bash {
         e = e.child(small_icon("prompt", TAB_PROMPT, theme::hex(theme::muted_on(ground))));
     }
-    // A session's tab: the sandbox muted, what tells it apart (the thread)
-    // bright; the cut falls on the second part.
-    let (prefix, rest) = match t.label.split_once(" · ") {
-        Some((a, b)) if !t.label.starts_with("Page ") => (Some(format!("{a} · ")), b.to_string()),
-        _ => (None, t.label.clone()),
-    };
+    let crown = |key: String| el().key(key).label("Team leader").help("Team leader").w(TAB_PROMPT).h(TAB_PROMPT).child(small_icon("leader", TAB_PROMPT, c("text-bright")));
     let weight = if on { 600.0 } else { 500.0 };
-    if let Some(p) = prefix {
-        e = e.child(text(p).font(small(TAB_TEXT, 500.0)).color(theme::hex(theme::muted_on(ground))));
+    if !t.parts.is_empty() {
+        // Several names, whole: a crown before each that leads.
+        let last = t.parts.len() - 1;
+        for (j, (name, lead)) in t.parts.iter().enumerate() {
+            let shown = if j < last { format!("{name},") } else { name.clone() };
+            let mut part = row().gap(3.0).items_center();
+            if *lead {
+                part = part.child(crown(format!("page-{}-leader-{}", k + 1, j + 1)));
+            }
+            e = e.child(part.child(text(shown).font(small(TAB_TEXT, weight)).color(c("text-bright"))));
+        }
+    } else {
+        if t.leader {
+            e = e.child(crown(format!("page-{}-leader", k + 1)));
+        }
+        // A session's tab: the sandbox muted, what tells it apart (the thread)
+        // bright; the cut falls on the second part.
+        let (prefix, rest) = match t.label.split_once(" · ") {
+            Some((a, b)) if !t.label.starts_with("Page ") => (Some(format!("{a} · ")), b.to_string()),
+            _ => (None, t.label.clone()),
+        };
+        if let Some(p) = prefix {
+            e = e.child(text(p).font(small(TAB_TEXT, 500.0)).color(theme::hex(theme::muted_on(ground))));
+        }
+        e = e.child(text(rest).font(small(TAB_TEXT, weight)).color(c("text-bright")).truncate().min_w(0.0).max_w(TAB_LABEL_MAX));
     }
-    e = e.child(text(rest).font(small(TAB_TEXT, weight)).color(c("text-bright")).truncate().min_w(0.0).max_w(TAB_LABEL_MAX));
     // Groups on the page besides the first one's: a small dot each.
     for g in t.others.iter().take(3) {
         e = e.child(el().w(5.0).h(5.0).radius(2.5).fill(theme::hex(*g)));

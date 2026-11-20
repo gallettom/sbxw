@@ -30,6 +30,8 @@ mod notice_tests;
 #[cfg(test)]
 mod resize_tests;
 #[cfg(test)]
+mod leader_mark_tests;
+#[cfg(test)]
 mod sidebar_tests;
 
 use crate::approval;
@@ -2767,6 +2769,9 @@ fn tile_view(s: &App, t: &Tile, path: String) -> El {
 }
 
 /// The name a pane bar shows: the sandbox, and its thread when it shows one.
+/// The leader mark's width in a pane bar (icon and the gap after it).
+const LEADER_MARK: f32 = bar::CHIP_ICON;
+
 fn pane_name(p: &Pane) -> String {
     match (&p.sandbox, &p.thread) {
         (Some(sb), Some(t)) => format!("{sb} · {t}"),
@@ -2921,6 +2926,12 @@ impl App {
         }
     }
 
+    /// Whether `p`'s session leads a team: the main session of a running
+    /// sandbox in `leaders()` (shell/leads.rs), never a thread; Lead Mode on or off.
+    pub fn pane_leads(&self, p: &Pane) -> bool {
+        p.thread.is_none() && p.sandbox.as_ref().is_some_and(|sb| self.leaders().contains(sb))
+    }
+
     /// What pane `i`'s bar shows inline and what goes into its overflow
     /// menu (bar.rs): the core's "wants you" and state word with the
     /// features' extras, by priority. None for a pane with no sandbox.
@@ -2936,7 +2947,7 @@ impl App {
             items.push(core("status", &p.status(), "muted", "The terminal's connection"));
         }
         let agent = self.agent_label(i);
-        let mut f = bar::pane_fit(self.bar_width(i), &pane_name(p), agent.as_deref(), items, true);
+        let mut f = bar::pane_fit(self.bar_width(i) - if self.pane_leads(p) { LEADER_MARK + bar::PANE_GAP } else { 0.0 }, &pane_name(p), agent.as_deref(), items, true);
         if let (false, Some(_)) = (f.switch, &agent) {
             // Too narrow even for the switch: the menu's first row.
             let to = if p.mode == Mode::Bash { agent.clone().unwrap_or_default() } else { bar::BASH.to_string() };
@@ -3449,7 +3460,12 @@ fn pane_view(s: &App, i: usize) -> El {
     let mut bar = bar.child(dot);
     let fit = s.pane_fit(i);
     let name_min = fit.as_ref().map_or(0.0, |f| f.name_min);
-    let mut mid = row().grow(1.0).min_w(0.0).h_full().gap(bar::PANE_GAP).items_center().clip_rounded(0.0).child(
+    let mut mid = row().grow(1.0).min_w(0.0).h_full().gap(bar::PANE_GAP).items_center().clip_rounded(0.0);
+    // The team leader's crown, before the name so a cut name never takes it.
+    if pane.is_some_and(|p| s.pane_leads(p)) {
+        mid = mid.child(el().key(format!("pane-{}-leader", i + 1)).label("Team leader").help("Team leader").w(LEADER_MARK).h(LEADER_MARK).child(rune::icon(crate::icons::get("leader").unwrap(), LEADER_MARK).color(c(if focused { "text-bright" } else { "text" }))));
+    }
+    mid = mid.child(
         text(label.clone()).key(format!("pane-{}-name", i + 1)).help(label).font(small(bar::NAME_TEXT, 500.0)).color(c(if focused { "text-bright" } else { "text" })).truncate().min_w(name_min),
     );
     if let (Some(_), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
