@@ -217,7 +217,17 @@ function rcPending(leader) {
   if (!leader || !(leader.asks || leader.state === 'attention')) return null;
   const steps = Array.isArray(leader.steps) ? leader.steps.filter(s => s && typeof s.text === 'string' && Array.isArray(s.options) && s.options.length) : [];
   if (steps.length && leader.answerable) return { kind: 'question', steps };
-  return { kind: 'mac', text: (steps[0]?.text) || (typeof leader.activity === 'string' && leader.activity) || 'The leader is waiting for you.' };
+  return { kind: 'mac', text: steps[0]?.text || 'The leader waits for something only the Mac can settle, such as allowing a tool.' };
+}
+
+// A leader's activity: one of the daemon's fixed phrases ("Working", "Asks a
+// question", "Waits for you at the Mac", "Waiting for a message"), never the
+// session's own line. Left out where it only repeats the state shown beside it.
+function rcActivity(leader) {
+  const a = leader && typeof leader.activity === 'string' ? leader.activity.trim() : '';
+  if (!a) return '';
+  const said = leader.asks ? 'needs you' : rcStateLabel(leader.state);
+  return a.toLowerCase() === said || (leader.state === 'working' && a.toLowerCase() === 'working') ? '' : a;
 }
 
 // ── Pairing ───────────────────────────────────────────────────────────────

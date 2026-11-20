@@ -14,7 +14,7 @@ const pageSrc = read('../../assets/remote/remote.js');
 const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
-const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcPairCode',
+const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcActivity', 'rcPairCode',
   'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcWithDictation', 'chatMarkdown'];
 const ctx = { URLSearchParams };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
@@ -135,10 +135,16 @@ test('leaders: those that need you first, then working, then idle', () => {
 test('a question the phone can answer, and one that needs the Mac', () => {
   const [shop, docs] = rc.rcLeaders(fx.leaders);
   assert.equal(rc.rcPending(shop).kind, 'question');
-  assert.deepEqual(plain(rc.rcPending(docs)), { kind: 'mac', text: 'Allow Bash?' });
+  assert.equal(rc.rcPending(docs).kind, 'mac');
+  assert.doesNotMatch(rc.rcPending(docs).text, /Waits for you/, 'the fixed phrase is not repeated in the card');
   assert.equal(rc.rcPending({ state: 'idle', asks: false }), null);
   // Steps without `answerable` are not answered from the phone.
   assert.equal(rc.rcPending({ ...shop, answerable: false }).kind, 'mac');
+});
+test('the fixed activity phrase, left out where it repeats the state', () => {
+  const [shop, docs, pay, web] = rc.rcLeaders(fx.leaders);
+  assert.deepEqual([shop, docs, pay, web].map(rc.rcActivity), ['Asks a question', 'Waits for you at the Mac', '', 'Waiting for a message']);
+  assert.equal(rc.rcActivity({ state: 'idle', activity: 42 }), '');
 });
 test('last activity in short words', () => {
   const now = 1_000_000_000;

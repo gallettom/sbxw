@@ -278,7 +278,7 @@
       state.className = 'rc-leader-state';
       state.textContent = l.asks ? 'needs you' : rcStateLabel(l.state);
       line.append(state);
-      if (typeof l.activity === 'string' && l.activity) line.append(` · ${l.activity}`);
+      if (rcActivity(l)) line.append(` · ${rcActivity(l)}`);
       b.append(dot, name, ago, line);
       b.addEventListener('click', () => openLeader(l.sandbox));
       li.append(b);
@@ -462,7 +462,7 @@
       const dot = document.createElement('span');
       dot.className = 'rc-pulse';
       const t = document.createElement('span');
-      t.textContent = typeof l.activity === 'string' && l.activity ? `Working · ${l.activity}` : 'Working…';
+      t.textContent = rcActivity(l) ? `Working · ${rcActivity(l)}` : 'Working…';
       w.append(dot, t);
       return tail.replaceChildren(w);
     }
