@@ -165,7 +165,7 @@ UI token. The contract is `.sbxw-artifacts/remote/API.md` section 5; the CLI
 | `POST /api/remote/pairing/requests/:id/refuse` `{}` | `{ok}`; `404` unknown |
 | `GET /api/remote/devices` | `[{id, name, created_ms, last_seen_ms}]` |
 | `DELETE /api/remote/devices/:id` | `{ok}`; `404` unknown. Immediate |
-| `GET /api/remote/journal?limit=` | `[{at_ms, device_id, device_name, kind}]`, newest last; never text |
+| `GET /api/remote/journal?limit=` | `[{at_ms, device_id, device_name, kind, size?}]`, newest last; never text. `kind` `upload` (a file a phone handed to a leader) carries `size`: `under_1mb`, `1_to_10mb` or `over_10mb`; never a file name |
 | `POST /api/remote/tailnet/forget` `{}` | `{ok}`; `409` while on |
 
 No bus event yet: poll `GET /api/remote` (every few seconds while a pairing is shown).

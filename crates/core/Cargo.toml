@@ -14,6 +14,12 @@ toml.workspace = true
 toml_edit.workspace = true
 getrandom.workspace = true
 sha2.workspace = true
+p256.workspace = true
+
+[features]
+# A software WebAuthn authenticator for tests (`remote_access::webauthn::soft`):
+# the daemon's tests turn it on; no build of sbxw does.
+test-authenticator = []
 
 [dev-dependencies]
 tempfile.workspace = true

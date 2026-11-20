@@ -883,17 +883,18 @@ struct ApprovalBody {
 
 /// Only an approval sbx still lists, with an option it offers: a stale page
 /// (a port request lapses after 45 s) gets told so rather than sbx's error.
+/// The same path as the phone's (`App::approval_answer`).
 async fn approval_respond(State(app): S, Json(b): Json<ApprovalBody>) -> ApiResult {
-    let pending = app.sbx.approvals().await?;
-    let Some(a) = pending.iter().find(|a| a.id == b.id) else {
-        return Err(ApiError::bad("this request is no longer pending — it was answered, or it lapsed"));
-    };
-    if !a.offers(&b.option) {
-        return Err(ApiError::bad(format!("“{}” is not one of this request's options", b.option)));
+    use crate::svc::remote_approvals::AnswerError;
+    match app.approval_answer(&b.id, &b.option).await {
+        Ok(a) => {
+            tracing::info!("web UI: approval {} for '{}' ({}) → {}", a.id, a.sandbox, a.title, b.option);
+            Ok(ok())
+        }
+        Err(AnswerError::Gone) => Err(ApiError::bad("this request is no longer pending — it was answered, or it lapsed")),
+        Err(AnswerError::NotOffered(o)) => Err(ApiError::bad(format!("“{o}” is not one of this request's options"))),
+        Err(AnswerError::Sbx(e)) => Err(e.into()),
     }
-    tracing::info!("web UI: approval {} for '{}' ({}) → {}", a.id, a.sandbox, a.title, b.option);
-    app.sbx.approval_respond(&a.id, &b.option).await?;
-    Ok(ok())
 }
 
 /// sbx's stored secrets, names and scopes only.
@@ -1091,27 +1092,9 @@ async fn upload(State(app): S, Path(name): Path<String>, Query(q): Query<UploadQ
     if body.is_empty() {
         return Err(ApiError::bad("empty file"));
     }
-    let dest = format!("/tmp/sbxw-uploads/{}/{}", crate::now_ms(), upload_name(&q.name));
-    app.sbx_for(&sb).await?.write_file(&sb.name, &dest, &body, false).await?;
+    let dest = app.write_upload(&sb, crate::now_ms(), &q.name, &body).await?;
     tracing::info!("web UI: uploaded {} bytes to '{sb}' at {dest}", body.len());
     Ok(ok_with(json!({ "path": dest })))
-}
-
-/// A browser's file name as one safe path component. The path is typed into a
-/// prompt, where a space would split it in two, so anything but `[A-Za-z0-9._-]`
-/// becomes `_`; leading dots go, so no `..` and no hidden file.
-pub(super) fn upload_name(raw: &str) -> String {
-    let base = raw.rsplit(['/', '\\']).next().unwrap_or("");
-    let safe: String = base
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
-        .collect();
-    let safe: String = safe.trim_start_matches('.').chars().take(120).collect();
-    if safe.is_empty() {
-        "upload".into()
-    } else {
-        safe
-    }
 }
 
 async fn hosts(State(app): S) -> Json<Value> {

@@ -21,7 +21,11 @@ pub mod devices;
 pub mod journal;
 pub mod limits;
 pub mod pairing;
+pub mod uploads;
 pub mod view;
+pub mod cbor;
+pub mod level2;
+pub mod webauthn;
 
 use serde::{Deserialize, Serialize};
 
@@ -236,6 +240,10 @@ pub fn check_message(text: &str) -> Result<(), MessageRefusal> {
 pub struct State {
     pub enabled: bool,
     pub devices: Vec<devices::Device>,
+    /// Level 2 (approving with a passkey) is on. Off by default; turning
+    /// remote access off turns it off. Absent from the file when off.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub approvals: bool,
 }
 
 /// A device name as a phone sends it: trimmed, 1 to 64 characters, no

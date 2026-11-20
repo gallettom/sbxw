@@ -14,10 +14,12 @@ import (
 )
 
 // Limits of the tailnet-facing HTTP server. The body cap covers the daemon's
-// largest route (voice transcription: 7,681,024 bytes) with a margin.
+// largest route (a phone's file upload: 25 MiB, API.md 2.6.1; before it, voice
+// transcription: 7,681,024 bytes) with a margin. The body is streamed to the
+// daemon, never held whole here; the daemon counts its own cap again.
 const (
 	maxHeaderBytes    = 16 << 10
-	maxBodyBytes      = 8 << 20
+	maxBodyBytes      = 26 << 20
 	readHeaderTimeout = 10 * time.Second
 	bodyReadTimeout   = 120 * time.Second
 	idleTimeout       = 120 * time.Second

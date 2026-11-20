@@ -19,6 +19,8 @@ pub mod plans;
 pub mod relay;
 pub mod remote;
 pub mod remote_access;
+pub mod remote_upload;
+pub mod remote_approvals;
 pub mod sandboxes;
 pub mod stats;
 pub mod team;

@@ -21,6 +21,21 @@ pub enum Kind {
     Logout,
     /// Dropped after 30 days idle.
     Expired,
+    /// A file handed to a leader (its size class only, never its name).
+    Upload,
+    // Level 2 (API-level2.md section 8).
+    PlanApprove,
+    PlanRefuse,
+    Merge,
+    NetworkRespond,
+    SandboxRemove,
+    PasskeyRegistered,
+    PasskeyFailed,
+    /// The item changed between the challenge and the action: nothing done.
+    Changed,
+    /// A phone asked to set up Face ID (no digits, no request id): a flood
+    /// of these means another client holds a copy of the device's cookie.
+    PasskeyRequested,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -30,6 +45,14 @@ pub struct Entry {
     pub device_id: String,
     pub device_name: String,
     pub kind: Kind,
+    /// `upload` only: how big, as a class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<super::uploads::SizeClass>,
+    /// Level 2: what was acted on, by NAME or id only (a plan id, a sandbox
+    /// name, a host), never a goal, a note, a diff or a message. Absent from
+    /// the line when there is none, so earlier lines read the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 /// Keep the newest [`MAX_ENTRIES`].
@@ -57,12 +80,15 @@ mod tests {
 
     #[test]
     fn bounded_and_round_trips() {
-        let mut v: Vec<Entry> = (0..MAX_ENTRIES as u64 + 5).map(|i| Entry { at_ms: i, device_id: "d".into(), device_name: "n".into(), kind: Kind::Message }).collect();
+        let mut v: Vec<Entry> = (0..MAX_ENTRIES as u64 + 5).map(|i| Entry { at_ms: i, device_id: "d".into(), device_name: "n".into(), kind: Kind::Message, size: None, target: None }).collect();
         bound(&mut v);
         assert_eq!(v.len(), MAX_ENTRIES);
         assert_eq!(v[0].at_ms, 5, "the oldest go");
         let text = to_lines(&v[..2]);
         assert_eq!(text, "{\"at_ms\":5,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"message\"}\n{\"at_ms\":6,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"message\"}\n");
+        let up = Entry { at_ms: 9, device_id: "d".into(), device_name: "n".into(), kind: Kind::Upload, size: Some(super::super::uploads::SizeClass::Over10Mb), target: None };
+        assert_eq!(to_lines(std::slice::from_ref(&up)), "{\"at_ms\":9,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"upload\",\"size\":\"over_10mb\"}\n");
+        assert_eq!(parse_lines(&to_lines(std::slice::from_ref(&up))), [up]);
         assert_eq!(parse_lines(&format!("{text}garbage\n{{\"at_ms\":1,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"message\",\"text\":\"x\"}}\n")).len(), 2, "no extra field is read back");
     }
 }

@@ -5,6 +5,7 @@ pub mod host_check;
 pub mod host_provision;
 pub mod mac;
 pub mod remote;
+pub mod remote_approvals;
 pub mod template;
 pub mod voice;
 

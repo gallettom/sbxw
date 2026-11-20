@@ -838,6 +838,18 @@ pub fn oauth_token_from_env() -> Option<String> {
         .find(|v| !v.is_empty())
 }
 
+impl App {
+    /// The one writer of uploaded files into a sandbox (the web UI's upload
+    /// box, the web chat's attachments, the phone's files): `bytes` under
+    /// `/tmp/sbxw-uploads/<at_ms>/<name>`, `name` made safe by
+    /// [`sbxw_core::uploads::upload_name`]. The path written.
+    pub async fn write_upload(&self, sb: &sbxw_core::SandboxRef, at_ms: u64, name: &str, bytes: &[u8]) -> Result<String> {
+        let dest = sbxw_core::uploads::dest(at_ms, &sbxw_core::uploads::upload_name(name));
+        self.sbx_for(sb).await?.write_file(&sb.name, &dest, bytes, false).await?;
+        Ok(dest)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::testing::{app_with, sbx_answer};
