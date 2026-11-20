@@ -354,7 +354,9 @@ impl App {
             let _ = rt.sidecar_pid();
             (addr, rt.sidecar_program.clone(), rt.tailnet_state_dir(), rt.tailnet_status_path(), running)
         };
-        if !rules::is_loopback_addr(&addr) {
+        // `Config::validate` refused a non-loopback `remote_addr`; checked
+        // again here, as the last step before a socket exists.
+        if !addr.parse::<std::net::SocketAddr>().is_ok_and(|a| a.ip().is_loopback()) {
             return Err(format!("remote_addr {addr} is not a loopback address"));
         }
         let sidecar_bin = match &program {
@@ -801,4 +803,26 @@ fn spawn_sidecar(bin: &Path, forward: &str, state_dir: &Path, status_file: &Path
         });
     }
     Ok(child)
+}
+
+#[cfg(test)]
+impl App {
+    /// Tests: remote access on, as if the sidecar served `tailnet`, without
+    /// binding a socket or starting a sidecar.
+    pub(crate) fn remote_test_on(&self, tailnet: &str) {
+        let mut rt = self.remote_access.lock().unwrap();
+        rt.enabled = true;
+        rt.sidecar_program = Sidecar::None;
+        rt.tailnet_override = Some(tailnet.to_string());
+        rt.save();
+    }
+
+    /// Tests: where the listener is bound, while it is.
+    pub(crate) fn remote_listen_addr(&self) -> Option<std::net::SocketAddr> {
+        self.remote_access.lock().unwrap().listener.as_ref().map(|l| l.addr)
+    }
+
+    pub(crate) fn remote_dir_for_tests(&self) -> PathBuf {
+        self.remote_access.lock().unwrap().dir.clone()
+    }
 }

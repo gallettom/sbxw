@@ -103,12 +103,6 @@ impl App {
         self.awake.lock().unwrap().battery.is_some_and(|b| b.on_battery)
     }
 
-    /// Whether `caffeinate` is held right now (for tests and the status).
-    #[cfg(test)]
-    pub(crate) fn awake_held(&self) -> bool {
-        self.awake.lock().unwrap().caffeinate.is_some()
-    }
-
     /// Removed sandboxes: no longer looked at, and the Mac let go at once if
     /// one was the last on Remote Control — not a poll later.
     pub(crate) fn forget_remote(&self, names: &[&SandboxRef]) {

@@ -31,6 +31,8 @@ pub mod ws;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod remote_tests;
 
 use crate::app::App;
 use axum::http::{header, HeaderValue};
