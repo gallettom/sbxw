@@ -70,20 +70,15 @@ end
 -- (blue) for the person, `bubble-agent` (green) for Claude and any other agent,
 -- each with its `-edge` border (theme.rs). `mine` puts the person's message on
 -- the right (label and bubble hugging that edge), agents stay on the left.
-local GUTTER = 40
+-- A bubble's widest: 80 percent of the conversation column, at most 720 pt,
+-- set by `render` from the window (the rows are built with it, so it is part
+-- of their signature).
 local MAX_W = 720
+local BW = MAX_W
 
 local function bubble(label, mark, ic, right, body, mine)
   local head = row{ gap = 4, w = "full", justify = mine and "end" or nil, icon{ mark, size = 12, color = ic }, text{ label, size = "sm", weight = "medium", color = "text-muted" }, right or false }
-  if not mine then
-    return row{ gap = 0, w = "full",
-      column{ gap = 4, grow = 1, head, body },
-      column{ w = GUTTER, h = 1 } }
-  end
-  -- The person's side: a gutter on the left keeps the two sides apart at any width.
-  return row{ gap = 0, w = "full", justify = "end",
-    column{ w = GUTTER, h = 1 },
-    column{ gap = 4, align = "end", grow = 1, max_w = MAX_W, head, body } }
+  return column{ gap = 4, w = "full", align = mine and "end" or nil, head, body }
 end
 
 local function question_card(d, data)
@@ -131,7 +126,7 @@ end
 local function summary(d, now, kids)
   if d.last_input then
     kids[#kids + 1] = bubble("You", "prompt", "text-muted", nil,
-      column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = MAX_W, text{ d.last_input, wrap = true, color = "text-bright" } }, true)
+      column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = BW, text{ d.last_input, wrap = true, color = "text-bright" } }, true)
   end
   if d.from then
     -- Another session's message (or the harness's): its words as data, quietly; never "You".
@@ -181,7 +176,7 @@ local function conv_row(r, d, now)
   elseif r.t == "you" then
     return column{ key = "monitor-you-" .. r.id, w = "full",
       bubble("You", "prompt", "text-muted", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" },
-        column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = MAX_W, key = "monitor-body-you-" .. r.id, text{ r.text, wrap = true, color = "text-bright" } }, true) }
+        column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = BW, key = "monitor-body-you-" .. r.id, text{ r.text, wrap = true, color = "text-bright" } }, true) }
   elseif r.t == "from" then
     -- Typed in by another session or the harness: quiet, never "You".
     local kids = { pad = 12, gap = 4, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full",
@@ -194,7 +189,7 @@ local function conv_row(r, d, now)
   elseif r.t == "claude" then
     return column{ key = "monitor-claude-" .. r.id, w = "full",
       bubble("Claude", "sparkle", "vendor-anthropic", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" },
-        column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = MAX_W, key = "monitor-body-claude-" .. r.id, markdown{ r.text, pills = d.sandbox } }) }
+        column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = BW, key = "monitor-body-claude-" .. r.id, markdown{ r.text, pills = d.sandbox } }) }
   elseif r.t == "step" then
     return step_row(r, d.key)
   elseif r.t == "group" then
@@ -238,7 +233,7 @@ local function feed(d, now, data, stick)
     end
     for _, r in ipairs(c.rows) do
       local mk = d.key .. "|" .. r.id
-      local sig = r.sig .. "|" .. (r.at and ago(r.at, now) or "")
+      local sig = r.sig .. "|" .. BW .. "|" .. (r.at and ago(r.at, now) or "")
       local m = cmemo[mk]
       if not (m and m.sig == sig) then
         cbuilt = cbuilt + 1
@@ -393,6 +388,8 @@ local screen = {
   init = function() return { drafts = {} } end,
   render = function(state, data)
     local v = data.monitor
+    local ow = ((data.app or {}).overlay or {}).w or 1000
+    BW = math.max(120, math.min(MAX_W, math.floor(((overlay_wide(data) and ow - LIST_W - 1 or ow) - 68) * 0.8)))
     local leads = v and (v.leads or {}).on == true
     if not v or (#(v.rows or {}) == 0 and not leads) then
       memo = {}

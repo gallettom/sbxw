@@ -1974,19 +1974,22 @@ fn the_person_is_on_the_right_and_agents_on_the_left() {
         let you = rect_of("monitor-body-you-");
         let claude = rect_of("monitor-body-claude-");
         assert!(you.len() >= 3 && claude.len() >= 2, "{w}: {} you, {} claude bubbles laid out", you.len(), claude.len());
+        let outer = |k: &str, id: &str| els.iter().find(|e| e.key.as_deref() == Some(format!("{k}{id}").as_str())).map(|e| e.rect).expect("the message's row");
         let right = conv[0] + conv[2];
         let mut by_w = you.clone();
         by_w.sort_by(|a, b| a.1[2].total_cmp(&b.1[2]));
         let (short, widest) = (&by_w[0].1, &by_w[by_w.len() - 1].1);
         assert!(short[2] < conv[2] * 0.5, "{w}: a short message is a short bubble: {short:?} in {conv:?}");
         for (k, r) in &you {
-            assert!(r[0] + r[2] > right - 20.0 && r[0] + r[2] <= right + 0.5, "{w}: {k} hugs the right edge: {r:?} in {conv:?}");
-            assert!(r[0] >= conv[0] + 40.0 - 0.5, "{w}: {k} keeps its gutter: {r:?}");
+            let o = outer("monitor-you-", k.trim_start_matches("monitor-body-you-"));
+            assert!((r[0] + r[2] - (o[0] + o[2])).abs() <= 0.5, "{w}: {k} hugs the right edge: {r:?} in {o:?}");
+            assert!(r[2] <= o[2] * 0.8 + 4.0 && o[0] + o[2] <= right + 0.5 && o[0] >= conv[0] - 0.5, "{w}: {k} is at most 80 percent of its column: {r:?} {o:?} in {conv:?}");
         }
-        assert!(widest[2] <= conv[2] - 40.0 + 0.5 && widest[2] <= 720.5, "{w}: the long one stays inside the column: {widest:?} in {conv:?}");
+        assert!(widest[2] <= 720.5, "{w}: the long one stays at the cap: {widest:?}");
         for (k, r) in &claude {
-            assert!((r[0] - conv[0]).abs() <= 1.0, "{w}: {k} at the left: {r:?} in {conv:?}");
-            assert!(r[0] + r[2] <= right - 40.0 + 0.5, "{w}: {k} keeps its gutter on the right: {r:?} in {conv:?}");
+            let o = outer("monitor-claude-", k.trim_start_matches("monitor-body-claude-"));
+            assert!((r[0] - o[0]).abs() <= 1.0, "{w}: {k} at the left: {r:?} in {o:?}");
+            assert!(r[2] <= o[2] * 0.8 + 4.0, "{w}: {k} is at most 80 percent of its column: {r:?} in {o:?}");
         }
         // Two sides: no person's bubble starts left of an agent's right edge shrunk gutter-wide overlap is allowed only vertically.
         for (ky, ry) in &you {
