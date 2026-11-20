@@ -24,16 +24,28 @@
 
   // ── Local preferences: the device name, nothing else ──
   const PREFS = 'sbxw-remote-prefs';
+  // Two UI preferences under one key: the device's name (to prefill
+  // pairing) and the dictation mode ('mac' unless the person chose 'iphone').
   const prefs = {
-    name() {
+    read() {
       try {
         const v = JSON.parse(localStorage.getItem(PREFS) || '{}');
-        return v && typeof v.device_name === 'string' ? rcCleanName(v.device_name) : '';
-      } catch (_) { return ''; }
+        return v && typeof v === 'object' ? v : {};
+      } catch (_) { return {}; }
     },
-    setName(name) {
-      try { localStorage.setItem(PREFS, JSON.stringify({ device_name: rcCleanName(name) })); } catch (_) {}
+    write(v) {
+      const out = {};
+      if (typeof v.device_name === 'string' && v.device_name) out.device_name = rcCleanName(v.device_name);
+      if (v.dictation === RC_DICTATION.iphone) out.dictation = RC_DICTATION.iphone;
+      try { localStorage.setItem(PREFS, JSON.stringify(out)); } catch (_) {}
     },
+    name() {
+      const v = prefs.read();
+      return typeof v.device_name === 'string' ? rcCleanName(v.device_name) : '';
+    },
+    setName(name) { prefs.write({ ...prefs.read(), device_name: name }); },
+    dictation() { return prefs.read().dictation === RC_DICTATION.iphone ? RC_DICTATION.iphone : RC_DICTATION.mac; },
+    setDictation(mode) { prefs.write({ ...prefs.read(), dictation: mode }); },
   };
 
   // ── The pairing code: read from the fragment, then gone from the bar ──
@@ -847,10 +859,16 @@
     mic.disabled = state === 'transcribing';
     gateSend();
   }
-  mic.addEventListener('click', async () => {
-    if (micWhy) { st.hint = micWhy; renderStatus(); return; }
+  mic.addEventListener('click', () => {
+    if (rec.state === 'listening') { speech.stop(); return; }
     if (rec.state === 'transcribing' || rec.starting) return;
     if (rec.recorder) { rec.recorder.stop(); return; }
+    // iPhone dictation, when chosen and available at this tap; else the Mac.
+    if (prefs.dictation() === RC_DICTATION.iphone && !rec.recorder && speech.start()) return;
+    macRecord();
+  });
+  async function macRecord() {
+    if (micWhy) { st.hint = micWhy; renderStatus(); return; }
     rec.starting = true;
     let stream;
     try {
@@ -871,7 +889,8 @@
     recorder.addEventListener('stop', () => finishRecording(recorder.mimeType));
     recorder.start();
     st.hint = '';
-    if (st.note?.tone !== 'warn') st.note = null;
+    // A warning stays, and so does the sentence that says why the Mac records.
+    if (st.note?.tone !== 'warn' && st.note?.text !== RC_SPEECH_FALLBACK_TEXT) st.note = null;
     startWave(stream);
     setRec('recording');
     const tick = () => {
@@ -881,7 +900,109 @@
     };
     tick();
     rec.timer = setInterval(tick, 250);
-  });
+  }
+
+  // ── iPhone dictation (Web Speech API), chosen in the menu ──
+  // The page opens no audio stream of its own here: no wave, a steady dot
+  // and the time. The final words go into the field at the caret; interim
+  // ones are shown lighter while they come. A refusal of the browser before
+  // any word falls back to the Mac for this recording, with one sentence.
+  const lastCaret = { value: null, at: 0 };
+  field.addEventListener('blur', () => { lastCaret.value = field.value; lastCaret.at = field.selectionStart; });
+  const speech = {
+    r: null, base: '', caret: 0, final: '', heard: false, sandbox: null, fellBack: false,
+    start() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (typeof SR !== 'function') return speech.fallback();
+      let r;
+      try {
+        r = new SR();
+        r.lang = rcSpeechLang(navigator.language, document.documentElement.lang);
+        r.interimResults = true;
+        r.continuous = true;
+        r.maxAlternatives = 1;
+      } catch (_) { return speech.fallback(); }
+      // The caret: where it was when the field lost focus to the mic button,
+      // if the text has not changed since; else the end.
+      const caret = document.activeElement === field ? field.selectionStart : lastCaret.value === field.value ? lastCaret.at : field.value.length;
+      Object.assign(speech, { r, base: field.value, caret, final: '', heard: false, sandbox: st.current, fellBack: false });
+      r.onresult = e => {
+        if (speech.r !== r) return;
+        speech.heard = true;
+        const t = rcSpeechText(e.results);
+        speech.final = t.final;
+        // The field holds what is final, at the caret; the bar shows both.
+        if (st.current === speech.sandbox) field.value = rcInsertAt(speech.base, speech.caret, t.final).value;
+        const tail = t.final.length > 140 ? `…${t.final.slice(-140)}` : t.final;
+        $('rec-final').textContent = tail;
+        $('rec-interim').textContent = t.interim;
+      };
+      r.onerror = e => {
+        if (speech.r !== r) return;
+        if (!speech.heard && rcSpeechFallback(e && e.error)) {
+          speech.fellBack = true;
+          speech.end();
+          note(RC_SPEECH_FALLBACK_TEXT, 'info');
+          macRecord();
+        }
+        // Any other error (no-speech, aborted...): onend follows and says it.
+      };
+      r.onend = () => { if (speech.r === r) speech.end(); };
+      try {
+        r.start();
+      } catch (_) {
+        speech.r = null;
+        return speech.fallback();
+      }
+      $('rec-final').textContent = '';
+      $('rec-interim').textContent = '';
+      $('rec-words').hidden = false;
+      $('rec-time').textContent = rcClock(0);
+      rec.started = Date.now();
+      st.hint = '';
+      if (st.note?.tone !== 'warn') st.note = null;
+      composer.dataset.wave = 'none';
+      setRec('listening');
+      clearInterval(rec.timer);
+      rec.timer = setInterval(() => {
+        const s = Math.floor((Date.now() - rec.started) / 1000);
+        $('rec-time').textContent = rcClock(s);
+        if (s >= RC_VOICE_MAX_S) speech.stop();
+      }, 250);
+      return true;
+    },
+    // Not available at this tap: say so once, and let the Mac record.
+    fallback() {
+      note(RC_SPEECH_FALLBACK_TEXT, 'info');
+      return false;
+    },
+    stop() { try { speech.r?.stop(); } catch (_) { speech.end(); } },
+    abort() { try { speech.r?.abort(); } catch (_) {} speech.end(); },
+    end() {
+      const r = speech.r;
+      if (!r) return;
+      speech.r = null;
+      r.onresult = r.onerror = r.onend = null;
+      clearInterval(rec.timer);
+      $('rec-words').hidden = true;
+      $('rec-final').textContent = '';
+      $('rec-interim').textContent = '';
+      setRec('idle');
+      if (speech.fellBack) return;
+      const words = speech.final;
+      if (st.current === speech.sandbox) {
+        const put = rcInsertAt(speech.base, speech.caret, words);
+        field.value = put.value;
+        // The advisory checks run on dictated text as on typed text.
+        field.dispatchEvent(new Event('input'));
+        st.hint = words ? 'Added to the field: read it, then Send.' : 'No words heard.';
+        renderStatus();
+      } else if (speech.sandbox && words) {
+        st.drafts.set(speech.sandbox, rcInsertAt(st.drafts.get(speech.sandbox) || speech.base, (st.drafts.get(speech.sandbox) || speech.base).length, words).value);
+      }
+    },
+  };
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && speech.r) speech.stop(); });
 
   // The wave: levels from an AnalyserNode on the same stream, drawn on a
   // canvas (no data: or blob: URL). Recording never depends on it: without
@@ -970,6 +1091,7 @@
   }
   // `discard`: the page hid or the device was forgotten: stop and keep nothing.
   function stopRecording(discard) {
+    if (speech.r) { if (discard) speech.abort(); else speech.stop(); }
     if (!rec.recorder) return;
     rec.discard = !!discard;
     try { rec.recorder.stop(); } catch (_) { finishRecording(''); }
@@ -1002,6 +1124,7 @@
       res = null;
     }
     setRec('idle');
+    if (st.note?.text === RC_SPEECH_FALLBACK_TEXT) st.note = null;
     const say = text => { st.hint = text; renderStatus(); };
     if (!res) return say('This recording could not be read.');
     if (!res.ok) return say(res.status === 503 ? 'Dictation is not installed on the Mac.' : rcFailText('Recording', res).replace('not sent', 'not transcribed'));
@@ -1040,6 +1163,23 @@
     f.classList.remove('rc-armed');
     f.textContent = 'Forget this device';
   }
+  // Dictation: Mac (private) or iPhone; a UI preference, kept on the phone.
+  function renderDictation() {
+    const mode = prefs.dictation();
+    for (const b of document.querySelectorAll('#dict .rc-seg-opt')) b.setAttribute('aria-checked', String(b.dataset.mode === mode));
+    const lang = $('dict-lang');
+    lang.hidden = mode !== RC_DICTATION.iphone;
+    lang.textContent = `Language: ${rcSpeechLang(navigator.language, document.documentElement.lang)} (this browser's).`;
+  }
+  for (const b of document.querySelectorAll('#dict .rc-seg-opt')) {
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      if (rec.state !== 'idle') return;
+      prefs.setDictation(b.dataset.mode === RC_DICTATION.iphone ? RC_DICTATION.iphone : RC_DICTATION.mac);
+      renderDictation();
+    });
+  }
+  renderDictation();
   $('menu-btn').addEventListener('click', e => {
     e.stopPropagation();
     const open = $('menu').hidden;

@@ -80,6 +80,30 @@ function spies() {
       return { type: 'public-key', rawId: buf('cred-id-12345678'), response: { clientDataJSON: buf('{"type":"webauthn.get"}'), authenticatorData: buf('authdata-authdata-authdata-authdata-1'), signature: buf('sig') } };
     };
   }
+  // A fake SpeechRecognition: `__sr` = ok (default) | missing | ctor | start
+  // | err:<code>. The test says words with window.__srLast.say([[text, final]]).
+  spy.sr = [];
+  const sr = localStorage.getItem('__sr') || 'ok';
+  delete window.SpeechRecognition;
+  delete window.webkitSpeechRecognition;
+  if (sr !== 'missing') {
+    window.webkitSpeechRecognition = class {
+      constructor() { if (sr === 'ctor') throw new Error('no'); window.__srLast = this; }
+      start() {
+        spy.sr.push(`start ${this.lang} ${this.interimResults} ${this.continuous}`);
+        if (sr === 'start') throw new DOMException('no', 'InvalidStateError');
+        if (sr.startsWith('err:')) setTimeout(() => { this.onerror?.({ error: sr.slice(4) }); this.onend?.(); }, 60);
+      }
+      stop() { spy.sr.push('stop'); setTimeout(() => this.onend?.(), 20); }
+      abort() { spy.sr.push('abort'); setTimeout(() => this.onend?.(), 0); }
+      say(list) {
+        const results = list.map(([t, f]) => ({ 0: { transcript: t }, length: 1, isFinal: f }));
+        results.item = i => results[i];
+        this.onresult?.({ resultIndex: 0, results });
+      }
+      fail(code) { this.onerror?.({ error: code }); this.onend?.(); }
+    };
+  }
   navigator.mediaDevices.getUserMedia = async () => {
     const ctx = new AudioContext();
     const osc = ctx.createOscillator();
@@ -108,7 +132,7 @@ async function phone(width = 390, height = 844, opts = {}) {
   const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: IPHONE_UA, reducedMotion: opts.reducedMotion || 'no-preference' });
   // Test levers for the fake microphone, set before the page's scripts (they
   // are the test's, never the page's: cleanSpy ignores keys starting __).
-  if (opts.flags) await ctx.addInitScript(f => { for (const x of f) { const [k, v] = x.split(':'); localStorage.setItem(k, v || '1'); } }, opts.flags);
+  if (opts.flags) await ctx.addInitScript(f => { for (const x of f) { const i = x.indexOf(':'); localStorage.setItem(i < 0 ? x : x.slice(0, i), i < 0 ? '1' : x.slice(i + 1)); } }, opts.flags);
   await ctx.addInitScript(spies);
   const page = await ctx.newPage();
   const problems = [];
@@ -128,8 +152,10 @@ async function cleanSpy(page) {
   assert.deepEqual(spy.console, [], 'no console output');
   assert.equal(spy.idb + spy.caches + spy.sw, 0, 'no IndexedDB, Cache API or service worker');
   for (const [area, key, value] of spy.storage.filter(([, k]) => !k.startsWith('__'))) {
-    assert.equal(`${area} ${key}`, 'local sbxw-remote-prefs', 'only the device name is stored');
-    assert.deepEqual(Object.keys(JSON.parse(value)), ['device_name']);
+    assert.equal(`${area} ${key}`, 'local sbxw-remote-prefs', 'only the UI preferences are stored');
+    const v = JSON.parse(value);
+    for (const k of Object.keys(v)) assert.ok(['device_name', 'dictation'].includes(k), `stored: ${k}`);
+    if ('dictation' in v) assert.equal(v.dictation, 'iphone');
     for (const w of SECRET_WORDS) assert.ok(!value.includes(w));
   }
   const stored = await page.evaluate(() => JSON.stringify(Object.fromEntries(Object.entries(localStorage).filter(([k]) => !k.startsWith('__')))) + JSON.stringify({ ...sessionStorage }));
@@ -1380,4 +1406,124 @@ test('kanban shots: 390x844, 320x568, and landscape 844x390 with the columns sid
     assert.deepEqual(problems, []);
     await ctx.close();
   }
+});
+
+// ══ Dictation by the phone's own recognition (optional) ═══════════════════
+const FALLBACK = 'iPhone dictation is not available here. Using your Mac.';
+async function chooseIphone(page) {
+  await page.tap('#menu-btn');
+  await page.tap('#dict-iphone');
+  await page.tap('#menu-btn');
+}
+test('dictation setting: Mac by default, iPhone kept as a preference, its honest line and language', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.waitForSelector('.rc-leader');
+  await page.tap('#menu-btn');
+  assert.equal(await page.getAttribute('#dict-mac', 'aria-checked'), 'true', 'Mac by default');
+  assert.ok(await page.isVisible('text=iPhone dictation is done by Apple\'s speech recognition; your voice may be sent to Apple.'));
+  assert.equal(await page.isVisible('#dict-lang'), false);
+  await page.tap('#dict-iphone');
+  assert.equal(await page.getAttribute('#dict-iphone', 'aria-checked'), 'true');
+  assert.match(await page.textContent('#dict-lang'), /^Language: [a-z]{2}(-[A-Z]{2})? \(this browser's\)\.$/);
+  await shot(page, '80-menu-dictation');
+  assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('sbxw-remote-prefs'))), { dictation: 'iphone' });
+  await page.reload();
+  await page.waitForSelector('.rc-leader');
+  await page.tap('#menu-btn');
+  assert.equal(await page.getAttribute('#dict-iphone', 'aria-checked'), 'true', 'kept across a reload');
+  await page.tap('#dict-mac');
+  assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('sbxw-remote-prefs'))), {}, 'Mac is the default: nothing kept');
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('iPhone dictation: interim then final words into the field at the caret, stop, nothing sent, no audio stream', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await chooseIphone(page);
+  await page.tap('.rc-leader >> text=website');
+  await page.fill('#field', 'Hello world');
+  await page.evaluate(() => { const f = document.getElementById('field'); f.focus(); f.setSelectionRange(5, 5); });
+  await page.tap('#mic');
+  await page.waitForSelector('#composer[data-rec="listening"]');
+  const spy = await page.evaluate(() => window.__spy);
+  assert.match(spy.sr[0], /^start [a-z]{2}(-[A-Z]{2})? true true$/);
+  assert.equal(spy.tracks, 0, 'the page opens no audio stream of its own');
+  assert.equal(await page.isVisible('#wave'), false, 'no wave in this mode');
+  assert.match(await page.textContent('#status'), /^Listening \(iPhone dictation\)\./);
+  await page.evaluate(() => window.__srLast.say([['big', false]]));
+  assert.equal(await page.textContent('#rec-interim'), 'big');
+  assert.equal(await page.inputValue('#field'), 'Hello world', 'an interim word is not in the field');
+  await page.evaluate(() => window.__srLast.say([['big and', true], ['bright', false]]));
+  assert.equal(await page.textContent('#rec-final'), 'big and');
+  assert.equal(await page.textContent('#rec-interim'), 'bright');
+  await page.waitForTimeout(1100);
+  assert.match(await page.textContent('#rec-time'), /^0:0[1-2]$/);
+  await shot(page, '81-iphone-listening');
+  await page.evaluate(() => window.__srLast.say([['big and', true], ['bright', true]]));
+  await page.tap('#mic');
+  await page.waitForSelector('#composer[data-rec="idle"]');
+  assert.equal(await page.inputValue('#field'), 'Hello big and bright world', 'at the caret, spaced');
+  assert.equal(await page.textContent('#status'), 'Added to the field: read it, then Send.');
+  await shot(page, '82-iphone-filled');
+  assert.ok((await page.evaluate(() => window.__spy.sr)).includes('stop'));
+  assert.equal((await calls('POST', '/r/voice/transcribe')).length, 0, 'the Mac is not asked');
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 0, 'dictation never sends');
+  // The advisory checks run on dictated words.
+  await page.fill('#field', '');
+  await page.tap('#mic');
+  await page.waitForSelector('#composer[data-rec="listening"]');
+  await page.evaluate(() => window.__srLast.say([['/clear', true]]));
+  await page.tap('#mic');
+  await page.waitForSelector('#status:text-matches("^Commands cannot be sent from the phone")');
+  // Nothing heard.
+  await page.fill('#field', '');
+  await page.tap('#mic');
+  await page.waitForSelector('#composer[data-rec="listening"]');
+  await page.evaluate(() => window.__srLast.fail('no-speech'));
+  await page.waitForSelector('#status:text("No words heard.")');
+  assert.equal((await calls('POST', '/r/voice/transcribe')).length, 0);
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('iPhone dictation falls back to the Mac, with one sentence, never a dead button', { skip }, async () => {
+  for (const mode of ['missing', 'ctor', 'start', 'err:not-allowed', 'err:service-not-allowed', 'err:network', 'err:audio-capture']) {
+    await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+    const { ctx, page, problems } = await phone(390, 844, { flags: [`__sr:${mode}`] });
+    await page.goto(`${base()}/`);
+    await chooseIphone(page);
+    await page.tap('.rc-leader >> text=website');
+    await page.tap('#mic');
+    await page.waitForSelector('#composer[data-rec="recording"]', { timeout: 5000 }).catch(async e => {
+      throw new Error(`${mode}: ${await page.getAttribute('#composer', 'data-rec')} / ${await page.textContent('#status')} / ${JSON.stringify(await page.evaluate(() => window.__spy.sr))}`);
+    });
+    assert.equal(await page.textContent('#status'), FALLBACK, mode);
+    if (mode === 'missing') await shot(page, '83-iphone-fallback');
+    await page.waitForTimeout(600);
+    await page.tap('#mic');
+    await page.waitForSelector('text=Added to the field: read it, then Send.', { timeout: 8000 });
+    assert.equal((await calls('POST', '/r/voice/transcribe')).length, 1, `${mode}: the Mac transcribed`);
+    assert.equal((await calls('POST', '/r/leaders/website/message')).length, 0);
+    assert.deepEqual(problems, [], mode);
+    await ctx.close();
+  }
+  // An error after words were heard is not a fallback: the words stay.
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
+  const { ctx, page } = await phone();
+  await page.goto(`${base()}/`);
+  await chooseIphone(page);
+  await page.tap('.rc-leader >> text=website');
+  await page.tap('#mic');
+  await page.waitForSelector('#composer[data-rec="listening"]');
+  await page.evaluate(() => { window.__srLast.say([['kept words', true]]); window.__srLast.fail('network'); });
+  await page.waitForSelector('#composer[data-rec="idle"]');
+  assert.equal(await page.inputValue('#field'), 'kept words');
+  assert.equal((await calls('POST', '/r/voice/transcribe')).length, 0);
+  await ctx.close();
 });

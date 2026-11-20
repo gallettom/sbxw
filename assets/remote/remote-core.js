@@ -628,6 +628,7 @@ function rcStatus({ note = null, rec = 'idle', gate = '', held = 0, pending = 0,
   if (note && note.text) return { text: note.text, tone: note.tone || 'info' };
   if (rec === 'recording') return { text: 'Recording. Tap stop when you are done: the words go into the field, nothing is sent.', tone: 'busy' };
   if (rec === 'transcribing') return { text: 'Transcribing on your Mac…', tone: 'busy' };
+  if (rec === 'listening') return { text: 'Listening (iPhone dictation). Tap stop when you are done: the words go into the field, nothing is sent.', tone: 'busy' };
   if (held) return { text: `Tick the box to attach ${held === 1 ? 'the file whose name looks' : `the ${held} files whose names look`} like a secret, or cancel.`, tone: 'info' };
   if (pending) return { text: `Uploading ${pending === 1 ? '1 file' : `${pending} files`}: Send waits until ${pending === 1 ? 'it is' : 'they are'} done.`, tone: 'busy' };
   if (gate) return { text: files ? `${gate.replace(/\.$/, '')}. Your files wait here.` : gate, tone: 'info' };
@@ -944,4 +945,46 @@ function rcKbPaths(sandbox, n) {
   const at = `/r/leaders/${encodeURIComponent(sandbox)}/kanban`;
   if (n === undefined) return at;
   return Number.isInteger(n) && n > 0 && n < 1e9 ? `${at}/T-${n}` : null;
+}
+
+// ══ Dictation by the phone's own speech recognition (optional) ═══════════
+// Off by default: the Mac transcribes (audio to /r/voice/transcribe only).
+// With "iPhone" chosen in the menu, the Web Speech API listens instead; the
+// voice may then be processed by Apple. The words still only go INTO the
+// field; nothing is sent.
+const RC_DICTATION = { mac: 'mac', iphone: 'iphone' };
+const RC_SPEECH_NOTE = 'iPhone dictation is done by Apple\'s speech recognition; your voice may be sent to Apple.';
+const RC_SPEECH_FALLBACK_TEXT = 'iPhone dictation is not available here. Using your Mac.';
+// Errors that mean "this browser cannot do it": the Mac takes over.
+const RC_SPEECH_FALLBACK = ['not-allowed', 'service-not-allowed', 'network', 'audio-capture'];
+function rcSpeechFallback(error) {
+  return RC_SPEECH_FALLBACK.includes(String(error || ''));
+}
+// The recognition language: the browser's, else the page's, else English.
+function rcSpeechLang(browser, page) {
+  const ok = s => typeof s === 'string' && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(s);
+  return ok(browser) ? browser : ok(page) ? page : 'en-US';
+}
+// Words put into the field at the caret, with a space on each side where
+// the text there needs one.
+function rcInsertAt(text, caret, words) {
+  const t = String(text ?? '');
+  const w = String(words ?? '').trim();
+  if (!w) return { value: t, caret: Math.min(Math.max(0, caret | 0), t.length) };
+  const at = Number.isInteger(caret) && caret >= 0 && caret <= t.length ? caret : t.length;
+  const before = t.slice(0, at), after = t.slice(at);
+  const lead = before && !/\s$/.test(before) ? ' ' : '';
+  const tail = after && !/^\s/.test(after) ? ' ' : '';
+  const value = `${before}${lead}${w}${tail}${after}`;
+  return { value, caret: before.length + lead.length + w.length };
+}
+// The final and the interim text of a SpeechRecognition result list.
+function rcSpeechText(results) {
+  let final = '', interim = '';
+  for (let i = 0; i < (results?.length || 0); i++) {
+    const r = results[i];
+    const t = r && r[0] && typeof r[0].transcript === 'string' ? r[0].transcript : '';
+    if (r && r.isFinal) final += ` ${t}`; else interim += ` ${t}`;
+  }
+  return { final: final.replace(/\s+/g, ' ').trim(), interim: interim.replace(/\s+/g, ' ').trim() };
 }

@@ -563,6 +563,23 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 [data-wave="pulse"] .rc-rec-dot { animation: rc-pulse 1.2s ease-in-out infinite; }
 [data-wave="pulse"] .rc-wave { visibility: hidden; }
 .rc-mic.rc-off { color: var(--c-text-dim); }
+/* iPhone dictation: no audio stream of the page's own, so no wave: a steady
+   dot, the time, and the words as they come (interim ones lighter). */
+.rc-rec-words { flex: 1; min-width: 0; margin: 0; max-height: 2.8em; overflow: hidden; font-size: var(--fs-sm); line-height: 1.4; color: var(--c-text-bright); overflow-wrap: anywhere; }
+.rc-rec-words:empty, .rc-rec-words:has(span:empty + span:empty)::before { content: "Listening…"; color: var(--c-text-dim); }
+.rc-interim { color: var(--c-text-dim); font-style: italic; }
+[data-rec="listening"] .rc-field, [data-rec="listening"] #attach, [data-rec="listening"] .rc-wave { display: none; }
+[data-rec="listening"] .rc-box { border-color: rgba(248, 81, 73, 0.5); padding-left: 10px; }
+[data-rec="listening"] .rc-mic { color: #fff; }
+[data-rec="listening"] .rc-mic::before { background: var(--c-red); }
+[data-rec="listening"] .rc-mic .rc-i-mic { display: none; }
+[data-rec="listening"] .rc-mic .rc-i-stop { display: block; }
+[data-rec="listening"] .rc-mic .rc-i-stop rect { fill: currentColor; stroke: none; }
+.rc-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; border-radius: 11px; background: var(--c-bg); border: 1px solid var(--c-hair); }
+.rc-seg-opt { position: relative; min-height: 36px; border: 0; border-radius: 9px; background: transparent; color: var(--c-text-muted); font-size: var(--fs-sm); font-weight: 600; }
+.rc-seg-opt::after { content: ""; position: absolute; inset: -4px 0; }
+.rc-seg-opt[aria-checked="true"] { background: var(--c-surface); color: var(--c-text-bright); box-shadow: 0 1px 2px rgba(1, 4, 9, 0.5); }
+.rc-seg-opt:focus-visible { box-shadow: var(--ring); }
 
 /* ── Files: chips above the field ── */
 .rc-tray { display: grid; gap: 6px; padding: 0 2px 4px; animation: rc-rise 180ms var(--ease); }

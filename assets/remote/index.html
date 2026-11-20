@@ -59,6 +59,13 @@
 <div id="menu" class="rc-menu" role="menu" hidden>
   <p class="rc-menu-label">This device</p>
   <p id="menu-device" class="rc-menu-device"></p>
+  <p class="rc-menu-label" id="dict-label">Dictation</p>
+  <div id="dict" class="rc-seg" role="radiogroup" aria-labelledby="dict-label">
+    <button id="dict-mac" class="rc-seg-opt" type="button" role="radio" aria-checked="true" data-mode="mac">Mac (private)</button>
+    <button id="dict-iphone" class="rc-seg-opt" type="button" role="radio" aria-checked="false" data-mode="iphone">iPhone</button>
+  </div>
+  <p class="rc-menu-note">iPhone dictation is done by Apple's speech recognition; your voice may be sent to Apple.</p>
+  <p id="dict-lang" class="rc-menu-note" hidden></p>
   <button id="forget" class="rc-btn rc-danger" type="button" role="menuitem">Forget this device</button>
   <p class="rc-menu-note">Forgetting it means pairing again from the Mac.</p>
 </div>
@@ -187,6 +194,7 @@
         <div id="rec" class="rc-rec" hidden>
           <span id="rec-dot" class="rc-rec-dot" aria-hidden="true"></span>
           <canvas id="wave" class="rc-wave" aria-hidden="true"></canvas>
+          <p id="rec-words" class="rc-rec-words" aria-live="polite" hidden><span id="rec-final"></span> <span id="rec-interim" class="rc-interim"></span></p>
           <span id="rec-time" class="rc-rec-time" role="timer" aria-label="Recording time">0:00</span>
         </div>
         <button id="mic" class="rc-icon-btn rc-in rc-mic" type="button" aria-label="Dictate">

@@ -20,7 +20,7 @@ const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcSta
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
   'rcL2Fail', 'RC_L2_REASON', 'rcActPath', 'rcActLine', 'rcActDone', 'rcL2Client',
-  'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths'];
+  'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback'];
 const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
@@ -616,4 +616,24 @@ test('the board is drawn as it comes: the daemon\'s order, fields checked, activ
   assert.equal(rc.rcKbPaths('my shop'), '/r/leaders/my%20shop/kanban');
   assert.equal(rc.rcKbPaths('shop', 12), '/r/leaders/shop/kanban/T-12');
   for (const n of [null, 0, -1, 1.5, '12', 1e9]) assert.equal(rc.rcKbPaths('shop', n), null, String(n));
+});
+
+// ── iPhone dictation ──
+test('iPhone dictation: words at the caret, final and interim apart, the language, which errors fall back', () => {
+  const at = (t, c, w) => plain(rc.rcInsertAt(t, c, w));
+  assert.deepEqual(at('', 0, 'hello'), { value: 'hello', caret: 5 });
+  assert.deepEqual(at('Hello world', 5, 'big'), { value: 'Hello big world', caret: 9 });
+  assert.deepEqual(at('Hello ', 6, ' there '), { value: 'Hello there', caret: 11 });
+  assert.deepEqual(at('ab', 99, 'c'), { value: 'ab c', caret: 4 }, 'a caret out of range: the end');
+  assert.deepEqual(at('ab', 1, '  '), { value: 'ab', caret: 1 });
+  const R = list => Object.assign(list.map(([t, f]) => ({ 0: { transcript: t }, isFinal: f })), {});
+  assert.deepEqual(plain(rc.rcSpeechText(R([['one ', true], [' two', true], ['thr', false]]))), { final: 'one two', interim: 'thr' });
+  assert.deepEqual(plain(rc.rcSpeechText(null)), { final: '', interim: '' });
+  assert.deepEqual(plain(rc.rcSpeechText([{ 0: { transcript: 7 }, isFinal: true }])), { final: '', interim: '' });
+  assert.equal(rc.rcSpeechLang('fr-FR', 'en'), 'fr-FR');
+  assert.equal(rc.rcSpeechLang('', 'en'), 'en');
+  assert.equal(rc.rcSpeechLang('"><x', '!!'), 'en-US');
+  for (const e of ['not-allowed', 'service-not-allowed', 'network', 'audio-capture']) assert.equal(rc.rcSpeechFallback(e), true, e);
+  for (const e of ['no-speech', 'aborted', 'language-not-supported', '', undefined]) assert.equal(rc.rcSpeechFallback(e), false, String(e));
+  assert.match(plain(rc.rcStatus({ rec: 'listening' })).text, /^Listening \(iPhone dictation\)\. .*nothing is sent\.$/);
 });
