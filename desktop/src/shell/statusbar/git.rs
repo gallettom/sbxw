@@ -233,6 +233,10 @@ impl App {
                 }
             }
         }
+        // A fixture has nothing that changes by itself: no timer for it.
+        if matches!(self.target, crate::client::Target::Fixture(_)) {
+            wake = None;
+        }
         let item = self.git_item();
         let changed = item != self.status.git.shown;
         self.status.git.shown = item;
