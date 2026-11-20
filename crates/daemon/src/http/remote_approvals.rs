@@ -57,24 +57,47 @@ pub async fn passkey_start(State(app): S, Extension(d): Extension<DeviceCtx>, Js
     answer(app.remote_passkey_start(&d).map(|(id, check, exp)| json!({ "request_id": id, "check": check, "expires_ms": exp })))
 }
 
-pub async fn passkey_status(State(app): S, Extension(d): Extension<DeviceCtx>) -> Response {
-    answer(app.remote_passkey_status(&d))
+/// The id `/r/passkey/start` gave the client that asked: 32 hex, or
+/// nothing matches.
+fn request_id(s: &str) -> &str {
+    if s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        s
+    } else {
+        ""
+    }
 }
 
-pub async fn passkey_options(State(app): S, Extension(d): Extension<DeviceCtx>, Json(_): Json<Empty>) -> Response {
-    answer(app.remote_passkey_options(&d))
+#[derive(Deserialize)]
+pub struct StatusQuery {
+    #[serde(default)]
+    request_id: String,
+}
+
+pub async fn passkey_status(State(app): S, Extension(d): Extension<DeviceCtx>, axum::extract::Query(q): axum::extract::Query<StatusQuery>) -> Response {
+    answer(app.remote_passkey_status(&d, request_id(&q.request_id)))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Options {
+    request_id: String,
+}
+
+pub async fn passkey_options(State(app): S, Extension(d): Extension<DeviceCtx>, Json(b): Json<Options>) -> Response {
+    answer(app.remote_passkey_options(&d, request_id(&b.request_id)))
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Register {
+    request_id: String,
     id: String,
     client_data_json: String,
     attestation_object: String,
 }
 
 pub async fn passkey_register(State(app): S, Extension(d): Extension<DeviceCtx>, Json(b): Json<Register>) -> Response {
-    answer(app.remote_passkey_register(&d, &b.id, &b.client_data_json, &b.attestation_object).map(|()| json!({ "ok": true })))
+    answer(app.remote_passkey_register(&d, request_id(&b.request_id), &b.id, &b.client_data_json, &b.attestation_object).map(|()| json!({ "ok": true })))
 }
 
 // ── Lists and details ────────────────────────────────────────────────────

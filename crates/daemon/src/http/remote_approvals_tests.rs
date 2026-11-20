@@ -113,6 +113,8 @@ struct Phone {
     token: String,
     id: String,
     auth: Authenticator,
+    /// The request id `/r/passkey/start` gave THIS client.
+    rid: std::cell::RefCell<String>,
 }
 
 async fn pair(w: &World, name: &str) -> Phone {
@@ -125,7 +127,19 @@ async fn pair(w: &World, name: &str) -> Phone {
     let cookie = r.headers[header::SET_COOKIE].to_str().unwrap().to_string();
     let token = cookie[COOKIE.len() + 1..].split(';').next().unwrap().to_string();
     let me = call(&w.router, "GET", "/r/me", Some(&token), json!({})).await;
-    Phone { token, id: me.json()["device"]["id"].as_str().unwrap().to_string(), auth: Authenticator::new() }
+    Phone { token, id: me.json()["device"]["id"].as_str().unwrap().to_string(), auth: Authenticator::new(), rid: Default::default() }
+}
+
+async fn opts(w: &World, p: &Phone, id: &str) -> Reply {
+    call(&w.router, "POST", "/r/passkey/options", Some(&p.token), json!({ "request_id": id })).await
+}
+
+async fn st(w: &World, p: &Phone, id: &str) -> Reply {
+    call(&w.router, "GET", &format!("/r/passkey/status?request_id={id}"), Some(&p.token), json!({})).await
+}
+
+fn rid(p: &Phone) -> String {
+    p.rid.borrow().clone()
 }
 
 /// The phone asks, the Mac types its digits: a grant.
@@ -133,11 +147,12 @@ async fn grant(w: &World, p: &Phone) {
     let r = call(&w.router, "POST", "/r/passkey/start", Some(&p.token), json!({})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     let check = r.json()["check"].as_str().unwrap().to_string();
+    *p.rid.borrow_mut() = r.json()["request_id"].as_str().unwrap().to_string();
     w.app.remote_passkey_allow(&p.id, &check).unwrap();
 }
 
 async fn register_with(w: &World, p: &Phone, t: &Twist) -> Reply {
-    let r = call(&w.router, "POST", "/r/passkey/options", Some(&p.token), json!({})).await;
+    let r = call(&w.router, "POST", "/r/passkey/options", Some(&p.token), json!({ "request_id": rid(p) })).await;
     if r.status != StatusCode::OK {
         return r;
     }
@@ -149,7 +164,7 @@ async fn register_with(w: &World, p: &Phone, t: &Twist) -> Reply {
     let ch = b64url_decode(pk["challenge"].as_str().unwrap(), 64).unwrap();
     assert!(ch.len() >= 16, "at least 128 bits");
     let (id, cd, att) = p.auth.register(TN, &ch, t);
-    call(&w.router, "POST", "/r/passkey/register", Some(&p.token), json!({ "id": b64url_encode(&id), "client_data_json": b64url_encode(&cd), "attestation_object": b64url_encode(&att) })).await
+    call(&w.router, "POST", "/r/passkey/register", Some(&p.token), json!({ "request_id": rid(p), "id": b64url_encode(&id), "client_data_json": b64url_encode(&cd), "attestation_object": b64url_encode(&att) })).await
 }
 
 async fn enrolled(w: &World, name: &str) -> Phone {
@@ -224,28 +239,36 @@ async fn registration_needs_a_grant_made_at_the_mac() {
     let a = pair(&w, "phone a").await;
     let b = pair(&w, "phone b").await;
     // No grant: no options, and a registration is refused.
-    let r = call(&w.router, "POST", "/r/passkey/options", Some(&a.token), json!({})).await;
+    let r = opts(&w, &a, &"0".repeat(32)).await;
     assert_eq!((r.status, r.json()["reason"].as_str()), (StatusCode::FORBIDDEN, Some("no_grant")));
     let (id, cd, att) = a.auth.register(TN, &[0u8; 32], &Twist::default());
-    let r = call(&w.router, "POST", "/r/passkey/register", Some(&a.token), json!({ "id": b64url_encode(&id), "client_data_json": b64url_encode(&cd), "attestation_object": b64url_encode(&att) })).await;
+    let r = call(&w.router, "POST", "/r/passkey/register", Some(&a.token), json!({ "request_id": "0".repeat(32), "id": b64url_encode(&id), "client_data_json": b64url_encode(&cd), "attestation_object": b64url_encode(&att) })).await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
     // A pending request is not a grant; wrong digits are not.
     let r = call(&w.router, "POST", "/r/passkey/start", Some(&a.token), json!({})).await;
     let check = r.json()["check"].as_str().unwrap().to_string();
-    assert_eq!(r.json()["request_id"].as_str().unwrap().len(), 32);
-    assert_eq!(call(&w.router, "POST", "/r/passkey/options", Some(&a.token), json!({})).await.status, StatusCode::FORBIDDEN);
+    let a_rid = r.json()["request_id"].as_str().unwrap().to_string();
+    assert_eq!(a_rid.len(), 32);
+    *a.rid.borrow_mut() = a_rid.clone();
+    assert_eq!(opts(&w, &a, &a_rid).await.status, StatusCode::FORBIDDEN);
     let wrong = if check == "000000" { "111111" } else { "000000" };
     assert!(w.app.remote_passkey_allow(&a.id, wrong).is_err());
-    // Another device's grant: B is granted, A still is not.
+    // Another device's grant: B is granted, A still is not, even with B's id.
     grant(&w, &b).await;
-    assert_eq!(call(&w.router, "POST", "/r/passkey/options", Some(&a.token), json!({})).await.status, StatusCode::FORBIDDEN, "B's grant is not A's");
+    assert_eq!(opts(&w, &a, &a_rid).await.status, StatusCode::FORBIDDEN, "B's grant is not A's");
+    assert_eq!(opts(&w, &a, &rid(&b)).await.status, StatusCode::FORBIDDEN, "B's request id under A's cookie");
     assert!(w.app.remote_passkey_allow(&b.id, &check).is_err(), "A's digits do not grant B");
-    // A's own grant works once.
+    // A's own grant: only with A's request id; status only for that id.
     w.app.remote_passkey_allow(&a.id, &check).unwrap();
+    assert_eq!(st(&w, &a, &a_rid).await.json()["state"], "granted");
+    assert_eq!(st(&w, &a, &"f".repeat(32)).await.json()["state"], "none", "another id learns nothing");
+    assert_eq!(call(&w.router, "GET", "/r/passkey/status", Some(&a.token), json!({})).await.json()["state"], "none", "no id learns nothing");
     assert_eq!(register_with(&w, &a, &Twist::default()).await.status, StatusCode::OK);
-    assert_eq!(call(&w.router, "GET", "/r/passkey/status", Some(&a.token), json!({})).await.json()["state"], "registered");
-    let r = call(&w.router, "POST", "/r/passkey/options", Some(&a.token), json!({})).await;
-    assert_eq!(r.status, StatusCode::FORBIDDEN, "a used grant is spent");
+    assert_eq!(call(&w.router, "GET", "/r/approvals", Some(&a.token), json!({})).await.json()["passkey"], true);
+    assert_eq!(opts(&w, &a, &a_rid).await.status, StatusCode::FORBIDDEN, "a used grant is spent");
+    // The Mac sees when it was registered.
+    let pk = &w.app.remote_approvals_status()["devices"].as_array().unwrap().iter().find(|d| d["id"] == a.id.as_str()).unwrap()["passkey"].clone();
+    assert!(pk["created_ms"].as_u64().unwrap() > 0, "{pk}");
     assert!(journal(&w).iter().any(|e| e.kind == Kind::PasskeyRegistered && e.device_id == a.id));
     // Stored at rest: public data only, 0600.
     let path = w.app.remote_dir_for_tests().join("passkeys.json");
@@ -278,7 +301,7 @@ async fn a_failed_registration_spends_the_grant_and_each_check_holds() {
         grant(&w, &p).await;
         let r = register_with(&w, &p, &twist).await;
         assert_eq!((r.status, r.json()["reason"].as_str()), (StatusCode::FORBIDDEN, Some("passkey")), "{what}: {}", r.text());
-        assert_eq!(call(&w.router, "POST", "/r/passkey/options", Some(&p.token), json!({})).await.status, StatusCode::FORBIDDEN, "{what}: the grant is spent");
+        assert_eq!(call(&w.router, "POST", "/r/passkey/options", Some(&p.token), json!({ "request_id": rid(&p) })).await.status, StatusCode::FORBIDDEN, "{what}: the grant is spent");
         assert!(w.app.remote_access.lock().unwrap().level2.passkeys.get(&p.id).is_none(), "{what}: nothing stored");
     }
     assert!(journal(&w).iter().filter(|e| e.kind == Kind::PasskeyFailed).count() >= 8);
@@ -678,7 +701,8 @@ async fn level_2_off_refuses_every_level_2_route_while_level_1_works() {
     let assertion = json!({ "id": "AA", "client_data_json": "AA", "authenticator_data": "AA", "signature": "AA" });
     for (m, path) in &routes {
         let body = match path.as_str() {
-            "/r/passkey/register" => json!({ "id": "AA", "client_data_json": "AA", "attestation_object": "AA" }),
+            "/r/passkey/register" => json!({ "request_id": "0".repeat(32), "id": "AA", "client_data_json": "AA", "attestation_object": "AA" }),
+            "/r/passkey/options" => json!({ "request_id": "0".repeat(32) }),
             "/r/approvals/challenge" => json!({ "kind": "merge", "target": "p-0123456789abcdef0123456789abcdef", "digest": "0".repeat(64) }),
             p if p.ends_with("/respond") => json!({ "option": "dismiss", "assertion": assertion }),
             p if p.ends_with("/approve") || p.ends_with("/refuse") || p.ends_with("/merge") || p.ends_with("/remove") => json!({ "assertion": assertion }),
@@ -956,4 +980,30 @@ async fn until(body: &mut (impl futures_util::Stream<Item = Result<axum::body::B
     })
     .await;
     seen.contains(want)
+}
+
+/// Review P1 turned around, in this file's terms: a second client holding a
+/// copy of the cookie cannot read, use or burn the person's grant.
+#[tokio::test]
+async fn a_copy_of_the_cookie_cannot_use_or_burn_the_persons_grant() {
+    let w = world();
+    let person = pair(&w, "iPhone").await;
+    let thief = Phone { token: person.token.clone(), id: person.id.clone(), auth: Authenticator::new(), rid: Default::default() };
+    grant(&w, &person).await;
+    // The copy knows no request id: status says none, options and register refuse.
+    assert_eq!(call(&w.router, "GET", "/r/passkey/status", Some(&thief.token), json!({})).await.json()["state"], "none");
+    let r = register_with(&w, &thief, &Twist::default()).await;
+    assert_eq!(r.json()["reason"], "no_grant", "{}", r.text());
+    // Its attempts burned nothing: the person registers.
+    assert_eq!(register_with(&w, &person, &Twist::default()).await.status, StatusCode::OK);
+    let stored = w.app.remote_access.lock().unwrap().level2.passkeys.get(&person.id).unwrap().credential_id.clone();
+    assert_eq!(stored, b64url_encode(&person.auth.id), "the person's key, not the copy's");
+    // A copy that starts its own request voids the person's: the digits the
+    // person types (from their own phone) then match nothing.
+    let r = call(&w.router, "POST", "/r/passkey/start", Some(&person.token), json!({})).await;
+    let digits = r.json()["check"].as_str().unwrap().to_string();
+    let r = call(&w.router, "POST", "/r/passkey/start", Some(&thief.token), json!({})).await;
+    if r.json()["check"].as_str().unwrap() != digits {
+        assert!(w.app.remote_passkey_allow(&person.id, &digits).is_err());
+    }
 }

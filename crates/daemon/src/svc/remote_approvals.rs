@@ -133,6 +133,10 @@ impl L2Error {
     }
 }
 
+fn no_grant() -> L2Error {
+    L2Error::new(403, "no_grant", "Allow this phone at the Mac first: sbxw remote approvals allow <device>")
+}
+
 const NEEDS_FACE_ID: &str = "Approving needs Face ID: enable it from your Mac.";
 const NAME_CHANGED: &str = "The tailnet name changed: enable Face ID again from your Mac.";
 
@@ -306,15 +310,16 @@ impl App {
         Ok(r)
     }
 
-    pub fn remote_passkey_status(&self, d: &DeviceCtx) -> Result<Value, L2Error> {
+    /// The state of the request the caller started (`request_id`, which
+    /// only that client was given): "none" for any other id, so a second
+    /// holder of the cookie learns nothing about the person's request.
+    pub fn remote_passkey_status(&self, d: &DeviceCtx, request_id: &str) -> Result<Value, L2Error> {
         let mut rt = self.remote_access.lock().unwrap();
         if !rt.level2.enabled {
             return Err(L2Error::off());
         }
-        let (st, exp) = rt.level2.enrol.status(&d.id, now_ms());
-        let registered = rt.level2.passkeys.get(&d.id).is_some();
+        let (st, exp) = rt.level2.enrol.status(&d.id, request_id, now_ms());
         let state = match st {
-            l2::EnrolStatus::None if registered => "registered",
             l2::EnrolStatus::None => "none",
             l2::EnrolStatus::Pending => "pending",
             l2::EnrolStatus::Granted => "granted",
@@ -323,19 +328,20 @@ impl App {
         Ok(json!({ "state": state, "expires_ms": exp }))
     }
 
-    /// Creation options, with a fresh 2-minute challenge: only with a live
-    /// grant made at the Mac for this device.
-    pub fn remote_passkey_options(&self, d: &DeviceCtx) -> Result<Value, L2Error> {
+    /// Creation options, with a fresh 2-minute challenge bound to the
+    /// request: only with a live grant the Mac made for THAT request
+    /// (review P1: a grant is not the device's, it is the request's).
+    pub fn remote_passkey_options(&self, d: &DeviceCtx, request_id: &str) -> Result<Value, L2Error> {
         let mut rt = self.remote_access.lock().unwrap();
         if !rt.level2.enabled {
             return Err(L2Error::off());
         }
         let rp = rt.serving_name().ok_or_else(|| L2Error::no_passkey("Face ID needs the tailnet address of sbxw."))?;
         let now = now_ms();
-        if rt.level2.enrol.granted_until(&d.id, now).is_none() {
-            return Err(L2Error::new(403, "no_grant", "Allow this phone at the Mac first: sbxw remote approvals allow <device>"));
+        if rt.level2.enrol.granted(&d.id, request_id, now).is_none() {
+            return Err(no_grant());
         }
-        let c = rt.level2.challenges.issue(&d.id, Purpose::Register, now);
+        let c = rt.level2.challenges.issue(&d.id, Purpose::Register { request: request_id.to_string() }, now);
         Ok(json!({
             "public_key": {
                 "rp": { "id": rp, "name": "sbxw" },
@@ -351,22 +357,27 @@ impl App {
         }))
     }
 
-    /// Verify a registration. The grant and the creation challenge are
-    /// spent first, whatever the outcome.
-    pub fn remote_passkey_register(&self, d: &DeviceCtx, raw_id: &str, client_data: &str, attestation: &str) -> Result<(), L2Error> {
+    /// Verify a registration for request `request_id`. A call that does not
+    /// present the request's id is `no_grant` and spends nothing (it cannot
+    /// burn the person's grant). With the id, the grant and the creation
+    /// challenge are spent first, whatever the outcome.
+    pub fn remote_passkey_register(&self, d: &DeviceCtx, request_id: &str, raw_id: &str, client_data: &str, attestation: &str) -> Result<(), L2Error> {
         let mut rt = self.remote_access.lock().unwrap();
         if !rt.level2.enabled {
             return Err(L2Error::off());
         }
         let now = now_ms();
-        let granted = rt.level2.enrol.take_grant(&d.id, now);
-        let challenge = rt.level2.challenges.take(&d.id, now);
+        if rt.level2.enrol.granted(&d.id, request_id, now).is_none() {
+            return Err(no_grant());
+        }
+        let granted = rt.level2.enrol.take_grant(&d.id, request_id, now);
+        let challenge = rt.level2.challenges.take_register(&d.id, request_id, now);
         let rp = rt.serving_name();
         let verdict = (|| {
             if !granted {
                 return Err(Fail::Challenge);
             }
-            let c = challenge.filter(|c| c.purpose == Purpose::Register).ok_or(Fail::Challenge)?;
+            let c = challenge.ok_or(Fail::Challenge)?;
             let rp = rp.as_deref().ok_or(Fail::RpIdHash)?;
             let raw_id = b64url_decode(raw_id, wa::MAX_CREDENTIAL_ID)?;
             let cd = b64url_decode(client_data, wa::MAX_CLIENT_DATA)?;
@@ -393,7 +404,7 @@ impl App {
                 rt.record_target(&d.id, &d.name, Kind::PasskeyFailed, None);
                 tracing::info!("remote access: device {}: passkey_failed", d.id);
                 tracing::debug!("remote access: registration refused at {f:?}");
-                Err(if granted { L2Error::passkey() } else { L2Error::new(403, "no_grant", "Allow this phone at the Mac first: sbxw remote approvals allow <device>") })
+                Err(if granted { L2Error::passkey() } else { no_grant() })
             }
         }
     }

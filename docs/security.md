@@ -528,6 +528,9 @@ A file from the phone is data handed to a leader, never an action:
    there in the sandbox. A large photo or video over 25 MB is refused with "too large".
 5. On mains power with remote access on, check the Mac does not idle to sleep
    (`pmset -g assertions` shows `caffeinate`); on battery, that it may.
+6. With approving from the phone on: after enabling Face ID, confirm on the Mac that exactly
+   one passkey was registered, at the time you did it (`sbxw remote approvals status`, and
+   one `passkey_registered` in `sbxw remote journal`).
 
 ### The threat model, in plain words
 
@@ -746,9 +749,18 @@ sbxw remote approvals off             # nothing can be approved from a phone; Fa
 3. **(Mac)** `sbxw remote approvals allow <device>` (the id from `sbxw remote devices`), then
    type the six digits. That allows ONE set-up, for 5 minutes.
 4. **(phone)** Finish with Face ID. The phone now has a passkey for sbxw.
+5. **(Mac)** `sbxw remote approvals status`: confirm that exactly one passkey was registered
+   for that device, at the time you did it (also `sbxw remote journal`: one
+   `passkey_registered`). Anything else: `sbxw remote approvals revoke <device>`, then
+   `sbxw remote revoke <device>` and pair again.
 
 A paired phone cannot set up Face ID by itself: a stolen device cookie on another phone
-would show its own digits, which you would never type. Jarvis and agents cannot turn level 2
+would show its own digits, which you would never type. The set-up is bound to the request
+the phone started (an id only that phone was given), not to the device: another holder of
+the same cookie cannot see the request, use the Mac's grant or spend it. Only the newest
+request of a device exists; if a copy of the cookie starts one after yours, yours is void,
+the digits you type (from your own phone) match nothing, and the Mac refuses after three
+tries. Jarvis and agents cannot turn level 2
 on, allow a device or set up a passkey: these are admin routes behind the UI token, level 2
 is remote state (not a `sbxw.toml` setting), and Jarvis's settings allowlist refuses it.
 
@@ -775,6 +787,11 @@ device's passkey with it. `sbxw remote off` turns level 2 off too.
 - sbxw asks the browser for the phone's built-in authenticator but cannot prove that is what
   answered (no vendor attestation is asked for): the trust comes from your typing the six
   digits at the Mac.
+- **The passkey protects approvals; the device cookie alone still gives level 1** (read,
+  write to an idle leader, answer, interrupt, hand a file). Someone who holds a copy of the
+  cookie AND controls the page session on your own phone (a compromised browser on the
+  phone) is out of scope: they can wait for your Face ID set-up and act as that phone.
+  Revoke a device you doubt: `sbxw remote revoke <id>` drops its cookie and its passkey.
 
 **The journal** (`sbxw remote journal`) records each try: the device, the time, the kind
 (`plan_approve`, `plan_refuse`, `merge`, `network_respond`, `sandbox_remove`,

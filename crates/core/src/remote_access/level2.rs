@@ -174,9 +174,18 @@ impl Enrolment {
         out
     }
 
-    pub fn status(&mut self, device_id: &str, now: u64) -> (EnrolStatus, Option<u64>) {
+    /// The device's ONE request, if `request_id` is its id (compared in
+    /// constant time). Another holder of the device's cookie never learns
+    /// the id, so it can neither read this request's state nor spend it.
+    fn mine(&self, device_id: &str, request_id: &str) -> Option<&EnrolRequest> {
+        self.requests.iter().find(|r| r.device_id == device_id).filter(|r| crate::ids::same_secret(&r.id, request_id))
+    }
+
+    /// The state of the request `request_id` of this device: `None` for any
+    /// other id.
+    pub fn status(&mut self, device_id: &str, request_id: &str, now: u64) -> (EnrolStatus, Option<u64>) {
         self.sweep(now);
-        match self.requests.iter().find(|r| r.device_id == device_id) {
+        match self.mine(device_id, request_id) {
             None => (EnrolStatus::None, None),
             Some(r) => match r.state {
                 EnrolState::Pending { .. } => (EnrolStatus::Pending, Some(r.expires_ms)),
@@ -195,7 +204,16 @@ impl Enrolment {
             .map(|r| EnrolView { id: r.id.clone(), created_ms: r.created_ms, expires_ms: r.expires_ms })
     }
 
-    /// The device's live grant, if any: until when.
+    /// The live grant of request `request_id`, if any: until when.
+    pub fn granted(&mut self, device_id: &str, request_id: &str, now: u64) -> Option<u64> {
+        self.sweep(now);
+        match self.mine(device_id, request_id)?.state {
+            EnrolState::Granted { until_ms } => Some(until_ms),
+            _ => None,
+        }
+    }
+
+    /// The device's live grant, if any: until when (for the Mac's status).
     pub fn granted_until(&mut self, device_id: &str, now: u64) -> Option<u64> {
         self.sweep(now);
         self.requests.iter().find_map(|r| match r.state {
@@ -234,10 +252,11 @@ impl Enrolment {
         }
     }
 
-    /// Spend the device's grant (at registration, whatever its outcome).
-    pub fn take_grant(&mut self, device_id: &str, now: u64) -> bool {
+    /// Spend the grant of request `request_id` (at registration, whatever
+    /// its outcome). Another id spends nothing.
+    pub fn take_grant(&mut self, device_id: &str, request_id: &str, now: u64) -> bool {
         self.sweep(now);
-        let had = self.requests.iter().any(|r| r.device_id == device_id && matches!(r.state, EnrolState::Granted { .. }));
+        let had = self.mine(device_id, request_id).is_some_and(|r| matches!(r.state, EnrolState::Granted { .. }));
         if had {
             self.requests.retain(|r| r.device_id != device_id);
         }
@@ -258,7 +277,8 @@ impl Enrolment {
 /// What a challenge was made for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Purpose {
-    Register,
+    /// A registration, for the enrolment request with this id.
+    Register { request: String },
     Act { action: Action, target: String, digest: String, option: Option<String> },
 }
 
@@ -280,10 +300,22 @@ impl Challenges {
     pub fn issue(&mut self, device_id: &str, purpose: Purpose, now: u64) -> Challenge {
         let mut bytes = vec![0u8; CHALLENGE_BYTES];
         getrandom::getrandom(&mut bytes).expect("the OS has no randomness to give");
-        let ttl = if purpose == Purpose::Register { CREATE_TTL_MS } else { ACT_TTL_MS };
+        let ttl = if matches!(purpose, Purpose::Register { .. }) { CREATE_TTL_MS } else { ACT_TTL_MS };
         let c = Challenge { bytes, purpose, expires_ms: now + ttl };
         self.by_device.insert(device_id.to_string(), c.clone());
         c
+    }
+
+    /// Take the device's challenge only if it is a registration challenge
+    /// for request `request_id` (compared in constant time): a call that
+    /// does not know the id leaves it in place.
+    pub fn take_register(&mut self, device_id: &str, request_id: &str, now: u64) -> Option<Challenge> {
+        let fits = matches!(self.by_device.get(device_id), Some(Challenge { purpose: Purpose::Register { request }, .. }) if crate::ids::same_secret(request, request_id));
+        if fits {
+            self.take(device_id, now)
+        } else {
+            None
+        }
     }
 
     /// Take (remove) the device's challenge: every attempt consumes it,
@@ -322,7 +354,7 @@ impl Challenges {
 pub fn challenge_fits(c: &Challenge, action: Action, target: &str, option: Option<&str>) -> bool {
     match &c.purpose {
         Purpose::Act { action: a, target: t, option: o, .. } => *a == action && t == target && o.as_deref() == option,
-        Purpose::Register => false,
+        Purpose::Register { .. } => false,
     }
 }
 
@@ -378,18 +410,21 @@ mod tests {
     fn a_grant_needs_the_phones_digits_and_is_single_use() {
         let mut e = Enrolment::default();
         assert_eq!(e.allow("d1", "000000", 0), Err(AllowError::Unknown), "no request, no grant");
-        let (_, check, exp) = e.start("d1", 0);
+        let (rid, check, exp) = e.start("d1", 0);
         assert_eq!(exp, ENROL_TTL_MS);
-        assert_eq!(e.status("d1", 1).0, EnrolStatus::Pending);
+        assert_eq!(e.status("d1", &rid, 1).0, EnrolStatus::Pending);
+        assert_eq!(e.status("d1", "0".repeat(32).as_str(), 1).0, EnrolStatus::None, "another id learns nothing");
         assert_eq!(e.allow("d2", &check, 1), Err(AllowError::Unknown), "another device's request");
         let wrong = if check == "000000" { "111111" } else { "000000" };
         assert_eq!(e.allow("d1", wrong, 1), Err(AllowError::WrongCheck { left: 2 }));
         assert_eq!(e.allow("d1", &check, 2), Ok(2 + GRANT_TTL_MS));
-        assert_eq!(e.status("d1", 3).0, EnrolStatus::Granted);
-        assert!(!e.take_grant("d2", 3));
-        assert!(e.take_grant("d1", 3));
-        assert!(!e.take_grant("d1", 3), "single use");
-        assert_eq!(e.status("d1", 3).0, EnrolStatus::None);
+        assert_eq!(e.status("d1", &rid, 3).0, EnrolStatus::Granted);
+        assert_eq!(e.granted("d1", "f".repeat(32).as_str(), 3), None, "the grant is the request's, not the device's");
+        assert!(!e.take_grant("d1", "f".repeat(32).as_str(), 3), "another id spends nothing");
+        assert!(!e.take_grant("d2", &rid, 3));
+        assert!(e.take_grant("d1", &rid, 3));
+        assert!(!e.take_grant("d1", &rid, 3), "single use");
+        assert_eq!(e.status("d1", &rid, 3).0, EnrolStatus::None);
     }
 
     #[test]
@@ -397,25 +432,25 @@ mod tests {
         let mut e = Enrolment::default();
         let (_, check, _) = e.start("d1", 0);
         assert_eq!(e.allow("d1", &check, ENROL_TTL_MS + 1), Err(AllowError::Unknown), "expired request");
-        let (_, check, _) = e.start("d1", 0);
+        let (rid, check, _) = e.start("d1", 0);
         e.allow("d1", &check, 10).unwrap();
-        assert!(!e.take_grant("d1", 10 + GRANT_TTL_MS + 1), "expired grant");
-        let (_, check, _) = e.start("d1", 0);
+        assert!(!e.take_grant("d1", &rid, 10 + GRANT_TTL_MS + 1), "expired grant");
+        let (rid, check, _) = e.start("d1", 0);
         let wrong = if check == "000000" { "111111" } else { "000000" };
         let _ = e.allow("d1", wrong, 1);
         let _ = e.allow("d1", wrong, 1);
         assert_eq!(e.allow("d1", wrong, 1), Err(AllowError::Refused));
         assert_eq!(e.allow("d1", &check, 1), Err(AllowError::Unknown), "refused for good");
-        assert_eq!(e.status("d1", 1).0, EnrolStatus::Refused);
+        assert_eq!(e.status("d1", &rid, 1).0, EnrolStatus::Refused);
     }
 
     #[test]
     fn a_new_request_voids_the_old_one_and_its_grant() {
         let mut e = Enrolment::default();
-        let (_, c1, _) = e.start("d1", 0);
+        let (r1, c1, _) = e.start("d1", 0);
         e.allow("d1", &c1, 1).unwrap();
-        let (_, c2, _) = e.start("d1", 2);
-        assert!(!e.take_grant("d1", 3), "the grant went with the old request");
+        let (_r2, c2, _) = e.start("d1", 2);
+        assert!(!e.take_grant("d1", &r1, 3), "the grant went with the old request");
         if c1 != c2 {
             assert!(e.allow("d1", &c1, 3).is_err(), "old digits");
         }
@@ -440,9 +475,12 @@ mod tests {
         assert!(c.take("d1", 1).is_none(), "taken once");
         c.issue("d1", act("p1"), 0);
         assert!(c.take("d1", ACT_TTL_MS + 1).is_none(), "expired, and gone");
-        let r = c.issue("d1", Purpose::Register, 0);
+        let r = c.issue("d1", Purpose::Register { request: "a".repeat(32) }, 0);
         assert_eq!(r.expires_ms, CREATE_TTL_MS);
         assert!(!challenge_fits(&r, Action::Merge, "p1", None));
+        assert!(c.take_register("d1", &"b".repeat(32), 1).is_none(), "another request id takes nothing");
+        assert_eq!(c.len(), 1, "and leaves it in place");
+        assert!(c.take_register("d1", &"a".repeat(32), 1).is_some());
     }
 
     #[test]

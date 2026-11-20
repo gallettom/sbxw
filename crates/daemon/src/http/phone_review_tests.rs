@@ -124,6 +124,8 @@ struct Phone {
     token: String,
     id: String,
     auth: Authenticator,
+    /// The request id `/r/passkey/start` gave THIS client (P1 fix).
+    rid: std::cell::RefCell<String>,
 }
 
 async fn pair(w: &World, name: &str) -> Phone {
@@ -136,22 +138,30 @@ async fn pair(w: &World, name: &str) -> Phone {
     let cookie = r.headers[header::SET_COOKIE].to_str().unwrap().to_string();
     let token = cookie[COOKIE.len() + 1..].split(';').next().unwrap().to_string();
     let me = call(&w.router, "GET", "/r/me", Some(&token), json!({})).await;
-    Phone { token, id: me.json()["device"]["id"].as_str().unwrap().to_string(), auth: Authenticator::new() }
+    Phone { token, id: me.json()["device"]["id"].as_str().unwrap().to_string(), auth: Authenticator::new(), rid: Default::default() }
 }
 
 async fn register_with(w: &World, p: &Phone) -> Reply {
-    let r = call(&w.router, "POST", "/r/passkey/options", Some(&p.token), json!({})).await;
+    let rid = p.rid.borrow().clone();
+    register_for(w, p, &rid).await
+}
+
+/// Registration as a client that holds `rid` (the id `/r/passkey/start`
+/// gave it): after the P1 fix, options and register carry it.
+async fn register_for(w: &World, p: &Phone, rid: &str) -> Reply {
+    let r = call(&w.router, "POST", "/r/passkey/options", Some(&p.token), json!({ "request_id": rid })).await;
     if r.status != StatusCode::OK {
         return r;
     }
     let ch = b64url_decode(r.json()["public_key"]["challenge"].as_str().unwrap(), 64).unwrap();
     let (id, cd, att) = p.auth.register(TN, &ch, &Twist::default());
-    call(&w.router, "POST", "/r/passkey/register", Some(&p.token), json!({ "id": b64url_encode(&id), "client_data_json": b64url_encode(&cd), "attestation_object": b64url_encode(&att) })).await
+    call(&w.router, "POST", "/r/passkey/register", Some(&p.token), json!({ "request_id": rid, "id": b64url_encode(&id), "client_data_json": b64url_encode(&cd), "attestation_object": b64url_encode(&att) })).await
 }
 
 async fn enrolled(w: &World, name: &str) -> Phone {
     let p = pair(w, name).await;
     let r = call(&w.router, "POST", "/r/passkey/start", Some(&p.token), json!({})).await;
+    *p.rid.borrow_mut() = r.json()["request_id"].as_str().unwrap().to_string();
     w.app.remote_passkey_allow(&p.id, r.json()["check"].as_str().unwrap()).unwrap();
     assert_eq!(register_with(w, &p).await.status, StatusCode::OK);
     p
@@ -195,26 +205,28 @@ fn git(dir: &std::path::Path, args: &[&str]) -> String {
 async fn finding_p1_a_copy_of_the_cookie_spends_the_persons_grant_and_approves() {
     let w = world();
     let person = pair(&w, "iPhone").await;
-    let mut thief = Phone { token: person.token.clone(), id: person.id.clone(), auth: Authenticator::new() };
+    let mut thief = Phone { token: person.token.clone(), id: person.id.clone(), auth: Authenticator::new(), rid: Default::default() };
     // The person's phone asks; the person types the digits only that phone shows.
     let r = call(&w.router, "POST", "/r/passkey/start", Some(&person.token), json!({})).await;
     let digits = r.json()["check"].as_str().unwrap().to_string();
+    *person.rid.borrow_mut() = r.json()["request_id"].as_str().unwrap().to_string();
     w.app.remote_passkey_allow(&person.id, &digits).unwrap();
-    // The copy sees the grant and wins the race.
+    // FIXED (P1): the copy, without the request id only the person's phone
+    // was given, sees nothing and can spend nothing.
     let st = call(&w.router, "GET", "/r/passkey/status", Some(&thief.token), json!({})).await;
-    assert_eq!(st.json()["state"], "granted");
+    assert_eq!(st.json()["state"], "none", "the copy learns nothing of the grant");
     let r = register_with(&w, &thief).await;
-    assert_eq!(r.status, StatusCode::OK, "FIXED? a registration not bound to the request the Mac granted: {}", r.text());
-    // The person's own registration then fails.
-    let r = register_with(&w, &person).await;
     assert_eq!((r.status, r.json()["reason"].as_str()), (StatusCode::FORBIDDEN, Some("no_grant")), "{}", r.text());
-    // And the copy approves a plan with its own key.
+    // The person's own registration still works: nothing was burned.
+    let r = register_with(&w, &person).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    // And the copy cannot approve: its key is not the device's passkey.
     let id = pending_plan(&w, "myapp", "anything");
     let ch = challenge(&w, &thief, "plan_approve", &id, &format!("/r/plans/{id}")).await;
     let a = assertion(&mut thief, &ch);
     let r = call(&w.router, "POST", &format!("/r/plans/{id}/approve"), Some(&thief.token), json!({ "assertion": a })).await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
-    assert_eq!(w.app.plan(&id).unwrap().state, PlanState::Approved);
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text());
+    assert_eq!(w.app.plan(&id).unwrap().state, PlanState::Pending);
 }
 
 /// What does hold: a copy that starts its OWN request after the person's
@@ -527,7 +539,7 @@ async fn checked_register_and_act_challenges_do_not_cross() {
     // A grant for A, options taken (a register challenge), then an act with it.
     let r = call(&w.router, "POST", "/r/passkey/start", Some(&a.token), json!({})).await;
     w.app.remote_passkey_allow(&a.id, r.json()["check"].as_str().unwrap()).unwrap();
-    let o = call(&w.router, "POST", "/r/passkey/options", Some(&a.token), json!({})).await;
+    let o = call(&w.router, "POST", "/r/passkey/options", Some(&a.token), json!({ "request_id": r.json()["request_id"] })).await;
     let ch = b64url_decode(o.json()["public_key"]["challenge"].as_str().unwrap(), 64).unwrap();
     let asr = assertion(&mut a, &ch);
     let r = call(&w.router, "POST", &format!("/r/plans/{id}/approve"), Some(&a.token), json!({ "assertion": asr })).await;

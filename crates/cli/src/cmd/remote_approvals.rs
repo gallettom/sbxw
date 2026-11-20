@@ -96,6 +96,7 @@ fn allow(daemon: &Daemon, device: &str, terminal: bool) -> Result<()> {
             Ok(r) => {
                 check(&r)?;
                 println!("allowed for 5 minutes, once: finish on the phone with Face ID.");
+                println!("Then check `sbxw remote approvals status`: this device should show ONE passkey, registered just now.");
                 return Ok(());
             }
             Err(e) if e.to_string().contains("tries left") => println!("{e:#}"),
@@ -114,7 +115,7 @@ pub fn render_status(st: &Value) -> Vec<String> {
         let face = match (&d["passkey"], &d["request"], &d["granted_until_ms"]) {
             (_, _, g) if !g.is_null() => "allowed, waiting for Face ID on the phone".to_string(),
             (_, r, _) if !r.is_null() => "asks for Face ID: sbxw remote approvals allow <device>".to_string(),
-            (p, _, _) if !p.is_null() => format!("Face ID set up {}", ago(&p["created_ms"])),
+            (p, _, _) if !p.is_null() => format!("Face ID passkey registered {}", ago(&p["created_ms"])),
             _ => "no Face ID".to_string(),
         };
         let name: String = s(&d["name"]).chars().filter(|c| !c.is_control()).collect();
@@ -137,7 +138,7 @@ mod tests {
         let l = render_status(&st);
         assert_eq!(l[0], "approving from the phone: on");
         assert!(l[1].ends_with("no Face ID"));
-        assert!(l[2].contains("Face ID set up") && !l[2].contains('\u{1b}'), "{:?}", l[2]);
+        assert!(l[2].contains("passkey registered") && !l[2].contains('\u{1b}'), "{:?}", l[2]);
         assert!(l[3].contains("allow"));
         assert_eq!(render_status(&json!({ "enabled": false, "devices": [] })), ["approving from the phone: off", "no paired device"]);
     }
