@@ -390,7 +390,7 @@ does the same as a revoke.
 | Read a leader's conversation: your prompts, its replies, messages from other sessions and from sbxw, questions. Its replies are sent as written (masked by your anonymise rules only), so a reply that quotes a file reaches the phone | See any tool's input or output, a file, a diff, a terminal, or the harness's own output (a `!` command's, a slash command's, hooks', task notifications, system reminders). These are shown as "3 steps" and nothing more |
 | Send it text, typed or dictated, as your own words (masked first by your anonymise rules), when it is idle at its prompt (see "What a message can do" below) | Type raw keys, open a terminal, create a sandbox or a thread; send a line starting with `!` (a shell command), `/` (a slash command) or `#`; send a control or invisible character; write to a leader that is working or waits for an answer at the Mac |
 | Answer a multiple-choice question (`AskUserQuestion`) | Allow a tool (a permission prompt): "This needs your Mac" |
-| Interrupt it (one Escape, as at the keyboard) | Approve or refuse a plan, a merge, a network request; remove anything |
+| Interrupt it (one Escape, as at the keyboard; it may take a few seconds while a line is being typed into that session) | Approve or refuse a plan, a merge, a network request; remove anything |
 | Dictate (the Mac transcribes; the text comes back to the phone to correct) | Touch secrets, the GitHub token, network rules, ports, kits, MCP servers, configuration, the relay, Jarvis, the daemon |
 
 These limits are enforced by the daemon, not by the page: the routes for everything in
@@ -428,11 +428,18 @@ what lands in the leader's prompt and nothing else:
 - **Residual window.** Claude Code opening a dialog on its own while idle, in the moment
   between sbxw's idle check and the paste, or between the second check and the Return,
   would receive that paste or that Return. An idle Claude Code waits for input and is not
-  known to open dialogs by itself, so this window is small, not zero.
+  known to open dialogs by itself, so this window is small, not zero. Also, "idle" is what
+  the hooks last told sbxw: if a tool call's notice were lost and the permission notice
+  that follows were lost or late too, sbxw could believe the leader idle while a dialog is
+  on screen, and a Return could reach it.
 - **Not verified on a real Mac:** that Claude Code turns bracketed paste on at its prompt.
   If it does not, every message from the phone is refused (the safe failure).
 - A message already being typed when you revoke the phone or turn remote access off
   finishes (a few seconds).
+- **Interrupt may take a few seconds** while a line is being typed into that session: it
+  waits behind the same typing lock (up to about 4 s behind a phone message, longer behind
+  a line sbxw types into a leader that is still starting), so an Escape never lands inside
+  a paste.
 
 ### Check on your Mac before relying on it
 
