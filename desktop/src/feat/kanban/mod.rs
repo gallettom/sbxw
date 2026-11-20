@@ -1,7 +1,13 @@
-//! Kanban: the Board's second view, the tickets of a sandbox (or of every
-//! sandbox) in five columns: Planned, In progress, In test, Ready to merge,
-//! Merged (docs/tickets.md). An overlay titled "Board", like the Board's
+//! Kanban: the Dashboard's second view (the feature `board`, shown to the
+//! person as "Dashboard"), the tickets of a sandbox (or of every sandbox) in
+//! five columns: Planned, In progress, In test, Ready to merge, Merged
+//! (docs/tickets.md). An overlay titled "Dashboard", like the Dashboard's
 //! conversation, with a "Conversation | Kanban" switch at the same place.
+//!
+//! * **Doors.** The top bar's Kanban button, ⌃⌥K / Alt+K and the palette's
+//!   "Show the Kanban" run `kanban_toggle`: open on the sandbox in context
+//!   ([`context_sandbox`]), or close when the Kanban is the screen drawn.
+//!   The Dashboard's own switch runs `kanban_show` (its last scope).
 //!
 //! * **Data.** The daemon decides every card's column and writes every
 //!   label (`GET /api/tickets?sandbox=`); this feature only lays the
@@ -51,7 +57,7 @@ pub const MAX_DESCRIPTION: usize = 8000;
 pub const FEATURE: Feature = Feature {
     name: "kanban",
     screens: &[
-        ScreenDecl { name: SCREEN, src: include_str!("../../../screens/kanban.luau"), slot: Slot::Overlay { title: "Board", icon: "board" } },
+        ScreenDecl { name: SCREEN, src: include_str!("../../../screens/kanban.luau"), slot: Slot::Overlay { title: TITLE, icon: "board" } },
         ScreenDecl { name: FORM, src: include_str!("../../../screens/kanban-form.luau"), slot: Slot::Modal { width: 600.0, light_dismiss: false } },
     ],
     events: &["tickets", "plan"],
@@ -63,8 +69,14 @@ pub const FEATURE: Feature = Feature {
     on_files: Some(on_files),
     on_dismiss: Some(on_dismiss),
     standin: Some(standin),
+    shortcuts: &[crate::feat::Shortcut { key: 'k', intent: "kanban_toggle", args: "{}", help: SHOW }],
     ..Feature::EMPTY
 };
+
+/// The overlay's title, the same as the conversation's (`board::TITLE`).
+pub const TITLE: &str = crate::feat::board::TITLE;
+/// The palette's row and Help's line for the shortcut.
+pub const SHOW: &str = "Show the Kanban";
 
 const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: &'static str) -> Spec {
     Spec { name, risk: Risk::Direct, args, doc }
@@ -72,6 +84,7 @@ const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: 
 
 pub const INTENTS: &[Spec] = &[
     d("kanban_show", &[("sandbox", Arg::Text, false)], "Opens the Kanban over the panes: the tickets and the threads of a sandbox (empty: every sandbox) in five columns, Planned, In progress, In test, Ready to merge, Merged, each placed by sbxw from its thread's state."),
+    d("kanban_toggle", &[], "Shows the Kanban, as the top bar's Kanban button does: on the sandbox in context (the focused pane's in the terminals, else the selected sandbox), else the last sandbox it showed, else every sandbox. Closes it when it is the screen shown."),
     d("kanban_scope", &[("sandbox", Arg::Text, true)], "Shows another sandbox's Kanban (empty: every sandbox)."),
     d("kanban_open", &[("id", Arg::Text, true)], "Opens a card's ticket as a panel over the board (its element key; empty: closes the panel)."),
     d("kanban_column", &[("column", Arg::OneOf(model::COLUMNS), true)], "Under 900 pt, the column shown."),
@@ -179,6 +192,18 @@ pub fn shown(cx: &Ctx) -> bool {
     cx.get("app")["overlay"]["screen"] == SCREEN
 }
 
+/// The sandbox the top bar's Kanban button opens on: in the terminals, the
+/// focused pane's sandbox; else (Sessions, an empty pane) the selected one.
+/// `None`: no sandbox in context (the Kanban's last scope, else every sandbox).
+pub fn context_sandbox(cx: &Ctx) -> Option<String> {
+    let app = cx.get("app");
+    let gui = app["base"].is_string();
+    let pane = app["panes"].as_array().into_iter().flatten().find(|p| p["focused"] == true).and_then(|p| p["sandbox"].as_str());
+    let sel = app["selected"].as_str();
+    let known = |s: &&str| !s.is_empty() && cx.sandbox(s).is_some();
+    (if gui { None } else { pane.filter(known) }).or(sel.filter(known)).map(str::to_string)
+}
+
 fn form_shown(cx: &Ctx) -> bool {
     cx.get("app")["modal"]["screen"] == FORM
 }
@@ -187,7 +212,7 @@ fn form_shown(cx: &Ctx) -> bool {
 /// Jarvis proposal waiting.
 pub fn held(cx: &Ctx) -> Option<String> {
     if cx.data["app"]["covered_top"] != false && !cx.data["app"]["covered_top"].is_null() {
-        return Some("Something is open over the board (a dialog or a menu): close it first".into());
+        return Some("Something is open over the Kanban (a dialog or a menu): close it first".into());
     }
     if cx.data["jarvis"]["pending"].as_array().is_some_and(|p| !p.is_empty()) {
         return Some("A Jarvis proposal waits for you: approve or refuse it first".into());
@@ -242,10 +267,16 @@ impl State {
         match a.name {
             "kanban_show" => {
                 let sb = a.s("sandbox").map(str::to_string).or_else(|| self.scope.clone()).or_else(|| cx.get("app")["selected"].as_str().map(str::to_string));
-                self.scope = sb.filter(|s| !s.is_empty());
-                self.reset();
-                out.push(Action::OpenPanel(SCREEN.into()));
-                out.push(self.read_board());
+                out.extend(self.show(sb));
+            }
+            "kanban_toggle" => {
+                if shown(cx) {
+                    // Closed as Escape or its cross close it: back to the
+                    // base view, or the focused terminal gets the keyboard.
+                    return Ok(vec![Action::ClosePanel(SCREEN.into())]);
+                }
+                let sb = context_sandbox(cx).or_else(|| self.scope.clone());
+                out.extend(self.show(sb));
             }
             "kanban_scope" => {
                 let sb = a.req("sandbox");
@@ -430,6 +461,13 @@ impl State {
         }
         out.extend(self.views(cx));
         Ok(out)
+    }
+
+    /// Opens the overlay on `sb` (`None` or empty: every sandbox) and reads it.
+    fn show(&mut self, sb: Option<String>) -> Vec<Action> {
+        self.scope = sb.filter(|s| !s.is_empty());
+        self.reset();
+        vec![Action::OpenPanel(SCREEN.into()), self.read_board()]
     }
 
     fn reset(&mut self) {

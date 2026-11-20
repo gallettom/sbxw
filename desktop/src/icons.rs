@@ -118,6 +118,9 @@ icons! {
     IMAGE "image" concat!(st!("rect", r#"x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5""#), st!("path", r#"d="M2 12l4-4 3 3 2-2 3 3""#), r#"<circle cx="10.75" cy="5.75" r="1.1" fill="currentColor"/>"#);
     MINUS "minus" st!("line", r#"x1="3" y1="8" x2="13" y2="8""#);
     FIT "fit" concat!(st!("polyline", r#"points="2,5.5 2,2 5.5,2""#), st!("polyline", r#"points="10.5,2 14,2 14,5.5""#), st!("polyline", r#"points="14,10.5 14,14 10.5,14""#), st!("polyline", r#"points="5.5,14 2,14 2,10.5""#));
+    // The Kanban (the top bar's button): three columns of cards, hung from
+    // one top line, each shorter than the one before (work moving right).
+    KANBAN "kanban" concat!(st!("rect", r#"x="1.75" y="2.25" width="3.5" height="11.5" rx="1""#), st!("rect", r#"x="6.25" y="2.25" width="3.5" height="8" rx="1""#), st!("rect", r#"x="10.75" y="2.25" width="3.5" height="5" rx="1""#));
 }
 
 pub fn get(name: &str) -> Option<&'static Icon> {

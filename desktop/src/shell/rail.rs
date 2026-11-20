@@ -516,50 +516,64 @@ mod tests {
         }
     }
 
-    /// The top bar's modes (GUI | TUI, Lead Mode) after the mark: as wide
-    /// as `bar::modes_w` says (the bar's fit counts on it), icons alone in
-    /// a narrow window, clear of the macOS window buttons, and overlapping
-    /// nothing else of the bar, windowed and full screen, Lead Mode on and
-    /// off, in GUI and in TUI.
+    /// The top bar's modes (GUI | TUI, Lead Mode, the Kanban) after the
+    /// mark: as wide as `bar::modes_w` says (the bar's fit counts on it),
+    /// icons alone in a narrow window, clear of the macOS window buttons,
+    /// and overlapping nothing else of the bar, windowed and full screen,
+    /// Lead Mode on and off, the Kanban shown or not, in GUI and in TUI, in
+    /// both themes.
     #[test]
     fn the_modes_fit_the_top_bar_at_every_width() {
         use super::super::tests::tap;
         for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
             for inset in [0.0, 76.0] {
-                for (lead, gui) in [(false, false), (true, false), (false, true), (true, true)] {
-                    let mut r = Rig::new(&["a", "b"], w, h);
-                    r.rt.update(|s, _| {
-                        s.sandboxes = ["a", "b"].iter().map(|n| crate::client::Sandbox::new(n, "claude", "running")).collect();
-                        s.feats.data.insert("leads".into(), serde_json::json!(["a"]));
-                        s.push_data();
-                    });
-                    r.rt.set_titlebar_inset(inset);
-                    r.settle();
-                    if lead {
-                        tap(&mut r.rt, "top-lead");
-                    }
-                    if gui {
-                        tap(&mut r.rt, "top-view-gui");
-                    }
-                    r.settle();
-                    let what = format!("{w}x{h} inset {inset} lead {lead} gui {gui}");
-                    assert_eq!(r.rt.state.leads_on(), lead, "{what}");
-                    assert_eq!(r.rt.state.feats.base.is_some(), gui, "{what}");
-                    let compact = r.rt.state.screen_data()["app"]["topbar"]["compact"] == true;
-                    assert_eq!(compact, w < 1000.0, "{what}: compact only when narrow");
-                    let m = r.rt.presented("top-modes").expect("the modes").0;
-                    assert!((m[2] - crate::shell::bar::modes_w(compact, lead)).abs() <= 1.0, "{what}: drawn {} wide, measured {}", m[2], crate::shell::bar::modes_w(compact, lead));
-                    let lead_w = r.rt.presented("top-lead").unwrap().0[2];
-                    if compact {
-                        assert!(lead_w <= 28.5, "{what}: Lead Mode is its icon alone ({lead_w})");
-                    }
-                    assert!(m[0] >= inset + 12.0 - 1.5, "{what}: clear of the window buttons (x {})", m[0]);
-                    if let Some((mark, _)) = r.rt.presented("app-mark") {
-                        assert!(m[0] >= mark[0] + mark[2], "{what}: after the mark");
-                    }
-                    for k in ["daemon-state", "extra-topbar-help", "extra-topbar-usage", "extra-topbar-mac", "extra-topbar"] {
-                        if let Some((o, _)) = r.rt.presented(k) {
-                            assert!(m[0] + m[2] <= o[0] || o[0] + o[2] <= m[0], "{what}: the modes overlap {k}: {m:?} {o:?}");
+                for (lead, gui, kanban) in [(false, false, false), (true, false, false), (false, true, false), (true, true, false), (false, false, true), (true, false, true), (false, true, true), (true, true, true)] {
+                    for theme in crate::theme::Mode::ALL {
+                        let mut r = Rig::new(&["a", "b"], w, h);
+                        r.rt.update(|s, _| {
+                            s.set_theme(theme);
+                            s.sandboxes = ["a", "b"].iter().map(|n| crate::client::Sandbox::new(n, "claude", "running")).collect();
+                            s.feats.data.insert("leads".into(), serde_json::json!(["a"]));
+                            s.push_data();
+                        });
+                        r.rt.set_titlebar_inset(inset);
+                        r.settle();
+                        if lead {
+                            tap(&mut r.rt, "top-lead");
+                        }
+                        if gui {
+                            tap(&mut r.rt, "top-view-gui");
+                        }
+                        r.settle();
+                        if kanban {
+                            tap(&mut r.rt, "top-kanban");
+                            r.settle();
+                        }
+                        let what = format!("{w}x{h} inset {inset} lead {lead} gui {gui} kanban {kanban} {}", theme.name());
+                        assert_eq!(r.rt.state.leads_on(), lead, "{what}");
+                        assert_eq!(r.rt.state.feats.base.is_some(), gui, "{what}");
+                        assert_eq!(r.rt.state.screen_shown("kanban"), kanban, "{what}");
+                        let compact = r.rt.state.screen_data()["app"]["topbar"]["compact"] == true;
+                        assert_eq!(compact, w < 1000.0, "{what}: compact only when narrow");
+                        let m = r.rt.presented("top-modes").expect("the modes").0;
+                        assert!((m[2] - crate::shell::bar::modes_w(compact, lead)).abs() <= 1.0, "{what}: drawn {} wide, measured {}", m[2], crate::shell::bar::modes_w(compact, lead));
+                        let lead_w = r.rt.presented("top-lead").unwrap().0[2];
+                        let k = r.rt.presented("top-kanban").expect("the Kanban button").0;
+                        if compact {
+                            assert!(lead_w <= 28.5, "{what}: Lead Mode is its icon alone ({lead_w})");
+                            assert!(k[2] <= 28.5, "{what}: the Kanban is its icon alone ({})", k[2]);
+                        }
+                        let l = r.rt.presented("top-lead").unwrap().0;
+                        assert!(k[0] >= l[0] + l[2] + 8.0 - 0.5 && k[0] + k[2] <= m[0] + m[2] + 0.5, "{what}: the Kanban after Lead Mode, inside the modes: {k:?} {l:?} {m:?}");
+                        assert!((k[3] - l[3]).abs() < 0.5, "{what}: the same height as Lead Mode");
+                        assert!(m[0] >= inset + 12.0 - 1.5, "{what}: clear of the window buttons (x {})", m[0]);
+                        if let Some((mark, _)) = r.rt.presented("app-mark") {
+                            assert!(m[0] >= mark[0] + mark[2], "{what}: after the mark");
+                        }
+                        for key in ["daemon-state", "extra-topbar-help", "extra-topbar-usage", "extra-topbar-mac", "extra-topbar"] {
+                            if let Some((o, _)) = r.rt.presented(key) {
+                                assert!(m[0] + m[2] <= o[0] || o[0] + o[2] <= m[0], "{what}: the modes overlap {key}: {m:?} {o:?}");
+                            }
                         }
                     }
                 }

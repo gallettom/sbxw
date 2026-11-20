@@ -108,11 +108,19 @@ local function more_menu(hidden)
 end
 
 -- The modes, after the mark: GUI | TUI (Sessions, the readable view of
--- every session, or the terminals) and Lead Mode (only the team leaders,
--- in either). They change what the pane area shows, so they live here and
--- not in the rail, whose entries show more. Compact (a narrow window):
--- icons alone, the words in their tooltips. shell/bar.rs `modes_w`
--- measures the same parts.
+-- every session, or the terminals), Lead Mode (only the team leaders,
+-- in either) and the Kanban (the Dashboard's tickets, over either). They
+-- change what the pane area shows, so they live here and not in the rail,
+-- whose entries show more. Compact (a narrow window): icons alone, the
+-- words in their tooltips. shell/bar.rs `modes_w` measures the same parts.
+local function kanban_button(app, compact)
+  local on = ((app.overlay or {}).screen) == "kanban"
+  local keys = app.platform == "macos" and { "⌃", "⌥", "K" } or { "Alt", "K" }
+  return button{ (not compact) and "Kanban" or nil, icon = "kanban", key = "top-kanban", on = "kanban", radius = "pill", keys = keys,
+    tone = "purple", variant = on and "neutral" or "ghost", color = on and "purple" or "text-muted", fill = on and "purple-tint" or nil,
+    help = on and "Kanban: shown. Press to close it" or "Kanban: the tickets planned, in progress, in test, ready to merge and merged" }
+end
+
 local function modes(app, compact)
   local gui = app.base ~= nil and app.base ~= false
   local lead = app.leads or {}
@@ -128,7 +136,11 @@ local function modes(app, compact)
       tone = "purple", variant = on and "neutral" or "ghost", color = on and "purple" or "text-muted", fill = on and "purple-tint" or nil,
       disabled = (not on) and lead.can ~= true,
       help = on and "Lead Mode On: only the team leaders (their terminals, their sessions and threads). Press for everything again"
-        or (lead.can == true and "Lead Mode Off: press to show only the team leaders, in the terminals and in Sessions" or "Lead Mode: no team is running") } }
+        or (lead.can == true and "Lead Mode Off: press to show only the team leaders, in the terminals and in Sessions" or "Lead Mode: no team is running") },
+    -- The Kanban: quiet at rest, lit only while it is the screen drawn (the
+    -- Dashboard's conversation does not light it). A press opens it on the
+    -- sandbox in context, or closes it (kanban_toggle).
+    kanban_button(app, compact) }
 end
 
 return {
@@ -196,6 +208,7 @@ return {
       if gui then return intent("monitor_toggle", {}) end
     end,
     lead = function() return intent("team_leads", { show = "toggle" }) end,
+    kanban = function() return intent("kanban_toggle", {}) end,
     extra = function(_, id)
       local i = extra_intents[id]
       if i then return intent(i.name, i.args) end
