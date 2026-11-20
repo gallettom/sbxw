@@ -324,6 +324,41 @@ web UI) refuses a pending plan and closes approved ones: their threads keep
 running, but their reports no longer reach the main session. Restarting the
 lead's session also removes the mark.
 
+**While lead mode is off**, nothing new happens to the sandbox's plans:
+
+- the lead's plan tools answer "the user ended lead mode, so plan <id> is no
+  longer yours to follow" (or, with no plan named, "the user ended lead mode
+  (or never turned it on in this sandbox)"). The routes refused are
+  `/api/plans/propose` (`propose_plan`), `/api/plans/wait` (`check_plan`),
+  `/api/plans/status` (`plan_status`), `/api/plans/propose_merge`,
+  `/api/plans/mark_done` (`mark_thread_done`) and the lead's side of
+  `/api/team/notes` (`read_team_notes` with no thread). They answer only
+  while the sandbox leads, by the rule of "What survives a daemon restart";
+- threads keep working: `report_thread_status`, `team_note` and a thread's
+  own `read_team_notes` still answer;
+- you still see the plans in the plan dialog and the Kanban ("team ended").
+  A done thread of an ended lead cannot be merged from sbxw, since Merge needs
+  the lead's proposal: turn Team on again so the lead proposes it, or close
+  the thread (keeping its branch) and merge it yourself.
+
+**Turning Team on again** in the same sandbox gives its lead back the plans
+the end closed that are still open: approved, not merged. A refused plan
+(by you, or the pending plan refused by the end) stays refused, and a merged
+one stays merged. Only the end of lead mode closes a plan, so a reopened plan
+is never one you settled. Right after `/lead`, sbxw types one line saying
+which plans it follows again, with their ids, threads and states, e.g.
+`[sbxw] Lead mode is on again, and you follow again the open plans of this
+sandbox from before: plan p-1 (a done, b working). ...`. Then `plan_status`,
+`propose_merge`, `mark_thread_done` and `read_team_notes` work for them as
+before. Nothing merges without your click.
+
+**Merged by hand.** When a done thread's branch (a shared plan: its one
+branch) is already an ancestor of the branch its repo's main checkout is on,
+`plan_status` shows the thread `already in <branch>: merged outside sbxw, or
+no commit of its own`, and `propose_merge` naming it says so rather than
+proposing a merge of nothing. sbxw records no merge for it: git proves only
+that the branch is in the base, not who merged it or how.
+
 ### What survives a daemon restart
 
 Lead mode is kept in the sandbox's record (`lead`: when you turned it on and
@@ -432,9 +467,21 @@ sent before the daemon had this version are not recovered.
   session id. That stays within what you allowed: before this, the lead was
   the terminal, whatever ran in it. A leader's main session can be read from a
   paired phone and typed into when idle; end lead mode to stop that.
-- A plan id is 128 random bits, seen only by the proposing session and the
-  browser. A thread report carries no id and could be forged by another session
-  in the same sandbox, but it only changes a label, never what runs.
+- **Within a sandbox, the daemon cannot tell the lead from a thread.** A post
+  to the plan routes is proven to come from a sandbox by its token, which
+  every session of the sandbox holds; which tools a session sees is decided
+  by its relay server inside the sandbox (`SBXW_THREAD`). A plan id is 128
+  random bits, but not secret inside the sandbox: a merged shared plan's id is
+  in the auto memory every session reads, and the lead may pass ids on. So
+  while a sandbox leads, any session in it that knows a plan id can read its
+  status, mark a thread done and propose its merge. Nothing merges without
+  your click on the UI listener, which sandboxes can't reach, and nothing of
+  another sandbox is reachable. While lead mode is off, every session of the
+  sandbox is refused alike. A thread report carries no id and could be forged
+  by another session in the same sandbox, but it only changes a label, never
+  what runs. Closing that gap needs a secret per session (for example a lead
+  token handed only to the bound main session at Team on and sent by its relay
+  server alone), which changes how a lead is bound: a separate decision.
 
 ## Tickets and the Kanban
 
