@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#161b22">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="sbxw">
+<meta name="format-detection" content="telephone=no">
+<title>sbxw</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/remote.css">
+<script src="/remote-core.js" defer></script>
+<script src="/remote.js" defer></script>
+</head>
+<body>
+<!-- One page, four screens; remote.js shows one at a time. Every text that
+     comes from the Mac is set with textContent, or as the fixed Markdown
+     subset of remote-core.js. Nothing in this file is inline script or style:
+     the page runs under default-src 'self'. -->
+<div id="unreachable" class="rc-banner" role="status" hidden>sbxw is unreachable (is the Mac awake?)</div>
+
+<header id="bar" class="rc-bar">
+  <button id="back" class="rc-icon-btn" type="button" aria-label="Back to the leaders" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
+  <img class="rc-mark" src="/icon-192.png" alt="" width="28" height="28">
+  <div class="rc-title">
+    <h1 id="title">sbxw</h1>
+    <p id="subtitle" class="rc-sub"></p>
+  </div>
+  <button id="menu-btn" class="rc-icon-btn" type="button" aria-label="Device menu" aria-haspopup="true" aria-expanded="false" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+  </button>
+</header>
+
+<div id="menu" class="rc-menu" role="menu" hidden>
+  <p class="rc-menu-label">This device</p>
+  <p id="menu-device" class="rc-menu-device"></p>
+  <button id="forget" class="rc-btn rc-danger" type="button" role="menuitem">Forget this device</button>
+  <p class="rc-menu-note">Forgetting it means pairing again from the Mac.</p>
+</div>
+
+<main id="screens">
+  <!-- Loading: until GET /r/me answers. -->
+  <section id="s-loading" class="rc-screen rc-center">
+    <p class="rc-muted">Connecting to sbxw…</p>
+  </section>
+
+  <!-- Pairing: opened from the link or QR code the Mac shows. -->
+  <section id="s-pair" class="rc-screen rc-center" hidden>
+    <form id="pair-form" class="rc-card" novalidate>
+      <h2>Pair this device</h2>
+      <p class="rc-muted">Give it a name you will recognise in the list on your Mac.</p>
+      <label for="pair-name" class="rc-label">Device name</label>
+      <input id="pair-name" class="rc-input" type="text" maxlength="40" autocomplete="off" autocapitalize="words" spellcheck="false" required>
+      <button id="pair-go" class="rc-btn rc-primary" type="submit">Pair</button>
+    </form>
+    <div id="pair-wait" class="rc-card" hidden>
+      <h2>Type this number on your Mac</h2>
+      <p id="pair-check" class="rc-check" aria-live="polite"></p>
+      <p id="pair-text" class="rc-muted"></p>
+    </div>
+    <div id="pair-end" class="rc-card" hidden>
+      <h2 id="pair-end-title">Not paired</h2>
+      <p id="pair-end-text" class="rc-muted"></p>
+    </div>
+  </section>
+
+  <!-- Not paired: no pairing code, or the device was forgotten. -->
+  <section id="s-unpaired" class="rc-screen rc-center" hidden>
+    <div class="rc-card">
+      <h2 id="unpaired-title">This device is not paired</h2>
+      <p id="unpaired-text" class="rc-muted">Open the pairing link or scan the QR code that sbxw shows on your Mac.</p>
+    </div>
+  </section>
+
+  <!-- Leaders: the running team leaders, those that need you first. -->
+  <section id="s-leaders" class="rc-screen" hidden>
+    <ul id="leaders" class="rc-leaders"></ul>
+    <p id="leaders-empty" class="rc-empty" hidden>No team leader is running</p>
+  </section>
+
+  <!-- A leader's conversation. -->
+  <section id="s-chat" class="rc-screen rc-chat" hidden>
+    <div id="log" class="rc-log" aria-live="polite">
+      <p id="log-top" class="rc-log-top"></p>
+      <div id="rows"></div>
+      <div id="tail"></div>
+    </div>
+    <form id="composer" class="rc-composer" novalidate>
+      <p id="composer-note" class="rc-composer-note" role="status" hidden></p>
+      <p id="send-gate" class="rc-gate" role="status" hidden></p>
+      <div class="rc-compose-row">
+        <textarea id="field" class="rc-field" rows="1" maxlength="16000" placeholder="Message the leader" autocomplete="off" aria-label="Message"></textarea>
+        <button id="mic" class="rc-icon-btn rc-mic" type="button" aria-label="Dictate">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+        </button>
+        <button id="send" class="rc-btn rc-primary rc-send" type="button" aria-live="polite">Send</button>
+      </div>
+      <div class="rc-compose-row rc-actions">
+        <button id="interrupt" class="rc-btn rc-interrupt" type="button">Interrupt</button>
+        <button id="interrupt-cancel" class="rc-btn rc-quiet" type="button" hidden>Cancel</button>
+        <span id="mic-note" class="rc-mic-note" role="status"></span>
+      </div>
+    </form>
+  </section>
+</main>
+</body>
+</html>
