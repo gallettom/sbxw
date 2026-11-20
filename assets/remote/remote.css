@@ -63,6 +63,7 @@
      remote.js from visualViewport; see `body` below. */
   --vvh: 100dvh;
   --vvt: 0px;
+  --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-l: env(safe-area-inset-left, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
@@ -184,6 +185,14 @@ svg circle { fill: currentColor; stroke: none; }
 .rc-chip-danger.rc-armed { background: var(--c-red-tint); border-color: var(--c-red); }
 
 /* ── Bar ── */
+/* The bar: one solid ground from the screen's top edge (under the status
+   bar in the home-screen app) to its hairline; its text sits below the
+   inset. No filter, no backdrop blur, no transform on it or its ancestors:
+   iOS rasterises text under any of them on a layer of its own. Every
+   measure in it is a whole pixel (52 px of content, 28 px icon, 22 + 2 + 20
+   px of title, the hairline drawn as a shadow, not a border): centred things
+   then land on whole device pixels at 2x and 3x, where a half pixel makes
+   iOS resample the icon and the title soft. */
 .rc-bar {
   flex: none;
   position: relative;
@@ -191,15 +200,15 @@ svg circle { fill: currentColor; stroke: none; }
   display: flex;
   align-items: center;
   gap: 4px;
-  min-height: calc(52px + env(safe-area-inset-top, 0px));
-  padding: env(safe-area-inset-top, 0px) max(4px, var(--safe-r)) 0 max(4px, var(--safe-l));
+  min-height: calc(52px + var(--safe-t));
+  padding: var(--safe-t) max(4px, var(--safe-r)) 0 max(4px, var(--safe-l));
   background: var(--c-surface);
-  border-bottom: 1px solid var(--c-hair);
+  box-shadow: inset 0 -1px 0 var(--c-hair);
 }
 .rc-mark { flex: none; width: 28px; height: 28px; margin: 0 6px 0 10px; border-radius: 7px; }
-.rc-title { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; padding: 0 4px; }
-.rc-title h1 { font-size: var(--fs-lg); line-height: 1.2; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rc-sub { font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rc-title { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 0 4px; }
+.rc-title h1 { font-size: var(--fs-lg); line-height: 22px; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rc-sub { font-size: var(--fs-xs); line-height: 16px; color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-sub:empty { display: none; }
 
 /* A leader's state: a small coloured pill with a dot. */
@@ -245,7 +254,7 @@ svg circle { fill: currentColor; stroke: none; }
 .rc-banner {
   flex: none;
   order: -1;
-  padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px;
+  padding: calc(8px + var(--safe-t)) 16px 8px;
   background: var(--c-amber-tint);
   color: var(--c-text-bright);
   border-bottom: 1px solid rgba(210, 153, 34, 0.5);
@@ -258,7 +267,7 @@ svg circle { fill: currentColor; stroke: none; }
 .rc-menu {
   position: absolute;
   z-index: 10;
-  top: calc(52px + env(safe-area-inset-top, 0px));
+  top: calc(52px + var(--safe-t));
   right: max(8px, var(--safe-r));
   width: min(300px, calc(100vw - 16px));
   padding: 14px;

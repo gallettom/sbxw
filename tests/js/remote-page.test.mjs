@@ -1527,3 +1527,85 @@ test('iPhone dictation falls back to the Mac, with one sentence, never a dead bu
   assert.equal((await calls('POST', '/r/voice/transcribe')).length, 0);
   await ctx.close();
 });
+
+// ── The bar under an iPhone status bar (home-screen app) ──
+// Chromium has no safe area: a 59 pt inset (a Dynamic Island iPhone) is
+// emulated through the page's own --safe-t token, in a context that lets the
+// test add that one rule. Each screen's bar is then checked: nothing stacked
+// above its text, no filter, backdrop blur or transform on it or an ancestor,
+// its text below the inset on whole device pixels; and a DPR-3 crop is kept.
+test('every bar under an emulated 59 pt status bar: solid, nothing over its text, sharp', { skip }, async () => {
+  await ctl({ reset: true, paired: false, pair: ['pending'], leaders: FX.leaders, history: { shop: FX.history.shop }, l2Reset: true, kanbanReset: true });
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, userAgent: IPHONE_UA, bypassCSP: true });
+  await ctx.addInitScript(spies);
+  const page = await ctx.newPage();
+  const problems = [];
+  page.on('pageerror', e => problems.push(e.message));
+  const inset = async () => page.addStyleTag({ content: ':root { --safe-t: 59px; }' });
+  const audit = async name => {
+    const r = await page.evaluate(() => {
+      const bar = document.getElementById('bar');
+      const out = { bad: [], over: [], top: [] };
+      for (let e = bar; e; e = e.parentElement) {
+        const cs = getComputedStyle(e);
+        if (cs.filter !== 'none' || cs.backdropFilter !== 'none' || (cs.webkitBackdropFilter && cs.webkitBackdropFilter !== 'none') || cs.transform !== 'none' || cs.willChange !== 'auto' || Number(cs.opacity) !== 1) {
+          out.bad.push(`${e.tagName}#${e.id}: ${cs.filter} ${cs.backdropFilter} ${cs.transform} ${cs.willChange} ${cs.opacity}`);
+        }
+      }
+      const bg = getComputedStyle(bar).backgroundColor;
+      out.solid = /^rgb\(/.test(bg) || /, 1\)$/.test(bg);
+      for (const el of [...bar.querySelectorAll('h1, .rc-sub, .rc-pill, .rc-mark, #back svg, #menu-btn svg, #approvals-btn svg')].filter(x => x.getClientRects().length && getComputedStyle(x).display !== 'none')) {
+        const b = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        if (hit && !(el === hit || el.contains(hit) || hit.contains(el))) out.over.push(`${(el.className?.baseVal ?? el.className) || el.tagName} under ${hit.tagName}#${hit.id}.${hit.className}`);
+        out.top.push([el.tagName, b.top, Math.abs(b.top * 3 - Math.round(b.top * 3)) < 0.01]);
+      }
+      return out;
+    });
+    assert.deepEqual(r.bad, [], `${name}: no filter, backdrop, transform or opacity on the bar or an ancestor`);
+    assert.deepEqual(r.over, [], `${name}: nothing stacked over the bar's text`);
+    assert.ok(r.solid, `${name}: a solid ground`);
+    for (const [tag, top, whole] of r.top) {
+      assert.ok(top >= 59, `${name}: ${tag} below the status bar (${top})`);
+      assert.ok(whole, `${name}: ${tag} on whole device pixels (${top})`);
+    }
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/90-bar-${name}.png`, clip: { x: 0, y: 0, width: 390, height: 140 }, animations: 'disabled' });
+  };
+  await page.goto(`${base()}/#pair=CODE1234abcd`);
+  await inset();
+  await page.waitForSelector('#pair-form:not([hidden])');
+  await audit('pairing');
+  await ctl({ paired: true });
+  await page.goto(`${base()}/`);
+  await inset();
+  await page.waitForSelector('.rc-leader');
+  await audit('leaders');
+  await page.tap('.rc-leader >> text=shop');
+  await page.waitForSelector('.rc-agent');
+  // The conversation scrolled under the bar, as in the person's screenshot.
+  await page.evaluate(() => { document.getElementById('log').scrollTop = 120; });
+  await audit('leader');
+  await page.tap('#v-kanban');
+  await page.waitForSelector('.rc-kb-lane.rc-on .rc-kb-card');
+  await audit('kanban');
+  await page.tap('#approvals-btn');
+  await page.waitForSelector('.rc-ap-row');
+  await audit('approvals');
+  await page.tap('.rc-ap-plans');
+  await page.waitForSelector('.rc-thread');
+  await page.evaluate(() => { document.getElementById('s-item').scrollTop = 200; });
+  await audit('plan');
+  // The composer at the bottom: nothing over its field either.
+  await page.tap('#back');
+  await page.tap('#back');
+  await page.waitForSelector('#s-chat:not([hidden])');
+  await page.tap('#v-chat');
+  const over = await page.evaluate(() => {
+    const f = document.getElementById('field').getBoundingClientRect();
+    const hit = document.elementFromPoint(f.left + f.width / 2, f.top + f.height / 2);
+    return hit?.id;
+  });
+  assert.equal(over, 'field');
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
