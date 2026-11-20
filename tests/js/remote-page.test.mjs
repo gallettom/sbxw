@@ -111,7 +111,8 @@ test('pairing: the fragment goes at once, the check number shows, then the leade
   await page.tap('#pair-go');
   await page.waitForSelector('#pair-wait:not([hidden])');
   assert.equal(await page.textContent('#pair-check'), '482 913');
-  assert.match(await page.textContent('#pair-text'), /Compare with the number on your Mac, then confirm there/);
+  assert.match(await page.textContent('#pair-text'), /type these six digits/);
+  assert.equal(await page.textContent('#pair-wait h2'), 'Type this number on your Mac');
   await shot(page, '02-pairing-check');
   const start = await calls('POST', '/r/pair/start');
   assert.equal(start.length, 1);
@@ -124,7 +125,7 @@ test('pairing: the fragment goes at once, the check number shows, then the leade
 });
 
 test('pairing refused, expired and rate limited each say so', { skip }, async () => {
-  for (const [state, words] of [['refused', /refused on the Mac/], ['expired', /expired/]]) {
+  for (const [state, words] of [['refused', /refused on the Mac/], ['expired', /^This request expired\. Open the new link from your Mac\.$/]]) {
     await ctl({ reset: true, paired: false, pair: [state] });
     const { ctx, page } = await phone();
     await page.goto(`${base()}/#pair=CODE1234abcd`);
@@ -225,6 +226,62 @@ test('Send calls message once and only on a tap; Interrupt asks for a second tap
   await page.tap('#interrupt');
   await page.waitForSelector('text=Interrupt sent.');
   assert.equal((await calls('POST', '/r/leaders/website/interrupt')).length, 1);
+  await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('a message takes seconds: Send is busy, a second tap sends nothing more', { skip }, async () => {
+  await ctl({ reset: true, paired: true, messageDelay: 1500 });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.tap('.rc-leader >> text=website');
+  await page.fill('#field', 'hello leader');
+  await page.tap('#send');
+  assert.equal(await page.textContent('#send'), 'Sending…');
+  assert.equal(await page.isDisabled('#send'), true);
+  await page.evaluate(() => document.getElementById('send').click());
+  await page.waitForSelector('text=Sent.', { timeout: 6000 });
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 1, 'one tap, one message');
+  assert.equal(await page.textContent('#send'), 'Send');
+  await ctl({ messageDelay: 0 });
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('refusals: a sentence per reason, the text kept, nothing resent', { skip }, async () => {
+  await ctl({
+    reset: true, paired: true,
+    messageReplies: [
+      { status: 409, body: { ok: false, reason: 'not_submitted', error: 'the leader changed before the Return' } },
+      { status: 409, body: { ok: false, reason: 'busy', error: 'a tool call is under way' } },
+      { status: 400, body: { ok: false, reason: 'command', error: 'a line starts with /' } },
+    ],
+  });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.tap('.rc-leader >> text=website');
+  await page.fill('#field', 'hello leader');
+  await page.tap('#send');
+  await page.waitForSelector('.rc-composer-note.rc-warn');
+  assert.match(await page.textContent('#composer-note'), /NOT SENT: the text was typed into the leader's input on the Mac but not submitted.*\(sbxw: the leader changed before the Return\)/);
+  assert.equal(await page.inputValue('#field'), 'hello leader', 'kept in the composer');
+  await shot(page, '14-not-submitted');
+  await page.waitForTimeout(1500);
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 1, 'never resent by itself');
+  await page.tap('#send');
+  await page.waitForSelector('text=/Try again in a few seconds/');
+  assert.equal(await page.inputValue('#field'), 'hello leader');
+  // A command: warned in place while typing, still the person's to send; the daemon refuses it.
+  await page.fill('#field', '/model opus');
+  await page.waitForSelector('text=/Commands cannot be sent from the phone/');
+  assert.equal(await page.isDisabled('#send'), false, 'the daemon stays the judge');
+  await shot(page, '15-command-warning');
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 2, 'the warning sent nothing');
+  await page.tap('#send');
+  await page.waitForSelector('text=/a line starts with \\//');
+  assert.equal(await page.inputValue('#field'), '/model opus');
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 3);
   await cleanSpy(page);
   assert.deepEqual(problems, []);
   await ctx.close();

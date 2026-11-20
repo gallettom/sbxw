@@ -15,7 +15,7 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcWithDictation', 'chatMarkdown'];
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcWithDictation', 'chatMarkdown'];
 const ctx = { URLSearchParams };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
@@ -170,7 +170,8 @@ test('every pairing answer maps to one plain state', () => {
   assert.equal(rc.rcPairState(r(200, { state: 'weird' }), 'status'), 'failed');
   assert.equal(rc.rcPairState(r(429, null), 'status'), 'limited');
   for (const s of ['refused', 'expired', 'limited', 'invalid', 'unreachable']) assert.ok(rc.RC_PAIR_TEXT[s].length > 10);
-  assert.match(rc.RC_PAIR_TEXT.pending, /Compare with the number on your Mac, then confirm there/);
+  assert.match(rc.RC_PAIR_TEXT.pending, /type these six digits/);
+  assert.equal(rc.RC_PAIR_TEXT.expired, 'This request expired. Open the new link from your Mac.');
 });
 test('a device name: prefilled from the platform, cleaned, at most 40 characters', () => {
   assert.equal(rc.rcDeviceName('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)', 'iPhone'), 'iPhone');
@@ -275,4 +276,33 @@ test('no storage but the device name, no console, no eval, no innerHTML of raw t
   assert.deepEqual([...pageSrc.matchAll(/localStorage\.(\w+)\(([^,)]*)/g)].map(m => `${m[1]} ${m[2]}`), ['getItem PREFS', 'setItem PREFS']);
   // innerHTML: once, with the core's escaped Markdown.
   assert.deepEqual([...pageSrc.matchAll(/\.innerHTML\s*=\s*([^;]+);/g)].map(m => m[1]), ['rcAgentHtml(text)']);
+});
+
+// ── Message refusals (API.md v1.2, 2.6) ──
+test('each refusal reason has its own sentence, with the daemon\'s words as text', () => {
+  const r = (status, reason, error = 'the daemon said <b>so</b>') => ({ ok: false, status, unreachable: false, data: { ok: false, reason, error } });
+  const want = {
+    command: [400, /Commands cannot be sent from the phone/],
+    control: [400, /control character/],
+    empty: [400, /empty/],
+    needs_mac: [409, /This needs your Mac/],
+    busy: [409, /Try again in a few seconds/],
+    no_paste: [409, /Send it from your Mac/],
+    not_submitted: [409, /NOT SENT: the text was typed into the leader's input on the Mac but not submitted/],
+  };
+  for (const [reason, [status, words]] of Object.entries(want)) {
+    const s = rc.rcFailText('Message', r(status, reason));
+    assert.match(s, words, reason);
+    assert.match(s, /\(sbxw: the daemon said <b>so<\/b>\)$/, 'the error is kept, as text (set with textContent)');
+  }
+  assert.deepEqual(Object.keys(rc.RC_MSG_REASON).sort(), Object.keys(want).sort());
+  // An unknown reason falls back to the generic sentence, never to its own name.
+  assert.match(rc.rcFailText('Message', r(409, '__proto__')), /^Message not sent:/);
+  assert.match(rc.rcFailText('Message', r(409, 'toString')), /^Message not sent:/);
+});
+test('the check before sending matches the daemon\'s rule', () => {
+  for (const s of ['/model', '!ls', '# remember', 'ok\n  /clear', 'a\n\t!x']) assert.equal(rc.rcMessageCheck(s), 'command', JSON.stringify(s));
+  for (const s of ['a\tb', 'a\rb', 'a\u001b[2J', 'a\u007f', 'a\u0085', 'a\u202eb', 'a\u2066b']) assert.equal(rc.rcMessageCheck(s), 'control', JSON.stringify(s));
+  for (const s of ['', '   ', '\n\n']) assert.equal(rc.rcMessageCheck(s), 'empty');
+  for (const s of ['hello', 'a/b and c#d', 'line one\nline two', 'see https://x.example/#a', 'Fix it! Now.']) assert.equal(rc.rcMessageCheck(s), null, JSON.stringify(s));
 });

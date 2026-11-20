@@ -7,7 +7,8 @@
 // `/__ctl` (POST JSON) is the test's lever, never part of the contract:
 // {down: true} drops every /r/ request, {paired: false} answers 401,
 // {pair: [...states]} the next pair/status answers, {pairStart: 429} the
-// status of pair/start, {emit: {event, data}}
+// status of pair/start, {messageDelay: ms, messageReplies: [{status, body}]}
+// how the next messages are answered, {emit: {event, data}}
 // pushes one server-sent event, {leaders}, {history: {sandbox: page}}.
 // Usage: node tests/js/remote-standin.mjs [port]
 import http from 'node:http';
@@ -52,6 +53,8 @@ export function startStandin(port = 0) {
     leaders: recent(fx.leaders),
     history: { shop: fx.history.shop, website: fx.history.website },
     pairStart: 200,
+    messageDelay: 0,
+    messageReplies: [],
     older: { shop: fx.history.shop_older },
     newer: { shop: fx.history.shop_newer },
     streams: new Set(),
@@ -79,6 +82,8 @@ export function startStandin(port = 0) {
       if (c.pair) s.pair = c.pair;
       if (c.leaders) s.leaders = recent(c.leaders);
       if (c.pairStart) s.pairStart = c.pairStart;
+      if ('messageDelay' in c) s.messageDelay = c.messageDelay;
+      if (c.messageReplies) s.messageReplies = c.messageReplies;
       if (c.history) Object.assign(s.history, c.history);
       if (c.emit) emit(c.emit.event, c.emit.data);
       if (c.reset) s.log.length = 0;
@@ -125,6 +130,12 @@ export function startStandin(port = 0) {
         if (url.searchParams.has('before')) return send(res, 200, s.older[sb] || { page: { items: [], latest_seq: 0 } });
         if (url.searchParams.has('after')) return send(res, 200, s.newer[sb] || { page: { items: [], latest_seq: 0 } });
         return s.history[sb] ? send(res, 200, s.history[sb]) : send(res, 404, { ok: false, error: 'not a leader' });
+      }
+      if (m[2] === 'message') {
+        // A message waits for the echo before its Return: 1 to 4 s.
+        await new Promise(r => setTimeout(r, s.messageDelay));
+        const reply = s.messageReplies.length ? s.messageReplies.shift() : { status: 200, body: { ok: true, masked: 0 } };
+        return send(res, reply.status, reply.body);
       }
       return send(res, 200, { ok: true, masked: 0 });
     }
