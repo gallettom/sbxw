@@ -26,6 +26,8 @@
 #   lead-gui Lead Mode On in GUI: Sessions lists the leaders and their threads;
 #   reply    (also) billing-api main's conversation: two days, a folded step group,
 #            the lead's message, a compaction, the reply with pills;
+#   right    fixtures/monitor/right.json: billing-api main's conversation with the person's
+#            messages on the right (short, long, unbroken) and the agents' on the left;
 #   steps    its last group of steps unfolded, then one step's output;
 #   injected the lead's long message unfolded (a "From lead" card);
 #   partial  docs-site main: an older hook, the summary and what to do;
@@ -92,7 +94,7 @@ if m == "choice":
     # N: the next session that needs you; then its row (a narrow view opens it).
     add(type="type", every=0.02, text="n"); add(type="mark", name="hold:300")
     step("monitor-row-shop-web:s-shop-main", "monitor-opt-1-1")
-if m in ("reply", "send", "attach", "attach-dialog", "attach-sent", "steps", "injected"):
+if m in ("reply", "right", "send", "attach", "attach-dialog", "attach-sent", "steps", "injected"):
     # A short window: the idle rows are below the fold of the list.
     add(type="wheel", key="monitor-row-shop-web:s-shop-main", dy=-600); add(type="mark", name="hold:300")
     step("monitor-row-billing-api:s-bill-main", "monitor-conv-billing-api:s-bill-main")
@@ -151,7 +153,7 @@ PY
 theme="${THEME:-dark}"
 for size in ${SIZES:-1284x816 720x480}; do
   for m in ${MARKS:-ask choice reply send live empty idle busy switch base under back attach attach-dialog attach-sent fold hidden hidden-terms top-tui top-gui lead-tui lead-gui steps injected partial conv-live}; do
-    case "$m" in empty|idle|busy) fx="$m" ;; fold) fx=folding ;; *) fx=basic ;; esac
+    case "$m" in empty|idle|busy) fx="$m" ;; fold) fx=folding ;; right) fx=right ;; *) fx=basic ;; esac
     out="$shots/monitor-$size-$theme-$m"
     SIZE="$size" script "$m" >"$out-script.json"
     start_daemon "$out-standin" --fixture "$here/fixtures/monitor/$fx.json"
