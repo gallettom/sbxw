@@ -118,6 +118,47 @@ fn ended_as_exited(info: &J) -> J {
     i
 }
 
+/// A Claude Code background session (the daemon's `kind`): no terminal,
+/// its own quiet row, never folded into its place's card.
+pub fn is_background(info: &J) -> bool {
+    s(info, "kind") == "background"
+}
+
+/// Why sbxw will not type into this session, in one sentence that says
+/// what is true and what to do, from the daemon's `unanswerable` (and
+/// `kind`). `None` when it may: a thread's (its own terminal), or one the
+/// daemon calls answerable. No final period: callers end it.
+pub fn unreachable_line(info: &J) -> Option<String> {
+    let sb = s(info, "sandbox");
+    let u = &info["unanswerable"];
+    let reason = if is_background(info) { "background" } else { u["reason"].as_str().unwrap_or("") };
+    if reason != "background" && (thread_of(info).is_some() || info["answerable"] == true) {
+        return None;
+    }
+    let n = u["sessions"].as_u64().unwrap_or(0);
+    Some(match reason {
+        "background" => "This is a background session of Claude Code; it has no terminal to type into".to_string(),
+        "no_terminal" => format!(
+            "sbxw holds no terminal for this session (sbxw restarted since, or it was started elsewhere): answer in its own terminal, or open {sb}'s terminal in sbxw for a session you can type into from here"
+        ),
+        "remote" => "This session came in over SSH or Claude Desktop, and sbxw's terminal holds another one: answer in its own window".to_string(),
+        "old_hook" => format!("This sandbox runs an older sbxw hook, so sbxw cannot tell its sessions apart: run sbxw up {sb}"),
+        "several_sessions" if n > 1 => format!(
+            "{n} Claude sessions are open in {sb}'s main checkout; sbxw cannot tell which terminal is this one's. Close the others, or answer in its terminal"
+        ),
+        _ => "sbxw cannot tell which terminal is this session's: answer in its terminal".to_string(),
+    })
+}
+
+/// How a report ranks for its place's one card: a live session (working or
+/// waiting on the person) before an idle one, then the one that reported
+/// last. `event_ms` when the daemon serves it (every event re-sends a
+/// sandbox's sessions with one `ts`), else `ts`.
+fn rank(i: &J) -> (bool, u64) {
+    let ts = i["ts"].as_u64().unwrap_or(0);
+    (matches!(s(i, "state"), "working" | "attention"), i["event_ms"].as_u64().filter(|e| *e > 0).unwrap_or(ts))
+}
+
 /// The session's thread, when it is one.
 pub fn thread_of(info: &J) -> Option<&str> {
     opt(info, "thread")
@@ -213,8 +254,15 @@ impl Model {
         let thread = thread_of(info);
         let sid = opt(info, "session_id");
         let ts = info["ts"].as_u64().unwrap_or(0);
+        // A background session is its own row: it never takes, nor
+        // displaces, the card of its place's sessions.
+        if is_background(info) {
+            let key = format!("{sb}:bg:{}", sid.unwrap_or(""));
+            let news = self.cards.get(&key).is_none_or(|c| ts >= c.info["ts"].as_u64().unwrap_or(0));
+            return Some((key, news));
+        }
         let live = |i: &J| matches!(s(i, "state"), "working" | "attention");
-        let place: Vec<(&String, &Card)> = self.cards.iter().filter(|(_, c)| s(&c.info, "sandbox") == sb && thread_of(&c.info) == thread).collect();
+        let place: Vec<(&String, &Card)> = self.cards.iter().filter(|(_, c)| s(&c.info, "sandbox") == sb && thread_of(&c.info) == thread && !is_background(&c.info)).collect();
         if let Some((k, _)) = place.iter().find(|(_, c)| sid.is_some() && opt(&c.info, "session_id") == sid) {
             return Some(((*k).clone(), true));
         }
@@ -237,9 +285,12 @@ impl Model {
         if thread.is_none() && live(info) && !place.is_empty() && place.iter().all(|(_, c)| live(&c.info)) {
             return Some((fresh(""), true));
         }
-        match place.iter().max_by_key(|(_, c)| c.info["ts"].as_u64().unwrap_or(0)) {
+        // Another session of the place: it shows only when it ranks as high
+        // as the one shown (live first, then the latest to report), so the
+        // card no longer flips to whichever sibling was sent last.
+        match place.iter().max_by_key(|(_, c)| rank(&c.info)) {
             // An end that names no session ends the place's.
-            Some((k, c)) => Some(((*k).clone(), ts >= c.info["ts"].as_u64().unwrap_or(0) || (sid.is_none() && s(info, "state") == "exited"))),
+            Some((k, c)) => Some(((*k).clone(), rank(info) >= rank(&c.info) || (sid.is_none() && s(info, "state") == "exited"))),
             None => Some((fresh(""), true)),
         }
     }
@@ -487,9 +538,13 @@ impl Model {
             return None;
         }
         let sb = s(&c.info, "sandbox");
-        let n = self.cards.values().filter(|o| s(&o.info, "sandbox") == sb && thread_of(&o.info).is_none()).count();
         let sid: Vec<char> = opt(&c.info, "session_id")?.chars().filter(|ch| ch.is_ascii_alphanumeric()).collect();
-        (n > 1).then(|| format!("main \u{b7} {}", sid[sid.len().saturating_sub(4)..].iter().collect::<String>()))
+        let tail: String = sid[sid.len().saturating_sub(4)..].iter().collect();
+        if is_background(&c.info) {
+            return Some(format!("background \u{b7} {tail}"));
+        }
+        let n = self.cards.values().filter(|o| s(&o.info, "sandbox") == sb && thread_of(&o.info).is_none() && !is_background(&o.info)).count();
+        (n > 1).then(|| format!("main \u{b7} {tail}"))
     }
 
     /// What the middle shows for one card.
@@ -502,17 +557,17 @@ impl Model {
         let st = steps(i);
         let waiting = g == Group::You;
         let answerable = i["answerable"] == true;
+        let bg = is_background(i);
         // Typed words go to a thread's own terminal, or to the sandbox's
-        // one main session when the daemon can tell which it is.
-        let reach = thread.is_some() || answerable;
-        let why = if waiting {
-            Some("Answer the card above first: typed text would land in its menu.")
-        } else if g == Group::Ended {
-            Some("This session has ended.")
-        } else if !reach {
-            Some("sbxw cannot tell which terminal is this session's: answer in its terminal.")
+        // one main session when the daemon can tell which it is; never to
+        // a background session (it has no terminal).
+        let unreachable = unreachable_line(i);
+        let why = if g == Group::Ended {
+            Some("This session has ended.".to_string())
+        } else if waiting && unreachable.is_none() {
+            Some("Answer the card above first: typed text would land in its menu.".to_string())
         } else {
-            None
+            unreachable.map(|w| format!("{w}."))
         };
         let worktree = opt(i, "cwd").and_then(|c| c.split_once(".sbxw-worktrees/")).map(|(_, w)| w.trim_end_matches('/').to_string());
         let mut strip = vec![match &worktree {
@@ -548,10 +603,12 @@ impl Model {
             "name": self.told_apart(key).unwrap_or_else(|| thread.unwrap_or("main").to_string()),
             "session": session_key(sb, thread),
             "state": s(i, "state"),
-            "word": g.word(),
+            "word": if bg { format!("background \u{b7} {}", g.word()) } else { g.word().to_string() },
             "tone": g.tone(),
             "model": opt(i, "model_name").map(str::to_string).or_else(|| opt(i, "model").map(|m| m.trim_start_matches("claude-").to_string())),
-            "cost": i["cost_usd"].as_f64().map(|c| format!("${c:.2}")),
+            // Unknown is a dash, never $0.00.
+            "cost": i["cost_usd"].as_f64().map(|c| format!("${c:.2}")).unwrap_or_else(|| "\u{2013}".to_string()),
+            "cost_help": if i["cost_usd"].is_number() { "What Claude Code estimates this session has cost (API prices)" } else { "No cost reported yet: its status line has not said" },
             "strip": strip.join("  \u{b7}  "),
             // The person's last prompt only: a message another session or
             // the harness typed in is shown as that, quietly, never as "You".

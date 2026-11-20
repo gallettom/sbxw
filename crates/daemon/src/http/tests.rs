@@ -970,7 +970,8 @@ async fn retiring_dead_records_stays_within_the_posting_sandbox() {
     let (a, b) = (token_of("alpha"), token_of("beta"));
     let hook = |token: &str, body: Value| json_req(post("/api/hook", body.clone()).header("authorization", format!("Bearer {token}")), body);
     let start = |id: &str, proc: &str, live: &[&str]| {
-        json!({"hook_event_name": "SessionStart", "session_id": id, "hook_version": 3, "agent_proc": proc, "live_procs": live})
+        json!({"hook_event_name": "SessionStart", "session_id": id, "hook_version": 3, "agent_proc": proc, "live_procs": live,
+            "ancestry": ["node", "claude"]})
     };
     call(agent_router(app.clone()), hook(&a, start("a1", "10:1", &["10:1"]))).await;
     call(agent_router(app.clone()), hook(&b, start("b1", "20:1", &[]))).await;

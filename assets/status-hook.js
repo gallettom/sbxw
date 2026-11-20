@@ -41,7 +41,9 @@ function done() {
 // What this hook can report, so the daemon can tell "the session is not over
 // SSH" from "the hook is too old to have looked". Bump when a signal is added.
 // v3: the transcript's tail (see `postHistory`) and the agent process.
-const HOOK_VERSION = 3;
+// v4: Claude Code's session kind (`session_kind`), and `live_procs` covering
+// every Claude-like process (`live_scope: "claude"`).
+const HOOK_VERSION = 4;
 
 // Which sshd-set variables are in this session's environment.
 //
@@ -100,6 +102,7 @@ function ancestors() {
   return out;
 }
 
+// BEGIN procs
 // What runs only a command for the agent, not the agent itself.
 const LAUNCHERS = new Set(["sh", "bash", "dash", "zsh", "fish", "env", "timeout"]);
 
@@ -111,23 +114,35 @@ function agentProcess(chain) {
   return a && a.start ? a : null;
 }
 
-// Every process alive in the sandbox with the agent's name, as
-// `<pid>:<start>`: which earlier sessions' processes are gone. Names and
-// pids only. Undefined when /proc cannot be listed (then nothing is retired).
-function liveProcs(name) {
+// A Claude Code process: `claude`, or its binary started by its versioned
+// path (`2.1.328`), which is how Claude Code starts its background sessions.
+function claudeLike(name) {
+  return name === "claude" || /^[0-9]+(\.[0-9]+)+$/.test(name);
+}
+
+// Every process alive in the sandbox with the agent's name or a Claude-like
+// one, as `<pid>:<start>`: which earlier sessions' processes are gone. The
+// daemon is told the list covers every Claude-like name (`live_scope`), so
+// a background session's start no longer reads the terminals' `claude` as
+// gone. Names and pids only. Undefined when /proc cannot be listed (then
+// nothing is retired).
+function liveProcs(name, root) {
+  root = root || "/proc";
   try {
     const out = [];
-    for (const d of fs.readdirSync("/proc")) {
+    for (const d of fs.readdirSync(root)) {
       if (!/^[0-9]+$/.test(d)) continue;
       let stat;
       try {
-        stat = fs.readFileSync("/proc/" + d + "/stat", "utf8");
+        stat = fs.readFileSync(root + "/" + d + "/stat", "utf8");
       } catch (_) {
         continue;
       }
       const open = stat.indexOf("(");
       const close = stat.lastIndexOf(")");
-      if (open < 0 || close < open || stat.slice(open + 1, close) !== name) continue;
+      if (open < 0 || close < open) continue;
+      const comm = stat.slice(open + 1, close);
+      if (comm !== name && !claudeLike(comm)) continue;
       const after = stat.slice(close + 1).trim().split(/\s+/);
       if (after[19]) out.push(d + ":" + after[19]);
     }
@@ -136,6 +151,14 @@ function liveProcs(name) {
     return undefined;
   }
 }
+
+// Claude Code's own word for the session (`CLAUDE_CODE_SESSION_KIND`: `bg`
+// for its background sessions), when it is a plain short word.
+function sessionKind(env) {
+  const k = env.CLAUDE_CODE_SESSION_KIND;
+  return typeof k === "string" && /^[a-z_-]{1,20}$/.test(k) ? k : undefined;
+}
+// END procs
 // BEGIN history
 // The conversation, for the Monitor: this session's own transcript (the path
 // Claude Code hands every hook; nothing else is read), from where the last
@@ -430,6 +453,11 @@ process.stdin.on("end", () => {
   // no other session — including one where a human typed /codemap themselves,
   // which is an ordinary session in every way that matters here.
   if (process.env.SBXW_CODEMAP_DONE) evt.background = "codemap";
+  // Claude Code's background sessions (and the spares it keeps ready) run
+  // under its own daemon, with no terminal: the daemon lists them as
+  // background, never as the terminal's session.
+  const kind = sessionKind(process.env);
+  if (kind) evt.session_kind = kind;
   // The agent process, and on a start which agent processes are alive, so
   // the daemon can tell a /clear or a killed terminal from a second one.
   const agent = agentProcess(chain);
@@ -437,7 +465,10 @@ process.stdin.on("end", () => {
     evt.agent_proc = agent.pid + ":" + agent.start;
     if (evt.hook_event_name === "SessionStart") {
       const live = liveProcs(agent.name);
-      if (live) evt.live_procs = live;
+      if (live) {
+        evt.live_procs = live;
+        evt.live_scope = "claude";
+      }
     }
   }
   // The transcript's tail, unless this is a background session.

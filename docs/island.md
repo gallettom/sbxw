@@ -81,6 +81,32 @@ Only the `tty` session can be typed into from the island. When the evidence is
 missing, **neither** row is answerable, because answering the wrong terminal
 answers someone else's question. The daemon enforces the same rule (`409`).
 
+Claude Code's own background sessions (a `/bg` job, the spares its daemon
+keeps ready; `kind: "background"`) run with no terminal. They are listed,
+never answerable, and do not count as a second session of the checkout.
+
+A session that cannot be typed into says why, in `unanswerable`:
+
+```json
+{ "answerable": false,
+  "unanswerable": { "reason": "several_sessions", "sessions": 3, "tty": 3, "hook_version": 3 } }
+```
+
+| `reason` | What is true | What to do |
+|---|---|---|
+| `background` | a Claude Code background session: no terminal | nothing; read it, or use its own window |
+| `no_terminal` | sbxw holds no terminal for the sandbox's main session (never opened in sbxw, or the daemon restarted since: a restart ends sbxw's terminals, not always the sessions in them) | open the sandbox's terminal in sbxw, or answer in its terminal |
+| `remote` | it came in over SSH or Claude Desktop; sbxw's terminal is another session's | answer in its own window |
+| `old_hook` | several sessions, one reported by a hook older than v3, whose dead records are never retired | `sbxw up <sandbox>` |
+| `several_sessions` | `sessions` sessions in the main checkout (`tty` of them from a terminal), none identifiably sbxw's | close the others, or answer in its terminal |
+
+`sessions` counts the main checkout's sessions (no thread, not background);
+`hook_version` is the oldest hook among them. Absent for a thread's session
+(sbxw types into its own terminal) and for an answerable one. Each session
+also carries `event_ms`, when it last reported an event of its own: every
+event re-sends all of a sandbox's sessions with the same `ts`, so `ts` does
+not say which one is current.
+
 ## How session state works
 
 State comes from **Claude Code hooks**, not terminal scraping. Provisioning

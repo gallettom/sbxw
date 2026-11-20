@@ -557,6 +557,22 @@ fn ask_says_its_own_reason_and_the_button_and_the_press_agree() {
         ("covered", Box::new(|d: &mut J| d["app"]["covered_top"] = true.into()), "open over the canvas"),
         ("question", Box::new(|d: &mut J| d["sessions"][0]["state"] = "attention".into()), "waits on a question or a permission"),
         ("unanswerable", Box::new(|d: &mut J| d["sessions"][0]["answerable"] = false.into()), "cannot tell which terminal"),
+        ("several", Box::new(|d: &mut J| {
+            d["sessions"][0]["answerable"] = false.into();
+            d["sessions"][0]["unanswerable"] = json!({ "reason": "several_sessions", "sessions": 3, "tty": 3, "hook_version": 3 });
+        }), "3 Claude sessions are open in"),
+        ("no terminal", Box::new(|d: &mut J| {
+            d["sessions"][0]["answerable"] = false.into();
+            d["sessions"][0]["unanswerable"] = json!({ "reason": "no_terminal", "sessions": 1, "tty": 1, "hook_version": 3 });
+        }), "sbxw holds no terminal for this session"),
+        ("old hook", Box::new(|d: &mut J| {
+            d["sessions"][0]["answerable"] = false.into();
+            d["sessions"][0]["unanswerable"] = json!({ "reason": "old_hook", "sessions": 2, "tty": 2, "hook_version": 2 });
+        }), "run sbxw up"),
+        ("background", Box::new(|d: &mut J| {
+            d["sessions"][0]["kind"] = "background".into();
+            d["sessions"][0]["answerable"] = false.into();
+        }), "background session of Claude Code"),
         ("stopped", Box::new(|d: &mut J| d["sandboxes"][0]["status"] = "stopped".into()), "is not running"),
         ("none", Box::new(|d: &mut J| d["sessions"] = json!([])), "no open agent session"),
     ];

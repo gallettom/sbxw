@@ -1798,3 +1798,124 @@ fn a_fold_opens_downwards_and_nothing_above_it_moves() {
         }
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// Background sessions, the place's card, and the reason a session cannot be
+// typed into (the daemon's `kind`, `event_ms` and `unanswerable`).
+
+fn rep(sid: &str, state: &str, ts: u64, event_ms: u64) -> J {
+    json!({ "sandbox": "sbxw-2", "session_id": sid, "state": state, "ts": ts, "event_ms": event_ms, "started_ms": 1,
+        "answerable": false, "unanswerable": { "reason": "no_terminal", "sessions": 1, "tty": 1, "hook_version": 3 } })
+}
+
+/// The user's case: every event re-sends the lead's busy record and a
+/// background spare's idle one with the same `ts`, the spare last. The
+/// spare is its own quiet row; the place's card stays the lead's.
+#[test]
+fn a_background_spare_never_takes_the_place_s_card() {
+    let mut m = Model::default();
+    for ts in [10, 20, 30] {
+        m.upsert(&rep("lead", "working", ts, ts));
+        let mut spare = rep("spare", "idle", ts, 5);
+        spare["kind"] = "background".into();
+        spare["unanswerable"]["reason"] = "background".into();
+        m.upsert(&spare);
+    }
+    assert_eq!(m.cards.len(), 2, "{:?}", m.cards.keys().collect::<Vec<_>>());
+    let lead = m.cards.iter().find(|(_, c)| c.info["session_id"] == "lead").map(|(k, _)| k.clone()).unwrap();
+    let spare = m.cards.iter().find(|(_, c)| c.info["session_id"] == "spare").map(|(k, _)| k.clone()).unwrap();
+    assert_eq!(m.cards[&lead].info["state"], "working");
+    let d = m.detail(&spare, &json!([]));
+    assert_eq!(d["word"], "background \u{b7} idle");
+    assert!(d["name"].as_str().unwrap().starts_with("background \u{b7} "), "{}", d["name"]);
+    assert_eq!(d["compose"]["can"], false);
+    assert_eq!(d["compose"]["why"], "This is a background session of Claude Code; it has no terminal to type into.");
+    // The lead is not "told apart" as one of two main sessions.
+    assert_eq!(m.detail(&lead, &json!([]))["name"], "main");
+    // A background session in a thread's worktree never reaches the thread's terminal.
+    let mut t = rep("job", "idle", 40, 40);
+    t["kind"] = "background".into();
+    t["thread"] = "t1".into();
+    m.upsert(&t);
+    let job = m.cards.iter().find(|(_, c)| c.info["session_id"] == "job").map(|(k, _)| k.clone()).unwrap();
+    assert_eq!(m.detail(&job, &json!([]))["compose"]["can"], false);
+}
+
+/// Several interactive sessions in one checkout, all idle: the card shows
+/// the one that reported last, whatever order the daemon sends them in;
+/// a working one wins over idle ones sent after it.
+#[test]
+fn the_place_s_card_is_chosen_not_the_last_sent() {
+    let mut m = Model::default();
+    // i1 reported at 7, i2 at 9; both re-sent at ts 50, i2 first.
+    m.upsert(&rep("i2", "idle", 50, 9));
+    m.upsert(&rep("i1", "idle", 50, 7));
+    assert_eq!(m.cards.len(), 1);
+    assert_eq!(m.cards.values().next().unwrap().info["session_id"], "i2", "the latest to report");
+    m.upsert(&rep("lead", "working", 60, 60));
+    m.upsert(&rep("i1", "idle", 60, 7));
+    m.upsert(&rep("i2", "idle", 60, 9));
+    assert_eq!(m.cards.values().next().unwrap().info["session_id"], "lead", "live first");
+    // The whole list, in any order, folds the same way.
+    let mut s = Model::default();
+    s.seed(&json!([rep("lead", "working", 60, 60), rep("i2", "idle", 60, 9), rep("i1", "idle", 60, 7)]));
+    assert_eq!(s.cards.values().next().unwrap().info["session_id"], "lead");
+}
+
+/// Each reason, in one line that says what is true and what to do.
+#[test]
+fn the_reason_lines_say_what_is_true() {
+    let line = |reason: &str, n: u64| {
+        let mut i = rep("a", "idle", 1, 1);
+        i["unanswerable"] = json!({ "reason": reason, "sessions": n, "tty": n, "hook_version": 3 });
+        model::unreachable_line(&i).unwrap()
+    };
+    assert_eq!(line("several_sessions", 3), "3 Claude sessions are open in sbxw-2's main checkout; sbxw cannot tell which terminal is this one's. Close the others, or answer in its terminal");
+    assert!(line("no_terminal", 1).starts_with("sbxw holds no terminal for this session (sbxw restarted since, or it was started elsewhere)"));
+    assert!(line("no_terminal", 1).contains("open sbxw-2's terminal in sbxw"));
+    assert_eq!(line("old_hook", 2), "This sandbox runs an older sbxw hook, so sbxw cannot tell its sessions apart: run sbxw up sbxw-2");
+    assert!(line("remote", 2).contains("SSH or Claude Desktop"));
+    // An older daemon (no reason): the line from before.
+    let mut old = rep("a", "idle", 1, 1);
+    old.as_object_mut().unwrap().remove("unanswerable");
+    assert_eq!(model::unreachable_line(&old).unwrap(), "sbxw cannot tell which terminal is this session's: answer in its terminal");
+    // Answerable, or a thread: no line.
+    let mut ok = rep("a", "idle", 1, 1);
+    ok["answerable"] = true.into();
+    assert_eq!(model::unreachable_line(&ok), None);
+    let mut t = rep("a", "idle", 1, 1);
+    t["thread"] = "t1".into();
+    assert_eq!(model::unreachable_line(&t), None);
+    // The composer ends it with a period.
+    let mut m = Model::default();
+    m.upsert(&rep("a", "idle", 1, 1));
+    let k = m.cards.keys().next().unwrap().clone();
+    assert!(m.detail(&k, &json!([]))["compose"]["why"].as_str().unwrap().ends_with("type into from here."));
+}
+
+/// Unknown cost is a dash, never $0.00; a real 0 stays a real 0.
+#[test]
+fn unknown_cost_is_a_dash() {
+    let mut m = Model::default();
+    m.upsert(&rep("a", "idle", 1, 1));
+    let k = m.cards.keys().next().unwrap().clone();
+    let d = m.detail(&k, &json!([]));
+    assert_eq!(d["cost"], "\u{2013}");
+    assert!(d["cost_help"].as_str().unwrap().starts_with("No cost reported yet"));
+    assert!(!d["strip"].as_str().unwrap().contains("min"), "no duration known: none shown");
+    let mut i = rep("a", "idle", 2, 2);
+    i["cost_usd"] = 0.0.into();
+    m.upsert(&i);
+    assert_eq!(m.detail(&k, &json!([]))["cost"], "$0.00");
+}
+
+/// The transcript line names its cause and stops promising.
+#[test]
+fn the_partial_line_says_which_it_is() {
+    assert!(conv::partial_line("old_hook", "sbxw-2", false).contains("Run sbxw up sbxw-2"));
+    assert!(conv::partial_line("catching_up", "sbxw-2", true).starts_with("A background session of Claude Code"));
+    let l = conv::partial_line("catching_up", "sbxw-2", false);
+    assert!(!l.contains("on its way"), "{l}");
+    assert!(l.contains("next event"));
+}

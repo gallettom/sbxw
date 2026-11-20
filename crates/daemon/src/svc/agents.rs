@@ -127,7 +127,7 @@ impl App {
         // The thread-less session that is not a client's: the tty's first.
         let main = infos
             .iter()
-            .filter(|i| i.sandbox == sandbox && i.thread.is_none() && i.origin != SessionOrigin::Remote && i.model.is_some())
+            .filter(|i| i.sandbox == sandbox && i.thread.is_none() && i.origin != SessionOrigin::Remote && i.kind.is_none() && i.model.is_some())
             .min_by_key(|i| (i.origin != SessionOrigin::Tty, i.started_ms));
         if let Some(i) = main {
             return (i.model.clone(), i.model_name.clone());
@@ -301,5 +301,40 @@ mod tests {
         assert_eq!(info().background, None);
         post(json!({"hook_event_name": "Stop", "background_tasks": [], "session_crons": []}));
         assert_eq!(state(&app, "sid-b"), SessionState::Idle);
+    }
+
+    /// The user's case on sbxw-2, end to end through `ingest_hook`: right
+    /// after a daemon restart (no terminal held), the lead's busy session
+    /// and four idle ones report, then a harness background spare starts.
+    /// All five stay, the spare is its own background record, and each says
+    /// why it cannot be typed into from here.
+    #[test]
+    fn a_background_spare_after_a_restart_keeps_the_terminals_sessions() {
+        let (_d, app) = app();
+        let sb = SandboxRef::parse("sbxw-2").unwrap();
+        let term = |event: &str, sid: &str, proc: &str| {
+            app.ingest_hook(&sb, json!({"hook_event_name": event, "session_id": sid, "hook_version": 3, "agent_proc": proc,
+                "ancestry": ["MainThread", "claude"]}));
+        };
+        term("PreToolUse", "lead", "100:5");
+        for (n, sid) in ["i1", "i2", "i3", "i4"].iter().enumerate() {
+            term("Stop", sid, &format!("{}:6", 200 + n));
+        }
+        app.ingest_hook(&sb, json!({"hook_event_name": "SessionStart", "session_id": "spare", "hook_version": 3, "agent_proc": "300:7",
+            "ancestry": ["MainThread", "2.1.328", "2.1.328", "claude"], "live_procs": ["300:7"]}));
+        let infos = app.session_infos();
+        assert_eq!(infos.len(), 6, "five terminals' sessions and the spare");
+        let of = |sid: &str| infos.iter().find(|i| i.session_id.as_deref() == Some(sid)).unwrap().clone();
+        assert_eq!(of("lead").state, SessionState::Working);
+        assert_eq!(of("lead").unanswerable.as_deref().map(|u| u.reason), Some("no_terminal"), "the daemon restarted: it holds no terminal");
+        assert_eq!(of("spare").kind, Some(sbxw_core::agents::RecordKind::Background));
+        assert_eq!(of("spare").unanswerable.as_deref().map(|u| u.reason), Some("background"));
+        let wire = serde_json::to_value(of("lead")).unwrap();
+        assert_eq!(wire["unanswerable"]["sessions"], 5);
+        assert!(wire.get("kind").is_none());
+        // The sandbox's model is the terminal's session's, never the spare's.
+        app.report_session_model(&sb, "spare", sbxw_core::agents::ModelReport::new(Some("claude-haiku-5-5"), Some("Haiku 5.5")).unwrap());
+        let (id, _) = app.main_model("sbxw-2", "claude", &app.session_infos());
+        assert_ne!(id.as_deref(), Some("claude-haiku-5-5"));
     }
 }

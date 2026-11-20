@@ -264,7 +264,8 @@ fn conv_view(m: &mut Model, key: &str, now: u64) -> J {
     v["truncated"] = (h.truncated && at_start).into();
     v["continues"] = (continues && at_start).into();
     v["error"] = h.error.clone().map_or(J::Null, J::String);
-    v["partial"] = h.partial.as_deref().map_or(J::Null, |p| conv::partial_line(p, &sb).into());
+    let bg = model::is_background(&c.info);
+    v["partial"] = h.partial.as_deref().map_or(J::Null, |p| conv::partial_line(p, &sb, bg).into());
     v["rev"] = h.rev.into();
     v
 }
@@ -502,8 +503,8 @@ fn reachable(m: &Model, cx: &Ctx, key: &str) -> Result<(String, Option<String>),
         Group::Ended => return Err(format!("Not sent: {to} has ended.")),
         _ => {}
     }
-    if thread.is_none() && c.info["answerable"] != true {
-        return Err(format!("Not sent: sbxw cannot tell which terminal is {to}'s. Answer in its terminal."));
+    if let Some(why) = model::unreachable_line(&c.info) {
+        return Err(format!("Not sent to {to}: {why}."));
     }
     if cx.sandbox(&sb).is_some_and(|x| x["status"] != "running") {
         return Err(format!("Not sent: {sb} is not running."));
