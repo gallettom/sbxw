@@ -12,7 +12,7 @@ anything but the one loopback port. Nothing needs to be installed on the Mac
 besides sbxw.
 
 The daemon starts and stops it; you never run it by hand. The contract with the
-daemon is section 6 of the remote-access API (`docs/remote-access.md`, "The Tailscale node").
+daemon is in [docs/security.md, Remote access](../docs/security.md#remote-access), sub-section "The Tailscale node".
 
 ## What it serves, and what it does not
 
@@ -85,8 +85,9 @@ file only, never to stdout, stderr or a log. The file never holds a key.
   `Tailscale-*`, and the hop-by-hop headers (and any header `Connection` names).
 - **Then set:** exactly one `X-Forwarded-For: <peer tailnet IP>` (the daemon
   uses it for rate limits) and `X-Sbxw-Tailnet-Node: <peer node DNS name>`
-  (from Tailscale's WhoIs). The daemon treats both as **information for its
-  journal and rate limits, never as authentication**: a device is trusted only
+  (from Tailscale's WhoIs). Both are **information, never authentication**: the
+  daemon uses the first only as a rate-limit hint and, in step 1, does not read
+  the second (a later journal may). A device is trusted only
   for its pairing cookie. The tailnet user's login (an email address) is not
   forwarded.
 - A connection from an address WhoIs does not know gets `403`.
