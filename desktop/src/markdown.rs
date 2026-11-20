@@ -8,14 +8,17 @@
 //! monospace text; and inline: `code`, **bold** / __bold__, *italics* /
 //! _italics_, [links](https://...) and bare `http(s)://` URLs. A backslash
 //! escapes the next punctuation character. Anything else is plain text: no
-//! HTML, no images, no tables (their pipes show as typed).
+//! HTML, no images. A table (a header row, a `|---|---|` separator, rows) is
+//! drawn as a table whose cells wrap inside their columns; one that is not
+//! well formed (cells counted differently in the header and the separator)
+//! stays text, its pipes as typed.
 //!
 //! Code spans are read first, so bold, italics and link labels can hold a
 //! code span (`**run `ls`**`, which the web UI got wrong once) and a code
 //! span's content is never read as Markdown. Only `http` and `https` links
 //! are links; any other scheme shows its label as plain text.
 
-use rune::{col, row, text, El, Span};
+use rune::{col, el, row, text, El, Span};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
@@ -23,6 +26,8 @@ pub enum Block {
     Paragraph(Vec<Run>),
     List { ordered: bool, start: u64, items: Vec<Vec<Run>> },
     Code(String),
+    /// A header row and body rows of cells, every row as wide as the header.
+    Table { head: Vec<Vec<Run>>, rows: Vec<Vec<Vec<Run>>> },
 }
 
 /// A piece of inline text with one style.
@@ -110,11 +115,27 @@ fn blocks(prose: &str, out: &mut Vec<Block>) {
                 out.push(Block::List { ordered, start, items: items.iter().map(|i| inline(i)).collect() });
             }
         };
-        for line in chunk.lines() {
+        let lines: Vec<&str> = chunk.lines().collect();
+        let mut li = 0;
+        while li < lines.len() {
+            let line = lines[li];
+            li += 1;
             if line.trim().is_empty() {
                 continue;
             }
-            if let Some((level, t)) = heading(line) {
+            if let Some((head, used)) = table_head(line, lines.get(li).copied()) {
+                flush_para(&mut para, out);
+                flush_list(&mut list, out);
+                li += 1;
+                let mut rows = vec![];
+                while li < lines.len() && lines[li].contains('|') && !lines[li].trim().is_empty() {
+                    let mut cells = split_cells(lines[li]);
+                    cells.resize(used, String::new());
+                    rows.push(cells.iter().map(|c| inline(c)).collect());
+                    li += 1;
+                }
+                out.push(Block::Table { head: head.iter().map(|c| inline(c)).collect(), rows });
+            } else if let Some((level, t)) = heading(line) {
                 flush_para(&mut para, out);
                 flush_list(&mut list, out);
                 out.push(Block::Heading(level, inline(t)));
@@ -137,6 +158,51 @@ fn blocks(prose: &str, out: &mut Vec<Block>) {
         flush_para(&mut para, out);
         flush_list(&mut list, out);
     }
+}
+
+/// A line's cells, split at the pipes that are not escaped; one pipe at each
+/// end only frames the row.
+fn split_cells(line: &str) -> Vec<String> {
+    let t = line.trim();
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let mut cells = vec![];
+    let mut cur = String::new();
+    let mut chars = t.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => {
+                cur.push('|');
+                chars.next();
+            }
+            '|' => cells.push(std::mem::take(&mut cur).trim().to_string()),
+            c => cur.push(c),
+        }
+    }
+    // The last cell, unless it is only what is after a closing pipe.
+    if !cur.trim().is_empty() || !t.ends_with('|') {
+        cells.push(cur.trim().to_string());
+    }
+    cells
+}
+
+/// Whether `|---|:--:|` is a table's separator row for `n` columns.
+fn separator(line: &str, n: usize) -> bool {
+    let cells = split_cells(line);
+    cells.len() == n && cells.iter().all(|c| {
+        let d = c.trim_matches(':');
+        !d.is_empty() && d.bytes().all(|b| b == b'-') && c.matches(':').count() <= 2
+    })
+}
+
+/// A table's header cells and column count when `line` and the `next` one
+/// are its header and separator.
+fn table_head(line: &str, next: Option<&str>) -> Option<(Vec<String>, usize)> {
+    if !line.contains('|') {
+        return None;
+    }
+    let head = split_cells(line);
+    let n = head.len();
+    (n >= 1 && separator(next?, n)).then_some((head, n))
 }
 
 fn split_blank(s: &str) -> Vec<String> {
@@ -375,6 +441,7 @@ pub fn plain(blocks: &[Block]) -> String {
             Block::Heading(_, r) | Block::Paragraph(r) => runs(r),
             Block::List { items, .. } => items.iter().map(|i| runs(i)).collect::<Vec<_>>().join("\n"),
             Block::Code(c) => c.clone(),
+            Block::Table { head, rows } => std::iter::once(head).chain(rows.iter()).map(|r| r.iter().map(|c| runs(c)).collect::<Vec<_>>().join("\t")).collect::<Vec<_>>().join("\n"),
         })
         .collect::<Vec<_>>()
         .join("\n\n")
@@ -454,6 +521,34 @@ fn rich_runs<S: 'static>(runs: &[Run], look: &Look, weight: f32, size: f32, key:
     e
 }
 
+/// A table: one flex row per table row, every cell of a column taking the
+/// same share of the width (its weight: the longest text in the column, kept
+/// between 6 and 40 characters), so the columns line up, the cells wrap
+/// inside them and the whole is never wider than its container.
+fn table<S: 'static>(head: &[Vec<Run>], rows: &[Vec<Vec<Run>>], look: &Look, key: &str, on_link: &Option<std::rc::Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>>) -> El {
+    use crate::theme::{c, radius};
+    let len = |cell: &[Run]| cell.iter().map(|r| r.text.chars().count()).sum::<usize>();
+    let weights: Vec<f32> = (0..head.len()).map(|i| std::iter::once(head).chain(rows.iter().map(|r| r.as_slice())).map(|r| len(&r[i])).max().unwrap_or(0).clamp(6, 40) as f32).collect();
+    let bright = Look { color: crate::theme::color_value("text-bright").unwrap(), size: look.size, pills: look.pills.clone() };
+    let line = |cells: &[Vec<Run>], n: usize, head: bool| {
+        let mut r = row().w_full().min_w(0.0).items_start().gap(12.0).px(8.0).py(5.0);
+        if head {
+            r = r.fill(c("elevated"));
+        }
+        for (i, cell) in cells.iter().enumerate() {
+            let k = format!("{key}-r{n}-c{i}");
+            let e = if head { rich_runs::<S>(cell, &bright, 600.0, look.size, &k, on_link) } else { rich_runs::<S>(cell, look, 400.0, look.size, &k, on_link) };
+            r = r.child(col().grow(weights[i]).min_w(0.0).child(e));
+        }
+        r
+    };
+    let mut t = col().key(key.to_string()).w_full().min_w(0.0).border(1.0, c("elevated")).radius(radius("sm").unwrap()).child(line(head, 0, true));
+    for (n, r) in rows.iter().enumerate() {
+        t = t.child(el().w_full().h(1.0).fill(c("elevated"))).child(line(r, n + 1, false));
+    }
+    t
+}
+
 /// The element: blocks stacked with a paragraph's gap. `key` prefixes every
 /// part's key (`<key>-b<N>`), so scripts can find them.
 pub fn view<S: 'static>(src: &str, look: &Look, key: &str, on_link: Option<std::rc::Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>>) -> El {
@@ -488,6 +583,7 @@ pub fn view<S: 'static>(src: &str, look: &Look, key: &str, on_link: Option<std::
                 }
                 l
             }
+            Block::Table { head, rows } => table::<S>(head, rows, look, &k, &on_link),
             Block::Code(code) => col()
                 .key(k.clone())
                 .w_full()
@@ -570,5 +666,23 @@ mod tests {
         assert_eq!(b[5], Block::Paragraph(vec![r("after")]));
         assert_eq!(parse("<b>hi</b> & <script>"), vec![Block::Paragraph(vec![r("<b>hi</b> & <script>")])]);
         assert!(plain(&b).contains("Title\n\nline one"));
+    }
+
+    #[test]
+    fn tables_are_read_when_well_formed_and_stay_text_otherwise() {
+        let b = parse("before\n\n| # | **Decision** |\n|---|:--:|\n| Q1 | read a \\| b |\n| Q2 |\n\nafter");
+        assert_eq!(b.len(), 3, "{b:?}");
+        let Block::Table { head, rows } = &b[1] else { panic!("{b:?}") };
+        assert_eq!((head.len(), rows.len()), (2, 2));
+        assert!(head[1][0].bold);
+        assert_eq!(rows[0][1][0].text, "read a | b");
+        assert_eq!(rows[1].len(), 2, "short rows are padded");
+        // Not a table: the separator counts other cells, or is missing.
+        for t in ["| a | b |\n|---|\n| 1 | 2 |", "| a | b |\n| 1 | 2 |", "a | b\nnot a separator", "|a|b|\n|--x|---|"] {
+            assert!(parse(t).iter().all(|b| matches!(b, Block::Paragraph(_))), "{t}");
+        }
+        // Without outer pipes.
+        assert!(matches!(&parse("a | b\n--|--\n1 | 2")[0], Block::Table { .. }));
+        assert_eq!(plain(&b[1..2]), "#\tDecision\nQ1\tread a | b\nQ2\t");
     }
 }

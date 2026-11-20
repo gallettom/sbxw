@@ -29,6 +29,8 @@
 pub mod codemap;
 pub mod drops;
 pub mod explorer;
+#[cfg(test)]
+mod scroll_tests;
 mod standin;
 #[cfg(test)]
 mod tests;
@@ -91,7 +93,7 @@ pub const INTENTS: &[Spec] = &[
     Spec { name: "files_open", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true), ("tab", Arg::OneOf(TABS), false), ("worktree", Arg::Str, false)], doc: "Opens the file explorer over the panes on that sandbox (its deliverables first, or `tab`; `worktree`: at that thread's worktree, as the daemon lists it)." },
     Spec { name: "files_show", risk: Risk::Direct, args: &[], doc: "Opens the file explorer on the sandbox used last, else the focused pane's, else the selected one." },
     Spec { name: "files_link", risk: Risk::Direct, args: &[("url", Arg::Url, true)], doc: "A link pressed in a file read in the explorer: a relative link or a `[[wiki link]]` is followed in the explorer (its folder listed, the file selected), any other opens in the browser." },
-    Spec { name: "files_outline", risk: Risk::Direct, args: &[("index", Arg::Int(0, 10_000), false)], doc: "Shows one heading's section of the Markdown file read (`index` in its outline), or the whole file (none)." },
+    Spec { name: "files_outline", risk: Risk::Direct, args: &[("index", Arg::Int(0, 10_000), false)], doc: "Scrolls the Markdown file read to one heading (`index` in its outline) and marks it, or back to the top (none)." },
     Spec { name: "files_tab", risk: Risk::Direct, args: &[("tab", Arg::OneOf(TABS), true)], doc: "Shows the Artifacts, Files or Recent tab." },
     Spec { name: "files_place", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Goes to one of the places (`recent`, or a place's path as listed in `files_ui.places`)." },
     Spec { name: "files_browse", risk: Risk::Direct, args: &[("path", Arg::Str, true)], doc: "Lists that folder of the sandbox (`~` is the agent's home). The daemon reads it as the agent sees it." },
@@ -265,7 +267,7 @@ pub struct State {
     map: MapState,
     /// A thread's worktree to list once the sandbox's places are read.
     want_worktree: Option<String>,
-    /// The Markdown section shown (`files_outline`), by heading index.
+    /// The Markdown heading last pressed in the Outline (`files_outline`), by index: the one marked.
     section: Option<usize>,
     /// Folders of the list opened in place (absolute paths), and what the
     /// daemon answered for each (its listing, or `{error}`).
@@ -444,12 +446,13 @@ impl State {
             "files_outline" => {
                 let n = a.i("index").map(|i| i as usize);
                 let text = self.preview["text"].as_str().unwrap_or("");
-                if let Some(i) = n {
-                    if explorer::section(text, i).is_none() {
-                        return Err(format!("the file has no heading {i}"));
-                    }
-                }
+                let rewritten = explorer::rewrite(text, "/");
+                let block = match n {
+                    Some(i) => Some(explorer::heading_block(&rewritten, i).ok_or_else(|| format!("the file has no heading {i}"))?),
+                    None => Some(0),
+                };
                 self.section = n;
+                out.extend(block.map(|b| Action::ScrollIntoView(format!("files-text-b{b}"))));
             }
             "files_tab" => {
                 self.tab = a.req("tab").into();
@@ -1337,9 +1340,10 @@ impl State {
             Some("markdown") => {
                 let dir = self.sel.as_ref().map(|s| view::parent(&self.abs_path(cx, s))).unwrap_or_else(|| "/".into());
                 let outline = explorer::outline(&text);
-                let shown = self.section.and_then(|i| explorer::section(&text, i)).unwrap_or(text);
-                p["text"] = explorer::rewrite(&shown, &dir).into();
-                p["outline"] = J::Array(outline.into_iter().map(|mut h| {
+                p["text"] = explorer::rewrite(&text, &dir).into();
+                // A long file's Outline lists its first headings (each is a row of the screen).
+                p["outline_more"] = outline.len().saturating_sub(view::OUTLINE_MAX).into();
+                p["outline"] = J::Array(outline.into_iter().take(view::OUTLINE_MAX).map(|mut h| {
                     h["on"] = (self.section == h["index"].as_u64().map(|i| i as usize)).into();
                     h
                 }).collect());
