@@ -325,3 +325,22 @@ async fn level_2_answers_do_not_change_with_a_running_sandbox() {
         assert_eq!((r.status, r.text()), was, "{p}");
     }
 }
+
+#[tokio::test]
+async fn a_plain_sandbox_ticket_sends_no_kanban_frame() {
+    // Lead's ruling K1: the phone's Kanban keeps exactly a leader's reach.
+    let (d, app) = on();
+    let (lead, _) = leader(&app, d.path(), "lead1").await;
+    let (app1, _) = plain(&app, d.path(), "app1").await;
+    let list = app.remote_leaders();
+    assert_eq!(list.len(), 2, "both reached");
+    let mut seen = super::remote_kanban::baseline(&app, &list);
+    assert!(!seen.contains_key("app1"), "no baseline for a sandbox with no team");
+    let draft = || sbxw_core::tickets::Draft { title: Some("t".into()), description: Some("".into()), priority: None };
+    app.ticket_create(&app1, draft()).unwrap();
+    let ev = crate::bus::Event::Tickets(crate::svc::tickets::TicketsNudge { sandbox: "app1".into(), n: None, what: "created" });
+    assert!(super::remote_kanban::changed(&app, &list, &ev, &mut seen).is_none());
+    app.ticket_create(&lead, draft()).unwrap();
+    let ev = crate::bus::Event::Tickets(crate::svc::tickets::TicketsNudge { sandbox: "lead1".into(), n: None, what: "created" });
+    assert!(super::remote_kanban::changed(&app, &list, &ev, &mut seen).is_some(), "a leader's still does");
+}
