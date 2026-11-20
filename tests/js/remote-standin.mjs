@@ -18,7 +18,8 @@
 // answers, {l2Digest: {plans|merges|network|stopped: hex}} a detail's new
 // digest (a challenge with the old one is "changed"), {l2Replies: {kind:
 // [{status, body}]}} how the next challenge or action is answered,
-// {pkStates: [...]} the next passkey/status answers, {l2Reset: true}.
+// {pkStates: [...]} the next passkey/status answers, {l2Reset: true},
+// {l2Gone: [ids]} whose detail answers 404, {l2Lists: {plans|merges|network|stopped: <the list's whole answer>}}.
 // Kanban (API-kanban.md): {kanban: {sandbox: board | null}} a board (null:
 // 404, the leader stopped), {tickets: {"sandbox/n": detail}}.
 // Uploads follow API.md 2.6.1: the raw body, an id of 32 hex back, no path.
@@ -169,6 +170,7 @@ export function startStandin(port = 0) {
     const det = L2_DETAIL.exec(p);
     if (det && req.method === 'GET') {
       const what = det[1];
+      if (s.l2.gone?.includes(decodeURIComponent(det[2]))) return send(res, 404, { ok: false, error: 'not found', reason: 'not_found' });
       const one = { plans: L.plan, merges: L.merge, network: L.network_one, stopped: L.stopped_one }[what];
       return send(res, 200, { ...one, digest: s.l2.digest[what] });
     }
@@ -212,6 +214,8 @@ export function startStandin(port = 0) {
       if ('transcribeDelay' in c) s.transcribeDelay = c.transcribeDelay;
       if (c.l2Reset || !s.l2) s.l2 = l2Fresh();
       if (c.l2) Object.assign(s.l2.approvals, c.l2.approvals || {});
+      if (c.l2Gone) s.l2.gone = c.l2Gone;
+      if (c.l2Lists) Object.assign(s.l2.L, c.l2Lists);
       if (c.l2Digest) Object.assign(s.l2.digest, c.l2Digest);
       if (c.l2Replies) Object.assign(s.l2.replies, c.l2Replies);
       if (c.pkStates) s.l2.pkStates = c.pkStates;
