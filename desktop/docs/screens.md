@@ -1616,6 +1616,20 @@ a plan id): the review while it waits, its threads' state once approved,
 the merge once proposed. `threads-new` (modal, `arg` = the sandbox): New
 thread, or a session on the main checkout.
 
+`threads-new` normalizes the name instead of refusing it (ticket T-37). The
+rule is `threads::model::clean_name` in Rust (the same as the web UI's
+`normalizeName`, on the shared table `tests/js/name-cases.json`); the screen
+calls nothing heavy: each change of the field returns the `thread_name`
+intent, which keeps `{raw, typing, full}` in `data.threads_ui.draft`. Typing
+shows `typing` (lower case, a trailing hyphen stands); a paste (the text grew by
+more than one character) shows `full`; until the answer is back the screen
+shows a light guess. A line *Will be created as `<full>`* appears when `full`
+is not what the field shows, and the worktree and branch lines use it. Open
+sends `thread_open` with `normalize = true`; without that flag (chips, scripts,
+the plan dialog's draft check) the name stays strictly checked. The one error
+left is the name taken by the other kind of session; a name that normalizes to
+nothing only disables Open.
+
 **Data** (each a route's answer; a per-sandbox read that failed is in
 `data.app.errors[key][sandbox]`):
 

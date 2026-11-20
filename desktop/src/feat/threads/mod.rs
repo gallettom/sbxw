@@ -84,9 +84,10 @@ pub const INTENTS: &[Spec] = &[
     d("thread_new", &[("sandbox", Arg::Str, true), ("kind", Arg::OneOf(KINDS), false)], "Opens the New thread dialog (`kind = session`: a session in the main checkout, no worktree)."),
     d(
         "thread_open",
-        &[("sandbox", Arg::Str, true), ("name", Arg::Str, true), ("repo", Arg::Str, false), ("model", Arg::Str, false), ("checkout", Arg::Bool, false), ("pane", Arg::Pane, false)],
-        "Opens a thread's session in a pane (spare by default), creating it the first time: `repo` (`=` then its path; `=` alone is the workspace), `model`, `checkout` (in the main checkout) apply to a new one only.",
+        &[("sandbox", Arg::Str, true), ("name", Arg::Str, true), ("repo", Arg::Str, false), ("model", Arg::Str, false), ("checkout", Arg::Bool, false), ("pane", Arg::Pane, false), ("normalize", Arg::Bool, false)],
+        "Opens a thread's session in a pane (spare by default), creating it the first time: `repo` (`=` then its path; `=` alone is the workspace), `model`, `checkout` (in the main checkout) apply to a new one only. `normalize` (the New thread dialog only) turns the name into lower case and hyphens first; without it the name must already be valid.",
     ),
+    d("thread_name", &[("name", Arg::Str, true)], "The New thread dialog's field changed: keeps what the name becomes as it is typed and in full (`data.threads_ui.draft`), for the field and for the line saying what will be created."),
     d("thread_bash", &[("sandbox", Arg::Str, true), ("thread", Arg::Str, false)], "Opens a shell in a thread's worktree (none: the sandbox's own Bash)."),
     d("session_interrupt", &[("sandbox", Arg::Str, true), ("thread", Arg::Str, false)], "Sends Escape to a Claude session (the main one without `thread`): Claude Code stops what it is doing."),
     d("remote_control", &[("sandbox", Arg::Str, true), ("thread", Arg::Str, false)], "Turns Remote Control on for a session, after reading how Claude is signed in there (a setup token needs `remote_login`)."),
@@ -210,6 +211,7 @@ fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
             let mut u = ui(ctx);
             u["new"] = json!({ "sandbox": sb, "kind": kind, "suggest": format!("{prefix}{n}") });
             u["repos_for"] = json!(sb);
+            u["draft"] = J::Null;
             Ok(vec![
                 set_ui(u),
                 Action::Set { key: "thread_repos".into(), value: J::Null },
@@ -218,6 +220,12 @@ fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
             ])
         }
         "thread_open" => thread_open(ctx, q),
+        "thread_name" => {
+            let raw = q.req("name");
+            let mut u = ui(ctx);
+            u["draft"] = json!({ "raw": raw, "typing": model::clean_name(raw, true), "full": model::normalize_name(raw) });
+            Ok(vec![set_ui(u)])
+        }
         "thread_bash" => {
             let mut args = json!({ "sandbox": q.req("sandbox"), "mode": "bash", "pane": "spare" });
             if let Some(t) = q.s("thread") {
@@ -348,7 +356,19 @@ fn pane_of(ctx: &Ctx, sandbox: &str, thread: Option<&str>) -> Option<u64> {
 }
 
 fn thread_open(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
-    let (sb, name) = (q.req("sandbox"), q.req("name").trim());
+    let sb = q.req("sandbox");
+    // Only the dialog asks for `normalize`: a name from anywhere else (a chip,
+    // a script, a plan) keeps the strict check.
+    let fixed;
+    let name = if q.b("normalize").unwrap_or(false) {
+        fixed = model::normalize_name(q.req("name"));
+        if fixed.is_empty() {
+            return Err("Give it a name: letters or digits.".into());
+        }
+        fixed.as_str()
+    } else {
+        q.req("name").trim()
+    };
     if !model::valid_name(name) {
         return Err(format!("\"{name}\": lower-case letters, digits and inner hyphens only, 40 at most"));
     }
@@ -395,6 +415,7 @@ fn thread_open(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
     }
     let mut u = ui(ctx);
     u["new"] = J::Null;
+    u["draft"] = J::Null;
     Ok(vec![set_ui(u), Action::CloseModal, Action::Intent { name: "open_terminal".into(), args }, Action::Refresh("threads")])
 }
 

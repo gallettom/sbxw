@@ -1,0 +1,138 @@
+{
+ "full": [
+  [
+   "Fix Login Bug",
+   "fix-login-bug"
+  ],
+  [
+   "  API_auth v2 ",
+   "api-auth-v2"
+  ],
+  [
+   "feature/Add-OAuth",
+   "feature-add-oauth"
+  ],
+  [
+   "--weird--",
+   "weird"
+  ],
+  [
+   "Été 2026",
+   "ete-2026"
+  ],
+  [
+   "Straße Ørsted Łódź",
+   "strasse-orsted-lodz"
+  ],
+  [
+   "Crème brûlée",
+   "creme-brulee"
+  ],
+  [
+   "a.b/c\\d_e f",
+   "a-b-c-d-e-f"
+  ],
+  [
+   "a - b -- c",
+   "a-b-c"
+  ],
+  [
+   "fix-",
+   "fix"
+  ],
+  [
+   "t1",
+   "t1"
+  ],
+  [
+   "日本語",
+   ""
+  ],
+  [
+   "!!!",
+   ""
+  ],
+  [
+   "",
+   ""
+  ],
+  [
+   "   ",
+   ""
+  ],
+  [
+   "rocket 🚀 launch",
+   "rocket-launch"
+  ],
+  [
+   "tab\there\nnew\u0000nul",
+   "tab-here-new-nul"
+  ],
+  [
+   "<img src=x onerror=alert(1)>",
+   "img-src-x-onerror-alert-1"
+  ],
+  [
+   "a\"b'c`d",
+   "a-b-c-d"
+  ],
+  [
+   "abcdefghij-abcdefghij-abcdefghij-abcdefghij-abcdefghij",
+   "abcdefghij-abcdefghij-abcdefghij-abcdefg"
+  ],
+  [
+   "abcdefghij-abcdefghij-abcdefghij-abcdef-xyz",
+   "abcdefghij-abcdefghij-abcdefghij-abcdef"
+  ],
+  [
+   "abcdefghij abcdefghij abcdefghij abcdef  xyz",
+   "abcdefghij-abcdefghij-abcdefghij-abcdef"
+  ],
+  [
+   "Abcdefghij Abcdefghij Abcdefghij Abcdefg",
+   "abcdefghij-abcdefghij-abcdefghij-abcdefg"
+  ]
+ ],
+ "typing": [
+  [
+   "Fix",
+   "fix"
+  ],
+  [
+   "fix ",
+   "fix-"
+  ],
+  [
+   "fix-",
+   "fix-"
+  ],
+  [
+   "Fix_Login",
+   "fix-login"
+  ],
+  [
+   " ",
+   ""
+  ],
+  [
+   "-a",
+   "a"
+  ],
+  [
+   "a  b",
+   "a-b"
+  ],
+  [
+   "é",
+   "e"
+  ],
+  [
+   "a!",
+   "a-"
+  ],
+  [
+   "",
+   ""
+  ]
+ ]
+}

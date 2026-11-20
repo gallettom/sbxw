@@ -1147,9 +1147,6 @@ async function openThread(idx, checkout = false) {
     ? `New session in ${sandbox}, on the main checkout` : `New thread in ${sandbox}`;
   document.getElementById('thread-name-label').textContent = checkout ? 'Session name' : 'Thread name';
   document.getElementById('thread-existing-label').textContent = checkout ? 'Existing sessions' : 'Existing threads';
-  document.getElementById('thread-hint').textContent = checkout
-    ? 'Lower-case letters, digits and hyphens. It works on the same files as the main session — no worktree, no branch — so two agents editing one file can overwrite each other.'
-    : 'Lower-case letters, digits and hyphens. It gets the worktree .sbxw-worktrees/<name> and the branch sbxw/<name>.';
   document.getElementById('thread-count').textContent =
     info?.ok ? `${info.open} of ${info.max} Claude sessions open` : '';
   const chips = document.getElementById('thread-existing');
@@ -1213,12 +1210,24 @@ function renderThreadModels() {
 function closeThreadModal() { threadOverlay.close(); threadAsk = null; }
 
 function validateThreadName() {
-  const name = threadInput.value.trim();
+  // What would be used: the field's text, normalized. Nothing the person can
+  // type is refused for its characters; an empty result only disables Open.
+  const typed = threadInput.value;
+  const name = normalizeName(typed);
   const ok = THREAD_NAME.test(name);
-  threadInput.classList.toggle('error', !!name && !ok);
-  threadError.textContent = name && !ok ? 'Lower-case letters, digits and inner hyphens only' : '';
-  threadError.classList.toggle('hidden', !threadError.textContent);
+  threadInput.classList.remove('error');
+  threadError.textContent = '';
+  threadError.classList.add('hidden');
   const checkout = !!threadAsk?.checkout;
+  // A quiet line when the name used is not what the field shows, ignoring a
+  // hyphen still waiting for its next letter: the field keeps what was typed
+  // (so the caret never fights the person) and this line says the result.
+  const preview = document.getElementById('thread-preview');
+  preview.textContent = name && name !== typed.replace(/-+$/, '') ? `Will be created as ${name}` : '';
+  preview.hidden = !preview.textContent;
+  document.getElementById('thread-hint').textContent = checkout
+    ? 'Capitals, spaces and other characters become lower case and hyphens. It works on the same files as the main session — no worktree, no branch — so two agents editing one file can overwrite each other.'
+    : `Capitals, spaces and other characters become lower case and hyphens. It gets the worktree .sbxw-worktrees/${name || '<name>'} and the branch sbxw/${name || '<name>'}.`;
   const existing = threadAsk?.known.find(t => t.name === name);
   // A name is one session: taken by the other kind, it is refused here rather
   // than by the daemon after the pane has opened.
@@ -1239,6 +1248,7 @@ function validateThreadName() {
   threadOpenBtn.disabled = !ok || needsRepo || otherKind;
 }
 
+// `name` is a chip's own name, kept as it is, or the field's text, normalized.
 function submitThread(name) {
   if (!threadAsk || !THREAD_NAME.test(name)) return;
   const { idx, sandbox, known, all, checkout, repos, repo, models, model } = threadAsk;
@@ -1268,7 +1278,13 @@ function showThread(idx, sandbox, name, repo, model, checkout) {
   setFocusedPane(at >= 0 ? at : target);
 }
 
-threadInput.addEventListener('input', validateThreadName);
+// Typing: lower case and hyphens as it goes, a trailing hyphen allowed to
+// stand. Paste: the whole field at once. Blur: the full rule (ends, 40 cut).
+// Not while an IME composes (Japanese, Chinese): rewriting the field then
+// would break the composition; compositionend fixes it.
+threadInput.addEventListener('input', e => { if (!e.isComposing) fixNameField(threadInput, e.inputType); validateThreadName(); });
+threadInput.addEventListener('compositionend', () => { fixNameField(threadInput, 'insertFromPaste'); validateThreadName(); });
+threadInput.addEventListener('blur', () => { threadInput.value = normalizeName(threadInput.value); validateThreadName(); });
 document.getElementById('thread-repos').addEventListener('change', e => {
   if (!threadAsk || e.target.name !== 'thread-repo') return;
   threadAsk.repo = threadAsk.repos.repos[+e.target.value]?.path;
@@ -1279,9 +1295,9 @@ document.getElementById('thread-models').addEventListener('change', e => {
   if (threadAsk && e.target.name === 'thread-model') threadAsk.model = e.target.value;
 });
 threadInput.addEventListener('keydown', e => {
-  if (isEnterKey(e) && !threadOpenBtn.disabled) { e.preventDefault(); submitThread(threadInput.value.trim()); }
+  if (isEnterKey(e) && !threadOpenBtn.disabled) { e.preventDefault(); submitThread(normalizeName(threadInput.value)); }
 });
-threadOpenBtn.addEventListener('click', () => submitThread(threadInput.value.trim()));
+threadOpenBtn.addEventListener('click', () => submitThread(normalizeName(threadInput.value)));
 document.getElementById('thread-existing').addEventListener('click', e => {
   const chip = e.target.closest('.thread-chip');
   if (chip) submitThread(chip.dataset.name);

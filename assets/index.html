@@ -488,8 +488,9 @@
       <div class="modal-body">
         <div>
           <label class="field-label" for="thread-name" id="thread-name-label">Thread name</label>
-          <input id="thread-name" class="field-input" type="text" maxlength="40" placeholder="fix-login"
+          <input id="thread-name" class="field-input" type="text" placeholder="fix-login"
                  autocomplete="off" autocapitalize="off" spellcheck="false">
+          <p class="thread-hint" id="thread-preview" hidden></p>
           <p class="thread-hint" id="thread-hint"></p>
         </div>
         <!-- The repo the new thread works in: one row per git repo of the
