@@ -2001,3 +2001,41 @@ fn the_person_is_on_the_right_and_agents_on_the_left() {
     }
     let _ = std::fs::remove_file(&path);
 }
+
+/// The real-sized case: 400 items, the person's messages 2000 characters
+/// each (and Claude's), drawn whole at the narrow and the wide width: the
+/// render stays within the Luau limits (an overrun is an error) and the
+/// element cap.
+#[test]
+fn long_texts_render_within_budget_on_both_sides() {
+    let mut d = data_of("basic");
+    let mut items = vec![];
+    let mut s = 1;
+    while items.len() < 400 {
+        items.push(it(s, "user_prompt", json!({ "text": format!("Prompt {s}: {}", "words to wrap ".repeat(140)) })));
+        items.push(it(s + 1, "tool_call", json!({ "tool": { "name": "Bash", "summary": format!("$ step {s}"), "id": format!("t{s}") } })));
+        items.push(it(s + 2, "tool_result", json!({ "result": { "status": "ok", "size": 120, "head": "ok", "id": format!("t{s}") } })));
+        items.push(it(s + 3, "assistant_text", json!({ "text": format!("Reply {s}: {}", "more words ".repeat(180)) })));
+        s += 4;
+    }
+    items.truncate(400);
+    put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": items }));
+    *STATE().lock().unwrap() = Model::default();
+    let a = run(&d, "monitor_open", json!({})).unwrap();
+    serve(&mut d, a);
+    let a = run(&d, "monitor_select", json!({ "key": "billing-api:s-bill-main" })).unwrap();
+    serve(&mut d, a);
+    for _ in 0..10 {
+        let a = run(&d, "monitor_earlier", json!({ "key": "billing-api:s-bill-main" })).unwrap();
+        serve(&mut d, a);
+    }
+    let h = host();
+    for ow in [1284, 760] {
+        d["app"]["overlay"]["w"] = ow.into();
+        let n = h.render(&d).unwrap_or_else(|e| panic!("{ow}: {e}"));
+        let mut all = vec![];
+        walk(&n, &mut all);
+        assert!(all.len() < 5000, "{ow}: under the element cap: {}", all.len());
+        assert!(all.iter().filter(|x| x.key.as_deref().is_some_and(|k| k.starts_with("monitor-body-you-"))).count() > 20, "{ow}: the person's messages are drawn");
+    }
+}
