@@ -785,6 +785,57 @@ function rcL2Fail(res) {
   if (res.status === 404) return 'This is not waiting any more. Nothing was done.';
   return `Nothing was done: the Mac answered ${res.status}${err ? ` (${err})` : ''}.`;
 }
+// ── The Approvals sandbox filter: a display filter, nothing more ──
+// Works on the lists the page already read. Every list item names its
+// sandbox (`sandbox`; a stopped sandbox is its own, so `name`). Nothing here
+// decides what the device may see or approve: it only hides rows.
+function rcApSandbox(what, it) {
+  const v = what === 'stopped' ? it?.name : it?.sandbox;
+  return typeof v === 'string' ? v : '';
+}
+// What the badge says (API-level2.md, `counts`): the number is plan decisions
+// only (plans and merges waiting); network requests never add to it, they
+// raise a dot; stopped sandboxes are a list, not a request, and count for
+// neither.
+function rcApBadge(counts) {
+  const n = k => (counts && typeof counts === 'object' ? Math.max(0, Math.floor(Number(counts[k]))) || 0 : 0);
+  return { n: n('plans') + n('merges'), dot: n('network') > 0 };
+}
+// `lists`: { plans: [...], merges: [...], network: [...], stopped: [...] }.
+// One entry per sandbox that has something waiting, with its count, in the
+// order the app uses for leaders (rcLeaders); the rest after, by name.
+function rcApEntries(lists, leaders, keep) {
+  const counts = new Map();
+  const per = new Map(); // sandbox -> { plans, merges, network, stopped }
+  for (const what of ['plans', 'merges', 'network', 'stopped']) {
+    for (const it of Array.isArray(lists?.[what]) ? lists[what] : []) {
+      const s = rcApSandbox(what, it);
+      if (!s) continue;
+      counts.set(s, (counts.get(s) || 0) + 1);
+      per.set(s, { ...per.get(s), [what]: (per.get(s)?.[what] || 0) + 1 });
+    }
+  }
+  // A chosen sandbox with nothing left stays in the strip, at zero.
+  if (typeof keep === 'string' && keep && !counts.has(keep)) counts.set(keep, 0);
+  const order = new Map((Array.isArray(leaders) ? leaders : []).map((l, i) => [l.sandbox, i]));
+  const name = s => (Array.isArray(leaders) ? leaders.find(l => l.sandbox === s)?.name : '') || s;
+  return [...counts]
+    .map(([sandbox, count]) => ({ sandbox, name: name(sandbox), count, ...rcApBadge(per.get(sandbox)) }))
+    .sort((a, b) => (b.count > 0) - (a.count > 0)
+      || (order.has(a.sandbox) ? order.get(a.sandbox) : Infinity) - (order.has(b.sandbox) ? order.get(b.sandbox) : Infinity)
+      || a.name.localeCompare(b.name));
+}
+// The items of one kind that pass the filter (null: all of them).
+function rcApFilter(what, items, sandbox) {
+  const list = Array.isArray(items) ? items : [];
+  return sandbox ? list.filter(it => rcApSandbox(what, it) === sandbox) : list;
+}
+// Where Approvals starts: on the leader the phone is looking at when it has
+// something waiting, else on All (null).
+function rcApDefault(current, entries) {
+  return current && (entries || []).some(e => e.sandbox === current && e.count > 0) ? current : null;
+}
+
 // The states of enabling Face ID on this device, each in a sentence.
 const RC_PASSKEY_TEXT = {
   pending: 'In sbxw on your Mac, run "sbxw remote approvals allow" for this device and type these six digits.',

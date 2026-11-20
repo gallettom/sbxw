@@ -76,6 +76,7 @@
     paired: false,
     screen: 's-loading',
     l2: null,            // GET /r/approvals: { level2, passkey, rp_ok, counts }
+    apLists: [], apFilter: undefined, apTouched: false, apWanted: null, apSeq: 0, apSeen: '', apLoading: false, apBase: null, apIds: new Set(), apToastTimer: null, apToastTo: null,
     l2From: null,        // where Approvals was opened: null (leaders) or a sandbox
     item: null,          // the open detail: { what, id, data, digest }
     views: new Map(),    // per leader: 'chat' or 'kanban', and the board's place
@@ -1540,18 +1541,73 @@
     return res;
   }
   function renderBadge() {
-    const c = st.l2?.level2 && st.l2.counts && typeof st.l2.counts === 'object' ? st.l2.counts : null;
-    const n = c ? ['plans', 'merges', 'network', 'stopped'].reduce((t, k) => t + (Math.max(0, Math.floor(Number(c[k]))) || 0), 0) : 0;
+    // The number is plans and merges; network requests raise a dot instead.
+    const { n, dot } = st.l2?.level2 ? rcApBadge(st.l2.counts) : { n: 0, dot: false };
     const b = $('badge');
     b.textContent = n > 99 ? '99+' : String(n);
     b.hidden = !n;
-    $('approvals-btn').setAttribute('aria-label', n ? `Approvals, ${n} waiting` : 'Approvals');
+    $('badge-dot').hidden = !dot;
+    $('approvals-btn').setAttribute('aria-label', n ? `Approvals, ${n} waiting${dot ? '. Network requests wait' : ''}` : dot ? 'Approvals. Network requests wait' : 'Approvals');
+    apToastCheck(n);
+    // Approvals is open and the counts moved: re-read its lists (the filter's
+    // entries and counts follow; the choice and the scroll are kept).
+    if (st.screen === 's-approvals' && !st.apLoading && st.l2?.level2 && apCountsKey() !== st.apSeen) { st.apLoading = true; loadApLists(); }
   }
-  $('approvals-btn').addEventListener('click', () => {
+  // `filter`: undefined (the person's own choice stands), null (All) or a sandbox.
+  function openApprovals(filter) {
     st.l2From = st.screen === 's-chat' ? st.current : null;
     if (st.screen === 's-chat') { saveDraft(); stopRecording(false); disarmInterrupt(); }
+    if (filter !== undefined) { st.apTouched = true; st.apFilter = filter; }
     showApprovals();
-  });
+  }
+  $('approvals-btn').addEventListener('click', () => openApprovals());
+
+  // ── A plan or merge went up: one toast, never a plan's text ──
+  // From the counts (the `approvals` event or a refresh). The first count the
+  // page sees is the baseline; going down, or network and stopped going up,
+  // say nothing. The sandbox's name comes from the lists the page already
+  // reads (plans, merges), shown as text.
+  async function apSeen() {
+    const got = await Promise.all([l2.list('plans'), l2.list('merges')]);
+    const fresh = [];
+    ['plans', 'merges'].forEach((k, i) => {
+      const r = got[i];
+      for (const it of r.ok && r.data && Array.isArray(r.data[k]) ? r.data[k] : []) {
+        const id = str(it?.id);
+        if (!id || st.apIds.has(id)) continue;
+        st.apIds.add(id);
+        fresh.push({ what: k, sandbox: str(it.sandbox) });
+      }
+    });
+    return fresh;
+  }
+  async function apToastCheck(n) {
+    const base = st.apBase;
+    st.apBase = n;
+    if (base === null) { if (n) apSeen(); return; }
+    if (n <= base) return;
+    const fresh = await apSeen();
+    if (!['s-leaders', 's-chat', 's-item'].includes(st.screen) || sheet) return;
+    const delta = n - base;
+    const merges = fresh.length > 0 && fresh.every(f => f.what === 'merges');
+    const noun = merges ? 'merge' : 'plan';
+    const sbs = new Set(fresh.map(f => f.sandbox).filter(Boolean));
+    const sb = sbs.size === 1 && fresh.every(f => f.sandbox) ? [...sbs][0] : '';
+    const name = sb ? (st.leaders.find(l => l.sandbox === sb)?.name || sb) : '';
+    $('ap-toast-text').textContent = delta > 1 ? `${delta} ${fresh.length ? noun : 'plan'}s wait for you` : `A ${noun} waits for you`;
+    $('ap-toast-sb').textContent = name;
+    $('ap-toast-sb').hidden = !name;
+    st.apToastTo = sb || null;
+    $('ap-toast').hidden = false;
+    clearTimeout(st.apToastTimer);
+    st.apToastTimer = setTimeout(hideApToast, 6000);
+  }
+  function hideApToast() {
+    clearTimeout(st.apToastTimer);
+    $('ap-toast').hidden = true;
+  }
+  $('ap-toast-go').addEventListener('click', () => { const to = st.apToastTo; hideApToast(); openApprovals(to); });
+  $('ap-toast-x').addEventListener('click', hideApToast);
   function leaveApprovals() {
     const back = st.l2From;
     st.l2From = null;
@@ -1570,6 +1626,9 @@
   async function showApprovals(done) {
     st.item = null;
     stopPasskeyPoll();
+    // Untouched, the filter starts again from the leader being looked at.
+    if (!st.apTouched) { st.apFilter = undefined; st.apWanted = st.l2From; }
+    st.apLoading = true;
     setTitle('Approvals', '');
     show('s-approvals');
     $('ap-done').textContent = done || '';
@@ -1582,20 +1641,81 @@
     $('ap-block-text').textContent = block;
     // Face ID is enabled from here once the Mac has level 2 on.
     $('ap-enable').hidden = !(a?.level2 === true && (a.passkey !== true || a.rp_ok === false));
-    if (!a?.level2) { $('ap-lists').replaceChildren(); $('ap-empty').hidden = true; return; }
+    if (!a?.level2) { st.apLoading = false; $('ap-lists').replaceChildren(); $('ap-filter').hidden = true; $('ap-none').hidden = true; $('ap-empty').hidden = true; return; }
+    await loadApLists();
+  }
+  // Read the four lists, then draw them. Also the live path: a change of the
+  // counts re-reads them (nothing is added to what the page asks).
+  async function loadApLists() {
+    const seq = ++st.apSeq;
     const got = await Promise.all(LISTS.map(L => l2.list(L.what)));
-    if (st.screen !== 's-approvals') return;
+    if (st.screen !== 's-approvals' || seq !== st.apSeq) return;
+    st.apLists = got;
+    for (const k of ['plans', 'merges']) for (const it of apItems()[k]) if (it?.id) st.apIds.add(str(it.id));
+    st.apSeen = apCountsKey();
+    st.apLoading = false;
+    renderApLists();
+  }
+  function apCountsKey() {
+    const c = st.l2?.counts;
+    return c && typeof c === 'object' ? LISTS.map(L => Number(c[L.count]) || 0).join(',') : '';
+  }
+  // The items of each list as the Mac sent them (a failed list: none).
+  function apItems() {
+    const out = {};
+    LISTS.forEach((L, i) => {
+      const r = st.apLists[i];
+      out[L.what] = r && r.ok && r.data && Array.isArray(r.data[L.key]) ? r.data[L.key] : [];
+    });
+    return out;
+  }
+  function apCounts(all) {
+    return { plans: all.plans.length, merges: all.merges.length, network: all.network.length };
+  }
+  // Display filter only: it hides rows, nothing else. The detail, the
+  // challenge and the action still come from the Mac, per item.
+  function renderApLists() {
+    const all = apItems();
+    const entries = rcApEntries(all, st.leaders, st.apFilter);
+    if (st.apFilter === undefined) st.apFilter = rcApDefault(st.apWanted, entries);
+    const only = st.apFilter;
+    const scroll = $('s-approvals').scrollTop;
+    const stripLeft = $('ap-filter').scrollLeft;
+    const total = LISTS.reduce((t, L) => t + all[L.what].length, 0);
+    // The strip is for choosing between sandboxes: nothing to choose from
+    // when at most one has something and no choice was made.
+    const showStrip = total > 0 && (entries.length > 1 || only);
+    $('ap-filter').hidden = !showStrip;
+    if (showStrip) {
+      const mk = (label, count, sandbox) => {
+        const t = el('button', 'rc-kb-tab rc-ap-fchip');
+        t.type = 'button';
+        t.setAttribute('role', 'tab');
+        t.setAttribute('aria-selected', String(sandbox === only || (!sandbox && !only)));
+        if (sandbox) t.dataset.sandbox = sandbox;
+        t.append(el('span', 'rc-ap-fname', label));
+        if (count.n) t.append(el('span', 'rc-kb-count', count.n));
+        if (count.dot) { const d = el('span', 'rc-ap-dot'); d.setAttribute('role', 'img'); d.setAttribute('aria-label', 'Network requests wait'); t.append(d); }
+        t.addEventListener('click', () => { st.apTouched = true; st.apFilter = sandbox; renderApLists(); });
+        return t;
+      };
+      $('ap-filter').replaceChildren(mk('All sandboxes', rcApBadge(apCounts(all)), null), ...entries.map(e => mk(e.name, e, e.sandbox)));
+      $('ap-filter').scrollLeft = stripLeft;
+      if (!stripLeft) $('ap-filter').querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    } else {
+      $('ap-filter').replaceChildren();
+    }
     const sections = [];
     LISTS.forEach((L, i) => {
-      const r = got[i];
-      const items = r.ok && r.data && Array.isArray(r.data[L.key]) ? r.data[L.key] : [];
+      const r = st.apLists[i];
       // A list the Mac could not read says so, quietly, in its place.
-      if (!r.ok && r.status !== 403) {
+      if (r && !r.ok && r.status !== 403) {
         const sec = el('section', 'rc-ap-sec');
         sec.append(el('h2', 'rc-ap-h', L.title), el('p', 'rc-muted rc-small-text rc-ap-fail', rcL2Fail(r)));
         sections.push(sec);
         return;
       }
+      const items = rcApFilter(L.what, all[L.what], only);
       if (!items.length) return;
       const sec = el('section', 'rc-ap-sec');
       const h = el('h2', 'rc-ap-h', L.title);
@@ -1607,8 +1727,14 @@
       sections.push(sec);
     });
     $('ap-lists').replaceChildren(...sections);
-    $('ap-empty').hidden = sections.length > 0;
+    // Nothing in the chosen sandbox: say so, with the way back.
+    const goneName = entries.find(e => e.sandbox === only)?.name || only;
+    $('ap-none-text').textContent = only ? `Nothing waits in ${goneName}` : '';
+    $('ap-none').hidden = !(only && !sections.length);
+    $('ap-empty').hidden = sections.length > 0 || !!only;
+    $('s-approvals').scrollTop = scroll;
   }
+  $('ap-none-all').addEventListener('click', () => { st.apTouched = true; st.apFilter = null; renderApLists(); });
   function listRow(what, it) {
     const li = el('li');
     const b = el('button', `rc-ap-row rc-ap-${what}`);

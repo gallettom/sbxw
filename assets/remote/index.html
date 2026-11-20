@@ -28,6 +28,12 @@
 <!-- Another view of this device holds the live stream: one tap takes it back. -->
 <button id="elsewhere" class="rc-banner rc-banner-btn" type="button" hidden>This page is open elsewhere on this device. Tap to reconnect here.</button>
 
+<!-- A plan or merge went up: one toast, a tap opens Approvals on its sandbox. -->
+<div id="ap-toast" class="rc-toast" role="status" hidden>
+  <button id="ap-toast-go" class="rc-toast-go" type="button"><span id="ap-toast-text"></span><span id="ap-toast-sb" class="rc-toast-sb" hidden></span></button>
+  <button id="ap-toast-x" class="rc-toast-x" type="button" aria-label="Dismiss">&times;</button>
+</div>
+
 <header id="bar" class="rc-bar">
   <button id="back" class="rc-icon-btn" type="button" aria-label="Back to the leaders" hidden>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
@@ -45,6 +51,7 @@
   <button id="approvals-btn" class="rc-icon-btn rc-ap-btn" type="button" aria-label="Approvals" hidden>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 5 6.2v5.3c0 4.3 2.9 7.6 7 9 4.1-1.4 7-4.7 7-9V6.2z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>
     <span id="badge" class="rc-badge" hidden></span>
+    <span id="badge-dot" class="rc-badge-dot" hidden></span>
   </button>
   <button id="menu-btn" class="rc-icon-btn" type="button" aria-label="Device menu" aria-haspopup="true" aria-expanded="false" hidden>
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18.5" cy="12" r="1.5"/></svg>
@@ -131,6 +138,11 @@
     <div id="ap-block" class="rc-ap-block" hidden>
       <p id="ap-block-text"></p>
       <button id="ap-enable" class="rc-btn rc-primary" type="button" hidden>Enable Face ID on this device</button>
+    </div>
+    <div id="ap-filter" class="rc-kb-pick rc-ap-filter" role="tablist" aria-label="Sandbox" hidden></div>
+    <div id="ap-none" class="rc-ap-none" role="status" hidden>
+      <p id="ap-none-text"></p>
+      <button id="ap-none-all" class="rc-btn" type="button">Show all sandboxes</button>
     </div>
     <div id="ap-lists" class="rc-ap-lists"></div>
     <p id="ap-empty" class="rc-empty" hidden>Nothing waits for you</p>

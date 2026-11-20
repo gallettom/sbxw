@@ -930,3 +930,36 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .rc-leaders { max-width: 720px; margin: 0 auto; width: 100%; }
   .rc-log, .rc-composer { padding-left: max(24px, calc((100% - 760px) / 2)); padding-right: max(24px, calc((100% - 760px) / 2)); }
 }
+
+/* Approvals: the sandbox filter (the Kanban's strip, one chip per sandbox). */
+.rc-ap-filter { padding-top: 6px; padding-bottom: 0; }
+.rc-ap-fchip { max-width: 70vw; }
+.rc-ap-fname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-ap-fchip .rc-kb-count { flex: none; }
+.rc-ap-none { margin: 24px max(16px, var(--safe-r)) 0 max(16px, var(--safe-l)); padding: 20px; display: grid; gap: 14px; justify-items: center; text-align: center; color: var(--c-text-bright); overflow-wrap: anywhere; }
+@media (min-width: 700px) { .rc-ap-filter, .rc-ap-none { max-width: 760px; margin-left: auto; margin-right: auto; width: 100%; } }
+/* Network requests wait: a dot, never a number (blue, not the amber pill). */
+.rc-badge-dot { position: absolute; bottom: 7px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--c-blue); box-shadow: 0 0 0 2px var(--c-surface); }
+.rc-ap-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c-blue); }
+
+/* A plan or merge waits: a bar at the top, inside the safe area, under the Face ID sheet. */
+.rc-toast {
+  position: fixed;
+  z-index: 10;
+  top: calc(8px + var(--safe-t));
+  left: max(12px, var(--safe-l));
+  right: max(12px, var(--safe-r));
+  max-width: 520px;
+  margin: 0 auto;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid rgba(210, 153, 34, 0.5);
+  border-radius: var(--r-lg);
+  background: var(--c-surface);
+  box-shadow: 0 6px 24px rgba(1, 4, 9, 0.5);
+  animation: rc-sheet 220ms var(--ease);
+}
+.rc-toast-go { flex: 1; min-width: 0; min-height: 48px; display: grid; gap: 1px; padding: 8px 14px; text-align: left; border: 0; background: transparent; color: var(--c-text-bright); font: inherit; font-weight: 600; }
+.rc-toast-sb { font-size: var(--fs-xs); font-weight: 400; color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-toast-x { flex: none; width: 48px; border: 0; background: transparent; color: var(--c-text-muted); font-size: 22px; }
+.rc-toast-go:focus-visible, .rc-toast-x:focus-visible { box-shadow: inset 0 0 0 2px var(--c-blue); border-radius: var(--r-lg); }

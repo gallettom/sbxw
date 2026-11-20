@@ -820,16 +820,20 @@ test('level 2: the Approvals entry, its badge, and one sentence when it cannot a
   const { ctx, page, problems } = await phone();
   await page.goto(`${base()}/`);
   await page.waitForSelector('#badge:not([hidden])');
-  assert.equal(await page.textContent('#badge'), '4');
-  assert.equal(await page.getAttribute('#approvals-btn', 'aria-label'), 'Approvals, 4 waiting');
+  assert.equal(await page.textContent('#badge'), '2'); // plans + merges; the network request is a dot
+  assert.equal(await page.isVisible('#badge-dot'), true);
+  assert.equal(await page.getAttribute('#approvals-btn', 'aria-label'), 'Approvals, 2 waiting. Network requests wait');
   await ctl({ emit: { event: 'approvals', data: { plans: 2, merges: 1, network: 0, stopped: 3 } } });
-  await page.waitForSelector('#badge:text("6")');
+  await page.waitForSelector('#badge:text("3")');
   await shot(page, '40-approvals-entry');
   // From a leader's bar too.
   await page.tap('.rc-leader >> text=website');
   assert.equal(await page.isVisible('#approvals-btn'), true);
   await page.tap('#approvals-btn');
   await page.waitForSelector('.rc-ap-row');
+  // Opened from website's conversation, the filter starts on website (it has a merge waiting).
+  assert.deepEqual(await page.$$eval('.rc-ap-h', h => h.map(e => e.textContent)), ['Merges proposed 1']);
+  await page.tap('#ap-filter .rc-ap-fchip >> text=All sandboxes');
   assert.deepEqual(await page.$$eval('.rc-ap-h', h => h.map(e => e.textContent)), ['Plans to approve 1', 'Merges proposed 1', 'Network requests 1', 'Stopped sandboxes 1']);
   await shot(page, '41-approvals-list');
   // A list sbx cannot read says so in its place; the others stay.
