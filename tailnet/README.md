@@ -92,9 +92,11 @@ file only, never to stdout, stderr or a log. The file never holds a key.
   `403 Forbidden.` with no detail, before anything is forwarded.
 - No path rewriting, no normalisation: the daemon receives the path as sent.
 - `Upgrade` (websocket) and `CONNECT` get `400`.
-- **Limits:** request headers 16 KiB (`431` above), body 8 MiB (`413`; the
-  daemon's largest route takes 7,681,024 bytes), header read 10 s, body read
-  120 s, idle connection 120 s, upstream answer 5 min.
+- **Limits:** request headers 16 KiB (`431` above), body 26 MiB (`413`; the
+  daemon's largest route, a phone's file upload, takes 25 MiB; it was 8 MiB
+  before that route), streamed to the daemon, header read 10 s, body read
+  120 s (a 25 MiB file needs about 1.7 Mbit/s of uplink), idle connection
+  120 s, upstream answer 5 min.
 - Server-sent events stream: responses are flushed at once, no buffering, no
   write timeout.
 - An upstream that does not answer gives `502` with a fixed sentence; no
