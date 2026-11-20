@@ -765,6 +765,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   overflow-x: auto;
   scrollbar-width: none;
   scroll-snap-type: x proximity;
+  scroll-padding-inline: 12px;
 }
 .rc-kb-pick::-webkit-scrollbar { display: none; }
 .rc-kb-tab {
@@ -811,7 +812,6 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 }
 .rc-kb-card:active { background: var(--c-elevated); transform: scale(0.99); }
 .rc-kb-card:focus-visible { box-shadow: var(--ring); }
-.rc-kb-p1 { box-shadow: inset 3px 0 0 var(--c-amber); }
 .rc-kb-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .rc-kb-num { font: 600 var(--fs-xs) var(--font-mono); color: var(--c-text-muted); white-space: nowrap; }
 .rc-kb-prio { font: 600 11px/16px var(--font-mono); padding: 0 6px; border-radius: 5px; color: var(--c-text-muted); background: rgba(110, 118, 129, 0.16); white-space: nowrap; }
@@ -853,7 +853,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* Wide: the five columns side by side, each scrolling on its own. */
 @media (min-width: 700px) {
   .rc-kb-pick { display: none; }
-  .rc-kb-lanes { gap: 10px; overflow-x: auto; padding-top: 10px; scroll-snap-type: x mandatory; }
+  .rc-kb-lanes { gap: 10px; overflow-x: auto; padding-top: 10px; scroll-snap-type: x mandatory; scroll-padding-inline: 12px; }
   .rc-kb-lane, .rc-kb-lane.rc-on { display: flex; flex: 0 0 min(280px, 42vw); scroll-snap-align: start; background: var(--c-surface-alt); border: 1px solid var(--c-hair); border-radius: var(--r-lg); padding: 0 8px; }
   .rc-kb-h { display: flex; align-items: center; gap: 6px; margin: 0; padding: 10px 4px 6px; font-size: var(--fs-sm); color: var(--tone); }
   .rc-kb-card { background: var(--c-surface); }

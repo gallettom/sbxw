@@ -613,6 +613,36 @@ a standalone app named sbxw.
   and correct. It never sends. The AudioContexts close and the microphone's tracks stop at
   every end; when the page is hidden the recording stops and nothing is sent. Without HTTPS,
   without a microphone or with the permission refused, the page says why.
+- **Kanban.** Under a leader's bar, "Conversation | Kanban" switches views; each keeps its
+  place (the conversation's scroll, the board's column, scrolls and open ticket). The board
+  is `GET /r/leaders/:sandbox/kanban` drawn as it comes, in the daemon's order: on a phone
+  one column at a time, picked from pills with their counts or by a swipe (In progress
+  first when it has cards), from 700 px all five side by side. A card shows its number,
+  its title (two lines at most), its marks, its thread with a status dot and its age. A
+  tap opens the ticket (`.../kanban/T-<n>`; a thread's own card has no ticket and calls no
+  route): title, description with its line breaks, priority, column, thread, history, and
+  files as plain rows (name, size; "Files open on your Mac": no preview, no download, no
+  link). The `kanban` event re-reads the board, debounced and only when its hash moved.
+  Read only: no control adds, moves, edits or deletes. A stopped leader: "This leader is
+  no longer running."
+- **Approvals (level 2).** A shield in the bar, with a badge from the `approvals` event
+  (numbers only), opens four lists: plans to approve, merges proposed, network requests,
+  stopped sandboxes. Off at the Mac: "Approving is turned off on your Mac.", nothing else.
+  No passkey on this device: the lists, read only, and "Enable Face ID on this device",
+  which shows six digits to type at the Mac, waits for the grant, then creates the passkey
+  on a tap (`navigator.credentials.create`, user verification required, attestation none).
+  A detail shows its item as text (a plan's threads with long goals folded, a merge's
+  branches with tips, commits and files as numbers and paths and never a diff, a network
+  request with only the options the daemon lists and "Allowing this needs your Mac", a
+  stopped sandbox with the daemon's own confirmation sentences). Every decision opens a
+  sheet that says in one line what will happen to what; only its button asks the Mac for a
+  challenge bound to the item's digest, runs `navigator.credentials.get` (user
+  verification required, this device's credential only) and posts the assertion. Refuse
+  and Remove are red. "changed" closes the sheet and reads the item again ("This changed
+  since you opened it: read it again."); a cancelled Face ID and every refusal say that
+  nothing was done. Closing the sheet or hiding the page drops the challenge and aborts the
+  prompt. The page keeps no credential id, challenge or assertion. A tool permission
+  prompt stays on the Mac.
 - **Unreachable.** When sbxw does not answer: "sbxw is unreachable (is the Mac awake?)".
   The text being typed stays in the field. Nothing is queued: a message that did not go is
   reported, and the person presses Send again when sbxw is back.
