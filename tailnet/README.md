@@ -145,13 +145,63 @@ own login to `sbxw:443`); the program does not depend on it.
 
 stderr only, a line per state change (`state running`, `forgotten`...).
 Never a URL (the login link included), a request path or query, a header
-value or a body. stdout stays empty.
+value or a body. stdout stays empty, except with `--push`, where it carries
+only the answers to push jobs (see [Push](#push)).
 
 Tailscale's own logs: backend logs are discarded, user logs (where tsnet would
 print the login link) are dropped, and **upload to `log.tailscale.com` is
 off** twice: the `ts_omit_logtail` build tag and Tailscale's
 `TS_NO_LOGS_NO_SUPPORT` switch, set by the program at start. Consequence:
 Tailscale support has no client logs for this node.
+
+## Push
+
+With `--push`, the program also sends Web Push notifications to the person's
+iPhone, from jobs the daemon writes on its stdin; it answers each job on
+stdout. Without `--push` it never reads stdin or writes stdout. The pipe
+protocol is in `.sbxw-artifacts/remote/API-push.md`; the code is `push.go`,
+Go's standard library only (no new module).
+
+**What it sends:** for each job, one HTTPS `POST` to the subscription's
+endpoint at Apple, with a 134-byte body encrypted to the phone's key (RFC 8291,
+`aes128gcm`) and a VAPID token signed with the Mac's key (RFC 8292, `sub` = the
+project URL given by the daemon, no e-mail). Inside the encryption there is only
+`{"kind":"p"|"n","badge":0..99}`: a kind letter and a count, padded so that every
+push has the same size. No sandbox name, title, message text or device name.
+The phone shows a fixed text for the kind.
+
+**To whom:** Apple's push service only. Apple sees the Mac's public IP, the
+endpoint (which identifies the phone's subscription), the time, the fixed size,
+the TTL, a fixed `Topic: sbxw` (the same for every push, so Apple keeps one
+pending push per phone and learns nothing of the kind) and
+the VAPID token; it cannot read the payload.
+
+**What it refuses**, each with a test in `push_test.go`:
+
+- any endpoint that is not `https://<label>.push.apple.com[:443]/<path>` with a
+  plain path of at most 512 bytes of `[A-Za-z0-9_\-/.]` and no user info,
+  query, fragment, IP literal or trailing dot;
+- a host that resolves to loopback, private, link-local, unique-local,
+  unspecified, multicast or tailnet (`100.64.0.0/10`) addresses, checked before
+  connecting and again in the dialer;
+- any method but `POST`, any body or header the daemon would like to choose
+  (the job has no such field), redirects (never followed), proxies (its own
+  transport ignores `HTTPS_PROXY`, and is not tsnet's dialer), an unverified
+  certificate (system roots; no switch to skip the check exists in the binary);
+- more than 10 s per push, more than one push at a time, more than 60 jobs an
+  hour, a job line over 4 KiB.
+
+Ignoring proxies is deliberate (no general route to the Internet): on a
+network where the Internet is reachable only through a proxy, every push fails
+and is answered `network`.
+
+A malformed line is answered `bad_job`, never a crash. If the daemon closes
+either pipe, pushing stops and the proxy goes on. The VAPID key comes only on
+the pipe's first line: never in argv, the environment or a file. Logs name a
+job's id, kind and status only; never the endpoint, a key or the token. No
+port is opened for this.
+
+Not verified here: Apple's real answers, and delivery to a real iPhone.
 
 ## State, and "Forget this node"
 
