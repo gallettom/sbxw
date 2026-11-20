@@ -624,15 +624,20 @@ function rcTray({ upload, drop = () => {}, onChange = () => {} }) {
 // outcome of the last action (a refusal, "Sent."), then the recorder, the
 // files, why Send waits, and last a hint. → { text, tone }: tone is err,
 // warn, ok, busy or info.
-function rcStatus({ note = null, rec = 'idle', gate = '', held = 0, pending = 0, failed = 0, files = 0, hint = '' } = {}) {
+// `quiet`: the recorder or the recogniser has heard nothing for a while.
+// `hint`: a string (tone info) or { text, tone }.
+function rcStatus({ note = null, rec = 'idle', gate = '', held = 0, pending = 0, failed = 0, files = 0, hint = '', quiet = false } = {}) {
   if (note && note.text) return { text: note.text, tone: note.tone || 'info' };
+  if (rec === 'recording' && quiet) return { text: RC_DICT_TEXT.quietMac, tone: 'warn' };
   if (rec === 'recording') return { text: 'Recording. Tap stop when you are done: the words go into the field, nothing is sent.', tone: 'busy' };
   if (rec === 'transcribing') return { text: 'Transcribing on your Mac…', tone: 'busy' };
+  if (rec === 'listening' && quiet) return { text: RC_DICT_TEXT.quietIphone, tone: 'warn' };
   if (rec === 'listening') return { text: 'Listening (iPhone dictation). Tap stop when you are done: the words go into the field, nothing is sent.', tone: 'busy' };
   if (held) return { text: `Tick the box to attach ${held === 1 ? 'the file whose name looks' : `the ${held} files whose names look`} like a secret, or cancel.`, tone: 'info' };
   if (pending) return { text: `Uploading ${pending === 1 ? '1 file' : `${pending} files`}: Send waits until ${pending === 1 ? 'it is' : 'they are'} done.`, tone: 'busy' };
   if (gate) return { text: files ? `${gate.replace(/\.$/, '')}. Your files wait here.` : gate, tone: 'info' };
   if (failed) return { text: `${failed === 1 ? 'An upload' : `${failed} uploads`} failed: retry or remove. The rest can be sent.`, tone: 'err' };
+  if (hint && typeof hint === 'object') return { text: String(hint.text || ''), tone: hint.tone || 'info' };
   return { text: hint || '', tone: 'info' };
 }
 
@@ -975,6 +980,148 @@ function rcSpeechText(results) {
     if (r && r.isFinal) final += ` ${t}`; else interim += ` ${t}`;
   }
   return { final: final.replace(/\s+/g, ' ').trim(), interim: interim.replace(/\s+/g, ' ').trim() };
+}
+
+// ── Dictation that never ends or fails in silence ─────────────────────────
+// Every end of a dictation says what happened and what to do, in one
+// sentence; the control is idle again. These sentences are the page's own.
+const RC_DICT_TEXT = {
+  added: 'Added to the field: read it, then Send.',
+  nothing: 'Nothing was heard. Tap the microphone and speak.',
+  stoppedSelf: 'The iPhone stopped listening: tap the microphone to go on.',
+  taken: 'The microphone was taken by another app (a call?). Tap the microphone to try again.',
+  network: 'The iPhone\'s speech recognition lost its connection. Tap the microphone to try again, or choose Mac in the menu.',
+  refused: 'Speech recognition is not allowed here. Allow it in Settings, or choose Mac in the menu.',
+  language: 'The iPhone cannot recognise this language here. Choose Mac in the menu.',
+  noStart: 'The iPhone did not start listening. Tap the microphone to try again.',
+  hidden: 'Dictation stopped: the page was hidden.',
+  time: 'Two minutes is the longest dictation. Tap the microphone to go on.',
+  kept: 'The words heard are in the field.',
+  quietMac: 'The microphone hears nothing. Speak closer, or check that no other app (a call) is using it.',
+  quietIphone: 'Nothing heard yet. Speak, or tap stop.',
+  macEmpty: 'Nothing was recorded. Tap the microphone and try again.',
+  macShort: 'Too short to transcribe. Tap the microphone, speak, then tap stop.',
+  macSilent: 'Nothing was heard: the recording is silent. Check the microphone and try again.',
+  macNoWords: 'The Mac heard no words. Speak closer to the phone and try again.',
+  macFailed: 'The Mac could not transcribe this: try again.',
+  macUnreachable: 'The Mac could not transcribe this: sbxw is unreachable (is the Mac awake?).',
+  macMissing: 'Dictation is not installed on the Mac.',
+  macTooLong: 'The Mac could not transcribe this: the recording is too long.',
+  macSlow: 'The Mac did not answer in time. Try again.',
+  unreadable: 'This recording could not be read. Try again.',
+  recFailed: 'The recording stopped by itself. Tap the microphone to try again.',
+};
+// How a recognition ended → { text, tone }. `error`: the last SpeechRecognition
+// error code, or ''. `reason`: 'person' (tapped stop), 'self' (ended alone),
+// 'hidden', 'time', 'nostart'. `words`: something is in the field.
+function rcSpeechEnd({ error = '', reason = 'self', words = false } = {}) {
+  const e = String(error || '');
+  let t = '';
+  if (e === 'audio-capture') t = RC_DICT_TEXT.taken;
+  else if (e === 'network') t = RC_DICT_TEXT.network;
+  else if (e === 'not-allowed' || e === 'service-not-allowed') t = RC_DICT_TEXT.refused;
+  else if (e === 'language-not-supported') t = RC_DICT_TEXT.language;
+  else if (reason === 'nostart') t = RC_DICT_TEXT.noStart;
+  else if (reason === 'hidden') t = RC_DICT_TEXT.hidden;
+  else if (reason === 'time') t = RC_DICT_TEXT.time;
+  else if (reason === 'person' || e === 'aborted') t = words ? '' : RC_DICT_TEXT.nothing;
+  else if (e === 'no-speech' && !words) t = RC_DICT_TEXT.nothing;
+  else t = words ? RC_DICT_TEXT.stoppedSelf : RC_DICT_TEXT.nothing;
+  if (!t) return { text: RC_DICT_TEXT.added, tone: 'ok' };
+  return { text: words ? `${t} ${RC_DICT_TEXT.kept}` : t, tone: 'warn' };
+}
+// Whether a recognition that ended BY ITSELF starts again. Only after a
+// clean end (no error), while visible, with words heard in that round and a
+// round of at least 2 s, and at most 2 times per tap: it cannot loop. An
+// error that needs the person never restarts.
+const RC_SPEECH_RESTARTS = 2;
+function rcSpeechRestart({ error = '', reason = 'self', hidden = false, restarts = 0, heard = false, ms = 0, total = 0 } = {}) {
+  return !error && reason === 'self' && !hidden && heard && restarts < RC_SPEECH_RESTARTS && ms >= 2000 && total < RC_VOICE_MAX_S * 1000;
+}
+// A final text is inserted once. Some recognisers deliver a final result
+// that repeats the one before it (the same words, or the same words and
+// more: a cumulative transcript), within one round or as the first result
+// of a restarted round. Two results whose first words (two or more) are the
+// same, compared without case and punctuation: the later one replaces the
+// earlier. → the joined text.
+const rcWordKeys = s => String(s || '').split(/\s+/).filter(Boolean).map(w => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ''));
+function rcRepeats(prev, cur) {
+  const p = rcWordKeys(prev), c = rcWordKeys(cur);
+  return p.length >= 2 && c.length >= p.length && p.every((k, i) => k === c[i]);
+}
+function rcFinalSegments(results) {
+  const out = [];
+  for (let i = 0; i < (results?.length || 0); i++) {
+    const r = results[i];
+    if (!r || !r.isFinal) continue;
+    const t = r[0] && typeof r[0].transcript === 'string' ? r[0].transcript.replace(/\s+/g, ' ').trim() : '';
+    if (!t) continue;
+    if (out.length && rcRepeats(out[out.length - 1], t)) out[out.length - 1] = t; else out.push(t);
+  }
+  return out;
+}
+// One round's text after the rounds before it. `carry`: the last final
+// segment of the round before; a first segment that repeats it adds only
+// its new words. → { final, interim, last }
+function rcSpeechRound(results, carry = '') {
+  const segs = rcFinalSegments(results);
+  if (carry && segs.length && rcRepeats(carry, segs[0])) {
+    const n = String(carry).split(/\s+/).filter(Boolean).length;
+    const rest = segs[0].split(/\s+/).filter(Boolean).slice(n).join(' ');
+    if (rest) segs[0] = rest; else segs.shift();
+  }
+  const t = rcSpeechText(results);
+  return { final: segs.join(' '), interim: t.interim, last: segs.length ? segs[segs.length - 1] : carry };
+}
+// The live preview shows the END of what is said: at most `max` characters
+// of final then interim words, older words cut at the start with "…".
+function rcTail(final, interim, max = 140) {
+  const f = String(final || ''), i = String(interim || '');
+  const sep = f && i ? 1 : 0;
+  const all = `${f}${sep ? ' ' : ''}${i}`;
+  const m = Math.max(8, max | 0);
+  if (all.length <= m) return { final: f, interim: i, cut: false };
+  let start = all.length - (m - 1);
+  // Start on a word when one begins close by.
+  const sp = all.indexOf(' ', start - 1);
+  if (sp >= 0 && sp - start < 16 && sp + 1 < all.length) start = sp + 1;
+  if (start < f.length) return { final: `…${f.slice(start).trimStart()}`, interim: i, cut: true };
+  return { final: '…', interim: i.slice(Math.max(0, start - f.length - sep)).trimStart(), cut: true };
+}
+// The recorder's format: the first the browser says it can record (an
+// iPhone records audio/mp4; Chromium webm). '' lets the browser choose.
+// The phone decodes it to 16 kHz PCM itself: the daemon reads no format.
+const RC_REC_TYPES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/aac', 'audio/ogg;codecs=opus'];
+function rcRecMime(isSupported) {
+  for (const t of RC_REC_TYPES) {
+    try { if (isSupported && isSupported(t)) return t; } catch (_) {}
+  }
+  return '';
+}
+// A clip worth sending: not empty, at least half a second. → '' or why not.
+function rcClipCheck(bytes, ms) {
+  if (!(bytes > 0)) return RC_DICT_TEXT.macEmpty;
+  if (!(ms >= 500)) return RC_DICT_TEXT.macShort;
+  return '';
+}
+// Samples that are all silence (peak under -54 dBFS): not sent.
+function rcSilentPcm(samples) {
+  const n = samples?.length || 0;
+  for (let i = 0; i < n; i++) if (Math.abs(samples[i]) >= 0.002) return false;
+  return true;
+}
+// The Mac's answer to a transcription → { words } or { text } (why not).
+function rcTranscribed(res) {
+  if (!res) return { text: RC_DICT_TEXT.unreadable };
+  if (res.timeout) return { text: RC_DICT_TEXT.macSlow };
+  if (!res.ok) {
+    if (res.status === 503) return { text: RC_DICT_TEXT.macMissing };
+    if (res.unreachable || res.status === 0) return { text: RC_DICT_TEXT.macUnreachable };
+    if (res.status === 413) return { text: RC_DICT_TEXT.macTooLong };
+    return { text: RC_DICT_TEXT.macFailed };
+  }
+  const words = typeof res.data?.text === 'string' ? res.data.text.trim() : '';
+  return words ? { words } : { text: RC_DICT_TEXT.macNoWords };
 }
 
 // ══ Text that is not the page's own, made unambiguous ════════════════════

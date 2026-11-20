@@ -20,7 +20,8 @@ const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcSta
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
   'rcL2Fail', 'RC_L2_REASON', 'rcActPath', 'rcActLine', 'rcActDone', 'rcL2Client',
-  'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback', 'rcMarked', 'rcActParts'];
+  'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback', 'rcMarked', 'rcActParts',
+  'RC_DICT_TEXT', 'rcSpeechEnd', 'rcSpeechRestart', 'RC_SPEECH_RESTARTS', 'rcSpeechRound', 'rcFinalSegments', 'rcTail', 'rcRecMime', 'rcClipCheck', 'rcSilentPcm', 'rcTranscribed'];
 const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
@@ -644,6 +645,121 @@ test('iPhone dictation: words at the caret, final and interim apart, the languag
   for (const e of ['not-allowed', 'service-not-allowed', 'network', 'audio-capture']) assert.equal(rc.rcSpeechFallback(e), true, e);
   for (const e of ['no-speech', 'aborted', 'language-not-supported', '', undefined]) assert.equal(rc.rcSpeechFallback(e), false, String(e));
   assert.match(plain(rc.rcStatus({ rec: 'listening' })).text, /^Listening \(iPhone dictation\)\. .*nothing is sent\.$/);
+});
+
+// ── Dictation that never stops or stays deaf in silence ──
+const SR = list => list.map(([t, f]) => ({ 0: { transcript: t }, isFinal: f }));
+test('dictation preview: the END of a long text, older words cut at the start with an ellipsis', () => {
+  const long = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ');
+  const t = plain(rc.rcTail(long, 'and the newest interim', 80));
+  assert.equal(t.cut, true);
+  assert.equal(t.interim, 'and the newest interim', 'the interim, newest, is whole');
+  assert.ok(t.final.startsWith('…'), t.final);
+  assert.ok(t.final.endsWith('word59'), 'the last final word is shown');
+  assert.ok(`${t.final} ${t.interim}`.length <= 80);
+  assert.ok(!t.final.includes('word0 '), 'the first words are cut');
+  assert.match(t.final, /^…word\d+ /, 'cut on a word');
+  // Only interim, very long: its end.
+  const i = plain(rc.rcTail('', long, 50));
+  assert.equal(i.final, '…');
+  assert.ok(i.interim.endsWith('word59') && i.interim.length <= 49);
+  // Short: untouched.
+  assert.deepEqual(plain(rc.rcTail('one two', 'three', 140)), { final: 'one two', interim: 'three', cut: false });
+});
+
+test('dictation ends: every way says a sentence; words kept are said kept', () => {
+  const T = rc.RC_DICT_TEXT;
+  const e = o => plain(rc.rcSpeechEnd(o));
+  assert.deepEqual(e({ reason: 'person', words: true }), { text: T.added, tone: 'ok' });
+  assert.deepEqual(e({ reason: 'person', words: false }), { text: T.nothing, tone: 'warn' });
+  assert.equal(e({ error: 'no-speech', reason: 'self' }).text, T.nothing);
+  assert.equal(e({ reason: 'self', words: true }).text, `${T.stoppedSelf} ${T.kept}`);
+  assert.equal(e({ reason: 'self', words: false }).text, T.nothing);
+  assert.equal(e({ error: 'audio-capture', words: false }).text, T.taken);
+  assert.equal(e({ error: 'audio-capture', words: true }).text, `${T.taken} ${T.kept}`);
+  assert.equal(e({ error: 'network', words: true }).text, `${T.network} ${T.kept}`);
+  assert.equal(e({ error: 'not-allowed' }).text, T.refused);
+  assert.equal(e({ error: 'service-not-allowed' }).text, T.refused);
+  assert.equal(e({ error: 'language-not-supported' }).text, T.language);
+  assert.equal(e({ error: 'aborted', reason: 'nostart' }).text, T.noStart);
+  assert.equal(e({ reason: 'hidden', words: true }).text, `${T.hidden} ${T.kept}`);
+  assert.equal(e({ reason: 'time', words: true }).text, `${T.time} ${T.kept}`);
+  for (const error of ['', 'no-speech', 'aborted', 'audio-capture', 'network', 'not-allowed', 'service-not-allowed', 'language-not-supported', 'bad-grammar', 'other']) {
+    for (const reason of ['person', 'self', 'hidden', 'time', 'nostart']) {
+      for (const words of [true, false]) {
+        const o = e({ error, reason, words });
+        assert.ok(o.text && o.text.length > 10, `${error}/${reason}/${words}: a sentence`);
+        assert.ok(['ok', 'warn'].includes(o.tone));
+      }
+    }
+  }
+  // The status line while it records or listens, and when it hears nothing.
+  assert.equal(plain(rc.rcStatus({ rec: 'recording', quiet: true })).text, T.quietMac);
+  assert.equal(plain(rc.rcStatus({ rec: 'listening', quiet: true })).text, T.quietIphone);
+  assert.deepEqual(plain(rc.rcStatus({ hint: { text: 'x', tone: 'warn' } })), { text: 'x', tone: 'warn' });
+  assert.deepEqual(plain(rc.rcStatus({ hint: 'y' })), { text: 'y', tone: 'info' });
+});
+
+test('dictation restarts: only after a clean end by itself, with words, visible, at most twice', () => {
+  const ok = { error: '', reason: 'self', hidden: false, restarts: 0, heard: true, ms: 5000, total: 5000 };
+  assert.equal(rc.rcSpeechRestart(ok), true);
+  assert.equal(rc.rcSpeechRestart({ ...ok, restarts: rc.RC_SPEECH_RESTARTS }), false, 'at most twice');
+  for (const error of ['no-speech', 'aborted', 'audio-capture', 'network', 'not-allowed']) assert.equal(rc.rcSpeechRestart({ ...ok, error }), false, error);
+  for (const reason of ['person', 'hidden', 'time', 'nostart']) assert.equal(rc.rcSpeechRestart({ ...ok, reason }), false, reason);
+  assert.equal(rc.rcSpeechRestart({ ...ok, hidden: true }), false);
+  assert.equal(rc.rcSpeechRestart({ ...ok, heard: false }), false, 'silence: no restart');
+  assert.equal(rc.rcSpeechRestart({ ...ok, ms: 300 }), false, 'a round that ends at once: no restart');
+  assert.equal(rc.rcSpeechRestart({ ...ok, total: 120000 }), false);
+  // A recogniser that ends after every round: the restarts stop.
+  let n = 0, restarts = 0;
+  while (rc.rcSpeechRestart({ ...ok, restarts }) && n < 100) { restarts++; n++; }
+  assert.equal(n, rc.RC_SPEECH_RESTARTS);
+});
+
+test('dictation: a final text is inserted once', () => {
+  // Re-delivered as the same, or as cumulative, within one round.
+  assert.equal(plain(rc.rcSpeechRound(SR([['Hello there', true], ['hello there.', true]]))).final, 'hello there.');
+  assert.equal(plain(rc.rcSpeechRound(SR([['Plan the table', true], ['Plan the table and the index', true]]))).final, 'Plan the table and the index');
+  // Distinct sentences stay; a one-word repeat is a person's.
+  assert.equal(plain(rc.rcSpeechRound(SR([['one two', true], ['three four', true]]))).final, 'one two three four');
+  assert.equal(plain(rc.rcSpeechRound(SR([['yes', true], ['yes', true]]))).final, 'yes yes');
+  // Recomputed from the whole list: the same event twice gives the same text.
+  const list = SR([['a b c', true], ['d', false]]);
+  assert.deepEqual(plain(rc.rcSpeechRound(list)), plain(rc.rcSpeechRound(list)));
+  // After a restart: the first result repeats the last of the round before.
+  const r2 = plain(rc.rcSpeechRound(SR([['add an index', true], ['then', false]]), 'add an index'));
+  assert.equal(r2.final, '');
+  assert.equal(r2.interim, 'then');
+  assert.equal(plain(rc.rcSpeechRound(SR([['Add an index on the id', true]]), 'add an index')).final, 'on the id');
+  assert.equal(plain(rc.rcSpeechRound(SR([['and more', true]]), 'add an index')).final, 'and more');
+  assert.equal(plain(rc.rcSpeechRound(SR([['and more', true]]), 'add an index')).last, 'and more');
+});
+
+test('the Mac path: a format the phone records, no empty or tiny clip, the answer as a sentence', () => {
+  const T = rc.RC_DICT_TEXT;
+  const iphone = t => t === 'audio/mp4';
+  const chromium = t => t.startsWith('audio/webm');
+  assert.equal(rc.rcRecMime(iphone), 'audio/mp4');
+  assert.equal(rc.rcRecMime(chromium), 'audio/webm;codecs=opus');
+  assert.equal(rc.rcRecMime(() => false), '');
+  assert.equal(rc.rcRecMime(() => { throw new Error('x'); }), '');
+  assert.equal(rc.rcRecMime(undefined), '');
+  assert.equal(rc.rcClipCheck(0, 3000), T.macEmpty);
+  assert.equal(rc.rcClipCheck(1200, 300), T.macShort);
+  assert.equal(rc.rcClipCheck(1200, 500), '');
+  assert.equal(rc.rcSilentPcm(new Float32Array(1600)), true);
+  assert.equal(rc.rcSilentPcm(Float32Array.from([0, 0.001, -0.3])), false);
+  const tr = r => plain(rc.rcTranscribed(r));
+  assert.deepEqual(tr({ ok: true, status: 200, data: { text: ' hi there ' } }), { words: 'hi there' });
+  assert.deepEqual(tr({ ok: true, status: 200, data: { text: '  ' } }), { text: T.macNoWords });
+  assert.deepEqual(tr({ ok: true, status: 200, data: {} }), { text: T.macNoWords });
+  assert.deepEqual(tr({ ok: false, status: 503 }), { text: T.macMissing });
+  assert.deepEqual(tr({ ok: false, status: 0, unreachable: true }), { text: T.macUnreachable });
+  assert.deepEqual(tr({ ok: false, status: 502, unreachable: true }), { text: T.macUnreachable });
+  assert.deepEqual(tr({ ok: false, status: 413 }), { text: T.macTooLong });
+  assert.deepEqual(tr({ ok: false, status: 500 }), { text: T.macFailed });
+  assert.deepEqual(tr({ ok: false, timeout: true }), { text: T.macSlow });
+  assert.deepEqual(tr(null), { text: T.unreadable });
 });
 
 // ── Security review P6: invisible and bidi controls made visible ──
