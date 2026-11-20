@@ -12,7 +12,7 @@ anything but the one loopback port. Nothing needs to be installed on the Mac
 besides sbxw.
 
 The daemon starts and stops it; you never run it by hand. The contract with the
-daemon is section 6 of the remote-access API (`docs/remote-access.md`).
+daemon is section 6 of the remote-access API (`docs/remote-access.md`, "The Tailscale node").
 
 ## What it serves, and what it does not
 
@@ -120,7 +120,8 @@ that is not absolute or does not end in `remote/tailnet`) holds:
 - `tailscaled.state`: the machine key and the **node key** (secrets: whoever
   has them is this node in your tailnet), the node's preferences and profile;
 - `certs/`: the ACME account key, the TLS certificate and its private key;
-- small cache and log-buffer files.
+- `tailscaled.log.conf`: a log identity tsnet writes even with uploads off
+  (nothing is uploaded), and small cache files.
 
 `sbxw-tailnet forget --state-dir <dir> --status-file <file>` (the daemon runs
 it, with the node stopped first) logs the node out at Tailscale when it can
@@ -159,6 +160,9 @@ for it **next to its own executable** (no `PATH` lookup): copy it beside
 - Go version: the `go` line of `go.mod`, with `GOTOOLCHAIN=local` (no
   toolchain download).
 - Modules: pinned by `go.sum`, built with `-mod=readonly`.
+- Measured here (linux/arm64 sandbox, Go 1.27.4): darwin/arm64 19.1 MB,
+  darwin/amd64 20.5 MB; about 30 s cold, a few seconds warm. Two cold builds
+  gave the same SHA-256.
 - `CGO_ENABLED=0`, `-trimpath`, `-ldflags "-s -w -buildid="`, the tags of
   `build-tags.txt`. Cross-compiling for macOS from Linux works (pure Go).
 
@@ -169,8 +173,46 @@ run the binary). No test uses a real tailnet.
 
 ## Compiled out
 
-COMPILED_OUT_PLACEHOLDER
+Tailscale's `ts_omit_*` build tags remove whole features from the binary.
+`build-tags.txt` lists the ones used; each was checked to build for
+darwin/arm64 and linux/arm64. Compiled out: log upload (`logtail`), Tailscale
+SSH, Taildrop, Taildrive, the web client, running and using an exit node,
+advertising and using subnet routes, app connectors, the peer relay server,
+network flow logs, packet capture, client auto-update, full remote
+configuration by the tailnet admin, port listing, Wake-on-LAN, the outbound
+SOCKS/HTTP proxy, Kubernetes and AWS integration, layer-2 (tap), BGP (bird),
+device posture, conn25, identity federation and OAuth auth keys (no auth key
+path at all), control-to-node requests (`c2n`), the PeerAPI server and client,
+NAT-PMP/UPnP port mapping (no talk to your router; peers that cannot connect
+directly go through Tailscale's DERP relays, still end-to-end encrypted),
+captive portal probing, and the doctor.
+
+**Could not be compiled out:**
+
+- **Serve and Funnel** (`ts_omit_serve`): the certificate code needs it, the
+  build fails without it. The program never calls `ListenFunnel` or
+  `ListenService`, and tsnet clears any stored serve configuration at first
+  start (see above).
+- The WireGuard data path, DERP, MagicDNS, ACME certificates, tailnet lock:
+  the node needs them.
+
+**What the node opens on the Mac itself:** two UDP sockets (IPv4 and IPv6, a
+random port) for WireGuard and NAT traversal, as every Tailscale node does.
+No TCP port on the Mac: the HTTPS listener exists only inside the node's
+userspace network stack, on its tailnet address. Checked here with `ss` while
+the binary ran.
 
 ## Licences
 
-LICENCES_PLACEHOLDER
+No copyleft licence. Checked from the licence file of every module linked
+into the darwin/arm64 build (`go list -deps`), at the versions in `go.sum`:
+
+| Licence | Modules |
+|---|---|
+| BSD-3-Clause | tailscale.com v1.104.7 (tsnet), golang.org/x/{crypto,exp,net,sync,sys,term,text,time}, filippo.io/edwards25519, go-json-experiment/json, hdevalence/ed25519consensus, tailscale/hujson, tailscale/peercred, go4.org/netipx, and the Go standard library |
+| Apache-2.0 | gvisor.dev/gvisor, klauspost/compress, golang/groupcache, google/btree, pires/go-proxyproto, go4.org/mem |
+| MIT | tailscale/wireguard-go, fxamacker/cbor, gaissmai/bart, mitchellh/go-ps, x448/float16 |
+| ISC | coder/websocket |
+
+A binary release must ship these notices (BSD, MIT, ISC and Apache-2.0 all ask
+for the copyright notice and licence text to travel with binaries).

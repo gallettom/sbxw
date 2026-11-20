@@ -23,6 +23,7 @@ case "$goos/$goarch" in
   *) echo "unsupported target: $target" >&2; exit 2 ;;
 esac
 out="${2:-$root/target/tailnet/$goos-$goarch/sbxw-tailnet}"
+case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
 
 want="$(sed -n 's/^go //p' "$src/go.mod")"
 have="$(go env GOVERSION)"

@@ -19,7 +19,6 @@ ts_omit_remoteconfig
 ts_omit_portlist
 ts_omit_wakeonlan
 ts_omit_outboundproxy
-ts_omit_serve
 ts_omit_kube
 ts_omit_aws
 ts_omit_tap
@@ -28,3 +27,9 @@ ts_omit_posture
 ts_omit_conn25
 ts_omit_identityfederation
 ts_omit_oauthkey
+ts_omit_c2n
+ts_omit_peerapiserver
+ts_omit_peerapiclient
+ts_omit_portmapper
+ts_omit_captiveportal
+ts_omit_doctor
