@@ -30,8 +30,6 @@ const KB_TONES = ['neutral', 'blue', 'purple', 'amber', 'green', 'red', 'dim'];
 const kbTone = t => (KB_TONES.includes(t) ? t : 'neutral');
 // A red edge for failed or refused work only (the contract's three marks).
 const KB_RED_MARKS = ['failed', 'merge_failed', 'refused'];
-// A column at least this wide draws `title_long`, else `title_short`.
-const KB_WIDE_COLUMN = 250;
 
 // File names that look like a secret: the desktop's list
 // (desktop/src/feat/files/drops.rs SECRET_NAMES), matched case-insensitively,
@@ -140,14 +138,15 @@ function kbThreadHtml(card) {
   return `<span class="kb-thread"><span class="kb-dot kb-tone-${kbTone(card.thread_tone)}" aria-hidden="true"></span>${escHtml(card.thread)}</span>`;
 }
 
-// One card. `o.wide` picks the long title, `o.all` adds the sandbox's name.
+// One card; `o.all` adds the sandbox's name. Both of the daemon's titles go
+// in, and the column's width picks one (a container query in app.css):
+// `title_short` under 250 px, `title_long` above.
 function kbCardHtml(card, o = {}) {
   const red = (card.marks || []).some(m => KB_RED_MARKS.includes(m.id));
-  const title = o.wide ? card.title_long : card.title_short;
   return `<button type="button" class="kb-card${red ? ' kb-red' : ''}" data-kb-card="${escHtml(card.key)}" title="${escHtml(card.title)}">
       <span class="kb-card-head"><span class="kb-num${card.n == null ? ' kb-num-thread' : ''}">${escHtml(card.num)}</span>${
         o.all ? `<span class="kb-sb">${escHtml(card.sandbox)}</span>` : ''}<span class="kb-age">${escHtml(card.age)}</span></span>
-      <span class="kb-card-title">${escHtml(title)}</span>
+      <span class="kb-card-title kb-t-short">${escHtml(card.title_short)}</span><span class="kb-card-title kb-t-long">${escHtml(card.title_long)}</span>
       ${kbMarksHtml(card.marks)}
       ${kbThreadHtml(card)}
     </button>`;
@@ -157,11 +156,11 @@ function kbColumnHtml(col, o = {}) {
   const cards = Array.isArray(col.cards) ? col.cards : [];
   const older = Number(col.older) || 0;
   return `<section class="kb-col" data-kb-col="${escHtml(col.id)}" aria-label="${escHtml(col.title)}">
-      <header class="kb-col-head" title="${escHtml(col.help)}">
+      <div class="kb-col-head" title="${escHtml(col.help)}">
         <span class="kb-dot kb-tone-${kbTone(col.tone)}" aria-hidden="true"></span>
         <h3 class="kb-col-title">${escHtml(col.title)}</h3>
         <span class="kb-count">${Number(col.count) || 0}</span>
-      </header>
+      </div>
       <div class="kb-col-cards" data-kb-scroll="${escHtml(col.id)}">
         ${cards.length ? cards.map(c => kbCardHtml(c, o)).join('') : `<p class="kb-empty">${escHtml(col.empty)}</p>`}
         ${older ? `<button type="button" class="kb-older" data-kb-older>Show ${older} older</button>` : ''}
@@ -244,8 +243,10 @@ function kbPanelHtml(card, t, o = {}) {
     const lines = ['Moving, editing and deleting a ticket are in the desktop app.'];
     if (can.send) lines.push('Send it to the lead from the desktop app, or ask the lead to read the planned tickets.');
     parts.push(`<p class="kb-p-note">${lines.map(escHtml).join(' ')}</p>`);
-  } else {
+  } else if (card.n == null) {
     parts.push(`<p class="kb-p-note">${escHtml(can.send_why || 'A thread, not a ticket')}: it follows its plan.</p>`);
+  } else {
+    parts.push('<p class="kb-p-note">Reading the ticket…</p>');
   }
   return parts.filter(Boolean).join('\n');
 }
@@ -288,12 +289,12 @@ const kbCounts = document.getElementById('kb-counts');
 const kbNote = document.getElementById('kb-note');
 // scope: a sandbox's name or 'all'; board: the last answer; ticket: the open
 // one ({key, card, t}) or null; back: the card to give the keyboard back to.
-const kb = { scope: 'all', older: false, board: null, open: null, busy: false, again: false, timer: null, pics: new Map(), seq: 0 };
+const kbv = { scope: 'all', older: false, board: null, open: null, busy: false, again: false, timer: null, pics: new Map(), seq: 0 };
 
 function openKanban(scope) {
-  kb.scope = scope || panes[focusedPane]?.sandbox || 'all';
-  kb.older = false;
-  kb.board = null;
+  kbv.scope = scope || panes[focusedPane]?.sandbox || 'all';
+  kbv.older = false;
+  kbv.board = null;
   kbCloseTicket(false);
   kbFillScope();
   setHtml(kbBody, '<p class="wt-note">Reading the tickets…</p>');
@@ -307,69 +308,68 @@ function openKanban(scope) {
 function closeKanban() {
   kbCloseTicket(false);
   kbOverlay.close();
-  clearTimeout(kb.timer);
+  clearTimeout(kbv.timer);
 }
 
 function kbFillScope() {
   const names = sandboxes.map(s => s.name);
-  if (kb.scope !== 'all' && !names.includes(kb.scope)) names.unshift(kb.scope);
+  if (kbv.scope !== 'all' && !names.includes(kbv.scope)) names.unshift(kbv.scope);
   kbScope.innerHTML = ['<option value="all">All sandboxes</option>',
     ...names.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`)].join('');
-  kbScope.value = kb.scope;
+  kbScope.value = kbv.scope;
 }
 
 async function kbRead() {
   if (!kbOverlay.open) return;
-  if (kb.busy) { kb.again = true; return; }
-  kb.busy = true;
-  const scope = kb.scope;
+  if (kbv.busy) { kbv.again = true; return; }
+  kbv.busy = true;
+  const scope = kbv.scope;
   let res;
   try {
-    const r = await fetch(kbBoardUrl(scope, kb.older));
+    const r = await fetch(kbBoardUrl(scope, kbv.older));
     res = await r.json().catch(() => ({ ok: false, error: r.status === 404 ? 'this daemon has no ticket routes: rebuild sbxw and run sbxw up' : `HTTP ${r.status}` }));
   } catch (e) {
     res = { ok: false, error: e.message };
   }
-  kb.busy = false;
-  if (kb.again) { kb.again = false; kbRead(); return; }
-  if (scope !== kb.scope || !kbOverlay.open) return;
+  kbv.busy = false;
+  if (kbv.again) { kbv.again = false; kbRead(); return; }
+  if (scope !== kbv.scope || !kbOverlay.open) return;
   if (!res?.ok || !res.board) {
     const why = `Could not read the tickets: ${res?.error || 'no answer'}`;
-    if (kb.board) showNote(kbNote, why); else setHtml(kbBody, `<p class="wt-note wt-warn">${escHtml(why)}</p>`);
+    if (kbv.board) showNote(kbNote, why); else setHtml(kbBody, `<p class="wt-note wt-warn">${escHtml(why)}</p>`);
     return;
   }
   showNote(kbNote, '');
-  kb.board = res.board;
+  kbv.board = res.board;
   kbPaint();
-  if (kb.open) kbReadTicket();
+  if (kbv.open) kbReadTicket();
 }
 
 // A repaint keeps every column's scroll, the board's sideways scroll and the
 // focused card.
 function kbPaint() {
-  const b = kb.board;
+  const b = kbv.board;
   if (!b) return;
   const tops = new Map([...kbBody.querySelectorAll('[data-kb-scroll]')].map(el => [el.dataset.kbScroll, el.scrollTop]));
   const left = kbBody.querySelector('.kb-cols')?.scrollLeft || 0;
   const focused = document.activeElement?.closest?.('[data-kb-card]')?.dataset.kbCard;
-  const wide = kbBody.clientWidth / Math.max(1, (b.columns || []).length) >= KB_WIDE_COLUMN;
-  setHtml(kbBody, kbBoardHtml(b, { wide, all: kb.scope === 'all' }));
+  setHtml(kbBody, kbBoardHtml(b, { all: kbv.scope === 'all' }));
   kbBody.querySelectorAll('[data-kb-scroll]').forEach(el => { el.scrollTop = tops.get(el.dataset.kbScroll) || 0; });
   const cols = kbBody.querySelector('.kb-cols');
   if (cols) cols.scrollLeft = left;
   if (focused) kbCardEl(focused)?.focus({ preventScroll: true });
   kbCounts.textContent = b.counts_line || '';
-  kbBody.querySelectorAll('.kb-card').forEach(el => el.classList.toggle('kb-on', el.dataset.kbCard === kb.open?.key));
+  kbBody.querySelectorAll('.kb-card').forEach(el => el.classList.toggle('kb-on', el.dataset.kbCard === kbv.open?.key));
 }
 
 const kbCardEl = key => [...kbBody.querySelectorAll('[data-kb-card]')].find(el => el.dataset.kbCard === key) || null;
 
 // ── The open ticket ──
 function kbOpenTicket(key) {
-  const card = kbCards(kb.board).get(key);
+  const card = kbCards(kbv.board).get(key);
   if (!card) return;
-  if (kb.open?.key !== key) kbRevokePics();
-  kb.open = { key, card, t: null };
+  if (kbv.open?.key !== key) kbRevokePics();
+  kbv.open = { key, card, t: null };
   kbPaintPanel();
   kbPanel.hidden = false;
   kbBody.querySelectorAll('.kb-card').forEach(el => el.classList.toggle('kb-on', el.dataset.kbCard === key));
@@ -378,15 +378,15 @@ function kbOpenTicket(key) {
 }
 
 async function kbReadTicket() {
-  const open = kb.open;
+  const open = kbv.open;
   if (!open) return;
-  const card = kbCards(kb.board).get(open.key) || open.card;
+  const card = kbCards(kbv.board).get(open.key) || open.card;
   open.card = card;
   if (card.n == null) { kbPaintPanel(); return; }
-  const seq = ++kb.seq;
+  const seq = ++kbv.seq;
   let res;
   try { res = await (await fetch(kbTicketUrl(card.sandbox, card.n))).json(); } catch (e) { res = { ok: false, error: e.message }; }
-  if (kb.open !== open || seq !== kb.seq) return;
+  if (kbv.open !== open || seq !== kbv.seq) return;
   if (!res?.ok || !res.ticket) {
     showNote(kbNote, `Could not read ${card.num}: ${res?.error || 'no answer'}`);
     kbPaintPanel();
@@ -404,11 +404,11 @@ function kbLinks(card) {
 }
 
 function kbPaintPanel() {
-  const open = kb.open;
+  const open = kbv.open;
   if (!open) return;
   const top = kbPanel.scrollTop;
   setHtml(kbPanel, kbPanelHtml(open.card, open.t, {
-    column: kbColumnTitle(kb.board, open.card.column), all: kb.scope === 'all', links: kbLinks(open.card),
+    column: kbColumnTitle(kbv.board, open.card.column), all: kbv.scope === 'all', links: kbLinks(open.card),
   }));
   kbPanel.scrollTop = top;
   kbPanel.setAttribute('aria-label', `Ticket ${open.t?.num || open.card.num}`);
@@ -418,36 +418,36 @@ function kbPaintPanel() {
 // A picture is read as a blob and shown from an object URL: never navigated
 // to, and the daemon serves it as an attachment with a sandboxing CSP anyway.
 function kbLoadPics() {
-  const open = kb.open;
+  const open = kbv.open;
   kbPanel.querySelectorAll('img[data-kb-pic]').forEach(async img => {
     const id = img.dataset.kbPic;
-    if (kb.pics.has(id)) { img.src = kb.pics.get(id); return; }
-    kb.pics.set(id, '');
+    if (kbv.pics.has(id)) { img.src = kbv.pics.get(id); return; }
+    kbv.pics.set(id, '');
     try {
       const r = await fetch(kbFileUrl(open.card.sandbox, open.card.n, id));
       if (!r.ok) throw new Error(String(r.status));
       const blob = await r.blob();
       if (!blob.type.startsWith('image/')) throw new Error('not a picture');
-      if (kb.open !== open) return;
+      if (kbv.open !== open) return;
       const url = URL.createObjectURL(blob);
-      kb.pics.set(id, url);
+      kbv.pics.set(id, url);
       kbPanel.querySelectorAll('img[data-kb-pic]').forEach(i => { if (i.dataset.kbPic === id) i.src = url; });
     } catch {
-      kb.pics.delete(id);
+      kbv.pics.delete(id);
       img.hidden = true;
     }
   });
 }
 
 function kbRevokePics() {
-  for (const u of kb.pics.values()) if (u) URL.revokeObjectURL(u);
-  kb.pics.clear();
+  for (const u of kbv.pics.values()) if (u) URL.revokeObjectURL(u);
+  kbv.pics.clear();
 }
 
 // Closes the panel and gives the keyboard back to its card.
 function kbCloseTicket(refocus = true) {
-  const key = kb.open?.key;
-  kb.open = null;
+  const key = kbv.open?.key;
+  kbv.open = null;
   kbRevokePics();
   kbPanel.hidden = true;
   setHtml(kbPanel, '');
@@ -456,7 +456,7 @@ function kbCloseTicket(refocus = true) {
 }
 
 function kbGo(what) {
-  const card = kb.open?.card;
+  const card = kbv.open?.card;
   if (!card?.thread) return;
   closeKanban();
   if (what === 'terminal') reachThread(card.sandbox, card.thread, focusedPane);
@@ -467,16 +467,16 @@ function kbGo(what) {
 }
 
 // Escape and a press outside: the ticket first, then the Kanban.
-wireModal(kbOverlay, () => { if (kb.open) kbCloseTicket(); else closeKanban(); });
+wireModal(kbOverlay, () => { if (kbv.open) kbCloseTicket(); else closeKanban(); });
 kbOverlay.addEventListener('pointerdown', e => {
-  if (!kb.open || kbPanel.contains(e.target) || e.target.closest('[data-kb-card]')) return;
+  if (!kbv.open || kbPanel.contains(e.target) || e.target.closest('[data-kb-card]')) return;
   if (!kbOverlay.contains(e.target) || e.target === kbOverlay) return; // the backdrop: wireModal's
   kbCloseTicket();
 });
 kbBody.addEventListener('click', e => {
   const card = e.target.closest('[data-kb-card]');
   if (card) { kbOpenTicket(card.dataset.kbCard); return; }
-  if (e.target.closest('[data-kb-older]')) { kb.older = true; kbRead(); }
+  if (e.target.closest('[data-kb-older]')) { kbv.older = true; kbRead(); }
 });
 kbPanel.addEventListener('click', e => {
   if (e.target.closest('[data-kb-close]')) { kbCloseTicket(); return; }
@@ -484,9 +484,9 @@ kbPanel.addEventListener('click', e => {
   if (go) kbGo(go.dataset.kbGo);
 });
 kbScope.addEventListener('change', () => {
-  kb.scope = kbScope.value;
-  kb.older = false;
-  kb.board = null;
+  kbv.scope = kbScope.value;
+  kbv.older = false;
+  kbv.board = null;
   kbCloseTicket(false);
   setHtml(kbBody, '<p class="wt-note">Reading the tickets…</p>');
   kbRead();
@@ -500,23 +500,18 @@ document.getElementById('wt-kanban')?.addEventListener('click', () => {
   closeWorktrees();
   openKanban(sandbox);
 });
-let kbResizeTimer = null;
-window.addEventListener('resize', () => {
-  clearTimeout(kbResizeTimer);
-  kbResizeTimer = setTimeout(() => { if (kbOverlay.open) kbPaint(); }, 150);
-});
 
 // Live: a ticket changed, or a plan its cards follow. Read again once the
 // burst settles; another sandbox's tickets do not concern a sandbox's board.
 function kbSoon() {
   if (!kbOverlay.open) return;
-  clearTimeout(kb.timer);
-  kb.timer = setTimeout(kbRead, 300);
+  clearTimeout(kbv.timer);
+  kbv.timer = setTimeout(kbRead, 300);
 }
 sbxwStream.addEventListener('tickets', ev => {
   let d = {};
   try { d = JSON.parse(ev.data) || {}; } catch { /* a nudge all the same */ }
-  if (kb.scope !== 'all' && d.sandbox && d.sandbox !== kb.scope) return;
+  if (kbv.scope !== 'all' && d.sandbox && d.sandbox !== kbv.scope) return;
   kbSoon();
 });
 sbxwStream.addEventListener('plan', kbSoon);
@@ -541,7 +536,7 @@ const kbfLimits = document.getElementById('kbf-limits');
 // ({sandbox, n, num}), so a retry attaches to it and never makes a second.
 const kbf = { files: [], made: null, busy: false };
 
-const kbLimits = () => kb.board?.limits || { title: 160, description: 8000, file_bytes: 20 << 20, files: 20, ticket_bytes: 100 << 20 };
+const kbLimits = () => kbv.board?.limits || { title: 160, description: 8000, file_bytes: 20 << 20, files: 20, ticket_bytes: 100 << 20 };
 
 function openKanbanForm() {
   const l = kbLimits();
@@ -552,7 +547,7 @@ function openKanbanForm() {
   kbfTitle.maxLength = l.title;
   kbfDesc.maxLength = l.description;
   kbfSandbox.innerHTML = sandboxes.map(s => `<option value="${escHtml(s.name)}">${escHtml(s.name)}</option>`).join('');
-  kbfSandbox.value = kb.scope !== 'all' ? kb.scope : (panes[focusedPane]?.sandbox || sandboxes[0]?.name || '');
+  kbfSandbox.value = kbv.scope !== 'all' ? kbv.scope : (panes[focusedPane]?.sandbox || sandboxes[0]?.name || '');
   kbfLimits.textContent = `Title up to ${l.title} characters, description up to ${l.description}. Files: ${l.files} at most, ${kbSize(l.file_bytes)} each, ${kbSize(l.ticket_bytes)} in all; archives and programs are refused.`;
   kbfAck.checked = false;
   showNote(kbfNotice, '');

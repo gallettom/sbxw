@@ -49,7 +49,7 @@ const names = list => list.map(t => t.replace(/\(.*$/, ''));
 
 test('the board is the daemon\'s five columns, in its order, with its counts and empty sentences', () => {
   for (const [key, board] of Object.entries(basic.tickets_boards)) {
-    const html = kb.kbBoardHtml(board, { wide: true, all: key.startsWith('all') });
+    const html = kb.kbBoardHtml(board, { all: key.startsWith('all') });
     tags(html);
     const ids = [...html.matchAll(/data-kb-col="([^"]+)"/g)].map(m => m[1]);
     assert.deepEqual(ids, board.columns.map(c => c.id), key);
@@ -62,7 +62,7 @@ test('the board is the daemon\'s five columns, in its order, with its counts and
 
 test('every card is drawn in the column the daemon put it in, in its order', () => {
   const board = basic.tickets_boards['web-app'];
-  const html = kb.kbBoardHtml(board, { wide: false });
+  const html = kb.kbBoardHtml(board, {});
   for (const col of board.columns) {
     const part = html.slice(html.indexOf(`data-kb-col="${col.id}"`)).split('<section')[0];
     const keys = [...part.matchAll(/data-kb-card="([^"]+)"/g)].map(m => m[1]);
@@ -75,9 +75,9 @@ test('a card shows its number or "thread", its title, marks, thread and age; the
   const board = basic.tickets_boards['web-app'];
   const cards = kb.kbCards(board);
   const failed = [...cards.values()].find(c => c.n == null);
-  const html = kb.kbCardHtml(failed, { wide: true });
+  const html = kb.kbCardHtml(failed, {});
   assert.ok(html.includes('>thread<') && html.includes('kb-num-thread'));
-  assert.ok(html.includes(failed.title_long));
+  assert.ok(html.includes(failed.title_long) && html.includes(failed.title_short));
   for (const m of failed.marks) {
     assert.ok(html.includes(`>${m.label}<`), m.label);
     assert.ok(html.includes(`title="${m.help}"`), 'its help as a tooltip');
@@ -95,14 +95,15 @@ test('a card shows its number or "thread", its title, marks, thread and age; the
   }
 });
 
-test('narrow cards take title_short, wide ones title_long, as the daemon cut them', () => {
+test('a card carries the daemon\'s short and long titles, as it cut them; the column\'s width picks', () => {
   for (const c of kb.kbCards(big.tickets_boards.all).values()) {
-    const narrow = kb.kbCardHtml(c, { wide: false });
-    const wide = kb.kbCardHtml(c, { wide: true });
-    const shown = h => h.match(/class="kb-card-title">([^<]*)</)[1];
-    assert.equal(shown(narrow), c.title_short.replace(/&/g, '&amp;').replace(/'/g, '&#39;'));
-    assert.equal(shown(wide), c.title_long.replace(/&/g, '&amp;').replace(/'/g, '&#39;'));
+    const html = kb.kbCardHtml(c, {});
+    const shown = cls => html.match(new RegExp(`class="kb-card-title ${cls}">([^<]*)<`))[1];
+    assert.equal(shown('kb-t-short'), ctx.escHtml(c.title_short));
+    assert.equal(shown('kb-t-long'), ctx.escHtml(c.title_long));
   }
+  const css = read('assets/app.css');
+  assert.match(css, /@container \(min-width: 250px\) \{\s*\.kb-t-short \{ display: none; \}/);
 });
 
 test('Merged at real size: 12 drawn, the count says all, and "Show 16 older"', () => {
@@ -154,6 +155,12 @@ test('a thread with no ticket opens its card only', () => {
   assert.ok(!html.includes('kb-p-desc') && !html.includes('kb-file'));
 });
 
+test('a ticket not read yet (or whose read failed) is never called a thread', () => {
+  const t = basic.tickets_views['web-app/5'];
+  const html = kb.kbPanelHtml(t.card, null, {});
+  assert.ok(html.includes('Reading the ticket') && !html.includes('A thread, not a ticket'));
+});
+
 // ── Text stays text ──
 const HOSTILE = `<script>alert(1)</script><img src=x onerror=alert(2)>"'><a href="javascript:alert(3)">x</a>&amp;`;
 
@@ -165,7 +172,7 @@ function hostileCard(card) {
 test('a title, a description and a file name full of markup add no element and no attribute', () => {
   const board = basic.tickets_boards.all;
   for (const c of kb.kbCards(board).values()) {
-    for (const o of [{ wide: true, all: true }, { wide: false }]) {
+    for (const o of [{ all: true }, {}]) {
       assert.deepEqual(tags(kb.kbCardHtml(hostileCard(c), o)), tags(kb.kbCardHtml(c, o)), c.key);
     }
   }
@@ -264,4 +271,15 @@ test('the form refuses an empty title or text over the caps, and says what a hal
   const said = kb.kbSaveReport('T-13', [{ name: 'a.png', state: 'done' }, { name: 'b.bin', state: 'failed', error: 'programs are refused' }, { name: 'c.pdf', state: 'wait' }]);
   assert.match(said, /^T-13 was created\. Attached: a\.png\. Not attached: b\.bin \(programs are refused\)\. Not sent: c\.pdf\./);
   assert.match(said, /Attach the rest/);
+});
+
+test('kanban.js declares no global another page script already declares', () => {
+  // The page's scripts are classic scripts sharing one global scope: a
+  // `const` declared twice stops the second file whole.
+  const top = s => new Set([...s.matchAll(/^(?:const|let|var|function|async function|class) ([A-Za-z_$][\w$]*)/gm)].map(m => m[1]));
+  const mine = top(src);
+  const shell = read('assets/js/singleton.js');
+  for (const f of [...shell.matchAll(/'\/js\/([\w-]+\.js)'/g)].map(m => m[1]).filter(f => f !== 'kanban.js')) {
+    for (const n of top(read(`assets/js/${f}`))) assert.ok(!mine.has(n), `${n} is declared in ${f} too`);
+  }
 });
