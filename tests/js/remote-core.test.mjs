@@ -587,6 +587,14 @@ test('level 2: the entry\'s sentence, each refusal, the routes, the sheet\'s lin
   await l2.challenge('network_respond', 'network:x', 'b'.repeat(64), 'dismiss');
   await l2.act('network_respond', 'network:x', { id: 'i' }, 'dismiss');
   await l2.act('merge', 'p-2', { id: 'i' }, 'ignored');
+  const RID = '0123456789abcdef0123456789abcdef';
+  await l2.passkeyStatus(RID);
+  await l2.passkeyOptions(RID);
+  await l2.passkeyRegister(RID, { id: 'a', client_data_json: 'b', attestation_object: 'c' });
+  const pk = calls.splice(-3);
+  assert.equal(pk[0].path, `/r/passkey/status?request_id=${RID}`);
+  assert.deepEqual(JSON.parse(pk[1].body), { request_id: RID });
+  assert.deepEqual(JSON.parse(pk[2].body), { request_id: RID, id: 'a', client_data_json: 'b', attestation_object: 'c' });
   assert.deepEqual(calls.map(c => [c.path, JSON.parse(c.body)]), [
     ['/r/approvals/challenge', { kind: 'plan_approve', target: 'p-1', digest: 'a'.repeat(64) }],
     ['/r/approvals/challenge', { kind: 'network_respond', target: 'network:x', digest: 'b'.repeat(64), option: 'dismiss' }],

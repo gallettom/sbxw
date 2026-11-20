@@ -641,6 +641,9 @@ a standalone app named sbxw.
   No passkey on this device: the lists, read only, and "Enable Face ID on this device",
   which shows six digits to type at the Mac, waits for the grant, then creates the passkey
   on a tap (`navigator.credentials.create`, user verification required, attestation none).
+  The ceremony's `request_id` lives in memory only and goes with each step; it is dropped
+  when the ceremony ends or the page hides (then: "Start again"). Whether Face ID is set up
+  is read from `GET /r/approvals`.
   A detail shows its item as text (a plan's threads with long goals folded, a merge's
   branches with tips, commits and files as numbers and paths and never a diff, a network
   request with only the options the daemon lists and "Allowing this needs your Mac", a
@@ -653,6 +656,9 @@ a standalone app named sbxw.
   nothing was done. Closing the sheet or hiding the page drops the challenge and aborts the
   prompt. The page keeps no credential id, challenge or assertion. A tool permission
   prompt stays on the Mac.
+- **Open elsewhere.** When a newer view of this device takes the live stream (`bye`
+  "too_many"), the page says "This page is open elsewhere on this device." and reconnects
+  only on a tap.
 - **Unreachable.** When sbxw does not answer: "sbxw is unreachable (is the Mac awake?)".
   The text being typed stays in the field. Nothing is queued: a message that did not go is
   reported, and the person presses Send again when sbxw is back.

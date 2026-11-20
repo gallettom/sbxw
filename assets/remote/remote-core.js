@@ -840,9 +840,11 @@ function rcL2Client(api) {
   return {
     approvals: () => api.get('/r/approvals'),
     passkeyStart: () => api.post('/r/passkey/start', {}),
-    passkeyStatus: () => api.get('/r/passkey/status'),
-    passkeyOptions: () => api.post('/r/passkey/options', {}),
-    passkeyRegister: body => api.post('/r/passkey/register', body),
+    // The request_id of /r/passkey/start binds the ceremony (v1.1): sent on
+    // status, options and register; the caller keeps it in memory only.
+    passkeyStatus: rid => api.get(`/r/passkey/status?request_id=${encodeURIComponent(rid)}`),
+    passkeyOptions: rid => api.post('/r/passkey/options', { request_id: rid }),
+    passkeyRegister: (rid, body) => api.post('/r/passkey/register', { request_id: rid, ...body }),
     list: what => api.get(`/r/${what}`),
     detail: (what, id) => api.get(`/r/${what}/${encodeURIComponent(id)}`),
     challenge: (kind, target, digest, option) => api.post('/r/approvals/challenge', option ? { kind, target, digest, option } : { kind, target, digest }),

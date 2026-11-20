@@ -87,7 +87,7 @@ export function startStandin(port = 0) {
     return {
       approvals: L.approvals, L,
       digest: { plans: L.plan.digest, merges: L.merge.digest, network: L.network_one.digest, stopped: L.stopped_one.digest },
-      replies: {}, pkStates: [], pk: 'none', chal: null, done: [],
+      replies: {}, pkStates: [], pk: 'none', rid: null, chal: null, done: [],
     };
   };
   s.l2 = l2Fresh();
@@ -102,23 +102,32 @@ export function startStandin(port = 0) {
     const off = () => send(res, 403, { ok: false, error: 'level 2 is off', reason: 'level2_off' });
     if (p === '/r/approvals' && req.method === 'GET') return send(res, 200, A.level2 ? A : { level2: false, passkey: A.passkey, rp_ok: A.rp_ok, counts: null });
     if (!A.level2) return off();
-    if (p === '/r/passkey/start') { s.l2.pk = 'pending'; return send(res, 200, { ...L.passkey_start, expires_ms: Date.now() + 300000 }); }
+    // v1.1: the ceremony is bound to the request_id of start; any other id
+    // is "none" / no_grant; status never says "registered".
+    const ridOk = id => typeof id === 'string' && id === s.l2.rid;
+    if (p === '/r/passkey/start') {
+      s.l2.pk = 'pending';
+      s.l2.rid = randomBytes(16).toString('hex');
+      return send(res, 200, { ...L.passkey_start, request_id: s.l2.rid, expires_ms: Date.now() + 300000 });
+    }
     if (p === '/r/passkey/status') {
+      if (!ridOk(new URL(req.url, 'http://x').searchParams.get('request_id'))) return send(res, 200, { state: 'none', expires_ms: null });
       if (s.l2.pkStates.length) s.l2.pk = s.l2.pkStates.shift();
       return send(res, 200, { state: s.l2.pk, expires_ms: Date.now() + 200000 });
     }
     if (p === '/r/passkey/options') {
-      if (s.l2.pk !== 'granted') return send(res, 403, { ok: false, error: 'no grant', reason: 'no_grant' });
+      if (!ridOk(body?.request_id) || s.l2.pk !== 'granted') return send(res, 403, { ok: false, error: 'no grant', reason: 'no_grant' });
       return send(res, 200, { ...L.passkey_options, expires_ms: Date.now() + 120000 });
     }
     if (p === '/r/passkey/register') {
       const q = s.l2.replies.register?.shift();
       if (q) { s.l2.pk = 'none'; return send(res, q.status, q.body); }
-      if (s.l2.pk !== 'granted') return send(res, 403, { ok: false, error: 'no grant', reason: 'no_grant' });
-      const ok = body && ['id', 'client_data_json', 'attestation_object'].every(k => typeof body[k] === 'string' && B64U.test(body[k])) && Object.keys(body).length === 3;
+      if (!ridOk(body?.request_id) || s.l2.pk !== 'granted') return send(res, 403, { ok: false, error: 'no grant', reason: 'no_grant' });
+      const ok = body && ['id', 'client_data_json', 'attestation_object'].every(k => typeof body[k] === 'string' && B64U.test(body[k])) && Object.keys(body).length === 4;
       s.l2.pk = 'none';
       if (!ok) return send(res, 403, { ok: false, error: 'passkey', reason: 'passkey' });
-      s.l2.pk = 'registered';
+      s.l2.pk = 'none';
+      s.l2.rid = null;
       A.passkey = true;
       A.rp_ok = true;
       return send(res, 200, { ok: true });

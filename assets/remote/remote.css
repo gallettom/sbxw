@@ -261,7 +261,9 @@ svg circle { fill: currentColor; stroke: none; }
   font-size: var(--fs-sm);
   text-align: center;
 }
-.rc-banner:not([hidden]) + .rc-bar { padding-top: 0; min-height: 52px; }
+.rc-banner:not([hidden]) + .rc-bar, .rc-banner:not([hidden]) + .rc-banner + .rc-bar { padding-top: 0; min-height: 52px; }
+.rc-banner-btn { display: block; width: 100%; border: 0; border-bottom: 1px solid rgba(88, 166, 255, 0.4); background: rgba(88, 166, 255, 0.14); font: inherit; font-size: var(--fs-sm); color: var(--c-text-bright); cursor: pointer; }
+.rc-banner-btn:focus-visible { box-shadow: inset 0 0 0 2px var(--c-blue); }
 
 /* ── Menu ── */
 .rc-menu {
@@ -377,6 +379,9 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+  /* The page keeps the place itself (older messages, a redrawn card), as
+     Safari does: no browser scroll anchoring moving it on its own. */
+  overflow-anchor: none;
   padding: 12px max(14px, var(--safe-r)) 16px max(14px, var(--safe-l));
 }
 .rc-log-top { text-align: center; font-size: var(--fs-xs); color: var(--c-text-dim); padding: 4px 0 12px; }

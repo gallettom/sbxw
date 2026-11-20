@@ -125,6 +125,7 @@
   function unpaired(title, text) {
     st.paired = false;
     stopEvents();
+    elsewhere(false);
     st.current = null;
     st.items = [];
     st.drafts.clear();
@@ -248,6 +249,9 @@
     es.addEventListener('bye', e => {
       const d = parse(e.data);
       stopEvents();
+      // A newer view of this device took the stream's place (v1.2): say so
+      // and wait for a tap; reconnecting by itself would take it back.
+      if (d?.reason === 'too_many') { elsewhere(true); return; }
       if (d?.reason === 'disabled') unpaired('Remote access is off', 'It was turned off on the Mac. Turn it on there, then open this page again.');
       else unpaired('This device is no longer paired', 'It was removed on the Mac. Pair it again from there.');
     });
@@ -258,12 +262,25 @@
       scheduleProbe(2000);
     });
   }
+  function elsewhere(on) {
+    st.elsewhere = on;
+    $('elsewhere').hidden = !on;
+  }
+  $('elsewhere').addEventListener('click', async () => {
+    if (!st.elsewhere) return;
+    elsewhere(false);
+    startEvents();
+    const l = await api.leaders();
+    if (l.ok) setLeaders(l.data);
+    if (st.current) fetchNewer();
+    refreshL2();
+  });
   function stopEvents() {
     if (st.es) { st.es.close(); st.es = null; }
     if (st.probe) { clearTimeout(st.probe); st.probe = null; }
   }
   function scheduleProbe(ms) {
-    if (st.probe || !st.paired) return;
+    if (st.probe || !st.paired || st.elsewhere) return;
     st.probe = setTimeout(async () => {
       st.probe = null;
       const res = await api.me();
@@ -1632,11 +1649,13 @@
     $('item').replaceChildren(...body);
     renderActs(what, data);
   }
+  // A line above the detail: a string, or parts ([string | { data }]).
   function itemStatus(text, tone) {
     const p = $('item-status');
-    p.textContent = text;
+    p.replaceChildren();
+    if (Array.isArray(text)) partsInto(p, text, false); else p.textContent = text;
     p.className = `rc-item-status${tone ? ` rc-t-${tone}` : ''}`;
-    p.hidden = !text;
+    p.hidden = !(Array.isArray(text) ? text.length : text);
   }
   // A field: a quiet label and its value, as text. Long text folds.
   function field_(label, value, opts = {}) {
@@ -1880,10 +1899,13 @@
   });
   function failed(res, s) {
     if (res.data?.reason === 'changed') {
-      // Read it again: the detail is fetched anew, the sheet closes.
+      // Read it again: the detail is fetched anew, the sheet closes. A
+      // merge says which branch moved and what was already merged (v1.2):
+      // its sentence is shown as it is, as data.
       const it = st.item;
+      const why = s.kind === 'merge' && typeof res.data.error === 'string' && res.data.error.trim() ? res.data.error.trim().slice(0, 600) : '';
       closeSheet();
-      if (it) openItem(it.what, it.id, RC_L2_REASON.changed);
+      if (it) openItem(it.what, it.id, why ? [`${RC_L2_REASON.changed} `, { data: why }] : RC_L2_REASON.changed);
       return;
     }
     if (sheet !== s) return;
@@ -1895,7 +1917,15 @@
 
   // ── Enabling Face ID on this device ──
   let pkPoll = null;
-  function stopPasskeyPoll() { if (pkPoll) { clearTimeout(pkPoll); pkPoll = null; } }
+  // The ceremony's request_id (v1.1): in this variable only, never stored,
+  // dropped when the ceremony ends, the screen is left or the page hides.
+  let pkReq = null;
+  function stopPasskeyPoll() { if (pkPoll) { clearTimeout(pkPoll); pkPoll = null; } pkReq = null; }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden' || !pkReq) return;
+    stopPasskeyPoll();
+    if (st.screen === 's-passkey') pkShow('expired');
+  });
   function pkShow(state, check) {
     $('pk-check').hidden = !check;
     if (check) $('pk-check').textContent = /^\d{6}$/.test(check) ? `${check.slice(0, 3)} ${check.slice(3)}` : check;
@@ -1920,19 +1950,22 @@
       $('pk-text').textContent = rcL2Fail(res);
       return;
     }
+    pkReq = /^[0-9a-f]{32}$/.test(res.data.request_id) ? res.data.request_id : null;
+    if (!pkReq) return pkShow('failed');
     pkShow('pending', String(res.data.check || ''));
     const until = Date.now() + 6 * 60 * 1000;
     const poll = async () => {
       pkPoll = null;
-      if (st.screen !== 's-passkey') return;
-      if (Date.now() > until) return pkShow('expired');
-      const r = await l2.passkeyStatus();
-      if (st.screen !== 's-passkey') return;
+      if (st.screen !== 's-passkey' || !pkReq) return;
+      if (Date.now() > until) { stopPasskeyPoll(); return pkShow('expired'); }
+      const r = await l2.passkeyStatus(pkReq);
+      if (st.screen !== 's-passkey' || !pkReq) return;
       const state = r.ok ? r.data?.state : null;
       if (state === 'granted') return pkShow('granted');
-      if (state === 'refused') return pkShow('refused');
-      if (state === 'registered') return pkShow('registered');
-      if (state === 'none') return pkShow('expired');
+      if (state === 'refused') { stopPasskeyPoll(); return pkShow('refused'); }
+      // "none": this request is not the device's any more (expired, or a
+      // newer one replaced it): start again, never guess.
+      if (state === 'none') { stopPasskeyPoll(); return pkShow('expired'); }
       pkPoll = setTimeout(poll, 2000);
     };
     pkPoll = setTimeout(poll, 1500);
@@ -1949,7 +1982,10 @@
       if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function'
         && !(await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable())) return pkShow('no_authenticator');
     } catch (_) { /* unknown: let create() say */ }
-    const o = await l2.passkeyOptions();
+    // Lost the request (a reload, the page hidden): start again.
+    const rid = pkReq;
+    if (!rid) return pkShow('expired');
+    const o = await l2.passkeyOptions(rid);
     if (st.screen !== 's-passkey') return;
     if (!o.ok) { pkShow(o.data?.reason === 'no_grant' ? 'expired' : 'failed'); if (o.data?.reason) $('pk-text').textContent = rcL2Fail(o); return; }
     const publicKey = rcCreateOptions(o.data?.public_key);
@@ -1958,18 +1994,23 @@
     try {
       cred = await navigator.credentials.create({ publicKey });
     } catch (e) {
+      stopPasskeyPoll();
       if (st.screen === 's-passkey') pkShow(rcCeremonyError(e));
       return;
     }
     if (st.screen !== 's-passkey') return;
     const body = rcRegistrationBody(cred);
     if (!body) { pkShow('failed'); $('pk-text').textContent = 'The browser gave an answer this page cannot read. Nothing was saved.'; return; }
-    const r = await l2.passkeyRegister(body);
+    const r = await l2.passkeyRegister(rid, body);
+    // The ceremony is over, whatever the answer: the id goes.
+    stopPasskeyPoll();
     if (st.screen !== 's-passkey') return;
     // no_grant: the grant expired or was used (v1.0); passkey: a check failed.
     if (!r.ok) return pkShow(r.data?.reason === 'passkey' ? 'rejected' : r.data?.reason === 'no_grant' ? 'expired' : 'failed');
-    pkShow('registered');
-    refreshL2();
+    // Whether Face ID is set up is GET /r/approvals' to say (v1.1).
+    await refreshL2();
+    if (st.screen !== 's-passkey') return;
+    pkShow(st.l2?.passkey === true ? 'registered' : 'failed');
   });
 
   // ── Navigation ──

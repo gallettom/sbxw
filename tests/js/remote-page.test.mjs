@@ -897,8 +897,17 @@ test('level 2: enabling Face ID: the digits, the grant, create, register; and ea
   assert.deepEqual(c.challenge, [...Array(32).keys()], 'the challenge decoded from base64url');
   assert.deepEqual(c.user, [...Buffer.from('dev-1')]);
   const reg = (await calls('POST', '/r/passkey/register'))[0].body;
-  assert.deepEqual(reg, { id: b64('cred-id-12345678'), client_data_json: b64('{"type":"webauthn.create"}'), attestation_object: b64('attestation') });
+  const rid = reg.request_id;
+  assert.match(rid, /^[0-9a-f]{32}$/, 'the request_id of start');
+  assert.deepEqual(reg, { request_id: rid, id: b64('cred-id-12345678'), client_data_json: b64('{"type":"webauthn.create"}'), attestation_object: b64('attestation') });
   for (const v of Object.values(reg)) assert.match(v, /^[A-Za-z0-9_-]+$/, 'base64url, no padding');
+  // The same id on every step, in the query for status, in the body for options.
+  assert.ok((await calls('GET', '/r/passkey/status')).every(e => e.query === `?request_id=${rid}`));
+  assert.deepEqual((await calls('POST', '/r/passkey/options'))[0].body, { request_id: rid });
+  // Set up is read from /r/approvals, not from status.
+  assert.ok((await calls('GET', '/r/approvals')).length >= 2);
+  // Kept nowhere but in memory.
+  assert.ok(!(await page.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }) + location.href)).includes(rid));
   await shot(page, '44-faceid-ready');
   await cleanSpy(page);
   assert.deepEqual(problems, []);
@@ -1672,6 +1681,86 @@ test('level 2: bidi and invisible controls in agent text and paths are shown, ne
   assert.equal(await page.textContent('#sheet-line'), 'Merge 2 branches of webU+202Esite in the order shown, stopping at the first conflict. Order: fooU+202Bter, contact-form.');
   assert.equal((await check('#sheet')).raw, false);
   await cleanSpy(page);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+// ── API-level2 v1.1 and v1.2 ──
+test('Face ID setup: a hidden page drops the request; a lost request starts again, never guessed', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true, l2: { approvals: { passkey: false } }, pkStates: ['pending'] });
+  const { ctx, page, problems } = await phone();
+  await openApprovals(page);
+  await page.tap('#ap-enable');
+  await page.waitForSelector('#pk-check:not([hidden])');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForSelector('#s-passkey[data-state="expired"]');
+  assert.equal(await page.textContent('#pk-text'), 'This request expired. Start again.');
+  const n = (await calls('GET', '/r/passkey/status')).length;
+  await page.waitForTimeout(2500);
+  assert.equal((await calls('GET', '/r/passkey/status')).length, n, 'no more polling with a dropped id');
+  // Start again: a new request, a new id.
+  await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' }); });
+  await ctl({ pkStates: ['granted'] });
+  await page.tap('#pk-again');
+  await page.waitForSelector('#pk-go:not([hidden])', { timeout: 10000 });
+  assert.equal((await calls('POST', '/r/passkey/start')).length, 2);
+  // Another request replaced this one at the daemon: status says "none".
+  await ctl({ l2Reset: true, l2: { approvals: { passkey: false } } });
+  await page.tap('#back');
+  await page.tap('#ap-enable');
+  await page.waitForSelector('#pk-check:not([hidden])');
+  await fetch(`${base()}/r/passkey/start`, { method: 'POST', body: '{}' }); // a newer request (no cookie needed by the stand-in)
+  await page.waitForSelector('#s-passkey[data-state="expired"]', { timeout: 10000 });
+  assert.equal((await calls('POST', '/r/passkey/register')).length, 0);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('bye "too_many": one sentence, no reconnect loop, a tap reconnects', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.waitForSelector('.rc-leader');
+  await page.waitForTimeout(300);
+  const streams = async () => (await calls('GET', '/r/events')).length;
+  const before = await streams();
+  await ctl({ emit: { event: 'bye', data: { reason: 'too_many' } } });
+  await page.waitForSelector('#elsewhere:not([hidden])');
+  assert.equal(await page.textContent('#elsewhere'), 'This page is open elsewhere on this device. Tap to reconnect here.');
+  assert.equal(await page.isVisible('#s-leaders'), true, 'still paired, still on its screen');
+  await shot(page, '84-open-elsewhere');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(3500);
+  assert.equal(await streams(), before, 'no reconnect by itself');
+  await page.tap('#elsewhere');
+  await page.waitForSelector('#elsewhere', { state: 'hidden' });
+  await page.waitForFunction(async n => (await (await fetch('/__log')).json()).filter(e => e.path === '/r/events').length > n, before);
+  assert.equal(await streams(), before + 1, 'one tap, one stream');
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('a merge "changed": its sentence shown as data, the detail read again', { skip }, async () => {
+  const why = 'Branch sbxw/contact\u202E-form moved since you opened it; already merged: footer.';
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true, l2Replies: { merge: [{ status: 409, body: { ok: false, reason: 'changed', error: why } }] } });
+  const { ctx, page, problems } = await phone();
+  await openApprovals(page);
+  await openItemOf(page, 'merges');
+  const reads = async () => (await log()).filter(e => e.method === 'GET' && e.path.startsWith('/r/merges/p-')).length;
+  const r0 = await reads();
+  await viaSheet(page, '[data-kind="merge"]');
+  await page.waitForSelector('#item-status:not([hidden])');
+  assert.equal(await page.textContent('#item-status'), 'This changed since you opened it: read it again. Branch sbxw/contactU+202E-form moved since you opened it; already merged: footer.');
+  assert.equal(await page.$eval('#item-status .rc-data', e => e.dir), 'auto');
+  await page.waitForSelector('#item-acts button');
+  assert.equal(await reads(), r0 + 1, 'the merge is read again');
+  await shot(page, '56-merge-changed-sentence');
   assert.deepEqual(problems, []);
   await ctx.close();
 });
