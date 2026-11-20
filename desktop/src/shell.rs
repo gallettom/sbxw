@@ -607,7 +607,7 @@ impl App {
             app.jarvis.seed_proposals(list);
             app.jarvis.seed_sessions(&d.sessions().unwrap_or_default());
             // A fixture's stream events, replayed once (`provision`: bring-ups
-            // for the status bar and the "New sandboxes" panel).
+            // for the status bar and its popover).
             for ev in app.raw["provision"].as_array().cloned().unwrap_or_default() {
                 app.feats_bus("provision", &ev.to_string());
             }
