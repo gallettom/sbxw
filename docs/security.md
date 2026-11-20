@@ -520,10 +520,11 @@ a standalone app named sbxw.
 - **Pairing.** Opened from the link or QR code the Mac shows (`#pair=<code>`). The page
   reads the code from the fragment and removes it from the address bar before any request,
   so it is in no history entry, request line or `Referer`. It asks for a device name
-  (prefilled from the platform: "iPhone", "iPad"...), then shows the 6-digit check value
-  in large digits: "Compare with the number on your Mac, then confirm there." It polls
-  every 1.5 s until the Mac confirms or refuses. Refused, expired, invalid and rate-limited
-  each say so in a sentence; nothing is retried.
+  (prefilled from the platform: "iPhone", "iPad"...), then shows six digits in large type
+  under "Type this number on your Mac": the Mac never shows them, the person types them
+  there. It polls every 1.5 s until the Mac accepts or refuses. A new pairing link voids a
+  pending request: "This request expired. Open the new link from your Mac." Refused (also
+  after three wrong numbers), invalid and rate-limited each say so; nothing is retried.
 - **Not paired.** No code and no device cookie, or a `401` anywhere, or the stream's
   `bye`: "This device is not paired" / "no longer paired" / "Remote access is off".
 - **Leaders.** The running team leaders: name, state (needs you, working, idle) and the
@@ -537,7 +538,13 @@ a standalone app named sbxw.
   settle says "This needs your Mac."
 - **Composer.** At the bottom on its own ground: a field that grows to a few lines, the
   microphone, Send, and below them Interrupt, which asks "Interrupt <leader>?" and acts
-  only on a second tap. Enter is a new line: only Send sends.
+  only on a second tap. Enter is a new line: only Send sends. A message takes 1 to 4 s
+  (the daemon waits for the echo before the Return): Send reads "Sending…" and a second tap
+  does nothing. A line starting with `!`, `/` or `#`, or a control character, is warned
+  about in place while typing; the daemon stays the judge. Each refusal reason has its own
+  sentence, with the daemon's words beside it as text; "not_submitted" says plainly that
+  the text waits unsent in the leader's input on the Mac, keeps it in the field, and
+  nothing is resent.
 - **Dictation.** Tap the microphone to record, tap again to stop (two minutes at most).
   The audio is turned into 16 kHz samples on the phone, sent to `/r/voice/transcribe`, and
   the text is put INTO the field for the person to read and correct. It never sends.
