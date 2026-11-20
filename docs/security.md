@@ -575,22 +575,44 @@ a standalone app named sbxw.
   on the `history` nudge of `/r/events`. A pending multiple-choice question is a card: pick
   an option, then "Send answer". A permission prompt or anything else the phone cannot
   settle says "This needs your Mac."
-- **Composer.** At the bottom on its own ground: a field that grows to a few lines, the
-  microphone, Send, and below them Interrupt, which asks "Interrupt <leader>?" and acts
-  only on a second tap. Enter is a new line: only Send sends. A message takes 1 to 4 s
-  (the daemon waits for the echo before the Return): Send reads "Sending…" and a second tap
-  does nothing. A message is typed only into an idle leader: while it works, Send is
-  disabled with "The leader is working: Send comes back at its prompt.", the text stays in
-  the field and nothing is queued; Interrupt stays available. A line starting with `!`, `/`
-  or `#`, a control character or an invisible one (zero-width space, soft hyphen...) is
-  warned about in place while typing; the daemon stays the judge. Each refusal reason has its own
-  sentence, with the daemon's words beside it as text; "not_submitted" says plainly that
-  the text waits unsent in the leader's input on the Mac, keeps it in the field, and
-  nothing is resent.
-- **Dictation.** Tap the microphone to record, tap again to stop (two minutes at most).
-  The audio is turned into 16 kHz samples on the phone, sent to `/r/voice/transcribe`, and
-  the text is put INTO the field for the person to read and correct. It never sends.
-  Without HTTPS, without a microphone or with the permission refused, the page says why.
+- **The bar.** In a conversation: back, the leader's name, its state as a small coloured
+  pill (idle, working, needs you), and, only while the leader works, Interrupt. Interrupt
+  opens a strip under the bar, "Interrupt <leader>?", with Cancel and Interrupt: only that
+  second button sends the Escape, and the strip closes by itself after 6 s.
+- **Composer.** One object at the bottom, on a ground that runs to the screen's edge with
+  its controls above the home indicator: attach, a field that grows to a few lines, the
+  microphone and a round Send, with one status line under them for every hint, wait and
+  refusal. Enter is a new line: only Send sends. A message takes 1 to 4 s (the daemon waits
+  for the echo before the Return): Send is busy and a second tap does nothing. A message is
+  typed only into an idle leader: while it works, Send is disabled with "The leader is
+  working: Send comes back at its prompt.", the text and files stay and nothing is queued.
+  A line starting with `!`, `/` or `#`, a control character or an invisible one
+  (zero-width space, soft hyphen...) is warned about in place while typing; the daemon stays
+  the judge. Each refusal reason has its own sentence, with the daemon's words beside it as
+  text; "not_submitted" says plainly that the text waits unsent in the leader's input on the
+  Mac, keeps it in the field, and nothing is resent.
+- **Files.** Attach opens the system picker (on an iPhone: Photo Library, Take Photo,
+  Choose Files). Before any byte is sent the page refuses an empty file, a file over 25 MiB,
+  a sixth file and more than 60 MiB together (API.md 2.6.1; the daemon checks again), and
+  holds back a name that looks like a secret (`.env*`, `*.pem`, `id_rsa*`..., the web
+  chat's list, kept equal to it by a test) until the person ticks "I have looked at these
+  files and want to attach them" and taps Attach. Each file is a chip above the field: its
+  name (as text), size, a progress bar, a remove cross, and on a refusal its reason and a
+  Retry. Files go up one at a time, as the raw body of `POST /r/leaders/:sandbox/upload`;
+  the daemon answers an id and its own name, never a path. Send waits while a file uploads;
+  a failed one blocks nothing. Send carries `{text, attachments: [ids]}` (the text may be
+  empty when files go): the daemon builds the paths and the "Attached files" block itself.
+  A removed file is dropped on the Mac too (`DELETE .../upload/:id`). The page reads no
+  file's content and shows no preview.
+- **Dictation.** Tap the microphone to record (two minutes at most): the field gives its
+  place to a live wave drawn on a canvas from an AnalyserNode on the same stream (levels
+  only, flat when silent), a running time and a stop button. With reduced motion the wave is
+  a plain level meter; without an analyser, a steady pulse, and recording goes on. On stop:
+  "Transcribing on your Mac…", then the audio is turned into 16 kHz samples on the phone,
+  sent to `/r/voice/transcribe`, and the text is put INTO the field for the person to read
+  and correct. It never sends. The AudioContexts close and the microphone's tracks stop at
+  every end; when the page is hidden the recording stops and nothing is sent. Without HTTPS,
+  without a microphone or with the permission refused, the page says why.
 - **Unreachable.** When sbxw does not answer: "sbxw is unreachable (is the Mac awake?)".
   The text being typed stays in the field. Nothing is queued: a message that did not go is
   reported, and the person presses Send again when sbxw is back.
@@ -600,7 +622,7 @@ a standalone app named sbxw.
 #### What the page keeps
 
 Only the device name, in `localStorage` under `sbxw-remote-prefs`, to prefill pairing. No
-message, answer, transcription or conversation is stored on the phone (no
+message, answer, transcription, audio, file name or conversation is stored on the phone (no
 `sessionStorage`, IndexedDB, Cache API or service worker), and nothing is written to the
 console. The device token is an HttpOnly cookie the page never sees.
 
