@@ -150,7 +150,8 @@ async fn guarded(app: &Arc<App>, req: &mut Request, path: &str, data: bool) -> R
     let safe = req.method() == Method::GET || req.method() == Method::HEAD;
     let (allowed, tailnet) = app.remote_hosts();
     if let Err(why) = rules::check_host_origin(&allowed, tailnet.as_deref(), host, origin, safe) {
-        tracing::info!("remote access: refused {} (host {host:?}): {why}", req.method());
+        let shown: String = host.unwrap_or("").chars().take(80).collect();
+        tracing::info!("remote access: refused {} (host {shown:?}): {why}", req.method());
         return Err(Box::new(ApiError::forbidden(why).into_response()));
     }
     if tricky(path) {
