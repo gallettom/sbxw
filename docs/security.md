@@ -613,6 +613,16 @@ a standalone app named sbxw.
   and correct. It never sends. The AudioContexts close and the microphone's tracks stop at
   every end; when the page is hidden the recording stops and nothing is sent. Without HTTPS,
   without a microphone or with the permission refused, the page says why.
+- **iPhone dictation (optional).** The menu's "Dictation: Mac (private) | iPhone", Mac by
+  default, with the line "iPhone dictation is done by Apple's speech recognition; your voice
+  may be sent to Apple." With iPhone chosen, the microphone uses the browser's Web Speech
+  API (in the browser's language, shown in the menu): the page opens no audio stream of its
+  own, so no wave, a steady dot and the time; the words appear as they come (interim ones
+  lighter) and the final ones go into the field at the caret. It never sends, and the
+  typing checks run on the words. A missing API, a start that throws, or a refusal before
+  any word (not-allowed, service-not-allowed, network, audio-capture) says "iPhone
+  dictation is not available here. Using your Mac." and records through the Mac. With Mac
+  chosen nothing changes: audio goes only to `/r/voice/transcribe`.
 - **Kanban.** Under a leader's bar, "Conversation | Kanban" switches views; each keeps its
   place (the conversation's scroll, the board's column, scrolls and open ticket). The board
   is `GET /r/leaders/:sandbox/kanban` drawn as it comes, in the daemon's order: on a phone
@@ -651,7 +661,8 @@ a standalone app named sbxw.
 
 #### What the page keeps
 
-Only the device name, in `localStorage` under `sbxw-remote-prefs`, to prefill pairing. No
+Only two UI preferences, in `localStorage` under `sbxw-remote-prefs`: the device name, to
+prefill pairing, and the dictation mode when it is iPhone. No
 message, answer, transcription, audio, file name or conversation is stored on the phone (no
 `sessionStorage`, IndexedDB, Cache API or service worker), and nothing is written to the
 console. The device token is an HttpOnly cookie the page never sees.
