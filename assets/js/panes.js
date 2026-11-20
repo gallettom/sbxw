@@ -314,6 +314,8 @@ function createPane(index) {
   // gone bad — something reconnecting the socket into the same xterm
   // instance can never fix.
   setupTerminal(pane);
+  // Files dropped on the pane are uploaded and their paths typed (pane-files.js).
+  paneDropMount(pane);
 
   // Focus pane on click inside it
   el.addEventListener('mousedown', () => setFocusedPane(index));
@@ -476,6 +478,9 @@ function setupTerminal(pane) {
   term.loadAddon(fit);
   if (typeof CanvasAddon !== 'undefined') term.loadAddon(new CanvasAddon.CanvasAddon());
   term.open(pane.termEl);
+  // File paths in the output: Cmd/Ctrl + click opens them in the Files tab
+  // (pane-files.js).
+  paneLinksAttach(term, pane);
   // Status pills over `[[Done]]` and its kind, for the sandbox shown now.
   pane.emphasis = window.sbxwEmphasis?.attach(term, () => pane.sandbox) || null;
 
