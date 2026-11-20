@@ -61,6 +61,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/r/voice/transcribe"),
     ("POST", "/r/leaders/:sandbox/upload"),
     ("DELETE", "/r/leaders/:sandbox/upload/:id"),
+    ("GET", "/r/leaders/:sandbox/kanban"),
+    ("GET", "/r/leaders/:sandbox/kanban/:ticket"),
     // Level 2 (API-level2.md): approving with a passkey.
     ("GET", "/r/approvals"),
     ("POST", "/r/passkey/start"),
@@ -107,6 +109,8 @@ pub fn remote_router(app: Arc<App>) -> Router {
         // (25 MiB); no extractor buffers it.
         .route("/r/leaders/:sandbox/upload", post(upload))
         .route("/r/leaders/:sandbox/upload/:id", delete(upload_drop))
+        .route("/r/leaders/:sandbox/kanban", get(super::remote_kanban::board))
+        .route("/r/leaders/:sandbox/kanban/:ticket", get(super::remote_kanban::ticket))
         // Level 2 (API-level2.md): approving with a passkey.
         .route("/r/approvals", get(l2::approvals))
         .route("/r/passkey/start", post(l2::passkey_start))
@@ -471,6 +475,7 @@ async fn events(State(app): S, Extension(d): Extension<DeviceCtx>) -> Response {
     let mut kicks = app.remote_kicks();
     let leaders_frame = |l: &Vec<crate::svc::remote_access::LeaderView>| Sse::default().event("leaders").data(json!({ "leaders": l }).to_string());
     let mut last = app.remote_leaders();
+    let mut kanban_seen = super::remote_kanban::baseline(&app, &last);
     let _ = tx.try_send(leaders_frame(&last));
     l2::spawn_badge(app.clone(), d.clone(), &tx);
     tokio::spawn(async move {
@@ -531,6 +536,13 @@ async fn events(State(app): S, Extension(d): Extension<DeviceCtx>) -> Response {
                             && sbxw_core::SandboxRef::parse(&n.sandbox).ok().and_then(|sb| app.remote_leader_session(&sb)).as_deref() == Some(n.session_id.as_str());
                         if ours && tx.send(Sse::default().event("history").data(json!({ "sandbox": n.sandbox, "seq": n.seq }).to_string())).await.is_err() {
                             break;
+                        }
+                    }
+                    Ok(ev @ (Event::Tickets(_) | Event::Plan(_))) => {
+                        if let Some(f) = super::remote_kanban::changed(&app, &last, &ev, &mut kanban_seen) {
+                            if tx.send(f).await.is_err() {
+                                break;
+                            }
                         }
                     }
                     Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}

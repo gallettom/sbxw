@@ -678,6 +678,17 @@ stay plain text.
 `PLAYWRIGHT_MODULE`, `CHROMIUM_PATH`), which runs the page against
 `tests/js/remote-standin.mjs`, a stand-in of the remote listener with the listener's CSP.
 
+### The Kanban on the phone
+
+From a leader's screen the phone can read that leader's sandbox Kanban and open a card. It is level 1 (reading), so any paired device can do it while remote access is on. Two routes, both `GET`, only on the remote listener: `/r/leaders/:sandbox/kanban` (the board) and `/r/leaders/:sandbox/kanban/:ticket` (one ticket), plus a `kanban` event on `/r/events` that carries the sandbox's name and a hash, so the page knows to read again. Contract: `.sbxw-artifacts/remote/API-kanban.md`.
+
+- **Same door.** A valid device token, the Host and Origin checks, no CORS, `Cache-Control: no-store`, the per-device limits. The UI's ticket routes are not on this listener, and these two are not on the UI's. A write method on either is refused.
+- **Which sandbox.** Only a running team leader's, by the rule `/r/leaders` uses. A stopped sandbox, one that leads no team, an unknown name and a malformed one all get the same 404, so the answer does not say whether a sandbox exists. The name and the ticket id are checked for length and characters before any lookup. A ticket of another sandbox is the same 404.
+- **What it shows.** What the Mac's board shows for that one sandbox: columns, cards with their marks, the linked thread and its state, age, and for a ticket its title, description, history and the names, sizes and kinds of its files.
+- **What it cannot do.** It cannot add, move, edit, delete or send a ticket. It cannot read a file's content: there is no file route, and no file id, no on-disk name and no path leaves the Mac. It shows no other sandbox and no "all sandboxes" view. It has no write permission field at all.
+- **Text is data.** Ticket titles and descriptions are the person's words; thread titles and reports are agent text. They travel as JSON strings, bounded (title 160 characters, description 8,000, file name 120, history 60 lines of 200), and the page escapes them. A word that starts like an absolute path (`/x`, `~/x`, `C:\x`) is replaced by `[path]`, so a path of the Mac or of the sandbox does not leave in free text. This is a filter on the shape of a word, not a guarantee: a path written some other way in a ticket is the person's own text, shown to their own paired phone.
+- **Not journaled, not logged.** Reads are not actions, so the journal has nothing for them, and no log line names a ticket's title or text.
+
 ### The Tailscale node
 
 Remote access reaches the Mac through `sbxw-tailnet`, a small program shipped beside `sbxw` and started by the daemon while remote access is on. It joins your tailnet as its own machine, named `sbxw`, and serves only HTTPS on that machine's port 443, forwarded to the daemon's remote listener on loopback. It is not the Mac's own Tailscale: nothing else on the Mac is reachable through it, and nothing needs installing besides sbxw. Details: [tailnet/README.md](../tailnet/README.md).
