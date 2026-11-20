@@ -2275,6 +2275,12 @@ mod tests {
         let w = world();
         let e = plan(&w, &[change(json!({"kind": "setting", "key": "web_addr", "value": "0.0.0.0:80"}))]).unwrap_err();
         assert!(e.contains("not a setting Jarvis may change"), "{e}");
+        // Remote access is the person's own switch: Jarvis can neither move
+        // its listener nor turn it on (it is state, not a setting).
+        for key in ["remote_addr", "remote_access", "remote.enabled"] {
+            let e = plan(&w, &[change(json!({"kind": "setting", "key": key, "value": "0.0.0.0:7683"}))]).unwrap_err();
+            assert!(e.contains("not a setting Jarvis may change"), "{key}: {e}");
+        }
         assert!(plan(&w, &[change(json!({"kind": "setting", "key": "voice.tts_voice", "value": "pierre"}))]).unwrap_err().contains("unknown tts_voice"));
         assert!(plan(&w, &[change(json!({"kind": "setting", "key": "battery_warn_below", "value": 300}))]).is_err());
         assert!(plan(&w, &[change(json!({"kind": "setting", "key": "claude_model", "value": "gpt"}))]).is_err());

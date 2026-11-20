@@ -174,6 +174,13 @@ impl Daemon {
             .context("the daemon's answer was not JSON")
     }
 
+    pub fn delete(&self, path: &str) -> Result<Value> {
+        let url = format!("{}{path}", self.base);
+        self.send(|| ureq::delete(&url), None)?
+            .into_json()
+            .context("the daemon's answer was not JSON")
+    }
+
     /// The address a browser signs in at: `base` (the page's address) with
     /// the token, once the daemon proved it knows it. `None` when no daemon
     /// of ours answers.
