@@ -78,6 +78,17 @@
     <div class="term-color-panel" id="term-color-panel" hidden></div>
   </div>
 
+  <!-- The Kanban: the tickets of a sandbox, or of all, in five columns.
+       Opens on the focused pane's sandbox. See /js/kanban.js. -->
+  <button type="button" class="kanban-btn" id="btn-kanban" title="Kanban: the tickets planned, in progress, in test, ready to merge and merged">
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="1.5" y="2" width="3.6" height="11" rx="1" stroke="currentColor" stroke-width="1.3"/>
+      <rect x="6.2" y="2" width="3.6" height="7.5" rx="1" stroke="currentColor" stroke-width="1.3"/>
+      <rect x="10.9" y="2" width="3.6" height="9.5" rx="1" stroke="currentColor" stroke-width="1.3"/>
+    </svg>
+    <span>Kanban</span>
+  </button>
+
   <!-- sbxw expects exactly one browser tab talking to it — a second one
        shares the same two runtime worker threads and the same PTY per
        sandbox instead of getting its own, which is what makes everything
@@ -554,7 +565,73 @@
       </div>
       <div class="modal-foot">
         <span class="wt-updated" id="wt-updated"></span>
+        <button class="btn-cancel" id="wt-kanban" title="The tickets of this sandbox in five columns">Open the Kanban</button>
         <button class="btn-cancel" id="wt-close">Close</button>
+      </div>
+  </dialog>
+
+  <!-- ── Kanban ──
+       The tickets of a sandbox (or of all) in the five columns the daemon
+       draws them in, each scrolling on its own; a card opens its ticket in a
+       panel over the board. Filled by /js/kanban.js; it computes nothing of
+       the columns, marks or permissions. -->
+  <dialog class="modal kb-modal" id="kb-overlay" aria-labelledby="kb-title" closedby="any">
+      <div class="modal-head kb-head">
+        <h2 class="modal-title" id="kb-title">Kanban</h2>
+        <label class="kb-scope-label"><span>in</span>
+          <select id="kb-scope" class="kb-scope" aria-label="Whose tickets"></select></label>
+        <span class="kb-counts" id="kb-counts"></span>
+        <span class="spacer"></span>
+        <button type="button" class="btn-create" id="kb-new" title="A new ticket: title, description, priority and files">＋ New ticket</button>
+        <button class="modal-close" id="kb-x" aria-label="Close">✕</button>
+      </div>
+      <p class="create-error hidden kb-note" id="kb-note" role="status"></p>
+      <div class="kb-wrap">
+        <div class="kb-body" id="kb-body"></div>
+        <aside class="kb-panel" id="kb-panel" role="region" aria-labelledby="kb-p-title" hidden></aside>
+      </div>
+  </dialog>
+
+  <!-- ── New ticket ──
+       No light dismiss: Escape closes it only while it is empty. Save creates
+       the ticket, then attaches each file in turn (/js/kanban.js). -->
+  <dialog class="modal kb-form" id="kb-form" aria-labelledby="kbf-heading">
+      <div class="modal-head">
+        <h2 class="modal-title" id="kbf-heading">New ticket</h2>
+        <button class="modal-close" id="kbf-x" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <label class="kbf-row"><span class="kbf-label">Sandbox</span>
+          <select id="kbf-sandbox"></select></label>
+        <label class="kbf-row"><span class="kbf-label">Title</span>
+          <input id="kbf-title" type="text" autocomplete="off" spellcheck="true" placeholder="What should be done"></label>
+        <label class="kbf-row kbf-col"><span class="kbf-label">Description</span>
+          <textarea id="kbf-desc" rows="7" placeholder="What it is for, what done looks like. Plain text."></textarea></label>
+        <label class="kbf-row"><span class="kbf-label">Priority</span>
+          <select id="kbf-prio">
+            <option value="none">No priority</option>
+            <option value="p1">P1</option>
+            <option value="p2">P2</option>
+            <option value="p3">P3</option>
+          </select></label>
+        <div class="kbf-row kbf-files-head"><span class="kbf-label">Files</span>
+          <span class="kbf-count" id="kbf-count"></span>
+          <span class="spacer"></span>
+          <label class="btn-cancel kbf-attach">Attach…<input type="file" id="kbf-input" multiple hidden></label></div>
+        <ul class="kbf-files" id="kbf-files"></ul>
+        <p class="kbf-drop">Or drop files on this dialog.</p>
+        <p class="kbf-limits" id="kbf-limits"></p>
+        <p class="create-error hidden kbf-notice" id="kbf-notice" role="status"></p>
+        <div class="kbf-ack" id="kbf-ack-row" hidden>
+          <p class="kbf-ask" id="kbf-ask"></p>
+          <label class="thread-check"><input type="checkbox" id="kbf-ack">
+            <span>I have looked at these files and want to attach them</span></label>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="create-error hidden kbf-error" id="kbf-error" role="alert"></span>
+        <button class="btn-cancel" id="kbf-cancel">Cancel</button>
+        <button class="btn-create" id="kbf-save">Save</button>
       </div>
   </dialog>
 
