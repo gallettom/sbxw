@@ -744,7 +744,7 @@ mod tests {
             let mut m = att.clone();
             let at = rng.next() as usize % m.len();
             m[at] = rng.next() as u8;
-            if rng.next() % 2 == 0 {
+            if rng.next().is_multiple_of(2) {
                 m.truncate(rng.next() as usize % m.len());
             }
             let r = verify_registration(RP, &ch, &id, &cd, &m);

@@ -147,8 +147,6 @@ mod tests {
         assert!(ON_QUESTION.contains("Face ID at each action") && ON_QUESTION.ends_with("[y/N] "));
         assert!(!ask(ON_QUESTION, true, &mut "\n".as_bytes()).unwrap());
         assert!(ask(ON_QUESTION, false, &mut "y\n".as_bytes()).is_err(), "no terminal, no yes");
-        for t in [ON_QUESTION] {
-            assert!(!t.contains('\u{2014}'), "no em dash");
-        }
+        assert!(!ON_QUESTION.contains('\u{2014}'), "no em dash");
     }
 }

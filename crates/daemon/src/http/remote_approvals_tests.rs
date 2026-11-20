@@ -173,10 +173,10 @@ fn plan_state(w: &World, id: &str) -> PlanState {
 }
 
 /// The detail's digest, then a challenge for `kind` on `target`.
-async fn challenge(w: &World, p: &Phone, kind: &str, target: &str, detail: &str, option: Option<&str>) -> Result<Vec<u8>, Reply> {
+async fn challenge(w: &World, p: &Phone, kind: &str, target: &str, detail: &str, option: Option<&str>) -> Result<Vec<u8>, Box<Reply>> {
     let d = call(&w.router, "GET", detail, Some(&p.token), json!({})).await;
     if d.status != StatusCode::OK {
-        return Err(d);
+        return Err(Box::new(d));
     }
     let mut body = json!({ "kind": kind, "target": target, "digest": d.json()["digest"] });
     if let Some(o) = option {
@@ -184,7 +184,7 @@ async fn challenge(w: &World, p: &Phone, kind: &str, target: &str, detail: &str,
     }
     let r = call(&w.router, "POST", "/r/approvals/challenge", Some(&p.token), body).await;
     if r.status != StatusCode::OK {
-        return Err(r);
+        return Err(Box::new(r));
     }
     let pk = &r.json()["public_key"];
     assert_eq!(pk["rpId"], TN);
