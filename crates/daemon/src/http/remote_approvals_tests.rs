@@ -81,6 +81,10 @@ impl Reply {
 }
 
 async fn send(router: &Router, r: Request<Body>) -> Reply {
+    // Tests running at the same time on other threads (no subscriber there)
+    // can leave a log site's interest cached as "never"; the log test needs
+    // every site live on its thread, so look again before each request.
+    tracing::callsite::rebuild_interest_cache();
     let res = router.clone().oneshot(r).await.unwrap();
     let status = res.status();
     let headers = res.headers().clone();
@@ -846,18 +850,43 @@ async fn the_journal_and_logs_carry_no_goal_and_no_diff() {
     let _ = approve_plan(&w, &mut p, &pending_plan(&w, "other", "GOAL-TEXT-PINEAPPLE again"), &Twist { bad_signature: true, ..Twist::default() }).await;
     let journal = std::fs::read_to_string(w.app.remote_dir_for_tests().join("journal.jsonl")).unwrap();
     assert!(journal.contains(&format!("\"target\":\"{id}\"")), "{journal}");
+    assert!(journal.contains("\"kind\":\"plan_refuse\"") && journal.contains("\"kind\":\"passkey_failed\""), "{journal}");
+    // What this thread captured (log sites muted by other tests' threads are
+    // covered by `every_level_2_log_line_names_a_device_and_a_kind_only`).
     let logged = logs.0.lock().unwrap().clone();
-    assert!(logged.contains(&format!("device {}: plan_refuse", p.id)), "the capture works: {logged}");
-    assert!(logged.contains(&format!("device {}: passkey_failed", p.id)));
     for leak in ["PINEAPPLE", "SECRET_DIFF_LINE", "b.rs", "Merge alpha please", &p.token[..]] {
         assert!(!journal.contains(leak), "{leak} in the journal:\n{journal}");
         assert!(!logged.contains(leak), "{leak} in the logs:\n{logged}");
     }
-    // Info lines from level 2 name a device and a kind, nothing else.
-    for l in logged.lines().filter(|l| l.starts_with("INFO") && l.contains("remote access: device")) {
-        let msg = l.split("remote access: device ").nth(1).unwrap();
-        assert!(msg.split(':').count() <= 2 && !msg.contains('\''), "{l}");
+}
+
+/// Every info and warn line of level 2, as written in the source: a device
+/// id and a kind, or a fixed sentence. A new line fails this test until it is
+/// added here, so a reviewer sees each one.
+#[test]
+fn every_level_2_log_line_names_a_device_and_a_kind_only() {
+    let src = include_str!("../svc/remote_approvals.rs");
+    let found: Vec<&str> = src.lines().map(str::trim).filter(|l| l.contains("tracing::info!(") || l.contains("tracing::warn!(")).collect();
+    let allowed = [
+        r#"tracing::warn!("remote access: passkeys.json unreadable ({e}); no passkey is kept");"#,
+        r#"tracing::warn!("remote access: cannot write passkeys.json: {e}");"#,
+        r#"tracing::info!("remote access: approving from the phone turned on");"#,
+        r#"tracing::info!("remote access: approving from the phone turned off");"#,
+        r#"Ok(_) => tracing::info!("remote access: device {device_id}: passkey registration granted on the Mac"),"#,
+        r#"tracing::info!("remote access: device {device_id}: passkey request refused after wrong digits");"#,
+        r#"tracing::info!("remote access: device {device_id}: passkey revoked on the Mac");"#,
+        r#"tracing::info!("remote access: device {}: passkey requested", d.id);"#,
+        r#"tracing::info!("remote access: device {}: passkey_registered", d.id);"#,
+        r#"tracing::info!("remote access: device {}: passkey_failed", d.id);"#,
+        r#"tracing::warn!("remote access: device {}: its passkey's counter went back, a sign it was copied; the passkey is dropped", d.id);"#,
+        r#"tracing::info!("remote access: device {}: {code}", d.id);"#,
+    ];
+    for l in &found {
+        assert!(allowed.contains(l), "a log line not reviewed for level 2: {l}");
     }
+    assert_eq!(found.len(), 13, "{found:#?}");
+    // `{code}` is a journal kind's name.
+    assert!(src.contains("let code = serde_json::to_value(kind)"));
 }
 
 #[tokio::test]
