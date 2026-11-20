@@ -324,6 +324,33 @@ web UI) refuses a pending plan and closes approved ones: their threads keep
 running, but their reports no longer reach the main session. Restarting the
 lead's session also removes the mark.
 
+### What survives a daemon restart
+
+Lead mode is kept in the sandbox's record (`lead`: when you turned it on and
+the Claude Code session id of the main session then). After a daemon restart,
+or a main terminal closed and opened again, the sandbox leads again, without a
+click and without anything typed, as soon as both hold:
+
+- its main terminal is open in sbxw again, and
+- the session that terminal shows (the newest live session with no thread) is
+  the recorded one, as its next hook post says.
+
+The desktop, the web UI and the phone then get the `Lead` event and show the
+leader again. It does not come back, and the record is dropped, when:
+
+- you ended lead mode (Team off);
+- the main terminal shows another conversation (a new `claude` started in
+  its place before it was found again): turn the team on again in that one;
+- the sandbox was stopped from sbxw, or removed;
+- the session was never known (no hook had reported when you turned it on, and
+  none did before the restart);
+- it was not found again within 7 days of its last binding.
+
+Once bound, the terminal decides, as before: it leads while it is open,
+whatever conversation runs in it. A record written by an older sbxw
+has no `lead` field and loads as no leader; a leader turned on before this
+change needs Team on once more.
+
 ### The team's timeline
 
 Each plan is a **team** (its sandbox, lead and threads), and sbxw keeps its
@@ -391,6 +418,14 @@ sent before the daemon had this version are not recovered.
   click.** That's Claude Code's own messaging, and the sandbox is the boundary:
   any session in it can already write to any other. Nothing reaches another
   sandbox.
+- **A lead is bound again only to its own sandbox's session.** A hook post is
+  proven to come from a sandbox by that sandbox's token; the session id in it
+  is not proven, the agent writes it. So an agent in another sandbox can never
+  make a sandbox lead, but an agent inside a sandbox you once put in lead mode
+  could keep or regain that sandbox's lead after a restart by sending its old
+  session id. That stays within what you allowed: before this, the lead was
+  the terminal, whatever ran in it. A leader's main session can be read from a
+  paired phone and typed into when idle; end lead mode to stop that.
 - A plan id is 128 random bits, seen only by the proposing session and the
   browser. A thread report carries no id and could be forged by another session
   in the same sandbox, but it only changes a label, never what runs.
