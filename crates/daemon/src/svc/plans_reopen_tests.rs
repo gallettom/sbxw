@@ -61,7 +61,7 @@ async fn led(app: &Arc<App>, dir: &Path, name: &str) -> SandboxRef {
 /// A post to the agent listener with `sb`'s token: what the relay server of
 /// any session in `sb` sends, whoever wrote the body.
 async fn post(app: &Arc<App>, sb: &str, path: &str, body: Value) -> (StatusCode, Value) {
-    let token = app.store.token(&SandboxRef::parse(sb).unwrap()).unwrap();
+    let token = app.store.token(SandboxRef::parse(sb).unwrap()).unwrap();
     let req = Request::builder()
         .method("POST")
         .uri(path)

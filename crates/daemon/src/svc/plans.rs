@@ -766,7 +766,7 @@ impl App {
     /// id stays the capability. `id` names the plan in the refusal.
     pub fn require_leading(&self, sandbox: &SandboxRef, id: Option<&str>) -> Result<(), String> {
         let me = sandbox.to_string();
-        if self.leading().iter().any(|s| *s == me) {
+        if self.leading().contains(&me) {
             return Ok(());
         }
         // Another sandbox's id reads as not found, as before the gate.
