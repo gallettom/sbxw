@@ -73,7 +73,7 @@ fn a_long_branch_shortens_in_its_middle_then_hides() {
 const T: &str = "fixtures/shell/statusbar-git.json";
 
 fn rig(w: f32) -> rune::Runtime<App> {
-    let a = App::new(Args { fixture: Some(format!("{}/{T}", env!("CARGO_MANIFEST_DIR")).into()), ..Args::default() });
+    let a = App::new(Args { fixture: Some(format!("{}/{T}", env!("CARGO_MANIFEST_DIR"))), ..Args::default() });
     rune::Runtime::new(a, view, (w, 480.0), rune::Env::new(true, 1.0))
 }
 
