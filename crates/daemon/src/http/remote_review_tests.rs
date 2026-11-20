@@ -436,8 +436,10 @@ async fn checked_a_message_cannot_smuggle_keys() {
     assert_eq!(got, b"\x1b[200~hello END\x1b[201~\r", "{got:?}");
 }
 
-/// A thread session of the leader's sandbox, and a sandbox that stopped
-/// leading, are out of reach of message, answer, interrupt and history.
+/// A thread session of the leader's sandbox is out of reach of message,
+/// answer, interrupt and history. A sandbox that stops leading stays
+/// reachable as a sandbox with no team (plan phone-sandboxes, which changed
+/// decision Q7: it was out of reach before).
 #[tokio::test]
 async fn checked_only_the_leaders_main_session_is_reachable() {
     let (d, app) = on();
@@ -451,14 +453,13 @@ async fn checked_only_the_leaders_main_session_is_reachable() {
         let r = send(&router, b.body(Body::from("{}")).unwrap()).await;
         assert_eq!(r.status, StatusCode::NOT_FOUND, "{name}: {}", r.text());
     }
-    // Lead mode ends: the same sandbox is gone from the phone at once.
-    app.leads.lock().unwrap().remove(&sb);
-    for (m, p) in [("POST", "/r/leaders/lead1/message"), ("POST", "/r/leaders/lead1/interrupt"), ("POST", "/r/leaders/lead1/answer"), ("GET", "/r/leaders/lead1/history")] {
-        let r = call(&router, m, p, PHONE, Some(&token), json!({"text": "hi", "indices": [1]})).await;
-        assert!(r.status == StatusCode::NOT_FOUND || r.status == StatusCode::UNPROCESSABLE_ENTITY, "{m} {p}: {}", r.status);
-    }
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(std::fs::read(&file).unwrap_or_default().is_empty(), "nothing typed");
+    // Lead mode ends: the same sandbox moves to the sandboxes at once.
+    app.leads.lock().unwrap().remove(&sb);
+    let r = call(&router, "GET", "/r/leaders", PHONE, Some(&token), json!({})).await;
+    assert_eq!(r.json()["leaders"][0]["kind"], "sandbox", "{}", r.text());
+    assert_eq!(call(&router, "GET", "/r/leaders/lead1/history", PHONE, Some(&token), json!({})).await.status, StatusCode::OK);
 }
 
 // ── F6 ───────────────────────────────────────────────────────────────────
