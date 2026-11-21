@@ -996,17 +996,19 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 8px max(12px, var(--safe-r)) 0 max(12px, var(--safe-l));
+  min-width: 0;
 }
+/* Inside the composer the row follows the field's width at every size. */
+.rc-composer .rc-ctl { max-width: none; margin: 0; width: auto; }
 .rc-ctl[hidden] { display: none; }
 .rc-ctl-model { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .rc-ctl-label { flex: none; font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-muted); }
 .rc-select {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 44px;
-  padding: 0 10px;
-  border-radius: 11px;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: 9px;
   border: 1px solid var(--c-hair);
   background: var(--c-surface);
   color: var(--c-text-bright);
