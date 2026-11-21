@@ -1071,3 +1071,25 @@ async fn a_face_id_request_is_journaled_and_carries_nothing_else() {
     assert!(!text.contains(&rid), "{line}");
     let _ = digits;
 }
+
+/// The page builds both links with `encodeURIComponent`, so a real sbx id
+/// (`network:85TMuE6`) reaches the listener as `network%3A85TMuE6`.
+#[tokio::test]
+async fn a_network_request_opens_and_answers_by_the_pages_encoded_link() {
+    let w = world();
+    let mut p = enrolled(&w, "phone").await;
+    w.sbx.lock().unwrap().approvals = vec![network_request("network:85TMuE6", "api.github.com:443", json!([{ "id": "allow", "label": "Allow" }, { "id": "dismiss", "label": "Dismiss" }]))];
+    let list = call(&w.router, "GET", "/r/network", Some(&p.token), json!({})).await.json();
+    assert_eq!(list["requests"][0]["id"], "network:85TMuE6");
+    let d = call(&w.router, "GET", "/r/network/network%3A85TMuE6", Some(&p.token), json!({})).await;
+    assert_eq!(d.status, StatusCode::OK, "{}", d.text());
+    let ch = challenge(&w, &p, "network_respond", "network:85TMuE6", "/r/network/network%3a85TMuE6", Some("dismiss")).await.unwrap();
+    let a = assertion(&mut p, &ch, &Twist::default());
+    let r = act(&w, &p, "/r/network/network%3A85TMuE6/respond", a, Some("dismiss")).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(w.fake.log().iter().any(|c| c == "policy approval respond network:85TMuE6 --option dismiss"), "{:?}", w.fake.log());
+    // Any other encoded byte is still refused, as is an id with one decoded.
+    for bad in ["/r/network/network%2F85TMuE6", "/r/network/network%3A..%2Fx", "/r/network/network%3A85TMuE6%20", "/r/network/%6Eetwork:85TMuE6", "/r/network/network%253A85TMuE6", "/r/network/network%3A85TMuE6%"] {
+        assert_eq!(call(&w.router, "GET", bad, Some(&p.token), json!({})).await.status, StatusCode::NOT_FOUND, "{bad}");
+    }
+}

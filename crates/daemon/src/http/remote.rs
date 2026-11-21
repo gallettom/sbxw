@@ -193,9 +193,12 @@ fn source(h: &HeaderMap) -> String {
 }
 
 /// A path this listener could be tricked by: an encoded byte, a dot
-/// segment, an empty segment. None of its routes needs one.
+/// segment, an empty segment. None of its routes needs one, except the
+/// encoded colon: the page sends a network id (`network:…`) through
+/// `encodeURIComponent`, so `%3A` alone is let through (the id is checked again).
 fn tricky(path: &str) -> bool {
-    path.contains('%') || path.contains("//") || path.split('/').any(|s| s == "." || s == "..") || path.contains('\\')
+    let encoded = path.match_indices('%').any(|(i, _)| !matches!(path.get(i + 1..i + 3), Some("3A" | "3a")));
+    encoded || path.contains("//") || path.split('/').any(|s| s == "." || s == "..") || path.contains('\\')
 }
 
 pub async fn remote_guard(State(app): S, mut req: Request, next: Next) -> Response {
