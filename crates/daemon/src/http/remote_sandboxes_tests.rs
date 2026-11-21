@@ -50,7 +50,7 @@ fn entry(list: &Value, name: &str) -> Option<Value> {
 /// can only come from resolving the name.
 fn sandbox_routes() -> Vec<(&'static str, &'static str)> {
     let r: Vec<_> = ROUTES.iter().copied().filter(|(_, p)| p.starts_with("/r/leaders/:sandbox")).collect();
-    assert_eq!(r.len(), 10, "history, message, answer, interrupt, model, lead, upload, upload drop, kanban, kanban ticket: {r:?}");
+    assert_eq!(r.len(), 11, "history, message, answer, interrupt, model, lead, upload, upload drop, kanban, kanban ticket, kanban create: {r:?}");
     r
 }
 
@@ -76,6 +76,8 @@ async fn hit(router: &Router, token: &str, method: &str, path: &str, name: &str)
         json!({"id": "x"})
     } else if p.ends_with("/lead") {
         json!({"on": true})
+    } else if p.ends_with("/kanban") {
+        json!({"title": "x"})
     } else {
         json!({})
     };

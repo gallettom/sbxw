@@ -66,6 +66,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/r/leaders/:sandbox/upload/:id"),
     ("GET", "/r/leaders/:sandbox/kanban"),
     ("GET", "/r/leaders/:sandbox/kanban/:ticket"),
+    ("POST", "/r/leaders/:sandbox/kanban"),
     // Level 2 (API-level2.md): approving with a passkey.
     ("GET", "/r/approvals"),
     ("POST", "/r/passkey/start"),
@@ -119,7 +120,7 @@ pub fn remote_router(app: Arc<App>) -> Router {
         // (25 MiB); no extractor buffers it.
         .route("/r/leaders/:sandbox/upload", post(upload))
         .route("/r/leaders/:sandbox/upload/:id", delete(upload_drop))
-        .route("/r/leaders/:sandbox/kanban", get(super::remote_kanban::board))
+        .route("/r/leaders/:sandbox/kanban", get(super::remote_kanban::board).post(super::remote_kanban::create).layer(DefaultBodyLimit::max(super::remote_kanban::BODY_MAX)))
         .route("/r/leaders/:sandbox/kanban/:ticket", get(super::remote_kanban::ticket))
         // Level 2 (API-level2.md): approving with a passkey.
         .route("/r/approvals", get(l2::approvals))
@@ -154,7 +155,7 @@ async fn not_found() -> ApiError {
     ApiError::not_found("not found")
 }
 
-fn refusal(r: Refusal) -> Response {
+pub(super) fn refusal(r: Refusal) -> Response {
     match r {
         Refusal::NotFound => ApiError::not_found("not found").into_response(),
         Refusal::Reason(r) => {

@@ -389,6 +389,8 @@ function rcClient(fetchImpl, hooks = {}) {
     models: () => call('GET', '/r/models'),
     setModel: (s, id) => call('POST', `${at(s)}/model`, { id }),
     setLead: (s, on) => call('POST', `${at(s)}/lead`, { on: !!on }),
+    // A new ticket on a leader's board: text only, it lands in Planned.
+    createTicket: (s, title, description) => call('POST', `${at(s)}/kanban`, { title, description }),
     transcribe: pcm => call('POST', '/r/voice/transcribe', undefined, pcm),
     // For the level-2 routes (rcL2Client): the same call, nothing more.
     get: path => call('GET', path),

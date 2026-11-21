@@ -194,6 +194,21 @@
     </div>
     <!-- The leader's board, read only: drawn from the route's answer. -->
     <div id="board" class="rc-board" hidden>
+      <div id="kb-newbar" class="rc-kb-newbar">
+        <button id="kb-new" class="rc-btn rc-small" type="button">New ticket</button>
+      </div>
+      <!-- A new ticket: text only, lands in Planned. The Mac masks it as it does a message. -->
+      <form id="kb-form" class="rc-kb-form" hidden novalidate>
+        <label class="rc-kb-flabel" for="kb-title">Title</label>
+        <input id="kb-title" class="rc-kb-input" type="text" maxlength="160" autocomplete="off" required>
+        <label class="rc-kb-flabel" for="kb-desc">Description</label>
+        <textarea id="kb-desc" class="rc-kb-input rc-kb-area" rows="4" maxlength="8000" autocomplete="off"></textarea>
+        <p id="kb-ferr" class="rc-kb-ferr" role="alert" hidden></p>
+        <div class="rc-held-row">
+          <button id="kb-cancel" class="rc-btn rc-quiet rc-small" type="button">Cancel</button>
+          <button id="kb-create" class="rc-btn rc-primary rc-small" type="submit">Create</button>
+        </div>
+      </form>
       <div id="kb-pick" class="rc-kb-pick" role="tablist" aria-label="Columns"></div>
       <p id="kb-status" class="rc-kb-status" role="status" hidden></p>
       <div id="kb-lanes" class="rc-kb-lanes"></div>

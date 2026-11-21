@@ -1017,3 +1017,15 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-select:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .rc-ctl-lead { flex: none; }
 @media (min-width: 640px) { .rc-ctl { max-width: 420px; margin-left: auto; margin-right: auto; width: calc(100% - 24px); } }
+
+/* ── New ticket (Kanban) ── */
+.rc-kb-newbar { display: flex; justify-content: flex-end; margin: 8px max(12px, var(--safe-r)) 0 max(12px, var(--safe-l)); }
+.rc-kb-newbar[hidden] { display: none; }
+.rc-kb-form { display: flex; flex-direction: column; gap: 6px; margin: 8px max(12px, var(--safe-r)) 8px max(12px, var(--safe-l)); padding: 12px; border: 1px solid var(--c-hair); border-radius: 12px; background: var(--c-surface); }
+.rc-kb-form[hidden] { display: none; }
+.rc-kb-flabel { font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-muted); }
+.rc-kb-input { width: 100%; box-sizing: border-box; min-height: 44px; padding: 8px 10px; border-radius: 11px; border: 1px solid var(--c-hair); background: var(--c-bg, var(--c-surface)); color: var(--c-text-bright); font: inherit; font-size: 16px; /* iOS zooms a smaller field */ }
+.rc-kb-area { resize: vertical; min-height: 96px; }
+.rc-kb-input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.rc-kb-ferr { margin: 0; font-size: var(--fs-sm); color: var(--c-red, #f85149); }
+.rc-kb-ferr[hidden] { display: none; }
