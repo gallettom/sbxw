@@ -388,6 +388,8 @@ function rcClient(fetchImpl, hooks = {}) {
     interrupt: s => call('POST', `${at(s)}/interrupt`, {}),
     models: () => call('GET', '/r/models'),
     setModel: (s, id) => call('POST', `${at(s)}/model`, { id }),
+    skills: () => call('GET', '/r/skills'),
+    runSkill: (s, name, args) => call('POST', `${at(s)}/skill`, { name, args }),
     setLead: (s, on) => call('POST', `${at(s)}/lead`, { on: !!on }),
     // A new ticket on a leader's board: text only, it lands in Planned.
     createTicket: (s, title, description) => call('POST', `${at(s)}/kanban`, { title, description }),
@@ -419,6 +421,12 @@ function rcModels(data) {
   return list
     .filter(m => m && typeof m.id === 'string' && m.id)
     .map(m => ({ id: m.id, label: typeof m.label === 'string' && m.label ? m.label : m.id }));
+}
+
+// The skill names the page offers: the daemon's closed list, names only.
+function rcSkills(data) {
+  const list = Array.isArray(data?.skills) ? data.skills : [];
+  return list.filter(n => typeof n === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(n));
 }
 
 // The id the select shows for a session: the one it reported, when the list
