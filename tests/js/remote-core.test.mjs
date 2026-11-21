@@ -14,7 +14,7 @@ const pageSrc = read('../../assets/remote/remote.js');
 const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
-const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcAnswerPick', 'rcAnswers', 'rcAnswerFail', 'rcActivity', 'rcPairCode',
+const NAMES = ['rcAgentHtml', 'RC_PILL_TONES', 'rcPills', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcAnswerPick', 'rcAnswers', 'rcAnswerFail', 'rcActivity', 'rcPairCode',
   'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
   'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
@@ -870,4 +870,27 @@ test('the model list keeps only {id, label} and the select follows the reported 
   assert.match(rcCtlGate({ state: 'working', kind: 'sandbox' }, 'model'), /working/);
   assert.equal(rcCtlGate({ state: 'working', kind: 'leader' }, 'lead'), '', 'ending lead needs no idle prompt');
   assert.equal(rcCtlGate({ state: 'idle', kind: 'sandbox' }, 'lead'), '');
+});
+
+// ── Status labels ──
+test('the pill word table equals the built-in one of crates/core/src/emphasis.rs', () => {
+  const rs = read('../../crates/core/src/emphasis.rs');
+  const body = /const BUILT_IN[^=]*=\s*&\[([\s\S]*?)\n\];/.exec(rs)[1];
+  const want = {};
+  for (const m of body.matchAll(/\("([^"]+)",\s*"([^"]+)",\s*&\[([^\]]*)\]/g)) {
+    want[m[1]] = m[2];
+    for (const a of m[3].matchAll(/"([^"]+)"/g)) want[a[1]] = m[2];
+  }
+  assert.ok(Object.keys(want).length >= 20);
+  assert.deepEqual(plain(rc.RC_PILL_TONES), want);
+});
+test('a status label is a pill with its tone and detail; unknown words and code stay plain', () => {
+  assert.match(rc.rcAgentHtml('Build [[Done]] ok'), /<span class="rc-pill rc-pill-green">Done<\/span>/);
+  assert.match(rc.rcAgentHtml('[[Failed: 3 tests]]'), /rc-pill-red">Failed<span class="rc-pill-detail"> ?3 tests<\/span>/);
+  assert.match(rc.rcAgentHtml('[[needs  you]]'), /rc-pill-amber/);
+  assert.doesNotMatch(rc.rcAgentHtml('[[Banana]] and [[x]]'), /rc-pill/);
+  assert.doesNotMatch(rc.rcAgentHtml('`[[Done]]`'), /rc-pill/);
+  assert.doesNotMatch(rc.rcAgentHtml('```\n[[Done]]\n```'), /rc-pill/);
+  const hostile = rc.rcAgentHtml('[[Done: <img src=x onerror=alert(1)>]]');
+  assertSafe(hostile, 'pill detail');
 });

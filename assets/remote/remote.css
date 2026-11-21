@@ -1033,3 +1033,15 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-kb-input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .rc-kb-ferr { margin: 0; font-size: var(--fs-sm); color: var(--c-red, #f85149); }
 .rc-kb-ferr[hidden] { display: none; }
+
+/* ── Status labels in agent text: [[Done]] as a pill, tone by word ── */
+.rc-pill { display: inline-block; padding: 0 7px; border-radius: 999px; border: 1px solid currentColor; font-size: 0.86em; font-weight: 600; line-height: 1.5; white-space: nowrap; background: color-mix(in srgb, currentColor 12%, transparent); }
+.rc-pill-detail { font-weight: 400; margin-left: 5px; }
+.rc-pill-detail::before { content: ":"; margin-right: 3px; opacity: 0.7; }
+.rc-pill-green { color: var(--c-green); }
+.rc-pill-red { color: var(--c-red); }
+.rc-pill-amber { color: var(--c-amber); }
+.rc-pill-blue { color: var(--c-blue); }
+.rc-pill-cyan { color: #39c5cf; }
+.rc-pill-purple { color: #bc8cff; }
+.rc-pill-danger { color: #ff7b72; background: var(--c-red-tint); }
