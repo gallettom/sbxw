@@ -998,6 +998,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   gap: 12px;
   min-width: 0;
 }
+/* Inside the composer the row follows the field's width at every size. */
+.rc-composer .rc-ctl { max-width: none; margin: 0; width: auto; }
 .rc-ctl[hidden] { display: none; }
 .rc-ctl-model { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .rc-ctl-label { flex: none; font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-muted); }
@@ -1016,3 +1018,4 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-select:disabled { opacity: 0.6; }
 .rc-select:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .rc-ctl-lead { flex: none; }
+@media (min-width: 640px) { .rc-ctl { max-width: 420px; margin-left: auto; margin-right: auto; width: calc(100% - 24px); } }
