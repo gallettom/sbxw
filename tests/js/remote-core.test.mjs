@@ -15,13 +15,13 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcSendNote', 'RC_QUEUED_TEXT', 'rcGroups', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
   'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
   'rcL2Fail', 'RC_L2_REASON', 'rcActPath', 'rcActLine', 'rcActDone', 'rcL2Client',
   'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback', 'rcMarked', 'rcActParts',
-  'RC_DICT_TEXT', 'rcSpeechEnd', 'rcSpeechRestart', 'RC_SPEECH_RESTARTS', 'rcSpeechRound', 'rcFinalSegments', 'rcTail', 'rcRecMime', 'rcClipCheck', 'rcSilentPcm', 'rcTranscribed'];
+  'RC_DICT_TEXT', 'rcSpeechEnd', 'rcSpeechRestart', 'RC_SPEECH_RESTARTS', 'rcSpeechRound', 'rcFinalSegments', 'rcTail', 'rcRecMime', 'rcClipCheck', 'rcSilentPcm', 'rcTranscribed', 'rcSendNote', 'RC_QUEUED_TEXT'];
 const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
