@@ -196,6 +196,11 @@ async fn team_note(State(app): S, Agent(me): Agent, Json(b): Json<TeamNoteBody>)
 /// `read_team_notes`: the notes for the caller not handed yet.
 async fn team_notes(State(app): S, Agent(me): Agent, Json(b): Json<Body>) -> ApiResult {
     let thread = thread_name(&b.thread)?;
+    // The lead's side only: a thread reads its notes while Team is off, as
+    // it goes on working.
+    if thread.is_none() {
+        app.require_leading(&me, None).map_err(ApiError::bad)?;
+    }
     let notes = app.team_notes_read(&me, thread.as_ref()).map_err(ApiError::bad)?;
     Ok(ok_with(json!({ "notes": notes })))
 }

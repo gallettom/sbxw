@@ -6,7 +6,7 @@ use crate::bus::{Event, ThreadClosed};
 use crate::git;
 use crate::store::{write_atomic, LeadRecord, Store, LEAD_UNBOUND_MAX_MS};
 use sbxw_core::agents::SessionInfo;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use sbxw_core::messages;
 use sbxw_core::plans::{DistillItem, MergeResult, MergeState, Plan, PlanState, PlanThread, ThreadState, Variant};
 use sbxw_sbx::scripts::Team;
@@ -215,6 +215,26 @@ impl App {
         let plan = self.plans.lock().unwrap().propose_merge(id, &sandbox.to_string(), order, &note, distillate, now_ms())?;
         tracing::info!("plans: '{sandbox}' proposed merging {id}");
         Ok(self.plan_changed(plan))
+    }
+
+    /// The lead's `propose_merge`: [`App::plan_propose_merge`], refused for
+    /// a thread git shows is in its base already ([`App::merged_outside`]):
+    /// sbxw would merge nothing, and says so rather than wait for it.
+    pub async fn plan_propose_merge_checked(&self, id: &str, sandbox: &SandboxRef, order: Vec<String>, note: &str, distillate: Vec<DistillItem>) -> Result<Plan, String> {
+        let plan = self.plan_led(id, sandbox)?;
+        let outside = self.merged_outside(&plan).await;
+        let named: Vec<String> = match plan.variant {
+            Variant::Shared => plan.threads.iter().map(|t| t.name.clone()).collect(),
+            Variant::Split => order.iter().map(|t| t.trim().to_string()).collect(),
+        };
+        if let Some((t, base)) = named.iter().find_map(|t| outside.get(t).map(|b| (t, b))) {
+            let what = if plan.variant.is_split() { format!("sbxw/{t}") } else { format!("sbxw/{} (thread {t:?})", plan.team_name()) };
+            return Err(format!(
+                "{what} is already in {base}: merged outside sbxw, or it has no commit of its own, \
+                 so there is nothing to merge. Leave it out of the order; the user can close the thread"
+            ));
+        }
+        self.plan_propose_merge(id, sandbox, order, note, distillate)
     }
 
     /// The lead marks a thread of its plan done ([`PlanBook::mark_done`]).
@@ -720,8 +740,101 @@ impl App {
             self.lead_recs.lock().unwrap().insert(sandbox.clone(), rec.clone());
             self.save_lead(sandbox, Some(rec));
             self.send(Event::Lead(sandbox.into()));
+            // Plans its last end closed are this sandbox's lead's again,
+            // told once, after `/lead`, which plans and where they stand.
+            let back = self.plans.lock().unwrap().resume_lead(&sandbox.to_string(), now);
+            if !back.is_empty() {
+                tracing::info!("plans: '{sandbox}' leads again, {} open plan(s) given back", back.len());
+                let text = messages::lead_resumed(&back);
+                for p in back {
+                    self.plan_changed(p);
+                }
+                if let Some(text) = text {
+                    if let Err(e) = self.push_text(sandbox, SessionKind::Agent, &text).await {
+                        tracing::warn!("plans: could not tell '{sandbox}' which plans it follows again: {e}");
+                    }
+                }
+            }
         }
         Ok(())
+    }
+
+    /// The gate of the lead's plan routes (propose, wait, status,
+    /// propose_merge, mark_done, the lead's read_team_notes): open only while
+    /// `sandbox` leads by [`App::leading`]'s rule. The daemon cannot tell
+    /// which session of the sandbox posts: within a leading sandbox, the plan
+    /// id stays the capability. `id` names the plan in the refusal.
+    pub fn require_leading(&self, sandbox: &SandboxRef, id: Option<&str>) -> Result<(), String> {
+        let me = sandbox.to_string();
+        if self.leading().contains(&me) {
+            return Ok(());
+        }
+        // Another sandbox's id reads as not found, as before the gate.
+        if let Some(id) = id {
+            self.plans.lock().unwrap().owned(id, &me)?;
+        }
+        Err(sbxw_core::plans::lead_ended(id))
+    }
+
+    /// Done threads of `plan` whose branch git shows is already in the branch
+    /// its repo's main checkout is on, though sbxw never merged it: merged by
+    /// hand, or with no commit of its own. Thread name to that branch. A
+    /// shared plan's one branch counts for all its threads.
+    pub async fn merged_outside(&self, plan: &Plan) -> BTreeMap<String, String> {
+        let mut out = BTreeMap::new();
+        if plan.state != PlanState::Approved || plan.merge.as_ref().is_some_and(|m| m.state == MergeState::Merged) {
+            return out;
+        }
+        let Ok(sandbox) = SandboxRef::parse(&plan.sandbox) else { return out };
+        let Some(ws) = self.store.workspace(&sandbox) else { return out };
+        let Ok(host) = self.host_for(&sandbox).await else { return out };
+        let recorded = self.store.get(&sandbox).threads;
+        let by_sbxw: Vec<&str> = plan.merge.iter().flat_map(|m| m.results.iter().filter(|r| r.ok).map(|r| r.thread.as_str())).collect();
+        let repo_of = |t: &PlanThread| recorded.get(t.name.as_str()).map(|r| r.repo.clone()).or_else(|| t.repo.clone()).unwrap_or_default();
+        let in_base = |rel: String, branch: String| {
+            let (host, ws) = (&host, &ws);
+            async move {
+                let root = git::repo_root(host, ws, &rel).await?;
+                let full = format!("refs/heads/{branch}");
+                let tip = git::git(host, &root, &["rev-parse", "--verify", "--quiet", &full]).await?;
+                git::git(host, &root, &["merge-base", "--is-ancestor", tip.trim(), "HEAD"]).await?;
+                Some(git::branch_of(host, &root).await.unwrap_or_else(|| "HEAD".into()))
+            }
+        };
+        let done = |t: &&PlanThread| t.state == ThreadState::Done && !by_sbxw.contains(&t.name.as_str());
+        match plan.variant {
+            Variant::Shared => {
+                let Some(first) = plan.threads.first() else { return out };
+                if let Some(base) = in_base(repo_of(first), format!("sbxw/{}", plan.team_name())).await {
+                    for t in plan.threads.iter().filter(done) {
+                        out.insert(t.name.clone(), base.clone());
+                    }
+                }
+            }
+            Variant::Split => {
+                for t in plan.threads.iter().filter(done) {
+                    if let Some(base) = in_base(repo_of(t), format!("sbxw/{}", t.name)).await {
+                        out.insert(t.name.clone(), base);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// [`App::plan_view`], with `merged_outside: <branch>` on each thread
+    /// git shows is already in its base ([`App::merged_outside`]).
+    pub async fn plan_view_checked(&self, plan: &Plan) -> serde_json::Value {
+        let outside = self.merged_outside(plan).await;
+        let mut v = self.plan_view(plan);
+        if let Some(threads) = v.get_mut("threads").and_then(|t| t.as_array_mut()) {
+            for t in threads.iter_mut() {
+                if let Some(base) = t["name"].as_str().and_then(|n| outside.get(n)) {
+                    t["merged_outside"] = base.clone().into();
+                }
+            }
+        }
+        v
     }
 
     pub async fn lead_end(self: &Arc<Self>, sandbox: &SandboxRef) {
@@ -888,6 +1001,10 @@ pub(crate) fn load_leads(store: &Store) -> HashMap<SandboxRef, LeadRecord> {
 #[cfg(test)]
 #[path = "plans_lead_tests.rs"]
 mod lead_tests;
+
+#[cfg(test)]
+#[path = "plans_reopen_tests.rs"]
+mod reopen_tests;
 
 #[cfg(test)]
 mod tests {
