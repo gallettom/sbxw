@@ -83,6 +83,10 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/r/stopped/:sandbox"),
     ("POST", "/r/stopped/:sandbox/remove"),
     ("POST", "/r/approvals/challenge"),
+    // Web Push (API.md 2.8): level 1, the device cookie and the Origin.
+    ("GET", "/r/push/key"),
+    ("POST", "/r/push/subscribe"),
+    ("POST", "/r/push/unsubscribe"),
 ];
 
 /// Data routes a phone may call before it is paired.
@@ -131,6 +135,9 @@ pub fn remote_router(app: Arc<App>) -> Router {
         .route("/r/stopped/:sandbox", get(l2::stopped_one))
         .route("/r/stopped/:sandbox/remove", post(l2::sandbox_remove))
         .route("/r/approvals/challenge", post(l2::challenge))
+        .route("/r/push/key", get(push_key))
+        .route("/r/push/subscribe", post(push_subscribe))
+        .route("/r/push/unsubscribe", post(push_unsubscribe))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(BODY_MAX))
         .layer(axum::middleware::from_fn_with_state(app.clone(), remote_guard))
@@ -253,8 +260,11 @@ fn with_headers(mut res: Response, data: bool) -> Response {
 
 async fn page(uri: axum::http::Uri) -> Response {
     let path = if uri.path() == "/index.html" { "/" } else { uri.path() };
+    // The service worker is never cached: a new daemon's worker replaces
+    // the old one at the next visit.
+    let cache = if path == "/sw.js" { "no-store" } else { "no-cache" };
     match REMOTE_PAGE.iter().find(|(p, _, _)| *p == path) {
-        Some((_, ctype, bytes)) => ([(header::CONTENT_TYPE, *ctype), (header::CACHE_CONTROL, "no-cache")], *bytes).into_response(),
+        Some((_, ctype, bytes)) => ([(header::CONTENT_TYPE, *ctype), (header::CACHE_CONTROL, cache)], *bytes).into_response(),
         None => ApiError::not_found("not found").into_response(),
     }
 }
@@ -459,6 +469,38 @@ async fn upload_drop(State(app): S, Extension(d): Extension<DeviceCtx>, Path((sa
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => refusal(e),
     }
+}
+
+// ── Web Push (API.md 2.8) ────────────────────────────────────────────────
+
+/// `{"key", "on"}`: the Mac's VAPID public key, and whether THIS device
+/// has notifications on.
+async fn push_key(State(app): S, Extension(d): Extension<DeviceCtx>) -> Json<Value> {
+    let (key, on) = app.remote_push_key(&d.id);
+    Json(json!({ "key": key, "on": on }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubscribeBody {
+    endpoint: String,
+    p256dh: String,
+    auth: String,
+}
+
+/// A forged endpoint or key: `400` with one reason word, nothing stored.
+async fn push_subscribe(State(app): S, Extension(d): Extension<DeviceCtx>, Json(b): Json<SubscribeBody>) -> Response {
+    use crate::svc::remote_push::SubscribeError;
+    match app.remote_push_subscribe(&d.id, &b.endpoint, &b.p256dh, &b.auth) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(SubscribeError::Refused(r)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": "this subscription is refused", "reason": r.word() }))).into_response(),
+        Err(SubscribeError::Gone) => ApiError::unauthorized("not paired").into_response(),
+    }
+}
+
+async fn push_unsubscribe(State(app): S, Extension(d): Extension<DeviceCtx>, Json(_): Json<Empty>) -> Json<Value> {
+    app.remote_push_off(&d.id);
+    Json(json!({ "ok": true }))
 }
 
 // ── Events ───────────────────────────────────────────────────────────────

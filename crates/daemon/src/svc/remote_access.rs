@@ -106,7 +106,7 @@ pub struct RemoteRuntime {
     pub(crate) copy_lock: Arc<tokio::sync::Mutex<()>>,
     /// The longest gap between two chunks of an upload (tests shorten it).
     pub(crate) upload_idle: Duration,
-    sidecar: Option<tokio::process::Child>,
+    pub(crate) sidecar: Option<tokio::process::Child>,
     pub sidecar_program: Sidecar,
     tailnet: Option<(u64, Option<TailnetStatus>)>,
     /// Tests: the tailnet name, as if a sidecar served it.
@@ -116,6 +116,9 @@ pub struct RemoteRuntime {
     kicks: tokio::sync::broadcast::Sender<Kick>,
     /// Level 2: approving with a passkey (`svc::remote_approvals`).
     pub(crate) level2: crate::svc::remote_approvals::Level2,
+    /// Web Push: the key, the subscriptions, the sidecar's pipe
+    /// (`svc::remote_push`).
+    pub(crate) push: crate::svc::remote_push::Push,
 }
 
 impl RemoteRuntime {
@@ -139,6 +142,7 @@ impl RemoteRuntime {
         // no owner any more.
         let _ = std::fs::remove_dir_all(dir.join(crate::svc::remote_upload::SPOOL_DIR));
         let level2 = crate::svc::remote_approvals::Level2::load(&dir, state.approvals && state.enabled);
+        let push = crate::svc::remote_push::Push::load(&dir, |id| state.devices.iter().any(|d| d.id == id));
         let mut rt = RemoteRuntime {
             dir,
             enabled: state.enabled,
@@ -162,6 +166,7 @@ impl RemoteRuntime {
             addr_override: None,
             kicks,
             level2,
+            push,
         };
         // A passkey whose device is gone goes too.
         let RemoteRuntime { devices, level2, dir, .. } = &mut rt;
@@ -201,7 +206,7 @@ impl RemoteRuntime {
         }
     }
 
-    fn record(&mut self, device_id: &str, device_name: &str, kind: Kind) {
+    pub(crate) fn record(&mut self, device_id: &str, device_name: &str, kind: Kind) {
         self.record_sized(device_id, device_name, kind, None);
     }
 
@@ -235,6 +240,8 @@ impl RemoteRuntime {
                 self.level2.save_passkeys(&self.dir);
             }
             tracing::info!("remote access: device {} dropped after 30 days idle", d.id);
+            let dir = self.dir.clone();
+            self.push.forget_device(&dir, &d.id);
             let files = self.uploads.drop_device(&d.id);
             crate::svc::remote_upload::remove_spools(&self.dir, files);
             self.record(&d.id, &d.name, Kind::Expired);
@@ -249,6 +256,11 @@ impl RemoteRuntime {
             Ok(None) => c.id(),
             _ => None,
         }
+    }
+
+    /// A sidecar child is alive.
+    pub(crate) fn sidecar_running(&mut self) -> bool {
+        self.sidecar_pid().is_some()
     }
 
     /// The tailnet name the Host and Origin checks may use, if the sidecar
@@ -316,6 +328,8 @@ pub struct RemoteStatus {
     pub devices: usize,
     pub pending_requests: usize,
     pub keep_awake: &'static str,
+    /// Devices with notifications on (a push subscription).
+    pub push_devices: usize,
     /// The path looked at, when the sidecar is not there.
     pub sidecar_missing: Option<String>,
     /// The team leaders a paired phone can see now (sandbox names).
@@ -529,6 +543,7 @@ impl App {
             devices: rt.devices.len(),
             pending_requests: rt.pairing.pending(now_ms()).len(),
             keep_awake: self.remote_keep_awake(rt.enabled),
+            push_devices: rt.push.devices_on(),
             sidecar_missing,
             leaders,
         }
@@ -553,12 +568,20 @@ impl App {
     /// At daemon start: back on if it was on. A failure is logged and
     /// shown in the status; `enabled` stays as the person left it.
     pub async fn remote_boot(self: &Arc<Self>) {
+        // The one push trigger: it watches the bus whether remote access is
+        // on or not (the edges stay current), and pushes only while on.
+        self.remote_push_task();
         if self.remote_enabled() {
             if let Err(e) = self.remote_start().await {
                 tracing::warn!("remote access: could not start: {e}");
             }
             self.remote_awake_changed();
         }
+    }
+
+    /// Start what is not running: the listener, the sidecar.
+    pub(crate) async fn remote_start_again(self: &Arc<Self>) -> Result<(), String> {
+        self.remote_start().await
     }
 
     async fn remote_start(self: &Arc<Self>) -> Result<(), String> {
@@ -613,9 +636,14 @@ impl App {
         let has_sidecar = self.remote_access.lock().unwrap().sidecar_pid().is_some();
         if let (Some(bin), false) = (sidecar_bin, has_sidecar) {
             let local = self.remote_access.lock().unwrap().listener.as_ref().map(|l| l.addr.to_string()).unwrap_or(addr);
-            match spawn_sidecar(&bin, &local, &state_dir, &status_path) {
-                Ok(child) => {
-                    tracing::info!("remote access: started {SIDECAR_NAME} (pid {:?})", child.id());
+            // With `--push` only when a phone has notifications on.
+            let push = self.remote_access.lock().unwrap().push.wanted();
+            match spawn_sidecar(&bin, &local, &state_dir, &status_path, push.is_some()) {
+                Ok(mut child) => {
+                    tracing::info!("remote access: started {SIDECAR_NAME} (pid {:?}){}", child.id(), if push.is_some() { " with notifications" } else { "" });
+                    if let (Some(config), Some(stdin), Some(stdout)) = (push, child.stdin.take(), child.stdout.take()) {
+                        self.remote_push_attach(config, stdin, stdout);
+                    }
                     self.remote_access.lock().unwrap().sidecar = Some(child);
                 }
                 Err(e) => {
@@ -655,6 +683,8 @@ impl App {
     async fn remote_stop(&self) {
         let (listener, sidecar, kicks, status_path) = {
             let mut rt = self.remote_access.lock().unwrap();
+            // The pipe goes first, so its close on stop is not reported.
+            rt.push.detach();
             (rt.listener.take(), rt.sidecar.take(), rt.kicks.clone(), rt.tailnet_status_path())
         };
         let _ = kicks.send(Kick::All);
@@ -668,17 +698,8 @@ impl App {
                 task.abort();
             }
         }
-        if let Some(mut c) = sidecar {
-            // SIGTERM first (a clean stop writes `stopped`), SIGKILL after 5 s.
-            if let Some(pid) = c.id() {
-                let _ = tokio::process::Command::new(sbxw_core::sysbin::sys_bin("kill")).args(["-TERM", &pid.to_string()]).status().await;
-            }
-            if tokio::time::timeout(Duration::from_secs(5), c.wait()).await.is_err() {
-                let _ = c.start_kill();
-                let _ = tokio::time::timeout(Duration::from_secs(2), c.wait()).await;
-            }
-            // No stale file: a missing one means "not serving".
-            let _ = std::fs::remove_file(&status_path);
+        if let Some(c) = sidecar {
+            stop_sidecar(c, &status_path).await;
         }
         self.remote_access.lock().unwrap().tailnet = None;
     }
@@ -871,6 +892,8 @@ impl App {
     pub fn remote_revoke(&self, id: &str, kind: Kind) -> bool {
         let mut rt = self.remote_access.lock().unwrap();
         let Some(d) = rt.devices.revoke(id) else { return false };
+        let dir = rt.dir.clone();
+        rt.push.forget_device(&dir, &d.id);
         if rt.level2.forget_device(&d.id) {
             let dir = rt.dir.clone();
             rt.level2.save_passkeys(&dir);
@@ -898,7 +921,7 @@ impl App {
 
     /// Every sandbox a phone reaches now, each with its kind and the session
     /// it shows and types into: the ONE rule, `sbxw_core::remote_access::reach`.
-    fn remote_reachable(&self) -> Vec<(SandboxRef, ReachKind, sbxw_core::agents::SessionInfo)> {
+    pub(crate) fn remote_reachable(&self) -> Vec<(SandboxRef, ReachKind, sbxw_core::agents::SessionInfo)> {
         let leading = self.leading();
         let infos = self.session_infos();
         let cands = self.reach_candidates(&infos);
@@ -1293,10 +1316,25 @@ impl App {
     }
 }
 
+/// Stop a sidecar: SIGTERM first (a clean stop writes `stopped`), SIGKILL
+/// after 5 s; then no stale status file (a missing one means "not serving").
+pub(crate) async fn stop_sidecar(mut c: tokio::process::Child, status_path: &Path) {
+    if let Some(pid) = c.id() {
+        let _ = tokio::process::Command::new(sbxw_core::sysbin::sys_bin("kill")).args(["-TERM", &pid.to_string()]).status().await;
+    }
+    if tokio::time::timeout(Duration::from_secs(5), c.wait()).await.is_err() {
+        let _ = c.start_kill();
+        let _ = tokio::time::timeout(Duration::from_secs(2), c.wait()).await;
+    }
+    let _ = std::fs::remove_file(status_path);
+}
+
 /// Start the sidecar: fixed argv, no shell, a cleared environment (tsnet
-/// reads secrets and switches from `TS_*`), no stdin, its stdout dropped and
-/// its stderr logged at debug (state names only, by its contract).
-fn spawn_sidecar(bin: &Path, forward: &str, state_dir: &Path, status_file: &Path) -> std::io::Result<tokio::process::Child> {
+/// reads secrets and switches from `TS_*`), its stderr logged at debug
+/// (state names only, by its contract). Without `push`: no stdin, stdout
+/// dropped. With `push`: `--push` last, stdin and stdout piped
+/// (API-push.md section 1); the caller takes both.
+fn spawn_sidecar(bin: &Path, forward: &str, state_dir: &Path, status_file: &Path, push: bool) -> std::io::Result<tokio::process::Child> {
     let mut cmd = tokio::process::Command::new(bin);
     cmd.arg("--forward")
         .arg(forward)
@@ -1309,10 +1347,13 @@ fn spawn_sidecar(bin: &Path, forward: &str, state_dir: &Path, status_file: &Path
         .arg("--parent-pid")
         .arg(std::process::id().to_string())
         .env_clear()
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    if push {
+        cmd.arg("--push").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+    } else {
+        cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null());
+    }
     for key in ["HOME", "TMPDIR", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"] {
         if let Some(v) = std::env::var_os(key) {
             cmd.env(key, v);
@@ -1356,6 +1397,11 @@ impl App {
     /// Tests: where the listener is bound, while it is.
     pub(crate) fn remote_listen_addr(&self) -> Option<std::net::SocketAddr> {
         self.remote_access.lock().unwrap().listener.as_ref().map(|l| l.addr)
+    }
+
+    /// Tests: the hourly drop of idle devices, at `now`.
+    pub(crate) fn remote_expire_for_tests(&self, now: u64) {
+        self.remote_access.lock().unwrap().expire(now);
     }
 
     pub(crate) fn remote_dir_for_tests(&self) -> PathBuf {

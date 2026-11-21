@@ -39,7 +39,7 @@ fn main() {
 /// A file not there yet is served as a short "not built" text, so the daemon
 /// builds without the page. Nothing else under `assets/remote/` is served.
 fn remote_page(assets: &Path) {
-    const FILES: [(&str, &str, &str); 8] = [
+    const FILES: [(&str, &str, &str); 9] = [
         ("/", "index.html", "text/html; charset=utf-8"),
         ("/remote-core.js", "remote-core.js", "application/javascript; charset=utf-8"),
         ("/remote.js", "remote.js", "application/javascript; charset=utf-8"),
@@ -48,6 +48,9 @@ fn remote_page(assets: &Path) {
         ("/icon-192.png", "icon-192.png", "image/png"),
         ("/icon-512.png", "icon-512.png", "image/png"),
         ("/apple-touch-icon.png", "apple-touch-icon.png", "image/png"),
+        // The service worker (Web Push, API.md 2.8). Served with
+        // `Cache-Control: no-store` by `http::remote`.
+        ("/sw.js", "sw.js", "text/javascript"),
     ];
     let dir = assets.join("remote");
     println!("cargo:rerun-if-changed={}", dir.display());
@@ -57,6 +60,9 @@ fn remote_page(assets: &Path) {
         println!("cargo:rerun-if-changed={}", f.display());
         if f.is_file() {
             writeln!(out, "    ({path:?}, {ctype:?}, include_bytes!({:?})),", f.display().to_string()).unwrap();
+        } else if file == "sw.js" {
+            // A worker that does nothing: valid JavaScript, no handler.
+            writeln!(out, "    ({path:?}, {ctype:?}, b\"// sbxw: the service worker is not built into this daemon.\\n\"),").unwrap();
         } else {
             writeln!(out, "    ({path:?}, \"text/plain; charset=utf-8\", b\"sbxw: the remote page is not built into this daemon.\\n\"),").unwrap();
         }
