@@ -28,6 +28,10 @@
 // `?after=` read answers, {newerHold: true} such reads wait until
 // {newerHold: false}, {mute: true} open streams stay open but get nothing
 // more (a stream that died without a word, as after a phone's sleep).
+// Push (API-push.md, thread push-daemon): GET /sw.js, GET /r/push/key,
+// POST /r/push/subscribe and /unsubscribe. {push: {on, keyReply: {status,
+// body}, subscribeReplies: [{status, body}]}} sets what they answer; the
+// subscriptions posted are in `state.push.subs`, and the log has every call.
 // Usage: node tests/js/remote-standin.mjs [port]
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
@@ -42,6 +46,7 @@ const STATIC = {
   '/remote-core.js': ['remote-core.js', 'text/javascript; charset=utf-8'],
   '/remote.js': ['remote.js', 'text/javascript; charset=utf-8'],
   '/remote.css': ['remote.css', 'text/css; charset=utf-8'],
+  '/sw.js': ['sw.js', 'text/javascript; charset=utf-8'],
   '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
   '/icon-192.png': ['icon-192.png', 'image/png'],
   '/icon-512.png': ['icon-512.png', 'image/png'],
@@ -88,6 +93,7 @@ export function startStandin(port = 0) {
     kanban: { shop: fx.kanban.board, website: fx.kanban.empty },
     tickets: { 'shop/12': fx.kanban.ticket },
     holds: [],
+    push: { on: false, key: Buffer.concat([Buffer.from([4]), randomBytes(64)]).toString('base64url'), keyReply: null, subscribeReplies: [], subs: [] },
   };
   const l2Fresh = () => {
     const L = structuredClone(fx.level2);
@@ -232,6 +238,7 @@ export function startStandin(port = 0) {
       if (c.kanbanReset) { s.kanban = { shop: fx.kanban.board, website: fx.kanban.empty }; s.tickets = { 'shop/12': fx.kanban.ticket }; }
       if ('uploadSlow' in c) s.uploadSlow = c.uploadSlow;
       if ('uploadHold' in c) { s.uploadHold = c.uploadHold; if (!c.uploadHold) s.holds.splice(0).forEach(r => r()); }
+      if (c.push) Object.assign(s.push, c.push);
       if (c.emit) emit(c.emit.event, c.emit.data);
       if (c.newer) Object.assign(s.newer, c.newer);
       if ('newerHold' in c) { s.newerHold = c.newerHold; if (!c.newerHold) (s.newerHolds || []).splice(0).forEach(r => r()); }
@@ -264,6 +271,24 @@ export function startStandin(port = 0) {
     }
     if (!s.paired) return send(res, 401, { ok: false, error: 'not paired' });
     if (p === '/r/me') return send(res, 200, fx.me);
+    if (p === '/r/push/key' && req.method === 'GET') {
+      return s.push.keyReply ? send(res, s.push.keyReply.status, s.push.keyReply.body) : send(res, 200, { key: s.push.key, on: s.push.on });
+    }
+    if (p === '/r/push/subscribe' && req.method === 'POST') {
+      const q = s.push.subscribeReplies.shift();
+      if (q) return send(res, q.status, q.body);
+      const b = entry.body;
+      const ok = b && typeof b === 'object' && Object.keys(b).length === 3 && ['endpoint', 'p256dh', 'auth'].every(k => typeof b[k] === 'string' && b[k]);
+      if (!ok) return send(res, 400, { ok: false, error: 'bad subscription', reason: 'bad_request' });
+      s.push.subs = [b];
+      s.push.on = true;
+      return send(res, 200, { ok: true });
+    }
+    if (p === '/r/push/unsubscribe' && req.method === 'POST') {
+      s.push.subs = [];
+      s.push.on = false;
+      return send(res, 200, { ok: true });
+    }
     if (p === '/r/logout') { s.paired = false; return send(res, 200, { ok: true }); }
     if (p === '/r/leaders') return send(res, 200, s.leaders);
     if (p === '/r/events') {
