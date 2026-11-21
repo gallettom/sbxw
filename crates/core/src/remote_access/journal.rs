@@ -16,6 +16,8 @@ pub enum Kind {
     Interrupt,
     /// The model of a leader changed from a closed list (the id is never kept).
     Model,
+    /// A skill of the closed list invoked from the phone (never its name or args).
+    Skill,
     /// Lead mode turned on or off for a sandbox from the phone.
     LeadOn,
     LeadOff,

@@ -31,6 +31,11 @@ models = [
   { id = "claude-haiku-5-5", label = "Haiku 5.5" },
 ]
 
+# Skills the phone page may invoke (remote access): a closed list of names,
+# lower-case letters, digits and hyphens. The phone never types a `/` line; the
+# daemon types `/<name> <text>` for a name of this list, at an idle prompt.
+phone_skills = ["code-review", "codemap", "retro"]
+
 # How the sandboxes sbxw creates see sbx's shared skill store (filled by
 # `sbxw skills import`), passed as `sbx create --skills=…` (sbx 0.43+):
 #   "off"        only what the sandbox's kits and workspace give it

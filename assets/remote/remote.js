@@ -60,6 +60,8 @@
     leaders: [],
     models: [],          // the model list from /r/models
     modelsAsked: false,
+    skills: [],          // the skill names from /r/skills
+    skillsAsked: false,
     ctlBusy: false,      // a model or lead change is in flight
     leadArm: null,       // which way a first tap on Lead armed
     current: null,       // the open leader's sandbox
@@ -104,7 +106,7 @@
     $('mark').hidden = BACK.includes(id);
     $('approvals-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     if (id !== 's-item') closeSheet();
-    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; disarmInterrupt(); } else loadModels();
+    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; disarmInterrupt(); } else { loadModels(); loadSkills(); }
     $('menu-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     closeMenu();
   }
@@ -436,6 +438,14 @@
     if (!st.models.length) st.modelsAsked = false;
     renderCtl(leader());
   }
+  async function loadSkills() {
+    if (st.skillsAsked) return;
+    st.skillsAsked = true;
+    const res = await api.skills();
+    st.skills = res.ok ? rcSkills(res.data) : [];
+    if (!st.skills.length) st.skillsAsked = false;
+    renderCtl(leader());
+  }
   function renderCtl(l) {
     const box = $('ctl');
     box.hidden = !l || st.screen !== 's-chat';
@@ -457,7 +467,37 @@
     sw.disabled = !!rcCtlGate(l, 'lead') || st.ctlBusy;
     const why = rcCtlGate(l, 'model') || rcCtlGate(l, 'lead');
     sel.title = sw.title = why;
+    const sk = $('skill');
+    if (sk.dataset.n !== String(st.skills.length)) {
+      sk.replaceChildren(new Option('Skill…', '', true, true));
+      sk.options[0].disabled = true;
+      for (const n of st.skills) sk.add(new Option(n, n));
+      sk.dataset.n = String(st.skills.length);
+    }
+    sk.closest('label').hidden = !st.skills.length;
+    sk.disabled = !!rcCtlGate(l, 'model') || st.ctlBusy;
+    sk.title = why;
   }
+  // A skill: the name of the list and the text now in the message field as
+  // its arguments. The daemon types `/<name> <text>`; the page never does.
+  $('skill').addEventListener('change', async () => {
+    const sandbox = st.current;
+    const name = $('skill').value;
+    $('skill').value = '';
+    if (!sandbox || !name || st.ctlBusy) return;
+    const raw = field.value;
+    const args = raw.trim();
+    if (args.includes('\n')) { note('A skill takes one line of text. Remove the line breaks, then pick it again.', 'warn'); return; }
+    st.ctlBusy = true; renderCtl(leader());
+    const res = await api.runSkill(sandbox, name, args);
+    st.ctlBusy = false;
+    if (res.ok && st.current === sandbox && field.value === raw) {
+      field.value = '';
+      field.dispatchEvent(new Event('input'));
+    }
+    note(res.ok ? `Started /${name}.` : rcFailText('Skill', res), res.ok ? 'ok' : 'err');
+    renderCtl(leader());
+  });
   $('model').addEventListener('change', async () => {
     const sandbox = st.current;
     const id = $('model').value;

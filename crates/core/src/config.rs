@@ -74,6 +74,9 @@ pub struct Config {
     pub claude_model: String,
     /// Models a thread may be started on.
     pub models: Vec<ModelChoice>,
+    /// Skills the phone page may invoke (names, no `/`): the daemon types
+    /// `/<name> <args>` for a name of this list and nothing else.
+    pub phone_skills: Vec<String>,
     /// `off` | `readonly` | `readwrite`; empty leaves it to sbx.
     pub skills: String,
     /// `always` | `missing` | `never`; empty leaves it to sbx.
@@ -142,6 +145,10 @@ pub struct PortMap {
     pub host_port: u16,
 }
 
+pub fn default_phone_skills() -> Vec<String> {
+    ["code-review", "codemap", "retro"].map(String::from).to_vec()
+}
+
 pub fn default_models() -> Vec<ModelChoice> {
     [
         ("claude-sonnet-5-5", "Sonnet 5.5"),
@@ -204,6 +211,7 @@ impl Default for Config {
             cache_ttl_days: 7,
             claude_model: "claude-sonnet-5-5".into(),
             models: default_models(),
+            phone_skills: default_phone_skills(),
             skills: String::new(),
             pull: String::new(),
             template: String::new(),
@@ -550,6 +558,11 @@ impl Config {
                 bail!("models: {:?} is not a model id", m.id);
             }
         }
+        for n in &self.phone_skills {
+            if !crate::names::is_valid_command_name(n) {
+                bail!("phone_skills: {n:?} is not a skill name (lower-case letters, digits and hyphens, at most 64)");
+            }
+        }
         for (key, v) in [("terminal_color", &self.terminal_color), ("terminal_bar_color", &self.terminal_bar_color)] {
             if !v.is_empty() && !is_hex_color(v) {
                 bail!("{key} = {v:?} — expected #rrggbb");
@@ -761,6 +774,10 @@ mod tests {
         assert!(bad("pull = \"weekly\""));
         assert!(bad("agent_addr = \"127.0.0.1:7681\""));
         assert!(bad("models = [{ id = \"Bad Id\", label = \"x\" }]"));
+        assert!(bad("phone_skills = [\"/lead\"]"));
+        assert!(bad("phone_skills = [\"Code Review\"]"));
+        assert!(!bad("phone_skills = [\"retro\", \"code-review\"]"));
+        assert_eq!(Config::default().phone_skills, ["code-review", "codemap", "retro"]);
         assert!(!bad("skills = \"off\""));
     }
 
