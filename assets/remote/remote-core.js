@@ -386,6 +386,9 @@ function rcClient(fetchImpl, hooks = {}) {
     dropUpload: (s, id) => call('DELETE', `${at(s)}/upload/${encodeURIComponent(id)}`),
     answer: (s, indices) => call('POST', `${at(s)}/answer`, { indices }),
     interrupt: s => call('POST', `${at(s)}/interrupt`, {}),
+    models: () => call('GET', '/r/models'),
+    setModel: (s, id) => call('POST', `${at(s)}/model`, { id }),
+    setLead: (s, on) => call('POST', `${at(s)}/lead`, { on: !!on }),
     transcribe: pcm => call('POST', '/r/voice/transcribe', undefined, pcm),
     // For the level-2 routes (rcL2Client): the same call, nothing more.
     get: path => call('GET', path),
@@ -406,6 +409,34 @@ const RC_MSG_REASON = {
   too_many: 'Not sent: a message takes 5 files at most. Remove some, then Send.',
   not_submitted: 'NOT SENT: the text was typed into the session\'s input on the Mac but not submitted, because the session changed meanwhile. It waits there unsent; it is also still in this field. Check on your Mac before sending again.',
 };
+
+// The model choices the page offers: the daemon's closed list, as
+// `{id, label}` pairs. Anything else in the answer is dropped.
+function rcModels(data) {
+  const list = Array.isArray(data?.models) ? data.models : [];
+  return list
+    .filter(m => m && typeof m.id === 'string' && m.id)
+    .map(m => ({ id: m.id, label: typeof m.label === 'string' && m.label ? m.label : m.id }));
+}
+
+// The id the select shows for a session: the one it reported, when the list
+// has it; '' (no choice made) otherwise.
+function rcModelValue(leader, models) {
+  const id = leader && typeof leader.model === 'string' ? leader.model : '';
+  return models.some(m => m.id === id) ? id : '';
+}
+
+// Whether the model and lead controls can act now: the same gate as Send
+// (idle, not read only). Lead OFF needs only that the sandbox is reachable.
+function rcCtlGate(leader, which) {
+  if (!leader) return 'This sandbox is not running.';
+  const ro = rcReadOnly(leader);
+  if (ro) return ro;
+  if (which === 'lead' && leader.kind === 'leader') return '';
+  if (leader.state === 'working') return 'The session is working: this comes back at its prompt.';
+  if (leader.asks) return 'This needs your Mac: the session is waiting for you there.';
+  return '';
+}
 
 // What the daemon will refuse, checked before sending so the person can fix
 // it in place (the daemon stays the judge): a line whose first non-blank

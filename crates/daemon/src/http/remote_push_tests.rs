@@ -142,7 +142,8 @@ fn the_route_list_grew_by_exactly_the_four_push_paths() {
     let now: BTreeSet<&str> = ROUTES.iter().map(|(_, p)| *p).chain(REMOTE_PAGE.iter().map(|(p, _, _)| *p)).collect();
     let before: BTreeSet<&str> = BEFORE.iter().copied().collect();
     let added: BTreeSet<&str> = now.difference(&before).copied().collect();
-    assert_eq!(added, BTreeSet::from(["/sw.js", "/r/push/key", "/r/push/subscribe", "/r/push/unsubscribe"]));
+    // Plus the model and lead routes (API.md 2.9), added after Web Push.
+    assert_eq!(added, BTreeSet::from(["/sw.js", "/r/push/key", "/r/push/subscribe", "/r/push/unsubscribe", "/r/models", "/r/leaders/:sandbox/model", "/r/leaders/:sandbox/lead"]));
     assert!(before.is_subset(&now), "nothing removed");
     let methods: Vec<_> = ROUTES.iter().filter(|(_, p)| p.starts_with("/r/push/")).copied().collect();
     assert_eq!(methods, [("GET", "/r/push/key"), ("POST", "/r/push/subscribe"), ("POST", "/r/push/unsubscribe")]);

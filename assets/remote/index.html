@@ -175,6 +175,18 @@
 
   <!-- A leader's or a sandbox's conversation. -->
   <section id="s-chat" class="rc-screen rc-chat" hidden>
+    <!-- Model and lead mode of this session. The model is an id of the list
+         the Mac offers, never text; lead mode asks a second tap. -->
+    <div id="ctl" class="rc-ctl" hidden>
+      <label class="rc-ctl-model" for="model">
+        <span class="rc-ctl-label">Model</span>
+        <select id="model" class="rc-select" aria-label="Model"></select>
+      </label>
+      <button id="lead" class="rc-switch rc-ctl-lead" type="button" role="switch" aria-checked="false" aria-label="Lead mode">
+        <span class="rc-ctl-label">Lead</span>
+        <span class="rc-switch-track" aria-hidden="true"><span class="rc-switch-knob"></span></span>
+      </button>
+    </div>
     <!-- Conversation | Kanban: each keeps its place when switching back. -->
     <div id="views" class="rc-views" role="tablist" aria-label="View">
       <button id="v-chat" class="rc-view" type="button" role="tab" aria-selected="true" aria-controls="log">Conversation</button>

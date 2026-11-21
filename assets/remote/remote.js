@@ -58,6 +58,10 @@
   const st = {
     me: null,
     leaders: [],
+    models: [],          // the model list from /r/models
+    modelsAsked: false,
+    ctlBusy: false,      // a model or lead change is in flight
+    leadArm: null,       // which way a first tap on Lead armed
     current: null,       // the open leader's sandbox
     items: [],           // its history, oldest first
     nextBefore: null,
@@ -100,7 +104,7 @@
     $('mark').hidden = BACK.includes(id);
     $('approvals-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     if (id !== 's-item') closeSheet();
-    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; disarmInterrupt(); }
+    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; disarmInterrupt(); } else loadModels();
     $('menu-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     closeMenu();
   }
@@ -418,8 +422,75 @@
     const board = !l || l.kind !== 'sandbox';
     $('views').hidden = !board;
     if (!board && st.screen === 's-chat' && view().mode === 'kanban') setView('chat');
+    renderCtl(l);
     gateSend();
   }
+  // ── Model and lead mode ──
+  // The list comes once from /r/models; the select shows what the session
+  // reported. A change is one call; the page shows the daemon's answer.
+  async function loadModels() {
+    if (st.modelsAsked) return;
+    st.modelsAsked = true;
+    const res = await api.models();
+    st.models = res.ok ? rcModels(res.data) : [];
+    if (!st.models.length) st.modelsAsked = false;
+    renderCtl(leader());
+  }
+  function renderCtl(l) {
+    const box = $('ctl');
+    box.hidden = !l || st.screen !== 's-chat';
+    if (box.hidden) return;
+    const sel = $('model');
+    if (sel.options.length !== st.models.length + 1 || sel.dataset.n !== String(st.models.length)) {
+      sel.replaceChildren(new Option('Model…', '', true, true));
+      sel.options[0].disabled = true;
+      for (const m of st.models) sel.add(new Option(m.label, m.id));
+      sel.dataset.n = String(st.models.length);
+    }
+    sel.value = rcModelValue(l, st.models);
+    sel.hidden = !st.models.length;
+    $('model').closest('label').hidden = !st.models.length;
+    const busyModel = !!rcCtlGate(l, 'model') || st.ctlBusy;
+    sel.disabled = busyModel;
+    const sw = $('lead');
+    sw.setAttribute('aria-checked', String(l.kind === 'leader'));
+    sw.disabled = !!rcCtlGate(l, 'lead') || st.ctlBusy;
+    const why = rcCtlGate(l, 'model') || rcCtlGate(l, 'lead');
+    sel.title = sw.title = why;
+  }
+  $('model').addEventListener('change', async () => {
+    const sandbox = st.current;
+    const id = $('model').value;
+    if (!sandbox || !id || st.ctlBusy) return;
+    st.ctlBusy = true; renderCtl(leader());
+    const res = await api.setModel(sandbox, id);
+    st.ctlBusy = false;
+    note(res.ok ? `Model set to ${st.models.find(m => m.id === id)?.label || id}.` : rcFailText('Model change', res), res.ok ? 'ok' : 'err');
+    renderCtl(leader());
+  });
+  // Turning lead mode ON types /lead into the session and installs its tools:
+  // it asks the second tap that Interrupt asks. Turning it off does too.
+  $('lead').addEventListener('click', async () => {
+    const sandbox = st.current;
+    const l = leader();
+    if (!sandbox || !l || st.ctlBusy) return;
+    const sw = $('lead');
+    const on = l.kind !== 'leader';
+    if (st.leadArm !== on) {
+      st.leadArm = on;
+      note(`${on ? 'Turn lead mode on' : 'End lead mode'} for ${l.name}? Tap Lead again to confirm.`, 'ok');
+      setTimeout(() => { if (st.leadArm === on) { st.leadArm = null; note('', 'ok'); } }, 6000);
+      return;
+    }
+    st.leadArm = null;
+    st.ctlBusy = true; renderCtl(l);
+    const res = await api.setLead(sandbox, on);
+    st.ctlBusy = false;
+    note(res.ok ? (on ? 'Lead mode is on.' : 'Lead mode ended.') : rcFailText('Lead mode change', res), res.ok ? 'ok' : 'err');
+    sw.blur();
+    renderCtl(leader());
+  });
+
   // Send waits while the leader works, while a file uploads, while the
   // recorder runs; the typed text and the files stay where they are.
   function gateSend() {

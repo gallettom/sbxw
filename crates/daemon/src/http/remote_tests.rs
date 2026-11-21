@@ -771,6 +771,41 @@ async fn interrupt_is_one_escape() {
 }
 
 #[tokio::test]
+async fn model_is_an_id_of_the_list_never_text() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (_sb, file) = leader(&app, d.path(), "lead1").await;
+    let r = call(&router, "GET", "/r/models", Some(&token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK);
+    // Not in the configured list, or not an id at all: nothing is typed.
+    for id in ["claude-not-in-the-list", "opus\r/lead", "--help", ""] {
+        let r = call(&router, "POST", "/r/leaders/lead1/model", Some(&token), json!({"id": id})).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{id:?}: {}", r.text());
+    }
+    let r = call(&router, "POST", "/r/leaders/lead1/model", Some(&token), json!({"id": "x", "text": "/lead"})).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "no free text rides along");
+    let r = call(&router, "POST", "/r/leaders/nosuch/model", Some(&token), json!({"id": "x"})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(std::fs::read(&file).unwrap_or_default().is_empty(), "nothing typed");
+}
+
+#[tokio::test]
+async fn lead_route_takes_only_on_and_is_idempotent() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let _ = leader(&app, d.path(), "lead1").await;
+    let r = call(&router, "POST", "/r/leaders/lead1/lead", Some(&token), json!({"on": true, "x": 1})).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let r = call(&router, "POST", "/r/leaders/lead1/lead", Some(&token), json!({"on": true})).await;
+    assert_eq!(r.status, StatusCode::OK, "already leading: nothing to do");
+    let r = call(&router, "POST", "/r/leaders/nosuch/lead", Some(&token), json!({"on": true})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn events_name_a_leader_that_needs_you() {
     let (d, app) = on();
     let router = remote_router(app.clone());

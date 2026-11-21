@@ -829,3 +829,22 @@ test('the page no longer says "leader" where it means either kind', () => {
   assert.doesNotMatch(html, /No team leader is running|Message the leader|Back to the leaders/);
   for (const v of Object.values(rc.RC_MSG_REASON)) assert.doesNotMatch(v, /leader/i);
 });
+
+// ── Model and lead controls ──
+// Loaded the same way as the cases above: the page's own source in a vm.
+test('the model list keeps only {id, label} and the select follows the reported model', () => {
+  const src = readFileSync(new URL('../../assets/remote/remote-core.js', import.meta.url), 'utf8');
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(src + '\n;globalThis.__t = { rcModels, rcModelValue, rcCtlGate };', ctx);
+  const { rcModels, rcModelValue, rcCtlGate } = ctx.__t;
+  const list = rcModels({ models: [{ id: 'a', label: 'A', extra: 1 }, { id: '' }, null, { id: 'b' }] });
+  assert.deepEqual(JSON.parse(JSON.stringify(list)), [{ id: 'a', label: 'A' }, { id: 'b', label: 'b' }]);
+  assert.equal(rcModelValue({ model: 'a' }, list), 'a');
+  assert.equal(rcModelValue({ model: 'zzz' }, list), '');
+  assert.equal(rcModelValue(null, list), '');
+  assert.match(rcCtlGate(null, 'model'), /not running/);
+  assert.match(rcCtlGate({ state: 'working', kind: 'sandbox' }, 'model'), /working/);
+  assert.equal(rcCtlGate({ state: 'working', kind: 'leader' }, 'lead'), '', 'ending lead needs no idle prompt');
+  assert.equal(rcCtlGate({ state: 'idle', kind: 'sandbox' }, 'lead'), '');
+});

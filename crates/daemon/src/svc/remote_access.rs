@@ -493,6 +493,9 @@ pub struct LeaderView {
     pub answerable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steps: Option<Vec<PhoneQuestion>>,
+    /// The model the session's status line last reported (an id), if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1051,6 +1054,7 @@ impl App {
                 asks: info.state == SessionState::Attention,
                 answerable: steps.is_some(),
                 steps,
+                model: info.model.clone(),
             });
         }
         out
@@ -1287,6 +1291,64 @@ impl App {
         } else {
             Err(Refusal::NotFound)
         }
+    }
+
+    /// `GET /r/models`: the closed list the phone may choose from (the same
+    /// one a thread is started on), and the daemon's default.
+    pub fn remote_models(&self) -> serde_json::Value {
+        serde_json::json!({ "default": self.cfg.claude_model, "models": self.cfg.models })
+    }
+
+    /// Switch the model of the session the phone shows: types `/model <id>`
+    /// for an id of the configured list, nothing else. The phone sends an id,
+    /// never text: the line is built here, so the `/` rule of messages stays
+    /// whole. Only at an idle prompt, as a message.
+    pub async fn remote_set_model(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, id: &str) -> Result<(), Refusal> {
+        let id = sbxw_core::ModelId::parse(id).map_err(|_| Refusal::Bad("model: not a model id".into()))?;
+        if !self.cfg.models.iter().any(|m| m.id == id.as_str()) {
+            return Err(Refusal::Bad("model: not in the list of models".into()));
+        }
+        if let Some(why) = self.remote_read_only(sb) {
+            self.remote_record(d, Kind::Refused);
+            return Err(Refusal::Conflict(format!("'{sb}' is read only from the phone ({why})")));
+        }
+        if let Err(r) = self.remote_can_type(sb) {
+            self.remote_record(d, Kind::Refused);
+            return Err(Refusal::Reason(r));
+        }
+        self.push_as_person(sb, SessionKind::Agent, &format!("/model {}", id.as_str())).await.map_err(Refusal::Conflict)?;
+        tracing::info!("remote access: device {}: model", d.id);
+        self.remote_record(d, Kind::Model);
+        Ok(())
+    }
+
+    /// Turn lead mode on or off for a sandbox the phone reaches: the same
+    /// calls as the Mac's button. On types `/lead` (so only at an idle
+    /// prompt); off types nothing the person did not choose. Idempotent.
+    pub async fn remote_set_lead(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, on: bool) -> Result<(), Refusal> {
+        let Some((kind, _)) = self.remote_reach(sb) else { return Err(Refusal::NotFound) };
+        let leading = kind == ReachKind::Leader;
+        if leading == on {
+            return Ok(());
+        }
+        if let Some(why) = self.remote_read_only(sb) {
+            self.remote_record(d, Kind::Refused);
+            return Err(Refusal::Conflict(format!("'{sb}' is read only from the phone ({why})")));
+        }
+        if on {
+            if let Err(r) = self.remote_can_type(sb) {
+                self.remote_record(d, Kind::Refused);
+                return Err(Refusal::Reason(r));
+            }
+            self.lead(sb).await.map_err(Refusal::Conflict)?;
+            tracing::info!("remote access: device {}: lead on", d.id);
+            self.remote_record(d, Kind::LeadOn);
+        } else {
+            self.lead_end(sb).await;
+            tracing::info!("remote access: device {}: lead off", d.id);
+            self.remote_record(d, Kind::LeadOff);
+        }
+        Ok(())
     }
 
     pub async fn remote_transcribe(self: &Arc<Self>, d: &DeviceCtx, body: &[u8]) -> Result<sbxw_core::anonymise::Masked, Refusal> {

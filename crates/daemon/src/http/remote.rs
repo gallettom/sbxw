@@ -58,6 +58,9 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/r/leaders/:sandbox/message"),
     ("POST", "/r/leaders/:sandbox/answer"),
     ("POST", "/r/leaders/:sandbox/interrupt"),
+    ("GET", "/r/models"),
+    ("POST", "/r/leaders/:sandbox/model"),
+    ("POST", "/r/leaders/:sandbox/lead"),
     ("POST", "/r/voice/transcribe"),
     ("POST", "/r/leaders/:sandbox/upload"),
     ("DELETE", "/r/leaders/:sandbox/upload/:id"),
@@ -108,6 +111,9 @@ pub fn remote_router(app: Arc<App>) -> Router {
         .route("/r/leaders/:sandbox/message", post(message).layer(DefaultBodyLimit::max(MESSAGE_BODY_MAX)))
         .route("/r/leaders/:sandbox/answer", post(answer))
         .route("/r/leaders/:sandbox/interrupt", post(interrupt))
+        .route("/r/models", get(models))
+        .route("/r/leaders/:sandbox/model", post(set_model))
+        .route("/r/leaders/:sandbox/lead", post(set_lead))
         .route("/r/voice/transcribe", post(transcribe).layer(DefaultBodyLimit::max(AUDIO_BODY_MAX)))
         // The body is streamed and counted by `remote_upload` itself
         // (25 MiB); no extractor buffers it.
@@ -415,6 +421,45 @@ async fn interrupt(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandb
         Err(e) => return refusal(e),
     };
     match app.remote_interrupt(&d, &sb).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+async fn models(State(app): S, Extension(_d): Extension<DeviceCtx>) -> Json<Value> {
+    Json(app.remote_models())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelBody {
+    id: String,
+}
+
+/// An id of the configured list, never text: the daemon types `/model <id>`.
+async fn set_model(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Json(b): Json<ModelBody>) -> Response {
+    let sb = match app.remote_target(&sandbox) {
+        Ok(sb) => sb,
+        Err(e) => return refusal(e),
+    };
+    match app.remote_set_model(&d, &sb, &b.id).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LeadBody {
+    on: bool,
+}
+
+async fn set_lead(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Json(b): Json<LeadBody>) -> Response {
+    let sb = match app.remote_target(&sandbox) {
+        Ok(sb) => sb,
+        Err(e) => return refusal(e),
+    };
+    match app.remote_set_lead(&d, &sb, b.on).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => refusal(e),
     }

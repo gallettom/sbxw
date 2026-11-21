@@ -14,6 +14,11 @@ pub enum Kind {
     Message,
     Answer,
     Interrupt,
+    /// The model of a leader changed from a closed list (the id is never kept).
+    Model,
+    /// Lead mode turned on or off for a sandbox from the phone.
+    LeadOn,
+    LeadOff,
     Transcribe,
     /// A pairing the person refused on the Mac, or an action the daemon refused.
     Refused,
