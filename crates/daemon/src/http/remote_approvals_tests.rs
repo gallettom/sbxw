@@ -600,10 +600,9 @@ async fn a_phone_merge_closes_the_threads_and_keeps_the_distillate() {
     let ch = challenge(&w, &p, "merge", &id, &format!("/r/merges/{id}"), None).await.unwrap();
     let a = assertion(&mut p, &ch, &Twist::default());
     let r = act(&w, &p, &format!("/r/merges/{id}/merge"), a, None).await;
-    eprintln!("{}", r.text());
-    let calls: Vec<String> = w.fake.log();
-    eprintln!("{calls:?}");
-    assert!(calls.iter().any(|c| c.contains("sbxw-thread-close")), "the thread was closed: {calls:?}");
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let ended: Vec<String> = w.fake.log().into_iter().filter(|c| c.ends_with("sbxw-thread-end =alpha =close =0 =1") || c.contains("sbxw-thread-end") && c.ends_with("=alpha =close =0 =1")).collect();
+    assert_eq!(ended.len(), 1, "the merged thread was closed, branch and all");
     assert_eq!(w.app.plan(&id).unwrap().merge.unwrap().distillate, kept);
 }
 
