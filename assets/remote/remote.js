@@ -1658,6 +1658,37 @@
     }, 400);
   }
 
+  // A new ticket: a small form over the board, text only. The Mac masks the
+  // text like a message and puts the ticket in Planned.
+  function kbFormShow(on) {
+    $('kb-form').hidden = !on;
+    $('kb-newbar').hidden = on || !!view().ticket;
+    if (on) { $('kb-ferr').hidden = true; $('kb-title').focus(); }
+  }
+  $('kb-new').addEventListener('click', () => kbFormShow(true));
+  $('kb-cancel').addEventListener('click', () => { $('kb-form').reset(); kbFormShow(false); });
+  $('kb-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const sandbox = st.current;
+    const title = $('kb-title').value.trim();
+    const err = $('kb-ferr');
+    if (!title) { err.textContent = 'A ticket needs a title.'; err.hidden = false; $('kb-title').focus(); return; }
+    $('kb-create').disabled = true;
+    const res = await api.createTicket(sandbox, title, $('kb-desc').value.trim());
+    $('kb-create').disabled = false;
+    if (!res.ok) {
+      err.textContent = res.status === 404 ? 'This team leader is no longer running.' : rcFailText('Ticket', res);
+      err.hidden = false;
+      return;
+    }
+    $('kb-form').reset();
+    kbFormShow(false);
+    if (st.current !== sandbox) return;
+    const v = view(sandbox);
+    if (v.board?.columns.some(c => c.id === 'planned')) v.col = 'planned';
+    loadBoard();
+  });
+
   const wide = window.matchMedia ? window.matchMedia('(min-width: 700px)') : { matches: false };
   function renderBoard() {
     const v = view();
@@ -1693,6 +1724,7 @@
       if (top) lane.querySelector('.rc-kb-list').scrollTop = top;
     }
     $('kb-ticket').hidden = !v.ticket;
+    $('kb-newbar').hidden = !!v.ticket || !$('kb-form').hidden;
     lanes.hidden = !!v.ticket;
     $('kb-pick').hidden = !!v.ticket;
     $('kb-pick').querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
