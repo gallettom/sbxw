@@ -177,12 +177,15 @@ async fn finding_s2_with_the_v3_hook_a_message_is_typed_right_after_a_tool_call(
     let (sb, file) = leader(&app, d.path(), "lead1").await;
     hook_v(&app, &sb, "s1", 3, json!({"hook_event_name": "UserPromptSubmit", "prompt": "deploy"}));
     hook_v(&app, &sb, "s1", 3, json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "git push --force"}}));
-    // Turned around by remote-daemon (S2 fix): only an idle leader is typed into.
+    // Turned around by remote-daemon (S2 fix): only an idle leader was typed
+    // into. Turned again by phone-busy-send: a message is typed while the
+    // leader works (Claude Code queues it). What stops the Return when a
+    // permission prompt does follow is the check after the paste
+    // (remote_tests::a_working_leader_that_asks_before_the_return_gets_no_return).
+    // Here no prompt follows within HOOK_GRACE: paste, then Return.
     let r = call(&router, "POST", "/r/leaders/lead1/message", PHONE, Some(&token), json!({"text": "yes"})).await;
-    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
-    assert_eq!(r.json()["reason"], "busy");
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(std::fs::read(&file).unwrap_or_default().is_empty(), "nothing typed");
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let _ = file;
 }
 
 /// S2 (events mode). Two tool calls in a row: the first finished long ago in
@@ -199,11 +202,11 @@ async fn finding_s2_a_tool_result_as_last_item_opens_the_window() {
     hook_v(&app, &sb, "s1", 2, json!({"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": "a"}}));
     hook_v(&app, &sb, "s1", 2, json!({"hook_event_name": "PostToolUse", "tool_name": "Read", "tool_response": {}}));
     // Turned around by remote-daemon (S2 fix): the leader is working.
+    // Turned again by phone-busy-send: working, a tool's result last, the
+    // window over: the message is typed (Claude Code queues it).
     let r = call(&router, "POST", "/r/leaders/lead1/message", PHONE, Some(&token), json!({"text": "ok"})).await;
-    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
-    assert_eq!(r.json()["reason"], "busy");
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(std::fs::read(&file).unwrap_or_default().is_empty(), "nothing typed");
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let _ = file;
 }
 
 /// The bracketed-paste rule fails closed: a terminal that turned paste off

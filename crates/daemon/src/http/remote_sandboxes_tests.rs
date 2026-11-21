@@ -256,11 +256,11 @@ async fn the_typing_refusals_are_unchanged_and_a_read_only_entry_says_why() {
     let router = remote_router(app.clone());
     let token = pair(&app, &router, "phone").await;
 
-    // Working: read and interrupted, not written to.
+    // Working: read, written to (Claude Code queues the message), interrupted.
     let (busy, _) = plain(&app, d.path(), "busy1").await;
     hook(&app, &busy, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": "work"}));
     let r = call(&router, "POST", "/r/leaders/busy1/message", Some(&token), json!({"text": "hi"})).await;
-    assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::CONFLICT, json!("busy")), "{}", r.text());
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert_eq!(call(&router, "POST", "/r/leaders/busy1/interrupt", Some(&token), json!({})).await.status, StatusCode::OK);
 
     // A permission prompt: the Mac's.

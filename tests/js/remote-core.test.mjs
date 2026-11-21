@@ -21,7 +21,7 @@ const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcSta
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
   'rcL2Fail', 'RC_L2_REASON', 'rcActPath', 'rcActLine', 'rcActDone', 'rcL2Client',
   'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback', 'rcMarked', 'rcActParts',
-  'RC_DICT_TEXT', 'rcSpeechEnd', 'rcSpeechRestart', 'RC_SPEECH_RESTARTS', 'rcSpeechRound', 'rcFinalSegments', 'rcTail', 'rcRecMime', 'rcClipCheck', 'rcSilentPcm', 'rcTranscribed'];
+  'RC_DICT_TEXT', 'rcSpeechEnd', 'rcSpeechRestart', 'RC_SPEECH_RESTARTS', 'rcSpeechRound', 'rcFinalSegments', 'rcTail', 'rcRecMime', 'rcClipCheck', 'rcSilentPcm', 'rcTranscribed', 'rcSendNote', 'RC_QUEUED_TEXT'];
 const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
@@ -317,7 +317,7 @@ test('each refusal reason has its own sentence, with the daemon\'s words as text
     control: [400, /control or invisible character/],
     empty: [400, /empty/],
     needs_mac: [409, /This needs your Mac/],
-    busy: [409, /The session is working\. A message can be sent once it is back at its prompt/],
+    busy: [409, /The session is busy right now: try again in a few seconds/],
     no_paste: [409, /Send it from your Mac/],
     not_submitted: [409, /NOT SENT: the text was typed into the session's input on the Mac but not submitted/],
     attachment: [400, /a file of this message is no longer on the Mac.*choose it again/],
@@ -340,15 +340,21 @@ test('the check before sending matches the daemon\'s rule', () => {
     assert.equal(rc.rcMessageCheck(s), 'control', JSON.stringify(s));
   }
   assert.match(rc.RC_MSG_REASON.control, /Remove the invisible characters, or retype the text/);
-  assert.equal(rc.RC_MSG_REASON.busy, 'The session is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.');
+  assert.equal(rc.RC_MSG_REASON.busy, 'The session is busy right now: try again in a few seconds. Meanwhile you can read it and interrupt it.');
   for (const s of ['', '   ', '\n\n']) assert.equal(rc.rcMessageCheck(s), 'empty');
   for (const s of ['hello', 'café ünïcödé 日本語 😀', 'a/b and c#d', 'line one\nline two', 'see https://x.example/#a', 'Fix it! Now.']) assert.equal(rc.rcMessageCheck(s), null, JSON.stringify(s));
 });
 
-test('Send waits while the session works, and only then', () => {
-  assert.match(rc.rcSendGate({ state: 'working' }), /The session is working/);
+test('Send goes while the session works, and the status line says Claude Code queues it', () => {
   assert.match(rc.rcSendGate(null), /not running/);
-  for (const l of [{ state: 'idle' }, { state: 'attention', asks: true }]) assert.equal(rc.rcSendGate(l), '');
+  for (const l of [{ state: 'idle' }, { state: 'working' }, { state: 'attention', asks: true }]) assert.equal(rc.rcSendGate(l), '', JSON.stringify(l));
+  assert.equal(rc.rcSendNote({ state: 'working' }), rc.RC_QUEUED_TEXT);
+  assert.match(rc.RC_QUEUED_TEXT, /queued by Claude Code/);
+  for (const l of [null, { state: 'idle' }, { state: 'attention', asks: true }, { state: 'working', read_only: 'no_terminal' }]) assert.equal(rc.rcSendNote(l), '', JSON.stringify(l));
+  const s = o => plain(rc.rcStatus(o));
+  assert.deepEqual(s({ queued: rc.RC_QUEUED_TEXT }), { text: rc.RC_QUEUED_TEXT, tone: 'info' });
+  assert.equal(s({ queued: rc.RC_QUEUED_TEXT, note: { text: 'Sent.', tone: 'ok' } }).text, 'Sent.', 'a note wins');
+  assert.equal(s({ queued: rc.RC_QUEUED_TEXT, gate: 'Read only.' }).text, 'Read only.', 'a gate wins');
 });
 
 // ── Files (API.md 2.6.1) ──

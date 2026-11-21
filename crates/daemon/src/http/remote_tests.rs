@@ -1057,6 +1057,13 @@ async fn the_admin_routes_answer_on_the_ui_listener_with_the_ui_token() {
 
 // ── Review fixes: F1 (message only into a prompt), F4, F5 ───────────────
 
+/// The state `GET /r/leaders` shows for `sandbox`.
+async fn state_of(router: &Router, token: &str, sandbox: &str) -> String {
+    let r = call(router, "GET", "/r/leaders", Some(token), json!({})).await;
+    let list = r.json()["leaders"].as_array().cloned().unwrap_or_default();
+    list.iter().find(|l| l["sandbox"] == sandbox).and_then(|l| l["state"].as_str()).unwrap_or("").to_string()
+}
+
 async fn message(router: &Router, token: &str, text: &str) -> Reply {
     call(router, "POST", "/r/leaders/lead1/message", Some(token), json!({ "text": text })).await
 }
@@ -1217,17 +1224,75 @@ async fn an_alias_that_would_make_a_command_is_refused() {
 }
 
 #[tokio::test]
-async fn a_working_leader_is_read_and_interrupted_not_written_to() {
+async fn a_working_leader_takes_a_message_claude_code_queues_and_can_be_interrupted() {
     let (d, app) = on();
     let router = remote_router(app.clone());
     let token = pair(&app, &router, "phone").await;
     let (sb, file) = leader(&app, d.path(), "lead1").await;
     hook(&app, &sb, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": "build it"}));
+    assert_eq!(state_of(&router, &token, "lead1").await, "working");
+    // Working: typed as one paste and one Return, as at the Mac's keyboard.
     let r = message(&router, &token, "and also this").await;
-    assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::CONFLICT, json!("busy")), "{}", r.text());
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(typed(&file, b"\x1b[201~\r").await, b"\x1b[200~and also this\x1b[201~\r");
+    assert_eq!(app.remote_journal(10).last().map(|e| e.kind), Some(Kind::Message));
     assert_eq!(call(&router, "GET", "/r/leaders/lead1/history", Some(&token), json!({})).await.status, StatusCode::OK);
     assert_eq!(call(&router, "POST", "/r/leaders/lead1/interrupt", Some(&token), json!({})).await.status, StatusCode::OK);
-    assert_eq!(typed(&file, b"\x1b").await, b"\x1b", "only the Escape");
+    assert_eq!(typed(&file, b"\r\x1b").await, b"\x1b[200~and also this\x1b[201~\r\x1b", "then only the Escape");
+}
+
+#[tokio::test]
+async fn a_working_leader_is_still_typed_only_messages_not_model_or_lead_lines() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
+    hook(&app, &sb, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": "build it"}));
+    let models = call(&router, "GET", "/r/models", Some(&token), json!({})).await.json();
+    let id = models["models"][0]["id"].as_str().expect("a configured model").to_string();
+    let r = call(&router, "POST", "/r/leaders/lead1/model", Some(&token), json!({"id": id})).await;
+    assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::CONFLICT, json!("busy")), "{}", r.text());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(std::fs::read(&file).unwrap_or_default().is_empty(), "no /model line while working");
+}
+
+#[tokio::test]
+async fn a_working_leader_that_asks_before_the_return_gets_no_return() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
+    hook(&app, &sb, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": "build it"}));
+    // Working, then Attention between the paste and the Return.
+    let late = app.clone();
+    let sb2 = sb.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        hook(&late, &sb2, "s1", json!({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"}));
+    });
+    let r = message(&router, &token, "keep going").await;
+    assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::CONFLICT, json!("not_submitted")), "{}", r.text());
+    assert_eq!(state_of(&router, &token, "lead1").await, "attention");
+    let got = typed(&file, b"\x1b[201~").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let got = { let all = std::fs::read(&file).unwrap_or_default(); if all.len() > got.len() { all } else { got } };
+    assert_eq!(got, b"\x1b[200~keep going\x1b[201~", "the paste, never the Return: {got:?}");
+    assert_eq!(app.remote_journal(10).last().map(|e| e.kind), Some(Kind::Refused));
+}
+
+#[tokio::test]
+async fn a_leader_waiting_for_the_person_is_still_refused_working_or_not() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
+    hook(&app, &sb, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": "build it"}));
+    hook(&app, &sb, "s1", json!({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"}));
+    assert_eq!(state_of(&router, &token, "lead1").await, "attention");
+    let r = message(&router, &token, "yes").await;
+    assert_eq!((r.status, r.json()["reason"].clone()), (StatusCode::CONFLICT, json!("needs_mac")), "{}", r.text());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(std::fs::read(&file).unwrap_or_default().is_empty(), "nothing typed");
 }
 
 #[tokio::test]
