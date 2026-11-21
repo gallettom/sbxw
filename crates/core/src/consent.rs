@@ -84,6 +84,9 @@ pub fn grants(cfg: &Config) -> Vec<String> {
     if cfg.chrome {
         out.insert("Claude in Chrome: the agent opens, drives and reads tabs in your host browser (chrome)".into());
     }
+    if cfg.phone_skills != d.phone_skills {
+        out.insert(format!("phone skills: a paired phone may make the daemon type {} into a leader (phone_skills)", cfg.phone_skills.iter().map(|n| format!("/{n}")).collect::<Vec<_>>().join(", ")));
+    }
     if cfg.cache_ttl_days > d.cache_ttl_days {
         out.insert(format!("kit cache kept {} days (default {})", cfg.cache_ttl_days, d.cache_ttl_days));
     }
@@ -313,7 +316,7 @@ mod tests {
             "workdir", "workspaces", "carve", "cpus", "memory", "fuse", "root_size", "docker_size", "volumes", "cache", "cache_ttl_days",
             "claude_model", "models", "skills", "pull", "template", "keep_running", "chrome", "max_agent_sessions", "keep_awake",
             "keep_awake_min_battery", "battery_warn_below", "monitor_cmd", "terminal_color", "terminal_bar_color",
-            "terminal_text_color", "env", "env_files", "mac", "voice",
+            "terminal_text_color", "env", "env_files", "mac", "voice", "phone_skills",
             // Display and guidance text only: no host access.
             "emphasis",
         ];
@@ -321,6 +324,14 @@ mod tests {
         for key in v.as_table().unwrap().keys() {
             assert!(known.contains(&key.as_str()), "classify the new key `{key}` in consent::grants");
         }
+    }
+
+    #[test]
+    fn a_non_default_phone_skills_is_a_grant() {
+        assert!(lines("").iter().all(|l| !l.starts_with("phone skills")));
+        let l = lines("phone_skills = [\"retro\", \"deploy\"]");
+        assert_eq!(l.len(), 1, "{l:?}");
+        assert!(l[0].starts_with("phone skills") && l[0].contains("/retro, /deploy"), "{l:?}");
     }
 
     #[test]
