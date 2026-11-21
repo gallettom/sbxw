@@ -14,7 +14,7 @@ const pageSrc = read('../../assets/remote/remote.js');
 const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
-const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcActivity', 'rcPairCode',
+const NAMES = ['rcAgentHtml', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcAnswerPick', 'rcAnswers', 'rcAnswerFail', 'rcActivity', 'rcPairCode',
   'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
   'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
@@ -147,6 +147,23 @@ test('a question the phone can answer, and one that needs the Mac', () => {
   // Steps without `answerable` are not answered from the phone.
   assert.equal(rc.rcPending({ ...shop, answerable: false }).kind, 'mac');
 });
+test('a multi-select step takes several options, a single-select step one', () => {
+  const one = { text: 'Which?', options: ['A', 'B', 'C'] };
+  const many = { text: 'Which ones?', options: ['A', 'B', 'C'], multi: true };
+  assert.deepEqual(plain(rc.rcAnswerPick([], one, 1)), [1]);
+  assert.deepEqual(plain(rc.rcAnswerPick([1], one, 2)), [2], 'a new tap replaces');
+  assert.deepEqual(plain(rc.rcAnswerPick([2], many, 0)), [0, 2], 'sorted');
+  assert.deepEqual(plain(rc.rcAnswerPick([0, 2], many, 2)), [0], 'a second tap unticks');
+  assert.deepEqual(plain(rc.rcAnswers([[0], [1, 2], [1]])), [[1], [2, 3], [2]], '1-based on the wire');
+  const leader = { asks: true, answerable: true, steps: [one, many] };
+  assert.equal(rc.rcPending(leader).steps[1].multi, true, 'the flag reaches the card');
+});
+test('an answer typed but not taken says to answer on the Mac', () => {
+  const notTaken = { ok: false, status: 409, data: { error: 'not taken: the question is still open at the Mac, answer it there' } };
+  assert.match(rc.rcAnswerFail(notTaken), /^Answer not taken: .*Answer it on the Mac\.$/);
+  assert.match(rc.rcAnswerFail({ ok: false, status: 409, data: { error: 'two sessions' } }), /^Answer not sent: the session is not waiting/);
+  assert.match(rc.rcAnswerFail({ ok: false, status: 0, unreachable: true }), /unreachable/);
+});
 test('the fixed activity phrase, left out where it repeats the state', () => {
   const [shop, docs, pay, web] = rc.rcLeaders(fx.leaders);
   assert.deepEqual([shop, docs, pay, web].map(rc.rcActivity), ['Asks a question', 'Waits for you at the Mac', '', 'Waiting for a message']);
@@ -201,7 +218,7 @@ test('each action calls its route once, same origin, JSON, no credential in the 
   const { f, calls } = fakeFetch({ status: 200, body: { ok: true } });
   const api = rc.rcClient(f);
   await api.message('shop', 'hello');
-  await api.answer('shop', [2]);
+  await api.answer('shop', [[2]]);
   await api.interrupt('shop');
   await api.leaders();
   await api.history('a b/../c', { before: 101 });
@@ -237,7 +254,7 @@ test('each action calls its route once, same origin, JSON, no credential in the 
     if (c.method === 'POST' && c.path !== '/r/voice/transcribe') assert.equal(c.headers['Content-Type'], 'application/json');
   }
   assert.deepEqual(JSON.parse(calls[0].body), { text: 'hello' });
-  assert.deepEqual(JSON.parse(calls[1].body), { indices: [2] });
+  assert.deepEqual(JSON.parse(calls[1].body), { answers: [[2]] }, 'per step, the options picked');
   assert.deepEqual(JSON.parse(calls[6].body), { code: 'CODE1234', device_name: 'iPhone' });
   assert.equal(calls.at(-1).headers['Content-Type'], 'application/octet-stream');
 });

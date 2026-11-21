@@ -709,10 +709,11 @@
   }
 
   // The same question re-rendered by a `leaders` event keeps what was picked.
+  // A multi-select step (`multi`) takes several options, as checkboxes.
   let picks = { key: '', picked: [] };
   function questionCard(l, steps) {
     const key = `${l.sandbox}\n${JSON.stringify(steps)}`;
-    if (picks.key !== key) picks = { key, picked: steps.map(() => null) };
+    if (picks.key !== key) picks = { key, picked: steps.map(() => []) };
     const card = document.createElement('div');
     card.className = 'rc-card-q';
     const submit = document.createElement('button');
@@ -722,40 +723,52 @@
     const status = document.createElement('p');
     status.className = 'rc-q-hint';
     status.hidden = true;
-    const ready = () => { submit.disabled = picks.picked.includes(null); };
+    const ready = () => { submit.disabled = picks.picked.some(p => !p.length); };
     steps.forEach((step, si) => {
       const p = document.createElement('p');
       p.textContent = step.text;
+      card.append(p);
+      if (step.multi) {
+        const hint = document.createElement('p');
+        hint.className = 'rc-q-hint';
+        hint.textContent = 'Pick one or more.';
+        card.append(hint);
+      }
       const opts = document.createElement('div');
       opts.className = 'rc-opts';
+      const paint = () => opts.querySelectorAll('.rc-opt').forEach((x, xi) => {
+        const on = picks.picked[si].includes(xi);
+        x.classList.toggle('rc-picked', on);
+        x.setAttribute('aria-pressed', String(on));
+      });
       step.options.forEach((label, oi) => {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = 'rc-opt';
+        b.className = step.multi ? 'rc-opt rc-check' : 'rc-opt';
         b.textContent = String(label);
-        b.classList.toggle('rc-picked', picks.picked[si] === oi);
         b.addEventListener('click', () => {
-          picks.picked[si] = oi;
-          opts.querySelectorAll('.rc-opt').forEach((x, xi) => x.classList.toggle('rc-picked', xi === oi));
+          picks.picked[si] = rcAnswerPick(picks.picked[si], step, oi);
+          paint();
           ready();
         });
         opts.append(b);
       });
-      card.append(p, opts);
+      paint();
+      card.append(opts);
     });
     submit.addEventListener('click', async () => {
       if (submit.disabled) return;
       const sandbox = l.sandbox;
       card.querySelectorAll('button').forEach(b => { b.disabled = true; });
-      const res = await api.answer(sandbox, picks.picked.map(i => i + 1));
+      status.textContent = 'Sending…';
+      status.hidden = false;
+      const res = await api.answer(sandbox, rcAnswers(picks.picked));
       if (res.ok) {
         status.textContent = 'Answer sent.';
-        status.hidden = false;
         submit.hidden = true;
         return;
       }
-      status.textContent = rcFailText('Answer', res);
-      status.hidden = false;
+      status.textContent = rcAnswerFail(res);
       card.querySelectorAll('button').forEach(b => { b.disabled = false; });
       ready();
     });
