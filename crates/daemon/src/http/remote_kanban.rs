@@ -643,6 +643,10 @@ mod tests {
         let paths = ["/r/leaders/web/kanban", "/r/leaders/web/kanban/1"];
         for p in paths {
             for m in ["POST", "PUT", "PATCH", "DELETE"] {
+                // The one write: a new ticket, POST on the board (its own test).
+                if m == "POST" && p == "/r/leaders/web/kanban" {
+                    continue;
+                }
                 let r = call(&router, m, p, Some(&token)).await;
                 assert_eq!(r.status, StatusCode::METHOD_NOT_ALLOWED, "{m} {p}");
             }
@@ -661,7 +665,8 @@ mod tests {
         // Listed, and only on this listener.
         for p in ["/r/leaders/:sandbox/kanban", "/r/leaders/:sandbox/kanban/:ticket"] {
             assert!(ROUTES.contains(&("GET", p)), "{p}");
-            assert!(!ROUTES.iter().any(|(m, q)| *q == p && *m != "GET"));
+            let others = ROUTES.iter().filter(|(m, q)| *q == p && *m != "GET").count();
+            assert_eq!(others, usize::from(p.ends_with("kanban")), "only the board takes a POST: {p}");
         }
         // The UI's ticket routes stay unreachable from here.
         for p in ["/api/tickets", "/api/tickets?sandbox=web", "/api/tickets/web/1", "/api/tickets/web/1/files/f-0123456789abcdef"] {
