@@ -406,10 +406,24 @@ async fn message(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox
     }
 }
 
+/// `{answers: [[1], [2, 3]]}`: per step, the options chosen (several for a
+/// multi-select step). `{indices: [1, 2]}`, one option per step, is what
+/// pages cached before multi-select still send.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AnswerBody {
-    indices: Vec<u32>,
+    answers: Option<Vec<Vec<u32>>>,
+    indices: Option<Vec<u32>>,
+}
+
+impl AnswerBody {
+    fn answers(self) -> Option<Vec<Vec<u32>>> {
+        match (self.answers, self.indices) {
+            (Some(a), None) => Some(a),
+            (None, Some(i)) => Some(i.into_iter().map(|i| vec![i]).collect()),
+            _ => None,
+        }
+    }
 }
 
 async fn answer(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Json(b): Json<AnswerBody>) -> Response {
@@ -417,7 +431,10 @@ async fn answer(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox)
         Ok(sb) => sb,
         Err(e) => return refusal(e),
     };
-    match app.remote_answer(&d, &sb, b.indices).await {
+    let Some(answers) = b.answers() else {
+        return refusal(Refusal::Bad("answers (or indices), not both".into()));
+    };
+    match app.remote_answer(&d, &sb, answers).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => refusal(e),
     }

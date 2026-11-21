@@ -3,7 +3,7 @@
 use crate::app::{now_ms, App};
 use crate::bus::Event;
 use crate::typing;
-use sbxw_core::agents::{self, answer_keystrokes, CostReport, HookEvent, ModelReport, OriginEvidence, SessionInfo, SessionOrigin};
+use sbxw_core::agents::{self, answer_keystrokes, CostReport, StepShape, HookEvent, ModelReport, OriginEvidence, SessionInfo, SessionOrigin};
 use sbxw_core::session::{SessionKey, SessionKind};
 use sbxw_core::{SandboxName, SandboxRef};
 use std::sync::Arc;
@@ -15,7 +15,15 @@ pub enum AnswerError {
     NoSession,
     Ambiguous(String),
     NoIndices,
+    /// Typed, but the session still shows the same question after
+    /// [`ANSWER_TAKEN_WITHIN`]: Claude Code did not take the answer.
+    NotTaken,
 }
+
+/// How long the answer path waits, after typing, for a hook to say the
+/// question left (`PostToolUse` of `AskUserQuestion`, or anything that clears
+/// the prompt). Claude Code fires it right after the last Return.
+pub const ANSWER_TAKEN_WITHIN: std::time::Duration = if cfg!(test) { std::time::Duration::from_millis(1500) } else { std::time::Duration::from_secs(5) };
 
 impl App {
     /// One hook event from `sandbox` (its identity, from its token).
@@ -182,26 +190,44 @@ impl App {
     }
 
     /// Answer a pending prompt by replaying the keystrokes a person would
-    /// type. Refused (409) unless exactly one session of the sandbox is
+    /// type: `answers[n]` holds the 1-based options chosen at step `n` (one
+    /// for a single-select step, one or more for a multi-select one).
+    /// Refused (409) unless exactly one session of the sandbox is
     /// identifiably the one sbxw's terminal drives — an island too old to know
     /// would otherwise answer one session's question in another's terminal.
-    pub async fn answer(self: &Arc<Self>, sandbox: &SandboxRef, kind: SessionKind, indices: Vec<u32>) -> Result<(), AnswerError> {
+    /// Then the hooks must show the question gone within
+    /// [`ANSWER_TAKEN_WITHIN`], or [`AnswerError::NotTaken`]: a caller never
+    /// reports success for keys Claude Code did not take.
+    pub async fn answer(self: &Arc<Self>, sandbox: &SandboxRef, kind: SessionKind, answers: Vec<Vec<u32>>) -> Result<(), AnswerError> {
         let Some(session) = self.sessions.live(&SessionKey::new(sandbox.clone(), kind)) else {
             return Err(AnswerError::NoSession);
         };
-        if indices.is_empty() {
+        if answers.is_empty() || answers.iter().any(Vec::is_empty) {
             return Err(AnswerError::NoIndices);
         }
-        let (key, sizes) = {
+        let (key, asked) = {
             let book = self.agents.lock().unwrap();
             let key = book.answerable(&sandbox.to_string()).map_err(|e| AnswerError::Ambiguous(e.to_string()))?;
-            let sizes = book.prompt_sizes(&key);
-            (key, sizes)
+            let asked = book.prompt_of(&key);
+            (key, asked)
         };
+        let shapes: Vec<StepShape> = asked.iter().map(StepShape::of).collect();
         // Never the indices: they are the person's answer (the remote
         // journal's rule holds for every log line).
-        tracing::debug!("answer '{sandbox}': {} step(s)", sizes.len());
-        typing::keys(&session, &answer_keystrokes(&indices, &sizes)).await;
+        tracing::debug!("answer '{sandbox}': {} step(s)", shapes.len());
+        typing::keys(&session, &answer_keystrokes(&answers, &shapes)).await;
+        let deadline = tokio::time::Instant::now() + ANSWER_TAKEN_WITHIN;
+        loop {
+            let still = !asked.is_empty() && self.agents.lock().unwrap().prompt_of(&key) == asked;
+            if !still {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!("answer '{sandbox}': typed, but the question is still open");
+                return Err(AnswerError::NotTaken);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         let infos = self.agents.lock().unwrap().answered(&key, true, now_ms());
         for i in infos {
             self.send(Event::Session(i));

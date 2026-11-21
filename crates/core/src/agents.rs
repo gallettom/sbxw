@@ -55,6 +55,10 @@ pub struct Question {
     /// "label — description" per option: the decision table.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<String>,
+    /// `multiSelect`: the person may pick several options (checkboxes in
+    /// Claude Code's prompt, toggled one by one, then "Next" or "Submit").
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub multi: bool,
 }
 
 /// The rich payload of `/api/events` and `/api/sessions`. A wire contract with
@@ -579,10 +583,12 @@ fn question_step(q: &Value) -> Option<Question> {
         }
         options.push(label);
     }
+    let multi = q.get("multiSelect").and_then(Value::as_bool) == Some(true);
     (options.len() >= 2).then_some(Question {
         text,
         options,
         context,
+        multi,
     })
 }
 
@@ -1225,6 +1231,13 @@ impl AgentBook {
             .unwrap_or_default()
     }
 
+    /// The pending prompt of `key`, step by step (empty: none). The answer
+    /// path compares it before and after typing: the hooks clear it once
+    /// Claude Code took the answer.
+    pub fn prompt_of(&self, key: &AgentKey) -> Vec<Question> {
+        self.statuses.get(key).map(|s| s.prompt.clone()).unwrap_or_default()
+    }
+
     /// The prompt was answered: clear it and mark the session working.
     pub fn answered(&mut self, key: &AgentKey, has_pty: bool, now: u64) -> Vec<SessionInfo> {
         if let Some(st) = self.statuses.get_mut(key) {
@@ -1348,23 +1361,72 @@ fn build(key: &AgentKey, st: &Status, why: Result<(), Unanswerable>, now: u64) -
     }
 }
 
-/// The keystrokes that answer a prompt: per step, `k-1` downs then Return
-/// (each tab opens on its first option, and the prompt listens to arrows and
-/// Return only — not to the numbers it shows), then a final Return on Submit.
-/// An index past what the step offers is clamped, so a stray number cannot
-/// spray arrows.
-pub fn answer_keystrokes(indices: &[u32], sizes: &[u32]) -> Vec<&'static [u8]> {
+/// What the keystrokes of one step depend on: how many options it offers
+/// and whether it is a multi-select (checkboxes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StepShape {
+    pub options: u32,
+    pub multi: bool,
+}
+
+impl StepShape {
+    pub fn of(q: &Question) -> Self {
+        StepShape { options: q.options.len() as u32, multi: q.multi }
+    }
+}
+
+/// The keystrokes that answer an `AskUserQuestion` prompt, as Claude Code
+/// (2.1.330, read from its bundled source) takes them. Each tab opens with
+/// its first option focused; the prompt is driven with arrows, Space and
+/// Return (the digits it shows are not relied on).
+///
+/// * A single-select step: `k-1` downs, then Return, which records the
+///   choice and moves to the next tab.
+/// * A multi-select step: for each chosen option, in order, the downs to
+///   reach it and a Space (which toggles it; Return would too, but Space can
+///   never press the step's button). Then downs past the last option and the
+///   "Other" row onto the step's "Next" (or "Submit") button, and Return.
+/// * Then a Return on the "Review your answers" tab, whose first button is
+///   "Submit answers". Not when the prompt is one single-select question:
+///   Claude Code hides that tab and its Return already submitted.
+///
+/// `answers[n]` holds the 1-based options chosen at step `n` (only the first
+/// counts for a single-select step). An index past what a step offers is
+/// clamped, so a stray number cannot spray arrows.
+pub fn answer_keystrokes(answers: &[Vec<u32>], steps: &[StepShape]) -> Vec<&'static [u8]> {
     const DOWN: &[u8] = b"\x1b[B";
+    const SPACE: &[u8] = b" ";
     const ENTER: &[u8] = b"\r";
     const MAX_MENU: u32 = 20;
+    let downs = |keys: &mut Vec<&'static [u8]>, n: u32| keys.extend(std::iter::repeat_n(DOWN, n as usize));
     let mut keys = Vec::new();
-    for (n, idx) in indices.iter().enumerate() {
-        let limit = sizes.get(n).copied().unwrap_or(MAX_MENU).max(1);
-        let downs = (*idx).clamp(1, limit) - 1;
-        keys.extend(std::iter::repeat_n(DOWN, downs as usize));
+    for (n, picks) in answers.iter().enumerate() {
+        let shape = steps.get(n).copied().unwrap_or(StepShape { options: MAX_MENU, multi: false });
+        let limit = shape.options.clamp(1, MAX_MENU);
+        if shape.multi {
+            let mut chosen: Vec<u32> = picks.iter().map(|i| (*i).clamp(1, limit)).collect();
+            chosen.sort_unstable();
+            chosen.dedup();
+            let mut at = 1;
+            for c in chosen {
+                downs(&mut keys, c - at);
+                keys.push(SPACE);
+                at = c;
+            }
+            // From `at` to the last option, one more onto "Other", one more
+            // onto the button.
+            downs(&mut keys, limit - at + 2);
+        } else {
+            let idx = picks.first().copied().unwrap_or(1).clamp(1, limit);
+            downs(&mut keys, idx - 1);
+        }
         keys.push(ENTER);
     }
-    keys.push(ENTER);
+    let count = if steps.is_empty() { answers.len() } else { steps.len() };
+    let lone_single = count == 1 && !steps.first().is_some_and(|s| s.multi);
+    if !lone_single {
+        keys.push(ENTER);
+    }
     keys
 }
 
@@ -2062,12 +2124,51 @@ mod tests {
         assert_eq!(describe_tool("Task", None), "Task");
     }
 
+    const D: &[u8] = b"\x1b[B";
+    const E: &[u8] = b"\r";
+    const S: &[u8] = b" ";
+    fn single(options: u32) -> StepShape {
+        StepShape { options, multi: false }
+    }
+
     #[test]
-    fn answers_become_arrows_and_returns() {
-        let k = answer_keystrokes(&[2, 1], &[3, 2]);
-        assert_eq!(k, [b"\x1b[B" as &[u8], b"\r", b"\r", b"\r"]);
-        let clamped = answer_keystrokes(&[9], &[2]);
-        assert_eq!(clamped.len(), 3, "one down, return, submit");
+    fn one_single_select_question_submits_on_its_own_return() {
+        // Claude Code hides the review tab for one single-select question.
+        assert_eq!(answer_keystrokes(&[vec![2]], &[single(3)]), [D, E]);
+        assert_eq!(answer_keystrokes(&[vec![1]], &[single(2)]), [E]);
+        let clamped = answer_keystrokes(&[vec![9]], &[single(2)]);
+        assert_eq!(clamped, [D, E], "one down at most, then return");
+    }
+
+    #[test]
+    fn three_single_select_questions_end_on_submit_answers() {
+        let k = answer_keystrokes(&[vec![2], vec![1], vec![3]], &[single(3), single(2), single(4)]);
+        assert_eq!(k, [D, E, E, D, D, E, E], "each return moves a tab on; the last presses Submit answers");
+    }
+
+    #[test]
+    fn a_multi_select_step_toggles_with_space_then_presses_next() {
+        let multi = StepShape { options: 4, multi: true };
+        // Options 2 and 3 of 4: down, space, down, space; then from option 3
+        // past option 4 and "Other" onto the button: three downs; return.
+        let k = answer_keystrokes(&[vec![3, 2]], &[multi]);
+        assert_eq!(k, [D, S, D, S, D, D, D, E, E], "a lone multi-select step still has its review tab");
+        // The reported case: three questions, the middle one multi-select.
+        let k = answer_keystrokes(&[vec![1], vec![2, 3], vec![2]], &[single(3), multi, single(2)]);
+        assert_eq!(k, [E, D, S, D, S, D, D, D, E, D, E, E]);
+        // A repeated or out of range pick toggles once, never off again.
+        let k = answer_keystrokes(&[vec![1, 1, 9]], &[multi]);
+        assert_eq!(k, [S, D, D, D, S, D, D, E, E]);
+    }
+
+    #[test]
+    fn a_question_carries_its_multi_select_flag() {
+        let mut v = ask(&[("Which?", &["A", "B"]), ("All?", &["C", "D"])]);
+        v["tool_input"]["questions"][1]["multiSelect"] = json!(true);
+        let qs = questions_from_ask(&v);
+        assert_eq!((qs[0].multi, qs[1].multi), (false, true));
+        assert_eq!(StepShape::of(&qs[1]), StepShape { options: 2, multi: true });
+        assert!(serde_json::to_value(&qs[0]).unwrap().get("multi").is_none(), "single-select stays as it was on the wire");
     }
 
     #[test]

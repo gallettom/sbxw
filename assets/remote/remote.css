@@ -484,6 +484,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-opt:focus-visible { box-shadow: var(--ring); }
 .rc-opt.rc-picked { border-color: var(--c-blue); background: rgba(88, 166, 255, 0.1); color: var(--c-text-bright); }
 .rc-opt.rc-picked::before { border-color: var(--c-blue); background: radial-gradient(circle, var(--c-blue) 0 3.5px, transparent 4px); }
+.rc-opt.rc-check::before { border-radius: 4px; }
+.rc-opt.rc-check.rc-picked::before { background: var(--c-blue); box-shadow: inset 0 0 0 2.5px var(--c-bg, #0d1117); }
 
 /* ── Composer: one object on its own ground, to the screen's edge ── */
 .rc-composer {

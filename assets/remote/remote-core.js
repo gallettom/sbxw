@@ -269,6 +269,28 @@ function rcPending(leader) {
   return { kind: 'mac', text: steps[0]?.text || 'It waits for something only the Mac can settle, such as allowing a tool.' };
 }
 
+// A tap on option `oi` (0-based) of a question's step: a single-select step
+// keeps that one option, a multi-select step (`step.multi`) toggles it. A
+// step's picks are a sorted array, empty while nothing is chosen.
+function rcAnswerPick(picked, step, oi) {
+  if (!step || !step.multi) return [oi];
+  const rest = picked.filter(x => x !== oi);
+  return (rest.length === picked.length ? [...picked, oi] : rest).sort((a, b) => a - b);
+}
+
+// The answer route's `answers`: per step, the 1-based options picked.
+function rcAnswers(picks) {
+  return picks.map(p => p.map(i => i + 1));
+}
+
+// Why an answer did not go through. A 409 "not taken": sbxw typed it, but
+// the session still asks, so the person answers at the Mac.
+function rcAnswerFail(res) {
+  const err = res && res.data && typeof res.data.error === 'string' ? res.data.error : '';
+  if (res && res.status === 409 && err.startsWith('not taken')) return 'Answer not taken: the question is still open. Answer it on the Mac.';
+  return rcFailText('Answer', res);
+}
+
 // A leader's activity: one of the daemon's fixed phrases ("Working", "Asks a
 // question", "Waits for you at the Mac", "Waiting for a message"), never the
 // session's own line. Left out where it only repeats the state shown beside it.
@@ -384,7 +406,8 @@ function rcClient(fetchImpl, hooks = {}) {
     message: (s, text, attachments) => call('POST', `${at(s)}/message`,
       Array.isArray(attachments) && attachments.length ? { text, attachments: attachments.map(String) } : { text }),
     dropUpload: (s, id) => call('DELETE', `${at(s)}/upload/${encodeURIComponent(id)}`),
-    answer: (s, indices) => call('POST', `${at(s)}/answer`, { indices }),
+    // Per step, the 1-based options chosen (several for a multi-select step).
+    answer: (s, answers) => call('POST', `${at(s)}/answer`, { answers }),
     interrupt: s => call('POST', `${at(s)}/interrupt`, {}),
     models: () => call('GET', '/r/models'),
     setModel: (s, id) => call('POST', `${at(s)}/model`, { id }),
