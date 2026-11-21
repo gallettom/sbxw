@@ -275,7 +275,7 @@ pub struct NewTicket {
 pub async fn create(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Json(b): Json<NewTicket>) -> Response {
     let Some(sb) = leader(&app, &sandbox) else { return not_found() };
     if b.attachments.len() > sbxw_core::remote_access::uploads::WAITING_MAX {
-        return super::remote::refusal(crate::svc::remote_access::Refusal::Reason(sbxw_core::remote_access::Reason::TooManyIds));
+        return super::remote::refusal(crate::svc::remote_access::Refusal::Reason(crate::svc::remote_access::Reason::TooManyIds));
     }
     match app.remote_ticket_create(&d, &sb, &b.title, &b.description, &b.attachments) {
         Ok(v) => Json(v).into_response(),
