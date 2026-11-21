@@ -360,16 +360,6 @@ pub enum AuthError {
     Limited(u64),
 }
 
-/// What [`App::remote_can_type`] is asked to type.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum Typing {
-    /// A phone message: typed at the prompt, or while the leader works
-    /// (Claude Code queues it).
-    Message,
-    /// A line of sbxw's own (`/model`, `/lead`): only at an idle prompt.
-    AtPrompt,
-}
-
 /// The fixed refusals of a message, each with a code the page can show.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Reason {
@@ -1025,7 +1015,7 @@ impl App {
 
     /// Why the phone can only read `sb`, if it can: the existing rules,
     /// looked at ahead (`can_type_into`, a live terminal of sbxw's).
-    fn remote_read_only(&self, sb: &SandboxRef) -> Option<&'static str> {
+    pub(super) fn remote_read_only(&self, sb: &SandboxRef) -> Option<&'static str> {
         if self.agents.lock().unwrap().can_type_into(&sb.to_string()).is_err() {
             return Some("several_sessions");
         }
@@ -1095,27 +1085,42 @@ impl App {
     // ── Acting on a leader ───────────────────────────────────────────────
 
     /// Whether typed text would land in the leader's prompt right now, and
-    /// its terminal. `typing` says what is typed: a phone message is also
-    /// typed while the leader is WORKING ([`Typing::Message`]): Claude Code
-    /// queues a message typed during a turn, as at the Mac's keyboard. A line
-    /// of sbxw's own (`/model`, `/lead`) is typed only into an IDLE leader
-    /// ([`Typing::AtPrompt`], review S2). Refused (fail closed) when the
-    /// leader is not a leader any more, waits for the person or its state is
-    /// unknown (`needs_mac`: Attention, a question, a permission prompt,
-    /// exited), its last history item is a prompt or a tool call under
-    /// [`TOOL_CALL_QUIET_MS`] (`busy`: a permission prompt may be on its way),
-    /// or its terminal has bracketed paste off. Claude Code does not open a
-    /// permission dialog on its own while it waits for input; while it works
-    /// it can, which is why [`Self::remote_message`] checks again after the
-    /// paste and before the Return.
-    fn remote_can_type(&self, sb: &SandboxRef, typing: Typing) -> Result<Arc<crate::pty::PtySession>, Reason> {
+    /// its terminal. Only an IDLE leader is typed into (review S2): at its
+    /// prompt, its turn over, nothing running; Claude Code does not open a
+    /// permission dialog on its own while it waits for input. Refused (fail
+    /// closed) when the leader is not a leader any more, is working (`busy`:
+    /// it can be read and interrupted, not written to), waits for the person
+    /// or its state is unknown (`needs_mac`), its last history item is a
+    /// prompt or a tool call under [`TOOL_CALL_QUIET_MS`], or its terminal has
+    /// bracketed paste off.
+    pub(super) fn remote_can_type(&self, sb: &SandboxRef) -> Result<Arc<crate::pty::PtySession>, Reason> {
         // Not reachable any more (stopped, or no longer a main session):
         // nothing is typed.
         let info = self.reach_info(sb).ok_or(Reason::NeedsMac)?;
+        if info.state == SessionState::Working {
+            return Err(Reason::Busy);
+        }
+        self.remote_can_type_in(sb, info)
+    }
+
+    /// [`Self::remote_can_type`] for a phone message, the only caller that
+    /// checks again between the paste and the Return
+    /// ([`Self::remote_message`]): a WORKING leader takes it too. Claude Code
+    /// queues a message typed during a turn, as at the Mac's keyboard. Every
+    /// other refusal holds: waiting for the person (Attention, a question, a
+    /// permission prompt), exited, unknown, a tool call under
+    /// [`TOOL_CALL_QUIET_MS`], bracketed paste off. Lines typed with no
+    /// re-check before their Return (`/model`, `/lead`, a skill) keep the
+    /// idle-only gate.
+    fn remote_can_type_message(&self, sb: &SandboxRef) -> Result<Arc<crate::pty::PtySession>, Reason> {
+        let info = self.reach_info(sb).ok_or(Reason::NeedsMac)?;
+        self.remote_can_type_in(sb, info)
+    }
+
+    /// The checks both gates share, on the state `info` read.
+    fn remote_can_type_in(&self, sb: &SandboxRef, info: sbxw_core::agents::SessionInfo) -> Result<Arc<crate::pty::PtySession>, Reason> {
         match info.state {
-            SessionState::Idle => {}
-            SessionState::Working if typing == Typing::Message => {}
-            SessionState::Working => return Err(Reason::Busy),
+            SessionState::Idle | SessionState::Working => {}
             SessionState::Attention | SessionState::Exited => return Err(Reason::NeedsMac),
         }
         if info.question.is_some() || info.steps.as_ref().is_some_and(|s| !s.is_empty()) {
@@ -1152,8 +1157,8 @@ impl App {
     /// 4. with files: check the leader takes text now, then copy each file
     ///    into the sandbox ([`App::remote_copy_attachments`]);
     /// 5. refuse unless typed text lands in the prompt now, or in Claude
-    ///    Code's queue while the leader works ([`Self::remote_can_type`] with
-    ///    [`Typing::Message`]), under the session's typing lock;
+    ///    Code's queue while the leader works
+    ///    ([`Self::remote_can_type_message`]), under the session's typing lock;
     /// 6. build the exact string typed (the masked text, then the fixed block
     ///    of the daemon's own paths) and check it whole, last;
     /// 7. send it as ONE bracketed paste, wait for the echo and [`HOOK_GRACE`];
@@ -1202,7 +1207,7 @@ impl App {
         // Files only reach a sandbox whose leader takes a message now; the
         // copy runs before the typing lock (it can take seconds).
         let paths = if files {
-            if let Err(r) = self.remote_can_type(sb, Typing::Message) {
+            if let Err(r) = self.remote_can_type_message(sb) {
                 self.remote_record(d, Kind::Refused);
                 return Err(Refusal::Reason(r));
             }
@@ -1213,7 +1218,7 @@ impl App {
         // The session's typing lock (shared with every other line writer:
         // chat push, sbxw's own lines, answers, Interrupt), then the state.
         let _one_at_a_time = live.typing.lock().await;
-        let session = match self.remote_can_type(sb, Typing::Message) {
+        let session = match self.remote_can_type_message(sb) {
             Ok(s) if Arc::ptr_eq(&s, &live) => s,
             Ok(_) => {
                 self.remote_record(d, Kind::Refused);
@@ -1241,7 +1246,7 @@ impl App {
         session.write(&[sbxw_core::terminal::PASTE_START, typed.as_bytes(), sbxw_core::terminal::PASTE_END]).await;
         crate::typing::settle(&mut rx, Some(crate::typing::ECHO_TIMEOUT), crate::typing::ECHO_QUIET).await;
         tokio::time::sleep(HOOK_GRACE).await;
-        match self.remote_can_type(sb, Typing::Message) {
+        match self.remote_can_type_message(sb) {
             Ok(again) if Arc::ptr_eq(&again, &session) => {}
             _ => {
                 tracing::info!("remote access: device {}: message not submitted (the leader's state changed)", d.id);
@@ -1335,7 +1340,7 @@ impl App {
             self.remote_record(d, Kind::Refused);
             return Err(Refusal::Conflict(format!("'{sb}' is read only from the phone ({why})")));
         }
-        if let Err(r) = self.remote_can_type(sb, Typing::AtPrompt) {
+        if let Err(r) = self.remote_can_type(sb) {
             self.remote_record(d, Kind::Refused);
             return Err(Refusal::Reason(r));
         }
@@ -1359,7 +1364,7 @@ impl App {
             return Err(Refusal::Conflict(format!("'{sb}' is read only from the phone ({why})")));
         }
         if on {
-            if let Err(r) = self.remote_can_type(sb, Typing::AtPrompt) {
+            if let Err(r) = self.remote_can_type(sb) {
                 self.remote_record(d, Kind::Refused);
                 return Err(Refusal::Reason(r));
             }
