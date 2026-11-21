@@ -141,6 +141,7 @@ async fn a_running_plain_sandbox_is_listed_and_reached_on_the_level_1_routes() {
         "tool_input": {"questions": [{"question": "Which?", "options": [{"label": "A"}, {"label": "B"}]}]}}));
     let e = entry(&call(&router, "GET", "/r/leaders", Some(&token), json!({})).await.json(), "app1").unwrap();
     assert_eq!((e["asks"].clone(), e["answerable"].clone()), (json!(true), json!(true)), "{e}");
+    super::remote_tests::takes_answer(&app, &sb, &file, b"\x1b[B\r");
     let r = call(&router, "POST", "/r/leaders/app1/answer", Some(&token), json!({"indices": [2]})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
 

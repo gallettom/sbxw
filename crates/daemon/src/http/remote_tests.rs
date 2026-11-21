@@ -580,6 +580,17 @@ pub(super) fn hook(app: &App, sb: &SandboxRef, sid: &str, mut ev: Value) {
     app.ingest_hook(sb, ev);
 }
 
+/// What Claude Code does once it takes an answer: its `PostToolUse` hook,
+/// once the keys reached the terminal (`want` is in `file`). The fake
+/// terminal never sends it; without it an answer is "not taken" (409).
+pub(super) fn takes_answer(app: &Arc<App>, sb: &SandboxRef, file: &std::path::Path, want: &'static [u8]) {
+    let (app, sb, file) = (app.clone(), sb.clone(), file.to_path_buf());
+    tokio::spawn(async move {
+        typed(&file, want).await;
+        hook(&app, &sb, "s1", json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion"}));
+    });
+}
+
 pub(super) async fn typed(file: &std::path::Path, want: &[u8]) -> Vec<u8> {
     for _ in 0..50 {
         let got = std::fs::read(file).unwrap_or_default();
@@ -736,12 +747,11 @@ async fn a_question_is_answered_a_permission_prompt_never() {
     assert!(!r.text().contains("reads ~/.ssh"), "no decision table");
     assert_eq!(call(&router, "POST", "/r/leaders/lead1/answer", Some(&token), json!({"indices": [0]})).await.status, StatusCode::BAD_REQUEST, "1-based");
     assert_eq!(call(&router, "POST", "/r/leaders/lead1/answer", Some(&token), json!({"indices": [1, 1]})).await.status, StatusCode::BAD_REQUEST, "one per step");
+    takes_answer(&app, &sb, &file, b"\x1b[B\r");
     let r = call(&router, "POST", "/r/leaders/lead1/answer", Some(&token), json!({"indices": [2]})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
-    let got = typed(&file, b"\x1b[B\r").await;
-    assert!(got.windows(4).any(|w| w == b"\x1b[B\r"), "{got:?}");
-
-    hook(&app, &sb, "s1", json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion"}));
+    let got = std::fs::read(&file).unwrap_or_default();
+    assert_eq!(got, b"\x1b[B\r", "one question, single-select: no review tab, no stray Return");
     hook(&app, &sb, "s1", json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "git push"}}));
     hook(&app, &sb, "s1", json!({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"}));
     let r = call(&router, "GET", "/r/leaders", Some(&token), json!({})).await;
@@ -754,6 +764,65 @@ async fn a_question_is_answered_a_permission_prompt_never() {
     assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(std::fs::read(&file).unwrap_or_default().len(), before, "nothing typed");
+}
+
+/// The reported case: three questions in one `AskUserQuestion`, the middle
+/// one multi-select. The phone sees which step takes several options, sends
+/// them, and the keys are the ones Claude Code's prompt needs.
+#[tokio::test]
+async fn a_multi_step_question_with_a_multi_select_step_is_answered() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
+    let opts = |l: &[&str]| l.iter().map(|o| json!({"label": o})).collect::<Vec<_>>();
+    hook(&app, &sb, "s1", json!({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion",
+        "tool_input": {"questions": [
+            {"question": "Which way?", "options": opts(&["Left", "Right", "Back"])},
+            {"question": "Which checks?", "multiSelect": true, "options": opts(&["Lint", "Tests", "Docs", "Bench"])},
+            {"question": "Now?", "options": opts(&["Yes", "No"])}]}}));
+    let l = call(&router, "GET", "/r/leaders", Some(&token), json!({})).await.json()["leaders"][0].clone();
+    assert_eq!(l["answerable"], true, "{l}");
+    assert_eq!((l["steps"][0].get("multi"), &l["steps"][1]["multi"]), (None, &json!(true)), "{l}");
+
+    let bad = |body: Value| {
+        let router = router.clone();
+        let token = token.clone();
+        async move { call(&router, "POST", "/r/leaders/lead1/answer", Some(&token), body).await.status }
+    };
+    assert_eq!(bad(json!({"answers": [[1, 2], [2], [1]]})).await, StatusCode::BAD_REQUEST, "a single-select step takes one");
+    assert_eq!(bad(json!({"answers": [[1], [2, 2], [1]]})).await, StatusCode::BAD_REQUEST, "each option once");
+    assert_eq!(bad(json!({"answers": [[1], [5], [1]]})).await, StatusCode::BAD_REQUEST, "among the step's options");
+    assert_eq!(bad(json!({"answers": [[1], [], [1]]})).await, StatusCode::BAD_REQUEST, "every step answered");
+    assert_eq!(bad(json!({"answers": [[1], [2], [1]], "indices": [1, 2, 1]})).await, StatusCode::BAD_REQUEST, "one form");
+    assert!(std::fs::read(&file).unwrap_or_default().is_empty(), "nothing typed on a refusal");
+
+    // Left; Tests and Docs; No; then Submit answers on the review tab.
+    const WANT: &[u8] = b"\r\x1b[B \x1b[B \x1b[B\x1b[B\x1b[B\r\x1b[B\r\r";
+    takes_answer(&app, &sb, &file, WANT);
+    let r = call(&router, "POST", "/r/leaders/lead1/answer", Some(&token), json!({"answers": [[1], [3, 2], [2]]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(std::fs::read(&file).unwrap_or_default(), WANT);
+    assert_eq!(app.remote_journal(10).last().map(|e| e.kind), Some(Kind::Answer));
+}
+
+/// Keys typed, but the hooks never say the question left: the phone is told
+/// it was not taken, never "sent".
+#[tokio::test]
+async fn an_answer_the_session_does_not_take_is_a_conflict() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
+    hook(&app, &sb, "s1", json!({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion",
+        "tool_input": {"questions": [{"question": "Which way?", "options": [{"label": "Left"}, {"label": "Right"}]}]}}));
+    let r = call(&router, "POST", "/r/leaders/lead1/answer", Some(&token), json!({"answers": [[2]]})).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
+    assert!(r.json()["error"].as_str().unwrap().starts_with("not taken"), "{}", r.text());
+    assert_eq!(app.remote_journal(10).last().map(|e| e.kind), Some(Kind::Refused));
+    assert_eq!(std::fs::read(&file).unwrap_or_default(), b"\x1b[B\r", "it was typed");
+    let l = call(&router, "GET", "/r/leaders", Some(&token), json!({})).await.json()["leaders"][0].clone();
+    assert_eq!(l["asks"], true, "still asking: nothing pretends it was answered");
 }
 
 #[tokio::test]
@@ -1116,9 +1185,10 @@ async fn info_logs_name_a_device_and_a_kind_only() {
     let (d, app) = on();
     let router = remote_router(app.clone());
     let token = pair(&app, &router, "phone").await;
-    let (sb, _) = leader(&app, d.path(), "lead1").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
     hook(&app, &sb, "s1", json!({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion",
         "tool_input": {"questions": [{"question": "Which way?", "options": [{"label": "Left"}, {"label": "Right"}, {"label": "Back"}]}]}}));
+    takes_answer(&app, &sb, &file, b"\r");
     assert_eq!(call(&router, "POST", "/r/leaders/lead1/answer", Some(&token), json!({"indices": [3]})).await.status, StatusCode::OK);
     assert_eq!(call(&router, "POST", "/r/leaders/lead1/interrupt", Some(&token), json!({})).await.status, StatusCode::OK);
     let all = logs.0.lock().unwrap().clone();

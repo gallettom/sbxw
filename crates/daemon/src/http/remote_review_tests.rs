@@ -314,9 +314,10 @@ async fn finding_f5_the_answer_a_phone_gives_is_logged() {
     let (d, app) = on();
     let router = remote_router(app.clone());
     let token = pair(&app, &router, "phone").await;
-    let (sb, _) = leader(&app, d.path(), "lead1").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
     hook(&app, &sb, "s1", json!({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion",
         "tool_input": {"questions": [{"question": "Which way?", "options": [{"label": "Left"}, {"label": "Right"}, {"label": "Back"}]}]}}));
+    super::remote_tests::takes_answer(&app, &sb, &file, b"\r");
     let r = call(&router, "POST", "/r/leaders/lead1/answer", PHONE, Some(&token), json!({"indices": [3]})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     let logged = logs.0.lock().unwrap().clone();
