@@ -60,6 +60,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/r/leaders/:sandbox/interrupt"),
     ("GET", "/r/models"),
     ("POST", "/r/leaders/:sandbox/model"),
+    ("GET", "/r/skills"),
+    ("POST", "/r/leaders/:sandbox/skill"),
     ("POST", "/r/leaders/:sandbox/lead"),
     ("POST", "/r/voice/transcribe"),
     ("POST", "/r/leaders/:sandbox/upload"),
@@ -114,6 +116,8 @@ pub fn remote_router(app: Arc<App>) -> Router {
         .route("/r/leaders/:sandbox/interrupt", post(interrupt))
         .route("/r/models", get(models))
         .route("/r/leaders/:sandbox/model", post(set_model))
+        .route("/r/skills", get(skills))
+        .route("/r/leaders/:sandbox/skill", post(run_skill))
         .route("/r/leaders/:sandbox/lead", post(set_lead))
         .route("/r/voice/transcribe", post(transcribe).layer(DefaultBodyLimit::max(AUDIO_BODY_MAX)))
         // The body is streamed and counted by `remote_upload` itself
@@ -447,6 +451,30 @@ async fn set_model(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandb
         Err(e) => return refusal(e),
     };
     match app.remote_set_model(&d, &sb, &b.id).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+async fn skills(State(app): S, Extension(_d): Extension<DeviceCtx>) -> Json<Value> {
+    Json(app.remote_skills())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SkillBody {
+    name: String,
+    #[serde(default)]
+    args: String,
+}
+
+/// A name of `phone_skills` and plain text: the daemon types `/<name> <args>`.
+async fn run_skill(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Json(b): Json<SkillBody>) -> Response {
+    let sb = match app.remote_target(&sandbox) {
+        Ok(sb) => sb,
+        Err(e) => return refusal(e),
+    };
+    match app.remote_run_skill(&d, &sb, &b.name, &b.args).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => refusal(e),
     }

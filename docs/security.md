@@ -414,6 +414,7 @@ does the same as a revoke.
 | Answer a multiple-choice question (`AskUserQuestion`) | Allow a tool (a permission prompt): "This needs your Mac" |
 | Interrupt it (one Escape, as at the keyboard; it may take a few seconds while a line is being typed into that session) | Approve or refuse a plan, a merge, a network request, or remove a sandbox, without Face ID at each action and level 2 turned on at the Mac (see "Approving from the phone") |
 | Switch its model: the phone sends an id from the list in your `models` setting, and the daemon types `/model <id>` (the phone never sends the text; an idle prompt only) | Send any other `/` line: the model route takes an id of that closed list and nothing else |
+| Invoke a skill: the phone sends a name from your `phone_skills` setting and optional plain text; the daemon types `/<name> <text>` (the text is checked and masked like a message, one line; an idle prompt only) | Send any other `/` line: the skill route takes a name of that closed list and nothing else |
 | Turn lead mode on (the daemon types `/lead` and installs the lead's tools, idle prompt only, one confirming tap) or off, for a sandbox it reaches | |
 | Write a ticket on a leader's Kanban (title and description, text only; masked by your anonymise rules; it lands in Planned) | Move, edit, delete or send a ticket, or attach a file to one from the phone |
 | Dictate (the Mac transcribes; the text comes back to the phone to correct) | Touch secrets, the GitHub token, network rules, ports, kits, MCP servers, configuration, the relay, Jarvis, the daemon |

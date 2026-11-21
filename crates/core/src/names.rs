@@ -344,6 +344,15 @@ pub fn is_valid_thread_name(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+/// A skill or command name: lower-case letters, digits and hyphens, 64 at most.
+pub fn is_valid_command_name(n: &str) -> bool {
+    let b = n.as_bytes();
+    !b.is_empty()
+        && b.len() <= 64
+        && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
+        && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+}
+
 pub fn is_valid_model_id(id: &str) -> bool {
     let b = id.as_bytes();
     !b.is_empty()

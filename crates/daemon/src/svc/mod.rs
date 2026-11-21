@@ -19,6 +19,7 @@ pub mod plans;
 pub mod relay;
 pub mod remote;
 pub mod remote_access;
+pub mod remote_skills;
 pub mod remote_push;
 pub mod remote_ticket;
 pub mod remote_upload;

@@ -1014,7 +1014,7 @@ impl App {
 
     /// Why the phone can only read `sb`, if it can: the existing rules,
     /// looked at ahead (`can_type_into`, a live terminal of sbxw's).
-    fn remote_read_only(&self, sb: &SandboxRef) -> Option<&'static str> {
+    pub(super) fn remote_read_only(&self, sb: &SandboxRef) -> Option<&'static str> {
         if self.agents.lock().unwrap().can_type_into(&sb.to_string()).is_err() {
             return Some("several_sessions");
         }
@@ -1092,7 +1092,7 @@ impl App {
     /// or its state is unknown (`needs_mac`), its last history item is a
     /// prompt or a tool call under [`TOOL_CALL_QUIET_MS`], or its terminal has
     /// bracketed paste off.
-    fn remote_can_type(&self, sb: &SandboxRef) -> Result<Arc<crate::pty::PtySession>, Reason> {
+    pub(super) fn remote_can_type(&self, sb: &SandboxRef) -> Result<Arc<crate::pty::PtySession>, Reason> {
         // Not reachable any more (stopped, or no longer a main session):
         // nothing is typed.
         let info = self.reach_info(sb).ok_or(Reason::NeedsMac)?;
