@@ -410,7 +410,7 @@ does the same as a revoke.
 |---|---|
 | List the running team leaders (the main session of a running sandbox that leads a team), and see which needs you | See any other session: threads, other sandboxes, Jarvis |
 | Read a leader's conversation: your prompts, its replies, messages from other sessions and from sbxw, questions. Its replies are sent as written (masked by your anonymise rules only), so a reply that quotes a file reaches the phone | See any tool's input or output, a file, a diff, a terminal, or the harness's own output (a `!` command's, a slash command's, hooks', task notifications, system reminders). These are shown as "3 steps" and nothing more |
-| Send it text, typed or dictated, as your own words (masked first by your anonymise rules), when it is idle at its prompt (see "What a message can do" below) | Type raw keys, open a terminal, create a sandbox or a thread; send a line starting with `!` (a shell command), `/` (a slash command) or `#`; send a control or invisible character; write to a leader that is working or waits for an answer at the Mac |
+| Send it text, typed or dictated, as your own words (masked first by your anonymise rules), when it is idle at its prompt or working (Claude Code queues it, as at the Mac; see "What a message can do" below) | Type raw keys, open a terminal, create a sandbox or a thread; send a line starting with `!` (a shell command), `/` (a slash command) or `#`; send a control or invisible character; write to a leader that waits for an answer at the Mac (a permission prompt, a question, any other dialog) |
 | Answer a multiple-choice question (`AskUserQuestion`) | Allow a tool (a permission prompt): "This needs your Mac" |
 | Interrupt it (one Escape, as at the keyboard; it may take a few seconds while a line is being typed into that session) | Approve or refuse a plan, a merge, a network request, or remove a sandbox, without Face ID at each action and level 2 turned on at the Mac (see "Approving from the phone") |
 | Switch its model: the phone sends an id from the list in your `models` setting, and the daemon types `/model <id>` (the phone never sends the text; an idle prompt only) | Send any other `/` line: the model route takes an id of that closed list and nothing else |
@@ -436,94 +436,42 @@ what lands in the leader's prompt and nothing else:
   only the first: whether Claude Code could read a later line of a paste as a command was
   not verified, so none may look like one. The check runs again on the exact text typed,
   after your anonymise rules: an alias that would start a line with `/` is refused too.
-- **Only into an idle leader.** A message is typed only while the leader is idle: at its
-  prompt, its turn over, nothing running. A leader at work can be read and interrupted
-  from the phone, not written to ("The leader is working"). A message is also refused
-  ("This needs your Mac") while the leader waits for you (a permission prompt, a question,
-  which the phone answers with its own button and never by typing, any other dialog) or
-  when sbxw does not know its state.
+- **Only at the prompt, idle or working.** A message is typed while the leader is idle at
+  its prompt, and while it works: Claude Code queues a message typed during a turn and
+  reads it when it can, exactly as when you type at the Mac's keyboard, and the phone's
+  status line says so. A message is refused ("This needs your Mac") while the leader waits
+  for you (a permission prompt, a question, which the phone answers with its own button and
+  never by typing, any other dialog), when it has exited, when sbxw does not know its
+  state, and on a read-only entry. It is refused for a few seconds after a tool call is
+  announced ("busy": its permission prompt may be on its way). Switching the model and
+  turning lead mode on still need an idle leader.
 - **As one paste, Return last.** The text goes as a single bracketed paste, then sbxw waits
-  for the echo and 600 ms more, checks that the leader is still idle, and only then presses
-  Return. If it is not, there is no Return: the phone is told "not sent" and the text waits
-  in the leader's input. If the leader's terminal has bracketed paste off, nothing is typed.
-  Nothing else sbxw types into that session (a composer's message, sbxw's own lines, an
-  answer, Interrupt) can land between the paste and the Return.
+  for the echo and 600 ms more, checks again that the leader is not waiting for you (the
+  same check as before the paste), and only then presses Return. If the leader started
+  asking something meanwhile (working or idle, then a permission prompt or a question),
+  there is no Return: the phone is told "not sent" and the text waits in the leader's
+  input. A leader that went from working to idle, or back, still gets the Return. If the
+  leader's terminal has bracketed paste off, nothing is typed. Nothing else sbxw types into
+  that session (a composer's message, sbxw's own lines, an answer, Interrupt) can land
+  between the paste and the Return.
 - **Design assumption, not verified:** that a Claude Code dialog does not read a paste as
   key presses. It matters only if a dialog is on screen when the paste arrives, which the
-  idle rule is there to prevent.
-- **Residual window.** Claude Code opening a dialog on its own while idle, in the moment
-  between sbxw's idle check and the paste, or between the second check and the Return,
-  would receive that paste or that Return. An idle Claude Code waits for input and is not
-  known to open dialogs by itself, so this window is small, not zero. Also, "idle" is what
-  the hooks last told sbxw: if a tool call's notice were lost and the permission notice
-  that follows were lost or late too, sbxw could believe the leader idle while a dialog is
-  on screen, and a Return could reach it.
-- **Not verified on a real Mac:** that Claude Code turns bracketed paste on at its prompt.
-  If it does not, every message from the phone is refused (the safe failure).
-- A message already being typed when you revoke the phone or turn remote access off
-  finishes (a few seconds).
-- **Interrupt may take a few seconds** while a line is being typed into that session: it
-  waits behind the same typing lock (up to about 4 s behind a phone message, longer behind
-  a line sbxw types into a leader that is still starting), so an Escape never lands inside
-  a paste.
-
-### What a file can do
-
-A file from the phone is data handed to a leader, never an action:
-
-- **Held on the Mac until you send it.** The phone streams the file to the Mac, where the
-  daemon keeps it in `~/.sbxw/remote/uploads/` (folder `0700`, file `0600`, random name)
-  and gives the phone an opaque handle bound to that phone and that leader. Nothing is
-  typed and nothing reaches the sandbox yet: the leader learns of a file only from a message
-  you send with it.
-- **Sent with a message.** When a message names the handle, the daemon copies the file into
-  the leader's sandbox with the web UI's own upload writer, to
-  `/tmp/sbxw-uploads/<time>/<name>`, and types after your text one fixed block of its own
-  paths ("Attached files (uploaded to this sandbox):" and one `- <path>` line per file), the
-  same block as the web chat. Everything "What a message can do" says holds for the whole
-  typed text, block included: only into an idle leader, one paste, the checks on the exact
-  text typed, Return last. A file is copied only if the leader takes a message at that
-  moment. The handle is spent only once the Return is sent; if the message is refused or
-  not sent, the handle stays usable for a retry (a file already copied is not copied again).
-- **Its name is the daemon's.** The phone's name is only a hint: the daemon keeps its last
-  part, turns every character outside `A-Z a-z 0-9 . _ -` into `_` (so no space, control,
-  invisible or look-alike character), drops leading dots (no hidden file, no `..`), keeps
-  120 characters at most. So no line of the block can start with `!`, `/` or `#`, and the
-  final check on the whole text would refuse it anyway. The daemon does not refuse a name
-  that looks like a secret (`.env`, `*.pem`): the files on your phone are yours, and the
-  name is never written to the journal or to the daemon's logs at info level and above.
-- **Refused kinds**, by their first bytes whatever the name: native programs (ELF, Windows
-  `MZ`, Mach-O) and archives (zip, tar, gzip, 7z, rar, xz, bzip2, zstd), and empty files.
-  Everything else is data: pictures, PDF, text (a script included: it is text an agent
-  reads, like a message), other bytes.
-- **Limits.** 25 MB per file (counted while it arrives, whatever the phone declares), at
-  most 5 files and 60 MB waiting per phone and leader, 200 MB for all phones, one upload at
-  a time per phone, 20 uploads per 10 minutes per phone (one phone's limit never holds
-  another back), the whole file within 180 s and no pause over 30 s. The Tailscale node
-  takes a body of 26 MB at most and gives it 120 s (the person's decision): a 25 MB file
-  needs about 1.7 Mbit/s of uplink. On a slower link the upload fails: the node cuts it at
-  120 s, the phone gets an error, nothing is kept on the Mac, and you retry on a better
-  connection or with a smaller file (each try counts toward the 20 per 10 minutes).
-- **How long.** An unsent file is deleted from the Mac 30 minutes after its upload, or when
-  you remove it on the phone, when the phone is revoked or logs out, when remote access is
-  turned off, and when the daemon restarts. A file sent with a message stays in the
-  sandbox, like the web chat's uploads; so does a file copied for a message that was then
-  not sent. No route of the phone removes a file from a sandbox.
-- **The phone never sees a path.** No answer names the uploads folder, and the
-  conversation shown on the phone shows `name` where the text said
-  `/tmp/sbxw-uploads/<time>/name`.
-- **Logs.** The journal records `upload` with a size class (under 1 MB, 1 to 10 MB, over
-  10 MB), never a name or a content. The daemon's info lines name a device and a size
-  class. Known gap: the `sbx` runner's own debug line prints every command it runs, so at
-  debug level the destination path (with the file's sanitised name) appears, as for every
-  web UI upload; the content never does.
+  checks are there to prevent.
+- **Residual window.** A dialog Claude Code opens between sbxw's check and the paste, or
+  between the second check and the Return, would receive that paste or that Return. At an
+  idle prompt Claude Code is not known to open dialogs by itself, so the window is small.
+  While the leader works it is wider: a tool call can ask for permission at any moment, and
+  sbxw learns of the prompt from a hook a few hundred milliseconds later. The 600 ms wait
+  before the Return covers a prompt whose hook arrives in that time; one whose hook is
+  later, or lost, could receive the Return (and so answer the prompt with its default
+  choice). If that matters for a session, send from the phone only while it is idle.
 
 ### Check on your Mac before relying on it
 
 1. Pair the phone with `sbxw remote pair` and type the digits it shows.
 2. Send one message from the phone to an idle leader and see it submitted in its terminal.
-   While the leader works, check that the phone says "The leader is working" and types
-   nothing.
+   While the leader works, send another one and check that the phone says it is queued by
+   Claude Code and that Claude Code shows it as a queued message.
 3. Make a leader ask for a permission and check that a message from the phone is refused
    ("This needs your Mac") and nothing reaches the terminal.
 4. From the phone, hand a photo to an idle leader with a message: the leader's terminal
@@ -649,8 +597,9 @@ a standalone app named sbxw.
   microphone and a round Send, with one status line under them for every hint, wait and
   refusal. Enter is a new line: only Send sends. A message takes 1 to 4 s (the daemon waits
   for the echo before the Return): Send is busy and a second tap does nothing. A message is
-  typed only into an idle leader: while it works, Send is disabled with "The leader is
-  working: Send comes back at its prompt.", the text and files stay and nothing is queued.
+  typed into a leader that is idle or working: while it works, the status line says the
+  message will be queued by Claude Code; while it waits for you, the daemon refuses it and
+  the text and files stay.
   A line starting with `!`, `/` or `#`, a control character or an invisible one
   (zero-width space, soft hyphen...) is warned about in place while typing; the daemon stays
   the judge. Each refusal reason has its own sentence, with the daemon's words beside it as

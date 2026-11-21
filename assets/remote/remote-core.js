@@ -405,7 +405,7 @@ const RC_MSG_REASON = {
   control: 'The message holds a control or invisible character (a tab, a zero-width space, a soft hyphen...). Remove the invisible characters, or retype the text.',
   empty: 'The message is empty.',
   needs_mac: 'This needs your Mac: the session is waiting for you there.',
-  busy: 'The session is working. A message can be sent once it is back at its prompt; meanwhile you can read it and interrupt it.',
+  busy: 'The session is busy right now: try again in a few seconds. Meanwhile you can read it and interrupt it.',
   no_paste: 'Send it from your Mac: this session\'s terminal cannot take a message from the phone.',
   attachment: 'Not sent: a file of this message is no longer on the Mac (it expires 30 minutes after its upload). Remove it, choose it again, then Send.',
   too_many: 'Not sent: a message takes 5 files at most. Remove some, then Send.',
@@ -469,15 +469,24 @@ function rcFailText(what, res) {
   return `${what} not sent: ${err}.`;
 }
 
-// Why Send waits, or '' when it can go: a message is typed only while the
-// leader is idle at its prompt (API.md v1.3). Never a queue: the text stays
-// in the field until the person presses Send again.
+// Why Send waits, or '' when it can go. A message goes while the session is
+// idle at its prompt and while it works (Claude Code queues it, as when typed
+// at the Mac); the daemon refuses it while the session waits for the person.
+// Never a queue of the page's: a refused text stays in the field until the
+// person presses Send again.
 function rcSendGate(leader) {
   if (!leader) return 'This sandbox is not running.';
   const ro = rcReadOnly(leader);
   if (ro) return ro;
-  if (leader.state === 'working') return 'The session is working: Send comes back at its prompt.';
   return '';
+}
+
+// What the status line says while Send can go to a working session: the
+// message is queued by Claude Code, not read at once. '' otherwise.
+const RC_QUEUED_TEXT = 'The session is working: a message you send now is queued by Claude Code and read when it can, as when typed at the Mac.';
+function rcSendNote(leader) {
+  if (!leader || rcSendGate(leader)) return '';
+  return leader.state === 'working' ? RC_QUEUED_TEXT : '';
 }
 
 // Dictation: the longest recording the daemon accepts (MAX_SAMPLES at
@@ -712,7 +721,7 @@ function rcTray({ upload, drop = () => {}, onChange = () => {} }) {
 // warn, ok, busy or info.
 // `quiet`: the recorder or the recogniser has heard nothing for a while.
 // `hint`: a string (tone info) or { text, tone }.
-function rcStatus({ note = null, rec = 'idle', gate = '', held = 0, pending = 0, failed = 0, files = 0, hint = '', quiet = false } = {}) {
+function rcStatus({ note = null, rec = 'idle', gate = '', held = 0, pending = 0, failed = 0, files = 0, hint = '', quiet = false, queued = '' } = {}) {
   if (note && note.text) return { text: note.text, tone: note.tone || 'info' };
   if (rec === 'recording' && quiet) return { text: RC_DICT_TEXT.quietMac, tone: 'warn' };
   if (rec === 'recording') return { text: 'Recording. Tap stop when you are done: the words go into the field, nothing is sent.', tone: 'busy' };
@@ -724,7 +733,7 @@ function rcStatus({ note = null, rec = 'idle', gate = '', held = 0, pending = 0,
   if (gate) return { text: files ? `${gate.replace(/\.$/, '')}. Your files wait here.` : gate, tone: 'info' };
   if (failed) return { text: `${failed === 1 ? 'An upload' : `${failed} uploads`} failed: retry or remove. The rest can be sent.`, tone: 'err' };
   if (hint && typeof hint === 'object') return { text: String(hint.text || ''), tone: hint.tone || 'info' };
-  return { text: hint || '', tone: 'info' };
+  return { text: hint || queued || '', tone: 'info' };
 }
 
 // ── The recorder's helpers ────────────────────────────────────────────────

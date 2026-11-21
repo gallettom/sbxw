@@ -367,7 +367,7 @@ test('refusals: a sentence per reason, the text kept, nothing resent', { skip },
   await ctx.close();
 });
 
-test('while the leader works Send waits, the text stays, nothing is queued', { skip }, async () => {
+test('while the session works Send goes, the status line says Claude Code queues it, Interrupt stays', { skip }, async () => {
   await ctl({ reset: true, paired: true, leaders: FX.leaders, history: { website: FX.history.website } });
   const { ctx, page, problems } = await phone();
   await page.goto(`${base()}/`);
@@ -379,29 +379,30 @@ test('while the leader works Send waits, the text stays, nothing is queued', { s
   working.leaders.find(l => l.sandbox === 'website').state = 'working';
   working.leaders.find(l => l.sandbox === 'website').activity = 'Working';
   await ctl({ emit: { event: 'leaders', data: working } });
-  await page.waitForSelector('#status:text("The leader is working: Send comes back at its prompt.")');
-  assert.equal(await page.isDisabled('#send'), true);
-  await page.evaluate(() => document.getElementById('send').click());
+  await page.waitForSelector('#status:text("queued by Claude Code")');
+  assert.equal(await page.isDisabled('#send'), false, 'Send goes while it works');
   assert.equal(await page.isVisible('#interrupt'), true, 'it can still be interrupted, from the bar');
   assert.equal(await page.isDisabled('#interrupt'), false);
   assert.match(await page.getAttribute('#state', 'class'), /rc-pill-working/);
-  await shot(page, '16-working-send-waits');
+  await shot(page, '16-working-send-queued');
+  // A daemon `busy` (a tool call just started): its sentence, the text kept.
+  await ctl({ messageReplies: [{ status: 409, body: { ok: false, reason: 'busy', error: 'a tool call just started' } }] });
+  await page.tap('#send');
+  await page.waitForSelector('text=/try again in a few seconds/');
+  assert.equal(await page.inputValue('#field'), 'hello leader');
+  // Then it goes.
+  await ctl({ messageReplies: [] });
+  await page.tap('#send');
+  await page.waitForSelector('#status:text("Sent.")');
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 2);
+  // Idle again: the queue line goes.
   await ctl({ emit: { event: 'leaders', data: FX.leaders } });
   await page.waitForSelector('#interrupt', { state: 'hidden' });
-  assert.equal(await page.textContent('#status'), '');
-  assert.equal(await page.isDisabled('#send'), false);
-  await page.waitForTimeout(800);
-  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 0, 'nothing queued while it worked');
-  assert.equal(await page.inputValue('#field'), 'hello leader', 'the text stayed');
-  // A daemon `busy` (it started working meanwhile): its sentence, the text kept.
-  await ctl({ messageReplies: [{ status: 409, body: { ok: false, reason: 'busy', error: 'the leader is working' } }] });
-  await page.tap('#send');
-  await page.waitForSelector('text=/meanwhile you can read it and interrupt it/');
-  assert.equal(await page.inputValue('#field'), 'hello leader');
+  await page.waitForFunction(() => !/queued/.test(document.getElementById('status').textContent));
   // An invisible character: warned in place, with what to do.
   await page.fill('#field', 'hello\u200bleader');
   await page.waitForSelector('text=/Remove the invisible characters, or retype the text/');
-  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 1);
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 2);
   await cleanSpy(page);
   assert.deepEqual(problems, []);
   await ctx.close();
@@ -640,7 +641,7 @@ test('files: checked before any byte, the tick, progress, failure and retry, rem
   await ctx.close();
 });
 
-test('files while the leader works: attaching allowed, sending not, and only files can be sent', { skip }, async () => {
+test('files while the session works: attached and sent, and only files can be sent', { skip }, async () => {
   const working = structuredClone(FX.leaders);
   working.leaders.find(l => l.sandbox === 'website').state = 'working';
   await ctl({ reset: true, paired: true, leaders: working, history: { website: FX.history.website }, uploadSlow: 0, uploadReplies: [] });
@@ -649,9 +650,7 @@ test('files while the leader works: attaching allowed, sending not, and only fil
   await page.tap('.rc-leader >> text=website');
   await pick(page, [fileOf('notes.txt', 300, 'text/plain')]);
   await page.waitForSelector('.rc-fchip[data-state="done"]');
-  assert.equal(await page.textContent('#status'), 'The leader is working: Send comes back at its prompt. Your files wait here.');
-  assert.equal(await page.isDisabled('#send'), true);
-  await ctl({ emit: { event: 'leaders', data: FX.leaders } });
+  await page.waitForSelector('#status:text("queued by Claude Code")');
   await page.waitForFunction(() => !document.getElementById('send').disabled);
   await page.tap('#send');
   await page.waitForSelector('#status:text("Sent.")');

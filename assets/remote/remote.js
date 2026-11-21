@@ -491,8 +491,9 @@
     renderCtl(leader());
   });
 
-  // Send waits while the leader works, while a file uploads, while the
-  // recorder runs; the typed text and the files stay where they are.
+  // Send waits while a file uploads, while the recorder runs, on a read-only
+  // entry; the typed text and the files stay where they are. While the
+  // session works Send goes, and the status line says Claude Code queues it.
   function gateSend() {
     const why = st.current ? rcSendGate(leader()) : '';
     const t = tray();
@@ -512,6 +513,7 @@
       files: t ? t.chips.length : 0,
       hint: st.hint,
       quiet: !!rec.quiet,
+      queued: st.current ? rcSendNote(leader()) : '',
     });
     const el = $('status');
     el.textContent = s.text;
