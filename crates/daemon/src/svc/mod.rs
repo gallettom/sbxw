@@ -20,6 +20,7 @@ pub mod relay;
 pub mod remote;
 pub mod remote_access;
 pub mod remote_push;
+pub mod remote_ticket;
 pub mod remote_upload;
 pub mod remote_approvals;
 pub mod sandboxes;

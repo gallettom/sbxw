@@ -28,6 +28,8 @@ pub enum Kind {
     Expired,
     /// A file handed to a leader (its size class only, never its name).
     Upload,
+    /// A ticket written on a leader's Kanban from the phone (never its text).
+    TicketCreate,
     // Level 2 (API-level2.md section 8).
     PlanApprove,
     PlanRefuse,

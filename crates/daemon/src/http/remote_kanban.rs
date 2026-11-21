@@ -1,4 +1,4 @@
-//! The Kanban on the phone (level 1, read only): one running leader's board
+//! The Kanban on the phone (level 1 reads; one write, a new ticket): one running leader's board
 //! and one of its tickets, on the remote listener. The contract is
 //! `.sbxw-artifacts/remote/API-kanban.md`.
 //!
@@ -6,8 +6,9 @@
 //! as the Mac's routes give it, reduced to the fields a phone may see. What
 //! is dropped: every write permission (`can`), plan ids, file ids and
 //! on-disk names, timestamps, the upload limits, other sandboxes. A word of
-//! free text that starts like an absolute path becomes `[path]`. Nothing is
-//! journaled and nothing here logs a title or a text.
+//! free text that starts like an absolute path becomes `[path]`. Reading
+//! journals nothing; a new ticket journals its kind only. Nothing here logs
+//! a title or a text.
 
 use super::error::ApiError;
 use crate::app::App;
@@ -255,6 +256,28 @@ pub async fn board(State(app): S, Extension(_d): Extension<DeviceCtx>, Path(sand
     Json(board_view(&app, &sb)).into_response()
 }
 
+/// A new ticket's body: 8000 characters of description at four bytes each,
+/// the title and the JSON.
+pub const BODY_MAX: usize = 40 * 1024;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NewTicket {
+    title: String,
+    #[serde(default)]
+    description: String,
+}
+
+/// A ticket from the phone, in Planned: the Mac's writer, the text masked.
+/// Text only: no files in this version.
+pub async fn create(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Json(b): Json<NewTicket>) -> Response {
+    let Some(sb) = leader(&app, &sandbox) else { return not_found() };
+    match app.remote_ticket_create(&d, &sb, &b.title, &b.description) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => super::remote::refusal(e),
+    }
+}
+
 pub async fn ticket(State(app): S, Extension(_d): Extension<DeviceCtx>, Path((sandbox, ticket)): Path<(String, String)>) -> Response {
     let Some(sb) = leader(&app, &sandbox) else { return not_found() };
     let Some(n) = ticket_number(&ticket) else { return not_found() };
@@ -437,6 +460,54 @@ mod tests {
         for bad in ["", "T-", "T-0", "0", "t-1", "T12", "T-1x", " 1", "1 ", "-1", "T--1", "1234567890", "T-1234567890", "٣", "%31", "1;2", "../1"] {
             assert_eq!(ticket_number(bad), None, "{bad:?}");
         }
+    }
+
+    async fn post_json(router: &Router, path: &str, token: &str, body: Value) -> Reply {
+        let r = req("POST", path, Some(token)).body(Body::from(body.to_string())).unwrap();
+        let res = router.clone().oneshot(r).await.unwrap();
+        let (status, headers) = (res.status(), res.headers().clone());
+        let body = String::from_utf8_lossy(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).into_owned();
+        Reply { status, headers, body }
+    }
+
+    #[tokio::test]
+    async fn a_paired_device_creates_a_ticket_in_planned() {
+        let (_d, app) = on();
+        let router = remote_router(app.clone());
+        let token = pair(&app, &router).await;
+        let sb = lead(&app, "web").await;
+        let path = "/r/leaders/web/kanban";
+
+        let ok = post_json(&router, path, &token, json!({ "title": "  Add a search box ", "description": "On the members page" })).await;
+        assert_eq!(ok.status, StatusCode::OK, "{}", ok.body);
+        let n = ok.json()["n"].as_u64().unwrap() as u32;
+        assert_eq!(ok.json()["num"], format!("T-{n}"));
+        let one = call(&router, "GET", &format!("{path}/{n}"), Some(&token)).await;
+        assert_eq!(one.json()["ticket"]["title"], "Add a search box");
+        assert_eq!(one.json()["ticket"]["description"], "On the members page");
+        assert_eq!(one.json()["ticket"]["column"], "planned");
+        let board = call(&router, "GET", path, Some(&token)).await.json();
+        let planned = board["columns"].as_array().unwrap().iter().find(|c| c["id"] == "planned").unwrap();
+        assert_eq!(planned["count"], 1, "{board}");
+        let _ = sb;
+
+        // The journal names the kind, never the text.
+        let journal = serde_json::to_string(&app.remote_journal(50)).unwrap();
+        assert!(journal.contains("ticket_create") && !journal.contains("search box"), "{journal}");
+
+        // Refused: an unknown field, no title, a title over the cap, no body at all.
+        let r = post_json(&router, path, &token, json!({ "title": "x", "priority": "high" })).await;
+        assert!(r.status.is_client_error() && r.status != StatusCode::NOT_FOUND, "{} {}", r.status, r.body);
+        assert_eq!(post_json(&router, path, &token, json!({ "title": "   " })).await.status, StatusCode::BAD_REQUEST);
+        assert_eq!(post_json(&router, path, &token, json!({ "title": "x".repeat(MAX_TITLE + 1) })).await.status, StatusCode::BAD_REQUEST);
+        assert!(post_json(&router, path, &token, json!({})).await.status.is_client_error());
+        assert_eq!(call(&router, "GET", path, Some(&token)).await.json()["columns"].as_array().unwrap().iter().find(|c| c["id"] == "planned").unwrap()["count"], 1, "nothing was added");
+
+        // An unknown sandbox, and one with no team, are the same 404; no cookie is 401.
+        assert_eq!(post_json(&router, "/r/leaders/nope/kanban", &token, json!({ "title": "x" })).await.status, StatusCode::NOT_FOUND);
+        assert_eq!(post_json(&router, "/r/leaders/..%2Fx/kanban", &token, json!({ "title": "x" })).await.status, StatusCode::NOT_FOUND);
+        let r = req("POST", path, None).body(Body::from(json!({ "title": "x" }).to_string())).unwrap();
+        assert_eq!(router.clone().oneshot(r).await.unwrap().status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
