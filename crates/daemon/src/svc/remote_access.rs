@@ -1004,7 +1004,7 @@ impl App {
         drop(book);
         let rules = self.anonymise_rules().unwrap_or_default();
         let m = |t: &str| sbxw_core::anonymise::mask(t, &rules).text;
-        Some(steps.iter().map(phone_question).map(|q| PhoneQuestion { text: m(&q.text), options: q.options.iter().map(|o| m(o)).collect() }).collect())
+        Some(steps.iter().map(phone_question).map(|q| PhoneQuestion { text: m(&q.text), options: q.options.iter().map(|o| m(o)).collect(), multi: q.multi }).collect())
     }
 
     fn remote_question(&self, sb: &SandboxRef) -> Option<Vec<PhoneQuestion>> {
@@ -1236,20 +1236,37 @@ impl App {
         Ok(count)
     }
 
-    pub async fn remote_answer(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, indices: Vec<u32>) -> Result<(), Refusal> {
+    /// The 409 of an answer typed but not taken; the page shows it as is.
+    pub const ANSWER_NOT_TAKEN: &'static str = "not taken: the question is still open at the Mac, answer it there";
+
+    /// `answers[n]`: the 1-based options chosen at step `n`, exactly one for
+    /// a single-select step, one or more (each once) for a multi-select one.
+    pub async fn remote_answer(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, answers: Vec<Vec<u32>>) -> Result<(), Refusal> {
         use crate::svc::agents::AnswerError;
-        if indices.is_empty() || indices.len() > 20 || indices.iter().any(|&i| i == 0 || i > 50) {
-            return Err(Refusal::Bad("indices: one 1-based option per step".into()));
+        const SHAPE: &str = "answers: per step, the 1-based options chosen";
+        if answers.is_empty() || answers.len() > 20 || answers.iter().any(|a| a.is_empty() || a.len() > 50 || a.iter().any(|&i| i == 0 || i > 50)) {
+            return Err(Refusal::Bad(SHAPE.into()));
         }
         let Some(steps) = self.remote_question(sb) else {
             let asks = self.reach_info(sb).is_some_and(|i| i.state == SessionState::Attention);
             self.remote_record(d, Kind::Refused);
             return Err(if asks { Refusal::Conflict("this prompt can only be answered at the Mac".into()) } else { Refusal::NotFound });
         };
-        if indices.len() != steps.len() {
+        if answers.len() != steps.len() {
             return Err(Refusal::Bad(format!("the question has {} step(s)", steps.len())));
         }
-        match self.answer(sb, SessionKind::Agent, indices).await {
+        for (n, (a, step)) in answers.iter().zip(&steps).enumerate() {
+            let mut seen = a.clone();
+            seen.sort_unstable();
+            seen.dedup();
+            if seen.len() != a.len() || a.iter().any(|&i| i as usize > step.options.len()) {
+                return Err(Refusal::Bad(format!("step {}: {SHAPE}, each once and among its {} options", n + 1, step.options.len())));
+            }
+            if !step.multi && a.len() != 1 {
+                return Err(Refusal::Bad(format!("step {}: one option only", n + 1)));
+            }
+        }
+        match self.answer(sb, SessionKind::Agent, answers).await {
             Ok(()) => {
                 tracing::info!("remote access: device {}: answer", d.id);
                 self.remote_record(d, Kind::Answer);
@@ -1260,6 +1277,11 @@ impl App {
             Err(AnswerError::Ambiguous(why)) => {
                 self.remote_record(d, Kind::Refused);
                 Err(Refusal::Conflict(why))
+            }
+            Err(AnswerError::NotTaken) => {
+                tracing::info!("remote access: device {}: answer not taken", d.id);
+                self.remote_record(d, Kind::Refused);
+                Err(Refusal::Conflict(Self::ANSWER_NOT_TAKEN.into()))
             }
         }
     }

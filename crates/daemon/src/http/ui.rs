@@ -295,7 +295,7 @@ async fn answer(State(app): S, Json(b): Json<AnswerBody>) -> StatusCode {
         (_, Some(i)) => vec![i],
         _ => vec![],
     };
-    match app.answer(&sb, kind, indices).await {
+    match app.answer(&sb, kind, indices.into_iter().map(|i| vec![i]).collect()).await {
         Ok(()) => StatusCode::OK,
         Err(AnswerError::NoSession) => StatusCode::NOT_FOUND,
         Err(AnswerError::NoIndices) => StatusCode::BAD_REQUEST,
@@ -303,6 +303,7 @@ async fn answer(State(app): S, Json(b): Json<AnswerBody>) -> StatusCode {
             tracing::warn!("refusing to answer '{sb}': {why}");
             StatusCode::CONFLICT
         }
+        Err(AnswerError::NotTaken) => StatusCode::CONFLICT,
     }
 }
 

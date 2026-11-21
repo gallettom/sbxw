@@ -34,14 +34,17 @@ pub struct PhoneItem {
 }
 
 /// A question's step: its text and options, not the decision table.
+/// `multi`: the person may pick several options (absent when false).
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PhoneQuestion {
     pub text: String,
     pub options: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub multi: bool,
 }
 
 pub fn phone_question(q: &Question) -> PhoneQuestion {
-    PhoneQuestion { text: no_upload_paths(&q.text), options: q.options.iter().map(|o| no_upload_paths(o)).collect() }
+    PhoneQuestion { text: no_upload_paths(&q.text), options: q.options.iter().map(|o| no_upload_paths(o)).collect(), multi: q.multi }
 }
 
 /// No path of sbxw's upload folder reaches the phone (API.md 2.6.1): a
@@ -216,7 +219,7 @@ mod tests {
         let mut perm = item(6, Kind::Permission, "Allow Bash: rm -rf /tmp/x?");
         perm.tool = Some(ToolCall { name: "Bash".into(), summary: "rm -rf /tmp/x".into(), id: None });
         let mut q = item(7, Kind::Question, "Which?");
-        q.steps = Some(vec![Question { text: "Which?".into(), options: vec!["A".into(), "B".into()], context: vec!["A — reads ~/.ssh".into()] }]);
+        q.steps = Some(vec![Question { text: "Which?".into(), options: vec!["A".into(), "B".into()], context: vec!["A — reads ~/.ssh".into()], multi: false }]);
         let p = page(vec![item(1, Kind::UserPrompt, "hello"), call, res, call2, item(5, Kind::AssistantText, "done"), perm, q, item(8, Kind::ToolResult, "")]);
         let out = phone_page(&p, None);
         let json = serde_json::to_string(&out).unwrap();
