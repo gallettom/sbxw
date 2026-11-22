@@ -539,13 +539,14 @@ pub fn check_guest_port(port: u64) -> Result<u16, String> {
 pub const MAX_REASON: usize = 300;
 
 /// The agent's reason, made safe to show beside sbxw's own words: no control
-/// characters, line breaks or bidirectional overrides (so it cannot start a
-/// paragraph of its own, or reorder what is shown), runs of white space as one
-/// space, at most `MAX_REASON` characters. Still untrusted text: escape it.
+/// characters, line breaks or invisible and bidirectional characters (the one
+/// list, [`crate::invisible::is_invisible`]; so it cannot start a paragraph of
+/// its own, or reorder what is shown), each of them and each run of white
+/// space as one space, at most `MAX_REASON` characters. Still untrusted text:
+/// escape it.
 pub fn clean_reason(raw: &str) -> String {
-    let bidi = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{061c}');
     let mut out = String::new();
-    for word in raw.split(|c: char| c.is_whitespace() || c.is_control() || bidi(c)).filter(|w| !w.is_empty()) {
+    for word in raw.split(|c: char| c.is_whitespace() || c.is_control() || crate::invisible::is_invisible(c)).filter(|w| !w.is_empty()) {
         if !out.is_empty() {
             out.push(' ');
         }

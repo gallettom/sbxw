@@ -189,16 +189,15 @@ pub fn bracketed_paste_enabled(replay: &[u8]) -> bool {
 /// Would `c` act as more than text in a terminal, or hide what it says?
 /// C0 controls but `\n` and `\t` (ESC can close a bracketed paste and turn
 /// the rest into keystrokes, CR is Return), DEL, C1 controls (U+0080..U+009F,
-/// U+009B is a one-byte CSI), the Unicode line and paragraph separators, and
-/// the bidi and zero-width format characters that make text read differently
-/// from what it is.
+/// U+009B is a one-byte CSI), and every character of the one invisible list
+/// ([`crate::invisible::is_invisible`]: bidi controls, zero-width characters
+/// and joiners, line and paragraph separators...) that makes text read
+/// differently from what it is.
 pub fn is_unsafe_typed_char(c: char) -> bool {
     match c {
         '\n' | '\t' => false,
         '\u{0}'..='\u{1f}' | '\u{7f}'..='\u{9f}' => true,
-        '\u{2028}' | '\u{2029}' | '\u{feff}' => true,
-        '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => true,
-        _ => false,
+        _ => crate::invisible::is_invisible(c),
     }
 }
 

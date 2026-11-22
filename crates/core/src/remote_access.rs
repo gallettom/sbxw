@@ -199,25 +199,13 @@ pub enum MessageRefusal {
 
 /// Would `c` act on the terminal, or hide or change what the text shows?
 /// Every C0 control but the line feed (so also tab and CR), DEL, every C1
-/// control, every character `terminal::sanitize_typed` would strip (so the
-/// check sees what is typed), the bidi controls, the line and paragraph
-/// separators (only a line feed breaks a line), and the invisible format
-/// characters (zero-width ones, joiners, the soft hyphen, tags...): what the
+/// control, and every character of the one invisible list
+/// ([`crate::invisible::is_invisible`]: bidi controls, line and paragraph
+/// separators, zero-width ones, joiners, the soft hyphen, tags...), which is
+/// also all `terminal::sanitize_typed` strips beyond controls: what the
 /// person sees is what is typed.
 fn forbidden_in_message(c: char) -> bool {
-    (c.is_control() && c != '\n')
-        || crate::terminal::is_unsafe_typed_char(c)
-        || matches!(c, '\u{00ad}' | '\u{034f}' | '\u{061c}' | '\u{06dd}' | '\u{070f}' | '\u{115f}' | '\u{1160}' | '\u{17b4}' | '\u{17b5}' | '\u{180e}' | '\u{2028}' | '\u{2029}' | '\u{3164}' | '\u{feff}' | '\u{ffa0}')
-        || ('\u{0600}'..='\u{0605}').contains(&c)
-        || ('\u{180b}'..='\u{180f}').contains(&c)
-        || ('\u{200b}'..='\u{200f}').contains(&c)
-        || ('\u{202a}'..='\u{202e}').contains(&c)
-        || ('\u{2060}'..='\u{206f}').contains(&c)
-        || ('\u{fe00}'..='\u{fe0f}').contains(&c)
-        || ('\u{fff9}'..='\u{fffb}').contains(&c)
-        || ('\u{1bca0}'..='\u{1bca3}').contains(&c)
-        || ('\u{1d173}'..='\u{1d17a}').contains(&c)
-        || ('\u{e0000}'..='\u{e0fff}').contains(&c)
+    (c.is_control() && c != '\n') || crate::invisible::is_invisible(c)
 }
 
 /// What a phone may send as a message: plain text and line feeds, and no line
@@ -253,11 +241,12 @@ pub struct State {
 }
 
 /// A device name as a phone sends it: trimmed, 1 to 64 characters, no
-/// control or bidi-override character (it is shown on the Mac, next to the
+/// control character and none of the one invisible list
+/// ([`crate::invisible::is_invisible`]; it is shown on the Mac, next to the
 /// check the person compares).
 pub fn clean_device_name(raw: &str) -> Option<String> {
     let t = raw.trim();
-    let bad = |c: char| c.is_control() || ('\u{202a}'..='\u{202e}').contains(&c) || ('\u{2066}'..='\u{2069}').contains(&c) || c == '\u{200e}' || c == '\u{200f}';
+    let bad = |c: char| c.is_control() || crate::invisible::is_invisible(c);
     (!t.is_empty() && t.chars().count() <= 64 && !t.chars().any(bad)).then(|| t.to_string())
 }
 
