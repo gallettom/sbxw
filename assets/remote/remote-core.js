@@ -1719,6 +1719,23 @@ function rcRowKeys(rows) {
     return `after${last}`;
   });
 }
+// What a row shows, as one string: two rows with the same signature draw
+// the same element, so remote.js keeps the one on screen.
+function rcRowSig(r) {
+  if (!r || typeof r !== 'object') return '';
+  return JSON.stringify([r.kind, r.text ?? null, r.from ?? null, r.count ?? null, r.files ?? null, r.images ?? null, r.pending ?? null, r.pid ?? null]);
+}
+// `box`'s children made exactly `els`, in order, moving only what is out of
+// place: an element already where it belongs is not touched (a re-inserted
+// element would lay out again and restart its animation).
+function rcPatchChildren(box, els) {
+  let at = box.firstChild;
+  for (const el of els) {
+    if (at === el) { at = at.nextSibling; continue; }
+    box.insertBefore(el, at);
+  }
+  while (at) { const nx = at.nextSibling; box.removeChild(at); at = nx; }
+}
 // Away from the end, the place is a row, not a scrollTop: the first row
 // still in view at the top ({ key, top, bottom } relative to the log's
 // content), and how far below the view's top it starts.

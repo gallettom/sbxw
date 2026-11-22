@@ -748,6 +748,7 @@
     renderChatTitle();
     $('log-top').textContent = 'Loading…';
     $('rows').replaceChildren();
+    drawn = new Map();
     renderTail();
     show('s-chat');
     setView(leader()?.kind === 'sandbox' ? 'chat' : view().mode);
@@ -948,19 +949,36 @@
     }
   }
 
+  // The rows on screen, by key: the element and what it shows. A row that
+  // shows the same thing keeps its element (no Markdown parsed again, no
+  // picture loaded again); only new or changed rows are built, and #rows is
+  // patched in place rather than emptied (rcRowSig, rcPatchChildren).
+  let drawn = new Map();
   function renderRows() {
     const shown = rcWithPending(rcRows(st.items), st.pending);
     st.pending = st.pending.filter(p => shown.left.includes(p.id));
     const rows = shown.rows;
     $('log-top').textContent = st.nextBefore != null ? '' : rows.length ? 'Start of the conversation' : 'No messages yet';
     const keys = rcRowKeys(rows);
-    $('rows').replaceChildren(...rows.map((r, i) => {
+    const next = new Map();
+    const els = rows.map((r, i) => {
+      const sig = rcRowSig(r);
+      const had = drawn.get(keys[i]);
+      if (had && had.sig === sig && !next.has(keys[i])) {
+        next.set(keys[i], had);
+        // As before: only a row built now rises in; one kept is still.
+        had.el.classList.remove('rc-new');
+        return had.el;
+      }
       const el = rowEl(r);
       el.dataset.key = keys[i];
       // Only what arrived since the last look rises in; a re-render is still.
       if (r.seq > st.shownSeq && (r.kind === 'agent' || r.kind === 'me')) el.classList.add('rc-new');
+      if (!next.has(keys[i])) next.set(keys[i], { sig, el });
       return el;
-    }));
+    });
+    drawn = next;
+    rcPatchChildren($('rows'), els);
   }
 
   function rowEl(r) {
