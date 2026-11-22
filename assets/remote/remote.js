@@ -830,6 +830,11 @@
       if (page.more) st.newerAgain = true;
       if (page.items.length) {
         st.items = rcMerge(st.items, page.items);
+        // At the end of the log, the oldest rows go (read again if wanted).
+        if (st.stick) {
+          const t = rcTrim(st.items);
+          if (t.cut !== null) { st.items = t.items; st.nextBefore = t.cut; }
+        }
         st.latestSeq = Math.max(st.latestSeq, page.latest_seq, ...page.items.map(i => Number(i.seq) || 0));
         renderRows();
         st.shownSeq = Math.max(st.shownSeq, st.latestSeq);

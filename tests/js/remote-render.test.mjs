@@ -181,3 +181,38 @@ test('a leaders event during a conversation does not rebuild the hidden home lis
   await dom.advance(0);
   assert.ok(list.textContent.includes('new-one'), 'drawn when it shows');
 });
+
+test('at the end, a long conversation keeps its newest rows; scrolling up reads the rest again', async () => {
+  const items = conversation(600, 1000);
+  const older = conversation(30, 1);
+  const dom = await openBig(items, { older });
+  const n0 = rowsOf(dom).length;
+  const last = items[items.length - 1].seq;
+  dom.S.newer = [newRow(last + 1, reply(3))];
+  dom.emit('history', { sandbox: 'big' });
+  await dom.advance(0);
+  const after = rowsOf(dom);
+  assert.ok(after.length < n0, `${after.length} rows, from ${n0}`);
+  assert.ok(after.length >= 300, 'still a long scroll back');
+  assert.match(after[after.length - 1].textContent, /Step 3: what changed/);
+  // Up to the top: the rows dropped are read again, from the first kept.
+  dom.counters.fetches.length = 0;
+  dom.$('log').scrollTop = 0;
+  await dom.advance(0);
+  const want = items[items.length + 1 - 400].seq;
+  assert.ok(dom.counters.fetches.some(f => f.includes(`before=${want}&`)), dom.counters.fetches.join());
+});
+
+test('scrolled up, nothing is dropped', async () => {
+  const items = conversation(600, 1000);
+  const dom = await openBig(items);
+  const log = dom.$('log');
+  log.scrollTop = log.scrollHeight / 2;
+  await dom.advance(0);
+  const n0 = rowsOf(dom).length;
+  const last = items[items.length - 1].seq;
+  dom.S.newer = [newRow(last + 1, reply(3))];
+  dom.emit('history', { sandbox: 'big' });
+  await dom.advance(0);
+  assert.equal(rowsOf(dom).length, n0 + 1);
+});

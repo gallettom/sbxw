@@ -460,6 +460,19 @@ function rcSameReply(a, b) {
   return words(a) === words(b);
 }
 
+// A conversation left open grows with every reply, and with every older
+// page read: at the end of the log, only the newest RC_KEEP_ITEMS are kept
+// (remote.js, at the end only, so nothing in view moves); the rest is read
+// again through the older-rows path if the person scrolls up. `cut` is the
+// seq to read before, or null when nothing was dropped.
+const RC_KEEP_ITEMS = 400;
+function rcTrim(items, keep = RC_KEEP_ITEMS) {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length <= keep) return { items: list, cut: null };
+  const kept = list.slice(list.length - keep);
+  return { items: kept, cut: Number(kept[0].seq) };
+}
+
 // The first page of a conversation, in rows (a run of steps is one): about
 // the last five exchanges (a prompt, its steps, its reply). Older pages,
 // read when the log is scrolled to its top, hold RC_OLDER_ROWS.
