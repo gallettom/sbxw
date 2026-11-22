@@ -66,6 +66,9 @@
     leadArm: null,       // which way a first tap on Lead armed
     current: null,       // the open leader's sandbox
     items: [],           // its history, oldest first
+    epoch: '',           // the numbering those items carry (rcPage)
+    pending: [],         // what was sent from here, until the history has it
+    pendingSeq: 0,
     nextBefore: null,
     latestSeq: 0,
     loadingOlder: false,
@@ -606,7 +609,16 @@
     show('s-chat');
     setView(leader()?.kind === 'sandbox' ? 'chat' : view().mode);
     cvLoadList(sandbox);
-    const res = await api.history(sandbox);
+    st.pending = [];
+    await loadLast(sandbox);
+  }
+
+  // The last page, alone: at open, and when the log's numbering changed (a
+  // daemon restart, the hook's backfill), when the rows held are dropped.
+  // Small (RC_FIRST_ROWS rows): older ones load when the log reaches its top.
+  async function loadLast(sandbox) {
+    st.loaded = null;
+    const res = await api.history(sandbox, { limit: RC_FIRST_ROWS });
     if (st.current !== sandbox) return;
     if (!res.ok) {
       $('log-top').textContent = res.status === 404 ? 'This sandbox is not running any more.' : 'Could not load the conversation.';
@@ -614,7 +626,11 @@
     }
     const page = rcPage(res.data);
     st.items = rcMerge([], page.items);
+    st.epoch = page.epoch;
     st.nextBefore = page.next_before;
+    // A bubble's `after` was a seq of the old numbering: from now on it
+    // matches its own text anywhere, and waits at the end (rcWithPending).
+    for (const p of st.pending) p.after = -1;
     st.latestSeq = Math.max(page.latest_seq, ...st.items.map(i => Number(i.seq)));
     renderRows();
     st.shownSeq = st.latestSeq;
@@ -640,6 +656,10 @@
     if (st.current !== sandbox) return;
     if (res.ok) {
       const page = rcPage(res.data);
+      // Another numbering: the rows held mean nothing in it. Start again
+      // from the last page (never the whole log).
+      if (rcEpochChanged(st.epoch, page)) { loadLast(sandbox); return; }
+      if (page.more) st.newerAgain = true;
       if (page.items.length) {
         st.items = rcMerge(st.items, page.items);
         st.latestSeq = Math.max(st.latestSeq, page.latest_seq, ...page.items.map(i => Number(i.seq) || 0));
@@ -657,11 +677,12 @@
     st.loadingOlder = true;
     const sandbox = st.current;
     $('log-top').textContent = 'Loading earlier messages…';
-    const res = await api.history(sandbox, { before: st.nextBefore });
+    const res = await api.history(sandbox, { before: st.nextBefore, limit: RC_OLDER_ROWS });
     st.loadingOlder = false;
     if (st.current !== sandbox) return;
     if (!res.ok) { $('log-top').textContent = 'Could not load earlier messages.'; return; }
     const page = rcPage(res.data);
+    if (rcEpochChanged(st.epoch, page)) { loadLast(sandbox); return; }
     st.items = rcMerge(st.items, page.items);
     st.nextBefore = page.next_before;
     renderRows();
@@ -770,7 +791,9 @@
   }
 
   function renderRows() {
-    const rows = rcRows(st.items);
+    const shown = rcWithPending(rcRows(st.items), st.pending);
+    st.pending = st.pending.filter(p => shown.left.includes(p.id));
+    const rows = shown.rows;
     $('log-top').textContent = st.nextBefore != null ? '' : rows.length ? 'Start of the conversation' : 'No messages yet';
     const keys = rcRowKeys(rows);
     $('rows').replaceChildren(...rows.map((r, i) => {
@@ -979,8 +1002,21 @@
     sendLabel.textContent = 'Sending…';
     $('composer').setAttribute('aria-busy', 'true');
     note('');
+    // Drawn at once, before anything that arrives after it; the history's
+    // own copy replaces it (rcWithPending).
+    const mine = { id: ++st.pendingSeq, text, files: t ? t.chips.filter(c => c.state === 'done' && c.id).map(c => c.name) : [], after: st.latestSeq, state: 'sending' };
+    st.pending.push(mine);
+    renderRows();
+    scrollToEnd();
     // The ids, never a path: the daemon adds the paths itself.
     const res = await api.message(sandbox, text, ids);
+    if (res.ok) mine.state = 'sent';
+    else {
+      // Shown as not sent, then gone: the text and files are still in the composer.
+      mine.state = 'failed';
+      setTimeout(() => { st.pending = st.pending.filter(p => p !== mine); if (st.current === sandbox) { renderRows(); keepPlace(); } }, 4000);
+    }
+    if (st.current === sandbox) { renderRows(); keepPlace(); }
     st.sending = false;
     send.removeAttribute('aria-busy');
     sendLabel.textContent = 'Send';

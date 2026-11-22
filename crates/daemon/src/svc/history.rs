@@ -106,6 +106,14 @@ impl App {
         book.page(&sandbox.to_string(), session_id, before, limit, now_ms())
     }
 
+    /// The items newer than `after`, oldest first (see
+    /// [`sbxw_core::history::HistoryBook::page_after`]); subscribes too.
+    pub fn history_page_after(&self, sandbox: &SandboxRef, session_id: &str, after: u64, limit: Option<usize>) -> Option<Page> {
+        let mut book = self.history.lock().unwrap();
+        book.expire(now_ms());
+        book.page_after(&sandbox.to_string(), session_id, after, limit, now_ms())
+    }
+
     pub fn history_unsubscribe(&self, sandbox: &SandboxRef, session_id: &str) -> bool {
         self.history.lock().unwrap().unsubscribe(&sandbox.to_string(), session_id)
     }

@@ -41,16 +41,35 @@ The daemon checks that offsets line up: a post must start where the last
 one ended (`from` = the daemon's `next`), else it answers `409 {next}` and
 the hook continues from there. After a daemon restart the daemon knows
 nothing (`409 {next: 0}`), and the hook backfills from the tail with
-`reset` at the next events. A transcript that shrank or was replaced is read
-again from its tail, with `reset`.
+`reset`. A transcript that shrank or was replaced is read again from its
+tail, with `reset`.
+
+**One event, several posts.** At each event the hook posts piece after
+piece until it has caught up, within a budget: at most 12 posts and 1 s,
+whichever comes first; the rest goes at the next event. A hook that has
+already caught up still posts one empty piece (`from` = `to`, no items): a
+separate small request, in parallel with the event, as the post always was.
+That empty piece is what lets a restarted daemon answer `409 {next: 0}`
+right away; the reset and the 2 MB backfill follow in the same run (8 reads
+of 256 KB). Before this, a caught-up hook posted nothing, the daemon never
+said 409, and an idle session's log stayed empty after a restart until the
+session wrote again, then filled one 256 KB piece per event. The hook never
+waits for the daemon past the budget: a daemon that does not answer, or is
+down, ends the run, nothing is kept, and the same piece goes again at the
+next event. An idle session that fires no event at all still has nothing
+until its next event (a restarted daemon cannot read a sandbox's files).
 
 `Stop`'s reply arrives before the transcript has it: it is kept as a
 `provisional` item, removed when the transcript's next post arrives (which
-carries the same text as an `assistant_text`).
+carries the same text as an `assistant_text`). It is the end of its turn:
+when a post brings items without the reply yet (the prompt the person sent,
+the turn's steps), the provisional item is moved after them with a new seq
+(seqs are never reused), so the prompt never shows after its reply.
 
 ## Items
 
-Each item: `seq` (per session, increasing, never reused), `at` (ms since the
+Each item: `seq` (per session, increasing, never reused within an epoch, see
+below), `at` (ms since the
 epoch: the transcript's timestamp, else arrival), `kind`, and what the kind
 carries. Absent fields are left out.
 
@@ -199,6 +218,13 @@ absent), oldest first within the page. Answer (content invented):
 }
 ```
 
+**`epoch`** (every page): an opaque string naming the log's numbering. It
+changes when the log is made again (a daemon restart, a log that expired)
+and at each `reset` post (the backfill replaces the items with new seqs). A
+reader holding items of another epoch drops them and reads the last page
+again: their seqs are not comparable with the new ones. Random per daemon
+run, then counting; no time, path or text in it.
+
 `404` when the daemon holds nothing for that session. `partial: true` comes
 with `partial_reason`: `old_hook: …` (the sandbox's hook is older than v3;
 `sbxw up <sandbox>` installs it), `no_transcript: …` (a v3 hook could not
@@ -225,6 +251,32 @@ Agent listener: `POST /api/hook/history`, the hook's post, accepted for the
 sandbox the token proves (a `sandbox` field in the body is ignored), body
 `{session_id, from, to, reset, items, prior_session?}`; `200 {next}`,
 `409 {next}`, `413`, `400` (no session id).
+
+## The phone's conversation
+
+`GET /r/leaders/:sandbox/history` (the remote listener) reads the same log
+for the sandbox's main session, folded for the phone: a run of tool calls,
+results and harness turns is one `steps` row with a `count`. Its `limit`
+counts those **rows**, not items:
+
+- no `after`: the last `limit` rows older than `before`, and `next_before`
+  for the page before (the first item the oldest row stands for, so a run of
+  steps cut at the edge is not lost);
+- `after=<seq>`: only the rows newer than that seq, the oldest `limit` of
+  them, and `more: true` when others follow, with `latest_seq` set to the
+  last row's seq to read again from. Never the end of the log in place of
+  what follows `after`.
+
+The page opens with the last 16 rows (`RC_FIRST_ROWS`: about five
+exchanges) and reads 30 older ones (`RC_OLDER_ROWS`) each time the log is
+scrolled to its top, keeping the row in view where it was. It reads newer
+rows on each nudge with `after` its last seq; an answer with another `epoch`
+drops the rows and reads the last page again. A message sent from the page
+is drawn at once as a pending bubble ("Sending…"), placed before anything
+that arrives after the Send, and replaced by the history's own prompt when
+it comes (the same text, whitespace aside, else the first prompt newer than
+the Send: the daemon masks names); a refused send shows "Not sent" for 4 s
+and leaves the text in the composer.
 
 ## Sessions: ended, continues, who wrote the last input
 

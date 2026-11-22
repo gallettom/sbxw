@@ -17,9 +17,10 @@ const block = src.slice(src.indexOf('// BEGIN history'), src.indexOf('// END his
 const require = createRequire(import.meta.url);
 
 function load() {
-  const ctx = vm.createContext({ require, fs: require('fs'), Buffer });
+  const ctx = vm.createContext({ require, fs: require('fs'), Buffer, setTimeout, clearTimeout, Date });
   vm.runInContext(`${block}
-    globalThis.api = { readTail, entryItems, stateAfter, saveState, loadState, transcriptProblem, toolInput };`, ctx);
+    globalThis.api = { readTail, entryItems, stateAfter, saveState, loadState, transcriptProblem, toolInput };
+    globalThis.sync = syncHistory;`, ctx);
   // Values come back through JSON: the context's arrays are another realm's.
   const api = {};
   for (const [k, f] of Object.entries(ctx.api)) {
@@ -28,7 +29,26 @@ function load() {
       return r === undefined ? r : JSON.parse(JSON.stringify(r));
     };
   }
+  api.sync = (tp, sid, dir, post, opts) => new Promise((resolve) => ctx.sync(tp, sid, dir, post, opts, (info) => resolve(JSON.parse(JSON.stringify(info)))));
   return api;
+}
+
+// The daemon's side of a transcript post, as `ingest_transcript` does it
+// (crates/core/src/history.rs): a post must start at `next`, else 409; a
+// reset clears the log; a fresh daemon (after a restart) knows nothing.
+function fakeDaemon() {
+  const d = { next: null, items: [], posts: [] };
+  d.post = (body, then) => {
+    const b = JSON.parse(JSON.stringify(body));
+    d.posts.push(b);
+    if (b.reset) d.items = [];
+    else if (!(d.next === b.from || (d.next === null && b.from === 0))) return then(409, { next: d.next ?? 0 });
+    d.next = b.to;
+    d.items.push(...b.items);
+    then(200, { next: b.to });
+  };
+  d.restart = () => { d.next = null; d.items = []; };
+  return d;
 }
 
 const SID = '0f9e8d7c-aaaa-bbbb-cccc-000000000001';
@@ -191,4 +211,86 @@ test('reading a full chunk stays well under the hook\'s budget', () => {
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   assert.ok(piece.items.length > 100);
   assert.ok(ms < 100, `took ${ms} ms`);
+});
+
+// The bug seen on the phone: the daemon restarted while the hook had caught
+// up with its transcript. The hook read nothing new, posted nothing, so the
+// daemon never said 409 {next: 0}, and the log stayed empty until the
+// session wrote again (then one 256 KB piece per event).
+test('after a daemon restart, a caught-up hook fills the log at its next event', async () => {
+  const api = load();
+  const t = transcript();
+  const dir = mkdtempSync(join(tmpdir(), 'sbxw-hook-state-'));
+  let text = '';
+  for (let i = 0; i < 40; i++) text += user(`prompt ${i}`) + said({ type: 'text', text: `reply ${i}` });
+  writeFileSync(t.path, text);
+  const d = fakeDaemon();
+  await api.sync(t.path, SID, dir, d.post);
+  assert.equal(d.items.length, 80);
+  // Caught up: the daemon restarts, the session goes idle; one event comes
+  // (a notification) with nothing new in the transcript.
+  d.restart();
+  await api.sync(t.path, SID, dir, d.post);
+  assert.equal(d.items.length, 80, 'the whole tail is back after one event');
+  assert.equal(d.next, text.length);
+  assert.equal(api.loadState(dir, SID).off, text.length);
+  // With the daemon in step, a caught-up event posts one empty piece.
+  const before = d.posts.length;
+  await api.sync(t.path, SID, dir, d.post);
+  assert.equal(d.posts.length, before + 1);
+  assert.deepEqual(d.posts.at(-1).items, []);
+});
+
+test('a backfill through lines longer than a read reaches the end in one event', async () => {
+  const api = load();
+  const t = transcript();
+  const dir = mkdtempSync(join(tmpdir(), 'sbxw-hook-state-'));
+  const big = (n) => line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu' + n, content: [{ type: 'image', source: { data: 'A'.repeat(20000) } }] }] } });
+  let text = '';
+  for (let i = 0; i < 30; i++) text += user(`old ${i}`) + said({ type: 'text', text: `old reply ${i}` });
+  text += big(1) + user('after the first image') + big(2) + big(3) + said({ type: 'text', text: 'last words' });
+  writeFileSync(t.path, text);
+  const d = fakeDaemon();
+  const limits = { read: 4096, backfill: 64 * 1024 };
+  // Caught up before a restart.
+  api.saveState(dir, SID, { off: text.length });
+  await api.sync(t.path, SID, dir, d.post, { limits });
+  assert.equal(d.next, text.length, 'stuck short of the end');
+  const texts = d.items.map((i) => i.text).filter(Boolean);
+  assert.equal(texts.at(-1), 'last words');
+  assert.ok(texts.includes('after the first image'));
+  assert.equal(d.items.filter((i) => i.oversized).length, 3);
+});
+
+test('one event posts at most a bounded number of pieces; the next event goes on', async () => {
+  const api = load();
+  const t = transcript();
+  const dir = mkdtempSync(join(tmpdir(), 'sbxw-hook-state-'));
+  let text = '';
+  for (let i = 0; i < 400; i++) text += user(`prompt ${i} ` + 'x'.repeat(200));
+  writeFileSync(t.path, text);
+  const d = fakeDaemon();
+  const opts = { limits: { read: 4096, backfill: 1 << 30 }, rounds: 3 };
+  await api.sync(t.path, SID, dir, d.post, opts);
+  assert.equal(d.posts.length, 3);
+  const after1 = d.next;
+  assert.ok(after1 > 0 && after1 < text.length);
+  await api.sync(t.path, SID, dir, d.post, opts);
+  assert.equal(d.posts.length, 6);
+  assert.equal(d.posts[3].from, after1);
+});
+
+test('a daemon that does not answer never holds the hook past its budget', async () => {
+  const api = load();
+  const t = transcript();
+  const dir = mkdtempSync(join(tmpdir(), 'sbxw-hook-state-'));
+  writeFileSync(t.path, user('hello'));
+  const t0 = Date.now();
+  const info = await api.sync(t.path, SID, dir, () => {}, { budgetMs: 100 });
+  assert.ok(Date.now() - t0 < 1000);
+  assert.equal(info.status, 0);
+  assert.deepEqual(api.loadState(dir, SID), {}, 'nothing kept: the same piece is posted again next time');
+  // Down (refused at once): nothing kept either.
+  await api.sync(t.path, SID, dir, (b, then) => then(0, null));
+  assert.deepEqual(api.loadState(dir, SID), {});
 });

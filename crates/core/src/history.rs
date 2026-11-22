@@ -215,6 +215,10 @@ struct Log {
     subscribed_until: u64,
     /// The last tool a `PreToolUse` announced: what a permission prompt is about.
     pending_tool: Option<ToolCall>,
+    /// Which numbering the items carry: new when the log is made (so after a
+    /// daemon restart too) and at each reset. A reader holding items of
+    /// another epoch drops them and reads the last page again.
+    epoch: u64,
 }
 
 /// One page of a session's log, newest page first.
@@ -235,6 +239,14 @@ pub struct Page {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partial_reason: Option<String>,
     pub ended: bool,
+    /// The log's numbering (see [`HistoryBook::page_after`]): opaque, it
+    /// changes when the log is made again (a daemon restart, a log that
+    /// expired) or reset (the hook's backfill). Seqs of two epochs are not
+    /// comparable: a reader whose items carry another epoch reads afresh.
+    pub epoch: String,
+    /// [`HistoryBook::page_after`] only: more items past this page.
+    #[serde(skip_serializing_if = "is_false")]
+    pub more: bool,
 }
 
 /// What a transcript post was answered: accepted up to `next`, or out of
@@ -253,6 +265,28 @@ pub struct HistoryBook {
     bounds: Bounds,
     /// What sbxw typed, so its lines are not shown as the person's.
     typed: crate::typed::TypedLog,
+    /// Epochs handed out: a random start per daemon run, then one more each.
+    epochs: Epochs,
+}
+
+/// Where epochs come from: random per book (so a restarted daemon never
+/// hands out an epoch a reader saw before it), then counting.
+#[derive(Debug)]
+struct Epochs(u64);
+
+impl Default for Epochs {
+    fn default() -> Self {
+        let mut b = [0u8; 8];
+        getrandom::getrandom(&mut b).expect("the OS has no randomness to give");
+        Epochs(u64::from_le_bytes(b))
+    }
+}
+
+impl Epochs {
+    fn mint(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(1);
+        self.0
+    }
 }
 
 impl HistoryBook {
@@ -280,7 +314,8 @@ impl HistoryBook {
     }
 
     fn log(&mut self, sandbox: &str, session_id: &str, now: u64) -> &mut Log {
-        let log = self.logs.entry((sandbox.to_string(), session_id.to_string())).or_default();
+        let epochs = &mut self.epochs;
+        let log = self.logs.entry((sandbox.to_string(), session_id.to_string())).or_insert_with(|| Log { epoch: epochs.mint(), ..Log::default() });
         log.last_ms = now;
         log
     }
@@ -396,12 +431,14 @@ impl HistoryBook {
         let from = post.get("from").and_then(Value::as_u64).unwrap_or(0);
         let to = post.get("to").and_then(Value::as_u64).unwrap_or(from).max(from);
         let reset = post.get("reset").and_then(Value::as_bool).unwrap_or(false);
+        let fresh = self.epochs.mint();
         let log = self.log(sandbox, session_id, now);
         if reset {
             let dropped: usize = log.items.iter().map(Item::weight).sum();
             log.items.clear();
             log.bytes = 0;
             log.truncated_before = from > 0;
+            log.epoch = fresh;
             self.total = self.total.saturating_sub(dropped);
         } else {
             match log.transcript_next {
@@ -424,10 +461,31 @@ impl HistoryBook {
             new.extend(transcript_items(raw, now, &|t| self.typed.typed(sandbox, t, now)));
         }
         let mut nudge = self.push(sandbox, session_id, new, rules, now);
+        // `Stop`'s early reply is the end of its turn: what the transcript
+        // brings before the reply itself (the prompt the person sent, the
+        // turn's steps) goes before it. It is numbered again, at the end.
+        if self.provisional_last(sandbox, session_id) {
+            nudge = nudge.and_then(|_| self.subscribed_seq(sandbox, session_id, now));
+        }
         if nudge.is_none() && reset {
             nudge = self.subscribed_seq(sandbox, session_id, now);
         }
         Posted::Accepted { next: to, nudge }
+    }
+
+    /// Move a provisional reply that is no longer the last item to the end,
+    /// with a new seq (seqs are never reused). `true` when it moved.
+    fn provisional_last(&mut self, sandbox: &str, session_id: &str) -> bool {
+        let Some(log) = self.logs.get_mut(&(sandbox.to_string(), session_id.to_string())) else { return false };
+        let Some(at) = log.items.iter().position(|i| i.provisional) else { return false };
+        if at + 1 == log.items.len() {
+            return false;
+        }
+        let Some(mut it) = log.items.remove(at) else { return false };
+        log.next_seq += 1;
+        it.seq = log.next_seq;
+        log.items.push_back(it);
+        true
     }
 
     fn subscribed_seq(&self, sandbox: &str, session_id: &str, now: u64) -> Option<u64> {
@@ -571,22 +629,7 @@ impl HistoryBook {
         let start = older.len().saturating_sub(limit);
         let items: Vec<Item> = older[start..].iter().map(|i| (*i).clone()).collect();
         let next_before = (start > 0).then(|| items.first().map(|i| i.seq)).flatten();
-        let (partial, partial_reason) = match (log.source, log.transcript_next) {
-            (Source::Transcript, Some(_)) => (false, None),
-            (Source::Transcript, None) => (true, Some("catching_up: the hook has not posted this session's transcript yet".to_string())),
-            (Source::Events, _) => match &log.no_transcript {
-                Some(why) => (true, Some(format!("no_transcript: the hook could not read this session's transcript ({why}); events only"))),
-                None if log.hook_version < HOOK_VERSION_TRANSCRIPT => (
-                    true,
-                    Some(format!(
-                        "old_hook: this sandbox's status hook (v{}) does not read the transcript: events only, no assistant text \
-                         between tool calls, nothing from before the daemon saw the session; `sbxw up <sandbox>` installs v{}",
-                        log.hook_version, HOOK_VERSION_TRANSCRIPT
-                    )),
-                ),
-                None => (true, Some("catching_up: the hook has not posted this session's transcript yet".to_string())),
-            },
-        };
+        let (partial, partial_reason) = partial_of(log);
         Some(Page {
             items,
             next_before,
@@ -595,6 +638,33 @@ impl HistoryBook {
             partial,
             partial_reason,
             ended: log.ended_ms.is_some(),
+            epoch: format!("{:016x}", log.epoch),
+            more: false,
+        })
+    }
+
+    /// The items newer than `after`, oldest first: the `limit` oldest of
+    /// them, `more` when there are others after those. Subscribes like
+    /// [`Self::page`]. `after` is a seq of the log's current epoch; one of
+    /// another epoch means nothing here (the reader compares epochs).
+    pub fn page_after(&mut self, sandbox: &str, session_id: &str, after: u64, limit: Option<usize>, now: u64) -> Option<Page> {
+        let log = self.logs.get_mut(&(sandbox.to_string(), session_id.to_string()))?;
+        log.subscribed_until = now + limits::SUBSCRIPTION_MS;
+        let limit = limit.unwrap_or(limits::PAGE_DEFAULT).clamp(1, limits::PAGE_MAX);
+        let mut newer = log.items.iter().filter(|i| i.seq > after);
+        let items: Vec<Item> = newer.by_ref().take(limit).cloned().collect();
+        let more = newer.next().is_some();
+        let (partial, partial_reason) = partial_of(log);
+        Some(Page {
+            items,
+            next_before: None,
+            latest_seq: log.next_seq,
+            truncated_before: log.truncated_before,
+            partial,
+            partial_reason,
+            ended: log.ended_ms.is_some(),
+            epoch: format!("{:016x}", log.epoch),
+            more,
         })
     }
 
@@ -607,6 +677,26 @@ impl HistoryBook {
             }
             None => false,
         }
+    }
+}
+
+/// Whether a log is the whole conversation, and why not.
+fn partial_of(log: &Log) -> (bool, Option<String>) {
+    match (log.source, log.transcript_next) {
+        (Source::Transcript, Some(_)) => (false, None),
+        (Source::Transcript, None) => (true, Some("catching_up: the hook has not posted this session's transcript yet".to_string())),
+        (Source::Events, _) => match &log.no_transcript {
+            Some(why) => (true, Some(format!("no_transcript: the hook could not read this session's transcript ({why}); events only"))),
+            None if log.hook_version < HOOK_VERSION_TRANSCRIPT => (
+                true,
+                Some(format!(
+                    "old_hook: this sandbox's status hook (v{}) does not read the transcript: events only, no assistant text \
+                     between tool calls, nothing from before the daemon saw the session; `sbxw up <sandbox>` installs v{}",
+                    log.hook_version, HOOK_VERSION_TRANSCRIPT
+                )),
+            ),
+            None => (true, Some("catching_up: the hook has not posted this session's transcript yet".to_string())),
+        },
     }
 }
 
