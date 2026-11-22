@@ -1212,6 +1212,13 @@
       // history itself until it does (rcPendingSent, catchUp).
       rcPendingSent(mine, res.data, st.epoch, Date.now());
       catchUp(sandbox, mine);
+    } else if (res.timeout) {
+      // No answer: it may have arrived. The bubble says so and gives way to
+      // the history's copy if it comes; the history is read as after a Send,
+      // and the bubble goes when that ends. The text stays in the field.
+      mine.state = 'unknown';
+      catchUp(sandbox, mine);
+      setTimeout(() => { st.pending = st.pending.filter(p => p !== mine); if (st.current === sandbox) { renderRows(); keepPlace(); } }, RC_PENDING_WAIT_MS + 1000);
     } else {
       // Shown as not sent, then gone: the text and files are still in the composer.
       mine.state = 'failed';
@@ -1223,7 +1230,7 @@
     sendLabel.textContent = 'Send';
     $('composer').removeAttribute('aria-busy');
     // Refused or not submitted: the text and the files stay, nothing is resent.
-    if (!res.ok) { note(rcFailText('Message', res), res.data?.reason === 'not_submitted' ? 'warn' : 'err'); gateSend(); return; }
+    if (!res.ok) { note(rcFailText('Message', res), res.timeout || res.data?.reason === 'not_submitted' ? 'warn' : 'err'); gateSend(); return; }
     if (t) t.sent(ids);
     // Sent: what was sent leaves the field; anything typed meanwhile stays.
     if (st.current === sandbox) {
