@@ -255,6 +255,9 @@
     if (!st.paired) return;
     const es = new EventSource('/r/events');
     st.es = es;
+    // Any event, `ping` included, says the stream lives (watchStream).
+    for (const ev of ['open', 'leaders', 'history', 'approvals', 'kanban', 'needs_you', 'ping']) es.addEventListener(ev, heard);
+    st.watch = setInterval(watchStream, RC_WATCH_MS);
     // Each (re)opened stream catches up on what it may have missed while
     // it was down: one read, then the nudges take over.
     es.addEventListener('open', () => { banner.hidden = true; if (st.current) fetchNewer(); });
@@ -309,6 +312,22 @@
   function stopEvents() {
     if (st.es) { st.es.close(); st.es = null; }
     if (st.probe) { clearTimeout(st.probe); st.probe = null; }
+    if (st.watch) { clearInterval(st.watch); st.watch = null; }
+  }
+  // A stream silent for longer than the daemon's `ping` allows, while the
+  // page shows, is opened again (rcStreamDead); each reopen that brings
+  // nothing waits twice as long before the next. A dead connection the
+  // browser does see goes through the `error` probe, banner and all.
+  const RC_WATCH_MS = 10000;
+  st.heardAt = Date.now();
+  st.silentMisses = 0;
+  function heard() { st.heardAt = Date.now(); st.silentMisses = 0; }
+  function watchStream() {
+    if (!st.es || !st.paired || st.elsewhere || document.visibilityState !== 'visible') return;
+    if (!rcStreamDead(Date.now(), st.heardAt, st.silentMisses)) return;
+    st.silentMisses += 1;
+    st.heardAt = Date.now();
+    startEvents();
   }
   function scheduleProbe(ms) {
     if (st.probe || !st.paired || st.elsewhere) return;
@@ -336,6 +355,8 @@
     if (document.visibilityState !== 'visible') { st.hiddenAt = Date.now(); return; }
     const away = st.hiddenAt ? Date.now() - st.hiddenAt : 0;
     st.hiddenAt = 0;
+    // Silence is counted while the page shows only (watchStream).
+    st.heardAt = Date.now();
     if (st.paired && st.screen === 's-leaders') refreshHome();
     if (!st.paired || st.elsewhere) return;
     if (!st.es) { scheduleProbe(10); return; }

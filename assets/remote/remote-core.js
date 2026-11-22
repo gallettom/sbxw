@@ -440,6 +440,19 @@ function rcMerge(have, incoming) {
 // read with no answer after RC_STUCK_MS no longer holds the next one back.
 const RC_AWAY_MS = 5000;
 const RC_STUCK_MS = 15000;
+// The stream's watchdog: the daemon says `ping` after 15 s of nothing, so a
+// stream silent for RC_SILENT_MS while the page shows died without a word
+// (iOS kept it "open"), and is opened again. A reopen that brings nothing
+// doubles the next wait, up to RC_SILENT_MAX_MS; any event starts again.
+const RC_SILENT_MS = 40000;
+const RC_SILENT_MAX_MS = 300000;
+function rcSilentWait(misses) {
+  const n = Math.max(0, Math.floor(Number(misses)) || 0);
+  return Math.min(RC_SILENT_MAX_MS, RC_SILENT_MS * 2 ** Math.min(n, 10));
+}
+function rcStreamDead(now, heardAt, misses) {
+  return Number(now) - Number(heardAt) >= rcSilentWait(misses);
+}
 
 // Two replies are the same text, whitespace aside.
 function rcSameReply(a, b) {

@@ -736,5 +736,15 @@ async fn events(State(app): S, Extension(d): Extension<DeviceCtx>) -> Response {
     });
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<_, std::convert::Infallible>);
     let stream = l2::capped(&app_for_cap, &d_for_cap, stream);
-    axum::response::Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))).into_response()
+    axum::response::Sse::new(stream).keep_alive(KeepAlive::new().interval(PING_EVERY).event(Sse::default().event("ping").data(""))).into_response()
 }
+
+/// After this long with nothing to send, the stream says `ping` (no payload).
+/// A named event rather than an SSE comment, which EventSource never shows to
+/// the page: the phone page counts the silence and opens the stream again
+/// when a stream iOS kept "open" went dead (thread phone-freeze-audit). A
+/// page that knows no `ping` ignores it.
+#[cfg(not(test))]
+pub(crate) const PING_EVERY: Duration = Duration::from_secs(15);
+#[cfg(test)]
+pub(crate) const PING_EVERY: Duration = Duration::from_millis(300);
