@@ -861,27 +861,7 @@ pub fn query(path: &str, key: &str) -> Option<String> {
 }
 
 fn decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            b'%' if i + 2 < b.len() => {
-                match u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("zz"), 16) {
-                    Ok(v) => {
-                        out.push(v);
-                        i += 3;
-                        continue;
-                    }
-                    Err(_) => out.push(b'%'),
-                }
-            }
-            b'+' => out.push(b' '),
-            c => out.push(c),
-        }
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    crate::pct::decode(s, true)
 }
 
 /// The stand-in's feature sockets: the first feature whose `standin_ws`
