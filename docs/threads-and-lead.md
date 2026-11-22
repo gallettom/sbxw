@@ -294,6 +294,15 @@ deleted. The lead is told the result in one line, e.g.
 `[sbxw] Merged: a, b. Failed: c (conflict in X).` A failed merge can be retried
 after fixing the cause.
 
+**A thread that finishes late can still be merged.** In a split plan, once
+some threads are merged, a thread that reports done later (or that the lead
+marks done) gets a merge of its own: the lead calls `propose_merge` again,
+naming only the done threads not merged yet, and the plan dialog offers it
+like the first. A thread sbxw already merged is refused (`thread "a" is
+already merged`), so nothing is merged twice. The earlier merge and its
+results stay in the plan's history (`earlier_merges`). A shared plan has one
+branch and stays one merge.
+
 **Main moved.** Once a merge has merged at least one thread, every other
 thread of the sandbox with an open session (of this plan or another) is told
 in one fixed line written by sbxw, e.g. ``[sbxw] main moved: a, b merged.

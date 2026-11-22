@@ -219,6 +219,12 @@ pub struct Plan {
     pub closed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge: Option<Merge>,
+    /// Merges before `merge`, oldest first: a split plan merged, then a
+    /// thread finished later and was proposed in a merge of its own. Their
+    /// results stay the plan's history, and their threads are never merged
+    /// again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub earlier_merges: Vec<Merge>,
     /// Uncommitted changes (tracked and untracked) in the main checkout of
     /// the repo(s) the threads work in, read on the host when the plan was
     /// proposed: work the threads' worktrees, cut from `HEAD`, will not
@@ -236,6 +242,17 @@ impl Plan {
     /// as one.
     pub fn team_name(&self) -> String {
         team_name(&self.id)
+    }
+
+    /// Every merge result that went through, in this merge and the earlier
+    /// ones: the threads sbxw merged (a shared plan: its one branch).
+    pub fn merged_results(&self) -> impl Iterator<Item = &MergeResult> {
+        self.earlier_merges.iter().chain(self.merge.iter()).flat_map(|m| m.results.iter()).filter(|r| r.ok)
+    }
+
+    /// The threads sbxw merged, in any of the plan's merges.
+    pub fn merged_threads(&self) -> HashSet<&str> {
+        self.merged_results().map(|r| r.thread.as_str()).collect()
     }
 }
 
@@ -513,6 +530,7 @@ impl PlanBook {
             lead: lead_address(lead),
             closed: false,
             merge: None,
+            earlier_merges: vec![],
             main_uncommitted: None,
             created_ms: now,
             updated_ms: now,
@@ -706,12 +724,26 @@ impl PlanBook {
                 Some(_) => {}
             }
         }
+        // A split plan merged (or partly merged) takes a new proposal for the
+        // threads that finished since: never one it merged already. A shared
+        // plan has one branch, merged once.
+        let merged = plan.merged_threads();
         if let Some(m) = &plan.merge {
-            if matches!(m.state, MergeState::Merging | MergeState::Merged) {
+            let late = plan.variant.is_split() && m.state != MergeState::Merging;
+            if !late && matches!(m.state, MergeState::Merging | MergeState::Merged) {
                 return Err(format!("plan {id} is already {:?}", m.state).to_lowercase());
             }
         }
+        if plan.variant.is_split() {
+            if let Some(name) = order.iter().find(|n| merged.contains(n.as_str())) {
+                return Err(format!("thread {name:?} is already merged; leave it out of the order"));
+            }
+        }
         self.mutate(id, now, |p| {
+            // An earlier merge that merged something stays in the history.
+            if let Some(m) = p.merge.take().filter(|m| m.results.iter().any(|r| r.ok)) {
+                p.earlier_merges.push(m);
+            }
             p.merge = Some(Merge {
                 order,
                 note: clip(note),
@@ -947,8 +979,12 @@ impl PlanBook {
         if t.state == ThreadState::Done && t.set_by.is_none() {
             return Ok(plan.clone());
         }
-        if plan.merge.as_ref().is_some_and(|m| matches!(m.state, MergeState::Merging | MergeState::Merged)) {
-            return Err(format!("plan {id} is already merging or merged"));
+        // A split plan already merged still takes a late thread's done.
+        match plan.merge.as_ref().map(|m| m.state) {
+            Some(MergeState::Merging) => return Err(format!("plan {id} is merging")),
+            Some(MergeState::Merged) if !plan.variant.is_split() => return Err(format!("plan {id} is already merged")),
+            _ if plan.merged_threads().contains(thread) => return Err(format!("thread {thread:?} is already merged")),
+            _ => {}
         }
         let note = clip(note);
         if note.is_empty() {
@@ -1119,6 +1155,31 @@ mod tests {
         let m = b.finish_merge(&p.id, 13).unwrap().merge.unwrap();
         assert_eq!(m.state, MergeState::Merged);
         assert!(m.results.iter().all(|r| r.ok) && m.results.len() == 2);
+    }
+
+    #[test]
+    fn a_late_thread_gets_a_merge_of_its_own_and_a_shared_plan_does_not() {
+        let mut b = PlanBook::new();
+        let p = proposed(&mut b, "n", &["a", "b"]);
+        b.approve(&p.id, vec![t("a"), t("b")], None, None, 3).unwrap();
+        b.set_thread("n", "a", ThreadState::Done, "ok", false, 4).unwrap();
+        b.propose_merge(&p.id, "n", vec!["a".into()], "", vec![], 5).unwrap();
+        b.start_merge(&p.id, None, None, 6).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None, note: None }, 7).unwrap();
+        b.finish_merge(&p.id, 8).unwrap();
+        b.mark_done(&p.id, "n", "b", "reviewed sbxw/b", 9).unwrap();
+        assert!(b.propose_merge(&p.id, "n", vec!["a".into(), "b".into()], "", vec![], 10).unwrap_err().contains("already merged"));
+        let q = b.propose_merge(&p.id, "n", vec!["b".into()], "", vec![], 10).unwrap();
+        assert_eq!((q.merge.as_ref().unwrap().state, q.earlier_merges.len()), (MergeState::Proposed, 1));
+
+        let s = b.propose("p-s".into(), "m", "", vec![t("x")], Variant::Shared, "why", None, 11).unwrap();
+        b.approve(&s.id, vec![t("x")], None, None, 12).unwrap();
+        b.set_thread("m", "x", ThreadState::Done, "ok", false, 13).unwrap();
+        b.propose_merge(&s.id, "m", vec![], "", vec![], 14).unwrap();
+        b.start_merge(&s.id, None, None, 15).unwrap();
+        b.merge_result(&s.id, MergeResult { thread: s.team_name(), ok: true, commit: None, error: None, note: None }, 16).unwrap();
+        b.finish_merge(&s.id, 17).unwrap();
+        assert!(b.propose_merge(&s.id, "m", vec![], "", vec![], 18).unwrap_err().contains("already merged"), "one branch, one merge");
     }
 
     #[test]
