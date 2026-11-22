@@ -12,7 +12,8 @@ const read = p => readFileSync(new URL(p, import.meta.url), 'utf8');
 const coreSrc = read('../../assets/remote/remote-core.js');
 const NAMES = ['rcCvPage', 'rcCvCounter', 'rcCvSwipe', 'rcCvClamp', 'rcCvPinch', 'rcCvToFrac', 'rcCvFromFrac', 'RC_CV_MAX_ZOOM',
   'rcCvId', 'rcCvImage', 'rcCvList', 'rcCvBadge', 'rcCvRemarks', 'rcCvManifest', 'rcCvShotLine', 'rcCvListLine', 'rcCvRowEl',
-  'rcCvConfirm', 'rcCvConfirmText', 'rcCvSubmitResult', 'rcCvRemarkResult', 'rcClient', 'rcCvHold'];
+  'rcCvConfirm', 'rcCvConfirmText', 'rcCvSubmitResult', 'rcCvRemarkResult', 'rcClient', 'rcCvHold',
+  'rcCvMode', 'rcCvTapAction', 'rcCvDoubleTap', 'rcCvIsDouble', 'rcCvToggleMode', 'rcCvHint', 'rcCvFsOpen', 'rcCvFsGo', 'rcCvFsClose', 'RC_CV_DOUBLE_ZOOM'];
 const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
@@ -241,4 +242,87 @@ test('a remark being typed holds the page: leaving does nothing and says why', (
   assert.equal(rc.rcCvHold({ kind: 'pin', n: 4, orig: 'Bigger' }, 'Bigger, and blue'), 'Save or Cancel pin 4 first: its text is not saved yet.');
   assert.equal(rc.rcCvHold({ kind: 'note', n: 2, orig: 'x' }, ''), 'Save or Cancel note 2 first: its text is not saved yet.', 'emptied is a change too');
   assert.equal(rc.rcCvHold({ kind: 'note', n: null, orig: '' }, 'A note'), 'Save or Cancel the new note first: its text is not saved yet.');
+});
+
+// ── View mode and pin mode ──
+const V1 = { s: 1, tx: 0, ty: 0 };
+test('mode: a tap in view mode places nothing; in pin mode it places a pin', () => {
+  assert.equal(rc.rcCvTapAction('view', false, V1, 150, 50, 300, 200).kind, 'none');
+  assert.equal(rc.rcCvTapAction(undefined, false, V1, 150, 50, 300, 200).kind, 'none', 'view is the default');
+  assert.deepEqual(plain(rc.rcCvTapAction('pin', false, V1, 150, 50, 300, 200)), { kind: 'new-pin', fx: 0.5, fy: 0.25 });
+  assert.equal(rc.rcCvTapAction('pin', false, V1, 400, 50, 300, 200).kind, 'none', 'off the picture');
+  const z = { s: 2, tx: -100, ty: 0 };
+  assert.deepEqual(plain(rc.rcCvTapAction('pin', false, z, 100, 100, 300, 200)), { kind: 'new-pin', fx: 0.3333, fy: 0.25 }, 'at any zoom');
+});
+test('mode: an existing pin opens for editing in both modes', () => {
+  assert.equal(rc.rcCvTapAction('view', true, V1, 1, 1, 300, 200).kind, 'edit-pin');
+  assert.equal(rc.rcCvTapAction('pin', true, V1, 1, 1, 300, 200).kind, 'edit-pin');
+});
+test('mode: toggling on is free; leaving follows rcCvHold', () => {
+  assert.deepEqual(plain(rc.rcCvToggleMode('view', null, '')), { mode: 'pin', hold: '' });
+  assert.deepEqual(plain(rc.rcCvToggleMode('pin', null, '')), { mode: 'view', hold: '' });
+  const fresh = { kind: 'pin', n: null, orig: '' };
+  assert.equal(rc.rcCvToggleMode('pin', fresh, '').mode, 'view', 'a new pin with nothing typed does not hold');
+  const held = rc.rcCvToggleMode('pin', fresh, 'wrong colour');
+  assert.equal(held.mode, 'pin');
+  assert.match(held.hold, /Save or Cancel the new pin first/);
+  const edited = rc.rcCvToggleMode('pin', { kind: 'pin', n: 3, orig: 'a' }, 'b');
+  assert.equal(edited.mode, 'pin');
+  assert.match(edited.hold, /pin 3/);
+  assert.equal(rc.rcCvToggleMode('pin', { kind: 'pin', n: 3, orig: 'a' }, ' a ').mode, 'view', 'unchanged text lets go');
+  assert.equal(rc.rcCvToggleMode('pin', { kind: 'note', n: null, orig: '' }, 'typed').mode, 'view', 'a note is not a pin');
+});
+test('mode: the hint names the mode', () => {
+  assert.match(rc.rcCvHint('pin'), /^Tap to place a pin/);
+  assert.doesNotMatch(rc.rcCvHint('view'), /^Tap to place a pin/);
+  assert.equal(rc.rcCvMode('junk'), 'view');
+});
+
+// ── Double tap ──
+test('double tap: 1x goes to 2.5x about the tapped point; zoomed goes back to 1x', () => {
+  const v = rc.rcCvDoubleTap(V1, 100, 50, 300, 200);
+  near(v.s, 2.5, 's');
+  near(v.tx, -150, 'tx');
+  near(v.ty, -75, 'ty');
+  // the tapped point stays under the finger
+  near(100 * v.s + v.tx, 100, 'the point is fixed');
+  near(50 * v.s + v.ty, 50, 'the point is fixed (y)');
+  assert.deepEqual(plain(rc.rcCvDoubleTap({ s: 2.5, tx: -150, ty: -75 }, 10, 10, 300, 200)), V1);
+  assert.deepEqual(plain(rc.rcCvDoubleTap({ s: 1.005, tx: 0, ty: 0 }, 100, 50, 300, 200)).s, 2.5, 'about 1x counts as 1x');
+});
+test('double tap: near an edge the picture stays covering its box', () => {
+  const v = rc.rcCvDoubleTap(V1, 300, 200, 300, 200);
+  near(v.tx, 300 - 300 * 2.5, 'tx at the limit');
+  near(v.ty, 200 - 200 * 2.5, 'ty at the limit');
+  const o = rc.rcCvDoubleTap(V1, 0, 0, 300, 200);
+  near(o.tx, 0, 'tx');
+  near(o.ty, 0, 'ty');
+});
+test('double tap: two close, quick taps only', () => {
+  assert.equal(rc.rcCvIsDouble(null, 100, 0, 0), false);
+  assert.equal(rc.rcCvIsDouble({ t: 0, x: 10, y: 10 }, 200, 14, 12), true);
+  assert.equal(rc.rcCvIsDouble({ t: 0, x: 10, y: 10 }, 500, 10, 10), false, 'too slow');
+  assert.equal(rc.rcCvIsDouble({ t: 0, x: 10, y: 10 }, 200, 100, 10), false, 'too far');
+});
+
+// ── Full screen ──
+test('full screen: opens on the current shot at 1x; no shot, no overlay', () => {
+  assert.deepEqual(plain(rc.rcCvFsOpen(2, 5)), { open: true, idx: 2, view: V1 });
+  assert.equal(rc.rcCvFsOpen(0, 0).open, false);
+  assert.equal(rc.rcCvFsOpen(9, 5).idx, 4, 'clamped');
+});
+test('full screen: next and previous stay in range and reset the zoom', () => {
+  const s = { open: true, idx: 1, view: { s: 3, tx: -10, ty: -10 } };
+  assert.deepEqual(plain(rc.rcCvFsGo(s, 1, 5)), { open: true, idx: 2, view: V1 });
+  assert.equal(rc.rcCvFsGo({ ...s, idx: 4 }, 1, 5).idx, 4, 'no wrap');
+  assert.equal(rc.rcCvFsGo({ ...s, idx: 0 }, -1, 5).idx, 0);
+  assert.equal(rc.rcCvFsGo({ open: false, idx: 1, view: V1 }, 1, 5).open, false, 'closed stays closed');
+});
+test('full screen: closing keeps the shot and gives 1x', () => {
+  assert.deepEqual(plain(rc.rcCvFsClose({ open: true, idx: 3, view: { s: 2, tx: -1, ty: -1 } })), { open: false, idx: 3, view: V1 });
+  assert.deepEqual(plain(rc.rcCvFsClose(null)), { open: false, idx: 0, view: V1 });
+});
+test('full screen: swipe pages only at 1x, as on the page', () => {
+  assert.equal(rc.rcCvSwipe(-120, 5, 1), 1);
+  assert.equal(rc.rcCvSwipe(-120, 5, 2.5), 0);
 });

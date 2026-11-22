@@ -205,6 +205,14 @@
             <span id="cv-count" class="rc-cv-count" aria-live="polite"></span>
             <button id="cv-next" class="rc-btn rc-quiet rc-small" type="button">Next</button>
           </div>
+          <div class="rc-cv-tools">
+            <button id="cv-mode" class="rc-btn rc-quiet rc-small rc-cv-mode" type="button" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-6.2-6.5-11a6.5 6.5 0 0 1 13 0c0 4.8-6.5 11-6.5 11Z"/><circle cx="12" cy="10" r="2.2"/></svg><span>Remark</span>
+            </button>
+            <button id="cv-full" class="rc-btn rc-quiet rc-small" type="button" aria-label="Full screen">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span>Full screen</span>
+            </button>
+          </div>
           <div id="cv-stage" class="rc-cv-stage">
             <div id="cv-layer" class="rc-cv-layer">
               <img id="cv-img" class="rc-cv-img" alt="" draggable="false">
@@ -216,7 +224,7 @@
           <h2 id="cv-shot-title" class="rc-cv-shot-title"></h2>
           <p id="cv-shot-line" class="rc-cv-shot-line"></p>
           <p id="cv-shot-note" class="rc-cv-shot-note"></p>
-          <p class="rc-cv-hint">Tap the picture to place a pin. Pinch to zoom; swipe to change shot.</p>
+          <p id="cv-hint" class="rc-cv-hint"></p>
           <p id="cv-saved" class="rc-cv-saved" role="status" aria-live="polite" hidden></p>
           <form id="cv-editor" class="rc-cv-editor" hidden novalidate>
             <label id="cv-ed-label" class="rc-kb-flabel" for="cv-ed-text"></label>
@@ -230,6 +238,21 @@
           <ul id="cv-remarks" class="rc-cv-remarks"></ul>
           <button id="cv-add-note" class="rc-btn rc-quiet rc-small rc-cv-add-note" type="button">Add a note on this shot</button>
         </div>
+      </div>
+      <!-- Full screen: the shot alone over the whole page (a fixed overlay, not
+           the Fullscreen API: iOS Safari has none for a picture). Pins shown,
+           none editable. -->
+      <div id="cv-fs" class="rc-cv-fs" role="dialog" aria-modal="true" aria-label="Shot, full screen" hidden>
+        <div id="cv-fs-stage" class="rc-cv-fs-stage">
+          <div id="cv-fs-layer" class="rc-cv-layer rc-cv-fs-layer">
+            <img id="cv-fs-img" class="rc-cv-img" alt="" draggable="false">
+            <div id="cv-fs-pins" class="rc-cv-pins"></div>
+          </div>
+        </div>
+        <span id="cv-fs-count" class="rc-cv-fs-count" aria-live="polite"></span>
+        <button id="cv-fs-close" class="rc-cv-fs-close" type="button" aria-label="Close full screen">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
       </div>
       <!-- "Send remarks": every remark in full, then the send. -->
       <div id="cv-confirm" class="rc-cv-confirm" role="dialog" aria-modal="true" aria-labelledby="cv-cf-title" hidden>

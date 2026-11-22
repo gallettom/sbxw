@@ -1707,6 +1707,60 @@ function rcCvFromFrac(fx, fy, view, w, h) {
   return { x: view.tx + fx * w * view.s, y: view.ty + fy * h * view.s };
 }
 
+// ── View mode and pin mode ──
+// View mode (the default): a tap on the picture places nothing; a double tap
+// zooms. Pin mode: a tap on the picture places a pin. A pin already there
+// opens for editing in both modes.
+const RC_CV_DOUBLE_ZOOM = 2.5;
+const rcCvMode = m => (m === 'pin' ? 'pin' : 'view');
+// What a finished still tap does: { kind: 'edit-pin' | 'new-pin' | 'none', fx, fy }.
+function rcCvTapAction(mode, onPin, view, x, y, w, h) {
+  if (onPin) return { kind: 'edit-pin' };
+  if (rcCvMode(mode) !== 'pin') return { kind: 'none' };
+  const f = rcCvToFrac(x, y, view, w, h);
+  return f ? { kind: 'new-pin', fx: f.fx, fy: f.fy } : { kind: 'none' };
+}
+// A double tap at (x, y) (relative to the box's top left): zoomed in, back to
+// 1x; at 1x, to RC_CV_DOUBLE_ZOOM about that point (it stays under the finger).
+function rcCvDoubleTap(view, x, y, w, h) {
+  if ((Number(view?.s) || 1) > 1.01) return { s: 1, tx: 0, ty: 0 };
+  const s = Math.min(RC_CV_MAX_ZOOM, RC_CV_DOUBLE_ZOOM);
+  return rcCvClamp({ s, tx: x - x * s, ty: y - y * s }, w, h);
+}
+// Two quick, close taps make a double tap.
+function rcCvIsDouble(prev, now, x, y, gap = 320, dist = 32) {
+  return !!prev && now - prev.t >= 0 && now - prev.t < gap && Math.hypot(x - prev.x, y - prev.y) < dist;
+}
+// Switching mode. Leaving pin mode with an unsaved remark follows rcCvHold:
+// the mode stays and the sentence says why. `edit` is the open editor's remark
+// (or null), `text` its field.
+function rcCvToggleMode(mode, edit, text) {
+  const cur = rcCvMode(mode);
+  if (cur === 'view') return { mode: 'pin', hold: '' };
+  const hold = edit && edit.kind === 'pin' ? rcCvHold(edit, text) : '';
+  return hold ? { mode: 'pin', hold } : { mode: 'view', hold: '' };
+}
+function rcCvHint(mode) {
+  return rcCvMode(mode) === 'pin'
+    ? 'Tap to place a pin. Tap a pin to edit it. Pinch to zoom.'
+    : 'Double-tap or pinch to zoom; swipe to change shot. Turn on Remark to place pins.';
+}
+// ── Full screen: the current shot alone, in a fixed overlay ──
+// State { open, idx, view }. Opening and moving to another shot start at 1x;
+// closing gives back the same shot at 1x.
+const RC_CV_VIEW1 = () => ({ s: 1, tx: 0, ty: 0 });
+function rcCvFsOpen(idx, n) {
+  const count = Math.max(0, Math.floor(Number(n)) || 0);
+  return count ? { open: true, idx: rcCvPage(idx, count), view: RC_CV_VIEW1() } : { open: false, idx: 0, view: RC_CV_VIEW1() };
+}
+function rcCvFsGo(state, delta, n) {
+  if (!state?.open) return state;
+  return { open: true, idx: rcCvPage(state.idx, n, delta), view: RC_CV_VIEW1() };
+}
+function rcCvFsClose(state) {
+  return { open: false, idx: Math.max(0, Math.trunc(Number(state?.idx)) || 0), view: RC_CV_VIEW1() };
+}
+
 // ── The canvas's data, read defensively ──
 // Ids and file names have one shape each; anything else is not used, so a
 // picture only ever loads from /r/canvas/<id>/images/<file> as the manifest
