@@ -248,6 +248,11 @@ test('leaders, a conversation, a question answered once on a tap', { skip }, asy
   assert.deepEqual(await page.$$eval('.rc-stopped .rc-leader-name', els => els.map(e => e.textContent)), ['old-experiment']);
   assert.equal(await page.$$eval('.rc-leader', b => b.at(-1).classList.contains('rc-stopped')), true);
   assert.ok(await noHScroll(page), 'no horizontal scroll');
+  // Facts are set apart by structure, not a middle dot: the state word in its
+  // own element (it keeps its colour), a ", " a screen reader hears between.
+  const shop = await page.$eval('.rc-leader:not(.rc-stopped) .rc-leader-line', e => [[...e.querySelectorAll('.rc-fact')].map(f => [f.className, f.textContent]), e.textContent]);
+  assert.deepEqual(shop, [[['rc-leader-state rc-fact', 'needs you'], ['rc-fact', 'Asks a question']], 'needs you, Asks a question']);
+  assert.equal(await page.$eval('#leaders', e => e.textContent.includes('·')), false, 'no middle dot on the home');
   await shot(page, '04-leaders');
   await page.tap('.rc-leader >> nth=0');
   await page.waitForSelector('.rc-card-q .rc-opt');
@@ -1120,7 +1125,7 @@ test('level 2: a merge in numbers and paths, its result in the daemon\'s words',
   await openItemOf(page, 'merges');
   assert.deepEqual(await page.$$eval('.rc-order li', l => l.map(e => e.textContent)), ['footer', 'contact-form']);
   assert.equal(await page.textContent('.rc-branch .rc-thread-meta'), '1a2b3c4');
-  assert.match(await page.textContent('.rc-branch-stat'), /^3 commits · 3 files \+120 −8$/);
+  assert.match(await page.textContent('.rc-branch-stat'), /^3 commits, 3 files \+120 −8$/);
   await page.tap('.rc-files-box summary');
   assert.deepEqual(await page.$$eval('.rc-file-path', l => l.slice(0, 3).map(e => e.textContent)), ['src/components/Footer.tsx', 'src/pages/legal/index.tsx', 'public/logo.png']);
   assert.equal(await page.textContent('.rc-files li:nth-child(3) .rc-file-n'), 'binary');

@@ -190,6 +190,14 @@ svg circle { fill: currentColor; stroke: none; }
 :focus:not(:focus-visible) { outline: none; }
 :where(button, input, select, textarea):disabled { opacity: var(--disabled-opacity); cursor: not-allowed; }
 .rc-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* Facts side by side (rcFactsInto): a gap, never a middle dot (gate 63).
+   Inline, so a one-line meta still ends in an ellipsis; the ", " between
+   two facts is .rc-vh, for a screen reader only. */
+/* The gap sits after a fact, so a fact that wraps starts flush. */
+.rc-facts > .rc-fact:not(:last-child) { margin-inline-end: var(--sp-3); }
+/* Where a line of short facts wraps, each wraps whole ("updated" never
+   ends a line without its "12 min ago"). */
+.rc-cv-row-line .rc-fact, .rc-cv-shot-line .rc-fact { white-space: nowrap; }
 
 /* ── Buttons ──
    Text buttons: 44 pt high; small ones 36 pt drawn, the target grown to 44
@@ -538,8 +546,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-leader-line { grid-column: 2 / 4; font-size: var(--fs-sm); color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-st-attention .rc-leader-state { color: var(--c-amber); font-weight: 600; }
 .rc-st-working .rc-leader-state { color: var(--c-green); }
-.rc-leader-info { grid-column: 2 / 4; display: flex; align-items: center; gap: var(--sp-2); min-width: 0; font-size: var(--fs-xs); color: var(--c-text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.rc-leader-canvas { flex: none; padding: 0 var(--sp-2); border-radius: var(--r-pill); font-weight: 600; color: var(--c-blue); background: var(--c-blue-a16); }
+.rc-leader-info { grid-column: 2 / 4; min-width: 0; font-size: var(--fs-xs); color: var(--c-text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.rc-leader-canvas { padding: 0 var(--sp-2); border-radius: var(--r-pill); font-weight: 600; color: var(--c-blue); background: var(--c-blue-a16); }
 .rc-empty { padding: var(--sp-14) var(--sp-6); text-align: center; color: var(--c-text-muted); }
 /* The home's groups: always shown, with icon, count and an empty line. The
    list scrolls inside its screen (.rc-screen); a group title stays in view. */
@@ -1323,7 +1331,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 }
 .rc-cv-row:active { background: var(--c-elevated); }
 .rc-cv-row-title { grid-area: t; font-size: var(--fs-md); font-weight: 600; color: var(--c-text-bright); overflow-wrap: anywhere; }
-.rc-cv-row-line { grid-area: l; font-size: var(--fs-xs); color: var(--c-text-muted); margin-top: 2px; }
+.rc-cv-row-line { grid-area: l; min-width: 0; font-size: var(--fs-xs); color: var(--c-text-muted); margin-top: 2px; }
 .rc-cv-new { grid-area: n; padding: 0 var(--sp-2); line-height: 20px; border-radius: var(--r-pill); background: var(--c-blue-a16); color: var(--c-blue); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
 
 .rc-cv-head {

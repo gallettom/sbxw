@@ -534,12 +534,40 @@ function rcGroups(data, stopped) {
   ].map(g => ({ ...g, count: g.items.length }));
 }
 // The stopped sandboxes as the home shows them: a name (else dropped), and
-// one line, the agent (or "chat") and the workspace path, as text.
+// one line of facts, the agent (or "chat") and the workspace path.
 function rcStopped(list) {
   const s = v => (typeof v === 'string' ? v : '');
   return (Array.isArray(list) ? list : [])
     .filter(x => x && typeof x === 'object' && s(x.name))
-    .map(x => ({ name: x.name, line: [s(x.agent) || (x.chat === true ? 'chat' : ''), s(x.workspace)].filter(Boolean).join(' · ') }));
+    .map(x => ({ name: x.name, line: [s(x.agent) || (x.chat === true ? 'chat' : ''), s(x.workspace)].filter(Boolean) }));
+}
+// Facts set side by side (gate 63: no middle dot between them): each in its
+// own span, the gap drawn by the CSS (.rc-facts), so a state word keeps its
+// colour and the rest stays muted. Between two facts sits a ", " only a
+// screen reader hears (.rc-vh), so the text never runs together.
+// `parts`: strings (set as text) or nodes; empty ones are left out.
+function rcFactsInto(box, parts) {
+  const doc = box.ownerDocument;
+  box.classList.add('rc-facts');
+  box.replaceChildren();
+  (Array.isArray(parts) ? parts : []).filter(p => p !== '' && p !== null && p !== undefined).forEach((p, i) => {
+    if (i) {
+      const sep = doc.createElement('span');
+      sep.className = 'rc-vh';
+      sep.textContent = ', ';
+      // A line that wraps breaks between two facts (no text, so the
+      // facts still read "a, b").
+      box.append(sep, doc.createElement('wbr'));
+    }
+    let f = p;
+    if (typeof p === 'string') {
+      f = doc.createElement('span');
+      f.textContent = p;
+    }
+    f.classList.add('rc-fact');
+    box.append(f);
+  });
+  return box;
 }
 // A long home group folds: more than `limit` entries show the first
 // `limit` and a "Show all" for the rest, until opened.
@@ -2219,21 +2247,22 @@ function rcCvManifest(data) {
     text_max: rcCvInt(limits.text) || 2000,
   };
 }
-// The line under a shot's title: its round, whether it is new, the width.
+// The line under a shot's title, as facts: its round, whether it is new,
+// the width.
 function rcCvShotLine(shot, rounds = 0) {
   const parts = [rounds > 1 || shot.round ? `Round ${shot.round}` : ''];
   if (shot.new) parts.push('new');
   if (shot.width) parts.push(`${shot.width} px wide`);
-  return parts.filter(Boolean).join(' · ');
+  return parts.filter(Boolean);
 }
-// "3 shots · 2 rounds", a canvas row's line.
+// ["3 shots", "2 rounds", ...], a canvas row's line, as facts.
 function rcCvListLine(c, now) {
   const p = [c.shots === 1 ? '1 shot' : `${c.shots} shots`];
   if (c.rounds > 1) p.push(`${c.rounds} rounds`);
   if (c.draft) p.push(c.draft === 1 ? '1 remark not sent' : `${c.draft} remarks not sent`);
   const ago = rcAgo(c.updated_ms, now);
   if (ago) p.push(ago === 'now' ? 'updated now' : `updated ${ago} ago`);
-  return p.join(' · ');
+  return p;
 }
 // A canvas row of the list, every string set as text.
 function rcCvRowEl(doc, c, now) {
@@ -2245,7 +2274,7 @@ function rcCvRowEl(doc, c, now) {
   t.textContent = c.title;
   const line = doc.createElement('span');
   line.className = 'rc-cv-row-line';
-  line.textContent = rcCvListLine(c, now);
+  rcFactsInto(line, rcCvListLine(c, now));
   b.append(t, line);
   if (c.new_shots > 0) {
     const n = doc.createElement('span');
@@ -2260,7 +2289,7 @@ function rcCvRowEl(doc, c, now) {
 function rcCvConfirm(m) {
   const pins = m?.pins || [], notes = m?.notes || [], shots = m?.shots || [];
   const groups = [];
-  const at = (n, i) => `Shot ${i + 1}${n ? ` · ${n}` : ''}`;
+  const at = (n, i) => `Shot ${i + 1}${n ? `: ${n}` : ''}`;
   const items = id => [
     ...pins.filter(p => p.shot === id).map(p => `Pin ${p.n} (${Math.round(p.x)}%, ${Math.round(p.y)}%): ${p.text}`),
     ...notes.filter(t => t.shot === id).map(t => `Note ${t.n}: ${t.text}`),
@@ -2364,7 +2393,7 @@ function rcUsage(u, now) {
     has: rows.length > 0,
     rows,
     updated: !ago ? '' : ago === 'now' ? 'updated just now' : `updated ${ago} ago`,
-    compact: rows.map(r => `${r.key === 'five' ? '5 h' : '7 d'} ${r.pct}%`).join(' · '),
+    compact: rows.map(r => `${r.key === 'five' ? '5 h' : '7 d'} ${r.pct}%`),
   };
 }
 // The conversation's one usage line, under Model and Lead: each window's

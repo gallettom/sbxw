@@ -1020,11 +1020,11 @@ test('the home: stopped sandboxes are a third group, last, only when there are a
   const g = plain(rc.rcGroups(leaders, stopped));
   assert.deepEqual(g.map(x => [x.kind, x.title, x.count]), [['leader', 'Team leaders', 1], ['sandbox', 'Sandboxes', 1], ['stopped', 'Stopped sandboxes', 2]]);
   assert.equal(g[2].icon, 'ap-i-stopped');
-  assert.deepEqual(g[2].items, [{ name: 'old', line: 'claude · /Users/me/dev/old' }, { name: 'notes', line: 'chat' }], 'a name, then the agent (or chat) and the path; no name, no card');
+  assert.deepEqual(g[2].items, [{ name: 'old', line: ['claude', '/Users/me/dev/old'] }, { name: 'notes', line: ['chat'] }], 'a name, then the agent (or chat) and the path; no name, no card');
   for (const none of [undefined, null, [], 'x', [{ agent: 'claude' }]]) {
     assert.deepEqual(plain(rc.rcGroups(leaders, none)).map(x => x.kind), ['leader', 'sandbox'], `no stopped group for ${JSON.stringify(none)}`);
   }
-  assert.deepEqual(plain(rc.rcStopped([{ name: 'x', agent: 7, workspace: { a: 1 } }])), [{ name: 'x', line: '' }], 'odd fields are dropped');
+  assert.deepEqual(plain(rc.rcStopped([{ name: 'x', agent: 7, workspace: { a: 1 } }])), [{ name: 'x', line: [] }], 'odd fields are dropped');
 });
 test('the stopped group folds past three entries, until Show all', () => {
   const n = k => Array.from({ length: k }, (_, i) => `s${i}`);
