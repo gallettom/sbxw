@@ -600,7 +600,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         Ok(req.id)
     }
 
-    async fn mac_await(&self, id: &str, me: &SandboxRef, wait: Duration) -> Result<String, String> {
+    async fn mac_await(self: &Arc<Self>, id: &str, me: &SandboxRef, wait: Duration) -> Result<String, String> {
         let got = self.relay_wait(id, me, wait).await?;
         Ok(match got.state {
             RelayState::Approved => got.answer.unwrap_or_else(|| "Approved.".into()),

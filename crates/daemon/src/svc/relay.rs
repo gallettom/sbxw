@@ -8,9 +8,56 @@ use sbxw_core::messages::{self, Recipient};
 use sbxw_core::relay::{self, RelayKind, RelayRequest, Shot};
 use sbxw_core::session::SessionKind;
 use sbxw_core::{SandboxRef, ThreadName};
+use sbxw_core::relay::RelayBook;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
+
+/// The parked `wait`s on one request, and an outcome settled while they
+/// were parked that none of them has returned yet.
+#[derive(Default)]
+pub struct Parked {
+    waits: usize,
+    owed: Option<RelayRequest>,
+}
+
+/// One parked wait. Dropped however the wait ends, returned or cancelled:
+/// the last one out types in an outcome no wait returned.
+struct WaitGuard<'a> {
+    app: &'a Arc<App>,
+    id: &'a str,
+    returned_final: bool,
+}
+
+impl Drop for WaitGuard<'_> {
+    fn drop(&mut self) {
+        let unread = {
+            let mut parked = self.app.relay_waiters.lock().unwrap();
+            let Some(p) = parked.get_mut(self.id) else { return };
+            p.waits = p.waits.saturating_sub(1);
+            let unread = if self.returned_final {
+                // This wait hands the outcome to the asker: nothing is owed.
+                p.owed = None;
+                None
+            } else if p.waits == 0 {
+                p.owed.take()
+            } else {
+                None
+            };
+            if p.waits == 0 {
+                parked.remove(self.id);
+            }
+            unread
+        };
+        if let Some(req) = unread {
+            if tokio::runtime::Handle::try_current().is_ok() {
+                self.app.tell_asker(&req);
+            } else {
+                tracing::warn!("relay: {} settled while its wait ended with the daemon; not typed in", self.id);
+            }
+        }
+    }
+}
 
 /// Ceiling on one `ask`/`wait`: past a few minutes it is a hung tool call.
 pub const MAX_WAIT_SECS: u64 = 600;
@@ -47,17 +94,26 @@ impl App {
 
     /// Park until the request settles or the bound passes, then return it as
     /// it stands. Waiting is reading, so only the asker may.
-    pub async fn relay_wait(&self, id: &str, from: &SandboxRef, bound: Duration) -> Result<RelayRequest, String> {
+    ///
+    /// Cancellation-safe: an outcome settled while this wait is parked is
+    /// either returned by it, or, if the wait ends without returning it (the
+    /// bound passed, the caller's future was dropped), typed into the asker
+    /// once the last parked wait is gone. Never both, never neither.
+    pub async fn relay_wait(self: &Arc<Self>, id: &str, from: &SandboxRef, bound: Duration) -> Result<RelayRequest, String> {
         // Subscribe before the first look, or a settlement in between is lost.
         let mut rx = self.bus.subscribe();
+        // Looked at and registered under the waiters lock, which settling
+        // holds too: an outcome is either seen here or owed to this wait.
         let current = {
-            let book = self.relay.lock().unwrap();
-            book.check_asker(id, &from.to_string())?.clone()
+            let mut parked = self.relay_waiters.lock().unwrap();
+            let current = self.relay.lock().unwrap().check_asker(id, &from.to_string())?.clone();
+            if current.state.is_final() {
+                return Ok(current);
+            }
+            parked.entry(id.to_string()).or_default().waits += 1;
+            current
         };
-        if current.state.is_final() {
-            return Ok(current);
-        }
-        *self.relay_waiters.lock().unwrap().entry(id.to_string()).or_default() += 1;
+        let mut guard = WaitGuard { app: self, id, returned_final: false };
         let mut latest = current;
         let deadline = tokio::time::Instant::now() + bound;
         loop {
@@ -86,14 +142,33 @@ impl App {
                 Ok(Err(RecvError::Closed)) | Err(_) => break,
             }
         }
-        if let Some(n) = self.relay_waiters.lock().unwrap().get_mut(id) {
-            *n = n.saturating_sub(1);
-        }
+        // No await from here to the return: what the guard is told is what
+        // the caller gets.
+        guard.returned_final = latest.state.is_final();
+        drop(guard);
         Ok(latest)
     }
 
-    fn relay_unattended(&self, id: &str) -> bool {
-        self.relay_waiters.lock().unwrap().get(id).copied().unwrap_or(0) == 0
+    /// Settle request `id` with `settle`, then deliver the outcome once: to
+    /// the parked waits if there are any (the last of them to go types it in
+    /// if none returned it), else typed into the asking session now.
+    fn relay_settle(self: &Arc<Self>, id: &str, settle: impl FnOnce(&mut RelayBook) -> Result<RelayRequest, String>) -> Result<RelayRequest, String> {
+        let (req, unattended) = {
+            let mut parked = self.relay_waiters.lock().unwrap();
+            let req = settle(&mut self.relay.lock().unwrap())?;
+            match parked.get_mut(id) {
+                Some(p) if p.waits > 0 => {
+                    p.owed = Some(req.clone());
+                    (req, false)
+                }
+                _ => (req, true),
+            }
+        };
+        let req = self.relay_changed(req);
+        if unattended {
+            self.tell_asker(&req);
+        }
+        Ok(req)
     }
 
     /// The routed-to sandbox files its answer; a human reviews it.
@@ -141,8 +216,8 @@ impl App {
     }
 
     /// A human releases the answer (theirs, or the target's, maybe edited)
-    /// and/or images. Whether anyone is parked is read *before*: settling is
-    /// what makes every wait return.
+    /// and/or images. Settling is what makes every wait return; see
+    /// `relay_settle` for who then gets the outcome.
     pub fn relay_approve(self: &Arc<Self>, id: &str, answer: Option<&str>, images: &[String]) -> Result<(), String> {
         // A virtual Mac request is settled by what the yes ran, not by text.
         if self.relay.lock().unwrap().get(id).is_some_and(|r| r.kind == RelayKind::Mac && r.state == sbxw_core::relay::RelayState::Pending) {
@@ -150,41 +225,23 @@ impl App {
         }
         let edited = answer.map(|a| messages::clip_text(a, relay::MAX_ANSWER)).filter(|a| !a.is_empty());
         let shots: Vec<Shot> = relay::parse_shots(images)?;
-        let unattended = self.relay_unattended(id);
-        let req = self.relay.lock().unwrap().approve(id, edited.as_deref(), shots, now_ms())?;
+        let req = self.relay_settle(id, |book| book.approve(id, edited.as_deref(), shots, now_ms()))?;
         tracing::info!("relay: {id} approved → '{}'", req.from);
-        let req = self.relay_changed(req);
-        if unattended {
-            self.tell_asker(&req);
-        }
         Ok(())
     }
 
     pub fn relay_deny(self: &Arc<Self>, id: &str, note: Option<&str>) -> Result<(), String> {
         let note = note.map(|n| messages::clip_text(n, 500)).filter(|n| !n.is_empty());
-        let unattended = self.relay_unattended(id);
         self.mac_denied(id);
-        let req = self.relay.lock().unwrap().deny(id, note.as_deref(), now_ms())?;
+        self.relay_settle(id, |book| book.deny(id, note.as_deref(), now_ms()))?;
         tracing::info!("relay: {id} denied");
-        let req = self.relay_changed(req);
-        if unattended {
-            self.tell_asker(&req);
-        }
         Ok(())
     }
 
     /// A Mac request the person approved, settled with what came of it.
     pub(crate) fn relay_settle_mac(self: &Arc<Self>, id: &str, outcome: &str) {
-        let unattended = self.relay_unattended(id);
-        let settled = self.relay.lock().unwrap().approve(id, Some(outcome), Vec::new(), now_ms());
-        match settled {
-            Ok(req) => {
-                tracing::info!("relay: {id} (virtual Mac) carried out → '{}'", req.from);
-                let req = self.relay_changed(req);
-                if unattended {
-                    self.tell_asker(&req);
-                }
-            }
+        match self.relay_settle(id, |book| book.approve(id, Some(outcome), Vec::new(), now_ms())) {
+            Ok(req) => tracing::info!("relay: {id} (virtual Mac) carried out → '{}'", req.from),
             Err(e) => tracing::warn!("relay: settling {id}: {e}"),
         }
     }
@@ -193,6 +250,8 @@ impl App {
     /// in is the only way it is ever read — into the thread that asked, while
     /// its session is open.
     fn tell_asker(self: &Arc<Self>, req: &RelayRequest) {
+        #[cfg(test)]
+        self.relay_told.lock().unwrap().push(req.id.clone());
         let Ok(from) = SandboxRef::parse(&req.from) else { return };
         let sessions = self.sessions.clone();
         let (to, text) = messages::relay_delivery(req, |t| {
@@ -278,6 +337,51 @@ mod tests {
         let r = app.relay_open(&sb("alpha"), None, RelayKind::Screenshot, "show").unwrap();
         let got = app.relay_wait(&r.id, &sb("alpha"), Duration::from_millis(30)).await.unwrap();
         assert_eq!(got.state, RelayState::Pending);
-        assert!(app.relay_unattended(&r.id), "the waiter deregistered");
+        assert!(app.relay_waiters.lock().unwrap().get(&r.id).is_none(), "the waiter deregistered");
+    }
+
+    fn told(app: &crate::app::App, id: &str) -> usize {
+        app.relay_told.lock().unwrap().iter().filter(|t| *t == id).count()
+    }
+
+    #[tokio::test]
+    async fn an_answer_approved_after_the_wait_was_dropped_is_typed_in_once() {
+        let (_d, app) = app();
+        let r = app.relay_open(&sb("alpha"), None, RelayKind::Question, "q?").unwrap();
+        let a = app.clone();
+        let id = r.id.clone();
+        let waiter = tokio::spawn(async move { a.relay_wait(&id, &sb("alpha"), Duration::from_secs(30)).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // The asker's call is cancelled (its client gave up, the connection dropped).
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        app.relay_approve(&r.id, Some("42"), &[]).unwrap();
+        assert_eq!(told(&app, &r.id), 1, "the approved answer is typed into the asker");
+        assert!(app.relay_waiters.lock().unwrap().get(&r.id).is_none(), "nothing left parked");
+    }
+
+    #[tokio::test]
+    async fn an_answer_a_live_wait_returns_is_not_typed_in_too() {
+        let (_d, app) = app();
+        let r = app.relay_open(&sb("alpha"), None, RelayKind::Question, "q?").unwrap();
+        let a = app.clone();
+        let id = r.id.clone();
+        let waiter = tokio::spawn(async move { a.relay_wait(&id, &sb("alpha"), Duration::from_secs(5)).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        app.relay_approve(&r.id, Some("42"), &[]).unwrap();
+        assert_eq!(waiter.await.unwrap().unwrap().state, RelayState::Approved);
+        assert_eq!(told(&app, &r.id), 0, "returned to the waiter, so not typed as well");
+    }
+
+    #[tokio::test]
+    async fn an_answer_nobody_waits_for_is_typed_in_once() {
+        let (_d, app) = app();
+        let r = app.relay_open(&sb("alpha"), None, RelayKind::Question, "q?").unwrap();
+        app.relay_approve(&r.id, Some("42"), &[]).unwrap();
+        assert_eq!(told(&app, &r.id), 1);
+        // A later wait reads the settled request; it does not type it again.
+        let got = app.relay_wait(&r.id, &sb("alpha"), Duration::from_millis(30)).await.unwrap();
+        assert_eq!(got.state, RelayState::Approved);
+        assert_eq!(told(&app, &r.id), 1);
     }
 }
