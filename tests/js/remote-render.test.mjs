@@ -144,3 +144,40 @@ test('scrolled up, a new row costs a few box reads, not one per row', async () =
     assert.ok(!dom.$('to-end').hidden, 'the round button shows, away from the end');
   }
 });
+
+test('the Working line: drawn again only when it changes', async () => {
+  const dom = await openBig(conversation(30));
+  const tail = dom.$('tail');
+  const line = tail.firstChild;
+  assert.match(tail.textContent, /Working · Running tests/);
+  const same = { leaders: [{ sandbox: 'big', name: 'big', kind: 'leader', state: 'working', activity: 'Running tests', last_at: 2, asks: false }] };
+  dom.emit('leaders', same);
+  await dom.advance(0);
+  assert.equal(tail.firstChild, line, 'the same line kept');
+  same.leaders[0].activity = 'Editing src/db/orders.rs';
+  dom.emit('leaders', same);
+  await dom.advance(0);
+  assert.notEqual(tail.firstChild, line);
+  assert.match(tail.textContent, /Working · Editing src\/db\/orders\.rs/);
+  same.leaders[0].state = 'idle';
+  dom.emit('leaders', same);
+  await dom.advance(0);
+  assert.equal(tail.childNodes.length, 0, 'idle: no line');
+  same.leaders[0].state = 'working';
+  dom.emit('leaders', same);
+  await dom.advance(0);
+  assert.match(tail.textContent, /Working · Editing/);
+});
+
+test('a leaders event during a conversation does not rebuild the hidden home list; back home it is current', async () => {
+  const dom = await openBig(conversation(20));
+  const list = dom.$('leaders');
+  const was = list.firstChild;
+  const l = { leaders: [{ sandbox: 'big', name: 'big', kind: 'leader', state: 'idle', activity: '', last_at: 3, asks: false }, { sandbox: 'new-one', name: 'new-one', kind: 'leader', state: 'working', activity: 'Starting', last_at: 4, asks: false }] };
+  dom.emit('leaders', l);
+  await dom.advance(0);
+  assert.equal(list.firstChild, was, 'hidden list untouched');
+  dom.$('back').click();
+  await dom.advance(0);
+  assert.ok(list.textContent.includes('new-one'), 'drawn when it shows');
+});

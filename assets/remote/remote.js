@@ -349,7 +349,9 @@
   // ── Leaders ──
   function setLeaders(data) {
     st.leaders = rcLeaders(data);
-    renderLeaders();
+    // The home list only while it shows (showLeaders draws it when it does):
+    // a conversation on screen does not rebuild a hidden list at each event.
+    if (st.screen === 's-leaders') renderLeaders();
     if (st.current && st.screen === 's-chat') {
       renderTail();
       renderChatTitle();
@@ -1039,10 +1041,19 @@
   }
 
   // ── The tail: working, a question, or "This needs your Mac" ──
+  // What the tail shows, when it is not a question card: an event that
+  // leaves it the same leaves its elements alone (no layout, no
+  // ResizeObserver round). A question card is drawn again as before.
+  let tailSig = null;
   function renderTail() {
     const tail = $('tail');
     const l = leader();
     const pending = rcPending(l);
+    const sig = pending?.kind === 'question' ? null
+      : pending?.kind === 'mac' ? `m\n${pending.text}`
+        : l?.state === 'working' ? `w\n${rcActivity(l)}` : '';
+    if (sig !== null && sig === tailSig && tail.isConnected) return;
+    tailSig = sig;
     if (pending?.kind === 'question') return tail.replaceChildren(questionCard(l, pending.steps));
     if (pending?.kind === 'mac') {
       const card = document.createElement('div');
