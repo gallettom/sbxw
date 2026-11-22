@@ -790,7 +790,7 @@ the Mac, and turned off with remote access. Contract:
 | Action | What the phone shows before you decide | What runs |
 |---|---|---|
 | Approve or refuse a plan, as it is | its sandbox, summary, justification, variant, and each thread's name, model, repo, scope, whole goal and ticket | the desktop's approve (the plan's own threads, nothing edited) or refuse (no note) |
-| Run a merge a lead proposed | the sandbox, the order, the lead's note and distillate, and per branch its tip, commits ahead of the base, files changed with insertions and deletions (numbers and paths, never diff content), and whether an earlier try of this merge failed on it | the desktop's merge: same order, stops at the first conflict, threads kept, distillate as proposed; and each branch merged as the exact commit shown, checked again just before its merge: a branch or base that moved stops the merge as "changed" |
+| Run a merge a lead proposed | the sandbox, the order, the lead's note and distillate, and per branch its tip, commits ahead of the base, files changed with insertions and deletions (numbers and paths, never diff content), and whether an earlier try of this merge failed on it | the web UI's default merge: same order, stops at the first conflict, the merged threads closed (branch and all), the distillate as proposed (it is part of what Face ID covers, so it cannot change between view and approval); and each branch merged as the exact commit shown, checked again just before its merge: a branch or base that moved stops the merge as "changed" |
 | Answer a pending network request | the sandbox, the host and port, sbx's detail, the options the phone may use and those it may not | sbx's own answer, with one of that request's options |
 | Remove a stopped sandbox | the desktop's sentences: what is lost, that the workspace folder stays | the desktop's removal |
 
@@ -806,7 +806,7 @@ your anonymise rules, and the page shows it as text.
 
 - A leader's tool permission prompt ("allow this command"): the phone says "This needs your
   Mac", and there is no route for it.
-- Editing a plan's threads, writing a note on a refusal, closing threads after a merge,
+- Editing a plan's threads, writing a note on a refusal, keeping threads open after a merge,
   editing a merge's distillate.
 - A network option that may leave a lasting rule. The phone offers only options on an exact
   list of ids, today **Dismiss** alone. sbx 0.51 offers **Allow** and **Dismiss** for a

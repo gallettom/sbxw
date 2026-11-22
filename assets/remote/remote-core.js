@@ -112,8 +112,40 @@ function chatBlock(block, files) {
 const RC_LINK = /<a href="([^"]*)" target="_blank" rel="noopener noreferrer">([\s\S]*?)<\/a>/g;
 function rcAgentHtml(text) {
   const src = String(text ?? '').replace(/\r\n?/g, '\n');
-  return chatMarkdown(src, null).replace(RC_LINK, (_, url, label) =>
-    `<a class="rc-link" href="${url}" target="_blank" rel="noopener noreferrer">${label} <span class="rc-url">${url}</span></a>`);
+  return rcPills(chatMarkdown(src, null).replace(RC_LINK, (_, url, label) =>
+    `<a class="rc-link" href="${url}" target="_blank" rel="noopener noreferrer">${label} <span class="rc-url">${url}</span></a>`));
+}
+
+// ── Status labels ─────────────────────────────────────────────────────────
+// `[[Done]]` or `[[Failed: 3 tests]]` as a pill, as the Mac terminal draws
+// them (assets/js/emphasis.js, crates/core/src/emphasis.rs). The word -> tone
+// table is the built-in one of emphasis.rs, copied: a test keeps the two
+// equal. A word outside it stays plain text (the Mac's colouring of unknown
+// capitalised words is not copied). Runs on the ESCAPED markup only, and
+// never inside <code> or <pre>.
+const RC_PILL_TONES = {
+  done: 'green', verified: 'green', fixed: 'green', passed: 'green',
+  failed: 'red', error: 'red', broken: 'red',
+  'needs you': 'amber', blocked: 'amber', decide: 'amber', question: 'amber',
+  irreversible: 'danger', destructive: 'danger', costly: 'danger',
+  note: 'blue', context: 'blue', fyi: 'blue',
+  working: 'cyan', 'in progress': 'cyan', next: 'cyan', plan: 'cyan',
+  team: 'purple', lead: 'purple', thread: 'purple', jarvis: 'purple',
+};
+const RC_PILL = /\[\[(\p{L}(?:[\p{L}\p{N} -]{0,30}[\p{L}\p{N}])?)(?::([^\[\]\p{Cc}]{1,48}))?\]\]/gu;
+function rcPills(html) {
+  if (html.indexOf('[[') < 0) return html;
+  return html
+    .split(/(<pre>[\s\S]*?<\/pre>|<code>[\s\S]*?<\/code>)/)
+    .map((part, i) => {
+      if (i % 2) return part;
+      return part.replace(RC_PILL, (all, word, detail) => {
+        const k = word.split(' ').filter(Boolean).join(' ').toLowerCase();
+        if (!Object.prototype.hasOwnProperty.call(RC_PILL_TONES, k)) return all;
+        return `<span class="rc-pill rc-pill-${RC_PILL_TONES[k]}">${word}${detail === undefined ? '' : `<span class="rc-pill-detail">${detail}</span>`}</span>`;
+      });
+    })
+    .join('');
 }
 
 // ── History → chat rows ───────────────────────────────────────────────────

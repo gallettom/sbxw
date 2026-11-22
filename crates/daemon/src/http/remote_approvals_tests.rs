@@ -587,6 +587,25 @@ async fn a_merge_shows_numbers_and_paths_and_a_moved_branch_is_changed() {
     assert!(journal(&w).iter().any(|e| matches!(e.kind, Kind::Merge | Kind::Refused) && e.target.as_deref() == Some(id.as_str())));
 }
 
+/// Merging from the phone closes the plan's threads, as the web does by
+/// default, and keeps the distillate the digest covered.
+#[tokio::test]
+async fn a_phone_merge_closes_the_threads_and_keeps_the_distillate() {
+    let w = world();
+    let mut p = enrolled(&w, "phone").await;
+    let ws = w._dir.path().join("ws5");
+    let id = proposed_merge(&w, &ws);
+    let kept = vec![sbxw_core::plans::DistillItem { kind: sbxw_core::plans::DistillKind::Decision, text: "prices in cents".into() }];
+    w.app.plans.lock().unwrap().propose_merge(&id, "myapp", vec!["alpha".into()], "Merge alpha please", kept.clone(), 5).unwrap();
+    let ch = challenge(&w, &p, "merge", &id, &format!("/r/merges/{id}"), None).await.unwrap();
+    let a = assertion(&mut p, &ch, &Twist::default());
+    let r = act(&w, &p, &format!("/r/merges/{id}/merge"), a, None).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let ended: Vec<String> = w.fake.log().into_iter().filter(|c| c.ends_with("sbxw-thread-end =alpha =close =0 =1") || c.contains("sbxw-thread-end") && c.ends_with("=alpha =close =0 =1")).collect();
+    assert_eq!(ended.len(), 1, "the merged thread was closed, branch and all");
+    assert_eq!(w.app.plan(&id).unwrap().merge.unwrap().distillate, kept);
+}
+
 // ── Network requests ─────────────────────────────────────────────────────
 
 fn network_request(id: &str, host: &str, options: Value) -> Value {
