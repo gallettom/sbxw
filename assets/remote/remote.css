@@ -980,7 +980,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-toast {
   position: fixed;
   z-index: 10;
-  top: calc(8px + var(--safe-t));
+  top: calc(52px + 8px + var(--safe-t));
   left: max(12px, var(--safe-l));
   right: max(12px, var(--safe-r));
   max-width: 520px;
@@ -1234,3 +1234,14 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .rc-cv-enter { animation: none; }
   .rc-cv-layer { will-change: auto; }
 }
+
+/* ── Plan usage (menu block and the picker's line) ── */
+.rc-usage { display: grid; gap: 8px; margin-bottom: 8px; }
+.rc-usage-row { display: grid; gap: 4px; }
+.rc-usage-head { margin: 0; font-size: var(--fs-sm, 14px); color: var(--c-text-bright); }
+.rc-usage-bar { height: 8px; border-radius: 4px; background: var(--c-elevated); overflow: hidden; }
+.rc-usage-bar > span { display: block; height: 100%; border-radius: 4px; background: var(--c-green); }
+.rc-usage-amber > span { background: var(--c-amber); }
+.rc-usage-red > span { background: var(--c-red); }
+.rc-usage-line { margin: 0 0 8px; font-size: var(--fs-xs); color: var(--c-text-muted); }
+.rc-usage-line[hidden] { display: none; }

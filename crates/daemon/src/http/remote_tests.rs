@@ -1315,3 +1315,35 @@ async fn sbxw_lines_wait_for_a_phone_message_to_finish() {
     assert!(got.starts_with("\u{1b}[200~PHONE TEXT\u{1b}[201~\r"), "the phone's paste and its Return first, whole: {got:?}");
     assert!(got.ends_with('\r') && got.contains("main moved"), "{got:?}");
 }
+
+#[tokio::test]
+async fn usage_is_read_only_for_a_paired_device_and_carries_only_the_usage_fields() {
+    let (_d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    assert_eq!(call(&router, "GET", "/r/usage", None, json!({})).await.status, StatusCode::UNAUTHORIZED, "no cookie");
+    assert_eq!(call(&router, "GET", "/r/usage", Some(&app.ui_token), json!({})).await.status, StatusCode::UNAUTHORIZED, "the UI token is not a device");
+    // Nothing read yet: only the stamp.
+    let r = call(&router, "GET", "/r/usage", Some(&token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(r.json().get("five_hour_pct").is_none());
+    app.report_usage(sbxw_core::usage::Reading {
+        five_hour_pct: Some(42.0),
+        seven_day_pct: Some(80.5),
+        five_hour_resets_at: Some(1_900_000_000),
+        seven_day_resets_at: Some(1_900_400_000),
+    });
+    let r = call(&router, "GET", "/r/usage", Some(&token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let j = r.json();
+    assert_eq!(j["five_hour_pct"], json!(42.0));
+    assert_eq!(j["seven_day_pct"], json!(80.5));
+    assert_eq!(j["five_hour_resets_at"], json!(1_900_000_000));
+    assert_eq!(j["seven_day_resets_at"], json!(1_900_400_000));
+    assert!(j["updated_ms"].is_u64());
+    let mut keys: Vec<_> = j.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(keys, ["five_hour_pct", "five_hour_resets_at", "seven_day_pct", "seven_day_resets_at", "updated_ms"], "no other field");
+    // A write is not a route.
+    assert_ne!(call(&router, "POST", "/r/usage", Some(&token), json!({})).await.status, StatusCode::OK);
+}

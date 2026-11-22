@@ -68,6 +68,8 @@
 <div id="menu" class="rc-menu" role="menu" hidden>
   <p class="rc-menu-label">This device</p>
   <p id="menu-device" class="rc-menu-device"></p>
+  <p class="rc-menu-label">Plan usage</p>
+  <div id="usage-block" class="rc-usage" aria-live="polite"><p class="rc-menu-note">No reading yet</p></div>
   <p class="rc-menu-label" id="dict-label">Dictation</p>
   <div id="dict" class="rc-seg" role="radiogroup" aria-labelledby="dict-label">
     <button id="dict-mac" class="rc-seg-opt" type="button" role="radio" aria-checked="true" data-mode="mac">Mac (private)</button>
@@ -136,6 +138,7 @@
   <!-- The picker: the running team leaders, then the running sandboxes with no
        team (API.md 2.4, v1.5); those that need you first in each group. -->
   <section id="s-leaders" class="rc-screen" hidden>
+    <p id="usage-line" class="rc-usage-line" hidden></p>
     <ul id="leaders" class="rc-leaders"></ul>
     <p id="leaders-empty" class="rc-empty" hidden>No sandbox is running</p>
   </section>
