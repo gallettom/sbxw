@@ -1157,7 +1157,33 @@
   // shows "recording" or "listening" only while something records or listens.
   const mic = $('mic');
   const composer = $('composer');
-  const rec = { state: 'idle', stream: null, recorder: null, chunks: [], timer: null, started: 0, audio: null, analyser: null, frame: 0, levels: [], mode: 'pulse', discard: false, quiet: false, heardAt: 0, why: '' };
+  const rec = { state: 'idle', stream: null, recorder: null, chunks: [], timer: null, started: 0, audio: null, analyser: null, frame: 0, levels: [], mode: 'pulse', discard: false, quiet: false, heardAt: 0, audioAt: 0, why: '' };
+  // Every user of the microphone not yet really ended: a recogniser until its
+  // `end` event, a stream until its tracks stop, an AudioContext until its
+  // close() settles. A new take waits for none to be left (rcMicGate).
+  const micUsers = new Set();
+  let micEndedAt = 0;
+  const micHold = u => { if (u) micUsers.add(u); };
+  const micRelease = u => { if (micUsers.delete(u) && !micUsers.size) micEndedAt = Date.now(); };
+  const micGateNow = (waited = 0) => rcMicGate({ live: micUsers.size, endedAt: micEndedAt, now: Date.now(), waited });
+  // → 'go' or 'busy', once the earlier users ended (or the bounded wait ran out).
+  function micReady() {
+    const t0 = Date.now();
+    return new Promise(done => {
+      const check = () => {
+        const g = micGateNow(Date.now() - t0);
+        if (g === 'wait') setTimeout(check, 100); else done(g);
+      };
+      check();
+    });
+  }
+  // A context closed: released once its close() has settled.
+  function closeCtx(ctx) {
+    if (!ctx) return;
+    let p;
+    try { p = ctx.state === 'closed' ? null : ctx.close(); } catch (_) { p = null; }
+    if (p && p.then) p.then(() => micRelease(ctx), () => micRelease(ctx)); else micRelease(ctx);
+  }
   const micWhy = !window.isSecureContext
     ? 'Dictation needs the HTTPS address of sbxw.'
     : !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) || typeof MediaRecorder === 'undefined'
@@ -1195,18 +1221,38 @@
   }
   mic.addEventListener('click', () => {
     if (rec.state === 'listening') { speech.stop('person'); return; }
-    if (rec.state === 'transcribing' || rec.starting) return;
+    if (rec.state === 'transcribing' || rec.starting || speech.r) return;
     if (rec.recorder) { stopRecording(false); return; }
     // iPhone dictation, when chosen and available at this tap; else the Mac.
-    if (prefs.dictation() === RC_DICTATION.iphone && !rec.recorder && speech.start()) return;
-    macRecord();
+    const go = () => {
+      if (prefs.dictation() === RC_DICTATION.iphone && !rec.recorder && speech.start()) return;
+      macRecord();
+    };
+    // The microphone free: start in the tap itself.
+    if (micGateNow() === 'go') { go(); return; }
+    // An earlier take still holds it (an iPhone keeps it a moment after the
+    // end): wait for it, bounded, or say it is busy. Never two at once.
+    rec.starting = true;
+    say(RC_DICT_TEXT.waiting, 'busy');
+    micReady().then(g => {
+      rec.starting = false;
+      if (g === 'busy') { say(RC_DICT_TEXT.busy, 'warn'); return; }
+      if (!st.current || document.visibilityState === 'hidden') { say(''); return; }
+      go();
+    });
   });
   async function macRecord() {
     if (micWhy) { say(micWhy, 'warn'); return; }
     rec.starting = true;
+    // After a recogniser that fell back to the Mac, its end is awaited too.
+    if (micGateNow() !== 'go') {
+      say(RC_DICT_TEXT.waiting, 'busy');
+      if (await micReady() === 'busy') { rec.starting = false; say(RC_DICT_TEXT.busy, 'warn'); return; }
+    }
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      micHold(stream);
     } catch (e) {
       rec.starting = false;
       say(e && e.name === 'NotAllowedError'
@@ -1216,8 +1262,8 @@
       return;
     }
     rec.starting = false;
-    const release = () => stream.getTracks().forEach(t => t.stop());
-    if (!st.current || document.visibilityState === 'hidden') { release(); return; }
+    const release = () => { stream.getTracks().forEach(t => t.stop()); micRelease(stream); };
+    if (!st.current || document.visibilityState === 'hidden') { release(); say(''); return; }
     // The first format this browser records (audio/mp4 on an iPhone).
     let recorder;
     try {
@@ -1227,7 +1273,7 @@
       try { recorder = new MediaRecorder(stream); } catch (_) { recorder = null; }
     }
     if (!recorder) { release(); say('This browser cannot record audio.', 'warn'); return; }
-    Object.assign(rec, { stream, recorder, chunks: [], started: Date.now(), discard: false, sandbox: st.current, why: '', heardAt: Date.now(), quiet: false });
+    Object.assign(rec, { stream, recorder, chunks: [], started: Date.now(), discard: false, sandbox: st.current, why: '', heardAt: 0, audioAt: 0, quiet: false });
     recorder.addEventListener('dataavailable', e => { if (e.data && e.data.size) rec.chunks.push(e.data); });
     recorder.addEventListener('stop', () => finishRecording(recorder));
     recorder.addEventListener('error', () => { if (rec.recorder === recorder) { rec.why = RC_DICT_TEXT.recFailed; stopRecording(false); } });
@@ -1284,7 +1330,7 @@
   }
   const speech = {
     r: null, base: '', caret: 0, done: '', final: '', carry: '', heard: false, sandbox: null, fellBack: false,
-    error: '', reason: '', restarts: 0, roundAt: 0, guard: 0, last: '', heardRound: false, heardAt: 0, startedOk: false,
+    error: '', reason: '', restarts: 0, roundAt: 0, guard: 0, last: '', heardRound: false, heardAt: 0, startedOk: false, audioAt: 0, waiting: false,
     // Words of this dictation so far: the rounds before, then this one.
     words() { return [speech.done, speech.final].filter(Boolean).join(' '); },
     start() {
@@ -1293,7 +1339,7 @@
       // The caret: where it was when the field lost focus to the mic button,
       // if the text has not changed since; else the end.
       const caret = document.activeElement === field ? field.selectionStart : lastCaret.value === field.value ? lastCaret.at : field.value.length;
-      Object.assign(speech, { base: field.value, caret, done: '', final: '', carry: '', heard: false, sandbox: st.current, fellBack: false, error: '', reason: '', restarts: 0 });
+      Object.assign(speech, { base: field.value, caret, done: '', final: '', carry: '', heard: false, sandbox: st.current, fellBack: false, error: '', reason: '', restarts: 0, waiting: false });
       if (!speech.round_(SR)) { speech.r = null; return speech.fallback(); }
       showPreview('', '');
       $('rec-words').hidden = false;
@@ -1309,10 +1355,11 @@
         const s = Math.floor((Date.now() - rec.started) / 1000);
         $('rec-time').textContent = rcClock(s);
         if (s >= RC_VOICE_MAX_S) speech.stop('time');
-        // Nothing heard for a while after the start of a round: said.
-        // After words, a longer pause: a recogniser can go deaf without any
-        // event (WebKit bug 321436); the person is told, it is not ended.
-        if (speech.r) setQuiet(speech.heardRound ? Date.now() - speech.heardAt >= HEARD_QUIET_MS : Date.now() - speech.roundAt >= QUIET_MS);
+        // Nothing heard for a while after the AUDIO of a round started:
+        // said; before it started, nothing is said (rcMicQuiet). After words,
+        // a longer pause: a recogniser can go deaf without any event (WebKit
+        // bug 321436); the person is told, it is not ended.
+        if (speech.r) setQuiet(rcMicQuiet({ now: Date.now(), audioAt: speech.audioAt, heardAt: speech.heardRound ? speech.heardAt : 0, quietMs: QUIET_MS, heardMs: HEARD_QUIET_MS }));
       }, 250);
       return true;
     },
@@ -1330,14 +1377,20 @@
       speech.final = '';
       speech.heardRound = false;
       speech.startedOk = false;
+      speech.audioAt = 0;
       speech.roundAt = Date.now();
-      r.onstart = r.onaudiostart = () => { if (speech.r === r) { speech.startedOk = true; if ($('rec').dataset.hear === 'off') $('rec').dataset.hear = 'on'; } };
-      r.onsoundstart = r.onspeechstart = () => { if (speech.r === r) { speech.startedOk = true; $('rec').dataset.hear = 'sound'; } };
+      // Held until its own `end`, whatever the page did with its handlers.
+      micHold(r);
+      try { r.addEventListener('end', () => micRelease(r)); } catch (_) {}
+      const audio = () => { if (!speech.audioAt) speech.audioAt = Date.now(); };
+      r.onstart = () => { if (speech.r === r) { speech.startedOk = true; if ($('rec').dataset.hear === 'off') $('rec').dataset.hear = 'on'; } };
+      r.onaudiostart = () => { if (speech.r === r) { speech.startedOk = true; audio(); if ($('rec').dataset.hear === 'off') $('rec').dataset.hear = 'on'; } };
+      r.onsoundstart = r.onspeechstart = () => { if (speech.r === r) { speech.startedOk = true; audio(); $('rec').dataset.hear = 'sound'; } };
       r.onsoundend = () => { if (speech.r === r) $('rec').dataset.hear = 'on'; };
       r.onresult = e => {
         if (speech.r !== r) return;
         const t = rcSpeechRound(e.results, speech.carry);
-        if (t.final || t.interim) { speech.heard = true; speech.heardRound = true; speech.heardAt = Date.now(); setQuiet(false); }
+        if (t.final || t.interim) { if (!speech.audioAt) speech.audioAt = Date.now(); speech.heard = true; speech.heardRound = true; speech.heardAt = Date.now(); setQuiet(false); }
         speech.final = t.final;
         speech.last = t.last;
         // The field holds what is final, at the caret; the bar shows both,
@@ -1363,6 +1416,7 @@
         r.start();
       } catch (_) {
         r.onstart = r.onaudiostart = r.onsoundstart = r.onspeechstart = r.onsoundend = r.onresult = r.onerror = r.onend = null;
+        micRelease(r);
         return false;
       }
       // A recogniser that never says it started is not listening.
@@ -1388,8 +1442,18 @@
         speech.done = speech.words();
         speech.carry = speech.last || '';
         speech.restarts++;
-        if (speech.round_(SR)) return;
-        speech.r = old;
+        // The next round waits like a new take: never on a session the
+        // round before still holds. The UI stays "listening" meanwhile.
+        speech.waiting = true;
+        speech.audioAt = 0;
+        micReady().then(g => {
+          if (speech.r !== old || !speech.waiting) return;
+          speech.waiting = false;
+          if (g === 'go' && st.current === speech.sandbox && document.visibilityState !== 'hidden' && speech.round_(SR)) return;
+          speech.r = old;
+          speech.end();
+        });
+        return;
       }
       speech.end();
     },
@@ -1403,6 +1467,8 @@
       const r = speech.r;
       if (!r) return;
       speech.reason = speech.reason || reason;
+      // Between two rounds: nothing listens, it ends now.
+      if (speech.waiting) { speech.end(); return; }
       try { r.stop(); } catch (_) { speech.end(); return; }
       setTimeout(() => { if (speech.r === r) speech.end(); }, 1500);
     },
@@ -1415,8 +1481,17 @@
       const r = speech.r;
       if (!r) return;
       speech.r = null;
+      speech.waiting = false;
       clearTimeout(speech.guard);
       r.onstart = r.onaudiostart = r.onsoundstart = r.onspeechstart = r.onsoundend = r.onresult = r.onerror = r.onend = null;
+      // Ended in the UI before the recogniser said `end` (a stop it did not
+      // acknowledge, the no-start guard, a fallback): it is aborted, so it
+      // lets go of the microphone, and the next take waits for its `end`.
+      // One that never says it is released after the longest wait anyway.
+      if (micUsers.has(r)) {
+        try { r.abort(); } catch (_) {}
+        setTimeout(() => micRelease(r), RC_MIC_WAIT_MS + 1000);
+      }
       clearInterval(rec.timer);
       $('rec-words').hidden = true;
       $('rec-final').textContent = '';
@@ -1447,7 +1522,16 @@
     try {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       if (Ctx) {
-        rec.audio = new Ctx();
+        const ctx = rec.audio = new Ctx();
+        micHold(ctx);
+        // A context iOS suspends or interrupts reads zeros: the level is
+        // then unknown, not silence (rec.audioAt back to 0).
+        ctx.onstatechange = () => {
+          if (rec.audio !== ctx || ctx.state === 'running') return;
+          rec.audioAt = 0;
+          if (rec.state === 'recording') setQuiet(false);
+          if (ctx.state !== 'closed') ctx.resume?.().catch(() => {});
+        };
         const src = rec.audio.createMediaStreamSource(stream);
         analyser = rec.audio.createAnalyser();
         analyser.fftSize = 1024;
@@ -1472,13 +1556,16 @@
       // About 30 levels a second for the bars; 8 for the plain meter.
       if (now - last < (rec.mode === 'meter' ? 125 : 33)) return;
       last = now;
+      // Levels count only from a running context.
+      if (rec.audio?.state !== 'running') { rec.audioAt = 0; if (rec.state === 'recording') setQuiet(false); return; }
+      if (!rec.audioAt) rec.audioAt = Date.now();
       rec.analyser.getByteTimeDomainData(buf);
       const level = rcLevel(buf);
       rec.levels.push(level);
       if (rec.levels.length > 240) rec.levels.splice(0, rec.levels.length - 240);
       $('rec').dataset.level = level.toFixed(2);
       if (level > 0) rec.heardAt = Date.now();
-      if (rec.state === 'recording') setQuiet(Date.now() - rec.heardAt >= QUIET_MS);
+      if (rec.state === 'recording') setQuiet(rcMicQuiet({ now: Date.now(), audioAt: rec.audioAt, heardAt: rec.heardAt, quietMs: QUIET_MS }));
       drawWave();
     };
     rec.frame = requestAnimationFrame(step);
@@ -1524,7 +1611,8 @@
     rec.analyser = null;
     const a = rec.audio;
     rec.audio = null;
-    if (a && a.state !== 'closed') a.close().catch(() => {});
+    rec.audioAt = 0;
+    closeCtx(a);
   }
   // `discard`: the page hid or the device was forgotten: stop and keep nothing.
   function stopRecording(discard) {
@@ -1547,6 +1635,7 @@
     clearInterval(rec.timer);
     stopWave();
     rec.stream?.getTracks().forEach(t => t.stop());
+    micRelease(rec.stream);
     const ms = Date.now() - rec.started;
     const blob = new Blob(rec.chunks, { type: recorder.mimeType || 'audio/mp4' });
     const { discard, sandbox, why } = rec;
@@ -1607,8 +1696,9 @@
   async function toPcm(blob) {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     const ctx = new Ctx();
+    micHold(ctx);
     let decoded;
-    try { decoded = await ctx.decodeAudioData(await blob.arrayBuffer()); } finally { ctx.close(); }
+    try { decoded = await ctx.decodeAudioData(await blob.arrayBuffer()); } finally { closeCtx(ctx); }
     const frames = Math.max(1, Math.ceil(decoded.duration * RC_VOICE_RATE));
     const off = new OfflineAudioContext(1, frames, RC_VOICE_RATE);
     const src = off.createBufferSource();

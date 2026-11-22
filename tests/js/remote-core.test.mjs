@@ -21,7 +21,8 @@ const NAMES = ['rcAgentHtml', 'RC_PILL_TONES', 'rcPills', 'rcRows', 'rcMerge', '
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
   'rcL2Fail', 'RC_L2_REASON', 'rcActPath', 'rcActLine', 'rcActDone', 'rcL2Client',
   'rcModelChanges', 'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback', 'rcMarked', 'rcActParts',
-  'RC_DICT_TEXT', 'rcSpeechEnd', 'rcSpeechRestart', 'RC_SPEECH_RESTARTS', 'rcSpeechRound', 'rcFinalSegments', 'rcTail', 'rcRecMime', 'rcClipCheck', 'rcSilentPcm', 'rcTranscribed', 'rcSendNote', 'RC_QUEUED_TEXT'];
+  'RC_DICT_TEXT', 'rcSpeechEnd', 'rcSpeechRestart', 'RC_SPEECH_RESTARTS', 'rcSpeechRound', 'rcFinalSegments', 'rcTail', 'rcRecMime', 'rcClipCheck', 'rcSilentPcm', 'rcTranscribed', 'rcSendNote', 'RC_QUEUED_TEXT',
+  'rcMicGate', 'rcMicQuiet', 'RC_MIC_SETTLE_MS', 'RC_MIC_WAIT_MS'];
 const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
@@ -778,6 +779,102 @@ test('dictation restarts: only after a clean end by itself, with words, visible,
   let n = 0, restarts = 0;
   while (rc.rcSpeechRestart({ ...ok, restarts }) && n < 100) { restarts++; n++; }
   assert.equal(n, rc.RC_SPEECH_RESTARTS);
+});
+
+// The microphone, used again quickly (an iPhone keeps the audio session a
+// moment after a recogniser ends: a take started in that time hears nothing).
+// A small model of the page: users of the microphone held until they end.
+function micModel() {
+  const users = new Set();
+  let endedAt = 0, now = 0;
+  return {
+    hold: u => users.add(u),
+    end: u => { if (users.delete(u) && !users.size) endedAt = now; },
+    at: t => { now = t; },
+    gate: (waited = 0) => rc.rcMicGate({ live: users.size, endedAt, now, waited }),
+  };
+}
+
+test('dictation: a take started while the previous one is still ending waits', () => {
+  const m = micModel();
+  m.at(1000); m.hold('take1');
+  // Stop tapped: the recogniser has not said `end` yet.
+  m.at(1200);
+  assert.equal(m.gate(0), 'wait', 'never two recognisers at once');
+  assert.equal(m.gate(rc.RC_MIC_WAIT_MS - 1), 'wait');
+  // Still not ended past the bounded wait: busy, said, nothing starts.
+  assert.equal(m.gate(rc.RC_MIC_WAIT_MS), 'busy');
+  assert.equal(rc.RC_DICT_TEXT.busy, 'Microphone busy, try again in a second.');
+  // Ended: a short settle, then it starts.
+  m.at(1500); m.end('take1');
+  assert.equal(m.gate(300), 'wait', 'just ended: settle');
+  m.at(1500 + rc.RC_MIC_SETTLE_MS);
+  assert.equal(m.gate(300 + rc.RC_MIC_SETTLE_MS), 'go');
+  // The settle never turns into "busy" and never runs past the bound.
+  m.hold('x'); m.at(5000); m.end('x');
+  assert.equal(m.gate(rc.RC_MIC_WAIT_MS), 'go');
+  assert.ok(rc.RC_MIC_SETTLE_MS < rc.RC_MIC_WAIT_MS);
+});
+
+test('dictation: a second take after the first really ended starts', () => {
+  const m = micModel();
+  assert.equal(m.gate(), 'go', 'first take: at once, in the tap');
+  m.at(0); m.hold('take1'); m.at(3000); m.end('take1');
+  m.at(3000 + rc.RC_MIC_SETTLE_MS);
+  assert.equal(m.gate(), 'go');
+  // Mac mode: a stream and two contexts (wave, decode) all let go.
+  m.hold('stream'); m.hold('wave'); m.hold('decode');
+  m.at(9000); m.end('stream'); m.end('wave');
+  assert.equal(m.gate(), 'wait', 'a context still closing');
+  m.end('decode'); m.at(9000 + rc.RC_MIC_SETTLE_MS);
+  assert.equal(m.gate(), 'go');
+  // Five quick takes in a row: each starts once the one before ended.
+  let t = 20000;
+  for (let i = 0; i < 5; i++) {
+    let waited = 0;
+    while (m.gate(waited) === 'wait') { waited += 100; m.at(t + waited); }
+    assert.equal(m.gate(waited), 'go', `take ${i + 1}`);
+    t += waited; m.at(t); m.hold(i); t += 800; m.at(t); m.end(i);
+  }
+});
+
+test('dictation: "nothing heard" only after audio actually started', () => {
+  const q = o => rc.rcMicQuiet({ quietMs: 3000, heardMs: 8000, ...o });
+  // No audio yet (a recogniser that has not said audiostart, a context
+  // that is suspended): never "nothing heard", however long.
+  assert.equal(q({ now: 60000, audioAt: 0 }), false);
+  // Audio for less than the quiet time: not yet.
+  assert.equal(q({ now: 5000, audioAt: 4000 }), false, 'a slow start is not counted');
+  assert.equal(q({ now: 7000, audioAt: 4000 }), true);
+  // Words heard: the longer pause counts from the last one.
+  assert.equal(q({ now: 10000, audioAt: 4000, heardAt: 5000 }), false);
+  assert.equal(q({ now: 13000, audioAt: 4000, heardAt: 5000 }), true);
+  // Words of an earlier round do not count for this one.
+  assert.equal(q({ now: 21000, audioAt: 20000, heardAt: 15000 }), false);
+  assert.equal(q({ now: 23000, audioAt: 20000, heardAt: 15000 }), true);
+  // The Mac's level meter: one quiet time.
+  assert.equal(rc.rcMicQuiet({ now: 4000, audioAt: 500, heardAt: 1000, quietMs: 3000 }), true);
+  assert.equal(rc.rcMicQuiet({ now: 3900, audioAt: 500, heardAt: 1000, quietMs: 3000 }), false);
+});
+
+test('dictation: the page holds the microphone until each user really ended', () => {
+  const page = pageSrc;
+  // A recogniser is held until its own `end`, registered before onend.
+  assert.match(page, /micHold\(r\);\s*\n\s*try \{ r\.addEventListener\('end', \(\) => micRelease\(r\)\); \} catch/);
+  // Ended in the UI first: aborted, released on `end` or after the bound.
+  assert.match(page, /if \(micUsers\.has\(r\)\) \{\s*try \{ r\.abort\(\); \} catch \(_\) \{\}\s*setTimeout\(\(\) => micRelease\(r\), RC_MIC_WAIT_MS \+ 1000\);/);
+  // A tap starts at once only when the gate says go; else it waits or says busy.
+  assert.match(page, /if \(micGateNow\(\) === 'go'\) \{ go\(\); return; \}/);
+  assert.match(page, /if \(g === 'busy'\) \{ say\(RC_DICT_TEXT\.busy, 'warn'\); return; \}/);
+  // A restart waits too.
+  assert.match(page, /speech\.waiting = true;\s*\n\s*speech\.audioAt = 0;\s*\n\s*micReady\(\)\.then/);
+  // Streams and contexts: released on every path.
+  assert.match(page, /const release = \(\) => \{ stream\.getTracks\(\)\.forEach\(t => t\.stop\(\)\); micRelease\(stream\); \};/);
+  assert.match(page, /rec\.stream\?\.getTracks\(\)\.forEach\(t => t\.stop\(\)\);\s*\n\s*micRelease\(rec\.stream\);/);
+  assert.equal((page.match(/closeCtx\(/g) || []).length, 3, 'defined, the wave, the decoder');
+  // The quiet line goes through rcMicQuiet in both modes; no other verdict.
+  assert.equal((page.match(/setQuiet\(rcMicQuiet\(/g) || []).length, 2);
+  assert.doesNotMatch(page, /Date\.now\(\) - speech\.roundAt >= QUIET_MS/);
 });
 
 test('dictation: a final text is inserted once', () => {

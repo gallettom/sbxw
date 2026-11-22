@@ -1317,6 +1317,8 @@ const RC_DICT_TEXT = {
   macSlow: 'The Mac did not answer in time. Try again.',
   unreadable: 'This recording could not be read. Try again.',
   recFailed: 'The recording stopped by itself. Tap the microphone to try again.',
+  busy: 'Microphone busy, try again in a second.',
+  waiting: 'Waiting for the microphone…',
 };
 // How a recognition ended → { text, tone }. `error`: the last SpeechRecognition
 // error code, or ''. `reason`: 'person' (tapped stop), 'self' (ended alone),
@@ -1344,6 +1346,34 @@ function rcSpeechEnd({ error = '', reason = 'self', words = false } = {}) {
 const RC_SPEECH_RESTARTS = 2;
 function rcSpeechRestart({ error = '', reason = 'self', hidden = false, restarts = 0, heard = false, ms = 0, total = 0 } = {}) {
   return !error && reason === 'self' && !hidden && heard && restarts < RC_SPEECH_RESTARTS && ms >= 2000 && total < RC_VOICE_MAX_S * 1000;
+}
+// ── One user of the microphone at a time ──────────────────────────────────
+// On an iPhone a recogniser that was told to stop (or abort) keeps the audio
+// session until its `end` event, and a little after: a new recogniser, or a
+// new getUserMedia stream, started in that time gets no audio at all and
+// the page says it hears nothing. So a new take waits: until every earlier
+// user of the microphone (a recogniser, a stream, an AudioContext) has
+// really ended, then a short settle. The wait is bounded: past `max` ms the
+// take does not start and the person is told the microphone is busy.
+// `live`: earlier users not yet ended. `endedAt`: when the last one ended
+// (0: never). `waited`: ms this take has waited. → 'go', 'wait' or 'busy'.
+const RC_MIC_SETTLE_MS = 350;
+const RC_MIC_WAIT_MS = 2000;
+function rcMicGate({ live = 0, endedAt = 0, now = 0, waited = 0, settle = RC_MIC_SETTLE_MS, max = RC_MIC_WAIT_MS } = {}) {
+  if (live > 0) return waited >= max ? 'busy' : 'wait';
+  if (endedAt > 0 && now - endedAt < settle && waited < max) return 'wait';
+  return 'go';
+}
+// Whether "nothing heard" is said, during a take. Only once audio has
+// really started (`audioAt`: the recogniser's audiostart, or the first level
+// read from a running AudioContext; 0: not yet, or not known now): before
+// that, a quiet line would blame the person for a microphone that is not
+// delivering yet. `heardAt`: the last sound or word, of this take (one
+// before `audioAt` belongs to an earlier round and does not count).
+function rcMicQuiet({ now = 0, audioAt = 0, heardAt = 0, quietMs = 3000, heardMs = quietMs } = {}) {
+  if (!(audioAt > 0)) return false;
+  if (heardAt >= audioAt) return now - heardAt >= heardMs;
+  return now - audioAt >= quietMs;
 }
 // A final text is inserted once. Some recognisers deliver a final result
 // that repeats the one before it (the same words, or the same words and
