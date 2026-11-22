@@ -221,6 +221,11 @@
       <div id="tail"></div>
     </div>
     <form id="composer" class="rc-composer" data-rec="idle" novalidate>
+      <!-- Floats just above the composer (and so above its tray and skill list) once the log is scrolled up. -->
+      <button id="to-end" class="rc-toend" type="button" aria-label="Jump to the latest message" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v13M6.5 12.5 12 18l5.5-5.5"/></svg>
+        <span id="to-end-dot" class="rc-toend-dot" aria-hidden="true" hidden></span>
+      </button>
       <!-- Files chosen for the next message: chips, and the tick for a name
            that looks like a secret. Names are set as text. -->
       <div id="tray" class="rc-tray" hidden>

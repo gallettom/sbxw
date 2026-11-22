@@ -1308,6 +1308,12 @@ function rcSpeechRound(results, carry = '') {
   const t = rcSpeechText(results);
   return { final: segs.join(' '), interim: t.interim, last: segs.length ? segs[segs.length - 1] : carry };
 }
+// The "jump to the latest" button shows when the log is scrolled away from
+// its end by more than `slack` px (the same 80 px the page uses for "at the end").
+function rcAwayFromEnd(scrollHeight, scrollTop, clientHeight, slack = 80) {
+  const gap = Number(scrollHeight) - Number(scrollTop) - Number(clientHeight);
+  return Number.isFinite(gap) && gap > slack;
+}
 // The live preview shows the END of what is said: at most `max` characters
 // of final then interim words, older words cut at the start with "…".
 function rcTail(final, interim, max = 140) {

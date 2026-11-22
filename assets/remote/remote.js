@@ -107,7 +107,7 @@
     $('mark').hidden = BACK.includes(id);
     $('approvals-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     if (id !== 's-item') closeSheet();
-    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; $('skill-list').hidden = true; disarmInterrupt(); } else { loadModels(); loadSkills(); }
+    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; $('skill-list').hidden = true; $('to-end').hidden = true; disarmInterrupt(); } else { loadModels(); loadSkills(); }
     $('menu-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     closeMenu();
   }
@@ -637,7 +637,7 @@
         st.latestSeq = Math.max(st.latestSeq, page.latest_seq, ...page.items.map(i => Number(i.seq) || 0));
         renderRows();
         st.shownSeq = Math.max(st.shownSeq, st.latestSeq);
-        if (atEnd) scrollToEnd();
+        if (atEnd) scrollToEnd(); else { st.unseenBelow = true; updateToEnd(); }
       }
     }
     if (st.newerAgain) { st.newerAgain = false; fetchNewer(); }
@@ -659,13 +659,32 @@
     st.nextBefore = page.next_before;
     renderRows();
     log.scrollTop = log.scrollHeight - fromEnd;
+    updateToEnd();
   }
-  $('log').addEventListener('scroll', () => { if ($('log').scrollTop < 120) fetchOlder(); }, { passive: true });
+  $('log').addEventListener('scroll', () => { if ($('log').scrollTop < 120) fetchOlder(); updateToEnd(); }, { passive: true });
 
   function scrollToEnd() {
     const log = $('log');
     log.scrollTop = log.scrollHeight;
+    updateToEnd();
   }
+  // The round button over the composer: only in the Conversation view, only
+  // while the log is away from its end; a dot when rows came in meanwhile.
+  function updateToEnd() {
+    const log = $('log');
+    const away = st.screen === 's-chat' && !log.hidden && rcAwayFromEnd(log.scrollHeight, log.scrollTop, log.clientHeight);
+    if (!away) st.unseenBelow = false;
+    $('to-end').hidden = !away;
+    $('to-end-dot').hidden = !(away && st.unseenBelow);
+  }
+  $('to-end').addEventListener('click', () => {
+    const log = $('log');
+    const smooth = !(reducedMotion && reducedMotion.matches);
+    if (smooth && log.scrollTo) log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' });
+    else log.scrollTop = log.scrollHeight;
+    st.unseenBelow = false;
+    updateToEnd();
+  });
 
   // Agent markup, checked once more on the elements: only the subset's tags
   // and attributes survive, and a link must be http(s) or it becomes text.
@@ -1688,6 +1707,7 @@
     } else if (v.logTop !== null) {
       log.scrollTop = v.logTop;
     }
+    updateToEnd();
   }
   $('v-chat').addEventListener('click', () => setView('chat'));
   $('v-kanban').addEventListener('click', () => setView('kanban'));

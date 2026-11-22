@@ -15,7 +15,7 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'RC_PILL_TONES', 'rcPills', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcAnswerPick', 'rcAnswers', 'rcAnswerFail', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'rcSkillMatches', 'rcSkillInsert', 'rcSkillLine', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'rcAwayFromEnd', 'rcSkillMatches', 'rcSkillInsert', 'rcSkillLine', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
   'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
@@ -343,6 +343,15 @@ test('the check before sending matches the daemon\'s rule', () => {
   assert.equal(rc.RC_MSG_REASON.busy, 'The session is busy right now: try again in a few seconds. Meanwhile you can read it and interrupt it.');
   for (const s of ['', '   ', '\n\n']) assert.equal(rc.rcMessageCheck(s), 'empty');
   for (const s of ['hello', 'café ünïcödé 日本語 😀', 'a/b and c#d', 'line one\nline two', 'see https://x.example/#a', 'Fix it! Now.']) assert.equal(rc.rcMessageCheck(s), null, JSON.stringify(s));
+});
+
+test('the jump button shows only when the log is away from its end', () => {
+  assert.equal(rc.rcAwayFromEnd(2000, 1200, 800), false, 'at the end');
+  assert.equal(rc.rcAwayFromEnd(2000, 1121, 800), false, 'within 80 px');
+  assert.equal(rc.rcAwayFromEnd(2000, 1100, 800), true);
+  assert.equal(rc.rcAwayFromEnd(500, 0, 800), false, 'a short log');
+  assert.equal(rc.rcAwayFromEnd(2000, 0, 800, 200), true);
+  assert.equal(rc.rcAwayFromEnd(undefined, 0, 0), false);
 });
 
 test('the "/" autocomplete filters, inserts, and routes a known skill apart from an unknown line', () => {

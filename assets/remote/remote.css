@@ -489,6 +489,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
 /* ── Composer: one object on its own ground, to the screen's edge ── */
 .rc-composer {
+  position: relative;
   flex: none;
   padding: 8px max(10px, var(--safe-r)) max(6px, var(--safe-b)) max(10px, var(--safe-l));
   background: var(--c-composer);
@@ -1052,3 +1053,28 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-pill-cyan { color: #39c5cf; }
 .rc-pill-purple { color: #bc8cff; }
 .rc-pill-danger { color: #ff7b72; background: var(--c-red-tint); }
+
+/* ── Jump to the latest message ── */
+/* Inside the composer, bottom: 100%: it rides on the composer's top edge, so it
+   clears the Send button, the tray and the skill list, the keyboard (the
+   viewport resizes) and the bottom safe area (the composer's own padding). */
+.rc-toend {
+  position: absolute;
+  right: max(14px, var(--safe-r));
+  bottom: calc(100% + 12px);
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--c-hair);
+  background: var(--c-surface);
+  color: var(--c-text-bright);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+.rc-toend[hidden] { display: none; }
+.rc-toend svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.rc-toend:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.rc-toend-dot { position: absolute; top: 4px; right: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--c-blue); border: 2px solid var(--c-surface); box-sizing: content-box; }
+.rc-toend-dot[hidden] { display: none; }
