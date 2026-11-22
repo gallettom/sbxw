@@ -2036,3 +2036,38 @@ function rcApKind(what) {
   const k = Object.prototype.hasOwnProperty.call(RC_AP_KINDS, what) ? RC_AP_KINDS[what] : null;
   return k ? { ...k } : { cls: 'rc-k-neutral', icon: 'ap-i-neutral', label: '' };
 }
+// The one busy state of a button whose request is running: it keeps its
+// colour, shows a small ring before its label (or `label` instead of the
+// label), says aria-busy, and takes no tap. Off puts back what was there.
+// On twice or off twice does nothing more. The ring is CSS (.rc-spin).
+function rcBusy(button, on, label) {
+  if (!button) return;
+  const was = button._rcBusy;
+  if (on) {
+    if (was) return;
+    const doc = button.ownerDocument;
+    const spin = doc.createElement('span');
+    spin.className = 'rc-spin';
+    spin.setAttribute('aria-hidden', 'true');
+    const saved = { disabled: !!button.disabled, nodes: null };
+    if (typeof label === 'string') {
+      saved.nodes = Array.from(button.childNodes);
+      button.replaceChildren(spin, doc.createTextNode(label));
+    } else {
+      button.prepend(spin);
+    }
+    saved.spin = spin;
+    button._rcBusy = saved;
+    button.classList.add('rc-busy');
+    button.setAttribute('aria-busy', 'true');
+    button.disabled = true;
+  } else {
+    if (!was) return;
+    button._rcBusy = null;
+    if (was.nodes) button.replaceChildren(...was.nodes);
+    else was.spin.remove();
+    button.classList.remove('rc-busy');
+    button.removeAttribute('aria-busy');
+    button.disabled = was.disabled;
+  }
+}

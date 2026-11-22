@@ -22,7 +22,7 @@ const NAMES = ['rcAgentHtml', 'RC_PILL_TONES', 'rcPills', 'rcRows', 'rcMerge', '
   'rcL2Fail', 'RC_L2_REASON', 'rcActPath', 'rcActLine', 'rcActDone', 'rcL2Client',
   'rcModelChanges', 'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback', 'rcMarked', 'rcActParts',
   'RC_DICT_TEXT', 'rcSpeechEnd', 'rcSpeechRestart', 'RC_SPEECH_RESTARTS', 'rcSpeechRound', 'rcFinalSegments', 'rcTail', 'rcRecMime', 'rcClipCheck', 'rcSilentPcm', 'rcTranscribed', 'rcSendNote', 'RC_QUEUED_TEXT',
-  'rcMicGate', 'rcMicQuiet', 'RC_MIC_SETTLE_MS', 'RC_MIC_WAIT_MS'];
+  'rcBusy', 'rcMicGate', 'rcMicQuiet', 'RC_MIC_SETTLE_MS', 'RC_MIC_WAIT_MS'];
 const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;

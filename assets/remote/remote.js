@@ -172,6 +172,7 @@
     $('pair-form').hidden = false;
     $('pair-wait').hidden = true;
     $('pair-end').hidden = true;
+    rcBusy($('pair-go'), false);
     $('pair-go').disabled = false;
     show('s-pair');
   }
@@ -191,7 +192,7 @@
     if (!code) return pairEnd('invalid');
     const name = rcCleanName($('pair-name').value) || rcDeviceName(navigator.userAgent, navigator.platform);
     prefs.setName(name);
-    $('pair-go').disabled = true;
+    rcBusy($('pair-go'), true);
     const res = await api.pairStart(code, name);
     // The code is single use: the daemon consumed it, whatever happens next.
     pairCode = null;
@@ -487,7 +488,9 @@
     if (why) { note(why, 'warn'); return; }
     const raw = field.value;
     st.ctlBusy = true; renderCtl(l);
+    rcBusy($('send'), true);
     const res = await api.runSkill(sandbox, line.name, line.args);
+    rcBusy($('send'), false);
     st.ctlBusy = false;
     if (res.ok && st.current === sandbox && field.value === raw) {
       field.value = '';
@@ -901,6 +904,7 @@
       if (submit.disabled) return;
       const sandbox = l.sandbox;
       card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+      rcBusy(submit, true);
       status.textContent = 'Sending…';
       status.hidden = false;
       const res = await api.answer(sandbox, rcAnswers(picks.picked));
@@ -910,6 +914,7 @@
         return;
       }
       status.textContent = rcAnswerFail(res);
+      rcBusy(submit, false);
       card.querySelectorAll('button').forEach(b => { b.disabled = false; });
       ready();
     });
@@ -974,15 +979,14 @@
     // Return): the composer says so, and a second tap does nothing.
     st.sending = true;
     const send = $('send');
-    send.disabled = true;
-    send.setAttribute('aria-busy', 'true');
+    rcBusy(send, true);
     sendLabel.textContent = 'Sending…';
     $('composer').setAttribute('aria-busy', 'true');
     note('');
     // The ids, never a path: the daemon adds the paths itself.
     const res = await api.message(sandbox, text, ids);
     st.sending = false;
-    send.removeAttribute('aria-busy');
+    rcBusy(send, false);
     sendLabel.textContent = 'Send';
     $('composer').removeAttribute('aria-busy');
     // Refused or not submitted: the text and the files stay, nothing is resent.
@@ -1024,9 +1028,11 @@
     const sandbox = st.current;
     if (!sandbox || $('confirm').hidden) return;
     disarmInterrupt();
-    $('interrupt').disabled = true;
+    rcBusy($('interrupt'), true);
+    rcBusy($('interrupt-go'), true);
     const res = await api.interrupt(sandbox);
-    $('interrupt').disabled = false;
+    rcBusy($('interrupt-go'), false);
+    rcBusy($('interrupt'), false);
     note(res.ok ? 'Interrupt sent.' : rcFailText('Interrupt', res), res.ok ? 'ok' : 'err');
   });
   $('interrupt-cancel').addEventListener('click', disarmInterrupt);
@@ -1860,9 +1866,9 @@
       f.textContent = 'Tap again to forget it';
       return;
     }
-    f.disabled = true;
+    rcBusy(f, true);
     const res = await api.logout();
-    f.disabled = false;
+    rcBusy(f, false);
     if (res.ok || res.status === 401) {
       unpaired('This device was forgotten', 'To use it again, pair it from your Mac.');
     } else {
@@ -2036,9 +2042,9 @@
     const t = kbTray(sandbox);
     if (t && t.failed()) { err.textContent = 'A file did not upload: retry or remove it.'; err.hidden = false; return; }
     const ids = t ? t.ids() : [];
-    $('kb-create').disabled = true;
+    rcBusy($('kb-create'), true);
     const res = await api.createTicket(sandbox, title, $('kb-desc').value.trim(), ids);
-    $('kb-create').disabled = false;
+    rcBusy($('kb-create'), false);
     if (!res.ok) {
       err.textContent = res.status === 404 ? 'This team leader is no longer running.' : rcFailText('Ticket', res);
       err.hidden = false;
@@ -2768,6 +2774,7 @@
     more.hidden = !more.childNodes.length;
     $('sheet-status').textContent = '';
     const go = $('sheet-go');
+    rcBusy(go, false);
     go.textContent = GO[kind];
     const danger = kind === 'plan_refuse' || kind === 'sandbox_remove' || (kind === 'network_respond' && DANGER.test(`${option?.id} ${option?.label}`));
     go.className = `rc-btn ${danger ? 'rc-danger-solid' : 'rc-primary'}`;
@@ -2783,6 +2790,7 @@
     if (!sheet) return;
     sheet.ctl?.abort();
     sheet = null;
+    rcBusy($('sheet-go'), false);
     $('sheet').hidden = true;
     $('veil').hidden = true;
   }
@@ -2798,13 +2806,13 @@
     const live = () => sheet === s && st.item === item;
     const say = (text, tone) => { if (live()) { $('sheet-status').textContent = text; $('sheet-status').className = `rc-sheet-status${tone ? ` rc-t-${tone}` : ''}`; } };
     const target = item.what === 'stopped' ? str(item.data.name) : item.id;
-    $('sheet-go').disabled = true;
+    rcBusy($('sheet-go'), true);
     say('Asking the Mac…', 'busy');
     const ch = await l2.challenge(s.kind, target, item.digest, s.option?.id, s.models);
     if (!live()) return;
     if (!ch.ok) return failed(ch, s);
     const publicKey = rcGetOptions(ch.data?.public_key);
-    if (!publicKey) { $('sheet-go').disabled = false; return say('The Mac sent a request this page cannot use. Nothing was done.', 'err'); }
+    if (!publicKey) { rcBusy($('sheet-go'), false); return say('The Mac sent a request this page cannot use. Nothing was done.', 'err'); }
     say('Waiting for Face ID…', 'busy');
     s.ctl = new AbortController();
     let cred;
@@ -2812,13 +2820,13 @@
       cred = await navigator.credentials.get({ publicKey, signal: s.ctl.signal });
     } catch (e) {
       if (!live()) return;
-      $('sheet-go').disabled = false;
+      rcBusy($('sheet-go'), false);
       const why = rcCeremonyError(e);
       return say(why === 'cancelled' ? 'Face ID was cancelled. Nothing was done.' : why === 'no_authenticator' ? 'Face ID is not available here. Nothing was done.' : 'Face ID did not finish. Nothing was done.', 'err');
     }
     if (!live()) return;
     const assertion = rcAssertionBody(cred);
-    if (!assertion) { $('sheet-go').disabled = false; return say('Face ID gave an answer this page cannot read. Nothing was done.', 'err'); }
+    if (!assertion) { rcBusy($('sheet-go'), false); return say('Face ID gave an answer this page cannot read. Nothing was done.', 'err'); }
     say('Sending…', 'busy');
     const res = await l2.act(s.kind, target, assertion, s.option?.id, s.models);
     if (!live()) return;
@@ -2840,7 +2848,7 @@
     if (sheet !== s) return;
     $('sheet-status').textContent = rcL2Fail(res);
     $('sheet-status').className = 'rc-sheet-status rc-t-err';
-    $('sheet-go').disabled = false;
+    rcBusy($('sheet-go'), false);
     if (res.data?.reason === 'no_passkey' || res.data?.reason === 'level2_off') { $('sheet-go').disabled = true; refreshL2(); }
   }
 
@@ -2870,6 +2878,7 @@
     $('pk-title').textContent = state === 'pending' ? 'Type this number on your Mac' : state === 'registered' ? 'Face ID is ready' : 'Enable Face ID';
     $('pk-text').textContent = RC_PASSKEY_TEXT[state] || RC_PASSKEY_TEXT.failed;
     $('pk-go').hidden = state !== 'granted';
+    rcBusy($('pk-go'), false);
     $('pk-go').disabled = false;
     $('pk-again').hidden = !['refused', 'expired', 'cancelled', 'failed', 'rejected', 'no_authenticator', 'exists'].includes(state);
     $('s-passkey').dataset.state = state;
@@ -2916,7 +2925,7 @@
   $('pk-go').addEventListener('click', async () => {
     const go = $('pk-go');
     if (go.disabled) return;
-    go.disabled = true;
+    rcBusy(go, true);
     if (!window.PublicKeyCredential || !navigator.credentials?.create) return pkShow('no_authenticator');
     try {
       if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function'
@@ -3260,12 +3269,12 @@
   async function cvRemark(body, what) {
     const m = cv.m, sandbox = cv.sandbox;
     cv.busy = true;
-    $('cv-ed-save').disabled = true;
     $('cv-ed-del').disabled = true;
+    rcBusy($('cv-ed-save'), true);
     cvSaid('cv-saved', { tone: 'info', text: `${what}: saving…` });
     const res = await api.canvasRemark(m.id, body);
     cv.busy = false;
-    $('cv-ed-save').disabled = false;
+    rcBusy($('cv-ed-save'), false);
     $('cv-ed-del').disabled = false;
     if (cv.sandbox !== sandbox || cv.m?.id !== m.id) return;
     const r = rcCvRemarkResult(res, what);
@@ -3515,10 +3524,11 @@
     if (!cv.m || cv.busy) return;
     const m = cv.m, sandbox = cv.sandbox;
     cv.busy = true;
-    $('cv-cf-go').disabled = true;
+    rcBusy($('cv-cf-go'), true);
     cvSaid('cv-cf-result', { tone: 'info', text: 'Sending…' });
     const res = await api.canvasSubmit(m.id);
     cv.busy = false;
+    rcBusy($('cv-cf-go'), false);
     if (cv.sandbox !== sandbox) return;
     const r = rcCvSubmitResult(res);
     cvSaid('cv-cf-result', r);

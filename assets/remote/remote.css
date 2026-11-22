@@ -124,6 +124,35 @@ svg circle { fill: currentColor; stroke: none; }
 .rc-btn:active:not(:disabled) { transform: scale(0.97); }
 .rc-btn:focus-visible { box-shadow: var(--ring); }
 .rc-btn:disabled { opacity: 0.4; cursor: default; }
+/* Busy button (rcBusy): keeps its colour, a 16 px ring before the label, no
+   tap. Icon buttons (Send, Interrupt) swap their glyph for the ring. Under
+   reduced motion the ring is a slowly pulsing dot. */
+.rc-spin {
+  flex: none;
+  display: inline-block;
+  vertical-align: -3px;
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: rc-spin 800ms linear infinite;
+}
+.rc-busy, .rc-busy:disabled { opacity: 1; cursor: default; pointer-events: none; }
+.rc-send.rc-busy, .rc-stop-btn.rc-busy { display: grid; place-items: center; }
+.rc-send.rc-busy .rc-spin, .rc-stop-btn.rc-busy .rc-spin { position: relative; z-index: 1; margin: 0; vertical-align: 0; color: #fff; }
+.rc-send.rc-busy > svg, .rc-stop-btn.rc-busy::after { display: none; }
+.rc-send.rc-busy:disabled { color: #fff; }
+.rc-send.rc-busy:disabled::before { background: var(--c-green-deep); box-shadow: inset 0 0 0 1px rgba(63, 185, 80, 0.55); }
+.rc-stop-btn.rc-busy:disabled::before { background: var(--c-red); }
+.rc-send.rc-busy[aria-busy="true"] > svg { animation: none; }
+@keyframes rc-spin { to { transform: rotate(360deg); } }
+@keyframes rc-spin-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .rc-spin { border: 0; background: currentColor; width: 10px; height: 10px; margin-right: 10px; vertical-align: -1px; animation: rc-spin-pulse 1600ms ease-in-out infinite; }
+  .rc-send.rc-busy .rc-spin, .rc-stop-btn.rc-busy .rc-spin { margin: 0; }
+}
 .rc-primary { background: var(--c-green-deep); border-color: rgba(63, 185, 80, 0.5); color: #fff; }
 .rc-primary:active:not(:disabled) { background: #1d6f2d; }
 .rc-quiet { background: transparent; border-color: transparent; color: var(--c-text-muted); font-weight: 500; }
