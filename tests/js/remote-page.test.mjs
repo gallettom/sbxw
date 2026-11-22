@@ -831,6 +831,12 @@ test('the recorder: silence is flat; reduced motion draws a meter; no analyser s
     assert.equal(await page.getAttribute('#composer', 'data-wave'), 'meter');
     assert.ok(Number(await page.getAttribute('#rec', 'data-level')) > 0.1);
     await shot(page, '20-recording-reduced-motion');
+    // Reduced motion stops every animation but one: the busy dot's slow pulse (opacity, no turn).
+    const motion = await page.evaluate(() => {
+      const mk = cls => { const e = document.createElement('span'); e.className = cls; document.body.append(e); const cs = getComputedStyle(e); const r = [cs.animationName, cs.animationDuration]; e.remove(); return r; };
+      return { spin: mk('rc-spin'), skel: mk('rc-skel'), pulse: mk('rc-pulse') };
+    });
+    assert.deepEqual(motion, { spin: ['rc-pulse', '1.2s'], skel: ['none', '0s'], pulse: ['none', '0s'] });
     await page.tap('#mic');
     await page.waitForSelector('text=Added to the field: read it, then Send.', { timeout: 8000 });
     assert.deepEqual(problems, []);

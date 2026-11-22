@@ -220,7 +220,9 @@ svg circle { fill: currentColor; stroke: none; }
 .rc-btn:active:not(:disabled) { transform: scale(0.97); }
 /* Busy button (rcBusy): keeps its colour, a 16 px ring before the label, no
    tap. Icon buttons (Send, Interrupt) swap their glyph for the ring. Under
-   reduced motion the ring is a still dot (nothing turns or pulses). */
+   reduced motion the ring is a dot with a slow pulse (opacity only, 1.2 s,
+   nothing turns): the one animation the reduced-motion block lets through,
+   so a busy button still says it is working. */
 .rc-spin {
   flex: none;
   display: inline-block;
@@ -243,7 +245,7 @@ svg circle { fill: currentColor; stroke: none; }
 .rc-send.rc-busy[aria-busy="true"] > svg { animation: none; }
 @keyframes rc-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .rc-spin { border: 0; background: currentColor; width: 8px; height: 8px; margin-right: var(--sp-2); vertical-align: 0; }
+  .rc-spin { border: 0; background: currentColor; width: 8px; height: 8px; margin-right: var(--sp-2); vertical-align: 0; animation: rc-pulse 1.2s ease-in-out infinite; }
   .rc-send.rc-busy .rc-spin, .rc-stop-btn.rc-busy .rc-spin { margin: 0; }
 }
 .rc-primary { background: var(--c-green-deep); border-color: var(--c-green-a45); color: var(--c-white); }
@@ -1190,6 +1192,10 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 @keyframes rc-sheet { from { transform: translateY(24px); opacity: 0.4; } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+  /* The one exception: the busy dot's slow pulse (see .rc-spin), opacity
+     only, no rotation. Without it a busy button would sit still and look
+     stuck. Nothing else is let through. */
+  .rc-spin { animation: rc-pulse 1.2s ease-in-out infinite !important; }
 }
 
 @media (max-width: 340px) {
