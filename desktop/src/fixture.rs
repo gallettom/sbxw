@@ -165,13 +165,19 @@ pub struct PaneView {
 
 /// The daemon's data (every key at the top level) plus `app`.
 pub fn screen_data(daemon: &serde_json::Value, app: &AppView) -> serde_json::Value {
-    let mut d = match daemon {
+    let d = match daemon {
         serde_json::Value::Object(o) => o.clone(),
         _ => serde_json::Map::new(),
     };
+    screen_data_of(d, app)
+}
+
+/// [`screen_data`] on daemon keys the caller already owns (the app builds
+/// them for each push): the same data, without a second copy of them all.
+pub fn screen_data_of(mut d: serde_json::Map<String, serde_json::Value>, app: &AppView) -> serde_json::Value {
     d.entry("sandboxes").or_insert_with(|| serde_json::json!([]));
     if !d.get("jarvis").is_some_and(|j| j.is_object()) {
-        let j = jarvis_of(daemon);
+        let j = jarvis_of(&serde_json::Value::Object(d.clone()));
         d.insert("jarvis".into(), j.screen_data(false));
     }
     d.insert("app".into(), serde_json::to_value(app).expect("app view"));
@@ -215,6 +221,18 @@ mod tests {
             }
         }
         assert!(n >= 3);
+    }
+
+    /// The owned form gives the same data, with Jarvis from the daemon keys or given.
+    #[test]
+    fn screen_data_of_owned_keys_is_the_same_data() {
+        let fx = Fixture::load(&dir().join("sandboxes/basic.json")).unwrap();
+        let app = AppView { selected: Some("x".into()), ..AppView::default() };
+        let mut with_jarvis = fx.raw.as_object().cloned().unwrap_or_default();
+        with_jarvis.insert("jarvis".into(), serde_json::json!({ "open": true }));
+        for m in [fx.raw.as_object().cloned().unwrap_or_default(), with_jarvis, serde_json::Map::new()] {
+            assert_eq!(screen_data_of(m.clone(), &app), screen_data(&serde_json::Value::Object(m), &app));
+        }
     }
 
     #[test]
