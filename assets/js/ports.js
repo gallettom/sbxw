@@ -213,7 +213,7 @@ function renderPolicyRules(view, policies) {
     const id = at(row, 'rule_id');
     if (!id || id === '-') return '';
     if (policyRuleIsGoverned(at(row, 'source')))
-      return `<span class="rule-locked" title="Set by organisation policy — sbx won't let sbxw remove it">🔒</span>`;
+      return `<span class="rule-locked" title="Set by organisation policy: sbx won't let sbxw remove it" aria-label="Locked by policy">${ICON.lock}</span>`;
     // Own scope column if there is one, else the parent policy's, else nothing
     // (an unknown scope is reported as unknown, never guessed).
     const own = at(row, 'applies') || at(row, 'sandbox');
@@ -392,7 +392,7 @@ function renderBlockedHosts(blocked) {
   const rows = blocked.map(b => {
     const when = timeAgo(b.last_seen);
     const action = b.governed
-      ? `<span class="rule-locked" title="${escHtml(b.reason || 'Blocked by organisation policy')}">🔒 org</span>`
+      ? `<span class="rule-locked" title="${escHtml(b.reason || 'Blocked by organisation policy')}">${ICON.lock} org</span>`
       : !b.resource ? ''
       : `<button class="btn-allow-host" data-resource="${escHtml(b.resource)}" title="Allow ${escHtml(b.resource)} for this sandbox">Allow</button>`;
     return `<tr><td><span class="policy-cell">${escHtml(b.host)}</span></td>` +

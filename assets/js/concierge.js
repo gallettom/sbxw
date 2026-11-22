@@ -1161,8 +1161,8 @@ function vcGrill(sandbox, thread, text, grill) {
 
   const show = () => {
     const q = grill.questions[st.i];
-    head.textContent = `${vcWho(sandbox, thread)} · ${q.id} (${st.i + 1}/${n})${q.title ? ' — ' + q.title : ''}`;
-    now.innerHTML = chatMarkdown(q.body || q.ask) + (q.rec ? `<p class="vc-grill-rec">➡️ ${chatInline(q.rec)}</p>` : '');
+    head.textContent = `${vcWho(sandbox, thread)} · ${q.id} (${st.i + 1}/${n})${q.title ? ': ' + q.title : ''}`;
+    now.innerHTML = chatMarkdown(q.body || q.ask) + (q.rec ? `<p class="vc-grill-rec">Recommended: ${chatInline(q.rec)}</p>` : '');
     answers.replaceChildren(...grill.questions.slice(0, st.i).map(x => {
       const li = document.createElement('li');
       li.textContent = `${x.id}${x.title ? ' (' + x.title + ')' : ''} : ${x.answer ?? '(skipped)'}`;

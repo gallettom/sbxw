@@ -317,7 +317,7 @@ function renderCrumbs() {
   el.scrollLeft = el.scrollWidth;        // the deep end is the part you need
 }
 
-const FX_ICONS = { dir: '📁', file: '📄', other: '·' };
+const FX_ICONS = { dir: ICON.folder, file: ICON.file, other: '·' };
 const FX_README = /^readme(\.(md|markdown|txt))?$/i;
 
 /// The rows on screen, in order: what the filter and the dotfile toggle leave.
@@ -492,7 +492,7 @@ function fxCanDelete(path) {
 function fxDeleteButton(e) {
   if (e.kind === 'other' && !e.link) return '';
   return fxCanDelete(fxPathOf(e)) ? `<button class="fx-dl fx-rm" type="button" tabindex="-1"
-    title="Delete" aria-label="Delete ${escHtml(e.name)}">🗑</button>` : '';
+    title="Delete" aria-label="Delete ${escHtml(e.name)}">${ICON.trash}</button>` : '';
 }
 
 async function fxDelete(entry) {

@@ -167,6 +167,11 @@
   :where(input:not([type="checkbox"], [type="radio"], [type="range"]), select, textarea):focus-visible { outline-offset: -1px; }
   :where(button, input, select, textarea):disabled { cursor: not-allowed; }
   ::selection { background: var(--c-blue-deep-a40); color: var(--c-text-bright); }
+  /* The scripts' stroke icons (ICON in util.js): sit on the text's baseline. */
+  .ico { display: inline-block; flex-shrink: 0; vertical-align: -2px; }
+  /* The attach chip's paperclip: chat-core.js builds no markup, so the icon is a mask. */
+  .cd-chip-icon { display: inline-block; flex-shrink: 0; width: 14px; height: 14px; background: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m13.2 7.6-4.9 4.9a3 3 0 0 1-4.2-4.2l5.2-5.2a2 2 0 0 1 2.8 2.8L6.9 11.1a1 1 0 0 1-1.4-1.4l4.6-4.6'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m13.2 7.6-4.9 4.9a3 3 0 0 1-4.2-4.2l5.2-5.2a2 2 0 0 1 2.8 2.8L6.9 11.1a1 1 0 0 1-1.4-1.4l4.6-4.6'/%3E%3C/svg%3E") center / contain no-repeat; }
 
   /* Motion is state: with reduced motion asked for, nothing travels, pulses
      or spins; every state change still lands, at once. */

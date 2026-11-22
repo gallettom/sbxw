@@ -462,12 +462,13 @@ function groupedHtml(list) {
       const isOther = cardKey === OTHER_GROUP;
       const title = isChat ? 'Chat sandboxes, each on its own empty workspace'
         : isOther ? 'Sandboxes whose workspace no other sandbox shares' : cardKey;
-      const label = isChat ? '💬 Chats' : isOther ? 'Other' : `📁 ${workspaceBasename(cardKey)}`;
+      const label = isChat ? 'Chats' : isOther ? 'Other' : workspaceBasename(cardKey);
+      const icon = isChat ? ICON.chat : isOther ? '' : ICON.folder;
       const cls = isChat ? ' sbx-group-chat' : isOther ? ' sbx-group-other' : '';
       const color = isOther ? '' : ` style="--group-color:${groupColorOf(cardKey)}"`;
       html += `<div class="sbx-group${cls}"${color}>
         <div class="sbx-group-label" title="${escHtml(title)}">
-          ${isOther ? '' : '<span class="sbx-group-dot"></span>'}${escHtml(label)}
+          ${isOther ? '' : '<span class="sbx-group-dot"></span>'}${icon}${escHtml(label)}
         </div>`;
       openGroup = cardKey;
     }
@@ -735,7 +736,7 @@ async function uploadPastedImage(file, pane) {
     if (data.ok && data.path) {
       pane.ws.send(new TextEncoder().encode(data.path + ' '));
       pane.term.focus();
-      showToast('📎 ' + data.path, 'ok');
+      showToast('Attached: ' + data.path, 'ok');
     } else {
       showToast('Upload failed: ' + (data.error || 'unknown error'), 'error');
     }

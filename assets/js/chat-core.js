@@ -742,7 +742,8 @@ function chatRenderTray(box, tray, flash) {
   const list = chatEl('ul', 'cd-chips');
   tray.chips.forEach(c => {
     const li = chatEl('li', `cd-chip ${c.state}`);
-    li.appendChild(chatEl('span', 'cd-chip-icon', '📎'));
+    // The paperclip is drawn by CSS (a stroke icon, not an emoji): no markup here.
+    li.appendChild(chatEl('span', 'cd-chip-icon'));
     const name = chatEl('span', 'cd-chip-name', chatShortName(c.name));
     name.setAttribute('title', chatShortName(c.name));
     const meta = chatEl('span', 'cd-chip-meta', c.state === 'failed' ? `Failed: ${c.error}`

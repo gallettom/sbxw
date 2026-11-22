@@ -655,7 +655,7 @@ function renderFsList() {
                title="${on ? 'Unstar this folder' : 'Star this folder: pins it as a shortcut above'}"
        >${on ? '★' : '☆'}</button>`;
     return `<div class="fs-item" data-path="${escHtml(e.path)}">
-       <span class="fs-icon">📁</span>
+       <span class="fs-icon">${ICON.folder}</span>
        <span class="fs-name">${escHtml(e.name)}</span>
        ${carvePick ? '' : `<button type="button" class="fs-row-add${added ? ' on' : ''}"
                data-add-path="${escHtml(e.path)}" aria-pressed="${added}"

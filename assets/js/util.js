@@ -193,6 +193,19 @@ function timeAgo(iso) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+// ── Icons ──────────────────────────────────────────────────────────────────
+// Stroke icons in currentColor, for markup the scripts write (in place of
+// emoji, which render differently on every system). Decorative: the text or
+// the aria-label beside each one says what it is.
+const ICON = {
+  folder: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.75 4.25a1 1 0 0 1 1-1h3.1l1.4 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z"/></svg>',
+  file: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.75 1.75h5.5l3 3v9.5h-8.5z"/><path d="M9.25 1.75v3h3"/></svg>',
+  chat: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.25 3.25a1 1 0 0 1 1-1h9.5a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H7l-3 2.75v-2.75h-.75a1 1 0 0 1-1-1z"/></svg>',
+  clip: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m13.2 7.6-4.9 4.9a3 3 0 0 1-4.2-4.2l5.2-5.2a2 2 0 0 1 2.8 2.8L6.9 11.1a1 1 0 0 1-1.4-1.4l4.6-4.6"/></svg>',
+  trash: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.25h11M6.25 4.25v-2h3.5v2M3.75 4.25l.75 9.5h7l.75-9.5"/></svg>',
+  lock: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.25" y="7.25" width="9.5" height="6.5" rx="1.25"/><path d="M5.25 7.25V5a2.75 2.75 0 0 1 5.5 0v2.25"/></svg>',
+};
+
 // ── Toast ─────────────────────────────────────────────────────────────────
 let pasteToastTimer = null;
 function showToast(msg, kind) {

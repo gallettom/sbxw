@@ -284,7 +284,7 @@ function cdCurrent() {
 const cdAttachBtn = document.createElement('button');
 cdAttachBtn.type = 'button';
 cdAttachBtn.className = 'cd-to-pane cd-attach-btn';
-cdAttachBtn.textContent = '📎 Attach files';
+cdAttachBtn.innerHTML = `${ICON.clip} Attach files`;
 cdAttachBtn.title = 'Attach files to the next message (or drop them on this panel)';
 cdEl('cd-hint').before(cdAttachBtn);
 const cdAttach = chatAttachMount({ form: cdForm, panel: cdPanel, button: cdAttachBtn, current: cdCurrent, focus: () => cdInput.focus() });
@@ -296,7 +296,7 @@ async function cdSend(shown) {
   const chips = tray ? tray.take() : [];
   // The person's words first, then one fixed block of the daemon's paths.
   const text = chatWithAttachments(shown, chips.map(c => c.path));
-  const note = chips.length ? `${shown ? shown + '\n' : ''}📎 ${chips.map(c => chatShortName(c.name)).join(', ')}` : shown;
+  const note = chips.length ? `${shown ? shown + '\n' : ''}Attached: ${chips.map(c => chatShortName(c.name)).join(', ')}` : shown;
   if (target === null) {
     if (cdSendingNew) return; // one sandbox at a time
     cdSendingNew = text;

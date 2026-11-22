@@ -201,7 +201,7 @@ async function sendUpload() {
     // context. When the pane cannot take keys (held, covered, another session,
     // not connected) it shows the paths with a Copy button and returns false:
     // the toast must not say attached then.
-    if (paneTypePaths(pane, want, paths)) showToast('📎 ' + paths.join('  '), 'ok');
+    if (paneTypePaths(pane, want, paths)) showToast('Attached: ' + paths.join('  '), 'ok');
     else showToast('Uploaded; the paths are on the pane, not typed', 'error');
   } catch (e) {
     showToast(`Upload failed: ${e.message}`, 'error');
