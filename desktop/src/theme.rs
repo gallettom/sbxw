@@ -26,7 +26,7 @@ pub const DARK: &[(&str, u32)] = &[
     ("text-bright", 0xe6edf3), // headings, emphasized text
     ("text-muted", 0x9198a1),  // secondary text, field labels (web: #8b949e)
     ("text-soft", 0x9198a1),   // lead paragraphs
-    ("text-dim", 0x8b949e),    // placeholders and hints only, never information (web: #6e7681)
+    ("text-dim", 0x8e97a1),    // hints, ages, second labels: 4.5:1 on a selected row too (web: #6e7681)
     ("blue", 0x58a6ff),
     ("blue-tint", 0x0d1f3c),
     ("green", 0x3fb950),
@@ -146,7 +146,7 @@ pub const GRAPHITE: &[(&str, u32)] = &[
     ("text-bright", 0xf1f3f4),
     ("text-muted", 0xa3a9af),
     ("text-soft", 0xa3a9af),
-    ("text-dim", 0x9aa0a6),
+    ("text-dim", 0xa2a8ae),
     ("blue", 0x6cb0ff),
     ("blue-tint", 0x303742),
     ("green", 0x4cc35d),
@@ -359,28 +359,54 @@ pub const ON_LIGHT_GROUND: &[(&str, u32)] = &[
 /// each failed WCAG AA on a surface the desktop draws it on.
 pub const WEB_ADJUSTED: &[(&str, u32)] = &[("text-muted", 0x8b949e), ("text-dim", 0x6e7681)];
 
-/// Corner radii: 6 for controls (buttons, rows, chips), 10 for tiles, cards
-/// and menus, 12 for dialogs.
-pub const RADII: &[(&str, f32)] = &[("xs", 6.0), ("sm", 6.0), ("md", 10.0), ("lg", 12.0), ("pill", 999.0)];
+/// Corner radii, the names screens use: `mark` 2 for the 8 pt identity
+/// squares and hairline bars, `box` 4 for the small boxes inside a control
+/// (a checkbox, a keycap), 6 for controls (buttons, rows, chips), 10 for
+/// tiles, cards and menus, 12 for dialogs, `pill` for dots and chips. The
+/// core reads the same values from [`corner`].
+pub const RADII: &[(&str, f32)] = &[("mark", corner::MARK), ("box", corner::BOX), ("xs", corner::CONTROL), ("sm", corner::CONTROL), ("md", corner::TILE), ("lg", corner::DIALOG), ("pill", corner::PILL)];
+
+/// [`RADII`] for the core, by role.
+pub mod corner {
+    pub const MARK: f32 = 2.0;
+    pub const BOX: f32 = 4.0;
+
+    pub const CONTROL: f32 = 6.0;
+    pub const TILE: f32 = 10.0;
+    pub const DIALOG: f32 = 12.0;
+    pub const PILL: f32 = 999.0;
+}
 
 /// The type scale (pt). Nothing a person must read is under 12: `caption`
-/// 12 (second lines, labels, badges), `body` 13, `title` 14 (row names,
-/// panel titles), `heading` 16 (dialog titles). The older names stay for
-/// screens written against them: `xxs`, `xs` and `sm` are 12, `md` 13,
-/// `lg` 14, `xl` 16. Hierarchy comes from weight (400, 500, 600) and
-/// colour, never from capitals.
+/// 12 (second lines, labels, badges, counts), `body` 13 (macOS's own body),
+/// `title` 15 (row names, panel titles), `heading` 17 (dialog titles):
+/// steps of 1.154 and 1.133 above the body; caption to body stays 1.083,
+/// pinned by the 12 pt floor. The older names stay for screens written
+/// against them: `xxs`, `xs` and `sm` are 12, `md` 13, `lg` 15, `xl` 17.
+/// Hierarchy comes from weight (400, 500, 600) and colour, never from
+/// capitals. The core reads the same values from [`font_size`].
 pub const TEXT_SIZES: &[(&str, f32)] = &[
-    ("caption", 12.0),
-    ("body", 13.0),
-    ("title", 14.0),
-    ("heading", 16.0),
-    ("xxs", 12.0),
-    ("xs", 12.0),
-    ("sm", 12.0),
-    ("md", 13.0),
-    ("lg", 14.0),
-    ("xl", 16.0),
+    ("caption", font_size::CAPTION),
+    ("body", font_size::BODY),
+    ("title", font_size::TITLE),
+    ("heading", font_size::HEADING),
+    ("xxs", font_size::CAPTION),
+    ("xs", font_size::CAPTION),
+    ("sm", font_size::CAPTION),
+    ("md", font_size::BODY),
+    ("lg", font_size::TITLE),
+    ("xl", font_size::HEADING),
 ];
+
+/// [`TEXT_SIZES`] for the core.
+pub mod font_size {
+    pub const CAPTION: f32 = 12.0;
+    pub const BODY: f32 = 13.0;
+    pub const TITLE: f32 = 15.0;
+    pub const HEADING: f32 = 17.0;
+    /// Every size the core may set text at (terminals and pictures aside).
+    pub const ALL: &[f32] = &[CAPTION, BODY, TITLE, HEADING];
+}
 
 /// The chrome's icon sizes (pt), one optical system: `SMALL` inline with
 /// 12 to 13 pt text (a row's chevron, a badge's mark, a file in a list),
@@ -407,6 +433,73 @@ pub const SPACE: &[(&str, f32)] = &[("xxs", 2.0), ("xs", 4.0), ("sm", 8.0), ("md
 
 /// Every spacing value a built-in screen may write as a number.
 pub const GRID: &[f32] = &[0.0, 2.0, 4.0, 8.0, 12.0, 16.0, 24.0];
+
+/// [`SPACE`] for the core, plus the two insets inside a control that the
+/// grid has no step for, named so they stay the only ones.
+pub mod spacing {
+    pub const XXS: f32 = 2.0;
+    pub const XS: f32 = 4.0;
+    pub const SM: f32 = 8.0;
+    pub const MD: f32 = 12.0;
+    pub const LG: f32 = 16.0;
+    pub const XL: f32 = 24.0;
+    /// An icon to its label inside a control (a button, a menu's face, a
+    /// popover's line).
+    pub const INLINE: f32 = 6.0;
+    /// A badge's or a count's inset: 6 across, 1 above and below, so a
+    /// 12 pt label sits in an 18 pt chip.
+    pub const CHIP_X: f32 = 6.0;
+    pub const CHIP_Y: f32 = 1.0;
+}
+
+/// Elevation, as Rune's shadow `(offset y, blur)` in the theme's
+/// [`shadow`] colour: `RAISED` a switch's thumb, `FLOAT` the top bar's
+/// notice, `OVERLAY` menus, popovers, the palette and dialogs. Surfaces
+/// otherwise rise by lightness (`surface` over `bg`, `elevated` over
+/// `surface`), never by a shadow.
+pub mod elevation {
+    pub const RAISED: (f32, f32) = (1.0, 3.0);
+    pub const FLOAT: (f32, f32) = (2.0, 8.0);
+    pub const OVERLAY: (f32, f32) = (8.0, 24.0);
+}
+
+/// `e` lifted to `level` ([`elevation`]).
+pub fn lift(e: rune::El, level: (f32, f32)) -> rune::El {
+    e.lift(level)
+}
+
+/// [`lift`] as a method, for a builder chain: `.lift(elevation::OVERLAY)`.
+pub trait Lift {
+    fn lift(self, level: (f32, f32)) -> Self;
+}
+impl Lift for rune::El {
+    fn lift(self, level: (f32, f32)) -> Self {
+        self.shadow(level.0, level.1, shadow())
+    }
+}
+
+
+/// Motion: two durations (seconds), state and never decoration. `MICRO_IN`
+/// and `MICRO_OUT` a fade (menus, popovers, the palette), `SHORT`
+/// everything that moves (a fold, a switch's thumb, a picker's face, the
+/// status bar's progress). `SPIN` is the busy ring's one turn. Under the
+/// system's reduced motion every one of them lands at once.
+pub mod motion {
+    pub const MICRO_IN: f32 = 0.1;
+    pub const MICRO_OUT: f32 = 0.08;
+    pub const SHORT: f32 = 0.18;
+    pub const SPIN: f32 = 0.9;
+}
+
+/// The keyboard focus ring: 2 pt in `focus`, drawn `OUT` outside a control
+/// (the default), `NEAR` outside where neighbours sit close (the rail, a
+/// field's box), `IN` inside a row that fills its list's width (menu rows).
+pub mod focus {
+    pub const W: f32 = 2.0;
+    pub const OUT: f32 = 2.0;
+    pub const NEAR: f32 = 1.0;
+    pub const IN: f32 = -2.0;
+}
 
 /// Layout constants of the shell, from `app.css`.
 pub mod layout {
@@ -530,7 +623,7 @@ pub fn as_prose(t: rune::TextStyle) -> rune::TextStyle {
 /// numbers, badges, bars, labels and tooltips stay monospace (tooltips are
 /// Rune's, in the app's one UI face).
 pub fn prose(size: f32, weight: f32) -> rune::TextStyle {
-    as_prose(crate::screen::body(size.max(12.0), weight))
+    as_prose(crate::screen::body(size.max(font_size::CAPTION), weight))
 }
 
 /// A sandbox's group colour, as the web UI gives it (`assets/js/sandboxes.js`,
@@ -830,6 +923,11 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("text-dim", "bg", Need::Text),
     ("text-dim", "surface", Need::Text),
     ("text-dim", "elevated", Need::Text),
+    // A selected or hovered row's second line: a Kanban card's age and
+    // sandbox, a Board team's time, a kit's description, a Monitor row.
+    ("text-dim", "active-bg", Need::Text),
+    ("text-dim", "hover-subtle", Need::Text),
+    ("text-soft", "active-bg", Need::Text),
     // Tones as text: badges on their tint, coloured labels on surfaces.
     ("blue", "blue-tint", Need::Text),
     ("green", "green-tint", Need::Text),
@@ -1489,7 +1587,70 @@ mod tests {
         assert!(found.is_empty(), "literal colours outside theme.rs:\n{}", found.join("\n"));
     }
 
+    /// Sizes go through the tokens as colours do: in the core, no text size,
+    /// radius, shadow or motion duration written as a number (the type scale,
+    /// [`corner`], [`elevation`], [`motion`]); in the screens, no radius as a
+    /// number. Excepted, with why: approval.rs (its dialogs are not this
+    /// pass's to restyle), the canvas's zoom-scaled marks (a radius times
+    /// the zoom), tests, fixtures and tools.
+    #[test]
+    fn core_sizes_go_through_the_tokens() {
+        const ALLOWED: &[(&str, &str)] = &[
+            ("src/approval.rs", "the approval dialogs: proposed, not restyled"),
+            ("src/surface_canvas.rs", "radius(N * inv): marks drawn at the canvas's zoom"),
+        ];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let num = |rest: &str| rest.trim_start().chars().next().is_some_and(|c| c.is_ascii_digit() || c == '-');
+        let mut found = vec![];
+        let mut stack = vec![root.join("src"), root.join("screens")];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                let name = p.file_name().unwrap().to_string_lossy().to_string();
+                if rel == "src/theme.rs" || rel.starts_with("src/bin/") || name.contains("tests") || ALLOWED.iter().any(|(f, _)| *f == rel) {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&p).unwrap();
+                let (calls, comment): (&[&str], &str) = if rel.ends_with(".luau") {
+                    (&["radius = "], "--")
+                } else if rel.ends_with(".rs") {
+                    (&["body(", "prose(", "TextStyle::new(", ".radius(", ".shadow(", "Spring::new(", "rotation("], "//")
+                } else {
+                    continue;
+                };
+                let body = src.split("#[cfg(test)]\nmod tests").next().unwrap();
+                for (n, line) in body.lines().enumerate() {
+                    let code = line.split(comment).next().unwrap();
+                    for call in calls {
+                        let mut rest = code;
+                        while let Some(at) = rest.find(call) {
+                            let before = rest[..at].chars().last();
+                            rest = &rest[at + call.len()..];
+                            let word = !call.starts_with('.') && before.is_some_and(|c| c.is_alphanumeric() || c == '_');
+                            if !word && num(rest) {
+                                found.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(found.is_empty(), "sizes written as numbers outside theme.rs:\n{}", found.join("\n"));
+        // Every text size the core may set is on the scale, and the scale's
+        // steps above the body are 1.125 to 1.2.
+        for w in font_size::ALL.windows(2).skip(1) {
+            let r = w[1] / w[0];
+            assert!((1.125..=1.2).contains(&r), "type step {} -> {}: {r:.3}", w[0], w[1]);
+        }
+    }
+
     /// `0xRRGGBB` or `#rrggbb` (`#rrggbbaa` too) in a line of code.
+
     fn literal_colour(code: &str) -> bool {
         let b = code.as_bytes();
         let hex = |i: usize, n: usize| i + n <= b.len() && b[i..i + n].iter().all(u8::is_ascii_hexdigit) && (i + n == b.len() || !b[i + n].is_ascii_alphanumeric());

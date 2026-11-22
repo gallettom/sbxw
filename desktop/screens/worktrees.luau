@@ -24,7 +24,7 @@ local function graphview(sb, g, width)
   local y0 = Y(0)
   local strokes, dots, kids = {}, {}, {}
   local function hit(x, y, c, branch)
-    kids[#kids + 1] = column{ w = 16, h = 16, radius = 8, pin = { left = x - 8, top = y - 8 },
+    kids[#kids + 1] = column{ w = 16, h = 16, radius = "pill", pin = { left = x - 8, top = y - 8 },
       key = "worktrees-dot-" .. sb .. "-" .. (c.short or "?"), on = "commit", arg = { sandbox = sb, hash = c.sha, branch = branch }, hover = "hover-subtle",
       help = (c.short or "") .. " " .. (c.subject or "") .. " (open in Commits)" }
   end
@@ -140,7 +140,7 @@ return {
     for _, b in ipairs(ui.blocks or {}) do
       local blk = { gap = 2, w = "full", radius = "md", pad = 4, key = "worktrees-block-" .. b.sandbox, border = "elevated",
         row{ gap = 8, px = 4, h = 28,
-          column{ w = 8, h = 8, radius = 2, fill = b.color or "text-dim" },
+          column{ w = 8, h = 8, radius = "mark", fill = b.color or "text-dim" },
           text{ b.sandbox, size = "caption", weight = "semibold", color = "text-bright" },
           text{ tostring(#(b.rows or {})), size = "caption", color = "text-muted" },
         },

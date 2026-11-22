@@ -78,7 +78,7 @@ local function listing_head(ui)
   if not here then return false end
   local path = ui.tab == "files" and (ui.path or here.path) or here.path
   return row{ key = "files-listing-head", gap = 8, w = "full", px = 8, h = 28, radius = "xs", fill = "active-bg",
-    column{ pin = { left = 0, top = 4, bottom = 4 }, w = 2, radius = 1, fill = "accent" },
+    column{ pin = { left = 0, top = 4, bottom = 4 }, w = 2, radius = "mark", fill = "accent" },
     icon{ here.icon or "folder", size = 14, color = "accent" },
     text{ here.label, size = "sm", weight = "semibold", color = "text-bright", truncate = true },
     path and text{ path, size = "xs", mono = true, color = "text-muted", truncate = true, grow = 1, help = path } or spacer{},
@@ -122,7 +122,7 @@ local function locations(ui, narrow)
         key = x.thread and ("files-worktree-" .. x.thread) or ("files-loc-" .. x.id),
         on = x.thread and "worktree" or "place", arg = x.thread and { sandbox = ui.sandbox, thread = x.thread } or x.id,
         fill = here and "active-bg" or nil, hover = "hover-subtle", help = x.help, selected = here,
-        here and column{ pin = { left = 0, top = 3, bottom = 3 }, w = 2, radius = 1, fill = "accent" } or false,
+        here and column{ pin = { left = 0, top = 3, bottom = 3 }, w = 2, radius = "mark", fill = "accent" } or false,
         icon{ x.icon or "folder", size = 12, color = here and "accent" or loc_color(x) },
         text{ x.label, size = "sm", truncate = true, grow = 1, color = here and "text-bright" or "text" },
         here and icon{ "chevron-right", size = 12, color = "accent" } or false,

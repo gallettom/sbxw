@@ -8,6 +8,7 @@
 //! when nothing is left to show. Bounded: a long list scrolls inside.
 
 use super::{App, Pop, POP_W, TEXT};
+use crate::theme::Lift;
 use crate::feat::{create, Asked};
 use crate::intent::Intent;
 use crate::screen;
@@ -68,11 +69,11 @@ fn action(key: String, label: &str, icon: Option<&str>, tone: &str, press: impl 
         .label(label.to_string())
         .h(24.0)
         .px(8.0)
-        .gap(6.0)
+        .gap(crate::theme::spacing::INLINE)
         .items_center()
         .radius(theme::radius("xs").unwrap())
         .hover(tint)
-        .focus_ring(2.0, -2.0, c("focus"))
+        .focus_ring(crate::theme::focus::W, crate::theme::focus::IN, c("focus"))
         .cursor(Cursor::Pointer)
         .on_press(press);
     if let Some(i) = icon {
@@ -101,7 +102,7 @@ fn card(j: &J) -> El {
         .child(
             row()
                 .w_full()
-                .gap(6.0)
+                .gap(crate::theme::spacing::INLINE)
                 .items_center()
                 .child(rune::icon(crate::icons::get(icon).unwrap(), theme::icon::SMALL).color(c(tone)))
                 .child(text(name.clone()).font(screen::body(TEXT, 600.0)).color(c("text-bright")).truncate().min_w(0.0).grow(1.0))
@@ -123,14 +124,15 @@ fn card(j: &J) -> El {
             row()
                 .key(format!("job-{name}-step-{}", i + 1))
                 .w_full()
-                .gap(6.0)
+                .gap(crate::theme::spacing::INLINE)
                 .items_center()
                 .child(rune::icon(crate::icons::get(mark).unwrap(), theme::icon::SMALL).color(c(mc)))
                 .child(small(s["label"].as_str().unwrap_or(""), if st == "waiting" { "text-dim" } else { "text" }).truncate().min_w(0.0).grow(1.0)),
         );
         if let Some(d) = s["detail"].as_str() {
             // What sbx prints under the running step, its last line.
-            col = col.child(text(d.to_string()).font(screen::body(11.0, 400.0).mono()).color(c("text-muted")).truncate().min_w(0.0).pl(18.0).help(d.to_string()));
+            col = col.child(text(d.to_string()).font(screen::body(crate::theme::font_size::CAPTION, 400.0).mono()).color(c("text-muted")).truncate().min_w(0.0).pl(crate::theme::icon::SMALL + crate::theme::spacing::INLINE)
+.help(d.to_string()));
         }
     }
     if let Some(e) = j["error"].as_str() {
@@ -181,12 +183,12 @@ pub fn popover(s: &App) -> El {
         .anchored("status-jobs".to_string(), rune::Side::Top, rune::Align::Start, 6.0)
         .w(POP_W.min(s.window.0 - 16.0))
         .padding(12.0)
-        .gap(6.0)
+        .gap(crate::theme::spacing::INLINE)
         .fill(c("surface"))
         .border(1.0, c("border"))
         .radius(theme::radius("md").unwrap())
-        .shadow(8.0, 24.0, crate::theme::shadow())
-        .child(text(title).key("status-jobs-pop-title").font(screen::body(13.0, 600.0)).color(c("text-bright")))
+        .lift(crate::theme::elevation::OVERLAY)
+        .child(text(title).key("status-jobs-pop-title").font(screen::body(crate::theme::font_size::BODY, 600.0)).color(c("text-bright")))
         .child(rune::col().key("status-jobs-pop-list").w_full().max_h(max_h).scroll(rune::ScrollSpec { stick_bottom: false }).child(list));
     if !screen::reduced_motion() {
         surface = surface.transition(screen::quick_fade());

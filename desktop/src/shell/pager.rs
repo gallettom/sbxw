@@ -353,7 +353,7 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
         let last = t.parts.len() - 1;
         for (j, (name, lead)) in t.parts.iter().enumerate() {
             let shown = if j < last { format!("{name},") } else { name.clone() };
-            let mut part = row().gap(3.0).items_center();
+            let mut part = row().gap(theme::spacing::XS).items_center();
             if *lead {
                 part = part.child(crown(format!("page-{}-leader-{}", k + 1, j + 1)));
             }
@@ -376,7 +376,8 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
     }
     // Groups on the page besides the first one's: a small dot each.
     for g in t.others.iter().take(3) {
-        e = e.child(el().w(5.0).h(5.0).radius(2.5).fill(theme::hex(*g)));
+        e = e.child(el().w(5.0).h(5.0).radius(theme::corner::PILL).fill(theme::hex(*g)));
+
     }
     let help = if s.pages.list.len() > 1 { format!("Close page {} (its terminals' views close; the sessions go on)", k + 1) } else { "Close this page's terminals (the sessions go on)".to_string() };
     e.child(

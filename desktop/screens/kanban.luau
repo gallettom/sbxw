@@ -42,7 +42,7 @@ local function card(c, wide)
     fill = c.selected and "active-bg" or "surface", border = c.border or "elevated", hover = "hover-subtle",
     help = c.help,
     row{ gap = 8, w = "full",
-      c.team_color and column{ w = 8, h = 8, radius = 2, fill = c.team_color, help = c.team_help } or false,
+      c.team_color and column{ w = 8, h = 8, radius = "mark", fill = c.team_color, help = c.team_help } or false,
       text{ c.num or "", size = "xs", mono = true, color = c.thread_card and "text-dim" or "text-muted", help = c.thread_card and "A thread with no ticket: its plan's goal" or nil },
       c.sandbox_label and text{ c.sandbox_label, size = "xs", mono = true, color = "text-dim", truncate = true, max_w = 120 } or false,
       spacer{},

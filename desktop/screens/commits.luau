@@ -88,7 +88,7 @@ local function rowview(r)
     selected = r.selected == true, fill = (r.expanded or r.selected) and "active-bg" or nil, hover_group = true,
     help = r.expanded and "Fold it" or "Open it: its message and changed files",
     icon{ r.expanded and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
-    column{ w = 8, h = 8, radius = 2, fill = r.color or "text-dim", help = r.sandbox },
+    column{ w = 8, h = 8, radius = "mark", fill = r.color or "text-dim", help = r.sandbox },
     text{ r.sandbox or "", size = "xs", color = "text-muted", truncate = true, max_w = 120 },
     text{ r.short or "", size = "xs", mono = true, color = "text-muted" },
     text{ r.subject or "", size = "sm", color = "text-bright", truncate = true, grow = 1, min_w = 140, help = r.subject },

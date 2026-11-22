@@ -4,6 +4,7 @@
 //! slots).
 
 use super::App;
+use crate::theme::Lift;
 use crate::approval::{self, ConfirmAnswers};
 use crate::client::LinkEvent;
 use crate::feat::{self, Action, Asked, Call, Confirm, Ctx, Extra, Feature, Place, Slot};
@@ -835,7 +836,7 @@ impl App {
         // The title, then what the screen puts beside it (its sandbox picker:
         // `screen::TITLE_SLOT`), then the room, then the way out.
         // Whole when a slot follows it (the slot shrinks first); else it may truncate.
-        let t = text(title).font(crate::screen::body(14.0, 600.0)).color(c("text-bright"));
+        let t = text(title).font(crate::screen::body(crate::theme::font_size::TITLE, 600.0)).color(c("text-bright"));
         head = head.child(if slot.is_some() { t } else { t.truncate().min_w(0.0) });
         // A scope picker in the slot (scope.rs): the title reads as a phrase,
         // "Files in [web-app]", and the overlay's frame takes its colour.
@@ -844,7 +845,7 @@ impl App {
         if let Some(e) = slot {
             if scope.is_some() && self.rects.overlay.is_none_or(|r| r[2] >= crate::scope::PHRASE_MIN) {
                 let muted = frame.wash.map_or(c("text-muted"), |w| crate::theme::hex(crate::theme::muted_on(w)));
-                head = head.child(text("in").font(crate::screen::body(14.0, 400.0)).color(muted));
+                head = head.child(text("in").font(crate::screen::body(crate::theme::font_size::TITLE, 400.0)).color(muted));
             }
             // The slot gives way first when the row is short (its name clips).
             head = head.child(el().w(4.0)).child(if scope.is_some() { e.shrink() } else { e });
@@ -854,7 +855,7 @@ impl App {
         if !base {
             head = head
             // The hint only where there is room for it (the cross's tooltip says it too).
-            .children(self.rects.overlay.is_none_or(|r| r[2] >= OVERLAY_HINT_MIN).then(|| text("Esc closes").font(crate::screen::body(12.0, 400.0)).color(c("text-muted"))))
+            .children(self.rects.overlay.is_none_or(|r| r[2] >= OVERLAY_HINT_MIN).then(|| text("Esc closes").font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted"))))
             .child(
                 el().key("overlay-close")
                     .role("button")
@@ -1290,7 +1291,7 @@ impl App {
             .radius(radius("lg").unwrap())
             .fill(c("surface"))
             .border(1.0, c("border"))
-            .shadow(8.0, 24.0, crate::theme::shadow())
+            .lift(crate::theme::elevation::OVERLAY)
             // A press inside stays inside (it does not reach the scrim).
             .on_press(|_s: &mut App| {})
             .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| {
@@ -1360,7 +1361,7 @@ impl App {
             if let Some(i) = crate::icons::get(icon) {
                 tab = tab.child(rune::icon(i, crate::theme::icon::MEDIUM).color(c(if shown { "text-bright" } else { "text-muted" })));
             }
-            tab = tab.child(text(title).font(crate::screen::body(14.0, 600.0)).color(c(if shown { "text-bright" } else { "text-muted" })).truncate().min_w(0.0));
+            tab = tab.child(text(title).font(crate::screen::body(crate::theme::font_size::TITLE, 600.0)).color(c(if shown { "text-bright" } else { "text-muted" })).truncate().min_w(0.0));
             tabs = tabs.child(tab);
         }
         if names.len() > 1 {

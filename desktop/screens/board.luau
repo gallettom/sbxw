@@ -90,7 +90,7 @@ local function bubble_w() return math.max(120, math.min(BUBBLE_MAX, CONV_W - 24)
 local function team_tag(r)
   if not nz(r.team_label) then return false end
   return row{ gap = 4, max_w = math.max(80, math.min(240, CONV_W - 220)), help = r.team_help,
-    column{ w = 8, h = 8, radius = 2, fill = r.team_color or "text-dim" },
+    column{ w = 8, h = 8, radius = "mark", fill = r.team_color or "text-dim" },
     text{ r.team_label, size = "xs", mono = true, color = "text-muted", truncate = true },
   }
 end
@@ -107,7 +107,7 @@ local function author_line(r)
       text{ "You", size = "sm", weight = "semibold", color = "text-bright" } }
   end
   return row{ gap = 8, w = "full", key = "board-author-" .. (r.id or ""),
-    column{ w = 8, h = 8, radius = 4, fill = r.who_color or "text-dim" },
+    column{ w = 8, h = 8, radius = "pill", fill = r.who_color or "text-dim" },
     text{ r.who or "", size = "sm", mono = true, weight = "semibold", color = r.who_color or "text-bright", truncate = true, max_w = nw },
     nz(r.role) and badge{ r.role, tone = "purple", help = "The session that planned this team" } or false,
     nz(r.to) and text{ "to " .. r.to, size = "xs", color = "text-muted", truncate = true, max_w = nw } or false,
@@ -190,7 +190,7 @@ local function rowview(r, sb)
     local n = r.count or 1
     return row{ gap = 8, w = "full", px = 4, key = "board-msg-" .. (r.id or ""),
       help = n > 1 and (n .. " changes of state: " .. (r.trail or "") .. " (from " .. (r.first_when or "") .. ")") or nil,
-      column{ w = 8, h = 8, radius = 4, fill = r.who_color or "text-dim" },
+      column{ w = 8, h = 8, radius = "pill", fill = r.who_color or "text-dim" },
       text{ r.who or "", size = "sm", mono = true, color = r.who_color or "text-muted", truncate = true, max_w = math.max(60, math.min(260, CONV_W - 220)) },
       icon{ "chevron-right", size = 12, color = "text-dim" },
       badge{ r.state.word, tone = r.state.tone },
@@ -213,7 +213,7 @@ local function rowview(r, sb)
   elseif r.type == "card" then
     local chips = { gap = 4, wrap = true }
     for _, t in ipairs(r.threads or {}) do
-      chips[#chips + 1] = row{ gap = 4, px = 8, h = 24, radius = "pill", fill = "floor", column{ w = 8, h = 8, radius = 4, fill = t.color }, text{ t.name, size = "xs", mono = true, color = "text-bright" } }
+      chips[#chips + 1] = row{ gap = 4, px = 8, h = 24, radius = "pill", fill = "floor", column{ w = 8, h = 8, radius = "pill", fill = t.color }, text{ t.name, size = "xs", mono = true, color = "text-bright" } }
     end
     local kids = {
       row{ gap = 4, badge{ "Plan", tone = "purple" }, r.variant and text{ r.variant == "shared" and "one shared worktree" or "a worktree per thread", size = "xs", color = "text-muted" } or false },
@@ -273,7 +273,7 @@ local function rowview(r, sb)
       on = r.count > 1 and "expand" or "commit", arg = r.count > 1 and r.key or r.lines[1].hash, hover = "hover-subtle",
       help = r.count > 1 and (r.open and "Fold the commits" or "Show the commits") or "Open it in the Commits column",
       icon{ r.count > 1 and (r.open and "chevron-down" or "chevron-right") or "history", size = 12, color = "text-muted" },
-      column{ w = 8, h = 8, radius = 4, fill = r.who_color },
+      column{ w = 8, h = 8, radius = "pill", fill = r.who_color },
       r.count > 1 and text{ r.text, size = "sm", color = "text-bright", truncate = true, grow = 1 }
         or row{ gap = 8, grow = 1, min_w = 0, text{ r.lines[1].short or "", size = "xs", mono = true, color = "text-muted" }, text{ r.text or "", size = "sm", color = "text-bright", truncate = true, grow = 1 } },
       text{ "+" .. tostring(r.added or 0), size = "xs", mono = true, color = "green" },
@@ -337,7 +337,7 @@ local function picker_button(ui, s, ow, wide)
     row{ key = "board-row-picker", on = "picker", w = bw, h = 28, px = 12, gap = 8, radius = "pill", border = lk.border or "control-border", fill = lk.fill or "surface",
       -- No tooltip while its list is open: it would cover the first rows.
       help = (not p.open) and ((nz(summary) and summary or "Pick a team") .. " (pick another team)") or nil,
-      (s or not ui.all) and column{ w = 8, h = 8, radius = 2, fill = color or "text-dim", key = "board-team-color" } or icon{ "grid", size = 14, color = lk.muted or "text-muted", key = "board-team-color" },
+      (s or not ui.all) and column{ w = 8, h = 8, radius = "mark", fill = color or "text-dim", key = "board-team-color" } or icon{ "grid", size = 14, color = lk.muted or "text-muted", key = "board-team-color" },
       text{ names or "", size = "sm", weight = "medium", mono = true, color = lk.text or "text-bright", truncate = true, max_w = math.floor(bw * 0.55) },
       nz(summary) and wide and text{ summary, size = "xs", color = lk.muted or "text-muted", truncate = true, grow = 1 } or spacer{},
       icon{ "chevron-down", size = 12, color = lk.muted or "text-muted" } },
@@ -352,7 +352,7 @@ local function picker_row(t, i, p, mw)
   return column{ key = "board-row-team-" .. t.id, on = "team", arg = t.id, gap = 2, px = 8, py = 8, radius = "xs", w = "full",
     fill = (hl or current) and "active-bg" or nil, hover = "hover-subtle", selected = current, help = (shown and shown ~= t.summary) and t.summary or nil,
     row{ gap = 8, w = "full",
-      column{ w = 8, h = 8, radius = 2, fill = t.color or "text-dim" },
+      column{ w = 8, h = 8, radius = "mark", fill = t.color or "text-dim" },
       text{ t.names or "", size = "sm", mono = true, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
       current and icon{ "check", size = 12, color = "accent" } or false,
       nz(t.state) and badge{ t.state, tone = t.tone or "neutral" } or false,
@@ -629,7 +629,7 @@ local function commits_view(s)
   for _, p in ipairs(s.commits or {}) do
     local tot = p.totals or {}
     out[#out + 1] = row{ gap = 8, w = "full", py = 4, key = "board-commits-" .. p.thread,
-      column{ w = 8, h = 8, radius = 4, fill = p.color },
+      column{ w = 8, h = 8, radius = "pill", fill = p.color },
       text{ p.thread, size = "sm", weight = "semibold", color = p.color, truncate = true, max_w = 240 },
       text{ (tot.commits or 0) .. " commits · " .. (tot.files or 0) .. " files · +" .. (tot.added or 0) .. " -" .. (tot.removed or 0), size = "xs", color = "text-muted", truncate = true, grow = 1 },
       p.merged and badge{ "merged", tone = "green", help = "Merged into the main checkout's branch" } or false }

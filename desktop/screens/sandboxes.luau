@@ -146,7 +146,7 @@ local function status_dot(st, name)
   local hollow = st.shape == "hollow" or progress
   local c = (progress and "blue") or rail_fill[st.tone] or "text-muted"
   return row{ key = "dot-" .. name, w = 12, h = 20, align = "center", help = st.word,
-    column{ w = 8, h = 8, radius = 4, fill = (not hollow) and c or nil, border = hollow and c or nil } }
+    column{ w = 8, h = 8, radius = "pill", fill = (not hollow) and c or nil, border = hollow and c or nil } }
 end
 
 -- The rail: 3 pt, its shape says the state without colour.
@@ -154,24 +154,24 @@ local function rail(tone, shape, small)
   local c = rail_fill[tone] or "text-muted"
   local w = small and 2 or 3
   if shape == "hollow" then
-    return column{ w = w, h = "full", radius = 2, border = c }
+    return column{ w = w, h = "full", radius = "mark", border = c }
   end
   if shape == "dashed" then
     local segs = { w = w, h = "full", gap = 4 }
-    for _ = 1, small and 2 or 4 do table.insert(segs, column{ w = w, grow = 1, radius = 1, fill = c }) end
+    for _ = 1, small and 2 or 4 do table.insert(segs, column{ w = w, grow = 1, radius = "mark", fill = c }) end
     return column(segs)
   end
   if shape == "broken" then
     return column{ w = w, h = "full", gap = small and 4 or 8,
-      column{ w = w, grow = 1, radius = 1, fill = c }, column{ w = w, grow = 1, radius = 1, fill = c } }
+      column{ w = w, grow = 1, radius = "mark", fill = c }, column{ w = w, grow = 1, radius = "mark", fill = c } }
   end
   if shape == "notch" then
     -- A tab into the row at mid height: amber AND a shape no other state has.
     return row{ h = "full", gap = 0, align = "center",
-      column{ w = w, h = "full", radius = 1, fill = c },
+      column{ w = w, h = "full", radius = "mark", fill = c },
       column{ w = 4, h = small and 8 or 14, fill = c } }
   end
-  return column{ w = w, h = "full", radius = 2, fill = c }
+  return column{ w = w, h = "full", radius = "mark", fill = c }
 end
 
 -- About how wide a text is at 12 pt: the UI is monospace, 0.6 em a character.
@@ -812,7 +812,7 @@ return {
         stack.w = nil
         stack.grow = 1
         table.insert(blk, row{ key = "sb-row-" .. sb.name, w = "full", gap = 2, align = "stretch",
-          column{ key = multi and ("sb-bar-" .. sb.name) or nil, w = 2, radius = 1, fill = multi and (gc or "text-muted") or nil },
+          column{ key = multi and ("sb-bar-" .. sb.name) or nil, w = 2, radius = "mark", fill = multi and (gc or "text-muted") or nil },
           column(stack) })
       else
         table.insert(blk, column(stack))
@@ -855,7 +855,7 @@ return {
           row{ key = "group-" .. gk, on = "toggle_group", arg = gk, h = 28, gap = 8, w = "full", px = 4, radius = "sm", hover_zone = "group:" .. gk,
             hover = gc and look.hover or "hover-subtle", help = (closed and "Show " or "Hide ") .. (g.help or g.label),
             icon{ closed and "chevron-right" or "chevron-down", size = 12, color = "text-muted" },
-            gc and column{ w = 8, h = 8, radius = 2, fill = gc } or false,
+            gc and column{ w = 8, h = 8, radius = "mark", fill = gc } or false,
             text{ g.label, size = "caption", weight = "semibold", color = gc and look.label or "text-muted", truncate = true },
             text{ tostring(#g.items), size = "caption", color = gc and look.label or "text-muted" },
             spacer{},

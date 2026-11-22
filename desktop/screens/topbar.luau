@@ -186,7 +186,7 @@ return {
         -- right after the chevron.
         (not compact) and row{ key = "app-mark", h = 28, gap = 2, align = "center", help = "sbxw",
           column{ w = 13, h = 28, align = "start", justify = "center", icon{ "logo-mark", size = 24, color = "green" } },
-          column{ w = 10, h = 28, justify = "end", py = 8, column{ w = 10, h = 3, radius = 1.5, fill = "blue" } },
+          column{ w = 10, h = 28, justify = "end", py = 8, column{ w = 10, h = 3, radius = "mark", fill = "blue" } },
         } or false,
         modes(app, compact),
       },

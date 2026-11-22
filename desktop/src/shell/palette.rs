@@ -13,6 +13,7 @@
 //! chords are too. Push-to-talk and F7 stay Jarvis's (jarvis.rs).
 
 use super::*;
+use crate::theme::Lift;
 use crate::feat;
 use rune::TextEdit;
 
@@ -399,7 +400,7 @@ pub fn view(s: &App) -> Option<El> {
     let sel = p.sel.min(shown.len().saturating_sub(1));
     let w = 560.0f32.min(s.window.0 - 32.0);
     let side = ((s.window.0 - w) / 2.0).max(16.0);
-    let input = rune::text_input(&p.edit, crate::screen::body(14.0, 400.0))
+    let input = rune::text_input(&p.edit, crate::screen::body(crate::theme::font_size::TITLE, 400.0))
         .single_line()
         .key("palette-input")
         .label("Command palette: type to filter")
@@ -445,7 +446,7 @@ pub fn view(s: &App) -> Option<El> {
         .child(input);
     let mut list = col().key("palette-list").role("listbox").w_full().gap(2.0).padding(8.0);
     if shown.is_empty() {
-        list = list.child(text(format!("Nothing matches “{}”.", p.edit.text)).font(crate::screen::body(13.0, 400.0)).color(c("text-muted")).wrap());
+        list = list.child(text(format!("Nothing matches “{}”.", p.edit.text)).font(crate::screen::body(crate::theme::font_size::BODY, 400.0)).color(c("text-muted")).wrap());
     }
     for (i, cmd) in shown.iter().enumerate() {
         let on = i == sel;
@@ -469,11 +470,12 @@ pub fn view(s: &App) -> Option<El> {
             Some(ic) => rune::icon(ic, crate::theme::icon::MEDIUM).color(c(if on { "text-bright" } else { "text-muted" })),
             None => el().w(16.0),
         });
-        r = r.child(text(cmd.label.clone()).font(crate::screen::body(13.0, 500.0)).color(c("text-bright")).truncate().min_w(0.0));
-        r = r.child(text(cmd.hint.clone()).font(crate::screen::body(12.0, 400.0)).color(c("text-muted")).truncate().grow(1.0).min_w(0.0));
+        r = r.child(text(cmd.label.clone()).font(crate::screen::body(crate::theme::font_size::BODY, 500.0)).color(c("text-bright")).truncate().min_w(0.0));
+        r = r.child(text(cmd.hint.clone()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).truncate().grow(1.0).min_w(0.0));
         let mut caps = row().gap(4.0).items_center();
         for k in &cmd.keys {
-            caps = caps.child(el().px(6.0).h(20.0).items_center().radius(4.0).fill(c("surface-alt")).border(1.0, c("border")).child(text(k.clone()).font(crate::screen::body(12.0, 500.0)).color(c("text"))));
+            caps = caps.child(el().px(crate::theme::spacing::CHIP_X).h(20.0).items_center().radius(crate::theme::corner::BOX)
+.fill(c("surface-alt")).border(1.0, c("border")).child(text(k.clone()).font(crate::screen::body(crate::theme::font_size::CAPTION, 500.0)).color(c("text"))));
         }
         list = list.child(r.child(caps));
     }
@@ -482,7 +484,7 @@ pub fn view(s: &App) -> Option<El> {
         .px(16.0)
         .h(32.0)
         .items_center()
-        .child(text("↑ ↓ to move · Enter to run · Esc to close").font(crate::screen::body(12.0, 400.0)).color(c("text-muted")));
+        .child(text("↑ ↓ to move · Enter to run · Esc to close").font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")));
     let card = col()
         .key("palette")
         .role("dialog")
@@ -492,7 +494,7 @@ pub fn view(s: &App) -> Option<El> {
         .fill(c("surface"))
         .border(1.0, c("border"))
         .radius(theme::radius("lg").unwrap())
-        .shadow(8.0, 24.0, crate::theme::shadow())
+        .lift(crate::theme::elevation::OVERLAY)
         .on_press(|_s: &mut App| {})
         .child(field)
         .child(el().h(1.0).w_full().fill(c("elevated")))
