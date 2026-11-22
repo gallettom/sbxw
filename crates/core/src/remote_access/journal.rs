@@ -57,6 +57,13 @@ pub enum Kind {
     /// Apple said the subscription is gone (404, 410) or the sidecar refused
     /// it: deleted.
     PushGone,
+    // Canvas (API-canvas.md). Never a title, a remark's text or a file name.
+    /// A canvas's manifest read from the phone.
+    CanvasRead,
+    /// A pin or a note added, changed or removed in a canvas's draft.
+    CanvasRemark,
+    /// A round of remarks sent from the phone.
+    CanvasSubmit,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -110,6 +117,11 @@ mod tests {
         let up = Entry { at_ms: 9, device_id: "d".into(), device_name: "n".into(), kind: Kind::Upload, size: Some(super::super::uploads::SizeClass::Over10Mb), target: None };
         assert_eq!(to_lines(std::slice::from_ref(&up)), "{\"at_ms\":9,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"upload\",\"size\":\"over_10mb\"}\n");
         assert_eq!(parse_lines(&to_lines(std::slice::from_ref(&up))), [up]);
+        let c = Entry { at_ms: 1, device_id: "d".into(), device_name: "n".into(), kind: Kind::CanvasSubmit, size: None, target: None };
+        assert_eq!(to_lines(std::slice::from_ref(&c)), "{\"at_ms\":1,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"canvas_submit\"}\n");
+        for (k, w) in [(Kind::CanvasRead, "\"canvas_read\""), (Kind::CanvasRemark, "\"canvas_remark\"")] {
+            assert_eq!(serde_json::to_string(&k).unwrap(), w);
+        }
         assert_eq!(parse_lines(&format!("{text}garbage\n{{\"at_ms\":1,\"device_id\":\"d\",\"device_name\":\"n\",\"kind\":\"message\",\"text\":\"x\"}}\n")).len(), 2, "no extra field is read back");
     }
 }

@@ -1,5 +1,5 @@
 // The service worker (assets/remote/sw.js): a notification for every push,
-// only ever one of three fixed French texts or one naming the sandbox; the badge set, cleared, and
+// only ever one of the fixed French texts or one naming the sandbox; the badge set, cleared, and
 // never in the way; and no way for the worker to read or send data.
 // Run: node --test tests/js/push-sw.test.mjs
 import { test } from 'node:test';
@@ -8,9 +8,9 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const src = readFileSync(new URL('../../assets/remote/sw.js', import.meta.url), 'utf8');
-const TEXTS = new Set(['Un plan vous attend', 'Un merge vous attend', 'Un agent a besoin de vous', 'Quelque chose vous attend']);
+const TEXTS = new Set(['Un plan vous attend', 'Un merge vous attend', 'Un agent a besoin de vous', 'De nouvelles captures vous attendent', 'Quelque chose vous attend']);
 // A shown text: a fixed one, or one of the three that name a sandbox.
-const NAMED = /^(?:Un (?:plan|merge) vous attend dans [A-Za-z0-9-]{1,63}|(?:Team leader )?[A-Za-z0-9-]{1,63} a besoin de vous)$/;
+const NAMED = /^(?:Un (?:plan|merge) vous attend dans [A-Za-z0-9-]{1,63}|De nouvelles captures vous attendent dans [A-Za-z0-9-]{1,63}|(?:Team leader )?[A-Za-z0-9-]{1,63} a besoin de vous)$/;
 const shownOk = t => TEXTS.has(t) || NAMED.test(t);
 
 // A worker world: records every notification, badge call and window action.
@@ -110,6 +110,13 @@ test('the text names the sandbox: a team leader, a sandbox, a plan', async () =>
     [{ kind: 'p', badge: 1, name: ['sbxw-2'] }, 'Un plan vous attend'],
     [{ kind: 'p', badge: 1, name: 7 }, 'Un plan vous attend'],
     [{ kind: 'n', badge: 1, name: 'sbxw-2', lead: 'true' }, 'sbxw-2 a besoin de vous'],
+    [{ kind: 'c', badge: 1, name: 'sbxw-2', lead: true }, 'De nouvelles captures vous attendent dans sbxw-2'],
+    [{ kind: 'c', badge: 0, name: 'web', lead: false }, 'De nouvelles captures vous attendent dans web'],
+    [{ kind: 'c', badge: 1, name: '' }, 'De nouvelles captures vous attendent'],
+    [{ kind: 'c', badge: 1 }, 'De nouvelles captures vous attendent'],
+    [{ kind: 'c', badge: 1, name: '<b>x</b>' }, 'De nouvelles captures vous attendent'],
+    [{ kind: 'c', badge: 1, name: 'x'.repeat(64) }, 'De nouvelles captures vous attendent'],
+    [{ kind: 'C', badge: 1, name: 'sbxw-2' }, 'Quelque chose vous attend'],
     [{ kind: 'x', badge: 1, name: 'sbxw-2', lead: true }, 'Quelque chose vous attend'],
   ];
   for (const [payload, want] of cases) {

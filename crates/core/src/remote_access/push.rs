@@ -246,7 +246,7 @@ impl PushFile {
 }
 
 /// What a push says, as the worker reads it: `p` a plan waits, `m` a merge
-/// waits, `n` a session needs the person.
+/// waits, `n` a session needs the person, `c` new shots wait on a canvas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub enum PushKind {
     #[serde(rename = "p")]
@@ -255,6 +255,8 @@ pub enum PushKind {
     Merge,
     #[serde(rename = "n")]
     Needs,
+    #[serde(rename = "c")]
+    Canvas,
 }
 
 impl PushKind {
@@ -263,6 +265,7 @@ impl PushKind {
             PushKind::Plan => "p",
             PushKind::Merge => "m",
             PushKind::Needs => "n",
+            PushKind::Canvas => "c",
         }
     }
 }
@@ -390,6 +393,9 @@ pub struct Waiting {
 #[derive(Debug, Default)]
 pub struct Edges {
     seen: Option<(BTreeMap<String, Asking>, BTreeMap<String, Waiting>)>,
+    /// Rounds of shots per sandbox (every canvas's, reachable or not), as
+    /// last seen; `None` before the first look.
+    rounds: Option<BTreeMap<String, usize>>,
 }
 
 impl Edges {
@@ -415,6 +421,24 @@ impl Edges {
         }
         self.seen = Some((asking, waiting));
         out
+    }
+
+    /// `c`: a sandbox the phone reaches has more rounds of shots than at the
+    /// last look (an agent posted a new round). `rounds` counts the rounds
+    /// of every canvas per sandbox, reachable or not, so a sandbox that
+    /// becomes reachable later does not push for rounds it already had;
+    /// `reachable` names those the phone reaches (and whether each leads a
+    /// team). The first look sets the baseline and pushes nothing; fewer
+    /// rounds (a canvas deleted) push nothing.
+    pub fn shots(&mut self, rounds: BTreeMap<String, usize>, reachable: &BTreeMap<String, bool>) -> Option<Fire> {
+        let fire = self.rounds.as_ref().and_then(|was| {
+            rounds
+                .iter()
+                .find(|(s, n)| **n > was.get(*s).copied().unwrap_or(0) && reachable.contains_key(*s))
+                .map(|(s, _)| Fire { kind: PushKind::Canvas, name: push_name(s), lead: reachable.get(s).copied().unwrap_or(false) })
+        });
+        self.rounds = Some(rounds);
+        fire
     }
 }
 
@@ -635,6 +659,27 @@ mod tests {
         assert!(l.take("d", PushKind::Plan, 0));
         assert!(l.take("d", PushKind::Merge, 1), "m has its own 2 minute bucket");
         assert!(!l.take("d", PushKind::Merge, 2));
+    }
+
+    #[test]
+    fn a_new_round_of_shots_fires_c_for_a_reachable_sandbox_only() {
+        let r = |v: &[(&str, usize)]| v.iter().map(|(s, n)| (s.to_string(), *n)).collect::<BTreeMap<_, _>>();
+        let reach = |v: &[(&str, bool)]| v.iter().map(|(s, l)| (s.to_string(), *l)).collect::<BTreeMap<_, _>>();
+        let mut e = Edges::default();
+        assert_eq!(e.shots(r(&[("a", 2)]), &reach(&[("a", false)])), None, "the baseline pushes nothing");
+        assert_eq!(e.shots(r(&[("a", 2)]), &reach(&[("a", false)])), None, "nothing new");
+        assert_eq!(e.shots(r(&[("a", 3)]), &reach(&[("a", true)])), Some(Fire { kind: PushKind::Canvas, name: "a".into(), lead: true }));
+        assert_eq!(e.shots(r(&[("a", 3), ("hidden", 1)]), &reach(&[("a", false)])), None, "a sandbox the phone does not reach");
+        assert_eq!(e.shots(r(&[("a", 3), ("hidden", 1)]), &reach(&[("a", false), ("hidden", false)])), None, "reachable later: its old round is no news");
+        assert_eq!(e.shots(r(&[("a", 1), ("hidden", 1)]), &reach(&[("a", false)])), None, "a canvas deleted");
+        assert_eq!(e.shots(r(&[("a", 1), ("mini~b", 1)]), &reach(&[("mini~b", false)])), Some(Fire { kind: PushKind::Canvas, name: "b".into(), lead: false }), "a first canvas");
+        assert_eq!(PushKind::Canvas.letter(), "c");
+        assert_eq!(serde_json::to_string(&PushKind::Canvas).unwrap(), "\"c\"");
+        let mut l = Limits::default();
+        assert!(l.take("d", PushKind::Needs, 0));
+        assert!(l.take("d", PushKind::Canvas, 1), "c has its own 2 minute bucket");
+        assert!(!l.take("d", PushKind::Canvas, 2));
+        assert!(l.take("d", PushKind::Canvas, 2 + PER_KIND_MS));
     }
 
     #[test]
