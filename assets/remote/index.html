@@ -54,10 +54,9 @@
     <p id="subtitle" class="rc-sub"></p>
     <span id="state" class="rc-pill" hidden></span>
   </div>
-  <button id="interrupt" class="rc-chip-btn rc-chip-danger" type="button" hidden>
-    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
-    <span>Interrupt</span>
-  </button>
+  <!-- Interrupt: a round red button with a white square, only while the
+       leader works; the first tap opens the strip below, never sends. -->
+  <button id="interrupt" class="rc-stop-btn" type="button" aria-label="Interrupt" aria-controls="confirm" aria-expanded="false" hidden></button>
   <button id="approvals-btn" class="rc-icon-btn rc-ap-btn" type="button" aria-label="Approvals" hidden>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 5 6.2v5.3c0 4.3 2.9 7.6 7 9 4.1-1.4 7-4.7 7-9V6.2z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>
     <span id="badge" class="rc-badge" hidden></span>
@@ -70,9 +69,9 @@
 
 <!-- Interrupt's second tap: one Escape into the session, only from here. -->
 <div id="confirm" class="rc-confirm" role="alertdialog" aria-labelledby="confirm-text" hidden>
-  <p id="confirm-text" class="rc-confirm-text"></p>
+  <p id="confirm-text" class="rc-confirm-text"><span>Interrupt </span><span id="confirm-name" class="rc-confirm-name"></span><span>?</span></p>
   <button id="interrupt-cancel" class="rc-btn rc-quiet" type="button">Cancel</button>
-  <button id="interrupt-go" class="rc-btn rc-danger-solid" type="button">Interrupt</button>
+  <button id="interrupt-go" class="rc-btn rc-danger-solid rc-confirm-go" type="button"><span class="rc-stop-sq" aria-hidden="true"></span>Interrupt</button>
 </div>
 
 <div id="menu" class="rc-menu" role="menu" hidden>
