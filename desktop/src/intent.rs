@@ -219,6 +219,12 @@ pub struct Spec {
     pub doc: &'static str,
 }
 
+/// A [`Spec`] of risk [`Risk::Direct`]: the features' intent lists build
+/// theirs with it (`use crate::intent::direct as d`).
+pub const fn direct(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: &'static str) -> Spec {
+    Spec { name, risk: Risk::Direct, args, doc }
+}
+
 const MODES: &[&str] = &["agent", "bash", "kit-add"];
 
 /// The closed list. Widening it later is a row here plus the variant and its

@@ -32,9 +32,7 @@ pub const FEATURE: Feature = Feature {
     ..Feature::EMPTY
 };
 
-const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: &'static str) -> Spec {
-    Spec { name, risk: Risk::Direct, args, doc }
-}
+use crate::intent::direct as d;
 const fn a(name: &'static str, asks: &'static str, args: &'static [(&'static str, Arg, bool)], doc: &'static str) -> Spec {
     Spec { name, risk: Risk::Approval(asks), args, doc }
 }

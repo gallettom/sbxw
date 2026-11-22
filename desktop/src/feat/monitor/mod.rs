@@ -61,9 +61,7 @@ pub const FEATURE: Feature = Feature {
     ..Feature::EMPTY
 };
 
-const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: &'static str) -> Spec {
-    Spec { name, risk: Risk::Direct, args, doc }
-}
+use crate::intent::direct as d;
 
 pub const INTENTS: &[Spec] = &[
     d("monitor_open", &[], "Makes Sessions the base view of the pane area (instead of the terminals): every session, who needs you first, read again from the daemon's list. An overlay over it closes."),

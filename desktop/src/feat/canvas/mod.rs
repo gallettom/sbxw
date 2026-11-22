@@ -76,9 +76,7 @@ const KEYS: &[&str] = &["type", "backspace", "escape", "up", "down", "enter", "l
 const OLDER: &[&str] = &["7", "30", "90"];
 const TABS: &[&str] = &["canvas", "remarks"];
 
-const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: &'static str) -> Spec {
-    Spec { name, risk: Risk::Direct, args, doc }
-}
+use crate::intent::direct as d;
 
 pub const INTENTS: &[Spec] = &[
     d("canvas_show", &[("sandbox", Arg::Text, false), ("canvas", Arg::Str, false)], "Opens the Canvas over the panes: the shots an agent added of the screens it works on, to review with pins, notes and example pictures. On that sandbox's latest canvas, or that canvas."),
