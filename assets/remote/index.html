@@ -28,8 +28,18 @@
 <!-- Another view of this device holds the live stream: one tap takes it back. -->
 <button id="elsewhere" class="rc-banner rc-banner-btn" type="button" hidden>This page is open elsewhere on this device. Tap to reconnect here.</button>
 
+<!-- Approvals kind icons (stroke style of the page's icons): plan checklist, merge, network globe, stopped box. -->
+<svg class="rc-sprite" width="0" height="0" aria-hidden="true" focusable="false">
+  <symbol id="ap-i-plans" viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M3.5 6l1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5L7.5 17"/></symbol>
+  <symbol id="ap-i-merges" viewBox="0 0 24 24"><circle cx="6" cy="5.5" r="2"/><circle cx="6" cy="18.5" r="2"/><circle cx="18" cy="14" r="2"/><path d="M6 8v8M6 8c0 4 12 1.5 12 4"/></symbol>
+  <symbol id="ap-i-network" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></symbol>
+  <symbol id="ap-i-stopped" viewBox="0 0 24 24"><path d="M4 7.5h16M9.5 7.5V5h5v2.5M6 7.5l1 12h10l1-12M10 11v5M14 11v5"/></symbol>
+  <symbol id="ap-i-neutral" viewBox="0 0 24 24"><path d="M5 7l7-3.5L19 7v10l-7 3.5L5 17zM5 7l7 3.5L19 7M12 10.5v10"/></symbol>
+</svg>
+
 <!-- A plan or merge went up: one toast, a tap opens Approvals on its sandbox. -->
 <div id="ap-toast" class="rc-toast" role="status" hidden>
+  <span id="ap-toast-ic" class="rc-ktile" aria-hidden="true"></span>
   <button id="ap-toast-go" class="rc-toast-go" type="button"><span id="ap-toast-text"></span><span id="ap-toast-sb" class="rc-toast-sb" hidden></span></button>
   <button id="ap-toast-x" class="rc-toast-x" type="button" aria-label="Dismiss">&times;</button>
 </div>
