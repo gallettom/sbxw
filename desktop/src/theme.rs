@@ -1590,13 +1590,12 @@ mod tests {
     /// Sizes go through the tokens as colours do: in the core, no text size,
     /// radius, shadow or motion duration written as a number (the type scale,
     /// [`corner`], [`elevation`], [`motion`]); in the screens, no radius as a
-    /// number. Excepted, with why: approval.rs (its dialogs are not this
-    /// pass's to restyle), the canvas's zoom-scaled marks (a radius times
-    /// the zoom), tests, fixtures and tools.
+    /// number. Excepted, with why: the canvas's zoom-scaled marks (a radius
+    /// times the zoom), tests, fixtures and tools.
     #[test]
     fn core_sizes_go_through_the_tokens() {
         const ALLOWED: &[(&str, &str)] = &[
-            ("src/approval.rs", "the approval dialogs: proposed, not restyled"),
+
             ("src/surface_canvas.rs", "radius(N * inv): marks drawn at the canvas's zoom"),
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
