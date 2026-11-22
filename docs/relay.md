@@ -157,6 +157,28 @@ one fixed line: `[sbxw canvas · c-…] review round 1 is ready: run
 canvas_read to read the person's remarks`. A session started before this
 version has no `canvas_read` until `sbxw up <sandbox>`.
 
+**Where a shot comes from.** `canvas_add_shots` reads a file inside the
+sandbox, so every source must leave a PNG, JPEG or WebP on the sandbox's
+disk first. Each of these does:
+
+| Source | How the agent gets a file | `width` to give |
+|---|---|---|
+| The sandbox's shared browser (the one the person watches in the Browser panel) | `node ~/.sbxw/browser/browser.mjs viewport mobile` (or `tablet`, `desktop`, `<w>x<h>`), `open <url>`, then `shot /tmp/shots/home.png`: Chromium's `Page.captureScreenshot`, written as a PNG at that path. With Playwright over `http://127.0.0.1:9222`, `page.screenshot({ path })` does the same. | the viewport's width (390, 820, 1280 or the `<w>` given) |
+| A headless Chromium of the agent's own | The same Chromium binary (`agent-skills` kit). The kit's hook refuses a one-off launch once and points to the shared browser, which the person can watch: use the shared one. `SBXW_OWN_BROWSER=1` lets a project's own runner (a Playwright test with `screenshot: 'on'`) write its files, which can then be posted. | the test's viewport width |
+| The virtual Mac | `mac_screenshot` (or `screenshot: true` on another `mac_*` call): the relay server saves the PNG it shows the agent as `.sbxw-artifacts/mac-shots/mac-<time>.png` in the workspace (else `~/.sbxw/shots/`), and says the path in its answer. The newest 40 are kept, so post them before taking many more. | none: it is the whole Mac screen, not a page, and the canvas sizes it by its pixels |
+
+So an agent never needs a picture it can only see: the shared browser and
+the Mac both leave a file, and a test runner's output is a file already.
+Without the `agent-skills` kit there is no Chromium in the sandbox, and
+without `sbxw:terminal-mac` no `mac_*` tool: then only files the project
+makes itself can be posted.
+
+**On the phone.** A paired phone (see [security](security.md#remote-access))
+sees the canvases of every sandbox it reaches, one shot per page, adds pins
+and notes on shots and sends the round: sbxw types the same fixed line. It
+gets a notification when an agent posts a new round. The phone does not add
+example pictures; a round with pictures added on the Mac is sent from the Mac.
+
 ## Virtual Mac requests
 
 With the [`sbxw:terminal-mac`](../assets/terminal-mac/README.md) kit, a
