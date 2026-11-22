@@ -417,7 +417,7 @@ does the same as a revoke.
 | Invoke a skill: the phone sends a name from your `phone_skills` setting and optional plain text; the daemon types `/<name> <text>` (the text is checked and masked like a message, one line; an idle prompt only) | Send any other `/` line: the skill route takes a name of that closed list and nothing else |
 | Turn lead mode on (the daemon types `/lead` and installs the lead's tools, idle prompt only, one confirming tap) or off, for a sandbox it reaches | |
 | Write a ticket on a leader's Kanban (title and description, masked by your anonymise rules; up to 5 files the phone uploaded for that leader, under the message limits; it lands in Planned) | Move, edit, delete or send a ticket, or attach a file to an existing one from the phone |
-| Dictate (the Mac transcribes; the text comes back to the phone to correct) | Touch secrets, the GitHub token, network rules, ports, kits, MCP servers, configuration, the relay, Jarvis, the daemon |
+| Dictate (the Mac transcribes; the text comes back to the phone to correct) | Touch secrets, the GitHub token, network rules (except what answering a pending network request with sbx's Allow may leave, with Face ID at level 2), ports, kits, MCP servers, configuration, the relay, Jarvis, the daemon |
 | Hand a file to a leader (a photo, a PDF, a text): up to 25 MB each, at most 5 waiting (60 MB together) per leader; it reaches the sandbox only with a message you send, under `/tmp/sbxw-uploads/`; an unsent one is deleted after 30 minutes (see "What a file can do") | Send a program or an archive (refused by their first bytes); read a file back, list the uploads folder or learn any path; hand a file to anything but a running team leader; have a file typed or opened by the upload itself |
 
 These limits are enforced by the daemon, not by the page: the routes for everything in
@@ -723,8 +723,10 @@ a standalone app named sbxw.
   assertion still go as soon as the sheet closes or the page hides.
   A detail shows its item as text (a plan's threads with long goals folded, a merge's
   branches with tips, commits and files as numbers and paths and never a diff, a network
-  request with only the options the daemon lists and "Allowing this needs your Mac", a
-  stopped sandbox with the daemon's own confirmation sentences). Every decision opens a
+  request with every option sbx offers and what each does, an option that may leave a
+  lasting rule flagged, a stopped sandbox with the daemon's own confirmation sentences). A
+  plan's detail has a model select per thread, on the proposed model, listing the
+  configured models. Every decision opens a
   sheet that says in one line what will happen to what; only its button asks the Mac for a
   challenge bound to the item's digest, runs `navigator.credentials.get` (user
   verification required, this device's credential only) and posts the assertion. Refuse
@@ -789,15 +791,18 @@ the Mac, and turned off with remote access. Contract:
 
 | Action | What the phone shows before you decide | What runs |
 |---|---|---|
-| Approve or refuse a plan, as it is | its sandbox, summary, justification, variant, and each thread's name, model, repo, scope, whole goal and ticket | the desktop's approve (the plan's own threads, nothing edited) or refuse (no note) |
+| Approve or refuse a plan, as it is or with a thread's model changed | its sandbox, summary, justification, variant, and each thread's name, model, repo, scope, whole goal and ticket; a model select per thread (the configured list, `models` in `sbxw.toml`) | the desktop's approve (the plan's own threads, only the models you chose changed) or refuse (no note) |
 | Run a merge a lead proposed | the sandbox, the order, the lead's note and distillate, and per branch its tip, commits ahead of the base, files changed with insertions and deletions (numbers and paths, never diff content), and whether an earlier try of this merge failed on it | the web UI's default merge: same order, stops at the first conflict, the merged threads closed (branch and all), the distillate as proposed (it is part of what Face ID covers, so it cannot change between view and approval); and each branch merged as the exact commit shown, checked again just before its merge: a branch or base that moved stops the merge as "changed" |
-| Answer a pending network request | the sandbox, the host and port, sbx's detail, the options the phone may use and those it may not | sbx's own answer, with one of that request's options |
+| Answer a pending network request | the sandbox, the host and port, sbx's detail, every option sbx offers with what it does, and a flag on an option that may leave a lasting rule ("Lasting: Allow may add a network rule to sbxw-2 that stays until you remove it on your Mac") | sbx's own answer, with one of that request's options |
 | Remove a stopped sandbox | the desktop's sentences: what is lost, that the workspace folder stays | the desktop's removal |
 
 What you see is what you approve: the daemon binds each Face ID check to a digest of exactly
-what was shown. If the plan, a branch tip, the base, the request or the sandbox changed in
-between (a plan edited, a branch moved, the request answered elsewhere, the sandbox started
-or created again under the same name), nothing is done and the phone says it changed.
+what was shown, and the challenge to the choice made on the phone (the network option; the
+models picked for a plan's threads, each checked against the configured list). If the plan,
+a branch tip, the base, the request or the sandbox changed in between (a plan edited, a
+branch moved, the request answered elsewhere, the sandbox started or created again under
+the same name), or the action carries another option or other models than its challenge,
+nothing is done and the phone says it changed.
 
 Agent text (goals, notes, the distillate, sbx's detail) reaches the phone as data, masked by
 your anonymise rules, and the page shows it as text.
@@ -806,15 +811,18 @@ your anonymise rules, and the page shows it as text.
 
 - A leader's tool permission prompt ("allow this command"): the phone says "This needs your
   Mac", and there is no route for it.
-- Editing a plan's threads, writing a note on a refusal, keeping threads open after a merge,
+- Editing a plan's threads beyond their model (goal, scope, repo, name, adding or removing a
+  thread, the variant), writing a note on a refusal, keeping threads open after a merge,
   editing a merge's distillate.
-- A network option that may leave a lasting rule. The phone offers only options on an exact
-  list of ids, today **Dismiss** alone. sbx 0.51 offers **Allow** and **Dismiss** for a
-  refused host, and whether its Allow writes a lasting rule has not been checked, so Allow is
-  answered at the Mac. A host port request (`port:`) is port publishing and is never
-  listed on the phone.
+- A host port request (`port:`): port publishing, never listed on the phone. A network
+  request is answered from the phone with any option sbx offers, each behind Face ID. sbx
+  0.51 offers **Allow** and **Dismiss** for a refused host: Dismiss closes the request and
+  writes no rule; whether Allow is one-time or writes a lasting rule of the sandbox has not
+  been checked, so the phone flags it as possibly lasting (as it does any option id it does
+  not know). A rule Allow leaves is removed at the Mac, in the network panel.
 - Starting or stopping a sandbox, removing a running one, removing the Jarvis sandbox.
-- Everything level 3 already kept: secrets and the GitHub token, permanent network rules,
+- Everything level 3 already kept: secrets and the GitHub token, network rules (beyond
+  what sbx's own Allow on a pending request may leave),
   port publishing, kits, MCP servers, configuration, relay routing, Jarvis proposals, any
   terminal, raw input, shutdown.
 
@@ -897,7 +905,7 @@ fifth closes its oldest).
 
 **Not verified on real hardware:** Face ID on a real iPhone, Safari's WebAuthn on a
 `.ts.net` name, a real merge started from the phone, and whether sbx's Allow on a refused
-host writes a lasting rule.
+host writes a lasting rule (the phone flags it as possibly lasting until this is checked).
 
 ### Notifications on a locked phone
 
