@@ -91,10 +91,16 @@ async fn attach(app: &Arc<App>) -> Fake {
 }
 
 /// Paired, subscribed through the route: `(router, token, device id)`.
+/// Each phone its own endpoint (one device per endpoint), all starting
+/// with [`EP`] and none holding the device's name.
+fn ep_of(name: &str) -> String {
+    format!("{EP}-{}", sbxw_core::remote_access::push::endpoint_tag(name))
+}
+
 async fn subscribed(app: &Arc<App>, name: &str) -> (Router, String, String) {
     let router = remote_router(app.clone());
     let token = pair(app, &router, name).await;
-    let r = call(&router, "POST", "/r/push/subscribe", Some(&token), sub_body(EP)).await;
+    let r = call(&router, "POST", "/r/push/subscribe", Some(&token), sub_body(&ep_of(name))).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     let id = device_id(&router, &token).await;
     (router, token, id)
@@ -379,7 +385,7 @@ async fn a_session_starting_to_ask_pushes_one_n_job_with_the_badge_and_nothing_e
     let line = fake.line(1000).await.expect("a job");
     let j = job(&line);
     assert_eq!((j["kind"].as_str(), j["badge"].as_u64(), j["ttl"].as_u64()), (Some("n"), Some(1), Some(3600)));
-    assert_eq!(j["endpoint"], EP);
+    assert_eq!(j["endpoint"], ep_of("Marie iPhone").as_str());
     assert_eq!((j["name"].as_str(), j["lead"].as_bool()), (Some("lead1"), Some(true)), "the sandbox, a team leader");
     assert!(!line.contains("Which way") && !line.contains("Marie"), "no text or device name: {line}");
     // The same state again: nothing.
@@ -671,8 +677,7 @@ async fn a_fake_sidecar_gets_push_on_the_first_subscription_restarted_once() {
     assert_eq!(jobs.lines().count(), 3, "{jobs}");
     for l in jobs.lines() {
         let j = job(l);
-        assert_eq!(j["kind"], "n");
-        assert!(!l.contains("lead1"));
+        assert_eq!((j["kind"].as_str(), j["name"].as_str(), j["lead"].as_bool()), (Some("n"), Some("lead1"), Some(true)));
     }
     for _ in 0..30 {
         if journal(&app).iter().filter(|e| e.kind == Kind::PushSent).count() == 3 {
