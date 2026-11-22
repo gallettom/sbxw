@@ -705,7 +705,7 @@ static SPIN_ARC: rune::Icon = rune::Icon { name: "busy-arc", view: 16.0, body: r
 pub fn busy_spinner(size: f32, ink: rune::Color) -> El {
     el().size(size, size).a11y_hidden()
         .child(rune::icon(&SPIN_RING, size).absolute(0.0, 0.0).color(ink).opacity(0.25))
-        .child(rune::icon(&SPIN_ARC, size).absolute(0.0, 0.0).color(ink).looping(rune::LoopSpec::rotation(theme::motion::SPIN)))
+        .child(rune::icon(&SPIN_ARC, size).absolute(0.0, 0.0).color(ink).looping(rune::LoopSpec::rotation(theme::motion::SPIN as f64)))
 }
 
 pub fn menu_surface(key: String, anchor: String, align: rune::Align, w: f32) -> El {
