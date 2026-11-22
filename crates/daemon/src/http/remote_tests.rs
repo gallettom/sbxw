@@ -861,6 +861,23 @@ async fn model_is_an_id_of_the_list_never_text() {
 }
 
 #[tokio::test]
+async fn a_live_only_model_may_be_chosen_an_unknown_one_not() {
+    let (d, app) = on();
+    *app.models_live.lock().unwrap() = Some(vec![sbxw_core::models::LiveModel { id: "claude-fable-5-2".into(), label: "Claude Fable 5.2".into(), created_at: 9 }]);
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (_sb, file) = leader(&app, d.path(), "lead1").await;
+    let models = call(&router, "GET", "/r/models", Some(&token), json!({})).await.json();
+    assert_eq!(models["models"][0], json!({"id": "claude-fable-5-2", "label": "Claude Fable 5.2"}), "{models}");
+    let r = call(&router, "POST", "/r/leaders/lead1/model", Some(&token), json!({"id": "claude-fable-6-0"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+    let r = call(&router, "POST", "/r/leaders/lead1/model", Some(&token), json!({"id": "claude-fable-5-2"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let got = typed(&file, b"/model claude-fable-5-2").await;
+    assert!(got.windows(23).any(|w| w == b"/model claude-fable-5-2"), "{:?}", String::from_utf8_lossy(&got));
+}
+
+#[tokio::test]
 async fn lead_route_takes_only_on_and_is_idempotent() {
     let (d, app) = on();
     let router = remote_router(app.clone());

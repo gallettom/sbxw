@@ -1102,6 +1102,26 @@ impl Sbx {
         Ok(out.stdout_str())
     }
 
+    /// `curl` with request headers, for an API behind the sandbox proxy.
+    /// Only a short list of header names passes, each value printable ASCII
+    /// with no line break, and `x-api-key` only as the proxy's sentinel: the
+    /// proxy adds the real credential, never this command line. An error
+    /// carries the exit code, never the body or stderr.
+    pub async fn curl_with_headers(&self, name: &SandboxName, url: &str, headers: &[(&str, &str)]) -> Result<String> {
+        let mut args: Vec<String> = ["curl", "-s", "--max-time", "10"].map(String::from).to_vec();
+        for (k, v) in headers {
+            check_header(k, v)?;
+            args.extend(["-H".to_string(), format!("{k}: {v}")]);
+        }
+        args.push(url.to_string());
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = self.exec(name, &refs, None).await?;
+        if !out.success() {
+            bail!("curl in '{name}' failed (exit {})", out.code.map_or("?".to_string(), |c| c.to_string()));
+        }
+        Ok(out.stdout_str())
+    }
+
     /// Run a tooling batch in one `sbx exec`.
     pub async fn tooling(&self, name: &SandboxName, batch: &Tooling) -> Result<ToolingOutcome> {
         let out = self.exec(name, &["node", "-"], Some(batch.script().into_bytes())).await?;
@@ -1167,6 +1187,20 @@ pub fn interactive(args: &[String]) -> Result<()> {
         bail!("`sbx {}` exited with {status}", args[..args.len().min(3)].join(" "));
     }
     Ok(())
+}
+
+/// Header names `curl_with_headers` accepts, and what each may carry.
+fn check_header(k: &str, v: &str) -> Result<()> {
+    let printable = |s: &str| !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| (0x20..0x7f).contains(&b));
+    if !printable(v) {
+        bail!("header {k}: value refused");
+    }
+    match k {
+        "anthropic-version" | "anthropic-beta" => Ok(()),
+        "x-api-key" if v == "proxy-managed" => Ok(()),
+        "x-api-key" => bail!("header x-api-key: only the proxy's sentinel may be sent"),
+        _ => bail!("header {k}: not allowed"),
+    }
 }
 
 #[cfg(test)]
@@ -1328,6 +1362,21 @@ mod tests {
         assert!(format!("{err:#}").contains("not found"), "{err:#}");
         let fake = Fake::new(|_| Output::fail(1, ""));
         assert_eq!(Sbx::new(fake).exec(&sb("n"), &["test", "-f", "/x"], None).await.unwrap().code, Some(1), "the command's own failure is its answer");
+    }
+
+    #[tokio::test]
+    async fn curl_with_headers_sends_only_allowed_headers() {
+        let fake = Fake::new(|_| Output::ok("{}"));
+        let sbx = Sbx::new(fake.clone());
+        sbx.curl_with_headers(&sb("n"), "https://api.anthropic.com/v1/models", &[("anthropic-version", "2023-06-01"), ("x-api-key", "proxy-managed")]).await.unwrap();
+        assert_eq!(fake.log(), ["exec n -- curl -s --max-time 10 -H anthropic-version: 2023-06-01 -H x-api-key: proxy-managed https://api.anthropic.com/v1/models"]);
+        for bad in [("authorization", "Bearer x"), ("x-api-key", "sk-real"), ("anthropic-beta", "a\r\nX-Evil: 1"), ("anthropic-beta", "")] {
+            assert!(sbx.curl_with_headers(&sb("n"), "https://x", &[bad]).await.is_err(), "{bad:?}");
+        }
+        assert_eq!(fake.log().len(), 1, "a refused header runs nothing");
+        let fake = Fake::new(|_| Output::fail(7, "body or secret"));
+        let err = Sbx::new(fake).curl_with_headers(&sb("n"), "https://x", &[]).await.unwrap_err();
+        assert!(!format!("{err:#}").contains("secret"), "{err:#}");
     }
 
     #[tokio::test]

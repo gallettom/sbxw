@@ -40,6 +40,19 @@ safety boundary. This page lists what that boundary is and where it has edges.
   `sbx policy allow` won't help.
 - **Published ports bind `127.0.0.1`** on the host, not every interface, so
   a sandbox's apps are not reachable from your network.
+- **The daemon asks Anthropic two things through a sandbox.** Both are a
+  `sbx exec <sandbox> -- curl` from the host, so the sandbox proxy adds the
+  account's credential and the host holds none: the subscription usage (every
+  five minutes, see [island.md](island.md#subscription-usage)) and the model
+  list, one `GET https://api.anthropic.com/v1/models` (paged, at most 10 pages)
+  at daemon start and then once an hour, never on a request. That request
+  carries only `anthropic-version`, `anthropic-beta: oauth-2025-04-20` and,
+  under `--use-api-key`, `x-api-key: proxy-managed` (the proxy's placeholder,
+  not a key). sbxw refuses any other header name, an `x-api-key` with another
+  value, and a value with a line break. The answer is parsed as data: only ids
+  starting with `claude-` that pass the `--model` id check are kept, labels are
+  cut to 64 characters with control characters removed, and the log carries
+  counts and a reason class, never a header value or the body.
 - **sbx's own errors reach you.** When an `sbx` call fails, sbxw shows what sbx
   said (including `Blocked by network policy` details and an organisation's
   support message) in the CLI and web UI.

@@ -64,7 +64,7 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 | Key | Default | Meaning |
 |---|---|---|
 | `claude_model` | `claude-sonnet-5-5` | Default model, passed as `ANTHROPIC_DEFAULT_MODEL`. Empty: don't set it. See [below](#the-default-model) |
-| `models` | Sonnet 5.5, Opus 5.5, Haiku 5.5 | `{ id, label }` choices for new threads and a lead's plans |
+| `models` | Sonnet 5.5, Opus 5.5, Haiku 5.5 | `{ id, label }`: the fallback and the pins of the model list. Every selector also offers the Claude models the daemon reads from Anthropic once an hour. See [below](#the-model-list) |
 | `phone_skills` | `["code-review", "codemap", "retro", "grill-me"]` | Skills the [phone page](security.md#remote-access) may invoke, by name (lower-case letters, digits, hyphens, at most 64; anything else is refused at load). The phone never sends a `/` line: the daemon types `/<name> <text>` for a name of this list, at an idle prompt |
 | `web_shell` | `""` | Empty attaches the Claude agent. Set to e.g. `"bash"` to open a shell in the main pane instead |
 | `keep_running` | `false` | Keep the sandbox up with nobody attached (`sbx run -d`) until `sbxw stop`. Useful for a dev server |
@@ -125,8 +125,34 @@ Setting `ANTHROPIC_DEFAULT_MODEL` in `[env]` yourself overrides it.
   `sbxw up`, sbxw removes that key, but only if it still equals `claude_model`
   (sbxw's own leftover). A different value is your `/model` and is kept.
 
-`models` lists what a thread can start on. A thread with a model runs
-`claude --model <id>`; without one it uses `claude_model`.
+A thread with a model runs `claude --model <id>`; without one it uses
+`claude_model`.
+
+## The model list
+
+Every model selector offers the same list: the phone's **Model** select, the
+per-thread model of a plan approved from the phone, and the Mac's **New thread**
+and plan dialogs. A chosen model is checked against that list too.
+
+- **The live part.** The daemon reads Anthropic's model list (`GET /v1/models`)
+  through a running sandbox, at start and then once an hour, never when you
+  open a selector. It keeps the models whose id starts with `claude-` and is a
+  valid `--model` id, labelled with Anthropic's display name, newest first. A
+  model released after your sbxw version (for example `claude-fable-5-2`)
+  appears this way without a config change.
+- **`models` is the fallback and the place to pin.** An entry of `models` keeps
+  its own label and stays offered even when the live list does not have it.
+  Until a live list has been read (no sandbox running yet, or the read fails),
+  the list is `models` alone, as before.
+- **A failed read changes nothing:** the last good list stays, and the daemon
+  tries again after 5 minutes, doubling up to an hour. Its log says how many
+  models were read, or why not, never the answer itself.
+
+> Unverified on a real account: the read sends `anthropic-version` and the
+> OAuth beta header, and relies on the sandbox proxy to add the credential.
+> Whether a claude.ai sign-in (or, with `--use-api-key`, the proxy's API key)
+> is accepted on `/v1/models` has not been confirmed yet. If it is not, the log
+> says `could not read the model list` and the list stays `models`.
 
 ## Environment variables
 
