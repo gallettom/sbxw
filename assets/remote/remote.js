@@ -264,7 +264,7 @@
     // Level 2's counts: numbers only.
     es.addEventListener('approvals', e => {
       const d = parse(e.data);
-      if (d && typeof d === 'object') { st.l2 = { ...(st.l2 || { level2: true }), counts: d }; renderBadge(); }
+      if (d && typeof d === 'object') { st.l2 = { ...(st.l2 || { level2: true }), counts: d }; renderBadge(); if (st.screen === 's-leaders') renderWaiting(); }
     });
     // A board changed: re-read it if it is the one on screen.
     es.addEventListener('kanban', e => {
@@ -330,6 +330,7 @@
     if (document.visibilityState !== 'visible') { st.hiddenAt = Date.now(); return; }
     const away = st.hiddenAt ? Date.now() - st.hiddenAt : 0;
     st.hiddenAt = 0;
+    if (st.paired && st.screen === 's-leaders') refreshHome();
     if (!st.paired || st.elsewhere) return;
     if (!st.es) { scheduleProbe(10); return; }
     if (away >= RC_AWAY_MS || st.es.readyState === 2) startEvents();
@@ -358,36 +359,95 @@
     setTitle('Sessions', st.me?.name ? `on ${st.me.name}` : '');
     show('s-leaders');
     renderLeaders();
+    refreshHome();
+  }
+  // Counts for the tiles and the models for the labels: read once when the
+  // home shows and when the page becomes visible again, no timer.
+  async function refreshHome() {
+    if (!st.models.length && !st.modelsAsked) {
+      st.modelsAsked = true;
+      const m = await api.models();
+      st.models = m.ok ? rcModels(m.data) : [];
+      if (!st.models.length) st.modelsAsked = false;
+    }
+    await refreshL2();
+    if (st.screen === 's-leaders') renderLeaders();
   }
 
-  // Two groups (API.md 2.4, v1.5): the team leaders, then the running
-  // sandboxes with no team; those that need the person first in each. Names
-  // and the read-only reason are set as text.
+  // Home (API.md 2.4, v1.5): the "Waiting for you" tiles, then two groups that
+  // are always shown, team leaders and sandboxes, each with its icon, a count
+  // and an empty line; those that need the person first in each. Names and
+  // the read-only reason are set as text.
+  function svgIcon(id, cls) {
+    const SVG = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(SVG, 'svg');
+    svg.setAttribute('aria-hidden', 'true');
+    if (cls) svg.setAttribute('class', cls);
+    const use = document.createElementNS(SVG, 'use');
+    use.setAttribute('href', `#${id}`);
+    svg.append(use);
+    return svg;
+  }
   function renderLeaders() {
+    renderWaiting();
     const ul = $('leaders');
     const now = Date.now();
-    const groups = rcGroups(st.leaders);
     const rows = [];
-    for (const g of groups) {
+    for (const g of rcGroups(st.leaders)) {
       const head = document.createElement('li');
       head.className = 'rc-group';
       const h = document.createElement('h2');
       h.className = 'rc-group-title';
-      h.textContent = g.title;
+      const n = document.createElement('span');
+      n.className = `rc-group-n${g.count ? '' : ' rc-zero'}`;
+      n.textContent = String(g.count);
+      h.append(svgIcon(g.icon, 'rc-group-ic'), document.createTextNode(g.title), n);
       head.append(h);
       rows.push(head);
-      for (const l of g.items) rows.push(leaderRow(l, now));
+      if (!g.count) {
+        const e = document.createElement('li');
+        e.className = 'rc-group-empty';
+        e.textContent = g.empty;
+        rows.push(e);
+      }
+      for (const l of g.items) rows.push(leaderRow(l, now, g.icon));
     }
     ul.replaceChildren(...rows);
-    $('leaders-empty').hidden = st.leaders.length > 0;
   }
-  function leaderRow(l, now) {
+  // One tile per Approvals kind with the counts the badge already uses; a tap
+  // opens Approvals at that kind's section. Hidden while level 2 is off.
+  function renderWaiting() {
+    const box = $('waiting');
+    box.hidden = !st.l2?.level2;
+    if (box.hidden) return;
+    const tiles = rcWaiting(st.l2.counts).map(t => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `rc-wtile ${t.cls}${t.zero ? ' rc-zero' : ''}`;
+      b.setAttribute('aria-label', `${t.label}: ${t.n} waiting`);
+      const ic = document.createElement('span');
+      ic.className = 'rc-ktile';
+      ic.append(svgIcon(t.icon));
+      const n = document.createElement('span');
+      n.className = 'rc-wn';
+      n.textContent = String(t.n);
+      const l = document.createElement('span');
+      l.className = 'rc-wl';
+      l.textContent = t.label;
+      b.append(ic, n, l);
+      b.addEventListener('click', () => { st.apJump = t.what; openApprovals(); });
+      return b;
+    });
+    $('waiting-tiles').replaceChildren(...tiles);
+  }
+  function leaderRow(l, now, icon) {
     const li = document.createElement('li');
     const b = document.createElement('button');
     b.type = 'button';
     b.className = `rc-leader rc-st-${RC_RANK[l.state] !== undefined ? l.state : 'other'}${l.read_only ? ' rc-ro' : ''}`;
-    const dot = document.createElement('span');
-    dot.className = 'rc-dot';
+    const tile = document.createElement('span');
+    tile.className = 'rc-ltile';
+    tile.append(svgIcon(icon));
     const name = document.createElement('span');
     name.className = 'rc-leader-name';
     name.textContent = l.name;
@@ -401,7 +461,20 @@
     state.textContent = l.asks ? 'needs you' : rcStateLabel(l.state);
     line.append(state);
     if (rcActivity(l)) line.append(` · ${rcActivity(l)}`);
-    b.append(dot, name, ago, line);
+    b.append(tile, name, ago, line);
+    const info = rcLeaderInfo(l, st.models);
+    if (info.parts.length || info.canvas) {
+      const x = document.createElement('span');
+      x.className = 'rc-leader-info';
+      x.append(document.createTextNode(info.parts.join(' · ')));
+      if (info.canvas) {
+        const c = document.createElement('span');
+        c.className = 'rc-leader-canvas';
+        c.textContent = `Canvas ${info.canvas} new`;
+        x.append(c);
+      }
+      b.append(x);
+    }
     if (l.read_only) {
       const ro = document.createElement('span');
       ro.className = 'rc-leader-ro';
@@ -2299,6 +2372,7 @@
     if (res.ok && res.data && typeof res.data === 'object') st.l2 = res.data;
     else if (res.status === 404) st.l2 = { level2: false };
     renderBadge();
+    if (st.screen === 's-leaders') renderWaiting();
     return res;
   }
   function renderBadge() {
@@ -2335,8 +2409,9 @@
       const r = got[i];
       for (const it of r.ok && r.data && Array.isArray(r.data[k]) ? r.data[k] : []) {
         const id = str(it?.id);
-        if (!id || st.apIds.has(id)) continue;
-        st.apIds.add(id);
+        // Keyed by kind and id: a merge's id is its plan's.
+        if (!id || st.apIds.has(`${k}:${id}`)) continue;
+        st.apIds.add(`${k}:${id}`);
         fresh.push({ what: k, sandbox: str(it.sandbox) });
       }
     });
@@ -2366,15 +2441,14 @@
     const fresh = await apSeen();
     if (!['s-leaders', 's-chat', 's-item'].includes(st.screen) || sheet) return;
     const delta = n - base;
-    const merges = fresh.length > 0 && fresh.every(f => f.what === 'merges');
-    const noun = merges ? 'merge' : 'plan';
+    const pick = rcToastChoice(fresh, delta);
     const sbs = new Set(fresh.map(f => f.sandbox).filter(Boolean));
     const sb = sbs.size === 1 && fresh.every(f => f.sandbox) ? [...sbs][0] : '';
     const name = sb ? (st.leaders.find(l => l.sandbox === sb)?.name || sb) : '';
-    const kind = rcApKind(merges ? 'merges' : 'plans');
+    const kind = rcApKind(pick.what);
     $('ap-toast').className = `rc-toast ${kind.cls}`;
     $('ap-toast-ic').replaceChildren(kindIcon(kind));
-    $('ap-toast-text').textContent = delta > 1 ? `${delta} ${fresh.length ? noun : 'plan'}s wait for you` : `A ${noun} waits for you`;
+    $('ap-toast-text').textContent = pick.text;
     $('ap-toast-sb').textContent = name;
     $('ap-toast-sb').hidden = !name;
     st.apToastTo = sb || null;
@@ -2431,7 +2505,7 @@
     const got = await Promise.all(LISTS.map(L => l2.list(L.what)));
     if (st.screen !== 's-approvals' || seq !== st.apSeq) return;
     st.apLists = got;
-    for (const k of ['plans', 'merges']) for (const it of apItems()[k]) if (it?.id) st.apIds.add(str(it.id));
+    for (const k of ['plans', 'merges']) for (const it of apItems()[k]) if (it?.id) st.apIds.add(`${k}:${str(it.id)}`);
     st.apSeen = apCountsKey();
     st.apLoading = false;
     renderApLists();
@@ -2498,6 +2572,7 @@
       const items = rcApFilter(L.what, all[L.what], only);
       if (!items.length) return;
       const sec = el('section', 'rc-ap-sec');
+      sec.dataset.what = L.what;
       const kind = rcApKind(L.what);
       const h = el('h2', `rc-ap-h ${kind.cls}`);
       const ic = kindIcon(kind);
@@ -2515,6 +2590,12 @@
     $('ap-none').hidden = !(only && !sections.length);
     $('ap-empty').hidden = sections.length > 0 || !!only;
     $('s-approvals').scrollTop = scroll;
+    // Coming from a Home tile: bring that kind's section into view, once.
+    if (st.apJump) {
+      const t = $('ap-lists').querySelector(`[data-what="${st.apJump}"]`);
+      st.apJump = null;
+      if (t?.scrollIntoView) t.scrollIntoView({ block: 'start' });
+    }
   }
   $('ap-none-all').addEventListener('click', () => { st.apTouched = true; st.apFilter = null; renderApLists(); });
   function listRow(what, it) {

@@ -408,7 +408,7 @@ does the same as a revoke.
 
 | A paired phone can | A paired phone cannot |
 |---|---|
-| List the running team leaders (the main session of a running sandbox that leads a team), and see which needs you | See any other session: threads, other sandboxes, Jarvis |
+| List the running team leaders (the main session of a running sandbox that leads a team), and see which needs you, with counts only (threads working, canvases with new shots, planned tickets; no titles or text) | See any other session: threads, other sandboxes, Jarvis |
 | Read a leader's conversation: your prompts, its replies, messages from other sessions and from sbxw, questions. Its replies are sent as written (masked by your anonymise rules only), so a reply that quotes a file reaches the phone | See any tool's input or output, a file, a diff, a terminal, or the harness's own output (a `!` command's, a slash command's, hooks', task notifications, system reminders). These are shown as "3 steps" and nothing more |
 | Send it text, typed or dictated, as your own words (masked first by your anonymise rules), when it is idle at its prompt or working (Claude Code queues it, as at the Mac; see "What a message can do" below) | Type raw keys, open a terminal, create a sandbox or a thread; send a line starting with `!` (a shell command), `/` (a slash command) or `#`; send a control or invisible character; write to a leader that waits for an answer at the Mac (a permission prompt, a question, any other dialog) |
 | Answer a multiple-choice question (`AskUserQuestion`) | Allow a tool (a permission prompt): "This needs your Mac" |
@@ -642,8 +642,11 @@ a standalone app named sbxw.
 - **Not paired.** No code and no device cookie, or a `401` anywhere, or the stream's
   `bye`: "This device is not paired" / "no longer paired" / "Remote access is off".
 - **Leaders.** The running team leaders: name, state (needs you, working, idle) and the
-  last activity. Those that need the person come first, then those at work. One tap opens
-  one. An empty list says "No team leader is running".
+  last activity, and one muted line of counts (model, threads working, canvases with new
+  shots, planned tickets; numbers only, no titles). Those that need the person come first,
+  then those at work. One tap opens one. Team leaders and Sandboxes are always shown with a
+  count; an empty one says "No team leader running" or "No other sandbox running". A
+  "Waiting for you" strip shows the Approvals counts by kind.
 - **A conversation.** Like a chat: the leader and other agents on the left (green tint),
   the person on the right (blue tint), "From sbxw" lines neutral, a run of tool steps as
   one quiet line ("3 steps"). Older entries load when scrolled to the top; new ones arrive
