@@ -236,7 +236,7 @@ local function uploads(ui, dragging)
           sending and progress{ value = s.progress or 0 } or false,
         },
         button{ sending and "Sending…" or "Upload", key = "files-upload-send-" .. s.index, icon = "send", variant = s.index == 1 and "primary" or "neutral",
-          on = "send", arg = s.index, disabled = nz(s.problem) or sending, help = "The app shows the file, its size and where it goes first" },
+          on = "send", arg = s.index, busy = sending and true or false, disabled = nz(s.problem) and not sending, help = "The app shows the file, its size and where it goes first" },
         button{ icon = "close", key = "files-unstage-" .. s.index, on = "unstage", arg = s.index, variant = "ghost", help = "Leave it out", disabled = sending },
       }
     end

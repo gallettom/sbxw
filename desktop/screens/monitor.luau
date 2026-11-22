@@ -94,7 +94,7 @@ local function question_card(d, data)
       local picked = picks[si] == i
       qk[#qk + 1] = row{ gap = 8, w = "full", align = "start",
         q.answerable and button{ o.label, key = "monitor-opt-" .. si .. "-" .. i, on = "choose", arg = { key = d.key, step = si, option = i },
-          tone = "amber", variant = picked and "primary" or nil, icon = picked and "check" or nil, disabled = sending ~= nil,
+          tone = "amber", variant = picked and "primary" or nil, icon = picked and "check" or nil, busy = picked and sending ~= nil, disabled = sending ~= nil and not picked,
           help = "Answers with this option, the Requests panel's way" }
           or text{ i .. ". " .. o.label, color = "text", wrap = true },
         o.desc and text{ o.desc, size = "sm", wrap = true, color = "text-muted", grow = 1 } or false }
@@ -224,7 +224,7 @@ local function feed(d, now, data, stick)
     if c.earlier then
       kids[#kids + 1] = row{ w = "full", justify = "center",
         button{ c.older_loading and "Reading…" or "Show earlier", key = "monitor-earlier", icon = "history", variant = "ghost", dense = true,
-          on = "earlier", arg = { key = d.key }, disabled = c.older_loading, help = "The earlier part of the conversation" } }
+          on = "earlier", arg = { key = d.key }, busy = c.older_loading and true or false, help = "The earlier part of the conversation" } }
     elseif c.truncated then
       kids[#kids + 1] = quiet_line("monitor-truncated", "info", "Earlier conversation is not kept")
     end

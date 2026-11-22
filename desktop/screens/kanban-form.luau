@@ -59,7 +59,7 @@ return {
     foot[#foot + 1] = row{ gap = 8, w = "full",
       spacer{},
       button{ "Cancel", on = "cancel", key = "kanban-form-cancel" },
-      button{ f.saving and "Saving…" or "Save", variant = "primary", on = "save", key = "kanban-form-save", disabled = f.save_why ~= nil, help = f.save_why or "Save the ticket on this computer, with its files", keys = { "⌘", "Return" } } }
+      button{ f.saving and "Saving…" or "Save", variant = "primary", on = "save", key = "kanban-form-save", busy = f.saving and true or false, disabled = not f.saving and f.save_why ~= nil, help = f.save_why or "Save the ticket on this computer, with its files", keys = { "⌘", "Return" } } }
     return column{ gap = 12, w = "full", h = "full", key = "kanban-form",
       scroll{ grow = 1, key = "kanban-form-scroll", column(kids) },
       column(foot) }

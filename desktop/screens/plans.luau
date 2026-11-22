@@ -353,7 +353,7 @@ local function approved(state, data, p)
     table.insert(buttons, button{ "Not now", on = "later", key = "merge-later" })
     -- A shared plan's claims hold Merge until released (the daemon refuses it anyway).
     local held = p.variant == "shared" and #((((data.board or {})[p.sandbox]) or {}).claims or {}) > 0
-    table.insert(buttons, button{ running and "Merging…" or (p.merge.state == "failed" and "Retry merge" or "Merge all"), variant = "primary", on = "merge", arg = p.id, disabled = running or held, key = "merge-all",
+    table.insert(buttons, button{ running and "Merging…" or (p.merge.state == "failed" and "Retry merge" or "Merge all"), variant = "primary", on = "merge", arg = p.id, busy = running, disabled = held and not running, key = "merge-all",
       help = held and "Files are still claimed: release them first" or nil })
   else
     table.insert(buttons, button{ "Close", on = "later", key = "plan-close" })
