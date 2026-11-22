@@ -64,12 +64,30 @@ fn typed(dir: &Path, name: &str) -> Vec<u8> {
     std::fs::read(dir.join(format!("{name}.typed"))).unwrap_or_default()
 }
 
+/// Waits, up to 5 s, until what the fake agent of `name` read satisfies `done`.
+async fn typed_until(dir: &Path, name: &str, done: impl Fn(&[u8]) -> bool) -> Vec<u8> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let got = typed(dir, name);
+        if done(&got) || tokio::time::Instant::now() >= deadline {
+            return got;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[tokio::test]
 async fn the_same_session_leads_again_after_a_restart_and_says_so() {
     let (d, app) = app();
     let sb = led(&app, d.path(), "lead1").await;
     let rec = app.store.get(&sb).lead.expect("kept on disk");
     assert_eq!(rec.session_id.as_deref(), Some("s1"));
+    // `/lead` and its Return were written to the old terminal; its agent
+    // may read them later. Seen landed, then that terminal goes, as in a
+    // real restart, so nothing of it reaches the file truncated below.
+    let first = typed_until(d.path(), "lead1", |b| b.ends_with(b"\r")).await;
+    assert!(first.ends_with(b"\r"), "the old terminal read /lead: {first:?}");
+    app.sessions.live(&SessionKey::agent(&sb)).expect("the old terminal").kill();
 
     // The daemon restarts: the store is read again, the terminals are new.
     let again = app_in(d.path());
@@ -81,8 +99,12 @@ async fn the_same_session_leads_again_after_a_restart_and_says_so() {
     hook(&again, &sb, "s1", "UserPromptSubmit");
     assert!(leads_again(&mut rx, "lead1"), "the Lead event goes out on the hook post");
     assert_eq!(again.leading(), vec!["lead1".to_string()]);
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(typed(d.path(), "lead1").is_empty(), "re-binding types nothing");
+    // A marker typed now reaches the agent after anything the re-binding
+    // typed (one pty, in order): once it is read, nothing else may be.
+    let s = again.sessions.live(&SessionKey::agent(&sb)).expect("the new terminal");
+    s.write(&[b"MARK"]).await;
+    let got = typed_until(d.path(), "lead1", |b| b.ends_with(b"MARK")).await;
+    assert_eq!(got, b"MARK", "re-binding types nothing");
     assert!(again.store.get(&sb).lead.unwrap().bound_ms >= rec.bound_ms);
 }
 
