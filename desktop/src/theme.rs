@@ -355,7 +355,7 @@ pub const ON_LIGHT_GROUND: &[(&str, u32)] = &[
 
 /// Tokens whose desktop value differs from app.css, with app.css's value:
 /// each failed WCAG AA on a surface the desktop draws it on.
-pub const WEB_ADJUSTED: &[(&str, u32)] = &[("text-muted", 0x8b949e), ("text-dim", 0x6e7681)];
+pub const WEB_ADJUSTED: &[(&str, u32)] = &[("text-muted", 0x8b949e)];
 
 /// Corner radii, the names screens use: `mark` 2 for the 8 pt identity
 /// squares and hairline bars, `box` 4 for the small boxes inside a control
@@ -1134,6 +1134,12 @@ mod tests {
             if !v.starts_with('#') || name.ends_with("-rgb") {
                 continue;
             }
+            // Only the tokens the desktop's palette has: the web UI keeps
+            // more (hovers, washes, alpha steps) the desktop does not draw,
+            // and `text-dim` is an alias here ([`ALIASES`]).
+            if !DARK.iter().any(|(n, _)| *n == name) {
+                continue;
+            }
             let v = if v.len() == 4 { v[1..].chars().flat_map(|c| [c, c]).collect::<String>() } else { v[1..].to_string() };
             let web = u32::from_str_radix(&v, 16).unwrap();
             match WEB_ADJUSTED.iter().find(|(n, _)| *n == name) {
@@ -1146,7 +1152,7 @@ mod tests {
             n += 1;
         }
         assert!(n >= 30, "read {n} tokens");
-        assert_eq!(WEB_ADJUSTED.len(), 2);
+        assert_eq!(WEB_ADJUSTED.len(), 1);
     }
 
     /// Every pair the app draws reaches WCAG AA: 4.5:1 for text (all of it
