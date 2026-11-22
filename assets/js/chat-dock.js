@@ -11,18 +11,18 @@
 // and `POST /api/answer` picks an option of a pending question. Nothing here is
 // chat-specific on the server side.
 //
-// "＋ New chat" is another session in `ephemeral-chat` — a `chat-N` thread,
-// in a worktree of the chat's throwaway repo — not another sandbox: one
+// "＋ New chat" is another session in `ephemeral-chat` (a `chat-N` thread,
+// in a worktree of the chat's throwaway repo), not another sandbox: one
 // container answers every conversation. The sandbox is made only when there
 // is none. Older `ephemeral-chat-N` sandboxes still show while they exist.
 //
-// The daemon keeps one reply per session — the last turn's — so the
+// The daemon keeps one reply per session (the last turn's), so the
 // transcript is this tab's own, kept in sessionStorage so a reload doesn't
 // lose it. That fits what these sandboxes are; "Open in a pane" is the way to
 // the real, complete session when it matters.
 //
 // Loaded after main.js: it listens on `sbxwStream` and reads `sandboxes`. The
-// conversation itself — events, transcript pieces, the composer — is
+// conversation itself (events, transcript pieces, the composer) is
 // chat-core.js, shared with the browser side panel.
 
 const CHAT_DOCK_RE = /^ephemeral-chat(-\d+)?$/;
@@ -345,7 +345,7 @@ chatComposer(cdForm, cdInput, cdSend, {
 });
 
 // ── Session events ────────────────────────────────────────────────────────
-// A chat's agents — its own and its sessions (a worktree cwd) — but not a
+// A chat's agents, its own and its sessions (a worktree cwd), but not a
 // bash pane.
 function cdIngest(info, seed = false) {
   if (!info || !CHAT_DOCK_RE.test(info.sandbox || '')) return;

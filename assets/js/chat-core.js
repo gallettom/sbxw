@@ -1,7 +1,7 @@
 // ── Chat core ─────────────────────────────────────────────────────────────
 // What the chat dock (chat-dock.js) and the browser side panel (sidepanel.js)
 // have in common: how a `session` event moves a conversation along, and the
-// pieces of a transcript — a message, the "working" line, a pending question —
+// pieces of a transcript (a message, the "working" line, a pending question)
 // built the same way in both, on the same `cd-*` styles.
 //
 // A chat here is `{ log, state, steps, answerable, activity }`: the tab's own
@@ -11,14 +11,14 @@
 
 // Is this event about a session sbxw drives? `/api/chat/push` types into
 // sbxw's own terminal, so a session an editor, Claude Desktop or SSH started
-// in the same container (`origin: 'remote'`) is not the conversation shown —
+// in the same container (`origin: 'remote'`) is not the conversation shown,
 // and its events, re-emitted alongside every sibling's (see `emit_info`),
 // would otherwise overwrite this one's state with theirs.
 //
 // A thread's agent is sbxw's too, but the daemon reads it as `remote`: origin
 // is decided by "started in the workspace", and a thread starts in its
-// worktree. It stays `remote` there on purpose — the main agent must remain the
-// one tty session that typing and answering pick (`is_answerable`) — so the
+// worktree. It stays `remote` there on purpose: the main agent must remain the
+// one tty session that typing and answering pick (`is_answerable`), so the
 // worktree is recognised here instead.
 function chatOwnSession(info) {
   return info.origin !== 'remote' || /\/\.sbxw-worktrees\/[a-z0-9-]+\/?$/.test(info.cwd || '');
@@ -43,8 +43,8 @@ function chatReplyReady(inTurn, info, last) {
 }
 
 // Fold a `session` event into `c`. Returns what the reader may want to hear
-// about — `{ reply }` when a turn just ended with an answer, `{ asked }` when a
-// question just appeared — or null.
+// about: `{ reply }` when a turn just ended with an answer, `{ asked }` when a
+// question just appeared, or null.
 //
 // `seed` is the first look, from `GET /api/sessions`: a chat with no
 // transcript of its own starts from what the daemon knows, the last prompt
@@ -81,8 +81,8 @@ function chatIngest(c, info, seed = false) {
 }
 
 // Claude answers in Markdown. Just enough of it to read well in a narrow
-// column — paragraphs, lists, code blocks, inline code, bold, italics, links,
-// headings — and nothing that could carry markup of its own: the text is
+// column (paragraphs, lists, code blocks, inline code, bold, italics, links,
+// headings) and nothing that could carry markup of its own: the text is
 // escaped first, and only these fixed tags are added to it.
 function chatEscape(s) {
   return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -274,7 +274,7 @@ function chatBlock(block, files) {
 // sbxw's prompt in the 5×7 dot-matrix of the corner job cards (util.js): the
 // chat dock's launcher, the side panel's header and the extension's icon are
 // one glyph. The cursor blinks at rest (CSS); while the agent works the grid
-// fills and drains like a running job — unless the reader asked for less
+// fills and drains like a running job, unless the reader asked for less
 // motion, when it simply stays lit.
 const CHAT_GLYPH = [
   [['10000', '01000', '00100', '00010', '00100', '01000', '10000'], '#3fb950', 0, false],

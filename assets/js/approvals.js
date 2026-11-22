@@ -15,7 +15,7 @@ const APPROVAL_KINDS = { network: 'Network', port: 'Host port' };
 
 function openApprovalsModal(name) {
   approvalsFor = name;
-  document.getElementById('approvals-modal-title').textContent = `Waiting for you — ${name}`;
+  document.getElementById('approvals-modal-title').textContent = `Waiting for you: ${name}`;
   showNote(approvalsError, '');
   modalOpen(approvalsOverlay);
   loadApprovals();
@@ -45,7 +45,7 @@ async function loadApprovals() {
       <p class="mac-card-note">${escHtml(a.detail).replace(/\n/g, ' · ')}${a.created_at ? ` · ${escHtml(timeAgo(a.created_at) || '')}` : ''}</p>
       <div class="mac-actions">${a.options.map((o, i) => `<button class="${o.id === 'allow' ? 'btn-create' : 'mac-btn'}" data-approval="${escHtml(a.id)}" data-option="${escHtml(o.id)}">${escHtml(o.label || o.id)}</button>`).join('')}</div>
     </div>`).join('')
-    : '<p class="repo-note">Nothing waiting — sbx has no pending request for this sandbox.</p>';
+    : '<p class="repo-note">Nothing waiting: sbx has no pending request for this sandbox.</p>';
 }
 
 approvalsBody.addEventListener('click', async e => {

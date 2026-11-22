@@ -3,10 +3,10 @@
 // An agent in one sandbox asked for something it cannot get to from where it
 // is. This is the human's half of that, and it comes in two shapes:
 //
-//  - a **question** about another sandbox's workspace — you choose which other
+//  - a **question** about another sandbox's workspace: you choose which other
 //    sandbox (if any) is asked, you read what comes back, and nothing reaches
 //    the asker until you say so;
-//  - a **screenshot** of what is on your screen — nobody else can supply that,
+//  - a **screenshot** of what is on your screen; nobody else can supply that,
 //    so there is no routing step at all: you attach one image or several,
 //    describe it in words instead, or refuse;
 //  - a **round of questions** for you (`ask_user_questions`): every question
@@ -18,7 +18,7 @@
 //
 // The popup is the *only* place any of this is visible, so it is deliberately
 // interrupting: a request that nobody sees is an agent blocked on a person who
-// never knew. Dismissing it is always "later", never "no" — refusing is a
+// never knew. Dismissing it is always "later", never "no": refusing is a
 // button of its own, because an agent that is refused stops asking while one
 // that is ignored comes back.
 
@@ -30,12 +30,12 @@ const relayFootEl = document.getElementById('relay-modal-foot');
 const relayQueueEl = document.getElementById('relay-queue');
 const relayBadgeEl = document.getElementById('relay-badge');
 
-// Images attached but not yet sent, by request id — a list per request, in the
+// Images attached but not yet sent, by request id: a list per request, in the
 // order they were attached, which is the order the agent receives them in.
 //
 // Kept here rather than on the request itself because the server does not know
 // they exist: attaching is a local act, and it stays local until "Send" turns
-// it into an approval. Which is also what makes building the set free — you can
+// it into an approval. Which is also what makes building the set free: you can
 // paste, look, add the after-shot, drop the one that came out blurry, and
 // nothing has left the tab until you say so.
 const relayShots = new Map(); // id -> [{ url, label }]
@@ -51,7 +51,7 @@ const RELAY_SHOT_MAX_EDGE = 1600;
 // cannot trust a browser to have done it.
 const RELAY_SHOT_MAX_B64 = 6 * 1024 * 1024;
 
-// How many images one reply may carry, and what they may weigh together —
+// How many images one reply may carry, and what they may weigh together:
 // `MAX_SHOTS` and `MAX_SHOTS_B64` in `src/relay.rs`. Mirrored here for the same
 // reason as the per-image cap: refused at the door is a toast you can act on
 // while the popup is still open, refused at the daemon is a round trip.
@@ -64,7 +64,7 @@ let relayCurrentId = null;
 // Set while the popup shows the outcome of a request that just settled, so the
 // tab doesn't jump straight to the next one before you've read it.
 let relayLingerTimer = null;
-// The human is typing an answer (or an edit of one) — re-rendering would throw
+// The human is typing an answer (or an edit of one); re-rendering would throw
 // it away, so state updates for the shown request are held back.
 let relayEditing = false;
 
@@ -80,7 +80,7 @@ function relayOpen() {
 }
 
 /**
- * Requests that have nothing to ask you *right now* — they are out with another
+ * Requests that have nothing to ask you *right now*: they are out with another
  * sandbox, whose agent is thinking. These shrink to a corner card instead of
  * holding the screen, so the wait (which can run minutes) is spent in another
  * sandbox rather than in front of a modal with nothing to do in it.
@@ -93,7 +93,7 @@ function relayDocked() {
   return relayOpen().filter(r => r.state === 'routed');
 }
 
-/** Open requests that want a decision from you — the popup's queue. */
+/** Open requests that want a decision from you: the popup's queue. */
 function relayQueue() {
   return relayOpen().filter(r => r.state !== 'routed');
 }
@@ -159,8 +159,8 @@ function relayQuestionBlock(req) {
   const why = relayIsMac(req)
     ? `asks you to approve this on the virtual Mac.`
     : relayIsShot(req)
-    ? `can't see its own screen, and asks — via you — for a look at what it just changed.`
-    : `asks — via you — for information it can't see from its own workspace.`;
+    ? `can't see its own screen, and asks (via you) for a look at what it just changed.`
+    : `asks (via you) for information it can't see from its own workspace.`;
   return `
     <div class="relay-from">
       <span class="relay-badge-sbx">${relayEsc(req.from)}</span>
@@ -338,13 +338,13 @@ function relayHeld(id) {
  * Four ways in, because the natural gesture differs by person and by platform:
  * take the image the OS screenshot key already put on the clipboard, drop a
  * file (or several), pick one, or let the browser capture a window here and
- * now. Each is a button or a target you can see — nothing here depends on
+ * now. Each is a button or a target you can see; nothing here depends on
  * knowing that a keystroke would have worked. They all end at the same place
  * (`relayAttach`), and the previews are the confirmation: you send what you can
  * see, never what you hope you copied.
  *
  * Each gesture *adds*, because the answer to "how does it look?" is often more
- * than one picture — a before and an after, two breakpoints, three steps of a
+ * than one picture: a before and an after, two breakpoints, three steps of a
  * flow. The set is numbered on screen in the order the agent will receive it,
  * and each thumbnail carries its own ✕ so a bad capture costs one click rather
  * than starting the set again.
@@ -361,20 +361,20 @@ function relayShotSection(req) {
           <figcaption class="relay-shot-meta">${i + 1}. ${relayEsc(shot.label)}</figcaption>
         </figure>`).join('')}</div>`
     : '';
-  // The zone stays on screen with images already attached — that is where the
-  // next one goes — but shrinks to a strip, since by then the previews are what
+  // The zone stays on screen with images already attached (that is where the
+  // next one goes) but shrinks to a strip, since by then the previews are what
   // the space is for.
   const hint = held.length
     ? `<div class="relay-shot-hint">
-         <strong>Add another</strong> — drop, paste or click${held.length > 1 ? ` · ${held.length} attached` : ''}
+         <strong>Add another</strong>: drop, paste or click${held.length > 1 ? ` · ${held.length} attached` : ''}
        </div>`
     : `<div class="relay-shot-hint">
-         <strong>Drop images here</strong> — or click to choose files
+         <strong>Drop images here</strong>, or click to choose files
        </div>`;
   const zone = room > 0
     ? `<div class="relay-shot-zone${held.length ? ' compact' : ''}" id="relay-shot-zone"
             title="Drop images, or click to choose files">${hint}</div>`
-    : `<p class="relay-note">That is ${RELAY_MAX_SHOTS} images — the most one reply carries.
+    : `<p class="relay-note">That is ${RELAY_MAX_SHOTS} images, the most one reply carries.
        Remove one to swap it for another.</p>`;
   return `
     ${grid}
@@ -390,7 +390,7 @@ function relayShotSection(req) {
 
 // Both of the browser-side capture routes are gated on a *secure context*,
 // which localhost satisfies and a LAN address (a `web_addr` opened up to the
-// network) does not — so their availability is a property of how you reached
+// network) does not, so their availability is a property of how you reached
 // sbxw, not of your browser. Either button is left out rather than shown and
 // refused: an offer that cannot be taken up is worse than no offer, and
 // dropping a file is always on screen.
@@ -458,7 +458,7 @@ bgJobsEl.addEventListener('click', ev => {
 /**
  * The header badge: the way back in after dismissing the popup.
  *
- * Counts only what is waiting on *you* — a docked request already has a card of
+ * Counts only what is waiting on *you*: a docked request already has a card of
  * its own down in the corner, and counting it in both places would read as two
  * requests. Separate from `relayRender` because closing the popup changes the
  * count without there being anything left to render.
@@ -507,7 +507,7 @@ function relayRender() {
     // what came of it, which is what the agent reads.
     if (relayMacRunning.has(req.id) || req.state === 'routed') {
       body += `<div class="relay-waiting"><span class="relay-spinner"></span>
-        Approved — sbxw is carrying it out. ${relayEsc(req.from)} gets the outcome.</div>`;
+        Approved: sbxw is carrying it out. ${relayEsc(req.from)} gets the outcome.</div>`;
       foot = `<button class="btn-cancel" data-relay-action="dismiss">Close</button>`;
     } else {
       body += `<p class="relay-note">The virtual Mac is shared by every sandbox and has no
@@ -560,13 +560,13 @@ function relayRender() {
   } else if (relayIsShot(req) && !settled) {
     // `pending` is the only live state a screenshot request has: the server
     // refuses to route one, so there is nothing to wait on and nothing to
-    // review — just you, an image, and two buttons.
+    // review: just you, an image, and two buttons.
     if (req.note) body += `<p class="relay-note">${relayEsc(req.note)}</p>`;
     body += relayShotSection(req);
     body += `
       <div class="relay-section-label relay-or">or describe it instead</div>
       <textarea class="relay-answer" id="relay-own-answer" rows="2"
-                placeholder="Words work too — say what it looks like, and ${relayEsc(req.from)} carries on with that."></textarea>`;
+                placeholder="Words work too: say what it looks like, and ${relayEsc(req.from)} carries on with that."></textarea>`;
     foot = `
       <button class="btn-cancel" data-relay-action="dismiss">Later</button>
       <button class="relay-deny" data-relay-action="deny">Refuse</button>
@@ -577,7 +577,7 @@ function relayRender() {
     body += `
       <div class="relay-section-label relay-or">or answer it yourself</div>
       <textarea class="relay-answer" id="relay-own-answer" rows="3"
-                placeholder="Type the answer here — it goes straight to ${relayEsc(req.from)}."></textarea>`;
+                placeholder="Type the answer here; it goes straight to ${relayEsc(req.from)}."></textarea>`;
     foot = `
       <button class="btn-cancel" data-relay-action="dismiss">Later</button>
       <button class="relay-deny" data-relay-action="deny">Refuse</button>
@@ -586,7 +586,7 @@ function relayRender() {
     body += `
       <div class="relay-waiting">
         <span class="relay-spinner"></span>
-        Sent to <strong>${relayEsc(req.to)}</strong> — waiting for its agent to answer.
+        Sent to <strong>${relayEsc(req.to)}</strong>, waiting for its agent to answer.
         Nothing reaches ${relayEsc(req.from)} until you approve it.
       </div>`;
     body += relayTargetButtons(req, 'Or ask someone else instead');
@@ -596,7 +596,7 @@ function relayRender() {
   } else if (req.state === 'answered') {
     body += `
       <div class="relay-section-label">
-        ${relayEsc(req.to)} answered — edit freely, this is what ${relayEsc(req.from)} will receive
+        ${relayEsc(req.to)} answered: edit freely, this is what ${relayEsc(req.from)} will receive
       </div>
       <textarea class="relay-answer" id="relay-review-answer" rows="8">${relayEsc(req.answer || '')}</textarea>`;
     foot = `
@@ -604,7 +604,7 @@ function relayRender() {
       <button class="relay-deny" data-relay-action="deny">Refuse</button>
       <button class="btn-create" data-relay-action="approve">✓ Send to ${relayEsc(req.from)}</button>`;
   } else {
-    // Settled — held on screen for a beat so the outcome is legible.
+    // Settled: held on screen for a beat so the outcome is legible.
     body += req.state === 'approved'
       ? `<div class="relay-settled ok">Sent to <strong>${relayEsc(req.from)}</strong>.</div>`
       : `<div class="relay-settled no">Refused. Nothing was shared with
@@ -628,7 +628,7 @@ function relayRender() {
     if (focused !== null) relayBodyEl.querySelector(`.relay-ask-answer[data-ask-index="${focused}"]`)?.focus();
   }
 
-  // "Send" only means something once there is something to send — which, on a
+  // "Send" only means something once there is something to send, which, on a
   // screenshot request, an attached image already satisfies with the textarea
   // left empty.
   const ownAnswer = document.getElementById('relay-own-answer');
@@ -671,7 +671,7 @@ function relayRender() {
     file.addEventListener('change', () => {
       if (!file.files || !file.files.length) return;
       const chosen = [...file.files];
-      // Cleared so the same file can be picked again — after removing it, say.
+      // Cleared so the same file can be picked again (after removing it, say).
       // `change` does not fire on an input whose value has not changed.
       file.value = '';
       relayAttachAll(req.id, chosen);
@@ -688,7 +688,7 @@ function relayShow(id) {
   modalOpen(relayOverlay);
   relayRender();
   // The target buttons are built from the sandbox list, which is only refreshed
-  // on explicit actions — a sandbox started since the last refresh would
+  // on explicit actions; a sandbox started since the last refresh would
   // otherwise be missing from exactly the moment it matters.
   loadSandboxes().then(relayRender).catch(() => {});
 }
@@ -727,7 +727,7 @@ function relayAdvance() {
  *
  * PNG first, because a screenshot is flat colour and text where PNG is both
  * smaller and sharper than JPEG. The fallback exists for the case PNG is worst
- * at — a photograph, or a screen full of gradients and video — where it can run
+ * at (a photograph, or a screen full of gradients and video), where it can run
  * several times over the cap that the same picture as JPEG sits comfortably
  * under. Choosing by *result* rather than by guessing at the content is the
  * only rule that gets both right.
@@ -753,7 +753,7 @@ async function relayShrink(source) {
  *
  * Attaching an image rebuilds the body, and the textarea goes with it. Someone
  * who wrote "this is the 375px breakpoint" and *then* pasted the screenshot
- * would watch their sentence disappear — so the text is carried across, and the
+ * would watch their sentence disappear, so the text is carried across, and the
  * synthetic `input` re-runs the enable/disable pass that was listening on it.
  */
 function relayRenderKeepingCaption() {
@@ -770,12 +770,12 @@ function relayRenderKeepingCaption() {
  * Hold an image against `id`, ready to send. The preview is the receipt.
  *
  * Adds to whatever is already attached, and refuses at the two limits the
- * daemon would refuse at anyway — one image too heavy, or the set as a whole
+ * daemon would refuse at anyway: one image too heavy, or the set as a whole
  * past what a reply carries. Refusing here is worth the duplicated constants:
  * the person is looking at the popup with the previews in front of them, and
  * can drop the one that was making the same point twice.
  *
- * `render` is false while a batch is being attached — dropping four files
+ * `render` is false while a batch is being attached: dropping four files
  * repaints once at the end rather than four times.
  */
 async function relayAttach(id, source, label, render = true) {
@@ -787,12 +787,12 @@ async function relayAttach(id, source, label, render = true) {
   try {
     const { url, w, h } = await relayShrink(source);
     if (url.length > RELAY_SHOT_MAX_B64) {
-      showToast('That image is too large to send — try a single window', 'error');
+      showToast('That image is too large to send; try a single window', 'error');
       return false;
     }
     const weight = held.reduce((sum, shot) => sum + shot.url.length, url.length);
     if (weight > RELAY_SHOTS_MAX_B64) {
-      showToast('That is more than one reply carries — remove one first', 'error');
+      showToast('That is more than one reply carries; remove one first', 'error');
       return false;
     }
     relayShots.set(id, held.concat({ url, label: `${label || 'image'} · ${w}×${h}` }));
@@ -805,8 +805,8 @@ async function relayAttach(id, source, label, render = true) {
 }
 
 /**
- * Attach a whole batch — a multi-file drop, or a picker several files were
- * chosen in — in the order they were given, then repaint once.
+ * Attach a whole batch (a multi-file drop, or a picker several files were
+ * chosen in) in the order they were given, then repaint once.
  *
  * Sequential rather than `Promise.all`: the order the images arrive in is what
  * the agent is told they are in, and a race would shuffle a before and an
@@ -824,7 +824,7 @@ async function relayAttachAll(id, files) {
  * here: the popup shares a tab with a live terminal, the keystroke belongs to
  * whatever holds focus, and a person looking at a modal with a screenshot
  * already on their clipboard should not have to guess which of the two is
- * listening. A button is the version of that gesture with no ambiguity in it —
+ * listening. A button is the version of that gesture with no ambiguity in it,
  * and the click is also the user activation the API insists on.
  */
 async function relayPasteFromClipboard(id) {
@@ -838,7 +838,7 @@ async function relayPasteFromClipboard(id) {
   } catch (_) {
     // Permission refused, or a browser that only allows the keystroke. Both
     // leave ⌘V working, so that is what to say.
-    showToast('The browser would not hand over the clipboard — press ⌘V instead', 'error');
+    showToast('The browser would not hand over the clipboard; press ⌘V instead', 'error');
     return;
   }
   let attached = 0;
@@ -864,12 +864,12 @@ async function relayPasteFromClipboard(id) {
  * Worth the extra path because it removes the step where the whole thing goes
  * wrong: an agent is waiting *now*, and "go and take a screenshot, then come
  * back and paste it" is where a person leaves the popup and forgets. The picker
- * the browser puts up is also the permission — sbxw never chooses what is
+ * the browser puts up is also the permission: sbxw never chooses what is
  * captured, and cannot see the screen the rest of the time.
  */
 async function relayCapture(id) {
   if (!relayCanCapture()) {
-    showToast('Capture needs sbxw opened on localhost — paste or drop an image instead', 'error');
+    showToast('Capture needs sbxw opened on localhost; paste or drop an image instead', 'error');
     return;
   }
   let stream;
@@ -958,7 +958,7 @@ relayOverlay.addEventListener('click', async ev => {
     return;
   }
 
-  // The drop zone is a button in everything but markup — clicking it (or the
+  // The drop zone is a button in everything but markup: clicking it (or the
   // preview already in it) picks a file, so the three ways in are one target.
   if (ev.target.closest('#relay-shot-zone')) {
     document.getElementById('relay-shot-file')?.click();
@@ -1047,7 +1047,7 @@ document.getElementById('relay-modal-close').addEventListener('click', () => {
 });
 relayBadgeEl.addEventListener('click', () => relayShow());
 
-// Escape dismisses, like every other modal here — and, like the ✕, it means
+// Escape dismisses, like every other modal here, and, like the ✕, it means
 // "later". No click on the backdrop (no `closedby="any"`): an agent's
 // question is not dropped by a stray click.
 wireModal(relayOverlay, () => { relayClose(); relayRender(); });
@@ -1094,7 +1094,7 @@ function relayIngest(req, seed = false) {
   }
 
   // Just sent out to a sandbox: get out of the way. The wait is on an agent
-  // now, not on you, and it can run for minutes — so the request shrinks to a
+  // now, not on you, and it can run for minutes, so the request shrinks to a
   // corner card and the screen goes back to whatever you were doing. If another
   // question is queued behind it, that one takes the popup instead of closing.
   if (req.state === 'routed' && prev?.state !== 'routed' && relayCurrentId === req.id) {
@@ -1102,7 +1102,7 @@ function relayIngest(req, seed = false) {
     return;
   }
 
-  // The other side of that: a docked request wants you again — its answer came
+  // The other side of that: a docked request wants you again: its answer came
   // back, or delivery failed and it fell back to `pending`. Raise it, but never
   // over a decision already in progress; that one keeps the popup and this
   // shows up in the "N more waiting" count.
@@ -1114,7 +1114,7 @@ function relayIngest(req, seed = false) {
   }
 
   // A question nobody has seen yet raises the popup. Everything else only
-  // repaints — including an answer arriving in the popup you are already
+  // repaints, including an answer arriving in the popup you are already
   // looking at, rather than stealing focus from another one.
   const isNew = !prev && req.state === 'pending';
   if (isNew && !seed && relayIsAsk(req) && typeof vcAskCue === 'function') {
@@ -1138,7 +1138,7 @@ fetch('/api/relay')
     (d.requests || []).forEach(r => relayIngest(r, true));
     // A tab opened (or reloaded) while requests were already waiting shows them
     // straight away: the agent behind each one is blocked either way. Ones
-    // already out with a sandbox only get their corner card back — the tab
+    // already out with a sandbox only get their corner card back; the tab
     // reloading is no reason to interrupt you on their behalf.
     if (relayQueue().length) relayShow();
     else relayRenderDocks();

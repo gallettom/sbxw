@@ -10,7 +10,7 @@
 // with kind one of claim | release | commit | conflict | decision | question |
 // handoff | warning. Times are unix seconds (milliseconds are taken too).
 // `plan` is the sandbox's shared plan at work, in full (id, variant, threads),
-// or null when there is none — then the dialog draws the graph instead.
+// or null when there is none; then the dialog draws the graph instead.
 
 const BOARD_AMBER_MS = 90 * 60 * 1000; // a claim held this long reads amber
 // What each kind of entry is called and marked; the feed filters by these.

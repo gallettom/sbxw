@@ -25,7 +25,7 @@ const planError = document.getElementById('plan-error');
 const planApprove = document.getElementById('plan-approve');
 
 // Where thread `thread` of `sandbox` stands, from the latest approved plan
-// that holds it — null when no plan does.
+// that holds it; null when no plan does.
 function planThreadState(sandbox, thread) {
   let best = null;
   for (const p of plans.values()) {
@@ -42,7 +42,7 @@ function pendingPlanFor(sandbox) {
   return null;
 }
 
-// Sandboxes whose main session was made lead with ★ Lead, per the daemon —
+// Sandboxes whose main session was made lead with ★ Lead, per the daemon,
 // which forgets one as soon as that session is replaced (see /api/leads).
 const leadSessions = new Set();
 
@@ -65,7 +65,7 @@ function markLeading(sandbox) {
 }
 
 // Is the main session of `sandbox` the lead: made lead with ★ Lead, or
-// leading a plan — one waiting on a person, or approved with a thread still at
+// leading a plan: one waiting on a person, or approved with a thread still at
 // work?
 function isLeading(sandbox) {
   if (leadSessions.has(sandbox)) return true;
@@ -104,7 +104,7 @@ function askEndLead(idx) {
   const pending = pendingPlanFor(sandbox);
   const lines = [`The main session of ${sandbox} stops leading and goes back to being an ordinary session.`];
   if (running) {
-    lines.push(`${running} thread${running === 1 ? ' is' : 's are'} still at work. ${running === 1 ? 'It keeps' : 'They keep'} running — close ${running === 1 ? 'it' : 'them'} with Close thread — but ${running === 1 ? 'its reports' : 'their reports'} will no longer reach the main session.`);
+    lines.push(`${running} thread${running === 1 ? ' is' : 's are'} still at work. ${running === 1 ? 'It keeps' : 'They keep'} running (close ${running === 1 ? 'it' : 'them'} with Close thread), but ${running === 1 ? 'its reports' : 'their reports'} will no longer reach the main session.`);
   }
   if (pending) lines.push('The plan waiting for your approval will be refused.');
   document.getElementById('lead-end-body').innerHTML =
@@ -141,7 +141,7 @@ document.getElementById('lead-end-cancel').addEventListener('click', closeLeadEn
 document.getElementById('lead-end-x').addEventListener('click', closeLeadEnd);
 wireModal(leadEndOverlay, closeLeadEnd);
 
-// "Review plan" on the main pane, shown while its plan waits on a person —
+// "Review plan" on the main pane, shown while its plan waits on a person:
 // the way back to a dialog closed with Later.
 function refreshPlanButtons() {
   panes.forEach((p, i) => {
@@ -253,7 +253,7 @@ function paintMergeTeam(plan) {
   const hue = name => Math.max(0, plan.threads.findIndex(t => t.name === name));
   let html = '';
   if (claims.length) {
-    html += `<div class="merge-claims" role="alert"><strong>${wtPlural(claims.length, 'file')} still claimed</strong> — Merge waits until they are released.
+    html += `<div class="merge-claims" role="alert"><strong>${wtPlural(claims.length, 'file')} still claimed</strong>. Merge waits until they are released.
       <ul>${claims.map(c => `<li><code>${escHtml(c.file)}</code> · ${escHtml(c.owner)}</li>`).join('')}</ul></div>`;
   }
   html += `<h3 class="merge-h">Commits by thread</h3>` + (commits.size
@@ -458,7 +458,7 @@ const PLAN_HUES = ['--c-group-1', '--c-group-2', '--c-group-3', '--c-group-4'];
 
 // A goal's opening sentence, as the one line saying what the thread does, and
 // the rest. A sentence ends at . ! or ? followed by a capital or an opening
-// quote — so `web.rs` or `e.g. a file` does not cut it short.
+// quote, so `web.rs` or `e.g. a file` does not cut it short.
 function splitGoal(goal) {
   const text = (goal || '').trim();
   const m = text.match(/^([\s\S]+?[.!?])\s+(?=[A-Z("'`])/);
@@ -508,8 +508,8 @@ function planViewHtml(t) {
 }
 
 // One thread: a card to read, with the form that edits it kept beside it. The
-// inputs are the card's source of truth — Approve reads them whether or not
-// they were ever shown — so reading and editing cannot drift apart. The repo
+// inputs are the card's source of truth (Approve reads them whether or not
+// they were ever shown), so reading and editing cannot drift apart. The repo
 // is kept in `data-repo`, absent while the thread has none: '' is a repo too,
 // the workspace itself. The model is kept the same way, in `data-model`.
 function planRowHtml(t = { name: '', goal: '', scope: '' }, i = 0) {
@@ -753,7 +753,7 @@ function ingestPlan(plan, seed = false) {
   const prev = plans.get(plan.id);
   plans.set(plan.id, plan);
   // A new proposal asks for attention at once; one found on reload too, unless
-  // a dialog is already up — its pane's Review plan button leads back to it.
+  // a dialog is already up; its pane's Review plan button leads back to it.
   if (plan.state === 'pending' && !prev && !planOverlay.open) showPlan(plan);
   if (plan.state === 'approved' && !seed && prev?.state === 'pending' && !panesOpenedFor.has(plan.id)) {
     panesOpenedFor.add(plan.id);

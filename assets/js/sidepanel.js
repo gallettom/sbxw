@@ -9,7 +9,7 @@
 // `postMessage`. Everything else happens here, same-origin with the daemon:
 //
 //   * `GET /api/embed/resolve` turns the tab's URL into the sandbox serving it
-//     (a hand-made pairing, else the published ports — see src/embed.rs);
+//     (a hand-made pairing, else the published ports; see src/embed.rs);
 //     with no single answer the developer picks one, and the pick becomes a
 //     pairing (`POST /api/embed/pairings`);
 //   * messages go to that sandbox's main agent, or one of its open threads,
@@ -123,7 +123,7 @@ function spChat(key = spKey()) {
 }
 
 // Same rule as main.js's `threadOfSession`: the name sbxw gave the thread,
-// else its worktree — never a shared plan's `team-<plan>`.
+// else its worktree, never a shared plan's `team-<plan>`.
 function spThreadOf(info) {
   if (info?.thread) return info.thread;
   const m = /\/\.sbxw-worktrees\/([a-z0-9-]+)(?:\/|$)/.exec(info?.cwd || '');
@@ -177,7 +177,7 @@ function spAutoShot() {
 }
 
 // What Claude saw, as the transcript shows it: a line and a thumbnail of the
-// very image it was sent. Its request is the tooltip — it was written for a
+// very image it was sent. Its request is the tooltip: it was written for a
 // person who would have had to take the screenshot, and read in the
 // transcript it says "please send a capture" about a capture already taken.
 function spShotNote(m) {

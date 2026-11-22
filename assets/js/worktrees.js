@@ -178,14 +178,14 @@ function wtRepoHtml(sandbox, r, workspace) {
 }
 
 function wtBaseLabel(r) {
-  return `<span class="wt-name wt-base-name" title="The branch the lead's checkout is on — the threads merge into it">${escHtml(r.base || 'HEAD')}</span>
+  return `<span class="wt-name wt-base-name" title="The branch the lead's checkout is on; the threads merge into it">${escHtml(r.base || 'HEAD')}</span>
     <span class="wt-sub">${r.base ? "lead's branch" : 'detached HEAD'}</span>`;
 }
 
 function wtThreadLabel(sandbox, t) {
   const { mark, state } = threadMark(sandbox, t.name);
   return `<button type="button" class="wt-name wt-go" data-thread="${escHtml(t.name)}"
-      title="${escHtml(`${threadVerb(sandbox, t.name)} — worktree ${t.worktree}, branch ${t.branch}`)}">⑂ ${escHtml(t.name)}</button>
+      title="${escHtml(`${threadVerb(sandbox, t.name)}: worktree ${t.worktree}, branch ${t.branch}`)}">⑂ ${escHtml(t.name)}</button>
     <span class="wt-sub"><span class="thread-mark" data-state="${state}">${mark || '•'}</span> ${THREAD_STATE_WORDS[state] ?? 'Idle'}</span>`;
 }
 
@@ -231,7 +231,7 @@ function wtSvg(g, rows) {
   const X = k => (k < 0 ? WT_EARLIER : WT_PAD + k * step);
   const Y = row => row * WT_ROW + WT_ROW / 2;
   const y0 = Y(0);
-  const tip = c => `<title>${escHtml(`${wtShort(c.sha)} ${c.subject} — ${wtAgo(c.at)}`)}</title>`;
+  const tip = c => `<title>${escHtml(`${wtShort(c.sha)} ${c.subject} (${wtAgo(c.at)})`)}</title>`;
   // From the base at column k down to row y, turning into the lane.
   const drop = (k, y) => `M${X(k)} ${y0} L${X(k)} ${y - 8} Q${X(k)} ${y} ${X(k) + 8} ${y}`;
   const out = [];
@@ -250,7 +250,7 @@ function wtSvg(g, rows) {
       // A branch with nothing on it yet: a link to an empty mark.
       end = fk + 1;
       out.push(`<path class="wt-edge wt-faint" d="${fk >= 0 ? drop(fk, y) : `M${X(fk)} ${y}`} L${X(end) - 6} ${y}"/>`,
-        `<circle class="wt-hollow" cx="${X(end)}" cy="${y}" r="4"><title>${escHtml(`${wtShort(t.tip)} — no commits of its own yet`)}</title></circle>`);
+        `<circle class="wt-hollow" cx="${X(end)}" cy="${y}" r="4"><title>${escHtml(`${wtShort(t.tip)}: no commits of its own yet`)}</title></circle>`);
     } else {
       end = first + shown.length - 1;
       out.push(fk >= 0
