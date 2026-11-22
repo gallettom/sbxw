@@ -23,9 +23,7 @@ fn err(code: u16, m: impl Into<String>) -> Option<(u16, J)> {
     Some((code, json!({ "ok": false, "error": m.into() })))
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-}
+use crate::feat::now_ms;
 
 /// A listing by path: `files_tree[path]`, else `files_dir` when it is that path (or none was asked).
 fn listing(data: &J, path: &str) -> Option<J> {

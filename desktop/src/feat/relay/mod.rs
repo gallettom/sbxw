@@ -205,7 +205,7 @@ static LOCAL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 pub fn add_local_round(sandbox: &str, thread: Option<&str>, text: &str) -> String {
     let n = LOCAL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let id = format!("s-{n}");
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let now = crate::feat::now_ms();
     let mut r = json!({ "id": id, "from": sandbox, "kind": "ask", "question": text, "state": "pending", "shot_count": 0, "local": true, "created_ms": now, "updated_ms": now });
     if let Some(t) = thread {
         r["from_thread"] = t.into();

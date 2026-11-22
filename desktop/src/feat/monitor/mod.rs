@@ -95,9 +95,7 @@ pub const INTENTS: &[Spec] = &[
 
 crate::feat::relay::per_thread!(STATE, Model);
 
-fn wall_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-}
+use crate::feat::now_ms as wall_ms;
 
 /// `data.monitor` as the model stands.
 pub fn view_action(m: &mut Model, cx: &Ctx) -> Action {

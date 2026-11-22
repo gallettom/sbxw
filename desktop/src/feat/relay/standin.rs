@@ -15,9 +15,7 @@ fn bad(m: impl Into<String>) -> Option<(u16, J)> {
     Some((400, json!({ "ok": false, "error": m.into() })))
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-}
+use crate::feat::now_ms;
 
 /// What the scripted agent of `to` answers.
 pub fn scripted_answer(req: &J, to: &str) -> String {

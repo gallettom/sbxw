@@ -35,9 +35,7 @@ fn refuse(code: u16, msg: impl Into<String>) -> Option<(u16, J)> {
     Some((code, json!({ "ok": false, "error": msg.into() })))
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-}
+use crate::feat::now_ms;
 
 fn view<'a>(data: &'a mut J, sb: &str) -> &'a mut J {
     if !data["threads"].is_object() {
