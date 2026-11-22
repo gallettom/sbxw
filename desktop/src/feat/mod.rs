@@ -948,6 +948,12 @@ pub fn screen(name: &str) -> Option<(&'static Feature, &'static ScreenDecl)> {
     FEATURES.iter().find_map(|f| f.screens.iter().find(|s| s.name == name).map(|s| (*f, s)))
 }
 
+/// Milliseconds since the Unix epoch (0 if the clock is before it): the
+/// features' and stand-ins' timestamps.
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
 /// Every feature screen, `(name, source)`.
 pub fn screens() -> impl Iterator<Item = (&'static str, &'static str)> {
     FEATURES.iter().flat_map(|f| f.screens.iter().map(|s| (s.name, s.src)))

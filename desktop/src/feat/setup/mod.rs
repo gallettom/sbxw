@@ -65,9 +65,7 @@ fn section_keys(section: &str) -> &'static [&'static str] {
 pub const SECTIONS: &[&str] = &["secrets", "hosts", "voice"];
 const PORT: Arg = Arg::Int(1, 65535);
 
-const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: &'static str) -> Spec {
-    Spec { name, risk: Risk::Direct, args, doc }
-}
+use crate::intent::direct as d;
 const fn a(name: &'static str, asks: &'static str, args: &'static [(&'static str, Arg, bool)], doc: &'static str) -> Spec {
     Spec { name, risk: Risk::Approval(asks), args, doc }
 }

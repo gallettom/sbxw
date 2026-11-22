@@ -30,7 +30,7 @@ pub mod model;
 
 use super::{Action, Asked, Call, Ctx, Extra, Feature, Place, ScreenDecl, Slot, Standin, Zone};
 use crate::client::enc;
-use crate::intent::{Arg, Risk, Spec};
+use crate::intent::{Arg, Spec};
 use serde_json::{json, Value as J};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -64,9 +64,7 @@ pub const FEATURE: Feature = Feature {
     ..Feature::EMPTY
 };
 
-const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: &'static str) -> Spec {
-    Spec { name, risk: Risk::Direct, args, doc }
-}
+use crate::intent::direct as d;
 
 pub const INTENTS: &[Spec] = &[
     d("board_show", &[("sandbox", Arg::Text, false), ("team", Arg::Str, false)], "Opens the Dashboard over the panes: a team's conversation between you, its lead and its threads (what went through sbxw), its notes and its commits. On a team (`team`, a plan id; `all` for every team), else on that sandbox's current team, else the latest. Read only."),

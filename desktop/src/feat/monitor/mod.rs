@@ -61,9 +61,7 @@ pub const FEATURE: Feature = Feature {
     ..Feature::EMPTY
 };
 
-const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: &'static str) -> Spec {
-    Spec { name, risk: Risk::Direct, args, doc }
-}
+use crate::intent::direct as d;
 
 pub const INTENTS: &[Spec] = &[
     d("monitor_open", &[], "Makes Sessions the base view of the pane area (instead of the terminals): every session, who needs you first, read again from the daemon's list. An overlay over it closes."),
@@ -97,9 +95,7 @@ pub const INTENTS: &[Spec] = &[
 
 crate::feat::relay::per_thread!(STATE, Model);
 
-fn wall_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-}
+use crate::feat::now_ms as wall_ms;
 
 /// `data.monitor` as the model stands.
 pub fn view_action(m: &mut Model, cx: &Ctx) -> Action {

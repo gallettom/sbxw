@@ -33,6 +33,8 @@ mod resize_tests;
 mod leader_mark_tests;
 #[cfg(test)]
 mod sidebar_tests;
+#[cfg(test)]
+mod timing_tests;
 
 use crate::approval;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
@@ -684,7 +686,7 @@ impl App {
         for (k, v) in &self.feats.data {
             daemon.insert(k.clone(), v.clone());
         }
-        let mut data = crate::fixture::screen_data(&J::Object(daemon), &self.view_model());
+        let mut data = crate::fixture::screen_data_of(daemon, &self.view_model());
         let (modal, panels, extras, _) = self.feats_app(&data);
         data["app"]["modal"] = modal;
         // The window's size in points (a dialog fits its parts to it).

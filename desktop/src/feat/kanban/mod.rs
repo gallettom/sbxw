@@ -78,9 +78,7 @@ pub const TITLE: &str = crate::feat::board::TITLE;
 /// The palette's row and Help's line for the shortcut.
 pub const SHOW: &str = "Show the Kanban";
 
-const fn d(name: &'static str, args: &'static [(&'static str, Arg, bool)], doc: &'static str) -> Spec {
-    Spec { name, risk: Risk::Direct, args, doc }
-}
+use crate::intent::direct as d;
 
 pub const INTENTS: &[Spec] = &[
     d("kanban_show", &[("sandbox", Arg::Text, false)], "Opens the Kanban over the panes: the tickets and the threads of a sandbox (empty: every sandbox) in five columns, Planned, In progress, In test, Ready to merge, Merged, each placed by sbxw from its thread's state."),

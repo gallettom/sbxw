@@ -4,6 +4,7 @@
 //! appended without the rest drawn again, and nothing outside the overlay.
 
 use super::*;
+use crate::intent::Risk;
 use crate::shell::{view, App, Args};
 use rune::Runtime;
 
