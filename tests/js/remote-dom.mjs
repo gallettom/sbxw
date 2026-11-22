@@ -238,7 +238,12 @@ export function makeDom(html, opts = {}) {
     getContext() { return null; }
     animate() { return { finished: Promise.resolve(), cancel() {} }; }
     // ── Layout reads: each one after a write lays the page out again ──
-    getBoundingClientRect() { const b = box(this); return { top: b.top, bottom: b.top + b.h, left: 0, right: 390, width: 390, height: b.h, x: 0, y: b.top }; }
+    getBoundingClientRect() {
+      const b = box(this);
+      let top = b.top;
+      for (let p = this.parentNode; p && p.nodeType === 1; p = p.parentNode) if (p._scroller) top -= p._sc.top;
+      return { top, bottom: top + b.h, left: 0, right: 390, width: 390, height: b.h, x: 0, y: top };
+    }
     getClientRects() { return [this.getBoundingClientRect()]; }
     get offsetWidth() { box(this); return this.hidden ? 0 : 390; }
     get offsetHeight() { return box(this).h; }
@@ -250,7 +255,8 @@ export function makeDom(html, opts = {}) {
       box(this);
       const max = this._scroller ? Math.max(0, layoutOf(this).content - this._scroller) : 0;
       const top = Math.max(0, Math.min(max, Number(v) || 0));
-      if (top !== this._sc.top) { this._sc.top = top; touch(); queueScroll(this); }
+      // A scroll moves what is drawn, it does not lay the page out again.
+      if (top !== this._sc.top) { this._sc.top = top; queueScroll(this); }
     }
     scrollTo(o) { this.scrollTop = typeof o === 'object' ? o.top : arguments[1]; }
   }
@@ -357,9 +363,8 @@ export function makeDom(html, opts = {}) {
       if (n.hidden || n.tagName === 'SCRIPT' || n.tagName === 'HEAD' || n.tagName === 'svg' || n.tagName === 'TEMPLATE') { lay.set(n, { top, h: 0, content: 0 }); return 0; }
       const pad = /\brc-msg\b/.test(n.className) ? 16 : 0;
       let h = pad;
-      const inner = top - (n._scroller ? n._sc.top : 0);
       if (n.tagName === 'IMG') h = 120;
-      else for (const c of n.childNodes) h += walk(c, inner + h);
+      else for (const c of n.childNodes) h += walk(c, top + h);
       const content = h;
       if (n._scroller) h = n._scroller;
       lay.set(n, { top, h, content });

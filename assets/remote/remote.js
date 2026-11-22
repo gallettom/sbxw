@@ -865,21 +865,46 @@
   st.stick = true;
   st.anchor = null;
   st.gliding = null;   // the round button's smooth scroll: a timer while it runs
+  // The rows on screen, by key: the element and what it shows. A row that
+  // shows the same thing keeps its element (no Markdown parsed again, no
+  // picture loaded again); only new or changed rows are built, and #rows is
+  // patched in place rather than emptied (rcRowSig, rcPatchChildren).
+  let drawn = new Map();
   function logShown() { return st.screen === 's-chat' && !logEl.hidden; }
-  function rowBoxes() {
-    const base = logEl.getBoundingClientRect().top - logEl.scrollTop;
-    return [...$('rows').children].map(el => {
-      const b = el.getBoundingClientRect();
-      return { key: el.dataset.key, top: b.top - base, bottom: b.bottom - base };
-    });
+  // A row's box relative to the log's content (`base`: logBase()), which a
+  // scroll does not change. Only the rows needed are measured, never all of
+  // them: on a long conversation that was thousands of reads per update and
+  // per scroll event.
+  function logBase() { return logEl.getBoundingClientRect().top - logEl.scrollTop; }
+  function rowBox(el, base) {
+    const b = el.getBoundingClientRect();
+    return { key: el.dataset.key, top: b.top - base, bottom: b.bottom - base };
+  }
+  // The first row still in view at `viewTop`, found by halving (the rows
+  // stack, so their bottoms only grow): what rcAnchorPick picks from all.
+  function rowsAt(viewTop) {
+    const kids = $('rows').children;
+    const base = logBase();
+    let lo = 0;
+    let hi = kids.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (rowBox(kids[mid], base).bottom > viewTop) hi = mid; else lo = mid + 1;
+    }
+    return lo < kids.length ? [rowBox(kids[lo], base)] : [];
+  }
+  // The anchor's row, if it is still on screen.
+  function anchorRows() {
+    const el = st.anchor ? drawn.get(st.anchor.key)?.el : null;
+    return el && el.parentNode === $('rows') ? [rowBox(el, logBase())] : [];
   }
   function noteAnchor() {
     if (!logShown()) return;
-    st.anchor = st.stick ? null : rcAnchorPick(rowBoxes(), logEl.scrollTop);
+    st.anchor = st.stick ? null : rcAnchorPick(rowsAt(logEl.scrollTop), logEl.scrollTop);
   }
   function keepPlace() {
     if (!logShown()) return;
-    const top = rcLogPlace(st.stick, st.anchor, st.stick ? [] : rowBoxes(), logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);
+    const top = rcLogPlace(st.stick, st.anchor, st.stick ? [] : anchorRows(), logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);
     if (Math.abs(logEl.scrollTop - top) >= 1) logEl.scrollTop = top;
     noteAnchor();
     updateToEnd();
@@ -949,11 +974,6 @@
     }
   }
 
-  // The rows on screen, by key: the element and what it shows. A row that
-  // shows the same thing keeps its element (no Markdown parsed again, no
-  // picture loaded again); only new or changed rows are built, and #rows is
-  // patched in place rather than emptied (rcRowSig, rcPatchChildren).
-  let drawn = new Map();
   function renderRows() {
     const shown = rcWithPending(rcRows(st.items), st.pending);
     st.pending = st.pending.filter(p => shown.left.includes(p.id));

@@ -95,3 +95,52 @@ test('a leaders event leaves the rows alone', async () => {
   await dom.advance(0);
   [...rowsOf(dom)].forEach((el, i) => assert.equal(el, before[i]));
 });
+
+// The row at the top of the view, and how far below the view's top it starts.
+function topRow(dom) {
+  const log = dom.$('log');
+  const lt = log.getBoundingClientRect().top;
+  const el = rowsOf(dom).find(r => r.getBoundingClientRect().bottom > lt);
+  return { el, offset: el.getBoundingClientRect().top - lt };
+}
+
+test('scrolled up, older rows come in above and the row in view stays put', async () => {
+  const items = conversation(300, 100000);
+  const older = conversation(30, 1);
+  const dom = await openBig(items, { older });
+  const log = dom.$('log');
+  log.scrollTop = 110; // near the top: the scroll reads the older page
+  await dom.advance(0);
+  await dom.advance(0);
+  assert.ok(rowsOf(dom).length > 300, 'older rows drawn');
+  const was = topRow(dom);
+  // The same row, measured against a page drawn with the older rows from the start.
+  const before = await openBig(items, { older });
+  const blog = before.$('log');
+  blog.scrollTop = 110;
+  before.frame();
+  const b = topRow(before);
+  assert.equal(was.el.dataset.key, b.el.dataset.key);
+  assert.equal(Math.round(was.offset), Math.round(b.offset));
+});
+
+test('scrolled up, a new row costs a few box reads, not one per row', async () => {
+  for (const n of [200, 2000]) {
+    const items = conversation(n);
+    const dom = await openBig(items);
+    const log = dom.$('log');
+    log.scrollTop = log.scrollHeight / 2;
+    await dom.advance(0);
+    const keep = topRow(dom);
+    const last = items[items.length - 1].seq;
+    dom.S.newer = [newRow(last + 1, reply(7))];
+    dom.counters.layoutReads = 0;
+    dom.emit('history', { sandbox: 'big' });
+    await dom.advance(0);
+    assert.ok(dom.counters.layoutReads < 120, `${n} rows: ${dom.counters.layoutReads} reads`);
+    const now = topRow(dom);
+    assert.equal(now.el, keep.el, 'the same row at the top');
+    assert.equal(now.offset, keep.offset);
+    assert.ok(!dom.$('to-end').hidden, 'the round button shows, away from the end');
+  }
+});
