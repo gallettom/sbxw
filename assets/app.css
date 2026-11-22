@@ -878,7 +878,9 @@
   #kind-chat:hover, #kind-chat:focus-visible {
     border-color: var(--c-green); box-shadow: 0 0 0 1px var(--c-green-a20);
   }
-  .kind-card-icon { font-size: var(--fs-xl); line-height: 1; grid-row: 1 / span 4; }
+  .kind-card-icon { width: 22px; height: 22px; grid-row: 1 / span 4; color: var(--c-text-muted); transition: color var(--dur-micro); }
+  #kind-workspace:hover .kind-card-icon, #kind-workspace:focus-visible .kind-card-icon { color: var(--c-blue); }
+  #kind-chat:hover .kind-card-icon, #kind-chat:focus-visible .kind-card-icon { color: var(--c-green); }
   .kind-card > :not(.kind-card-icon) { grid-column: 2; }
   .kind-card-title { color: var(--c-text-bright); font-size: var(--fs-base); font-weight: 600; }
   .kind-card-lead { color: var(--c-text-soft); font-size: var(--fs-sm); line-height: 1.5; }
@@ -4910,3 +4912,15 @@ dialog.kb-form .modal-foot { align-items: center; }
   .kbf-row:not(.kbf-col) { flex-wrap: wrap; }
 }
 dialog.kb-form .modal-foot button { white-space: nowrap; flex-shrink: 0; }
+
+/* ── Dialog copy ── what used to be inline styles in index.html, on tokens. */
+.modal-text { margin: 0; color: var(--c-text); font-size: var(--fs-base); line-height: 1.5; }
+.modal-text-lead { margin-bottom: .2rem; }
+.modal-name { color: var(--c-text-bright); }
+.modal-warn { color: var(--c-red); font-size: var(--fs-sm); }
+.pop-note { margin: 0; color: var(--c-text-muted); font-size: var(--fs-sm); line-height: 1.5; }
+.pop-note-dim { color: var(--c-text-dim); font-size: var(--fs-xs); }
+.label-aside { font-weight: 400; }
+.label-aside-dim { color: var(--c-text-dim); }
+.field-hint { display: block; margin-top: .35rem; color: var(--c-text-muted); font-size: var(--fs-sm); }
+.field-hint strong { color: var(--c-text); font-weight: 600; }
