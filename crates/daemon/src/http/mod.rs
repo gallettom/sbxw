@@ -56,6 +56,8 @@ mod phone_review2_tests;
 #[cfg(test)]
 mod phone_live_tests;
 #[cfg(test)]
+mod phone_history_tests;
+#[cfg(test)]
 mod remote_push_tests;
 #[cfg(test)]
 mod remote_skills_tests;

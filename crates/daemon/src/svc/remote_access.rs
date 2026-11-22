@@ -1066,19 +1066,41 @@ impl App {
         self.reach_info(sb)?.session_id
     }
 
+    /// A page of the conversation the phone shows, counted in the phone's
+    /// rows (a run of steps is one), not in history items: the last `limit`
+    /// rows older than `before`, or the oldest `limit` rows newer than
+    /// `after` (`more` when others follow: read again from `latest_seq`).
+    /// The page carries the log's `epoch`: rows of another epoch are not
+    /// comparable (a daemon restart, a reset) and the phone reads afresh.
     pub fn remote_history(&self, sb: &SandboxRef, before: Option<u64>, after: Option<u64>, limit: Option<usize>) -> Result<(String, PhonePage), Refusal> {
         let sid = self.remote_leader_session(sb).ok_or(Refusal::NotFound)?;
         let max = sbxw_core::history::limits::PAGE_MAX;
         let limit = limit.unwrap_or(sbxw_core::history::limits::PAGE_DEFAULT).clamp(1, max);
-        let page = match after {
-            Some(_) => self.history_page(sb, &sid, None, Some(max)),
-            None => self.history_page(sb, &sid, before, Some(limit)),
-        }
-        .ok_or(Refusal::NotFound)?;
-        let mut view = phone_page(&page, after);
-        if after.is_some() && view.items.len() > limit {
-            view.items.truncate(limit);
-        }
+        let view = match after {
+            Some(a) => {
+                let page = self.history_page_after(sb, &sid, a, Some(max)).ok_or(Refusal::NotFound)?;
+                let mut view = phone_page(&page, Some(a));
+                if view.items.len() > limit {
+                    view.items.truncate(limit);
+                    view.more = true;
+                }
+                if view.more {
+                    if let Some(last) = view.items.last() {
+                        view.latest_seq = last.seq;
+                    }
+                }
+                view
+            }
+            None => {
+                let page = self.history_page(sb, &sid, before, Some(max)).ok_or(Refusal::NotFound)?;
+                let mut view = phone_page(&page, None);
+                if view.items.len() > limit {
+                    view.items.drain(..view.items.len() - limit);
+                    view.next_before = view.items.first().map(|i| i.first_seq);
+                }
+                view
+            }
+        };
         Ok((sid, view))
     }
 

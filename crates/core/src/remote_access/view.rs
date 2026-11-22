@@ -35,6 +35,11 @@ pub struct PhoneItem {
     pub clipped: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub provisional: bool,
+    /// The oldest history seq this row stands for (a `steps` row folds a
+    /// run; `seq` is its newest): where the page before it ends. Not on the
+    /// wire.
+    #[serde(skip)]
+    pub first_seq: u64,
 }
 
 /// A question's step: its text and options, not the decision table.
@@ -92,10 +97,17 @@ pub struct PhonePage {
     pub truncated_before: bool,
     pub partial: bool,
     pub ended: bool,
+    /// The log's numbering ([`Page::epoch`]): items of another epoch are
+    /// dropped and the last page read again.
+    pub epoch: String,
+    /// A `?after=` read: more items past this page, read again from
+    /// `latest_seq`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub more: bool,
 }
 
 fn plain(it: &Item, kind: &'static str) -> PhoneItem {
-    PhoneItem { seq: it.seq, at: it.at, kind, text: String::new(), from: None, steps: None, files: Vec::new(), count: None, clipped: false, provisional: false }
+    PhoneItem { seq: it.seq, at: it.at, kind, text: String::new(), from: None, steps: None, files: Vec::new(), count: None, clipped: false, provisional: false, first_seq: it.seq }
 }
 
 /// The phone's copy of `page`. `after`: only items past that seq.
@@ -159,6 +171,8 @@ pub fn phone_page(page: &Page, after: Option<u64>) -> PhonePage {
         truncated_before: page.truncated_before,
         partial: page.partial,
         ended: page.ended,
+        epoch: page.epoch.clone(),
+        more: page.more,
     }
 }
 
@@ -215,7 +229,7 @@ mod tests {
     }
 
     fn page(items: Vec<Item>) -> Page {
-        Page { latest_seq: items.last().map_or(0, |i| i.seq), items, next_before: Some(1), truncated_before: false, partial: false, partial_reason: Some("why".into()), ended: false }
+        Page { latest_seq: items.last().map_or(0, |i| i.seq), items, next_before: Some(1), truncated_before: false, partial: false, partial_reason: Some("why".into()), ended: false, epoch: "e1".into(), more: false }
     }
 
     #[test]
