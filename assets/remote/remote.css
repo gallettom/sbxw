@@ -707,7 +707,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-field:focus-visible { outline: none; }
 .rc-in { color: var(--c-text-muted); }
 .rc-in svg { width: 21px; height: 21px; }
-.rc-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+/* The hidden file input (composer, ticket form); a sent file's chip is .rc-file. */
+.rc-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .rc-field {
   flex: 1;
   min-width: 0;

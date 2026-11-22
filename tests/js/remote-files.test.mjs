@@ -72,4 +72,9 @@ test('the page draws the person row with rcMeEl and styles the chips', () => {
   assert.match(read('../../assets/remote/remote.js'), /r\.kind === 'me'\) \{\s*return rcMeEl\(document, r\);/);
   const css = read('../../assets/remote/remote.css');
   for (const sel of ['.rc-files', '.rc-file']) assert.ok(css.includes(`${sel} {`), sel);
+  // One rule per name: the chip keeps .rc-file, the hidden inputs have their own class.
+  assert.equal(css.split('.rc-file {').length - 1, 1, 'one .rc-file rule, the chip\'s');
+  assert.ok(css.includes('.rc-file-input {'));
+  const html = read('../../assets/remote/index.html');
+  for (const id of ['file', 'kb-file']) assert.match(html, new RegExp(`<input id="${id}" class="rc-file-input" type="file"`), id);
 });
