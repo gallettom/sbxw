@@ -3673,7 +3673,7 @@ fn empty_pane(s: &App, i: usize) -> El {
         .items_center()
         .justify_center()
         .child(rune::icon(crate::icons::get("terminal").unwrap(), theme::icon::LARGE).color(c("text-muted")))
-        .child(text(title).font(small(16.0, 600.0)).color(c("text-bright")))
+        .child(text(title).font(small(theme::font_size::HEADING, 600.0)).color(c("text-bright")))
         .child(text(line).font(theme::prose(crate::theme::font_size::BODY, 400.0)).color(c("text-muted")).wrap().max_w(360.0))
         .child(actions)
 }
