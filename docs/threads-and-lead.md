@@ -507,7 +507,7 @@ state; nobody drags a card past what sbxw knows.
 | In progress | Its thread is starting, working, blocked (mark) or failed (red mark) |
 | In test | Its thread reported done (or the lead marked it done) and no merge names it yet: the lead reviews and checks |
 | Ready to merge | A merge is proposed (or running) and names the thread; a failed merge stays here with a red mark |
-| Merged | Its merge result is ok |
+| Merged | Its merge result is ok, in this merge or an earlier one of the plan (a late merge); or git shows its branch already in the base (mark "merged outside sbxw"); or it is done, sbxw never merged it and its branch no longer exists (mark "branch gone"); or you closed its plan (mark "plan closed") |
 
 `sbxw_core::tickets::column_of` is the one place this is decided; the
 desktop, the web and the agents read the daemon's answer. A team that ended
@@ -516,6 +516,21 @@ Merged shows the 12 newest; the rest are behind "Show older". A thread with
 no ticket is a card too, titled with its name and its goal's first line;
 when it merges sbxw records it (at most 200 a sandbox), so it stays in Merged
 after its plan is pruned.
+
+**Old work leaves In test.** The daemon asks git about the done threads of
+approved plans (at most every 20 seconds a plan, when the board is read). A
+branch that is an ancestor of the base reads "merged outside sbxw", the same
+test as `plan_status` above. A done thread whose branch does not exist, and
+that sbxw never merged, goes to Merged with the mark "branch gone": nothing is
+left to review, and the mark says sbxw cannot tell a hand merge from a
+discard. It is not a column of its own, since only old plans have such
+threads. If git cannot be asked (no workspace, host unreachable) the card
+stays where it was: unknown is never "gone". For a plan you want off the
+board anyway, a thread's panel in In test has **Close plan** (two clicks): it
+marks the plan closed, so its unmerged threads show in Merged with "plan
+closed". It is refused while a thread works or a merge is proposed or running.
+It never touches git or a worktree, and it is not the lead's team end (which
+Team on again reverses). The phone has no such button.
 
 **Linking.** The lead reads the planned tickets (`tickets_list`,
 `ticket_read`) and names one per thread in `propose_plan` (`ticket:
