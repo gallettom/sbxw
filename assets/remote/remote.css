@@ -580,30 +580,30 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   /* The page keeps the place itself (older messages, a redrawn card), as
      Safari does: no browser scroll anchoring moving it on its own. */
   overflow-anchor: none;
-  padding: 12px max(14px, var(--safe-r)) 16px max(14px, var(--safe-l));
+  padding: var(--sp-3) max(var(--sp-4), var(--safe-r)) var(--sp-4) max(var(--sp-4), var(--safe-l));
 }
-.rc-log-top { text-align: center; font-size: var(--fs-xs); color: var(--c-text-dim); padding: 4px 0 12px; }
+.rc-log-top { text-align: center; font-size: var(--fs-xs); color: var(--c-text-dim); padding: var(--sp-1) 0 var(--sp-3); }
 .rc-log-top:empty { display: none; }
-#rows, #tail { display: flex; flex-direction: column; gap: 10px; }
-#tail:not(:empty) { margin-top: 10px; }
+#rows, #tail { display: flex; flex-direction: column; gap: var(--sp-3); }
+#tail:not(:empty) { margin-top: var(--sp-3); }
 
 .rc-msg {
   max-width: min(88%, 640px);
   min-width: 0;
-  padding: 9px 13px;
-  border-radius: 18px;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-xl);
   overflow-wrap: anywhere;
   word-break: break-word;
 }
-.rc-agent { align-self: flex-start; background: var(--c-agent); box-shadow: inset 0 0 0 1px var(--c-agent-edge); border-bottom-left-radius: 6px; }
-.rc-me { align-self: flex-end; background: var(--c-you); color: var(--c-text-bright); border-bottom-right-radius: 6px; white-space: pre-wrap; }
+.rc-agent { align-self: flex-start; background: var(--c-agent); box-shadow: inset 0 0 0 1px var(--c-agent-edge); border-bottom-left-radius: var(--r-xs); }
+.rc-me { align-self: flex-end; background: var(--c-you); color: var(--c-text-bright); border-bottom-right-radius: var(--r-xs); white-space: pre-wrap; }
 /* A message sent from this page, until the history has it. */
 .rc-me.rc-pending { opacity: .72; }
-.rc-me-state { margin-top: 4px; font-size: var(--fs-xs); opacity: .85; text-align: right; }
+.rc-me-state { margin-top: var(--sp-1); font-size: var(--fs-xs); opacity: .85; text-align: right; }
 .rc-me.rc-pending-failed { opacity: 1; outline: 1px solid var(--c-red); }
 .rc-me.rc-pending-unknown { opacity: 1; outline: 1px solid var(--c-amber); }
 .rc-new { animation: rc-rise var(--dur-medium) var(--ease); }
-.rc-from { font-size: var(--fs-xs); color: var(--c-green); opacity: 0.85; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-from { font-size: var(--fs-xs); color: var(--c-green); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-sbxw, .rc-note, .rc-steps, .rc-mac-line {
   align-self: center;
   max-width: 100%;
@@ -612,9 +612,9 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   text-align: center;
   overflow-wrap: anywhere;
 }
-.rc-sbxw { align-self: stretch; padding: 8px 12px; border-left: 2px solid var(--c-border); background: var(--c-surface-alt); border-radius: 0 var(--r-md) var(--r-md) 0; text-align: left; white-space: pre-wrap; }
+.rc-sbxw { align-self: stretch; padding: var(--sp-2) var(--sp-3); border-left: 2px solid var(--c-border); background: var(--c-surface-alt); border-radius: 0 var(--r-md) var(--r-md) 0; text-align: left; white-space: pre-wrap; }
 .rc-sbxw b { color: var(--c-text); font-weight: 600; font-size: var(--fs-xs); }
-.rc-steps { font: var(--fs-xs) var(--font-mono); color: var(--c-text-dim); display: flex; align-items: center; gap: 8px; align-self: stretch; }
+.rc-steps { font: var(--fs-xs) var(--font-mono); color: var(--c-text-dim); display: flex; align-items: center; gap: var(--sp-2); align-self: stretch; }
 .rc-steps::before, .rc-steps::after { content: ""; flex: 1; height: 1px; background: var(--c-hair); }
 .rc-mac-line { color: var(--c-amber); }
 
@@ -622,12 +622,12 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-md { min-width: 0; }
 .rc-md > :first-child { margin-top: 0; }
 .rc-md > :last-child { margin-bottom: 0; }
-.rc-md p, .rc-md ul, .rc-md ol, .rc-md pre { margin: 0 0 8px; }
+.rc-md p, .rc-md ul, .rc-md ol, .rc-md pre { margin: 0 0 var(--sp-2); }
 .rc-md ul, .rc-md ol { padding-left: 1.25em; }
 .rc-md li + li { margin-top: 2px; }
 .rc-md li::marker { color: var(--c-text-dim); }
-.rc-md code { font: 0.87em var(--font-mono); background: var(--c-neutral-a20); padding: 1px 5px; border-radius: 5px; overflow-wrap: anywhere; }
-.rc-md pre { overflow-x: auto; max-width: 100%; padding: 10px 12px; background: var(--c-sink-deep); border-radius: var(--r-md); font-size: var(--fs-sm); }
+.rc-md code { font: 0.87em var(--font-mono); background: var(--c-neutral-a20); padding: 1px var(--sp-1); border-radius: var(--r-xs); overflow-wrap: anywhere; }
+.rc-md pre { overflow-x: auto; max-width: 100%; padding: var(--sp-2) var(--sp-3); background: var(--c-sink-deep); border-radius: var(--r-md); font-size: var(--fs-sm); }
 .rc-md pre code { background: none; padding: 0; white-space: pre; overflow-wrap: normal; }
 .rc-md strong { color: var(--c-text-bright); font-weight: 600; }
 .rc-link { color: var(--c-blue); text-decoration: underline; text-decoration-color: var(--c-blue-a45); text-underline-offset: 2px; }
@@ -636,49 +636,49 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-url::after { content: ")"; }
 
 /* The tail: working line, a question card, "This needs your Mac". */
-.rc-working { align-self: flex-start; font-size: var(--fs-sm); color: var(--c-text-muted); display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; padding: 4px 2px; }
+.rc-working { align-self: flex-start; font-size: var(--fs-sm); color: var(--c-text-muted); display: flex; align-items: center; gap: var(--sp-2); min-width: 0; max-width: 100%; padding: var(--sp-1) 2px; }
 .rc-working span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rc-pulse { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--c-green); animation: rc-pulse 1.4s ease-in-out infinite; }
+.rc-pulse { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c-green); animation: rc-pulse 1.4s ease-in-out infinite; }
 .rc-card-q {
   align-self: stretch;
-  padding: 14px;
+  padding: var(--sp-4);
   background: var(--c-surface);
   border: 1px solid var(--c-amber-a45);
   border-radius: var(--r-lg);
   display: grid;
-  gap: 10px;
+  gap: var(--sp-3);
   animation: rc-rise var(--dur-medium) var(--ease);
 }
 .rc-card-q p { color: var(--c-text-bright); overflow-wrap: anywhere; white-space: pre-wrap; }
 .rc-card-q .rc-q-hint { font-size: var(--fs-sm); color: var(--c-text-muted); white-space: normal; }
-.rc-opts { display: grid; gap: 6px; }
+.rc-opts { display: grid; gap: var(--sp-2); }
 .rc-opt {
   min-height: var(--tap);
-  padding: 9px 12px 9px 38px;
+  padding: var(--sp-2) var(--sp-3) var(--sp-2) 40px;
   position: relative;
   text-align: left;
   border: 1px solid var(--c-hair-strong);
   border-radius: var(--r-md);
   background: transparent;
   overflow-wrap: anywhere;
-  transition: border-color var(--dur-micro), background-color var(--dur-micro);
+  transition: border-color var(--dur-micro) var(--ease), background-color var(--dur-micro) var(--ease);
 }
-.rc-opt::before { content: ""; position: absolute; left: 13px; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%; border: 1.5px solid var(--c-dim); }
+.rc-opt::before { content: ""; position: absolute; left: 14px; top: calc(50% - 7px); width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--c-dim); }
 .rc-opt:active { background: var(--c-press); }
 .rc-opt.rc-picked { border-color: var(--c-blue); background: var(--c-blue-a10); color: var(--c-text-bright); }
 .rc-opt.rc-picked::before { border-color: var(--c-blue); background: radial-gradient(circle, var(--c-blue) 0 3.5px, transparent 4px); }
-.rc-opt.rc-multi::before { border-radius: 4px; }
+.rc-opt.rc-multi::before { border-radius: var(--r-2xs); }
 .rc-opt.rc-multi.rc-picked::before { background: var(--c-blue); box-shadow: inset 0 0 0 2.5px var(--c-bg); }
 
 /* ── Composer: one object on its own ground, to the screen's edge ── */
 .rc-composer {
   position: relative;
   flex: none;
-  padding: 8px max(10px, var(--safe-r)) max(6px, var(--safe-b)) max(10px, var(--safe-l));
+  padding: var(--sp-2) max(var(--sp-2), var(--safe-r)) max(var(--sp-2), var(--safe-b)) max(var(--sp-2), var(--safe-l));
   background: var(--c-composer);
   border-top: 1px solid var(--c-hair);
   display: grid;
-  gap: 4px;
+  gap: var(--sp-1);
 }
 .rc-box {
   display: flex;
@@ -701,7 +701,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   min-width: 0;
   min-height: var(--tap);
   max-height: 7.6em;
-  padding: 11px 2px;
+  padding: calc((var(--tap) - 1.375em) / 2) 2px; /* one line centred in 44 */
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -744,7 +744,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* The status line: one place for every hint, refusal and wait. */
 .rc-status {
   min-height: 18px;
-  padding: 0 14px;
+  padding: 0 var(--sp-3);
   font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--c-text-muted);
@@ -756,7 +756,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-status.rc-t-busy { color: var(--c-text); }
 .rc-status.rc-t-warn {
   margin: 2px 0 0;
-  padding: 7px 12px;
+  padding: var(--sp-2) var(--sp-3);
   color: var(--c-text-bright);
   background: var(--c-amber-tint);
   border-radius: var(--r-md);
@@ -765,7 +765,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 }
 
 /* ── Recording: the field gives its place to a live wave ── */
-.rc-rec { flex: 1; min-width: 0; height: var(--tap); display: flex; align-items: center; gap: 10px; padding-left: 4px; }
+.rc-rec { flex: 1; min-width: 0; height: var(--tap); display: flex; align-items: center; gap: var(--sp-3); padding-left: var(--sp-1); }
 .rc-rec-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c-red); box-shadow: 0 0 0 4px var(--c-red-a14); }
 .rc-wave { flex: 1; min-width: 0; width: 100%; height: 28px; display: block; }
 .rc-rec-time { flex: none; font: var(--fs-sm) var(--font-mono); color: var(--c-text-bright); font-variant-numeric: tabular-nums; }
@@ -812,23 +812,23 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-seg-opt[aria-checked="true"], .rc-view[aria-selected="true"] { background: var(--c-elevated); color: var(--c-text-bright); box-shadow: var(--shadow-edge), inset 0 0 0 1px var(--c-hair-strong); }
 
 /* ── Files: chips above the field ── */
-.rc-tray { display: grid; gap: 6px; padding: 0 2px 4px; animation: rc-rise var(--dur-short) var(--ease); }
-.rc-chips { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.rc-tray { display: grid; gap: var(--sp-2); padding: 0 2px var(--sp-1); animation: rc-rise var(--dur-short) var(--ease); }
+.rc-chips { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
 .rc-chips:empty { display: none; }
 .rc-fchip {
   position: relative;
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
-  column-gap: 10px;
-  min-height: 44px;
-  padding: 3px 0 3px 6px;
+  column-gap: var(--sp-3);
+  min-height: var(--tap);
+  padding: 2px 0 2px var(--sp-2);
   background: var(--c-box);
   border: 1px solid var(--c-hair);
-  border-radius: 14px;
+  border-radius: var(--r-md);
   overflow: hidden;
 }
-.rc-fchip-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: var(--c-neutral-a16); color: var(--c-text-muted); }
+.rc-fchip-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: var(--r-sm); background: var(--c-neutral-a16); color: var(--c-text-muted); }
 .rc-fchip-icon svg { width: 18px; height: 18px; }
 .rc-fchip-text { min-width: 0; display: grid; }
 .rc-fchip-name { font-size: var(--fs-sm); color: var(--c-text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -836,7 +836,9 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-fchip-acts { display: flex; align-items: center; }
 .rc-fchip-acts .rc-icon-btn svg { width: 18px; height: 18px; }
 .rc-fchip-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: transparent; }
-.rc-fchip-bar > i { display: block; height: 100%; width: 0; background: var(--c-blue); transition: width var(--dur-short) linear; }
+/* The progress bar: the script sets its width; it is not tweened (a
+   transition on width re-lays the row every frame). */
+.rc-fchip-bar > i { display: block; height: 100%; width: 0; background: var(--c-blue); }
 .rc-fchip.rc-f-done .rc-fchip-icon { color: var(--c-green); background: var(--c-green-a10); }
 .rc-fchip.rc-f-failed { border-color: var(--c-red-a45); }
 .rc-fchip.rc-f-failed .rc-fchip-icon { color: var(--c-red); background: var(--c-red-a14); }
@@ -844,15 +846,15 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-held {
   display: grid;
   gap: 2px;
-  padding: 10px 6px 6px 12px;
+  padding: var(--sp-3) var(--sp-1) var(--sp-1) var(--sp-3);
   background: var(--c-amber-tint);
-  border-radius: 14px;
+  border-radius: var(--r-md);
   box-shadow: inset 0 0 0 1px var(--c-amber-a45);
 }
 .rc-held-why { font-size: var(--fs-sm); color: var(--c-text-bright); overflow-wrap: anywhere; white-space: pre-line; }
-.rc-tick { display: flex; align-items: center; gap: 10px; min-height: var(--tap); padding: 4px 0; font-size: var(--fs-sm); cursor: pointer; }
+.rc-tick { display: flex; align-items: center; gap: var(--sp-3); min-height: var(--tap); padding: var(--sp-1) 0; font-size: var(--fs-sm); cursor: pointer; }
 .rc-tick input { flex: none; width: 20px; height: 20px; margin: 0; accent-color: var(--c-green); }
-.rc-held-row { display: flex; justify-content: flex-end; gap: 6px; }
+.rc-held-row { display: flex; justify-content: flex-end; gap: var(--sp-2); }
 
 /* ── Level 2: Approvals ── */
 .rc-ap-btn { color: var(--c-text); }
@@ -1179,10 +1181,10 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-toast-go:focus-visible, .rc-toast-x:focus-visible { outline-offset: -2px; border-radius: var(--r-lg); }
 
 /* ── Skill suggestions above the field ── */
-.rc-skills { list-style: none; margin: 0 0 6px; padding: 4px; display: grid; gap: 2px; max-height: 176px; overflow-y: auto; border-radius: 12px; border: 1px solid var(--c-hair); background: var(--c-surface); }
+.rc-skills { list-style: none; margin: 0 0 var(--sp-2); padding: var(--sp-1); display: grid; gap: 2px; max-height: 192px; overflow-y: auto; border-radius: var(--r-md); border: 1px solid var(--c-hair); background: var(--c-surface); }
 .rc-skills[hidden] { display: none; }
-.rc-skills button { width: 100%; min-height: 40px; padding: 0 12px; text-align: left; border: 0; border-radius: 8px; background: transparent; color: var(--c-text-bright); font: inherit; }
-.rc-skills button:active { background: var(--c-hair); }
+.rc-skills button { width: 100%; min-height: var(--tap); padding: 0 var(--sp-3); text-align: left; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--c-text-bright); font: inherit; }
+.rc-skills button:active { background: var(--c-press); }
 .rc-skills button:focus-visible { outline-offset: -2px; }
 
 /* ── Model and lead mode ── */
@@ -1190,13 +1192,13 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   flex: none;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-3);
   min-width: 0;
 }
 /* Inside the composer the row follows the field's width at every size. */
 .rc-composer .rc-ctl { max-width: none; margin: 0; width: auto; }
 .rc-ctl[hidden] { display: none; }
-.rc-ctl-model { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.rc-ctl-model { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: var(--sp-2); }
 .rc-ctl-label { flex: none; font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-muted); }
 .rc-select {
   flex: 1 1 auto;
@@ -1211,7 +1213,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   font-size: var(--fs-md); /* iOS zooms a smaller field on focus */
 }
 .rc-ctl-lead { flex: none; }
-@media (min-width: 640px) { .rc-ctl { max-width: 420px; margin-left: auto; margin-right: auto; width: calc(100% - 24px); } }
+@media (min-width: 640px) { .rc-ctl { max-width: 420px; margin-left: auto; margin-right: auto; width: calc(100% - var(--sp-6)); } }
 /* Plan usage, one quiet line under the row; a window's percent turns amber
    from 75 and red from 90 (rcUsageTone). */
 .rc-ctl-usage { flex: none; margin: 0; font-size: var(--fs-xs); color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1231,8 +1233,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-kb-ferr[hidden] { display: none; }
 
 /* ── Status labels in agent text: [[Done]] as a pill, tone by word ── */
-.rc-pill { display: inline-block; padding: 0 7px; border-radius: 999px; border: 1px solid currentColor; font-size: 0.86em; font-weight: 600; line-height: 1.5; white-space: nowrap; background: color-mix(in srgb, currentColor 12%, transparent); }
-.rc-pill-detail { font-weight: 400; margin-left: 5px; }
+.rc-pill { display: inline-block; padding: 0 var(--sp-2); border-radius: var(--r-pill); font-size: 0.86em; font-weight: 600; line-height: 1.6; white-space: nowrap; background: color-mix(in srgb, currentColor 16%, transparent); }
+.rc-pill-detail { font-weight: 400; margin-left: var(--sp-1); }
 .rc-pill-detail::before { content: ":"; margin-right: 3px; opacity: 0.7; }
 .rc-pill-green { color: var(--c-green); }
 .rc-pill-red { color: var(--c-red); }
@@ -1248,10 +1250,10 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
    viewport resizes) and the bottom safe area (the composer's own padding). */
 .rc-toend {
   position: absolute;
-  right: max(14px, var(--safe-r));
-  bottom: calc(100% + 12px);
-  width: 44px;
-  height: 44px;
+  right: max(var(--sp-4), var(--safe-r));
+  bottom: calc(100% + var(--sp-3));
+  width: var(--tap);
+  height: var(--tap);
   display: grid;
   place-items: center;
   padding: 0;
@@ -1263,19 +1265,19 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 }
 .rc-toend[hidden] { display: none; }
 .rc-toend svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.rc-toend-dot { position: absolute; top: 4px; right: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--c-blue); border: 2px solid var(--c-surface); box-sizing: content-box; }
+.rc-toend-dot { position: absolute; top: var(--sp-1); right: var(--sp-1); width: 10px; height: 10px; border-radius: 50%; background: var(--c-blue); border: 2px solid var(--c-surface); box-sizing: content-box; }
 .rc-toend-dot[hidden] { display: none; }
 
 /* ── Files sent with a message: small chips under the person's text ── */
-.rc-files { display: flex; flex-wrap: wrap; gap: 6px; }
-.rc-me-text + .rc-files { margin-top: 8px; }
+.rc-files { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.rc-me-text + .rc-files { margin-top: var(--sp-2); }
 .rc-file {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 3px 10px;
-  border-radius: 999px;
+  padding: 2px var(--sp-3);
+  border-radius: var(--r-pill);
   border: 1px solid var(--c-hair);
   background: var(--c-sink);
   font-size: var(--fs-xs);
@@ -1284,7 +1286,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* A sent image kept on the Mac: a thumbnail, 120px at most, aspect kept; a
    tap opens it full screen (.rc-sent-fs reuses the canvas overlay). */
 .rc-thumb {
-  display: block; padding: 0; margin: 0; border: 1px solid var(--c-hair); border-radius: 10px; overflow: hidden;
+  display: block; padding: 0; margin: 0; border: 1px solid var(--c-hair); border-radius: var(--r-md); overflow: hidden;
   background: var(--c-sink); min-width: 48px; min-height: 48px; cursor: pointer; line-height: 0;
 }
 .rc-thumb-img { display: block; width: auto; height: auto; max-width: 120px; max-height: 120px; object-fit: contain; }
