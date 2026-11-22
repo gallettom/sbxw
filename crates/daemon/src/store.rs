@@ -320,14 +320,17 @@ fn restrict(path: &Path, mode: u32) {
 }
 
 /// Write `bytes` to `path` through a private temporary file and a rename.
+/// The temporary file is the writer's own (pid and a random part): two
+/// threads writing one file at once never share it.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().context("a file needs a directory")?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     restrict(dir, 0o700);
     let tmp = dir.join(format!(
-        ".{}.{}.tmp",
+        ".{}.{}.{}.tmp",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
-        std::process::id()
+        std::process::id(),
+        sbxw_core::ids::random_hex(4)
     ));
     std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
     restrict(&tmp, 0o600);
@@ -714,6 +717,33 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two writers of one file at once each land whole: neither renames the
+    /// other's half-written temporary file, nor fails on it gone.
+    #[test]
+    fn concurrent_atomic_writes_of_one_file_each_land_whole() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("state").join("plans.json");
+        let writers: Vec<_> = (0..8)
+            .map(|w| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for i in 0..200 {
+                        let body = serde_json::to_vec(&serde_json::json!({ "w": w, "i": i, "pad": "x".repeat(4096 * (w + 1)) })).unwrap();
+                        write_atomic(&path, &body).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for w in writers {
+            w.join().unwrap();
+        }
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let w = v["w"].as_u64().unwrap() as usize;
+        assert_eq!(v["pad"].as_str().unwrap().len(), 4096 * (w + 1), "a whole write");
+        let left: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left.len(), 1, "no temporary file left behind: {left:?}");
+    }
 
     fn r(raw: &str) -> SandboxRef {
         SandboxRef::parse(raw).unwrap()
