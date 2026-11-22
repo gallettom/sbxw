@@ -32,5 +32,7 @@ pub mod voice_engine;
 
 #[cfg(test)]
 pub(crate) mod testing;
+#[cfg(test)]
+mod perf_tests;
 
 pub use app::{now_ms, App, AppBuilder};
