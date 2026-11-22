@@ -48,7 +48,7 @@ safety boundary. This page lists what that boundary is and where it has edges.
   at daemon start and then once an hour, never on a request. That request
   carries only `anthropic-version`, `anthropic-beta: oauth-2025-04-20` and,
   under `--use-api-key`, `x-api-key: proxy-managed` (the proxy's placeholder,
-  not a key). `sbx` refuses any other header name, an `x-api-key` with another
+  not a key). sbxw refuses any other header name, an `x-api-key` with another
   value, and a value with a line break. The answer is parsed as data: only ids
   starting with `claude-` that pass the `--model` id check are kept, labels are
   cut to 64 characters with control characters removed, and the log carries
