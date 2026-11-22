@@ -1917,3 +1917,26 @@ function rcUsage(u, now) {
     compact: rows.map(r => `${r.key === 'five' ? '5 h' : '7 d'} ${r.pct}%`).join(' · '),
   };
 }
+
+// Files pasted from the clipboard (the composer and the Kanban form): the
+// event's `files`, else its `items` of kind 'file'. An image without a useful
+// name (none, or the generic "image.png" iOS gives) is named by its type and
+// the time. Returns [] for a plain-text paste, so the caller leaves the event
+// alone. `mk(file, name)` makes the renamed copy (the page's File).
+const RC_PASTE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heif', 'image/tiff': 'tiff', 'image/bmp': 'bmp' };
+function rcPasteFiles(cd, now, mk) {
+  let files = Array.from((cd && cd.files) || []);
+  if (!files.length) {
+    files = Array.from((cd && cd.items) || []).filter(i => i && i.kind === 'file' && typeof i.getAsFile === 'function').map(i => i.getAsFile()).filter(Boolean);
+  }
+  const stamp = new Date(Number(now) || 0).toISOString().replace(/\D/g, '').slice(0, 14);
+  const make = typeof mk === 'function' ? mk : (f, name) => new File([f], name, { type: f.type });
+  return files.map((f, i) => {
+    const type = String(f.type || '');
+    if (!type.startsWith('image/')) return f;
+    const name = String(f.name || '');
+    if (name && !/^image\.\w+$/i.test(name)) return f;
+    const ext = RC_PASTE_EXT[type] || (/^image\/([a-z0-9]+)/.exec(type) || [])[1] || 'png';
+    return make(f, `pasted-${stamp}${files.length > 1 ? `-${i + 1}` : ''}.${ext}`);
+  });
+}

@@ -1051,6 +1051,17 @@
     fileInput.value = '';
     fileInput.click();
   });
+  // Pasting an image attaches it like the paperclip; a text paste is left alone.
+  $('field').addEventListener('paste', e => {
+    const files = rcPasteFiles(e.clipboardData, Date.now());
+    if (!files.length) return;
+    e.preventDefault();
+    const t = tray();
+    if (!t || rec.state !== 'idle') return;
+    if (st.note?.tone !== 'warn') note('');
+    $('tick').checked = false;
+    t.offer(files);
+  });
   fileInput.addEventListener('change', () => {
     const t = tray();
     const files = [...(fileInput.files || [])];
@@ -1897,6 +1908,16 @@
     $('kb-create').disabled = t.pending() > 0;
   }
   $('kb-attach').addEventListener('click', () => { $('kb-file').value = ''; $('kb-file').click(); });
+  $('kb-desc').addEventListener('paste', e => {
+    const files = rcPasteFiles(e.clipboardData, Date.now());
+    if (!files.length) return;
+    e.preventDefault();
+    const t = kbTray();
+    if (!t) return;
+    $('kb-ferr').hidden = true;
+    $('kb-tick').checked = false;
+    t.offer(files);
+  });
   $('kb-file').addEventListener('change', () => {
     const t = kbTray();
     const files = [...($('kb-file').files || [])];
