@@ -8,8 +8,8 @@ package main
 // it to an Apple push endpoint. Everything is Go's standard library.
 //
 // It is not an Internet door: only https://<label>.push.apple.com/<path>,
-// only POST, only a body this file builds from a kind letter and a badge
-// count, only to public addresses, with TLS verified against the system
+// only POST, only a body this file builds from a kind letter, a badge
+// count and a sandbox name of letters, digits and hyphens, only to public addresses, with TLS verified against the system
 // roots, no proxy, no redirect, one request at a time, 60 an hour at most.
 
 import (
@@ -59,7 +59,8 @@ const (
 	pushTimeout     = 10 * time.Second
 	pushRespReadMax = 1 << 10
 	pushRecordSize  = 4096 // the rs field of the aes128gcm header
-	pushPlainPadded = 32   // payload JSON + 0x02 delimiter + zero padding
+	pushNameMax     = 63   // a sandbox name, bytes (sbx's own limit)
+	pushPlainPadded = 128  // payload JSON + 0x02 delimiter + zero padding: fits the longest name
 	pushJWTLife     = 12 * time.Hour
 	pushJWTReuse    = 11 * time.Hour // a token is reused until it is this old
 	pushJWTCacheMax = 16
@@ -86,6 +87,7 @@ const (
 
 var (
 	pushIDRE    = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	pushNameRE  = regexp.MustCompile(`^[A-Za-z0-9-]{0,63}$`)
 	pushHostRE  = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+push\.apple\.com$`)
 	pushPathRE  = regexp.MustCompile(`^/[A-Za-z0-9_\-/.]*$`)
 	errRefused  = errors.New("refused")
@@ -229,6 +231,8 @@ type pushJob struct {
 	uaPublic *ecdh.PublicKey
 	auth     []byte
 	kind     string // "p" or "n"
+	name     string // the sandbox, [A-Za-z0-9-]{0,63}; may be empty
+	lead     bool   // the sandbox is a team leader
 	badge    int
 	ttl      int
 }
@@ -242,6 +246,8 @@ func parseJob(line []byte) (*pushJob, string, error) {
 		P256dh   *string `json:"p256dh"`
 		Auth     *string `json:"auth"`
 		Kind     *string `json:"kind"`
+		Name     *string `json:"name"`
+		Lead     *bool   `json:"lead"`
 		Badge    *int64  `json:"badge"`
 		TTL      *int64  `json:"ttl"`
 	}
@@ -252,10 +258,15 @@ func parseJob(line []byte) (*pushJob, string, error) {
 		return nil, "", errBadJob
 	}
 	id := *j.ID
-	if j.Endpoint == nil || j.P256dh == nil || j.Auth == nil || j.Kind == nil || j.Badge == nil || j.TTL == nil {
+	if j.Endpoint == nil || j.P256dh == nil || j.Auth == nil || j.Kind == nil || j.Name == nil || j.Lead == nil || j.Badge == nil || j.TTL == nil {
 		return nil, id, errBadJob
 	}
 	if *j.Kind != "p" && *j.Kind != "n" {
+		return nil, id, errBadJob
+	}
+	// Letters, digits and hyphens only: JSON never escapes them, so the
+	// plaintext always fits pushPlainPadded.
+	if len(*j.Name) > pushNameMax || !pushNameRE.MatchString(*j.Name) {
 		return nil, id, errBadJob
 	}
 	if *j.TTL < 0 {
@@ -288,7 +299,7 @@ func parseJob(line []byte) (*pushJob, string, error) {
 	if ttl > pushTTLMax {
 		ttl = pushTTLMax
 	}
-	return &pushJob{id: id, endpoint: ep, uaPublic: ua, auth: auth, kind: *j.Kind, badge: int(badge), ttl: int(ttl)}, id, nil
+	return &pushJob{id: id, endpoint: ep, uaPublic: ua, auth: auth, kind: *j.Kind, name: *j.Name, lead: *j.Lead, badge: int(badge), ttl: int(ttl)}, id, nil
 }
 
 // idOf recovers a well-formed id from a line that is otherwise bad, so the
@@ -303,12 +314,16 @@ func idOf(line []byte) string {
 	return j.ID
 }
 
-// pushPlaintext is the payload, before encryption: {"kind":"p","badge":7}.
-func pushPlaintext(kind string, badge int) []byte {
+// pushPlaintext is the payload, before encryption:
+// {"kind":"n","badge":7,"name":"sbxw-2","lead":true}. It is padded to
+// pushPlainPadded whatever the name, so its size says nothing of it.
+func pushPlaintext(kind string, badge int, name string, lead bool) []byte {
 	b, _ := json.Marshal(struct {
 		Kind  string `json:"kind"`
 		Badge int    `json:"badge"`
-	}{kind, badge})
+		Name  string `json:"name"`
+		Lead  bool   `json:"lead"`
+	}{kind, badge, name, lead})
 	return b
 }
 
@@ -576,7 +591,7 @@ func (s *pushSender) send(ctx context.Context, job *pushJob) string {
 	if _, err := rand.Read(salt); err != nil {
 		return ansNetwork
 	}
-	body, err := encryptPush(pushPlaintext(job.kind, job.badge), pushPlainPadded, job.uaPublic, job.auth, asPriv, salt, pushRecordSize)
+	body, err := encryptPush(pushPlaintext(job.kind, job.badge, job.name, job.lead), pushPlainPadded, job.uaPublic, job.auth, asPriv, salt, pushRecordSize)
 	if err != nil {
 		return ansBadJob
 	}
