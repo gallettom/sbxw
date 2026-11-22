@@ -272,11 +272,22 @@ exchanges) and reads 30 older ones (`RC_OLDER_ROWS`) each time the log is
 scrolled to its top, keeping the row in view where it was. It reads newer
 rows on each nudge with `after` its last seq; an answer with another `epoch`
 drops the rows and reads the last page again. A message sent from the page
-is drawn at once as a pending bubble ("Sending…"), placed before anything
-that arrives after the Send, and replaced by the history's own prompt when
-it comes (the same text, whitespace aside, else the first prompt newer than
-the Send: the daemon masks names); a refused send shows "Not sent" for 4 s
-and leaves the text in the composer.
+is drawn at once as a pending bubble ("Sending…", then "Sent"), placed
+before anything that arrives after the Send, and replaced by the history's
+own prompt when it comes. `POST /r/leaders/:sandbox/message` answers
+`{ok, masked, text, after, epoch}`: `after` is the log's newest seq just
+before the daemon pressed Return, `epoch` its numbering, `text` the words as
+typed (masked, trimmed, without the block of attachment paths). The prompt
+is the first prompt row of that epoch newer than `after` (the same words
+first). After another epoch (a restart, the hook's backfill) the bubble
+matches the newest prompt with its words, typed or masked, else with its
+files. The page does not rely on the event stream's nudge alone: it reads
+`after` itself at fixed delays after the Send (`RC_CATCH_UP_MS`, up to
+60 s), and a bubble still unmatched after 60 s says "Sent, waiting for the
+agent" (it is still replaced when the row comes). The event stream sends a
+`history` nudge for every leader when it fell behind the daemon's events.
+A refused send shows "Not sent" for 4 s and leaves the text in the
+composer.
 
 ## Sessions: ended, continues, who wrote the last input
 
