@@ -489,13 +489,16 @@ pub mod motion {
     pub const SPIN: f32 = 0.9;
 }
 
-/// The keyboard focus ring: 2 pt in `focus`, drawn `OUT` outside a control
-/// (the default), `NEAR` outside where neighbours sit close (the rail, a
-/// field's box), `IN` inside a row that fills its list's width (menu rows).
+/// The keyboard focus ring: 2 pt in `focus`, one offset, `OUT` (2 pt
+/// outside) on every control, the rail's buttons and the fields included
+/// (the rail's 6 pt gaps keep a ring clear of its neighbours). `IN` (inside)
+/// only where outside has no room: a row that fills its list's width (menu
+/// rows, the scope list) and the status bar's entries, 24 pt in a 26 pt bar
+/// at the window's foot, where a ring outside would be cut by the window's
+/// edge. `focus_rings_are_out_but_rows_and_the_status_bar` holds the list.
 pub mod focus {
     pub const W: f32 = 2.0;
     pub const OUT: f32 = 2.0;
-    pub const NEAR: f32 = 1.0;
     pub const IN: f32 = -2.0;
 }
 
@@ -1652,6 +1655,37 @@ mod tests {
             let r = w[1] / w[0];
             assert!((1.125..=1.2).contains(&r), "type step {} -> {}: {r:.3}", w[0], w[1]);
         }
+    }
+
+    /// One focus-ring offset: `focus::IN` only on menu rows, the scope
+    /// list's rows and the status bar's entries ([`focus`]); every other
+    /// ring is `focus::OUT`.
+    #[test]
+    fn focus_rings_are_out_but_rows_and_the_status_bar() {
+        const IN_ALLOWED: &[(&str, usize)] = &[("src/screen.rs", 1), ("src/scope.rs", 1), ("src/shell/statusbar.rs", 4)];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut stack = vec![root.join("src")];
+        let mut found = vec![];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                if rel == "src/theme.rs" || !rel.ends_with(".rs") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&p).unwrap();
+                let n = src.matches("focus::IN,").count();
+                let want = IN_ALLOWED.iter().find(|(f, _)| *f == rel).map_or(0, |(_, n)| *n);
+                if n != want {
+                    found.push(format!("{rel}: {n} rings inside, {want} allowed"));
+                }
+            }
+        }
+        assert!(found.is_empty(), "{}", found.join("\n"));
     }
 
     /// A retired colour name ([`ALIASES`]) resolves to its token, in the

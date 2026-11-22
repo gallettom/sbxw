@@ -73,7 +73,7 @@ fn action(key: String, label: &str, icon: Option<&str>, tone: &str, press: impl 
         .items_center()
         .radius(theme::radius("xs").unwrap())
         .hover(tint)
-        .focus_ring(crate::theme::focus::W, crate::theme::focus::IN, c("focus"))
+        .focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus"))
         .cursor(Cursor::Pointer)
         .on_press(press);
     if let Some(i) = icon {

@@ -567,7 +567,7 @@ pub fn narrow_chip<S: 'static>(key: &str, sp: &Spec, clear: Option<Box<dyn Fn(&m
         r = r.child(
             el().key(format!("{key}-narrow-clear")).role("button").label(format!("Clear {name}")).help(format!("Back to the whole sandbox, not only {name}"))
                 .w(theme::layout::DENSE_H).h(theme::layout::DENSE_H).items_center().justify_center().radius(theme::radius("xs").unwrap())
-                .hover(c("elevated")).focus_ring(crate::theme::focus::W, crate::theme::focus::IN, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut S| f(s))
+                .hover(c("elevated")).focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut S| f(s))
                 .child(icon("close", theme::icon::SMALL, muted)),
         );
     }
@@ -660,7 +660,7 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
                 }
                 _ => false,
             });
-        l = l.child(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(theme::radius("sm").unwrap()).focus_within_ring(crate::theme::focus::W, crate::theme::focus::NEAR, c("focus")).child(input));
+        l = l.child(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(theme::radius("sm").unwrap()).focus_within_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).child(input));
     }
     // The rows scroll inside the panel (it never grows past LIST_MAX_H or the
     // window): `shrink` and `min_h(0)` let the viewport be shorter than its

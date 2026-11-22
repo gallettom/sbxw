@@ -1506,7 +1506,7 @@ impl Build<'_> {
                 if n.disabled {
                     t = t.read_only(true);
                 }
-                field_ground(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center(), n).radius(theme::radius("sm").unwrap()).focus_within_ring(theme::focus::W, theme::focus::NEAR, c("focus")).child(t)
+                field_ground(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center(), n).radius(theme::radius("sm").unwrap()).focus_within_ring(theme::focus::W, theme::focus::OUT, c("focus")).child(t)
             }
             Kind::Icon => {
                 let i = crate::icons::get(&n.text).expect("checked icon");
@@ -1617,7 +1617,7 @@ impl Build<'_> {
                     t = t.read_only(true);
                 }
                 let h = n.rows as f32 * (size * theme::LINE_HEIGHT).round() + 16.0;
-                field_ground(col().w_full().h(h).px(8.0).py(8.0), n).radius(theme::radius("sm").unwrap()).focus_within_ring(theme::focus::W, theme::focus::NEAR, c("focus")).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
+                field_ground(col().w_full().h(h).px(8.0).py(8.0), n).radius(theme::radius("sm").unwrap()).focus_within_ring(theme::focus::W, theme::focus::OUT, c("focus")).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
             }
             Kind::Image => match crate::picture::shown(key.as_deref().unwrap_or("")) {
                 Some((px, (w, h))) => {

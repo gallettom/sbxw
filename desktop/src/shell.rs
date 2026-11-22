@@ -3295,7 +3295,7 @@ fn mode_switch(s: &App, i: usize, agent: &str, ground: u32) -> El {
         if on {
             e = e.fill(c("elevated"));
         } else {
-            e = e.hover(c("hover-subtle")).cursor(Cursor::Pointer).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::NEAR, c("focus")).on_press(move |s: &mut App| {
+            e = e.hover(c("hover-subtle")).cursor(Cursor::Pointer).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).on_press(move |s: &mut App| {
                 s.switch_mode(i);
                 s.push_data();
             });
@@ -3354,7 +3354,7 @@ fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
         let hover = if quiet { theme::hex(theme::over(meaning_fg, 0.12, quiet_tint)) } else { c("active-bg") };
         // A chip with words is named by them; a bare icon or number by its tooltip.
         let named = if it.chip_text() == it.text() && !it.text().is_empty() { it.text() } else { it.help.clone() };
-        b = b.role("button").label(named).expanded(active).hover(hover).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::NEAR, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+        b = b.role("button").label(named).expanded(active).hover(hover).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
             s.press_extra("pane", &name, &args);
             s.push_data();
         });
