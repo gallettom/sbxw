@@ -17,7 +17,7 @@
 use crate::app::{now_ms, App};
 use sbxw_core::agents::SessionState;
 use sbxw_core::remote_access::journal::Kind;
-use sbxw_core::remote_access::push::{self as rules, Answer, Asking, Edges, Job, Limits, Outcome, PushFile, PushKind, Refused, Subscription, Vapid};
+use sbxw_core::remote_access::push::{self as rules, Answer, Asking, Edges, Job, Limits, Outcome, PushFile, PushKind, Refused, Subscription, Vapid, Waiting};
 use sbxw_core::remote_access::reach::ReachKind;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -385,7 +385,7 @@ impl App {
             .map(|(s, k, _)| (s.to_string(), Asking { name: rules::push_name(s.name.as_str()), lead: k == ReachKind::Leader }))
             .collect();
         let waiting_by = self.remote_waiting();
-        let waiting: usize = waiting_by.values().sum();
+        let waiting: usize = waiting_by.values().map(|w| w.plans + w.merges).sum();
         let now = now_ms();
         let mut guard = self.remote_access.lock().unwrap();
         let rt = &mut *guard;
@@ -426,11 +426,21 @@ impl App {
 
     /// Plans waiting for the person's approval plus merges proposed, per
     /// sandbox.
-    fn remote_waiting(&self) -> BTreeMap<String, usize> {
+    fn remote_waiting(&self) -> BTreeMap<String, Waiting> {
         use sbxw_core::plans::{MergeState, PlanState};
-        let mut out = BTreeMap::new();
-        for p in self.plans_list().iter().filter(|p| (p.state == PlanState::Pending && !p.closed) || p.merge.as_ref().is_some_and(|m| m.state == MergeState::Proposed)) {
-            *out.entry(p.sandbox.clone()).or_insert(0) += 1;
+        let mut out: BTreeMap<String, Waiting> = BTreeMap::new();
+        for p in self.plans_list().iter() {
+            let plan = p.state == PlanState::Pending && !p.closed;
+            let merge = p.merge.as_ref().is_some_and(|m| m.state == MergeState::Proposed);
+            if plan || merge {
+                let w = out.entry(p.sandbox.clone()).or_default();
+                // A plan still pending counts as a plan, else its merge.
+                if plan {
+                    w.plans += 1;
+                } else {
+                    w.merges += 1;
+                }
+            }
         }
         out
     }

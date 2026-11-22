@@ -941,10 +941,10 @@ terms (remote-access-spec.md, D1 to D7); contract: `.sbxw-artifacts/remote/API.m
   builds the request itself, and follows no redirect: it is not a general door to the
   Internet (tailnet/README.md, "Push").
 - **What causes a push:** only a change of state seen by one daemon task: a reachable
-  session starting to ask for the person, or more plans and merges waiting. No route causes
+  session starting to ask for the person, or more plans (`p`) or more merges (`m`) waiting (both at once: one `p`). No route causes
   one, an agent can cause at most the same push as its own question would (a thread, a
   background session or Jarvis cannot, as they are not reached), and a network request
-  never does. Per phone: one per kind per 2 minutes, 20 an hour. A phone whose page is open
+  never does. Per phone: one per kind (`p`, `m`, `n` each have their own bucket) per 2 minutes, 20 an hour over all kinds. A phone whose page is open
   gets none.
 - **A forged subscription** (a phone sending an endpoint that is not Apple's) is refused at
   subscribe with the same allow-list the sidecar applies again before each send, and never

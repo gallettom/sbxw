@@ -171,6 +171,8 @@ func TestPushRoundTripAndFixedSize(t *testing.T) {
 		want  string
 	}{
 		{"p", 0, "", false, `{"kind":"p","badge":0,"name":"","lead":false}`},
+		{"m", 2, "sbxw-2", false, `{"kind":"m","badge":2,"name":"sbxw-2","lead":false}`},
+		{"m", 99, long, false, `{"kind":"m","badge":99,"name":"` + long + `","lead":false}`},
 		{"n", 7, "a", true, `{"kind":"n","badge":7,"name":"a","lead":true}`},
 		{"n", 1, "sbxw-2", false, `{"kind":"n","badge":1,"name":"sbxw-2","lead":false}`},
 		{"p", 99, long, false, `{"kind":"p","badge":99,"name":"` + long + `","lead":false}`},
@@ -777,6 +779,16 @@ func TestPushConfigLine(t *testing.T) {
 	}
 	if fmt.Sprintf("%v %+v %#v %s", cfg, cfg, cfg, cfg) != strings.Repeat("pushConfig{...} ", 3)+"pushConfig{...}" {
 		t.Error("a printed config shows its fields")
+	}
+}
+
+func TestPushAcceptsKindM(t *testing.T) {
+	ua, auth := newUA(t)
+	for _, k := range []string{"p", "m", "n"} {
+		line := jobLine("x1", "https://web.push.apple.com/abc", ua, auth, k, 1, 60)
+		if _, _, err := parseJob(line); err != nil {
+			t.Errorf("kind %s refused: %v", k, err)
+		}
 	}
 }
 

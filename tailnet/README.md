@@ -166,7 +166,7 @@ Go's standard library only (no new module).
 endpoint at Apple, with a 230-byte body encrypted to the phone's key (RFC 8291,
 `aes128gcm`) and a VAPID token signed with the Mac's key (RFC 8292, `sub` = the
 project URL given by the daemon, no e-mail). Inside the encryption there is only
-`{"kind":"p"|"n","badge":0..99,"name":"<sandbox>","lead":true|false}`: a kind
+`{"kind":"p"|"m"|"n","badge":0..99,"name":"<sandbox>","lead":true|false}`: a kind
 letter, a count, the sandbox's name (0 to 63 letters, digits and hyphens, else
 the job is refused) and whether it is a team leader, padded to 128 bytes so that
 every push has the same size whatever the name. No title, message text or device
