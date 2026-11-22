@@ -77,3 +77,23 @@ test('approvals filter: per-sandbox counts follow the badge rule', () => {
   assert.deepEqual([by.docs.n, by.docs.dot], [0, true]);
   assert.deepEqual([by['old-experiment'].n, by['old-experiment'].dot, by['old-experiment'].count], [0, false, 1]);
 });
+
+// ── Approvals: one class and one icon per kind ──
+test('approvals kind: each kind maps to its class and icon id, unknown is neutral', () => {
+  const k = {};
+  vm.runInNewContext(`${read('../../assets/remote/remote-core.js')}\nthis.rcApKind = rcApKind;`, k);
+  const want = { plans: 'plans', merges: 'merges', network: 'network', stopped: 'stopped' };
+  for (const w of Object.keys(want)) {
+    const r = plain(k.rcApKind(w));
+    assert.equal(r.cls, `rc-k-${w}`);
+    assert.equal(r.icon, `ap-i-${w}`);
+  }
+  for (const bad of ['nope', undefined, null, 'constructor', '__proto__']) {
+    const r = plain(k.rcApKind(bad));
+    assert.equal(r.cls, 'rc-k-neutral');
+    assert.equal(r.icon, 'ap-i-neutral');
+  }
+  const html = read('../../assets/remote/index.html');
+  for (const w of Object.keys(want)) assert.ok(html.includes(`id="ap-i-${w}"`), `sprite has ${w}`);
+  assert.ok(html.includes('id="ap-i-neutral"'));
+});

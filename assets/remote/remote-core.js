@@ -2024,3 +2024,15 @@ function rcPasteFiles(cd, now, mk) {
     return make(f, `pasted-${stamp}${files.length > 1 ? `-${i + 1}` : ''}.${ext}`);
   });
 }
+// The Approvals kinds: one class (accent colour) and one icon id per kind.
+// An unknown kind is neutral, so a new kind from the Mac never breaks a row.
+const RC_AP_KINDS = {
+  plans: { cls: 'rc-k-plans', icon: 'ap-i-plans', label: 'Plan' },
+  merges: { cls: 'rc-k-merges', icon: 'ap-i-merges', label: 'Merge' },
+  network: { cls: 'rc-k-network', icon: 'ap-i-network', label: 'Network request' },
+  stopped: { cls: 'rc-k-stopped', icon: 'ap-i-stopped', label: 'Stopped sandbox' },
+};
+function rcApKind(what) {
+  const k = Object.prototype.hasOwnProperty.call(RC_AP_KINDS, what) ? RC_AP_KINDS[what] : null;
+  return k ? { ...k } : { cls: 'rc-k-neutral', icon: 'ap-i-neutral', label: '' };
+}

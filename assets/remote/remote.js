@@ -2294,6 +2294,22 @@
     });
     return fresh;
   }
+  // A kind's icon, drawn from the sprite in index.html.
+  function kindIcon(kind) {
+    const SVG = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(SVG, 'svg');
+    svg.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS(SVG, 'use');
+    use.setAttribute('href', `#${kind.icon}`);
+    svg.append(use);
+    return svg;
+  }
+  function kindTile(kind) {
+    const t = el('span', 'rc-ktile');
+    t.setAttribute('aria-hidden', 'true');
+    t.append(kindIcon(kind));
+    return t;
+  }
   async function apToastCheck(n) {
     const base = st.apBase;
     st.apBase = n;
@@ -2307,6 +2323,9 @@
     const sbs = new Set(fresh.map(f => f.sandbox).filter(Boolean));
     const sb = sbs.size === 1 && fresh.every(f => f.sandbox) ? [...sbs][0] : '';
     const name = sb ? (st.leaders.find(l => l.sandbox === sb)?.name || sb) : '';
+    const kind = rcApKind(merges ? 'merges' : 'plans');
+    $('ap-toast').className = `rc-toast ${kind.cls}`;
+    $('ap-toast-ic').replaceChildren(kindIcon(kind));
     $('ap-toast-text').textContent = delta > 1 ? `${delta} ${fresh.length ? noun : 'plan'}s wait for you` : `A ${noun} waits for you`;
     $('ap-toast-sb').textContent = name;
     $('ap-toast-sb').hidden = !name;
@@ -2431,9 +2450,11 @@
       const items = rcApFilter(L.what, all[L.what], only);
       if (!items.length) return;
       const sec = el('section', 'rc-ap-sec');
-      const h = el('h2', 'rc-ap-h', L.title);
-      const n = el('span', 'rc-ap-n', items.length);
-      h.append(' ', n);
+      const kind = rcApKind(L.what);
+      const h = el('h2', `rc-ap-h ${kind.cls}`);
+      const ic = kindIcon(kind);
+      ic.setAttribute('class', 'rc-ap-hic');
+      h.append(ic, el('span', 'rc-ap-ht', L.title), el('span', 'rc-ap-n', items.length));
       const ul = el('ul', 'rc-ap-list');
       for (const it of items) ul.append(listRow(L.what, it));
       sec.append(h, ul);
@@ -2450,14 +2471,24 @@
   $('ap-none-all').addEventListener('click', () => { st.apTouched = true; st.apFilter = null; renderApLists(); });
   function listRow(what, it) {
     const li = el('li');
-    const b = el('button', `rc-ap-row rc-ap-${what}`);
+    const kind = rcApKind(what);
+    const b = el('button', `rc-ap-row rc-ap-${what} ${kind.cls}`);
     b.type = 'button';
     let id, main, meta;
     if (what === 'plans') { id = str(it.id); main = str(it.summary) || id; meta = `${str(it.sandbox)} · ${Number(it.threads) || 0} threads`; }
     else if (what === 'merges') { id = str(it.id); main = `Merge of ${str(it.sandbox)}`; meta = `${str(it.variant)} · ${Number(it.branches) || 0} branches`; }
     else if (what === 'network') { id = str(it.id); main = str(it.host); meta = str(it.sandbox); }
     else { id = str(it.name); main = str(it.name); meta = [str(it.agent) || (it.chat ? 'chat' : ''), str(it.workspace)].filter(Boolean).join(' · '); }
-    b.append(dataEl('span', 'rc-ap-main', main, what === 'network'), dataEl('span', 'rc-ap-meta', meta));
+    const txt = el('span', 'rc-ap-txt');
+    txt.append(dataEl('span', 'rc-ap-main', main, what === 'network'), dataEl('span', 'rc-ap-meta', meta));
+    const chev = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    chev.setAttribute('class', 'rc-ap-chev');
+    chev.setAttribute('viewBox', '0 0 24 24');
+    chev.setAttribute('aria-hidden', 'true');
+    const cp = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    cp.setAttribute('d', 'M9.5 5.5 16 12l-6.5 6.5');
+    chev.append(cp);
+    b.append(kindTile(kind), txt, chev);
     b.addEventListener('click', () => openItem(what, id, '', what === 'network' ? { sandbox: str(it.sandbox), host: str(it.host) } : null));
     li.append(b);
     return li;
@@ -2531,9 +2562,12 @@
   }
   // A detail's head: its title (data) and a line of parts ([string | { data }]).
   function head(title, sub) {
-    const h = el('div', 'rc-item-head');
-    h.append(dataEl('h2', 'rc-item-title', title));
-    if (sub && sub.length) h.append(partsInto(el('p', 'rc-item-sub'), sub));
+    const kind = rcApKind(st.item && st.item.what);
+    const h = el('div', `rc-item-head ${kind.cls}`);
+    const txt = el('div', 'rc-item-headtxt');
+    txt.append(dataEl('h2', 'rc-item-title', title));
+    if (sub && sub.length) txt.append(partsInto(el('p', 'rc-item-sub'), sub));
+    h.append(kindTile(kind), txt);
     return h;
   }
   function planView(p) {
