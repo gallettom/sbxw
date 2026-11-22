@@ -1051,6 +1051,9 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-kb-count { font: var(--fs-xs) var(--font-mono); color: var(--c-text-dim); }
 .rc-kb-tab[aria-selected="true"] .rc-kb-count { color: var(--tone); }
 .rc-kb-status { margin: var(--sp-3) max(var(--sp-4), var(--safe-r)) 0 max(var(--sp-4), var(--safe-l)); font-size: var(--fs-sm); color: var(--c-text-muted); }
+/* A region's error line (rcSay): its own state class, the error colour role,
+   one plain sentence, no icon. Loading and empty stay muted. */
+.rc-kb-status.rc-t-err, .rc-log-top.rc-t-err, .rc-ap-fail.rc-t-err, .rc-item > .rc-t-err { color: var(--c-red-ink); }
 .rc-kb-lanes { flex: 1; min-height: 0; display: flex; padding: 0 max(var(--sp-3), var(--safe-r)) 0 max(var(--sp-3), var(--safe-l)); }
 .rc-kb-lane { display: none; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
 .rc-kb-lane.rc-on { display: flex; }
@@ -1139,6 +1142,42 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   unicode-bidi: isolate;
   white-space: nowrap;
 }
+
+/* ── First load: a skeleton in the shape of the list (rcSkeletonInto) ──
+   Home, Approvals, Kanban and Canvas, until the list's first answer; a
+   refresh of rows already drawn shows none. Its own classes on the cards'
+   metrics (radius, hairline, paddings, min heights), so the real rows take
+   its place without a jump; bars where the text goes, one line box each
+   (1lh). A slow pulse, opacity only, stopped under reduced motion. */
+.rc-skel-row { list-style: none; }
+.rc-skel-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.rc-skel {
+  display: grid; align-content: center; gap: 2px; min-height: 64px;
+  padding: var(--sp-3) var(--sp-4); background: var(--c-surface);
+  border: 1px solid var(--c-hair); border-radius: var(--r-lg);
+  animation: rc-skel 1.6s ease-in-out infinite;
+}
+.rc-skel-bar { display: block; height: 0.75em; margin-block: calc((1lh - 0.75em) / 2); border-radius: var(--r-2xs); background: var(--c-hair-strong); }
+.rc-skel-a { width: 50%; }
+.rc-skel-b { width: 78%; font-size: var(--fs-sm); }
+.rc-skel-c { width: 28%; font-size: var(--fs-sm); }
+.rc-skel-tile { width: 32px; height: 32px; border-radius: var(--r-sm); background: var(--c-hair); }
+.rc-skel-head { padding: var(--sp-2) 2px 2px; }
+.rc-skel-leader { grid-template-columns: 32px minmax(0, 1fr); column-gap: var(--sp-3); padding-left: var(--sp-3); border-left: 3px solid var(--c-hair-strong); }
+.rc-skel-leader .rc-skel-tile { grid-row: 1 / 3; }
+.rc-skel-sec { display: grid; gap: var(--sp-2); }
+.rc-skel-h { margin-top: var(--sp-2); margin-inline-start: var(--sp-1); }
+.rc-skel-group { gap: 1px; border-radius: var(--r-lg); overflow: hidden; background: var(--c-hair); border: 1px solid var(--c-hair); }
+.rc-skel-ap { display: flex; align-items: center; gap: var(--sp-3); min-height: 60px; padding: var(--sp-3); border: 0; border-left: 3px solid var(--c-hair-strong); border-radius: 0; }
+.rc-skel-ap .rc-skel-tile { flex: none; width: 28px; height: 28px; }
+.rc-skel-txt { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.rc-skel-ap .rc-skel-b { font-size: var(--fs-xs); }
+.rc-skel-kb { gap: var(--sp-2); min-height: 96px; }
+.rc-skel-kb .rc-skel-c { font-size: var(--fs-xs); }
+.rc-skel-lane { flex: 1; min-width: 0; padding: var(--sp-1) 0 var(--sp-4); }
+.rc-skel-cv { min-height: 60px; }
+.rc-skel-cv .rc-skel-b { width: 45%; font-size: var(--fs-xs); }
+@keyframes rc-skel { 50% { opacity: 0.55; } }
 
 /* ── Motion: short, and only where something changed ── */
 @keyframes rc-pulse { 50% { opacity: 0.3; } }

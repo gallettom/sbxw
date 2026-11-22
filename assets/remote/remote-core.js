@@ -569,6 +569,50 @@ function rcFactsInto(box, parts) {
   });
   return box;
 }
+// A region's status line: loading and empty in the muted tone; an error in
+// its own state class (rc-t-err, the error colour role), one plain sentence,
+// no icon. Empty text hides the line.
+function rcSay(node, text, err = false) {
+  node.textContent = text || '';
+  node.hidden = !text;
+  node.classList.toggle('rc-t-err', !!(text && err));
+  return node;
+}
+// The first load of a list (home, Approvals, Kanban, Canvas) draws a
+// skeleton in its shape: `n` placeholder rows on the cards' metrics, bars
+// where the text goes. Its own classes (rc-skel-*), never the cards' (the
+// page and its tests wait on those). Hidden from screen readers; the region
+// says aria-busy until rcSkeletonDone. A refresh of rows already drawn
+// never calls this.
+function rcSkeletonInto(region, shape, n = 3) {
+  const doc = region.ownerDocument;
+  const mk = (tag, cls, ...kids) => { const e = doc.createElement(tag); e.className = cls; e.append(...kids); return e; };
+  const bar = cls => mk('span', `rc-skel-bar ${cls}`);
+  const card = () => {
+    if (shape === 'leader') return mk('div', 'rc-skel rc-skel-leader', mk('span', 'rc-skel-tile'), bar('rc-skel-a'), bar('rc-skel-b'));
+    if (shape === 'ap') return mk('div', 'rc-skel rc-skel-ap', mk('span', 'rc-skel-tile'), mk('span', 'rc-skel-txt', bar('rc-skel-a'), bar('rc-skel-b')));
+    if (shape === 'kb') return mk('div', 'rc-skel rc-skel-kb', bar('rc-skel-c'), bar('rc-skel-a'), bar('rc-skel-b'));
+    return mk('div', 'rc-skel rc-skel-cv', bar('rc-skel-a'), bar('rc-skel-b'));
+  };
+  const rows = Array.from({ length: n }, () => mk('li', 'rc-skel-row', card()));
+  let out;
+  if (shape === 'leader') out = [mk('li', 'rc-skel-row rc-skel-head', bar('rc-skel-c')), ...rows];
+  else if (shape === 'ap') out = [mk('div', 'rc-skel-sec', bar('rc-skel-c rc-skel-h'), mk('ul', 'rc-skel-list rc-skel-group', ...rows))];
+  else if (shape === 'kb') out = [mk('div', 'rc-skel-lane', mk('ul', 'rc-skel-list', ...rows))];
+  else out = rows;
+  for (const o of out) o.setAttribute('aria-hidden', 'true');
+  region.replaceChildren(...out);
+  region.setAttribute('aria-busy', 'true');
+  return region;
+}
+// The first answer came (rows, an empty list or an error): called before
+// the rows are drawn, it takes the skeleton away and the region is no
+// longer busy. A region that was not busy is left as it is.
+function rcSkeletonDone(region) {
+  if (region.getAttribute('aria-busy') !== 'true') return;
+  region.removeAttribute('aria-busy');
+  region.replaceChildren();
+}
 // A long home group folds: more than `limit` entries show the first
 // `limit` and a "Show all" for the rest, until opened.
 function rcFold(items, open, limit = 3) {

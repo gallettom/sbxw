@@ -902,6 +902,71 @@ async function openApprovals(page, from = 'leaders') {
   await page.waitForSelector('#s-approvals:not([hidden])');
 }
 
+// A route held until the test lets it go (one gate per call of hold()).
+async function hold(page, test) {
+  let go;
+  const gate = new Promise(r => { go = r; });
+  await page.route(u => test(new URL(u)), async route => { await gate; await route.continue().catch(() => {}); });
+  return () => go();
+}
+test('first loads: a skeleton in the list\'s shape, then the rows in its place; a refresh shows none; errors have their own class', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true, kanbanReset: true, canvasReset: true });
+  const { ctx, page, problems } = await phone();
+  // Home: the list and the stream held, so only the skeleton can show.
+  const goHome = await hold(page, u => u.pathname === '/r/leaders' || u.pathname === '/r/events');
+  await page.goto(`${base()}/`);
+  await page.waitForSelector('#leaders[aria-busy="true"] .rc-skel-leader');
+  assert.equal(await page.$$eval('#leaders .rc-skel-leader', e => e.length), 3, 'three placeholder rows');
+  assert.deepEqual(await page.$$eval('#leaders > li', l => [...new Set(l.map(e => e.getAttribute('aria-hidden')))]), ['true'], 'hidden from screen readers');
+  assert.equal(await page.textContent('#leaders'), '', 'no text while it loads');
+  const skelTop = await page.$eval('#leaders .rc-skel-leader', e => e.getBoundingClientRect().top);
+  goHome();
+  await page.waitForSelector('.rc-leader');
+  assert.equal(await page.$eval('#leaders', e => e.hasAttribute('aria-busy')), false);
+  assert.equal(await page.$$eval('.rc-skel', e => e.length), 0);
+  const rowTop = await page.$eval('.rc-leader', e => e.getBoundingClientRect().top);
+  assert.ok(Math.abs(rowTop - skelTop) <= 2, `the first row lands where the skeleton's was (${skelTop} then ${rowTop})`);
+  // Approvals: the first read draws the skeleton, a second visit keeps the rows.
+  const goAp = await hold(page, u => /^\/r\/(plans|merges|network)$/.test(u.pathname));
+  await page.tap('#approvals-btn');
+  await page.waitForSelector('#ap-lists[aria-busy="true"] .rc-skel-ap');
+  goAp();
+  await page.waitForSelector('.rc-ap-row');
+  assert.equal(await page.$eval('#ap-lists', e => e.hasAttribute('aria-busy')), false);
+  await page.unroute(() => true);
+  // Canvas: skeleton on the first read; back to it, the rows stay while it reads again.
+  // (The conversation reads the list for the tab's badge: held from before.)
+  const goCv = await hold(page, u => /^\/r\/leaders\/[^/]+\/canvas$/.test(u.pathname));
+  await page.tap('#back');
+  await page.tap('.rc-leader >> text=shop');
+  await page.waitForSelector('#s-chat:not([hidden])');
+  await page.tap('#v-canvas');
+  await page.waitForSelector('#cv-list[aria-busy="true"] .rc-skel-cv');
+  assert.equal(await page.isVisible('#cv-status'), false, 'the skeleton, not a line of text');
+  goCv();
+  await page.waitForSelector('.rc-cv-row');
+  await page.unroute(() => true);
+  const goCv2 = await hold(page, u => /^\/r\/leaders\/[^/]+\/canvas$/.test(u.pathname));
+  await page.tap('#v-chat');
+  await page.tap('#v-canvas');
+  assert.equal(await page.$$eval('.rc-skel', e => e.length), 0, 'a refresh shows no skeleton');
+  assert.ok(await page.$$eval('.rc-cv-row', e => e.length) > 0, 'the rows stay');
+  goCv2();
+  await page.unroute(() => true);
+  // Kanban: an error is its own line, in the error class, and no skeleton stays.
+  await page.route(u => /\/kanban$/.test(new URL(u).pathname), r => r.fulfill({ status: 500, contentType: 'application/json', body: '{"ok":false,"error":"boom"}' }));
+  await page.tap('#v-kanban');
+  await page.waitForSelector('#kb-status:not([hidden])');
+  assert.equal(await page.$eval('#kb-status', e => e.classList.contains('rc-t-err')), true);
+  assert.equal(await page.textContent('#kb-status'), 'The board could not be read: boom.');
+  assert.equal(await page.$eval('#kb-lanes', e => [e.hasAttribute('aria-busy'), e.children.length].join()), 'false,0');
+  const [err, muted] = await page.$eval('#kb-status', e => [getComputedStyle(e).color, getComputedStyle(document.querySelector('.rc-muted') || document.body).color]);
+  assert.notEqual(err, muted, 'not the loading colour');
+  await page.unroute(() => true);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
 test('level 2: the Approvals entry, its badge, and one sentence when it cannot act', { skip }, async () => {
   await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
   const { ctx, page, problems } = await phone();
@@ -929,6 +994,7 @@ test('level 2: the Approvals entry, its badge, and one sentence when it cannot a
   await page.tap('#approvals-btn');
   await page.waitForSelector('.rc-ap-fail');
   assert.equal(await page.textContent('.rc-ap-fail'), 'The Mac cannot read this right now (sbx did not answer). Try again in a moment.');
+  assert.equal(await page.$eval('.rc-ap-fail', e => e.classList.contains('rc-t-err')), true, 'an error line, not a muted one');
   assert.equal(await page.$$eval('.rc-ap-row', r => r.length), 2, 'the plan and the merge stay (stopped sandboxes are on the home)');
   await page.tap('#back');
   await page.waitForSelector('#s-chat:not([hidden])');
@@ -1342,7 +1408,7 @@ async function openBoard(page, sandbox = 'shop') {
   await page.tap(`.rc-leader >> text=${sandbox}`);
   await page.waitForSelector('#s-chat:not([hidden])');
   await page.tap('#v-kanban');
-  await page.waitForSelector('.rc-kb-lane, #kb-status:not([hidden])');
+  await page.waitForSelector('.rc-kb-lane.rc-on, #kb-status:not([hidden])');
 }
 const selected = page => page.$eval('.rc-kb-tab[aria-selected="true"]', t => t.dataset.col);
 const visibleCards = page => page.$$eval('.rc-kb-lane.rc-on .rc-kb-card', c => c.map(e => e.dataset.key));

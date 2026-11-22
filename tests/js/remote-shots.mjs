@@ -99,6 +99,20 @@ async function chat(page, sb) { await home(page); await page.tap(`.rc-leader >> 
   await page.goto(`${base}/#pair=CODE1234abcd`); await page.waitForSelector('#pair-form:not([hidden])');
   await snap(page, 'phone-pairing'); await ctx.close();
 }
+// 14. The home's first load: the skeleton (the list and the stream held)
+{
+  const { ctx, page } = await fresh();
+  await page.route(u => ['/r/leaders', '/r/events'].includes(new URL(u).pathname), () => {});
+  await page.goto(`${base}/`); await page.waitForSelector('#leaders[aria-busy="true"] .rc-skel-leader');
+  await snap(page, 'phone-skeleton'); await ctx.close();
+}
+// 15. An error line: the board could not be read
+{
+  const { ctx, page } = await fresh(); await chat(page, 'shop');
+  await page.route(u => /\/kanban$/.test(new URL(u).pathname), r => r.fulfill({ status: 500, contentType: 'application/json', body: '{"ok":false,"error":"the board file is not readable"}' }));
+  await page.tap('#v-kanban'); await page.waitForSelector('#kb-status.rc-t-err:not([hidden])');
+  await snap(page, 'phone-error'); await ctx.close();
+}
 console.log(made.join('\n'));
 await br.close();
 await sb.close();

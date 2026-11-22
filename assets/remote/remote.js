@@ -58,6 +58,7 @@
   const st = {
     me: null,
     leaders: [],
+    leadersKnown: false, // false until the first list arrives: the home draws a skeleton
     stopped: [],         // /r/stopped's sandboxes, for the home's last group
     stoppedOpen: false,  // that group unfolded ("Show all")
     models: [],          // the model list from /r/models
@@ -246,7 +247,7 @@
     startEvents();
     refreshPush();
     const res = await api.leaders();
-    if (res.ok) setLeaders(res.data);
+    if (res.ok) setLeaders(res.data); else leadersFailed(res);
     refreshL2();
   }
 
@@ -306,7 +307,7 @@
     elsewhere(false);
     startEvents();
     const l = await api.leaders();
-    if (l.ok) setLeaders(l.data);
+    if (l.ok) setLeaders(l.data); else leadersFailed(l);
     if (st.current) fetchNewer();
     refreshL2();
   });
@@ -340,7 +341,7 @@
         banner.hidden = true;
         startEvents();
         const l = await api.leaders();
-        if (l.ok) setLeaders(l.data);
+        if (l.ok) setLeaders(l.data); else leadersFailed(l);
         if (st.current) fetchNewer();
       } else if (res.status !== 401) {
         banner.hidden = false;
@@ -371,6 +372,8 @@
   // ── Leaders ──
   function setLeaders(data) {
     st.leaders = rcLeaders(data);
+    st.leadersKnown = true;
+    rcSay($('home-status'), '');
     // The home list only while it shows (showLeaders draws it when it does):
     // a conversation on screen does not rebuild a hidden list at each event.
     if (st.screen === 's-leaders') renderLeaders();
@@ -381,6 +384,14 @@
     }
   }
 
+  // The first list could not be read: the skeleton gives way to one error
+  // line (the stream's next `leaders` event still fills the home). Once a
+  // list was drawn, a failed read leaves it as it is.
+  function leadersFailed(res) {
+    if (st.leadersKnown || res.status === 401) return;
+    rcSay($('home-status'), res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : `The sessions could not be read (the Mac answered ${res.status}).`, true);
+    rcSkeletonDone($('leaders'));
+  }
   // `done`: a line saying what was just done (a sandbox removed), else none.
   function showLeaders(done) {
     saveDraft();
@@ -439,6 +450,11 @@
   function renderLeaders() {
     renderWaiting();
     const ul = $('leaders');
+    if (!st.leadersKnown) {
+      if ($('home-status').hidden) rcSkeletonInto(ul, 'leader');
+      return;
+    }
+    rcSkeletonDone(ul);
     const now = Date.now();
     const rows = [];
     for (const g of rcGroups(st.leaders, st.stopped)) {
@@ -769,7 +785,7 @@
     renderTray();
     history.pushState({ leader: true }, '', location.pathname);
     renderChatTitle();
-    $('log-top').textContent = 'Loading…';
+    rcSay($('log-top'), 'Loading…');
     $('rows').replaceChildren();
     drawn = new Map();
     renderTail();
@@ -788,7 +804,7 @@
     const res = await api.history(sandbox, { limit: RC_FIRST_ROWS });
     if (st.current !== sandbox) return;
     if (!res.ok) {
-      $('log-top').textContent = res.status === 404 ? 'This sandbox is not running any more.' : 'Could not load the conversation.';
+      rcSay($('log-top'), res.status === 404 ? 'This sandbox is not running any more.' : 'Could not load the conversation.', res.status !== 404);
       return;
     }
     const page = rcPage(res.data);
@@ -863,11 +879,11 @@
     if (st.loadingOlder || st.nextBefore == null || !st.current) return;
     st.loadingOlder = true;
     const sandbox = st.current;
-    $('log-top').textContent = 'Loading earlier messages…';
+    rcSay($('log-top'), 'Loading earlier messages…');
     const res = await api.history(sandbox, { before: st.nextBefore, limit: RC_OLDER_ROWS });
     st.loadingOlder = false;
     if (st.current !== sandbox) return;
-    if (!res.ok) { $('log-top').textContent = 'Could not load earlier messages.'; return; }
+    if (!res.ok) { rcSay($('log-top'), 'Could not load earlier messages.', true); return; }
     const page = rcPage(res.data);
     if (rcEpochChanged(st.epoch, page)) { loadLast(sandbox); return; }
     st.items = rcMerge(st.items, page.items);
@@ -1006,7 +1022,7 @@
     const shown = rcWithPending(rcRows(st.items), st.pending);
     st.pending = st.pending.filter(p => shown.left.includes(p.id));
     const rows = shown.rows;
-    $('log-top').textContent = st.nextBefore != null ? '' : rows.length ? 'Start of the conversation' : 'No messages yet';
+    rcSay($('log-top'), st.nextBefore != null ? '' : rows.length ? 'Start of the conversation' : 'No messages yet');
     const keys = rcRowKeys(rows);
     const next = new Map();
     const els = rows.map((r, i) => {
@@ -2199,21 +2215,21 @@
   $('v-kanban').addEventListener('click', () => setView('kanban'));
   $('v-canvas').addEventListener('click', () => setView('canvas'));
 
-  function kbStatus(text) {
-    $('kb-status').textContent = text;
-    $('kb-status').hidden = !text;
+  function kbStatus(text, err = false) {
+    rcSay($('kb-status'), text, err);
   }
   async function loadBoard() {
     const sandbox = st.current;
     const v = view(sandbox);
     if (v.loading) { v.again = true; return; }
     v.loading = true;
-    if (!v.board) kbStatus('Loading the board…');
+    if (!v.board) { kbStatus(''); rcSkeletonInto($('kb-lanes'), 'kb'); }
     const res = await api.get(rcKbPaths(sandbox));
     v.loading = false;
     if (st.current !== sandbox) return;
+    rcSkeletonDone($('kb-lanes'));
     if (!res.ok) {
-      kbStatus(res.status === 404 ? 'This team leader is no longer running.' : rcFailText('Board', res).replace('Board not sent', 'The board could not be read'));
+      kbStatus(res.status === 404 ? 'This team leader is no longer running.' : rcFailText('Board', res).replace('Board not sent', 'The board could not be read'), res.status !== 404);
       if (res.status === 404) { v.board = null; $('kb-lanes').replaceChildren(); $('kb-pick').replaceChildren(); }
     } else {
       kbStatus('');
@@ -2630,6 +2646,7 @@
     st.apLoading = true;
     setTitle('Approvals', '');
     show('s-approvals');
+    if (!st.apLists.length) { rcSkeletonInto($('ap-lists'), 'ap'); $('ap-empty').hidden = true; }
     $('ap-done').textContent = done || '';
     $('ap-done').hidden = !done;
     const res = await refreshL2();
@@ -2640,7 +2657,7 @@
     $('ap-block-text').textContent = block;
     // Face ID is enabled from here once the Mac has level 2 on.
     $('ap-enable').hidden = !(a?.level2 === true && (a.passkey !== true || a.rp_ok === false));
-    if (!a?.level2) { st.apLoading = false; $('ap-lists').replaceChildren(); $('ap-filter').hidden = true; $('ap-none').hidden = true; $('ap-empty').hidden = true; return; }
+    if (!a?.level2) { st.apLoading = false; rcSkeletonDone($('ap-lists')); $('ap-lists').replaceChildren(); $('ap-filter').hidden = true; $('ap-none').hidden = true; $('ap-empty').hidden = true; return; }
     await loadApLists();
   }
   // Read the three lists, then draw them. Also the live path: a change of the
@@ -2710,7 +2727,7 @@
       // A list the Mac could not read says so, quietly, in its place.
       if (r && !r.ok && r.status !== 403) {
         const sec = el('section', 'rc-ap-sec');
-        sec.append(el('h2', 'rc-ap-h', L.title), el('p', 'rc-muted rc-small-text rc-ap-fail', rcL2Fail(r)));
+        sec.append(el('h2', 'rc-ap-h', L.title), el('p', 'rc-t-err rc-small-text rc-ap-fail', rcL2Fail(r)));
         sections.push(sec);
         return;
       }
@@ -2728,6 +2745,7 @@
       sec.append(h, ul);
       sections.push(sec);
     });
+    rcSkeletonDone($('ap-lists'));
     $('ap-lists').replaceChildren(...sections);
     // Nothing in the chosen sandbox: say so, with the way back.
     const goneName = entries.find(e => e.sandbox === only)?.name || only;
@@ -2794,7 +2812,7 @@
         const again = rows.find(r => r && str(r.id) !== id && str(r.sandbox) === hint.sandbox && str(r.host) === hint.host);
         if (again) return openItem(what, str(again.id), said, null);
       }
-      $('item').replaceChildren(el('p', 'rc-muted', res.status === 404 ? 'This is not waiting any more.' : rcL2Fail(res)));
+      $('item').replaceChildren(res.status === 404 ? el('p', 'rc-muted', 'This is not waiting any more.') : el('p', 'rc-t-err', rcL2Fail(res)));
       return;
     }
     const d = res.data;
@@ -3269,7 +3287,7 @@
     cvShowReview(false);
     cvRenderBadge();
   }
-  function cvStatus(text) { $('cv-status').textContent = text; $('cv-status').hidden = !text; }
+  function cvStatus(text, err = false) { rcSay($('cv-status'), text, err); }
   function cvSaid(el, r) {
     $(el).textContent = r ? r.text : '';
     $(el).className = `rc-cv-saved rc-t-${r ? r.tone : 'info'}`;
@@ -3287,12 +3305,12 @@
     // One read at a time per sandbox; another sandbox's read in the air is left to drop.
     if (cv.listLoading === sandbox) return;
     cv.listLoading = sandbox;
-    if (!cv.list) cvStatus('Loading the canvases…');
+    if (!cv.list) { cvStatus(''); rcSkeletonInto($('cv-list'), 'cv'); $('cv-empty').hidden = true; }
     const res = await api.canvasList(sandbox);
     if (cv.sandbox !== sandbox) return;
     cv.listLoading = null;
     if (!res.ok) {
-      cvStatus(res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : res.status === 404 ? 'This sandbox is not running any more.' : `The canvases could not be read (the Mac answered ${res.status}).`);
+      cvStatus(res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : res.status === 404 ? 'This sandbox is not running any more.' : `The canvases could not be read (the Mac answered ${res.status}).`, res.status !== 404);
     } else {
       cvStatus('');
       cv.list = rcCvList(res.data);
@@ -3303,6 +3321,7 @@
   function cvRenderList() {
     const list = cv.list || [];
     const now = Date.now();
+    rcSkeletonDone($('cv-list'));
     $('cv-list').replaceChildren(...list.map(c => {
       const li = document.createElement('li');
       const b = rcCvRowEl(document, c, now);
@@ -3330,7 +3349,7 @@
     if (cv.sandbox !== sandbox || st.current !== sandbox) return;
     const m = res.ok ? rcCvManifest(res.data) : null;
     if (!m) {
-      cvStatus(res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : res.status === 404 ? 'This canvas is no longer reachable.' : 'The canvas could not be read.');
+      cvStatus(res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : res.status === 404 ? 'This canvas is no longer reachable.' : 'The canvas could not be read.', res.status !== 404);
       if (keep) cvShowReview(false);
       return;
     }
