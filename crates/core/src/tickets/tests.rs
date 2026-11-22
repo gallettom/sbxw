@@ -572,3 +572,24 @@ fn the_fixtures_boards_hold_every_column() {
     assert_eq!(f.plans.len(), 25);
     assert_eq!(f.plans.iter().map(|p| p.threads.len()).sum::<usize>(), 40);
 }
+
+/// Timing, not a check: `cargo test -p sbxw-core --release -- --ignored timing_ --nocapture`.
+/// A sandbox holds up to MAX_TICKETS; the board is built per UI and phone read.
+#[test]
+#[ignore]
+fn timing_board_full_planned() {
+    let mut b = Book::new("web");
+    for k in 0..MAX_TICKETS {
+        b.create(draft(&format!("ticket {k}")), 1).unwrap();
+    }
+    // The person's order, shuffled (a fixed permutation of the ranks).
+    for (k, t) in b.tickets.iter_mut().enumerate() {
+        t.rank = ((k * 7919) % MAX_TICKETS) as i64 + 1;
+    }
+    let n = 20;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        assert_eq!(board("web", &[&b], &[], 9, false).columns[0].count, MAX_TICKETS);
+    }
+    eprintln!("timing_board_full_planned {} tickets: {:?} per board", MAX_TICKETS, t.elapsed() / n);
+}

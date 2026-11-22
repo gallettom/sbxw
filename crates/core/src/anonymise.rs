@@ -561,4 +561,32 @@ mod tests {
         assert!(Rules::parse("[remplace]\n\"a\" = \"b\"").is_err(), "a misspelt table hides nothing: say so");
         assert_eq!(Rules::parse("").unwrap(), Rules::default());
     }
+
+    /// Timing, not a check: `cargo test -p sbxw-core --release -- --ignored timing_ --nocapture`.
+    /// A history item's text is at most 16 KiB; every one is masked on ingest.
+    #[test]
+    #[ignore]
+    fn timing_mask() {
+        let prose = "The build in /home/agent/src/app-server failed at step 3: cargo test returned 2 errors, see crates/core/src/lib.rs:42. \
+                     Mail jeanne@example.com or call +41 22 717 21 11 about version 1.2.3 of Projet Atlas, 10.11.2026 14:30. ";
+        let cases: [(&str, String); 7] = [
+            ("prose 16 KiB", prose.repeat(16 * 1024 / prose.len())),
+            ("kebab run 16 KiB", "ab-".repeat(16 * 1024 / 3)),
+            ("dotted run 16 KiB", "ab.".repeat(16 * 1024 / 3)),
+            ("snake run 16 KiB", "ab_".repeat(16 * 1024 / 3)),
+            ("spaced zeros 16 KiB", "0 ".repeat(16 * 1024 / 2)),
+            ("spaced pairs 16 KiB", "12 ".repeat(16 * 1024 / 3)),
+            ("iban-like groups 16 KiB", "AB12 ".repeat(16 * 1024 / 5)),
+        ];
+        let r = rules();
+        for (what, text) in &cases {
+            let n = 20;
+            let t = std::time::Instant::now();
+            let mut count = 0;
+            for _ in 0..n {
+                count += mask(text, &r).count;
+            }
+            eprintln!("timing_mask {what}: {:?} per call ({count} masked)", t.elapsed() / n);
+        }
+    }
 }
