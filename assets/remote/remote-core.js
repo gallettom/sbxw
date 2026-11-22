@@ -298,6 +298,21 @@ function rcGroups(data) {
   ].map(g => ({ ...g, count: g.items.length }));
 }
 
+// The toast when the Approvals count rose by `delta`: `fresh` is the items the
+// page had not seen (`{ what, sandbox }`, keyed by kind and id). Nothing fresh
+// (a merge of a plan already seen, a late merge) is never guessed to be a
+// plan: neutral text and style.
+function rcToastChoice(fresh, delta) {
+  const list = Array.isArray(fresh) ? fresh : [];
+  const n = Math.max(1, Math.floor(Number(delta)) || 1);
+  if (!list.length) return { what: 'neutral', text: n > 1 ? `${n} things wait for you` : 'Something waits for you' };
+  const merges = list.every(f => f.what === 'merges');
+  const plans = list.every(f => f.what === 'plans');
+  if (!merges && !plans) return { what: 'neutral', text: n > 1 ? `${n} things wait for you` : 'Something waits for you' };
+  const noun = merges ? 'merge' : 'plan';
+  return { what: merges ? 'merges' : 'plans', text: n > 1 ? `${n} ${noun}s wait for you` : `A ${noun} waits for you` };
+}
+
 // The "Waiting for you" tiles: one per Approvals kind, in the Approvals
 // order, with the same class and icon (rcApKind) and the count the page
 // already has for its badge. A missing or odd count is 0 (shown dimmed).

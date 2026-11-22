@@ -15,7 +15,7 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'RC_PILL_TONES', 'rcPills', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcAnswerPick', 'rcAnswers', 'rcAnswerFail', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'rcAwayFromEnd', 'rcSkillMatches', 'rcSkillInsert', 'rcSkillLine', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'rcAwayFromEnd', 'rcSkillMatches', 'rcSkillInsert', 'rcSkillLine', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcWaiting', 'rcToastChoice', 'rcLeaderInfo', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
   'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
@@ -978,8 +978,24 @@ test('the picker: team leaders first, then sandboxes, those that need you first 
   ] });
   assert.deepEqual(plain(g.map(x => [x.title, x.items.map(i => i.sandbox)])), [['Team leaders', ['old', 'web']], ['Sandboxes', ['asks', 'calm']]],
     'an entry with no kind is a leader (a daemon before v1.5)');
-  assert.deepEqual(plain(rc.rcGroups({ leaders: [{ sandbox: 'a', kind: 'sandbox', state: 'idle' }] }).map(x => x.title)), ['Sandboxes'], 'an empty group is left out');
-  assert.deepEqual(plain(rc.rcGroups({ leaders: [] })), []);
+  const one = plain(rc.rcGroups({ leaders: [{ sandbox: 'a', kind: 'sandbox', state: 'idle' }] }));
+  assert.deepEqual(one.map(x => [x.title, x.count]), [['Team leaders', 0], ['Sandboxes', 1]], 'both groups stay, with their counts');
+  assert.equal(one[0].empty, 'No team leader running');
+  const none = plain(rc.rcGroups({ leaders: [] }));
+  assert.deepEqual(none.map(x => [x.kind, x.count, x.icon, x.empty]), [['leader', 0, 'home-i-team', 'No team leader running'], ['sandbox', 0, 'home-i-box', 'No other sandbox running']]);
+});
+test('the Waiting for you tiles: the Approvals kinds, colours and icons, 0 dimmed', () => {
+  const t = plain(rc.rcWaiting({ plans: 2, merges: 0, network: '3', stopped: -1 }));
+  assert.deepEqual(t.map(x => [x.what, x.n, x.zero]), [['plans', 2, false], ['merges', 0, true], ['network', 3, false], ['stopped', 0, true]]);
+  assert.deepEqual(t.map(x => [x.cls, x.icon]), [['rc-k-plans', 'ap-i-plans'], ['rc-k-merges', 'ap-i-merges'], ['rc-k-network', 'ap-i-network'], ['rc-k-stopped', 'ap-i-stopped']]);
+  assert.ok(plain(rc.rcWaiting(null)).every(x => x.n === 0 && x.zero), 'no counts: all zero');
+});
+test('a card info line: only what is known', () => {
+  const models = [{ id: 'claude-opus-5-5', label: 'Opus 5.5' }];
+  assert.deepEqual(plain(rc.rcLeaderInfo({ model: 'claude-opus-5-5', threads_working: 2, canvas_new: 1, tickets_planned: 3 }, models)), { parts: ['Opus 5.5', '2 threads working', '3 planned'], canvas: 1 });
+  assert.deepEqual(plain(rc.rcLeaderInfo({ model: 'odd-id', threads_working: 1 }, models)), { parts: ['odd-id', '1 thread working'], canvas: 0 }, 'the id when the list lacks it');
+  assert.deepEqual(plain(rc.rcLeaderInfo({}, [])), { parts: [], canvas: 0 });
+  assert.deepEqual(plain(rc.rcLeaderInfo({ threads_working: 0, canvas_new: 'x', tickets_planned: -2 }, null)), { parts: [], canvas: 0 });
 });
 test('a read-only entry says why, and Send says it too', () => {
   const two = { sandbox: 'a', kind: 'sandbox', state: 'idle', read_only: 'several_sessions' };
@@ -995,7 +1011,7 @@ test('a read-only entry says why, and Send says it too', () => {
 });
 test('the page no longer says "leader" where it means either kind', () => {
   const html = read('../../assets/remote/index.html');
-  assert.match(html, />No sandbox is running</);
+  assert.doesNotMatch(html, /No sandbox is running/, "the empty lines are per group now (rcGroups)");
   assert.match(html, /placeholder="Write a message"/);
   assert.doesNotMatch(html, /No team leader is running|Message the leader|Back to the leaders/);
   for (const v of Object.values(rc.RC_MSG_REASON)) assert.doesNotMatch(v, /leader/i);
@@ -1041,4 +1057,12 @@ test('a status label is a pill with its tone and detail; unknown words and code 
   assert.doesNotMatch(rc.rcAgentHtml('```\n[[Done]]\n```'), /rc-pill/);
   const hostile = rc.rcAgentHtml('[[Done: <img src=x onerror=alert(1)>]]');
   assertSafe(hostile, 'pill detail');
+});
+
+test('the toast names what is fresh and never guesses a plan', () => {
+  const t = (f, d) => plain(rc.rcToastChoice(f, d));
+  assert.deepEqual(t([{ what: 'merges', sandbox: 'a' }], 1), { what: 'merges', text: 'A merge waits for you' });
+  assert.deepEqual(t([{ what: 'plans' }, { what: 'plans' }], 2), { what: 'plans', text: '2 plans wait for you' });
+  assert.deepEqual(t([], 1), { what: 'neutral', text: 'Something waits for you' }, 'a merge of a plan already seen');
+  assert.deepEqual(t([{ what: 'plans' }, { what: 'merges' }], 2), { what: 'neutral', text: '2 things wait for you' });
 });
