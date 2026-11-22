@@ -211,6 +211,7 @@ function rcFiles(list) {
 
 // A kept image's id: 32 hex, as the Mac writes it; nothing else is a URL.
 const RC_SENT_ID = /^[0-9a-f]{32}$/;
+const rcSentSrc = src => typeof src === 'string' && /^\/r\/sent\/[0-9a-f]{32}$/.test(src);
 const rcSentId = id => (typeof id === 'string' && RC_SENT_ID.test(id) ? id : '');
 // The files of a prompt with the kept image of each (`images` is parallel to
 // `files` as the Mac sent them): the same cleaning as rcFiles, the two lists

@@ -3532,6 +3532,137 @@
     tap() {},
   });
 
+  // ── A sent image, full screen ──
+  // A tap on a thumbnail in the conversation opens the kept copy alone, in a
+  // fixed overlay of the canvas's look. Two fingers pinch, one finger pans a
+  // zoomed picture, a double tap zooms; the geometry is the canvas's own
+  // (rcCvPinch, rcCvClamp, rcCvDoubleTap). The overlay is made on first use.
+  const sv = { el: null, layer: null, img: null, view: { s: 1, tx: 0, ty: 0 }, box: { w: 1, h: 1 }, from: null };
+  function svApply() {
+    sv.layer.style.transform = `translate(${sv.view.tx}px, ${sv.view.ty}px) scale(${sv.view.s})`;
+  }
+  function svLayout() {
+    if (!sv.el || sv.el.hidden) return;
+    const stage = sv.stage, W = stage.clientWidth, H = stage.clientHeight;
+    const nw = sv.img.naturalWidth || 1, nh = sv.img.naturalHeight || 1;
+    const k = Math.min(W / nw, H / nh);
+    const w = Math.max(1, nw * k), h = Math.max(1, nh * k);
+    sv.box = { w, h };
+    Object.assign(sv.layer.style, { width: `${w}px`, height: `${h}px`, left: `${(W - w) / 2}px`, top: `${(H - h) / 2}px` });
+    sv.view = rcCvClamp(sv.view, w, h);
+    svApply();
+  }
+  function svClose() {
+    if (!sv.el || sv.el.hidden) return;
+    sv.el.hidden = true;
+    sv.img.removeAttribute('src');
+    try { sv.from && sv.from.focus({ preventScroll: true }); } catch (_) {}
+    sv.from = null;
+  }
+  function svBuild() {
+    const el = document.createElement('div');
+    el.className = 'rc-cv-fs rc-sent-fs';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.hidden = true;
+    const stage = document.createElement('div');
+    stage.className = 'rc-cv-fs-stage';
+    const layer = document.createElement('div');
+    layer.className = 'rc-cv-layer rc-cv-fs-layer';
+    const img = document.createElement('img');
+    img.className = 'rc-cv-img';
+    img.draggable = false;
+    img.addEventListener('load', svLayout);
+    img.addEventListener('error', svClose);
+    layer.append(img);
+    stage.append(layer);
+    const close = document.createElement('button');
+    close.className = 'rc-cv-fs-close';
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Close');
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', 'M6 6l12 12M18 6 6 18');
+    svg.append(path);
+    close.append(svg);
+    close.addEventListener('click', svClose);
+    el.append(stage, close);
+    document.body.append(el);
+    Object.assign(sv, { el, stage, layer, img });
+    const ptrs = new Map();
+    let g = null, last = null;
+    const local = (x, y) => {
+      const r = stage.getBoundingClientRect();
+      return { x: x - r.left - (r.width - sv.box.w) / 2, y: y - r.top - (r.height - sv.box.h) / 2 };
+    };
+    const two = () => {
+      const [a, b] = [...ptrs.values()];
+      return { m: local((a.x + b.x) / 2, (a.y + b.y) / 2), d: Math.hypot(a.x - b.x, a.y - b.y) };
+    };
+    stage.addEventListener('pointerdown', e => {
+      if (e.button > 0) return;
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      try { stage.setPointerCapture(e.pointerId); } catch (_) {}
+      if (ptrs.size === 1) g = { mode: 'one', x0: e.clientX, y0: e.clientY, t0: Date.now(), v0: { ...sv.view } };
+      else if (ptrs.size === 2) { const t = two(); g = { mode: 'pinch', v0: { ...sv.view }, m0: t.m, d0: t.d }; last = null; }
+    });
+    stage.addEventListener('pointermove', e => {
+      const p = ptrs.get(e.pointerId);
+      if (!p || !g) return;
+      p.x = e.clientX; p.y = e.clientY;
+      const b = sv.box;
+      if (g.mode === 'pinch' && ptrs.size === 2) {
+        const t = two();
+        sv.view = rcCvPinch(g.v0, g.m0, g.d0, t.m, t.d, b.w, b.h);
+        svApply();
+      } else if (g.mode === 'one' && g.v0.s > 1.01) {
+        sv.view = rcCvClamp({ s: g.v0.s, tx: g.v0.tx + e.clientX - g.x0, ty: g.v0.ty + e.clientY - g.y0 }, b.w, b.h);
+        svApply();
+      }
+    });
+    const end = (e, cancelled) => {
+      if (!ptrs.has(e.pointerId)) return;
+      ptrs.delete(e.pointerId);
+      if (!g) return;
+      if (g.mode === 'pinch') { g = ptrs.size ? { mode: 'rest' } : null; return; }
+      if (g.mode !== 'one' || cancelled) { if (!ptrs.size) g = null; return; }
+      const still = Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 10 && Date.now() - g.t0 < 600;
+      g = null;
+      if (!still) { last = null; return; }
+      const now = Date.now(), at = local(e.clientX, e.clientY), b = sv.box;
+      if (rcCvIsDouble(last, now, e.clientX, e.clientY)) {
+        last = null;
+        sv.view = rcCvDoubleTap(sv.view, at.x, at.y, b.w, b.h);
+        svApply();
+      } else last = { t: now, x: e.clientX, y: e.clientY };
+    };
+    stage.addEventListener('pointerup', e => end(e, false));
+    stage.addEventListener('pointercancel', e => end(e, true));
+    stage.addEventListener('gesturestart', e => e.preventDefault());
+    stage.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+    window.addEventListener('resize', svLayout);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !el.hidden) { e.preventDefault(); svClose(); } });
+  }
+  function svOpen(src, name, from) {
+    if (!rcSentSrc(src)) return;
+    if (!sv.el) svBuild();
+    sv.view = { s: 1, tx: 0, ty: 0 };
+    sv.from = from || null;
+    sv.el.setAttribute('aria-label', name || 'Image');
+    sv.img.alt = name || '';
+    sv.el.hidden = false;
+    sv.img.src = src;
+    svLayout();
+    sv.el.querySelector('button').focus({ preventScroll: true });
+  }
+  document.addEventListener('click', e => {
+    const b = e.target && e.target.closest ? e.target.closest('.rc-thumb') : null;
+    if (b) svOpen(b.dataset.src, b.dataset.name, b);
+  });
+
   // ── Send remarks: every remark in full, then one call ──
   $('cv-send').addEventListener('click', () => {
     if (!cv.m || cv.busy || cvHeld()) return;
