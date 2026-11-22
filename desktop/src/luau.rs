@@ -583,12 +583,18 @@ impl LuauHost {
     /// `app.pages`; `*` or `app.*` when a level was iterated) let the core
     /// skip a render whose inputs did not change (screen.rs).
     pub fn render_tracked(&self, data: &J) -> Result<(Node, Reads), String> {
+        self.render_shared(&Rc::new(data.clone()))
+    }
+
+    /// [`Self::render_tracked`] on data the caller already shares: the lazy
+    /// tables point into it instead of into a copy of the whole data (a
+    /// screen's data is one `Rc` per push, screen.rs).
+    pub fn render_shared(&self, root: &Rc<J>) -> Result<(Node, Reads), String> {
         let (module, state) = self.parts()?;
         let reads = Rc::new(RefCell::new(Reads::default()));
-        let root = Rc::new(data.clone());
         let tree: Value = self.guarded(|lua| {
             let render: Function = module.get("render")?;
-            let data = lazy_data(lua, &root, &[], &reads)?;
+            let data = lazy_data(lua, root, &[], &reads)?;
             render.call((state, data))
         })?;
         let mut count = 0;

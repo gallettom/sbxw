@@ -523,7 +523,6 @@ impl ScreenState {
             return;
         }
         self.stale_view = false;
-        let with_zone;
         // The theme changed since the chunk loaded: load it again first.
         if self.theme_gen != theme::generation() {
             self.theme_gen = theme::generation();
@@ -538,14 +537,13 @@ impl ScreenState {
             Some(z) => {
                 let mut d = (*self.data).clone();
                 d["app"]["hover_zone"] = J::String(z.clone());
-                with_zone = d;
-                &with_zone
+                Rc::new(d)
             }
-            None => &self.data,
+            None => self.data.clone(),
         };
         self.renders += 1;
         let t = crate::perf::start();
-        let out = self.host.get_or_insert_with(|| LuauHost::new(Limits::default()).expect("Luau VM")).render_tracked(data);
+        let out = self.host.get_or_insert_with(|| LuauHost::new(Limits::default()).expect("Luau VM")).render_shared(&data);
         crate::perf::done(t, || format!("render {}", self.name));
         match out {
             Ok((n, reads)) => {
