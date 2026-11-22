@@ -2851,7 +2851,7 @@
     cvShowReview(true);
     cvRenderPage(!keep || at < 0);
   }
-  $('cv-back').addEventListener('click', () => { cvShowReview(false); cvLoadList(); });
+  $('cv-back').addEventListener('click', () => { if (cvHeld()) return; cvShowReview(false); cvLoadList(); });
 
   // One page: the picture, its pins, its title, note and round, its remarks.
   function cvRenderPage(fresh = true) {
@@ -2894,8 +2894,18 @@
     $('cv-imgerr').textContent = 'The picture could not be loaded from the Mac.';
     $('cv-imgerr').hidden = false;
   });
+  // True when a typed remark holds the page: then it says so and stays.
+  function cvHeld() {
+    const why = rcCvHold($('cv-editor').hidden ? null : cv.edit, $('cv-ed-text').value);
+    if (!why) return false;
+    cvSaid('cv-saved', { tone: 'warn', text: why });
+    $('cv-ed-text').focus({ preventScroll: true });
+    $('cv-editor').scrollIntoView({ block: 'nearest' });
+    return true;
+  }
   function cvGo(delta) {
     if (!cv.m) return;
+    if (rcCvPage(cv.idx, cv.m.shots.length, delta) !== cv.idx && cvHeld()) return;
     const j = rcCvPage(cv.idx, cv.m.shots.length, delta);
     if (j === cv.idx) return;
     cvCloseEditor();
@@ -2993,7 +3003,7 @@
 
   // ── Writing one remark ──
   function cvOpenEditor(edit, label, text) {
-    cv.edit = edit;
+    cv.edit = { ...edit, orig: edit.n == null ? '' : text };
     cv.delArm = null;
     $('cv-ed-label').textContent = label;
     $('cv-ed-text').value = text;
@@ -3013,17 +3023,22 @@
     $('cv-add-note').hidden = false;
     cvRenderPins();
   }
-  function cvEditPin(p) { if (!cv.busy) cvOpenEditor({ kind: 'pin', n: p.n, shot: p.shot, x: p.x, y: p.y }, `Pin ${p.n}`, p.text); }
-  function cvEditNote(t) { if (!cv.busy) cvOpenEditor({ kind: 'note', n: t.n, shot: t.shot }, `Note ${t.n}`, t.text); }
+  const cvSame = (kind, n) => !$('cv-editor').hidden && cv.edit?.kind === kind && cv.edit.n === n;
+  // The remark already open: its field keeps what is typed, focused again.
+  function cvRefocus() { $('cv-ed-text').focus({ preventScroll: true }); }
+  function cvEditPin(p) { if (cvSame('pin', p.n)) return cvRefocus(); if (!cv.busy && !cvHeld()) cvOpenEditor({ kind: 'pin', n: p.n, shot: p.shot, x: p.x, y: p.y }, `Pin ${p.n}`, p.text); }
+  function cvEditNote(t) { if (cvSame('note', t.n)) return cvRefocus(); if (!cv.busy && !cvHeld()) cvOpenEditor({ kind: 'note', n: t.n, shot: t.shot }, `Note ${t.n}`, t.text); }
   function cvNewPin(fx, fy) {
     const shot = cv.m?.shots[cv.idx];
     if (!shot || cv.busy) return;
+    // Moving a new pin keeps its text; an edit in progress elsewhere holds.
+    if (!(cvSame('pin', null) && cv.edit.shot === shot.id) && cvHeld()) return;
     const x = Math.round(fx * 1000) / 10, y = Math.round(fy * 1000) / 10;
     cvOpenEditor({ kind: 'pin', n: null, shot: shot.id, x, y }, 'New pin', $('cv-editor').hidden || cv.edit?.n != null ? '' : $('cv-ed-text').value);
   }
   $('cv-add-note').addEventListener('click', () => {
     const shot = cv.m?.shots[cv.idx];
-    if (shot && !cv.busy) cvOpenEditor({ kind: 'note', n: null, shot: shot.id }, 'New note on this shot', '');
+    if (shot && !cv.busy && !cvHeld()) cvOpenEditor({ kind: 'note', n: null, shot: shot.id }, 'New note on this shot', '');
   });
   $('cv-ed-cancel').addEventListener('click', cvCloseEditor);
   async function cvRemark(body, what) {
@@ -3151,7 +3166,7 @@
 
   // ── Send remarks: every remark in full, then one call ──
   $('cv-send').addEventListener('click', () => {
-    if (!cv.m || cv.busy) return;
+    if (!cv.m || cv.busy || cvHeld()) return;
     cvCloseEditor();
     const c = rcCvConfirm(cv.m);
     $('cv-cf-title').textContent = c.empty ? 'No remark to send' : c.title;

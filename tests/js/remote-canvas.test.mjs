@@ -12,7 +12,7 @@ const read = p => readFileSync(new URL(p, import.meta.url), 'utf8');
 const coreSrc = read('../../assets/remote/remote-core.js');
 const NAMES = ['rcCvPage', 'rcCvCounter', 'rcCvSwipe', 'rcCvClamp', 'rcCvPinch', 'rcCvToFrac', 'rcCvFromFrac', 'RC_CV_MAX_ZOOM',
   'rcCvId', 'rcCvImage', 'rcCvList', 'rcCvBadge', 'rcCvRemarks', 'rcCvManifest', 'rcCvShotLine', 'rcCvListLine', 'rcCvRowEl',
-  'rcCvConfirm', 'rcCvConfirmText', 'rcCvSubmitResult', 'rcCvRemarkResult', 'rcClient'];
+  'rcCvConfirm', 'rcCvConfirmText', 'rcCvSubmitResult', 'rcCvRemarkResult', 'rcClient', 'rcCvHold'];
 const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
@@ -231,4 +231,14 @@ test('a remark\'s save: saved (with masking said), or not saved and why', () => 
   assert.match(r(false, 0, null, true).text, /unreachable\. Your text is still in the field/);
   // The answer's remarks redraw the page without a second read.
   assert.deepEqual(plain(rc.rcCvRemarks({ ok: true, pins: [{ n: 7, shot: 's-1', x: 5, y: 6, text: 'a' }], notes: [], draft: 1 })), { pins: [{ n: 7, shot: 's-1', x: 5, y: 6, text: 'a' }], notes: [], draft: 1 });
+});
+
+test('a remark being typed holds the page: leaving does nothing and says why', () => {
+  assert.equal(rc.rcCvHold(null, 'anything'), '', 'no editor open');
+  assert.equal(rc.rcCvHold({ kind: 'pin', n: null, orig: '' }, '   '), '', 'a new pin with nothing typed');
+  assert.equal(rc.rcCvHold({ kind: 'pin', n: 4, orig: 'Bigger' }, 'Bigger '), '', 'an existing pin, unchanged');
+  assert.equal(rc.rcCvHold({ kind: 'pin', n: null, orig: '' }, 'Too small'), 'Save or Cancel the new pin first: its text is not saved yet.');
+  assert.equal(rc.rcCvHold({ kind: 'pin', n: 4, orig: 'Bigger' }, 'Bigger, and blue'), 'Save or Cancel pin 4 first: its text is not saved yet.');
+  assert.equal(rc.rcCvHold({ kind: 'note', n: 2, orig: 'x' }, ''), 'Save or Cancel note 2 first: its text is not saved yet.', 'emptied is a change too');
+  assert.equal(rc.rcCvHold({ kind: 'note', n: null, orig: '' }, 'A note'), 'Save or Cancel the new note first: its text is not saved yet.');
 });

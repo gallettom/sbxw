@@ -1834,6 +1834,18 @@ function rcCvConfirm(m) {
     blocked: !!m?.draft_examples,
   };
 }
+// A remark being typed is never lost: while the editor is open with text
+// that differs from what is saved, leaving the shot (swipe, Previous/Next,
+// back to the list, Send remarks) does nothing and says why. Returns the
+// sentence, or '' when leaving is fine (no editor, nothing typed, unchanged).
+function rcCvHold(edit, text) {
+  if (!edit) return '';
+  const now = String(text ?? '').trim();
+  const was = String(edit.orig ?? '').trim();
+  if (now === was) return '';
+  const what = edit.n == null ? `the new ${edit.kind === 'pin' ? 'pin' : 'note'}` : `${edit.kind === 'pin' ? 'pin' : 'note'} ${edit.n}`;
+  return `Save or Cancel ${what} first: its text is not saved yet.`;
+}
 // The confirmation as plain text (one line per remark), as tests read it.
 function rcCvConfirmText(c) {
   return [c.title, c.line, ...c.groups.flatMap(g => [g.head, ...g.items.map(i => `  ${i}`)]), ...c.notes].join('\n');
