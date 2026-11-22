@@ -399,6 +399,11 @@ fn iban(c: &[char], i: usize) -> Option<usize> {
         if x.is_ascii_digit() || x.is_ascii_uppercase() {
             chars += 1;
             end = n + 1;
+            // Past the longest IBAN it can only grow: read no further (every
+            // group of `AB12 AB12 …` starts a reading of its own).
+            if chars > 34 {
+                return None;
+            }
         } else if !(x == ' ' && c.get(n + 1).is_some_and(|y| y.is_ascii_digit() || y.is_ascii_uppercase())) {
             break;
         }

@@ -260,6 +260,15 @@ fn the_faster_mask_masks_exactly_as_before() {
         seed ^= seed << 17;
         (seed % n as u64) as usize
     };
+    // Long runs, past every shape's bound.
+    for (piece, n) in [("AB12 ", 12), ("CH93 0076 ", 6), ("ab-", 60), ("aB1_", 40), ("a.", 80), ("+41 ", 8), ("12 ", 12), ("sk-aB1", 8)] {
+        for k in 0..n {
+            let s = format!("x {} y", piece.repeat(k));
+            for r in [&rules, &Rules::default()] {
+                assert_eq!(super::mask(&s, r), mask(&s, r), "on {s:?}");
+            }
+        }
+    }
     for _ in 0..20_000 {
         let mut s = String::new();
         let len = next(120);
