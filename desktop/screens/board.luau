@@ -424,6 +424,7 @@ local function conversation(ui, sb)
 end
 
 -- ── The summary (one column: replaces the side column) ──────────────────
+-- A section between two hairlines (not a card inside the tile).
 -- Under the title (which has the team's state), above the filters: its lead, each
 -- thread as a chip (press: only that thread; its terminal and its session
 -- beside it, shown on hover and focus), the places one acts, and counters
@@ -538,7 +539,9 @@ local function summary(s, ui, narrow)
   counts[#counts + 1] = button{ (not narrow) and (open and "Less" or "Details") or nil, icon = open and "chevron-down" or "chevron-right", variant = "ghost", dense = true, on = "expand", arg = "summary",
     key = "board-summary-details", help = open and "Hide the threads' worktrees and models" or "The threads' worktrees and models" }
 
-  local kids = { gap = 8, w = "full", px = narrow and 8 or 12, py = narrow and 4 or 8, radius = "md", fill = "surface", border = "elevated", key = "board-summary", folds = true }
+  -- A section of the tile, not a card in it: a hairline above and below,
+  -- its rows at the tile's own left edge (as the picker and the filters).
+  local kids = { gap = 8, w = "full", key = "board-summary", folds = true, divider{} }
   if narrow then
     -- One wrapping line: chips, counts, link icons, Details.
     for _, k in ipairs(counts) do head[#head + 1] = k end
@@ -562,6 +565,7 @@ local function summary(s, ui, narrow)
     if #(s.threads or {}) == 0 then d[#d + 1] = note("No thread yet.", "text-muted") end
     kids[#kids + 1] = column(d)
   end
+  kids[#kids + 1] = divider{}
   return column(kids)
 end
 
@@ -600,6 +604,7 @@ local function fileview(f, sb)
     if #(f.groups or {}) == 0 and not nz(f.note) then d[#d + 1] = note("No change to show (a mode change or an empty file).") end
     kids[#kids + 1] = column(d)
   end
+  kids[#kids + 1] = divider{}
   return column(kids)
 end
 
