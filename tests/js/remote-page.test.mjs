@@ -296,8 +296,14 @@ test('Send calls message once and only on a tap; Interrupt asks for a second tap
   await ctl({ emit: { event: 'leaders', data: working } });
   await page.waitForSelector('#interrupt:visible');
   assert.equal(await page.textContent('#state'), 'working');
+  // A round button with no text: the leader is named for a screen reader,
+  // and the hit area is the full 44 px.
+  assert.equal(await page.getAttribute('#interrupt', 'aria-label'), 'Interrupt website');
+  assert.equal((await page.textContent('#interrupt')).trim(), '');
+  assert.deepEqual(await page.$eval('#interrupt', b => { const r = b.getBoundingClientRect(); return [r.width, r.height]; }), [44, 44]);
   await page.tap('#interrupt');
   assert.equal(await page.textContent('#confirm-text'), 'Interrupt website?');
+  assert.equal(await page.getAttribute('#interrupt', 'aria-expanded'), 'true');
   assert.equal((await calls('POST', '/r/leaders/website/interrupt')).length, 0, 'the first tap only asks');
   await shot(page, '07-interrupt-confirm');
   await page.tap('#interrupt-cancel');
@@ -306,6 +312,60 @@ test('Send calls message once and only on a tap; Interrupt asks for a second tap
   await page.tap('#interrupt-go');
   await page.waitForSelector('text=Interrupt sent.');
   assert.equal((await calls('POST', '/r/leaders/website/interrupt')).length, 1);
+
+  // The bar at three phone widths, a 40-character name and a short one, in
+  // every state: the name on one line (an ellipsis, the whole name kept as
+  // title and aria-label), the pill under it, Interrupt only while working,
+  // nothing overlapping, every top on a whole device pixel.
+  const NAME40 = 'customer-portal-staging-eu-west-replica2';
+  assert.equal(NAME40.length, 40);
+  const states = {
+    idle: l => { l.state = 'idle'; },
+    working: l => { l.state = 'working'; },
+    'needs you': l => { l.state = 'idle'; l.asks = true; },
+    'read only': l => { l.state = 'working'; l.read_only = true; },
+    'not running': null,
+  };
+  for (const name of [NAME40, 'web']) {
+    for (const [label, set] of Object.entries(states)) {
+      const data = structuredClone(FX.leaders);
+      const l = data.leaders.find(x => x.sandbox === 'website');
+      l.name = name;
+      // Not running: the leader leaves the list, the bar keeps the sandbox.
+      if (set) set(l); else data.leaders = data.leaders.filter(x => x !== l);
+      const shown = set ? name : 'website';
+      if (!set && name !== NAME40) continue;
+      await ctl({ emit: { event: 'leaders', data } });
+      await page.waitForFunction(([n, w]) => document.getElementById('title').textContent === n && document.getElementById('state').textContent === w, [shown, label === 'read only' ? 'working' : label]);
+      for (const width of [320, 375, 430]) {
+        await page.setViewportSize({ width, height: 844 });
+        const g = await page.evaluate(() => {
+          const box = id => { const e = document.getElementById(id); const r = e.getBoundingClientRect(); return e.getClientRects().length ? { l: r.left, r: r.right, t: r.top, b: r.bottom, h: r.height } : null; };
+          const h = document.getElementById('title');
+          return { h: box('title'), s: box('state'), i: box('interrupt'), ap: box('approvals-btn'), clipped: h.scrollWidth > h.clientWidth, tip: h.title, aria: h.getAttribute('aria-label'), pill: document.getElementById('state').textContent, hscroll: document.documentElement.scrollWidth > window.innerWidth };
+        });
+        const at = `${label}, ${shown.length} chars, ${width}px`;
+        assert.equal(g.h.h, 22, `${at}: the name on one line`);
+        assert.equal(g.clipped, shown === NAME40, `${at}: an ellipsis only for the long name`);
+        assert.equal(g.tip, shown, `${at}: the whole name as title`);
+        assert.equal(g.aria, shown, `${at}: the whole name as aria-label`);
+        assert.ok(g.s.t >= g.h.b, `${at}: the pill under the name`);
+        assert.equal(g.s.h, 20, `${at}: a 20 px pill`);
+        for (const v of [g.h.t, g.s.t, g.h.l, g.s.l]) assert.ok(Number.isInteger(v), `${at}: on whole pixels (${v})`);
+        assert.equal(g.pill, label === 'read only' ? 'working' : label, `${at}: the pill's word`);
+        assert.equal(!!g.i, label === 'working', `${at}: Interrupt only while working`);
+        // The name ends 8 px before the first button (the column's 4 px
+        // padding and the bar's 4 px gap), so a hidden Interrupt leaves no
+        // hole and a shown one is never overlapped.
+        const right = g.i || g.ap;
+        assert.equal(right.l - g.h.r, 8, `${at}: the name stops 8 px before the buttons`);
+        assert.ok(g.s.r <= right.l, `${at}: the pill stops before the buttons`);
+        assert.equal(g.hscroll, false, `${at}: no sideways scroll`);
+        await shot(page, `08-bar-${width}-${shown.length}-${label.replace(' ', '-')}`);
+      }
+    }
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
   await cleanSpy(page);
   assert.deepEqual(problems, []);
   await ctx.close();

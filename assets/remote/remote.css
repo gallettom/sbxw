@@ -180,9 +180,6 @@ svg circle { fill: currentColor; stroke: none; }
 .rc-chip-btn:active:not(:disabled) { transform: scale(0.96); background: var(--c-press); }
 .rc-chip-btn:focus-visible { box-shadow: var(--ring); }
 .rc-chip-btn:disabled { opacity: 0.4; }
-.rc-chip-danger { color: var(--c-red); border-color: rgba(248, 81, 73, 0.4); }
-.rc-chip-danger svg rect { fill: currentColor; stroke: none; }
-.rc-chip-danger.rc-armed { background: var(--c-red-tint); border-color: var(--c-red); }
 
 /* ── Bar ── */
 /* The bar: one solid ground from the screen's top edge (under the status
@@ -207,12 +204,16 @@ svg circle { fill: currentColor; stroke: none; }
 }
 .rc-mark { flex: none; width: 28px; height: 28px; margin: 0 6px 0 10px; border-radius: 7px; }
 .rc-title { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 0 4px; }
+/* Line 1 the name alone (an ellipsis when long), line 2 the state pill. */
 .rc-title h1 { font-size: var(--fs-lg); line-height: 22px; letter-spacing: 0; -webkit-font-smoothing: antialiased; text-rendering: geometricPrecision; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-sub { font-size: var(--fs-xs); line-height: 16px; color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-sub:empty { display: none; }
 
-/* A leader's state: a small coloured pill with a dot. */
-.rc-pill {
+/* A leader's state: a small coloured pill with a dot, 20 px tall. Scoped
+   to the bar: the status labels in agent text (".rc-pill" further down)
+   share the class name and would otherwise give it a border and a
+   fractional height. */
+.rc-bar .rc-pill {
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
@@ -225,16 +226,54 @@ svg circle { fill: currentColor; stroke: none; }
   font-weight: 500;
   color: var(--c-text-muted);
   background: rgba(110, 118, 129, 0.16);
+  border: 0;
   white-space: nowrap;
 }
-.rc-pill::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.rc-pill-working { color: var(--c-green); background: rgba(63, 185, 80, 0.12); }
+.rc-bar .rc-pill::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.rc-bar .rc-pill-working { color: var(--c-green); background: rgba(63, 185, 80, 0.12); }
 /* The bar's dot does not pulse: an animated opacity makes iOS composite the
    bar's layers apart, and the title beside it is then drawn soft. */
-.rc-pill-attention { color: var(--c-amber); background: rgba(210, 153, 34, 0.14); }
-.rc-pill-stopped { color: var(--c-text-dim); }
+.rc-bar .rc-pill-attention { color: var(--c-amber); background: rgba(210, 153, 34, 0.14); }
+.rc-bar .rc-pill-stopped { color: var(--c-text-dim); }
 
-/* Interrupt's confirmation: a strip under the bar. */
+/* Interrupt, in the bar while the leader works: a 36 px red disc with a
+   12 px white square, centred in a 44 px hit area (4 px of air each side,
+   so every edge lands on a whole pixel). No text: the aria-label names the
+   leader. Armed (the strip below is open), a ring in the bar's colour and
+   then red goes round the disc, inside the same 44 px. */
+.rc-stop-btn {
+  position: relative;
+  flex: none;
+  width: var(--tap);
+  height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+.rc-stop-btn::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--c-red);
+  transition: background-color 120ms var(--ease), box-shadow 120ms var(--ease);
+}
+.rc-stop-btn::after {
+  content: "";
+  position: absolute;
+  inset: 16px;
+  border-radius: 3px;
+  background: #fff;
+}
+.rc-stop-btn:active:not(:disabled)::before { background: #da3633; }
+.rc-stop-btn.rc-armed::before { box-shadow: 0 0 0 2px var(--c-surface), 0 0 0 4px var(--c-red); }
+.rc-stop-btn:focus-visible { outline: none; }
+.rc-stop-btn:focus-visible::before { box-shadow: 0 0 0 2px var(--c-surface), 0 0 0 4px var(--c-blue); }
+.rc-stop-btn:disabled::before { background: rgba(248, 81, 73, 0.4); }
+
+/* Interrupt's confirmation: a strip under the bar. The name ends with an
+   ellipsis, never the question mark; Interrupt carries the bar's square. */
 .rc-confirm {
   flex: none;
   position: relative;
@@ -247,8 +286,11 @@ svg circle { fill: currentColor; stroke: none; }
   border-bottom: 1px solid rgba(248, 81, 73, 0.35);
   animation: rc-drop 160ms var(--ease);
 }
-.rc-confirm-text { flex: 1; min-width: 0; font-size: var(--fs-sm); color: var(--c-text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rc-confirm .rc-btn { min-height: 36px; padding: 0 12px; font-size: var(--fs-sm); }
+.rc-confirm-text { flex: 1; min-width: 0; display: flex; font-size: var(--fs-sm); line-height: 20px; color: var(--c-text-bright); white-space: pre; }
+.rc-confirm-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.rc-confirm .rc-btn { min-height: 36px; padding: 0 14px; border-radius: var(--r-pill); font-size: var(--fs-sm); }
+.rc-confirm-go { display: inline-flex; align-items: center; gap: 7px; }
+.rc-stop-sq { flex: none; width: 10px; height: 10px; border-radius: 2px; background: #fff; }
 .rc-confirm .rc-btn::after { content: ""; position: absolute; inset: -4px 0; }
 
 /* ── Unreachable ── */

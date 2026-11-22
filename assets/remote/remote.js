@@ -112,7 +112,12 @@
     closeMenu();
   }
   function setTitle(title, sub) {
-    $('title').textContent = title;
+    // The bar draws one line and ends a long name with an ellipsis; the
+    // whole name stays on the heading for a long press and a screen reader.
+    const h = $('title');
+    h.textContent = title;
+    h.title = title;
+    h.setAttribute('aria-label', title);
     $('subtitle').textContent = sub || '';
   }
 
@@ -423,6 +428,7 @@
     // cannot tell which session the Escape would reach (it refuses too).
     const canStop = l?.state === 'working' && !l.read_only;
     $('interrupt').hidden = !canStop;
+    $('interrupt').setAttribute('aria-label', `Interrupt ${l?.name || st.current}`);
     if (!canStop && !$('confirm').hidden) disarmInterrupt();
     // Every sandbox the phone reaches has a board (tickets only without a team).
     $('views').hidden = !l;
@@ -1008,7 +1014,7 @@
     if (!st.current) return;
     if (!$('confirm').hidden) { disarmInterrupt(); return; }
     const l = leader();
-    $('confirm-text').textContent = `Interrupt ${l?.name || st.current}?`;
+    $('confirm-name').textContent = l?.name || st.current;
     $('interrupt').classList.add('rc-armed');
     $('interrupt').setAttribute('aria-expanded', 'true');
     $('confirm').hidden = false;
