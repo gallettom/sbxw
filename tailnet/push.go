@@ -230,7 +230,7 @@ type pushJob struct {
 	endpoint pushEndpoint
 	uaPublic *ecdh.PublicKey
 	auth     []byte
-	kind     string // "p" or "n"
+	kind     string // "p", "m" or "n"
 	name     string // the sandbox, [A-Za-z0-9-]{0,63}; may be empty
 	lead     bool   // the sandbox is a team leader
 	badge    int
@@ -261,7 +261,7 @@ func parseJob(line []byte) (*pushJob, string, error) {
 	if j.Endpoint == nil || j.P256dh == nil || j.Auth == nil || j.Kind == nil || j.Name == nil || j.Lead == nil || j.Badge == nil || j.TTL == nil {
 		return nil, id, errBadJob
 	}
-	if *j.Kind != "p" && *j.Kind != "n" {
+	if *j.Kind != "p" && *j.Kind != "m" && *j.Kind != "n" {
 		return nil, id, errBadJob
 	}
 	// Letters, digits and hyphens only: JSON never escapes them, so the

@@ -245,12 +245,14 @@ impl PushFile {
     }
 }
 
-/// What a push says, as the worker reads it: `p` a plan or a merge waits,
-/// `n` a session needs the person.
+/// What a push says, as the worker reads it: `p` a plan waits, `m` a merge
+/// waits, `n` a session needs the person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub enum PushKind {
     #[serde(rename = "p")]
     Plan,
+    #[serde(rename = "m")]
+    Merge,
     #[serde(rename = "n")]
     Needs,
 }
@@ -259,6 +261,7 @@ impl PushKind {
     pub fn letter(self) -> &'static str {
         match self {
             PushKind::Plan => "p",
+            PushKind::Merge => "m",
             PushKind::Needs => "n",
         }
     }
@@ -366,30 +369,48 @@ pub struct Fire {
     pub lead: bool,
 }
 
+/// Plans and merges waiting for the person in one sandbox.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Waiting {
+    pub plans: usize,
+    pub merges: usize,
+}
+
 /// The edges that cause a push, watched by ONE daemon task: a sandbox the
 /// phone reaches starts to ask for the person (`n`, the test of the
-/// `needs_you` event), or the number of plans and merges waiting goes up
-/// (`p`). The first look sets the baseline and pushes nothing.
+/// `needs_you` event), the number of plans waiting goes up (`p`), or the
+/// number of merges waiting goes up (`m`). The first look sets the
+/// baseline and pushes nothing.
 ///
 /// `asking` is keyed by the sandbox reference; `waiting` counts plans and
 /// merges per sandbox. The push names the first sandbox that started to
-/// ask, or the first whose count went up.
+/// ask, or the first whose count went up. When plans and merges both grew
+/// in one look, only `p` is sent (one push per look for the pair; the
+/// phone is told that something waits, and the app shows which).
 #[derive(Debug, Default)]
 pub struct Edges {
-    seen: Option<(BTreeMap<String, Asking>, BTreeMap<String, usize>)>,
+    seen: Option<(BTreeMap<String, Asking>, BTreeMap<String, Waiting>)>,
 }
 
 impl Edges {
-    pub fn step(&mut self, asking: BTreeMap<String, Asking>, waiting: BTreeMap<String, usize>) -> Vec<Fire> {
+    pub fn step(&mut self, asking: BTreeMap<String, Asking>, waiting: BTreeMap<String, Waiting>) -> Vec<Fire> {
         let mut out = Vec::new();
         if let Some((was_asking, was_waiting)) = &self.seen {
             if let Some((_, a)) = asking.iter().find(|(s, _)| !was_asking.contains_key(*s)) {
                 out.push(Fire { kind: PushKind::Needs, name: a.name.clone(), lead: a.lead });
             }
-            let total = |m: &BTreeMap<String, usize>| m.values().sum::<usize>();
-            if total(&waiting) > total(was_waiting) {
-                let rose = waiting.iter().find(|(s, n)| **n > was_waiting.get(*s).copied().unwrap_or(0)).map(|(s, _)| push_name(s)).unwrap_or_default();
-                out.push(Fire { kind: PushKind::Plan, name: rose, lead: false });
+            let before = |s: &String| was_waiting.get(s).copied().unwrap_or_default();
+            let rose = |count: fn(&Waiting) -> usize| {
+                let total = |m: &BTreeMap<String, Waiting>| m.values().map(count).sum::<usize>();
+                if total(&waiting) <= total(was_waiting) {
+                    return None;
+                }
+                waiting.iter().find(|(s, w)| count(w) > count(&before(s))).map(|(s, _)| push_name(s))
+            };
+            if let Some(name) = rose(|w| w.plans) {
+                out.push(Fire { kind: PushKind::Plan, name, lead: false });
+            } else if let Some(name) = rose(|w| w.merges) {
+                out.push(Fire { kind: PushKind::Merge, name, lead: false });
             }
         }
         self.seen = Some((asking, waiting));
@@ -584,7 +605,7 @@ mod tests {
     #[test]
     fn edges_fire_on_the_rise_only_and_name_the_sandbox() {
         let ask = |v: &[(&str, bool)]| v.iter().map(|(s, l)| (s.to_string(), Asking { name: push_name(s), lead: *l })).collect::<BTreeMap<_, _>>();
-        let wait = |v: &[(&str, usize)]| v.iter().map(|(s, n)| (s.to_string(), *n)).collect::<BTreeMap<_, _>>();
+        let wait = |v: &[(&str, usize)]| v.iter().map(|(s, n)| (s.to_string(), Waiting { plans: *n, merges: 0 })).collect::<BTreeMap<_, _>>();
         let fire = |kind, name: &str, lead| Fire { kind, name: name.into(), lead };
         let mut e = Edges::default();
         assert!(e.step(ask(&[("a", false)]), wait(&[("a", 3)])).is_empty(), "the baseline pushes nothing");
@@ -595,6 +616,25 @@ mod tests {
         assert!(e.step(ask(&[]), wait(&[("a", 2), ("mini~c", 2)])).is_empty());
         assert_eq!(e.step(ask(&[("a", false)]), wait(&[("a", 2), ("mini~c", 2)])), [fire(PushKind::Needs, "a", false)], "asking again after an answer is a new edge");
         assert!(e.step(ask(&[("a", false)]), wait(&[("a", 1), ("c", 3)])).is_empty(), "the total did not rise");
+    }
+
+    #[test]
+    fn a_new_merge_fires_m_a_new_plan_p_and_both_only_p() {
+        let w = |v: &[(&str, usize, usize)]| v.iter().map(|(s, p, m)| (s.to_string(), Waiting { plans: *p, merges: *m })).collect::<BTreeMap<_, _>>();
+        let fire = |kind, name: &str| Fire { kind, name: name.into(), lead: false };
+        let mut e = Edges::default();
+        assert!(e.step(BTreeMap::new(), w(&[("a", 1, 0)])).is_empty());
+        assert_eq!(e.step(BTreeMap::new(), w(&[("a", 1, 1)])), [fire(PushKind::Merge, "a")], "a merge rose");
+        assert_eq!(e.step(BTreeMap::new(), w(&[("a", 2, 1)])), [fire(PushKind::Plan, "a")], "a plan rose");
+        assert!(e.step(BTreeMap::new(), w(&[("a", 2, 0)])).is_empty(), "a merge done pushes nothing");
+        assert_eq!(e.step(BTreeMap::new(), w(&[("a", 3, 1), ("mini~b", 0, 1)])), [fire(PushKind::Plan, "a")], "both rose: one p");
+        assert!(e.step(BTreeMap::new(), w(&[("a", 3, 0), ("mini~b", 0, 2)])).is_empty(), "merges moved, total did not rise");
+        assert_eq!(e.step(BTreeMap::new(), w(&[("a", 3, 0), ("mini~b", 0, 3)])), [fire(PushKind::Merge, "b")]);
+        assert_eq!(PushKind::Merge.letter(), "m");
+        let mut l = Limits::default();
+        assert!(l.take("d", PushKind::Plan, 0));
+        assert!(l.take("d", PushKind::Merge, 1), "m has its own 2 minute bucket");
+        assert!(!l.take("d", PushKind::Merge, 2));
     }
 
     #[test]

@@ -8,9 +8,9 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const src = readFileSync(new URL('../../assets/remote/sw.js', import.meta.url), 'utf8');
-const TEXTS = new Set(['Un plan vous attend', 'Un agent a besoin de vous', 'Quelque chose vous attend']);
+const TEXTS = new Set(['Un plan vous attend', 'Un merge vous attend', 'Un agent a besoin de vous', 'Quelque chose vous attend']);
 // A shown text: a fixed one, or one of the three that name a sandbox.
-const NAMED = /^(?:Un plan vous attend dans [A-Za-z0-9-]{1,63}|(?:Team leader )?[A-Za-z0-9-]{1,63} a besoin de vous)$/;
+const NAMED = /^(?:Un (?:plan|merge) vous attend dans [A-Za-z0-9-]{1,63}|(?:Team leader )?[A-Za-z0-9-]{1,63} a besoin de vous)$/;
 const shownOk = t => TEXTS.has(t) || NAMED.test(t);
 
 // A worker world: records every notification, badge call and window action.
@@ -99,6 +99,10 @@ test('the text names the sandbox: a team leader, a sandbox, a plan', async () =>
     // No name, or one that is not a sbx name: the fixed texts.
     [{ kind: 'n', badge: 1, name: '', lead: true }, 'Un agent a besoin de vous'],
     [{ kind: 'p', badge: 1, name: '' }, 'Un plan vous attend'],
+    [{ kind: 'm', badge: 1, name: 'sbxw-2', lead: false }, 'Un merge vous attend dans sbxw-2'],
+    [{ kind: 'm', badge: 1, name: '' }, 'Un merge vous attend'],
+    [{ kind: 'm', badge: 1 }, 'Un merge vous attend'],
+    [{ kind: 'm', badge: 1, name: '<b>x</b>' }, 'Un merge vous attend'],
     [{ kind: 'n', badge: 1, lead: true }, 'Un agent a besoin de vous'],
     [{ kind: 'n', badge: 1, name: '<b>x</b>', lead: true }, 'Un agent a besoin de vous'],
     [{ kind: 'n', badge: 1, name: 'a b' }, 'Un agent a besoin de vous'],
