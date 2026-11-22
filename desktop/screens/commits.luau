@@ -88,14 +88,14 @@ local function rowview(r)
     selected = r.selected == true, fill = (r.expanded or r.selected) and "active-bg" or nil, hover_group = true,
     help = r.expanded and "Fold it" or "Open it: its message and changed files",
     icon{ r.expanded and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
-    column{ w = 8, h = 8, radius = "mark", fill = r.color or "text-dim", help = r.sandbox },
+    column{ w = 8, h = 8, radius = "mark", fill = r.color or "text-muted", help = r.sandbox },
     text{ r.sandbox or "", size = "xs", color = "text-muted", truncate = true, max_w = 120 },
     text{ r.short or "", size = "xs", mono = true, color = "text-muted" },
     text{ r.subject or "", size = "sm", color = "text-bright", truncate = true, grow = 1, min_w = 140, help = r.subject },
     branch,
     r.merged and badge{ "merged", tone = "green", help = "The main checkout's branch holds it" } or false,
     text{ r.author or "", size = "xs", color = "text-muted", truncate = true, max_w = 120 },
-    text{ r.when or "", size = "xs", color = "text-dim" },
+    text{ r.when or "", size = "xs", color = "text-muted" },
     button{ icon = "copy", key = "commits-copy-" .. r.id, on = "copy", arg = r.id, variant = "ghost", dense = true, help = "Copy the full hash" },
   }
 end
@@ -114,7 +114,7 @@ return {
       list[#list + 1] = note(ui.loading and "Reading the commits…" or (nz(ui.filter) and "No commit matches the filter." or "No commits to show."))
     end
     for _, n in ipairs(ui.notes or {}) do
-      list[#list + 1] = note(n.text, n.tone == "red" and "red" or "text-dim")
+      list[#list + 1] = note(n.text, n.tone == "red" and "red" or "text-muted")
     end
     return column{ h = "full", gap = 8, w = "full",
       scope(ui),

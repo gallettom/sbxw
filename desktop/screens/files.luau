@@ -105,14 +105,14 @@ local function locations(ui, narrow)
   end
   local kids = { gap = 2, w = "full", key = "files-locations-list",
     text{ "Locations", size = "caption", weight = "semibold", color = "text-muted" },
-    text{ "Inside " .. (ui.sandbox or "the sandbox") .. ", as its agent sees them", size = "xs", color = "text-dim", truncate = true,
+    text{ "Inside " .. (ui.sandbox or "the sandbox") .. ", as its agent sees them", size = "xs", color = "text-muted", truncate = true,
       help = "These are the sandbox's files, not this computer's: only the workspace (and any mount) is a folder of this computer, shared at the same path" },
   }
   for gi, g in ipairs(groups) do
     -- A group reads as a group: more air above its label than between entries, a quieter label.
     kids[#kids + 1] = column{ w = "full", py = 4, key = "files-group-" .. g.group,
       spacer{ h = gi == 1 and 0 or 4, grow = 0 },
-      text{ g.group, size = "xs", color = "text-dim" } }
+      text{ g.group, size = "xs", color = "text-muted" } }
     for _, x in ipairs(g.items or {}) do
       local here = x.id == ui.location
       -- The current one: the listing's own highlight (its header at the
@@ -194,11 +194,11 @@ local function crumbs(state, ui, narrow, w)
         local items = {}
         for j = 2, from - 1 do items[#items + 1] = { id = cs[j].path, label = cs[j].label } end
         add(menu{ "…", id = "files-crumbs-more", items = items, on = "crumb_pick" })
-        add(text{ "/", size = "sm", color = "text-dim" })
+        add(text{ "/", size = "sm", color = "text-muted" })
       end
     else
       add(seg(i, c, i == n))
-      if i < n and not (i == 1 and c.label == "/") then add(text{ "/", size = "sm", color = "text-dim" }) end
+      if i < n and not (i == 1 and c.label == "/") then add(text{ "/", size = "sm", color = "text-muted" }) end
     end
   end
   local tail = {}
@@ -308,7 +308,7 @@ local function dirview(r)
       icon{ "folder", size = 12, color = "blue" },
       text{ r.name .. (r.link and " ↪" or ""), size = "sm", truncate = true, grow = 1 },
       count and text{ count, size = "xs", color = "text-muted" } or false,
-      nz(r.when) and text{ r.when, size = "xs", color = "text-dim" } or false,
+      nz(r.when) and text{ r.when, size = "xs", color = "text-muted" } or false,
       button{ icon = "chevron-right", key = "files-into-" .. r.id, on = "select", arg = r.id, variant = "ghost", dense = true, reveal = true,
         help = "List " .. r.name .. " (Enter)" },
     },
@@ -329,7 +329,7 @@ local function rowview(ui, r, i)
     icon{ r.icon or "file", size = 12, color = r.kind == "dir" and "blue" or file_color(r.name) },
     column{ gap = 2, grow = 1,
       text{ r.name .. (r.link and " ↪" or ""), size = "sm", truncate = true, color = r.selected and "text-bright" or "text" },
-      #meta > 0 and text{ table.concat(meta, " · "), size = "xs", color = "text-dim", truncate = true } or false,
+      #meta > 0 and text{ table.concat(meta, " · "), size = "xs", color = "text-muted", truncate = true } or false,
     },
     r.fresh and dot{ tone = "blue", help = "Written in the last hour" } or false,
     nz(r.size) and text{ r.size, size = "xs", color = "text-muted" } or false,
@@ -442,7 +442,7 @@ local function preview(ui, narrow, w)
   return column{ gap = 8, h = "full", min_h = 0, pad = 8,
     text{ s.name, weight = "semibold", truncate = true, color = "text-bright" },
     text{ s.type .. (isfile and (" · " .. s.size .. " · " .. s.modified) or ""), size = "xs", color = "text-muted", truncate = true },
-    text{ s.path or "", size = "xs", mono = true, color = "text-dim", truncate = true, help = s.path },
+    text{ s.path or "", size = "xs", mono = true, color = "text-muted", truncate = true, help = s.path },
     row(acts),
     divider{},
     body,
@@ -521,7 +521,7 @@ return {
         scope = { kind = "sandbox", narrow = thread, narrow_icon = "branch" } },
       ui.offline and badge{ "stopped: workspace only", tone = "amber", help = "Read from this computer; the sandbox is not started to list a folder" } or false,
     }
-    local list_head = nz(ui.artifacts_dir) and ui.tab == "artifacts" and text{ ui.artifacts_dir, size = "xs", color = "text-dim", mono = true, truncate = true, help = ui.artifacts_dir } or false
+    local list_head = nz(ui.artifacts_dir) and ui.tab == "artifacts" and text{ ui.artifacts_dir, size = "xs", color = "text-muted", mono = true, truncate = true, help = ui.artifacts_dir } or false
     if narrow then
       if state.pane == "reader" and ui.selected then
         return column{ h = "full", gap = 8, w = "full",

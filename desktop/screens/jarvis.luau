@@ -23,7 +23,7 @@ local function message(m, speaks)
       markdown{ m.text, on = "link", key = "msg-" .. m.id, pills = true },
       speaks and row{ w = "full", justify = "end",
         button{ icon = "speaker", variant = "ghost", on = "read", arg = m.id,
-          color = m.reading and "blue" or "text-dim",
+          color = m.reading and "blue" or "text-muted",
           help = m.reading and "Stop reading" or "Read aloud" },
       } or false,
     }
@@ -32,7 +32,7 @@ local function message(m, speaks)
     return column{ w = "full", gap = 4, key = "msg-" .. m.id,
       row{ gap = 8, w = "full", badge{ m.from or "agent", tone = "blue" }, spacer{},
         speaks and button{ icon = "speaker", variant = "ghost", on = "read", arg = m.id,
-          color = m.reading and "blue" or "text-dim", help = m.reading and "Stop reading" or "Read aloud" } or false },
+          color = m.reading and "blue" or "text-muted", help = m.reading and "Stop reading" or "Read aloud" } or false },
       markdown{ m.text, on = "link", pills = m.from or true },
     }
   elseif m.who == "error" then
@@ -125,7 +125,7 @@ return {
           icon{ "send", size = 12, color = "text-muted", help = "Where your words go" },
           -- A sandbox picked: its colour square, as the overlays' sandbox picker.
           target and column{ w = 8, h = 8, radius = "mark", key = "jarvis-target-color",
-            fill = (((data.app or {}).groups or {})[target]) or "text-dim" } or false,
+            fill = (((data.app or {}).groups or {})[target]) or "text-muted" } or false,
           select{ id = "jarvis-target", items = items, value = target or "sbxw-jarvis", on = "target", min_w = 0,
             help = "Where your words go: Jarvis, or a running sandbox's agent (you confirm each message)" },
         } or false,

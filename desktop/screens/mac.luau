@@ -121,7 +121,7 @@ return {
       row(pills),
       row{ gap = 8, w = "full", text{ "Release", size = "sm", color = "text-muted", w = 60 }, text{ n(m.pinned), size = "sm", mono = true } },
       row{ gap = 8, w = "full", align = "start", text{ "Ports", size = "sm", color = "text-muted", w = 60 },
-        #ports > 0 and text{ table.concat(ports, "  "), size = "sm", mono = true, wrap = true, grow = 1 } or text{ "none published", size = "sm", color = "text-dim" } },
+        #ports > 0 and text{ table.concat(ports, "  "), size = "sm", mono = true, wrap = true, grow = 1 } or text{ "none published", size = "sm", color = "text-muted" } },
       row(acts),
       row(ends),
     })
@@ -155,7 +155,7 @@ return {
     local s = m.settings or {}
     table.insert(out, note("A lease lapses after " .. n(s.idle_release_minutes) .. " min idle. A VM sbxw started is paused after " ..
       n(s.pause_after_minutes) .. " min unheld and shut down after " .. n(s.stop_after_minutes) ..
-      " min, forced if the shutdown still hangs " .. n(s.force_stop_after_minutes) .. " min later. Set these under [mac] in sbxw.toml.", "text-dim"))
+      " min, forced if the shutdown still hangs " .. n(s.force_stop_after_minutes) .. " min later. Set these under [mac] in sbxw.toml.", "text-muted"))
     return scroll{ column(out) }
   end,
 

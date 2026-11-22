@@ -99,7 +99,7 @@ return {
         column{ grow = 1, gap = 2,
           text{ "/" .. x.name, mono = true, color = "text-bright" },
           x.description and text{ x.description, size = "sm", wrap = true, color = "text-soft" } or false,
-          text{ "from " .. (x.sandbox or "?"), size = "xs", color = "text-dim", help = x.path },
+          text{ "from " .. (x.sandbox or "?"), size = "xs", color = "text-muted", help = x.path },
         },
         button{ "Remove", variant = "ghost", on = "forget", arg = x.name, key = "forget-" .. x.name, help = "New sandboxes stop getting it" },
       }
@@ -148,11 +148,11 @@ return {
             column{ grow = 1, gap = 2,
               text{ "/" .. x.name, mono = true, color = "text-bright" },
               x.description and text{ x.description, size = "sm", wrap = true, color = "text-soft" } or false,
-              text{ x.path .. " · " .. (x.files or 0) .. " files, " .. kb(x.bytes), size = "xs", color = "text-dim" },
+              text{ x.path .. " · " .. (x.files or 0) .. " files, " .. kb(x.bytes), size = "xs", color = "text-muted" },
             },
             x.keepable and button{ is_kept and "Replace…" or "Keep…", key = "keep-" .. x.name, on = "keep", arg = { sandbox = look_for, name = x.name },
               help = "Every sandbox created from now on gets it" }
-              or text{ "name not kept", size = "sm", color = "text-dim", help = "Lowercase letters, digits, - and _ only" },
+              or text{ "name not kept", size = "sm", color = "text-muted", help = "Lowercase letters, digits, - and _ only" },
           }
         end
         if #rows > 0 then

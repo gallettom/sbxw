@@ -178,7 +178,7 @@ return {
         row{ gap = 8, grow = 1, min_w = 0, px = 4, h = 28, radius = "xs", key = "kit-sel-" .. b.name, on = "sel", arg = b.ref,
           fill = state.sel == b.ref and "active-bg" or nil, hover = "hover-subtle", help = "What " .. b.ref .. " gives a sandbox",
           b.default and badge{ "default", help = "What a file without a kits line gets" } or false,
-          text{ b.about or "", size = "sm", color = on and "text-soft" or "text-dim", truncate = true, grow = 1 },
+          text{ b.about or "", size = "sm", color = on and "text-soft" or "text-muted", truncate = true, grow = 1 },
         },
       }
     end

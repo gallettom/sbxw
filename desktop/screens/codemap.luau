@@ -28,7 +28,7 @@ local function lens_box(ui, open)
     note("Retell the map for one reader, in a background session of this sandbox's agent."),
     input{ id = "codemap-lens", value = ui.lens or "", placeholder = "a product owner: what each part delivers, for whom, what it costs to change", on = "lens_typed" },
     row{ gap = 8, w = "full",
-      text{ (ui.lens_left or 400) .. " characters left", size = "xs", color = (ui.lens_left or 400) < 0 and "red" or "text-dim" },
+      text{ (ui.lens_left or 400) .. " characters left", size = "xs", color = (ui.lens_left or 400) < 0 and "red" or "text-muted" },
       spacer{},
       button{ "Write the lens", key = "codemap-lens-send", icon = "send", on = "lens", arg = ui.sandbox,
         busy = ui.writing and true or false, disabled = not ui.writing and (not ui.running or not nz(ui.lens) or (ui.lens_left or 0) < 0),
@@ -59,7 +59,7 @@ local function side(ui, d)
   end
   for i, b in ipairs(d.backlinks or {}) do
     kids[#kids + 1] = row{ gap = 8, w = "full", px = 4, py = 2, radius = "xs", key = "codemap-back-" .. i, on = "doc", arg = { doc = b.from, anchor = b.anchor },
-      text{ b.from, size = "sm", color = "blue" }, nz(b.section) and text{ b.section, size = "xs", color = "text-dim", truncate = true, grow = 1 } or false }
+      text{ b.from, size = "sm", color = "blue" }, nz(b.section) and text{ b.section, size = "xs", color = "text-muted", truncate = true, grow = 1 } or false }
   end
   kids[#kids + 1] = spacer{ h = 4 }
   kids[#kids + 1] = head("Outline")
@@ -72,7 +72,7 @@ local function side(ui, d)
     kids[#kids + 1] = head("Code referenced")
     for i, c in ipairs(d.code) do
       kids[#kids + 1] = row{ w = "full", px = 4, py = 2, radius = "xs", key = "codemap-code-" .. i, on = "copy", arg = c, help = "Copy the path",
-        icon{ "copy", size = 12, color = "text-dim" }, text{ c, size = "xs", mono = true, truncate = true, grow = 1 } }
+        icon{ "copy", size = 12, color = "text-muted" }, text{ c, size = "xs", mono = true, truncate = true, grow = 1 } }
     end
   end
   return scroll(kids)
@@ -83,7 +83,7 @@ local function doc_view(ui, m)
   if not d then return note("Pick a file of the map.") end
   return column{ gap = 8, grow = 1,
     row{ gap = 8, w = "full",
-      text{ ".sbxw-artifacts/" .. (d.path or "") .. (d.section and ("  ›  " .. d.section.title) or ""), size = "xs", mono = true, color = "text-dim", truncate = true, grow = 1 },
+      text{ ".sbxw-artifacts/" .. (d.path or "") .. (d.section and ("  ›  " .. d.section.title) or ""), size = "xs", mono = true, color = "text-muted", truncate = true, grow = 1 },
       d.section and button{ "Whole file", key = "codemap-whole", on = "doc", arg = { doc = d.key }, variant = "ghost" } or false,
     },
     split{ id = "codemap-split", ratio = 0.68,
@@ -96,7 +96,7 @@ local function results(m)
   local list = { gap = 2 }
   for i, d in ipairs(m.docs or {}) do
     list[#list + 1] = row{ gap = 8, w = "full", px = 8, py = 4, radius = "xs", key = "codemap-hit-" .. d.key, on = "doc", arg = { doc = d.key },
-      text{ d.title, size = "sm", truncate = true, grow = 1 }, text{ d.key, size = "xs", color = "text-dim" } }
+      text{ d.title, size = "sm", truncate = true, grow = 1 }, text{ d.key, size = "xs", color = "text-muted" } }
   end
   if #(m.docs or {}) == 0 then list[#list + 1] = note("No file of the map holds those words.") end
   return scroll(list)
@@ -115,7 +115,7 @@ return {
     local docs = {}
     for _, d in ipairs(m.docs or {}) do docs[#docs + 1] = { id = d.key, label = d.title } end
     local top = row{ gap = 8, w = "full", badge{ ui.sandbox, tone = "blue" },
-      #maps > 1 and select{ id = "codemap-maps", items = maps, value = ui.root, on = "map", arg = ui.sandbox } or text{ nz(ui.root) and (".sbxw-artifacts/" .. ui.root .. "/") or "", size = "xs", mono = true, color = "text-dim", truncate = true },
+      #maps > 1 and select{ id = "codemap-maps", items = maps, value = ui.root, on = "map", arg = ui.sandbox } or text{ nz(ui.root) and (".sbxw-artifacts/" .. ui.root .. "/") or "", size = "xs", mono = true, color = "text-muted", truncate = true },
       spacer{},
       ui.diagram and button{ "Diagram", key = "codemap-diagram", icon = "link", on = "diagram", variant = "ghost",
         help = "An HTML page the app does not draw: saved, then opened in your browser (the app asks first)" } or false,

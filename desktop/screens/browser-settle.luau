@@ -18,7 +18,7 @@ return {
         button{ "Remove them", on = "settle", arg = false, variant = "danger", key = "browser-settle-remove" },
         button{ "Keep them", on = "settle", arg = true, variant = "primary", key = "browser-settle-keep" },
       },
-      text{ "Escape leaves the question for the next close: the hosts stay allowed meanwhile.", size = "xs", color = "text-dim", wrap = true },
+      text{ "Escape leaves the question for the next close: the hosts stay allowed meanwhile.", size = "xs", color = "text-muted", wrap = true },
     }
   end,
   actions = {

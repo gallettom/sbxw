@@ -1481,7 +1481,7 @@ impl Build<'_> {
                     .single_line()
                     .key(key.clone().unwrap_or_default())
                     .color(c("text-bright"))
-                    .placeholder(n.placeholder.clone().unwrap_or_default(), c(if is_compose(n) && !n.disabled { "text-muted" } else { "text-dim" }))
+                    .placeholder(n.placeholder.clone().unwrap_or_default(), c("text-muted"))
                     .w_full()
                     .on_edit(move |s: &mut S| &mut s.screen(&name).ui.edits.get_mut(&id2).expect("input synced").0);
                 if n.secure {
@@ -1588,7 +1588,7 @@ impl Build<'_> {
                 let mut t = text_input(&edit, body(size, 400.0))
                     .key(key.clone().unwrap_or_default())
                     .color(c("text-bright"))
-                    .placeholder(n.placeholder.clone().unwrap_or_default(), c(if is_compose(n) && !n.disabled { "text-muted" } else { "text-dim" }))
+                    .placeholder(n.placeholder.clone().unwrap_or_default(), c("text-muted"))
                     .w_full()
                     .on_edit(move |s: &mut S| &mut s.screen(&name).ui.edits.get_mut(&id2).expect("textarea synced").0);
                 if let Some(on) = n.on.clone() {

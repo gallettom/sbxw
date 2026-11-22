@@ -863,7 +863,7 @@ switch every screen is loaded again and renders with the new values. So:
 
 | Table | Names |
 |---|---|
-| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary` (the one filled button's fill), `on-primary` (its label), `primary-hover`, `red-text` (red words on a group's tint), `status-bar`, `status-line`, `vendor-anthropic`, `vendor-openai`, `vendor-google`, `cyan`, `pill-danger`, `accent`, `accent-tint`, `link`, `tab-current`, `scrim`, `shadow`, `media` (behind a picture), `file-doc`, `file-code`, `file-image`, `file-data`, `file-archive` (the explorer's file kinds) |
+| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary` (the one filled button's fill), `on-primary` (its label), `primary-hover`, `red-text` (red words on a group's tint), `status-bar`, `status-line`, `vendor-anthropic`, `vendor-openai`, `vendor-google`, `cyan`, `pill-danger`, `accent`, `accent-tint`, `link`, `tab-current`, `scrim`, `shadow`, `media` (behind a picture), `file-doc`, `file-code`, `file-image`, `file-data`, `file-archive` (the explorer's file kinds) |
 | `theme.mode` | `dark` or `graphite` |
 | `theme.icon` | `sm` 12 (inline with text), `md` 14 (every control), `lg` 20 (the rail), `mark` 24 (the top bar's mark) |
 | `theme.radius` | `mark` 2 (8 pt squares, thin bars), `box` 4 (a checkbox, a keycap), `xs` 6, `sm` 6, `md` 10, `lg` 12, `pill` 999 (dots, chips) |
@@ -946,9 +946,11 @@ Both rules and the contrast on every ground are tested (`screen::tests`).
   and colour make the hierarchy.
 - **Colour**: every text and surface pair meets WCAG AA (4.5:1; 3:1 for
   icons, marks and focus rings): `theme::tests::contrast_of_every_pair_used`
-  lists them. `text-dim` is for hints and second lines (an age, a label
-  beside a name): it reads at 4.5:1 on every ground, a selected row
-  included. A state is never colour alone: say it in a word too.
+  lists them. One secondary grey, `text-muted`, for labels, hints and
+  second lines (an age, a label beside a name): it reads at 4.5:1 on every
+  ground, a selected row included. `text-dim`, its former twin, still
+  resolves to it for screens written against it; do not write it in a new
+  screen. A state is never colour alone: say it in a word too.
 - **Radii**: always a name, never a number (a test fails a built-in screen
   that writes one): 6 for controls and rows (`xs`, `sm`), 10 for cards,
   tiles and menus (`md`), 12 for dialogs (`lg`), `pill` for a dot,

@@ -631,7 +631,7 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
             .single_line()
             .key(filter_key.clone())
             .label("Filter sandboxes")
-            .placeholder("Filter sandboxes", c("text-dim"))
+            .placeholder("Filter sandboxes", c("text-muted"))
             .color(c("text-bright"))
             .autofocus()
             .w_full()
@@ -721,7 +721,7 @@ fn heading(key: &str, group: &Option<String>, color: Option<u32>) -> El {
     let sq = el().w(8.0).h(8.0).radius(theme::corner::MARK);
     let sq = match color {
         Some(g) => sq.fill(hex(g)),
-        None => sq.border(1.0, c("text-dim")),
+        None => sq.border(1.0, c("text-muted")),
     };
     row().key(format!("{key}-group-{name}")).w_full().h(HEAD_H).px(8.0).gap(crate::theme::spacing::INLINE).items_center().radius(theme::radius("xs").unwrap()).fill(hex(tint)).help(name.clone())
         .child(sq)
@@ -739,7 +739,7 @@ fn chip(sp: &Spec, ch: &Choice, key: &str) -> Option<El> {
     };
     if n == 0 {
         return (sp.only_counted && ch.count.is_some()).then(|| {
-            text(format!("no {}", sp.noun)).key(k).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-dim")).help(format!("No {} any more: shown because it is the current one", sp.noun))
+            text(format!("no {}", sp.noun)).key(k).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).help(format!("No {} any more: shown because it is the current one", sp.noun))
         });
     }
     Some(el().key(k).px(crate::theme::spacing::CHIP_X).py(crate::theme::spacing::CHIP_Y).radius(theme::radius("xs").unwrap()).fill(c("elevated")).help(tip).child(text(n.to_string()).font(crate::screen::body(crate::theme::font_size::CAPTION, 500.0)).color(c("text"))))
@@ -778,11 +778,11 @@ fn choice_row<S: 'static>(cx: &ListCtx<S>, ch: &Choice, key: &str, prev: Option<
             .child(text(ch.id.clone()).font(crate::screen::body(crate::theme::font_size::BODY, if current { 600.0 } else { 500.0 })).color(c("text-bright")).grow(1.0).min_w(0.0).truncate())
             // In the order of the count, the group is named here (no headings).
             .children(cx.spec.by_count.then(|| {
-                text(ch.group.clone().unwrap_or_default()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-dim")).truncate().shrink().max_w(GROUP_W)
+                text(ch.group.clone().unwrap_or_default()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).truncate().shrink().max_w(GROUP_W)
             }))
             .children(chip(&cx.spec, ch, &key))
             .child(el().w(64.0).child(text(ch.status.clone()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).truncate().min_w(0.0)))
-            .child(el().w(56.0).child(text(ch.agent.clone()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-dim")).truncate().min_w(0.0)));
+            .child(el().w(56.0).child(text(ch.agent.clone()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).truncate().min_w(0.0)));
     }
     r = r.child(el().w(12.0).items_center().justify_center().children(current.then(|| icon("check", theme::icon::SMALL, theme::color_value("accent").unwrap()))));
     if current {

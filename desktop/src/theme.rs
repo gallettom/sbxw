@@ -24,9 +24,8 @@ pub const DARK: &[(&str, u32)] = &[
     ("dim", 0x484f58),         // faint icons, hover borders
     ("text", 0xc9d1d9),        // base body text
     ("text-bright", 0xe6edf3), // headings, emphasized text
-    ("text-muted", 0x9198a1),  // secondary text, field labels (web: #8b949e)
+    ("text-muted", 0x9198a1),  // secondary text: labels, hints, ages, placeholders; 4.5:1 on a selected row too (web: #8b949e)
     ("text-soft", 0x9198a1),   // lead paragraphs
-    ("text-dim", 0x8e97a1),    // hints, ages, second labels: 4.5:1 on a selected row too (web: #6e7681)
     ("blue", 0x58a6ff),
     ("blue-tint", 0x0d1f3c),
     ("green", 0x3fb950),
@@ -146,7 +145,6 @@ pub const GRAPHITE: &[(&str, u32)] = &[
     ("text-bright", 0xf1f3f4),
     ("text-muted", 0xa3a9af),
     ("text-soft", 0xa3a9af),
-    ("text-dim", 0xa2a8ae),
     ("blue", 0x6cb0ff),
     ("blue-tint", 0x303742),
     ("green", 0x4cc35d),
@@ -546,10 +544,17 @@ pub fn color_value(name: &str) -> Option<u32> {
     color_in(mode(), name)
 }
 
-/// A token's value in `m`'s palette.
+/// A token's value in `m`'s palette (an [`ALIASES`] name reads its token).
 pub fn color_in(m: Mode, name: &str) -> Option<u32> {
+    let name = ALIASES.iter().find(|(old, _)| *old == name).map_or(name, |(_, to)| *to);
     m.palette().iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
 }
+
+/// Retired colour names that still resolve, for screens written against
+/// them (an override in `~/.sbxw/desktop/screens/` may name one): `text-dim`
+/// was a second grey 1 to 4 % from `text-muted`, merged into it. Built-in
+/// code never writes them (`retired_colour_names_stay_out_of_built_in_code`).
+pub const ALIASES: &[(&str, &str)] = &[("text-dim", "text-muted")];
 
 /// A colour prop: a token name or `#rrggbb`.
 pub fn parse_color(s: &str) -> Result<u32, String> {
@@ -580,7 +585,10 @@ pub fn space(s: &str) -> Result<f32, String> {
 
 /// The table screens see as `theme`.
 pub fn to_json() -> serde_json::Value {
-    let colors: serde_json::Map<_, _> = mode().palette().iter().map(|(n, v)| (n.to_string(), format!("#{v:06x}").into())).collect();
+    let mut colors: serde_json::Map<_, _> = mode().palette().iter().map(|(n, v)| (n.to_string(), format!("#{v:06x}").into())).collect();
+    for (old, _) in ALIASES {
+        colors.insert(old.to_string(), format!("#{:06x}", color_value(old).unwrap()).into());
+    }
     let nums = |t: &[(&str, f32)]| -> serde_json::Map<String, serde_json::Value> { t.iter().map(|(n, v)| (n.to_string(), (*v as f64).into())).collect() };
     serde_json::json!({
         "mode": mode().name(),
@@ -919,14 +927,12 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("text-muted", "active-bg", Need::Text),
     ("text-soft", "bg", Need::Text),
     ("text-soft", "surface", Need::Text),
-    // Placeholders: in inputs (bg) and in the palette's field (surface).
-    ("text-dim", "bg", Need::Text),
-    ("text-dim", "surface", Need::Text),
-    ("text-dim", "elevated", Need::Text),
-    // A selected or hovered row's second line: a Kanban card's age and
-    // sandbox, a Board team's time, a kit's description, a Monitor row.
-    ("text-dim", "active-bg", Need::Text),
-    ("text-dim", "hover-subtle", Need::Text),
+    // `text-muted` above also covers what `text-dim` drew before the merge:
+    // placeholders in inputs (bg) and the palette's field (surface), and a
+    // selected or hovered row's second line (a Kanban card's age and
+    // sandbox, a Board team's time, a kit's description, a Monitor row).
+    ("text-muted", "floor", Need::Text),
+    ("text-muted", "pane-bar", Need::Text),
     ("text-soft", "active-bg", Need::Text),
     // Tones as text: badges on their tint, coloured labels on surfaces.
     ("blue", "blue-tint", Need::Text),
@@ -1030,7 +1036,7 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("group-3", "surface", Need::Mark),
     ("group-4", "surface", Need::Mark),
     // A chat input's ground (`compose`): typed words, the placeholder
-    // (`text-muted` there: `text-dim` falls under 4.5:1), its edge
+    // (`text-muted`), its edge
     // (`compose-edge`) and the focus ring on it (disabled, it is drawn on `bg` at
     // DISABLED_OPACITY: `text-bright` on `bg`, Disabled, below).
     ("text-bright", "compose", Need::Text),
@@ -1646,6 +1652,44 @@ mod tests {
             let r = w[1] / w[0];
             assert!((1.125..=1.2).contains(&r), "type step {} -> {}: {r:.3}", w[0], w[1]);
         }
+    }
+
+    /// A retired colour name ([`ALIASES`]) resolves to its token, in the
+    /// core and in `theme.color`, and no built-in code writes it.
+    #[test]
+    fn retired_colour_names_stay_out_of_built_in_code() {
+        for m in Mode::ALL {
+            for (old, to) in ALIASES {
+                assert!(!m.palette().iter().any(|(n, _)| n == old), "{old} is in the {m:?} palette");
+                assert_eq!(color_in(m, old), color_in(m, to), "{m:?}: {old}");
+            }
+        }
+        assert_eq!(to_json()["color"]["text-dim"], to_json()["color"]["text-muted"]);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut found = vec![];
+        let mut stack = vec![root.join("src"), root.join("screens")];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                if rel == "src/theme.rs" {
+                    continue;
+                }
+                let Ok(src) = std::fs::read_to_string(&p) else { continue };
+                for (old, _) in ALIASES {
+                    for q in [format!("\"{old}\""), format!("'{old}'")] {
+                        if src.contains(&q) {
+                            found.push(format!("{rel}: {old}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(found.is_empty(), "retired colour names in built-in code:\n{}", found.join("\n"));
     }
 
     /// `0xRRGGBB` or `#rrggbb` (`#rrggbbaa` too) in a line of code.

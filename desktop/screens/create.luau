@@ -90,7 +90,7 @@ local function folder_browser(c)
   if l then
     if l.can_up then
       rows[#rows + 1] = row{ key = "fs-up", on = "browse", arg = l.parent, w = "full", gap = 8, py = 4, px = 4, radius = "xs",
-        icon{ "chevron-right", size = 12, color = "text-dim" }, text{ "..", color = "text-muted" } }
+        icon{ "chevron-right", size = 12, color = "text-muted" }, text{ "..", color = "text-muted" } }
     end
     for _, e in ipairs(l.entries) do
       rows[#rows + 1] = row{ key = "fs-" .. e.name, on = "browse", arg = e.path, w = "full", gap = 8, py = 2, px = 4, radius = "xs",
@@ -99,7 +99,7 @@ local function folder_browser(c)
         (not picking) and button{ e.added and "✓" or "+", key = "add-" .. e.name, variant = e.added and "primary" or "ghost",
           on = "repo_toggle", arg = e.path, help = e.added and "Remove from this sandbox" or "Add to this sandbox's folders" } or false,
         (not picking and not c.remote) and button{ e.starred and "★" or "☆", key = "star-" .. e.name, variant = "ghost",
-          color = e.starred and "amber" or "text-dim", on = "star", arg = e.path,
+          color = e.starred and "amber" or "text-muted", on = "star", arg = e.path,
           help = e.starred and "Unstar this folder" or "Star this folder: pins it as a shortcut above" } or false,
       }
     end
@@ -118,7 +118,7 @@ local function folder_browser(c)
     local chips = { gap = 4, w = "full" }
     for _, f in ipairs(c.favourites) do
       chips[#chips + 1] = button{ "★ " .. f.name, key = "fav-" .. f.name, on = "browse", arg = f.path,
-        color = f.missing and "text-dim" or "amber", help = f.missing and (f.path .. ": not found right now") or f.path }
+        color = f.missing and "text-muted" or "amber", help = f.missing and (f.path .. ": not found right now") or f.path }
     end
     favs = row(chips)
   end
@@ -237,8 +237,8 @@ local function ports(c)
   }
   if #c.ports > 0 then
     kids[#kids + 1] = row{ w = "full", gap = 8,
-      text{ "In sandbox", size = "xs", color = "text-dim", w = 80 }, text{ "", w = 12 },
-      text{ "On your machine", size = "xs", color = "text-dim", w = 100 }, text{ "Hostname", size = "xs", color = "text-dim", grow = 1 } }
+      text{ "In sandbox", size = "xs", color = "text-muted", w = 80 }, text{ "", w = 12 },
+      text{ "On your machine", size = "xs", color = "text-muted", w = 100 }, text{ "Hostname", size = "xs", color = "text-muted", grow = 1 } }
   end
   for i, p in ipairs(c.ports) do
     kids[#kids + 1] = row{ w = "full", gap = 8,

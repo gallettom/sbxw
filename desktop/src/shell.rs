@@ -3440,7 +3440,7 @@ fn redraw_row(n: usize) -> screen::MenuRow<'static> {
 
 /// The grip a pane is dragged by: two columns of three dots.
 fn grip(n: usize) -> El {
-    let dot = || el().w(2.0).h(2.0).radius(theme::corner::PILL).fill(c("text-dim"));
+    let dot = || el().w(2.0).h(2.0).radius(theme::corner::PILL).fill(c("text-muted"));
     let column = || col().gap(2.0).child(dot()).child(dot()).child(dot());
     row()
         .key(format!("pane-{n}-grip"))

@@ -162,7 +162,7 @@ local function requests(data, state)
       row{ gap = 8, w = "full",
         badge{ kinds[r.kind] or r.kind or "request", tone = r.kind == "network" and "neutral" or "amber" },
         text{ r.title or "", mono = true, color = "text-bright", truncate = true, grow = 1 },
-        g.n > 1 and text{ "×" .. g.n, size = "sm", color = "text-dim", help = "sbx listed this " .. g.n .. " times (each retry)" } or false,
+        g.n > 1 and text{ "×" .. g.n, size = "sm", color = "text-muted", help = "sbx listed this " .. g.n .. " times (each retry)" } or false,
       },
       text{ (r.sandbox or "") .. ((r.detail and r.detail ~= "") and (" · " .. string.gsub(r.detail, "\n", " · ")) or ""), size = "sm", color = "text-muted", wrap = true },
       row(buttons),
@@ -191,7 +191,7 @@ local function blocked_view(sb, policy)
     end
     table.insert(rows, row{ gap = 8, w = "full",
       text{ b.host, mono = true, size = "sm", color = "text", truncate = true, grow = 1, help = b.reason },
-      (b.count or 0) > 1 and text{ "×" .. b.count, size = "sm", color = "text-dim" } or false,
+      (b.count or 0) > 1 and text{ "×" .. b.count, size = "sm", color = "text-muted" } or false,
       action,
     })
   end
@@ -228,8 +228,8 @@ local function rules_view(sb, policy, state)
       table.insert(items, row{ gap = 8, w = "full",
         badge{ action ~= "" and action or "?", tone = action == "allow" and "green" or (action == "deny" and "red" or "neutral") },
         text{ host ~= "" and host or line, mono = true, size = "sm", color = "text", truncate = true, grow = 1 },
-        text{ scope_label(at(v, r, "applies") ~= "" and at(v, r, "applies") or at(v, r, "sandbox")), size = "xs", color = "text-dim" },
-        src ~= "" and text{ src, size = "xs", color = "text-dim" } or false,
+        text{ scope_label(at(v, r, "applies") ~= "" and at(v, r, "applies") or at(v, r, "sandbox")), size = "xs", color = "text-muted" },
+        src ~= "" and text{ src, size = "xs", color = "text-muted" } or false,
         rm,
       })
     end
@@ -264,7 +264,7 @@ local function log_view(policy)
     if i > 12 then break end
     local action = string.lower(at(v, r, "action"))
     table.insert(items, row{ gap = 8, w = "full",
-      text{ at(v, r, "time"), size = "xs", color = "text-dim" },
+      text{ at(v, r, "time"), size = "xs", color = "text-muted" },
       badge{ action ~= "" and action or "?", tone = action == "allow" and "green" or (action == "deny" and "red" or "neutral") },
       text{ at(v, r, "host"), mono = true, size = "sm", color = "text", truncate = true, grow = 1 },
     })
@@ -305,7 +305,7 @@ local function ports_view(sb, ports, hosts, state)
     for _, e in ipairs(h) do
       table.insert(hi, row{ gap = 8, w = "full", text{ e.hostname or "", size = "sm", grow = 1 }, text{ e.ip or "", mono = true, size = "sm", color = "text-muted" } })
     end
-    table.insert(out, text{ "/etc/hosts aliases", size = "xs", color = "text-dim" })
+    table.insert(out, text{ "/etc/hosts aliases", size = "xs", color = "text-muted" })
     table.insert(out, list(hi))
   end
   return column(out)

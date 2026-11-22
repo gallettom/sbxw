@@ -684,7 +684,7 @@ pub fn lanes(threads: &[String], commits: &[J], w: f32) -> J {
         let n = (times.len().max(2) - 1) as f32;
         X0 + 16.0 + span * (rank / n)
     };
-    let mut strokes = vec![json!({ "points": [X0, main_y, w - 4.0, main_y], "width": 2, "color": "text-dim" })];
+    let mut strokes = vec![json!({ "points": [X0, main_y, w - 4.0, main_y], "width": 2, "color": "text-muted" })];
     let mut dots = vec![];
     let mut labels = vec![json!({ "name": "main", "y": main_y, "color": "text-muted" })];
     for (i, t) in threads.iter().enumerate() {

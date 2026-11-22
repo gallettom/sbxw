@@ -26,7 +26,7 @@ end
 
 local function square(data, sb)
   local c = ((data.app or {}).groups or {})[sb]
-  return c and column{ w = 8, h = 8, radius = "mark", fill = c } or column{ w = 8, h = 8, radius = "mark", border = "text-dim" }
+  return c and column{ w = 8, h = 8, radius = "mark", fill = c } or column{ w = 8, h = 8, radius = "mark", border = "text-muted" }
 end
 
 -- One line a row: the status dot, the names, a chip and the time. Nested
@@ -53,17 +53,17 @@ local function list_row(r, sel, now, color)
       row{ gap = 4, w = "full", min_w = 0,
         (not nested and color) and column{ py = 4, column{ w = 8, h = 8, radius = "mark", fill = color } } or false,
         (not nested) and text{ r.sandbox, key = "monitor-row-sb-" .. r.key, weight = "medium", color = "text-bright", truncate = true, min_w = r.chip and 56 or 72, max_w = 150, help = r.sandbox } or false,
-        text{ r.name, key = "monitor-row-name-" .. r.key, size = "sm", color = nested and "text-bright" or (r.thread and "text-muted" or "text-dim"),
+        text{ r.name, key = "monitor-row-name-" .. r.key, size = "sm", color = nested and "text-bright" or "text-muted",
           weight = nested and "medium" or nil, truncate = true, grow = 1, min_w = r.chip and 48 or 56, help = r.name },
         r.chip and text{ r.chip, size = "sm", pills = r.sandbox, key = "monitor-row-chip-" .. r.key } or false,
-        text{ when, size = "sm", color = "text-dim", key = "monitor-row-when-" .. r.key } },
+        text{ when, size = "sm", color = "text-muted", key = "monitor-row-when-" .. r.key } },
       r.ask and text{ r.ask, size = "sm", weight = "medium", color = "amber", truncate = true } or false } }
   memo[r.key] = { sig = sig, el = el }
   return el
 end
 
 local function heading(t, n)
-  return row{ px = 8, py = 4, gap = 4, text{ t, size = "sm", weight = "semibold", color = "text-muted" }, text{ tostring(n), size = "sm", color = "text-dim" } }
+  return row{ px = 8, py = 4, gap = 4, text{ t, size = "sm", weight = "semibold", color = "text-muted" }, text{ tostring(n), size = "sm", color = "text-muted" } }
 end
 
 -- A message's label row over its body. The callers tint the body: `bubble-you`
@@ -104,7 +104,7 @@ local function question_card(d, data)
   if sending then
     kids[#kids + 1] = text{ "Sending: " .. sending, size = "sm", color = "text-muted", wrap = true }
   elseif q.answerable then
-    kids[#kids + 1] = text{ #q.steps > 1 and "It is sent once each question has a pick." or "A press answers it.", size = "sm", color = "text-dim" }
+    kids[#kids + 1] = text{ #q.steps > 1 and "It is sent once each question has a pick." or "A press answers it.", size = "sm", color = "text-muted" }
   else
     kids[#kids + 1] = row{ gap = 8, w = "full",
       text{ "sbxw cannot answer this session from here.", size = "sm", color = "text-muted", grow = 1, wrap = true },
@@ -130,12 +130,12 @@ local function summary(d, now, kids)
   end
   if d.from then
     -- Another session's message (or the harness's): its words as data, quietly; never "You".
-    kids[#kids + 1] = bubble("From " .. d.from.name, "people", "text-dim", nil,
+    kids[#kids + 1] = bubble("From " .. d.from.name, "people", "text-muted", nil,
       column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", key = "monitor-from",
         text{ d.from.text ~= "" and d.from.text or "A message from another session.", wrap = true, size = "sm", color = "text-muted" } })
   end
   if d.reply then
-    kids[#kids + 1] = bubble("Claude", "sparkle", "vendor-anthropic", text{ "· last reply, " .. ago(d.ts, now), size = "sm", color = "text-dim" },
+    kids[#kids + 1] = bubble("Claude", "sparkle", "vendor-anthropic", text{ "· last reply, " .. ago(d.ts, now), size = "sm", color = "text-muted" },
       column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = 720, key = "monitor-reply", markdown{ d.reply, pills = d.sandbox } })
   end
 end
@@ -149,7 +149,7 @@ local STATUS = { ok = { "check", "green", "done" }, error = { "warning", "red", 
 
 local function quiet_line(key, ic, t)
   return row{ key = key, gap = 8, w = "full", justify = "center", py = 4,
-    icon{ ic, size = 12, color = "text-dim" }, text{ t, size = "sm", color = "text-muted", wrap = true, max_w = 560 } }
+    icon{ ic, size = 12, color = "text-muted" }, text{ t, size = "sm", color = "text-muted", wrap = true, max_w = 560 } }
 end
 
 -- One step: its tool's icon, the one-line summary, the result's size, a
@@ -162,7 +162,7 @@ local function step_row(st, skey, nested)
     nested and column{ w = 16, h = 1 } or false,
     icon{ st.icon, size = 12, color = "text-muted" },
     text{ st.summary, size = "sm", mono = true, color = "text", truncate = true, grow = 1 },
-    st.size and text{ st.size, size = "sm", color = "text-dim" } or false,
+    st.size and text{ st.size, size = "sm", color = "text-muted" } or false,
     icon{ m[1], size = 12, color = m[2], help = m[3] } }
   if not (st.open and st.head) then return head end
   return column{ gap = 4, w = "full", head,
@@ -175,7 +175,7 @@ local function conv_row(r, d, now)
     return row{ gap = 8, w = "full", py = 4, key = "monitor-" .. r.id, column{ grow = 1, h = 1, fill = "elevated" }, text{ r.label, size = "xs", color = "text-muted" }, column{ grow = 1, h = 1, fill = "elevated" } }
   elseif r.t == "you" then
     return column{ key = "monitor-you-" .. r.id, w = "full",
-      bubble("You", "prompt", "text-muted", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" },
+      bubble("You", "prompt", "text-muted", text{ "· " .. ago(r.at, now), size = "sm", color = "text-muted" },
         column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = BW, key = "monitor-body-you-" .. r.id, text{ r.text, wrap = true, color = "text-bright" } }, true) }
   elseif r.t == "from" then
     -- Typed in by another session or the harness: quiet, never "You".
@@ -185,10 +185,10 @@ local function conv_row(r, d, now)
       kids[#kids + 1] = row{ button{ r.open and "Show less" or "Show all", key = "monitor-fold-" .. r.id, variant = "ghost", dense = true, on = "expand", arg = { key = d.key, id = r.id } } }
     end
     return column{ key = "monitor-from-" .. r.id, w = "full",
-      bubble("From " .. r.name, "people", "text-dim", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" }, column(kids)) }
+      bubble("From " .. r.name, "people", "text-muted", text{ "· " .. ago(r.at, now), size = "sm", color = "text-muted" }, column(kids)) }
   elseif r.t == "claude" then
     return column{ key = "monitor-claude-" .. r.id, w = "full",
-      bubble("Claude", "sparkle", "vendor-anthropic", text{ "· " .. ago(r.at, now), size = "sm", color = "text-dim" },
+      bubble("Claude", "sparkle", "vendor-anthropic", text{ "· " .. ago(r.at, now), size = "sm", color = "text-muted" },
         column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = BW, key = "monitor-body-claude-" .. r.id, markdown{ r.text, pills = d.sandbox } }) }
   elseif r.t == "step" then
     return step_row(r, d.key)
@@ -200,7 +200,7 @@ local function conv_row(r, d, now)
         help = r.open and "Fold the steps" or "Show each step",
         icon{ r.open and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
         text{ label, size = "sm", weight = "medium", color = "text" },
-        icon{ r.icon, size = 12, color = "text-dim" },
+        icon{ r.icon, size = 12, color = "text-muted" },
         text{ r.summary, size = "sm", mono = true, color = "text-muted", truncate = true, grow = 1 },
         icon{ m[1], size = 12, color = m[2], help = m[3] } } }
     if r.open then
@@ -252,12 +252,12 @@ local function feed(d, now, data, stick)
       or c.state == "loading" and "Reading the conversation…"
       or c.state == "error" and ("The conversation could not be read: " .. tostring(c.error)))
       or "sbxw has no conversation for this session: its last prompt, what it does now and its last reply."
-    kids[#kids + 1] = text{ why, key = "monitor-conv-note", size = "sm", color = "text-dim", wrap = true }
+    kids[#kids + 1] = text{ why, key = "monitor-conv-note", size = "sm", color = "text-muted", wrap = true }
   end
   for k in pairs(cmemo) do if not seen[k] then cmemo[k] = nil end end
   if c and c.error and c.state ~= "error" then
     kids[#kids + 1] = row{ gap = 8, w = "full", key = "monitor-conv-error",
-      text{ "The last read failed; what is shown may be behind.", size = "sm", color = "text-dim", wrap = true, grow = 1 },
+      text{ "The last read failed; what is shown may be behind.", size = "sm", color = "text-muted", wrap = true, grow = 1 },
       button{ "Try again", key = "monitor-retry", variant = "ghost", dense = true, on = "retry", arg = { key = d.key } } }
   elseif c and c.state == "error" then
     kids[#kids + 1] = row{ button{ "Try again", key = "monitor-retry", variant = "ghost", dense = true, on = "retry", arg = { key = d.key } } }
@@ -266,7 +266,7 @@ local function feed(d, now, data, stick)
   if d.now then
     kids[#kids + 1] = row{ gap = 8, px = 12, py = 8, radius = "sm", border = "elevated", w = "full", key = "monitor-now",
       icon{ "sparkle", size = 12, color = "blue" }, text{ "Now", size = "sm", weight = "medium", color = "blue" },
-      text{ d.now, mono = d.now_mono ~= false, size = "sm", color = "text", truncate = true, grow = 1 }, text{ ago(d.ts, now), size = "sm", color = "text-dim" } }
+      text{ d.now, mono = d.now_mono ~= false, size = "sm", color = "text", truncate = true, grow = 1 }, text{ ago(d.ts, now), size = "sm", color = "text-muted" } }
   end
   if d.question then
     kids[#kids + 1] = question_card(d, data)
@@ -298,7 +298,7 @@ local function chips(d)
     kids[#kids + 1] = row{ gap = 4, px = 8, h = 24, radius = "sm", border = f.state == "ok" and "elevated" or tone, key = "monitor-file-" .. f.id, help = f.why,
       icon{ ic, size = 12, color = tone },
       text{ f.name, size = "sm", color = "text", truncate = true, max_w = 260 },
-      text{ f.sending and string.format("%d%%", math.floor((f.progress or 0) * 100)) or f.size, size = "sm", color = "text-dim" },
+      text{ f.sending and string.format("%d%%", math.floor((f.progress or 0) * 100)) or f.size, size = "sm", color = "text-muted" },
       button{ icon = "close", key = "monitor-file-remove-" .. f.id, variant = "ghost", dense = true, on = "unattach", arg = { key = d.key, id = f.id },
         disabled = d.sending == true, help = "Remove it: it is not sent" } }
   end
@@ -340,8 +340,8 @@ local function composer(state, d, data)
     listening,
     chips(d),
     row{ gap = 8, w = "full",
-      icon{ "send", size = 12, color = "text-dim" },
-      text{ "To", size = "sm", color = "text-dim" }, square(data, d.sandbox),
+      icon{ "send", size = 12, color = "text-muted" },
+      text{ "To", size = "sm", color = "text-muted" }, square(data, d.sandbox),
       text{ c.target, size = "sm", weight = "medium", color = "text", truncate = true, grow = 1, key = "monitor-target" },
       button{ narrow >= 640 and "Attach" or nil, key = "monitor-attach", icon = "plus", variant = "ghost", dense = true, on = "attach", arg = { key = d.key },
         disabled = not can or d.attach_max == true,
@@ -355,7 +355,7 @@ local function composer(state, d, data)
       button{ "Send…", key = "monitor-send", icon = "send", tone = "green", on = "send", arg = { key = d.key, gen = d.sent },
         disabled = not can or refused or (draft == "" and #files == 0),
         help = "Opens the core's dialog with your words in full, the files and the session they go to", keys = { (data.app or {}).platform == "macos" and "⌘" or "Ctrl", "↩" } } },
-    (not c.can) and text{ c.why, size = "sm", color = "text-dim", wrap = true } or false }
+    (not c.can) and text{ c.why, size = "sm", color = "text-muted", wrap = true } or false }
 end
 
 local function header(d, data)
@@ -369,7 +369,7 @@ local function header(d, data)
       d.model and text{ d.model, size = "sm", color = "vendor-anthropic" } or false,
       text{ d.cost or "–", size = "sm", color = "text-muted", help = d.cost_help } },
     row{ gap = 4, w = "full",
-      text{ d.strip, size = "sm", color = "text-dim", truncate = true, grow = 1 },
+      text{ d.strip, size = "sm", color = "text-muted", truncate = true, grow = 1 },
       button{ icon = "terminal", key = "monitor-terminal", tone = "green", variant = "ghost", dense = true, on = "link", arg = { name = "monitor_terminal", key = d.key },
         help = d.pane and ("Its terminal, in pane " .. d.pane .. " (the view closes)") or "Open its terminal (the view closes)" },
       button{ icon = "history", key = "monitor-commits", tone = "blue", variant = "ghost", dense = true, on = "link", arg = { name = "monitor_commits", key = d.key }, help = "Its commits" },
@@ -426,7 +426,7 @@ local screen = {
       text{ head_text, key = "monitor-count", size = "sm", weight = "medium", color = "text-muted", truncate = true, grow = 1, help = head_text },
       you > 0 and button{ you .. " need" .. (you == 1 and "s" or "") .. " you", key = "monitor-next", tone = "amber", dense = true, on = "next",
         help = "The next session that needs you", keys = { "N" } }
-        or text{ "Nothing needs you", key = "monitor-calm", size = "sm", color = "text-dim" } }
+        or text{ "Nothing needs you", key = "monitor-calm", size = "sm", color = "text-muted" } }
     -- Wide (beside the detail): a fixed width, enough for a sandbox and a
     -- thread name (each clips on its own); the detail takes the rest.
     local side = overlay_wide(data) and d

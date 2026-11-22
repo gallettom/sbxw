@@ -28,7 +28,7 @@ local function graphview(sb, g, width)
       key = "worktrees-dot-" .. sb .. "-" .. (c.short or "?"), on = "commit", arg = { sandbox = sb, hash = c.sha, branch = branch }, hover = "hover-subtle",
       help = (c.short or "") .. " " .. (c.subject or "") .. " (open in Commits)" }
   end
-  if g.earlier then strokes[#strokes + 1] = { points = { X(-1), y0, X(0), y0 }, width = 2, color = "text-dim" } end
+  if g.earlier then strokes[#strokes + 1] = { points = { X(-1), y0, X(0), y0 }, width = 2, color = "text-muted" } end
   local nb = #(g.base or {})
   if nb > 1 then strokes[#strokes + 1] = { points = { X(0), y0, X(nb - 1), y0 }, width = 2, color = "text-muted" } end
   for _, l in ipairs(g.lanes or {}) do
@@ -44,7 +44,7 @@ local function graphview(sb, g, width)
         pts[#pts + 1] = y - CURVE + CURVE * math.sin(a)
       end
     else
-      strokes[#strokes + 1] = { points = { X(-1), y, X(0), y }, width = 2, color = "text-dim" }
+      strokes[#strokes + 1] = { points = { X(-1), y, X(0), y }, width = 2, color = "text-muted" }
       pts = { X(0), y }
     end
     pts[#pts + 1] = X(l["end"]); pts[#pts + 1] = y
@@ -66,7 +66,7 @@ local function graphview(sb, g, width)
       dot{ tone = l.tone == "muted" and "neutral" or l.tone },
       text{ l.thread, size = "xs", weight = "medium", color = tone_color(l.tone), truncate = true },
       -- Narrow, the name keeps the room (the row under says the numbers).
-      width >= 760 and text{ "↑" .. l.ahead .. (behind > 0 and (" ↓" .. behind) or ""), size = "xs", mono = true, color = "text-dim" } or false,
+      width >= 760 and text{ "↑" .. l.ahead .. (behind > 0 and (" ↓" .. behind) or ""), size = "xs", mono = true, color = "text-muted" } or false,
     }
   end
   for _, c in ipairs(g.base or {}) do
@@ -89,15 +89,15 @@ end
 local function counts(r)
   local kids = { gap = 8 }
   if r.has_branch then
-    kids[#kids + 1] = text{ "↑" .. tostring(r.ahead or 0), size = "xs", mono = true, color = (r.ahead or 0) > 0 and "blue" or "text-dim",
+    kids[#kids + 1] = text{ "↑" .. tostring(r.ahead or 0), size = "xs", mono = true, color = (r.ahead or 0) > 0 and "blue" or "text-muted",
       help = tostring(r.ahead or 0) .. " commits ahead of " .. (r.base or "the main checkout's branch") }
-    kids[#kids + 1] = text{ "↓" .. tostring(r.behind or 0), size = "xs", mono = true, color = (r.behind or 0) > 0 and "amber" or "text-dim",
+    kids[#kids + 1] = text{ "↓" .. tostring(r.behind or 0), size = "xs", mono = true, color = (r.behind or 0) > 0 and "amber" or "text-muted",
       help = tostring(r.behind or 0) .. " commits behind " .. (r.base or "the main checkout's branch") }
   else
-    kids[#kids + 1] = text{ "no branch", size = "xs", color = "text-dim" }
+    kids[#kids + 1] = text{ "no branch", size = "xs", color = "text-muted" }
   end
   if r.dirty ~= nil then
-    kids[#kids + 1] = text{ "●" .. tostring(r.dirty), size = "xs", mono = true, color = r.dirty > 0 and "amber" or "text-dim",
+    kids[#kids + 1] = text{ "●" .. tostring(r.dirty), size = "xs", mono = true, color = r.dirty > 0 and "amber" or "text-muted",
       help = tostring(r.dirty) .. " uncommitted changes" }
   end
   return row(kids)
@@ -119,7 +119,7 @@ local function rowview(r, wide)
       spacer{ w = 20, grow = 0 },
       text{ r.branch or "", size = "xs", mono = true, color = "text-muted", truncate = true, max_w = 220 },
       nz(r.subject) and text{ r.subject, size = "xs", color = "text", truncate = true, grow = 1, min_w = 80, help = r.subject } or spacer{},
-      nz(r.when) and text{ r.when, size = "xs", color = "text-dim" } or false,
+      nz(r.when) and text{ r.when, size = "xs", color = "text-muted" } or false,
       button{ lab("Terminal"), key = "worktrees-terminal-" .. r.id, icon = "terminal", on = "terminal", arg = r.id, variant = "ghost", tone = "green", dense = true,
         help = "Open its thread's terminal" },
       button{ lab("Commits"), key = "worktrees-commits-" .. r.id, icon = "history", on = "commits", arg = r.id, variant = "ghost", tone = "blue", dense = true,
@@ -140,7 +140,7 @@ return {
     for _, b in ipairs(ui.blocks or {}) do
       local blk = { gap = 2, w = "full", radius = "md", pad = 4, key = "worktrees-block-" .. b.sandbox, border = "elevated",
         row{ gap = 8, px = 4, h = 28,
-          column{ w = 8, h = 8, radius = "mark", fill = b.color or "text-dim" },
+          column{ w = 8, h = 8, radius = "mark", fill = b.color or "text-muted" },
           text{ b.sandbox, size = "caption", weight = "semibold", color = "text-bright" },
           text{ tostring(#(b.rows or {})), size = "caption", color = "text-muted" },
         },
@@ -148,7 +148,7 @@ return {
       for _, gr in ipairs(b.graphs or {}) do
         local g = wide and gr.wide or gr.narrow
         blk[#blk + 1] = column{ w = "full", px = 4, py = 4, clip = true,
-          (#(b.graphs or {}) > 1 and g.repo ~= "") and text{ g.repo, size = "xs", mono = true, color = "text-dim" } or false,
+          (#(b.graphs or {}) > 1 and g.repo ~= "") and text{ g.repo, size = "xs", mono = true, color = "text-muted" } or false,
           graphview(b.sandbox, g, width) }
       end
       for _, r in ipairs(b.rows or {}) do blk[#blk + 1] = rowview(r, wide) end
@@ -160,9 +160,9 @@ return {
       list[#list + 1] = note(ui.loading and "Reading the worktrees…" or (nz(ui.filter) and "No worktree matches the filter." or "No active worktree: threads with their own worktree show here."))
     end
     if #(ui.none or {}) > 0 then
-      list[#list + 1] = note("No worktree: " .. table.concat(ui.none, ", "), "text-dim")
+      list[#list + 1] = note("No worktree: " .. table.concat(ui.none, ", "), "text-muted")
     end
-    for _, n in ipairs(ui.notes or {}) do list[#list + 1] = note(n.text, n.tone == "red" and "red" or "text-dim") end
+    for _, n in ipairs(ui.notes or {}) do list[#list + 1] = note(n.text, n.tone == "red" and "red" or "text-muted") end
     return column{ h = "full", gap = 8, w = "full",
       -- The scope beside the title ("Worktrees in [All sandboxes v]"): scope.rs.
       -- Its list offers the sandboxes that have worktrees, the most first.

@@ -43,10 +43,10 @@ local function card(c, wide)
     help = c.help,
     row{ gap = 8, w = "full",
       c.team_color and column{ w = 8, h = 8, radius = "mark", fill = c.team_color, help = c.team_help } or false,
-      text{ c.num or "", size = "xs", mono = true, color = c.thread_card and "text-dim" or "text-muted", help = c.thread_card and "A thread with no ticket: its plan's goal" or nil },
-      c.sandbox_label and text{ c.sandbox_label, size = "xs", mono = true, color = "text-dim", truncate = true, max_w = 120 } or false,
+      text{ c.num or "", size = "xs", mono = true, color = "text-muted", help = c.thread_card and "A thread with no ticket: its plan's goal" or nil },
+      c.sandbox_label and text{ c.sandbox_label, size = "xs", mono = true, color = "text-muted", truncate = true, max_w = 120 } or false,
       spacer{},
-      text{ c.age or "", size = "xs", color = "text-dim" } },
+      text{ c.age or "", size = "xs", color = "text-muted" } },
     text{ wide and (c.title_long or "") or (c.title or ""), size = "sm", wrap = true, color = "text-bright" },
     #(c.marks or {}) > 0 and marks(c) or false,
     c.thread and row{ gap = 8, w = "full",
@@ -69,14 +69,14 @@ local function lane(col, col_w, ui, narrow)
   local kids = { gap = 8, w = "full", group = "list" }
   for _, c in ipairs(col.cards or {}) do kids[#kids + 1] = card(c, wide) end
   if #(col.cards or {}) == 0 then
-    kids[#kids + 1] = column{ px = 8, py = 12, gap = 8, key = "kanban-empty-" .. col.id, note(col.empty or "Nothing here.", "text-dim"),
+    kids[#kids + 1] = column{ px = 8, py = 12, gap = 8, key = "kanban-empty-" .. col.id, note(col.empty or "Nothing here.", "text-muted"),
       col.id == "planned" and not ui.new_why and button{ "Add a ticket", icon = "plus", variant = "ghost", tone = "blue", dense = true, on = "new", key = "kanban-new-empty" } or false }
   end
   if col.more then
     kids[#kids + 1] = button{ col.more.label, variant = "ghost", tone = "blue", dense = true, on = "more", arg = col.id, key = col.more.el }
   end
   if col.capped then
-    kids[#kids + 1] = note("The first cards are drawn: a sandbox of its own shows fewer.", "text-dim")
+    kids[#kids + 1] = note("The first cards are drawn: a sandbox of its own shows fewer.", "text-muted")
   end
   if col.older then
     kids[#kids + 1] = button{ col.older.label, variant = "ghost", tone = "blue", dense = true, on = "older", key = col.older.el, help = "Merged cards past the recent ones" }
@@ -114,11 +114,11 @@ local function panel(t, ow)
       chips[#chips + 1] = row{ gap = 4, px = 8, h = 24, radius = "pill", fill = "surface-alt", border = "elevated", key = f.el, on = "file", arg = f.id, help = f.help,
         icon{ f.icon or "file", size = 12, color = "text-muted" },
         text{ f.name or "", size = "xs", truncate = true, max_w = 220 },
-        text{ f.size or "", size = "xs", color = "text-dim" },
+        text{ f.size or "", size = "xs", color = "text-muted" },
         t.editable and button{ icon = "close", variant = "ghost", compact = true, on = "remove_file", arg = f.id, key = f.el_remove, help = "Remove this file", tab_stop = false } or false }
     end
     kids[#kids + 1] = column{ gap = 8, w = "full", text{ t.files_label or "Files", size = "xs", color = "text-muted" }, #pics > 0 and row(pics) or false, row(chips),
-      t.files_note and text{ t.files_note, size = "xs", color = "text-dim", wrap = true, key = "kanban-files-note" } or false }
+      t.files_note and text{ t.files_note, size = "xs", color = "text-muted", wrap = true, key = "kanban-files-note" } or false }
   end
   if t.priorities or t.movable or t.validate then
     local r = { gap = 8, w = "full", wrap = true }
@@ -131,7 +131,7 @@ local function panel(t, ow)
     if t.validate then r[#r + 1] = checkbox{ "Validated on my machine", value = t.validate.on == true, on = "validate", key = "kanban-validate" } end
     kids[#kids + 1] = row(r)
   elseif nz(t.move_why) and not t.thread_card then
-    kids[#kids + 1] = text{ t.move_why, size = "xs", color = "text-dim", wrap = true }
+    kids[#kids + 1] = text{ t.move_why, size = "xs", color = "text-muted", wrap = true }
   end
   if t.thread then
     local th = t.thread
@@ -149,14 +149,14 @@ local function panel(t, ow)
   if #(t.history or {}) > 0 then
     local h = { gap = 2, w = "full", key = "kanban-history", text{ "History", size = "xs", color = "text-muted" } }
     for _, e in ipairs(t.history) do
-      h[#h + 1] = row{ gap = 8, w = "full", dot{ tone = e.tone or "neutral" }, text{ e.text or "", size = "xs", grow = 1, truncate = true, help = e.text }, text{ e.when or "", size = "xs", color = "text-dim" } }
+      h[#h + 1] = row{ gap = 8, w = "full", dot{ tone = e.tone or "neutral" }, text{ e.text or "", size = "xs", grow = 1, truncate = true, help = e.text }, text{ e.when or "", size = "xs", color = "text-muted" } }
     end
     kids[#kids + 1] = column(h)
   end
   if not t.thread_card then
     kids[#kids + 1] = row{ gap = 8, w = "full",
       spacer{},
-      t.send_why and text{ t.send_why, size = "xs", color = "text-dim", key = "kanban-send-why" } or false,
+      t.send_why and text{ t.send_why, size = "xs", color = "text-muted", key = "kanban-send-why" } or false,
       button{ "Send to the lead", icon = "send", tone = "blue", on = "send", key = "kanban-send", disabled = t.send_why ~= nil,
         help = t.send_why or "Types one fixed line into the lead's session: the ticket's number and how to read it" } }
   end
