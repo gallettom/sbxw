@@ -18,7 +18,7 @@
 //! Every text a person or an agent wrote is data: cleaned, clipped, never a
 //! path. File names on disk are generated here, never taken from outside.
 
-use crate::plans::{MergeState, Plan, PlanState, PlanThread, ThreadState};
+use crate::plans::{Ext, MergeState, Plan, PlanState, PlanThread, ThreadState};
 use crate::team::{EventKind, TeamLog};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -137,6 +137,12 @@ pub enum Mark {
     Refused,
     /// Team mode ended while the thread had not merged.
     TeamEnded,
+    /// Git shows the branch in its base, though sbxw never merged it.
+    MergedOutside,
+    /// Done, never merged by sbxw, and its branch no longer exists.
+    BranchGone,
+    /// The person closed its plan from the Kanban.
+    Dismissed,
 }
 
 impl Mark {
@@ -149,6 +155,9 @@ impl Mark {
             Mark::MergeFailed => "merge failed",
             Mark::Refused => "plan refused",
             Mark::TeamEnded => "team ended",
+            Mark::MergedOutside => "merged outside sbxw",
+            Mark::BranchGone => "branch gone",
+            Mark::Dismissed => "plan closed",
         }
     }
     pub fn tone(self) -> &'static str {
@@ -156,7 +165,8 @@ impl Mark {
             Mark::Proposed | Mark::Merging => "blue",
             Mark::Blocked => "amber",
             Mark::Failed | Mark::MergeFailed | Mark::Refused => "red",
-            Mark::TeamEnded => "neutral",
+            Mark::TeamEnded | Mark::BranchGone | Mark::Dismissed => "neutral",
+            Mark::MergedOutside => "green",
         }
     }
     pub fn help(self) -> &'static str {
@@ -168,6 +178,9 @@ impl Mark {
             Mark::MergeFailed => "The merge of this thread failed: the plan dialog says why",
             Mark::Refused => "Its plan was refused: the ticket waits for a new plan",
             Mark::TeamEnded => "Team mode ended before this thread merged",
+            Mark::MergedOutside => "Git shows this branch already in its base: merged by hand or outside sbxw",
+            Mark::BranchGone => "The thread is done and sbxw never merged it, but its branch no longer exists. sbxw cannot tell a hand merge from a discard",
+            Mark::Dismissed => "You closed this plan from the Kanban; git was not touched",
         }
     }
 }
@@ -182,8 +195,12 @@ pub fn column_of(plan: &Plan, t: &PlanThread) -> (Column, Vec<Mark>) {
     if plan.state == PlanState::Refused {
         return (Column::Planned, vec![Mark::Refused]);
     }
-    let in_merge = plan.merge.as_ref().filter(|m| m.order.iter().any(|n| n == &t.name));
-    let col = if let Some(m) = in_merge {
+    // Merged in any of the plan's merges, the late-merge ones included.
+    let by_sbxw = plan.merged_threads().contains(t.name.as_str());
+    let in_merge = plan.merge.as_ref().filter(|_| !by_sbxw).filter(|m| m.order.iter().any(|n| n == &t.name));
+    let col = if by_sbxw {
+        Column::Merged
+    } else if let Some(m) = in_merge {
         let result = m.results.iter().rev().find(|r| r.thread == t.name);
         match (result, m.state) {
             (Some(r), _) if r.ok => Column::Merged,
@@ -209,9 +226,26 @@ pub fn column_of(plan: &Plan, t: &PlanThread) -> (Column, Vec<Mark>) {
                 marks.push(Mark::Failed);
                 Column::Progress
             }
-            ThreadState::Done => Column::Test,
+            ThreadState::Done => match plan.ext.get(&t.name) {
+                Some(Ext::Outside) => {
+                    marks.push(Mark::MergedOutside);
+                    Column::Merged
+                }
+                // Merged, not Test: nothing is left to review, and the mark
+                // keeps it honest (no new column for a case that only
+                // old plans have).
+                Some(Ext::Gone) => {
+                    marks.push(Mark::BranchGone);
+                    Column::Merged
+                }
+                None => Column::Test,
+            },
         }
     };
+    if plan.dismissed && col != Column::Merged {
+        marks.push(Mark::Dismissed);
+        return (Column::Merged, marks);
+    }
     if plan.closed && col != Column::Merged {
         marks.push(Mark::TeamEnded);
     }

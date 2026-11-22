@@ -18,6 +18,8 @@ fn plan(id: &str, state: PlanState, threads: Vec<PlanThread>) -> Plan {
         note: None,
         lead: None,
         closed: false,
+        dismissed: false,
+        ext: Default::default(),
         merge: None,
         earlier_merges: vec![],
         main_uncommitted: None,
@@ -65,6 +67,39 @@ fn every_plan_and_thread_state_has_its_column() {
     assert_eq!(one(PlanState::Approved, Done, merge(MergeState::Merged, &["a"], vec![]), false), (Merged, vec![]));
     assert_eq!(one(PlanState::Approved, Working, None, true), (Progress, vec![Mark::TeamEnded]));
     assert_eq!(one(PlanState::Approved, Done, merge(MergeState::Merged, &["a"], vec![]), true), (Merged, vec![]));
+}
+
+#[test]
+fn a_thread_merged_in_an_earlier_merge_is_merged() {
+    let mut p = plan("p", PlanState::Approved, vec![th("a", ThreadState::Done, None), th("b", ThreadState::Done, None)]);
+    p.earlier_merges = vec![merge(MergeState::Merged, &["a"], vec![ok("a", true)]).unwrap()];
+    p.merge = merge(MergeState::Proposed, &["b"], vec![]);
+    assert_eq!(column_of(&p, &p.threads[0]), (Column::Merged, vec![]));
+    assert_eq!(column_of(&p, &p.threads[1]), (Column::Ready, vec![]));
+    // The late merge done too: the thread of the earlier one stays merged.
+    p.merge = merge(MergeState::Merged, &["b"], vec![ok("b", true)]);
+    assert_eq!(column_of(&p, &p.threads[0]).0, Column::Merged);
+}
+
+#[test]
+fn merged_outside_and_branch_gone_leave_in_test_with_a_mark() {
+    let mut p = plan("p", PlanState::Approved, vec![th("a", ThreadState::Done, None), th("b", ThreadState::Done, None), th("c", ThreadState::Done, None), th("w", ThreadState::Working, None)]);
+    p.ext.insert("a".into(), Ext::Outside);
+    p.ext.insert("b".into(), Ext::Gone);
+    p.ext.insert("w".into(), Ext::Gone);
+    assert_eq!(column_of(&p, &p.threads[0]), (Column::Merged, vec![Mark::MergedOutside]));
+    assert_eq!(column_of(&p, &p.threads[1]), (Column::Merged, vec![Mark::BranchGone]));
+    assert_eq!(column_of(&p, &p.threads[2]), (Column::Test, vec![]));
+    // Only a done thread is read through git's answer.
+    assert_eq!(column_of(&p, &p.threads[3]).0, Column::Progress);
+}
+
+#[test]
+fn a_closed_plan_keeps_its_unmerged_threads_out_of_the_review_columns() {
+    let mut p = plan("p", PlanState::Approved, vec![th("a", ThreadState::Done, None), th("f", ThreadState::Failed, None)]);
+    p.dismissed = true;
+    assert_eq!(column_of(&p, &p.threads[0]), (Column::Merged, vec![Mark::Dismissed]));
+    assert_eq!(column_of(&p, &p.threads[1]), (Column::Merged, vec![Mark::Failed, Mark::Dismissed]));
 }
 
 #[test]
