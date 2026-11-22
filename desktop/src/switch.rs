@@ -26,7 +26,7 @@ pub const TRAVEL: rune::Spring = rune::Spring::new(crate::theme::motion::SHORT, 
 pub const SLOT_PX: f32 = 10.0;
 pub const ICON: f32 = theme::icon::MEDIUM;
 pub const GAP: f32 = 6.0;
-pub const TEXT: f32 = 13.0;
+pub const TEXT: f32 = crate::theme::font_size::BODY;
 
 /// Whether a node is drawn as a switch: a select with `switch = true` and
 /// exactly two items (anything else is the plain select).

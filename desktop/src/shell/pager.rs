@@ -21,7 +21,7 @@ use super::*;
 pub const H: f32 = layout::PAGER_H;
 const TAB_PX: f32 = 8.0;
 const TAB_GAP: f32 = 6.0;
-const TAB_TEXT: f32 = 12.0;
+const TAB_TEXT: f32 = theme::font_size::CAPTION;
 const TAB_DOT: f32 = 6.0;
 const TAB_CLOSE: f32 = 16.0;
 /// A tab's label is cut beyond this (its tooltip has it whole).

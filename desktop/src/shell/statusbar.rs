@@ -55,7 +55,7 @@ pub const ITEM_PX: f32 = 8.0;
 pub const ICON: f32 = theme::icon::MEDIUM;
 pub const ICON_GAP: f32 = 6.0;
 /// The type: 12 pt; numbers in the monospace face are tabular already.
-pub const TEXT: f32 = 12.0;
+pub const TEXT: f32 = crate::theme::font_size::CAPTION;
 /// The bring-up's progress line: 56 by 3 pt, rounded.
 pub const TRACK_W: f32 = 56.0;
 pub const TRACK_H: f32 = 3.0;

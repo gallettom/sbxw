@@ -681,9 +681,9 @@ fn chars_w(t: &str, size: f32) -> f32 {
 /// that truncates, and its tooltip has the whole label.
 pub fn menu_width(rows: &[MenuRow]) -> f32 {
     let w = rows.iter().map(|r| {
-        let keys: f32 = r.keys.iter().map(|k| chars_w(k, 12.0).max(10.0) + 10.0 + 4.0).sum::<f32>() + if r.keys.is_empty() { 0.0 } else { 12.0 };
-        let count = r.count.map_or(0.0, |c| chars_w(&c.to_string(), 12.0) + 12.0 + 8.0);
-        MENU_ROW_PX * 2.0 + MENU_ICON + MENU_ICON_GAP + chars_w(r.label, 13.0) + keys + count + if r.chosen { 20.0 } else { 0.0 }
+        let keys: f32 = r.keys.iter().map(|k| chars_w(k, theme::font_size::CAPTION).max(10.0) + 10.0 + 4.0).sum::<f32>() + if r.keys.is_empty() { 0.0 } else { 12.0 };
+        let count = r.count.map_or(0.0, |c| chars_w(&c.to_string(), theme::font_size::CAPTION) + 12.0 + 8.0);
+        MENU_ROW_PX * 2.0 + MENU_ICON + MENU_ICON_GAP + chars_w(r.label, theme::font_size::BODY) + keys + count + if r.chosen { 20.0 } else { 0.0 }
     }).fold(0.0, f32::max);
     (w + MENU_PAD * 2.0 + 2.0).ceil().clamp(MENU_MIN_W, MENU_MAX_W)
 }
@@ -773,7 +773,7 @@ pub fn menu_row(r: &MenuRow) -> El {
         row_ = row_.child(el().w(8.0)).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("accent")));
     }
     // Its help, else its whole label when the label may be cut.
-    let cut = chars_w(r.label, 13.0) > MENU_MAX_W - MENU_PAD * 2.0 - MENU_ROW_PX * 2.0 - MENU_ICON - MENU_ICON_GAP - 24.0;
+    let cut = chars_w(r.label, theme::font_size::BODY) > MENU_MAX_W - MENU_PAD * 2.0 - MENU_ROW_PX * 2.0 - MENU_ICON - MENU_ICON_GAP - 24.0;
     if let Some(h) = r.help.map(str::to_string).or_else(|| cut.then(|| r.label.to_string())) {
         row_ = row_.help(h);
     }

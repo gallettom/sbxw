@@ -1607,6 +1607,12 @@ mod tests {
 
             ("src/surface_canvas.rs", "radius(N * inv): marks drawn at the canvas's zoom"),
         ];
+        // Single lines off the scale, found by the second pass and left for
+        // a decision (each a visible change): (file, the line's code, why).
+        const ALLOWED_LINES: &[(&str, &str, &str)] = &[
+            ("src/shell.rs", "font(small(16.0, 600.0))", "the empty pane's title, 16 pt: between title 15 and heading 17"),
+            ("src/shell/rail.rs", "font(small(10.0, 700.0))", "the rail's count badge, 10 pt bold in a 14 pt bubble"),
+        ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let num = |rest: &str| rest.trim_start().chars().next().is_some_and(|c| c.is_ascii_digit() || c == '-');
         let mut found = vec![];
@@ -1627,13 +1633,53 @@ mod tests {
                 let (calls, comment): (&[&str], &str) = if rel.ends_with(".luau") {
                     (&["radius = "], "--")
                 } else if rel.ends_with(".rs") {
-                    (&["body(", "prose(", "TextStyle::new(", ".radius(", ".shadow(", "Spring::new(", "rotation("], "//")
+                    (&["body(", "prose(", "small(", "TextStyle::new(", ".radius(", ".shadow(", "Spring::new(", "rotation("], "//")
                 } else {
                     continue;
                 };
                 let body = src.split("#[cfg(test)]\nmod tests").next().unwrap();
                 for (n, line) in body.lines().enumerate() {
                     let code = line.split(comment).next().unwrap();
+                    if ALLOWED_LINES.iter().any(|(f, l, _)| *f == rel && code.contains(l)) {
+                        continue;
+                    }
+                    // The measuring mirrors: a text's width measured at a
+                    // size (`measure(t, size, weight)`, `chars_w(t, size)`)
+                    // names the size as the drawing does.
+                    if rel.ends_with(".rs") {
+                        for call in ["measure(", "chars_w("] {
+                            let mut rest = code;
+                            while let Some(at) = rest.find(call) {
+                                let before = rest[..at].chars().last();
+                                rest = &rest[at + call.len()..];
+                                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') || rest.starts_with("t: &str") {
+                                    continue;
+                                }
+                                // The second argument, at depth 0.
+                                let (mut depth, mut commas, mut arg2) = (0i32, 0, None);
+                                for (i, ch) in rest.char_indices() {
+                                    match ch {
+                                        '(' | '[' | '{' => depth += 1,
+                                        ')' | ']' | '}' if depth == 0 => break,
+                                        ')' | ']' | '}' => depth -= 1,
+                                        ',' if depth == 0 => {
+                                            commas += 1;
+                                            if commas == 1 {
+                                                arg2 = Some(&rest[i + 1..]);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                // `measure(t, size, weight)` has three; the
+                                // status bar's own `measure(t, weight)` two.
+                                let args = if call == "measure(" { 2 } else { 1 };
+                                if commas == args && arg2.is_some_and(num) {
+                                    found.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+                                }
+                            }
+                        }
+                    }
                     for call in calls {
                         let mut rest = code;
                         while let Some(at) = rest.find(call) {
