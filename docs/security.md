@@ -417,6 +417,7 @@ does the same as a revoke.
 | Invoke a skill: the phone sends a name from your `phone_skills` setting and optional plain text, typed as `/name text` in the message field (a list of your skills shows after `/`); the daemon types `/<name> <text>` (the text is checked and masked like a message, one line; an idle prompt only) | Send any other `/` line: the skill route takes a name of that closed list and nothing else |
 | Turn lead mode on (the daemon types `/lead` and installs the lead's tools, idle prompt only, one confirming tap) or off, for a sandbox it reaches | |
 | Write a ticket on the Kanban of a sandbox the phone reaches (a leader or a sandbox with no team) (title and description, masked by your anonymise rules; up to 5 files the phone uploaded for that leader, under the message limits; it lands in Planned) | Move, edit, delete or send a ticket, or attach a file to an existing one from the phone |
+| See the canvases of a sandbox it reaches (the screenshots its agent posted, their titles and notes masked by your anonymise rules), add, change or remove pins and notes on shots (masked like a message), and send the round: the daemon types the same fixed line the Mac does, under the message gate (see "The canvas on the phone") | See a canvas of a thread, Jarvis, a stopped sandbox or a sandbox it does not reach; see or add an example picture; move, rename or delete a canvas; change a remark already sent; send a round that holds example pictures added on the Mac |
 | Dictate (the Mac transcribes; the text comes back to the phone to correct) | Touch secrets, the GitHub token, network rules, ports, kits, MCP servers, configuration, the relay, Jarvis, the daemon |
 | Hand a file to a leader (a photo, a PDF, a text): up to 25 MB each, at most 5 waiting (60 MB together) per leader; it reaches the sandbox only with a message you send, under `/tmp/sbxw-uploads/`; an unsent one is deleted after 30 minutes (see "What a file can do") | Send a program or an archive (refused by their first bytes); read a file back, list the uploads folder or learn any path; hand a file to anything but a running team leader; have a file typed or opened by the upload itself |
 
@@ -780,6 +781,17 @@ From the screen of any sandbox it reaches (a leader or a sandbox with no team; n
 - **Text is data.** Ticket titles and descriptions are the person's words; thread titles and reports are agent text. They travel as JSON strings, bounded (title 160 characters, description 8,000, file name 120, history 60 lines of 200), and the page escapes them. Where something shaped like an absolute path starts in a word (`/x`, `~/x`, `C:\x`, `\\server`, `$HOME/x`, also after `=`, `:`, `file://`, a quote or a bracket), the rest of the word is replaced by `[path]`. This is a best-effort filter on the shape of a word, not a guarantee: a path written some other way in a ticket is the person's own text, shown to their own paired phone.
 - **Journal and logs.** Reads are not actions, so the journal has nothing for them. A new ticket is one `ticket_create` entry (device and time, never the text), and no log line names a ticket's title or text.
 
+### The canvas on the phone
+
+From the screen of any sandbox it reaches (a leader or a sandbox with no team; never a thread, Jarvis or a stopped sandbox) the phone can open that sandbox's canvases, look at the shots one per page, pin remarks and write notes on them, and send the round. Level 1: any paired device while remote access is on. Routes, only on the remote listener: `GET /r/leaders/:sandbox/canvas`, `GET /r/canvas/:id`, `GET /r/canvas/:id/images/:file`, `POST /r/canvas/:id/remarks`, `POST /r/canvas/:id/submit`. Contract: `.sbxw-artifacts/remote/API-canvas.md`.
+
+- **Pictures now leave the Mac for the phone.** Until now a screenshot an agent posted stayed on this computer's disk. A paired phone now downloads them: over the tailnet (WireGuard, between your own devices), from the remote listener, never through Apple or any other third party, and never in a notification. Each answer says `Cache-Control: no-store, private`, so the phone's browser keeps no copy on disk; the page holds a picture only while it shows it. Anything on screen when the agent took the shot (a token in a terminal, a customer's data in a page) reaches the phone too: the agent is asked to keep secrets off screen, and nothing checks the pixels.
+- **Which canvas.** A canvas answers only while its sandbox is one the phone reaches, by the rule of `/r/leaders`. A canvas of another sandbox, of a thread, of Jarvis or of a stopped sandbox, an unknown id and a malformed one all get the same 404.
+- **Which file.** A picture is served only by a name the manifest gives (`s-` and 12 hex digits, an image extension), and only a SHOT of that canvas: never an example picture the person added on the Mac, never the manifest, never a name built from what the phone sends. The content type is the one the canvas module found when it checked the file's bytes, with `nosniff`.
+- **Text is data.** Canvas titles, shot titles and notes are agent text: masked by your anonymise rules before they leave, sent as JSON strings, escaped by the page. A remark from the phone is masked like a message before it is stored, at most 2,000 characters, no control character, and goes through the Mac's own canvas edit (its limits: 500 pins and 300 notes a canvas). A remark already sent never changes.
+- **Sending.** The same as **Send remarks** on the Mac: the round is recorded, then one fixed line written by sbxw (`[sbxw canvas · c-…] review round N is ready: run canvas_read …`) is typed into the sandbox's main session as one paste and one Return, under the gate of a phone message: refused while the session waits for the person (a question, a permission prompt) and for a read-only entry, taken while it works. Nothing the phone sends is in that line.
+- **Journal and logs.** `canvas_read` (a manifest opened), `canvas_remark`, `canvas_submit`: device and time, never a title, a text or a file name. Pictures are neither journaled nor logged.
+
 ### Approving from the phone
 
 Level 2: with Face ID (or Touch ID) at **each** action, a paired phone can approve a few
@@ -928,10 +940,11 @@ terms (remote-access-spec.md, D1 to D7); contract: `.sbxw-artifacts/remote/API.m
   person. **What it cannot see:** anything else; the payload (a kind letter, a badge
   number, the sandbox's name and whether it is a team leader) is encrypted to the phone's
   key and padded to one fixed length before encryption, so its size says nothing of the
-  name. No plan title, message or device name is in it.
+  name. No plan title, message, device name, canvas title or picture is in it.
 - **What the lock screen shows:** the sandbox's name, which the person chose to see
   (reversing the earlier "no sandbox name" rule): "Team leader sbxw-2 a besoin de vous",
-  "sbxw-2 a besoin de vous", "Un plan vous attend dans sbxw-2". Anyone who sees the locked
+  "sbxw-2 a besoin de vous", "Un plan vous attend dans sbxw-2", "De nouvelles captures
+  vous attendent dans sbxw-2". Anyone who sees the locked
   phone sees which sandbox waits. The worker shows the name as plain text, and only when it
   is 1 to 63 letters, digits and hyphens (a sbx name; the host part of a remote sandbox is
   dropped); anything else falls back to the fixed French texts.
@@ -941,10 +954,12 @@ terms (remote-access-spec.md, D1 to D7); contract: `.sbxw-artifacts/remote/API.m
   builds the request itself, and follows no redirect: it is not a general door to the
   Internet (tailnet/README.md, "Push").
 - **What causes a push:** only a change of state seen by one daemon task: a reachable
-  session starting to ask for the person, or more plans (`p`) or more merges (`m`) waiting (both at once: one `p`). No route causes
-  one, an agent can cause at most the same push as its own question would (a thread, a
-  background session or Jarvis cannot, as they are not reached), and a network request
-  never does. Per phone: one per kind (`p`, `m`, `n` each have their own bucket) per 2 minutes, 20 an hour over all kinds. A phone whose page is open
+  session starting to ask for the person, more plans (`p`) or more merges (`m`) waiting (both at once: one `p`), or an
+  agent of a reachable sandbox posting a new round of shots to a canvas (`c`, on the round's first shot). No route causes
+  one, an agent can cause at most the same push as its own question would, or a `c` by
+  posting shots (a thread, a background session or Jarvis cannot, as they are not
+  reached; rounds posted while a sandbox was not reached push nothing once it is), and a network request
+  never does. Per phone: one per kind (`p`, `m`, `n`, `c` each have their own bucket) per 2 minutes, 20 an hour over all kinds. A phone whose page is open
   gets none.
 - **A forged subscription** (a phone sending an endpoint that is not Apple's) is refused at
   subscribe with the same allow-list the sidecar applies again before each send, and never

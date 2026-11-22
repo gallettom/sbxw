@@ -69,6 +69,12 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/r/leaders/:sandbox/kanban"),
     ("GET", "/r/leaders/:sandbox/kanban/:ticket"),
     ("POST", "/r/leaders/:sandbox/kanban"),
+    // The canvas (API-canvas.md).
+    ("GET", "/r/leaders/:sandbox/canvas"),
+    ("GET", "/r/canvas/:id"),
+    ("GET", "/r/canvas/:id/images/:file"),
+    ("POST", "/r/canvas/:id/remarks"),
+    ("POST", "/r/canvas/:id/submit"),
     // Level 2 (API-level2.md): approving with a passkey.
     ("GET", "/r/approvals"),
     ("POST", "/r/passkey/start"),
@@ -126,6 +132,11 @@ pub fn remote_router(app: Arc<App>) -> Router {
         .route("/r/leaders/:sandbox/upload/:id", delete(upload_drop))
         .route("/r/leaders/:sandbox/kanban", get(super::remote_kanban::board).post(super::remote_kanban::create).layer(DefaultBodyLimit::max(super::remote_kanban::BODY_MAX)))
         .route("/r/leaders/:sandbox/kanban/:ticket", get(super::remote_kanban::ticket))
+        .route("/r/leaders/:sandbox/canvas", get(super::remote_canvas::list))
+        .route("/r/canvas/:id", get(super::remote_canvas::manifest))
+        .route("/r/canvas/:id/images/:file", get(super::remote_canvas::image))
+        .route("/r/canvas/:id/remarks", post(super::remote_canvas::remarks).layer(DefaultBodyLimit::max(super::remote_canvas::REMARK_BODY_MAX)))
+        .route("/r/canvas/:id/submit", post(super::remote_canvas::submit))
         // Level 2 (API-level2.md): approving with a passkey.
         .route("/r/approvals", get(l2::approvals))
         .route("/r/passkey/start", post(l2::passkey_start))
@@ -250,7 +261,7 @@ async fn guarded(app: &Arc<App>, req: &mut Request, path: &str, data: bool) -> R
 
 /// Every answer of this listener: a strict policy for the page, no framing,
 /// no sniffing, no referrer, nothing cached on `/r/`, never a CORS header.
-fn with_headers(mut res: Response, data: bool) -> Response {
+pub(super) fn with_headers(mut res: Response, data: bool) -> Response {
     let h = res.headers_mut();
     for (name, value) in [
         (header::CONTENT_SECURITY_POLICY, "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"),
@@ -260,7 +271,9 @@ fn with_headers(mut res: Response, data: bool) -> Response {
     ] {
         h.insert(name, HeaderValue::from_static(value));
     }
-    if data {
+    // A route may only make it stricter ("no-store, private" on a canvas
+    // picture): any value that does not start with `no-store` is replaced.
+    if data && !h.get(header::CACHE_CONTROL).is_some_and(|v| v.as_bytes().starts_with(b"no-store")) {
         h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     let cors: Vec<_> = h.keys().filter(|k| k.as_str().starts_with("access-control-")).cloned().collect();

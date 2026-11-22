@@ -148,8 +148,15 @@ fn the_route_list_grew_by_exactly_the_four_push_paths() {
     let now: BTreeSet<&str> = ROUTES.iter().map(|(_, p)| *p).chain(REMOTE_PAGE.iter().map(|(p, _, _)| *p)).collect();
     let before: BTreeSet<&str> = BEFORE.iter().copied().collect();
     let added: BTreeSet<&str> = now.difference(&before).copied().collect();
-    // Plus the model and lead routes (API.md 2.9), added after Web Push.
-    assert_eq!(added, BTreeSet::from(["/sw.js", "/r/push/key", "/r/push/subscribe", "/r/push/unsubscribe", "/r/models", "/r/leaders/:sandbox/model", "/r/leaders/:sandbox/lead", "/r/skills", "/r/leaders/:sandbox/skill"]));
+    // Plus the model and lead routes (API.md 2.9), added after Web Push,
+    // and the canvas's five (API-canvas.md).
+    assert_eq!(
+        added,
+        BTreeSet::from([
+            "/sw.js", "/r/push/key", "/r/push/subscribe", "/r/push/unsubscribe", "/r/models", "/r/leaders/:sandbox/model", "/r/leaders/:sandbox/lead", "/r/skills", "/r/leaders/:sandbox/skill",
+            "/r/leaders/:sandbox/canvas", "/r/canvas/:id", "/r/canvas/:id/images/:file", "/r/canvas/:id/remarks", "/r/canvas/:id/submit",
+        ])
+    );
     assert!(before.is_subset(&now), "nothing removed");
     let methods: Vec<_> = ROUTES.iter().filter(|(_, p)| p.starts_with("/r/push/")).copied().collect();
     assert_eq!(methods, [("GET", "/r/push/key"), ("POST", "/r/push/subscribe"), ("POST", "/r/push/unsubscribe")]);
@@ -697,4 +704,59 @@ async fn a_fake_sidecar_gets_push_on_the_first_subscription_restarted_once() {
     let starts = wait_for("starts", 3).await;
     assert!(starts.lines().nth(2).unwrap().ends_with(" --push"), "{starts}");
     app.remote_disable().await;
+}
+
+fn canvas_shot(app: &App, sb: &SandboxRef, batch: &str) {
+    let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
+    b.extend(13u32.to_be_bytes());
+    b.extend(b"IHDR");
+    b.extend(390u32.to_be_bytes());
+    b.extend(844u32.to_be_bytes());
+    b.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    b.extend(0u32.to_be_bytes());
+    b.extend(b"IDAT");
+    let shot = crate::svc::canvas::ShotIn { b64: sbxw_core::mac::base64(&b), title: "Secret screen title".into(), ..Default::default() };
+    app.canvas_agent_add(sb, None, "", batch, shot).unwrap();
+}
+
+#[tokio::test]
+async fn a_new_round_of_shots_in_a_reachable_sandbox_pushes_c_once() {
+    let (d, app) = on();
+    let (_router, _token, _id) = subscribed(&app, "phone").await;
+    let mut fake = attach(&app).await;
+    let (sb, _) = leader(&app, d.path(), "lead1").await;
+    app.remote_push_step(); // the baseline
+    assert!(fake.line(200).await.is_none());
+    // A sandbox the phone does not reach: nothing.
+    canvas_shot(&app, &SandboxRef::parse("gone1").unwrap(), "g1");
+    app.remote_push_step();
+    assert!(fake.line(200).await.is_none(), "not reachable");
+    // The first shot of a new round in lead1: one `c`.
+    canvas_shot(&app, &sb, "b1");
+    app.remote_push_step();
+    let line = fake.line(1000).await.expect("a c job");
+    let j = job(&line);
+    assert_eq!((j["kind"].as_str(), j["name"].as_str(), j["lead"].as_bool()), (Some("c"), Some("lead1"), Some(true)));
+    assert!(!line.contains("Secret"), "no title: {line}");
+    // More shots of the same round: nothing.
+    canvas_shot(&app, &sb, "b1");
+    app.remote_push_step();
+    assert!(fake.line(200).await.is_none(), "same round");
+    // A new round within two minutes: the c bucket holds.
+    canvas_shot(&app, &sb, "b2");
+    app.remote_push_step();
+    assert!(fake.line(200).await.is_none(), "one c per 2 minutes");
+}
+
+#[tokio::test]
+async fn the_task_wakes_on_new_shots() {
+    let (d, app) = on();
+    let (_router, _token, _id) = subscribed(&app, "phone").await;
+    let mut fake = attach(&app).await;
+    let (sb, _) = leader(&app, d.path(), "lead1").await;
+    app.remote_push_task();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    canvas_shot(&app, &sb, "b1");
+    let line = fake.line(2000).await.expect("the bus woke the task");
+    assert_eq!(job(&line)["kind"], "c");
 }

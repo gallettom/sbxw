@@ -6,7 +6,8 @@
 //! and decides when to push.
 //!
 //! What causes a push: only a change of state (a reachable session starts
-//! to ask for the person, more plans or merges wait). No route does, and
+//! to ask for the person, more plans or merges wait, an agent of a
+//! reachable sandbox posts a new round of shots to a canvas). No route does, and
 //! a network request never does. A device whose event stream is open gets
 //! no push (it has the toast). Only while remote access is on (D4): the
 //! sidecar runs only then.
@@ -362,6 +363,7 @@ impl App {
                     _ = tick.tick() => {}
                     ev = bus.recv() => match ev {
                         Ok(Event::Session(_) | Event::Lead(_) | Event::LeadEnd(_) | Event::Plan(_)) => {}
+                        Ok(Event::Canvas(n)) if n.what == "shots" => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                         Ok(_) => continue,
                         Err(_) => break,
@@ -378,8 +380,10 @@ impl App {
     /// goes only while remote access is on and the pipe is open, to each
     /// device with a subscription, no stream open, and room in its limits.
     pub(crate) fn remote_push_step(&self) {
-        let asking: BTreeMap<String, Asking> = self
-            .remote_reachable()
+        let reachable = self.remote_reachable();
+        let reach: BTreeMap<String, bool> = reachable.iter().map(|(s, k, _)| (s.to_string(), *k == ReachKind::Leader)).collect();
+        let rounds = self.remote_canvas_rounds();
+        let asking: BTreeMap<String, Asking> = reachable
             .into_iter()
             .filter(|(_, _, i)| i.state == SessionState::Attention)
             .map(|(s, k, _)| (s.to_string(), Asking { name: rules::push_name(s.name.as_str()), lead: k == ReachKind::Leader }))
@@ -390,7 +394,8 @@ impl App {
         let mut guard = self.remote_access.lock().unwrap();
         let rt = &mut *guard;
         let asking_n = asking.len();
-        let fires = rt.push.edges.step(asking, waiting_by);
+        let mut fires = rt.push.edges.step(asking, waiting_by);
+        fires.extend(rt.push.edges.shots(rounds, &reach));
         if fires.is_empty() || !rt.enabled {
             return;
         }
@@ -422,6 +427,15 @@ impl App {
                 rt.push.pending.insert(seq, (device, kind));
             }
         }
+    }
+
+    /// Rounds of shots per sandbox, every canvas's (the `c` edge).
+    fn remote_canvas_rounds(&self) -> BTreeMap<String, usize> {
+        let mut out: BTreeMap<String, usize> = BTreeMap::new();
+        for s in self.canvas_list().0 {
+            *out.entry(s.sandbox).or_default() += s.rounds;
+        }
+        out
     }
 
     /// Plans waiting for the person's approval plus merges proposed, per

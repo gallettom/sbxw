@@ -407,6 +407,11 @@ pub struct Note {
     pub h: f32,
     pub text: String,
     pub sent: Option<u32>,
+    /// The shot it was written about, when the phone wrote it (the phone
+    /// has no free placement). Absent from notes the Mac placed; kept
+    /// across the Mac's edits by the note's id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on: Option<String>,
 }
 
 /// One batch of shots from the agent.
@@ -880,7 +885,11 @@ impl Canvas {
                     return Err(format!("note {} is already used", n.n));
                 }
                 let id = if n.id.starts_with("n-") && n.id.len() <= 12 && n.id[2..].bytes().all(|b| b.is_ascii_hexdigit()) { n.id } else { item_id("n") };
-                out.push(Note { id, n: n.n, x: finite(n.x, -WORLD, WORLD), y: finite(n.y, -WORLD, WORLD), w: finite(n.w, 120.0, 2000.0), h: finite(n.h, 60.0, 2000.0), text: clean(&n.text, MAX_NOTE, true), sent: None });
+                // The shot a note is about: as given, else as the same unsent
+                // note had it (the Mac's edits do not carry it); a shot of this canvas only.
+                let was = self.notes.iter().find(|o| o.id == id && o.sent.is_none()).and_then(|o| o.on.clone());
+                let on = n.on.or(was).filter(|o| self.shots.iter().any(|s| &s.id == o));
+                out.push(Note { id, n: n.n, x: finite(n.x, -WORLD, WORLD), y: finite(n.y, -WORLD, WORLD), w: finite(n.w, 120.0, 2000.0), h: finite(n.h, 60.0, 2000.0), text: clean(&n.text, MAX_NOTE, true), sent: None, on });
             }
             self.notes = out;
         }
@@ -968,7 +977,11 @@ impl Canvas {
         let mut notes: Vec<&Note> = self.notes.iter().filter(|x| x.sent == Some(n)).collect();
         notes.sort_by_key(|x| x.n);
         for x in notes {
-            let near = self.nearest_shot(x.x + x.w / 2.0, x.y + x.h / 2.0).map(|s| format!(" (next to shot \"{}\")", s.title)).unwrap_or_default();
+            let near = match self.note_shot(x).and_then(|id| self.shots.iter().find(|s| s.id == id)) {
+                Some(s) if x.on.as_deref() == Some(s.id.as_str()) => format!(" (about shot \"{}\")", s.title),
+                Some(s) => format!(" (next to shot \"{}\")", s.title),
+                None => String::new(),
+            };
             out.push_str(&format!("\nNote {}{near}:\n{}\n", x.n, quote(&x.text)));
         }
         for a in self.assets.iter().filter(|a| a.sent == Some(n)) {
@@ -976,6 +989,27 @@ impl Canvas {
             out.push_str(&format!("\nExample {}: a picture the person added as an example ({}x{} px{near}), copied to {}\n", a.n, a.px_w, a.px_h, a.sandbox_path.as_deref().unwrap_or("(not copied)")));
         }
         out
+    }
+
+    /// The shot a note is about: the one it names, else the nearest one.
+    pub fn note_shot(&self, n: &Note) -> Option<&str> {
+        if let Some(s) = n.on.as_deref().and_then(|o| self.shots.iter().find(|s| s.id == o)) {
+            return Some(s.id.as_str());
+        }
+        self.nearest_shot(n.x + n.w / 2.0, n.y + n.h / 2.0).map(|s| s.id.as_str())
+    }
+
+    /// Where a new note about shot `on` goes on the surface: under the
+    /// shot, centred, below the notes already about it. `None`: no such shot.
+    pub fn note_spot(&self, on: &str) -> Option<(f32, f32, f32, f32)> {
+        let s = self.shots.iter().find(|s| s.id == on)?;
+        let k = self.notes.iter().filter(|n| n.on.as_deref() == Some(on)).count() as f32;
+        Some((s.x + (s.w - NOTE_W) / 2.0, s.y + s.h + 24.0 + k * (NOTE_H + 16.0), NOTE_W, NOTE_H))
+    }
+
+    /// The next free number of a pin and of a note (sent ones count).
+    pub fn next_numbers(&self) -> (u32, u32) {
+        (self.pins.iter().map(|p| p.n).max().unwrap_or(0) + 1, self.notes.iter().map(|n| n.n).max().unwrap_or(0) + 1)
     }
 
     fn nearest_shot(&self, x: f32, y: f32) -> Option<&Shot> {
@@ -1359,7 +1393,7 @@ mod tests {
         assert_eq!(c.title, "]0;xTitle");
         let e = Edit { pins: Some(vec![Pin { n: 1, on: "s-nothere".into(), ..Default::default() }]), ..Default::default() };
         assert!(c.apply(e, 2).is_err(), "a pin on nothing");
-        let e = Edit { notes: Some(vec![Note { id: "../../x".into(), n: 1, x: f32::NAN, y: f32::INFINITY, w: 1e30, h: -5.0, text: "x".repeat(5000), sent: Some(9) }]), ..Default::default() };
+        let e = Edit { notes: Some(vec![Note { id: "../../x".into(), n: 1, x: f32::NAN, y: f32::INFINITY, w: 1e30, h: -5.0, text: "x".repeat(5000), sent: Some(9), on: None }]), ..Default::default() };
         c.apply(e, 2).unwrap();
         let n = &c.notes[0];
         assert!(n.id.starts_with("n-") && n.id != "../../x");
@@ -1391,5 +1425,38 @@ mod tests {
         assert_eq!(hint(0.05, 0.05), "top-left");
         assert_eq!(hint(0.5, 0.5), "middle");
         assert_eq!(hint(0.9, 0.95), "bottom-right");
+    }
+
+    #[test]
+    fn a_note_about_a_shot_keeps_it_across_the_macs_edits() {
+        let mut c = Canvas::new(new_id(), "web".into(), "Review", 1);
+        let r = c.round_for("b", 1).unwrap();
+        c.add_shot(r, "s-000000000001.png".into(), hdr(780, 1688), 10, "Home", "", Some(390), None, 1);
+        c.add_shot(r, "s-000000000002.png".into(), hdr(780, 1688), 10, "Settings", "", Some(390), None, 1);
+        let (a, b) = (c.shots[0].id.clone(), c.shots[1].id.clone());
+        assert_eq!(c.next_numbers(), (1, 1));
+        let (x, y, w, h) = c.note_spot(&b).unwrap();
+        assert!(y > c.shots[1].y + c.shots[1].h && (x + w / 2.0 - (c.shots[1].x + c.shots[1].w / 2.0)).abs() < 1.0, "under its shot, centred");
+        assert!(c.note_spot("s-nope").is_none());
+        let phone = Note { n: 1, x, y, w, h, text: "About settings".into(), on: Some(b.clone()), ..Default::default() };
+        let stray = Note { n: 2, x: 0.0, y: 0.0, w, h, text: "x".into(), on: Some("s-nope".into()), ..Default::default() };
+        c.apply(Edit { notes: Some(vec![phone, stray]), ..Default::default() }, 2).unwrap();
+        assert_eq!(c.notes[0].on.as_deref(), Some(b.as_str()));
+        assert_eq!(c.notes[1].on, None, "only a shot of this canvas");
+        assert_eq!(c.note_shot(&c.notes[0]), Some(b.as_str()));
+        assert_eq!(c.note_shot(&c.notes[1]), Some(a.as_str()), "a placed note: the nearest shot");
+        // The Mac sends the note back without `on`, moved onto the other shot: it keeps it.
+        let mut mac = c.notes[0].clone();
+        mac.on = None;
+        (mac.x, mac.y) = (c.shots[0].x, c.shots[0].y);
+        c.apply(Edit { notes: Some(vec![mac]), ..Default::default() }, 3).unwrap();
+        assert_eq!(c.notes[0].on.as_deref(), Some(b.as_str()));
+        let (_, y2, _, _) = c.note_spot(&b).unwrap();
+        assert!(y2 > y, "the next note about it goes below");
+        assert_eq!(c.next_numbers(), (1, 2));
+        let n = c.submit("web · main", &[], 4).unwrap().n;
+        assert!(c.review_text(n).contains("Note 1 (about shot \"Settings\")"), "{}", c.review_text(n));
+        // Serialised: absent when none, so older manifests read the same.
+        assert!(!serde_json::to_string(&Note::default()).unwrap().contains("\"on\""));
     }
 }

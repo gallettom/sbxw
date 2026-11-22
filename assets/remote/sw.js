@@ -10,6 +10,7 @@ const TITLE = 'sbxw';
 const TEXT_PLAN = 'Un plan vous attend';
 const TEXT_MERGE = 'Un merge vous attend';
 const TEXT_AGENT = 'Un agent a besoin de vous';
+const TEXT_SHOTS = 'De nouvelles captures vous attendent';
 const TEXT_OTHER = 'Quelque chose vous attend';
 
 // The sandbox's name, or null: anything but a sbx name is never shown.
@@ -17,7 +18,7 @@ function nameFor(n) {
   return typeof n === 'string' && /^[A-Za-z0-9-]{1,63}$/.test(n) ? n : null;
 }
 
-// The kind ("p", "m" or "n", API-push.md) picks the text: with the sandbox's
+// The kind ("p", "m", "n" or "c", API-push.md) picks the text: with the sandbox's
 // name when the push carries a valid one, else the fixed text. Anything
 // else, an empty or unreadable push included, still shows the fallback,
 // because a push that shows nothing makes iOS revoke the permission.
@@ -25,6 +26,7 @@ function bodyFor(kind, name, lead) {
   const n = nameFor(name);
   if (kind === 'p') return n ? `Un plan vous attend dans ${n}` : TEXT_PLAN;
   if (kind === 'm') return n ? `Un merge vous attend dans ${n}` : TEXT_MERGE;
+  if (kind === 'c') return n ? `De nouvelles captures vous attendent dans ${n}` : TEXT_SHOTS;
   if (kind === 'n') return n ? `${lead === true ? 'Team leader ' : ''}${n} a besoin de vous` : TEXT_AGENT;
   return TEXT_OTHER;
 }
