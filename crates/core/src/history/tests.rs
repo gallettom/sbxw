@@ -602,3 +602,34 @@ fn a_prompt_the_transcript_brings_after_an_early_reply_comes_before_it() {
     assert_eq!(texts, ["earlier", "earlier reply", "Are the threads merged?", "", "All merged."]);
     assert!(!p.items.last().unwrap().provisional);
 }
+
+#[test]
+fn a_tool_response_is_its_status_size_and_head() {
+    let long = "é".repeat(limits::RESULT_HEAD_MAX + 5);
+    let r = result_of_response(&json!(long), Some(&json!("tu_1")));
+    assert_eq!((r.status, r.size, r.head.chars().count(), r.id.as_deref()), (ResultStatus::Ok, long.chars().count() as u64, limits::RESULT_HEAD_MAX, Some("tu_1")));
+    assert_eq!(r.head, "é".repeat(limits::RESULT_HEAD_MAX));
+    let r = result_of_response(&json!({"stdout": "ok\n", "stderr": ""}), None);
+    assert_eq!((r.status, r.size, r.head.as_str(), r.id), (ResultStatus::Ok, 3, "ok\n", None));
+    let r = result_of_response(&json!({"is_error": true, "n": 1}), None);
+    assert_eq!((r.status, r.head.as_str()), (ResultStatus::Error, r#"{"is_error":true,"n":1}"#));
+    let r = result_of_response(&Value::Null, None);
+    assert_eq!((r.size, r.head.as_str()), (0, ""));
+    assert_eq!(cap_chars("aéb", 2), "aé");
+    assert_eq!(cap_chars("aéb", 3), "aéb");
+    assert_eq!(cap_chars("", 0), "");
+}
+
+/// Timing, not a check: `cargo test -p sbxw-core --release -- --ignored timing_ --nocapture`.
+/// An old hook's `PostToolUse` carries the whole response (a file read, a log).
+#[test]
+#[ignore]
+fn timing_tool_response() {
+    let resp = json!({ "stdout": "line of a large tool output, é\n".repeat(32 * 1024) });
+    let n = 50;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        assert_eq!(result_of_response(&resp, None).head.chars().count(), limits::RESULT_HEAD_MAX);
+    }
+    eprintln!("timing_tool_response 1 MiB: {:?} per response", t.elapsed() / n);
+}

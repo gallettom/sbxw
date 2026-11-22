@@ -258,6 +258,29 @@ fn only_planned_tickets_move_and_only_among_their_priority() {
 }
 
 #[test]
+fn planned_on_the_all_board_follows_each_sandboxs_order() {
+    let mut web = Book::new("web");
+    let mut docs = Book::new("docs");
+    for t in ["w1", "w2", "w3"] {
+        web.create(draft(t), 1).unwrap();
+    }
+    for t in ["d1", "d2", "d3"] {
+        docs.create(draft(t), 2).unwrap();
+    }
+    for (b, ranks) in [(&mut web, [3, 1, 2]), (&mut docs, [2, 3, 1])] {
+        for (t, r) in b.tickets.iter_mut().zip(ranks) {
+            t.rank = r;
+        }
+    }
+    docs.tickets[0].priority = Priority::P1;
+    let pending = plan("p-new", PlanState::Pending, vec![th("idea", ThreadState::Starting, None)]);
+    let b = board("all", &[&web, &docs], &[pending], 9, false);
+    let order: Vec<&str> = b.columns[0].cards.iter().map(|c| c.title.as_str()).collect();
+    assert_eq!(order[..6], ["d1", "d3", "w2", "w3", "d2", "w1"], "priority, then rank, then the newer");
+    assert!(order[6].starts_with("idea"), "threads of a pending plan last: {order:?}");
+}
+
+#[test]
 fn a_ticket_at_work_cannot_be_deleted_and_says_why() {
     let mut b = Book::new("web");
     let n = b.create(draft("a"), 1).unwrap().n;
@@ -571,4 +594,25 @@ fn the_fixtures_boards_hold_every_column() {
     assert!(b.columns.iter().all(|c| c.count > 0));
     assert_eq!(f.plans.len(), 25);
     assert_eq!(f.plans.iter().map(|p| p.threads.len()).sum::<usize>(), 40);
+}
+
+/// Timing, not a check: `cargo test -p sbxw-core --release -- --ignored timing_ --nocapture`.
+/// A sandbox holds up to MAX_TICKETS; the board is built per UI and phone read.
+#[test]
+#[ignore]
+fn timing_board_full_planned() {
+    let mut b = Book::new("web");
+    for k in 0..MAX_TICKETS {
+        b.create(draft(&format!("ticket {k}")), 1).unwrap();
+    }
+    // The person's order, shuffled (a fixed permutation of the ranks).
+    for (k, t) in b.tickets.iter_mut().enumerate() {
+        t.rank = ((k * 7919) % MAX_TICKETS) as i64 + 1;
+    }
+    let n = 20;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        assert_eq!(board("web", &[&b], &[], 9, false).columns[0].count, MAX_TICKETS);
+    }
+    eprintln!("timing_board_full_planned {} tickets: {:?} per board", MAX_TICKETS, t.elapsed() / n);
 }
