@@ -2143,3 +2143,47 @@ test('a merge "changed": its sentence shown as data, the detail read again', { s
   assert.deepEqual(problems, []);
   await ctx.close();
 });
+
+// iOS can leave the window scrolled (or the visual viewport offset) after the
+// keyboard, dictation, a picker or the Face ID sheet goes: the page is drawn
+// in place but every tap lands off by the offset. Chromium has no such split
+// between paint and hit-testing, so this reproduces the state, not the
+// symptom: the document is made scrollable, then scrolled by script, and the
+// guard must put it back at 0,0, with the field hit where it is drawn. A
+// focused field is left alone (the keyboard's own scroll is iOS's).
+test('the window is put back at 0,0 when left scrolled; a focused field keeps it until it lets go', { skip }, async () => {
+  await ctl({ reset: true, paired: true, down: false, leaders: FX.leaders, history: { shop: FX.history.shop } });
+  const { ctx, page, problems } = await phone(390, 844);
+  await page.goto(`${base()}/`);
+  await page.waitForSelector('.rc-leader');
+  await page.tap('.rc-leader >> text=shop');
+  await page.waitForSelector('#field');
+  const state = () => page.evaluate(() => {
+    const f = document.getElementById('field');
+    const r = f.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { y: window.scrollY, hit: hit === f || f.contains(hit), html: getComputedStyle(document.documentElement).overflowY };
+  });
+  assert.notEqual((await state()).html, 'visible', 'the document clips');
+  // What iOS leaves behind: a document taller than the screen, scrolled.
+  await page.evaluate(() => { const d = document.createElement('div'); d.id = '__tall'; d.style.height = '3000px'; document.documentElement.append(d); });
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.evaluate(() => window.scrollTo(0, 300));
+  await page.waitForTimeout(50);
+  let s = await state();
+  assert.equal(s.y, 0, 'no field focused: back at 0 at once');
+  assert.ok(s.hit, 'the field is hit where it is drawn');
+  // The keyboard up: the window may move; nothing fights it.
+  await page.focus('#field');
+  await page.evaluate(() => window.scrollTo(0, 200));
+  await page.waitForTimeout(50);
+  assert.equal((await state()).y, 200, 'a focused field keeps the scroll');
+  // The keyboard goes: put back once focus has left.
+  await page.evaluate(() => document.getElementById('field').blur());
+  await page.waitForTimeout(500);
+  s = await state();
+  assert.equal(s.y, 0, 'after the field lets go: back at 0');
+  assert.ok(s.hit, 'and the field is hit where it is drawn');
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});

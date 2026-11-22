@@ -149,7 +149,11 @@
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
 
-html { background: var(--c-bg); overflow-x: clip; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* The document itself never scrolls: only the log and the lists do. html
+   is the viewport's height and clips; remote.js puts the window back at 0,0
+   if iOS leaves it scrolled after the keyboard (taps would land off by that
+   much while the paint looks right). */
+html { height: 100%; overflow: clip; overscroll-behavior: none; background: var(--c-bg); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 /* The body fills the whole screen, to its bottom edge (the composer's ground
    runs under the home indicator, its controls above it). Only with the
    keyboard up does it follow the visual viewport: in the home-screen app the
