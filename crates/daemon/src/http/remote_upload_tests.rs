@@ -588,3 +588,42 @@ async fn a_daemon_restart_empties_the_spool() {
     let again = crate::testing::app_in(d.path());
     assert!(!again.remote_uploads_for_tests().1.exists(), "handles live in memory: an old spool is removed at start");
 }
+
+// ── A new ticket with files ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn a_new_ticket_takes_uploads_and_a_bad_id_refuses_the_whole_create() {
+    let (d, app, _) = on();
+    let router = remote_router(app.clone());
+    let ta = pair(&app, &router, "phone a").await;
+    let tb = pair(&app, &router, "phone b").await;
+    let _ = leader(&app, d.path(), "lead1").await;
+    let _ = leader(&app, d.path(), "lead2").await;
+    let path = "/r/leaders/lead1/kanban";
+    let a1 = id_of(&upload(&app, &router, &ta, "lead1", "one.png", PNG).await);
+    let a2 = id_of(&upload(&app, &router, &ta, "lead1", "two.png", PNG).await);
+    let b1 = id_of(&upload(&app, &router, &tb, "lead1", "b.png", PNG).await);
+    let other_leader = id_of(&upload(&app, &router, &ta, "lead2", "c.png", PNG).await);
+    let forged = "0123456789abcdef0123456789abcdef".to_string();
+    let count = |app: &App| app.tickets_board(Some(&sbxw_core::SandboxRef::parse("lead1").unwrap()), false).columns.iter().map(|c| c.cards.len()).sum::<usize>();
+    for bad in [&b1, &other_leader, &forged] {
+        let r = call(&router, "POST", path, Some(&ta), json!({ "title": "t", "attachments": [&a1, bad] })).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+        assert_eq!(count(&app), 0, "no ticket");
+    }
+    let six = vec![a1.as_str(); 6];
+    assert_eq!(call(&router, "POST", path, Some(&ta), json!({ "title": "t", "attachments": six })).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(count(&app), 0);
+    let r = call(&router, "POST", path, Some(&ta), json!({ "title": "With files", "attachments": [&a1, &a2] })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["files"], 2);
+    let n = r.json()["n"].as_u64().unwrap();
+    let one = call(&router, "GET", &format!("{path}/{n}"), Some(&ta), json!({})).await.json();
+    assert_eq!(one["ticket"]["files"].as_array().unwrap().len(), 2, "{one}");
+    // Spent: the ids do not work twice, and the spool holds only the others.
+    let r = call(&router, "POST", path, Some(&ta), json!({ "title": "again", "attachments": [&a1] })).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(count(&app), 1);
+    let journal = serde_json::to_string(&app.remote_journal(50)).unwrap();
+    assert!(journal.contains("ticket_create") && !journal.contains("one.png"), "{journal}");
+}

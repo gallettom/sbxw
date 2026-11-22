@@ -266,13 +266,18 @@ pub struct NewTicket {
     title: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    attachments: Vec<String>,
 }
 
 /// A ticket from the phone, in Planned: the Mac's writer, the text masked.
-/// Text only: no files in this version.
+/// `attachments`: upload ids, at most as many as a message takes.
 pub async fn create(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Json(b): Json<NewTicket>) -> Response {
     let Some(sb) = leader(&app, &sandbox) else { return not_found() };
-    match app.remote_ticket_create(&d, &sb, &b.title, &b.description) {
+    if b.attachments.len() > sbxw_core::remote_access::uploads::WAITING_MAX {
+        return super::remote::refusal(crate::svc::remote_access::Refusal::Reason(crate::svc::remote_access::Reason::TooManyIds));
+    }
+    match app.remote_ticket_create(&d, &sb, &b.title, &b.description, &b.attachments) {
         Ok(v) => Json(v).into_response(),
         Err(e) => super::remote::refusal(e),
     }

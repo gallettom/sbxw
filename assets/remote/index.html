@@ -185,14 +185,27 @@
       <div id="kb-newbar" class="rc-kb-newbar">
         <button id="kb-new" class="rc-btn rc-small" type="button">New ticket</button>
       </div>
-      <!-- A new ticket: text only, lands in Planned. The Mac masks it as it does a message. -->
+      <!-- A new ticket: text and files, lands in Planned. The Mac masks it as it does a message. -->
       <form id="kb-form" class="rc-kb-form" hidden novalidate>
         <label class="rc-kb-flabel" for="kb-title">Title</label>
         <input id="kb-title" class="rc-kb-input" type="text" maxlength="160" autocomplete="off" required>
         <label class="rc-kb-flabel" for="kb-desc">Description</label>
         <textarea id="kb-desc" class="rc-kb-input rc-kb-area" rows="4" maxlength="8000" autocomplete="off"></textarea>
+        <div id="kb-tray" class="rc-tray" hidden>
+          <div id="kb-held" class="rc-held" hidden>
+            <p id="kb-held-why" class="rc-held-why"></p>
+            <label class="rc-tick"><input id="kb-tick" type="checkbox"><span>I have looked at these files and want to attach them</span></label>
+            <div class="rc-held-row">
+              <button id="kb-held-cancel" class="rc-btn rc-quiet rc-small" type="button">Cancel</button>
+              <button id="kb-held-go" class="rc-btn rc-primary rc-small" type="button">Attach</button>
+            </div>
+          </div>
+          <ul id="kb-chips" class="rc-chips"></ul>
+        </div>
+        <input id="kb-file" class="rc-file" type="file" multiple tabindex="-1" aria-hidden="true">
         <p id="kb-ferr" class="rc-kb-ferr" role="alert" hidden></p>
         <div class="rc-held-row">
+          <button id="kb-attach" class="rc-btn rc-quiet rc-small" type="button">Attach files</button>
           <button id="kb-cancel" class="rc-btn rc-quiet rc-small" type="button">Cancel</button>
           <button id="kb-create" class="rc-btn rc-primary rc-small" type="submit">Create</button>
         </div>

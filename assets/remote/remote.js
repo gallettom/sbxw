@@ -75,6 +75,7 @@
     hiddenAt: 0,         // when the page was last hidden (0: visible)
     drafts: new Map(),   // per leader: what was typed and not sent (memory only)
     trays: new Map(),    // per leader: the files picked for its next message
+    kbTrays: new Map(),  // per leader: the files picked for a new ticket
     sending: false,
     note: null,          // the status line's last outcome: { text, tone }
     hint: '',            // a quieter line (dictation's results)
@@ -141,6 +142,8 @@
     st.drafts.clear();
     for (const t of st.trays.values()) t.clear();
     st.trays.clear();
+    for (const t of st.kbTrays.values()) t.clear();
+    st.kbTrays.clear();
     stopRecording(true);
     st.l2 = null;
     st.item = null;
@@ -927,21 +930,25 @@
   $('interrupt-cancel').addEventListener('click', disarmInterrupt);
 
   // ── Files: picked, checked, uploaded one at a time, sent with a message ──
-  function tray(sandbox = st.current) {
+  // One tray per leader for the composer and one for the ticket form: the
+  // same upload, the same checks, the same ids; only the drawing differs.
+  function trayIn(map, sandbox, redraw) {
     if (!sandbox) return null;
-    let t = st.trays.get(sandbox);
+    let t = map.get(sandbox);
     if (!t) {
       t = rcTray({
         upload: (file, onProgress, signal) => rcUploadXhr(XMLHttpRequest, sandbox, file, onProgress, signal),
         // A file removed before sending leaves the Mac too (best effort:
         // unsent files expire there by themselves).
         drop: id => { api.dropUpload(sandbox, id); },
-        onChange: () => { if (st.current === sandbox) renderTray(); },
+        onChange: () => { if (st.current === sandbox) redraw(); },
       });
-      st.trays.set(sandbox, t);
+      map.set(sandbox, t);
     }
     return t;
   }
+  function tray(sandbox = st.current) { return trayIn(st.trays, sandbox, renderTray); }
+  function kbTray(sandbox = st.current) { return trayIn(st.kbTrays, sandbox, renderKbTray); }
   const fileInput = $('file');
   $('attach').addEventListener('click', () => {
     if (!st.current || rec.state !== 'idle') return;
@@ -983,14 +990,19 @@
     return b;
   }
   function renderTray() {
+    if (!drawTray(tray(), { box: $('tray'), ul: $('chips'), held: $('held'), why: $('held-why') })) return;
     const t = tray();
-    const box = $('tray');
-    const ul = $('chips');
-    if (!t) { box.hidden = true; ul.replaceChildren(); return; }
+    // A check's refusal ("Not attached: ...") is said once, in the status line.
+    if (t.note) { const n = t.note; t.note = ''; note(n, 'err'); }
+    gateSend();
+  }
+  // The chips and the held block of a tray, drawn into `d`'s elements.
+  function drawTray(t, d) {
+    const { box, ul, held } = d;
+    if (!t) { box.hidden = true; ul.replaceChildren(); return false; }
     // The held files, waiting for the tick: nothing of them is sent yet.
-    const held = $('held');
     held.hidden = !t.held;
-    if (t.held) $('held-why').textContent = t.held.reasons.join('\n');
+    if (t.held) d.why.textContent = t.held.reasons.join('\n');
     ul.replaceChildren(...t.chips.map(c => {
       const li = document.createElement('li');
       li.className = `rc-fchip rc-f-${c.state}`;
@@ -1029,9 +1041,7 @@
       return li;
     }));
     box.hidden = !t.held && !t.chips.length;
-    // A check's refusal ("Not attached: ...") is said once, in the status line.
-    if (t.note) { const n = t.note; t.note = ''; note(n, 'err'); }
-    gateSend();
+    return true;
   }
 
   // ── Dictation: a live wave while it records, then into the field ──
@@ -1713,23 +1723,45 @@
     }, 400);
   }
 
-  // A new ticket: a small form over the board, text only. The Mac masks the
+  // A new ticket: a small form over the board, text and files. The Mac masks the
   // text like a message and puts the ticket in Planned.
   function kbFormShow(on) {
     $('kb-form').hidden = !on;
     $('kb-newbar').hidden = on || !!view().ticket;
     if (on) { $('kb-ferr').hidden = true; $('kb-title').focus(); }
   }
-  $('kb-new').addEventListener('click', () => kbFormShow(true));
-  $('kb-cancel').addEventListener('click', () => { $('kb-form').reset(); kbFormShow(false); });
+  // The form's files: the composer's tray, drawn under the form.
+  function renderKbTray() {
+    const t = kbTray();
+    if (!drawTray(t, { box: $('kb-tray'), ul: $('kb-chips'), held: $('kb-held'), why: $('kb-held-why') })) return;
+    if (t.note) { const err = $('kb-ferr'); err.textContent = t.note; err.hidden = false; t.note = ''; }
+    $('kb-create').disabled = t.pending() > 0;
+  }
+  $('kb-attach').addEventListener('click', () => { $('kb-file').value = ''; $('kb-file').click(); });
+  $('kb-file').addEventListener('change', () => {
+    const t = kbTray();
+    const files = [...($('kb-file').files || [])];
+    $('kb-file').value = '';
+    if (!t || !files.length) return;
+    $('kb-ferr').hidden = true;
+    $('kb-tick').checked = false;
+    t.offer(files);
+  });
+  $('kb-held-go').addEventListener('click', () => { const t = kbTray(); if (t) t.confirmHeld($('kb-tick').checked === true); });
+  $('kb-held-cancel').addEventListener('click', () => { const t = kbTray(); if (t) { t.note = ''; t.discardHeld(); } });
+  $('kb-new').addEventListener('click', () => { kbFormShow(true); renderKbTray(); });
+  $('kb-cancel').addEventListener('click', () => { $('kb-form').reset(); const t = kbTray(); if (t) t.clear(); kbFormShow(false); });
   $('kb-form').addEventListener('submit', async e => {
     e.preventDefault();
     const sandbox = st.current;
     const title = $('kb-title').value.trim();
     const err = $('kb-ferr');
     if (!title) { err.textContent = 'A ticket needs a title.'; err.hidden = false; $('kb-title').focus(); return; }
+    const t = kbTray(sandbox);
+    if (t && t.failed()) { err.textContent = 'A file did not upload: retry or remove it.'; err.hidden = false; return; }
+    const ids = t ? t.ids() : [];
     $('kb-create').disabled = true;
-    const res = await api.createTicket(sandbox, title, $('kb-desc').value.trim());
+    const res = await api.createTicket(sandbox, title, $('kb-desc').value.trim(), ids);
     $('kb-create').disabled = false;
     if (!res.ok) {
       err.textContent = res.status === 404 ? 'This team leader is no longer running.' : rcFailText('Ticket', res);
@@ -1737,6 +1769,7 @@
       return;
     }
     $('kb-form').reset();
+    if (t) t.sent(ids);
     kbFormShow(false);
     if (st.current !== sandbox) return;
     const v = view(sandbox);
