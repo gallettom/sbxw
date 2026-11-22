@@ -40,17 +40,23 @@ pub const KEY_DELAY: Duration = Duration::from_millis(60);
 /// for a first byte before timing silence. `rx` is subscribed by the caller
 /// *before* the write it waits on, or the echo can slip between the two.
 pub async fn settle(rx: &mut broadcast::Receiver<Vec<u8>>, first: Option<Duration>, quiet: Duration) {
-    if let Some(bound) = first {
-        if tokio::time::timeout(bound, rx.recv()).await.is_err() {
+    settle_within(rx, first, quiet, READY_TIMEOUT).await
+}
+
+/// [`settle`], giving up on silence after `bound` (tests shorten it).
+async fn settle_within(rx: &mut broadcast::Receiver<Vec<u8>>, first: Option<Duration>, quiet: Duration, bound: Duration) {
+    if let Some(wait) = first {
+        if tokio::time::timeout(wait, rx.recv()).await.is_err() {
             return;
         }
     }
-    let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + bound;
     while tokio::time::Instant::now() < deadline {
         match tokio::time::timeout(quiet, rx.recv()).await {
             Err(_) => return,
-            Ok(Ok(_)) => continue,
-            Ok(Err(_)) => return,
+            // Fell behind: output was missed, which is not silence.
+            Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(broadcast::error::RecvError::Closed)) => return,
         }
     }
 }
@@ -174,5 +180,39 @@ mod tests {
         .unwrap();
         let r = tokio::time::timeout(Duration::from_secs(5), type_and_submit(&s, "x", true)).await.unwrap();
         assert!(r.is_err());
+    }
+
+    /// A receiver that fell behind missed output: that is the opposite of
+    /// quiet, so the quiet window starts again from the lag.
+    #[tokio::test]
+    async fn a_lagging_stream_is_not_read_as_quiet() {
+        let (tx, mut rx) = broadcast::channel::<Vec<u8>>(1);
+        for _ in 0..3 {
+            tx.send(b"frame".to_vec()).unwrap();
+        }
+        let start = tokio::time::Instant::now();
+        settle(&mut rx, None, Duration::from_millis(200)).await;
+        assert!(start.elapsed() >= Duration::from_millis(200), "settled after {:?}", start.elapsed());
+        drop(tx);
+    }
+
+    /// Output that never stops still ends at the overall bound.
+    #[tokio::test]
+    async fn a_stream_that_keeps_lagging_still_ends_at_the_bound() {
+        let (tx, mut rx) = broadcast::channel::<Vec<u8>>(1);
+        let flood = tokio::spawn(async move {
+            loop {
+                for _ in 0..3 {
+                    let _ = tx.send(b"frame".to_vec());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        let bound = Duration::from_millis(600);
+        let start = tokio::time::Instant::now();
+        settle_within(&mut rx, None, Duration::from_millis(200), bound).await;
+        let took = start.elapsed();
+        flood.abort();
+        assert!(took >= bound && took < bound + Duration::from_millis(400), "took {took:?}");
     }
 }
