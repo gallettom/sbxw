@@ -1158,6 +1158,31 @@ mod tests {
     }
 
     #[test]
+    fn a_late_thread_gets_a_merge_of_its_own_and_a_shared_plan_does_not() {
+        let mut b = PlanBook::new();
+        let p = proposed(&mut b, "n", &["a", "b"]);
+        b.approve(&p.id, vec![t("a"), t("b")], None, None, 3).unwrap();
+        b.set_thread("n", "a", ThreadState::Done, "ok", false, 4).unwrap();
+        b.propose_merge(&p.id, "n", vec!["a".into()], "", vec![], 5).unwrap();
+        b.start_merge(&p.id, None, None, 6).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None, note: None }, 7).unwrap();
+        b.finish_merge(&p.id, 8).unwrap();
+        b.mark_done(&p.id, "n", "b", "reviewed sbxw/b", 9).unwrap();
+        assert!(b.propose_merge(&p.id, "n", vec!["a".into(), "b".into()], "", vec![], 10).unwrap_err().contains("already merged"));
+        let q = b.propose_merge(&p.id, "n", vec!["b".into()], "", vec![], 10).unwrap();
+        assert_eq!((q.merge.as_ref().unwrap().state, q.earlier_merges.len()), (MergeState::Proposed, 1));
+
+        let s = b.propose("p-s".into(), "m", "", vec![t("x")], Variant::Shared, "why", None, 11).unwrap();
+        b.approve(&s.id, vec![t("x")], None, None, 12).unwrap();
+        b.set_thread("m", "x", ThreadState::Done, "ok", false, 13).unwrap();
+        b.propose_merge(&s.id, "m", vec![], "", vec![], 14).unwrap();
+        b.start_merge(&s.id, None, None, 15).unwrap();
+        b.merge_result(&s.id, MergeResult { thread: s.team_name(), ok: true, commit: None, error: None, note: None }, 16).unwrap();
+        b.finish_merge(&s.id, 17).unwrap();
+        assert!(b.propose_merge(&s.id, "m", vec![], "", vec![], 18).unwrap_err().contains("already merged"), "one branch, one merge");
+    }
+
+    #[test]
     fn plans_are_scoped_to_their_sandbox() {
         let mut b = PlanBook::new();
         let p = proposed(&mut b, "myapp", &["api"]);
