@@ -33,6 +33,8 @@ mod resize_tests;
 mod leader_mark_tests;
 #[cfg(test)]
 mod sidebar_tests;
+#[cfg(test)]
+mod timing_tests;
 
 use crate::approval;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
