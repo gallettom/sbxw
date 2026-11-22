@@ -900,7 +900,7 @@ test('level 2: the Approvals entry, its badge, and one sentence when it cannot a
   // Opened from website's conversation, the filter starts on website (it has a merge waiting).
   assert.deepEqual(await page.$$eval('.rc-ap-h', h => h.map(e => e.textContent)), ['Merges proposed 1']);
   await page.tap('#ap-filter .rc-ap-fchip >> text=All sandboxes');
-  assert.deepEqual(await page.$$eval('.rc-ap-h', h => h.map(e => e.textContent)), ['Plans to approve 1', 'Merges proposed 1', 'Network requests 1', 'Stopped sandboxes 1']);
+  assert.deepEqual(await page.$$eval('.rc-ap-h', h => h.map(e => e.textContent)), ['Plans to approve 1', 'Merges proposed 1', 'Network requests 1'], 'stopped sandboxes are on the home, not here');
   await shot(page, '41-approvals-list');
   // A list sbx cannot read says so in its place; the others stay.
   await ctl({ l2Replies: { network: [{ status: 503, body: { ok: false, reason: 'unavailable' } }] } });
@@ -1006,6 +1006,13 @@ test('level 2: enabling Face ID: the digits, the grant, create, register; and ea
   }
 });
 
+// A stopped sandbox is opened from the home's last group, not from Approvals.
+async function openStopped(page) {
+  await page.goto(`${base()}/`);
+  await page.waitForSelector('.rc-stopped');
+  await page.tap('.rc-stopped');
+  await page.waitForSelector('#item-acts button');
+}
 async function openItemOf(page, cls) {
   await page.tap(`.rc-ap-${cls}`);
   await page.waitForSelector('#item-acts button');
@@ -1143,7 +1150,7 @@ test('level 2: a network request offers every sbx option, a lasting one flagged;
   await page.waitForSelector('#ap-done:text("Answered.")');
   assert.deepEqual((await actCalls()).at(-1).body.option, 'allow');
   assert.deepEqual((await calls('POST', '/r/approvals/challenge')).at(-1).body.option, 'allow');
-  await openItemOf(page, 'stopped');
+  await openStopped(page);
   assert.deepEqual(await page.$$eval('.rc-confirm-lines p', l => l.map(e => e.textContent)), L2.stopped_one.confirm, 'verbatim');
   await page.tap('[data-kind="sandbox_remove"]');
   await page.waitForSelector('#sheet:not([hidden])');
@@ -1151,7 +1158,8 @@ test('level 2: a network request offers every sbx option, a lasting one flagged;
   assert.match(await page.getAttribute('#sheet-go', 'class'), /rc-danger-solid/);
   await shot(page, '51-remove-sheet');
   await page.tap('#sheet-go');
-  await page.waitForSelector('#ap-done:text("Sandbox removed.")');
+  await page.waitForSelector('#home-done:text("Sandbox removed.")');
+  assert.equal(await page.isVisible('#s-leaders'), true, 'back on the home');
   assert.equal((await actCalls()).at(-1).path, '/r/stopped/old-experiment/remove');
   await cleanSpy(page);
   assert.deepEqual(problems, []);
@@ -1201,8 +1209,7 @@ test('level 2: "changed", every refusal, a cancelled or odd Face ID: nothing don
   for (const [mode, want] of [['cancel', 'Face ID was cancelled. Nothing was done.'], ['wrong', 'Face ID gave an answer this page cannot read. Nothing was done.']]) {
     await ctl({ reset: true, l2Reset: true });
     const { ctx, page } = await phone(390, 844, { flags: [`__cred:${mode}`] });
-    await openApprovals(page);
-    await openItemOf(page, 'stopped');
+    await openStopped(page);
     await viaSheet(page, '[data-kind="sandbox_remove"]');
     await page.waitForSelector(`#sheet-status:text("${want}")`);
     assert.equal((await actCalls()).length, 0, `${mode}: nothing done`);
@@ -1273,7 +1280,7 @@ test('level 2 screens at 320x568', { skip }, async () => {
   await page.waitForSelector('.rc-ap-row');
   assert.ok(await noHScroll(page));
   await shot(page, '61-approvals-list-320');
-  for (const [cls, name, btn] of [['plans', 'plan', '[data-kind="plan_approve"]'], ['merges', 'merge', '[data-kind="merge"]'], ['network', 'network', '#item-acts button'], ['stopped', 'stopped', '[data-kind="sandbox_remove"]']]) {
+  for (const [cls, name, btn] of [['plans', 'plan', '[data-kind="plan_approve"]'], ['merges', 'merge', '[data-kind="merge"]'], ['network', 'network', '#item-acts button']]) {
     await openItemOf(page, cls);
     assert.ok(await noHScroll(page), name);
     await shot(page, `62-${name}-320`);

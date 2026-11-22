@@ -28,7 +28,9 @@
 <!-- Another view of this device holds the live stream: one tap takes it back. -->
 <button id="elsewhere" class="rc-banner rc-banner-btn" type="button" hidden>This page is open elsewhere on this device. Tap to reconnect here.</button>
 
-<!-- Approvals kind icons (stroke style of the page's icons): plan checklist, merge, network globe, stopped box. -->
+<!-- Kind icons, outlines in the page's stroke style (remote.css draws their
+     circles as outlines too): plan checklist, merge, network globe, stopped
+     sandbox (a bin; the home's last group), team, sandbox box. -->
 <svg class="rc-sprite" width="0" height="0" aria-hidden="true" focusable="false">
   <symbol id="ap-i-plans" viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M3.5 6l1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5L7.5 17"/></symbol>
   <symbol id="ap-i-merges" viewBox="0 0 24 24"><circle cx="6" cy="5.5" r="2"/><circle cx="6" cy="18.5" r="2"/><circle cx="18" cy="14" r="2"/><path d="M6 8v8M6 8c0 4 12 1.5 12 4"/></symbol>
@@ -147,8 +149,10 @@
   </section>
 
   <!-- The picker: the running team leaders, then the running sandboxes with no
-       team (API.md 2.4, v1.5); those that need you first in each group. -->
+       team (API.md 2.4, v1.5); those that need you first in each group. Last,
+       the stopped sandboxes the phone may remove (level 2), when there are any. -->
   <section id="s-leaders" class="rc-screen" hidden>
+    <p id="home-done" class="rc-ap-done" role="status" hidden></p>
     <div id="waiting" class="rc-waiting" hidden>
       <h2 class="rc-group-title">Waiting for you</h2>
       <div id="waiting-tiles" class="rc-wtiles"></div>
@@ -157,7 +161,7 @@
     <ul id="leaders" class="rc-leaders"></ul>
   </section>
 
-  <!-- Approvals (level 2): what waits, in four lists. -->
+  <!-- Approvals (level 2): what waits, in three lists (plans, merges, network requests). -->
   <section id="s-approvals" class="rc-screen" hidden>
     <p id="ap-done" class="rc-ap-done" role="status" hidden></p>
     <div id="ap-block" class="rc-ap-block" hidden>

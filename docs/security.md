@@ -739,8 +739,11 @@ a standalone app named sbxw.
   Read only: no control adds, moves, edits or deletes. A stopped leader: "This leader is
   no longer running."
 - **Approvals (level 2).** A shield in the bar, with a badge from the `approvals` event
-  (numbers only), opens four lists: plans to approve, merges proposed, network requests,
-  stopped sandboxes. Off at the Mac: "Approving is turned off on your Mac.", nothing else.
+  (numbers only), opens three lists: plans to approve, merges proposed, network requests.
+  Stopped sandboxes are not a request: the home screen lists them last, in their own group
+  (`GET /r/stopped`, read when the home shows or the page comes back, no timer), and a tap
+  opens the same detail and Remove as below; the badge and "Waiting for you" do not count
+  them. Off at the Mac: "Approving is turned off on your Mac.", nothing else.
   No passkey on this device: the lists, read only, and "Enable Face ID on this device",
   which shows six digits to type at the Mac, waits for the grant, then creates the passkey
   on a tap (`navigator.credentials.create`, user verification required, attestation none).

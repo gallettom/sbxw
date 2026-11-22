@@ -474,9 +474,16 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-group-empty { padding: 6px 4px 2px; font-size: var(--fs-sm); color: var(--c-text-dim); }
 .rc-leader-ro { grid-column: 2 / 4; font-size: var(--fs-xs); color: var(--c-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-ro .rc-leader-name { color: var(--c-text-muted); }
+/* Stopped sandboxes: the home's last group, red like their kind, the cards
+   dim (they do not run), a note when removing needs Face ID, Show all. */
+.rc-group-stopped .rc-group-ic { color: var(--k); }
+.rc-stopped { opacity: 0.72; }
+.rc-stopped .rc-leader-name { color: var(--c-text-muted); grid-column: 2 / 4; }
+.rc-group-note { padding: 2px 4px; font-size: var(--fs-xs); color: var(--c-text-dim); }
+.rc-group-foot { display: grid; padding: 0 4px; }
 /* Waiting for you: one tile per Approvals kind (same colours and icons). */
 .rc-waiting { padding: 12px max(12px, var(--safe-r)) 0 max(12px, var(--safe-l)); display: grid; gap: 6px; }
-.rc-wtiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.rc-wtiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .rc-wtile { display: grid; justify-items: center; gap: 2px; padding: 8px 4px; background: var(--c-surface); border: 1px solid var(--c-hair); border-radius: var(--r-lg); text-align: center; }
 .rc-wtile:active { background: var(--c-elevated); }
 .rc-wtile:focus-visible { box-shadow: var(--ring); }
@@ -810,6 +817,11 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-k-stopped { --k: var(--c-red); --k-tint: rgba(248, 81, 73, 0.16); }
 .rc-k-neutral { --k: var(--c-text-muted); --k-tint: var(--c-hair); }
 .rc-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+/* A <use> clone is styled as its symbol is placed: in this sprite, where the
+   page-wide `svg circle` (a filled dot) matches and `.rc-ktile svg circle`
+   cannot. So the kind icons' circles are outlines here, or the network
+   globe draws as a filled disc. */
+.rc-sprite symbol circle { fill: none; stroke: currentColor; }
 .rc-ktile { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--k); background: var(--k-tint); }
 .rc-ktile svg { width: 17px; height: 17px; }
 .rc-ktile svg circle, .rc-ap-hic circle { fill: none; stroke: currentColor; }

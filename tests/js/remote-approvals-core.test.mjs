@@ -28,10 +28,8 @@ const leadersOf = () => rc.rcLeaders(fx.leaders);
 
 test('approvals filter: one entry per sandbox with something waiting, counts, leaders order', () => {
   const e = plain(rc.rcApEntries(AP(), leadersOf()));
-  assert.deepEqual(e.map(x => [x.sandbox, x.count]), [['shop', 2], ['docs', 1], ['website', 2], ['old-experiment', 1]]);
+  assert.deepEqual(e.map(x => [x.sandbox, x.count]), [['shop', 2], ['docs', 1], ['website', 2]], 'stopped sandboxes are not in Approvals');
   assert.equal(e[0].name, 'shop');
-  // a stopped sandbox is its own sandbox (`name`), the others say `sandbox`
-  assert.equal(rc.rcApSandbox('stopped', { name: 'x' }), 'x');
   assert.equal(rc.rcApSandbox('plans', { sandbox: 'y', name: 'x' }), 'y');
   assert.equal(rc.rcApSandbox('plans', {}), '');
   assert.deepEqual(plain(rc.rcApEntries({}, [])), []);
@@ -45,8 +43,6 @@ test('approvals filter: each kind is filtered, and All keeps everything', () => 
   assert.equal(rc.rcApFilter('merges', l.merges, 'shop').length, 0);
   assert.equal(rc.rcApFilter('network', l.network, 'shop').length, 1);
   assert.equal(rc.rcApFilter('network', l.network, 'docs')[0].host, 'registry.npmjs.org');
-  assert.equal(rc.rcApFilter('stopped', l.stopped, 'old-experiment').length, 1);
-  assert.equal(rc.rcApFilter('stopped', l.stopped, 'shop').length, 0);
   for (const k of Object.keys(l)) assert.equal(rc.rcApFilter(k, l[k], null).length, l[k].length);
   assert.deepEqual(plain(rc.rcApFilter('plans', undefined, 'shop')), []);
 });
@@ -75,7 +71,7 @@ test('approvals filter: per-sandbox counts follow the badge rule', () => {
   const by = Object.fromEntries(e.map(x => [x.sandbox, x]));
   assert.deepEqual([by.shop.n, by.shop.dot, by.shop.count], [1, true, 2]); // a plan; a network request
   assert.deepEqual([by.docs.n, by.docs.dot], [0, true]);
-  assert.deepEqual([by['old-experiment'].n, by['old-experiment'].dot, by['old-experiment'].count], [0, false, 1]);
+  assert.equal(by['old-experiment'], undefined, 'a stopped sandbox gets no chip');
 });
 
 // ── Approvals: one class and one icon per kind ──
