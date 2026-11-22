@@ -464,6 +464,7 @@ function rcClient(fetchImpl, hooks = {}) {
     pairStart: (code, deviceName) => call('POST', '/r/pair/start', { code, device_name: deviceName }),
     pairStatus: id => call('GET', `/r/pair/status?request_id=${encodeURIComponent(id)}`),
     leaders: () => call('GET', '/r/leaders'),
+    usage: () => call('GET', '/r/usage'),
     pushKey: () => call('GET', '/r/push/key'),
     pushSubscribe: sub => call('POST', '/r/push/subscribe', { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth }),
     pushUnsubscribe: () => call('POST', '/r/push/unsubscribe', {}),
@@ -1876,4 +1877,43 @@ function rcCvRemarkResult(res, what) {
   if (res.status === 404) return { tone: 'err', reload: true, text: `${what}: not saved, it was already sent or removed. The canvas was read again.` };
   if (res.status === 409) return { tone: 'err', text: `${what}: not saved, the canvas is full (${err}).` };
   return { tone: 'err', text: `${what}: not saved (${err}).` };
+}
+
+// The plan usage (GET /r/usage): the two windows as rows for the menu block
+// and the compact line of the picker. Pure: `now` in ms, local time for the
+// reset's clock. A window with no percentage is left out; none at all means
+// `has: false` ("No reading yet").
+const RC_USAGE_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function rcUsageTone(pct) { return pct >= 90 ? 'red' : pct >= 75 ? 'amber' : 'ok'; }
+function rcUsageReset(at, now) {
+  const t = Number(at);
+  if (at == null || !Number.isFinite(t) || t <= 0) return '';
+  const left = Math.round(t - now / 1000);
+  if (left <= 0) return 'reset passed';
+  if (left < 86400) {
+    const m = Math.max(1, Math.round(left / 60));
+    const h = Math.floor(m / 60);
+    return h ? `resets in ${h} h ${m % 60} min` : `resets in ${m} min`;
+  }
+  const d = new Date(t * 1000);
+  const two = n => String(n).padStart(2, '0');
+  return `resets ${RC_USAGE_DAYS[d.getDay()]} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+function rcUsage(u, now) {
+  const rows = [];
+  const o = u && typeof u === 'object' ? u : {};
+  for (const [key, label, pk, rk] of [['five', '5 hours', 'five_hour_pct', 'five_hour_resets_at'], ['seven', '7 days', 'seven_day_pct', 'seven_day_resets_at']]) {
+    const v = o[pk];
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    const pct = Math.min(100, Math.max(0, Math.round(v)));
+    rows.push({ key, label, pct, tone: rcUsageTone(pct), reset: rcUsageReset(o[rk], now) });
+  }
+  const upd = Number(o.updated_ms);
+  const ago = upd > 0 && rows.length ? rcAgo(upd, now) : '';
+  return {
+    has: rows.length > 0,
+    rows,
+    updated: !ago ? '' : ago === 'now' ? 'updated just now' : `updated ${ago} ago`,
+    compact: rows.map(r => `${r.key === 'five' ? '5 h' : '7 d'} ${r.pct}%`).join(' · '),
+  };
 }

@@ -1607,6 +1607,64 @@
     return (await off.startRendering()).getChannelData(0);
   }
 
+  // ── Plan usage: read when the menu opens and when the page shows ──
+  const usageSt = { data: null, busy: false };
+  function renderUsage() {
+    const u = rcUsage(usageSt.data, Date.now());
+    const line = $('usage-line');
+    line.hidden = !u.has;
+    line.textContent = u.has ? `Plan usage: ${u.compact}` : '';
+    const box = $('usage-block');
+    box.textContent = '';
+    if (!u.has) {
+      const p = document.createElement('p');
+      p.className = 'rc-menu-note';
+      p.textContent = 'No reading yet';
+      box.appendChild(p);
+      return;
+    }
+    for (const r of u.rows) {
+      const row = document.createElement('div');
+      row.className = 'rc-usage-row';
+      const head = document.createElement('p');
+      head.className = 'rc-usage-head';
+      head.textContent = `${r.label}: ${r.pct}%`;
+      const bar = document.createElement('div');
+      bar.className = `rc-usage-bar rc-usage-${r.tone}`;
+      bar.setAttribute('role', 'progressbar');
+      bar.setAttribute('aria-label', `${r.label} limit`);
+      bar.setAttribute('aria-valuenow', String(r.pct));
+      bar.setAttribute('aria-valuemin', '0');
+      bar.setAttribute('aria-valuemax', '100');
+      const fill = document.createElement('span');
+      fill.style.width = `${r.pct}%`;
+      bar.appendChild(fill);
+      row.append(head, bar);
+      if (r.reset) {
+        const n = document.createElement('p');
+        n.className = 'rc-menu-note';
+        n.textContent = r.reset;
+        row.appendChild(n);
+      }
+      box.appendChild(row);
+    }
+    if (u.updated) {
+      const n = document.createElement('p');
+      n.className = 'rc-menu-note';
+      n.textContent = u.updated;
+      box.appendChild(n);
+    }
+  }
+  async function loadUsage() {
+    if (usageSt.busy) return;
+    usageSt.busy = true;
+    const res = await api.usage();
+    usageSt.busy = false;
+    if (res.ok && res.data && typeof res.data === 'object') { usageSt.data = res.data; renderUsage(); }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadUsage(); });
+  loadUsage();
+
   // ── Menu: the device, and forgetting it ──
   function closeMenu() {
     $('menu').hidden = true;
@@ -1683,7 +1741,7 @@
     e.stopPropagation();
     const open = $('menu').hidden;
     closeMenu();
-    if (open) refreshPush();
+    if (open) { refreshPush(); loadUsage(); }
     $('menu').hidden = !open;
     $('menu-btn').setAttribute('aria-expanded', String(open));
   });
