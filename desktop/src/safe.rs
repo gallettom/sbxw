@@ -12,9 +12,64 @@ use std::path::{Path, PathBuf};
 /// Longest name, UTF-8 bytes (the stem is cut, the extension kept).
 pub const MAX_NAME: usize = 200;
 
-/// Invisible characters that reorder or hide text (bidi controls, marks, BOM).
-fn invisible(c: char) -> bool {
-    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}' | '\u{061C}' | '\u{00AD}')
+/// The one list of invisible and bidirectional characters
+/// (`docs/security.md#invisible-characters`): a copy of `INVISIBLE` in
+/// `crates/core/src/invisible.rs`, which the desktop crate does not depend
+/// on. A test compares the two tables line for line. U+FE0E and U+FE0F are
+/// left out on purpose, so emoji like ❤️ pass. Every place of the desktop that
+/// strips, refuses or shows invisible characters asks [`is_invisible`], each
+/// with its own action and its own rule for control characters.
+/// Inclusive ranges, sorted, one per line (the tests read this table).
+pub const INVISIBLE: &[(char, char)] = &[
+    ('\u{00ad}', '\u{00ad}'),     // soft hyphen
+    ('\u{034f}', '\u{034f}'),     // combining grapheme joiner
+    ('\u{0600}', '\u{0605}'),     // Arabic number signs
+    ('\u{061c}', '\u{061c}'),     // Arabic letter mark
+    ('\u{06dd}', '\u{06dd}'),     // Arabic end of ayah
+    ('\u{070f}', '\u{070f}'),     // Syriac abbreviation mark
+    ('\u{0890}', '\u{0891}'),     // Arabic pound and piastre marks above
+    ('\u{08e2}', '\u{08e2}'),     // Arabic disputed end of ayah
+    ('\u{115f}', '\u{1160}'),     // Hangul choseong and jungseong fillers
+    ('\u{17b4}', '\u{17b5}'),     // Khmer inherent vowels
+    ('\u{180b}', '\u{180f}'),     // Mongolian variation selectors and vowel separator
+    ('\u{200b}', '\u{200f}'),     // zero-width space, ZWNJ, ZWJ, LRM, RLM
+    ('\u{2028}', '\u{2029}'),     // line and paragraph separators
+    ('\u{202a}', '\u{202e}'),     // bidi embeddings and overrides
+    ('\u{2060}', '\u{206f}'),     // word joiner, invisible operators, bidi isolates, deprecated formats
+    ('\u{3164}', '\u{3164}'),     // Hangul filler
+    ('\u{fe00}', '\u{fe0d}'),     // variation selectors 1 to 14 (not 15 and 16, see below)
+    ('\u{feff}', '\u{feff}'),     // byte order mark, zero-width no-break space
+    ('\u{ffa0}', '\u{ffa0}'),     // half-width Hangul filler
+    ('\u{fff9}', '\u{fffb}'),     // interlinear annotation
+    ('\u{110bd}', '\u{110bd}'),   // Kaithi number sign
+    ('\u{110cd}', '\u{110cd}'),   // Kaithi number sign above
+    ('\u{13430}', '\u{1343f}'),   // Egyptian hieroglyph format controls
+    ('\u{1bca0}', '\u{1bca3}'),   // shorthand format controls
+    ('\u{1d173}', '\u{1d17a}'),   // musical symbol format controls
+    ('\u{e0000}', '\u{e0fff}'),   // tags and variation selectors supplement
+];
+
+/// Is `c` one of [`INVISIBLE`]: a character that hides, reorders or changes
+/// what text shows without showing itself?
+pub fn is_invisible(c: char) -> bool {
+    INVISIBLE.iter().any(|&(a, b)| (a..=b).contains(&c))
+}
+
+/// Every character of [`INVISIBLE`], for the tests of each place.
+pub fn invisible_chars() -> impl Iterator<Item = char> {
+    INVISIBLE.iter().flat_map(|&(a, b)| a..=b)
+}
+
+/// The characters just outside each range of [`INVISIBLE`], which no place
+/// may touch for being invisible: the boundaries the tests check.
+#[cfg(test)]
+pub fn invisible_neighbours() -> Vec<char> {
+    INVISIBLE
+        .iter()
+        .flat_map(|&(a, b)| [char::from_u32(a as u32 - 1), char::from_u32(b as u32 + 1)])
+        .flatten()
+        .filter(|c| !is_invisible(*c))
+        .collect()
 }
 
 /// Replaced with `_`: control characters, what Windows refuses in a name,
@@ -42,7 +97,7 @@ fn reserved_stem(name: &str) -> bool {
 pub fn file_name(raw: &str) -> String {
     let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(raw);
     let last = nfc.rsplit(['/', '\\']).next().unwrap_or("");
-    let mut s: String = last.chars().filter(|c| !invisible(*c)).map(|c| if replaced(c) { '_' } else { c }).collect();
+    let mut s: String = last.chars().filter(|c| !is_invisible(*c)).map(|c| if replaced(c) { '_' } else { c }).collect();
     s = s.trim_start_matches(['.', ' ']).trim_end_matches(['.', ' ']).to_string();
     if s.is_empty() {
         return "download".into();
@@ -249,6 +304,42 @@ pub fn verdict(name: &str, head: &[u8]) -> (Verdict, String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The table of `INVISIBLE` (from `pub const INVISIBLE` to its `];`).
+    fn table(src: &str) -> &str {
+        let start = src.find("pub const INVISIBLE").expect("INVISIBLE");
+        let end = start + src[start..].find("];").expect("end of INVISIBLE");
+        &src[start..end]
+    }
+
+    /// The desktop's copy is the core's list, line for line, comments too.
+    #[test]
+    fn invisible_is_the_core_list() {
+        let core_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/core/src/invisible.rs");
+        let core = std::fs::read_to_string(core_path).expect("crates/core/src/invisible.rs");
+        let ours = include_str!("safe.rs");
+        assert_eq!(table(ours), table(&core), "copy INVISIBLE again from crates/core/src/invisible.rs");
+        for w in INVISIBLE.windows(2) {
+            assert!(w[0].0 <= w[0].1 && w[0].1 < w[1].0, "{w:?}");
+        }
+        assert!(!is_invisible('\u{fe0e}') && !is_invisible('\u{fe0f}'));
+        assert!(invisible_chars().count() > 4000);
+    }
+
+    #[test]
+    fn file_name_removes_every_invisible_character() {
+        for c in invisible_chars() {
+            assert_eq!(file_name(&format!("a{c}b.txt")), "ab.txt", "{c:?} removed");
+        }
+        for s in ["\u{2764}\u{fe0f} ok.txt", "\u{2764}\u{fe0e} ok.txt", "a\u{fe0f}b.txt", "a\u{fe0e}b.txt"] {
+            assert_eq!(file_name(s), s, "{s:?} kept");
+        }
+        let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc();
+        for c in invisible_neighbours() {
+            let s = format!("a{c}b.txt");
+            assert_eq!(file_name(&s), nfc.normalize(&s), "{c:?} kept");
+        }
+    }
 
     #[test]
     fn names_are_made_safe() {

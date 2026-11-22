@@ -513,3 +513,20 @@ fn frame_cost() {
     crate::surface::clear("bench");
     crate::surface::clear(ID);
 }
+
+#[test]
+fn clean_removes_every_invisible_character() {
+    use crate::safe::{invisible_chars, invisible_neighbours};
+    for c in invisible_chars() {
+        assert_eq!(proto::clean(&format!("a{c}b"), 99), "ab", "{c:?}");
+    }
+    for s in ["\u{2764}\u{fe0f} ok", "\u{2764}\u{fe0e} ok", "a\u{fe0f}b", "a\u{fe0e}b"] {
+        assert_eq!(proto::clean(s, 99), s, "{s:?} kept");
+    }
+    for c in invisible_neighbours() {
+        let s = format!("a{c}b");
+        assert_eq!(proto::clean(&s, 99), s, "{c:?} kept");
+    }
+    // Controls keep their own rule: a space.
+    assert_eq!(proto::clean("a\nb\u{9b}c", 99), "a b c");
+}

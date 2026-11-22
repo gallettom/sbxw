@@ -697,7 +697,7 @@ pub fn size_label(n: usize) -> String {
 }
 
 /// The first [`OSC_PREVIEW_CHARS`] characters, with line breaks, tabs, C0
-/// and C1 controls, DEL and the bidi and zero-width marks shown as visible
+/// and C1 controls, DEL and the invisible characters ([`crate::safe::is_invisible`]) shown as visible
 /// marks, so the preview is what will be pasted (the web UI's `oscPreview`).
 pub fn osc_preview(text: &str) -> String {
     let mut out: String = text
@@ -709,7 +709,8 @@ pub fn osc_preview(text: &str) -> String {
             0x09 => '⇥',
             n @ 0..=0x1f => char::from_u32(0x2400 + n).unwrap_or('�'),
             0x7f => '␡',
-            0x80..=0x9f | 0x200b..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069 | 0xfeff => '�',
+            0x80..=0x9f => '�',
+            _ if crate::safe::is_invisible(c) => '�',
             _ => c,
         })
         .collect();
@@ -816,5 +817,20 @@ mod tests {
         let long = "x".repeat(81);
         assert_eq!(osc_preview(&long), format!("{}…", "x".repeat(80)));
         assert_eq!(osc_preview(&"x".repeat(80)), "x".repeat(80));
+    }
+
+    #[test]
+    fn preview_marks_every_invisible_character() {
+        use crate::safe::{invisible_chars, invisible_neighbours};
+        for c in invisible_chars() {
+            assert_eq!(osc_preview(&format!("a{c}b")), "a�b", "{c:?}");
+        }
+        for s in ["\u{2764}\u{fe0f} ok", "\u{2764}\u{fe0e} ok", "a\u{fe0f}b", "a\u{fe0e}b"] {
+            assert_eq!(osc_preview(s), s, "{s:?} kept");
+        }
+        for c in invisible_neighbours() {
+            let s = format!("a{c}b");
+            assert_eq!(osc_preview(&s), s, "{c:?} kept");
+        }
     }
 }

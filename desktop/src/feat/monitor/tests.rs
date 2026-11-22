@@ -2039,3 +2039,26 @@ fn long_texts_render_within_budget_on_both_sides() {
         assert!(all.iter().filter(|x| x.key.as_deref().is_some_and(|k| k.starts_with("monitor-body-you-"))).count() > 20, "{ow}: the person's messages are drawn");
     }
 }
+
+#[test]
+fn names_show_every_invisible_character() {
+    use crate::safe::{invisible_chars, invisible_neighbours};
+    for c in invisible_chars() {
+        let s = format!("a{c}b");
+        assert_eq!(attach::written_out(&s), format!("a\\u{{{:x}}}b", c as u32), "{c:?}");
+        assert_eq!(attach::clipped(&s), "a?b", "{c:?}");
+        assert_eq!(attach::clipped_text(&s, 99), "ab", "{c:?}");
+    }
+    for s in ["\u{2764}\u{fe0f} ok", "\u{2764}\u{fe0e} ok", "a\u{fe0f}b", "a\u{fe0e}b"] {
+        assert_eq!(attach::written_out(s), s, "{s:?} kept");
+        assert_eq!(attach::clipped(s), s, "{s:?} kept");
+        assert_eq!(attach::clipped_text(s, 99), s, "{s:?} kept");
+    }
+    for c in invisible_neighbours() {
+        let s = format!("a{c}b");
+        assert_eq!(attach::written_out(&s), s, "{c:?} kept");
+        assert_eq!(attach::clipped_text(&s, 99), s, "{c:?} kept");
+    }
+    // Controls keep their own rule: new lines and tabs stay in agent text.
+    assert_eq!(attach::clipped_text("a\nb\tc\u{1b}", 99), "a\nb\tc");
+}
