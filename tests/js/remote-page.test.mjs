@@ -1006,6 +1006,28 @@ test('level 2: a plan folded and unfolded, the sheet first, then Face ID, then t
   await ctx.close();
 });
 
+test('level 2: a plan approved with a thread\'s model changed sends the change with the challenge and the act', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
+  const { ctx, page, problems } = await phone();
+  await openApprovals(page);
+  await openItemOf(page, 'plans');
+  assert.deepEqual(await page.$$eval('.rc-model-select', s => s.map(e => [e.dataset.thread, e.value])), [['db-schema', 'opus'], ['checkout', 'sonnet']], 'the proposed models');
+  assert.deepEqual(await page.$$eval('.rc-model-select:first-of-type option', o => o.map(e => e.value)), ['sonnet', 'opus', 'haiku'], 'the configured list');
+  await page.selectOption('.rc-model-select[data-thread="checkout"]', 'haiku');
+  await page.tap('[data-kind="plan_approve"]');
+  await page.waitForSelector('#sheet:not([hidden])');
+  assert.equal(await page.textContent('#sheet-line'), 'Approve the plan of shop: it starts 2 threads, as proposed except the model of checkout (now haiku).');
+  await shot(page, '47b-approve-model-changed');
+  await page.tap('#sheet-cancel');
+  await viaSheet(page, '[data-kind="plan_approve"]');
+  await page.waitForSelector('#ap-done:not([hidden])');
+  const ch = (await calls('POST', '/r/approvals/challenge')).at(-1).body;
+  assert.deepEqual(ch.models, { checkout: 'haiku' });
+  assert.deepEqual((await actCalls()).at(-1).body.models, { checkout: 'haiku' });
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
 test('level 2: a merge in numbers and paths, its result in the daemon\'s words', { skip }, async () => {
   await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
   const { ctx, page, problems } = await phone();
@@ -1032,19 +1054,35 @@ test('level 2: a merge in numbers and paths, its result in the daemon\'s words',
   await ctx.close();
 });
 
-test('level 2: a network request offers only the daemon\'s options; a stopped sandbox shows its own sentences', { skip }, async () => {
+test('level 2: a network request offers every sbx option, a lasting one flagged; a stopped sandbox shows its own sentences', { skip }, async () => {
   await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
   const { ctx, page, problems } = await phone();
   await openApprovals(page);
   await openItemOf(page, 'network');
-  assert.deepEqual(await page.$$eval('#item-acts button', b => b.map(e => e.textContent)), ['Dismiss'], 'dismiss only');
-  assert.equal(await page.textContent('.rc-item-note'), 'Allowing this needs your Mac.');
-  assert.match(await page.getAttribute('#item-acts button', 'class'), /rc-danger/);
-  await shot(page, '50-network-dismiss-only');
-  await viaSheet(page, '#item-acts button');
+  // The detail shows what the list showed (the iPhone bug: an empty detail).
+  assert.equal(await page.textContent('.rc-item-title'), 'registry.npmjs.org');
+  assert.equal(await page.textContent('.rc-item-sub'), 'asked by docs');
+  assert.deepEqual(await page.$$eval('#item-acts button', b => b.map(e => e.textContent)), ['Allow', 'Dismiss'], 'every option sbx offers');
+  assert.deepEqual(await page.$$eval('.rc-net-opt .rc-item-warn', w => w.map(e => e.textContent)), ['Adds a lasting network rule.'], 'Allow is flagged as lasting');
+  assert.match(await page.getAttribute('#item-acts button.rc-danger', 'class'), /rc-danger/);
+  await shot(page, '50-network-options');
+  await page.tap('#item-acts button:not(.rc-danger)');
+  await page.waitForSelector('#sheet:not([hidden])');
+  assert.equal(await page.textContent('#sheet-line'), 'Answer Allow to the request of docs for registry.npmjs.org.');
+  assert.equal(await page.textContent('#sheet-more .rc-item-warn'), 'Allow registry.npmjs.org: adds a lasting network rule to docs (remove it on the Mac with sbx policy rm).');
+  assert.match(await page.textContent('#sheet-more .rc-sheet-effect'), /^Adds a lasting network rule to docs/);
+  await shot(page, '50b-network-allow-sheet');
+  await page.tap('#sheet-cancel');
+  await viaSheet(page, '#item-acts button.rc-danger');
   await page.waitForSelector('#ap-done:text("Answered.")');
   assert.deepEqual((await actCalls()).at(-1).body.option, 'dismiss');
   assert.deepEqual((await calls('POST', '/r/approvals/challenge')).at(-1).body.option, 'dismiss');
+  // Allow from the phone too, behind the same sheet and Face ID.
+  await openItemOf(page, 'network');
+  await viaSheet(page, '#item-acts button:not(.rc-danger)');
+  await page.waitForSelector('#ap-done:text("Answered.")');
+  assert.deepEqual((await actCalls()).at(-1).body.option, 'allow');
+  assert.deepEqual((await calls('POST', '/r/approvals/challenge')).at(-1).body.option, 'allow');
   await openItemOf(page, 'stopped');
   assert.deepEqual(await page.$$eval('.rc-confirm-lines p', l => l.map(e => e.textContent)), L2.stopped_one.confirm, 'verbatim');
   await page.tap('[data-kind="sandbox_remove"]');

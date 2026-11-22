@@ -42,9 +42,9 @@ const LISTS = (extra = {}) => ({
   plans: { plans: [PL(1, 'shop', 'Orders table'), PL(3, 'website', 'Redesign the footer')] },
   merges: { merges: [{ id: `p-${'2'.repeat(32)}`, sandbox: 'website', variant: 'split', branches: 2 }] },
   network: { requests: [
-    { id: 'network:a1', sandbox: 'docs', host: 'registry.npmjs.org', options: [{ id: 'dismiss', label: 'dismiss' }], mac_only: [] },
-    { id: 'network:a2', sandbox: 'docs', host: 'github.com', options: [{ id: 'dismiss', label: 'dismiss' }], mac_only: [] },
-    { id: 'network:a3', sandbox: 'shop', host: 'pypi.org', options: [{ id: 'dismiss', label: 'dismiss' }], mac_only: [] }] },
+    { id: 'network:a1', sandbox: 'docs', host: 'registry.npmjs.org', options: [{ id: 'dismiss', label: 'dismiss' }] },
+    { id: 'network:a2', sandbox: 'docs', host: 'github.com', options: [{ id: 'dismiss', label: 'dismiss' }] },
+    { id: 'network:a3', sandbox: 'shop', host: 'pypi.org', options: [{ id: 'dismiss', label: 'dismiss' }] }] },
   stopped: { sandboxes: [{ name: 'old-experiment', agent: 'claude', chat: false, workspace: '/w/old', created_at: '2026-10-02T09:12:00Z' }] },
   ...extra,
 });
@@ -243,7 +243,7 @@ test('network detail: nothing the phone may answer says the Mac decides', { skip
   const { ctx, page } = await phone();
   await open(page);
   await page.tap('.rc-ap-network');
-  await page.waitForFunction(() => document.querySelector('#item-acts')?.textContent.includes('Only the Mac can allow this request.'));
+  await page.waitForFunction(() => document.querySelector('#item-acts')?.textContent.includes('Only the Mac can answer this request.'));
   assert.equal(await page.$$eval('#item-acts button', b => b.length), 0);
   await ctx.close();
 });

@@ -264,7 +264,22 @@
           }
         ]
       },
-      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "models": [
+        {
+          "id": "sonnet",
+          "label": "Sonnet"
+        },
+        {
+          "id": "opus",
+          "label": "Opus"
+        },
+        {
+          "id": "haiku",
+          "label": "Haiku"
+        }
+      ],
+      "default_model": "sonnet"
     },
     "merges": {
       "merges": [
@@ -412,12 +427,17 @@
           "created_at": "2026-11-20T17:30:00Z",
           "options": [
             {
+              "id": "allow",
+              "label": "Allow",
+              "lasting": true,
+              "effect": "Adds a lasting network rule to docs: docs may reach registry.npmjs.org from now on, until you remove the rule on your Mac (sbx policy rm network --id <rule id> --sandbox docs)."
+            },
+            {
               "id": "dismiss",
-              "label": "dismiss"
+              "label": "Dismiss",
+              "lasting": false,
+              "effect": "Closes this request and writes no rule: docs stays unable to reach registry.npmjs.org, and sbx asks again if it tries again."
             }
-          ],
-          "mac_only": [
-            "allow"
           ]
         }
       ]
@@ -431,12 +451,17 @@
         "created_at": "2026-11-20T17:30:00Z",
         "options": [
           {
+            "id": "allow",
+            "label": "Allow",
+            "lasting": true,
+            "effect": "Adds a lasting network rule to docs: docs may reach registry.npmjs.org from now on, until you remove the rule on your Mac (sbx policy rm network --id <rule id> --sandbox docs)."
+          },
+          {
             "id": "dismiss",
-            "label": "dismiss"
+            "label": "Dismiss",
+            "lasting": false,
+            "effect": "Closes this request and writes no rule: docs stays unable to reach registry.npmjs.org, and sbx asks again if it tries again."
           }
-        ],
-        "mac_only": [
-          "allow"
         ]
       },
       "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"

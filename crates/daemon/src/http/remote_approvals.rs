@@ -16,6 +16,7 @@ use axum::{Extension, Json};
 use sbxw_core::remote_access::level2::Action;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -159,13 +160,17 @@ pub struct ChallengeBody {
     digest: String,
     #[serde(default)]
     option: Option<String>,
+    /// A plan approval: thread name to model id, for threads whose model
+    /// the phone changed.
+    #[serde(default)]
+    models: BTreeMap<String, String>,
 }
 
 pub async fn challenge(State(app): S, Extension(d): Extension<DeviceCtx>, Json(b): Json<ChallengeBody>) -> Response {
-    if b.target.len() > 128 || b.option.as_ref().is_some_and(|o| o.len() > 64) {
-        return refuse(L2Error { status: 400, reason: "bad", error: "target or option too long".into(), retry_ms: None });
+    if b.target.len() > 128 || b.option.as_ref().is_some_and(|o| o.len() > 64) || b.models.iter().any(|(t, m)| t.len() > 64 || m.len() > 128) {
+        return refuse(L2Error { status: 400, reason: "bad", error: "target, option or model too long".into(), retry_ms: None });
     }
-    answer(app.remote_challenge(&d, b.kind, &b.target, &b.digest, b.option.as_deref()).await)
+    answer(app.remote_challenge(&d, b.kind, &b.target, &b.digest, b.option.as_deref(), &b.models).await)
 }
 
 #[derive(Deserialize)]
@@ -176,29 +181,38 @@ pub struct ActBody {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ApproveBody {
+    assertion: Assertion,
+    /// The model changes the challenge was asked with, again.
+    #[serde(default)]
+    models: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RespondBody {
     option: String,
     assertion: Assertion,
 }
 
-pub async fn plan_approve(State(app): S, Extension(d): Extension<DeviceCtx>, Path(id): Path<String>, Json(b): Json<ActBody>) -> Response {
-    answer(app.remote_act(&d, Action::PlanApprove, &id, None, &b.assertion).await)
+pub async fn plan_approve(State(app): S, Extension(d): Extension<DeviceCtx>, Path(id): Path<String>, Json(b): Json<ApproveBody>) -> Response {
+    answer(app.remote_act(&d, Action::PlanApprove, &id, None, &b.models, &b.assertion).await)
 }
 
 pub async fn plan_refuse(State(app): S, Extension(d): Extension<DeviceCtx>, Path(id): Path<String>, Json(b): Json<ActBody>) -> Response {
-    answer(app.remote_act(&d, Action::PlanRefuse, &id, None, &b.assertion).await)
+    answer(app.remote_act(&d, Action::PlanRefuse, &id, None, &BTreeMap::new(), &b.assertion).await)
 }
 
 pub async fn merge_run(State(app): S, Extension(d): Extension<DeviceCtx>, Path(id): Path<String>, Json(b): Json<ActBody>) -> Response {
-    answer(app.remote_act(&d, Action::Merge, &id, None, &b.assertion).await)
+    answer(app.remote_act(&d, Action::Merge, &id, None, &BTreeMap::new(), &b.assertion).await)
 }
 
 pub async fn network_respond(State(app): S, Extension(d): Extension<DeviceCtx>, Path(id): Path<String>, Json(b): Json<RespondBody>) -> Response {
-    answer(app.remote_act(&d, Action::NetworkRespond, &id, Some(&b.option), &b.assertion).await)
+    answer(app.remote_act(&d, Action::NetworkRespond, &id, Some(&b.option), &BTreeMap::new(), &b.assertion).await)
 }
 
 pub async fn sandbox_remove(State(app): S, Extension(d): Extension<DeviceCtx>, Path(name): Path<String>, Json(b): Json<ActBody>) -> Response {
-    answer(app.remote_act(&d, Action::SandboxRemove, &name, None, &b.assertion).await)
+    answer(app.remote_act(&d, Action::SandboxRemove, &name, None, &BTreeMap::new(), &b.assertion).await)
 }
 
 // ── The badge on the event stream, and the cap on streams ────────────────

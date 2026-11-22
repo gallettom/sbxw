@@ -769,6 +769,11 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 }
 .rc-sheet::before { content: ""; justify-self: center; width: 36px; height: 4px; margin: -10px 0 2px; border-radius: 2px; background: var(--c-dim); }
 .rc-sheet-line { color: var(--c-text-bright); overflow-wrap: anywhere; }
+.rc-sheet-more { display: grid; gap: 6px; }
+.rc-sheet-effect { font-size: var(--fs-sm); color: var(--c-text-muted); overflow-wrap: anywhere; }
+.rc-model-pick { display: grid; gap: 4px; margin-top: 8px; }
+.rc-model-select { width: 100%; min-height: 44px; }
+.rc-net-opt { margin-top: 8px; }
 .rc-sheet-status { font-size: var(--fs-sm); color: var(--c-text-muted); min-height: 1.45em; overflow-wrap: anywhere; }
 .rc-sheet-status.rc-t-err { color: #ff7b72; }
 .rc-sheet-status.rc-t-busy { color: var(--c-text); }

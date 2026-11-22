@@ -344,19 +344,19 @@ async fn finding_p3_every_event_stream_runs_sbx_itself() {
     drop(held);
 }
 
-// ── P4: which network options reach the phone ────────────────────────────
+// ── P4: how network options are read ─────────────────────────────────────
 
-/// `phone_option` matches substrings: "unblock" and "do not block" read as a
-/// refusal, "deny" also matches a lasting deny-list entry.
+/// `phone_option` matched substrings: "unblock" and "do not block" read as a
+/// refusal, "deny" also matched a lasting deny-list entry.
 #[test]
 fn finding_p4_phone_option_reads_substrings() {
-    // FIXED (P4): an exact list of ids; no word inside an id or label counts.
-    assert!(!level2::phone_option("unblock", "Unblock this host"));
-    assert!(!level2::phone_option("allow", "Allow (do not block)"));
-    assert!(!level2::phone_option("denylist", "Add to the denylist"));
-    assert!(!level2::phone_option("allow-always", "Always allow"));
-    assert!(!level2::phone_option("allow", "Allow"));
-    assert!(level2::phone_option("dismiss", "Dismiss"));
+    // FIXED (P4), kept in round 4: every option sbx offers reaches the phone
+    // (behind Face ID), and its wording goes by its exact id: only `dismiss`
+    // reads as leaving no rule; no word inside an id or label counts.
+    for (id, label) in [("unblock", "Unblock this host"), ("allow", "Allow (do not block)"), ("denylist", "Add to the denylist"), ("allow-always", "Always allow"), ("allow", "Allow"), ("x", "Dismiss")] {
+        assert!(level2::option_meaning(id, label, "s", "h").lasting, "{id:?} {label:?}");
+    }
+    assert!(!level2::option_meaning("dismiss", "Dismiss", "s", "h").lasting);
 }
 
 // ── P5: the Kanban's `[path]` filter ─────────────────────────────────────

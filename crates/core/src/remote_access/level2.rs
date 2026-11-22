@@ -10,7 +10,9 @@
 //!   2 minutes, taken (removed) by the first attempt that names its device.
 //! * [`digest`]: SHA-256 of canonical JSON, so what was shown is what is
 //!   approved.
-//! * [`phone_option`]: which network-request options a phone may answer.
+//! * [`option_meaning`]: what a network-request option does, in the words
+//!   the phone's confirmation shows, and whether it may leave a lasting rule.
+//! * [`check_models`]: the model changes a phone may make to a plan.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -279,7 +281,16 @@ impl Enrolment {
 pub enum Purpose {
     /// A registration, for the enrolment request with this id.
     Register { request: String },
-    Act { action: Action, target: String, digest: String, option: Option<String> },
+    Act {
+        action: Action,
+        target: String,
+        digest: String,
+        option: Option<String>,
+        /// A plan approval: the model the phone chose per thread (thread
+        /// name to model id); empty for the proposed models and any other
+        /// action. The act must send exactly these.
+        models: BTreeMap<String, String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -375,17 +386,64 @@ pub fn valid_digest(s: &str) -> bool {
 
 // ── Network options ──────────────────────────────────────────────────────
 
-/// Option ids a phone may send for a network request: exactly these, by
-/// id (review P4: never a word found inside an id or a label). `dismiss`
-/// closes sbx 0.51's request and writes no rule. Add an id only once its
-/// meaning in sbx is checked (one-time, no lasting rule) and a test says so.
-pub const PHONE_OPTIONS: &[&str] = &["dismiss"];
+/// What answering a network request with one option does, as the phone's
+/// confirmation says it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OptionMeaning {
+    /// It may leave a rule behind that outlives this request: the sheet
+    /// flags it.
+    pub lasting: bool,
+    /// One plain sentence.
+    pub effect: String,
+}
 
-/// Whether a phone may answer a network request with this option: its id is
-/// one of [`PHONE_OPTIONS`], exactly. The label is shown, never matched.
-/// Anything else, a plain "Allow" included, is for the Mac (fail closed).
-pub fn phone_option(id: &str, _label: &str) -> bool {
-    PHONE_OPTIONS.contains(&id)
+/// What option `id` of a network request of `sandbox` for `host` does.
+/// A phone may answer with any option sbx offers (each behind Face ID);
+/// this only words it. sbx 0.51 offers two, checked against its real
+/// output: `dismiss` closes the request and writes no rule; `allow` writes
+/// a LASTING rule. Evidence (sbx 0.51, verified on the person's Mac,
+/// 2026-11-22): after allowing index.crates.io, static.crates.io,
+/// crates.io and proxy.golang.org, `sbx policy inspect` showed a `local`
+/// policy applying to `sandbox:sbxw-2` with one `allow <host>:443 network
+/// tcp active` rule each, editable, and removable with `sbx policy rm
+/// network --id <rule-id> --sandbox sbxw-2`. By id, exactly (review P4:
+/// never a word found inside an id or a label); any other id is sbx's own,
+/// worded cautiously and flagged as lasting (fail safe).
+pub fn option_meaning(id: &str, label: &str, sandbox: &str, host: &str) -> OptionMeaning {
+    match id {
+        "dismiss" => OptionMeaning { lasting: false, effect: format!("Closes this request and writes no rule: {sandbox} stays unable to reach {host}, and sbx asks again if it tries again.") },
+        "allow" => OptionMeaning {
+            lasting: true,
+            effect: format!("Adds a lasting network rule to {sandbox}: {sandbox} may reach {host} from now on, until you remove the rule on your Mac (sbx policy rm network --id <rule id> --sandbox {sandbox})."),
+        },
+        _ => {
+            let label = if label.is_empty() { id } else { label };
+            OptionMeaning { lasting: true, effect: format!("sbx's own option \u{201c}{label}\u{201d} for {sandbox} and {host}. sbxw does not know what it leaves behind: it may add a lasting network rule to {sandbox}.") }
+        }
+    }
+}
+
+// ── Models of a plan approved from the phone ─────────────────────────────
+
+/// Model changes a phone sends with a plan approval, at most.
+pub const MAX_MODEL_CHANGES: usize = 32;
+
+/// Check a phone's model changes for a plan: each names one of the plan's
+/// `threads` and a model id of `allowed` (the configured list, the one
+/// `GET /r/models` serves). Only the model of a thread changes, nothing else.
+pub fn check_models(models: &BTreeMap<String, String>, threads: &[&str], allowed: &[&str]) -> Result<(), String> {
+    if models.len() > MAX_MODEL_CHANGES {
+        return Err("models: too many".into());
+    }
+    for (t, m) in models {
+        if !threads.contains(&t.as_str()) {
+            return Err(format!("models: \u{201c}{t}\u{201d} is not a thread of this plan"));
+        }
+        if !allowed.contains(&m.as_str()) {
+            return Err(format!("models: \u{201c}{m}\u{201d} is not in the list of models"));
+        }
+    }
+    Ok(())
 }
 
 /// A plan id as the routes take it: `p-` and 32 hex.
@@ -457,7 +515,7 @@ mod tests {
     #[test]
     fn challenges_are_one_per_device_taken_once_and_expire() {
         let mut c = Challenges::default();
-        let act = |t: &str| Purpose::Act { action: Action::Merge, target: t.into(), digest: "d".into(), option: None };
+        let act = |t: &str| Purpose::Act { action: Action::Merge, target: t.into(), digest: "d".into(), option: None, models: BTreeMap::new() };
         let a = c.issue("d1", act("p1"), 0);
         assert_eq!(a.bytes.len(), CHALLENGE_BYTES);
         let b = c.issue("d1", act("p2"), 0);
@@ -492,26 +550,30 @@ mod tests {
     }
 
     #[test]
-    fn only_options_on_the_exact_list_reach_the_phone() {
-        assert!(phone_option("dismiss", "Dismiss"));
-        assert!(phone_option("dismiss", "anything sbx says"), "the id decides");
-        for (id, label) in [
-            ("allow", "Allow"),
-            ("allow-always", "Allow always"),
-            ("deny", "Deny"),
-            ("deny-always", "Deny always"),
-            ("allow-once", "Allow once"),
-            ("unblock", "Unblock this host"),
-            ("allow", "Allow (do not block)"),
-            ("denylist", "Add to the denylist"),
-            ("Dismiss", "Dismiss"),
-            ("dismiss ", "Dismiss"),
-            ("dismiss-always", "Dismiss"),
-            ("x", "dismiss"),
-            ("", ""),
-        ] {
-            assert!(!phone_option(id, label), "{id:?} {label:?}");
+    fn each_option_is_worded_by_its_exact_id_and_unknown_ones_are_lasting() {
+        let d = option_meaning("dismiss", "Dismiss", "sbxw-2", "storage.googleapis.com:443");
+        assert!(!d.lasting);
+        assert!(d.effect.contains("writes no rule") && d.effect.contains("sbxw-2"));
+        let a = option_meaning("allow", "Allow", "sbxw-2", "storage.googleapis.com:443");
+        assert!(a.lasting, "sbx 0.51's Allow writes a lasting rule");
+        assert!(a.effect.starts_with("Adds a lasting network rule to sbxw-2:") && a.effect.contains("storage.googleapis.com:443") && a.effect.contains("sbx policy rm"));
+        assert!(!a.effect.contains("may add"), "no hedge for a checked id");
+        for (id, label) in [("allow-always", "Allow always"), ("Dismiss", "Dismiss"), ("dismiss ", "Dismiss"), ("x", "dismiss"), ("deny", "Deny")] {
+            assert!(option_meaning(id, label, "s", "h").lasting, "{id:?} {label:?}: unknown, so flagged");
         }
+        assert!(option_meaning("x", "", "s", "h").effect.contains("\u{201c}x\u{201d}"), "no label: the id is shown");
+    }
+
+    #[test]
+    fn model_changes_name_a_thread_of_the_plan_and_a_listed_model() {
+        let m = |pairs: &[(&str, &str)]| pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<BTreeMap<_, _>>();
+        let threads = ["alpha", "beta"];
+        let allowed = ["claude-opus-5-5", "claude-sonnet-5-5"];
+        assert!(check_models(&m(&[]), &threads, &allowed).is_ok());
+        assert!(check_models(&m(&[("alpha", "claude-sonnet-5-5")]), &threads, &allowed).is_ok());
+        assert!(check_models(&m(&[("gamma", "claude-sonnet-5-5")]), &threads, &allowed).is_err(), "not a thread");
+        assert!(check_models(&m(&[("alpha", "gpt-x")]), &threads, &allowed).is_err(), "not listed");
+        assert!(check_models(&m(&[("alpha", "claude-sonnet-5-5 ")]), &threads, &allowed).is_err(), "exactly");
     }
 
     #[test]

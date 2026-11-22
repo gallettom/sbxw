@@ -20,7 +20,7 @@ const NAMES = ['rcAgentHtml', 'RC_PILL_TONES', 'rcPills', 'rcRows', 'rcMerge', '
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
   'rcL2Fail', 'RC_L2_REASON', 'rcActPath', 'rcActLine', 'rcActDone', 'rcL2Client',
-  'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback', 'rcMarked', 'rcActParts',
+  'rcModelChanges', 'rcKbBoard', 'rcKbFirst', 'rcKbTicket', 'rcKbPaths', 'rcInsertAt', 'rcSpeechText', 'rcSpeechLang', 'rcSpeechFallback', 'rcMarked', 'rcActParts',
   'RC_DICT_TEXT', 'rcSpeechEnd', 'rcSpeechRestart', 'RC_SPEECH_RESTARTS', 'rcSpeechRound', 'rcFinalSegments', 'rcTail', 'rcRecMime', 'rcClipCheck', 'rcSilentPcm', 'rcTranscribed', 'rcSendNote', 'RC_QUEUED_TEXT'];
 const ctx = { URLSearchParams, AbortController };
 vm.runInNewContext(`${coreSrc}\n${NAMES.map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
@@ -644,6 +644,10 @@ test('level 2: the entry\'s sentence, each refusal, the routes, the sheet\'s lin
   await l2.challenge('network_respond', 'network:x', 'b'.repeat(64), 'dismiss');
   await l2.act('network_respond', 'network:x', { id: 'i' }, 'dismiss');
   await l2.act('merge', 'p-2', { id: 'i' }, 'ignored');
+  await l2.challenge('plan_approve', 'p-3', 'c'.repeat(64), undefined, { alpha: 'haiku' });
+  await l2.act('plan_approve', 'p-3', { id: 'i' }, undefined, { alpha: 'haiku' });
+  await l2.challenge('plan_refuse', 'p-3', 'c'.repeat(64), undefined, { alpha: 'haiku' });
+  await l2.act('plan_approve', 'p-3', { id: 'i' }, undefined, {});
   const RID = '0123456789abcdef0123456789abcdef';
   await l2.passkeyStatus(RID);
   await l2.passkeyOptions(RID);
@@ -657,6 +661,10 @@ test('level 2: the entry\'s sentence, each refusal, the routes, the sheet\'s lin
     ['/r/approvals/challenge', { kind: 'network_respond', target: 'network:x', digest: 'b'.repeat(64), option: 'dismiss' }],
     ['/r/network/network%3Ax/respond', { option: 'dismiss', assertion: { id: 'i' } }],
     ['/r/merges/p-2/merge', { assertion: { id: 'i' } }],
+    ['/r/approvals/challenge', { kind: 'plan_approve', target: 'p-3', digest: 'c'.repeat(64), models: { alpha: 'haiku' } }],
+    ['/r/plans/p-3/approve', { assertion: { id: 'i' }, models: { alpha: 'haiku' } }],
+    ['/r/approvals/challenge', { kind: 'plan_refuse', target: 'p-3', digest: 'c'.repeat(64) }],
+    ['/r/plans/p-3/approve', { assertion: { id: 'i' } }],
   ]);
   assert.throws(() => l2.act('nope', 'x', {}));
 });
@@ -848,6 +856,19 @@ test('a sheet\'s line: the page\'s words and the daemon\'s data apart', () => {
     assert.ok(p.filter(x => typeof x === 'string').every(x => !/[\p{Cf}]/u.test(x)), 'the page\'s own words carry no control');
   }
   assert.deepEqual(plain(rc.rcActParts('nope', {})), []);
+  assert.deepEqual(plain(rc.rcActParts('plan_approve', { sandbox: 's', threads: [{}, {}] }, null, { b: 'haiku' })), ['Approve the plan of ', { data: 's' }, ': it starts 2 threads, as proposed except the model of ', { data: 'b' }, ' (now ', { data: 'haiku' }, ')', '.']);
+  assert.equal(rc.rcActLine('plan_approve', { sandbox: 's', threads: [{}] }), 'Approve the plan of s as it is: it starts 1 thread.');
+});
+test('a plan\'s model changes: only threads of the plan, models of the list, and only real changes', () => {
+  const threads = [{ name: 'a', model: 'opus' }, { name: 'b', model: null }, { name: 'c', model: 'sonnet' }];
+  const list = [{ id: 'opus', label: 'Opus' }, { id: 'haiku', label: 'Haiku' }, { id: 'sonnet', label: 'Sonnet' }];
+  assert.deepEqual(plain(rc.rcModelChanges(threads, { a: 'opus', b: 'haiku', c: 'gpt', d: 'haiku' }, list)), { b: 'haiku' });
+  assert.deepEqual(plain(rc.rcModelChanges(threads, {}, list)), {});
+  assert.deepEqual(plain(rc.rcModelChanges(threads, { a: 'haiku' }, [])), {}, 'no list, no change');
+  assert.deepEqual(plain(rc.rcModelChanges(null, { a: 'haiku' }, list)), {});
+  const odd = rc.rcModelChanges([{ name: '__proto__', model: 'opus' }], JSON.parse('{"__proto__":"haiku"}'), list);
+  assert.deepEqual(Object.keys(odd), ['__proto__'], 'an own key, never a prototype');
+  assert.equal(Object.getPrototypeOf(odd), Object.getPrototypeOf(rc.rcModelChanges([], {}, list)));
 });
 
 // ── Plan phone-sandboxes (API.md 2.4, v1.5) ──
