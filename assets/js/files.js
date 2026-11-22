@@ -1,12 +1,12 @@
 // ── Project panel ─────────────────────────────────────────────────────────
 //
 // A file explorer over the sandbox's filesystem, opening on `.sbxw-artifacts/`
-// — what this repository has produced — with the code map button beside it,
+// (what this repository has produced), with the code map button beside it,
 // and a Recent view above the folders for the files an agent left elsewhere.
 // The whole filesystem is reachable, not just the deliverables: `/home/agent`,
 // a tool's cache, a log under `/tmp`. While the sandbox runs it is read through
 // `sbx exec`; stopped, the daemon falls back to the workspace on the host and
-// says so (see src/sandbox_fs.rs). Browse, preview, download — and delete,
+// says so (see src/sandbox_fs.rs). Browse, preview, download, and delete,
 // for the stray file, under the places an agent writes to (see `fxDelete`).
 const filesOverlay = document.getElementById('files-modal-overlay');
 const filesNameEl  = document.getElementById('files-modal-name');
@@ -14,12 +14,12 @@ const fxTbody      = document.getElementById('fx-tbody');
 let filesTarget = null;
 // What the last `/artifacts` fetch said this project has. Held rather than
 // passed straight to the renderer because the button repaints on its own
-// schedule too — a run starting or ending elsewhere changes what it should say
+// schedule too: a run starting or ending elsewhere changes what it should say
 // without changing a single file (see `applyCodemapRun`).
 let filesCodemap = { map: null, lenses: [], run: null };
 
 // The explorer's own state. `places` is what the daemon says this sandbox's
-// fixed favourites are — only it knows where the workspace is mounted.
+// fixed favourites are; only it knows where the workspace is mounted.
 const fx = {
   path: '',
   parent: null,
@@ -29,7 +29,7 @@ const fx = {
   offline: false,
   // The Recent view, when it is the one on screen: the daemon's newest files
   // across the workspace, the RW mounts, home and /tmp. `null` while browsing a
-  // folder. `fresh` is what the favourite's badge counts — kept apart so the
+  // folder. `fresh` is what the favourite's badge counts, kept apart so the
   // badge survives leaving the view.
   recent: null,
   fresh: null,
@@ -65,7 +65,7 @@ function fullTime(unixSecs) {
   return unixSecs ? new Date(unixSecs * 1000).toLocaleString() : '';
 }
 
-/// "4 min ago", "3 h ago", "yesterday" — for the Recent view, where how long
+/// "4 min ago", "3 h ago", "yesterday": for the Recent view, where how long
 /// ago is the whole question and a date makes you do the subtraction.
 function agoTime(unixSecs) {
   if (!unixSecs) return '—';
@@ -88,13 +88,13 @@ const fxFileUrl = (path, extra = '') =>
   fxApi('/file', `?path=${encodeURIComponent(path)}${extra}`);
 const fxJoin = (dir, name) => (dir === '/' ? '' : dir) + '/' + name;
 // A row's identity and its absolute path. Recent rows come from all over the
-// filesystem — two `notes.md` are two rows — so they are told apart by path.
+// filesystem (two `notes.md` are two rows), so they are told apart by path.
 const fxKey = (e) => e.path || e.name;
 const fxPathOf = (e) => e.path || fxJoin(fx.path, e.name);
 
 /* ── Favourites ──
-   Four are built in and always there — the deliverables folder first, since
-   that is what this panel opened onto before it was an explorer — and any
+   Four are built in and always there (the deliverables folder first, since
+   that is what this panel opened onto before it was an explorer), and any
    folder can be starred on top of them. Starred folders are a per-browser
    convenience, kept in localStorage per sandbox; storage that throws (a
    private window) just means nothing is remembered. */
@@ -174,11 +174,11 @@ function fxRenderFavourites() {
   const row = (f, removable) => `
     <div class="fx-fav${f.path === here ? ' active' : ''}${f.main ? ' main' : ''}${f.recent ? ' recent' : ''}"
          data-path="${escHtml(f.path)}"${f.select ? ` data-select="${escHtml(f.select)}"` : ''}
-         title="${escHtml(f.recent ? 'Files written in the last few days — workspace, mounts, home and /tmp'
+         title="${escHtml(f.recent ? 'Files written in the last few days: workspace, mounts, home and /tmp'
            : f.icon === 'logs' ? 'sbx-kit-startup.log (every startup command) and sbx-kits/<kit>/install-<n>.log (install hooks)'
-           : f.thread ? `Thread "${f.thread.thread}" — ${f.path}, branch sbxw/${f.thread.thread}`
-           : f.path + (f.mode === 'ro' ? ' — read-only: the agent can read it, not change it'
-                                  : f.mode === 'rw' ? ' — read-write' : ''))}">
+           : f.thread ? `Thread "${f.thread.thread}": ${f.path}, branch sbxw/${f.thread.thread}`
+           : f.path + (f.mode === 'ro' ? ' (read-only: the agent can read it, not change it)'
+                                  : f.mode === 'rw' ? ' (read-write)' : ''))}">
       ${fxFavIcon(f.icon)}
       <span class="fx-fav-name">${escHtml(f.label)}</span>
       ${f.mode ? `<span class="fx-fav-mode ${f.mode}">${f.mode === 'ro' ? 'RO' : 'RW'}</span>` : ''}
@@ -271,9 +271,9 @@ async function fxOpen(path, { push = true, select = null } = {}) {
   const ro = fx.places.mounts.find((m) => m.readonly && (fx.path === m.path || fx.path.startsWith(m.path + '/')));
   const wt = fxWorktreeOf(fx.path);
   fxNotice(fx.offline
-    ? 'This sandbox is stopped — showing its workspace from the host. Start it to browse the rest of its filesystem.'
-    : ro ? `Read-only — ${ro.path.split('/').pop()} is mounted RO: the agent can read it, not change it.`
-    : wt ? `Thread "${wt.thread}"'s worktree — branch sbxw/${wt.thread}, not in the main checkout until it is merged.`
+    ? 'This sandbox is stopped: showing its workspace from the host. Start it to browse the rest of its filesystem.'
+    : ro ? `Read-only. ${ro.path.split('/').pop()} is mounted RO: the agent can read it, not change it.`
+    : wt ? `Thread "${wt.thread}"'s worktree, branch sbxw/${wt.thread}, not in the main checkout until it is merged.`
     : '');
   document.getElementById('fx-filter').value = '';
   renderCrumbs();
@@ -324,12 +324,12 @@ const FX_README = /^readme(\.(md|markdown|txt))?$/i;
 function fxVisible() {
   const q = document.getElementById('fx-filter').value.trim().toLowerCase();
   const hidden = document.getElementById('fx-show-hidden').checked;
-  // Recent filters on the whole path — "which of these went under /tmp" — and
+  // Recent filters on the whole path ("which of these went under /tmp") and
   // ignores the dotfile toggle: a file hidden in a dot-folder is exactly the
   // one this view is for.
   if (fx.recent) return fx.entries.filter((e) => !q || e.path.toLowerCase().includes(q));
   return fx.entries.filter((e) =>
-    // Dotfiles are hidden by default — except the deliverables, and the threads'
+    // Dotfiles are hidden by default, except the deliverables, and the threads'
     // worktrees, where a thread's deliverables are until it is merged.
     (hidden || !e.name.startsWith('.') || e.name === '.sbxw-artifacts' || e.name === '.sbxw-worktrees')
     && (!q || e.name.toLowerCase().includes(q)));
@@ -363,7 +363,7 @@ function renderList() {
    scans the workspace, the RW mounts, home and /tmp, skipping .git, dependency
    and cache folders (see RECENT_PRUNE in src/sandbox_fs.rs), and answers with
    the newest files first. Shown in the same table, grouped by how long ago,
-   each with the folder it landed in — the part you could not have guessed. */
+   each with the folder it landed in: the part you could not have guessed. */
 const FX_RECENT = 'recent:';
 
 /// Where a file is, said the short way: `./` for the workspace, `~/` for home.
@@ -420,7 +420,7 @@ async function fxOpenRecent({ push = true, select = null } = {}) {
   fx.parent = null;
   fx.selected = select && fx.entries.some((e) => e.path === select) ? select : null;
   fxNotice(data.offline
-    ? 'This sandbox is stopped — only its workspace was searched. Start it to include home and /tmp.' : '');
+    ? 'This sandbox is stopped: only its workspace was searched. Start it to include home and /tmp.' : '');
   document.getElementById('fx-filter').value = '';
   document.querySelector('.fx-list').classList.add('recent');
   renderCrumbs();
@@ -432,7 +432,7 @@ async function fxOpenRecent({ push = true, select = null } = {}) {
   document.getElementById('fx-up').disabled = true;
 }
 
-/// Bucket by age, newest first — the list is already in that order.
+/// Bucket by age, newest first; the list is already in that order.
 function fxAgeGroup(unixSecs) {
   const s = Date.now() / 1000 - unixSecs;
   if (s < 3600) return 'Last hour';
@@ -471,8 +471,8 @@ function renderRecentList() {
 
 /* ── Delete ──
    The one write this panel makes: removing what an agent left where it should
-   not have. Offered only under the places an agent writes to — the workspace,
-   the read-write mounts, home and /tmp — and never on one of those itself, the
+   not have. Offered only under the places an agent writes to (the workspace,
+   the read-write mounts, home and /tmp) and never on one of those itself, the
    deliverables folder or the repository's .git. The daemon checks the same
    again, on the resolved path (see refuse_delete in src/sandbox_fs.rs); this
    copy only decides whether to show the button. Always confirmed. */
@@ -547,7 +547,7 @@ function fxShow(entry) {
   document.getElementById('fx-preview').innerHTML = `
     <div class="fx-prev-head">
       <div class="fx-prev-name">${escHtml(entry.name)}</div>
-      <div class="fx-prev-meta">${entry.kind === 'dir' ? 'Folder — Return to open it' : 'Not a regular file'}</div>
+      <div class="fx-prev-meta">${entry.kind === 'dir' ? 'Folder: Return to open it' : 'Not a regular file'}</div>
       ${fxCanDelete(fxPathOf(entry)) ? `<div class="fx-prev-actions">
         <button class="fx-copy fx-del" data-delete title="Delete it and everything in it (Del)">Delete</button></div>` : ''}
     </div>`;
@@ -556,7 +556,7 @@ function fxShow(entry) {
 /* ── Preview ──
    Read through the same endpoint as Download, capped so a click on a big log
    does not stream it into a <pre>. HTML is shown from its text in an iframe
-   with scripts and no same-origin — the file was written in the sandbox, and a
+   with scripts and no same-origin: the file was written in the sandbox, and a
    page with this tab's origin could call the daemon's API. Images go straight
    into an <img>, which runs nothing. */
 const FX_IMAGE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
@@ -567,7 +567,7 @@ const FX_HTML_MAX = 8 * 1024 * 1024;
 const FX_IMAGE_MAX = 24 * 1024 * 1024;
 
 /// Nothing selected: the preview column folds away rather than standing empty
-/// beside the list — it was a third of the panel holding one grey sentence and
+/// beside the list: it was a third of the panel holding one grey sentence and
 /// a third copy of the path. It comes back with the first selection.
 function setPreviewOpen(open) {
   document.querySelector('.fx-body').classList.toggle('no-preview', !open);
@@ -623,7 +623,7 @@ async function fxPreview(entry) {
   const html = FX_HTML.test(entry.name);
   const max = html ? FX_HTML_MAX : FX_TEXT_MAX;
   if (html && entry.size > max) {
-    body.innerHTML = '<p class="cm-empty-small">Too large to preview — download it.</p>';
+    body.innerHTML = '<p class="cm-empty-small">Too large to preview. Download it.</p>';
     return;
   }
   // Text past the cap is previewed from its head: the daemon reads only that.
@@ -634,7 +634,7 @@ async function fxPreview(entry) {
     if (!res.ok) throw new Error(await res.text());
     const head = new Uint8Array(await res.arrayBuffer());
     if (head.subarray(0, 8192).includes(0)) {
-      if (stillHere()) body.innerHTML = '<p class="cm-empty-small">Binary file — no preview.</p>';
+      if (stillHere()) body.innerHTML = '<p class="cm-empty-small">Binary file, no preview.</p>';
       return;
     }
     text = new TextDecoder('utf-8', { fatal: false }).decode(head);
@@ -660,7 +660,7 @@ async function fxPreview(entry) {
 function fxPaintSource(body, text, truncated, max, size) {
   body.classList.remove('fx-prev-md');
   body.innerHTML = `<pre class="fx-prev-text"></pre>${truncated
-    ? `<p class="cm-empty-small">First ${humanSize(max)} of ${humanSize(size)} — download it for the rest.</p>` : ''}`;
+    ? `<p class="cm-empty-small">First ${humanSize(max)} of ${humanSize(size)}. Download it for the rest.</p>` : ''}`;
   body.querySelector('pre').textContent = text;
 }
 
@@ -768,14 +768,14 @@ function fxMdFollow(body, idx) {
 ///
 /// Four states, because the button answers four different questions:
 ///
-///  - **Code map** — there is one; open it.
-///  - **Writing the map…** — a background session is writing one right now
+///  - **Code map**: there is one; open it.
+///  - **Writing the map…**: a background session is writing one right now
 ///    (see `applyCodemapRun`), so there is nothing to open and nothing to ask
 ///    for. Disabled, and the only state that is.
-///  - **Writing a lens…** — same session, different document, and the map it is
+///  - **Writing a lens…**: same session, different document, and the map it is
 ///    written from is still there to read. So it says what is happening and
 ///    stays clickable: a lens being written is no reason to lock the map away.
-///  - **Generate code map** — there is none. Enabled: a project without a map
+///  - **Generate code map**: there is none. Enabled: a project without a map
 ///    is the case where the button has the most to do.
 ///
 /// A lens counts as something to open. A project whose map was deleted but
@@ -799,18 +799,18 @@ function renderCodemapButton() {
   const lensNote = n ? ` · ${n} lens${n === 1 ? '' : 'es'}` : '';
   btn.title = writing
     ? `${filesTarget} is writing ${lens ? 'a lens' : 'its map'} in a background session, started `
-      + `${humanTime(Math.round(run.started / 1000))} — it takes a few minutes`
+      + `${humanTime(Math.round(run.started / 1000))}; it takes a few minutes`
       + (lens && readable ? ' · the map is readable meanwhile' : '')
     : map
-      ? `Open the code map — ${map.files} file${map.files === 1 ? '' : 's'} under `
+      ? `Open the code map: ${map.files} file${map.files === 1 ? '' : 's'} under `
         + `.sbxw-artifacts/${map.dir}/, updated ${humanTime(map.modified)}${lensNote}`
       : n
         ? `Open ${n} lens${n === 1 ? '' : 'es'} under .sbxw-artifacts/codemap-lenses/ `
-          + '— the map they were written from is gone'
+          + '(the map they were written from is gone)'
         : run?.phase === 'failed'
-          ? `No code map yet — the last attempt ended: ${run.note || 'without one'}. `
+          ? `No code map yet. The last attempt ended: ${run.note || 'without one'}. `
             + 'Click to try again.'
-          : 'No code map yet — write one with this sandbox\'s agent, in the background';
+          : 'No code map yet. Write one with this sandbox\'s agent, in the background';
 }
 
 /// Ask this sandbox to write its map, and let the daemon paint the rest.
@@ -824,7 +824,7 @@ async function generateCodemap(name) {
     const res = await fetch(`/api/sandboxes/${encodeURIComponent(name)}/codemap`, { method: 'POST' });
     const data = await res.json();
     if (!data.ok) { showToast(data.error || 'sbxw could not start that', 'error'); return; }
-    showToast(`“${name}” is writing its code map — this takes a few minutes`);
+    showToast(`“${name}” is writing its code map. This takes a few minutes`);
   } catch (_) {
     showToast('Could not reach sbxw', 'error');
   }
@@ -832,8 +832,8 @@ async function generateCodemap(name) {
 
 /// Reload the project panel if it is the one showing `name`.
 ///
-/// What this project *has* changes from outside the panel — a map finishing is
-/// files appearing under `.sbxw-artifacts/` with nobody in this tab involved —
+/// What this project *has* changes from outside the panel (a map finishing is
+/// files appearing under `.sbxw-artifacts/` with nobody in this tab involved),
 /// so the panel re-reads rather than being told what changed.
 function refreshFilesModal(name) {
   if (filesTarget !== name || !filesOverlay.open) return;
@@ -852,7 +852,7 @@ async function fetchCodemapState(name) {
     const data = await res.json();
     if (filesTarget !== name) return;
     filesCodemap = { map: data.codemap || null, lenses: data.lenses || [], run: data.run || null };
-    // The panel may be the first thing in this tab to hear about a run — it is
+    // The panel may be the first thing in this tab to hear about a run: it is
     // opened by name, while the stream only reports changes. Seeded, so a map
     // that finished before this tab existed is not announced as news.
     if (data.run) applyCodemapRun(data.run, true);
@@ -909,7 +909,7 @@ function closeFilesModal() { filesOverlay.close(); filesTarget = null; fx.seq++;
 document.getElementById('files-modal-codemap').addEventListener('click', () => {
   if (!filesTarget) return;
   const sandbox = filesTarget;
-  // Nothing to read yet: ask for one instead, and leave the panel open — the
+  // Nothing to read yet: ask for one instead, and leave the panel open; the
   // button becomes the run's own status line a moment later.
   if (!filesCodemap.map && !filesCodemap.lenses.length) { generateCodemap(sandbox); return; }
   closeFilesModal();
@@ -1001,8 +1001,8 @@ fxTbody.addEventListener('dblclick', (e) => {
   fxDownload(entry);
 });
 
-// The list as one keyboard widget. Arrows walk the visible rows — previewing
-// files as they go, so reading through a folder is a matter of holding ↓ —
+// The list as one keyboard widget. Arrows walk the visible rows (previewing
+// files as they go, so reading through a folder is a matter of holding ↓),
 // Return acts on the selection, Backspace goes up a level.
 document.getElementById('fx-list-wrap').addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1076,6 +1076,6 @@ document.getElementById('fx-preview').addEventListener('click', (e) => {
       () => showToast('Path copied'),
       () => showToast('Could not copy the path', 'error'));
   } else {
-    showToast('Clipboard needs localhost or HTTPS — select the path and copy it', 'error');
+    showToast('Clipboard needs localhost or HTTPS: select the path and copy it', 'error');
   }
 });

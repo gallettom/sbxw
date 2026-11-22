@@ -16,7 +16,7 @@ let selectedPath = '';
 // where the sandbox runs, defaulting to the host picked last time in this
 // browser. On a remote host the folder browser lists that host's folders
 // (`/api/fs?host=`), and a git URL can be cloned there instead; what is only
-// this machine's — starred folders, the native picker, kit folders — is hidden.
+// this machine's (starred folders, the native picker, kit folders) is hidden.
 const hostField = document.getElementById('host-field');
 const inpHost   = document.getElementById('inp-host');
 const gitRow    = document.getElementById('git-url-row');
@@ -35,7 +35,7 @@ function fillHostField() {
   try { last = localStorage.getItem(CREATE_HOST_KEY) || 'local'; } catch (_) {}
   inpHost.innerHTML = [`<option value="local">local (this machine)</option>`]
     .concat(remoteHosts.map(h => {
-      const state = h.link === 'up' ? '' : h.link === 'down' ? ' — down' : ' — not connected yet';
+      const state = h.link === 'up' ? '' : h.link === 'down' ? ', down' : ', not connected yet';
       return `<option value="${escHtml(h.name)}">${escHtml(h.name)} (${escHtml(h.address)}${state})</option>`;
     })).join('');
   inpHost.value = remoteHosts.some(h => h.name === last) ? last : 'local';
@@ -67,7 +67,7 @@ inpHost.addEventListener('change', () => {
 // Developers keep their projects under one or two roots, so the picker opening
 // at $HOME every time costs the same three clicks to reach a folder they will
 // pick again tomorrow. Starring a root turns that into one click and leaves the
-// browser doing the part that genuinely differs — choosing the subfolder.
+// browser doing the part that genuinely differs: choosing the subfolder.
 //
 // The list lives on the host (`~/.sbxw/state/favourites.json`), not in this
 // browser: it names directories on *that machine*, so it has to survive a
@@ -85,7 +85,7 @@ function renderFavourites() {
   fsFavsEl.innerHTML = favourites.map(f => `
     <button type="button" class="fs-fav${f.missing ? ' missing' : ''}"
             data-fav-path="${escHtml(f.path)}"
-            title="${escHtml(f.missing ? f.path + ' — not found right now' : f.path)}">
+            title="${escHtml(f.missing ? f.path + ' (not found right now)' : f.path)}">
       <span class="fs-fav-star">★</span>${escHtml(f.name)}
     </button>`).join('');
 }
@@ -105,7 +105,7 @@ async function loadFavourites() {
  * Star or unstar `path`, from the row it belongs to.
  *
  * Starring is on the *rows* rather than on the path bar because you star a root
- * you are about to browse *into* — `~/dev`, not the project inside it. On the
+ * you are about to browse *into*: `~/dev`, not the project inside it. On the
  * path bar that meant entering a folder just to pin it, then going back out;
  * from the row it is one click on something already on screen.
  */
@@ -122,7 +122,7 @@ async function toggleFavourite(path) {
   }
 }
 
-// A chip jumps the browser into that folder — the subfolder list below is the
+// A chip jumps the browser into that folder; the subfolder list below is the
 // point, so this browses *into* it rather than selecting it outright.
 fsFavsEl.addEventListener('click', ev => {
   const path = ev.target.closest('[data-fav-path]')?.dataset.favPath;
@@ -133,7 +133,7 @@ fsFavsEl.addEventListener('click', ev => {
 //
 // A workspace is often one repo of several (`~/dev/shop/{backend,frontend}`),
 // and the agent needs the others beside it: to read a contract, or to change
-// both sides at once. The first repo is the workspace — always read-write,
+// both sides at once. The first repo is the workspace: always read-write,
 // threads put their worktrees in it; each other one is mounted beside it at
 // the same path, read-only unless switched. Nothing added means the folder
 // browsed to, alone, as before.
@@ -154,7 +154,7 @@ function toggleRepo(path) {
 }
 
 // sbx shares a directory once: a repo inside another is reached through the
-// outer mount, with its mode — so an RO one inside the workspace is writable.
+// outer mount, with its mode, so an RO one inside the workspace is writable.
 // The server refuses the pair; this says so before anyone presses Create.
 function nestedRepos() {
   const inside = (a, b) => a.startsWith(b.endsWith('/') ? b : b + '/');
@@ -644,15 +644,15 @@ function renderFsList() {
     html += '<div class="fs-empty">No subdirectories</div>';
   }
   // The star is a button *inside* the row: the row itself browses, the star
-  // pins. Rendered on every row rather than on hover only — a control nobody
-  // can see is a feature nobody finds — but dimmed until starred or hovered.
+  // pins. Rendered on every row rather than on hover only (a control nobody
+  // can see is a feature nobody finds), but dimmed until starred or hovered.
   html += fsListing.entries.map(e => {
     const on = isFavourite(e.path);
     const added = hasRepo(e.path);
     // Starring is for this machine's folders (the list lives here).
     const star = createRemote() || carvePick ? '' : `<button type="button" class="fs-row-star${on ? ' on' : ''}"
                data-star-path="${escHtml(e.path)}" aria-pressed="${on}"
-               title="${on ? 'Unstar this folder' : 'Star this folder — pins it as a shortcut above'}"
+               title="${on ? 'Unstar this folder' : 'Star this folder: pins it as a shortcut above'}"
        >${on ? '★' : '☆'}</button>`;
     return `<div class="fs-item" data-path="${escHtml(e.path)}">
        <span class="fs-icon">📁</span>
@@ -670,7 +670,7 @@ function renderFsList() {
 
 // Which navigation is the current one. Clicking from one favourite to another
 // starts a second read before the first has answered, and the responses can
-// come back in either order — without this, the slower one wins and you land
+// come back in either order; without this, the slower one wins and you land
 // somewhere you didn't click last.
 let browseSeq = 0;
 
@@ -683,7 +683,7 @@ async function browseTo(path) {
   const seq = ++browseSeq;
   // Deliberately *not* blanking the list: replacing it with a one-line
   // "Loading…" collapsed the box from its full height to a single row and back
-  // on every navigation, which the modal followed — the jump you see switching
+  // on every navigation, which the modal followed: the jump you see switching
   // between two favourites. The folders already on screen stay put until the
   // new ones are ready to take their place.
   const slow = setTimeout(() => {
@@ -742,9 +742,9 @@ fsList.addEventListener('click', ev => {
 function validateForm() {
   const name = inpName.value.trim();
   // Creating under a taken name would reuse that sandbox, its folders and all
-  // — never what this dialog's repos asked for.
+  // (never what this dialog's repos asked for).
   const taken = sandboxes.some(s => s.name === createRef(name));
-  if (taken) showNote(nameErrEl, `“${createRef(name)}” already exists — pick another name`);
+  if (taken) showNote(nameErrEl, `“${createRef(name)}” already exists; pick another name`);
   const nameOk = !taken && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name);
   const pathOk = repos.length > 0 || selectedPath.length > 0 || (createRemote() && inpGitUrl.value.trim().length > 0);
   btnCreate.disabled = !(nameOk && pathOk) || !!nestedRepos() || carveBlocked();
@@ -762,7 +762,7 @@ function normalizeNameInput() {
     el.setSelectionRange(pos, pos);
   }
   nameErrEl.textContent = hadInvalidChars
-    ? 'Lowercase letters, digits, and hyphens only — must start and end with a letter or digit'
+    ? 'Lowercase letters, digits, and hyphens only; must start and end with a letter or digit'
     : '';
   nameErrEl.classList.toggle('hidden', !hadInvalidChars);
   inpName.classList.remove('error');
@@ -775,7 +775,7 @@ inpGitUrl.addEventListener('input', validateForm);
 // ── Which kind of sandbox? ────────────────────────────────────────────────
 // The sidebar's ＋ is the single way in: it opens the chooser, and the chooser
 // opens one of the two wizards. Two buttons sitting side by side made the
-// choice before it was explained — an emoji is a poor place to learn that one
+// choice before it was explained: an emoji is a poor place to learn that one
 // of them mounts your code and the other deliberately does not.
 const kindOverlay = document.getElementById('kind-modal-overlay');
 
@@ -786,7 +786,7 @@ document.getElementById('btn-new-sandbox').addEventListener('click', openKindMod
 document.getElementById('kind-modal-close').addEventListener('click', closeKindModal);
 wireModal(kindOverlay, closeKindModal);
 
-// Alt+N (⌃⌥N on a Mac, see isAppShortcut) opens the chooser from anywhere —
+// Alt+N (⌃⌥N on a Mac, see isAppShortcut) opens the chooser from anywhere;
 // Ctrl/⌘+N belongs to the browser and cannot be taken. Listened for on window in the capture phase because xterm
 // stops the keydowns it handles, and the point is to work from a terminal pane.
 // Not while another dialog is open: one modal stacked on another is the bug.
@@ -798,7 +798,7 @@ window.addEventListener('keydown', e => {
   openKindModal();
 }, true);
 
-// Each card hands straight over to that kind's own modal — the chooser is a
+// Each card hands straight over to that kind's own modal; the chooser is a
 // signpost, not a step you have to confirm your way out of.
 document.getElementById('kind-workspace').addEventListener('click', () => {
   closeKindModal();
@@ -820,13 +820,13 @@ document.getElementById('chat-modal-back').addEventListener('click', () => {
 });
 
 // ── Host monitor ──────────────────────────────────────────────────────────
-// One PTY on the host running `monitor_cmd`, shared by every viewer — not a
+// One PTY on the host running `monitor_cmd`, shared by every viewer: not a
 // sandbox session, and deliberately not a general "run something on the host"
 // pane: the daemon binds to localhost, and one fixed configured command is a
 // far smaller thing to expose than a shell.
 //
 // The button sits at the foot of the sidebar, under the list: it shows every
-// sandbox at once, which is the whole of what that column is about — and it
+// sandbox at once, which is the whole of what that column is about, and it
 // stays put there while the list above it scrolls.
 //
 // It opens in a modal nearly the size of the window, not in a pane: a TUI
@@ -877,7 +877,7 @@ function closeMonitor() {
 
 if (MONITOR_CMD) {
   btnMonitor.hidden = false;
-  btnMonitor.title = `Host monitor — runs \`${MONITOR_CMD}\` in a large window`;
+  btnMonitor.title = `Host monitor: runs \`${MONITOR_CMD}\` in a large window`;
   document.getElementById('monitor-cmd').textContent = MONITOR_CMD;
   btnMonitor.addEventListener('click', () =>
     !monitorOverlay.open ? openMonitor() : closeMonitor());
@@ -890,7 +890,7 @@ if (MONITOR_CMD) {
 
 // ── Chat sandbox: an agent on an empty temp folder (no code access) ────────
 // Spins up a throwaway sandbox whose workspace is a fresh temp dir, so the
-// agent has nothing to read or edit — a pure chat. The name is optional: the
+// agent has nothing to read or edit: a pure chat. The name is optional: the
 // modal pre-computes a `chat-xxxxxx` one and uses it when the field is left
 // empty, so the pending card always matches the sandbox the server creates.
 // Provisioned in the background like a normal create (corner card +
@@ -918,14 +918,14 @@ function openChatModal() {
 function closeChatModal() { chatOverlay.close(); }
 
 // Empty is valid (the suggestion is used); a typed name has to be well-formed
-// and free — provisioning an existing name would adopt that sandbox instead of
+// and free: provisioning an existing name would adopt that sandbox instead of
 // starting a chat.
 function validateChatForm() {
   const name = chatInpName.value.trim();
   if (!name) { chatNameErr.classList.add('hidden'); chatConfirm.disabled = false; return; }
   const taken = sandboxes.some(s => s.name === name);
   if (taken) {
-    showNote(chatNameErr, `“${name}” already exists — pick another name`);
+    showNote(chatNameErr, `“${name}” already exists; pick another name`);
   }
   chatConfirm.disabled = taken || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name);
 }
@@ -942,7 +942,7 @@ chatInpName.addEventListener('input', () => {
     el.setSelectionRange(pos, pos);
   }
   chatNameErr.textContent = hadInvalidChars
-    ? 'Lowercase letters, digits, and hyphens only — must start and end with a letter or digit'
+    ? 'Lowercase letters, digits, and hyphens only; must start and end with a letter or digit'
     : '';
   chatNameErr.classList.toggle('hidden', !hadInvalidChars);
   chatInpName.classList.remove('error');
@@ -1013,7 +1013,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
   closeModal();
 
   (async () => {
-    // Shown as a corner card, where every other job running behind you is —
+    // Shown as a corner card, where every other job running behind you is;
     // the sandbox list is for sandboxes that exist, and this one does not yet.
     addPendingSandbox(name);
     try {
@@ -1031,7 +1031,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
         // flags it ready in the list with a blue dot for a manual connect.
         attachToEmptyPaneOrMarkReady(name);
         await loadSandboxes();
-        // The sandbox is up even when something beside it did not work — an
+        // The sandbox is up even when something beside it did not work: an
         // /etc/hosts alias needing a password nobody could type is the usual
         // one. The toast holds a single message, so the warning replaces the
         // success line rather than being pushed off by it; the last warning is
@@ -1039,9 +1039,9 @@ document.getElementById('modal-create').addEventListener('click', async () => {
         const warnings = Array.isArray(data.warnings) ? data.warnings : [];
         showToast(
           warnings.length
-            ? `Sandbox “${name}” is ready — ⚠ ${warnings[warnings.length - 1]}`
+            ? `Sandbox “${name}” is ready: ⚠ ${warnings[warnings.length - 1]}`
             : remote_control
-              ? `Sandbox “${name}” is ready — press Remote in its pane (before sbx 0.53: /login there first)`
+              ? `Sandbox “${name}” is ready. Press Remote in its pane (before sbx 0.53: /login there first)`
               : `Sandbox “${name}” is ready`,
           warnings.length ? 'error' : 'ok');
       } else {
