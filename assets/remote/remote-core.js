@@ -170,8 +170,13 @@ function rcRows(items) {
     const at = Number(it.at) || 0;
     let row = null;
     if (kind === 'user_prompt') {
-      const files = rcFiles(it.files);
-      if (text || files.length) row = files.length ? { kind: 'me', text, files } : { kind: 'me', text };
+      const pairs = rcFilePairs(it.files, it.images);
+      const files = pairs.map(f => f.name);
+      if (text || files.length) {
+        row = files.length ? { kind: 'me', text, files } : { kind: 'me', text };
+        // Kept copies of the images sent (`/r/sent/:id`), one per file, '' when none.
+        if (pairs.some(f => f.id)) row.images = pairs.map(f => f.id);
+      }
     }
     else if (kind === 'assistant_text' && text) row = { kind: 'agent', text };
     else if (kind === 'injected' && text) {
@@ -204,6 +209,70 @@ function rcFiles(list) {
     .slice(0, RC_FILES_MAX);
 }
 
+// A kept image's id: 32 hex, as the Mac writes it; nothing else is a URL.
+const RC_SENT_ID = /^[0-9a-f]{32}$/;
+const rcSentSrc = src => typeof src === 'string' && /^\/r\/sent\/[0-9a-f]{32}$/.test(src);
+const rcSentId = id => (typeof id === 'string' && RC_SENT_ID.test(id) ? id : '');
+// The files of a prompt with the kept image of each (`images` is parallel to
+// `files` as the Mac sent them): the same cleaning as rcFiles, the two lists
+// kept in step.
+function rcFilePairs(list, images) {
+  if (!Array.isArray(list)) return [];
+  const ids = Array.isArray(images) ? images : [];
+  const out = [];
+  list.forEach((f, i) => {
+    if (typeof f !== 'string') return;
+    const name = f.split(/[\\/]/).pop();
+    if (name) out.push({ name, id: rcSentId(ids[i]) });
+  });
+  return out.slice(0, RC_FILES_MAX);
+}
+// What a row shows for each file: a thumbnail of the kept image (`src`), else
+// the name chip (`src` null: not an image, or past its 7 days, or a page that
+// has no copy).
+function rcThumbs(row) {
+  const ids = Array.isArray(row?.images) ? row.images : [];
+  return rcFiles(row?.files).map((name, i) => {
+    const id = rcSentId(ids[i]);
+    return { name, src: id ? `/r/sent/${id}` : null };
+  });
+}
+function rcChipEl(doc, name) {
+  const chip = doc.createElement('span');
+  chip.className = 'rc-file';
+  chip.textContent = name;
+  chip.title = name;
+  return chip;
+}
+// A thumbnail: a button (opens the picture full screen) holding the image,
+// loaded lazily, 120px at most (the style). A picture that fails to load
+// (the 7 days ran out, the Mac is away) turns back into the name chip.
+function rcThumbEl(doc, t) {
+  const b = doc.createElement('button');
+  b.className = 'rc-thumb';
+  b.type = 'button';
+  b.title = t.name;
+  b.dataset = b.dataset || {};
+  b.dataset.src = t.src;
+  b.dataset.name = t.name;
+  if (b.setAttribute) b.setAttribute('aria-label', `Open ${t.name}`);
+  const img = doc.createElement('img');
+  img.className = 'rc-thumb-img';
+  img.alt = t.name;
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  img.draggable = false;
+  img.src = t.src;
+  if (img.addEventListener) {
+    img.addEventListener('error', () => {
+      const chip = rcChipEl(doc, t.name);
+      if (b.replaceWith) b.replaceWith(chip);
+    });
+  }
+  b.append(img);
+  return b;
+}
+
 // The person's bubble: the text, then one small chip per file. Every name
 // is set as text (textContent), never as markup.
 function rcMeEl(doc, row) {
@@ -215,17 +284,11 @@ function rcMeEl(doc, row) {
     t.textContent = row.text;
     d.append(t);
   }
-  const files = rcFiles(row.files);
+  const files = rcThumbs(row);
   if (files.length) {
     const box = doc.createElement('div');
     box.className = 'rc-files';
-    for (const name of files) {
-      const chip = doc.createElement('span');
-      chip.className = 'rc-file';
-      chip.textContent = name;
-      chip.title = name;
-      box.append(chip);
-    }
+    for (const f of files) box.append(f.src ? rcThumbEl(doc, f) : rcChipEl(doc, f.name));
     d.append(box);
   }
   if (row.pending) {

@@ -10,6 +10,7 @@
 //! and journal entries name a device and a size class.
 
 use super::remote_access::{DeviceCtx, Reason, Refusal};
+use super::remote_sent::{Sent, SentStore};
 use crate::app::{now_ms, App};
 use axum::body::Bytes;
 use futures_util::{Stream, StreamExt};
@@ -204,9 +205,37 @@ impl App {
 
     /// The message was submitted: its ids are spent, their spool files go.
     pub(crate) fn remote_spend_attachments(&self, ids: &[String]) {
+        let (gone, dir) = {
+            let mut rt = self.remote_access.lock().unwrap();
+            (rt.uploads.spend(ids), rt.dir().to_path_buf())
+        };
+        // Keep a copy of each image before its spool goes (the copy runs
+        // outside the lock: a file can be 25 MiB).
+        let now = now_ms();
+        let kept: Vec<Sent> = gone
+            .iter()
+            .filter_map(|u| SentStore::copy_in(&dir, &dir.join(SPOOL_DIR).join(&u.spool), &u.device_id, &u.sandbox, u.copied.as_deref()?, now))
+            .collect();
         let mut rt = self.remote_access.lock().unwrap();
-        let gone = rt.uploads.spend(ids);
+        for s in kept {
+            // Revoked while the copy ran: not kept.
+            if rt.has_device(&s.device_id) {
+                rt.sent.add(s);
+            } else {
+                let _ = std::fs::remove_file(rt.sent.dir().join(format!("{}.{}", s.id, s.kind.ext())));
+            }
+        }
         remove_spools(rt.dir(), gone);
+    }
+
+    /// `GET /r/sent/:id`: the bytes of an image this device sent, and its
+    /// content type. Not found for another device's id, an unknown or an
+    /// expired one, or a sandbox that is not reachable now.
+    pub async fn remote_sent_image(&self, d: &DeviceCtx, id: &str) -> Result<(Vec<u8>, &'static str), Refusal> {
+        let (sandbox, path, mime) = self.remote_access.lock().unwrap().sent.get(&d.id, id, now_ms()).ok_or(Refusal::NotFound)?;
+        self.remote_target(&sandbox)?;
+        let bytes = tokio::fs::read(path).await.map_err(|_| Refusal::NotFound)?;
+        Ok((bytes, mime))
     }
 
     /// Unsent uploads past their life go, with their spool files.
@@ -217,6 +246,7 @@ impl App {
             tracing::info!("remote access: {} unsent upload(s) expired", gone.len());
         }
         remove_spools(rt.dir(), gone);
+        rt.sent.expire(now_ms());
     }
 
     /// Tests: how many uploads wait, and the spool folder.
@@ -224,6 +254,19 @@ impl App {
     pub(crate) fn remote_uploads_for_tests(&self) -> (usize, std::path::PathBuf) {
         let rt = self.remote_access.lock().unwrap();
         (rt.uploads.len(), rt.dir().join(SPOOL_DIR))
+    }
+
+    /// Tests: how many images are kept, and the folder they sit in.
+    #[cfg(test)]
+    pub(crate) fn remote_sent_for_tests(&self) -> (usize, std::path::PathBuf) {
+        let rt = self.remote_access.lock().unwrap();
+        (rt.sent.len(), rt.sent.dir().to_path_buf())
+    }
+
+    /// Tests: every kept image `by_ms` older.
+    #[cfg(test)]
+    pub(crate) fn remote_sent_age_for_tests(&self, by_ms: u64) {
+        self.remote_access.lock().unwrap().sent.age_all(by_ms);
     }
 
     /// Tests: every waiting upload `by_ms` older; a shorter chunk gap.

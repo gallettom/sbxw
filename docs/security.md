@@ -420,7 +420,7 @@ does the same as a revoke.
 | See the canvases of a sandbox it reaches (the screenshots its agent posted, their titles and notes masked by your anonymise rules), add, change or remove pins and notes on shots (masked like a message), and send the round: the daemon types the same fixed line the Mac does, under the message gate (see "The canvas on the phone") | See a canvas of a thread, Jarvis, a stopped sandbox or a sandbox it does not reach; see or add an example picture; move, rename or delete a canvas; change a remark already sent; send a round that holds example pictures added on the Mac |
 | Read the plan usage (the 5-hour and 7-day percentages and when they reset; `GET /r/usage`, the same numbers the Mac shows, no other field, nothing journaled) | Change or refresh it: the route only reads what the daemon already holds |
 | Dictate (the Mac transcribes; the text comes back to the phone to correct) | Touch secrets, the GitHub token, network rules, ports, kits, MCP servers, configuration, the relay, Jarvis, the daemon |
-| Hand a file to a leader (a photo, a PDF, a text): up to 25 MB each, at most 5 waiting (60 MB together) per leader; it reaches the sandbox only with a message you send, under `/tmp/sbxw-uploads/`; an unsent one is deleted after 30 minutes (see "What a file can do") | Send a program or an archive (refused by their first bytes); read a file back, list the uploads folder or learn any path; hand a file to anything but a running team leader; have a file typed or opened by the upload itself |
+| Hand a file to a leader (a photo, a PDF, a text): up to 25 MB each, at most 5 waiting (60 MB together) per leader; it reaches the sandbox only with a message you send, under `/tmp/sbxw-uploads/`; an unsent one is deleted after 30 minutes (see "What a file can do") | Send a program or an archive (refused by their first bytes); read a file back (other than an image it sent itself, within 7 days), list the uploads folder or learn any path; hand a file to anything but a running team leader; have a file typed or opened by the upload itself |
 
 These limits are enforced by the daemon, not by the page: the routes for everything in
 the right column do not exist on the remote listener at all.
@@ -495,6 +495,17 @@ A file from the phone is data handed to a leader, never an action:
   text typed, Return last. A file is copied only if the leader takes a message at that
   moment. The handle is spent only once the Return is sent; if the message is refused or
   not sent, the handle stays usable for a retry (a file already copied is not copied again).
+- **Images sent from the phone are kept 7 days on the Mac.** When the Return is sent, the
+  daemon keeps a copy of each PNG, JPEG or WebP (judged by its first bytes, never its name)
+  in `~/.sbxw/remote/sent/`, so the phone's conversation can show a thumbnail of what it
+  sent. Folder `0700`, files `0600`, random names; an `index.json` beside them says which
+  phone sent each image, to which leader, and where it sat in the sandbox. A copy goes after
+  7 days, when the 500 MB cap is passed (oldest first), when that phone is revoked or logs
+  out, or when remote access is turned off. Only the phone that sent an image can read it
+  back (`GET /r/sent/<id>`, `Cache-Control: no-store, private`), and only while that leader
+  is reachable; another phone's id, an unknown one and an expired one all answer 404. Other
+  kinds of file (PDF, text) are not kept: the conversation shows their name only. Nothing
+  else in the list above changes: the phone still cannot list the folder or learn a path.
 - **Its name is the daemon's.** The phone's name is only a hint: the daemon keeps its last
   part, turns every character outside `A-Z a-z 0-9 . _ -` into `_` (so no space, control,
   invisible or look-alike character), drops leading dots (no hidden file, no `..`), keeps

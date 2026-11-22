@@ -28,6 +28,11 @@ pub struct PhoneItem {
     /// (the history keeps no path; `no_upload_paths` once more all the same).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<String>,
+    /// For `kind: "user_prompt"` with files: per file, parallel to `files`,
+    /// the id of the kept copy of an image (`GET /r/sent/:id`), else `""`.
+    /// Absent when no file has one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
     /// For `kind: "steps"`: how many tool calls the run held.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<u32>,
@@ -107,11 +112,17 @@ pub struct PhonePage {
 }
 
 fn plain(it: &Item, kind: &'static str) -> PhoneItem {
-    PhoneItem { seq: it.seq, at: it.at, kind, text: String::new(), from: None, steps: None, files: Vec::new(), count: None, clipped: false, provisional: false, first_seq: it.seq }
+    PhoneItem { seq: it.seq, at: it.at, kind, text: String::new(), from: None, steps: None, files: Vec::new(), images: Vec::new(), count: None, clipped: false, provisional: false, first_seq: it.seq }
 }
 
 /// The phone's copy of `page`. `after`: only items past that seq.
 pub fn phone_page(page: &Page, after: Option<u64>) -> PhonePage {
+    phone_page_with(page, after, &|_, _| None)
+}
+
+/// [`phone_page`], with `kept(ms, name)` naming the kept image of a file the
+/// person sent (`ms` is its upload folder's name, `name` its base name).
+pub fn phone_page_with(page: &Page, after: Option<u64>, kept: &dyn Fn(u64, &str) -> Option<String>) -> PhonePage {
     let mut items: Vec<PhoneItem> = Vec::new();
     let mut run: Option<PhoneItem> = None;
     for it in page.items.iter().filter(|i| after.is_none_or(|a| i.seq > a)) {
@@ -142,6 +153,14 @@ pub fn phone_page(page: &Page, after: Option<u64>) -> PhonePage {
             Kind::UserPrompt => PhoneItem {
                 text: no_upload_paths(&it.text),
                 files: it.files.iter().map(|f| no_upload_paths(f)).collect(),
+                images: {
+                    let ids: Vec<String> = it.files.iter().enumerate().map(|(i, f)| it.file_ms.get(i).and_then(|ms| kept(*ms, f)).unwrap_or_default()).collect();
+                    if ids.iter().all(String::is_empty) {
+                        Vec::new()
+                    } else {
+                        ids
+                    }
+                },
                 clipped: it.clipped,
                 ..plain(it, "user_prompt")
             },
@@ -222,6 +241,7 @@ mod tests {
             from: None,
             steps: None,
             files: Vec::new(),
+            file_ms: Vec::new(),
             clipped: false,
             provisional: false,
             message: false,
@@ -291,6 +311,20 @@ mod tests {
         assert_eq!(out.items[0].files, ["IMG_1838.png", "x.txt"]);
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains(r#""files":["IMG_1838.png","x.txt"]"#) && json.matches("\"files\"").count() == 1, "{json}");
+    }
+
+    #[test]
+    fn a_prompt_names_the_kept_image_of_each_file() {
+        let mut me = item(1, Kind::UserPrompt, "look");
+        me.files = vec!["a.png".into(), "b.txt".into(), "a.png".into()];
+        me.file_ms = vec![5, 5, 6];
+        let kept = |ms: u64, n: &str| (n == "a.png" && ms == 6).then(|| "ID6".to_string());
+        let out = phone_page_with(&page(vec![me.clone()]), None, &kept);
+        assert_eq!(out.items[0].images, ["", "", "ID6"]);
+        assert!(serde_json::to_string(&out).unwrap().contains(r#""images":["","","ID6"]"#));
+        let none = phone_page(&page(vec![me]), None);
+        assert!(none.items[0].images.is_empty());
+        assert!(!serde_json::to_string(&none).unwrap().contains("images"));
     }
 
     #[test]
