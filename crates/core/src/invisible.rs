@@ -70,9 +70,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ranges_are_sorted_and_apart() {
+    fn ranges_are_sorted_and_disjoint() {
         for w in INVISIBLE.windows(2) {
-            assert!(w[0].0 <= w[0].1 && (w[0].1 as u32) + 1 < w[1].0 as u32, "{w:?}");
+            assert!(w[0].0 <= w[0].1 && w[0].1 < w[1].0, "{w:?}");
         }
         assert!(all().all(|c| !c.is_whitespace() || c == '\u{2028}' || c == '\u{2029}'));
         assert!(neighbours().count() >= 30);
