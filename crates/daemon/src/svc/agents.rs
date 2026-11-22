@@ -117,11 +117,14 @@ impl App {
     /// `claude_model`, else the daemon's, else the first of the models list.
     /// Only for Claude: sbxw starts no other agent on a model it chose.
     pub fn fill_model(&self, info: &mut SessionInfo) {
-        if info.model.is_some() || info.agent != "claude" {
-            return;
+        if let Some(sb) = needs_model(info) {
+            self.fill_model_from(info, &self.store.get(sb));
         }
-        let Ok(sb) = SandboxRef::parse(&info.sandbox) else { return };
-        let rec = self.store.get(sb);
+    }
+
+    /// [`Self::fill_model`] for a session that needs it, from its sandbox's
+    /// record `rec`.
+    fn fill_model_from(&self, info: &mut SessionInfo, rec: &crate::store::SandboxRecord) {
         let thread = info.thread.as_ref().and_then(|t| rec.threads.get(t)).and_then(|r| r.model.clone());
         let (id, name) = self.configured_model(rec.config_snapshot.as_deref(), thread);
         info.model = id;
@@ -183,8 +186,14 @@ impl App {
             },
             now_ms(),
         );
+        // One record read per sandbox, not per session: a sandbox's threads
+        // share its record (a read parses its whole config snapshot).
+        let mut recs: std::collections::HashMap<SandboxRef, crate::store::SandboxRecord> = std::collections::HashMap::new();
         for info in &mut infos {
-            self.fill_model(info);
+            if let Some(sb) = needs_model(info) {
+                let rec = recs.entry(sb).or_insert_with_key(|sb| self.store.get(sb));
+                self.fill_model_from(info, rec);
+            }
         }
         infos
     }
@@ -245,6 +254,15 @@ impl App {
             None => false,
         }
     }
+}
+
+/// The sandbox whose record fills `info`'s model: a Claude session that
+/// reported none (see [`App::fill_model`]).
+fn needs_model(info: &SessionInfo) -> Option<SandboxRef> {
+    if info.model.is_some() || info.agent != "claude" {
+        return None;
+    }
+    SandboxRef::parse(&info.sandbox).ok()
 }
 
 #[cfg(test)]
@@ -366,5 +384,43 @@ mod tests {
         app.report_session_model(&sb, "spare", sbxw_core::agents::ModelReport::new(Some("claude-haiku-5-5"), Some("Haiku 5.5")).unwrap());
         let (id, _) = app.main_model("sbxw-2", "claude", &app.session_infos());
         assert_ne!(id.as_deref(), Some("claude-haiku-5-5"));
+    }
+
+    /// Sessions that reported no model, several to a sandbox: each gets its
+    /// own, from its sandbox's record (its thread's model, else the
+    /// snapshot's), and a sandbox's record never fills another's.
+    #[test]
+    fn session_infos_fill_each_sessions_model_from_its_own_record() {
+        let (_d, app) = app();
+        let a = SandboxRef::parse("a").unwrap();
+        let b = SandboxRef::parse("b").unwrap();
+        for (sb, main) in [(&a, "model-a"), (&b, "model-b")] {
+            app.store
+                .update(sb, |r| {
+                    r.config_snapshot = Some(Box::new(sbxw_core::config::Config { claude_model: main.into(), ..Default::default() }));
+                    r.threads.insert("t1".into(), crate::store::ThreadRecord { repo: ".".into(), model: Some(format!("{main}-t1")), same_worktree: false });
+                    r.threads.insert("t2".into(), crate::store::ThreadRecord { repo: ".".into(), model: None, same_worktree: false });
+                })
+                .unwrap();
+        }
+        for sb in [&a, &b] {
+            app.ingest_hook(sb, json!({"hook_event_name": "SessionStart", "session_id": format!("{sb}-main"), "hook_version": 2}));
+            for t in ["t1", "t2"] {
+                app.ingest_hook(sb, json!({"hook_event_name": "SessionStart", "session_id": format!("{sb}-{t}"), "sbxw_thread": t, "hook_version": 2}));
+            }
+        }
+        let infos = app.session_infos();
+        let model = |sid: &str| infos.iter().find(|i| i.session_id.as_deref() == Some(sid)).unwrap().model.clone();
+        assert_eq!(infos.len(), 6);
+        for (sb, main) in [("a", "model-a"), ("b", "model-b")] {
+            assert_eq!(model(&format!("{sb}-main")).as_deref(), Some(main));
+            assert_eq!(model(&format!("{sb}-t1")), Some(format!("{main}-t1")));
+            assert_eq!(model(&format!("{sb}-t2")).as_deref(), Some(main), "a thread opened on no model: the sandbox's");
+        }
+        // A session that reported its model keeps it.
+        app.report_session_model(&a, "a-t2", sbxw_core::agents::ModelReport::new(Some("claude-haiku-5-5"), Some("Haiku 5.5")).unwrap());
+        let infos = app.session_infos();
+        let t2 = infos.iter().find(|i| i.session_id.as_deref() == Some("a-t2")).unwrap();
+        assert_eq!(t2.model.as_deref(), Some("claude-haiku-5-5"));
     }
 }
