@@ -3972,5 +3972,31 @@
   }
   field.addEventListener('focus', () => setTimeout(() => { fit(); keepPlace(); }, 300));
 
+  // ── The document never scrolls ──
+  // Only the log and the lists scroll. iOS can leave the window scrolled, or
+  // the visual viewport offset, after the keyboard, dictation, a picker, the
+  // Face ID sheet or a return from the background: the paint snaps back but
+  // taps land off by that much (the field answers above where it is drawn).
+  // With no field focused (a focused one owns the keyboard's own scroll) and
+  // no pinch zoom (the person's), put the window back at 0,0.
+  const FIELD = 'input, textarea, select, [contenteditable="true"]';
+  function settle() {
+    const a = document.activeElement;
+    if (a && a !== document.body && a.matches && a.matches(FIELD)) return;
+    if (vv && vv.scale > 1.01) return;
+    if (window.scrollX || window.scrollY || (vv && (vv.offsetTop || vv.offsetLeft))) {
+      window.scrollTo(0, 0);
+      fit();
+    }
+  }
+  if (vv) { vv.addEventListener('resize', settle); vv.addEventListener('scroll', settle); }
+  window.addEventListener('scroll', settle);
+  window.addEventListener('focus', settle);
+  window.addEventListener('pageshow', settle);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') settle(); });
+  // After a field lets go: once focus has moved, and once the keyboard has
+  // finished going down.
+  document.addEventListener('focusout', () => { setTimeout(settle, 0); setTimeout(settle, 400); });
+
   boot();
 })();
