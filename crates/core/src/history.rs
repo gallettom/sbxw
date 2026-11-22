@@ -461,10 +461,31 @@ impl HistoryBook {
             new.extend(transcript_items(raw, now, &|t| self.typed.typed(sandbox, t, now)));
         }
         let mut nudge = self.push(sandbox, session_id, new, rules, now);
+        // `Stop`'s early reply is the end of its turn: what the transcript
+        // brings before the reply itself (the prompt the person sent, the
+        // turn's steps) goes before it. It is numbered again, at the end.
+        if self.provisional_last(sandbox, session_id) {
+            nudge = nudge.and_then(|_| self.subscribed_seq(sandbox, session_id, now));
+        }
         if nudge.is_none() && reset {
             nudge = self.subscribed_seq(sandbox, session_id, now);
         }
         Posted::Accepted { next: to, nudge }
+    }
+
+    /// Move a provisional reply that is no longer the last item to the end,
+    /// with a new seq (seqs are never reused). `true` when it moved.
+    fn provisional_last(&mut self, sandbox: &str, session_id: &str) -> bool {
+        let Some(log) = self.logs.get_mut(&(sandbox.to_string(), session_id.to_string())) else { return false };
+        let Some(at) = log.items.iter().position(|i| i.provisional) else { return false };
+        if at + 1 == log.items.len() {
+            return false;
+        }
+        let Some(mut it) = log.items.remove(at) else { return false };
+        log.next_seq += 1;
+        it.seq = log.next_seq;
+        log.items.push_back(it);
+        true
     }
 
     fn subscribed_seq(&self, sandbox: &str, session_id: &str, now: u64) -> Option<u64> {

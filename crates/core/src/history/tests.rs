@@ -538,3 +538,67 @@ fn a_hostile_file_name_is_carried_as_data() {
     post(&mut b, 0, 1, json!([{"t": "user", "text": pasted("q2", &format!("x\n\nAttached files (uploaded to this sandbox):\n- /tmp/sbxw-uploads/7/{key}.txt"))}]), 1);
     assert!(!serde_json::to_string(&page(&mut b)).unwrap().contains(key));
 }
+
+#[test]
+fn page_after_gives_the_oldest_newer_items_and_says_when_more_follow() {
+    let mut b = HistoryBook::new();
+    let items: Vec<Value> = (0..10).map(|i| json!({"t": "user", "text": format!("p{i}"), "at": i})).collect();
+    post(&mut b, 0, 100, Value::Array(items), 1);
+    let all = page(&mut b);
+    let s3 = all.items[3].seq;
+    let p = b.page_after(SB, ID, s3, Some(4), 2).unwrap();
+    assert_eq!(p.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), ["p4", "p5", "p6", "p7"]);
+    assert!(p.more);
+    assert_eq!(p.next_before, None);
+    let last = p.items.last().unwrap().seq;
+    let p = b.page_after(SB, ID, last, Some(4), 2).unwrap();
+    assert_eq!(p.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), ["p8", "p9"]);
+    assert!(!p.more);
+    assert!(b.page_after(SB, ID, p.latest_seq, None, 2).unwrap().items.is_empty());
+    assert!(b.page_after(SB, "nobody", 0, None, 2).is_none());
+}
+
+#[test]
+fn the_epoch_changes_with_a_reset_and_a_new_book_never_with_a_plain_post() {
+    let mut b = HistoryBook::new();
+    post(&mut b, 0, 10, json!([{"t": "user", "text": "a"}]), 1);
+    let e1 = page(&mut b).epoch;
+    post(&mut b, 10, 20, json!([{"t": "user", "text": "b"}]), 2);
+    assert_eq!(page(&mut b).epoch, e1);
+    b.ingest_transcript(SB, &json!({"session_id": ID, "from": 5, "to": 20, "reset": true, "items": [{"t": "user", "text": "b"}]}), &rules(), 3);
+    let e2 = page(&mut b).epoch;
+    assert_ne!(e1, e2);
+    assert!(!e2.is_empty() && e2.chars().all(|c| c.is_ascii_hexdigit()), "opaque: {e2}");
+    // A restarted daemon: a new book, the same post.
+    let mut b2 = HistoryBook::new();
+    post(&mut b2, 0, 10, json!([{"t": "user", "text": "a"}]), 1);
+    let e3 = page(&mut b2).epoch;
+    assert_ne!(e3, e1);
+    assert_ne!(e3, e2);
+}
+
+/// What the person saw on the phone: their message drawn after the agent's
+/// reply. `Stop`'s early reply came first; the transcript then brought the
+/// prompt (and the turn's steps) but not the reply yet: those got later
+/// seqs than the reply. The early reply stays the turn's end.
+#[test]
+fn a_prompt_the_transcript_brings_after_an_early_reply_comes_before_it() {
+    let mut b = HistoryBook::new();
+    post(&mut b, 0, 10, json!([{"t": "user", "text": "earlier", "at": 1}, {"t": "assistant", "text": "earlier reply", "at": 2}]), 2);
+    ev(&mut b, v3("Stop", json!({"last_assistant_message": "All merged."})), 5);
+    post(&mut b, 10, 20, json!([
+        {"t": "user", "text": "Are the threads merged?", "at": 3},
+        {"t": "tool_use", "id": "tu1", "name": "Bash", "input": {"command": "git log"}, "at": 4},
+    ]), 6);
+    let p = page(&mut b);
+    let texts: Vec<&str> = p.items.iter().map(|i| i.text.as_str()).collect();
+    assert_eq!(texts, ["earlier", "earlier reply", "Are the threads merged?", "", "All merged."]);
+    assert!(p.items.last().unwrap().provisional);
+    assert!(p.items.windows(2).all(|w| w[0].seq < w[1].seq), "seqs in order");
+    // The reply's own copy settles it: one reply, at the end.
+    post(&mut b, 20, 30, json!([{"t": "assistant", "text": "All merged.", "at": 5}]), 7);
+    let p = page(&mut b);
+    let texts: Vec<&str> = p.items.iter().map(|i| i.text.as_str()).collect();
+    assert_eq!(texts, ["earlier", "earlier reply", "Are the threads merged?", "", "All merged."]);
+    assert!(!p.items.last().unwrap().provisional);
+}
