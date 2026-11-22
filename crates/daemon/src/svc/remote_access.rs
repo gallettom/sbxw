@@ -14,7 +14,7 @@ use sbxw_core::remote_access::journal::{self, Entry, Kind};
 use sbxw_core::remote_access::limits::Limiter;
 use sbxw_core::remote_access::pairing::{ApproveError, PairingBook, RequestView, StartError, Status};
 use sbxw_core::remote_access::reach::{self, ReachKind};
-use sbxw_core::remote_access::view::{phone_activity, phone_page, phone_question, phone_state, PhonePage, PhoneQuestion};
+use sbxw_core::remote_access::view::{phone_activity, phone_page_with, phone_question, phone_state, PhonePage, PhoneQuestion};
 use sbxw_core::remote_access::{self as rules, State, TailnetStatus};
 use sbxw_core::session::{SessionKey, SessionKind};
 use sbxw_core::SandboxRef;
@@ -97,6 +97,9 @@ pub struct RemoteRuntime {
     listener: Option<Listener>,
     /// Files phones handed to leaders, not yet sent (`remote_upload`).
     pub(crate) uploads: sbxw_core::remote_access::uploads::UploadBook,
+    /// Images phones sent, kept 7 days for their conversation
+    /// (`svc::remote_sent`).
+    pub(crate) sent: crate::svc::remote_sent::SentStore,
     /// Each device's upload rate, keyed by device id.
     pub(crate) upload_limit: Limiter,
     /// Devices with an upload in progress (one at a time each).
@@ -144,7 +147,7 @@ impl RemoteRuntime {
         let level2 = crate::svc::remote_approvals::Level2::load(&dir, state.approvals && state.enabled);
         let push = crate::svc::remote_push::Push::load(&dir, |id| state.devices.iter().any(|d| d.id == id));
         let mut rt = RemoteRuntime {
-            dir,
+            dir: dir.clone(),
             enabled: state.enabled,
             devices: DeviceBook::from_devices(state.devices),
             journal,
@@ -155,6 +158,7 @@ impl RemoteRuntime {
             device_limit: Limiter::new(60_000, 600, u32::MAX),
             listener: None,
             uploads: Default::default(),
+            sent: crate::svc::remote_sent::SentStore::open(&dir, now_ms()),
             upload_limit: Limiter::new(sbxw_core::remote_access::uploads::RATE_WINDOW_MS, sbxw_core::remote_access::uploads::RATE_PER_DEVICE, u32::MAX),
             uploading: Default::default(),
             copy_lock: Default::default(),
@@ -244,6 +248,7 @@ impl RemoteRuntime {
             self.push.forget_device(&dir, &d.id);
             let files = self.uploads.drop_device(&d.id);
             crate::svc::remote_upload::remove_spools(&self.dir, files);
+            self.sent.drop_device(&d.id);
             self.record(&d.id, &d.name, Kind::Expired);
             let _ = self.kicks.send(Kick::Device(d.id.clone()));
         }
@@ -672,6 +677,7 @@ impl App {
             rt.pairing.clear();
             let files = rt.uploads.clear();
             crate::svc::remote_upload::remove_spools(&rt.dir, files);
+            rt.sent.clear();
             // Level 2 goes off with it.
             let was = rt.level2.enabled;
             rt.level2.turn_off();
@@ -905,6 +911,7 @@ impl App {
         rt.save();
         let files = rt.uploads.drop_device(&d.id);
         crate::svc::remote_upload::remove_spools(&rt.dir, files);
+        rt.sent.drop_device(&d.id);
         rt.record(&d.id, &d.name, kind);
         let _ = rt.kicks.send(Kick::Device(d.id.clone()));
         tracing::info!("remote access: device {} {}", d.id, if kind == Kind::Logout { "logged out" } else { "revoked" });
@@ -1072,14 +1079,19 @@ impl App {
     /// `after` (`more` when others follow: read again from `latest_seq`).
     /// The page carries the log's `epoch`: rows of another epoch are not
     /// comparable (a daemon restart, a reset) and the phone reads afresh.
-    pub fn remote_history(&self, sb: &SandboxRef, before: Option<u64>, after: Option<u64>, limit: Option<usize>) -> Result<(String, PhonePage), Refusal> {
+    pub fn remote_history(&self, device_id: &str, sb: &SandboxRef, before: Option<u64>, after: Option<u64>, limit: Option<usize>) -> Result<(String, PhonePage), Refusal> {
         let sid = self.remote_leader_session(sb).ok_or(Refusal::NotFound)?;
         let max = sbxw_core::history::limits::PAGE_MAX;
+        // The images this device sent, still kept: found by where each file
+        // sat in the sandbox.
+        let key = sb.to_string();
+        let now = now_ms();
+        let kept = |ms: u64, name: &str| self.remote_access.lock().unwrap().sent.find(device_id, &key, ms, name, now);
         let limit = limit.unwrap_or(sbxw_core::history::limits::PAGE_DEFAULT).clamp(1, max);
         let view = match after {
             Some(a) => {
                 let page = self.history_page_after(sb, &sid, a, Some(max)).ok_or(Refusal::NotFound)?;
-                let mut view = phone_page(&page, Some(a));
+                let mut view = phone_page_with(&page, Some(a), &kept);
                 if view.items.len() > limit {
                     view.items.truncate(limit);
                     view.more = true;
@@ -1093,7 +1105,7 @@ impl App {
             }
             None => {
                 let page = self.history_page(sb, &sid, before, Some(max)).ok_or(Refusal::NotFound)?;
-                let mut view = phone_page(&page, None);
+                let mut view = phone_page_with(&page, None, &kept);
                 if view.items.len() > limit {
                     view.items.drain(..view.items.len() - limit);
                     view.next_before = view.items.first().map(|i| i.first_seq);

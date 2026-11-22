@@ -155,7 +155,7 @@ fn the_route_list_grew_by_exactly_the_four_push_paths() {
         BTreeSet::from([
             "/sw.js", "/r/push/key", "/r/push/subscribe", "/r/push/unsubscribe", "/r/models", "/r/leaders/:sandbox/model", "/r/leaders/:sandbox/lead", "/r/skills", "/r/leaders/:sandbox/skill",
             "/r/leaders/:sandbox/canvas", "/r/canvas/:id", "/r/canvas/:id/images/:file", "/r/canvas/:id/remarks", "/r/canvas/:id/submit",
-            "/r/usage",
+            "/r/usage", "/r/sent/:id",
         ])
     );
     assert!(before.is_subset(&now), "nothing removed");

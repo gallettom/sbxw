@@ -627,3 +627,66 @@ async fn a_new_ticket_takes_uploads_and_a_bad_id_refuses_the_whole_create() {
     let journal = serde_json::to_string(&app.remote_journal(50)).unwrap();
     assert!(journal.contains("ticket_create") && !journal.contains("one.png"), "{journal}");
 }
+
+// ── Images kept for the conversation ─────────────────────────────────────
+
+#[tokio::test]
+async fn a_sent_image_is_kept_shown_again_to_its_device_only_and_expires() {
+    let (d, app, fake) = on();
+    let router = remote_router(app.clone());
+    let ta = pair(&app, &router, "phone").await;
+    let tb = pair(&app, &router, "tablet").await;
+    let (sb, file) = leader(&app, d.path(), "lead1").await;
+    let png = id_of(&upload(&app, &router, &ta, "lead1", "photo.png", PNG).await);
+    let txt = id_of(&upload(&app, &router, &ta, "lead1", "note.txt", b"hello").await);
+    // Not kept before the message goes.
+    assert_eq!(app.remote_sent_for_tests().0, 0);
+    let r = send_msg(&app, &router, &ta, "lead1", "look", &[&png, &txt]).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(app.remote_sent_for_tests().0, 1, "the image is kept, the text file is not");
+    assert_eq!(spool_files(&app), 0, "the spool is still spent");
+    let c = copies(&fake);
+    let want = format!("\x1b[200~look\n\nAttached files (uploaded to this sandbox):\n- {}\n- {}\x1b[201~\r", c[0].0, c[1].0);
+    let _ = typed(&file, b"\x1b[201~\r").await;
+    hook(&app, &sb, "s1", json!({"hook_event_name": "UserPromptSubmit", "prompt": format!("<pasted_content id=\"p1\">{}</pasted_content id=\"p1\">", want.trim_start_matches("\x1b[200~").trim_end_matches("\x1b[201~\r"))}));
+
+    // The sender's history names the image; the other device's does not.
+    let h = call(&router, "GET", "/r/leaders/lead1/history", Some(&ta), json!({})).await;
+    clean(&app, &h);
+    let item = h.json()["page"]["items"].as_array().unwrap().iter().find(|i| i["kind"] == "user_prompt").unwrap().clone();
+    assert_eq!(item["files"], json!(["photo.png", "note.txt"]));
+    let id = item["images"][0].as_str().unwrap().to_string();
+    assert_eq!((id.len(), item["images"][1].as_str()), (32, Some("")), "{item}");
+    let hb = call(&router, "GET", "/r/leaders/lead1/history", Some(&tb), json!({})).await;
+    assert!(!hb.text().contains("\"images\""), "{}", hb.text());
+
+    // The route.
+    let get = |t: &str, id: &str| {
+        let (router, t, id) = (router.clone(), t.to_string(), id.to_string());
+        async move { call(&router, "GET", &format!("/r/sent/{id}"), Some(&t), json!({})).await }
+    };
+    let ok = get(&ta, &id).await;
+    assert_eq!(ok.status, StatusCode::OK);
+    assert_eq!(ok.body, PNG);
+    assert_eq!(ok.headers[header::CONTENT_TYPE], "image/png");
+    assert_eq!(ok.headers[header::CACHE_CONTROL], "no-store, private");
+    clean(&app, &Reply { status: ok.status, headers: ok.headers.clone(), body: Vec::new() });
+    assert_eq!(get(&tb, &id).await.status, StatusCode::NOT_FOUND, "another device's");
+    assert_eq!(get(&ta, &"0".repeat(32)).await.status, StatusCode::NOT_FOUND, "unknown");
+    assert_eq!(get(&ta, "short").await.status, StatusCode::NOT_FOUND, "malformed");
+    let anon = call(&router, "GET", &format!("/r/sent/{id}"), None, json!({})).await;
+    assert_eq!(anon.status, StatusCode::UNAUTHORIZED);
+    // Kept files are private to the Mac, named by id.
+    let (_, dir) = app.remote_sent_for_tests();
+    let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+    assert!(names.contains(&format!("{id}.png")) && names.iter().all(|n| !n.contains("photo")), "{names:?}");
+
+    // After seven days: 404, the chip is back, the file is gone.
+    app.remote_sent_age_for_tests(crate::svc::remote_sent::KEEP_MS);
+    assert_eq!(get(&ta, &id).await.status, StatusCode::NOT_FOUND, "expired");
+    let h = call(&router, "GET", "/r/leaders/lead1/history", Some(&ta), json!({})).await;
+    assert!(!h.text().contains("\"images\""), "{}", h.text());
+    app.remote_sweep_uploads();
+    assert_eq!(app.remote_sent_for_tests().0, 0);
+    assert!(!dir.join(format!("{id}.png")).exists());
+}

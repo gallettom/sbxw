@@ -67,6 +67,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/r/voice/transcribe"),
     ("POST", "/r/leaders/:sandbox/upload"),
     ("DELETE", "/r/leaders/:sandbox/upload/:id"),
+    ("GET", "/r/sent/:id"),
     ("GET", "/r/leaders/:sandbox/kanban"),
     ("GET", "/r/leaders/:sandbox/kanban/:ticket"),
     ("POST", "/r/leaders/:sandbox/kanban"),
@@ -132,6 +133,7 @@ pub fn remote_router(app: Arc<App>) -> Router {
         // (25 MiB); no extractor buffers it.
         .route("/r/leaders/:sandbox/upload", post(upload))
         .route("/r/leaders/:sandbox/upload/:id", delete(upload_drop))
+        .route("/r/sent/:id", get(sent_image))
         .route("/r/leaders/:sandbox/kanban", get(super::remote_kanban::board).post(super::remote_kanban::create).layer(DefaultBodyLimit::max(super::remote_kanban::BODY_MAX)))
         .route("/r/leaders/:sandbox/kanban/:ticket", get(super::remote_kanban::ticket))
         .route("/r/leaders/:sandbox/canvas", get(super::remote_canvas::list))
@@ -389,12 +391,12 @@ struct HistoryQuery {
     limit: Option<usize>,
 }
 
-async fn history(State(app): S, Extension(_d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Query(q): Query<HistoryQuery>) -> Response {
+async fn history(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox): Path<String>, Query(q): Query<HistoryQuery>) -> Response {
     let sb = match app.remote_target(&sandbox) {
         Ok(sb) => sb,
         Err(e) => return refusal(e),
     };
-    match app.remote_history(&sb, q.before, q.after, q.limit) {
+    match app.remote_history(&d.id, &sb, q.before, q.after, q.limit) {
         Ok((sid, page)) => Json(json!({ "sandbox": sb.to_string(), "session_id": sid, "page": page })).into_response(),
         Err(e) => refusal(e),
     }
@@ -582,6 +584,18 @@ async fn upload_drop(State(app): S, Extension(d): Extension<DeviceCtx>, Path((sa
     }
     match app.remote_upload_drop(&d, &sb, &id) {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+/// An image this device sent, kept 7 days (`svc::remote_sent`): its own, its
+/// sandbox reachable now, else 404. The type is the content check's.
+async fn sent_image(State(app): S, Extension(d): Extension<DeviceCtx>, Path(id): Path<String>) -> Response {
+    if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return refusal(Refusal::NotFound);
+    }
+    match app.remote_sent_image(&d, &id).await {
+        Ok((bytes, mime)) => (StatusCode::OK, [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "no-store, private"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], bytes).into_response(),
         Err(e) => refusal(e),
     }
 }
