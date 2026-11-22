@@ -50,7 +50,7 @@ fn entry(list: &Value, name: &str) -> Option<Value> {
 /// can only come from resolving the name.
 fn sandbox_routes() -> Vec<(&'static str, &'static str)> {
     let r: Vec<_> = ROUTES.iter().copied().filter(|(_, p)| p.starts_with("/r/leaders/:sandbox")).collect();
-    assert_eq!(r.len(), 12, "history, message, answer, interrupt, model, skill, lead, upload, upload drop, kanban, kanban ticket, kanban create: {r:?}");
+    assert_eq!(r.len(), 13, "history, message, answer, interrupt, model, skill, lead, upload, upload drop, kanban, kanban ticket, kanban create, canvas: {r:?}");
     r
 }
 

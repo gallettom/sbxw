@@ -25,6 +25,7 @@ pub mod mac;
 pub mod remote;
 pub mod remote_admin;
 pub mod remote_kanban;
+pub mod remote_canvas;
 pub mod remote_approvals;
 pub mod remote_approvals_admin;
 pub mod stream;
@@ -58,6 +59,8 @@ mod phone_live_tests;
 mod remote_push_tests;
 #[cfg(test)]
 mod remote_skills_tests;
+#[cfg(test)]
+mod remote_canvas_tests;
 
 use crate::app::App;
 use axum::http::{header, HeaderValue};

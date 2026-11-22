@@ -1112,7 +1112,7 @@ impl App {
     /// [`TOOL_CALL_QUIET_MS`], bracketed paste off. Lines typed with no
     /// re-check before their Return (`/model`, `/lead`, a skill) keep the
     /// idle-only gate.
-    fn remote_can_type_message(&self, sb: &SandboxRef) -> Result<Arc<crate::pty::PtySession>, Reason> {
+    pub(super) fn remote_can_type_message(&self, sb: &SandboxRef) -> Result<Arc<crate::pty::PtySession>, Reason> {
         let info = self.reach_info(sb).ok_or(Reason::NeedsMac)?;
         self.remote_can_type_in(sb, info)
     }
