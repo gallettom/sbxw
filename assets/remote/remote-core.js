@@ -891,6 +891,9 @@ const RC_INVISIBLE_RANGES = [
   [0x110BD, 0x110BD], [0x110CD, 0x110CD], [0x13430, 0x1343F], [0x1BCA0, 0x1BCA3], [0x1D173, 0x1D17A],
   [0xE0000, 0xE0FFF],
 ];
+// The list as the inside of a regexp character class (flag u); the same name
+// as in assets/js/invisible.js, so chatShortName stays one source.
+const INVISIBLE_CLASS = RC_INVISIBLE_RANGES.map(([a, b]) => `\\u{${a.toString(16)}}-\\u{${b.toString(16)}}`).join('');
 const RC_CONTROL = new RegExp(`(?!\\n)[\\p{Cc}${RC_INVISIBLE_RANGES.map(([a, b]) => `\\u{${a.toString(16)}}-\\u{${b.toString(16)}}`).join('')}]`, 'u');
 function rcMessageCheck(text, skills) {
   const s = String(text ?? '');
@@ -998,7 +1001,7 @@ function chatSize(bytes) {
 }
 
 function chatShortName(name) {
-  const s = [...String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '?')];
+  const s = [...String(name ?? '').replace(new RegExp(`[\\u0000-\\u001f\\u007f-\\u009f${INVISIBLE_CLASS}]`, 'gu'), '?')];
   return s.length <= 60 ? s.join('') : `${s.slice(0, 40).join('')}…${s.slice(-16).join('')}`;
 }
 

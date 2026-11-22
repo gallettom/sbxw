@@ -9,6 +9,8 @@ import vm from 'node:vm';
 
 const read = p => readFileSync(new URL(`../../${p}`, import.meta.url), 'utf8');
 const core = read('assets/js/chat-core.js');
+// Loaded before chat-core.js on every page (singleton.js, the side panel).
+const invisible = read('assets/js/invisible.js');
 const block = core.slice(core.indexOf('// BEGIN chat attach'), core.indexOf('// END chat attach'));
 const composerSrc = core.slice(core.indexOf('function chatComposer'), core.indexOf('// ── A round of questions'));
 
@@ -32,7 +34,7 @@ const document = { createElement: t => new El(t) };
 
 function load(extra = '') {
   const ctx = vm.createContext({ document, AbortController, Promise, setTimeout, CSS: { supports: () => true } });
-  vm.runInContext(`${block}\n${composerSrc}\n${extra}\nglobalThis.api = { CHAT_SECRET_NAMES, chatSecretName, chatCheckAttach, chatAttachTray, chatRenderTray, chatDroppedFiles, chatUploadUrl, chatUploadName, chatWithAttachments, chatAttachMount, chatComposer, chatShortName };`, ctx);
+  vm.runInContext(`${invisible}\n${block}\n${composerSrc}\n${extra}\nglobalThis.api = { CHAT_SECRET_NAMES, chatSecretName, chatCheckAttach, chatAttachTray, chatRenderTray, chatDroppedFiles, chatUploadUrl, chatUploadName, chatWithAttachments, chatAttachMount, chatComposer, chatShortName };`, ctx);
   return ctx.api;
 }
 const api = load();

@@ -519,10 +519,11 @@ function chatSize(bytes) {
   return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }
 
-// A name for a message to the person: no control characters, at most 60
+// A name for a message to the person: no control or invisible characters (the
+// one list, invisible.js; each becomes ?), at most 60
 // characters, a long one cut in the middle so its extension stays visible.
 function chatShortName(name) {
-  const s = [...String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '?')];
+  const s = [...String(name ?? '').replace(new RegExp(`[\\u0000-\\u001f\\u007f-\\u009f${INVISIBLE_CLASS}]`, 'gu'), '?')];
   return s.length <= 60 ? s.join('') : `${s.slice(0, 40).join('')}…${s.slice(-16).join('')}`;
 }
 

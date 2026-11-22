@@ -24,6 +24,8 @@ const SBXW_APP_SCRIPTS = [
   '/vendor/xterm.js',
   '/vendor/addon-fit.js',
   '/vendor/addon-canvas.js',
+  // The one invisible-character list, before every script that asks it.
+  '/js/invisible.js',
   '/js/util.js',
   '/js/term-color.js',
   // Before panes.js, which attaches it to each terminal it builds.

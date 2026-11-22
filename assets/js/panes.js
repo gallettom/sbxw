@@ -397,8 +397,9 @@ let oscOffer = null;
 
 const oscSize = n => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`);
 
-// Newlines, tabs, C0/C1 controls, DEL and the bidi and zero-width marks are
-// shown as visible marks, so the preview is what will be pasted.
+// Newlines, tabs, C0/C1 controls, DEL and the invisible characters (the one
+// list, invisible.js) are shown as visible marks, so the preview is what will
+// be pasted.
 function oscPreview(text) {
   const shown = [...text.slice(0, OSC_PREVIEW_CHARS * 2)].slice(0, OSC_PREVIEW_CHARS).map(c => {
     const n = c.codePointAt(0);
@@ -407,8 +408,7 @@ function oscPreview(text) {
     if (c === '\t') return '⇥';
     if (n < 0x20) return String.fromCodePoint(0x2400 + n);
     if (n === 0x7f) return '␡';
-    if ((n >= 0x80 && n <= 0x9f) || (n >= 0x200b && n <= 0x200f) || (n >= 0x202a && n <= 0x202e)
-        || (n >= 0x2066 && n <= 0x2069) || n === 0xfeff) return '�';
+    if ((n >= 0x80 && n <= 0x9f) || invisibleCode(n)) return '�';
     return c;
   }).join('');
   return [...text].length > OSC_PREVIEW_CHARS ? shown + '…' : shown;

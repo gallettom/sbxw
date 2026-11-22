@@ -13,6 +13,8 @@ const core = read('assets/js/chat-core.js');
 const fileRules = core.slice(core.indexOf('const CHAT_FILE_EXT'), core.indexOf('// Code spans are lifted out first'));
 const attach = core.slice(core.indexOf('// BEGIN chat attach'), core.indexOf('// END chat attach'));
 const paneFiles = read('assets/js/pane-files.js');
+// Loaded before every app script (singleton.js).
+const invisible = read('assets/js/invisible.js');
 const panes = read('assets/js/panes.js');
 const holdRules = panes.slice(panes.indexOf('// BEGIN pane-hold rules'), panes.indexOf('// END pane-hold rules'));
 
@@ -83,7 +85,7 @@ function load(extra = {}, core = 'with') {
     paneCount: 2, window: { innerWidth: 1000, innerHeight: 800, addEventListener() {} },
     ...extra,
   });
-  vm.runInContext(`${core === 'with' ? `${fileRules}\n${attach}\n` : ''}${holdRules}\n${paneFiles}\nglobalThis.api = { chatFilePath: globalThis.chatFilePath, chatFileTokens: globalThis.chatFileTokens, paneLogicalLine, paneFileLinksAt, paneLinkTarget, paneLinkTip, paneLinkProvider, paneLinksAttach, paneShellQuote, paneTypeLine, paneTypeBlocker, paneTypePaths, paneDropMount, paneShowPathNotice, paneFrameAllowed };`, ctx);
+  vm.runInContext(`${invisible}\n${core === 'with' ? `${fileRules}\n${attach}\n` : ''}${holdRules}\n${paneFiles}\nglobalThis.api = { chatFilePath: globalThis.chatFilePath, chatFileTokens: globalThis.chatFileTokens, paneLogicalLine, paneFileLinksAt, paneLinkTarget, paneLinkTip, paneLinkProvider, paneLinksAttach, paneShellQuote, paneTypeLine, paneTypeBlocker, paneTypePaths, paneDropMount, paneShowPathNotice, paneFrameAllowed };`, ctx);
   // chat-core.js comes after pane-files.js on the page: `late` evaluates it now.
   const late = () => vm.runInContext(`${fileRules}\n${attach}\nglobalThis.chatFilePath = chatFilePath; globalThis.chatFileTokens = chatFileTokens;`, ctx);
   return { api: ctx.api, ctx, calls, document, late };
