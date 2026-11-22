@@ -399,7 +399,7 @@ fn button(e: &Entry, prev: Option<String>, next: Option<String>) -> El {
 
                 .fill(theme::hex(bf))
                 .border(2.0, c("bg"))
-                .child(text(label).font(small(10.0, 700.0)).color(c("bg"))),
+                .child(text(label).font(small(theme::font_size::CAPTION, 700.0)).color(c("bg"))),
         );
     }
     b
@@ -462,6 +462,37 @@ pub fn view(s: &App) -> El {
 mod tests {
     use super::super::layout_tests::Rig;
     use super::*;
+
+    static BADGE_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn badge_view(a: &App, _cx: &mut rune::Cx<App>) -> El {
+        let mut e = a.rail_entries().0.into_iter().find(|e| e.key == "rail-requests").unwrap();
+        e.count = Some(BADGE_N.load(std::sync::atomic::Ordering::Relaxed));
+        e.badge = "amber";
+        rune::col().w(W).h(200.0).padding(16.0).child(button(&e, None, None))
+    }
+
+    /// The count badge at CAPTION: for 1, 2 and 3 characters ("99+") it
+    /// holds its text and stays 16 pt high; the rail row (the 28 pt button)
+    /// does not grow. Printed for the report.
+    #[test]
+    fn the_count_badge_holds_two_digits_at_caption() {
+        for n in [3u64, 42, 100] {
+            BADGE_N.store(n, std::sync::atomic::Ordering::Relaxed);
+            let a = App::new(Args { fixture: Some(format!("{}/fixtures/shell/panebar-4.json", env!("CARGO_MANIFEST_DIR"))), ..Args::default() });
+            let mut rt = rune::Runtime::new(a, badge_view, (400.0, 300.0), rune::Env::new(true, 1.0));
+            for _ in 0..6 {
+                rt.frame(0.016);
+            }
+            let (b, _) = rt.presented("rail-requests-badge").expect("badge");
+            let (row, _) = rt.presented("rail-requests").expect("row");
+            eprintln!("count {n}: badge {b:?}, row {row:?}");
+            assert_eq!(b[3], 16.0, "badge height for {n}");
+            assert_eq!(row[3], TARGET, "row height for {n}");
+            let label_w = if n > 99 { 3.0 } else { n.to_string().len() as f32 } * theme::font_size::CAPTION * 0.6;
+            assert!(b[2] >= label_w + 2.0 * theme::spacing::XS, "badge {}: {label_w} of text does not fit in {n}", b[2]);
+        }
+    }
 
     /// Each entry's colour marks at 3:1 on the rail and on its active tile;
     /// a badge's number reads on its fill.
