@@ -1204,6 +1204,29 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-cv-cf-list li { font-size: var(--fs-md); color: var(--c-text-bright); white-space: pre-wrap; overflow-wrap: anywhere; }
 .rc-cv-cf-note { margin: 0; font-size: var(--fs-sm); color: var(--c-amber); }
 .rc-cv-confirm .rc-sheet-row { position: sticky; bottom: 0; margin-top: auto; padding-top: 8px; background: var(--c-bg); }
+.rc-cv-tools { display: flex; gap: 8px; justify-content: space-between; padding: 0 0 8px; }
+.rc-cv-tools .rc-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.rc-cv-tools svg, .rc-cv-fs-close svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.rc-cv-mode[aria-pressed="true"] { background: var(--c-blue); border-color: var(--c-blue); color: #fff; }
+.rc-cv-stage.rc-cv-pinmode { box-shadow: inset 0 0 0 2px var(--c-blue); cursor: crosshair; }
+.rc-cv-fs {
+  position: fixed; inset: 0; z-index: 50; background: #000; color: #fff;
+  touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: contain;
+}
+.rc-cv-fs[hidden] { display: none; }
+.rc-cv-fs-stage { position: absolute; top: var(--safe-t); right: var(--safe-r); bottom: var(--safe-b); left: var(--safe-l); overflow: hidden; touch-action: none; }
+.rc-cv-fs-layer { position: absolute; margin: 0; }
+.rc-cv-fs .rc-cv-pin { pointer-events: none; }
+.rc-cv-fs-close {
+  position: absolute; top: calc(var(--safe-t) + 8px); right: calc(var(--safe-r) + 8px); width: 44px; height: 44px;
+  display: flex; align-items: center; justify-content: center; border: 0; border-radius: 50%;
+  background: rgba(30, 30, 30, 0.72); color: #fff;
+}
+.rc-cv-fs-close:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.rc-cv-fs-count {
+  position: absolute; top: calc(var(--safe-t) + 8px); left: calc(var(--safe-l) + 8px); padding: 0 12px; height: 44px; display: flex; align-items: center;
+  border-radius: 22px; background: rgba(30, 30, 30, 0.72); font: 13px var(--font-mono); font-variant-numeric: tabular-nums; pointer-events: none;
+}
 @media (min-width: 700px) {
   .rc-cv-page, .rc-cv-list, .rc-cv-confirm > * { max-width: 760px; margin-left: auto; margin-right: auto; width: 100%; box-sizing: border-box; }
 }

@@ -2755,7 +2755,9 @@
 
   // ── Canvas (API-canvas.md) ──
   // A sandbox's canvases, then one shot per page: swipe or Previous/Next,
-  // pinch to zoom and pan (a swipe pages only at 1x), a tap places a pin.
+  // pinch to zoom and pan (a swipe pages only at 1x). View mode: a double tap
+  // zooms. Pin mode (the Remark button): a tap places a pin. Full screen: the
+  // shot alone in a fixed overlay, pins shown, none editable.
   // Every remark is one call, its outcome said under the picture; "Send
   // remarks" lists every remark in full first. Nothing is kept on the phone:
   // the manifest lives in memory, pictures come from the Mac each time.
@@ -2765,6 +2767,8 @@
     idx: 0,             // the shot on screen
     view: { s: 1, tx: 0, ty: 0 },
     box: { w: 0, h: 0 },
+    mode: 'view',       // 'view' (taps zoom) or 'pin' (a tap places a pin)
+    fs: rcCvFsClose(null), fsBox: { w: 0, h: 0 },
     edit: null,         // the remark being written: { kind, n, shot, x, y }
     busy: false,        // a remark or the send in flight
     delArm: null,
@@ -2827,7 +2831,7 @@
     $('cv-listview').hidden = on;
     $('cv-review').hidden = !on;
     $('cv-confirm').hidden = true;
-    if (!on) { cv.m = null; cv.edit = null; $('cv-editor').hidden = true; cvSaid('cv-saved', null); }
+    if (!on) { cvFsHide(); cv.mode = 'view'; cvRenderMode(); cv.m = null; cv.edit = null; $('cv-editor').hidden = true; cvSaid('cv-saved', null); }
   }
   async function cvOpen(id, keep) {
     const sandbox = cv.sandbox;
@@ -2864,7 +2868,7 @@
     $('cv-prev').disabled = cv.idx <= 0;
     $('cv-next').disabled = cv.idx >= n - 1;
     $('cv-page').hidden = !shot;
-    if (!shot) { cvStatus('This canvas has no shot yet.'); return; }
+    if (!shot) { cvFsHide(); cvStatus('This canvas has no shot yet.'); return; }
     $('cv-shot-title').textContent = shot.title || `Shot ${cv.idx + 1}`;
     $('cv-shot-line').textContent = rcCvShotLine(shot, m.rounds.length);
     $('cv-shot-note').textContent = shot.note;
@@ -2886,6 +2890,8 @@
     cvLayout();
     cvRenderPins();
     cvRenderRemarks();
+    cvRenderMode();
+    if (cv.fs.open) cvFsRender(fresh);
     const total = Math.max(m.pins.length + m.notes.length, m.draft);
     $('cv-send').textContent = total ? `Send remarks (${total})` : 'Send remarks';
   }
@@ -2915,6 +2921,7 @@
   $('cv-prev').addEventListener('click', () => cvGo(-1));
   $('cv-next').addEventListener('click', () => cvGo(1));
   document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && cv.fs.open) { e.preventDefault(); cvFsClose(); return; }
     if ($('cv-review').hidden || $('canvas').hidden || st.screen !== 's-chat' || !$('cv-confirm').hidden) return;
     if (e.target && /^(TEXTAREA|INPUT|SELECT)$/.test(e.target.tagName)) return;
     if (e.key === 'ArrowLeft') cvGo(-1);
@@ -2951,7 +2958,7 @@
     $('cv-fit').hidden = !zoomed;
   }
   $('cv-fit').addEventListener('click', () => { cv.view = { s: 1, tx: 0, ty: 0 }; cvApply(); });
-  window.addEventListener('resize', () => { if (cv.m && !$('cv-review').hidden) cvLayout(); });
+  window.addEventListener('resize', () => { if (cv.m && !$('cv-review').hidden) { cvLayout(); if (cv.fs.open) cvFsLayout(); } });
 
   function cvPinEl(n, x, y, label, cls = '') {
     const b = document.createElement('button');
@@ -3092,77 +3099,184 @@
     cvRemark({ op: 'remove', kind: ed.kind, n: ed.n }, `${ed.kind === 'pin' ? 'Pin' : 'Note'} ${ed.n} deleted`);
   });
 
+  // ── Mode ──
+  function cvRenderMode() {
+    const pin = cv.mode === 'pin';
+    $('cv-mode').setAttribute('aria-pressed', String(pin));
+    $('cv-stage').classList.toggle('rc-cv-pinmode', pin);
+    $('cv-hint').textContent = rcCvHint(cv.mode);
+  }
+  $('cv-mode').addEventListener('click', () => {
+    const open = !$('cv-editor').hidden;
+    const r = rcCvToggleMode(cv.mode, open ? cv.edit : null, $('cv-ed-text').value);
+    if (r.hold) { cvHeld(); return; }
+    // A new pin placed but not written (nothing typed) goes with the mode.
+    if (r.mode === 'view' && open && cv.edit?.kind === 'pin') cvCloseEditor();
+    cv.mode = r.mode;
+    cvRenderMode();
+  });
+
   // ── Gestures on the picture ──
   // One finger: at 1x a horizontal swipe pages (a vertical move scrolls the
   // page, the browser's own); zoomed in, it pans. Two fingers: pinch. A
-  // short still touch is a tap: on a pin it opens it, elsewhere it places one.
-  const stage = $('cv-stage');
-  const ptrs = new Map();
-  let g = null;
-  function cvLocal(x, y) {
-    const r = stage.getBoundingClientRect();
-    return { x: x - r.left - (r.width - cv.box.w) / 2, y: y - r.top };
-  }
-  function cvTwo() {
-    const [a, b] = [...ptrs.values()];
-    const m0 = cvLocal((a.x + b.x) / 2, (a.y + b.y) / 2);
-    return { m: m0, d: Math.hypot(a.x - b.x, a.y - b.y) };
-  }
-  stage.addEventListener('pointerdown', e => {
-    if (!cv.m || e.button > 0) return;
-    if (e.target.closest('#cv-fit')) return;
-    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    try { stage.setPointerCapture(e.pointerId); } catch (_) {}
-    if (ptrs.size === 1) {
-      g = { mode: 'one', x0: e.clientX, y0: e.clientY, t0: Date.now(), v0: { ...cv.view }, pin: e.target.closest('.rc-cv-pin') };
-    } else if (ptrs.size === 2) {
-      const t = cvTwo();
-      g = { mode: 'pinch', v0: { ...cv.view }, m0: t.m, d0: t.d };
-    }
-  });
-  stage.addEventListener('pointermove', e => {
-    const p = ptrs.get(e.pointerId);
-    if (!p || !g) return;
-    p.x = e.clientX; p.y = e.clientY;
-    if (g.mode === 'pinch' && ptrs.size === 2) {
-      const t = cvTwo();
-      cv.view = rcCvPinch(g.v0, g.m0, g.d0, t.m, t.d, cv.box.w, cv.box.h);
-      cvApply();
-    } else if (g.mode === 'one' && g.v0.s > 1.01) {
-      cv.view = rcCvClamp({ s: g.v0.s, tx: g.v0.tx + e.clientX - g.x0, ty: g.v0.ty + e.clientY - g.y0 }, cv.box.w, cv.box.h);
-      cvApply();
-    }
-  });
-  function cvEnd(e, cancelled) {
-    if (!ptrs.has(e.pointerId)) return;
-    ptrs.delete(e.pointerId);
-    if (!g) return;
-    if (g.mode === 'pinch') { if (!ptrs.size) g = null; else g = { mode: 'rest' }; return; }
-    if (g.mode !== 'one' || cancelled) { if (!ptrs.size) g = null; return; }
-    const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
-    const still = Math.hypot(dx, dy) < 10 && Date.now() - g.t0 < 600;
-    const was = g;
-    g = null;
-    if (still) {
-      if (was.pin) {
-        const n = Number(was.pin.dataset.n);
-        const p = cv.m.pins.find(x => x.n === n);
-        if (p) cvEditPin(p);
+  // short still touch is a tap; two of them, a double tap (zoom). What a tap
+  // does is rcCvTapAction's rule. One recogniser serves the review stage and
+  // the full-screen overlay; each passes its own view, box and reactions.
+  function cvGestures(el, o) {
+    const ptrs = new Map();
+    let g = null, last = null;
+    const local = (x, y) => {
+      const r = el.getBoundingClientRect(), b = o.box();
+      return { x: x - r.left - (r.width - b.w) / 2, y: y - r.top - (r.height - b.h) / 2 };
+    };
+    const two = () => {
+      const [a, b] = [...ptrs.values()];
+      return { m: local((a.x + b.x) / 2, (a.y + b.y) / 2), d: Math.hypot(a.x - b.x, a.y - b.y) };
+    };
+    el.addEventListener('pointerdown', e => {
+      if (!cv.m || e.button > 0) return;
+      if (e.target.closest('button:not(.rc-cv-pin)')) return;
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      try { el.setPointerCapture(e.pointerId); } catch (_) {}
+      if (ptrs.size === 1) {
+        g = { mode: 'one', x0: e.clientX, y0: e.clientY, t0: Date.now(), v0: { ...o.view() }, pin: e.target.closest('.rc-cv-pin') };
+      } else if (ptrs.size === 2) {
+        const t = two();
+        g = { mode: 'pinch', v0: { ...o.view() }, m0: t.m, d0: t.d };
+        last = null;
+      }
+    });
+    el.addEventListener('pointermove', e => {
+      const p = ptrs.get(e.pointerId);
+      if (!p || !g) return;
+      p.x = e.clientX; p.y = e.clientY;
+      const b = o.box();
+      if (g.mode === 'pinch' && ptrs.size === 2) {
+        const t = two();
+        o.set(rcCvPinch(g.v0, g.m0, g.d0, t.m, t.d, b.w, b.h));
+      } else if (g.mode === 'one' && g.v0.s > 1.01) {
+        o.set(rcCvClamp({ s: g.v0.s, tx: g.v0.tx + e.clientX - g.x0, ty: g.v0.ty + e.clientY - g.y0 }, b.w, b.h));
+      }
+    });
+    function end(e, cancelled) {
+      if (!ptrs.has(e.pointerId)) return;
+      ptrs.delete(e.pointerId);
+      if (!g) return;
+      if (g.mode === 'pinch') { if (!ptrs.size) g = null; else g = { mode: 'rest' }; return; }
+      if (g.mode !== 'one' || cancelled) { if (!ptrs.size) g = null; return; }
+      const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
+      const now = Date.now();
+      const still = Math.hypot(dx, dy) < 10 && now - g.t0 < 600;
+      const was = g;
+      g = null;
+      if (still) {
+        const at = local(e.clientX, e.clientY);
+        const b = o.box();
+        if (!was.pin && o.double() && rcCvIsDouble(last, now, e.clientX, e.clientY)) {
+          last = null;
+          o.set(rcCvDoubleTap(o.view(), at.x, at.y, b.w, b.h));
+          return;
+        }
+        last = was.pin ? null : { t: now, x: e.clientX, y: e.clientY };
+        o.tap(at, was.pin);
         return;
       }
-      const at = cvLocal(e.clientX, e.clientY);
-      const f = rcCvToFrac(at.x, at.y, cv.view, cv.box.w, cv.box.h);
-      if (f) cvNewPin(f.fx, f.fy);
-      return;
+      last = null;
+      const dir = rcCvSwipe(dx, dy, was.v0.s);
+      if (dir) cvGo(dir);
     }
-    const dir = rcCvSwipe(dx, dy, was.v0.s);
-    if (dir) cvGo(dir);
+    el.addEventListener('pointerup', e => end(e, false));
+    el.addEventListener('pointercancel', e => end(e, true));
+    // Safari's own page zoom must not take a pinch on the picture.
+    el.addEventListener('gesturestart', e => e.preventDefault());
+    el.addEventListener('touchmove', e => { if (o.lock(e)) e.preventDefault(); }, { passive: false });
   }
-  stage.addEventListener('pointerup', e => cvEnd(e, false));
-  stage.addEventListener('pointercancel', e => cvEnd(e, true));
-  // Safari's own page zoom must not take a pinch on the picture.
-  stage.addEventListener('gesturestart', e => e.preventDefault());
-  stage.addEventListener('touchmove', e => { if (e.touches.length > 1 || cv.view.s > 1.01) e.preventDefault(); }, { passive: false });
+  cvGestures($('cv-stage'), {
+    view: () => cv.view, box: () => cv.box,
+    set: v => { cv.view = v; cvApply(); },
+    double: () => cv.mode === 'view',
+    lock: e => e.touches.length > 1 || cv.view.s > 1.01,
+    tap(at, pinEl) {
+      const act = rcCvTapAction(cv.mode, !!pinEl, cv.view, at.x, at.y, cv.box.w, cv.box.h);
+      if (act.kind === 'edit-pin') {
+        const p = cv.m.pins.find(x => x.n === Number(pinEl.dataset.n));
+        if (p) cvEditPin(p);
+      } else if (act.kind === 'new-pin') cvNewPin(act.fx, act.fy);
+    },
+  });
+
+  // ── Full screen ──
+  function cvFsHide() {
+    cv.fs = rcCvFsClose(cv.fs);
+    $('cv-fs').hidden = true;
+  }
+  function cvFsLayout() {
+    const shot = cv.m?.shots[cv.fs.idx];
+    const stage = $('cv-fs-stage');
+    if (!shot || !cv.fs.open) return;
+    const ratio = shot.px_w / shot.px_h;
+    const W = stage.clientWidth, H = stage.clientHeight;
+    const w = Math.max(1, Math.min(W, H * ratio));
+    const h = w / ratio;
+    cv.fsBox = { w, h };
+    const layer = $('cv-fs-layer');
+    layer.style.width = `${w}px`;
+    layer.style.height = `${h}px`;
+    layer.style.left = `${(W - w) / 2}px`;
+    layer.style.top = `${(H - h) / 2}px`;
+    cv.fs.view = rcCvClamp(cv.fs.view, w, h);
+    cvFsApply();
+  }
+  function cvFsApply() {
+    const { s, tx, ty } = cv.fs.view;
+    const layer = $('cv-fs-layer');
+    layer.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+    layer.style.setProperty('--cv-inv', String(1 / s));
+  }
+  function cvFsRender(fresh) {
+    const m = cv.m, shot = m?.shots[cv.idx];
+    if (!shot) { cvFsHide(); return; }
+    cv.fs = { ...cv.fs, idx: cv.idx, view: fresh ? { s: 1, tx: 0, ty: 0 } : cv.fs.view };
+    $('cv-fs-count').textContent = rcCvCounter(cv.idx, m.shots.length);
+    const img = $('cv-fs-img');
+    const src = rcCvImage(m.id, shot.file);
+    if (img.dataset.src !== src) {
+      img.dataset.src = src || '';
+      img.removeAttribute('src');
+      if (src) img.src = src;
+      img.alt = shot.title ? `Shot: ${shot.title}` : `Shot ${cv.idx + 1}`;
+    }
+    $('cv-fs-pins').replaceChildren(...m.pins.filter(p => p.shot === shot.id).map(p => cvPinEl(String(p.n), p.x, p.y, `Pin ${p.n}: ${p.text}`)));
+    cvFsLayout();
+  }
+  function cvFsOpen() {
+    if (!cv.m || !cv.m.shots.length || $('cv-confirm').hidden === false) return;
+    // An unsaved remark holds the page; full screen would page away from it.
+    if (cvHeld()) return;
+    cv.fs = rcCvFsOpen(cv.idx, cv.m.shots.length);
+    $('cv-fs').hidden = false;
+    cvFsRender(true);
+    $('cv-fs-close').focus({ preventScroll: true });
+  }
+  function cvFsClose() {
+    if (!cv.fs.open) return;
+    cv.fs = rcCvFsClose(cv.fs);
+    $('cv-fs').hidden = true;
+    // The same shot on the review page, at 1x.
+    cv.idx = rcCvPage(cv.fs.idx, cv.m ? cv.m.shots.length : 0);
+    cv.view = { s: 1, tx: 0, ty: 0 };
+    if (cv.m) cvRenderPage(true);
+    try { $('cv-full').focus({ preventScroll: true }); } catch (_) {}
+  }
+  $('cv-full').addEventListener('click', cvFsOpen);
+  $('cv-fs-close').addEventListener('click', cvFsClose);
+  cvGestures($('cv-fs-stage'), {
+    view: () => cv.fs.view, box: () => cv.fsBox,
+    set: v => { cv.fs.view = v; cvFsApply(); },
+    double: () => true,
+    lock: () => true,
+    tap() {},
+  });
 
   // ── Send remarks: every remark in full, then one call ──
   $('cv-send').addEventListener('click', () => {
@@ -3170,7 +3284,7 @@
     cvCloseEditor();
     const c = rcCvConfirm(cv.m);
     $('cv-cf-title').textContent = c.empty ? 'No remark to send' : c.title;
-    $('cv-cf-line').textContent = c.empty ? 'Tap a shot to place a pin, or add a note, first.' : c.line;
+    $('cv-cf-line').textContent = c.empty ? 'Turn on Remark and tap a shot to place a pin, or add a note, first.' : c.line;
     $('cv-cf-list').replaceChildren(...c.groups.map(gr => {
       const sec = document.createElement('section');
       const h = document.createElement('h3');
