@@ -22,7 +22,7 @@
     <div class="singleton-title">sbxw is already open</div>
     <p class="singleton-body">
       Another tab in this browser is already connected. sbxw isn't built to
-      be shared by several tabs at once — opening a second one here will slow
+      be shared by several tabs at once: opening a second one here will slow
       both down.
     </p>
     <div class="singleton-actions">
@@ -47,7 +47,7 @@
         viewport size and is recomputed on every resize. -->
   <div class="layout-switch" id="layout-switch">
     <button class="layout-switch-trigger" id="layout-switch-btn" title="Number of terminals" aria-haspopup="true" aria-expanded="false">
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
         <polyline points="3.7,5.5 6.7,8 3.7,10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
         <line x1="8" y1="10.8" x2="12.3" y2="10.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
@@ -95,7 +95,7 @@
        (the file browser especially) grind to a halt. Shown/hidden by the
        `clients` event on the `/api/stream` SSE connection in main.js. -->
   <span class="multi-client-warning" id="multi-client-warning" hidden
-        title="Another sbxw tab or window is connected to this server. sbxw isn't built to be shared by several tabs at once — expect things to slow down until only one is left. Click to ask any other tab in this browser to focus itself.">
+        title="Another sbxw tab or window is connected to this server. sbxw isn't built to be shared by several tabs at once, so expect things to slow down until only one is left. Click to ask any other tab in this browser to focus itself.">
     ⚠ <span id="multi-client-count-label">2</span> sbxw tabs open
   </span>
 
@@ -157,7 +157,7 @@
       <span class="sidebar-label">Sandboxes</span>
       <span class="sidebar-actions">
         <button id="btn-refresh" class="btn-refresh">
-          <svg width="10" height="10" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
             <path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
             <polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
@@ -184,7 +184,7 @@
            sandbox the modal below asks for, and its path lands in that
            sandbox's prompt unsent, so there is room to say what it is for.
            (/js/upload.js) -->
-      <label class="upload-box" id="upload-box" title="Drop a file to send it into a sandbox — or click to pick one">
+      <label class="upload-box" id="upload-box" title="Drop a file to send it into a sandbox, or click to pick one">
         <input type="file" id="upload-input" multiple hidden>
         <svg class="upload-box-icon" width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
           <path class="upload-arrow" d="M13 15V4M8.5 8.5 13 4l4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
@@ -201,12 +201,12 @@
            utility button. Help is a "?" keycap: the one glyph nobody has to
            learn. -->
       <div class="footer-row">
-        <button id="btn-setup" class="skills-btn" title="Setup — skills, templates, kits, MCP servers, hosts and the virtual Mac for your sandboxes">Setup</button>
+        <button id="btn-setup" class="skills-btn" title="Setup: skills, templates, kits, MCP servers, hosts and the virtual Mac for your sandboxes">Setup</button>
         <button id="btn-monitor" class="monitor-btn" hidden
-                title="Monitor Sandboxes — every sandbox at once, in a pane of its own">
+                title="Monitor Sandboxes: every sandbox at once, in a pane of its own">
           Monitor
         </button>
-        <button id="btn-help" class="help-btn" aria-label="Help" title="Help — empty sandbox list, sbx login, daemon restart">?</button>
+        <button id="btn-help" class="help-btn" aria-label="Help" title="Help: empty sandbox list, sbx login, daemon restart">?</button>
       </div>
 
       <!-- The two global shortcuts, written as keycaps so they read as keys to
@@ -248,7 +248,7 @@
         </p>
         <div class="kind-grid">
           <button type="button" class="kind-card" id="kind-workspace">
-            <span class="kind-card-icon" aria-hidden="true">📂</span>
+            <svg class="kind-card-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2l2 2.2h8.8A1.5 1.5 0 0 1 21 9.7v8.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></svg>
             <span class="kind-card-title">Workspace sandbox</span>
             <span class="kind-card-lead">An agent on one of your project folders.</span>
             <ul class="kind-card-points">
@@ -260,13 +260,13 @@
             <span class="kind-card-go">Choose folder →</span>
           </button>
           <button type="button" class="kind-card" id="kind-chat">
-            <span class="kind-card-icon" aria-hidden="true">💬</span>
+            <svg class="kind-card-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H10l-4.5 4v-4h0A1.5 1.5 0 0 1 4 14.5z"/></svg>
             <span class="kind-card-title">Chat sandbox</span>
             <span class="kind-card-lead">An agent on a fresh empty folder.</span>
             <ul class="kind-card-points">
               <li>None of your code is mounted</li>
               <li>Nothing of yours to read or change</li>
-              <li>Nothing to configure — the name is optional</li>
+              <li>Nothing to configure: the name is optional</li>
               <li>Throwaway: for asking, not for building</li>
             </ul>
             <span class="kind-card-go">Start chatting →</span>
@@ -304,7 +304,7 @@
         <div class="create-field">
           <div class="ports-header">
             <label class="field-label" style="margin:0">Project folder</label>
-            <button class="btn-add-port" id="btn-browse-native" type="button">📂 Browse…</button>
+            <button class="btn-add-port" id="btn-browse-native" type="button">Browse…</button>
           </div>
           <span class="create-hint">The agent works in this folder and can change its files.</span>
           <!-- Starred folders: one click into the root a project lives under,
@@ -465,9 +465,9 @@
         <button class="modal-close" id="rm-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
-        <p style="margin:0;color:#c9d1d9;font-size:13px;">
-          Remove <strong id="rm-modal-name" style="color:#e6edf3"></strong>?<br>
-          <span style="color:#f85149;font-size:11px;">This is irreversible — all sandbox state will be lost.</span>
+        <p class="modal-text">
+          Remove <strong id="rm-modal-name" class="modal-name"></strong>?<br>
+          <span class="modal-warn">This is irreversible: all sandbox state will be lost.</span>
         </p>
       </div>
       <div class="modal-foot">
@@ -705,14 +705,14 @@
       <span class="ssh-pop-title" id="ssh-pop-title">SSH connection</span>
       <button class="modal-close" id="ssh-pop-close" aria-label="Close">✕</button>
     </div>
-    <p style="margin:0;color:#8b949e;font-size:11px;line-height:1.5;">
+    <p class="pop-note">
       Fields for a client's <em>Add SSH connection</em> form. The managed
       <code>Host *.sbx</code> block already carries the user, the key and a
       ProxyCommand, so the greyed fields must stay <strong>empty</strong>.
     </p>
     <div id="ssh-fields"></div>
-    <p style="margin:0;color:#6e7681;font-size:10px;line-height:1.5;">
-      Needs <code>sbxw ssh --setup</code> once on this Mac — it writes the
+    <p class="pop-note pop-note-dim">
+      Needs <code>sbxw ssh --setup</code> once on this Mac; it writes the
       managed block into <code>~/.ssh/config</code>.
     </p>
   </div>
@@ -734,14 +734,14 @@
     <p class="envfile-hint">
       This sandbox's workspace and its published ports, in the format
       <code>sbx env run</code> reads. Commit it beside the repository so a
-      colleague brings up the same sandbox — <code>sbxw env run</code> adds the
+      colleague brings up the same sandbox; <code>sbxw env run</code> adds the
       policy, credentials and hooks on top.
     </p>
     <div class="envfile-root-row">
       <label class="field-label" for="envfile-root" style="margin:0">Folder</label>
       <input id="envfile-root" class="port-input w-alias" type="text" spellcheck="false"
              autocapitalize="off" autocomplete="off"
-             title="Where the file is saved — every path in it is written relative to this folder">
+             title="Where the file is saved: every path in it is written relative to this folder">
       <button class="refresh-btn" id="envfile-preview">Preview</button>
     </div>
     <span class="envfile-root-note" id="envfile-root-note"></span>
@@ -781,8 +781,8 @@
         <button class="modal-close" id="dup-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
-        <p style="margin:0 0 .2rem;color:#c9d1d9;font-size:13px;">
-          New sandbox on the same workspace as <strong id="dup-modal-source" style="color:#e6edf3"></strong>.
+        <p class="modal-text modal-text-lead">
+          New sandbox on the same workspace as <strong id="dup-modal-source" class="modal-name"></strong>.
         </p>
         <input id="dup-inp-name" class="field-input" type="text" maxlength="63" placeholder="new-sandbox-name"
                pattern="[a-z0-9][a-z0-9\-]*" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -802,15 +802,15 @@
         <button class="modal-close" id="chat-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
-        <p style="margin:0 0 .2rem;color:#c9d1d9;font-size:13px;">
-          An agent on a fresh empty folder — none of your code is mounted.
+        <p class="modal-text modal-text-lead">
+          An agent on a fresh empty folder: none of your code is mounted.
         </p>
         <div>
-          <label class="field-label" for="chat-inp-name">Name <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
+          <label class="field-label" for="chat-inp-name">Name <span class="label-aside">(optional)</span></label>
           <input id="chat-inp-name" class="field-input" type="text" maxlength="63"
                  pattern="[a-z0-9][a-z0-9\-]*" autocomplete="off" autocapitalize="off" spellcheck="false">
-          <span style="color:#8b949e;font-size:11px;display:block;margin-top:.35rem">
-            Leave empty for <strong id="chat-name-suggestion" style="color:#c9d1d9;font-weight:600"></strong>.
+          <span class="field-hint">
+            Leave empty for <strong id="chat-name-suggestion"></strong>.
           </span>
           <span class="create-error hidden" id="chat-name-error" style="align-self:flex-start;margin-top:.3rem;display:block"></span>
         </div>
@@ -818,14 +818,14 @@
       <div class="modal-foot">
         <button class="btn-back" id="chat-modal-back">← Back</button>
         <button class="btn-cancel" id="chat-modal-cancel">Cancel</button>
-        <button class="btn-create" id="chat-modal-confirm">💬 Start</button>
+        <button class="btn-create" id="chat-modal-confirm">Start</button>
       </div>
   </dialog>
 
   <!-- ── Ports info modal ── -->
   <dialog class="modal" id="ports-modal-overlay" aria-labelledby="ports-modal-title" closedby="none" style="width:1440px">
       <div class="modal-head">
-        <h2 class="modal-title" id="ports-modal-title">Ports &amp; network — <span id="ports-modal-name"></span></h2>
+        <h2 class="modal-title" id="ports-modal-title">Ports &amp; network: <span id="ports-modal-name"></span></h2>
         <button class="modal-close" id="ports-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body" style="gap:0;padding-bottom:.5rem">
@@ -853,13 +853,13 @@
               <input id="add-host-ip"   class="port-input w-ip"   type="text" placeholder="127.0.0.1" title="Host IP">
             </div>
             <div class="add-port-row">
-              <input id="add-alias"     class="port-input w-alias" type="text" placeholder="app.local (optional — creates /etc/hosts alias)" title="Hostname alias">
+              <input id="add-alias"     class="port-input w-alias" type="text" placeholder="app.local (optional, creates /etc/hosts alias)" title="Hostname alias">
               <button class="btn-add-mapping" id="btn-add-mapping" disabled>＋ Add</button>
             </div>
             <span class="ports-error-msg hidden" id="ports-add-error"></span>
           </div>
 
-          <div class="ports-section-label" style="margin-top:.9rem">Host aliases <span style="color:#6e7681;font-weight:400">(/etc/hosts)</span></div>
+          <div class="ports-section-label" style="margin-top:.9rem">Host aliases <span class="label-aside label-aside-dim">(/etc/hosts)</span></div>
           <table class="ports-table">
             <thead>
               <tr><th>Hostname</th><th>IP</th></tr>
@@ -869,7 +869,7 @@
             </tbody>
           </table>
 
-          <div class="ports-section-label" style="margin-top:.9rem">Network policy <span style="color:#6e7681;font-weight:400">(egress)</span></div>
+          <div class="ports-section-label" style="margin-top:.9rem">Network policy <span class="label-aside label-aside-dim">(egress)</span></div>
           <div id="policy-modal-content">
             <div class="ports-empty-msg">Loading…</div>
           </div>
@@ -895,8 +895,8 @@
   <dialog class="modal-shell" id="browser-overlay" aria-labelledby="browser-title" closedby="none">
     <div class="modal browser-modal">
       <div class="modal-head">
-        <h2 class="modal-title" id="browser-title">Browser — <span id="browser-name"></span></h2>
-        <button class="modal-close" id="browser-hide" aria-label="Hide the panel" title="Hide the panel — the browser keeps running in the sandbox">✕</button>
+        <h2 class="modal-title" id="browser-title">Browser: <span id="browser-name"></span></h2>
+        <button class="modal-close" id="browser-hide" aria-label="Hide the panel" title="Hide the panel; the browser keeps running in the sandbox">✕</button>
       </div>
       <div class="browser-bar">
         <button class="browser-nav" id="browser-back" title="Back" aria-label="Back">←</button>
@@ -904,7 +904,7 @@
         <button class="browser-nav" id="browser-reload" title="Reload" aria-label="Reload">↻</button>
         <input id="browser-url" class="browser-url" type="text" inputmode="url" autocomplete="off" autocorrect="off"
                autocapitalize="none" spellcheck="false" autofocus
-               aria-label="Address of the page shown" placeholder="The page the browser is on — type an address and press Enter">
+               aria-label="Address of the page shown" placeholder="The page the browser is on: type an address and press Enter">
         <select id="browser-viewport" class="browser-viewport" aria-label="Device the page is laid out for: a phone, a tablet or a desktop; Auto fits this panel">
           <option value="auto">Auto</option>
           <option value="mobile">Mobile · 390</option>
@@ -977,7 +977,7 @@
        bar (see /js/panes.js, /js/files.js). -->
   <dialog class="modal files-modal" id="files-modal-overlay" aria-labelledby="files-modal-title" closedby="any">
       <div class="modal-head">
-        <h2 class="modal-title" id="files-modal-title">Project — <span id="files-modal-name"></span></h2>
+        <h2 class="modal-title" id="files-modal-title">Project: <span id="files-modal-name"></span></h2>
         <!-- Files and Code map are the two halves of one project, so they are
              tabs at the top rather than a list with a map button in its footer,
              where the one thing sbxw adds over any file browser was the
@@ -1029,7 +1029,7 @@
         <!-- Focusable as one widget: ↑/↓ move the selection, Return opens a
              folder or downloads a file, Backspace goes up (see /js/files.js). -->
         <section class="fx-list-wrap" id="fx-list-wrap" tabindex="0"
-                 aria-label="Files — arrow keys to move, Return to open or download">
+                 aria-label="Files: arrow keys to move, Return to open or download">
           <table class="fx-list">
             <thead>
               <tr><th>Name</th><th class="fx-num">Size</th><th>Modified</th><th class="fx-act"><span class="sr-only">Download</span></th></tr>
@@ -1064,7 +1064,7 @@
        /js/codemap.js). -->
   <dialog class="modal codemap-modal" id="codemap-modal-overlay" aria-labelledby="codemap-title" closedby="any">
       <div class="modal-head">
-        <h2 class="modal-title" id="codemap-title">Project — <span id="codemap-name"></span></h2>
+        <h2 class="modal-title" id="codemap-title">Project: <span id="codemap-name"></span></h2>
         <!-- The Project modal's tabs, with this side selected: Files goes back
              to the explorer on the same sandbox. -->
         <div class="proj-tabs" role="tablist" aria-label="Project">
@@ -1120,11 +1120,11 @@
         <form class="codemap-lens-form hidden" id="codemap-lens-form">
           <textarea id="codemap-lens-objective" class="field-input codemap-lens-input"
                     rows="2" spellcheck="false"
-                    placeholder="Who is reading, and what do they need from it? e.g. “A product owner: what each part delivers, for whom, and what it costs to change — no file paths.”"></textarea>
+                    placeholder="Who is reading, and what do they need from it? e.g. “A product owner: what each part delivers, for whom, and what it costs to change, no file paths.”"></textarea>
           <!-- Names the dependency at the moment of use: this runs a slash
                command, and a sandbox without the codemap kit does not have it. -->
           <p class="codemap-lens-hint">Runs <code>/codemap-lens</code> in a background
-            session — the command ships with the codemap kit, and your agent pane stays
+            session: the command ships with the codemap kit, and your agent pane stays
             yours. The agent reads the map, writes the lens beside it and names it; the
             map itself is never touched.</p>
           <div class="codemap-lens-actions">
@@ -1167,8 +1167,8 @@
           before the kit was added needs <code>sbxw rm</code> then <code>sbxw up</code>.
         </p>
         <p class="help-lead">
-          <strong>Default</strong> skills are run by sbxw on its own — a hook, a web UI
-          button, or another skill; <strong>manual</strong> ones only when you type them.
+          <strong>Default</strong> skills are run by sbxw on its own (a hook, a web UI
+          button, or another skill); <strong>manual</strong> ones only when you type them.
           Hover a tag for the reason.
         </p>
         <!-- Your own skills: kept from a sandbox, installed in every new one by
@@ -1176,8 +1176,8 @@
         <div class="help-step" id="my-skills">
           <div class="help-step-head">Your skills <span class="skills-kit">~/.sbxw/skills</span></div>
           <p class="help-step-body">
-            A skill you made in a sandbox — under the project’s <code>.claude/skills/</code> or the
-            sandbox’s <code>~/.claude/skills/</code> — can be kept: every sandbox created afterwards
+            A skill you made in a sandbox (under the project’s <code>.claude/skills/</code> or the
+            sandbox’s <code>~/.claude/skills/</code>) can be kept: every sandbox created afterwards
             gets it as <code>/name</code>. Read it before keeping it: an agent wrote it, and every
             later agent will follow it.
           </p>
@@ -1197,7 +1197,7 @@
           </div>
           <div class="skills-row">
             <div class="skills-cmd"><code>/archify</code> <span class="skills-tag skills-tag-default" title="Run by /codemap to draw the map’s architecture diagram">default</span> <a class="skills-src" href="https://github.com/tt-a1i/archify" target="_blank" rel="noopener">tt-a1i/archify</a></div>
-            <p class="help-step-body">Validated, interactive HTML diagrams — architecture, workflow, sequence, data flow, lifecycle — from a description, pasted Mermaid, or the repository itself.</p>
+            <p class="help-step-body">Validated, interactive HTML diagrams (architecture, workflow, sequence, data flow, lifecycle) from a description, pasted Mermaid, or the repository itself.</p>
           </div>
           <div class="skills-row">
             <div class="skills-cmd"><code>/handoff</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span> <a class="skills-src" href="https://github.com/mattpocock/skills" target="_blank" rel="noopener">mattpocock/skills</a></div>
@@ -1213,7 +1213,7 @@
           </div>
           <div class="skills-row">
             <div class="skills-cmd"><code>/frontend-design</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span> <a class="skills-src" href="https://github.com/anthropics/skills" target="_blank" rel="noopener">anthropics/skills</a></div>
-            <p class="help-step-body">Guidance for distinctive, intentional UI design — aesthetic direction, typography, choices that don’t read as templated defaults. Used on its own when the agent builds UI.</p>
+            <p class="help-step-body">Guidance for distinctive, intentional UI design: aesthetic direction, typography, choices that don’t read as templated defaults. Used on its own when the agent builds UI.</p>
           </div>
           <div class="skills-row">
             <div class="skills-cmd"><code>/brag</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span> <a class="skills-src" href="https://github.com/latent-spaces/brag" target="_blank" rel="noopener">latent-spaces/brag</a></div>
@@ -1232,7 +1232,7 @@
           </div>
           <div class="skills-row">
             <div class="skills-cmd"><code>/codemap-lens</code> <span class="skills-tag skills-tag-default" title="Run by the web UI’s “Write a lens…” button">default</span></div>
-            <p class="help-step-body">Retells the code map for one reader — a product owner, a new joiner — as a separate document beside it.</p>
+            <p class="help-step-body">Retells the code map for one reader (a product owner, a new joiner) as a separate document beside it.</p>
           </div>
         </div>
         <div class="help-step">
@@ -1246,7 +1246,7 @@
           <div class="help-step-head">Retro kit <span class="skills-kit">assets/retro</span></div>
           <div class="skills-row">
             <div class="skills-cmd"><code>/retro</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span></div>
-            <p class="help-step-body">Reads back over past sessions and proposes what should become a script, a hook, a skill, a rule or a kit — with the evidence, building nothing until you pick.</p>
+            <p class="help-step-body">Reads back over past sessions and proposes what should become a script, a hook, a skill, a rule or a kit, with the evidence, building nothing until you pick.</p>
           </div>
         </div>
       </div>
@@ -1370,8 +1370,8 @@
       <div class="modal-body">
         <p class="help-lead">
           A template is a snapshot of a sandbox that is already set up. New sandboxes
-          start from it with <code>template = "&lt;tag&gt;"</code> in <code>sbxw.toml</code>
-          — no image pull, no kit reinstall. Secrets are taken out before the save.
+          start from it with <code>template = "&lt;tag&gt;"</code> in <code>sbxw.toml</code>,
+          with no image pull and no kit reinstall. Secrets are taken out before the save.
         </p>
         <div>
           <span class="field-label">Saved</span>
@@ -1438,7 +1438,7 @@
             <code>git</code> and <code>gh</code>. It never enters a sandbox.</p>
           <div class="sec-row">
             <input id="github-token" class="field-input" type="password" spellcheck="false" autocomplete="off"
-                   aria-label="GitHub token" placeholder="Paste a token — ghp_… or github_pat_…">
+                   aria-label="GitHub token" placeholder="Paste a token: ghp_… or github_pat_…">
             <button class="btn-create" id="github-save">Save</button>
           </div>
           <div class="mac-actions">
@@ -1613,13 +1613,13 @@
        (see /js/help.js). -->
   <dialog class="modal" id="help-modal-overlay" aria-labelledby="help-modal-title" style="width:540px" closedby="any">
       <div class="modal-head">
-        <h2 class="modal-title" id="help-modal-title">Help — no sandboxes showing?</h2>
+        <h2 class="modal-title" id="help-modal-title">Help: no sandboxes showing?</h2>
         <button class="modal-close" id="help-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
         <p class="help-lead">
           The sidebar lists exactly what the <code>sbx</code> CLI reports. An empty list
-          nearly always means <code>sbx</code> has nothing to report — not that your
+          nearly always means <code>sbx</code> has nothing to report, not that your
           sandboxes are gone. Run the commands below on the machine sbxw itself runs on
           (a terminal on your host, <em>not</em> a sandbox pane), then hit
           <strong>Refresh</strong>.
@@ -1646,7 +1646,7 @@
           </div>
           <p class="help-step-body">
             Already logged in and the list is still empty? The daemon behind the CLI is
-            wedged or not running. Start it again in the background — it keeps running
+            wedged or not running. Start it again in the background; it keeps running
             after you close the terminal, and writes what happened to
             <code>~/.sbx/daemon-restart.log</code>.
           </p>

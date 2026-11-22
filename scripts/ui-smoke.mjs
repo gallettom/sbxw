@@ -1,10 +1,11 @@
 // Load the real web UI from a running daemon in headless Chromium: no page
 // error, the sandbox listed, a pane attached to it, the usage chip filled —
 // then a screenshot. Usage: node ui-smoke.mjs <port> <sandbox> <png>
-// (PLAYWRIGHT_MODULE points at a playwright install when it is not resolvable.)
+// (PLAYWRIGHT_MODULE points at a playwright install when it is not resolvable,
+// CHROMIUM_PATH at a browser when Playwright has none of its own.)
 const [port, sandbox, png] = process.argv.slice(2);
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 // The CDN scripts (xterm) may come through a TLS-intercepting proxy in CI or a
 // sandbox; the page's own origin is plain HTTP on loopback either way.
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: true });
@@ -48,7 +49,8 @@ await page.route('**/api/jarvis/proposals/*/*', (route) => {
   route.fulfill({ json: { ok: true, proposal: p } });
 });
 expected.add('409 /api/jarvis/proposals/smoke-high/approve');
-await page.goto(`http://127.0.0.1:${port}/#sandbox=${sandbox}`, { waitUntil: 'domcontentloaded' });
+const signIn = process.env.SBXW_UI_TOKEN ? `?t=${encodeURIComponent(process.env.SBXW_UI_TOKEN)}` : '';
+await page.goto(`http://127.0.0.1:${port}/${signIn}#sandbox=${sandbox}`, { waitUntil: 'domcontentloaded' });
 let listed = false;
 for (let i = 0; i < 60 && !listed; i++) {
   listed = await page.evaluate((n) => document.body.innerText.includes(n), sandbox);
