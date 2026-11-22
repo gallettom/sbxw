@@ -127,7 +127,8 @@ pub fn carve_extras(cfg: &Config, mounts: &[(String, bool)]) -> Vec<sbxw_core::c
 
 impl App {
     pub async fn sandboxes(&self) -> Vec<SandboxItem> {
-        let listed = self.sbx.ls().await;
+        // Two independent `sbx` calls: run side by side, not one after the other.
+        let (listed, pending) = tokio::join!(self.sbx.ls(), self.sbx.approvals());
         // Which sbx made each sandbox sbxw knows, asked of `sbx inspect` once
         // and recorded: it never changes.
         let unknown: Vec<SandboxRef> = listed
@@ -144,7 +145,7 @@ impl App {
             }
         }
         let waiting = self.kit_approvals.lock().unwrap().clone();
-        let pending = self.sbx.approvals().await.unwrap_or_default();
+        let pending = pending.unwrap_or_default();
         let infos = self.session_infos();
         let pending_for = |name: &str| pending.iter().filter(|a| a.sandbox == name).count();
         let waiting_for = |name: &str| SandboxRef::parse(name).ok().and_then(|r| waiting.get(&r).map(Vec::len)).unwrap_or(0);
