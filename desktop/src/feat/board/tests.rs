@@ -1196,9 +1196,9 @@ fn eight_threads_keep_the_summary_to_two_rows() {
             tap(&mut rt, &k);
         }
         let (sm, _) = rt.presented("board-summary").unwrap();
-        // A row of chips or counters is 26 pt and 6 pt apart; a hairline and
+        // A row of chips or counters is 24 pt and 8 pt apart; a hairline and
         // 8 pt above and below.
-        let max_h = 18.0 + rows as f32 * 26.0 + (rows - 1) as f32 * 8.0 + 4.0;
+        let max_h = 18.0 + rows as f32 * 24.0 + (rows - 1) as f32 * 8.0 + 4.0;
         assert!(sm[3] <= max_h, "at {w}: the summary is {} tall (at most {rows} rows: {max_h})", sm[3]);
         let chips = rt.elements().into_iter().filter_map(|e| e.key).filter(|k| k.starts_with("board-chip-") && k != "board-chip-lead" && k != "board-chip-more").count();
         assert!(chips >= 2 && chips < 8, "at {w}: {chips} chips shown");
@@ -1625,4 +1625,33 @@ fn the_summary_is_a_section_between_hairlines_not_a_card() {
             assert!((team[0] - s[0]).abs() < 0.5, "at {w}: the team's row starts at the section's edge: {team:?} {s:?}");
         }
     }
+}
+
+/// Heights on the 4 pt steps: a chip is 24 pt (the counters' height; its
+/// pressable 22 inside the 1 pt ring), a thread's row in Details 24.
+#[test]
+fn chips_and_detail_rows_sit_on_the_4_pt_steps() {
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    if rt.presented("board-summary-more").is_none() {
+        tap(&mut rt, "board-summary-details");
+    }
+    let els = rt.elements();
+    let (mut chips, mut rows) = (0, 0);
+    for e in &els {
+        let Some(k) = e.key.as_deref() else { continue };
+        let h = e.rect[3];
+        if k.starts_with("board-chip-") && k != "board-chip-more" {
+            chips += 1;
+            assert!((h - 24.0).abs() < 0.5, "{k}: {h} pt");
+        } else if k.starts_with("board-thread-") {
+            assert!((h - 22.0).abs() < 0.5, "{k}: {h} pt");
+        } else if k.starts_with("board-detail-thread-") {
+            rows += 1;
+            assert!((h - 24.0).abs() < 0.5, "{k}: {h} pt");
+        } else if k.starts_with("board-count-") {
+            assert!((h - 24.0).abs() < 0.5, "{k}: {h} pt");
+        }
+    }
+    assert!(chips >= 2 && rows >= 1, "{chips} chips, {rows} detail rows");
 }

@@ -118,7 +118,7 @@ local function locations(ui, narrow)
       -- The current one: the listing's own highlight (its header at the
       -- middle has the same ground and the same accent edge), so the two read
       -- as one thing: this location, listed there.
-      kids[#kids + 1] = row{ gap = 8, w = "full", min_w = 0, px = 8, h = 22, radius = "xs",
+      kids[#kids + 1] = row{ gap = 8, w = "full", min_w = 0, px = 8, h = 24, radius = "xs",
         key = x.thread and ("files-worktree-" .. x.thread) or ("files-loc-" .. x.id),
         on = x.thread and "worktree" or "place", arg = x.thread and { sandbox = ui.sandbox, thread = x.thread } or x.id,
         fill = here and "active-bg" or nil, hover = "hover-subtle", help = x.help, selected = here,

@@ -454,12 +454,14 @@ local function chip_w(t, ui, narrow)
   return w
 end
 
+-- A chip: a 24 pt pill (the counters' height) whose 1 pt ring holds a
+-- 22 pt pressable inside it.
 local function thread_chip(t, ui, narrow)
   local tone_c = t.tone == "neutral" and "text-muted" or t.tone
-  return row{ key = "board-chip-" .. t.name, gap = 0, radius = "pill", h = 26, px = 0, hover_group = true, pad = 0,
+  return row{ key = "board-chip-" .. t.name, gap = 0, radius = "pill", h = 24, px = 0, hover_group = true, pad = 0,
     fill = t.selected and "active-bg" or "floor", border = t.selected and "accent" or "elevated",
     row{ key = "board-thread-" .. t.name, on = "thread", arg = t.selected and "" or t.name, selected = t.selected,
-      gap = 4, px = 8, h = 24, radius = "pill", hover = "hover-subtle",
+      gap = 4, px = 8, h = 22, radius = "pill", hover = "hover-subtle",
       help = t.selected and "Every thread again" or ("Only " .. t.name .. " in the conversation (" .. t.state .. ")"),
       dot{ tone = t.tone },
       text{ t.name, size = "xs", mono = true, weight = "semibold", color = t.color, truncate = true, max_w = narrow and 120 or 180 },
@@ -487,10 +489,10 @@ local function summary(s, ui, narrow)
   local c = s.counts or {}
   local head = { gap = 8, w = "full", wrap = true, key = "board-summary-team" }
   -- (The team's state is beside the picker, in the title: not twice.)
-  head[#head + 1] = row{ key = "board-chip-lead", gap = 0, radius = "pill", h = 26, px = 0,
+  head[#head + 1] = row{ key = "board-chip-lead", gap = 0, radius = "pill", h = 24, px = 0,
     fill = ui.thread == "lead" and "active-bg" or "floor", border = ui.thread == "lead" and "accent" or "elevated",
     row{ key = "board-thread-lead", on = "thread", arg = ui.thread == "lead" and "" or "lead", selected = ui.thread == "lead",
-      gap = 4, px = 8, h = 24, radius = "pill", hover = "hover-subtle",
+      gap = 4, px = 8, h = 22, radius = "pill", hover = "hover-subtle",
       help = ui.thread == "lead" and "Every thread again" or ("Only the lead in the conversation" .. (nz(s.lead) and (": " .. s.lead) or "")),
       badge{ "lead", tone = "purple" },
       text{ s.lead or "the sandbox's main session", size = "xs", color = "text-bright", truncate = true, max_w = narrow and 100 or 200 } } }
@@ -554,7 +556,7 @@ local function summary(s, ui, narrow)
     local d = { gap = 2, w = "full", key = "board-summary-more" }
     for _, t in ipairs(s.threads or {}) do
       d[#d + 1] = row{ gap = 8, w = "full", key = "board-detail-" .. t.name,
-        row{ key = "board-detail-thread-" .. t.name, on = "thread", arg = t.selected and "" or t.name, selected = t.selected, gap = 4, px = 4, h = 22, radius = "xs", hover = "hover-subtle",
+        row{ key = "board-detail-thread-" .. t.name, on = "thread", arg = t.selected and "" or t.name, selected = t.selected, gap = 4, px = 4, h = 24, radius = "xs", hover = "hover-subtle",
           help = t.selected and "Every thread again" or ("Only " .. t.name .. " in the conversation (" .. (t.state or "") .. ")"),
           dot{ tone = t.tone },
           text{ t.name, size = "xs", mono = true, weight = "semibold", color = t.color, truncate = true, max_w = narrow and 110 or 180 } },
