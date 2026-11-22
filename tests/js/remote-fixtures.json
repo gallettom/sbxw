@@ -430,7 +430,7 @@
               "id": "allow",
               "label": "Allow",
               "lasting": true,
-              "effect": "Lets docs reach registry.npmjs.org. sbx may keep this as a lasting network rule of docs (whether its Allow is one-time is not verified): it stays until you remove it in the network panel on your Mac."
+              "effect": "Adds a lasting network rule to docs: docs may reach registry.npmjs.org from now on, until you remove the rule on your Mac (sbx policy rm network --id <rule id> --sandbox docs)."
             },
             {
               "id": "dismiss",
@@ -454,7 +454,7 @@
             "id": "allow",
             "label": "Allow",
             "lasting": true,
-            "effect": "Lets docs reach registry.npmjs.org. sbx may keep this as a lasting network rule of docs (whether its Allow is one-time is not verified): it stays until you remove it in the network panel on your Mac."
+            "effect": "Adds a lasting network rule to docs: docs may reach registry.npmjs.org from now on, until you remove the rule on your Mac (sbx policy rm network --id <rule id> --sandbox docs)."
           },
           {
             "id": "dismiss",

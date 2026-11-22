@@ -2378,7 +2378,8 @@
       const box = el('div', 'rc-kv rc-net-opt');
       box.append(dataEl('p', 'rc-kv-k', str(o.label) || o.id));
       if (str(o.effect)) box.append(dataEl('p', 'rc-kv-v', str(o.effect)));
-      if (o.lasting === true) box.append(el('p', 'rc-item-warn', 'May leave a lasting network rule.'));
+      // sbx 0.51's Allow writes a lasting rule (checked); an id sbxw does not know may.
+      if (o.lasting === true) box.append(el('p', 'rc-item-warn', o.id === 'allow' ? 'Adds a lasting network rule.' : 'May leave a lasting network rule.'));
       out.push(box);
     }
     return out;
@@ -2449,7 +2450,9 @@
     more.replaceChildren();
     if (kind === 'network_respond') {
       const o = (Array.isArray(st.item.data.options) ? st.item.data.options : []).find(x => x && x.id === option?.id);
-      if (o && o.lasting === true) more.append(partsInto(el('p', 'rc-item-warn'), ['Lasting: ', { data: str(o.label) || o.id }, ' may add a network rule to ', { data: str(st.item.data.sandbox) }, ' that stays until you remove it on your Mac.']));
+      const sb = { data: str(st.item.data.sandbox) };
+      if (o && o.id === 'allow') more.append(partsInto(el('p', 'rc-item-warn'), [{ data: str(o.label) || o.id }, ' ', { data: str(st.item.data.host) }, ': adds a lasting network rule to ', sb, ' (remove it on the Mac with sbx policy rm).']));
+      else if (o && o.lasting === true) more.append(partsInto(el('p', 'rc-item-warn'), ['Lasting: ', { data: str(o.label) || o.id }, ' may add a network rule to ', sb, ' that stays until you remove it on your Mac.']));
       if (o && str(o.effect)) more.append(dataEl('p', 'rc-sheet-effect', str(o.effect)));
     }
     more.hidden = !more.childNodes.length;

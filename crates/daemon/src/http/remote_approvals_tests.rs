@@ -640,7 +640,7 @@ async fn each_sbx_network_option_is_answered_from_the_phone_with_face_id() {
     let opts = &list["requests"][0]["options"];
     assert_eq!(opts.as_array().unwrap().iter().map(|o| o["id"].as_str().unwrap()).collect::<Vec<_>>(), ["allow", "dismiss"], "every option sbx offers");
     assert_eq!((opts[0]["lasting"].as_bool(), opts[1]["lasting"].as_bool()), (Some(true), Some(false)), "Allow is flagged");
-    assert!(opts[0]["effect"].as_str().unwrap().contains("lasting network rule of sbxw-2"));
+    assert!(opts[0]["effect"].as_str().unwrap().starts_with("Adds a lasting network rule to sbxw-2"));
     assert!(list["requests"][0].get("mac_only").is_none());
     let detail = "/r/network/network%3A85TMuE6";
     for option in ["allow", "dismiss"] {

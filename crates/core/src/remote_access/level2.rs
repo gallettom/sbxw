@@ -400,17 +400,21 @@ pub struct OptionMeaning {
 /// What option `id` of a network request of `sandbox` for `host` does.
 /// A phone may answer with any option sbx offers (each behind Face ID);
 /// this only words it. sbx 0.51 offers two, checked against its real
-/// output: `dismiss` closes the request and writes no rule; `allow` lets
-/// the host through, and whether sbx keeps that as a rule of the sandbox
-/// is not verified, so it is flagged as lasting. By id, exactly (review
-/// P4: never a word found inside an id or a label); any other id is sbx's
-/// own and is flagged as lasting too (fail safe).
+/// output: `dismiss` closes the request and writes no rule; `allow` writes
+/// a LASTING rule. Evidence (sbx 0.51, verified on the person's Mac,
+/// 2026-11-22): after allowing index.crates.io, static.crates.io,
+/// crates.io and proxy.golang.org, `sbx policy inspect` showed a `local`
+/// policy applying to `sandbox:sbxw-2` with one `allow <host>:443 network
+/// tcp active` rule each, editable, and removable with `sbx policy rm
+/// network --id <rule-id> --sandbox sbxw-2`. By id, exactly (review P4:
+/// never a word found inside an id or a label); any other id is sbx's own,
+/// worded cautiously and flagged as lasting (fail safe).
 pub fn option_meaning(id: &str, label: &str, sandbox: &str, host: &str) -> OptionMeaning {
     match id {
         "dismiss" => OptionMeaning { lasting: false, effect: format!("Closes this request and writes no rule: {sandbox} stays unable to reach {host}, and sbx asks again if it tries again.") },
         "allow" => OptionMeaning {
             lasting: true,
-            effect: format!("Lets {sandbox} reach {host}. sbx may keep this as a lasting network rule of {sandbox} (whether its Allow is one-time is not verified): it stays until you remove it in the network panel on your Mac."),
+            effect: format!("Adds a lasting network rule to {sandbox}: {sandbox} may reach {host} from now on, until you remove the rule on your Mac (sbx policy rm network --id <rule id> --sandbox {sandbox})."),
         },
         _ => {
             let label = if label.is_empty() { id } else { label };
@@ -551,8 +555,9 @@ mod tests {
         assert!(!d.lasting);
         assert!(d.effect.contains("writes no rule") && d.effect.contains("sbxw-2"));
         let a = option_meaning("allow", "Allow", "sbxw-2", "storage.googleapis.com:443");
-        assert!(a.lasting, "sbx 0.51's Allow may keep a rule");
-        assert!(a.effect.contains("storage.googleapis.com:443") && a.effect.contains("lasting network rule of sbxw-2"));
+        assert!(a.lasting, "sbx 0.51's Allow writes a lasting rule");
+        assert!(a.effect.starts_with("Adds a lasting network rule to sbxw-2:") && a.effect.contains("storage.googleapis.com:443") && a.effect.contains("sbx policy rm"));
+        assert!(!a.effect.contains("may add"), "no hedge for a checked id");
         for (id, label) in [("allow-always", "Allow always"), ("Dismiss", "Dismiss"), ("dismiss ", "Dismiss"), ("x", "dismiss"), ("deny", "Deny")] {
             assert!(option_meaning(id, label, "s", "h").lasting, "{id:?} {label:?}: unknown, so flagged");
         }
