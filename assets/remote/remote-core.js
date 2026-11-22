@@ -308,6 +308,8 @@ const RC_PENDING_TEXT = {
   sent: 'Sent',
   waiting: 'Sent, waiting for the agent',
   failed: 'Not sent',
+  // The Mac never answered (rcClient's timeout): it may have the message.
+  unknown: 'No answer from the Mac',
 };
 
 // What the person sent from this page, drawn at once, until the history has
@@ -438,11 +440,37 @@ function rcMerge(have, incoming) {
 // read with no answer after RC_STUCK_MS no longer holds the next one back.
 const RC_AWAY_MS = 5000;
 const RC_STUCK_MS = 15000;
+// The stream's watchdog: the daemon says `ping` after 15 s of nothing, so a
+// stream silent for RC_SILENT_MS while the page shows died without a word
+// (iOS kept it "open"), and is opened again. A reopen that brings nothing
+// doubles the next wait, up to RC_SILENT_MAX_MS; any event starts again.
+const RC_SILENT_MS = 40000;
+const RC_SILENT_MAX_MS = 300000;
+function rcSilentWait(misses) {
+  const n = Math.max(0, Math.floor(Number(misses)) || 0);
+  return Math.min(RC_SILENT_MAX_MS, RC_SILENT_MS * 2 ** Math.min(n, 10));
+}
+function rcStreamDead(now, heardAt, misses) {
+  return Number(now) - Number(heardAt) >= rcSilentWait(misses);
+}
 
 // Two replies are the same text, whitespace aside.
 function rcSameReply(a, b) {
   const words = t => String(t ?? '').split(/\s+/).filter(Boolean).join(' ');
   return words(a) === words(b);
+}
+
+// A conversation left open grows with every reply, and with every older
+// page read: at the end of the log, only the newest RC_KEEP_ITEMS are kept
+// (remote.js, at the end only, so nothing in view moves); the rest is read
+// again through the older-rows path if the person scrolls up. `cut` is the
+// seq to read before, or null when nothing was dropped.
+const RC_KEEP_ITEMS = 400;
+function rcTrim(items, keep = RC_KEEP_ITEMS) {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length <= keep) return { items: list, cut: null };
+  const kept = list.slice(list.length - keep);
+  return { items: kept, cut: Number(kept[0].seq) };
 }
 
 // The first page of a conversation, in rows (a run of steps is one): about
@@ -698,10 +726,31 @@ function rcCleanName(s) {
 //
 // `hooks.reach(bool)` hears whether sbxw answered; `hooks.unpaired()` a 401
 // outside pairing (the device was forgotten or revoked).
+//
+// A request with no answer after RC_CALL_MS (a phone that slept with it in
+// the air: iOS may never settle it) ends as `{ ok: false, status: 0,
+// timeout: true }`, so nothing waits on it for ever (a Send spinner, a busy
+// button, a flag that holds the next read back). It says nothing about
+// reachability, and a write that timed out may still have reached the Mac:
+// its outcome says "no answer", never "not sent" (rcFailText).
+const RC_CALL_MS = { read: 20000, write: 60000, message: 30000 };
 function rcClient(fetchImpl, hooks = {}) {
-  const call = async (method, path, body, raw) => {
+  const call = async (method, path, body, raw, ms) => {
     if (!path.startsWith('/r/')) throw new Error('not a remote route');
     const init = { method, credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: {} };
+    const limit = ms === undefined ? (method === 'GET' ? RC_CALL_MS.read : RC_CALL_MS.write) : ms;
+    let timer = null;
+    let late = null;
+    if (limit && typeof setTimeout === 'function') {
+      late = new Promise(done => { timer = setTimeout(() => done(null), limit); });
+      if (typeof AbortController === 'function') {
+        const ac = new AbortController();
+        init.signal = ac.signal;
+        late = late.then(() => { try { ac.abort(); } catch (_) {} return null; });
+      }
+    }
+    const timedOut = { ok: false, status: 0, unreachable: false, timeout: true, data: null };
+    const settle = p => (late ? Promise.race([p, late]) : p);
     if (raw !== undefined) {
       init.headers['Content-Type'] = 'application/octet-stream';
       init.body = raw;
@@ -711,16 +760,21 @@ function rcClient(fetchImpl, hooks = {}) {
     }
     let res;
     try {
-      res = await fetchImpl(path, init);
+      res = await settle(fetchImpl(path, init));
     } catch (_) {
+      if (timer !== null) clearTimeout(timer);
+      if (init.signal?.aborted) return timedOut;
       hooks.reach?.(false);
       return { ok: false, status: 0, unreachable: true, data: null };
     }
+    if (res === null) return timedOut;
     // The sidecar answers 502/504 when the daemon behind it is gone.
     const unreachable = res.status === 502 || res.status === 504;
     hooks.reach?.(!unreachable);
-    let data = null;
-    try { data = await res.json(); } catch (_) {}
+    const got = await settle(res.json().then(v => ({ v }), () => ({ v: null })));
+    if (timer !== null) clearTimeout(timer);
+    if (got === null) return timedOut;
+    const data = got.v;
     if (res.status === 401 && !path.startsWith('/r/pair/')) hooks.unpaired?.();
     return { ok: res.ok, status: res.status, unreachable, data };
   };
@@ -746,7 +800,7 @@ function rcClient(fetchImpl, hooks = {}) {
     // Attachments are the daemon's upload ids, never a path: the daemon adds
     // the paths itself. Without attachments the body is exactly { text }.
     message: (s, text, attachments) => call('POST', `${at(s)}/message`,
-      Array.isArray(attachments) && attachments.length ? { text, attachments: attachments.map(String) } : { text }),
+      Array.isArray(attachments) && attachments.length ? { text, attachments: attachments.map(String) } : { text }, undefined, RC_CALL_MS.message),
     dropUpload: (s, id) => call('DELETE', `${at(s)}/upload/${encodeURIComponent(id)}`),
     // Per step, the 1-based options chosen (several for a multi-select step).
     answer: (s, answers) => call('POST', `${at(s)}/answer`, { answers }),
@@ -758,7 +812,8 @@ function rcClient(fetchImpl, hooks = {}) {
     setLead: (s, on) => call('POST', `${at(s)}/lead`, { on: !!on }),
     // A new ticket on a leader's board: text and up to 5 upload ids, it lands in Planned.
     createTicket: (s, title, description, attachments = []) => call('POST', `${at(s)}/kanban`, attachments.length ? { title, description, attachments } : { title, description }),
-    transcribe: pcm => call('POST', '/r/voice/transcribe', undefined, pcm),
+    // Its own bound (remote.js: 120 s, then a sentence); none here.
+    transcribe: pcm => call('POST', '/r/voice/transcribe', undefined, pcm, 0),
     // The canvas (API-canvas.md): read the list and a manifest, change one
     // remark of the draft, send the round. An id that is not a canvas id
     // never reaches the network.
@@ -869,7 +924,10 @@ function rcSkillLine(text, skills) {
 }
 
 // Why a request did not go through, in the person's words. `what`: "Message".
+// A write with no answer (`timeout`) may have reached the Mac: never "not sent".
+const RC_NO_ANSWER = 'no answer from the Mac. It may have arrived: check before sending again.';
 function rcFailText(what, res) {
+  if (res.timeout) return `${what}: ${RC_NO_ANSWER}`;
   if (res.unreachable || res.status === 0) return `${what} not sent: sbxw is unreachable (is the Mac awake?).`;
   const reason = res.data && typeof res.data.reason === 'string' && Object.hasOwn(RC_MSG_REASON, res.data.reason) ? res.data.reason : null;
   if (reason) {
@@ -1290,6 +1348,7 @@ const RC_L2_REASON = {
   limited: 'Too many tries. Wait a few minutes, then start again.',
 };
 function rcL2Fail(res) {
+  if (res && res.timeout) return 'No answer from the Mac. It may have been done: check before trying again.';
   if (!res || res.unreachable || res.status === 0) return 'sbxw is unreachable (is the Mac awake?). Nothing was done.';
   const reason = res.data && typeof res.data.reason === 'string' && Object.hasOwn(RC_L2_REASON, res.data.reason) ? res.data.reason : null;
   const err = res.data && typeof res.data.error === 'string' && res.data.error.trim() ? res.data.error.trim().slice(0, 300) : '';
@@ -1718,6 +1777,23 @@ function rcRowKeys(rows) {
     if (r && r.pid != null) return `p${r.pid}`;
     return `after${last}`;
   });
+}
+// What a row shows, as one string: two rows with the same signature draw
+// the same element, so remote.js keeps the one on screen.
+function rcRowSig(r) {
+  if (!r || typeof r !== 'object') return '';
+  return JSON.stringify([r.kind, r.text ?? null, r.from ?? null, r.count ?? null, r.files ?? null, r.images ?? null, r.pending ?? null, r.pid ?? null]);
+}
+// `box`'s children made exactly `els`, in order, moving only what is out of
+// place: an element already where it belongs is not touched (a re-inserted
+// element would lay out again and restart its animation).
+function rcPatchChildren(box, els) {
+  let at = box.firstChild;
+  for (const el of els) {
+    if (at === el) { at = at.nextSibling; continue; }
+    box.insertBefore(el, at);
+  }
+  while (at) { const nx = at.nextSibling; box.removeChild(at); at = nx; }
 }
 // Away from the end, the place is a row, not a scrollTop: the first row
 // still in view at the top ({ key, top, bottom } relative to the log's
@@ -2223,6 +2299,7 @@ function rcCvConfirmText(c) {
 // The send's answer, as one sentence and a tone.
 function rcCvSubmitResult(res) {
   if (res.ok && res.data?.ok) return { tone: 'ok', text: `Sent: round ${rcCvInt(res.data.review)} of remarks. The session was asked to read them.`, sent: true };
+  if (res.timeout) return { tone: 'warn', text: 'No answer from the Mac. The remarks may have been sent: check before sending again.' };
   if (res.unreachable || res.status === 0) return { tone: 'err', text: 'Not sent: sbxw is unreachable (is the Mac awake?). Your remarks are kept on the Mac.' };
   const d = res.data || {};
   const err = typeof d.error === 'string' && d.error.trim() ? ` (sbxw: ${d.error.trim().slice(0, 200)})` : '';
@@ -2241,6 +2318,7 @@ function rcCvRemarkResult(res, what) {
     const m = rcCvInt(res.data.masked);
     return { tone: 'ok', text: `${what}: saved${m ? ` (${m === 1 ? '1 word' : `${m} words`} masked by your anonymise rules)` : ''}.` };
   }
+  if (res.timeout) return { tone: 'warn', text: `${what}: no answer from the Mac. It may have been saved: check before saving again.` };
   if (res.unreachable || res.status === 0) return { tone: 'err', text: `${what}: not saved, sbxw is unreachable. Your text is still in the field.` };
   const err = typeof res.data?.error === 'string' && res.data.error.trim() ? res.data.error.trim().slice(0, 200) : `the Mac answered ${res.status}`;
   if (res.status === 404) return { tone: 'err', reload: true, text: `${what}: not saved, it was already sent or removed. The canvas was read again.` };

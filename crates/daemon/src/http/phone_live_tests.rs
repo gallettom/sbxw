@@ -89,3 +89,20 @@ async fn the_reply_reaches_an_open_stream_with_nobody_sending() {
     assert_eq!(replies.len(), 1, "{replies:?}");
     assert!(replies[0].get("provisional").is_none(), "{replies:?}");
 }
+
+/// A quiet stream says `ping` (a named event with an empty data line, so
+/// EventSource dispatches it to the page), at PING_EVERY, and only that: no
+/// payload.
+#[tokio::test]
+async fn a_quiet_stream_says_ping() {
+    let (_d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let r = req("GET", "/r/events").header(header::COOKIE, format!("{COOKIE}={token}")).body(Body::empty()).unwrap();
+    let mut s = router.clone().oneshot(r).await.unwrap().into_body().into_data_stream();
+    frames_until(&mut s, "event: leaders", Duration::from_secs(5)).await.expect("leaders at connect");
+    let seen = frames_until(&mut s, "event: ping", super::remote::PING_EVERY * 10).await.unwrap_or_else(|seen| panic!("no ping; saw {seen:?}"));
+    let ping = &seen[seen.find("event: ping").unwrap()..];
+    let frame = &ping[..ping.find("\n\n").map_or(ping.len(), |i| i + 2)];
+    assert!(frame == "event: ping\ndata: \n\n" || frame == "event: ping\ndata:\n\n", "{frame:?}");
+}

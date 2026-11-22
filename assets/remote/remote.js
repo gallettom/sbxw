@@ -255,6 +255,9 @@
     if (!st.paired) return;
     const es = new EventSource('/r/events');
     st.es = es;
+    // Any event, `ping` included, says the stream lives (watchStream).
+    for (const ev of ['open', 'leaders', 'history', 'approvals', 'kanban', 'needs_you', 'ping']) es.addEventListener(ev, heard);
+    st.watch = setInterval(watchStream, RC_WATCH_MS);
     // Each (re)opened stream catches up on what it may have missed while
     // it was down: one read, then the nudges take over.
     es.addEventListener('open', () => { banner.hidden = true; if (st.current) fetchNewer(); });
@@ -309,6 +312,22 @@
   function stopEvents() {
     if (st.es) { st.es.close(); st.es = null; }
     if (st.probe) { clearTimeout(st.probe); st.probe = null; }
+    if (st.watch) { clearInterval(st.watch); st.watch = null; }
+  }
+  // A stream silent for longer than the daemon's `ping` allows, while the
+  // page shows, is opened again (rcStreamDead); each reopen that brings
+  // nothing waits twice as long before the next. A dead connection the
+  // browser does see goes through the `error` probe, banner and all.
+  const RC_WATCH_MS = 10000;
+  st.heardAt = Date.now();
+  st.silentMisses = 0;
+  function heard() { st.heardAt = Date.now(); st.silentMisses = 0; }
+  function watchStream() {
+    if (!st.es || !st.paired || st.elsewhere || document.visibilityState !== 'visible') return;
+    if (!rcStreamDead(Date.now(), st.heardAt, st.silentMisses)) return;
+    st.silentMisses += 1;
+    st.heardAt = Date.now();
+    startEvents();
   }
   function scheduleProbe(ms) {
     if (st.probe || !st.paired || st.elsewhere) return;
@@ -336,6 +355,8 @@
     if (document.visibilityState !== 'visible') { st.hiddenAt = Date.now(); return; }
     const away = st.hiddenAt ? Date.now() - st.hiddenAt : 0;
     st.hiddenAt = 0;
+    // Silence is counted while the page shows only (watchStream).
+    st.heardAt = Date.now();
     if (st.paired && st.screen === 's-leaders') refreshHome();
     if (!st.paired || st.elsewhere) return;
     if (!st.es) { scheduleProbe(10); return; }
@@ -349,7 +370,9 @@
   // ── Leaders ──
   function setLeaders(data) {
     st.leaders = rcLeaders(data);
-    renderLeaders();
+    // The home list only while it shows (showLeaders draws it when it does):
+    // a conversation on screen does not rebuild a hidden list at each event.
+    if (st.screen === 's-leaders') renderLeaders();
     if (st.current && st.screen === 's-chat') {
       renderTail();
       renderChatTitle();
@@ -748,6 +771,7 @@
     renderChatTitle();
     $('log-top').textContent = 'Loading…';
     $('rows').replaceChildren();
+    drawn = new Map();
     renderTail();
     show('s-chat');
     setView(leader()?.kind === 'sandbox' ? 'chat' : view().mode);
@@ -806,6 +830,11 @@
       if (page.more) st.newerAgain = true;
       if (page.items.length) {
         st.items = rcMerge(st.items, page.items);
+        // At the end of the log, the oldest rows go (read again if wanted).
+        if (st.stick) {
+          const t = rcTrim(st.items);
+          if (t.cut !== null) { st.items = t.items; st.nextBefore = t.cut; }
+        }
         st.latestSeq = Math.max(st.latestSeq, page.latest_seq, ...page.items.map(i => Number(i.seq) || 0));
         renderRows();
         st.shownSeq = Math.max(st.shownSeq, st.latestSeq);
@@ -864,21 +893,46 @@
   st.stick = true;
   st.anchor = null;
   st.gliding = null;   // the round button's smooth scroll: a timer while it runs
+  // The rows on screen, by key: the element and what it shows. A row that
+  // shows the same thing keeps its element (no Markdown parsed again, no
+  // picture loaded again); only new or changed rows are built, and #rows is
+  // patched in place rather than emptied (rcRowSig, rcPatchChildren).
+  let drawn = new Map();
   function logShown() { return st.screen === 's-chat' && !logEl.hidden; }
-  function rowBoxes() {
-    const base = logEl.getBoundingClientRect().top - logEl.scrollTop;
-    return [...$('rows').children].map(el => {
-      const b = el.getBoundingClientRect();
-      return { key: el.dataset.key, top: b.top - base, bottom: b.bottom - base };
-    });
+  // A row's box relative to the log's content (`base`: logBase()), which a
+  // scroll does not change. Only the rows needed are measured, never all of
+  // them: on a long conversation that was thousands of reads per update and
+  // per scroll event.
+  function logBase() { return logEl.getBoundingClientRect().top - logEl.scrollTop; }
+  function rowBox(el, base) {
+    const b = el.getBoundingClientRect();
+    return { key: el.dataset.key, top: b.top - base, bottom: b.bottom - base };
+  }
+  // The first row still in view at `viewTop`, found by halving (the rows
+  // stack, so their bottoms only grow): what rcAnchorPick picks from all.
+  function rowsAt(viewTop) {
+    const kids = $('rows').children;
+    const base = logBase();
+    let lo = 0;
+    let hi = kids.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (rowBox(kids[mid], base).bottom > viewTop) hi = mid; else lo = mid + 1;
+    }
+    return lo < kids.length ? [rowBox(kids[lo], base)] : [];
+  }
+  // The anchor's row, if it is still on screen.
+  function anchorRows() {
+    const el = st.anchor ? drawn.get(st.anchor.key)?.el : null;
+    return el && el.parentNode === $('rows') ? [rowBox(el, logBase())] : [];
   }
   function noteAnchor() {
     if (!logShown()) return;
-    st.anchor = st.stick ? null : rcAnchorPick(rowBoxes(), logEl.scrollTop);
+    st.anchor = st.stick ? null : rcAnchorPick(rowsAt(logEl.scrollTop), logEl.scrollTop);
   }
   function keepPlace() {
     if (!logShown()) return;
-    const top = rcLogPlace(st.stick, st.anchor, st.stick ? [] : rowBoxes(), logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);
+    const top = rcLogPlace(st.stick, st.anchor, st.stick ? [] : anchorRows(), logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);
     if (Math.abs(logEl.scrollTop - top) >= 1) logEl.scrollTop = top;
     noteAnchor();
     updateToEnd();
@@ -954,13 +1008,25 @@
     const rows = shown.rows;
     $('log-top').textContent = st.nextBefore != null ? '' : rows.length ? 'Start of the conversation' : 'No messages yet';
     const keys = rcRowKeys(rows);
-    $('rows').replaceChildren(...rows.map((r, i) => {
+    const next = new Map();
+    const els = rows.map((r, i) => {
+      const sig = rcRowSig(r);
+      const had = drawn.get(keys[i]);
+      if (had && had.sig === sig && !next.has(keys[i])) {
+        next.set(keys[i], had);
+        // As before: only a row built now rises in; one kept is still.
+        had.el.classList.remove('rc-new');
+        return had.el;
+      }
       const el = rowEl(r);
       el.dataset.key = keys[i];
       // Only what arrived since the last look rises in; a re-render is still.
       if (r.seq > st.shownSeq && (r.kind === 'agent' || r.kind === 'me')) el.classList.add('rc-new');
+      if (!next.has(keys[i])) next.set(keys[i], { sig, el });
       return el;
-    }));
+    });
+    drawn = next;
+    rcPatchChildren($('rows'), els);
   }
 
   function rowEl(r) {
@@ -1001,10 +1067,19 @@
   }
 
   // ── The tail: working, a question, or "This needs your Mac" ──
+  // What the tail shows, when it is not a question card: an event that
+  // leaves it the same leaves its elements alone (no layout, no
+  // ResizeObserver round). A question card is drawn again as before.
+  let tailSig = null;
   function renderTail() {
     const tail = $('tail');
     const l = leader();
     const pending = rcPending(l);
+    const sig = pending?.kind === 'question' ? null
+      : pending?.kind === 'mac' ? `m\n${pending.text}`
+        : l?.state === 'working' ? `w\n${rcActivity(l)}` : '';
+    if (sig !== null && sig === tailSig && tail.isConnected) return;
+    tailSig = sig;
     if (pending?.kind === 'question') return tail.replaceChildren(questionCard(l, pending.steps));
     if (pending?.kind === 'mac') {
       const card = document.createElement('div');
@@ -1174,6 +1249,13 @@
       // history itself until it does (rcPendingSent, catchUp).
       rcPendingSent(mine, res.data, st.epoch, Date.now());
       catchUp(sandbox, mine);
+    } else if (res.timeout) {
+      // No answer: it may have arrived. The bubble says so and gives way to
+      // the history's copy if it comes; the history is read as after a Send,
+      // and the bubble goes when that ends. The text stays in the field.
+      mine.state = 'unknown';
+      catchUp(sandbox, mine);
+      setTimeout(() => { st.pending = st.pending.filter(p => p !== mine); if (st.current === sandbox) { renderRows(); keepPlace(); } }, RC_PENDING_WAIT_MS + 1000);
     } else {
       // Shown as not sent, then gone: the text and files are still in the composer.
       mine.state = 'failed';
@@ -1185,7 +1267,7 @@
     sendLabel.textContent = 'Send';
     $('composer').removeAttribute('aria-busy');
     // Refused or not submitted: the text and the files stay, nothing is resent.
-    if (!res.ok) { note(rcFailText('Message', res), res.data?.reason === 'not_submitted' ? 'warn' : 'err'); gateSend(); return; }
+    if (!res.ok) { note(rcFailText('Message', res), res.timeout || res.data?.reason === 'not_submitted' ? 'warn' : 'err'); gateSend(); return; }
     if (t) t.sent(ids);
     // Sent: what was sent leaves the field; anything typed meanwhile stays.
     if (st.current === sandbox) {
@@ -3865,13 +3947,20 @@
   // bottom safe area is the keyboard's, not the home indicator's.
   const vv = window.visualViewport;
   let tallest = 0;
+  // Called at every visual viewport scroll and resize: the root's style is
+  // written only when it changes (each write restyles the whole page).
+  let fitWas = '';
   function fit() {
     if (!vv) return;
     tallest = Math.max(tallest, vv.height);
+    const kb = vv.height < tallest - 120;
+    const now = `${vv.height}/${vv.offsetTop}/${kb}`;
+    if (now === fitWas) return;
+    fitWas = now;
     const root = document.documentElement;
     root.style.setProperty('--vvh', `${vv.height}px`);
     root.style.setProperty('--vvt', `${vv.offsetTop}px`);
-    root.classList.toggle('rc-kb', vv.height < tallest - 120);
+    root.classList.toggle('rc-kb', kb);
   }
   if (vv) {
     vv.addEventListener('resize', fit);

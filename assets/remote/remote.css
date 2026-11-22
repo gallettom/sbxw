@@ -526,6 +526,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-me.rc-pending { opacity: .72; }
 .rc-me-state { margin-top: 4px; font-size: 12px; opacity: .85; text-align: right; }
 .rc-me.rc-pending-failed { opacity: 1; outline: 1px solid var(--c-red); }
+.rc-me.rc-pending-unknown { opacity: 1; outline: 1px solid var(--c-amber); }
 .rc-new { animation: rc-rise 220ms var(--ease); }
 .rc-from { font-size: var(--fs-xs); color: var(--c-green); opacity: 0.85; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-sbxw, .rc-note, .rc-steps, .rc-mac-line {
