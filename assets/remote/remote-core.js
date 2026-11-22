@@ -208,7 +208,7 @@ function rcFiles(list) {
 // is set as text (textContent), never as markup.
 function rcMeEl(doc, row) {
   const d = doc.createElement('div');
-  d.className = 'rc-msg rc-me';
+  d.className = row.pending ? `rc-msg rc-me rc-pending rc-pending-${row.pending}` : 'rc-msg rc-me';
   if (row.text) {
     const t = doc.createElement('div');
     t.className = 'rc-me-text';
@@ -228,7 +228,47 @@ function rcMeEl(doc, row) {
     }
     d.append(box);
   }
+  if (row.pending) {
+    const s = doc.createElement('div');
+    s.className = 'rc-me-state';
+    s.textContent = row.pending === 'failed' ? 'Not sent' : 'Sending…';
+    d.append(s);
+  }
   return d;
+}
+
+// What the person sent from this page, drawn at once, until the history has
+// it. `pending`: [{ id, text, files, after, state }]: `after` is the newest
+// seq the page held at Send, `state` 'sending', 'sent' or 'failed'. A
+// message the history has is a 'me' row newer than `after`: the same text
+// (whitespace aside) first, else the first such row not matched yet (the
+// daemon masks names and addresses, so the text may differ). A failed one
+// never matches. What is not matched is drawn after the last row not newer
+// than its `after`: before anything that arrived after the Send. `after` -1
+// (the numbering changed since the Send): its own text anywhere, else it
+// waits at the end. Returns the rows and the ids still pending.
+function rcWithPending(rows, pending) {
+  const out = Array.isArray(rows) ? rows.slice() : [];
+  const list = (Array.isArray(pending) ? pending : []).filter(p => p && p.id != null);
+  const used = new Set();
+  const left = [];
+  const find = (p, same) => out.findIndex((r, i) => r && r.kind === 'me' && !used.has(i) && Number(r.seq) > Number(p.after) && (!same || rcSameReply(r.text, p.text)));
+  for (const p of list) {
+    if (p.state === 'failed') { left.push(p); continue; }
+    const lost = Number(p.after) < 0;
+    let i = lost ? out.findIndex((r, k) => r && r.kind === 'me' && !used.has(k) && rcSameReply(r.text, p.text)) : find(p, true);
+    if (i < 0 && !lost) i = find(p, false);
+    if (i >= 0) used.add(i); else left.push(p);
+  }
+  for (const p of left) {
+    let at = out.length;
+    while (Number(p.after) >= 0 && at > 0 && Number(out[at - 1].seq) > Number(p.after)) at -= 1;
+    const row = { kind: 'me', text: typeof p.text === 'string' ? p.text : '', pending: p.state === 'failed' ? 'failed' : 'sending', pid: p.id, seq: 0 };
+    const files = rcFiles(p.files);
+    if (files.length) row.files = files;
+    out.splice(at, 0, row);
+  }
+  return { rows: out, left: left.map(p => p.id) };
 }
 
 // `have` and a newer or older page, by seq, oldest first. A provisional
@@ -257,7 +297,18 @@ function rcSameReply(a, b) {
   return words(a) === words(b);
 }
 
-// A history answer, as `{ items, next_before, latest_seq }`: the page may
+// The first page of a conversation, in rows (a run of steps is one): about
+// the last five exchanges (a prompt, its steps, its reply). Older pages,
+// read when the log is scrolled to its top, hold RC_OLDER_ROWS.
+const RC_FIRST_ROWS = 16;
+const RC_OLDER_ROWS = 30;
+// Whether a history answer belongs to another numbering than the rows held
+// (a daemon restart, the hook's backfill): then the page starts again.
+function rcEpochChanged(held, page) {
+  return !!(held && page && page.epoch && page.epoch !== held);
+}
+
+// A history answer, as `{ items, next_before, latest_seq, epoch, more }`: the page may
 // come bare or under `page`.
 function rcPage(data) {
   const p = data && typeof data === 'object' ? (data.page && typeof data.page === 'object' ? data.page : data) : {};
@@ -265,6 +316,10 @@ function rcPage(data) {
     items: Array.isArray(p.items) ? p.items : [],
     next_before: Number.isFinite(Number(p.next_before)) && p.next_before !== null ? Number(p.next_before) : null,
     latest_seq: Number(p.latest_seq) || 0,
+    // The log's numbering: rows of another epoch are dropped, the last page
+    // read again. '' from a daemon that does not say (never a reload).
+    epoch: typeof p.epoch === 'string' ? p.epoch : '',
+    more: p.more === true,
   };
 }
 
@@ -1402,6 +1457,7 @@ function rcRowKeys(rows) {
   let last = 0;
   return (Array.isArray(rows) ? rows : []).map(r => {
     if (r && Number.isFinite(Number(r.seq)) && Number(r.seq) > 0) { last = Number(r.seq); return `s${last}`; }
+    if (r && r.pid != null) return `p${r.pid}`;
     return `after${last}`;
   });
 }

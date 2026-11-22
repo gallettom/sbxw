@@ -1211,3 +1211,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .rc-cv-enter { animation: none; }
   .rc-cv-layer { will-change: auto; }
 }
+/* A message sent from this page, until the history has it. */
+.rc-me.rc-pending { opacity: .72; }
+.rc-me-state { margin-top: 4px; font-size: 12px; opacity: .85; text-align: right; }
+.rc-me.rc-pending-failed { opacity: 1; outline: 1px solid var(--c-red); }
