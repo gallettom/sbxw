@@ -15,7 +15,7 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'RC_PILL_TONES', 'rcPills', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcAnswerPick', 'rcAnswers', 'rcAnswerFail', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'rcSkillMatches', 'rcSkillInsert', 'rcSkillLine', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
   'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
@@ -343,6 +343,27 @@ test('the check before sending matches the daemon\'s rule', () => {
   assert.equal(rc.RC_MSG_REASON.busy, 'The session is busy right now: try again in a few seconds. Meanwhile you can read it and interrupt it.');
   for (const s of ['', '   ', '\n\n']) assert.equal(rc.rcMessageCheck(s), 'empty');
   for (const s of ['hello', 'café ünïcödé 日本語 😀', 'a/b and c#d', 'line one\nline two', 'see https://x.example/#a', 'Fix it! Now.']) assert.equal(rc.rcMessageCheck(s), null, JSON.stringify(s));
+});
+
+test('the "/" autocomplete filters, inserts, and routes a known skill apart from an unknown line', () => {
+  const sk = ['code-review', 'codemap', 'retro', 'grill-me'];
+  assert.deepEqual(plain(rc.rcSkillMatches('/', sk)), sk);
+  assert.deepEqual(plain(rc.rcSkillMatches('/co', sk)), ['code-review', 'codemap']);
+  assert.deepEqual(plain(rc.rcSkillMatches('/ME', sk)), ['grill-me']);
+  assert.deepEqual(plain(rc.rcSkillMatches('/map', sk)), ['codemap'], 'a name that holds it comes after prefixes');
+  for (const t of ['', 'co', 'hi /co', '/retro ', '/retro x', '/x y', '/a\nb', null]) assert.deepEqual(plain(rc.rcSkillMatches(t, sk)), [], JSON.stringify(t));
+  assert.equal(rc.rcSkillInsert('retro'), '/retro ');
+  assert.deepEqual(plain(rc.rcSkillLine('/retro', sk)), { name: 'retro', args: '' });
+  assert.deepEqual(plain(rc.rcSkillLine('  /retro  last week ', sk)), { name: 'retro', args: 'last week' });
+  for (const t of ['/x', '/x args', '/retro\nmore', '/Retro', 'retro', '//retro', '/', '/retro-x']) assert.equal(rc.rcSkillLine(t, sk), null, JSON.stringify(t));
+  // The typing check: a known skill is no command; an unknown line still is.
+  assert.equal(rc.rcMessageCheck('/retro now', sk), null);
+  assert.equal(rc.rcMessageCheck('/retro', sk), null);
+  assert.equal(rc.rcMessageCheck('/x now', sk), 'command');
+  assert.equal(rc.rcMessageCheck('/retro now', []), 'command');
+  assert.equal(rc.rcMessageCheck('/retro now'), 'command');
+  assert.equal(rc.rcMessageCheck('/retro a\tb', sk), 'control');
+  assert.equal(rc.rcMessageCheck('/retro\n/clear', sk), 'command');
 });
 
 test('Send goes while the session works, and the status line says Claude Code queues it', () => {

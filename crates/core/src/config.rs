@@ -146,7 +146,7 @@ pub struct PortMap {
 }
 
 pub fn default_phone_skills() -> Vec<String> {
-    ["code-review", "codemap", "retro"].map(String::from).to_vec()
+    ["code-review", "codemap", "retro", "grill-me"].map(String::from).to_vec()
 }
 
 pub fn default_models() -> Vec<ModelChoice> {
@@ -777,7 +777,7 @@ mod tests {
         assert!(bad("phone_skills = [\"/lead\"]"));
         assert!(bad("phone_skills = [\"Code Review\"]"));
         assert!(!bad("phone_skills = [\"retro\", \"code-review\"]"));
-        assert_eq!(Config::default().phone_skills, ["code-review", "codemap", "retro"]);
+        assert_eq!(Config::default().phone_skills, ["code-review", "codemap", "retro", "grill-me"]);
         assert!(!bad("skills = \"off\""));
     }
 

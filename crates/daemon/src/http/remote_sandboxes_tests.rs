@@ -152,8 +152,18 @@ async fn a_running_plain_sandbox_is_listed_and_reached_on_the_level_1_routes() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert_eq!(app.remote_journal(10).last().map(|e| e.kind), Some(Kind::Interrupt));
 
-    // Its Kanban stays a leader's: a sandbox with no team has none.
-    assert_eq!(call(&router, "GET", "/r/leaders/app1/kanban", Some(&token), json!({})).await.status, StatusCode::NOT_FOUND);
+    // Its Kanban: a sandbox with no team reads its board (tickets only, no
+    // thread columns) and creates a ticket.
+    let r = call(&router, "GET", "/r/leaders/app1/kanban", Some(&token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["sandbox"], "app1");
+    let r = call(&router, "POST", "/r/leaders/app1/kanban", Some(&token), json!({"title": "from the phone"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let n = r.json()["n"].as_u64().unwrap();
+    let r = call(&router, "GET", &format!("/r/leaders/app1/kanban/{n}"), Some(&token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let board = call(&router, "GET", "/r/leaders/app1/kanban", Some(&token), json!({})).await.json();
+    assert!(board.to_string().contains("from the phone"), "{board}");
     assert_eq!(app.remote_status().leaders, vec!["lead1".to_string()], "sbxw remote status names leaders only");
 }
 
@@ -336,19 +346,19 @@ async fn level_2_answers_do_not_change_with_a_running_sandbox() {
 }
 
 #[tokio::test]
-async fn a_plain_sandbox_ticket_sends_no_kanban_frame() {
-    // Lead's ruling K1: the phone's Kanban keeps exactly a leader's reach.
+async fn a_plain_sandbox_ticket_sends_a_kanban_frame() {
+    // Every reached sandbox has a board, so its changes are told too.
     let (d, app) = on();
     let (lead, _) = leader(&app, d.path(), "lead1").await;
     let (app1, _) = plain(&app, d.path(), "app1").await;
     let list = app.remote_leaders();
     assert_eq!(list.len(), 2, "both reached");
     let mut seen = super::remote_kanban::baseline(&app, &list);
-    assert!(!seen.contains_key("app1"), "no baseline for a sandbox with no team");
+    assert!(seen.contains_key("app1"), "a baseline for a sandbox with no team");
     let draft = || sbxw_core::tickets::Draft { title: Some("t".into()), description: Some("".into()), priority: None };
     app.ticket_create(&app1, draft()).unwrap();
     let ev = crate::bus::Event::Tickets(crate::svc::tickets::TicketsNudge { sandbox: "app1".into(), n: None, what: "created" });
-    assert!(super::remote_kanban::changed(&app, &list, &ev, &mut seen).is_none());
+    assert!(super::remote_kanban::changed(&app, &list, &ev, &mut seen).is_some());
     app.ticket_create(&lead, draft()).unwrap();
     let ev = crate::bus::Event::Tickets(crate::svc::tickets::TicketsNudge { sandbox: "lead1".into(), n: None, what: "created" });
     assert!(super::remote_kanban::changed(&app, &list, &ev, &mut seen).is_some(), "a leader's still does");

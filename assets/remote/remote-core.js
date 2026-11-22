@@ -509,12 +509,35 @@ function rcCtlGate(leader, which) {
 // ESC, DEL, C1), a format character (bidi controls, zero-width space and
 // joiners, BOM, soft hyphen, word joiner, tags), a line or paragraph separator.
 const RC_CONTROL = /(?!\n)[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
-function rcMessageCheck(text) {
+function rcMessageCheck(text, skills) {
   const s = String(text ?? '');
   if (!s.trim()) return 'empty';
+  // A known skill line goes to the skill route, not as a message.
+  if (skills && rcSkillLine(s, skills)) return RC_CONTROL.test(s) ? 'control' : null;
   if (s.split('\n').some(line => /^\s*[!/#]/.test(line))) return 'command';
   if (RC_CONTROL.test(s)) return 'control';
   return null;
+}
+
+// The skill autocomplete. While the field holds `/` and a partial name (no
+// space yet), the skills whose name starts with it, then those that hold it.
+// Anything else (no `/`, a space typed, a line break): none.
+function rcSkillMatches(text, skills) {
+  const m = /^\/([a-z0-9-]*)$/i.exec(String(text ?? ''));
+  if (!m || !Array.isArray(skills)) return [];
+  const q = m[1].toLowerCase();
+  return [...skills.filter(n => n.startsWith(q)), ...skills.filter(n => !n.startsWith(q) && n.includes(q))];
+}
+// What tapping a suggestion puts in the field.
+function rcSkillInsert(name) { return `/${name} `; }
+// The whole text as a known skill's line: `/<name>` or `/<name> <args>`, one
+// line, the name in the list. {name, args}, or null (a message, or a line the
+// daemon refuses).
+function rcSkillLine(text, skills) {
+  const s = String(text ?? '').trim();
+  const m = /^\/([a-z0-9][a-z0-9-]{0,63})(?:[ \t]+([^\n]*))?$/.exec(s);
+  if (!m || !Array.isArray(skills) || !skills.includes(m[1])) return null;
+  return { name: m[1], args: (m[2] || '').trim() };
 }
 
 // Why a request did not go through, in the person's words. `what`: "Message".

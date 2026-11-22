@@ -107,7 +107,7 @@
     $('mark').hidden = BACK.includes(id);
     $('approvals-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     if (id !== 's-item') closeSheet();
-    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; disarmInterrupt(); } else { loadModels(); loadSkills(); }
+    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; $('skill-list').hidden = true; disarmInterrupt(); } else { loadModels(); loadSkills(); }
     $('menu-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     closeMenu();
   }
@@ -423,10 +423,9 @@
     const canStop = l?.state === 'working' && !l.read_only;
     $('interrupt').hidden = !canStop;
     if (!canStop && !$('confirm').hidden) disarmInterrupt();
-    // A sandbox with no team has no board: no Kanban tab.
-    const board = !l || l.kind !== 'sandbox';
-    $('views').hidden = !board;
-    if (!board && st.screen === 's-chat' && view().mode === 'kanban') setView('chat');
+    // Every sandbox the phone reaches has a board (tickets only without a team).
+    $('views').hidden = !l;
+    if (!l && st.screen === 's-chat' && view().mode === 'kanban') setView('chat');
     renderCtl(l);
     gateSend();
   }
@@ -447,6 +446,7 @@
     const res = await api.skills();
     st.skills = res.ok ? rcSkills(res.data) : [];
     if (!st.skills.length) st.skillsAsked = false;
+    renderSkillList();
     renderCtl(leader());
   }
   function renderCtl(l) {
@@ -470,37 +470,51 @@
     sw.disabled = !!rcCtlGate(l, 'lead') || st.ctlBusy;
     const why = rcCtlGate(l, 'model') || rcCtlGate(l, 'lead');
     sel.title = sw.title = why;
-    const sk = $('skill');
-    if (sk.dataset.n !== String(st.skills.length)) {
-      sk.replaceChildren(new Option('Skill…', '', true, true));
-      sk.options[0].disabled = true;
-      for (const n of st.skills) sk.add(new Option(n, n));
-      sk.dataset.n = String(st.skills.length);
-    }
-    sk.closest('label').hidden = !st.skills.length;
-    sk.disabled = !!rcCtlGate(l, 'model') || st.ctlBusy;
-    sk.title = why;
   }
-  // A skill: the name of the list and the text now in the message field as
-  // its arguments. The daemon types `/<name> <text>`; the page never does.
-  $('skill').addEventListener('change', async () => {
-    const sandbox = st.current;
-    const name = $('skill').value;
-    $('skill').value = '';
-    if (!sandbox || !name || st.ctlBusy) return;
+  // A skill line: the name of the list and its text. The daemon types
+  // `/<name> <text>`; the page never does. Returns true when it handled it.
+  async function runSkillLine(sandbox, line) {
+    if (st.ctlBusy) return;
+    const l = leader();
+    const why = rcCtlGate(l, 'model') || rcSendGate(l);
+    if (why) { note(why, 'warn'); return; }
     const raw = field.value;
-    const args = raw.trim();
-    if (args.includes('\n')) { note('A skill takes one line of text. Remove the line breaks, then pick it again.', 'warn'); return; }
-    st.ctlBusy = true; renderCtl(leader());
-    const res = await api.runSkill(sandbox, name, args);
+    st.ctlBusy = true; renderCtl(l);
+    const res = await api.runSkill(sandbox, line.name, line.args);
     st.ctlBusy = false;
     if (res.ok && st.current === sandbox && field.value === raw) {
       field.value = '';
       field.dispatchEvent(new Event('input'));
     }
-    note(res.ok ? `Started /${name}.` : rcFailText('Skill', res), res.ok ? 'ok' : 'err');
+    note(res.ok ? `Started /${line.name}.` : rcFailText('Skill', res), res.ok ? 'ok' : 'err');
     renderCtl(leader());
-  });
+  }
+  // The "/" list: tap a name to put `/<name> ` in the field.
+  const skillList = $('skill-list');
+  function renderSkillList() {
+    const names = rcSkillMatches(field.value, st.skills);
+    skillList.hidden = !names.length || st.screen !== 's-chat';
+    skillList.replaceChildren();
+    if (skillList.hidden) return;
+    for (const n of names) {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'presentation');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('role', 'option');
+      b.textContent = `/${n}`;
+      // Keep the field focused (and the keyboard up) while tapping.
+      b.addEventListener('pointerdown', e => e.preventDefault());
+      b.addEventListener('click', () => {
+        field.value = rcSkillInsert(n);
+        field.dispatchEvent(new Event('input'));
+        field.focus();
+        field.setSelectionRange(field.value.length, field.value.length);
+      });
+      li.append(b);
+      skillList.append(li);
+    }
+  }
   $('model').addEventListener('change', async () => {
     const sandbox = st.current;
     const id = $('model').value;
@@ -832,13 +846,14 @@
   // Warn in place about what the daemon will refuse; Send stays the person's.
   field.addEventListener('input', () => {
     if (!st.sending) {
-      const why = field.value.trim() ? rcMessageCheck(field.value) : null;
+      const why = field.value.trim() ? rcMessageCheck(field.value, st.skills) : null;
       // The typing check's own warning comes and goes with the text; a
       // refusal from the daemon stays until the next action.
       const typed = st.note && (st.note.text === RC_MSG_REASON.command || st.note.text === RC_MSG_REASON.control);
       if (why === 'command' || why === 'control') note(RC_MSG_REASON[why], 'warn');
       else if (typed) note('');
     }
+    renderSkillList();
     gateSend();
   });
   function saveDraft() {
@@ -868,6 +883,11 @@
     const ids = t ? t.ids() : [];
     if (!sandbox || (!text && !ids.length) || st.sending || rcSendGate(leader())) return;
     if (t && (t.pending() || t.held) || rec.state !== 'idle') return;
+    // A known skill goes to the skill route; any other "/" line is refused here.
+    const skill = rcSkillLine(text, st.skills);
+    if (skill && !ids.length) { runSkillLine(sandbox, skill); return; }
+    if (skill) { note('A skill takes text only. Remove the files, then Send.', 'warn'); return; }
+    if (rcMessageCheck(text, st.skills) === 'command') { note(RC_MSG_REASON.command, 'warn'); return; }
     // A message takes 1 to 4 s (the daemon waits for the echo before the
     // Return): the composer says so, and a second tap does nothing.
     st.sending = true;
