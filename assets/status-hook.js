@@ -334,7 +334,7 @@ function readTail(tp, st, sid, limits) {
       if (off > 0) reset = true;
     }
     const from = off;
-    if (off >= stat.size) return { from, to: off, reset, items: [], ino: stat.ino, prior: null, empty: !reset };
+    if (off >= stat.size) return { from, to: off, reset, items: [], ino: stat.ino, prior: null, size: stat.size };
     const len = Math.min(stat.size - off, L.read);
     const buf = Buffer.alloc(len);
     const n = fs.readSync(fd, buf, 0, len, off);
@@ -343,7 +343,7 @@ function readTail(tp, st, sid, limits) {
       const nl = buf.indexOf(10);
       if (nl < 0 || nl >= n) {
         // Still inside the line we landed in: skip what was read.
-        return { from, to: off + n, reset, items: [], ino: stat.ino, prior: null, align: true };
+        return { from, to: off + n, reset, items: [], ino: stat.ino, prior: null, align: true, size: stat.size };
       }
       start = nl + 1;
     }
@@ -358,10 +358,10 @@ function readTail(tp, st, sid, limits) {
         const m = fs.readSync(fd, chunk, 0, chunk.length, pos);
         if (m <= 0) return null; // not finished being written
         const nl = chunk.indexOf(10);
-        if (nl >= 0 && nl < m) return { from, to: pos + nl + 1, reset, items, ino: stat.ino, prior: null };
+        if (nl >= 0 && nl < m) return { from, to: pos + nl + 1, reset, items, ino: stat.ino, prior: null, size: stat.size };
         pos += m;
       }
-      return { from, to: pos, reset, items, ino: stat.ino, prior: null, align: true };
+      return { from, to: pos, reset, items, ino: stat.ino, prior: null, align: true, size: Math.max(stat.size, pos + 1) };
     }
     const items = [];
     let prior = null;
@@ -384,7 +384,7 @@ function readTail(tp, st, sid, limits) {
       bytes += size;
       to = off + p;
     }
-    return { from, to, reset, items, ino: stat.ino, prior };
+    return { from, to, reset, items, ino: stat.ino, prior, size: stat.size };
   } catch (_) {
     return null;
   } finally {
@@ -414,19 +414,58 @@ function stateAfter(status, body, piece) {
   return null; // unchanged: tried again at the next event
 }
 
-// Post what the transcript has that the daemon lacks. `post(body,
-// then(status, parsed))` sends one piece; `done({posts, items, status})`.
+// Post what the transcript has that the daemon lacks, piece after piece,
+// within one event's budget: at most SYNC_ROUNDS posts and SYNC_BUDGET_MS,
+// whichever comes first; the rest goes at the next event. A caught-up hook
+// still posts one empty piece, so a daemon that restarted (and lost every
+// log) says `409 {next: 0}` now, and the backfill follows in the same run
+// rather than when the session next writes. `post(body, then(status,
+// parsed))` sends one piece (status 0: no answer); `done({posts, items,
+// status})` is called once, at the latest when the budget runs out, whatever
+// the daemon does: the hook never waits longer than that for it.
+const SYNC_ROUNDS = 12; // a 2 MB backfill in 256 KB reads, and a 409 or two
+const SYNC_BUDGET_MS = 1000; // under the hook's 2 s safety net
 function syncHistory(tp, sid, dir, post, opts, done) {
-  const st = loadState(dir, sid);
-  const piece = readTail(tp, st, sid, opts && opts.limits);
-  if (!piece || !(piece.to > piece.from || piece.reset)) return done({ posts: 0, items: 0, status: 0 });
-  const body = { session_id: sid, from: piece.from, to: piece.to, reset: !!piece.reset, items: piece.items };
-  if (piece.prior) body.prior_session = piece.prior;
-  post(body, (status, parsed) => {
-    const next = stateAfter(status, parsed, piece);
-    if (next) saveState(dir, sid, next);
-    done({ posts: 1, items: piece.items.length, status });
-  });
+  const o = opts || {};
+  const rounds = o.rounds || SYNC_ROUNDS;
+  let posts = 0;
+  let items = 0;
+  let status = 0;
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    done({ posts, items, status });
+  };
+  const timer = setTimeout(finish, o.budgetMs || SYNC_BUDGET_MS);
+  let st = loadState(dir, sid);
+  const step = () => {
+    if (finished) return;
+    if (posts >= rounds) return finish();
+    const piece = readTail(tp, st, sid, o.limits);
+    // Nothing to read (a line still being written, an unreadable file), or
+    // nothing new after the first post: done for this event.
+    if (!piece || (posts > 0 && !(piece.to > piece.from || piece.reset))) return finish();
+    const body = { session_id: sid, from: piece.from, to: piece.to, reset: !!piece.reset, items: piece.items };
+    if (piece.prior) body.prior_session = piece.prior;
+    posts += 1;
+    post(body, (s, parsed) => {
+      if (finished) return; // too late: the same piece goes again next time
+      status = s;
+      const next = stateAfter(s, parsed, piece);
+      if (!next) return finish();
+      saveState(dir, sid, next);
+      st = next;
+      if (s === 200) {
+        items += piece.items.length;
+        // Caught up: nothing more this time.
+        if (!(piece.to < piece.size)) return finish();
+      }
+      step();
+    });
+  };
+  step();
 }
 // END history
 
