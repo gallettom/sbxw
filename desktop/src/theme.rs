@@ -1613,12 +1613,6 @@ mod tests {
 
             ("src/surface_canvas.rs", "radius(N * inv): marks drawn at the canvas's zoom"),
         ];
-        // Single lines off the scale, found by the second pass and left for
-        // a decision (each a visible change): (file, the line's code, why).
-        const ALLOWED_LINES: &[(&str, &str, &str)] = &[
-            ("src/shell.rs", "font(small(16.0, 600.0))", "the empty pane's title, 16 pt: between title 15 and heading 17"),
-            ("src/shell/rail.rs", "font(small(10.0, 700.0))", "the rail's count badge, 10 pt bold in a 14 pt bubble"),
-        ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let num = |rest: &str| rest.trim_start().chars().next().is_some_and(|c| c.is_ascii_digit() || c == '-');
         let mut found = vec![];
@@ -1646,9 +1640,6 @@ mod tests {
                 let body = src.split("#[cfg(test)]\nmod tests").next().unwrap();
                 for (n, line) in body.lines().enumerate() {
                     let code = line.split(comment).next().unwrap();
-                    if ALLOWED_LINES.iter().any(|(f, l, _)| *f == rel && code.contains(l)) {
-                        continue;
-                    }
                     // The measuring mirrors: a text's width measured at a
                     // size (`measure(t, size, weight)`, `chars_w(t, size)`)
                     // names the size as the drawing does.

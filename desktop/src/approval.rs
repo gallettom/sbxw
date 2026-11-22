@@ -178,7 +178,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
     let mut body = col().w_full().min_w(0.0).gap(crate::theme::spacing::MD);
     body = body.child(small(p["summary"].as_str().filter(|s| !s.is_empty()).unwrap_or("(no summary)").to_string(), 13.0, 400.0, "text-bright").key("jv-summary"));
     if high && pending {
-        body = body.child(small("High risk: read every change below before you approve. A spoken or typed yes does not approve this one: click Approve.".into(), 11.5, 400.0, "amber").key("jv-high-note"));
+        body = body.child(small("High risk: read every change below before you approve. A spoken or typed yes does not approve this one: click Approve.".into(), crate::theme::font_size::CAPTION, 400.0, "amber").key("jv-high-note"));
     }
     let changes = p["changes"].as_array().cloned().unwrap_or_default();
     for (i, ch) in changes.iter().enumerate() {
@@ -198,7 +198,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
         item = item.child(h);
         if let Some((ok, _, msg)) = &res {
             if !msg.is_empty() {
-                item = item.child(small(msg.clone(), 11.0, 400.0, if *ok == Some(false) { "red" } else { "text-muted" }));
+                item = item.child(small(msg.clone(), crate::theme::font_size::CAPTION, 400.0, if *ok == Some(false) { "red" } else { "text-muted" }));
             }
         }
         if let Some(cmd) = ch["host_command"].as_str() {
@@ -212,13 +212,13 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
                     .radius(radius("sm").unwrap())
                     .fill(c("red-tint"))
                     .border(1.0, c("red"))
-                    .child(small("This command will run on this machine, outside any sandbox:".into(), 11.5, 600.0, "text-bright"))
+                    .child(small("This command will run on this machine, outside any sandbox:".into(), crate::theme::font_size::CAPTION, 600.0, "text-bright"))
                     .child(text(cmd.to_string()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0).mono()).color(c("text-bright")).wrap_anywhere().w_full().min_w(0.0)),
             );
         }
         if let Some(list) = screen_intents(ch) {
             let mut box_ = col().key(format!("jv-intents-{i}")).w_full().gap(crate::theme::spacing::XXS).padding(crate::theme::spacing::SM).radius(radius("sm").unwrap()).fill(c("surface-alt")).border(1.0, c("elevated"));
-            box_ = box_.child(small(if list.is_empty() { "This screen asks the app for nothing.".into() } else { "This screen can ask the app to:".into() }, 11.5, 600.0, "text-bright"));
+            box_ = box_.child(small(if list.is_empty() { "This screen asks the app for nothing.".into() } else { "This screen can ask the app to:".into() }, crate::theme::font_size::CAPTION, 600.0, "text-bright"));
             for (words, new, approval) in list {
                 let mut line = words;
                 if new {
@@ -227,7 +227,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
                 if approval {
                     line = format!("{line}  (needs your approval in a core dialog)");
                 }
-                box_ = box_.child(small(format!("• {line}"), 11.5, 400.0, if new { "amber" } else { "text" }));
+                box_ = box_.child(small(format!("• {line}"), crate::theme::font_size::CAPTION, 400.0, if new { "amber" } else { "text" }));
             }
             item = item.child(box_);
         }
@@ -524,7 +524,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
         let granted = granted_lines(x);
         if !granted.is_empty() {
             let mut list = col().key("cf-grants").w_full().gap(crate::theme::spacing::XXS).padding(crate::theme::spacing::SM).radius(radius("sm").unwrap()).fill(c("surface-alt")).border(1.0, c("elevated"));
-            list = list.child(small("You grant:".into(), 11.5, 600.0, "text-bright"));
+            list = list.child(small("You grant:".into(), crate::theme::font_size::CAPTION, 600.0, "text-bright"));
             for (i, g) in granted.iter().enumerate() {
                 list = list.child(small(format!("• {g}"), 12.0, 400.0, "text").key(format!("cf-grant-{i}")));
             }
@@ -582,7 +582,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
                 input = input.placeholder(sec.placeholder.clone(), c("text-muted"));
             }
             let input = input.secure();
-            body = body.child(small(label, 11.5, 500.0, "text-muted")).child(
+            body = body.child(small(label, crate::theme::font_size::CAPTION, 500.0, "text-muted")).child(
                 rune::el().w_full().min_h(crate::theme::layout::CONTROL_H).px(crate::theme::spacing::SM).py(crate::theme::spacing::XS).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(radius("sm").unwrap()).child(input),
             );
         }
