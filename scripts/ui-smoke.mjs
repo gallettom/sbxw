@@ -66,6 +66,33 @@ for (let i = 0; i < 60 && !listed; i++) {
 await page.waitForTimeout(3000);
 // Open each panel the way a person would, and give it time to fetch.
 const tour = [];
+// Every control in a pane bar has one height and one vertical centre (within
+// half a pixel), and the bar is 32px: chips, buttons, icon buttons and the
+// mode switch alike. The pointer is put over the pane so the on-demand
+// buttons (Team mode, Sessions, ⋯, ↻) are drawn too.
+async function checkPaneBars(label) {
+  const count = await page.evaluate(() => paneCount);
+  for (let i = 0; i < count; i++) {
+    await page.locator(`#pane-${i} .pane-bar`).hover();
+    await page.waitForTimeout(150);
+    const r = await page.evaluate((i) => {
+      const bar = document.querySelector(`#pane-${i} .pane-bar`);
+      const rect = (e) => e.getBoundingClientRect();
+      const ctl = [...bar.querySelectorAll('.pane-btn, .role-chip, .pane-close-btn, .mode-switch')]
+        .filter((e) => e.offsetParent !== null && rect(e).height > 0)
+        .map((e) => ({ id: e.id || e.className, h: e.offsetHeight, mid: rect(e).top + rect(e).height / 2 }));
+      return { barH: bar.offsetHeight, ctl };
+    }, i);
+    if (r.barH !== 32) problems.push(`${label}: pane ${i} bar is ${r.barH}px, want 32`);
+    if (!r.ctl.length) continue;
+    const mid0 = r.ctl[0].mid;
+    for (const c of r.ctl) {
+      if (c.h !== 24) problems.push(`${label}: pane ${i} bar: ${c.id} is ${c.h}px high, want 24`);
+      if (Math.abs(c.mid - mid0) > 0.5) problems.push(`${label}: pane ${i} bar: ${c.id} centre ${c.mid} vs ${mid0}`);
+    }
+    tour.push(`${label}: pane ${i} bar, ${r.ctl.length} controls, one height`);
+  }
+}
 async function visit(label, open, after) {
   const before = problems.length;
   try {
@@ -79,6 +106,7 @@ async function visit(label, open, after) {
     tour.push(`${label}: could not open (${e.message.split('\n')[0]})`);
   }
 }
+await checkPaneBars('Pane bar');
 const button = (re) => page.getByRole('button', { name: re }).first();
 await visit('Project panel', () => button(/Project/).click(), () => page.screenshot({ path: png.replace(/\.png$/, '-project.png') }));
 await visit('More menu', () => button(/More actions/).click(), () => page.screenshot({ path: png.replace(/\.png$/, '-more.png') }));
@@ -100,6 +128,8 @@ await visit('New session on the main checkout', async () => {
   await page.locator('#psessions-0').click();
   await page.waitForTimeout(600);
   await page.screenshot({ path: png.replace(/\.png$/, '-sessions-after.png') });
+  await page.keyboard.press('Escape');
+  await checkPaneBars('Pane bar with a session');
 });
 await visit('Sidebar sessions', () => page.locator('.sbx-sessions-toggle').first().click(),
   () => page.screenshot({ path: png.replace(/\.png$/, '-sidebar.png') }));

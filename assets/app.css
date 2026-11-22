@@ -617,7 +617,7 @@
   .layout-switch-trigger {
     display: inline-flex; align-items: center; gap: var(--sp-1);
     background: var(--c-bg); color: var(--c-text-bright); border: 1px solid var(--c-border); border-radius: var(--r-sm);
-    height: 28px; padding: 0 var(--sp-2); font-size: var(--fs-sm);
+    height: var(--ctl-hdr); padding: 0 var(--sp-2); font-size: var(--fs-sm);
     cursor: pointer; font-family: inherit;
     transition: background var(--dur-micro), border-color var(--dur-micro), color var(--dur-micro);
   }
@@ -654,7 +654,7 @@
     display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-1);
     background: var(--c-bg); color: var(--c-text-bright);
     border: 1px solid var(--c-border); border-radius: 0 var(--r-sm) var(--r-sm) 0;
-    height: 28px; padding: 0 var(--sp-2); cursor: pointer;
+    height: var(--ctl-hdr); padding: 0 var(--sp-2); cursor: pointer;
     transition: border-color var(--dur-micro), color var(--dur-micro);
   }
   /* Raised over the count switch's edge, so its hover and open border shows
@@ -4760,7 +4760,7 @@
 .kanban-btn {
   display: inline-flex; align-items: center; gap: var(--sp-1);
   background: var(--c-bg); color: var(--c-text-bright); border: 1px solid var(--c-border); border-radius: var(--r-sm);
-  height: 28px; padding: 0 var(--sp-2); font: inherit; font-size: var(--fs-sm); cursor: pointer;
+  height: var(--ctl-hdr); padding: 0 var(--sp-2); font: inherit; font-size: var(--fs-sm); cursor: pointer;
   transition: background var(--dur-micro), border-color var(--dur-micro);
 }
 .kanban-btn:hover { background: var(--c-border); border-color: var(--c-dim); }
@@ -4944,18 +4944,21 @@ dialog.kb-form .modal-foot button { white-space: nowrap; flex-shrink: 0; }
 .field-hint strong { color: var(--c-text); font-weight: 600; }
 
 /* ── Control sizes (App screens) ──
-   Three heights, read from tokens: 32px for a control in a form or a dialog,
-   28px in a dense toolbar or a table row, 24px for the smallest one that sits
-   inside a list row. Nothing interactive is drawn under 24px. Where the bar
+   Heights read from tokens: 28px for a control in a form or a dialog, 24px in
+   a dense toolbar or a table row and for the smallest one that sits inside a
+   list row. Two bars have one height for everything in them: the page header
+   (--ctl-hdr, 28px, in its 48px) and a pane's bar (--ctl-bar, 24px, in 32px). Nothing interactive is drawn under 24px. Where the bar
    around a control has room, an invisible ::before grows its hit area to 44px
    high without moving a neighbour; where it has none (a sidebar row, a pane
    bar), the row itself is the larger target. Text-sized links inside prose
    and native checkboxes (16px, their label is the target) are not controls
    in this sense. */
 :root {
-  --ctl-h: 32px;
-  --ctl-h-dense: 28px;
+  --ctl-h: 28px;
+  --ctl-h-dense: 24px;
   --ctl-h-min: 24px;
+  --ctl-hdr: 28px;
+  --ctl-bar: 24px;
   --hit-min: 44px;
   --check-size: 16px;
 }
@@ -4970,7 +4973,7 @@ dialog.kb-form .modal-foot button { white-space: nowrap; flex-shrink: 0; }
 }
 /* Dense: the header, the pane bar, the sidebar's own bars, dialog toolbars
    and table rows. */
-:is(.layout-switch-trigger, .term-color-trigger, .kanban-btn, .skills-btn, .monitor-btn, .help-btn,
+:is(.skills-btn, .monitor-btn, .help-btn,
     .btn-new, .btn-refresh, .pane-bar .pane-btn, .pane-bar select,
     .port-input, .btn-add-mapping, .btn-allow-host, .btn-add-port, .ssh-copy, .tpl-rm,
     .fx-crumb, .fx-icon-btn, .fx-filter, .kb-scope, .policy-form select) {
@@ -4988,17 +4991,63 @@ dialog.kb-form .modal-foot button { white-space: nowrap; flex-shrink: 0; }
 .ports-table .btn-del-port, .btn-rm-port {
   min-height: var(--ctl-h-min); min-width: var(--ctl-h-min);
 }
-/* The pane bar holds 28px controls: it grows from 32 to 37px (4px above and
-   below, and its 1px rule). The mode switch is one 28px control whose lit
-   segment sits 2px in. */
+/* The pane bar: one height (--ctl-bar, 24px) for every chip, button, icon
+   button and the mode switch, all on one centre line, in a 32px bar (1px
+   above, the 1px rule below, 30px between). Icon buttons are 24px squares.
+   Same corner (--r-xs) throughout. Each control's hit area is extended to the
+   bar's full height by an invisible ::before. */
 .pane-bar {
-  height: calc(var(--ctl-h-dense) + 2 * var(--sp-1) + 1px);
-  padding-top: var(--sp-1); padding-bottom: var(--sp-1);
+  height: 32px; box-sizing: border-box;
+  padding-top: 1px; padding-bottom: 0;
 }
-.pane-bar .mode-switch { padding: 1px; gap: 1px; }
-.pane-bar .mode-switch button { min-height: calc(var(--ctl-h-dense) - 4px); }
-/* The Jarvis launcher: a 32px pill holding 28px buttons, in the 48px header. */
-.vc-launcher { height: var(--ctl-h); padding: 1px var(--sp-1); }
+@container pane (max-width: 620px) {
+  .pane-bar { padding-top: 1px; padding-bottom: 0; }
+}
+.pane-bar :is(.pane-btn, .role-chip, .pane-close-btn, .mode-switch) {
+  box-sizing: border-box; height: var(--ctl-bar); min-height: var(--ctl-bar);
+  margin: 0; border-radius: var(--r-xs);
+}
+.pane-bar :is(.pane-btn, .role-chip):not(.pane-dictate-btn) {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 var(--sp-2); line-height: 1; overflow: visible; gap: var(--sp-1);
+}
+.pane-bar .pane-dictate-btn { overflow: visible; }
+.pane-bar :is(.pane-btn, .role-chip)[hidden], .pane-bar .mode-switch button[hidden] { display: none; }
+.pane-bar .pane-files-btn { padding: 0 var(--sp-2); }
+.pane-bar :is(.pane-dictate-btn, .pane-more-btn, .pane-refresh-btn, .pane-close-btn) {
+  width: var(--ctl-bar); min-width: var(--ctl-bar); padding: 0; justify-content: center;
+}
+.pane-bar :is(.pane-more-btn, .pane-refresh-btn, .pane-close-btn) { display: inline-flex; align-items: center; }
+.pane-bar .pane-close-btn { line-height: 1; }
+.pane-bar .pane-dictate-btn svg, .pane-bar .pane-more-btn svg { display: block; }
+.pane-bar .session-count { line-height: 1.3; }
+.pane-bar .mode-switch { display: inline-flex; align-items: stretch; padding: 1px; gap: 1px; }
+.pane-bar .mode-switch button {
+  height: auto; min-height: 0; display: inline-flex; align-items: center; gap: var(--sp-1);
+  line-height: 1; border-radius: calc(var(--r-xs) - 1px);
+}
+.pane-bar :is(.pane-btn, .role-chip, .pane-close-btn) { position: relative; }
+.pane-bar :is(.pane-btn, .role-chip, .pane-close-btn)::before {
+  content: ''; position: absolute; left: 0; right: 0; top: -4px; bottom: -4px;
+}
+@container pane (max-width: 400px) {
+  .pane.pane .pane-bar .pane-session-btn.pane-refresh-btn { display: none; }
+}
+@media (hover: hover) {
+  .pane .pane-bar .pane-session-btn { display: none; }
+  .pane.focused .pane-bar .pane-session-btn,
+  .pane:hover .pane-bar .pane-session-btn,
+  .pane:focus-within .pane-bar .pane-session-btn,
+  .pane:has(.term-disconnected) .pane-bar .pane-more-btn,
+  .pane .pane-bar .pane-more-btn.remote-on { display: inline-flex; }
+  .pane .pane-bar .pane-main-action { display: none; }
+  .pane.focused .pane-bar .pane-main-action:not([hidden]),
+  .pane:hover .pane-bar .pane-main-action:not([hidden]),
+  .pane:focus-within .pane-bar .pane-main-action:not([hidden]),
+  .pane.leading .pane-bar .pane-lead-toggle:not([hidden]) { display: inline-flex; }
+}
+/* The Jarvis launcher: a 28px pill (the header's control height) holding 24px buttons. */
+.vc-launcher { height: var(--ctl-hdr); padding: 1px var(--sp-1); box-sizing: border-box; }
 .vc-l-btn, .vc-l-target { height: var(--ctl-h-dense); }
 .vc-l-btn { min-width: var(--ctl-h-dense); }
 /* The Jarvis panel and the chat dock: a dense panel, a 32px composer. */
