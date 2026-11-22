@@ -1609,3 +1609,63 @@ function rcClearBadge(nav) {
   } catch (_) {}
   return Promise.resolve();
 }
+
+// ══ Canvas: one shot per page, zoom, pins ═════════════════════════════════
+// The contract is .sbxw-artifacts/remote/API-canvas.md. The geometry below
+// is pure: the page measures, these compute.
+const RC_CV_MAX_ZOOM = 4;
+// The pager: an index kept inside [0, n - 1] (0 when there is no page).
+function rcCvPage(i, n, delta = 0) {
+  const count = Math.max(0, Math.floor(Number(n)) || 0);
+  if (!count) return 0;
+  const j = (Math.trunc(Number(i)) || 0) + (Math.trunc(Number(delta)) || 0);
+  return Math.min(count - 1, Math.max(0, j));
+}
+function rcCvCounter(i, n) {
+  const count = Math.max(0, Math.floor(Number(n)) || 0);
+  return count ? `${rcCvPage(i, count) + 1} / ${count}` : '0 / 0';
+}
+// A finished one-finger move: +1 (next), -1 (previous) or 0. Only a
+// mostly horizontal move, and never while the picture is zoomed in (then
+// the finger pans).
+function rcCvSwipe(dx, dy, scale = 1, min = 50) {
+  if (!(scale <= 1.01)) return 0;
+  if (Math.abs(dx) < min || Math.abs(dx) < Math.abs(dy) * 1.5) return 0;
+  return dx < 0 ? 1 : -1;
+}
+// The view of the picture: scale s about the box's top left, then a move
+// (tx, ty), kept so the picture always covers its box (no empty edge) and
+// s stays in [1, RC_CV_MAX_ZOOM].
+function rcCvClamp(view, w, h) {
+  const s = Math.min(RC_CV_MAX_ZOOM, Math.max(1, Number(view?.s) || 1));
+  const clamp = (v, lo) => Math.min(0, Math.max(lo, Number(v) || 0));
+  return { s, tx: clamp(view?.tx, w - w * s), ty: clamp(view?.ty, h - h * s) };
+}
+// Two fingers: the point of the picture under the first midpoint (m0) stays
+// under the current one (m1), scaled by the change of distance (d1 / d0).
+// Points are relative to the box's top left.
+function rcCvPinch(v0, m0, d0, m1, d1, w, h) {
+  const s = Math.min(RC_CV_MAX_ZOOM, Math.max(1, v0.s * (d0 > 0 ? d1 / d0 : 1)));
+  const px = (m0.x - v0.tx) / v0.s;
+  const py = (m0.y - v0.ty) / v0.s;
+  return rcCvClamp({ s, tx: m1.x - px * s, ty: m1.y - py * s }, w, h);
+}
+// A double tap: zoom 2x at the point, or back to 1x.
+function rcCvToggle(view, p, w, h) {
+  if (view.s > 1.01) return { s: 1, tx: 0, ty: 0 };
+  return rcCvPinch(view, p, 1, p, 2, w, h);
+}
+// A tap at (x, y), relative to the box's top left, as a fraction of the
+// picture (0..1 each way, 4 decimals), or null when it is off the picture.
+function rcCvToFrac(x, y, view, w, h) {
+  if (!(w > 0 && h > 0)) return null;
+  const fx = (x - view.tx) / view.s / w;
+  const fy = (y - view.ty) / view.s / h;
+  if (!(fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1)) return null;
+  const r = v => Math.round(v * 1e4) / 1e4;
+  return { fx: r(fx), fy: r(fy) };
+}
+// Where a fraction of the picture is on screen, relative to the box.
+function rcCvFromFrac(fx, fy, view, w, h) {
+  return { x: view.tx + fx * w * view.s, y: view.ty + fy * h * view.s };
+}
