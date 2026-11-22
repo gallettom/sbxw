@@ -90,3 +90,17 @@ fn timing_markdown_view() {
     });
     eprintln!("timing: markdown 400 x {} bytes: parse {parse:.2} ms, element {view:.2} ms (median of 11)", one.len());
 }
+
+/// `feats_app` (every feature's extras), which a push runs twice: inside
+/// `screen_data` and again for the pane extras.
+#[test]
+#[ignore]
+fn timing_feats_app() {
+    let Some(path) = big() else { return eprintln!("SBXW_PERF_FIXTURE not set: skipped") };
+    let a = App::new(Args { fixture: Some(path), ..Args::default() });
+    let d = a.screen_data();
+    let ms = time(15, || {
+        std::hint::black_box(a.feats_app(&d));
+    });
+    eprintln!("timing: feats_app {ms:.2} ms median of 15");
+}
