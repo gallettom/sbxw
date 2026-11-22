@@ -567,11 +567,12 @@ async fn upload_drop(State(app): S, Extension(d): Extension<DeviceCtx>, Path((sa
 
 // ── Web Push (API.md 2.8) ────────────────────────────────────────────────
 
-/// `{"key", "on"}`: the Mac's VAPID public key, and whether THIS device
-/// has notifications on.
+/// `{"key", "on", "tag"}`: the Mac's VAPID public key, whether THIS device
+/// has notifications on, and the tag of its subscription's endpoint (16 hex
+/// digits of its SHA-256, `null` when off; never the endpoint).
 async fn push_key(State(app): S, Extension(d): Extension<DeviceCtx>) -> Json<Value> {
-    let (key, on) = app.remote_push_key(&d.id);
-    Json(json!({ "key": key, "on": on }))
+    let (key, tag) = app.remote_push_key(&d.id);
+    Json(json!({ "key": key, "on": tag.is_some(), "tag": tag }))
 }
 
 #[derive(Deserialize)]

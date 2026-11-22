@@ -1,5 +1,5 @@
 // The service worker (assets/remote/sw.js): a notification for every push,
-// only ever one of three fixed French texts; the badge set, cleared, and
+// only ever one of three fixed French texts or one naming the sandbox; the badge set, cleared, and
 // never in the way; and no way for the worker to read or send data.
 // Run: node --test tests/js/push-sw.test.mjs
 import { test } from 'node:test';
@@ -9,6 +9,9 @@ import vm from 'node:vm';
 
 const src = readFileSync(new URL('../../assets/remote/sw.js', import.meta.url), 'utf8');
 const TEXTS = new Set(['Un plan vous attend', 'Un agent a besoin de vous', 'Quelque chose vous attend']);
+// A shown text: a fixed one, or one of the three that name a sandbox.
+const NAMED = /^(?:Un plan vous attend dans [A-Za-z0-9-]{1,63}|(?:Team leader )?[A-Za-z0-9-]{1,63} a besoin de vous)$/;
+const shownOk = t => TEXTS.has(t) || NAMED.test(t);
 
 // A worker world: records every notification, badge call and window action.
 function world({ badge = 'both', showFails = false, badgeFails = false, windows = [] } = {}) {
@@ -81,7 +84,34 @@ test('showNotification is called for every push shape, inside waitUntil', async 
     const w = world();
     assert.equal(await w.push(data), 1, 'one waitUntil');
     assert.equal(w.shown.length, 1, `a notification for ${JSON.stringify(data && data.json ? (() => { try { return data.json(); } catch (_) { return 'throws'; } })() : data)}`);
-    assert.ok(TEXTS.has(w.shown[0].opts.body));
+    assert.ok(shownOk(w.shown[0].opts.body), w.shown[0].opts.body);
+    assert.equal(w.shown[0].title, 'sbxw');
+  }
+});
+
+test('the text names the sandbox: a team leader, a sandbox, a plan', async () => {
+  const cases = [
+    [{ kind: 'n', badge: 1, name: 'sbxw-2', lead: true }, 'Team leader sbxw-2 a besoin de vous'],
+    [{ kind: 'n', badge: 1, name: 'sbxw-2', lead: false }, 'sbxw-2 a besoin de vous'],
+    [{ kind: 'p', badge: 1, name: 'sbxw-2', lead: false }, 'Un plan vous attend dans sbxw-2'],
+    [{ kind: 'p', badge: 1, name: 'sbxw-2', lead: true }, 'Un plan vous attend dans sbxw-2'],
+    [{ kind: 'n', badge: 1, name: 'x'.repeat(63), lead: false }, `${'x'.repeat(63)} a besoin de vous`],
+    // No name, or one that is not a sbx name: the fixed texts.
+    [{ kind: 'n', badge: 1, name: '', lead: true }, 'Un agent a besoin de vous'],
+    [{ kind: 'p', badge: 1, name: '' }, 'Un plan vous attend'],
+    [{ kind: 'n', badge: 1, lead: true }, 'Un agent a besoin de vous'],
+    [{ kind: 'n', badge: 1, name: '<b>x</b>', lead: true }, 'Un agent a besoin de vous'],
+    [{ kind: 'n', badge: 1, name: 'a b' }, 'Un agent a besoin de vous'],
+    [{ kind: 'n', badge: 1, name: 'x'.repeat(64) }, 'Un agent a besoin de vous'],
+    [{ kind: 'p', badge: 1, name: ['sbxw-2'] }, 'Un plan vous attend'],
+    [{ kind: 'p', badge: 1, name: 7 }, 'Un plan vous attend'],
+    [{ kind: 'n', badge: 1, name: 'sbxw-2', lead: 'true' }, 'sbxw-2 a besoin de vous'],
+    [{ kind: 'x', badge: 1, name: 'sbxw-2', lead: true }, 'Quelque chose vous attend'],
+  ];
+  for (const [payload, want] of cases) {
+    const w = world();
+    await w.push(json(payload));
+    assert.equal(w.shown[0].opts.body, want, JSON.stringify(payload));
     assert.equal(w.shown[0].title, 'sbxw');
   }
 });
@@ -99,6 +129,8 @@ test('hostile payloads change nothing shown: only the table texts appear', async
     { kind: evil, badge: 2 },
     { kind: 'p', badge: 2, body: 'Your password is hunter2' },
     { kind: 'n‮', badge: 3 },
+    { kind: 'n', badge: 3, name: evil, lead: true },
+    { kind: 'p', badge: 3, name: 'sbxw-2\n<script>evil</script>' },
   ];
   for (const p of payloads) {
     const w = world();
@@ -107,7 +139,7 @@ test('hostile payloads change nothing shown: only the table texts appear', async
     const { title, opts } = w.shown[0];
     assert.equal(title, 'sbxw');
     assert.deepEqual(Object.keys(opts).sort(), ['body', 'lang', 'renotify', 'tag']);
-    assert.ok(TEXTS.has(opts.body));
+    assert.ok(TEXTS.has(opts.body), opts.body);
     assert.equal(JSON.stringify(w.shown[0]).includes('evil'), false);
   }
   const w = world();

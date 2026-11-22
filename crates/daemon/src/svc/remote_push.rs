@@ -17,8 +17,9 @@
 use crate::app::{now_ms, App};
 use sbxw_core::agents::SessionState;
 use sbxw_core::remote_access::journal::Kind;
-use sbxw_core::remote_access::push::{self as rules, Answer, Edges, Job, Limits, Outcome, PushFile, PushKind, Refused, Subscription, Vapid};
-use std::collections::{BTreeMap, BTreeSet};
+use sbxw_core::remote_access::push::{self as rules, Answer, Asking, Edges, Job, Limits, Outcome, PushFile, PushKind, Refused, Subscription, Vapid};
+use sbxw_core::remote_access::reach::ReachKind;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -135,16 +136,21 @@ impl App {
     // ── The phone's routes ───────────────────────────────────────────────
 
     /// `GET /r/push/key`: the VAPID public key (made on first need) and
-    /// whether THIS device has a subscription.
-    pub fn remote_push_key(&self, device: &str) -> (String, bool) {
+    /// THIS device's subscription as the page may see it: `None`, or the
+    /// tag of its endpoint ([`rules::endpoint_tag`]), so the page can tell
+    /// that its own subscription is not the one the Mac sends to.
+    pub fn remote_push_key(&self, device: &str) -> (String, Option<String>) {
         let mut rt = self.remote_access.lock().unwrap();
         let dir = rt.dir.clone();
         let key = rt.push.vapid(&dir).public_b64();
-        (key, rt.push.file.subscriptions.contains_key(device))
+        (key, rt.push.file.subscriptions.get(device).map(|s| rules::endpoint_tag(&s.endpoint)))
     }
 
-    /// `POST /r/push/subscribe`: checked, then stored (one per device: a new
-    /// one replaces the old). The first subscription while the sidecar runs
+    /// `POST /r/push/subscribe`: checked, then stored. One per device: a new
+    /// one replaces the device's old one (an app removed and added again
+    /// subscribes afresh, and the old endpoint, which Apple still accepts
+    /// but no app shows, is never sent to again). One device per endpoint:
+    /// another device holding the same endpoint loses it. The first subscription while the sidecar runs
     /// without `--push` restarts it with `--push`, once, shortly after.
     pub fn remote_push_subscribe(self: &Arc<Self>, device: &str, endpoint: &str, p256dh: &str, auth: &str) -> Result<(), SubscribeError> {
         let sub = Subscription::parse(endpoint, p256dh, auth, now_ms()).map_err(SubscribeError::Refused)?;
@@ -153,7 +159,10 @@ impl App {
             let Some(name) = rt.devices.get(device).map(|d| d.name.clone()) else { return Err(SubscribeError::Gone) };
             let dir = rt.dir.clone();
             let _ = rt.push.vapid(&dir);
-            rt.push.file.subscriptions.insert(device.to_string(), sub);
+            rt.push.file.subscriptions.retain(|id, s| id == device || s.endpoint != sub.endpoint);
+            if rt.push.file.subscriptions.insert(device.to_string(), sub).is_some() {
+                tracing::info!("remote access: device {device} replaced its push subscription");
+            }
             rt.push.save(&dir);
             rt.record(device, &name, Kind::PushOn);
             tracing::info!("remote access: device {device} turned notifications on");
@@ -369,14 +378,20 @@ impl App {
     /// goes only while remote access is on and the pipe is open, to each
     /// device with a subscription, no stream open, and room in its limits.
     pub(crate) fn remote_push_step(&self) {
-        let asking: BTreeSet<String> = self.remote_reachable().into_iter().filter(|(_, _, i)| i.state == SessionState::Attention).map(|(s, _, _)| s.to_string()).collect();
-        let waiting = self.remote_waiting_count();
+        let asking: BTreeMap<String, Asking> = self
+            .remote_reachable()
+            .into_iter()
+            .filter(|(_, _, i)| i.state == SessionState::Attention)
+            .map(|(s, k, _)| (s.to_string(), Asking { name: rules::push_name(s.name.as_str()), lead: k == ReachKind::Leader }))
+            .collect();
+        let waiting_by = self.remote_waiting();
+        let waiting: usize = waiting_by.values().sum();
         let now = now_ms();
         let mut guard = self.remote_access.lock().unwrap();
         let rt = &mut *guard;
         let asking_n = asking.len();
-        let kinds = rt.push.edges.step(asking, waiting);
-        if kinds.is_empty() || !rt.enabled {
+        let fires = rt.push.edges.step(asking, waiting_by);
+        if fires.is_empty() || !rt.enabled {
             return;
         }
         let Some(tx) = rt.push.pipe.as_ref().map(|p| p.tx.clone()) else { return };
@@ -393,7 +408,8 @@ impl App {
             .map(|(id, s)| (id.clone(), s.clone()))
             .collect();
         for (device, sub) in targets {
-            let Some(kind) = kinds.iter().copied().find(|k| rt.push.limits.take(&device, *k, now)) else { continue };
+            let Some(fire) = fires.iter().find(|f| rt.push.limits.take(&device, f.kind, now)) else { continue };
+            let kind = fire.kind;
             if rt.push.pending.len() >= IN_FLIGHT_MAX {
                 tracing::info!("remote access: push to device {device} skipped, {IN_FLIGHT_MAX} unanswered");
                 continue;
@@ -401,17 +417,22 @@ impl App {
             rt.push.seq += 1;
             let seq = rt.push.seq;
             let id = format!("j{seq}");
-            let line = Job { id: &id, endpoint: &sub.endpoint, p256dh: &sub.p256dh, auth: &sub.auth, kind, badge, ttl: rules::TTL_S }.line();
+            let line = Job { id: &id, endpoint: &sub.endpoint, p256dh: &sub.p256dh, auth: &sub.auth, kind, name: &fire.name, lead: fire.lead, badge, ttl: rules::TTL_S }.line();
             if tx.try_send(line).is_ok() {
                 rt.push.pending.insert(seq, (device, kind));
             }
         }
     }
 
-    /// Plans waiting for the person's approval plus merges proposed.
-    fn remote_waiting_count(&self) -> usize {
+    /// Plans waiting for the person's approval plus merges proposed, per
+    /// sandbox.
+    fn remote_waiting(&self) -> BTreeMap<String, usize> {
         use sbxw_core::plans::{MergeState, PlanState};
-        self.plans_list().iter().filter(|p| (p.state == PlanState::Pending && !p.closed) || p.merge.as_ref().is_some_and(|m| m.state == MergeState::Proposed)).count()
+        let mut out = BTreeMap::new();
+        for p in self.plans_list().iter().filter(|p| (p.state == PlanState::Pending && !p.closed) || p.merge.as_ref().is_some_and(|m| m.state == MergeState::Proposed)) {
+            *out.entry(p.sandbox.clone()).or_insert(0) += 1;
+        }
+        out
     }
 }
 

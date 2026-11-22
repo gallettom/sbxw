@@ -917,13 +917,24 @@ terms (remote-access-spec.md, D1 to D7); contract: `.sbxw-artifacts/remote/API.m
 
 - **Off until the phone turns it on**, by a tap, per phone. The Mac turns one off with
   `sbxw remote notifications-off <id>`; `sbxw remote off` stops all of them (the sidecar
-  that sends stops), and unpairing a phone deletes its subscription.
+  that sends stops), and unpairing a phone deletes its subscription. One subscription per
+  phone: a new one replaces the phone's old one, and an endpoint belongs to one phone only.
+  The page compares its own subscription with the Mac's through a 16-hex-digit tag of the
+  endpoint's SHA-256 (never the endpoint) and, when the app was removed and added again,
+  says "Notifications are off on this installation: turn them on again."
 - **What Apple sees:** the Mac's public IP, the phone's subscription address, the time, a
-  fixed size (134 bytes), a fixed `Topic`, and a token signed with the Mac's own push key
+  fixed size (230 bytes), a fixed `Topic`, and a token signed with the Mac's own push key
   naming the public sbxw project URL. That is the timing of when agents wait for the
-  person. **What it cannot see:** anything else; the payload, a kind letter and a badge
-  number, is encrypted to the phone's key. No sandbox name, plan title, message or device
-  name is in it; the phone picks one of two fixed French texts.
+  person. **What it cannot see:** anything else; the payload (a kind letter, a badge
+  number, the sandbox's name and whether it is a team leader) is encrypted to the phone's
+  key and padded to one fixed length before encryption, so its size says nothing of the
+  name. No plan title, message or device name is in it.
+- **What the lock screen shows:** the sandbox's name, which the person chose to see
+  (reversing the earlier "no sandbox name" rule): "Team leader sbxw-2 a besoin de vous",
+  "sbxw-2 a besoin de vous", "Un plan vous attend dans sbxw-2". Anyone who sees the locked
+  phone sees which sandbox waits. The worker shows the name as plain text, and only when it
+  is 1 to 63 letters, digits and hyphens (a sbx name; the host part of a remote sandbox is
+  dropped); anything else falls back to the fixed French texts.
 - **Who sends:** `sbxw-tailnet`, started with `--push` only while remote access is on and
   a phone has a subscription. It takes jobs only from the daemon over a pipe (no socket),
   posts only to `https://*.push.apple.com:443` after checking that the address is public,

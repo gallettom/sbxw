@@ -162,24 +162,29 @@ func newUA(t *testing.T) (*ecdh.PrivateKey, []byte) {
 
 func TestPushRoundTripAndFixedSize(t *testing.T) {
 	ua, auth := newUA(t)
+	long := strings.Repeat("x", pushNameMax)
 	for _, c := range []struct {
 		kind  string
 		badge int
+		name  string
+		lead  bool
 		want  string
 	}{
-		{"p", 0, `{"kind":"p","badge":0}`},
-		{"n", 7, `{"kind":"n","badge":7}`},
-		{"p", 99, `{"kind":"p","badge":99}`},
+		{"p", 0, "", false, `{"kind":"p","badge":0,"name":"","lead":false}`},
+		{"n", 7, "a", true, `{"kind":"n","badge":7,"name":"a","lead":true}`},
+		{"n", 1, "sbxw-2", false, `{"kind":"n","badge":1,"name":"sbxw-2","lead":false}`},
+		{"p", 99, long, false, `{"kind":"p","badge":99,"name":"` + long + `","lead":false}`},
 	} {
 		as, _ := ecdh.P256().GenerateKey(rand.Reader)
 		salt := make([]byte, 16)
 		rand.Read(salt)
-		body, err := encryptPush(pushPlaintext(c.kind, c.badge), pushPlainPadded, ua.PublicKey(), auth, as, salt, pushRecordSize)
+		body, err := encryptPush(pushPlaintext(c.kind, c.badge, c.name, c.lead), pushPlainPadded, ua.PublicKey(), auth, as, salt, pushRecordSize)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(body) != pushBodySize || pushBodySize != 134 {
-			t.Errorf("%s/%d: body %d bytes, want %d (134)", c.kind, c.badge, len(body), pushBodySize)
+		// One size on the wire for a short name, a long one and none.
+		if len(body) != pushBodySize || pushBodySize != 230 {
+			t.Errorf("%s/%q: body %d bytes, want %d (230)", c.kind, c.name, len(body), pushBodySize)
 		}
 		got, err := decryptPush(body, ua, auth)
 		if err != nil || string(got) != c.want {
@@ -193,7 +198,7 @@ func TestPushRoundTripAndFixedSize(t *testing.T) {
 		}
 	}
 	// The largest payload still fits the fixed size.
-	if n := len(pushPlaintext("p", pushBadgeMax)); n+1 > pushPlainPadded {
+	if n := len(pushPlaintext("n", pushBadgeMax, long, false)); n+1 > pushPlainPadded {
 		t.Errorf("largest payload %d bytes does not fit %d", n, pushPlainPadded)
 	}
 }
@@ -432,7 +437,7 @@ func testJob(t *testing.T, endpoint string) *pushJob {
 func jobLine(id, endpoint string, ua *ecdh.PrivateKey, auth []byte, kind string, badge, ttl int) []byte {
 	b, _ := json.Marshal(map[string]any{
 		"id": id, "endpoint": endpoint, "p256dh": b64.EncodeToString(ua.PublicKey().Bytes()),
-		"auth": b64.EncodeToString(auth), "kind": kind, "badge": badge, "ttl": ttl,
+		"auth": b64.EncodeToString(auth), "kind": kind, "name": "sbxw-2", "lead": true, "badge": badge, "ttl": ttl,
 	})
 	return b
 }
@@ -553,7 +558,7 @@ func TestPushSendExactRequest(t *testing.T) {
 		t.Errorf("body %d bytes, Content-Length %d, want %d", len(r.body), r.contentLength, pushBodySize)
 	}
 	plain, err := decryptPush(r.body, ua, auth)
-	if err != nil || string(plain) != `{"kind":"n","badge":99}` {
+	if err != nil || string(plain) != `{"kind":"n","badge":99,"name":"sbxw-2","lead":true}` {
 		t.Errorf("payload %q %v", plain, err)
 	}
 }
@@ -781,7 +786,7 @@ func TestPushMalformedJobs(t *testing.T) {
 	good := func(mut func(m map[string]any)) string {
 		m := map[string]any{
 			"id": "x1", "endpoint": "https://web.push.apple.com/abc", "p256dh": b64.EncodeToString(ua.PublicKey().Bytes()),
-			"auth": b64.EncodeToString(auth), "kind": "p", "badge": 1, "ttl": 60,
+			"auth": b64.EncodeToString(auth), "kind": "p", "name": "sbxw-2", "lead": false, "badge": 1, "ttl": 60,
 		}
 		mut(m)
 		b, _ := json.Marshal(m)
@@ -800,6 +805,15 @@ func TestPushMalformedJobs(t *testing.T) {
 		{"no endpoint", good(func(m map[string]any) { delete(m, "endpoint") }), "x1", ansBadJob},
 		{"kind x", good(func(m map[string]any) { m["kind"] = "x" }), "x1", ansBadJob},
 		{"kind text", good(func(m map[string]any) { m["kind"] = "a plan waits" }), "x1", ansBadJob},
+		{"no name", good(func(m map[string]any) { delete(m, "name") }), "x1", ansBadJob},
+		{"no lead", good(func(m map[string]any) { delete(m, "lead") }), "x1", ansBadJob},
+		{"lead string", good(func(m map[string]any) { m["lead"] = "yes" }), "x1", ansBadJob},
+		{"name number", good(func(m map[string]any) { m["name"] = 2 }), "x1", ansBadJob},
+		{"name too long", good(func(m map[string]any) { m["name"] = strings.Repeat("a", pushNameMax+1) }), "x1", ansBadJob},
+		{"name markup", good(func(m map[string]any) { m["name"] = "<b>x</b>" }), "x1", ansBadJob},
+		{"name space", good(func(m map[string]any) { m["name"] = "a b" }), "x1", ansBadJob},
+		{"name unicode", good(func(m map[string]any) { m["name"] = "é" }), "x1", ansBadJob},
+		{"name quote", good(func(m map[string]any) { m["name"] = `a"b` }), "x1", ansBadJob},
 		{"badge float", good(func(m map[string]any) { m["badge"] = 1.5 }), "x1", ansBadJob},
 		{"badge string", good(func(m map[string]any) { m["badge"] = "3" }), "x1", ansBadJob},
 		{"no badge", good(func(m map[string]any) { delete(m, "badge") }), "x1", ansBadJob},

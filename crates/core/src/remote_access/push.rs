@@ -11,7 +11,7 @@
 
 use super::webauthn::{b64url_decode, b64url_encode};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 /// The `sub` claim of every VAPID token (D5): the public project URL, the
 /// same for every install, so no personal address goes to Apple.
@@ -35,6 +35,29 @@ pub const BACKOFF_429_MS: u64 = 10 * 60_000;
 
 /// The badge is clamped to this (the sidecar's own cap).
 pub const BADGE_MAX: usize = 99;
+
+/// A sandbox name in a job, bytes at most (the sidecar's `pushNameMax`):
+/// sbx's own limit, so a local name is never cut. The sidecar pads the
+/// plaintext to one fixed length that fits the longest name, so the size
+/// on the wire says nothing of it.
+pub const NAME_MAX: usize = 63;
+
+/// The name a job carries: the sandbox part of a reference
+/// (`host~name` gives `name`), only `[A-Za-z0-9-]`, at most [`NAME_MAX`]
+/// bytes. Anything else is dropped, so the sidecar never refuses it.
+pub fn push_name(sandbox: &str) -> String {
+    let name = sandbox.rsplit(crate::names::REF_SEP).next().unwrap_or("");
+    name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(NAME_MAX).collect()
+}
+
+/// What `GET /r/push/key` tells the page of THIS device's subscription:
+/// the first 16 hex digits of the SHA-256 of its endpoint. Enough for the
+/// page to see that its own subscription is not the one the Mac sends to
+/// (an app removed and added again), never the endpoint itself.
+pub fn endpoint_tag(endpoint: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(endpoint.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
 
 /// Why a subscription is refused: one short word, the `400`'s `reason`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,8 +276,10 @@ pub fn config_line(vapid: &Vapid) -> String {
     s
 }
 
-/// A job line (API-push.md section 4). No field for a text, a title, a
-/// sandbox or a URL exists: the sidecar builds the request itself.
+/// A job line (API-push.md section 4). No field for a text, a title or a
+/// URL exists: the sidecar builds the request itself. `name` is the
+/// sandbox the push is about ([`push_name`], may be empty) and `lead`
+/// whether it is a team leader; both travel only inside the encryption.
 #[derive(Serialize)]
 pub struct Job<'a> {
     pub id: &'a str,
@@ -262,6 +287,8 @@ pub struct Job<'a> {
     pub p256dh: &'a str,
     pub auth: &'a str,
     pub kind: PushKind,
+    pub name: &'a str,
+    pub lead: bool,
     pub badge: usize,
     pub ttl: u64,
 }
@@ -323,24 +350,46 @@ pub fn outcome(status: &str) -> Outcome {
     }
 }
 
+/// A session that asks for the person, as the trigger sees it: its
+/// sandbox's name for the notification and whether it is a team leader.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Asking {
+    pub name: String,
+    pub lead: bool,
+}
+
+/// One push to make: its kind and the sandbox it names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fire {
+    pub kind: PushKind,
+    pub name: String,
+    pub lead: bool,
+}
+
 /// The edges that cause a push, watched by ONE daemon task: a sandbox the
 /// phone reaches starts to ask for the person (`n`, the test of the
 /// `needs_you` event), or the number of plans and merges waiting goes up
 /// (`p`). The first look sets the baseline and pushes nothing.
+///
+/// `asking` is keyed by the sandbox reference; `waiting` counts plans and
+/// merges per sandbox. The push names the first sandbox that started to
+/// ask, or the first whose count went up.
 #[derive(Debug, Default)]
 pub struct Edges {
-    seen: Option<(BTreeSet<String>, usize)>,
+    seen: Option<(BTreeMap<String, Asking>, BTreeMap<String, usize>)>,
 }
 
 impl Edges {
-    pub fn step(&mut self, asking: BTreeSet<String>, waiting: usize) -> Vec<PushKind> {
+    pub fn step(&mut self, asking: BTreeMap<String, Asking>, waiting: BTreeMap<String, usize>) -> Vec<Fire> {
         let mut out = Vec::new();
         if let Some((was_asking, was_waiting)) = &self.seen {
-            if asking.iter().any(|s| !was_asking.contains(s)) {
-                out.push(PushKind::Needs);
+            if let Some((_, a)) = asking.iter().find(|(s, _)| !was_asking.contains_key(*s)) {
+                out.push(Fire { kind: PushKind::Needs, name: a.name.clone(), lead: a.lead });
             }
-            if waiting > *was_waiting {
-                out.push(PushKind::Plan);
+            let total = |m: &BTreeMap<String, usize>| m.values().sum::<usize>();
+            if total(&waiting) > total(was_waiting) {
+                let rose = waiting.iter().find(|(s, n)| **n > was_waiting.get(*s).copied().unwrap_or(0)).map(|(s, _)| push_name(s)).unwrap_or_default();
+                out.push(Fire { kind: PushKind::Plan, name: rose, lead: false });
             }
         }
         self.seen = Some((asking, waiting));
@@ -509,8 +558,8 @@ mod tests {
         let v = Vapid::generate();
         let c = config_line(&v);
         assert_eq!(c, format!("{{\"vapid_private\":\"{}\",\"sub\":\"https://github.com/gallettom/sbxw\"}}\n", v.private_b64()));
-        let j = Job { id: "j1", endpoint: "https://web.push.apple.com/x", p256dh: "BP", auth: "x2", kind: PushKind::Needs, badge: badge(150), ttl: TTL_S }.line();
-        assert_eq!(j, "{\"id\":\"j1\",\"endpoint\":\"https://web.push.apple.com/x\",\"p256dh\":\"BP\",\"auth\":\"x2\",\"kind\":\"n\",\"badge\":99,\"ttl\":3600}\n");
+        let j = Job { id: "j1", endpoint: "https://web.push.apple.com/x", p256dh: "BP", auth: "x2", kind: PushKind::Needs, name: "sbxw-2", lead: true, badge: badge(150), ttl: TTL_S }.line();
+        assert_eq!(j, "{\"id\":\"j1\",\"endpoint\":\"https://web.push.apple.com/x\",\"p256dh\":\"BP\",\"auth\":\"x2\",\"kind\":\"n\",\"name\":\"sbxw-2\",\"lead\":true,\"badge\":99,\"ttl\":3600}\n");
         assert!(j.len() < 4096);
     }
 
@@ -533,16 +582,38 @@ mod tests {
     }
 
     #[test]
-    fn edges_fire_on_the_rise_only() {
-        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
+    fn edges_fire_on_the_rise_only_and_name_the_sandbox() {
+        let ask = |v: &[(&str, bool)]| v.iter().map(|(s, l)| (s.to_string(), Asking { name: push_name(s), lead: *l })).collect::<BTreeMap<_, _>>();
+        let wait = |v: &[(&str, usize)]| v.iter().map(|(s, n)| (s.to_string(), *n)).collect::<BTreeMap<_, _>>();
+        let fire = |kind, name: &str, lead| Fire { kind, name: name.into(), lead };
         let mut e = Edges::default();
-        assert!(e.step(set(&["a"]), 3).is_empty(), "the baseline pushes nothing");
-        assert!(e.step(set(&["a"]), 3).is_empty(), "no change, no push");
-        assert_eq!(e.step(set(&["a", "b"]), 3), [PushKind::Needs]);
-        assert!(e.step(set(&["b"]), 2).is_empty(), "a fall pushes nothing");
-        assert_eq!(e.step(set(&["a", "b"]), 4), [PushKind::Needs, PushKind::Plan]);
-        assert!(e.step(set(&[]), 4).is_empty());
-        assert_eq!(e.step(set(&["a"]), 4), [PushKind::Needs], "asking again after an answer is a new edge");
+        assert!(e.step(ask(&[("a", false)]), wait(&[("a", 3)])).is_empty(), "the baseline pushes nothing");
+        assert!(e.step(ask(&[("a", false)]), wait(&[("a", 3)])).is_empty(), "no change, no push");
+        assert_eq!(e.step(ask(&[("a", false), ("b", true)]), wait(&[("a", 3)])), [fire(PushKind::Needs, "b", true)]);
+        assert!(e.step(ask(&[("b", true)]), wait(&[("a", 2)])).is_empty(), "a fall pushes nothing");
+        assert_eq!(e.step(ask(&[("a", false), ("b", true)]), wait(&[("a", 2), ("mini~c", 2)])), [fire(PushKind::Needs, "a", false), fire(PushKind::Plan, "c", false)]);
+        assert!(e.step(ask(&[]), wait(&[("a", 2), ("mini~c", 2)])).is_empty());
+        assert_eq!(e.step(ask(&[("a", false)]), wait(&[("a", 2), ("mini~c", 2)])), [fire(PushKind::Needs, "a", false)], "asking again after an answer is a new edge");
+        assert!(e.step(ask(&[("a", false)]), wait(&[("a", 1), ("c", 3)])).is_empty(), "the total did not rise");
+    }
+
+    #[test]
+    fn a_push_name_is_the_sandbox_part_cut_to_fit() {
+        assert_eq!(push_name("sbxw-2"), "sbxw-2");
+        assert_eq!(push_name("mini~sbxw-2"), "sbxw-2", "the host part is not shown");
+        assert_eq!(push_name("a<b>\"c"), "abc", "only letters, digits and hyphens");
+        assert_eq!(push_name(&"x".repeat(200)).len(), NAME_MAX);
+        assert_eq!(push_name(""), "");
+    }
+
+    #[test]
+    fn the_endpoint_tag_is_short_and_reveals_nothing() {
+        let t = endpoint_tag("https://web.push.apple.com/QGx");
+        assert_eq!(t.len(), 16);
+        assert!(t.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(t, endpoint_tag("https://web.push.apple.com/QGy"));
+        // The same digest the page computes with crypto.subtle (tests/js).
+        assert_eq!(endpoint_tag("https://web.push.apple.com/abc"), "3333140aac13e319");
     }
 
     #[test]

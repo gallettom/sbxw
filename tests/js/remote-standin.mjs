@@ -30,11 +30,12 @@
 // more (a stream that died without a word, as after a phone's sleep).
 // Push (API-push.md, thread push-daemon): GET /sw.js, GET /r/push/key,
 // POST /r/push/subscribe and /unsubscribe. {push: {on, keyReply: {status,
-// body}, subscribeReplies: [{status, body}]}} sets what they answer; the
+// body}, subscribeReplies: [{status, body}], tag}} sets what they answer
+// (`tag`, else the one of the last subscription posted); the
 // subscriptions posted are in `state.push.subs`, and the log has every call.
 // Usage: node tests/js/remote-standin.mjs [port]
 import http from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -276,7 +277,7 @@ export function startStandin(port = 0) {
     if (!s.paired) return send(res, 401, { ok: false, error: 'not paired' });
     if (p === '/r/me') return send(res, 200, fx.me);
     if (p === '/r/push/key' && req.method === 'GET') {
-      return s.push.keyReply ? send(res, s.push.keyReply.status, s.push.keyReply.body) : send(res, 200, { key: s.push.key, on: s.push.on });
+      return s.push.keyReply ? send(res, s.push.keyReply.status, s.push.keyReply.body) : send(res, 200, { key: s.push.key, on: s.push.on, tag: s.push.on ? (s.push.tag ?? (s.push.subs[0] ? createHash('sha256').update(s.push.subs[0].endpoint).digest('hex').slice(0, 16) : null)) : null });
     }
     if (p === '/r/push/subscribe' && req.method === 'POST') {
       const q = s.push.subscribeReplies.shift();

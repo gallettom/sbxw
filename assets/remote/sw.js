@@ -1,8 +1,9 @@
 // sbxw: the service worker. It exists only to show a notification when a push
 // arrives with the phone locked. Two listeners, nothing else: it reads no
 // data, stores nothing and makes no request. The only text it ever shows is
-// in the table below (French, chosen by the person); nothing from the push
-// is shown as text, whatever it carries.
+// in the table below (French, chosen by the person), with at most one thing
+// from the push in it: the sandbox's name, and only when it is 1 to 63
+// letters, digits and hyphens (plain text: a notification renders no HTML).
 'use strict';
 
 const TITLE = 'sbxw';
@@ -10,12 +11,19 @@ const TEXT_PLAN = 'Un plan vous attend';
 const TEXT_AGENT = 'Un agent a besoin de vous';
 const TEXT_OTHER = 'Quelque chose vous attend';
 
-// The kind ("p" or "n", API-push.md) picks one fixed text; anything else,
-// an empty or unreadable push included, still shows the fallback, because a
-// push that shows nothing makes iOS revoke the permission.
-function bodyFor(kind) {
-  if (kind === 'p') return TEXT_PLAN;
-  if (kind === 'n') return TEXT_AGENT;
+// The sandbox's name, or null: anything but a sbx name is never shown.
+function nameFor(n) {
+  return typeof n === 'string' && /^[A-Za-z0-9-]{1,63}$/.test(n) ? n : null;
+}
+
+// The kind ("p" or "n", API-push.md) picks the text: with the sandbox's
+// name when the push carries a valid one, else the fixed text. Anything
+// else, an empty or unreadable push included, still shows the fallback,
+// because a push that shows nothing makes iOS revoke the permission.
+function bodyFor(kind, name, lead) {
+  const n = nameFor(name);
+  if (kind === 'p') return n ? `Un plan vous attend dans ${n}` : TEXT_PLAN;
+  if (kind === 'n') return n ? `${lead === true ? 'Team leader ' : ''}${n} a besoin de vous` : TEXT_AGENT;
   return TEXT_OTHER;
 }
 
@@ -35,11 +43,15 @@ async function setBadge(n) {
 
 self.addEventListener('push', event => {
   let kind = null;
+  let name = null;
+  let lead = false;
   let badge = null;
   try {
     const d = event.data ? event.data.json() : null;
     if (d && typeof d === 'object') {
       kind = d.kind;
+      name = d.name;
+      lead = d.lead;
       badge = badgeFor(d.badge);
     }
   } catch (_) { /* unreadable: the fallback text */ }
@@ -48,7 +60,7 @@ self.addEventListener('push', event => {
     // the older one.
     let shown = null;
     try {
-      shown = self.registration.showNotification(TITLE, { body: bodyFor(kind), tag: TITLE, renotify: true, lang: 'fr' });
+      shown = self.registration.showNotification(TITLE, { body: bodyFor(kind, name, lead), tag: TITLE, renotify: true, lang: 'fr' });
     } catch (_) { /* nothing more to do */ }
     await setBadge(badge);
     try { await shown; } catch (_) { /* nothing more to do */ }

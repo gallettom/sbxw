@@ -91,10 +91,16 @@ async fn attach(app: &Arc<App>) -> Fake {
 }
 
 /// Paired, subscribed through the route: `(router, token, device id)`.
+/// Each phone its own endpoint (one device per endpoint), all starting
+/// with [`EP`] and none holding the device's name.
+fn ep_of(name: &str) -> String {
+    format!("{EP}-{}", sbxw_core::remote_access::push::endpoint_tag(name))
+}
+
 async fn subscribed(app: &Arc<App>, name: &str) -> (Router, String, String) {
     let router = remote_router(app.clone());
     let token = pair(app, &router, name).await;
-    let r = call(&router, "POST", "/r/push/subscribe", Some(&token), sub_body(EP)).await;
+    let r = call(&router, "POST", "/r/push/subscribe", Some(&token), sub_body(&ep_of(name))).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     let id = device_id(&router, &token).await;
     (router, token, id)
@@ -120,7 +126,7 @@ fn propose(app: &App, sandbox: &str) -> String {
 fn job(line: &str) -> Value {
     let v: Value = serde_json::from_str(line).unwrap();
     let keys: BTreeSet<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
-    assert_eq!(keys, BTreeSet::from(["id", "endpoint", "p256dh", "auth", "kind", "badge", "ttl"]), "exactly the contract's fields: {line}");
+    assert_eq!(keys, BTreeSet::from(["id", "endpoint", "p256dh", "auth", "kind", "name", "lead", "badge", "ttl"]), "exactly the contract's fields: {line}");
     v
 }
 
@@ -222,14 +228,40 @@ async fn the_key_is_made_once_kept_private_and_on_says_this_device() {
         assert_eq!(m & 0o777, 0o600);
     }
     assert_eq!(call(&router, "POST", "/r/push/subscribe", Some(&a), sub_body(EP)).await.json(), json!({ "ok": true }));
-    assert_eq!(call(&router, "GET", "/r/push/key", Some(&a), json!({})).await.json()["on"], true);
-    assert_eq!(call(&router, "GET", "/r/push/key", Some(&b), json!({})).await.json()["on"], false, "on is per device");
+    let ka = call(&router, "GET", "/r/push/key", Some(&a), json!({})).await.json();
+    assert_eq!((&ka["on"], ka["tag"].as_str()), (&json!(true), Some(sbxw_core::remote_access::push::endpoint_tag(EP).as_str())), "on, and the tag of its endpoint");
+    assert!(!ka.to_string().contains("apple"), "never the endpoint: {ka}");
+    let kb = call(&router, "GET", "/r/push/key", Some(&b), json!({})).await.json();
+    assert_eq!((&kb["on"], &kb["tag"]), (&json!(false), &Value::Null), "on is per device");
     // A restart keeps the key and the subscription.
     let again = crate::testing::app_in(d.path());
     let (k2, _) = again.remote_push_key("x");
     assert_eq!(k2, key);
     assert_eq!(again.remote_push_devices(), 1);
     assert!(!format!("{:?}", again.remote_status()).contains("push.apple.com"));
+}
+
+/// The iPhone case: the app removed and added again subscribes afresh; the
+/// device's old endpoint is replaced, never sent to again.
+#[tokio::test]
+async fn a_new_subscription_replaces_the_devices_old_one() {
+    use sbxw_core::remote_access::push::endpoint_tag;
+    let (_d, app) = on();
+    let router = remote_router(app.clone());
+    let a = pair(&app, &router, "a").await;
+    let b = pair(&app, &router, "b").await;
+    const EP2: &str = "https://web.push.apple.com/QGx-phone_2.b";
+    assert_eq!(call(&router, "POST", "/r/push/subscribe", Some(&a), sub_body(EP)).await.json(), json!({ "ok": true }));
+    assert_eq!(call(&router, "POST", "/r/push/subscribe", Some(&a), sub_body(EP2)).await.json(), json!({ "ok": true }));
+    assert_eq!(app.remote_push_devices(), 1, "one subscription per device");
+    assert_eq!(call(&router, "GET", "/r/push/key", Some(&a), json!({})).await.json()["tag"], endpoint_tag(EP2).as_str());
+    let file = push_file(&app);
+    assert!(file.contains(EP2) && !file.contains(EP), "the old endpoint is gone from push.json");
+    // One device per endpoint: b taking a's endpoint takes it from a.
+    assert_eq!(call(&router, "POST", "/r/push/subscribe", Some(&b), sub_body(EP2)).await.json(), json!({ "ok": true }));
+    assert_eq!(app.remote_push_devices(), 1);
+    assert_eq!(call(&router, "GET", "/r/push/key", Some(&a), json!({})).await.json()["on"], false);
+    assert_eq!(call(&router, "GET", "/r/push/key", Some(&b), json!({})).await.json()["on"], true);
 }
 
 #[tokio::test]
@@ -353,8 +385,9 @@ async fn a_session_starting_to_ask_pushes_one_n_job_with_the_badge_and_nothing_e
     let line = fake.line(1000).await.expect("a job");
     let j = job(&line);
     assert_eq!((j["kind"].as_str(), j["badge"].as_u64(), j["ttl"].as_u64()), (Some("n"), Some(1), Some(3600)));
-    assert_eq!(j["endpoint"], EP);
-    assert!(!line.contains("lead1") && !line.contains("Which way") && !line.contains("Marie"), "no sandbox, text or device name: {line}");
+    assert_eq!(j["endpoint"], ep_of("Marie iPhone").as_str());
+    assert_eq!((j["name"].as_str(), j["lead"].as_bool()), (Some("lead1"), Some(true)), "the sandbox, a team leader");
+    assert!(!line.contains("Which way") && !line.contains("Marie"), "no text or device name: {line}");
     // The same state again: nothing.
     app.remote_push_step();
     assert!(fake.line(200).await.is_none(), "no push on a repeat");
@@ -391,7 +424,8 @@ async fn more_plans_waiting_pushes_p_and_the_badge_counts_plans_only_with_level_
     let line = fake.line(1000).await.expect("a p job");
     let j = job(&line);
     assert_eq!((j["kind"].as_str(), j["badge"].as_u64()), (Some("p"), Some(0)), "level 2 off: no plan count leaks through the badge");
-    assert!(!line.contains("Secret") && !line.contains("secret goal") && !line.contains("lead1"), "{line}");
+    assert!(!line.contains("Secret") && !line.contains("secret goal"), "{line}");
+    assert_eq!((j["name"].as_str(), j["lead"].as_bool()), (Some("lead1"), Some(false)), "the sandbox the plan waits in");
 
     // Level 2 on, a second phone: the badge counts the plans.
     app.remote_approvals_enable().unwrap();
@@ -402,7 +436,7 @@ async fn more_plans_waiting_pushes_p_and_the_badge_counts_plans_only_with_level_
     app.remote_push_step();
     let line = fake.line(1000).await.expect("the second phone's job");
     let j = job(&line);
-    assert_eq!((j["kind"].as_str(), j["badge"].as_u64()), (Some("p"), Some(2)));
+    assert_eq!((j["kind"].as_str(), j["badge"].as_u64(), j["name"].as_str()), (Some("p"), Some(2), Some("lead2")));
     assert!(fake.line(200).await.is_none(), "the first phone is inside its 2 minutes");
     // Fewer plans: no push.
     for p in app.plans_list() {
@@ -643,8 +677,7 @@ async fn a_fake_sidecar_gets_push_on_the_first_subscription_restarted_once() {
     assert_eq!(jobs.lines().count(), 3, "{jobs}");
     for l in jobs.lines() {
         let j = job(l);
-        assert_eq!(j["kind"], "n");
-        assert!(!l.contains("lead1"));
+        assert_eq!((j["kind"].as_str(), j["name"].as_str(), j["lead"].as_bool()), (Some("n"), Some("lead1"), Some(true)));
     }
     for _ in 0..30 {
         if journal(&app).iter().filter(|e| e.kind == Kind::PushSent).count() == 3 {

@@ -1461,6 +1461,7 @@ const RC_PUSH_TEXT = {
   unreachable: 'The Mac did not answer (is it awake?). Notifications stay off.',
   browser: 'This browser could not turn notifications on. Try again.',
   mac_off: 'Notifications are off on this phone, but the Mac did not answer, so it may still try to send one.',
+  install: 'Notifications are off on this installation: turn them on again.',
 };
 
 // null when this browser can do Web Push, else the key of the one line to
@@ -1478,10 +1479,20 @@ function rcPushFail(why, reason) {
   return base;
 }
 
+// The tag the Mac gives for this device's subscription (API.md 2.8, GET
+// /r/push/key): the first 16 hex digits of the SHA-256 of the endpoint.
+// null when it cannot be computed (no crypto.subtle).
+async function rcEndpointTag(subtle, endpoint) {
+  try {
+    const d = new Uint8Array(await subtle.digest('SHA-256', new TextEncoder().encode(endpoint)));
+    return Array.from(d.slice(0, 8), b => b.toString(16).padStart(2, '0')).join('');
+  } catch (_) { return null; }
+}
+
 // The switch's logic, with its world passed in: `api` (rcClient), `sw`
-// (navigator.serviceWorker), `Notif` (Notification). Every method answers,
-// none throws.
-function rcPush({ api, sw, Notif }) {
+// (navigator.serviceWorker), `Notif` (Notification), `subtle`
+// (crypto.subtle, optional). Every method answers, none throws.
+function rcPush({ api, sw, Notif, subtle }) {
   let key = null;
   const sub = async () => {
     try { const r = await sw.getRegistration(); return r ? await r.pushManager.getSubscription() : null; } catch (_) { return null; }
@@ -1495,12 +1506,21 @@ function rcPush({ api, sw, Notif }) {
   return {
     // 'on' only when the Mac and this browser both hold the subscription and
     // the permission stands; any disagreement shows 'off' (a tap repairs it).
+    // The Mac on but this installation without it, or with another one (the
+    // tags differ: the app was removed and added again), says so: the Mac
+    // would send where nothing is shown.
     async state() {
       const k = await readKey();
       if (Notif.permission === 'denied') return { state: 'denied', text: RC_PUSH_TEXT.denied };
       if (!k.ok) return { state: 'off', text: k.unreachable ? RC_PUSH_TEXT.unreachable : '' };
       const mine = await sub();
-      return { state: k.data.on === true && !!mine && Notif.permission === 'granted' ? 'on' : 'off', text: '' };
+      if (k.data.on !== true) return { state: 'off', text: '' };
+      let same = !!mine && Notif.permission === 'granted';
+      if (same && subtle && typeof k.data.tag === 'string') {
+        const t = await rcEndpointTag(subtle, mine.endpoint);
+        if (t !== null && t !== k.data.tag) same = false;
+      }
+      return same ? { state: 'on', text: '' } : { state: 'off', text: RC_PUSH_TEXT.install };
     },
     // From the tap itself: the worker registers while the permission is
     // asked (the prompt needs the tap, so nothing is awaited before it).
