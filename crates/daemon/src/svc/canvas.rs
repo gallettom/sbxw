@@ -113,6 +113,21 @@ impl App {
         })
     }
 
+    /// Per sandbox, how many canvases hold shots added since the last round
+    /// of remarks was sent (a canvas never reviewed: any shot). Counts only.
+    pub(crate) fn canvas_new_counts(&self) -> std::collections::HashMap<String, usize> {
+        self.canvas_book(|b| {
+            let mut out = std::collections::HashMap::new();
+            for c in b.by_id.values() {
+                let since = c.reviews.last().map_or(0, |r| r.at_ms);
+                if c.shots.iter().any(|s| s.added_ms > since) {
+                    *out.entry(c.sandbox.clone()).or_insert(0) += 1;
+                }
+            }
+            out
+        })
+    }
+
     pub fn canvas_get(&self, id: &str) -> Option<Canvas> {
         self.canvas_book(|b| b.by_id.get(id).cloned())
     }

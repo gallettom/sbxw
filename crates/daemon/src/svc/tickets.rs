@@ -169,6 +169,13 @@ impl App {
         }
     }
 
+    /// How many tickets of `sb` sit in Planned now (a count, for the phone).
+    pub(crate) fn tickets_planned_count(&self, sb: &str) -> usize {
+        let plans = self.plans_of(Some(sb));
+        let by: HashMap<&str, &Plan> = plans.iter().map(|p| (p.id.as_str(), p)).collect();
+        self.tickets_with(sb, |b| b.tickets.iter().filter(|t| tickets::ticket_column(t, &by).0 == Column::Planned).count())
+    }
+
     /// The column a ticket is in now.
     fn ticket_column(&self, sb: &str, t: &Ticket) -> Column {
         let plans = self.plans_of(Some(sb));

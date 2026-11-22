@@ -497,6 +497,16 @@ pub struct LeaderView {
     /// The model the session's status line last reported (an id), if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Team leaders: threads of its approved plans working now. Counts only,
+    /// never titles; omitted when zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threads_working: Option<usize>,
+    /// Canvases with shots added since the last round was sent; omitted when 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canvas_new: Option<usize>,
+    /// Tickets in the Planned column of its Kanban; omitted when 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tickets_planned: Option<usize>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1035,8 +1045,23 @@ impl App {
     /// name: leaders first, then running sandboxes with no team).
     pub fn remote_leaders(&self) -> Vec<LeaderView> {
         let mut out = Vec::new();
+        let canvases = self.canvas_new_counts();
         for (sb, kind, info) in self.remote_reachable() {
             let name = sb.to_string();
+            let nz = |n: usize| (n > 0).then_some(n);
+            let threads_working = if kind == ReachKind::Leader {
+                let plans = self.plans.lock().unwrap().of(&name);
+                nz(plans
+                    .iter()
+                    .filter(|p| p.state == sbxw_core::plans::PlanState::Approved)
+                    .flat_map(|p| p.threads.iter())
+                    .filter(|t| t.state == sbxw_core::plans::ThreadState::Working)
+                    .count())
+            } else {
+                None
+            };
+            let canvas_new = nz(canvases.get(&name).copied().unwrap_or(0));
+            let tickets_planned = nz(self.tickets_planned_count(&name));
             let steps = self.remote_question_of(&sb, &info);
             let last_at = info
                 .session_id
@@ -1056,6 +1081,9 @@ impl App {
                 answerable: steps.is_some(),
                 steps,
                 model: info.model.clone(),
+                threads_working,
+                canvas_new,
+                tickets_planned,
             });
         }
         out

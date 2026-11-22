@@ -444,3 +444,67 @@ async fn defect_a_resumed_main_session_drops_a_restarted_lead() {
     hook(&app, &sb, "s2", json!({"hook_event_name": "SessionStart", "source": "resume"}));
     assert!(app.leading().contains(&"sbxw2".to_string()), "s2 continues s1, but is not s1: lead dropped");
 }
+
+/// The home screen's counts (API.md 2.4): threads working, canvases with new
+/// shots, Planned tickets. Counts only; each is absent when zero.
+#[tokio::test]
+async fn leaders_carry_counts_for_threads_canvas_and_planned_tickets() {
+    use sbxw_core::plans::{PlanThread, ThreadState, Variant};
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (lead, _) = leader(&app, d.path(), "lead1").await;
+    let (app1, _) = plain(&app, d.path(), "app1").await;
+    let get = |name: &'static str| {
+        let (router, token) = (router.clone(), token.clone());
+        async move {
+            let l = call(&router, "GET", "/r/leaders", Some(&token), json!({})).await.json();
+            l["leaders"].as_array().unwrap().iter().find(|e| e["sandbox"] == name).cloned().unwrap()
+        }
+    };
+    // Nothing yet: all three absent.
+    for name in ["lead1", "app1"] {
+        let e = get(name).await;
+        for k in ["threads_working", "canvas_new", "tickets_planned"] {
+            assert!(e.get(k).is_none(), "{name} {k}: {e}");
+        }
+    }
+    // Two working threads in an approved plan of the leader.
+    let th = |n: &str| PlanThread { name: n.into(), goal: "SECRET GOAL".into(), scope: String::new(), repo: None, model: None, state: ThreadState::Starting, summary: String::new(), updated_ms: 0, set_by: None, ticket: None };
+    {
+        let mut b = app.plans.lock().unwrap();
+        b.propose("p-1".into(), "lead1", "s", vec![th("a"), th("b"), th("c")], Variant::Split, "why", None, 1).unwrap();
+        b.approve("p-1", vec![th("a"), th("b"), th("c")], None, None, 2).unwrap();
+        b.set_thread("lead1", "a", ThreadState::Working, "", false, 3).unwrap();
+        b.set_thread("lead1", "b", ThreadState::Working, "", false, 3).unwrap();
+        b.set_thread("lead1", "c", ThreadState::Done, "", false, 3).unwrap();
+    }
+    let e = get("lead1").await;
+    assert_eq!(e["threads_working"], 2, "{e}");
+    assert!(get("app1").await.get("threads_working").is_none(), "a plain sandbox has no threads");
+    // A canvas with new shots on the plain sandbox.
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend(13u32.to_be_bytes());
+    png.extend(b"IHDR");
+    png.extend(390u32.to_be_bytes());
+    png.extend(844u32.to_be_bytes());
+    png.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    png.extend(0u32.to_be_bytes());
+    png.extend(b"IDAT");
+    let shot = crate::svc::canvas::ShotIn { b64: sbxw_core::mac::base64(&png), title: "SECRET TITLE".into(), note: String::new(), width: Some(390), screen: None };
+    app.canvas_agent_add(&app1, None, "Review", "b1", shot).unwrap();
+    let e = get("app1").await;
+    assert_eq!(e["canvas_new"], 1, "{e}");
+    assert!(get("lead1").await.get("canvas_new").is_none());
+    // Planned tickets: two on the plain sandbox's board.
+    let draft = || sbxw_core::tickets::Draft { title: Some("SECRET T".into()), description: Some("".into()), priority: None };
+    app.ticket_create(&app1, draft()).unwrap();
+    app.ticket_create(&app1, draft()).unwrap();
+    let e = get("app1").await;
+    assert_eq!(e["tickets_planned"], 2, "{e}");
+    assert!(get("lead1").await.get("tickets_planned").is_none());
+    let _ = lead;
+    // Counts only: no title or goal reaches the list.
+    let all = call(&router, "GET", "/r/leaders", Some(&token), json!({})).await.text();
+    assert!(!all.contains("SECRET"), "{all}");
+}
