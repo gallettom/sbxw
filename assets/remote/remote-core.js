@@ -294,45 +294,130 @@ function rcMeEl(doc, row) {
   if (row.pending) {
     const s = doc.createElement('div');
     s.className = 'rc-me-state';
-    s.textContent = row.pending === 'failed' ? 'Not sent' : 'Sending…';
+    s.textContent = RC_PENDING_TEXT[row.pending] || RC_PENDING_TEXT.sending;
     d.append(s);
   }
   return d;
 }
 
+// What a pending bubble says: on its way; delivered (the daemon typed it and
+// pressed Return) until the history has it; still not in the history after
+// RC_PENDING_WAIT_MS; refused.
+const RC_PENDING_TEXT = {
+  sending: 'Sending…',
+  sent: 'Sent',
+  waiting: 'Sent, waiting for the agent',
+  failed: 'Not sent',
+};
+
 // What the person sent from this page, drawn at once, until the history has
-// it. `pending`: [{ id, text, files, after, state }]: `after` is the newest
-// seq the page held at Send, `state` 'sending', 'sent' or 'failed'. A
-// message the history has is a 'me' row newer than `after`: the same text
-// (whitespace aside) first, else the first such row not matched yet (the
-// daemon masks names and addresses, so the text may differ). A failed one
-// never matches. What is not matched is drawn after the last row not newer
-// than its `after`: before anything that arrived after the Send. `after` -1
-// (the numbering changed since the Send): its own text anywhere, else it
-// waits at the end. Returns the rows and the ids still pending.
+// it. `pending`: [{ id, text, files, after, state, match, epoch, key }]:
+// `after` is the newest seq known at Send, then the daemon's own (the log's
+// newest seq just before it pressed Return: `key`, of numbering `epoch`);
+// `match` the words as the daemon typed them (masked, without the files'
+// block); `state` 'sending', 'sent', 'waiting' or 'failed'. A message the
+// history has is a 'me' row newer than `after`: the same words first, else
+// the first such row not matched yet (the daemon masks names and addresses,
+// so the text may differ). A failed one never matches. What is not matched
+// is drawn after the last row not newer than its `after`: before anything
+// that arrived after the Send. `after` -1 (the numbering changed since the
+// Send, and the daemon's key is not of the new one): the newest row with
+// the same words (typed or masked), else with the same files, else it waits
+// at the end. Returns the rows and the ids still pending.
 function rcWithPending(rows, pending) {
   const out = Array.isArray(rows) ? rows.slice() : [];
   const list = (Array.isArray(pending) ? pending : []).filter(p => p && p.id != null);
   const used = new Set();
   const left = [];
-  const find = (p, same) => out.findIndex((r, i) => r && r.kind === 'me' && !used.has(i) && Number(r.seq) > Number(p.after) && (!same || rcSameReply(r.text, p.text)));
+  const free = (r, i) => r && r.kind === 'me' && !r.pending && !used.has(i);
+  const same = (r, p) => rcSameText(r.text, p.text) || (typeof p.match === 'string' && rcSameText(r.text, p.match));
+  const sameFiles = (r, p) => {
+    const a = rcFiles(p.files);
+    const b = rcFiles(r.files);
+    return a.length > 0 && a.length === b.length && a.every((f, k) => f === b[k]);
+  };
+  const last = test => { for (let i = out.length - 1; i >= 0; i -= 1) if (test(out[i], i)) return i; return -1; };
   for (const p of list) {
     if (p.state === 'failed') { left.push(p); continue; }
-    const lost = Number(p.after) < 0;
-    let i = lost ? out.findIndex((r, k) => r && r.kind === 'me' && !used.has(k) && rcSameReply(r.text, p.text)) : find(p, true);
-    if (i < 0 && !lost) i = find(p, false);
+    let i;
+    if (Number(p.after) < 0) {
+      i = last((r, k) => free(r, k) && same(r, p));
+      if (i < 0) i = last((r, k) => free(r, k) && sameFiles(r, p));
+    } else {
+      const newer = (r, k) => free(r, k) && Number(r.seq) > Number(p.after);
+      i = out.findIndex((r, k) => newer(r, k) && same(r, p));
+      if (i < 0) i = out.findIndex(newer);
+    }
     if (i >= 0) used.add(i); else left.push(p);
   }
   for (const p of left) {
     let at = out.length;
     while (Number(p.after) >= 0 && at > 0 && Number(out[at - 1].seq) > Number(p.after)) at -= 1;
-    const row = { kind: 'me', text: typeof p.text === 'string' ? p.text : '', pending: p.state === 'failed' ? 'failed' : 'sending', pid: p.id, seq: 0 };
+    const state = RC_PENDING_TEXT[p.state] ? p.state : 'sending';
+    const row = { kind: 'me', text: typeof p.text === 'string' ? p.text : '', pending: state, pid: p.id, seq: 0 };
     const files = rcFiles(p.files);
     if (files.length) row.files = files;
     out.splice(at, 0, row);
   }
   return { rows: out, left: left.map(p => p.id) };
 }
+
+// Two texts are the same words: Unicode composed alike, any run of white
+// space (a new line, a no-break space from dictation) one space, ends trimmed.
+function rcSameText(a, b) {
+  const words = t => {
+    let s = String(t ?? '');
+    try { s = s.normalize('NFC'); } catch (_) {}
+    return s.split(/\s+/).filter(Boolean).join(' ');
+  };
+  return words(a) === words(b);
+}
+
+// The daemon's answer to a message (`{ ok, masked, text, after, epoch }`)
+// into its pending bubble `p`: delivered, the words as typed, and the key.
+// `held` is the numbering of the rows the page holds: the key is used at
+// once when it is the same, else when the page reads that numbering
+// (rcPendingRenumber). A daemon that gives no key leaves the page's `after`.
+function rcPendingSent(p, data, held, now) {
+  p.state = 'sent';
+  p.sentAt = now;
+  const d = data && typeof data === 'object' ? data : {};
+  if (typeof d.text === 'string') p.match = d.text;
+  const after = d.after;
+  if (typeof after === 'number' && Number.isFinite(after) && after >= 0 && typeof d.epoch === 'string' && d.epoch) {
+    p.key = after;
+    p.epoch = d.epoch;
+    if (!held || held === d.epoch) p.after = after;
+  }
+  return p;
+}
+
+// The rows held were dropped for numbering `epoch`: a bubble keeps a key of
+// that numbering, any other anchor is lost (-1).
+function rcPendingRenumber(pending, epoch) {
+  for (const p of Array.isArray(pending) ? pending : []) {
+    p.after = p.key != null && p.epoch && p.epoch === epoch ? p.key : -1;
+  }
+}
+
+// A delivered bubble the history still lacks after RC_PENDING_WAIT_MS says
+// so ('waiting'), rather than "Sending…" for ever. `true` when one changed.
+const RC_PENDING_WAIT_MS = 60000;
+function rcPendingAge(pending, now) {
+  let changed = false;
+  for (const p of Array.isArray(pending) ? pending : []) {
+    if (p && p.state === 'sent' && Number(p.sentAt) > 0 && now - p.sentAt >= RC_PENDING_WAIT_MS) {
+      p.state = 'waiting';
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// After a Send the page reads the history itself at these delays (ms after
+// the daemon's answer), as long as the bubble waits: the event stream's
+// nudge may never come (a stream iOS left dead, events the daemon dropped).
+const RC_CATCH_UP_MS = [800, 2000, 4000, 8000, 15000, 30000, RC_PENDING_WAIT_MS];
 
 // `have` and a newer or older page, by seq, oldest first. A provisional
 // reply (the Stop hook's copy) gives way to the transcript's copy of the same

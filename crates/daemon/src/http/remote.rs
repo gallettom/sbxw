@@ -424,7 +424,7 @@ async fn message(State(app): S, Extension(d): Extension<DeviceCtx>, Path(sandbox
         Err(e) => return refusal(e),
     };
     match app.remote_message(&d, &sb, &b.text, &b.attachments).await {
-        Ok(masked) => Json(json!({ "ok": true, "masked": masked })).into_response(),
+        Ok(m) => Json(json!({ "ok": true, "masked": m.masked, "text": m.text, "after": m.after, "epoch": m.epoch })).into_response(),
         Err(e) => refusal(e),
     }
 }
@@ -718,7 +718,17 @@ async fn events(State(app): S, Extension(d): Extension<DeviceCtx>) -> Response {
                             }
                         }
                     }
-                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    // Events were missed, history nudges among them: each
+                    // leader's conversation is read again (a page waiting for
+                    // its message's row would otherwise wait for nothing).
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        for l in &last {
+                            if tx.send(Sse::default().event("history").data(json!({ "sandbox": l.sandbox, "seq": 0 }).to_string())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(_) => {}
                     Err(_) => break,
                 },
             }
