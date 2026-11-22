@@ -205,20 +205,32 @@ pub fn mask(text: &str, rules: &Rules) -> Masked {
     let mut out = String::with_capacity(text.len());
     let mut count = 0;
     let mut i = 0;
+    // Each shape is read once per run, not once per word in it: a word
+    // starts after every `-` or `.` of `ab-ab-ab…`, and reading the rest of
+    // the run from each of them made a long run quadratic.
+    let mut no_email_before = 0;
+    let mut key_run = KeyRun::default();
     while i < c.len() {
         let starts_word = i == 0 || !word(i - 1);
         if starts_word {
             // An address first: a listed name at its start would leave the
-            // rest of it behind.
-            let shape = rules
-                .has("email")
-                .then(|| email(&c, i))
-                .flatten()
+            // rest of it behind. An address fails alike from every word of
+            // a local part that ends without one.
+            let address = if rules.has("email") && i >= no_email_before {
+                let found = email(&c, i);
+                if found.is_none() {
+                    no_email_before = i + local_part(&c, i);
+                }
+                found
+            } else {
+                None
+            };
+            let shape = address
                 .map(|n| (n, "[email]"))
                 .or_else(|| rules.replace.iter().find_map(|(said, sent)| name_at(i, said).map(|n| (n, sent.as_str()))))
                 .or_else(|| rules.has("iban").then(|| iban(&c, i)).flatten().map(|n| (n, "[iban]")))
                 .or_else(|| rules.has("phone").then(|| phone(&c, i)).flatten().map(|n| (n, "[phone]")))
-                .or_else(|| rules.has("secret").then(|| secret(&c, i)).flatten().map(|n| (n, "[secret]")));
+                .or_else(|| rules.has("secret").then(|| secret(&c, i, &mut key_run)).flatten().map(|n| (n, "[secret]")));
             if let Some((len, sent)) = shape {
                 out.push_str(sent);
                 count += 1;
@@ -232,9 +244,15 @@ pub fn mask(text: &str, rules: &Rules) -> Masked {
     Masked { text: out, count }
 }
 
+/// The characters of an address's local part from `i`: the same end for
+/// every `i` inside one run of them.
+fn local_part(c: &[char], i: usize) -> usize {
+    c[i..].iter().take_while(|&&x| is_word(x) || matches!(x, '.' | '_' | '%' | '+' | '-')).count()
+}
+
 /// `name.surname@example.com` starting at `i`: its length.
 fn email(c: &[char], i: usize) -> Option<usize> {
-    let local = c[i..].iter().take_while(|&&x| is_word(x) || matches!(x, '.' | '_' | '%' | '+' | '-')).count();
+    let local = local_part(c, i);
     if local == 0 || c.get(i + local) != Some(&'@') {
         return None;
     }
@@ -398,18 +416,65 @@ fn iban(c: &[char], i: usize) -> Option<usize> {
 /// What a key or a token starts with, whatever follows.
 const SECRET_PREFIXES: &[&str] = &["sk-", "ghp_", "gho_", "ghs_", "github_pat_", "xoxb-", "xoxp-", "AKIA", "eyJ", "glpat-"];
 
+/// A character of a key or a token.
+fn key_char(x: &char) -> bool {
+    x.is_ascii_alphanumeric() || matches!(x, '_' | '-')
+}
+
+/// One run of [`key_char`]s, `start..end`, and where each kind of character
+/// last appears in it: what [`secret`] needs of the run from any `i` in it
+/// (the rest of the run holds a kind when its last one is at `i` or after).
+#[derive(Default)]
+struct KeyRun {
+    start: usize,
+    end: usize,
+    alpha: Option<usize>,
+    digit: Option<usize>,
+    upper: Option<usize>,
+    lower: Option<usize>,
+    not_hex: Option<usize>,
+}
+
+impl KeyRun {
+    fn at(c: &[char], i: usize) -> KeyRun {
+        let end = i + c[i..].iter().take_while(|x| key_char(x)).count();
+        let mut r = KeyRun { start: i, end, ..KeyRun::default() };
+        for (k, x) in c.iter().enumerate().take(end).skip(i) {
+            let last = |on: bool, at: &mut Option<usize>| {
+                if on {
+                    *at = Some(k);
+                }
+            };
+            last(x.is_ascii_alphabetic(), &mut r.alpha);
+            last(x.is_ascii_digit(), &mut r.digit);
+            last(x.is_ascii_uppercase(), &mut r.upper);
+            last(x.is_ascii_lowercase(), &mut r.lower);
+            last(!x.is_ascii_hexdigit(), &mut r.not_hex);
+        }
+        r
+    }
+}
+
 /// A key or a token starting at `i`: one unbroken run of letters, digits,
 /// `_` and `-`, either long and mixed, or with a known prefix. A commit hash
-/// (hexadecimal only) is not a secret.
-fn secret(c: &[char], i: usize) -> Option<usize> {
-    let run: String = c[i..].iter().take_while(|x| x.is_ascii_alphanumeric() || matches!(x, '_' | '-')).collect();
-    let (letters, digits) = (run.chars().any(|x| x.is_ascii_alphabetic()), run.chars().any(|x| x.is_ascii_digit()));
-    let known = SECRET_PREFIXES.iter().any(|p| run.starts_with(p)) && run.len() >= 16;
-    let hex = run.chars().all(|x| x.is_ascii_hexdigit());
+/// (hexadecimal only) is not a secret. `run` is the run `i` is in, read
+/// again only when `i` is past it.
+fn secret(c: &[char], i: usize, run: &mut KeyRun) -> Option<usize> {
+    if !(run.start <= i && i < run.end) {
+        *run = KeyRun::at(c, i);
+    }
+    let rest = &c[i..run.end];
+    let has = |last: Option<usize>| last.is_some_and(|k| k >= i);
+    let (letters, digits) = (has(run.alpha), has(run.digit));
+    let known = SECRET_PREFIXES.iter().any(|p| rest.iter().copied().take(p.len()).eq(p.chars())) && rest.len() >= 16;
+    let hex = !has(run.not_hex);
     // Upper and lower case mixed with digits: random, not a `snake_case_name_2`.
-    let random = run.len() >= 24 && letters && digits && !hex && run.chars().any(|x| x.is_ascii_uppercase()) && run.chars().any(|x| x.is_ascii_lowercase());
-    (known || random).then_some(run.chars().count())
+    let random = rest.len() >= 24 && letters && digits && !hex && has(run.upper) && has(run.lower);
+    (known || random).then_some(rest.len())
 }
+
+#[cfg(test)]
+mod reference;
 
 #[cfg(test)]
 mod tests {
