@@ -16,7 +16,7 @@ async fn a_skill_of_the_list_types_its_slash_line_and_nothing_else() {
     let (_sb, file) = leader(&app, d.path(), "lead1").await;
     let r = call(&router, "GET", "/r/skills", Some(&token), json!({})).await;
     assert_eq!(r.status, StatusCode::OK);
-    assert_eq!(r.json()["skills"], json!(["code-review", "codemap", "retro"]));
+    assert_eq!(r.json()["skills"], json!(["code-review", "codemap", "retro", "grill-me"]));
     let url = "/r/leaders/lead1/skill";
     // Outside the list: never typed.
     for name in ["lead", "model", "", "Retro", "retro --x", "../retro"] {

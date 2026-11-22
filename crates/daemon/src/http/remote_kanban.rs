@@ -39,14 +39,14 @@ fn not_found() -> Response {
     ApiError::not_found("not found").into_response()
 }
 
-/// `:sandbox` as a running leader's, by the rule `/r/leaders` uses. Every
-/// failure is the same answer.
+/// `:sandbox` as a sandbox the phone reaches (a leader or a sandbox with no
+/// team; never a thread, Jarvis or a stopped one). Every failure is the same
+/// answer.
 fn leader(app: &App, raw: &str) -> Option<SandboxRef> {
     if raw.is_empty() || raw.len() > NAME_MAX || !raw.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~')) {
         return None;
     }
-    let sb = app.remote_leader(raw).ok()?;
-    app.remote_leader_names().contains(&sb.to_string()).then_some(sb)
+    app.remote_target(raw).ok()
 }
 
 /// `:ticket` as `T-<n>` or `<n>`: ASCII digits, 1 to 9, not zero.
@@ -306,7 +306,7 @@ fn hash_of(app: &App, sandbox: &str) -> Option<String> {
 /// The state of every leader's board as a stream opens: no event is sent
 /// for it.
 pub fn baseline(app: &App, leaders: &[crate::svc::remote_access::LeaderView]) -> Seen {
-    leaders.iter().filter(|l| l.kind == sbxw_core::remote_access::reach::ReachKind::Leader).filter_map(|l| Some((l.sandbox.clone(), hash_of(app, &l.sandbox)?))).collect()
+    leaders.iter().filter_map(|l| Some((l.sandbox.clone(), hash_of(app, &l.sandbox)?))).collect()
 }
 
 /// The `kanban` frame for a bus event, when it is a change of a listed
@@ -317,7 +317,7 @@ pub fn changed(app: &App, leaders: &[crate::svc::remote_access::LeaderView], ev:
         Event::Plan(p) => p.sandbox.as_str(),
         _ => return None,
     };
-    if !leaders.iter().any(|l| l.sandbox == sandbox && l.kind == sbxw_core::remote_access::reach::ReachKind::Leader) {
+    if !leaders.iter().any(|l| l.sandbox == sandbox) {
         return None;
     }
     let now = hash_of(app, sandbox)?;
@@ -562,7 +562,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anything_but_a_running_leader_is_the_same_404() {
+    async fn anything_but_a_reached_sandbox_is_the_same_404() {
         let (_d, app) = on();
         let router = remote_router(app.clone());
         let token = pair(&app, &router).await;
@@ -582,12 +582,11 @@ mod tests {
             bodies.insert(r.body);
         }
         assert_eq!(bodies.len(), 1, "one body whatever the reason: {bodies:?}");
-        // Stopped: the leader ends, the same answer.
+        // The leader stops leading: its main session still runs, so it keeps its
+        // board as a sandbox with no team (a stopped sandbox is in remote_sandboxes_tests).
         assert_eq!(call(&router, "GET", "/r/leaders/web/kanban", Some(&token)).await.status, StatusCode::OK);
         app.leads.lock().unwrap().clear();
-        let r = call(&router, "GET", "/r/leaders/web/kanban", Some(&token)).await;
-        assert_eq!(r.status, StatusCode::NOT_FOUND);
-        assert!(bodies.contains(&r.body));
+        assert_eq!(call(&router, "GET", "/r/leaders/web/kanban", Some(&token)).await.status, StatusCode::OK);
     }
 
     #[tokio::test]
