@@ -612,38 +612,103 @@ fn network_request(id: &str, host: &str, options: Value) -> Value {
     json!({ "id": id, "sandbox_name": "myapp", "title": host, "detail": "no matching allow rule", "created_at": "2026-11-20T10:00:00Z", "options": options })
 }
 
+/// A row as a real `sbx policy approval ls --format json` (0.51) prints it:
+/// the shape of `core::approvals`' fixture and of the desktop's 83 rows.
+fn real_sbx_row(id: &str, sandbox: &str, host: &str) -> Value {
+    json!({
+        "created_at": "2026-11-06T15:08:54.850902+01:00",
+        "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+        "id": id,
+        "options": [{ "id": "allow", "label": "Allow" }, { "id": "dismiss", "label": "Dismiss" }],
+        "sandbox_name": sandbox,
+        "title": host
+    })
+}
+
+fn responded(w: &World, id: &str, option: &str) -> bool {
+    w.fake.log().iter().any(|c| *c == format!("policy approval respond {id} --option {option}"))
+}
+
+/// Every option sbx 0.51 offers (`allow`, `dismiss`) is answered from the
+/// phone with a valid assertion, and with a forged one nothing is sent.
 #[tokio::test]
-async fn a_network_request_is_answered_only_with_options_that_leave_no_rule() {
+async fn each_sbx_network_option_is_answered_from_the_phone_with_face_id() {
+    let w = world();
+    let mut p = enrolled(&w, "phone").await;
+    w.sbx.lock().unwrap().approvals = vec![real_sbx_row("network:85TMuE6", "sbxw-2", "storage.googleapis.com:443")];
+    let list = call(&w.router, "GET", "/r/network", Some(&p.token), json!({})).await.json();
+    let opts = &list["requests"][0]["options"];
+    assert_eq!(opts.as_array().unwrap().iter().map(|o| o["id"].as_str().unwrap()).collect::<Vec<_>>(), ["allow", "dismiss"], "every option sbx offers");
+    assert_eq!((opts[0]["lasting"].as_bool(), opts[1]["lasting"].as_bool()), (Some(true), Some(false)), "Allow is flagged");
+    assert!(opts[0]["effect"].as_str().unwrap().contains("lasting network rule of sbxw-2"));
+    assert!(list["requests"][0].get("mac_only").is_none());
+    let detail = "/r/network/network%3A85TMuE6";
+    for option in ["allow", "dismiss"] {
+        // A forged assertion: refused, nothing sent to sbx.
+        let ch = challenge(&w, &p, "network_respond", "network:85TMuE6", detail, Some(option)).await.unwrap();
+        let a = assertion(&mut p, &ch, &Twist { bad_signature: true, ..Twist::default() });
+        let r = act(&w, &p, "/r/network/network%3A85TMuE6/respond", a, Some(option)).await;
+        assert_eq!((r.status, r.json()["reason"].as_str()), (StatusCode::FORBIDDEN, Some("passkey")), "{option}: {}", r.text());
+        // No assertion at all: refused by the extractor.
+        let r = call(&w.router, "POST", "/r/network/network%3A85TMuE6/respond", Some(&p.token), json!({ "option": option })).await;
+        assert!(r.status.is_client_error(), "{option}");
+        assert!(!responded(&w, "network:85TMuE6", option), "{option}: nothing answered");
+        reset_failures(&w);
+        // A valid one: sbx's own answer, with that option.
+        let ch = challenge(&w, &p, "network_respond", "network:85TMuE6", detail, Some(option)).await.unwrap();
+        let a = assertion(&mut p, &ch, &Twist::default());
+        let r = act(&w, &p, "/r/network/network%3A85TMuE6/respond", a, Some(option)).await;
+        assert_eq!(r.status, StatusCode::OK, "{option}: {}", r.text());
+        assert!(responded(&w, "network:85TMuE6", option), "{option}: {:?}", w.fake.log());
+    }
+    assert_eq!(journal(&w).iter().filter(|e| e.kind == Kind::NetworkRespond && e.target.as_deref() == Some("storage.googleapis.com:443")).count(), 2);
+}
+
+/// An option the request does not offer: refused at the challenge, and an
+/// act naming another option than its challenge is refused too.
+#[tokio::test]
+async fn a_network_option_not_offered_is_refused() {
     let w = world();
     let mut p = enrolled(&w, "phone").await;
     w.sbx.lock().unwrap().approvals = vec![
-        network_request("network:abc", "api.example.com:443", json!([{ "id": "allow", "label": "Allow" }, { "id": "dismiss", "label": "Dismiss" }])),
-        network_request("network:only", "x.example.com:443", json!([{ "id": "allow", "label": "Allow" }])),
+        network_request("network:abc", "api.example.com:443", json!([{ "id": "dismiss", "label": "Dismiss" }])),
         json!({ "id": "port:k1", "sandbox_name": "myapp", "title": "5173", "options": [{ "id": "allow", "label": "Allow" }] }),
     ];
     let list = call(&w.router, "GET", "/r/network", Some(&p.token), json!({})).await.json();
-    let reqs = list["requests"].as_array().unwrap();
-    assert_eq!(reqs.len(), 2, "a port request is port publishing: never listed");
-    assert_eq!(reqs[0]["options"], json!([{ "id": "dismiss", "label": "Dismiss" }]));
-    assert_eq!(reqs[0]["mac_only"], json!(["Allow"]));
-    assert_eq!(reqs[1]["options"], json!([]), "only a permanent option: answer it on the Mac");
-    // Allow is refused at the challenge; port: is not found.
-    assert!(challenge(&w, &p, "network_respond", "network:abc", "/r/network/network:abc", Some("allow")).await.is_err());
+    assert_eq!(list["requests"].as_array().unwrap().len(), 1, "a port request is port publishing: never listed");
     assert_eq!(call(&w.router, "GET", "/r/network/port:k1", Some(&p.token), json!({})).await.status, StatusCode::NOT_FOUND);
-    let d = call(&w.router, "GET", "/r/network/network:only", Some(&p.token), json!({})).await;
-    let r = call(&w.router, "POST", "/r/approvals/challenge", Some(&p.token), json!({ "kind": "network_respond", "target": "network:only", "digest": d.json()["digest"], "option": "allow" })).await;
-    assert!(r.status.is_client_error());
-    // Dismiss, bound to its option: another option under the same challenge is refused.
+    for o in ["allow", "allow-always", "Dismiss", "dismiss "] {
+        let r = challenge(&w, &p, "network_respond", "network:abc", "/r/network/network:abc", Some(o)).await.unwrap_err();
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{o}: {}", r.text());
+    }
+    // No option, or an option on another kind: refused.
+    assert!(challenge(&w, &p, "network_respond", "network:abc", "/r/network/network:abc", None).await.is_err());
     let ch = challenge(&w, &p, "network_respond", "network:abc", "/r/network/network:abc", Some("dismiss")).await.unwrap();
     let a = assertion(&mut p, &ch, &Twist::default());
-    assert_eq!(act(&w, &p, "/r/network/network:abc/respond", a, Some("allow")).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(act(&w, &p, "/r/network/network:abc/respond", a, Some("allow")).await.status, StatusCode::FORBIDDEN, "bound to its option");
     assert!(!w.fake.called("policy approval respond"));
-    let ch = challenge(&w, &p, "network_respond", "network:abc", "/r/network/network:abc", Some("dismiss")).await.unwrap();
-    let a = assertion(&mut p, &ch, &Twist::default());
-    let r = act(&w, &p, "/r/network/network:abc/respond", a, Some("dismiss")).await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
-    assert!(w.fake.log().iter().any(|c| c == "policy approval respond network:abc --option dismiss"), "{:?}", w.fake.log());
-    assert!(journal(&w).iter().any(|e| e.kind == Kind::NetworkRespond && e.target.as_deref() == Some("api.example.com:443")));
+}
+
+/// The bug seen on an iPhone: the list showed host and sandbox, the detail
+/// an empty "asked by", no host, no option. The detail carried the request
+/// flat while the page (and the contract) read it under `request`.
+#[tokio::test]
+async fn the_network_detail_carries_its_request_as_the_list_does() {
+    let w = world();
+    let p = enrolled(&w, "phone").await;
+    w.sbx.lock().unwrap().approvals = vec![real_sbx_row("network:85TMuE6", "sbxw-2", "storage.googleapis.com:443")];
+    let list = call(&w.router, "GET", "/r/network", Some(&p.token), json!({})).await.json();
+    let row = &list["requests"][0];
+    let d = call(&w.router, "GET", "/r/network/network%3A85TMuE6", Some(&p.token), json!({})).await;
+    assert_eq!(d.status, StatusCode::OK, "{}", d.text());
+    let d = d.json();
+    let r = &d["request"];
+    assert_eq!((r["id"].as_str(), r["sandbox"].as_str(), r["host"].as_str()), (Some("network:85TMuE6"), Some("sbxw-2"), Some("storage.googleapis.com:443")));
+    assert_eq!((&r["sandbox"], &r["host"], &r["options"]), (&row["sandbox"], &row["host"], &row["options"]), "what the list showed");
+    assert_eq!(r["options"].as_array().unwrap().len(), 2);
+    assert!(r["detail"].as_str().unwrap().contains("default deny"));
+    assert!(d["digest"].as_str().is_some_and(|x| x.len() == 64));
+    assert!(d.get("host").is_none(), "not flat any more");
 }
 
 #[tokio::test]
@@ -1111,4 +1176,93 @@ async fn a_network_request_opens_and_answers_by_the_pages_encoded_link() {
     for bad in ["/r/network/network%2F85TMuE6", "/r/network/network%3A..%2Fx", "/r/network/network%3A85TMuE6%20", "/r/network/%6Eetwork:85TMuE6", "/r/network/network%253A85TMuE6", "/r/network/network%3A85TMuE6%"] {
         assert_eq!(call(&w.router, "GET", bad, Some(&p.token), json!({})).await.status, StatusCode::NOT_FOUND, "{bad}");
     }
+}
+
+// ── Plan approval with a model changed on the phone ──────────────────────
+
+/// A challenge for approving plan `id` with model changes.
+async fn challenge_models(w: &World, p: &Phone, id: &str, models: Value) -> Reply {
+    let d = call(&w.router, "GET", &format!("/r/plans/{id}"), Some(&p.token), json!({})).await;
+    call(&w.router, "POST", "/r/approvals/challenge", Some(&p.token), json!({ "kind": "plan_approve", "target": id, "digest": d.json()["digest"], "models": models })).await
+}
+
+fn challenge_bytes(r: &Reply) -> Vec<u8> {
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    b64url_decode(r.json()["public_key"]["challenge"].as_str().unwrap(), 64).unwrap()
+}
+
+async fn approve_with(w: &World, p: &Phone, id: &str, a: Value, models: Value) -> Reply {
+    call(&w.router, "POST", &format!("/r/plans/{id}/approve"), Some(&p.token), json!({ "assertion": a, "models": models })).await
+}
+
+#[tokio::test]
+async fn a_plan_is_approved_with_a_model_the_phone_changed() {
+    let w = world();
+    let mut p = enrolled(&w, "phone").await;
+    let id = pending_plan(&w, "myapp", "goal");
+    let d = call(&w.router, "GET", &format!("/r/plans/{id}"), Some(&p.token), json!({})).await.json();
+    let listed: Vec<&str> = d["models"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+    assert!(listed.contains(&"claude-haiku-5-5"), "the detail carries the configured list: {listed:?}");
+    let ch = challenge_bytes(&challenge_models(&w, &p, &id, json!({ "alpha": "claude-haiku-5-5" })).await);
+    let a = assertion(&mut p, &ch, &Twist::default());
+    let r = approve_with(&w, &p, &id, a, json!({ "alpha": "claude-haiku-5-5" })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let plan = w.app.plan(&id).unwrap();
+    assert_eq!(plan.state, PlanState::Approved);
+    assert_eq!(plan.threads[0].model.as_deref(), Some("claude-haiku-5-5"));
+    assert_eq!((plan.threads[0].goal.as_str(), plan.threads[0].scope.as_str()), ("goal", "crates/x"), "nothing else of the thread changed");
+}
+
+#[tokio::test]
+async fn a_model_not_in_the_list_or_on_another_thread_is_refused() {
+    let w = world();
+    let p = enrolled(&w, "phone").await;
+    let id = pending_plan(&w, "myapp", "goal");
+    for (models, what) in [
+        (json!({ "alpha": "claude-made-up-9" }), "not in the list"),
+        (json!({ "alpha": "Claude-Haiku-5-5" }), "not exactly in the list"),
+        (json!({ "gamma": "claude-haiku-5-5" }), "not a thread of the plan"),
+        (json!({ "alpha": 3 }), "not an id"),
+    ] {
+        let r = challenge_models(&w, &p, &id, models).await;
+        assert!(r.status.is_client_error(), "{what}: {}", r.text());
+        assert_ne!(r.json()["reason"], "changed", "{what}");
+    }
+    // Models on another action: refused.
+    let d = call(&w.router, "GET", &format!("/r/plans/{id}"), Some(&p.token), json!({})).await;
+    let r = call(&w.router, "POST", "/r/approvals/challenge", Some(&p.token), json!({ "kind": "plan_refuse", "target": id, "digest": d.json()["digest"], "models": { "alpha": "claude-haiku-5-5" } })).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+    assert_eq!(plan_state(&w, &id), PlanState::Pending);
+}
+
+#[tokio::test]
+async fn a_model_changed_after_the_challenge_is_changed() {
+    let w = world();
+    let mut p = enrolled(&w, "phone").await;
+    let id = pending_plan(&w, "myapp", "goal");
+    // Another model at the act than at the challenge.
+    let ch = challenge_bytes(&challenge_models(&w, &p, &id, json!({ "alpha": "claude-haiku-5-5" })).await);
+    let a = assertion(&mut p, &ch, &Twist::default());
+    let r = approve_with(&w, &p, &id, a, json!({ "alpha": "claude-opus-5-5" })).await;
+    assert_eq!((r.status, r.json()["reason"].as_str()), (StatusCode::CONFLICT, Some("changed")), "{}", r.text());
+    // The change dropped at the act.
+    let ch = challenge_bytes(&challenge_models(&w, &p, &id, json!({ "alpha": "claude-haiku-5-5" })).await);
+    let a = assertion(&mut p, &ch, &Twist::default());
+    assert_eq!(approve_with(&w, &p, &id, a, json!({})).await.json()["reason"], "changed");
+    // A change added at the act to a challenge made without one.
+    let ch = challenge_bytes(&challenge_models(&w, &p, &id, json!({})).await);
+    let a = assertion(&mut p, &ch, &Twist::default());
+    assert_eq!(approve_with(&w, &p, &id, a, json!({ "alpha": "claude-haiku-5-5" })).await.json()["reason"], "changed");
+    // The plan's proposed model changes on the Mac after the challenge.
+    let ch = challenge_bytes(&challenge_models(&w, &p, &id, json!({ "alpha": "claude-haiku-5-5" })).await);
+    {
+        let mut book = w.app.plans.lock().unwrap();
+        let mut list = book.list();
+        list.iter_mut().filter(|pl| pl.id == id).for_each(|pl| pl.threads[0].model = Some("claude-opus-5-5".into()));
+        *book = sbxw_core::plans::PlanBook::load(list);
+    }
+    let a = assertion(&mut p, &ch, &Twist::default());
+    assert_eq!(approve_with(&w, &p, &id, a, json!({ "alpha": "claude-haiku-5-5" })).await.json()["reason"], "changed");
+    assert_eq!(plan_state(&w, &id), PlanState::Pending, "nothing started");
+    assert!(journal(&w).iter().filter(|e| e.kind == Kind::Changed).count() >= 4);
 }
