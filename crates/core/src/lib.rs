@@ -26,6 +26,7 @@ pub mod favourites;
 pub mod history;
 pub mod hosts;
 pub mod ids;
+pub mod invisible;
 pub mod jarvis;
 pub mod kits;
 pub mod mac;

@@ -15,7 +15,7 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'RC_PILL_TONES', 'rcPills', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcAnswerPick', 'rcAnswers', 'rcAnswerFail', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'rcAwayFromEnd', 'rcSkillMatches', 'rcSkillInsert', 'rcSkillLine', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcStopped', 'rcFold', 'rcWaiting', 'rcToastChoice', 'rcLeaderInfo', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_INVISIBLE_RANGES', 'rcAwayFromEnd', 'rcSkillMatches', 'rcSkillInsert', 'rcSkillLine', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcStopped', 'rcFold', 'rcWaiting', 'rcToastChoice', 'rcLeaderInfo', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
   'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
@@ -344,6 +344,26 @@ test('the check before sending matches the daemon\'s rule', () => {
   assert.equal(rc.RC_MSG_REASON.busy, 'The session is busy right now: try again in a few seconds. Meanwhile you can read it and interrupt it.');
   for (const s of ['', '   ', '\n\n']) assert.equal(rc.rcMessageCheck(s), 'empty');
   for (const s of ['hello', 'café ünïcödé 日本語 😀', 'a/b and c#d', 'line one\nline two', 'see https://x.example/#a', 'Fix it! Now.']) assert.equal(rc.rcMessageCheck(s), null, JSON.stringify(s));
+});
+
+test('the phone refuses the one invisible list of crates/core/src/invisible.rs', () => {
+  const rs = read('../../crates/core/src/invisible.rs');
+  const body = /pub const INVISIBLE[^=]*=\s*&\[([\s\S]*?)\n\];/.exec(rs)[1];
+  const want = [...body.matchAll(/\('\\u\{([0-9a-f]+)\}',\s*'\\u\{([0-9a-f]+)\}'\)/g)].map(m => [parseInt(m[1], 16), parseInt(m[2], 16)]);
+  assert.ok(want.length >= 20);
+  assert.deepEqual(plain(rc.RC_INVISIBLE_RANGES), want);
+  const inList = n => want.some(([a, b]) => n >= a && n <= b);
+  const cf = /[\p{Cf}\p{Zl}\p{Zp}]/u;
+  for (let n = 0; n <= 0x10FFFF; n++) {
+    if (n >= 0xD800 && n <= 0xDFFF) continue;
+    const ch = String.fromCodePoint(n);
+    // Never looser than before: every format character, separator and control.
+    if (cf.test(ch)) assert.ok(inList(n), `U+${n.toString(16)} is a format character missing from the list`);
+    const control = /\p{Cc}/u.test(ch) && ch !== '\n';
+    assert.equal(rc.rcMessageCheck(`a${ch}b`), inList(n) || control ? 'control' : null, `U+${n.toString(16)}`);
+  }
+  // The emoji and text selectors pass: ❤️ ☺️ ✌️ as a phone keyboard writes them.
+  for (const s of ['\u2764\uFE0F', '\u263A\uFE0F', '\u270C\uFE0F', '\u2764\uFE0E']) assert.equal(rc.rcMessageCheck(s), null, s);
 });
 
 test('the jump button shows only when the log is away from its end', () => {
@@ -929,13 +949,13 @@ test('the Mac path: a format the phone records, no empty or tiny clip, the answe
 
 // ── Security review P6: invisible and bidi controls made visible ──
 const CONTROLS = [0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0xFEFF, 0x00AD,
-  0x2028, 0x2029, 0x061C, 0x034F, 0x115F, 0x1160, 0x3164, 0xFE0F, 0xFFA0, 0xFFF9, 0xE0001, 0xE0041, 0x001B, 0x007F, 0x0085];
+  0x2028, 0x2029, 0x061C, 0x034F, 0x115F, 0x1160, 0x3164, 0xFE00, 0xFE0D, 0xFFA0, 0xFFF9, 0xE0001, 0xE0041, 0x001B, 0x007F, 0x0085];
 test('every invisible or bidi control becomes a visible code, nothing else does', () => {
   for (const cp of CONTROLS) {
     const parts = plain(rc.rcMarked(`a${String.fromCodePoint(cp)}b`));
     assert.deepEqual(parts, ['a', { code: `U+${cp.toString(16).toUpperCase().padStart(4, '0')}` }, 'b'], cp.toString(16));
   }
-  for (const ok of ['plain', 'é à ü', '日本語', 'עברית', 'العربية', '😀👍🏽', 'a\tb', 'line\nline', 'src/x.rs']) {
+  for (const ok of ['plain', 'é à ü', '日本語', 'עברית', 'العربية', '😀👍🏽', '\u2764\uFE0F', '\u2764\uFE0E', 'a\tb', 'line\nline', 'src/x.rs']) {
     assert.deepEqual(plain(rc.rcMarked(ok)), [ok], ok);
   }
   assert.deepEqual(plain(rc.rcMarked('')), []);

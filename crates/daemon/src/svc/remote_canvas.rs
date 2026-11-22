@@ -102,7 +102,8 @@ fn draft_view(c: &Canvas) -> (Vec<Value>, Vec<Value>) {
 }
 
 /// A remark's text from the phone: trimmed, 1 to [`TEXT_MAX`] characters,
-/// no control character but a line break.
+/// no control character but a line break, none of the one invisible list
+/// ([`sbxw_core::invisible::is_invisible`]).
 fn checked_text(t: Option<&str>) -> Result<&str, Refusal> {
     let t = t.map(str::trim).unwrap_or("");
     if t.is_empty() {
@@ -111,7 +112,7 @@ fn checked_text(t: Option<&str>) -> Result<&str, Refusal> {
     if t.chars().count() > TEXT_MAX {
         return Err(Refusal::Bad(format!("a remark is at most {TEXT_MAX} characters")));
     }
-    if t.chars().any(|c| (c.is_control() && c != '\n') || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')) {
+    if t.chars().any(|c| (c.is_control() && c != '\n') || sbxw_core::invisible::is_invisible(c)) {
         return Err(Refusal::Reason(Reason::Control));
     }
     Ok(t)
@@ -354,5 +355,28 @@ impl App {
         tracing::info!("remote access: device {}: canvas submit", d.id);
         self.remote_record(d, Kind::CanvasSubmit);
         Ok(n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A remark from the phone is refused for every character of the one
+    /// invisible list, and kept for the characters around each range.
+    #[test]
+    fn remarks_refuse_every_invisible_character() {
+        for c in sbxw_core::invisible::all() {
+            let s = format!("a{c}b");
+            assert!(matches!(checked_text(Some(&s)), Err(Refusal::Reason(Reason::Control))), "{c:?}");
+        }
+        for c in sbxw_core::invisible::neighbours() {
+            let s = format!("a{c}b");
+            assert_eq!(checked_text(Some(&s)).ok(), Some(s.as_str()), "{c:?}");
+        }
+        // The emoji and text selectors are accepted.
+        for s in ["\u{2764}\u{fe0f} thanks", "\u{2764}\u{fe0e}"] {
+            assert_eq!(checked_text(Some(s)).ok(), Some(s), "{s:?}");
+        }
     }
 }

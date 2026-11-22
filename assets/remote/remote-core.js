@@ -823,9 +823,20 @@ function rcCtlGate(leader, which) {
 // What the daemon will refuse, checked before sending so the person can fix
 // it in place (the daemon stays the judge): a line whose first non-blank
 // character is !, / or #, or any control character but a line feed (tab, CR,
-// ESC, DEL, C1), a format character (bidi controls, zero-width space and
-// joiners, BOM, soft hyphen, word joiner, tags), a line or paragraph separator.
-const RC_CONTROL = /(?!\n)[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+// ESC, DEL, C1), or a character of the one invisible list (bidi controls,
+// zero-width space and joiners, BOM, soft hyphen, word joiner, line and
+// paragraph separators, variation selectors, tags...).
+// The one invisible list: the same inclusive ranges as INVISIBLE in
+// crates/core/src/invisible.rs, which the daemon refuses (a test compares them).
+const RC_INVISIBLE_RANGES = [
+  [0x00AD, 0x00AD], [0x034F, 0x034F], [0x0600, 0x0605], [0x061C, 0x061C], [0x06DD, 0x06DD],
+  [0x070F, 0x070F], [0x0890, 0x0891], [0x08E2, 0x08E2], [0x115F, 0x1160], [0x17B4, 0x17B5],
+  [0x180B, 0x180F], [0x200B, 0x200F], [0x2028, 0x2029], [0x202A, 0x202E], [0x2060, 0x206F],
+  [0x3164, 0x3164], [0xFE00, 0xFE0D], [0xFEFF, 0xFEFF], [0xFFA0, 0xFFA0], [0xFFF9, 0xFFFB],
+  [0x110BD, 0x110BD], [0x110CD, 0x110CD], [0x13430, 0x1343F], [0x1BCA0, 0x1BCA3], [0x1D173, 0x1D17A],
+  [0xE0000, 0xE0FFF],
+];
+const RC_CONTROL = new RegExp(`(?!\\n)[\\p{Cc}${RC_INVISIBLE_RANGES.map(([a, b]) => `\\u{${a.toString(16)}}-\\u{${b.toString(16)}}`).join('')}]`, 'u');
 function rcMessageCheck(text, skills) {
   const s = String(text ?? '');
   if (!s.trim()) return 'empty';
@@ -1788,8 +1799,10 @@ function rcTranscribed(res) {
 // joiners, BOM, soft hyphen, word joiner, tags...), line and paragraph
 // separators, C0 and C1 controls but tab and line feed, and the characters
 // that draw nothing (combining grapheme joiner, Hangul fillers, Mongolian
-// selectors, variation selectors, interlinear annotation).
-const RC_INVISIBLE = /[\p{Cf}\p{Zl}\p{Zp}\u0000-\u0008\u000B-\u001F\u007F-\u009F\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u3164\uFE00-\uFE0F\uFFA0\uFFF9-\uFFFB]/u;
+// selectors, variation selectors but the text and emoji ones U+FE0E and
+// U+FE0F, which only pick the form of the character before them (as in
+// crates/core/src/invisible.rs), interlinear annotation).
+const RC_INVISIBLE = /[\p{Cf}\p{Zl}\p{Zp}\u0000-\u0008\u000B-\u001F\u007F-\u009F\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u3164\uFE00-\uFE0D\uFFA0\uFFF9-\uFFFB]/u;
 // → [string | { code: 'U+202E' }]
 function rcMarked(s) {
   const out = [];

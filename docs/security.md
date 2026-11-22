@@ -172,8 +172,8 @@ page instead of the chat.
   waiting on that sandbox's answer. See [Relay](relay.md).
 - **Text typed into a terminal:** when one agent's text is typed into another
   agent's terminal, control characters (ESC, CR, the other C0 and C1
-  characters) and bidi and zero-width format characters are removed first. The
-  text cannot end the paste and type keystrokes of its own.
+  characters) and every character of the [invisible list](#invisible-characters)
+  are removed first. The text cannot end the paste and type keystrokes of its own.
 - **Screenshots:** in the web UI, nothing leaves until you attach it, to one
   named sandbox, after seeing a preview of every image. sbxw can't capture
   your screen; the browser's own picker asks each time. Refusing discards what
@@ -203,6 +203,34 @@ page instead of the chat.
 - **Plans:** nothing starts until you approve. After approval, a lead and its
   threads message each other without clicks, **inside one sandbox only**. See
   [the lead's trust model](threads-and-lead.md#trust).
+
+## Invisible characters
+
+Text from an agent or a phone may carry characters that draw nothing but hide, reorder or
+change what you read: bidi controls (U+202E can make `gpj.exe` read as `exe.jpg`),
+zero-width spaces and joiners, a byte order mark, a soft hyphen, variation selectors, tags.
+sbxw keeps **one list** of them, `INVISIBLE` in `crates/core/src/invisible.rs`: every
+Unicode format character (category Cf), the line and paragraph separators, and the
+characters that draw nothing (combining grapheme joiner, Hangul fillers, Khmer inherent
+vowels, Mongolian selectors, variation selectors, U+E0000 to U+E0FFF). Two variation
+selectors are left out: U+FE0E and U+FE0F only pick the text or emoji form of the
+character before them (❤︎ or ❤️); they draw nothing of their own, cannot hide a character
+and cannot reorder text, and phone keyboards write U+FE0F in ordinary emoji. Every place that
+handles such text uses that list, each with its own action:
+
+| Where | What happens to a listed character |
+|---|---|
+| Text typed into a terminal (`terminal::sanitize_typed`) | removed |
+| A reason on an approval card (`mac::clean_reason`) | becomes a word break |
+| Canvas and ticket texts (`canvas::clean`, `tickets::clean`) | removed |
+| A phone's message, device name or canvas remark | the whole text is refused |
+| An uploaded file's name (`uploads::upload_name`) | becomes `_` (only `A-Z a-z 0-9 . - _` survive) |
+
+The phone page warns with the same list (`RC_INVISIBLE_RANGES`), checked against the Rust
+table by a test. The cost: a joined emoji (U+200D) falls apart into its parts, a regional
+flag such as Scotland's (tags) shows as a plain black flag, and scripts that use a joiner
+or a selector in ordinary writing (Persian and some Indic scripts with U+200C, Mongolian,
+Japanese ideographic variants) lose it, or are refused where the action is to refuse.
 
 ## Jarvis
 
@@ -446,8 +474,9 @@ what lands in the leader's prompt and nothing else:
 - **Only plain text.** A message with any line starting with `!`, `/` or `#` is refused
   (Claude Code would run a `!` line as a shell command at once, and a `/` line is a slash
   command such as `/permissions` or `/mcp`). So is any control character except a line
-  break (tab, Return, Escape and the like), any bidi control, and any invisible character
-  (zero-width spaces and joiners, a byte order mark, a soft hyphen...): what you see is
+  break (tab, Return, Escape and the like), and any character of the
+  [invisible list](#invisible-characters) (bidi controls, zero-width spaces and joiners, a
+  byte order mark, a soft hyphen, variation selectors...): what you see is
   exactly what is typed. The text is refused, never rewritten. Every line is checked, not
   only the first: whether Claude Code could read a later line of a paste as a command was
   not verified, so none may look like one. The check runs again on the exact text typed,
@@ -689,8 +718,9 @@ a standalone app named sbxw.
   typed into a leader that is idle or working: while it works, the status line says the
   message will be queued by Claude Code; while it waits for you, the daemon refuses it and
   the text and files stay.
-  A line starting with `!`, `/` or `#`, a control character or an invisible one
-  (zero-width space, soft hyphen...) is warned about in place while typing; the daemon stays
+  A line starting with `!`, `/` or `#`, a control character or one of the
+  [invisible list](#invisible-characters) is warned about in place while typing (the page
+  holds the same list as the daemon, and a test compares them); the daemon stays
   the judge. Each refusal reason has its own sentence, with the daemon's words beside it as
   text; "not_submitted" says plainly that the text waits unsent in the leader's input on the
   Mac, keeps it in the field, and nothing is resent.

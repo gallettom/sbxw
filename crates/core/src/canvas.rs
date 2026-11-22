@@ -278,12 +278,13 @@ pub fn unbase64(s: &str, max: usize) -> Result<Vec<u8>, String> {
 // Texts and ids
 
 /// Agent or person text as data: control characters (but new lines when
-/// `lines`) and bidirectional overrides removed, trimmed, cut to `max` characters.
+/// `lines`) and invisible and bidirectional characters (the one list,
+/// [`crate::invisible::is_invisible`]) removed, trimmed, cut to `max` characters.
 pub fn clean(s: &str, max: usize, lines: bool) -> String {
     let t: String = s
         .chars()
         .filter(|c| !(c.is_control() && !(lines && *c == '\n')))
-        .filter(|c| !matches!(*c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}'))
+        .filter(|c| !crate::invisible::is_invisible(*c))
         .collect();
     t.trim().chars().take(max).collect()
 }
