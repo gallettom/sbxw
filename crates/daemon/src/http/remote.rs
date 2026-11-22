@@ -53,6 +53,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/r/me"),
     ("POST", "/r/logout"),
     ("GET", "/r/leaders"),
+    ("GET", "/r/usage"),
     ("GET", "/r/leaders/:sandbox/history"),
     ("GET", "/r/events"),
     ("POST", "/r/leaders/:sandbox/message"),
@@ -115,6 +116,7 @@ pub fn remote_router(app: Arc<App>) -> Router {
         .route("/r/me", get(me))
         .route("/r/logout", post(logout))
         .route("/r/leaders", get(leaders))
+        .route("/r/usage", get(usage))
         .route("/r/leaders/:sandbox/history", get(history))
         .route("/r/events", get(events))
         .route("/r/leaders/:sandbox/message", post(message).layer(DefaultBodyLimit::max(MESSAGE_BODY_MAX)))
@@ -372,6 +374,12 @@ async fn logout(State(app): S, Extension(d): Extension<DeviceCtx>, Json(_): Json
 
 async fn leaders(State(app): S, Extension(_d): Extension<DeviceCtx>) -> Json<Value> {
     Json(json!({ "leaders": app.remote_leaders() }))
+}
+
+/// The plan usage (5-hour and 7-day limits): the same JSON as the UI's
+/// `/api/usage`, read only, nothing journaled.
+async fn usage(State(app): S, Extension(_d): Extension<DeviceCtx>) -> Json<Value> {
+    Json(json!(app.usage()))
 }
 
 #[derive(Deserialize)]
