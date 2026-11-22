@@ -949,13 +949,13 @@ test('the Mac path: a format the phone records, no empty or tiny clip, the answe
 
 // ── Security review P6: invisible and bidi controls made visible ──
 const CONTROLS = [0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0xFEFF, 0x00AD,
-  0x2028, 0x2029, 0x061C, 0x034F, 0x115F, 0x1160, 0x3164, 0xFE0F, 0xFFA0, 0xFFF9, 0xE0001, 0xE0041, 0x001B, 0x007F, 0x0085];
+  0x2028, 0x2029, 0x061C, 0x034F, 0x115F, 0x1160, 0x3164, 0xFE00, 0xFE0D, 0xFFA0, 0xFFF9, 0xE0001, 0xE0041, 0x001B, 0x007F, 0x0085];
 test('every invisible or bidi control becomes a visible code, nothing else does', () => {
   for (const cp of CONTROLS) {
     const parts = plain(rc.rcMarked(`a${String.fromCodePoint(cp)}b`));
     assert.deepEqual(parts, ['a', { code: `U+${cp.toString(16).toUpperCase().padStart(4, '0')}` }, 'b'], cp.toString(16));
   }
-  for (const ok of ['plain', 'é à ü', '日本語', 'עברית', 'العربية', '😀👍🏽', 'a\tb', 'line\nline', 'src/x.rs']) {
+  for (const ok of ['plain', 'é à ü', '日本語', 'עברית', 'العربية', '😀👍🏽', '\u2764\uFE0F', '\u2764\uFE0E', 'a\tb', 'line\nline', 'src/x.rs']) {
     assert.deepEqual(plain(rc.rcMarked(ok)), [ok], ok);
   }
   assert.deepEqual(plain(rc.rcMarked('')), []);

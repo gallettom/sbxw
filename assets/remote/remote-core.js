@@ -1799,8 +1799,10 @@ function rcTranscribed(res) {
 // joiners, BOM, soft hyphen, word joiner, tags...), line and paragraph
 // separators, C0 and C1 controls but tab and line feed, and the characters
 // that draw nothing (combining grapheme joiner, Hangul fillers, Mongolian
-// selectors, variation selectors, interlinear annotation).
-const RC_INVISIBLE = /[\p{Cf}\p{Zl}\p{Zp}\u0000-\u0008\u000B-\u001F\u007F-\u009F\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u3164\uFE00-\uFE0F\uFFA0\uFFF9-\uFFFB]/u;
+// selectors, variation selectors but the text and emoji ones U+FE0E and
+// U+FE0F, which only pick the form of the character before them (as in
+// crates/core/src/invisible.rs), interlinear annotation).
+const RC_INVISIBLE = /[\p{Cf}\p{Zl}\p{Zp}\u0000-\u0008\u000B-\u001F\u007F-\u009F\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u3164\uFE00-\uFE0D\uFFA0\uFFF9-\uFFFB]/u;
 // → [string | { code: 'U+202E' }]
 function rcMarked(s) {
   const out = [];
