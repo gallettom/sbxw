@@ -426,7 +426,7 @@
     if (!canStop && !$('confirm').hidden) disarmInterrupt();
     // Every sandbox the phone reaches has a board (tickets only without a team).
     $('views').hidden = !l;
-    if (!l && st.screen === 's-chat' && view().mode === 'kanban') setView('chat');
+    if (!l && st.screen === 's-chat' && view().mode !== 'chat') setView('chat');
     renderCtl(l);
     gateSend();
   }
@@ -599,6 +599,7 @@
     renderTail();
     show('s-chat');
     setView(leader()?.kind === 'sandbox' ? 'chat' : view().mode);
+    cvLoadList(sandbox);
     const res = await api.history(sandbox);
     if (st.current !== sandbox) return;
     if (!res.ok) {
@@ -1749,16 +1750,20 @@
     const log = $('log');
     v.mode = mode;
     const k = mode === 'kanban';
-    $('v-chat').setAttribute('aria-selected', String(!k));
+    const c = mode === 'canvas';
+    $('v-chat').setAttribute('aria-selected', String(!k && !c));
     $('v-kanban').setAttribute('aria-selected', String(k));
+    $('v-canvas').setAttribute('aria-selected', String(c));
     $('board').hidden = !k;
-    log.hidden = k;
-    $('composer').hidden = k;
+    $('canvas').hidden = !c;
+    log.hidden = k || c;
+    $('composer').hidden = k || c;
+    if (k || c) { saveDraft(); stopRecording(false); }
     if (k) {
-      saveDraft();
-      stopRecording(false);
       if (v.board) renderBoard(); else $('kb-lanes').replaceChildren();
       loadBoard();
+    } else if (c) {
+      cvShow();
     } else {
       keepPlace();
     }
@@ -1766,6 +1771,7 @@
   }
   $('v-chat').addEventListener('click', () => setView('chat'));
   $('v-kanban').addEventListener('click', () => setView('kanban'));
+  $('v-canvas').addEventListener('click', () => setView('canvas'));
 
   function kbStatus(text) {
     $('kb-status').textContent = text;
@@ -2746,6 +2752,450 @@
     else showLeaders();
   });
   window.addEventListener('popstate', () => { if (st.current && st.screen === 's-chat') showLeaders(); });
+
+  // ── Canvas (API-canvas.md) ──
+  // A sandbox's canvases, then one shot per page: swipe or Previous/Next,
+  // pinch to zoom and pan (a swipe pages only at 1x), a tap places a pin.
+  // Every remark is one call, its outcome said under the picture; "Send
+  // remarks" lists every remark in full first. Nothing is kept on the phone:
+  // the manifest lives in memory, pictures come from the Mac each time.
+  const cv = {
+    sandbox: null, list: null, listLoading: false,
+    m: null,            // the open canvas's manifest (rcCvManifest)
+    idx: 0,             // the shot on screen
+    view: { s: 1, tx: 0, ty: 0 },
+    box: { w: 0, h: 0 },
+    edit: null,         // the remark being written: { kind, n, shot, x, y }
+    busy: false,        // a remark or the send in flight
+    delArm: null,
+  };
+  function cvReset(sandbox) {
+    if (cv.sandbox === sandbox) return;
+    Object.assign(cv, { sandbox, list: null, m: null, idx: 0, edit: null, busy: false });
+    $('cv-list').replaceChildren();
+    cvShowReview(false);
+  }
+  function cvStatus(text) { $('cv-status').textContent = text; $('cv-status').hidden = !text; }
+  function cvSaid(el, r) {
+    $(el).textContent = r ? r.text : '';
+    $(el).className = `rc-cv-saved rc-t-${r ? r.tone : 'info'}`;
+    $(el).hidden = !r;
+  }
+  function cvRenderBadge() {
+    const n = cv.sandbox === st.current ? rcCvBadge(cv.list) : 0;
+    $('cv-badge').textContent = n ? String(n) : '';
+    $('cv-badge').hidden = !n;
+    $('v-canvas').setAttribute('aria-label', n ? `Canvas, ${n === 1 ? '1 canvas has' : `${n} canvases have`} new shots` : 'Canvas');
+  }
+  async function cvLoadList(sandbox = st.current) {
+    if (!sandbox) return;
+    cvReset(sandbox);
+    if (cv.listLoading) return;
+    cv.listLoading = true;
+    if (!cv.list) cvStatus('Loading the canvases…');
+    const res = await api.canvasList(sandbox);
+    cv.listLoading = false;
+    if (cv.sandbox !== sandbox) return;
+    if (!res.ok) {
+      cvStatus(res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : res.status === 404 ? 'This sandbox is not running any more.' : `The canvases could not be read (the Mac answered ${res.status}).`);
+    } else {
+      cvStatus('');
+      cv.list = rcCvList(res.data);
+    }
+    cvRenderBadge();
+    cvRenderList();
+  }
+  function cvRenderList() {
+    const list = cv.list || [];
+    const now = Date.now();
+    $('cv-list').replaceChildren(...list.map(c => {
+      const li = document.createElement('li');
+      const b = rcCvRowEl(document, c, now);
+      b.addEventListener('click', () => cvOpen(c.id));
+      li.append(b);
+      return li;
+    }));
+    $('cv-empty').hidden = !(cv.list && !list.length);
+  }
+  function cvShow() {
+    cvLoadList();
+    if (cv.m) cvRenderPage();
+  }
+  function cvShowReview(on) {
+    $('cv-listview').hidden = on;
+    $('cv-review').hidden = !on;
+    $('cv-confirm').hidden = true;
+    if (!on) { cv.m = null; cv.edit = null; $('cv-editor').hidden = true; cvSaid('cv-saved', null); }
+  }
+  async function cvOpen(id, keep) {
+    const sandbox = cv.sandbox;
+    if (!keep) { cv.idx = 0; cvSaid('cv-saved', null); }
+    cvStatus(keep ? '' : 'Loading the canvas…');
+    const res = await api.canvas(id);
+    if (cv.sandbox !== sandbox || st.current !== sandbox) return;
+    const m = res.ok ? rcCvManifest(res.data) : null;
+    if (!m) {
+      cvStatus(res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : res.status === 404 ? 'This canvas is no longer reachable.' : 'The canvas could not be read.');
+      if (keep) cvShowReview(false);
+      return;
+    }
+    cvStatus('');
+    const was = cv.m?.shots[cv.idx]?.id;
+    cv.m = m;
+    // Back on the shot that was on screen, wherever it is now; else the first new one.
+    const at = was ? m.shots.findIndex(s => s.id === was) : -1;
+    cv.idx = at >= 0 ? at : keep ? rcCvPage(cv.idx, m.shots.length) : Math.max(0, m.shots.findIndex(s => s.new));
+    $('cv-title').textContent = m.title;
+    cvShowReview(true);
+    cvRenderPage(!keep || at < 0);
+  }
+  $('cv-back').addEventListener('click', () => { cvShowReview(false); cvLoadList(); });
+
+  // One page: the picture, its pins, its title, note and round, its remarks.
+  function cvRenderPage(fresh = true) {
+    const m = cv.m;
+    if (!m) return;
+    const n = m.shots.length;
+    cv.idx = rcCvPage(cv.idx, n);
+    const shot = m.shots[cv.idx] || null;
+    $('cv-count').textContent = rcCvCounter(cv.idx, n);
+    $('cv-prev').disabled = cv.idx <= 0;
+    $('cv-next').disabled = cv.idx >= n - 1;
+    $('cv-page').hidden = !shot;
+    if (!shot) { cvStatus('This canvas has no shot yet.'); return; }
+    $('cv-shot-title').textContent = shot.title || `Shot ${cv.idx + 1}`;
+    $('cv-shot-line').textContent = rcCvShotLine(shot, m.rounds.length);
+    $('cv-shot-note').textContent = shot.note;
+    $('cv-shot-note').hidden = !shot.note;
+    const img = $('cv-img');
+    const src = rcCvImage(m.id, shot.file);
+    if (img.dataset.src !== src) {
+      img.dataset.src = src || '';
+      $('cv-imgerr').hidden = true;
+      img.removeAttribute('src');
+      if (src) img.src = src;
+      img.alt = shot.title ? `Shot: ${shot.title}` : `Shot ${cv.idx + 1}`;
+    }
+    if (fresh) {
+      cv.view = { s: 1, tx: 0, ty: 0 };
+      const page = $('cv-page');
+      if (!(reducedMotion && reducedMotion.matches)) { page.classList.remove('rc-cv-enter'); void page.offsetWidth; page.classList.add('rc-cv-enter'); }
+    }
+    cvLayout();
+    cvRenderPins();
+    cvRenderRemarks();
+    const total = Math.max(m.pins.length + m.notes.length, m.draft);
+    $('cv-send').textContent = total ? `Send remarks (${total})` : 'Send remarks';
+  }
+  $('cv-img').addEventListener('error', () => {
+    if (!$('cv-img').getAttribute('src')) return;
+    $('cv-imgerr').textContent = 'The picture could not be loaded from the Mac.';
+    $('cv-imgerr').hidden = false;
+  });
+  function cvGo(delta) {
+    if (!cv.m) return;
+    const j = rcCvPage(cv.idx, cv.m.shots.length, delta);
+    if (j === cv.idx) return;
+    cvCloseEditor();
+    cv.idx = j;
+    cvRenderPage(true);
+  }
+  $('cv-prev').addEventListener('click', () => cvGo(-1));
+  $('cv-next').addEventListener('click', () => cvGo(1));
+  document.addEventListener('keydown', e => {
+    if ($('cv-review').hidden || $('canvas').hidden || st.screen !== 's-chat' || !$('cv-confirm').hidden) return;
+    if (e.target && /^(TEXTAREA|INPUT|SELECT)$/.test(e.target.tagName)) return;
+    if (e.key === 'ArrowLeft') cvGo(-1);
+    else if (e.key === 'ArrowRight') cvGo(1);
+  });
+
+  // The picture fits the width (in landscape, also the height left), at
+  // its own proportions; the layer holds it and the pins, and is what zooms.
+  function cvLayout() {
+    const shot = cv.m?.shots[cv.idx];
+    const stage = $('cv-stage');
+    if (!shot || $('canvas').hidden) return;
+    const ratio = shot.px_w / shot.px_h;
+    const W = stage.clientWidth;
+    const landscape = window.innerWidth > window.innerHeight;
+    const maxH = landscape ? Math.max(160, (vv ? vv.height : window.innerHeight) - 96) : Infinity;
+    const w = Math.max(1, Math.min(W, maxH * ratio));
+    const h = w / ratio;
+    cv.box = { w, h };
+    const layer = $('cv-layer');
+    layer.style.width = `${w}px`;
+    layer.style.height = `${h}px`;
+    stage.style.height = `${h}px`;
+    cv.view = rcCvClamp(cv.view, w, h);
+    cvApply();
+  }
+  function cvApply() {
+    const { s, tx, ty } = cv.view;
+    const layer = $('cv-layer');
+    layer.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+    layer.style.setProperty('--cv-inv', String(1 / s));
+    const zoomed = s > 1.01;
+    $('cv-stage').classList.toggle('rc-cv-zoomed', zoomed);
+    $('cv-fit').hidden = !zoomed;
+  }
+  $('cv-fit').addEventListener('click', () => { cv.view = { s: 1, tx: 0, ty: 0 }; cvApply(); });
+  window.addEventListener('resize', () => { if (cv.m && !$('cv-review').hidden) cvLayout(); });
+
+  function cvPinEl(n, x, y, label, cls = '') {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `rc-cv-pin${cls}`;
+    b.textContent = n;
+    b.setAttribute('aria-label', label);
+    b.dataset.n = n;
+    b.style.left = `${x}%`;
+    b.style.top = `${y}%`;
+    return b;
+  }
+  function cvRenderPins() {
+    const m = cv.m, shot = m?.shots[cv.idx];
+    if (!shot) return;
+    const els = m.pins.filter(p => p.shot === shot.id).map(p => {
+      const b = cvPinEl(String(p.n), p.x, p.y, `Pin ${p.n}: ${p.text}`, cv.edit?.kind === 'pin' && cv.edit.n === p.n ? ' rc-cv-pin-on' : '');
+      // A keyboard's Enter (no pointer): open it. Taps go through the stage.
+      b.addEventListener('click', e => { if (e.detail === 0) cvEditPin(p); });
+      return b;
+    });
+    if (cv.edit?.kind === 'pin' && cv.edit.n == null && cv.edit.shot === shot.id) els.push(cvPinEl('+', cv.edit.x, cv.edit.y, 'New pin', ' rc-cv-pin-on'));
+    $('cv-pins').replaceChildren(...els);
+  }
+  function cvRenderRemarks() {
+    const m = cv.m, shot = m?.shots[cv.idx];
+    if (!shot) return;
+    const row = (tag, text, open) => {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'rc-cv-remark';
+      const t = document.createElement('span');
+      t.className = 'rc-cv-remark-tag';
+      t.textContent = tag;
+      const x = document.createElement('span');
+      x.className = 'rc-cv-remark-text';
+      x.textContent = text;
+      b.append(t, x);
+      b.addEventListener('click', open);
+      li.append(b);
+      return li;
+    };
+    $('cv-remarks').replaceChildren(
+      ...m.pins.filter(p => p.shot === shot.id).map(p => row(`Pin ${p.n}`, p.text, () => cvEditPin(p))),
+      ...m.notes.filter(t => t.shot === shot.id).map(t => row(`Note ${t.n}`, t.text, () => cvEditNote(t))),
+    );
+  }
+
+  // ── Writing one remark ──
+  function cvOpenEditor(edit, label, text) {
+    cv.edit = edit;
+    cv.delArm = null;
+    $('cv-ed-label').textContent = label;
+    $('cv-ed-text').value = text;
+    $('cv-ed-text').maxLength = cv.m?.text_max || 2000;
+    $('cv-ed-del').hidden = edit.n == null;
+    $('cv-ed-del').textContent = 'Delete';
+    $('cv-ed-save').disabled = false;
+    $('cv-editor').hidden = false;
+    $('cv-add-note').hidden = true;
+    cvRenderPins();
+    $('cv-ed-text').focus({ preventScroll: true });
+    $('cv-editor').scrollIntoView({ block: 'nearest', behavior: reducedMotion && reducedMotion.matches ? 'auto' : 'smooth' });
+  }
+  function cvCloseEditor() {
+    cv.edit = null;
+    $('cv-editor').hidden = true;
+    $('cv-add-note').hidden = false;
+    cvRenderPins();
+  }
+  function cvEditPin(p) { if (!cv.busy) cvOpenEditor({ kind: 'pin', n: p.n, shot: p.shot, x: p.x, y: p.y }, `Pin ${p.n}`, p.text); }
+  function cvEditNote(t) { if (!cv.busy) cvOpenEditor({ kind: 'note', n: t.n, shot: t.shot }, `Note ${t.n}`, t.text); }
+  function cvNewPin(fx, fy) {
+    const shot = cv.m?.shots[cv.idx];
+    if (!shot || cv.busy) return;
+    const x = Math.round(fx * 1000) / 10, y = Math.round(fy * 1000) / 10;
+    cvOpenEditor({ kind: 'pin', n: null, shot: shot.id, x, y }, 'New pin', $('cv-editor').hidden || cv.edit?.n != null ? '' : $('cv-ed-text').value);
+  }
+  $('cv-add-note').addEventListener('click', () => {
+    const shot = cv.m?.shots[cv.idx];
+    if (shot && !cv.busy) cvOpenEditor({ kind: 'note', n: null, shot: shot.id }, 'New note on this shot', '');
+  });
+  $('cv-ed-cancel').addEventListener('click', cvCloseEditor);
+  async function cvRemark(body, what) {
+    const m = cv.m, sandbox = cv.sandbox;
+    cv.busy = true;
+    $('cv-ed-save').disabled = true;
+    $('cv-ed-del').disabled = true;
+    cvSaid('cv-saved', { tone: 'info', text: `${what}: saving…` });
+    const res = await api.canvasRemark(m.id, body);
+    cv.busy = false;
+    $('cv-ed-save').disabled = false;
+    $('cv-ed-del').disabled = false;
+    if (cv.sandbox !== sandbox || cv.m?.id !== m.id) return;
+    const r = rcCvRemarkResult(res, what);
+    cvSaid('cv-saved', r);
+    if (r.tone === 'ok') {
+      Object.assign(cv.m, rcCvRemarks(res.data));
+      cvCloseEditor();
+      cvRenderPage(false);
+    } else if (r.reload) {
+      cvCloseEditor();
+      cvOpen(m.id, true);
+    }
+  }
+  $('cv-editor').addEventListener('submit', e => {
+    e.preventDefault();
+    const ed = cv.edit;
+    if (!ed || cv.busy) return;
+    const text = $('cv-ed-text').value.trim();
+    if (!text) { cvSaid('cv-saved', { tone: 'err', text: 'Write something first, or Cancel.' }); return; }
+    const kind = ed.kind;
+    const name = kind === 'pin' ? 'Pin' : 'Note';
+    if (ed.n == null) {
+      const body = kind === 'pin' ? { op: 'add', kind, shot: ed.shot, x: ed.x, y: ed.y, text } : { op: 'add', kind, shot: ed.shot, text };
+      cvRemark(body, `New ${name.toLowerCase()}`);
+    } else {
+      cvRemark({ op: 'edit', kind, n: ed.n, text }, `${name} ${ed.n}`);
+    }
+  });
+  // Delete asks a second tap.
+  $('cv-ed-del').addEventListener('click', () => {
+    const ed = cv.edit;
+    if (!ed || ed.n == null || cv.busy) return;
+    if (cv.delArm !== ed.n) {
+      cv.delArm = ed.n;
+      $('cv-ed-del').textContent = 'Tap again to delete';
+      setTimeout(() => { if (cv.delArm === ed.n) { cv.delArm = null; $('cv-ed-del').textContent = 'Delete'; } }, 4000);
+      return;
+    }
+    cv.delArm = null;
+    cvRemark({ op: 'remove', kind: ed.kind, n: ed.n }, `${ed.kind === 'pin' ? 'Pin' : 'Note'} ${ed.n} deleted`);
+  });
+
+  // ── Gestures on the picture ──
+  // One finger: at 1x a horizontal swipe pages (a vertical move scrolls the
+  // page, the browser's own); zoomed in, it pans. Two fingers: pinch. A
+  // short still touch is a tap: on a pin it opens it, elsewhere it places one.
+  const stage = $('cv-stage');
+  const ptrs = new Map();
+  let g = null;
+  function cvLocal(x, y) {
+    const r = stage.getBoundingClientRect();
+    return { x: x - r.left - (r.width - cv.box.w) / 2, y: y - r.top };
+  }
+  function cvTwo() {
+    const [a, b] = [...ptrs.values()];
+    const m0 = cvLocal((a.x + b.x) / 2, (a.y + b.y) / 2);
+    return { m: m0, d: Math.hypot(a.x - b.x, a.y - b.y) };
+  }
+  stage.addEventListener('pointerdown', e => {
+    if (!cv.m || e.button > 0) return;
+    if (e.target.closest('#cv-fit')) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { stage.setPointerCapture(e.pointerId); } catch (_) {}
+    if (ptrs.size === 1) {
+      g = { mode: 'one', x0: e.clientX, y0: e.clientY, t0: Date.now(), v0: { ...cv.view }, pin: e.target.closest('.rc-cv-pin') };
+    } else if (ptrs.size === 2) {
+      const t = cvTwo();
+      g = { mode: 'pinch', v0: { ...cv.view }, m0: t.m, d0: t.d };
+    }
+  });
+  stage.addEventListener('pointermove', e => {
+    const p = ptrs.get(e.pointerId);
+    if (!p || !g) return;
+    p.x = e.clientX; p.y = e.clientY;
+    if (g.mode === 'pinch' && ptrs.size === 2) {
+      const t = cvTwo();
+      cv.view = rcCvPinch(g.v0, g.m0, g.d0, t.m, t.d, cv.box.w, cv.box.h);
+      cvApply();
+    } else if (g.mode === 'one' && g.v0.s > 1.01) {
+      cv.view = rcCvClamp({ s: g.v0.s, tx: g.v0.tx + e.clientX - g.x0, ty: g.v0.ty + e.clientY - g.y0 }, cv.box.w, cv.box.h);
+      cvApply();
+    }
+  });
+  function cvEnd(e, cancelled) {
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.delete(e.pointerId);
+    if (!g) return;
+    if (g.mode === 'pinch') { if (!ptrs.size) g = null; else g = { mode: 'rest' }; return; }
+    if (g.mode !== 'one' || cancelled) { if (!ptrs.size) g = null; return; }
+    const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
+    const still = Math.hypot(dx, dy) < 10 && Date.now() - g.t0 < 600;
+    const was = g;
+    g = null;
+    if (still) {
+      if (was.pin) {
+        const n = Number(was.pin.dataset.n);
+        const p = cv.m.pins.find(x => x.n === n);
+        if (p) cvEditPin(p);
+        return;
+      }
+      const at = cvLocal(e.clientX, e.clientY);
+      const f = rcCvToFrac(at.x, at.y, cv.view, cv.box.w, cv.box.h);
+      if (f) cvNewPin(f.fx, f.fy);
+      return;
+    }
+    const dir = rcCvSwipe(dx, dy, was.v0.s);
+    if (dir) cvGo(dir);
+  }
+  stage.addEventListener('pointerup', e => cvEnd(e, false));
+  stage.addEventListener('pointercancel', e => cvEnd(e, true));
+  // Safari's own page zoom must not take a pinch on the picture.
+  stage.addEventListener('gesturestart', e => e.preventDefault());
+  stage.addEventListener('touchmove', e => { if (e.touches.length > 1 || cv.view.s > 1.01) e.preventDefault(); }, { passive: false });
+
+  // ── Send remarks: every remark in full, then one call ──
+  $('cv-send').addEventListener('click', () => {
+    if (!cv.m || cv.busy) return;
+    cvCloseEditor();
+    const c = rcCvConfirm(cv.m);
+    $('cv-cf-title').textContent = c.empty ? 'No remark to send' : c.title;
+    $('cv-cf-line').textContent = c.empty ? 'Tap a shot to place a pin, or add a note, first.' : c.line;
+    $('cv-cf-list').replaceChildren(...c.groups.map(gr => {
+      const sec = document.createElement('section');
+      const h = document.createElement('h3');
+      h.textContent = gr.head;
+      const ul = document.createElement('ul');
+      ul.append(...gr.items.map(t => { const li = document.createElement('li'); li.textContent = t; return li; }));
+      sec.append(h, ul);
+      return sec;
+    }), ...c.notes.map(t => { const p = document.createElement('p'); p.className = 'rc-cv-cf-note'; p.textContent = t; return p; }));
+    cvSaid('cv-cf-result', null);
+    $('cv-cf-go').hidden = c.empty || c.blocked;
+    $('cv-cf-go').disabled = false;
+    $('cv-cf-cancel').textContent = 'Cancel';
+    $('cv-confirm').hidden = false;
+    $('cv-cf-cancel').focus({ preventScroll: true });
+  });
+  $('cv-cf-cancel').addEventListener('click', () => { $('cv-confirm').hidden = true; });
+  $('cv-cf-go').addEventListener('click', async () => {
+    if (!cv.m || cv.busy) return;
+    const m = cv.m, sandbox = cv.sandbox;
+    cv.busy = true;
+    $('cv-cf-go').disabled = true;
+    cvSaid('cv-cf-result', { tone: 'info', text: 'Sending…' });
+    const res = await api.canvasSubmit(m.id);
+    cv.busy = false;
+    if (cv.sandbox !== sandbox) return;
+    const r = rcCvSubmitResult(res);
+    cvSaid('cv-cf-result', r);
+    if (r.sent) {
+      $('cv-cf-go').hidden = true;
+      $('cv-cf-cancel').textContent = 'Done';
+      cvOpen(m.id, true);
+    } else {
+      $('cv-cf-go').disabled = false;
+    }
+  });
+  // Back in front (a `c` push tapped, say): the list again, the open canvas again.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || !st.current || st.screen !== 's-chat') return;
+    cvLoadList();
+    if (view().mode === 'canvas' && cv.m && !cv.busy && $('cv-editor').hidden && $('cv-confirm').hidden) cvOpen(cv.m.id, true);
+  });
 
   // ── The keyboard must not hide the composer ──
   // The body is fixed to the visual viewport; with the keyboard up, the

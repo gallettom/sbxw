@@ -491,6 +491,13 @@ function rcClient(fetchImpl, hooks = {}) {
     // A new ticket on a leader's board: text and up to 5 upload ids, it lands in Planned.
     createTicket: (s, title, description, attachments = []) => call('POST', `${at(s)}/kanban`, attachments.length ? { title, description, attachments } : { title, description }),
     transcribe: pcm => call('POST', '/r/voice/transcribe', undefined, pcm),
+    // The canvas (API-canvas.md): read the list and a manifest, change one
+    // remark of the draft, send the round. An id that is not a canvas id
+    // never reaches the network.
+    canvasList: s => call('GET', `${at(s)}/canvas`),
+    canvas: id => (rcCvId(id) ? call('GET', `/r/canvas/${id}`) : Promise.resolve({ ok: false, status: 404, unreachable: false, data: null })),
+    canvasRemark: (id, body) => (rcCvId(id) ? call('POST', `/r/canvas/${id}/remarks`, body) : Promise.resolve({ ok: false, status: 404, unreachable: false, data: null })),
+    canvasSubmit: id => (rcCvId(id) ? call('POST', `/r/canvas/${id}/submit`, {}) : Promise.resolve({ ok: false, status: 404, unreachable: false, data: null })),
     // For the level-2 routes (rcL2Client): the same call, nothing more.
     get: path => call('GET', path),
     post: (path, body) => call('POST', path, body),
@@ -1685,11 +1692,6 @@ function rcCvPinch(v0, m0, d0, m1, d1, w, h) {
   const py = (m0.y - v0.ty) / v0.s;
   return rcCvClamp({ s, tx: m1.x - px * s, ty: m1.y - py * s }, w, h);
 }
-// A double tap: zoom 2x at the point, or back to 1x.
-function rcCvToggle(view, p, w, h) {
-  if (view.s > 1.01) return { s: 1, tx: 0, ty: 0 };
-  return rcCvPinch(view, p, 1, p, 2, w, h);
-}
 // A tap at (x, y), relative to the box's top left, as a fraction of the
 // picture (0..1 each way, 4 decimals), or null when it is off the picture.
 function rcCvToFrac(x, y, view, w, h) {
@@ -1703,4 +1705,163 @@ function rcCvToFrac(x, y, view, w, h) {
 // Where a fraction of the picture is on screen, relative to the box.
 function rcCvFromFrac(fx, fy, view, w, h) {
   return { x: view.tx + fx * w * view.s, y: view.ty + fy * h * view.s };
+}
+
+// ── The canvas's data, read defensively ──
+// Ids and file names have one shape each; anything else is not used, so a
+// picture only ever loads from /r/canvas/<id>/images/<file> as the manifest
+// names it.
+const rcCvId = id => typeof id === 'string' && /^c-[0-9a-f]{16}$/.test(id);
+const rcCvFile = f => typeof f === 'string' && /^s-[0-9a-f]{12}\.(?:png|jpg|webp|gif)$/.test(f);
+function rcCvImage(id, file) {
+  return rcCvId(id) && rcCvFile(file) ? `/r/canvas/${id}/images/${file}` : null;
+}
+const rcCvNum = (v, d = 0) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : d);
+const rcCvInt = v => Math.max(0, Math.floor(rcCvNum(v)));
+// The list of one sandbox's canvases, in the daemon's order.
+function rcCvList(data) {
+  return (Array.isArray(data?.canvases) ? data.canvases : []).filter(c => c && rcCvId(c.id)).map(c => ({
+    id: c.id,
+    title: rcStr(c.title) || 'Untitled canvas',
+    shots: rcCvInt(c.shots),
+    rounds: rcCvInt(c.rounds),
+    new_shots: rcCvInt(c.new_shots),
+    draft: rcCvInt(c.draft),
+    draft_examples: rcCvInt(c.draft_examples),
+    updated_ms: rcCvNum(c.updated_ms),
+  }));
+}
+// How many canvases have new shots: the Canvas tab's badge.
+function rcCvBadge(list) {
+  return (Array.isArray(list) ? list : []).filter(c => c.new_shots > 0).length;
+}
+// The pins and notes of the draft, checked; for the manifest and for a
+// remarks answer alike.
+function rcCvRemarks(data) {
+  const pins = (Array.isArray(data?.pins) ? data.pins : []).filter(p => p && Number.isInteger(p.n) && p.n > 0 && typeof p.text === 'string')
+    .map(p => ({ n: p.n, shot: rcStr(p.shot) || null, x: Math.min(100, Math.max(0, rcCvNum(p.x))), y: Math.min(100, Math.max(0, rcCvNum(p.y))), text: p.text }));
+  const notes = (Array.isArray(data?.notes) ? data.notes : []).filter(t => t && Number.isInteger(t.n) && t.n > 0 && typeof t.text === 'string')
+    .map(t => ({ n: t.n, shot: rcStr(t.shot) || null, text: t.text }));
+  return { pins, notes, draft: rcCvInt(data?.draft) };
+}
+// The manifest: shots in the daemon's order, those without a usable picture
+// left out.
+function rcCvManifest(data) {
+  if (!data || !rcCvId(data.id)) return null;
+  const limits = data.limits && typeof data.limits === 'object' ? data.limits : {};
+  return {
+    id: data.id,
+    title: rcStr(data.title) || 'Untitled canvas',
+    updated_ms: rcCvNum(data.updated_ms),
+    rounds: (Array.isArray(data.rounds) ? data.rounds : []).filter(r => r && Number.isInteger(r.n)).map(r => ({ n: r.n, at_ms: rcCvNum(r.at_ms), shots: rcCvInt(r.shots) })),
+    shots: (Array.isArray(data.shots) ? data.shots : []).filter(s => s && typeof s.id === 'string' && s.id && rcCvFile(s.file)).map(s => ({
+      id: s.id,
+      round: rcCvInt(s.round),
+      title: rcStr(s.title),
+      note: rcStr(s.note),
+      width: Number.isFinite(s.width) && s.width > 0 ? Math.floor(s.width) : null,
+      file: s.file,
+      px_w: rcCvInt(s.px_w) || 1,
+      px_h: rcCvInt(s.px_h) || 1,
+      new: s.new === true,
+    })),
+    ...rcCvRemarks(data),
+    draft_examples: rcCvInt(data.draft_examples),
+    text_max: rcCvInt(limits.text) || 2000,
+  };
+}
+// The line under a shot's title: its round, whether it is new, the width.
+function rcCvShotLine(shot, rounds = 0) {
+  const parts = [rounds > 1 || shot.round ? `Round ${shot.round}` : ''];
+  if (shot.new) parts.push('new');
+  if (shot.width) parts.push(`${shot.width} px wide`);
+  return parts.filter(Boolean).join(' · ');
+}
+// "3 shots · 2 rounds", a canvas row's line.
+function rcCvListLine(c, now) {
+  const p = [c.shots === 1 ? '1 shot' : `${c.shots} shots`];
+  if (c.rounds > 1) p.push(`${c.rounds} rounds`);
+  if (c.draft) p.push(c.draft === 1 ? '1 remark not sent' : `${c.draft} remarks not sent`);
+  const ago = rcAgo(c.updated_ms, now);
+  if (ago) p.push(ago === 'now' ? 'updated now' : `updated ${ago} ago`);
+  return p.join(' · ');
+}
+// A canvas row of the list, every string set as text.
+function rcCvRowEl(doc, c, now) {
+  const b = doc.createElement('button');
+  b.className = 'rc-cv-row';
+  b.type = 'button';
+  const t = doc.createElement('span');
+  t.className = 'rc-cv-row-title';
+  t.textContent = c.title;
+  const line = doc.createElement('span');
+  line.className = 'rc-cv-row-line';
+  line.textContent = rcCvListLine(c, now);
+  b.append(t, line);
+  if (c.new_shots > 0) {
+    const n = doc.createElement('span');
+    n.className = 'rc-cv-new';
+    n.textContent = `${c.new_shots} new`;
+    b.append(n);
+  }
+  return b;
+}
+// What "Send remarks" asks before it sends: every remark in full, grouped
+// by shot in the shots' order; what the phone cannot show is counted.
+function rcCvConfirm(m) {
+  const pins = m?.pins || [], notes = m?.notes || [], shots = m?.shots || [];
+  const groups = [];
+  const at = (n, i) => `Shot ${i + 1}${n ? ` · ${n}` : ''}`;
+  const items = id => [
+    ...pins.filter(p => p.shot === id).map(p => `Pin ${p.n} (${Math.round(p.x)}%, ${Math.round(p.y)}%): ${p.text}`),
+    ...notes.filter(t => t.shot === id).map(t => `Note ${t.n}: ${t.text}`),
+  ];
+  shots.forEach((s, i) => { const it = items(s.id); if (it.length) groups.push({ head: at(s.title, i), items: it }); });
+  const known = new Set(shots.map(s => s.id));
+  const loose = [...pins.filter(p => !known.has(p.shot)).map(p => `Pin ${p.n}: ${p.text}`), ...notes.filter(t => !known.has(t.shot)).map(t => `Note ${t.n}: ${t.text}`)];
+  if (loose.length) groups.push({ head: 'Not on a shot shown here', items: loose });
+  const listed = pins.length + notes.length;
+  const total = Math.max(listed, rcCvInt(m?.draft));
+  const notes_ = [];
+  if (total > listed) notes_.push(total - listed === 1 ? '1 more remark is on an example picture (shown on the Mac only).' : `${total - listed} more remarks are on example pictures (shown on the Mac only).`);
+  if (m?.draft_examples) notes_.push('This round holds example pictures added on the Mac: it can only be sent from the Mac.');
+  return {
+    title: total === 1 ? 'Send 1 remark?' : `Send ${total} remarks?`,
+    line: `One round of remarks on "${m?.title || 'this canvas'}", for the session of this sandbox. sbxw types one line asking it to read them; once sent, they cannot be changed.`,
+    groups,
+    notes: notes_,
+    empty: total === 0,
+    blocked: !!m?.draft_examples,
+  };
+}
+// The confirmation as plain text (one line per remark), as tests read it.
+function rcCvConfirmText(c) {
+  return [c.title, c.line, ...c.groups.flatMap(g => [g.head, ...g.items.map(i => `  ${i}`)]), ...c.notes].join('\n');
+}
+// The send's answer, as one sentence and a tone.
+function rcCvSubmitResult(res) {
+  if (res.ok && res.data?.ok) return { tone: 'ok', text: `Sent: round ${rcCvInt(res.data.review)} of remarks. The session was asked to read them.`, sent: true };
+  if (res.unreachable || res.status === 0) return { tone: 'err', text: 'Not sent: sbxw is unreachable (is the Mac awake?). Your remarks are kept on the Mac.' };
+  const d = res.data || {};
+  const err = typeof d.error === 'string' && d.error.trim() ? ` (sbxw: ${d.error.trim().slice(0, 200)})` : '';
+  if (d.reason === 'not_submitted') return { tone: 'warn', sent: true, text: `Round ${rcCvInt(d.review)} is recorded, but the line asking the session to read it was NOT submitted: the session started asking you something at the Mac. The line waits unsent in its input; check on your Mac.` };
+  if (d.reason === 'examples') return { tone: 'err', text: 'Not sent: this round holds example pictures added on the Mac. Send it from the Mac.' };
+  if (Object.hasOwn(RC_MSG_REASON, d.reason || '')) return { tone: 'err', text: `Not sent. ${RC_MSG_REASON[d.reason]}${err}` };
+  if (res.status === 409) return { tone: 'err', text: `Not sent: this sandbox is read only from the phone. Send from the Mac.${err}` };
+  if (res.status === 400) return { tone: 'err', text: 'Not sent: there is no new remark to send.' };
+  if (res.status === 404) return { tone: 'err', text: 'Not sent: this canvas is no longer reachable (the sandbox stopped?).' };
+  if (res.status === 429) return { tone: 'err', text: 'Not sent: too many requests at once. Try again in a moment.' };
+  return { tone: 'err', text: `Not sent: the Mac answered ${res.status}${err}.` };
+}
+// One remark's save, as one sentence and a tone.
+function rcCvRemarkResult(res, what) {
+  if (res.ok && res.data?.ok) {
+    const m = rcCvInt(res.data.masked);
+    return { tone: 'ok', text: `${what}: saved${m ? ` (${m === 1 ? '1 word' : `${m} words`} masked by your anonymise rules)` : ''}.` };
+  }
+  if (res.unreachable || res.status === 0) return { tone: 'err', text: `${what}: not saved, sbxw is unreachable. Your text is still in the field.` };
+  const err = typeof res.data?.error === 'string' && res.data.error.trim() ? res.data.error.trim().slice(0, 200) : `the Mac answered ${res.status}`;
+  if (res.status === 404) return { tone: 'err', reload: true, text: `${what}: not saved, it was already sent or removed. The canvas was read again.` };
+  if (res.status === 409) return { tone: 'err', text: `${what}: not saved, the canvas is full (${err}).` };
+  return { tone: 'err', text: `${what}: not saved (${err}).` };
 }
