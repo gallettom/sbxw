@@ -408,7 +408,6 @@ test('refusals: a sentence per reason, the text kept, nothing resent', { skip },
     messageReplies: [
       { status: 409, body: { ok: false, reason: 'not_submitted', error: 'the leader changed before the Return' } },
       { status: 409, body: { ok: false, reason: 'busy', error: 'a tool call is under way' } },
-      { status: 400, body: { ok: false, reason: 'command', error: 'a line starts with /' } },
     ],
   });
   const { ctx, page, problems } = await phone();
@@ -425,16 +424,18 @@ test('refusals: a sentence per reason, the text kept, nothing resent', { skip },
   await page.tap('#send');
   await page.waitForSelector('text=/The session is busy right now: try again in a few seconds/');
   assert.equal(await page.inputValue('#field'), 'hello leader');
-  // A command: warned in place while typing, still the person's to send; the daemon refuses it.
+  // A command: warned in place while typing. A "/" line that is no known
+  // skill is refused on the phone itself: Send says why and sends nothing.
   await page.fill('#field', '/model opus');
   await page.waitForSelector('text=/Commands cannot be sent from the phone/');
-  assert.equal(await page.isDisabled('#send'), false, 'the daemon stays the judge');
+  assert.equal(await page.isDisabled('#send'), false, 'Send stays tappable, to say why');
   await shot(page, '15-command-warning');
   assert.equal((await calls('POST', '/r/leaders/website/message')).length, 2, 'the warning sent nothing');
   await page.tap('#send');
-  await page.waitForSelector('text=/a line starts with \\//');
+  await page.waitForTimeout(500);
+  assert.match(await page.textContent('#status'), /^Commands cannot be sent from the phone/);
   assert.equal(await page.inputValue('#field'), '/model opus');
-  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 3);
+  assert.equal((await calls('POST', '/r/leaders/website/message')).length, 2, 'a command is not sent');
   await cleanSpy(page);
   assert.deepEqual(problems, []);
   await ctx.close();
@@ -939,7 +940,9 @@ test('level 2: the Approvals entry, its badge, and one sentence when it cannot a
     assert.equal(await page.isVisible('#ap-enable'), false);
     assert.equal(await page.$$eval('.rc-ap-row', r => r.length), 0);
     assert.equal(await page.isVisible('#badge'), false);
-    assert.deepEqual((await l2calls()).map(e => e.path), ['/r/approvals', '/r/approvals'], 'no list is read while it is off');
+    // Only the counts are read (at start, by the home, by Approvals): no list.
+    const paths = (await l2calls()).map(e => e.path);
+    assert.ok(paths.length >= 2 && paths.every(p => p === '/r/approvals'), `no list is read while it is off: ${paths}`);
     await ctx.close();
   }
   // No passkey: the lists, read only, and Enable Face ID.
@@ -1353,7 +1356,10 @@ test('kanban: the switch keeps each place; one column at a time, by picker or sw
   await page.goto(`${base()}/`);
   await page.tap('.rc-leader >> text=shop');
   await page.waitForSelector('.rc-agent');
+  // Near the top the page reads the older rows and keeps the same rows in
+  // view: the place is recorded once that has settled.
   await page.evaluate(() => { document.getElementById('log').scrollTop = 40; });
+  await page.waitForFunction(() => new Promise(r => { const h = document.getElementById('log').scrollHeight; setTimeout(() => r(document.getElementById('log').scrollHeight === h), 600); }));
   const logTop = await page.$eval('#log', l => l.scrollTop);
   await shot(page, '70-switch-conversation');
   await page.tap('#v-kanban');
@@ -1765,7 +1771,11 @@ test('iPhone dictation: every end or error says a sentence and returns to idle',
     const { ctx, page, problems } = await phone(390, 844, { flags: [`__sr:${flag}`] });
     await iphoneListening(page);
     if (flag === 'dead') {
-      await page.waitForSelector(`#status:text("${D.quietIphone}")`, { timeout: 5000 });
+      // No audio has started: no "nothing heard" that would blame the
+      // person (rcMicQuiet); the no-start guard ends it at 4 s.
+      await page.waitForTimeout(3300);
+      assert.equal(await page.getAttribute('#composer', 'data-rec'), 'listening', flag);
+      assert.notEqual(await page.textContent('#status'), D.quietIphone, 'no quiet line before audio');
       await shot(page, '86-iphone-nothing-heard-yet');
     } else await page.tap('#mic');
     await page.waitForSelector('#composer[data-rec="idle"]', { timeout: 6000 });
@@ -1799,17 +1809,18 @@ test('iPhone dictation: an end by itself restarts at most twice, the words once 
   // Round 1: words, then iOS ends it after a pause.
   await page.evaluate(() => window.__srLast.say([['add an index', true]]));
   await page.waitForTimeout(2100);
+  // The next round waits for the old one's end and a short settle
+  // (RC_MIC_SETTLE_MS): the UI stays "listening" meanwhile.
   await page.evaluate(() => window.__srLast.endSelf());
-  await page.waitForTimeout(100);
+  assert.equal(await page.getAttribute('#composer', 'data-rec'), 'listening', 'still listening between rounds');
+  await page.waitForFunction(() => window.__spy.srMade === 2, null, { timeout: 3000 });
   assert.equal(await page.getAttribute('#composer', 'data-rec'), 'listening', 'restarted');
-  assert.equal(await page.evaluate(() => window.__spy.srMade), 2);
   // Round 2 re-delivers the last words of round 1, then new ones.
   await page.evaluate(() => window.__srLast.say([['Add an index', true], ['on the id', true]]));
   assert.equal(await page.inputValue('#field'), 'add an index on the id', 'nothing twice');
   await page.waitForTimeout(2100);
   await page.evaluate(() => window.__srLast.endSelf());
-  await page.waitForTimeout(100);
-  assert.equal(await page.evaluate(() => window.__spy.srMade), 3, 'a second restart');
+  await page.waitForFunction(() => window.__spy.srMade === 3, null, { timeout: 3000 });
   await page.evaluate(() => window.__srLast.say([['please', true]]));
   await page.waitForTimeout(2100);
   // A third end: no more restarts. It says so, and keeps every word once.
