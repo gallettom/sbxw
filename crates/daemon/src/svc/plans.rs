@@ -8,7 +8,7 @@ use crate::store::{write_atomic, LeadRecord, Store, LEAD_UNBOUND_MAX_MS};
 use sbxw_core::agents::SessionInfo;
 use std::collections::{BTreeMap, HashMap};
 use sbxw_core::messages;
-use sbxw_core::plans::{DistillItem, MergeResult, MergeState, Plan, PlanState, PlanThread, ThreadState, Variant};
+use sbxw_core::plans::{DistillItem, Ext, MergeResult, MergeState, Plan, PlanState, PlanThread, ThreadState, Variant};
 use sbxw_sbx::scripts::Team;
 use sbxw_core::session::{SessionKey, SessionKind};
 use sbxw_core::tooling::Tooling;
@@ -20,6 +20,18 @@ use tokio::sync::broadcast::error::RecvError;
 /// The commits a merge approved from the phone must take, per thread (a
 /// shared plan: its team branch's name): `(branch tip, base tip)`, full ids.
 pub type MergePins = HashMap<String, (String, String)>;
+
+/// How long what git showed of a plan's threads is believed.
+pub const PLAN_EXT_TTL: Duration = Duration::from_secs(20);
+
+/// What git shows of a done thread's branch.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Probe {
+    /// Already in this base branch.
+    InBase(String),
+    /// No such branch.
+    Gone,
+}
 
 impl App {
     /// [`App::sbx_for`], its error as the plain text these services return.
@@ -357,6 +369,13 @@ impl App {
         if let Some(p) = changed {
             self.plan_changed(p);
         }
+    }
+
+    /// The person closes a settled plan from the Kanban: its unmerged
+    /// threads leave the review columns. Only marks the plan; git is not touched.
+    pub fn plan_dismiss(&self, id: &str) -> Result<Plan, String> {
+        let plan = self.plans.lock().unwrap().dismiss(id, now_ms())?;
+        Ok(self.plan_changed(plan))
     }
 
     pub fn plan_refuse(&self, id: &str, note: Option<String>) -> Result<Plan, String> {
@@ -782,6 +801,17 @@ impl App {
     /// hand, or with no commit of its own. Thread name to that branch. A
     /// shared plan's one branch counts for all its threads.
     pub async fn merged_outside(&self, plan: &Plan) -> BTreeMap<String, String> {
+        self.thread_git(plan).await.into_iter().filter_map(|(t, p)| match p {
+            Probe::InBase(base) => Some((t, base)),
+            Probe::Gone => None,
+        }).collect()
+    }
+
+    /// What git shows of each done thread of `plan` that sbxw never merged:
+    /// its branch in the base ([`Probe::InBase`]) or no branch at all
+    /// ([`Probe::Gone`]). A thread git cannot be asked about (no workspace,
+    /// host unreachable, repo gone) is left out: unknown is not gone.
+    pub async fn thread_git(&self, plan: &Plan) -> BTreeMap<String, Probe> {
         let mut out = BTreeMap::new();
         // A split plan merged may still hold a thread that finished later.
         if plan.state != PlanState::Approved || (!plan.variant.is_split() && plan.merge.as_ref().is_some_and(|m| m.state == MergeState::Merged)) {
@@ -793,35 +823,58 @@ impl App {
         let recorded = self.store.get(&sandbox).threads;
         let by_sbxw = plan.merged_threads();
         let repo_of = |t: &PlanThread| recorded.get(t.name.as_str()).map(|r| r.repo.clone()).or_else(|| t.repo.clone()).unwrap_or_default();
-        let in_base = |rel: String, branch: String| {
+        let probe = |rel: String, branch: String| {
             let (host, ws) = (&host, &ws);
             async move {
                 let root = git::repo_root(host, ws, &rel).await?;
                 let full = format!("refs/heads/{branch}");
-                let tip = git::git(host, &root, &["rev-parse", "--verify", "--quiet", &full]).await?;
+                let Some(tip) = git::git(host, &root, &["rev-parse", "--verify", "--quiet", &full]).await else {
+                    return Some(Probe::Gone);
+                };
                 git::git(host, &root, &["merge-base", "--is-ancestor", tip.trim(), "HEAD"]).await?;
-                Some(git::branch_of(host, &root).await.unwrap_or_else(|| "HEAD".into()))
+                Some(Probe::InBase(git::branch_of(host, &root).await.unwrap_or_else(|| "HEAD".into())))
             }
         };
         let done = |t: &&PlanThread| t.state == ThreadState::Done && !by_sbxw.contains(t.name.as_str());
         match plan.variant {
             Variant::Shared => {
                 let Some(first) = plan.threads.first() else { return out };
-                if let Some(base) = in_base(repo_of(first), format!("sbxw/{}", plan.team_name())).await {
+                if let Some(p) = probe(repo_of(first), format!("sbxw/{}", plan.team_name())).await {
                     for t in plan.threads.iter().filter(done) {
-                        out.insert(t.name.clone(), base.clone());
+                        out.insert(t.name.clone(), p.clone());
                     }
                 }
             }
             Variant::Split => {
                 for t in plan.threads.iter().filter(done) {
-                    if let Some(base) = in_base(repo_of(t), format!("sbxw/{}", t.name)).await {
-                        out.insert(t.name.clone(), base);
+                    if let Some(p) = probe(repo_of(t), format!("sbxw/{}", t.name)).await {
+                        out.insert(t.name.clone(), p);
                     }
                 }
             }
         }
         out
+    }
+
+    /// Asks git about the done threads of the approved plans of `sandboxes`
+    /// (`None`: all) and keeps the answer for [`PLAN_EXT_TTL`], for the
+    /// board's columns. One git probe per plan at most per TTL.
+    pub async fn plans_ext_refresh(&self, sandboxes: Option<&[String]>) {
+        let plans: Vec<Plan> = self.plans.lock().unwrap().list().into_iter().filter(|p| p.state == PlanState::Approved && sandboxes.is_none_or(|s| s.contains(&p.sandbox))).collect();
+        for p in plans {
+            if !p.threads.iter().any(|t| t.state == ThreadState::Done) {
+                continue;
+            }
+            let fresh = self.plan_ext.lock().unwrap().get(&p.id).is_some_and(|(at, _)| at.elapsed() < PLAN_EXT_TTL);
+            if fresh {
+                continue;
+            }
+            let ext: HashMap<String, Ext> = self.thread_git(&p).await.into_iter().map(|(t, pr)| (t, match pr {
+                Probe::InBase(_) => Ext::Outside,
+                Probe::Gone => Ext::Gone,
+            })).collect();
+            self.plan_ext.lock().unwrap().insert(p.id.clone(), (std::time::Instant::now(), ext));
+        }
     }
 
     /// [`App::plan_view`], with `merged_outside: <branch>` on each thread

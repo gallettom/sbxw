@@ -194,6 +194,15 @@ pub struct Merge {
     pub distillate: Vec<DistillItem>,
 }
 
+/// Where git shows a done thread's branch, when sbxw never merged it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ext {
+    /// The branch is already in its base: merged by hand, or empty.
+    Outside,
+    /// The branch no longer exists.
+    Gone,
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct Plan {
     pub id: String,
@@ -217,6 +226,16 @@ pub struct Plan {
     /// Team mode ended: threads run on, reports no longer reach the lead.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
+    /// The person closed this plan from the Kanban: its unmerged threads
+    /// leave the review columns. Marks the plan only; never touches git.
+    /// Not `closed`: that one means the lead ended, and Team on again
+    /// gives such a plan back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dismissed: bool,
+    /// What git showed the daemon about threads sbxw never merged, by
+    /// thread name; set by the daemon before the board is built, never saved.
+    #[serde(skip)]
+    pub ext: HashMap<String, Ext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge: Option<Merge>,
     /// Merges before `merge`, oldest first: a split plan merged, then a
@@ -529,6 +548,8 @@ impl PlanBook {
             note: None,
             lead: lead_address(lead),
             closed: false,
+            dismissed: false,
+            ext: HashMap::new(),
             merge: None,
             earlier_merges: vec![],
             main_uncommitted: None,
@@ -655,6 +676,25 @@ impl PlanBook {
             }
         }
         ended
+    }
+
+    /// The person closes a settled plan from the Kanban. Refused while a
+    /// thread still works or a merge is proposed or running. Only marks
+    /// the plan; git is never touched.
+    pub fn dismiss(&mut self, id: &str, now: u64) -> Result<Plan, String> {
+        self.mutate(id, now, |p| {
+            if p.state != PlanState::Approved {
+                return Err(format!("plan {id} is not a running plan"));
+            }
+            if p.threads.iter().any(|t| matches!(t.state, ThreadState::Starting | ThreadState::Working | ThreadState::Blocked)) {
+                return Err("a thread of this plan still works".into());
+            }
+            if p.merge.as_ref().is_some_and(|m| matches!(m.state, MergeState::Proposed | MergeState::Merging)) {
+                return Err("a merge of this plan is proposed or running".into());
+            }
+            p.dismissed = true;
+            Ok(())
+        })
     }
 
     /// Team mode on again in `sandbox`: the approved plans its end closed come

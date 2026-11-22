@@ -197,6 +197,7 @@ function kbThreadLinksHtml(card, o) {
         ${l.terminal ? '<button type="button" class="kb-link" data-kb-go="terminal" title="Open the thread\'s terminal">Terminal</button>' : ''}
         ${l.plan ? '<button type="button" class="kb-link" data-kb-go="plan" title="Open its plan">Plan</button>' : ''}
         ${l.worktrees ? '<button type="button" class="kb-link" data-kb-go="worktrees" title="Its branch in the worktree graph">Worktrees</button>' : ''}
+        ${l.closePlan && card.plan ? `<button type="button" class="kb-link" data-kb-close-plan="${escHtml(card.plan)}" title="Mark this plan closed: its unmerged threads leave In test. Git is not touched.">Close plan</button>` : ''}
       </span>
     </div>`;
 }
@@ -400,7 +401,7 @@ function kbLinks(card) {
   if (!card.thread) return {};
   const plan = typeof pendingPlanFor === 'function'
     && ((pendingPlanFor(card.sandbox)?.id === card.plan) || (mergePlanFor(card.sandbox)?.id === card.plan));
-  return { terminal: true, plan: !!plan, worktrees: true };
+  return { terminal: true, plan: !!plan, worktrees: true, closePlan: card.column === 'test' };
 }
 
 function kbPaintPanel() {
@@ -482,7 +483,26 @@ kbPanel.addEventListener('click', e => {
   if (e.target.closest('[data-kb-close]')) { kbCloseTicket(); return; }
   const go = e.target.closest('[data-kb-go]');
   if (go) kbGo(go.dataset.kbGo);
+  const cp = e.target.closest('[data-kb-close-plan]');
+  if (cp) kbClosePlan(cp);
 });
+// Marks the plan closed (never touches git); asks once, in the button.
+async function kbClosePlan(btn) {
+  if (btn.dataset.sure !== '1') {
+    btn.dataset.sure = '1';
+    btn.textContent = 'Close plan? Click again';
+    return;
+  }
+  btn.disabled = true;
+  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(btn.dataset.kbClosePlan)}/dismiss`, {});
+  if (!res?.ok) {
+    btn.disabled = false;
+    showNote(kbNote, `Could not close the plan: ${res?.error || 'no answer'}`);
+    return;
+  }
+  kbCloseTicket(false);
+  kbRead();
+}
 kbScope.addEventListener('change', () => {
   kbv.scope = kbScope.value;
   kbv.older = false;

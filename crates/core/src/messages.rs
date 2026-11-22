@@ -506,6 +506,8 @@ mod tests {
             note: None,
             lead: lead.map(String::from),
             closed: false,
+            dismissed: false,
+            ext: Default::default(),
             merge: None,
             earlier_merges: vec![],
             main_uncommitted: None,

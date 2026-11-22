@@ -253,6 +253,7 @@ fn ticket_view(app: &App, sb: &SandboxRef, n: u32) -> Option<Value> {
 
 pub async fn board(State(app): S, Extension(_d): Extension<DeviceCtx>, Path(sandbox): Path<String>) -> Response {
     let Some(sb) = leader(&app, &sandbox) else { return not_found() };
+    app.plans_ext_refresh(Some(&[sb.to_string()])).await;
     Json(board_view(&app, &sb)).into_response()
 }
 
