@@ -2771,9 +2771,10 @@
   };
   function cvReset(sandbox) {
     if (cv.sandbox === sandbox) return;
-    Object.assign(cv, { sandbox, list: null, m: null, idx: 0, edit: null, busy: false });
+    Object.assign(cv, { sandbox, list: null, listLoading: null, m: null, idx: 0, edit: null, busy: false });
     $('cv-list').replaceChildren();
     cvShowReview(false);
+    cvRenderBadge();
   }
   function cvStatus(text) { $('cv-status').textContent = text; $('cv-status').hidden = !text; }
   function cvSaid(el, r) {
@@ -2790,12 +2791,13 @@
   async function cvLoadList(sandbox = st.current) {
     if (!sandbox) return;
     cvReset(sandbox);
-    if (cv.listLoading) return;
-    cv.listLoading = true;
+    // One read at a time per sandbox; another sandbox's read in the air is left to drop.
+    if (cv.listLoading === sandbox) return;
+    cv.listLoading = sandbox;
     if (!cv.list) cvStatus('Loading the canvases…');
     const res = await api.canvasList(sandbox);
-    cv.listLoading = false;
     if (cv.sandbox !== sandbox) return;
+    cv.listLoading = null;
     if (!res.ok) {
       cvStatus(res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : res.status === 404 ? 'This sandbox is not running any more.' : `The canvases could not be read (the Mac answered ${res.status}).`);
     } else {
@@ -3186,6 +3188,7 @@
       $('cv-cf-go').hidden = true;
       $('cv-cf-cancel').textContent = 'Done';
       cvOpen(m.id, true);
+      cvLoadList();
     } else {
       $('cv-cf-go').disabled = false;
     }
