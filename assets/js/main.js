@@ -1,4 +1,4 @@
-// "Jump to this sandbox" — the one thing an island click asks of the tab.
+// "Jump to this sandbox": the one thing an island click asks of the tab.
 //
 // Deliberately the smallest gesture that answers it: a sandbox already on
 // screen only needs its pane focused. Reconnecting it would close a healthy
@@ -17,7 +17,7 @@ function focusSandbox(name) {
 }
 
 // Deep-link: opening `…/#sandbox=<name>` focuses that session. Only used to
-// cold-start a tab — an island click with a tab already open goes over the SSE
+// cold-start a tab; an island click with a tab already open goes over the SSE
 // stream below instead, precisely so that no navigation (and no reload) is
 // involved.
 function applySandboxHash() {
@@ -32,7 +32,7 @@ function applySandboxHash() {
 window.addEventListener('hashchange', applySandboxHash);
 
 // `/api/stream` multiplexes every SSE feed the browser UI needs onto one
-// HTTP connection (named events: `session`, `focus`, `clients`) — see
+// HTTP connection (named events: `session`, `focus`, `clients`); see
 // `api_stream` in src/web.rs for why: plain HTTP has no multiplexing, and
 // three separate long-lived EventSources per tab meant two tabs already used
 // 8 of the browser's 6-per-origin connection slots, so a third tab's `GET /`
@@ -42,7 +42,7 @@ const sbxwStream = new EventSource('/api/stream');
 window.sbxwEmphasis?.listen(sbxwStream);
 
 // The macOS notch companion (island) asks an already-open tab to switch
-// sandboxes over this stream — so clicking a session focuses this tab rather
+// sandboxes over this stream, so clicking a session focuses this tab rather
 // than spawning a new page. See `/api/focus` in src/web.rs.
 sbxwStream.addEventListener('focus', ev => {
   if (!ev.data) return;
@@ -51,7 +51,7 @@ sbxwStream.addEventListener('focus', ev => {
 });
 
 // A sandbox is being created: the steps it plans to take, the one running now,
-// and what `sbx` is printing under it — the image pull, mostly, which is the
+// and what `sbx` is printing under it: the image pull, mostly, which is the
 // part that takes minutes. Painted onto the bring-up's corner card (see
 // `applyProvisionEvent`), for whichever tab is open rather than only the one
 // that clicked Create.
@@ -61,7 +61,7 @@ sbxwStream.addEventListener('provision', ev => {
   applyProvisionEvent(data);
 });
 
-// sbxw expects exactly one browser tab talking to it — a second one shares
+// sbxw expects exactly one browser tab talking to it; a second one shares
 // the same two runtime worker threads and the same PTY per sandbox instead of
 // getting its own, which is what makes everything (the file browser
 // especially) grind to a halt. The `clients` event reports how many tabs are
@@ -82,7 +82,7 @@ sbxwStream.addEventListener('clients', ev => {
 // the sidebar (they cannot move at all).
 //
 // The versions are baked into the page by `index_handler` (see src/web.rs),
-// since neither can change while this daemon runs — there is nothing to poll.
+// since neither can change while this daemon runs; there is nothing to poll.
 // `sbx`'s is empty when its output carried no readable version, and an absent
 // version is not worth a line saying so.
 (function showVersions() {
@@ -93,7 +93,7 @@ sbxwStream.addEventListener('clients', ev => {
   el.hidden = false;
 })();
 
-// The footer's shortcut keycaps: ⌃ ⌥ on a Mac, Alt elsewhere — whatever
+// The footer's shortcut keycaps: ⌃ ⌥ on a Mac, Alt elsewhere, whatever
 // isAppShortcut (util.js) actually listens for.
 (function showShortcuts() {
   const mods = IS_MAC ? ['⌃', '⌥'] : ['Alt'];
@@ -108,7 +108,7 @@ sbxwStream.addEventListener('clients', ev => {
 })();
 
 // Usage does move. `/api/usage` holds the 5-hour and weekly percentages Claude
-// Code's `/usage` prints — account-wide, so this is one figure for the window
+// Code's `/usage` prints, account-wide, so this is one figure for the window
 // and not one per sandbox. The daemon keeps it current by asking Anthropic
 // through a running sandbox every five minutes (spawn_usage_poller in
 // src/web.rs); a sandbox mid-message forwards what Claude Code already told it,
@@ -121,7 +121,7 @@ const USAGE_POLL_MS = 30000;
 const usageEl = document.getElementById('usage');
 
 /// "3d 4h", "2h 14m", "38m", "<1m": how long until a window resets. The two
-/// largest units only — the unit you plan the next long run in; a clock time
+/// largest units only: the unit you plan the next long run in; a clock time
 /// made you do the subtraction.
 function untilText(ms) {
   const m = Math.ceil(ms / 60000);
@@ -135,7 +135,7 @@ function untilText(ms) {
 // past is the honest reason a percentage looks wrong: nobody has run an agent
 // since the window rolled over, so the daemon is still holding the last figure
 // from the previous one. Say so in the tooltip and fade the chip rather than
-// hiding it — a stale 90% and no figure at all are different things.
+// hiding it: a stale 90% and no figure at all are different things.
 function renderUsageWindow(id, label, pct, resetsAt) {
   const el = document.getElementById(id);
   if (typeof pct !== 'number') { el.hidden = true; return; }
@@ -159,7 +159,7 @@ function renderUsageWindow(id, label, pct, resetsAt) {
   el.title = `${label}: ${rounded}% of the subscription window used`
     + (reset
         ? stale
-          ? ` — but that window reset at ${reset.toLocaleString()}; no sandbox has reported since`
+          ? `, but that window reset at ${reset.toLocaleString()}; no sandbox has reported since`
           : ` · resets ${reset.toLocaleString()}`
         : '');
   el.hidden = false;
@@ -189,26 +189,26 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) refr
 
 // ── Agent activity on the liserets ────────────────────────────────────────
 // The `session` event on `/api/stream` carries one SessionInfo per state
-// change, folded from the hooks the sandbox POSTs to `/api/hook` — the same
+// change, folded from the hooks the sandbox POSTs to `/api/hook`, the same
 // data the macOS island reads directly off `/api/events`.
 // Painting the latest state on both strips turns the window into a status
 // board: the panes answer for what you have open, the sidebar for everything
 // else, which is where an agent working in a sandbox you closed shows up.
 //
 // Sessions are keyed `<sandbox>::claude`, so a sidebar row keys off its sandbox
-// alone while a pane is painted only in `claude` mode — animating a bash pane
+// alone while a pane is painted only in `claude` mode; animating a bash pane
 // would claim an agent works in a terminal that has none.
 //
 // Both strips are one animation on a different edge, so the classes below are
 // host-agnostic and the stylesheet decides where the line goes.
 
-// Paint one liseret host — a `.pane` or a `.sbx-item` — for the session of
+// Paint one liseret host (a `.pane` or a `.sbx-item`) for the session of
 // `sandbox`. Both carry the same three classes and run the same animations;
 // only where the strip is anchored differs (under the pane bar, along the top
 // of the row).
 //
 // `thread` paints a thread's pane instead: its own state, never a summons
-// suppressed for watching the agent beside it, and no "done" flash — that one
+// suppressed for watching the agent beside it, and no "done" flash; that one
 // is the agent's, and is shared with the sidebar row.
 function paintLiseret(el, sandbox, watchedSandbox = null, thread = null) {
   const st = sandbox ? agentStates.get(thread ? `${sandbox}::thread:${thread}` : `${sandbox}::claude`) : null;
@@ -239,7 +239,7 @@ function paintLiseret(el, sandbox, watchedSandbox = null, thread = null) {
 
 function applyAgentStates() {
   // The sandbox whose terminal is actually being read: the focused pane's, in
-  // `claude` mode, in a focused window. The window condition matters — a
+  // `claude` mode, in a focused window. The window condition matters: a
   // background tab still has a focused pane and nobody reading it, and a
   // summons raised then is exactly the one that must survive until you return.
   // A sandbox rather than a pane, since reading it settles every strip that
@@ -248,7 +248,7 @@ function applyAgentStates() {
   const watchedSandbox = document.hasFocus() && focused?.mode === 'claude'
     ? focused.sandbox || null
     : null;
-  // A bash pane is a shell you drive yourself — no agent, so nothing to show.
+  // A bash pane is a shell you drive yourself: no agent, so nothing to show.
   panes.forEach(p => p.mode === 'thread'
     ? paintLiseret(p.el, p.sandbox, watchedSandbox, p.thread)
     : paintLiseret(p.el, p.mode === 'claude' ? p.sandbox : null, watchedSandbox));
@@ -261,7 +261,7 @@ function applyAgentStates() {
 
 // Tell the daemon which terminal is being read, so the island can retire a
 // notification for a session already looked at (`/api/watching`). Only on
-// change — the signal is an arrival, not a state — and never for "none", which
+// change (the signal is an arrival, not a state), and never for "none", which
 // has no consumer and would make a tab that merely lost focus chatter.
 let announcedWatch = null;
 function announceWatching(sandbox) {
@@ -301,7 +301,7 @@ function flashDone(sandbox) {
 // freshly reached, so a session that has been idle since yesterday must not
 // flash green just because you reloaded the tab.
 //
-// A thread's hooks report the same mode as the agent's — they are the same
+// A thread's hooks report the same mode as the agent's: they are the same
 // `claude`, reading the same settings. Its working directory is what tells it
 // apart, and filing it under its own key is what stops a busy thread from
 // painting the agent's pane and sidebar row as busy.
@@ -309,7 +309,7 @@ function flashDone(sandbox) {
 // The thread's own name comes first: sbxw starts it with SBXW_THREAD and the
 // status hook sends that as `thread`. The worktree is the fallback for hooks
 // older than that, but never a shared plan's: `team-<plan>` holds every thread
-// of that plan and is none of them — read as a thread, it became a phantom one
+// of that plan and is none of them; read as a thread, it became a phantom one
 // whose pane started a second session there.
 function threadOfSession(info) {
   if (info?.thread) return info.thread;
@@ -333,7 +333,7 @@ function ingestSession(info, seed = false) {
   // A main session that ended takes its lead role with it.
   if (info.state === 'exited' && !thread && typeof refreshLeads === 'function') refreshLeads();
   else agentStates.set(key, info.state);
-  // "Finished thinking" is a transition, not a state — `idle` is also where a
+  // "Finished thinking" is a transition, not a state: `idle` is also where a
   // session sits between prompts, and that is not news.
   if (!seed && !thread && info.state === 'idle' && (prev === 'working' || prev === 'attention'))
     flashDone(info.sandbox);
@@ -355,7 +355,7 @@ sbxwStream.addEventListener('session', ev => {
 // A thread closed for good, by whoever: its panes and row go (panes.js).
 sbxwStream.addEventListener('thread-closed', ev => { onThreadClosed(ev.data); });
 
-// A sandbox started, finished or failed to write its code map — the one piece
+// A sandbox started, finished or failed to write its code map, the one piece
 // of agent work sbxw starts itself, in a session with no pane to watch. Painted
 // by `applyCodemapRun` (in /js/sandboxes.js) onto the sandbox's row and a
 // corner card; the snapshot below is what a tab reloaded mid-run rebuilds from,
@@ -369,7 +369,7 @@ fetch('/api/codemap')
   .then(list => list.forEach(run => applyCodemapRun(run, true)))
   .catch(() => {});
 
-// Leaving the tab un-watches the focused pane, coming back watches it again —
+// Leaving the tab un-watches the focused pane, coming back watches it again,
 // so a session that raised `attention` while you were elsewhere is still
 // flagged when you return, and stops being flagged the moment you read it.
 window.addEventListener('focus', applyAgentStates);
@@ -378,13 +378,13 @@ window.addEventListener('blur', applyAgentStates);
 // Coming back to the tab reconciles every pane's size against the live PTY
 // instead of blindly re-announcing it. A PTY is shared by everyone watching
 // that sandbox, so the one thing this tab cannot notice while it is away is
-// somebody else resizing it — no box changes here, and the observer has
+// somebody else resizing it; no box changes here, and the observer has
 // nothing to fire on. But forgetting what every socket was told (nulling
 // `sentSize` outright) made *every* pane re-announce on *every* return,
-// whether or not its size actually moved — and after a long sleep or a
+// whether or not its size actually moved, and after a long sleep or a
 // reconnect, several panes come back at once. Each unnecessary resize is a
 // real SIGWINCH to that sandbox's PTY, and a CLI agent (Claude Code among
-// them) redraws its whole screen off the back of one — a wave of full-screen
+// them) redraws its whole screen off the back of one: a wave of full-screen
 // redraws across every open pane for no reason. `/api/ptys` reads the PTY's
 // actual size, the same truth `sentSize` is meant to track, so reconcile
 // against that instead of discarding it: only a pane whose size truly drifted
@@ -411,7 +411,7 @@ document.addEventListener('visibilitychange', async () => {
 // Last in the last script, and it has to stay there: laying out the panes
 // paints the liserets, which reads the module-level state above (`announcedWatch`
 // and friends). Booting from the top of this file would run that before those
-// `let`s are initialised — a TDZ ReferenceError, not an `undefined` to shrug
+// `let`s are initialised: a TDZ ReferenceError, not an `undefined` to shrug
 // off. Function declarations hoist, top-level bindings do not.
 (async () => {
   const maxPanes = computeMaxPanes();
@@ -434,7 +434,7 @@ document.addEventListener('visibilitychange', async () => {
       }
     });
     if (!connected) {
-      // No saved sandbox exists anymore — fall back to default.
+      // No saved sandbox exists anymore; fall back to default.
       const initial = (INITIAL_SANDBOX && exists(INITIAL_SANDBOX)) ? INITIAL_SANDBOX : sandboxes[0]?.name;
       if (initial) {
         connectPane(0, initial);
@@ -445,7 +445,7 @@ document.addEventListener('visibilitychange', async () => {
       }
     }
   } else {
-    // No saved layout — use default behaviour.
+    // No saved layout: use default behaviour.
     const initial = (INITIAL_SANDBOX && exists(INITIAL_SANDBOX)) ? INITIAL_SANDBOX : sandboxes[0]?.name;
     if (initial) {
       connectPane(0, initial);
