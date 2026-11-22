@@ -81,8 +81,6 @@
 <div id="menu" class="rc-menu" role="menu" hidden>
   <p class="rc-menu-label">This device</p>
   <p id="menu-device" class="rc-menu-device"></p>
-  <p class="rc-menu-label">Plan usage</p>
-  <div id="usage-block" class="rc-usage" aria-live="polite"><p class="rc-menu-note">No reading yet</p></div>
   <p class="rc-menu-label" id="dict-label">Dictation</p>
   <div id="dict" class="rc-seg" role="radiogroup" aria-labelledby="dict-label">
     <button id="dict-mac" class="rc-seg-opt" type="button" role="radio" aria-checked="true" data-mode="mac">Mac (private)</button>
@@ -380,6 +378,8 @@
           <span class="rc-switch-track" aria-hidden="true"><span class="rc-switch-knob"></span></span>
         </button>
       </div>
+      <!-- Plan usage, one line under Model and Lead; hidden with them, and when there is no reading. -->
+      <p id="ctl-usage" class="rc-ctl-usage" hidden></p>
       <p id="status" class="rc-status" role="status" aria-live="polite"></p>
     </form>
   </section>

@@ -112,7 +112,7 @@
     $('mark').hidden = BACK.includes(id);
     $('approvals-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     if (id !== 's-item') closeSheet();
-    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; $('skill-list').hidden = true; $('to-end').hidden = true; disarmInterrupt(); } else { loadModels(); loadSkills(); }
+    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; $('ctl-usage').hidden = true; $('skill-list').hidden = true; $('to-end').hidden = true; disarmInterrupt(); } else { loadModels(); loadSkills(); loadUsage(); }
     $('menu-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     closeMenu();
   }
@@ -601,6 +601,8 @@
   function renderCtl(l) {
     const box = $('ctl');
     box.hidden = !l || st.screen !== 's-chat';
+    // The usage line goes with the row (and needs a reading).
+    $('ctl-usage').hidden = box.hidden || !$('ctl-usage').childNodes.length;
     if (box.hidden) return;
     const sel = $('model');
     if (sel.options.length !== st.models.length + 1 || sel.dataset.n !== String(st.models.length)) {
@@ -1894,53 +1896,30 @@
     return (await off.startRendering()).getChannelData(0);
   }
 
-  // ── Plan usage: read when the menu opens and when the page shows ──
+  // ── Plan usage: read when the conversation or the menu opens and when the
+  // page shows, no timer. One line on the home, one under Model and Lead.
   const usageSt = { data: null, busy: false };
   function renderUsage() {
     const u = rcUsage(usageSt.data, Date.now());
     const line = $('usage-line');
     line.hidden = !u.has;
     line.textContent = u.has ? `Plan usage: ${u.compact}` : '';
-    const box = $('usage-block');
-    box.textContent = '';
-    if (!u.has) {
-      const p = document.createElement('p');
-      p.className = 'rc-menu-note';
-      p.textContent = 'No reading yet';
-      box.appendChild(p);
-      return;
+    const c = rcUsageLine(u);
+    const box = $('ctl-usage');
+    const kids = [];
+    if (c.has) {
+      kids.push(document.createTextNode('Plan usage: '));
+      c.parts.forEach((p, i) => {
+        if (i) kids.push(document.createTextNode(' · '));
+        const s = document.createElement('span');
+        s.className = `rc-usage-t-${p.tone}`;
+        s.textContent = p.text;
+        kids.push(s);
+      });
+      if (c.reset) kids.push(document.createTextNode(` · ${c.reset}`));
     }
-    for (const r of u.rows) {
-      const row = document.createElement('div');
-      row.className = 'rc-usage-row';
-      const head = document.createElement('p');
-      head.className = 'rc-usage-head';
-      head.textContent = `${r.label}: ${r.pct}%`;
-      const bar = document.createElement('div');
-      bar.className = `rc-usage-bar rc-usage-${r.tone}`;
-      bar.setAttribute('role', 'progressbar');
-      bar.setAttribute('aria-label', `${r.label} limit`);
-      bar.setAttribute('aria-valuenow', String(r.pct));
-      bar.setAttribute('aria-valuemin', '0');
-      bar.setAttribute('aria-valuemax', '100');
-      const fill = document.createElement('span');
-      fill.style.width = `${r.pct}%`;
-      bar.appendChild(fill);
-      row.append(head, bar);
-      if (r.reset) {
-        const n = document.createElement('p');
-        n.className = 'rc-menu-note';
-        n.textContent = r.reset;
-        row.appendChild(n);
-      }
-      box.appendChild(row);
-    }
-    if (u.updated) {
-      const n = document.createElement('p');
-      n.className = 'rc-menu-note';
-      n.textContent = u.updated;
-      box.appendChild(n);
-    }
+    box.replaceChildren(...kids);
+    box.hidden = !c.has || $('ctl').hidden;
   }
   async function loadUsage() {
     if (usageSt.busy) return;

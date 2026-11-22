@@ -1164,6 +1164,12 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-select:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .rc-ctl-lead { flex: none; }
 @media (min-width: 640px) { .rc-ctl { max-width: 420px; margin-left: auto; margin-right: auto; width: calc(100% - 24px); } }
+/* Plan usage, one quiet line under the row; a window's percent turns amber
+   from 75 and red from 90 (rcUsageTone). */
+.rc-ctl-usage { flex: none; margin: 0; font-size: var(--fs-xs); color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-ctl-usage[hidden] { display: none; }
+.rc-usage-t-amber { color: var(--c-amber); font-weight: 600; }
+.rc-usage-t-red { color: var(--c-red); font-weight: 600; }
 
 /* ── New ticket (Kanban) ── */
 .rc-kb-newbar { display: flex; justify-content: flex-end; margin: 8px max(12px, var(--safe-r)) 0 max(12px, var(--safe-l)); }
@@ -1373,13 +1379,6 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .rc-cv-layer { will-change: auto; }
 }
 
-/* ── Plan usage (menu block and the picker's line) ── */
-.rc-usage { display: grid; gap: 8px; margin-bottom: 8px; }
-.rc-usage-row { display: grid; gap: 4px; }
-.rc-usage-head { margin: 0; font-size: var(--fs-sm, 14px); color: var(--c-text-bright); }
-.rc-usage-bar { height: 8px; border-radius: 4px; background: var(--c-elevated); overflow: hidden; }
-.rc-usage-bar > span { display: block; height: 100%; border-radius: 4px; background: var(--c-green); }
-.rc-usage-amber > span { background: var(--c-amber); }
-.rc-usage-red > span { background: var(--c-red); }
+/* ── Plan usage: the picker's line (the conversation's is with .rc-ctl) ── */
 .rc-usage-line { margin: 0 0 8px; font-size: var(--fs-xs); color: var(--c-text-muted); }
 .rc-usage-line[hidden] { display: none; }

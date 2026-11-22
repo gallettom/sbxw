@@ -2150,10 +2150,10 @@ function rcCvRemarkResult(res, what) {
   return { tone: 'err', text: `${what}: not saved (${err}).` };
 }
 
-// The plan usage (GET /r/usage): the two windows as rows for the menu block
-// and the compact line of the picker. Pure: `now` in ms, local time for the
-// reset's clock. A window with no percentage is left out; none at all means
-// `has: false` ("No reading yet").
+// The plan usage (GET /r/usage): the two windows as rows, for the compact
+// line of the picker and the conversation's line (rcUsageLine). Pure: `now`
+// in ms, local time for the reset's clock. A window with no percentage is
+// left out; none at all means `has: false` (no line).
 const RC_USAGE_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 function rcUsageTone(pct) { return pct >= 90 ? 'red' : pct >= 75 ? 'amber' : 'ok'; }
 function rcUsageReset(at, now) {
@@ -2186,6 +2186,17 @@ function rcUsage(u, now) {
     rows,
     updated: !ago ? '' : ago === 'now' ? 'updated just now' : `updated ${ago} ago`,
     compact: rows.map(r => `${r.key === 'five' ? '5 h' : '7 d'} ${r.pct}%`).join(' · '),
+  };
+}
+// The conversation's one usage line, under Model and Lead: each window's
+// percent with its tone (amber from 75, red from 90), then the first reset
+// known (the 5-hour one when there is one). `u` is rcUsage's answer.
+function rcUsageLine(u) {
+  const rows = u && Array.isArray(u.rows) ? u.rows : [];
+  return {
+    has: rows.length > 0,
+    parts: rows.map(r => ({ text: `${r.key === 'five' ? '5 h' : '7 d'} ${r.pct}%`, tone: r.tone })),
+    reset: (rows.find(r => r.reset) || {}).reset || '',
   };
 }
 
