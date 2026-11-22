@@ -822,7 +822,7 @@
       step.options.forEach((label, oi) => {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = step.multi ? 'rc-opt rc-check' : 'rc-opt';
+        b.className = step.multi ? 'rc-opt rc-multi' : 'rc-opt';
         b.textContent = String(label);
         b.addEventListener('click', () => {
           picks.picked[si] = rcAnswerPick(picks.picked[si], step, oi);
