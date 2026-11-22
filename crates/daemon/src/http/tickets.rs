@@ -81,6 +81,7 @@ async fn board(State(app): S, Query(q): Query<HashMap<String, String>>) -> ApiRe
         Some(s) => Some(sandbox(s)?),
     };
     let older = q.get("older").is_some_and(|v| v == "1" || v == "true");
+    app.plans_ext_refresh(sb.as_ref().map(|s| vec![s.to_string()]).as_deref()).await;
     let b = app.tickets_board(sb.as_ref(), older);
     Ok(ok_with(json!({ "board": b })))
 }

@@ -129,6 +129,9 @@ pub struct App {
     pub(crate) canvas: Mutex<crate::svc::canvas::Book>,
     /// The tickets on disk, per sandbox, read on first use (see `svc::tickets`).
     pub(crate) tickets: Mutex<crate::svc::tickets::Store>,
+    /// What git showed of plans' done threads, per plan id, with when (see
+    /// `App::plans_ext_refresh`); the board reads it without waiting on git.
+    pub(crate) plan_ext: Mutex<std::collections::HashMap<String, (std::time::Instant, std::collections::HashMap<String, sbxw_core::plans::Ext>)>>,
     /// Remote access: state, devices, pairing, the remote listener and the
     /// tailnet sidecar (see `svc::remote_access`).
     pub(crate) remote_access: Mutex<crate::svc::remote_access::RemoteRuntime>,
@@ -203,6 +206,7 @@ impl AppBuilder {
             cpu_probe: Mutex::new(crate::svc::stats::CpuProbe::Os),
             canvas: Mutex::new(Default::default()),
             tickets: Mutex::new(Default::default()),
+            plan_ext: Mutex::new(Default::default()),
             remote_access,
         })
     }

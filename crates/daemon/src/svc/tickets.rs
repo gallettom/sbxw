@@ -162,11 +162,21 @@ impl App {
     }
 
     fn plans_of(&self, sb: Option<&str>) -> Vec<Plan> {
-        let p = self.plans.lock().unwrap();
-        match sb {
-            Some(s) => p.of(s),
-            None => p.list(),
+        let mut out = {
+            let p = self.plans.lock().unwrap();
+            match sb {
+                Some(s) => p.of(s),
+                None => p.list(),
+            }
+        };
+        // What git showed of done threads (see `plans_ext_refresh`).
+        let ext = self.plan_ext.lock().unwrap();
+        for p in &mut out {
+            if let Some((_, e)) = ext.get(&p.id) {
+                p.ext = e.clone();
+            }
         }
+        out
     }
 
     /// The column a ticket is in now.

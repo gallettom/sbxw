@@ -135,6 +135,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/plans", get(plans))
         .route("/api/plans/:id/approve", post(plan_approve))
         .route("/api/plans/:id/refuse", post(plan_refuse))
+        .route("/api/plans/:id/dismiss", post(plan_dismiss))
         .route("/api/plans/:id/merge", post(plan_merge))
         // Relay (the human's half).
         .route("/api/relay", get(relay_list))
@@ -1416,6 +1417,12 @@ struct RefuseBody {
 
 async fn plan_refuse(State(app): S, Path(id): Path<String>, Json(b): Json<RefuseBody>) -> ApiResult {
     let plan = app.plan_refuse(&id, b.note)?;
+    Ok(ok_with(json!({ "plan": plan })))
+}
+
+/// The person closes a settled plan from the Kanban.
+async fn plan_dismiss(State(app): S, Path(id): Path<String>) -> ApiResult {
+    let plan = app.plan_dismiss(&id)?;
     Ok(ok_with(json!({ "plan": plan })))
 }
 

@@ -277,3 +277,68 @@ async fn a_thread_merged_by_hand_reads_as_merged_outside_sbxw() {
     let (st, v) = post(&app, "reopen-hand", "/api/plans/propose_merge", json!({ "id": id, "order": ["b"] })).await;
     assert_eq!(st, StatusCode::OK, "{v}");
 }
+
+/// The Kanban of a plan merged by hand: no thread waits in In test for work
+/// that is in main, a thread whose branch is gone is marked, one whose branch
+/// is unmerged stays, and closing the plan moves it without touching git.
+#[tokio::test]
+async fn the_board_places_threads_merged_by_hand_or_gone() {
+    if std::process::Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let (d, app) = app();
+    let sb = led(&app, d.path(), "board-hand").await;
+    let ws = tempfile::tempdir().unwrap();
+    git(ws.path(), &["init", "-q"]);
+    std::fs::write(ws.path().join("f"), "one").unwrap();
+    git(ws.path(), &["add", "f"]);
+    git(ws.path(), &["commit", "-q", "-m", "one"]);
+    for (b, file) in [("a", "fa"), ("b", "fb")] {
+        git(ws.path(), &["checkout", "-q", "-b", &format!("sbxw/{b}"), "main"]);
+        std::fs::write(ws.path().join(file), b).unwrap();
+        git(ws.path(), &["add", file]);
+        git(ws.path(), &["commit", "-q", "-m", b]);
+    }
+    git(ws.path(), &["checkout", "-q", "main"]);
+    git(ws.path(), &["merge", "-q", "--no-ff", "--no-edit", "sbxw/a"]);
+    app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+    let threads = vec![t("a"), t("b"), t("c")];
+    let p = app.plan_propose(&sb, "three parts", threads.clone(), Variant::Split, "independent", Some("Lead")).await.unwrap();
+    app.plans.lock().unwrap().approve(&p.id, threads, None, None, crate::app::now_ms()).unwrap();
+    for n in ["a", "b", "c"] {
+        app.plans.lock().unwrap().set_thread(&sb.to_string(), n, ThreadState::Done, "finished", false, crate::app::now_ms()).unwrap();
+    }
+    let place = |app: &Arc<App>| -> std::collections::BTreeMap<String, (String, Vec<String>)> {
+        let b = serde_json::to_value(app.tickets_board(Some(&sb), true)).unwrap();
+        let mut out = std::collections::BTreeMap::new();
+        for col in b["columns"].as_array().unwrap() {
+            for c in col["cards"].as_array().unwrap() {
+                let marks = c["marks"].as_array().unwrap().iter().map(|m| m["label"].as_str().unwrap().to_string()).collect();
+                out.insert(c["thread"].as_str().unwrap().to_string(), (col["id"].as_str().unwrap().to_string(), marks));
+            }
+        }
+        out
+    };
+    // Before git is asked: all three wait in test.
+    assert_eq!(place(&app)["a"].0, "test");
+    app.plans_ext_refresh(None).await;
+    let got = place(&app);
+    assert_eq!(got["a"], ("merged".into(), vec!["merged outside sbxw".into()]));
+    assert_eq!(got["b"], ("test".into(), vec![]));
+    assert_eq!(got["c"], ("merged".into(), vec!["branch gone".into()]));
+
+    // The person closes the plan: b leaves test, git is as it was.
+    let head = git(ws.path(), &["rev-parse", "sbxw/b"]);
+    app.plan_dismiss(&p.id).unwrap();
+    assert_eq!(place(&app)["b"], ("merged".into(), vec!["plan closed".into()]));
+    assert_eq!(git(ws.path(), &["rev-parse", "sbxw/b"]), head);
+}
+
+#[tokio::test]
+async fn closing_a_plan_is_refused_while_a_thread_works() {
+    let (d, app) = app();
+    let sb = led(&app, d.path(), "board-close").await;
+    let p = app.plan_propose(&sb, "one", vec![t("a")], Variant::Split, "x", Some("Lead")).await.unwrap();
+    app.plans.lock().unwrap().approve(&p.id, vec![t("a")], None, None, crate::app::now_ms()).unwrap();
+    assert!(app.plan_dismiss(&p.id).unwrap_err().contains("still works"));
+}
