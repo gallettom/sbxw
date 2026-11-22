@@ -418,6 +418,10 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 }
 .rc-agent { align-self: flex-start; background: var(--c-agent); box-shadow: inset 0 0 0 1px var(--c-agent-edge); border-bottom-left-radius: 6px; }
 .rc-me { align-self: flex-end; background: var(--c-you); color: var(--c-text-bright); border-bottom-right-radius: 6px; white-space: pre-wrap; }
+/* A message sent from this page, until the history has it. */
+.rc-me.rc-pending { opacity: .72; }
+.rc-me-state { margin-top: 4px; font-size: 12px; opacity: .85; text-align: right; }
+.rc-me.rc-pending-failed { opacity: 1; outline: 1px solid var(--c-red); }
 .rc-new { animation: rc-rise 220ms var(--ease); }
 .rc-from { font-size: var(--fs-xs); color: var(--c-green); opacity: 0.85; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-sbxw, .rc-note, .rc-steps, .rc-mac-line {
@@ -1211,7 +1215,3 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .rc-cv-enter { animation: none; }
   .rc-cv-layer { will-change: auto; }
 }
-/* A message sent from this page, until the history has it. */
-.rc-me.rc-pending { opacity: .72; }
-.rc-me-state { margin-top: 4px; font-size: 12px; opacity: .85; text-align: right; }
-.rc-me.rc-pending-failed { opacity: 1; outline: 1px solid var(--c-red); }
