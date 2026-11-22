@@ -1,0 +1,144 @@
+== proposal, high risk
+ jv-dialog [dialog] label="Jarvis proposes a change" text="" tab=false
+   - [group] label="" text="" tab=false
+     - [text] label="" text="Jarvis proposes" tab=false
+     - [group] label="" text="" tab=false
+       - [text] label="" text="High risk" tab=false
+     - [group] label="" text="" tab=false
+     jv-close [button] label="Later" text="" tab=false
+       - [icon] label="" text="" tab=false
+   jv-body [group] label="" text="" tab=false
+     - [group] label="" text="" tab=false
+       jv-summary [text] label="" text="Add a /review command to web-app" tab=false
+       jv-high-note [text] label="" text="High risk: read every change below before you approve. A spoken or typed yes does not approve this one: click Approve." tab=false
+       jv-change-0 [group] label="" text="" tab=false
+         - [group] label="" text="" tab=false
+           - [group] label="" text="" tab=false
+             - [text] label="" text="kit" tab=false
+           - [text] label="" text="kit jarvis-review: 1 file" tab=false
+           - [group] label="" text="" tab=false
+             - [text] label="" text="high risk" tab=false
+         jv-diff-0 [document] label="Diff of kit jarvis-review: 1 file" text="" tab=false
+           - [text] label="" text="--- /dev/null\\n+++ ~/.sbxw/state/kits/jarvis-review/files/home/agent/.claude/commands/review.md\\n@@ -0,0 +1,6 @@\\n+Review the staged diff.\\n+\\n+1. Run `git diff --cached`.\\n+2. List each bug with its file and line.\\n+3. Say nothing about style.\\n+\\n" tab=false
+       jv-change-1 [group] label="" text="" tab=false
+         - [group] label="" text="" tab=false
+           - [group] label="" text="" tab=false
+             - [text] label="" text="kits line" tab=false
+           - [text] label="" text="kits of web-app (/Users/ana/dev/web/sbxw.toml)" tab=false
+           - [group] label="" text="" tab=false
+             - [text] label="" text="high risk" tab=false
+         jv-diff-1 [document] label="Diff of kits of web-app (/Users/ana/dev/web/sbxw.toml)" text="" tab=false
+           - [text] label="" text="--- /Users/ana/dev/web/sbxw.toml\\n+++ /Users/ana/dev/web/sbxw.toml\\n@@ -1,3 +1,3 @@\\n name = \"web-app\"\\n-kits = [\"sbxw:dev-ports\"]\\n+kits = [\"sbxw:dev-ports\", \"jarvis-review\"]\\n" tab=false
+   - [group] label="" text="" tab=false
+     - [group] label="" text="" tab=false
+       jv-reason [textbox] label="" text="" tab=true
+     jv-refuse [button] label="Refuse" text="" tab=false
+       - [text] label="" text="Refuse" tab=false
+     jv-approve [button] label="Approve" text="" tab=false
+       - [text] label="" text="Approve" tab=false
+== proposal, low risk, refused once
+ jv-dialog [dialog] label="Jarvis proposes a change" text="" tab=false
+   - [group] label="" text="" tab=false
+     - [text] label="" text="Jarvis proposes" tab=false
+     - [group] label="" text="" tab=false
+       - [text] label="" text="Low risk" tab=false
+     - [text] label="" text="1 more waiting" tab=false
+     - [group] label="" text="" tab=false
+     jv-close [button] label="Later" text="" tab=false
+       - [icon] label="" text="" tab=false
+   jv-body [group] label="" text="" tab=false
+     - [group] label="" text="" tab=false
+       jv-summary [text] label="" text="Read answers with the English voice" tab=false
+       jv-change-0 [group] label="" text="" tab=false
+         - [group] label="" text="" tab=false
+           - [group] label="" text="" tab=false
+             - [text] label="" text="setting" tab=false
+           - [text] label="" text="voice.tts_voice in /Users/ana/.sbxw/sbxw.toml" tab=false
+         jv-diff-0 [document] label="Diff of voice.tts_voice in /Users/ana/.sbxw/sbxw.toml" text="" tab=false
+           - [text] label="" text="--- /Users/ana/.sbxw/sbxw.toml\\n+++ /Users/ana/.sbxw/sbxw.toml\\n@@ -3,4 +3,4 @@\\n [voice]\\n push_to_talk_key = \"F8\"\\n-tts_voice = \"fr_female\"\\n+tts_voice = \"en_female\"\\n dictate_key = \"F9\"\\n" tab=false
+       jv-error [text] label="" text="Changed since it was proposed" tab=false
+   - [group] label="" text="" tab=false
+     - [group] label="" text="" tab=false
+       jv-reason [textbox] label="" text="" tab=true
+     jv-refuse [button] label="Refuse" text="" tab=false
+       - [text] label="" text="Refuse" tab=false
+     jv-approve [button] label="Approve" text="" tab=false
+       - [text] label="" text="Approve" tab=false
+== confirm
+ cf-dialog [dialog] label="Allow api.github.com" text="" tab=false
+   cf-body [group] label="" text="" tab=false
+     - [group] label="" text="" tab=false
+       - [group] label="" text="" tab=false
+         cf-title [text] label="" text="Allow api.github.com" tab=false
+         cf-close [button] label="Cancel" text="" tab=false
+           - [icon] label="" text="" tab=false
+       cf-line-0 [text] label="" text="web-app may reach api.github.com:443" tab=false
+       cf-line-1 [text] label="" text="Until you remove it" tab=false
+       cf-grants [group] label="" text="" tab=false
+         - [text] label="" text="You grant:" tab=false
+         cf-grant-0 [text] label="" text="• api.github.com" tab=false
+         cf-grant-1 [text] label="" text="• uploads.github.com" tab=false
+       cf-preview [document] label="" text="" tab=false
+         - [text] label="" text="+allow api.github.com\\n-deny *" tab=false
+       - [text] label="" text="API key (optional)" tab=false
+       - [group] label="" text="" tab=false
+         cf-secret-0 [textbox] label="API key" text="" tab=true
+   cf-ack [checkbox] label="I read what this allows" text="" tab=false
+     - [group] label="" text="" tab=false
+     - [text] label="" text="I read what this allows" tab=false
+   cf-dont-ask [checkbox] label="Do not ask again for files I drop" text="" tab=false
+     - [group] label="" text="" tab=false
+     - [text] label="" text="Do not ask again for files I drop" tab=false
+   - [group] label="" text="" tab=false
+     - [group] label="" text="" tab=false
+     cf-cancel [button] label="Cancel" text="" tab=false
+       - [text] label="" text="Cancel" tab=false
+     cf-confirm [button] label="Confirm" text="" tab=false
+       - [text] label="" text="Confirm" tab=false
+== confirm, busy with an error
+ cf-dialog [dialog] label="Allow api.github.com" text="" tab=false
+   cf-body [group] label="" text="" tab=false
+     - [group] label="" text="" tab=false
+       - [group] label="" text="" tab=false
+         cf-title [text] label="" text="Allow api.github.com" tab=false
+         cf-close [button] label="Cancel" text="" tab=false
+           - [icon] label="" text="" tab=false
+       cf-line-0 [text] label="" text="web-app may reach api.github.com:443" tab=false
+       cf-line-1 [text] label="" text="Until you remove it" tab=false
+       cf-grants [group] label="" text="" tab=false
+         - [text] label="" text="You grant:" tab=false
+         cf-grant-0 [text] label="" text="• api.github.com" tab=false
+         cf-grant-1 [text] label="" text="• uploads.github.com" tab=false
+       cf-preview [document] label="" text="" tab=false
+         - [text] label="" text="+allow api.github.com\\n-deny *" tab=false
+       - [text] label="" text="API key (optional)" tab=false
+       - [group] label="" text="" tab=false
+         cf-secret-0 [textbox] label="API key" text="" tab=true
+       cf-error [text] label="" text="The daemon answered 409" tab=false
+   cf-ack [checkbox] label="I read what this allows" text="" tab=false
+     - [group] label="" text="" tab=false
+       - [icon] label="" text="" tab=false
+     - [text] label="" text="I read what this allows" tab=false
+   cf-dont-ask [checkbox] label="Do not ask again for files I drop" text="" tab=false
+     - [group] label="" text="" tab=false
+     - [text] label="" text="Do not ask again for files I drop" tab=false
+   - [group] label="" text="" tab=false
+     - [group] label="" text="" tab=false
+     cf-cancel [button] label="Cancel" text="" tab=false
+       - [text] label="" text="Cancel" tab=false
+     cf-confirm [button] label="Confirm" text="" tab=false
+       - [group] label="" text="" tab=false
+         - [icon] label="" text="" tab=false
+         - [icon] label="" text="" tab=false
+       - [text] label="" text="Confirm" tab=false
+== copy offer
+ copy-offer [alertdialog] label="Clipboard copy from a sandbox" text="" tab=false
+   - [text] label="" text="web-app wants to copy 20 B to your clipboard:" tab=false
+   - [group] label="" text="" tab=false
+     - [text] label="" text="secret text↵line two" tab=false
+   - [group] label="" text="" tab=false
+     - [group] label="" text="" tab=false
+     copy-offer-dismiss [button] label="Dismiss" text="" tab=false
+       - [text] label="" text="Dismiss" tab=false
+     copy-offer-copy [button] label="Copy" text="" tab=false
+       - [text] label="" text="Copy" tab=false

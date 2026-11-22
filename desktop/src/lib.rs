@@ -39,6 +39,8 @@ pub mod scope;
 pub mod switch;
 #[cfg(test)]
 mod busy_tests;
+#[cfg(test)]
+mod approval_tree_tests;
 pub mod screen;
 pub mod shell;
 pub mod socket;
