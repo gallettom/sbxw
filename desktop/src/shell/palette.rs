@@ -404,7 +404,7 @@ pub fn view(s: &App) -> Option<El> {
         .single_line()
         .key("palette-input")
         .label("Command palette: type to filter")
-        .placeholder("Type a command or a sandbox name", c("text-dim"))
+        .placeholder("Type a command or a sandbox name", c("text-muted"))
         .color(c("text-bright"))
         .autofocus()
         .grow(1.0)

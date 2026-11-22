@@ -312,10 +312,11 @@ fn hostile_and_long_names_are_text_only_and_clipped() {
         assert_eq!(label_of(&rt, "files-sandbox"), Some(format!("Scope: {name} (running)")));
         let (cap, _) = rt.presented("files-sandbox").unwrap();
         assert!(cap[2] <= NAME_MAX_W + 80.0, "{name}: the capsule is clipped: {cap:?}");
-        // Its whole name in a tooltip-bearing element; no pill, no control made from it.
+        // Its whole name in a tooltip-bearing element; no pill, no control
+        // made from it (its row's name and state texts are keyed by it).
         press(&mut rt, "files-sandbox");
         let els = rt.elements();
-        let inside: Vec<_> = els.iter().filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("files-sandbox-") && k.contains("hostile") && k != format!("files-sandbox-{hostile}") && !k.starts_with("files-sandbox-face-"))).collect();
+        let inside: Vec<_> = els.iter().filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("files-sandbox-") && k.contains("hostile") && ![format!("files-sandbox-{hostile}"), format!("files-sandbox-{hostile}-name"), format!("files-sandbox-{hostile}-status")].contains(&k.to_string()) && !k.starts_with("files-sandbox-face-"))).collect();
         assert!(inside.is_empty(), "{name}: {:?}", inside.iter().map(|e| &e.key).collect::<Vec<_>>());
         assert!(!els.iter().any(|e| e.text.as_deref() == Some("Done")), "{name}: no keyword pill from a name");
     }
@@ -871,4 +872,30 @@ fn a_screen_may_ask_for_the_name_order() {
     // The default: web-app's live sessions first with its group, then the
     // running ones (Chats before an ungrouped one, docs alone is ungrouped).
     assert_eq!(ids(json!("sandbox")), ["web-app", "web-api", "chat-1", "loose", "docs"]);
+}
+
+/// The open list's rows say their state in words and draw no status dot;
+/// their names start at one x. The closed capsule keeps its dot: there it
+/// is the only visible sign of the state.
+#[test]
+fn the_list_says_the_state_in_words_and_the_capsule_keeps_its_dot() {
+    let mut rt = window("scope/many", 1284.0, 816.0);
+    run(&mut rt, "files_open", json!({ "sandbox": "web-app" }));
+    assert!(rt.presented("files-sandbox-face-dot").is_some(), "the capsule's dot");
+    press(&mut rt, "files-sandbox");
+    let rows = list_rows(&rt, "files-sandbox");
+    let mut name_x: Option<f32> = None;
+    let mut seen = 0;
+    for (k, r) in &rows {
+        let Some((n, _)) = rt.presented(&format!("{k}-name")) else { continue };
+        seen += 1;
+        let (st, _) = rt.presented(&format!("{k}-status")).unwrap_or_else(|| panic!("{k}: no state word"));
+        assert!(st[0] > n[0] && st[0] + st[2] <= r[0] + r[2] + 0.5, "{k}: the state word in the row");
+        let dx = n[0] - r[0];
+        let first = *name_x.get_or_insert(dx);
+        assert!((dx - first).abs() < 0.5, "{k}: its name starts {dx} pt in, the first row's {first}");
+        // Only the 3 pt group bar and one gap before the name: no dot.
+        assert!(dx <= 8.0 + 3.0 + 8.0 + 0.5, "{k}: something before the name ({dx} pt in)");
+    }
+    assert!(seen >= 3, "{seen} sandbox rows seen");
 }

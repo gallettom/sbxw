@@ -425,7 +425,7 @@ sandbox_picker = function(data, o)
   local groups = ((data or {}).app or {}).groups or {}
   local id = o.id or "sandbox"
   return row{ gap = 8, key = id .. "-row",
-    column{ w = 8, h = 8, radius = 2, fill = (o.value and groups[o.value]) or "text-dim", key = id .. "-color" },
+    column{ w = 8, h = 8, radius = 2, fill = (o.value and groups[o.value]) or "text-muted", key = id .. "-color" },
     select{ id = id, value = o.value or "", items = o.items or {}, on = o.on, placeholder = o.placeholder, disabled = o.disabled } }
 end
 -- An overlay over the pane area wide enough for two columns (760 pt and

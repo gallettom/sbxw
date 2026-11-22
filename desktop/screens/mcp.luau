@@ -143,7 +143,7 @@ return {
     -- The servers, under the form, the whole width: the first PAGE (+ "Show more").
     out[#out + 1] = row{ w = "full", gap = 8, wrap = true, key = "mcp-list-head",
       text{ "Registered on this machine", size = "caption", weight = "semibold", color = "text-muted" }, badge{ tostring(#servers) },
-      text{ "sbx does not say which servers a sandbox has loaded: Load and Unload are both offered.", size = "xs", color = "text-dim", truncate = true, grow = 1, min_w = 0,
+      text{ "sbx does not say which servers a sandbox has loaded: Load and Unload are both offered.", size = "xs", color = "text-muted", truncate = true, grow = 1, min_w = 0,
         help = "sbx does not say which servers a sandbox has loaded: Load and Unload are both offered, and the list keeps the order of this machine's registrations." } }
     local shown = PAGE + (state.more or 0)
     local rows = {}

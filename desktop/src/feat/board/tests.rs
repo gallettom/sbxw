@@ -1196,8 +1196,9 @@ fn eight_threads_keep_the_summary_to_two_rows() {
             tap(&mut rt, &k);
         }
         let (sm, _) = rt.presented("board-summary").unwrap();
-        // A row of chips or counters is 26 pt and 6 pt apart, 8 pt of padding each side.
-        let max_h = 16.0 + rows as f32 * 26.0 + (rows - 1) as f32 * 8.0 + 4.0;
+        // A row of chips or counters is 24 pt and 8 pt apart; a hairline and
+        // 8 pt above and below.
+        let max_h = 18.0 + rows as f32 * 24.0 + (rows - 1) as f32 * 8.0 + 4.0;
         assert!(sm[3] <= max_h, "at {w}: the summary is {} tall (at most {rows} rows: {max_h})", sm[3]);
         let chips = rt.elements().into_iter().filter_map(|e| e.key).filter(|k| k.starts_with("board-chip-") && k != "board-chip-lead" && k != "board-chip-more").count();
         assert!(chips >= 2 && chips < 8, "at {w}: {chips} chips shown");
@@ -1589,4 +1590,68 @@ fn the_board_is_called_dashboard_wherever_the_person_reads_it() {
     assert!(t.iter().any(|x| x.contains(crate::feat::kanban::SHOW)), "Help lists the shortcut");
     bad.extend(t.iter().filter(|x| board(x)).map(|x| format!("help: {x}")));
     assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// The summary is a section of the tile, not a card in it: no fill, no
+/// border, no corner of its own, a hairline above and below, its rows at
+/// the tile's left edge (the picker's), narrow and wide, Details open too.
+#[test]
+fn the_summary_is_a_section_between_hairlines_not_a_card() {
+    fn find<'a>(n: &'a crate::luau::Node, k: &str) -> Option<&'a crate::luau::Node> {
+        if n.key.as_deref() == Some(k) {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| find(c, k))
+    }
+    for w in [1284.0, 600.0] {
+        let mut rt = window(w, 816.0);
+        if w < 700.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            settle(&mut rt);
+        }
+        open(&mut rt, json!({ "team": "p-run" }));
+        for details in [false, true] {
+            if details != rt.presented("board-summary-more").is_some() {
+                tap(&mut rt, "board-summary-details");
+            }
+            let node = rt.state.screens.iter().find(|s| s.name == SCREEN).and_then(|s| s.last_good.clone()).unwrap();
+            let sm = find(&node, "board-summary").expect("the summary");
+            assert!(sm.style.fill.is_none() && sm.style.border.is_none() && sm.style.radius.is_none(), "at {w}: the summary is drawn as a card");
+            assert!(sm.style.px.unwrap_or(0.0) == 0.0 && sm.style.pad.unwrap_or(0.0) == 0.0, "at {w}: the summary is inset");
+            let (first, last) = (sm.children.first().unwrap(), sm.children.last().unwrap());
+            assert!(matches!(first.kind, crate::luau::Kind::Divider) && matches!(last.kind, crate::luau::Kind::Divider), "at {w} (details {details}): a hairline above and below");
+            let (s, _) = rt.presented("board-summary").unwrap();
+            let (team, _) = rt.presented("board-summary-team").unwrap();
+            assert!((team[0] - s[0]).abs() < 0.5, "at {w}: the team's row starts at the section's edge: {team:?} {s:?}");
+        }
+    }
+}
+
+/// Heights on the 4 pt steps: a chip is 24 pt (the counters' height; its
+/// pressable 22 inside the 1 pt ring), a thread's row in Details 24.
+#[test]
+fn chips_and_detail_rows_sit_on_the_4_pt_steps() {
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-run" }));
+    if rt.presented("board-summary-more").is_none() {
+        tap(&mut rt, "board-summary-details");
+    }
+    let els = rt.elements();
+    let (mut chips, mut rows) = (0, 0);
+    for e in &els {
+        let Some(k) = e.key.as_deref() else { continue };
+        let h = e.rect[3];
+        if k.starts_with("board-chip-") && k != "board-chip-more" {
+            chips += 1;
+            assert!((h - 24.0).abs() < 0.5, "{k}: {h} pt");
+        } else if k.starts_with("board-thread-") {
+            assert!((h - 22.0).abs() < 0.5, "{k}: {h} pt");
+        } else if k.starts_with("board-detail-thread-") {
+            rows += 1;
+            assert!((h - 24.0).abs() < 0.5, "{k}: {h} pt");
+        } else if k.starts_with("board-count-") {
+            assert!((h - 24.0).abs() < 0.5, "{k}: {h} pt");
+        }
+    }
+    assert!(chips >= 2 && rows >= 1, "{chips} chips, {rows} detail rows");
 }

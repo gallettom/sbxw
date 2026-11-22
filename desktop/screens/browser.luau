@@ -72,7 +72,7 @@ return {
     local n = ui.allowed or 0
     table.insert(out, text{ n > 0
       and (n .. " host" .. (n == 1 and "" or "s") .. " allowed from here, for this sandbox only. Closing the browser asks whether to keep " .. (n == 1 and "it" or "them") .. ".")
-      or "Runs inside the sandbox, under its network policy.", size = "xs", color = "text-dim", wrap = true, key = "browser-grant-note" })
+      or "Runs inside the sandbox, under its network policy.", size = "xs", color = "text-muted", wrap = true, key = "browser-grant-note" })
 
     if ui.error then
       table.insert(out, column{ w = "full", pad = 8, radius = "sm", fill = "red-tint", border = "red-border", key = "browser-error",
@@ -103,8 +103,8 @@ return {
       and ("Keys go to the page. F6: the address bar. " .. release .. ": give the keyboard back.")
       or "Click the page to type in it."
     table.insert(out, row{ gap = 8, w = "full",
-      text{ hint, size = "xs", color = ui.focused and "blue" or "text-dim", truncate = true, grow = 1, key = "browser-hint" },
-      (stats.frames or 0) > 0 and text{ (stats.fps or 0) .. " fps" .. (stats.latency_ms and (" · " .. stats.latency_ms .. " ms") or ""), size = "xs", color = "text-dim",
+      text{ hint, size = "xs", color = ui.focused and "blue" or "text-muted", truncate = true, grow = 1, key = "browser-hint" },
+      (stats.frames or 0) > 0 and text{ (stats.fps or 0) .. " fps" .. (stats.latency_ms and (" · " .. stats.latency_ms .. " ms") or ""), size = "xs", color = "text-muted",
         help = "Pictures a second from the sandbox, and the time from a click or a key to the next picture (median)", key = "browser-stats" } or false,
     })
     return column(out)

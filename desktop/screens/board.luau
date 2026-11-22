@@ -32,7 +32,7 @@ local function words(t, sb, opts)
 end
 
 local function when(r)
-  return text{ r.when or "", size = "xs", color = "text-dim", help = r.exact }
+  return text{ r.when or "", size = "xs", color = "text-muted", help = r.exact }
 end
 
 -- The fold, decided here at the width drawn now, in constant steps (the
@@ -90,7 +90,7 @@ local function bubble_w() return math.max(120, math.min(BUBBLE_MAX, CONV_W - 24)
 local function team_tag(r)
   if not nz(r.team_label) then return false end
   return row{ gap = 4, max_w = math.max(80, math.min(240, CONV_W - 220)), help = r.team_help,
-    column{ w = 8, h = 8, radius = "mark", fill = r.team_color or "text-dim" },
+    column{ w = 8, h = 8, radius = "mark", fill = r.team_color or "text-muted" },
     text{ r.team_label, size = "xs", mono = true, color = "text-muted", truncate = true },
   }
 end
@@ -107,11 +107,11 @@ local function author_line(r)
       text{ "You", size = "sm", weight = "semibold", color = "text-bright" } }
   end
   return row{ gap = 8, w = "full", key = "board-author-" .. (r.id or ""),
-    column{ w = 8, h = 8, radius = "pill", fill = r.who_color or "text-dim" },
+    column{ w = 8, h = 8, radius = "pill", fill = r.who_color or "text-muted" },
     text{ r.who or "", size = "sm", mono = true, weight = "semibold", color = r.who_color or "text-bright", truncate = true, max_w = nw },
     nz(r.role) and badge{ r.role, tone = "purple", help = "The session that planned this team" } or false,
     nz(r.to) and text{ "to " .. r.to, size = "xs", color = "text-muted", truncate = true, max_w = nw } or false,
-    r.guess and text{ "team inferred", size = "xs", color = "text-dim", help = "From before entries named their plan: placed by its time and author" } or false,
+    r.guess and text{ "team inferred", size = "xs", color = "text-muted", help = "From before entries named their plan: placed by its time and author" } or false,
     team_tag(r), when(r) }
 end
 
@@ -190,9 +190,9 @@ local function rowview(r, sb)
     local n = r.count or 1
     return row{ gap = 8, w = "full", px = 4, key = "board-msg-" .. (r.id or ""),
       help = n > 1 and (n .. " changes of state: " .. (r.trail or "") .. " (from " .. (r.first_when or "") .. ")") or nil,
-      column{ w = 8, h = 8, radius = "pill", fill = r.who_color or "text-dim" },
+      column{ w = 8, h = 8, radius = "pill", fill = r.who_color or "text-muted" },
       text{ r.who or "", size = "sm", mono = true, color = r.who_color or "text-muted", truncate = true, max_w = math.max(60, math.min(260, CONV_W - 220)) },
-      icon{ "chevron-right", size = 12, color = "text-dim" },
+      icon{ "chevron-right", size = 12, color = "text-muted" },
       badge{ r.state.word, tone = r.state.tone },
       n > 1 and text{ "×" .. n, size = "xs", color = "text-muted" } or false,
       team_tag(r), when(r) }
@@ -250,7 +250,7 @@ local function rowview(r, sb)
     if nz(r.text) then kids[#kids + 1] = r.side == "right" and text{ r.text, size = "sm", wrap = true, color = "text" } or words(r.text, sb, { size = "sm" }) end
     kids[#kids + 1] = fold_button(r)
     if r.questions then kids[#kids + 1] = questions(r, sb) end
-    if nz(r.hidden_text) then kids[#kids + 1] = note(r.hidden_text, "text-dim") end
+    if nz(r.hidden_text) then kids[#kids + 1] = note(r.hidden_text, "text-muted") end
     kids[#kids + 1] = link(r.link, "board-link-" .. (r.id or ""))
     return bubble(r, kids)
   elseif r.type == "message" then
@@ -337,7 +337,7 @@ local function picker_button(ui, s, ow, wide)
     row{ key = "board-row-picker", on = "picker", w = bw, h = 28, px = 12, gap = 8, radius = "pill", border = lk.border or "control-border", fill = lk.fill or "surface",
       -- No tooltip while its list is open: it would cover the first rows.
       help = (not p.open) and ((nz(summary) and summary or "Pick a team") .. " (pick another team)") or nil,
-      (s or not ui.all) and column{ w = 8, h = 8, radius = "mark", fill = color or "text-dim", key = "board-team-color" } or icon{ "grid", size = 14, color = lk.muted or "text-muted", key = "board-team-color" },
+      (s or not ui.all) and column{ w = 8, h = 8, radius = "mark", fill = color or "text-muted", key = "board-team-color" } or icon{ "grid", size = 14, color = lk.muted or "text-muted", key = "board-team-color" },
       text{ names or "", size = "sm", weight = "medium", mono = true, color = lk.text or "text-bright", truncate = true, max_w = math.floor(bw * 0.55) },
       nz(summary) and wide and text{ summary, size = "xs", color = lk.muted or "text-muted", truncate = true, grow = 1 } or spacer{},
       icon{ "chevron-down", size = 12, color = lk.muted or "text-muted" } },
@@ -352,11 +352,11 @@ local function picker_row(t, i, p, mw)
   return column{ key = "board-row-team-" .. t.id, on = "team", arg = t.id, gap = 2, px = 8, py = 8, radius = "xs", w = "full",
     fill = (hl or current) and "active-bg" or nil, hover = "hover-subtle", selected = current, help = (shown and shown ~= t.summary) and t.summary or nil,
     row{ gap = 8, w = "full",
-      column{ w = 8, h = 8, radius = "mark", fill = t.color or "text-dim" },
+      column{ w = 8, h = 8, radius = "mark", fill = t.color or "text-muted" },
       text{ t.names or "", size = "sm", mono = true, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
       current and icon{ "check", size = 12, color = "accent" } or false,
       nz(t.state) and badge{ t.state, tone = t.tone or "neutral" } or false,
-      nz(t.when) and text{ t.when, size = "xs", color = "text-dim" } or false },
+      nz(t.when) and text{ t.when, size = "xs", color = "text-muted" } or false },
     shown and text{ shown, size = "xs", color = "text-muted", wrap = true } or false }
 end
 
@@ -365,14 +365,14 @@ local function picker_menu(ui, ow, oh, wide)
   if not p.open then return false end
   local mw = menu_w(ow, wide)
   local list = { gap = 2, w = "full", key = "board-picker-list", group = "list" }
-  list[#list + 1] = picker_row({ id = "all", names = "All teams", summary = "Every team's latest messages, each with its team", color = "text-dim" }, 0, p, mw)
+  list[#list + 1] = picker_row({ id = "all", names = "All teams", summary = "Every team's latest messages, each with its team", color = "text-muted" }, 0, p, mw)
   -- Teams that need you first (the core's order), then the finished ones
   -- under a quiet heading.
   local headed = false
   for i, t in ipairs(ui.teams or {}) do
     if t.live == false and not headed and i > 1 then
       list[#list + 1] = row{ w = "full", gap = 8, px = 8, key = "board-picker-finished",
-        text{ "Finished", size = "xs", weight = "semibold", color = "text-dim" }, column{ grow = 1, h = 1, fill = "elevated" } }
+        text{ "Finished", size = "xs", weight = "semibold", color = "text-muted" }, column{ grow = 1, h = 1, fill = "elevated" } }
       headed = true
     end
     list[#list + 1] = picker_row(t, i, p, mw)
@@ -406,7 +406,7 @@ local function conversation(ui, sb)
   local list = { gap = 4, w = "full", px = 4, folds = true, key = "board-rows" }
   if ui.capped then
     -- As many rows as one view draws: older ones through a filter or a search.
-    list[#list + 1] = row{ w = "full", justify = "center", key = "board-capped", note("The newest " .. #(ui.rows or {}) .. " rows are drawn. A filter, a thread or a search finds earlier ones.", "text-dim") }
+    list[#list + 1] = row{ w = "full", justify = "center", key = "board-capped", note("The newest " .. #(ui.rows or {}) .. " rows are drawn. A filter, a thread or a search finds earlier ones.", "text-muted") }
   elseif ui.older then
     list[#list + 1] = row{ w = "full", justify = "center", button{ "Show earlier", variant = "ghost", tone = "blue", on = "more", key = "board-more", help = ui.hidden > 0 and (ui.hidden .. " earlier rows read") or "Read older events" } }
   end
@@ -424,6 +424,7 @@ local function conversation(ui, sb)
 end
 
 -- ── The summary (one column: replaces the side column) ──────────────────
+-- A section between two hairlines (not a card inside the tile).
 -- Under the title (which has the team's state), above the filters: its lead, each
 -- thread as a chip (press: only that thread; its terminal and its session
 -- beside it, shown on hover and focus), the places one acts, and counters
@@ -453,12 +454,14 @@ local function chip_w(t, ui, narrow)
   return w
 end
 
+-- A chip: a 24 pt pill (the counters' height) whose 1 pt ring holds a
+-- 22 pt pressable inside it.
 local function thread_chip(t, ui, narrow)
   local tone_c = t.tone == "neutral" and "text-muted" or t.tone
-  return row{ key = "board-chip-" .. t.name, gap = 0, radius = "pill", h = 26, px = 0, hover_group = true, pad = 0,
+  return row{ key = "board-chip-" .. t.name, gap = 0, radius = "pill", h = 24, px = 0, hover_group = true, pad = 0,
     fill = t.selected and "active-bg" or "floor", border = t.selected and "accent" or "elevated",
     row{ key = "board-thread-" .. t.name, on = "thread", arg = t.selected and "" or t.name, selected = t.selected,
-      gap = 4, px = 8, h = 24, radius = "pill", hover = "hover-subtle",
+      gap = 4, px = 8, h = 22, radius = "pill", hover = "hover-subtle",
       help = t.selected and "Every thread again" or ("Only " .. t.name .. " in the conversation (" .. t.state .. ")"),
       dot{ tone = t.tone },
       text{ t.name, size = "xs", mono = true, weight = "semibold", color = t.color, truncate = true, max_w = narrow and 120 or 180 },
@@ -486,10 +489,10 @@ local function summary(s, ui, narrow)
   local c = s.counts or {}
   local head = { gap = 8, w = "full", wrap = true, key = "board-summary-team" }
   -- (The team's state is beside the picker, in the title: not twice.)
-  head[#head + 1] = row{ key = "board-chip-lead", gap = 0, radius = "pill", h = 26, px = 0,
+  head[#head + 1] = row{ key = "board-chip-lead", gap = 0, radius = "pill", h = 24, px = 0,
     fill = ui.thread == "lead" and "active-bg" or "floor", border = ui.thread == "lead" and "accent" or "elevated",
     row{ key = "board-thread-lead", on = "thread", arg = ui.thread == "lead" and "" or "lead", selected = ui.thread == "lead",
-      gap = 4, px = 8, h = 24, radius = "pill", hover = "hover-subtle",
+      gap = 4, px = 8, h = 22, radius = "pill", hover = "hover-subtle",
       help = ui.thread == "lead" and "Every thread again" or ("Only the lead in the conversation" .. (nz(s.lead) and (": " .. s.lead) or "")),
       badge{ "lead", tone = "purple" },
       text{ s.lead or "the sandbox's main session", size = "xs", color = "text-bright", truncate = true, max_w = narrow and 100 or 200 } } }
@@ -531,14 +534,16 @@ local function summary(s, ui, narrow)
       c.commits .. " commits, +" .. (c.added or 0) .. " -" .. (c.removed or 0) .. " lines (Commits)",
       (not narrow) and row{ gap = 4, text{ "+" .. tostring(c.added or 0), size = "xs", mono = true, color = "green" }, text{ "-" .. tostring(c.removed or 0), size = "xs", mono = true, color = "red" } } or nil)
   end
-  if #counts == 0 then counts[#counts + 1] = text{ "No standing decision or warning, no question waiting, no commit yet.", size = "xs", color = "text-dim" } end
+  if #counts == 0 then counts[#counts + 1] = text{ "No standing decision or warning, no question waiting, no commit yet.", size = "xs", color = "text-muted" } end
   counts[#counts + 1] = spacer{}
   counts[#counts + 1] = row(links)
   local open = ui.details
   counts[#counts + 1] = button{ (not narrow) and (open and "Less" or "Details") or nil, icon = open and "chevron-down" or "chevron-right", variant = "ghost", dense = true, on = "expand", arg = "summary",
     key = "board-summary-details", help = open and "Hide the threads' worktrees and models" or "The threads' worktrees and models" }
 
-  local kids = { gap = 8, w = "full", px = narrow and 8 or 12, py = narrow and 4 or 8, radius = "md", fill = "surface", border = "elevated", key = "board-summary", folds = true }
+  -- A section of the tile, not a card in it: a hairline above and below,
+  -- its rows at the tile's own left edge (as the picker and the filters).
+  local kids = { gap = 8, w = "full", key = "board-summary", folds = true, divider{} }
   if narrow then
     -- One wrapping line: chips, counts, link icons, Details.
     for _, k in ipairs(counts) do head[#head + 1] = k end
@@ -551,7 +556,7 @@ local function summary(s, ui, narrow)
     local d = { gap = 2, w = "full", key = "board-summary-more" }
     for _, t in ipairs(s.threads or {}) do
       d[#d + 1] = row{ gap = 8, w = "full", key = "board-detail-" .. t.name,
-        row{ key = "board-detail-thread-" .. t.name, on = "thread", arg = t.selected and "" or t.name, selected = t.selected, gap = 4, px = 4, h = 22, radius = "xs", hover = "hover-subtle",
+        row{ key = "board-detail-thread-" .. t.name, on = "thread", arg = t.selected and "" or t.name, selected = t.selected, gap = 4, px = 4, h = 24, radius = "xs", hover = "hover-subtle",
           help = t.selected and "Every thread again" or ("Only " .. t.name .. " in the conversation (" .. (t.state or "") .. ")"),
           dot{ tone = t.tone },
           text{ t.name, size = "xs", mono = true, weight = "semibold", color = t.color, truncate = true, max_w = narrow and 110 or 180 } },
@@ -559,9 +564,10 @@ local function summary(s, ui, narrow)
         narrow and term_link(t, false) or false,
         narrow and mon_link(t, ui, false) or false }
     end
-    if #(s.threads or {}) == 0 then d[#d + 1] = note("No thread yet.", "text-dim") end
+    if #(s.threads or {}) == 0 then d[#d + 1] = note("No thread yet.", "text-muted") end
     kids[#kids + 1] = column(d)
   end
+  kids[#kids + 1] = divider{}
   return column(kids)
 end
 
@@ -600,6 +606,7 @@ local function fileview(f, sb)
     if #(f.groups or {}) == 0 and not nz(f.note) then d[#d + 1] = note("No change to show (a mode change or an empty file).") end
     kids[#kids + 1] = column(d)
   end
+  kids[#kids + 1] = divider{}
   return column(kids)
 end
 
@@ -633,7 +640,7 @@ local function commits_view(s)
       text{ p.thread, size = "sm", weight = "semibold", color = p.color, truncate = true, max_w = 240 },
       text{ (tot.commits or 0) .. " commits · " .. (tot.files or 0) .. " files · +" .. (tot.added or 0) .. " -" .. (tot.removed or 0), size = "xs", color = "text-muted", truncate = true, grow = 1 },
       p.merged and badge{ "merged", tone = "green", help = "Merged into the main checkout's branch" } or false }
-    if #(p.commits or {}) == 0 then out[#out + 1] = note("No commits yet.", "text-dim") end
+    if #(p.commits or {}) == 0 then out[#out + 1] = note("No commits yet.", "text-muted") end
     for _, c in ipairs(p.commits or {}) do
       out[#out + 1] = row{ gap = 8, w = "full", px = 4, h = 28, radius = "xs", key = "board-side-commit-" .. c.hash, on = "commit", arg = c.hash, hover = "hover-subtle",
         fill = c.open and "active-bg" or nil, help = c.open and "Fold it" or "Open it: its files and their diff",

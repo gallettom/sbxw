@@ -10,8 +10,8 @@
 //!   branch) follows it as a chip with its own clear cross.
 //! - **Open**: "All sandboxes" first (only where the screen offers it), then
 //!   a heading per group in the sidebar's tint, a row per sandbox: its group
-//!   bar, status dot, name, state, agent, sessions, a check on the current
-//!   one. A filter field above [`FILTER_FROM`] sandboxes. Up and Down,
+//!   bar, name, state (in words: no dot), agent, sessions, a check on the
+//!   current one. A filter field above [`FILTER_FROM`] sandboxes. Up and Down,
 //!   Enter, Escape (the list closes, the view stays), a press outside closes.
 //! - **Over an overlay** ([`frame`]): the overlay's top edge, its title band
 //!   and its edge take the scope's colour.
@@ -471,14 +471,18 @@ pub fn in_slot(n: &Node) -> Option<(Spec, String)> {
 // ---------------------------------------------------------------------------
 // Drawing
 
-/// The status mark: a dot in its tone, a ring when stopped.
-fn status_mark(status: &str, ground: u32) -> El {
+/// The status mark: a dot in its tone, a ring when stopped. Only the
+/// closed capsule draws it: there it is the one visible sign of the state
+/// (the word is in the tooltip and the accessible label). A row of the
+/// open list says its state in words, so it has none.
+fn status_mark(key: String, status: &str, ground: u32) -> El {
     let tone = status_tone(status);
     let fg = theme::mark_on(crate::screen::tone(tone).0, ground);
+    let d = el().key(key).w(8.0).h(8.0).radius(theme::corner::PILL);
     if tone == "neutral" {
-        el().w(8.0).h(8.0).radius(theme::corner::PILL).border(1.5, hex(theme::muted_on(ground)))
+        d.border(1.5, hex(theme::muted_on(ground)))
     } else {
-        el().w(8.0).h(8.0).radius(theme::corner::PILL).fill(hex(fg))
+        d.fill(hex(fg))
     }
 }
 
@@ -518,7 +522,7 @@ pub fn capsule<S: 'static>(key: &str, value: &str, ch: Option<&Choice>, empty: (
     } else if all {
         face = face.child(text(all_label.to_string()).font(crate::screen::body(crate::theme::font_size::BODY, 400.0)).color(hex(lk.muted)));
     } else {
-        face = face.child(status_mark(ch.map_or("", |c| c.status.as_str()), lk.fill)).child(text(value.to_string()).font(crate::screen::body(crate::theme::font_size::BODY, 500.0)).color(hex(lk.text)).truncate().shrink().max_w(NAME_MAX_W));
+        face = face.child(status_mark(format!("{key}-face-dot"), ch.map_or("", |c| c.status.as_str()), lk.fill)).child(text(value.to_string()).font(crate::screen::body(crate::theme::font_size::BODY, 500.0)).color(hex(lk.text)).truncate().shrink().max_w(NAME_MAX_W));
     }
     if !crate::screen::reduced_motion() {
         face = face.transition(rune::Transition::scale(0.9).combined(rune::Transition::opacity()).springs(rune::SpringPair::new(rune::Spring::new(theme::motion::SHORT, 0.0), rune::Spring::new(theme::motion::MICRO_OUT, 0.0))));
@@ -563,7 +567,7 @@ pub fn narrow_chip<S: 'static>(key: &str, sp: &Spec, clear: Option<Box<dyn Fn(&m
         r = r.child(
             el().key(format!("{key}-narrow-clear")).role("button").label(format!("Clear {name}")).help(format!("Back to the whole sandbox, not only {name}"))
                 .w(theme::layout::DENSE_H).h(theme::layout::DENSE_H).items_center().justify_center().radius(theme::radius("xs").unwrap())
-                .hover(c("elevated")).focus_ring(crate::theme::focus::W, crate::theme::focus::IN, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut S| f(s))
+                .hover(c("elevated")).focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut S| f(s))
                 .child(icon("close", theme::icon::SMALL, muted)),
         );
     }
@@ -631,7 +635,7 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
             .single_line()
             .key(filter_key.clone())
             .label("Filter sandboxes")
-            .placeholder("Filter sandboxes", c("text-dim"))
+            .placeholder("Filter sandboxes", c("text-muted"))
             .color(c("text-bright"))
             .autofocus()
             .w_full()
@@ -656,7 +660,7 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
                 }
                 _ => false,
             });
-        l = l.child(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(theme::radius("sm").unwrap()).focus_within_ring(crate::theme::focus::W, crate::theme::focus::NEAR, c("focus")).child(input));
+        l = l.child(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(theme::radius("sm").unwrap()).focus_within_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).child(input));
     }
     // The rows scroll inside the panel (it never grows past LIST_MAX_H or the
     // window): `shrink` and `min_h(0)` let the viewport be shorter than its
@@ -721,7 +725,7 @@ fn heading(key: &str, group: &Option<String>, color: Option<u32>) -> El {
     let sq = el().w(8.0).h(8.0).radius(theme::corner::MARK);
     let sq = match color {
         Some(g) => sq.fill(hex(g)),
-        None => sq.border(1.0, c("text-dim")),
+        None => sq.border(1.0, c("text-muted")),
     };
     row().key(format!("{key}-group-{name}")).w_full().h(HEAD_H).px(8.0).gap(crate::theme::spacing::INLINE).items_center().radius(theme::radius("xs").unwrap()).fill(hex(tint)).help(name.clone())
         .child(sq)
@@ -739,7 +743,7 @@ fn chip(sp: &Spec, ch: &Choice, key: &str) -> Option<El> {
     };
     if n == 0 {
         return (sp.only_counted && ch.count.is_some()).then(|| {
-            text(format!("no {}", sp.noun)).key(k).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-dim")).help(format!("No {} any more: shown because it is the current one", sp.noun))
+            text(format!("no {}", sp.noun)).key(k).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).help(format!("No {} any more: shown because it is the current one", sp.noun))
         });
     }
     Some(el().key(k).px(crate::theme::spacing::CHIP_X).py(crate::theme::spacing::CHIP_Y).radius(theme::radius("xs").unwrap()).fill(c("elevated")).help(tip).child(text(n.to_string()).font(crate::screen::body(crate::theme::font_size::CAPTION, 500.0)).color(c("text"))))
@@ -747,7 +751,6 @@ fn chip(sp: &Spec, ch: &Choice, key: &str) -> Option<El> {
 
 fn choice_row<S: 'static>(cx: &ListCtx<S>, ch: &Choice, key: &str, prev: Option<String>, next: Option<String>, focus_me: bool) -> El {
     let current = ch.id == cx.value;
-    let surface = theme::color_value("surface").unwrap();
     let muted = theme::color_value("text-muted").unwrap();
     let mut r = row().key(key.to_string()).w_full().h(ROW_H).px(8.0).gap(8.0).items_center().radius(theme::radius("xs").unwrap()).role("menuitem").focusable(true);
     if ch.all() {
@@ -774,15 +777,14 @@ fn choice_row<S: 'static>(cx: &ListCtx<S>, ch: &Choice, key: &str, prev: Option<
         }
         r = r.label(format!("{}, {}", ch.id, if ch.status.is_empty() { "unknown" } else { &ch.status })).help(tip)
             .child(bar)
-            .child(status_mark(&ch.status, surface))
-            .child(text(ch.id.clone()).font(crate::screen::body(crate::theme::font_size::BODY, if current { 600.0 } else { 500.0 })).color(c("text-bright")).grow(1.0).min_w(0.0).truncate())
+            .child(text(ch.id.clone()).key(format!("{key}-name")).font(crate::screen::body(crate::theme::font_size::BODY, if current { 600.0 } else { 500.0 })).color(c("text-bright")).grow(1.0).min_w(0.0).truncate())
             // In the order of the count, the group is named here (no headings).
             .children(cx.spec.by_count.then(|| {
-                text(ch.group.clone().unwrap_or_default()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-dim")).truncate().shrink().max_w(GROUP_W)
+                text(ch.group.clone().unwrap_or_default()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).truncate().shrink().max_w(GROUP_W)
             }))
             .children(chip(&cx.spec, ch, &key))
-            .child(el().w(64.0).child(text(ch.status.clone()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).truncate().min_w(0.0)))
-            .child(el().w(56.0).child(text(ch.agent.clone()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-dim")).truncate().min_w(0.0)));
+            .child(el().key(format!("{key}-status")).w(64.0).child(text(ch.status.clone()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).truncate().min_w(0.0)))
+            .child(el().w(56.0).child(text(ch.agent.clone()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).truncate().min_w(0.0)));
     }
     r = r.child(el().w(12.0).items_center().justify_center().children(current.then(|| icon("check", theme::icon::SMALL, theme::color_value("accent").unwrap()))));
     if current {

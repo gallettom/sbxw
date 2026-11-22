@@ -38,7 +38,7 @@ return {
         column{ grow = 1, min_w = 0, input{ id = "env-dir", value = dir, placeholder = "a folder above the workspace", on = "dir", on_submit = "preview" } },
         button{ "Preview", icon = "reload", on = "preview", key = "env-preview" },
       },
-      text{ note, size = "xs", color = "text-dim", wrap = true },
+      text{ note, size = "xs", color = "text-muted", wrap = true },
       e.error and row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "red-tint", border = "red",
         icon{ "warning", size = 12, color = "red" },
         text{ e.error, size = "sm", color = "text-bright", wrap = true, grow = 1 },

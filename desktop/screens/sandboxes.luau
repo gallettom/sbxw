@@ -1,17 +1,18 @@
--- The sandbox list: a status dot. Built in; a copy at
+-- The sandbox list. Built in; a copy at
 -- ~/.sbxw/desktop/screens/sandboxes.luau replaces it and reloads on save.
 --
--- Every row starts with a round dot before its name that carries the
--- sandbox's state, with the state word under it (colour is never alone):
---   wants you  amber, filled, and the amber notch on the row's left edge
+-- A row says its sandbox's state in a word, first on its second line, in
+-- the state's colour (the colour is never alone):
+--   wants you  amber, semibold, and the amber notch on the row's left edge
 --              (the only state that draws the eye)
---   working    blue, filled
---   running    green, filled                  (running and idle)
---   starting…  blue, hollow                   (any state in progress)
---   stopped    grey, hollow
---   failed     red, filled                    (unreachable, or a state sbx calls an error)
--- The rail the rows had (a 3 pt bar per state) went with the dot: it said
--- the same thing a third time. Only "wants you" keeps its notch at the edge.
+--   working    blue
+--   running    grey                           (running and idle; a stop button)
+--   starting…  grey                           (any state in progress; no button)
+--   stopped    grey                           (a start button and a remove)
+--   failed     red                            (unreachable, or a state sbx calls an error)
+-- The dot that stood before the name said the same as the word, and went;
+-- so did the rail the rows had (a 3 pt bar per state). Only "wants you"
+-- keeps its notch at the edge. The name and the word start at one x.
 -- Sessions under a sandbox keep their small rails (their own states).
 -- Line 1: the name (it truncates; nothing is drawn over it), the network
 -- count as a bubble (blue: hosts sbx refused; amber: sbx holds something for
@@ -138,16 +139,6 @@ local function state_of(sb, data)
 end
 
 local rail_fill = { green = "green", blue = "blue", amber = "amber", red = "red", muted = "text-muted" }
-
--- The row's status dot: 8 pt, filled, or a ring for a state in progress
--- (blue) and for stopped (grey).
-local function status_dot(st, name)
-  local progress = st.tone == "muted" and st.shape == "dashed"
-  local hollow = st.shape == "hollow" or progress
-  local c = (progress and "blue") or rail_fill[st.tone] or "text-muted"
-  return row{ key = "dot-" .. name, w = 12, h = 20, align = "center", help = st.word,
-    column{ w = 8, h = 8, radius = "pill", fill = (not hollow) and c or nil, border = hollow and c or nil } }
-end
 
 -- The rail: 3 pt, its shape says the state without colour.
 local function rail(tone, shape, small)
@@ -429,8 +420,7 @@ local function item(sb, app, data)
   -- padding, which keeps a 24 pt target), and moves with the name's length;
   -- a long name truncates before the bubble is pushed out.
   local line1 = { w = "full", gap = 2,
-    status_dot(st, name),
-    text{ name, size = "title", weight = "medium", color = "text-bright", truncate = true, help = name },
+    text{ name, key = "name-" .. name, size = "title", weight = "medium", color = "text-bright", truncate = true, help = name },
   }
   if approvals then
     table.insert(line1, row{ key = "extra-sandbox-" .. name .. "-approvals", on = approvals.intent and "extra" or nil, arg = name .. "\napprovals",

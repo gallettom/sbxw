@@ -324,7 +324,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
             .single_line()
             .key("jv-reason")
             .color(c("text-bright"))
-            .placeholder("Why not (optional, told to Jarvis)", c("text-dim"))
+            .placeholder("Why not (optional, told to Jarvis)", c("text-muted"))
             .w_full()
             .on_edit(|s: &mut S| s.reason_edit());
         foot = foot
@@ -579,7 +579,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
                 input = input.single_line();
             }
             if !sec.placeholder.is_empty() {
-                input = input.placeholder(sec.placeholder.clone(), c("text-dim"));
+                input = input.placeholder(sec.placeholder.clone(), c("text-muted"));
             }
             let input = input.secure();
             body = body.child(small(label, 11.5, 500.0, "text-muted")).child(

@@ -32,7 +32,7 @@ local function list(data)
       text{ tp.tag, mono = true, color = "text-bright", truncate = true },
       tp.configured and badge{ "in use", tone = "green", help = "sbxw.toml's template: new sandboxes start from it" } or false,
       tp.auto and badge{ "automatic", tone = "blue", help = "Kept by sbxw for template = \"auto\"" } or false,
-      text{ table.concat(meta, " · "), size = "sm", color = "text-dim", truncate = true, grow = 1 },
+      text{ table.concat(meta, " · "), size = "sm", color = "text-muted", truncate = true, grow = 1 },
       button{ "Remove", icon = "trash", variant = "ghost", on = "remove", arg = tp.tag, key = "tpl-rm-" .. tp.tag, help = "Remove this template" },
     })
   end

@@ -24,9 +24,8 @@ pub const DARK: &[(&str, u32)] = &[
     ("dim", 0x484f58),         // faint icons, hover borders
     ("text", 0xc9d1d9),        // base body text
     ("text-bright", 0xe6edf3), // headings, emphasized text
-    ("text-muted", 0x9198a1),  // secondary text, field labels (web: #8b949e)
+    ("text-muted", 0x9198a1),  // secondary text: labels, hints, ages, placeholders; 4.5:1 on a selected row too (web: #8b949e)
     ("text-soft", 0x9198a1),   // lead paragraphs
-    ("text-dim", 0x8e97a1),    // hints, ages, second labels: 4.5:1 on a selected row too (web: #6e7681)
     ("blue", 0x58a6ff),
     ("blue-tint", 0x0d1f3c),
     ("green", 0x3fb950),
@@ -146,7 +145,6 @@ pub const GRAPHITE: &[(&str, u32)] = &[
     ("text-bright", 0xf1f3f4),
     ("text-muted", 0xa3a9af),
     ("text-soft", 0xa3a9af),
-    ("text-dim", 0xa2a8ae),
     ("blue", 0x6cb0ff),
     ("blue-tint", 0x303742),
     ("green", 0x4cc35d),
@@ -357,7 +355,7 @@ pub const ON_LIGHT_GROUND: &[(&str, u32)] = &[
 
 /// Tokens whose desktop value differs from app.css, with app.css's value:
 /// each failed WCAG AA on a surface the desktop draws it on.
-pub const WEB_ADJUSTED: &[(&str, u32)] = &[("text-muted", 0x8b949e), ("text-dim", 0x6e7681)];
+pub const WEB_ADJUSTED: &[(&str, u32)] = &[("text-muted", 0x8b949e)];
 
 /// Corner radii, the names screens use: `mark` 2 for the 8 pt identity
 /// squares and hairline bars, `box` 4 for the small boxes inside a control
@@ -491,13 +489,16 @@ pub mod motion {
     pub const SPIN: f32 = 0.9;
 }
 
-/// The keyboard focus ring: 2 pt in `focus`, drawn `OUT` outside a control
-/// (the default), `NEAR` outside where neighbours sit close (the rail, a
-/// field's box), `IN` inside a row that fills its list's width (menu rows).
+/// The keyboard focus ring: 2 pt in `focus`, one offset, `OUT` (2 pt
+/// outside) on every control, the rail's buttons and the fields included
+/// (the rail's 6 pt gaps keep a ring clear of its neighbours). `IN` (inside)
+/// only where outside has no room: a row that fills its list's width (menu
+/// rows, the scope list) and the status bar's entries, 24 pt in a 26 pt bar
+/// at the window's foot, where a ring outside would be cut by the window's
+/// edge. `focus_rings_are_out_but_rows_and_the_status_bar` holds the list.
 pub mod focus {
     pub const W: f32 = 2.0;
     pub const OUT: f32 = 2.0;
-    pub const NEAR: f32 = 1.0;
     pub const IN: f32 = -2.0;
 }
 
@@ -546,10 +547,17 @@ pub fn color_value(name: &str) -> Option<u32> {
     color_in(mode(), name)
 }
 
-/// A token's value in `m`'s palette.
+/// A token's value in `m`'s palette (an [`ALIASES`] name reads its token).
 pub fn color_in(m: Mode, name: &str) -> Option<u32> {
+    let name = ALIASES.iter().find(|(old, _)| *old == name).map_or(name, |(_, to)| *to);
     m.palette().iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
 }
+
+/// Retired colour names that still resolve, for screens written against
+/// them (an override in `~/.sbxw/desktop/screens/` may name one): `text-dim`
+/// was a second grey 1 to 4 % from `text-muted`, merged into it. Built-in
+/// code never writes them (`retired_colour_names_stay_out_of_built_in_code`).
+pub const ALIASES: &[(&str, &str)] = &[("text-dim", "text-muted")];
 
 /// A colour prop: a token name or `#rrggbb`.
 pub fn parse_color(s: &str) -> Result<u32, String> {
@@ -580,7 +588,10 @@ pub fn space(s: &str) -> Result<f32, String> {
 
 /// The table screens see as `theme`.
 pub fn to_json() -> serde_json::Value {
-    let colors: serde_json::Map<_, _> = mode().palette().iter().map(|(n, v)| (n.to_string(), format!("#{v:06x}").into())).collect();
+    let mut colors: serde_json::Map<_, _> = mode().palette().iter().map(|(n, v)| (n.to_string(), format!("#{v:06x}").into())).collect();
+    for (old, _) in ALIASES {
+        colors.insert(old.to_string(), format!("#{:06x}", color_value(old).unwrap()).into());
+    }
     let nums = |t: &[(&str, f32)]| -> serde_json::Map<String, serde_json::Value> { t.iter().map(|(n, v)| (n.to_string(), (*v as f64).into())).collect() };
     serde_json::json!({
         "mode": mode().name(),
@@ -919,14 +930,12 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("text-muted", "active-bg", Need::Text),
     ("text-soft", "bg", Need::Text),
     ("text-soft", "surface", Need::Text),
-    // Placeholders: in inputs (bg) and in the palette's field (surface).
-    ("text-dim", "bg", Need::Text),
-    ("text-dim", "surface", Need::Text),
-    ("text-dim", "elevated", Need::Text),
-    // A selected or hovered row's second line: a Kanban card's age and
-    // sandbox, a Board team's time, a kit's description, a Monitor row.
-    ("text-dim", "active-bg", Need::Text),
-    ("text-dim", "hover-subtle", Need::Text),
+    // `text-muted` above also covers what `text-dim` drew before the merge:
+    // placeholders in inputs (bg) and the palette's field (surface), and a
+    // selected or hovered row's second line (a Kanban card's age and
+    // sandbox, a Board team's time, a kit's description, a Monitor row).
+    ("text-muted", "floor", Need::Text),
+    ("text-muted", "pane-bar", Need::Text),
     ("text-soft", "active-bg", Need::Text),
     // Tones as text: badges on their tint, coloured labels on surfaces.
     ("blue", "blue-tint", Need::Text),
@@ -1030,7 +1039,7 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("group-3", "surface", Need::Mark),
     ("group-4", "surface", Need::Mark),
     // A chat input's ground (`compose`): typed words, the placeholder
-    // (`text-muted` there: `text-dim` falls under 4.5:1), its edge
+    // (`text-muted`), its edge
     // (`compose-edge`) and the focus ring on it (disabled, it is drawn on `bg` at
     // DISABLED_OPACITY: `text-bright` on `bg`, Disabled, below).
     ("text-bright", "compose", Need::Text),
@@ -1125,6 +1134,12 @@ mod tests {
             if !v.starts_with('#') || name.ends_with("-rgb") {
                 continue;
             }
+            // Only the tokens the desktop's palette has: the web UI keeps
+            // more (hovers, washes, alpha steps) the desktop does not draw,
+            // and `text-dim` is an alias here ([`ALIASES`]).
+            if !DARK.iter().any(|(n, _)| *n == name) {
+                continue;
+            }
             let v = if v.len() == 4 { v[1..].chars().flat_map(|c| [c, c]).collect::<String>() } else { v[1..].to_string() };
             let web = u32::from_str_radix(&v, 16).unwrap();
             match WEB_ADJUSTED.iter().find(|(n, _)| *n == name) {
@@ -1137,7 +1152,7 @@ mod tests {
             n += 1;
         }
         assert!(n >= 30, "read {n} tokens");
-        assert_eq!(WEB_ADJUSTED.len(), 2);
+        assert_eq!(WEB_ADJUSTED.len(), 1);
     }
 
     /// Every pair the app draws reaches WCAG AA: 4.5:1 for text (all of it
@@ -1598,6 +1613,12 @@ mod tests {
 
             ("src/surface_canvas.rs", "radius(N * inv): marks drawn at the canvas's zoom"),
         ];
+        // Single lines off the scale, found by the second pass and left for
+        // a decision (each a visible change): (file, the line's code, why).
+        const ALLOWED_LINES: &[(&str, &str, &str)] = &[
+            ("src/shell.rs", "font(small(16.0, 600.0))", "the empty pane's title, 16 pt: between title 15 and heading 17"),
+            ("src/shell/rail.rs", "font(small(10.0, 700.0))", "the rail's count badge, 10 pt bold in a 14 pt bubble"),
+        ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let num = |rest: &str| rest.trim_start().chars().next().is_some_and(|c| c.is_ascii_digit() || c == '-');
         let mut found = vec![];
@@ -1618,13 +1639,53 @@ mod tests {
                 let (calls, comment): (&[&str], &str) = if rel.ends_with(".luau") {
                     (&["radius = "], "--")
                 } else if rel.ends_with(".rs") {
-                    (&["body(", "prose(", "TextStyle::new(", ".radius(", ".shadow(", "Spring::new(", "rotation("], "//")
+                    (&["body(", "prose(", "small(", "TextStyle::new(", ".radius(", ".shadow(", "Spring::new(", "rotation("], "//")
                 } else {
                     continue;
                 };
                 let body = src.split("#[cfg(test)]\nmod tests").next().unwrap();
                 for (n, line) in body.lines().enumerate() {
                     let code = line.split(comment).next().unwrap();
+                    if ALLOWED_LINES.iter().any(|(f, l, _)| *f == rel && code.contains(l)) {
+                        continue;
+                    }
+                    // The measuring mirrors: a text's width measured at a
+                    // size (`measure(t, size, weight)`, `chars_w(t, size)`)
+                    // names the size as the drawing does.
+                    if rel.ends_with(".rs") {
+                        for call in ["measure(", "chars_w("] {
+                            let mut rest = code;
+                            while let Some(at) = rest.find(call) {
+                                let before = rest[..at].chars().last();
+                                rest = &rest[at + call.len()..];
+                                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') || rest.starts_with("t: &str") {
+                                    continue;
+                                }
+                                // The second argument, at depth 0.
+                                let (mut depth, mut commas, mut arg2) = (0i32, 0, None);
+                                for (i, ch) in rest.char_indices() {
+                                    match ch {
+                                        '(' | '[' | '{' => depth += 1,
+                                        ')' | ']' | '}' if depth == 0 => break,
+                                        ')' | ']' | '}' => depth -= 1,
+                                        ',' if depth == 0 => {
+                                            commas += 1;
+                                            if commas == 1 {
+                                                arg2 = Some(&rest[i + 1..]);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                // `measure(t, size, weight)` has three; the
+                                // status bar's own `measure(t, weight)` two.
+                                let args = if call == "measure(" { 2 } else { 1 };
+                                if commas == args && arg2.is_some_and(num) {
+                                    found.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+                                }
+                            }
+                        }
+                    }
                     for call in calls {
                         let mut rest = code;
                         while let Some(at) = rest.find(call) {
@@ -1646,6 +1707,75 @@ mod tests {
             let r = w[1] / w[0];
             assert!((1.125..=1.2).contains(&r), "type step {} -> {}: {r:.3}", w[0], w[1]);
         }
+    }
+
+    /// One focus-ring offset: `focus::IN` only on menu rows, the scope
+    /// list's rows and the status bar's entries ([`focus`]); every other
+    /// ring is `focus::OUT`.
+    #[test]
+    fn focus_rings_are_out_but_rows_and_the_status_bar() {
+        const IN_ALLOWED: &[(&str, usize)] = &[("src/screen.rs", 1), ("src/scope.rs", 1), ("src/shell/statusbar.rs", 4)];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut stack = vec![root.join("src")];
+        let mut found = vec![];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                if rel == "src/theme.rs" || !rel.ends_with(".rs") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&p).unwrap();
+                let n = src.matches("focus::IN,").count();
+                let want = IN_ALLOWED.iter().find(|(f, _)| *f == rel).map_or(0, |(_, n)| *n);
+                if n != want {
+                    found.push(format!("{rel}: {n} rings inside, {want} allowed"));
+                }
+            }
+        }
+        assert!(found.is_empty(), "{}", found.join("\n"));
+    }
+
+    /// A retired colour name ([`ALIASES`]) resolves to its token, in the
+    /// core and in `theme.color`, and no built-in code writes it.
+    #[test]
+    fn retired_colour_names_stay_out_of_built_in_code() {
+        for m in Mode::ALL {
+            for (old, to) in ALIASES {
+                assert!(!m.palette().iter().any(|(n, _)| n == old), "{old} is in the {m:?} palette");
+                assert_eq!(color_in(m, old), color_in(m, to), "{m:?}: {old}");
+            }
+        }
+        assert_eq!(to_json()["color"]["text-dim"], to_json()["color"]["text-muted"]);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut found = vec![];
+        let mut stack = vec![root.join("src"), root.join("screens")];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                if rel == "src/theme.rs" {
+                    continue;
+                }
+                let Ok(src) = std::fs::read_to_string(&p) else { continue };
+                for (old, _) in ALIASES {
+                    for q in [format!("\"{old}\""), format!("'{old}'")] {
+                        if src.contains(&q) {
+                            found.push(format!("{rel}: {old}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(found.is_empty(), "retired colour names in built-in code:\n{}", found.join("\n"));
     }
 
     /// `0xRRGGBB` or `#rrggbb` (`#rrggbbaa` too) in a line of code.

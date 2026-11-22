@@ -1237,3 +1237,25 @@ fn a_thread_pane_resolves_a_relative_path_in_its_worktree() {
     let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "src/main.ts", "thread": "unknown" })).unwrap();
     assert!(a.iter().any(|x| matches!(x, Action::Fetch { path, .. } if path.ends_with("%2FUsers%2Fme%2Fweb%2Fsrc"))), "{a:?}");
 }
+
+/// A location's row is 24 pt (the 4 pt steps; was 22): 13 pt text and its
+/// 12 pt glyph inside, a pointer target no smaller than before.
+#[test]
+fn a_location_row_is_24_pt() {
+    let dir = std::env::temp_dir().join("sbxw-no-overrides");
+    let f = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/files/files-browse.json");
+    let x = crate::fixture::Fixture::load(&f).unwrap();
+    let s = crate::screen::ScreenState::new(SCREEN, &dir, x.screen_data(&crate::fixture::AppView::default()));
+    fn walk(n: &crate::luau::Node, out: &mut Vec<(String, Option<crate::luau::Size>)>) {
+        if let Some(k) = n.key.as_deref().filter(|k| k.starts_with("files-loc-") || k.starts_with("files-worktree-")) {
+            out.push((k.to_string(), n.style.h));
+        }
+        n.children.iter().for_each(|c| walk(c, out));
+    }
+    let mut rows = vec![];
+    walk(s.last_good.as_ref().unwrap(), &mut rows);
+    assert!(rows.len() >= 3, "{rows:?}");
+    for (k, h) in rows {
+        assert_eq!(h, Some(crate::luau::Size::Pt(24.0)), "{k}");
+    }
+}

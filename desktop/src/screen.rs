@@ -681,9 +681,9 @@ fn chars_w(t: &str, size: f32) -> f32 {
 /// that truncates, and its tooltip has the whole label.
 pub fn menu_width(rows: &[MenuRow]) -> f32 {
     let w = rows.iter().map(|r| {
-        let keys: f32 = r.keys.iter().map(|k| chars_w(k, 12.0).max(10.0) + 10.0 + 4.0).sum::<f32>() + if r.keys.is_empty() { 0.0 } else { 12.0 };
-        let count = r.count.map_or(0.0, |c| chars_w(&c.to_string(), 12.0) + 12.0 + 8.0);
-        MENU_ROW_PX * 2.0 + MENU_ICON + MENU_ICON_GAP + chars_w(r.label, 13.0) + keys + count + if r.chosen { 20.0 } else { 0.0 }
+        let keys: f32 = r.keys.iter().map(|k| chars_w(k, theme::font_size::CAPTION).max(10.0) + 10.0 + 4.0).sum::<f32>() + if r.keys.is_empty() { 0.0 } else { 12.0 };
+        let count = r.count.map_or(0.0, |c| chars_w(&c.to_string(), theme::font_size::CAPTION) + 12.0 + 8.0);
+        MENU_ROW_PX * 2.0 + MENU_ICON + MENU_ICON_GAP + chars_w(r.label, theme::font_size::BODY) + keys + count + if r.chosen { 20.0 } else { 0.0 }
     }).fold(0.0, f32::max);
     (w + MENU_PAD * 2.0 + 2.0).ceil().clamp(MENU_MIN_W, MENU_MAX_W)
 }
@@ -773,7 +773,7 @@ pub fn menu_row(r: &MenuRow) -> El {
         row_ = row_.child(el().w(8.0)).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("accent")));
     }
     // Its help, else its whole label when the label may be cut.
-    let cut = chars_w(r.label, 13.0) > MENU_MAX_W - MENU_PAD * 2.0 - MENU_ROW_PX * 2.0 - MENU_ICON - MENU_ICON_GAP - 24.0;
+    let cut = chars_w(r.label, theme::font_size::BODY) > MENU_MAX_W - MENU_PAD * 2.0 - MENU_ROW_PX * 2.0 - MENU_ICON - MENU_ICON_GAP - 24.0;
     if let Some(h) = r.help.map(str::to_string).or_else(|| cut.then(|| r.label.to_string())) {
         row_ = row_.help(h);
     }
@@ -1481,7 +1481,7 @@ impl Build<'_> {
                     .single_line()
                     .key(key.clone().unwrap_or_default())
                     .color(c("text-bright"))
-                    .placeholder(n.placeholder.clone().unwrap_or_default(), c(if is_compose(n) && !n.disabled { "text-muted" } else { "text-dim" }))
+                    .placeholder(n.placeholder.clone().unwrap_or_default(), c("text-muted"))
                     .w_full()
                     .on_edit(move |s: &mut S| &mut s.screen(&name).ui.edits.get_mut(&id2).expect("input synced").0);
                 if n.secure {
@@ -1506,7 +1506,7 @@ impl Build<'_> {
                 if n.disabled {
                     t = t.read_only(true);
                 }
-                field_ground(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center(), n).radius(theme::radius("sm").unwrap()).focus_within_ring(theme::focus::W, theme::focus::NEAR, c("focus")).child(t)
+                field_ground(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center(), n).radius(theme::radius("sm").unwrap()).focus_within_ring(theme::focus::W, theme::focus::OUT, c("focus")).child(t)
             }
             Kind::Icon => {
                 let i = crate::icons::get(&n.text).expect("checked icon");
@@ -1588,7 +1588,7 @@ impl Build<'_> {
                 let mut t = text_input(&edit, body(size, 400.0))
                     .key(key.clone().unwrap_or_default())
                     .color(c("text-bright"))
-                    .placeholder(n.placeholder.clone().unwrap_or_default(), c(if is_compose(n) && !n.disabled { "text-muted" } else { "text-dim" }))
+                    .placeholder(n.placeholder.clone().unwrap_or_default(), c("text-muted"))
                     .w_full()
                     .on_edit(move |s: &mut S| &mut s.screen(&name).ui.edits.get_mut(&id2).expect("textarea synced").0);
                 if let Some(on) = n.on.clone() {
@@ -1617,7 +1617,7 @@ impl Build<'_> {
                     t = t.read_only(true);
                 }
                 let h = n.rows as f32 * (size * theme::LINE_HEIGHT).round() + 16.0;
-                field_ground(col().w_full().h(h).px(8.0).py(8.0), n).radius(theme::radius("sm").unwrap()).focus_within_ring(theme::focus::W, theme::focus::NEAR, c("focus")).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
+                field_ground(col().w_full().h(h).px(8.0).py(8.0), n).radius(theme::radius("sm").unwrap()).focus_within_ring(theme::focus::W, theme::focus::OUT, c("focus")).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
             }
             Kind::Image => match crate::picture::shown(key.as_deref().unwrap_or("")) {
                 Some((px, (w, h))) => {

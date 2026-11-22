@@ -572,7 +572,7 @@ row{ key = "title-slot", gap = 8,
   tier; a workspace of one is ungrouped, and ungrouped sandboxes after a
   group get a hairline (`<id>-ungrouped-<n>`). Inside a tier, the daemon's
   order (by name). The order is taken when the list opens and holds while it
-  is open (a state change updates the dot and the word, never the row's
+  is open (a state change updates the word, never the row's
   place); the filter keeps it. `order = "name"` asks for the daemon's order
   grouped by workspace instead (no built-in screen does).
 - **Closed**: a capsule in the sandbox's group colour (its fill the colour
@@ -591,8 +591,9 @@ row{ key = "title-slot", gap = 8,
   rows, `<id>-rows`, scroll inside under the pinned filter and All, the
   current row in view on open): All first, then each group under a heading in
   the sidebar's tint and label colour, a row per sandbox (`<id>-<name>`,
-  All `<id>-`; a script's `wait:` knows `<id>-list`, then taps a row): the group's bar, status, name, open sessions, state,
-  agent, a check on the current one. Above 8 sandboxes a filter field
+  All `<id>-`; a script's `wait:` knows `<id>-list`, then taps a row): the group's bar, name, open sessions, state
+  (a word, no dot: the capsule keeps its dot, its only visible sign of the
+  state), agent, a check on the current one. Above 8 sandboxes a filter field
   (`<id>-filter`) that matches names and group names. The keyboard starts
   in the field, else on the current row; Up and Down move, Enter picks
   (in the field: the first match), Escape closes only the list and gives
@@ -863,7 +864,7 @@ switch every screen is loaded again and renders with the new values. So:
 
 | Table | Names |
 |---|---|
-| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary` (the one filled button's fill), `on-primary` (its label), `primary-hover`, `red-text` (red words on a group's tint), `status-bar`, `status-line`, `vendor-anthropic`, `vendor-openai`, `vendor-google`, `cyan`, `pill-danger`, `accent`, `accent-tint`, `link`, `tab-current`, `scrim`, `shadow`, `media` (behind a picture), `file-doc`, `file-code`, `file-image`, `file-data`, `file-archive` (the explorer's file kinds) |
+| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary` (the one filled button's fill), `on-primary` (its label), `primary-hover`, `red-text` (red words on a group's tint), `status-bar`, `status-line`, `vendor-anthropic`, `vendor-openai`, `vendor-google`, `cyan`, `pill-danger`, `accent`, `accent-tint`, `link`, `tab-current`, `scrim`, `shadow`, `media` (behind a picture), `file-doc`, `file-code`, `file-image`, `file-data`, `file-archive` (the explorer's file kinds) |
 | `theme.mode` | `dark` or `graphite` |
 | `theme.icon` | `sm` 12 (inline with text), `md` 14 (every control), `lg` 20 (the rail), `mark` 24 (the top bar's mark) |
 | `theme.radius` | `mark` 2 (8 pt squares, thin bars), `box` 4 (a checkbox, a keycap), `xs` 6, `sm` 6, `md` 10, `lg` 12, `pill` 999 (dots, chips) |
@@ -946,9 +947,11 @@ Both rules and the contrast on every ground are tested (`screen::tests`).
   and colour make the hierarchy.
 - **Colour**: every text and surface pair meets WCAG AA (4.5:1; 3:1 for
   icons, marks and focus rings): `theme::tests::contrast_of_every_pair_used`
-  lists them. `text-dim` is for hints and second lines (an age, a label
-  beside a name): it reads at 4.5:1 on every ground, a selected row
-  included. A state is never colour alone: say it in a word too.
+  lists them. One secondary grey, `text-muted`, for labels, hints and
+  second lines (an age, a label beside a name): it reads at 4.5:1 on every
+  ground, a selected row included. `text-dim`, its former twin, still
+  resolves to it for screens written against it; do not write it in a new
+  screen. A state is never colour alone: say it in a word too.
 - **Radii**: always a name, never a number (a test fails a built-in screen
   that writes one): 6 for controls and rows (`xs`, `sm`), 10 for cards,
   tiles and menus (`md`), 12 for dialogs (`lg`), `pill` for a dot,

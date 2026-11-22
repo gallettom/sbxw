@@ -164,9 +164,9 @@ pub fn measure(t: &str, size: f32, weight: f32) -> f32 {
 pub const CHIP_PX: f32 = 8.0;
 pub const CHIP_GAP: f32 = 6.0;
 pub const CHIP_ICON: f32 = crate::theme::icon::MEDIUM;
-pub const CHIP_TEXT: f32 = 12.0;
+pub const CHIP_TEXT: f32 = crate::theme::font_size::CAPTION;
 /// The pane's name in its bar.
-pub const NAME_TEXT: f32 = 13.0;
+pub const NAME_TEXT: f32 = crate::theme::font_size::BODY;
 /// The overflow button's gap and tone dot.
 pub const MORE_GAP: f32 = 4.0;
 pub const MORE_DOT: f32 = 6.0;
@@ -334,7 +334,7 @@ pub fn menu_w(label: &str, icon: bool, chevron: bool) -> f32 {
         parts += 1;
     }
     if !label.is_empty() {
-        w += measure(label, 13.0, 400.0);
+        w += measure(label, crate::theme::font_size::BODY, 400.0);
         parts += 1;
     }
     if chevron {
@@ -346,7 +346,7 @@ pub fn menu_w(label: &str, icon: bool, chevron: bool) -> f32 {
 
 /// The daemon's state at the bar's right end: px 8, dot 8, gap 8, a word 12/400.
 pub fn state_w(word: &str) -> f32 {
-    16.0 + 8.0 + 8.0 + measure(word, 12.0, 400.0)
+    16.0 + 8.0 + 8.0 + measure(word, crate::theme::font_size::CAPTION, 400.0)
 }
 
 /// The modes at the top bar's left (topbar.luau `modes`): the GUI | TUI
@@ -460,7 +460,7 @@ pub fn usage_bars_w(u: &J) -> Option<f32> {
     if w.is_empty() {
         return None;
     }
-    let parts: f32 = w.iter().map(|(l, p)| measure(l, 12.0, 500.0) + USAGE_GAP + USAGE_BAR_W + USAGE_GAP + measure(&format!("{}%", p.round()), 12.0, 500.0)).sum();
+    let parts: f32 = w.iter().map(|(l, p)| measure(l, crate::theme::font_size::CAPTION, 500.0) + USAGE_GAP + USAGE_BAR_W + USAGE_GAP + measure(&format!("{}%", p.round()), crate::theme::font_size::CAPTION, 500.0)).sum();
     Some(16.0 + parts + USAGE_WINDOW_GAP * (w.len() - 1) as f32)
 }
 
@@ -532,7 +532,7 @@ mod tests {
                 let items: Vec<Item> = many().into_iter().take(n).collect();
                 let f = pane_fit(width, "test-sbx", Some("Claude"), items.clone(), true);
                 assert_eq!(f.shown.len() + f.hidden.len(), n, "{width} {n}");
-                let name = measure("test-sbx", 12.0, 500.0).min(NAME_WANT);
+                let name = measure("test-sbx", crate::theme::font_size::CAPTION, 500.0).min(NAME_WANT);
                 // The "⋯" menu is always there (it holds the pane's moves).
                 let sw = if f.switch { switch_w("Claude") + PANE_GAP } else { 0.0 };
                 let mut used = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name + sw + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);

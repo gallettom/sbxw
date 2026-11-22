@@ -200,7 +200,7 @@ local function worktrees_tab(data, sb)
         row{ gap = 8, w = "full", text{ "⑂ " .. t.name, color = "text", truncate = true, grow = 1 },
           text{ table.concat(bits, " · "), size = "sm", color = (t.dirty or 0) > 0 and "amber" or "text-muted" },
           button{ icon = "terminal", variant = "ghost", on = "open", arg = { sandbox = sb, thread = t.name }, key = "wt-open-" .. t.name, help = "Show " .. t.name } },
-        text{ t.branch .. " · " .. (t.worktree or ""), size = "xs", color = "text-dim", truncate = true },
+        text{ t.branch .. " · " .. (t.worktree or ""), size = "xs", color = "text-muted", truncate = true },
         column{ gap = 2, w = "full", table.unpack(commits) },
       })
     end
@@ -289,9 +289,9 @@ local function board_tab(state, data, sb)
       row{ gap = 8, w = "full", text{ m[1], color = e.kind == "conflict" and "red" or (e.kind == "warning" and "amber" or "text-muted") },
         text{ m[2], weight = "medium", size = "sm" },
         text{ e.to and (e.by .. " → " .. e.to) or (e.by or ""), size = "sm", color = "text-muted", truncate = true, grow = 1 },
-        e.hash and text{ short(e.hash), mono = true, size = "xs", color = "text-dim" } or false },
+        e.hash and text{ short(e.hash), mono = true, size = "xs", color = "text-muted" } or false },
       (e.text and e.text ~= "") and text{ e.text, size = "sm", wrap = true } or false,
-      #files > 0 and text{ table.concat(files, ", "), size = "xs", mono = true, color = "text-dim", wrap = true } or false,
+      #files > 0 and text{ table.concat(files, ", "), size = "xs", mono = true, color = "text-muted", wrap = true } or false,
     })
   end
   return column(out)

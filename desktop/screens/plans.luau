@@ -90,7 +90,7 @@ local function card(state, data, p, t, i, repos)
   local hue = hues[((i - 1) % 4) + 1]
   local items = { gap = 8, w = "full", pad = 12, radius = "md", fill = "surface-alt", border = hue, key = key }
   table.insert(items, row{ gap = 8, w = "full",
-    text{ (t.name ~= "" and t.name) or "Unnamed thread", weight = "semibold", color = t.name ~= "" and "text-bright" or "text-dim", truncate = true, grow = 1 },
+    text{ (t.name ~= "" and t.name) or "Unnamed thread", weight = "semibold", color = t.name ~= "" and "text-bright" or "text-muted", truncate = true, grow = 1 },
     button{ editing and "Done" or "Edit", variant = "ghost", on = "edit_toggle", arg = { id = id, i = i }, key = key .. "-edit" },
     button{ icon = "close", variant = "ghost", on = "remove", arg = { id = id, i = i }, help = "Remove this thread from the plan", key = key .. "-remove" },
   })
@@ -127,7 +127,7 @@ local function card(state, data, p, t, i, repos)
       table.insert(items, row{ gap = 8, w = "full", text{ "No repository yet:", size = "sm", color = "amber" }, repo_select() })
     end
     local lead, rest = first_sentence(t.goal)
-    table.insert(items, text{ lead ~= "" and lead or "No goal yet", color = lead ~= "" and "text" or "text-dim", wrap = true })
+    table.insert(items, text{ lead ~= "" and lead or "No goal yet", color = lead ~= "" and "text" or "text-muted", wrap = true })
     if rest ~= "" then
       local open = (state.more or {})[id .. ":" .. i]
       if open then table.insert(items, text{ rest, size = "sm", color = "text-soft", wrap = true }) end
@@ -137,7 +137,7 @@ local function card(state, data, p, t, i, repos)
     -- past 12, a "+N more" that opens the rest.
     local chips = { gap = 4, w = "full", wrap = true, key = key .. "-owns", text{ "Owns", size = "sm", color = "text-muted" } }
     local sc = scope_items(t.scope)
-    if #sc == 0 then table.insert(chips, text{ "Nothing named", size = "sm", color = "text-dim" }) end
+    if #sc == 0 then table.insert(chips, text{ "Nothing named", size = "sm", color = "text-muted" }) end
     local all = (state.owns or {})[id .. ":" .. i]
     for k, s in ipairs(sc) do
       if k > 12 and not all then
@@ -256,7 +256,7 @@ local function status(data, p)
   return column(items)
 end
 
-local merge_marks = { ok = { "✓", "green" }, failed = { "✕", "red" }, pending = { "…", "blue" }, skipped = { "–", "text-dim" } }
+local merge_marks = { ok = { "✓", "green" }, failed = { "✕", "red" }, pending = { "…", "blue" }, skipped = { "–", "text-muted" } }
 
 local function merge_view(data, p)
   local ui = data.threads_ui or {}

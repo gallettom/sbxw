@@ -73,7 +73,7 @@ fn action(key: String, label: &str, icon: Option<&str>, tone: &str, press: impl 
         .items_center()
         .radius(theme::radius("xs").unwrap())
         .hover(tint)
-        .focus_ring(crate::theme::focus::W, crate::theme::focus::IN, c("focus"))
+        .focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus"))
         .cursor(Cursor::Pointer)
         .on_press(press);
     if let Some(i) = icon {
@@ -118,7 +118,7 @@ fn card(j: &J) -> El {
             "done" => ("check", "green"),
             "running" => ("reload", "blue"),
             "failed" => ("close", "red"),
-            _ => ("chevron-right", "text-dim"),
+            _ => ("chevron-right", "text-muted"),
         };
         col = col.child(
             row()
@@ -127,7 +127,7 @@ fn card(j: &J) -> El {
                 .gap(crate::theme::spacing::INLINE)
                 .items_center()
                 .child(rune::icon(crate::icons::get(mark).unwrap(), theme::icon::SMALL).color(c(mc)))
-                .child(small(s["label"].as_str().unwrap_or(""), if st == "waiting" { "text-dim" } else { "text" }).truncate().min_w(0.0).grow(1.0)),
+                .child(small(s["label"].as_str().unwrap_or(""), if st == "waiting" { "text-muted" } else { "text" }).truncate().min_w(0.0).grow(1.0)),
         );
         if let Some(d) = s["detail"].as_str() {
             // What sbx prints under the running step, its last line.

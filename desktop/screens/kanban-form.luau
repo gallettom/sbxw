@@ -25,11 +25,11 @@ return {
         select{ id = "kanban-form-sandbox", value = f.sandbox or "", on = "sandbox", scope = { kind = "sandbox" }, placeholder = "Pick a sandbox" } }
     kids[#kids + 1] = column{ gap = 4, w = "full",
       row{ gap = 8, w = "full", text{ "Title", size = "sm", color = "text-muted" }, spacer{},
-        nz(f.title_count) and text{ f.title_count, size = "xs", color = f.title_over and "red" or "text-dim" } or false },
+        nz(f.title_count) and text{ f.title_count, size = "xs", color = f.title_over and "red" or "text-muted" } or false },
       input{ id = "kanban-form-title", value = f.title_text or "", placeholder = "What should be done, in one line", on = "title", on_submit = "save" } }
     kids[#kids + 1] = column{ gap = 4, w = "full",
       row{ gap = 8, w = "full", text{ "Description", size = "sm", color = "text-muted" }, spacer{},
-        nz(f.description_count) and text{ f.description_count, size = "xs", color = f.description_over and "red" or "text-dim" } or false },
+        nz(f.description_count) and text{ f.description_count, size = "xs", color = f.description_over and "red" or "text-muted" } or false },
       textarea{ id = "kanban-form-description", value = f.description or "", rows = rows, tone = "compose", placeholder = "What it is for, what done looks like, anything the lead should know. Plain text.", on = "description", on_submit = "save" } }
     kids[#kids + 1] = row{ gap = 8, w = "full",
       text{ "Priority", size = "sm", color = "text-muted" },
@@ -37,7 +37,7 @@ return {
     local files = { gap = 8, w = "full", key = "kanban-form-files",
       row{ gap = 8, w = "full",
         text{ "Files", size = "sm", color = "text-muted" },
-        nz(f.files_label) and text{ f.files_label, size = "xs", color = "text-dim" } or false,
+        nz(f.files_label) and text{ f.files_label, size = "xs", color = "text-muted" } or false,
         spacer{},
         button{ "Attach…", icon = "file", variant = "ghost", dense = true, on = "attach", key = "kanban-form-attach", disabled = f.attach_why ~= nil, help = f.attach_why or "Pick files: pictures, PDFs, text (20 MB each, 20 files, 100 MB in all; archives are refused)" },
         button{ "Paste picture", icon = "image", variant = "ghost", dense = true, on = "paste", key = "kanban-form-paste", disabled = f.attach_why ~= nil, help = f.attach_why or "Attach the picture on the clipboard" } } }
@@ -45,14 +45,14 @@ return {
       files[#files + 1] = row{ gap = 8, w = "full", key = x.el, px = 8, py = 4, radius = "sm", fill = x.look and "amber-tint" or "surface-alt",
         icon{ "file", size = 12, color = "text-muted" },
         text{ x.name or "", size = "xs", truncate = true, grow = 1, help = x.name },
-        text{ x.size or "", size = "xs", color = "text-dim" },
+        text{ x.size or "", size = "xs", color = "text-muted" },
         x.look and icon{ "warning", size = 12, color = "amber" } or false,
         button{ icon = "close", variant = "ghost", compact = true, on = "unattach", arg = x.i, key = x.el .. "-remove", help = "Take this file back" } }
       if x.look then files[#files + 1] = text{ "Look first: " .. x.look, size = "xs", color = "amber", wrap = true } end
     end
     -- A drop zone to aim at (a drop anywhere on the dialog also works).
     files[#files + 1] = column{ w = "full", h = 72, radius = "sm", fill = "surface-alt", border = "border", key = "kanban-form-drop", align = "center", justify = "center",
-      text{ #(f.files or {}) == 0 and "Drop files here, or attach them." or "Drop more files here.", size = "xs", color = "text-dim" } }
+      text{ #(f.files or {}) == 0 and "Drop files here, or attach them." or "Drop more files here.", size = "xs", color = "text-muted" } }
     kids[#kids + 1] = column(files)
     local foot = { gap = 8, w = "full", key = "kanban-form-foot" }
     if nz(f.error) then foot[#foot + 1] = text{ f.error, size = "sm", color = "red", wrap = true, key = "kanban-form-error" } end

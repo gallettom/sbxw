@@ -260,6 +260,15 @@ fn the_tabs_show_what_the_daemon_said() {
     assert!(v.contains("Downloading") && v.contains("Cancel"), "{v}");
 }
 
+/// Labels are sentence case (docs/screens.md, "No capitals"): the voice
+/// tab's runtime row says "Runtime", not "RUNTIME".
+#[test]
+fn the_runtime_badge_is_sentence_case() {
+    let v = render_tab("full", "voice");
+    assert!(v.iter().any(|t| t == "Runtime"), "{v:?}");
+    assert!(!v.iter().any(|t| t == "RUNTIME"), "{v:?}");
+}
+
 #[test]
 fn every_setup_intent_is_described_in_the_screen_doc() {
     let doc = include_str!("../../../docs/screens.md");

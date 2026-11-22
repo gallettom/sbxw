@@ -179,7 +179,7 @@ local function detail(data, ui, r)
   local kids = { gap = 12, w = "full", pad = 12, radius = "md", fill = "surface", border = settled(r) and "border" or "amber", key = "relay-card-" .. r.id,
     row{ gap = 8, w = "full",
       text{ TITLE[r.kind] or "Request", weight = "semibold", color = "text-bright", grow = 1 },
-      text{ r.id, size = "xs", color = "text-dim", mono = true },
+      text{ r.id, size = "xs", color = "text-muted", mono = true },
     },
   }
   local function add(x) if x then kids[#kids + 1] = x end end

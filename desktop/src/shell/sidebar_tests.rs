@@ -422,6 +422,9 @@ fn audit(rt: &rune::Runtime<App>, w: f32, count: usize, what: &str) {
     assert_eq!(names.len(), count, "{what}: {names:?}");
     let (list, _) = rt.presented("sidebar").expect("the sidebar drawn");
     let mut seen: Vec<[f32; 4]> = vec![];
+    // No status dot before a name (the state word says it); every name
+    // starts at the same distance from its row's edge.
+    let mut name_x: Option<f32> = None;
     for n in &names {
         let Some((r, _)) = rt.presented(&format!("row-{n}")) else { continue };
         assert!(r[0] >= list[0] - 0.5 && r[0] + r[2] <= list[0] + list[2] + 0.5, "{what} at {w}: row-{n} {r:?} out of the sidebar {list:?}");
@@ -429,8 +432,11 @@ fn audit(rt: &rune::Runtime<App>, w: f32, count: usize, what: &str) {
             assert!(r[1] >= o[1] + o[3] - 0.5 || r[1] + r[3] <= o[1] + 0.5, "{what} at {w}: row-{n} {r:?} overlaps {o:?}");
         }
         seen.push(r);
-        if let Some((dot, _)) = rt.presented(&format!("dot-{n}")) {
-            assert!((dot[2] - 12.0).abs() < 0.5, "{what} at {w}: dot-{n} {dot:?}");
+        assert!(rt.presented(&format!("dot-{n}")).is_none(), "{what} at {w}: a status dot before {n}");
+        if let Some((t, _)) = rt.presented(&format!("name-{n}")) {
+            let dx = t[0] - r[0];
+            let first = *name_x.get_or_insert(dx);
+            assert!((dx - first).abs() < 0.5, "{what} at {w}: {n}'s name starts {dx} pt in, the first row's {first}");
         }
     }
     // Fifteen rows are taller than the window: the list scrolls inside the sidebar.

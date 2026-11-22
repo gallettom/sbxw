@@ -348,7 +348,7 @@ fn button(e: &Entry, prev: Option<String>, next: Option<String>) -> El {
         .justify_center()
         .radius(theme::radius("sm").unwrap())
         .hover(theme::hex(tint))
-        .focus_ring(crate::theme::focus::W, crate::theme::focus::NEAR, c("focus"))
+        .focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus"))
         .cursor(Cursor::Pointer)
         .on_press(move |s: &mut App| {
             if disabled {

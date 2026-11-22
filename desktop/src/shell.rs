@@ -2600,9 +2600,9 @@ fn notice_view(s: &App) -> Option<El> {
     // Its kind, by meaning, from what it is: an error, an offer to act
     // (needs you), or news.
     let (kind, ground, icon) = notice_kind(*err, what.is_some());
-    let mut body = col().gap(1.0).grow(1.0).min_w(0.0).child(text(t.clone()).font(small(13.0, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
+    let mut body = col().gap(1.0).grow(1.0).min_w(0.0).child(text(t.clone()).font(small(theme::font_size::BODY, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
     if let Some(w) = what {
-        body = body.child(row().gap(2.0).items_center().child(text(w).font(small(12.0, 600.0)).color(c("text-bright")).truncate().min_w(0.0)).child(rune::icon(crate::icons::get("chevron-right").unwrap(), theme::icon::SMALL).color(c("text-bright"))));
+        body = body.child(row().gap(2.0).items_center().child(text(w).font(small(theme::font_size::CAPTION, 600.0)).color(c("text-bright")).truncate().min_w(0.0)).child(rune::icon(crate::icons::get("chevron-right").unwrap(), theme::icon::SMALL).color(c("text-bright"))));
     }
     let close = el()
         .key("notice-close")
@@ -3239,7 +3239,7 @@ fn drag_overlay(s: &App) -> Vec<El> {
         if small_target {
             what = Some((z.label(), ok));
         } else {
-            p = p.child(text(z.label()).font(small(13.0, 600.0)).color(c(if ok { "text-bright" } else { "text-muted" })));
+            p = p.child(text(z.label()).font(small(theme::font_size::BODY, 600.0)).color(c(if ok { "text-bright" } else { "text-muted" })));
         }
         v.push(p);
     }
@@ -3254,9 +3254,9 @@ fn drag_overlay(s: &App) -> Vec<El> {
         .fill(c("elevated"))
         .border(1.0, c(if what.as_ref().is_some_and(|w| w.1) { "blue" } else { "border" }))
         .child(rune::icon(crate::icons::get("terminal").unwrap(), 14.0).color(c("blue")))
-        .child(text(name).font(small(12.0, 500.0)).color(c("text-bright")));
+        .child(text(name).font(small(theme::font_size::CAPTION, 500.0)).color(c("text-bright")));
     if let Some((label, ok)) = what {
-        ghost = ghost.child(text(format!("· {label}")).font(small(12.0, 600.0)).color(c(if ok { "blue" } else { "text-muted" })));
+        ghost = ghost.child(text(format!("· {label}")).font(small(theme::font_size::CAPTION, 600.0)).color(c(if ok { "blue" } else { "text-muted" })));
     }
     v.push(ghost);
     v
@@ -3295,7 +3295,7 @@ fn mode_switch(s: &App, i: usize, agent: &str, ground: u32) -> El {
         if on {
             e = e.fill(c("elevated"));
         } else {
-            e = e.hover(c("hover-subtle")).cursor(Cursor::Pointer).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::NEAR, c("focus")).on_press(move |s: &mut App| {
+            e = e.hover(c("hover-subtle")).cursor(Cursor::Pointer).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).on_press(move |s: &mut App| {
                 s.switch_mode(i);
                 s.push_data();
             });
@@ -3354,7 +3354,7 @@ fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
         let hover = if quiet { theme::hex(theme::over(meaning_fg, 0.12, quiet_tint)) } else { c("active-bg") };
         // A chip with words is named by them; a bare icon or number by its tooltip.
         let named = if it.chip_text() == it.text() && !it.text().is_empty() { it.text() } else { it.help.clone() };
-        b = b.role("button").label(named).expanded(active).hover(hover).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::NEAR, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+        b = b.role("button").label(named).expanded(active).hover(hover).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
             s.press_extra("pane", &name, &args);
             s.push_data();
         });
@@ -3440,7 +3440,7 @@ fn redraw_row(n: usize) -> screen::MenuRow<'static> {
 
 /// The grip a pane is dragged by: two columns of three dots.
 fn grip(n: usize) -> El {
-    let dot = || el().w(2.0).h(2.0).radius(theme::corner::PILL).fill(c("text-dim"));
+    let dot = || el().w(2.0).h(2.0).radius(theme::corner::PILL).fill(c("text-muted"));
     let column = || col().gap(2.0).child(dot()).child(dot()).child(dot());
     row()
         .key(format!("pane-{n}-grip"))
@@ -3563,7 +3563,7 @@ fn pane_view(s: &App, i: usize) -> El {
                 (Some(sb), None) => format!("{sb}: {}", p.status()),
                 (None, None) => unreachable!("the empty pane"),
             };
-            let mut body = row().gap(8.0).items_start().w_full().child(text(msg).font(small(13.0, 400.0)).color(c(if p.error.is_some() { "red" } else { "text-muted" })).wrap().grow(1.0).min_w(0.0));
+            let mut body = row().gap(8.0).items_start().w_full().child(text(msg).font(small(theme::font_size::BODY, 400.0)).color(c(if p.error.is_some() { "red" } else { "text-muted" })).wrap().grow(1.0).min_w(0.0));
             if p.error.is_some() {
                 body = row().gap(8.0).items_start().w_full().child(rune::icon(crate::icons::get("warning").unwrap(), crate::theme::icon::MEDIUM).color(c("red"))).child(body);
             }
@@ -3641,7 +3641,7 @@ fn core_button(key: &str, label: &str, icon: &str, keys: Vec<String>, primary: b
     if let Some(ic) = crate::icons::get(icon) {
         b = b.child(rune::icon(ic, crate::theme::icon::MEDIUM).color(c(fg)));
     }
-    b.child(text(label.to_string()).font(small(13.0, 500.0)).color(c(fg)))
+    b.child(text(label.to_string()).font(small(theme::font_size::BODY, 500.0)).color(c(fg)))
 }
 
 /// An empty pane says what to do, centred, and offers it: open a sandbox
@@ -3961,7 +3961,7 @@ mod tests {
             assert!(!models.is_empty());
             for (k, t) in models {
                 let Some((r, _)) = rt.presented(&k) else { continue };
-                let want = bar::measure(&t, 12.0, 400.0);
+                let want = bar::measure(&t, theme::font_size::CAPTION, 400.0);
                 assert!(r[2] + 0.5 >= want, "{fixture}: {k} \"{t}\" cut: {} of {want}", r[2]);
             }
         }
@@ -4507,15 +4507,15 @@ mod tests {
             assert!(label.matches('…').count() <= 1, "cut once at most: {label}");
             // The line as laid out: the sidebar less paddings, columns, glyph, gaps and the +.
             let room = w - 24.0 - 40.0 - 20.0 - 16.0 - 32.0;
-            let whole_fits = bar::measure(thread, 13.0, 400.0) + bar::measure(word, 12.0, 400.0) <= room;
+            let whole_fits = bar::measure(thread, theme::font_size::BODY, 400.0) + bar::measure(word, theme::font_size::CAPTION, 400.0) <= room;
             if whole_fits {
                 assert!(label == thread || label == format!("…/{thread}") || label == format!(".sbxw-worktrees/{thread}"), "{w}: the name whole: {label}");
             } else {
                 // One middle cut, both ends of the name kept.
-                let (a, b) = label.split_once('…').unwrap_or_else(|| panic!("{w} {word}: {label} not cut, {} pt", bar::measure(&label, 13.0, 400.0)));
+                let (a, b) = label.split_once('…').unwrap_or_else(|| panic!("{w} {word}: {label} not cut, {} pt", bar::measure(&label, theme::font_size::BODY, 400.0)));
                 assert!(thread.starts_with(a) && thread.ends_with(b) && a.len() >= 3 && b.len() >= 3, "{w}: {label}");
             }
-            let used = bar::measure(&label, 13.0, 400.0) + bar::measure(word, 12.0, 400.0);
+            let used = bar::measure(&label, theme::font_size::BODY, 400.0) + bar::measure(word, theme::font_size::CAPTION, 400.0);
             assert!(used <= room + 1.0, "{label} + {word}: {used} pt in {room}");
         }
     }
