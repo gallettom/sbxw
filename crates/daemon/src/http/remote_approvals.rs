@@ -267,6 +267,10 @@ pub fn spawn_badge(app: Arc<App>, d: DeviceCtx, tx: &tokio::sync::mpsc::Sender<S
                     Err(_) => break,
                 },
             }
+            // Its stream is gone: nothing more to send, whatever the counts.
+            if weak.strong_count() == 0 {
+                break;
+            }
             let on = app.remote_access.lock().unwrap().level2.enabled;
             if !on || app.remote_device(&d.id).is_none() {
                 if weak.upgrade().is_none() {

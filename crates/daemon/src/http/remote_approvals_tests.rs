@@ -1021,6 +1021,43 @@ async fn the_event_stream_carries_a_badge_of_numbers() {
     assert!(!seen.contains("GOAL-TEXT"), "numbers only");
 }
 
+/// A closed stream's badge task ends at its next wake, counts changed or
+/// not: it does not stay behind, one per connection, for the daemon's life.
+#[tokio::test]
+async fn the_badge_task_ends_with_its_stream() {
+    use futures_util::StreamExt;
+    let w = world();
+    let p = pair(&w, "phone").await;
+    let id = pending_plan(&w, "myapp", "GOAL-TEXT");
+    let before = w.app.bus.listeners();
+    let req = Request::builder().uri("/r/events").header(header::HOST, TN).header(header::COOKIE, format!("{COOKIE}={}", p.token)).body(Body::empty()).unwrap();
+    let res = w.router.clone().oneshot(req).await.unwrap();
+    let mut body = res.into_body().into_data_stream();
+    let mut seen = String::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(Ok(b)) = body.next().await {
+            seen.push_str(&String::from_utf8_lossy(&b));
+            if seen.contains("event: approvals") {
+                break;
+            }
+        }
+    })
+    .await;
+    assert!(seen.contains("event: approvals"), "{seen}");
+    assert!(w.app.bus.listeners() > before, "the stream and its badge listen");
+    drop(body);
+    // The stream's own task sees it closed; the badge is woken by a plan
+    // event whose counts are the same as before.
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        w.app.send(crate::bus::Event::Plan(w.app.plan(&id).unwrap()));
+        if w.app.bus.listeners() == before {
+            break;
+        }
+    }
+    assert_eq!(w.app.bus.listeners(), before, "every task of the closed stream ended");
+}
+
 /// The badge and the Kanban nudge share one stream: each arrives, neither
 /// holds the other back, and `bye` still ends the stream.
 #[tokio::test]
