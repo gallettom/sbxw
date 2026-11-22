@@ -696,6 +696,20 @@ pub fn menu_width(rows: &[MenuRow]) -> f32 {
 /// room beside its trigger); its rows scroll inside.
 pub const MENU_MAX_H: f32 = 420.0;
 
+static SPIN_RING: rune::Icon = rune::Icon { name: "busy-ring", view: 16.0, body: r#"<circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="2" fill="none"/>"# };
+/// A third of the ring from 12 o'clock, round caps.
+static SPIN_ARC: rune::Icon = rune::Icon { name: "busy-arc", view: 16.0, body: r#"<path d="M8 2A6 6 0 0 1 13.258 10.89" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>"# };
+
+/// The busy indicator of a button whose action runs: a faint ring with a
+/// third of it turning once every 0.9 s, in the label's colour. Rune owns the
+/// loop: it asks for frames only while this element is on screen, and under
+/// reduced motion the arc rests at 12 o'clock (a static mark).
+pub fn busy_spinner(size: f32, ink: rune::Color) -> El {
+    el().size(size, size).a11y_hidden()
+        .child(rune::icon(&SPIN_RING, size).absolute(0.0, 0.0).color(ink).opacity(0.25))
+        .child(rune::icon(&SPIN_ARC, size).absolute(0.0, 0.0).color(ink).looping(rune::LoopSpec::rotation(0.9)))
+}
+
 pub fn menu_surface(key: String, anchor: String, align: rune::Align, w: f32) -> El {
     let e = col()
         .key(key)
@@ -1670,7 +1684,10 @@ impl Build<'_> {
         if let Some(k) = key {
             b = b.key(k);
         }
-        if let Some(i) = n.icon.as_deref().and_then(crate::icons::get) {
+        if n.busy && !n.disabled {
+            // The spinner takes the icon's slot, or leads the label.
+            b = b.child(busy_spinner(icon, fg));
+        } else if let Some(i) = n.icon.as_deref().and_then(crate::icons::get) {
             b = b.child(rune::icon(i, icon).color(fg));
         }
         if !only_icon {
@@ -1682,6 +1699,11 @@ impl Build<'_> {
         }
         if n.disabled {
             return b.opacity(theme::DISABLED_OPACITY).disabled(true);
+        }
+        if n.busy {
+            // Working: its own colours, no press, no hover, no pointer; the
+            // tree says busy (not disabled, which assistive tech reads as dimmed).
+            return b.busy(true);
         }
         if n.skip_tab {
             b = b.tab_index(-1);
@@ -1703,7 +1725,9 @@ impl Build<'_> {
         let only_icon = n.text.is_empty();
         let name = if only_icon { n.help.clone().unwrap_or_else(|| n.icon.clone().unwrap_or_default()) } else { n.text.clone() };
         let mut face = row().gap(4.0).items_center().justify_center().h(20.0).min_w(20.0).px(if only_icon { 0.0 } else { 6.0 }).radius(theme::radius("xs").unwrap()).fill(c("elevated")).border(1.0, c("border"));
-        if let Some(i) = n.icon.as_deref().and_then(crate::icons::get) {
+        if n.busy && !n.disabled {
+            face = face.child(busy_spinner(12.0, hex(fg)));
+        } else if let Some(i) = n.icon.as_deref().and_then(crate::icons::get) {
             face = face.child(rune::icon(i, 12.0).color(hex(fg)));
         }
         if !only_icon {
@@ -1718,6 +1742,9 @@ impl Build<'_> {
         }
         if n.disabled {
             return b.opacity(theme::DISABLED_OPACITY).disabled(true);
+        }
+        if n.busy {
+            return b.busy(true);
         }
         if n.skip_tab {
             b = b.tab_index(-1);

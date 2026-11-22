@@ -299,7 +299,7 @@ local function ask_card(a)
     local opts = { gap = 8, w = "full" }
     for oi, o in ipairs(step.options or {}) do
       local picked = (a.picks or {})[si] == oi
-      opts[#opts + 1] = button{ o, variant = picked and "primary" or "neutral", disabled = a.sending ~= nil,
+      opts[#opts + 1] = button{ o, variant = picked and "primary" or "neutral", busy = picked and a.sending ~= nil, disabled = a.sending ~= nil and not picked,
         on = "pick", arg = { sandbox = a.sandbox, thread = a.thread, step = si, option = oi }, key = base .. "-" .. si .. "-" .. oi,
         help = (step.context or {})[oi] }
     end

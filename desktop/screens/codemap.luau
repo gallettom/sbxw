@@ -31,7 +31,7 @@ local function lens_box(ui, open)
       text{ (ui.lens_left or 400) .. " characters left", size = "xs", color = (ui.lens_left or 400) < 0 and "red" or "text-dim" },
       spacer{},
       button{ "Write the lens", key = "codemap-lens-send", icon = "send", on = "lens", arg = ui.sandbox,
-        disabled = ui.writing or not ui.running or not nz(ui.lens) or (ui.lens_left or 0) < 0,
+        busy = ui.writing and true or false, disabled = not ui.writing and (not ui.running or not nz(ui.lens) or (ui.lens_left or 0) < 0),
         help = ui.running and "Runs /codemap-lens in the background" or "Start the sandbox first" },
     },
   }
@@ -45,7 +45,7 @@ local function empty(ui)
     run and nz(run.label) and note(run.label, run.phase == "failed" and "red" or "amber") or false,
     row{ gap = 8,
       button{ ui.writing and "Writing the map…" or "Generate code map", key = "codemap-generate", icon = "sparkle", variant = "primary",
-        on = "generate", arg = ui.sandbox, disabled = ui.writing or not ui.running,
+        on = "generate", arg = ui.sandbox, busy = ui.writing and true or false, disabled = not ui.writing and not ui.running,
         help = ui.running and "Runs /codemap in a background session: your pane stays yours" or "Start the sandbox first" },
     },
   }

@@ -35,6 +35,8 @@ pub mod picture;
 pub mod safe;
 pub mod scope;
 pub mod switch;
+#[cfg(test)]
+mod busy_tests;
 pub mod screen;
 pub mod shell;
 pub mod socket;

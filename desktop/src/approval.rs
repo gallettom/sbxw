@@ -464,7 +464,10 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
             (true, false) => ("primary", "primary", "primary-hover"),
             _ => ("elevated", "border", "border"),
         };
-        let b = rune::el()
+        // Confirm while the call runs: its own colours and a spinner, no press.
+        let working = d.busy && key == "cf-confirm" && !enabled;
+        let ink = c(if primary && !danger { "on-primary" } else { "text-bright" });
+        let mut b = rune::el()
             .key(key)
             .role("button")
             .label(label)
@@ -473,8 +476,14 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
             .radius(radius("sm").unwrap())
             .fill(c(fill))
             .border(1.0, c(edge))
-            .min_w(0.0)
-            .child(text(label.to_string()).font(crate::screen::body(13.0, 500.0)).color(c(if primary && !danger { "on-primary" } else { "text-bright" })).wrap_anywhere().min_w(0.0));
+            .min_w(0.0);
+        if working {
+            b = b.gap(6.0).justify_center().child(crate::screen::busy_spinner(14.0, ink));
+        }
+        let b = b.child(text(label.to_string()).font(crate::screen::body(13.0, 500.0)).color(ink).wrap_anywhere().min_w(0.0));
+        if working {
+            return b.busy(true);
+        }
         if enabled {
             b.hover(c(hover)).cursor(Cursor::Pointer)
         } else {

@@ -174,6 +174,9 @@ pub struct Node {
     pub variant: Option<String>,
     pub icon: Option<String>,
     pub disabled: bool,
+    /// `button`: its action is running. Keeps its colours, shows a spinner,
+    /// ignores presses. `disabled` wins when both are set.
+    pub busy: bool,
     pub secure: bool,
     /// `split` and `divider`: true for side by side (a vertical divider).
     pub vertical: bool,
@@ -271,6 +274,7 @@ impl Node {
             variant: None,
             icon: None,
             disabled: false,
+            busy: false,
             secure: false,
             vertical: false,
             stick_bottom: false,
@@ -330,7 +334,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("column", Kind::Column, Positional::Children, BOX_PROPS),
     ("list", Kind::List, Positional::Children, &["gap"]),
     ("scroll", Kind::Scroll, Positional::Children, &["gap", "stick_bottom", "fade"]),
-    ("button", Kind::Button, Positional::Text, &["on", "arg", "variant", "icon", "disabled", "color", "dense", "keys", "tab_stop", "hover", "tone", "compact"]),
+    ("button", Kind::Button, Positional::Text, &["on", "arg", "variant", "icon", "disabled", "busy", "color", "dense", "keys", "tab_stop", "hover", "tone", "compact"]),
     ("input", Kind::Input, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "secure", "disabled", "tone"]),
     ("icon", Kind::Icon, Positional::Text, &["color", "size"]),
     ("badge", Kind::Badge, Positional::Text, &["tone", "pill"]),
@@ -907,7 +911,7 @@ fn check(n: &Node, name: &str) -> Result<(), String> {
     if needs_id && n.id.is_none() {
         return Err(format!("{name} needs an 'id'"));
     }
-    if matches!(n.kind, Kind::Button | Kind::Menu | Kind::Select | Kind::Checkbox) && n.on.is_none() && !n.disabled {
+    if matches!(n.kind, Kind::Button | Kind::Menu | Kind::Select | Kind::Checkbox) && n.on.is_none() && !n.disabled && !n.busy {
         return Err(format!("{name} needs 'on' (the action it calls) unless disabled"));
     }
     if n.kind == Kind::Icon && !crate::icons::exists(&n.text) {
@@ -1136,6 +1140,7 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "paint" => n.paint = Some(paint_of(v)?),
         "icon" => n.icon = Some(string_of(v)?),
         "disabled" => n.disabled = bool_of(v)?,
+        "busy" => n.busy = bool_of(v)?,
         "secure" => n.secure = bool_of(v)?,
         "vertical" => n.vertical = bool_of(v)?,
         "stick_bottom" => n.stick_bottom = bool_of(v)?,

@@ -73,7 +73,7 @@ return {
           row{ gap = 8, w = "full",
             select{ id = "tpl-sandbox", items = items, value = chosen, on = "pick", placeholder = "No sandbox" },
             column{ grow = 1, min_w = 0, input{ id = "tpl-tag", value = state.tag, placeholder = "tag, e.g. web-base", on = "tag", on_submit = "save" } },
-            button{ saving and "Saving…" or "Save", icon = "check", variant = "primary", on = "save", disabled = saving ~= nil or chosen == nil, key = "tpl-save" },
+            button{ saving and "Saving…" or "Save", icon = "check", variant = "primary", on = "save", busy = saving ~= nil, disabled = saving == nil and chosen == nil, key = "tpl-save" },
           },
           saving and note("Saving " .. saving.sandbox .. " as " .. saving.tag .. ": this can take minutes.") or false,
         },

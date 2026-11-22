@@ -53,7 +53,7 @@ return {
         checkbox{ "Overwrite an existing file", value = state.overwrite, on = "overwrite", key = "env-overwrite" },
         spacer{},
         button{ "Copy", icon = "copy", on = "copy", disabled = (e.yaml or "") == "", key = "env-copy" },
-        button{ "Save file", icon = "check", variant = "primary", on = "save", disabled = e.loading == true, key = "env-save" },
+        button{ "Save file", icon = "check", variant = "primary", on = "save", busy = e.loading == true, key = "env-save" },
       },
     }
   end,

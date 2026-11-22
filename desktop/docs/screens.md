@@ -264,6 +264,7 @@ the focus ring (2 pt, blue, 2 pt outside) when the keyboard reaches it.
 | `icon` | icon name | Before the label |
 | `color` | colour | The label's and icon's colour |
 | `disabled` | bool | Greyed, not pressable |
+| `busy` | bool | Its action is running: keeps its colours, a small spinner takes the icon's place (or leads the label), presses are ignored; reads as busy to screen readers; Reduce Motion: the ring rests. Use it, not `disabled`, while a request to the daemon runs; `disabled` wins if both are set |
 | `dense` | bool | 24 pt instead of 28, 12 pt label: for bars that are dense on purpose |
 | `keys` | list of strings | Its shortcut, drawn as keycaps in its tooltip after the `help` text: `keys = { "⌘", "K" }` |
 | `tab_stop` | bool | `false`: left out of the Tab order, still pressable (a row's secondary actions, which its own keys and its menu reach) |
