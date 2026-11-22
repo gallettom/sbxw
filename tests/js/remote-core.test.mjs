@@ -15,7 +15,7 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'RC_PILL_TONES', 'rcPills', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcAnswerPick', 'rcAnswers', 'rcAnswerFail', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'rcAwayFromEnd', 'rcSkillMatches', 'rcSkillInsert', 'rcSkillLine', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcWaiting', 'rcToastChoice', 'rcLeaderInfo', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'rcAwayFromEnd', 'rcSkillMatches', 'rcSkillInsert', 'rcSkillLine', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcStopped', 'rcFold', 'rcWaiting', 'rcToastChoice', 'rcLeaderInfo', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
   'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
@@ -985,10 +985,46 @@ test('the picker: team leaders first, then sandboxes, those that need you first 
   assert.deepEqual(none.map(x => [x.kind, x.count, x.icon, x.empty]), [['leader', 0, 'home-i-team', 'No team leader running'], ['sandbox', 0, 'home-i-box', 'No other sandbox running']]);
 });
 test('the Waiting for you tiles: the Approvals kinds, colours and icons, 0 dimmed', () => {
-  const t = plain(rc.rcWaiting({ plans: 2, merges: 0, network: '3', stopped: -1 }));
-  assert.deepEqual(t.map(x => [x.what, x.n, x.zero]), [['plans', 2, false], ['merges', 0, true], ['network', 3, false], ['stopped', 0, true]]);
-  assert.deepEqual(t.map(x => [x.cls, x.icon]), [['rc-k-plans', 'ap-i-plans'], ['rc-k-merges', 'ap-i-merges'], ['rc-k-network', 'ap-i-network'], ['rc-k-stopped', 'ap-i-stopped']]);
+  const t = plain(rc.rcWaiting({ plans: 2, merges: 0, network: '3', stopped: 4 }));
+  assert.deepEqual(t.map(x => [x.what, x.n, x.zero]), [['plans', 2, false], ['merges', 0, true], ['network', 3, false]], 'stopped sandboxes are no tile');
+  assert.deepEqual(t.map(x => [x.cls, x.icon]), [['rc-k-plans', 'ap-i-plans'], ['rc-k-merges', 'ap-i-merges'], ['rc-k-network', 'ap-i-network']]);
   assert.ok(plain(rc.rcWaiting(null)).every(x => x.n === 0 && x.zero), 'no counts: all zero');
+});
+test('the home: stopped sandboxes are a third group, last, only when there are any', () => {
+  const leaders = { leaders: [{ sandbox: 'web', kind: 'leader', state: 'idle' }, { sandbox: 'a', kind: 'sandbox', state: 'idle' }] };
+  const stopped = [
+    { name: 'old', agent: 'claude', chat: false, workspace: '/Users/me/dev/old', created_at: 'x' },
+    { name: 'notes', agent: '', chat: true, workspace: null },
+    { name: '', agent: 'claude' }, null, { agent: 'claude' },
+  ];
+  const g = plain(rc.rcGroups(leaders, stopped));
+  assert.deepEqual(g.map(x => [x.kind, x.title, x.count]), [['leader', 'Team leaders', 1], ['sandbox', 'Sandboxes', 1], ['stopped', 'Stopped sandboxes', 2]]);
+  assert.equal(g[2].icon, 'ap-i-stopped');
+  assert.deepEqual(g[2].items, [{ name: 'old', line: 'claude · /Users/me/dev/old' }, { name: 'notes', line: 'chat' }], 'a name, then the agent (or chat) and the path; no name, no card');
+  for (const none of [undefined, null, [], 'x', [{ agent: 'claude' }]]) {
+    assert.deepEqual(plain(rc.rcGroups(leaders, none)).map(x => x.kind), ['leader', 'sandbox'], `no stopped group for ${JSON.stringify(none)}`);
+  }
+  assert.deepEqual(plain(rc.rcStopped([{ name: 'x', agent: 7, workspace: { a: 1 } }])), [{ name: 'x', line: '' }], 'odd fields are dropped');
+});
+test('the stopped group folds past three entries, until Show all', () => {
+  const n = k => Array.from({ length: k }, (_, i) => `s${i}`);
+  for (const k of [0, 1, 3]) assert.deepEqual(plain(rc.rcFold(n(k), false)), { shown: n(k), rest: 0, open: false }, `${k}: never folded`);
+  assert.deepEqual(plain(rc.rcFold(n(4), false)), { shown: n(3), rest: 1, open: false });
+  assert.deepEqual(plain(rc.rcFold(n(9), false)), { shown: n(3), rest: 6, open: false });
+  assert.deepEqual(plain(rc.rcFold(n(9), true)), { shown: n(9), rest: 6, open: true }, 'opened: all, with Show fewer');
+  assert.deepEqual(plain(rc.rcFold(n(2), true)), { shown: n(2), rest: 0, open: false }, 'nothing to fold');
+  assert.deepEqual(plain(rc.rcFold(null, false)), { shown: [], rest: 0, open: false });
+});
+test('the sprite: kind icons are outlines (a circle in the sprite is never a filled dot)', () => {
+  const css = read('../../assets/remote/remote.css');
+  const html = read('../../assets/remote/index.html');
+  // The page draws every svg circle filled; a <use> clone matches as its
+  // symbol is placed, in the sprite, so the sprite must undo that.
+  assert.match(css, /svg circle \{ fill: currentColor; stroke: none; \}/);
+  assert.match(css, /\.rc-sprite symbol circle \{ fill: none; stroke: currentColor; \}/);
+  const sprite = html.slice(html.indexOf('<svg class="rc-sprite"'), html.indexOf('</svg>', html.indexOf('<svg class="rc-sprite"')));
+  assert.match(sprite, /id="ap-i-network"[^]*?<circle cx="12" cy="12" r="9"\/>/, 'the globe is a circle, outlined by the rule above');
+  assert.doesNotMatch(sprite, /fill=|style=/, 'no symbol sets its own fill');
 });
 test('a card info line: only what is known', () => {
   const models = [{ id: 'claude-opus-5-5', label: 'Opus 5.5' }];

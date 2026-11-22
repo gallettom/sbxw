@@ -408,12 +408,32 @@ function rcRank(l) {
 // then the running sandboxes with no team, each in rcLeaders' order. An entry
 // without a kind is a leader (a daemon from before v1.5). Both groups are
 // always returned, even empty, with their icon id, count and empty line.
-function rcGroups(data) {
+// `stopped`: the `sandboxes` of /r/stopped (level 2), or nothing. Its group
+// comes last and only when it has an entry: the phone lists them here, not
+// in Approvals (they are not a request), and removes one from its detail.
+function rcGroups(data, stopped) {
   const all = rcLeaders(data);
+  const off = rcStopped(stopped);
   return [
     { kind: 'leader', title: 'Team leaders', icon: 'home-i-team', empty: 'No team leader running', items: all.filter(l => l.kind !== 'sandbox') },
     { kind: 'sandbox', title: 'Sandboxes', icon: 'home-i-box', empty: 'No other sandbox running', items: all.filter(l => l.kind === 'sandbox') },
+    ...(off.length ? [{ kind: 'stopped', title: 'Stopped sandboxes', icon: 'ap-i-stopped', empty: '', items: off }] : []),
   ].map(g => ({ ...g, count: g.items.length }));
+}
+// The stopped sandboxes as the home shows them: a name (else dropped), and
+// one line, the agent (or "chat") and the workspace path, as text.
+function rcStopped(list) {
+  const s = v => (typeof v === 'string' ? v : '');
+  return (Array.isArray(list) ? list : [])
+    .filter(x => x && typeof x === 'object' && s(x.name))
+    .map(x => ({ name: x.name, line: [s(x.agent) || (x.chat === true ? 'chat' : ''), s(x.workspace)].filter(Boolean).join(' · ') }));
+}
+// A long home group folds: more than `limit` entries show the first
+// `limit` and a "Show all" for the rest, until opened.
+function rcFold(items, open, limit = 3) {
+  const list = Array.isArray(items) ? items : [];
+  const fold = list.length > limit;
+  return { shown: fold && !open ? list.slice(0, limit) : list, rest: fold ? list.length - limit : 0, open: fold && !!open };
 }
 
 // The toast when the Approvals count rose by `delta`: `fresh` is the items the
@@ -434,9 +454,10 @@ function rcToastChoice(fresh, delta) {
 // The "Waiting for you" tiles: one per Approvals kind, in the Approvals
 // order, with the same class and icon (rcApKind) and the count the page
 // already has for its badge. A missing or odd count is 0 (shown dimmed).
+// Stopped sandboxes wait for nobody: they have their own home group.
 function rcWaiting(counts) {
   const n = k => (counts && typeof counts === 'object' ? Math.max(0, Math.floor(Number(counts[k]))) || 0 : 0);
-  return [['plans', 'Plans'], ['merges', 'Merges'], ['network', 'Network'], ['stopped', 'Stopped']]
+  return [['plans', 'Plans'], ['merges', 'Merges'], ['network', 'Network']]
     .map(([what, label]) => ({ what, label, n: n(what), zero: n(what) === 0, ...rcApKind(what) }));
 }
 
@@ -1184,12 +1205,15 @@ function rcL2Fail(res) {
 }
 // ── The Approvals sandbox filter: a display filter, nothing more ──
 // Works on the lists the page already read. Every list item names its
-// sandbox (`sandbox`; a stopped sandbox is its own, so `name`). Nothing here
-// decides what the device may see or approve: it only hides rows.
+// sandbox (`sandbox`). Nothing here decides what the device may see or
+// approve: it only hides rows.
 function rcApSandbox(what, it) {
-  const v = what === 'stopped' ? it?.name : it?.sandbox;
+  const v = it?.sandbox;
   return typeof v === 'string' ? v : '';
 }
+// What Approvals lists: plans, merges and network requests. Stopped
+// sandboxes are not a request: the home lists them (rcGroups).
+const RC_AP_LISTS = ['plans', 'merges', 'network'];
 // What the badge says (API-level2.md, `counts`): the number is plan decisions
 // only (plans and merges waiting); network requests never add to it, they
 // raise a dot; stopped sandboxes are a list, not a request, and count for
@@ -1198,13 +1222,14 @@ function rcApBadge(counts) {
   const n = k => (counts && typeof counts === 'object' ? Math.max(0, Math.floor(Number(counts[k]))) || 0 : 0);
   return { n: n('plans') + n('merges'), dot: n('network') > 0 };
 }
-// `lists`: { plans: [...], merges: [...], network: [...], stopped: [...] }.
+// `lists`: { plans: [...], merges: [...], network: [...] } (anything else,
+// such as stopped sandboxes, is not counted).
 // One entry per sandbox that has something waiting, with its count, in the
 // order the app uses for leaders (rcLeaders); the rest after, by name.
 function rcApEntries(lists, leaders, keep) {
   const counts = new Map();
-  const per = new Map(); // sandbox -> { plans, merges, network, stopped }
-  for (const what of ['plans', 'merges', 'network', 'stopped']) {
+  const per = new Map(); // sandbox -> { plans, merges, network }
+  for (const what of RC_AP_LISTS) {
     for (const it of Array.isArray(lists?.[what]) ? lists[what] : []) {
       const s = rcApSandbox(what, it);
       if (!s) continue;
@@ -2125,10 +2150,10 @@ function rcCvRemarkResult(res, what) {
   return { tone: 'err', text: `${what}: not saved (${err}).` };
 }
 
-// The plan usage (GET /r/usage): the two windows as rows for the menu block
-// and the compact line of the picker. Pure: `now` in ms, local time for the
-// reset's clock. A window with no percentage is left out; none at all means
-// `has: false` ("No reading yet").
+// The plan usage (GET /r/usage): the two windows as rows, for the compact
+// line of the picker and the conversation's line (rcUsageLine). Pure: `now`
+// in ms, local time for the reset's clock. A window with no percentage is
+// left out; none at all means `has: false` (no line).
 const RC_USAGE_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 function rcUsageTone(pct) { return pct >= 90 ? 'red' : pct >= 75 ? 'amber' : 'ok'; }
 function rcUsageReset(at, now) {
@@ -2161,6 +2186,17 @@ function rcUsage(u, now) {
     rows,
     updated: !ago ? '' : ago === 'now' ? 'updated just now' : `updated ${ago} ago`,
     compact: rows.map(r => `${r.key === 'five' ? '5 h' : '7 d'} ${r.pct}%`).join(' · '),
+  };
+}
+// The conversation's one usage line, under Model and Lead: each window's
+// percent with its tone (amber from 75, red from 90), then the first reset
+// known (the 5-hour one when there is one). `u` is rcUsage's answer.
+function rcUsageLine(u) {
+  const rows = u && Array.isArray(u.rows) ? u.rows : [];
+  return {
+    has: rows.length > 0,
+    parts: rows.map(r => ({ text: `${r.key === 'five' ? '5 h' : '7 d'} ${r.pct}%`, tone: r.tone })),
+    reset: (rows.find(r => r.reset) || {}).reset || '',
   };
 }
 

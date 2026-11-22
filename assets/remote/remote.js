@@ -58,6 +58,8 @@
   const st = {
     me: null,
     leaders: [],
+    stopped: [],         // /r/stopped's sandboxes, for the home's last group
+    stoppedOpen: false,  // that group unfolded ("Show all")
     models: [],          // the model list from /r/models
     modelsAsked: false,
     skills: [],          // the skill names from /r/skills
@@ -110,7 +112,7 @@
     $('mark').hidden = BACK.includes(id);
     $('approvals-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     if (id !== 's-item') closeSheet();
-    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; $('skill-list').hidden = true; $('to-end').hidden = true; disarmInterrupt(); } else { loadModels(); loadSkills(); }
+    if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; $('ctl-usage').hidden = true; $('skill-list').hidden = true; $('to-end').hidden = true; disarmInterrupt(); } else { loadModels(); loadSkills(); loadUsage(); }
     $('menu-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     closeMenu();
   }
@@ -264,7 +266,11 @@
     // Level 2's counts: numbers only.
     es.addEventListener('approvals', e => {
       const d = parse(e.data);
-      if (d && typeof d === 'object') { st.l2 = { ...(st.l2 || { level2: true }), counts: d }; renderBadge(); if (st.screen === 's-leaders') renderWaiting(); }
+      if (d && typeof d === 'object') {
+        st.l2 = { ...(st.l2 || { level2: true }), counts: d };
+        renderBadge();
+        if (st.screen === 's-leaders') { renderWaiting(); if (d.stopped !== undefined && Number(d.stopped) !== st.stopped.length) loadStopped(); }
+      }
     });
     // A board changed: re-read it if it is the one on screen.
     es.addEventListener('kanban', e => {
@@ -351,13 +357,18 @@
     }
   }
 
-  function showLeaders() {
+  // `done`: a line saying what was just done (a sandbox removed), else none.
+  function showLeaders(done) {
     saveDraft();
     stopRecording(false);
     st.current = null;
+    st.item = null;
     disarmInterrupt();
     setTitle('Sessions', st.me?.name ? `on ${st.me.name}` : '');
     show('s-leaders');
+    const said = typeof done === 'string' ? done : '';
+    $('home-done').textContent = said;
+    $('home-done').hidden = !said;
     renderLeaders();
     refreshHome();
   }
@@ -371,13 +382,26 @@
       if (!st.models.length) st.modelsAsked = false;
     }
     await refreshL2();
-    if (st.screen === 's-leaders') renderLeaders();
+    await loadStopped(true);
+  }
+  // The stopped sandboxes (level 2 only: the Mac refuses the list while it
+  // is off). Read with the home, never on a timer.
+  async function loadStopped(always) {
+    const before = JSON.stringify(st.stopped);
+    if (!st.l2?.level2) st.stopped = [];
+    else {
+      const res = await l2.list('stopped');
+      if (res.ok) st.stopped = Array.isArray(res.data?.sandboxes) ? res.data.sandboxes : [];
+      else if (res.status === 403 || res.status === 404) st.stopped = [];
+    }
+    if (st.screen === 's-leaders' && (always || JSON.stringify(st.stopped) !== before)) renderLeaders();
   }
 
   // Home (API.md 2.4, v1.5): the "Waiting for you" tiles, then two groups that
   // are always shown, team leaders and sandboxes, each with its icon, a count
-  // and an empty line; those that need the person first in each. Names and
-  // the read-only reason are set as text.
+  // and an empty line; those that need the person first in each. Last, the
+  // stopped sandboxes when there are any (level 2), folded past three. Names,
+  // paths and the read-only reason are set as text.
   function svgIcon(id, cls) {
     const SVG = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(SVG, 'svg');
@@ -393,9 +417,9 @@
     const ul = $('leaders');
     const now = Date.now();
     const rows = [];
-    for (const g of rcGroups(st.leaders)) {
+    for (const g of rcGroups(st.leaders, st.stopped)) {
       const head = document.createElement('li');
-      head.className = 'rc-group';
+      head.className = `rc-group${g.kind === 'stopped' ? ' rc-group-stopped rc-k-stopped' : ''}`;
       const h = document.createElement('h2');
       h.className = 'rc-group-title';
       const n = document.createElement('span');
@@ -410,9 +434,50 @@
         e.textContent = g.empty;
         rows.push(e);
       }
+      if (g.kind === 'stopped') { rows.push(...stoppedRows(g)); continue; }
       for (const l of g.items) rows.push(leaderRow(l, now, g.icon));
     }
     ul.replaceChildren(...rows);
+  }
+  // The stopped group: a note when removing cannot be done from here, the
+  // cards (dim), then Show all / Show fewer. A tap opens the detail, where
+  // Remove goes through the sheet and Face ID, as before.
+  function stoppedRows(g) {
+    const out = [];
+    const li = (cls, child) => { const e = document.createElement('li'); e.className = cls; if (child) e.append(child); return e; };
+    if (rcApprovalsBlock(st.l2)) {
+      const p = li('rc-group-note');
+      p.textContent = 'Removing a sandbox from the phone needs Face ID, turned on from your Mac.';
+      out.push(p);
+    }
+    const f = rcFold(g.items, st.stoppedOpen);
+    for (const s of f.shown) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'rc-leader rc-stopped rc-k-stopped';
+      const tile = document.createElement('span');
+      tile.className = 'rc-ltile';
+      tile.append(svgIcon(g.icon));
+      const name = document.createElement('span');
+      name.className = 'rc-leader-name';
+      name.textContent = s.name;
+      const line = document.createElement('span');
+      line.className = 'rc-leader-line';
+      line.textContent = s.line;
+      b.append(tile, name, line);
+      b.addEventListener('click', () => openItem('stopped', s.name, ''));
+      out.push(li('', b));
+    }
+    if (f.rest) {
+      const t = document.createElement('button');
+      t.type = 'button';
+      t.className = 'rc-fold rc-group-more';
+      t.textContent = f.open ? 'Show fewer' : `Show all (${g.count})`;
+      t.setAttribute('aria-expanded', String(f.open));
+      t.addEventListener('click', () => { st.stoppedOpen = !f.open; renderLeaders(); });
+      out.push(li('rc-group-foot', t));
+    }
+    return out;
   }
   // One tile per Approvals kind with the counts the badge already uses; a tap
   // opens Approvals at that kind's section. Hidden while level 2 is off.
@@ -536,6 +601,8 @@
   function renderCtl(l) {
     const box = $('ctl');
     box.hidden = !l || st.screen !== 's-chat';
+    // The usage line goes with the row (and needs a reading).
+    $('ctl-usage').hidden = box.hidden || !$('ctl-usage').childNodes.length;
     if (box.hidden) return;
     const sel = $('model');
     if (sel.options.length !== st.models.length + 1 || sel.dataset.n !== String(st.models.length)) {
@@ -1829,53 +1896,30 @@
     return (await off.startRendering()).getChannelData(0);
   }
 
-  // ── Plan usage: read when the menu opens and when the page shows ──
+  // ── Plan usage: read when the conversation or the menu opens and when the
+  // page shows, no timer. One line on the home, one under Model and Lead.
   const usageSt = { data: null, busy: false };
   function renderUsage() {
     const u = rcUsage(usageSt.data, Date.now());
     const line = $('usage-line');
     line.hidden = !u.has;
     line.textContent = u.has ? `Plan usage: ${u.compact}` : '';
-    const box = $('usage-block');
-    box.textContent = '';
-    if (!u.has) {
-      const p = document.createElement('p');
-      p.className = 'rc-menu-note';
-      p.textContent = 'No reading yet';
-      box.appendChild(p);
-      return;
+    const c = rcUsageLine(u);
+    const box = $('ctl-usage');
+    const kids = [];
+    if (c.has) {
+      kids.push(document.createTextNode('Plan usage: '));
+      c.parts.forEach((p, i) => {
+        if (i) kids.push(document.createTextNode(' · '));
+        const s = document.createElement('span');
+        s.className = `rc-usage-t-${p.tone}`;
+        s.textContent = p.text;
+        kids.push(s);
+      });
+      if (c.reset) kids.push(document.createTextNode(` · ${c.reset}`));
     }
-    for (const r of u.rows) {
-      const row = document.createElement('div');
-      row.className = 'rc-usage-row';
-      const head = document.createElement('p');
-      head.className = 'rc-usage-head';
-      head.textContent = `${r.label}: ${r.pct}%`;
-      const bar = document.createElement('div');
-      bar.className = `rc-usage-bar rc-usage-${r.tone}`;
-      bar.setAttribute('role', 'progressbar');
-      bar.setAttribute('aria-label', `${r.label} limit`);
-      bar.setAttribute('aria-valuenow', String(r.pct));
-      bar.setAttribute('aria-valuemin', '0');
-      bar.setAttribute('aria-valuemax', '100');
-      const fill = document.createElement('span');
-      fill.style.width = `${r.pct}%`;
-      bar.appendChild(fill);
-      row.append(head, bar);
-      if (r.reset) {
-        const n = document.createElement('p');
-        n.className = 'rc-menu-note';
-        n.textContent = r.reset;
-        row.appendChild(n);
-      }
-      box.appendChild(row);
-    }
-    if (u.updated) {
-      const n = document.createElement('p');
-      n.className = 'rc-menu-note';
-      n.textContent = u.updated;
-      box.appendChild(n);
-    }
+    box.replaceChildren(...kids);
+    box.hidden = !c.has || $('ctl').hidden;
   }
   async function loadUsage() {
     if (usageSt.busy) return;
@@ -2357,7 +2401,6 @@
     { what: 'plans', key: 'plans', title: 'Plans to approve', count: 'plans' },
     { what: 'merges', key: 'merges', title: 'Merges proposed', count: 'merges' },
     { what: 'network', key: 'requests', title: 'Network requests', count: 'network' },
-    { what: 'stopped', key: 'sandboxes', title: 'Stopped sandboxes', count: 'stopped' },
   ];
   const el = (tag, cls, text) => {
     const e = document.createElement(tag);
@@ -2399,8 +2442,8 @@
 
   // ── A plan or merge went up: one toast, never a plan's text ──
   // From the counts (the `approvals` event or a refresh). The first count the
-  // page sees is the baseline; going down, or network and stopped going up,
-  // say nothing. The sandbox's name comes from the lists the page already
+  // page sees is the baseline; going down, or network going up, say
+  // nothing (stopped sandboxes are not counted at all). The sandbox's name comes from the lists the page already
   // reads (plans, merges), shown as text.
   async function apSeen() {
     const got = await Promise.all([l2.list('plans'), l2.list('merges')]);
@@ -2498,7 +2541,7 @@
     if (!a?.level2) { st.apLoading = false; $('ap-lists').replaceChildren(); $('ap-filter').hidden = true; $('ap-none').hidden = true; $('ap-empty').hidden = true; return; }
     await loadApLists();
   }
-  // Read the four lists, then draw them. Also the live path: a change of the
+  // Read the three lists, then draw them. Also the live path: a change of the
   // counts re-reads them (nothing is added to what the page asks).
   async function loadApLists() {
     const seq = ++st.apSeq;
@@ -2606,8 +2649,7 @@
     let id, main, meta;
     if (what === 'plans') { id = str(it.id); main = str(it.summary) || id; meta = `${str(it.sandbox)} · ${Number(it.threads) || 0} threads`; }
     else if (what === 'merges') { id = str(it.id); main = `Merge of ${str(it.sandbox)}`; meta = `${str(it.variant)} · ${Number(it.branches) || 0} branches`; }
-    else if (what === 'network') { id = str(it.id); main = str(it.host); meta = str(it.sandbox); }
-    else { id = str(it.name); main = str(it.name); meta = [str(it.agent) || (it.chat ? 'chat' : ''), str(it.workspace)].filter(Boolean).join(' · '); }
+    else { id = str(it.id); main = str(it.host); meta = str(it.sandbox); }
     const txt = el('span', 'rc-ap-txt');
     txt.append(dataEl('span', 'rc-ap-main', main, what === 'network'), dataEl('span', 'rc-ap-meta', meta));
     const chev = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -2949,7 +2991,9 @@
     if (!live()) return;
     if (!res.ok) return failed(res, s);
     closeSheet();
-    showApprovals(rcActDone(s.kind, res.data));
+    // A stopped sandbox is opened from the home: back there, with the line.
+    if (item.what === 'stopped') showLeaders(rcActDone(s.kind, res.data));
+    else showApprovals(rcActDone(s.kind, res.data));
   });
   function failed(res, s) {
     if (res.data?.reason === 'changed') {
@@ -3081,6 +3125,7 @@
 
   // ── Navigation ──
   $('back').addEventListener('click', () => {
+    if (st.screen === 's-item' && st.item?.what === 'stopped') return showLeaders();
     if (st.screen === 's-item' || st.screen === 's-passkey') return showApprovals();
     if (st.screen === 's-approvals') return leaveApprovals();
     if (history.state && history.state.leader) history.back();

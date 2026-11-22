@@ -70,16 +70,13 @@ test('filter: entries and counts, each kind filtered, headings follow, badge kee
     { name: 'All sandboxes', n: '3', dot: true, on: true },
     { name: 'shop', n: '1', dot: true, on: false },
     { name: 'docs', n: '', dot: true, on: false },
-    { name: 'website', n: '2', dot: false, on: false },
-    { name: 'old-experiment', n: '', dot: false, on: false }]);
-  assert.deepEqual(await heads(page), ['Plans to approve 2', 'Merges proposed 1', 'Network requests 3', 'Stopped sandboxes 1']);
+    { name: 'website', n: '2', dot: false, on: false }]);
+  assert.deepEqual(await heads(page), ['Plans to approve 2', 'Merges proposed 1', 'Network requests 3'], 'no stopped sandboxes in Approvals');
   await shot(page, 'all-sandboxes');
   await page.tap('#ap-filter [data-sandbox="website"]');
   assert.deepEqual(await heads(page), ['Plans to approve 1', 'Merges proposed 1']);
   await page.tap('#ap-filter [data-sandbox="docs"]');
   assert.deepEqual(await heads(page), ['Network requests 2']);
-  await page.tap('#ap-filter [data-sandbox="old-experiment"]');
-  assert.deepEqual(await heads(page), ['Stopped sandboxes 1']);
   await page.tap('#ap-filter [data-sandbox="shop"]');
   assert.deepEqual(await heads(page), ['Plans to approve 1', 'Network requests 1']);
   await shot(page, 'one-sandbox');
@@ -99,13 +96,45 @@ test('filter: starts on the leader being looked at when it has something waiting
   await open(page, 'shop');
   assert.deepEqual((await chips(page)).filter(c => c.on).map(c => c.name), ['shop']);
   await page.tap('#ap-filter .rc-ap-fchip >> text=All sandboxes');
-  assert.equal((await heads(page)).length, 4);
+  assert.equal((await heads(page)).length, 3);
   await ctx.close();
   // a leader with nothing waiting: All
   const b = await phone();
   await open(b.page, 'payments-service-with-a-very-long-sandbox-name');
   assert.deepEqual((await chips(b.page)).filter(c => c.on).map(c => c.name), ['All sandboxes']);
   await b.ctx.close();
+});
+
+test('home: stopped sandboxes are its last group, folded past three; Waiting for you has three tiles', { skip }, async () => {
+  const many = Array.from({ length: 5 }, (_, i) => ({ name: `old-${i}`, agent: 'claude', chat: false, workspace: `/Users/me/dev/a-very-long-workspace-path-for-old-${i}`, created_at: '2026-10-02T09:12:00Z' }));
+  await setup(LISTS({ stopped: { sandboxes: many } }), { ...COUNTS, stopped: 5 });
+  const { ctx, page, problems } = await phone();
+  await page.goto(`${base()}/`);
+  await page.waitForSelector('.rc-stopped');
+  assert.deepEqual(await page.$$eval('.rc-wtile .rc-wl', t => t.map(e => e.textContent)), ['Plans', 'Merges', 'Network']);
+  const titles = await page.$$eval('#leaders .rc-group-title', h => h.map(e => e.textContent));
+  assert.equal(titles.length, 3);
+  assert.equal(titles.at(-1), 'Stopped sandboxes5', 'last, with its count');
+  assert.equal(await page.$eval('#leaders > li:last-child', e => e.classList.contains('rc-group-foot')), true, 'the group is last, ending with Show all');
+  assert.equal(await page.$$eval('.rc-stopped', b => b.length), 3, 'folded');
+  assert.equal(await page.textContent('.rc-group-more'), 'Show all (5)');
+  assert.equal(await page.textContent('.rc-stopped .rc-leader-line'), 'claude · /Users/me/dev/a-very-long-workspace-path-for-old-0');
+  await shot(page, 'home-stopped');
+  await page.tap('.rc-group-more');
+  assert.equal(await page.$$eval('.rc-stopped', b => b.length), 5, 'Show all');
+  assert.equal(await page.textContent('.rc-group-more'), 'Show fewer');
+  // A tap opens the detail; Back is the home again.
+  await page.tap('.rc-stopped >> text=old-1');
+  await page.waitForSelector('#s-item:not([hidden])');
+  await page.tap('#back');
+  await page.waitForSelector('#s-leaders:not([hidden])');
+  // No Face ID key: the list stays, with the sentence.
+  await ctl({ l2: { approvals: { passkey: false } } });
+  await page.goto(`${base()}/`);
+  await page.waitForSelector('.rc-group-note');
+  assert.match(await page.textContent('.rc-group-note'), /needs Face ID/);
+  assert.deepEqual(problems, []);
+  await ctx.close();
 });
 
 test('filter: the choice is remembered for the session', { skip }, async () => {
