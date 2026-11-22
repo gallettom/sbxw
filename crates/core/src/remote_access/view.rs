@@ -24,6 +24,10 @@ pub struct PhoneItem {
     pub from: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steps: Option<Vec<PhoneQuestion>>,
+    /// For `kind: "user_prompt"`: the files sent with it, base names only
+    /// (the history keeps no path; `no_upload_paths` once more all the same).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
     /// For `kind: "steps"`: how many tool calls the run held.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<u32>,
@@ -91,7 +95,7 @@ pub struct PhonePage {
 }
 
 fn plain(it: &Item, kind: &'static str) -> PhoneItem {
-    PhoneItem { seq: it.seq, at: it.at, kind, text: String::new(), from: None, steps: None, count: None, clipped: false, provisional: false }
+    PhoneItem { seq: it.seq, at: it.at, kind, text: String::new(), from: None, steps: None, files: Vec::new(), count: None, clipped: false, provisional: false }
 }
 
 /// The phone's copy of `page`. `after`: only items past that seq.
@@ -123,7 +127,12 @@ pub fn phone_page(page: &Page, after: Option<u64>) -> PhonePage {
             items.push(r);
         }
         let shown = match it.kind {
-            Kind::UserPrompt => PhoneItem { text: no_upload_paths(&it.text), clipped: it.clipped, ..plain(it, "user_prompt") },
+            Kind::UserPrompt => PhoneItem {
+                text: no_upload_paths(&it.text),
+                files: it.files.iter().map(|f| no_upload_paths(f)).collect(),
+                clipped: it.clipped,
+                ..plain(it, "user_prompt")
+            },
             Kind::AssistantText => PhoneItem { text: no_upload_paths(&it.text), clipped: it.clipped, provisional: it.provisional, ..plain(it, "assistant_text") },
             Kind::Injected => PhoneItem { text: no_upload_paths(&it.text), clipped: it.clipped, from: it.from.clone(), ..plain(it, "injected") },
             Kind::Question => PhoneItem {
@@ -198,6 +207,7 @@ mod tests {
             result: None,
             from: None,
             steps: None,
+            files: Vec::new(),
             clipped: false,
             provisional: false,
             message: false,
@@ -257,6 +267,16 @@ mod tests {
         let kinds: Vec<&str> = out.items.iter().map(|i| i.kind).collect();
         assert_eq!(kinds, ["user_prompt", "injected", "injected", "steps"]);
         assert_eq!(out.items[3].seq, 16);
+    }
+
+    #[test]
+    fn a_prompt_carries_its_file_names() {
+        let mut me = item(1, Kind::UserPrompt, "look");
+        me.files = vec!["IMG_1838.png".into(), "/tmp/sbxw-uploads/5/x.txt".into()];
+        let out = phone_page(&page(vec![me, item(2, Kind::AssistantText, "ok")]), None);
+        assert_eq!(out.items[0].files, ["IMG_1838.png", "x.txt"]);
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(json.contains(r#""files":["IMG_1838.png","x.txt"]"#) && json.matches("\"files\"").count() == 1, "{json}");
     }
 
     #[test]

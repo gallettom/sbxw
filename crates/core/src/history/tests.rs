@@ -454,3 +454,87 @@ fn a_provisional_reply_gives_way_to_the_next_one() {
     let prov: Vec<&str> = p.items.iter().filter(|i| i.provisional).map(|i| i.text.as_str()).collect();
     assert_eq!(prov, vec!["Second."]);
 }
+
+/// A phone message as Claude Code records it: sbxw types the text and its
+/// attachment block (`uploads::with_attachments`) as one bracketed paste.
+fn pasted(id: &str, body: &str) -> String {
+    format!("\n\n<pasted_content id=\"{id}\">\n{body}\n</pasted_content id=\"{id}\">\n")
+}
+
+#[test]
+fn a_paste_with_files_shows_the_words_and_the_file_names() {
+    let paths = vec![crate::uploads::dest(1795260992700, "IMG_1838.png"), crate::uploads::dest(1795260992701, "notes.txt")];
+    let typed = crate::uploads::with_attachments("Un peu trop gros la police\n\nsecond line", &paths);
+    let c = classify_user_text(&pasted("cf57", &typed));
+    assert_eq!(c.kind, Kind::UserPrompt);
+    assert_eq!(c.text, "Un peu trop gros la police\n\nsecond line");
+    assert_eq!(c.files, ["IMG_1838.png", "notes.txt"]);
+
+    // Files alone: no words, the names still.
+    let c = classify_user_text(&pasted("a1", &crate::uploads::with_attachments("", &paths[..1])));
+    assert_eq!((c.text.as_str(), c.files.as_slice()), ("", &["IMG_1838.png".to_string()][..]));
+
+    // Through the log: a field of its own, never a path.
+    let mut b = HistoryBook::new();
+    post(&mut b, 0, 1, json!([{"t": "user", "text": pasted("cf57", &typed)}]), 1);
+    let p = page(&mut b);
+    assert_eq!(p.items[0].files, ["IMG_1838.png", "notes.txt"]);
+    let wire = serde_json::to_string(&p).unwrap();
+    assert!(!wire.contains("sbxw-uploads") && !wire.contains("pasted_content") && !wire.contains("Attached files"), "{wire}");
+}
+
+#[test]
+fn a_paste_without_files_is_unwrapped() {
+    let c = classify_user_text(&pasted("x9", "sbx policy ls\nAttached files are not mentioned here"));
+    assert_eq!(c.kind, Kind::UserPrompt);
+    assert_eq!(c.text, "sbx policy ls\nAttached files are not mentioned here");
+    assert!(c.files.is_empty());
+    // A block that is not sbxw's own (typed by hand, a path elsewhere, a
+    // line after it) stays the person's text.
+    for body in [
+        "see\n\nAttached files (uploaded to this sandbox):\n- /home/me/a.png",
+        "see\n\nAttached files (uploaded to this sandbox):\n- /tmp/sbxw-uploads/1/a.png\nthanks",
+        "see\n\nAttached files (uploaded to this sandbox):\n- /tmp/sbxw-uploads/1/../../etc/passwd",
+        "see\n\nAttached files (uploaded to this sandbox):",
+    ] {
+        let c = classify_user_text(&pasted("x9", body));
+        assert_eq!((c.text.as_str(), c.files.len()), (body, 0), "{body}");
+    }
+}
+
+#[test]
+fn text_alone_and_lookalike_wrappers_stay_as_they_are() {
+    let c = classify_user_text("just words\n\nAttached files (uploaded to this sandbox):\n- /tmp/sbxw-uploads/1/a.png");
+    assert_eq!(c.kind, Kind::UserPrompt);
+    assert!(c.files.is_empty(), "only a paste is unwrapped and split");
+    assert!(c.text.starts_with("just words"));
+    for raw in [
+        "<pasted_content id=\"a\">hi</pasted_content id=\"b\">",
+        "before <pasted_content id=\"a\">hi</pasted_content id=\"a\">",
+        "<pasted_content id=\"a\">hi</pasted_content id=\"a\"> after",
+        "<pasted_content id=\"a\">one</pasted_content id=\"a\"><pasted_content id=\"a\">two</pasted_content id=\"a\">",
+        "<pasted_content id=\"a b\">hi</pasted_content id=\"a b\">",
+        "<pasted_content id=\"\">hi</pasted_content id=\"\">",
+    ] {
+        let c = classify_user_text(raw);
+        assert_eq!((c.kind, c.text.as_str(), c.files.len()), (Kind::UserPrompt, raw, 0), "{raw}");
+    }
+}
+
+#[test]
+fn a_hostile_file_name_is_carried_as_data() {
+    let name = "<img src=x onerror=alert(1)>\"'.png";
+    let body = format!("look\n\nAttached files (uploaded to this sandbox):\n- /tmp/sbxw-uploads/7/{name}");
+    let mut b = HistoryBook::new();
+    post(&mut b, 0, 1, json!([{"t": "user", "text": pasted("q1", &body)}]), 1);
+    let p = page(&mut b);
+    assert_eq!(p.items[0].text, "look");
+    assert_eq!(p.items[0].files, [name], "kept verbatim: escaping is the renderer's (textContent), not a rewrite here");
+    let wire = serde_json::to_string(&p).unwrap();
+    assert!(wire.contains(r#"<img src=x onerror=alert(1)>\"'.png"#), "{wire}");
+    // A secret in a name is masked like the text.
+    let key = "ghp_FAKEfake0123456789abcdefABCDEF0000";
+    let mut b = HistoryBook::new();
+    post(&mut b, 0, 1, json!([{"t": "user", "text": pasted("q2", &format!("x\n\nAttached files (uploaded to this sandbox):\n- /tmp/sbxw-uploads/7/{key}.txt"))}]), 1);
+    assert!(!serde_json::to_string(&page(&mut b)).unwrap().contains(key));
+}

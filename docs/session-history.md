@@ -56,7 +56,7 @@ carries. Absent fields are left out.
 
 | `kind` | Carries | From |
 |---|---|---|
-| `user_prompt` | `text`: the person's words; a slash command or `!` command as typed (`/model opus`, `! ls`) | transcript; `UserPromptSubmit` (old hook) |
+| `user_prompt` | `text`: the person's words; a slash command or `!` command as typed (`/model opus`, `! ls`); `files`: base names of the files sent with it (see below) | transcript; `UserPromptSubmit` (old hook) |
 | `assistant_text` | `text`; `provisional: true` for `Stop`'s early copy | transcript; `Stop` |
 | `tool_call` | `tool {name, summary, id}` | transcript; `PreToolUse` (old hook) |
 | `tool_result` | `result {status: ok\|error, size, head, id}` | transcript; `PostToolUse` (old hook) |
@@ -67,6 +67,16 @@ carries. Absent fields are left out.
 | `injected` | `text`, `from` | transcript; `UserPromptSubmit` (old hook) |
 
 `clipped: true` says the text was cut at its cap.
+
+**A paste** (a phone message is typed as one) is recorded by Claude Code as
+`<pasted_content id="X">` ... `</pasted_content id="X">`. A user text that is
+exactly one such wrapper, with the same plain id on both tags, is unwrapped.
+When it ends with sbxw's own attachment block (`uploads::with_attachments`: a
+blank line, `Attached files (uploaded to this sandbox):`, then one
+`- /tmp/sbxw-uploads/<ms>/<name>` line per file and nothing after), the block
+is split off into `files` (base names only, masked like the text, at most 32)
+and `text` keeps the person's words. Anything else (a header typed by hand, a
+path elsewhere, mismatched ids, text around the wrapper) stays as it is.
 
 **`injected`** is a user turn the harness wrote, never the person: a message
 from another session (`<cross-session-message from-name=…>`: `from` is the

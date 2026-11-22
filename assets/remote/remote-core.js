@@ -169,7 +169,10 @@ function rcRows(items) {
     const text = typeof it.text === 'string' ? it.text : '';
     const at = Number(it.at) || 0;
     let row = null;
-    if (kind === 'user_prompt' && text) row = { kind: 'me', text };
+    if (kind === 'user_prompt') {
+      const files = rcFiles(it.files);
+      if (text || files.length) row = files.length ? { kind: 'me', text, files } : { kind: 'me', text };
+    }
     else if (kind === 'assistant_text' && text) row = { kind: 'agent', text };
     else if (kind === 'injected' && text) {
       const from = typeof it.from === 'string' && it.from && it.from !== 'sbxw' ? it.from : null;
@@ -187,6 +190,45 @@ function rcRows(items) {
     rows.push(row);
   }
   return rows;
+}
+
+// The files sent with a prompt (the history's `files`: base names): strings
+// only, a path cut to its last part all the same, at most RC_FILES_MAX.
+const RC_FILES_MAX = 32;
+function rcFiles(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter(f => typeof f === 'string')
+    .map(f => f.split(/[\\/]/).pop())
+    .filter(Boolean)
+    .slice(0, RC_FILES_MAX);
+}
+
+// The person's bubble: the text, then one small chip per file. Every name
+// is set as text (textContent), never as markup.
+function rcMeEl(doc, row) {
+  const d = doc.createElement('div');
+  d.className = 'rc-msg rc-me';
+  if (row.text) {
+    const t = doc.createElement('div');
+    t.className = 'rc-me-text';
+    t.textContent = row.text;
+    d.append(t);
+  }
+  const files = rcFiles(row.files);
+  if (files.length) {
+    const box = doc.createElement('div');
+    box.className = 'rc-files';
+    for (const name of files) {
+      const chip = doc.createElement('span');
+      chip.className = 'rc-file';
+      chip.textContent = name;
+      chip.title = name;
+      box.append(chip);
+    }
+    d.append(box);
+  }
+  return d;
 }
 
 // `have` and a newer or older page, by seq, oldest first. A provisional
