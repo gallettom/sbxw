@@ -1083,3 +1083,19 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-toend:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .rc-toend-dot { position: absolute; top: 4px; right: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--c-blue); border: 2px solid var(--c-surface); box-sizing: content-box; }
 .rc-toend-dot[hidden] { display: none; }
+
+/* ── Files sent with a message: small chips under the person's text ── */
+.rc-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.rc-me-text + .rc-files { margin-top: 8px; }
+.rc-file {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--c-hair);
+  background: rgba(0, 0, 0, 0.18);
+  font-size: var(--fs-xs);
+  color: var(--c-text-bright);
+}

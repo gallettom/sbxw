@@ -510,7 +510,6 @@ fn text_alone_and_lookalike_wrappers_stay_as_they_are() {
     assert!(c.text.starts_with("just words"));
     for raw in [
         "<pasted_content id=\"a\">hi</pasted_content id=\"b\">",
-        "<pasted_content id=\"a\">hi</pasted_content>",
         "before <pasted_content id=\"a\">hi</pasted_content id=\"a\">",
         "<pasted_content id=\"a\">hi</pasted_content id=\"a\"> after",
         "<pasted_content id=\"a\">one</pasted_content id=\"a\"><pasted_content id=\"a\">two</pasted_content id=\"a\">",

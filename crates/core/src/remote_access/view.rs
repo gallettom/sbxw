@@ -270,6 +270,16 @@ mod tests {
     }
 
     #[test]
+    fn a_prompt_carries_its_file_names() {
+        let mut me = item(1, Kind::UserPrompt, "look");
+        me.files = vec!["IMG_1838.png".into(), "/tmp/sbxw-uploads/5/x.txt".into()];
+        let out = phone_page(&page(vec![me, item(2, Kind::AssistantText, "ok")]), None);
+        assert_eq!(out.items[0].files, ["IMG_1838.png", "x.txt"]);
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(json.contains(r#""files":["IMG_1838.png","x.txt"]"#) && json.matches("\"files\"").count() == 1, "{json}");
+    }
+
+    #[test]
     fn after_keeps_only_newer_items() {
         let p = page(vec![item(1, Kind::UserPrompt, "a"), item(2, Kind::AssistantText, "b"), item(3, Kind::Injected, "c")]);
         let out = phone_page(&p, Some(1));

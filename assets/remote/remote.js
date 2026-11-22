@@ -733,8 +733,7 @@
       agentInto(body, r.text);
       d.append(body);
     } else if (r.kind === 'me') {
-      d.className = 'rc-msg rc-me';
-      d.textContent = r.text;
+      return rcMeEl(document, r);
     } else if (r.kind === 'sbxw') {
       d.className = 'rc-sbxw';
       const b = document.createElement('b');
