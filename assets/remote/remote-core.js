@@ -414,8 +414,8 @@ function rcClient(fetchImpl, hooks = {}) {
     skills: () => call('GET', '/r/skills'),
     runSkill: (s, name, args) => call('POST', `${at(s)}/skill`, { name, args }),
     setLead: (s, on) => call('POST', `${at(s)}/lead`, { on: !!on }),
-    // A new ticket on a leader's board: text only, it lands in Planned.
-    createTicket: (s, title, description) => call('POST', `${at(s)}/kanban`, { title, description }),
+    // A new ticket on a leader's board: text and up to 5 upload ids, it lands in Planned.
+    createTicket: (s, title, description, attachments = []) => call('POST', `${at(s)}/kanban`, attachments.length ? { title, description, attachments } : { title, description }),
     transcribe: pcm => call('POST', '/r/voice/transcribe', undefined, pcm),
     // For the level-2 routes (rcL2Client): the same call, nothing more.
     get: path => call('GET', path),
