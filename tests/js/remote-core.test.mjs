@@ -15,7 +15,7 @@ const chatSrc = read('../../assets/js/chat-core.js');
 const fx = JSON.parse(read('./remote-fixtures.json'));
 
 const NAMES = ['rcAgentHtml', 'RC_PILL_TONES', 'rcPills', 'rcRows', 'rcMerge', 'rcPage', 'rcLeaders', 'rcStateLabel', 'rcAgo', 'rcPending', 'rcAnswerPick', 'rcAnswers', 'rcAnswerFail', 'rcActivity', 'rcPairCode',
-  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'rcAwayFromEnd', 'rcSkillMatches', 'rcSkillInsert', 'rcSkillLine', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcStopped', 'rcFold', 'rcWaiting', 'rcToastChoice', 'rcLeaderInfo', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
+  'RC_PAIR_TEXT', 'rcPairState', 'rcDeviceName', 'rcCleanName', 'rcClient', 'rcFailText', 'rcMessageCheck', 'RC_INVISIBLE_RANGES', 'rcAwayFromEnd', 'rcSkillMatches', 'rcSkillInsert', 'rcSkillLine', 'RC_MSG_REASON', 'rcSendGate', 'rcGroups', 'rcStopped', 'rcFold', 'rcWaiting', 'rcToastChoice', 'rcLeaderInfo', 'rcReadOnly', 'rcReadOnlyShort', 'rcWithDictation', 'chatMarkdown',
   'CHAT_SECRET_NAMES', 'chatSecretName', 'chatShortName', 'chatUploadName', 'rcCheckAttach', 'RC_UPLOAD_MAX_FILES', 'RC_UPLOAD_MAX_BYTES', 'RC_UPLOAD_MAX_TOTAL',
   'RC_UPLOAD_REASON', 'rcUploadFail', 'rcUploadDone', 'rcUploadXhr', 'rcTray', 'rcStatus', 'rcLevel', 'rcClock', 'rcWaveMode',
   'rcB64u', 'rcFromB64u', 'rcCreateOptions', 'rcGetOptions', 'rcRegistrationBody', 'rcAssertionBody', 'rcCeremonyError', 'rcApprovalsBlock',
@@ -344,6 +344,24 @@ test('the check before sending matches the daemon\'s rule', () => {
   assert.equal(rc.RC_MSG_REASON.busy, 'The session is busy right now: try again in a few seconds. Meanwhile you can read it and interrupt it.');
   for (const s of ['', '   ', '\n\n']) assert.equal(rc.rcMessageCheck(s), 'empty');
   for (const s of ['hello', 'café ünïcödé 日本語 😀', 'a/b and c#d', 'line one\nline two', 'see https://x.example/#a', 'Fix it! Now.']) assert.equal(rc.rcMessageCheck(s), null, JSON.stringify(s));
+});
+
+test('the phone refuses the one invisible list of crates/core/src/invisible.rs', () => {
+  const rs = read('../../crates/core/src/invisible.rs');
+  const body = /pub const INVISIBLE[^=]*=\s*&\[([\s\S]*?)\n\];/.exec(rs)[1];
+  const want = [...body.matchAll(/\('\\u\{([0-9a-f]+)\}',\s*'\\u\{([0-9a-f]+)\}'\)/g)].map(m => [parseInt(m[1], 16), parseInt(m[2], 16)]);
+  assert.ok(want.length >= 20);
+  assert.deepEqual(plain(rc.RC_INVISIBLE_RANGES), want);
+  const inList = n => want.some(([a, b]) => n >= a && n <= b);
+  const cf = /[\p{Cf}\p{Zl}\p{Zp}]/u;
+  for (let n = 0; n <= 0x10FFFF; n++) {
+    if (n >= 0xD800 && n <= 0xDFFF) continue;
+    const ch = String.fromCodePoint(n);
+    // Never looser than before: every format character, separator and control.
+    if (cf.test(ch)) assert.ok(inList(n), `U+${n.toString(16)} is a format character missing from the list`);
+    const control = /\p{Cc}/u.test(ch) && ch !== '\n';
+    assert.equal(rc.rcMessageCheck(`a${ch}b`), inList(n) || control ? 'control' : null, `U+${n.toString(16)}`);
+  }
 });
 
 test('the jump button shows only when the log is away from its end', () => {
