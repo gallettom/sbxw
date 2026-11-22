@@ -108,3 +108,28 @@ async fn perf_hot_paths() {
         hook(&app, &sbs[1], "s1", None, json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": format!("ls {n}")}}));
     });
 }
+
+/// The board's sandbox list against an `sbx` that takes 200 ms a call (a
+/// shell script standing in for it): what the `sbx` calls cost end to end.
+#[tokio::test]
+#[ignore = "a timing, run on demand"]
+async fn perf_board_list_with_a_slow_sbx() {
+    let d = tempfile::tempdir().unwrap();
+    let bin = d.path().join("slow-sbx");
+    std::fs::write(&bin, "#!/bin/sh\nsleep 0.2\necho '[]'\n").unwrap();
+    std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let app = crate::app::AppBuilder {
+        paths: crate::store::Paths::under(d.path()),
+        cfg: sbxw_core::config::Config::default(),
+        sbx: sbxw_sbx::Sbx::new(Arc::new(sbxw_sbx::runner::Process { bin: bin.to_string_lossy().into_owned() })),
+        hosts: crate::hostsys::for_tests(&d.path().join("hosts")),
+        use_api_key: true,
+        sbx_version: Some("0.51.0".into()),
+    }
+    .build();
+    let t = Instant::now();
+    for _ in 0..5 {
+        std::hint::black_box(app.sandboxes().await);
+    }
+    println!("perf: {:<40} {:>10.1} ms/op", "sandboxes() with a 200 ms sbx", t.elapsed().as_secs_f64() * 1e3 / 5.0);
+}
