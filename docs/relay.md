@@ -47,7 +47,9 @@ The call waits about 90 seconds, then returns the answer, a refusal, or "still
 open, check later with `check_sandbox_question`". An agent's tool call never
 hangs on a human who stepped away. If the answer is approved after the call
 returned, sbxw types it into the asking session (the thread, if a thread
-asked).
+asked). The same holds when the call was cut short (the agent's client gave up,
+the connection dropped): the answer is delivered once, either returned by a
+call still waiting or typed in, never both and never neither.
 
 ### Your side
 
