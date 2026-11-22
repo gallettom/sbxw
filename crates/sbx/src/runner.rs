@@ -90,15 +90,31 @@ impl Runner for Process {
             .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("failed to spawn `{}` — is it on your PATH?", self.bin))?;
-        if let (Some(data), Some(mut pipe)) = (inv.stdin, child.stdin.take()) {
-            pipe.write_all(&data).await?;
-            drop(pipe);
-        }
+        // Stdin is fed while both pipes drain: sbx refusing at once (no such
+        // sandbox) closes stdin unread, and its own message must win over the
+        // broken pipe; a child writing a full pipe before it reads would
+        // otherwise deadlock against this write.
+        let stdin = child.stdin.take();
+        let data = inv.stdin;
+        let feed = async move {
+            match (data, stdin) {
+                (Some(data), Some(mut pipe)) => pipe.write_all(&data).await,
+                _ => Ok(()),
+            }
+            // The pipe is dropped here, closing the child's stdin.
+        };
         let out = child.stdout.take();
         let err = child.stderr.take();
         let sink = inv.on_line.clone();
-        let (stdout, stderr) = tokio::join!(drain(out, sink.clone()), drain(err, sink));
+        let (fed, stdout, stderr) = tokio::join!(feed, drain(out, sink.clone()), drain(err, sink));
         let status = child.wait().await?;
+        if let Err(e) = fed {
+            // A failure speaks for itself, in sbx's words. A success that
+            // never took its input is not one: that input may be a secret.
+            if status.success() {
+                return Err(anyhow::Error::new(e).context(format!("`{}` exited before reading its input", self.bin)));
+            }
+        }
         Ok(Output {
             code: status.code(),
             stdout,
@@ -242,5 +258,53 @@ mod tests {
         let mut lines = seen.lock().unwrap().clone();
         lines.sort();
         assert_eq!(lines, ["a", "b", "err", "piped"]);
+    }
+
+    fn big(n: usize) -> Vec<u8> {
+        vec![b'x'; n]
+    }
+
+    /// sbx refusing at once (no such sandbox) closes its stdin unread: its
+    /// own message and exit status are what the caller gets, not a broken pipe.
+    #[tokio::test]
+    async fn a_child_that_exits_without_reading_keeps_its_own_error() {
+        let runner = Process { bin: "sh".into() };
+        let out = runner
+            .run(Invocation {
+                args: vec!["-c".into(), "echo 'sandbox not found' >&2; exit 125".into()],
+                stdin: Some(big(1 << 20)),
+                on_line: None,
+            })
+            .await
+            .expect("sbx's own answer, not a write error");
+        assert_eq!(out.code, Some(125));
+        assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "sandbox not found");
+    }
+
+    /// The same, but sbx says it succeeded without taking its input: that
+    /// is not a success, the input never arrived.
+    #[tokio::test]
+    async fn a_child_that_succeeds_without_reading_its_input_is_an_error() {
+        let runner = Process { bin: "sh".into() };
+        let e = runner
+            .run(Invocation { args: vec!["-c".into(), "exit 0".into()], stdin: Some(big(1 << 20)), on_line: None })
+            .await
+            .unwrap_err();
+        assert!(format!("{e:#}").contains("before reading its input"), "{e:#}");
+    }
+
+    /// A child that writes a full pipe before it reads does not deadlock
+    /// against a parent still writing its stdin.
+    #[tokio::test]
+    async fn output_is_drained_while_stdin_is_written() {
+        let runner = Process { bin: "sh".into() };
+        let run = runner.run(Invocation {
+            args: vec!["-c".into(), "head -c 300000 /dev/zero; cat > /dev/null; echo done".into()],
+            stdin: Some(big(300_000)),
+            on_line: None,
+        });
+        let out = tokio::time::timeout(std::time::Duration::from_secs(10), run).await.expect("no deadlock").unwrap();
+        assert!(out.success());
+        assert_eq!(out.stdout.len(), 300_000 + "done\n".len());
     }
 }

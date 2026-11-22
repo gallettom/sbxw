@@ -53,8 +53,11 @@ pub struct App {
     pub(crate) history: Mutex<sbxw_core::history::HistoryBook>,
     pub(crate) relay: Mutex<RelayBook>,
     /// Parked `wait`s per request: an approval with none is typed into the
-    /// asking session instead, or it is never read.
-    pub(crate) relay_waiters: Mutex<HashMap<String, usize>>,
+    /// asking session instead, or it is never read (see `svc::relay`).
+    pub(crate) relay_waiters: Mutex<HashMap<String, crate::svc::relay::Parked>>,
+    /// Tests only: each relay outcome `tell_asker` typed in, by request id.
+    #[cfg(test)]
+    pub(crate) relay_told: Mutex<Vec<String>>,
     pub(crate) plans: Mutex<PlanBook>,
     /// Keyed by the ref's text form, as the plans that own boards name it.
     pub(crate) boards: Mutex<HashMap<String, sbxw_core::board::Board>>,
@@ -177,6 +180,8 @@ impl AppBuilder {
             history: Mutex::new(sbxw_core::history::HistoryBook::new()),
             relay: Mutex::new(RelayBook::new()),
             relay_waiters: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            relay_told: Mutex::new(Vec::new()),
             plans: Mutex::new(plan_book),
             boards: Mutex::new(HashMap::new()),
             codemap: Mutex::new(RunBook::new()),
@@ -296,6 +301,8 @@ impl App {
         let app = self.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(15));
+            // A slow sbx (up to its timeout) delays the next pass, never bursts.
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tick.tick().await;
                 app.reconcile_sessions().await;
