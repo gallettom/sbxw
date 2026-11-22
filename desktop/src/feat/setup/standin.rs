@@ -40,21 +40,7 @@ fn arr<'a>(data: &'a mut J, key: &str, inner: &str) -> &'a mut Vec<J> {
 }
 
 fn decode(seg: &str) -> String {
-    let b = seg.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&seg[i + 1..i + 3], 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    crate::pct::decode(seg, false)
 }
 
 /// One step of a running voice download per request, so a scripted run sees

@@ -13,6 +13,7 @@
 //! * [`theme`], [`icons`]: the web UI's tokens; the icons screens may name.
 //! * [`fixture`]: daemon data from JSON files, for headless screens.
 //! * [`surface`]: picture surfaces drawn by the core, input back to features; [`socket`]: features' WebSockets.
+//! * [`pct`]: the one percent-decoder (`%xx` in paths, query values and link addresses).
 //! * [`files`]: downloads, opens, reveals and uploads the core runs; [`safe`]: its file-name and open-by-type rules.
 //! * [`terminal`]: a terminal emulator drawn with Rune's grid (thread desktop-terminal).
 
@@ -30,6 +31,7 @@ pub mod jarvis;
 pub mod luau;
 pub mod markdown;
 pub mod mem;
+pub mod pct;
 pub mod perf;
 pub mod picture;
 pub mod safe;

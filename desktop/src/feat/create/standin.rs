@@ -49,21 +49,7 @@ fn query(path: &str) -> (&str, Vec<(String, String)>) {
 }
 
 fn decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = vec![];
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(if b[i] == b'+' { b' ' } else { b[i] });
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    crate::pct::decode(s, true)
 }
 
 /// `{ok, favourites: [{path, name, missing}]}`, `missing` checked against the tree.

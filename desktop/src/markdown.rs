@@ -552,9 +552,15 @@ fn table<S: 'static>(head: &[Vec<Run>], rows: &[Vec<Vec<Run>>], look: &Look, key
 /// The element: blocks stacked with a paragraph's gap. `key` prefixes every
 /// part's key (`<key>-b<N>`), so scripts can find them.
 pub fn view<S: 'static>(src: &str, look: &Look, key: &str, on_link: Option<std::rc::Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>>) -> El {
+    view_blocks::<S>(&cache::parsed(src), look, key, on_link)
+}
+
+/// [`view`] of blocks already parsed. Everything but the parse (look, theme,
+/// pills, key, link handler) is read here, on every call.
+pub(crate) fn view_blocks<S: 'static>(blocks: &[Block], look: &Look, key: &str, on_link: Option<std::rc::Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>>) -> El {
     use crate::theme::{c, hex, radius};
     let mut out = col().w_full().min_w(0.0).gap(8.0);
-    for (i, b) in parse(src).iter().enumerate() {
+    for (i, b) in blocks.iter().enumerate() {
         let k = format!("{key}-b{i}");
         out = out.child(match b {
             Block::Heading(level, runs) => {
@@ -596,6 +602,72 @@ pub fn view<S: 'static>(src: &str, look: &Look, key: &str, on_link: Option<std::
         });
     }
     out
+}
+
+/// Parsed blocks by text, so a long conversation is not parsed again on each
+/// core `view` (400 messages: about 5 ms per view in a release build).
+///
+/// The key is the text itself (hashed, then compared in full on a hit), never
+/// a pointer: a different text is a different entry, so a changed message is
+/// parsed again. Parsing reads nothing but the text, so the theme, the width,
+/// the pills and the link handler need no invalidation: they are applied by
+/// [`view_blocks`] on every call. Bounded: two generations of at most
+/// `GEN_ENTRIES` texts and `GEN_BYTES` bytes each; when the current one is
+/// full it becomes the old one and the old one is dropped, and a text found in
+/// the old one moves back to the current one (least recently used, roughly).
+/// One per thread: the UI thread's views share it.
+mod cache {
+    use super::{parse, Block};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    pub(super) const GEN_ENTRIES: usize = 1024;
+    pub(super) const GEN_BYTES: usize = 2 << 20;
+    /// A longer text is parsed each time and not kept.
+    pub(super) const MAX_TEXT: usize = 256 << 10;
+
+    type Map = HashMap<Box<str>, Rc<Vec<Block>>>;
+
+    #[derive(Default)]
+    pub(super) struct Cache {
+        now: Map,
+        old: Map,
+        /// The text bytes in `now`.
+        bytes: usize,
+    }
+
+    impl Cache {
+        pub(super) fn get(&mut self, src: &str) -> Rc<Vec<Block>> {
+            if let Some(b) = self.now.get(src) {
+                return b.clone();
+            }
+            if src.len() > MAX_TEXT {
+                return Rc::new(parse(src));
+            }
+            let (k, b) = self.old.remove_entry(src).unwrap_or_else(|| (src.into(), Rc::new(parse(src))));
+            if self.now.len() >= GEN_ENTRIES || self.bytes + src.len() > GEN_BYTES {
+                self.old = std::mem::take(&mut self.now);
+                self.bytes = 0;
+            }
+            self.bytes += src.len();
+            self.now.insert(k, b.clone());
+            b
+        }
+
+        #[cfg(test)]
+        pub(super) fn len(&self) -> (usize, usize) {
+            (self.now.len(), self.old.len())
+        }
+    }
+
+    thread_local! {
+        static CACHE: RefCell<Cache> = RefCell::default();
+    }
+
+    pub(super) fn parsed(src: &str) -> Rc<Vec<Block>> {
+        CACHE.with(|c| c.borrow_mut().get(src))
+    }
 }
 
 #[cfg(test)]
@@ -684,5 +756,111 @@ mod tests {
         // Without outer pipes.
         assert!(matches!(&parse("a | b\n--|--\n1 | 2")[0], Block::Table { .. }));
         assert_eq!(plain(&b[1..2]), "#\tDecision\nQ1\tread a | b\nQ2\t");
+    }
+
+    /// Messages of every kind the views show: code blocks, lists, links,
+    /// status labels, tables, headings, long text, empty.
+    fn varied() -> Vec<String> {
+        let mut v: Vec<String> = [
+            "",
+            "plain line",
+            "# Title\n\nline one\nline two",
+            "Step 3 is **done**: `npm test pay` passes.\n\n- one change\n- [[Done]]",
+            "```rust\nfn main() {\n    println!(\"hi\");\n}\n```\nafter the fence",
+            "```\nunclosed fence\n**not bold**",
+            "1. one\n2) two\n   carried on\n- bullet",
+            "See [the docs](https://example.com/a?b=c) and https://example.org/x, not [x](javascript:alert(1)).",
+            "[[Needs you: pick one]] then [[Failed]] and *italics* and __bold__",
+            "| a | **b** |\n|---|:--:|\n| 1 | `2` |\n| 3 |",
+            "\u{e9}t\u{e9} \u{20ac} \u{1f600} \\*escaped\\*",
+            "<script>alert(1)</script> & <b>no html</b>",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        v.push("A long paragraph with **bold**, `code` and a [link](https://example.com). ".repeat(300));
+        v.push(v[3..10].join("\n\n").repeat(8));
+        v
+    }
+
+    /// The cache hands `view` exactly what a fresh parse gives, on a miss, on
+    /// a hit and after eviction; and both paths build an element. (Rune's `El`
+    /// has no public inspection, so the trees are compared through the one
+    /// input they are built from: `view` and `view_blocks` share every other
+    /// line.)
+    #[test]
+    fn cached_blocks_are_the_fresh_parse() {
+        let look = Look { color: 0xdddddd, size: 13.0, pills: None };
+        let mut c = cache::Cache::default();
+        for m in varied() {
+            let fresh = parse(&m);
+            let miss = c.get(&m);
+            assert_eq!(*miss, fresh, "{m:?}");
+            let hit = c.get(&m);
+            assert!(std::rc::Rc::ptr_eq(&miss, &hit), "a second view is a hit: {m:?}");
+            assert_eq!(*hit, fresh);
+            let _ = view::<()>(&m, &look, "k", None);
+            let _ = view_blocks::<()>(&fresh, &look, "k", None);
+        }
+        // Through the thread's cache, as `view` uses it.
+        for m in varied() {
+            assert_eq!(*cache::parsed(&m), parse(&m));
+            assert_eq!(*cache::parsed(&m), parse(&m));
+        }
+    }
+
+    /// A changed text is a new entry (parsed again); a text never matches
+    /// another by its length or a shared prefix.
+    #[test]
+    fn a_changed_text_is_parsed_again() {
+        let mut c = cache::Cache::default();
+        let a = c.get("- one\n- two");
+        let b = c.get("- one\n- twO");
+        assert!(!std::rc::Rc::ptr_eq(&a, &b));
+        assert_eq!(*b, parse("- one\n- twO"));
+        assert_eq!(*c.get("- one"), parse("- one"));
+        assert_eq!(*c.get("- one\n- two"), *a);
+    }
+
+    #[test]
+    fn the_cache_is_bounded() {
+        let mut c = cache::Cache::default();
+        let first = c.get("text 0");
+        for i in 1..cache::GEN_ENTRIES * 3 {
+            c.get(&format!("text {i}"));
+            let (now, old) = c.len();
+            assert!(now <= cache::GEN_ENTRIES && old <= cache::GEN_ENTRIES, "{now} {old}");
+        }
+        // "text 0" was dropped two generations ago: parsed again.
+        assert!(!std::rc::Rc::ptr_eq(&first, &c.get("text 0")));
+        // By bytes: 40 texts of 100 KB never keep more than two generations' worth.
+        let mut c = cache::Cache::default();
+        for i in 0..40 {
+            c.get(&format!("{i} {}", "x".repeat(100 << 10)));
+            let (now, old) = c.len();
+            assert!((now + old) * (100 << 10) <= 2 * cache::GEN_BYTES + (200 << 10), "{now} {old}");
+        }
+        // Over the per-text cap: parsed, not kept.
+        let mut c = cache::Cache::default();
+        let big = "y".repeat(cache::MAX_TEXT + 1);
+        assert_eq!(*c.get(&big), parse(&big));
+        assert_eq!(c.len(), (0, 0));
+    }
+
+    /// A text read again from the old generation moves back to the current
+    /// one, so the messages on screen survive a rotation.
+    #[test]
+    fn a_text_in_use_survives_a_rotation() {
+        let mut c = cache::Cache::default();
+        let kept = c.get("on screen");
+        for i in 0..cache::GEN_ENTRIES {
+            c.get(&format!("other {i}"));
+        }
+        assert_eq!(c.len().1, cache::GEN_ENTRIES, "rotated once");
+        assert!(std::rc::Rc::ptr_eq(&kept, &c.get("on screen")), "found in the old generation");
+        for i in 0..cache::GEN_ENTRIES - 1 {
+            c.get(&format!("again {i}"));
+        }
+        assert!(std::rc::Rc::ptr_eq(&kept, &c.get("on screen")), "moved back on its read: it survives a second rotation");
     }
 }

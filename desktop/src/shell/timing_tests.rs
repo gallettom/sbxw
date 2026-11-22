@@ -71,36 +71,37 @@ fn timing_screen_render() {
 }
 
 /// The core's Markdown element for 400 messages of 884 bytes each (a
-/// long conversation): what each `view` rebuild pays for Markdown nodes.
+/// long conversation): what each `view` rebuild pays for Markdown nodes,
+/// without the parse cache (`view_blocks` on a fresh parse) and with it
+/// (`view`, every text already seen: the steady state while a conversation
+/// is drawn). Then the same for the perf fixture's shorter replies.
 /// Runs without the fixture.
 #[test]
 #[ignore]
 fn timing_markdown_view() {
-    let one = "## Plan\n\nThe **first** step reads `src/main.rs` and the [docs](https://example.com/docs).\n\n- one item with `code`\n- two, *in italics*\n- three\n\n```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n".repeat(4);
+    let long = "## Plan\n\nThe **first** step reads `src/main.rs` and the [docs](https://example.com/docs).\n\n- one item with `code`\n- two, *in italics*\n- three\n\n```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n".repeat(4);
     let look = crate::markdown::Look { color: 0xdddddd, size: 13.0, pills: None };
-    let parse = time(11, || {
-        for _ in 0..400 {
-            std::hint::black_box(crate::markdown::parse(&one));
-        }
-    });
-    let view = time(11, || {
-        for i in 0..400 {
-            std::hint::black_box(crate::markdown::view::<App>(&one, &look, &format!("m{i}"), None));
-        }
-    });
-    eprintln!("timing: markdown 400 x {} bytes: parse {parse:.2} ms, element {view:.2} ms (median of 11)", one.len());
-}
-
-/// `feats_app` (every feature's extras), which a push runs twice: inside
-/// `screen_data` and again for the pane extras.
-#[test]
-#[ignore]
-fn timing_feats_app() {
-    let Some(path) = big() else { return eprintln!("SBXW_PERF_FIXTURE not set: skipped") };
-    let a = App::new(Args { fixture: Some(path), ..Args::default() });
-    let d = a.screen_data();
-    let ms = time(15, || {
-        std::hint::black_box(a.feats_app(&d));
-    });
-    eprintln!("timing: feats_app {ms:.2} ms median of 15");
+    let short: Vec<String> = (0..400).map(|i| format!("Step {i} is **done**: the copy reads better and `npm test pay` passes.\n\n- one change\n- [[Done]]")).collect();
+    // Distinct texts, as in a real conversation (a cache keyed by text must not
+    // win by seeing one text 400 times).
+    let longs: Vec<String> = (0..400).map(|i| format!("{long}{i}")).collect();
+    for (name, msgs) in [("884-byte", &longs), ("fixture", &short)] {
+        let bytes = msgs[0].len();
+        let parse = time(11, || {
+            for m in msgs {
+                std::hint::black_box(crate::markdown::parse(m));
+            }
+        });
+        let fresh = time(11, || {
+            for (i, m) in msgs.iter().enumerate() {
+                std::hint::black_box(crate::markdown::view_blocks::<App>(&crate::markdown::parse(m), &look, &format!("m{i}"), None));
+            }
+        });
+        let cached = time(11, || {
+            for (i, m) in msgs.iter().enumerate() {
+                std::hint::black_box(crate::markdown::view::<App>(m, &look, &format!("m{i}"), None));
+            }
+        });
+        eprintln!("timing: markdown 400 x {bytes} bytes ({name}): parse {parse:.2} ms, element without cache {fresh:.2} ms, with cache {cached:.2} ms (median of 11)");
+    }
 }

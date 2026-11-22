@@ -316,23 +316,7 @@ pub fn parse_panel_url(url: &str) -> Option<(String, Option<String>)> {
         Some((d, a)) => (d, Some(a)),
         None => (rest, None),
     };
-    let dec = |s: &str| {
-        let b = s.as_bytes();
-        let mut out = Vec::with_capacity(b.len());
-        let mut i = 0;
-        while i < b.len() {
-            if b[i] == b'%' && i + 2 < b.len() {
-                if let Some(v) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                    out.push(v);
-                    i += 3;
-                    continue;
-                }
-            }
-            out.push(b[i]);
-            i += 1;
-        }
-        String::from_utf8_lossy(&out).into_owned()
-    };
+    let dec = |s: &str| crate::pct::decode(s, false);
     let doc = dec(doc);
     (!doc.is_empty()).then(|| (doc, anchor.map(dec).filter(|a| !a.is_empty())))
 }
