@@ -3,9 +3,9 @@
 // One modal, one question: "why is the sandbox list empty?". sbxw renders
 // whatever `sbx ls` reports and nothing else, so both cures live on the host
 // (`sbx login`, then restarting the daemon) and there is nothing the UI can
-// press on the user's behalf — it can only show the commands and let them be
-// copied. Reachable from the Help button at the foot of the sidebar — under
-// the list it is a question about — and from the list's own empty state, which
+// press on the user's behalf; it can only show the commands and let them be
+// copied. Reachable from the Help button at the foot of the sidebar (under
+// the list it is a question about) and from the list's own empty state, which
 // is where the question actually gets asked.
 const helpOverlay = document.getElementById('help-modal-overlay');
 
@@ -24,7 +24,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-help-open]')) openHelpModal();
 });
 
-// Copy buttons carry their command verbatim in `data-help-copy` — the visible
+// Copy buttons carry their command verbatim in `data-help-copy`: the visible
 // <code> is HTML-escaped for the redirection operators, so reading it back out
 // of the DOM would be the long way round to the same string.
 helpOverlay.addEventListener('click', e => {

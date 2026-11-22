@@ -2,7 +2,7 @@
 //
 // One modal over `sbx template ls`: each saved template with a remove button,
 // and a form to save a sandbox as a new one. The list is fetched each time the
-// dialog opens — a template saved or removed from a terminal shows up then.
+// dialog opens, so a template saved or removed from a terminal shows up then.
 // Saving runs in the daemon (it takes the sandbox's secrets out first), and
 // can take minutes; the Save button says so while it does.
 const templatesOverlay = document.getElementById('templates-modal-overlay');
@@ -56,7 +56,7 @@ async function loadTemplates() {
   templatesList.innerHTML = rows.map(t => {
     const tags = [
       t.configured ? '<span class="skills-tag skills-tag-default" title="sbxw.toml’s template: new sandboxes start from it">in use</span>' : '',
-      t.auto ? `<span class="skills-tag skills-tag-manual" title="Kept by sbxw for template = &quot;auto&quot; — kits: ${escHtml((t.auto.kits || []).join(', ') || 'none')}">automatic</span>` : '',
+      t.auto ? `<span class="skills-tag skills-tag-manual" title="Kept by sbxw for template = &quot;auto&quot;. Kits: ${escHtml((t.auto.kits || []).join(', ') || 'none')}">automatic</span>` : '',
     ].join('');
     const meta = [t.size, t.created].filter(Boolean).map(escHtml).join(' · ');
     return `<div class="tpl-row">
@@ -93,7 +93,7 @@ templatesSave.addEventListener('click', async () => {
   templatesSave.textContent = 'Save';
   if (!r.ok) { showNote(templatesError, r.error || 'Could not save it'); return; }
   templatesTag.value = '';
-  showToast(r.warnings?.length ? `Saved ${tag} — ${r.warnings.join('; ')}` : `Saved ${sandbox} as ${tag}`);
+  showToast(r.warnings?.length ? `Saved ${tag}: ${r.warnings.join('; ')}` : `Saved ${sandbox} as ${tag}`);
   loadTemplates();
   loadDiskUsage();
 });

@@ -539,7 +539,7 @@ function renderBrowserTabs() {
     // One name whatever the state; the state is `aria-expanded`.
     tab.setAttribute('aria-label', `Browser of ${p.sandbox}: its agent is using it`);
     tab.setAttribute('aria-expanded', String(open));
-    tab.title = open ? 'Hide the browser — it keeps running' : 'Watch what the agent does in its browser';
+    tab.title = open ? 'Hide the browser; it keeps running' : 'Watch what the agent does in its browser';
   });
 }
 

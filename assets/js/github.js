@@ -48,7 +48,7 @@ async function loadGithub() {
     return;
   }
   githubStatus.innerHTML = r.set ? secPill('ok', 'token set') : secPill('off', 'no token');
-  githubToken.placeholder = r.set ? 'Paste a new token to replace it' : 'Paste a token — ghp_… or github_pat_…';
+  githubToken.placeholder = r.set ? 'Paste a new token to replace it' : 'Paste a token: ghp_… or github_pat_…';
   githubRemove.classList.toggle('hidden', !r.set);
   // sbx runs `gh auth token` itself and refreshes it: nothing pasted, nothing
   // to rotate by hand. Offered only when gh is there to run.
@@ -75,7 +75,7 @@ githubUseGh.addEventListener('click', async () => {
   githubUseGh.disabled = true;
   const r = await postJsonOrError('/api/github-token/gh', {});
   githubUseGh.disabled = false;
-  if (!r.ok) { showNote(githubError, r.error || 'sbx could not read a token from gh — is `gh auth login` done?'); return; }
+  if (!r.ok) { showNote(githubError, r.error || 'sbx could not read a token from gh. Is `gh auth login` done?'); return; }
   loadGithub();
 });
 githubToken.addEventListener('keydown', e => { if (isEnterKey(e)) githubSave.click(); });

@@ -1,7 +1,7 @@
 // ── Skills ────────────────────────────────────────────────────────────────
 //
 // One modal listing the commands the bundled kits put in a sandbox and what
-// each does — static markup in index.html — and, above them, the person's own
+// each does (static markup in index.html) and, above them, the person's own
 // skills: ones kept from a sandbox, which every new sandbox gets (see
 // svc/my_skills.rs). Keeping one is the person's act, on this page only: a
 // sandbox can write a skill, never make it reach the others.
@@ -68,12 +68,12 @@ async function mySkillsKeep(btn) {
   const sb = mySkillsBox.value, name = btn.dataset.keep, replace = !!btn.dataset.kept;
   const ask = replace
     ? `Replace your kept /${name} with the one in ${sb}? Sandboxes created from now on get this version.`
-    : `Keep /${name} from ${sb}? Every sandbox created from now on gets it — read its SKILL.md first.`;
+    : `Keep /${name} from ${sb}? Every sandbox created from now on gets it. Read its SKILL.md first.`;
   if (!confirm(ask)) return;
   btn.disabled = true;
   const r = await postJsonOrError(`/api/sandboxes/${encodeURIComponent(sb)}/skills/keep`, { origin: btn.dataset.origin, name, replace });
   if (!r.ok) { btn.disabled = false; showNote(mySkillsError, r.error || 'Could not keep it'); return; }
-  showToast(r.warnings?.length ? `Kept /${name} — ${r.warnings.join('; ')}` : `Kept /${name}: new sandboxes get it`);
+  showToast(r.warnings?.length ? `Kept /${name}: ${r.warnings.join('; ')}` : `Kept /${name}: new sandboxes get it`);
   await Promise.all([mySkillsLoad(), mySkillsLook()]);
 }
 

@@ -5,8 +5,8 @@
 // by clicking away, or by pressing the button again.
 //
 // It sits there rather than in the ports dialog because it is the same kind of
-// thing as the SSH card — something you open, read and copy, not a form you
-// fill in — and because the sandbox it describes is the one you are looking at.
+// thing as the SSH card (something you open, read and copy, not a form you
+// fill in) and because the sandbox it describes is the one you are looking at.
 //
 // The panel is a preview before it is a writer. The one value worth choosing is
 // the folder the file goes in: sbx (0.43+) resolves the file's paths against
@@ -94,7 +94,7 @@ const envCard = bindPopover(envPop, {
   closeButton: 'env-pop-close',
   onOpen: sandbox => {
     envfileTarget = sandbox;
-    document.getElementById('env-pop-title').textContent = `Environment file — ${sandbox}`;
+    document.getElementById('env-pop-title').textContent = `Environment file: ${sandbox}`;
     // Cleared first, then filled by the render: a slow response must never show
     // the previous sandbox's file under the new title.
     envfileYaml.value = '';
