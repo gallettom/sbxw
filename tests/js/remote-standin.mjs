@@ -23,6 +23,8 @@
 // {l2Gone: [ids]} whose detail answers 404, {l2Lists: {plans|merges|network|stopped: <the list's whole answer>}}.
 // Kanban (API-kanban.md): {kanban: {sandbox: board | null}} a board (null:
 // 404, the leader stopped), {tickets: {"sandbox/n": detail}}.
+// Canvas, read only: {canvas: {lists, manifests}}, {canvasReset: true} (see CANVAS).
+// {models: {models: [{id, label}]}} and {usage: {...}} answer /r/models and /r/usage (null: 404).
 // Uploads follow API.md 2.6.1: the raw body, an id of 32 hex back, no path.
 // Live replies (thread phone-live): {newer: {sandbox: page}} what a
 // `?after=` read answers, {newerHold: true} such reads wait until
@@ -69,6 +71,43 @@ function recent(leaders) {
   return l;
 }
 
+// The canvas fixtures: one sandbox with two canvases, one picture for every
+// shot (a made-up sample app screen). {canvas: {lists, manifests}} replaces
+// parts, {canvasReset: true} restores them.
+const CANVAS_PNG = readFileSync(new URL('./remote-canvas-shot.png', import.meta.url));
+const CV1 = 'c-0123456789abcdef';
+const CV2 = 'c-fedcba9876543210';
+const CANVAS = {
+  lists: {
+    shop: [
+      { id: CV1, title: 'Checkout redesign', shots: 3, rounds: 2, new_shots: 1, draft: 1, draft_examples: 0, updated_ms: Date.now() - 12 * 60000 },
+      { id: CV2, title: 'Orders list', shots: 1, rounds: 1, new_shots: 0, draft: 0, draft_examples: 0, updated_ms: Date.now() - 3 * 3600000 },
+    ],
+  },
+  manifests: {
+    [CV1]: {
+      id: CV1, title: 'Checkout redesign', updated_ms: Date.now() - 12 * 60000,
+      rounds: [{ n: 1, at_ms: Date.now() - 3600000, shots: 2 }, { n: 2, at_ms: Date.now() - 12 * 60000, shots: 1 }],
+      shots: [
+        { id: 'orders', round: 1, title: 'Orders, today', note: 'The list after the change', width: 390, file: 's-000000000001.png', px_w: 390, px_h: 700, new: false },
+        { id: 'orders-empty', round: 1, title: 'Orders, empty', note: 'No order yet', width: 390, file: 's-000000000002.png', px_w: 390, px_h: 700, new: false },
+        { id: 'orders', round: 2, title: 'Orders, today', note: 'Larger tags', width: 390, file: 's-000000000003.png', px_w: 390, px_h: 700, new: true },
+      ],
+      pins: [{ n: 1, shot: 'orders', x: 82, y: 16, text: 'The tag could be larger' }],
+      notes: [],
+      draft: 1,
+      draft_examples: 0,
+      limits: { text: 2000 },
+    },
+    [CV2]: {
+      id: CV2, title: 'Orders list', updated_ms: Date.now() - 3 * 3600000,
+      rounds: [{ n: 1, at_ms: Date.now() - 3 * 3600000, shots: 1 }],
+      shots: [{ id: 'orders', round: 1, title: 'Orders', note: '', width: 390, file: 's-000000000004.png', px_w: 390, px_h: 700, new: false }],
+      pins: [], notes: [], draft: 0, draft_examples: 0, limits: { text: 2000 },
+    },
+  },
+};
+
 export function startStandin(port = 0) {
   const s = {
     log: [],
@@ -93,6 +132,9 @@ export function startStandin(port = 0) {
     l2: null,
     kanban: { shop: fx.kanban.board, website: fx.kanban.empty },
     tickets: { 'shop/12': fx.kanban.ticket },
+    canvas: structuredClone(CANVAS),
+    models: null,  // {models: [{id, label}]} for /r/models; null: 404 as before
+    usage: null,   // /r/usage's answer; null: 404 as before
     holds: [],
     push: { on: false, key: Buffer.concat([Buffer.from([4]), randomBytes(64)]).toString('base64url'), keyReply: null, subscribeReplies: [], subs: [] },
   };
@@ -240,6 +282,10 @@ export function startStandin(port = 0) {
       if (c.pkStates) s.l2.pkStates = c.pkStates;
       if (c.kanban) Object.assign(s.kanban, c.kanban);
       if (c.tickets) Object.assign(s.tickets, c.tickets);
+      if (c.canvas) Object.assign(s.canvas, c.canvas);
+      if ('models' in c) s.models = c.models;
+      if ('usage' in c) s.usage = c.usage;
+      if (c.canvasReset) s.canvas = structuredClone(CANVAS);
       if (c.kanbanReset) { s.kanban = { shop: fx.kanban.board, website: fx.kanban.empty }; s.tickets = { 'shop/12': fx.kanban.ticket }; }
       if ('uploadSlow' in c) s.uploadSlow = c.uploadSlow;
       if ('uploadHold' in c) { s.uploadHold = c.uploadHold; if (!c.uploadHold) s.holds.splice(0).forEach(r => r()); }
@@ -302,6 +348,20 @@ export function startStandin(port = 0) {
       s.streams.add(res);
       req.on('close', () => s.streams.delete(res));
       return;
+    }
+    if (p === '/r/models' && s.models) return send(res, 200, s.models);
+    if (p === '/r/usage' && s.usage) return send(res, 200, s.usage);
+    // Canvas (read only here): a sandbox's list, a manifest, its pictures.
+    const cl = /^\/r\/leaders\/([^/]+)\/canvas$/.exec(p);
+    if (cl && req.method === 'GET') return send(res, 200, { canvases: s.canvas.lists[decodeURIComponent(cl[1])] || [] });
+    const cm = /^\/r\/canvas\/(c-[0-9a-f]{16})(?:\/images\/(s-[0-9a-f]{12}\.png))?$/.exec(p);
+    if (cm && req.method === 'GET') {
+      const man = s.canvas.manifests[cm[1]];
+      if (!man) return send(res, 404, { ok: false, error: 'not found' });
+      if (!cm[2]) return send(res, 200, man);
+      if (!man.shots.some(x => x.file === cm[2])) return send(res, 404, { ok: false, error: 'not found' });
+      res.writeHead(200, { ...HEADERS, 'Content-Type': 'image/png' });
+      return res.end(CANVAS_PNG);
     }
     const kb = /^\/r\/leaders\/([^/]+)\/kanban(?:\/(?:T-)?([0-9]{1,9}))?$/.exec(p);
     if (kb && req.method === 'GET') {

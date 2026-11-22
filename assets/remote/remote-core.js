@@ -571,7 +571,7 @@ function rcToastChoice(fresh, delta) {
 function rcWaiting(counts) {
   const n = k => (counts && typeof counts === 'object' ? Math.max(0, Math.floor(Number(counts[k]))) || 0 : 0);
   return [['plans', 'Plans'], ['merges', 'Merges'], ['network', 'Network']]
-    .map(([what, label]) => ({ what, label, n: n(what), zero: n(what) === 0, ...rcApKind(what) }));
+    .map(([what, label]) => ({ what, n: n(what), zero: n(what) === 0, ...rcApKind(what), label }));
 }
 
 // A card's one muted info line, only what is known: the model (its label

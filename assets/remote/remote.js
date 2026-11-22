@@ -113,6 +113,7 @@
     $('approvals-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     if (id !== 's-item') closeSheet();
     if (id !== 's-chat') { $('state').hidden = true; $('interrupt').hidden = true; $('ctl').hidden = true; $('ctl-usage').hidden = true; $('skill-list').hidden = true; $('to-end').hidden = true; disarmInterrupt(); } else { loadModels(); loadSkills(); loadUsage(); }
+    if (id === 's-leaders') loadUsage();
     $('menu-btn').hidden = !(id === 's-leaders' || id === 's-chat');
     closeMenu();
   }
@@ -2029,8 +2030,9 @@
     usageSt.busy = false;
     if (res.ok && res.data && typeof res.data === 'object') { usageSt.data = res.data; renderUsage(); }
   }
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadUsage(); });
-  loadUsage();
+  // Not at start: before pairing the page asks the Mac nothing but /r/me.
+  // The home and the conversation read it when they show.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && (!$('s-chat').hidden || !$('s-leaders').hidden)) loadUsage(); });
 
   // ── Menu: the device, and forgetting it ──
   function closeMenu() {

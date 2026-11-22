@@ -51,7 +51,8 @@ const LISTS = (extra = {}) => ({
 const COUNTS = { plans: 2, merges: 1, network: 3, stopped: 1 };
 const setup = (lists = LISTS(), counts = COUNTS) => ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true, l2Lists: lists, l2: { approvals: { counts } } });
 const chips = page => page.$$eval('#ap-filter .rc-ap-fchip', b => b.map(x => ({ name: x.querySelector('.rc-ap-fname').textContent, n: x.querySelector('.rc-kb-count')?.textContent || '', dot: !!x.querySelector('.rc-ap-dot'), on: x.getAttribute('aria-selected') === 'true' })));
-const heads = page => page.$$eval('#ap-lists .rc-ap-h', h => h.map(x => x.textContent.trim()));
+// A heading is its title and, in its own span, the count: read as "title count".
+const heads = page => page.$$eval('#ap-lists .rc-ap-h', h => h.map(x => [...x.querySelectorAll('.rc-ap-ht, .rc-ap-n')].map(e => e.textContent).join(' ') || x.textContent.trim()));
 async function open(page, from) {
   await page.goto(`${base()}/`);
   await page.waitForSelector('.rc-leader');
