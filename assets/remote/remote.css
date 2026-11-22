@@ -190,6 +190,14 @@ svg circle { fill: currentColor; stroke: none; }
 :focus:not(:focus-visible) { outline: none; }
 :where(button, input, select, textarea):disabled { opacity: var(--disabled-opacity); cursor: not-allowed; }
 .rc-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* Facts side by side (rcFactsInto): a gap, never a middle dot (gate 63).
+   Inline, so a one-line meta still ends in an ellipsis; the ", " between
+   two facts is .rc-vh, for a screen reader only. */
+/* The gap sits after a fact, so a fact that wraps starts flush. */
+.rc-facts > .rc-fact:not(:last-child) { margin-inline-end: var(--sp-3); }
+/* Where a line of short facts wraps, each wraps whole ("updated" never
+   ends a line without its "12 min ago"). */
+.rc-cv-row-line .rc-fact, .rc-cv-shot-line .rc-fact { white-space: nowrap; }
 
 /* ── Buttons ──
    Text buttons: 44 pt high; small ones 36 pt drawn, the target grown to 44
@@ -212,7 +220,9 @@ svg circle { fill: currentColor; stroke: none; }
 .rc-btn:active:not(:disabled) { transform: scale(0.97); }
 /* Busy button (rcBusy): keeps its colour, a 16 px ring before the label, no
    tap. Icon buttons (Send, Interrupt) swap their glyph for the ring. Under
-   reduced motion the ring is a still dot (nothing turns or pulses). */
+   reduced motion the ring is a dot with a slow pulse (opacity only, 1.2 s,
+   nothing turns): the one animation the reduced-motion block lets through,
+   so a busy button still says it is working. */
 .rc-spin {
   flex: none;
   display: inline-block;
@@ -235,7 +245,7 @@ svg circle { fill: currentColor; stroke: none; }
 .rc-send.rc-busy[aria-busy="true"] > svg { animation: none; }
 @keyframes rc-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .rc-spin { border: 0; background: currentColor; width: 8px; height: 8px; margin-right: var(--sp-2); vertical-align: 0; }
+  .rc-spin { border: 0; background: currentColor; width: 8px; height: 8px; margin-right: var(--sp-2); vertical-align: 0; animation: rc-pulse 1.2s ease-in-out infinite; }
   .rc-send.rc-busy .rc-spin, .rc-stop-btn.rc-busy .rc-spin { margin: 0; }
 }
 .rc-primary { background: var(--c-green-deep); border-color: var(--c-green-a45); color: var(--c-white); }
@@ -505,7 +515,6 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 }
 .rc-leader {
   --k: var(--c-text-dim);
-  --k-tint: var(--c-hair);
   width: 100%;
   min-height: 64px;
   display: grid;
@@ -523,23 +532,24 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   transition: background-color var(--dur-micro) var(--ease), transform var(--dur-micro) var(--ease);
 }
 .rc-leader:active { background: var(--c-elevated); transform: scale(0.99); }
-/* State sets the left border and the tile's tint: amber needs you, green
-   working, grey idle, dim not running (by colour, never by opacity: the
-   text keeps 4.5:1). */
-.rc-st-working { --k: var(--c-green); --k-tint: var(--c-green-a14); }
-.rc-st-idle { --k: var(--c-text-muted); --k-tint: var(--c-hair); }
+/* State is shown once a row, twice at most: the left border and the state
+   word (amber needs you, green working, grey idle, dim not running; by
+   colour, never by opacity: the text keeps 4.5:1). The icon tile is
+   neutral: it shows the kind (team or box), not the state. */
+.rc-st-working { --k: var(--c-green); }
+.rc-st-idle { --k: var(--c-text-muted); }
 .rc-st-other { --k: var(--c-dim); }
 .rc-st-other .rc-leader-name { color: var(--c-text-muted); }
-.rc-st-attention { --k: var(--c-amber); --k-tint: var(--c-amber-a16); border-color: var(--c-amber-a45); border-left-color: var(--k); background: linear-gradient(var(--c-amber-a06), var(--c-amber-a06)), var(--c-surface); }
-.rc-ltile { grid-row: 1 / 3; width: 32px; height: 32px; border-radius: var(--r-sm); display: grid; place-items: center; color: var(--k); background: var(--k-tint); }
+.rc-st-attention { --k: var(--c-amber); border-color: var(--c-amber-a45); border-left-color: var(--k); background: linear-gradient(var(--c-amber-a06), var(--c-amber-a06)), var(--c-surface); }
+.rc-ltile { grid-row: 1 / 3; width: 32px; height: 32px; border-radius: var(--r-sm); display: grid; place-items: center; color: var(--c-text-muted); background: var(--c-hair); }
 .rc-ltile svg { width: 18px; height: 18px; }
 .rc-leader-name { color: var(--c-text-bright); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-leader-ago { grid-row: 1; grid-column: 3; font: var(--fs-xs) var(--font-mono); color: var(--c-text-dim); }
 .rc-leader-line { grid-column: 2 / 4; font-size: var(--fs-sm); color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-st-attention .rc-leader-state { color: var(--c-amber); font-weight: 600; }
 .rc-st-working .rc-leader-state { color: var(--c-green); }
-.rc-leader-info { grid-column: 2 / 4; display: flex; align-items: center; gap: var(--sp-2); min-width: 0; font-size: var(--fs-xs); color: var(--c-text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.rc-leader-canvas { flex: none; padding: 0 var(--sp-2); border-radius: var(--r-pill); font-weight: 600; color: var(--c-blue); background: var(--c-blue-a16); }
+.rc-leader-info { grid-column: 2 / 4; min-width: 0; font-size: var(--fs-xs); color: var(--c-text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.rc-leader-canvas { padding: 0 var(--sp-2); border-radius: var(--r-pill); font-weight: 600; color: var(--c-blue); background: var(--c-blue-a16); }
 .rc-empty { padding: var(--sp-14) var(--sp-6); text-align: center; color: var(--c-text-muted); }
 /* The home's groups: always shown, with icon, count and an empty line. The
    list scrolls inside its screen (.rc-screen); a group title stays in view. */
@@ -699,7 +709,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-field:focus-visible { outline: none; }
 .rc-in { color: var(--c-text-muted); }
 .rc-in svg { width: 21px; height: 21px; }
-.rc-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+/* The hidden file input (composer, ticket form); a sent file's chip is .rc-file. */
+.rc-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .rc-field {
   flex: 1;
   min-width: 0;
@@ -1043,6 +1054,9 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-kb-count { font: var(--fs-xs) var(--font-mono); color: var(--c-text-dim); }
 .rc-kb-tab[aria-selected="true"] .rc-kb-count { color: var(--tone); }
 .rc-kb-status { margin: var(--sp-3) max(var(--sp-4), var(--safe-r)) 0 max(var(--sp-4), var(--safe-l)); font-size: var(--fs-sm); color: var(--c-text-muted); }
+/* A region's error line (rcSay): its own state class, the error colour role,
+   one plain sentence, no icon. Loading and empty stay muted. */
+.rc-kb-status.rc-t-err, .rc-log-top.rc-t-err, .rc-ap-fail.rc-t-err, .rc-item > .rc-t-err { color: var(--c-red-ink); }
 .rc-kb-lanes { flex: 1; min-height: 0; display: flex; padding: 0 max(var(--sp-3), var(--safe-r)) 0 max(var(--sp-3), var(--safe-l)); }
 .rc-kb-lane { display: none; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
 .rc-kb-lane.rc-on { display: flex; }
@@ -1132,6 +1146,42 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   white-space: nowrap;
 }
 
+/* ── First load: a skeleton in the shape of the list (rcSkeletonInto) ──
+   Home, Approvals, Kanban and Canvas, until the list's first answer; a
+   refresh of rows already drawn shows none. Its own classes on the cards'
+   metrics (radius, hairline, paddings, min heights), so the real rows take
+   its place without a jump; bars where the text goes, one line box each
+   (1lh). A slow pulse, opacity only, stopped under reduced motion. */
+.rc-skel-row { list-style: none; }
+.rc-skel-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.rc-skel {
+  display: grid; align-content: center; gap: 2px; min-height: 64px;
+  padding: var(--sp-3) var(--sp-4); background: var(--c-surface);
+  border: 1px solid var(--c-hair); border-radius: var(--r-lg);
+  animation: rc-skel 1.6s ease-in-out infinite;
+}
+.rc-skel-bar { display: block; height: 0.75em; margin-block: calc((1lh - 0.75em) / 2); border-radius: var(--r-2xs); background: var(--c-hair-strong); }
+.rc-skel-a { width: 50%; }
+.rc-skel-b { width: 78%; font-size: var(--fs-sm); }
+.rc-skel-c { width: 28%; font-size: var(--fs-sm); }
+.rc-skel-tile { width: 32px; height: 32px; border-radius: var(--r-sm); background: var(--c-hair); }
+.rc-skel-head { padding: var(--sp-2) 2px 2px; }
+.rc-skel-leader { grid-template-columns: 32px minmax(0, 1fr); column-gap: var(--sp-3); padding-left: var(--sp-3); border-left: 3px solid var(--c-hair-strong); }
+.rc-skel-leader .rc-skel-tile { grid-row: 1 / 3; }
+.rc-skel-sec { display: grid; gap: var(--sp-2); }
+.rc-skel-h { margin-top: var(--sp-2); margin-inline-start: var(--sp-1); }
+.rc-skel-group { gap: 1px; border-radius: var(--r-lg); overflow: hidden; background: var(--c-hair); border: 1px solid var(--c-hair); }
+.rc-skel-ap { display: flex; align-items: center; gap: var(--sp-3); min-height: 60px; padding: var(--sp-3); border: 0; border-left: 3px solid var(--c-hair-strong); border-radius: 0; }
+.rc-skel-ap .rc-skel-tile { flex: none; width: 28px; height: 28px; }
+.rc-skel-txt { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.rc-skel-ap .rc-skel-b { font-size: var(--fs-xs); }
+.rc-skel-kb { gap: var(--sp-2); min-height: 96px; }
+.rc-skel-kb .rc-skel-c { font-size: var(--fs-xs); }
+.rc-skel-lane { flex: 1; min-width: 0; padding: var(--sp-1) 0 var(--sp-4); }
+.rc-skel-cv { min-height: 60px; }
+.rc-skel-cv .rc-skel-b { width: 45%; font-size: var(--fs-xs); }
+@keyframes rc-skel { 50% { opacity: 0.55; } }
+
 /* ── Motion: short, and only where something changed ── */
 @keyframes rc-pulse { 50% { opacity: 0.3; } }
 @keyframes rc-rise { from { opacity: 0; transform: translateY(6px); } }
@@ -1142,6 +1192,10 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 @keyframes rc-sheet { from { transform: translateY(24px); opacity: 0.4; } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+  /* The one exception: the busy dot's slow pulse (see .rc-spin), opacity
+     only, no rotation. Without it a busy button would sit still and look
+     stuck. Nothing else is let through. */
+  .rc-spin { animation: rc-pulse 1.2s ease-in-out infinite !important; }
 }
 
 @media (max-width: 340px) {
@@ -1323,7 +1377,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 }
 .rc-cv-row:active { background: var(--c-elevated); }
 .rc-cv-row-title { grid-area: t; font-size: var(--fs-md); font-weight: 600; color: var(--c-text-bright); overflow-wrap: anywhere; }
-.rc-cv-row-line { grid-area: l; font-size: var(--fs-xs); color: var(--c-text-muted); margin-top: 2px; }
+.rc-cv-row-line { grid-area: l; min-width: 0; font-size: var(--fs-xs); color: var(--c-text-muted); margin-top: 2px; }
 .rc-cv-new { grid-area: n; padding: 0 var(--sp-2); line-height: 20px; border-radius: var(--r-pill); background: var(--c-blue-a16); color: var(--c-blue); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
 
 .rc-cv-head {

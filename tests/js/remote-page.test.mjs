@@ -248,6 +248,15 @@ test('leaders, a conversation, a question answered once on a tap', { skip }, asy
   assert.deepEqual(await page.$$eval('.rc-stopped .rc-leader-name', els => els.map(e => e.textContent)), ['old-experiment']);
   assert.equal(await page.$$eval('.rc-leader', b => b.at(-1).classList.contains('rc-stopped')), true);
   assert.ok(await noHScroll(page), 'no horizontal scroll');
+  // Facts are set apart by structure, not a middle dot: the state word in its
+  // own element (it keeps its colour), a ", " a screen reader hears between.
+  const shop = await page.$eval('.rc-leader:not(.rc-stopped) .rc-leader-line', e => [[...e.querySelectorAll('.rc-fact')].map(f => [f.className, f.textContent]), e.textContent]);
+  assert.deepEqual(shop, [[['rc-leader-state rc-fact', 'needs you'], ['rc-fact', 'Asks a question']], 'needs you, Asks a question']);
+  assert.equal(await page.$eval('#leaders', e => e.textContent.includes('·')), false, 'no middle dot on the home');
+  // State shown once: the stripe and the word carry it, the icon tile is the same on every state.
+  const tiles = await page.$$eval('.rc-leader:not(.rc-stopped)', ls => ls.map(l => { const t = getComputedStyle(l.querySelector('.rc-ltile')); return [getComputedStyle(l).borderLeftColor, t.backgroundColor, t.color]; }));
+  assert.ok(new Set(tiles.map(t => t[0])).size > 1, 'the stripes differ by state');
+  assert.equal(new Set(tiles.map(t => `${t[1]}|${t[2]}`)).size, 1, 'one neutral tile for every state');
   await shot(page, '04-leaders');
   await page.tap('.rc-leader >> nth=0');
   await page.waitForSelector('.rc-card-q .rc-opt');
@@ -822,6 +831,12 @@ test('the recorder: silence is flat; reduced motion draws a meter; no analyser s
     assert.equal(await page.getAttribute('#composer', 'data-wave'), 'meter');
     assert.ok(Number(await page.getAttribute('#rec', 'data-level')) > 0.1);
     await shot(page, '20-recording-reduced-motion');
+    // Reduced motion stops every animation but one: the busy dot's slow pulse (opacity, no turn).
+    const motion = await page.evaluate(() => {
+      const mk = cls => { const e = document.createElement('span'); e.className = cls; document.body.append(e); const cs = getComputedStyle(e); const r = [cs.animationName, cs.animationDuration]; e.remove(); return r; };
+      return { spin: mk('rc-spin'), skel: mk('rc-skel'), pulse: mk('rc-pulse') };
+    });
+    assert.deepEqual(motion, { spin: ['rc-pulse', '1.2s'], skel: ['none', '0s'], pulse: ['none', '0s'] });
     await page.tap('#mic');
     await page.waitForSelector('text=Added to the field: read it, then Send.', { timeout: 8000 });
     assert.deepEqual(problems, []);
@@ -897,6 +912,71 @@ async function openApprovals(page, from = 'leaders') {
   await page.waitForSelector('#s-approvals:not([hidden])');
 }
 
+// A route held until the test lets it go (one gate per call of hold()).
+async function hold(page, test) {
+  let go;
+  const gate = new Promise(r => { go = r; });
+  await page.route(u => test(new URL(u)), async route => { await gate; await route.continue().catch(() => {}); });
+  return () => go();
+}
+test('first loads: a skeleton in the list\'s shape, then the rows in its place; a refresh shows none; errors have their own class', { skip }, async () => {
+  await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true, kanbanReset: true, canvasReset: true });
+  const { ctx, page, problems } = await phone();
+  // Home: the list and the stream held, so only the skeleton can show.
+  const goHome = await hold(page, u => u.pathname === '/r/leaders' || u.pathname === '/r/events');
+  await page.goto(`${base()}/`);
+  await page.waitForSelector('#leaders[aria-busy="true"] .rc-skel-leader');
+  assert.equal(await page.$$eval('#leaders .rc-skel-leader', e => e.length), 3, 'three placeholder rows');
+  assert.deepEqual(await page.$$eval('#leaders > li', l => [...new Set(l.map(e => e.getAttribute('aria-hidden')))]), ['true'], 'hidden from screen readers');
+  assert.equal(await page.textContent('#leaders'), '', 'no text while it loads');
+  const skelTop = await page.$eval('#leaders .rc-skel-leader', e => e.getBoundingClientRect().top);
+  goHome();
+  await page.waitForSelector('.rc-leader');
+  assert.equal(await page.$eval('#leaders', e => e.hasAttribute('aria-busy')), false);
+  assert.equal(await page.$$eval('.rc-skel', e => e.length), 0);
+  const rowTop = await page.$eval('.rc-leader', e => e.getBoundingClientRect().top);
+  assert.ok(Math.abs(rowTop - skelTop) <= 2, `the first row lands where the skeleton's was (${skelTop} then ${rowTop})`);
+  // Approvals: the first read draws the skeleton, a second visit keeps the rows.
+  const goAp = await hold(page, u => /^\/r\/(plans|merges|network)$/.test(u.pathname));
+  await page.tap('#approvals-btn');
+  await page.waitForSelector('#ap-lists[aria-busy="true"] .rc-skel-ap');
+  goAp();
+  await page.waitForSelector('.rc-ap-row');
+  assert.equal(await page.$eval('#ap-lists', e => e.hasAttribute('aria-busy')), false);
+  await page.unroute(() => true);
+  // Canvas: skeleton on the first read; back to it, the rows stay while it reads again.
+  // (The conversation reads the list for the tab's badge: held from before.)
+  const goCv = await hold(page, u => /^\/r\/leaders\/[^/]+\/canvas$/.test(u.pathname));
+  await page.tap('#back');
+  await page.tap('.rc-leader >> text=shop');
+  await page.waitForSelector('#s-chat:not([hidden])');
+  await page.tap('#v-canvas');
+  await page.waitForSelector('#cv-list[aria-busy="true"] .rc-skel-cv');
+  assert.equal(await page.isVisible('#cv-status'), false, 'the skeleton, not a line of text');
+  goCv();
+  await page.waitForSelector('.rc-cv-row');
+  await page.unroute(() => true);
+  const goCv2 = await hold(page, u => /^\/r\/leaders\/[^/]+\/canvas$/.test(u.pathname));
+  await page.tap('#v-chat');
+  await page.tap('#v-canvas');
+  assert.equal(await page.$$eval('.rc-skel', e => e.length), 0, 'a refresh shows no skeleton');
+  assert.ok(await page.$$eval('.rc-cv-row', e => e.length) > 0, 'the rows stay');
+  goCv2();
+  await page.unroute(() => true);
+  // Kanban: an error is its own line, in the error class, and no skeleton stays.
+  await page.route(u => /\/kanban$/.test(new URL(u).pathname), r => r.fulfill({ status: 500, contentType: 'application/json', body: '{"ok":false,"error":"boom"}' }));
+  await page.tap('#v-kanban');
+  await page.waitForSelector('#kb-status:not([hidden])');
+  assert.equal(await page.$eval('#kb-status', e => e.classList.contains('rc-t-err')), true);
+  assert.equal(await page.textContent('#kb-status'), 'The board could not be read: boom.');
+  assert.equal(await page.$eval('#kb-lanes', e => [e.hasAttribute('aria-busy'), e.children.length].join()), 'false,0');
+  const [err, muted] = await page.$eval('#kb-status', e => [getComputedStyle(e).color, getComputedStyle(document.querySelector('.rc-muted') || document.body).color]);
+  assert.notEqual(err, muted, 'not the loading colour');
+  await page.unroute(() => true);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
 test('level 2: the Approvals entry, its badge, and one sentence when it cannot act', { skip }, async () => {
   await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
   const { ctx, page, problems } = await phone();
@@ -924,6 +1004,7 @@ test('level 2: the Approvals entry, its badge, and one sentence when it cannot a
   await page.tap('#approvals-btn');
   await page.waitForSelector('.rc-ap-fail');
   assert.equal(await page.textContent('.rc-ap-fail'), 'The Mac cannot read this right now (sbx did not answer). Try again in a moment.');
+  assert.equal(await page.$eval('.rc-ap-fail', e => e.classList.contains('rc-t-err')), true, 'an error line, not a muted one');
   assert.equal(await page.$$eval('.rc-ap-row', r => r.length), 2, 'the plan and the merge stay (stopped sandboxes are on the home)');
   await page.tap('#back');
   await page.waitForSelector('#s-chat:not([hidden])');
@@ -1120,7 +1201,7 @@ test('level 2: a merge in numbers and paths, its result in the daemon\'s words',
   await openItemOf(page, 'merges');
   assert.deepEqual(await page.$$eval('.rc-order li', l => l.map(e => e.textContent)), ['footer', 'contact-form']);
   assert.equal(await page.textContent('.rc-branch .rc-thread-meta'), '1a2b3c4');
-  assert.match(await page.textContent('.rc-branch-stat'), /^3 commits · 3 files \+120 −8$/);
+  assert.match(await page.textContent('.rc-branch-stat'), /^3 commits, 3 files \+120 −8$/);
   await page.tap('.rc-files-box summary');
   assert.deepEqual(await page.$$eval('.rc-file-path', l => l.slice(0, 3).map(e => e.textContent)), ['src/components/Footer.tsx', 'src/pages/legal/index.tsx', 'public/logo.png']);
   assert.equal(await page.textContent('.rc-files li:nth-child(3) .rc-file-n'), 'binary');
@@ -1337,7 +1418,7 @@ async function openBoard(page, sandbox = 'shop') {
   await page.tap(`.rc-leader >> text=${sandbox}`);
   await page.waitForSelector('#s-chat:not([hidden])');
   await page.tap('#v-kanban');
-  await page.waitForSelector('.rc-kb-lane, #kb-status:not([hidden])');
+  await page.waitForSelector('.rc-kb-lane.rc-on, #kb-status:not([hidden])');
 }
 const selected = page => page.$eval('.rc-kb-tab[aria-selected="true"]', t => t.dataset.col);
 const visibleCards = page => page.$$eval('.rc-kb-lane.rc-on .rc-kb-card', c => c.map(e => e.dataset.key));

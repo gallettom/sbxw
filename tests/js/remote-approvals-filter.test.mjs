@@ -119,7 +119,7 @@ test('home: stopped sandboxes are its last group, folded past three; Waiting for
   assert.equal(await page.$eval('#leaders > li:last-child', e => e.classList.contains('rc-group-foot')), true, 'the group is last, ending with Show all');
   assert.equal(await page.$$eval('.rc-stopped', b => b.length), 3, 'folded');
   assert.equal(await page.textContent('.rc-group-more'), 'Show all (5)');
-  assert.equal(await page.textContent('.rc-stopped .rc-leader-line'), 'claude · /Users/me/dev/a-very-long-workspace-path-for-old-0');
+  assert.equal(await page.textContent('.rc-stopped .rc-leader-line'), 'claude, /Users/me/dev/a-very-long-workspace-path-for-old-0');
   await shot(page, 'home-stopped');
   await page.tap('.rc-group-more');
   assert.equal(await page.$$eval('.rc-stopped', b => b.length), 5, 'Show all');

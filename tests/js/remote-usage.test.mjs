@@ -16,7 +16,7 @@ test('percent, rounded and clamped, with the tone at 75 and 90', () => {
   assert.deepEqual(plain(u.rows.map(r => [r.key, r.pct, r.tone])), [['five', 75, 'amber'], ['seven', 100, 'red']]);
   assert.equal(ctx.rcUsage({ five_hour_pct: 74.4 }, now).rows[0].tone, 'ok');
   assert.equal(ctx.rcUsage({ five_hour_pct: 90 }, now).rows[0].tone, 'red');
-  assert.equal(u.compact, '5 h 75% · 7 d 100%');
+  assert.deepEqual([...u.compact], ['5 h 75%', '7 d 100%']);
 });
 test('reset countdown under a day', () => {
   assert.equal(ctx.rcUsageReset(sec(now + (2 * 60 + 14) * 60e3), now), 'resets in 2 h 14 min');
@@ -40,7 +40,7 @@ test('missing values', () => {
     assert.equal(u.has, false);
     assert.deepEqual(plain(u.rows), []);
     assert.equal(u.updated, '');
-    assert.equal(u.compact, '');
+    assert.deepEqual([...u.compact], []);
   }
   const one = ctx.rcUsage({ seven_day_pct: 10 }, now);
   assert.deepEqual(plain(one.rows.map(r => [r.key, r.reset])), [['seven', '']]);

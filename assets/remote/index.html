@@ -156,6 +156,7 @@
       <div id="waiting-tiles" class="rc-wtiles"></div>
     </div>
     <p id="usage-line" class="rc-usage-line" hidden></p>
+    <p id="home-status" class="rc-kb-status" role="status" hidden></p>
     <ul id="leaders" class="rc-leaders"></ul>
   </section>
 
@@ -239,7 +240,7 @@
             </div>
             <button id="cv-fit" class="rc-chip-btn rc-cv-fit" type="button" hidden>Fit</button>
           </div>
-          <p id="cv-imgerr" class="rc-kb-status" role="status" hidden></p>
+          <p id="cv-imgerr" class="rc-kb-status rc-t-err" role="status" hidden></p>
           <h2 id="cv-shot-title" class="rc-cv-shot-title"></h2>
           <p id="cv-shot-line" class="rc-cv-shot-line"></p>
           <p id="cv-shot-note" class="rc-cv-shot-note"></p>
@@ -307,7 +308,7 @@
           </div>
           <ul id="kb-chips" class="rc-chips"></ul>
         </div>
-        <input id="kb-file" class="rc-file" type="file" multiple tabindex="-1" aria-hidden="true">
+        <input id="kb-file" class="rc-file-input" type="file" multiple tabindex="-1" aria-hidden="true">
         <p id="kb-ferr" class="rc-kb-ferr" role="alert" hidden></p>
         <div class="rc-held-row">
           <button id="kb-attach" class="rc-btn rc-quiet rc-small" type="button">Attach files</button>
@@ -349,7 +350,7 @@
         <button id="attach" class="rc-icon-btn rc-in" type="button" aria-label="Attach files">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5 12.1 19.4a5 5 0 0 1-7.1-7.1l8.2-8.2a3.3 3.3 0 0 1 4.7 4.7l-8.1 8.1a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/></svg>
         </button>
-        <input id="file" class="rc-file" type="file" multiple tabindex="-1" aria-hidden="true">
+        <input id="file" class="rc-file-input" type="file" multiple tabindex="-1" aria-hidden="true">
         <textarea id="field" class="rc-field" rows="1" maxlength="16000" placeholder="Write a message" autocomplete="off" aria-label="Message"></textarea>
         <div id="rec" class="rc-rec" hidden>
           <span id="rec-dot" class="rc-rec-dot" aria-hidden="true"></span>

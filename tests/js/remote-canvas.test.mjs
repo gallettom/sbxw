@@ -108,8 +108,8 @@ test('the manifest: bad files are dropped, coordinates kept in 0..100, junk rema
   assert.equal(m.notes.length, 2);
   assert.equal(m.draft, 5);
   assert.equal(rc.rcCvManifest({ ...MANIFEST, id: 'c-../x' }), null);
-  assert.equal(rc.rcCvShotLine(m.shots[1], 2), 'Round 2 · new');
-  assert.equal(rc.rcCvShotLine(m.shots[0], 2), 'Round 1 · 390 px wide');
+  assert.deepEqual(plain(rc.rcCvShotLine(m.shots[1], 2)), ['Round 2', 'new']);
+  assert.deepEqual(plain(rc.rcCvShotLine(m.shots[0], 2)), ['Round 1', '390 px wide']);
 });
 
 test('pictures load only from /r/canvas/<id>/images/<file>, both checked', () => {
@@ -148,8 +148,8 @@ test('the list and the tab badge', () => {
   assert.equal(list[1].title, 'Untitled canvas');
   assert.equal(rc.rcCvBadge(list), 1);
   assert.equal(rc.rcCvBadge(null), 0);
-  assert.equal(rc.rcCvListLine(list[0], 1000 + 5 * 60000), '12 shots · 2 rounds · 3 remarks not sent · updated 5 min ago');
-  assert.equal(rc.rcCvListLine(list[1], 0), '1 shot');
+  assert.deepEqual(plain(rc.rcCvListLine(list[0], 1000 + 5 * 60000)), ['12 shots', '2 rounds', '3 remarks not sent', 'updated 5 min ago']);
+  assert.deepEqual(plain(rc.rcCvListLine(list[1], 0)), ['1 shot']);
 });
 
 // A document with only what the row may use: no innerHTML at all, so a
@@ -157,12 +157,16 @@ test('the list and the tab badge', () => {
 function fakeDoc() {
   const make = tag => {
     const el = { tag, className: '', type: '', children: [], _text: '' };
+    el.ownerDocument = doc;
     el.append = (...kids) => { el.children.push(...kids); };
+    el.replaceChildren = (...kids) => { el._text = ''; el.children = [...kids]; };
+    el.classList = { add: c => { el.className = el.className ? `${el.className} ${c}` : c; } };
     Object.defineProperty(el, 'textContent', { get: () => el._text + el.children.map(c => c.textContent).join(''), set: v => { el._text = String(v); el.children = []; } });
     Object.defineProperty(el, 'innerHTML', { get: () => { throw new Error('innerHTML read'); }, set: () => { throw new Error('innerHTML written'); } });
     return el;
   };
-  return { createElement: make };
+  const doc = { createElement: make };
+  return doc;
 }
 
 test('hostile titles stay text: in a list row and in the confirmation', () => {
@@ -171,11 +175,17 @@ test('hostile titles stay text: in a list row and in the confirmation', () => {
   const row = rc.rcCvRowEl(fakeDoc(), c, 0);
   assert.equal(row.tag, 'button');
   assert.deepEqual(row.children.map(k => [k.className, k.textContent]), [
-    ['rc-cv-row-title', hostile], ['rc-cv-row-line', '2 shots'], ['rc-cv-new', '2 new'],
+    ['rc-cv-row-title', hostile], ['rc-cv-row-line rc-facts', '2 shots'], ['rc-cv-new', '2 new'],
   ]);
+  // Several facts: each its own span, a ", " for a screen reader between them, no middle dot.
+  const [c2] = rc.rcCvList({ canvases: [{ id: ID, title: 't', shots: 3, rounds: 2 }] });
+  const line = rc.rcCvRowEl(fakeDoc(), c2, 0).children[1];
+  // The third child is a <wbr>: a line may break there, and it adds no text.
+  assert.deepEqual(line.children.map(k => [k.tag, k.className, k.textContent]), [['span', 'rc-fact', '3 shots'], ['span', 'rc-vh', ', '], ['wbr', '', ''], ['span', 'rc-fact', '2 rounds']]);
+  assert.equal(line.textContent, '3 shots, 2 rounds');
   const m = rc.rcCvManifest({ ...MANIFEST, title: hostile, shots: [{ ...MANIFEST.shots[0], title: hostile }], pins: [{ n: 1, shot: 's-1', x: 1, y: 1, text: hostile }], notes: [] });
   const text = rc.rcCvConfirmText(rc.rcCvConfirm(m));
-  assert.ok(text.includes(`Shot 1 · ${hostile}`));
+  assert.ok(text.includes(`Shot 1: ${hostile}`));
   assert.ok(text.includes(`Pin 1 (1%, 1%): ${hostile}`));
 });
 
@@ -187,10 +197,10 @@ test('the confirmation lists every remark in full, by shot, and counts what the 
   assert.equal(rc.rcCvConfirmText(c), [
     'Send 5 remarks?',
     'One round of remarks on "Mobile review", for the session of this sandbox. sbxw types one line asking it to read them; once sent, they cannot be changed.',
-    'Shot 1 · Home',
+    'Shot 1: Home',
     '  Pin 4 (43%, 10%): Bigger tap target',
     '  Note 2: The empty state needs a call to action',
-    'Shot 2 · Login',
+    'Shot 2: Login',
     '  Pin 6 (100%, 0%): Line one\nline two',
     'Not on a shot shown here',
     '  Note 3: Overall too dark',

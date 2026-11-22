@@ -149,7 +149,7 @@ test('the Working line: drawn again only when it changes', async () => {
   const dom = await openBig(conversation(30));
   const tail = dom.$('tail');
   const line = tail.firstChild;
-  assert.match(tail.textContent, /Working · Running tests/);
+  assert.match(tail.textContent, /Working, Running tests/);
   const same = { leaders: [{ sandbox: 'big', name: 'big', kind: 'leader', state: 'working', activity: 'Running tests', last_at: 2, asks: false }] };
   dom.emit('leaders', same);
   await dom.advance(0);
@@ -158,7 +158,7 @@ test('the Working line: drawn again only when it changes', async () => {
   dom.emit('leaders', same);
   await dom.advance(0);
   assert.notEqual(tail.firstChild, line);
-  assert.match(tail.textContent, /Working · Editing src\/db\/orders\.rs/);
+  assert.match(tail.textContent, /Working, Editing src\/db\/orders\.rs/);
   same.leaders[0].state = 'idle';
   dom.emit('leaders', same);
   await dom.advance(0);
@@ -166,7 +166,7 @@ test('the Working line: drawn again only when it changes', async () => {
   same.leaders[0].state = 'working';
   dom.emit('leaders', same);
   await dom.advance(0);
-  assert.match(tail.textContent, /Working · Editing/);
+  assert.match(tail.textContent, /Working, Editing/);
 });
 
 test('a leaders event during a conversation does not rebuild the hidden home list; back home it is current', async () => {

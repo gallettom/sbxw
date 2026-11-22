@@ -58,6 +58,7 @@
   const st = {
     me: null,
     leaders: [],
+    leadersKnown: false, // false until the first list arrives: the home draws a skeleton
     stopped: [],         // /r/stopped's sandboxes, for the home's last group
     stoppedOpen: false,  // that group unfolded ("Show all")
     models: [],          // the model list from /r/models
@@ -246,7 +247,7 @@
     startEvents();
     refreshPush();
     const res = await api.leaders();
-    if (res.ok) setLeaders(res.data);
+    if (res.ok) setLeaders(res.data); else leadersFailed(res);
     refreshL2();
   }
 
@@ -306,7 +307,7 @@
     elsewhere(false);
     startEvents();
     const l = await api.leaders();
-    if (l.ok) setLeaders(l.data);
+    if (l.ok) setLeaders(l.data); else leadersFailed(l);
     if (st.current) fetchNewer();
     refreshL2();
   });
@@ -340,7 +341,7 @@
         banner.hidden = true;
         startEvents();
         const l = await api.leaders();
-        if (l.ok) setLeaders(l.data);
+        if (l.ok) setLeaders(l.data); else leadersFailed(l);
         if (st.current) fetchNewer();
       } else if (res.status !== 401) {
         banner.hidden = false;
@@ -371,6 +372,8 @@
   // ── Leaders ──
   function setLeaders(data) {
     st.leaders = rcLeaders(data);
+    st.leadersKnown = true;
+    rcSay($('home-status'), '');
     // The home list only while it shows (showLeaders draws it when it does):
     // a conversation on screen does not rebuild a hidden list at each event.
     if (st.screen === 's-leaders') renderLeaders();
@@ -381,6 +384,14 @@
     }
   }
 
+  // The first list could not be read: the skeleton gives way to one error
+  // line (the stream's next `leaders` event still fills the home). Once a
+  // list was drawn, a failed read leaves it as it is.
+  function leadersFailed(res) {
+    if (st.leadersKnown || res.status === 401) return;
+    rcSay($('home-status'), res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : `The sessions could not be read (the Mac answered ${res.status}).`, true);
+    rcSkeletonDone($('leaders'));
+  }
   // `done`: a line saying what was just done (a sandbox removed), else none.
   function showLeaders(done) {
     saveDraft();
@@ -439,6 +450,11 @@
   function renderLeaders() {
     renderWaiting();
     const ul = $('leaders');
+    if (!st.leadersKnown) {
+      if ($('home-status').hidden) rcSkeletonInto(ul, 'leader');
+      return;
+    }
+    rcSkeletonDone(ul);
     const now = Date.now();
     const rows = [];
     for (const g of rcGroups(st.leaders, st.stopped)) {
@@ -487,7 +503,7 @@
       name.textContent = s.name;
       const line = document.createElement('span');
       line.className = 'rc-leader-line';
-      line.textContent = s.line;
+      rcFactsInto(line, s.line);
       b.append(tile, name, line);
       b.addEventListener('click', () => openItem('stopped', s.name, ''));
       out.push(li('', b));
@@ -548,20 +564,19 @@
     const state = document.createElement('span');
     state.className = 'rc-leader-state';
     state.textContent = l.asks ? 'needs you' : rcStateLabel(l.state);
-    line.append(state);
-    if (rcActivity(l)) line.append(` · ${rcActivity(l)}`);
+    rcFactsInto(line, [state, rcActivity(l)]);
     b.append(tile, name, ago, line);
     const info = rcLeaderInfo(l, st.models);
     if (info.parts.length || info.canvas) {
       const x = document.createElement('span');
       x.className = 'rc-leader-info';
-      x.append(document.createTextNode(info.parts.join(' · ')));
+      let c = '';
       if (info.canvas) {
-        const c = document.createElement('span');
+        c = document.createElement('span');
         c.className = 'rc-leader-canvas';
         c.textContent = `Canvas ${info.canvas} new`;
-        x.append(c);
       }
+      rcFactsInto(x, [...info.parts, c]);
       b.append(x);
     }
     if (l.read_only) {
@@ -770,7 +785,7 @@
     renderTray();
     history.pushState({ leader: true }, '', location.pathname);
     renderChatTitle();
-    $('log-top').textContent = 'Loading…';
+    rcSay($('log-top'), 'Loading…');
     $('rows').replaceChildren();
     drawn = new Map();
     renderTail();
@@ -789,7 +804,7 @@
     const res = await api.history(sandbox, { limit: RC_FIRST_ROWS });
     if (st.current !== sandbox) return;
     if (!res.ok) {
-      $('log-top').textContent = res.status === 404 ? 'This sandbox is not running any more.' : 'Could not load the conversation.';
+      rcSay($('log-top'), res.status === 404 ? 'This sandbox is not running any more.' : 'Could not load the conversation.', res.status !== 404);
       return;
     }
     const page = rcPage(res.data);
@@ -864,11 +879,11 @@
     if (st.loadingOlder || st.nextBefore == null || !st.current) return;
     st.loadingOlder = true;
     const sandbox = st.current;
-    $('log-top').textContent = 'Loading earlier messages…';
+    rcSay($('log-top'), 'Loading earlier messages…');
     const res = await api.history(sandbox, { before: st.nextBefore, limit: RC_OLDER_ROWS });
     st.loadingOlder = false;
     if (st.current !== sandbox) return;
-    if (!res.ok) { $('log-top').textContent = 'Could not load earlier messages.'; return; }
+    if (!res.ok) { rcSay($('log-top'), 'Could not load earlier messages.', true); return; }
     const page = rcPage(res.data);
     if (rcEpochChanged(st.epoch, page)) { loadLast(sandbox); return; }
     st.items = rcMerge(st.items, page.items);
@@ -1007,7 +1022,7 @@
     const shown = rcWithPending(rcRows(st.items), st.pending);
     st.pending = st.pending.filter(p => shown.left.includes(p.id));
     const rows = shown.rows;
-    $('log-top').textContent = st.nextBefore != null ? '' : rows.length ? 'Start of the conversation' : 'No messages yet';
+    rcSay($('log-top'), st.nextBefore != null ? '' : rows.length ? 'Start of the conversation' : 'No messages yet');
     const keys = rcRowKeys(rows);
     const next = new Map();
     const els = rows.map((r, i) => {
@@ -1099,7 +1114,8 @@
       const dot = document.createElement('span');
       dot.className = 'rc-pulse';
       const t = document.createElement('span');
-      t.textContent = rcActivity(l) ? `Working · ${rcActivity(l)}` : 'Working…';
+      if (rcActivity(l)) rcFactsInto(t, ['Working', rcActivity(l)]);
+      else t.textContent = 'Working…';
       w.append(dot, t);
       return tail.replaceChildren(w);
     }
@@ -1412,10 +1428,10 @@
       const name = dataEl('span', 'rc-fchip-name', chatShortName(c.name));
       const meta = document.createElement('span');
       meta.className = 'rc-fchip-meta';
-      meta.textContent = c.state === 'sending' ? `${chatSize(c.size)} · ${c.pct < 1 ? `${Math.round(c.pct * 100)} %` : 'the Mac checks it'}`
-        : c.state === 'queued' ? `${chatSize(c.size)} · waiting`
-          : c.state === 'done' ? `${chatSize(c.size)} · ready`
-            : c.error;
+      const said = c.state === 'sending' ? (c.pct < 1 ? `${Math.round(c.pct * 100)} %` : 'the Mac checks it')
+        : c.state === 'queued' ? 'waiting' : c.state === 'done' ? 'ready' : '';
+      if (said) rcFactsInto(meta, [chatSize(c.size), said]);
+      else meta.textContent = c.error;
       tx.append(name, meta);
       const acts = document.createElement('span');
       acts.className = 'rc-fchip-acts';
@@ -2005,20 +2021,19 @@
     const u = rcUsage(usageSt.data, Date.now());
     const line = $('usage-line');
     line.hidden = !u.has;
-    line.textContent = u.has ? `Plan usage: ${u.compact}` : '';
+    line.replaceChildren(...(u.has ? ['Plan usage: ', rcFactsInto(document.createElement('span'), u.compact)] : []));
     const c = rcUsageLine(u);
     const box = $('ctl-usage');
     const kids = [];
     if (c.has) {
       kids.push(document.createTextNode('Plan usage: '));
-      c.parts.forEach((p, i) => {
-        if (i) kids.push(document.createTextNode(' · '));
+      const facts = c.parts.map(p => {
         const s = document.createElement('span');
         s.className = `rc-usage-t-${p.tone}`;
         s.textContent = p.text;
-        kids.push(s);
+        return s;
       });
-      if (c.reset) kids.push(document.createTextNode(` · ${c.reset}`));
+      kids.push(rcFactsInto(document.createElement('span'), [...facts, c.reset || '']));
     }
     box.replaceChildren(...kids);
     box.hidden = !c.has || $('ctl').hidden;
@@ -2200,21 +2215,21 @@
   $('v-kanban').addEventListener('click', () => setView('kanban'));
   $('v-canvas').addEventListener('click', () => setView('canvas'));
 
-  function kbStatus(text) {
-    $('kb-status').textContent = text;
-    $('kb-status').hidden = !text;
+  function kbStatus(text, err = false) {
+    rcSay($('kb-status'), text, err);
   }
   async function loadBoard() {
     const sandbox = st.current;
     const v = view(sandbox);
     if (v.loading) { v.again = true; return; }
     v.loading = true;
-    if (!v.board) kbStatus('Loading the board…');
+    if (!v.board) { kbStatus(''); rcSkeletonInto($('kb-lanes'), 'kb'); }
     const res = await api.get(rcKbPaths(sandbox));
     v.loading = false;
     if (st.current !== sandbox) return;
+    rcSkeletonDone($('kb-lanes'));
     if (!res.ok) {
-      kbStatus(res.status === 404 ? 'This team leader is no longer running.' : rcFailText('Board', res).replace('Board not sent', 'The board could not be read'));
+      kbStatus(res.status === 404 ? 'This team leader is no longer running.' : rcFailText('Board', res).replace('Board not sent', 'The board could not be read'), res.status !== 404);
       if (res.status === 404) { v.board = null; $('kb-lanes').replaceChildren(); $('kb-pick').replaceChildren(); }
     } else {
       kbStatus('');
@@ -2631,6 +2646,7 @@
     st.apLoading = true;
     setTitle('Approvals', '');
     show('s-approvals');
+    if (!st.apLists.length) { rcSkeletonInto($('ap-lists'), 'ap'); $('ap-empty').hidden = true; }
     $('ap-done').textContent = done || '';
     $('ap-done').hidden = !done;
     const res = await refreshL2();
@@ -2641,7 +2657,7 @@
     $('ap-block-text').textContent = block;
     // Face ID is enabled from here once the Mac has level 2 on.
     $('ap-enable').hidden = !(a?.level2 === true && (a.passkey !== true || a.rp_ok === false));
-    if (!a?.level2) { st.apLoading = false; $('ap-lists').replaceChildren(); $('ap-filter').hidden = true; $('ap-none').hidden = true; $('ap-empty').hidden = true; return; }
+    if (!a?.level2) { st.apLoading = false; rcSkeletonDone($('ap-lists')); $('ap-lists').replaceChildren(); $('ap-filter').hidden = true; $('ap-none').hidden = true; $('ap-empty').hidden = true; return; }
     await loadApLists();
   }
   // Read the three lists, then draw them. Also the live path: a change of the
@@ -2711,7 +2727,7 @@
       // A list the Mac could not read says so, quietly, in its place.
       if (r && !r.ok && r.status !== 403) {
         const sec = el('section', 'rc-ap-sec');
-        sec.append(el('h2', 'rc-ap-h', L.title), el('p', 'rc-muted rc-small-text rc-ap-fail', rcL2Fail(r)));
+        sec.append(el('h2', 'rc-ap-h', L.title), el('p', 'rc-t-err rc-small-text rc-ap-fail', rcL2Fail(r)));
         sections.push(sec);
         return;
       }
@@ -2729,6 +2745,7 @@
       sec.append(h, ul);
       sections.push(sec);
     });
+    rcSkeletonDone($('ap-lists'));
     $('ap-lists').replaceChildren(...sections);
     // Nothing in the chosen sandbox: say so, with the way back.
     const goneName = entries.find(e => e.sandbox === only)?.name || only;
@@ -2750,11 +2767,14 @@
     const b = el('button', `rc-ap-row rc-ap-${what} ${kind.cls}`);
     b.type = 'button';
     let id, main, meta;
-    if (what === 'plans') { id = str(it.id); main = str(it.summary) || id; meta = `${str(it.sandbox)} · ${Number(it.threads) || 0} threads`; }
-    else if (what === 'merges') { id = str(it.id); main = `Merge of ${str(it.sandbox)}`; meta = `${str(it.variant)} · ${Number(it.branches) || 0} branches`; }
-    else { id = str(it.id); main = str(it.host); meta = str(it.sandbox); }
+    const n = (v, one, many) => { const k = Number(v) || 0; return `${k} ${k === 1 ? one : many}`; };
+    if (what === 'plans') { id = str(it.id); main = str(it.summary) || id; meta = [str(it.sandbox), n(it.threads, 'thread', 'threads')]; }
+    else if (what === 'merges') { id = str(it.id); main = `Merge of ${str(it.sandbox)}`; meta = [str(it.variant), n(it.branches, 'branch', 'branches')]; }
+    else { id = str(it.id); main = str(it.host); meta = [str(it.sandbox)]; }
     const txt = el('span', 'rc-ap-txt');
-    txt.append(dataEl('span', 'rc-ap-main', main, what === 'network'), dataEl('span', 'rc-ap-meta', meta));
+    // The sandbox (and variant) are data; the counts are the page's words.
+    const metaEl = rcFactsInto(el('span', 'rc-ap-meta'), meta.map((m, i) => (i === 0 ? dataEl('span', null, m) : m)));
+    txt.append(dataEl('span', 'rc-ap-main', main, what === 'network'), metaEl);
     const chev = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     chev.setAttribute('class', 'rc-ap-chev');
     chev.setAttribute('viewBox', '0 0 24 24');
@@ -2792,7 +2812,7 @@
         const again = rows.find(r => r && str(r.id) !== id && str(r.sandbox) === hint.sandbox && str(r.host) === hint.host);
         if (again) return openItem(what, str(again.id), said, null);
       }
-      $('item').replaceChildren(el('p', 'rc-muted', res.status === 404 ? 'This is not waiting any more.' : rcL2Fail(res)));
+      $('item').replaceChildren(res.status === 404 ? el('p', 'rc-muted', 'This is not waiting any more.') : el('p', 'rc-t-err', rcL2Fail(res)));
       return;
     }
     const d = res.data;
@@ -2834,18 +2854,22 @@
     }
     return box;
   }
-  // A detail's head: its title (data) and a line of parts ([string | { data }]).
-  function head(title, sub) {
+  // A detail's head: its title (data) and a line under it: a sentence of
+  // parts ([string | { data }]), or with `facts`, one fact per part.
+  function head(title, sub, facts = false) {
     const kind = rcApKind(st.item && st.item.what);
     const h = el('div', `rc-item-head ${kind.cls}`);
     const txt = el('div', 'rc-item-headtxt');
     txt.append(dataEl('h2', 'rc-item-title', title));
-    if (sub && sub.length) txt.append(partsInto(el('p', 'rc-item-sub'), sub));
+    if (sub && sub.length) {
+      txt.append(facts ? rcFactsInto(el('p', 'rc-item-sub'), sub.map(p => (typeof p === 'string' ? p : dataEl('span', null, p.data, true))))
+        : partsInto(el('p', 'rc-item-sub'), sub));
+    }
     h.append(kindTile(kind), txt);
     return h;
   }
   function planView(p) {
-    const out = [head(str(p.summary) || 'A plan', [{ data: str(p.sandbox) }, ` · ${str(p.variant) === 'shared' ? 'one shared branch' : 'a branch per thread'}`])];
+    const out = [head(str(p.summary) || 'A plan', [{ data: str(p.sandbox) }, str(p.variant) === 'shared' ? 'one shared branch' : 'a branch per thread'], true)];
     if (str(p.justification)) out.push(field_('Why this way', str(p.justification), { fold: true }));
     const dirty = Number(p.main_uncommitted) || 0;
     if (dirty) out.push(el('p', 'rc-item-warn', `${dirty} uncommitted ${dirty === 1 ? 'change' : 'changes'} in the main checkout.`));
@@ -2855,8 +2879,8 @@
       const card = el('div', 'rc-thread');
       const top = el('div', 'rc-thread-top');
       top.append(dataEl('span', 'rc-thread-name', str(t.name), true));
-      const meta = [str(t.model), str(t.repo) && str(t.repo) !== '.' ? str(t.repo) : '', str(t.ticket)].filter(Boolean).join(' · ');
-      if (meta) top.append(dataEl('span', 'rc-thread-meta', meta, true));
+      const meta = [str(t.model), str(t.repo) && str(t.repo) !== '.' ? str(t.repo) : '', str(t.ticket)].filter(Boolean);
+      if (meta.length) top.append(rcFactsInto(dataEl('span', 'rc-thread-meta', '', true), meta.map(m => dataEl('span', null, m, true))));
       card.append(top);
       if (str(t.scope)) card.append(field_('Scope', str(t.scope), { fold: true }));
       if (str(t.goal)) card.append(field_('Goal', str(t.goal), { fold: true }));
@@ -2920,7 +2944,7 @@
       const ins = Number(b.insertions) || 0, del = Number(b.deletions) || 0;
       card.append(partsInto(el('p', 'rc-branch-line'), ['into ', { data: str(base.branch) }, ' at ', base.tip ? { data: short(base.tip) } : 'unreadable', ...(str(b.repo) && str(b.repo) !== '.' ? [' (', { data: str(b.repo) }, ')'] : [])]));
       const stat = el('p', 'rc-branch-stat');
-      stat.append(el('span', null, `${Number(b.ahead) || 0} ${Number(b.ahead) === 1 ? 'commit' : 'commits'} · ${Number(b.files_changed) || 0} files `), el('span', 'rc-ins', `+${ins}`), ' ', el('span', 'rc-del', `−${del}`));
+      stat.append(el('span', null, `${Number(b.ahead) || 0} ${Number(b.ahead) === 1 ? 'commit' : 'commits'}, ${Number(b.files_changed) || 0} files `), el('span', 'rc-ins', `+${ins}`), ' ', el('span', 'rc-del', `−${del}`));
       card.append(stat);
       if (b.known_conflict === true) card.append(el('p', 'rc-item-warn', 'An earlier attempt stopped at a conflict on this branch.'));
       const files = Array.isArray(b.files) ? b.files : [];
@@ -2963,8 +2987,8 @@
     return out;
   }
   function stoppedView(sb, confirm) {
-    const sub = [str(sb.agent) || (sb.chat ? 'chat' : ''), str(sb.created_at)].filter(Boolean).flatMap((x, i) => (i ? [' · ', { data: x }] : [{ data: x }]));
-    const out = [head(str(sb.name), sub)];
+    const sub = [str(sb.agent) || (sb.chat ? 'chat' : ''), str(sb.created_at)].filter(Boolean).map(x => ({ data: x }));
+    const out = [head(str(sb.name), sub, true)];
     const lines = Array.isArray(confirm) ? confirm.map(str).filter(Boolean) : [];
     const box = el('div', 'rc-confirm-lines');
     // The daemon's own sentences, verbatim, as text.
@@ -3263,7 +3287,7 @@
     cvShowReview(false);
     cvRenderBadge();
   }
-  function cvStatus(text) { $('cv-status').textContent = text; $('cv-status').hidden = !text; }
+  function cvStatus(text, err = false) { rcSay($('cv-status'), text, err); }
   function cvSaid(el, r) {
     $(el).textContent = r ? r.text : '';
     $(el).className = `rc-cv-saved rc-t-${r ? r.tone : 'info'}`;
@@ -3281,12 +3305,12 @@
     // One read at a time per sandbox; another sandbox's read in the air is left to drop.
     if (cv.listLoading === sandbox) return;
     cv.listLoading = sandbox;
-    if (!cv.list) cvStatus('Loading the canvases…');
+    if (!cv.list) { cvStatus(''); rcSkeletonInto($('cv-list'), 'cv'); $('cv-empty').hidden = true; }
     const res = await api.canvasList(sandbox);
     if (cv.sandbox !== sandbox) return;
     cv.listLoading = null;
     if (!res.ok) {
-      cvStatus(res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : res.status === 404 ? 'This sandbox is not running any more.' : `The canvases could not be read (the Mac answered ${res.status}).`);
+      cvStatus(res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : res.status === 404 ? 'This sandbox is not running any more.' : `The canvases could not be read (the Mac answered ${res.status}).`, res.status !== 404);
     } else {
       cvStatus('');
       cv.list = rcCvList(res.data);
@@ -3297,6 +3321,7 @@
   function cvRenderList() {
     const list = cv.list || [];
     const now = Date.now();
+    rcSkeletonDone($('cv-list'));
     $('cv-list').replaceChildren(...list.map(c => {
       const li = document.createElement('li');
       const b = rcCvRowEl(document, c, now);
@@ -3324,7 +3349,7 @@
     if (cv.sandbox !== sandbox || st.current !== sandbox) return;
     const m = res.ok ? rcCvManifest(res.data) : null;
     if (!m) {
-      cvStatus(res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : res.status === 404 ? 'This canvas is no longer reachable.' : 'The canvas could not be read.');
+      cvStatus(res.unreachable || res.status === 0 ? 'sbxw is unreachable (is the Mac awake?).' : res.status === 404 ? 'This canvas is no longer reachable.' : 'The canvas could not be read.', res.status !== 404);
       if (keep) cvShowReview(false);
       return;
     }
@@ -3353,7 +3378,7 @@
     $('cv-page').hidden = !shot;
     if (!shot) { cvFsHide(); cvStatus('This canvas has no shot yet.'); return; }
     $('cv-shot-title').textContent = shot.title || `Shot ${cv.idx + 1}`;
-    $('cv-shot-line').textContent = rcCvShotLine(shot, m.rounds.length);
+    rcFactsInto($('cv-shot-line'), rcCvShotLine(shot, m.rounds.length));
     $('cv-shot-note').textContent = shot.note;
     $('cv-shot-note').hidden = !shot.note;
     const img = $('cv-img');
