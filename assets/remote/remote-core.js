@@ -286,16 +286,44 @@ function rcRank(l) {
   return l.asks ? 0 : RC_RANK[l.state] ?? 3;
 }
 
-// The picker's two groups (API.md 2.4, v1.5): the team leaders first, then
-// the running sandboxes with no team, each in rcLeaders' order. An entry
-// without a kind is a leader (a daemon from before v1.5). Empty groups are
-// left out.
+// The home screen's two groups (API.md 2.4, v1.5): the team leaders first,
+// then the running sandboxes with no team, each in rcLeaders' order. An entry
+// without a kind is a leader (a daemon from before v1.5). Both groups are
+// always returned, even empty, with their icon id, count and empty line.
 function rcGroups(data) {
   const all = rcLeaders(data);
   return [
-    { kind: 'leader', title: 'Team leaders', items: all.filter(l => l.kind !== 'sandbox') },
-    { kind: 'sandbox', title: 'Sandboxes', items: all.filter(l => l.kind === 'sandbox') },
-  ].filter(g => g.items.length);
+    { kind: 'leader', title: 'Team leaders', icon: 'home-i-team', empty: 'No team leader running', items: all.filter(l => l.kind !== 'sandbox') },
+    { kind: 'sandbox', title: 'Sandboxes', icon: 'home-i-box', empty: 'No other sandbox running', items: all.filter(l => l.kind === 'sandbox') },
+  ].map(g => ({ ...g, count: g.items.length }));
+}
+
+// The "Waiting for you" tiles: one per Approvals kind, in the Approvals
+// order, with the same class and icon (rcApKind) and the count the page
+// already has for its badge. A missing or odd count is 0 (shown dimmed).
+function rcWaiting(counts) {
+  const n = k => (counts && typeof counts === 'object' ? Math.max(0, Math.floor(Number(counts[k]))) || 0 : 0);
+  return [['plans', 'Plans'], ['merges', 'Merges'], ['network', 'Network'], ['stopped', 'Stopped']]
+    .map(([what, label]) => ({ what, label, n: n(what), zero: n(what) === 0, ...rcApKind(what) }));
+}
+
+// A card's one muted info line, only what is known: the model (its label
+// from /r/models, else the id), a leader's threads working, the planned
+// tickets; and the number of canvases with new shots, for the Canvas badge.
+// The daemon omits each count when it is zero.
+function rcLeaderInfo(l, models) {
+  const cnt = v => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.floor(Number(v)) : 0);
+  const parts = [];
+  const id = l && typeof l.model === 'string' ? l.model : '';
+  if (id) {
+    const m = (Array.isArray(models) ? models : []).find(x => x && x.id === id);
+    parts.push(m && m.label ? m.label : id);
+  }
+  const threads = cnt(l && l.threads_working);
+  if (threads) parts.push(`${threads} ${threads === 1 ? 'thread' : 'threads'} working`);
+  const planned = cnt(l && l.tickets_planned);
+  if (planned) parts.push(`${planned} planned`);
+  return { parts, canvas: cnt(l && l.canvas_new) };
 }
 
 // Why the phone can only read this one, when the daemon says so; '' else.
