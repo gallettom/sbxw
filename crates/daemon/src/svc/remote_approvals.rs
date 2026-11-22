@@ -24,6 +24,7 @@ use sbxw_core::remote_access::webauthn::{self as wa, b64url_decode, b64url_encod
 use sbxw_core::{SandboxName, SandboxRef};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -174,9 +175,9 @@ pub struct Shown {
     pub view: Value,
     pub digest: String,
     /// Only for a target the phone may act on now (a merge whose tips are
-    /// all read, a network request with a phone option...).
+    /// all read, a network request with an option...).
     pub actionable: bool,
-    /// The network request's phone option ids.
+    /// The network request's option ids (every option sbx offers).
     pub options: Vec<String>,
     /// What the journal names: a plan id, a sandbox name, a host.
     pub journal_target: String,
@@ -578,9 +579,12 @@ impl App {
                 let list = self.sbx.approvals().await.map_err(|e| L2Error::new(503, "unavailable", format!("sbx could not list its requests: {e:#}")))?;
                 let m = self.mask();
                 list.iter().find(|a| a.id == target && a.kind == "network").map(|a| {
-                    let options: Vec<String> = a.options.iter().filter(|o| l2::phone_option(&o.id, &o.label)).map(|o| o.id.clone()).collect();
-                    let digest = l2::digest(&json!({ "id": a.id, "sandbox": a.sandbox, "host": a.title, "options": options }));
-                    Shown { view: network_view(a, &m, true), digest, actionable: !options.is_empty(), options, journal_target: a.title.clone(), pins: None, distillate: None }
+                    let options: Vec<String> = a.options.iter().map(|o| o.id.clone()).collect();
+                    let labelled: Vec<Value> = a.options.iter().map(|o| json!({ "id": o.id, "label": o.label })).collect();
+                    let digest = l2::digest(&json!({ "id": a.id, "sandbox": a.sandbox, "host": a.title, "options": labelled }));
+                    // Under `request`, as the contract and the page have it.
+                    let view = json!({ "request": network_view(a, &m, true) });
+                    Shown { view, digest, actionable: !options.is_empty(), options, journal_target: a.title.clone(), pins: None, distillate: None }
                 })
             }
             Action::SandboxRemove => {
@@ -611,7 +615,13 @@ impl App {
             .iter()
             .map(|t| json!({ "name": t.name, "model": t.model, "repo": t.repo, "scope": m(&t.scope), "goal": m(&t.goal), "ticket": t.ticket.map(|n| format!("T-{n}")) }))
             .collect();
-        let view = json!({ "plan": { "id": p.id, "sandbox": p.sandbox, "summary": m(&p.summary), "justification": m(&p.justification), "variant": p.variant, "main_uncommitted": p.main_uncommitted, "threads": shown } });
+        // The models a thread may be switched to (`GET /r/models`'s list): not
+        // in the digest, which covers the plan; the choice is bound to the
+        // challenge instead.
+        let view = json!({
+            "plan": { "id": p.id, "sandbox": p.sandbox, "summary": m(&p.summary), "justification": m(&p.justification), "variant": p.variant, "main_uncommitted": p.main_uncommitted, "threads": shown },
+            "models": self.cfg.models, "default_model": self.cfg.claude_model,
+        });
         Shown { view, digest, actionable: true, options: vec![], journal_target: p.id.clone(), pins: None, distillate: None }
     }
 
@@ -699,13 +709,18 @@ impl App {
     // ── The phone's side: the challenge and the action ───────────────────
 
     /// A challenge bound to {device, credential, action, target, digest,
-    /// option}: only when the digest the phone was shown is still current.
-    pub async fn remote_challenge(self: &Arc<Self>, d: &DeviceCtx, action: Action, target: &str, digest: &str, option: Option<&str>) -> Result<Value, L2Error> {
+    /// option, models}: only when the digest the phone was shown is still
+    /// current, the option is one sbx offers, and each model change names a
+    /// thread of the plan and a model of the configured list.
+    pub async fn remote_challenge(self: &Arc<Self>, d: &DeviceCtx, action: Action, target: &str, digest: &str, option: Option<&str>, models: &BTreeMap<String, String>) -> Result<Value, L2Error> {
         if !l2::valid_digest(digest) {
             return Err(L2Error::bad("digest: 64 lower-case hex, as the detail gave it"));
         }
         if (action == Action::NetworkRespond) != option.is_some() {
             return Err(L2Error::bad("option: given for a network request, and only for one"));
+        }
+        if action != Action::PlanApprove && !models.is_empty() {
+            return Err(L2Error::bad("models: only for a plan approval"));
         }
         let (rp, cred) = self.l2_credential(d)?;
         let shown = self.remote_item(action, target).await?;
@@ -714,14 +729,17 @@ impl App {
         };
         if let Some(o) = option {
             if !shown.options.iter().any(|x| x == o) {
-                return Err(L2Error::bad("this option is not one the phone may answer"));
+                return Err(L2Error::bad("this option is not one sbx offers for this request"));
             }
+        }
+        if action == Action::PlanApprove {
+            self.l2_check_models(target, models).map_err(L2Error::bad)?;
         }
         let mut rt = self.remote_access.lock().unwrap();
         if !rt.level2.enabled {
             return Err(L2Error::off());
         }
-        let c = rt.level2.challenges.issue(&d.id, Purpose::Act { action, target: target.into(), digest: digest.into(), option: option.map(str::to_string) }, now_ms());
+        let c = rt.level2.challenges.issue(&d.id, Purpose::Act { action, target: target.into(), digest: digest.into(), option: option.map(str::to_string), models: models.clone() }, now_ms());
         Ok(json!({
             "public_key": {
                 "challenge": b64url_encode(&c.bytes),
@@ -732,6 +750,17 @@ impl App {
             },
             "expires_ms": c.expires_ms,
         }))
+    }
+
+    /// A phone's model changes for plan `id` (see [`l2::check_models`]).
+    fn l2_check_models(&self, id: &str, models: &BTreeMap<String, String>) -> Result<(), String> {
+        if models.is_empty() {
+            return Ok(());
+        }
+        let plan = self.plan(id).ok_or_else(|| "no such plan".to_string())?;
+        let threads: Vec<&str> = plan.threads.iter().map(|t| t.name.as_str()).collect();
+        let allowed: Vec<&str> = self.cfg.models.iter().map(|m| m.id.as_str()).collect();
+        l2::check_models(models, &threads, &allowed)
     }
 
     /// Level 2 on, and this device's passkey made for the current RP ID:
@@ -752,7 +781,7 @@ impl App {
     /// Verify `a` against the device's taken challenge: the digest it was
     /// bound to. Every failure counts against this device only; a counter
     /// regression drops its passkey.
-    fn l2_verify(&self, d: &DeviceCtx, action: Action, target: &str, option: Option<&str>, a: &Assertion) -> Result<String, L2Error> {
+    fn l2_verify(&self, d: &DeviceCtx, action: Action, target: &str, option: Option<&str>, a: &Assertion) -> Result<(String, BTreeMap<String, String>), L2Error> {
         let mut rt = self.remote_access.lock().unwrap();
         if !rt.level2.enabled {
             return Err(L2Error::off());
@@ -768,7 +797,7 @@ impl App {
             if !l2::challenge_fits(&c, action, target, option) {
                 return Err(Fail::Challenge);
             }
-            let Purpose::Act { digest, .. } = &c.purpose else { return Err(Fail::Challenge) };
+            let Purpose::Act { digest, models, .. } = &c.purpose else { return Err(Fail::Challenge) };
             if b64url_decode(&a.id, wa::MAX_CREDENTIAL_ID)? != b64url_decode(&pk.credential_id, wa::MAX_CREDENTIAL_ID)? {
                 return Err(Fail::CredentialId);
             }
@@ -776,16 +805,16 @@ impl App {
             let ad = b64url_decode(&a.authenticator_data, wa::MAX_AUTH_DATA)?;
             let sig = b64url_decode(&a.signature, wa::MAX_SIGNATURE)?;
             let key = b64url_decode(&pk.public_key, 65)?;
-            wa::verify_assertion(&rp, &c.bytes, &key, pk.counter, &cd, &ad, &sig).map(|n| (n, digest.clone()))
+            wa::verify_assertion(&rp, &c.bytes, &key, pk.counter, &cd, &ad, &sig).map(|n| (n, digest.clone(), models.clone()))
         })();
         match verdict {
-            Ok((counter, digest)) => {
+            Ok((counter, digest, models)) => {
                 if counter != pk.counter {
                     rt.level2.passkeys.set_counter(&d.id, counter);
                     let dir = rt.dir.clone();
                     rt.level2.save_passkeys(&dir);
                 }
-                Ok(digest)
+                Ok((digest, models))
             }
             Err(f) => {
                 let _ = rt.level2.fail_minute.hit(&d.id, now);
@@ -806,8 +835,14 @@ impl App {
 
     /// One level 2 action: the passkey check, the digest check, then the
     /// SAME core function the desktop calls, with its refusals.
-    pub async fn remote_act(self: &Arc<Self>, d: &DeviceCtx, action: Action, target: &str, option: Option<&str>, a: &Assertion) -> Result<Value, L2Error> {
-        let digest = self.l2_verify(d, action, target, option, a)?;
+    /// `models`: a plan approval's model changes, which must be the ones the
+    /// challenge was bound to, and still valid ("changed" otherwise).
+    pub async fn remote_act(self: &Arc<Self>, d: &DeviceCtx, action: Action, target: &str, option: Option<&str>, models: &BTreeMap<String, String>, a: &Assertion) -> Result<Value, L2Error> {
+        let (digest, bound) = self.l2_verify(d, action, target, option, a)?;
+        if *models != bound || (action == Action::PlanApprove && self.l2_check_models(target, models).is_err()) {
+            self.l2_journal(d, Kind::Changed, target);
+            return Err(L2Error::changed());
+        }
         let shown = self.remote_item(action, target).await.ok().flatten();
         let Some(shown) = shown.filter(|s| s.digest == digest && s.actionable) else {
             self.l2_journal(d, Kind::Changed, target);
@@ -816,9 +851,18 @@ impl App {
         let jt = shown.journal_target.clone();
         let done: Result<Value, String> = match action {
             // The plan's own threads, read once more and held to the digest:
-            // what starts is exactly what the phone showed.
+            // what starts is exactly what the phone showed, with only the
+            // models the phone chose (bound to the challenge) changed.
             Action::PlanApprove => match self.plan(target).filter(|p| p.state == PlanState::Pending && self.plan_shown(p).digest == digest) {
-                Some(p) => self.plan_approve(target, p.threads, None).await.map(|p| json!({ "plan": p })),
+                Some(p) => {
+                    let mut threads = p.threads;
+                    for t in threads.iter_mut() {
+                        if let Some(m) = models.get(&t.name) {
+                            t.model = Some(m.clone());
+                        }
+                    }
+                    self.plan_approve(target, threads, None).await.map(|p| json!({ "plan": p }))
+                }
                 None => {
                     self.l2_journal(d, Kind::Changed, &jt);
                     return Err(L2Error::changed());
@@ -911,13 +955,18 @@ struct BranchFacts {
     more_files: usize,
 }
 
+/// A network request as the phone is shown it, in the list and (with sbx's
+/// detail) in the detail: every option sbx offers, each with what it does.
 fn network_view(a: &Approval, m: &impl Fn(&str) -> String, detail: bool) -> Value {
-    let (phone, mac): (Vec<_>, Vec<_>) = a.options.iter().partition(|o| l2::phone_option(&o.id, &o.label));
-    let mut v = json!({
-        "id": a.id, "sandbox": a.sandbox, "host": a.title, "created_at": a.created_at,
-        "options": phone.iter().map(|o| json!({ "id": o.id, "label": o.label })).collect::<Vec<_>>(),
-        "mac_only": mac.iter().map(|o| if o.label.is_empty() { o.id.clone() } else { o.label.clone() }).collect::<Vec<_>>(),
-    });
+    let options: Vec<Value> = a
+        .options
+        .iter()
+        .map(|o| {
+            let means = l2::option_meaning(&o.id, &o.label, &a.sandbox, &a.title);
+            json!({ "id": o.id, "label": o.label, "lasting": means.lasting, "effect": means.effect })
+        })
+        .collect();
+    let mut v = json!({ "id": a.id, "sandbox": a.sandbox, "host": a.title, "created_at": a.created_at, "options": options });
     if detail {
         v["detail"] = json!(m(&a.detail));
     }
