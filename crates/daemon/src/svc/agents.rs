@@ -162,7 +162,7 @@ impl App {
                 .map(|c| c.models.as_slice())
                 .unwrap_or_default()
                 .iter()
-                .chain(self.cfg.models.iter())
+                .chain(self.offered_models().iter())
                 .find(|m| &m.id == id)
                 .map(|m| m.label.clone())
         });

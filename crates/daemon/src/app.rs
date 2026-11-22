@@ -60,6 +60,8 @@ pub struct App {
     pub(crate) boards: Mutex<HashMap<String, sbxw_core::board::Board>>,
     pub(crate) codemap: Mutex<RunBook>,
     pub(crate) usage: Mutex<Usage>,
+    /// The last good live model list; `None` until one is read.
+    pub(crate) models_live: Mutex<Option<Vec<sbxw_core::models::LiveModel>>>,
     /// Sandboxes whose main session was made lead, and *which* session (its
     /// address): a restarted agent never read `/lead`. Only the terminals
     /// this daemon holds; see `lead_recs` for what survives a restart.
@@ -176,6 +178,7 @@ impl AppBuilder {
             boards: Mutex::new(HashMap::new()),
             codemap: Mutex::new(RunBook::new()),
             usage: Mutex::new(Usage::default()),
+            models_live: Mutex::new(None),
             leads: Mutex::new(HashMap::new()),
             lead_recs: Mutex::new(lead_recs),
             hook_log: Mutex::new(VecDeque::new()),
@@ -299,6 +302,8 @@ impl App {
             let app = self.clone();
             tokio::spawn(async move { app.poll_usage().await });
         }
+        let app = self.clone();
+        tokio::spawn(async move { app.poll_models().await });
         self.start_stats_ticker();
         self.start_keep_awake();
         self.start_board_listener();

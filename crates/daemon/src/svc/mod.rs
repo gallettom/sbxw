@@ -13,6 +13,7 @@ pub mod jarvis;
 pub mod jarvis_sandbox;
 pub mod kits;
 pub mod mac;
+pub mod models;
 pub mod my_skills;
 pub mod open;
 pub mod plans;

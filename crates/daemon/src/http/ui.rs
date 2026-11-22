@@ -316,7 +316,7 @@ async fn usage(State(app): S) -> Json<Value> {
 }
 
 async fn models(State(app): S) -> Json<Value> {
-    ok_with(json!({ "default": app.cfg.claude_model, "models": app.cfg.models }))
+    ok_with(json!({ "default": app.cfg.claude_model, "models": app.offered_models() }))
 }
 
 async fn leads(State(app): S) -> Json<Value> {
@@ -1897,7 +1897,7 @@ async fn state(State(app): S) -> Json<Value> {
         "codemap": app.codemap_runs(),
         "leads": app.leading(),
         "usage": app.usage(),
-        "models": { "default": app.cfg.claude_model, "models": app.cfg.models },
+        "models": { "default": app.cfg.claude_model, "models": app.offered_models() },
         "versions": { "sbxw": app.versions.sbxw, "sbx": app.versions.sbx },
     }))
 }

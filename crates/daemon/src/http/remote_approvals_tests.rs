@@ -1236,6 +1236,25 @@ async fn a_model_not_in_the_list_or_on_another_thread_is_refused() {
 }
 
 #[tokio::test]
+async fn a_live_only_model_is_offered_and_accepted_an_unknown_one_refused() {
+    let w = world();
+    *w.app.models_live.lock().unwrap() = Some(vec![sbxw_core::models::LiveModel { id: "claude-fable-5-2".into(), label: "Claude Fable 5.2".into(), created_at: 9 }]);
+    let mut p = enrolled(&w, "phone").await;
+    let id = pending_plan(&w, "myapp", "goal");
+    let d = call(&w.router, "GET", &format!("/r/plans/{id}"), Some(&p.token), json!({})).await.json();
+    let listed: Vec<&str> = d["models"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+    assert_eq!(listed.first(), Some(&"claude-fable-5-2"), "live first: {listed:?}");
+    assert!(listed.contains(&"claude-haiku-5-5"), "configured ones stay: {listed:?}");
+    let r = challenge_models(&w, &p, &id, json!({ "alpha": "claude-fable-6-0" })).await;
+    assert!(r.status.is_client_error(), "{}", r.text());
+    let ch = challenge_bytes(&challenge_models(&w, &p, &id, json!({ "alpha": "claude-fable-5-2" })).await);
+    let a = assertion(&mut p, &ch, &Twist::default());
+    let r = approve_with(&w, &p, &id, a, json!({ "alpha": "claude-fable-5-2" })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(w.app.plan(&id).unwrap().threads[0].model.as_deref(), Some("claude-fable-5-2"));
+}
+
+#[tokio::test]
 async fn a_model_changed_after_the_challenge_is_changed() {
     let w = world();
     let mut p = enrolled(&w, "phone").await;

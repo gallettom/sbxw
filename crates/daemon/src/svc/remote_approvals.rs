@@ -620,7 +620,7 @@ impl App {
         // challenge instead.
         let view = json!({
             "plan": { "id": p.id, "sandbox": p.sandbox, "summary": m(&p.summary), "justification": m(&p.justification), "variant": p.variant, "main_uncommitted": p.main_uncommitted, "threads": shown },
-            "models": self.cfg.models, "default_model": self.cfg.claude_model,
+            "models": self.offered_models(), "default_model": self.cfg.claude_model,
         });
         Shown { view, digest, actionable: true, options: vec![], journal_target: p.id.clone(), pins: None, distillate: None }
     }
@@ -759,7 +759,8 @@ impl App {
         }
         let plan = self.plan(id).ok_or_else(|| "no such plan".to_string())?;
         let threads: Vec<&str> = plan.threads.iter().map(|t| t.name.as_str()).collect();
-        let allowed: Vec<&str> = self.cfg.models.iter().map(|m| m.id.as_str()).collect();
+        let offered = self.offered_models();
+        let allowed: Vec<&str> = offered.iter().map(|m| m.id.as_str()).collect();
         l2::check_models(models, &threads, &allowed)
     }
 

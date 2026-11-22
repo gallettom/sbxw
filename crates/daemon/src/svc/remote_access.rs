@@ -1396,16 +1396,16 @@ impl App {
     /// `GET /r/models`: the closed list the phone may choose from (the same
     /// one a thread is started on), and the daemon's default.
     pub fn remote_models(&self) -> serde_json::Value {
-        serde_json::json!({ "default": self.cfg.claude_model, "models": self.cfg.models })
+        serde_json::json!({ "default": self.cfg.claude_model, "models": self.offered_models() })
     }
 
     /// Switch the model of the session the phone shows: types `/model <id>`
-    /// for an id of the configured list, nothing else. The phone sends an id,
+    /// for an id of the offered list (`App::offered_models`), nothing else. The phone sends an id,
     /// never text: the line is built here, so the `/` rule of messages stays
     /// whole. Only at an idle prompt, as a message.
     pub async fn remote_set_model(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, id: &str) -> Result<(), Refusal> {
         let id = sbxw_core::ModelId::parse(id).map_err(|_| Refusal::Bad("model: not a model id".into()))?;
-        if !self.cfg.models.iter().any(|m| m.id == id.as_str()) {
+        if !self.model_offered(id.as_str()) {
             return Err(Refusal::Bad("model: not in the list of models".into()));
         }
         if let Some(why) = self.remote_read_only(sb) {
