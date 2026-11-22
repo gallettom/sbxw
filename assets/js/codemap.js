@@ -3,13 +3,13 @@
 // Reads the markdown knowledge graph a `/codemap` run leaves under
 // `.sbxw-artifacts/codemap/` (see assets/codemap/) and makes it navigable the
 // way Obsidian makes a vault navigable: `[[wiki links]]` are clickable,
-// backlinks are listed, and the whole thing can be seen at once — as the
+// backlinks are listed, and the whole thing can be seen at once: as the
 // map's Archify architecture diagram when `/codemap` drew one, and as the graph
 // of its links otherwise.
 //
 // Everything here is front-end only. The two endpoints the Files panel already
-// uses are enough — `/artifacts` to list, `/artifacts/download` to fetch a
-// file's bytes (the attachment disposition doesn't bother `fetch`) — so this
+// uses are enough: `/artifacts` to list, `/artifacts/download` to fetch a
+// file's bytes (the attachment disposition doesn't bother `fetch`), so this
 // pane needs no new server route and no access beyond `.sbxw-artifacts`.
 //
 // No markdown library: the map is written in a narrow, checker-enforced subset
@@ -43,7 +43,7 @@
   const headingId = (id) => `cm-${id}`;
 
   // Blank out fenced blocks only. Inline code is left in place: a heading may
-  // legitimately contain a `code span`, and blanking it renames the section —
+  // legitimately contain a `code span`, and blanking it renames the section,
   // along with every link that addresses it.
   const maskFences = (text) => {
     let fence = null;
@@ -59,8 +59,8 @@
   };
 
   // Links and inline code, matched in one pass: whichever starts first wins.
-  // That single rule separates `[[refs]]` — a quoted example the code span
-  // swallows — from [[a#`b` c]], a real link whose heading contains code.
+  // That single rule separates `[[refs]]` (a quoted example the code span
+  // swallows) from [[a#`b` c]], a real link whose heading contains code.
   const LINK_OR_CODE = /\[\[[^\]]+\]\]|`+[^`]*`+/g;
   const linksIn = (line) => {
     const found = [];
@@ -119,7 +119,7 @@
 
   // Resolve a markdown wiki link against the loaded docs. Mirrors the rules
   // the checker enforces (and lat.md implements): full path or unique file
-  // stem, case-insensitive headings, and an H1 that may be left implicit —
+  // stem, case-insensitive headings, and an H1 that may be left implicit:
   // `[[cli#mcp]]` means cli.md → "# CLI" → "## mcp".
   function resolveLink(target, docs) {
     const parts = target.split('#');
@@ -207,7 +207,7 @@
   // a placeholder is one more string that must never occur in prose, and the
   // spans around it are exactly where spacing bugs hide.
   // Links and code spans are consumed in document order by the same rule the
-  // parser uses, so a link whose heading contains `code` survives whole — the
+  // parser uses, so a link whose heading contains `code` survives whole; the
   // earlier `split on code spans` approach tore it in three.
   function renderInline(text, ctx) {
     const re = new RegExp(LINK_OR_CODE.source, 'g');   // own instance: renderSpans may re-enter
@@ -234,10 +234,10 @@
       .replace(/`([^`]+)`/g, '<code>$1</code>');
     if (isCodeTarget(target)) {
       // The API only reaches .sbxw-artifacts, so source can't be opened from
-      // here. Copying the path is the useful half — it pastes straight into
+      // here. Copying the path is the useful half: it pastes straight into
       // the IDE's "go to file".
       return `<span class="cm-code-link" data-path="${escapeHtml(target)}"
-        title="Source reference — click to copy">${label}</span>`;
+        title="Source reference: click to copy">${label}</span>`;
     }
     const r = ctx ? resolveLink(target, ctx.docs) : { error: 'no map loaded' };
     if (r.error) {
@@ -301,7 +301,7 @@
         continue;
       }
 
-      // Pipe tables: only the shape maps actually use — header, separator, rows.
+      // Pipe tables: only the shape maps actually use (header, separator, rows).
       if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] || '')) {
         const cells = (row) => row.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
         const head = cells(line);
@@ -366,7 +366,7 @@
   /* ── Graph layout ──────────────────────────────────────────────────────
      Fruchterman-Reingold with a cooling schedule. A map is a handful of
      files, so the O(n²) repulsion pass costs nothing and buys a layout that
-     is stable between openings — no quadtree, no worker. */
+     is stable between openings: no quadtree, no worker. */
 
   function tickGraph(nodes, edges, width, height, alpha) {
     const area = width * height;
@@ -394,7 +394,7 @@
     const cx = width / 2, cy = height / 2;
     for (const n of nodes) {
       if (n.pinned) continue;
-      // Gravity keeps disconnected files from drifting off the canvas — a map
+      // Gravity keeps disconnected files from drifting off the canvas; a map
       // in progress usually has one or two.
       n.vx += (cx - n.x) * 0.035 * k;
       n.vy += (cy - n.y) * 0.035 * k;
@@ -440,7 +440,7 @@
   //
   // It normally does: `/artifacts` folds `codemap/` out of the file list and
   // hands it back as `codemap`, entries and all. This is the fallback for a
-  // project that keeps its map somewhere else — any directory carrying the
+  // project that keeps its map somewhere else: any directory carrying the
   // index file the format requires (dir/dir.md).
   function findMapRoot(entries) {
     const dirs = new Set(entries
@@ -468,7 +468,7 @@
   }
 
   // Every map this project has, in the order the picker offers them: the code
-  // map first — it is the source the lenses are written from — then each lens,
+  // map first (it is the source the lenses are written from), then each lens,
   // newest first, as the server listed them.
   function mapsFrom(data) {
     const maps = [];
@@ -553,16 +553,16 @@
         <p><strong>No code map in this sandbox yet.</strong></p>
         <p>A map is a few linked markdown files under
         <code>.sbxw-artifacts/codemap/</code> describing what the project does and
-        why — the layer the source can't state itself.</p>
+        why: the layer the source can't state itself.</p>
         <p><strong>Generate code map</strong>, in the project panel this opened
-        from, asks this sandbox's agent for one — in a background session, so
+        from, asks this sandbox's agent for one, in a background session, so
         the pane stays yours while it writes.</p>
       </div>`;
     $('codemap-side').innerHTML = '';
   }
 
   /* ── Lenses ───────────────────────────────────────────────────────────
-     A lens is the same repository told for one reader — a product owner, a new
+     A lens is the same repository told for one reader: a product owner, a new
      joiner, whoever the brief names. It is written by the sandbox's own agent
      into `.sbxw-artifacts/codemap-lenses/<slug>/`, beside the map rather than
      inside it, and read here through exactly the same viewer: a lens is a map,
@@ -570,8 +570,8 @@
 
      Nothing in this file writes one. The browser hands the brief to the daemon,
      the daemon starts a background session running `/codemap-lens`, and the
-     agent — the only party that can read the map and judge what a product owner
-     needs from it — writes it while your pane stays yours. The run is the
+     agent (the only party that can read the map and judge what a product owner
+     needs from it) writes it while your pane stays yours. The run is the
      daemon's state, the same as the map's: it reaches this panel through
      `applyRun` below, and the picker reloads itself when the lens lands. */
 
@@ -592,7 +592,7 @@
     toggle.disabled = !hasMap;
     toggle.title = hasMap
       ? 'Ask this sandbox\'s agent to retell the map for one reader'
-      : 'Write the map first — Generate code map, in the project panel — then a lens has something to retell';
+      : 'Write the map first (Generate code map, in the project panel), then a lens has something to retell';
     if (!hasMap) closeLensForm();
   }
 
@@ -654,7 +654,7 @@
     // Deliberately not a progress bar: a lens is minutes of the agent's
     // reading, with no step anyone here can count. What the daemon does report
     // is the run's phase, and `applyRun` below is where the rest of this note's
-    // life happens — including the reload when the lens lands.
+    // life happens, including the reload when the lens lands.
     closeLensForm();
     $('codemap-lens-objective').value = '';
     updateLensCount();
@@ -667,7 +667,7 @@
    * A background run for this sandbox changed phase.
    *
    * Called from `applyCodemapRun` (in /js/sandboxes.js), which owns the tab's
-   * copy of the daemon's state — this panel is one more thing painted from it,
+   * copy of the daemon's state; this panel is one more thing painted from it,
    * like the sidebar badge and the corner card. Only the sandbox on screen is
    * any of its business.
    *
@@ -681,13 +681,13 @@
     const lens = run.kind === 'lens';
     if (run.phase === 'writing') {
       setLensNote(lens
-        ? 'Writing a lens in a background session — this takes a few minutes'
-        : 'Rewriting the map in a background session — this takes a few minutes');
+        ? 'Writing a lens in a background session. This takes a few minutes'
+        : 'Rewriting the map in a background session. This takes a few minutes');
       return;
     }
     if (seed) return;
     if (run.phase === 'done') {
-      setLensNote(lens ? 'Lens written — it is in the picker above' : 'Map rewritten', 'ok');
+      setLensNote(lens ? 'Lens written: it is in the picker above' : 'Map rewritten', 'ok');
       // Reload rather than ask for a Refresh: what changed is a document in the
       // panel you are looking at, and the picker cannot list a lens it has
       // never heard of. Stays on what you were reading (`state.root`).
@@ -807,7 +807,7 @@
      was written by an agent inside the sandbox, and a page running with this
      tab's origin could call every route the daemon serves. Archify guards its
      storage access, so an opaque origin costs it nothing but a remembered
-     theme. A map without a diagram — a lens, or one written before Archify —
+     theme. A map without a diagram (a lens, or one written before Archify)
      falls back to the graph of its links below. */
 
   async function showDiagram() {
@@ -865,7 +865,7 @@
     syncViewButtons();
     const host = $('codemap-doc');
     host.innerHTML = (fallback ? `<p class="cm-diagram-note">No Archify diagram in this map
-      yet — <code>/codemap</code> draws one. Meanwhile, how its files link to each other:</p>` : '')
+      yet. <code>/codemap</code> draws one. Meanwhile, how its files link to each other:</p>` : '')
       + '<svg class="cm-graph" id="codemap-graph"></svg>';
     const svg = $('codemap-graph');
     const width = host.clientWidth || 640;

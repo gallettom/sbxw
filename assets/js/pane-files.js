@@ -294,7 +294,7 @@ function paneDropMount(pane) {
     const w = want;
     want = null;
     if (!w) return;
-    if (paneTypePaths(pane, w, paths)) showToast(`📎 ${paths.join('  ')}`, 'ok');
+    if (paneTypePaths(pane, w, paths)) showToast(`Attached: ${paths.join('  ')}`, 'ok');
   };
   const render = () => {
     if (typeof chatRenderTray === 'function' && tray) chatRenderTray(box, tray, flash);

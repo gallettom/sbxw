@@ -12,7 +12,7 @@
 //   session in the `sbxw-jarvis` sandbox, an agent like any other: picked
 //   in the bar, it is where the words go (see JARVIS below).
 // * **Push-to-talk only**: hold the button, or the key `[voice]` names (F8 by
-//   default — no terminal binds it). Nothing listens while nothing is held.
+//   default; no terminal binds it). Nothing listens while nothing is held.
 // * **The page resamples**: MediaRecorder's own container (webm, mp4) is
 //   decoded here and sent as 16 kHz mono f32, so the daemon parses no audio
 //   format. The audio never leaves the tab otherwise and is never stored.
@@ -64,7 +64,7 @@ function vcRenderSetup() {
     row.className = 'vc-progress';
     const bar = document.createElement('progress');
     bar.max = 100; bar.value = pct;
-    const label = p('vc-dim', `${job.state === 'verifying' ? 'Checking' : 'Downloading'} ${job.model} · ${job.file} — ${pct}% (${vcMb(job.done)} / ${vcMb(job.total)})`);
+    const label = p('vc-dim', `${job.state === 'verifying' ? 'Checking' : 'Downloading'} ${job.model} · ${job.file}: ${pct}% (${vcMb(job.done)} / ${vcMb(job.total)})`);
     const cancel = document.createElement('button');
     cancel.type = 'button'; cancel.className = 'vc-btn'; cancel.textContent = 'Cancel';
     cancel.onclick = () => fetch('/api/voice/cancel', { method: 'POST' });
@@ -78,17 +78,17 @@ function vcRenderSetup() {
     for (const m of s.models || []) {
       const li = document.createElement('li');
       const st = m.installed.state === 'ready' ? '✓' : m.installed.state === 'partial' ? `partial, ${vcMb(m.installed.have)}` : `~${m.approx_mb} MB`;
-      li.textContent = `${m.role.toUpperCase()} · ${m.label} (${m.license}) — ${st}`;
+      li.textContent = `${m.role.toUpperCase()} · ${m.label} (${m.license}): ${st}`;
       list.append(li);
     }
     if (s.speech?.supported) {
       const li = document.createElement('li');
-      li.textContent = `RUNTIME · ${s.speech.runtime}, fetched by uvx — ${s.speech.runtime_ready ? '✓' : 'needs uv installed'}`;
+      li.textContent = `RUNTIME · ${s.speech.runtime}, fetched by uvx: ${s.speech.runtime_ready ? '✓' : 'needs uv installed'}`;
       list.append(li);
     }
     vcSetup.append(p('vc-text', `Voice needs local models, about ${vcGb(s.approx_mb)}. Install them from a terminal:`), code(s.hint || 'sbxw voice install'), p('vc-dim', 'or here:'), list);
     if (job && job.state === 'failed') vcSetup.append(p('vc-warn', `Last download failed: ${job.error || 'unknown error'}`));
-    if (job && job.state === 'cancelled') vcSetup.append(p('vc-dim', 'Download cancelled — installing resumes where it stopped.'));
+    if (job && job.state === 'cancelled') vcSetup.append(p('vc-dim', 'Download cancelled; installing resumes where it stopped.'));
     const go = document.createElement('button');
     go.type = 'button'; go.className = 'vc-btn vc-primary';
     go.textContent = `Install voice (~${vcGb(s.approx_mb)})`;
@@ -175,7 +175,7 @@ async function vcStart(dest = null) {
   vcSpeech.stop(); // speaking over the voice interrupts it
   vcWarm(false);
   if (dest && (!vcReady() || !window.isSecureContext)) {
-    showToast(!window.isSecureContext ? 'The microphone needs sbxw on 127.0.0.1' : `Voice is not installed — run ${vcStatus?.hint || 'sbxw voice install'}`, 'error');
+    showToast(!window.isSecureContext ? 'The microphone needs sbxw on 127.0.0.1' : `Voice is not installed: run ${vcStatus?.hint || 'sbxw voice install'}`, 'error');
     return;
   }
   if (vcRec || vcBusy || vcStarting || !vcReady() || !window.isSecureContext) return;
@@ -329,7 +329,7 @@ async function vcMask(area) {
 // ── Dictation into a terminal ────────────────────────────────────────────
 // What is said is typed into the pane's terminal, as the keyboard would:
 // into Claude's prompt, or a shell. No Enter, so it can be read and fixed
-// first — unless the dictation ends with "entrée" (or "envoie", "enter"),
+// first, unless the dictation ends with "entrée" (or "envoie", "enter"),
 // which is dropped and pressed as Return, its own keystroke once the text
 // has landed (a Return inside the burst would be pasted as a newline).
 const VC_ENTER = /[\s,.;:!?]*\b(entr[ée]e?|entrer|envoie|envoyer|enter|send)[\s.!]*$/i;
@@ -347,7 +347,7 @@ function vcDictate(idx, text) {
 function vcDictateKey() { return (vcStatus && vcStatus.dictate_key) || 'F9'; }
 
 // The pane's button toggles: one click starts listening, the next stops and
-// types — easier than holding a button through a long sentence. F9 stays
+// types, easier than holding a button through a long sentence. F9 stays
 // push-to-talk.
 document.addEventListener('click', e => {
   const b = e.target.closest('.pane-dictate-btn');
@@ -991,8 +991,8 @@ window.addEventListener('keydown', e => {
 
 // ── Following the sandbox's agent: the grill by voice ───────────────────
 // The picked sandbox's agents are followed on the session stream (the chat
-// dock's own reader, chat-core.js). When one ends its turn with a message —
-// a /grill-me round, a question in prose — it shows here and is read aloud
+// dock's own reader, chat-core.js). When one ends its turn with a message (
+// a /grill-me round, a question in prose), it shows here and is read aloud
 // as written (markdown and code blocks left out), and the next thing said
 // answers it: the words are shown, editable, and confirmed before they are
 // typed into that session. A multiple-choice question (AskUserQuestion) is
@@ -1008,7 +1008,7 @@ try { vcFollow = localStorage.getItem(VC_FOLLOW) === '1'; } catch (_) {}
 
 // A grill is what the voice is for: a prompt starting /grill-me (or
 // /grilling), or a reply in its round format, engages the concierge even
-// with Follow off — and opens the panel, since what arrives must be seen.
+// with Follow off, and opens the panel, since what arrives must be seen.
 const VC_GRILL_PROMPT = /^\s*\/(grill-me|grilling)\b/i;
 const VC_GRILL_REPLY = /❓\s*\*\*Q\d+/;
 function vcEngages(info, reply) {
@@ -1161,11 +1161,11 @@ function vcGrill(sandbox, thread, text, grill) {
 
   const show = () => {
     const q = grill.questions[st.i];
-    head.textContent = `${vcWho(sandbox, thread)} · ${q.id} (${st.i + 1}/${n})${q.title ? ' — ' + q.title : ''}`;
-    now.innerHTML = chatMarkdown(q.body || q.ask) + (q.rec ? `<p class="vc-grill-rec">➡️ ${chatInline(q.rec)}</p>` : '');
+    head.textContent = `${vcWho(sandbox, thread)} · ${q.id} (${st.i + 1}/${n})${q.title ? ': ' + q.title : ''}`;
+    now.innerHTML = chatMarkdown(q.body || q.ask) + (q.rec ? `<p class="vc-grill-rec">Recommended: ${chatInline(q.rec)}</p>` : '');
     answers.replaceChildren(...grill.questions.slice(0, st.i).map(x => {
       const li = document.createElement('li');
-      li.textContent = `${x.id}${x.title ? ' — ' + x.title : ''} : ${x.answer ?? '(skipped)'}`;
+      li.textContent = `${x.id}${x.title ? ' (' + x.title + ')' : ''} : ${x.answer ?? '(skipped)'}`;
       return li;
     }));
     vcArm({ kind: 'grill', st, card });
@@ -1406,8 +1406,8 @@ sbxwStream.addEventListener('session', ev => {
   try { info = JSON.parse(ev.data); } catch (_) { return; }
   // Every session sbxw drives in that sandbox: its main agent, and the
   // threads and sessions it named (SBXW_THREAD, which read as `remote`
-  // since they are not the main agent). A client of its own — Claude
-  // Desktop, an ssh shell — has no thread and stays out.
+  // since they are not the main agent). A client of its own (Claude
+  // Desktop, an ssh shell) has no thread and stays out.
   if (!vcTarget || info.sandbox !== vcTarget) return;
   if (info.origin === 'remote' && !info.thread) return;
   const key = `${info.sandbox}::${info.thread || ''}`;
@@ -1425,7 +1425,7 @@ function vcRenderFollow() {
   vcFollowBtn.classList.toggle('on', vcFollow);
   vcFollowBtn.title = vcFollow
     ? "Following this sandbox's agents: every message and question shows here and is read aloud"
-    : 'Only a /grill-me is followed — click to follow every turn';
+    : 'Only a /grill-me is followed; click to follow every turn';
   vcFollowBtn.setAttribute('aria-pressed', String(vcFollow));
 }
 vcFollowBtn.addEventListener('click', () => {

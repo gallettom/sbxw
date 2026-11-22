@@ -3,14 +3,14 @@
 // sbxw can drive `sbx` on other machines over SSH (docs/remote-hosts.md).
 // Their sandboxes are named by ref, `host~name`; this machine's keep their
 // bare names. With at least one host registered the sidebar becomes one
-// section per host — `local` first — each with a header saying whether its
+// section per host (`local` first), each with a header saying whether its
 // SSH link is up, how long a round trip takes, and a ⋯ menu (Test, Provision,
 // Edit). With none, nothing here shows and the sidebar is what it always was.
 //
 // The registry itself (`~/.sbxw/hosts.toml`) is edited in Setup → Hosts. A
 // host key is trusted once, on a fingerprint the person has read: the dialog
-// asks the daemon for it first, shows it, and only the second call — which
-// carries the fingerprint back — writes known_hosts.
+// asks the daemon for it first, shows it, and only the second call (which
+// carries the fingerprint back) writes known_hosts.
 let remoteHosts = [];
 // This machine's sbxw binary, for the provision command (from the daemon).
 let sbxwBin = 'sbxw';
@@ -211,10 +211,10 @@ function openProvisionModal(host) {
 function closeProvisionModal() { provOverlay.close(); }
 
 document.getElementById('provision-copy').addEventListener('click', () => {
-  if (!navigator.clipboard) { showToast('Clipboard unavailable — select the command and copy it', 'error'); return; }
+  if (!navigator.clipboard) { showToast('Clipboard unavailable: select the command and copy it', 'error'); return; }
   navigator.clipboard.writeText(provCmd.textContent)
-    .then(() => showToast('Copied — paste it in a terminal on this machine', 'ok'))
-    .catch(() => showToast('Copy failed — select the command and copy it', 'error'));
+    .then(() => showToast('Copied. Paste it in a terminal on this machine', 'ok'))
+    .catch(() => showToast('Copy failed: select the command and copy it', 'error'));
 });
 document.getElementById('provision-modal-close').addEventListener('click', closeProvisionModal);
 document.getElementById('provision-modal-close2').addEventListener('click', closeProvisionModal);
@@ -358,7 +358,7 @@ async function hostsSubmit(fingerprints) {
     const url = hostsEditing ? `/api/remote-hosts/${encodeURIComponent(hostsEditing)}/edit` : '/api/remote-hosts/add';
     const r = await postJsonOrError(url, { ...form, fingerprints: fingerprints || null });
     if (!r.ok) { showNote(hostsError, r.error || 'Could not save the host'); return; }
-    showToast(hostsEditing ? `Saved ${form.name}` : `Added ${form.name} — try ⋯ → Test in the sidebar`, 'ok');
+    showToast(hostsEditing ? `Saved ${form.name}` : `Added ${form.name}. Try ⋯ → Test in the sidebar`, 'ok');
     await loadSandboxes();
     hostsReset();
   } finally {

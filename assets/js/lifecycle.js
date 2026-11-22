@@ -18,7 +18,7 @@ async function removeSandbox(name) {
   // The sandbox is going away and so is every terminal onto it. Emptying the
   // pane rather than just dropping its socket is the difference between "this
   // session is gone" and a pane still captioned with the sandbox's name,
-  // showing the last screen it ever printed — and the saved layout must forget
+  // showing the last screen it ever printed, and the saved layout must forget
   // it too, or the next reload tries to reconnect a sandbox that is not there.
   panes.forEach((p, i) => { if (p.sandbox === name) emptyPane(i); });
   saveLayout();
@@ -95,7 +95,7 @@ dupInpName.addEventListener('input', () => {
     el.setSelectionRange(pos, pos);
   }
   dupNameErr.textContent = hadInvalidChars
-    ? 'Lowercase letters, digits, and hyphens only — must start and end with a letter or digit'
+    ? 'Lowercase letters, digits, and hyphens only; must start and end with a letter or digit'
     : '';
   dupNameErr.classList.toggle('hidden', !hadInvalidChars);
   dupInpName.classList.remove('error');
@@ -130,7 +130,7 @@ dupConfirm.addEventListener('click', () => {
         const warnings = Array.isArray(data.warnings) ? data.warnings : [];
         showToast(
           warnings.length
-            ? `Sandbox “${newName}” duplicated — ⚠ ${warnings[warnings.length - 1]}`
+            ? `Sandbox “${newName}” duplicated: ⚠ ${warnings[warnings.length - 1]}`
             : `Sandbox “${newName}” duplicated from “${source}”`,
           warnings.length ? 'error' : 'ok');
       } else {

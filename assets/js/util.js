@@ -1,7 +1,7 @@
 // Escape text for interpolation into an HTML string, attribute values
 // included. Loaded first, so every panel that builds markup from values sbxw
-// does not itself constrain — filesystem paths, policy rows out of `sbx`, an
-// agent's question — can reach for it.
+// does not itself constrain (filesystem paths, policy rows out of `sbx`, an
+// agent's question) can reach for it.
 function escHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -80,8 +80,8 @@ function anyModalOpen() {
 }
 
 // The app's global shortcuts (⌥N new sandbox, ⌥M chat). On a Mac, Option
-// alone is how characters are typed — ⌥N is the tilde dead key on French and
-// US layouts alike, ⌥M is "µ" — so taking it breaks typing `~` in a
+// alone is how characters are typed (⌥N is the tilde dead key on French and
+// US layouts alike, ⌥M is "µ"), so taking it breaks typing `~` in a
 // terminal pane. There the shortcut is ⌃⌥ instead, which types nothing.
 // Elsewhere Alt alone stays: Ctrl+Alt is AltGr on many Windows layouts.
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
@@ -124,7 +124,7 @@ function showNote(el, msg) {
 // itself (path '') or a repo one level down. The New thread dialog and the
 // plan dialog both list them, so the reading lives here once.
 
-// `{ok, workspace, repos}` from the daemon, or `{ok: false, error}` — an
+// `{ok, workspace, repos}` from the daemon, or `{ok: false, error}`, an
 // unreachable daemon folded in, as postJsonOrError does.
 async function fetchRepos(sandbox) {
   try {
@@ -156,7 +156,7 @@ function repoStatus(r) {
 
 // ── Models ────────────────────────────────────────────────────────────────
 // The Claude models a thread can run, from /api/models: `{ok, default,
-// models: [{id, label}]}`, or `{ok: false}` when the daemon has none to offer —
+// models: [{id, label}]}`, or `{ok: false}` when the daemon has none to offer;
 // then no model control is shown and threads get the daemon's default. Asked
 // once per tab: the list cannot change while the daemon runs.
 let modelsAsk = null;
@@ -193,6 +193,19 @@ function timeAgo(iso) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+// ── Icons ──────────────────────────────────────────────────────────────────
+// Stroke icons in currentColor, for markup the scripts write (in place of
+// emoji, which render differently on every system). Decorative: the text or
+// the aria-label beside each one says what it is.
+const ICON = {
+  folder: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.75 4.25a1 1 0 0 1 1-1h3.1l1.4 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z"/></svg>',
+  file: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.75 1.75h5.5l3 3v9.5h-8.5z"/><path d="M9.25 1.75v3h3"/></svg>',
+  chat: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.25 3.25a1 1 0 0 1 1-1h9.5a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H7l-3 2.75v-2.75h-.75a1 1 0 0 1-1-1z"/></svg>',
+  clip: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m13.2 7.6-4.9 4.9a3 3 0 0 1-4.2-4.2l5.2-5.2a2 2 0 0 1 2.8 2.8L6.9 11.1a1 1 0 0 1-1.4-1.4l4.6-4.6"/></svg>',
+  trash: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.25h11M6.25 4.25v-2h3.5v2M3.75 4.25l.75 9.5h7l.75-9.5"/></svg>',
+  lock: '<svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.25" y="7.25" width="9.5" height="6.5" rx="1.25"/><path d="M5.25 7.25V5a2.75 2.75 0 0 1 5.5 0v2.25"/></svg>',
+};
+
 // ── Toast ─────────────────────────────────────────────────────────────────
 let pasteToastTimer = null;
 function showToast(msg, kind) {
@@ -213,7 +226,7 @@ function showToast(msg, kind) {
 // ── Background-job corner indicators ─────────────────────────────────────
 // Long-running operations (sandbox creation, port publishing) run in the
 // background instead of blocking the UI behind a modal overlay. Each one
-// gets a small pixel-logo card stacked in the bottom-right corner — "SBXW"
+// gets a small pixel-logo card stacked in the bottom-right corner: "SBXW"
 // rendered as a 5×7 dot-matrix glyph grid (same blue/green pair as the
 // header badge), with a fill level sweeping up through it and back down on
 // a loop for as long as the job is running.
@@ -271,7 +284,7 @@ let bgJobSeq = 0;
  * Opens an empty corner card and hands back its body to fill.
  *
  * Most background work has one line to say and uses `startBgJob` below. Work
- * that has more — a bring-up ticking off the steps it announced — writes into
+ * that has more (a bring-up ticking off the steps it announced) writes into
  * `body` instead, so it still arrives in the same corner, in the same card,
  * with the same logo and the same entry and exit. A long job looks like a long
  * job whatever it happens to be doing.
@@ -327,20 +340,20 @@ function copyField(btn, text) {
     setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1400);
   };
   // The clipboard API needs a secure context; sbxw is served over plain HTTP on
-  // a loopback name, which qualifies — but not if the page was reached by LAN
+  // a loopback name, which qualifies, but not if the page was reached by LAN
   // IP, so the failure is real and has to say what to do instead.
   if (!navigator.clipboard) {
     done(false);
-    showToast('Clipboard needs localhost or HTTPS — select the value and copy it', 'error');
+    showToast('Clipboard needs localhost or HTTPS. Select the value and copy it', 'error');
     return;
   }
   navigator.clipboard.writeText(text).then(() => done(true)).catch(() => {
     done(false);
-    showToast('Copy failed — select the value and copy it', 'error');
+    showToast('Copy failed. Select the value and copy it', 'error');
   });
 }
 
-/// Copy `text` with no UI of its own — for the copies nobody pressed a button
+/// Copy `text` with no UI of its own, for the copies nobody pressed a button
 /// for (selecting text in a terminal). Resolves to whether the clipboard took
 /// it, so the caller decides whether a failure is worth saying out loud.
 ///
@@ -355,7 +368,7 @@ function copyQuiet(text) {
 
 /// The pre-Clipboard-API path: `execCommand('copy')` copies the *document*
 /// selection, so it needs a real element holding the text and selected in it.
-/// Off-screen rather than hidden — `display:none` can't hold a selection — and
+/// Off-screen rather than hidden (`display:none` can't hold a selection), and
 /// focus goes back where it was, or the terminal loses the keyboard to a
 /// textarea that no longer exists.
 function copyViaExecCommand(text) {
@@ -379,7 +392,7 @@ function copyViaExecCommand(text) {
 // elsewhere, and re-placing it when the layout moves are the same problem every
 // time, and the last three are the ones easy to get subtly wrong.
 
-/// The popover currently open, so opening one closes the other — explicitly,
+/// The popover currently open, so opening one closes the other, explicitly,
 /// not as a side effect of the outside-click handler, which only fires on a
 /// click.
 let openPopover = null;
@@ -389,7 +402,7 @@ let openPopover = null;
 /// Measured after the content is built and while `visibility: hidden`, since a
 /// `display: none` element has no size to measure.
 ///
-/// Returns false when the anchor has left the document — a layout change
+/// Returns false when the anchor has left the document: a layout change
 /// rebuilds panes, which can take the button out from under a card that is
 /// still up.
 function positionPopover(pop, anchor) {
@@ -417,8 +430,8 @@ function positionPopover(pop, anchor) {
   return true;
 }
 
-/// Wire up one pane-bar card. `onOpen(payload)` fills its content — it runs
-/// *before* the first placement, so the card is measured at its real size — and
+/// Wire up one pane-bar card. `onOpen(payload)` fills its content (it runs
+/// *before* the first placement, so the card is measured at its real size), and
 /// `onClose()` drops whatever state that content needed.
 ///
 /// Returns `{ open, close, toggle, reposition, isOpen }`. The caller keeps only

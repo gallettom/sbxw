@@ -2,7 +2,7 @@
 //
 // The drop box above Skills. A file dropped on it (or picked through it) opens
 // a modal asking which sandbox it is for; picking one copies the file in and
-// types its path into that sandbox's Claude prompt — not submitted, so there is
+// types its path into that sandbox's Claude prompt: not submitted, so there is
 // room to say what the file is for before Return.
 //
 // A sandbox no pane shows gets one first, the way a freshly created sandbox
@@ -21,7 +21,7 @@ const uploadError = document.getElementById('upload-error');
 // file is refused before it is sent rather than after.
 const UPLOAD_MAX = 128 * 1024 * 1024;
 // Silence after which a terminal counts as drawn: a cold TUI's first frame,
-// and a warm one's redraw — the same two numbers as typing.rs.
+// and a warm one's redraw; the same two numbers as typing.rs.
 const UPLOAD_SETTLE_COLD = 900;
 const UPLOAD_SETTLE_WARM = 180;
 // A stopped sandbox starts when its pane attaches, which can take a while.
@@ -111,7 +111,7 @@ function renderUploadSandboxes(blocked) {
 
 // The pane whose prompt the path goes into, attaching one when none shows the
 // sandbox: the focused pane when it is already on it (agent or thread), else
-// its agent's pane, else a fresh one — an empty pane, a new one when the
+// its agent's pane, else a fresh one: an empty pane, a new one when the
 // layout has room, the focused one as a last resort. -1 when connectPane
 // refused (that session is in another pane in a mode we did not look for).
 function uploadPane(name) {
@@ -132,7 +132,7 @@ function uploadPane(name) {
 // Resolves once the pane's socket is open and its output has been quiet for
 // `quiet` ms. `cold` also waits for a first byte: a pane just attached has
 // drawn nothing yet, and nothing is not the same as quiet. A warm pane whose
-// agent is busy never goes quiet; it is typed into after a second anyway —
+// agent is busy never goes quiet; it is typed into after a second anyway:
 // Claude Code queues what is typed mid-turn.
 function paneSettled(pane, name, cold) {
   const quiet = cold ? UPLOAD_SETTLE_COLD : UPLOAD_SETTLE_WARM;
@@ -162,7 +162,7 @@ async function uploadOne(name, file) {
 }
 
 // A sandbox starting from stopped can go quiet mid-boot, before `sbx exec`
-// reaches it — which the daemon answers 502. Retried until it is up; every
+// reaches it, which the daemon answers 502. Retried until it is up; every
 // other refusal is the answer.
 async function uploadWhenUp(pane, name, file, cold) {
   const t0 = Date.now();
@@ -201,7 +201,7 @@ async function sendUpload() {
     // context. When the pane cannot take keys (held, covered, another session,
     // not connected) it shows the paths with a Copy button and returns false:
     // the toast must not say attached then.
-    if (paneTypePaths(pane, want, paths)) showToast('📎 ' + paths.join('  '), 'ok');
+    if (paneTypePaths(pane, want, paths)) showToast('Attached: ' + paths.join('  '), 'ok');
     else showToast('Uploaded; the paths are on the pane, not typed', 'error');
   } catch (e) {
     showToast(`Upload failed: ${e.message}`, 'error');

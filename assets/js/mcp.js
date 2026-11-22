@@ -56,11 +56,11 @@ function mcpRenderList() {
         <span class="tpl-tag" title="${escHtml(s.name)}">${escHtml(s.name)}</span>
         <span class="tpl-meta">${escHtml(s.type || '')}</span>
         <span class="mcp-actions">
-          <button class="mcp-btn" data-act="load" ${target ? '' : 'disabled'} title="Attach to ${escHtml(target || 'a running sandbox')} — its agent picks up the tools without a restart">Load</button>
-          <button class="mcp-btn" data-act="unload" ${target ? '' : 'disabled'} title="Detach from ${escHtml(target || 'a running sandbox')} — its agent keeps running">Unload</button>
-          ${mcpIsStdio(s) ? '' : `<button class="mcp-btn" data-act="auth" title="sbx mcp auth — sign in from this host's browser; the token serves every sandbox">Sign in</button>`}
-          <button class="mcp-btn" data-act="inspect" title="sbx mcp inspect — header templates and whether their secrets are set">Inspect</button>
-          <button class="mcp-btn" data-act="edit" title="Edit — saved as remove then add">Edit</button>
+          <button class="mcp-btn" data-act="load" ${target ? '' : 'disabled'} title="Attach to ${escHtml(target || 'a running sandbox')}; its agent picks up the tools without a restart">Load</button>
+          <button class="mcp-btn" data-act="unload" ${target ? '' : 'disabled'} title="Detach from ${escHtml(target || 'a running sandbox')}; its agent keeps running">Unload</button>
+          ${mcpIsStdio(s) ? '' : `<button class="mcp-btn" data-act="auth" title="sbx mcp auth: sign in from this host's browser; the token serves every sandbox">Sign in</button>`}
+          <button class="mcp-btn" data-act="inspect" title="sbx mcp inspect: header templates and whether their secrets are set">Inspect</button>
+          <button class="mcp-btn" data-act="edit" title="Edit: saved as remove then add">Edit</button>
           <button class="tpl-rm" data-act="rm" title="Unregister from this host">Remove</button>
         </span>
       </div>`).join('')
@@ -129,7 +129,7 @@ function mcpStartEdit(s) {
   mcpDir.value = mcpField(d, 'dir', 'cwd', 'config.dir') || '';
   mcpSyncKind();
   mcpRenderSecrets();
-  showNote(mcpError, (mcpUrl.value || mcpCommand.value) ? '' : 'sbx did not list this server\'s settings — fill them in again (Inspect shows its headers).');
+  showNote(mcpError, (mcpUrl.value || mcpCommand.value) ? '' : 'sbx did not list this server\'s settings; fill them in again (Inspect shows its headers).');
   mcpName.focus();
 }
 

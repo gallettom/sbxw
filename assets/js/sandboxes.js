@@ -11,9 +11,9 @@ const readySandboxes = new Set();
 
 // If a visible pane is sitting empty (no sandbox attached), a freshly
 // created/duplicated sandbox attaches to it straight away instead of just
-// sitting in the sidebar as "ready" — no need to manually connect it when
+// sitting in the sidebar as "ready"; no need to manually connect it when
 // there was somewhere obvious for it to go. If every pane is busy, the
-// layout grows by one pane and the sandbox attaches there instead — unless
+// layout grows by one pane and the sandbox attaches there instead, unless
 // the layout is already at the max the window can fit, in which case this
 // falls back to the old "flag it ready, switch to it when you're ready"
 // behaviour.
@@ -38,11 +38,11 @@ function attachToEmptyPaneOrMarkReady(name) {
  * A creation is background work like publishing a port or writing a code map,
  * so it says so where the other long jobs do: a card in the bottom-right stack
  * (`#bg-jobs`, see `openBgJob`), not a row in the sandbox list. The list is for
- * sandboxes that exist — this one does not yet — and one corner for everything
+ * sandboxes that exist (this one does not yet), and one corner for everything
  * running behind you beats a second place to look.
  *
  * Returns the card's state, so a caller that only wants to make sure a card
- * exists — the progress stream, for a bring-up this tab did not start — can
+ * exists (the progress stream, for a bring-up this tab did not start) can
  * take the existing one instead of restarting its animation.
  */
 function addPendingSandbox(name) {
@@ -73,8 +73,8 @@ function addPendingSandbox(name) {
     steps: [],
     /// Index into `steps` of the one running now; -1 before the first starts.
     at: -1,
-    /// The last line `sbx` printed under it. Latest wins — a status line, not
-    /// a log — and cleared when the next step starts.
+    /// The last line `sbx` printed under it. Latest wins (a status line, not
+    /// a log), and cleared when the next step starts.
     detail: '',
   };
   pendingCreations.set(name, pending);
@@ -99,7 +99,7 @@ function removePendingSandbox(name) {
 // daemon reports each step as it starts and forwards what `sbx` prints
 // underneath (see src/progress.rs); this paints it.
 //
-// The plan is drawn whole, unstarted steps included — a slow step then reads
+// The plan is drawn whole, unstarted steps included: a slow step then reads
 // as *one of seven with five still to come* rather than as a list that has
 // stopped moving.
 function renderPendingSteps(p) {
@@ -143,7 +143,7 @@ function applyProvisionEvent(ev) {
     p.at = -1;
     p.detail = '';
   } else if (ev.kind === 'started') {
-    // An id with no row — an older page against a newer daemon — leaves the
+    // An id with no row (an older page against a newer daemon) leaves the
     // list on the last step it does know, which is still true of the bring-up:
     // that step has started and has not been said to finish.
     const idx = p.steps.findIndex(s => s.id === ev.id);
@@ -159,7 +159,7 @@ function applyProvisionEvent(ev) {
 
 // ── Code map runs ─────────────────────────────────────────────────────────
 //
-// A code map — and a lens on it — is written by the sandbox's own agent, in a
+// A code map (and a lens on it) is written by the sandbox's own agent, in a
 // background session with no pane to watch, and it takes minutes (see
 // src/codemap.rs). The daemon holds that state per sandbox and streams every
 // change over `/api/stream`'s `codemap` event; this is the tab's copy of it.
@@ -167,12 +167,12 @@ function applyProvisionEvent(ev) {
 // One run per sandbox whatever it is writing, which is the daemon's rule and
 // not this file's: a lens is written *from* the map, so the two never overlap.
 // Everything here therefore keys on the sandbox and reads `run.kind` for the
-// words — "map" and "lens" are different documents and calling one the other
+// words: "map" and "lens" are different documents and calling one the other
 // in a toast is how you go looking in the wrong directory.
 //
 // State rather than a promise, deliberately: the run belongs to the daemon and
 // not to the click that started it. A tab opened halfway through seeds itself
-// from `/api/codemap` and shows exactly what the tab that clicked shows — a
+// from `/api/codemap` and shows exactly what the tab that clicked shows: a
 // badge on the sandbox's row, and one of the corner cards long jobs already
 // use.
 const codemapRuns = new Map();   // sandbox -> { phase, started, ended, note }
@@ -186,7 +186,7 @@ const isLensRun = (run) => run?.kind === 'lens';
 const codemapWhat = (run) => (isLensRun(run) ? 'lens' : 'code map');
 
 /**
- * Apply one run — from the SSE event, or from a snapshot.
+ * Apply one run, from the SSE event, or from a snapshot.
  *
  * `seed` marks a snapshot: those runs are already true rather than freshly
  * reached, so reloading the tab must not announce a map written an hour ago.
@@ -205,7 +205,7 @@ function applyCodemapRun(run, seed = false) {
 
   if (run.phase === 'writing') {
     if (!codemapCards.has(name)) {
-      const label = isLensRun(run) ? `Lens — ${name}` : `Code map — ${name}`;
+      const label = isLensRun(run) ? `Lens: ${name}` : `Code map: ${name}`;
       codemapCards.set(name, startBgJob(label));
     }
   } else {
@@ -217,7 +217,7 @@ function applyCodemapRun(run, seed = false) {
       const what = codemapWhat(run);
       if (run.phase === 'done') {
         showToast(isLensRun(run)
-          ? `Lens written in “${name}” — it is in the Code map panel's picker`
+          ? `Lens written in “${name}”; it is in the Code map panel's picker`
           : `Code map written in “${name}”`, 'ok');
       } else {
         showToast(`Could not write the ${what} in “${name}”: ${run.note || 'the session ended without one'}`, 'error');
@@ -252,13 +252,13 @@ function workspaceGroupColor(key) {
 }
 
 // Chat sandboxes each get their own throwaway workspace, so path grouping can
-// never bring them together — they group on the API's `chat` flag instead,
+// never bring them together; they group on the API's `chat` flag instead,
 // under a sentinel key no real path can collide with, and keep a fixed accent
 // (they're one recognisable kind, not one folder among many).
 const CHAT_GROUP = '\u0000chat';
 const CHAT_GROUP_COLOR = 'hsl(265, 60%, 68%)';
 
-// The card the ungrouped share: no workspace, so no hue — a dark one.
+// The card the ungrouped share: no workspace, so no hue, a dark one.
 const OTHER_GROUP = '\u0000other';
 
 function groupKeyOf(s) {
@@ -272,8 +272,8 @@ function groupColorOf(key) {
 
 // Reorders sandboxes into three tiers: the chat group first (it always forms,
 // even with a single chat sandbox, and always sorts to the very top so it's
-// never buried under older workspaces), then every other group — sorted by its
-// label — and finally ungrouped sandboxes on their own. Grouped sandboxes never
+// never buried under older workspaces), then every other group (sorted by its
+// label), and finally ungrouped sandboxes on their own. Grouped sandboxes never
 // interleave with ungrouped ones this way: all the group cards sit together as
 // one block, with any singles trailing after rather than wedged between them.
 //
@@ -325,7 +325,7 @@ function sandboxItemHtml(s, groupColor) {
   const addTag = !isActive && !sandboxUnreachable(s)
     ? `<button class="sbx-pane-add" data-action="open-pane" data-name="${escHtml(s.name)}" title="Open in an empty pane, or in a new one" aria-label="Open ${escHtml(s.name)} in another pane">+</button>`
     : '';
-  // The sandbox in the focused pane — the one being worked on — keeps its
+  // The sandbox in the focused pane (the one being worked on) keeps its
   // row's buttons out without a hover (see "Row actions, on demand").
   const isFocused = panes[focusedPane]?.sandbox === s.name;
   const isRunning = s.status === 'running';
@@ -343,7 +343,7 @@ function sandboxItemHtml(s, groupColor) {
   const down = sandboxUnreachable(s);
   const dupBtn = `<button class="icon-btn dup-btn" data-action="duplicate" data-name="${escHtml(s.name)}" title="Duplicate (new sandbox, same workspace)">⧉</button>`
     // Made by an sbx older than 0.51: it runs, but takes no kit until recreated.
-    + (s.kits_waiting ? `<button class="icon-btn approve-btn" data-action="kit-add" data-name="${escHtml(s.name)}" title="${s.kits_waiting} kit${s.kits_waiting > 1 ? 's' : ''} waiting for your approval — answer sbx's prompt in a pane">✓</button>` : '')
+    + (s.kits_waiting ? `<button class="icon-btn approve-btn" data-action="kit-add" data-name="${escHtml(s.name)}" title="${s.kits_waiting} kit${s.kits_waiting > 1 ? 's' : ''} waiting for your approval: answer sbx's prompt in a pane">✓</button>` : '')
     + (s.old_sbx && !s.chat ? `<button class="icon-btn recreate-btn" data-action="recreate" data-name="${escHtml(s.name)}" title="Recreate with this sbx">⟲</button>` : '');
   const actions = down
     ? ['▶', '⇌', '⧉', '✕'].map(icon =>
@@ -352,7 +352,7 @@ function sandboxItemHtml(s, groupColor) {
     ? `<button class="icon-btn stop-btn" data-action="stop" data-name="${escHtml(s.name)}" title="Stop">■</button>
        <button class="icon-btn restart-btn" data-action="restart" data-name="${escHtml(s.name)}" title="Reload">↺</button>
        <button class="icon-btn ports-btn" data-action="ports" data-name="${escHtml(s.name)}" title="Ports &amp; network policy">⇌</button>
-       <button class="icon-btn browser-btn" data-action="browser" data-name="${escHtml(s.name)}" title="Browser — the sandbox's own Chromium, live" aria-label="Browser"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6.3"/><path d="M1.7 8h12.6M8 1.7c2.2 2 2.2 10.600 0 12.6M8 1.7c-2.2 2-2.2 10.600 0 12.6"/></svg></button>
+       <button class="icon-btn browser-btn" data-action="browser" data-name="${escHtml(s.name)}" title="Browser: the sandbox's own Chromium, live" aria-label="Browser"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6.3"/><path d="M1.7 8h12.6M8 1.7c2.2 2 2.2 10.600 0 12.6M8 1.7c-2.2 2-2.2 10.600 0 12.6"/></svg></button>
        ${dupBtn}
        <button class="icon-btn rm-btn" data-action="rm" data-name="${escHtml(s.name)}" title="Remove permanently">✕</button>`
     : `<button class="icon-btn connect-btn" data-action="connect" data-name="${escHtml(s.name)}" title="Connect">▶</button>
@@ -360,7 +360,7 @@ function sandboxItemHtml(s, groupColor) {
        ${dupBtn}
        <button class="icon-btn rm-btn" data-action="rm" data-name="${escHtml(s.name)}" title="Remove permanently">✕</button>`;
   // Active state is on border-right and the group colour on border-left, so
-  // a row can carry both. Ungrouped rows still get a left border — just a
+  // a row can carry both. Ungrouped rows still get a left border, just a
   // neutral grey (the same one buttons use), so the sidebar's left edge
   // reads consistently whether or not a row belongs to a group.
   const borderStyle = ` style="border-left-color:${groupColor || '#c9d1d9'}"`;
@@ -373,7 +373,7 @@ function sandboxItemHtml(s, groupColor) {
   // person takes colour: sbx's pending requests. "Made by an older sbx" is a
   // ring, worded in its tooltip, and gives way to ⟲ among the row's actions.
   const flagTag = s.approvals
-    ? `<button class="sbx-flag" data-action="approvals" data-name="${escHtml(s.name)}" title="sbx is waiting for you to decide ${s.approvals} request${s.approvals > 1 ? 's' : ''} — a host no rule allows, a kit's port">⚑ ${s.approvals}</button>`
+    ? `<button class="sbx-flag" data-action="approvals" data-name="${escHtml(s.name)}" title="sbx is waiting for you to decide ${s.approvals} request${s.approvals > 1 ? 's' : ''}: a host no rule allows, a kit's port">⚑ ${s.approvals}</button>`
     : '';
   const oldTag = s.old_sbx
     ? '<span class="sbx-old-mark" title="Made by an sbx older than 0.51: it runs, but takes no kit until recreated (⟲ in its actions)" aria-label="made by an older sbx"></span>'
@@ -408,7 +408,7 @@ function renderSidebar() {
   }
   if (!sandboxes.length) {
     // Nothing in the list *while a bring-up is running* is not the ambiguous
-    // case below — it is the expected one, and the corner card already says
+    // case below; it is the expected one, and the corner card already says
     // what is happening. Offering the "can't see my sandboxes" help here would
     // send someone troubleshooting a machine that is working.
     if (pendingCreations.size) {
@@ -417,7 +417,7 @@ function renderSidebar() {
       </div>`;
       return;
     }
-    // An empty list is otherwise ambiguous — you own no sandboxes, or `sbx`
+    // An empty list is otherwise ambiguous: you own no sandboxes, or `sbx`
     // can't see the ones you do. The second case is the common one and is fixed
     // on the host, so point at the help dialog that spells out how
     // (/js/help.js).
@@ -438,8 +438,8 @@ function renderSidebar() {
 // The workspace and chat cards for `list`: the whole sidebar on one machine,
 // one host's section with remote hosts.
 function groupedHtml(list) {
-  // Only sandboxes sharing a group key with at least one other — an identical
-  // workspace path, or being a chat sandbox — get grouped. The lone ones on a
+  // Only sandboxes sharing a group key with at least one other (an identical
+  // workspace path, or being a chat sandbox) get grouped. The lone ones on a
   // unique workspace share the dark "Other" card at the bottom.
   const groupCounts = new Map();
   list.forEach(s => {
@@ -460,14 +460,15 @@ function groupedHtml(list) {
       if (openGroup !== null) html += '</div>';
       const isChat = cardKey === CHAT_GROUP;
       const isOther = cardKey === OTHER_GROUP;
-      const title = isChat ? 'Chat sandboxes — each on its own empty workspace'
+      const title = isChat ? 'Chat sandboxes, each on its own empty workspace'
         : isOther ? 'Sandboxes whose workspace no other sandbox shares' : cardKey;
-      const label = isChat ? '💬 Chats' : isOther ? 'Other' : `📁 ${workspaceBasename(cardKey)}`;
+      const label = isChat ? 'Chats' : isOther ? 'Other' : workspaceBasename(cardKey);
+      const icon = isChat ? ICON.chat : isOther ? '' : ICON.folder;
       const cls = isChat ? ' sbx-group-chat' : isOther ? ' sbx-group-other' : '';
       const color = isOther ? '' : ` style="--group-color:${groupColorOf(cardKey)}"`;
       html += `<div class="sbx-group${cls}"${color}>
         <div class="sbx-group-label" title="${escHtml(title)}">
-          ${isOther ? '' : '<span class="sbx-group-dot"></span>'}${escHtml(label)}
+          ${isOther ? '' : '<span class="sbx-group-dot"></span>'}${icon}${escHtml(label)}
         </div>`;
       openGroup = cardKey;
     }
@@ -482,7 +483,7 @@ listEl.addEventListener('click', e => {
   // The fold under a row opens or closes its sessions, and connects nothing.
   const fold = e.target.closest('.sbx-sessions-toggle');
   if (fold) { setSessionsOpen(fold.dataset.sandbox, !sessionsOpen(fold.dataset.sandbox)); return; }
-  // A session row reaches that session — shown and focused — not its sandbox.
+  // A session row reaches that session (shown and focused), not its sandbox.
   const threadRow = e.target.closest('.sbx-thread');
   if (threadRow) { reachSession(threadRow.dataset.sandbox, threadRow.dataset.thread || null); return; }
   const btn = e.target.closest('button[data-action]');
@@ -604,13 +605,13 @@ async function postBringUp(url, body) {
 // Remove a sandbox an older sbx made and create it again from what sbxw
 // recorded. Its workspace is a host folder and survives; nothing else does.
 async function recreateSandbox(name) {
-  if (!confirm(`Recreate “${name}” with this sbx?\n\nIts workspace folder is kept. Everything else in the sandbox — files outside the workspace, installed packages, unpushed commits in other folders, its thread records — is lost.`)) return;
+  if (!confirm(`Recreate “${name}” with this sbx?\n\nIts workspace folder is kept. Everything else in the sandbox (files outside the workspace, installed packages, unpushed commits in other folders, its thread records) is lost.`)) return;
   addPendingSandbox(name);
   try {
     const data = await postJson(`/api/sandboxes/${encodeURIComponent(name)}/recreate`, {});
     await loadSandboxes();
     const warnings = Array.isArray(data.warnings) ? data.warnings : [];
-    if (data.ok) showToast(warnings.length ? `“${name}” recreated — ⚠ ${warnings[warnings.length - 1]}` : `“${name}” recreated`, warnings.length ? 'error' : 'ok');
+    if (data.ok) showToast(warnings.length ? `“${name}” recreated: ⚠ ${warnings[warnings.length - 1]}` : `“${name}” recreated`, warnings.length ? 'error' : 'ok');
     else showToast(`Could not recreate “${name}”: ${data.error || 'unknown error'}`, 'error');
   } catch (_) {
     showToast(`Could not recreate “${name}”: network error`, 'error');
@@ -671,8 +672,8 @@ document.getElementById('btn-refresh').addEventListener('click', loadSandboxes);
 
 // Pane-count popover: toggled by its trigger button, closed on an outside
 // click, an Escape press, or once a count is picked (see renderLayoutSwitch).
-// The trigger stops its click, so the colour picker beside it — whose outside
-// click would close it — is closed here instead: one popover at a time.
+// The trigger stops its click, so the colour picker beside it (whose outside
+// click would close it) is closed here instead: one popover at a time.
 document.getElementById('layout-switch-btn').addEventListener('click', e => {
   e.stopPropagation();
   closeTermColorPanel();
@@ -697,7 +698,7 @@ window.addEventListener('resize', () => {
   resizeDebounce = setTimeout(updateLayoutSwitch, 150);
 });
 
-// ── Copy: Cmd+C (macOS) or Ctrl+Shift+C — copies focused pane's selection ─
+// ── Copy: Cmd+C (macOS) or Ctrl+Shift+C: copies focused pane's selection ─
 document.addEventListener('keydown', e => {
   const isCopy = (e.metaKey && !e.altKey && e.key === 'c') ||
                  (e.ctrlKey && e.shiftKey && e.key === 'C');
@@ -709,7 +710,7 @@ document.addEventListener('keydown', e => {
   e.preventDefault();
   e.stopImmediatePropagation();
   if (!navigator.clipboard) {
-    showToast('Clipboard unavailable — needs HTTPS or localhost', 'error');
+    showToast('Clipboard unavailable: needs HTTPS or localhost', 'error');
     fp.term.focus();
     return;
   }
@@ -722,7 +723,7 @@ document.addEventListener('keydown', e => {
 // ── Paste image → upload to focused pane's sandbox ────────────────────────
 async function uploadPastedImage(file, pane) {
   if (!pane.sandbox || !pane.ws || pane.ws.readyState !== WebSocket.OPEN) {
-    showToast('No sandbox attached — connect one first', 'error');
+    showToast('No sandbox attached; connect one first', 'error');
     return;
   }
   showToast('Uploading image…', 'progress');
@@ -735,12 +736,12 @@ async function uploadPastedImage(file, pane) {
     if (data.ok && data.path) {
       pane.ws.send(new TextEncoder().encode(data.path + ' '));
       pane.term.focus();
-      showToast('📎 ' + data.path, 'ok');
+      showToast('Attached: ' + data.path, 'ok');
     } else {
       showToast('Upload failed: ' + (data.error || 'unknown error'), 'error');
     }
   } catch (_) {
-    showToast('Upload error — is the sandbox running?', 'error');
+    showToast('Upload error: is the sandbox running?', 'error');
   }
 }
 

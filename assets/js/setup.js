@@ -1,7 +1,7 @@
 // ── Setup: Skills, Templates, Kits, MCP and Hosts as tabs of one dialog ──────────
 //
 // The sidebar used to give each its own button; four rows for what is one
-// question — what does a sandbox start with. They stay four dialogs (each
+// question: what does a sandbox start with? They stay four dialogs (each
 // file keeps its own open, close and dirty check), and this draws the same
 // tab strip across the head of each, so switching is closing one and opening
 // the next in the same frame. A tab whose dialog refuses to close (an unsaved

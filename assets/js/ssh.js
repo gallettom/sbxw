@@ -14,18 +14,18 @@ function toggleSshPop(sandbox, anchor) { sshCard.toggle(anchor, sandbox); }
 function fillSshFields(sandbox) {
   const host = `${sandbox}.sbx`;
   // sbx publishes each sandbox as `<name>.sbx` through the managed block that
-  // `sbx setup ssh` (i.e. `sbxw ssh --setup`) writes into ~/.ssh/config — it
+  // `sbx setup ssh` (i.e. `sbxw ssh --setup`) writes into ~/.ssh/config; it
   // owns the user, the key and the ProxyCommand, so we must not invent any of
   // them, and the client must not be given a port or an identity file either.
   const rows = [
     { key: 'Name',          value: sandbox, hint: 'Any label; the sandbox name keeps them straight.' },
-    { key: 'SSH Host',      value: host,    hint: 'The alias from ~/.ssh/config — no user@ needed.' },
+    { key: 'SSH Host',      value: host,    hint: 'The alias from ~/.ssh/config; no user@ needed.' },
     { key: 'SSH Port',      empty: 'leave empty', hint: 'Not port 22: the managed block dials a ProxyCommand.' },
     { key: 'Identity File', empty: 'leave empty', hint: 'The managed block supplies the key.' },
     { key: 'Terminal',      value: `ssh ${host}`, hint: 'The same connection, from a shell.' },
   ];
 
-  document.getElementById('ssh-pop-title').textContent = `SSH — ${sandbox}`;
+  document.getElementById('ssh-pop-title').textContent = `SSH: ${sandbox}`;
   const box = document.getElementById('ssh-fields');
   box.replaceChildren();
   for (const row of rows) {

@@ -45,11 +45,11 @@ function renderHostsTable(hostEntries) {
 }
 
 // Policy text comes from sbx (and, for a governance denial, from whatever an
-// organisation configured), so it is escaped rather than interpolated raw —
+// organisation configured), so it is escaped rather than interpolated raw,
 // unlike the port/hostname values above, which sbxw itself constrains.
 // `escHtml` lives in util.js, which every other panel needing it also loads.
 
-// `allow`/`deny` get a colour wherever they appear — matching on the value, not
+// `allow`/`deny` get a colour wherever they appear, matching on the value, not
 // on a column name, so a renamed or reordered `sbx policy ls` column still
 // reads correctly.
 function policyCell(cell) {
@@ -61,7 +61,7 @@ function policyCell(cell) {
 }
 
 // A policy id is a UUID; only its first block is worth the width, the rest goes
-// in the tooltip. A named policy ("local-policy") is short already — keep it.
+// in the tooltip. A named policy ("local-policy") is short already; keep it.
 function policyShortId(id) {
   const v = String(id || '').trim();
   return /^[0-9a-f-]{20,}$/i.test(v) ? v.split('-')[0] : v;
@@ -76,7 +76,7 @@ function policyScopeLabel(scope) {
   return v;
 }
 
-// Split a SUMMARY — "network: 159 allow; filesystem read: 1 allow" — into one
+// Split a SUMMARY ("network: 159 allow; filesystem read: 1 allow") into one
 // chip per clause, with the count pulled out so the number reads first.
 function policyRuleChips(summary) {
   const clauses = String(summary || '').split(';').map(s => s.trim()).filter(Boolean);
@@ -110,7 +110,7 @@ function renderPolicyEntries(data) {
     const known = ['local', 'kit', 'corporate'].includes(src.toLowerCase());
     const scope = policyScopeLabel(at(row, iScope));
     const id = at(row, iId);
-    // Columns we have no role for still carry information — append them rather
+    // Columns we have no role for still carry information; append them rather
     // than drop them.
     const extra = row
       .map((c, i) => ([iId, iSrc, iScope, iSum].includes(i) ? '' : String(c || '').trim()))
@@ -132,7 +132,7 @@ function renderPolicyEntries(data) {
 }
 
 // `actions` is an optional array of trailing-cell HTML, one per row, aligned by
-// index — the per-row delete buttons.
+// index: the per-row delete buttons.
 function policyTableHtml(columns, rows, actions) {
   const withActions = Array.isArray(actions);
   return `<table class="ports-table"><thead><tr>` +
@@ -147,7 +147,7 @@ function policyTableHtml(columns, rows, actions) {
 }
 
 // A rule sbxw must not offer to delete: `org` rules are governance, and sbx
-// refuses to remove them anyway — an enabled button that always fails is worse
+// refuses to remove them anyway; an enabled button that always fails is worse
 // than none. Everything else is the user's own local or kit policy.
 function policyRuleIsGoverned(source) {
   return ['org', 'corporate', 'system'].includes(String(source || '').trim().toLowerCase());
@@ -179,7 +179,7 @@ function policyDropImpliedColumns(view, roles_to_drop) {
 
 // The rule-level view (`sbx policy ls <sandbox> --wide`): one row per rule, with
 // the resource it covers. This is the section that actually answers "what can
-// this sandbox reach?", so it leads — and it gets a filter box, because a global
+// this sandbox reach?", so it leads, and it gets a filter box, because a global
 // policy runs to a couple of hundred rules.
 // Map each policy id to the scope its overview row reported. The rule-level
 // listing carries a policy id but not always a scope, and "does deleting this
@@ -213,9 +213,9 @@ function renderPolicyRules(view, policies) {
     const id = at(row, 'rule_id');
     if (!id || id === '-') return '';
     if (policyRuleIsGoverned(at(row, 'source')))
-      return `<span class="rule-locked" title="Set by organisation policy — sbx won't let sbxw remove it">🔒</span>`;
+      return `<span class="rule-locked" title="Set by organisation policy: sbx won't let sbxw remove it" aria-label="Locked by policy">${ICON.lock}</span>`;
     // Own scope column if there is one, else the parent policy's, else nothing
-    // — an unknown scope is reported as unknown, never guessed.
+    // (an unknown scope is reported as unknown, never guessed).
     const own = at(row, 'applies') || at(row, 'sandbox');
     const scope = own ? policyScopeLabel(own) : (scopeById[at(row, 'id')] || '');
     return `<button class="btn-del-rule" title="Remove this rule"` +
@@ -227,10 +227,10 @@ function renderPolicyRules(view, policies) {
 
   const { columns, rows } = policyDropImpliedColumns(view, ['applies', 'sandbox']);
   return policySectionLabel('Rules', 'sbx policy ls --wide', 'policy-rule-count', rows.length) +
-    `<input id="policy-rule-filter" class="policy-filter" type="text" placeholder="Filter rules — domain, decision, source…" autocomplete="off" spellcheck="false">` +
+    `<input id="policy-rule-filter" class="policy-filter" type="text" placeholder="Filter rules: domain, decision, source…" autocomplete="off" spellcheck="false">` +
     `<div class="policy-scroll" id="policy-rules-wrap">${policyTableHtml(columns, rows, actions)}</div>` +
-    (view.truncated ? `<div class="policy-note">+ ${view.truncated} more rule${view.truncated === 1 ? '' : 's'} not shown — run <code>sbx policy ls --wide</code> for the full set.</div>` : '') +
-    (deletable ? '' : '<div class="policy-note">This sbx\'s listing has no rule-id column, so rules can\'t be removed from here — use <code>sbx policy rm</code>.</div>') +
+    (view.truncated ? `<div class="policy-note">+ ${view.truncated} more rule${view.truncated === 1 ? '' : 's'} not shown; run <code>sbx policy ls --wide</code> for the full set.</div>` : '') +
+    (deletable ? '' : '<div class="policy-note">This sbx\'s listing has no rule-id column, so rules can\'t be removed from here; use <code>sbx policy rm</code>.</div>') +
     policyAddForm();
 }
 
@@ -255,7 +255,7 @@ function policyAddForm() {
       `<input id="policy-add-path" class="port-input" type="text" autocomplete="off" spellcheck="false"` +
       ` placeholder="/v1/**" title="Path glob; empty is /**">` +
       `<input id="policy-add-query" class="port-input" type="text" autocomplete="off" spellcheck="false"` +
-      ` placeholder="org=acme, label=release*" title="Query parameters the request must carry, name=value (the value may be a pattern), comma-separated — every one is required">` +
+      ` placeholder="org=acme, label=release*" title="Query parameters the request must carry, name=value (the value may be a pattern), comma-separated; every one is required">` +
     `</details>` +
     `<span class="ports-error-msg hidden" id="policy-add-error" style="flex-basis:100%"></span>` +
   `</div>`;
@@ -273,7 +273,7 @@ function renderPolicyLog(log) {
   const iAction = (log.roles || []).filter(r => !dropped.includes(r)).indexOf('action');
   return policySectionLabel('Recent egress', 'sbx policy log') +
     `<div class="policy-scroll" id="policy-log-wrap" data-action-col="${iAction}">${policyTableHtml(columns, rows)}</div>` +
-    (log.truncated ? `<div class="policy-note">+ ${log.truncated} older entr${log.truncated === 1 ? 'y' : 'ies'} — run <code>sbx policy log</code> for the full history.</div>` : '');
+    (log.truncated ? `<div class="policy-note">+ ${log.truncated} older entr${log.truncated === 1 ? 'y' : 'ies'}; run <code>sbx policy log</code> for the full history.</div>` : '');
 }
 
 // The overview: which policies govern this sandbox and where they come from.
@@ -302,7 +302,7 @@ function renderPolicy(data) {
   const hasRules = policyHasRows(data.rules);
 
   // Nothing rule-level to show: say so with whatever sbx did give us, rather
-  // than leave a blank where the rules should be. The add form still renders —
+  // than leave a blank where the rules should be. The add form still renders:
   // writing a rule doesn't depend on being able to read the current ones.
   if (!hasRules) {
     const v = data.rules || {};
@@ -318,7 +318,7 @@ function renderPolicy(data) {
     v && !v.error && v.columns && v.columns.length && !v.sandbox_scoped &&
     !(v.roles || []).some(r => r === 'applies' || r === 'sandbox'));
   if (unscoped)
-    parts.push('<div class="policy-note warn">⚠ This sbx didn\'t accept a sandbox argument and its output has no scope column — some of these rules may belong to other sandboxes.</div>');
+    parts.push('<div class="policy-note warn">⚠ This sbx didn\'t accept a sandbox argument and its output has no scope column; some of these rules may belong to other sandboxes.</div>');
 
   parts.push(renderPolicyLog(data.log));
   parts.push(renderPolicySources(data.policies));
@@ -332,7 +332,7 @@ function renderPolicy(data) {
     parts.push(
       // Folded when the live rules already list the domains; open when they are
       // the only answer the panel has.
-      `<details class="policy-details"${hasRules ? '' : ' open'}><summary>Domains sbxw allows on up — sbxw.toml (${allow.length} allow${deny.length ? `, ${deny.length} deny` : ''})</summary>` +
+      `<details class="policy-details"${hasRules ? '' : ' open'}><summary>Domains sbxw allows on up: sbxw.toml (${allow.length} allow${deny.length ? `, ${deny.length} deny` : ''})</summary>` +
       (chips ? `<div class="policy-chips">${chips}</div>`
              : '<div class="ports-empty-msg">No allowlist configured</div>') +
       `</details>`
@@ -352,11 +352,11 @@ function renderPolicy(data) {
   wireBlockedAllows();
 }
 
-// `sbx policy refresh` (0.49): re-read the policy now — after an AI Governance
-// change, say — instead of at the next poll. Open connections stay open.
+// `sbx policy refresh` (0.49): re-read the policy now (after an AI Governance
+// change, say) instead of at the next poll. Open connections stay open.
 function policyToolbar() {
   return `<div class="policy-toolbar">` +
-    `<button class="refresh-btn" id="policy-refresh-btn" title="sbx policy refresh — re-read the policy now instead of at the next poll">↻ Re-read policy now</button>` +
+    `<button class="refresh-btn" id="policy-refresh-btn" title="sbx policy refresh: re-read the policy now instead of at the next poll">↻ Re-read policy now</button>` +
     `<span class="ports-error-msg hidden" id="policy-refresh-error"></span></div>`;
 }
 
@@ -384,7 +384,7 @@ function wirePolicyRefresh() {
 }
 
 // What this sandbox tried to reach and was refused, newest first, one row per
-// host — the list people open this panel for. Allow writes a rule for this
+// host: the list people open this panel for. Allow writes a rule for this
 // sandbox only; a host blocked by organisation policy gets no button, since
 // sbx refuses that allow anyway.
 function renderBlockedHosts(blocked) {
@@ -392,7 +392,7 @@ function renderBlockedHosts(blocked) {
   const rows = blocked.map(b => {
     const when = timeAgo(b.last_seen);
     const action = b.governed
-      ? `<span class="rule-locked" title="${escHtml(b.reason || 'Blocked by organisation policy')}">🔒 org</span>`
+      ? `<span class="rule-locked" title="${escHtml(b.reason || 'Blocked by organisation policy')}">${ICON.lock} org</span>`
       : !b.resource ? ''
       : `<button class="btn-allow-host" data-resource="${escHtml(b.resource)}" title="Allow ${escHtml(b.resource)} for this sandbox">Allow</button>`;
     return `<tr><td><span class="policy-cell">${escHtml(b.host)}</span></td>` +
@@ -479,7 +479,7 @@ function wirePolicyDeletes() {
   for (const btn of policyContent.querySelectorAll('.btn-del-rule')) {
     btn.addEventListener('click', async () => {
       const { rule, resource, decision, scope } = btn.dataset;
-      // Removing a rule changes what a sandbox can reach — and a host-wide rule
+      // Removing a rule changes what a sandbox can reach, and a host-wide rule
       // changes it for all of them. An unknown scope says so: a warning that
       // cries "every sandbox" on a guess is one people learn to click through.
       const blast = !scope ? 'sbxw can\'t tell from this listing which sandboxes it covers.'
@@ -506,7 +506,7 @@ function wirePolicyDeletes() {
 }
 
 // Live filter over the rule rows. They are all in the DOM already, so this is a
-// plain show/hide — no refetch, and the count stays honest about how many of
+// plain show/hide: no refetch, and the count stays honest about how many of
 // how many are showing.
 function wirePolicyFilter() {
   const input = document.getElementById('policy-rule-filter');
@@ -551,7 +551,7 @@ function wirePolicyLogSort() {
       .forEach(({ tr }) => tbody.appendChild(tr));
     const label = { recent: '', deny: ' · deny first', allow: ' · allow first' }[policyLogSort];
     th.innerHTML = `${escHtml(th.dataset.label)}<span class="policy-sort-ind">${label}</span>`;
-    th.title = `Sorted: ${policyLogSort === 'recent' ? 'most recent first' : policyLogSort + ' first'} — click to change`;
+    th.title = `Sorted: ${policyLogSort === 'recent' ? 'most recent first' : policyLogSort + ' first'}; click to change`;
   };
   th.dataset.label = th.textContent;
   th.classList.add('policy-sortable');

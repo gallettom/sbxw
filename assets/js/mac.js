@@ -3,8 +3,8 @@
 // One panel over `GET /api/mac`: whether terminal-mac is installed (the
 // pinned release, SHA-256 checked), the VM's state, the guest's one-time
 // setup as a checklist, who holds the lease, and the buttons the CLI's
-// `sbxw mac` has. Install and boot take minutes — a first boot downloads
-// macOS — so they start in the daemon and this follows `busy` on the `mac`
+// `sbxw mac` has. Install and boot take minutes (a first boot downloads
+// macOS), so they start in the daemon and this follows `busy` on the `mac`
 // event until they finish.
 const macOverlay = document.getElementById('mac-modal-overlay');
 const macBody    = document.getElementById('mac-body');

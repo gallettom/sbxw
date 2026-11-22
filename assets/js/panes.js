@@ -254,10 +254,10 @@ function createPane(index) {
       <span class="sandbox-label" id="plabel-${index}">—</span>
       <!-- Beside the name, not over with SSH/Env/Reconnect on the right: those
            act on the *session* in this pane, while a project is a fact about
-           the sandbox the name belongs to — the same workspace, whichever pane
+           the sandbox the name belongs to: the same workspace, whichever pane
            happens to be showing it. -->
       <button class="pane-btn pane-files-btn" id="pfiles-${index}" disabled
-              title="Project — this sandbox's code map and the deliverables under .sbxw-artifacts/">
+              title="Project: this sandbox's code map and the deliverables under .sbxw-artifacts/">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg><span class="files-word">Project</span>
       </button>
       <span class="conn-label" id="pconn-${index}"></span>
@@ -270,18 +270,18 @@ function createPane(index) {
       <button class="pane-btn pane-plan-btn" id="pmerge-${index}" hidden
               title="This lead's threads are reviewed and ready to merge">Merge</button>
       <button class="pane-btn pane-thread-close" id="pthreadclose-${index}" hidden
-              title="Close this thread — stop it, remove its worktree, and its branch">Close thread</button>
+              title="Close this thread: stop it, remove its worktree, and its branch">Close thread</button>
       <!-- Team mode is a state of the main session, turned on and off, so it
            sits with the pane's other work (Project, the plan), left of the
            spacer, and last before it, so showing it on demand moves nothing
            else. -->
-      <button class="pane-btn pane-main-action pane-lead-toggle" id="plead-${index}" aria-pressed="false" title="Team mode — make this sandbox's main session plan the work into threads, have you approve the plan, and follow them; it stops coding itself">★<span class="mode-word"> Team mode</span> <span class="lead-state">Off</span></button>
+      <button class="pane-btn pane-main-action pane-lead-toggle" id="plead-${index}" aria-pressed="false" title="Team mode: make this sandbox's main session plan the work into threads, have you approve the plan, and follow them; it stops coding itself">★<span class="mode-word"> Team mode</span> <span class="lead-state">Off</span></button>
       <!-- Every Claude session of this sandbox in one menu, in two kinds: those
            in the main checkout (main, and sessions beside it) and those in a
            worktree of their own (threads). The one picked takes this pane's
            place: the same terminal, another session. On a thread's pane too,
            since it switches back to main as readily as the other way round. -->
-      <button class="pane-btn pane-main-action pane-sessions-btn" id="psessions-${index}" hidden aria-haspopup="menu" aria-expanded="false" title="Sessions — every Claude session in this sandbox, in the main checkout or a worktree of its own; open a new one, or pick one to show it in this pane">⑂<span class="mode-word"> Sessions</span><span class="session-count" hidden></span></button>
+      <button class="pane-btn pane-main-action pane-sessions-btn" id="psessions-${index}" hidden aria-haspopup="menu" aria-expanded="false" title="Sessions: every Claude session in this sandbox, in the main checkout or a worktree of its own; open a new one, or pick one to show it in this pane">⑂<span class="mode-word"> Sessions</span><span class="session-count" hidden></span></button>
       <span class="spacer"></span>
       <!-- Dictation: hold it (or F9 in the focused pane) and speak; the words
            are typed into this terminal as if from the keyboard. See
@@ -292,12 +292,12 @@ function createPane(index) {
            first. The menu itself is one element for every pane (see
            togglePaneMenu). A dot on it says Remote control is on. -->
       <button class="pane-btn pane-session-btn pane-more-btn" id="pmore-${index}" aria-haspopup="menu" aria-expanded="false" title="Remote control, SSH, environment file, reconnect" aria-label="More actions"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/></svg></button>
-      <button class="pane-btn pane-session-btn pane-refresh-btn" id="prefresh-${index}" title="Rebuild this pane's terminal from scratch — fixes a broken layout that Reconnect alone can't, by destroying and recreating the terminal widget (then reconnecting)">↻</button>
+      <button class="pane-btn pane-session-btn pane-refresh-btn" id="prefresh-${index}" title="Rebuild this pane's terminal from scratch: it fixes a broken layout that Reconnect alone can't, by destroying and recreating the terminal widget (then reconnecting)">↻</button>
       <div class="mode-switch" role="tablist">
         <!-- The word is wrapped so a narrow pane can drop it and keep the
              glyph, which carries the mode on its own (see app.css). -->
         <button class="mode-btn active" data-mode="claude" title="Claude" aria-label="Claude">✦<span class="mode-word"> Claude</span></button>
-        <button class="mode-btn" data-mode="thread" title="Thread — another Claude session in this sandbox, in a git worktree and branch of its own" aria-label="Thread">⑂<span class="mode-word"> Thread</span></button>
+        <button class="mode-btn" data-mode="thread" title="Thread: another Claude session in this sandbox, in a git worktree and branch of its own" aria-label="Thread">⑂<span class="mode-word"> Thread</span></button>
         <button class="mode-btn" data-mode="bash" title="Bash" aria-label="Bash">❯<span class="mode-word"> Bash</span></button>
       </div>
       <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
@@ -321,7 +321,7 @@ function createPane(index) {
   // Builds pane.term/pane.fit and wires them up. Split out of createPane so
   // recreatePaneTerminal() can call it again on a pane that already exists,
   // to throw away a terminal whose internal state (not just its content) has
-  // gone bad — something reconnecting the socket into the same xterm
+  // gone bad: something reconnecting the socket into the same xterm
   // instance can never fix.
   setupTerminal(pane);
   // Files dropped on the pane are uploaded and their paths typed (pane-files.js).
@@ -336,7 +336,7 @@ function createPane(index) {
   // Mode buttons
   // A main pane switches between Claude and Bash, beside the Sessions menu
   // and the Team mode toggle. A thread's pane switches between Thread and Bash,
-  // both about *that* thread: its agent, and a shell in its worktree — see
+  // both about *that* thread: its agent, and a shell in its worktree; see
   // applyPaneChrome.
   const [claudeBtn, threadBtn, bashBtn] = el.querySelectorAll('.mode-btn');
   const leadBtn = document.getElementById(`plead-${index}`);
@@ -461,7 +461,7 @@ function offerOscCopy(sandbox, text, bytes) {
 
 // Builds a fresh xterm Terminal (+ addons) into `pane.termEl` and points
 // pane.term/pane.fit at it. Called once from createPane, and again from
-// recreatePaneTerminal() on an existing pane — so every wire-up here must
+// recreatePaneTerminal() on an existing pane, so every wire-up here must
 // read `pane.*` rather than close over locals that a second call would
 // shadow instead of replace.
 const TERM_FONT_SIZE = 13;
@@ -499,7 +499,7 @@ function setupTerminal(pane) {
   // ── Clipboard writes from inside the sandbox (OSC 52) ───────────────────
   // A program in the PTY has no clipboard within reach: the sandbox's `xclip`
   // and `wl-paste` are shims that only *read* images back out (`sbx-clipboard`),
-  // and a write to them exits 0 having copied nothing — which is how an agent
+  // and a write to them exits 0 having copied nothing, which is how an agent
   // reports "copied 7 chars to clipboard" while the user's clipboard never
   // changes. OSC 52 is the sequence that asks the *terminal* to do the copy
   // instead, and through this browser it is the one path out of the sandbox
@@ -511,7 +511,7 @@ function setupTerminal(pane) {
   // is the app's and the clipboard write has to come from the app too.
   //
   // Writes only. The read form (`52;c;?`) replies down the PTY, handing
-  // whatever the user is carrying — a password out of a manager, say — to any
+  // whatever the user is carrying (a password out of a manager, say) to any
   // program that asks for it, or to any file that happens to be `cat`ed.
   //
   // And only a short write is done at once, with a toast saying so; a longer
@@ -522,13 +522,13 @@ function setupTerminal(pane) {
   // mode: `CoreMouseService`'s `activeProtocol` setter fires `onProtocolChange`
   // unconditionally, and `Terminal` answers that by calling
   // `SelectionService.disable()`, whose first line is `clearSelection()`. An
-  // agent's TUI re-sends `?1000;1002;1003;1006h` on essentially every repaint —
-  // 115 times in one 256 KB replay of a live session — so a selection could not
+  // agent's TUI re-sends `?1000;1002;1003;1006h` on essentially every repaint:
+  // 115 times in one 256 KB replay of a live session, so a selection could not
   // outlive the next line of output arriving behind it.
   //
   // A real terminal resets nothing when a program re-declares a mode it already
   // has, so neither does this one: the setter is made idempotent, and a genuine
-  // change still goes through untouched. Reaching into `_core` is the price —
+  // change still goes through untouched. Reaching into `_core` is the price;
   // the guard below keeps a future xterm that renames this from throwing.
   //
   // This must stay *after* `term.open()`: xterm ends `_bindMouse` with a
@@ -584,12 +584,12 @@ function setupTerminal(pane) {
 
 // ── Destroy-and-recreate ─────────────────────────────────────────────────
 // The "layout is broken, I can't scroll history anymore" failure lives in
-// xterm's own internal render/viewport state, not in the socket or the PTY —
+// xterm's own internal render/viewport state, not in the socket or the PTY:
 // Reconnect already tears down and reopens the WebSocket into the *same*
 // Terminal instance, and that alone doesn't clear it. So this goes further:
 // dispose the whole Terminal (DOM, renderer, addons) and build a brand new
 // one in its place, exactly as if the pane had just been created. The PTY
-// itself is untouched — connectPane's fresh socket then replays the
+// itself is untouched; connectPane's fresh socket then replays the
 // session's last 256 KB of output (see PtySession::replay in src/web.rs) to
 // repaint it, so a live agent session picks back up rather than going blank.
 function recreatePaneTerminal(idx) {
@@ -615,7 +615,7 @@ function setFocusedPane(idx) {
     row.classList.toggle('focused', !!focusedSandbox && row.dataset.name === focusedSandbox));
   panes[idx]?.term.focus();
   // Which sandbox is being read decides whether its `attention` liseret shows
-  // at all — on this pane, and on its sidebar row.
+  // at all, on this pane, and on its sidebar row.
   applyAgentStates();
 }
 
@@ -635,7 +635,7 @@ const termSize = pane => `${pane.term.cols}x${pane.term.rows}`;
 // Tell the PTY this pane's size, and record it *on the socket that carried it*.
 // A send on a socket that is not open yet is dropped by the browser without a
 // word, so a fresh socket having no record is the accurate starting state rather
-// than a thing to remember to reset — and when `closePane` shifts a socket to
+// than a thing to remember to reset; and when `closePane` shifts a socket to
 // another pane, what it was told travels with it.
 function sendPaneResize(pane) {
   if (!pane.ws || pane.ws.readyState !== WebSocket.OPEN) {
@@ -657,13 +657,13 @@ function sendPaneResize(pane) {
 // The daemon replays only the last 256 KB of raw output, and a TUI like Claude
 // Code redraws incrementally (changed cells only), so that tail is often diffs
 // without the frame they apply to: a status line of stray digits, no box
-// borders — and ↻ replays the same bytes, so it looks identical. A resize is the
+// borders, and ↻ replays the same bytes, so it looks identical. A resize is the
 // one thing that makes such a program repaint all of it (SIGWINCH), which is why
 // resizing the pane "fixes" it. So we resize by one column and straight back.
 // It is done for bash too: a shell prompt redraws harmlessly, and a full-screen
 // program run in it (vim, htop) has the same problem.
 //
-// Only here, once per socket — never from a tab focus or a refit, which is the
+// Only here, once per socket, never from a tab focus or a refit, which is the
 // extra-SIGWINCH wave main.js's visibilitychange handler avoids. The replay is
 // sent right after the socket opens and has no end marker, so we give it a
 // moment to arrive; the repaint must land after it, or it would be drawn first
@@ -690,7 +690,7 @@ function nudgePaneRepaint(pane, ws) {
 // Sizing trace, off unless asked for: `sbxwTermLog()` turns it on and remembers
 // across reloads, `sbxwTermLog(false)` stops it, `sbxwSizes()` prints the current
 // state once. It answers the only question a terminal drawn at the wrong width
-// raises — whether the mistake is in the measurement, in xterm, or in the PTY
+// raises: whether the mistake is in the measurement, in xterm, or in the PTY
 // (`/api/ptys` answers for that last one).
 let TERM_LOG = localStorage.getItem('sbxw:termlog') === '1';
 function sbxwTermLog(on = true) {
@@ -719,7 +719,7 @@ function sbxwSizes() { panes.slice(0, paneCount).forEach(p => termLog(p, 'state'
 // prepared and then dropped for want of an open socket, and a PTY inherited from
 // an earlier page has been told nothing at all.
 function fitPane(pane, why = 'fit') {
-  // One read of the box, before the fit writes to it — and the only thing that
+  // One read of the box, before the fit writes to it, and the only thing that
   // can say whether there is anything to measure. A hidden tab has no layout,
   // and fitting from it would propose xterm's 80×24 default as if it were real.
   const box = `${pane.termEl.offsetWidth}x${pane.termEl.offsetHeight}`;
@@ -875,7 +875,7 @@ function refitPanes(why = 'refit') {
 
 // Keep a pane fitted to whatever box the layout gives it, whenever that changes:
 // window resized, devtools opened, grid switched, a hidden tab finally laid out.
-// One observer replaces every "fit 50ms after the thing that resized it" guess —
+// One observer replaces every "fit 50ms after the thing that resized it" guess,
 // including the first fit, since observing an element reports its size straight
 // away. Being idempotent, it cannot make a correctly-sized terminal blink.
 //
@@ -883,7 +883,7 @@ function refitPanes(why = 'refit') {
 // panes on a window drag should not send three resizes each.
 function observePaneSize(pane) {
   if (typeof ResizeObserver === 'undefined') return;
-  // recreatePaneTerminal() calls setupTerminal() — and so this — again on a
+  // recreatePaneTerminal() calls setupTerminal() (and so this) again on a
   // pane whose termEl already has an observer from the first time around;
   // without disconnecting it first, a repeated rebuild would pile up one more
   // observer on every click, each firing fitPane redundantly.
@@ -926,7 +926,7 @@ function handlePaneData(pane, ev) {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'attention') { notifyAttention(msg.sandbox || pane.sandbox); return; }
       if (msg.type === 'size') { applyPtySize(pane, msg); return; }
-    } catch (_) { /* not JSON — fall through and write it verbatim */ }
+    } catch (_) { /* not JSON: fall through and write it verbatim */ }
     pane.term.write(ev.data);
   } else {
     pane.term.write(new Uint8Array(ev.data));
@@ -939,7 +939,7 @@ function handlePaneData(pane, ev) {
 // A pane's mode is sticky across reconnects, which is what makes the Bash
 // toggle survive switching sandboxes. `monitor` is the exception: it belongs to
 // the host pane alone, and the paths that just say "connect me to this sandbox"
-// pass no mode — letting it stick would reopen the monitor under a sandbox's
+// pass no mode; letting it stick would reopen the monitor under a sandbox's
 // name, with the Claude/Bash toggles hidden and no way back. The target decides
 // the mode, not the pane's current contents.
 //
@@ -953,7 +953,7 @@ function paneModeFor(name, requested, current) {
 }
 
 // Which slot a pane holds, as one comparable string. A sandbox's agent and
-// its shell are one slot — showing both in two panes was never offered — and
+// its shell are one slot (showing both in two panes was never offered), and
 // so are a thread's agent and the shell in its worktree, while each thread is
 // a slot of its own beside the agent.
 function sessionIdentity(sandbox, mode, thread) {
@@ -967,7 +967,7 @@ function sessionIdentity(sandbox, mode, thread) {
 // sandbox: its title, and the buttons that need a sandbox behind them. An empty
 // pane has nothing to ssh into, describe, or open a project for; the monitor
 // runs on the host, so it has no sandbox to ssh into, no env file, and no
-// workspace — neither a project of its own nor anything for the Claude/Bash
+// workspace: neither a project of its own nor anything for the Claude/Bash
 // toggles (which would otherwise point at the pseudo-sandbox it is filed under)
 // to read a map from. One function because three paths set this: connecting a
 // pane, emptying one, and shifting a live session into one when a pane closes.
@@ -980,9 +980,9 @@ function applyPaneChrome(idx, name) {
   // The thread's name is its role chip, painted by paintGroups().
   label.textContent = monitor ? 'monitor' : (name || '—');
   const same = !!thread && inMainCheckout(name, thread);
-  label.title = monitor ? `host monitor — ${MONITOR_CMD}`
-    : same ? `Session "${thread}" — on the main checkout, beside the main session`
-    : thread ? `Thread "${thread}" — worktree .sbxw-worktrees/${thread}, branch sbxw/${thread}` : '';
+  label.title = monitor ? `host monitor: ${MONITOR_CMD}`
+    : same ? `Session "${thread}": on the main checkout, beside the main session`
+    : thread ? `Thread "${thread}": worktree .sbxw-worktrees/${thread}, branch sbxw/${thread}` : '';
   // SSH and Env (in the ⋯ menu) read `pane.sandbox` when it opens, and go dark
   // on the monitor there. It runs on the host and has no workspace, so it has
   // no project either.
@@ -998,8 +998,8 @@ function applyPaneChrome(idx, name) {
   const closeBtn = document.getElementById(`pthreadclose-${idx}`);
   closeBtn.hidden = !(name && thread);
   closeBtn.textContent = same ? 'Close session' : 'Close thread';
-  closeBtn.title = same ? 'Close this session — stop it; the main checkout stays as it is'
-    : 'Close this thread — stop it, remove its worktree, and its branch';
+  closeBtn.title = same ? 'Close this session: stop it; the main checkout stays as it is'
+    : 'Close this thread: stop it, remove its worktree, and its branch';
   document.getElementById(`psessions-${idx}`).hidden = !name || monitor;
   applyRemoteButton(idx);
 }
@@ -1027,7 +1027,7 @@ function applyRemoteButton(idx) {
  * that left mouse-tracking on cannot leak DECSET modes into whatever is
  * connected here next.
  *
- * Leaves the layout alone — how many panes there are is the user's choice, not
+ * Leaves the layout alone: how many panes there are is the user's choice, not
  * a consequence of one of them emptying. Callers that also want the slot gone
  * use `closePane`.
  */
@@ -1078,7 +1078,7 @@ function connectPane(idx, name, mode, thread, repo, model, checkout) {
   pane.lastOutput = 0;
   pane.sandbox = name;
   pane.emphasis?.refresh();
-  // The liseret describes whoever is in the pane *now* — repainting drops the
+  // The liseret describes whoever is in the pane *now*: repainting drops the
   // outgoing session's state and picks up the incoming one's, mid-flash included.
   applyAgentStates();
   document.getElementById(`pconn-${idx}`).textContent = 'connecting…';
@@ -1101,7 +1101,7 @@ function connectPane(idx, name, mode, thread, repo, model, checkout) {
     document.getElementById(`pdot-${idx}`).className = 'dot term-connected';
     document.getElementById(`pconn-${idx}`).textContent = 'connected';
     // A brand-new socket has been told nothing, so this always announces the
-    // size — unless the pane has no box to measure, in which case it declines
+    // size, unless the pane has no box to measure, in which case it declines
     // and the observer does it the moment there is one.
     fitPane(pane, 'socket open');
     nudgePaneRepaint(pane, pane.ws);
@@ -1137,10 +1137,10 @@ const threadError = document.getElementById('thread-error');
 // The pane that asked, and the sandbox it showed then.
 let threadAsk = null;
 
-// Ask for a thread of the sandbox in pane `idx` — or, `checkout`, for a
+// Ask for a thread of the sandbox in pane `idx`; or, `checkout`, for a
 // session in its main checkout: no worktree and no repo to pick, the same
 // files as the main session. The existing ones of that kind are offered as
-// chips — reopening one is the common case after a reload.
+// chips; reopening one is the common case after a reload.
 async function openThread(idx, checkout = false) {
   const sandbox = panes[idx]?.sandbox;
   if (!sandbox) return;
@@ -1168,7 +1168,7 @@ async function openThread(idx, checkout = false) {
   const ws = repos.ok ? repos.workspace : '';
   chips.innerHTML = known.map(t =>
     `<button type="button" class="thread-chip${t.open ? ' open' : ''}" data-name="${escHtml(t.name)}"
-       title="${t.open ? 'Open — go to it' : 'Worktree kept — reopen it'}">${escHtml(t.name)}${t.repo != null
+       title="${t.open ? 'Open: go to it' : 'Worktree kept: reopen it'}">${escHtml(t.name)}${t.repo != null
          ? `<span class="thread-chip-repo">${escHtml(repoLabel(t.repo, ws))}</span>` : ''}${models.ok && t.model && t.model !== models.default
          ? `<span class="thread-chip-repo">${escHtml(modelLabel(t.model, models))}</span>` : ''}</button>`).join('');
   renderThreadRepos();
@@ -1241,7 +1241,7 @@ function validateThreadName() {
   preview.textContent = name && name !== typed.replace(/-+$/, '') ? `Will be created as ${name}` : '';
   preview.hidden = !preview.textContent;
   document.getElementById('thread-hint').textContent = checkout
-    ? 'Capitals, spaces and other characters become lower case and hyphens. It works on the same files as the main session — no worktree, no branch — so two agents editing one file can overwrite each other.'
+    ? 'Capitals, spaces and other characters become lower case and hyphens. It works on the same files as the main session (no worktree, no branch), so two agents editing one file can overwrite each other.'
     : `Capitals, spaces and other characters become lower case and hyphens. It gets the worktree .sbxw-worktrees/${name || '<name>'} and the branch sbxw/${name || '<name>'}.`;
   const existing = threadAsk?.known.find(t => t.name === name);
   // A name is one session: taken by the other kind, it is refused here rather
@@ -1423,7 +1423,7 @@ closeConfirm.addEventListener('click', async () => {
 });
 
 // A closed thread leaves the screen: its pane, its row under the sandbox, and
-// the state its hooks last reported — its agent was killed, so no
+// the state its hooks last reported; its agent was killed, so no
 // `SessionEnd` comes to clear it. Shared with the chat dock's ×.
 function afterThreadClosed(sandbox, thread) {
   const at = panes.slice(0, paneCount).findIndex(p => p.sandbox === sandbox && p.mode === 'thread' && p.thread === thread);
@@ -1502,12 +1502,12 @@ function renderPaneMenu() {
   const on = remote && pane.remote === true;
   const rcState = !remote ? '' : on ? 'On' : pane.remote === false ? 'Off' : '…';
   const rcHint = !remote ? (pane.mode === 'bash' ? 'Switch to the Claude session first' : 'Needs a Claude session')
-    : on ? 'Reachable from claude.ai — turn off with /remote-control'
+    : on ? 'Reachable from claude.ai; turn off with /remote-control'
     : 'Drive this session from claude.ai/code or the Claude app';
   const focused = paneMenu.el.contains(document.activeElement) ? document.activeElement.dataset.act : null;
   paneMenu.el.innerHTML = `
     <button type="button" role="menuitem" data-act="remote"${!remote || on || remoteStarting.has(idx) ? ' disabled' : ''}
-      aria-pressed="${on}" title="Remote control — needs a claude.ai login (/login) in the session">
+      aria-pressed="${on}" title="Remote control: needs a claude.ai login (/login) in the session">
       <span class="pane-menu-name">Remote control${rcState ? ` <span class="rc-state">${rcState}</span>` : ''}</span>
       <span class="pane-menu-hint">${rcHint}</span></button>
     <button type="button" role="menuitem" data-act="ssh"${host ? ' disabled' : ''}
@@ -1517,7 +1517,7 @@ function renderPaneMenu() {
       title="This sandbox's workspace and published ports in sbx's own format (.sbxenv.yaml)">
       <span class="pane-menu-name">Environment file</span><span class="pane-menu-hint">For a colleague to bring the same sandbox up</span></button>
     <button type="button" role="menuitem" data-act="reconnect"${name ? '' : ' disabled'}
-      title="Close this pane's socket and open it again — the session keeps running">
+      title="Close this pane's socket and open it again; the session keeps running">
       <span class="pane-menu-name">Reconnect</span><span class="pane-menu-hint">Reattach to the running session</span></button>`;
   if (focused) paneMenu.el.querySelector(`button[data-act="${focused}"]:not(:disabled)`)?.focus();
 }
@@ -1567,7 +1567,7 @@ document.addEventListener('keydown', e => {
 // ── Sessions, shown and folded ────────────────────────────────────────────
 // Folding a session closes its pane, never the session: the PTY outlives the
 // socket, so showing it again reattaches to an agent that kept working. The
-// sessions of a sandbox are listed twice — in the pane bar's Sessions menu,
+// sessions of a sandbox are listed twice: in the pane bar's Sessions menu,
 // where one is shown in that pane, and folded under its sidebar entry, to
 // reach any of them from anywhere.
 //
@@ -1652,8 +1652,8 @@ function threadVerb(sandbox, name) {
   if (threadPaneIndex(sandbox, name) >= 0) return `Go to ${name}`;
   if (threadRunning(sandbox, name)) return `Show ${name}`;
   return inMainCheckout(sandbox, name)
-    ? `Start ${name} again — a fresh conversation in the main checkout`
-    : `Start ${name} again — its worktree is kept, its session had stopped`;
+    ? `Start ${name} again: a fresh conversation in the main checkout`
+    : `Start ${name} again; its worktree is kept, its session had stopped`;
 }
 
 // ✦ for what works on the main checkout (main, and the sessions beside it),
@@ -1687,7 +1687,7 @@ function sidebarRowHtml(sandbox, thread) {
 function setHtml(el, html) { if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; } }
 
 function renderThreadViews() {
-  // The Sessions button counts every session — main, beside it, and threads —
+  // The Sessions button counts every session (main, beside it, and threads)
   // and turns amber while one of them is waiting for you; the menu is where
   // you find which.
   panes.forEach((p, i) => {
@@ -1756,7 +1756,7 @@ function reachSession(sandbox, thread) {
 }
 
 // ── Folded under the sidebar row ──
-// Folded by default — a long list of sandboxes stays a list of sandboxes —
+// Folded by default (a long list of sandboxes stays a list of sandboxes),
 // with the count and the most urgent mark on the fold, so a thread waiting
 // for you is seen without opening it. Open or folded is kept per sandbox in
 // this browser only.
@@ -1787,7 +1787,7 @@ function sidebarSessionsHtml(sandbox) {
     // the heading's, so the rows under it do not repeat it.
     const kind = (glyph, name, about) =>
       `<div class="sbx-sessions-kind" title="${about}"><span aria-hidden="true">${glyph}</span>${name}</div>`;
-    rows = (own.length ? kind('✦', 'Main checkout', 'Same files as the main session — no worktree, no branch') : '')
+    rows = (own.length ? kind('✦', 'Main checkout', 'Same files as the main session: no worktree, no branch') : '')
       + same.map(t => sidebarRowHtml(sandbox, t)).join('')
       + (own.length ? kind('⑂', 'Own worktree', 'Each thread on a git worktree and branch of its own')
         + own.map(t => sidebarRowHtml(sandbox, t)).join('') : '');
@@ -1842,7 +1842,7 @@ function closeSessionMenu() {
 // One line per session: its mark, its name, what it is doing in words, and
 // where it is on screen. What a click does is said in its tooltip, and its
 // one other action (Beside or Hide) takes the place of the "where" while the
-// row is pointed at or focused — the sidebar rows' pattern — so the list
+// row is pointed at or focused (the sidebar rows' pattern), so the list
 // reads as names and states, not as a column of buttons.
 function sessionMenuRowHtml(idx, sandbox, t) {
   const at = sessionPaneIndex(sandbox, t);
@@ -1851,14 +1851,14 @@ function sessionMenuRowHtml(idx, sandbox, t) {
   const words = THREAD_STATE_WORDS[state] ?? 'Idle';
   const where = here ? 'here' : at >= 0 ? `P${at + 1}` : '';
   const verb = here ? 'Shown in this pane'
-    : at >= 0 ? `In pane ${at + 1} — pick it to swap the two panes`
-    : state === 'stopped' ? 'Stopped — pick it to start it again in this pane' : 'Show it in this pane';
+    : at >= 0 ? `In pane ${at + 1}: pick it to swap the two panes`
+    : state === 'stopped' ? 'Stopped: pick it to start it again in this pane' : 'Show it in this pane';
   const name = !t ? 'main' : t;
   const team = t && threadKind(sandbox, t) === 'team' ? '<span class="sm-tag" title="A thread of a shared plan: it shares one worktree with the plan\'s other threads">team</span>' : '';
   const side = !t || here ? ''
     : at >= 0
       ? `<button type="button" role="menuitem" class="sm-act" data-fold="${escHtml(t)}"
-          title="Close its pane — the agent keeps running">Hide</button>`
+          title="Close its pane; the agent keeps running">Hide</button>`
       : `<button type="button" role="menuitem" class="sm-act" data-beside="${escHtml(t)}"
           title="${escHtml(threadVerb(sandbox, t))}, in another pane">Beside</button>`;
   return `<div class="sm-row${here ? ' here' : ''}${side ? ' has-act' : ''}" data-state="${state}">
@@ -1897,7 +1897,7 @@ function renderSessionMenu() {
       ${hidden ? `<button type="button" role="menuitem" data-all="show"
         title="Put every thread on screen, as far as the window has room">Show all ${hidden}</button>` : ''}
       ${shown ? `<button type="button" role="menuitem" data-all="fold"
-        title="Close every thread's pane — their agents keep running">Hide all</button>` : ''}
+        title="Close every thread's pane; their agents keep running">Hide all</button>` : ''}
     </div>`;
   setHtml(sessionMenu.el, `
     <div class="sm-head" title="Pick a session to show it in this pane. Each keeps running when it is not shown.">
@@ -1905,7 +1905,7 @@ function renderSessionMenu() {
     </div>
     <section class="sm-section">
       ${sessionMenuKindHtml('✦', 'Main checkout', 'same files',
-        'Same files as the main session — no worktree, no branch.', 'same', 'Session',
+        'Same files as the main session: no worktree, no branch.', 'same', 'Session',
         'Another Claude on the main checkout: a second conversation about the same files. Two agents editing one file can overwrite each other.')}
       <div class="sm-list">${same.map(t => sessionMenuRowHtml(idx, sandbox, t)).join('')}</div>
     </section>
@@ -2071,7 +2071,7 @@ function paintRemoteButton(idx, active) {
   if (more) {
     more.classList.toggle('remote-on', active === true);
     more.title = active === true
-      ? 'Remote control is on — this session is reachable from claude.ai/code and the Claude app. Also SSH, environment file, reconnect'
+      ? 'Remote control is on: this session is reachable from claude.ai/code and the Claude app. Also SSH, environment file, reconnect'
       : 'Remote control, SSH, environment file, reconnect';
   }
   if (paneMenu.idx === idx) renderPaneMenu();
@@ -2116,8 +2116,8 @@ async function startRemoteControl(idx) {
     if (!state) return;
     if (!state.ok) { say(state.error); return; }
     if (state.active) return;
-    if (state.login === 'helper') { say(state.advice || 'an apiKeyHelper outranks the login — recreate this sandbox on sbx 0.50+'); return; }
-    if (state.login === 'missing') { say('not logged in to claude.ai — run /login here, then choose Remote control again'); return; }
+    if (state.login === 'helper') { say(state.advice || 'an apiKeyHelper outranks the login; recreate this sandbox on sbx 0.50+'); return; }
+    if (state.login === 'missing') { say('not logged in to claude.ai; run /login here, then choose Remote control again'); return; }
     if (state.login === 'token') {
       const yes = confirm(
         `“${sandbox}” is signed in with a setup token (CLAUDE_CODE_OAUTH_TOKEN), which Remote Control refuses.\n\n` +
@@ -2140,7 +2140,7 @@ async function startRemoteControl(idx) {
 }
 
 // ── Groups ────────────────────────────────────────────────────────────────
-// A sandbox shown in more than one pane — its agent and its threads — is one
+// A sandbox shown in more than one pane (its agent and its threads) is one
 // piece of work, so its panes sit side by side and share a thin outline. The
 // outline is drawn per edge, only where a pane does not touch another of its
 // group, so a group reads as one block rather than as boxes in a row.
@@ -2209,9 +2209,9 @@ document.addEventListener('contextmenu', e => {
 // order the sandboxes first appear, keeping the order they are in within a
 // group (a person may have dragged a thread ahead of its agent). An empty
 // pane keeps its slot, so one can be swapped anywhere, unless it sits inside
-// a group — a gap there would split the group apart — which it then follows.
+// a group (a gap there would split the group apart), which it then follows.
 // Only the
-// panes whose content changes are reconnected — a reconnect replays the
+// panes whose content changes are reconnected: a reconnect replays the
 // session, so it costs a repaint, never the session.
 function regroupPanes() {
   const vis = panes.slice(0, paneCount);
@@ -2278,7 +2278,7 @@ function paintGroups() {
     const st = thread && typeof planThreadState === 'function' ? planThreadState(p.sandbox, thread) : null;
     const leading = !thread && p.sandbox && typeof isLeading === 'function' && isLeading(p.sandbox);
     // Team mode is said once, by its toggle lit On (kept on the bar while it
-    // is, focused or not) and the stripe on the bar — not a second time by a
+    // is, focused or not) and the stripe on the bar, not a second time by a
     // "★ lead" chip beside it. The chip stays "main" among its threads.
     chip.textContent = thread ? `${sessionLabel(p.sandbox, thread)}${st ? ` ${PLAN_STATE_MARK[st.state] || ''}` : ''}` : 'main';
     p.el.classList.toggle('leading', !!leading && i < paneCount);
@@ -2288,9 +2288,9 @@ function paintGroups() {
       leadBtn.querySelector('.lead-state').textContent = leading ? 'On' : 'Off';
       // On, the toggle ends team mode; say so where a person hovers.
       leadBtn.dataset.title ??= leadBtn.title;
-      leadBtn.title = leading ? 'Team mode is on — click to end it: this session stops leading; its threads keep running' : leadBtn.dataset.title;
+      leadBtn.title = leading ? 'Team mode is on. Click to end it: this session stops leading; its threads keep running' : leadBtn.dataset.title;
     }
-    chip.title = st ? `${st.state}${st.summary ? ` — ${st.summary}` : ''}` : '';
+    chip.title = st ? `${st.state}${st.summary ? `: ${st.summary}` : ''}` : '';
     chip.classList.toggle('thread', !!thread);
     chip.hidden = !(i < paneCount && p.sandbox && (thread || color));
     if (!color) { p.el.style.removeProperty('--group-color'); return; }

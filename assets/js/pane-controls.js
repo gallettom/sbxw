@@ -97,7 +97,7 @@ function closePane(idx) {
     dst.term.reset();
 
     // Null out the source so it becomes a clean empty slot. The socket is
-    // dropped *before* emptying it — it now belongs to `dst`, and `emptyPane`
+    // dropped *before* emptying it: it now belongs to `dst`, and `emptyPane`
     // would otherwise close the session that just moved.
     src.ws = null;
     emptyPane(src.index);
@@ -120,7 +120,7 @@ function closePane(idx) {
   // between panes, and on an uneven grid a socket can land on a pane of a
   // different cell count without any box changing. Each moved socket carries the
   // size it was told, so this reconciles exactly those and stays silent for the
-  // rest — no delay needed, the grid template above is already applied.
+  // rest; no delay needed, the grid template above is already applied.
   refitPanes('pane closed');
 
   renderSidebar();
@@ -200,7 +200,7 @@ document.addEventListener('mousedown', e => {
   if (e.button !== 0) return;
   const pane = paneFromEl(e.target);
   if (!pane || pane.el.style.display === 'none') return;
-  // xterm-viewport carries the native scrollbar — let it scroll freely.
+  // xterm-viewport carries the native scrollbar; let it scroll freely.
   if (e.target.classList.contains('xterm-viewport')) return;
   const start = mouseToCell(e, pane);
   if (!start) return;
@@ -241,7 +241,7 @@ document.addEventListener('mouseup', e => {
   dragSel = null;
   if (e.button !== 0 || !pane) return;
   // Copy first: this handler is on the capture phase, so the selection is
-  // still there — by the time xterm is done with this same event it may not be.
+  // still there; by the time xterm is done with this same event it may not be.
   copySelectionOnRelease(pane);
   if (range) keepSelectionVisible(pane, range);
 }, true);
@@ -250,14 +250,14 @@ document.addEventListener('mouseup', e => {
 ///
 /// While a TUI holds mouse tracking, xterm reports the mouse to the program as
 /// *user input* (`CoreMouseService` → `triggerDataEvent(report, true)`), and
-/// its selection service clears the selection on any user input — the same
+/// its selection service clears the selection on any user input, the same
 /// rule that makes a keystroke drop the highlight, which is right for a
 /// keystroke and wrong for the mouse-up that just finished drawing it. So the
 /// text stayed selected for exactly as long as the button was held, which read
 /// as "selecting with the mouse doesn't work" even though the copy landed.
 ///
-/// The release still reaches the program — swallowing it would leave the TUI
-/// believing the button is down — and the selection goes back on top of it,
+/// The release still reaches the program (swallowing it would leave the TUI
+/// believing the button is down), and the selection goes back on top of it,
 /// before the frame it would have been missing from.
 function keepSelectionVisible(pane, range) {
   requestAnimationFrame(() => {
@@ -272,7 +272,7 @@ function keepSelectionVisible(pane, range) {
 /// for as long as a selection is on screen.
 ///
 /// An agent's TUI asks for any-event tracking (`?1003h`), so every move over
-/// the pane is reported to it — and xterm hands the program's mouse reports to
+/// the pane is reported to it, and xterm hands the program's mouse reports to
 /// `triggerDataEvent(report, true)`, i.e. as *user input*, which its selection
 /// service answers by clearing the selection. The selected text therefore
 /// survived only until the pointer twitched over the terminal: move the mouse
@@ -280,7 +280,7 @@ function keepSelectionVisible(pane, range) {
 ///
 /// Motion only, and only over a pane that has something selected. Buttons and
 /// keys still reach the program untouched, and the first of either drops the
-/// selection and hands the pointer straight back — so a TUI's hover states are
+/// selection and hands the pointer straight back, so a TUI's hover states are
 /// frozen exactly while the user is reading a selection, and never after it.
 function holdSelectionAgainstMotion(e) {
   if (e.target.classList?.contains('xterm-viewport')) return;
@@ -293,7 +293,7 @@ function holdSelectionAgainstMotion(e) {
 
 // ── Copy on select ───────────────────────────────────────────────────────
 // A selection in a terminal is only ever made in order to paste it somewhere,
-// and a pane has no Copy button to press — xterm just leaves the selection lit
+// and a pane has no Copy button to press; xterm just leaves the selection lit
 // up waiting for a ⌘C nobody types after double-clicking a word. So every
 // selection the mouse makes (double-click word, triple-click line, or a drag
 // through the custom path above) goes to the clipboard the moment the button
@@ -302,14 +302,14 @@ function holdSelectionAgainstMotion(e) {
 //
 // This is the copy for text the *browser* selected. While a TUI holds mouse
 // tracking, xterm makes no selection at all and the double-click belongs to
-// the program in the PTY — there the copy arrives as OSC 52 instead, handled
+// the program in the PTY; there the copy arrives as OSC 52 instead, handled
 // in `setupTerminal`.
 let copySelectionFailed = false;
 
 function copySelectionOnRelease(pane) {
   // Read and write synchronously, inside the mouseup. Both selection paths are
-  // settled by now — xterm selects a word on the second *mousedown* of a
-  // double-click, and a drag updates on every mousemove — and deferring the
+  // settled by now (xterm selects a word on the second *mousedown* of a
+  // double-click, and a drag updates on every mousemove), and deferring the
   // clipboard write out of the event, even by `setTimeout(…, 0)`, leaves the
   // user gesture behind, which Safari will not write without.
   const text = pane.term?.getSelection?.();
@@ -319,6 +319,6 @@ function copySelectionOnRelease(pane) {
     // opened on, so it will fail on every selection after this one too.
     if (ok || copySelectionFailed) return;
     copySelectionFailed = true;
-    showToast('Copy-on-select needs localhost or HTTPS — press ⌘C instead', 'error');
+    showToast('Copy-on-select needs localhost or HTTPS. Press ⌘C instead', 'error');
   });
 }

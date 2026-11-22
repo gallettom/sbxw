@@ -2,10 +2,10 @@
 //
 // sbxw expects exactly one browser tab. A second one doesn't get its own
 // slice of the two runtime worker threads, the PTY per sandbox, or the
-// browser's six-per-origin HTTP/1.1 connection budget — it just contends
+// browser's six-per-origin HTTP/1.1 connection budget; it just contends
 // with the first for all of it (see `api_stream` in src/web.rs). Tabs in the
 // *same* browser can find each other instantly over `BroadcastChannel`
-// (same-origin, cross-tab, no network round trip involved) — so before
+// (same-origin, cross-tab, no network round trip involved), so before
 // paying for any of that, a freshly opened tab asks "is anyone already
 // here?" and, if so, offers to hand off instead of piling on.
 //
@@ -15,7 +15,7 @@
 // tab count on `/api/stream`) is what catches that case, once both are
 // already running.
 //
-// Everything the app actually needs — xterm.js and every local script — is
+// Everything the app actually needs (xterm.js and every local script) is
 // loaded from here, and only once a decision is made. That's what makes a
 // duplicate tab cheap: it never opens an SSE connection, a WebSocket, or
 // pulls in xterm, unless the user explicitly chooses to.
@@ -104,7 +104,7 @@ function sbxwLoadApp() {
 }
 
 // Older browsers without BroadcastChannel have no way to detect a duplicate
-// tab — just boot normally.
+// tab; just boot normally.
 if (typeof BroadcastChannel === 'undefined') {
   sbxwLoadApp();
 } else {
@@ -112,7 +112,7 @@ if (typeof BroadcastChannel === 'undefined') {
   const myId = Math.random().toString(36).slice(2);
   let heardPong = false;
   // Only a tab that has actually decided to run the app answers pings or
-  // focus-requests — a tab still mid-decision (showing its own interstitial)
+  // focus-requests; a tab still mid-decision (showing its own interstitial)
   // has no app running here to hand off to. Two tabs opened within the same
   // ~200ms window can both miss each other and both boot; that race is
   // accepted rather than solved, same tradeoff any peer-election over a
@@ -138,7 +138,7 @@ if (typeof BroadcastChannel === 'undefined') {
   };
 
   // Clicking the header's "N tabs open" warning asks any other running tab
-  // to raise its hand — the same handoff the interstitial below offers, but
+  // to raise its hand, the same handoff the interstitial below offers, but
   // reachable after a tab has already chosen to boot despite a duplicate.
   document.getElementById('multi-client-warning')
     ?.addEventListener('click', () => bc.postMessage({ type: 'focus-request' }));
@@ -152,7 +152,7 @@ if (typeof BroadcastChannel === 'undefined') {
       return;
     }
 
-    // Another tab is already running — offer to hand off instead of booting
+    // Another tab is already running; offer to hand off instead of booting
     // a second full app here.
     const overlay = document.getElementById('singleton-overlay');
     overlay.hidden = false;
@@ -160,7 +160,7 @@ if (typeof BroadcastChannel === 'undefined') {
     document.getElementById('singleton-focus').addEventListener('click', ev => {
       bc.postMessage({ type: 'focus-request' });
       const btn = ev.currentTarget;
-      btn.textContent = 'Sent — you can close this tab';
+      btn.textContent = 'Sent. You can close this tab';
       btn.disabled = true;
     });
 

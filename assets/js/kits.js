@@ -8,7 +8,7 @@
 // Bundled kits are checkboxes, everything else a list with an add field. A
 // bundled kit listed by its path in a checkout (`…/assets/codemap`) is shown on
 // its checkbox row, not again under Other kits: it is the same kit, read from
-// the working tree instead of the binary — which is why it is kept as written
+// the working tree instead of the binary, which is why it is kept as written
 // unless "Use sbxw: names" is pressed. A file without a `kits` line gets the
 // defaults, shown checked: saving writes them out, and "Use defaults" takes the
 // line away again.
@@ -47,7 +47,7 @@ function kitsLoadFile() {
   const users = [f.daemon ? 'the daemon (new sandboxes from this page)' : '', ...(f.sandboxes || [])].filter(Boolean);
   const notes = [
     users.length ? `Used by ${users.join(', ')}.` : '',
-    f.exists ? '' : 'The file does not exist yet — saving creates it.',
+    f.exists ? '' : 'The file does not exist yet; saving creates it.',
     kitsExplicit ? '' : 'No kits line: the default kits apply. Saving writes them out.',
     f.error ? `Cannot be edited: ${f.error}` : '',
   ].filter(Boolean);
@@ -75,7 +75,7 @@ function kitsRender() {
           <span class="tpl-tag" title="${escHtml(k)}">${escHtml(k)}</span>
           <button class="tpl-rm" data-ref="${escHtml(k)}" ${broken ? 'disabled' : ''} title="Take it out of the list">Remove</button>
         </div>`).join('')
-    : '<p class="repo-note">None — only bundled kits.</p>';
+    : '<p class="repo-note">None: only bundled kits.</p>';
 }
 
 async function openKitsModal() {
@@ -117,7 +117,7 @@ async function kitsWrite(kits) {
     showNote(kitsError, r.error || 'Could not save');
     return;
   }
-  showToast(r.warnings?.length ? `Saved — ${r.warnings.join('; ')}` : `Saved ${path.split('/').pop()}`);
+  showToast(r.warnings?.length ? `Saved: ${r.warnings.join('; ')}` : `Saved ${path.split('/').pop()}`);
   kitsDirty = false;
   await openKitsModal();
   if (r.warnings?.length) showNote(kitsError, r.warnings.join(' · '));
