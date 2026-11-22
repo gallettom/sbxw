@@ -572,7 +572,7 @@ row{ key = "title-slot", gap = 8,
   tier; a workspace of one is ungrouped, and ungrouped sandboxes after a
   group get a hairline (`<id>-ungrouped-<n>`). Inside a tier, the daemon's
   order (by name). The order is taken when the list opens and holds while it
-  is open (a state change updates the dot and the word, never the row's
+  is open (a state change updates the word, never the row's
   place); the filter keeps it. `order = "name"` asks for the daemon's order
   grouped by workspace instead (no built-in screen does).
 - **Closed**: a capsule in the sandbox's group colour (its fill the colour
@@ -591,8 +591,9 @@ row{ key = "title-slot", gap = 8,
   rows, `<id>-rows`, scroll inside under the pinned filter and All, the
   current row in view on open): All first, then each group under a heading in
   the sidebar's tint and label colour, a row per sandbox (`<id>-<name>`,
-  All `<id>-`; a script's `wait:` knows `<id>-list`, then taps a row): the group's bar, status, name, open sessions, state,
-  agent, a check on the current one. Above 8 sandboxes a filter field
+  All `<id>-`; a script's `wait:` knows `<id>-list`, then taps a row): the group's bar, name, open sessions, state
+  (a word, no dot: the capsule keeps its dot, its only visible sign of the
+  state), agent, a check on the current one. Above 8 sandboxes a filter field
   (`<id>-filter`) that matches names and group names. The keyboard starts
   in the field, else on the current row; Up and Down move, Enter picks
   (in the field: the first match), Escape closes only the list and gives
