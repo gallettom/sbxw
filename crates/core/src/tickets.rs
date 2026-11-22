@@ -1113,14 +1113,15 @@ pub fn board(scope: &str, books: &[&Book], plans: &[Plan], now: u64, older: bool
             cols.get_mut(&c.column).expect("every column").push(c);
         }
     }
+    let ranks = ranks_of(books);
     let mut columns = vec![];
     let mut counts = vec![];
     for (col, mut cards) in cols {
         match col {
             Column::Planned => cards.sort_by(|a, b| {
                 // Tickets first by priority then the person's order, then threads of a pending plan.
-                let ra = (a.source != Source::Person, a.priority, rank_of(books, a), std::cmp::Reverse(a.created_ms));
-                let rb = (b.source != Source::Person, b.priority, rank_of(books, b), std::cmp::Reverse(b.created_ms));
+                let ra = (a.source != Source::Person, a.priority, rank_of(&ranks, a), std::cmp::Reverse(a.created_ms));
+                let rb = (b.source != Source::Person, b.priority, rank_of(&ranks, b), std::cmp::Reverse(b.created_ms));
                 ra.cmp(&rb).then(a.key.cmp(&b.key))
             }),
             _ => cards.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.key.cmp(&b.key))),
@@ -1143,9 +1144,23 @@ pub fn board(scope: &str, books: &[&Book], plans: &[Plan], now: u64, older: bool
     }
 }
 
-fn rank_of(books: &[&Book], c: &Card) -> i64 {
+/// Each ticket's rank by (sandbox, number), as a search would find it: the
+/// first book of a sandbox, the first ticket of a number in it. Built once
+/// per board, not searched for at every comparison of the sort.
+fn ranks_of<'a>(books: &[&'a Book]) -> HashMap<(&'a str, u32), i64> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = HashMap::new();
+    for b in books.iter().filter(|b| seen.insert(b.sandbox.as_str())) {
+        for t in &b.tickets {
+            out.entry((b.sandbox.as_str(), t.n)).or_insert(t.rank);
+        }
+    }
+    out
+}
+
+fn rank_of(ranks: &HashMap<(&str, u32), i64>, c: &Card) -> i64 {
     let Some(n) = c.n else { return i64::MAX };
-    books.iter().find(|b| b.sandbox == c.sandbox).and_then(|b| b.get(n)).map_or(i64::MAX, |t| t.rank)
+    ranks.get(&(c.sandbox.as_str(), n)).copied().unwrap_or(i64::MAX)
 }
 
 /// A ticket's history: its own steps, and while its plan is kept, what the
