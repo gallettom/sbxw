@@ -69,3 +69,24 @@ fn timing_screen_render() {
     assert!(s.error.is_none(), "{:?}", s.error);
     eprintln!("timing: sandboxes render {ms:.2} ms median of 21 (data {bytes} bytes)");
 }
+
+/// The core's Markdown element for 400 messages of 884 bytes each (a
+/// long conversation): what each `view` rebuild pays for Markdown nodes.
+/// Runs without the fixture.
+#[test]
+#[ignore]
+fn timing_markdown_view() {
+    let one = "## Plan\n\nThe **first** step reads `src/main.rs` and the [docs](https://example.com/docs).\n\n- one item with `code`\n- two, *in italics*\n- three\n\n```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n".repeat(4);
+    let look = crate::markdown::Look { color: 0xdddddd, size: 13.0, pills: None };
+    let parse = time(11, || {
+        for _ in 0..400 {
+            std::hint::black_box(crate::markdown::parse(&one));
+        }
+    });
+    let view = time(11, || {
+        for i in 0..400 {
+            std::hint::black_box(crate::markdown::view::<App>(&one, &look, &format!("m{i}"), None));
+        }
+    });
+    eprintln!("timing: markdown 400 x {} bytes: parse {parse:.2} ms, element {view:.2} ms (median of 11)", one.len());
+}
