@@ -465,6 +465,21 @@ pub const TOOL_CALL_QUIET_MS: u64 = 3_000;
 /// state is checked again and the Return sent.
 pub const HOOK_GRACE: Duration = Duration::from_millis(600);
 
+/// A message typed and submitted: what the phone matches its pending bubble
+/// with. The prompt is the first `user_prompt` row of `epoch` newer than
+/// `after`; `text` is the words as typed (masked, trimmed, without the block
+/// of attachment paths), as the history shows them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageSent {
+    /// Words masked by the anonymise rules.
+    pub masked: usize,
+    pub text: String,
+    /// The log's newest seq before the Return; `None` when no log was found.
+    pub after: Option<u64>,
+    /// The numbering `after` belongs to ('' when unknown).
+    pub epoch: String,
+}
+
 /// What a phone is refused, and why, in a status the route maps.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Refusal {
@@ -1235,7 +1250,10 @@ impl App {
     /// the Return whose hook has not reached sbxw within [`HOOK_GRACE`]. It
     /// is wider while the leader works (a tool call can ask for permission
     /// any moment) than at an idle prompt.
-    pub async fn remote_message(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, text: &str, attachments: &[String]) -> Result<usize, Refusal> {
+    ///
+    /// Returns what the page needs to find the prompt in the history (see
+    /// [`MessageSent`]).
+    pub async fn remote_message(self: &Arc<Self>, d: &DeviceCtx, sb: &SandboxRef, text: &str, attachments: &[String]) -> Result<MessageSent, Refusal> {
         use sbxw_core::remote_access::MessageRefusal as M;
         let reason = |m: M| match m {
             M::Empty => Reason::Empty,
@@ -1316,6 +1334,14 @@ impl App {
                 return Err(Refusal::Reason(Reason::NotSubmitted));
             }
         }
+        // The log's newest seq just before the Return: the prompt it submits
+        // is the first of the person's rows after it (reading the page also
+        // keeps the history's nudges coming for this session).
+        let (after, epoch) = self
+            .remote_leader_session(sb)
+            .and_then(|sid| self.history_page(sb, &sid, None, Some(1)))
+            .map(|p| (Some(p.latest_seq), p.epoch))
+            .unwrap_or((None, String::new()));
         session.write(&[b"\r"]).await;
         if files {
             self.remote_spend_attachments(attachments);
@@ -1323,7 +1349,7 @@ impl App {
         tracing::info!("remote access: device {}: message", d.id);
         tracing::debug!("remote access: message to '{sb}' ({} bytes, {} masked, {} files)", typed.len(), count, paths.len());
         self.remote_record(d, Kind::Message);
-        Ok(count)
+        Ok(MessageSent { masked: count, text: masked, after, epoch })
     }
 
     /// The 409 of an answer typed but not taken; the page shows it as is.

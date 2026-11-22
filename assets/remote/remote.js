@@ -704,9 +704,10 @@
     st.items = rcMerge([], page.items);
     st.epoch = page.epoch;
     st.nextBefore = page.next_before;
-    // A bubble's `after` was a seq of the old numbering: from now on it
-    // matches its own text anywhere, and waits at the end (rcWithPending).
-    for (const p of st.pending) p.after = -1;
+    // A bubble's `after` was a seq of the old numbering: it keeps the
+    // daemon's key when that is of this numbering, else it matches its own
+    // words (or files) anywhere and waits at the end (rcWithPending).
+    rcPendingRenumber(st.pending, page.epoch);
     st.latestSeq = Math.max(page.latest_seq, ...st.items.map(i => Number(i.seq)));
     renderRows();
     st.shownSeq = st.latestSeq;
@@ -746,6 +747,20 @@
       }
     }
     if (st.newerAgain) { st.newerAgain = false; fetchNewer(); }
+  }
+
+  // After a Send, read the history at RC_CATCH_UP_MS whatever the event
+  // stream does, while the bubble waits; at RC_PENDING_WAIT_MS it says it
+  // was sent and waits for the agent. Stops when the history has it, or the
+  // conversation on screen changed.
+  function catchUp(sandbox, mine) {
+    for (const ms of RC_CATCH_UP_MS) {
+      setTimeout(() => {
+        if (st.current !== sandbox || !st.pending.includes(mine)) return;
+        if (rcPendingAge(st.pending, Date.now())) { renderRows(); keepPlace(); }
+        fetchNewer();
+      }, ms);
+    }
   }
 
   async function fetchOlder() {
@@ -1081,14 +1096,18 @@
     note('');
     // Drawn at once, before anything that arrives after it; the history's
     // own copy replaces it (rcWithPending).
-    const mine = { id: ++st.pendingSeq, text, files: t ? t.chips.filter(c => c.state === 'done' && c.id).map(c => c.name) : [], after: st.latestSeq, state: 'sending' };
+    const mine = { id: ++st.pendingSeq, text, files: t ? t.chips.filter(c => c.state === 'done' && c.id).map(c => c.name) : [], after: st.latestSeq, epoch: st.epoch, state: 'sending' };
     st.pending.push(mine);
     renderRows();
     scrollToEnd();
     // The ids, never a path: the daemon adds the paths itself.
     const res = await api.message(sandbox, text, ids);
-    if (res.ok) mine.state = 'sent';
-    else {
+    if (res.ok) {
+      // Delivered: the daemon's key finds the prompt; the page reads the
+      // history itself until it does (rcPendingSent, catchUp).
+      rcPendingSent(mine, res.data, st.epoch, Date.now());
+      catchUp(sandbox, mine);
+    } else {
       // Shown as not sent, then gone: the text and files are still in the composer.
       mine.state = 'failed';
       setTimeout(() => { st.pending = st.pending.filter(p => p !== mine); if (st.current === sandbox) { renderRows(); keepPlace(); } }, 4000);

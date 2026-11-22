@@ -143,3 +143,35 @@ async fn a_restart_or_a_reset_changes_the_epoch() {
     assert_eq!(texts(&full).len(), 6);
     assert_ne!(full["epoch"], e3.as_str());
 }
+
+/// Thread `phone-pending-fix`: a message's answer carries the key the page
+/// finds its prompt with (the log's newest seq before the Return, its epoch,
+/// the words as typed), and the prompt is the first row after that seq.
+#[tokio::test]
+async fn a_message_answers_with_the_key_of_its_prompt_row() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (sb, _) = leader(&app, d.path(), "lead1").await;
+    post(&app, &sb, 0, 10, false, exchanges(2));
+    let before = get(&router, &token, "").await;
+
+    let r = call(&router, "POST", "/r/leaders/lead1/message", Some(&token), json!({ "text": "  write to someone@example.org\n" })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let sent = r.json();
+    assert!(sent["masked"].as_u64().unwrap() >= 1);
+    let words = sent["text"].as_str().unwrap().to_string();
+    assert!(words.starts_with("write to ") && !words.contains("someone@"), "the words as typed: masked, trimmed: {words:?}");
+    let after = sent["after"].as_u64().expect("a key");
+    assert_eq!(after, before["latest_seq"].as_u64().unwrap());
+    assert_eq!(sent["epoch"], before["epoch"]);
+
+    // The transcript brings the paste as Claude Code records it, then a reply.
+    let typed = format!("<pasted_content id=\"p1\">{words}</pasted_content id=\"p1\">");
+    post(&app, &sb, 10, 20, false, json!([{"t": "user", "text": typed, "at": 9}, {"t": "assistant", "text": "Done.", "at": 9}]));
+    let newer = get(&router, &token, &format!("?after={after}")).await;
+    let first = &newer["items"][0];
+    assert_eq!(first["kind"], "user_prompt");
+    assert_eq!(first["text"].as_str().unwrap(), words, "the row's text is the answer's text");
+    assert_eq!(texts(&newer), [words.as_str(), "Done."]);
+}
