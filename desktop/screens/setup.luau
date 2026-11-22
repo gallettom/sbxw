@@ -288,7 +288,7 @@ local function voice_tab(state, d)
   end
   if v.speech and v.speech.supported then
     models[#models + 1] = row{ w = "full", gap = 8, key = "model-runtime",
-      badge{ "RUNTIME" },
+      badge{ "Runtime" },
       text{ (v.speech.runtime or "") .. ", fetched by uvx", truncate = true, grow = 1 },
       badge{ v.speech.runtime_ready and "ready" or "needs uv", tone = v.speech.runtime_ready and "green" or "amber" },
     }
