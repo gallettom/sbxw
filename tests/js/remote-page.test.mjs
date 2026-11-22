@@ -90,24 +90,27 @@ function spies() {
   delete window.SpeechRecognition;
   delete window.webkitSpeechRecognition;
   if (sr !== 'missing') {
-    window.webkitSpeechRecognition = class {
-      constructor() { if (sr === 'ctor') throw new Error('no'); window.__srLast = this; spy.srMade++; }
+    // An EventTarget, as the real one: `end` reaches both onend and the
+    // page's own 'end' listener (it holds the microphone until then).
+    window.webkitSpeechRecognition = class extends EventTarget {
+      constructor() { super(); if (sr === 'ctor') throw new Error('no'); window.__srLast = this; spy.srMade++; }
+      end_() { this.onend?.(); this.dispatchEvent(new Event('end')); }
       start() {
         spy.sr.push(`start ${this.lang} ${this.interimResults} ${this.continuous}`);
         if (sr === 'start') throw new DOMException('no', 'InvalidStateError');
         if (sr !== 'dead') setTimeout(() => { this.onstart?.(); this.onaudiostart?.(); }, 10);
-        if (sr.startsWith('err:')) setTimeout(() => { this.onerror?.({ error: sr.slice(4) }); this.onend?.(); }, 60);
+        if (sr.startsWith('err:')) setTimeout(() => { this.onerror?.({ error: sr.slice(4) }); this.end_(); }, 60);
       }
-      stop() { spy.sr.push('stop'); if (sr !== 'deaf') setTimeout(() => this.onend?.(), 20); }
-      endSelf() { this.onend?.(); }
+      stop() { spy.sr.push('stop'); if (sr !== 'deaf') setTimeout(() => this.end_(), 20); }
+      endSelf() { this.end_(); }
       sound() { this.onsoundstart?.(); }
-      abort() { spy.sr.push('abort'); setTimeout(() => this.onend?.(), 0); }
+      abort() { spy.sr.push('abort'); setTimeout(() => this.end_(), 0); }
       say(list) {
         const results = list.map(([t, f]) => ({ 0: { transcript: t }, length: 1, isFinal: f }));
         results.item = i => results[i];
         this.onresult?.({ resultIndex: 0, results });
       }
-      fail(code) { this.onerror?.({ error: code }); this.onend?.(); }
+      fail(code) { this.onerror?.({ error: code }); this.end_(); }
     };
   }
   navigator.mediaDevices.getUserMedia = async () => {
@@ -152,6 +155,13 @@ const ctl = body => fetch(`${base()}/__ctl`, { method: 'POST', body: JSON.string
 const log = async () => (await fetch(`${base()}/__log`)).json();
 const calls = async (method, path) => (await log()).filter(e => e.method === method && e.path === path);
 const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png`, animations: 'disabled' }); };
+// The page's own icons: an aria-hidden <svg> whose one child is a bare
+// <use href="#id"> of the page's sprite. Nothing else in a list or a detail
+// may be an <svg> or a <use>; hostile text never becomes one of these (it
+// would have to be markup, which the hostile tests also count).
+const OWN_ICON = () => { window.__rcOwnIcon = e => { const svg = e.closest('svg'); const u = svg?.firstElementChild; return !!svg && svg.getAttribute('aria-hidden') === 'true' && svg.children.length === 1 && u.tagName === 'use' && u.attributes.length === 1 && /^#[a-z0-9-]+$/.test(u.getAttribute('href') || '') && [...svg.attributes].every(a => ['aria-hidden', 'class', 'viewBox'].includes(a.name)); }; };
+// An Approvals heading is its title and, in its own span, the count: read as "title count".
+const apHeads = page => page.$$eval('.rc-ap-h', h => h.map(x => [...x.querySelectorAll('.rc-ap-ht, .rc-ap-n')].map(e => e.textContent).join(' ') || x.textContent.trim()));
 const noHScroll = page => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth && document.body.scrollWidth <= window.innerWidth);
 async function cleanSpy(page) {
   const spy = await page.evaluate(() => window.__spy);
@@ -232,8 +242,11 @@ test('leaders, a conversation, a question answered once on a tap', { skip }, asy
   const { ctx, page, problems } = await phone();
   await page.goto(`${base()}/`);
   await page.waitForSelector('.rc-leader');
-  const names = await page.$$eval('.rc-leader-name', els => els.map(e => e.textContent));
+  const names = await page.$$eval('.rc-leader:not(.rc-stopped) .rc-leader-name', els => els.map(e => e.textContent));
   assert.deepEqual(names, ['shop', 'docs', 'payments-service-with-a-very-long-sandbox-name', 'website']);
+  // The stopped sandboxes are the home's last group, after the running ones.
+  assert.deepEqual(await page.$$eval('.rc-stopped .rc-leader-name', els => els.map(e => e.textContent)), ['old-experiment']);
+  assert.equal(await page.$$eval('.rc-leader', b => b.at(-1).classList.contains('rc-stopped')), true);
   assert.ok(await noHScroll(page), 'no horizontal scroll');
   await shot(page, '04-leaders');
   await page.tap('.rc-leader >> nth=0');
@@ -255,7 +268,7 @@ test('leaders, a conversation, a question answered once on a tap', { skip }, asy
   await page.waitForSelector('text=Answer sent.');
   const answers = await calls('POST', '/r/leaders/shop/answer');
   assert.equal(answers.length, 1);
-  assert.deepEqual(answers[0].body, { indices: [1] });
+  assert.deepEqual(answers[0].body, { answers: [[1]] }, 'per step, the 1-based options picked');
   assert.equal(answers[0].ct, 'application/json');
   assert.equal(answers[0].origin, base(), 'the browser sends Origin on a POST');
   // A leader waiting on a permission prompt: no answer from here.
@@ -404,13 +417,13 @@ test('refusals: a sentence per reason, the text kept, nothing resent', { skip },
   await page.fill('#field', 'hello leader');
   await page.tap('#send');
   await page.waitForSelector('#status.rc-t-warn');
-  assert.match(await page.textContent('#status'), /NOT SENT: the text was typed into the leader's input on the Mac but not submitted.*\(sbxw: the leader changed before the Return\)/);
+  assert.match(await page.textContent('#status'), /NOT SENT: the text was typed into the session's input on the Mac but not submitted.*\(sbxw: the leader changed before the Return\)/);
   assert.equal(await page.inputValue('#field'), 'hello leader', 'kept in the composer');
   await shot(page, '14-not-submitted');
   await page.waitForTimeout(1500);
   assert.equal((await calls('POST', '/r/leaders/website/message')).length, 1, 'never resent by itself');
   await page.tap('#send');
-  await page.waitForSelector('text=/once it is back at its prompt/');
+  await page.waitForSelector('text=/The session is busy right now: try again in a few seconds/');
   assert.equal(await page.inputValue('#field'), 'hello leader');
   // A command: warned in place while typing, still the person's to send; the daemon refuses it.
   await page.fill('#field', '/model opus');
@@ -567,19 +580,21 @@ test('hostile names and text stay text', { skip }, async () => {
     ], latest_seq: 5 } } },
   });
   const { ctx, page, problems } = await phone(320, 568);
+  await page.addInitScript(OWN_ICON);
   await page.goto(`${base()}/`);
   await page.waitForSelector('.rc-leader');
+  assert.equal(await page.textContent('.rc-leader-name'), evil, 'the name is shown as text');
   assert.ok(await noHScroll(page));
   await page.tap('.rc-leader');
   await page.waitForSelector('.rc-card-q .rc-opt');
   await page.evaluate(() => document.querySelectorAll('a').forEach(a => a.getAttribute('href')?.startsWith('https:') || a.click()));
   const r = await page.evaluate(() => ({
     pwned: window.__pwned,
-    bad: document.querySelectorAll('#rows *:is(img,script,svg,iframe), #tail *:is(img,script,svg,iframe), #leaders *:is(img,script,svg,iframe), [onerror], [onclick]').length,
+    bad: [...document.querySelectorAll('#rows *:is(img,script,svg,use,iframe), #tail *:is(img,script,svg,use,iframe), #leaders *:is(img,script,svg,use,iframe), [onerror], [onclick]')].filter(e => !window.__rcOwnIcon(e)).length,
     hrefs: [...document.querySelectorAll('#rows a')].map(a => a.getAttribute('href')),
   }));
   assert.equal(r.pwned, undefined);
-  assert.equal(r.bad, 0, await page.evaluate(() => [...document.querySelectorAll('#rows *:is(img,script,svg,iframe), #tail *:is(img,script,svg,iframe), #leaders *:is(img,script,svg,iframe), [onerror], [onclick]')].map(e => e.outerHTML.slice(0, 200)).join('\n')));
+  assert.equal(r.bad, 0, await page.evaluate(() => [...document.querySelectorAll('#rows *:is(img,script,svg,use,iframe), #tail *:is(img,script,svg,use,iframe), #leaders *:is(img,script,svg,use,iframe), [onerror], [onclick]')].filter(e => !window.__rcOwnIcon(e)).map(e => e.outerHTML.slice(0, 200)).join('\n')));
   assert.ok(r.hrefs.every(h => /^https?:\/\//.test(h)), JSON.stringify(r.hrefs));
   assert.ok(await noHScroll(page), 'a 20,000-character message does not widen the page');
   await cleanSpy(page);
@@ -898,9 +913,9 @@ test('level 2: the Approvals entry, its badge, and one sentence when it cannot a
   await page.tap('#approvals-btn');
   await page.waitForSelector('.rc-ap-row');
   // Opened from website's conversation, the filter starts on website (it has a merge waiting).
-  assert.deepEqual(await page.$$eval('.rc-ap-h', h => h.map(e => e.textContent)), ['Merges proposed 1']);
+  assert.deepEqual(await apHeads(page), ['Merges proposed 1']);
   await page.tap('#ap-filter .rc-ap-fchip >> text=All sandboxes');
-  assert.deepEqual(await page.$$eval('.rc-ap-h', h => h.map(e => e.textContent)), ['Plans to approve 1', 'Merges proposed 1', 'Network requests 1'], 'stopped sandboxes are on the home, not here');
+  assert.deepEqual(await apHeads(page), ['Plans to approve 1', 'Merges proposed 1', 'Network requests 1'], 'stopped sandboxes are on the home, not here');
   await shot(page, '41-approvals-list');
   // A list sbx cannot read says so in its place; the others stay.
   await ctl({ l2Replies: { network: [{ status: 503, body: { ok: false, reason: 'unavailable' } }] } });
@@ -908,7 +923,7 @@ test('level 2: the Approvals entry, its badge, and one sentence when it cannot a
   await page.tap('#approvals-btn');
   await page.waitForSelector('.rc-ap-fail');
   assert.equal(await page.textContent('.rc-ap-fail'), 'The Mac cannot read this right now (sbx did not answer). Try again in a moment.');
-  assert.equal(await page.$$eval('.rc-ap-row', r => r.length), 3);
+  assert.equal(await page.$$eval('.rc-ap-row', r => r.length), 2, 'the plan and the merge stay (stopped sandboxes are on the home)');
   await page.tap('#back');
   await page.waitForSelector('#s-chat:not([hidden])');
   assert.equal(await page.textContent('#title'), 'website', 'back to the conversation it came from');
@@ -1079,7 +1094,7 @@ test('level 2: a plan approved with a thread\'s model changed sends the change w
   await openApprovals(page);
   await openItemOf(page, 'plans');
   assert.deepEqual(await page.$$eval('.rc-model-select', s => s.map(e => [e.dataset.thread, e.value])), [['db-schema', 'opus'], ['checkout', 'sonnet']], 'the proposed models');
-  assert.deepEqual(await page.$$eval('.rc-model-select:first-of-type option', o => o.map(e => e.value)), ['sonnet', 'opus', 'haiku'], 'the configured list');
+  assert.deepEqual(await page.$$eval('.rc-model-select', s => s.map(e => [...e.options].map(o => o.value))), [['sonnet', 'opus', 'haiku'], ['sonnet', 'opus', 'haiku']], 'the configured list, in each thread\'s select');
   await page.selectOption('.rc-model-select[data-thread="checkout"]', 'haiku');
   await page.tap('[data-kind="plan_approve"]');
   await page.waitForSelector('#sheet:not([hidden])');
@@ -1224,6 +1239,7 @@ test('level 2: hostile text in a plan and in file paths stays text; the sheet cl
   await ctl({ reset: true, paired: true, leaders: FX.leaders, l2Reset: true });
   // The stand-in reads the fixtures it was started with; hostile text goes in through its state.
   const { ctx, page, problems } = await phone(320, 568);
+  await page.addInitScript(OWN_ICON);
   await page.route('**/r/plans/p-*', async route => {
     const plan = structuredClone(L.plan);
     plan.plan.summary = evil;
@@ -1244,7 +1260,7 @@ test('level 2: hostile text in a plan and in file paths stays text; the sheet cl
   await page.tap('.rc-fold >> nth=0').catch(() => {});
   const check = () => page.evaluate(() => ({
     pwned: window.__pwned,
-    bad: document.querySelectorAll('#item img, #item script, #item a, #item strong, #item iframe, #item [onerror], #item [href]').length,
+    bad: [...document.querySelectorAll('#item img, #item script, #item a, #item strong, #item iframe, #item svg, #item [onerror], #item [href]')].filter(e => !window.__rcOwnIcon(e)).length,
   }));
   assert.deepEqual(await check(), { pwned: undefined, bad: 0 });
   assert.ok((await page.textContent('.rc-item-title')).includes('<img src=x'), 'shown as text');
@@ -1369,10 +1385,14 @@ test('kanban: the switch keeps each place; one column at a time, by picker or sw
   assert.equal(await selected(page), 'planned', 'no column before the first');
   await swipe(page, -30);
   assert.equal(await selected(page), 'planned', 'a small move is not a swipe');
-  // Read only: no control that writes, not even a disabled one.
-  const labels = await page.$$eval('#board button', b => b.map(e => `${e.textContent} ${e.getAttribute('aria-label') || ''}`.toLowerCase()));
+  // The cards are read only: no control that writes, not even a disabled one.
+  // The one way to write is New ticket, whose form stays closed until tapped.
+  assert.equal((await page.textContent('#kb-newbar')).trim(), 'New ticket');
+  assert.equal(await page.isVisible('#kb-form'), false);
+  const labels = await page.$$eval('#board button:not(#kb-newbar *, #kb-form *)', b => b.map(e => `${e.textContent} ${e.getAttribute('aria-label') || ''}`.toLowerCase()));
   for (const l of labels) assert.doesNotMatch(l, /\b(add|new|move|edit|delete|remove|send|drag)\b/, l);
-  assert.equal(await page.$$eval('#board input, #board textarea, #board [draggable="true"], #board [contenteditable]', e => e.length), 0);
+  assert.equal(await page.$$eval('#board :is(input, textarea, [draggable="true"], [contenteditable]):not(#kb-form *)', e => e.length), 0);
+  assert.equal((await log()).filter(e => e.method !== 'GET').length, 0, 'browsing the board writes nothing');
   // Back to the conversation: its place; back to the board: its column.
   await page.tap('#v-chat');
   assert.equal(await page.$eval('#log', l => l.scrollTop), logTop);
@@ -1481,7 +1501,7 @@ test('kanban: an empty board, a stopped leader, hostile titles and descriptions'
   {
     const { ctx, page } = await phone();
     await openBoard(page);
-    await page.waitForSelector('#kb-status:text("This leader is no longer running.")');
+    await page.waitForSelector('#kb-status:text("This team leader is no longer running.")');
     await shot(page, '77-kanban-stopped');
     await ctx.close();
   }
