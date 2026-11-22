@@ -413,6 +413,21 @@ function stateAfter(status, body, piece) {
   if (status === 409 && next !== null) return { off: next, ino: piece.ino };
   return null; // unchanged: tried again at the next event
 }
+
+// Post what the transcript has that the daemon lacks. `post(body,
+// then(status, parsed))` sends one piece; `done({posts, items, status})`.
+function syncHistory(tp, sid, dir, post, opts, done) {
+  const st = loadState(dir, sid);
+  const piece = readTail(tp, st, sid, opts && opts.limits);
+  if (!piece || !(piece.to > piece.from || piece.reset)) return done({ posts: 0, items: 0, status: 0 });
+  const body = { session_id: sid, from: piece.from, to: piece.to, reset: !!piece.reset, items: piece.items };
+  if (piece.prior) body.prior_session = piece.prior;
+  post(body, (status, parsed) => {
+    const next = stateAfter(status, parsed, piece);
+    if (next) saveState(dir, sid, next);
+    done({ posts: 1, items: piece.items.length, status });
+  });
+}
 // END history
 
 // Safety net: never hang the agent if stdin doesn't close.
@@ -472,37 +487,26 @@ process.stdin.on("end", () => {
     }
   }
   // The transcript's tail, unless this is a background session.
-  let piece = null;
   const problem = transcriptProblem(evt);
+  let syncing = false;
   if (!evt.background) {
     if (problem) evt.history = "none:" + problem;
     else {
-      const st = loadState(HISTORY_DIR, evt.session_id);
-      piece = readTail(evt.transcript_path, st, evt.session_id);
       // Not written yet (a session's first prompt) is catching up, not a
       // failure: the daemon must not fill the log from events meanwhile.
-      evt.history = piece || !fs.existsSync(evt.transcript_path) || readable(evt.transcript_path) ? "transcript" : "none:unreadable";
-      if (piece && !(piece.to > piece.from || piece.reset)) piece = null;
+      evt.history = !fs.existsSync(evt.transcript_path) || readable(evt.transcript_path) ? "transcript" : "none:unreadable";
+      syncing = evt.history === "transcript";
     }
   }
   log(
     "fire event=" + (evt.hook_event_name || "?") +
       " ssh=" + (evt.ssh_env.join(",") || "-") +
       " ancestry=" + evt.ancestry.join("<") +
-      (piece ? " history=" + piece.items.length + " items " + (piece.to - piece.from) + "B" : "") +
       " → host.docker.internal:" + PORT,
   );
 
   // Both requests at once; the hook exits when both are answered.
-  let pending = 1 + (piece ? 1 : 0);
-  let output = null;
-  const settle = () => {
-    pending -= 1;
-    if (pending > 0) return;
-    if (output) process.stdout.write(JSON.stringify(output), done);
-    else done();
-  };
-
+  let pending = 1 + (syncing ? 1 : 0);
   send("/api/hook", evt, (status, body) => {
     if (status >= 400) log("status=" + status + " body=" + body.replace(/\s+/g, " ").trim());
     else {
@@ -515,17 +519,17 @@ process.stdin.on("end", () => {
     }
     settle();
   });
-  if (piece) {
-    const post = { session_id: evt.session_id, from: piece.from, to: piece.to, reset: !!piece.reset, items: piece.items };
-    if (piece.prior) post.prior_session = piece.prior;
-    send("/api/hook/history", post, (status, body) => {
-      let parsed = null;
-      try {
-        parsed = JSON.parse(body);
-      } catch (_) {}
-      const next = stateAfter(status, parsed, piece);
-      if (next) saveState(HISTORY_DIR, evt.session_id, next);
-      log("history status=" + status);
+  if (syncing) {
+    const post = (body, then) =>
+      send("/api/hook/history", body, (status, text) => {
+        let parsed = null;
+        try {
+          parsed = JSON.parse(text);
+        } catch (_) {}
+        then(status, parsed);
+      });
+    syncHistory(evt.transcript_path, evt.session_id, HISTORY_DIR, post, null, (info) => {
+      log("history posts=" + info.posts + " items=" + info.items + " status=" + info.status);
       settle();
     });
   }
