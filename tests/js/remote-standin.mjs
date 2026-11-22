@@ -159,7 +159,7 @@ export function startStandin(port = 0) {
       const what = WHAT[body?.kind];
       if (!what) return send(res, 400, { ok: false, error: 'kind' });
       if (body.digest !== s.l2.digest[what]) return send(res, 409, { ok: false, error: 'changed', reason: 'changed' });
-      s.l2.chal = { kind: body.kind, target: body.target, option: body.option || null };
+      s.l2.chal = { kind: body.kind, target: body.target, option: body.option || null, models: JSON.stringify(body.models || {}) };
       return send(res, 200, { ...L.challenge, expires_ms: Date.now() + 60000 });
     }
     const act = L2_ACT.exec(p);
@@ -173,9 +173,13 @@ export function startStandin(port = 0) {
       if (!chal || chal.kind !== kind || chal.target !== target || (kind === 'network_respond' && chal.option !== body.option) || !shaped) {
         return send(res, 403, { ok: false, error: 'passkey', reason: 'passkey' });
       }
+      // The daemon: models other than the challenge's are "changed".
+      if (kind === 'plan_approve' && chal.models !== JSON.stringify(body.models || {})) {
+        return send(res, 409, { ok: false, error: 'changed', reason: 'changed' });
+      }
       const q = s.l2.replies[kind]?.shift();
       if (q) return send(res, q.status, q.body);
-      s.l2.done.push({ kind, target, option: body.option || null });
+      s.l2.done.push({ kind, target, option: body.option || null, ...(body.models ? { models: body.models } : {}) });
       if (kind === 'merge') return send(res, 200, L.merge_done);
       return send(res, 200, { ok: true });
     }

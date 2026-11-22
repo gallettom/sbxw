@@ -2196,7 +2196,7 @@
   // ── A detail ──
   async function openItem(what, id, said, hint) {
     closeSheet();
-    st.item = { what, id, data: null, digest: '' };
+    st.item = { what, id, data: null, digest: '', models: [], picked: {} };
     const titles = { plans: 'Plan', merges: 'Merge', network: 'Network request', stopped: 'Stopped sandbox' };
     setTitle(titles[what], '');
     show('s-item');
@@ -2225,6 +2225,8 @@
     const data = d[key] && typeof d[key] === 'object' ? d[key] : {};
     st.item.data = data;
     st.item.digest = typeof d.digest === 'string' && /^[0-9a-f]{64}$/.test(d.digest) ? d.digest : '';
+    // The models a thread may be switched to (the configured list, ids and labels).
+    st.item.models = what === 'plans' && Array.isArray(d.models) ? d.models.filter(m => m && typeof m.id === 'string' && m.id).map(m => ({ id: m.id, label: str(m.label) || m.id })) : [];
     const body = what === 'plans' ? planView(data) : what === 'merges' ? mergeView(data) : what === 'network' ? networkView(data) : stoppedView(data, d.confirm);
     $('item').replaceChildren(...body);
     renderActs(what, data);
@@ -2280,9 +2282,30 @@
       card.append(top);
       if (str(t.scope)) card.append(field_('Scope', str(t.scope), { fold: true }));
       if (str(t.goal)) card.append(field_('Goal', str(t.goal), { fold: true }));
+      const pick = modelPick(t);
+      if (pick) card.append(pick);
       out.push(card);
     }
     return out;
+  }
+  // A thread's model, chosen before approving: the proposed one first and
+  // selected, then the configured list. Only the model of a thread changes.
+  function modelPick(t) {
+    const list = st.item?.models || [];
+    const name = str(t.name);
+    if (!list.length || !name) return null;
+    const proposed = str(t.model);
+    const box = el('label', 'rc-kv rc-model-pick');
+    box.append(el('span', 'rc-kv-k', 'Model'));
+    const sel = el('select', 'rc-select rc-model-select');
+    sel.dataset.thread = name;
+    const opt = (value, label) => { const o = el('option', null, label); o.value = value; return o; };
+    if (!list.some(m => m.id === proposed)) sel.append(opt(proposed, proposed ? `${proposed} (proposed)` : 'Default (proposed)'));
+    for (const m of list) sel.append(opt(m.id, m.id === proposed ? `${m.label} (proposed)` : m.label));
+    sel.value = proposed;
+    sel.addEventListener('change', () => { if (st.item) st.item.picked[name] = sel.value; });
+    box.append(sel);
+    return box;
   }
   // A tip is shown as 7 hex characters; anything else is data, shown marked.
   const short = h => (/^[0-9a-f]{7,64}$/.test(str(h)) ? str(h).slice(0, 7) : str(h));
@@ -2348,16 +2371,15 @@
     const out = [head(str(r.host), ['asked by ', { data: str(r.sandbox) }])];
     if (str(r.detail)) out.push(field_('What sbx says', str(r.detail), { fold: true, mono: true }));
     if (str(r.created_at)) out.push(field_('Asked at', str(r.created_at)));
-    const opts = Array.isArray(r.options) ? r.options : [];
-    const macOnly = Array.isArray(r.mac_only) ? r.mac_only.map(str).filter(Boolean) : [];
-    const allowHere = opts.some(o => /allow/i.test(`${str(o?.id)} ${str(o?.label)}`));
+    const opts = Array.isArray(r.options) ? r.options.filter(o => o && typeof o.id === 'string') : [];
     if (!opts.length) out.push(el('p', 'rc-item-note', 'Answer this on your Mac.'));
-    else if (!allowHere) out.push(el('p', 'rc-item-note', 'Allowing this needs your Mac.'));
-    if (macOnly.length) {
-      const p = el('p', 'rc-muted rc-small-text', 'On your Mac only: ');
-      macOnly.forEach((l, i) => { if (i) p.append(', '); p.append(dataEl('span', null, l, true)); });
-      p.append('.');
-      out.push(p);
+    // What each option sbx offers does, in the daemon's words.
+    for (const o of opts) {
+      const box = el('div', 'rc-kv rc-net-opt');
+      box.append(dataEl('p', 'rc-kv-k', str(o.label) || o.id));
+      if (str(o.effect)) box.append(dataEl('p', 'rc-kv-v', str(o.effect)));
+      if (o.lasting === true) box.append(el('p', 'rc-item-warn', 'May leave a lasting network rule.'));
+      out.push(box);
     }
     return out;
   }
@@ -2397,8 +2419,8 @@
       const label = str(o.label) || o.id;
       list.push(btn(label.charAt(0).toUpperCase() + label.slice(1), 'network_respond', DANGER.test(`${o.id} ${label}`) ? 'rc-danger' : 'rc-primary', { id: o.id, label }));
     }
-    // A request the phone may not answer (only "Allow" is left): say so.
-    if (what === 'network' && !list.length) list.push(el('p', 'rc-item-note', 'Only the Mac can allow this request.'));
+    // A request with no option to answer: say so.
+    if (what === 'network' && !list.length) list.push(el('p', 'rc-item-note', 'Only the Mac can answer this request.'));
     acts.replaceChildren(...list);
   }
 
@@ -2410,7 +2432,10 @@
   function openSheet(kind, option) {
     if (!st.item?.data || !RC_KINDS.includes(kind)) return;
     closeSheet();
-    sheet = { kind, option: option || null, ctl: null, token: ++sheetSeq };
+    // A plan approval carries the models picked in the detail (only those
+    // that differ from the proposed ones), bound to the challenge.
+    const models = kind === 'plan_approve' ? rcModelChanges(st.item.data.threads, st.item.picked, st.item.models) : {};
+    sheet = { kind, option: option || null, models, ctl: null, token: ++sheetSeq };
     const title = $('sheet-title');
     title.replaceChildren();
     if (kind === 'network_respond') partsInto(title, ['Answer ', { data: option?.label ?? option?.id ?? '' }, '?']);
@@ -2418,7 +2443,16 @@
     // What will happen, to what: the names isolated, in monospace, marked.
     const line = $('sheet-line');
     line.replaceChildren();
-    partsInto(line, rcActParts(kind, st.item.data, option));
+    partsInto(line, rcActParts(kind, st.item.data, option, models));
+    // A network answer: what the option does, and a lasting rule flagged.
+    const more = $('sheet-more');
+    more.replaceChildren();
+    if (kind === 'network_respond') {
+      const o = (Array.isArray(st.item.data.options) ? st.item.data.options : []).find(x => x && x.id === option?.id);
+      if (o && o.lasting === true) more.append(partsInto(el('p', 'rc-item-warn'), ['Lasting: ', { data: str(o.label) || o.id }, ' may add a network rule to ', { data: str(st.item.data.sandbox) }, ' that stays until you remove it on your Mac.']));
+      if (o && str(o.effect)) more.append(dataEl('p', 'rc-sheet-effect', str(o.effect)));
+    }
+    more.hidden = !more.childNodes.length;
     $('sheet-status').textContent = '';
     const go = $('sheet-go');
     go.textContent = GO[kind];
@@ -2453,7 +2487,7 @@
     const target = item.what === 'stopped' ? str(item.data.name) : item.id;
     $('sheet-go').disabled = true;
     say('Asking the Mac…', 'busy');
-    const ch = await l2.challenge(s.kind, target, item.digest, s.option?.id);
+    const ch = await l2.challenge(s.kind, target, item.digest, s.option?.id, s.models);
     if (!live()) return;
     if (!ch.ok) return failed(ch, s);
     const publicKey = rcGetOptions(ch.data?.public_key);
@@ -2473,7 +2507,7 @@
     const assertion = rcAssertionBody(cred);
     if (!assertion) { $('sheet-go').disabled = false; return say('Face ID gave an answer this page cannot read. Nothing was done.', 'err'); }
     say('Sending…', 'busy');
-    const res = await l2.act(s.kind, target, assertion, s.option?.id);
+    const res = await l2.act(s.kind, target, assertion, s.option?.id, s.models);
     if (!live()) return;
     if (!res.ok) return failed(res, s);
     closeSheet();

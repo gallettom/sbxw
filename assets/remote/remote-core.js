@@ -1049,6 +1049,23 @@ function rcActDone(kind, data) {
   return { plan_approve: 'Plan approved: its threads are starting.', plan_refuse: 'Plan refused.', network_respond: 'Answered.', sandbox_remove: 'Sandbox removed.' }[kind] || 'Done.';
 }
 
+const rcHasModels = m => !!m && typeof m === 'object' && Object.keys(m).length > 0;
+// A plan's model changes, as the challenge takes them: for each thread whose
+// picked model is an id of the configured list and differs from the one
+// proposed, thread name to id. Nothing else of a thread changes.
+function rcModelChanges(threads, picked, list) {
+  const ids = new Set((Array.isArray(list) ? list : []).map(m => (m && typeof m.id === 'string' ? m.id : '')).filter(Boolean));
+  const out = [];
+  for (const t of Array.isArray(threads) ? threads : []) {
+    const name = typeof t?.name === 'string' ? t.name : '';
+    const want = picked && Object.prototype.hasOwnProperty.call(picked, name) ? picked[name] : undefined;
+    if (!name || typeof want !== 'string' || !ids.has(want) || want === (t.model ?? '')) continue;
+    out.push([name, want]);
+  }
+  // Own data properties only: a thread named `__proto__` sets no prototype.
+  return Object.fromEntries(out);
+}
+
 // The level-2 routes, on the same client rules (same origin, JSON, once).
 function rcL2Client(api) {
   return {
@@ -1061,11 +1078,19 @@ function rcL2Client(api) {
     passkeyRegister: (rid, body) => api.post('/r/passkey/register', { request_id: rid, ...body }),
     list: what => api.get(`/r/${what}`),
     detail: (what, id) => api.get(`/r/${what}/${encodeURIComponent(id)}`),
-    challenge: (kind, target, digest, option) => api.post('/r/approvals/challenge', option ? { kind, target, digest, option } : { kind, target, digest }),
-    act: (kind, target, assertion, option) => {
+    // `models` (a plan approval's model changes, thread name to model id)
+    // is sent with the challenge and again with the act, only when not empty.
+    challenge: (kind, target, digest, option, models) => {
+      const body = option ? { kind, target, digest, option } : { kind, target, digest };
+      if (kind === 'plan_approve' && rcHasModels(models)) body.models = models;
+      return api.post('/r/approvals/challenge', body);
+    },
+    act: (kind, target, assertion, option, models) => {
       const path = rcActPath(kind, target);
       if (!path) throw new Error('not an action');
-      return api.post(path, kind === 'network_respond' ? { option, assertion } : { assertion });
+      if (kind === 'network_respond') return api.post(path, { option, assertion });
+      if (kind === 'plan_approve' && rcHasModels(models)) return api.post(path, { assertion, models });
+      return api.post(path, { assertion });
     },
   };
 }
@@ -1365,12 +1390,17 @@ function rcMarked(s) {
 // A sheet's one line as parts: the page's words as strings, the daemon's
 // data (names, hosts, labels, branches) as { data } to draw isolated, in
 // monospace, with the codes visible.
-function rcActParts(kind, item, option) {
+function rcActParts(kind, item, option, models) {
   const d = v => ({ data: String(v ?? '') });
   switch (kind) {
     case 'plan_approve': {
       const n = Array.isArray(item?.threads) ? item.threads.length : 0;
-      return ['Approve the plan of ', d(item?.sandbox), ` as it is: it starts ${n === 1 ? '1 thread' : `${n} threads`}.`];
+      const changed = rcHasModels(models) ? Object.entries(models) : [];
+      if (!changed.length) return ['Approve the plan of ', d(item?.sandbox), ` as it is: it starts ${n === 1 ? '1 thread' : `${n} threads`}.`];
+      const parts = ['Approve the plan of ', d(item?.sandbox), `: it starts ${n === 1 ? '1 thread' : `${n} threads`}, as proposed except the model of `];
+      changed.forEach(([t, m], i) => { if (i) parts.push(', '); parts.push(d(t), ' (now ', d(m), ')'); });
+      parts.push('.');
+      return parts;
     }
     case 'plan_refuse': return ['Refuse the plan of ', d(item?.sandbox), ': no thread starts.'];
     case 'merge': {
