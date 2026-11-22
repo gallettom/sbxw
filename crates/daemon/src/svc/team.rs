@@ -105,10 +105,7 @@ impl App {
     /// its recorded merge commit's other side), or a shared plan's one branch.
     fn commit_ranges(plan: &Plan) -> Vec<(Option<String>, String, bool)> {
         let merged_by: HashMap<&str, &str> = plan
-            .merge
-            .iter()
-            .flat_map(|m| m.results.iter())
-            .filter(|r| r.ok)
+            .merged_results()
             .filter_map(|r| r.commit.as_deref().map(|c| (r.thread.as_str(), c)))
             .collect();
         let range = |name: &str, thread: Option<String>| match merged_by.get(name) {

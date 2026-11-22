@@ -466,8 +466,9 @@ impl App {
         let merge = plan.merge.clone().unwrap_or(merge);
         let mut summary = messages::merge_summary(&merge);
         // The other threads of the sandbox hear that their base moved.
-        let all_merged: Vec<String> = merge.results.iter().filter(|r| r.ok).map(|r| r.thread.clone()).collect();
-        let merged_now: Vec<String> = all_merged.iter().filter(|t| !done_before.contains(*t)).cloned().collect();
+        let merged_now: Vec<String> = merge.results.iter().filter(|r| r.ok && !done_before.contains(&r.thread)).map(|r| r.thread.clone()).collect();
+        // Threads merged by this merge or an earlier one are not told.
+        let all_merged: Vec<String> = plan.merged_threads().into_iter().map(str::to_string).collect();
         let told = self.tell_main_moved(&sandbox, &merged_now, &all_merged, merge.base.as_deref());
         if !told.is_empty() {
             summary.push_str(&format!(" Told that {} moved: {}.", merge.base.as_deref().unwrap_or("main"), told.join(", ")));
@@ -782,14 +783,15 @@ impl App {
     /// shared plan's one branch counts for all its threads.
     pub async fn merged_outside(&self, plan: &Plan) -> BTreeMap<String, String> {
         let mut out = BTreeMap::new();
-        if plan.state != PlanState::Approved || plan.merge.as_ref().is_some_and(|m| m.state == MergeState::Merged) {
+        // A split plan merged may still hold a thread that finished later.
+        if plan.state != PlanState::Approved || (!plan.variant.is_split() && plan.merge.as_ref().is_some_and(|m| m.state == MergeState::Merged)) {
             return out;
         }
         let Ok(sandbox) = SandboxRef::parse(&plan.sandbox) else { return out };
         let Some(ws) = self.store.workspace(&sandbox) else { return out };
         let Ok(host) = self.host_for(&sandbox).await else { return out };
         let recorded = self.store.get(&sandbox).threads;
-        let by_sbxw: Vec<&str> = plan.merge.iter().flat_map(|m| m.results.iter().filter(|r| r.ok).map(|r| r.thread.as_str())).collect();
+        let by_sbxw = plan.merged_threads();
         let repo_of = |t: &PlanThread| recorded.get(t.name.as_str()).map(|r| r.repo.clone()).or_else(|| t.repo.clone()).unwrap_or_default();
         let in_base = |rel: String, branch: String| {
             let (host, ws) = (&host, &ws);
@@ -801,7 +803,7 @@ impl App {
                 Some(git::branch_of(host, &root).await.unwrap_or_else(|| "HEAD".into()))
             }
         };
-        let done = |t: &&PlanThread| t.state == ThreadState::Done && !by_sbxw.contains(&t.name.as_str());
+        let done = |t: &&PlanThread| t.state == ThreadState::Done && !by_sbxw.contains(t.name.as_str());
         match plan.variant {
             Variant::Shared => {
                 let Some(first) = plan.threads.first() else { return out };
@@ -1241,6 +1243,62 @@ mod tests {
         let merges: Vec<&String> = log.iter().filter(|c| c.contains("sbxw-thread-merge")).skip(before).collect();
         assert_eq!(merges.len(), 1, "only b is merged again: {merges:?}");
         assert!(merges[0].ends_with("=b"));
+    }
+
+    #[tokio::test]
+    async fn a_thread_done_after_the_merge_is_merged_on_its_own() {
+        let (_d, app, fake) = app_with(move |a| {
+            let has = |x: &str| a.iter().any(|y| y == x);
+            match a.first().map(String::as_str) {
+                Some("ls") => ls(&[("myapp", "running")]),
+                Some("exec") if has("sbxw-thread-merge") => Output::ok("base=main\ncommit=abc1234\nok=1\n"),
+                Some("exec") if has("sbxw-thread-end") => Output::ok("ok=1\n"),
+                _ => sbx_answer(a),
+            }
+        });
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(ws.path().join("r/.git")).unwrap();
+        app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+        let on = |n: &str| PlanThread { repo: Some("r".into()), ..t(n) };
+        let threads = vec![on("a"), on("b"), on("c")];
+        let p = app.plan_propose(&sb, "", threads.clone(), Variant::Split, "independent", Some("lead")).await.unwrap();
+        app.plans.lock().unwrap().approve(&p.id, threads, None, None, 1).unwrap();
+        for n in ["a", "b"] {
+            app.plans.lock().unwrap().set_thread("myapp", n, ThreadState::Done, "", false, 2).unwrap();
+        }
+        app.plan_propose_merge_checked(&p.id, &sb, vec!["a".into(), "b".into()], "", vec![]).await.unwrap();
+        assert_eq!(app.plan_merge(&p.id, true, None).await.unwrap().state, MergeState::Merged);
+        assert!(app.plan_propose_merge_checked(&p.id, &sb, vec!["c".into()], "", vec![]).await.unwrap_err().contains("not done"));
+
+        // c finishes after the merge: the lead proposes it alone.
+        app.plans.lock().unwrap().set_thread("myapp", "c", ThreadState::Done, "late", false, 3).unwrap();
+        let err = app.plan_propose_merge_checked(&p.id, &sb, vec!["b".into(), "c".into()], "", vec![]).await.unwrap_err();
+        assert!(err.contains("\"b\" is already merged"), "{err}");
+        let plan = app.plan_propose_merge_checked(&p.id, &sb, vec!["c".into()], "c too", vec![]).await.unwrap();
+        let m = plan.merge.as_ref().unwrap();
+        assert_eq!((m.state, m.order.as_slice()), (MergeState::Proposed, ["c".to_string()].as_slice()));
+        assert_eq!(plan.earlier_merges.len(), 1, "the first merge is kept");
+        assert_eq!(plan.earlier_merges[0].results.iter().map(|r| r.thread.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+
+        let before = fake.log().iter().filter(|c| c.contains("sbxw-thread-merge")).count();
+        let merge = app.plan_merge(&p.id, true, None).await.unwrap();
+        assert_eq!(merge.state, MergeState::Merged);
+        assert_eq!(merge.results.iter().map(|r| (r.thread.as_str(), r.ok)).collect::<Vec<_>>(), [("c", true)]);
+        let log = fake.log();
+        let merges: Vec<&String> = log.iter().filter(|c| c.contains("sbxw-thread-merge")).skip(before).collect();
+        assert_eq!(merges.len(), 1, "only c is merged: {merges:?}");
+        assert!(merges[0].ends_with("=c"));
+        assert!(log.iter().any(|c| c.contains("sbxw-thread-end") && c.contains("=c ")), "c is closed: {log:?}");
+
+        let plan = app.plan(&p.id).unwrap();
+        assert_eq!(plan.merged_threads().len(), 3);
+        for n in ["a", "c"] {
+            let err = app.plan_propose_merge_checked(&p.id, &sb, vec![n.into()], "", vec![]).await.unwrap_err();
+            assert!(err.contains("already merged"), "{n}: {err}");
+        }
+        let again = crate::testing::app_in(_d.path());
+        assert_eq!(again.plan(&p.id).unwrap().earlier_merges.len(), 1, "persisted");
     }
 
     #[tokio::test]
