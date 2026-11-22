@@ -225,9 +225,18 @@ handles such text uses that list, each with its own action:
 | Canvas and ticket texts (`canvas::clean`, `tickets::clean`) | removed |
 | A phone's message, device name or canvas remark | the whole text is refused |
 | An uploaded file's name (`uploads::upload_name`) | becomes `_` (only `A-Z a-z 0-9 . - _` survive) |
+| Desktop: a downloaded file's name (`safe::file_name`) | removed |
+| Desktop: text of the sandbox browser (`browser::proto::clean`) | removed |
+| Desktop and web UI: the clipboard preview (`approval::osc_preview`, `oscPreview`) | shown as `�` |
+| Desktop: an attached file's name (`monitor::attach`) | written out (`\u{202e}`) in the dialog, `?` on a chip, removed from agent text |
+| Web UI: paths typed at a terminal prompt (`paneTypeLine`) | the line is not typed; the notice shows `?` |
+| Web UI and phone: a file name in a chat message (`chatShortName`) | shown as `?` |
 
-The phone page warns with the same list (`RC_INVISIBLE_RANGES`), checked against the Rust
-table by a test. The cost: a joined emoji (U+200D) falls apart into its parts, a regional
+The list is shared by the daemon, the desktop app and the web UI. The phone page warns
+with the same list (`RC_INVISIBLE_RANGES`); the web UI holds it once, in
+`assets/js/invisible.js` (`INVISIBLE_RANGES`); the desktop app, which does not depend on
+the core crate, holds a copy in `desktop/src/safe.rs`. A test checks each against the Rust
+table. Each place keeps its own rule for control characters on top of the list. The cost: a joined emoji (U+200D) falls apart into its parts, a regional
 flag such as Scotland's (tags) shows as a plain black flag, and scripts that use a joiner
 or a selector in ordinary writing (Persian and some Indic scripts with U+200C, Mongolian,
 Japanese ideographic variants) lose it, or are refused where the action is to refuse.

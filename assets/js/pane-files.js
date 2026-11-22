@@ -138,11 +138,13 @@ function paneShellQuote(p) {
 
 // The line typed at the prompt for the daemon's paths: quoted, separated by
 // spaces, a trailing space and NO Return. null when a path holds a control
-// character (a newline typed at a prompt is a Return).
+// character (a newline typed at a prompt is a Return) or an invisible one (the
+// one list, invisible.js).
+const PANE_PATH_BAD = new RegExp(`[\\u0000-\\u001f\\u007f-\\u009f${INVISIBLE_CLASS}]`, 'u');
 function paneTypeLine(paths) {
   if (!paths.length) return null;
   for (const p of paths) {
-    if (typeof p !== 'string' || !p || /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(p)) return null;
+    if (typeof p !== 'string' || !p || PANE_PATH_BAD.test(p)) return null;
   }
   return paths.map(paneShellQuote).join(' ') + ' ';
 }
@@ -248,7 +250,7 @@ function paneShowPathNotice(pane, reason, line) {
 function paneTypePaths(pane, want, paths) {
   const line = paneTypeLine(paths);
   if (line === null) {
-    paneShowPathNotice(pane, 'a path has a control character', paths.map(p => String(p).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, '?')).join(' '));
+    paneShowPathNotice(pane, 'a path has a control character', paths.map(p => String(p).replace(new RegExp(PANE_PATH_BAD.source, 'gu'), '?')).join(' '));
     return false;
   }
   const why = paneTypeBlocker(pane, want, paneEnvNow());

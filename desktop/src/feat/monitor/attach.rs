@@ -97,9 +97,10 @@ impl Att {
 }
 
 /// Characters a name may hold that would change how the line around it
-/// reads: controls, and the invisible direction and joining marks.
+/// reads: controls, and the one list of invisible characters
+/// ([`crate::safe::is_invisible`]).
 fn hidden(c: char) -> bool {
-    c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+    c.is_control() || crate::safe::is_invisible(c)
 }
 
 /// Whole, each hidden character written out (`\u{202e}`): the dialog's.

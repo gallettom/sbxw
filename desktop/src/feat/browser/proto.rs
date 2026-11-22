@@ -87,9 +87,10 @@ pub fn is_frame(line: &str) -> bool {
 }
 
 /// Text from the sandbox, made safe to show: no control characters, one
-/// line, at most `max` characters.
+/// line, at most `max` characters, no invisible character
+/// ([`crate::safe::is_invisible`]).
 pub fn clean(s: &str, max: usize) -> String {
-    let mut out: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).filter(|c| !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}')).take(max).collect();
+    let mut out: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).filter(|c| !crate::safe::is_invisible(*c)).take(max).collect();
     out.truncate(out.trim_end().len());
     out
 }

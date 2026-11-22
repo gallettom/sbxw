@@ -33,6 +33,7 @@ macro_rules! vendor {
 const STATIC: &[(&str, &str, &str)] = &[
     ("/app.css", "text/css; charset=utf-8", include_str!("../../../../assets/app.css")),
     js!("singleton.js"),
+    js!("invisible.js"),
     js!("util.js"),
     js!("term-color.js"),
     js!("emphasis.js"),
@@ -89,6 +90,7 @@ const SIDEPANEL: &str = r#"<!doctype html>
 </head>
 <body class="sp-body">
 <script>const SP_EXTENSION_ORIGIN = '__EXTENSION_ORIGIN__';</script>
+<script src="/js/invisible.js"></script>
 <script src="/js/chat-core.js"></script>
 <script src="/js/sidepanel.js"></script>
 </body>
