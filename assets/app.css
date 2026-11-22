@@ -1301,41 +1301,38 @@
     content: ''; position: absolute; top: 0; left: var(--r-sm); right: var(--r-sm); height: 2px;
     pointer-events: none; opacity: 0; background-repeat: no-repeat;
   }
-  /* ── Sidebar grouping — sandboxes sharing an identical workspace path (and,
-     as one group of their own, chat sandboxes) are visually clustered under a
-     small label, tinted with a color derived from the workspace path so the
-     same group reads consistently across re-renders. ── */
-  .sbx-group {
-    margin: .3rem .4rem; padding-bottom: .3rem;
-    background: color-mix(in srgb, var(--group-color) 15%, transparent);
-    border-radius: var(--r-md);
-  }
-  /* Inside a group the group's own inset is the margin; a second one would
-     squeeze the row. */
-  .sbx-group .sbx-item { margin-left: .25rem; margin-right: .25rem; }
-  /* Chat sandboxes always sort first (see orderForGrouping) — pin their group
-     to the top of the scroll area too, so it never scrolls out of view behind
-     older workspace groups. Needs an opaque-ish background (mixed against the
-     sidebar's own bg, not transparent) so items scrolling underneath don't
-     show through the sticky header. */
+  /* ── Sidebar grouping: sandboxes sharing an identical workspace path (and,
+     as one group of their own, chat sandboxes) are listed under a small
+     section head. One container level only: the head is a label over a
+     hairline, the sandboxes are rows on the sidebar's own ground, and the
+     group's hue (derived from the workspace path, so it reads the same
+     across re-renders) is on its dot and on each row's left edge. ── */
+  .sbx-group { margin: 0 0 var(--sp-2); }
+  /* Rows sit at the sidebar's own inset whether grouped or not. */
+  .sbx-group .sbx-item { margin-left: var(--sp-1); margin-right: var(--sp-1); }
+  /* Chat sandboxes always sort first (see orderForGrouping): their group is
+     pinned to the top of the scroll area, so it never scrolls out of view
+     behind older workspace groups. Opaque, on the sidebar's ground, so rows
+     scrolling underneath don't show through. */
   .sbx-group-chat {
     position: sticky;
     top: 0;
     z-index: 1;
-    background: color-mix(in srgb, var(--group-color) 15%, var(--c-bg));
-    border-radius: var(--r-md);
+    background: var(--c-bg);
+    padding-bottom: var(--sp-1);
   }
-  /* The ungrouped, in a card of their own so their rows sit at the same inset
-     as every group's. Dark, and without a dot: it is no workspace. */
-  .sbx-group-other {
-    background: color-mix(in srgb, var(--c-black) 35%, transparent);
-  }
+  /* The ungrouped: same head and rows, no dot (it is no workspace). */
+  .sbx-group-other { background: none; }
   .sbx-group-label {
-    display: flex; align-items: center; gap: .35rem;
-    padding: .35rem .75rem .15rem;
+    display: flex; align-items: center; gap: var(--sp-1);
+    margin: 0 var(--sp-1) var(--sp-1); padding: var(--sp-1);
+    border-bottom: 1px solid var(--c-elevated);
     font-size: var(--fs-xs); color: var(--c-text-muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  /* The group's icon carries its hue, so the dot before it gives way. */
+  .sbx-group-label .ico { color: var(--group-color, var(--c-text-dim)); }
+  .sbx-group-dot:has(+ .ico) { display: none; }
   .sbx-group-dot {
     width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
     background: var(--group-color);
