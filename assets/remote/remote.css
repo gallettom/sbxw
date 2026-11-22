@@ -172,7 +172,7 @@ body {
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
 h1, h2 { margin: 0; color: var(--c-text-bright); font-weight: 600; }
-h2 { font-size: var(--fs-lg); letter-spacing: -0.01em; }
+h2 { font-size: var(--fs-lg); letter-spacing: -0.01em; text-wrap: balance; }
 p { margin: 0; }
 svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 svg circle { fill: currentColor; stroke: none; }
@@ -311,39 +311,37 @@ svg circle { fill: currentColor; stroke: none; }
   background: var(--c-surface);
   box-shadow: inset 0 -1px 0 var(--c-hair);
 }
-.rc-mark { flex: none; width: 28px; height: 28px; margin: 0 6px 0 10px; border-radius: 7px; }
+.rc-mark { flex: none; width: 28px; height: 28px; margin: 0 var(--sp-2); border-radius: var(--r-sm); }
 .rc-title { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 0 4px; }
 /* Line 1 the name alone (an ellipsis when long), line 2 the state pill. */
 .rc-title h1 { font-size: var(--fs-lg); line-height: 22px; letter-spacing: 0; -webkit-font-smoothing: antialiased; text-rendering: geometricPrecision; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-sub { font-size: var(--fs-xs); line-height: 16px; color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-sub:empty { display: none; }
 
-/* A leader's state: a small coloured pill with a dot, 20 px tall. Scoped
-   to the bar: the status labels in agent text (".rc-pill" further down)
-   share the class name and would otherwise give it a border and a
-   fractional height. */
+/* A leader's state: a small tinted pill, 20 px tall; the word and its
+   colour say the state, no dot. Scoped to the bar: the status labels in
+   agent text (".rc-pill" further down) share the class name and would
+   otherwise take a fractional height. */
 .rc-bar .rc-pill {
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
   max-width: 100%;
-  padding: 1px 8px 1px 6px;
+  padding: 1px var(--sp-2);
   border-radius: var(--r-pill);
   font-size: var(--fs-xs);
   line-height: 18px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--c-text-muted);
   background: var(--c-neutral-a16);
   border: 0;
   white-space: nowrap;
 }
-.rc-bar .rc-pill::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .rc-bar .rc-pill-working { color: var(--c-green); background: var(--c-green-a10); }
-/* The bar's dot does not pulse: an animated opacity makes iOS composite the
+/* Nothing in the bar pulses: an animated opacity makes iOS composite the
    bar's layers apart, and the title beside it is then drawn soft. */
 .rc-bar .rc-pill-attention { color: var(--c-amber); background: var(--c-amber-a16); }
-.rc-bar .rc-pill-stopped { color: var(--c-text-dim); }
+.rc-bar .rc-pill-stopped { color: var(--c-text-muted); }
 
 /* Interrupt, in the bar while the leader works: a 36 px red disc with a
    12 px white square, centred in a 44 px hit area (4 px of air each side,
@@ -363,7 +361,7 @@ svg circle { fill: currentColor; stroke: none; }
 .rc-stop-btn::before {
   content: "";
   position: absolute;
-  inset: 4px;
+  inset: var(--sp-1);
   border-radius: 50%;
   background: var(--c-red-fill);
   transition: background-color var(--dur-micro) var(--ease);
@@ -371,8 +369,8 @@ svg circle { fill: currentColor; stroke: none; }
 .rc-stop-btn::after {
   content: "";
   position: absolute;
-  inset: 16px;
-  border-radius: 3px;
+  inset: var(--sp-4);
+  border-radius: var(--r-2xs);
   background: var(--c-white);
 }
 .rc-stop-btn:active:not(:disabled)::before { background: var(--c-red-deep); }
@@ -389,24 +387,24 @@ svg circle { fill: currentColor; stroke: none; }
   z-index: 4;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px max(12px, var(--safe-r)) 6px max(16px, var(--safe-l));
+  gap: var(--sp-1);
+  padding: var(--sp-1) max(var(--sp-3), var(--safe-r)) var(--sp-1) max(var(--sp-4), var(--safe-l));
   background: var(--c-red-tint);
   border-bottom: 1px solid var(--c-red-a45);
   animation: rc-drop var(--dur-short) var(--ease);
 }
 .rc-confirm-text { flex: 1; min-width: 0; display: flex; font-size: var(--fs-sm); line-height: 20px; color: var(--c-text-bright); white-space: pre; }
 .rc-confirm-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
-.rc-confirm .rc-btn { min-height: 36px; padding: 0 14px; border-radius: var(--r-pill); font-size: var(--fs-sm); }
-.rc-confirm-go { display: inline-flex; align-items: center; gap: 7px; }
+.rc-confirm .rc-btn { min-height: var(--tap-small); padding: 0 var(--sp-3); border-radius: var(--r-pill); font-size: var(--fs-sm); }
+.rc-confirm-go { display: inline-flex; align-items: center; gap: var(--sp-2); }
 .rc-stop-sq { flex: none; width: 10px; height: 10px; border-radius: 2px; background: var(--c-white); }
-.rc-confirm .rc-btn::after { content: ""; position: absolute; inset: -4px 0; }
+.rc-confirm .rc-btn::after { content: ""; position: absolute; inset: calc(var(--sp-1) * -1) 0; }
 
 /* ── Unreachable ── */
 .rc-banner {
   flex: none;
   order: -1;
-  padding: calc(8px + var(--safe-t)) 16px 8px;
+  padding: calc(var(--sp-2) + var(--safe-t)) var(--sp-4) var(--sp-2);
   background: var(--c-amber-tint);
   color: var(--c-text-bright);
   border-bottom: 1px solid var(--c-amber-a45);
@@ -422,26 +420,26 @@ svg circle { fill: currentColor; stroke: none; }
   position: absolute;
   z-index: 10;
   top: calc(52px + var(--safe-t));
-  right: max(8px, var(--safe-r));
+  right: max(var(--sp-2), var(--safe-r));
   width: min(300px, calc(100% - var(--sp-4)));
-  padding: 14px;
+  padding: var(--sp-4);
   background: var(--c-elevated);
   border: 1px solid var(--c-hair-strong);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-lg);
   display: grid;
-  gap: 8px;
+  gap: var(--sp-2);
   transform-origin: top right;
   animation: rc-pop var(--dur-short) var(--ease);
 }
 .rc-menu-label { font-size: var(--fs-xs); color: var(--c-text-muted); }
 .rc-menu-device { color: var(--c-text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rc-menu-note { font-size: var(--fs-xs); color: var(--c-text-dim); }
+.rc-menu-note { font-size: var(--fs-xs); color: var(--c-text-muted); }
 
 /* Notifications: one switch, off until the person taps it. */
-.rc-switch { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0; border: 0; background: none; font: inherit; color: var(--c-text-bright); cursor: pointer; text-align: left; }
+.rc-switch { display: flex; align-items: center; gap: var(--sp-3); min-height: var(--tap); padding: 0; border: 0; background: none; font: inherit; color: var(--c-text-bright); cursor: pointer; text-align: left; }
 .rc-switch:focus-visible { border-radius: var(--r-pill); }
-.rc-switch-track { flex: none; width: 46px; height: 28px; border-radius: 999px; background: var(--c-hair-strong); position: relative; transition: background var(--dur-short) var(--ease); }
+.rc-switch-track { flex: none; width: 46px; height: 28px; border-radius: var(--r-pill); background: var(--c-hair-strong); position: relative; transition: background var(--dur-short) var(--ease); }
 .rc-switch-knob { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--c-white); box-shadow: var(--shadow-edge); transition: transform var(--dur-short) var(--ease); }
 .rc-switch[aria-checked="true"] .rc-switch-track { background: var(--c-blue); }
 .rc-switch[aria-checked="true"] .rc-switch-knob { transform: translateX(18px); }
@@ -455,23 +453,23 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 24px max(16px, var(--safe-r)) calc(24px + var(--safe-b)) max(16px, var(--safe-l));
+  padding: var(--sp-6) max(var(--sp-4), var(--safe-r)) calc(var(--sp-6) + var(--safe-b)) max(var(--sp-4), var(--safe-l));
 }
 .rc-muted { color: var(--c-text-muted); }
 .rc-card {
   width: 100%;
   max-width: 400px;
   margin: 0 auto;
-  padding: 24px 20px 20px;
+  padding: var(--sp-6) var(--sp-5) var(--sp-5);
   background: var(--c-surface);
   border: 1px solid var(--c-hair);
-  border-radius: 20px;
+  border-radius: var(--r-xl);
   display: grid;
-  gap: 12px;
+  gap: var(--sp-3);
 }
 .rc-card .rc-muted { font-size: var(--fs-sm); }
-.rc-card .rc-btn { margin-top: 4px; }
-.rc-label { font-size: var(--fs-xs); color: var(--c-text-muted); margin-bottom: -6px; }
+.rc-card .rc-btn { margin-top: var(--sp-1); }
+.rc-label { font-size: var(--fs-xs); color: var(--c-text-muted); margin-bottom: calc(var(--sp-1) * -1); }
 .rc-input {
   width: 100%;
   min-height: var(--tap);
@@ -486,8 +484,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   letter-spacing: 0.14em;
   color: var(--c-text-bright);
   text-align: center;
-  padding: 16px 0;
-  margin: 4px 0;
+  padding: var(--sp-4) 0;
+  margin: var(--sp-1) 0;
   border-radius: var(--r-md);
   background: var(--c-bg);
   font-variant-numeric: tabular-nums;
@@ -497,9 +495,9 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rc-leaders {
   list-style: none;
   margin: 0;
-  padding: 12px max(12px, var(--safe-r)) calc(16px + var(--safe-b)) max(12px, var(--safe-l));
+  padding: var(--sp-3) max(var(--sp-3), var(--safe-r)) calc(var(--sp-4) + var(--safe-b)) max(var(--sp-3), var(--safe-l));
   display: grid;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 .rc-leader {
   --k: var(--c-text-dim);
@@ -509,10 +507,10 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto;
   grid-template-rows: auto auto;
-  column-gap: 12px;
+  column-gap: var(--sp-3);
   row-gap: 2px;
   align-items: center;
-  padding: 12px 14px 12px 11px;
+  padding: var(--sp-3) var(--sp-4) var(--sp-3) var(--sp-3);
   text-align: left;
   background: var(--c-surface);
   border: 1px solid var(--c-hair);
@@ -522,50 +520,53 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 }
 .rc-leader:active { background: var(--c-elevated); transform: scale(0.99); }
 /* State sets the left border and the tile's tint: amber needs you, green
-   working, grey idle, dim not running. */
+   working, grey idle, dim not running (by colour, never by opacity: the
+   text keeps 4.5:1). */
 .rc-st-working { --k: var(--c-green); --k-tint: var(--c-green-a14); }
 .rc-st-idle { --k: var(--c-text-muted); --k-tint: var(--c-hair); }
-.rc-st-other { --k: var(--c-dim); opacity: 0.7; }
+.rc-st-other { --k: var(--c-dim); }
+.rc-st-other .rc-leader-name { color: var(--c-text-muted); }
 .rc-st-attention { --k: var(--c-amber); --k-tint: var(--c-amber-a16); border-color: var(--c-amber-a45); border-left-color: var(--k); background: linear-gradient(var(--c-amber-a06), var(--c-amber-a06)), var(--c-surface); }
-.rc-ltile { grid-row: 1 / 3; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; color: var(--k); background: var(--k-tint); }
+.rc-ltile { grid-row: 1 / 3; width: 32px; height: 32px; border-radius: var(--r-sm); display: grid; place-items: center; color: var(--k); background: var(--k-tint); }
 .rc-ltile svg { width: 18px; height: 18px; }
 .rc-leader-name { color: var(--c-text-bright); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-leader-ago { grid-row: 1; grid-column: 3; font: var(--fs-xs) var(--font-mono); color: var(--c-text-dim); }
 .rc-leader-line { grid-column: 2 / 4; font-size: var(--fs-sm); color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-st-attention .rc-leader-state { color: var(--c-amber); font-weight: 600; }
 .rc-st-working .rc-leader-state { color: var(--c-green); }
-.rc-leader-info { grid-column: 2 / 4; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--fs-xs); color: var(--c-text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.rc-leader-canvas { flex: none; padding: 0 7px; border-radius: 999px; font-weight: 600; color: var(--c-blue); background: var(--c-blue-a16); }
-.rc-empty { padding: 56px 24px; text-align: center; color: var(--c-text-muted); }
+.rc-leader-info { grid-column: 2 / 4; display: flex; align-items: center; gap: var(--sp-2); min-width: 0; font-size: var(--fs-xs); color: var(--c-text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.rc-leader-canvas { flex: none; padding: 0 var(--sp-2); border-radius: var(--r-pill); font-weight: 600; color: var(--c-blue); background: var(--c-blue-a16); }
+.rc-empty { padding: var(--sp-14) var(--sp-6); text-align: center; color: var(--c-text-muted); }
 /* The home's groups: always shown, with icon, count and an empty line. The
    list scrolls inside its screen (.rc-screen); a group title stays in view. */
-.rc-group { position: sticky; top: 0; z-index: 1; background: var(--c-bg); padding: 8px 2px 2px; }
-.rc-group:not(:first-child) { margin-top: 8px; }
-.rc-group-title { margin: 0; display: flex; align-items: center; gap: 7px; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c-text-dim); }
-.rc-group-ic { flex: none; width: 15px; height: 15px; }
+.rc-group { position: sticky; top: 0; z-index: 1; background: var(--c-bg); padding: var(--sp-2) 2px 2px; }
+.rc-group:not(:first-child) { margin-top: var(--sp-2); }
+/* Group heads: the label face, sentence case, untracked. */
+.rc-group-title { margin: 0; display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); font-weight: 600; letter-spacing: 0; color: var(--c-text-muted); }
+.rc-group-ic { flex: none; width: 16px; height: 16px; }
 .rc-group-ic circle { fill: none; stroke: currentColor; }
-.rc-group-n { padding: 0 7px; border-radius: 999px; font: 600 var(--fs-xs) var(--font-mono); letter-spacing: 0; color: var(--c-text-bright); background: var(--c-hair); }
+.rc-group-n { padding: 0 var(--sp-2); border-radius: var(--r-pill); font: 600 var(--fs-xs) var(--font-mono); letter-spacing: 0; color: var(--c-text-bright); background: var(--c-hair); }
 .rc-group-n.rc-zero { color: var(--c-text-dim); background: transparent; }
-.rc-group-empty { padding: 6px 4px 2px; font-size: var(--fs-sm); color: var(--c-text-dim); }
+.rc-group-empty { padding: var(--sp-1) var(--sp-1) 2px; font-size: var(--fs-sm); color: var(--c-text-dim); }
 .rc-leader-ro { grid-column: 2 / 4; font-size: var(--fs-xs); color: var(--c-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-ro .rc-leader-name { color: var(--c-text-muted); }
-/* Stopped sandboxes: the home's last group, red like their kind, the cards
-   dim (they do not run), a note when removing needs Face ID, Show all. */
+/* Stopped sandboxes: the home's last group, red like their kind, the names
+   quieter (they do not run), a note when removing needs Face ID, Show all. */
 .rc-group-stopped .rc-group-ic { color: var(--k); }
-.rc-stopped { opacity: 0.72; }
 .rc-stopped .rc-leader-name { color: var(--c-text-muted); grid-column: 2 / 4; }
-.rc-group-note { padding: 2px 4px; font-size: var(--fs-xs); color: var(--c-text-dim); }
-.rc-group-foot { display: grid; padding: 0 4px; }
+.rc-group-note { padding: 2px var(--sp-1); font-size: var(--fs-xs); color: var(--c-text-dim); }
+.rc-group-foot { display: grid; padding: 0 var(--sp-1); }
 /* Waiting for you: one tile per Approvals kind (same colours and icons). */
-.rc-waiting { padding: 12px max(12px, var(--safe-r)) 0 max(12px, var(--safe-l)); display: grid; gap: 6px; }
-.rc-wtiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.rc-wtile { display: grid; justify-items: center; gap: 2px; padding: 8px 4px; background: var(--c-surface); border: 1px solid var(--c-hair); border-radius: var(--r-lg); text-align: center; }
+.rc-waiting { padding: var(--sp-3) max(var(--sp-3), var(--safe-r)) 0 max(var(--sp-3), var(--safe-l)); display: grid; gap: var(--sp-2); }
+.rc-wtiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-2); }
+.rc-wtile { display: grid; justify-items: center; gap: 2px; padding: var(--sp-2) var(--sp-1); background: var(--c-surface); border: 1px solid var(--c-hair); border-radius: var(--r-lg); text-align: center; }
 .rc-wtile:active { background: var(--c-elevated); }
 .rc-wn { font: 600 var(--fs-lg) var(--font-mono); color: var(--k); }
 .rc-wl { font-size: var(--fs-xs); color: var(--c-text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rc-wtile.rc-zero { opacity: 0.45; }
+/* Nothing waits: the tile steps back (no ground), its words stay legible. */
+.rc-wtile.rc-zero { background: transparent; }
 .rc-wtile.rc-zero .rc-wn { color: var(--c-text-dim); }
-.rc-waiting + .rc-usage-line { margin-top: 8px; padding: 0 max(14px, var(--safe-l)); }
+.rc-waiting + .rc-usage-line { margin-top: var(--sp-2); padding: 0 max(var(--sp-4), var(--safe-l)); }
 
 /* ── Conversation ── */
 .rc-chat { display: flex; flex-direction: column; overflow: hidden; }
