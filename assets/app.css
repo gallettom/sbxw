@@ -209,7 +209,8 @@
     0%, 100% { opacity: 1; }
     50% { opacity: .6; }
   }
-  header .spacer { flex: 1; }
+  /* The launcher's auto margins share the room out now (see .vc-launcher). */
+  header .spacer { display: none; }
 
   /* ── Header corner: subscription usage ──
      Sized to be read rather than squinted at. It used to share this corner with
@@ -280,6 +281,11 @@
      times: the percentages are what must never be squeezed out. */
   @media (max-width: 1280px) { .usage-reset-word { display: none; } }
   @media (max-width: 1024px) { .usage-reset { display: none; } }
+  /* Under 1024px the launcher and the gauges share less room: the word
+     "Usage" goes first (the corner's title still says it), then the launcher's
+     F8 key cap (its tooltip and the panel still name the key). */
+  @media (max-width: 960px) { .usage-title { display: none; } }
+  @media (max-width: 880px) { .vc-l-mic kbd { display: none; } }
 
   /* ── Duplicate-tab interstitial (see singleton.js) ── */
   .singleton-overlay {
@@ -4272,8 +4278,12 @@
   }
   .vc-dock > * { pointer-events: auto; }
   .vc-dock [hidden] { display: none !important; }
+  /* In the header's flow, centred in the room left between the controls on
+     the left and the usage corner by its own auto margins: never on top of
+     either, at any width. (It used to be centred on the window, absolutely,
+     and covered "Usage" at 1024px.) */
   .vc-launcher {
-    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    position: relative; flex: none; margin-left: auto; margin-right: auto;
     display: inline-flex; align-items: center; gap: .15rem;
     height: 28px; padding: 0 .3rem;
     background: var(--c-bg); color: var(--c-text-muted);
