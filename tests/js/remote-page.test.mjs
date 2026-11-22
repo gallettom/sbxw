@@ -253,6 +253,10 @@ test('leaders, a conversation, a question answered once on a tap', { skip }, asy
   const shop = await page.$eval('.rc-leader:not(.rc-stopped) .rc-leader-line', e => [[...e.querySelectorAll('.rc-fact')].map(f => [f.className, f.textContent]), e.textContent]);
   assert.deepEqual(shop, [[['rc-leader-state rc-fact', 'needs you'], ['rc-fact', 'Asks a question']], 'needs you, Asks a question']);
   assert.equal(await page.$eval('#leaders', e => e.textContent.includes('·')), false, 'no middle dot on the home');
+  // State shown once: the stripe and the word carry it, the icon tile is the same on every state.
+  const tiles = await page.$$eval('.rc-leader:not(.rc-stopped)', ls => ls.map(l => { const t = getComputedStyle(l.querySelector('.rc-ltile')); return [getComputedStyle(l).borderLeftColor, t.backgroundColor, t.color]; }));
+  assert.ok(new Set(tiles.map(t => t[0])).size > 1, 'the stripes differ by state');
+  assert.equal(new Set(tiles.map(t => `${t[1]}|${t[2]}`)).size, 1, 'one neutral tile for every state');
   await shot(page, '04-leaders');
   await page.tap('.rc-leader >> nth=0');
   await page.waitForSelector('.rc-card-q .rc-opt');
