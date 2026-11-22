@@ -2,12 +2,10 @@
  * floor: 0 open (waived on the record in .sbxw-artifacts/reports/hallmark-webui.md) · fixed: 10a, 26a, 27, 33, 34, 39a, 40, 48, 54, 67, 19, 30a
  * built: the project · redesign: restyle · brand: sbxw's own dark palette and mono face, kept */
   /* ── Design tokens ──
-     One name per colour actually reused across the file (every value below
-     appeared 2+ times as a literal before this pass) — component rules read
-     var(--c-blue) instead of #58a6ff so a shade only ever needs to change in
-     one place. A handful of one-off shades (gradient highlights, a rare
-     tint) stay as literals: they're not duplicated, so a token would only
-     add a name to look up. */
+     Every colour, font, size, radius, shadow and duration in this file is
+     a token below: component rules read var(--c-blue), never #58a6ff, so a
+     shade only ever changes in one place. Add a token before adding a
+     literal. */
   :root {
     color-scheme: dark;
     --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
