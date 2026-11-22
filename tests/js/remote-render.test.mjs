@@ -216,3 +216,21 @@ test('scrolled up, nothing is dropped', async () => {
   await dom.advance(0);
   assert.equal(rowsOf(dom).length, n0 + 1);
 });
+
+test('the keyboard fit writes the root style only when the viewport changed', async () => {
+  const dom = await openBig(conversation(5));
+  const vv = dom.window.visualViewport;
+  const root = dom.document.documentElement;
+  let writes = 0;
+  const set = root.style.setProperty;
+  root.style.setProperty = (k, v) => { writes++; set(k, v); };
+  for (let i = 0; i < 20; i += 1) vv.dispatchEvent(new dom.Event('scroll'));
+  assert.equal(writes, 0, 'twenty scrolls, nothing moved: no write');
+  vv.height = 500;
+  vv.dispatchEvent(new dom.Event('resize'));
+  assert.equal(root.style.getPropertyValue('--vvh'), '500px');
+  assert.ok(root.classList.contains('rc-kb'), 'the keyboard is up');
+  vv.height = 844;
+  vv.dispatchEvent(new dom.Event('resize'));
+  assert.ok(!root.classList.contains('rc-kb'));
+});

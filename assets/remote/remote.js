@@ -3947,13 +3947,20 @@
   // bottom safe area is the keyboard's, not the home indicator's.
   const vv = window.visualViewport;
   let tallest = 0;
+  // Called at every visual viewport scroll and resize: the root's style is
+  // written only when it changes (each write restyles the whole page).
+  let fitWas = '';
   function fit() {
     if (!vv) return;
     tallest = Math.max(tallest, vv.height);
+    const kb = vv.height < tallest - 120;
+    const now = `${vv.height}/${vv.offsetTop}/${kb}`;
+    if (now === fitWas) return;
+    fitWas = now;
     const root = document.documentElement;
     root.style.setProperty('--vvh', `${vv.height}px`);
     root.style.setProperty('--vvt', `${vv.offsetTop}px`);
-    root.classList.toggle('rc-kb', vv.height < tallest - 120);
+    root.classList.toggle('rc-kb', kb);
   }
   if (vv) {
     vv.addEventListener('resize', fit);

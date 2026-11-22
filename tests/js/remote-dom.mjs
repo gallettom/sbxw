@@ -448,6 +448,7 @@ export function makeDom(html, opts = {}) {
     },
   };
   win.visualViewport.addEventListener = Node.prototype.addEventListener;
+  win.visualViewport.dispatchEvent = Node.prototype.dispatchEvent;
   win.addEventListener = Node.prototype.addEventListener;
   win.removeEventListener = Node.prototype.removeEventListener;
   win.dispatchEvent = Node.prototype.dispatchEvent;
