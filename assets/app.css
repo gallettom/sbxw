@@ -22,7 +22,7 @@
     --c-text-bright: #e6edf3;  /* headings, emphasized text */
     --c-text-muted: #8b949e;   /* secondary text, field labels */
     --c-text-soft: #9198a1;    /* lead paragraphs */
-    --c-text-dim: #6e7681;     /* tertiary/placeholder text */
+    --c-text-dim: #7d8590;     /* tertiary/placeholder text: 4.5:1 on the surface */
 
     --c-blue: #58a6ff;
     --c-blue-tint: #0d1f3c;
@@ -516,7 +516,7 @@
   .mac-pill-held { color: var(--c-purple); border-color: var(--c-purple-strong); background: var(--c-purple-tint); }
   .mac-pill-off  { color: var(--c-text-dim); }
   .mac-facts { display: grid; grid-template-columns: 5.5rem 1fr; gap: .35rem .75rem; margin: 0; font-size: var(--fs-sm); }
-  .mac-facts dt { color: var(--c-text-dim); text-transform: uppercase; letter-spacing: .04em; font-size: var(--fs-xs); font-weight: 600; align-self: center; }
+  .mac-facts dt { color: var(--c-text-dim); font-size: var(--fs-xs); font-weight: 600; align-self: center; }
   .mac-facts dd { margin: 0; color: var(--c-text); display: flex; flex-wrap: wrap; gap: .35rem; }
   .mac-none { color: var(--c-text-dim); }
   .mac-steps { margin: 0; padding-left: 1.25rem; display: flex; flex-direction: column; gap: .4rem; font-size: var(--fs-base); line-height: 1.5; }
@@ -546,7 +546,7 @@
   .sec-rm { margin-left: auto; padding: .15rem .5rem; font-size: var(--fs-sm); }
   .sec-grid { display: grid; grid-template-columns: 2fr 1.4fr 1.4fr auto; gap: .5rem; align-items: end; }
   .sec-field { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
-  .sec-field > span { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-dim); }
+  .sec-field > span { font-size: var(--fs-xs); color: var(--c-text-dim); }
   .sec-field .field-input { margin: 0; min-width: 0; }
   @media (max-width: 640px) { .sec-grid { grid-template-columns: 1fr; } }
   .mac-banner { display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; border-radius: var(--r-sm); font-size: var(--fs-sm); }
@@ -587,7 +587,7 @@
      another skill); manual = only when typed. Same tint-and-ring as the help
      step numbers, so it reads as a label rather than as something to press. */
   .skills-tag {
-    font-size: var(--fs-xs); font-weight: 600; letter-spacing: .03em; text-transform: uppercase;
+    font-size: var(--fs-xs); font-weight: 600;
     padding: 0 .4em; border-radius: var(--r-xs); border: 1px solid; line-height: 1.5; cursor: help;
   }
   .skills-tag-default { color: var(--c-green); border-color: var(--c-green-deep); background: var(--c-green-tint); }
@@ -621,7 +621,7 @@
     font-size: var(--fs-sm); color: var(--c-text-bright); cursor: pointer; font-family: inherit;
   }
   .layout-switch-panel button:hover { background: var(--c-elevated); color: var(--c-text-bright); }
-  .layout-switch-panel button.active { background: var(--c-blue); color: var(--c-white); }
+  .layout-switch-panel button.active { background: var(--c-blue-deep); color: var(--c-white); }
 
   /* ── Terminal colour picker ──
      Same trigger as the pane-count switch beside it. The swatch is a tiny
@@ -805,9 +805,7 @@
     display: flex; align-items: center; justify-content: space-between;
     padding: .4rem .75rem; padding-right: 0.45rem; margin-bottom: 10px;
   }
-  .sidebar-label { font-size: var(--fs-sm); text-transform: uppercase;
-    letter-spacing: .06em; font-weight: 600;
-  }
+  .sidebar-label { font-size: var(--fs-sm); font-weight: 600; }
   .btn-new, .btn-refresh {
     background: none; border: none; cursor: pointer;
     font-size: var(--fs-lg); line-height: 1; padding: 0 .1rem;
@@ -967,8 +965,8 @@
   .ssh-row { display: flex; align-items: center; gap: .5rem; padding: .35rem 0; }
   .ssh-row + .ssh-row { border-top: 1px solid var(--c-elevated); }
   .ssh-row .ssh-key {
-    color: var(--c-text-muted); font-size: var(--fs-sm); font-weight: 600; text-transform: uppercase;
-    letter-spacing: .05em; flex: 0 0 104px;
+    color: var(--c-text-muted); font-size: var(--fs-sm); font-weight: 600;
+    flex: 0 0 104px;
   }
   .ssh-row .ssh-val {
     flex: 1; min-width: 0; background: var(--c-bg); border: 1px solid var(--c-border);
@@ -987,7 +985,7 @@
   }
   .ssh-copy:hover { background: var(--c-border); color: var(--c-text-bright); }
   .ssh-copy.copied { border-color: var(--c-green-deep); color: var(--c-green); }
-  .field-label { color: var(--c-text-muted); font-size: var(--fs-sm); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; margin-bottom: .3rem; display: block; }
+  .field-label { color: var(--c-text-muted); font-size: var(--fs-sm); font-weight: 600; margin-bottom: .3rem; display: block; }
   .field-input {
     width: 100%; background: var(--c-bg); border: 1px solid var(--c-border); border-radius: var(--r-sm);
     color: var(--c-text-bright); padding: .4rem .65rem; font: inherit; font-size: var(--fs-base);
@@ -1327,7 +1325,7 @@
   .sbx-group-label {
     display: flex; align-items: center; gap: .35rem;
     padding: .35rem .75rem .15rem;
-    font-size: var(--fs-micro); color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .05em;
+    font-size: var(--fs-xs); color: var(--c-text-muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .sbx-group-dot {
@@ -1479,7 +1477,7 @@
      title. */
   .host-name {
     color: var(--c-text-bright); font-weight: 600; font-size: var(--fs-sm);
-    letter-spacing: .03em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     flex: 0 1 auto; min-width: 2.5rem;
   }
   .dot.host-link.up    { background: var(--c-green); }
@@ -1489,7 +1487,7 @@
   .host-head.tight .host-link-text { display: none; }
   .host-chevron, .host-menu-btn { flex: none; }
   .host-count {
-    margin-left: auto; flex: none; white-space: nowrap; font-size: var(--fs-xs); color: var(--c-text-dim);
+    margin-left: auto; flex: none; white-space: nowrap; font-size: var(--fs-xs); color: var(--c-text-muted);
     background: var(--c-elevated); border-radius: var(--r-xs); padding: 0 .3rem;
   }
   .host-menu-btn {
@@ -1613,14 +1611,14 @@
   }
   .ports-section-label {
     color: var(--c-text-muted); font-size: var(--fs-sm); font-weight: 600;
-    text-transform: uppercase; letter-spacing: .05em; margin-bottom: .35rem;
+    margin-bottom: .35rem;
   }
   .ports-table {
     width: 100%; border-collapse: collapse; font-size: var(--fs-sm);
   }
   .ports-table th {
     text-align: left; color: var(--c-text-dim); font-weight: 600;
-    font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .05em;
+    font-size: var(--fs-xs);
     padding: .25rem .5rem; border-bottom: 1px solid var(--c-elevated);
   }
   .ports-table td {
@@ -1689,7 +1687,7 @@
   /* Network policy section (egress rules from `sbx policy ls`). */
   .policy-badge {
     font-size: var(--fs-xs); border-radius: var(--r-xs); padding: .1rem .35rem;
-    text-transform: lowercase; letter-spacing: .02em;
+    text-transform: lowercase;
   }
   .policy-badge.allow { color: var(--c-green); background: var(--c-green-badge); }
   .policy-badge.deny  { color: var(--c-red); background: var(--c-red-border); }
@@ -1816,7 +1814,7 @@
   .setup-tabs { display: flex; gap: .15rem; margin-left: -.55rem; }
   .setup-tab {
     position: relative; background: none; border: none; padding: 1rem .7rem .95rem;
-    font: inherit; font-size: var(--fs-base); font-weight: 500; letter-spacing: .01em;
+    font: inherit; font-size: var(--fs-base); font-weight: 500;
     color: var(--c-text-muted); cursor: pointer; transition: color var(--dur-micro);
   }
   .setup-tab::before {
@@ -2053,8 +2051,8 @@
   .pane-bar .role-chip {
     font-size: var(--fs-sm); font-weight: 600; line-height: 1;
     padding: .2rem .45rem; border-radius: var(--r-xs);
-    border: 1px solid var(--group-color, var(--c-dim));
-    background: var(--group-color, var(--c-dim));
+    border: 1px solid var(--group-color, var(--c-text-muted));
+    background: var(--group-color, var(--c-text-muted));
     color: var(--c-bg);
   }
   .pane-bar .role-chip.thread {
@@ -2825,7 +2823,6 @@
   }
   .relay-section-label {
     color: var(--c-text-muted); font-size: var(--fs-sm); font-weight: 600;
-    text-transform: uppercase; letter-spacing: .05em;
   }
   .relay-or { border-top: 1px solid var(--c-elevated); padding-top: .65rem; }
   .relay-note { margin: 0; color: var(--c-amber); font-size: var(--fs-sm); }
@@ -2943,7 +2940,7 @@
     opacity: var(--disabled-opacity); cursor: not-allowed; background: var(--c-elevated); border-color: var(--c-border);
   }
   /* The question's id and title: the title is the agent's words, so it keeps
-     its own case rather than the label's capitals. */
+     its own case and the body's weight. */
   .relay-section-label.relay-ask-head {
     text-transform: none; letter-spacing: normal; font-size: var(--fs-sm); color: var(--c-text);
   }
@@ -3287,8 +3284,8 @@
   }
   .cm-file-hit:hover { background: var(--c-hover-subtle); color: var(--c-text); }
   .cm-side-label {
-    color: var(--c-text-dim); font-size: var(--fs-xs); text-transform: uppercase;
-    letter-spacing: .06em; margin: .8rem .45rem .35rem;
+    color: var(--c-text-dim); font-size: var(--fs-xs);
+    margin: .8rem .45rem .35rem;
   }
   .cm-side-label:first-child { margin-top: .2rem; }
   .cm-back { padding: .28rem .45rem; border-radius: var(--r-xs); cursor: pointer; font-size: var(--fs-sm); }
@@ -3574,7 +3571,7 @@
   .fx-group td {
     position: sticky; top: 27px; z-index: 1; background: var(--c-surface);
     color: var(--c-text-dim); font-size: var(--fs-xs); font-weight: 600;
-    text-transform: uppercase; letter-spacing: .04em; padding: .5rem .7rem .25rem;
+    padding: .5rem .7rem .25rem;
   }
   .fx-where {
     margin-left: .55rem; color: var(--c-text-dim);
@@ -4164,7 +4161,7 @@
   .bd { display: flex; flex-direction: column; gap: .9rem; min-width: 0; }
   .bd-summary { margin: 0; color: var(--c-text-muted); font-size: var(--fs-sm); }
   .bd-sec { display: flex; flex-direction: column; gap: .45rem; min-width: 0; }
-  .bd-h { margin: 0; font-size: var(--fs-sm); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-muted); }
+  .bd-h { margin: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-muted); }
   .bd-claims, .bd-feed { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .35rem; }
   .bd-claim {
     display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr) auto; align-items: baseline; gap: .2rem .75rem;
@@ -4227,7 +4224,7 @@
   .plan-justification { margin: 0; color: var(--c-text-soft); font-family: var(--font-prose); line-height: 1.5; }
   .merge-team { display: flex; flex-direction: column; gap: .5rem; }
   .merge-team:empty { display: none; }
-  .merge-h { margin: .4rem 0 0; font-size: var(--fs-sm); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-muted); }
+  .merge-h { margin: .4rem 0 0; font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-muted); }
   .merge-claims { padding: .55rem .7rem; border-radius: var(--r-sm); font-size: var(--fs-sm); line-height: 1.5; color: var(--c-amber-strong); background: var(--c-amber-tint); border: 1px solid var(--c-amber); }
   .merge-claims ul { margin: .3rem 0 0; padding-left: 1.2rem; color: var(--c-text); }
   .merge-commits { padding: .45rem .7rem; border: 1px solid var(--c-border); border-left: 3px solid var(--plan-accent); border-radius: var(--r-sm); background: var(--c-bg); }
