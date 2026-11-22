@@ -542,6 +542,52 @@ pub fn wants_confirmation(err: &str) -> bool {
 #[derive(Clone)]
 pub struct Sbx {
     runner: Arc<dyn Runner>,
+    timeouts: Timeouts,
+}
+
+/// How long an `sbx` call may take before it is stopped, so a wedged sbx
+/// cannot hold its caller (a reconcile tick, a request handler) for ever.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Timeouts {
+    /// Every command not named below: a list, a lookup, a policy or secret
+    /// change. sbx answers these in seconds.
+    pub ordinary: Duration,
+    /// Commands that are slow but end on their own: `stop` and `rm` (a VM
+    /// shutting down), `run` (`run -d` boots one), `template` (saving an
+    /// image), `prune` and `diagnose` (walk every image or log).
+    pub long: Duration,
+}
+
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self { ordinary: Duration::from_secs(60), long: Duration::from_secs(15 * 60) }
+    }
+}
+
+impl Timeouts {
+    /// The bound for one argv; `None` for commands whose length is not sbx's
+    /// but the work's: `create` (pulls the image, streams progress), `exec`
+    /// (runs whatever it was given; callers that know a bound set their own,
+    /// as the code map run does), `mcp auth` (waits on the person's sign-in
+    /// in a browser).
+    pub fn for_args(&self, args: &[String]) -> Option<Duration> {
+        let a: Vec<&str> = args.iter().take(2).map(String::as_str).collect();
+        match a.as_slice() {
+            ["create", ..] | ["exec", ..] | ["mcp", "auth"] => None,
+            ["stop" | "rm" | "run" | "template" | "prune" | "diagnose", ..] => Some(self.long),
+            _ => Some(self.ordinary),
+        }
+    }
+}
+
+/// What a timed-out call is called in its error: the subcommand, never an
+/// argument (a name, a command, a value).
+fn command_class(args: &[String]) -> String {
+    let first = args.first().map(String::as_str).unwrap_or("");
+    match (first, args.get(1)) {
+        ("policy" | "mcp" | "template" | "secret" | "setting", Some(sub)) if sub.chars().all(|c| c.is_ascii_lowercase() || c == '-') => format!("{first} {sub}"),
+        _ => first.to_string(),
+    }
 }
 
 fn s(args: &[&str]) -> Vec<String> {
@@ -550,7 +596,30 @@ fn s(args: &[&str]) -> Vec<String> {
 
 impl Sbx {
     pub fn new(runner: Arc<dyn Runner>) -> Self {
-        Self { runner }
+        Self { runner, timeouts: Timeouts::default() }
+    }
+
+    /// The same client with other bounds (tests shorten them).
+    pub fn with_timeouts(mut self, timeouts: Timeouts) -> Self {
+        self.timeouts = timeouts;
+        self
+    }
+
+    /// Every call goes through here: bounded by its class, the child killed
+    /// when the bound passes (the runner's future is dropped, and both local
+    /// runners spawn with `kill_on_drop`).
+    async fn run(&self, inv: Invocation) -> Result<Output> {
+        let Some(bound) = self.timeouts.for_args(&inv.args) else {
+            return self.runner.run(inv).await;
+        };
+        let class = command_class(&inv.args);
+        match tokio::time::timeout(bound, self.runner.run(inv)).await {
+            Ok(out) => out,
+            Err(_) => {
+                tracing::warn!("`sbx {class}` did not finish within {} s; stopped", bound.as_secs());
+                Err(anyhow!("`sbx {class}` did not finish within {} s and was stopped", bound.as_secs()))
+            }
+        }
     }
 
     pub fn process() -> Self {
@@ -560,7 +629,7 @@ impl Sbx {
     /// Run; fail with sbx's own words.
     async fn checked(&self, inv: Invocation) -> Result<Output> {
         let args = inv.args.clone();
-        let out = self.runner.run(inv).await?;
+        let out = self.run(inv).await?;
         if !out.success() {
             return Err(command_error(&args, &out));
         }
@@ -578,7 +647,7 @@ impl Sbx {
     }
 
     pub async fn raw(&self, inv: Invocation) -> Result<Output> {
-        self.runner.run(inv).await
+        self.run(inv).await
     }
 
     /// `sbx --version`, parsed: the client's version, which starts no daemon (0.51).
@@ -698,7 +767,7 @@ impl Sbx {
     pub async fn rm(&self, names: &[SandboxName]) -> Result<Vec<RmResult>> {
         let mut a = s(&["rm", "--force", "--format", "json"]);
         a.extend(names.iter().map(|n| n.to_string()));
-        let out = self.runner.run(Invocation::new(a.clone())).await?;
+        let out = self.run(Invocation::new(a.clone())).await?;
         if let Some(results) = parse_rm_json(&out.stdout_str()).filter(|r| !r.is_empty()) {
             return Ok(results);
         }
@@ -952,7 +1021,7 @@ impl Sbx {
     /// a daemon that did not answer once must not be read as one.
     pub async fn setting_bool(&self, key: &str, since: (u32, u32, u32)) -> Result<Option<bool>> {
         let args = s(&["settings", "get", key]);
-        let out = self.runner.run(Invocation::new(args.clone())).await?;
+        let out = self.run(Invocation::new(args.clone())).await?;
         if out.success() {
             return Ok(match out.stdout_str().trim() {
                 "true" => Some(true),
@@ -1054,7 +1123,7 @@ impl Sbx {
         }
         a.extend([name.to_string(), "--".into()]);
         a.extend(args.iter().map(|x| x.to_string()));
-        let out = self.runner.run(Invocation { args: a.clone(), stdin, on_line: None }).await?;
+        let out = self.run(Invocation { args: a.clone(), stdin, on_line: None }).await?;
         if out.code == Some(EXEC_NOT_RUN) {
             // sbx itself refused: the command never ran, so its "failure"
             // must not be read as the command's answer.
@@ -1132,7 +1201,7 @@ impl Sbx {
     }
 
     async fn thread_script(&self, args: Vec<String>) -> Result<std::collections::HashMap<String, String>> {
-        let out = self.runner.run(Invocation::new(args.clone())).await?;
+        let out = self.run(Invocation::new(args.clone())).await?;
         let fields = scripts::script_fields(&out.stdout_str()).map_err(|e| anyhow!(e))?;
         if !out.success() {
             return Err(command_error(&args, &out));
@@ -1491,5 +1560,90 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(format!("{e}"), "has 2 uncommitted file(s)");
+    }
+
+    /// An `sbx` that never answers.
+    struct Hang;
+
+    #[async_trait::async_trait]
+    impl Runner for Hang {
+        async fn run(&self, _inv: Invocation) -> Result<Output> {
+            std::future::pending().await
+        }
+    }
+
+    fn short() -> Timeouts {
+        Timeouts { ordinary: Duration::from_millis(100), long: Duration::from_millis(300) }
+    }
+
+    #[tokio::test]
+    async fn a_hung_sbx_times_out_naming_the_command_not_its_arguments() {
+        let sbx = Sbx::new(Arc::new(Hang)).with_timeouts(short());
+        let start = tokio::time::Instant::now();
+        assert!(sbx.ls().await.is_empty(), "could not tell, as for any failed ls");
+        let e = format!("{:#}", sbx.secret_set_command("github", "op read op://vault/token").await.unwrap_err());
+        assert!(e.contains("`sbx secret set` did not finish within"), "{e}");
+        assert!(!e.contains("op read") && !e.contains("github"), "no argument in the error: {e}");
+        let e = format!("{:#}", sbx.stop(&sb("myapp")).await.unwrap_err());
+        assert!(e.contains("`sbx stop`") && !e.contains("myapp"), "{e}");
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn long_commands_get_a_longer_bound_or_none() {
+        let t = Timeouts::default();
+        let of = |a: &[&str]| t.for_args(&s(a));
+        assert_eq!(of(&["ls", "--format", "json"]), Some(t.ordinary));
+        assert_eq!(of(&["policy", "ls"]), Some(t.ordinary));
+        assert_eq!(of(&["secret", "set", "github"]), Some(t.ordinary));
+        for long in [&["stop", "a"][..], &["rm", "--force", "a"], &["run", "-d", "--name", "a"], &["template", "save", "a", "t"], &["prune", "--force"], &["diagnose"]] {
+            assert_eq!(of(long), Some(t.long), "{long:?}");
+        }
+        for none in [&["create", "--name", "a"][..], &["exec", "a", "--", "true"], &["mcp", "auth", "srv"]] {
+            assert_eq!(of(none), None, "{none:?}");
+        }
+        assert!(t.ordinary == Duration::from_secs(60));
+    }
+
+    /// The real runner: on a timeout the child is killed, not left behind.
+    #[tokio::test]
+    async fn a_timed_out_process_is_killed() {
+        let dir = std::env::temp_dir().join(format!("sbxw-sbx-kill-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pidfile = dir.join("pid");
+        let sbx = Sbx::new(Arc::new(runner::Process { bin: "sh".into() })).with_timeouts(short());
+        let script = format!("echo $$ > '{}'; exec sleep 30", pidfile.display());
+        let e = sbx.raw(Invocation::new(s(&["-c", &script]))).await.unwrap_err();
+        assert!(format!("{e:#}").contains("did not finish within"), "{e:#}");
+        let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_string();
+        let mut gone = false;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let ps = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid]).output().unwrap();
+            let stat = String::from_utf8_lossy(&ps.stdout).trim().to_string();
+            if stat.is_empty() || stat.starts_with('Z') {
+                gone = true;
+                break;
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(gone, "sleep {pid} still runs");
+    }
+
+    /// `sbx exec` into a sandbox that is not there exits at once with its
+    /// reason, before reading the piped input: the caller sees that reason.
+    #[tokio::test]
+    async fn exec_that_sbx_refuses_reports_sbx_own_words() {
+        let dir = std::env::temp_dir().join(format!("sbxw-sbx-refuse-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("sbx");
+        std::fs::write(&bin, "#!/bin/sh\necho 'ERROR: sandbox myapp not found' >&2\nexit 125\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let sbx = Sbx::new(Arc::new(runner::Process { bin: bin.display().to_string() }));
+        let e = sbx.write_file(&sb("myapp"), "/tmp/x", &vec![b'x'; 1 << 20], false).await.unwrap_err();
+        let _ = std::fs::remove_dir_all(&dir);
+        let e = format!("{e:#}");
+        assert!(e.contains("sbx could not run the command in 'myapp'") && e.contains("sandbox myapp not found"), "{e}");
     }
 }

@@ -301,6 +301,8 @@ impl App {
         let app = self.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(15));
+            // A slow sbx (up to its timeout) delays the next pass, never bursts.
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tick.tick().await;
                 app.reconcile_sessions().await;
