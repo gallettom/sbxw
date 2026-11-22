@@ -4930,3 +4930,90 @@ dialog.kb-form .modal-foot button { white-space: nowrap; flex-shrink: 0; }
 .label-aside-dim { color: var(--c-text-dim); }
 .field-hint { display: block; margin-top: .35rem; color: var(--c-text-muted); font-size: var(--fs-sm); }
 .field-hint strong { color: var(--c-text); font-weight: 600; }
+
+/* ── Control sizes (App screens) ──
+   Three heights, read from tokens: 32px for a control in a form or a dialog,
+   28px in a dense toolbar or a table row, 24px for the smallest one that sits
+   inside a list row. Nothing interactive is drawn under 24px. Where the bar
+   around a control has room, an invisible ::before grows its hit area to 44px
+   high without moving a neighbour; where it has none (a sidebar row, a pane
+   bar), the row itself is the larger target. Text-sized links inside prose
+   and native checkboxes (16px, their label is the target) are not controls
+   in this sense. */
+:root {
+  --ctl-h: 32px;
+  --ctl-h-dense: 28px;
+  --ctl-h-min: 24px;
+  --hit-min: 44px;
+  --check-size: 16px;
+}
+/* Default: forms and dialogs. */
+:is(.btn-create, .btn-cancel, .btn-back, .btn-danger, .refresh-btn, input.field-input, select.field-input) {
+  min-height: var(--ctl-h);
+}
+/* A dialog's close button sits in its head bar: dense, with a 44px hit area. */
+.modal-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--ctl-h-dense); min-width: var(--ctl-h-dense);
+}
+/* Dense: the header, the pane bar, the sidebar's own bars, dialog toolbars
+   and table rows. */
+:is(.layout-switch-trigger, .term-color-trigger, .kanban-btn, .skills-btn, .monitor-btn, .help-btn,
+    .btn-new, .btn-refresh, .pane-bar .pane-btn, .pane-bar select,
+    .port-input, .btn-add-mapping, .btn-allow-host, .btn-add-port, .ssh-copy, .tpl-rm,
+    .fx-crumb, .fx-icon-btn, .fx-filter, .kb-scope, .policy-form select) {
+  min-height: var(--ctl-h-dense);
+}
+:is(.btn-new, .btn-refresh, .fx-icon-btn, .tpl-rm) { min-width: var(--ctl-h-dense); }
+.btn-new, .btn-refresh, .fx-crumb, .ssh-copy, .tpl-rm, .btn-add-port, .btn-allow-host {
+  display: inline-flex; align-items: center; justify-content: center;
+}
+/* A summary keeps its own display (its marker, its spaces): the height is
+   centred with align-content. */
+.policy-details > summary, .policy-http summary {
+  min-height: var(--ctl-h-dense); align-content: center;
+}
+.ports-table .btn-del-port, .btn-rm-port {
+  min-height: var(--ctl-h-min); min-width: var(--ctl-h-min);
+}
+/* The pane bar holds 28px controls: it grows from 32 to 37px (4px above and
+   below, and its 1px rule). The mode switch is one 28px control whose lit
+   segment sits 2px in. */
+.pane-bar {
+  height: calc(var(--ctl-h-dense) + 2 * var(--sp-1) + 1px);
+  padding-top: var(--sp-1); padding-bottom: var(--sp-1);
+}
+.pane-bar .mode-switch { padding: 1px; gap: 1px; }
+.pane-bar .mode-switch button { min-height: calc(var(--ctl-h-dense) - 4px); }
+/* The Jarvis launcher: a 32px pill holding 28px buttons, in the 48px header. */
+.vc-launcher { height: var(--ctl-h); padding: 1px var(--sp-1); }
+.vc-l-btn, .vc-l-target { height: var(--ctl-h-dense); }
+.vc-l-btn { min-width: var(--ctl-h-dense); }
+/* The Jarvis panel and the chat dock: a dense panel, a 32px composer. */
+.cd-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--ctl-h-dense); min-width: var(--ctl-h-dense);
+}
+.vc-btn, .vc-head .vc-target { min-height: var(--ctl-h-dense); }
+.vc-foot input { min-height: var(--ctl-h); }
+.vc-talk { height: var(--ctl-h); }
+/* Inside a sidebar row: 24px, the row's second line grows to match. */
+.sbx-actions button, .host-menu-btn, .sbx-sessions-toggle, .sbx-thread {
+  min-height: var(--ctl-h-min);
+}
+.sbx-actions button, .host-menu-btn { display: inline-flex; align-items: center; justify-content: center; min-width: var(--ctl-h-min); }
+.sbx-name > .sbx-pane-add { width: var(--ctl-h-min); height: var(--ctl-h-min); }
+.sbx-meta { min-height: var(--ctl-h-min); }
+.host-head { min-height: var(--ctl-h-dense); }
+input[type="checkbox"], input[type="radio"] { width: var(--check-size); height: var(--check-size); }
+/* 44px hit areas where the bar has the room: the 48px header, a dialog's
+   head and foot. Vertical only, so side-by-side buttons never share a pixel. */
+:is(header .layout-switch-trigger, header .term-color-trigger, header .kanban-btn, .vc-l-btn, .vc-l-target,
+    .modal-foot :is(.btn-create, .btn-cancel, .btn-back, .btn-danger, .refresh-btn), .modal-head .modal-close) {
+  position: relative;
+}
+:is(header .layout-switch-trigger, header .term-color-trigger, header .kanban-btn, .vc-l-btn, .vc-l-target,
+    .modal-foot :is(.btn-create, .btn-cancel, .btn-back, .btn-danger, .refresh-btn), .modal-head .modal-close)::before {
+  content: ''; position: absolute; left: 0; right: 0;
+  top: 50%; height: var(--hit-min); transform: translateY(-50%);
+}
