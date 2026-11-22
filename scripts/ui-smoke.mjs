@@ -1,5 +1,5 @@
 // Load the real web UI from a running daemon in headless Chromium: no page
-// error, the sandbox listed, a pane attached to it, the usage chip filled —
+// error, the sandbox listed, a pane attached to it, the usage chip filled,
 // then a screenshot. Usage: node ui-smoke.mjs <port> <sandbox> <png>
 // (PLAYWRIGHT_MODULE points at a playwright install when it is not resolvable,
 // CHROMIUM_PATH at a browser when Playwright has none of its own.)
@@ -21,9 +21,16 @@ if (process.env.XTERM_VENDOR) {
 }
 const problems = [];
 page.on('pageerror', (e) => problems.push('pageerror: ' + e.message));
-page.on('console', (m) => { if (m.type() === 'error') problems.push('console: ' + m.text()); });
 // The 409 a voice approval of a high-risk proposal gets is expected (see below).
+// Chromium logs every failed load as a console error too: that one line is
+// excused for exactly the status and path in `expected`, nothing else.
 const expected = new Set();
+const expectedLoad = (m) => {
+  const status = /^Failed to load resource: the server responded with a status of (\d+)/.exec(m.text())?.[1];
+  const url = m.location()?.url;
+  return !!status && !!url && expected.has(`${status} ${new URL(url).pathname}`);
+};
+page.on('console', (m) => { if (m.type() === 'error' && !expectedLoad(m)) problems.push('console: ' + m.text()); });
 page.on('response', (r) => { if (r.url().includes('/api/') && r.status() >= 400 && !expected.has(`${r.status()} ${new URL(r.url()).pathname}`)) problems.push(`HTTP ${r.status()} ${r.url()}`); });
 // Jarvis's endpoints, stubbed: the smoke has no `sbxw-jarvis` sandbox to
 // propose anything, and nothing may be created by loading the page. The stub
@@ -323,7 +330,13 @@ await visit('Jarvis: a plain conversation', async () => {
     problems.push(`jarvis conversation: ${JSON.stringify(got)}, another sandbox ${JSON.stringify(other)}; want two plain answers on the left, markup as text, only Read aloud buttons, nothing armed, no inner scrollbar, Follow hidden, no hint line, a one-row footer; and for another sandbox Follow shown and an armed card with a left rule`);
   }
   jv.status = { state: 'absent' };
-  await page.evaluate(() => { vcReset(); vcSetTarget('sbxw-jarvis'); vcSetOpen(false); });
+  // Picking Jarvis while it is not running offers to start it, which opens the
+  // panel once its status is read: let that land, then close the panel, as a
+  // person would, so it does not cover the pane bar the next steps click.
+  await page.evaluate(() => { vcReset(); vcSetTarget('sbxw-jarvis'); });
+  await page.waitForTimeout(500);
+  await page.evaluate(() => vcSetOpen(false));
+  if (!await page.locator('#vc-panel').isHidden()) problems.push('jarvis panel: still open after the conversation step closed it');
 });
 await visit('Bash pane', () => button(/Bash/).click());
 await visit('Claude pane', () => button(/Claude/).click());
@@ -489,7 +502,13 @@ await visit('Create on a remote host', async () => {
 // Headless Chromium has been seen to crash at or after the Monitor step: say
 // where things stand first, so a crash there does not hide what came before.
 console.error(JSON.stringify({ before_monitor: { tour, problems } }, null, 2));
-await visit('Monitor', () => button(/^Monitor$/).click());
+// Its terminal takes the Escape keys, as a terminal should: close it with its
+// own Close button, as a person would.
+await visit('Monitor', () => button(/^Monitor$/).click(), async () => {
+  await page.locator('#monitor-close').click();
+  await page.waitForTimeout(300);
+  if (await page.locator('#monitor-overlay').evaluate((d) => d.open)) problems.push('monitor: still open after its Close button');
+});
 await visit('Help', () => button(/^Help$/).click());
 // Setup is one dialog with a tab per part: open it, then walk the tabs.
 const tab = (re) => page.locator('dialog[open] .setup-tab').filter({ hasText: re });
@@ -502,6 +521,11 @@ await visit('Setup: MCP', async () => { await button(/^Setup$/).click(); await t
   await page.locator('#mcp-list .mcp-btn[data-act="edit"]').first().click();
   await page.waitForTimeout(300);
   await page.screenshot({ path: png.replace(/\.png$/, '-mcp-edit.png') });
+  // Leave the edit the way a person would, or the Escape below only ends the
+  // edit and the dialog stays over the next step's Setup button.
+  await page.locator('#mcp-cancel-edit').click();
+  await page.waitForTimeout(300);
+  if (await page.locator('#mcp-cancel-edit').isVisible()) problems.push('mcp: Cancel edit left the form in edit mode');
 });
 // Setup → Mac: on a host that cannot run terminal-mac it says so; with the
 // fake (SBXW_TERMINAL_MAC) it shows the VM. Either way it must draw.
@@ -514,4 +538,6 @@ const terminal = await page.evaluate(() => [...document.querySelectorAll('.xterm
 await page.screenshot({ path: png });
 await browser.close();
 console.log(JSON.stringify({ listed, terminal: terminal.slice(0, 300), tour, problems }, null, 2));
-process.exit(listed && problems.length === 0 ? 0 : 1);
+// A step that could not even open its panel checked nothing: that fails too.
+const unopened = tour.filter((t) => / could not open /.test(t));
+process.exit(listed && problems.length === 0 && unopened.length === 0 ? 0 : 1);
