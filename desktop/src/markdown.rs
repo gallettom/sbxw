@@ -531,7 +531,7 @@ fn table<S: 'static>(head: &[Vec<Run>], rows: &[Vec<Vec<Run>>], look: &Look, key
     let weights: Vec<f32> = (0..head.len()).map(|i| std::iter::once(head).chain(rows.iter().map(|r| r.as_slice())).map(|r| len(&r[i])).max().unwrap_or(0).clamp(6, 40) as f32).collect();
     let bright = Look { color: crate::theme::color_value("text-bright").unwrap(), size: look.size, pills: look.pills.clone() };
     let line = |cells: &[Vec<Run>], n: usize, head: bool| {
-        let mut r = row().w_full().min_w(0.0).items_start().gap(12.0).px(8.0).py(5.0);
+        let mut r = row().w_full().min_w(0.0).items_start().gap(12.0).px(8.0).py(crate::theme::spacing::XS);
         if head {
             r = r.fill(c("elevated"));
         }
@@ -574,7 +574,8 @@ pub(crate) fn view_blocks<S: 'static>(blocks: &[Block], look: &Look, key: &str, 
             }
             Block::Paragraph(runs) => rich_runs::<S>(runs, look, 400.0, look.size, &k, &on_link),
             Block::List { ordered, start, items } => {
-                let mut l = col().w_full().min_w(0.0).gap(3.0).key(k.clone());
+                let mut l = col().w_full().min_w(0.0).gap(crate::theme::spacing::XXS).key(k.clone());
+
                 for (n, it) in items.iter().enumerate() {
                     let mark = if *ordered { format!("{}.", start + n as u64) } else { "•".to_string() };
                     l = l.child(
@@ -582,7 +583,7 @@ pub(crate) fn view_blocks<S: 'static>(blocks: &[Block], look: &Look, key: &str, 
                             .w_full()
                             .min_w(0.0)
                             .items_start()
-                            .gap(6.0)
+                            .gap(crate::theme::spacing::INLINE)
                             .child(text(mark).font(crate::theme::prose(look.size, 400.0)).color(c("text-muted")).min_w(if *ordered { 16.0 } else { 8.0 }))
                             .child(col().grow(1.0).min_w(0.0).child(rich_runs::<S>(it, look, 400.0, look.size, &format!("{k}-i{n}"), &on_link))),
                     );

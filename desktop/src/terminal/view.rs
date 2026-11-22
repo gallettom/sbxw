@@ -175,7 +175,7 @@ where
         .child(
             el().key(t.key("term-status"))
                 .h(STATUS_H)
-                .child(text(format!("terminal {cols}x{rows}{owner}  {}{scrolled}", t.status)).font(TextStyle::new(12.0, 400.0)).color(dim)),
+                .child(text(format!("terminal {cols}x{rows}{owner}  {}{scrolled}", t.status)).font(TextStyle::new(crate::theme::font_size::CAPTION, 400.0)).color(dim)),
         )
         .child(room.child(view(t, lens)))
 }

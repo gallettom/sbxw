@@ -26,7 +26,7 @@ end
 
 local function square(data, sb)
   local c = ((data.app or {}).groups or {})[sb]
-  return c and column{ w = 8, h = 8, radius = 2, fill = c } or column{ w = 8, h = 8, radius = 2, border = "text-dim" }
+  return c and column{ w = 8, h = 8, radius = "mark", fill = c } or column{ w = 8, h = 8, radius = "mark", border = "text-dim" }
 end
 
 -- One line a row: the status dot, the names, a chip and the time. Nested
@@ -51,7 +51,7 @@ local function list_row(r, sel, now, color)
     column{ py = 4, dot{ tone = r.tone } },
     column{ grow = 1, gap = 2, min_w = 0,
       row{ gap = 4, w = "full", min_w = 0,
-        (not nested and color) and column{ py = 4, column{ w = 8, h = 8, radius = 2, fill = color } } or false,
+        (not nested and color) and column{ py = 4, column{ w = 8, h = 8, radius = "mark", fill = color } } or false,
         (not nested) and text{ r.sandbox, key = "monitor-row-sb-" .. r.key, weight = "medium", color = "text-bright", truncate = true, min_w = r.chip and 56 or 72, max_w = 150, help = r.sandbox } or false,
         text{ r.name, key = "monitor-row-name-" .. r.key, size = "sm", color = nested and "text-bright" or (r.thread and "text-muted" or "text-dim"),
           weight = nested and "medium" or nil, truncate = true, grow = 1, min_w = r.chip and 48 or 56, help = r.name },

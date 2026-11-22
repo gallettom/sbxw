@@ -108,7 +108,7 @@ return {
     -- The dot as the sidebar draws it: filled, or a ring for stopped and for a state in progress.
     local state = row{ gap = 8, min_w = 0, clip = true, key = target and "jarvis-target-state" or "jarvis-state",
       help = target and (target .. "'s agent: " .. st[1]) or ("Jarvis: " .. st[1]),
-      column{ w = 8, h = 8, radius = 4, fill = (not st.ring) and st[2] or nil, border = st.ring and st[2] or nil },
+      column{ w = 8, h = 8, radius = "pill", fill = (not st.ring) and st[2] or nil, border = st.ring and st[2] or nil },
       -- With a proposal waiting its button needs the room: the dot alone (its tooltip says the word).
       #j.pending == 0 and text{ st[1], size = "sm", color = st[2], truncate = true } or false,
     }
@@ -124,7 +124,7 @@ return {
         #items > 1 and row{ gap = 4,
           icon{ "send", size = 12, color = "text-muted", help = "Where your words go" },
           -- A sandbox picked: its colour square, as the overlays' sandbox picker.
-          target and column{ w = 8, h = 8, radius = 2, key = "jarvis-target-color",
+          target and column{ w = 8, h = 8, radius = "mark", key = "jarvis-target-color",
             fill = (((data.app or {}).groups or {})[target]) or "text-dim" } or false,
           select{ id = "jarvis-target", items = items, value = target or "sbxw-jarvis", on = "target", min_w = 0,
             help = "Where your words go: Jarvis, or a running sandbox's agent (you confirm each message)" },

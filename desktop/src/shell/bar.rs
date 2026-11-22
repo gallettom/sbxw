@@ -307,19 +307,22 @@ pub const TOP_CENTRE_GAP: f32 = 8.0;
 pub const TOP_RIGHT_GAP: f32 = 4.0;
 
 /// A built-in `button`'s width, as screen.rs lays it out: 28 pt square at
-/// least; a label pads 10 each side, an icon is 16 with a gap of 6, the
-/// label 13/500.
+/// least; a label pads 12 each side, an icon is 16 with a gap of 6, the
+/// label the body size at 500.
 pub fn button_w(label: &str, icon: bool) -> f32 {
+    use crate::theme::{font_size, layout, spacing};
     if label.is_empty() {
-        return 28.0;
+        return layout::CONTROL_H;
     }
-    (20.0 + if icon { 16.0 + 6.0 } else { 0.0 } + measure(label, 13.0, 500.0)).max(28.0)
+    (2.0 * spacing::MD + if icon { 16.0 + spacing::INLINE } else { 0.0 } + measure(label, font_size::BODY, 500.0)).max(layout::CONTROL_H)
 }
 
-/// A built-in `badge`: px 6 each side, text 12/500.
+/// A built-in `badge`: the chip's inset each side, the caption at 500.
 pub fn badge_w(label: &str) -> f32 {
-    12.0 + measure(label, 12.0, 500.0)
+    use crate::theme::{font_size, spacing};
+    2.0 * spacing::CHIP_X + measure(label, font_size::CAPTION, 500.0)
 }
+
 
 /// A built-in `menu`/`select` trigger: px 8, icon 16, gaps 6, label 13/400,
 /// a 12 pt chevron (none on a ghost menu with no label), 28 pt at least.

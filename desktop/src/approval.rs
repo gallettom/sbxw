@@ -137,19 +137,19 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
     let small = |t: String, size: f32, weight: f32, color: &str| text(t).font(crate::screen::body(size, weight)).color(c(color)).wrap_anywhere().w_full().min_w(0.0);
     let badge = |t: &str, tone: &str| {
         let (fg, tint) = crate::screen::tone(tone);
-        rune::el().px(6.0).py(1.0).radius(radius("xs").unwrap()).fill(crate::theme::hex(tint)).child(text(t.to_string()).font(crate::screen::body(12.0, 500.0)).color(crate::theme::hex(fg)))
+        rune::el().px(crate::theme::spacing::CHIP_X).py(crate::theme::spacing::CHIP_Y).radius(radius("xs").unwrap()).fill(crate::theme::hex(tint)).child(text(t.to_string()).font(crate::screen::body(crate::theme::font_size::CAPTION, 500.0)).color(crate::theme::hex(fg)))
     };
     let button = |key: &str, label: &str, primary: bool, enabled: bool| {
         let b = rune::el()
             .key(key)
             .role("button")
             .label(label)
-            .px(12.0)
-            .py(4.0).min_h(crate::theme::layout::CONTROL_H).items_center()
+            .px(crate::theme::spacing::MD)
+            .py(crate::theme::spacing::XS).min_h(crate::theme::layout::CONTROL_H).items_center()
             .radius(radius("sm").unwrap())
             .fill(c(if primary { "primary" } else { "elevated" }))
             .border(1.0, c(if primary { "primary" } else { "border" }))
-            .child(text(label.to_string()).font(crate::screen::body(13.0, 500.0)).color(c(if primary { "on-primary" } else { "text-bright" })));
+            .child(text(label.to_string()).font(crate::screen::body(crate::theme::font_size::BODY, 500.0)).color(c(if primary { "on-primary" } else { "text-bright" })));
         if enabled {
             b.hover(c(if primary { "primary-hover" } else { "border" })).cursor(Cursor::Pointer)
         } else {
@@ -157,9 +157,9 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
         }
     };
 
-    let mut head = row().w_full().gap(8.0).items_center().child(text("Jarvis proposes").font(crate::screen::body(16.0, 600.0)).color(c("text-bright"))).child(badge(if high { "High risk" } else { "Low risk" }, if high { "red" } else { "green" }));
+    let mut head = row().w_full().gap(crate::theme::spacing::SM).items_center().child(text("Jarvis proposes").font(crate::screen::body(crate::theme::font_size::HEADING, 600.0)).color(c("text-bright"))).child(badge(if high { "High risk" } else { "Low risk" }, if high { "red" } else { "green" }));
     if d.waiting > 0 {
-        head = head.child(text(format!("{} more waiting", d.waiting)).font(crate::screen::body(12.0, 400.0)).color(c("text-muted")));
+        head = head.child(text(format!("{} more waiting", d.waiting)).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")));
     }
     head = head.child(rune::el().grow(1.0)).child(
         rune::el()
@@ -167,7 +167,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
             .role("button")
             .label("Later")
             .help("Later: the proposal waits, the Jarvis panel brings it back")
-            .padding(3.0)
+            .padding(crate::theme::spacing::XS)
             .radius(radius("xs").unwrap())
             .hover(c("border"))
             .cursor(Cursor::Pointer)
@@ -175,15 +175,15 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
             .child(rune::icon(crate::icons::get("close").unwrap(), 14.0).color(c("text-muted"))),
     );
 
-    let mut body = col().w_full().min_w(0.0).gap(12.0);
+    let mut body = col().w_full().min_w(0.0).gap(crate::theme::spacing::MD);
     body = body.child(small(p["summary"].as_str().filter(|s| !s.is_empty()).unwrap_or("(no summary)").to_string(), 13.0, 400.0, "text-bright").key("jv-summary"));
     if high && pending {
         body = body.child(small("High risk: read every change below before you approve. A spoken or typed yes does not approve this one: click Approve.".into(), 11.5, 400.0, "amber").key("jv-high-note"));
     }
     let changes = p["changes"].as_array().cloned().unwrap_or_default();
     for (i, ch) in changes.iter().enumerate() {
-        let mut item = col().key(format!("jv-change-{i}")).w_full().min_w(0.0).gap(6.0);
-        let mut h = row().w_full().gap(6.0).items_center().child(badge(kind_label(ch["kind"].as_str().unwrap_or("change")), "neutral")).child(text(ch["title"].as_str().unwrap_or("").to_string()).font(crate::screen::body(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0));
+        let mut item = col().key(format!("jv-change-{i}")).w_full().min_w(0.0).gap(crate::theme::spacing::INLINE);
+        let mut h = row().w_full().gap(crate::theme::spacing::INLINE).items_center().child(badge(kind_label(ch["kind"].as_str().unwrap_or("change")), "neutral")).child(text(ch["title"].as_str().unwrap_or("").to_string()).font(crate::screen::body(crate::theme::font_size::CAPTION, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0));
         if ch["risk"] == "high" && pending {
             h = h.child(badge("high risk", "red"));
         }
@@ -207,17 +207,17 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
                     .key(format!("jv-host-{i}"))
                     .role("alert")
                     .w_full()
-                    .padding(8.0)
-                    .gap(4.0)
+                    .padding(crate::theme::spacing::SM)
+                    .gap(crate::theme::spacing::XS)
                     .radius(radius("sm").unwrap())
                     .fill(c("red-tint"))
                     .border(1.0, c("red"))
                     .child(small("This command will run on this machine, outside any sandbox:".into(), 11.5, 600.0, "text-bright"))
-                    .child(text(cmd.to_string()).font(crate::screen::body(12.0, 400.0).mono()).color(c("text-bright")).wrap_anywhere().w_full().min_w(0.0)),
+                    .child(text(cmd.to_string()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0).mono()).color(c("text-bright")).wrap_anywhere().w_full().min_w(0.0)),
             );
         }
         if let Some(list) = screen_intents(ch) {
-            let mut box_ = col().key(format!("jv-intents-{i}")).w_full().gap(2.0).padding(8.0).radius(radius("sm").unwrap()).fill(c("surface-alt")).border(1.0, c("elevated"));
+            let mut box_ = col().key(format!("jv-intents-{i}")).w_full().gap(crate::theme::spacing::XXS).padding(crate::theme::spacing::SM).radius(radius("sm").unwrap()).fill(c("surface-alt")).border(1.0, c("elevated"));
             box_ = box_.child(small(if list.is_empty() { "This screen asks the app for nothing.".into() } else { "This screen can ask the app to:".into() }, 11.5, 600.0, "text-bright"));
             for (words, new, approval) in list {
                 let mut line = words;
@@ -263,11 +263,11 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
                     .w_full()
                     .max_h(280.0)
                     .min_h(0.0)
-                    .padding(8.0)
+                    .padding(crate::theme::spacing::SM)
                     .radius(radius("sm").unwrap())
                     .fill(c("bg"))
                     .border(1.0, c("elevated"))
-                    .child(rune::rich(diff.to_string(), spans).font(crate::screen::body(12.0, 400.0).mono()).color(c("text-muted")).wrap_anywhere().w_full().min_w(0.0))
+                    .child(rune::rich(diff.to_string(), spans).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0).mono()).color(c("text-muted")).wrap_anywhere().w_full().min_w(0.0))
                     .on_at_bottom(move |_: &mut S, at: bool| set_more(&format!("jv-diff-{i}"), !at)),
             );
             if let Some(e) = more_below(&format!("jv-diff-{i}")) {
@@ -296,12 +296,12 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
         body = body.child(small(e.to_string(), 12.0, 500.0, "red").key("jv-error"));
     }
 
-    let mut foot = row().w_full().gap(8.0).items_center();
+    let mut foot = row().w_full().gap(crate::theme::spacing::SM).items_center();
     let mut ack_row = None;
     if pending {
         if needs_ack {
             let on = d.acked;
-            let mut b = rune::el().w(16.0).h(16.0).radius(4.0).border(1.0, c(if on { "blue" } else { "control-border" })).items_center().justify_center();
+            let mut b = rune::el().w(16.0).h(16.0).radius(crate::theme::corner::BOX).border(1.0, c(if on { "blue" } else { "control-border" })).items_center().justify_center();
             if on {
                 b = b.fill(c("blue")).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("white")));
             }
@@ -312,15 +312,15 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
                     .role("checkbox")
                     .checked(on)
                     .label("I have read this command")
-                    .gap(6.0)
+                    .gap(crate::theme::spacing::INLINE)
                     .items_center()
                     .cursor(Cursor::Pointer)
                     .on_press(|s: &mut S| s.toggle_ack())
                     .child(b)
-                    .child(text("I have read this command").font(crate::screen::body(13.0, 500.0)).color(c("text-bright")).wrap_anywhere().min_w(0.0)),
+                    .child(text("I have read this command").font(crate::screen::body(crate::theme::font_size::BODY, 500.0)).color(c("text-bright")).wrap_anywhere().min_w(0.0)),
             );
         }
-        let reason = rune::text_input(d.reason, crate::screen::body(12.0, 400.0))
+        let reason = rune::text_input(d.reason, crate::screen::body(crate::theme::font_size::CAPTION, 400.0))
             .single_line()
             .key("jv-reason")
             .color(c("text-bright"))
@@ -328,7 +328,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
             .w_full()
             .on_edit(|s: &mut S| s.reason_edit());
         foot = foot
-            .child(rune::el().grow(1.0).min_w(80.0).h(28.0).px(8.0).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(radius("sm").unwrap()).child(reason))
+            .child(rune::el().grow(1.0).min_w(80.0).h(crate::theme::layout::CONTROL_H).px(crate::theme::spacing::SM).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(radius("sm").unwrap()).child(reason))
             .child(if d.busy { button("jv-refuse", "Refuse", false, false) } else { button("jv-refuse", "Refuse", false, true).on_press(|s: &mut S| s.refuse_click()) });
         let can = !d.busy && (!needs_ack || d.acked);
         foot = foot.child(if can { button("jv-approve", "Approve", true, true).on_press(|s: &mut S| s.approve_click()) } else { button("jv-approve", "Approve", true, false) });
@@ -342,12 +342,12 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
         .label("Jarvis proposes a change")
         .pin(Some(d.left), Some(d.top), Some(d.right), None)
         .max_h(d.max_h.max(160.0))
-        .padding(16.0)
-        .gap(12.0)
+        .padding(crate::theme::spacing::LG)
+        .gap(crate::theme::spacing::MD)
         .radius(radius("lg").unwrap())
         .fill(c("surface"))
         .border(1.0, c(if high { "red-border" } else { "border" }))
-        .shadow(8.0, 24.0, crate::theme::shadow())
+        .shadow(crate::theme::elevation::OVERLAY.0, crate::theme::elevation::OVERLAY.1, crate::theme::shadow())
         .child(head)
         .child(watch::<S>(col().key("jv-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 130.0).max(80.0)).child(body), "jv-body"))
         .children(more_below("jv-body"))
@@ -441,7 +441,7 @@ fn more_below(key: &str) -> Option<El> {
         rune::el()
             .key(format!("{key}-more"))
             .w_full()
-            .child(rune::text("More below: scroll to read it all before you answer".to_string()).font(crate::screen::body(12.0, 600.0)).color(crate::theme::c("amber")).wrap_anywhere().w_full().min_w(0.0))
+            .child(rune::text("More below: scroll to read it all before you answer".to_string()).font(crate::screen::body(crate::theme::font_size::CAPTION, 600.0)).color(crate::theme::c("amber")).wrap_anywhere().w_full().min_w(0.0))
     })
 }
 
@@ -471,16 +471,16 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
             .key(key)
             .role("button")
             .label(label)
-            .px(12.0)
-            .py(4.0).min_h(crate::theme::layout::CONTROL_H).items_center()
+            .px(crate::theme::spacing::MD)
+            .py(crate::theme::spacing::XS).min_h(crate::theme::layout::CONTROL_H).items_center()
             .radius(radius("sm").unwrap())
             .fill(c(fill))
             .border(1.0, c(edge))
             .min_w(0.0);
         if working {
-            b = b.gap(6.0).justify_center().child(crate::screen::busy_spinner(14.0, ink));
+            b = b.gap(crate::theme::spacing::INLINE).justify_center().child(crate::screen::busy_spinner(14.0, ink));
         }
-        let b = b.child(text(label.to_string()).font(crate::screen::body(13.0, 500.0)).color(ink).wrap_anywhere().min_w(0.0));
+        let b = b.child(text(label.to_string()).font(crate::screen::body(crate::theme::font_size::BODY, 500.0)).color(ink).wrap_anywhere().min_w(0.0));
         if working {
             return b.busy(true);
         }
@@ -493,9 +493,9 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
     let title = d.confirm.map(|x| x.title.as_str()).unwrap_or(d.title);
     let head = row()
         .w_full()
-        .gap(8.0)
+        .gap(crate::theme::spacing::SM)
         .items_center()
-        .child(text(title.to_string()).font(crate::screen::body(16.0, 600.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0).key("cf-title"))
+        .child(text(title.to_string()).font(crate::screen::body(crate::theme::font_size::HEADING, 600.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0).key("cf-title"))
         .child(
             rune::el()
                 .key("cf-close")
@@ -513,17 +513,17 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
         );
     // The title scrolls with the body: a long one (a path, a host) never
     // pushes Cancel and Confirm out of the window.
-    let mut body = col().w_full().min_w(0.0).gap(8.0).child(head);
+    let mut body = col().w_full().min_w(0.0).gap(crate::theme::spacing::SM).child(head);
     if d.loading {
         body = body.child(small("Reading from the daemon…".into(), 12.0, 400.0, "text-muted").key("cf-loading"));
     }
     if let Some(x) = d.confirm {
         for (i, l) in x.lines.iter().enumerate() {
-            body = body.child(text(l.clone()).font(crate::theme::prose(13.0, 400.0)).color(c("text-bright")).wrap_anywhere().w_full().min_w(0.0).key(format!("cf-line-{i}")));
+            body = body.child(text(l.clone()).font(crate::theme::prose(crate::theme::font_size::BODY, 400.0)).color(c("text-bright")).wrap_anywhere().w_full().min_w(0.0).key(format!("cf-line-{i}")));
         }
         let granted = granted_lines(x);
         if !granted.is_empty() {
-            let mut list = col().key("cf-grants").w_full().gap(3.0).padding(8.0).radius(radius("sm").unwrap()).fill(c("surface-alt")).border(1.0, c("elevated"));
+            let mut list = col().key("cf-grants").w_full().gap(crate::theme::spacing::XXS).padding(crate::theme::spacing::SM).radius(radius("sm").unwrap()).fill(c("surface-alt")).border(1.0, c("elevated"));
             list = list.child(small("You grant:".into(), 11.5, 600.0, "text-bright"));
             for (i, g) in granted.iter().enumerate() {
                 list = list.child(small(format!("• {g}"), 12.0, 400.0, "text").key(format!("cf-grant-{i}")));
@@ -560,11 +560,11 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
                     .w_full()
                     .max_h(260.0)
                     .min_h(0.0)
-                    .padding(8.0)
+                    .padding(crate::theme::spacing::SM)
                     .radius(radius("sm").unwrap())
                     .fill(c("bg"))
                     .border(1.0, c("elevated"))
-                    .child(rune::rich(p.text.clone(), spans).font(crate::screen::body(12.0, 400.0).mono()).color(c("text")).wrap_anywhere().w_full().min_w(0.0))
+                    .child(rune::rich(p.text.clone(), spans).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0).mono()).color(c("text")).wrap_anywhere().w_full().min_w(0.0))
                     .on_at_bottom(|_: &mut S, at: bool| set_more("cf-preview", !at)),
             );
             if let Some(e) = more_below("cf-preview") {
@@ -574,7 +574,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
         for (i, sec) in x.secrets.iter().enumerate() {
             let Some(edit) = d.secrets.get(i) else { continue };
             let label = if sec.optional { format!("{} (optional)", sec.label) } else { sec.label.clone() };
-            let mut input = rune::text_input(edit, crate::screen::body(12.0, 400.0)).key(format!("cf-secret-{i}")).label(sec.label.clone()).color(c("text-bright")).w_full().on_edit(move |s: &mut S| s.secret_edit(i));
+            let mut input = rune::text_input(edit, crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).key(format!("cf-secret-{i}")).label(sec.label.clone()).color(c("text-bright")).w_full().on_edit(move |s: &mut S| s.secret_edit(i));
             if !sec.multiline {
                 input = input.single_line();
             }
@@ -583,7 +583,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
             }
             let input = input.secure();
             body = body.child(small(label, 11.5, 500.0, "text-muted")).child(
-                rune::el().w_full().min_h(28.0).px(8.0).py(4.0).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(radius("sm").unwrap()).child(input),
+                rune::el().w_full().min_h(crate::theme::layout::CONTROL_H).px(crate::theme::spacing::SM).py(crate::theme::spacing::XS).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(radius("sm").unwrap()).child(input),
             );
         }
     }
@@ -593,7 +593,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
     // The acknowledgement box on its own line, above the buttons: it wraps,
     // and it never pushes Confirm past the dialog's edge.
     let checkbox = |key: &str, label: String, on: bool| {
-        let mut b = rune::el().w(16.0).h(16.0).radius(4.0).border(1.0, c(if on { "blue" } else { "control-border" })).items_center().justify_center();
+        let mut b = rune::el().w(16.0).h(16.0).radius(crate::theme::corner::BOX).border(1.0, c(if on { "blue" } else { "control-border" })).items_center().justify_center();
         if on {
             b = b.fill(c("blue")).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("white")));
         }
@@ -603,12 +603,12 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
             .role("checkbox")
             .checked(on)
             .label(label.clone())
-            .gap(6.0)
+            .gap(crate::theme::spacing::INLINE)
             .items_center()
             .min_w(0.0)
             .cursor(Cursor::Pointer)
             .child(b)
-            .child(text(label).font(crate::screen::body(13.0, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0))
+            .child(text(label).font(crate::screen::body(crate::theme::font_size::BODY, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0))
     };
     let ack_row = d.confirm.and_then(|x| x.ack.clone()).map(|ack| checkbox("cf-ack", ack, d.acked).on_press(|s: &mut S| s.toggle_confirm_ack()));
     // Unticked by default, and Confirm works either way.
@@ -618,9 +618,9 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
     let confirm = if d.can_confirm() { button("cf-confirm", yes, true, true).on_press(|s: &mut S| s.confirm_click()) } else { button("cf-confirm", yes, true, false) };
     // Long labels: one button per line, full width, so both always fit.
     let foot = if yes.chars().count() + no.chars().count() > 36 {
-        col().w_full().gap(6.0).child(confirm.w_full()).child(cancel.w_full())
+        col().w_full().gap(crate::theme::spacing::INLINE).child(confirm.w_full()).child(cancel.w_full())
     } else {
-        row().w_full().gap(8.0).items_center().child(rune::el().grow(1.0)).child(cancel).child(confirm)
+        row().w_full().gap(crate::theme::spacing::SM).items_center().child(rune::el().grow(1.0)).child(cancel).child(confirm)
     };
     col()
         .key("cf-dialog")
@@ -630,12 +630,12 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
         .label(title.to_string())
         .pin(Some(d.left), Some(d.top), Some(d.right), None)
         .max_h(d.max_h.max(160.0))
-        .padding(16.0)
-        .gap(12.0)
+        .padding(crate::theme::spacing::LG)
+        .gap(crate::theme::spacing::MD)
         .radius(radius("lg").unwrap())
         .fill(c("surface"))
         .border(1.0, c(if danger { "red-border" } else { "border" }))
-        .shadow(8.0, 24.0, crate::theme::shadow())
+        .shadow(crate::theme::elevation::OVERLAY.0, crate::theme::elevation::OVERLAY.1, crate::theme::shadow())
         .child(watch::<S>(col().key("cf-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 110.0).max(80.0)).child(body), "cf-body"))
         .children(more_below("cf-body"))
         .children(ack_row)
@@ -750,8 +750,8 @@ pub fn copy_offer_view<S: 'static>(o: &CopyOffer, copy: impl Fn(&mut S, &mut Tx)
             .key(key)
             .role("button")
             .label(label)
-            .px(10.0)
-            .py(4.0)
+            .px(crate::theme::spacing::MD)
+            .py(crate::theme::spacing::XS)
             .min_h(crate::theme::layout::CONTROL_H)
             .items_center()
             .radius(radius("sm").unwrap())
@@ -759,7 +759,7 @@ pub fn copy_offer_view<S: 'static>(o: &CopyOffer, copy: impl Fn(&mut S, &mut Tx)
             .border(1.0, c(if primary { "primary" } else { "border" }))
             .hover(c(if primary { "primary-hover" } else { "border" }))
             .cursor(Cursor::Pointer)
-            .child(text(label.to_string()).font(crate::screen::body(13.0, 500.0)).color(c(if primary { "on-primary" } else { "text-bright" })))
+            .child(text(label.to_string()).font(crate::screen::body(crate::theme::font_size::BODY, 500.0)).color(c(if primary { "on-primary" } else { "text-bright" })))
     };
     col()
         .key("copy-offer")
@@ -767,25 +767,25 @@ pub fn copy_offer_view<S: 'static>(o: &CopyOffer, copy: impl Fn(&mut S, &mut Tx)
         .label("Clipboard copy from a sandbox")
         .pin(None, None, Some(16.0), Some(64.0))
         .w(460.0)
-        .padding(12.0)
-        .gap(8.0)
+        .padding(crate::theme::spacing::MD)
+        .gap(crate::theme::spacing::SM)
         .radius(radius("md").unwrap())
         .fill(c("surface"))
         .border(1.0, c("amber"))
-        .child(text(o.headline()).font(crate::screen::body(12.0, 500.0)).color(c("text-bright")).wrap_anywhere())
+        .child(text(o.headline()).font(crate::screen::body(crate::theme::font_size::CAPTION, 500.0)).color(c("text-bright")).wrap_anywhere())
         .child(
             col()
                 .w_full()
                 .min_w(0.0)
-                .padding(8.0)
+                .padding(crate::theme::spacing::SM)
                 .radius(radius("sm").unwrap())
                 .fill(c("bg"))
-                .child(text(osc_preview(&o.text)).font(crate::screen::body(12.0, 400.0)).color(c("text")).wrap_anywhere().w_full().min_w(0.0)),
+                .child(text(osc_preview(&o.text)).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text")).wrap_anywhere().w_full().min_w(0.0)),
         )
         .child(
             row()
                 .w_full()
-                .gap(8.0)
+                .gap(crate::theme::spacing::SM)
                 .child(rune::el().grow(1.0))
                 .child(button("copy-offer-dismiss", "Dismiss", false).on_press(dismiss))
                 .child(button("copy-offer-copy", "Copy", true).on_press_tx(copy)),

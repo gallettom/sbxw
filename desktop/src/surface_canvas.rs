@@ -1011,8 +1011,9 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
                 b = b
                     .fill(c("amber-tint"))
                     .border(if selected { 2.0 * inv } else { 1.0 * inv }, if selected { c("accent") } else { c("amber") })
-                    .radius(6.0)
-                    .padding(10.0)
+                    .radius(crate::theme::corner::CONTROL)
+                    .padding(crate::theme::spacing::MD)
+
                     .child(
                         rune::col().gap(4.0).w(i.w - 20.0)
                             .child(text(match n { Some(n) => format!("Note {n}"), None => "Note".into() }).font(small(12.0, 600.0)).color(c("text-muted")))

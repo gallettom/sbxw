@@ -348,7 +348,7 @@ fn button(e: &Entry, prev: Option<String>, next: Option<String>) -> El {
         .justify_center()
         .radius(theme::radius("sm").unwrap())
         .hover(theme::hex(tint))
-        .focus_ring(2.0, 1.0, c("focus"))
+        .focus_ring(crate::theme::focus::W, crate::theme::focus::NEAR, c("focus"))
         .cursor(Cursor::Pointer)
         .on_press(move |s: &mut App| {
             if disabled {
@@ -373,13 +373,13 @@ fn button(e: &Entry, prev: Option<String>, next: Option<String>) -> El {
     }
     if e.on {
         // Active: a filled tile of its tint and a 2 pt bar on the rail's edge.
-        b = b.fill(theme::hex(tint)).checked(true).child(el().key(format!("{}-on", e.key)).absolute(-(W - TARGET) / 2.0 + 1.0, 4.0).w(2.0).h(TARGET - 8.0).radius(1.0).fill(theme::hex(fg)));
+        b = b.fill(theme::hex(tint)).checked(true).child(el().key(format!("{}-on", e.key)).absolute(-(W - TARGET) / 2.0 + 1.0, 4.0).w(2.0).h(TARGET - 8.0).radius(theme::corner::PILL).fill(theme::hex(fg)));
     }
     b = b.child(rune::icon(crate::icons::get(&e.icon).unwrap_or_else(|| crate::icons::get("single").unwrap()), ICON).color(theme::hex(fg)));
     if let Some(t) = &e.dot {
         // The status dot: lower right, a dark ring so it reads on any tile;
         // `muted` is a hollow grey ring (off, not set up).
-        let d = el().key(format!("{}-dot", e.key)).pin(None, None, Some(-3.0), Some(-3.0)).w(10.0).h(10.0).radius(5.0);
+        let d = el().key(format!("{}-dot", e.key)).pin(None, None, Some(-3.0), Some(-3.0)).w(10.0).h(10.0).radius(theme::corner::PILL);
         b = b.child(if t == "muted" { d.fill(c("bg")).border(2.0, c("text-muted")) } else { d.fill(c(t)).border(2.0, c("bg")) });
     }
     if let Some(n) = e.count {
@@ -392,10 +392,11 @@ fn button(e: &Entry, prev: Option<String>, next: Option<String>) -> El {
                 .pin(None, Some(-6.0), Some(-8.0), None)
                 .h(16.0)
                 .min_w(16.0)
-                .px(3.0)
+                .px(theme::spacing::XS)
                 .items_center()
                 .justify_center()
-                .radius(8.0)
+                .radius(theme::corner::PILL)
+
                 .fill(theme::hex(bf))
                 .border(2.0, c("bg"))
                 .child(text(label).font(small(10.0, 700.0)).color(c("bg"))),
@@ -422,7 +423,7 @@ pub fn view(s: &App) -> El {
         .h_full()
         .min_h(0.0)
         .py(8.0)
-        .gap(6.0)
+        .gap(crate::theme::spacing::INLINE)
         .items_center()
         .clip_rounded(theme::radius("md").unwrap())
         .fill(c("bg"))

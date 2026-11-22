@@ -37,6 +37,7 @@ mod sidebar_tests;
 mod timing_tests;
 
 use crate::approval;
+use crate::theme::Lift;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
 use crate::fixture::{AppView, Connection, Fixture, LayoutView, PaneView};
 use crate::intent::{Intent, Mode, PageOp, PaneTarget, Risk, Split, ThreadStart};
@@ -2303,7 +2304,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // stop in reading order, and shows a 2 pt ring 2 pt outside it when the
     // keyboard put it there (never for a click).
     cx.web_focus();
-    cx.focus_ring(2.0, 2.0, c("focus"));
+    cx.focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus"));
     // The app's zoom (Cmd/Ctrl with + − 0 outside a terminal, or the palette).
     cx.zoom(s.zoom());
     // Tooltips in the app's own look (Rune draws them on macOS too, in
@@ -2315,13 +2316,13 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             .fill(c("elevated"))
             .ink(c("text-bright"))
             .ring(1.0, c("border"))
-            .radius(6.0)
+            .radius(theme::corner::CONTROL)
             .padding(8.0, 6.0)
-            .font(screen::body(12.0, 400.0))
+            .font(screen::body(crate::theme::font_size::CAPTION, 400.0))
             .max_width(Some(280.0))
-            .gap(6.0)
+            .gap(crate::theme::spacing::INLINE)
             .row_gap(4.0)
-            .keycaps(c("bg"), c("text"), screen::body(12.0, 500.0), false)
+            .keycaps(c("bg"), c("text"), screen::body(crate::theme::font_size::CAPTION, 500.0), false)
             .keycap_shape(18.0, 5.0, 4.0, 4.0, 8.0),
     );
     // Folds and fades follow the system's reduced-motion setting (screen.rs).
@@ -2376,7 +2377,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     };
     if let Some(name) = &s.solo {
         let sc = s.screens.iter().find(|x| &x.name == name).expect("solo screen");
-        return root.padding(layout::GUTTER).child(tile(col().w_full().h_full().min_h(0.0).padding(10.0)).child(screen::view::<App>(sc)));
+        return root.padding(layout::GUTTER).child(tile(col().w_full().h_full().min_h(0.0).padding(theme::spacing::MD)).child(screen::view::<App>(sc)));
     }
     // 0 in macOS full screen and off macOS (no window buttons over the bar);
     // SBXW_DESKTOP_NO_LIGHTS=1 draws that case in a headless shot.
@@ -2637,7 +2638,7 @@ fn notice_view(s: &App) -> Option<El> {
             .radius(theme::radius("sm").unwrap())
             .fill(c(ground))
             .border_sides([0.0, 0.0, 0.0, 3.0], c(kind))
-            .shadow(2.0, 8.0, crate::theme::shadow())
+            .lift(crate::theme::elevation::FLOAT)
             .cursor(Cursor::Pointer)
             .on_press(|s: &mut App| {
                 s.notice = None;
@@ -3247,7 +3248,7 @@ fn drag_overlay(s: &App) -> Vec<El> {
         .pin(Some((d.at[0] + 14.0).min(s.window.0 - 300.0).max(4.0)), Some(d.at[1] + 14.0), None, None)
         .px(8.0)
         .h(24.0)
-        .gap(6.0)
+        .gap(crate::theme::spacing::INLINE)
         .items_center()
         .radius(theme::radius("xs").unwrap())
         .fill(c("elevated"))
@@ -3294,7 +3295,7 @@ fn mode_switch(s: &App, i: usize, agent: &str, ground: u32) -> El {
         if on {
             e = e.fill(c("elevated"));
         } else {
-            e = e.hover(c("hover-subtle")).cursor(Cursor::Pointer).focusable(true).focus_ring(2.0, 1.0, c("focus")).on_press(move |s: &mut App| {
+            e = e.hover(c("hover-subtle")).cursor(Cursor::Pointer).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::NEAR, c("focus")).on_press(move |s: &mut App| {
                 s.switch_mode(i);
                 s.push_data();
             });
@@ -3353,7 +3354,7 @@ fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
         let hover = if quiet { theme::hex(theme::over(meaning_fg, 0.12, quiet_tint)) } else { c("active-bg") };
         // A chip with words is named by them; a bare icon or number by its tooltip.
         let named = if it.chip_text() == it.text() && !it.text().is_empty() { it.text() } else { it.help.clone() };
-        b = b.role("button").label(named).expanded(active).hover(hover).focusable(true).focus_ring(2.0, 1.0, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+        b = b.role("button").label(named).expanded(active).hover(hover).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::NEAR, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
             s.press_extra("pane", &name, &args);
             s.push_data();
         });
@@ -3439,7 +3440,7 @@ fn redraw_row(n: usize) -> screen::MenuRow<'static> {
 
 /// The grip a pane is dragged by: two columns of three dots.
 fn grip(n: usize) -> El {
-    let dot = || el().w(2.0).h(2.0).radius(1.0).fill(c("text-dim"));
+    let dot = || el().w(2.0).h(2.0).radius(theme::corner::PILL).fill(c("text-dim"));
     let column = || col().gap(2.0).child(dot()).child(dot()).child(dot());
     row()
         .key(format!("pane-{n}-grip"))
@@ -3623,9 +3624,10 @@ fn core_button(key: &str, label: &str, icon: &str, keys: Vec<String>, primary: b
         .label(label.to_string())
         .help(label.to_string())
         .help_keys(keys)
-        .gap(6.0)
+        .gap(crate::theme::spacing::INLINE)
         .h(layout::CONTROL_H)
-        .px(10.0)
+        .px(theme::spacing::MD)
+
         .items_center()
         .radius(theme::radius("xs").unwrap())
         .fill(c(fill))
@@ -3672,7 +3674,7 @@ fn empty_pane(s: &App, i: usize) -> El {
         .justify_center()
         .child(rune::icon(crate::icons::get("terminal").unwrap(), theme::icon::LARGE).color(c("text-muted")))
         .child(text(title).font(small(16.0, 600.0)).color(c("text-bright")))
-        .child(text(line).font(theme::prose(13.0, 400.0)).color(c("text-muted")).wrap().max_w(360.0))
+        .child(text(line).font(theme::prose(crate::theme::font_size::BODY, 400.0)).color(c("text-muted")).wrap().max_w(360.0))
         .child(actions)
 }
 

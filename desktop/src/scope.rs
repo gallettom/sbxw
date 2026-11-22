@@ -476,9 +476,9 @@ fn status_mark(status: &str, ground: u32) -> El {
     let tone = status_tone(status);
     let fg = theme::mark_on(crate::screen::tone(tone).0, ground);
     if tone == "neutral" {
-        el().w(8.0).h(8.0).radius(4.0).border(1.5, hex(theme::muted_on(ground)))
+        el().w(8.0).h(8.0).radius(theme::corner::PILL).border(1.5, hex(theme::muted_on(ground)))
     } else {
-        el().w(8.0).h(8.0).radius(4.0).fill(hex(fg))
+        el().w(8.0).h(8.0).radius(theme::corner::PILL).fill(hex(fg))
     }
 }
 
@@ -514,14 +514,14 @@ pub fn capsule<S: 'static>(key: &str, value: &str, ch: Option<&Choice>, empty: (
     let (all_label, is_all) = empty;
     let mut face = row().key(format!("{key}-face-{value}")).gap(8.0).items_center().shrink();
     if all && is_all {
-        face = face.child(icon("grid", theme::icon::MEDIUM, lk.muted)).child(text(all_label.to_string()).font(crate::screen::body(13.0, 500.0)).color(hex(lk.text)));
+        face = face.child(icon("grid", theme::icon::MEDIUM, lk.muted)).child(text(all_label.to_string()).font(crate::screen::body(crate::theme::font_size::BODY, 500.0)).color(hex(lk.text)));
     } else if all {
-        face = face.child(text(all_label.to_string()).font(crate::screen::body(13.0, 400.0)).color(hex(lk.muted)));
+        face = face.child(text(all_label.to_string()).font(crate::screen::body(crate::theme::font_size::BODY, 400.0)).color(hex(lk.muted)));
     } else {
-        face = face.child(status_mark(ch.map_or("", |c| c.status.as_str()), lk.fill)).child(text(value.to_string()).font(crate::screen::body(13.0, 500.0)).color(hex(lk.text)).truncate().shrink().max_w(NAME_MAX_W));
+        face = face.child(status_mark(ch.map_or("", |c| c.status.as_str()), lk.fill)).child(text(value.to_string()).font(crate::screen::body(crate::theme::font_size::BODY, 500.0)).color(hex(lk.text)).truncate().shrink().max_w(NAME_MAX_W));
     }
     if !crate::screen::reduced_motion() {
-        face = face.transition(rune::Transition::scale(0.9).combined(rune::Transition::opacity()).springs(rune::SpringPair::new(rune::Spring::new(0.22, 0.0), rune::Spring::new(0.08, 0.0))));
+        face = face.transition(rune::Transition::scale(0.9).combined(rune::Transition::opacity()).springs(rune::SpringPair::new(rune::Spring::new(theme::motion::SHORT, 0.0), rune::Spring::new(theme::motion::MICRO_OUT, 0.0))));
     }
     let name = if all { all_label.to_string() } else { value.to_string() };
     let mut t = row()
@@ -541,7 +541,7 @@ pub fn capsule<S: 'static>(key: &str, value: &str, ch: Option<&Choice>, empty: (
         .radius(theme::radius("pill").unwrap())
         .fill(hex(lk.fill))
         .border(if open { 2.0 } else { 1.0 }, hex(lk.border))
-        .focus_ring(2.0, 2.0, c("focus"))
+        .focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus"))
         .child(face)
         .child(icon("chevron-down", theme::icon::SMALL, lk.muted));
     if disabled {
@@ -558,12 +558,12 @@ pub fn narrow_chip<S: 'static>(key: &str, sp: &Spec, clear: Option<Box<dyn Fn(&m
     let mut r = row().key(format!("{key}-narrow")).gap(4.0).items_center().shrink().help(name.clone())
         .child(icon("chevron-right", theme::icon::SMALL, muted))
         .child(icon(&sp.narrow_icon, theme::icon::SMALL, muted))
-        .child(text(name.clone()).font(crate::screen::body(13.0, 500.0)).color(c("text-bright")).truncate().shrink().max_w(NARROW_MAX_W));
+        .child(text(name.clone()).font(crate::screen::body(crate::theme::font_size::BODY, 500.0)).color(c("text-bright")).truncate().shrink().max_w(NARROW_MAX_W));
     if let Some(f) = clear {
         r = r.child(
             el().key(format!("{key}-narrow-clear")).role("button").label(format!("Clear {name}")).help(format!("Back to the whole sandbox, not only {name}"))
                 .w(theme::layout::DENSE_H).h(theme::layout::DENSE_H).items_center().justify_center().radius(theme::radius("xs").unwrap())
-                .hover(c("elevated")).focus_ring(2.0, -2.0, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut S| f(s))
+                .hover(c("elevated")).focus_ring(crate::theme::focus::W, crate::theme::focus::IN, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut S| f(s))
                 .child(icon("close", theme::icon::SMALL, muted)),
         );
     }
@@ -627,7 +627,7 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
     if let Some(edit) = &cx.filter {
         let (e2, first, pick, close) = (cx.edit.clone(), keys.first().cloned(), cx.pick.clone(), cx.close.clone());
         let first_id = shown.iter().find(|c| !c.all() || shown.len() == 1).map(|c| c.id.clone());
-        let input = text_input(edit, crate::screen::body(13.0, 400.0))
+        let input = text_input(edit, crate::screen::body(crate::theme::font_size::BODY, 400.0))
             .single_line()
             .key(filter_key.clone())
             .label("Filter sandboxes")
@@ -656,7 +656,7 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
                 }
                 _ => false,
             });
-        l = l.child(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(theme::radius("sm").unwrap()).focus_within_ring(2.0, 1.0, c("focus")).child(input));
+        l = l.child(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(theme::radius("sm").unwrap()).focus_within_ring(crate::theme::focus::W, crate::theme::focus::NEAR, c("focus")).child(input));
     }
     // The rows scroll inside the panel (it never grows past LIST_MAX_H or the
     // window): `shrink` and `min_h(0)` let the viewport be shorter than its
@@ -683,7 +683,7 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
                 rows = rows.child(heading(&cx.key, g, ch.color));
             } else if last_group.is_some() {
                 runs += 1;
-                rows = rows.child(el().key(format!("{}-ungrouped-{runs}", cx.key)).w_full().py(3.0).child(el().w_full().h(1.0).fill(c("elevated"))));
+                rows = rows.child(el().key(format!("{}-ungrouped-{runs}", cx.key)).w_full().py(theme::spacing::XS).child(el().w_full().h(1.0).fill(c("elevated"))));
             }
             last_group = Some(g.clone());
         }
@@ -699,10 +699,10 @@ pub fn list<S: 'static>(cx: ListCtx<S>, choices: &[Choice]) -> El {
     }
     if shown.iter().all(|c| c.all()) && q.trim().is_empty() && cx.spec.only_counted {
         let line = if cx.spec.counting { format!("Counting the {}s\u{2026}", cx.spec.noun) } else { format!("No sandbox has a {}", cx.spec.noun) };
-        rows = rows.child(el().key(format!("{}-none", cx.key)).w_full().px(8.0).py(6.0).child(text(line).font(crate::screen::body(12.0, 400.0)).color(c("text-muted")).truncate().min_w(0.0)));
+        rows = rows.child(el().key(format!("{}-none", cx.key)).w_full().px(8.0).py(6.0).child(text(line).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).truncate().min_w(0.0)));
     }
     if shown.iter().all(|c| c.all()) && !q.trim().is_empty() {
-        rows = rows.child(el().w_full().px(8.0).py(6.0).child(text(format!("No sandbox matches \u{201c}{}\u{201d}", q.trim())).font(crate::screen::body(12.0, 400.0)).color(c("text-muted")).truncate().min_w(0.0)));
+        rows = rows.child(el().w_full().px(8.0).py(6.0).child(text(format!("No sandbox matches \u{201c}{}\u{201d}", q.trim())).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).truncate().min_w(0.0)));
     }
     l.child(rows)
 }
@@ -718,14 +718,14 @@ fn heading(key: &str, group: &Option<String>, color: Option<u32>) -> El {
         }
         None => (theme::color_value("surface").unwrap(), theme::color_value("text-muted").unwrap()),
     };
-    let sq = el().w(8.0).h(8.0).radius(2.0);
+    let sq = el().w(8.0).h(8.0).radius(theme::corner::MARK);
     let sq = match color {
         Some(g) => sq.fill(hex(g)),
         None => sq.border(1.0, c("text-dim")),
     };
-    row().key(format!("{key}-group-{name}")).w_full().h(HEAD_H).px(8.0).gap(6.0).items_center().radius(theme::radius("xs").unwrap()).fill(hex(tint)).help(name.clone())
+    row().key(format!("{key}-group-{name}")).w_full().h(HEAD_H).px(8.0).gap(crate::theme::spacing::INLINE).items_center().radius(theme::radius("xs").unwrap()).fill(hex(tint)).help(name.clone())
         .child(sq)
-        .child(text(name).font(crate::screen::body(12.0, 600.0)).color(hex(label)).truncate().min_w(0.0))
+        .child(text(name).font(crate::screen::body(crate::theme::font_size::CAPTION, 600.0)).color(hex(label)).truncate().min_w(0.0))
 }
 
 /// A row's count: the screen's count (`counts`: "4 worktrees") or, without,
@@ -739,10 +739,10 @@ fn chip(sp: &Spec, ch: &Choice, key: &str) -> Option<El> {
     };
     if n == 0 {
         return (sp.only_counted && ch.count.is_some()).then(|| {
-            text(format!("no {}", sp.noun)).key(k).font(crate::screen::body(12.0, 400.0)).color(c("text-dim")).help(format!("No {} any more: shown because it is the current one", sp.noun))
+            text(format!("no {}", sp.noun)).key(k).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-dim")).help(format!("No {} any more: shown because it is the current one", sp.noun))
         });
     }
-    Some(el().key(k).px(6.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).help(tip).child(text(n.to_string()).font(crate::screen::body(12.0, 500.0)).color(c("text"))))
+    Some(el().key(k).px(crate::theme::spacing::CHIP_X).py(crate::theme::spacing::CHIP_Y).radius(theme::radius("xs").unwrap()).fill(c("elevated")).help(tip).child(text(n.to_string()).font(crate::screen::body(crate::theme::font_size::CAPTION, 500.0)).color(c("text"))))
 }
 
 fn choice_row<S: 'static>(cx: &ListCtx<S>, ch: &Choice, key: &str, prev: Option<String>, next: Option<String>, focus_me: bool) -> El {
@@ -753,10 +753,11 @@ fn choice_row<S: 'static>(cx: &ListCtx<S>, ch: &Choice, key: &str, prev: Option<
     if ch.all() {
         r = r.label(cx.all_label.clone()).help("Every sandbox: no filter")
             .child(icon("grid", theme::icon::MEDIUM, muted))
-            .child(text(cx.all_label.clone()).font(crate::screen::body(13.0, if current { 600.0 } else { 500.0 })).color(c("text-bright")).grow(1.0).min_w(0.0).truncate())
-            .child(text("no filter").font(crate::screen::body(12.0, 400.0)).color(c("text-muted")));
+            .child(text(cx.all_label.clone()).font(crate::screen::body(crate::theme::font_size::BODY, if current { 600.0 } else { 500.0 })).color(c("text-bright")).grow(1.0).min_w(0.0).truncate())
+            .child(text("no filter").font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")));
     } else {
-        let bar = el().w(3.0).h(18.0).radius(2.0);
+        let bar = el().w(3.0).h(18.0).radius(theme::corner::MARK);
+
         let bar = match ch.color {
             Some(g) => bar.fill(hex(g)),
             None => bar.fill(c("elevated")),
@@ -774,14 +775,14 @@ fn choice_row<S: 'static>(cx: &ListCtx<S>, ch: &Choice, key: &str, prev: Option<
         r = r.label(format!("{}, {}", ch.id, if ch.status.is_empty() { "unknown" } else { &ch.status })).help(tip)
             .child(bar)
             .child(status_mark(&ch.status, surface))
-            .child(text(ch.id.clone()).font(crate::screen::body(13.0, if current { 600.0 } else { 500.0 })).color(c("text-bright")).grow(1.0).min_w(0.0).truncate())
+            .child(text(ch.id.clone()).font(crate::screen::body(crate::theme::font_size::BODY, if current { 600.0 } else { 500.0 })).color(c("text-bright")).grow(1.0).min_w(0.0).truncate())
             // In the order of the count, the group is named here (no headings).
             .children(cx.spec.by_count.then(|| {
-                text(ch.group.clone().unwrap_or_default()).font(crate::screen::body(12.0, 400.0)).color(c("text-dim")).truncate().shrink().max_w(GROUP_W)
+                text(ch.group.clone().unwrap_or_default()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-dim")).truncate().shrink().max_w(GROUP_W)
             }))
             .children(chip(&cx.spec, ch, &key))
-            .child(el().w(64.0).child(text(ch.status.clone()).font(crate::screen::body(12.0, 400.0)).color(c("text-muted")).truncate().min_w(0.0)))
-            .child(el().w(56.0).child(text(ch.agent.clone()).font(crate::screen::body(12.0, 400.0)).color(c("text-dim")).truncate().min_w(0.0)));
+            .child(el().w(64.0).child(text(ch.status.clone()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")).truncate().min_w(0.0)))
+            .child(el().w(56.0).child(text(ch.agent.clone()).font(crate::screen::body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-dim")).truncate().min_w(0.0)));
     }
     r = r.child(el().w(12.0).items_center().justify_center().children(current.then(|| icon("check", theme::icon::SMALL, theme::color_value("accent").unwrap()))));
     if current {
@@ -792,7 +793,7 @@ fn choice_row<S: 'static>(cx: &ListCtx<S>, ch: &Choice, key: &str, prev: Option<
     }
     let (pick, id, me) = (cx.pick.clone(), ch.id.clone(), key.to_string());
     let (pick2, id2) = (cx.pick.clone(), ch.id.clone());
-    r.hover(c("elevated")).focus_highlight(c("elevated")).focus_ring(2.0, -2.0, c("focus")).cursor(Cursor::Pointer)
+    r.hover(c("elevated")).focus_highlight(c("elevated")).focus_ring(crate::theme::focus::W, crate::theme::focus::IN, c("focus")).cursor(Cursor::Pointer)
         .on_press(move |s: &mut S| pick(s, &id))
         .on_key(move |s: &mut S, ev: &rune::KeyEvent, tx: &mut rune::Tx| {
             if tx.focused() != Some(me.as_str()) || ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo {

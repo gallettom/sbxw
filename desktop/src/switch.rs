@@ -12,6 +12,7 @@
 //! on the press: the view switches as the thumb starts to travel.
 
 use crate::luau::{Item, Kind, Node};
+use crate::theme::Lift;
 use crate::theme::{self, c, hex};
 use rune::{el, row, text, Cursor, El};
 use std::rc::Rc;
@@ -19,7 +20,8 @@ use std::rc::Rc;
 /// The track's inner padding, the thumb's travel time. The track is inset
 /// (`bg` with a hairline), the thumb raised (`elevated`, a soft shadow).
 pub const PAD: f32 = 2.0;
-pub const TRAVEL: rune::Spring = rune::Spring::new(0.16, 0.0);
+pub const TRAVEL: rune::Spring = rune::Spring::new(crate::theme::motion::SHORT, 0.0);
+
 /// A label slot: px 10, icon 14, gap 6, the word at 13/500; icons alone 28.
 pub const SLOT_PX: f32 = 10.0;
 pub const ICON: f32 = theme::icon::MEDIUM;
@@ -64,7 +66,7 @@ pub fn view<S: 'static>(n: &Node, key: String, flip: Rc<dyn Fn(&mut S, &str)>) -
         .h(h - PAD * 2.0)
         .radius(theme::radius("pill").unwrap())
         .fill(c("elevated"))
-        .shadow(1.0, 3.0, crate::theme::shadow())
+        .lift(crate::theme::elevation::RAISED)
         .offset(on as f32 * w, 0.0)
         .offset_motion(TRAVEL);
     let mut track = row()
@@ -78,7 +80,7 @@ pub fn view<S: 'static>(n: &Node, key: String, flip: Rc<dyn Fn(&mut S, &str)>) -
         .radius(theme::radius("pill").unwrap())
         .fill(c("bg"))
         .border(1.0, c("border"))
-        .focus_ring(2.0, 2.0, c("focus"))
+        .focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus"))
         .child(thumb);
     if let Some(help) = &n.help {
         track = track.help(help.clone());

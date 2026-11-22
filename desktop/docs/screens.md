@@ -866,8 +866,8 @@ switch every screen is loaded again and renders with the new values. So:
 | `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary` (the one filled button's fill), `on-primary` (its label), `primary-hover`, `red-text` (red words on a group's tint), `status-bar`, `status-line`, `vendor-anthropic`, `vendor-openai`, `vendor-google`, `cyan`, `pill-danger`, `accent`, `accent-tint`, `link`, `tab-current`, `scrim`, `shadow`, `media` (behind a picture), `file-doc`, `file-code`, `file-image`, `file-data`, `file-archive` (the explorer's file kinds) |
 | `theme.mode` | `dark` or `graphite` |
 | `theme.icon` | `sm` 12 (inline with text), `md` 14 (every control), `lg` 20 (the rail), `mark` 24 (the top bar's mark) |
-| `theme.radius` | `xs` 6, `sm` 6, `md` 10, `lg` 12, `pill` 999 |
-| `theme.text` | `caption` 12, `body` 13, `title` 14, `heading` 16; older names `xxs`, `xs`, `sm` 12, `md` 13, `lg` 14, `xl` 16 |
+| `theme.radius` | `mark` 2 (8 pt squares, thin bars), `box` 4 (a checkbox, a keycap), `xs` 6, `sm` 6, `md` 10, `lg` 12, `pill` 999 (dots, chips) |
+| `theme.text` | `caption` 12, `body` 13, `title` 15, `heading` 17; older names `xxs`, `xs`, `sm` 12, `md` 13, `lg` 15, `xl` 17 |
 | `theme.space` | `xxs` 2, `xs` 4, `sm` 8, `md` 12, `lg` 16, `xl` 24 |
 | `theme.line_height` | 1.4 (a multiple of the size) |
 | `theme.layout` | `top_bar_h` 44, `gutter` 8, `sidebar_w` 264 (`sidebar_min` 200, `sidebar_max` 420), `pane_bar_h` 32, `control_h` 28, `dense_h` 24, `traffic_lights_w` |
@@ -940,16 +940,25 @@ Both rules and the contrast on every ground are tested (`screen::tests`).
   lines of one thing). A test fails a built-in screen that writes another
   number for `gap`, `pad`, `px` or `py`.
 - **Type**: 12 pt for second lines, labels and badges (`caption`), 13 for
-  body (`body`), 14 for row and panel titles (`title`), 16 for dialog titles
-  (`heading`). Nothing under 12. Weights 400, 500, 600. **No capitals** for
-  labels: sentence case; weight and colour make the hierarchy.
+  body (`body`), 15 for row and panel titles (`title`), 17 for dialog titles
+  (`heading`): steps of 1.125 to 1.2 above the body. Nothing under 12.
+  Weights 400, 500, 600. **No capitals** for labels: sentence case; weight
+  and colour make the hierarchy.
 - **Colour**: every text and surface pair meets WCAG AA (4.5:1; 3:1 for
   icons, marks and focus rings): `theme::tests::contrast_of_every_pair_used`
-  lists them. `text-dim` is for placeholders and hints only, never for
-  something a person needs. A state is never colour alone: say it in a word
-  too.
-- **Radii**: 6 for controls and rows (`xs`, `sm`), 10 for cards, tiles and
-  menus (`md`), 12 for dialogs (`lg`).
+  lists them. `text-dim` is for hints and second lines (an age, a label
+  beside a name): it reads at 4.5:1 on every ground, a selected row
+  included. A state is never colour alone: say it in a word too.
+- **Radii**: always a name, never a number (a test fails a built-in screen
+  that writes one): 6 for controls and rows (`xs`, `sm`), 10 for cards,
+  tiles and menus (`md`), 12 for dialogs (`lg`), `pill` for a dot,
+  `mark` for an 8 pt square or a thin bar.
+- **Motion and elevation** live in the core (`theme::motion`,
+  `theme::elevation`): two durations, a fade (0.1 s in, 0.08 s out) and a
+  move (0.18 s), all landing at once under the system's reduced motion;
+  three shadows, for a switch's thumb, the top bar's notice and anything
+  that floats over the window (menus, popovers, dialogs).
+
 - **Targets**: anything pressable is at least 28 pt (24 in a dense bar),
   icon-only buttons have a `help` (their name for screen readers and their
   tooltip) and, when there is one, their shortcut in `keys`.

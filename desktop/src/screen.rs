@@ -705,7 +705,7 @@ static SPIN_ARC: rune::Icon = rune::Icon { name: "busy-arc", view: 16.0, body: r
 pub fn busy_spinner(size: f32, ink: rune::Color) -> El {
     el().size(size, size).a11y_hidden()
         .child(rune::icon(&SPIN_RING, size).absolute(0.0, 0.0).color(ink).opacity(0.25))
-        .child(rune::icon(&SPIN_ARC, size).absolute(0.0, 0.0).color(ink).looping(rune::LoopSpec::rotation(0.9)))
+        .child(rune::icon(&SPIN_ARC, size).absolute(0.0, 0.0).color(ink).looping(rune::LoopSpec::rotation(theme::motion::SPIN as f64)))
 }
 
 pub fn menu_surface(key: String, anchor: String, align: rune::Align, w: f32) -> El {
@@ -719,8 +719,8 @@ pub fn menu_surface(key: String, anchor: String, align: rune::Align, w: f32) -> 
         .gap(0.0)
         .fill(c("surface"))
         .border(1.0, c("border"))
-        .radius(theme::radius("md").unwrap())
-        .shadow(8.0, 24.0, crate::theme::shadow());
+        .radius(theme::radius("md").unwrap());
+    let e = theme::lift(e, theme::elevation::OVERLAY);
     if reduced_motion() {
         e
     } else {
@@ -730,7 +730,7 @@ pub fn menu_surface(key: String, anchor: String, align: rune::Align, w: f32) -> 
 
 /// Menus and the palette: in over 0.1 s, out over 0.08 s.
 pub fn quick_fade() -> rune::Transition {
-    rune::Transition::opacity().springs(rune::SpringPair::new(rune::Spring::new(0.1, 0.0), rune::Spring::new(0.08, 0.0)))
+    rune::Transition::opacity().springs(rune::SpringPair::new(rune::Spring::new(theme::motion::MICRO_IN, 0.0), rune::Spring::new(theme::motion::MICRO_OUT, 0.0)))
 }
 
 /// A line between two groups of a menu's rows.
@@ -757,14 +757,15 @@ pub fn menu_row(r: &MenuRow) -> El {
         None => slot,
     });
     row_ = row_.child(el().w(MENU_ICON_GAP));
-    row_ = row_.child(text(r.label.to_string()).font(body(13.0, if r.chosen { 600.0 } else { 400.0 })).color(label_c).truncate().min_w(0.0).grow(1.0));
+    row_ = row_.child(text(r.label.to_string()).font(body(crate::theme::font_size::BODY, if r.chosen { 600.0 } else { 400.0 })).color(label_c).truncate().min_w(0.0).grow(1.0));
     if let Some(n) = r.count {
-        row_ = row_.child(el().w(8.0)).child(el().px(6.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text(n.to_string()).font(body(12.0, 500.0)).color(c("text"))));
+        row_ = row_.child(el().w(8.0)).child(el().px(theme::spacing::CHIP_X).py(theme::spacing::CHIP_Y).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text(n.to_string()).font(body(crate::theme::font_size::CAPTION, 500.0)).color(c("text"))));
     }
     if !r.keys.is_empty() {
         let mut caps = row().gap(4.0).items_center().pl(12.0);
         for k in r.keys {
-            caps = caps.child(el().h(18.0).min_w(18.0).px(5.0).items_center().justify_center().radius(4.0).fill(c("bg")).border(1.0, c("border")).child(text(k.clone()).font(body(12.0, 500.0)).color(c("text-muted"))));
+            caps = caps.child(el().h(18.0).min_w(18.0).px(theme::spacing::XS).items_center().justify_center().radius(theme::corner::BOX).fill(c("bg"))
+.border(1.0, c("border")).child(text(k.clone()).font(body(crate::theme::font_size::CAPTION, 500.0)).color(c("text-muted"))));
         }
         row_ = row_.child(caps);
     }
@@ -779,7 +780,7 @@ pub fn menu_row(r: &MenuRow) -> El {
     if r.disabled {
         return row_.opacity(theme::DISABLED_OPACITY).disabled(true);
     }
-    row_.hover(c(if danger { "red-tint" } else { "elevated" })).focus_highlight(c(if danger { "red-tint" } else { "elevated" })).focus_ring(2.0, -2.0, c("focus")).cursor(Cursor::Pointer)
+    row_.hover(c(if danger { "red-tint" } else { "elevated" })).focus_highlight(c(if danger { "red-tint" } else { "elevated" })).focus_ring(theme::focus::W, theme::focus::IN, c("focus")).cursor(Cursor::Pointer)
 }
 
 /// What sits under an open menu: nothing to see, the whole window, so a
@@ -808,7 +809,7 @@ pub fn action_tone(name: &str) -> (u32, u32) {
 /// sessions, a group, a menu's fade): 0.18 s, no bounce, settling like an
 /// ease-out. Only a press or a key starts it (Rune plays nothing for data
 /// that arrives); never a loop.
-pub const FOLD: rune::Spring = rune::Spring::new(0.18, 0.0);
+pub const FOLD: rune::Spring = rune::Spring::new(theme::motion::SHORT, 0.0);
 
 thread_local! {
     static REDUCED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -874,7 +875,7 @@ fn build_view<S: Host>(s: &ScreenState, slot: bool) -> (El, Vec<El>, Option<El>)
     if let Some(e) = &s.error {
         panel = panel.child(
             el().key(format!("screen-error-{}", s.name)).w_full().padding(12.0).radius(theme::radius("sm").unwrap()).fill(c("red-tint")).border(1.0, c("red")).child(
-                text(format!("Screen error, showing the last good view:\n{e}")).font(body(12.0, 400.0)).color(c("text-bright")).wrap().w_full(),
+                text(format!("Screen error, showing the last good view:\n{e}")).font(body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-bright")).wrap().w_full(),
             ),
         );
     }
@@ -906,9 +907,9 @@ fn stale_marker<S: Host>(name: &str) -> El {
     let line = if name == "topbar" { "Old copy".to_string() } else { format!("Your {name} screen is a customised copy made for an older version. Restore…") };
     row()
         .key(format!("screen-stale-{name}"))
-        .gap(5.0)
-        .px(6.0)
-        .py(2.0)
+        .gap(theme::spacing::INLINE)
+        .px(theme::spacing::CHIP_X)
+        .py(theme::spacing::XXS)
         .items_center()
         .radius(theme::radius("xs").unwrap())
         .fill(c("amber-tint"))
@@ -918,7 +919,7 @@ fn stale_marker<S: Host>(name: &str) -> El {
         .help(format!("Your {name} screen is a customised copy made for an older version; new features may be missing, and colours it writes as #rrggbb do not follow the theme. Ask Jarvis to update it, or restore the built-in."))
         .child(rune::icon(crate::icons::get("warning").unwrap(), 12.0).color(c("amber")))
         .w_full()
-        .child(text(line).font(body(12.0, 500.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0))
+        .child(text(line).font(body(crate::theme::font_size::CAPTION, 500.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0))
         .on_press(move |s: &mut S| press_intent(s, &screen, "screen_restore", &serde_json::json!({ "screen": &*screen })))
 }
 
@@ -930,7 +931,7 @@ fn fallback_extras<S: Host>(name: &str, missing: &[(String, J)]) -> El {
     let mut group = None;
     for (g, e) in missing {
         if group.as_deref() != Some(g.as_str()) && !g.is_empty() {
-            strip = strip.child(text(format!("{g}:")).font(body(12.0, 500.0)).color(c("text-muted")));
+            strip = strip.child(text(format!("{g}:")).font(body(crate::theme::font_size::CAPTION, 500.0)).color(c("text-muted")));
         }
         group = Some(g.clone());
         let (fg, tint) = tone(e["tone"].as_str().unwrap_or(""));
@@ -940,9 +941,9 @@ fn fallback_extras<S: Host>(name: &str, missing: &[(String, J)]) -> El {
         }
         let mut b = row()
             .key(format!("screen-extras-{name}-{g}-{}", e["id"].as_str().unwrap_or("")))
-            .gap(4.0)
-            .px(5.0)
-            .py(1.0)
+            .gap(theme::spacing::XS)
+            .px(theme::spacing::CHIP_X)
+            .py(theme::spacing::CHIP_Y)
             .items_center()
             .radius(theme::radius("xs").unwrap())
             .fill(hex(tint))
@@ -954,7 +955,7 @@ fn fallback_extras<S: Host>(name: &str, missing: &[(String, J)]) -> El {
             b = b.child(rune::icon(i, 12.0).color(hex(fg)));
         }
         if !label.is_empty() {
-            b = b.child(text(label).font(body(12.0, 500.0)).color(hex(fg)));
+            b = b.child(text(label).font(body(crate::theme::font_size::CAPTION, 500.0)).color(hex(fg)));
         }
         if let (Some(n), args) = (e["intent"]["name"].as_str().map(str::to_string), e["intent"]["args"].clone()) {
             let screen = screen.clone();
@@ -1505,7 +1506,7 @@ impl Build<'_> {
                 if n.disabled {
                     t = t.read_only(true);
                 }
-                field_ground(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center(), n).radius(theme::radius("sm").unwrap()).focus_within_ring(2.0, 1.0, c("focus")).child(t)
+                field_ground(el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center(), n).radius(theme::radius("sm").unwrap()).focus_within_ring(theme::focus::W, theme::focus::NEAR, c("focus")).child(t)
             }
             Kind::Icon => {
                 let i = crate::icons::get(&n.text).expect("checked icon");
@@ -1515,18 +1516,18 @@ impl Build<'_> {
                 // A count alone in a round bubble: the tone's colour filled,
                 // the number in the page's dark (a mark and its label at once).
                 let (fg, _) = tone(n.variant.as_deref().unwrap_or("blue"));
-                // 16 pt high, 11 pt figures (tabular in the monospace face), a
+                // 16 pt high, 12 pt figures (the caption, tabular), a
                 // pill for two digits rather than a stretched circle.
-                el().h(16.0).min_w(16.0).px(5.0).items_center().justify_center().radius(8.0).fill(hex(fg)).child(text(n.text.clone()).font(TextStyle::new(11.0, 600.0).lh(16.0)).color(c("bg")))
+                el().h(16.0).min_w(16.0).px(theme::spacing::XS).items_center().justify_center().radius(theme::corner::PILL).fill(hex(fg)).child(text(n.text.clone()).font(TextStyle::new(crate::theme::font_size::CAPTION, 600.0).lh(16.0)).color(c("bg")))
             }
             Kind::Badge => {
                 let (fg, tint) = tone(n.variant.as_deref().unwrap_or("neutral"));
                 // A quiet label: the tone's tint, its colour as text, no frame.
-                el().px(6.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(hex(tint)).child(text(n.text.clone()).font(body(12.0, 500.0)).color(hex(fg)))
+                el().px(theme::spacing::CHIP_X).py(theme::spacing::CHIP_Y).radius(theme::corner::CONTROL).fill(hex(tint)).child(text(n.text.clone()).font(body(crate::theme::font_size::CAPTION, 500.0)).color(hex(fg)))
             }
             Kind::Dot => {
                 let (fg, _) = tone(n.variant.as_deref().unwrap_or("neutral"));
-                el().w(8.0).h(8.0).radius(4.0).fill(hex(fg))
+                el().w(8.0).h(8.0).radius(theme::corner::PILL).fill(hex(fg))
             }
             Kind::Split => self.split::<S>(n),
             Kind::Spacer => {
@@ -1554,11 +1555,11 @@ impl Build<'_> {
             Kind::Menu | Kind::Select => self.menu::<S>(n, key.clone()),
             Kind::Checkbox => {
                 let on = n.value.as_bool().unwrap_or(false);
-                let mut b = el().w(16.0).h(16.0).radius(4.0).border(1.0, c(if on { "blue" } else { "control-border" })).items_center().justify_center();
+                let mut b = el().w(16.0).h(16.0).radius(theme::corner::BOX).border(1.0, c(if on { "blue" } else { "control-border" })).items_center().justify_center();
                 if on {
                     b = b.fill(c("blue")).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("bg")));
                 }
-                let mut r = row().gap(8.0).min_h(theme::layout::DENSE_H).items_center().child(b).child(text(n.text.clone()).font(body(13.0, 400.0)).color(c("text"))).role("checkbox").label(n.text.clone()).checked(on);
+                let mut r = row().gap(8.0).min_h(theme::layout::DENSE_H).items_center().child(b).child(text(n.text.clone()).font(body(crate::theme::font_size::BODY, 400.0)).color(c("text"))).role("checkbox").label(n.text.clone()).checked(on);
                 if !n.disabled {
                     if let Some(act) = n.on.clone() {
                         let arg = n.arg.clone();
@@ -1616,7 +1617,7 @@ impl Build<'_> {
                     t = t.read_only(true);
                 }
                 let h = n.rows as f32 * (size * theme::LINE_HEIGHT).round() + 16.0;
-                field_ground(col().w_full().h(h).px(8.0).py(8.0), n).radius(theme::radius("sm").unwrap()).focus_within_ring(2.0, 1.0, c("focus")).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
+                field_ground(col().w_full().h(h).px(8.0).py(8.0), n).radius(theme::radius("sm").unwrap()).focus_within_ring(theme::focus::W, theme::focus::NEAR, c("focus")).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
             }
             Kind::Image => match crate::picture::shown(key.as_deref().unwrap_or("")) {
                 Some((px, (w, h))) => {
@@ -1625,10 +1626,10 @@ impl Build<'_> {
                     let e = el().w((w as f32 * scale).max(1.0)).h((h as f32 * scale).max(1.0)).radius(theme::radius("xs").unwrap());
                     e.pixels_fit(&px, if n.fill_image { rune::SurfaceFit::Fill } else { rune::SurfaceFit::Fit })
                 }
-                None => el().px(8.0).py(4.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text("picture not loaded").font(body(12.0, 400.0)).color(c("text-muted"))),
+                None => el().px(8.0).py(4.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text("picture not loaded").font(body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted"))),
             },
             Kind::Surface if crate::feat::surface_owner(n.id.as_deref().unwrap_or("")).is_none() => {
-                el().grow(1.0).w_full().padding(8.0).fill(c("elevated")).child(text(format!("no feature owns a surface '{}'", n.id.as_deref().unwrap_or(""))).font(body(12.0, 400.0)).color(c("text-muted")))
+                el().grow(1.0).w_full().padding(8.0).fill(c("elevated")).child(text(format!("no feature owns a surface '{}'", n.id.as_deref().unwrap_or(""))).font(body(crate::theme::font_size::CAPTION, 400.0)).color(c("text-muted")))
             }
             // A canvas no feature owns draws nothing and hears nothing.
             Kind::Canvas if crate::feat::surface_owner(n.id.as_deref().unwrap_or("")).is_none() => el(),
@@ -1637,7 +1638,7 @@ impl Build<'_> {
             Kind::Progress => {
                 let v = n.value.as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
                 let (fg, _) = tone(n.variant.as_deref().unwrap_or("blue"));
-                el().w_full().h(4.0).radius(2.0).fill(c("elevated")).child(el().w_frac(v).h_full().radius(2.0).fill(hex(fg)))
+                el().w_full().h(4.0).radius(theme::corner::PILL).fill(c("elevated")).child(el().w_frac(v).h_full().radius(theme::corner::PILL).fill(hex(fg)))
             }
         };
         // Shown only while the nearest hover group is hovered or focused.
@@ -1671,11 +1672,11 @@ impl Build<'_> {
         // tints the button under the pointer and the keyboard focus.
         let toned = n.tone.as_deref().filter(|t| *t != "neutral" && variant != "primary").map(action_tone);
         let fg = n.style.color.map(hex).or(toned.map(|t| hex(t.0))).unwrap_or_else(|| c(fg));
-        // At least 28 pt square (24 dense), the icon centred; a label pads 10 (8 dense).
-        let (h, size, icon) = if n.dense { (theme::layout::DENSE_H, 12.0, theme::icon::MEDIUM) } else { (theme::layout::CONTROL_H, 13.0, theme::icon::MEDIUM) };
+        // At least 28 pt square (24 dense), the icon centred; a label pads 12 (8 dense).
+        let (h, size, icon) = if n.dense { (theme::layout::DENSE_H, theme::font_size::CAPTION, theme::icon::MEDIUM) } else { (theme::layout::CONTROL_H, theme::font_size::BODY, theme::icon::MEDIUM) };
         let only_icon = n.text.is_empty();
         let name = if only_icon { n.help.clone().unwrap_or_else(|| n.icon.clone().unwrap_or_default()) } else { n.text.clone() };
-        let mut b = row().gap(6.0).items_center().justify_center().h(h).min_w(h).px(if only_icon { 0.0 } else if n.dense { 8.0 } else { 10.0 }).radius(theme::radius("xs").unwrap()).role("button").label(name);
+        let mut b = row().gap(theme::spacing::INLINE).items_center().justify_center().h(h).min_w(h).px(if only_icon { 0.0 } else if n.dense { theme::spacing::SM } else { theme::spacing::MD }).radius(theme::radius("xs").unwrap()).role("button").label(name);
         if !fill.is_empty() {
             b = b.fill(c(fill)).border(1.0, c(border));
         }
@@ -1729,7 +1730,7 @@ impl Build<'_> {
             face = face.child(rune::icon(i, 12.0).color(hex(fg)));
         }
         if !only_icon {
-            face = face.child(text(n.text.clone()).font(body(12.0, 500.0)).color(hex(fg)));
+            face = face.child(text(n.text.clone()).font(body(crate::theme::font_size::CAPTION, 500.0)).color(hex(fg)));
         }
         let mut b = row().items_center().justify_center().h(theme::layout::DENSE_H).min_w(theme::layout::DENSE_H).radius(theme::radius("xs").unwrap()).role("button").label(name).child(face);
         if let Some(k) = key {
@@ -1761,7 +1762,7 @@ impl Build<'_> {
         };
         let (h, size) = if n.dense { (theme::layout::DENSE_H, 12.0) } else { (theme::layout::CONTROL_H, 13.0) };
         let name = if label.is_empty() { n.help.clone().unwrap_or_else(|| id.clone()) } else { label.clone() };
-        let mut t = row().key(key.clone()).gap(6.0).items_center().justify_center().px(8.0).h(h).min_w(h).radius(theme::radius("sm").unwrap()).role(if n.kind == Kind::Select { "combobox" } else { "button" }).label(name).expanded(open);
+        let mut t = row().key(key.clone()).gap(theme::spacing::INLINE).items_center().justify_center().px(8.0).h(h).min_w(h).radius(theme::radius("sm").unwrap()).role(if n.kind == Kind::Select { "combobox" } else { "button" }).label(name).expanded(open);
         t = match (n.kind, n.variant.as_deref()) {
             (Kind::Menu, Some("ghost")) => t.hover(c("elevated")),
             _ => t.fill(c("bg")).border(1.0, c(if open { "blue" } else { "control-border" })).hover(c("elevated")),
@@ -1999,7 +2000,8 @@ where
 
 fn text_style(st: &Style, size: f32, weight: f32) -> TextStyle {
     // Nothing a person reads is under 12 pt, whatever a screen asks.
-    let t = body(st.size.unwrap_or(size).max(12.0), st.weight.unwrap_or(weight));
+    let t = body(st.size.unwrap_or(size).max(theme::font_size::CAPTION), st.weight.unwrap_or(weight));
+
     if st.mono {
         t.mono()
     } else if st.wrap {

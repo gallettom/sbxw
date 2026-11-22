@@ -20,6 +20,7 @@
 //! what is on screen; it shortens, then hides, before any entry above is touched.
 
 use super::{bar, App};
+use crate::theme::Lift;
 use crate::feat::create::{self, model::BarJob, model::BarState};
 use crate::intent::Intent;
 use crate::screen;
@@ -442,7 +443,7 @@ fn jobs_view(s: &App, f: Fit) -> Option<El> {
         .items_center()
         .radius(theme::radius("xs").unwrap());
     if listed {
-        e = e.hover(c("hover-subtle")).focus_ring(2.0, -2.0, c("focus")).cursor(Cursor::Pointer).on_press(|s: &mut App| {
+        e = e.hover(c("hover-subtle")).focus_ring(crate::theme::focus::W, crate::theme::focus::IN, c("focus")).cursor(Cursor::Pointer).on_press(|s: &mut App| {
             if s.status.pop == Some(Pop::Jobs) {
                 s.status.pop = None;
             } else {
@@ -548,7 +549,7 @@ pub fn popover(s: &App) -> Vec<El> {
         .fill(c("surface"))
         .border(1.0, c("border"))
         .radius(theme::radius("md").unwrap())
-        .shadow(8.0, 24.0, crate::theme::shadow());
+        .lift(crate::theme::elevation::OVERLAY);
     if !screen::reduced_motion() {
         surface = surface.transition(screen::quick_fade());
     }
@@ -582,7 +583,7 @@ fn line(key: String, left: String, left_c: &str, mid: String, right: String, rig
 }
 
 fn heading(t: &str) -> El {
-    text(t.to_string()).font(screen::body(13.0, 600.0)).color(c("text-bright")).pb(6.0)
+    text(t.to_string()).font(screen::body(crate::theme::font_size::BODY, 600.0)).color(c("text-bright")).pb(6.0)
 }
 
 fn note(t: String) -> El {
@@ -677,7 +678,7 @@ fn entry(key: &str, icon: &str, label: &str, color: &str, help: &str) -> El {
         .items_center()
         .radius(theme::radius("xs").unwrap())
         .hover(c("hover-subtle"))
-        .focus_ring(2.0, -2.0, c("focus"))
+        .focus_ring(crate::theme::focus::W, crate::theme::focus::IN, c("focus"))
         .cursor(Cursor::Pointer)
         .child(rune::icon(crate::icons::get(icon).unwrap(), ICON).color(c(if color == "text" { "text-muted" } else { color })));
     if !label.is_empty() {
@@ -708,7 +709,7 @@ fn theme_view(s: &App) -> El {
         .justify_center()
         .radius(theme::radius("xs").unwrap())
         .hover(c("hover-subtle"))
-        .focus_ring(2.0, -2.0, c("focus"))
+        .focus_ring(crate::theme::focus::W, crate::theme::focus::IN, c("focus"))
         .cursor(Cursor::Pointer)
         .on_press(|s: &mut App| {
             s.status.pop = None;
@@ -727,7 +728,7 @@ fn theme_view(s: &App) -> El {
         .justify_center()
         .radius(theme::radius("xs").unwrap())
         .hover(c("hover-subtle"))
-        .focus_ring(2.0, -2.0, c("focus"))
+        .focus_ring(crate::theme::focus::W, crate::theme::focus::IN, c("focus"))
         .cursor(Cursor::Pointer)
         .on_press(|s: &mut App| s.statusbar_toggle(Pop::Theme))
         .child(rune::icon(crate::icons::get("chevron-down").unwrap(), theme::icon::SMALL).color(c("text-muted")));
@@ -754,7 +755,7 @@ fn theme_menu(s: &App) -> Vec<El> {
         .fill(c("surface"))
         .border(1.0, c("border"))
         .radius(theme::radius("md").unwrap())
-        .shadow(8.0, 24.0, crate::theme::shadow());
+        .lift(crate::theme::elevation::OVERLAY);
     if !screen::reduced_motion() {
         surface = surface.transition(screen::quick_fade());
     }
@@ -765,12 +766,13 @@ fn theme_menu(s: &App) -> Vec<El> {
             .w(20.0)
             .h(14.0)
             .ml(8.0)
-            .radius(3.0)
+            .radius(theme::corner::MARK)
             .fill(at("surface"))
             .border(1.0, c("control-border"))
             .items_center()
             .justify_center()
-            .child(el().w(8.0).h(4.0).radius(2.0).fill(at("accent")));
+            .child(el().w(8.0).h(4.0).radius(theme::corner::PILL).fill(at("accent")));
+
         surface = surface.child(screen::menu_row(r).child(swatch).on_press(move |s: &mut App| {
             s.status.pop = None;
             s.run_intent("statusbar", Intent::SetTheme { theme: Some(m) });
