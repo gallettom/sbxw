@@ -1531,7 +1531,7 @@
   // added to the Home Screen. The switch shows the truth: on only when the
   // Mac and this browser both hold the subscription.
   const pushNo = rcPushSupport({ serviceWorker: 'serviceWorker' in navigator, PushManager: 'PushManager' in window, Notification: 'Notification' in window }, navigator.userAgent);
-  const push = pushNo ? null : rcPush({ api, sw: navigator.serviceWorker, Notif: window.Notification });
+  const push = pushNo ? null : rcPush({ api, sw: navigator.serviceWorker, Notif: window.Notification, subtle: window.crypto && window.crypto.subtle });
   const pushSt = { on: false, busy: false };
   function renderPush(on, text) {
     pushSt.on = on;

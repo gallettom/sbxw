@@ -6,6 +6,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import vm from 'node:vm';
 import { startStandin } from './remote-standin.mjs';
 
@@ -13,8 +14,8 @@ const read = p => readFileSync(new URL(p, import.meta.url), 'utf8');
 const coreSrc = read('../../assets/remote/remote-core.js');
 const pageSrc = read('../../assets/remote/remote.js');
 const htmlSrc = read('../../assets/remote/index.html');
-const ctx = { URLSearchParams, AbortController, Uint8Array };
-vm.runInNewContext(`${coreSrc}\n${['rcPush', 'rcPushSupport', 'rcPushFail', 'rcClearBadge', 'rcClient', 'RC_PUSH_TEXT', 'rcB64u'].map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
+const ctx = { URLSearchParams, AbortController, Uint8Array, TextEncoder };
+vm.runInNewContext(`${coreSrc}\n${['rcPush', 'rcEndpointTag', 'rcPushSupport', 'rcPushFail', 'rcClearBadge', 'rcClient', 'RC_PUSH_TEXT', 'rcB64u'].map(n => `this.${n} = ${n};`).join('\n')}`, ctx);
 const rc = ctx;
 
 const so = await startStandin(0);
@@ -52,10 +53,11 @@ function browser({ permission = 'default', answer = 'granted', subscribeFails = 
     getRegistration: async () => registration,
   };
   b.Notif.requestPermission = async () => { b.order.push('permission'); b.asked++; b.Notif.permission = answer; return answer; };
-  b.make = () => rc.rcPush({ api: api(), sw: b.sw, Notif: b.Notif });
+  b.make = () => rc.rcPush({ api: api(), sw: b.sw, Notif: b.Notif, subtle: crypto.subtle });
   return b;
 }
-const reset = async (push = {}) => { await ctl({ reset: true, push: { on: false, subs: [], keyReply: null, subscribeReplies: [], ...push } }); };
+const reset = async (push = {}) => { await ctl({ reset: true, push: { on: false, subs: [], keyReply: null, subscribeReplies: [], tag: null, ...push } }); };
+const tagOf = e => createHash('sha256').update(e).digest('hex').slice(0, 16);
 
 test('support: needs service workers, PushManager and Notification; the iPhone line says Home Screen', () => {
   const all = { serviceWorker: true, PushManager: true, Notification: true };
@@ -89,12 +91,40 @@ test('state: on only when the Mac and the browser agree', async () => {
 });
 
 test('state: disagreement shows off (the Mac says on, the browser has none; and the reverse)', async () => {
+  const INSTALL = 'Notifications are off on this installation: turn them on again.';
   await reset({ on: true });
-  assert.equal((await browser({ permission: 'granted', hasSub: false }).make().state()).state, 'off');
+  assert.deepEqual(plain(await browser({ permission: 'granted', hasSub: false }).make().state()), { state: 'off', text: INSTALL }, 'the app added again: says so');
   await reset({ on: false });
-  assert.equal((await browser({ permission: 'granted', hasSub: true }).make().state()).state, 'off');
+  assert.deepEqual(plain(await browser({ permission: 'granted', hasSub: true }).make().state()), { state: 'off', text: '' }, 'the Mac off: nothing to say');
   await reset({ on: true });
-  assert.equal((await browser({ permission: 'default', hasSub: true }).make().state()).state, 'off', 'permission gone');
+  assert.deepEqual(plain(await browser({ permission: 'default', hasSub: true }).make().state()), { state: 'off', text: INSTALL }, 'permission gone');
+});
+
+test('state: the Mac holding another subscription than this installation (tags differ) says turn them on again', async () => {
+  const INSTALL = 'Notifications are off on this installation: turn them on again.';
+  await reset({ on: true, tag: tagOf('https://web.push.apple.com/OLDINSTALL') });
+  const b = browser({ permission: 'granted', hasSub: true });
+  assert.deepEqual(plain(await b.make().state()), { state: 'off', text: INSTALL });
+  // The same endpoint: on.
+  await reset({ on: true, tag: tagOf('https://web.push.apple.com/SECRETENDPOINT') });
+  assert.deepEqual(plain(await browser({ permission: 'granted', hasSub: true }).make().state()), { state: 'on', text: '' });
+  // A tap repairs it: the Mac then holds this one.
+  await reset({ on: true, tag: tagOf('https://web.push.apple.com/OLDINSTALL') });
+  const push = b.make();
+  assert.equal((await push.enable()).ok, true);
+  await ctl({ push: { tag: null } });
+  assert.deepEqual(plain(await push.state()), { state: 'on', text: '' });
+  // No crypto.subtle, or no tag from an older Mac: no comparison.
+  await reset({ on: true, tag: tagOf('https://web.push.apple.com/OLDINSTALL') });
+  assert.equal((await rc.rcPush({ api: api(), sw: b.sw, Notif: b.Notif }).state()).state, 'on');
+  await reset({ on: true, keyReply: { status: 200, body: { key: 'BAAA', on: true } } });
+  assert.equal((await b.make().state()).state, 'on');
+});
+
+test('the endpoint tag is the Mac\'s: 16 hex digits of SHA-256', async () => {
+  // The same vector as crates/core push.rs, the_endpoint_tag_is_short_and_reveals_nothing.
+  assert.equal(await rc.rcEndpointTag(crypto.subtle, 'https://web.push.apple.com/abc'), '3333140aac13e319');
+  assert.equal(await rc.rcEndpointTag(undefined, 'x'), null);
 });
 
 test('state: refused permission says how to allow it again; an unreachable Mac says so', async () => {
