@@ -337,6 +337,7 @@
     if (st.current && st.screen === 's-chat') {
       renderTail();
       renderChatTitle();
+      keepPlace();
     }
   }
 
@@ -579,6 +580,8 @@
 
   async function openLeader(sandbox) {
     st.current = sandbox;
+    st.stick = true;
+    st.anchor = null;
     st.loaded = null;
     st.items = [];
     st.nextBefore = null;
@@ -621,8 +624,6 @@
     const sandbox = st.current;
     if (!sandbox) return;
     if (st.loaded !== sandbox || (st.newer && Date.now() - st.newer.at < RC_STUCK_MS)) { st.newerAgain = true; return; }
-    const log = $('log');
-    const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
     const mine = { at: Date.now() };
     st.newer = mine;
     st.newerAgain = false;
@@ -637,7 +638,8 @@
         st.latestSeq = Math.max(st.latestSeq, page.latest_seq, ...page.items.map(i => Number(i.seq) || 0));
         renderRows();
         st.shownSeq = Math.max(st.shownSeq, st.latestSeq);
-        if (atEnd) scrollToEnd(); else { st.unseenBelow = true; updateToEnd(); }
+        if (!st.stick) st.unseenBelow = true;
+        keepPlace();
       }
     }
     if (st.newerAgain) { st.newerAgain = false; fetchNewer(); }
@@ -653,20 +655,69 @@
     if (st.current !== sandbox) return;
     if (!res.ok) { $('log-top').textContent = 'Could not load earlier messages.'; return; }
     const page = rcPage(res.data);
-    const log = $('log');
-    const fromEnd = log.scrollHeight - log.scrollTop;
     st.items = rcMerge(st.items, page.items);
     st.nextBefore = page.next_before;
     renderRows();
-    log.scrollTop = log.scrollHeight - fromEnd;
+    keepPlace();
+  }
+
+  // ── The log's place: one rule, here only ──
+  // `st.stick` is the one "at the end?" state. A scroll sets it
+  // (rcStickAfterScroll); a change of content never does. Every change of
+  // the log's content or size ends in keepPlace(): stuck, the log is pinned
+  // to its end; scrolled up, the row at the top of the view stays exactly
+  // where it was (a row, not a scrollTop). Content and size changes the page
+  // does not make itself (a reply's layout, the keyboard, a rotation) reach
+  // it through a ResizeObserver, before the frame is painted.
+  // What made the log jump before: "at the end" was measured again at each
+  // history read, while nothing re-pinned the log when the tail (the Working
+  // line, a question card), a reply or the keyboard moved the end away; past
+  // 80 px the next message counted as "scrolled up" and the view was left at
+  // an earlier place, more so after each message.
+  const logEl = $('log');
+  st.stick = true;
+  st.anchor = null;
+  st.gliding = null;   // the round button's smooth scroll: a timer while it runs
+  function logShown() { return st.screen === 's-chat' && !logEl.hidden; }
+  function rowBoxes() {
+    const base = logEl.getBoundingClientRect().top - logEl.scrollTop;
+    return [...$('rows').children].map(el => {
+      const b = el.getBoundingClientRect();
+      return { key: el.dataset.key, top: b.top - base, bottom: b.bottom - base };
+    });
+  }
+  function noteAnchor() {
+    if (!logShown()) return;
+    st.anchor = st.stick ? null : rcAnchorPick(rowBoxes(), logEl.scrollTop);
+  }
+  function keepPlace() {
+    if (!logShown()) return;
+    const top = rcLogPlace(st.stick, st.anchor, st.stick ? [] : rowBoxes(), logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);
+    if (Math.abs(logEl.scrollTop - top) >= 1) logEl.scrollTop = top;
+    noteAnchor();
     updateToEnd();
   }
-  $('log').addEventListener('scroll', () => { if ($('log').scrollTop < 120) fetchOlder(); updateToEnd(); }, { passive: true });
+  function stopGlide() { if (st.gliding) { clearTimeout(st.gliding); st.gliding = null; } }
+  logEl.addEventListener('scroll', () => {
+    if (!logShown()) return;
+    st.stick = rcStickAfterScroll(logEl.scrollHeight, logEl.scrollTop, logEl.clientHeight, !!st.gliding);
+    if (st.gliding && !rcAwayFromEnd(logEl.scrollHeight, logEl.scrollTop, logEl.clientHeight, 2)) stopGlide();
+    noteAnchor();
+    if (logEl.scrollTop < 120) fetchOlder();
+    updateToEnd();
+  }, { passive: true });
+  // A finger or a wheel during the glide is the person's: the glide ends.
+  for (const ev of ['touchstart', 'wheel']) logEl.addEventListener(ev, stopGlide, { passive: true });
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(() => keepPlace());
+    for (const el of [logEl, $('rows'), $('tail')]) ro.observe(el);
+  }
 
   function scrollToEnd() {
-    const log = $('log');
-    log.scrollTop = log.scrollHeight;
-    updateToEnd();
+    stopGlide();
+    st.stick = true;
+    st.anchor = null;
+    keepPlace();
   }
   // The round button over the composer: only in the Conversation view, only
   // while the log is away from its end; a dot when rows came in meanwhile.
@@ -680,9 +731,13 @@
   $('to-end').addEventListener('click', () => {
     const log = $('log');
     const smooth = !(reducedMotion && reducedMotion.matches);
-    if (smooth && log.scrollTo) log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' });
-    else log.scrollTop = log.scrollHeight;
     st.unseenBelow = false;
+    if (!smooth || !log.scrollTo) return scrollToEnd();
+    stopGlide();
+    st.stick = true;
+    st.anchor = null;
+    st.gliding = setTimeout(() => { st.gliding = null; keepPlace(); }, 900);
+    log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' });
     updateToEnd();
   });
 
@@ -710,8 +765,10 @@
   function renderRows() {
     const rows = rcRows(st.items);
     $('log-top').textContent = st.nextBefore != null ? '' : rows.length ? 'Start of the conversation' : 'No messages yet';
-    $('rows').replaceChildren(...rows.map(r => {
+    const keys = rcRowKeys(rows);
+    $('rows').replaceChildren(...rows.map((r, i) => {
       const el = rowEl(r);
+      el.dataset.key = keys[i];
       // Only what arrived since the last look rises in; a re-render is still.
       if (r.seq > st.shownSeq && (r.kind === 'agent' || r.kind === 'me')) el.classList.add('rc-new');
       return el;
@@ -1684,13 +1741,12 @@
   // column's scroll and an open ticket survive a re-read.
   function view(sandbox = st.current) {
     let v = st.views.get(sandbox);
-    if (!v) { v = { mode: 'chat', board: null, col: null, scroll: {}, ticket: null, logTop: null, loading: false, again: false, timer: null }; st.views.set(sandbox, v); }
+    if (!v) { v = { mode: 'chat', board: null, col: null, scroll: {}, ticket: null, loading: false, again: false, timer: null }; st.views.set(sandbox, v); }
     return v;
   }
   function setView(mode) {
     const v = view();
     const log = $('log');
-    if (mode === 'kanban' && v.mode === 'chat' && !log.hidden) v.logTop = log.scrollTop;
     v.mode = mode;
     const k = mode === 'kanban';
     $('v-chat').setAttribute('aria-selected', String(!k));
@@ -1703,8 +1759,8 @@
       stopRecording(false);
       if (v.board) renderBoard(); else $('kb-lanes').replaceChildren();
       loadBoard();
-    } else if (v.logTop !== null) {
-      log.scrollTop = v.logTop;
+    } else {
+      keepPlace();
     }
     updateToEnd();
   }
@@ -2710,7 +2766,7 @@
     window.addEventListener('orientationchange', () => { tallest = 0; setTimeout(fit, 300); });
     fit();
   }
-  field.addEventListener('focus', () => setTimeout(() => { fit(); if ($('log').scrollHeight - $('log').scrollTop - $('log').clientHeight < 200) scrollToEnd(); }, 300));
+  field.addEventListener('focus', () => setTimeout(() => { fit(); keepPlace(); }, 300));
 
   boot();
 })();

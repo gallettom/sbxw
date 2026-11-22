@@ -1381,6 +1381,41 @@ function rcAwayFromEnd(scrollHeight, scrollTop, clientHeight, slack = 80) {
   const gap = Number(scrollHeight) - Number(scrollTop) - Number(clientHeight);
   return Number.isFinite(gap) && gap > slack;
 }
+// ── The conversation's place (remote.js keeps it in one place) ──
+// One state, `stick`: true while the person is at the end of the log. Only
+// a scroll changes it, never a change of content, so rows that arrive, a
+// tail that grows or a keyboard that opens never decide it. While the page
+// itself glides to the end (the round button), it stays true.
+function rcStickAfterScroll(scrollHeight, scrollTop, clientHeight, gliding = false, slack = 80) {
+  return !!gliding || !rcAwayFromEnd(scrollHeight, scrollTop, clientHeight, slack);
+}
+// A row's key, stable across re-renders: its seq, or for a folded "steps"
+// row the seq of the row before it.
+function rcRowKeys(rows) {
+  let last = 0;
+  return (Array.isArray(rows) ? rows : []).map(r => {
+    if (r && Number.isFinite(Number(r.seq)) && Number(r.seq) > 0) { last = Number(r.seq); return `s${last}`; }
+    return `after${last}`;
+  });
+}
+// Away from the end, the place is a row, not a scrollTop: the first row
+// still in view at the top ({ key, top, bottom } relative to the log's
+// content), and how far below the view's top it starts.
+function rcAnchorPick(rows, viewTop) {
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (r && r.key && r.bottom > viewTop) return { key: r.key, offset: r.top - viewTop };
+  }
+  return null;
+}
+// After a change: where to put scrollTop. Stuck: the end. Away: the anchor
+// row back at the same offset; with no anchor found, the old scrollTop.
+function rcLogPlace(stick, anchor, rows, scrollTop, scrollHeight, clientHeight) {
+  const end = Math.max(0, scrollHeight - clientHeight);
+  if (stick) return end;
+  const r = anchor && (Array.isArray(rows) ? rows : []).find(x => x && x.key === anchor.key);
+  const top = r ? r.top - anchor.offset : scrollTop;
+  return Math.min(end, Math.max(0, top));
+}
 // The live preview shows the END of what is said: at most `max` characters
 // of final then interim words, older words cut at the start with "…".
 function rcTail(final, interim, max = 140) {
