@@ -299,11 +299,8 @@ mod tests {
         assert_eq!(sanitize_typed("\u{9b}201~\u{7f}\u{0}"), "201~");
         assert_eq!(sanitize_typed("x\u{2028}y\u{2029}z\u{feff}"), "xyz");
         assert_eq!(sanitize_typed("a\u{202e}b\u{2066}c\u{200b}d\u{200f}e"), "abcde");
-        let fr = "Déjà vu, garçon : « œuvre » à l'Hôtel, 1 000 € 👋🏽 🇫🇷 🚀";
+        let fr = "Déjà vu, garçon : « œuvre » à l'Hôtel, 1 000 € 👋🏽 🇫🇷 ❤️ 🚀";
         assert_eq!(sanitize_typed(fr), fr);
-        // U+FE0F (variation selector 16) is on the one invisible list: an
-        // emoji that asks for it is typed in its text form.
-        assert_eq!(sanitize_typed("❤\u{fe0f}"), "❤");
         // U+200D (zero-width joiner) is in the dropped range: a joined emoji
         // falls apart into its parts, still readable.
         assert_eq!(sanitize_typed("👩\u{200d}💻"), "👩💻");

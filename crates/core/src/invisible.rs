@@ -10,6 +10,10 @@
 //! separators, and the characters that draw nothing (combining grapheme
 //! joiner, Hangul fillers, Khmer inherent vowels, Mongolian selectors,
 //! variation selectors, the whole tag and variation-selector plane block).
+//! Two variation selectors are left out on purpose: U+FE0E and U+FE0F only
+//! pick the text or emoji form of the character before them (❤︎ or ❤️). They
+//! draw nothing of their own, cannot hide a character, and cannot reorder
+//! text, and phone keyboards write U+FE0F in ordinary emoji.
 //! The phone page holds the same list (`RC_INVISIBLE_RANGES` in
 //! `assets/remote/remote-core.js`); a JS test compares the two.
 
@@ -31,7 +35,7 @@ pub const INVISIBLE: &[(char, char)] = &[
     ('\u{202a}', '\u{202e}'),     // bidi embeddings and overrides
     ('\u{2060}', '\u{206f}'),     // word joiner, invisible operators, bidi isolates, deprecated formats
     ('\u{3164}', '\u{3164}'),     // Hangul filler
-    ('\u{fe00}', '\u{fe0f}'),     // variation selectors
+    ('\u{fe00}', '\u{fe0d}'),     // variation selectors 1 to 14 (not 15 and 16, see below)
     ('\u{feff}', '\u{feff}'),     // byte order mark, zero-width no-break space
     ('\u{ffa0}', '\u{ffa0}'),     // half-width Hangul filler
     ('\u{fff9}', '\u{fffb}'),     // interlinear annotation
@@ -95,6 +99,17 @@ mod tests {
             assert_eq!(remote_access::check_message(&s), Err(remote_access::MessageRefusal::Control), "check_message refuses {c:?}");
             assert_eq!(remote_access::clean_device_name(&s), None, "clean_device_name refuses {c:?}");
             assert_eq!(uploads::upload_name(&s), "a_b", "upload_name replaces {c:?}");
+        }
+        // The emoji and text selectors are kept, or accepted, everywhere.
+        for s in ["\u{2764}\u{fe0f} ok", "\u{2764}\u{fe0e} ok", "a\u{fe0f}b", "a\u{fe0e}b"] {
+            assert!(!s.chars().any(is_invisible), "{s:?}");
+            assert_eq!(terminal::sanitize_typed(s), s, "{s:?}");
+            assert_eq!(mac::clean_reason(s), s, "{s:?}");
+            assert_eq!(canvas::clean(s, 99, true), s, "{s:?}");
+            assert_eq!(canvas::clean(s, 99, false), s, "{s:?}");
+            assert_eq!(tickets::clean(s, 99, true), s, "{s:?}");
+            assert_eq!(remote_access::check_message(s), Ok(()), "{s:?}");
+            assert_eq!(remote_access::clean_device_name(s).as_deref(), Some(s), "{s:?}");
         }
         for c in neighbours() {
             let s = format!("a{c}b");

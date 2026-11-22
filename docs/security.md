@@ -212,7 +212,10 @@ zero-width spaces and joiners, a byte order mark, a soft hyphen, variation selec
 sbxw keeps **one list** of them, `INVISIBLE` in `crates/core/src/invisible.rs`: every
 Unicode format character (category Cf), the line and paragraph separators, and the
 characters that draw nothing (combining grapheme joiner, Hangul fillers, Khmer inherent
-vowels, Mongolian selectors, variation selectors, U+E0000 to U+E0FFF). Every place that
+vowels, Mongolian selectors, variation selectors, U+E0000 to U+E0FFF). Two variation
+selectors are left out: U+FE0E and U+FE0F only pick the text or emoji form of the
+character before them (❤︎ or ❤️); they draw nothing of their own, cannot hide a character
+and cannot reorder text, and phone keyboards write U+FE0F in ordinary emoji. Every place that
 handles such text uses that list, each with its own action:
 
 | Where | What happens to a listed character |
@@ -224,8 +227,8 @@ handles such text uses that list, each with its own action:
 | An uploaded file's name (`uploads::upload_name`) | becomes `_` (only `A-Z a-z 0-9 . - _` survive) |
 
 The phone page warns with the same list (`RC_INVISIBLE_RANGES`), checked against the Rust
-table by a test. The cost: a joined emoji (U+200D) falls apart into its parts, an emoji
-asking for its colour form (U+FE0F) shows in its text form, and scripts that use a joiner
+table by a test. The cost: a joined emoji (U+200D) falls apart into its parts, a regional
+flag such as Scotland's (tags) shows as a plain black flag, and scripts that use a joiner
 or a selector in ordinary writing (Persian and some Indic scripts with U+200C, Mongolian,
 Japanese ideographic variants) lose it, or are refused where the action is to refuse.
 

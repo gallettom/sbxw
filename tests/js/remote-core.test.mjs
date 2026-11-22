@@ -362,6 +362,8 @@ test('the phone refuses the one invisible list of crates/core/src/invisible.rs',
     const control = /\p{Cc}/u.test(ch) && ch !== '\n';
     assert.equal(rc.rcMessageCheck(`a${ch}b`), inList(n) || control ? 'control' : null, `U+${n.toString(16)}`);
   }
+  // The emoji and text selectors pass: ❤️ ☺️ ✌️ as a phone keyboard writes them.
+  for (const s of ['\u2764\uFE0F', '\u263A\uFE0F', '\u270C\uFE0F', '\u2764\uFE0E']) assert.equal(rc.rcMessageCheck(s), null, s);
 });
 
 test('the jump button shows only when the log is away from its end', () => {

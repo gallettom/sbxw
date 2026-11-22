@@ -374,5 +374,9 @@ mod tests {
             let s = format!("a{c}b");
             assert_eq!(checked_text(Some(&s)).ok(), Some(s.as_str()), "{c:?}");
         }
+        // The emoji and text selectors are accepted.
+        for s in ["\u{2764}\u{fe0f} thanks", "\u{2764}\u{fe0e}"] {
+            assert_eq!(checked_text(Some(s)).ok(), Some(s), "{s:?}");
+        }
     }
 }
