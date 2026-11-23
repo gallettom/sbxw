@@ -280,6 +280,20 @@ note. The plan dialog offers **Merge all**. For each thread, in order, sbxw:
 2. runs `git merge --no-ff --no-edit sbxw/<thread>` inside the sandbox,
 3. on conflict, runs `git merge --abort` and stops there.
 
+**Nothing to merge.** Before that, sbxw asks git on the host about each
+thread of the order. A thread whose branch is already in the base (a
+read-only study with no commit of its own, or a branch merged by hand) or
+whose branch is gone (you closed the thread by hand after the lead proposed
+it) is settled as merged with nothing: no merge runs for it, its row says
+`merged`, the result's note says `nothing to merge, sbxw/<thread> is already
+in main` or `... is gone`, the merge goes on with the others, and with close
+threads ticked it is closed like them. A proposal naming only such threads
+settles at the first click instead of failing at every retry with "there is
+no branch". A branch with even one commit its base lacks is never settled
+this way (git's `merge-base --is-ancestor` decides), so closing never
+deletes unmerged work; a repo git cannot read on the host is unknown, and its
+thread is merged as before.
+
 Unstaged edits elsewhere stay in the working tree, out of the merge commit.
 **Tracked files absent from the checkout** (`git status` shows ` D`, most
 often because the sandbox mounts only part of the workspace) are left alone
@@ -289,10 +303,24 @@ absent. When the merge *does* touch one, it is refused with the files named:
 the merge has to be done where the whole repository is present. sbxw never
 advises committing those "deletions", which would delete real files.
 
-With **close threads** ticked, merged threads are then closed and their branches
-deleted. The lead is told the result in one line, e.g.
-`[sbxw] Merged: a, b. Failed: c (conflict in X).` A failed merge can be retried
-after fixing the cause.
+With **close threads** ticked (the box is ticked by default, in the desktop
+app as in the web UI), merged threads are then closed: each session is
+ended, its worktree removed and its branch deleted. Every app drops the
+thread's pane when it hears the close. A pane that missed it still does not
+start the thread again when its terminal reconnects: for ten minutes after a
+close, sbxw refuses a reconnect of that session, and the pane shows
+`'<thread>' was closed, so a reconnect does not open it again: close this
+pane. To start a thread of that name again, use New thread`. A deliberate
+start is not refused: a New thread of that name (its first open carries its
+repo, model or checkout choice) or a plan approved with that name starts it
+at once. One case cannot be told from a reconnect: a New thread opened with
+no choice at all (no repo list could be read, default model); it is refused
+for those ten minutes. The lead is told the
+result in one line, e.g. `[sbxw] Merged: a, b. Closed: a, b.` or
+`[sbxw] Merged: a, b. Failed: c (conflict in X).`; a thread whose close
+failed is named with the reason (`Not closed: b (... has 2 uncommitted
+file(s)).`) and keeps its session, worktree and branch. A failed merge can be
+retried after fixing the cause.
 
 **A thread that finishes late can still be merged.** In a split plan, once
 some threads are merged, a thread that reports done later (or that the lead
@@ -364,9 +392,11 @@ before. Nothing merges without your click.
 **Merged by hand.** When a done thread's branch (a shared plan: its one
 branch) is already an ancestor of the branch its repo's main checkout is on,
 `plan_status` shows the thread `already in <branch>: merged outside sbxw, or
-no commit of its own`, and `propose_merge` naming it says so rather than
-proposing a merge of nothing. sbxw records no merge for it: git proves only
-that the branch is in the base, not who merged it or how.
+no commit of its own`. In a split plan `propose_merge` may name it: the merge
+settles it with nothing to merge (above) and closes it. A shared plan's one
+branch in its base is refused at `propose_merge`, which says so rather than
+proposing a merge of nothing. Git proves only that the branch is in the base,
+not who merged it or how.
 
 ### What survives a daemon restart
 

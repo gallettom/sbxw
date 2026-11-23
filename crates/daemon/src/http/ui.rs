@@ -20,7 +20,7 @@ use sbxw_core::plans::{DistillItem, PlanThread, Variant};
 use sbxw_core::policy;
 use sbxw_core::ports::WantedPort;
 use sbxw_core::progress::Progress;
-use sbxw_core::session::SessionKind;
+use sbxw_core::session::{SessionKey, SessionKind};
 use sbxw_core::{names, ModelId, SandboxName, SandboxRef, ThreadName};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -1981,6 +1981,12 @@ pub async fn settle_ws_thread(
     checkout: bool,
 ) -> Result<(), String> {
     if let SessionKind::Thread(t) = kind {
+        // A first open carries the thread's choices (New thread); a
+        // reconnect never does. Only the first may start a thread closed
+        // a moment ago (`Sessions::end`).
+        if checkout || repo.is_some() || model.is_some() {
+            app.sessions.clear_ended(&SessionKey::new(sb.clone(), kind.clone()));
+        }
         if checkout {
             app.settle_same_worktree(sb, t).await?;
         }

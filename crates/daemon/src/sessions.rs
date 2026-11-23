@@ -18,7 +18,17 @@ use std::sync::{Arc, Mutex, Weak};
 pub struct Sessions {
     map: Mutex<HashMap<SessionKey, Arc<PtySession>>>,
     creating: Mutex<HashMap<SessionKey, Arc<tokio::sync::Mutex<()>>>>,
+    /// Sessions [`Sessions::end`]ed, and when: a pane still attached when
+    /// its thread was closed reconnects on its own, and must not start it
+    /// again (with a new worktree and branch cut from `HEAD`). A deliberate
+    /// start of that name clears the mark ([`Sessions::clear_ended`]).
+    ended: Mutex<HashMap<SessionKey, std::time::Instant>>,
 }
+
+/// How long an ended session is refused to a reconnect. Every client drops
+/// the pane at `thread-closed`; this covers one that missed it, which
+/// retries every 10 s, for a good while. A deliberate start clears it.
+pub const ENDED_HOLD: std::time::Duration = std::time::Duration::from_secs(600);
 
 impl Sessions {
     pub fn new() -> Arc<Self> {
@@ -64,6 +74,36 @@ impl Sessions {
             .collect()
     }
 
+    /// Holds `key`'s creator lock until the guard drops: nothing opens a
+    /// session under it meanwhile (a close under way).
+    pub async fn hold(&self, key: &SessionKey) -> tokio::sync::OwnedMutexGuard<()> {
+        let gate = self.creating.lock().unwrap().entry(key.clone()).or_default().clone();
+        gate.lock_owned().await
+    }
+
+    /// Stops and forgets the session under `key` (its thread was closed),
+    /// and refuses to open it again for [`ENDED_HOLD`].
+    pub fn end(&self, key: &SessionKey) {
+        let gone = self.map.lock().unwrap().remove(key);
+        if let Some(s) = gone {
+            s.kill();
+        }
+        let mut ended = self.ended.lock().unwrap();
+        ended.retain(|_, at| at.elapsed() < ENDED_HOLD);
+        ended.insert(key.clone(), std::time::Instant::now());
+    }
+
+    /// A deliberate start of `key` (a pane's first open with its choices, a
+    /// plan's approval): an earlier [`Sessions::end`] no longer refuses it.
+    pub fn clear_ended(&self, key: &SessionKey) {
+        self.ended.lock().unwrap().remove(key);
+    }
+
+    /// Whether `key` was [`Sessions::end`]ed within [`ENDED_HOLD`].
+    pub fn just_ended(&self, key: &SessionKey) -> bool {
+        self.ended.lock().unwrap().get(key).is_some_and(|at| at.elapsed() < ENDED_HOLD)
+    }
+
     pub fn all(&self) -> Vec<(SessionKey, Arc<PtySession>)> {
         self.map.lock().unwrap().iter().map(|(k, s)| (k.clone(), s.clone())).collect()
     }
@@ -100,6 +140,9 @@ impl Sessions {
         let _held = gate.lock().await;
         if let Some(s) = self.live(key) {
             return Ok((s, false));
+        }
+        if self.just_ended(key) {
+            anyhow::bail!("'{key}' was closed, so a reconnect does not open it again: close this pane. To start a thread of that name again, use New thread");
         }
         let spawn = make().await?;
         let weak: Weak<Self> = Arc::downgrade(self);

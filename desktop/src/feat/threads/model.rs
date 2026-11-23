@@ -514,10 +514,18 @@ pub fn merge_rows(plan: &J) -> (Vec<J>, String) {
         })
         .collect();
     let outcome = match st {
-        "merged" => match m["base"].as_str() {
-            Some(b) => format!("Merged into {b}."),
-            None => "Merged.".to_string(),
-        },
+        "merged" => {
+            let mut s = match m["base"].as_str() {
+                Some(b) => format!("Merged into {b}."),
+                None => "Merged.".to_string(),
+            };
+            for r in results.iter().filter(|r| r["ok"] == true) {
+                if let (Some(t), Some(n)) = (r["thread"].as_str(), r["note"].as_str().filter(|n| !n.is_empty())) {
+                    s += &format!(" {t}: {n}.");
+                }
+            }
+            s
+        }
         "failed" => {
             let bad = results.iter().find(|r| r["ok"] != true);
             let done: Vec<&str> = results.iter().filter(|r| r["ok"] == true).filter_map(|r| r["thread"].as_str()).collect();

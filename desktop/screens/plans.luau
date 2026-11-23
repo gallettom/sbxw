@@ -291,7 +291,10 @@ local function merge_view(data, p)
   table.insert(out, column(rows))
   -- The outcome in words.
   if m.state == "merged" then
-    table.insert(out, text{ m.base and ("Merged into " .. m.base .. ".") or "Merged.", color = "green", key = "merge-outcome" })
+    -- What each thread's result says (nothing to merge, files left alone), as the web UI's outcome.
+    local s = m.base and ("Merged into " .. m.base .. ".") or "Merged."
+    for _, r in ipairs(m.results or {}) do if r.ok and r.note and r.note ~= "" then s = s .. " " .. r.thread .. ": " .. r.note .. "." end end
+    table.insert(out, text{ s, color = "green", wrap = true, key = "merge-outcome" })
   elseif m.state == "failed" then
     local bad, done = nil, {}
     for _, r in ipairs(m.results or {}) do if r.ok then done[r.thread] = true elseif not bad then bad = r end end

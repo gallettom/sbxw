@@ -229,21 +229,21 @@ impl App {
         Ok(self.plan_changed(plan))
     }
 
-    /// The lead's `propose_merge`: [`App::plan_propose_merge`], refused for
-    /// a thread git shows is in its base already ([`App::merged_outside`]):
-    /// sbxw would merge nothing, and says so rather than wait for it.
+    /// The lead's `propose_merge`: [`App::plan_propose_merge`]. A shared
+    /// plan whose one branch git shows is in its base already
+    /// ([`App::merged_outside`]) is refused: sbxw would merge nothing, and
+    /// says so rather than wait for it. A split plan's thread in its base
+    /// may be named: the merge settles it with nothing to merge and closes
+    /// it with the others ([`App::plan_merge_pinned`]).
     pub async fn plan_propose_merge_checked(&self, id: &str, sandbox: &SandboxRef, order: Vec<String>, note: &str, distillate: Vec<DistillItem>) -> Result<Plan, String> {
         let plan = self.plan_led(id, sandbox)?;
-        let outside = self.merged_outside(&plan).await;
-        let named: Vec<String> = match plan.variant {
-            Variant::Shared => plan.threads.iter().map(|t| t.name.clone()).collect(),
-            Variant::Split => order.iter().map(|t| t.trim().to_string()).collect(),
-        };
+        let outside = if plan.variant.is_split() { BTreeMap::new() } else { self.merged_outside(&plan).await };
+        let named: Vec<String> = plan.threads.iter().map(|t| t.name.clone()).collect();
         if let Some((t, base)) = named.iter().find_map(|t| outside.get(t).map(|b| (t, b))) {
-            let what = if plan.variant.is_split() { format!("sbxw/{t}") } else { format!("sbxw/{} (thread {t:?})", plan.team_name()) };
             return Err(format!(
-                "{what} is already in {base}: merged outside sbxw, or it has no commit of its own, \
-                 so there is nothing to merge. Leave it out of the order; the user can close the thread"
+                "sbxw/{} (thread {t:?}) is already in {base}: merged outside sbxw, or it has no commit of its own, \
+                 so there is nothing to merge. The user can close the threads",
+                plan.team_name()
             ));
         }
         self.plan_propose_merge(id, sandbox, order, note, distillate)
@@ -333,6 +333,8 @@ impl App {
     async fn launch_thread(self: &Arc<Self>, sandbox: &SandboxRef, name: &str) {
         let Ok(thread) = ThreadName::parse(name) else { return };
         let key = SessionKey::thread(sandbox, &thread);
+        // The person approved this thread: a start, never a stale reconnect.
+        self.sessions.clear_ended(&key);
         let outcome = match self.open_session(&key).await {
             Err(e) => Err(format!("{e:#}")),
             Ok((session, _)) => {
@@ -426,6 +428,15 @@ impl App {
             };
             dirs.push((t.clone(), dir));
         }
+        // What git shows of each thread to merge, read on the host: a branch
+        // already in its base (no commit of its own, or merged by hand) or
+        // gone (the thread was closed by hand) has nothing to merge. Such a
+        // thread is settled as merged with nothing, so the merge goes on and
+        // it is closed like the others, instead of failing at every retry.
+        // A branch with a commit its base lacks is never in this list, and a
+        // repo git cannot read is left out. The phone's pinned merge is as
+        // it was.
+        let nothing = if pins.is_none() { self.thread_git(&plan).await } else { BTreeMap::new() };
         let host = self.host_for(&sandbox).await.map_err(|e| format!("{e:#}"))?;
         let mut bases: std::collections::BTreeSet<Option<String>> = std::collections::BTreeSet::new();
         for (_, d) in &dirs {
@@ -441,6 +452,16 @@ impl App {
 
         let running = self.ensure_running_for_thread(&sandbox).await.map_err(|e| format!("{e:#}"));
         for (thread, dir) in dirs {
+            if let Some(probe) = nothing.get(&thread) {
+                let note = match probe {
+                    Probe::InBase(base) => format!("nothing to merge, sbxw/{thread} is already in {base}"),
+                    Probe::Gone => format!("nothing to merge, sbxw/{thread} is gone"),
+                };
+                let result = MergeResult { thread: thread.clone(), ok: true, commit: None, error: None, note: Some(note) };
+                let p = self.plans.lock().unwrap().merge_result(id, result, now_ms())?;
+                self.plan_changed(p);
+                continue;
+            }
             let outcome = match (&running, dir, ThreadName::parse(&thread)) {
                 (Err(e), _, _) => Err(format!("the sandbox could not be started: {e}")),
                 (Ok(()), Err(e), _) => Err(e),
@@ -493,13 +514,20 @@ impl App {
             summary.push_str(&format!(" Told that {} moved: {}.", merge.base.as_deref().unwrap_or("main"), told.join(", ")));
         }
         if close_threads && merge.state == MergeState::Merged {
-            let mut unclosed = Vec::new();
+            let (mut closed, mut unclosed) = (Vec::new(), Vec::new());
             for t in &merge.order {
                 let Ok(name) = ThreadName::parse(t) else { continue };
-                if let Err(e) = self.close_thread(&sandbox, &name, false, true).await {
-                    tracing::warn!("plans: could not close merged thread '{t}': {e}");
-                    unclosed.push(format!("{t} ({e})"));
+                match self.close_thread(&sandbox, &name, false, true).await {
+                    Ok(()) => closed.push(t.clone()),
+                    Err(e) => {
+                        tracing::warn!("plans: could not close merged thread '{t}': {e}");
+                        unclosed.push(format!("{t} ({e})"));
+                    }
                 }
+            }
+            // Said either way, so the line shows whether the close ran.
+            if !closed.is_empty() {
+                summary.push_str(&format!(" Closed: {}.", closed.join(", ")));
             }
             if !unclosed.is_empty() {
                 summary.push_str(&format!(" Not closed: {}.", unclosed.join(", ")).replace('\n', " "));
@@ -623,12 +651,16 @@ impl App {
                 }
             }
             if close_threads {
-                let mut unclosed = Vec::new();
+                let (mut closed, mut unclosed) = (Vec::new(), Vec::new());
                 for t in &merge.order {
                     let Ok(name) = ThreadName::parse(t) else { continue };
-                    if let Err(e) = self.close_thread(sandbox, &name, false, true).await {
-                        unclosed.push(format!("{t} ({e})"));
+                    match self.close_thread(sandbox, &name, false, true).await {
+                        Ok(()) => closed.push(t.clone()),
+                        Err(e) => unclosed.push(format!("{t} ({e})")),
                     }
+                }
+                if !closed.is_empty() {
+                    summary.push_str(&format!(" Closed: {}.", closed.join(", ")));
                 }
                 if let Err(e) = self.sbx_of(sandbox).await?.thread_close(&sandbox.name, dir, &team, false, true).await {
                     unclosed.push(format!("its worktree ({e:#})"));
@@ -660,6 +692,10 @@ impl App {
     /// the branch if asked. Dirty work is refused without `discard` — the
     /// daemon does not trust a click it did not see.
     pub async fn close_thread(&self, sandbox: &SandboxRef, thread: &ThreadName, discard: bool, delete_branch: bool) -> Result<(), String> {
+        // No pane reopens the session while it closes: a reconnect would
+        // start it again in a worktree the close then removes.
+        let key = SessionKey::thread(sandbox, thread);
+        let _opening = self.sessions.hold(&key).await;
         // A session in the main checkout has no worktree to remove (its folder
         // is the main agent's, so nothing there is killed by cwd). A shared
         // thread has no worktree of its own: it leaves its plan, and the plan's
@@ -694,8 +730,10 @@ impl App {
                 Err(e) => return Err(e),
             }
         }
-        self.sessions.remove(&SessionKey::thread(sandbox, thread));
-        self.sessions.remove(&SessionKey::new(sandbox.clone(), SessionKind::ThreadBash(thread.clone())));
+        // Ended, not only forgotten: a session dropped from the map alone
+        // runs on, and a pane's reconnect would start the thread again.
+        self.sessions.end(&key);
+        self.sessions.end(&SessionKey::new(sandbox.clone(), SessionKind::ThreadBash(thread.clone())));
         if let Some((dir, team)) = team_end {
             self.end_team_worktree(sandbox, &dir, &team).await;
         }
@@ -827,6 +865,8 @@ impl App {
             let (host, ws) = (&host, &ws);
             async move {
                 let root = git::repo_root(host, ws, &rel).await?;
+                // A repo git cannot read is unknown, not a branch gone.
+                git::git(host, &root, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]).await?;
                 let full = format!("refs/heads/{branch}");
                 let Some(tip) = git::git(host, &root, &["rev-parse", "--verify", "--quiet", &full]).await else {
                     return Some(Probe::Gone);
@@ -1060,6 +1100,10 @@ mod lead_tests;
 #[cfg(test)]
 #[path = "plans_reopen_tests.rs"]
 mod reopen_tests;
+
+#[cfg(test)]
+#[path = "plans_merge_close_tests.rs"]
+mod merge_close_tests;
 
 #[cfg(test)]
 mod tests {

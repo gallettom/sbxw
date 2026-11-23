@@ -594,9 +594,15 @@ fn plan_merge(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
         Some(b) => format!("into {b}"),
         None => "into the branch its repo's main checkout is on".to_string(),
     };
+    // A shared plan sends the distillate this dialog shows, as the web UI
+    // sends the one its person kept: what is merged is what was read.
+    let mut body = json!({ "close_threads": close });
+    if shared {
+        body["distillate"] = m["distillate"].as_array().cloned().map(J::Array).unwrap_or_else(|| json!([]));
+    }
     let mut c = Confirm::new(
         format!("Merge the threads of {sb}?"),
-        Call::post(format!("/api/plans/{}/merge", enc(id)), json!({ "close_threads": close }), format!("merge the threads of {sb}")).then(&["plans", "threads"]).timeout(600).tag(&format!("merge:{id}")),
+        Call::post(format!("/api/plans/{}/merge", enc(id)), body, format!("merge the threads of {sb}")).then(&["plans", "threads"]).timeout(600).tag(&format!("merge:{id}")),
     );
     c = c.line(if shared {
         format!("One branch, sbxw/team-{id}, merged once {into}.")
@@ -950,7 +956,17 @@ fn plans_changed(ctx: &Ctx, old: &J, new: &J) -> Vec<Action> {
                 out.push(Action::OpenModal { screen: "plans".into(), arg: json!(id) });
             }
         }
-        if !seed && p["merge"]["state"] == "proposed" && prev.is_some_and(|x| x["merge"].is_null()) {
+        // A new proposal: the first, a late one after a merge, or one that
+        // replaces the proposal before it (another order). The words of the
+        // merge before it (its refusal, what was closed) are not this one's.
+        let proposed = |x: &J| x["merge"]["state"] == "proposed";
+        let new_proposal = proposed(p) && prev.is_some_and(|x| !proposed(x) || x["merge"]["order"] != p["merge"]["order"]);
+        if !seed && new_proposal {
+            for k in ["merge_note", "plan_error"] {
+                if obj(&mut u, k).remove(id).is_some() {
+                    changed = true;
+                }
+            }
             out.push(Action::Notice { text: format!("The lead of {sb} proposes merging its threads"), error: false, then: Some(("plan_review".into(), json!({ "id": id }))) });
         }
     }
