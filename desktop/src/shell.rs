@@ -5759,15 +5759,15 @@ end, actions = {} }"#).unwrap();
         let mut tx = Tx::default();
         let now = Instant::now();
         // Up to 4 KB: copied at once, and said so.
-        a.osc_copy(0, "mus", "x".repeat(40), now, &mut tx);
+        a.osc_copy(0, "mus", "x".repeat(40), now, &mut |t| tx.copy(t));
         assert_eq!(a.notice.as_ref().map(|n| (n.0.as_str(), n.1)), Some(("Copied 40 B from mus", false)));
         assert!(a.copy_offer.is_none());
         // Up to 100 KB: offered, nothing copied yet; a newer offer replaces it.
         a.notice = None;
-        a.osc_copy(0, "mus", "y".repeat(6 * 1024), now, &mut tx);
+        a.osc_copy(0, "mus", "y".repeat(6 * 1024), now, &mut |t| tx.copy(t));
         assert_eq!(a.copy_offer.as_ref().map(|o| o.bytes), Some(6 * 1024));
         assert!(a.notice.is_none());
-        a.osc_copy(1, "web-app", "z".repeat(5000), now, &mut tx);
+        a.osc_copy(1, "web-app", "z".repeat(5000), now, &mut |t| tx.copy(t));
         let o = a.copy_offer.as_ref().unwrap();
         assert_eq!((o.sandbox.as_str(), o.bytes), ("web-app", 5000));
         assert_eq!(o.headline(), "web-app wants to copy 4.9 KB to your clipboard:");
@@ -5776,8 +5776,8 @@ end, actions = {} }"#).unwrap();
         assert!(a.copy_offer.is_none());
         assert_eq!(a.notice.as_ref().map(|n| n.0.as_str()), Some("Copied 4.9 KB from web-app"));
         // Above: dropped, with an error notice; an offer showing stays.
-        a.osc_copy(0, "mus", "y".repeat(6 * 1024), now, &mut tx);
-        a.osc_copy(0, "mus", "w".repeat(100 * 1024 + 1), now, &mut tx);
+        a.osc_copy(0, "mus", "y".repeat(6 * 1024), now, &mut |t| tx.copy(t));
+        a.osc_copy(0, "mus", "w".repeat(100 * 1024 + 1), now, &mut |t| tx.copy(t));
         assert_eq!(a.notice.as_ref().map(|n| n.1), Some(true));
         assert!(a.notice.as_ref().unwrap().0.contains("more than 100.0 KB, dropped"), "{:?}", a.notice);
         assert_eq!(a.copy_offer.as_ref().map(|o| o.bytes), Some(6 * 1024));
