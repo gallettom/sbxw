@@ -11,6 +11,7 @@ mod bar;
 mod dictate;
 mod drag;
 mod features;
+pub use features::Dialog;
 mod jarvis;
 mod leads;
 mod memory;
@@ -1077,7 +1078,8 @@ impl App {
     }
 
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
-        let mut changed = false;
+        // What the other windows asked (crate::windows), first.
+        let mut changed = self.windows_drain();
         self.memory_tick();
         if self.theme_seen != theme::generation() {
             self.theme_seen = theme::generation();
@@ -1361,6 +1363,11 @@ impl App {
         if self.bar_menu.take().is_some() || self.pager_menu.take().is_some() || std::mem::take(&mut self.rail_menu) || self.drag.take().is_some() {
             return true;
         }
+        // A confirmation shown in another window (crate::windows) is answered
+        // there only: Escape here leaves it.
+        if crate::windows::dialog_elsewhere() {
+            return true;
+        }
         if self.feats.dialog.is_some() || self.feats.modal.is_some() {
             // The confirmation first, then the modal under it.
             if !self.dismiss_dialog() {
@@ -1393,7 +1400,8 @@ impl App {
         // itself): as its feature's `<screen>_key` intent, if it has one.
         // Left, Right, Backspace and typed text too, to a feature whose key
         // intent lists them (the explorer: fold, open, type to filter).
-        if let Some((name, _)) = self.feats.overlay.clone() {
+        // Not a view shown in its own window (crate::windows): its window has its keys.
+        if let Some((name, _)) = self.feats.overlay.clone().filter(|(n, _)| !crate::windows::shows_screen(n)) {
             let k = match &ev.key {
                 Key::Up => Some("up"),
                 Key::Down => Some("down"),
@@ -1587,7 +1595,7 @@ impl App {
     /// area (an overlay, or the base view) shows a popup of its own: its
     /// `<name>_ui.popup` is true and its `<name>_key` takes `escape`.
     pub fn popup_escape(&self) -> Option<String> {
-        let (name, _) = self.feats.overlay.as_ref()?;
+        let (name, _) = self.feats.overlay.as_ref().filter(|(n, _)| !crate::windows::shows_screen(n))?;
         if self.feats.data.get(&format!("{name}_ui")).is_none_or(|u| u["popup"] != true) {
             return None;
         }
@@ -2520,6 +2528,10 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // A feature's overlay view covers the pane area (pager and panes), drawn
     // absolute over it so no terminal moves or resizes (features.rs).
     let over = s.feats.overlay.as_ref().and_then(|(name, _)| s.screens.iter().find(|x| &x.name == name)).and_then(|sc| {
+        // Shown in its own window (crate::windows): here, only where it is.
+        if crate::windows::shows_screen(&sc.name) {
+            return s.overlay_view(crate::windows::placeholder(), None);
+        }
         let (el_, more, slot) = screen::view_slot::<App>(sc);
         overlays.extend(more);
         s.overlay_view(el_, slot)
@@ -2572,7 +2584,11 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         root = root.child(dialog);
     }
     // The core's confirmation: a press outside cancels, as its × and Escape do.
-    if let Some(dialog) = s.confirm_view() {
+    // A confirmation raised in the canvas window is drawn and answered
+    // there (crate::windows); here, a scrim saying where it is.
+    if crate::windows::dialog_elsewhere() {
+        root = root.child(crate::windows::elsewhere_scrim());
+    } else if let Some(dialog) = s.confirm_view() {
         root = root.child(scrim("cf-scrim", dialog, |s: &mut App| approval::ConfirmAnswers::cancel_click(s)));
     }
     root
@@ -2598,19 +2614,19 @@ fn proposal_scrim() -> El {
 /// reads as inactive but stays recognisable. It is modal for the keyboard
 /// and the pointer (Tab stays inside, nothing behind takes a press or a
 /// key), Escape and a press on it run `outside`.
-pub fn scrim(key: &str, dialog: El, outside: impl Fn(&mut App) + Clone + 'static) -> El {
+pub fn scrim<S: 'static>(key: &str, dialog: El, outside: impl Fn(&mut S) + Clone + 'static) -> El {
     scrim_with(key, dialog, outside, true)
 }
 
 /// [`scrim`], where a press on it closes the dialog only when `light`
 /// (a form's does nothing: only its cross, Cancel and Escape close it).
-pub fn scrim_with(key: &str, dialog: El, outside: impl Fn(&mut App) + Clone + 'static, light: bool) -> El {
+pub fn scrim_with<S: 'static>(key: &str, dialog: El, outside: impl Fn(&mut S) + Clone + 'static, light: bool) -> El {
     let o2 = outside.clone();
     el().key(key.to_string())
         .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
         .fill(theme::scrim())
-        .modal(false, move |s: &mut App| o2(s))
-        .on_press(move |s: &mut App| {
+        .modal(false, move |s: &mut S| o2(s))
+        .on_press(move |s: &mut S| {
             if light {
                 outside(s)
             }

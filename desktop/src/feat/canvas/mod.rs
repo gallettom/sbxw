@@ -67,6 +67,7 @@ pub const FEATURE: Feature = Feature {
     standin: Some(model::standin),
     surfaces: &[SURF],
     on_surface: Some(on_surface),
+    shortcuts: &[crate::feat::Shortcut { key: 'o', intent: "canvas_window", args: r#"{"to":"window"}"#, help: "Open the Canvas in its own window" }],
     ..Feature::EMPTY
 };
 
@@ -76,6 +77,7 @@ const KEYS: &[&str] = &["type", "backspace", "escape", "up", "down", "enter", "l
 const OLDER: &[&str] = &["7", "30", "90"];
 const TABS: &[&str] = &["canvas", "remarks"];
 const GROUNDS: &[&str] = &["white", "dark", "follow"];
+const WINDOW_TO: &[&str] = &["window", "main"];
 
 use crate::intent::direct as d;
 
@@ -93,6 +95,7 @@ pub const INTENTS: &[Spec] = &[
     d("canvas_session", &[("key", Arg::Str, true)], "The session the remarks go to (`<sandbox>` for its main session, `<sandbox>::<thread>`)."),
     d("canvas_ask_text", &[("text", Arg::Text, true)], "Edits the prompt of Ask the agent for screenshots."),
     d("canvas_ground", &[("ground", Arg::OneOf(GROUNDS), true)], "The canvas's ground: `white` (the default), `dark`, or `follow` (the theme's: dark for the dark themes). Remembered across launches."),
+    d("canvas_window", &[("to", Arg::OneOf(WINDOW_TO), true)], "Shows the Canvas in its own window (`window`: opened, or brought to the front when it is open; full screen there with ⌃⌘F, F11 elsewhere), or back over the panes of the main window (`main`: its window closes). One place at a time: while it has its window, the main window's Canvas says so."),
     d("canvas_tab", &[("tab", Arg::OneOf(TABS), true)], "On a narrow window: the canvas or the remarks."),
     d("canvas_key", &[("key", Arg::OneOf(KEYS), true), ("text", Arg::Text, false)], "The Canvas's keys: V, P, N, A pick a tool, Escape leaves it, Backspace removes the unsent remark selected."),
     Spec { name: "canvas_send", risk: Risk::Approval("Sends your remarks to an agent's session"), args: &[], doc: "Sends the new pins, notes and example pictures to the session shown, after one confirmation listing them all: the pictures are copied into the sandbox, the round recorded, and a fixed line asks the agent to read it with canvas_read." },
@@ -199,8 +202,9 @@ fn on_surface(ev: &crate::surface::SurfaceEvent) -> Vec<Action> {
     STATE().lock().unwrap().on_canvas(ev.clone())
 }
 
+/// Shown: over the panes, or in its own window (`crate::windows`).
 pub fn shown(cx: &Ctx) -> bool {
-    cx.get("app")["overlay"]["screen"] == SCREEN
+    cx.get("app")["overlay"]["screen"] == SCREEN || crate::windows::canvas_open()
 }
 
 /// The ground remembered across launches (absent, or a name no ground has: White).
@@ -270,6 +274,26 @@ impl State {
         }
     }
 
+    /// Canvas opens (over the panes, or in its own window): its sandbox,
+    /// its ground, the list, and the canvas asked for or the last one.
+    fn start(&mut self, cx: &Ctx, a: &Asked) -> Vec<Action> {
+        sc::set_wake(std::sync::Arc::new(wake));
+        if let Some(sb) = a.s("sandbox").filter(|s| !s.is_empty()) {
+            self.sandbox = Some(sb.to_string());
+        }
+        if self.sandbox.is_none() {
+            self.sandbox = cx.get("app")["selected"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
+        }
+        self.ground = kept_ground(cx);
+        let want = a.s("canvas").map(str::to_string).or_else(|| self.current.clone());
+        // Opened again: the pictures are read again (they were dropped on close).
+        self.forget_surface();
+        self.current = None;
+        let mut out = vec![self.read_list()];
+        out.extend(self.show_canvas(want));
+        out
+    }
+
     fn forget_surface(&mut self) {
         sc::close(SURF);
         self.queue.clear();
@@ -286,22 +310,31 @@ impl State {
         self.snap(cx);
         let mut out = vec![];
         match a.name {
-            "canvas_show" => {
-                sc::set_wake(std::sync::Arc::new(wake));
-                if let Some(sb) = a.s("sandbox").filter(|s| !s.is_empty()) {
-                    self.sandbox = Some(sb.to_string());
-                }
-                if self.sandbox.is_none() {
-                    self.sandbox = cx.get("app")["selected"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
-                }
-                self.ground = kept_ground(cx);
-                let want = a.s("canvas").map(str::to_string).or_else(|| self.current.clone());
-                // Opened again: the pictures are read again (they were dropped on close).
-                self.forget_surface();
-                self.current = None;
+            // Shown in its own window (crate::windows): the overlay says where
+            // it is; a canvas asked for shows there, nothing is read again.
+            "canvas_show" if crate::windows::canvas_open() => {
                 out.push(Action::OpenPanel(SCREEN.into()));
-                out.push(self.read_list());
-                out.extend(self.show_canvas(want));
+                if let Some(id) = a.s("canvas").filter(|id| Some(*id) != self.current.as_deref()) {
+                    out.push(self.read_list());
+                    out.extend(self.show_canvas(Some(id.to_string())));
+                }
+            }
+            "canvas_show" => {
+                out.extend(self.start(cx, a));
+                out.push(Action::OpenPanel(SCREEN.into()));
+            }
+            "canvas_window" if a.req("to") == "main" => {
+                // The window closes (a confirmation it showed is cancelled);
+                // the Canvas shows over the panes again, as it was.
+                crate::windows::close_canvas();
+                out.push(Action::OpenPanel(SCREEN.into()));
+            }
+            "canvas_window" => {
+                // Not shown anywhere yet: read as Canvas opens.
+                if !self.open && self.current.is_none() && !crate::windows::canvas_open() {
+                    out.extend(self.start(cx, a));
+                }
+                crate::windows::open_canvas();
             }
             "canvas_sandbox" => {
                 let sb = a.req("name").to_string();

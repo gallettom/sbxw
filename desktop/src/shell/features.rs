@@ -37,6 +37,44 @@ pub struct Dialog {
     pub tag: String,
 }
 
+impl Dialog {
+    /// What the confirmation draws, in a window `window` points wide and high
+    /// with its top at `top` (the main window's, or the canvas window's:
+    /// `crate::windows`). One description for every window that draws it.
+    pub fn state(&self, window: (f32, f32), top: f32) -> approval::ConfirmState<'_> {
+        let w = 520.0f32.min(window.0 - 32.0);
+        let side = ((window.0 - w) / 2.0).max(16.0);
+        approval::ConfirmState {
+            confirm: self.confirm.as_ref(),
+            title: &self.title,
+            loading: self.preparing.is_some() && self.error.is_none(),
+            error: self.error.as_deref(),
+            busy: self.running.is_some(),
+            acked: self.acked,
+            dont_ask: self.dont_ask,
+            secrets: &self.secrets,
+            left: side,
+            top,
+            right: side,
+            max_h: window.1 - top - 24.0,
+        }
+    }
+
+    pub fn toggle_ack(&mut self) {
+        self.acked = !self.acked;
+    }
+
+    pub fn toggle_dont_ask(&mut self) {
+        self.dont_ask = !self.dont_ask;
+    }
+
+    /// Which confirmation this is, for an answer given in another window
+    /// (`crate::windows`): it answers this one, never one that replaced it.
+    pub fn identity(&self) -> String {
+        format!("{}\u{1f}{}\u{1f}{}\u{1f}{}", self.feature, self.from, self.tag, self.title)
+    }
+}
+
 /// Features' state in the app.
 #[derive(Default)]
 pub struct Feats {
@@ -416,8 +454,9 @@ impl App {
 
     /// The feature whose panel is shown, if it takes files.
     /// The feature whose overlay (first) or panel is shown, if it takes files.
+    /// Not a view shown in its own window (`crate::windows`): its window takes them.
     pub(super) fn files_target(&self) -> Option<&'static str> {
-        let shown = self.feats.overlay.as_ref().map(|o| o.0.as_str()).or(self.feats.panel.as_deref())?;
+        let shown = self.feats.overlay.as_ref().map(|o| o.0.as_str()).or(self.feats.panel.as_deref()).filter(|n| !crate::windows::shows_screen(n))?;
         let (f, _) = feat::screen(shown)?;
         f.on_files.map(|_| f.name)
     }
@@ -425,7 +464,7 @@ impl App {
     /// Files dropped on the overlay: to its feature when it takes files
     /// (never to a terminal under it).
     pub(super) fn overlay_drop(&mut self, files: &[std::path::PathBuf]) {
-        if let Some(f) = self.feats.overlay.as_ref().and_then(|(m, _)| feat::screen(m)).filter(|(f, _)| f.on_files.is_some()).map(|(f, _)| f.name) {
+        if let Some(f) = self.feats.overlay.as_ref().filter(|(m, _)| !crate::windows::shows_screen(m)).and_then(|(m, _)| feat::screen(m)).filter(|(f, _)| f.on_files.is_some()).map(|(f, _)| f.name) {
             self.feature_incoming(f, feat::Incoming::Files(files.to_vec()));
             self.push_data();
         }
@@ -1301,6 +1340,79 @@ impl App {
         self.push_data();
     }
 
+    /// Runs what the other windows asked (`crate::windows`), in order, by
+    /// the paths the main window's own overlay uses. The person's input from
+    /// another window is refused while a gate is up ([`crate::windows::gate_of`]:
+    /// checked again before each message, since one may raise it); a
+    /// confirmation it raised belongs to that window, and only an answer
+    /// from that window, for that very confirmation, runs here.
+    pub fn windows_drain(&mut self) -> bool {
+        use crate::windows::{self as w, ToPrimary};
+        let msgs = w::with(|h| h.take_for_primary());
+        if msgs.is_empty() {
+            return false;
+        }
+        for (from, m) in msgs {
+            let input = m.is_input();
+            match m {
+                ToPrimary::Answer { confirm, dialog } => {
+                    let ours = self.feats.dialog.as_ref().is_some_and(|d| d.identity() == dialog) && w::with(|h| h.dialog_owner()) == Some(from);
+                    if !ours {
+                        log::info!("windows: an answer from the {from} window to a confirmation that is not its own: ignored");
+                        continue;
+                    }
+                    if confirm {
+                        ConfirmAnswers::confirm_click(self);
+                    } else {
+                        ConfirmAnswers::cancel_click(self);
+                    }
+                }
+                ToPrimary::Closed => self.press_extra("windows", "canvas_window", &json!({ "to": "main" })),
+                ToPrimary::Resized => self.push_data(),
+                _ if input && w::gate_of(self).is_some() => {
+                    w::with(|h| h.refused += 1);
+                    log::info!("windows: input from the {from} window refused: a gate is up");
+                }
+                m => {
+                    let before = self.feats.dialog.as_ref().map(Dialog::identity);
+                    match m {
+                        ToPrimary::Intents { screen, intents, editing } => {
+                            if screen != w::CANVAS_SCREEN {
+                                continue;
+                            }
+                            if let Some(sc) = self.screens.iter_mut().find(|s| s.name == screen) {
+                                sc.ui.editing = editing;
+                            }
+                            crate::screen::Host::intents(self, &screen, intents);
+                            if let Some(sc) = self.screens.iter_mut().find(|s| s.name == screen) {
+                                sc.ui.editing = false;
+                            }
+                        }
+                        ToPrimary::Surface(ev) => self.feats_surface(ev),
+                        ToPrimary::Key(args) => {
+                            self.press_extra("keys", "canvas_key", &args);
+                            self.push_data();
+                        }
+                        ToPrimary::Files(p) => {
+                            self.feature_incoming("canvas", feat::Incoming::Files(p));
+                            self.push_data();
+                        }
+                        ToPrimary::Png(b) => {
+                            self.feature_incoming("canvas", feat::Incoming::Png(b));
+                            self.push_data();
+                        }
+                        ToPrimary::Answer { .. } | ToPrimary::Closed | ToPrimary::Resized => {}
+                    }
+                    // A confirmation this input raised is shown, and answered, in its window.
+                    if let Some(id) = self.feats.dialog.as_ref().map(Dialog::identity).filter(|id| Some(id) != before.as_ref()) {
+                        w::with(|h| h.dialog_raised(id, from));
+                    }
+                }
+            }
+        }
+        true
+    }
+
     pub(super) fn press_extra(&mut self, from: &str, name: &str, args: &J) {
         match crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })) {
             Ok(list) => crate::screen::Host::intents(self, from, list),
@@ -1313,24 +1425,8 @@ impl App {
     /// The confirmation, centred over the window.
     pub(super) fn confirm_view(&self) -> Option<El> {
         let d = self.feats.dialog.as_ref()?;
-        let w = 520.0f32.min(self.window.0 - 32.0);
-        let side = ((self.window.0 - w) / 2.0).max(16.0);
         let top = layout::GUTTER * 2.0 + layout::TOP_BAR_H + 24.0;
-        let st = approval::ConfirmState {
-            confirm: d.confirm.as_ref(),
-            title: &d.title,
-            loading: d.preparing.is_some() && d.error.is_none(),
-            error: d.error.as_deref(),
-            busy: d.running.is_some(),
-            acked: d.acked,
-            dont_ask: d.dont_ask,
-            secrets: &d.secrets,
-            left: side,
-            top,
-            right: side,
-            max_h: self.window.1 - top - 24.0,
-        };
-        Some(approval::confirm_view::<App>(&st))
+        Some(approval::confirm_view::<App>(&d.state(self.window, top)))
     }
 
     /// The modal screen over a dimmed window.
@@ -1628,13 +1724,13 @@ impl ConfirmAnswers for App {
 
     fn toggle_confirm_ack(&mut self) {
         if let Some(d) = self.feats.dialog.as_mut() {
-            d.acked = !d.acked;
+            d.toggle_ack();
         }
     }
 
     fn toggle_confirm_dont_ask(&mut self) {
         if let Some(d) = self.feats.dialog.as_mut() {
-            d.dont_ask = !d.dont_ask;
+            d.toggle_dont_ask();
         }
     }
 

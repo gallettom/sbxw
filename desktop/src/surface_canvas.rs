@@ -410,8 +410,23 @@ fn with<R>(id: &str, f: impl FnOnce(&mut Canvas) -> R) -> R {
     CANVASES.with(|m| f(m.borrow_mut().entry(id.to_string()).or_insert_with(Canvas::new)))
 }
 
+/// Bumped when what a canvas draws changes from outside its own gestures
+/// (a scene, a zoom command, a picture decoded, a close): a window that
+/// draws it elsewhere than where the change ran draws again (`crate::windows`).
+static GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn changed() {
+    GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// See [`GEN`].
+pub fn generation() -> u64 {
+    GEN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Replaces what canvas `id` shows (the camera stays where it is).
 pub fn set_scene(id: &str, scene: Scene) {
+    changed();
     with(id, |c| {
         // The first items fit the view (a canvas laid out before its manifest came).
         let first = c.scene.items.is_empty() && !scene.items.is_empty();
@@ -444,6 +459,7 @@ pub fn zoom_label(id: &str) -> String {
 }
 
 pub fn zoom(id: &str, cmd: ZoomCmd) {
+    changed();
     with(id, |c| {
         let mut cam = c.cam;
         let mid = cam.c();
@@ -464,6 +480,7 @@ pub fn zoom(id: &str, cmd: ZoomCmd) {
 /// Brings world rectangle `r` into view (a pin chosen in the side list),
 /// zooming in only as far as `max`.
 pub fn show(id: &str, r: [f32; 4], max: f32) {
+    changed();
     with(id, |c| {
         let mut cam = c.cam;
         let vis = cam.visible();
@@ -477,6 +494,7 @@ pub fn show(id: &str, r: [f32; 4], max: f32) {
 
 /// Forgets canvas `id`: its scene, camera and every picture level.
 pub fn close(id: &str) {
+    changed();
     CANVASES.with(|m| m.borrow_mut().remove(id));
     let pre = prefix(id);
     pics(|m| m.retain(|k, _| !k.starts_with(&pre)));
@@ -549,6 +567,7 @@ pub fn load(id: &str, image: &str, bytes: Vec<u8>, full: bool) {
         if let Loaded::Err(e) = &got {
             log::warn!("canvas: a picture could not be shown ({} bytes): {e}", bytes.len());
         }
+        changed();
         if let Some(w) = WAKE.lock().unwrap().clone() {
             w();
         }
@@ -982,6 +1001,7 @@ fn laid_out(id: &str, size: [f32; 2]) -> bool {
 
 /// Re-fit on the next layout (a canvas opened again, or another one shown).
 pub fn refit(id: &str) {
+    changed();
     with(id, |cv| cv.fitted = false);
 }
 
