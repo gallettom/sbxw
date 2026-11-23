@@ -1016,7 +1016,8 @@ pub(crate) fn button<S: 'static>(key: &str, label: &str, help: &str, primary: bo
 /// The canvas window's view: a header (the Canvas's title and pickers,
 /// full screen, back to the main window), the Canvas screen, its open
 /// menus, and the gate's scrim over everything while one is up.
-pub fn canvas_view(s: &CanvasWin, _cx: &mut Cx<CanvasWin>) -> El {
+pub fn canvas_view(s: &CanvasWin, cx: &mut Cx<CanvasWin>) -> El {
+    let inset = if std::env::var_os("SBXW_DESKTOP_NO_LIGHTS").is_some() { 0.0 } else { cx.titlebar_inset() };
     let mut root = col()
         .key("cwin")
         .w_full()
@@ -1042,7 +1043,11 @@ pub fn canvas_view(s: &CanvasWin, _cx: &mut Cx<CanvasWin>) -> El {
         Some((_, sc)) => {
             let (panel, more, slot) = screen::view_slot::<CanvasWin>(sc);
             overlays = more;
-            let mut head = row().key("cwin-head").w_full().h(layout::CONTROL_H).gap(8.0).items_center();
+            let mut head = row().key("cwin-head").w_full().h(layout::CONTROL_H).gap(8.0).items_center().window_drag();
+            let room = canvas_lights_room(inset);
+            if room > 0.0 {
+                head = head.child(el().key("cwin-lights-room").w(room - 8.0).h_full());
+            }
             if let Some(i) = crate::icons::get("canvas") {
                 head = head.child(rune::icon(i, theme::icon::MEDIUM).color(c("text-bright")));
             }
@@ -1059,7 +1064,7 @@ pub fn canvas_view(s: &CanvasWin, _cx: &mut Cx<CanvasWin>) -> El {
                         with(|h| h.close_canvas());
                     }
                 }));
-            col().key("cwin-body").w_full().h_full().min_h(0.0).padding(12.0).gap(8.0).child(head).child(col().grow(1.0).w_full().min_h(0.0).child(panel))
+            col().key("cwin-body").w_full().h_full().min_h(0.0).padding(CANVAS_PAD).gap(8.0).child(head).child(col().grow(1.0).w_full().min_h(0.0).child(panel))
         }
         // Between hand-overs (the main window holds the screen for a moment).
         None => col().key("cwin-wait").w_full().h_full().items_center().justify_center().child(text("The Canvas is in the main window.").font(small(theme::font_size::BODY, 400.0)).color(c("text-muted"))),
@@ -1196,6 +1201,23 @@ pub fn placeholder() -> El {
         )
 }
 
+/// The canvas window's body padding, all round.
+const CANVAS_PAD: f32 = 12.0;
+
+/// The canvas window's frame: on macOS the window buttons sit on its
+/// header's line (AppKit's default (7, 6) put them over the title), at the
+/// body's padding, centred on the header. Only the header moves the window.
+pub const fn canvas_chrome() -> rune::Chrome {
+    rune::Chrome { full_size_content: true, traffic_lights: Some((CANVAS_PAD, CANVAS_PAD + layout::CONTROL_H / 2.0 - rune::Chrome::TRAFFIC_LIGHT / 2.0)), drag_regions: true }
+}
+
+/// The room the header keeps at its left for the window buttons: 12 pt
+/// clear after the zoom button (`inset` is from the window's edge, the
+/// header starts a padding in). None without them (full screen, Linux, Windows).
+pub fn canvas_lights_room(inset: f32) -> f32 {
+    if inset > 0.0 { inset - CANVAS_PAD + 12.0 } else { 0.0 }
+}
+
 /// The canvas window's spec: its own state, the Canvas screen moved in for
 /// its turns, a standard frame, and its menu item for full screen.
 pub fn canvas_spec() -> rune::WindowSpec<CanvasWin> {
@@ -1213,7 +1235,7 @@ pub fn canvas_spec() -> rune::WindowSpec<CanvasWin> {
             item = item.key_equivalent(k);
         }
     }
-    let app = rune::App::new(spec).turn_scope(canvas_enter, canvas_leave).on_close(canvas_closed).menu_item(item);
+    let app = rune::App::new(spec).chrome(canvas_chrome()).turn_scope(canvas_enter, canvas_leave).on_close(canvas_closed).menu_item(item);
     rune::WindowSpec::from_app(CANVAS.to_string(), app)
 }
 

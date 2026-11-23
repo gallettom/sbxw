@@ -788,3 +788,16 @@ fn a_page_window_never_opens_a_second_view_of_a_main_window_session() {
     assert_eq!((r.rt.state.panes[f].sandbox.as_deref(), r.rt.state.panes[f].mode), (Some("web-app"), Mode::Bash));
     assert!(r.rt.state.notice.as_ref().is_some_and(|n| n.0.contains("shows in the main window")), "{:?}", r.rt.state.notice);
 }
+
+/// The window buttons (macOS) sit on the page window's header line, at its
+/// padding; the header keeps 12 pt clear after them, and no room without them.
+#[test]
+fn the_page_windows_header_keeps_room_for_the_window_buttons() {
+    let c = pw::page_chrome();
+    assert!(c.full_size_content && c.drag_regions);
+    let (x, y) = c.traffic_lights.unwrap();
+    assert_eq!(x, layout::GUTTER);
+    assert_eq!(y + rune::Chrome::TRAFFIC_LIGHT / 2.0, layout::GUTTER + layout::CONTROL_H / 2.0, "centred on the header");
+    assert_eq!(pw::lights_room(0.0), 0.0);
+    assert_eq!(pw::lights_room(76.0), 76.0 - layout::GUTTER + 12.0);
+}

@@ -929,6 +929,9 @@ pub fn page_view(s: &PageWin, cx: &mut Cx<PageWin>) -> El {
         cx.zoom(ch.zoom);
     }
     cx.help_look(help_look());
+    // The window buttons (macOS) sit on the header's line, as in the canvas
+    // window: the header keeps room for them and moves the window.
+    let inset = if std::env::var_os("SBXW_DESKTOP_NO_LIGHTS").is_some() { 0.0 } else { cx.titlebar_inset() };
     let mut root = col()
         .key("pwin")
         .w_full()
@@ -971,12 +974,12 @@ pub fn page_view(s: &PageWin, cx: &mut Cx<PageWin>) -> El {
         });
     }
     let title = s.chrome.as_ref().map_or_else(|| "Page".to_string(), |c| c.title.clone());
-    let head = row()
-        .key("pwin-head")
-        .w_full()
-        .h(layout::CONTROL_H)
-        .gap(8.0)
-        .items_center()
+    let mut head = row().key("pwin-head").w_full().h(layout::CONTROL_H).gap(8.0).items_center().window_drag();
+    let room = lights_room(inset);
+    if room > 0.0 {
+        head = head.child(el().key("pwin-lights-room").w(room - 8.0).h_full());
+    }
+    let head = head
         .child(rune::icon(crate::icons::get("single").unwrap(), theme::icon::MEDIUM).color(c("text-bright")))
         .child(text(title).font(small(theme::font_size::TITLE, 600.0)).color(c("text-bright")).truncate().shrink().min_w(0.0))
         .child(el().grow(1.0).min_w(0.0))
@@ -1020,6 +1023,20 @@ pub fn page_view(s: &PageWin, cx: &mut Cx<PageWin>) -> El {
     root
 }
 
+/// The page window's frame: on macOS the window buttons sit on its header's
+/// line, at the body's padding, centred on the header (as the canvas
+/// window's, `windows::canvas_chrome`). Only the header moves the window.
+pub const fn page_chrome() -> rune::Chrome {
+    rune::Chrome { full_size_content: true, traffic_lights: Some((layout::GUTTER, layout::GUTTER + layout::CONTROL_H / 2.0 - rune::Chrome::TRAFFIC_LIGHT / 2.0)), drag_regions: true }
+}
+
+/// The room the header keeps at its left for the window buttons: 12 pt
+/// clear after the zoom button (`inset` is from the window's edge, the
+/// header starts a padding in). None without them (full screen, Linux, Windows).
+pub fn lights_room(inset: f32) -> f32 {
+    if inset > 0.0 { inset - layout::GUTTER + 12.0 } else { 0.0 }
+}
+
 /// "Move Page to New Window" and back: ⌘⇧M on macOS, Ctrl+Shift+M elsewhere.
 pub fn back_keys() -> Vec<String> {
     if cfg!(target_os = "macos") {
@@ -1061,6 +1078,7 @@ pub fn page_spec(id: u32) -> rune::WindowSpec<PageWin> {
         }
     }
     let app = rune::App::new(spec)
+        .chrome(page_chrome())
         .turn_scope(page_enter, page_leave)
         .on_close(page_closed)
         .on_ime(|s: &mut PageWin, ime: &rune::Ime, tx: &mut Tx| s.on_ime(ime, tx.focused()))
