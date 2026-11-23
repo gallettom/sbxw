@@ -354,8 +354,9 @@ pub fn view(s: &State, snap: &J) -> J {
         "tool": s.tool.name(), "selected": s.selected, "renaming": s.renaming, "loading": s.loading, "error": s.error,
         "tab": if s.tab.is_empty() { "canvas" } else { s.tab.as_str() },
         "ask": { "text": s.ask_text.clone().unwrap_or_else(|| super::ASK_PROMPT.to_string()) },
+        // The bar's select: its value is checked in its list.
         "ground": s.ground.name(),
-        "grounds": crate::surface_canvas::Ground::ALL.iter().map(|g| json!({ "id": g.name(), "label": g.label(), "current": *g == s.ground })).collect::<Vec<_>>(),
+        "grounds": crate::surface_canvas::Ground::ALL.iter().map(|g| json!({ "id": g.name(), "label": g.label() })).collect::<Vec<_>>(),
         "popup": s.tool != Tool::Select, "zoom": format!("{:.0}%", crate::surface_canvas::camera(super::SURF).zoom * 100.0),
     });
     let Some(c) = &s.canvas else {

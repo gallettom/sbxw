@@ -1029,14 +1029,14 @@ fn the_ground_defaults_to_white_and_the_choice_is_remembered() {
     w.open();
     assert_eq!(w.ui()["ground"], "white");
     assert_eq!(crate::surface_canvas::scene(SURF).ground, Ground::White);
-    let marked: Vec<&str> = w.ui()["grounds"].as_array().unwrap().iter().filter(|g| g["current"] == true).filter_map(|g| g["id"].as_str()).collect();
-    assert_eq!(marked, ["white"]);
+    let ids: Vec<&str> = w.ui()["grounds"].as_array().unwrap().iter().filter_map(|g| g["id"].as_str()).collect();
+    assert_eq!(ids, ["white", "dark", "follow"], "three options; the select checks the one in `ground`");
     let acts = w.intent("canvas_ground", json!({ "ground": "dark" })).unwrap();
     assert!(acts.contains(&Action::Remember { key: "ground".into(), value: json!("dark") }), "{acts:?}");
     w.run(acts);
     assert_eq!(w.ui()["ground"], "dark");
     assert_eq!(crate::surface_canvas::scene(SURF).ground, Ground::Dark);
-    assert!(w.intent("canvas_ground", json!({ "ground": "pink" })).is_err() || crate::intent::parse(&json!({ "kind": "intent", "name": "canvas_ground", "args": { "ground": "pink" } })).is_err());
+    assert!(crate::intent::parse(&json!({ "kind": "intent", "name": "canvas_ground", "args": { "ground": "pink" } })).is_err(), "a ground no choice has is refused");
     // Opened again in a later run: the kept choice.
     for (kept, want) in [(json!("follow"), Ground::Follow), (json!("dark"), Ground::Dark), (json!("sepia"), Ground::White), (J::Null, Ground::White)] {
         let mut w = World::new("basic");
