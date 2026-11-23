@@ -364,3 +364,25 @@ fn a_route_cannot_weaken_no_store() {
         assert_eq!(out.headers()[header::CACHE_CONTROL], want, "{set:?}");
     }
 }
+
+/// A canvas holding a diagram reads on the phone as before: its shots, and
+/// the diagrams as a count only (a later stage draws them read only).
+#[tokio::test]
+async fn a_canvas_with_a_diagram_reads_on_the_phone_with_a_count() {
+    let (d, app) = on();
+    let router = remote_router(app.clone());
+    let token = pair(&app, &router, "phone").await;
+    let (_sb, _) = leader(&app, d.path(), "lead1").await;
+    let id = canvas_of(&app, "lead1", "Review", 1);
+    let flow = r#"{ "version": 1, "kind": "workflow", "title": "Secret flow", "nodes": [{ "id": "a", "label": "Hidden label" }] }"#;
+    let me = SandboxRef::parse("lead1").unwrap();
+    app.canvas_agent_diagram(&me, Some(&id), "k", crate::svc::canvas::DiagramIn { json: flow.into(), ..Default::default() }).unwrap();
+    let r = get(&router, &token, "/r/leaders/lead1/canvas").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["canvases"][0]["diagrams"], 1);
+    let r = get(&router, &token, &format!("/r/canvas/{id}")).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let m = r.json();
+    assert_eq!((m["shots"].as_array().unwrap().len(), m["diagrams"].as_u64(), m["draft_diagrams"].as_u64()), (1, Some(1), Some(0)));
+    assert!(!r.text().contains("Hidden label") && !r.text().contains("Secret flow"), "no diagram content: {}", r.text());
+}

@@ -13,6 +13,7 @@
 //! * A round is sent as the Mac sends it: the round recorded, then ONE fixed
 //!   line typed into the main session, under the phone's message gate.
 //! * Never logged, never journaled: a title, a remark's text, a file name.
+//! * Diagrams are left out of the view for now: a count only.
 
 use super::remote_access::{DeviceCtx, Reason, Refusal, HOOK_GRACE};
 use crate::app::App;
@@ -166,6 +167,7 @@ impl App {
                     "unread": c.unread().len(),
                     "draft": c.draft(),
                     "draft_examples": unsent_examples(&c),
+                    "diagrams": c.diagrams.len(),
                     "updated_ms": c.updated_ms,
                 })
             })
@@ -208,6 +210,11 @@ impl App {
             "reviews": reviews,
             "draft": c.draft(),
             "draft_examples": unsent_examples(&c),
+            // Diagrams are not shown on the phone yet (a later stage draws
+            // them read only): their count, and the Mac's unsent edits to them,
+            // which a round sent from here takes along like the Mac's notes.
+            "diagrams": c.diagrams.len(),
+            "draft_diagrams": c.draft_diagrams(),
             "limits": { "text": TEXT_MAX, "pins": canvas::MAX_PINS, "notes": canvas::MAX_NOTES },
         }))
     }

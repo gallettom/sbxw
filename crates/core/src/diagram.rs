@@ -184,10 +184,10 @@ pub struct Group {
 pub struct Node {
     pub id: String,
     pub label: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sub: String,
     pub shape: Shape,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane: Option<String>,
     pub x: f32,
     pub y: f32,
@@ -201,18 +201,18 @@ pub struct Edge {
     pub id: String,
     pub from: String,
     pub to: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub label: String,
     pub style: Style,
     /// A sequence message's row, from 0.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Diagram {
     pub version: u32,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
     pub kind: Kind,
     pub title: String,

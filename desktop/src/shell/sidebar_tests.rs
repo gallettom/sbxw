@@ -1,7 +1,7 @@
 //! The Sandboxes list's order and its session blocks (sandboxes.luau, "The
 //! order"): active sandboxes first in three tiers, at both levels; the order
 //! holds under the pointer and while a menu is open; the tinted block of a
-//! sandbox with several sessions. Fixture: fixtures/shell/order.json
+//! sandbox with several sessions, the one card every sandbox has. Fixture: fixtures/shell/order.json
 //! (invented names; the state file is memory only in tests).
 
 use super::*;
@@ -234,7 +234,7 @@ fn the_order_holds_under_the_pointer_and_an_open_menu() {
 }
 
 #[test]
-fn several_sessions_get_a_block_and_one_keeps_todays_look() {
+fn several_sessions_get_a_tinted_card_and_one_the_plain_one() {
     let mut a = app();
     // The first push learns which sandboxes draw a block (their own colour).
     a.push_data();
@@ -270,10 +270,13 @@ fn several_sessions_get_a_block_and_one_keeps_todays_look() {
     let bar = find(&n, "sb-bar-atlas-web").expect("the bar");
     assert_eq!(bar.style.fill, Some(hex(&groups["atlas-web"])));
     assert!(find(&n, "sb-bar-atlas-api").is_none() && find(&n, "sb-bar-ivy").is_none());
-    // One session (ember), none (cobalt), stopped (aurora): no block.
-    for k in ["sb-ember", "sb-cobalt", "sb-aurora", "sb-atlas-api"] {
-        assert_eq!(fill(&n, k), None, "{k}");
+    // One session (ember), none (cobalt), stopped (aurora): the plain card
+    // every sandbox out of a group has; in a group, the group's block.
+    let alt = Some(crate::theme::color_value("surface-alt").unwrap());
+    for k in ["sb-ember", "sb-cobalt", "sb-aurora"] {
+        assert_eq!(fill(&n, k), alt, "{k}");
     }
+    assert_eq!(fill(&n, "sb-atlas-api"), None);
     // The row's text does not move when the block comes or goes: the same
     // room either way (the stack's 4 pt sides are always there).
     let px = |n: &Node, k: &str| find(n, k).unwrap().style.px;
@@ -285,7 +288,7 @@ fn several_sessions_get_a_block_and_one_keeps_todays_look() {
     let rows_of = d["app"]["extras"]["rows"]["ivy"].as_array().unwrap()[..1].to_vec();
     d["app"]["extras"]["rows"]["ivy"] = J::Array(rows_of);
     let n = l.draw(&d);
-    assert_eq!(fill(&n, "sb-ivy"), None);
+    assert_eq!(fill(&n, "sb-ivy"), alt);
 }
 
 /// The list in the window: the order holds while the pointer rests on a row
@@ -633,4 +636,62 @@ fn twenty_sandboxes_draw_within_the_budgets() {
     let mut r = vec![];
     keys(&n, "remove-", &mut r);
     assert!(r.len() >= 10, "{}", r.len());
+}
+
+/// One card recipe for every sandbox (the person's screenshot: a lone
+/// stopped sandbox last in the list drew no card). A team leader (fjord,
+/// three sessions), lone running sandboxes, a group of stopped ones and a
+/// lone stopped one last: every sandbox's card, its own stack out of a
+/// group, its group's block in one, has the same x and width and a fill.
+#[test]
+fn every_sandbox_card_has_the_same_width_and_a_fill() {
+    let mut a = app();
+    a.feats.data.insert("leads".into(), serde_json::json!(["fjord"]));
+    let mut rt = rune::Runtime::new(a, view, (1284.0, 2400.0), rune::Env::new(true, 1.0));
+    for _ in 0..30 {
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        rt.frame(1.0 / 60.0);
+    }
+    let side = rt.state.screens.iter().find(|s| s.name == "sandboxes").unwrap();
+    let n = side.last_good.clone().unwrap();
+    let list = find_list(&n).expect("the list");
+    let mut cards: Vec<(String, String)> = vec![];
+    for b in &list.children {
+        let k = key(b).unwrap_or_default();
+        if k.starts_with("block-ungrouped") {
+            for c in &b.children {
+                let k = key(c).unwrap();
+                cards.push((k[3..].to_string(), k));
+            }
+        } else {
+            let mut v = vec![];
+            keys(b, "row-", &mut v);
+            cards.extend(v.into_iter().map(|r| (r[4..].to_string(), k.clone())));
+        }
+    }
+    let names: Vec<&str> = cards.iter().map(|c| c.0.as_str()).collect();
+    for want in ["fjord", "cobalt", "ember", "atlas-api"] {
+        assert!(names.contains(&want), "{want} in {names:?}");
+    }
+    let (last, last_card) = cards.last().unwrap();
+    assert!(last_card.starts_with("sb-"), "the last one is out of a group: {last_card}");
+    let sbs = rt.state.screen_data()["sandboxes"].clone();
+    let status = |n: &str| sbs.as_array().unwrap().iter().find(|s| s["name"] == n).map(|s| s["status"].clone()).unwrap();
+    assert_eq!(status(last), "stopped", "{last} last");
+    assert_eq!(status("atlas-api"), "stopped");
+    let mut first: Option<[f32; 4]> = None;
+    for (sb, card) in &cards {
+        let node = find(&n, card).unwrap_or_else(|| panic!("{card}"));
+        assert!(node.style.fill.is_some(), "{sb}'s card {card} has no fill");
+        let (r, _) = rt.presented(card).unwrap_or_else(|| panic!("{card} drawn"));
+        let f = *first.get_or_insert(r);
+        assert!((r[0] - f[0]).abs() < 0.5 && (r[2] - f[2]).abs() < 0.5, "{sb}'s card {card} {r:?}, the first {f:?}");
+    }
+    // The same padding and radius on every card out of a group.
+    let solo: Vec<&Node> = cards.iter().filter(|c| c.1.starts_with("sb-")).map(|c| find(&n, &c.1).unwrap()).collect();
+    for c in &solo {
+        assert_eq!((c.style.px, c.style.py, c.style.radius), (solo[0].style.px, solo[0].style.py, solo[0].style.radius), "{:?}", key(c));
+    }
 }
