@@ -569,6 +569,7 @@ mod tests {
                 MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict in x\ny".into()), note: None },
             ],
             distillate: vec![],
+            abandoned_ms: None,
         };
         assert_eq!(merge_summary(&m), "[sbxw] Merged: a. Failed: b (conflict in x y). Not tried: c.");
     }

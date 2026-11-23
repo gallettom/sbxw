@@ -164,6 +164,11 @@ pub enum MergeState {
     Merging,
     Merged,
     Failed,
+    /// The person gave the proposal up (Abandon merge): nothing was merged
+    /// by it after that, nothing was closed or deleted. Kept as the plan's
+    /// merge, with `abandoned_ms`, until the lead proposes again, which is
+    /// a fresh proposal. Not a merge to do: no Merge button offers it.
+    Abandoned,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -192,6 +197,10 @@ pub struct Merge {
     /// Proposed by the lead, then as the person approved it at Merge.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub distillate: Vec<DistillItem>,
+    /// When the person abandoned it ([`MergeState::Abandoned`]). Only the
+    /// person can, from the plan dialog; the plan's log says so too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abandoned_ms: Option<u64>,
 }
 
 /// Where git shows a done thread's branch, when sbxw never merged it.
@@ -791,12 +800,40 @@ impl PlanBook {
                 base: None,
                 results: vec![],
                 distillate,
+                abandoned_ms: None,
             });
             Ok(())
         })
         .inspect(|p| {
             let m = p.merge.as_ref().expect("just proposed");
             self.note(id, now, EventKind::MergeProposed, team::LEAD, Some(team::USER), Some(&m.note), json!({ "order": m.order, "distillate": m.distillate.len() }));
+        })
+    }
+
+    /// The person abandons the merge proposed (or failed) for plan `id`:
+    /// the plan no longer has a merge to do. Refused while it is merging,
+    /// and once merged. Merges nothing, closes nothing, deletes nothing: the
+    /// merge keeps its results (a thread a failed merge already merged
+    /// stays merged), and the lead may propose again.
+    pub fn abandon_merge(&mut self, id: &str, now: u64) -> Result<Plan, String> {
+        self.mutate(id, now, |p| {
+            if p.state != PlanState::Approved {
+                return Err(format!("plan {id} is not approved"));
+            }
+            let m = p.merge.as_mut().ok_or_else(|| format!("plan {id} has no merge proposed"))?;
+            match m.state {
+                MergeState::Proposed | MergeState::Failed => {}
+                MergeState::Merging => return Err(format!("plan {id} is merging: wait for the merge to end")),
+                MergeState::Merged => return Err(format!("plan {id} is already merged")),
+                MergeState::Abandoned => return Err(format!("the merge of plan {id} is already abandoned")),
+            }
+            m.state = MergeState::Abandoned;
+            m.abandoned_ms = Some(now);
+            Ok(())
+        })
+        .inspect(|p| {
+            let m = p.merge.as_ref().expect("abandoned");
+            self.note(id, now, EventKind::MergeAbandoned, team::USER, Some(team::LEAD), Some("The user abandoned the proposed merge: nothing was merged"), json!({ "order": m.order }));
         })
     }
 
@@ -1195,6 +1232,65 @@ mod tests {
         let m = b.finish_merge(&p.id, 13).unwrap().merge.unwrap();
         assert_eq!(m.state, MergeState::Merged);
         assert!(m.results.iter().all(|r| r.ok) && m.results.len() == 2);
+    }
+
+    /// Abandon merge: allowed when proposed or failed, refused while it
+    /// runs, once merged, with no merge, and twice. The merge is kept as
+    /// abandoned (when, and the log says the person), its results with it;
+    /// Merge is refused on it; a later proposal is a fresh one, the earlier
+    /// merge kept as history only when it merged something.
+    #[test]
+    fn abandoning_a_merge_leaves_no_merge_to_do_and_a_fresh_proposal_works() {
+        let mut b = PlanBook::new();
+        let p = proposed(&mut b, "n", &["a", "b"]);
+        assert!(b.abandon_merge(&p.id, 2).unwrap_err().contains("not approved"));
+        b.approve(&p.id, vec![t("a"), t("b")], None, None, 3).unwrap();
+        assert!(b.abandon_merge(&p.id, 3).unwrap_err().contains("no merge proposed"));
+        b.set_thread("n", "a", ThreadState::Done, "ok", false, 4).unwrap();
+        b.set_thread("n", "b", ThreadState::Done, "ok", false, 5).unwrap();
+        // Proposed, then abandoned.
+        b.propose_merge(&p.id, "n", vec!["a".into(), "b".into()], "", vec![], 6).unwrap();
+        let q = b.abandon_merge(&p.id, 7).unwrap();
+        let m = q.merge.as_ref().unwrap();
+        assert_eq!((m.state, m.abandoned_ms, m.results.len()), (MergeState::Abandoned, Some(7), 0));
+        assert!(q.threads.iter().all(|t| t.state == ThreadState::Done), "no thread touched");
+        assert!(b.abandon_merge(&p.id, 8).unwrap_err().contains("already abandoned"));
+        assert!(b.start_merge(&p.id, None, None, 8).unwrap_err().contains("abandoned"), "Merge is refused on it");
+        let log = b.log_of(&p.id);
+        let e = log.entries.iter().find(|e| e.kind == EventKind::MergeAbandoned).expect("logged");
+        assert_eq!((e.from.as_str(), e.to.as_deref(), e.at), (team::USER, Some(team::LEAD), 7));
+        // The lead proposes again: a fresh proposal, nothing kept of the
+        // abandoned one (it merged nothing).
+        let q = b.propose_merge(&p.id, "n", vec!["a".into(), "b".into()], "again", vec![], 9).unwrap();
+        let m = q.merge.as_ref().unwrap();
+        assert_eq!((m.state, m.abandoned_ms, q.earlier_merges.len()), (MergeState::Proposed, None, 0));
+        // Failed after merging a: abandoned, a stays merged; re-proposing b
+        // keeps the abandoned merge as history.
+        b.start_merge(&p.id, None, None, 10).unwrap();
+        assert!(b.abandon_merge(&p.id, 10).unwrap_err().contains("is merging"), "refused while it runs");
+        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None, note: None }, 11).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict".into()), note: None }, 12).unwrap();
+        b.finish_merge(&p.id, 13).unwrap();
+        let q = b.abandon_merge(&p.id, 14).unwrap();
+        assert_eq!(q.merge.as_ref().unwrap().state, MergeState::Abandoned);
+        assert!(q.merged_threads().contains("a") && !q.merged_threads().contains("b"));
+        assert!(b.propose_merge(&p.id, "n", vec!["a".into()], "", vec![], 15).unwrap_err().contains("already merged"));
+        let q = b.propose_merge(&p.id, "n", vec!["b".into()], "", vec![], 15).unwrap();
+        assert_eq!((q.merge.as_ref().unwrap().state, q.earlier_merges.len()), (MergeState::Proposed, 1));
+        assert_eq!(q.earlier_merges[0].state, MergeState::Abandoned);
+        // Merged: nothing to abandon.
+        b.start_merge(&p.id, None, None, 16).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: true, commit: Some("def".into()), error: None, note: None }, 17).unwrap();
+        b.finish_merge(&p.id, 18).unwrap();
+        assert!(b.abandon_merge(&p.id, 19).unwrap_err().contains("already merged"));
+        // A plan whose merge was abandoned can be closed from the Kanban.
+        let s = proposed(&mut b, "m", &["x"]);
+        b.approve(&s.id, vec![t("x")], None, None, 20).unwrap();
+        b.set_thread("m", "x", ThreadState::Done, "ok", false, 21).unwrap();
+        b.propose_merge(&s.id, "m", vec!["x".into()], "", vec![], 22).unwrap();
+        assert!(b.dismiss(&s.id, 23).is_err());
+        b.abandon_merge(&s.id, 24).unwrap();
+        assert!(b.dismiss(&s.id, 25).unwrap().dismissed);
     }
 
     #[test]

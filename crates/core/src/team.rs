@@ -86,6 +86,8 @@ pub enum EventKind {
     MergeStarted,
     MergeResult,
     MergeFinished,
+    /// The person abandoned the proposed or failed merge.
+    MergeAbandoned,
     Commit,
     /// A note an agent of the team sent another, or the whole team, through
     /// sbxw (`team_note`): `data.kind` is info, warning or decision.

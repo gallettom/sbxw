@@ -110,6 +110,7 @@ pub const INTENTS: &[Spec] = &[
     d("merge_close_set", &[("id", Arg::Str, true), ("on", Arg::Bool, true)], "Whether the merge closes each thread (session, worktree, branch) once all merged."),
     a("plan_approve", "Approve a plan and start its threads", &[("id", Arg::Str, true)], "Opens the core's dialog with the draft as it stands and the sessions it starts; Approve there starts the threads."),
     a("plan_merge", "Merge a plan's threads", &[("id", Arg::Str, true)], "Opens the core's dialog with the lead's merge order and note; Merge there merges each thread in order, stopping at the first failure."),
+    a("plan_merge_abandon", "Abandon a plan's proposed merge", &[("id", Arg::Str, true)], "Opens the core's dialog; Abandon merge there withdraws the merge proposed (or failed): nothing is merged, closed or deleted, and the lead is told. Refused while merging."),
     a("thread_close", "Close a thread with its worktree", &[("sandbox", Arg::Str, true), ("thread", Arg::Str, true)], "Reads what closing would lose (uncommitted files, commits), then the core's dialog; Close there stops the session and removes its worktree."),
 ];
 
@@ -327,6 +328,7 @@ fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
         }
         "plan_approve" => plan_approve(ctx, q),
         "plan_merge" => plan_merge(ctx, q),
+        "plan_merge_abandon" => plan_merge_abandon(ctx, q),
         "thread_close" => {
             let (sb, t) = (q.req("sandbox"), q.req("thread"));
             if !model::valid_name(t) {
@@ -629,6 +631,32 @@ fn plan_merge(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
     Ok(vec![c.labels(if m["state"] == "failed" { "Retry merge" } else { "Merge" }, "Cancel").into_action()])
 }
 
+/// Abandon merge: the core's dialog, then the daemon withdraws the merge.
+/// Only a merge proposed or failed; while it runs, or once merged, there is
+/// nothing to abandon. Nothing is merged, closed or deleted.
+fn plan_merge_abandon(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
+    let id = q.req("id");
+    let p = model::plan(ctx.data, id).ok_or_else(|| format!("no plan {id}"))?;
+    let sb = p["sandbox"].as_str().unwrap_or("");
+    match p["merge"]["state"].as_str() {
+        Some("proposed") | Some("failed") => {}
+        Some("merging") => return Err(format!("the threads of {sb} are being merged: wait for the merge to end")),
+        Some("merged") => return Err(format!("the threads of {sb} are merged already")),
+        Some("abandoned") => return Err(format!("the merge of {sb} is abandoned already")),
+        _ => return Err(format!("the lead of {sb} has proposed no merge")),
+    }
+    let (rows, _) = model::merge_rows(p);
+    let names: Vec<&str> = rows.iter().filter_map(|r| r["name"].as_str()).collect();
+    let c = Confirm::new(
+        "Abandon the proposed merge?",
+        Call::post(format!("/api/plans/{}/merge/abandon", enc(id)), json!({}), format!("abandon the merge of {sb}")).then(&["plans", "threads"]).tag(&format!("abandon:{id}")),
+    )
+    .line("Nothing is merged, and the threads, their branches and worktrees stay as they are. The lead is told.")
+    .line(format!("The merge of {sb}: {}.", names.join(", ")))
+    .line("Closing a thread stays its own Close. The lead may propose the merge again.");
+    Ok(vec![c.labels("Abandon merge", "Cancel").into_action()])
+}
+
 /// The closes this app put to the person (the dialog is up or was answered),
 /// by `"sandbox\nthread"`: the `thread-closed` event of such a close is not
 /// news here, so it gets no notice. A mark nobody confirmed is forgotten
@@ -798,6 +826,22 @@ fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action>
                     let mut out = vec![set_ui(u), tone];
                     out.extend(acts);
                     out
+                }
+            }
+        }
+        "abandon" => {
+            let sb = model::plan(ctx.data, rest).and_then(|p| p["sandbox"].as_str()).unwrap_or("").to_string();
+            match err {
+                Some(e) => {
+                    let text = format!("Abandon merge refused: {e}");
+                    obj(&mut u, "plan_error").insert(rest.into(), json!(text));
+                    vec![set_ui(u), Action::error(text)]
+                }
+                None => {
+                    for k in ["plan_error", "merge_note"] {
+                        obj(&mut u, k).remove(rest);
+                    }
+                    vec![set_ui(u), Action::notice(format!("Abandoned the proposed merge of {sb}: nothing was merged"))]
                 }
             }
         }
