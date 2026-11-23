@@ -905,7 +905,7 @@ for both), as a 20% tint (16% unfocused) under a 2 pt line of the colour; a
 sandbox with no workspace is on the neutral bar. A bar's actions are its
 icon in its colour by meaning and its label in `text-bright`, grouped in
 zones with a hairline between two: state and what waits (sbx asks, a
-question, a plan) | what it opens (Browser, Project, Env) | the team (Team,
+question, a plan) | what it opens (Browser, Project) and the microphone | the team (Team,
 Threads) | the session (Esc, Remote). Hover and focus put the meaning's tint
 under it; an action whose panel shows for the focused pane is a tinted chip.
 A page tab takes the group colour of its first terminal (14%, the current
@@ -1275,6 +1275,41 @@ the same fit. Escape closes the menu. The fit follows each bar's laid-out
 width, at every resize. The top bar's extras get the same order; the core
 marks those that do not fit `more` (above).
 
+**What the "⋯" menu leaves out** (`bar::same_view`). The pane's menu lists
+only what the left rail and the sidebar do not already offer for that
+sandbox, read from the intents' declarations, not from a list of ids. An
+item is the rail's when a rail entry (drawn, or folded into the rail's
+"More") runs the same intent with a part of its arguments, or shows a screen
+of the feature that owns the item's intent, and the item's intent takes only
+optional arguments (a view opened on any sandbox and moved to this one
+there). It is the sidebar's, while the sidebar shows, when that sandbox's
+row has an extra with the same intent and arguments (the row's menu lists
+every one). Such an item is never a menu row; it stays inline while it fits
+only when it says something there (a count, an amber or green tone), else
+it leaves the pane. An action on this sandbox (Esc, Remote, Close thread,
+Team, Browser, Project, Env) needs its sandbox and stays the pane's. Today:
+sbx's requests (`approvals`, the rail's Network) and an agent's request
+(`relay`, Requests) show inline while they fit; Commits, MCP servers…,
+Skills… and Kits… (the rail's entries) are gone from the pane; Threads is
+gone while the sidebar shows (its row's "threads"), back in the bar or menu
+when it is hidden. `shell::tests::every_pane_action_is_reachable` walks every
+pane extra and checks each has a visible entry point.
+
+**Env and the microphone.** Env (`pane-<n>-x-envfile`, the environment file
+card) is always a row of the "⋯" menu (`bar::MENU_ONLY`). In its place in the
+fit order the core draws the microphone, `pane-<n>-dictate` (icon alone,
+named "Dictate", its tooltip the action and the dictate key): a press gives
+the pane the keyboard and starts the dictation into its terminal, the same
+path as the dictate key held there (`dictate.rs`, masked by the daemon,
+typed as a paste with no Enter, only while that pane keeps the keyboard and
+the gate is open); a second press stops it, Escape cancels. It never takes
+the keyboard from the terminal (`preserve_focus_on_press`). Recording, it is
+red with `aria-pressed`; while the words are transcribed and masked, the
+busy spinner; when it cannot dictate (no audio, voice not installed or not
+reachable, Jarvis listening, no terminal in the pane, something over the
+panes, a dictation elsewhere) it is disabled with the reason as its tooltip.
+Folded into the menu, its row does the same.
+
 ### A rail entry
 
 A feature puts an entry in the left rail with `Place::Rail { zone, order }`.
@@ -1542,9 +1577,9 @@ The `<screen>_view` convention (view state dropped on close) holds for
 overlays too: closing one drops its `<screen>_view`.
 
 Each opens for a sandbox from that sandbox's Manage dialog (`sa-mcp`,
-`sa-skills`, `sa-kits`) and from a pane's "⋯" menu (extras `mcp-view`,
-`skills-view`, `kits-view`, menu-only), with `<name>_show { sandbox }`;
-from the rail, on the last sandbox (or file) used, kept in the app's state
+`sa-skills`, `sa-kits`), with `<name>_show { sandbox }` (the pane extras
+`mcp-view`, `skills-view`, `kits-view` are declared but left out of the pane:
+the rail offers the same panel, see "What the ⋯ menu leaves out"); from the rail, on the last sandbox (or file) used, kept in the app's state
 file (`data.app.kept.<feature>`). Each panel: a sentence saying what the
 thing is, state by colour (green kept or listed, amber a local command or
 something waiting for you, red a failed read), one filled button (Add…,
@@ -1985,8 +2020,8 @@ automatic reconnect (a new socket runs a new bridge in the sandbox).
 ### commits
 
 The Commits view: an **overlay** over the pane area (`Slot::Overlay`), from
-the rail's Commits entry (browse zone), a pane's "⋯" menu (filtered to that
-sandbox) or the Worktrees view (filtered to a thread's branch). Read only.
+the rail's Commits entry (browse zone; a pane's `commits` extra is left out
+of the pane as the rail's, see "What the ⋯ menu leaves out") or the Worktrees view (filtered to a thread's branch). Read only.
 
 Data: `GET /api/sandboxes/:name/commits?limit=50&before=&ref=` per sandbox
 (six at a time), `.../commits/:hash` for a row opened; nothing in the
