@@ -19,6 +19,9 @@
 //! * `standin_merge_fail`: the thread whose merge stops at a conflict, once
 //!   (the retry after it merges);
 //! * `standin_close_refuse`: threads a merge cannot close (their worktree is busy).
+//!
+//! Abandon merge (`/api/plans/{id}/merge/abandon`) answers as the daemon:
+//! a merge proposed or failed becomes abandoned; anything else is refused.
 
 use crate::feat::{match_path, Standin};
 use serde_json::{json, Value as J};
@@ -175,6 +178,9 @@ pub fn answer(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u
                 let p = p.clone();
                 (st.publish)("plan", p.clone());
                 return ok(json!({ "plan": p }));
+            }
+            if let Some(c) = cap("/api/plans/{id}/merge/abandon") {
+                return abandon(st, &c[0]);
             }
             if let Some(c) = cap("/api/plans/{id}/merge") {
                 return merge(st, &c[0], body["close_threads"] == true);
@@ -361,6 +367,26 @@ fn step_plans(st: &mut Standin) {
     for p in changed {
         (st.publish)("plan", p);
     }
+}
+
+/// Abandon merge, as the daemon answers it (`PlanBook::abandon_merge`):
+/// only a merge proposed or failed; nothing merged, closed or deleted.
+fn abandon(st: &mut Standin, id: &str) -> Option<(u16, J)> {
+    let Some(i) = plan_index(st.data, id) else { return refuse(400, format!("no plan '{id}'")) };
+    let m = &mut plans(st.data)[i]["merge"];
+    match m["state"].as_str() {
+        Some("proposed") | Some("failed") => {}
+        Some("merging") => return refuse(400, format!("plan {id} is merging: wait for the merge to end")),
+        Some("merged") => return refuse(400, format!("plan {id} is already merged")),
+        Some("abandoned") => return refuse(400, format!("the merge of plan {id} is already abandoned")),
+        _ => return refuse(400, format!("plan {id} has no merge proposed")),
+    }
+    m["state"] = json!("abandoned");
+    m["abandoned_ms"] = json!(now_ms());
+    plans(st.data)[i]["updated_ms"] = json!(now_ms());
+    let plan = st.data["plans"][i].clone();
+    (st.publish)("plan", plan.clone());
+    ok(json!({ "plan": plan }))
 }
 
 fn merge(st: &mut Standin, id: &str, close: bool) -> Option<(u16, J)> {

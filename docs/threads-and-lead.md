@@ -322,6 +322,29 @@ failed is named with the reason (`Not closed: b (... has 2 uncommitted
 file(s)).`) and keeps its session, worktree and branch. A failed merge can be
 retried after fixing the cause.
 
+**Abandon merge.** A merge that will never be made (a study with nothing to
+keep, work you decided against) can be given up: **Abandon merge**, a quiet
+button beside Not now in the plan dialog (desktop app and web UI), shown
+while the merge is proposed or failed, never while it runs. It asks first
+(`Abandon the proposed merge? Nothing is merged, and the threads, their
+branches and worktrees stay as they are. The lead is told.`), then the
+daemon withdraws it: the merge's `state` becomes `abandoned`, with
+`abandoned_ms`, and the plan's log records that you did it. Nothing is
+merged, closed or deleted (closing stays each thread's Close); a thread a
+failed merge already merged stays merged. The plan no longer has a merge to
+do, so the pane bar's Merge or Retry merge button goes; the dialog shows the
+plan with `You abandoned this merge: nothing was merged.` and Close. On the
+Kanban, a done thread of that merge goes back to Test with the mark `merge
+abandoned` (or stays in Merged with `branch gone` when git shows its branch
+gone); the Threads view lists the plan as `Plan: n of n threads done, merge
+abandoned`. The lead is told in one line, `[sbxw] The user abandoned the
+proposed merge of "<plan summary>": nothing was merged. ...` (the threads
+when the plan has no summary), so it does not wait; it may call
+`propose_merge` again, which is a fresh proposal. Abandon merge is the
+person's only: its route is on the UI listener, and no agent tool reaches it.
+The phone lists only proposed merges, so an abandoned one leaves its
+approvals, and its Kanban shows the same mark.
+
 **A thread that finishes late can still be merged.** In a split plan, once
 some threads are merged, a thread that reports done later (or that the lead
 marks done) gets a merge of its own: the lead calls `propose_merge` again,
@@ -688,7 +711,9 @@ data rather than instructions, and copies its files into the sandbox under
   `POST /api/plans/mark_done` (agent listener) takes `{id, thread, note}`.
 - **Merge state.** The plan carries
   `merge: {order, note, state, base, results, distillate}`; `state` goes
-  `proposed` → `merging` → `merged` or `failed`. A shared plan's `order` is every
+  `proposed` → `merging` → `merged` or `failed`; `proposed` or `failed` →
+  `abandoned` (with `abandoned_ms`) by `POST /api/plans/<id>/merge/abandon`
+  (UI listener only, no body), which merges, closes and deletes nothing. A shared plan's `order` is every
   thread and its `results` hold one entry, named `team-<plan>`. `distillate` is
   `[{kind: "decision" | "warning", text}]`. `POST /api/plans/<id>/merge` with
   `{close_threads, distillate?}` runs it; `distillate`, when given, replaces the

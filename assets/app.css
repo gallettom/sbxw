@@ -1276,6 +1276,9 @@
   .merge-outcome.ok { color: var(--c-green); background: var(--c-green-tint); border: 1px solid var(--c-green-deep); font-weight: 600; }
   .merge-outcome.failed { color: var(--c-red); background: var(--c-red-tint); border: 1px solid var(--c-red-border); }
   .merge-outcome[hidden], .merge-list:empty { display: none; }
+  .merge-abandon-ask { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2); padding: var(--sp-2); border-radius: var(--r-sm); border: 1px solid var(--c-border); font-size: var(--fs-sm); }
+  .merge-abandon-ask p { margin: 0; flex: 1 1 100%; line-height: 1.5; }
+  .merge-abandon-ask[hidden] { display: none; }
   #merge-close-row input:focus-visible,
   .plan-merge-part button:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
   .plan-merge-part button[hidden] { display: none; }

@@ -563,3 +563,100 @@ fn the_close_this_app_asked_for_hears_the_event_without_a_notice_and_its_answer_
     d["sessions"] = json!([]);
     assert!(on_event(&Ctx { data: &d }, "thread-closed", &json!({ "sandbox": "web-app", "thread": "t1" })).is_empty());
 }
+
+/// `fixture` with plan p-1's merge in `state`.
+fn merge_in(state: &str) -> J {
+    let mut d = fixture(if state == "failed" { "merge-failed" } else { "merge-proposed" });
+    d["plans"][0]["merge"]["state"] = json!(state);
+    d
+}
+
+/// Abandon merge: a quiet button beside Not now while the merge is
+/// proposed or failed, never while it runs or once merged or abandoned.
+/// Pressed, the screen only asks for the intent; the intent only opens the
+/// core's dialog (an Approval row), whose call is the abandon route.
+#[test]
+fn abandon_merge_is_offered_when_proposed_or_failed_and_asks_the_core_dialog() {
+    for (state, shown) in [("proposed", true), ("failed", true), ("merging", false), ("merged", false), ("abandoned", false)] {
+        let (_, tree) = plan_screen(&merge_in(state), "p-1");
+        let b = find_key(&tree, "merge-abandon");
+        assert_eq!(b.is_some(), shown, "{state}");
+        if let Some(b) = b {
+            assert_eq!(b.text, "Abandon merge");
+            assert_ne!(b.variant.as_deref(), Some("primary"), "quiet, not the primary");
+            assert!(find_key(&tree, "merge-later").is_some(), "beside Not now");
+        }
+    }
+    assert!(matches!(spec("plan_merge_abandon").risk, Risk::Approval(_)));
+    let mut data = merge_in("failed");
+    data["app"]["modal"] = json!({ "screen": "plans", "arg": "p-1" });
+    let dir = std::env::temp_dir().join("sbxw-threads-test-no-overrides");
+    let mut s = crate::screen::ScreenState::new("plans", &dir, data.clone());
+    let got = s.act("abandon", &json!("p-1"), &J::Null).expect("intents");
+    assert!(matches!(&got[0], crate::intent::Intent::Feature(a) if a.name == "plan_merge_abandon" && a.args["id"] == "p-1"), "{got:?}");
+    for state in ["proposed", "failed"] {
+        let c = confirm(run(&merge_in(state), "plan_merge_abandon", json!({ "id": "p-1" })).unwrap());
+        assert_eq!(c.title, "Abandon the proposed merge?");
+        assert_eq!(c.lines[0], "Nothing is merged, and the threads, their branches and worktrees stay as they are. The lead is told.");
+        assert_eq!((c.confirm.as_str(), c.cancel.as_str()), ("Abandon merge", "Cancel"));
+        assert!(matches!(c.call.method, crate::feat::Method::Post));
+        assert_eq!(c.call.path, "/api/plans/p-1/merge/abandon");
+        assert!(c.lines.iter().all(|l| !l.contains('\u{2014}')));
+    }
+    for (state, why) in [("merging", "being merged"), ("merged", "merged already"), ("abandoned", "abandoned already")] {
+        assert!(run(&merge_in(state), "plan_merge_abandon", json!({ "id": "p-1" })).unwrap_err().contains(why), "{state}");
+    }
+}
+
+/// The answer: a refusal is said in the dialog as text; done, the notice
+/// says nothing was merged, the dialog shows the plan with no merge to do
+/// (no Merge, no Abandon, Close), and the pane bar's and Threads view's
+/// merge offer goes: `merge_plan`, what the bar reads, no longer finds it.
+#[test]
+fn an_abandoned_merge_leaves_no_merge_to_do_in_the_dialog_bar_and_threads_view() {
+    let d = merge_in("failed");
+    let call = Call::post("/api/plans/p-1/merge/abandon", json!({}), "x").tag("abandon:p-1");
+    let acts = on_answer(&Ctx { data: &d }, &call, Err("plan p-1 is merging: wait for the merge to end".into()));
+    let mut e = d.clone();
+    apply(&mut e, &acts);
+    let text = e[UI]["plan_error"]["p-1"].as_str().unwrap().to_string();
+    assert!(text.starts_with("Abandon merge refused:") && text.contains("is merging"), "{text}");
+    let (_, tree) = plan_screen(&e, "p-1");
+    assert_eq!(find_key(&tree, "plan-error").unwrap().text, text);
+
+    let mut after = e.clone();
+    after["plans"][0]["merge"]["state"] = json!("abandoned");
+    after["plans"][0]["merge"]["abandoned_ms"] = json!(5);
+    let body = json!({ "ok": true, "plan": after["plans"][0] });
+    let acts = on_answer(&Ctx { data: &after }, &call, Ok((200, body)));
+    assert!(acts.contains(&Action::notice("Abandoned the proposed merge of web-app: nothing was merged")), "{acts:?}");
+    apply(&mut after, &acts);
+    assert!(after[UI]["plan_error"]["p-1"].is_null());
+    let (_, tree) = plan_screen(&after, "p-1");
+    for k in ["merge-all", "merge-abandon", "merge-close", "merge-later"] {
+        assert!(find_key(&tree, k).is_none(), "{k} is gone");
+    }
+    assert!(find_key(&tree, "plan-close").is_some());
+    let out = find_key(&tree, "merge-outcome").unwrap().text.clone();
+    assert!(out.starts_with("You abandoned this merge"), "{out}");
+    assert_eq!(out, model::merge_rows(&after["plans"][0]).1);
+    // The bar's data: no plan with a merge to do, so no Merge or Retry merge.
+    assert!(model::merge_plan(&d, "web-app").is_some(), "failed: Retry merge was offered");
+    assert!(model::merge_plan(&after, "web-app").is_none());
+    assert!(view(&Ctx { data: &after })["web-app"]["merge"].is_null());
+}
+
+/// The stand-in answers as the daemon: a proposed merge abandoned, then a
+/// second abandon refused, as is Merge on it.
+#[test]
+fn the_standin_abandons_as_the_daemon_does() {
+    let mut d = merge_in("proposed");
+    let mut ev = vec![];
+    let (code, v) = answer_from(&mut d, "POST", "/api/plans/p-1/merge/abandon", &json!({}), &mut |n, v| ev.push((n.to_string(), v)));
+    assert_eq!((code, v["plan"]["merge"]["state"].as_str()), (200, Some("abandoned")));
+    assert!(ev.iter().any(|(n, v)| n == "plan" && v["merge"]["state"] == "abandoned"));
+    let (code, v) = answer_from(&mut d, "POST", "/api/plans/p-1/merge/abandon", &json!({}), &mut |_, _| {});
+    assert_eq!(code, 400);
+    assert!(v["error"].as_str().unwrap().contains("already abandoned"));
+    assert!(run(&d, "plan_merge", json!({ "id": "p-1" })).is_err(), "Merge is not offered on it");
+}

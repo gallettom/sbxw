@@ -108,7 +108,7 @@ local function plan_block(data, v, sb)
       local n, done = 0, 0
       for _, t in ipairs(p.threads or {}) do n = n + 1; if t.state == "done" then done = done + 1 end end
       table.insert(out, row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = "elevated", key = "plan-" .. p.id,
-        text{ "Plan: " .. done .. " of " .. plural(n, "thread") .. " done", grow = 1, truncate = true },
+        text{ "Plan: " .. done .. " of " .. plural(n, "thread") .. " done" .. ((p.merge and p.merge.state == "abandoned") and ", merge abandoned" or ""), grow = 1, truncate = true },
         button{ "Status", on = "review", arg = p.id, key = "plan-status-" .. p.id } })
     end
   end

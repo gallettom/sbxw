@@ -171,8 +171,31 @@ const mergeAll = document.getElementById('merge-all');
 const mergeLater = document.getElementById('merge-later');
 const mergeError = document.getElementById('merge-error');
 const mergeClose = document.getElementById('merge-close');
+const mergeAbandon = document.getElementById('merge-abandon');
+const mergeAbandonAsk = document.getElementById('merge-abandon-ask');
+const mergeAbandonYes = document.getElementById('merge-abandon-yes');
 // The plan id a Merge all is on its way for, until the daemon answers.
 let mergeAsk = null;
+
+// BEGIN plans merge pure
+// A merge to do: proposed, under way, or failed (and can be retried). One the
+// person abandoned is none: the pane's Merge button goes, the dialog shows
+// the record. Abandon merge is offered while it is proposed or failed only.
+function mergeToDo(m) {
+  return !!m && ['proposed', 'merging', 'failed'].includes(m.state);
+}
+function mergeAbandonable(m) {
+  return !!m && (m.state === 'proposed' || m.state === 'failed');
+}
+const MERGE_ABANDON_ASK = 'Abandon the proposed merge? Nothing is merged, and the threads, their branches and worktrees stay as they are. The lead is told.';
+// The outcome line of an abandoned merge: what merged before stays merged.
+function mergeAbandonedText(m) {
+  const done = (m.results || []).filter(r => r.ok).map(r => r.thread);
+  return done.length
+    ? `You abandoned this merge. Merged before that: ${done.join(', ')}. The rest was not merged; the lead may propose it again.`
+    : 'You abandoned this merge: nothing was merged. The lead may propose it again.';
+}
+// END plans merge pure
 
 // The plan of `sandbox` whose merge waits on a person, is under way or failed
 // (and can be retried): the latest, if several. Plans whose lead mode was ended are over.
@@ -180,7 +203,7 @@ function mergePlanFor(sandbox) {
   let best = null;
   for (const p of plans.values()) {
     if (p.sandbox !== sandbox || p.closed || !p.merge) continue;
-    if (!['proposed', 'merging', 'failed'].includes(p.merge.state)) continue;
+    if (!mergeToDo(p.merge)) continue;
     if (!best || p.created_ms > best.created_ms) best = p;
   }
   return best;
@@ -343,8 +366,9 @@ async function showMerge(plan) {
   distillateOpen = new Set();
   startMergeBoard(plan);
   if (planRepos?.sandbox !== plan.sandbox) planRepos = null;
-  document.getElementById('plan-title').textContent = `Merge the threads of ${plan.sandbox}`;
+  document.getElementById('plan-title').textContent = mergeToDo(plan.merge) ? `Merge the threads of ${plan.sandbox}` : `Plan of ${plan.sandbox}`;
   mergeClose.checked = true;
+  mergeAbandonAsk.hidden = true;
   showNote(mergeError, '');
   paintMerge(plan);
   modalOpen(planOverlay);
@@ -377,7 +401,7 @@ function mergeRowHtml(plan, name, i) {
     status = '<span>pending</span>';
   } else if (t?.set_by === 'lead' && !(m.state === 'failed' || m.state === 'merged')) {
     status = `<span>marked done by the lead${t.summary ? `: ${escHtml(t.summary)}` : ''}</span>`;
-  } else if (m.state === 'failed' || m.state === 'merged') {
+  } else if (m.state === 'failed' || m.state === 'merged' || m.state === 'abandoned') {
     state = 'skipped';
     status = '<span>not merged</span>';
   }
@@ -410,13 +434,17 @@ function paintMerge(plan) {
     const rest = order.filter(n => !done.has(n) && n !== bad?.thread);
     outcome.textContent = (bad ? `${bad.thread} could not be merged: ${bad.error || 'no reason given'}.` : 'The merge failed.')
       + (rest.length ? ` The remaining thread${rest.length === 1 ? ' was' : 's were'} not merged: ${rest.join(', ')}.` : '');
+  } else if (m.state === 'abandoned') {
+    outcome.textContent = mergeAbandonedText(m);
   } else {
     outcome.textContent = '';
   }
   outcome.hidden = !outcome.textContent;
 
-  // 'merged' is final; 'failed' stays open for a retry.
-  const over = m.state === 'merged';
+  // 'merged' is final, and so is 'abandoned' (the lead may propose afresh);
+  // 'failed' stays open for a retry.
+  const over = !mergeToDo(m);
+  if (over) document.getElementById('plan-title').textContent = `Plan of ${plan.sandbox}`;
   const failed = m.state === 'failed';
   const running = !over && (m.state === 'merging' || mergeAsk === plan.id);
   document.getElementById('merge-close-row').hidden = over;
@@ -429,7 +457,42 @@ function paintMerge(plan) {
   mergeAll.textContent = running ? 'Merging…' : failed ? 'Retry merge' : 'Merge all';
   // Closing never stops a merge under way: the pane's Merging… button leads back.
   mergeLater.textContent = over ? 'Close' : running ? 'Hide' : failed ? 'Close' : 'Not now';
+  // Quiet, beside Not now: shown while the merge is proposed or failed.
+  mergeAbandon.hidden = running || !mergeAbandonable(m);
+  if (mergeAbandon.hidden) mergeAbandonAsk.hidden = true;
 }
+
+// Abandon merge: asked in the dialog first, then the daemon withdraws the
+// merge. Nothing is merged, closed or deleted; the lead is told.
+mergeAbandon.addEventListener('click', () => {
+  document.getElementById('merge-abandon-text').textContent = MERGE_ABANDON_ASK;
+  mergeAbandonYes.disabled = false;
+  mergeAbandonYes.textContent = 'Abandon merge';
+  mergeAbandonAsk.hidden = false;
+  showNote(mergeError, '');
+  mergeAbandonYes.focus();
+});
+document.getElementById('merge-abandon-no').addEventListener('click', () => {
+  mergeAbandonAsk.hidden = true;
+  mergeAbandon.focus();
+});
+mergeAbandonYes.addEventListener('click', async () => {
+  const id = planShown;
+  if (!mergeAbandonable(plans.get(id)?.merge) || mergeAbandonYes.disabled) return;
+  mergeAbandonYes.disabled = true;
+  mergeAbandonYes.textContent = 'Abandoning…';
+  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/merge/abandon`, {});
+  mergeAbandonYes.disabled = false;
+  mergeAbandonYes.textContent = 'Abandon merge';
+  if (res.ok && res.plan) plans.set(id, res.plan);
+  if (planShown === id && planView === 'merge') {
+    if (res.ok) mergeAbandonAsk.hidden = true;
+    else showNote(mergeError, `Abandon merge refused: ${res.error || 'no reason given'}`);
+    const now = plans.get(id);
+    if (now?.merge) paintMerge(now);
+  }
+  schedulePaintGroups();
+});
 
 mergeAll.addEventListener('click', async () => {
   const id = planShown;

@@ -143,6 +143,8 @@ pub enum Mark {
     BranchGone,
     /// The person closed its plan from the Kanban.
     Dismissed,
+    /// The person abandoned the merge proposed for it: nothing was merged.
+    MergeAbandoned,
 }
 
 impl Mark {
@@ -158,6 +160,7 @@ impl Mark {
             Mark::MergedOutside => "merged outside sbxw",
             Mark::BranchGone => "branch gone",
             Mark::Dismissed => "plan closed",
+            Mark::MergeAbandoned => "merge abandoned",
         }
     }
     pub fn tone(self) -> &'static str {
@@ -165,7 +168,7 @@ impl Mark {
             Mark::Proposed | Mark::Merging => "blue",
             Mark::Blocked => "amber",
             Mark::Failed | Mark::MergeFailed | Mark::Refused => "red",
-            Mark::TeamEnded | Mark::BranchGone | Mark::Dismissed => "neutral",
+            Mark::TeamEnded | Mark::BranchGone | Mark::Dismissed | Mark::MergeAbandoned => "neutral",
             Mark::MergedOutside => "green",
         }
     }
@@ -181,6 +184,7 @@ impl Mark {
             Mark::MergedOutside => "Git shows this branch already in its base: merged by hand or outside sbxw",
             Mark::BranchGone => "The thread is done and sbxw never merged it, but its branch no longer exists. sbxw cannot tell a hand merge from a discard",
             Mark::Dismissed => "You closed this plan from the Kanban; git was not touched",
+            Mark::MergeAbandoned => "You abandoned the merge proposed for this thread: nothing was merged, and the lead may propose it again",
         }
     }
 }
@@ -198,6 +202,13 @@ pub fn column_of(plan: &Plan, t: &PlanThread) -> (Column, Vec<Mark>) {
     // Merged in any of the plan's merges, the late-merge ones included.
     let by_sbxw = plan.merged_threads().contains(t.name.as_str());
     let in_merge = plan.merge.as_ref().filter(|_| !by_sbxw).filter(|m| m.order.iter().any(|n| n == &t.name));
+    // An abandoned merge is no merge to do: the thread stands where its own
+    // state puts it (done: Test), marked so the card says why.
+    let abandoned = in_merge.is_some_and(|m| m.state == MergeState::Abandoned);
+    let in_merge = in_merge.filter(|_| !abandoned);
+    if abandoned {
+        marks.push(Mark::MergeAbandoned);
+    }
     let col = if by_sbxw {
         Column::Merged
     } else if let Some(m) = in_merge {
@@ -214,6 +225,8 @@ pub fn column_of(plan: &Plan, t: &PlanThread) -> (Column, Vec<Mark>) {
                 Column::Ready
             }
             (None, MergeState::Proposed) => Column::Ready,
+            // Left out above; never reached.
+            (None, MergeState::Abandoned) => Column::Test,
         }
     } else {
         match t.state {

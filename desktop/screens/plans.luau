@@ -267,7 +267,8 @@ local function merge_view(data, p)
   local results = {}
   for _, r in ipairs(m.results or {}) do results[r.thread] = r end
   local shared = p.variant == "shared"
-  table.insert(out, text{ shared and ("Merge the shared branch sbxw/team-" .. p.id) or "Merge, in the lead's order", weight = "semibold", color = "text-bright" })
+  local abandoned = m.state == "abandoned"
+  table.insert(out, text{ abandoned and "Merge abandoned" or (shared and ("Merge the shared branch sbxw/team-" .. p.id) or "Merge, in the lead's order"), weight = "semibold", color = "text-bright" })
   if m.note and m.note ~= "" then table.insert(out, row{ gap = 8, w = "full", text{ "Lead's note", size = "sm", color = "text-muted" }, text{ m.note, size = "sm", wrap = true, grow = 1 } }) end
   local rows = { gap = 4, w = "full" }
   local team_r = nil
@@ -278,7 +279,7 @@ local function merge_view(data, p)
     if r and r.ok then st = "ok"; txt = r.commit and string.sub(r.commit, 1, 7) or "merged"
     elseif r then st = "failed"; txt = r.error or "failed"
     elseif m.state == "merging" then st = "pending"; txt = "pending"
-    elseif m.state == "failed" or m.state == "merged" then st = "skipped"; txt = "not merged" end
+    elseif m.state == "failed" or m.state == "merged" or abandoned then st = "skipped"; txt = "not merged" end
     local mk = merge_marks[st]
     table.insert(rows, row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = hues[((i - 1) % 4) + 1], key = "mr-" .. name,
       text{ i .. ".", size = "sm", color = "text-muted" },
@@ -303,6 +304,13 @@ local function merge_view(data, p)
     local s = bad and ("Stopped at " .. bad.thread .. ": " .. (bad.error or "no reason given") .. ".") or "The merge failed."
     if #rest > 0 then s = s .. " Not merged: " .. table.concat(rest, ", ") .. "." end
     table.insert(out, text{ s, color = "red", wrap = true, key = "merge-outcome" })
+  elseif abandoned then
+    -- The person gave it up: what merged before that stays merged, nothing was touched.
+    local done = {}
+    for _, r in ipairs(m.results or {}) do if r.ok then table.insert(done, r.thread) end end
+    local s = #done == 0 and "You abandoned this merge: nothing was merged. The lead may propose it again."
+      or ("You abandoned this merge. Merged before that: " .. table.concat(done, ", ") .. ". The rest was not merged; the lead may propose it again.")
+    table.insert(out, text{ s, color = "text-muted", wrap = true, key = "merge-outcome" })
   end
   local mn = (ui.merge_note or {})[p.id]
   if mn then table.insert(out, text{ mn, color = string.sub(mn, 1, 4) == "Not " and "amber" or "text-muted", wrap = true, key = "merge-note" }) end
@@ -310,7 +318,7 @@ local function merge_view(data, p)
   if shared then
     local b = (data.board or {})[p.sandbox] or {}
     local claims = b.claims or {}
-    if #claims > 0 and m.state ~= "merged" then
+    if #claims > 0 and m.state ~= "merged" and not abandoned then
       local files = {}
       for _, c in ipairs(claims) do table.insert(files, c.file .. " (" .. c.owner .. ")") end
       table.insert(out, note(plural(#claims, "file") .. " still claimed: Merge waits until they are released. " .. table.concat(files, ", "), "amber"))
@@ -336,7 +344,9 @@ local function approved(state, data, p)
   local ui = data.threads_ui or {}
   local out = { gap = 12, w = "full", h = "full" }
   local over = p.merge and p.merge.state == "merged"
-  table.insert(out, header((p.merge and "Merge the threads of " or "Plan of ") .. p.sandbox, p.summary))
+  -- An abandoned merge is no merge to do: the plan, its record kept below.
+  local todo = p.merge and not over and p.merge.state ~= "abandoned"
+  table.insert(out, header((todo and "Merge the threads of " or "Plan of ") .. p.sandbox, p.summary))
   if p.closed then table.insert(out, note("Team mode was ended: the threads run on, their reports no longer reach the lead.")) end
   local body = { gap = 12, w = "full" }
   if p.merge then table.insert(body, merge_view(data, p)) end
@@ -348,11 +358,13 @@ local function approved(state, data, p)
   local buttons = { gap = 8, w = "full" }
   table.insert(buttons, button{ icon = "reload", on = "reload", help = "Read the plan again", key = "plan-reload" })
   table.insert(buttons, spacer{})
-  if p.merge and not over then
+  if todo then
     local running = p.merge.state == "merging"
     local close = (ui.merge_close or {})[p.id]
     if close == nil then close = true end
     table.insert(buttons, checkbox{ "Close each thread once merged", value = close, on = "close_set", arg = p.id, disabled = running, key = "merge-close" })
+    -- Quiet, beside Not now: gives the merge up (the core's dialog says what that leaves).
+    if not running then table.insert(buttons, button{ "Abandon merge", variant = "ghost", on = "abandon", arg = p.id, key = "merge-abandon", help = "Withdraw this merge: nothing is merged, closed or deleted" }) end
     table.insert(buttons, button{ "Not now", on = "later", key = "merge-later" })
     -- A shared plan's claims hold Merge until released (the daemon refuses it anyway).
     local held = p.variant == "shared" and #((((data.board or {})[p.sandbox]) or {}).claims or {}) > 0
@@ -435,6 +447,7 @@ return {
     end,
     approve = function(_, id) return intent("plan_approve", { id = id }) end,
     merge = function(_, id) return intent("plan_merge", { id = id }) end,
+    abandon = function(_, id) return intent("plan_merge_abandon", { id = id }) end,
     close_set = function(_, id, on) return intent("merge_close_set", { id = id, on = on }) end,
     open = function(_, a) return intent("open_terminal", { sandbox = a.sandbox, thread = a.thread, pane = "spare" }) end,
   },

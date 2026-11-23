@@ -488,7 +488,8 @@ pub fn new_sessions(data: &J, sandbox: &str, draft: &J) -> u64 {
 // Merge
 
 /// One row per thread in merge order: `{name, state, text}`, state `ok`,
-/// `failed`, `pending`, `skipped` or `` (not run yet); and the outcome line.
+/// `failed`, `pending`, `skipped` or `` (not run yet); and the outcome line
+/// (an abandoned merge says so).
 pub fn merge_rows(plan: &J) -> (Vec<J>, String) {
     let m = &plan["merge"];
     let mut order: Vec<String> = m["order"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_string)).collect();
@@ -507,7 +508,7 @@ pub fn merge_rows(plan: &J) -> (Vec<J>, String) {
                 Some(r) if r["ok"] == true => ("ok", r["commit"].as_str().map(|c| c.chars().take(7).collect()).unwrap_or_else(|| "merged".to_string())),
                 Some(r) => ("failed", r["error"].as_str().unwrap_or("failed").to_string()),
                 None if st == "merging" => ("pending", "pending".to_string()),
-                None if st == "failed" || st == "merged" => ("skipped", "not merged".to_string()),
+                None if st == "failed" || st == "merged" || st == "abandoned" => ("skipped", "not merged".to_string()),
                 None => ("", String::new()),
             };
             json!({ "name": n, "state": state, "text": text })
@@ -538,6 +539,15 @@ pub fn merge_rows(plan: &J) -> (Vec<J>, String) {
                 s += &format!(" Not merged: {}.", rest.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
             }
             s
+        }
+        // The person gave it up: what merged before that stays merged.
+        "abandoned" => {
+            let done: Vec<&str> = results.iter().filter(|r| r["ok"] == true).filter_map(|r| r["thread"].as_str()).collect();
+            if done.is_empty() {
+                "You abandoned this merge: nothing was merged. The lead may propose it again.".to_string()
+            } else {
+                format!("You abandoned this merge. Merged before that: {}. The rest was not merged; the lead may propose it again.", done.join(", "))
+            }
         }
         _ => String::new(),
     };

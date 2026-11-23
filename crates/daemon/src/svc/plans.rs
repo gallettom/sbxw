@@ -380,6 +380,26 @@ impl App {
         Ok(self.plan_changed(plan))
     }
 
+    /// The person abandons the merge proposed (or failed) for plan `id`, from
+    /// the plan dialog: the plan has no merge to do any more, and the lead is
+    /// told in one line so it does not wait on it. Merges nothing, closes
+    /// nothing, deletes nothing: threads, branches and worktrees stay as they
+    /// are. Never an agent's: the route is on the UI listener only.
+    pub async fn plan_abandon_merge(self: &Arc<Self>, id: &str) -> Result<Plan, String> {
+        let plan = self.plans.lock().unwrap().abandon_merge(id, now_ms())?;
+        let plan = self.plan_changed(plan);
+        let line = abandoned_line(&plan);
+        tracing::info!("plans: {id}: {line}");
+        if let Ok(sandbox) = SandboxRef::parse(&plan.sandbox) {
+            if self.sessions.is_live(&SessionKey::agent(&sandbox)) {
+                if let Err(e) = self.push_text(&sandbox, SessionKind::Agent, &line).await {
+                    tracing::warn!("plans: could not tell the lead of '{sandbox}' the merge was abandoned: {e}");
+                }
+            }
+        }
+        Ok(plan)
+    }
+
     pub fn plan_refuse(&self, id: &str, note: Option<String>) -> Result<Plan, String> {
         let plan = self.plans.lock().unwrap().refuse(id, note, now_ms())?;
         Ok(self.plan_changed(plan))
@@ -1452,4 +1472,18 @@ mod tests {
         app.board_release("myapp", Some(&p.id), "api", &files).unwrap();
         assert_eq!(app.plan_merge(&p.id, false, None).await.unwrap().state, MergeState::Merged);
     }
+}
+
+/// What the lead is told when the person abandons its proposed merge: one
+/// `[sbxw]` line naming the plan (its summary, else its merge's threads).
+pub(crate) fn abandoned_line(plan: &Plan) -> String {
+    let what: String = plan.summary.split_whitespace().collect::<Vec<_>>().join(" ");
+    let what = match what.char_indices().nth(80) {
+        Some((i, _)) => format!("\"{}…\"", what[..i].trim_end()),
+        None if what.is_empty() => format!("threads {}", plan.merge.as_ref().map(|m| m.order.join(", ")).unwrap_or_default()),
+        None => format!("\"{what}\""),
+    };
+    format!(
+        "[sbxw] The user abandoned the proposed merge of {what}: nothing was merged. Its threads, branches and worktrees are as they were; propose the merge again if it should still be made."
+    )
 }
