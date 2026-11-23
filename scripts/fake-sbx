@@ -21,7 +21,8 @@ name_after() { # the value after --name
 }
 
 case "${1:-}" in
-  version|--version) echo "sbx version 0.51.0" ;;
+  # FAKE_SBX_VERSION=0.54.0 answers as the release with `sbx port`.
+  version|--version) echo "sbx version ${FAKE_SBX_VERSION:-0.51.0}" ;;
   ls)
     if [ "${2:-}" = "--format" ]; then # 0.48: a bare array
       sep=""; printf '['
@@ -86,7 +87,28 @@ case "${1:-}" in
       cat|rm) case "$*" in */home/agent/*) [ "$1" = cat ] && echo "guest-secret"; exit 0 ;; esac; exec "$@" ;;
       *) exec "$@" ;;
     esac ;;
+  port) # 0.54: `port ls|publish|unpublish SANDBOX [SPEC]`; IP::SP gets a host port.
+    case "${FAKE_SBX_VERSION:-0.51.0}" in 0.5[0-3].*|0.[0-4]*) echo "Error: unknown command \"port\" for \"sbx\"" >&2; exit 1 ;; esac
+    n="${3:-}"
+    case "${2:-}" in
+      publish)
+        IFS=: read -r x y z <<< "$4"
+        if [ -n "${z:-}" ] && [ -z "$y" ]; then y=$(( 49152 + $(wc -l < "$S/ports/$n" 2>/dev/null || echo 0) )); echo "Published $x:$y -> $z/tcp"; fi
+        if [ -n "${z:-}" ]; then echo "$x $y $z" >> "$S/ports/$n"; else echo "127.0.0.1 $x $y" >> "$S/ports/$n"; fi
+        sort -u -o "$S/ports/$n" "$S/ports/$n" ;;
+      unpublish) IFS=: read -r x y z <<< "$4"; grep -v "^$x $y $z\$" "$S/ports/$n" > "$S/ports/$n.tmp"; mv "$S/ports/$n.tmp" "$S/ports/$n" ;;
+      ls)
+        if [ "${4:-}" = "--format" ]; then
+          sep=""; printf '['
+          while read -r ip hp sp; do printf '%s{"host_ip":"%s","host_port":%s,"sandbox_port":%s,"protocol":"tcp"}' "$sep" "$ip" "$hp" "$sp"; sep=","; done < "$S/ports/$n"
+          printf ']\n'
+        else
+          echo "HOST IP     HOST PORT   SANDBOX PORT   PROTOCOL"
+          while read -r ip hp sp; do printf '%-11s %-11s %-14s tcp\n' "$ip" "$hp" "$sp"; done < "$S/ports/$n"
+        fi ;;
+    esac ;;
   ports)
+    case "${FAKE_SBX_VERSION:-0.51.0}" in 0.5[0-3].*) ;; *) echo "Warning: 'sbx ports' is deprecated, use 'sbx port'" >&2 ;; esac
     n="$2"
     if [ "${3:-}" = "--publish" ]; then
       IFS=: read -r x y z <<< "$4"
