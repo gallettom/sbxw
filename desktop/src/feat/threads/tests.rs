@@ -302,6 +302,113 @@ fn the_merge_dialog_shows_the_leads_order_and_note_and_a_claimed_file_holds_it()
     assert!(run(&fixture("merge-merged"), "plan_merge", json!({ "id": "p-1" })).is_err());
 }
 
+/// The plan screen as the core draws it, on the dialog of plan `id`.
+fn plan_screen(data: &J, id: &str) -> (crate::luau::LuauHost, crate::luau::Node) {
+    let mut d = data.clone();
+    d["app"]["modal"] = json!({ "screen": "plans", "arg": id });
+    let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+    h.load("plans", include_str!("../../../screens/plans.luau")).unwrap();
+    let tree = h.render(&d).unwrap();
+    (h, tree)
+}
+
+fn find_key<'a>(n: &'a crate::luau::Node, k: &str) -> Option<&'a crate::luau::Node> {
+    if crate::screen::key_of(n).as_deref() == Some(k) {
+        return Some(n);
+    }
+    n.children.iter().find_map(|c| find_key(c, k))
+}
+
+/// What the Close box shows is what Merge sends: checked and true by
+/// default; pressed, unchecked and false; pressed again, checked and true.
+/// The press goes through the screen, as a click does.
+#[test]
+fn the_close_box_shows_what_merge_sends() {
+    let mut d = fixture("merge-proposed");
+    for want in [true, false, true] {
+        let (h, tree) = plan_screen(&d, "p-1");
+        let b = find_key(&tree, "merge-close").expect("the Close box");
+        assert_eq!(b.value, json!(want), "shown");
+        assert_eq!(confirm(run(&d, "plan_merge", json!({ "id": "p-1" })).unwrap()).call.body, json!({ "close_threads": want }), "sent");
+        let asks = h.act(b.on.as_deref().unwrap(), &b.arg, &J::Bool(!want)).unwrap();
+        assert_eq!(asks["name"], "merge_close_set");
+        let args = asks["args"].clone();
+        let acts = act(&Ctx { data: &d }, &asked("merge_close_set", args)).unwrap();
+        apply(&mut d, &acts);
+    }
+}
+
+/// A shared plan's Merge sends the distillate its dialog lists, as the web
+/// UI sends the one its person kept.
+#[test]
+fn a_shared_merge_sends_the_distillate_it_shows() {
+    let mut d = fixture("merge-shared");
+    d["board"]["web-app"]["claims"] = json!([]);
+    let c = confirm(run(&d, "plan_merge", json!({ "id": "p-2" })).unwrap());
+    assert_eq!(c.call.body["close_threads"], true);
+    assert_eq!(c.call.body["distillate"], d["plans"][0]["merge"]["distillate"]);
+    assert!(c.lines.iter().any(|l| l.contains("Orders v2 routes live under /v2")));
+    // A split plan sends none: the daemon keeps what was proposed.
+    let c = confirm(run(&fixture("merge-proposed"), "plan_merge", json!({ "id": "p-1" })).unwrap());
+    assert!(c.call.body.get("distillate").is_none());
+}
+
+/// The lead replaces its proposal (another order), or proposes a late merge
+/// once the first is merged: the person is told, the dialog offers Merge
+/// with the new order, and the words of the merge before (its refusal,
+/// what was closed) are gone.
+#[test]
+fn a_re_proposed_or_late_merge_is_announced_and_merged_afresh() {
+    let base = fixture("merge-proposed");
+    let first = base["plans"].clone();
+    let mut d = base.clone();
+    d[UI] = json!({ "plan_error": { "p-1": "Merge refused: there is no branch sbxw/docs" } });
+    let mut again = first.clone();
+    again[0]["merge"]["order"] = json!(["api-routes", "web-orders"]);
+    let acts = on_data(&Ctx { data: &d }, "plans", &first, &again);
+    assert!(acts.iter().any(|a| matches!(a, Action::Notice { text, .. } if text.contains("proposes merging"))), "{acts:?}");
+    apply(&mut d, &acts);
+    assert!(d[UI]["plan_error"]["p-1"].is_null(), "the old refusal is not this proposal's");
+    d["plans"] = again.clone();
+    let c = confirm(run(&d, "plan_merge", json!({ "id": "p-1" })).unwrap());
+    assert_eq!(c.preview.unwrap().text, "1. api-routes\n2. web-orders");
+    assert_eq!(c.call.body, json!({ "close_threads": true }));
+
+    // Merged, then a late merge of docs.
+    let merged = fixture("merge-merged")["plans"].clone();
+    let mut d = fixture("merge-merged");
+    d[UI] = json!({ "merge_note": { "p-1": "Every merged thread was closed." } });
+    assert!(run(&d, "plan_merge", json!({ "id": "p-1" })).unwrap_err().contains("merged already"));
+    let mut late = merged.clone();
+    late[0]["merge"] = json!({ "order": ["docs"], "note": "docs late", "state": "proposed", "base": null, "results": [] });
+    let acts = on_data(&Ctx { data: &d }, "plans", &merged, &late);
+    assert!(acts.iter().any(|a| matches!(a, Action::Notice { text, .. } if text.contains("proposes merging"))), "{acts:?}");
+    apply(&mut d, &acts);
+    assert!(d[UI]["merge_note"]["p-1"].is_null());
+    d["plans"] = late;
+    let c = confirm(run(&d, "plan_merge", json!({ "id": "p-1" })).unwrap());
+    assert_eq!(c.preview.unwrap().text, "1. docs");
+    assert_eq!(c.confirm, "Merge");
+    let (_, tree) = plan_screen(&d, "p-1");
+    assert_eq!(find_key(&tree, "merge-close").expect("the Close box").value, json!(true));
+    // Nothing changed: no second notice.
+    let same = d["plans"].clone();
+    assert!(!on_data(&Ctx { data: &d }, "plans", &same, &same).iter().any(|a| matches!(a, Action::Notice { .. })));
+}
+
+/// A thread with nothing to merge says so in the outcome, in the dialog and
+/// in the rows' words, as the web UI does.
+#[test]
+fn a_merge_with_nothing_for_a_thread_says_why() {
+    let mut d = fixture("merge-merged");
+    d["plans"][0]["merge"]["results"][2] = json!({ "thread": "docs", "ok": true, "note": "nothing to merge, sbxw/docs is gone" });
+    let (rows, out) = model::merge_rows(&d["plans"][0]);
+    assert_eq!(rows[2]["text"], "merged");
+    assert_eq!(out, "Merged into main. docs: nothing to merge, sbxw/docs is gone.");
+    let (_, tree) = plan_screen(&d, "p-1");
+    assert_eq!(find_key(&tree, "merge-outcome").unwrap().text, out);
+}
+
 #[test]
 fn merge_rows_say_merged_stopped_and_not_merged() {
     let (rows, out) = model::merge_rows(&fixture("merge-failed")["plans"][0]);
