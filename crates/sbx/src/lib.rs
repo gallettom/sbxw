@@ -332,6 +332,21 @@ pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
              egress.stalledConnectionTimeoutSeconds 0` turns that off.",
         );
     }
+    if before < (0, 54, 0) && now >= (0, 54, 0) {
+        notes.push(
+            "sbx 0.54 checks kit permissions with stronger digests: a sandbox may ask again to confirm a kit's \
+             permissions it already had. Answer sbx's prompt in the sandbox's terminal.",
+        );
+        notes.push(
+            "sbx 0.54 refuses to start a sandbox whose saved mount now resolves to a different directory (a \
+             moved folder, a changed symlink). sbxw shows sbx's message; the fix is `sbx umount` for that mount, \
+             then mount it again (or `sbxw rm <name>` and `sbxw up <name>`).",
+        );
+        notes.push(
+            "If HTTPS from sandboxes stalls behind a firewall or a TLS-inspecting proxy since sbx 0.54, it may drop \
+             post-quantum key exchange: `sbx settings set tls.postQuantumKeyExchange false`, then `sbx daemon restart`.",
+        );
+    }
     notes
 }
 
@@ -1440,6 +1455,8 @@ mod tests {
         assert_eq!(upgrade_notes("0.51.2", "0.53.0").len(), 3, "policy case, secret commands, Remote Control");
         assert_eq!(upgrade_notes("0.50.1", "0.53.0").len(), 6, "0.52 was skipped: both crossings at once");
         assert!(upgrade_notes("0.53.0", "0.53.1").is_empty());
+        assert_eq!(upgrade_notes("0.53.1", "0.54.0").len(), 3, "kit permissions, saved mounts, post-quantum TLS");
+        assert!(upgrade_notes("0.54.0", "0.54.1").is_empty());
         assert!(upgrade_notes("", "0.50.0").is_empty(), "a first install has nothing to upgrade from");
     }
 
