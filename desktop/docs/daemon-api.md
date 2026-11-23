@@ -159,7 +159,7 @@ sbx (`raw`, `message`, `rule`, server names) is set as text.
 
 | Route | `Daemon` method (feature) | Notes |
 |---|---|---|
-| `POST /api/sandboxes/:name/ports/publish` (changed) | `request` (network, `port_publish`) | `host_port` left out: sbx 0.54 picks. Answer adds `sandbox_port, host_ip, host_port, assigned, note, forwarded_port`; kept as `data.network_publish`, the row of that port says "sbx picked" |
+| `POST /api/sandboxes/:name/ports/publish` (changed) | `request` (network, `port_publish`) | `host_port` left out: sbx 0.54 picks, on 127.0.0.1 only (a `host_ip` other than 127.0.0.1 without `host_port` is refused, nothing run: the Network screen says so as text and asks nothing). Answer adds `sandbox_port, host_ip, host_port, assigned, note, forwarded_port`; kept as `data.network_publish`, the row of that port says "sbx picked" |
 | `GET /api/sandboxes/:name/policy/check?target=<host>[:<port>]` | `request` (network, `network_why`) | `{supported, target, allowed (true/false/null), rule, rule_id, raw, note}`; the target is checked in the app first (host and optional port). Removing the rule named is the existing `.../policy/rules/rm`, from the rules list's own button |
 | `GET /api/sandboxes/:name/mcp` | data key `mcp_mode` (mcp, lazy, by sandbox) | `{supported, mode: static\|dynamic\|unknown, servers, note}`; read when the panel opens, when it moves to a sandbox not read yet, after a load or unload; never on a timer |
 | `GET /api/ssh` | data key `ssh` (ssh) | `{configured, refresh_due, sbx, refreshed_at}`; Setup's card. `GET /api/state` also carries `ssh_refresh_due` (`daemon_state`), which turns Settings amber |
