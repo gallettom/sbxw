@@ -93,6 +93,9 @@ fn node(v: &Value, shape: Shape, lane: Option<String>) -> Node {
 
 fn archify_value(v: &Value) -> Result<Diagram, String> {
     let t = s(v, "diagram_type");
+    if t.is_empty() {
+        return Err("an Archify diagram has a diagram_type".into());
+    }
     match v.get("schema_version").and_then(Value::as_u64) {
         Some(1 | 2) => {}
         Some(n) => return Err(format!("Archify schema version {n} is not one sbxw imports (1 and 2)")),
@@ -219,7 +222,6 @@ fn archify_value(v: &Value) -> Result<Diagram, String> {
                 }
             }
         }
-        "" => return Err("an Archify diagram has a diagram_type".into()),
         other => return Err(format!("Archify diagram type \"{}\" is not one sbxw imports (workflow, sequence, dataflow, lifecycle, architecture)", super::shown(other))),
     }
     // Ids lower-cased may collide: say so in Archify's terms rather than as a duplicate.
