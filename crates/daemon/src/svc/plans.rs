@@ -512,13 +512,20 @@ impl App {
             summary.push_str(&format!(" Told that {} moved: {}.", merge.base.as_deref().unwrap_or("main"), told.join(", ")));
         }
         if close_threads && merge.state == MergeState::Merged {
-            let mut unclosed = Vec::new();
+            let (mut closed, mut unclosed) = (Vec::new(), Vec::new());
             for t in &merge.order {
                 let Ok(name) = ThreadName::parse(t) else { continue };
-                if let Err(e) = self.close_thread(&sandbox, &name, false, true).await {
-                    tracing::warn!("plans: could not close merged thread '{t}': {e}");
-                    unclosed.push(format!("{t} ({e})"));
+                match self.close_thread(&sandbox, &name, false, true).await {
+                    Ok(()) => closed.push(t.clone()),
+                    Err(e) => {
+                        tracing::warn!("plans: could not close merged thread '{t}': {e}");
+                        unclosed.push(format!("{t} ({e})"));
+                    }
                 }
+            }
+            // Said either way, so the line shows whether the close ran.
+            if !closed.is_empty() {
+                summary.push_str(&format!(" Closed: {}.", closed.join(", ")));
             }
             if !unclosed.is_empty() {
                 summary.push_str(&format!(" Not closed: {}.", unclosed.join(", ")).replace('\n', " "));
@@ -642,12 +649,16 @@ impl App {
                 }
             }
             if close_threads {
-                let mut unclosed = Vec::new();
+                let (mut closed, mut unclosed) = (Vec::new(), Vec::new());
                 for t in &merge.order {
                     let Ok(name) = ThreadName::parse(t) else { continue };
-                    if let Err(e) = self.close_thread(sandbox, &name, false, true).await {
-                        unclosed.push(format!("{t} ({e})"));
+                    match self.close_thread(sandbox, &name, false, true).await {
+                        Ok(()) => closed.push(t.clone()),
+                        Err(e) => unclosed.push(format!("{t} ({e})")),
                     }
+                }
+                if !closed.is_empty() {
+                    summary.push_str(&format!(" Closed: {}.", closed.join(", ")));
                 }
                 if let Err(e) = self.sbx_of(sandbox).await?.thread_close(&sandbox.name, dir, &team, false, true).await {
                     unclosed.push(format!("its worktree ({e:#})"));

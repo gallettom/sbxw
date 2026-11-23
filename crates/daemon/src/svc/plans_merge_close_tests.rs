@@ -273,5 +273,38 @@ async fn a_re_proposed_merge_closes_and_ends_every_thread() {
         let err = app.open_session(&key).await.err().map(|e| format!("{e:#}")).unwrap_or_default();
         assert!(err.contains("closed just now"), "{n}: a reconnect does not start it again: {err:?}");
     }
+    let line = typed_soon(&typed, "Closed:").await;
+    assert!(line.contains("Merged: a, b.") && line.contains("Closed: a, b."), "{line}");
 }
 
+/// A close that fails is named in the merge's line to the lead, and the
+/// thread's session is left as it was.
+#[tokio::test]
+async fn a_close_that_fails_is_named_to_the_lead() {
+    if !has_git() {
+        return;
+    }
+    let (d, app, _fake) = app_with(|a: &[String]| {
+        let has = |x: &str| a.iter().any(|y| y == x);
+        match a.first().map(String::as_str) {
+            Some("ls") => ls(&[("myapp", "running")]),
+            Some("exec") if has("sbxw-thread-merge") => Output::ok("base=main\ncommit=abc1234\nok=1\n"),
+            Some("exec") if has("sbxw-thread-end") && has("=b") => Output::fail(4, "error=/w/.sbxw-worktrees/b has 2 uncommitted file(s)\n"),
+            Some("exec") if has("sbxw-thread-end") => Output::ok("ok=1\n"),
+            _ => sbx_answer(a),
+        }
+    });
+    let sb = SandboxRef::parse("myapp").unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    repo(ws.path(), &[("a", 1), ("b", 1)]);
+    app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+    let typed = d.path().join("lead.typed");
+    lead_terminal(&app, &sb, &typed).await;
+    let id = done_plan(&app, &sb, &["a", "b"]).await;
+    let b = session(&app, &SessionKey::thread(&sb, &ThreadName::parse("b").unwrap()), "exec sleep 60".into()).await;
+    app.plan_propose_merge_checked(&id, &sb, vec!["a".into(), "b".into()], "", vec![]).await.unwrap();
+    assert_eq!(app.plan_merge(&id, true, None).await.unwrap().state, MergeState::Merged);
+    let line = typed_soon(&typed, "Not closed:").await;
+    assert!(line.contains("Closed: a.") && line.contains("Not closed: b (") && line.contains("uncommitted"), "{line}");
+    assert!(b.alive(), "b's session runs on");
+}

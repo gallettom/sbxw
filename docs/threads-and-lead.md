@@ -303,10 +303,17 @@ absent. When the merge *does* touch one, it is refused with the files named:
 the merge has to be done where the whole repository is present. sbxw never
 advises committing those "deletions", which would delete real files.
 
-With **close threads** ticked, merged threads are then closed and their branches
-deleted. The lead is told the result in one line, e.g.
-`[sbxw] Merged: a, b. Failed: c (conflict in X).` A failed merge can be retried
-after fixing the cause.
+With **close threads** ticked (the box is ticked by default, in the desktop
+app as in the web UI), merged threads are then closed: each session is
+ended, its worktree removed and its branch deleted. A pane still showing a
+closed thread does not start it again when its terminal reconnects: for two
+minutes after a close, sbxw refuses to open that session (`... was closed
+just now`), long enough for every app to drop the pane. The lead is told the
+result in one line, e.g. `[sbxw] Merged: a, b. Closed: a, b.` or
+`[sbxw] Merged: a, b. Failed: c (conflict in X).`; a thread whose close
+failed is named with the reason (`Not closed: b (... has 2 uncommitted
+file(s)).`) and keeps its session, worktree and branch. A failed merge can be
+retried after fixing the cause.
 
 **A thread that finishes late can still be merged.** In a split plan, once
 some threads are merged, a thread that reports done later (or that the lead
