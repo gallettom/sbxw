@@ -197,3 +197,81 @@ async fn an_unreadable_repo_is_not_a_gone_branch() {
     assert_eq!(calls(&fake.log(), "sbxw-thread-merge").len(), 1);
 }
 
+/// A stand-in session under `key`: a shell that runs until killed.
+async fn session(app: &Arc<App>, key: &SessionKey, script: String) -> Arc<crate::pty::PtySession> {
+    let (s, _) = app
+        .sessions
+        .get_or_open(key, 0, || async move { Ok(crate::pty::Spawn { program: "sh".into(), args: vec!["-c".into(), script], env: vec![] }) })
+        .await
+        .unwrap();
+    s
+}
+
+/// The lead's terminal: what sbxw types into it lands in `typed`.
+async fn lead_terminal(app: &Arc<App>, sb: &SandboxRef, typed: &Path) {
+    let s = session(app, &SessionKey::agent(sb), format!("printf '\\033[?2004h'; stty raw -echo 2>/dev/null; exec cat >> '{}'", typed.display())).await;
+    for _ in 0..100 {
+        if sbxw_core::terminal::bracketed_paste_enabled(&s.replay()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn typed_soon(typed: &Path, what: &str) -> String {
+    for _ in 0..150 {
+        let s = String::from_utf8_lossy(&std::fs::read(typed).unwrap_or_default()).into_owned();
+        if s.contains(what) {
+            return s;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    String::from_utf8_lossy(&std::fs::read(typed).unwrap_or_default()).into_owned()
+}
+
+/// The lead proposed a merge of one thread, then replaced it by a proposal
+/// of both (a re-proposal). Merge with close: both are closed, their
+/// sessions ended (not only forgotten), a pane reconnecting at once does
+/// not start them again, and the lead's line says which were closed.
+#[tokio::test]
+async fn a_re_proposed_merge_closes_and_ends_every_thread() {
+    if !has_git() {
+        return;
+    }
+    let (d, app, fake) = app_with(fake(&[]));
+    let sb = SandboxRef::parse("myapp").unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    repo(ws.path(), &[("a", 1), ("b", 1)]);
+    app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+    let typed = d.path().join("lead.typed");
+    lead_terminal(&app, &sb, &typed).await;
+    let id = done_plan(&app, &sb, &["a", "b"]).await;
+    let mut running = vec![];
+    for n in ["a", "b"] {
+        let name = ThreadName::parse(n).unwrap();
+        app.store.update(&sb, |r| r.threads.entry(n.into()).or_default().repo = String::new()).unwrap();
+        running.push(session(&app, &SessionKey::thread(&sb, &name), "exec sleep 60".into()).await);
+    }
+    app.plan_propose_merge_checked(&id, &sb, vec!["a".into()], "", vec![]).await.unwrap();
+    app.plan_propose_merge_checked(&id, &sb, vec!["a".into(), "b".into()], "both", vec![]).await.unwrap();
+
+    let m = app.plan_merge(&id, true, None).await.unwrap();
+    assert_eq!(m.state, MergeState::Merged);
+    assert_eq!(m.results.iter().map(|r| r.thread.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+    let ends = calls(&fake.log(), "sbxw-thread-end");
+    for (n, s) in ["a", "b"].iter().zip(&running) {
+        assert!(ends.iter().any(|c| c.contains(&format!("={n} "))), "{n} is closed: {ends:?}");
+        for _ in 0..100 {
+            if !s.alive() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!s.alive(), "{n}'s session is ended");
+        assert!(!app.sessions.open_threads("myapp").contains(&n.to_string()));
+        let key = SessionKey::thread(&sb, &ThreadName::parse(n).unwrap());
+        let err = app.open_session(&key).await.err().map(|e| format!("{e:#}")).unwrap_or_default();
+        assert!(err.contains("closed just now"), "{n}: a reconnect does not start it again: {err:?}");
+    }
+}
+

@@ -679,6 +679,10 @@ impl App {
     /// the branch if asked. Dirty work is refused without `discard` — the
     /// daemon does not trust a click it did not see.
     pub async fn close_thread(&self, sandbox: &SandboxRef, thread: &ThreadName, discard: bool, delete_branch: bool) -> Result<(), String> {
+        // No pane reopens the session while it closes: a reconnect would
+        // start it again in a worktree the close then removes.
+        let key = SessionKey::thread(sandbox, thread);
+        let _opening = self.sessions.hold(&key).await;
         // A session in the main checkout has no worktree to remove (its folder
         // is the main agent's, so nothing there is killed by cwd). A shared
         // thread has no worktree of its own: it leaves its plan, and the plan's
@@ -713,8 +717,10 @@ impl App {
                 Err(e) => return Err(e),
             }
         }
-        self.sessions.remove(&SessionKey::thread(sandbox, thread));
-        self.sessions.remove(&SessionKey::new(sandbox.clone(), SessionKind::ThreadBash(thread.clone())));
+        // Ended, not only forgotten: a session dropped from the map alone
+        // runs on, and a pane's reconnect would start the thread again.
+        self.sessions.end(&key);
+        self.sessions.end(&SessionKey::new(sandbox.clone(), SessionKind::ThreadBash(thread.clone())));
         if let Some((dir, team)) = team_end {
             self.end_team_worktree(sandbox, &dir, &team).await;
         }

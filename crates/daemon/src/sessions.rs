@@ -18,7 +18,15 @@ use std::sync::{Arc, Mutex, Weak};
 pub struct Sessions {
     map: Mutex<HashMap<SessionKey, Arc<PtySession>>>,
     creating: Mutex<HashMap<SessionKey, Arc<tokio::sync::Mutex<()>>>>,
+    /// Sessions [`Sessions::end`]ed, and when: a pane still attached when
+    /// its thread was closed reconnects on its own, and must not start it
+    /// again (with a new worktree and branch cut from `HEAD`).
+    ended: Mutex<HashMap<SessionKey, std::time::Instant>>,
 }
+
+/// How long an ended session is refused to a reconnect: long enough for
+/// every client to have heard `thread-closed` and dropped its pane.
+pub const ENDED_HOLD: std::time::Duration = std::time::Duration::from_secs(120);
 
 impl Sessions {
     pub fn new() -> Arc<Self> {
@@ -64,6 +72,30 @@ impl Sessions {
             .collect()
     }
 
+    /// Holds `key`'s creator lock until the guard drops: nothing opens a
+    /// session under it meanwhile (a close under way).
+    pub async fn hold(&self, key: &SessionKey) -> tokio::sync::OwnedMutexGuard<()> {
+        let gate = self.creating.lock().unwrap().entry(key.clone()).or_default().clone();
+        gate.lock_owned().await
+    }
+
+    /// Stops and forgets the session under `key` (its thread was closed),
+    /// and refuses to open it again for [`ENDED_HOLD`].
+    pub fn end(&self, key: &SessionKey) {
+        let gone = self.map.lock().unwrap().remove(key);
+        if let Some(s) = gone {
+            s.kill();
+        }
+        let mut ended = self.ended.lock().unwrap();
+        ended.retain(|_, at| at.elapsed() < ENDED_HOLD);
+        ended.insert(key.clone(), std::time::Instant::now());
+    }
+
+    /// Whether `key` was [`Sessions::end`]ed within [`ENDED_HOLD`].
+    pub fn just_ended(&self, key: &SessionKey) -> bool {
+        self.ended.lock().unwrap().get(key).is_some_and(|at| at.elapsed() < ENDED_HOLD)
+    }
+
     pub fn all(&self) -> Vec<(SessionKey, Arc<PtySession>)> {
         self.map.lock().unwrap().iter().map(|(k, s)| (k.clone(), s.clone())).collect()
     }
@@ -100,6 +132,9 @@ impl Sessions {
         let _held = gate.lock().await;
         if let Some(s) = self.live(key) {
             return Ok((s, false));
+        }
+        if self.just_ended(key) {
+            anyhow::bail!("'{key}' was closed just now, so it is not opened again: close its pane");
         }
         let spawn = make().await?;
         let weak: Weak<Self> = Arc::downgrade(self);
