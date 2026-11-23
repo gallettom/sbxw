@@ -131,6 +131,19 @@ Every request must pass two checks, in this order.
    shows a page saying how to sign the browser in for the extension; and
    `/api/health` answers only the proof below (no version, no addresses).
 
+**The `/` list** (`GET /api/sandboxes/:name/commands`, for the desktop
+input's autocompletion) is read-only and answers only behind this token. It
+never starts a sandbox: `sbx exec` would start a stopped one, so the daemon
+reads from inside only a sandbox `sbx ls` reports running, and otherwise
+reads the project's `.claude/skills` and `.claude/commands` on the host
+(a symlink is followed only when it stays inside the folder listed, and the
+folders must stay inside the workspace). Only names
+(`^[a-z0-9][a-z0-9:_-]{0,63}$`, anything else dropped) and one-line
+descriptions (control and invisible characters removed, 160 characters)
+leave the daemon: at most 300 entries, 4 KB read per file, 5 s per read.
+Nothing but counts is logged. The list is text to show and grants nothing:
+it changes no approval path and no input gate.
+
 **Port squatting.** Before the CLI sends the token, or anything secret such as
 the API key of `sbxw up --use-api-key`, it checks that what answers on the
 port knows the token, without revealing it: it sends a random nonce to
@@ -242,6 +255,7 @@ handles such text uses that list, each with its own action:
 | Text typed into a terminal (`terminal::sanitize_typed`) | removed |
 | A reason on an approval card (`mac::clean_reason`) | becomes a word break |
 | Canvas and ticket texts (`canvas::clean`, `tickets::clean`), diagram titles and labels | removed |
+| A skill's or command's description in the `/` list (`commands::one_line`) | removed |
 | A phone's message, device name or canvas remark | the whole text is refused |
 | An uploaded file's name (`uploads::upload_name`) | becomes `_` (only `A-Z a-z 0-9 . - _` survive) |
 | Desktop: a downloaded file's name (`safe::file_name`) | removed |

@@ -498,6 +498,24 @@ getting it.
 - Skills in sbx's [shared store](#shared-skills) are not offered: they reach
   every sandbox already.
 
+## What `/` completes to in the desktop app
+
+The desktop app's message input lists the skills and commands you can type
+after `/`, from `GET /api/sandboxes/:name/commands`:
+
+- the project's `.claude/skills/<name>/SKILL.md` and `.claude/commands/<name>.md`;
+- the sandbox's own `~/.claude/skills/` (sbx's [shared store](#shared-skills)
+  included) and `~/.claude/commands/`, which is where kits and
+  [kept skills](#keeping-a-skill-you-made) put theirs (`/handoff`, `/grill-me`, `/retro`);
+- four of Claude Code's own commands: `/clear`, `/compact`, `/context`, `/model`.
+
+Each comes with the `description` of its frontmatter, as one line. A project
+entry hides a home one of the same name. **A stopped sandbox is not started
+for this**: the list then holds only the project's entries and the built-in
+ones, and says so. Not listed: commands in subfolders (`commands/<dir>/x.md`),
+plugin and MCP commands, and Claude Code's other built-ins (most open a
+terminal dialog the input cannot show).
+
 ## Writing your own kit
 
 Every kit sbxw ships or writes is **kit spec v3**
