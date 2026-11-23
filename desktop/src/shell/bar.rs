@@ -102,11 +102,15 @@ pub struct Item {
     pub intent: Option<(String, J)>,
     /// The core's own (attention, status): keyed `pane-<n>-<id>`, not `pane-<n>-x-<id>`.
     pub core: bool,
+    /// The left rail or the sidebar already offers its action for this
+    /// pane's sandbox ([`same_view`]): it may show inline for what it says
+    /// (a count, a tone), never in the overflow menu.
+    pub elsewhere: bool,
 }
 
 impl Item {
     pub fn from_extra(e: &Extra) -> Item {
-        Item { id: e.id.clone(), label: e.label.clone(), icon: e.icon.clone(), tone: e.tone.clone(), help: e.help.clone(), count: e.count, intent: e.intent.clone(), core: false }
+        Item { id: e.id.clone(), label: e.label.clone(), icon: e.icon.clone(), tone: e.tone.clone(), help: e.help.clone(), count: e.count, intent: e.intent.clone(), core: false, elsewhere: false }
     }
 
     pub fn rank(&self) -> u8 {
@@ -117,6 +121,9 @@ impl Item {
     /// icon says what it counts ([`COUNT_ONLY`]), else [`Self::text`]. Its
     /// tooltip says the whole thing; the overflow menu keeps the words.
     pub fn chip_text(&self) -> String {
+        if ICON_ONLY.contains(&self.id.as_str()) {
+            return String::new();
+        }
         match self.count {
             Some(n) if self.icon.is_some() && COUNT_ONLY.contains(&self.id.as_str()) => n.to_string(),
             _ => self.text(),
@@ -143,9 +150,46 @@ impl Item {
 /// the sentence.
 pub const COUNT_ONLY: &[&str] = &["approvals"];
 
+/// Chips drawn as their icon alone (their word is the accessible name, the
+/// tooltip and the menu row's label): the microphone.
+pub const ICON_ONLY: &[&str] = &[DICTATE];
+
 /// Extras that always sit in the "⋯" menu, never inline: a view setting
-/// of the pane (keyword pills), not something to act on at a glance.
-pub const MENU_ONLY: &[&str] = &["pills", "commits", "mcp-view", "skills-view", "kits-view"];
+/// of the pane (keyword pills), or a card opened now and then (the
+/// environment file), not something to act on at a glance. (Commits, MCP,
+/// Skills and Kits on a pane are the rail's: [`same_view`] leaves them out.)
+pub const MENU_ONLY: &[&str] = &["pills", "envfile", "commits", "mcp-view", "skills-view", "kits-view"];
+
+/// The core's dictation button (`pane-<n>-dictate`): it stands where Env
+/// stood in the fit order, Env having moved into the "⋯" menu.
+pub const DICTATE: &str = "dictate";
+
+/// Whether a press on the rail (or a sidebar row) that runs `other` (its
+/// intent and arguments; `screen`: the screen that entry shows, when it
+/// says) does what a pane item running `own` does, for that pane's
+/// sandbox. Read from the intents' declarations, not from a list of ids:
+///
+/// * `own` takes only optional arguments: the view it opens can be opened
+///   on any sandbox and moved to this one there (a picker, a filter). An
+///   action on this sandbox (Esc, Remote, Close, Team, the browser, the
+///   project's files) needs its sandbox and is never someone else's.
+/// * `other` runs the same intent with a part of `own`'s arguments (none:
+///   the view on every sandbox, or the last one used), or shows a screen
+///   that the feature owning `own`'s intent declares (the rail's Skills
+///   opens the Skills panel, a pane's "Skills…" too, on its sandbox).
+pub fn same_view(own: &(String, J), other: &(String, J), screen: Option<&str>) -> bool {
+    let Some((feature, spec)) = crate::feat::intent(&own.0) else { return false };
+    if spec.args.iter().any(|(_, _, required)| *required) {
+        return false;
+    }
+    let empty = serde_json::Map::new();
+    let mine = own.1.as_object().unwrap_or(&empty);
+    let theirs = other.1.as_object().unwrap_or(&empty);
+    if own.0 == other.0 {
+        return theirs.iter().all(|(k, v)| mine.get(k) == Some(v));
+    }
+    screen.and_then(crate::feat::screen).is_some_and(|(f, _)| f.name == feature.name)
+}
 
 /// Sorted by [`rank`], stable: the order the bar fills in.
 pub fn by_priority(mut items: Vec<Item>) -> Vec<Item> {
@@ -277,6 +321,8 @@ pub fn pane_fit(width: f32, name: &str, agent: Option<&str>, items: Vec<Item>, m
     let k = if agent.is_some() && !switch { 0 } else { (0..=n).rev().find(|&k| fixed + chips_w(&items[..k], PANE_GAP) + if k < n { PANE_GAP + more } else { 0.0 } <= width + 0.5).unwrap_or(0) };
     let mut shown = items;
     let mut hidden = shown.split_off(k);
+    // What the rail or the sidebar offers is not listed again in the menu.
+    hidden.retain(|i| !i.elsewhere);
     hidden.extend(only_menu);
     PaneFit { switch, shown: by_zone(shown), hidden, name_min }
 }
@@ -477,7 +523,7 @@ mod tests {
     fn many() -> Vec<Item> {
         vec![
             ex("browser", "Browser", "muted", None),
-            ex("env", "Env", "muted", None),
+            ex("dictate", "Dictate", "muted", None),
             ex("project", "Project", "muted", None),
             ex("approvals", "sbx asks", "muted", Some(2)),
             ex("lead", "Team", "muted", None),
@@ -499,15 +545,65 @@ mod tests {
         let get = |id: &str| tones.iter().find(|(i, _)| *i == id).unwrap().1.clone();
         assert_eq!((get("interrupt"), get("remote"), get("threads"), get("lead"), get("browser"), get("project")), ("red".into(), "blue".into(), "blue".into(), "purple".into(), "blue".into(), "blue".into()));
         assert_eq!(get("plan"), "amber", "a toned extra keeps its own tone");
-        assert_eq!(get("env"), "neutral");
+        assert_eq!(get("dictate"), "neutral");
     }
 
     #[test]
     fn what_needs_the_person_goes_first() {
         let order = by_priority(many());
-        assert_eq!(ids(&order), ["plan", "approvals", "browser", "env", "project", "lead", "interrupt", "remote", "threads"]);
+        assert_eq!(ids(&order), ["plan", "approvals", "browser", "dictate", "project", "lead", "interrupt", "remote", "threads"]);
         assert_eq!(rank("red", None), 2, "red is danger (Close thread), not attention");
         assert_eq!(rank("green", None), 1);
+    }
+
+    /// Env is a row of the "⋯" menu at every width; the microphone stands
+    /// where it stood, drawn as its icon alone.
+    #[test]
+    fn env_is_in_the_menu_and_the_microphone_in_its_place() {
+        let mut items = many();
+        items.push(ex("envfile", "Env", "muted", None));
+        for width in [1400.0, 700.0, 300.0] {
+            let f = pane_fit(width, "test-sbx", Some("Claude"), items.clone(), true);
+            assert!(f.hidden.iter().any(|i| i.id == "envfile") && f.shown.iter().all(|i| i.id != "envfile"), "{width}");
+        }
+        let wide = pane_fit(1400.0, "test-sbx", Some("Claude"), items, true);
+        assert!(wide.shown.iter().any(|i| i.id == DICTATE));
+        let mic = ex(DICTATE, "Dictate", "muted", None);
+        assert_eq!(mic.chip_text(), "", "the icon alone; its word names it");
+        assert_eq!(chip_w(&mic), CHIP_PX * 2.0 + CHIP_ICON);
+    }
+
+    /// An item the rail offers too may show inline (it says something
+    /// there), never in the menu.
+    #[test]
+    fn what_the_rail_offers_never_goes_into_the_menu() {
+        let mut items = many();
+        for it in items.iter_mut().filter(|i| i.id == "approvals") {
+            it.elsewhere = true;
+        }
+        let wide = pane_fit(1400.0, "test-sbx", Some("Claude"), items.clone(), true);
+        assert!(wide.shown.iter().any(|i| i.id == "approvals"), "inline while it fits");
+        let narrow = pane_fit(200.0, "test-sbx", Some("Claude"), items, true);
+        assert!(narrow.shown.iter().chain(&narrow.hidden).all(|i| i.id != "approvals"), "not in the menu: {:?}", ids(&narrow.hidden));
+    }
+
+    /// The rule, from the intents' declarations.
+    #[test]
+    fn the_same_view_is_read_from_the_intents() {
+        let i = |n: &str, a: J| (n.to_string(), a);
+        let web = serde_json::json!({ "sandbox": "web" });
+        // The same intent, the rail's on every sandbox, the pane's on its own.
+        assert!(same_view(&i("network_show", web.clone()), &i("network_show", serde_json::json!({})), Some("network")));
+        assert!(same_view(&i("commits_show", web.clone()), &i("commits_show", serde_json::json!({})), Some("commits")));
+        assert!(!same_view(&i("network_show", web.clone()), &i("network_show", serde_json::json!({ "sandbox": "api" })), None), "another sandbox");
+        // The screen of the feature that owns the pane's intent.
+        assert!(same_view(&i("skills_show", web.clone()), &i("open_panel", serde_json::json!({ "screen": "skills" })), Some("skills")));
+        assert!(same_view(&i("mcp_show", web.clone()), &i("open_panel", serde_json::json!({ "screen": "mcp" })), Some("mcp")));
+        assert!(!same_view(&i("skills_show", web.clone()), &i("open_panel", serde_json::json!({ "screen": "mcp" })), Some("mcp")));
+        // An action that needs its sandbox is the pane's own.
+        assert!(!same_view(&i("files_open", web.clone()), &i("files_show", serde_json::json!({})), Some("files")), "Project: the files of this sandbox");
+        assert!(!same_view(&i("envfile_show", web.clone()), &i("envfile_show", web.clone()), None));
+        assert!(!same_view(&i("browser_open", web.clone()), &i("browser_open", web), None));
     }
 
     #[test]

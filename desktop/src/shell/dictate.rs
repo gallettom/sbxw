@@ -69,6 +69,21 @@ pub struct Dictation {
     pub notice: Option<(String, String, String)>,
     /// What had Rune's keyboard at the last poll (`dictate_watch`).
     pub seen: Option<String>,
+    /// A pane bar's microphone was pressed: the dictation into that pane
+    /// starts at the next poll, once its grid has the keyboard again.
+    pub pane_ask: Option<usize>,
+}
+
+/// A pane bar's microphone, as drawn.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PaneDictate {
+    Ready,
+    /// Recording into this pane: drawn pressed (a press stops it).
+    Recording,
+    /// Its words are being transcribed and masked: the busy state.
+    Busy,
+    /// Disabled, and why (its tooltip).
+    Off(String),
 }
 
 /// Whether `key` is an `input` or `textarea` of tree `n`.
@@ -176,8 +191,10 @@ impl App {
         }
     }
 
-    /// Starts a held dictation into the terminal of pane `pane` (grid `grid`).
-    fn dictate_terminal(&mut self, pane: usize, grid: &str) {
+    /// Starts a dictation into the terminal of pane `pane` (grid `grid`):
+    /// held by the dictate key (released: stop), or started by the pane
+    /// bar's microphone (`held` false: pressed again, stop).
+    fn dictate_terminal(&mut self, pane: usize, grid: &str, held: bool) {
         let Some(id) = self.panes.get(pane).and_then(|p| p.term.as_ref()).map(|t| t.id.clone()) else { return };
         if let Some(why) = self.terminal_refusal() {
             log::info!("dictation refused");
@@ -191,7 +208,7 @@ impl App {
                 self.dictation.level = 0.0;
                 self.dictation.notice = None;
                 self.dictation.seen = Some(grid.to_string());
-                self.dictation.on = Some(Take { screen: "terminal".into(), input: grid.into(), arg: J::Null, held: true, at_end: false, started: Instant::now(), term: Some((pane, id)) });
+                self.dictation.on = Some(Take { screen: "terminal".into(), input: grid.into(), arg: J::Null, held, at_end: false, started: Instant::now(), term: Some((pane, id)) });
                 log::info!("dictation: recording into pane {}", pane + 1);
             }
             Err(e) => self.dictate_notice("terminal", grid, format!("Cannot record: {e}"), true),
@@ -304,6 +321,60 @@ impl App {
         }
     }
 
+    /// What pane `i`'s microphone shows: recording into it, its words on
+    /// their way, ready, or why it cannot dictate now (the same reasons the
+    /// dictate key gets, said before the press).
+    pub(super) fn pane_dictate_state(&self, i: usize) -> PaneDictate {
+        let into = |t: &Take| t.term.as_ref().is_some_and(|(p, _)| *p == i);
+        match (&self.dictation.on, &self.dictation.pending) {
+            (Some(t), _) if into(t) => return PaneDictate::Recording,
+            (_, Some((_, t))) if into(t) => return PaneDictate::Busy,
+            (Some(_), _) | (_, Some(_)) => return PaneDictate::Off("Not dictating: a dictation elsewhere is under way.".into()),
+            _ => {}
+        }
+        if self.panes.get(i).and_then(|p| p.term.as_ref()).is_none() {
+            return PaneDictate::Off("Not dictating: this pane has no terminal to type into.".into());
+        }
+        if let Some(why) = self.terminal_refusal() {
+            return PaneDictate::Off(why);
+        }
+        // The keyboard gate the words must pass (terminal_may_take_keys).
+        if self.panes_covered() || crate::surface::focused().is_some() {
+            return PaneDictate::Off("Not dictating: something is open over the panes. Close it first.".into());
+        }
+        PaneDictate::Ready
+    }
+
+    /// Pane `i`'s microphone pressed: the first press gives the pane the
+    /// keyboard and starts a dictation into its terminal (at the next poll,
+    /// [`Self::dictate_pane_begin`]); a press while it records stops it.
+    /// The same path as the dictate key held in that terminal: the words are
+    /// masked by the daemon and typed only while the pane keeps the keyboard.
+    pub(super) fn dictate_pane_press(&mut self, i: usize) {
+        match self.pane_dictate_state(i) {
+            PaneDictate::Recording => self.dictate_stop(),
+            PaneDictate::Ready => {
+                self.focus_pane(i);
+                self.refocus = true;
+                self.dictation.pane_ask = Some(i);
+            }
+            PaneDictate::Busy | PaneDictate::Off(_) => {}
+        }
+    }
+
+    /// Each poll, after the focused pane's grid got the keyboard back: the
+    /// dictation a microphone asked for starts, when the gate lets keys
+    /// reach that terminal (the dictate key's own check).
+    pub(super) fn dictate_pane_begin(&mut self) {
+        let Some(i) = self.dictation.pane_ask.take() else { return };
+        let Some(grid) = self.panes.get(i).and_then(|p| p.term.as_ref()).map(|t| t.key("grid")) else { return };
+        if self.focused != i || self.dictation.on.is_some() || !self.terminal_may_take_keys(Some(&grid)) {
+            self.dictate_notice("terminal", &grid, "Not dictating: the terminal does not have the keyboard.".into(), false);
+            return;
+        }
+        self.dictate_terminal(i, &grid, false);
+    }
+
     /// The dictate key pressed: true when it was taken.
     pub(super) fn dictate_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         let m = ev.mods;
@@ -334,7 +405,7 @@ impl App {
                 return false;
             }
             let (pane, k) = (self.focused, k.to_string());
-            self.dictate_terminal(pane, &k);
+            self.dictate_terminal(pane, &k, true);
             return true;
         }
         // A terminal behind a layer, or another field (a filter, a form), keeps its key.

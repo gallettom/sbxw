@@ -37,6 +37,7 @@ mod sidebar_tests;
 mod timing_tests;
 
 use crate::approval;
+use dictate::PaneDictate;
 use crate::theme::Lift;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
 use crate::fixture::{AppView, Connection, Fixture, LayoutView, PaneView};
@@ -1238,6 +1239,11 @@ impl App {
             self.refocus = false;
             if let Some(t) = self.panes.get(self.focused).and_then(|p| p.term.as_ref()) {
                 tx.focus(t.key("grid"), false);
+            }
+            // A pane bar's microphone: its grid has the keyboard now.
+            if self.dictation.pane_ask.is_some() {
+                self.dictate_pane_begin();
+                changed = true;
             }
         } else if let Some(k) = tx.focused().map(str::to_string) {
             if let Some(i) = shown.clone().find(|&i| self.panes[i].term.as_ref().is_some_and(|t| t.key("grid") == k)) {
@@ -2969,12 +2975,26 @@ impl App {
     /// features' extras, by priority. None for a pane with no sandbox.
     fn pane_fit(&self, i: usize) -> Option<bar::PaneFit> {
         let p = self.panes.get(i).filter(|p| p.sandbox.is_some())?;
-        let core = |id: &str, label: &str, tone: &str, help: &str| bar::Item { id: id.into(), label: label.into(), icon: None, tone: tone.into(), help: help.into(), count: None, intent: None, core: true };
+        let core = |id: &str, label: &str, tone: &str, help: &str| bar::Item { id: id.into(), label: label.into(), icon: None, tone: tone.into(), help: help.into(), count: None, intent: None, core: true, elsewhere: false };
         let mut items = vec![];
         if p.attention {
             items.push(core("attention", "wants you", "amber", "The agent in this pane waits for you"));
         }
-        items.extend(self.pane_items(p.sandbox.as_deref().unwrap_or(""), p.thread.as_deref()));
+        let sb = p.sandbox.as_deref().unwrap_or("");
+        let mut extras = self.pane_items(sb, p.thread.as_deref());
+        // What the rail or the sidebar already offers for this sandbox
+        // (bar::same_view): left out of the menu; left out of the bar too
+        // when it says nothing more there (no count, no tone that asks).
+        let elsewhere = self.offered_elsewhere(sb);
+        extras.retain_mut(|it| {
+            let dup = it.intent.as_ref().is_some_and(|own| elsewhere.iter().any(|(other, screen)| bar::same_view(own, other, screen.as_deref())));
+            it.elsewhere = dup;
+            !dup || it.rank() < 2
+        });
+        // Dictation stands where Env stood (Env is a menu row now).
+        let at = extras.iter().position(|it| it.id == "envfile").unwrap_or(extras.len());
+        extras.insert(at, self.dictate_item(i));
+        items.extend(extras);
         if p.status() != "connected" {
             items.push(core("status", &p.status(), "muted", "The terminal's connection"));
         }
@@ -2983,9 +3003,43 @@ impl App {
         if let (false, Some(_)) = (f.switch, &agent) {
             // Too narrow even for the switch: the menu's first row.
             let to = if p.mode == Mode::Bash { agent.clone().unwrap_or_default() } else { bar::BASH.to_string() };
-            f.hidden.insert(0, bar::Item { id: "mode".into(), label: format!("Switch to {to}"), icon: Some(if p.mode == Mode::Bash { "sparkle" } else { "prompt" }.into()), tone: String::new(), help: format!("This pane shows {}: switch it to {to} (the other session keeps running)", if p.mode == Mode::Bash { "the shell" } else { "the agent" }), count: None, intent: None, core: true });
+            f.hidden.insert(0, bar::Item { id: "mode".into(), label: format!("Switch to {to}"), icon: Some(if p.mode == Mode::Bash { "sparkle" } else { "prompt" }.into()), tone: String::new(), help: format!("This pane shows {}: switch it to {to} (the other session keeps running)", if p.mode == Mode::Bash { "the shell" } else { "the agent" }), count: None, intent: None, core: true, elsewhere: false });
         }
         Some(f)
+    }
+
+    /// The presses the left rail and the sidebar offer for `sandbox`, each
+    /// with the screen it shows when it says: every rail entry (folded
+    /// into "More" or not) and, while the sidebar shows, that sandbox's
+    /// row extras.
+    pub(super) fn offered_elsewhere(&self, sandbox: &str) -> Vec<((String, J), Option<String>)> {
+        let (top, bottom) = self.rail_entries();
+        let mut v: Vec<((String, J), Option<String>)> = top
+            .into_iter()
+            .chain(bottom)
+            .filter_map(|e| match e.run {
+                rail::RailRun::Intent(n, a) => Some(((n, a), None)),
+                rail::RailRun::Toggle { name, args, screen } => Some(((name, args), Some(screen))),
+                _ => None,
+            })
+            .collect();
+        if self.sidebar_shown() {
+            let row = crate::feat::Place::Sandbox(sandbox.to_string());
+            v.extend(self.feats.pane_extras.iter().filter(|e| e.place == row).filter_map(|e| e.intent.clone()).map(|i| (i, None)));
+        }
+        v
+    }
+
+    /// Pane `i`'s dictation button, as the bar fits it: the microphone, its
+    /// tooltip the action, or why it cannot dictate now.
+    fn dictate_item(&self, i: usize) -> bar::Item {
+        let help = match self.pane_dictate_state(i) {
+            PaneDictate::Recording => "Listening: press again to type the words here. Escape cancels".to_string(),
+            PaneDictate::Busy => "Writing down your words, masked first…".to_string(),
+            PaneDictate::Off(why) => why,
+            PaneDictate::Ready => format!("Dictate: press, speak, press again (or hold {}). The words are masked and typed here; nothing is sent", self.dictation.key_name()),
+        };
+        bar::Item { id: bar::DICTATE.into(), label: "Dictate".into(), icon: Some("mic".into()), tone: "muted".into(), help, count: None, intent: None, core: true, elsewhere: false }
     }
 
     /// The mode switch's agent segment of pane `i`: "Thread" on a thread's
@@ -3045,7 +3099,21 @@ impl App {
         let room = below.max(top - 12.0) - screen::MENU_PAD * 2.0 - 4.0;
         let mut list = col().w_full().max_h(room.max(120.0)).scroll(rune::ScrollSpec { stick_bottom: false });
         for (it, r) in f.hidden.iter().zip(&rows) {
-            list = list.child(if it.core && it.id == "mode" {
+            list = list.child(if it.core && it.id == bar::DICTATE {
+                // The microphone folded into the menu: the same press, or disabled with why.
+                let off = matches!(self.pane_dictate_state(i), PaneDictate::Off(_) | PaneDictate::Busy);
+                let row = screen::MenuRow { key: r.key.clone(), label: r.label, icon: r.icon, tone: r.tone, help: r.help, keys: r.keys, count: r.count, chosen: r.chosen, disabled: off };
+                let e = screen::menu_row(&row);
+                if off {
+                    e
+                } else {
+                    e.on_press(move |s: &mut App| {
+                        s.bar_menu = None;
+                        s.dictate_pane_press(i);
+                        s.push_data();
+                    })
+                }
+            } else if it.core && it.id == "mode" {
                 screen::menu_row(r).on_press(move |s: &mut App| {
                     s.bar_menu = None;
                     s.switch_mode(i);
@@ -3362,6 +3430,51 @@ fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
     b
 }
 
+/// Pane `i`'s microphone (`pane-<n>-dictate`): dictation into its
+/// terminal, the same path as the dictate key held there (dictate.rs). As
+/// big as a chip; pressed (red, `aria-pressed`) while it records, the busy
+/// spinner while the words are transcribed and masked, disabled with the
+/// reason as its tooltip when it cannot dictate. It never takes the
+/// keyboard from the terminal: the words are typed only while the pane's
+/// grid has it.
+fn dictate_chip(s: &App, it: &bar::Item, i: usize, ground: u32) -> El {
+    let state = s.pane_dictate_state(i);
+    let rec = state == PaneDictate::Recording;
+    let (red, red_tint) = crate::screen::tone("red");
+    let ink = if rec { theme::hex(red) } else { theme::hex(theme::mark_on(theme::color_value("text-bright").unwrap(), ground)) };
+    let mut b = row()
+        .key(it.key(i + 1))
+        .role("button")
+        .label(it.label.clone())
+        .help(it.help.clone())
+        .px(bar::CHIP_PX)
+        .h(layout::DENSE_H)
+        .min_w(layout::DENSE_H)
+        .justify_center()
+        .items_center()
+        .radius(theme::radius("xs").unwrap())
+        .focusable(false)
+        .preserve_focus_on_press(true);
+    if rec {
+        b = b.fill(theme::hex(red_tint));
+    }
+    b = match state {
+        PaneDictate::Busy => b.child(screen::busy_spinner(bar::CHIP_ICON, ink)),
+        _ => b.child(rune::icon(crate::icons::get("mic").unwrap(), bar::CHIP_ICON).color(ink)),
+    };
+    match state {
+        PaneDictate::Off(_) => b.opacity(theme::DISABLED_OPACITY).disabled(true),
+        PaneDictate::Busy => b.busy(true),
+        _ => {
+            let keys = if rec { vec![] } else { vec![s.dictation.key_name().to_string()] };
+            b.checked(rec).help_keys(keys).hover(if rec { theme::hex(theme::over(red, 0.12, red_tint)) } else { c("elevated") }).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+                s.dictate_pane_press(i);
+                s.push_data();
+            })
+        }
+    }
+}
+
 /// One row of a pane bar's overflow menu: the same key, label, icon, tone,
 /// count and intent as the chip it stands for, in the shared menu look.
 fn bar_menu_row<'a>(it: &'a bar::Item, n: usize, label: &'a str) -> screen::MenuRow<'a> {
@@ -3515,7 +3628,7 @@ fn pane_view(s: &App, i: usize) -> El {
         for it in &f.shown {
             let z = bar::zone(&it.id);
             let active = focused && bar::panel_of(&it.id).is_some_and(shown_panel);
-            let mut chip = bar_chip(it, i + 1, active, bar_ground);
+            let mut chip = if it.core && it.id == bar::DICTATE { dictate_chip(s, it, i, bar_ground) } else { bar_chip(it, i + 1, active, bar_ground) };
             if last.is_some_and(|l| l != z) {
                 // In the gap before the zone's first chip (no room of its own).
                 let x = -(bar::PANE_GAP + bar::SEP_W) / 2.0;
@@ -4066,6 +4179,42 @@ mod tests {
     /// name and close button are inside the pane, the extras that do not fit
     /// are in one menu whose items keep their keys and run their intents,
     /// and the top bar's parts stay inside the window.
+    /// Every extra a feature places on a pane, and its dictation button,
+    /// has a visible entry point: inline in the bar, a row of its "⋯" menu,
+    /// a rail entry drawn (or folded into the rail's "More"), or a row of
+    /// the sidebar shown (its menu lists every extra with an intent).
+    fn every_pane_action_is_reachable(rt: &rune::Runtime<App>, what: &str) {
+        let s = &rt.state;
+        let l = s.rail_layout();
+        let rail: Vec<(&rail::Entry, bool)> = l.top.iter().chain(&l.bottom).map(|e| (e, true)).chain(l.folded.iter().map(|e| (e, false))).collect();
+        let mut walked = 0;
+        for (i, p) in s.panes.iter().enumerate() {
+            let Some(sb) = p.sandbox.clone() else { continue };
+            let f = s.pane_fit(i).unwrap();
+            let on_pane = |id: &str| f.shown.iter().chain(&f.hidden).any(|it| it.id == id);
+            assert!(on_pane(bar::DICTATE), "{what}: pane {}: the microphone", i + 1);
+            for it in s.pane_items(&sb, p.thread.as_deref()) {
+                walked += 1;
+                if on_pane(&it.id) {
+                    continue;
+                }
+                let own = it.intent.clone().unwrap_or_else(|| panic!("{what}: pane {}: {} is on no bar and has no intent", i + 1, it.id));
+                let by_rail = rail.iter().any(|(e, drawn)| {
+                    let (other, screen) = match &e.run {
+                        rail::RailRun::Intent(n, a) => ((n.clone(), a.clone()), None),
+                        rail::RailRun::Toggle { name, args, screen } => ((name.clone(), args.clone()), Some(screen.as_str())),
+                        _ => return false,
+                    };
+                    bar::same_view(&own, &other, screen) && s.rail_drawn(if *drawn { e.key.as_str() } else { "rail-more" })
+                });
+                let row = crate::feat::Place::Sandbox(sb.clone());
+                let by_sidebar = s.sidebar_shown() && s.feats.pane_extras.iter().any(|e| e.place == row && e.intent.as_ref() == Some(&own));
+                assert!(by_rail || by_sidebar, "{what}: pane {}: {} ({own:?}) is on neither the bar, its menu, the rail nor the sidebar", i + 1, it.id);
+            }
+        }
+        assert!(walked > 10, "{what}: the fixture puts extras on the panes ({walked})");
+    }
+
     #[test]
     fn pane_bars_keep_their_name_and_close_button_and_overflow_into_a_menu() {
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/panebar-4.json");
@@ -4166,18 +4315,52 @@ mod tests {
                 let f = rt.state.pane_fit(0).unwrap();
                 assert!(f.hidden.iter().chain(&f.shown).take(3).any(|i| i.tone == "amber"), "{:?}", f.hidden);
                 tap(&mut rt, "pane-1-more");
-                assert!(rt.state.drawn("pane-1-more-list") && rt.state.drawn("pane-1-x-approvals"), "open: drawn, wait: marks see it");
+                assert!(rt.state.drawn("pane-1-more-list") && rt.state.drawn("pane-1-x-envfile"), "open: drawn, wait: marks see it");
+                // sbx's requests are the rail's Network: never a row of this menu.
+                assert!(!rt.state.drawn("pane-1-x-approvals"), "the rail's Network is not listed again");
                 let (r, _) = rt.presented("pane-1-more-list").unwrap();
                 assert!(r[0] >= 0.0 && r[0] + r[2] <= w + 0.5 && r[1] >= 0.0 && r[1] + r[3] <= h + 0.5, "menu {r:?} inside the window");
-                // Its item runs the same intent as the chip: the Network panel on test-sbx.
-                tap(&mut rt, "pane-1-x-approvals");
+                // Its row runs the extra's intent: the environment file of test-sbx.
+                // The menu-only rows come last: the list scrolls to them.
+                for _ in 0..20 {
+                    let (env, _) = rt.presented("pane-1-x-envfile").unwrap();
+                    if env[1] + env[3] <= r[1] + r[3] {
+                        break;
+                    }
+                    rt.wheel(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0, -60.0);
+                    rt.frame(0.05);
+                }
+                tap(&mut rt, "pane-1-x-envfile");
+                for _ in 0..3 {
+                    rt.update(|s, tx| {
+                        s.poll(0.0, tx);
+                    });
+                    rt.frame(0.016);
+                }
                 assert_eq!(rt.state.bar_menu, None);
-                assert_eq!(rt.state.feats.data.get("network_for").and_then(J::as_str), Some("test-sbx"));
+                assert_eq!(rt.state.feats.modal.as_ref().map(|m| m.0.as_str()), Some("envfile"));
+                assert_eq!(rt.state.feats.data.get("envfile").map(|e| e["sandbox"].clone()), Some(J::from("test-sbx")));
+                rt.update(|s, _| {
+                    s.feats.modal = None;
+                    s.push_data();
+                });
+                rt.frame(0.016);
                 // Escape closes it too.
                 tap(&mut rt, "pane-1-more");
                 rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
                 rt.frame(0.016);
                 assert!(!rt.state.drawn("pane-1-more-list"));
+            }
+            // Nothing a pane offered became unreachable, sidebar shown or hidden.
+            every_pane_action_is_reachable(&rt, &format!("{w}, sidebar shown"));
+            rt.update(|s, _| s.set_sidebar(false));
+            for _ in 0..4 {
+                rt.frame(0.016);
+            }
+            every_pane_action_is_reachable(&rt, &format!("{w}, sidebar hidden"));
+            rt.update(|s, _| s.set_sidebar(true));
+            for _ in 0..4 {
+                rt.frame(0.016);
             }
             // The top bar: nothing leaves the window.
             for key in ["jarvis-toggle", "pager-per", "pager-view-grid"] {
