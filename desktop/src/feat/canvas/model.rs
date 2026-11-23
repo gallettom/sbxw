@@ -442,8 +442,9 @@ pub fn view(s: &State, snap: &J) -> J {
         let look = s.handed.get(&a.id).map(|h| !h.look.is_empty()).unwrap_or(false);
         draft.push(json!({ "key": a.id, "kind": "asset", "n": a.n, "label": format!("Example {} · {} · {}", a.n, clipped(&a.name), size_label(a.bytes)), "look": look, "selected": sel == Some(a.id.as_str()) }));
     }
-    let new = draft.len();
+    let new = draft.len() + draft_diagrams(s);
     v["draft"] = J::Array(draft);
+    v["diagram"] = diagram_view(s, c);
     // Past rounds, newest first, read only.
     let mut history = vec![];
     for r in c.reviews.iter().rev() {
@@ -463,6 +464,57 @@ pub fn view(s: &State, snap: &J) -> J {
     v["history"] = J::Array(history);
     v["send"] = send_view(s, snap, new);
     v
+}
+
+/// Changed diagrams not sent yet, as the daemon counts them (the canvas
+/// list's `draft_diagrams`, read again after each save).
+pub fn draft_diagrams(s: &State) -> usize {
+    s.list.iter().find(|c| Some(c["id"].as_str().unwrap_or("")) == s.current.as_deref()).and_then(|c| c["draft_diagrams"].as_u64()).unwrap_or(0) as usize
+}
+
+/// The bar of the diagram selected (or of one whose save was refused):
+/// its name, undo and redo, its save's state, and the 409's choice.
+fn diagram_view(s: &State, c: &Manifest) -> J {
+    let sel = s.selected.as_deref().and_then(dg::parse_sel).map(|(d, p)| (d.to_string(), p));
+    let conflicted = s.diagrams.iter().find(|(_, d)| d.conflict.is_some()).map(|(id, _)| id.clone());
+    // The bar stays while the canvas holds diagrams (so the surface under it
+    // never moves as a diagram is selected): idle, it says how to start.
+    let idle = json!({ "idle": true, "hint": "Press a diagram to edit it: drag its nodes, link them from their handle, double click to rename" });
+    if c.diagrams.is_empty() {
+        return J::Null;
+    }
+    let Some(did) = conflicted.clone().or_else(|| sel.as_ref().map(|(d, _)| d.clone())) else { return idle };
+    let Some(st) = s.diagrams.get(&did) else { return idle };
+    let title = c.diagrams.iter().find(|d| d.id == did).map(|d| plain(&d.title)).unwrap_or_default();
+    let part = sel.as_ref().filter(|(d, _)| *d == did).map(|(_, p)| p.clone()).unwrap_or(dg::Part::Whole);
+    let (undo, redo) = st.hist.steps();
+    let status = if st.relayout {
+        "Laying out again…".to_string()
+    } else if st.saving || st.dirty {
+        "Saving…".to_string()
+    } else if let Some(e) = &st.error {
+        format!("Not saved: {}", plain(e))
+    } else {
+        format!("Saved · revision {}", st.rev)
+    };
+    let selected = match &part {
+        dg::Part::Node(n) => st.cur.node(n).map(|n| format!("Node \"{}\"", plain(&n.label))),
+        dg::Part::Edge(e) => st.cur.edge(e).map(|e| format!("Edge {}", plain(&dg::edge_name(&st.cur, e)))),
+        dg::Part::Whole => None,
+    };
+    let seq = st.cur.kind == dg::Kind::Sequence;
+    let hint = match (&part, seq) {
+        (dg::Part::Node(_), true) => "Drag a lifeline sideways · drag its handle to another lifeline for a message · Enter renames · Tab adds the next · Delete removes it",
+        (dg::Part::Node(_), false) => "Drag to move · drag its handle to another node to link, or to empty ground for a new one · Enter renames · Tab adds the next · Delete removes it",
+        (dg::Part::Edge(_), true) => "Drag the message up or down to reorder · Enter renames · Delete removes it",
+        (dg::Part::Edge(_), false) => "Enter renames the edge · Delete removes it",
+        (dg::Part::Whole, _) => "Drag to move the diagram · double click its ground to add a node · double click a node or an edge to rename it",
+    };
+    let conflict = st.conflict.as_ref().map(|d| format!(
+        "\"{title}\" changed elsewhere (revision {}) while you edited it: your last change was not saved. Reload takes the newer version (undo brings yours back); Reapply my change saves yours over it.", d.rev));
+    json!({ "id": did, "title": title, "kind": st.cur.kind.name(), "nodes": st.cur.nodes.len(), "edges": st.cur.edges.len(),
+        "selected": selected, "part": match part { dg::Part::Node(_) => "node", dg::Part::Edge(_) => "edge", dg::Part::Whole => "whole" },
+        "undo": undo > 0, "redo": redo > 0, "status": status, "hint": hint, "conflict": conflict, "busy": st.relayout })
 }
 
 /// The sessions of `sb` a send or an ask may go to, one per place as the
@@ -568,7 +620,7 @@ fn send_view(s: &State, snap: &J, new: usize) -> J {
     json!({
         "label": format!("Send remarks to {to}"), "to": to, "new": new,
         "ok": new > 0 && why.is_none() && !busy, "ask_ok": why.is_none(),
-        "why": if busy { Some("Sending…".to_string()) } else if new == 0 { Some("No new pin, note or example since the last round".to_string()) } else { why.clone() },
+        "why": if busy { Some("Sending…".to_string()) } else if new == 0 { Some("No new pin, note, example or diagram change since the last round".to_string()) } else { why.clone() },
         // The Ask button's own reason: independent of what is new.
         "ask_why": why,
         "sessions": v.places.iter().map(|(k, l, _)| json!({ "id": k, "label": l })).collect::<Vec<_>>(), "session": v.key,
