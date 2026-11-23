@@ -6,6 +6,7 @@ pub mod board;
 pub mod browser;
 pub mod canvas;
 pub mod codemap;
+pub mod commands;
 pub mod emphasis;
 pub mod history;
 pub mod hosts;
