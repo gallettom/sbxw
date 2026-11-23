@@ -4376,7 +4376,8 @@ mod tests {
         for (i, p) in s.panes.iter().enumerate() {
             let Some(sb) = p.sandbox.clone() else { continue };
             let f = s.pane_fit(i).unwrap();
-            let on_pane = |id: &str| f.shown.iter().chain(&f.hidden).any(|it| it.id == id);
+            // The team toggle (`lead`) is the name pill's (bar::take_team).
+            let on_pane = |id: &str| f.shown.iter().chain(&f.hidden).any(|it| it.id == id) || (id == "lead" && f.team.is_some());
             assert!(on_pane(bar::DICTATE), "{what}: pane {}: the microphone", i + 1);
             for it in s.pane_items(&sb, p.thread.as_deref()) {
                 walked += 1;
