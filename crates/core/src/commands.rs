@@ -9,7 +9,7 @@
 //! ([`crate::my_skills::description`]).
 
 use crate::invisible::is_invisible;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// At most this many entries in one answer; files past it are not read.
 pub const MAX_COMMANDS: usize = 300;
@@ -54,7 +54,7 @@ pub fn one_line(text: &str) -> String {
 
 /// Where an entry was found, which is also its precedence: a workspace
 /// entry hides a home one of the same name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Origin {
     /// The project's `.claude/skills` or `.claude/commands`.
@@ -68,7 +68,7 @@ pub enum Origin {
 
 /// A skill (`skills/<name>/SKILL.md`) hides a command
 /// (`commands/<name>.md`) of the same name and origin.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Skill,
