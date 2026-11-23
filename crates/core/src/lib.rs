@@ -14,6 +14,7 @@ pub mod canvas;
 pub mod artifacts;
 pub mod carve;
 pub mod codemap;
+pub mod diagram;
 pub mod commits;
 pub mod chrome;
 pub mod config;

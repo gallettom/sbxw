@@ -1,0 +1,485 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "sbxw kits and Jarvis: from the binary to a sandbox",
+    "output": ".sbxw-artifacts/codemap/diagram/architecture.html",
+    "quality_profile": "showcase",
+    "locale": "en",
+    "repository": {
+      "url": "git@github.com:gallettom/sbxw.git",
+      "link_mode": "local-only",
+      "revision": "ebb5554fb31dd3de9b621eaeaec23ddb6f57c308"
+    }
+  },
+  "components": [
+    {
+      "id": "embed",
+      "type": "backend",
+      "label": "Embedding and writing out",
+      "sublabel": "build.rs → ~/.sbxw/kits",
+      "pos": [
+        20,
+        200
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "crates/daemon/build.rs",
+          "line": 13,
+          "end_line": 33,
+          "label": "embed kit trees"
+        },
+        {
+          "path": "crates/daemon/src/bundled.rs",
+          "line": 22,
+          "end_line": 55,
+          "label": "write out sbxw:<name>"
+        }
+      ]
+    },
+    {
+      "id": "base",
+      "type": "backend",
+      "label": "Base kit",
+      "sublabel": "Node.js, relay guidance",
+      "pos": [
+        335,
+        40
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "assets/base/spec.yaml",
+          "line": 1,
+          "end_line": 40,
+          "label": "v3 spec"
+        },
+        {
+          "path": "crates/core/src/kits.rs",
+          "line": 30,
+          "end_line": 34,
+          "label": "with_base"
+        }
+      ]
+    },
+    {
+      "id": "apply",
+      "type": "backend",
+      "label": "Applying kits",
+      "sublabel": "provision.rs bring-up",
+      "pos": [
+        320,
+        200
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "sources": [
+        {
+          "path": "crates/daemon/src/provision.rs",
+          "line": 286,
+          "end_line": 345,
+          "label": "create --kit"
+        },
+        {
+          "path": "crates/daemon/src/provision.rs",
+          "line": 453,
+          "end_line": 510,
+          "label": "kit add on existing"
+        }
+      ]
+    },
+    {
+      "id": "sbx",
+      "type": "external",
+      "label": "sbx",
+      "sublabel": "Docker Sandboxes CLI",
+      "pos": [
+        760,
+        200
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "sources": [
+        {
+          "path": "crates/sbx/src/lib.rs",
+          "line": 625,
+          "end_line": 640,
+          "label": "create"
+        },
+        {
+          "path": "crates/sbx/src/lib.rs",
+          "line": 970,
+          "end_line": 972,
+          "label": "kit add"
+        }
+      ]
+    },
+    {
+      "id": "pane",
+      "type": "frontend",
+      "label": "Kit approval pane",
+      "sublabel": "✓ → sbx kit add in a PTY",
+      "pos": [
+        560,
+        40
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "crates/daemon/src/svc/open.rs",
+          "line": 109,
+          "end_line": 116,
+          "label": "KitAdd session"
+        },
+        {
+          "path": "crates/daemon/src/provision.rs",
+          "line": 486,
+          "end_line": 500,
+          "label": "record the waiting kit"
+        }
+      ]
+    },
+    {
+      "id": "skills",
+      "type": "backend",
+      "label": "Kept skills",
+      "sublabel": "sbxw-my-skills kit",
+      "pos": [
+        250,
+        380
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "crates/core/src/my_skills.rs",
+          "line": 176,
+          "end_line": 216,
+          "label": "kit_files"
+        },
+        {
+          "path": "crates/daemon/src/svc/my_skills.rs",
+          "line": 23,
+          "end_line": 70,
+          "label": "write_kit_tree"
+        }
+      ]
+    },
+    {
+      "id": "volumes",
+      "type": "backend",
+      "label": "Volumes",
+      "sublabel": "volume@1 per sandbox",
+      "pos": [
+        430,
+        380
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "crates/core/src/kits.rs",
+          "line": 333,
+          "end_line": 345,
+          "label": "volumes_kit_spec"
+        },
+        {
+          "path": "crates/daemon/src/store.rs",
+          "line": 537,
+          "end_line": 545,
+          "label": "write_volumes_kit"
+        }
+      ]
+    },
+    {
+      "id": "creds",
+      "type": "security",
+      "label": "Credentials and approvals",
+      "sublabel": "Setup → Secrets",
+      "pos": [
+        650,
+        380
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "crates/daemon/src/http/ui.rs",
+          "line": 656,
+          "end_line": 680,
+          "label": "github secret"
+        },
+        {
+          "path": "crates/daemon/src/http/ui.rs",
+          "line": 724,
+          "end_line": 760,
+          "label": "custom secrets"
+        }
+      ]
+    },
+    {
+      "id": "pending",
+      "type": "frontend",
+      "label": "Pending approvals",
+      "sublabel": "⚑ N → Allow / Dismiss",
+      "pos": [
+        830,
+        380
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "crates/daemon/src/http/ui.rs",
+          "line": 687,
+          "end_line": 715,
+          "label": "list and respond"
+        },
+        {
+          "path": "crates/sbx/src/lib.rs",
+          "line": 926,
+          "end_line": 940,
+          "label": "policy approval"
+        }
+      ]
+    },
+    {
+      "id": "jsandbox",
+      "type": "backend",
+      "label": "Its sandbox",
+      "sublabel": "sbxw-jarvis · sbxw-config MCP",
+      "pos": [
+        10,
+        560
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "crates/daemon/src/svc/jarvis_sandbox.rs",
+          "line": 90,
+          "end_line": 113,
+          "label": "config"
+        },
+        {
+          "path": "assets/jarvis/spec.yaml",
+          "line": 1,
+          "end_line": 60,
+          "label": "sbxw:jarvis kit"
+        }
+      ]
+    },
+    {
+      "id": "jtrust",
+      "type": "backend",
+      "label": "The trust chain",
+      "sublabel": "plan · re-plan · apply",
+      "pos": [
+        320,
+        560
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "sources": [
+        {
+          "path": "crates/core/src/jarvis.rs",
+          "line": 558,
+          "end_line": 578,
+          "label": "plan"
+        },
+        {
+          "path": "crates/daemon/src/svc/jarvis.rs",
+          "line": 270,
+          "end_line": 330,
+          "label": "jarvis_approve"
+        },
+        {
+          "path": "crates/daemon/src/http/jarvis.rs",
+          "line": 35,
+          "end_line": 41,
+          "label": "only_jarvis"
+        }
+      ]
+    },
+    {
+      "id": "jui",
+      "type": "frontend",
+      "label": "In the web UI",
+      "sublabel": "proposal dialog · voice by risk",
+      "pos": [
+        650,
+        560
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "sources": [
+        {
+          "path": "assets/js/jarvis.js",
+          "line": 89,
+          "end_line": 190,
+          "label": "dialog"
+        },
+        {
+          "path": "assets/js/jarvis.js",
+          "line": 243,
+          "end_line": 275,
+          "label": "approve"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "embed-apply",
+      "from": "embed",
+      "to": "apply",
+      "label": "dir path",
+      "variant": "emphasis"
+    },
+    {
+      "id": "base-apply",
+      "from": "base",
+      "to": "apply",
+      "label": "always first",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "apply-sbx",
+      "from": "apply",
+      "to": "sbx",
+      "label": "create --kit · kit add",
+      "variant": "emphasis"
+    },
+    {
+      "id": "apply-pane",
+      "from": "apply",
+      "to": "pane",
+      "label": "needs approval",
+      "variant": "dashed"
+    },
+    {
+      "id": "pane-sbx",
+      "from": "pane",
+      "to": "sbx",
+      "label": "kit add (PTY)"
+    },
+    {
+      "id": "skills-apply",
+      "from": "skills",
+      "to": "apply",
+      "label": "own kit",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "volumes-apply",
+      "from": "volumes",
+      "to": "apply",
+      "label": "own kit",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "creds-sbx",
+      "from": "creds",
+      "to": "sbx",
+      "label": "secret set (stdin)",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "pending-sbx",
+      "from": "pending",
+      "to": "sbx",
+      "label": "ls · respond",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "jsandbox-jtrust",
+      "from": "jsandbox",
+      "to": "jtrust",
+      "label": "propose (agent listener)",
+      "variant": "dashed"
+    },
+    {
+      "id": "jui-jtrust",
+      "from": "jui",
+      "to": "jtrust",
+      "label": "approve (UI listener)",
+      "variant": "security"
+    },
+    {
+      "id": "jtrust-apply",
+      "from": "jtrust",
+      "to": "apply",
+      "label": "jarvis-* kits · kits lines",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Spec v3 only",
+      "items": [
+        "sbx 0.51's claude is a v3 workload",
+        "v1/v2 local kits refused before create"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Stable paths",
+      "items": [
+        "sbx re-resolves a kit by path on every swap",
+        "files rewritten only when bytes change"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "On the host",
+      "items": [
+        "secrets never enter a sandbox",
+        "sbxw never answers an approval itself"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Jarvis proposes",
+      "items": [
+        "the daemon writes, after a click",
+        "high risk: never by voice"
+      ]
+    }
+  ]
+}

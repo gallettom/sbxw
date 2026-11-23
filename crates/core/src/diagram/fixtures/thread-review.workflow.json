@@ -1,0 +1,52 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "A thread's work, from plan to merge",
+    "output": "thread-review.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "person", "label": "Person" },
+    { "id": "lead", "label": "Lead session" },
+    { "id": "thread", "label": "Thread session" },
+    { "id": "checks", "label": "Checks", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "plan", "label": "Plan", "fromCol": 0, "toCol": 1 },
+    { "id": "build", "label": "Build", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "land", "label": "Land", "fromCol": 4, "toCol": 5 }
+  ],
+  "groups": [
+    { "id": "build_loop", "label": "Build and test loop", "lane": "thread", "fromCol": 2, "toCol": 3, "variant": "emphasis" }
+  ],
+  "mainPath": ["ask", "split", "approve", "work", "test", "report", "review", "merge"],
+  "nodes": [
+    { "id": "ask", "lane": "person", "col": 0, "type": "external", "label": "Asks for a change", "sublabel": "in the sbxw window" },
+    { "id": "approve", "lane": "person", "col": 1, "type": "external", "label": "Approves the plan" },
+    { "id": "split", "lane": "lead", "col": 0, "type": "backend", "label": "Splits the work", "sublabel": "disjoint files" },
+    { "id": "review", "lane": "lead", "col": 4, "type": "backend", "label": "Reviews the branch" },
+    { "id": "merge", "lane": "lead", "col": 5, "type": "backend", "label": "Merges to main", "tag": "git" },
+    { "id": "work", "lane": "thread", "col": 2, "type": "backend", "label": "Writes the code", "sublabel": "own worktree" },
+    { "id": "test", "lane": "thread", "col": 3, "type": "backend", "label": "Runs the tests" },
+    { "id": "report", "lane": "thread", "col": 4, "type": "backend", "label": "Reports done" },
+    { "id": "mergeTree", "lane": "checks", "col": 4, "type": "security", "label": "merge-tree is clean" },
+    { "id": "blocked", "lane": "checks", "col": 3, "type": "security", "label": "Blocked: asks the lead" }
+  ],
+  "edges": [
+    { "id": "ask-split", "from": "ask", "to": "split", "label": "goal" },
+    { "id": "split-approve", "from": "split", "to": "approve", "label": "plan", "variant": "emphasis" },
+    { "id": "approve-work", "from": "approve", "to": "work", "role": "main" },
+    { "from": "work", "to": "test" },
+    { "from": "test", "to": "work", "label": "fails", "role": "return", "route": "return-left" },
+    { "from": "test", "to": "blocked", "role": "error", "label": "stuck" },
+    { "from": "blocked", "to": "split", "role": "async", "label": "question" },
+    { "from": "test", "to": "report", "label": "passes" },
+    { "from": "report", "to": "mergeTree" },
+    { "from": "mergeTree", "to": "review" },
+    { "from": "review", "to": "merge", "variant": "emphasis" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Ignored by sbxw", "items": ["cards, phases and mainPath are not imported"] }
+  ]
+}

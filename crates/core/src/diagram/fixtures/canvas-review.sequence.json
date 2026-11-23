@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "A canvas review round",
+    "output": "canvas-review.html",
+    "viewBox": [1080, 560],
+    "column_fit": "spread"
+  },
+  "participants": [
+    { "id": "agent", "type": "backend", "label": "Agent", "sublabel": "in the sandbox" },
+    { "id": "relay", "type": "backend", "label": "Relay MCP" },
+    { "id": "daemon", "type": "backend", "label": "sbxw daemon" },
+    { "id": "store", "type": "database", "label": "Canvas store" },
+    { "id": "desktop", "type": "frontend", "label": "Desktop app" },
+    { "id": "person", "type": "external", "label": "Person" }
+  ],
+  "segments": [
+    { "from": 140, "to": 260, "label": "Provision" },
+    { "from": 270, "to": 420, "label": "Review" }
+  ],
+  "messages": [
+    { "id": "add", "from": "agent", "to": "relay", "y": 150, "label": "canvas_add_shots" },
+    { "id": "post", "from": "relay", "to": "daemon", "y": 175, "label": "POST shots", "variant": "emphasis" },
+    { "id": "save", "from": "daemon", "to": "store", "y": 200, "label": "write manifest" },
+    { "id": "event", "from": "daemon", "to": "desktop", "y": 225, "label": "canvas event" },
+    { "id": "pin", "from": "person", "to": "desktop", "y": 280, "label": "pins remarks" },
+    { "id": "check", "from": "desktop", "to": "desktop", "y": 300, "label": "keeps draft" },
+    { "id": "send", "from": "desktop", "to": "daemon", "y": 330, "label": "send round", "variant": "security" },
+    { "id": "ready", "from": "daemon", "to": "agent", "y": 360, "label": "round ready", "variant": "return" },
+    { "id": "read", "from": "agent", "to": "relay", "y": 390, "label": "canvas_read" },
+    { "id": "remarks", "from": "relay", "to": "agent", "y": 410, "label": "remarks", "variant": "return", "note": "as data" }
+  ],
+  "activations": [
+    { "participant": "daemon", "from": 175, "to": 230, "type": "backend" }
+  ]
+}
