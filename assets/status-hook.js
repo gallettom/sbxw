@@ -546,6 +546,13 @@ process.stdin.on("end", () => {
 
   // Both requests at once; the hook exits when both are answered.
   let pending = 1 + (syncing ? 1 : 0);
+  let output = null;
+  const settle = () => {
+    pending -= 1;
+    if (pending > 0) return;
+    if (output) process.stdout.write(JSON.stringify(output), done);
+    else done();
+  };
   send("/api/hook", evt, (status, body) => {
     if (status >= 400) log("status=" + status + " body=" + body.replace(/\s+/g, " ").trim());
     else {
