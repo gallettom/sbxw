@@ -1,11 +1,12 @@
 //! Canvas routes. Agents (agent listener, the sandbox is the token's): add
-//! shots, list their canvases, read the remarks sent to them. The UI (UI
-//! listener, UI token): everything the person does. See `docs/canvas.md`.
+//! shots and diagrams, list their canvases, read the remarks and diagram
+//! edits sent to them. The UI (UI listener, UI token): everything the person
+//! does. See `docs/canvas.md`, `docs/relay.md` and `desktop/docs/daemon-api.md`.
 
 use super::error::{ok_with, ApiError, ApiResult};
 use super::guard::Agent;
 use crate::app::App;
-use crate::svc::canvas::ShotIn;
+use crate::svc::canvas::{DiagramIn, DiagramSaveError, ShotIn};
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, StatusCode};
@@ -25,12 +26,15 @@ type S = State<Arc<App>>;
 const SHOT_BODY_MAX: usize = canvas::MAX_IMAGE_BYTES / 3 * 4 + (64 << 10);
 /// An asset travels as raw bytes.
 const ASSET_BODY_MAX: usize = canvas::MAX_IMAGE_BYTES + 1024;
+/// A diagram travels as a JSON string inside JSON: escaping can double it.
+const DIAGRAM_BODY_MAX: usize = sbxw_core::diagram::MAX_SOURCE_BYTES * 2 + (16 << 10);
 
 pub fn agent_routes() -> Router<Arc<App>> {
     Router::new()
         .route("/api/canvas/shots", post(agent_add).layer(DefaultBodyLimit::max(SHOT_BODY_MAX)))
         .route("/api/canvas/list", post(agent_list))
         .route("/api/canvas/read", post(agent_read))
+        .route("/api/canvas/diagrams", post(agent_diagram).layer(DefaultBodyLimit::max(DIAGRAM_BODY_MAX)))
 }
 
 pub fn ui_routes() -> Router<Arc<App>> {
@@ -43,6 +47,7 @@ pub fn ui_routes() -> Router<Arc<App>> {
         .route("/api/canvas/:id/edit", post(edit))
         .route("/api/canvas/:id/assets", post(asset).layer(DefaultBodyLimit::max(ASSET_BODY_MAX)))
         .route("/api/canvas/:id/submit", post(submit))
+        .route("/api/canvas/:id/diagrams/:did", get(diagram).post(save_diagram).layer(DefaultBodyLimit::max(DIAGRAM_BODY_MAX)))
 }
 
 fn checked(id: &str) -> Result<(), ApiError> {
@@ -72,6 +77,21 @@ async fn agent_add(State(app): S, Agent(me): Agent, Json(b): Json<AddBody>) -> A
     Ok(ok_with(json!({ "canvas": a.canvas, "title": a.title, "round": a.round, "shot": a.shot })))
 }
 
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct DiagramBody {
+    canvas: Option<String>,
+    /// The tool call's id (each call is one round).
+    batch: String,
+    diagram: DiagramIn,
+}
+
+async fn agent_diagram(State(app): S, Agent(me): Agent, Json(b): Json<DiagramBody>) -> ApiResult {
+    let batch = canvas::clean(&b.batch, 40, false);
+    let a = app.canvas_agent_diagram(&me, b.canvas.as_deref(), &batch, b.diagram)?;
+    Ok(ok_with(json!(a)))
+}
+
 async fn agent_list(State(app): S, Agent(me): Agent) -> ApiResult {
     Ok(ok_with(json!({ "canvases": app.canvas_agent_list(&me) })))
 }
@@ -83,8 +103,9 @@ struct ReadBody {
 }
 
 async fn agent_read(State(app): S, Agent(me): Agent, Json(b): Json<ReadBody>) -> ApiResult {
-    let text = app.canvas_agent_read(&me, b.canvas.as_deref())?;
-    Ok(ok_with(json!({ "text": text })))
+    let r = app.canvas_agent_read_all(&me, b.canvas.as_deref())?;
+    let diagrams: Vec<_> = r.diagrams.into_iter().map(|(c, d)| json!({ "canvas": c, "id": d.id, "title": d.title, "rev": d.rev, "lines": d.lines, "json": d.json })).collect();
+    Ok(ok_with(json!({ "text": r.text, "diagrams": diagrams })))
 }
 
 // ── The UI ────────────────────────────────────────────────────────────────
@@ -98,7 +119,33 @@ async fn manifest(State(app): S, Path(id): Path<String>) -> ApiResult {
     checked(&id)?;
     let c = app.canvas_get(&id).ok_or_else(|| ApiError::not_found("no such canvas"))?;
     let bytes = c.bytes();
-    Ok(ok_with(json!({ "canvas": c, "bytes": bytes })))
+    let diagram_bytes = c.diagram_bytes();
+    Ok(ok_with(json!({ "canvas": c.ui_view(), "bytes": bytes, "diagram_bytes": diagram_bytes })))
+}
+
+async fn diagram(State(app): S, Path((id, did)): Path<(String, String)>) -> ApiResult {
+    checked(&id)?;
+    let d = app.canvas_diagram(&id, &did).ok_or_else(|| ApiError::not_found("no such diagram"))?;
+    Ok(ok_with(json!({ "diagram": d })))
+}
+
+#[derive(Deserialize)]
+struct SaveDiagramBody {
+    /// The revision the editor started from (`diagram.rev` as read).
+    rev: u32,
+    /// The whole diagram, sbxw's schema.
+    diagram: serde_json::Value,
+}
+
+async fn save_diagram(State(app): S, Path((id, did)): Path<(String, String)>, Json(b): Json<SaveDiagramBody>) -> ApiResult {
+    checked(&id)?;
+    let json = b.diagram.to_string();
+    match app.canvas_save_diagram(&id, &did, b.rev, &json) {
+        Ok(d) => Ok(ok_with(json!({ "diagram": d, "rev": d.diagram.rev }))),
+        Err(DiagramSaveError::Stale(n)) => Err(ApiError::conflict(format!("the diagram changed since revision {} (it is at {n}): read it again", b.rev))),
+        Err(DiagramSaveError::NotFound) => Err(ApiError::not_found("no such diagram")),
+        Err(DiagramSaveError::Bad(e)) => Err(ApiError::bad(e)),
+    }
 }
 
 async fn image(State(app): S, Path((id, file)): Path<(String, String)>) -> Result<Response, ApiError> {
@@ -299,4 +346,57 @@ mod tests {
         let t = v["text"].as_str().unwrap();
         assert!(t.contains("Pin 1 on shot \"Home\"") && t.contains("> Bigger tap target") && t.contains("/tmp/sbxw-uploads/1/evil.png"), "{t}");
     }
+
+    #[tokio::test]
+    async fn diagrams_go_in_by_the_agent_and_are_edited_by_the_person() {
+        let (_d, app) = app();
+        let alpha = app.store.token(sbxw_core::SandboxRef::parse("alpha").unwrap()).unwrap();
+        let beta = app.store.token(sbxw_core::SandboxRef::parse("beta").unwrap()).unwrap();
+        let flow = r#"{ "version": 1, "kind": "workflow", "title": "Release", "nodes": [{ "id": "push", "label": "Push" }, { "id": "test", "label": "Test" }], "edges": [{ "from": "push", "to": "test" }] }"#;
+        let body = json!({ "batch": "k1", "sandbox": "beta", "diagram": { "json": flow, "kind": "workflow" } });
+        assert_eq!(call(agent_router(app.clone()), post("/api/canvas/diagrams", None, body.clone())).await.0, StatusCode::UNAUTHORIZED);
+        let (s, v) = call(agent_router(app.clone()), post("/api/canvas/diagrams", Some(&alpha), body.clone())).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let (id, did) = (v["canvas"].as_str().unwrap().to_string(), v["diagram"].as_str().unwrap().to_string());
+        assert_eq!(app.canvas_get(&id).unwrap().sandbox, "alpha", "the token decides");
+        assert_eq!((v["kind"].clone(), v["rev"].clone(), v["nodes"].clone()), (json!("workflow"), json!(1), json!(2)));
+        // Beta cannot add to alpha's canvas; a wrong kind is refused.
+        let mut other = body.clone();
+        other["canvas"] = json!(id);
+        assert_eq!(call(agent_router(app.clone()), post("/api/canvas/diagrams", Some(&beta), other)).await.0, StatusCode::BAD_REQUEST);
+        let wrong = json!({ "batch": "k2", "diagram": { "json": flow, "kind": "sequence" } });
+        let (s, v) = call(agent_router(app.clone()), post("/api/canvas/diagrams", Some(&alpha), wrong)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert!(v["error"].as_str().unwrap().contains("not a sequence"));
+        // Agents have no UI diagram route.
+        assert!(matches!(call(agent_router(app.clone()), get(&format!("/api/canvas/{id}/diagrams/{did}"))).await.0, StatusCode::NOT_FOUND | StatusCode::UNAUTHORIZED | StatusCode::METHOD_NOT_ALLOWED));
+        // The UI: the manifest lists it (no base copy), the diagram reads, a save needs the revision.
+        assert_eq!(call(ui_router(app.clone()), get(&format!("/api/canvas/{id}/diagrams/{did}"))).await.0, StatusCode::UNAUTHORIZED);
+        let (_, m) = call(signed_in(app.clone()), get(&format!("/api/canvas/{id}"))).await;
+        assert_eq!(m["canvas"]["diagrams"][0]["id"], json!(did));
+        assert!(m["diagram_bytes"].as_u64().unwrap() > 0);
+        let (s, g) = call(signed_in(app.clone()), get(&format!("/api/canvas/{id}/diagrams/{did}"))).await;
+        assert_eq!(s, StatusCode::OK);
+        let mut d = g["diagram"]["diagram"].clone();
+        d["nodes"][1]["label"] = json!("Lead\u{202e} review");
+        let (s, v) = call(signed_in(app.clone()), post(&format!("/api/canvas/{id}/diagrams/{did}"), None, json!({ "rev": 1, "diagram": d }))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["rev"], 2);
+        assert_eq!(v["diagram"]["diagram"]["nodes"][1]["label"], "Lead review", "cleaned");
+        let (s, v) = call(signed_in(app.clone()), post(&format!("/api/canvas/{id}/diagrams/{did}"), None, json!({ "rev": 1, "diagram": d }))).await;
+        assert_eq!(s, StatusCode::CONFLICT, "{v}");
+        assert_eq!(call(signed_in(app.clone()), get(&format!("/api/canvas/{id}/diagrams/d-..%2F..%2Fxx"))).await.0, StatusCode::NOT_FOUND);
+        let (_, m) = call(signed_in(app.clone()), get(&format!("/api/canvas/{id}"))).await;
+        assert!(m["canvas"]["diagrams"][0].get("base").is_none(), "{}", m["canvas"]["diagrams"][0]);
+        // Sent with a round; the agent reads it once.
+        assert_eq!(call(signed_in(app.clone()), post(&format!("/api/canvas/{id}/submit"), None, json!({}))).await.0, StatusCode::OK);
+        let (_, v) = call(agent_router(app.clone()), post("/api/canvas/read", Some(&alpha), json!({}))).await;
+        assert_eq!(v["diagrams"][0]["id"], json!(did));
+        assert_eq!(v["diagrams"][0]["canvas"], json!(id));
+        assert!(v["diagrams"][0]["lines"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("Lead review")));
+        assert!(v["diagrams"][0]["json"].as_str().unwrap().contains("Lead review"));
+        let (_, v) = call(agent_router(app.clone()), post("/api/canvas/read", Some(&alpha), json!({}))).await;
+        assert_eq!(v["diagrams"], json!([]));
+    }
+
 }
