@@ -723,7 +723,7 @@ fn button<S: 'static>(key: &str, label: &str, help: &str, primary: bool, press: 
         .fill(fill)
         .hover(if primary { c("blue").alpha(0.85) } else { c("hover") })
         .cursor(Cursor::Pointer)
-        .focusable()
+        .focusable(true)
         .on_press_tx(press)
         .child(text(label.to_string()).font(small(theme::font_size::BODY, 500.0)).color(fg))
 }
