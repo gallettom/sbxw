@@ -149,6 +149,12 @@ The terminal (`/ws`, above) with `size=1`: `{"type":"size","cols","rows","owner"
 before the replay and on every change; the grid takes the PTY's size and is
 drawn smaller when another window owns a larger one (TERMINAL.md).
 
+### Message input autocompletion (thread gui-composer)
+
+| Route | Notes |
+|---|---|
+| `GET /api/sandboxes/:name/commands` | `{ok, commands: [{name, description, kind: "skill"\|"command", origin: "workspace"\|"home"\|"built-in"}], complete, reason?}`. Read-only, UI listener only. `name` matches `^[a-z0-9][a-z0-9:_-]{0,63}$`, without the `/`; `description` is one line of visible text, at most 160 characters, empty when the file has none. Sorted by name, one entry per name: workspace over home over built-in, a skill over a command. At most 300 entries. **Never starts a sandbox**: a stopped one (or one whose read failed or took over 5 s) answers from its workspace on the host, `complete: false` and a plain `reason` to show muted. `built-in` is a short fixed list (`clear`, `compact`, `context`, `model`), always present |
+
 ### Covered for sbx 0.54 (features 1, 2, 3, 5, 6)
 
 The contract is `.sbxw-artifacts/reports/sbx-054-features-api.md`. An sbx

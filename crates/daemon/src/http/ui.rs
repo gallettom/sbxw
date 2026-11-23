@@ -96,6 +96,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/my-skills/rm", post(my_skills_rm))
         .route("/api/sandboxes/:name/skills", get(sandbox_skills))
         .route("/api/sandboxes/:name/skills/keep", post(keep_skill))
+        .route("/api/sandboxes/:name/commands", get(sandbox_commands))
         .route("/api/mcp", get(mcp_list).post(mcp_save))
         .route("/api/mcp/:server", get(mcp_inspect))
         .route("/api/mcp/:server/rm", post(mcp_rm))
@@ -524,6 +525,12 @@ struct SkillNameBody {
 async fn my_skills_rm(State(app): S, Json(b): Json<SkillNameBody>) -> ApiResult {
     app.forget_skill(&b.name)?;
     Ok(ok())
+}
+
+/// What `/` completes to in a sandbox's Claude session. Read-only, and
+/// never starts a stopped sandbox (svc/commands.rs).
+async fn sandbox_commands(State(app): S, Path(name): Path<String>) -> ApiResult {
+    Ok(ok_with(app.sandbox_commands(&sandbox(&name)?).await?))
 }
 
 /// The skills a sandbox has that could be kept.
