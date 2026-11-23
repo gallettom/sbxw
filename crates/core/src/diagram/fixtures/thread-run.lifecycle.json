@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "diagram_type": "lifecycle",
+  "meta": { "title": "A thread's states", "output": "thread-run.html" },
+  "lanes": [
+    { "id": "main", "label": "Main path" },
+    { "id": "waits", "label": "Waits" },
+    { "id": "exits", "label": "Exits" }
+  ],
+  "states": [
+    { "id": "planned", "type": "start", "label": "Planned", "lane": "main", "col": 0 },
+    { "id": "working", "type": "active", "label": "Working", "lane": "main", "col": 1 },
+    { "id": "review", "type": "active", "label": "In review", "lane": "main", "col": 2 },
+    { "id": "merged", "type": "success", "label": "Merged", "lane": "main", "col": 3 },
+    { "id": "blocked", "type": "waiting", "label": "Blocked", "sublabel": "a question for the lead", "lane": "waits", "col": 1 },
+    { "id": "stopped", "type": "failure", "label": "Stopped", "lane": "exits", "col": 2 }
+  ],
+  "transitions": [
+    { "from": "planned", "to": "working", "label": "approved" },
+    { "from": "working", "to": "blocked", "label": "asks" },
+    { "from": "blocked", "to": "working", "label": "answered" },
+    { "from": "working", "to": "review", "label": "done" },
+    { "from": "review", "to": "working", "label": "changes", "variant": "dashed" },
+    { "from": "review", "to": "merged" },
+    { "from": "working", "to": "stopped", "label": "cancelled" },
+    { "from": "working", "to": "working", "label": "commit" }
+  ]
+}
