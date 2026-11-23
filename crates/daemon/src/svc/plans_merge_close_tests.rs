@@ -377,3 +377,148 @@ async fn a_plan_approved_with_a_closed_name_starts_it() {
     let reason = app.plan(&p.id).unwrap().threads[0].summary.clone();
     assert!(!reason.contains("reconnect"), "{reason}");
 }
+
+// ---------------------------------------------------------------------------
+// The person's case behind "Abandon merge", and Abandon merge itself.
+
+/// The case of the screenshot: a plan of one thread, a study the person
+/// closed by hand (session stopped, its record, worktree and branch gone),
+/// whose merge failed with "there is no branch" before the settle-with-
+/// nothing fix. Retry merge now settles it as merged with nothing; the
+/// merge script never runs, and the pane bar has nothing left to offer.
+#[tokio::test]
+async fn retrying_a_failed_merge_of_a_thread_closed_by_hand_settles() {
+    if !has_git() {
+        return;
+    }
+    let (_d, app, fake) = app_with(fake(&[]));
+    let sb = SandboxRef::parse("myapp").unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    repo(ws.path(), &[("study", 0)]);
+    app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+    let id = done_plan(&app, &sb, &["study"]).await;
+    app.plan_propose_merge_checked(&id, &sb, vec!["study".into()], "", vec![]).await.unwrap();
+    // As the old code left it: failed at the gone branch.
+    {
+        let mut b = app.plans.lock().unwrap();
+        b.start_merge(&id, None, None, 3).unwrap();
+        let err = "there is no branch sbxw/study in /w".to_string();
+        b.merge_result(&id, sbxw_core::plans::MergeResult { thread: "study".into(), ok: false, commit: None, error: Some(err), note: None }, 4).unwrap();
+        assert_eq!(b.finish_merge(&id, 5).unwrap().merge.unwrap().state, MergeState::Failed);
+    }
+    git(ws.path(), &["branch", "-D", "sbxw/study"]);
+    app.store.update(&sb, |r| { r.threads.remove("study"); }).unwrap();
+    let m = app.plan_merge(&id, true, None).await.unwrap();
+    assert_eq!(m.state, MergeState::Merged, "{m:?}");
+    assert!(m.results[0].ok && m.results[0].note.as_deref().unwrap_or("").contains("gone"), "{m:?}");
+    assert!(calls(&fake.log(), "sbxw-thread-merge").is_empty());
+}
+
+async fn ui_post(app: &Arc<App>, path: &str) -> (axum::http::StatusCode, serde_json::Value) {
+    use tower::ServiceExt;
+    let req = axum::http::Request::builder().method("POST").uri(path).header("host", "127.0.0.1:7681").header("content-type", "application/json").body(axum::body::Body::from("{}")).unwrap();
+    let res = crate::testing::signed_in(app.clone()).oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or_default())
+}
+
+/// The card of `thread` on the sandbox's board: its column and marks.
+fn card(app: &App, sb: &SandboxRef, thread: &str) -> (sbxw_core::tickets::Column, Vec<String>) {
+    let b = app.tickets_board(Some(sb), true);
+    let c = b.columns.iter().flat_map(|c| c.cards.iter()).find(|c| c.thread.as_deref() == Some(thread)).expect("a card");
+    (c.column, c.marks.iter().map(|m| m.id.clone()).collect())
+}
+
+/// Abandon merge, from the UI route, on a proposed merge and on a failed
+/// one: the plan has no merge to do, nothing is merged, no thread closed,
+/// no branch touched (the sbx scripts never run, git's branches are as
+/// they were), the lead hears one line, the board shows the threads in
+/// Test marked "merge abandoned", and a later proposal is a fresh one.
+/// Refused while merging, when merged, and when there is no merge; the
+/// agent listener has no such route.
+#[tokio::test]
+async fn abandoning_a_merge_merges_nothing_tells_the_lead_and_can_be_proposed_again() {
+    if !has_git() {
+        return;
+    }
+    let (d, app, fake) = app_with(fake(&["b"]));
+    let sb = SandboxRef::parse("myapp").unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    repo(ws.path(), &[("a", 1), ("b", 1)]);
+    app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+    let typed = d.path().join("lead.typed");
+    lead_terminal(&app, &sb, &typed).await;
+    let id = done_plan(&app, &sb, &["a", "b"]).await;
+    let path = format!("/api/plans/{id}/merge/abandon");
+    let branches = || git(ws.path(), &["branch", "--list", "sbxw/*"]);
+    let before = branches();
+
+    // No merge yet: refused, as text.
+    let (s, v) = ui_post(&app, &path).await;
+    assert_eq!(s, axum::http::StatusCode::BAD_REQUEST, "{v}");
+    assert!(v.to_string().contains("no merge proposed"), "{v}");
+
+    // Proposed, then abandoned.
+    app.plan_propose_merge_checked(&id, &sb, vec!["a".into(), "b".into()], "", vec![]).await.unwrap();
+    assert_eq!(card(&app, &sb, "a").0, sbxw_core::tickets::Column::Ready);
+    let (s, v) = ui_post(&app, &path).await;
+    assert_eq!(s, axum::http::StatusCode::OK, "{v}");
+    assert_eq!(v["plan"]["merge"]["state"], "abandoned");
+    assert!(v["plan"]["merge"]["abandoned_ms"].as_u64().is_some());
+    let line = typed_soon(&typed, "abandoned").await;
+    assert!(line.contains("[sbxw] The user abandoned the proposed merge of threads a, b: nothing was merged"), "{line}");
+    assert_eq!(card(&app, &sb, "a"), (sbxw_core::tickets::Column::Test, vec!["merge_abandoned".to_string()]));
+    let plan = app.plan(&id).unwrap();
+    assert!(plan.threads.iter().all(|t| t.state == ThreadState::Done) && plan.merged_threads().is_empty());
+    // Twice: refused.
+    assert_eq!(ui_post(&app, &path).await.0, axum::http::StatusCode::BAD_REQUEST);
+
+    // Proposed again: a fresh proposal; merged, a goes and b fails.
+    app.plan_propose_merge_checked(&id, &sb, vec!["a".into(), "b".into()], "again", vec![]).await.unwrap();
+    assert_eq!(app.plan(&id).unwrap().merge.unwrap().state, MergeState::Proposed);
+    let m = app.plan_merge(&id, false, None).await.unwrap();
+    assert_eq!(m.state, MergeState::Failed);
+    let merges_before = calls(&fake.log(), "sbxw-thread-merge").len();
+    // Failed: abandoned too; a stays merged, b goes back to Test.
+    let (s, v) = ui_post(&app, &path).await;
+    assert_eq!(s, axum::http::StatusCode::OK, "{v}");
+    assert_eq!(card(&app, &sb, "a").0, sbxw_core::tickets::Column::Merged);
+    assert_eq!(card(&app, &sb, "b"), (sbxw_core::tickets::Column::Test, vec!["merge_abandoned".to_string()]));
+
+    // Abandoning ran nothing in the sandbox, closed nothing, deleted no branch.
+    let log = fake.log();
+    assert_eq!(calls(&log, "sbxw-thread-merge").len(), merges_before);
+    assert!(calls(&log, "sbxw-thread-end").is_empty(), "nothing closed");
+    assert_eq!(branches(), before, "every branch as it was");
+
+    // Merging: refused.
+    app.plan_propose_merge_checked(&id, &sb, vec!["b".into()], "", vec![]).await.unwrap();
+    app.plans.lock().unwrap().start_merge(&id, None, None, now()).unwrap();
+    let (s, v) = ui_post(&app, &path).await;
+    assert_eq!(s, axum::http::StatusCode::BAD_REQUEST);
+    assert!(v.to_string().contains("merging"), "{v}");
+
+    // Only the person's listener has the route.
+    use tower::ServiceExt;
+    let req = axum::http::Request::builder().method("POST").uri(&path).header("content-type", "application/json").body(axum::body::Body::from("{}")).unwrap();
+    let res = crate::http::agent_router(app.clone()).oneshot(req).await.unwrap();
+    assert!(res.status() == axum::http::StatusCode::NOT_FOUND || res.status() == axum::http::StatusCode::UNAUTHORIZED, "{}", res.status());
+}
+
+fn now() -> u64 {
+    crate::app::now_ms()
+}
+
+/// The lead's line names the plan by its summary when it has one.
+#[test]
+fn the_abandoned_line_names_the_plan() {
+    let mut p = sbxw_core::plans::PlanBook::new().propose("p".into(), "n", "Abandon merge in the dialogs", vec![t("a")], Variant::Split, "why", None, 1).unwrap();
+    assert_eq!(
+        super::abandoned_line(&p),
+        "[sbxw] The user abandoned the proposed merge of \"Abandon merge in the dialogs\": nothing was merged. Its threads, branches and worktrees are as they were; propose the merge again if it should still be made."
+    );
+    p.summary = "x ".repeat(100);
+    assert!(super::abandoned_line(&p).contains("x x…\""));
+    assert!(!super::abandoned_line(&p).contains('\u{2014}'));
+}

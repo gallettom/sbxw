@@ -141,6 +141,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/plans/:id/refuse", post(plan_refuse))
         .route("/api/plans/:id/dismiss", post(plan_dismiss))
         .route("/api/plans/:id/merge", post(plan_merge))
+        .route("/api/plans/:id/merge/abandon", post(plan_merge_abandon))
         // Relay (the human's half).
         .route("/api/relay", get(relay_list))
         .route("/api/relay/:id/route", post(relay_route))
@@ -1469,6 +1470,12 @@ struct MergeBody {
 async fn plan_merge(State(app): S, Path(id): Path<String>, Json(b): Json<MergeBody>) -> ApiResult {
     let merge = app.plan_merge(&id, b.close_threads, b.distillate).await?;
     Ok(ok_with(json!({ "merge": merge })))
+}
+
+/// The person abandons the merge proposed for a plan: nothing is merged.
+async fn plan_merge_abandon(State(app): S, Path(id): Path<String>) -> ApiResult {
+    let plan = app.plan_abandon_merge(&id).await?;
+    Ok(ok_with(json!({ "plan": plan })))
 }
 
 // ── Relay ────────────────────────────────────────────────────────────────
