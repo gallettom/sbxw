@@ -341,6 +341,8 @@ pub const LEAD_END: &str = "lead_end";
 pub fn take_team(items: &mut Vec<Item>) -> Option<TeamToggle> {
     let at = items.iter().position(|i| i.id == "lead")?;
     let it = items.remove(at);
+    // One toggle per name, whatever a feature emitted.
+    items.retain(|i| i.id != "lead");
     let intent = it.intent?;
     Some(TeamToggle { on: intent.0 == LEAD_END, intent })
 }
