@@ -263,6 +263,7 @@ pub fn fit(avail: f32, fixed: f32, widths: &[f32], gap: f32, more: f32) -> usize
 }
 
 /// A pane bar's parts, measured.
+#[derive(Debug)]
 pub struct PaneFit {
     /// The mode switch shows inline (else it is the menu's "Switch to ...",
     /// a core item `mode` in `hidden`: one of the last things to go).

@@ -1347,13 +1347,18 @@ impl App {
     /// confirmation it raised belongs to that window, and only an answer
     /// from that window, for that very confirmation, runs here.
     pub fn windows_drain(&mut self) -> bool {
-        use crate::windows::{self as w, ToPrimary};
+        use crate::windows::{self as w, ToPrimary, Win};
         let msgs = w::with(|h| h.take_for_primary());
         if msgs.is_empty() {
             return false;
         }
         for (from, m) in msgs {
             let input = m.is_input();
+            // A page window's own page is the app's page while its message runs (pagewin.rs).
+            let page = match from {
+                Win::Page(n) if self.windowed.iter().any(|x| x.id == n) => Some(n),
+                _ => None,
+            };
             match m {
                 ToPrimary::Answer { confirm, dialog } => {
                     let ours = self.feats.dialog.as_ref().is_some_and(|d| d.identity() == dialog) && w::with(|h| h.dialog_owner()) == Some(from);
@@ -1361,23 +1366,59 @@ impl App {
                         log::info!("windows: an answer from the {from} window to a confirmation that is not its own: ignored");
                         continue;
                     }
-                    if confirm {
-                        ConfirmAnswers::confirm_click(self);
-                    } else {
-                        ConfirmAnswers::cancel_click(self);
+                    let answer = move |a: &mut App| {
+                        if confirm {
+                            ConfirmAnswers::confirm_click(a);
+                        } else {
+                            ConfirmAnswers::cancel_click(a);
+                        }
+                    };
+                    match page {
+                        Some(n) => {
+                            self.in_window(n, answer);
+                            self.save_layout();
+                        }
+                        None => answer(self),
                     }
                 }
-                ToPrimary::Closed => self.press_extra("windows", "canvas_window", &json!({ "to": "main" })),
+                ToPrimary::CopyAnswer { copy } => {
+                    if self.copy_offer.is_none() || w::with(|h| h.copy_owner()) != Some(from) {
+                        log::info!("windows: an answer from the {from} window to a copy offer that is not its own: ignored");
+                        continue;
+                    }
+                    if copy {
+                        // Copied with the next poll's `Tx` (App::poll).
+                        self.copy_accept = true;
+                    } else {
+                        self.copy_offer = None;
+                    }
+                }
+                ToPrimary::Closed => match from {
+                    Win::Page(n) => {
+                        self.move_page_back(n);
+                    }
+                    _ => self.press_extra("windows", "canvas_window", &json!({ "to": "main" })),
+                },
                 ToPrimary::Resized => self.push_data(),
+                ToPrimary::Changed => {}
                 _ if input && w::gate_of(self).is_some() => {
                     w::with(|h| h.refused += 1);
                     log::info!("windows: input from the {from} window refused: a gate is up");
                 }
                 m => {
                     let before = self.feats.dialog.as_ref().map(Dialog::identity);
+                    let copy_before = self.copy_offer.as_ref().map(w::copy_id);
                     match m {
+                        ToPrimary::Run { f, .. } => match (from, page) {
+                            (Win::Page(_), Some(n)) => {
+                                self.in_window(n, |a| (f.0)(a));
+                                self.save_layout();
+                            }
+                            (Win::Page(n), None) => log::info!("windows: page window {n} is gone: its action is dropped"),
+                            _ => (f.0)(self),
+                        },
                         ToPrimary::Intents { screen, intents, editing } => {
-                            if screen != w::CANVAS_SCREEN {
+                            if screen != w::CANVAS_SCREEN || from != w::CANVAS {
                                 continue;
                             }
                             if let Some(sc) = self.screens.iter_mut().find(|s| s.name == screen) {
@@ -1401,11 +1442,14 @@ impl App {
                             self.feature_incoming("canvas", feat::Incoming::Png(b));
                             self.push_data();
                         }
-                        ToPrimary::Answer { .. } | ToPrimary::Closed | ToPrimary::Resized => {}
+                        ToPrimary::Answer { .. } | ToPrimary::CopyAnswer { .. } | ToPrimary::Closed | ToPrimary::Resized | ToPrimary::Changed => {}
                     }
-                    // A confirmation this input raised is shown, and answered, in its window.
+                    // A confirmation (or a copy offer) this input raised is shown, and answered, in its window.
                     if let Some(id) = self.feats.dialog.as_ref().map(Dialog::identity).filter(|id| Some(id) != before.as_ref()) {
                         w::with(|h| h.dialog_raised(id, from));
+                    }
+                    if let Some(id) = self.copy_offer.as_ref().map(w::copy_id).filter(|id| Some(id) != copy_before.as_ref()) {
+                        w::with(|h| h.copy_raised(id, from));
                     }
                 }
             }

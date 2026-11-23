@@ -63,16 +63,50 @@ use crate::theme::{self, c, layout, radius};
 use rune::{col, el, row, text, Cursor, Cx, El, KeyEvent, Tx, Waker};
 use serde_json::{json, Value as J};
 use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::rc::Rc;
+
+/// A window of the app: the main one, the canvas window, or a page window
+/// (shell/pagewin.rs) by its number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Win {
+    Main,
+    Canvas,
+    Page(u32),
+}
+
+impl std::fmt::Display for Win {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Win::Main => write!(f, "main"),
+            Win::Canvas => write!(f, "canvas"),
+            Win::Page(n) => write!(f, "page-{n}"),
+        }
+    }
+}
 
 /// The canvas window's key (one canvas window: the Canvas view has one
 /// current canvas and one surface, `feat::canvas::SURF`).
-pub const CANVAS: &str = "canvas";
+pub const CANVAS: Win = Win::Canvas;
 /// The screen the canvas window shows.
 pub const CANVAS_SCREEN: &str = crate::feat::canvas::SCREEN;
 /// The canvas window's size when it opens, and its smallest, in points.
 pub const CANVAS_SIZE: (f32, f32) = (1200.0, 800.0);
 pub const CANVAS_MIN: (f32, f32) = (640.0, 420.0);
+
+/// Something a page window asks the primary to run on the app, inside that
+/// window's page (`App::in_window`): a pane bar's press, a menu item, a
+/// drop, a pasted picture, a program's copy. Only through [`Hub::post`],
+/// which refuses it while a gate holds the window (when it is input).
+#[derive(Clone)]
+pub struct RunFn(pub Rc<dyn Fn(&mut App)>);
+
+impl std::fmt::Debug for RunFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RunFn")
+    }
+}
 
 /// What a secondary window hands the primary.
 #[derive(Debug)]
@@ -90,19 +124,33 @@ pub enum ToPrimary {
     Png(Vec<u8>),
     /// The window's content size changed (its screen lays out by it).
     Resized,
-    /// The window closed (its close button, ⌘W): the view goes back to the main window.
+    /// The window closed (its close button, ⌘W, its menu item): its view or
+    /// its page goes back to the main window.
     Closed,
     /// The answer to the confirmation this window shows (its Confirm, or
     /// Cancel, ×, Escape, a press outside): `dialog` is its identity
     /// (`Dialog::identity`), so it answers that one or nothing.
     Answer { confirm: bool, dialog: String },
+    /// The answer to the copy offer this window shows (Copy, or Not now).
+    CopyAnswer { copy: bool },
+    /// A page window's action on the app ([`RunFn`]); `input`: the person's
+    /// (a press, a drop), which a gate holds, else the window's own news
+    /// (a bar laid out, a program's copy).
+    Run { f: RunFn, input: bool },
+    /// What a page window shows changed on its side (a pane's focus, a
+    /// title, a connection): the primary draws its bars again.
+    Changed,
 }
 
 impl ToPrimary {
     /// Whether it is the person's input to the view, which a gate holds
     /// (an answer is the gate's own input: see [`Hub::post`]).
     pub fn is_input(&self) -> bool {
-        !matches!(self, ToPrimary::Resized | ToPrimary::Closed | ToPrimary::Answer { .. })
+        match self {
+            ToPrimary::Resized | ToPrimary::Closed | ToPrimary::Answer { .. } | ToPrimary::CopyAnswer { .. } | ToPrimary::Changed => false,
+            ToPrimary::Run { input, .. } => *input,
+            _ => true,
+        }
     }
 }
 
@@ -110,43 +158,51 @@ impl ToPrimary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Native {
     /// Open the window of that key.
-    Open(&'static str),
+    Open(Win),
     /// Bring that window to the front.
-    Focus(&'static str),
+    Focus(Win),
     /// Close that window.
-    Close(&'static str),
+    Close(Win),
     /// Bring the main window to the front.
     FocusPrimary,
 }
 
-/// Where a gate is drawn and answered, and what the other window says about it.
+/// Where a gate is drawn and answered, and what the other windows say about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Gate {
-    /// The window that draws it, and alone answers it: [`PRIMARY`], or
-    /// [`CANVAS`] for a confirmation raised there.
-    pub owner: &'static str,
-    /// One line naming what waits, said in the other window.
+    /// The window that draws it, and alone answers it: [`PRIMARY`], or the
+    /// window whose input raised it (a confirmation, a copy offer).
+    pub owner: Win,
+    /// One line naming what waits, said in the other windows.
     pub what: String,
 }
 
-/// The owner of every gate.
-pub const PRIMARY: &str = "main";
+/// The owner of every gate not raised in another window.
+pub const PRIMARY: Win = Win::Main;
 
 /// The hub's model: which windows are open, what goes to the primary, the
-/// gate, and what the platform must do.
+/// gates, and what the platform must do.
 #[derive(Debug, Default)]
 pub struct Hub {
     canvas_open: bool,
     /// The canvas window's content size (points), once laid out.
     canvas_size: Option<[f32; 2]>,
-    to_primary: Vec<(&'static str, ToPrimary)>,
+    to_primary: Vec<(Win, ToPrimary)>,
     native: Vec<Native>,
-    /// The main window's own gate, which holds the canvas window.
-    gate: Option<Gate>,
+    /// Every gate up, in order, each with the window that draws it.
+    gates: Vec<Gate>,
     /// The confirmation up (its identity) and the window it belongs to.
-    dialog: Option<(String, &'static str)>,
-    /// The canvas window must draw again.
-    canvas_dirty: bool,
+    dialog: Option<(String, Win)>,
+    /// The copy offer up (its identity) and the window it belongs to.
+    copy: Option<(String, Win)>,
+    /// The page windows open, by number, with their titles.
+    pages: BTreeMap<u32, String>,
+    next_page: u32,
+    /// The main window holds the keyboard for Jarvis's proposal
+    /// (`App::held_focus`): no terminal of any window takes a key.
+    keys_held: bool,
+    /// The windows that must draw again.
+    dirty: BTreeSet<Win>,
     /// What the canvas window last drew from: the screen's renders, the
     /// surface's generation.
     seen: (u64, u64),
@@ -174,17 +230,24 @@ impl Hub {
             return Opened::Focused;
         }
         self.canvas_open = true;
-        self.canvas_dirty = true;
+        self.dirty.insert(CANVAS);
         self.native.push(Native::Open(CANVAS));
         Opened::New
     }
 
     /// Brings the canvas window to the front, if it is open.
     pub fn focus_canvas(&mut self) -> bool {
-        if self.canvas_open {
-            self.native.push(Native::Focus(CANVAS));
+        self.focus(CANVAS)
+    }
+
+    /// Brings window `w` to the front, if it is open (the main one always is).
+    pub fn focus(&mut self, w: Win) -> bool {
+        match w {
+            Win::Main => self.native.push(Native::FocusPrimary),
+            w if self.is_open(w) => self.native.push(Native::Focus(w)),
+            _ => return false,
         }
-        self.canvas_open
+        true
     }
 
     /// The view goes back to the main window: the canvas window closes.
@@ -194,44 +257,98 @@ impl Hub {
     pub fn close_canvas(&mut self) -> bool {
         let was = std::mem::take(&mut self.canvas_open);
         if was {
-            self.cancel_dialog_of(CANVAS);
+            self.cancel_gates_of(CANVAS);
             self.native.push(Native::Close(CANVAS));
             self.canvas_size = None;
         }
         was
     }
 
+    /// A new page window (its page is moved there by the caller): its number.
+    pub fn open_page(&mut self, title: String) -> u32 {
+        self.next_page += 1;
+        let n = self.next_page;
+        self.pages.insert(n, title);
+        self.dirty.insert(Win::Page(n));
+        self.native.push(Native::Open(Win::Page(n)));
+        n
+    }
+
+    /// The page goes back to the main window by the main window's own
+    /// doing (its menu item, the palette): the window closes, and what it
+    /// showed of a gate is cancelled. Its `on_close` then says nothing more.
+    pub fn close_page(&mut self, n: u32) -> bool {
+        let was = self.pages.remove(&n).is_some();
+        if was {
+            self.cancel_gates_of(Win::Page(n));
+            self.dirty.remove(&Win::Page(n));
+            self.native.push(Native::Close(Win::Page(n)));
+        }
+        was
+    }
+
+    /// The page windows open, by number.
+    pub fn page_windows(&self) -> Vec<u32> {
+        self.pages.keys().copied().collect()
+    }
+
+    pub fn page_title(&self, n: u32) -> Option<&str> {
+        self.pages.get(&n).map(String::as_str)
+    }
+
+    /// A page window's title follows what its page shows.
+    pub fn set_page_title(&mut self, n: u32, title: String) {
+        if let Some(t) = self.pages.get_mut(&n) {
+            *t = title;
+        }
+    }
+
     /// A window closed by the person (its close button, ⌘W, the menu): a
-    /// confirmation it showed is cancelled, and the primary hears it once
-    /// and puts the view back in its overlay.
-    pub fn window_closed(&mut self, key: &'static str) {
-        if key == CANVAS && std::mem::take(&mut self.canvas_open) {
-            self.canvas_size = None;
-            self.cancel_dialog_of(CANVAS);
+    /// confirmation or copy offer it showed is cancelled, and the primary
+    /// hears it once and puts the view (or the page) back.
+    pub fn window_closed(&mut self, key: Win) {
+        let was = match key {
+            Win::Canvas => {
+                let was = std::mem::take(&mut self.canvas_open);
+                if was {
+                    self.canvas_size = None;
+                }
+                was
+            }
+            Win::Page(n) => self.pages.remove(&n).is_some(),
+            Win::Main => false,
+        };
+        if was {
+            self.dirty.remove(&key);
+            self.cancel_gates_of(key);
             self.to_primary.push((key, ToPrimary::Closed));
         }
     }
 
-    /// The confirmation of window `key` is cancelled: its answer is queued
-    /// (the primary runs `cancel_click` for it), and it belongs to the main
-    /// window until then, so the main window draws it if it is still up.
-    fn cancel_dialog_of(&mut self, key: &'static str) {
-        if let Some((id, owner)) = &mut self.dialog {
+    /// The confirmation and the copy offer of window `key` are cancelled:
+    /// their answers are queued (the primary runs `cancel_click`, or drops
+    /// the offer), and they belong to it until then, so the answer is taken.
+    fn cancel_gates_of(&mut self, key: Win) {
+        if let Some((id, owner)) = &self.dialog {
             if *owner == key {
                 self.to_primary.push((key, ToPrimary::Answer { confirm: false, dialog: id.clone() }));
             }
         }
+        if self.copy.as_ref().is_some_and(|(_, o)| *o == key) {
+            self.to_primary.push((key, ToPrimary::CopyAnswer { copy: false }));
+        }
     }
 
     /// A message from window `from` to the primary. Returns whether it was
-    /// queued. An answer is taken only from the window the confirmation
-    /// belongs to; the view's input only while no gate holds that window
-    /// (the main window's own gate, or its own confirmation, which is
-    /// modal there).
-    pub fn post(&mut self, from: &'static str, msg: ToPrimary) -> bool {
+    /// queued. An answer is taken only from the window the confirmation (or
+    /// the copy offer) belongs to, for that one; the view's input only from
+    /// an open window, and only while no gate is up anywhere (the main
+    /// window's, or one raised in a window, which is modal there).
+    pub fn post(&mut self, from: Win, msg: ToPrimary) -> bool {
         let ok = match &msg {
             ToPrimary::Answer { dialog, .. } => self.dialog.as_ref().is_some_and(|(id, owner)| *owner == from && id == dialog),
-            m if m.is_input() => self.gate.is_none() && self.dialog_owner() != Some(from) && (from != CANVAS || self.canvas_open),
+            ToPrimary::CopyAnswer { .. } => self.copy.as_ref().is_some_and(|(_, owner)| *owner == from),
+            m if m.is_input() => self.gates.is_empty() && self.dialog.is_none() && self.copy.is_none() && from != PRIMARY && self.is_open(from),
             _ => true,
         };
         if !ok {
@@ -245,36 +362,63 @@ impl Hub {
 
     /// A confirmation came up while the primary ran input from window
     /// `from`: it is drawn and answered there.
-    pub fn dialog_raised(&mut self, id: String, from: &'static str) {
+    pub fn dialog_raised(&mut self, id: String, from: Win) {
         let owner = if self.is_open(from) { from } else { PRIMARY };
         self.dialog = Some((id, owner));
-        self.canvas_dirty = true;
+        self.mark_all();
     }
 
     /// The confirmation up at the end of a primary turn (its identity, or
     /// none): one this hub has not seen came from the main window itself
     /// (its own press, its own paths), and belongs to it.
     pub fn note_dialog(&mut self, id: Option<String>) {
-        let next = match id {
-            None => None,
-            Some(id) => match self.dialog.take() {
-                Some((seen, owner)) if seen == id && (owner == PRIMARY || self.is_open(owner)) => Some((seen, owner)),
-                _ => Some((id, PRIMARY)),
-            },
-        };
+        let next = Self::noted(self.dialog.take(), id, |o| o == PRIMARY || self.is_open(o));
         if next != self.dialog {
-            self.canvas_dirty = true;
+            self.mark_all();
         }
         self.dialog = next;
     }
 
+    /// A copy offer came up while the primary ran what window `from` asked
+    /// (its program's copy): it is drawn and answered there.
+    pub fn copy_raised(&mut self, id: String, from: Win) {
+        let owner = if self.is_open(from) { from } else { PRIMARY };
+        self.copy = Some((id, owner));
+        self.mark_all();
+    }
+
+    /// The copy offer up at the end of a primary turn, as [`Self::note_dialog`].
+    pub fn note_copy(&mut self, id: Option<String>) {
+        let was = self.copy.clone();
+        let next = Self::noted(self.copy.take(), id, |o| o == PRIMARY || self.is_open(o));
+        if next != was {
+            self.mark_all();
+        }
+        self.copy = next;
+    }
+
+    fn noted(seen: Option<(String, Win)>, id: Option<String>, open: impl Fn(Win) -> bool) -> Option<(String, Win)> {
+        match id {
+            None => None,
+            Some(id) => match seen {
+                Some((s, owner)) if s == id && open(owner) => Some((s, owner)),
+                _ => Some((id, PRIMARY)),
+            },
+        }
+    }
+
     /// The window the confirmation up belongs to.
-    pub fn dialog_owner(&self) -> Option<&'static str> {
+    pub fn dialog_owner(&self) -> Option<Win> {
         self.dialog.as_ref().map(|(_, o)| *o)
     }
 
+    /// The window the copy offer up belongs to.
+    pub fn copy_owner(&self) -> Option<Win> {
+        self.copy.as_ref().map(|(_, o)| *o)
+    }
+
     /// The primary takes what the other windows asked, in order.
-    pub fn take_for_primary(&mut self) -> Vec<(&'static str, ToPrimary)> {
+    pub fn take_for_primary(&mut self) -> Vec<(Win, ToPrimary)> {
         std::mem::take(&mut self.to_primary)
     }
 
@@ -282,25 +426,65 @@ impl Hub {
         !self.to_primary.is_empty()
     }
 
-    /// The main window's own gate, which holds the other windows (`None`: none).
+    /// The main window's own gate, alone (`None`: none). See [`Self::set_gates`].
     pub fn set_gate(&mut self, gate: Option<Gate>) {
-        if gate != self.gate {
-            self.gate = gate;
-            self.canvas_dirty = true;
+        self.set_gates(gate.into_iter().collect());
+    }
+
+    /// Every gate up, each with its owner ([`gates`]): each other window
+    /// draws its scrim and refuses input while one is up.
+    pub fn set_gates(&mut self, gates: Vec<Gate>) {
+        if gates != self.gates {
+            self.gates = gates;
+            self.mark_all();
         }
     }
 
+    /// The first gate up, wherever it is drawn.
     pub fn gate(&self) -> Option<&Gate> {
-        self.gate.as_ref()
+        self.gates.first()
     }
 
-    /// The person asked for the main window (the scrim's button).
+    /// The gate that holds window `w`: the first one drawn in another window.
+    pub fn gate_for(&self, w: Win) -> Option<&Gate> {
+        self.gates.iter().find(|g| g.owner != w)
+    }
+
+    /// The main window holds the keyboard for Jarvis's proposal.
+    pub fn set_keys_held(&mut self, held: bool) {
+        if held != self.keys_held {
+            self.keys_held = held;
+            self.mark_all();
+        }
+    }
+
+    pub fn keys_held(&self) -> bool {
+        self.keys_held
+    }
+
+    /// The person asked for the main window (a scrim's button).
     pub fn show_primary(&mut self) {
         self.native.push(Native::FocusPrimary);
     }
 
-    pub fn is_open(&self, key: &str) -> bool {
-        key == CANVAS && self.canvas_open
+    pub fn is_open(&self, key: Win) -> bool {
+        match key {
+            Win::Main => true,
+            Win::Canvas => self.canvas_open,
+            Win::Page(n) => self.pages.contains_key(&n),
+        }
+    }
+
+    /// The words for a window, in a sentence ("the Canvas window").
+    pub fn name(&self, w: Win) -> String {
+        match w {
+            Win::Main => "the main window".into(),
+            Win::Canvas => "the Canvas window".into(),
+            Win::Page(n) => match self.pages.get(&n).filter(|t| !t.is_empty()) {
+                Some(t) => format!("the page window “{t}”"),
+                None => format!("page window {n}"),
+            },
+        }
     }
 
     /// What the platform must do now.
@@ -325,17 +509,39 @@ impl Hub {
     pub fn note_drawn_from(&mut self, renders: u64, surface: u64) {
         if self.seen != (renders, surface) {
             self.seen = (renders, surface);
-            self.canvas_dirty = true;
+            self.dirty.insert(CANVAS);
         }
+    }
+
+    /// Every open window but the main one must draw again (a gate moved).
+    pub fn mark_all(&mut self) {
+        if self.canvas_open {
+            self.dirty.insert(CANVAS);
+        }
+        for n in self.pages.keys() {
+            self.dirty.insert(Win::Page(*n));
+        }
+    }
+
+    /// Window `w` must draw again.
+    pub fn mark(&mut self, w: Win) {
+        if w != PRIMARY && self.is_open(w) {
+            self.dirty.insert(w);
+        }
+    }
+
+    /// Whether window `w` must draw again (and clears it).
+    pub fn take_dirty(&mut self, w: Win) -> bool {
+        self.dirty.remove(&w)
     }
 
     /// Whether the canvas window must draw again (and clears it).
     pub fn take_canvas_dirty(&mut self) -> bool {
-        std::mem::take(&mut self.canvas_dirty)
+        self.take_dirty(CANVAS)
     }
 
-    fn canvas_dirty(&self) -> bool {
-        self.canvas_dirty
+    fn dirty_windows(&self) -> Vec<Win> {
+        self.dirty.iter().copied().filter(|w| self.is_open(*w)).collect()
     }
 }
 
@@ -353,13 +559,14 @@ thread_local! {
     /// The Canvas screen between turns while the canvas window is open:
     /// (its index in `App::screens`, the screen).
     static SLOT: RefCell<Option<(usize, ScreenState)>> = const { RefCell::new(None) };
-    /// The confirmation between turns while it belongs to the canvas window.
-    static DIALOG: RefCell<Option<Dialog>> = const { RefCell::new(None) };
+    /// The confirmation between turns while it belongs to another window
+    /// than the main one, with that window.
+    static DIALOG: RefCell<Option<(Win, Dialog)>> = const { RefCell::new(None) };
     static PLATFORM: RefCell<Option<Box<dyn Platform>>> = RefCell::new(None);
     /// The operations run with no platform installed (tests).
     static DONE: RefCell<Vec<Native>> = const { RefCell::new(Vec::new()) };
-    static PRIMARY_WAKE: RefCell<Option<Waker>> = const { RefCell::new(None) };
-    static CANVAS_WAKE: RefCell<Option<Waker>> = const { RefCell::new(None) };
+    /// Each window's Rune waker, once it is set up.
+    static WAKERS: RefCell<HashMap<Win, Waker>> = RefCell::new(HashMap::new());
 }
 
 /// The UI thread's hub.
@@ -374,7 +581,17 @@ pub fn install(p: Box<dyn Platform>) {
 
 /// The primary's waker (its `setup`).
 pub fn set_primary_waker(w: Waker) {
-    PRIMARY_WAKE.with(|s| *s.borrow_mut() = Some(w));
+    set_waker(PRIMARY, w);
+}
+
+/// Window `w`'s waker (its `setup`).
+pub fn set_waker(w: Win, waker: Waker) {
+    WAKERS.with(|s| s.borrow_mut().insert(w, waker));
+}
+
+/// Window `w`'s waker, once it is set up.
+pub fn waker(w: Win) -> Option<Waker> {
+    WAKERS.with(|s| s.borrow().get(&w).cloned())
 }
 
 /// A new hub on this thread, its slots empty (tests: one app per run).
@@ -383,6 +600,8 @@ pub fn reset() {
     SLOT.with(|s| s.borrow_mut().take());
     DIALOG.with(|s| s.borrow_mut().take());
     DONE.with(|d| d.borrow_mut().clear());
+    WAKERS.with(|s| s.borrow_mut().clear());
+    crate::shell::pagewin::reset();
 }
 
 /// The operations the hub asked for with no platform installed (tests).
@@ -402,9 +621,9 @@ pub fn run_native() {
     });
 }
 
-fn wake(slot: &'static std::thread::LocalKey<RefCell<Option<Waker>>>) {
-    let w = slot.with(|s| s.borrow().clone());
-    if let Some(w) = w {
+/// Wakes window `w` (its `poll` runs), once it is set up.
+pub fn wake(w: Win) {
+    if let Some(w) = waker(w) {
         w();
     }
 }
@@ -437,15 +656,20 @@ pub fn close_canvas() -> bool {
 
 /// The placeholder's button: the canvas window to the front.
 pub fn focus_canvas() -> bool {
-    let open = with(Hub::focus_canvas);
+    focus_window(CANVAS)
+}
+
+/// A scrim's button: window `w` to the front.
+pub fn focus_window(w: Win) -> bool {
+    let open = with(|h| h.focus(w));
     run_native();
     open
 }
 
 /// Every gate up, each with the window that draws and answers it: the
-/// core's confirmation (in the window it belongs to, [`Hub::dialog_owner`]),
-/// and in the main window an approval, the copy offer, Jarvis's proposal, a
-/// modal, the palette.
+/// core's confirmation and the copy offer (in the window they belong to,
+/// [`Hub::dialog_owner`], [`Hub::copy_owner`]), and in the main window an
+/// approval, Jarvis's proposal, a modal, the palette.
 pub fn gates(app: &App) -> Vec<Gate> {
     let mut v = vec![];
     let main = |what: &str| Gate { owner: PRIMARY, what: what.into() };
@@ -453,13 +677,16 @@ pub fn gates(app: &App) -> Vec<Gate> {
         v.push(main("An approval waits for you in the main window."));
     }
     if app.feats.dialog.is_some() {
-        match with(|h| h.dialog_owner().filter(|o| *o != PRIMARY && h.is_open(o))) {
-            Some(o) => v.push(Gate { owner: o, what: "A confirmation waits for you in the Canvas window.".into() }),
+        match with(|h| h.dialog_owner().filter(|o| *o != PRIMARY && h.is_open(*o)).map(|o| (o, h.name(o)))) {
+            Some((o, name)) => v.push(Gate { owner: o, what: format!("A confirmation waits for you in {name}.") }),
             None => v.push(main("A confirmation waits for you in the main window.")),
         }
     }
     if app.copy_offer.is_some() {
-        v.push(main("A copy to the clipboard waits for your answer in the main window."));
+        match with(|h| h.copy_owner().filter(|o| *o != PRIMARY && h.is_open(*o)).map(|o| (o, h.name(o)))) {
+            Some((o, name)) => v.push(Gate { owner: o, what: format!("A copy to the clipboard waits for your answer in {name}.") }),
+            None => v.push(main("A copy to the clipboard waits for your answer in the main window.")),
+        }
     }
     if app.proposal_up() {
         v.push(main("A Jarvis proposal waits for your answer in the main window."));
@@ -475,39 +702,65 @@ pub fn gate_of(app: &App) -> Option<Gate> {
     gates(app).into_iter().next()
 }
 
-/// Whether the confirmation up belongs to another window than the main one
-/// (the main window then draws [`elsewhere_scrim`], never the confirmation).
+/// The window other than the main one the confirmation up belongs to (the
+/// main window then draws [`elsewhere_scrim`], never the confirmation).
+pub fn dialog_elsewhere_in() -> Option<Win> {
+    with(|h| h.dialog_owner().filter(|o| *o != PRIMARY && h.is_open(*o)))
+}
+
+/// Whether the confirmation up belongs to another window than the main one.
 pub fn dialog_elsewhere() -> bool {
-    with(|h| h.dialog_owner().is_some_and(|o| o != PRIMARY && h.is_open(o)))
+    dialog_elsewhere_in().is_some()
+}
+
+/// The window other than the main one the copy offer up belongs to.
+pub fn copy_elsewhere_in() -> Option<Win> {
+    with(|h| h.copy_owner().filter(|o| *o != PRIMARY && h.is_open(*o)))
+}
+
+/// A copy offer's identity, to know it again turn after turn.
+pub fn copy_id(o: &crate::approval::CopyOffer) -> String {
+    format!("{}:{}:{:?}", o.sandbox, o.bytes, o.until)
 }
 
 /// The start of a primary turn: the Canvas screen comes back to
-/// `App::screens`, and a confirmation the canvas window held to `feats.dialog`.
+/// `App::screens`, a confirmation another window held to `feats.dialog`,
+/// and the page windows' pages to `App::windowed`.
 pub fn primary_enter(app: &mut App) {
     if let Some((i, sc)) = SLOT.with(|s| s.borrow_mut().take()) {
         let i = i.min(app.screens.len());
         app.screens.insert(i, sc);
     }
-    if let Some(d) = DIALOG.with(|s| s.borrow_mut().take()) {
+    if let Some((w, d)) = DIALOG.with(|s| s.borrow_mut().take()) {
         if app.feats.dialog.is_none() {
             app.feats.dialog = Some(d);
         } else {
-            log::warn!("windows: two confirmations at once; the canvas window's is dropped");
+            log::warn!("windows: two confirmations at once; the {w} window's is dropped");
         }
     }
+    crate::shell::pagewin::primary_enter(app);
 }
 
 /// The end of a primary turn: the gates are published, the Canvas screen
-/// (and a confirmation that belongs to the canvas window) move out while
-/// its window is open, the platform runs what was asked, and the canvas
-/// window is woken when what it draws changed.
+/// (and a confirmation that belongs to another window) move out while
+/// that window is open, the page windows' pages too (their bars drawn
+/// again when what they show changed), the platform runs what was asked,
+/// and each window whose view changed is woken.
 pub fn primary_leave(app: &mut App) {
-    with(|h| h.note_dialog(app.feats.dialog.as_ref().map(Dialog::identity)));
-    let gate = gates(app).into_iter().find(|g| g.owner == PRIMARY);
-    with(|h| h.set_gate(gate));
-    if dialog_elsewhere() {
-        let d = app.feats.dialog.take();
-        DIALOG.with(|s| *s.borrow_mut() = d);
+    with(|h| {
+        h.note_dialog(app.feats.dialog.as_ref().map(Dialog::identity));
+        h.note_copy(app.copy_offer.as_ref().map(copy_id));
+    });
+    let gates = gates(app);
+    let held = app.keys_held_for_windows();
+    with(|h| {
+        h.set_gates(gates);
+        h.set_keys_held(held);
+    });
+    if let Some(w) = dialog_elsewhere_in() {
+        if let Some(d) = app.feats.dialog.take() {
+            DIALOG.with(|s| *s.borrow_mut() = Some((w, d)));
+        }
     }
     if canvas_open() {
         if let Some(i) = app.screens.iter().position(|s| s.name == CANVAS_SCREEN) {
@@ -517,9 +770,36 @@ pub fn primary_leave(app: &mut App) {
             SLOT.with(|s| *s.borrow_mut() = Some((i, sc)));
         }
     }
+    crate::shell::pagewin::primary_leave(app);
     run_native();
-    if canvas_open() && with(|h| h.canvas_dirty()) {
-        wake(&CANVAS_WAKE);
+    for w in with(|h| h.dirty_windows()) {
+        wake(w);
+    }
+}
+
+/// The confirmation that belongs to window `w`, for its turn.
+pub fn take_dialog_of(w: Win) -> Option<Dialog> {
+    DIALOG.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.as_ref().is_some_and(|(o, _)| *o == w) {
+            s.take().map(|(_, d)| d)
+        } else {
+            None
+        }
+    })
+}
+
+/// Window `w`'s turn ends: its confirmation goes back.
+pub fn put_dialog_of(w: Win, d: Dialog) {
+    DIALOG.with(|s| *s.borrow_mut() = Some((w, d)));
+}
+
+/// A secondary window's turn ends: the platform runs what it asked, and
+/// the primary is woken when something waits for it.
+pub fn secondary_leave() {
+    run_native();
+    if with(|h| h.pending_for_primary()) {
+        wake(PRIMARY);
     }
 }
 
@@ -673,9 +953,9 @@ pub fn canvas_enter(s: &mut CanvasWin) {
         s.screen = SLOT.with(|sl| sl.borrow_mut().take());
     }
     if s.dialog.is_none() {
-        s.dialog = DIALOG.with(|sl| sl.borrow_mut().take());
+        s.dialog = take_dialog_of(CANVAS);
     }
-    s.gate = with(|h| h.gate().cloned());
+    s.gate = with(|h| h.gate_for(CANVAS).cloned());
 }
 
 /// The canvas window's turn ends: the screen and its confirmation go back,
@@ -685,16 +965,13 @@ pub fn canvas_leave(s: &mut CanvasWin) {
         SLOT.with(|sl| *sl.borrow_mut() = Some(sc));
     }
     if let Some(d) = s.dialog.take() {
-        DIALOG.with(|sl| *sl.borrow_mut() = Some(d));
+        put_dialog_of(CANVAS, d);
     }
-    run_native();
-    if with(|h| h.pending_for_primary()) {
-        wake(&PRIMARY_WAKE);
-    }
+    secondary_leave();
 }
 
 pub fn canvas_setup(_s: &mut CanvasWin, waker: Waker) {
-    CANVAS_WAKE.with(|w| *w.borrow_mut() = Some(waker));
+    set_waker(CANVAS, waker);
 }
 
 /// Draws again when a primary turn changed what it shows.
@@ -712,12 +989,12 @@ pub fn canvas_menu_full_screen(_s: &mut CanvasWin, tx: &mut Tx) {
     tx.toggle_full_screen();
 }
 
-fn small(size: f32, weight: f32) -> rune::TextStyle {
+pub(crate) fn small(size: f32, weight: f32) -> rune::TextStyle {
     screen::body(size, weight)
 }
 
 /// A plain button of the window's chrome.
-fn button<S: 'static>(key: &str, label: &str, help: &str, primary: bool, press: impl Fn(&mut S, &mut Tx) + 'static) -> El {
+pub(crate) fn button<S: 'static>(key: &str, label: &str, help: &str, primary: bool, press: impl Fn(&mut S, &mut Tx) + 'static) -> El {
     let (fill, fg) = if primary { (c("blue"), c("bg")) } else { (c("elevated"), c("text-bright")) };
     el().key(key.to_string())
         .role("button")
@@ -800,12 +1077,12 @@ pub fn canvas_view(s: &CanvasWin, _cx: &mut Cx<CanvasWin>) -> El {
         let dialog = crate::approval::confirm_view::<CanvasWin>(&d.state(size, top));
         root = root.child(crate::shell::scrim("cf-scrim", dialog, |s: &mut CanvasWin| ConfirmAnswers::cancel_click(s)));
     } else if let Some(g) = &s.gate {
-        root = root.child(gate_scrim(g));
+        root = root.child(gate_scrim::<CanvasWin>(g));
     }
     root
 }
 
-fn full_screen_help() -> &'static str {
+pub(crate) fn full_screen_help() -> &'static str {
     if cfg!(target_os = "macos") {
         "Full screen (⌃⌘F, or the green button)"
     } else {
@@ -813,45 +1090,61 @@ fn full_screen_help() -> &'static str {
     }
 }
 
-/// Over the canvas window while the main window has a gate up: modal (no
-/// press, key or Tab reaches what is under it), saying where to answer.
-fn gate_scrim(g: &Gate) -> El {
+/// Over a secondary window (the canvas window, a page window) while a gate
+/// drawn in another window is up: modal (no press, key or Tab reaches what
+/// is under it), saying where to answer, with a button that brings that
+/// window to the front.
+pub fn gate_scrim<S: 'static>(g: &Gate) -> El {
+    let (name, owner) = (with(|h| h.name(g.owner)), g.owner);
+    let title = format!("Answer in {name}");
     let card = col()
         .key("cwin-gate")
         .role("alertdialog")
-        .label("Answer in the main window")
+        .label(title.clone())
         .w(420.0)
         .padding(16.0)
         .gap(10.0)
         .radius(radius("md").unwrap())
         .fill(c("surface"))
         .border(1.0, c("border"))
-        .child(text("Answer in the main window").font(small(theme::font_size::TITLE, 600.0)).color(c("text-bright")))
+        .child(text(title).font(small(theme::font_size::TITLE, 600.0)).color(c("text-bright")))
         .child(text(g.what.clone()).font(small(theme::font_size::BODY, 400.0)).color(c("text")).wrap().w_full())
         .child(text("Nothing here can answer it: this window waits until it is answered there.").font(small(theme::font_size::CAPTION, 400.0)).color(c("text-muted")).wrap().w_full())
-        .child(row().w_full().child(el().grow(1.0)).child(button("cwin-gate-show", "Show the main window", "Brings the main window to the front", true, |_s: &mut CanvasWin, _tx: &mut Tx| {
-            with(Hub::show_primary);
-        })));
+        .child(row().w_full().child(el().grow(1.0)).child(button(
+            "cwin-gate-show",
+            &format!("Show {name}"),
+            "Brings that window to the front",
+            true,
+            move |_s: &mut S, _tx: &mut Tx| {
+                focus_window(owner);
+            },
+        )));
     el().key("cwin-scrim")
         .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
         .fill(theme::scrim())
-        .modal(false, |_s: &mut CanvasWin| {})
-        .on_press(|_s: &mut CanvasWin| {})
-        .on_wheel(|_s: &mut CanvasWin, _ev: rune::WheelEvent, _tx: &mut Tx| true)
-        .on_drop_files(|_s: &mut CanvasWin, _files: &[PathBuf], _tx| with(|h| h.refused += 1))
+        .modal(false, |_s: &mut S| {})
+        .on_press(|_s: &mut S| {})
+        .on_wheel(|_s: &mut S, _ev: rune::WheelEvent, _tx: &mut Tx| true)
+        .on_drop_files(|_s: &mut S, _files: &[PathBuf], _tx| with(|h| h.refused += 1))
         .items_center()
         .justify_center()
         .child(card)
 }
 
-/// Over the main window while a confirmation raised in the canvas window
-/// waits there: a press, the wheel or a drop on it reaches nothing and
-/// answers nothing; its button brings the Canvas window to the front.
-pub fn elsewhere_scrim() -> El {
+/// Over the main window while a confirmation (or a copy offer) raised in
+/// window `owner` waits there: a press, the wheel or a drop on it reaches
+/// nothing and answers nothing; its button brings that window to the front.
+pub fn elsewhere_scrim(owner: Win) -> El {
+    let name = with(|h| h.name(owner));
+    let short = match owner {
+        Win::Canvas => "Show the Canvas window".to_string(),
+        Win::Page(_) => "Show the page window".to_string(),
+        Win::Main => "Show the main window".to_string(),
+    };
     let card = col()
         .key("cwin-elsewhere")
         .role("alertdialog")
-        .label("Answer in the Canvas window")
+        .label(format!("Answer in {name}"))
         .w(420.0)
         .padding(16.0)
         .gap(10.0)
@@ -859,10 +1152,10 @@ pub fn elsewhere_scrim() -> El {
         .fill(c("surface"))
         .border(1.0, c("border"))
         .on_press(|_s: &mut App| {})
-        .child(text("Answer in the Canvas window").font(small(theme::font_size::TITLE, 600.0)).color(c("text-bright")))
-        .child(text("A confirmation you asked for in the Canvas window waits there. It is answered there only.").font(small(theme::font_size::BODY, 400.0)).color(c("text")).wrap().w_full())
-        .child(row().w_full().child(el().grow(1.0)).child(button("cwin-elsewhere-show", "Show the Canvas window", "Brings the Canvas window to the front", true, |_s: &mut App, _tx: &mut Tx| {
-            focus_canvas();
+        .child(text(format!("Answer in {name}")).font(small(theme::font_size::TITLE, 600.0)).color(c("text-bright")))
+        .child(text(format!("What you asked for in {name} waits there for your answer. It is answered there only.")).font(small(theme::font_size::BODY, 400.0)).color(c("text")).wrap().w_full())
+        .child(row().w_full().child(el().grow(1.0)).child(button("cwin-elsewhere-show", &short, "Brings that window to the front", true, move |_s: &mut App, _tx: &mut Tx| {
+            focus_window(owner);
         })));
     el().key("cwin-elsewhere-scrim")
         .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
@@ -921,28 +1214,49 @@ pub fn canvas_spec() -> rune::WindowSpec<CanvasWin> {
         }
     }
     let app = rune::App::new(spec).turn_scope(canvas_enter, canvas_leave).on_close(canvas_closed).menu_item(item);
-    rune::WindowSpec::from_app(CANVAS, app)
+    rune::WindowSpec::from_app(CANVAS.to_string(), app)
 }
 
-/// Rune's side: the main window's handle, and the canvas window's once open.
+/// Rune's side: the main window's handle, and each other window's once
+/// open (kept, so a later stage can read and restore its placement).
 pub struct RunePlatform {
     pub primary: rune::AppHandle<App>,
     pub canvas: Option<rune::WindowHandle>,
+    pub pages: HashMap<u32, rune::WindowHandle>,
+}
+
+impl RunePlatform {
+    fn handle(&self, w: Win) -> Option<&rune::WindowHandle> {
+        match w {
+            Win::Canvas => self.canvas.as_ref(),
+            Win::Page(n) => self.pages.get(&n),
+            Win::Main => None,
+        }
+    }
 }
 
 impl Platform for RunePlatform {
     fn run(&mut self, op: &Native) {
         match op {
             Native::Open(CANVAS) => self.canvas = Some(rune::open_window(canvas_spec())),
+            Native::Open(Win::Page(n)) => {
+                let h = rune::open_window(crate::shell::pagewin::page_spec(*n));
+                self.pages.insert(*n, h);
+            }
             Native::Open(k) => log::warn!("windows: no window of key {k}"),
-            Native::Focus(_) => {
-                if let Some(h) = &self.canvas {
+            Native::Focus(w) => {
+                if let Some(h) = self.handle(*w) {
                     h.open();
                     h.focus();
                 }
             }
-            Native::Close(_) => {
-                if let Some(h) = self.canvas.take() {
+            Native::Close(w) => {
+                let h = match w {
+                    Win::Canvas => self.canvas.take(),
+                    Win::Page(n) => self.pages.remove(n),
+                    Win::Main => None,
+                };
+                if let Some(h) = h {
                     h.close();
                 }
             }
