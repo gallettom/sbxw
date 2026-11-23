@@ -203,7 +203,32 @@ secrets into sbx, use `sbx secret import`.
 | SSH and remote editors | `sbxw ssh --setup` once. See [SSH](ssh.md) |
 | Chrome / Edge side panel | `sbxw extension`, then *Load unpacked*. See [Chat](chat.md#the-browser-side-panel) |
 | macOS notch companion | Offered by the installer. See [Dynamic Island](island.md) |
+| macOS desktop app | `sbxw-desktop-macos.zip` on the release page. See [The desktop app](#the-desktop-app) |
 | Your host's skills in every sandbox | `sbxw skills import`. See [Kits and skills](kits-and-skills.md#shared-skills) |
+
+## The desktop app
+
+A native macOS app with the same panes, boards and approvals as the web UI. It
+talks to a running sbxw daemon (`127.0.0.1:7681`, with the token in
+`~/.sbxw/run/ui-token`); it does not start one, so run `sbxw` first.
+
+From a release (when the release has one; the installer does not fetch it):
+
+```bash
+# Download sbxw-desktop-macos.zip from the release page, then:
+ditto -x -k sbxw-desktop-macos.zip /Applications
+xattr -dr com.apple.quarantine /Applications/sbxw.app   # ad-hoc signed, not notarized
+open /Applications/sbxw.app
+```
+
+From source (any release, and Linux):
+
+```bash
+cd desktop && cargo run --release
+```
+
+`--daemon ADDR` and `--token-file PATH` point it at another daemon.
+`desktop/packaging/build-app.sh` builds the same `sbxw.app` bundle locally.
 
 ## Updating
 

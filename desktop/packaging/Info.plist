@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- For a later sbxw.app (not built yet: no installer before parity).
-     Contents/MacOS/sbxw is the release binary, Contents/Resources/sbxw.icns
+<!-- The sbxw.app bundle, built by build-app.sh (which sets the two version
+     keys). Contents/MacOS/sbxw is the release binary, Contents/Resources/sbxw.icns
      the icon from make-icon.py. -->
 <plist version="1.0">
 <dict>

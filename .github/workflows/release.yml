@@ -104,10 +104,44 @@ jobs:
             dist/SbxwIsland-macos.zip
             dist/island-version.txt
 
+  # ── Build the macOS desktop app (sbxw.app) ────────────────────────────────
+  # Optional for now: a failure here does not stop the release, which then
+  # ships without the desktop app (install.sh and `sbxw update` do not fetch it).
+  desktop:
+    name: sbxw-desktop-macos
+    runs-on: macos-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # desktop/ is its own workspace with its own Cargo.lock; its toolchain is
+      # the one desktop/rust-toolchain.toml pins, installed by rustup on first use.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: desktop
+          key: desktop-macos
+
+      # The version is the release tag's (v4.1.1 -> 4.1.1).
+      - name: Build .app bundle
+        env:
+          SBXW_DESKTOP_VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          SBXW_DESKTOP_VERSION="${SBXW_DESKTOP_VERSION#v}" desktop/packaging/build-app.sh dist
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbxw-desktop-macos
+          path: |
+            dist/sbxw-desktop-macos.zip
+            dist/desktop-version.txt
+
   # ── Create GitHub Release and attach all binaries ─────────────────────────
   release:
     name: GitHub Release
-    needs: [build, island]
+    needs: [build, island, desktop]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # the only job that may: it creates the release
@@ -128,6 +162,12 @@ jobs:
             sbxw-macos-arm64 sbxw-macos-x86_64 \
             sbxw-linux-x86_64 sbxw-linux-arm64 \
             SbxwIsland-macos.zip > sha256sums.txt
+          # The desktop app is optional (its job may fail): listed when built.
+          if [ -f sbxw-desktop-macos.zip ]; then
+            sha256sum sbxw-desktop-macos.zip >> sha256sums.txt
+          else
+            echo "::warning title=No desktop app::sbxw-desktop-macos.zip was not built: this release ships without the desktop app."
+          fi
           cat sha256sums.txt
 
       # Signs sha256sums.txt with the RELEASE_SIGNING_KEY secret (an
@@ -167,6 +207,8 @@ jobs:
             sbxw-linux-*
             SbxwIsland-macos.zip
             island-version.txt
+            sbxw-desktop-macos.zip
+            desktop-version.txt
             sha256sums.txt
             sha256sums.txt.sig
           generate_release_notes: true
