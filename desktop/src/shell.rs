@@ -3038,7 +3038,7 @@ impl App {
             items.push(core("status", &p.status(), "muted", "The terminal's connection"));
         }
         let agent = self.agent_label(i);
-        let mut f = bar::pane_fit(self.bar_width(i) - if self.pane_leads(p) { LEADER_MARK + bar::PANE_GAP } else { 0.0 }, &pane_name(p), agent.as_deref(), items, true);
+        let mut f = bar::pane_fit(self.bar_width(i), &pane_name(p), agent.as_deref(), items, true, self.pane_leads(p));
         if let (false, Some(_)) = (f.switch, &agent) {
             // Too narrow even for the switch: the menu's first row.
             let to = if p.mode == Mode::Bash { agent.clone().unwrap_or_default() } else { bar::BASH.to_string() };
@@ -3606,6 +3606,49 @@ fn grip(n: usize) -> El {
         .child(column())
 }
 
+/// Pane `i`'s name (`pane-<n>-name`). With a team toggle (bar::take_team:
+/// the main session of a running sandbox) it is a pill that turns team mode
+/// on and off through the threads feature's own intent (`lead_start` /
+/// `lead_end`, the same dialog): on, the purple pill of the old "Team on"
+/// chip (the purple tone's tint and text, the chip's radius and height) with
+/// the leader icon (`pane-<n>-leader`) before the name; off, a quiet
+/// outlined pill, no icon. Without one (a thread, a stopped sandbox, a kit)
+/// it is plain text, the leader mark before it when the session leads.
+fn name_pill(s: &App, i: usize, label: &str, team: Option<&bar::TeamToggle>, leads: bool, name_min: f32, ground: u32) -> El {
+    let n = i + 1;
+    let focused = i == s.focused;
+    let plain = if focused { "text-bright" } else { "text" };
+    let on = team.is_some_and(|t| t.on);
+    let (purple, purple_tint) = crate::screen::tone("purple");
+    let ink = if on { theme::hex(purple) } else { c(plain) };
+    let name = text(label.to_string()).font(small(bar::NAME_TEXT, 500.0)).color(ink.clone()).truncate().shrink().min_w(name_min);
+    let mark = || el().key(format!("pane-{n}-leader")).label("Team leader").w(LEADER_MARK).h(LEADER_MARK).child(rune::icon(crate::icons::get("leader").unwrap(), LEADER_MARK).color(ink.clone()));
+    let Some(t) = team else {
+        let mut r = row().gap(bar::PANE_GAP).items_center().min_w(0.0).shrink();
+        if leads {
+            r = r.child(mark().help("Team leader"));
+        }
+        return r.child(name.key(format!("pane-{n}-name")).help(label.to_string()));
+    };
+    let pad = bar::name_pad(Some(t), leads);
+    let mut b = row().key(format!("pane-{n}-name")).gap(bar::CHIP_GAP).px(bar::CHIP_PX).h(layout::DENSE_H).items_center().min_w(name_min + pad).shrink().radius(theme::radius("xs").unwrap());
+    b = if on { b.fill(theme::hex(purple_tint)).child(mark()) } else { b.border(1.0, theme::hex(theme::over(theme::color_value("text").unwrap(), 0.18, ground))) };
+    let hover = if on { c("active-bg") } else { c("elevated") };
+    let (intent, args) = t.intent.clone();
+    b.child(name)
+        .role("button")
+        .label(bar::name_label(label, t))
+        .help(bar::name_help(label, t))
+        .hover(hover)
+        .focusable(true)
+        .focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus"))
+        .cursor(Cursor::Pointer)
+        .on_press(move |s: &mut App| {
+            s.press_extra("pane", &intent, &args);
+            s.push_data();
+        })
+}
+
 fn pane_view(s: &App, i: usize) -> El {
     let pane = s.panes.get(i);
     let uid = pane.map_or(0, |p| p.uid);
@@ -3648,30 +3691,26 @@ fn pane_view(s: &App, i: usize) -> El {
     let fit = s.pane_fit(i);
     let name_min = fit.as_ref().map_or(0.0, |f| f.name_min);
     let mut mid = row().grow(1.0).min_w(0.0).h_full().gap(bar::PANE_GAP).items_center().clip_rounded(0.0);
-    // The team leader's crown, before the name so a cut name never takes it.
-    if pane.is_some_and(|p| s.pane_leads(p)) {
-        mid = mid.child(el().key(format!("pane-{}-leader", i + 1)).label("Team leader").help("Team leader").w(LEADER_MARK).h(LEADER_MARK).child(rune::icon(crate::icons::get("leader").unwrap(), LEADER_MARK).color(c(if focused { "text-bright" } else { "text" }))));
-    }
-    mid = mid.child(
-        text(label.clone()).key(format!("pane-{}-name", i + 1)).help(label).font(small(bar::NAME_TEXT, 500.0)).color(c(if focused { "text-bright" } else { "text" })).truncate().min_w(name_min),
-    );
+    mid = mid.child(name_pill(s, i, &label, fit.as_ref().and_then(|f| f.team.as_ref()), pane.is_some_and(|p| s.pane_leads(p)), name_min, bar_ground));
     if let (Some(_), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
+        // By group (bar::zone), a hairline between two: the name pill is
+        // group 0, the switch opens the session's group 1.
+        let hairline = |z: u8| el().key(format!("pane-{}-zone-{z}", i + 1)).absolute(-(bar::PANE_GAP + bar::SEP_W) / 2.0, (layout::DENSE_H - 14.0) / 2.0).w(bar::SEP_W).h(14.0).fill(theme::hex(theme::over(theme::color_value("text").unwrap(), 0.3, bar_ground)));
+        let mut last = Some(0);
         if f.switch {
             if let Some(agent) = s.agent_label(i) {
-                mid = mid.child(mode_switch(s, i, &agent, bar_ground));
+                mid = mid.child(mode_switch(s, i, &agent, bar_ground).child(hairline(1)));
+                last = Some(1);
             }
         }
-        // By zone (bar::zone), a hairline between two.
         let shown_panel = |name: &str| s.feats.panel.as_deref() == Some(name) || (s.feats.split && s.feats.panels.iter().any(|p| p == name));
-        let mut last = None;
         for it in &f.shown {
             let z = bar::zone(&it.id);
             let active = focused && bar::panel_of(&it.id).is_some_and(shown_panel);
             let mut chip = if it.core && it.id == bar::DICTATE { dictate_chip(s, it, i, bar_ground) } else { bar_chip(it, i + 1, active, bar_ground) };
             if last.is_some_and(|l| l != z) {
-                // In the gap before the zone's first chip (no room of its own).
-                let x = -(bar::PANE_GAP + bar::SEP_W) / 2.0;
-                chip = chip.child(el().key(format!("pane-{}-zone-{z}", i + 1)).absolute(x, (layout::DENSE_H - 14.0) / 2.0).w(bar::SEP_W).h(14.0).fill(theme::hex(theme::over(theme::color_value("text").unwrap(), 0.3, bar_ground))));
+                // In the gap before the group's first chip (no room of its own).
+                chip = chip.child(hairline(z));
             }
             last = Some(z);
             mid = mid.child(chip);
@@ -4353,7 +4392,8 @@ mod tests {
         for (i, p) in s.panes.iter().enumerate() {
             let Some(sb) = p.sandbox.clone() else { continue };
             let f = s.pane_fit(i).unwrap();
-            let on_pane = |id: &str| f.shown.iter().chain(&f.hidden).any(|it| it.id == id);
+            // The team toggle (`lead`) is the name pill's (bar::take_team).
+            let on_pane = |id: &str| f.shown.iter().chain(&f.hidden).any(|it| it.id == id) || (id == "lead" && f.team.is_some());
             assert!(on_pane(bar::DICTATE), "{what}: pane {}: the microphone", i + 1);
             for it in s.pane_items(&sb, p.thread.as_deref()) {
                 walked += 1;

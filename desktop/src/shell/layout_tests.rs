@@ -741,7 +741,7 @@ fn the_mode_switch_goes_between_the_agent_and_a_shell() {
     });
     assert_eq!((r.rt.state.panes[1].mode, r.rt.state.focused), (Mode::Agent, 0), "a's shell is pane 1's: focused, not duplicated");
     // Narrow: the switch is the menu's first row.
-    let f = bar::pane_fit(200.0, "a", Some("Claude"), vec![], true);
+    let f = bar::pane_fit(200.0, "a", Some("Claude"), vec![], true, false);
     assert!(!f.switch);
     r.rt.update(|s, _| { s.bar_w.insert(s.panes[0].uid, 150.0); });
     let f = r.rt.state.pane_fit(0).unwrap();
