@@ -604,6 +604,12 @@ row{ key = "title-slot", gap = 8,
   `in-view-<name>`), from `data.app.overlay.scope` (`{sandbox, title}`,
   null for All or no scope). It follows a pick at once (the core pushes
   again when the overlay's scope moved) and goes when the overlay closes.
+- **The status bar's versions** (`status-versions`, with `status-version-sbx` and
+  `status-version-sbxw`): at the very left, "sbx 0.54.0" and "sbxw 4.1.3" from
+  `data.daemon_state.versions`, caption size, muted, set apart by a gap. One the
+  daemon does not send is left out, no placeholder. They are the first thing a
+  narrow bar drops (before the bring-up's step label).
+
 - **The status bar**: its git item (`status-git`, `src/shell/statusbar/git.rs`)
   names the repository and branch of the scope's sandbox, as
   `<repository>/<branch>` (its main checkout's branch, from the daemon's

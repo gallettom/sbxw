@@ -270,7 +270,7 @@ fn a_200_character_branch_never_pushes_the_fixed_items_out() {
         point(&mut rt, "data-pipeline-with-a-long-name", None);
         run(&mut rt, t0, 0.0, 1.5);
         let (cpu, cost) = (rt.state.status.cpu.clone().unwrap(), rt.state.status.cost.clone().unwrap());
-        let f = super::super::fit(w, &rt.state.status.jobs, &cpu, &cost);
+        let f = rt.state.statusbar_fit(&cpu, &cost);
         let (bar, _) = rt.presented("status-bar").unwrap();
         let (right, _) = rt.presented("status-right").unwrap();
         for (key, t) in [("status-cpu", super::super::numbers::cpu_text(&cpu, f.cpu_word)), ("status-cost", super::super::numbers::cost_text(&cost)), ("status-help", if f.help_word { "Help".into() } else { String::new() })] {

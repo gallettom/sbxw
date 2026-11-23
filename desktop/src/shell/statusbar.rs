@@ -11,6 +11,9 @@
 //! already, or opens a read-only popover. Its code stays here so the
 //! window's structure can be rearranged around it.
 //!
+//! At the very left, the versions of sbx and of sbxw as the daemon reports
+//! them (nothing for one it does not know); they hide first.
+//!
 //! What fits ([`fit`]) follows the window's width: the bar never wraps and
 //! never cuts a number. Under a width it drops, in this order, the
 //! bring-up's step label, the word "CPU", the word "Help"; past that the
@@ -159,26 +162,60 @@ pub fn right_w(cpu: &Cpu, cost: &Cost, f: Fit) -> f32 {
 /// What shows at a width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fit {
+    /// The two versions at the far left; the first thing to go.
+    pub versions: bool,
     pub step: bool,
     pub cpu_word: bool,
     pub help_word: bool,
 }
 
+/// The versions' texts, in the order drawn: sbx, then sbxw. One that is
+/// unknown (not sent, empty) is left out, never a placeholder.
+pub fn versions_texts(state: Option<&J>) -> Vec<(&'static str, String)> {
+    let v = state.map(|s| &s["versions"]);
+    [("status-version-sbx", "sbx"), ("status-version-sbxw", "sbxw")]
+        .into_iter()
+        .filter_map(|(key, name)| {
+            let n = v?.get(name)?.as_str()?.trim();
+            (!n.is_empty()).then(|| (key, format!("{name} {n}")))
+        })
+        .collect()
+}
+
+/// What the versions item takes, its gap to the next included: 0 when none.
+pub fn versions_w(v: &[(&'static str, String)]) -> f32 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    ITEM_PX * 2.0 + v.iter().map(|(_, t)| measure(t, 400.0)).sum::<f32>() + INNER * (v.len() - 1) as f32 + GAP
+}
+
 /// What the bar shows `width` points wide: everything when it fits, else
-/// the parts dropped in their order (the step, the word "CPU", the word
-/// "Help") until it does.
-pub fn fit(width: f32, jobs: &[BarJob], cpu: &Cpu, cost: &Cost) -> Fit {
-    let need = |f: Fit| PAD * 2.0 + jobs_w(jobs, f.step) + GAP + right_w(cpu, cost, f);
+/// the parts dropped in their order (the versions, the step, the word
+/// "CPU", the word "Help") until it does. `ver` is [`versions_w`].
+pub fn fit(width: f32, ver: f32, jobs: &[BarJob], cpu: &Cpu, cost: &Cost) -> Fit {
+    let need = |f: Fit| PAD * 2.0 + if f.versions { ver } else { 0.0 } + jobs_w(jobs, f.step) + GAP + right_w(cpu, cost, f);
     let steps = [
-        Fit { step: true, cpu_word: true, help_word: true },
-        Fit { step: false, cpu_word: true, help_word: true },
-        Fit { step: false, cpu_word: false, help_word: true },
-        Fit { step: false, cpu_word: false, help_word: false },
+        Fit { versions: true, step: true, cpu_word: true, help_word: true },
+        Fit { versions: false, step: true, cpu_word: true, help_word: true },
+        Fit { versions: false, step: false, cpu_word: true, help_word: true },
+        Fit { versions: false, step: false, cpu_word: false, help_word: true },
+        Fit { versions: false, step: false, cpu_word: false, help_word: false },
     ];
-    steps.into_iter().find(|f| need(*f) <= width + 0.5).unwrap_or(steps[3])
+    steps.into_iter().find(|f| need(*f) <= width + 0.5).unwrap_or(steps[4])
 }
 
 impl App {
+    /// The versions the daemon sent (its state snapshot), in drawn order.
+    pub(super) fn statusbar_versions(&self) -> Vec<(&'static str, String)> {
+        versions_texts(self.feats.data.get("daemon_state"))
+    }
+
+    /// What shows at this window's width.
+    pub(super) fn statusbar_fit(&self, cpu: &Cpu, cost: &Cost) -> Fit {
+        fit(self.window.0, versions_w(&self.statusbar_versions()), &self.status.jobs, cpu, cost)
+    }
+
     /// The git item as drawn at this fit: item, its text, its sandbox.
     fn statusbar_git_shown(&self, f: Fit, cpu: &Cpu, cost: &Cost) -> Option<(git::Item, String, String)> {
         let i = self.git_item()?;
@@ -190,7 +227,7 @@ impl App {
     /// The git item when the bar draws it.
     fn statusbar_git(&self) -> Option<(git::Item, String, String)> {
         let (cpu, cost) = self.statusbar_numbers();
-        let f = fit(self.window.0, &self.status.jobs, &cpu, &cost);
+        let f = self.statusbar_fit(&cpu, &cost);
         self.statusbar_git_shown(f, &cpu, &cost)
     }
 
@@ -202,12 +239,16 @@ impl App {
         match key {
             "status-bar" | "status-left" | "status-right" | "status-cpu" | "status-cost" | "status-help" | "status-theme" | "status-theme-more" => true,
             "status-jobs" => first.is_some(),
+            "status-versions" | "status-version-sbx" | "status-version-sbxw" => {
+                let (cpu, cost) = self.statusbar_numbers();
+                self.statusbar_fit(&cpu, &cost).versions && self.statusbar_versions().iter().any(|(k, _)| *k == key || key == "status-versions")
+            }
             "status-git" => self.statusbar_git().is_some(),
             "status-jobs-track" | "status-jobs-fill" => first.is_some_and(|j| j.state != BarState::Created),
             "status-jobs-more" => more(&jobs).is_some(),
             "status-jobs-step" => first.is_some() && {
                 let (cpu, cost) = self.statusbar_numbers();
-                fit(self.window.0, &jobs, &cpu, &cost).step
+                fit(self.window.0, versions_w(&self.statusbar_versions()), &jobs, &cpu, &cost).step
             },
             "status-pop-scrim" => self.status.pop.is_some(),
             "status-jobs-pop" => self.status.pop == Some(Pop::Jobs),
@@ -367,7 +408,7 @@ pub fn view(s: &App) -> El {
         (Some(a), Some(b)) => (a.clone(), b.clone()),
         _ => s.statusbar_numbers(),
     };
-    let f = fit(s.window.0, &s.status.jobs, &cpu, &cost);
+    let f = s.statusbar_fit(&cpu, &cost);
     let right = row()
         .key("status-right")
         .gap(GAP)
@@ -377,6 +418,10 @@ pub fn view(s: &App) -> El {
         .child(theme_view(s))
         .child(help_view(f.help_word));
     let mut left = row().key("status-left").grow(1.0).min_w(0.0).h_full().items_center();
+    let versions = s.statusbar_versions();
+    if f.versions && !versions.is_empty() {
+        left = left.child(versions_view(&versions));
+    }
     if let Some(j) = jobs_view(s, f) {
         left = left.child(j);
     }
@@ -395,6 +440,16 @@ pub fn view(s: &App) -> El {
         .child(el().pin(Some(0.0), Some(0.0), Some(0.0), None).h(1.0).fill(c("status-line")))
         .child(left)
         .child(right)
+}
+
+/// The versions (key `status-versions`): plain text from the daemon, caption
+/// size, the secondary colour, one text per version apart by a gap.
+fn versions_view(v: &[(&'static str, String)]) -> El {
+    let mut e = row().key("status-versions").role("status").shrink().h(layout::DENSE_H).px(ITEM_PX).gap(INNER).items_center();
+    for (key, t) in v {
+        e = e.child(text(t.clone()).key(*key).font(screen::body(TEXT, 400.0)).color(c("text-muted")));
+    }
+    e
 }
 
 /// The shown bring-up (key `status-jobs`): its mark, name, step, progress

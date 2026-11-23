@@ -218,7 +218,7 @@ fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16,
     }
     if (method, path) == ("GET", "/api/state") {
         let s = st.data["daemon_state"].clone();
-        return Some((200, if s.is_null() { json!({ "versions": { "sbxw": "stand-in", "sbx": "0.53.0" } }) } else { s }));
+        return Some((200, if s.is_null() { json!({ "versions": { "sbxw": "stand-in", "sbx": "0.54.0" } }) } else { s }));
     }
     if method != "POST" {
         return None;

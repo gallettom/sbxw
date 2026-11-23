@@ -27,15 +27,15 @@ fn the_bar_drops_its_parts_in_order_and_never_wraps() {
     let jobs = vec![job("better-api", BarState::Running, Some("Pulling image 63%"), 0.4, t), job("web", BarState::Running, None, 0.0, t)];
     let cpu = numbers::cpu(Some(&serde_json::json!({ "daemon_cpu_pct": 0.8, "sandboxes": [{ "name": "a", "cpu_pct": 1141.5 }], "total_cpu_pct": 1142.3 })), None, Some(2.0));
     let cost = numbers::Cost { total: Some(1240.5), sandboxes: vec![], unknown: 0 };
-    let all = Fit { step: true, cpu_word: true, help_word: true };
-    assert_eq!(fit(1284.0, &jobs, &cpu, &cost), all);
-    assert_eq!(fit(720.0, &jobs, &cpu, &cost), all);
-    assert_eq!(fit(1284.0, &[], &cpu, &cost), all, "nothing in progress");
+    let all = Fit { versions: true, step: true, cpu_word: true, help_word: true };
+    assert_eq!(fit(1284.0, 0.0, &jobs, &cpu, &cost), all);
+    assert_eq!(fit(720.0, 0.0, &jobs, &cpu, &cost), all);
+    assert_eq!(fit(1284.0, 0.0, &[], &cpu, &cost), all, "nothing in progress");
     // Shrink: the step goes first, then the CPU word, then the Help word.
     let mut last = all;
     let mut order = vec![];
     for w in (60..720).rev() {
-        let f = fit(w as f32, &jobs, &cpu, &cost);
+        let f = fit(w as f32, 0.0, &jobs, &cpu, &cost);
         if f != last {
             order.push(f);
             last = f;
@@ -44,9 +44,9 @@ fn the_bar_drops_its_parts_in_order_and_never_wraps() {
     assert_eq!(
         order,
         [
-            Fit { step: false, cpu_word: true, help_word: true },
-            Fit { step: false, cpu_word: false, help_word: true },
-            Fit { step: false, cpu_word: false, help_word: false },
+            Fit { versions: false, step: false, cpu_word: true, help_word: true },
+            Fit { versions: false, step: false, cpu_word: false, help_word: true },
+            Fit { versions: false, step: false, cpu_word: false, help_word: false },
         ]
     );
 }
@@ -133,7 +133,7 @@ fn the_status_bar_fit_measures_what_is_drawn() {
 
         assert!((bar_r[3] - H).abs() < 0.5 && (bar_r[0] + bar_r[2] - w).abs() < 0.5, "{w}: {bar_r:?}");
         let (cpu, cost) = (rt.state.status.cpu.clone().unwrap(), rt.state.status.cost.clone().unwrap());
-        let f = fit(w, &rt.state.status.jobs, &cpu, &cost);
+        let f = rt.state.statusbar_fit(&cpu, &cost);
         let mut x = None;
         for (key, t) in [("status-cpu", numbers::cpu_text(&cpu, f.cpu_word)), ("status-cost", numbers::cost_text(&cost)), ("status-help", if f.help_word { "Help".into() } else { String::new() })] {
             let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{w}: {key}"));
@@ -290,4 +290,99 @@ fn the_bring_ups_popover_replaces_the_panel() {
         assert_eq!(rt.state.status.pop, Some(Pop::Jobs));
         assert!(rt.state.feats.panel.is_none(), "{w}: nothing docked");
     }
+}
+
+fn versions_state(sbx: Option<&str>, sbxw: Option<&str>) -> serde_json::Value {
+    let mut v = serde_json::Map::new();
+    if let Some(x) = sbx {
+        v.insert("sbx".into(), x.into());
+    }
+    if let Some(x) = sbxw {
+        v.insert("sbxw".into(), x.into());
+    }
+    serde_json::json!({ "versions": v })
+}
+
+#[test]
+fn versions_come_from_the_snapshot_and_unknown_ones_are_left_out() {
+    let both = versions_state(Some("0.54.0"), Some("4.1.3"));
+    let t = versions_texts(Some(&both));
+    assert_eq!(t.iter().map(|(_, s)| s.as_str()).collect::<Vec<_>>(), ["sbx 0.54.0", "sbxw 4.1.3"]);
+    let only = versions_texts(Some(&versions_state(None, Some("4.1.3"))));
+    assert_eq!(only.iter().map(|(_, s)| s.as_str()).collect::<Vec<_>>(), ["sbxw 4.1.3"], "no placeholder for the missing one");
+    assert!(versions_texts(Some(&versions_state(Some(""), None))).is_empty(), "empty is unknown");
+    assert!(versions_texts(Some(&serde_json::json!({}))).is_empty());
+    assert!(versions_texts(None).is_empty(), "daemon not reached");
+    assert_eq!(versions_w(&[]), 0.0);
+}
+
+fn bar_rig(w: f32, state: Option<serde_json::Value>) -> rune::Runtime<App> {
+    use crate::shell::{view, Args};
+    let a = App::new(Args { fixture: Some(format!("{}/fixtures/shell/statusbar-many.json", env!("CARGO_MANIFEST_DIR")).into()), ..Args::default() });
+    let mut rt = rune::Runtime::new(a, view, (w, 480.0), rune::Env::new(true, 1.0));
+    rt.update(|s, _| {
+        match state {
+            Some(v) => s.feats.data.insert("daemon_state".into(), v),
+            None => s.feats.data.remove("daemon_state"),
+        };
+    });
+    for _ in 0..30 {
+        rt.update(|s, _| {
+            s.statusbar_poll(Instant::now());
+        });
+        rt.frame(0.016);
+    }
+    rt
+}
+
+#[test]
+fn the_status_bar_holds_both_versions_at_the_left_and_hides_them_when_absent() {
+    let rt = bar_rig(1284.0, Some(versions_state(Some("0.54.0"), Some("4.1.3"))));
+    let (bar, _) = rt.presented("status-bar").unwrap();
+    assert!((bar[3] - H).abs() < 0.5, "the bar keeps its height: {bar:?}");
+    let (left, _) = rt.presented("status-left").unwrap();
+    let (vs, _) = rt.presented("status-versions").expect("versions drawn");
+    let (a, _) = rt.presented("status-version-sbx").expect("sbx");
+    let (b, _) = rt.presented("status-version-sbxw").expect("sbxw");
+    assert!((vs[0] - left[0]).abs() < 0.5, "first in the left group");
+    assert!(a[0] + a[2] < b[0], "apart by a gap, in order");
+    assert!(vs[3] <= H + 0.5 && b[0] + b[2] <= vs[0] + vs[2] + 0.5);
+    let (jobs, _) = rt.presented("status-jobs").expect("a bring-up");
+    assert!(vs[0] + vs[2] <= jobs[0] + 0.5, "the bring-up follows the versions");
+    assert!(rt.state.statusbar_drawn("status-version-sbx") && rt.state.statusbar_drawn("status-version-sbxw"));
+
+    let rt = bar_rig(1284.0, Some(versions_state(None, Some("4.1.3"))));
+    assert!(rt.presented("status-version-sbx").is_none());
+    assert!(rt.presented("status-version-sbxw").is_some());
+
+    for state in [None, Some(serde_json::json!({}))] {
+        let rt = bar_rig(1284.0, state);
+        assert!(rt.presented("status-versions").is_none() && rt.presented("status-version-sbx").is_none() && rt.presented("status-version-sbxw").is_none());
+        assert!(!rt.state.statusbar_drawn("status-versions"));
+    }
+}
+
+#[test]
+fn the_versions_are_the_first_thing_a_narrow_bar_drops() {
+    let t = Instant::now();
+    let jobs = vec![job("better-api", BarState::Running, Some("Pulling image 63%"), 0.4, t)];
+    let cpu = numbers::cpu(Some(&serde_json::json!({ "daemon_cpu_pct": 0.8, "sandboxes": [], "total_cpu_pct": 0.8 })), None, Some(2.0));
+    let cost = numbers::Cost { total: Some(1240.5), sandboxes: vec![], unknown: 0 };
+    let ver = versions_w(&versions_texts(Some(&versions_state(Some("0.54.0"), Some("4.1.3")))));
+    assert!(ver > 0.0);
+    let mut last = fit(2000.0, ver, &jobs, &cpu, &cost);
+    assert!(last.versions && last.step);
+    let mut order = vec![];
+    for w in (60..2000).rev() {
+        let f = fit(w as f32, ver, &jobs, &cpu, &cost);
+        if f != last {
+            order.push(f);
+            last = f;
+        }
+    }
+    assert_eq!(order[0], Fit { versions: false, step: true, cpu_word: true, help_word: true }, "versions first, the step still shown");
+    assert_eq!(order.len(), 4);
+    // The width where they go is exactly what they take.
+    let wide = fit(2000.0, 0.0, &jobs, &cpu, &cost);
+    assert!(!wide.versions || wide.step);
 }
