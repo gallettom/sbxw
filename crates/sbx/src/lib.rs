@@ -25,6 +25,7 @@
 //! sbx policy allow|deny network [--sandbox N] [--method M,…] [--path GLOB] [--query K=V]… RESOURCES
 //! sbx policy ls [N] [--wide] · sbx policy log [N]   (N positional here)
 //! sbx policy rm network --id RULE_ID [--sandbox N] --force
+//! sbx policy check network [--sandbox N] TARGET   (0.54; argument shape unverified)
 //! sbx secret set [--sandbox N] SERVICE [--force]  (value on stdin)
 //! sbx kit add N REF                           (recreates the container; startup commands too)
 //! sbx env create PATH… --name N [--env-arg K=V]…   (shows a plan and asks)
@@ -147,9 +148,9 @@ pub fn denied_hosts(said: &str) -> Vec<String> {
                 continue;
             }
             if let Ok(h) = sbxw_core::policy::clean_host(&sbxw_core::policy::allow_resource(word)) {
-                // A dotted word ending in a file suffix or a version is not a host.
+                // clean_host refuses an address or a version; a file is not a host either.
                 let last = h.rsplit('.').next().unwrap_or("");
-                if (last.chars().all(|c| c.is_ascii_digit()) && !sbxw_core::hosts::is_ipv4_literal(&h)) || ["json", "yaml", "yml", "log", "sh", "go"].contains(&last) {
+                if ["json", "yaml", "yml", "log", "sh", "go"].contains(&last) {
                     continue;
                 }
                 if !out.contains(&h) {
@@ -669,6 +670,50 @@ pub fn assigned_host_port(said: &str, host_ip: &str, sandbox_port: u16) -> Optio
         .find(|p| *p != 0)
 }
 
+/// What `sbx policy check network` (0.54) said of one target: `allowed`
+/// and the `rule` that decided, when its answer says so, and `raw`, its
+/// answer as printed, always.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PolicyCheck {
+    pub allowed: Option<bool>,
+    pub rule: Option<String>,
+    pub raw: String,
+}
+
+/// The release that added `sbx policy check network`.
+pub const POLICY_CHECK_SINCE: (u32, u32, u32) = (0, 54, 0);
+
+/// [`PolicyCheck`] out of `raw`: a JSON object (`allowed` or `decision`,
+/// `rule`/`rule_id`/`rule_name`/`id`, or a nested `rule.name|id`), else
+/// text: `allow`/`deny` words and the word after `rule`. Not documented.
+pub fn parse_policy_check(raw: &str) -> PolicyCheck {
+    let mut c = PolicyCheck { raw: raw.trim().to_string(), ..Default::default() };
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim()) {
+        let text = |v: &serde_json::Value, keys: &[&str]| keys.iter().find_map(|k| v.get(*k).and_then(|x| x.as_str())).map(String::from);
+        c.allowed = v.get("allowed").and_then(|a| a.as_bool()).or_else(|| {
+            let d = text(&v, &["decision", "action", "result"])?.to_ascii_lowercase();
+            d.starts_with("allow").then_some(true).or(d.starts_with("den").then_some(false).or(d.starts_with("block").then_some(false)))
+        });
+        c.rule = text(&v, &["rule_name", "rule", "rule_id", "id"]).or_else(|| v.get("rule").and_then(|r| text(r, &["name", "id"])));
+        return c;
+    }
+    let lower = raw.to_ascii_lowercase();
+    c.allowed = if lower.contains("denied") || lower.contains("blocked") || lower.contains("not allowed") {
+        Some(false)
+    } else if lower.contains("allowed") {
+        Some(true)
+    } else {
+        None
+    };
+    let words: Vec<&str> = raw.split_whitespace().collect();
+    c.rule = words
+        .windows(2)
+        .find(|w| w[0].trim_matches(|ch: char| matches!(ch, ':' | '(' | ',')).eq_ignore_ascii_case("rule"))
+        .map(|w| w[1].trim_matches(|ch: char| matches!(ch, '"' | '\'' | '`' | ',' | '.' | '(' | ')')).to_string())
+        .filter(|r| !r.is_empty());
+    c
+}
+
 /// Did sbx refuse because it wanted a yes it could not ask for?
 pub fn wants_confirmation(err: &str) -> bool {
     let e = err.to_lowercase();
@@ -1086,6 +1131,27 @@ impl Sbx {
             }
         }
         (self.policy_view(s(&["policy", "log", sandbox.as_str()]), s(&["policy", "log"]), sandbox).await, None)
+    }
+
+    /// Which rule lets the sandbox (or, with `None`, every sandbox) reach
+    /// `target` (`host` or `host:port`, checked before it reaches argv):
+    /// `sbx policy check network [--sandbox N] TARGET`, the shape of `policy
+    /// allow network`, on 0.54 only.
+    pub async fn policy_check(&self, sandbox: Option<&SandboxName>, target: &str) -> Result<PolicyCheck> {
+        let (host, port) = match target.rsplit_once(':') {
+            Some((h, p)) if p.parse::<u16>().is_ok_and(|p| p != 0) => (h, Some(p)),
+            _ => (target, None),
+        };
+        let host = sbxw_core::policy::clean_host(host).map_err(|e| anyhow!("not a target: {e}"))?;
+        if !self.known_version().await.is_some_and(|v| v >= POLICY_CHECK_SINCE) {
+            bail!("`sbx policy check` needs sbx 0.54 or newer");
+        }
+        let mut a = s(&["policy", "check", "network"]);
+        if let Some(n) = sandbox {
+            a.extend(["--sandbox".into(), n.to_string()]);
+        }
+        a.push(port.map_or(host.clone(), |p| format!("{host}:{p}")));
+        Ok(parse_policy_check(&self.capture(a).await?))
     }
 
     /// `sbx policy refresh`: re-read policy now, e.g. after an AI
@@ -2071,5 +2137,35 @@ mod tests {
         let b = Sbx::new(fake.clone()).blocked_since(&sb("n"), "2026-11-23T10:00:00Z").await;
         assert_eq!(b.iter().map(|b| b.resource.as_str()).collect::<Vec<_>>(), ["pypi.org"]);
         assert_eq!(fake.log(), ["policy log n --format json"]);
+    }
+
+    #[tokio::test]
+    async fn policy_check_names_the_rule_on_0_54_only() {
+        let fake = Fake::new(|a| match a[0].as_str() {
+            "--version" => Output::ok("sbx version 0.54.0"),
+            _ => Output::ok("ALLOWED pypi.org:443 by rule b-12 (allow network pypi.org, sandbox n)\n"),
+        });
+        let sbx = Sbx::new(fake.clone());
+        let c = sbx.policy_check(Some(&sb("n")), "pypi.org:443").await.unwrap();
+        assert_eq!((c.allowed, c.rule.as_deref()), (Some(true), Some("b-12")));
+        assert_eq!(fake.log()[1], "policy check network --sandbox n pypi.org:443");
+        for bad in ["--force", "a b", "pypi.org:x:1", "", "*.org"] {
+            assert!(sbx.policy_check(None, bad).await.is_err(), "{bad:?}");
+        }
+        assert_eq!(fake.log().len(), 2, "a bad target never reaches sbx");
+        let old = Sbx::new(Fake::new(|_| Output::ok("sbx version 0.53.1")));
+        assert!(format!("{:#}", old.policy_check(None, "pypi.org").await.unwrap_err()).contains("0.54"));
+    }
+
+    #[test]
+    fn a_policy_check_answer_is_read_as_json_or_text() {
+        let j = parse_policy_check(r#"{"target":"x.com:443","decision":"allow","rule":{"id":"r-1","name":"balanced: x.com"}}"#);
+        assert_eq!((j.allowed, j.rule.as_deref()), (Some(true), Some("balanced: x.com")));
+        let j = parse_policy_check(r#"{"allowed":false,"rule_id":"default-deny-all"}"#);
+        assert_eq!((j.allowed, j.rule.as_deref()), (Some(false), Some("default-deny-all")));
+        let t = parse_policy_check("x.com: blocked (rule: default-deny-all)");
+        assert_eq!((t.allowed, t.rule.as_deref()), (Some(false), Some("default-deny-all")));
+        let t = parse_policy_check("something else");
+        assert_eq!((t.allowed, t.rule, t.raw.as_str()), (None, None, "something else"), "kept as printed");
     }
 }
