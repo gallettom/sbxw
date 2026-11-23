@@ -3612,7 +3612,8 @@ fn grip(n: usize) -> El {
 /// `lead_end`, the same dialog): on, the purple pill of the old "Team on"
 /// chip (the purple tone's tint and text, the chip's radius and height) with
 /// the leader icon (`pane-<n>-leader`) before the name; off, a quiet
-/// outlined pill, no icon. Without one (a thread, a stopped sandbox, a kit)
+/// outlined pill with the same icon muted (`pane-<n>-team-icon`), so the
+/// pill reads as the team switch without a hover. Without one (a thread, a stopped sandbox, a kit)
 /// it is plain text, the leader mark before it when the session leads.
 fn name_pill(s: &App, i: usize, label: &str, team: Option<&bar::TeamToggle>, leads: bool, name_min: f32, ground: u32) -> El {
     let n = i + 1;
@@ -3623,6 +3624,9 @@ fn name_pill(s: &App, i: usize, label: &str, team: Option<&bar::TeamToggle>, lea
     let ink = if on { theme::hex(purple) } else { c(plain) };
     let name = text(label.to_string()).font(small(bar::NAME_TEXT, 500.0)).color(ink.clone()).truncate().shrink().min_w(name_min);
     let mark = || el().key(format!("pane-{n}-leader")).label("Team leader").w(LEADER_MARK).h(LEADER_MARK).child(rune::icon(crate::icons::get("leader").unwrap(), LEADER_MARK).color(ink.clone()));
+    // Off: the same icon, muted, under its own key (`pane-<n>-leader` means
+    // "this session leads"), so the pill reads as a team switch without a hover.
+    let off_mark = || el().key(format!("pane-{n}-team-icon")).w(LEADER_MARK).h(LEADER_MARK).child(rune::icon(crate::icons::get("leader").unwrap(), LEADER_MARK).color(c("text-muted")));
     let Some(t) = team else {
         let mut r = row().gap(bar::PANE_GAP).items_center().min_w(0.0).shrink();
         if leads {
@@ -3632,7 +3636,7 @@ fn name_pill(s: &App, i: usize, label: &str, team: Option<&bar::TeamToggle>, lea
     };
     let pad = bar::name_pad(Some(t), leads);
     let mut b = row().key(format!("pane-{n}-name")).gap(bar::CHIP_GAP).px(bar::CHIP_PX).h(layout::DENSE_H).items_center().min_w(name_min + pad).shrink().radius(theme::radius("xs").unwrap());
-    b = if on { b.fill(theme::hex(purple_tint)).child(mark()) } else { b.border(1.0, theme::hex(theme::over(theme::color_value("text").unwrap(), 0.18, ground))) };
+    b = if on { b.fill(theme::hex(purple_tint)).child(mark()) } else { b.border(1.0, theme::hex(theme::over(theme::color_value("text").unwrap(), 0.18, ground))).child(off_mark()) };
     let hover = if on { c("active-bg") } else { c("elevated") };
     let (intent, args) = t.intent.clone();
     b.child(name)

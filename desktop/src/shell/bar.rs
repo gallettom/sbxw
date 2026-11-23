@@ -347,13 +347,12 @@ pub fn take_team(items: &mut Vec<Item>) -> Option<TeamToggle> {
     Some(TeamToggle { on: intent.0 == LEAD_END, intent })
 }
 
-/// What the name pill adds around the name: its padding, and with team
-/// mode on the leader icon and its gap. Plain text (no toggle): the
+/// What the name pill adds around the name: its padding, and the leader
+/// icon and its gap (purple when team mode is on, muted when off). Plain text (no toggle): the
 /// leader mark and its gap when `leads`, else nothing.
 pub fn name_pad(team: Option<&TeamToggle>, leads: bool) -> f32 {
     match team {
-        Some(t) if t.on => CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP,
-        Some(_) => CHIP_PX * 2.0,
+        Some(_) => CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP,
         None if leads => CHIP_ICON + PANE_GAP,
         None => 0.0,
     }
@@ -837,7 +836,7 @@ mod tests {
         assert_eq!(name_label("sbxw-2", &t), "sbxw-2, team mode off");
         assert!(name_help("sbxw-2", &t).contains("Team mode is off: press to turn it on"));
         // Off: the pill's padding, no icon; on: the icon and its gap too.
-        assert_eq!(name_pad(Some(&t), false), CHIP_PX * 2.0);
+        assert_eq!(name_pad(Some(&t), false), CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP, "off: the muted icon too");
         assert_eq!(name_pad(Some(&TeamToggle { on: true, ..t }), true), CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP);
     }
 
