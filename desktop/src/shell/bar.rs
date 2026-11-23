@@ -523,7 +523,7 @@ mod tests {
     fn many() -> Vec<Item> {
         vec![
             ex("browser", "Browser", "muted", None),
-            ex("env", "Env", "muted", None),
+            ex("dictate", "Dictate", "muted", None),
             ex("project", "Project", "muted", None),
             ex("approvals", "sbx asks", "muted", Some(2)),
             ex("lead", "Team", "muted", None),
@@ -545,15 +545,65 @@ mod tests {
         let get = |id: &str| tones.iter().find(|(i, _)| *i == id).unwrap().1.clone();
         assert_eq!((get("interrupt"), get("remote"), get("threads"), get("lead"), get("browser"), get("project")), ("red".into(), "blue".into(), "blue".into(), "purple".into(), "blue".into(), "blue".into()));
         assert_eq!(get("plan"), "amber", "a toned extra keeps its own tone");
-        assert_eq!(get("env"), "neutral");
+        assert_eq!(get("dictate"), "neutral");
     }
 
     #[test]
     fn what_needs_the_person_goes_first() {
         let order = by_priority(many());
-        assert_eq!(ids(&order), ["plan", "approvals", "browser", "env", "project", "lead", "interrupt", "remote", "threads"]);
+        assert_eq!(ids(&order), ["plan", "approvals", "browser", "dictate", "project", "lead", "interrupt", "remote", "threads"]);
         assert_eq!(rank("red", None), 2, "red is danger (Close thread), not attention");
         assert_eq!(rank("green", None), 1);
+    }
+
+    /// Env is a row of the "⋯" menu at every width; the microphone stands
+    /// where it stood, drawn as its icon alone.
+    #[test]
+    fn env_is_in_the_menu_and_the_microphone_in_its_place() {
+        let mut items = many();
+        items.push(ex("envfile", "Env", "muted", None));
+        for width in [1400.0, 700.0, 300.0] {
+            let f = pane_fit(width, "test-sbx", Some("Claude"), items.clone(), true);
+            assert!(f.hidden.iter().any(|i| i.id == "envfile") && f.shown.iter().all(|i| i.id != "envfile"), "{width}");
+        }
+        let wide = pane_fit(1400.0, "test-sbx", Some("Claude"), items, true);
+        assert!(wide.shown.iter().any(|i| i.id == DICTATE));
+        let mic = ex(DICTATE, "Dictate", "muted", None);
+        assert_eq!(mic.chip_text(), "", "the icon alone; its word names it");
+        assert_eq!(chip_w(&mic), CHIP_PX * 2.0 + CHIP_ICON);
+    }
+
+    /// An item the rail offers too may show inline (it says something
+    /// there), never in the menu.
+    #[test]
+    fn what_the_rail_offers_never_goes_into_the_menu() {
+        let mut items = many();
+        for it in items.iter_mut().filter(|i| i.id == "approvals") {
+            it.elsewhere = true;
+        }
+        let wide = pane_fit(1400.0, "test-sbx", Some("Claude"), items.clone(), true);
+        assert!(wide.shown.iter().any(|i| i.id == "approvals"), "inline while it fits");
+        let narrow = pane_fit(200.0, "test-sbx", Some("Claude"), items, true);
+        assert!(narrow.shown.iter().chain(&narrow.hidden).all(|i| i.id != "approvals"), "not in the menu: {:?}", ids(&narrow.hidden));
+    }
+
+    /// The rule, from the intents' declarations.
+    #[test]
+    fn the_same_view_is_read_from_the_intents() {
+        let i = |n: &str, a: J| (n.to_string(), a);
+        let web = serde_json::json!({ "sandbox": "web" });
+        // The same intent, the rail's on every sandbox, the pane's on its own.
+        assert!(same_view(&i("network_show", web.clone()), &i("network_show", serde_json::json!({})), Some("network")));
+        assert!(same_view(&i("commits_show", web.clone()), &i("commits_show", serde_json::json!({})), Some("commits")));
+        assert!(!same_view(&i("network_show", web.clone()), &i("network_show", serde_json::json!({ "sandbox": "api" })), None), "another sandbox");
+        // The screen of the feature that owns the pane's intent.
+        assert!(same_view(&i("skills_show", web.clone()), &i("open_panel", serde_json::json!({ "screen": "skills" })), Some("skills")));
+        assert!(same_view(&i("mcp_show", web.clone()), &i("open_panel", serde_json::json!({ "screen": "mcp" })), Some("mcp")));
+        assert!(!same_view(&i("skills_show", web.clone()), &i("open_panel", serde_json::json!({ "screen": "mcp" })), Some("mcp")));
+        // An action that needs its sandbox is the pane's own.
+        assert!(!same_view(&i("files_open", web.clone()), &i("files_show", serde_json::json!({})), Some("files")), "Project: the files of this sandbox");
+        assert!(!same_view(&i("envfile_show", web.clone()), &i("envfile_show", web.clone()), None));
+        assert!(!same_view(&i("browser_open", web.clone()), &i("browser_open", web), None));
     }
 
     #[test]

@@ -4179,6 +4179,42 @@ mod tests {
     /// name and close button are inside the pane, the extras that do not fit
     /// are in one menu whose items keep their keys and run their intents,
     /// and the top bar's parts stay inside the window.
+    /// Every extra a feature places on a pane, and its dictation button,
+    /// has a visible entry point: inline in the bar, a row of its "⋯" menu,
+    /// a rail entry drawn (or folded into the rail's "More"), or a row of
+    /// the sidebar shown (its menu lists every extra with an intent).
+    fn every_pane_action_is_reachable(rt: &rune::Runtime<App>, what: &str) {
+        let s = &rt.state;
+        let l = s.rail_layout();
+        let rail: Vec<(&rail::Entry, bool)> = l.top.iter().chain(&l.bottom).map(|e| (e, true)).chain(l.folded.iter().map(|e| (e, false))).collect();
+        let mut walked = 0;
+        for (i, p) in s.panes.iter().enumerate() {
+            let Some(sb) = p.sandbox.clone() else { continue };
+            let f = s.pane_fit(i).unwrap();
+            let on_pane = |id: &str| f.shown.iter().chain(&f.hidden).any(|it| it.id == id);
+            assert!(on_pane(bar::DICTATE), "{what}: pane {}: the microphone", i + 1);
+            for it in s.pane_items(&sb, p.thread.as_deref()) {
+                walked += 1;
+                if on_pane(&it.id) {
+                    continue;
+                }
+                let own = it.intent.clone().unwrap_or_else(|| panic!("{what}: pane {}: {} is on no bar and has no intent", i + 1, it.id));
+                let by_rail = rail.iter().any(|(e, drawn)| {
+                    let (other, screen) = match &e.run {
+                        rail::RailRun::Intent(n, a) => ((n.clone(), a.clone()), None),
+                        rail::RailRun::Toggle { name, args, screen } => ((name.clone(), args.clone()), Some(screen.as_str())),
+                        _ => return false,
+                    };
+                    bar::same_view(&own, &other, screen) && s.rail_drawn(if *drawn { e.key.as_str() } else { "rail-more" })
+                });
+                let row = crate::feat::Place::Sandbox(sb.clone());
+                let by_sidebar = s.sidebar_shown() && s.feats.pane_extras.iter().any(|e| e.place == row && e.intent.as_ref() == Some(&own));
+                assert!(by_rail || by_sidebar, "{what}: pane {}: {} ({own:?}) is on neither the bar, its menu, the rail nor the sidebar", i + 1, it.id);
+            }
+        }
+        assert!(walked > 10, "{what}: the fixture puts extras on the panes ({walked})");
+    }
+
     #[test]
     fn pane_bars_keep_their_name_and_close_button_and_overflow_into_a_menu() {
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/panebar-4.json");
@@ -4279,18 +4315,52 @@ mod tests {
                 let f = rt.state.pane_fit(0).unwrap();
                 assert!(f.hidden.iter().chain(&f.shown).take(3).any(|i| i.tone == "amber"), "{:?}", f.hidden);
                 tap(&mut rt, "pane-1-more");
-                assert!(rt.state.drawn("pane-1-more-list") && rt.state.drawn("pane-1-x-approvals"), "open: drawn, wait: marks see it");
+                assert!(rt.state.drawn("pane-1-more-list") && rt.state.drawn("pane-1-x-envfile"), "open: drawn, wait: marks see it");
+                // sbx's requests are the rail's Network: never a row of this menu.
+                assert!(!rt.state.drawn("pane-1-x-approvals"), "the rail's Network is not listed again");
                 let (r, _) = rt.presented("pane-1-more-list").unwrap();
                 assert!(r[0] >= 0.0 && r[0] + r[2] <= w + 0.5 && r[1] >= 0.0 && r[1] + r[3] <= h + 0.5, "menu {r:?} inside the window");
-                // Its item runs the same intent as the chip: the Network panel on test-sbx.
-                tap(&mut rt, "pane-1-x-approvals");
+                // Its row runs the extra's intent: the environment file of test-sbx.
+                // The menu-only rows come last: the list scrolls to them.
+                for _ in 0..20 {
+                    let (env, _) = rt.presented("pane-1-x-envfile").unwrap();
+                    if env[1] + env[3] <= r[1] + r[3] {
+                        break;
+                    }
+                    rt.wheel(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0, -60.0);
+                    rt.frame(0.05);
+                }
+                tap(&mut rt, "pane-1-x-envfile");
+                for _ in 0..3 {
+                    rt.update(|s, tx| {
+                        s.poll(0.0, tx);
+                    });
+                    rt.frame(0.016);
+                }
                 assert_eq!(rt.state.bar_menu, None);
-                assert_eq!(rt.state.feats.data.get("network_for").and_then(J::as_str), Some("test-sbx"));
+                assert_eq!(rt.state.feats.modal.as_ref().map(|m| m.0.as_str()), Some("envfile"));
+                assert_eq!(rt.state.feats.data.get("envfile").map(|e| e["sandbox"].clone()), Some(J::from("test-sbx")));
+                rt.update(|s, _| {
+                    s.feats.modal = None;
+                    s.push_data();
+                });
+                rt.frame(0.016);
                 // Escape closes it too.
                 tap(&mut rt, "pane-1-more");
                 rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
                 rt.frame(0.016);
                 assert!(!rt.state.drawn("pane-1-more-list"));
+            }
+            // Nothing a pane offered became unreachable, sidebar shown or hidden.
+            every_pane_action_is_reachable(&rt, &format!("{w}, sidebar shown"));
+            rt.update(|s, _| s.set_sidebar(false));
+            for _ in 0..4 {
+                rt.frame(0.016);
+            }
+            every_pane_action_is_reachable(&rt, &format!("{w}, sidebar hidden"));
+            rt.update(|s, _| s.set_sidebar(true));
+            for _ in 0..4 {
+                rt.frame(0.016);
             }
             // The top bar: nothing leaves the window.
             for key in ["jarvis-toggle", "pager-per", "pager-view-grid"] {

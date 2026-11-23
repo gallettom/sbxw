@@ -685,3 +685,68 @@ fn sessions_has_no_head_band_and_files_keeps_its_head() {
     assert!(head[1] - over[1] >= 8.0 && head[3] >= crate::theme::layout::CONTROL_H - 0.5, "{head:?} in {over:?}");
     assert!(rt.presented("overlay-close").is_some(), "Files keeps its close cross");
 }
+
+// The pane bar's microphone (`pane-<n>-dictate`): the same path as F9 held
+// in that terminal, started by a press and stopped by a second one.
+
+fn mic(rt: &mut rune::Runtime<App>, n: usize) {
+    // Two panes side by side: the sidebar hidden, each bar has room for it.
+    if rt.state.sidebar_shown() {
+        rt.update(|s, _| s.set_sidebar(false));
+        settle(rt, 3);
+    }
+    let (x, y) = rt.find(&format!("pane-{n}-dictate")).unwrap_or_else(|| panic!("pane {n}'s microphone drawn: {:?} {:?}", rt.state.pane_fit(n - 1).map(|f| (f.shown.iter().map(|i| i.id.clone()).collect::<Vec<_>>(), f.hidden.iter().map(|i| i.id.clone()).collect::<Vec<_>>())), rt.state.bar_width(n - 1)));
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(rt, 4);
+}
+
+#[test]
+fn the_pane_microphone_types_masked_words_into_its_terminal_only() {
+    let (mut rt, rx, rx2) = voice_window();
+    // Pane 2's microphone: pane 2 gets the keyboard, and records.
+    mic(&mut rt, 2);
+    assert!(rt.state.dictation.on.as_ref().is_some_and(|t| t.term.as_ref().is_some_and(|(p, _)| *p == 1) && !t.held), "recording into pane 2 by a press: {}", dictation_notice(&rt));
+    assert_eq!(rt.state.focused, 1);
+    assert_eq!(rt.state.pane_dictate_state(1), super::dictate::PaneDictate::Recording);
+    assert!(matches!(rt.state.pane_dictate_state(0), super::dictate::PaneDictate::Off(_)), "one capture at a time");
+    // Pressed again: stopped, the words typed there, never Enter.
+    mic(&mut rt, 2);
+    settle(&mut rt, 4);
+    assert!(rt.state.dictation.on.is_none() && rt.state.dictation.pending.is_none(), "{}", dictation_notice(&rt));
+    let got = String::from_utf8(sent(&rx2)).unwrap();
+    assert!(got.contains("please send the report to [email] today"), "{got:?} {}", dictation_notice(&rt));
+    assert!(!got.contains('\r') && !got.contains('\n'), "no Enter: {got:?}");
+    assert_eq!(sent(&rx), b"", "the other terminal gets nothing");
+}
+
+#[test]
+fn the_pane_microphone_follows_the_gates_and_says_why_it_is_off() {
+    use super::dictate::PaneDictate;
+    // A modal over the panes: disabled, nothing records, nothing typed.
+    let (mut rt, rx, _rx2) = voice_window();
+    assert_eq!(rt.state.pane_dictate_state(0), PaneDictate::Ready);
+    rt.update(|s, _| s.open_modal("templates", J::Null));
+    settle(&mut rt, 2);
+    assert!(matches!(rt.state.pane_dictate_state(0), PaneDictate::Off(w) if w.contains("open over the panes")));
+    rt.update(|s, _| s.dictate_pane_press(0));
+    settle(&mut rt, 2);
+    assert!(rt.state.dictation.on.is_none());
+    assert_eq!(sent(&rx), b"");
+    // Voice not installed: the reason F9 would get.
+    let (mut rt, _rx, _rx2) = voice_window();
+    rt.update(|s, _| s.jarvis.voice.as_mut().unwrap()["ready"] = false.into());
+    assert!(matches!(rt.state.pane_dictate_state(0), PaneDictate::Off(w) if w.contains("voice is not installed")));
+    // Recording, then the keyboard leaves the pane: cancelled, as with F9.
+    let (mut rt, rx, rx2) = voice_window();
+    mic(&mut rt, 1);
+    assert!(rt.state.dictation.on.is_some());
+    rt.update(|s, tx| {
+        s.focused = 1;
+        tx.focus("grid-2", false);
+    });
+    settle(&mut rt, 2);
+    assert!(rt.state.dictation.on.is_none() && dictation_notice(&rt).contains("cancelled"), "{}", dictation_notice(&rt));
+    assert_eq!(sent(&rx), b"");
+    assert_eq!(sent(&rx2), b"");
+}
