@@ -256,29 +256,71 @@ local function rules_view(sb, policy, state)
   return column(out)
 end
 
-local function log_view(policy)
+-- sbx's answer to "Why?" (data.network_why), under the host it was asked
+-- for. Every word of it is sbx's, set as text. The remove button is the
+-- rules list's own (the same intents), only for a rule id the panel lists.
+local function why_view(w)
+  local out = { gap = 4, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = "elevated", key = "why-answer" }
+  local head = row{ gap = 8, w = "full",
+    text{ "Why " .. (w.target or "") .. "?", size = "sm", weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
+    button{ icon = "close", variant = "ghost", dense = true, on = "why_close", key = "why-close", help = "Hide" },
+  }
+  table.insert(out, head)
+  if w.busy then
+    table.insert(out, note("Asking sbx…"))
+  elseif w.error then
+    table.insert(out, note(w.error, "red"))
+  elseif w.supported == false then
+    table.insert(out, note(w.note or "needs sbx 0.54", "text-muted"))
+  else
+    local verdict = w.allowed == true and badge{ "allowed", tone = "green" } or (w.allowed == false and badge{ "denied", tone = "red" } or badge{ "sbx does not say", tone = "neutral" })
+    table.insert(out, row{ gap = 8, w = "full",
+      verdict,
+      text{ w.rule and ("Rule: " .. w.rule) or "No rule named", size = "sm", mono = w.rule ~= nil, color = "text", truncate = true, grow = 1, key = "why-rule" },
+      (w.rule_id and w.removable) and button{ "Remove rule", icon = "close", variant = "ghost", tone = "red", on = w.removable == "rule_rm" and "rule_rm" or "unblock", arg = w.rule_id,
+        key = "why-rm", help = "Remove rule " .. w.rule_id .. " (the rules list's remove)" } or false,
+    })
+    if (w.raw or "") ~= "" then
+      table.insert(out, text{ w.raw, size = "xs", mono = true, color = "text-muted", wrap = true, key = "why-raw" })
+    end
+  end
+  return column(out)
+end
+
+local function log_view(sb, policy, why)
   local v = policy.log or {}
   if v.error or not v.rows or #v.rows == 0 then return false end
   local items = {}
   for i, r in ipairs(v.rows) do
     if i > 12 then break end
     local action = string.lower(at(v, r, "action"))
+    local host = at(v, r, "host")
     table.insert(items, row{ gap = 8, w = "full",
       text{ at(v, r, "time"), size = "xs", color = "text-muted" },
       badge{ action ~= "" and action or "?", tone = action == "allow" and "green" or (action == "deny" and "red" or "neutral") },
-      text{ at(v, r, "host"), mono = true, size = "sm", color = "text", truncate = true, grow = 1 },
+      text{ host, mono = true, size = "sm", color = "text", truncate = true, grow = 1 },
+      (action == "allow" and host ~= "") and button{ "Why?", variant = "ghost", tone = "blue", dense = true, on = "why", arg = host, key = "why-" .. host,
+        busy = (why and why.target == host and why.busy) and true or false,
+        help = "Ask sbx which rule let " .. host .. " through (sbx policy check, sbx 0.54)" } or false,
     })
+    if why and why.sandbox == sb and why.target == host then
+      table.insert(items, why_view(why))
+    end
   end
   return column{ gap = 4, w = "full", section("Recent egress", #v.rows), list(items) }
 end
 
-local function ports_view(sb, ports, hosts, state)
+local function ports_view(sb, ports, hosts, state, pub)
   local list_ = (ports or {}).ports or {}
   local items = {}
+  -- The last publish's answer for this sandbox (data.network_publish).
+  if not (pub and pub.sandbox == sb) then pub = nil end
   for _, p in ipairs(list_) do
-    table.insert(items, row{ gap = 8, w = "full",
+    local picked = pub and pub.assigned and pub.host_port == p.host_port and pub.sandbox_port == p.sandbox_port
+    table.insert(items, row{ gap = 8, w = "full", key = "port-" .. p.spec,
       text{ tostring(p.sandbox_port), weight = "semibold", color = "text-bright" },
       text{ "→ " .. (p.host_ip or "") .. ":" .. tostring(p.host_port), mono = true, size = "sm", color = "text-muted", grow = 1 },
+      picked and badge{ "sbx picked", tone = "blue", help = "sbx chose host port " .. tostring(p.host_port) .. " (no host port was given)", key = "port-picked-" .. p.spec } or false,
       badge{ p.proto or "tcp", tone = "neutral" },
       button{ "Open", icon = "link", variant = "ghost", tone = "blue", on = "port_open", arg = p.spec, key = "port-open-" .. p.spec, help = "Open in the browser" },
       button{ icon = "close", variant = "ghost", tone = "red", on = "port_rm", arg = p.spec, key = "port-rm-" .. p.spec, help = "Unpublish" },
@@ -296,9 +338,21 @@ local function ports_view(sb, ports, hosts, state)
       input{ id = "port-alias", value = state.alias, placeholder = "alias (optional)", on = "alias" },
     },
     row{ gap = 8, w = "full", spacer{},
-      button{ "Publish", icon = "plus", tone = "green", on = "publish", disabled = tonumber(state.sport or "") == nil, key = "port-publish" },
+      button{ "Publish", icon = "plus", tone = "green", on = "publish", key = "port-publish",
+        busy = (pub and pub.busy) and true or false, disabled = tonumber(state.sport or "") == nil and not (pub and pub.busy),
+        help = "Leave the host port empty: sbx picks a free one (sbx 0.54)" },
     },
   })
+  if pub and not pub.busy then
+    if pub.error then
+      table.insert(out, note("Not published: " .. pub.error, "red"))
+    elseif pub.host_port then
+      table.insert(out, text{ "Published " .. tostring(pub.sandbox_port) .. " on " .. (pub.host_ip or "") .. ":" .. tostring(pub.host_port)
+        .. (pub.assigned and ", the port sbx picked." or ".") .. (pub.forwarded_port and (" Here: 127.0.0.1:" .. tostring(pub.forwarded_port) .. ".") or ""),
+        size = "sm", color = "text-muted", wrap = true, key = "port-published" })
+    end
+    if pub.note then table.insert(out, note(pub.note, "amber")) end
+  end
   local h = hosts or {}
   if #h > 0 then
     local hi = {}
@@ -339,7 +393,7 @@ return {
         local b = blocked_view(sb, policy)
         if b then table.insert(body, b) end
         table.insert(body, rules_view(sb, policy, state))
-        local l = log_view(policy)
+        local l = log_view(sb, policy, data.network_why)
         if l then table.insert(body, l) end
         local allow = policy.configured_allow or {}
         if #allow > 0 then
@@ -349,7 +403,7 @@ return {
           button{ "Re-read policy now", icon = "reload", variant = "ghost", on = "policy_refresh", key = "policy-refresh", help = "sbx policy refresh" } })
       end
       table.insert(body, divider{})
-      table.insert(body, ports_view(sb, data.network_ports, data.network_hosts, state))
+      table.insert(body, ports_view(sb, data.network_ports, data.network_hosts, state, data.network_publish))
     else
       table.insert(body, note("Choose a running sandbox to see its network policy and ports."))
     end
@@ -381,6 +435,8 @@ return {
       state.res = ""
       return intent(state.decision == "deny" and "network_deny" or "network_allow", args)
     end,
+    why = function(_, host) return intent("network_why", { sandbox = current, target = host }) end,
+    why_close = function() return intent("network_why_close") end,
     port_open = function(_, spec) return intent("port_open", { sandbox = current, spec = spec }) end,
     port_rm = function(_, spec) return intent("port_unpublish", { sandbox = current, spec = spec }) end,
     publish = function(state)

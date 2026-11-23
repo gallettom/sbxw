@@ -339,3 +339,47 @@ fn every_intent_of_the_three_panels_is_described_in_the_screen_doc() {
         assert!(!s.doc.is_empty());
     }
 }
+
+// ---- sbx 0.54: the SSH card's reminder ----
+
+#[test]
+fn the_ssh_card_asks_for_the_rewrite_until_it_is_done() {
+    let src = include_str!("../../../screens/setup.luau");
+    let due = json!({ "ok": true, "configured": true, "refresh_due": true, "sbx": "0.54.0", "refreshed_at": "0.53.2" });
+    // Shown: the sentence, the button, the setup entry amber.
+    let (t, _) = render_panel("setup", src, "full", json!({ "ssh": due }));
+    let all = t.join("\n");
+    assert!(all.contains("SSH access to sandboxes") && all.contains("sbx 0.54 asks to rewrite the SSH configuration") && all.contains("ssh-setup"), "{all}");
+    let mut d = fixture("full");
+    d["ssh"] = due.clone();
+    let x = extras(&Ctx { data: &d });
+    assert_eq!(x[0].tone, "amber");
+    // Pressed: the ssh feature's intent; busy while it runs.
+    let asks = press("setup", src, "full", json!({ "ssh": due }), "ssh-setup");
+    assert_eq!((asks.len(), asks[0]["name"].as_str()), (1, Some("ssh_setup")));
+    let (_, tree) = render_panel("setup", src, "full", json!({ "ssh": due, "ssh_run": { "busy": true } }));
+    fn find<'a>(n: &'a crate::luau::Node, k: &str) -> Option<&'a crate::luau::Node> {
+        if n.key.as_deref() == Some(k) {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| find(c, k))
+    }
+    assert!(find(&tree, "ssh-setup").is_some_and(|b| b.busy));
+    // A failure: sbx's words, the button still there.
+    let (t, _) = render_panel("setup", src, "full", json!({ "ssh": due, "ssh_run": { "error": "~/.ssh/config is not writable" } }));
+    let all = t.join("\n");
+    assert!(all.contains("Not rewritten: ~/.ssh/config is not writable") && all.contains("ssh-setup"), "{all}");
+    // Done: gone.
+    let done = json!({ "ok": true, "configured": true, "refresh_due": false, "sbx": "0.54.0", "refreshed_at": "0.54.0" });
+    let (t, _) = render_panel("setup", src, "full", json!({ "ssh": done.clone(), "ssh_run": { "done": true, "refreshed_at": "0.54.0" } }));
+    let all = t.join("\n");
+    assert!(!all.contains("ssh-setup") && !all.contains("asks to rewrite") && all.contains("Rewritten with sbx 0.54.0"), "{all}");
+    d["ssh"] = done;
+    assert_eq!(extras(&Ctx { data: &d })[0].tone, "muted");
+    // An older sbx: no button, "needs sbx 0.54"; an older daemon: no card.
+    let (t, _) = render_panel("setup", src, "full", json!({ "ssh": { "ok": true, "configured": true, "refresh_due": false, "sbx": "0.53.2", "refreshed_at": J::Null } }));
+    let all = t.join("\n");
+    assert!(all.contains("needs sbx 0.54") && !all.contains("ssh-setup"), "{all}");
+    let (t, _) = render_panel("setup", src, "full", json!({}));
+    assert!(!t.join("\n").contains("SSH access to sandboxes"));
+}

@@ -1658,6 +1658,19 @@
   .ports-table .dl-link:hover { background: var(--c-elevated); border-color: var(--c-dim); }
   .ports-empty-msg { color: var(--c-text-dim); font-style: italic; font-size: var(--fs-sm); padding: var(--sp-2) var(--sp-1); }
   .ports-error-msg { color: var(--c-red); font-size: var(--fs-sm); margin-top: var(--sp-1); }
+  /* A bring-up's hosts sbx refused, on its corner card (create.js). */
+  .sbx-denied { display: flex; flex-direction: column; gap: var(--sp-1); margin-top: var(--sp-2); font-size: var(--fs-sm); color: var(--c-text); }
+  .sbx-denied-scope { color: var(--c-text-muted); }
+  .sbx-denied-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+  .sbx-denied-host { font-family: var(--font-mono); overflow-wrap: anywhere; }
+  .sbx-denied-actions { display: flex; gap: var(--sp-1); justify-content: flex-end; }
+  .ssh-refresh { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-1); margin-bottom: var(--sp-2); }
+  .mcp-mode { margin: 0 0 var(--sp-2); font-size: var(--fs-sm); color: var(--c-text-muted); }
+  .ports-result-msg { color: var(--c-text-muted); font-size: var(--fs-sm); margin-top: var(--sp-1); }
+  /* "Why?" in the egress log, and sbx's answer under the table (ports.js). */
+  .btn-why { background: none; border: 1px solid var(--c-elevated); border-radius: var(--r-sm); color: var(--c-text-muted); font-size: var(--fs-sm); cursor: pointer; }
+  .btn-why:hover { color: var(--c-text); }
+  .policy-why { margin-top: var(--sp-2); font-size: var(--fs-sm); color: var(--c-text); display: flex; flex-direction: column; gap: var(--sp-1); }
 
   /* ── Environment file card (pane bar, beside the SSH one) ───────────── */
   /* Shares .ssh-pop for the card itself — same shell, same shadow, same head —

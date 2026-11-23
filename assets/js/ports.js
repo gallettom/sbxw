@@ -10,6 +10,7 @@ const addHostIp     = document.getElementById('add-host-ip');
 const addAlias      = document.getElementById('add-alias');
 const btnAddMapping = document.getElementById('btn-add-mapping');
 const portsAddError = document.getElementById('ports-add-error');
+const portsAddResult = document.getElementById('ports-add-result');
 let portsTarget = null;
 
 function renderPortsTable(ports) {
@@ -271,8 +272,16 @@ function renderPolicyLog(log) {
   const dropped = ['sandbox', 'applies'];
   const { columns, rows } = policyDropImpliedColumns(log, dropped);
   const iAction = (log.roles || []).filter(r => !dropped.includes(r)).indexOf('action');
+  // "Why?" beside an allowed host: which rule let it through (sbx 0.54).
+  const roles = log.roles || [];
+  const at = (row, role) => { const i = roles.indexOf(role); return i >= 0 ? String(row[i] || '').trim() : ''; };
+  const whys = log.rows.map(row => {
+    const target = /^allow/i.test(at(row, 'action')) ? policyWhyTarget(at(row, 'host')) : null;
+    return target ? `<button class="btn-why" data-target="${escHtml(target)}" title="Which rule allowed ${escHtml(target)}: sbx policy check">Why?</button>` : '';
+  });
   return policySectionLabel('Recent egress', 'sbx policy log') +
-    `<div class="policy-scroll" id="policy-log-wrap" data-action-col="${iAction}">${policyTableHtml(columns, rows)}</div>` +
+    `<div class="policy-scroll" id="policy-log-wrap" data-action-col="${iAction}">${policyTableHtml(columns, rows, whys.some(Boolean) ? whys : undefined)}</div>` +
+    `<div class="policy-why hidden" id="policy-why" role="status"></div>` +
     (log.truncated ? `<div class="policy-note">+ ${log.truncated} older entr${log.truncated === 1 ? 'y' : 'ies'}; run <code>sbx policy log</code> for the full history.</div>` : '');
 }
 
@@ -350,6 +359,53 @@ function renderPolicy(data) {
   wirePolicyDeletes();
   wirePolicyRefresh();
   wireBlockedAllows();
+  wirePolicyWhy();
+}
+
+// The answer to "Why?": sbx's rule and its raw words, as text. When the rule
+// is one the rules table can remove, the button beside the answer presses
+// that row's own remove button, with its confirmation: nothing new removes.
+function wirePolicyWhy() {
+  const out = document.getElementById('policy-why');
+  if (!out) return;
+  for (const btn of policyContent.querySelectorAll('.btn-why')) {
+    btn.addEventListener('click', async () => {
+      const target = portsTarget;
+      const host = btn.dataset.target;
+      btn.disabled = true;
+      out.classList.remove('hidden');
+      out.replaceChildren(Object.assign(document.createElement('div'), { textContent: `Asking sbx why ${host} is allowed…` }));
+      let data;
+      try {
+        data = await (await fetch(`/api/sandboxes/${encodeURIComponent(target)}/policy/check?target=${encodeURIComponent(host)}`)).json();
+      } catch (e) {
+        data = { ok: false, error: e.message };
+      } finally {
+        btn.disabled = false;
+      }
+      if (portsTarget !== target) return;
+      const head = document.createElement('div');
+      head.className = 'policy-why-head';
+      const parts = [head];
+      if (!data.ok) head.textContent = `${host}: ${data.error || 'sbx policy check failed'}`;
+      else if (!data.supported) head.textContent = `${host}: ${data.note || 'needs sbx 0.54'}`;
+      else {
+        const verdict = data.allowed === false ? 'denied' : data.allowed === true ? 'allowed' : 'decided';
+        head.textContent = data.rule ? `${host} is ${verdict} by rule ${data.rule}` : `${host} is ${verdict}; sbx names no rule`;
+        const row = data.rule_id && [...policyContent.querySelectorAll('.btn-del-rule')].find(b => b.dataset.rule === data.rule_id);
+        if (row) {
+          const rm = document.createElement('button');
+          rm.className = 'btn-cancel policy-why-rm';
+          rm.textContent = 'Remove this rule…';
+          rm.title = `The ✕ on rule ${data.rule_id} in Rules, with its confirmation`;
+          rm.addEventListener('click', () => row.click());
+          head.append(' ', rm);
+        }
+        if (data.raw) parts.push(Object.assign(document.createElement('pre'), { className: 'policy-raw', textContent: data.raw }));
+      }
+      out.replaceChildren(...parts);
+    });
+  }
 }
 
 // `sbx policy refresh` (0.49): re-read the policy now (after an AI Governance
@@ -597,11 +653,32 @@ async function deletePort(spec, btn) {
   }
 }
 
+// An empty host port is left to sbx (0.54 picks a free one); an older sbx
+// publishes on the sandbox port, and the result line says which happened.
 addSbxPort.addEventListener('input', () => {
   btnAddMapping.disabled = !addSbxPort.value;
-  if (addSbxPort.value && !addHostPort.value)
-    addHostPort.placeholder = addSbxPort.value;
 });
+
+// BEGIN sbx-054 ports rules
+// The line under the form once a port is published: where it landed, and
+// why it is not an automatic port when the daemon says so. Text, not markup.
+function publishResultLine(data) {
+  if (!data || !data.host_port) return 'Published';
+  const where = `${data.host_ip || '127.0.0.1'}:${data.host_port}`;
+  const how = data.assigned ? ' (picked by sbx)' : '';
+  const fwd = data.forwarded_port ? `, reached here on port ${data.forwarded_port}` : '';
+  const note = data.note ? `. ${data.note}` : '';
+  return `Published sandbox port ${data.sandbox_port} on ${where}${how}${fwd}${note}`;
+}
+
+// The query for "Why?" beside an allowed host in the egress log: the host
+// (and port) as the log shows it, or null when the cell is not one (a
+// wildcard, a URL, blank): such a row gets no button.
+function policyWhyTarget(cell) {
+  const t = String(cell || '').trim().toLowerCase();
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d{1,5})?$/.test(t) ? t : null;
+}
+// END sbx-054 ports rules
 
 btnAddMapping.addEventListener('click', async () => {
   const sbxPort  = parseInt(addSbxPort.value, 10);
@@ -617,6 +694,7 @@ btnAddMapping.addEventListener('click', async () => {
 
   btnAddMapping.disabled = true;
   portsAddError.classList.add('hidden');
+  portsAddResult.classList.add('hidden');
   const jobId = startBgJob(`Publishing port ${sbxPort}…`);
   try {
     const data = await postJson(`/api/sandboxes/${encodeURIComponent(portsTarget)}/ports/publish`, body);
@@ -625,11 +703,10 @@ btnAddMapping.addEventListener('click', async () => {
       addHostPort.value = '';
       addHostIp.value   = '';
       addAlias.value    = '';
-      addHostPort.placeholder = 'same';
+      addHostPort.placeholder = 'auto';
       await fetchPorts(portsTarget);
-      if (data.hosts_warning) {
-        showNote(portsAddError, '⚠ ' + data.hosts_warning);
-      }
+      showNote(portsAddResult, publishResultLine(data));
+      if (data.hosts_warning) showNote(portsAddError, '⚠ ' + data.hosts_warning);
     } else {
       showNote(portsAddError, data.error || 'Failed to publish');
     }
@@ -646,9 +723,10 @@ function openPortsModal(name) {
   addHostPort.value = '';
   addHostIp.value   = '';
   addAlias.value    = '';
-  addHostPort.placeholder = 'same';
+  addHostPort.placeholder = 'auto';
   btnAddMapping.disabled = true;
   portsAddError.classList.add('hidden');
+  portsAddResult.classList.add('hidden');
   modalOpen(portsOverlay);
   fetchPorts(name);
 }

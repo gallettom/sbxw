@@ -423,10 +423,16 @@ fn extras(ctx: &Ctx) -> Vec<Extra> {
         id: "setup".into(),
         label: String::new(),
         icon: Some("gear".into()),
-        tone: "muted".into(),
-        help: "Setup: secrets and sign-in, remote hosts, voice".into(),
+        // Amber while sbx 0.54 asks to rewrite the SSH configuration
+        // (the card is on the first tab, which opens then).
+        tone: if crate::feat::ssh::due(ctx) { "amber" } else { "muted" }.into(),
+        help: if crate::feat::ssh::due(ctx) {
+            "Setup: sbx 0.54 asks to rewrite the SSH configuration (Secrets and sign-in)".into()
+        } else {
+            "Setup: secrets and sign-in, remote hosts, voice".into()
+        },
         count: None,
-        intent: Some(("open_modal".into(), match ctx.get("app")["kept"]["setup"]["tab"].as_str().filter(|t| SECTIONS.contains(t)) {
+        intent: Some(("open_modal".into(), match ctx.get("app")["kept"]["setup"]["tab"].as_str().filter(|t| SECTIONS.contains(t) && !crate::feat::ssh::due(ctx)) {
             Some(t) => json!({ "screen": "setup", "arg": t }),
             None => json!({ "screen": "setup" }),
         })),

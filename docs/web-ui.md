@@ -158,6 +158,15 @@ sbxw  myapp                     Creating… 2/5
 - Every way of creating a sandbox reports here: the create and chat dialogs,
   **Duplicate**, and the island's chat.
 - A failed `sbx create` shows sbx's own error, not just "exited with status 1".
+- **Hosts sbx refused.** When a create or a kit install fails because sbx
+  denied network access, the card lists each host (sbx 0.54 names them;
+  before, sbxw reads them off the sandbox's policy log since the step began)
+  and stays until you dismiss it. Each host has one button, scoped as the
+  daemon says: **Allow for this sandbox** when the sandbox exists, or **Allow
+  for all sandboxes**, with a line saying the rule applies to every sandbox on
+  this machine, when the create left no sandbox to scope a rule to. Both ask
+  for a confirmation and add a rule through the same route as the network
+  panel. **Retry** (on the tab that clicked Create) sends the same request again.
 
 ## Remote hosts (experimental)
 
@@ -536,7 +545,10 @@ being written (one at a time, since a lens reads the map).
 ![The Ports and network dialog: published ports, host aliases, network policy rules and the domains sbxw allows](images/ports.png)
 
 **Published ports and aliases.** View, add and remove mappings, including host
-IP and `/etc/hosts` alias.
+IP and `/etc/hosts` alias. The host port is optional: left empty, sbx 0.54
+picks a free one; an older sbx publishes on the sandbox port, as before. The
+line under the form says the port it got and, on an older sbx, why it is not
+an automatic one.
 
 **Network policy.** No single `sbx` call answers "what can this sandbox reach?",
 so the panel combines three:
@@ -568,6 +580,11 @@ verbatim rather than as a misleading empty list.
 - **Allow on a blocked host** adds an allow rule for that host (without its
   port), for this sandbox only, after a confirmation. A host blocked by
   organisation policy shows 🔒 instead.
+- **Why?** beside an allowed host in **Recent egress** runs `sbx policy check
+  network --sandbox <name> <host[:port]>` (sbx 0.54) and shows the rule sbx names
+  and its answer as text. When that rule is one the **Rules** table can remove,
+  **Remove this rule…** presses that row's ✕, with its confirmation. Before
+  0.54 it says it needs sbx 0.54.
 - **↻ Re-read policy now** runs `sbx policy refresh`: the policy is
   re-read at once, after an AI Governance change say, instead of at the next
   poll. Open connections stay open.
@@ -589,6 +606,10 @@ ports the sandbox *actually* has, including ones you added in the UI. See
 form: **Name**, **SSH Host** (`<name>.sbx`), and **SSH Port** / **Identity
 File** shown as *leave empty* (the managed `Host *.sbx` block supplies them).
 The last row is the whole command, `ssh <name>.sbx`. See [SSH](ssh.md).
+On sbx 0.54, until the SSH configuration has been written again, the card
+starts with a reminder and **Rewrite SSH configuration**, which runs `sbx setup
+ssh` (`POST /api/ssh/setup`); it shows only where `~/.ssh/config` already has
+the `*.sbx` block.
 
 Both cards close with Escape or a click outside.
 
@@ -600,7 +621,7 @@ Both cards close with Escape or a click outside.
 | **Setup → Skills** | Lists the commands the bundled kits put in every sandbox, which run on their own (*default*) and which only when typed (*manual*); above them, **Your skills** keeps a skill made in a sandbox for every new one ([details](kits-and-skills.md#keeping-a-skill-you-made)) |
 | **Setup → Templates** | Lists the saved templates (`sbx template ls`), marking the one `template` in `sbxw.toml` names (*in use*) and the ones `template = "auto"` keeps (*automatic*). **Remove** deletes one. Pick a sandbox and a tag, then **Save**, to snapshot it as a new template: its agent token and Claude credentials are taken out first and put back after, as with `sbxw template save`. sbx may stop the sandbox for the snapshot; sbxw starts it again |
 | **Setup → Kits** | Edits the `kits` line of an `sbxw.toml` sbxw uses — the daemon's own, or the one a sandbox was created from; no other file. Bundled kits are checkboxes (`sbxw:<name>`); any other reference (a path, a `.zip`, an OCI ref, a git URL) a list with **Add** and **Remove**. Only that line is rewritten: comments, `[[ports]]` and the rest stay as written. A file without the line shows the defaults; **Save** writes them out, **Use defaults** removes it. New sandboxes from this page get the change at once; an existing one at its next `sbxw up` |
-| **Setup → MCP** | The MCP servers registered on this host (`sbx mcp ls`). **Add** registers one: a remote URL with optional headers (a `${key}` in a header is a secret, typed in the dialog and stored as `mcp:<name>:<key>` through `sbx secret set`, never on a command line), or a host command (stdio) with arguments and a working directory. Remote servers are added with `--skip-auth`: authorize an OAuth one with **Sign in**, which runs `sbx mcp auth <name>` on the host: its browser opens, and the token serves every sandbox. **Edit** is a remove then an add, since sbx has no edit — it drops the server's OAuth token, and an empty secret field keeps the stored secret. **Inspect** shows `sbx mcp inspect`; **Remove** unregisters it (sandboxes that loaded it keep it until unloaded). **Load** / **Unload** attach it to or detach it from the running sandbox picked at the top, without restarting its agent; sbx does not say which servers a sandbox has loaded, so both are always offered |
+| **Setup → MCP** | The MCP servers registered on this host (`sbx mcp ls`). **Add** registers one: a remote URL with optional headers (a `${key}` in a header is a secret, typed in the dialog and stored as `mcp:<name>:<key>` through `sbx secret set`, never on a command line), or a host command (stdio) with arguments and a working directory. Remote servers are added with `--skip-auth`: authorize an OAuth one with **Sign in**, which runs `sbx mcp auth <name>` on the host: its browser opens, and the token serves every sandbox. **Edit** is a remove then an add, since sbx has no edit — it drops the server's OAuth token, and an empty secret field keeps the stored secret. **Inspect** shows `sbx mcp inspect`; **Remove** unregisters it (sandboxes that loaded it keep it until unloaded). **Load** / **Unload** attach it to or detach it from the running sandbox picked at the top, without restarting its agent; sbx does not say which servers a sandbox has loaded, so both are always offered. On sbx 0.54 a line under the picker shows that sandbox's MCP mode (`static`, `dynamic`, or `unknown`) and the servers connected now, from one `sbx inspect` when the panel opens or the picker moves; before 0.54 it says it needs sbx 0.54 |
 | **Setup → Hosts** | Remote hosts (experimental): see [Remote hosts](#remote-hosts-experimental) |
 | **Setup → Mac** | The [virtual Mac](../assets/terminal-mac/README.md): install terminal-mac, start, pause, shut down or open the VM, follow the guest's one-time setup checklist, see who holds the lease and the ports opened for it, and take the lease back |
 | **Setup → Secrets** | The token sbx's proxy presents to GitHub for every sandbox (`git push` over HTTPS, `gh`): sbx's global `github` secret. Write-only — the page says whether one is set, never what it is; the value goes to `sbx secret set github` on stdin and is cleared from the field. **Use my gh login** (shown when `gh` is in Homebrew's or the system's `bin`, never looked up on `PATH`) stores `sbx secret set github --command '<path>/gh auth token'` instead: sbx runs it on this machine and refreshes the token itself. **Other services** stores a key for a service sbx does not know (`sbx secret set-custom --host … --env … --value-stdin`, 0.51): the sandbox sees a placeholder in the variable, the proxy puts the value in requests to the listed hosts only — hosts are required, since 0.51 substitutes nothing without them. The list shows names and scopes, never values. A token scoped to a single sandbox (`--sandbox`) is not counted as set. **Remove** runs `sbx secret rm github` |

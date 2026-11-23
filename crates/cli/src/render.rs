@@ -76,6 +76,10 @@ impl Renderer {
                 self.clear_detail();
                 eprintln!("  ! {}", text.replace('\n', "\n    "));
             }
+            Progress::Denied { hosts, .. } => {
+                self.clear_detail();
+                eprintln!("  ! sbx refused: {} (allow one with `sbx policy allow network --sandbox <name> <host>`)", hosts.join(", "));
+            }
             Progress::Done { error } => {
                 if error.is_none() {
                     self.finish_current();

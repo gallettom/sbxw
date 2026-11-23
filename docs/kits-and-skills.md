@@ -350,6 +350,17 @@ folder (or approve Jarvis's proposal to remove it). `sbxw:jarvis`, the kit
 of Jarvis's own sandbox, is not one of these: it is never offered, and a
 project's `kits` cannot list it.
 
+## A kit install sbx refused network access to
+
+When `sbx create` or `sbx kit add` fails because sbx denied a host the kit's
+install needed, the bring-up names the hosts: sbx 0.54 lists them in its
+error, and for an older sbx (or one that names none) sbxw reads the hosts the
+sandbox's policy log blocked since the step began. The web UI's bring-up card
+and the desktop app offer an allow per host (for the sandbox when it exists,
+or for every sandbox, said so, when the create left none) and a retry;
+`sbxw up` prints them under the step. Nothing is allowed without your click.
+To keep the host allowed, add it to `network_allow` in `sbxw.toml`.
+
 ## Kits are checked before anything is created
 
 On every `sbxw up`, each of your own local kits (a directory, not a bundled

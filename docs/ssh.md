@@ -21,6 +21,9 @@ you once, on its first run after it sees sbx reach 0.54, if a `*.sbx` block is
 already in `~/.ssh/config`, and says so. If that fails it says to run
 `sbxw ssh --setup` (or `sbx setup ssh`). sbxw remembers the sbx version setup
 last ran with (`~/.sbxw/state/ssh-refreshed.json`), so it happens once.
+Until it has, the web UI's SSH card shows the reminder with a **Rewrite SSH
+configuration** button, and the daemon's status (`ssh_refresh_due` in
+`/api/state`) tells the desktop app to do the same.
 
 **The installer does this for you.** Run interactively, it asks (default yes).
 Piped (`curl … | sh`), it applies the same default, since otherwise the web UI's

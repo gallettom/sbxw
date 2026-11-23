@@ -1012,19 +1012,25 @@ document.getElementById('modal-create').addEventListener('click', async () => {
   const template = !createRemote() && forced ? 'rebuild' : 'default';
   closeModal();
 
-  (async () => {
+  // The request, built once (a git URL cloned once): a Retry from the card of
+  // a bring-up sbx refused hosts in sends it again as it was.
+  let body = null;
+  const bringUp = async () => {
     // Shown as a corner card, where every other job running behind you is;
     // the sandbox list is for sandboxes that exist, and this one does not yet.
     addPendingSandbox(name);
     try {
       // A git URL is cloned on the host first; the sandbox gets the clone.
-      if (gitUrl) {
+      if (!body && gitUrl) {
         const c = await postJson(`/api/remote-hosts/${encodeURIComponent(host)}/clone`, { url: gitUrl });
         if (!c.ok) { showToast(`Could not clone ${gitUrl} on ${host}: ${c.error || 'unknown error'}`, 'error'); return; }
         path = c.path;
       }
-      const body = { name, path, mounts, ports, template, remote_control, chrome, kit_mounts };
-      if (carve.length) body.carve = carve; // nothing is sent without restrictions
+      if (!body) {
+        body = { name, path, mounts, ports, template, remote_control, chrome, kit_mounts };
+        if (carve.length) body.carve = carve; // nothing is sent without restrictions
+      }
+      bringUpRetries.set(name, bringUp);
       const data = await postBringUp('/api/sandboxes/create', body);
       if (data.ok) {
         // Attaches to an empty pane if one is sitting idle; otherwise just
@@ -1052,5 +1058,114 @@ document.getElementById('modal-create').addEventListener('click', async () => {
     } finally {
       removePendingSandbox(name);
     }
-  })();
+  };
+  bringUp();
 });
+
+// ── Hosts sbx refused while installing a kit ──────────────────────────────
+//
+// A `denied` progress event (sbx 0.54 names the hosts; else the daemon reads
+// them off the policy log) lists each host with an allow button and keeps
+// the bring-up's corner card until the person dismisses it or retries. The
+// allow is the existing `POST /api/sandboxes/:name/policy/rules`, on the
+// person's click: scoped to the sandbox when it exists, and otherwise a rule
+// for every sandbox, said in those words. Every value is sbx's: text only.
+
+// BEGIN sbx-054 denied rules
+// The button for one refused host: its words and the rule request it sends.
+// Only `allow_scope: "sandbox"` gets "Allow for this sandbox", and that
+// request never carries `global`; anything else is a rule for every sandbox
+// and says so.
+function deniedAllow(ev, host) {
+  if (ev && ev.allow_scope === 'sandbox') {
+    return {
+      label: 'Allow for this sandbox',
+      line: '',
+      confirm: `Allow '${ev.sandbox}' to reach:\n\n  ${host}\n\nThe rule applies to this sandbox only.`,
+      body: { resources: host, decision: 'allow' },
+    };
+  }
+  return {
+    label: 'Allow for all sandboxes',
+    line: 'The sandbox was not created, so a rule cannot be scoped to it: this rule applies to every sandbox on this machine.',
+    confirm: `Allow EVERY sandbox on this machine to reach:\n\n  ${host}\n\nThe rule is not scoped to one sandbox.`,
+    body: { resources: host, decision: 'allow', global: true },
+  };
+}
+
+// The line over the list: which step, which kit.
+function deniedHeadline(ev) {
+  const what = ev.step === 'kits' && ev.kit ? `installing kit ${ev.kit}` : 'creating the sandbox';
+  const from = ev.source === 'policy_log' ? ' (from the policy log)' : '';
+  return `sbx refused these hosts while ${what}${from}:`;
+}
+// END sbx-054 denied rules
+
+/// name -> the bring-up to run again (the create form's request).
+const bringUpRetries = new Map();
+/// name -> the corner-card id of a finished bring-up held for its hosts.
+const heldDeniedCards = new Map();
+
+function holdDeniedCard(name, p) {
+  const job = bgJobs.get(p.job);
+  if (job) clearInterval(job.timer);
+  p.card.classList.add('held');
+  p.statusEl.textContent = 'sbx refused hosts';
+  p.held = true;
+  heldDeniedCards.set(name, p.job);
+  renderDeniedHosts(name, p);
+}
+
+function dropHeldDeniedCard(name) {
+  const id = heldDeniedCards.get(name);
+  if (id === undefined) return;
+  heldDeniedCards.delete(name);
+  finishBgJob(id);
+}
+
+function renderDeniedHosts(name, p) {
+  const ev = p.denied;
+  let box = p.card.querySelector('.sbx-denied');
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'sbx-denied';
+    p.card.appendChild(box);
+  }
+  const head = Object.assign(document.createElement('div'), { className: 'sbx-denied-head', textContent: deniedHeadline(ev) });
+  const parts = [head];
+  const scopeLine = deniedAllow(ev, '').line;
+  if (scopeLine) parts.push(Object.assign(document.createElement('div'), { className: 'sbx-denied-scope', textContent: scopeLine }));
+  const err = Object.assign(document.createElement('div'), { className: 'ports-error-msg hidden' });
+  for (const host of ev.hosts || []) {
+    const a = deniedAllow(ev, host);
+    const row = document.createElement('div');
+    row.className = 'sbx-denied-row';
+    const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-allow-host', textContent: a.label });
+    btn.addEventListener('click', async () => {
+      if (!confirm(a.confirm)) return;
+      btn.disabled = true;
+      const r = await postJsonOrError(`/api/sandboxes/${encodeURIComponent(name)}/policy/rules`, a.body);
+      if (r.ok) btn.textContent = 'Allowed';
+      else { btn.disabled = false; showNote(err, r.error || 'Failed to allow'); }
+    });
+    row.append(Object.assign(document.createElement('span'), { className: 'sbx-denied-host', textContent: host }), btn);
+    parts.push(row);
+  }
+  const actions = document.createElement('div');
+  actions.className = 'sbx-denied-actions';
+  // Retry only once this bring-up has ended: a second one beside it would race it.
+  const retry = p.held && bringUpRetries.get(name);
+  if (retry) {
+    const b = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-cancel', textContent: 'Retry' });
+    b.title = 'Run the same bring-up again';
+    b.addEventListener('click', () => { dropHeldDeniedCard(name); retry(); });
+    actions.append(b);
+  }
+  if (p.held) {
+    const dismiss = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-cancel', textContent: 'Dismiss' });
+    dismiss.addEventListener('click', () => dropHeldDeniedCard(name));
+    actions.append(dismiss);
+  }
+  parts.push(err, actions);
+  box.replaceChildren(...parts);
+}

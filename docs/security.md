@@ -214,6 +214,14 @@ page instead of the chat.
 - **Plans:** nothing starts until you approve. After approval, a lead and its
   threads message each other without clicks, **inside one sandbox only**. See
   [the lead's trust model](threads-and-lead.md#trust).
+- **Network rules from sbx 0.54's answers:** a failed kit install that names
+  the hosts sbx denied, and **Why?** on an allowed host, only show sbx's
+  words, as text. Allowing a denied host is the network panel's own rule
+  route, on your click and after a confirmation; the button says the scope
+  (**this sandbox**, or **all sandboxes** when the create left no sandbox to
+  scope it to). A host given to `sbx policy check` is checked as a host name
+  (and port) before it reaches a command line. **Rewrite SSH configuration**
+  runs `sbx setup ssh` only on your click.
 
 ## Invisible characters
 
