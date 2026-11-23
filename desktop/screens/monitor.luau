@@ -305,6 +305,57 @@ local function chips(d)
   return row(kids)
 end
 
+-- The completion list (the phone's rcSkillMatches): while the draft is `/`
+-- and a partial name with no space yet, the skills and commands whose name
+-- starts with it, then those that hold it. Names and descriptions come
+-- from the sandbox: data, checked and cleaned by the Rust (cmds.rs), drawn
+-- as text. `nil` when the draft is not a partial name.
+local function slash_query(draft)
+  return string.match(draft, "^/([%w:_%-]*)$")
+end
+
+local function slash_matches(d, draft)
+  local q = slash_query(draft)
+  local items = ((d.commands or {}).items) or {}
+  if not q then return {} end
+  q = string.lower(q)
+  local first, then_ = {}, {}
+  for _, it in ipairs(items) do
+    local n = it.name or ""
+    if string.sub(n, 1, #q) == q then first[#first + 1] = it
+    elseif string.find(n, q, 1, true) then then_[#then_ + 1] = it end
+  end
+  for _, it in ipairs(then_) do first[#first + 1] = it end
+  return first
+end
+
+-- At most this many rows show; the window follows the selection.
+local LIST_ROWS = 8
+
+-- The open list's selection (1-based), kept while the draft stays the same.
+local function list_sel(state, d, draft, n)
+  local cl = state.cl
+  local i = (cl and cl.key == d.key and cl.text == draft) and cl.i or 1
+  return math.max(1, math.min(i, n))
+end
+
+local function slash_list(d, matches, i, gen, draft)
+  local top = math.max(1, math.min(i - LIST_ROWS // 2, #matches - LIST_ROWS + 1))
+  local kids = { gap = 0, w = "full", py = 4, radius = "sm", border = "elevated", fill = "surface", key = "monitor-cmds" }
+  for j = top, math.min(#matches, top + LIST_ROWS - 1) do
+    local it = matches[j]
+    kids[#kids + 1] = row{ key = "monitor-cmd-" .. it.name, gap = 8, w = "full", px = 8, py = 4, selected = j == i,
+      fill = j == i and "elevated" or nil, on = "pick_cmd", arg = { key = d.key, gen = gen, name = it.name }, keep_focus = true,
+      help = "/" .. it.name,
+      text{ "/" .. it.name, weight = "medium", color = "text-bright", truncate = true, max_w = 240 },
+      text{ it.desc or "", size = "sm", color = "text-muted", truncate = true, grow = 1 } }
+  end
+  local more = #matches > LIST_ROWS and string.format("%d of %d · ", i, #matches) or ""
+  kids[#kids + 1] = text{ more .. "Up and Down move, Tab or Enter completes, Escape closes", size = "sm", color = "text-muted",
+    truncate = true, px = 8, key = "monitor-cmds-hint" }
+  return column(kids)
+end
+
 local function composer(state, d, data)
   local c = d.compose
   local covered = (data.app or {}).covered == true
@@ -333,10 +384,22 @@ local function composer(state, d, data)
   elseif note then
     listening = text{ note, size = "sm", color = "text-muted", wrap = true, key = "monitor-dictate-note" }
   end
+  -- The completion list: shown while the draft is a partial name with
+  -- matches and Escape did not close it for this very draft.
+  local matches = c.can and slash_matches(d, draft) or {}
+  local esc = state.esc
+  local open = #matches > 0 and not (esc and esc.key == d.key and esc.text == draft)
+  local sel = open and list_sel(state, d, draft, #matches) or 1
+  local names = {}
+  if open then for j, it in ipairs(matches) do names[j] = it.name end end
   return column{ gap = 8, px = 24, py = 12, w = "full",
-    textarea{ id = "monitor-compose", rows = 2, value = draft, disabled = not c.can, tone = "compose",
-      placeholder = c.can and ("Write to " .. c.target .. "…") or "",
-      on = "typed", on_submit = "submit", arg = { key = d.key, gen = d.sent } },
+    open and slash_list(d, matches, sel, d.sent, draft) or false,
+    -- Enter sends (the Send press, its checks in the Rust), Shift+Enter is
+    -- a new line; while the list is open its keys are the list's.
+    textarea{ id = "monitor-compose", rows = 2, value = draft, disabled = not c.can, tone = "compose", enter = "send",
+      placeholder = c.can and ("Write to " .. c.target .. "… Enter sends, Shift+Enter starts a new line, / lists the skills") or "",
+      on = "typed", on_submit = "submit", on_list_key = open and "list_key" or nil,
+      arg = { key = d.key, gen = d.sent, can = c.can, files = #files, need = d.commands == nil, names = names, sel = sel, text = draft } },
     listening,
     chips(d),
     row{ gap = 8, w = "full",
@@ -354,7 +417,7 @@ local function composer(state, d, data)
           or ("Dictate: press, speak, press again (or hold " .. (dict.key or "F9") .. "). The words are masked and put in the field; nothing is sent") },
       button{ "Send…", key = "monitor-send", icon = "send", tone = "green", on = "send", arg = { key = d.key, gen = d.sent },
         disabled = not can or refused or (draft == "" and #files == 0),
-        help = "Opens the core's dialog with your words in full, the files and the session they go to", keys = { (data.app or {}).platform == "macos" and "⌘" or "Ctrl", "↩" } } },
+        help = "Opens the core's dialog with your words in full, the files and the session they go to. Enter in the box does the same; Shift+Enter starts a new line", keys = { "↩" } } },
     (not c.can) and text{ c.why, size = "sm", color = "text-muted", wrap = true } or false }
 end
 
@@ -462,6 +525,9 @@ local screen = {
     typed = function(state, a, text)
       state.drafts = state.drafts or {}
       state.drafts[a.key] = { text = text or "", gen = a.gen }
+      -- The first `/` of a partial name: the Rust reads this sandbox's
+      -- skills and commands (once; nothing is sent).
+      if a.need and slash_query(text or "") then return intent("monitor_commands", { key = a.key }) end
     end,
     -- Words, files, or both: the core's Rust checks what may go.
     send = function(state, a)
@@ -470,10 +536,34 @@ local screen = {
       -- No words: no `text` (files alone; the Rust says when nothing would go).
       return intent("monitor_send", { key = a.key, text = string.find(text, "%S") and text or nil })
     end,
+    -- Enter (Cmd or Ctrl+Enter too): the Send press. A closed composer, or
+    -- no words and no file, sends nothing; the Rust checks the rest.
     submit = function(state, a, text)
       state.drafts = state.drafts or {}
       state.drafts[a.key] = { text = text or "", gen = a.gen }
-      return intent("monitor_send", { key = a.key, text = string.find(text or "", "%S") and text or nil })
+      local words = string.find(text or "", "%S") ~= nil
+      if not a.can or (not words and (a.files or 0) == 0) then return nil end
+      return intent("monitor_send", { key = a.key, text = words and text or nil })
+    end,
+    -- The completion list's keys, while it is open (the field keeps the keyboard).
+    list_key = function(state, a, k)
+      local n = #(a.names or {})
+      if k == "up" or k == "down" then
+        local i = math.max(1, math.min(n, (a.sel or 1) + (k == "up" and -1 or 1)))
+        state.cl = { key = a.key, text = a.text, i = i }
+      elseif (k == "tab" or k == "enter") and n > 0 then
+        local name = a.names[math.max(1, math.min(n, a.sel or 1))]
+        state.drafts = state.drafts or {}
+        state.drafts[a.key] = { text = "/" .. name .. " ", gen = a.gen }
+        state.cl = nil
+      elseif k == "escape" then
+        state.esc = { key = a.key, text = a.text }
+      end
+    end,
+    pick_cmd = function(state, a)
+      state.drafts = state.drafts or {}
+      state.drafts[a.key] = { text = "/" .. a.name .. " ", gen = a.gen }
+      state.cl = nil
     end,
     attach = function(_, a) return intent("monitor_attach", { key = a.key }) end,
     expand = function(state, a)

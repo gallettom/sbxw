@@ -2062,3 +2062,392 @@ fn names_show_every_invisible_character() {
     // Controls keep their own rule: new lines and tabs stay in agent text.
     assert_eq!(attach::clipped_text("a\nb\tc\u{1b}", 99), "a\nb\tc");
 }
+
+// ---------------------------------------------------------------------------
+// The composer's keys: Enter sends, Shift+Enter a new line; the completion list
+
+/// The answer of `GET /api/sandboxes/billing-api/commands` the tests use:
+/// sorted by name as the daemon sends them, with hostile entries.
+fn commands_answer() -> J {
+    json!({ "ok": true, "complete": true, "commands": [
+        { "name": "archify", "description": "Draw architecture diagrams", "kind": "skill", "origin": "home" },
+        { "name": "big-graph", "description": "Plot a graph", "kind": "command", "origin": "workspace" },
+        { "name": "grill-me", "description": "Grill the plan", "kind": "command", "origin": "home" },
+        { "name": "grilling", "description": "line one\nline two\t\u{200b}\u{202e}\u{1b}[31mred", "kind": "skill", "origin": "home" },
+        { "name": "handoff", "description": "x".repeat(400), "kind": "command", "origin": "home" },
+        { "name": "Evil", "description": "upper case" },
+        { "name": "/slash", "description": "a slash" },
+        { "name": "rtl\u{202e}x", "description": "bidi" },
+        { "name": "archify", "description": "a second archify" },
+        { "description": "no name" }
+    ] })
+}
+
+/// `d` opened on billing-api's main session, its sandbox's commands served
+/// by the stand-in (`answer`, or none: a daemon without the route).
+fn with_commands(answer: Option<J>) -> J {
+    let mut d = data_of("basic");
+    opened(&mut d);
+    run(&d, "monitor_select", json!({ "key": "billing-api:s-bill-main" })).map(|a| d["monitor"] = view(&a)).unwrap();
+    if let Some(a) = answer {
+        d["commands"] = json!({ "billing-api": a });
+    }
+    let acts = run(&d, "monitor_commands", json!({ "key": "billing-api:s-bill-main" })).unwrap();
+    d["monitor"] = view(&acts);
+    assert_eq!(d["monitor"]["detail"]["commands"]["state"], "loading");
+    let call = acts.iter().find_map(|a| match a {
+        Action::Call(c) => Some(c.clone()),
+        _ => None,
+    }).expect("the read");
+    assert_eq!(call.path, "/api/sandboxes/billing-api/commands");
+    let (code, body) = crate::feat::answer_from(&mut d, "GET", &call.path, &J::Null, &mut |_, _| {});
+    let back = on_answer(&Ctx { data: &d }, &call, Ok((code, body)));
+    d["monitor"] = view(&back);
+    d
+}
+
+/// The names the list draws, in order.
+fn listed(n: &Node) -> Vec<String> {
+    let mut all = vec![];
+    walk(n, &mut all);
+    all.iter().filter_map(|x| x.key.as_deref().and_then(|k| k.strip_prefix("monitor-cmd-"))).map(str::to_string).collect()
+}
+
+#[test]
+fn enter_in_the_composer_is_the_send_press_and_shift_enter_is_not() {
+    let mut d = data_of("basic");
+    opened(&mut d);
+    run(&d, "monitor_select", json!({ "key": "billing-api:s-bill-main" })).map(|a| d["monitor"] = view(&a)).unwrap();
+    let h = host();
+    let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+    assert!(ta.enter_sends, "the composer sends on Return");
+    assert_eq!(ta.on_submit.as_deref(), Some("submit"));
+    assert!(ta.placeholder.as_deref().unwrap().contains("Enter sends, Shift+Enter starts a new line"));
+    let send_b = find(&h.render(&d).unwrap(), "monitor-send").unwrap().clone();
+    assert_eq!(send_b.keys, ["↩"], "Send's keycap is Return now");
+    // Empty, or only spaces and line breaks, and no file: nothing.
+    for t in ["", "   ", "\n \n"] {
+        assert_eq!(h.act("submit", &ta.arg, &t.into()).unwrap(), J::Null, "{t:?}");
+    }
+    // Words: the Send press's intent, once.
+    let it = h.act("submit", &ta.arg, &"Ship it\nnow".into()).unwrap();
+    assert_eq!(it["name"], "monitor_send");
+    assert_eq!(it["args"], json!({ "key": "billing-api:s-bill-main", "text": "Ship it\nnow" }));
+    // The same checks: the Rust refuses under a dialog as for the button.
+    let mut covered = d.clone();
+    covered["app"]["covered"] = true.into();
+    assert!(run(&covered, "monitor_send", it["args"].clone()).unwrap_err().starts_with("Not sent"));
+    // It goes: the core's dialog, then the push; its answer empties the box.
+    let a = admit(Risk::Approval("x"), "monitor_send", run(&d, "monitor_send", it["args"].clone()).unwrap()).unwrap();
+    let Action::Prepare(p) = &a[0] else { panic!("{a:?}") };
+    let c = (p.build)(&Ctx { data: &d }, &p.asked, &json!({ "ok": true, "text": "Ship it\nnow", "masked": 0 })).unwrap();
+    d["monitor"] = view(&on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "ok": true })))));
+    let n = h.render(&d).unwrap();
+    assert_eq!(find(&n, "monitor-compose").unwrap().value, "", "the draft is cleared once sent");
+    // A closed composer (a session on a menu): Return sends nothing.
+    run(&d, "monitor_select", json!({ "key": "shop-web:s-shop-main" })).map(|a| d["monitor"] = view(&a)).unwrap();
+    let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+    assert!(ta.disabled);
+    assert_eq!(h.act("submit", &ta.arg, &"1".into()).unwrap(), J::Null);
+}
+
+/// Only the Sessions composer sends on Return: every other textarea of the
+/// app keeps Return as a new line (Canvas, Kanban, relay answers, Jarvis...).
+#[test]
+fn no_other_field_sends_on_return() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("screens");
+    for e in std::fs::read_dir(&dir).unwrap() {
+        let p = e.unwrap().path();
+        let src = std::fs::read_to_string(&p).unwrap();
+        let n = src.matches("enter = \"send\"").count();
+        let want = usize::from(p.file_name().unwrap() == "monitor.luau");
+        assert_eq!(n, want, "{}", p.display());
+        assert!(!src.contains("on_list_key") || p.file_name().unwrap() == "monitor.luau", "{}", p.display());
+    }
+    // A textarea without `enter` is a new-line field.
+    let mut h = LuauHost::new(Limits::default()).unwrap();
+    h.load("x", r#"return { render = function() return textarea{ id = "a", on_submit = "s" } end, actions = { s = function() end } }"#).unwrap();
+    let n = h.render(&J::Null).unwrap();
+    assert!(!n.enter_sends && n.on_list_key.is_none());
+    h.load("x", r#"return { render = function() return textarea{ id = "a", enter = "submit" } end }"#).unwrap();
+    assert!(h.render(&J::Null).is_err(), "only send or newline");
+}
+
+#[test]
+fn the_list_reads_once_per_sandbox_and_only_when_needed() {
+    let mut d = data_of("basic");
+    opened(&mut d);
+    run(&d, "monitor_select", json!({ "key": "billing-api:s-bill-main" })).map(|a| d["monitor"] = view(&a)).unwrap();
+    assert!(d["monitor"]["detail"]["commands"].is_null(), "nothing read before the composer needs it");
+    let h = host();
+    let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+    // Words, or a `/` followed by a space: no read.
+    for t in ["hello", "/x y", " /x"] {
+        assert_eq!(h.act("typed", &ta.arg, &t.into()).unwrap(), J::Null, "{t:?}");
+    }
+    // The first partial name asks the Rust.
+    let it = h.act("typed", &ta.arg, &"/".into()).unwrap();
+    assert_eq!(it["name"], "monitor_commands");
+    assert_eq!(it["args"], json!({ "key": "billing-api:s-bill-main" }));
+    let a = run(&d, "monitor_commands", it["args"].clone()).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::Call(c) if c.path == "/api/sandboxes/billing-api/commands" && c.method == crate::feat::Method::Get)));
+    assert!(!sends(&a.iter().filter(|x| !matches!(x, Action::Call(c) if c.tag.starts_with("cmds:"))).cloned().collect::<Vec<_>>()));
+    d["monitor"] = view(&a);
+    // Asked again for that sandbox: nothing more; the screen does not ask while it has a list.
+    assert!(run(&d, "monitor_commands", it["args"].clone()).unwrap().is_empty());
+    let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+    assert_eq!(h.act("typed", &ta.arg, &"/g".into()).unwrap(), J::Null);
+    // A session of the same sandbox: the same list. Another sandbox: its own read.
+    assert!(run(&d, "monitor_commands", json!({ "key": "billing-api::retry-queue" })).unwrap().is_empty());
+    let a = run(&d, "monitor_commands", json!({ "key": "docs-site:s-docs-main" })).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::Call(c) if c.path == "/api/sandboxes/docs-site/commands")));
+    // The late answer of the first sandbox is dropped (it is not the one held).
+    let first = Call::get("/api/sandboxes/billing-api/commands", "x").tag("cmds:billing-api");
+    assert!(on_answer(&Ctx { data: &d }, &first, Ok((200, commands_answer()))).is_empty());
+}
+
+#[test]
+fn the_list_filters_starts_with_first_and_draws_the_sandbox_text_cleaned() {
+    let d = with_commands(Some(commands_answer()));
+    let items = d["monitor"]["detail"]["commands"]["items"].as_array().unwrap().clone();
+    let names: Vec<&str> = items.iter().map(|i| i["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["archify", "big-graph", "grill-me", "grilling", "handoff"], "bad names left out, a name once");
+    assert_eq!(items[3]["desc"], "line one line two [31mred", "one line, no control or invisible character");
+    assert_eq!(items[4]["desc"].as_str().unwrap().chars().count(), cmds::DESC_MAX + 1, "cut, with an ellipsis");
+    let h = host();
+    let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+    let at = |h: &LuauHost, t: &str| {
+        let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+        h.act("typed", &ta.arg, &t.into()).unwrap();
+        h.render(&d).unwrap()
+    };
+    assert!(find(&h.render(&d).unwrap(), "monitor-cmds").is_none(), "no list for an empty draft");
+    assert_eq!(listed(&at(&h, "/")), names, "`/`: everything");
+    // `/gr`: the names that start with it, then those that hold it.
+    let n = at(&h, "/gr");
+    assert_eq!(listed(&n), ["grill-me", "grilling", "big-graph"]);
+    let ta2 = find(&n, "monitor-compose").unwrap();
+    assert_eq!(ta2.on_list_key.as_deref(), Some("list_key"), "the list's keys while it shows");
+    // The description is text, as cleaned.
+    let row = find(&n, "monitor-cmd-grilling").unwrap();
+    let mut all = vec![];
+    walk(row, &mut all);
+    assert!(all.iter().any(|x| x.kind == crate::luau::Kind::Text && x.text == "line one line two [31mred"));
+    assert!(all.iter().all(|x| x.kind != crate::luau::Kind::Markdown), "never Markdown");
+    assert!(row.keep_focus, "a press leaves the keyboard in the box");
+    // Upper case typed: the same list. No match, a space, a second line: none.
+    assert_eq!(listed(&at(&h, "/GR")), ["grill-me", "grilling", "big-graph"]);
+    for t in ["/zzz", "/gr ", "/gr\nx", "hello /gr"] {
+        let n = at(&h, t);
+        assert!(find(&n, "monitor-cmds").is_none(), "{t:?}");
+        assert!(find(&n, "monitor-compose").unwrap().on_list_key.is_none(), "{t:?}: Return is the box's again");
+    }
+    let _ = ta;
+}
+
+#[test]
+fn the_keys_of_the_list_move_complete_and_close_and_send_nothing() {
+    let d = with_commands(Some(commands_answer()));
+    let h = host();
+    let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+    h.act("typed", &ta.arg, &"/gr".into()).unwrap();
+    let key = |h: &LuauHost, k: &str| {
+        let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+        assert_eq!(ta.on_list_key.as_deref(), Some("list_key"), "{k}: the list is open");
+        h.act("list_key", &ta.arg, &k.into()).unwrap()
+    };
+    let sel = |h: &LuauHost| {
+        let n = h.render(&d).unwrap();
+        let mut all = vec![];
+        walk(&n, &mut all);
+        all.iter().find(|x| x.selected && x.key.as_deref().is_some_and(|k| k.starts_with("monitor-cmd-"))).and_then(|x| x.key.clone())
+    };
+    assert_eq!(sel(&h).as_deref(), Some("monitor-cmd-grill-me"), "the first is selected");
+    assert_eq!(key(&h, "down"), J::Null);
+    assert_eq!(key(&h, "down"), J::Null);
+    assert_eq!(key(&h, "down"), J::Null);
+    assert_eq!(sel(&h).as_deref(), Some("monitor-cmd-big-graph"), "Down stops at the last");
+    assert_eq!(key(&h, "up"), J::Null);
+    assert_eq!(sel(&h).as_deref(), Some("monitor-cmd-grilling"));
+    // Enter completes the name and a space: nothing is sent, the list closes.
+    assert_eq!(key(&h, "enter"), J::Null, "Enter with the list open sends nothing");
+    let n = h.render(&d).unwrap();
+    assert_eq!(find(&n, "monitor-compose").unwrap().value, "/grilling ");
+    assert!(find(&n, "monitor-cmds").is_none());
+    // Tab does the same; Escape closes the list and keeps the draft.
+    let ta = find(&n, "monitor-compose").unwrap().clone();
+    h.act("typed", &ta.arg, &"/ha".into()).unwrap();
+    assert_eq!(key(&h, "tab"), J::Null);
+    assert_eq!(find(&h.render(&d).unwrap(), "monitor-compose").unwrap().value, "/handoff ");
+    let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+    h.act("typed", &ta.arg, &"/ar".into()).unwrap();
+    assert_eq!(key(&h, "escape"), J::Null);
+    let n = h.render(&d).unwrap();
+    assert!(find(&n, "monitor-cmds").is_none(), "Escape closes the list");
+    assert_eq!(find(&n, "monitor-compose").unwrap().value, "/ar", "and keeps the draft");
+    assert!(find(&n, "monitor-compose").unwrap().on_list_key.is_none());
+    // Typing on opens it again; a click picks.
+    let ta = find(&n, "monitor-compose").unwrap().clone();
+    h.act("typed", &ta.arg, &"/arc".into()).unwrap();
+    let n = h.render(&d).unwrap();
+    let row = find(&n, "monitor-cmd-archify").unwrap().clone();
+    assert_eq!(h.act(row.on.as_deref().unwrap(), &row.arg, &J::Null).unwrap(), J::Null);
+    assert_eq!(find(&h.render(&d).unwrap(), "monitor-compose").unwrap().value, "/archify ");
+}
+
+#[test]
+fn a_long_list_shows_eight_rows_around_the_selection() {
+    let many: Vec<J> = (0..20).map(|i| json!({ "name": format!("s{i:02}"), "description": "" })).collect();
+    let d = with_commands(Some(json!({ "complete": false, "reason": "The sandbox is stopped", "commands": many })));
+    let h = host();
+    let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+    h.act("typed", &ta.arg, &"/s".into()).unwrap();
+    assert_eq!(listed(&h.render(&d).unwrap()), (0..8).map(|i| format!("s{i:02}")).collect::<Vec<_>>());
+    for _ in 0..12 {
+        let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+        h.act("list_key", &ta.arg, &"down".into()).unwrap();
+    }
+    let n = h.render(&d).unwrap();
+    let l = listed(&n);
+    assert_eq!(l.len(), 8);
+    assert!(l.contains(&"s12".to_string()), "{l:?}");
+    assert!(find(&n, "monitor-cmds-hint").unwrap().text.starts_with("13 of 20"));
+}
+
+#[test]
+fn a_daemon_without_the_route_shows_no_list() {
+    let d = with_commands(None);
+    assert_eq!(d["monitor"]["detail"]["commands"]["state"], "none");
+    let h = host();
+    let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+    assert_eq!(h.act("typed", &ta.arg, &"/gr".into()).unwrap(), J::Null, "not asked again");
+    let n = h.render(&d).unwrap();
+    assert!(find(&n, "monitor-cmds").is_none());
+    assert!(find(&n, "monitor-compose").unwrap().on_list_key.is_none());
+}
+
+/// The whole window: Shift+Enter is a new line, Enter during a composition
+/// confirms it, Enter sends (the core's dialog); with the list open Enter
+/// completes, a click picks, and the keyboard never leaves the box.
+#[test]
+fn the_composer_keys_in_the_window() {
+    use crate::shell::{view as shell_view, App};
+    use rune::{Key, KeyEvent};
+    let mut fx: J = serde_json::from_str(&std::fs::read_to_string(format!("{}/fixtures/monitor/basic.json", env!("CARGO_MANIFEST_DIR"))).unwrap()).unwrap();
+    fx["daemon"]["commands"] = json!({ "billing-api": commands_answer() });
+    let dir = std::env::temp_dir().join(format!("sbxw-composer-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("composer.json");
+    std::fs::write(&path, fx.to_string()).unwrap();
+    let a = App::new(crate::shell::Args { fixture: Some(path.to_string_lossy().into_owned()), ..Default::default() });
+    let mut rt = rune::Runtime::new(a, shell_view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut rune::Tx| s.on_key(ev, tx));
+    rt.frame(0.0);
+    let frames = |rt: &mut rune::Runtime<App>, n: usize| {
+        for _ in 0..n {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+        }
+    };
+    let tap = |rt: &mut rune::Runtime<App>, key: &str| {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.016);
+    };
+    let typ = |rt: &mut rune::Runtime<App>, s: &str| {
+        for c in s.chars() {
+            rt.key(KeyEvent { key: Key::Text(c.to_string()), mods: rune::Mods::default() });
+            rt.frame(0.02);
+        }
+    };
+    let press = |rt: &mut rune::Runtime<App>, k: Key, mods: rune::Mods| {
+        rt.key(KeyEvent { key: k, mods });
+        rt.frame(0.02);
+    };
+    let typed = |rt: &rune::Runtime<App>| rt.state.screens.iter().find(|x| x.name == "monitor").and_then(|sc| sc.ui.edits.get("monitor-compose").map(|e| e.0.text.clone())).unwrap_or_default();
+    let focused = |rt: &mut rune::Runtime<App>| {
+        let mut f = String::new();
+        rt.update(|_, tx| f = tx.focused().unwrap_or("").to_string());
+        f
+    };
+    let none = rune::Mods::default();
+    let shift = rune::Mods { shift: true, ..Default::default() };
+    frames(&mut rt, 4);
+    tap(&mut rt, "top-view-gui");
+    frames(&mut rt, 6);
+    tap(&mut rt, "monitor-row-billing-api:s-bill-main");
+    frames(&mut rt, 4);
+    rt.update(|_, tx| tx.focus("monitor-compose", false));
+    frames(&mut rt, 1);
+    // Enter on an empty box: nothing.
+    press(&mut rt, Key::Enter, none);
+    frames(&mut rt, 2);
+    assert!(rt.state.feats.dialog.is_none(), "an empty box sends nothing");
+    assert_eq!(typed(&rt), "", "and writes no line");
+    // Shift+Enter: a new line, nothing sent.
+    typ(&mut rt, "hello");
+    press(&mut rt, Key::Enter, shift);
+    typ(&mut rt, "there");
+    frames(&mut rt, 2);
+    assert_eq!(typed(&rt), "hello\nthere");
+    assert!(rt.state.feats.dialog.is_none(), "Shift+Enter sends nothing");
+    // A composition under way: its Return confirms it, nothing is sent.
+    rt.ime(rune::Ime::Preedit("ね".into(), Some((0, 3)), Vec::new()));
+    rt.frame(0.02);
+    press(&mut rt, Key::Enter, none);
+    frames(&mut rt, 2);
+    assert!(rt.state.feats.dialog.is_none(), "Enter during a composition sends nothing");
+    rt.ime(rune::Ime::Commit("ね".into()));
+    frames(&mut rt, 2);
+    assert_eq!(typed(&rt), "hello\nthereね");
+    // Enter: the Send press, once: the core's dialog (after masking).
+    press(&mut rt, Key::Enter, none);
+    frames(&mut rt, 4);
+    assert!(rt.state.feats.dialog.is_some(), "Enter sends: {:?}", rt.state.notice);
+    assert_eq!(typed(&rt), "hello\nthereね", "no line added by the Enter that sent");
+    rt.update(|s, _| s.feats.dialog = None);
+    frames(&mut rt, 2);
+    // The list: `/gr` read from the stand-in, shown above the box.
+    rt.update(|s, _| {
+        if let Some(sc) = s.screens.iter_mut().find(|x| x.name == "monitor") {
+            sc.ui.edits.get_mut("monitor-compose").unwrap().0.replace_text("");
+        }
+    });
+    rt.update(|_, tx| tx.focus("monitor-compose", false));
+    frames(&mut rt, 1);
+    typ(&mut rt, "/gr");
+    frames(&mut rt, 4);
+    assert!(rt.find("monitor-cmd-grill-me").is_some(), "the list shows");
+    assert_eq!(focused(&mut rt), "monitor-compose", "the list takes no keyboard");
+    // Down, Enter: completed, not sent.
+    press(&mut rt, Key::Down, none);
+    press(&mut rt, Key::Enter, none);
+    frames(&mut rt, 3);
+    assert_eq!(typed(&rt), "/grilling ");
+    assert!(rt.state.feats.dialog.is_none(), "Enter with the list open sends nothing");
+    assert!(rt.find("monitor-cmds").is_none(), "the list closed");
+    assert_eq!(focused(&mut rt), "monitor-compose");
+    // Escape closes the list and keeps the draft (and the view).
+    for _ in 0.."/grilling ".len() {
+        press(&mut rt, Key::Backspace, none);
+    }
+    typ(&mut rt, "/ar");
+    frames(&mut rt, 2);
+    assert!(rt.find("monitor-cmd-archify").is_some());
+    press(&mut rt, Key::Escape, none);
+    frames(&mut rt, 2);
+    assert!(rt.find("monitor-cmds").is_none(), "Escape closes the list");
+    assert_eq!(typed(&rt), "/ar");
+    assert_eq!(rt.state.feats.base.as_deref(), Some("monitor"), "the view stays");
+    // Typing on opens it again; a click picks, the keyboard stays in the box.
+    typ(&mut rt, "c");
+    frames(&mut rt, 2);
+    tap(&mut rt, "monitor-cmd-archify");
+    frames(&mut rt, 3);
+    assert_eq!(typed(&rt), "/archify ");
+    assert_eq!(focused(&mut rt), "monitor-compose", "a click keeps the keyboard in the box");
+    let _ = std::fs::remove_dir_all(&dir);
+}

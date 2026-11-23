@@ -27,6 +27,7 @@
 //!   conversation row's only act is its own fold, by its id.
 
 pub mod attach;
+pub mod cmds;
 pub mod conv;
 pub mod model;
 #[cfg(test)]
@@ -84,6 +85,7 @@ pub const INTENTS: &[Spec] = &[
         "Picks option `option` of question `step` the session waits on: the relay's `agent_pick` (the Requests panel's path). Refused while anything covers the view or a Jarvis proposal waits.",
     ),
     d("monitor_attach", &[("key", Arg::Str, true)], "The system's file dialog, to attach a file to what you write to that session (the one shown). The file waits as a chip under the box until Send; files dropped on Sessions or a picture pasted there are attached the same way. Refused while the composer is."),
+    d("monitor_commands", &[("key", Arg::Str, true)], "Reads the skills and slash commands of that session's sandbox for the composer's completion list (once per sandbox; a stopped sandbox is not started). View state only: nothing is sent."),
     d("monitor_attach_remove", &[("key", Arg::Str, true), ("id", Arg::Int(1, 1_000_000_000), true)], "Removes attached file `id` from that session's waiting files."),
     Spec {
         name: "monitor_send",
@@ -112,6 +114,8 @@ pub fn view_action(m: &mut Model, cx: &Ctx) -> Action {
         v["detail"]["files"] = attach::chips(files, &cx.data["app"]["uploads"], sending);
         v["detail"]["sending"] = sending.into();
         v["detail"]["attach_max"] = (files.len() >= attach::MAX).into();
+        let sb = m.cards.get(&k).and_then(|c| c.info["sandbox"].as_str()).unwrap_or("").to_string();
+        v["detail"]["commands"] = cmds::view(m.cmds.as_ref(), &sb);
     }
     Action::Set { key: KEY.into(), value: v }
 }
@@ -278,6 +282,14 @@ fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> 
     }
     if let Some(rest) = call.tag.strip_prefix("hist:") {
         return history_answer(&mut m, cx, rest, r);
+    }
+    if let Some(sb) = call.tag.strip_prefix("cmds:") {
+        let Some(c) = m.cmds.as_mut().filter(|c| c.sandbox == sb) else { return vec![] };
+        c.state = match r {
+            Ok((c, b)) if (200..300).contains(&c) && b["commands"].is_array() => cmds::State::Ready(cmds::parse(&b)),
+            _ => cmds::State::None,
+        };
+        return if shown(cx) { vec![view_action(&mut m, cx)] } else { vec![] };
     }
     if let Some(n) = call.tag.strip_prefix("attach:").and_then(|n| n.parse::<u64>().ok()) {
         return uploaded(&mut m, cx, n, r);
@@ -456,6 +468,16 @@ fn act_on(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
             Ok(vec![Action::Intent { name: "agent_pick".into(), args }])
         }
         "monitor_send" => send(&mut m, cx, a),
+        "monitor_commands" => {
+            let k = a.req("key");
+            let sb = m.cards.get(k).and_then(|c| c.info["sandbox"].as_str()).filter(|s| !s.is_empty()).map(str::to_string).ok_or_else(|| format!("{k} is not a session Sessions lists"))?;
+            // Held for that sandbox already (read, under way or failed): nothing.
+            if m.cmds.as_ref().is_some_and(|c| c.sandbox == sb) {
+                return Ok(vec![]);
+            }
+            m.cmds = Some(cmds::Cmds { sandbox: sb.clone(), state: cmds::State::Loading });
+            Ok(vec![view_action(&mut m, cx), Action::Call(Call::get(cmds::path(&sb), "read the skills and commands").timeout(15).tag(&cmds::tag(&sb)))])
+        }
         "monitor_attach" => {
             let k = a.req("key");
             if let Some(why) = held(cx) {
@@ -893,6 +915,18 @@ fn links(m: &Model, cx: &Ctx, name: &str, key: &str) -> Result<Vec<Action>, Stri
 /// ends it.
 fn standin(st: &mut super::Standin, method: &str, path: &str, _body: &J) -> Option<(u16, J)> {
     let (p, query) = path.split_once('?').unwrap_or((path, ""));
+    // `GET /api/sandboxes/:name/commands`: the fixture's `commands.<name>`
+    // as the daemon's answer; no entry is a daemon without the route (404).
+    // Each read is noted in `commands_calls`.
+    if let Some(sb) = p.strip_prefix("/api/sandboxes/").and_then(|r| r.strip_suffix("/commands")).filter(|_| method == "GET") {
+        let sb = pct_decode(sb);
+        if !st.data["commands_calls"].is_array() {
+            st.data["commands_calls"] = json!([]);
+        }
+        st.data["commands_calls"].as_array_mut().unwrap().push(sb.clone().into());
+        let a = st.data["commands"][&sb].clone();
+        return Some(if a.is_null() { (404, json!({ "ok": false, "error": "not found" })) } else { (200, a) });
+    }
     let rest = p.strip_prefix("/api/sessions/")?;
     let parts: Vec<String> = rest.split('/').map(pct_decode).collect();
     let q = |k: &str| query.split('&').find_map(|kv| kv.strip_prefix(&format!("{k}="))).and_then(|v| v.parse::<u64>().ok());
