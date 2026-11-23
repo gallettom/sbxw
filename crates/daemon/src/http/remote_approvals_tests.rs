@@ -1155,7 +1155,13 @@ async fn the_desktop_merge_is_unpinned_and_the_phones_is_pinned() {
         std::fs::write(ws4.join("a"), "a").unwrap();
         git(&ws4, &["add", "."]);
         git(&ws4, &["commit", "-qm", "base"]);
-        git(&ws4, &["branch", "sbxw/alpha"]);
+        // A commit of its own: a branch already in main has nothing to merge
+        // and is settled without the script (plans_merge_close_tests.rs).
+        git(&ws4, &["checkout", "-q", "-b", "sbxw/alpha"]);
+        std::fs::write(ws4.join("b"), "b").unwrap();
+        git(&ws4, &["add", "."]);
+        git(&ws4, &["commit", "-qm", "alpha"]);
+        git(&ws4, &["checkout", "-q", "main"]);
         w.app.store.update(&sb, |r| r.workspace = Some(ws4.clone())).unwrap();
         let id = pending_plan(&w, "other", "g");
         let mut book = w.app.plans.lock().unwrap();
