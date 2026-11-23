@@ -926,7 +926,7 @@ mod tests {
         assert!(c.lines[0].contains("sandbox web-app"), "{:?}", c.lines);
         assert!(act(&cx, &ask("network_unblock", json!({ "sandbox": "web-app", "rule": "r-org" }))).unwrap_err().contains("organisation"));
         // A fixed host port: the dialog; sbx's choice: direct.
-        assert!(matches!(act(&cx, &ask("port_publish", json!({ "sandbox": "web-app", "sandbox_port": 3000 }))).unwrap().as_slice(), [Action::Call(_)]));
+        assert!(matches!(act(&cx, &ask("port_publish", json!({ "sandbox": "web-app", "sandbox_port": 3000 }))).unwrap().as_slice(), [Action::Set { .. }, Action::Call(_)]));
         let a = act(&cx, &ask("port_publish_fixed", json!({ "sandbox": "web-app", "sandbox_port": 3000, "host_port": 3000, "host_ip": "0.0.0.0" }))).unwrap();
         let [Action::Confirm(c)] = a.as_slice() else { panic!() };
         assert!(c.danger && c.lines.iter().any(|l| l.contains("other machines")));
@@ -1278,6 +1278,7 @@ mod tests {
         assert!(all.contains("Published 5173 on 127.0.0.1:49154, the port sbx picked."), "{all}");
         // While it runs, the button is busy.
         d["network_publish"] = json!({ "sandbox": "web-app", "sandbox_port": 5173, "busy": true });
+        d["app"] = json!({});
         let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
         h.load("network", include_str!("../../screens/network.luau")).unwrap();
         let tree = h.render(&d).unwrap();
@@ -1314,19 +1315,17 @@ mod tests {
         assert_eq!(set_of(&v, "network_why").unwrap()["busy"], true);
         let call = the_call(&v);
         assert_eq!(call.path, "/api/sandboxes/web-app/policy/check?target=api.anthropic.com%3A443");
-        // A rule: named, and the rules list's remove (an allow rule: direct).
-        d["policy"]["web-app"]["rules"]["rows"].as_array_mut().unwrap().push(json!(["local-policy", "r-9", "local", "sandbox:web-app", "allow", "api.anthropic.com"]));
-        d["network_policy"] = d["policy"]["web-app"].clone();
+        // A rule (the fixture's r-1): named, and the rules list's remove (an allow rule: direct).
         let r = answer(&mut d, &call);
         let w = why_answer(&Ctx { data: &d }, &call, Ok(r));
-        assert_eq!((w["rule"].clone(), w["rule_id"].clone(), w["removable"].clone(), w["target"].clone()), (json!("r-9"), json!("r-9"), json!("rule_rm"), json!("api.anthropic.com:443")));
+        assert_eq!((w["rule"].clone(), w["rule_id"].clone(), w["removable"].clone(), w["target"].clone()), (json!("r-1"), json!("r-1"), json!("rule_rm"), json!("api.anthropic.com:443")));
         d["network_why"] = w;
         let (out, args, h) = render(d.clone(), None, 0);
         let all = out.join("\n");
-        assert!(all.contains("Rule: r-9") && all.contains("allowed by rule r-9 (api.anthropic.com)") && all.contains("why-rm"), "{all}");
+        assert!(all.contains("Rule: r-1") && all.contains("allowed by rule r-1 (api.anthropic.com)") && all.contains("why-rm"), "{all}");
         let rm = args.iter().find(|(k, _)| k == "why-rm").unwrap().1.clone();
         let asks = h.act("rule_rm", &rm, &J::Null).unwrap();
-        assert_eq!((asks["name"].clone(), asks["args"]["rule"].clone()), (json!("network_rule_rm"), json!("r-9")));
+        assert_eq!((asks["name"].clone(), asks["args"]["rule"].clone()), (json!("network_rule_rm"), json!("r-1")));
         // sbx names no rule: said so, no remove.
         let mut d2 = cx_data();
         d2["policy_check"] = json!({ "web-app": { "api.anthropic.com:443": { "ok": true, "supported": true, "target": "api.anthropic.com:443", "allowed": J::Null, "rule": J::Null, "rule_id": J::Null, "raw": "unknown: no matching entry" } } });

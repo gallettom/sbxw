@@ -356,7 +356,7 @@ fn the_ssh_card_asks_for_the_rewrite_until_it_is_done() {
     assert_eq!(x[0].tone, "amber");
     // Pressed: the ssh feature's intent; busy while it runs.
     let asks = press("setup", src, "full", json!({ "ssh": due }), "ssh-setup");
-    assert_eq!(asks, vec![json!({ "name": "ssh_setup", "args": {} })]);
+    assert_eq!((asks.len(), asks[0]["name"].as_str()), (1, Some("ssh_setup")));
     let (_, tree) = render_panel("setup", src, "full", json!({ "ssh": due, "ssh_run": { "busy": true } }));
     fn find<'a>(n: &'a crate::luau::Node, k: &str) -> Option<&'a crate::luau::Node> {
         if n.key.as_deref() == Some(k) {

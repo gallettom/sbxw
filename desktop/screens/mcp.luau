@@ -109,7 +109,7 @@ return {
         local word, tone, line, help
         if type(m) == "table" and m.supported ~= false and m.ok ~= false then
           word = m.mode or "unknown"
-          tone = word == "dynamic" and "blue" or (word == "static" and "neutral" or "amber")
+          tone = word == "dynamic" and "blue" or "neutral"
           local list_ = m.servers or {}
           line = #list_ > 0 and table.concat(list_, ", ") or "no server connected"
           help = word == "dynamic" and "Dynamic: the agent connects servers as it needs them; this is what is connected now"
