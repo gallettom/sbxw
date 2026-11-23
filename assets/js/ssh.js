@@ -6,7 +6,39 @@ const sshPop = document.getElementById('ssh-pop');
 
 const sshCard = bindPopover(sshPop, {
   closeButton: 'ssh-pop-close',
-  onOpen: sandbox => fillSshFields(sandbox),
+  onOpen: sandbox => { fillSshFields(sandbox); sshShowRefresh(); },
+});
+
+// sbx 0.54 asks for `sbx setup ssh` once after the upgrade; the daemon knows
+// whether it is still due (`GET /api/ssh`). The button is the person's click:
+// nothing runs setup on its own from here.
+const sshRefresh = document.getElementById('ssh-refresh');
+const sshRefreshBtn = document.getElementById('ssh-refresh-btn');
+const sshRefreshErr = document.getElementById('ssh-refresh-error');
+
+async function sshShowRefresh() {
+  let r = null;
+  try { r = await (await fetch('/api/ssh')).json(); } catch (_) { /* no reminder */ }
+  sshRefresh.classList.toggle('hidden', !(r && r.ok && r.refresh_due));
+  showNote(sshRefreshErr, '');
+}
+
+sshRefreshBtn.addEventListener('click', async () => {
+  sshRefreshBtn.disabled = true;
+  showNote(sshRefreshErr, '');
+  try {
+    const r = await postJson('/api/ssh/setup', {});
+    if (r.ok) {
+      sshRefresh.classList.add('hidden');
+      showToast('SSH configuration rewritten (sbx setup ssh)', 'ok');
+    } else {
+      showNote(sshRefreshErr, r.error || 'sbx setup ssh failed: run `sbxw ssh --setup` in a terminal');
+    }
+  } catch (e) {
+    showNote(sshRefreshErr, e.message);
+  } finally {
+    sshRefreshBtn.disabled = false;
+  }
 });
 
 function toggleSshPop(sandbox, anchor) { sshCard.toggle(anchor, sandbox); }
