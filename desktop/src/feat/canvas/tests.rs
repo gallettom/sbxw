@@ -1141,10 +1141,15 @@ mod in_window {
 
     /// Canvas over the panes, then in its own window from its bar's control.
     fn opened() -> (Runtime<App>, Runtime<CanvasWin>) {
+        opened_on("basic")
+    }
+
+    /// [`opened`] on another fixture.
+    pub(super) fn opened_on(fixture: &str) -> (Runtime<App>, Runtime<CanvasWin>) {
         *STATE().lock().unwrap() = State::default();
         crate::surface_canvas::close(SURF);
         w::reset();
-        let mut rt = runtime(1284.0, 816.0);
+        let mut rt = super::window::runtime_of(fixture, 1284.0, 816.0);
         main(&mut rt, |rt| tap(rt, "rail-canvas"));
         main(&mut rt, |rt| settle(rt, 6));
         main(&mut rt, |rt| tap(rt, "canvas-open-window"));
@@ -1367,4 +1372,69 @@ mod in_window {
             assert!(n.contains("runs only from your own press"), "{n}");
         });
     }
+
+    /// The canvas window draws a diagram and takes its gestures and keys as
+    /// the overlay does: a node dragged, Tab for a successor, ⌘Z; saved
+    /// through the main window's feature.
+    #[test]
+    fn a_diagram_is_edited_the_same_in_the_canvas_window() {
+        use crate::surface_canvas::diagram as dg;
+        let flow = super::diagram::FLOW;
+        let (mut rt, mut ct) = opened_on("diagrams");
+        // The workflow in view there, nothing selected.
+        main(&mut rt, |rt| {
+            for t in [flow, ""] {
+                let list = crate::intent::parse(&json!({ "kind": "intent", "name": "canvas_select", "args": { "target": t } })).unwrap();
+                rt.update(|s, _| list.into_iter().for_each(|i| s.run_intent("test", i)));
+                settle(rt, 3);
+            }
+        });
+        cframe(&mut ct);
+        let node = format!("canvas-dg-{flow}-n-plan");
+        let (x, y) = cwin(&mut ct, |ct| {
+            ct.frame(0.05);
+            ct.find(&node).unwrap_or_else(|| panic!("{node} drawn in the canvas window"))
+        });
+        cwin(&mut ct, |ct| {
+            ct.pointer_down(x, y);
+            ct.frame(0.02);
+            for k in 1..=5 {
+                ct.pointer_move(x + 12.0 * k as f32, y);
+                ct.frame(0.02);
+            }
+            ct.pointer_up(x + 60.0, y);
+            ct.frame(0.05);
+        });
+        main(&mut rt, |rt| settle(rt, 4));
+        let moved = STATE().lock().unwrap().diagrams[flow].cur.node("plan").unwrap().clone();
+        assert!(moved.x > 336.0 && moved.placed == dg::Placed::Person, "{moved:?}");
+        assert_eq!(STATE().lock().unwrap().selected.as_deref(), Some(format!("{flow}:n:plan").as_str()));
+        // Its keys: Tab adds a successor, ⌘Z takes it back.
+        let n = STATE().lock().unwrap().diagrams[flow].cur.nodes.len();
+        cwin(&mut ct, |ct| {
+            ct.key(key(Key::Tab));
+            ct.frame(0.05);
+        });
+        main(&mut rt, |rt| settle(rt, 4));
+        assert_eq!(STATE().lock().unwrap().diagrams[flow].cur.nodes.len(), n + 1);
+        cwin(&mut ct, |ct| {
+            ct.key(key(Key::Escape));
+            ct.frame(0.05);
+        });
+        main(&mut rt, |rt| settle(rt, 2));
+        cwin(&mut ct, |ct| {
+            ct.key(KeyEvent { key: Key::Command('z'), mods: Mods { cmd: true, ..Mods::default() } });
+            ct.frame(0.05);
+        });
+        main(&mut rt, |rt| settle(rt, 6));
+        assert_eq!(STATE().lock().unwrap().diagrams[flow].cur.nodes.len(), n);
+        let st = STATE().lock().unwrap().diagrams[flow].clone();
+        assert!(!st.saving && !st.dirty && st.rev >= 3, "saved through the main window: rev {}", st.rev);
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Diagrams (surface_canvas::diagram): drawn, then edited.
+
+#[path = "diagram_tests.rs"]
+mod diagram;

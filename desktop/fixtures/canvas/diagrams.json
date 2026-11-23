@@ -1,0 +1,444 @@
+{
+ "about": "Canvas: invented sandboxes and mock screens (gen.py).",
+ "app": {
+  "selected": "web-app",
+  "panes": 1,
+  "split": "columns",
+  "open": [
+   "web-app"
+  ],
+  "focused": 1
+ },
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/work/web",
+    "created_at": "2026-11-10T09:12:00Z",
+    "approvals": 0,
+    "kits_waiting": 0
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "stopped",
+    "workspace": "/work/docs",
+    "created_at": "2026-11-11T09:12:00Z",
+    "approvals": 0,
+    "kits_waiting": 0
+   }
+  ],
+  "sessions": [
+   {
+    "sandbox": "web-app",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763460300000,
+    "ts": 1763463600000,
+    "answerable": true,
+    "origin": "sbxw",
+    "session_id": "s-main"
+   },
+   {
+    "sandbox": "web-app",
+    "mode": "claude",
+    "state": "working",
+    "agent": "claude",
+    "started_ms": 1763460420000,
+    "ts": 1763463600000,
+    "answerable": true,
+    "thread": "checkout-ui",
+    "origin": "sbxw",
+    "session_id": "s-thread"
+   }
+  ],
+  "canvas": {
+   "canvases": {
+    "c-00000000000000d1": {
+     "id": "c-00000000000000d1",
+     "sandbox": "web-app",
+     "title": "Release plan",
+     "created_ms": 1763460000000,
+     "updated_ms": 1763460060000,
+     "shots": [],
+     "assets": [],
+     "pins": [],
+     "notes": [],
+     "rounds": [
+      {
+       "n": 1,
+       "at_ms": 1763460000000,
+       "shots": 0,
+       "diagrams": 1
+      },
+      {
+       "n": 2,
+       "at_ms": 1763460060000,
+       "shots": 0,
+       "diagrams": 1
+      }
+     ],
+     "reviews": [],
+     "diagrams": [
+      {
+       "id": "d-0000000000a1",
+       "title": "Release",
+       "kind": "workflow",
+       "round": 1,
+       "added_ms": 1763460000000,
+       "x": 0,
+       "y": 0,
+       "w": 1728,
+       "h": 336,
+       "moved": false,
+       "bytes": 3000,
+       "diagram": {
+        "version": 1,
+        "id": "d-0000000000a1",
+        "kind": "workflow",
+        "title": "Release",
+        "direction": "lr",
+        "lanes": [
+         {
+          "id": "person",
+          "label": "Person",
+          "at": 0,
+          "span": 112
+         },
+         {
+          "id": "lead",
+          "label": "Lead",
+          "at": 112,
+          "span": 92
+         },
+         {
+          "id": "thread",
+          "label": "Thread",
+          "at": 224,
+          "span": 112
+         }
+        ],
+        "groups": [
+         {
+          "id": "build",
+          "label": "Build and test",
+          "nodes": [
+           "work",
+           "test"
+          ]
+         }
+        ],
+        "nodes": [
+         {
+          "id": "ask",
+          "label": "Ask",
+          "shape": "start",
+          "x": 136,
+          "y": 24,
+          "w": 128,
+          "h": 64,
+          "placed": "layout",
+          "lane": "person",
+          "sub": "the person"
+         },
+         {
+          "id": "plan",
+          "label": "Plan the split",
+          "shape": "process",
+          "x": 336,
+          "y": 136,
+          "w": 152,
+          "h": 44,
+          "placed": "layout",
+          "lane": "lead"
+         },
+         {
+          "id": "ok",
+          "label": "Approve?",
+          "shape": "decision",
+          "x": 560,
+          "y": 24,
+          "w": 160,
+          "h": 60,
+          "placed": "layout",
+          "lane": "person"
+         },
+         {
+          "id": "work",
+          "label": "Work",
+          "shape": "process",
+          "x": 800,
+          "y": 248,
+          "w": 152,
+          "h": 64,
+          "placed": "layout",
+          "lane": "thread",
+          "sub": "in a worktree"
+         },
+         {
+          "id": "test",
+          "label": "Test",
+          "shape": "process",
+          "x": 1016,
+          "y": 258,
+          "w": 96,
+          "h": 44,
+          "placed": "layout",
+          "lane": "thread"
+         },
+         {
+          "id": "results",
+          "label": "Results",
+          "shape": "store",
+          "x": 1176,
+          "y": 258,
+          "w": 112,
+          "h": 44,
+          "placed": "layout",
+          "lane": "thread"
+         },
+         {
+          "id": "ci",
+          "label": "CI service",
+          "shape": "external",
+          "x": 1176,
+          "y": 136,
+          "w": 128,
+          "h": 44,
+          "placed": "layout",
+          "lane": "lead"
+         },
+         {
+          "id": "reviewer",
+          "label": "Reviewer",
+          "shape": "actor",
+          "x": 1376,
+          "y": 136,
+          "w": 128,
+          "h": 44,
+          "placed": "layout",
+          "lane": "lead"
+         },
+         {
+          "id": "rule",
+          "label": "Merge-tree must be clean",
+          "shape": "note",
+          "x": 1376,
+          "y": 248,
+          "w": 200,
+          "h": 64,
+          "placed": "layout",
+          "lane": "thread"
+         },
+         {
+          "id": "merged",
+          "label": "Merged",
+          "shape": "end",
+          "x": 1616,
+          "y": 24,
+          "w": 112,
+          "h": 44,
+          "placed": "layout",
+          "lane": "person"
+         }
+        ],
+        "edges": [
+         {
+          "id": "e1",
+          "from": "ask",
+          "to": "plan",
+          "style": "solid",
+          "label": "asks"
+         },
+         {
+          "id": "e2",
+          "from": "plan",
+          "to": "ok",
+          "style": "dashed",
+          "label": "proposes"
+         },
+         {
+          "id": "e3",
+          "from": "ok",
+          "to": "work",
+          "style": "emphasis",
+          "label": "yes"
+         },
+         {
+          "id": "e4",
+          "from": "ok",
+          "to": "ask",
+          "style": "error",
+          "label": "no"
+         },
+         {
+          "id": "e5",
+          "from": "work",
+          "to": "test",
+          "style": "solid"
+         },
+         {
+          "id": "e6",
+          "from": "test",
+          "to": "results",
+          "style": "dashed"
+         },
+         {
+          "id": "e7",
+          "from": "test",
+          "to": "ci",
+          "style": "solid",
+          "label": "runs"
+         },
+         {
+          "id": "e8",
+          "from": "ci",
+          "to": "reviewer",
+          "style": "emphasis"
+         },
+         {
+          "id": "e9",
+          "from": "reviewer",
+          "to": "rule",
+          "style": "dashed"
+         },
+         {
+          "id": "e10",
+          "from": "rule",
+          "to": "merged",
+          "style": "solid",
+          "label": "merge"
+         }
+        ],
+        "rev": 1,
+        "author": "agent",
+        "updated_ms": 1763460000000
+       }
+      },
+      {
+       "id": "d-0000000000b2",
+       "title": "Canvas review",
+       "kind": "sequence",
+       "round": 2,
+       "added_ms": 1763460060000,
+       "x": 0,
+       "y": 816,
+       "w": 680,
+       "h": 348,
+       "moved": false,
+       "bytes": 1500,
+       "diagram": {
+        "version": 1,
+        "id": "d-0000000000b2",
+        "kind": "sequence",
+        "title": "Canvas review",
+        "direction": "lr",
+        "lanes": [],
+        "groups": [],
+        "nodes": [
+         {
+          "id": "you",
+          "label": "You",
+          "shape": "actor",
+          "x": 0,
+          "y": 0,
+          "w": 128,
+          "h": 44,
+          "placed": "layout"
+         },
+         {
+          "id": "app",
+          "label": "App",
+          "shape": "process",
+          "x": 188,
+          "y": 0,
+          "w": 104,
+          "h": 44,
+          "placed": "layout"
+         },
+         {
+          "id": "daemon",
+          "label": "Daemon",
+          "shape": "process",
+          "x": 352,
+          "y": 0,
+          "w": 120,
+          "h": 44,
+          "placed": "layout"
+         },
+         {
+          "id": "agent",
+          "label": "Agent",
+          "shape": "process",
+          "x": 532,
+          "y": 0,
+          "w": 112,
+          "h": 44,
+          "placed": "layout"
+         }
+        ],
+        "edges": [
+         {
+          "id": "m1",
+          "from": "you",
+          "to": "app",
+          "style": "solid",
+          "label": "pin a remark",
+          "order": 0
+         },
+         {
+          "id": "m2",
+          "from": "app",
+          "to": "daemon",
+          "style": "solid",
+          "label": "save",
+          "order": 1
+         },
+         {
+          "id": "m3",
+          "from": "daemon",
+          "to": "app",
+          "style": "dashed",
+          "label": "rev 2",
+          "order": 2
+         },
+         {
+          "id": "m4",
+          "from": "app",
+          "to": "agent",
+          "style": "emphasis",
+          "label": "send round",
+          "order": 3
+         },
+         {
+          "id": "m5",
+          "from": "agent",
+          "to": "agent",
+          "style": "dashed",
+          "label": "read",
+          "order": 4
+         },
+         {
+          "id": "m6",
+          "from": "agent",
+          "to": "daemon",
+          "style": "error",
+          "label": "replace",
+          "order": 5
+         }
+        ],
+        "rev": 1,
+        "author": "agent",
+        "updated_ms": 1763460000000
+       }
+      }
+     ]
+    }
+   },
+   "pictures": {}
+  }
+ }
+}

@@ -398,6 +398,17 @@ pub const CANVAS_WHITE: &[(&str, u32)] = &[
     ("canvas-pin-text", 0xffffff),
     // The edge of the resize handle (the ground's colour).
     ("canvas-handle-edge", 0xffffff),
+    // A diagram (surface_diagram.rs): a node's fill and edge, an edge's line
+    // by style (solid and dashed, emphasis, error), a lane's band, a group's
+    // frame, a sequence's lifelines.
+    ("canvas-diagram-node", 0xffffff),
+    ("canvas-diagram-node-edge", 0x6e7781),
+    ("canvas-diagram-edge", 0x57606a),
+    ("canvas-diagram-emphasis", 0x0969da),
+    ("canvas-diagram-error", 0xcf222e),
+    ("canvas-diagram-lane", 0xf6f8fa),
+    ("canvas-diagram-group", 0x8250df),
+    ("canvas-diagram-lifeline", 0x6e7781),
 ];
 
 /// The dark ground: each canvas token is the active theme's token named
@@ -423,6 +434,14 @@ pub const CANVAS_DARK: &[(&str, &str)] = &[
     ("canvas-pin-ring-selected", "text-bright"),
     ("canvas-pin-text", "on-primary"),
     ("canvas-handle-edge", "bg"),
+    ("canvas-diagram-node", "elevated"),
+    ("canvas-diagram-node-edge", "text-muted"),
+    ("canvas-diagram-edge", "text-muted"),
+    ("canvas-diagram-emphasis", "accent"),
+    ("canvas-diagram-error", "red"),
+    ("canvas-diagram-lane", "surface"),
+    ("canvas-diagram-group", "purple"),
+    ("canvas-diagram-lifeline", "text-muted"),
 ];
 
 /// The dots' opacity on the dark ground (`border` at 70 %); opaque on white.
@@ -477,6 +496,27 @@ pub const CANVAS_PAIRS: &[(&str, &str, Need)] = &[
     ("canvas-frame", "canvas-mat", Need::Mark),
     // A note card's edge on the ground.
     ("canvas-note-edge", "canvas-ground", Need::Mark),
+    // A diagram: a node's label and second line on its fill; a lane's and a
+    // group's label on the band; an error edge's label on its ground.
+    ("canvas-text", "canvas-diagram-node", Need::Text),
+    ("canvas-text-muted", "canvas-diagram-node", Need::Text),
+    ("canvas-text", "canvas-diagram-lane", Need::Text),
+    ("canvas-text-muted", "canvas-diagram-lane", Need::Text),
+    ("canvas-diagram-error", "canvas-ground", Need::Text),
+    // Its lines and frames, on the ground and on a lane's band; a selected
+    // node's edge on its fill.
+    ("canvas-diagram-node-edge", "canvas-ground", Need::Mark),
+    ("canvas-diagram-node-edge", "canvas-diagram-lane", Need::Mark),
+    ("canvas-diagram-edge", "canvas-ground", Need::Mark),
+    ("canvas-diagram-edge", "canvas-diagram-lane", Need::Mark),
+    ("canvas-diagram-emphasis", "canvas-ground", Need::Mark),
+    ("canvas-diagram-emphasis", "canvas-diagram-lane", Need::Mark),
+    ("canvas-diagram-error", "canvas-diagram-lane", Need::Mark),
+    ("canvas-diagram-group", "canvas-ground", Need::Mark),
+    ("canvas-diagram-group", "canvas-diagram-lane", Need::Mark),
+    ("canvas-diagram-lifeline", "canvas-ground", Need::Mark),
+    ("canvas-accent", "canvas-diagram-node", Need::Mark),
+    ("canvas-accent", "canvas-diagram-lane", Need::Mark),
 ];
 
 /// Pairs the dark ground draws as the canvas always did, under the level:
