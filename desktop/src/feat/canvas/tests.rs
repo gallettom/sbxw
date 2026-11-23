@@ -1030,7 +1030,9 @@ fn the_ground_defaults_to_white_and_the_choice_is_remembered() {
     assert_eq!(w.ui()["ground"], "white");
     assert_eq!(crate::surface_canvas::scene(SURF).ground, Ground::White);
     let ids: Vec<&str> = w.ui()["grounds"].as_array().unwrap().iter().filter_map(|g| g["id"].as_str()).collect();
-    assert_eq!(ids, ["white", "dark", "follow"], "three options; the select checks the one in `ground`");
+    assert_eq!(ids, ["white", "dark", "follow"], "three options");
+    let checked: Vec<&str> = w.ui()["grounds"].as_array().unwrap().iter().filter(|g| g["icon"] == "check").filter_map(|g| g["id"].as_str()).collect();
+    assert_eq!(checked, ["white"], "the current one marked");
     let acts = w.intent("canvas_ground", json!({ "ground": "dark" })).unwrap();
     assert!(acts.contains(&Action::Remember { key: "ground".into(), value: json!("dark") }), "{acts:?}");
     w.run(acts);
@@ -1060,11 +1062,12 @@ fn the_element_tree_has_the_ground_and_the_grid_for_each_choice() {
     let mut rt = window::opened_of("grid12", "s-1-80", 1284.0, 816.0);
     window::settle(&mut rt, 4);
     let info = |rt: &rune::Runtime<crate::shell::App>, key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key));
-    assert!(info(&rt, "canvas-ground").is_some(), "the ground's select in the bar");
+    assert!(info(&rt, "canvas-ground").is_some(), "the ground's menu in the bar");
     for (g, light) in [("white", true), ("dark", false), ("follow", false), ("white", true)] {
         let list = crate::intent::parse(&json!({ "kind": "intent", "name": "canvas_ground", "args": { "ground": g } })).unwrap();
         rt.update(|s, _| list.into_iter().for_each(|i| s.run_intent("test", i)));
-        window::settle(&mut rt, 4);
+        // Long enough for the ground's fill to finish its transition.
+        window::settle(&mut rt, 30);
         let ground = info(&rt, "canvas-canvas").expect("the surface");
         assert_eq!(ground.fill, canvas_c(light, "canvas-ground"), "{g}");
         let dots = info(&rt, "canvas-dots-canvas").unwrap_or_else(|| panic!("{g}: the dots"));

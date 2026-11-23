@@ -66,8 +66,9 @@ local function toolbar(ui, wide)
   out[#out + 1] = button{ icon = "fit", key = "canvas-zoom-fit", on = "zoom", arg = "fit", variant = "ghost", dense = true, help = "Every shot in view" }
   out[#out + 1] = button{ "100%", key = "canvas-zoom-actual", on = "zoom", arg = "actual", variant = "ghost", dense = true, help = "One CSS pixel of the shot per point" }
   -- The ground: White (the default), Dark, or Follow theme; the current one checked.
-  out[#out + 1] = select{ id = "canvas-ground", value = ui.ground or "white", items = ui.grounds or {}, on = "ground",
-    help = "The canvas's ground: white, dark, or the theme's" }
+  -- Dense like the bar's buttons; its name shows on a wide overlay only.
+  out[#out + 1] = menu{ wide and (ui.ground_label or "White") or nil, id = "canvas-ground", icon = "appearance", items = ui.grounds or {},
+    on = "ground", variant = "ghost", dense = true, help = "Ground: " .. (ui.ground_label or "White") .. ". White, dark, or the theme's" }
   return row(out)
 end
 
