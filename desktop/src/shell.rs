@@ -1640,7 +1640,9 @@ impl App {
         if self.swapped.is_some() {
             return self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some();
         }
-        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.feats.base.is_some() || self.jarvis.shown.is_some() || self.palette.is_some()
+        // A copy offer drawn in a page window: the main window shows its scrim, modal as any.
+        let copy_elsewhere = self.copy_offer.is_some() && crate::windows::copy_elsewhere_in().is_some();
+        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.feats.base.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || copy_elsewhere
     }
 
     /// `data.app.covered`: something over the panes and over the view drawn
@@ -2615,7 +2617,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // A copy offer raised by a page window's terminal is answered there
     // (crate::windows); here, a scrim saying where it is.
     match (&s.copy_offer, crate::windows::copy_elsewhere_in()) {
-        (Some(_), Some(w)) => root = root.child(crate::windows::elsewhere_scrim(w)),
+        (Some(_), Some(w)) => root = root.child(crate::windows::elsewhere_scrim(w, true)),
         (Some(o), None) => root = root.child(approval::copy_offer_view::<App>(o, |s: &mut App, tx: &mut Tx| s.accept_copy_offer(tx), |s: &mut App| s.copy_offer = None)),
         _ => {}
     }
@@ -2631,7 +2633,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // A confirmation raised in the canvas window is drawn and answered
     // there (crate::windows); here, a scrim saying where it is.
     if let Some(w) = crate::windows::dialog_elsewhere_in() {
-        root = root.child(crate::windows::elsewhere_scrim(w));
+        root = root.child(crate::windows::elsewhere_scrim(w, false));
     } else if let Some(dialog) = s.confirm_view() {
         root = root.child(scrim("cf-scrim", dialog, |s: &mut App| approval::ConfirmAnswers::cancel_click(s)));
     }

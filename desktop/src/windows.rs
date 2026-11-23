@@ -1134,7 +1134,7 @@ pub fn gate_scrim<S: 'static>(g: &Gate) -> El {
 /// Over the main window while a confirmation (or a copy offer) raised in
 /// window `owner` waits there: a press, the wheel or a drop on it reaches
 /// nothing and answers nothing; its button brings that window to the front.
-pub fn elsewhere_scrim(owner: Win) -> El {
+pub fn elsewhere_scrim(owner: Win, copy: bool) -> El {
     let name = with(|h| h.name(owner));
     let short = match owner {
         Win::Canvas => "Show the Canvas window".to_string(),
@@ -1153,7 +1153,7 @@ pub fn elsewhere_scrim(owner: Win) -> El {
         .border(1.0, c("border"))
         .on_press(|_s: &mut App| {})
         .child(text(format!("Answer in {name}")).font(small(theme::font_size::TITLE, 600.0)).color(c("text-bright")))
-        .child(text(format!("What you asked for in {name} waits there for your answer. It is answered there only.")).font(small(theme::font_size::BODY, 400.0)).color(c("text")).wrap().w_full())
+        .child(text(if copy { format!("A copy to the clipboard, asked by a program in {name}, waits there for your answer. It is answered there only.") } else { format!("A confirmation you asked for in {name} waits there. It is answered there only.") }).font(small(theme::font_size::BODY, 400.0)).color(c("text")).wrap().w_full())
         .child(row().w_full().child(el().grow(1.0)).child(button("cwin-elsewhere-show", &short, "Brings that window to the front", true, move |_s: &mut App, _tx: &mut Tx| {
             focus_window(owner);
         })));
