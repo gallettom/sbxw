@@ -267,6 +267,9 @@ enum Cmd {
         check: bool,
         #[arg(long)]
         no_island: bool,
+        /// Leave an installed desktop app (sbxw.app) as it is.
+        #[arg(long)]
+        no_desktop: bool,
     },
     /// Install the browser extension (side panel beside the app under test).
     Extension {
@@ -420,7 +423,7 @@ fn main() -> Result<()> {
         Cmd::Remote { cmd, config } => cmd::remote::run(cmd.unwrap_or_default(), &config),
         Cmd::Cache { action, config } => cmd::cache(action.unwrap_or_default(), &config),
         Cmd::Down { name } => cmd::down(name),
-        Cmd::Update { check, no_island } => update::run(check, no_island),
+        Cmd::Update { check, no_island, no_desktop } => update::run(check, no_island, no_desktop),
         Cmd::Extension { config, daemon, refresh } => {
             let cfg = cmd::load_config(&config)?;
             extension::cmd(&cfg.web_addr, daemon, refresh)

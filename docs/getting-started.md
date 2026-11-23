@@ -212,13 +212,16 @@ A native macOS app with the same panes, boards and approvals as the web UI. It
 talks to a running sbxw daemon (`127.0.0.1:7681`, with the token in
 `~/.sbxw/run/ui-token`); it does not start one, so run `sbxw` first.
 
-From a release (when the release has one; the installer does not fetch it):
+From a release: the install script offers it on macOS ("Install the sbxw
+desktop app?") and puts `sbxw.app` in `~/Applications`, after checking its
+checksum. A release whose desktop build failed has none, and the installer says
+so. By hand:
 
 ```bash
 # Download sbxw-desktop-macos.zip from the release page, then:
-ditto -x -k sbxw-desktop-macos.zip /Applications
-xattr -dr com.apple.quarantine /Applications/sbxw.app   # ad-hoc signed, not notarized
-open /Applications/sbxw.app
+ditto -x -k sbxw-desktop-macos.zip ~/Applications
+xattr -dr com.apple.quarantine ~/Applications/sbxw.app   # ad-hoc signed, not notarized
+open ~/Applications/sbxw.app
 ```
 
 From source (any release, and Linux):
@@ -239,6 +242,9 @@ sbxw update --check    # only check
 
 `sbxw update` also refreshes the browser extension folder. On macOS it updates
 an installed `SbxwIsland.app` when the release has a newer build, and relaunches
-it if it was running. `--no-island` leaves the app alone.
+it if it was running. `--no-island` leaves the app alone. It also updates an
+installed `sbxw.app` (the desktop app) when the release has a newer one; a
+running desktop app is not restarted: quit and reopen it. `--no-desktop` leaves
+it alone.
 
 The web UI shows both versions, `sbx` and `sbxw`, at the foot of the sidebar.

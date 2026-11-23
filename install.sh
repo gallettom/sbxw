@@ -181,6 +181,41 @@ install_island() {
   printf "  Want it at startup? Add it under System Settings › General › Login Items.\n"
 }
 
+# Download the prebuilt macOS desktop app (sbxw.app) and install it into
+# ~/Applications. Same rules as the island: verified first, ad-hoc-signed, so
+# the download quarantine is stripped. A release without one is skipped.
+install_desktop() {
+  url="$1"; app_dir="$2"; sums="$3"
+  tmp="$(mktemp -d)"
+  if ! fetch "$url" -o "$tmp/desktop.zip" 2>/dev/null; then
+    warn "No desktop app build in ${VERSION} (skipping)."
+    rm -rf "$tmp"; return 0
+  fi
+  # Fail closed: an unverified bundle is never extracted, moved or opened.
+  if ! verify_sum "$tmp/desktop.zip" "sbxw-desktop-macos.zip" "$sums"; then
+    err "The desktop app download did not verify, so it was not installed."
+    rm -rf "$tmp"; return 0
+  fi
+  if command -v ditto >/dev/null 2>&1; then
+    ditto -x -k "$tmp/desktop.zip" "$tmp" 2>/dev/null || true
+  else
+    unzip -q "$tmp/desktop.zip" -d "$tmp" 2>/dev/null || true
+  fi
+  if [ ! -d "$tmp/sbxw.app" ]; then
+    warn "Desktop archive missing sbxw.app (skipping)."
+    rm -rf "$tmp"; return 0
+  fi
+  mkdir -p "$app_dir"
+  rm -rf "$app_dir/sbxw.app"
+  mv "$tmp/sbxw.app" "$app_dir/"
+  xattr -dr com.apple.quarantine "$app_dir/sbxw.app" 2>/dev/null || true
+  rm -rf "$tmp"
+  info "desktop app installed → ${app_dir}/sbxw.app"
+  printf "  Launch it:  open '%s/sbxw.app'\n" "$app_dir"
+  printf "  It talks to the running daemon: start one with 'sbxw' first.\n"
+  printf "  'sbxw update' keeps it up to date (--no-desktop leaves it alone).\n"
+}
+
 # ── Wordmark ─────────────────────────────────────────────────────────────────
 # The site's logo at terminal scale: the prompt and the wordmark, in the
 # favicon's colours. Half blocks (▀▄█) carry two pixel rows per text row, so the
@@ -406,6 +441,24 @@ if [ "$OS" = "macos" ]; then
     read -r REPLY < /dev/tty || REPLY=""
     case "$REPLY" in
       [yY]*) install_island "$ISLAND_URL" "$ISLAND_APP_DIR" "$SUMS" ;;
+      *)     info "Skipped. Grab it any time from the releases page." ;;
+    esac
+  fi
+fi
+
+# ── macOS desktop app (optional) ─────────────────────────────────────────────
+if [ "$OS" = "macos" ]; then
+  istep "$C_ISLAND" "sbxw desktop app" "native app, optional"
+  DESKTOP_URL="https://github.com/${REPO}/releases/download/${VERSION}/sbxw-desktop-macos.zip"
+  DESKTOP_APP_DIR="$HOME/Applications"
+  if ! (: 2>/dev/null >/dev/tty) 2>/dev/null; then
+    warn "Non-interactive install — skipping the desktop app."
+    printf "  Get it later from https://github.com/%s/releases (sbxw-desktop-macos.zip).\n" "$REPO"
+  else
+    printf "Install the sbxw desktop app (a native window on the same daemon)? [y/N] " > /dev/tty
+    read -r REPLY < /dev/tty || REPLY=""
+    case "$REPLY" in
+      [yY]*) install_desktop "$DESKTOP_URL" "$DESKTOP_APP_DIR" "$SUMS" ;;
       *)     info "Skipped. Grab it any time from the releases page." ;;
     esac
   fi

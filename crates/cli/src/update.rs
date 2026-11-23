@@ -23,7 +23,7 @@ const SIG_NAMESPACE: &str = "sbxw-release";
 
 /// Checks GitHub for a newer sbxw release and, unless `check_only`, downloads
 /// and installs it in place of the currently running binary.
-pub fn run(check_only: bool, no_island: bool) -> Result<()> {
+pub fn run(check_only: bool, no_island: bool, no_desktop: bool) -> Result<()> {
     let ui = Ui::new();
     let current = env!("CARGO_PKG_VERSION");
     println!("{}\n", crate::banner());
@@ -45,19 +45,33 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
         }
     };
 
+    // The desktop app follows the release's version: refreshed when installed.
+    let desktop = |check: bool| {
+        if no_desktop {
+            return;
+        }
+        if let Err(e) = update_desktop(&ui, &base, check) {
+            ui.warn(&format!(
+                "could not refresh {DESKTOP_APP}: {e:#}\ninstall it manually from https://github.com/{REPO}/releases"
+            ));
+        }
+    };
+
     let exe = std::env::current_exe().context("could not resolve current executable path")?;
 
     // The island bullet only when there is one to refresh: updating never
     // installs what the user declined.
     let island_planned = !no_island && std::env::consts::OS == "macos" && installed_island_app().is_some();
+    let desktop_planned = !no_desktop && std::env::consts::OS == "macos" && installed_app(DESKTOP_APP).is_some();
 
     if parse_version(latest) <= parse_version(current) {
         ui.ok("sbxw", &format!("v{current} is the latest"));
         if !check_only {
-            ui.plan("sbxw update will refresh", &[PlanItem::extension(), PlanItem::island(island_planned)]);
+            ui.plan("sbxw update will refresh", &[PlanItem::extension(), PlanItem::island(island_planned), PlanItem::desktop(desktop_planned)]);
             refresh_extension(&ui, &exe);
         }
         island(check_only);
+        desktop(check_only);
         println!();
         return Ok(());
     }
@@ -74,10 +88,12 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
             }),
             PlanItem::extension(),
             PlanItem::island(island_planned),
+            PlanItem::desktop(desktop_planned),
         ],
     );
     if check_only {
         island(true);
+        desktop(true);
         println!("\n  run {} to install it\n", ui.cmd("sbxw update"));
         return Ok(());
     }
@@ -112,6 +128,7 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
 
     refresh_extension(&ui, &exe);
     island(false);
+    desktop(false);
 
     println!(
         "\n  {}  sbxw {}v{current}{} → {}{latest_tag}{}\n",
@@ -174,6 +191,15 @@ impl PlanItem {
             title: "sbxw Island".into(),
             place: "~/Applications".into(),
             why: "menu-bar app, if a newer one ships".into(),
+        })
+    }
+
+    fn desktop(installed: bool) -> Option<Self> {
+        installed.then(|| Self {
+            colour: BLUE,
+            title: "sbxw desktop app".into(),
+            place: "~/Applications".into(),
+            why: "native app, if a newer one ships".into(),
         })
     }
 }
@@ -408,12 +434,114 @@ fn open_island(app: &std::path::Path) -> std::io::Result<std::process::ExitStatu
 /// Where install.sh puts the app, most-specific first. `None` when the user
 /// never installed it.
 fn installed_island_app() -> Option<PathBuf> {
+    installed_app(ISLAND_APP)
+}
+
+/// The bundle `name` in ~/Applications, else /Applications. `None` when it
+/// is in neither.
+fn installed_app(name: &str) -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    app_candidates(home.as_deref(), name).into_iter().find(|p| p.is_dir())
+}
+
+/// Where a bundle may be installed, most specific first.
+fn app_candidates(home: Option<&std::path::Path>, name: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(PathBuf::from(home).join("Applications").join(ISLAND_APP));
+    if let Some(home) = home {
+        candidates.push(home.join("Applications").join(name));
     }
-    candidates.push(PathBuf::from("/Applications").join(ISLAND_APP));
-    candidates.into_iter().find(|p| p.is_dir())
+    candidates.push(PathBuf::from("/Applications").join(name));
+    candidates
+}
+
+// ── macOS desktop app (sbxw.app) ─────────────────────────────────────────
+// Like the island: refreshed in place only when already installed. Its
+// version is the release's (desktop/packaging/build-app.sh), published as
+// `desktop-version.txt` beside the zip.
+const DESKTOP_APP: &str = "sbxw.app";
+const DESKTOP_ZIP: &str = "sbxw-desktop-macos.zip";
+
+/// Refreshes an installed `sbxw.app` when the release ships a newer build.
+/// macOS only; a no-op when the app is not installed, and when the release
+/// has no desktop build (its job is optional). With `check_only` it only
+/// reports.
+///
+/// The app is never quit or relaunched: its process is named `sbxw`, as the
+/// CLI and the daemon are, so it cannot be told apart by name. A running app
+/// keeps the code it started with until the person restarts it, and is told so.
+fn update_desktop(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
+    if std::env::consts::OS != "macos" {
+        return Ok(());
+    }
+    let Some(app) = installed_app(DESKTOP_APP) else {
+        return Ok(()); // not installed: nothing to refresh
+    };
+
+    // Removed when it goes out of scope, on every exit path.
+    let tmp = PrivateDir::new("sbxw-desktop")?;
+    let tmp_dir = tmp.path();
+
+    let tmp_ver = tmp_dir.join("desktop-version.txt");
+    if curl_download(&format!("{base}/desktop-version.txt"), &tmp_ver).is_err() {
+        ui.ok("desktop app", "no build in this release: left as is");
+        return Ok(());
+    }
+    let latest = std::fs::read_to_string(&tmp_ver)?.trim().to_string();
+    let installed = island_bundle_version(&app);
+
+    if parse_version(&latest) <= parse_version(&installed) {
+        ui.ok("desktop app", &format!("v{installed} is up to date"));
+        return Ok(());
+    }
+    if check_only {
+        ui.ok("desktop app", &format!("v{latest} available  (you have v{installed})"));
+        return Ok(());
+    }
+
+    let tmp_zip = tmp_dir.join(DESKTOP_ZIP);
+    ui.spin(&format!("downloading {DESKTOP_ZIP}"), || {
+        curl_download(&format!("{base}/{DESKTOP_ZIP}"), &tmp_zip).with_context(|| format!("failed to download {DESKTOP_ZIP}"))
+    })?;
+
+    // Fail closed, as for the binary: no line for the zip, no install.
+    fetch_and_verify(base, tmp_dir, &tmp_zip, DESKTOP_ZIP).context("verification failed: leaving the installed app alone")?;
+
+    let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("ditto"))
+        .args(["-x", "-k"])
+        .arg(&tmp_zip)
+        .arg(tmp_dir)
+        .status()
+        .context("failed to run ditto")?;
+    let staged = tmp_dir.join(DESKTOP_APP);
+    if !status.success() || !staged.is_dir() {
+        anyhow::bail!("downloaded archive did not contain {DESKTOP_APP}");
+    }
+
+    let running = desktop_running(&app);
+    swap_bundle(&staged, &app)?;
+    // Ad-hoc-signed, not notarised: without this Gatekeeper refuses to open it.
+    let _ = std::process::Command::new(sbxw_core::sysbin::sys_bin("xattr"))
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(&app)
+        .status();
+
+    ui.ok(
+        "desktop app",
+        &format!("v{installed} → v{latest}{}", if running { "  (quit and reopen it to use the new version)" } else { "" }),
+    );
+    Ok(())
+}
+
+/// Whether the installed bundle's own executable runs: matched on its full
+/// path, never on the process name `sbxw`, which the CLI and the daemon share.
+fn desktop_running(app: &std::path::Path) -> bool {
+    let exe = app.join("Contents").join("MacOS").join("sbxw");
+    std::process::Command::new(sbxw_core::sysbin::sys_bin("pgrep"))
+        .arg("-f")
+        .arg(exe.as_os_str())
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// The installed bundle's CFBundleShortVersionString, or "0" when it can't be
@@ -788,6 +916,20 @@ mod tests {
     use super::*;
 
     const HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[test]
+    fn a_bundle_is_looked_for_in_the_home_applications_first() {
+        let c = app_candidates(Some(std::path::Path::new("/Users/me")), DESKTOP_APP);
+        assert_eq!(c, [PathBuf::from("/Users/me/Applications/sbxw.app"), PathBuf::from("/Applications/sbxw.app")]);
+        assert_eq!(app_candidates(None, ISLAND_APP), [PathBuf::from("/Applications/SbxwIsland.app")]);
+    }
+
+    #[test]
+    fn the_desktop_zip_has_its_own_line_in_the_sums() {
+        let sums = format!("{HASH}  sbxw-macos-arm64\n{HASH} *{DESKTOP_ZIP}\n");
+        assert_eq!(expected_checksum(&sums, DESKTOP_ZIP).unwrap(), HASH);
+        assert!(expected_checksum(&format!("{HASH}  sbxw-macos-arm64\n"), DESKTOP_ZIP).is_err(), "no line, no install");
+    }
 
     #[test]
     fn expected_checksum_finds_the_artifact_line() {
