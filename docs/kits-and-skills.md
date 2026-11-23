@@ -92,7 +92,15 @@ force a re-apply, run `sbx kit add <sandbox> <kit>` yourself.
 A kit that adds network rules makes sbx ask you to approve them, and sbx has
 no flag for that answer. sbxw then keeps the kit waiting and puts a **✓** on
 the sandbox's row: it opens a pane running `sbx kit add` where you answer
-sbx's prompt, one kit per ✓.
+sbx's prompt, one kit per ✓. sbx 0.54 checks kit permissions with stronger
+digests, so after that upgrade a sandbox may ask again for a kit's permissions
+it already had; sbxw says so once.
+
+A kit whose install fails shows sbx's own message whole: sbx 0.54 keeps the
+install's diagnostics and names the hosts it denied while installing, and
+sbxw keeps those hosts as well (the `SbxFailure` of `crates/sbx`), ready for
+an allow rule. Allow one with `network_allow` or the network panel, then
+`sbxw up` again.
 
 A kit's `network-policy@1` allow rules join the sandbox policy when it's
 applied. The bundled kits declare everything they fetch, so none of them needs

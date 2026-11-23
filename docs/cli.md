@@ -290,7 +290,9 @@ too. See [Approving host access](configuration.md#approving-host-access).
    changes*).
 7. **Ports.** A new sandbox is created with its mappings (`sbx create … -p …`),
    live from first boot. For a reused one, sbxw waits for `running` and
-   publishes each with `sbx ports <name> --publish …`. Ports published later
+   publishes each with `sbx port publish <name> …` (sbx 0.54; `sbx ports
+   <name> --publish …` before it, and whenever 0.54 refuses the spec's form).
+   Ports published later
    don't survive a stop, which is why this is automated. Mappings made at
    creation do, and a busy host port among them would stop the sandbox from
    starting: sbxw unpublishes that one before starting it, with a warning. If one host port is busy, sbx refuses
