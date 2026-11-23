@@ -335,6 +335,19 @@ pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
     notes
 }
 
+/// The release whose `sbx setup ssh` writes a configuration crafted host or
+/// user names cannot run commands through (with older OpenSSH clients); a
+/// configuration written before it stays unsafe until setup runs again.
+pub const SSH_CONFIG_SINCE: (u32, u32, u32) = (0, 54, 0);
+
+/// Must `sbx setup ssh` run again? When sbx is `now` 0.54 or newer and the
+/// configuration was last written (`refreshed_at`, the sbx version sbxw ran
+/// setup with; `None` when sbxw never did) by an older one or nobody knows.
+/// Whether SSH is set up at all is the caller's to know.
+pub fn ssh_refresh_due(refreshed_at: Option<&str>, now: &str) -> bool {
+    parse_version(now).is_some_and(|v| v >= SSH_CONFIG_SINCE) && refreshed_at.and_then(parse_version).is_none_or(|v| v < SSH_CONFIG_SINCE)
+}
+
 /// The first `MAJOR.MINOR[.PATCH]` in `raw`, however it is framed; a digit run
 /// inside a longer token ("sha256") or a four-digit year is not one.
 pub fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
@@ -1376,6 +1389,9 @@ impl Sbx {
         Ok(scripts::MergeOutcome::from_fields(&f))
     }
 
+    /// `sbx setup ssh`: writes (again) the managed `Host *.sbx` block. Safe
+    /// to re-run; sbx 0.54 asks for it once after the upgrade (see
+    /// [`ssh_refresh_due`]).
     pub async fn setup_ssh(&self) -> Result<()> {
         self.checked(Invocation::new(s(&["setup", "ssh"]))).await.map(drop)
     }
@@ -1425,6 +1441,16 @@ mod tests {
         assert_eq!(upgrade_notes("0.50.1", "0.53.0").len(), 6, "0.52 was skipped: both crossings at once");
         assert!(upgrade_notes("0.53.0", "0.53.1").is_empty());
         assert!(upgrade_notes("", "0.50.0").is_empty(), "a first install has nothing to upgrade from");
+    }
+
+    #[test]
+    fn the_ssh_configuration_is_refreshed_once_on_0_54() {
+        assert!(ssh_refresh_due(None, "0.54.0"), "never refreshed by sbxw");
+        assert!(ssh_refresh_due(Some("0.53.1"), "0.54.0"));
+        assert!(!ssh_refresh_due(Some("0.54.0"), "0.54.2"), "done once");
+        assert!(!ssh_refresh_due(None, "0.53.1"), "an older sbx writes the same thing again");
+        assert!(!ssh_refresh_due(None, "dev build"));
+        assert!(ssh_refresh_due(Some("garbage"), "0.55.0"));
     }
 
     #[test]

@@ -150,6 +150,9 @@ impl Paths {
     fn favourites(&self) -> PathBuf {
         self.state().join("favourites.json")
     }
+    fn ssh_refreshed(&self) -> PathBuf {
+        self.state().join("ssh-refreshed.json")
+    }
     fn pairings(&self) -> PathBuf {
         self.state().join("embed-pairings.json")
     }
@@ -604,6 +607,16 @@ impl Store {
         write_atomic(&self.paths.favourites(), &serde_json::to_vec_pretty(list)?)
     }
 
+    /// The sbx version `sbx setup ssh` last ran with through sbxw; `None`
+    /// when it never did. See `sbxw_sbx::ssh_refresh_due`.
+    pub fn ssh_refreshed_at(&self) -> Option<String> {
+        read_json(&self.paths.ssh_refreshed())
+    }
+
+    pub fn set_ssh_refreshed_at(&self, sbx_version: &str) -> Result<()> {
+        write_atomic(&self.paths.ssh_refreshed(), &serde_json::to_vec(&Some(sbx_version))?)
+    }
+
     pub fn pairings(&self) -> BTreeMap<String, String> {
         read_json(&self.paths.pairings())
     }
@@ -717,6 +730,15 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ssh_refresh_is_remembered_by_sbx_version() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::open(Paths::under(d.path()));
+        assert_eq!(store.ssh_refreshed_at(), None);
+        store.set_ssh_refreshed_at("0.54.0").unwrap();
+        assert_eq!(store.ssh_refreshed_at().as_deref(), Some("0.54.0"));
+    }
 
     /// Two writers of one file at once each land whole: neither renames the
     /// other's half-written temporary file, nor fails on it gone.

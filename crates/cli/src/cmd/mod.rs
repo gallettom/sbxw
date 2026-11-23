@@ -177,10 +177,41 @@ pub(crate) fn check_sbx(rt: &tokio::runtime::Runtime) -> Result<Option<String>> 
     for note in sbxw_sbx::upgrade_notes(&before, v.as_deref().unwrap_or_default()) {
         eprintln!("sbxw  note: {note}");
     }
+    if let Some(now) = &v {
+        refresh_ssh_if_due(rt, now);
+    }
     if let (Some(key), Some(v)) = (key, &v) {
         let _ = sbxw_daemon::store::write_atomic(&cache, format!("{key}\n{v}\n").as_bytes());
     }
     Ok(v)
+}
+
+/// sbx 0.54 writes an SSH configuration that crafted host or user names
+/// cannot run commands through, and asks for `sbx setup ssh` again after the
+/// upgrade. Run once here, only where `*.sbx` is already configured (the
+/// managed block, safe to re-run), and said; a failure is said with the
+/// command to run.
+fn refresh_ssh_if_due(rt: &tokio::runtime::Runtime, now: &str) {
+    let store = Store::open(Paths::from_home());
+    if !sbx_ssh_configured() || !sbxw_sbx::ssh_refresh_due(store.ssh_refreshed_at().as_deref(), now) {
+        return;
+    }
+    match rt.block_on(Sbx::process().setup_ssh()) {
+        Ok(()) => {
+            let _ = store.set_ssh_refreshed_at(now);
+            eprintln!("sbxw  note: sbx {now} rewrote its SSH configuration (`sbx setup ssh`), as it asks after the upgrade: the older one let crafted host names run commands with older OpenSSH clients.");
+        }
+        Err(e) => eprintln!(
+            "sbxw  note: sbx {now} asks for its SSH configuration to be written again, and `sbx setup ssh` failed: run `sbxw ssh --setup`.\n{e:#}"
+        ),
+    }
+}
+
+/// Is a `*.sbx` host block in `~/.ssh/config` (`sbx setup ssh`'s)?
+fn sbx_ssh_configured() -> bool {
+    std::env::var_os("HOME")
+        .and_then(|h| std::fs::read_to_string(PathBuf::from(h).join(".ssh/config")).ok())
+        .is_some_and(|s| s.contains(".sbx"))
 }
 
 /// `path|size|mtime` of the `sbx` that PATH resolves to; `None` if not found.
@@ -727,7 +758,11 @@ pub fn bash(name: &str) -> Result<()> {
 
 pub fn ssh(name: Option<String>, setup: bool, command: &[String]) -> Result<()> {
     if setup {
-        runtime().block_on(Sbx::process().setup_ssh()).context("`sbx setup ssh` failed")?;
+        let rt = runtime();
+        rt.block_on(Sbx::process().setup_ssh()).context("`sbx setup ssh` failed")?;
+        if let Ok(Some(v)) = rt.block_on(Sbx::process().version()) {
+            let _ = Store::open(Paths::from_home()).set_ssh_refreshed_at(&format!("{}.{}.{}", v.0, v.1, v.2));
+        }
         println!("SSH configured — reach any sandbox with `ssh <name>.sbx`.");
         if name.is_none() {
             return Ok(());
@@ -749,10 +784,7 @@ pub fn ssh(name: Option<String>, setup: bool, command: &[String]) -> Result<()> 
     if status.success() {
         return Ok(());
     }
-    let configured = std::env::var_os("HOME")
-        .and_then(|h| std::fs::read_to_string(PathBuf::from(h).join(".ssh/config")).ok())
-        .is_some_and(|s| s.contains(".sbx"));
-    if status.code() == Some(255) && !configured {
+    if status.code() == Some(255) && !sbx_ssh_configured() {
         bail!("`ssh {host}` failed and no `*.sbx` entry was found in ~/.ssh/config.\nRun `sbxw ssh --setup` once to register it.");
     }
     bail!("`ssh {host}` exited with {status}")
