@@ -264,7 +264,7 @@ fn extras_put_rows_under_the_sandbox_and_controls_on_each_sessions_pane() {
 }
 
 #[test]
-fn a_plan_arriving_opens_its_dialog_and_an_approval_opens_its_panes() {
+fn a_plan_arriving_opens_its_dialog_and_an_approval_opens_no_pane() {
     let data = fixture("basic");
     let old = json!([]);
     let p = fixture("plan-pending")["plans"].clone();
@@ -273,15 +273,17 @@ fn a_plan_arriving_opens_its_dialog_and_an_approval_opens_its_panes() {
     let mut d = data.clone();
     apply(&mut d, &acts);
     assert!(d[UI]["drafts"]["p-1"].is_object());
-    // Approved elsewhere: a pane per thread while there is room (1 empty + 2 new).
+    // Approved elsewhere: no pane opens, no page shows, the focus stays.
     let mut approved = p.clone();
     approved[0]["state"] = json!("approved");
     let acts = on_data(&Ctx { data: &d }, "plans", &p, &approved);
-    let opened: Vec<&J> = acts.iter().filter_map(|a| match a { Action::Intent { name, args } if name == "open_terminal" => Some(&args["thread"]), _ => None }).collect();
-    assert_eq!(opened, [&json!("api-routes"), &json!("web-orders"), &json!("docs")]);
-    apply(&mut d, &acts);
-    // Not twice.
-    assert!(!on_data(&Ctx { data: &d }, "plans", &p, &approved).iter().any(|a| matches!(a, Action::Intent { .. })));
+    assert!(!acts.iter().any(|a| matches!(a, Action::Intent { .. })), "{acts:?}");
+    // Approved here: the dialog closes, a notice says the threads start, no pane.
+    let call = Call::post("/api/plans/p-1/approve", json!({}), "approve").tag("approve:p-1");
+    let acts = on_answer(&Ctx { data: &d }, &call, Ok((200, json!({ "ok": true, "plan": approved[0] }))));
+    assert!(acts.contains(&Action::CloseModal), "{acts:?}");
+    assert!(acts.iter().any(|a| matches!(a, Action::Notice { text, .. } if text == "Plan approved: 3 threads starting")), "{acts:?}");
+    assert!(!acts.iter().any(|a| matches!(a, Action::Intent { .. })), "{acts:?}");
 }
 
 #[test]
@@ -380,44 +382,6 @@ fn a_thread_opened_on_the_standins_ws_is_recorded_as_the_daemon_does() {
 /// Pages (the desktop's layout): a five-thread plan at three per page opens
 /// every thread (no cap of four), spilling onto following pages through the
 /// core's spare rule, then shows the page of the first one.
-#[test]
-fn an_approved_plan_opens_every_thread_and_shows_the_first_ones_page() {
-    let data = fixture("basic");
-    let mut plan = fixture("plan-pending")["plans"][0].clone();
-    plan["threads"] = json!([{ "name": "t1" }, { "name": "t2" }, { "name": "t3" }, { "name": "t4" }, { "name": "t5" }]);
-    let mut d = data.clone();
-    // Page 1 of 2 shows (web-app's main session and an empty pane), 3 per page;
-    // page 2 is full.
-    d["app"]["pages"] = json!({ "current": 1, "count": 2, "per": 3, "view": "grid", "panes": [[1, 2], [3, 4, 5]] });
-    d["app"]["panes"] = json!([
-        { "index": 1, "sandbox": "web-app", "mode": "agent", "thread": null, "focused": true, "status": "connected" },
-        { "index": 2, "sandbox": null, "mode": "agent", "thread": null, "focused": false, "status": "empty" },
-        { "index": 3, "sandbox": "api", "mode": "agent", "thread": null, "focused": false, "status": "connected" },
-        { "index": 4, "sandbox": "api", "mode": "bash", "thread": null, "focused": false, "status": "connected" },
-        { "index": 5, "sandbox": "docs", "mode": "agent", "thread": null, "focused": false, "status": "connected" }
-    ]);
-    d["app"]["layout"]["panes"] = json!(5);
-    let acts = open_plan_panes(&Ctx { data: &d }, &plan);
-    let names: Vec<String> = acts.iter().filter_map(|a| match a { Action::Intent { name, args } if name == "open_terminal" => { assert_eq!(args["pane"], "spare"); args["thread"].as_str().map(str::to_string) } _ => None }).collect();
-    assert_eq!(names, ["t1", "t2", "t3", "t4", "t5"], "all five, none dropped for a lack of room");
-    assert_eq!(acts.last(), Some(&Action::Intent { name: "page_show".into(), args: json!({ "page": 1 }) }), "the first thread lands on the page the person is on");
-    // Every page full: the first thread goes to a new page, which then shows.
-    d["app"]["pages"]["panes"] = json!([[1, 3], [4, 5]]);
-    d["app"]["pages"]["per"] = json!(2);
-    let acts = open_plan_panes(&Ctx { data: &d }, &plan);
-    assert_eq!(acts.last(), Some(&Action::Intent { name: "page_show".into(), args: json!({ "page": 3 }) }));
-    // Each intent is valid as the core checks it.
-    for a in &acts {
-        if let Action::Intent { name, args } = a {
-            crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })).unwrap();
-        }
-    }
-}
-
-/// One `Set` of the panel's state per intent: the Worktrees tab, which also
-/// reads the worktrees, keeps the tab it chose (a second `Set` built from
-/// the state before the intent used to drop it, and the panel stayed on
-/// Sessions). The whole-window press is in `tests/tab_presses.rs`.
 #[test]
 fn the_worktrees_tab_is_kept_while_it_reads_the_worktrees() {
     let mut data = fixture("basic");

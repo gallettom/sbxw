@@ -412,4 +412,40 @@ mod tests {
         });
         assert!(r.rt.state.leads_on() && !r.rt.state.leads_restore, "a team still runs by its plan: Lead Mode is back");
     }
+
+    /// A lead's plan approved (here or elsewhere): its threads open no pane
+    /// on their own and the focus stays; the thread is listed at once under
+    /// its leader in the sidebar, and a click on that row opens its pane.
+    #[test]
+    fn a_plans_thread_opens_no_pane_until_its_row_is_clicked() {
+        let mut r = rig();
+        r.rt.update(|s, _| s.focus_pane(1));
+        r.settle();
+        let panes = r.rt.state.panes.iter().map(|p| p.uid).collect::<Vec<_>>();
+        let focus = r.rt.state.focused_uid();
+        let pending = serde_json::json!([{ "id": "p-1", "sandbox": "a", "state": "pending", "threads": [{ "name": "t1", "goal": "x" }] }]);
+        let mut approved = pending.clone();
+        approved[0]["state"] = serde_json::json!("approved");
+        approved[0]["threads"][0]["state"] = serde_json::json!("starting");
+        r.rt.update(|s, _| {
+            s.feats.data.insert("plans".into(), pending.clone());
+            s.feats.modal = None;
+            s.feats.data.insert("plans".into(), approved.clone());
+            s.feats.data.insert("threads".into(), serde_json::json!({ "a": { "threads": [{ "name": "t1", "open": true }] } }));
+            s.feats_data_changed("plans", &pending, &approved);
+            s.push_data();
+        });
+        r.settle();
+        assert_eq!(r.rt.state.panes.iter().map(|p| p.uid).collect::<Vec<_>>(), panes, "no pane opened for the plan's thread");
+        assert!(r.rt.state.panes.iter().all(|p| p.thread.is_none()));
+        assert_eq!(r.rt.state.focused_uid(), focus, "the focus did not move");
+        // The sidebar lists it under its leader, with the click that opens it.
+        let rows = r.rt.state.screen_data()["app"]["extras"]["rows"]["a"].clone();
+        let row = rows.as_array().and_then(|l| l.iter().find(|x| x["id"] == "t1").cloned()).unwrap_or_else(|| panic!("a row for t1: {rows}"));
+        assert_eq!(row["intent"]["name"], "open_terminal");
+        r.rt.update(|s, _| s.press_extra("sandboxes", row["intent"]["name"].as_str().unwrap(), &row["intent"]["args"]));
+        r.settle();
+        let i = r.rt.state.panes.iter().position(|p| p.sandbox.as_deref() == Some("a") && p.thread.as_deref() == Some("t1")).expect("the click opened t1's pane");
+        assert_eq!(r.rt.state.focused, i, "and focused it");
+    }
 }
