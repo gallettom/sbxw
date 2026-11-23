@@ -34,7 +34,7 @@ use crate::feat::monitor::model::who;
 use crate::feat::{Action, Asked, Call, Confirm, Ctx, Extra, Feature, Incoming, Place, ScreenDecl, Slot, Zone};
 use crate::intent::{Arg, Risk, Spec};
 use crate::surface_canvas::{self as sc, CanvasEvent, Ground, Tool, ZoomCmd};
-use model::{Manifest, NoteD, PinD};
+use model::{DState, Manifest, NoteD, PinD};
 use serde_json::{json, Value as J};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -139,6 +139,8 @@ pub struct State {
     pub pins: Vec<PinD>,
     pub notes: Vec<NoteD>,
     pub layout: BTreeMap<String, [f32; 4]>,
+    /// The diagrams' editors, by diagram id (`surface_canvas::diagram`).
+    pub diagrams: BTreeMap<String, DState>,
     pub remove: Vec<String>,
     pub saving: bool,
     pub dirty: bool,
@@ -260,6 +262,7 @@ impl State {
             self.pins.clear();
             self.notes.clear();
             self.layout.clear();
+            self.diagrams.clear();
             self.remove.clear();
             self.selected = None;
             self.tool = Tool::Select;
@@ -514,7 +517,26 @@ impl State {
         }
         self.saving = true;
         self.dirty = false;
-        let layout: Vec<J> = std::mem::take(&mut self.layout).into_iter().map(|(id, r)| json!({ "id": id, "x": r[0], "y": r[1], "w": r[2], "h": r[3] })).collect();
+        let moved = std::mem::take(&mut self.layout);
+        // The places sent are kept in the manifest held here: the daemon does
+        // not send our own edit back, and the scene falls back to it.
+        if let Some(c) = &mut self.canvas {
+            for (id, r) in &moved {
+                for s in c.shots.iter_mut().filter(|s| &s.id == id) {
+                    (s.x, s.y, s.w, s.h, s.moved) = (r[0], r[1], r[2], r[3], true);
+                }
+                for a in c.assets.iter_mut().filter(|a| &a.id == id) {
+                    (a.x, a.y, a.w, a.h) = (r[0], r[1], r[2], r[3]);
+                }
+                for n in c.notes.iter_mut().filter(|n| &n.id == id) {
+                    (n.x, n.y, n.w, n.h) = (r[0], r[1], r[2], r[3]);
+                }
+                for d in c.diagrams.iter_mut().filter(|d| &d.id == id) {
+                    (d.x, d.y, d.moved) = (r[0], r[1], true);
+                }
+            }
+        }
+        let layout: Vec<J> = moved.into_iter().map(|(id, r)| json!({ "id": id, "x": r[0], "y": r[1], "w": r[2], "h": r[3] })).collect();
         let remove = std::mem::take(&mut self.remove);
         let body = json!({ "pins": self.pins, "notes": self.notes, "remove_assets": remove, "layout": layout });
         vec![Action::Call(Call::post(format!("/api/canvas/{}/edit", crate::client::enc(&id)), body, "save the canvas").tag(&format!("cv-save:{id}")).quiet())]
@@ -530,13 +552,39 @@ impl State {
         if let Some(x) = self.notes.iter().find(|x| x.id == t) {
             return Some([x.x, x.y, x.w, x.h]);
         }
+        if let Some((did, _)) = sc::diagram::parse_sel(t) {
+            return model::diagram_rect(c, did, &self.layout, &self.diagrams).map(|(r, _)| r);
+        }
         model::item_rect(c, t, &self.layout)
+    }
+
+    /// The diagrams' editors after a manifest was read: a new diagram gets
+    /// one; a diagram the agent replaced is taken when the person has nothing
+    /// unsaved on it (else their next save meets the daemon's 409 and offers
+    /// Reload or Reapply); one gone is forgotten.
+    fn sync_diagrams(&mut self, m: &mut Manifest) {
+        for it in &mut m.diagrams {
+            sc::diagram::tidy(&mut it.diagram);
+            it.title = sc::diagram::clean(&it.title).chars().take(sc::diagram::MAX_TITLE).collect();
+        }
+        self.diagrams.retain(|id, _| m.diagrams.iter().any(|d| &d.id == id));
+        for it in &m.diagrams {
+            match self.diagrams.get_mut(&it.id) {
+                None => {
+                    self.diagrams.insert(it.id.clone(), DState { cur: it.diagram.clone(), rev: it.diagram.rev, ..DState::default() });
+                }
+                Some(st) if it.diagram.rev > st.rev && !st.saving && !st.dirty && st.conflict.is_none() => {
+                    *st = DState { cur: it.diagram.clone(), rev: it.diagram.rev, ..DState::default() };
+                }
+                Some(_) => {}
+            }
+        }
     }
 
     /// The surface's scene from the manifest and the draft.
     pub fn push_scene(&mut self) {
         if let Some(c) = &self.canvas {
-            let mut scene = model::scene(c, &self.pins, &self.notes, &self.layout, self.selected.as_deref(), self.tool);
+            let mut scene = model::scene(c, &self.pins, &self.notes, &self.layout, &self.diagrams, self.selected.as_deref(), self.tool);
             scene.ground = self.ground;
             sc::set_scene(SURF, scene);
             self.open = true;
@@ -576,7 +624,10 @@ impl State {
         match ev {
             CanvasEvent::Select { target } => self.selected = target,
             CanvasEvent::Moved { item, x, y } => {
-                if let Some(n) = self.notes.iter_mut().find(|n| n.id == item) {
+                if let Some((r, off)) = self.canvas.as_ref().and_then(|c| model::diagram_rect(c, &item, &self.layout, &self.diagrams)) {
+                    // A diagram moves by its origin (where its (0, 0) sits): the edit route's `layout`.
+                    self.layout.insert(item, [x - off[0], y - off[1], r[2], r[3]]);
+                } else if let Some(n) = self.notes.iter_mut().find(|n| n.id == item) {
                     (n.x, n.y) = (x, y);
                 } else if let Some(r) = self.canvas.as_ref().and_then(|c| model::item_rect(c, &item, &self.layout)) {
                     self.layout.insert(item, [x, y, r[2], r[3]]);
@@ -709,7 +760,7 @@ impl State {
             } else {
                 self.error = None;
                 match serde_json::from_value::<Manifest>(body["canvas"].clone()) {
-                    Ok(m) => {
+                    Ok(mut m) => {
                         let first = self.canvas.is_none();
                         // Unsent remarks are ours: kept from the manifest the first time, then from here.
                         if first {
@@ -719,6 +770,7 @@ impl State {
                         for f in m.shots.iter().map(|s| s.file.clone()).chain(m.assets.iter().map(|a| a.file.clone())) {
                             self.want(&f, false);
                         }
+                        self.sync_diagrams(&mut m);
                         self.canvas = Some(m);
                         self.push_scene();
                         out.extend(self.pump());

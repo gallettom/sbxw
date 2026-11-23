@@ -1368,3 +1368,9 @@ mod in_window {
         });
     }
 }
+
+// ---------------------------------------------------------------------------
+// Diagrams (surface_canvas::diagram): drawn, then edited.
+
+#[path = "diagram_tests.rs"]
+mod diagram;

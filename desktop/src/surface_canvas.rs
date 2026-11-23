@@ -24,6 +24,10 @@
 
 use rune::{el, text, Cursor, Drag, El, Live, MagnifyEvent, Phase, PointerButton, Tx, WheelEvent};
 use std::cell::RefCell;
+
+/// Diagrams drawn as canvas items (a module of its own, kept beside this one).
+#[path = "surface_diagram.rs"]
+pub mod diagram;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -79,6 +83,10 @@ pub enum Body {
     Note { text: String, n: Option<u32> },
     /// A round's label across the surface (not pressable).
     Band { label: String },
+    /// A diagram an agent added ([`diagram`]): the item's rectangle is its
+    /// content's box, `off` that box's corner in the diagram's own points
+    /// (the diagram's (0, 0) sits at `x - off[0], y - off[1]`).
+    Diagram { diagram: std::sync::Arc<diagram::Diagram>, off: [f32; 2], title: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -768,7 +776,7 @@ fn hit(cv: &Canvas, w: [f32; 2]) -> Hit {
         }
     }
     if let Some(sel) = &cv.scene.selected {
-        if let Some((k, i)) = cv.scene.items.iter().enumerate().find(|(_, i)| &i.id == sel && i.movable) {
+        if let Some((k, i)) = cv.scene.items.iter().enumerate().find(|(_, i)| &i.id == sel && i.movable && !matches!(i.body, Body::Diagram { .. })) {
             let (hx, hy) = (i.x + i.w, i.y + i.h);
             if handle_side(i.w * z, i.h * z).is_some() && (w[0] - hx).abs() <= HANDLE_HIT / z && (w[1] - hy).abs() <= HANDLE_HIT / z {
                 return Hit::Handle(k);
@@ -1108,6 +1116,13 @@ fn dots(id: &str, cam: &Camera, light: bool) -> Option<El> {
     Some(e)
 }
 
+/// A diagram's gesture under way, drawn as it goes: a new edge's rubber line
+/// (from a node to a point, the diagram's points), a message's new row.
+#[allow(clippy::type_complexity)]
+fn diagram_drag(_cv: &Canvas, _item: &str) -> (Option<(String, [f32; 2])>, Option<(String, u32)>) {
+    (None, None)
+}
+
 fn world(id: &str, cv: &Canvas, scale: f32) -> El {
     let z = cv.cam.zoom;
     let inv = 1.0 / z;
@@ -1140,6 +1155,23 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
         }
         let on = i.x < vis[0] + vis[2] + mx && i.x + i.w > vis[0] - mx && i.y < vis[1] + vis[3] + my && i.y + i.h > vis[1] - my;
         let selected = cv.scene.selected.as_deref() == Some(&i.id);
+        if let Body::Diagram { diagram: d, off, title } = &i.body {
+            // Out of view (and the margin): nothing built.
+            if !on {
+                continue;
+            }
+            let sel = cv.scene.selected.as_deref().and_then(diagram::parse_sel).filter(|(did, _)| *did == i.id).map(|(_, p)| p);
+            if sel == Some(diagram::Part::Whole) {
+                let o = RING_GAP * inv + 8.0;
+                w = w.child(el().key(format!("canvas-ring-{}", i.id)).pin(Some(i.x - o), Some(i.y - o), None, None).w(i.w + 2.0 * o).h(i.h + 2.0 * o).border(RING_W * inv, k("canvas-accent")).radius(6.0));
+            }
+            let (rubber, row_drag) = diagram_drag(cv, &i.id);
+            let look = diagram::Look { id: &i.id, d, origin: [i.x - off[0], i.y - off[1]], zoom: z, light, sel: sel.as_ref(), rubber: rubber.as_ref().map(|(f, p)| (f.as_str(), *p)), row_drag: row_drag.as_ref().map(|(e, r)| (e.as_str(), *r)), title };
+            for e in diagram::draw(&look) {
+                w = w.child(e);
+            }
+            continue;
+        }
         if matches!(i.body, Body::Picture { .. }) {
             // A mat a shade lighter than the ground, edged by a hairline: dark
             // screens stand apart from the surface and from each other.
@@ -1189,7 +1221,7 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
                             .child(text(if t.trim().is_empty() { "(no text yet)".to_string() } else { t.clone() }).font(small(14.0, 400.0)).color(k("canvas-text")).wrap().w(i.w - 20.0)),
                     );
             }
-            Body::Band { .. } => {}
+            Body::Band { .. } | Body::Diagram { .. } => {}
         }
         if let Some(side) = handle_side(i.w * z, i.h * z).filter(|_| selected && i.movable) {
             let hs = side / 2.0 * inv;
