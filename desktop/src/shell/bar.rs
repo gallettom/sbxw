@@ -102,11 +102,15 @@ pub struct Item {
     pub intent: Option<(String, J)>,
     /// The core's own (attention, status): keyed `pane-<n>-<id>`, not `pane-<n>-x-<id>`.
     pub core: bool,
+    /// The left rail or the sidebar already offers its action for this
+    /// pane's sandbox ([`same_view`]): it may show inline for what it says
+    /// (a count, a tone), never in the overflow menu.
+    pub elsewhere: bool,
 }
 
 impl Item {
     pub fn from_extra(e: &Extra) -> Item {
-        Item { id: e.id.clone(), label: e.label.clone(), icon: e.icon.clone(), tone: e.tone.clone(), help: e.help.clone(), count: e.count, intent: e.intent.clone(), core: false }
+        Item { id: e.id.clone(), label: e.label.clone(), icon: e.icon.clone(), tone: e.tone.clone(), help: e.help.clone(), count: e.count, intent: e.intent.clone(), core: false, elsewhere: false }
     }
 
     pub fn rank(&self) -> u8 {
@@ -117,6 +121,9 @@ impl Item {
     /// icon says what it counts ([`COUNT_ONLY`]), else [`Self::text`]. Its
     /// tooltip says the whole thing; the overflow menu keeps the words.
     pub fn chip_text(&self) -> String {
+        if ICON_ONLY.contains(&self.id.as_str()) {
+            return String::new();
+        }
         match self.count {
             Some(n) if self.icon.is_some() && COUNT_ONLY.contains(&self.id.as_str()) => n.to_string(),
             _ => self.text(),
@@ -143,9 +150,46 @@ impl Item {
 /// the sentence.
 pub const COUNT_ONLY: &[&str] = &["approvals"];
 
+/// Chips drawn as their icon alone (their word is the accessible name, the
+/// tooltip and the menu row's label): the microphone.
+pub const ICON_ONLY: &[&str] = &[DICTATE];
+
 /// Extras that always sit in the "⋯" menu, never inline: a view setting
-/// of the pane (keyword pills), not something to act on at a glance.
-pub const MENU_ONLY: &[&str] = &["pills", "commits", "mcp-view", "skills-view", "kits-view"];
+/// of the pane (keyword pills), or a card opened now and then (the
+/// environment file), not something to act on at a glance. (Commits, MCP,
+/// Skills and Kits on a pane are the rail's: [`same_view`] leaves them out.)
+pub const MENU_ONLY: &[&str] = &["pills", "envfile", "commits", "mcp-view", "skills-view", "kits-view"];
+
+/// The core's dictation button (`pane-<n>-dictate`): it stands where Env
+/// stood in the fit order, Env having moved into the "⋯" menu.
+pub const DICTATE: &str = "dictate";
+
+/// Whether a press on the rail (or a sidebar row) that runs `other` (its
+/// intent and arguments; `screen`: the screen that entry shows, when it
+/// says) does what a pane item running `own` does, for that pane's
+/// sandbox. Read from the intents' declarations, not from a list of ids:
+///
+/// * `own` takes only optional arguments: the view it opens can be opened
+///   on any sandbox and moved to this one there (a picker, a filter). An
+///   action on this sandbox (Esc, Remote, Close, Team, the browser, the
+///   project's files) needs its sandbox and is never someone else's.
+/// * `other` runs the same intent with a part of `own`'s arguments (none:
+///   the view on every sandbox, or the last one used), or shows a screen
+///   that the feature owning `own`'s intent declares (the rail's Skills
+///   opens the Skills panel, a pane's "Skills…" too, on its sandbox).
+pub fn same_view(own: &(String, J), other: &(String, J), screen: Option<&str>) -> bool {
+    let Some((feature, spec)) = crate::feat::intent(&own.0) else { return false };
+    if spec.args.iter().any(|(_, _, required)| *required) {
+        return false;
+    }
+    let empty = serde_json::Map::new();
+    let mine = own.1.as_object().unwrap_or(&empty);
+    let theirs = other.1.as_object().unwrap_or(&empty);
+    if own.0 == other.0 {
+        return theirs.iter().all(|(k, v)| mine.get(k) == Some(v));
+    }
+    screen.and_then(crate::feat::screen).is_some_and(|(f, _)| f.name == feature.name)
+}
 
 /// Sorted by [`rank`], stable: the order the bar fills in.
 pub fn by_priority(mut items: Vec<Item>) -> Vec<Item> {
@@ -277,6 +321,8 @@ pub fn pane_fit(width: f32, name: &str, agent: Option<&str>, items: Vec<Item>, m
     let k = if agent.is_some() && !switch { 0 } else { (0..=n).rev().find(|&k| fixed + chips_w(&items[..k], PANE_GAP) + if k < n { PANE_GAP + more } else { 0.0 } <= width + 0.5).unwrap_or(0) };
     let mut shown = items;
     let mut hidden = shown.split_off(k);
+    // What the rail or the sidebar offers is not listed again in the menu.
+    hidden.retain(|i| !i.elsewhere);
     hidden.extend(only_menu);
     PaneFit { switch, shown: by_zone(shown), hidden, name_min }
 }
