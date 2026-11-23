@@ -340,6 +340,10 @@ pub struct App {
     /// While a page window's action runs on the app (`App::in_window`):
     /// that window's number; its page is the app's only page meanwhile.
     pub(crate) swapped: Option<u32>,
+    /// Meanwhile, the sessions the other windows show (one view each).
+    elsewhere: Vec<pagewin::Shown>,
+    /// A view to focus in another window once the page window's action is done.
+    pending_focus: Option<(crate::windows::Win, Uid)>,
     /// A page window's Copy on the copy offer, run with the next `Tx`.
     copy_accept: bool,
 }
@@ -471,6 +475,8 @@ impl App {
             bar_menu: None,
             windowed: vec![],
             swapped: None,
+            elsewhere: vec![],
+            pending_focus: None,
             copy_accept: false,
             sidebar_live: None,
             theme_choice: theme::DEFAULT_MODE,
@@ -2188,11 +2194,19 @@ impl App {
         log::info!("{}", intent_log_line(from, &intent));
         match intent {
             Intent::OpenTerminal { sandbox, mode, thread, pane, start } => {
+                // Shown in another window (a page window, or the main one from
+                // a page window): that view is focused, none is added (pagewin.rs).
+                if self.focus_if_elsewhere(&sandbox, mode, thread.as_deref()) {
+                    return;
+                }
                 let i = self.pane_for(&pane);
                 self.open_with(i, &sandbox, mode, thread, start);
                 self.focused = i;
             }
             Intent::StartSandbox { sandbox, pane } => {
+                if self.focus_if_elsewhere(&sandbox, Mode::Agent, None) {
+                    return;
+                }
                 let i = self.pane_for(&pane);
                 self.open(i, &sandbox, Mode::Agent, None);
                 self.focused = i;
@@ -3163,6 +3177,9 @@ impl App {
             self.notify(format!("{} is already open in pane {}", if to == Mode::Bash { "This shell" } else { "This agent" }, j + 1), false);
             self.show_page_of(self.panes[j].uid);
             self.focus_pane(j);
+            return;
+        }
+        if self.focus_if_elsewhere(&sb, to, thread.as_deref()) {
             return;
         }
         self.open_with(i, &sb, to, thread, ThreadStart::default());

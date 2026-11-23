@@ -92,6 +92,13 @@ impl WinPage {
     }
 }
 
+/// A session a window shows: sandbox, mode, thread, the window, the pane.
+pub(crate) type Shown = (String, Mode, Option<String>, Win, Uid);
+
+fn shown_in<'a>(win: Win, panes: impl Iterator<Item = &'a Pane>) -> Vec<Shown> {
+    panes.filter_map(|p| Some((p.sandbox.clone()?, p.mode, p.thread.clone(), win, p.uid))).collect()
+}
+
 /// What the primary draws for a page window (its turns have the app): each
 /// pane's bar with its ground and group colour, the open bar menu, the copy
 /// offer that belongs to the window, the title and the zoom.
@@ -177,6 +184,55 @@ impl App {
     /// The page windows open, by number.
     pub fn page_windows(&self) -> Vec<u32> {
         self.windowed.iter().map(|w| w.id).collect()
+    }
+
+    /// The window and pane that already show this session elsewhere than
+    /// here (here: the main window, or inside `in_window` that page window).
+    /// A terminal shows in one window only: an open asked for one of those
+    /// focuses it instead ([`Self::focus_if_elsewhere`]).
+    pub(crate) fn shown_elsewhere(&self, sandbox: &str, mode: Mode, thread: Option<&str>) -> Option<(Win, Uid)> {
+        let hit = |s: &Shown| s.0 == sandbox && s.1 == mode && s.2.as_deref() == thread;
+        match self.swapped {
+            Some(_) => self.elsewhere.iter().find(|s| hit(s)).map(|s| (s.3, s.4)),
+            None => self.windowed.iter().flat_map(|w| shown_in(Win::Page(w.id), w.panes.iter())).find(|s| hit(s)).map(|s| (s.3, s.4)),
+        }
+    }
+
+    /// When this session shows in another window: that window to the front
+    /// with its pane focused (after a page window's action, once its page
+    /// is back in place), and true; nothing is opened.
+    pub(crate) fn focus_if_elsewhere(&mut self, sandbox: &str, mode: Mode, thread: Option<&str>) -> bool {
+        let Some((win, uid)) = self.shown_elsewhere(sandbox, mode, thread) else { return false };
+        let name = with_thread(sandbox, thread);
+        self.notify(format!("{name} shows in {}: brought to the front", w::with(|h| h.name(win))), false);
+        if self.swapped.is_some() {
+            self.pending_focus = Some((win, uid));
+        } else {
+            self.focus_shown(win, uid);
+        }
+        true
+    }
+
+    fn focus_shown(&mut self, win: Win, uid: Uid) {
+        match win {
+            Win::Main => {
+                if let Some(i) = self.index_of(uid) {
+                    self.show_page_of(uid);
+                    self.focus_pane(i);
+                }
+            }
+            Win::Page(n) => {
+                if let Some(wp) = self.windowed.iter_mut().find(|x| x.id == n) {
+                    if let Some(j) = wp.panes.iter().position(|p| p.uid == uid) {
+                        wp.focused = j;
+                        wp.refocus = true;
+                    }
+                }
+                w::with(|h| h.mark(win));
+            }
+            Win::Canvas => return,
+        }
+        w::with(|h| h.focus(win));
     }
 
     /// What the current page shows, as a window's title: its sessions' names.
@@ -295,9 +351,16 @@ impl App {
         let main_drag = self.drag.take();
         let main_leads = self.leads.take();
         let main_grid = self.grid_saved.take();
+        // What the other windows show, for the one-view rule (`shown_elsewhere`).
+        let mut elsewhere = shown_in(Win::Main, main_panes.iter());
+        for o in &self.windowed {
+            elsewhere.extend(shown_in(Win::Page(o.id), o.panes.iter()));
+        }
+        self.elsewhere = elsewhere;
         self.swapped = Some(id);
         let r = f(self);
         self.swapped = None;
+        self.elsewhere.clear();
         let mut pages = std::mem::replace(&mut self.pages, main_pages);
         let panes = std::mem::replace(&mut self.panes, main_panes);
         let focus = panes.get(self.focused).map(|p| p.uid);
@@ -339,6 +402,9 @@ impl App {
         if extra {
             let keep = self.focused_uid();
             self.sync_panes(keep);
+        }
+        if let Some((win, uid)) = self.pending_focus.take() {
+            self.focus_shown(win, uid);
         }
         Some(r)
     }
@@ -1001,6 +1067,13 @@ pub fn page_spec(id: u32) -> rune::WindowSpec<PageWin> {
         .menu_item(back)
         .menu_item(full);
     rune::WindowSpec::from_app(Win::Page(id).to_string(), app)
+}
+
+fn with_thread(sandbox: &str, thread: Option<&str>) -> String {
+    match thread {
+        Some(t) => format!("{sandbox} · {t}"),
+        None => sandbox.to_string(),
+    }
 }
 
 fn small(size: f32, weight: f32) -> TextStyle {

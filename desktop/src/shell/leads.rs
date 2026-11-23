@@ -75,6 +75,11 @@ impl App {
         if leaders.is_empty() {
             return self.notify("No team is running", false);
         }
+        // A leader shown in a page window stays there (one view per terminal, pagewin.rs).
+        let leaders: Vec<String> = leaders.into_iter().filter(|l| self.shown_elsewhere(l, Mode::Agent, None).is_none()).collect();
+        if leaders.is_empty() {
+            return self.notify("The team leaders show in their page windows", false);
+        }
         let saved = self.pages.clone();
         let focus = self.focused_uid();
         let sessions: HashMap<Uid, (String, Mode, Option<String>)> = self.panes.iter().filter_map(|p| Some((p.uid, (p.sandbox.clone()?, p.mode, p.thread.clone())))).collect();
@@ -126,7 +131,7 @@ impl App {
             }
             match v.sessions.get(&u) {
                 // Closed in the view: open it again where it was.
-                Some((sb, mode, thread)) if running.contains(sb) => {
+                Some((sb, mode, thread)) if running.contains(sb) && self.shown_elsewhere(sb, *mode, thread.as_deref()).is_none() => {
                     self.panes.push(Pane::empty(u));
                     reopen.push((u, sb.clone(), *mode, thread.clone()));
                 }

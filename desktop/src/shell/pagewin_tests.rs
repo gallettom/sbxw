@@ -707,3 +707,84 @@ fn a_session_closed_elsewhere_closes_its_pane_in_a_page_window() {
     r.settle();
     assert!(r.win(0, |pt| pt.state.page.as_ref().unwrap().panes[0].term.is_none()), "its terminal closed");
 }
+
+/// One view per terminal: the sidebar's open (its row's `open_terminal`,
+/// through the screens' intents path) for a session shown in a page window
+/// focuses that window and pane, and adds no pane in the main window; so
+/// does the palette's open into a spare pane, and a start. Back in the main
+/// window, the same open runs there as before.
+#[test]
+fn opening_a_session_shown_in_a_page_window_focuses_it_there() {
+    let mut r = Rig::new(&["web-app", "api", "docs"], 2);
+    let id = r.move_out(0);
+    // The window's focus is on api; the main window has docs alone.
+    r.win(0, |pt| pt.state.page.as_mut().unwrap().focused = 1);
+    r.settle();
+    let main_panes = r.rt.state.panes.len();
+    w::take_done();
+    let open = |sb: &str, extra: serde_json::Value| {
+        let mut args = serde_json::json!({ "sandbox": sb });
+        if let (Some(a), Some(e)) = (args.as_object_mut(), extra.as_object()) {
+            a.extend(e.clone());
+        }
+        crate::intent::parse(&serde_json::json!({ "kind": "intent", "name": "open_terminal", "args": args })).unwrap()
+    };
+    let list = open("web-app", serde_json::json!({}));
+    r.main(|rt| rt.update(|s, _| s.intents("sandboxes", list)));
+    r.settle();
+    assert_eq!(r.rt.state.panes.len(), main_panes, "no pane added in the main window");
+    assert_eq!(r.main_names(), [vec!["docs"]]);
+    assert!(w::take_done().contains(&Native::Focus(Win::Page(id))), "its window to the front");
+    assert_eq!(r.win(0, |pt| pt.state.page.as_ref().unwrap().focused), 0, "and its pane focused");
+    // The palette's open into a spare pane, and a start: the same.
+    r.main(|rt| rt.update(|s, _| s.run_cmd(palette::Run::Intents(vec![("open_terminal".into(), serde_json::json!({ "sandbox": "api", "pane": "spare" }))]))));
+    r.settle();
+    assert_eq!((r.rt.state.panes.len(), r.win(0, |pt| pt.state.page.as_ref().unwrap().focused)), (main_panes, 1));
+    r.main(|rt| rt.update(|s, _| s.run_intent("test", Intent::StartSandbox { sandbox: "web-app".into(), pane: PaneTarget::Spare })));
+    r.settle();
+    assert_eq!((r.rt.state.panes.len(), r.win(0, |pt| pt.state.page.as_ref().unwrap().focused)), (main_panes, 0));
+    assert_eq!(r.generations().len(), 3, "no terminal opened");
+    // A bash of web-app is another session: it opens in the main window.
+    let list = open("web-app", serde_json::json!({ "mode": "bash" }));
+    r.main(|rt| rt.update(|s, _| s.intents("sandboxes", list)));
+    r.settle();
+    assert!(r.rt.state.panes.iter().any(|p| p.sandbox.as_deref() == Some("web-app") && p.mode == Mode::Bash));
+    // Back: the open runs in the main window as before.
+    r.win(0, |pt| pt.state.back());
+    r.settle();
+    w::take_done();
+    let list = open("api", serde_json::json!({}));
+    r.main(|rt| rt.update(|s, _| s.intents("sandboxes", list)));
+    r.settle();
+    assert!(!w::take_done().iter().any(|n| matches!(n, Native::Focus(Win::Page(_)))));
+    let f = r.rt.state.focused;
+    assert_eq!(r.rt.state.panes[f].sandbox.as_deref(), Some("api"), "opened in the main window's focused pane");
+}
+
+/// The reverse: a page window cannot get a second view of a session shown
+/// in the main window (its pane's mode switch, which opens the other
+/// session of the sandbox): the main window's pane is focused instead.
+#[test]
+fn a_page_window_never_opens_a_second_view_of_a_main_window_session() {
+    let mut r = Rig::new(&["web-app", "docs"], 1);
+    // The main window's docs pane shows web-app's shell.
+    r.rt.update(|s, _| {
+        let i = s.panes.iter().position(|p| p.sandbox.as_deref() == Some("docs")).unwrap();
+        s.panes[i].sandbox = Some("web-app".into());
+        s.panes[i].mode = Mode::Bash;
+    });
+    let id = r.move_out(0);
+    w::take_done();
+    // From the window's bar: switch its web-app agent pane to the shell.
+    r.run_from(id, |a| a.switch_mode(0));
+    r.settle();
+    assert!(r.win(0, |pt| pt.state.page.as_ref().unwrap().panes[0].mode == Mode::Agent), "the window kept its view");
+    let gen = |p: &Pane| p.term.as_ref().map(|t| t.fit_key().rsplit_once("-g").unwrap().1.to_string());
+    let mut gens: Vec<String> = r.rt.state.panes.iter().filter_map(gen).collect();
+    gens.extend(r.win(0, |pt| pt.state.page.as_ref().unwrap().panes.iter().filter_map(gen).collect::<Vec<_>>()));
+    assert_eq!(gens.len(), 2, "no terminal opened: {gens:?}");
+    assert!(w::take_done().contains(&Native::FocusPrimary), "the main window to the front");
+    let f = r.rt.state.focused;
+    assert_eq!((r.rt.state.panes[f].sandbox.as_deref(), r.rt.state.panes[f].mode), (Some("web-app"), Mode::Bash));
+    assert!(r.rt.state.notice.as_ref().is_some_and(|n| n.0.contains("shows in the main window")), "{:?}", r.rt.state.notice);
+}
