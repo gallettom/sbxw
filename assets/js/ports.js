@@ -671,6 +671,14 @@ function publishResultLine(data) {
   return `Published sandbox port ${data.sandbox_port} on ${where}${how}${fwd}${note}`;
 }
 
+// Why the form cannot be sent as typed, or null: sbx picks a host port only
+// on 127.0.0.1, so another host IP needs a host port. Text, not markup.
+function publishRefusal(hostIp, hostPort) {
+  const ip = String(hostIp || '').trim();
+  if (!hostPort && ip && ip !== '127.0.0.1') return 'sbx picks a host port only on the loopback address 127.0.0.1: name the host port';
+  return null;
+}
+
 // The query for "Why?" beside an allowed host in the egress log: the host
 // (and port) as the log shows it, or null when the cell is not one (a
 // wildcard, a URL, blank): such a row gets no button.
@@ -686,6 +694,12 @@ btnAddMapping.addEventListener('click', async () => {
   const hostIp   = addHostIp.value.trim() || undefined;
   const alias    = addAlias.value.trim() || undefined;
   if (!sbxPort) return;
+  const refused = publishRefusal(hostIp, hostPort);
+  if (refused) {
+    portsAddResult.classList.add('hidden');
+    showNote(portsAddError, refused);
+    return;
+  }
 
   const body = { sandbox_port: sbxPort };
   if (hostPort) body.host_port = hostPort;

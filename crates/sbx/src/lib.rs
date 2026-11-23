@@ -20,7 +20,7 @@
 //! sbx run -d --name N                         (keep running with nobody attached)
 //! sbx ls --format json                        (a bare array)
 //! sbx exec [-i|-it] N -- cmd…                 (starts a stopped sandbox first; no --detach since 0.53; 125 = not run)
-//! sbx port ls N [--format json] · sbx port publish|unpublish N SPEC   (0.54; IP::SP = sbx picks the host port)
+//! sbx port ls N [--format json] · sbx port publish|unpublish N SPEC   (0.54; a bare SP = sbx picks a host port on 127.0.0.1)
 //! sbx ports N --format json · sbx ports N --publish|--unpublish SPEC   (before 0.54, and the fallback)
 //! sbx policy allow|deny network [--sandbox N] [--method M,…] [--path GLOB] [--query K=V]… RESOURCES
 //! sbx policy ls [N] [--wide] · sbx policy log [N]   (N positional here)

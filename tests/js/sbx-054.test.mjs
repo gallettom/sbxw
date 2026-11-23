@@ -53,6 +53,13 @@ test('the publish result line says the port and why it is not automatic', () => 
   assert.match(publishResultLine({ sandbox_port: 80, host_ip: '127.0.0.1', host_port: 8080, forwarded_port: 51000 }), /reached here on port 51000/);
   assert.equal(publishResultLine({ ok: true }), 'Published');
 
+  const { publishRefusal } = load('ports.js', 'ports', ['publishRefusal']);
+  assert.match(publishRefusal('127.0.0.2', undefined), /only on the loopback address 127\.0\.0\.1: name the host port/);
+  assert.match(publishRefusal('0.0.0.0', 0), /name the host port/);
+  for (const [ip, hp] of [[undefined, undefined], ['', undefined], ['127.0.0.1', undefined], [' 127.0.0.1 ', undefined], ['127.0.0.2', 4200]]) {
+    assert.equal(publishRefusal(ip, hp), null, `${ip} ${hp}`);
+  }
+
   assert.equal(policyWhyTarget(' PyPI.org:443 '), 'pypi.org:443');
   assert.equal(policyWhyTarget('github.com'), 'github.com');
   for (const bad of ['', '*.github.com', 'https://a.com/x', 'a.com;rm', 'localhost', '-x.com', '<b>.com']) {
