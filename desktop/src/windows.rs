@@ -721,7 +721,7 @@ fn button<S: 'static>(key: &str, label: &str, help: &str, primary: bool, press: 
         .justify_center()
         .radius(radius("sm").unwrap())
         .fill(fill)
-        .hover(if primary { c("blue").alpha(0.85) } else { c("hover") })
+        .hover(if primary { c("blue").alpha(0.85) } else { c("hover-subtle") })
         .cursor(Cursor::Pointer)
         .focusable(true)
         .on_press_tx(press)
@@ -816,7 +816,7 @@ fn gate_scrim(g: &Gate) -> El {
         .padding(16.0)
         .gap(10.0)
         .radius(radius("md").unwrap())
-        .fill(c("panel"))
+        .fill(c("surface"))
         .border(1.0, c("border"))
         .child(text("Answer in the main window").font(small(theme::font_size::TITLE, 600.0)).color(c("text-bright")))
         .child(text(g.what.clone()).font(small(theme::font_size::BODY, 400.0)).color(c("text")).wrap().w_full())
@@ -848,7 +848,7 @@ pub fn elsewhere_scrim() -> El {
         .padding(16.0)
         .gap(10.0)
         .radius(radius("md").unwrap())
-        .fill(c("panel"))
+        .fill(c("surface"))
         .border(1.0, c("border"))
         .on_press(|_s: &mut App| {})
         .child(text("Answer in the Canvas window").font(small(theme::font_size::TITLE, 600.0)).color(c("text-bright")))
@@ -942,3 +942,7 @@ impl Platform for RunePlatform {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;
