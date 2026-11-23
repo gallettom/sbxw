@@ -271,7 +271,7 @@ async fn a_re_proposed_merge_closes_and_ends_every_thread() {
         assert!(!app.sessions.open_threads("myapp").contains(&n.to_string()));
         let key = SessionKey::thread(&sb, &ThreadName::parse(n).unwrap());
         let err = app.open_session(&key).await.err().map(|e| format!("{e:#}")).unwrap_or_default();
-        assert!(err.contains("closed just now"), "{n}: a reconnect does not start it again: {err:?}");
+        assert!(err.contains("was closed, so a reconnect"), "{n}: a reconnect does not start it again: {err:?}");
     }
     let line = typed_soon(&typed, "Closed:").await;
     assert!(line.contains("Merged: a, b.") && line.contains("Closed: a, b."), "{line}");
@@ -307,4 +307,73 @@ async fn a_close_that_fails_is_named_to_the_lead() {
     let line = typed_soon(&typed, "Not closed:").await;
     assert!(line.contains("Closed: a.") && line.contains("Not closed: b (") && line.contains("uncommitted"), "{line}");
     assert!(b.alive(), "b's session runs on");
+}
+
+/// Merged and closed with the Close box: thread `x` of a plan, in a repo
+/// on main. Returns its key.
+async fn merged_and_closed(app: &Arc<App>, sb: &SandboxRef, ws: &Path) -> SessionKey {
+    repo(ws, &[("x", 1)]);
+    app.store.update(sb, |r| r.workspace = Some(ws.to_path_buf())).unwrap();
+    let id = done_plan(app, sb, &["x"]).await;
+    let key = SessionKey::thread(sb, &ThreadName::parse("x").unwrap());
+    session(app, &key, "exec sleep 60".into()).await;
+    app.plan_propose_merge_checked(&id, sb, vec!["x".into()], "", vec![]).await.unwrap();
+    assert_eq!(app.plan_merge(&id, true, None).await.unwrap().state, MergeState::Merged);
+    key
+}
+
+/// A pane left open on the closed thread reconnects as panes do, with no
+/// choices: refused, with a sentence for the pane, and no worktree or
+/// branch is made for it. A pane's first open of a New thread of that name
+/// carries its choices (its repo, as the desktop and the web UI send it):
+/// it starts the thread again at once.
+#[tokio::test]
+async fn a_stale_pane_is_refused_and_a_new_thread_of_that_name_starts() {
+    if !has_git() {
+        return;
+    }
+    let (_d, app, fake) = app_with(fake(&[]));
+    let sb = SandboxRef::parse("myapp").unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let key = merged_and_closed(&app, &sb, ws.path()).await;
+    let prepares = || calls(&fake.log(), "sbxw-thread-prepare").len();
+    let before = prepares();
+
+    crate::http::ui::settle_ws_thread(&app, &sb, &key.kind, None, None, false).await.unwrap();
+    let err = app.open_session(&key).await.err().map(|e| format!("{e:#}")).unwrap_or_default();
+    assert!(err.contains("a reconnect does not open it again: close this pane"), "{err:?}");
+    assert_eq!(prepares(), before, "no worktree, no branch");
+    assert!(!app.store.get(&sb).threads.contains_key("x"), "no record made");
+
+    crate::http::ui::settle_ws_thread(&app, &sb, &key.kind, Some(""), None, false).await.unwrap();
+    let opened = app.open_session(&key).await.err().map(|e| format!("{e:#}")).unwrap_or_default();
+    assert!(!opened.contains("reconnect"), "{opened:?}");
+    assert_eq!(prepares(), before + 1, "its worktree is made: the thread starts");
+}
+
+/// The lead plans the same name again right after the merge, and the
+/// person approves it: the thread starts, not refused as a reconnect.
+#[tokio::test]
+async fn a_plan_approved_with_a_closed_name_starts_it() {
+    if !has_git() {
+        return;
+    }
+    let (_d, app, fake) = app_with(fake(&[]));
+    let sb = SandboxRef::parse("myapp").unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let key = merged_and_closed(&app, &sb, ws.path()).await;
+    assert!(app.sessions.just_ended(&key));
+    let before = calls(&fake.log(), "sbxw-thread-prepare").len();
+    let p = app.plan_propose(&sb, "again", vec![t("x")], Variant::Split, "one", Some("lead")).await.unwrap();
+    app.plan_approve(&p.id, vec![t("x")], None).await.unwrap();
+    for _ in 0..150 {
+        if calls(&fake.log(), "sbxw-thread-prepare").len() > before {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(calls(&fake.log(), "sbxw-thread-prepare").len(), before + 1, "x is started again");
+    assert!(!app.sessions.just_ended(&key));
+    let reason = app.plan(&p.id).unwrap().threads[0].summary.clone();
+    assert!(!reason.contains("reconnect"), "{reason}");
 }

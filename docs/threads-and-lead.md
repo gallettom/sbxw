@@ -305,10 +305,17 @@ advises committing those "deletions", which would delete real files.
 
 With **close threads** ticked (the box is ticked by default, in the desktop
 app as in the web UI), merged threads are then closed: each session is
-ended, its worktree removed and its branch deleted. A pane still showing a
-closed thread does not start it again when its terminal reconnects: for two
-minutes after a close, sbxw refuses to open that session (`... was closed
-just now`), long enough for every app to drop the pane. The lead is told the
+ended, its worktree removed and its branch deleted. Every app drops the
+thread's pane when it hears the close. A pane that missed it still does not
+start the thread again when its terminal reconnects: for ten minutes after a
+close, sbxw refuses a reconnect of that session, and the pane shows
+`'<thread>' was closed, so a reconnect does not open it again: close this
+pane. To start a thread of that name again, use New thread`. A deliberate
+start is not refused: a New thread of that name (its first open carries its
+repo, model or checkout choice) or a plan approved with that name starts it
+at once. One case cannot be told from a reconnect: a New thread opened with
+no choice at all (no repo list could be read, default model); it is refused
+for those ten minutes. The lead is told the
 result in one line, e.g. `[sbxw] Merged: a, b. Closed: a, b.` or
 `[sbxw] Merged: a, b. Failed: c (conflict in X).`; a thread whose close
 failed is named with the reason (`Not closed: b (... has 2 uncommitted

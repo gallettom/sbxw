@@ -333,6 +333,8 @@ impl App {
     async fn launch_thread(self: &Arc<Self>, sandbox: &SandboxRef, name: &str) {
         let Ok(thread) = ThreadName::parse(name) else { return };
         let key = SessionKey::thread(sandbox, &thread);
+        // The person approved this thread: a start, never a stale reconnect.
+        self.sessions.clear_ended(&key);
         let outcome = match self.open_session(&key).await {
             Err(e) => Err(format!("{e:#}")),
             Ok((session, _)) => {

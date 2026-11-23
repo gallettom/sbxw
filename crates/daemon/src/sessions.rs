@@ -20,13 +20,15 @@ pub struct Sessions {
     creating: Mutex<HashMap<SessionKey, Arc<tokio::sync::Mutex<()>>>>,
     /// Sessions [`Sessions::end`]ed, and when: a pane still attached when
     /// its thread was closed reconnects on its own, and must not start it
-    /// again (with a new worktree and branch cut from `HEAD`).
+    /// again (with a new worktree and branch cut from `HEAD`). A deliberate
+    /// start of that name clears the mark ([`Sessions::clear_ended`]).
     ended: Mutex<HashMap<SessionKey, std::time::Instant>>,
 }
 
-/// How long an ended session is refused to a reconnect: long enough for
-/// every client to have heard `thread-closed` and dropped its pane.
-pub const ENDED_HOLD: std::time::Duration = std::time::Duration::from_secs(120);
+/// How long an ended session is refused to a reconnect. Every client drops
+/// the pane at `thread-closed`; this covers one that missed it, which
+/// retries every 10 s, for a good while. A deliberate start clears it.
+pub const ENDED_HOLD: std::time::Duration = std::time::Duration::from_secs(600);
 
 impl Sessions {
     pub fn new() -> Arc<Self> {
@@ -91,6 +93,12 @@ impl Sessions {
         ended.insert(key.clone(), std::time::Instant::now());
     }
 
+    /// A deliberate start of `key` (a pane's first open with its choices, a
+    /// plan's approval): an earlier [`Sessions::end`] no longer refuses it.
+    pub fn clear_ended(&self, key: &SessionKey) {
+        self.ended.lock().unwrap().remove(key);
+    }
+
     /// Whether `key` was [`Sessions::end`]ed within [`ENDED_HOLD`].
     pub fn just_ended(&self, key: &SessionKey) -> bool {
         self.ended.lock().unwrap().get(key).is_some_and(|at| at.elapsed() < ENDED_HOLD)
@@ -134,7 +142,7 @@ impl Sessions {
             return Ok((s, false));
         }
         if self.just_ended(key) {
-            anyhow::bail!("'{key}' was closed just now, so it is not opened again: close its pane");
+            anyhow::bail!("'{key}' was closed, so a reconnect does not open it again: close this pane. To start a thread of that name again, use New thread");
         }
         let spawn = make().await?;
         let weak: Weak<Self> = Arc::downgrade(self);
