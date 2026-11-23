@@ -1111,7 +1111,9 @@ function holdDeniedCard(name, p) {
   if (job) clearInterval(job.timer);
   p.card.classList.add('held');
   p.statusEl.textContent = 'sbx refused hosts';
+  p.held = true;
   heldDeniedCards.set(name, p.job);
+  renderDeniedHosts(name, p);
 }
 
 function dropHeldDeniedCard(name) {
@@ -1151,19 +1153,19 @@ function renderDeniedHosts(name, p) {
   }
   const actions = document.createElement('div');
   actions.className = 'sbx-denied-actions';
-  const retry = bringUpRetries.get(name);
+  // Retry only once this bring-up has ended: a second one beside it would race it.
+  const retry = p.held && bringUpRetries.get(name);
   if (retry) {
     const b = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-cancel', textContent: 'Retry' });
     b.title = 'Run the same bring-up again';
     b.addEventListener('click', () => { dropHeldDeniedCard(name); retry(); });
     actions.append(b);
   }
-  const dismiss = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-cancel', textContent: 'Dismiss' });
-  dismiss.addEventListener('click', () => {
-    if (pendingCreations.get(name)?.denied === ev) pendingCreations.get(name).denied = null;
-    dropHeldDeniedCard(name);
-  });
-  actions.append(dismiss);
+  if (p.held) {
+    const dismiss = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-cancel', textContent: 'Dismiss' });
+    dismiss.addEventListener('click', () => dropHeldDeniedCard(name));
+    actions.append(dismiss);
+  }
   parts.push(err, actions);
   box.replaceChildren(...parts);
 }
