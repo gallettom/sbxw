@@ -1845,6 +1845,10 @@ impl App {
 
     /// Closes the panes showing that session, on every page (each page re-tiles).
     fn close_panes(&mut self, sandbox: &str, thread: Option<&str>) {
+        // In the page windows too, each in its own page (pagewin.rs).
+        for id in self.page_windows() {
+            self.in_window(id, |a| a.close_panes(sandbox, thread));
+        }
         let gone: Vec<Uid> = self.panes.iter().filter(|p| p.sandbox.as_deref() == Some(sandbox) && p.thread.as_deref() == thread).map(|p| p.uid).collect();
         for u in gone {
             if let Some(i) = self.index_of(u) {
@@ -2201,8 +2205,9 @@ impl App {
                 if let Some(s) = self.sandboxes.iter_mut().find(|s| s.name == sandbox) {
                     s.status = "stopping…".into();
                 }
-                // As the web UI does: close this sandbox's terminals first.
-                for p in &mut self.panes {
+                // As the web UI does: close this sandbox's terminals first
+                // (those in page windows too, pagewin.rs).
+                for p in self.panes.iter_mut().chain(self.windowed.iter_mut().flat_map(|w| w.panes.iter_mut())) {
                     if p.sandbox.as_deref() == Some(sandbox.as_str()) {
                         p.term = None;
                     }

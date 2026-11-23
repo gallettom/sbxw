@@ -692,3 +692,18 @@ fn the_pager_menu_the_palette_and_the_chord_move_the_page_out() {
         got
     }), None);
 }
+
+/// A session closed elsewhere (its thread ended) closes its pane in the page
+/// window too, the window's page re-tiling; a stopped sandbox's terminals
+/// there close as the main window's do.
+#[test]
+fn a_session_closed_elsewhere_closes_its_pane_in_a_page_window() {
+    let mut r = Rig::new(&["web-app", "api", "docs"], 2);
+    r.move_out(0);
+    r.main(|rt| rt.update(|s, _| s.close_panes("api", None)));
+    r.settle();
+    assert_eq!(r.win_names(0), ["web-app"], "its pane went, the page re-tiled");
+    r.main(|rt| rt.update(|s, _| s.run_intent("test", Intent::StopSandbox { sandbox: "web-app".into() })));
+    r.settle();
+    assert!(r.win(0, |pt| pt.state.page.as_ref().unwrap().panes[0].term.is_none()), "its terminal closed");
+}

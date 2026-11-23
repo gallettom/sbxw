@@ -55,6 +55,17 @@ impl App {
                 lines.push((format!("terminal {} ({})", i + 1, p.sandbox.as_deref().unwrap_or("-")), m.grid_bytes, format!("{} lines x {} cols, measured {} MB, {} MB of output{}", m.lines, m.cols, mem::mb(m.measured), mem::mb(m.bytes_in), if i >= self.panes.len() { ", parked by the leads view" } else if shown { "" } else { ", hidden page" })));
             }
         }
+        // The page windows' terminals (pagewin.rs).
+        for wp in &self.windowed {
+            for p in &wp.panes {
+                if let Some(t) = &p.term {
+                    let m = t.mem();
+                    terms += m.grid_bytes;
+                    drawn += m.drawn_bytes;
+                    lines.push((format!("terminal in page window {} ({})", wp.id, p.sandbox.as_deref().unwrap_or("-")), m.grid_bytes, format!("{} lines x {} cols, measured {} MB, {} MB of output", m.lines, m.cols, mem::mb(m.measured), mem::mb(m.bytes_in))));
+                }
+            }
+        }
         // Screens: Luau VMs, element trees, the data they point at (shared:
         // each distinct one once).
         let mut lua = 0u64;
@@ -79,7 +90,7 @@ impl App {
         let pics = crate::picture::mem();
         let surfaces = crate::surface::mem();
         let jarvis: u64 = self.jarvis.log.iter().map(|m| m.text.capacity() as u64 + 64).sum();
-        lines.push(("terminals: grids, all".into(), terms, format!("{} terminals", self.panes.iter().chain(parked).filter(|p| p.term.is_some()).count())));
+        lines.push(("terminals: grids, all".into(), terms, format!("{} terminals", self.panes.iter().chain(parked).chain(self.windowed.iter().flat_map(|w| w.panes.iter())).filter(|p| p.term.is_some()).count())));
         lines.push(("terminals: rows drawn".into(), drawn, "estimate".into()));
         lines.push(("luau: all VMs".into(), lua, format!("{} screens", self.screens.len())));
         // MEM_GC=1: what a full collection of every VM would leave (it runs it).
