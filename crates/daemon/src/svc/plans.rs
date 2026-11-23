@@ -229,21 +229,21 @@ impl App {
         Ok(self.plan_changed(plan))
     }
 
-    /// The lead's `propose_merge`: [`App::plan_propose_merge`], refused for
-    /// a thread git shows is in its base already ([`App::merged_outside`]):
-    /// sbxw would merge nothing, and says so rather than wait for it.
+    /// The lead's `propose_merge`: [`App::plan_propose_merge`]. A shared
+    /// plan whose one branch git shows is in its base already
+    /// ([`App::merged_outside`]) is refused: sbxw would merge nothing, and
+    /// says so rather than wait for it. A split plan's thread in its base
+    /// may be named: the merge settles it with nothing to merge and closes
+    /// it with the others ([`App::plan_merge_pinned`]).
     pub async fn plan_propose_merge_checked(&self, id: &str, sandbox: &SandboxRef, order: Vec<String>, note: &str, distillate: Vec<DistillItem>) -> Result<Plan, String> {
         let plan = self.plan_led(id, sandbox)?;
-        let outside = self.merged_outside(&plan).await;
-        let named: Vec<String> = match plan.variant {
-            Variant::Shared => plan.threads.iter().map(|t| t.name.clone()).collect(),
-            Variant::Split => order.iter().map(|t| t.trim().to_string()).collect(),
-        };
+        let outside = if plan.variant.is_split() { BTreeMap::new() } else { self.merged_outside(&plan).await };
+        let named: Vec<String> = plan.threads.iter().map(|t| t.name.clone()).collect();
         if let Some((t, base)) = named.iter().find_map(|t| outside.get(t).map(|b| (t, b))) {
-            let what = if plan.variant.is_split() { format!("sbxw/{t}") } else { format!("sbxw/{} (thread {t:?})", plan.team_name()) };
             return Err(format!(
-                "{what} is already in {base}: merged outside sbxw, or it has no commit of its own, \
-                 so there is nothing to merge. Leave it out of the order; the user can close the thread"
+                "sbxw/{} (thread {t:?}) is already in {base}: merged outside sbxw, or it has no commit of its own, \
+                 so there is nothing to merge. The user can close the threads",
+                plan.team_name()
             ));
         }
         self.plan_propose_merge(id, sandbox, order, note, distillate)
@@ -426,6 +426,15 @@ impl App {
             };
             dirs.push((t.clone(), dir));
         }
+        // What git shows of each thread to merge, read on the host: a branch
+        // already in its base (no commit of its own, or merged by hand) or
+        // gone (the thread was closed by hand) has nothing to merge. Such a
+        // thread is settled as merged with nothing, so the merge goes on and
+        // it is closed like the others, instead of failing at every retry.
+        // A branch with a commit its base lacks is never in this list, and a
+        // repo git cannot read is left out. The phone's pinned merge is as
+        // it was.
+        let nothing = if pins.is_none() { self.thread_git(&plan).await } else { BTreeMap::new() };
         let host = self.host_for(&sandbox).await.map_err(|e| format!("{e:#}"))?;
         let mut bases: std::collections::BTreeSet<Option<String>> = std::collections::BTreeSet::new();
         for (_, d) in &dirs {
@@ -441,6 +450,16 @@ impl App {
 
         let running = self.ensure_running_for_thread(&sandbox).await.map_err(|e| format!("{e:#}"));
         for (thread, dir) in dirs {
+            if let Some(probe) = nothing.get(&thread) {
+                let note = match probe {
+                    Probe::InBase(base) => format!("nothing to merge, sbxw/{thread} is already in {base}"),
+                    Probe::Gone => format!("nothing to merge, sbxw/{thread} is gone"),
+                };
+                let result = MergeResult { thread: thread.clone(), ok: true, commit: None, error: None, note: Some(note) };
+                let p = self.plans.lock().unwrap().merge_result(id, result, now_ms())?;
+                self.plan_changed(p);
+                continue;
+            }
             let outcome = match (&running, dir, ThreadName::parse(&thread)) {
                 (Err(e), _, _) => Err(format!("the sandbox could not be started: {e}")),
                 (Ok(()), Err(e), _) => Err(e),
@@ -827,6 +846,8 @@ impl App {
             let (host, ws) = (&host, &ws);
             async move {
                 let root = git::repo_root(host, ws, &rel).await?;
+                // A repo git cannot read is unknown, not a branch gone.
+                git::git(host, &root, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]).await?;
                 let full = format!("refs/heads/{branch}");
                 let Some(tip) = git::git(host, &root, &["rev-parse", "--verify", "--quiet", &full]).await else {
                     return Some(Probe::Gone);
@@ -1060,6 +1081,10 @@ mod lead_tests;
 #[cfg(test)]
 #[path = "plans_reopen_tests.rs"]
 mod reopen_tests;
+
+#[cfg(test)]
+#[path = "plans_merge_close_tests.rs"]
+mod merge_close_tests;
 
 #[cfg(test)]
 mod tests {

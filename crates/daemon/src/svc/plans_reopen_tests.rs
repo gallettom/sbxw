@@ -271,10 +271,9 @@ async fn a_thread_merged_by_hand_reads_as_merged_outside_sbxw() {
     assert_eq!(v["plan"]["threads"][0]["merged_outside"], "main");
     assert_eq!(v["plan"]["threads"][1]["merged_outside"], Value::Null, "b is not in main");
     assert_eq!(v["plan"]["threads"][0]["state"], "done", "no state invented");
+    // a may be proposed: the merge settles it with nothing to merge and
+    // closes it (plans_merge_close_tests.rs).
     let (st, v) = post(&app, "reopen-hand", "/api/plans/propose_merge", json!({ "id": id, "order": ["a", "b"] })).await;
-    assert_eq!(st, StatusCode::BAD_REQUEST);
-    assert!(text(&v).contains("sbxw/a is already in main: merged outside sbxw"), "{v}");
-    let (st, v) = post(&app, "reopen-hand", "/api/plans/propose_merge", json!({ "id": id, "order": ["b"] })).await;
     assert_eq!(st, StatusCode::OK, "{v}");
 }
 

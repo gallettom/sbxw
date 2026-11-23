@@ -280,6 +280,20 @@ note. The plan dialog offers **Merge all**. For each thread, in order, sbxw:
 2. runs `git merge --no-ff --no-edit sbxw/<thread>` inside the sandbox,
 3. on conflict, runs `git merge --abort` and stops there.
 
+**Nothing to merge.** Before that, sbxw asks git on the host about each
+thread of the order. A thread whose branch is already in the base (a
+read-only study with no commit of its own, or a branch merged by hand) or
+whose branch is gone (you closed the thread by hand after the lead proposed
+it) is settled as merged with nothing: no merge runs for it, its row says
+`merged`, the result's note says `nothing to merge, sbxw/<thread> is already
+in main` or `... is gone`, the merge goes on with the others, and with close
+threads ticked it is closed like them. A proposal naming only such threads
+settles at the first click instead of failing at every retry with "there is
+no branch". A branch with even one commit its base lacks is never settled
+this way (git's `merge-base --is-ancestor` decides), so closing never
+deletes unmerged work; a repo git cannot read on the host is unknown, and its
+thread is merged as before.
+
 Unstaged edits elsewhere stay in the working tree, out of the merge commit.
 **Tracked files absent from the checkout** (`git status` shows ` D`, most
 often because the sandbox mounts only part of the workspace) are left alone
@@ -364,9 +378,11 @@ before. Nothing merges without your click.
 **Merged by hand.** When a done thread's branch (a shared plan: its one
 branch) is already an ancestor of the branch its repo's main checkout is on,
 `plan_status` shows the thread `already in <branch>: merged outside sbxw, or
-no commit of its own`, and `propose_merge` naming it says so rather than
-proposing a merge of nothing. sbxw records no merge for it: git proves only
-that the branch is in the base, not who merged it or how.
+no commit of its own`. In a split plan `propose_merge` may name it: the merge
+settles it with nothing to merge (above) and closes it. A shared plan's one
+branch in its base is refused at `propose_merge`, which says so rather than
+proposing a merge of nothing. Git proves only that the branch is in the base,
+not who merged it or how.
 
 ### What survives a daemon restart
 
