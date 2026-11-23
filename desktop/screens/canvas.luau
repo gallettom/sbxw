@@ -45,7 +45,7 @@ end
 
 -- id, icon, label, tooltip (one line: what it does), key.
 local TOOLS = {
-  { "select", "pointer", "Select", "Select, move and resize shots, notes and examples; drag the ground to pan", "V" },
+  { "select", "pointer", "Select", "Select, move and resize shots, notes and examples; edit diagrams; drag the ground to pan", "V" },
   { "pin", "pin", "Pin", "Pin: a numbered remark on a point of a shot (press the point)", "P" },
   { "note", "note", "Note", "Note: a remark placed anywhere on the canvas (press where it goes)", "N" },
   { "asset", "image", "Add example", "Add a picture of yours as an example for the agent: pick a file, drop one, or paste", "A" },
@@ -83,6 +83,38 @@ local function toolbar(ui, wide)
       help = "Open in a window: the Canvas in its own window, which can go full screen" }
   end
   return row(out)
+end
+
+-- The diagram selected (or one whose save was refused): what it is, its
+-- tools, its save's state, and the refused save's choice. Every text here
+-- is data from the feature; diagram labels are never keys or arguments.
+local function diagram_bar(ui, wide)
+  local d = ui.diagram
+  if not d then return false end
+  local out = { gap = 4, w = "full", key = "canvas-diagram-bar", px = 8, py = 4, radius = "xs", fill = "elevated" }
+  local off = d.idle or d.busy
+  out[#out + 1] = row{ gap = 4, w = "full", align = "center",
+    icon{ "canvas", size = 14, color = "purple" },
+    text{ d.idle and "Diagrams" or (d.selected or ("Diagram · " .. (d.title or ""))), size = "sm", color = "text-bright", truncate = true, grow = 1, key = "canvas-diagram-name" },
+    button{ wide and "Add node" or nil, icon = "plus", key = "canvas-diagram-add", on = "diagram", arg = "add", dense = true, variant = "ghost", disabled = off,
+      help = "Add a node to this diagram (or double click its ground where it goes)" },
+    button{ wide and "Lay out again" or nil, icon = "grid", key = "canvas-diagram-relayout", on = "diagram", arg = "relayout", dense = true, variant = "ghost",
+      disabled = off or (d.relayout_why ~= nil),
+      help = d.relayout_why or "Lay out again: rearranges the whole diagram (every node, your places too), as the agent's was laid out. One step: Undo puts every node back" },
+    button{ "Undo", key = "canvas-diagram-undo", on = "diagram", arg = "undo", dense = true, variant = "ghost", disabled = not d.undo, help = "Undo the last change to this diagram (⌘Z)" },
+    button{ "Redo", key = "canvas-diagram-redo", on = "diagram", arg = "redo", dense = true, variant = "ghost", disabled = not d.redo, help = "Redo (⇧⌘Z)" } }
+  out[#out + 1] = row{ gap = 8, w = "full",
+    -- One line whatever is selected: the surface below never moves.
+    text{ d.hint or "", size = "xs", color = "text-muted", truncate = true, grow = 1, help = d.hint },
+    text{ d.status or "", size = "xs", color = "text-muted", key = "canvas-diagram-status" } }
+  if d.conflict then
+    out[#out + 1] = column{ gap = 8, w = "full", key = "canvas-diagram-conflict",
+      text{ d.conflict, size = "sm", color = "amber", wrap = true },
+      row{ gap = 8,
+        button{ "Reload", key = "canvas-diagram-reload", on = "diagram", arg = "reload", dense = true, help = "Take the newer version; undo brings your change back" },
+        button{ "Reapply my change", key = "canvas-diagram-reapply", on = "diagram", arg = "reapply", dense = true, variant = "primary", help = "Save your version over the newer one" } } }
+  end
+  return column(out)
 end
 
 -- `pick`: offer the session picker here (the empty view has no send bar).
@@ -186,6 +218,7 @@ return {
       toolbar(ui, wide),
       ui.empty == "shots" and ask_block(ui, data, false) or false,
       ui.tool == "asset" and example_hint() or false,
+      diagram_bar(ui, wide),
       canvas{ id = "canvas" } }
     local panel = column{ w = wide and 320 or "full", h = "full", gap = 8,
       column{ grow = 1, min_h = 0, w = "full", scroll{ key = "canvas-side", side(ui, data) } }, sendbar(ui) }
@@ -232,5 +265,6 @@ return {
     tab = function(_, t) return intent("canvas_tab", { tab = t }) end,
     ground = function(_, _, v) return intent("canvas_ground", { ground = v or "white" }) end,
     window = function() return intent("canvas_window", { to = "window" }) end,
+    diagram = function(_, op) return intent("canvas_diagram", { op = op }) end,
   },
 }

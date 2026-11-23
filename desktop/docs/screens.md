@@ -425,6 +425,33 @@ Delete) is the core's, drawn and answered in that window; one that rises
 in the main window (or Jarvis's proposal, the copy offer, the palette)
 holds the canvas window behind a scrim that says where to answer.
 
+**Diagrams.** A diagram an agent added (`canvas_add_diagram`, sbxw's
+schema: `crates/core/src/diagram.rs`) is one item of the world, at its
+place, moved like a shot (its origin goes through the edit route's
+`layout`). The core draws it (`src/surface_diagram.rs`): nodes by shape
+(process a rounded box, decision a diamond, start and end round, store,
+external, actor, note), their label and second line, edges routed at draw
+time as orthogonal elbows with an arrowhead (solid, dashed, emphasis,
+error), lanes as bands, groups as frames, a sequence as lifelines with its
+messages in rows. Every text is the agent's, cleaned and cut as the core
+does, drawn as text. Below 30 % zoom the labels are left out. Each node is
+a button named by its label; each edge is named "A to B: label". With the
+Select tool: drag a node (its edges follow; a lifeline moves sideways
+only); drag from the selected node's handle to another node (a new edge)
+or to empty ground (a new node, linked); drag a message up or down (a new
+row); double click a node or an edge to rename it in place (Enter keeps,
+Escape drops); double click the diagram's ground for a new node. A press
+gives the surface the keyboard: Enter renames, Tab adds a linked successor,
+Delete or Backspace removes (a node takes its edges), ⌘Z and ⇧⌘Z undo and
+redo (100 steps a diagram, kept by the feature). Each edit is checked
+against the core's limits before anything is sent, then the whole diagram
+is saved (`POST /api/canvas/:id/diagrams/:did`, one save in flight, edits
+made meanwhile going in the next); a 409 shows "Reload" and "Reapply my
+change". "Lay out again" sends every node without a place, so the
+daemon's own layout places them: one undo step. The screen's bar for the
+diagram (`canvas_ui.diagram`, the `canvas_diagram` intent) stays while the
+canvas holds diagrams, so the surface never moves when one is selected.
+
 ### `icon`
 
 Positional: an [icon](#icons) name.

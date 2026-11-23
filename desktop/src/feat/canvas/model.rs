@@ -6,6 +6,7 @@ use crate::feat::monitor::model::{who, Group};
 use crate::feat::files::view::{ago, now_secs, size_label};
 use crate::feat::monitor::attach::{clipped, clipped_text};
 use crate::feat::Standin;
+use crate::surface_canvas::diagram::{self as dg, Diagram, History};
 use crate::surface_canvas::{Body, Item, Pin, Scene, Tool};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as J};
@@ -95,6 +96,45 @@ pub struct Review {
     pub read_ms: Option<u64>,
 }
 
+/// A diagram on the canvas, as the manifest holds it: `x, y` is where the
+/// diagram's own (0, 0) sits on the surface; `w, h` its content's far corner.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct DiagramItem {
+    pub id: String,
+    pub title: String,
+    pub kind: String,
+    pub round: u32,
+    pub added_ms: u64,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub moved: bool,
+    pub bytes: u64,
+    pub diagram: Diagram,
+}
+
+/// The person's editor of one diagram.
+#[derive(Debug, Clone, Default)]
+pub struct DState {
+    /// The version shown and edited.
+    pub cur: Diagram,
+    /// The revision the daemon holds: the next save is made from it.
+    pub rev: u32,
+    pub hist: History,
+    /// One save in flight; a change meanwhile marks it dirty and the answer sends the rest.
+    pub saving: bool,
+    pub dirty: bool,
+    /// "Lay out again" in flight: the daemon's answer (its layout) is taken whole.
+    pub relayout: bool,
+    /// The daemon's newer version, when a save was refused as stale (409):
+    /// shown with Reload and Reapply my change; nothing is saved until one is chosen.
+    pub conflict: Option<Diagram>,
+    /// Why the last save failed (any other refusal).
+    pub error: Option<String>,
+}
+
 /// `GET /api/canvas/:id`'s `canvas`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
@@ -110,6 +150,7 @@ pub struct Manifest {
     pub notes: Vec<NoteM>,
     pub rounds: Vec<Round>,
     pub reviews: Vec<Review>,
+    pub diagrams: Vec<DiagramItem>,
 }
 
 /// An unsent pin (the person's draft), as the edit route takes it.
@@ -158,6 +199,17 @@ pub fn item_rect(c: &Manifest, id: &str, layout: &BTreeMap<String, [f32; 4]>) ->
     c.shots.iter().find(|s| s.id == id).map(|s| [s.x, s.y, s.w, s.h]).or_else(|| c.assets.iter().find(|a| a.id == id).map(|a| [a.x, a.y, a.w, a.h]))
 }
 
+/// A diagram's item on the surface: (the rectangle of its content, the
+/// content box's corner in the diagram's points). The person's move applied,
+/// and their edits (`local`) drawn.
+pub fn diagram_rect(c: &Manifest, id: &str, layout: &BTreeMap<String, [f32; 4]>, local: &BTreeMap<String, DState>) -> Option<([f32; 4], [f32; 2])> {
+    let it = c.diagrams.iter().find(|d| d.id == id)?;
+    let d = local.get(id).map(|s| &s.cur).unwrap_or(&it.diagram);
+    let (ox, oy) = layout.get(id).map(|r| (r[0], r[1])).unwrap_or((it.x, it.y));
+    let b = dg::content_box(d);
+    Some(([ox + b[0], oy + b[1], b[2], b[3]], [b[0], b[1]]))
+}
+
 /// Pins are numbered per canvas: after every pin, sent or not.
 pub fn next_pin(c: &Manifest, draft: &[PinD]) -> u32 {
     c.pins.iter().map(|p| p.n).chain(draft.iter().map(|p| p.n)).max().unwrap_or(0) + 1
@@ -189,8 +241,14 @@ fn caption(s: &Shot) -> Vec<String> {
 
 /// The surface's scene: shots, a band above each round's row, assets,
 /// notes (sent and draft), pins (sent ones muted).
-pub fn scene(c: &Manifest, pins: &[PinD], notes: &[NoteD], layout: &BTreeMap<String, [f32; 4]>, selected: Option<&str>, tool: Tool) -> Scene {
+pub fn scene(c: &Manifest, pins: &[PinD], notes: &[NoteD], layout: &BTreeMap<String, [f32; 4]>, local: &BTreeMap<String, DState>, selected: Option<&str>, tool: Tool) -> Scene {
     let mut items = vec![];
+    // Diagrams under everything else (a shot moved onto one stays seen).
+    for it in &c.diagrams {
+        let Some((r, off)) = diagram_rect(c, &it.id, layout, local) else { continue };
+        let d = local.get(&it.id).map(|s| s.cur.clone()).unwrap_or_else(|| it.diagram.clone());
+        items.push(Item { id: it.id.clone(), x: r[0], y: r[1], w: r[2], h: r[3], body: Body::Diagram { diagram: std::sync::Arc::new(d), off, title: plain(&it.title) }, movable: true });
+    }
     let mut rounds: BTreeMap<u32, [f32; 3]> = BTreeMap::new();
     for s in &c.shots {
         let r = item_rect(c, &s.id, layout).unwrap_or([s.x, s.y, s.w, s.h]);
@@ -367,7 +425,7 @@ pub fn view(s: &State, snap: &J) -> J {
         return v;
     };
     v["current"] = json!({ "id": c.id, "title": plain(&c.title), "shots": c.shots.len(), "rounds": c.rounds.len(), "reviews": c.reviews.len() });
-    if c.shots.is_empty() {
+    if c.shots.is_empty() && c.diagrams.is_empty() {
         v["empty"] = "shots".into();
     }
     // The draft: pins, notes, assets not sent yet.
@@ -384,8 +442,9 @@ pub fn view(s: &State, snap: &J) -> J {
         let look = s.handed.get(&a.id).map(|h| !h.look.is_empty()).unwrap_or(false);
         draft.push(json!({ "key": a.id, "kind": "asset", "n": a.n, "label": format!("Example {} · {} · {}", a.n, clipped(&a.name), size_label(a.bytes)), "look": look, "selected": sel == Some(a.id.as_str()) }));
     }
-    let new = draft.len();
+    let new = draft.len() + draft_diagrams(s);
     v["draft"] = J::Array(draft);
+    v["diagram"] = diagram_view(s, c);
     // Past rounds, newest first, read only.
     let mut history = vec![];
     for r in c.reviews.iter().rev() {
@@ -405,6 +464,59 @@ pub fn view(s: &State, snap: &J) -> J {
     v["history"] = J::Array(history);
     v["send"] = send_view(s, snap, new);
     v
+}
+
+/// Changed diagrams not sent yet, as the daemon counts them (the canvas
+/// list's `draft_diagrams`, read again after each save).
+pub fn draft_diagrams(s: &State) -> usize {
+    s.list.iter().find(|c| Some(c["id"].as_str().unwrap_or("")) == s.current.as_deref()).and_then(|c| c["draft_diagrams"].as_u64()).unwrap_or(0) as usize
+}
+
+/// The bar of the diagram selected (or of one whose save was refused):
+/// its name, undo and redo, its save's state, and the 409's choice.
+fn diagram_view(s: &State, c: &Manifest) -> J {
+    let sel = s.selected.as_deref().and_then(dg::parse_sel).map(|(d, p)| (d.to_string(), p));
+    let conflicted = s.diagrams.iter().find(|(_, d)| d.conflict.is_some()).map(|(id, _)| id.clone());
+    // The bar stays while the canvas holds diagrams (so the surface under it
+    // never moves as a diagram is selected): idle, it says how to start.
+    let idle = json!({ "idle": true, "hint": "Press a diagram to edit it: drag its nodes, link them from their handle, double click to rename" });
+    if c.diagrams.is_empty() {
+        return J::Null;
+    }
+    let Some(did) = conflicted.clone().or_else(|| sel.as_ref().map(|(d, _)| d.clone())) else { return idle };
+    let Some(st) = s.diagrams.get(&did) else { return idle };
+    let title = c.diagrams.iter().find(|d| d.id == did).map(|d| plain(&d.title)).unwrap_or_default();
+    let part = sel.as_ref().filter(|(d, _)| *d == did).map(|(_, p)| p.clone()).unwrap_or(dg::Part::Whole);
+    let (undo, redo) = st.hist.steps();
+    let status = if st.relayout {
+        "Laying out again…".to_string()
+    } else if st.saving || st.dirty {
+        "Saving…".to_string()
+    } else if let Some(e) = &st.error {
+        format!("Not saved: {}", plain(e))
+    } else {
+        format!("Saved · revision {}", st.rev)
+    };
+    let selected = match &part {
+        dg::Part::Node(n) => st.cur.node(n).map(|n| format!("Node \"{}\"", plain(&n.label))),
+        dg::Part::Edge(e) => st.cur.edge(e).map(|e| format!("Edge {}", plain(&dg::edge_name(&st.cur, e)))),
+        dg::Part::Whole => None,
+    };
+    let seq = st.cur.kind == dg::Kind::Sequence;
+    let hint = match (&part, seq) {
+        (dg::Part::Node(_), true) => "Drag a lifeline sideways · drag its handle to another lifeline for a message · Enter renames · Tab adds the next · Delete removes it",
+        (dg::Part::Node(_), false) => "Drag to move · drag its handle to another node to link, or to empty ground for a new one · Enter renames · Tab adds the next · Delete removes it",
+        (dg::Part::Edge(_), true) => "Drag the message up or down to reorder · Enter renames · Delete removes it",
+        (dg::Part::Edge(_), false) => "Enter renames the edge · Delete removes it",
+        (dg::Part::Whole, _) => "Drag to move the diagram · double click its ground to add a node · double click a node or an edge to rename it",
+    };
+    let conflict = st.conflict.as_ref().map(|d| format!(
+        "\"{title}\" changed elsewhere (revision {}) while you edited it: your last change was not saved. Reload takes the newer version (undo brings yours back); Reapply my change saves yours over it.", d.rev));
+    json!({ "id": did, "title": title, "kind": st.cur.kind.name(), "nodes": st.cur.nodes.len(), "edges": st.cur.edges.len(),
+        "selected": selected, "part": match part { dg::Part::Node(_) => "node", dg::Part::Edge(_) => "edge", dg::Part::Whole => "whole" },
+        "undo": undo > 0, "redo": redo > 0, "status": status, "hint": hint, "conflict": conflict, "busy": st.relayout,
+        // Lay out again waits for the save in flight (it rearranges what was saved).
+        "relayout_why": if st.relayout { Some("Laying out again: a moment") } else if st.saving || st.dirty { Some("Wait: your last change is still being saved") } else if st.conflict.is_some() { Some("Reload or reapply your change first") } else { None } })
 }
 
 /// The sessions of `sb` a send or an ask may go to, one per place as the
@@ -510,7 +622,7 @@ fn send_view(s: &State, snap: &J, new: usize) -> J {
     json!({
         "label": format!("Send remarks to {to}"), "to": to, "new": new,
         "ok": new > 0 && why.is_none() && !busy, "ask_ok": why.is_none(),
-        "why": if busy { Some("Sending…".to_string()) } else if new == 0 { Some("No new pin, note or example since the last round".to_string()) } else { why.clone() },
+        "why": if busy { Some("Sending…".to_string()) } else if new == 0 { Some("No new pin, note, example or diagram change since the last round".to_string()) } else { why.clone() },
         // The Ask button's own reason: independent of what is new.
         "ask_why": why,
         "sessions": v.places.iter().map(|(k, l, _)| json!({ "id": k, "label": l })).collect::<Vec<_>>(), "session": v.key,
@@ -559,11 +671,53 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-fn summary(c: &J) -> J {
+fn summary(c: &J, changed: &J) -> J {
     let bytes: u64 = c["shots"].as_array().into_iter().flatten().chain(c["assets"].as_array().into_iter().flatten()).map(|x| x["bytes"].as_u64().unwrap_or(0)).sum();
     let draft = c["pins"].as_array().into_iter().flatten().filter(|p| p["sent"].is_null()).count() + c["notes"].as_array().into_iter().flatten().filter(|p| p["sent"].is_null()).count();
+    let diagrams = c["diagrams"].as_array().map_or(0, Vec::len);
+    let draft_diagrams = c["diagrams"].as_array().into_iter().flatten().filter(|d| changed[d["id"].as_str().unwrap_or("")] == true).count();
     json!({ "id": c["id"], "sandbox": c["sandbox"], "title": c["title"], "created_ms": c["created_ms"], "updated_ms": c["updated_ms"],
-        "shots": c["shots"].as_array().map_or(0, Vec::len), "rounds": c["rounds"].as_array().map_or(0, Vec::len), "reviews": c["reviews"].as_array().map_or(0, Vec::len), "bytes": bytes, "draft": draft })
+        "shots": c["shots"].as_array().map_or(0, Vec::len), "rounds": c["rounds"].as_array().map_or(0, Vec::len), "reviews": c["reviews"].as_array().map_or(0, Vec::len), "bytes": bytes, "draft": draft,
+        "diagrams": diagrams, "draft_diagrams": draft_diagrams })
+}
+
+/// The stand-in's layout of the nodes without a place (the daemon runs the
+/// core's layered layout; this is a plain one, for demos and tests):
+/// lifelines left to right in a sequence; else ranks by longest path from
+/// the nodes nothing leads to, one column a rank, lanes as rows.
+pub fn standin_layout(d: &mut Diagram) {
+    use dg::{Kind, Placed};
+    if d.nodes.iter().all(|n| n.placed != Placed::None) {
+        return;
+    }
+    if d.kind == Kind::Sequence {
+        let mut x = 0.0;
+        for n in &mut d.nodes {
+            (n.x, n.y, n.placed) = (x, 0.0, Placed::Layout);
+            x += n.w + dg::SEQ_GAP;
+        }
+        return;
+    }
+    let ids: Vec<String> = d.nodes.iter().map(|n| n.id.clone()).collect();
+    let mut rank = vec![0usize; ids.len()];
+    for _ in 0..ids.len() {
+        for e in &d.edges {
+            let (Some(a), Some(b)) = (ids.iter().position(|i| *i == e.from), ids.iter().position(|i| *i == e.to)) else { continue };
+            if a != b && rank[b] < rank[a] + 1 && rank[a] + 1 < ids.len() {
+                rank[b] = rank[a] + 1;
+            }
+        }
+    }
+    let lanes: Vec<String> = d.lanes.iter().map(|l| l.id.clone()).collect();
+    let mut rows: BTreeMap<(usize, usize), f32> = BTreeMap::new();
+    let lane_h = 140.0;
+    for (k, n) in d.nodes.iter_mut().enumerate() {
+        let lane = n.lane.as_ref().and_then(|l| lanes.iter().position(|x| x == l)).unwrap_or(0);
+        let at = rows.entry((lane, rank[k])).or_insert(0.0);
+        (n.x, n.y, n.placed) = (dg::LANE_TITLE + rank[k] as f32 * 240.0, lane as f32 * lane_h + dg::LANE_PAD + *at, Placed::Layout);
+        *at += n.h + dg::NODE_GAP;
+    }
+    dg::fit_lanes(d);
 }
 
 /// The core's column rule (`sbxw_core::canvas::grid_cols`), for the stand-in:
@@ -594,8 +748,48 @@ pub fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(
     if data.is_null() {
         *data = json!({ "canvases": {}, "pictures": {} });
     }
+    if data["changed"].is_null() {
+        data["changed"] = json!({});
+    }
+    if let Some(c) = match_path("/api/canvas/{id}/diagrams/{did}", p) {
+        let (id, did) = (c[0].1.clone(), c[1].1.clone());
+        let Some(k) = data["canvases"][id.as_str()]["diagrams"].as_array().and_then(|a| a.iter().position(|d| d["id"] == did.as_str())) else {
+            return Some((404, json!({ "ok": false, "error": "no such diagram" })));
+        };
+        if method == "GET" {
+            return Some((200, json!({ "ok": true, "diagram": data["canvases"][id.as_str()]["diagrams"][k] })));
+        }
+        // The daemon's save: the revision checked, the whole diagram checked
+        // again, unplaced nodes laid out, the revision bumped.
+        let item = &mut data["canvases"][id.as_str()]["diagrams"][k];
+        let cur = item["diagram"]["rev"].as_u64().unwrap_or(0);
+        if body["rev"].as_u64() != Some(cur) {
+            return Some((409, json!({ "ok": false, "error": format!("the diagram changed since revision {} (now {cur}): read it again", body["rev"]), "rev": cur })));
+        }
+        let mut d: Diagram = match serde_json::from_value(body["diagram"].clone()) {
+            Ok(d) => d,
+            Err(e) => return Some((400, json!({ "ok": false, "error": format!("not a diagram: {e}") }))),
+        };
+        if let Err(e) = dg::check(&d) {
+            return Some((400, json!({ "ok": false, "error": e })));
+        }
+        standin_layout(&mut d);
+        (d.id, d.rev, d.author, d.updated_ms) = (did.clone(), cur as u32 + 1, "person".into(), now);
+        let b = dg::content_box(&d);
+        item["w"] = (b[0] + b[2]).ceil().into();
+        item["h"] = (b[1] + b[3]).ceil().into();
+        item["diagram"] = dg::wire(&d);
+        // Laid-out nodes come back with their places.
+        let saved = item.clone();
+        data["changed"][did.as_str()] = true.into();
+        data["canvases"][id.as_str()]["updated_ms"] = now.into();
+        let sb = data["canvases"][id.as_str()]["sandbox"].clone();
+        (st.publish)("canvas", json!({ "id": id, "sandbox": sb, "what": "edit" }));
+        return Some((200, json!({ "ok": true, "diagram": saved, "rev": cur + 1 })));
+    }
     if method == "GET" && p == "/api/canvas" {
-        let mut l: Vec<J> = data["canvases"].as_object().into_iter().flatten().map(|(_, c)| summary(c)).collect();
+        let changed = data["changed"].clone();
+        let mut l: Vec<J> = data["canvases"].as_object().into_iter().flatten().map(|(_, c)| summary(c, &changed)).collect();
         l.sort_by_key(|c| std::cmp::Reverse(c["updated_ms"].as_u64().unwrap_or(0)));
         let total: u64 = l.iter().map(|c| c["bytes"].as_u64().unwrap_or(0)).sum();
         return Some((200, json!({ "ok": true, "canvases": l, "total_bytes": total })));
@@ -613,7 +807,7 @@ pub fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(
         for id in body["ids"].as_array().into_iter().flatten().filter_map(|i| i.as_str()) {
             if let Some(c) = data["canvases"].as_object_mut().and_then(|m| m.remove(id)) {
                 n += 1;
-                bytes += summary(&c)["bytes"].as_u64().unwrap_or(0);
+                bytes += summary(&c, &J::Null)["bytes"].as_u64().unwrap_or(0);
                 (st.publish)("canvas", json!({ "id": id, "sandbox": c["sandbox"], "what": "deleted" }));
             }
         }
@@ -674,6 +868,10 @@ pub fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(
                         }
                     }
                 }
+                // A diagram moves by its origin only.
+                for x in cv["diagrams"].as_array_mut().into_iter().flatten().filter(|x| x["id"] == l["id"]) {
+                    (x["x"], x["y"], x["moved"]) = (l["x"].clone(), l["y"].clone(), true.into());
+                }
             }
             cv["updated_ms"] = now.into();
             json!({ "ok": true })
@@ -705,10 +903,16 @@ pub fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(
                 a["sandbox_path"] = body["assets"][a["id"].as_str().unwrap_or("")].clone();
                 assets += 1;
             }
-            if pins + notes + assets == 0 {
+            let ids: Vec<String> = cv["diagrams"].as_array().into_iter().flatten().filter_map(|d| d["id"].as_str().map(str::to_string)).collect();
+            let diagrams = ids.iter().filter(|d| data["changed"][d.as_str()] == true).count();
+            if pins + notes + assets + diagrams == 0 {
                 return Some((400, json!({ "ok": false, "error": "there is no new remark to send" })));
             }
-            cv["reviews"].as_array_mut()?.push(json!({ "n": n, "at_ms": now, "session": body["session"], "pins": pins, "notes": notes, "assets": assets, "read_ms": null }));
+            for d in &ids {
+                data["changed"][d.as_str()] = false.into();
+            }
+            let cv = &mut data["canvases"][id.as_str()];
+            cv["reviews"].as_array_mut()?.push(json!({ "n": n, "at_ms": now, "session": body["session"], "pins": pins, "notes": notes, "assets": assets, "read_ms": null, "diagrams": diagrams }));
             json!({ "ok": true, "review": n, "line": format!("[sbxw canvas · {id}] review round {n} is ready: run canvas_read to read the person's remarks") })
         }
         // Stand-in only: the agent adds a round of shots (`{shots: [{title, w, h, width, screen}]}`).
@@ -740,9 +944,27 @@ pub fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(
             }
             json!({ "ok": true })
         }
+        // Stand-in only: the agent adds or replaces a diagram (`{diagram: item}`, its id kept).
+        "standin-diagram" => {
+            let it = body["diagram"].clone();
+            let did = it["id"].clone();
+            data["changed"][did.as_str().unwrap_or("")] = false.into();
+            let cv = &mut data["canvases"][id.as_str()];
+            if cv["diagrams"].is_null() {
+                cv["diagrams"] = json!([]);
+            }
+            let list = cv["diagrams"].as_array_mut()?;
+            match list.iter().position(|d| d["id"] == did) {
+                Some(k) => list[k] = it,
+                None => list.push(it),
+            }
+            cv["updated_ms"] = now.into();
+            json!({ "ok": true })
+        }
         _ => return None,
     };
     let what_ev = match what.as_str() {
+        "standin-diagram" => "diagram",
         "standin-shots" => "shots",
         "submit" => "review",
         w => if w == "assets" { "asset" } else { "edit" },

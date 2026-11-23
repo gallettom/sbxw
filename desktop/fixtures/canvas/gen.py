@@ -6,7 +6,10 @@ basic.json: web-app's canvas "Checkout review": round 1 (six desktop shots at
 (three shots of the same screens, after), a draft (two pins, a note, an
 asset); an older canvas, and one of a removed sandbox. big.json: 15 shots
 (12 at 1440x900, 3 at 390x844) for perf.sh and memory.sh. empty.json: a
-sandbox with no canvas. grid12.json: one round of 12 desktop shots at
+sandbox with no canvas. diagrams.json: web-app's canvas "Release plan" with two agent diagrams
+(a workflow with three lanes, a group, every shape and edge style; a
+sequence with a self message) and no shot.
+grid12.json: one round of 12 desktop shots at
 1284 (the user's case); grid2.json: that round and a second of six shots,
 five of the same screens (same cells) and a new one.
 Positions follow the core's grid (crates/core/src/canvas.rs, layout_round):
@@ -143,6 +146,49 @@ def grid(pictures, second):
     return {"id": "c-00000000000000g%d" % (2 if second else 1), "sandbox": "web-app", "title": title, "created_ms": NOW, "updated_ms": NOW + DAY,
             "shots": shots, "assets": [], "pins": [], "notes": [], "rounds": rounds, "reviews": []}
 
+def node(i, label, shape, lane, x, y, w, h, sub=""):
+    n = {"id": i, "label": label, "shape": shape, "x": x, "y": y, "w": w, "h": h, "placed": "layout"}
+    if lane:
+        n["lane"] = lane
+    if sub:
+        n["sub"] = sub
+    return n
+
+def edge(i, a, b, style="solid", label="", order=None):
+    e = {"id": i, "from": a, "to": b, "style": style}
+    if label:
+        e["label"] = label
+    if order is not None:
+        e["order"] = order
+    return e
+
+def diagrams():
+    """Two agent diagrams, placed as the core lays them out (lanes as bands)."""
+    flow = {"version": 1, "id": "d-0000000000a1", "kind": "workflow", "title": "Release", "direction": "lr",
+            "lanes": [{"id": "person", "label": "Person", "at": 0, "span": 112}, {"id": "lead", "label": "Lead", "at": 112, "span": 92},
+                      {"id": "thread", "label": "Thread", "at": 224, "span": 112}],
+            "groups": [{"id": "build", "label": "Build and test", "nodes": ["work", "test"]}],
+            "nodes": [node("ask", "Ask", "start", "person", 136, 24, 128, 64, "the person"), node("plan", "Plan the split", "process", "lead", 336, 136, 152, 44),
+                      node("ok", "Approve?", "decision", "person", 560, 24, 160, 60), node("work", "Work", "process", "thread", 800, 248, 152, 64, "in a worktree"),
+                      node("test", "Test", "process", "thread", 1016, 258, 96, 44), node("results", "Results", "store", "thread", 1176, 258, 112, 44),
+                      node("ci", "CI service", "external", "lead", 1176, 136, 128, 44), node("reviewer", "Reviewer", "actor", "lead", 1376, 136, 128, 44),
+                      node("rule", "Merge-tree must be clean", "note", "thread", 1376, 248, 200, 64), node("merged", "Merged", "end", "person", 1616, 24, 112, 44)],
+            "edges": [edge("e1", "ask", "plan", label="asks"), edge("e2", "plan", "ok", "dashed", "proposes"), edge("e3", "ok", "work", "emphasis", "yes"),
+                      edge("e4", "ok", "ask", "error", "no"), edge("e5", "work", "test"), edge("e6", "test", "results", "dashed"), edge("e7", "test", "ci", label="runs"),
+                      edge("e8", "ci", "reviewer", "emphasis"), edge("e9", "reviewer", "rule", "dashed"), edge("e10", "rule", "merged", label="merge")],
+            "rev": 1, "author": "agent", "updated_ms": NOW}
+    seq = {"version": 1, "id": "d-0000000000b2", "kind": "sequence", "title": "Canvas review", "direction": "lr", "lanes": [], "groups": [],
+           "nodes": [node("you", "You", "actor", None, 0, 0, 128, 44), node("app", "App", "process", None, 188, 0, 104, 44),
+                     node("daemon", "Daemon", "process", None, 352, 0, 120, 44), node("agent", "Agent", "process", None, 532, 0, 112, 44)],
+           "edges": [edge("m1", "you", "app", label="pin a remark", order=0), edge("m2", "app", "daemon", label="save", order=1), edge("m3", "daemon", "app", "dashed", "rev 2", 2),
+                     edge("m4", "app", "agent", "emphasis", "send round", 3), edge("m5", "agent", "agent", "dashed", "read", 4), edge("m6", "agent", "daemon", "error", "replace", 5)],
+           "rev": 1, "author": "agent", "updated_ms": NOW}
+    items = [{"id": flow["id"], "title": flow["title"], "kind": "workflow", "round": 1, "added_ms": NOW, "x": 0, "y": 0, "w": 1728, "h": 336, "moved": False, "bytes": 3000, "diagram": flow},
+             {"id": seq["id"], "title": seq["title"], "kind": "sequence", "round": 2, "added_ms": NOW + 60000, "x": 0, "y": 816, "w": 680, "h": 348, "moved": False, "bytes": 1500, "diagram": seq}]
+    return {"id": "c-00000000000000d1", "sandbox": "web-app", "title": "Release plan", "created_ms": NOW, "updated_ms": NOW + 60000,
+            "shots": [], "assets": [], "pins": [], "notes": [], "rounds": [{"n": 1, "at_ms": NOW, "shots": 0, "diagrams": 1}, {"n": 2, "at_ms": NOW + 60000, "shots": 0, "diagrams": 1}],
+            "reviews": [], "diagrams": items}
+
 def write(name, canvases, pictures, selected="web-app"):
     fx = {"about": "Canvas: invented sandboxes and mock screens (gen.py).",
           "app": {"selected": selected, "panes": 1, "split": "columns", "open": ["web-app"], "focused": 1},
@@ -160,3 +206,4 @@ p = {}
 write("grid12", [grid(p, False)], p)
 p = {}
 write("grid2", [grid(p, True)], p)
+write("diagrams", [diagrams()], {})

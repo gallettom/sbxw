@@ -24,6 +24,10 @@
 
 use rune::{el, text, Cursor, Drag, El, Live, MagnifyEvent, Phase, PointerButton, Tx, WheelEvent};
 use std::cell::RefCell;
+
+/// Diagrams drawn as canvas items (a module of its own, kept beside this one).
+#[path = "surface_diagram.rs"]
+pub mod diagram;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -79,6 +83,10 @@ pub enum Body {
     Note { text: String, n: Option<u32> },
     /// A round's label across the surface (not pressable).
     Band { label: String },
+    /// A diagram an agent added ([`diagram`]): the item's rectangle is its
+    /// content's box, `off` that box's corner in the diagram's own points
+    /// (the diagram's (0, 0) sits at `x - off[0], y - off[1]`).
+    Diagram { diagram: std::sync::Arc<diagram::Diagram>, off: [f32; 2], title: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,6 +123,10 @@ pub struct Scene {
     pub tool: Tool,
     /// The ground the person chose (the canvas's bar).
     pub ground: Ground,
+    /// A diagram part renamed inline: its selection key and the text it starts with.
+    pub rename: Option<(String, String)>,
+    /// The screen the surface is drawn in (the inline rename keeps its text there).
+    pub screen: String,
 }
 
 /// The canvas's ground, as the person chose it: white (the default), dark
@@ -258,6 +270,17 @@ pub enum CanvasEvent {
     NeedFull { image: String },
     /// The zoom changed by a gesture (its readout, beside the zoom buttons, is the screen's).
     Zoomed { zoom: f32 },
+    /// A change to a diagram (`item`): a drag, a link, a double click on its
+    /// ground, the inline rename's Enter.
+    Diagram { item: String, op: diagram::Op },
+    /// A double click on a diagram's node or edge: rename it inline.
+    Rename { item: String, part: diagram::Part },
+    /// The inline rename closed with Escape: nothing changes.
+    RenameCancel,
+    /// A key while the surface has the keyboard: `canvas_key`'s names
+    /// (`type` with its text, `escape`, `backspace`, `enter`), and `tab`,
+    /// `delete`, `undo` (⌘Z, Ctrl+Z), `redo` (⇧⌘Z, Ctrl+Shift+Z).
+    Key { key: String, text: Option<String> },
 }
 
 // ---------------------------------------------------------------------------
@@ -361,6 +384,16 @@ enum Grab {
     Pin { idx: usize },
     /// A press of a tool that acts on release (no drag past 4 pt).
     Tap,
+    /// A diagram's node dragged (item, node index, where it started).
+    DNode { idx: usize, node: usize, x0: f32, y0: f32 },
+    /// A new edge dragged from a node's handle.
+    DLink { idx: usize, node: usize },
+    /// A sequence message dragged to another row.
+    DMessage { idx: usize, edge: usize },
+    /// A press on an edge (pans when dragged; a double click renames it).
+    DEdge { idx: usize, edge: usize, pan0: [f32; 2] },
+    /// A press on a diagram's ground: moves the whole diagram; a double click adds a node.
+    DMove { idx: usize, x0: f32, y0: f32 },
 }
 
 struct Canvas {
@@ -377,11 +410,22 @@ struct Canvas {
     dirty: bool,
     /// The view was laid out (its size is known).
     sized: bool,
+    /// Where a new edge's rubber line ends now (world).
+    link_at: Option<[f32; 2]>,
+    /// The row a dragged message would take.
+    row: Option<u32>,
+    /// The last tap (no drag): when, where (view points), on what; a second
+    /// one soon after, near it, on the same thing, is a double click.
+    tap: Option<(std::time::Instant, [f32; 2], String)>,
+    /// The inline rename: its target, its text as typed (a copy of the
+    /// screen's field, for drawing), and whether the field must take it
+    /// (a rename just opened).
+    rename: Option<(String, rune::TextEdit, bool)>,
 }
 
 impl Canvas {
     fn new() -> Canvas {
-        Canvas { scene: Scene::default(), cam: Camera::default(), live_pan: Live::new([0.0, 0.0]), live_zoom: Live::new(1.0), grab: None, pin_at: None, fitted: false, dirty: false, sized: false }
+        Canvas { scene: Scene::default(), cam: Camera::default(), live_pan: Live::new([0.0, 0.0]), live_zoom: Live::new(1.0), grab: None, pin_at: None, fitted: false, dirty: false, sized: false, link_at: None, row: None, tap: None, rename: None }
     }
     fn set_cam(&mut self, cam: Camera) {
         self.cam = cam;
@@ -430,6 +474,18 @@ pub fn set_scene(id: &str, scene: Scene) {
     with(id, |c| {
         // The first items fit the view (a canvas laid out before its manifest came).
         let first = c.scene.items.is_empty() && !scene.items.is_empty();
+        // A rename opened (or moved to another part): the field starts from its text.
+        match &scene.rename {
+            Some((target, text)) if c.rename.as_ref().is_none_or(|r| &r.0 != target) => {
+                let mut e = rune::TextEdit::new(text.clone());
+                e.set_selection(0, text.len());
+                // Focused through its model: the field takes the keyboard as it shows.
+                e.focused = true;
+                c.rename = Some((target.clone(), e, true));
+            }
+            Some(_) => {}
+            None => c.rename = None,
+        }
         c.scene = scene;
         if first {
             c.fitted = false;
@@ -756,7 +812,22 @@ enum Hit {
     Handle(usize),
     Item(usize),
     Ground,
+    /// A diagram's node, its selected node's handle, an edge (item, index).
+    DNode(usize, usize),
+    DHandle(usize, usize),
+    DEdge(usize, usize),
 }
+
+/// A diagram item's diagram and where its (0, 0) sits in the world.
+fn diagram_of(i: &Item) -> Option<(&diagram::Diagram, [f32; 2])> {
+    match &i.body {
+        Body::Diagram { diagram, off, .. } => Some((diagram, [i.x - off[0], i.y - off[1]])),
+        _ => None,
+    }
+}
+
+/// How near (screen points) a press must be to an edge to take it.
+const EDGE_HIT: f32 = 6.0;
 
 fn hit(cv: &Canvas, w: [f32; 2]) -> Hit {
     let z = cv.cam.zoom;
@@ -767,8 +838,19 @@ fn hit(cv: &Canvas, w: [f32; 2]) -> Hit {
             }
         }
     }
+    // The selected node's handle, over everything of its diagram.
+    if let Some((did, diagram::Part::Node(nid))) = cv.scene.selected.as_deref().and_then(diagram::parse_sel) {
+        if let Some((k, (d, o))) = cv.scene.items.iter().enumerate().find(|(_, i)| i.id == did).and_then(|(k, i)| diagram_of(i).map(|x| (k, x))) {
+            if let Some(n) = d.nodes.iter().position(|n| n.id == nid) {
+                let h = diagram::handle_at(d, &d.nodes[n]);
+                if (o[0] + h[0] - w[0]).hypot(o[1] + h[1] - w[1]) <= (diagram::HANDLE_R + 4.0) / z {
+                    return Hit::DHandle(k, n);
+                }
+            }
+        }
+    }
     if let Some(sel) = &cv.scene.selected {
-        if let Some((k, i)) = cv.scene.items.iter().enumerate().find(|(_, i)| &i.id == sel && i.movable) {
+        if let Some((k, i)) = cv.scene.items.iter().enumerate().find(|(_, i)| &i.id == sel && i.movable && !matches!(i.body, Body::Diagram { .. })) {
             let (hx, hy) = (i.x + i.w, i.y + i.h);
             if handle_side(i.w * z, i.h * z).is_some() && (w[0] - hx).abs() <= HANDLE_HIT / z && (w[1] - hy).abs() <= HANDLE_HIT / z {
                 return Hit::Handle(k);
@@ -780,11 +862,29 @@ fn hit(cv: &Canvas, w: [f32; 2]) -> Hit {
             continue;
         }
         if w[0] >= i.x && w[0] <= i.x + i.w && w[1] >= i.y && w[1] <= i.y + i.h {
+            if let Some((d, o)) = diagram_of(i) {
+                match diagram::under(d, [w[0] - o[0], w[1] - o[1]], EDGE_HIT / z) {
+                    Some(diagram::Under::Node(n)) => return Hit::DNode(k, n),
+                    Some(diagram::Under::Edge(e)) => return Hit::DEdge(k, e),
+                    None => {}
+                }
+            }
             return Hit::Item(k);
         }
     }
     Hit::Ground
 }
+
+/// Whether this tap (view point `q`, on `what`) is the second of a double click.
+fn second_tap(cv: &mut Canvas, q: [f32; 2], what: &str) -> bool {
+    let now = std::time::Instant::now();
+    let double = cv.tap.as_ref().is_some_and(|(t, p, w)| w == what && now.duration_since(*t) <= DOUBLE_CLICK && (p[0] - q[0]).hypot(p[1] - q[1]) <= 6.0);
+    cv.tap = if double { None } else { Some((now, q, what.to_string())) };
+    double
+}
+
+/// Two taps this close in time are a double click.
+pub const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(450);
 
 /// A picture item under world point `w` (pins go on pictures only).
 fn picture_at(sc: &Scene, w: [f32; 2]) -> Option<(String, f32, f32)> {
@@ -817,6 +917,33 @@ fn on_drag(id: &str, d: &Drag, button: PointerButton) -> (Vec<CanvasEvent>, bool
                             }
                         }
                         (Tool::Select, Hit::Handle(k)) => Grab::Resize { idx: k, w0: cv.scene.items[k].w, h0: cv.scene.items[k].h },
+                        (Tool::Select, Hit::DHandle(k, n)) => {
+                            cv.link_at = Some(w);
+                            Grab::DLink { idx: k, node: n }
+                        }
+                        (Tool::Select, Hit::DNode(k, n)) => {
+                            let i = &cv.scene.items[k];
+                            let (d, _) = diagram_of(i).expect("a diagram");
+                            let nd = &d.nodes[n];
+                            out.push(CanvasEvent::Select { target: Some(diagram::Part::Node(nd.id.clone()).key(&i.id)) });
+                            Grab::DNode { idx: k, node: n, x0: nd.x, y0: nd.y }
+                        }
+                        (Tool::Select, Hit::DEdge(k, e)) => {
+                            let i = &cv.scene.items[k];
+                            let (d, _) = diagram_of(i).expect("a diagram");
+                            out.push(CanvasEvent::Select { target: Some(diagram::Part::Edge(d.edges[e].id.clone()).key(&i.id)) });
+                            cv.row = None;
+                            if d.kind == diagram::Kind::Sequence {
+                                Grab::DMessage { idx: k, edge: e }
+                            } else {
+                                Grab::DEdge { idx: k, edge: e, pan0: cv.cam.pan }
+                            }
+                        }
+                        (Tool::Select, Hit::Item(k)) if matches!(cv.scene.items[k].body, Body::Diagram { .. }) => {
+                            let i = &cv.scene.items[k];
+                            out.push(CanvasEvent::Select { target: Some(i.id.clone()) });
+                            Grab::DMove { idx: k, x0: i.x, y0: i.y }
+                        }
                         (Tool::Select, Hit::Item(k)) => {
                             out.push(CanvasEvent::Select { target: Some(cv.scene.items[k].id.clone()) });
                             let i = &cv.scene.items[k];
@@ -839,6 +966,7 @@ fn on_drag(id: &str, d: &Drag, button: PointerButton) -> (Vec<CanvasEvent>, bool
             }
             Phase::Move => {
                 let z = cv.cam.zoom;
+                let (dx, dy) = (d.dx, d.dy);
                 match cv.grab {
                     Some(Grab::Pan { pan0 }) => {
                         let mut cam = cv.cam;
@@ -870,11 +998,50 @@ fn on_drag(id: &str, d: &Drag, button: PointerButton) -> (Vec<CanvasEvent>, bool
                         cv.pin_at = Some(cv.cam.world(q));
                         (out, false)
                     }
+                    Some(Grab::DNode { idx, node, x0, y0 }) => {
+                        if let Some(Item { body: Body::Diagram { diagram: d, .. }, .. }) = cv.scene.items.get_mut(idx) {
+                            let seq = d.kind == diagram::Kind::Sequence;
+                            if let Some(n) = std::sync::Arc::make_mut(d).nodes.get_mut(node) {
+                                n.x = x0 + dx / z;
+                                // A lifeline moves sideways only.
+                                if !seq {
+                                    n.y = y0 + dy / z;
+                                }
+                            }
+                        }
+                        (out, false)
+                    }
+                    Some(Grab::DLink { .. }) => {
+                        cv.link_at = Some(cv.cam.world(q));
+                        (out, false)
+                    }
+                    Some(Grab::DMessage { idx, .. }) => {
+                        let w = cv.cam.world(q);
+                        cv.row = cv.scene.items.get(idx).and_then(diagram_of).map(|(d, o)| diagram::row_at(d, w[1] - o[1]));
+                        (out, false)
+                    }
+                    Some(Grab::DEdge { pan0, .. }) => {
+                        let mut cam = cv.cam;
+                        cam.pan = [pan0[0] + d.dx, pan0[1] + d.dy];
+                        cv.set_cam(cam);
+                        (out, true)
+                    }
+                    Some(Grab::DMove { idx, x0, y0 }) => {
+                        if let Some(i) = cv.scene.items.get_mut(idx) {
+                            i.x = x0 + d.dx / z;
+                            i.y = y0 + d.dy / z;
+                        }
+                        (out, false)
+                    }
                     _ => (out, true),
                 }
             }
             Phase::Up if !d.cancelled() => {
                 let moved = d.dx.hypot(d.dy) > 4.0;
+                // A drag in between: the next tap starts afresh.
+                if moved {
+                    cv.tap = None;
+                }
                 let w = cv.cam.world(q);
                 match cv.grab.take() {
                     Some(Grab::Move { idx, .. }) if moved => {
@@ -899,6 +1066,63 @@ fn on_drag(id: &str, d: &Drag, button: PointerButton) -> (Vec<CanvasEvent>, bool
                             }
                         }
                     }
+                    Some(Grab::DNode { idx, node, .. }) => {
+                        let Some((iid, nd)) = cv.scene.items.get(idx).and_then(|i| diagram_of(i).and_then(|(d, _)| d.nodes.get(node).cloned()).map(|n| (i.id.clone(), n))) else { return (out, false) };
+                        if moved {
+                            out.push(CanvasEvent::Diagram { item: iid, op: diagram::Op::Move { node: nd.id, x: nd.x.round(), y: nd.y.round() } });
+                        } else if second_tap(cv, q, &diagram::Part::Node(nd.id.clone()).key(&iid)) {
+                            out.push(CanvasEvent::Rename { item: iid, part: diagram::Part::Node(nd.id) });
+                        }
+                    }
+                    Some(Grab::DLink { idx, node }) => {
+                        cv.link_at = None;
+                        if moved {
+                            if let Some((iid, d, o)) = cv.scene.items.get(idx).and_then(|i| diagram_of(i).map(|(d, o)| (i.id.clone(), d, o))) {
+                                let from = d.nodes[node].id.clone();
+                                let local = [w[0] - o[0], w[1] - o[1]];
+                                let op = match diagram::under(d, local, EDGE_HIT / cv.cam.zoom) {
+                                    Some(diagram::Under::Node(m)) if m != node => Some(diagram::Op::Link { from, to: d.nodes[m].id.clone() }),
+                                    Some(diagram::Under::Node(_)) => None,
+                                    _ => Some(diagram::Op::LinkNew { from, x: local[0].round(), y: local[1].round() }),
+                                };
+                                if let Some(op) = op {
+                                    out.push(CanvasEvent::Diagram { item: iid, op });
+                                }
+                            }
+                        }
+                    }
+                    Some(Grab::DMessage { idx, edge }) => {
+                        let row = cv.row.take();
+                        let Some((iid, eid)) = cv.scene.items.get(idx).and_then(|i| diagram_of(i).and_then(|(d, _)| d.edges.get(edge).map(|e| (i.id.clone(), e.id.clone())))) else { return (out, false) };
+                        if moved {
+                            if let Some(order) = row {
+                                out.push(CanvasEvent::Diagram { item: iid, op: diagram::Op::Reorder { edge: eid, order } });
+                            }
+                        } else if second_tap(cv, q, &diagram::Part::Edge(eid.clone()).key(&iid)) {
+                            out.push(CanvasEvent::Rename { item: iid, part: diagram::Part::Edge(eid) });
+                        }
+                    }
+                    Some(Grab::DEdge { idx, edge, .. }) if !moved => {
+                        if let Some((iid, eid)) = cv.scene.items.get(idx).and_then(|i| diagram_of(i).and_then(|(d, _)| d.edges.get(edge).map(|e| (i.id.clone(), e.id.clone())))) {
+                            if second_tap(cv, q, &diagram::Part::Edge(eid.clone()).key(&iid)) {
+                                out.push(CanvasEvent::Rename { item: iid, part: diagram::Part::Edge(eid) });
+                            }
+                        }
+                    }
+                    Some(Grab::DMove { idx, .. }) => {
+                        if let Some(i) = cv.scene.items.get(idx) {
+                            let iid = i.id.clone();
+                            if moved {
+                                out.push(CanvasEvent::Moved { item: iid, x: i.x.round(), y: i.y.round() });
+                            } else if let Some((_, o)) = diagram_of(i) {
+                                let local = [(w[0] - o[0]).round(), (w[1] - o[1]).round()];
+                                // A double click on a diagram's ground adds a node there.
+                                if second_tap(cv, q, &iid) {
+                                    out.push(CanvasEvent::Diagram { item: iid, op: diagram::Op::AddAt { x: local[0], y: local[1] } });
+                                }
+                            }
+                        }
+                    }
                     Some(Grab::Tap) if !moved => match cv.scene.tool {
                         Tool::Pin => {
                             if let Some((item, fx, fy)) = picture_at(&cv.scene, w) {
@@ -916,7 +1140,21 @@ fn on_drag(id: &str, d: &Drag, button: PointerButton) -> (Vec<CanvasEvent>, bool
             _ => {
                 // Cancelled: put back what moved.
                 cv.pin_at = None;
+                cv.link_at = None;
+                cv.row = None;
                 match cv.grab.take() {
+                    Some(Grab::DNode { idx, node, x0, y0 }) => {
+                        if let Some(Item { body: Body::Diagram { diagram: d, .. }, .. }) = cv.scene.items.get_mut(idx) {
+                            if let Some(n) = std::sync::Arc::make_mut(d).nodes.get_mut(node) {
+                                (n.x, n.y) = (x0, y0);
+                            }
+                        }
+                    }
+                    Some(Grab::DMove { idx, x0, y0 }) => {
+                        if let Some(i) = cv.scene.items.get_mut(idx) {
+                            (i.x, i.y) = (x0, y0);
+                        }
+                    }
                     Some(Grab::Move { idx, x0, y0 }) => {
                         if let Some(i) = cv.scene.items.get_mut(idx) {
                             (i.x, i.y) = (x0, y0);
@@ -1013,18 +1251,18 @@ fn small(size: f32, weight: f32) -> rune::TextStyle {
 }
 
 /// The element for canvas `id`. `sink` gets what the person did (on the UI thread).
-pub fn view<S: 'static>(id: &str, scale: f32, sink: fn(&mut S, &str, CanvasEvent, &mut Tx)) -> El {
-    let (need, world, ground) = with(id, |cv| {
+pub fn view<S: crate::screen::Host>(id: &str, scale: f32, sink: fn(&mut S, &str, CanvasEvent, &mut Tx)) -> El {
+    let (need, world, ground, rename) = with(id, |cv| {
         cv.dirty = false;
         let need = plan_levels(id, cv, scale);
-        (need, world(id, cv, scale), crate::theme::canvas_c(cv.scene.ground.light(), "canvas-ground"))
+        (need, world(id, cv, scale), crate::theme::canvas_c(cv.scene.ground.light(), "canvas-ground"), rename_field::<S>(id, cv, sink))
     });
     if !need.is_empty() {
         // Asked once each; the feature fetches and calls `load`.
         PENDING.with(|p| p.borrow_mut().extend(need));
     }
-    let (i1, i2, i3, i4) = (id.to_string(), id.to_string(), id.to_string(), id.to_string());
-    el().key(format!("canvas-{id}"))
+    let (i1, i2, i3, i4, i5) = (id.to_string(), id.to_string(), id.to_string(), id.to_string(), id.to_string());
+    let mut e = el().key(format!("canvas-{id}"))
         .w_full()
         .grow(1.0)
         .min_h(0.0)
@@ -1072,7 +1310,106 @@ pub fn view<S: 'static>(id: &str, scale: f32, sink: fn(&mut S, &str, CanvasEvent
             }
             true
         })
-        .child(world)
+        // A press gives the surface the keyboard: a diagram's keys (Enter,
+        // Tab, Delete, ⌘Z) and the Canvas's own, as the overlay takes them.
+        .focusable(true)
+        .no_focus_ring()
+        .on_key(move |s: &mut S, ev: &rune::KeyEvent, tx: &mut Tx| match with(&i5, |cv| surface_key(cv, ev)) {
+            Some(k) => {
+                sink(s, &i5, k, tx);
+                true
+            }
+            None => false,
+        })
+        .child(world);
+    if let Some(r) = rename {
+        e = e.child(r);
+    }
+    e
+}
+
+/// The text field of an inline rename, over the part renamed, at its size
+/// on screen (it keeps its size as the world zooms). Its text lives in the
+/// screen's fields (`ui.edits`, as an `input`'s), copied here to be drawn;
+/// Enter sends the new label, Escape closes it.
+fn rename_field<S: crate::screen::Host>(id: &str, cv: &Canvas, sink: fn(&mut S, &str, CanvasEvent, &mut Tx)) -> Option<El> {
+    let (target, edit, _) = cv.rename.as_ref()?;
+    let (did, part) = diagram::parse_sel(target)?;
+    let item = cv.scene.items.iter().find(|i| i.id == did)?;
+    let (d, o) = diagram_of(item)?;
+    // The part's box in the world: a node's, an edge label's (or a box at its middle), the title's.
+    let r = match &part {
+        diagram::Part::Node(n) => {
+            let n = d.node(n)?;
+            [o[0] + n.x, o[1] + n.y, n.w, n.h]
+        }
+        diagram::Part::Edge(e) => {
+            let e = d.edge(e)?;
+            let at = diagram::route(d, e)?.label_at;
+            let s = diagram::label_size(&e.label);
+            [o[0] + at[0] - s[0] / 2.0, o[1] + at[1] - s[1] / 2.0, s[0], s[1]]
+        }
+        diagram::Part::Whole => [item.x, item.y - 30.0, item.w.min(480.0), 24.0],
+    };
+    let a = cv.cam.screen([r[0], r[1]]);
+    let fh = crate::theme::layout::CONTROL_H;
+    let fw = (r[2] * cv.cam.zoom).max(180.0);
+    let (x, y) = (a[0] + (r[2] * cv.cam.zoom - fw) / 2.0, a[1] + (r[3] * cv.cam.zoom - fh) / 2.0);
+    let light = cv.scene.ground.light();
+    let k = |name: &str| crate::theme::canvas_c(light, name);
+    let field = format!("canvas-dg-rename-{id}");
+    let (screen, i1, i2, i3, i4) = (cv.scene.screen.clone(), id.to_string(), id.to_string(), id.to_string(), id.to_string());
+    let (scr2, scr3, f1, f2, f3) = (screen.clone(), screen.clone(), field.clone(), field.clone(), field.clone());
+    let (item_id, part2) = (did.to_string(), part.clone());
+    let input = rune::text_input(edit, crate::screen::body(crate::theme::font_size::BODY, 400.0))
+        .single_line()
+        .key(field.clone())
+        .color(k("canvas-text"))
+        .w_full()
+        .autofocus()
+        .on_edit(rune::edit_access(move |s: &mut S| {
+            // A rename just opened: the field takes its starting text.
+            let fresh = with(&i1, |cv| cv.rename.as_mut().and_then(|r| std::mem::take(&mut r.2).then(|| r.1.clone())));
+            let e = &mut s.screen(&screen).ui.edits.entry(f1.clone()).or_insert_with(|| (rune::TextEdit::new(""), None)).0;
+            if let Some(t) = fresh {
+                *e = t;
+            }
+            e
+        }))
+        .on_input_change(move |s: &mut S, _tx: &mut Tx| {
+            let t = s.screen(&scr2).ui.edits.get(&f2).map(|e| e.0.clone());
+            with(&i2, |cv| {
+                if let (Some(r), Some(t)) = (cv.rename.as_mut(), t) {
+                    r.1 = t;
+                }
+            });
+        })
+        .on_submit(move |s: &mut S, tx: &mut Tx| {
+            let text = s.screen(&scr3).ui.edits.get(&f3).map(|e| e.0.text.clone()).unwrap_or_default();
+            sink(s, &i3, CanvasEvent::Diagram { item: item_id.clone(), op: diagram::Op::Rename { part: part2.clone(), text } }, tx);
+            // The keyboard back to the surface (its keys go on working).
+            tx.focus(format!("canvas-{i3}"), false);
+        })
+        .on_input_key(move |s: &mut S, ev: &rune::KeyEvent, tx: &mut Tx| {
+            if ev.key == rune::Key::Escape {
+                sink(s, &i4, CanvasEvent::RenameCancel, tx);
+                tx.focus(format!("canvas-{i4}"), false);
+                return true;
+            }
+            false
+        });
+    Some(
+        el().key(format!("canvas-dg-rename-box-{id}"))
+            .pin(Some(x), Some(y), None, None)
+            .w(fw)
+            .h(fh)
+            .px(crate::theme::spacing::SM)
+            .items_center()
+            .fill(k("canvas-diagram-node"))
+            .border(crate::theme::focus::W, k("canvas-accent"))
+            .radius(crate::theme::corner::CONTROL)
+            .child(input),
+    )
 }
 
 thread_local! {
@@ -1108,6 +1445,52 @@ fn dots(id: &str, cam: &Camera, light: bool) -> Option<El> {
     Some(e)
 }
 
+/// A diagram's gesture under way, drawn as it goes: a new edge's rubber line
+/// (from a node to a point, the diagram's points), a message's new row.
+#[allow(clippy::type_complexity)]
+fn diagram_drag(cv: &Canvas, item: &str) -> (Option<(String, [f32; 2])>, Option<(String, u32)>) {
+    let mine = |idx: usize| cv.scene.items.get(idx).filter(|i| i.id == item).and_then(diagram_of);
+    match cv.grab {
+        Some(Grab::DLink { idx, node }) => match (mine(idx), cv.link_at) {
+            (Some((d, o)), Some(p)) => (d.nodes.get(node).map(|n| (n.id.clone(), [p[0] - o[0], p[1] - o[1]])), None),
+            _ => (None, None),
+        },
+        Some(Grab::DMessage { idx, edge }) => match (mine(idx), cv.row) {
+            (Some((d, _)), Some(r)) => (None, d.edges.get(edge).map(|e| (e.id.clone(), r))),
+            _ => (None, None),
+        },
+        _ => (None, None),
+    }
+}
+
+/// What a key does on the surface when it has the keyboard (a press on it
+/// gives it): a diagram's keys while one of its parts is selected, and the
+/// Canvas's own keys (`canvas_key`) otherwise. None: not the surface's.
+fn surface_key(cv: &Canvas, ev: &rune::KeyEvent) -> Option<CanvasEvent> {
+    let m = ev.mods;
+    let plain = !(m.cmd || m.ctrl || m.alt || m.logo);
+    let key = |k: &str| Some(CanvasEvent::Key { key: k.into(), text: None });
+    let in_diagram = cv.scene.selected.as_deref().and_then(diagram::parse_sel).is_some();
+    if in_diagram {
+        if ev.is_command('z') {
+            return key(if m.shift { "redo" } else { "undo" });
+        }
+        match &ev.key {
+            rune::Key::Enter if plain && !m.shift => return key("enter"),
+            rune::Key::Tab if plain && !m.shift => return key("tab"),
+            rune::Key::Backspace | rune::Key::Delete if plain => return key("delete"),
+            rune::Key::Escape => return key("escape"),
+            _ => {}
+        }
+    }
+    match &ev.key {
+        rune::Key::Escape if cv.scene.tool != Tool::Select || cv.scene.selected.is_some() => key("escape"),
+        rune::Key::Backspace if plain && cv.scene.selected.is_some() => key("backspace"),
+        rune::Key::Text(t) if plain && ["v", "p", "n", "a"].contains(&t.to_lowercase().as_str()) => Some(CanvasEvent::Key { key: "type".into(), text: Some(t.clone()) }),
+        _ => None,
+    }
+}
+
 fn world(id: &str, cv: &Canvas, scale: f32) -> El {
     let z = cv.cam.zoom;
     let inv = 1.0 / z;
@@ -1140,6 +1523,23 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
         }
         let on = i.x < vis[0] + vis[2] + mx && i.x + i.w > vis[0] - mx && i.y < vis[1] + vis[3] + my && i.y + i.h > vis[1] - my;
         let selected = cv.scene.selected.as_deref() == Some(&i.id);
+        if let Body::Diagram { diagram: d, off, title } = &i.body {
+            // Out of view (and the margin): nothing built.
+            if !on {
+                continue;
+            }
+            let sel = cv.scene.selected.as_deref().and_then(diagram::parse_sel).filter(|(did, _)| *did == i.id).map(|(_, p)| p);
+            if sel == Some(diagram::Part::Whole) {
+                let o = RING_GAP * inv + 8.0;
+                w = w.child(el().key(format!("canvas-ring-{}", i.id)).pin(Some(i.x - o), Some(i.y - o), None, None).w(i.w + 2.0 * o).h(i.h + 2.0 * o).border(RING_W * inv, k("canvas-accent")).radius(6.0));
+            }
+            let (rubber, row_drag) = diagram_drag(cv, &i.id);
+            let look = diagram::Look { id: &i.id, d, origin: [i.x - off[0], i.y - off[1]], zoom: z, light, sel: sel.as_ref(), rubber: rubber.as_ref().map(|(f, p)| (f.as_str(), *p)), row_drag: row_drag.as_ref().map(|(e, r)| (e.as_str(), *r)), title };
+            for e in diagram::draw(&look) {
+                w = w.child(e);
+            }
+            continue;
+        }
         if matches!(i.body, Body::Picture { .. }) {
             // A mat a shade lighter than the ground, edged by a hairline: dark
             // screens stand apart from the surface and from each other.
@@ -1189,7 +1589,7 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
                             .child(text(if t.trim().is_empty() { "(no text yet)".to_string() } else { t.clone() }).font(small(14.0, 400.0)).color(k("canvas-text")).wrap().w(i.w - 20.0)),
                     );
             }
-            Body::Band { .. } => {}
+            Body::Band { .. } | Body::Diagram { .. } => {}
         }
         if let Some(side) = handle_side(i.w * z, i.h * z).filter(|_| selected && i.movable) {
             let hs = side / 2.0 * inv;
