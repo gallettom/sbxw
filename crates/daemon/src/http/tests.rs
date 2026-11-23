@@ -165,6 +165,30 @@ async fn the_index_carries_its_versions_and_the_state_is_one_call() {
     for k in ["sessions", "relay", "plans", "codemap", "leads", "usage", "models"] {
         assert!(v.get(k).is_some(), "{k}");
     }
+    assert_eq!(v["ssh_refresh_due"], false, "a bool, false where SSH is not set up");
+}
+
+#[tokio::test]
+async fn a_policy_check_refuses_a_target_that_is_not_a_host_before_sbx_hears_of_it() {
+    let (_d, app, fake) = crate::testing::app_with(crate::testing::sbx_answer);
+    for target in ["", "%2Drf", "a.com%3Brm", "a.com%3A0", "127.0.0.1"] {
+        let req = Request::builder().uri(format!("/api/sandboxes/web/policy/check?target={target}")).header("host", HOST).body(Body::empty()).unwrap();
+        let (s, v) = call(signed_in(app.clone()), req).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{target}: {v}");
+        assert_eq!(v["ok"], false);
+    }
+    assert!(!fake.log().iter().any(|l| l.starts_with("policy")), "{:?}", fake.log());
+    // sbx 0.51 (the fake's): not supported, said, not an error.
+    let req = Request::builder().uri("/api/sandboxes/web/policy/check?target=pypi.org").header("host", HOST).body(Body::empty()).unwrap();
+    let (s, v) = call(signed_in(app.clone()), req).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["ok"].clone(), v["supported"].clone()), (json!(true), json!(false)));
+    let req = Request::builder().uri("/api/sandboxes/web/mcp").header("host", HOST).body(Body::empty()).unwrap();
+    let (s, v) = call(signed_in(app.clone()), req).await;
+    assert_eq!(s, StatusCode::BAD_GATEWAY, "inspect prints nothing in this fake: {v}");
+    let (s, v) = call(signed_in(app), Request::builder().uri("/api/ssh").header("host", HOST).body(Body::empty()).unwrap()).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["refresh_due"], false);
 }
 
 #[test]

@@ -70,6 +70,10 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/ports/publish", post(publish))
         .route("/api/sandboxes/:name/ports/unpublish", post(unpublish))
         .route("/api/sandboxes/:name/policy", get(policy_panel))
+        .route("/api/sandboxes/:name/policy/check", get(policy_check))
+        .route("/api/sandboxes/:name/mcp", get(sandbox_mcp))
+        .route("/api/ssh", get(ssh_status))
+        .route("/api/ssh/setup", post(ssh_setup))
         .route("/api/sandboxes/:name/policy/rules", post(policy_add))
         .route("/api/sandboxes/:name/policy/rules/rm", post(policy_rm))
         .route("/api/policy/refresh", post(policy_refresh))
@@ -764,11 +768,39 @@ struct PublishBody {
 }
 
 async fn publish(State(app): S, Path(name): Path<String>, Json(b): Json<PublishBody>) -> ApiResult {
-    let w = app.publish_port(&sandbox(&name)?, b.sandbox_port, b.host_port, b.host_ip, b.alias).await?;
-    Ok(match w {
-        None => ok(),
-        Some(w) => ok_with(json!({ "hosts_warning": w })),
-    })
+    let p = app.publish_port(&sandbox(&name)?, b.sandbox_port, b.host_port, b.host_ip, b.alias).await?;
+    Ok(ok_with(json!(p)))
+}
+
+#[derive(Deserialize)]
+struct CheckQuery {
+    #[serde(default)]
+    target: String,
+}
+
+/// Which rule lets the sandbox reach `target` (sbx 0.54). The target is
+/// checked as a host (and port) before anything reaches a command line.
+async fn policy_check(State(app): S, Path(name): Path<String>, Query(q): Query<CheckQuery>) -> ApiResult {
+    use crate::svc::sandboxes::CheckRefused;
+    match app.policy_check(&sandbox(&name)?, &q.target).await {
+        Ok(c) => Ok(ok_with(json!(c))),
+        Err(CheckRefused::Bad(e)) => Err(ApiError::bad(e)),
+        Err(CheckRefused::Failed(e)) => Err(e.into()),
+    }
+}
+
+/// A sandbox's MCP mode and connected servers (sbx 0.54, `sbx inspect`).
+async fn sandbox_mcp(State(app): S, Path(name): Path<String>) -> ApiResult {
+    Ok(ok_with(json!(app.sandbox_mcp(&sandbox(&name)?).await?)))
+}
+
+async fn ssh_status(State(app): S) -> ApiResult {
+    Ok(ok_with(json!(app.ssh_status().await)))
+}
+
+/// `sbx setup ssh`, on the person's click (the SSH card's reminder).
+async fn ssh_setup(State(app): S) -> ApiResult {
+    Ok(ok_with(json!(app.ssh_setup().await?)))
 }
 
 #[derive(Deserialize)]
@@ -1906,6 +1938,7 @@ async fn state(State(app): S) -> Json<Value> {
         "usage": app.usage(),
         "models": { "default": app.cfg.claude_model, "models": app.offered_models() },
         "versions": { "sbxw": app.versions.sbxw, "sbx": app.versions.sbx },
+        "ssh_refresh_due": app.ssh_status().await.refresh_due,
     }))
 }
 

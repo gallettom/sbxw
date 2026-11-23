@@ -725,9 +725,10 @@ impl App {
     }
 
     /// Publish one mapping from the ports dialog; an alias goes through the
-    /// same parking rule as a bring-up's. A hosts warning rides along.
-    pub async fn publish_port(self: &Arc<Self>, name: &SandboxRef, sandbox_port: u16, host_port: Option<u16>, host_ip: Option<String>, alias: Option<String>) -> Result<Option<String>> {
-        let host_port = host_port.unwrap_or(sandbox_port);
+    /// same parking rule as a bring-up's. With no host port, sbx 0.54 picks
+    /// one ([`Sbx::port_publish`](sbxw_sbx::Sbx::port_publish)); an older sbx
+    /// gets today's default, the sandbox port, and the answer says so.
+    pub async fn publish_port(self: &Arc<Self>, name: &SandboxRef, sandbox_port: u16, host_port: Option<u16>, host_ip: Option<String>, alias: Option<String>) -> Result<Published> {
         let ip = host_ip.unwrap_or_else(|| "127.0.0.1".into());
         let alias = alias.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
         if let Some(a) = &alias {
@@ -735,23 +736,90 @@ impl App {
                 bail!("'{a}' is not a hostname");
             }
         }
+        let sbx = self.sbx_for(name).await?;
+        // Before 0.54 there is no automatic port: today's default, said.
+        let (host_port, note) = match host_port {
+            None if !sbx.has_port_command().await => (Some(sandbox_port), Some(AUTO_PORT_NEEDS_054.to_string())),
+            hp => (hp, None),
+        };
+        let assigned = host_port.is_none();
         if !name.is_local() {
             // On the host's loopback, reached here through the link.
-            let spec = format!("127.0.0.1:{host_port}:{sandbox_port}");
-            self.sbx_for(name).await?.publish(&name.name, &spec).await?;
-            self.forward_port(name, &spec).await;
-            return Ok(alias.map(|_| format!("'{name}' is on another host: its port is reached as {}.{}.localhost, not by an alias", name.name, name.host)));
+            let m = sbx.port_publish(&name.name, "127.0.0.1", host_port, sandbox_port).await?;
+            let forwarded_port = self.forward_port(name, &m.spec()).await;
+            let hosts_warning = alias.map(|_| format!("'{name}' is on another host: its port is reached as {}.{}.localhost, not by an alias", name.name, name.host));
+            return Ok(Published { sandbox_port, host_ip: m.host_ip, host_port: m.host_port, assigned, note, forwarded_port, hosts_warning });
         }
         let app = self.clone();
         let ip2 = ip.clone();
         tokio::task::spawn_blocking(move || app.hosts.ensure_loopback(&[HostAlias::new("", ip2)]))
             .await?
             .context("failed to create the loopback alias — run: sudo ifconfig lo0 alias <ip> up")?;
-        self.sbx.publish(&name.name, &format!("{ip}:{host_port}:{sandbox_port}")).await?;
-        let Some(alias) = alias else { return Ok(None) };
+        let m = sbx.port_publish(&name.name, &ip, host_port, sandbox_port).await?;
+        let mut out = Published { sandbox_port, host_ip: m.host_ip, host_port: m.host_port, assigned, note, forwarded_port: None, hosts_warning: None };
+        let Some(alias) = alias else { return Ok(out) };
         let app = self.clone();
         let w = tokio::task::spawn_blocking(move || app.hosts.apply(&app.store, &[HostAlias::new(alias, ip)])).await?;
-        Ok(w.into_iter().next())
+        out.hosts_warning = w.into_iter().next();
+        Ok(out)
+    }
+
+    /// Which rule lets `sandbox` reach `target` (`host` or `host:port`,
+    /// checked first): `sbx policy check network` (0.54). Before 0.54,
+    /// `supported: false` and a note, never an error. `rule_id` is the rule
+    /// again when the sandbox's `policy ls --wide` lists it as a rule id, the
+    /// one `policy rm` takes.
+    pub async fn policy_check(&self, sandbox: &SandboxRef, target: &str) -> Result<PolicyCheckAnswer, CheckRefused> {
+        let target = check_target(target).map_err(CheckRefused::Bad)?;
+        let sbx = self.sbx_for(sandbox).await.map_err(CheckRefused::Failed)?;
+        if !sbx.known_version().await.is_some_and(|v| v >= sbxw_sbx::POLICY_CHECK_SINCE) {
+            return Ok(PolicyCheckAnswer { supported: false, target, note: Some(POLICY_CHECK_NEEDS_054.into()), ..Default::default() });
+        }
+        let c = sbx.policy_check(Some(&sandbox.name), &target).await.map_err(CheckRefused::Failed)?;
+        let rule_id = match &c.rule {
+            Some(rule) => {
+                let rules = sbx.policy_ls(&sandbox.name, true).await;
+                rule_ids(&rules).into_iter().find(|id| id == rule)
+            }
+            None => None,
+        };
+        Ok(PolicyCheckAnswer { supported: true, target, allowed: c.allowed, rule: c.rule, rule_id, raw: c.raw, note: None })
+    }
+
+    /// Must `sbx setup ssh` run again (sbx 0.54 asks once after the
+    /// upgrade)? Only where `~/.ssh/config` has the `*.sbx` block: a person
+    /// who never set SSH up is not reminded of it.
+    pub async fn ssh_status(&self) -> SshStatus {
+        let sbx = self.sbx.known_version().await.map(|(a, b, c)| format!("{a}.{b}.{c}")).or_else(|| self.versions.sbx.clone());
+        // `~/.sbxw`'s parent: the home directory (a test's own directory under test).
+        let configured = ssh_configured(self.store.paths.root.parent());
+        let refreshed_at = self.store.ssh_refreshed_at();
+        let due = sbx.as_deref().is_some_and(|now| sbxw_sbx::ssh_refresh_due(refreshed_at.as_deref(), now));
+        SshStatus { configured, refresh_due: configured && due, sbx, refreshed_at }
+    }
+
+    /// `sbx setup ssh` on the person's click, and the sbx version it ran
+    /// with recorded, which ends the reminder.
+    pub async fn ssh_setup(&self) -> Result<SshStatus> {
+        tracing::info!("web UI: running `sbx setup ssh`");
+        self.sbx.setup_ssh().await?;
+        if let Some(v) = self.sbx.known_version().await.map(|(a, b, c)| format!("{a}.{b}.{c}")).or_else(|| self.versions.sbx.clone()) {
+            self.store.set_ssh_refreshed_at(&v)?;
+        }
+        Ok(self.ssh_status().await)
+    }
+
+    /// A sandbox's MCP mode and connected servers, from `sbx inspect` (sbx
+    /// 0.54, local sandboxes). Whatever sbx does not say is `unknown`.
+    pub async fn sandbox_mcp(&self, sandbox: &SandboxRef) -> Result<SandboxMcp> {
+        if !sandbox.is_local() {
+            return Ok(SandboxMcp::unsupported(MCP_LOCAL_ONLY));
+        }
+        let i = self.sbx.inspect(&sandbox.name).await?;
+        Ok(match i.mcp {
+            Some(m) => SandboxMcp { supported: true, mode: m.mode, servers: m.servers, note: None },
+            None => SandboxMcp::unsupported(MCP_NEEDS_054),
+        })
     }
 
     /// The env file for an existing sandbox — the ports it *has*, the aliases
@@ -777,6 +845,106 @@ impl App {
             dest: dir.join(envfile::FILE_NAME),
             dir,
         })
+    }
+}
+
+pub const AUTO_PORT_NEEDS_054: &str = "automatic host port needs sbx 0.54: published on the sandbox port";
+pub const POLICY_CHECK_NEEDS_054: &str = "needs sbx 0.54: `sbx policy check` is new there";
+pub const MCP_NEEDS_054: &str = "needs sbx 0.54";
+pub const MCP_LOCAL_ONLY: &str = "only shown for sandboxes on this Mac";
+
+/// `GET /api/ssh`'s answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SshStatus {
+    /// `~/.ssh/config` has a `*.sbx` block (`sbx setup ssh`'s).
+    pub configured: bool,
+    pub refresh_due: bool,
+    /// The running sbx's version.
+    pub sbx: Option<String>,
+    /// The sbx version sbxw last ran `sbx setup ssh` with.
+    pub refreshed_at: Option<String>,
+}
+
+/// Is a `*.sbx` host block in `<home>/.ssh/config`?
+pub fn ssh_configured(home: Option<&Path>) -> bool {
+    home.and_then(|h| std::fs::read_to_string(h.join(".ssh/config")).ok()).is_some_and(|s| s.contains(".sbx"))
+}
+
+/// What publishing one port did (`POST .../ports/publish`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Published {
+    pub sandbox_port: u16,
+    pub host_ip: String,
+    pub host_port: u16,
+    /// sbx picked `host_port` (0.54, none asked for).
+    pub assigned: bool,
+    /// Why no automatic port was given, on an older sbx.
+    pub note: Option<String>,
+    /// A remote sandbox's: the local end of the forward to its host port.
+    pub forwarded_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosts_warning: Option<String>,
+}
+
+/// `GET .../policy/check`'s answer. Every string is sbx's: text, not markup.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PolicyCheckAnswer {
+    pub supported: bool,
+    pub target: String,
+    pub allowed: Option<bool>,
+    pub rule: Option<String>,
+    pub rule_id: Option<String>,
+    pub raw: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Why a policy check was not run: a target that is not one (the caller's),
+/// or sbx failing it.
+#[derive(Debug)]
+pub enum CheckRefused {
+    Bad(String),
+    Failed(anyhow::Error),
+}
+
+/// `host` or `host:port` (1..65535), the host checked as a host name:
+/// nothing else reaches a command line. Normalised (lower case).
+pub fn check_target(raw: &str) -> Result<String, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("not a target: give a host, or host:port".into());
+    }
+    let (host, port) = match raw.rsplit_once(':') {
+        Some((h, p)) => match p.parse::<u16>() {
+            Ok(p) if p != 0 => (h, Some(p)),
+            _ => return Err(format!("not a target: '{raw}' has no valid port")),
+        },
+        None => (raw, None),
+    };
+    let host = sbxw_core::policy::clean_host(host).map_err(|e| format!("not a target: {e}"))?;
+    Ok(port.map_or(host.clone(), |p| format!("{host}:{p}")))
+}
+
+/// The rule ids a `policy ls --wide` listing shows.
+fn rule_ids(v: &PolicyView) -> Vec<String> {
+    let Some(i) = v.roles.iter().position(|r| *r == "rule_id") else { return vec![] };
+    v.rows.iter().filter_map(|r| r.get(i)).map(|id| id.trim().to_string()).filter(|id| !id.is_empty() && id != "-").collect()
+}
+
+/// `GET /api/sandboxes/:name/mcp`'s answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SandboxMcp {
+    pub supported: bool,
+    /// `static`, `dynamic` or `unknown`.
+    pub mode: String,
+    pub servers: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl SandboxMcp {
+    fn unsupported(note: &str) -> Self {
+        Self { supported: false, mode: "unknown".into(), servers: vec![], note: Some(note.into()) }
     }
 }
 
@@ -923,5 +1091,98 @@ mod tests {
         let e = app.remove(&[a.clone(), b.clone()]).await.unwrap_err();
         assert!(format!("{e:#}").contains("'b': busy"), "{e:#}");
         assert!(!app.store.exists(sbxw_core::SandboxRef::parse("a").unwrap()) && app.store.exists(sbxw_core::SandboxRef::parse("b").unwrap()));
+    }
+
+    fn on(version: &'static str, rest: impl Fn(&[String]) -> Option<Output> + Send + Sync + 'static) -> impl Fn(&[String]) -> Output + Send + Sync + 'static {
+        move |a: &[String]| match a.first().map(String::as_str) {
+            Some("--version") => Output::ok(&format!("sbx version {version}\n")),
+            _ => rest(a).unwrap_or_else(|| sbx_answer(a)),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_port_with_no_host_port_is_sbx_s_pick_on_0_54_and_the_sandbox_port_before() {
+        let (_d, app, fake) = app_with(on("0.54.0", |a| (a[0] == "port").then(|| Output::ok("published 127.0.0.1:49153->3000/tcp\n"))));
+        let web = SandboxRef::parse("web").unwrap();
+        let p = app.publish_port(&web, 3000, None, None, None).await.unwrap();
+        assert_eq!((p.host_port, p.assigned, p.note.as_deref()), (49153, true, None));
+        assert!(fake.log().iter().any(|c| c == "port publish web 127.0.0.1::3000"), "{:?}", fake.log());
+        let fixed = app.publish_port(&web, 3000, Some(8080), None, None).await.unwrap();
+        assert_eq!((fixed.host_port, fixed.assigned), (8080, false));
+
+        let (_d, app, fake) = app_with(on("0.53.1", |_| None));
+        let p = app.publish_port(&web, 3000, None, None, None).await.unwrap();
+        assert_eq!((p.host_port, p.assigned), (3000, false), "today's default");
+        assert_eq!(p.note.as_deref(), Some(super::AUTO_PORT_NEEDS_054));
+        assert!(!fake.log().iter().any(|c| c.contains("::")), "no automatic spec is sent before 0.54: {:?}", fake.log());
+    }
+
+    #[test]
+    fn a_policy_check_target_is_a_host_and_maybe_a_port_or_nothing_runs() {
+        assert_eq!(super::check_target(" GitHub.com:443 ").unwrap(), "github.com:443");
+        assert_eq!(super::check_target("pypi.org").unwrap(), "pypi.org");
+        for bad in ["", "-rf", "a.com:0", "a.com:99999", "a.com:x", "a.com;rm -rf /", "--sandbox=x", "a b.com", "localhost:80", "10.0.0.1"] {
+            assert!(super::check_target(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_policy_check_names_the_rule_and_its_id_on_0_54_only() {
+        let (_d, app, fake) = app_with(on("0.54.0", |a| match (a[0].as_str(), a.get(1).map(String::as_str)) {
+            ("policy", Some("check")) => Some(Output::ok("ALLOWED pypi.org:443 by rule b-12 (allow network pypi.org)\n")),
+            ("policy", Some("ls")) => Some(Output::ok("RULE ID   DECISION   RESOURCE\nb-12      allow      pypi.org\n")),
+            _ => None,
+        }));
+        let web = SandboxRef::parse("web").unwrap();
+        let c = app.policy_check(&web, "pypi.org:443").await.unwrap();
+        assert!(c.supported);
+        assert_eq!(c.rule.as_deref(), Some("b-12"));
+        assert_eq!(c.rule_id.as_deref(), Some("b-12"), "removable through policy rm");
+        assert!(c.raw.contains("ALLOWED"));
+        assert!(fake.log().iter().any(|l| l == "policy check network --sandbox web pypi.org:443"), "{:?}", fake.log());
+        assert!(matches!(app.policy_check(&web, "x.com; rm").await, Err(super::CheckRefused::Bad(_))));
+
+        let (_d, app, fake) = app_with(on("0.53.0", |_| None));
+        let c = app.policy_check(&web, "pypi.org").await.unwrap();
+        assert!(!c.supported && c.note.is_some());
+        assert!(!fake.log().iter().any(|l| l.starts_with("policy check")));
+    }
+
+    #[tokio::test]
+    async fn the_mcp_mode_is_sbx_s_word_or_unknown_never_an_error() {
+        let (_d, app, _f) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("inspect") if a[1] == "new" => Output::ok(r#"{"name":"new","kits":[],"mcp":{"mode":"dynamic","servers":["github",{"name":"notion"}]}}"#),
+            Some("inspect") => Output::ok(r#"{"name":"old","kits":[]}"#),
+            _ => sbx_answer(a),
+        });
+        let m = app.sandbox_mcp(&SandboxRef::parse("new").unwrap()).await.unwrap();
+        assert!(m.supported);
+        assert_eq!((m.mode.as_str(), m.servers.as_slice()), ("dynamic", &["github".to_string(), "notion".to_string()][..]));
+        let m = app.sandbox_mcp(&SandboxRef::parse("old").unwrap()).await.unwrap();
+        assert!(!m.supported);
+        assert_eq!((m.mode.as_str(), m.note.as_deref()), ("unknown", Some(super::MCP_NEEDS_054)));
+    }
+
+    #[tokio::test]
+    async fn the_ssh_reminder_shows_on_0_54_where_ssh_is_set_up_until_setup_runs() {
+        let (d, app, fake) = app_with(on("0.54.0", |_| None));
+        let s = app.ssh_status().await;
+        assert!(!s.configured && !s.refresh_due, "no *.sbx block, no reminder");
+        // `Paths::under(dir)`: the test's directory stands for the home.
+        let home = app.store.paths.root.parent().unwrap().to_path_buf();
+        assert!(home.starts_with(d.path()));
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::write(home.join(".ssh/config"), "Host *.sbx\n  ProxyCommand sbx ssh-proxy %h\n").unwrap();
+        assert!(app.ssh_status().await.refresh_due);
+        let after = app.ssh_setup().await.unwrap();
+        assert!(fake.log().iter().any(|l| l == "setup ssh"));
+        assert_eq!((after.refresh_due, after.refreshed_at.as_deref()), (false, Some("0.54.0")));
+
+        let (d2, old, _f) = app_with(on("0.53.0", |_| None));
+        let home = old.store.paths.root.parent().unwrap().to_path_buf();
+        assert!(home.starts_with(d2.path()));
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::write(home.join(".ssh/config"), "Host *.sbx\n").unwrap();
+        assert!(!old.ssh_status().await.refresh_due, "an older sbx asks for nothing");
     }
 }

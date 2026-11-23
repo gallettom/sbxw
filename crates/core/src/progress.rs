@@ -43,6 +43,24 @@ pub enum Progress {
     /// A manual step left undone (a `/etc/hosts` alias nobody could authorise),
     /// without failing the bring-up.
     Warning { text: String },
+    /// Hosts sbx refused while a step installed a kit (sbx 0.54 names them;
+    /// else read off the sandbox's policy log since the step began). Sent
+    /// before the warning or the `Done` that reports the same failure, so a
+    /// UI can offer an allow rule per host. `step` is [`CREATE`] or [`KITS`];
+    /// `source` is `"sbx"` or `"policy_log"`; `exists` whether the sandbox
+    /// is there to scope a rule to, and `allow_scope` the scope an allow
+    /// offered for these hosts has: `"sandbox"` when it exists, else
+    /// `"global"` (every sandbox on the machine), which a UI must say in
+    /// those words. Every string is sbx's: data, not markup.
+    Denied {
+        step: String,
+        kit: Option<String>,
+        hosts: Vec<String>,
+        source: String,
+        exists: bool,
+        allow_scope: String,
+        message: String,
+    },
     Done { error: Option<String> },
 }
 
