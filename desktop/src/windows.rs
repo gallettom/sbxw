@@ -377,6 +377,14 @@ pub fn set_primary_waker(w: Waker) {
     PRIMARY_WAKE.with(|s| *s.borrow_mut() = Some(w));
 }
 
+/// A new hub on this thread, its slots empty (tests: one app per run).
+pub fn reset() {
+    with(|h| *h = Hub::default());
+    SLOT.with(|s| s.borrow_mut().take());
+    DIALOG.with(|s| s.borrow_mut().take());
+    DONE.with(|d| d.borrow_mut().clear());
+}
+
 /// The operations the hub asked for with no platform installed (tests).
 pub fn take_done() -> Vec<Native> {
     DONE.with(|d| std::mem::take(&mut *d.borrow_mut()))

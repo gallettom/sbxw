@@ -1143,7 +1143,7 @@ mod in_window {
     fn opened() -> (Runtime<App>, Runtime<CanvasWin>) {
         *STATE().lock().unwrap() = State::default();
         crate::surface_canvas::close(SURF);
-        let _ = w::take_done();
+        w::reset();
         let mut rt = runtime(1284.0, 816.0);
         main(&mut rt, |rt| tap(rt, "rail-canvas"));
         main(&mut rt, |rt| settle(rt, 6));
