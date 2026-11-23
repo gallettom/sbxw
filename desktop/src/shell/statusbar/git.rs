@@ -191,7 +191,8 @@ impl App {
     /// The width the item may take: what the fixed parts leave.
     pub(super) fn git_avail(&self, f: super::Fit, cpu: &super::Cpu, cost: &super::Cost) -> f32 {
         let jobs = &self.status.jobs;
-        let left = if jobs.is_empty() { 0.0 } else { super::jobs_w(jobs, f.step) + GAP };
+        let ver = if f.versions { super::versions_w(&self.statusbar_versions()) } else { 0.0 };
+        let left = ver + if jobs.is_empty() { 0.0 } else { super::jobs_w(jobs, f.step) + GAP };
         self.window.0 - PAD * 2.0 - GAP - super::right_w(cpu, cost, f) - left - 0.5
     }
 
