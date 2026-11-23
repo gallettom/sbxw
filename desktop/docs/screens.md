@@ -190,6 +190,7 @@ Children side by side. Children are centred vertically.
 | `hover_zone` | string | `row`/`column`: one hover zone with every element of this screen that names the same zone, even apart in the tree (a row and the block under it). The core tells the screen where the pointer rests in `data.app.hover_zone` ([Hover zones](#hover-zones)) |
 | `group` | `list` | Its pressable children (with `on`) are one list: Up and Down move the keyboard between them |
 | `selected` | bool | With `on`: the selected item (screen readers say so) |
+| `keep_focus` | bool | With `on`: a press leaves the keyboard focus where it is (the rows of a completion list, under a field that keeps the keyboard) |
 | `clip` | bool | What overflows it is cut at its edges (a line of badges that may not fit) |
 | `shortcuts` | list of `{ what, key, ... }` | Lines under its `help` in the tooltip, each what a key does with its keycaps: `shortcuts = { { "Open its terminal", "Enter" }, { "Start or stop", "Space" } }` |
 | `paint` | `{ strokes = { { points = { x1, y1, x2, y2, ... }, width = 2, color = "blue" } }, dots = { { x =, y =, r =, color =, hollow = } } }` | Vector drawing in the element's own points from its top-left, under its children (Rune's `Shape`: round-capped polylines, dots as filled discs or rings). At most 400 strokes, 600 dots, 8000 points. Give the element its `w` and `h`; put pressable parts over it as `pin`ned children. The Worktrees graph draws with it |
@@ -301,7 +302,10 @@ input{ id = "filter", value = state.filter, placeholder = "Filter", on = "filter
 ### `textarea`
 
 A text field of several lines: Return is a new line, Cmd+Return (Ctrl+Return
-off macOS) submits. The core holds the text, as for `input`.
+off macOS) submits. With `enter = "send"`, Return submits too and
+Shift+Return is the new line. Either way a held Return submits once, and a
+Return that confirms an input method's composition (IME, dead keys) never
+submits. The core holds the text, as for `input`.
 
 | Prop | Value | Effect |
 |---|---|---|
@@ -310,7 +314,9 @@ off macOS) submits. The core holds the text, as for `input`.
 | `placeholder` | string | Shown while empty |
 | `rows` | number | Visible lines, 1 to 40 (default 4); more text scrolls |
 | `on` | action name | Called on every edit, `value` = the text |
-| `on_submit` | action name | Called on Cmd/Ctrl+Return, `value` = the text |
+| `on_submit` | action name | Called on Cmd/Ctrl+Return (and Return with `enter = "send"`), `value` = the text |
+| `enter` | `newline` or `send` | What a plain Return does: a new line (the default), or `on_submit` (Shift+Return is then the new line). Only the Sessions composer sends on Return: a chat box where one message is the norm. Every other field keeps the default |
+| `on_list_key` | action name | Set while the screen shows a completion list for this field: plain Up, Down, Tab, Return and Escape call it with `"up"`, `"down"`, `"tab"`, `"enter"`, `"escape"` (and the same `arg`) instead of editing or submitting; the keyboard stays in the field. Leave it unset when no list shows |
 | `arg` | any value | Passed to both |
 | `disabled` | bool | Read only |
 | `tone` | `compose` or `plain` | `compose`: a chat input, where the person writes to an agent (the Sessions composer, Jarvis's input, Canvas's ask and remarks, a request's answer). It gets the `compose` ground, raised above the panel, and dictation (F9 held, or the `dictate` intent) writes there. Filters, searches and forms stay `plain` (the default) |
@@ -2466,10 +2472,22 @@ a `Set` renders only drawn screens). Also read: `data.relay_ui.picks` and
 | `monitor_terminal`, `monitor_commits`, `monitor_files`, `monitor_worktrees` | `key` | direct | `thread_open` or `open_terminal` (spare pane; the pane that shows it, when one does), `commits_show` on its branch, `files_open` at its worktree, `worktrees_show` scoped to its sandbox (a thread: filtered to it) |
 | `monitor_pick` | `key`, `step`, `option` | direct | The relay's `agent_pick`, only for a session the daemon lists as waiting and answerable |
 | `monitor_attach` | `key` (the session shown) | direct | The core's file dialog (`Action::PickFiles`, from a press only); the file comes back through `on_files` and waits as a chip of that session |
+| `monitor_commands` | `key` (the session shown) | direct | The composer's completion list: `GET /api/sandboxes/:name/commands` for that session's sandbox, once (the screen asks when the draft first starts with `/` and a partial name). One sandbox's list is held; the shown session in another sandbox reads that one's. Never on a timer, never from Luau. The answer's names are checked (`^[a-z0-9][a-z0-9:_-]{0,63}$`) and its descriptions cleaned (controls and invisible characters dropped, one line, 100 characters) before `detail.commands` (`{state = "loading" \| "ready" \| "none", items = { {name, desc} }}`); a 404 (a daemon without the route) or any failure is `none`: no list, nothing said |
 | `monitor_attach_remove` | `key`, `id` | direct | Takes that file off the session's chips; the core forgets its path |
 | `monitor_send` | `key`, `text?` | approval | Masked (`/api/voice/anonymise`), then ONE core dialog: the words in full, each attached file (local path, size, "look" reasons), the total, the session; a "look" file needs its box ticked. Send there: without files, `/api/chat/push {text, name, thread}`; with files, `core:uploads` (then each pasted picture's `paste-image`), then the push of the words followed by the daemon's paths. A failure pushes nothing |
 
-**The rules.** Only a press (or Cmd+Return in the composer) sends. The
+**The composer's keys.** Return sends (the Send press: the same intent and
+the same checks in Rust); Shift+Return starts a new line; Cmd+Return
+(Ctrl+Return) sends too. A closed composer, or no words and no file, sends
+nothing. While the draft is `/` and a partial name (no space yet), the
+skills and commands of the session's sandbox whose name starts with it,
+then those that hold it, show above the box (8 rows at a time, the window
+following the selection): Up and Down move, Tab or Return completes the
+name followed by a space (and sends nothing), Escape closes the list for
+that draft and keeps it, a click picks one; the keyboard stays in the box.
+No match shows nothing.
+
+**The rules.** Only a press (or Return in the composer) sends. The
 target is always drawn next to Send. The composer is disabled while the
 session waits on a question or a permission (typed words would land in its
 menu). `monitor_pick` and `monitor_send` refuse while `data.app.covered` is

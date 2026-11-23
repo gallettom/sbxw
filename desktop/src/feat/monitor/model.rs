@@ -221,6 +221,8 @@ pub struct Model {
     pub leads: Option<Leads>,
     /// The conversations read (the selected session's and a few recent ones).
     pub conv: super::conv::Store,
+    /// The composer's completion list, for one sandbox ([`super::cmds`]).
+    pub cmds: Option<super::cmds::Cmds>,
 }
 
 /// The rail's Team leads, applied to Sessions: the core's one state

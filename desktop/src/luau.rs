@@ -52,7 +52,8 @@ pub enum Kind {
     Checkbox,
     Progress,
     Markdown,
-    /// A multi-line `input`: Return is a new line, Cmd/Ctrl+Return submits.
+    /// A multi-line `input`: Return is a new line, Cmd/Ctrl+Return submits
+    /// (with `enter = "send"`: Return submits, Shift+Return is the new line).
     Textarea,
     /// A picture a feature registered with the core (`Action::Image`), by its key.
     Image,
@@ -159,6 +160,17 @@ pub struct Node {
     pub on: Option<String>,
     pub arg: J,
     pub on_submit: Option<String>,
+    /// `textarea` with `enter = "send"`: a plain Return submits and
+    /// Shift+Return is the new line (the Sessions composer only).
+    pub enter_sends: bool,
+    /// `textarea`: while set (a completion list shows under the screen's
+    /// control), plain Up, Down, Tab, Return and Escape call this action
+    /// with `"up"`, `"down"`, `"tab"`, `"enter"`, `"escape"` instead of
+    /// editing; the keyboard stays in the field.
+    pub on_list_key: Option<String>,
+    /// `row`/`column` with `on`: a press leaves the keyboard focus where it
+    /// is (a completion list's rows, under the field that keeps it).
+    pub keep_focus: bool,
     /// `input`, `split`, `menu`, `select`: names the core-held part of the element.
     pub id: Option<String>,
     /// `input` text, `select` value, `checkbox` checked, `progress` fraction, `split` ratio.
@@ -265,6 +277,9 @@ impl Node {
             on: None,
             arg: J::Null,
             on_submit: None,
+            enter_sends: false,
+            on_list_key: None,
+            keep_focus: false,
             id: None,
             value: J::Null,
             placeholder: None,
@@ -325,7 +340,7 @@ pub enum Positional {
 /// Props every element takes.
 pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin"];
 const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate", "pills"];
-const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "on_left", "on_right", "clip", "folds", "shortcuts", "paint", "wrap"];
+const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "on_left", "on_right", "clip", "folds", "shortcuts", "paint", "wrap", "keep_focus"];
 
 /// The frozen element set: name, kind, positional entries, props beyond [`COMMON`].
 pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
@@ -347,7 +362,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("checkbox", Kind::Checkbox, Positional::Text, &["value", "on", "arg", "disabled"]),
     ("progress", Kind::Progress, Positional::None, &["value", "tone"]),
     ("markdown", Kind::Markdown, Positional::Text, &["color", "size", "on", "arg", "pills"]),
-    ("textarea", Kind::Textarea, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "disabled", "rows", "tone"]),
+    ("textarea", Kind::Textarea, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "disabled", "rows", "tone", "enter", "on_list_key"]),
     ("image", Kind::Image, Positional::None, &["fit"]),
     ("surface", Kind::Surface, Positional::None, &["id"]),
     ("canvas", Kind::Canvas, Positional::None, &["id"]),
@@ -1103,6 +1118,14 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         }
         "on" => n.on = Some(string_of(v)?),
         "on_submit" => n.on_submit = Some(string_of(v)?),
+        // Return's job in a textarea: "newline" (the default) or "send".
+        "enter" => {
+            n.enter_sends = match string_of(v)?.as_str() {
+                "send" => true,
+                "newline" => false,
+                o => return Err(format!("enter: expected \"send\" or \"newline\", got {o:?}")),
+            }
+        }
         "arg" => n.arg = lua_to_json(v, 0)?,
         "id" => n.id = Some(string_of(v)?),
         "value" => {
@@ -1164,6 +1187,8 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
             st.pin = Some(e);
         }
         "hover_group" => n.hover_group = bool_of(v)?,
+        "keep_focus" => n.keep_focus = bool_of(v)?,
+        "on_list_key" => n.on_list_key = Some(string_of(v)?),
         "hover_zone" => n.hover_zone = Some(string_of(v)?).filter(|z| !z.is_empty() && z.len() <= 200),
         "reveal" => n.reveal = bool_of(v)?,
         "group" => n.group = Some(one_of(v, &["list"])?),

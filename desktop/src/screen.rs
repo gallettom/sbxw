@@ -1368,6 +1368,9 @@ impl Build<'_> {
                 if let Some(on) = &n.on {
                     let (on, arg) = (on.clone(), n.arg.clone());
                     b = b.role("button").cursor(Cursor::Pointer).hover(hex(st.hover.unwrap_or(theme::color_value("surface").unwrap()))).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null));
+                    if n.keep_focus {
+                        b = b.preserve_focus_on_press(true);
+                    }
                     if let Some(h) = &n.help {
                         b = b.label(h.clone());
                     }
@@ -1601,10 +1604,16 @@ impl Build<'_> {
                     });
                 }
                 // Rune submits on a plain Return in a paragraph: here that is a new
-                // line, and only Cmd (Ctrl elsewhere) + Return submits.
-                let (name2, arg, on_submit) = (self.name.clone(), n.arg.clone(), n.on_submit.clone());
+                // line, and only Cmd (Ctrl elsewhere) + Return submits. With
+                // `enter = "send"` (the Sessions composer) a plain Return submits
+                // too. Either way Shift+Return is the editor's new line (it never
+                // submits), a held Return submits once, and a Return that confirms
+                // an input method's composition never reaches here (Rune keeps it).
+                let (name2, arg, on_submit, enter_sends, disabled) = (self.name.clone(), n.arg.clone(), n.on_submit.clone(), n.enter_sends, n.disabled);
                 t = t.on_submit(move |s: &mut S, tx: &mut rune::Tx| {
-                    if tx.mods().cmd {
+                    if disabled && enter_sends {
+                        // A closed composer: Return sends nothing and writes nothing.
+                    } else if tx.mods().cmd || enter_sends {
                         if let Some(on) = &on_submit {
                             let v = s.screen(&name2).ui.edits.get(&id3).map(|e| e.0.text.clone()).unwrap_or_default();
                             fire(s, &name2, on, &arg, &J::String(v));
@@ -1613,6 +1622,25 @@ impl Build<'_> {
                         let _ = e.0.paste("\n");
                     }
                 });
+                // A completion list under the screen's control: its keys, before the editor's.
+                if let Some(on) = n.on_list_key.clone().filter(|_| !n.disabled) {
+                    let (name, arg) = (self.name.clone(), n.arg.clone());
+                    t = t.on_input_key(move |s: &mut S, ev: &rune::KeyEvent, _tx: &mut rune::Tx| {
+                        if ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo || ev.mods.shift {
+                            return false;
+                        }
+                        let k = match ev.key {
+                            rune::Key::Up => "up",
+                            rune::Key::Down => "down",
+                            rune::Key::Tab => "tab",
+                            rune::Key::Enter => "enter",
+                            rune::Key::Escape => "escape",
+                            _ => return false,
+                        };
+                        fire(s, &name, &on, &arg, &J::String(k.into()));
+                        true
+                    });
+                }
                 if n.disabled {
                     t = t.read_only(true);
                 }
