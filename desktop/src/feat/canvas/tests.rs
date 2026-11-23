@@ -1016,3 +1016,67 @@ fn the_grid_view_draws_nothing_outside_the_overlay() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The ground and its dots
+
+/// White when nothing is kept, or something no ground is called; the kept
+/// choice when the view opens; a choice from the bar is kept (Remember) and
+/// reaches the surface's scene.
+#[test]
+fn the_ground_defaults_to_white_and_the_choice_is_remembered() {
+    let mut w = World::new("basic");
+    w.open();
+    assert_eq!(w.ui()["ground"], "white");
+    assert_eq!(crate::surface_canvas::scene(SURF).ground, Ground::White);
+    let marked: Vec<&str> = w.ui()["grounds"].as_array().unwrap().iter().filter(|g| g["current"] == true).filter_map(|g| g["id"].as_str()).collect();
+    assert_eq!(marked, ["white"]);
+    let acts = w.intent("canvas_ground", json!({ "ground": "dark" })).unwrap();
+    assert!(acts.contains(&Action::Remember { key: "ground".into(), value: json!("dark") }), "{acts:?}");
+    w.run(acts);
+    assert_eq!(w.ui()["ground"], "dark");
+    assert_eq!(crate::surface_canvas::scene(SURF).ground, Ground::Dark);
+    assert!(w.intent("canvas_ground", json!({ "ground": "pink" })).is_err() || crate::intent::parse(&json!({ "kind": "intent", "name": "canvas_ground", "args": { "ground": "pink" } })).is_err());
+    // Opened again in a later run: the kept choice.
+    for (kept, want) in [(json!("follow"), Ground::Follow), (json!("dark"), Ground::Dark), (json!("sepia"), Ground::White), (J::Null, Ground::White)] {
+        let mut w = World::new("basic");
+        w.data["app"]["kept"] = json!({ "canvas": { "ground": kept } });
+        w.open();
+        assert_eq!(crate::surface_canvas::scene(SURF).ground, want, "{kept}");
+        assert_eq!(w.ui()["ground"], want.name());
+    }
+    // Follow theme is the dark ground in every theme the app has.
+    for m in crate::theme::Mode::ALL {
+        assert!(!crate::theme::with_mode(m, || Ground::Follow.light()), "{m:?}");
+    }
+}
+
+/// Each choice draws its ground under the items and the dot grid inside the
+/// world; the captions take the ground's text colour; the choice is kept in
+/// the state file's `features.canvas.ground` (in memory here).
+#[test]
+fn the_element_tree_has_the_ground_and_the_grid_for_each_choice() {
+    use crate::theme::canvas_c;
+    let mut rt = window::opened_of("grid12", "s-1-80", 1284.0, 816.0);
+    window::settle(&mut rt, 4);
+    let info = |rt: &rune::Runtime<crate::shell::App>, key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key));
+    assert!(info(&rt, "canvas-ground").is_some(), "the ground's select in the bar");
+    for (g, light) in [("white", true), ("dark", false), ("follow", false), ("white", true)] {
+        let list = crate::intent::parse(&json!({ "kind": "intent", "name": "canvas_ground", "args": { "ground": g } })).unwrap();
+        rt.update(|s, _| list.into_iter().for_each(|i| s.run_intent("test", i)));
+        window::settle(&mut rt, 4);
+        let ground = info(&rt, "canvas-canvas").expect("the surface");
+        assert_eq!(ground.fill, canvas_c(light, "canvas-ground"), "{g}");
+        let dots = info(&rt, "canvas-dots-canvas").unwrap_or_else(|| panic!("{g}: the dots"));
+        let world = info(&rt, "canvas-world-canvas").unwrap();
+        assert!(dots.path.starts_with(&world.path), "{g}: the dots move with the world: {} under {}", dots.path, world.path);
+        // Drawn first in the world: under every item.
+        let first = rt.elements().into_iter().filter(|e| e.path.starts_with(&world.path) && e.path != world.path).map(|e| e.key.unwrap_or_default()).next();
+        assert_eq!(first.as_deref(), Some("canvas-dots-canvas"), "{g}");
+        let cap = rt.elements().into_iter().find(|e| e.text.as_deref().is_some_and(|t| t == "Dashboard" || t == "Inbox") && e.path.starts_with(&world.path)).expect("a caption");
+        assert_eq!(cap.text_color, Some(canvas_c(light, "canvas-text")), "{g}: a caption's title in the ground's text colour");
+        let mut kept = J::Null;
+        rt.update(|s, _| kept = s.store.get("features")["canvas"]["ground"].clone());
+        assert_eq!(kept, g, "kept");
+    }
+}

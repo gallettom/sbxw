@@ -1247,4 +1247,89 @@ mod tests {
         assert_eq!(level_for(900.0), 1);
         assert_eq!(level_for(2880.0), 2);
     }
+
+    /// The dots are 16 to 32 pt apart on screen at every zoom, on a power
+    /// of two times 24 world points.
+    #[test]
+    fn the_dots_stay_16_to_32_pt_apart_on_screen_at_any_zoom() {
+        let mut z = MIN_ZOOM;
+        while z <= MAX_ZOOM {
+            let s = dot_step(z).unwrap();
+            assert!((DOT_MIN..=DOT_MAX).contains(&(s * z)), "zoom {z}: {s} world = {} pt", s * z);
+            let k = (s / DOT_BASE).log2();
+            assert!((k - k.round()).abs() < 1e-4, "zoom {z}: {s} is 24 · 2^k");
+            z *= 1.07;
+        }
+        assert_eq!(dot_step(1.0), Some(24.0));
+        assert_eq!(dot_step(0.5), Some(48.0), "zoomed out: doubled");
+        assert_eq!(dot_step(0.25), Some(96.0));
+        assert_eq!(dot_step(2.0), Some(12.0), "zoomed in: halved");
+        assert_eq!(dot_step(8.0), Some(3.0));
+        assert_eq!(dot_step(0.0), None);
+        assert_eq!(dot_step(f32::NAN), None);
+    }
+
+    /// Only the dots in view (and the margin) are drawn: a known view counts
+    /// exactly, every dot sits in the element's rect on a multiple of the
+    /// spacing, and no view draws more than the budget.
+    #[test]
+    fn only_the_dots_in_view_are_drawn() {
+        // 800 x 600 at 100 %: the view [0, 0, 800, 600] plus 50 % each side,
+        // [-400, -300, 1600, 1200]; columns -384..=1200 (67), rows -288..=888 (50).
+        let cam = Camera { pan: [0.0, 0.0], zoom: 1.0, view: [800.0, 600.0] };
+        let d = dot_grid(&cam).unwrap();
+        assert_eq!(d.step, 24.0);
+        assert_eq!(d.rect, [-400.0, -300.0, 1600.0, 1200.0]);
+        assert_eq!(d.points.len(), 67 * 50);
+        for p in &d.points {
+            assert!(p[0] >= d.rect[0] && p[0] <= d.rect[0] + d.rect[2] && p[1] >= d.rect[1] && p[1] <= d.rect[1] + d.rect[3], "{p:?}");
+            assert!((p[0] / d.step).fract() == 0.0 && (p[1] / d.step).fract() == 0.0, "{p:?} on the lattice");
+        }
+        // Panned and zoomed: the same rule, the lattice of that zoom.
+        let mut cam = Camera { pan: [0.0, 0.0], zoom: 1.0, view: [800.0, 600.0] };
+        cam.zoom_about([123.0, 45.0], 0.3);
+        cam.pan[0] += 777.0;
+        let d = dot_grid(&cam).unwrap();
+        assert_eq!(d.step, 96.0);
+        let vis = cam.visible();
+        let (cols, rows, _, _) = lattice(d.rect, d.step);
+        assert_eq!(d.points.len(), cols * rows);
+        assert!(d.rect[0] <= vis[0] && d.rect[0] + d.rect[2] >= vis[0] + vis[2], "it covers the view");
+        // A full-screen 5K view (2560 x 1440 pt) at the densest spacing: the
+        // margin shrinks, the count stays in the budget.
+        for z in [16.0 / 24.0, 1.0, 0.7, 0.02, 8.0] {
+            let cam = Camera { pan: [0.0, 0.0], zoom: z, view: [2560.0, 1440.0] };
+            let d = dot_grid(&cam).unwrap();
+            assert!(d.points.len() <= DOT_BUDGET, "zoom {z}: {}", d.points.len());
+            assert!((DOT_MIN..=DOT_MAX).contains(&(d.step * z)), "zoom {z}: still in the band");
+            let vis = cam.visible();
+            assert!(d.rect[2] >= vis[2] - 0.01 && d.rect[3] >= vis[3] - 0.01, "zoom {z}: the whole view");
+        }
+        // A view larger than any display: the spacing doubles past the band
+        // rather than the count passing the budget.
+        let cam = Camera { pan: [0.0, 0.0], zoom: 16.0 / 24.0, view: [6000.0, 4000.0] };
+        let d = dot_grid(&cam).unwrap();
+        assert!(d.points.len() <= DOT_BUDGET && d.step * cam.zoom > DOT_MAX, "{} dots at {} pt", d.points.len(), d.step * cam.zoom);
+    }
+
+    /// The cost of a build's dots on the CPU, the worst case (a 2560 x 1440
+    /// pt view at 16 pt): the grid and its shape. Prints the numbers
+    /// (`cargo test dots_cost -- --nocapture`); the bound is loose (a
+    /// debug build on a loaded machine), the GPU side is for a Mac.
+    #[test]
+    fn dots_cost_of_the_worst_case() {
+        let cam = Camera { pan: [0.0, 0.0], zoom: 16.0 / 24.0, view: [2560.0, 1440.0] };
+        let runs = 20;
+        let t = std::time::Instant::now();
+        let mut n = 0;
+        for _ in 0..runs {
+            let el = dots("canvas", &cam, true).unwrap();
+            n = dot_grid(&cam).unwrap().points.len();
+            std::hint::black_box(el);
+        }
+        let ms = t.elapsed().as_secs_f64() * 1000.0 / runs as f64;
+        println!("canvas dots: {n} dots, {ms:.2} ms a build (grid + shape + element)");
+        assert!(n > 10_000 && n <= DOT_BUDGET, "{n}");
+        assert!(ms < 250.0, "{ms:.1} ms a build");
+    }
 }
