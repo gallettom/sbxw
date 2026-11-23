@@ -341,6 +341,11 @@ pub struct Rects {
     pub overlay: Option<[f32; 4]>,
     /// Files are being dragged over the overlay (`data.app.overlay.drop_over`).
     pub overlay_drop: bool,
+    /// The pane files are being dragged over, by index (one at most): it
+    /// shows where they would go, or why they would not ([`App::pane_drop_refusal`]).
+    pub pane_drop: Option<usize>,
+    /// The docked panel or modal files are being dragged over, by screen name.
+    pub panel_drop: Option<String>,
 }
 
 /// A pane being dragged by its bar: where the press was, where the pointer
@@ -3618,6 +3623,7 @@ fn pane_view(s: &App, i: usize) -> El {
         // Not while something covers the panes: a drop's upload must not
         // start (nor skip its dialog) behind another dialog.
         .on_drop_files(move |s: &mut App, files: &[std::path::PathBuf], _tx| {
+            s.rects.pane_drop = None;
             if s.panes_covered() {
                 s.notify("Close what is open first: nothing was dropped", false);
             } else {
@@ -3626,10 +3632,39 @@ fn pane_view(s: &App, i: usize) -> El {
                 s.pane_drop(i, files)
             }
         })
+        // Files dragged over it: this pane (only) shows that it takes them.
+        .on_drop_hover(move |s: &mut App, over: bool, _tx| s.pane_drop_hover(i, over))
         .child(top_line(format!("pane-{}-accent", i + 1), accent, theme::hex(bar_ground), tab_foot(s, uid)))
         .child(bar)
         .child(el().h(1.0).w_full().fill(c("elevated")))
         .child(body)
+        .children((s.rects.pane_drop == Some(i)).then(|| {
+            let label = match s.pane_drop_refusal(i) {
+                Some(why) => why,
+                None => format!("Drop to send to {}", pane.and_then(|p| p.sandbox.as_deref()).unwrap_or("this sandbox")),
+            };
+            drop_mark(&format!("pane-{}-drop", i + 1), &label, s.pane_drop_refusal(i).is_some(), md)
+        }))
+}
+
+/// Where dragged files would go: a 2 pt border inside the target (the
+/// accent, or `dim` when the drop would be refused), a veil and a centred
+/// line. Drawn over the target, pinned to its edges: the layout does not
+/// move. No animation.
+pub(crate) fn drop_mark(key: &str, label: &str, refused: bool, corner: f32) -> El {
+    let (edge, ink) = if refused { (c("dim"), c("text-muted")) } else { (c("accent"), c("text")) };
+    col()
+        .key(key.to_string())
+        .role("status")
+        .label(label.to_string())
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .fill(theme::scrim())
+        .border(2.0, edge)
+        .radius(corner)
+        .items_center()
+        .justify_center()
+        .padding(theme::spacing::MD)
+        .child(text(label.to_string()).font(small(theme::font_size::BODY, 500.0)).color(ink).wrap())
 }
 
 /// A core-drawn button, as the `button` element draws one: 28 pt, a label
@@ -3775,6 +3810,99 @@ mod tests {
             }
         }
         out
+    }
+
+    /// The platform's paste key in a terminal: ⌘V on macOS (the window's
+    /// paste), Ctrl+Shift+V elsewhere (the grid's clipboard read).
+    fn paste_key(rt: &mut rune::Runtime<App>) {
+        let mods = if cfg!(target_os = "macos") { rune::Mods { logo: true, ..Default::default() } } else { rune::Mods { ctrl: true, shift: true, ..Default::default() } };
+        rt.key(KeyEvent { key: Key::Command('v'), mods });
+        for _ in 0..3 {
+            rt.frame(0.02);
+            // The app's poll runs before each frame (main.rs); this runtime has none.
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+        }
+    }
+
+    /// A paste in a terminal: text is typed as before; a picture with no
+    /// text types nothing and opens the drop's upload dialog for that
+    /// pane's sandbox (one paste-image call, the picture's own bytes);
+    /// with both, the text wins; with the panes covered, nothing.
+    #[test]
+    fn a_picture_pasted_into_a_terminal_asks_to_upload_it_and_text_still_pastes() {
+        let (mut rt, rx, clip) = window_with_terminal();
+        tap(&mut rt, "grid-1");
+        sent(&rx);
+        clip.set_text("echo hi");
+        paste_key(&mut rt);
+        assert_eq!(sent(&rx), b"echo hi");
+        assert!(rt.state.feats.dialog.is_none());
+        let png = crate::feat::canvas::model::mock_png(40, 30, 1);
+        let image = || rune::ClipboardImage::from_png(png.clone()).unwrap();
+        clip.set_content(rune::ClipboardContent::new("").with_image(image()));
+        paste_key(&mut rt);
+        assert_eq!(sent(&rx), b"", "a picture types nothing itself");
+        let c = rt.state.feats.dialog.as_ref().and_then(|d| d.confirm.clone()).expect("the upload's dialog");
+        assert!(c.title.starts_with("Upload pasted-") && c.title.ends_with("into web-app?"), "{}", c.title);
+        assert_eq!(c.call.path, "/api/sandboxes/web-app/paste-image");
+        assert_eq!(c.call.bytes.as_ref().map(|(_, b)| b.as_slice()), Some(png.as_slice()));
+        rt.update(|s, _| { s.dismiss_dialog(); });
+        rt.frame(0.02);
+        assert!(rt.state.feats.dialog.is_none());
+        // Text beside the picture (a file copied in Finder): the text.
+        tap(&mut rt, "grid-1");
+        clip.set_content(rune::ClipboardContent::new("shot.png").with_image(image()));
+        paste_key(&mut rt);
+        assert_eq!(sent(&rx), b"shot.png");
+        assert!(rt.state.feats.dialog.is_none(), "text wins: no upload");
+        // Something over the panes: nothing typed, nothing asked.
+        rt.update(|s, _| s.open_modal("templates", J::Null));
+        rt.frame(0.02);
+        clip.set_content(rune::ClipboardContent::new("").with_image(image()));
+        paste_key(&mut rt);
+        assert_eq!(sent(&rx), b"");
+        assert!(rt.state.feats.dialog.is_none(), "no upload behind a modal");
+    }
+
+    /// Files dragged over a pane mark that pane only, with where they would
+    /// go, or why not (a stopped sandbox, the panes covered); leaving or
+    /// dropping clears it.
+    #[test]
+    fn files_dragged_over_a_pane_mark_that_pane_only() {
+        let (mut rt, _rx, _clip) = window_with_terminal();
+        rt.update(|s, _| s.panes[1].sandbox = Some("web-api".into()));
+        for _ in 0..3 {
+            rt.frame(0.02);
+        }
+        let file = std::env::temp_dir().join(format!("sbxw-hover-{}.txt", std::process::id()));
+        std::fs::write(&file, b"x").unwrap();
+        let center = |rt: &rune::Runtime<App>, key: &str| {
+            let r = rt.presented(key).unwrap_or_else(|| panic!("{key} drawn")).0;
+            (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0)
+        };
+        let at2 = center(&rt, "pane-2");
+        rt.drag_files(vec![file.clone()], Some(at2));
+        rt.frame(0.02);
+        assert_eq!(rt.state.rects.pane_drop, Some(1));
+        assert!(rt.find("pane-2-drop").is_some() && rt.find("pane-1-drop").is_none());
+        // web-api is stopped: the refused style, with why.
+        assert_eq!(rt.state.pane_drop_refusal(1).as_deref(), Some("web-api is not running: start it first, then drop"));
+        let at1 = center(&rt, "pane-1");
+        rt.drag_files_to(Some(at1));
+        rt.frame(0.02);
+        assert_eq!(rt.state.rects.pane_drop, Some(0));
+        assert!(rt.find("pane-1-drop").is_some() && rt.find("pane-2-drop").is_none());
+        assert_eq!(rt.state.pane_drop_refusal(0), None, "web-app runs: it would take them");
+        rt.drag_files_leave();
+        rt.frame(0.02);
+        assert_eq!(rt.state.rects.pane_drop, None);
+        assert!(rt.find("pane-1-drop").is_none());
+        // Covered: the refusal says so.
+        rt.update(|s, _| s.open_modal("templates", J::Null));
+        assert_eq!(rt.state.pane_drop_refusal(0).as_deref(), Some("Close what is open first: nothing would be dropped"));
+        let _ = std::fs::remove_file(&file);
     }
 
     pub(super) fn tap(rt: &mut rune::Runtime<App>, key: &str) {

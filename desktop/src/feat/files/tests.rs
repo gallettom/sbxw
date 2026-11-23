@@ -1259,3 +1259,50 @@ fn a_location_row_is_24_pt() {
         assert_eq!(h, Some(crate::luau::Size::Pt(24.0)), "{k}");
     }
 }
+
+/// A picture pasted into a pane: its one dialog at once (paste-image, the
+/// name the app made), and on the daemon's answer its path typed into that
+/// pane's session with a space, never a Return; Cancel leaves nothing; a
+/// stopped sandbox is refused with no dialog.
+#[test]
+fn a_picture_pasted_into_a_pane_asks_once_then_types_its_path() {
+    let d = fixture("standin");
+    let mut st = State::default();
+    let paste = |sb: &str| PaneDrop { paths: vec![], skip_dialog: false, sandbox: sb.into(), thread: Some("checkout".into()), picture: Some(vec![7; 3000]) };
+    let a = st.on_pane_drop(&Ctx { data: &d }, &paste("web-app"));
+    let [Action::Confirm(c)] = a.as_slice() else { panic!("{a:?}") };
+    assert!(st.staged.is_empty(), "never shown as waiting in the panel");
+    assert!(c.title.starts_with("Upload pasted-20") && c.title.ends_with(".png into web-app?"), "{}", c.title);
+    assert_eq!(c.lines[0], "a picture from the clipboard · 2.9 KB");
+    assert_eq!(c.call.path, "/api/sandboxes/web-app/paste-image");
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "ok": true, "path": "/tmp/sbxw-pastes/paste-1.png" }))));
+    let calls: Vec<&Call> = a.iter().filter_map(|x| if let Action::Call(c) = x { Some(c) } else { None }).collect();
+    let [t] = calls.as_slice() else { panic!("{a:?}") };
+    assert_eq!((t.path.as_str(), &t.body), ("/api/input", &json!({ "sandbox": "web-app", "mode": "thread:checkout", "data": "/tmp/sbxw-pastes/paste-1.png " })));
+    assert!(st.dropped.is_empty());
+    // A path the daemon does not make is never typed.
+    let a = st.on_pane_drop(&Ctx { data: &d }, &paste("web-app"));
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "ok": true, "path": "/tmp/x; rm -rf ~" }))));
+    assert!(!a.iter().any(|x| matches!(x, Action::Call(_))), "{a:?}");
+    // The daemon unreachable: said, nothing typed.
+    let a = st.on_pane_drop(&Ctx { data: &d }, &paste("web-app"));
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Err("not connected to the daemon".into()));
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { text, error: true, .. } if text.ends_with("was not uploaded: not connected to the daemon"))), "{a:?}");
+    assert!(!a.iter().any(|x| matches!(x, Action::Call(_))));
+    // Cancel: nothing left.
+    let a = st.on_pane_drop(&Ctx { data: &d }, &paste("web-app"));
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    st.on_dismiss(&Ctx { data: &d }, &c.call.tag);
+    assert!(st.dropped.is_empty());
+    // A stopped sandbox: refused, no dialog.
+    let a = st.on_pane_drop(&Ctx { data: &d }, &paste("data-pipeline"));
+    assert!(matches!(a.as_slice(), [Action::Notice { text, error: true, .. }] if text.contains("not running")), "{a:?}");
+    assert!(st.dropped.is_empty());
+}
+
+#[test]
+fn a_pasted_picture_is_named_by_the_time_only() {
+    assert_eq!(pasted_name(1_795_444_205_000), "pasted-2026-11-23-143005.png");
+}
