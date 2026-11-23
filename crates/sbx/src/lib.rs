@@ -1940,4 +1940,17 @@ mod tests {
         assert_eq!(assigned_host_port("done", "127.0.0.1", 3000), None);
         assert_eq!(assigned_host_port("127.0.0.2:5 -> 3000", "127.0.0.1", 3000), None, "another loopback's mapping is not this one");
     }
+
+    #[tokio::test]
+    async fn inspect_keeps_the_mcp_mode_when_sbx_gives_one() {
+        let fake = Fake::new(|a| match a[1].as_str() {
+            "new" => Output::ok(r#"{"name":"new","kits":[],"created_version":"v0.54.0","mcp":{"mode":"static","servers":[{"name":"github"}]}}"#),
+            _ => Output::ok(r#"{"name":"old","kits":[],"created_version":"v0.53.0"}"#),
+        });
+        let sbx = Sbx::new(fake.clone());
+        let new = sbx.inspect(&sb("new")).await.unwrap().mcp.unwrap();
+        assert_eq!((new.mode.as_str(), new.servers.as_slice()), ("static", &["github".to_string()][..]));
+        assert_eq!(sbx.inspect(&sb("old")).await.unwrap().mcp, None);
+        assert_eq!(fake.log()[0], "inspect new --format json");
+    }
 }

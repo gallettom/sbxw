@@ -307,6 +307,20 @@ pub struct Inspected {
     /// The sbx that created it (`v0.51.0`); `None` for a sandbox an sbx
     /// older than 0.51 created, which did not record it.
     pub created_version: Option<String>,
+    /// The sandbox's MCP mode and connected servers (sbx 0.54, local
+    /// sandboxes); `None` when sbx says nothing of MCP.
+    pub mcp: Option<InspectedMcp>,
+}
+
+/// What `sbx inspect` says of a sandbox's MCP (0.54). The field names are
+/// not documented: read under the likely ones, and anything else kept as
+/// `unknown` rather than refused.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct InspectedMcp {
+    /// `static`, `dynamic`, or `unknown` (absent, or a word sbxw does not know).
+    pub mode: String,
+    /// The connected servers by name.
+    pub servers: Vec<String>,
 }
 
 /// `None` when `raw` is not that document.
@@ -315,7 +329,46 @@ pub fn parse_inspect(raw: &str) -> Option<Inspected> {
     v.as_object()?;
     let kits = v.get("kits").and_then(|k| k.as_array()).map(|a| a.iter().filter_map(|k| k.as_str().map(String::from)).collect()).unwrap_or_default();
     let created_version = v.get("created_version").and_then(|c| c.as_str()).map(str::trim).filter(|c| !c.is_empty()).map(String::from);
-    Some(Inspected { kits, created_version })
+    Some(Inspected { kits, created_version, mcp: inspect_mcp(&v) })
+}
+
+/// [`InspectedMcp`] out of an inspect document: an `mcp` object (`mode`,
+/// `servers` or `connected`/`connected_servers`), or flat `mcp_mode` and
+/// `mcp_servers` (camelCase too). A server is a string or an object with a
+/// `name`.
+fn inspect_mcp(v: &serde_json::Value) -> Option<InspectedMcp> {
+    let nested = v.get("mcp").filter(|m| m.is_object());
+    let field = |keys: &[&str]| -> Option<&serde_json::Value> {
+        keys.iter().find_map(|k| nested.and_then(|m| m.get(*k)).or_else(|| v.get(format!("mcp_{k}"))).or_else(|| {
+            let mut camel = String::from("mcp");
+            let mut up = true;
+            for c in k.chars() {
+                match c {
+                    '_' => up = true,
+                    c if up => {
+                        camel.extend(c.to_uppercase());
+                        up = false
+                    }
+                    c => camel.push(c),
+                }
+            }
+            v.get(camel)
+        }))
+    };
+    let mode = field(&["mode"]);
+    let servers = field(&["servers", "connected_servers", "connected"]);
+    if nested.is_none() && mode.is_none() && servers.is_none() {
+        return None;
+    }
+    let mode = match mode.and_then(|m| m.as_str()).map(|m| m.trim().to_ascii_lowercase()) {
+        Some(m) if m == "static" || m == "dynamic" => m,
+        _ => "unknown".into(),
+    };
+    let servers = servers
+        .and_then(|s| s.as_array())
+        .map(|a| a.iter().filter_map(|s| s.as_str().or_else(|| s.get("name")?.as_str())).map(String::from).collect())
+        .unwrap_or_default();
+    Some(InspectedMcp { mode, servers })
 }
 
 /// The kits `sbx inspect --format json` lists; `None` when `raw` is not
@@ -495,6 +548,20 @@ mod tests {
         assert_eq!(parse_inspect(raw).unwrap().created_version, None, "an sbx before 0.51 recorded none");
         let new = parse_inspect(r#"{"name":"n","kits":[],"created_version":"v0.51.0"}"#).unwrap();
         assert_eq!(new.created_version.as_deref(), Some("v0.51.0"));
+        assert_eq!(new.mcp, None, "before 0.54 inspect says nothing of MCP");
+    }
+
+    #[test]
+    fn the_mcp_mode_and_servers_are_read_however_inspect_names_them() {
+        let m = |raw: &str| parse_inspect(raw).unwrap().mcp;
+        let both = InspectedMcp { mode: "dynamic".into(), servers: vec!["github".into(), "notion".into()] };
+        assert_eq!(m(r#"{"kits":[],"mcp":{"mode":"dynamic","servers":["github",{"name":"notion","url":"x"}]}}"#), Some(both.clone()));
+        assert_eq!(m(r#"{"kits":[],"mcp_mode":"Dynamic","mcp_servers":[{"name":"github"},{"name":"notion"}]}"#), Some(both.clone()));
+        assert_eq!(m(r#"{"kits":[],"mcpMode":"dynamic","mcpConnectedServers":["github","notion"]}"#), Some(both));
+        let odd = m(r#"{"kits":[],"mcp":{"mode":{"kind":"static"},"connected":"github"}}"#).unwrap();
+        assert_eq!((odd.mode.as_str(), odd.servers.len()), ("unknown", 0), "an unknown shape is unknown, never an error");
+        assert_eq!(m(r#"{"kits":[],"mcp":{"mode":"static"}}"#).unwrap().servers, Vec::<String>::new());
+        assert_eq!(m(r#"{"kits":[],"mcp":"static"}"#), None, "not an object, and nothing else: nothing said");
     }
 
     #[test]
