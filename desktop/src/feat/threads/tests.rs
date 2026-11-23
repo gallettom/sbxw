@@ -599,7 +599,7 @@ fn abandon_merge_is_offered_when_proposed_or_failed_and_asks_the_core_dialog() {
         assert_eq!(c.title, "Abandon the proposed merge?");
         assert_eq!(c.lines[0], "Nothing is merged, and the threads, their branches and worktrees stay as they are. The lead is told.");
         assert_eq!((c.confirm.as_str(), c.cancel.as_str()), ("Abandon merge", "Cancel"));
-        assert!(matches!(c.call.method, Method::Post));
+        assert!(matches!(c.call.method, crate::feat::Method::Post));
         assert_eq!(c.call.path, "/api/plans/p-1/merge/abandon");
         assert!(c.lines.iter().all(|l| !l.contains('\u{2014}')));
     }
