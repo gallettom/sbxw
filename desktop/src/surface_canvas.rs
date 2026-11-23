@@ -1148,8 +1148,8 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
                 let mut cap = el().pin(Some(0.0), Some(i.h + (6.0 * inv).min(16.0)), None, None).w(i.w);
                 let mut lines = rune::col().gap((2.0 * inv).min(6.0));
                 let far = z < 0.25;
-                for (k, l) in caption.iter().enumerate().take(if far { 1 } else { 2 }) {
-                    let (sz, wt, col) = if k == 0 { (12.0, 600.0, "canvas-text") } else { (11.0, 400.0, "canvas-text-muted") };
+                for (line_no, l) in caption.iter().enumerate().take(if far { 1 } else { 2 }) {
+                    let (sz, wt, col) = if line_no == 0 { (12.0, 600.0, "canvas-text") } else { (11.0, 400.0, "canvas-text-muted") };
                     lines = lines.child(text(l.clone()).font(small((sz * inv).min(CAPTION_MAX), wt)).color(k(col)).truncate().w(i.w));
                 }
                 cap = cap.child(lines);
