@@ -726,10 +726,16 @@ impl App {
 
     /// Publish one mapping from the ports dialog; an alias goes through the
     /// same parking rule as a bring-up's. With no host port, sbx 0.54 picks
-    /// one ([`Sbx::port_publish`](sbxw_sbx::Sbx::port_publish)); an older sbx
-    /// gets today's default, the sandbox port, and the answer says so.
+    /// one on 127.0.0.1 ([`Sbx::port_publish`](sbxw_sbx::Sbx::port_publish));
+    /// another host IP without a host port is refused before anything runs;
+    /// an older sbx gets today's default, the sandbox port, and the answer
+    /// says so.
     pub async fn publish_port(self: &Arc<Self>, name: &SandboxRef, sandbox_port: u16, host_port: Option<u16>, host_ip: Option<String>, alias: Option<String>) -> Result<Published> {
-        let ip = host_ip.unwrap_or_else(|| "127.0.0.1".into());
+        let ip = host_ip.map(|i| i.trim().to_string()).filter(|i| !i.is_empty()).unwrap_or_else(|| sbxw_sbx::AUTO_PORT_IP.into());
+        // sbx assigns a host port only on 127.0.0.1: refused before anything runs.
+        if host_port.is_none() && ip != sbxw_sbx::AUTO_PORT_IP {
+            bail!("{}", sbxw_sbx::AUTO_PORT_LOOPBACK_ONLY);
+        }
         let alias = alias.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
         if let Some(a) = &alias {
             if !sbxw_core::hosts::is_hostname(a) {
@@ -1102,13 +1108,25 @@ mod tests {
 
     #[tokio::test]
     async fn a_port_with_no_host_port_is_sbx_s_pick_on_0_54_and_the_sandbox_port_before() {
-        let (_d, app, fake) = app_with(on("0.54.0", |a| (a[0] == "port").then(|| Output::ok("published 127.0.0.1:49153->3000/tcp\n"))));
+        // What sbx 0.54 printed on the person's Mac, verbatim.
+        let said = r#"[{"action":"published","host_ip":"127.0.0.1","host_port":49152,"sandbox_port":3000,"protocol":"tcp4"}]"#;
+        let (_d, app, fake) = app_with(on("0.54.0", move |a| (a[0] == "port" && a[1] == "publish").then(|| Output::ok(said))));
         let web = SandboxRef::parse("web").unwrap();
         let p = app.publish_port(&web, 3000, None, None, None).await.unwrap();
-        assert_eq!((p.host_port, p.assigned, p.note.as_deref()), (49153, true, None));
-        assert!(fake.log().iter().any(|c| c == "port publish web 127.0.0.1::3000"), "{:?}", fake.log());
+        assert_eq!((p.host_ip.as_str(), p.host_port, p.assigned, p.note.as_deref()), ("127.0.0.1", 49152, true, None));
+        assert!(fake.log().iter().any(|c| c == "port publish web 3000 --format json"), "{:?}", fake.log());
         let fixed = app.publish_port(&web, 3000, Some(8080), None, None).await.unwrap();
         assert_eq!((fixed.host_port, fixed.assigned), (8080, false));
+        assert!(fake.log().iter().any(|c| c == "port publish web 127.0.0.1:8080:3000"), "{:?}", fake.log());
+        let fixed = app.publish_port(&web, 3000, Some(8081), Some("127.0.0.2".into()), None).await.unwrap();
+        assert_eq!((fixed.host_ip.as_str(), fixed.host_port), ("127.0.0.2", 8081));
+        assert!(fake.log().iter().any(|c| c == "port publish web 127.0.0.2:8081:3000"), "{:?}", fake.log());
+
+        // Another host IP with no host port: refused, nothing run.
+        let ran = fake.log().len();
+        let e = app.publish_port(&web, 3000, None, Some("127.0.0.2".into()), None).await.unwrap_err();
+        assert_eq!(format!("{e:#}"), sbxw_sbx::AUTO_PORT_LOOPBACK_ONLY);
+        assert_eq!(fake.log().len(), ran, "{:?}", fake.log());
 
         let (_d, app, fake) = app_with(on("0.53.1", |_| None));
         let p = app.publish_port(&web, 3000, None, None, None).await.unwrap();

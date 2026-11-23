@@ -546,9 +546,12 @@ being written (one at a time, since a lens reads the map).
 
 **Published ports and aliases.** View, add and remove mappings, including host
 IP and `/etc/hosts` alias. The host port is optional: left empty, sbx 0.54
-picks a free one; an older sbx publishes on the sandbox port, as before. The
-line under the form says the port it got and, on an older sbx, why it is not
-an automatic one.
+picks a free one on 127.0.0.1 (`sbx port publish NAME 3000`); an older sbx
+publishes on the sandbox port, as before. sbx picks a host port only on the
+loopback address, so a host IP other than 127.0.0.1 needs a host port: the form
+says so and sends nothing. The line under the form says the port it got and, on
+an older sbx, why it is not an automatic one. On sbx 0.54 publishing on a
+stopped sandbox starts it first.
 
 **Network policy.** No single `sbx` call answers "what can this sandbox reach?",
 so the panel combines three:

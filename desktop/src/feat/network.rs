@@ -785,14 +785,20 @@ fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16,
         // here); an older sbx (`standin_sbx_old`) publishes on the sandbox port.
         let old = st.data["standin_sbx_old"] == true;
         let n = st.data["ports"][sb.as_str()]["ports"].as_array().map(Vec::len).unwrap_or(0) as u64;
+        let ip = body["host_ip"].as_str().unwrap_or("127.0.0.1").to_string();
+        // As the daemon: sbx picks a host port only on 127.0.0.1.
+        if body["host_port"].is_null() && ip != "127.0.0.1" {
+            return Some((500, json!({ "ok": false, "error": "sbx picks a host port only on the loopback address 127.0.0.1: name the host port" })));
+        }
         let (hport, assigned, note) = match body["host_port"].as_u64() {
             Some(h) => (h, false, J::Null),
             None if old => (sport, false, json!("automatic host port needs sbx 0.54: published on the sandbox port")),
             None => (49153 + n, true, J::Null),
         };
-        let ip = body["host_ip"].as_str().unwrap_or("127.0.0.1").to_string();
-        let spec = format!("{ip}:{hport}:{sport}/tcp");
-        let entry = json!({ "spec": spec, "sandbox_port": sport, "proto": "tcp", "host_ip": ip, "host_port": hport });
+        // The daemon's row: the spec is `IP:HOST:SANDBOX`, and a spec
+        // without a protocol is tcp4 on sbx 0.54.
+        let spec = format!("{ip}:{hport}:{sport}");
+        let entry = json!({ "spec": spec, "sandbox_port": sport, "proto": if old { "tcp" } else { "tcp4" }, "host_ip": ip, "host_port": hport });
         let ports = &mut st.data["ports"][sb.as_str()]["ports"];
         if !ports.is_array() {
             *ports = json!([]);
@@ -1274,7 +1280,7 @@ mod tests {
         d["network_publish"] = pubd;
         let (out, _, _) = render(d.clone(), None, 0);
         let all = out.join("\n");
-        assert!(all.contains("port-picked-127.0.0.1:49154:5173/tcp") && all.contains("sbx picked"), "{all}");
+        assert!(all.contains("port-picked-127.0.0.1:49154:5173\n") && all.contains("sbx picked"), "{all}");
         assert!(all.contains("Published 5173 on 127.0.0.1:49154, the port sbx picked."), "{all}");
         // While it runs, the button is busy.
         d["network_publish"] = json!({ "sandbox": "web-app", "sandbox_port": 5173, "busy": true });
@@ -1300,6 +1306,33 @@ mod tests {
         let (out, _, _) = render(d, None, 0);
         let all = out.join("\n");
         assert!(all.contains("automatic host port needs sbx 0.54") && !all.contains("port-picked-"), "{all}");
+    }
+
+    #[test]
+    fn a_host_address_without_a_host_port_is_refused_as_text_and_nothing_is_asked() {
+        let mut d = cx_data();
+        d["network_for"] = "web-app".into();
+        d["network_ports"] = d["ports"]["web-app"].clone();
+        d["app"] = json!({});
+        let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+        h.load("network", include_str!("../../screens/network.luau")).unwrap();
+        h.render(&d).unwrap();
+        h.act("sport", &J::Null, &json!("3000")).unwrap();
+        h.act("hip", &J::Null, &json!("127.0.0.2")).unwrap();
+        let asked = h.act("publish", &J::Null, &J::Null).unwrap();
+        assert!(asked.is_null(), "nothing asked: {asked}");
+        let (mut out, mut args) = (vec![], vec![]);
+        walk(&h.render(&d).unwrap(), &mut out, &mut args);
+        let all = out.join("\n");
+        assert!(all.contains("sbx picks a host port only on the loopback address 127.0.0.1: name the host port"), "{all}");
+        // With a host port, the same address is the fixed publish (its dialog).
+        h.act("hport", &J::Null, &json!("4200")).unwrap();
+        let asked = h.act("publish", &J::Null, &J::Null).unwrap();
+        assert_eq!((asked["name"].as_str(), asked["args"]["host_ip"].as_str()), (Some("port_publish_fixed"), Some("127.0.0.2")), "{asked}");
+        // 127.0.0.1 typed, no host port: sbx picks.
+        h.act("sport", &J::Null, &json!("3000")).unwrap();
+        h.act("hip", &J::Null, &json!("127.0.0.1")).unwrap();
+        assert_eq!(h.act("publish", &J::Null, &J::Null).unwrap()["name"], "port_publish");
     }
 
     #[test]

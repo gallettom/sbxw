@@ -20,7 +20,7 @@
 //! sbx run -d --name N                         (keep running with nobody attached)
 //! sbx ls --format json                        (a bare array)
 //! sbx exec [-i|-it] N -- cmd…                 (starts a stopped sandbox first; no --detach since 0.53; 125 = not run)
-//! sbx port ls N [--format json] · sbx port publish|unpublish N SPEC   (0.54; IP::SP = sbx picks the host port)
+//! sbx port ls N [--format json] · sbx port publish|unpublish N SPEC   (0.54; a bare SP = sbx picks a host port on 127.0.0.1)
 //! sbx ports N --format json · sbx ports N --publish|--unpublish SPEC   (before 0.54, and the fallback)
 //! sbx policy allow|deny network [--sandbox N] [--method M,…] [--path GLOB] [--query K=V]… RESOURCES
 //! sbx policy ls [N] [--wide] · sbx policy log [N]   (N positional here)
@@ -652,15 +652,54 @@ fn check_port_spec(spec: &str) -> Result<()> {
     Ok(())
 }
 
+/// The spec sent to sbx 0.54's `port unpublish`: `127.0.0.1:HP:SP` with no
+/// protocol or `/tcp4` becomes `HP:SP` (the form seen to work on 0.54, the
+/// same binding by its grammar); anything else is left as it is.
+pub fn unpublish_spec_054(spec: &str) -> String {
+    let (ports, proto) = spec.split_once('/').map_or((spec, None), |(p, x)| (p, Some(x)));
+    match ports.strip_prefix("127.0.0.1:") {
+        Some(rest) if rest.split(':').count() == 2 && matches!(proto, None | Some("tcp4")) => rest.to_string(),
+        _ => spec.to_string(),
+    }
+}
+
 /// The host port sbx says it assigned to `sandbox_port` on `host_ip`, from
-/// its answer to `port publish`: a JSON row (or rows) with `host_port`, or
-/// an `IP:PORT` address in its text. Not documented: `None` when neither.
+/// its answer to `port publish`: see [`assigned_mapping`].
 pub fn assigned_host_port(said: &str, host_ip: &str, sandbox_port: u16) -> Option<u16> {
+    assigned_mapping(said, host_ip, sandbox_port).map(|m| m.host_port)
+}
+
+/// The mapping sbx says it published for `sandbox_port` on `host_ip`. sbx
+/// 0.54's `port publish --format json` prints rows as `port ls` does, with an
+/// `action` (`[{"action":"published","host_ip":"127.0.0.1","host_port":49152,
+/// "sandbox_port":3000,"protocol":"tcp4"}]`); read tolerantly: the whole
+/// answer or any line of it as a row or rows, rows under any key of an
+/// object, else an `IP:PORT` address in its text. `None` when none of that.
+pub fn assigned_mapping(said: &str, host_ip: &str, sandbox_port: u16) -> Option<PortMapping> {
+    let mine = |rows: Vec<PortMapping>| rows.into_iter().find(|m| m.sandbox_port == sandbox_port && (m.host_ip == host_ip || m.host_ip == "0.0.0.0"));
+    let from_json = |text: &str| -> Option<PortMapping> {
+        let v: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
+        let mut tries = vec![v.clone()];
+        if let Some(o) = v.as_object() {
+            tries.push(serde_json::Value::Array(vec![v.clone()]));
+            tries.extend(o.values().filter(|x| x.is_array() || x.is_object()).cloned());
+        }
+        tries.into_iter().find_map(|t| {
+            let t = if t.is_object() { serde_json::Value::Array(vec![t]) } else { t };
+            mine(sbxw_core::ports::parse_ports_json(&t.to_string())?)
+        })
+    };
+    let fill = |mut m: PortMapping| {
+        // A row without `host_ip` reads as 0.0.0.0: sbx bound the loopback it was asked for.
+        m.host_ip = host_ip.to_string();
+        m
+    };
+    if let Some(m) = from_json(said) {
+        return Some(fill(m));
+    }
     for line in said.lines().map(str::trim).filter(|l| l.starts_with('{') || l.starts_with('[')) {
-        if let Some(rows) = sbxw_core::ports::parse_ports_json(line).or_else(|| sbxw_core::ports::parse_ports_json(&format!("[{line}]"))) {
-            if let Some(m) = rows.iter().find(|m| m.sandbox_port == sandbox_port) {
-                return Some(m.host_port);
-            }
+        if let Some(m) = from_json(line) {
+            return Some(fill(m));
         }
     }
     let prefix = format!("{host_ip}:");
@@ -668,7 +707,18 @@ pub fn assigned_host_port(said: &str, host_ip: &str, sandbox_port: u16) -> Optio
         .filter_map(|w| w.trim_start_matches("http://").strip_prefix(prefix.as_str()))
         .filter_map(|rest| rest.split(|c: char| !c.is_ascii_digit()).next()?.parse::<u16>().ok())
         .find(|p| *p != 0)
+        .map(|host_port| PortMapping { sandbox_port, proto: AUTO_PORT_PROTO.into(), host_ip: host_ip.to_string(), host_port })
 }
+
+/// The protocol of a spec without one, on sbx 0.54: `tcp4` (127.0.0.1 only).
+pub const AUTO_PORT_PROTO: &str = "tcp4";
+
+/// The only host IP sbx assigns a host port on: a bare `SANDBOX_PORT` spec
+/// binds loopback, and the grammar has no `HOST_IP::SANDBOX_PORT`.
+pub const AUTO_PORT_IP: &str = "127.0.0.1";
+
+/// Why an automatic host port on another address is refused.
+pub const AUTO_PORT_LOOPBACK_ONLY: &str = "sbx picks a host port only on the loopback address 127.0.0.1: name the host port";
 
 /// What `sbx policy check network` (0.54) said of one target: `allowed`
 /// and the `rule` that decided, when its answer says so, and `raw`, its
@@ -995,26 +1045,30 @@ impl Sbx {
         self.capture(s(&["ports", name.as_str()])).await
     }
 
-    /// Publish `[[HOST_IP:]HOST_PORT:]SANDBOX_PORT`: `port publish` on sbx
-    /// 0.54, `ports --publish` before it, or when 0.54 refuses the spec's form
-    /// as usage (the notes show `HOST:SANDBOX`, not a host IP before them).
+    /// Publish `[[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTOCOL]`: `port publish`
+    /// on sbx 0.54, whose help gives exactly that grammar, so its refusal is
+    /// the answer; `ports --publish` before 0.54 (or an unreadable version).
     pub async fn publish(&self, name: &SandboxName, spec: &str) -> Result<()> {
         check_port_spec(spec)?;
-        self.port_change(name, "publish", spec).await
+        if !self.has_port_command().await {
+            return self.checked(Invocation::new(s(&["ports", name.as_str(), "--publish", spec]))).await.map(drop);
+        }
+        self.checked(Invocation::new(s(&["port", "publish", name.as_str(), spec]))).await.map(drop)
     }
 
-    /// Unpublish one mapping, as [`Self::publish`] does.
+    /// Unpublish one mapping: `port unpublish` on 0.54, `ports --unpublish`
+    /// before it, or when 0.54 refuses the spec's form as usage. On 0.54 a
+    /// tcp4 mapping on 127.0.0.1 is sent as `HOST_PORT:SANDBOX_PORT`, the
+    /// form seen to work there (the same binding: no host IP is loopback,
+    /// no protocol tcp4); any other spec as given.
     pub async fn unpublish(&self, name: &SandboxName, spec: &str) -> Result<()> {
         check_port_spec(spec)?;
-        self.port_change(name, "unpublish", spec).await
-    }
-
-    async fn port_change(&self, name: &SandboxName, verb: &str, spec: &str) -> Result<()> {
-        let legacy = s(&["ports", name.as_str(), &format!("--{verb}"), spec]);
+        let legacy = s(&["ports", name.as_str(), "--unpublish", spec]);
         if !self.has_port_command().await {
             return self.checked(Invocation::new(legacy)).await.map(drop);
         }
-        let Err(new) = self.checked(Invocation::new(s(&["port", verb, name.as_str(), spec]))).await else {
+        let short = unpublish_spec_054(spec);
+        let Err(new) = self.checked(Invocation::new(s(&["port", "unpublish", name.as_str(), &short]))).await else {
             return Ok(());
         };
         if !is_usage_error(&format!("{new:#}")) {
@@ -1023,32 +1077,40 @@ impl Sbx {
         self.checked(Invocation::new(legacy))
             .await
             .map(drop)
-            .map_err(|old| anyhow!("{old:#}\n(`sbx ports` tried after `sbx port {verb}` refused the spec: {new:#})"))
+            .map_err(|old| anyhow!("{old:#}\n(`sbx ports` tried after `sbx port unpublish` refused the spec: {new:#})"))
     }
 
     /// Publish `sandbox_port` on loopback `host_ip`, at `host_port` or, when
-    /// `None`, at a port sbx assigns (0.54: an older sbx is refused here,
-    /// never sent a spec it would read otherwise). The mapping as published:
-    /// read from sbx's answer, else found by listing the ports afterwards.
+    /// `None`, at a port sbx assigns (0.54: an older sbx is refused here).
+    /// sbx assigns a port only on 127.0.0.1: the spec is the bare sandbox
+    /// port, which 0.54 binds on 127.0.0.1 with its default protocol, tcp4;
+    /// any other `host_ip` without a host port is refused before sbx runs.
+    /// The mapping as published: read from sbx's JSON answer, else found by
+    /// listing the ports afterwards.
     pub async fn port_publish(&self, name: &SandboxName, host_ip: &str, host_port: Option<u16>, sandbox_port: u16) -> Result<PortMapping> {
         if !sbxw_core::hosts::is_ipv4_literal(host_ip) || sandbox_port == 0 || host_port == Some(0) {
             bail!("not a port mapping: {host_ip}:{}:{sandbox_port}", host_port.map(|p| p.to_string()).unwrap_or_default());
         }
-        let fixed = |host_port| PortMapping { sandbox_port, proto: "tcp".into(), host_ip: host_ip.to_string(), host_port };
         if let Some(hp) = host_port {
             self.publish(name, &format!("{host_ip}:{hp}:{sandbox_port}")).await?;
-            return Ok(fixed(hp));
+            // No protocol in the spec: 0.54 reads it as tcp4, older sbx as tcp.
+            let proto = if self.has_port_command().await { AUTO_PORT_PROTO } else { "tcp" };
+            return Ok(PortMapping { sandbox_port, proto: proto.into(), host_ip: host_ip.to_string(), host_port: hp });
+        }
+        if host_ip != AUTO_PORT_IP {
+            bail!("{AUTO_PORT_LOOPBACK_ONLY}");
         }
         if !self.has_port_command().await {
             bail!("an automatic host port needs sbx {}.{}.{} or newer: name the host port", PORT_SINCE.0, PORT_SINCE.1, PORT_SINCE.2);
         }
         let before = self.ports(name).await;
-        // Always with the host IP, as docker writes an assigned host port
-        // (`IP::SANDBOX`): a bare sandbox port could bind every interface.
-        let out = self.checked(Invocation::new(s(&["port", "publish", name.as_str(), &format!("{host_ip}::{sandbox_port}")]))).await?;
+        // The bare sandbox port, as sbx's help writes it (`sbx port publish
+        // my-sandbox 8080`): loopback, tcp4, an ephemeral host port. No
+        // `/tcp4`: that is the default, and the form the help shows.
+        let out = self.checked(Invocation::new(s(&["port", "publish", name.as_str(), &sandbox_port.to_string(), "--format", "json"]))).await?;
         let said = format!("{}\n{}", out.stdout_str(), String::from_utf8_lossy(&out.stderr));
-        if let Some(hp) = assigned_host_port(&said, host_ip, sandbox_port) {
-            return Ok(fixed(hp));
+        if let Some(m) = assigned_mapping(&said, host_ip, sandbox_port) {
+            return Ok(m);
         }
         self.ports(name)
             .await
@@ -2003,18 +2065,24 @@ mod tests {
         assert_eq!(fake.log()[1], "ports n --publish 127.0.0.1:1:1");
     }
 
+    /// What sbx 0.54 printed on the person's Mac, verbatim.
+    const PUBLISHED_054: &str = r#"[{"action":"published","host_ip":"127.0.0.1","host_port":49152,"sandbox_port":3000,"protocol":"tcp4"}]"#;
+    const LS_054: &str = r#"[{"host_ip":"127.0.0.1","host_port":49152,"sandbox_port":3000,"protocol":"tcp4"}]"#;
+
     #[tokio::test]
-    async fn sbx_0_54_is_sent_port_and_falls_back_only_on_a_usage_refusal() {
+    async fn sbx_0_54_is_sent_port_publish_and_only_unpublish_falls_back() {
         let fake = ports_fake("sbx version 0.54.0", |a| match a[1].as_str() {
-            "ls" => Output::ok(r#"[{"host_ip":"127.0.0.1","host_port":8000,"sandbox_port":8000,"protocol":"tcp"}]"#),
-            "publish" if a[3].contains("4200") => Output::fail(1, "Error: invalid argument \"127.0.0.1:4200:4200\" for publish\nUsage: sbx port publish SANDBOX [HOST_PORT:]SANDBOX_PORT"),
+            "ls" => Output::ok(r#"[{"host_ip":"127.0.0.1","host_port":8000,"sandbox_port":8000,"protocol":"tcp4"}]"#),
+            "unpublish" if a[3].contains("4200") => Output::fail(1, "Error: invalid argument \"127.0.0.1:4200:4200\"\nUsage: sbx port unpublish SANDBOX SPEC"),
+            "publish" if a[3].contains("4200") => Output::fail(1, "error: invalid port spec \"127.0.0.1:4200:4200\""),
             "publish" => Output::fail(1, "host port 8000 is already in use"),
             _ => Output::ok(""),
         });
         let sbx = Sbx::new(fake.clone());
         assert_eq!(sbx.ports(&sb("n")).await[0].host_port, 8000);
         sbx.unpublish(&sb("n"), "127.0.0.1:8000:8000").await.unwrap();
-        sbx.publish(&sb("n"), "127.0.0.1:4200:4200").await.unwrap();
+        sbx.unpublish(&sb("n"), "127.0.0.1:4200:4200").await.unwrap();
+        assert!(sbx.publish(&sb("n"), "127.0.0.1:4200:4200").await.is_err(), "0.54 documents this grammar: its refusal is the answer");
         let busy = sbx.publish(&sb("n"), "127.0.0.1:8000:8000").await.unwrap_err();
         assert!(format!("{busy:#}").contains("already in use"));
         assert_eq!(
@@ -2022,12 +2090,13 @@ mod tests {
             [
                 "--version",
                 "port ls n --format json",
-                "port unpublish n 127.0.0.1:8000:8000",
+                "port unpublish n 8000:8000",
+                "port unpublish n 4200:4200",
+                "ports n --unpublish 127.0.0.1:4200:4200",
                 "port publish n 127.0.0.1:4200:4200",
-                "ports n --publish 127.0.0.1:4200:4200",
                 "port publish n 127.0.0.1:8000:8000",
             ],
-            "a busy port is not tried twice"
+            "publish never falls back to `sbx ports` on 0.54"
         );
         // `port ls` without --format json: the legacy JSON.
         let fake = ports_fake("sbx version 0.54.0", |_| Output::fail(1, "Error: unknown flag: --format"));
@@ -2036,29 +2105,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_automatic_host_port_is_read_from_sbx_or_from_the_list() {
-        for said in [r#"{"host_ip":"127.0.0.1","host_port":49153,"sandbox_port":3000,"protocol":"tcp"}"#, "Published 127.0.0.1:49153 -> 3000/tcp\n"] {
+    async fn a_fixed_host_port_is_one_spec_with_or_without_a_host_ip() {
+        let fake = ports_fake("sbx version 0.54.0", |_| Output::ok(""));
+        let sbx = Sbx::new(fake.clone());
+        let m = sbx.port_publish(&sb("n"), "127.0.0.2", Some(4200), 3000).await.unwrap();
+        assert_eq!((m.host_ip.as_str(), m.host_port, m.proto.as_str()), ("127.0.0.2", 4200, "tcp4"));
+        sbx.publish(&sb("n"), "4200:3000").await.unwrap();
+        assert_eq!(fake.log(), ["--version", "port publish n 127.0.0.2:4200:3000", "port publish n 4200:3000"]);
+        // sbx 0.53: the same specs, to `sbx ports`.
+        let fake = ports_fake("sbx version 0.53.1", |_| Output::fail(1, "unknown command \"port\""));
+        let sbx = Sbx::new(fake.clone());
+        assert_eq!(sbx.port_publish(&sb("n"), "127.0.0.2", Some(4200), 3000).await.unwrap().proto, "tcp");
+        sbx.publish(&sb("n"), "4200:3000").await.unwrap();
+        assert_eq!(fake.log(), ["--version", "ports n --publish 127.0.0.2:4200:3000", "ports n --publish 4200:3000"]);
+    }
+
+    #[tokio::test]
+    async fn an_automatic_host_port_is_the_bare_sandbox_port_and_read_from_sbx() {
+        let shapes = [
+            PUBLISHED_054,
+            r#"{"host_ip":"127.0.0.1","host_port":49152,"sandbox_port":3000,"protocol":"tcp4"}"#,
+            "{\n  \"published\": [\n    {\"host_ip\": \"127.0.0.1\", \"host_port\": \"49152\", \"sandbox_port\": 3000}\n  ]\n}\n",
+            "Published 127.0.0.1:49152 -> 3000/tcp4\n",
+        ];
+        for said in shapes {
             let fake = ports_fake("sbx version 0.54.0", move |a| if a[1] == "publish" { Output::ok(said) } else { Output::ok("[]") });
             let m = Sbx::new(fake.clone()).port_publish(&sb("n"), "127.0.0.1", None, 3000).await.unwrap();
-            assert_eq!((m.host_ip.as_str(), m.host_port, m.sandbox_port), ("127.0.0.1", 49153, 3000), "{said}");
-            assert!(fake.called("port publish n 127.0.0.1::3000"), "always with the loopback IP: {:?}", fake.log());
+            assert_eq!((m.host_ip.as_str(), m.host_port, m.sandbox_port), ("127.0.0.1", 49152, 3000), "{said}");
+            assert_eq!(fake.log(), ["--version", "port ls n --format json", "port publish n 3000 --format json"], "{said}");
         }
-        // Nothing said: the new row in the list is the answer.
+        let m = assigned_mapping(PUBLISHED_054, "127.0.0.1", 3000).unwrap();
+        assert_eq!(m.proto, "tcp4");
+        assert_eq!(m.spec(), "127.0.0.1:49152:3000", "the unpublish spec: no protocol, which 0.54 reads as tcp4");
+        // Nothing readable said: the new row in `port ls` is the answer.
         let published = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let p = published.clone();
         let fake = ports_fake("sbx version 0.54.0", move |a| match a[1].as_str() {
             "publish" => {
                 p.store(true, std::sync::atomic::Ordering::SeqCst);
-                Output::ok("")
+                Output::ok("{\"unexpected\": true}")
             }
-            _ if p.load(std::sync::atomic::Ordering::SeqCst) => Output::ok(r#"[{"host_ip":"127.0.0.1","host_port":8000,"sandbox_port":3000},{"host_ip":"127.0.0.1","host_port":49200,"sandbox_port":3000}]"#),
-            _ => Output::ok(r#"[{"host_ip":"127.0.0.1","host_port":8000,"sandbox_port":3000}]"#),
+            _ if p.load(std::sync::atomic::Ordering::SeqCst) => Output::ok(LS_054),
+            _ => Output::ok("[]"),
         });
-        assert_eq!(Sbx::new(fake).port_publish(&sb("n"), "127.0.0.1", None, 3000).await.unwrap().host_port, 49200);
-        // A fixed host port is the ordinary publish.
-        let fake = ports_fake("sbx version 0.54.0", |_| Output::ok(""));
-        assert_eq!(Sbx::new(fake.clone()).port_publish(&sb("n"), "127.0.0.2", Some(4200), 3000).await.unwrap().host_port, 4200);
-        assert!(fake.called("port publish n 127.0.0.2:4200:3000"));
+        let m = Sbx::new(fake).port_publish(&sb("n"), "127.0.0.1", None, 3000).await.unwrap();
+        assert_eq!((m.host_ip.as_str(), m.host_port, m.proto.as_str()), ("127.0.0.1", 49152, "tcp4"));
+    }
+
+    #[tokio::test]
+    async fn an_automatic_host_port_on_another_ip_is_refused_before_sbx_runs() {
+        let fake = ports_fake("sbx version 0.54.0", |_| Output::ok(PUBLISHED_054));
+        let e = Sbx::new(fake.clone()).port_publish(&sb("n"), "127.0.0.2", None, 3000).await.unwrap_err();
+        assert_eq!(format!("{e:#}"), AUTO_PORT_LOOPBACK_ONLY);
+        assert!(fake.log().is_empty(), "{:?}", fake.log());
     }
 
     #[tokio::test]
@@ -2081,7 +2180,14 @@ mod tests {
         assert_eq!(assigned_host_port("[{\"host_port\":5,\"sandbox_port\":3000}]", "127.0.0.1", 3000), Some(5));
         assert_eq!(assigned_host_port("warning: x\nhttp://127.0.0.1:61000 → sandbox 3000", "127.0.0.1", 3000), Some(61000));
         assert_eq!(assigned_host_port("done", "127.0.0.1", 3000), None);
+        assert_eq!(unpublish_spec_054("127.0.0.1:49152:3000"), "49152:3000");
+        assert_eq!(unpublish_spec_054("127.0.0.1:49152:3000/tcp4"), "49152:3000");
+        assert_eq!(unpublish_spec_054("127.0.0.1:49152:3000/tcp"), "127.0.0.1:49152:3000/tcp");
+        assert_eq!(unpublish_spec_054("127.0.0.2:4200:3000"), "127.0.0.2:4200:3000");
+        assert_eq!(unpublish_spec_054("4200:3000"), "4200:3000");
         assert_eq!(assigned_host_port("127.0.0.2:5 -> 3000", "127.0.0.1", 3000), None, "another loopback's mapping is not this one");
+        assert_eq!(assigned_host_port(r#"[{"host_ip":"127.0.0.2","host_port":5,"sandbox_port":3000}]"#, "127.0.0.1", 3000), None);
+        assert_eq!(assigned_host_port(r#"{"error":"x"}"#, "127.0.0.1", 3000), None, "an unknown shape is no port, not an error");
     }
 
     #[tokio::test]

@@ -340,10 +340,12 @@ local function ports_view(sb, ports, hosts, state, pub)
     row{ gap = 8, w = "full", spacer{},
       button{ "Publish", icon = "plus", tone = "green", on = "publish", key = "port-publish",
         busy = (pub and pub.busy) and true or false, disabled = tonumber(state.sport or "") == nil and not (pub and pub.busy),
-        help = "Leave the host port empty: sbx picks a free one (sbx 0.54)" },
+        help = "Leave the host port empty: sbx picks a free one on 127.0.0.1 (sbx 0.54)" },
     },
   })
-  if pub and not pub.busy then
+  if state.refused then
+    table.insert(out, note("Not published: " .. state.refused, "red"))
+  elseif pub and not pub.busy then
     if pub.error then
       table.insert(out, note("Not published: " .. pub.error, "red"))
     elseif pub.host_port then
@@ -443,6 +445,13 @@ return {
       local sport = tonumber(state.sport or "")
       if not sport or not current then return nil end
       local hport = tonumber(state.hport or "")
+      local hip = string.match(state.hip or "", "^%s*(.-)%s*$")
+      -- sbx picks a host port only on 127.0.0.1: another address needs one.
+      if not hport and hip ~= "" and hip ~= "127.0.0.1" then
+        state.refused = "sbx picks a host port only on the loopback address 127.0.0.1: name the host port"
+        return nil
+      end
+      state.refused = nil
       local args = { sandbox = current, sandbox_port = sport }
       if (state.alias or "") ~= "" then args.alias = state.alias end
       state.sport, state.hport = "", ""
@@ -462,8 +471,8 @@ return {
     path = function(state, _, t) state.path = t end,
     query = function(state, _, t) state.query = t end,
     sport = function(state, _, t) state.sport = t end,
-    hport = function(state, _, t) state.hport = t end,
-    hip = function(state, _, t) state.hip = t end,
+    hport = function(state, _, t) state.hport = t; state.refused = nil end,
+    hip = function(state, _, t) state.hip = t; state.refused = nil end,
     alias = function(state, _, t) state.alias = t end,
   },
 }
