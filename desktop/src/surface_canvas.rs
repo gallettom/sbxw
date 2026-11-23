@@ -113,6 +113,128 @@ pub struct Scene {
     /// An item id or `pin-<n>`.
     pub selected: Option<String>,
     pub tool: Tool,
+    /// The ground the person chose (the canvas's bar).
+    pub ground: Ground,
+}
+
+/// The canvas's ground, as the person chose it: white (the default), dark
+/// (the theme's page colour), or the theme's (dark for the dark themes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Ground {
+    #[default]
+    White,
+    Dark,
+    Follow,
+}
+
+impl Ground {
+    pub const ALL: [Ground; 3] = [Ground::White, Ground::Dark, Ground::Follow];
+    pub fn parse(s: &str) -> Option<Ground> {
+        Ground::ALL.into_iter().find(|g| g.name() == s)
+    }
+    /// Its name in the state file and in `canvas_ground`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Ground::White => "white",
+            Ground::Dark => "dark",
+            Ground::Follow => "follow",
+        }
+    }
+    /// Its name for a person.
+    pub fn label(self) -> &'static str {
+        match self {
+            Ground::White => "White",
+            Ground::Dark => "Dark",
+            Ground::Follow => "Follow theme",
+        }
+    }
+    /// Whether it draws the white ground now (Follow: the active theme's).
+    pub fn light(self) -> bool {
+        match self {
+            Ground::White => true,
+            Ground::Dark => false,
+            Ground::Follow => crate::theme::mode().light(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The dot grid
+
+/// Dots are this many world points apart at 100 %.
+pub const DOT_BASE: f32 = 24.0;
+/// The spacing on screen stays within these (points): zooming out doubles
+/// the world spacing, zooming in halves it.
+pub const DOT_MIN: f32 = 16.0;
+pub const DOT_MAX: f32 = 32.0;
+/// A dot's radius on screen (points), on the white and on the dark ground.
+pub const DOT_R_WHITE: f32 = 1.0;
+pub const DOT_R_DARK: f32 = 1.25;
+/// The most dots one build draws. The 50 % margin around the view (so a pan
+/// does not show a bare edge before the next build) shrinks first; on a
+/// view too large even without it, the spacing doubles past [`DOT_MAX`].
+/// A 2560 x 1440 pt view at 16 pt is about 14,600 dots.
+pub const DOT_BUDGET: usize = 16_000;
+
+/// The world spacing of the dots at `zoom`: 24 · 2^k, `k` chosen so it is
+/// 16 to 32 pt on screen. None for a zoom that is not a positive number.
+pub fn dot_step(zoom: f32) -> Option<f32> {
+    if !(zoom.is_finite() && zoom > 0.0) {
+        return None;
+    }
+    let mut s = DOT_BASE;
+    while s * zoom < DOT_MIN {
+        s *= 2.0;
+    }
+    while s * zoom > DOT_MAX {
+        s /= 2.0;
+    }
+    Some(s)
+}
+
+/// The dots one build draws: in world points, inside `rect` (x, y, w, h,
+/// where the element sits), `step` apart, on multiples of `step` so a dot
+/// keeps its place across builds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dots {
+    pub step: f32,
+    pub rect: [f32; 4],
+    pub points: Vec<[f32; 2]>,
+}
+
+/// Dots on the lines of `step` inside `r`: (columns, rows, first x, first y).
+fn lattice(r: [f32; 4], step: f32) -> (usize, usize, f32, f32) {
+    let (x0, y0) = ((r[0] / step).ceil() * step, (r[1] / step).ceil() * step);
+    let n = |from: f32, to: f32| if to < from { 0 } else { ((to - from) / step).floor() as usize + 1 };
+    (n(x0, r[0] + r[2]), n(y0, r[1] + r[3]), x0, y0)
+}
+
+/// The dots for camera `cam`: the view plus a margin, within [`DOT_BUDGET`].
+pub fn dot_grid(cam: &Camera) -> Option<Dots> {
+    let mut step = dot_step(cam.zoom)?;
+    let vis = cam.visible();
+    if !(vis[2] > 0.0 && vis[3] > 0.0) {
+        return None;
+    }
+    let grow = |m: f32| [vis[0] - vis[2] * m, vis[1] - vis[3] * m, vis[2] * (1.0 + 2.0 * m), vis[3] * (1.0 + 2.0 * m)];
+    let count = |r: [f32; 4], step: f32| {
+        let (c, rw, _, _) = lattice(r, step);
+        c.saturating_mul(rw)
+    };
+    let rect = loop {
+        if let Some(r) = [0.5, 0.25, 0.125, 0.0].into_iter().map(grow).find(|r| count(*r, step) <= DOT_BUDGET) {
+            break r;
+        }
+        step *= 2.0;
+    };
+    let (cols, rows, x0, y0) = lattice(rect, step);
+    let mut points = Vec::with_capacity(cols * rows);
+    for j in 0..rows {
+        for i in 0..cols {
+            points.push([x0 + i as f32 * step, y0 + j as f32 * step]);
+        }
+    }
+    Some(Dots { step, rect, points })
 }
 
 /// What the person did that the feature records.
@@ -866,20 +988,16 @@ pub fn refit(id: &str) {
 // ---------------------------------------------------------------------------
 // Drawing
 
-fn c(name: &str) -> rune::Color {
-    crate::theme::c(name)
-}
-
 fn small(size: f32, weight: f32) -> rune::TextStyle {
     crate::screen::body(size, weight)
 }
 
 /// The element for canvas `id`. `sink` gets what the person did (on the UI thread).
 pub fn view<S: 'static>(id: &str, scale: f32, sink: fn(&mut S, &str, CanvasEvent, &mut Tx)) -> El {
-    let (need, world) = with(id, |cv| {
+    let (need, world, ground) = with(id, |cv| {
         cv.dirty = false;
         let need = plan_levels(id, cv, scale);
-        (need, world(id, cv, scale))
+        (need, world(id, cv, scale), crate::theme::canvas_c(cv.scene.ground.light(), "canvas-ground"))
     });
     if !need.is_empty() {
         // Asked once each; the feature fetches and calls `load`.
@@ -891,7 +1009,7 @@ pub fn view<S: 'static>(id: &str, scale: f32, sink: fn(&mut S, &str, CanvasEvent
         .grow(1.0)
         .min_h(0.0)
         .min_w(0.0)
-        .fill(c("bg"))
+        .fill(ground)
         .clip_soft(0.0)
         .cursor(Cursor::Default)
         .pointer_buttons([PointerButton::Middle])
@@ -946,10 +1064,41 @@ pub fn take_pending() -> Vec<CanvasEvent> {
     PENDING.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
 
+/// The dot grid for camera `cam`, as one shape: a zero-length round-capped
+/// line per dot (one small quad each on the GPU), in world points, sized by
+/// `1 / zoom` so a dot is [`DOT_R_WHITE`] (or [`DOT_R_DARK`]) on screen.
+fn dots(id: &str, cam: &Camera, light: bool) -> Option<El> {
+    let t = crate::perf::start();
+    let d = dot_grid(cam)?;
+    let inv = 1.0 / cam.zoom;
+    let (r, color) = if light {
+        (DOT_R_WHITE, crate::theme::canvas_c(true, "canvas-dot"))
+    } else {
+        (DOT_R_DARK, crate::theme::canvas_c(false, "canvas-dot").alpha(crate::theme::CANVAS_DOT_ALPHA_DARK))
+    };
+    let (ox, oy, wd) = (d.rect[0], d.rect[1], 2.0 * r * inv);
+    let mut shape = rune::Shape::new();
+    for p in &d.points {
+        let q = [p[0] - ox, p[1] - oy];
+        shape = shape.line(q, q, wd, rune::LineCap::Round, color);
+    }
+    let n = d.points.len();
+    let e = rune::canvas(shape).key(format!("canvas-dots-{id}")).pin(Some(ox), Some(oy), None, None).w(d.rect[2]).h(d.rect[3]);
+    crate::perf::done(t, || format!("canvas dots: {n} at {} pt", d.step));
+    Some(e)
+}
+
 fn world(id: &str, cv: &Canvas, scale: f32) -> El {
     let z = cv.cam.zoom;
     let inv = 1.0 / z;
+    let light = cv.scene.ground.light();
+    let k = |name: &str| crate::theme::canvas_c(light, name);
     let mut w = el().key(format!("canvas-world-{id}")).w(cv.cam.view[0]).h(cv.cam.view[1]).live_offset(&cv.live_pan).live_scale(&cv.live_zoom);
+    // The dot grid first, under every item, inside the world so a live pan
+    // or pinch moves it without a build.
+    if let Some(d) = dots(id, &cv.cam, light) {
+        w = w.child(d);
+    }
     let vis = cv.cam.visible();
     // A margin so a pan does not show a blank edge before the next build.
     let (mx, my) = (vis[2] * 0.5, vis[3] * 0.5);
@@ -964,8 +1113,8 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
                     .pin(Some(i.x), Some(i.y - lh - (10.0 * inv).min(16.0)), None, None)
                     .w(i.w)
                     .h(lh + 4.0 * inv)
-                    .child(text(label.clone()).font(small(fs, 600.0)).color(c("text-muted")).truncate().w(i.w))
-                    .child(el().pin(Some(0.0), Some(lh + 2.0 * inv), None, None).w(i.w).h(inv).fill(c("border"))),
+                    .child(text(label.clone()).font(small(fs, 600.0)).color(k("canvas-text-muted")).truncate().w(i.w))
+                    .child(el().pin(Some(0.0), Some(lh + 2.0 * inv), None, None).w(i.w).h(inv).fill(k("canvas-line"))),
             );
             continue;
         }
@@ -975,33 +1124,33 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
             // A mat a shade lighter than the ground, edged by a hairline: dark
             // screens stand apart from the surface and from each other.
             let m = (MAT * inv).min(MAT_MAX);
-            w = w.child(el().key(format!("canvas-mat-{}", i.id)).pin(Some(i.x - m), Some(i.y - m), None, None).w(i.w + 2.0 * m).h(i.h + 2.0 * m).fill(c("surface")).border(inv, c("dim")).radius(3.0 * inv));
+            w = w.child(el().key(format!("canvas-mat-{}", i.id)).pin(Some(i.x - m), Some(i.y - m), None, None).w(i.w + 2.0 * m).h(i.h + 2.0 * m).fill(k("canvas-mat")).border(inv, k("canvas-mat-edge")).radius(3.0 * inv));
         }
         if selected {
             // The selection ring, outside the item (and its mat): it reads on any picture, at any zoom.
             let o = (MAT * inv).min(MAT_MAX) + RING_GAP * inv;
-            w = w.child(el().key(format!("canvas-ring-{}", i.id)).pin(Some(i.x - o), Some(i.y - o), None, None).w(i.w + 2.0 * o).h(i.h + 2.0 * o).border(RING_W * inv, c("accent")).radius(4.0 * inv));
+            w = w.child(el().key(format!("canvas-ring-{}", i.id)).pin(Some(i.x - o), Some(i.y - o), None, None).w(i.w + 2.0 * o).h(i.h + 2.0 * o).border(RING_W * inv, k("canvas-accent")).radius(4.0 * inv));
         }
         let mut b = el().key(format!("canvas-{}", i.id)).pin(Some(i.x), Some(i.y), None, None).w(i.w).h(i.h);
         match &i.body {
             Body::Picture { image, caption, asset } => {
-                b = b.fill(c("elevated")).radius(2.0 * inv);
+                b = b.fill(k("canvas-picture")).radius(2.0 * inv);
                 if on {
                     if let Some(px) = pixels_for(id, image, i.w * z * scale) {
                         b = b.pixels_fit(&px, rune::SurfaceFit::Fill);
                     } else if let Some(e) = pic_error(id, image) {
-                        b = b.child(text(format!("This picture cannot be shown: {e}")).font(small(12.0 * inv, 400.0)).color(c("text-muted")).wrap().w(i.w));
+                        b = b.child(text(format!("This picture cannot be shown: {e}")).font(small(12.0 * inv, 400.0)).color(k("canvas-text-muted")).wrap().w(i.w));
                     }
                 }
-                b = b.border(inv, if selected { c("accent") } else if *asset { c("amber") } else { c("border") });
+                b = b.border(inv, if selected { k("canvas-accent") } else if *asset { k("canvas-asset") } else { k("canvas-frame") });
                 // The caption under the picture, at a size that stays readable.
                 // Zoomed far out, the title alone, and never taller than the gap between rows.
                 let mut cap = el().pin(Some(0.0), Some(i.h + (6.0 * inv).min(16.0)), None, None).w(i.w);
                 let mut lines = rune::col().gap((2.0 * inv).min(6.0));
                 let far = z < 0.25;
                 for (k, l) in caption.iter().enumerate().take(if far { 1 } else { 2 }) {
-                    let (sz, wt, col) = if k == 0 { (12.0, 600.0, "text") } else { (11.0, 400.0, "text-muted") };
-                    lines = lines.child(text(l.clone()).font(small((sz * inv).min(CAPTION_MAX), wt)).color(c(col)).truncate().w(i.w));
+                    let (sz, wt, col) = if k == 0 { (12.0, 600.0, "canvas-text") } else { (11.0, 400.0, "canvas-text-muted") };
+                    lines = lines.child(text(l.clone()).font(small((sz * inv).min(CAPTION_MAX), wt)).color(k(col)).truncate().w(i.w));
                 }
                 cap = cap.child(lines);
                 b = b.child(cap);
@@ -1009,22 +1158,22 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
             Body::Note { text: t, n } => {
                 // A note is a thing on the surface: its text scales with it.
                 b = b
-                    .fill(c("amber-tint"))
-                    .border(if selected { 2.0 * inv } else { 1.0 * inv }, if selected { c("accent") } else { c("amber") })
+                    .fill(k("canvas-note"))
+                    .border(if selected { 2.0 * inv } else { 1.0 * inv }, if selected { k("canvas-accent") } else { k("canvas-note-edge") })
                     .radius(crate::theme::corner::CONTROL)
                     .padding(crate::theme::spacing::MD)
 
                     .child(
                         rune::col().gap(4.0).w(i.w - 20.0)
-                            .child(text(match n { Some(n) => format!("Note {n}"), None => "Note".into() }).font(small(12.0, 600.0)).color(c("text-muted")))
-                            .child(text(if t.trim().is_empty() { "(no text yet)".to_string() } else { t.clone() }).font(small(14.0, 400.0)).color(c("text")).wrap().w(i.w - 20.0)),
+                            .child(text(match n { Some(n) => format!("Note {n}"), None => "Note".into() }).font(small(12.0, 600.0)).color(k("canvas-text-muted")))
+                            .child(text(if t.trim().is_empty() { "(no text yet)".to_string() } else { t.clone() }).font(small(14.0, 400.0)).color(k("canvas-text")).wrap().w(i.w - 20.0)),
                     );
             }
             Body::Band { .. } => {}
         }
         if let Some(side) = handle_side(i.w * z, i.h * z).filter(|_| selected && i.movable) {
             let hs = side / 2.0 * inv;
-            b = b.child(el().key(format!("canvas-handle-{}", i.id)).pin(Some(i.w - hs), Some(i.h - hs), None, None).w(2.0 * hs).h(2.0 * hs).radius(inv).fill(c("accent")).border(inv, c("bg")));
+            b = b.child(el().key(format!("canvas-handle-{}", i.id)).pin(Some(i.w - hs), Some(i.h - hs), None, None).w(2.0 * hs).h(2.0 * hs).radius(inv).fill(k("canvas-accent")).border(inv, k("canvas-handle-edge")));
         }
         w = w.child(b);
     }
@@ -1041,7 +1190,7 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
         }
         let selected = cv.scene.selected.as_deref() == Some(&format!("pin-{}", p.n));
         let r = PIN_R * inv;
-        let fill = if p.sent { c("text-muted") } else if selected { c("accent") } else { c("primary") };
+        let fill = if p.sent { k("canvas-pin-sent") } else if selected { k("canvas-pin-selected") } else { k("canvas-pin") };
         w = w.child(
             el().key(format!("canvas-pin-{}", p.n))
                 .pin(Some(at[0] - r), Some(at[1] - r), None, None)
@@ -1049,10 +1198,10 @@ fn world(id: &str, cv: &Canvas, scale: f32) -> El {
                 .h(2.0 * r)
                 .radius(r)
                 .fill(fill)
-                .border(2.0 * inv, if selected { c("text-bright") } else { c("bg") })
+                .border(2.0 * inv, if selected { k("canvas-pin-ring-selected") } else { k("canvas-pin-ring") })
                 .items_center()
                 .justify_center()
-                .child(text(p.n.to_string()).font(small(11.0 * inv, 600.0)).color(c("on-primary"))),
+                .child(text(p.n.to_string()).font(small(11.0 * inv, 600.0)).color(k("canvas-pin-text"))),
         );
     }
     w

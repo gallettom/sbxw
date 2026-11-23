@@ -226,7 +226,7 @@ pub fn scene(c: &Manifest, pins: &[PinD], notes: &[NoteD], layout: &BTreeMap<Str
     }
     let mut ps: Vec<Pin> = c.pins.iter().filter(|p| p.sent.is_some()).map(|p| Pin { n: p.n, item: p.on.clone(), fx: p.fx, fy: p.fy, sent: true }).collect();
     ps.extend(pins.iter().map(|p| Pin { n: p.n, item: p.on.clone(), fx: p.fx, fy: p.fy, sent: false }));
-    Scene { items, pins: ps, selected: selected.map(str::to_string), tool }
+    Scene { items, pins: ps, selected: selected.map(str::to_string), tool, ..Scene::default() }
 }
 
 /// Whether the session surely has `canvas_read`: it started after a shot of
@@ -354,6 +354,8 @@ pub fn view(s: &State, snap: &J) -> J {
         "tool": s.tool.name(), "selected": s.selected, "renaming": s.renaming, "loading": s.loading, "error": s.error,
         "tab": if s.tab.is_empty() { "canvas" } else { s.tab.as_str() },
         "ask": { "text": s.ask_text.clone().unwrap_or_else(|| super::ASK_PROMPT.to_string()) },
+        "ground": s.ground.name(),
+        "grounds": crate::surface_canvas::Ground::ALL.iter().map(|g| json!({ "id": g.name(), "label": g.label(), "current": *g == s.ground })).collect::<Vec<_>>(),
         "popup": s.tool != Tool::Select, "zoom": format!("{:.0}%", crate::surface_canvas::camera(super::SURF).zoom * 100.0),
     });
     let Some(c) = &s.canvas else {
