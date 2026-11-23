@@ -103,6 +103,64 @@ pub fn command_error(args: &[String], out: &Output) -> anyhow::Error {
     anyhow!("`sbx {shown}` exited with {status}:\n{tail}")
 }
 
+/// A failed `sbx create` or `sbx kit add`, kept whole for whoever can do
+/// more than show it: `message` is what [`command_error`] says (sbx's own
+/// words, its tail), `denied` the hosts sbx said it refused while installing
+/// a kit (sbx 0.54 reports them), each a bare host name fit for an allow
+/// rule. Reached through `anyhow::Error::downcast_ref`, context or not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SbxFailure {
+    pub message: String,
+    pub denied: Vec<String>,
+}
+
+impl std::fmt::Display for SbxFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SbxFailure {}
+
+impl SbxFailure {
+    pub fn new(args: &[String], out: &Output) -> Self {
+        let said = format!("{}\n{}", out.stdout_str(), String::from_utf8_lossy(&out.stderr));
+        Self { message: format!("{:#}", command_error(args, out)), denied: denied_hosts(&said) }
+    }
+}
+
+/// The hosts named on lines that say a connection was denied or blocked:
+/// `host`, `host:port` or a URL's host, each checked as a host name
+/// ([`sbxw_core::policy::clean_host`]), deduplicated in order. The wording is
+/// sbx's and not documented: a line it phrases otherwise names nothing.
+pub fn denied_hosts(said: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in said.lines() {
+        let lower = line.to_ascii_lowercase();
+        if !["denied", "blocked", "not allowed", "refused"].iter().any(|w| lower.contains(w)) {
+            continue;
+        }
+        for word in line.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')' | '"' | '\'' | '`' | '<' | '>' | '[' | ']')) {
+            let word = word.split_once("://").map_or(word, |(_, rest)| rest);
+            let word = word.split('/').next().unwrap_or("").trim_end_matches([':', '.']);
+            if !word.contains('.') || word.starts_with('-') {
+                continue;
+            }
+            if let Ok(h) = sbxw_core::policy::clean_host(&sbxw_core::policy::allow_resource(word)) {
+                // A dotted word ending in a file suffix or a version is not a host.
+                let last = h.rsplit('.').next().unwrap_or("");
+                if (last.chars().all(|c| c.is_ascii_digit()) && !sbxw_core::hosts::is_ipv4_literal(&h)) || ["json", "yaml", "yml", "log", "sh", "go"].contains(&last) {
+                    continue;
+                }
+                if !out.contains(&h) {
+                    out.push(h);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// One row of `sbx ls`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SandboxInfo {
@@ -808,7 +866,9 @@ impl Sbx {
         let sink: runner::LineSink = Arc::new(move |line: &str| {
             {
                 let mut t = t.lock().unwrap();
-                if t.len() == 12 {
+                // sbx 0.54 keeps a failed kit install's diagnostics and the
+                // hosts it denied: room for them (command_error caps the text).
+                if t.len() == 40 {
                     t.pop_front();
                 }
                 t.push_back(line.to_string());
@@ -828,8 +888,8 @@ impl Sbx {
             .await?;
         if !out.success() {
             let said = Vec::from(std::mem::take(&mut *tail.lock().unwrap())).join("\n");
-            let out = Output { stderr: said.into_bytes(), ..out };
-            return Err(command_error(&args, &out));
+            let out = if said.is_empty() { out } else { Output { stderr: said.into_bytes(), stdout: Vec::new(), ..out } };
+            return Err(SbxFailure::new(&args, &out).into());
         }
         Ok(())
     }
@@ -1261,8 +1321,25 @@ impl Sbx {
         s(&["kit", "add", name.as_str(), kit])
     }
 
+    /// A failure is an [`SbxFailure`]: sbx's words and the hosts it denied.
     pub async fn kit_add(&self, name: &SandboxName, kit: &str) -> Result<()> {
-        self.checked(Invocation::new(s(&["kit", "add", name.as_str(), kit]))).await.map(drop)
+        let args = Self::kit_add_args(name, kit);
+        let out = self.run(Invocation::new(args.clone())).await?;
+        if !out.success() {
+            return Err(SbxFailure::new(&args, &out).into());
+        }
+        Ok(())
+    }
+
+    /// The hosts the sandbox was refused since `since` (RFC 3339, as sbx
+    /// writes `last_seen`), from `policy log --format json`: what a kit's
+    /// install hit when sbx's own message names none (before 0.54). Empty
+    /// when the log cannot be read.
+    pub async fn blocked_since(&self, name: &SandboxName, since: &str) -> Vec<sbxw_core::policy::BlockedHost> {
+        let (_, log) = self.policy_log(name).await;
+        let Some(mut log) = log else { return Vec::new() };
+        log.blocked.retain(|e| e.last_seen.as_str() >= since);
+        log.blocked_hosts()
     }
 
     /// `sbx inspect --format json`, as far as sbxw reads it: an error when
@@ -1952,5 +2029,47 @@ mod tests {
         assert_eq!((new.mode.as_str(), new.servers.as_slice()), ("static", &["github".to_string()][..]));
         assert_eq!(sbx.inspect(&sb("old")).await.unwrap().mcp, None);
         assert_eq!(fake.log()[0], "inspect new --format json");
+    }
+
+    #[test]
+    fn denied_hosts_are_read_off_the_lines_that_say_so() {
+        let said = "installing kit sbxw:agent-skills v1.2.3\n\
+                    npm ERR! request to https://registry.npmjs.org/foo failed\n\
+                    Network denials during installation:\n\
+                    \x20 - registry.npmjs.org:443 (blocked by network policy)\n\
+                    \x20 - \"github.com\" denied, rule default-deny-all\n\
+                    Blocked by network policy: domain objects.githubusercontent.com\n\
+                    blocked: registry.npmjs.org again, see policy.json, sbx 0.54.0\n\
+                    blocked --sandbox=x.y rm -rf\n";
+        assert_eq!(denied_hosts(said), ["registry.npmjs.org", "github.com", "objects.githubusercontent.com"]);
+        assert!(denied_hosts("all good: registry.npmjs.org").is_empty(), "a host on a line that denies nothing");
+    }
+
+    #[tokio::test]
+    async fn a_failed_kit_install_keeps_sbx_words_and_the_denied_hosts() {
+        let fake = Fake::new(|a| match a[0].as_str() {
+            // Streamed: the fake hands stdout to the line sink, as sbx's progress.
+            "create" => Output { code: Some(1), stdout: b"pulling 100%\nkit sbxw:codemap: startup command failed (exit 1): npm install\ndenied: registry.npmjs.org:443\n".to_vec(), stderr: vec![] },
+            _ => Output::fail(1, "kit add: install failed\nblocked by network policy: pypi.org, files.pythonhosted.org\n"),
+        });
+        let sbx = Sbx::new(fake.clone());
+        let e = sbx.create(&sb("n"), &CreateOpts { workspace: "/w".into(), ..Default::default() }, None).await.unwrap_err();
+        let e = e.context("creating 'n'");
+        let f = e.downcast_ref::<SbxFailure>().expect("typed through a context");
+        assert_eq!(f.denied, ["registry.npmjs.org"]);
+        assert!(f.message.contains("startup command failed") && format!("{e:#}").contains("denied: registry.npmjs.org:443"), "sbx's words, unchanged: {e:#}");
+        let e = sbx.kit_add(&sb("n"), "sbxw:k").await.unwrap_err();
+        assert_eq!(e.downcast_ref::<SbxFailure>().unwrap().denied, ["pypi.org", "files.pythonhosted.org"]);
+        assert!(format!("{e:#}").starts_with("`sbx kit add n sbxw:k` exited with exit status 1:"), "{e:#}");
+    }
+
+    #[tokio::test]
+    async fn blocked_hosts_since_an_install_began_come_from_the_policy_log() {
+        let fake = Fake::new(|_| Output::ok(r#"{"allowed":[],"blocked":[
+            {"host":"old.example.com:443","rule":"default-deny-all","reason":"no matching allow rule","count":1,"last_seen":"2026-11-01T09:00:00Z"},
+            {"host":"pypi.org:443","rule":"default-deny-all","reason":"no matching allow rule","count":4,"last_seen":"2026-11-23T10:00:05Z"}]}"#));
+        let b = Sbx::new(fake.clone()).blocked_since(&sb("n"), "2026-11-23T10:00:00Z").await;
+        assert_eq!(b.iter().map(|b| b.resource.as_str()).collect::<Vec<_>>(), ["pypi.org"]);
+        assert_eq!(fake.log(), ["policy log n --format json"]);
     }
 }
