@@ -936,10 +936,22 @@ in it, with its tint under the pointer and the keyboard focus.
 sandbox's group colour, the sidebar's own (`App::group_colors`, one function
 for both), as a 20% tint (16% unfocused) under a 2 pt line of the colour; a
 sandbox with no workspace is on the neutral bar. A bar's actions are its
-icon in its colour by meaning and its label in `text-bright`, grouped in
-zones with a hairline between two: state and what waits (sbx asks, a
-question, a plan) | what it opens (Browser, Project) and the microphone | the team (Team,
-Threads) | the session (Esc, Remote). Hover and focus put the meaning's tint
+icon in its colour by meaning and its label in `text-bright`, grouped
+left to right with a hairline between two groups (`bar::zone`,
+`bar::ORDER`): identity (the grip, the state dot, the name) | the session
+(the Claude / Bash switch, Esc, the microphone) | the team (Threads, a plan
+to review, Merge or Retry merge) | attention (wants you, a question, the sbx
+shield and its count) | tools (Browser, Project) | Remote (and Close thread)
+last. The name carries team mode: on the main session of a running sandbox
+it is a pill that turns it on and off (the `lead_start` / `lead_end`
+intents, ending it through the same dialog); on, it is purple with the
+leader icon before the name, off a quiet outlined pill with no icon. A
+thread's pane or a stopped sandbox has no toggle: its name is plain text.
+There is no separate Team chip. A narrow pane moves chips into the "⋯"
+menu by urgency first (amber, then a count or green: the shield, Merge),
+then from the bar's right end (Remote, Project, Browser, Threads, the
+microphone, Esc last); the Claude / Bash switch goes only when nothing
+else fits, and the name never does. Hover and focus put the meaning's tint
 under it; an action whose panel shows for the focused pane is a tinted chip.
 A page tab takes the group colour of its first terminal (14%, the current
 one 28% with a 1 pt border and a 2 pt line of the colour, or the focus blue

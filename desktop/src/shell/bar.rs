@@ -36,18 +36,36 @@ pub fn meaning(id: &str) -> &'static str {
     }
 }
 
-/// The zone of a pane bar an extra sits in, so the eye finds a zone before
-/// a button: 0 the session's state and what waits (sbx asks, questions, a
-/// plan, the model), 1 things it opens (Browser, Project, Env), 2 the team
-/// (Team, Threads), 3 controlling the session (Esc, Remote, closing it).
-/// Zones are drawn in this order, a hairline between two.
+/// The group of a pane bar an extra sits in, left to right, so the eye
+/// finds a group before a button (a hairline between two):
+///
+/// 0. identity: the grip, the state dot and the name pill (drawn by the
+///    core, never an extra; the name pill carries the team toggle, see
+///    [`take_team`]);
+/// 1. the session: the Claude / Bash switch (drawn by the core), then Esc,
+///    the microphone, then what only describes it (model, state word,
+///    connection): what acts on this session's agent;
+/// 2. the team: Threads, a plan to review, Merge / Retry merge;
+/// 3. attention: a session that wants you, a question, sbx's requests
+///    (the shield and its count);
+/// 4. tools: Browser, Project, and any other extra;
+/// 5. the session's remote control, then closing a thread, last.
 pub fn zone(id: &str) -> u8 {
     match id {
-        "attention" | "status" | "approvals" | "relay" | "state" | "model" | "merge" | "plan" => 0,
-        "lead" | "threads" => 2,
-        "interrupt" | "remote" | "close" => 3,
-        _ => 1,
+        "interrupt" | DICTATE | "model" | "state" | "status" => 1,
+        "threads" | "plan" | "merge" | "lead" => 2,
+        "attention" | "relay" | "approvals" => 3,
+        "remote" | "close" => 5,
+        _ => 4,
     }
+}
+
+/// The order inside a group (an id not listed comes after the listed ones of its group).
+pub const ORDER: &[&str] = &["interrupt", DICTATE, "model", "state", "status", "threads", "plan", "merge", "attention", "relay", "approvals", "browser", "project", "codemap", "remote", "close"];
+
+/// Where `id` is drawn: its group, then its place in [`ORDER`].
+pub fn place(id: &str) -> (u8, usize) {
+    (zone(id), ORDER.iter().position(|o| *o == id).unwrap_or(ORDER.len()))
 }
 
 /// The hairline between two zones: drawn in the gap before a zone's first
@@ -68,9 +86,9 @@ pub fn panel_of(id: &str) -> Option<&'static str> {
     }
 }
 
-/// `items` in the order the bar draws them: by zone, stable.
+/// `items` in the order the bar draws them: by group, then [`ORDER`], stable.
 pub fn by_zone(mut items: Vec<Item>) -> Vec<Item> {
-    items.sort_by_key(|i| zone(&i.id));
+    items.sort_by_key(|i| place(&i.id));
     items
 }
 
@@ -191,9 +209,13 @@ pub fn same_view(own: &(String, J), other: &(String, J), screen: Option<&str>) -
     screen.and_then(crate::feat::screen).is_some_and(|(f, _)| f.name == feature.name)
 }
 
-/// Sorted by [`rank`], stable: the order the bar fills in.
+/// Sorted by [`rank`], then by where the bar draws them: the order the bar
+/// fills in. What collapses into the menu first is the last of that order:
+/// the quiet chips from the bar's right end (Close thread, Remote, the
+/// tools, Threads, the microphone, Esc last), while anything amber or with
+/// a count or a green tone (the shield's count, Merge) stays longest.
 pub fn by_priority(mut items: Vec<Item>) -> Vec<Item> {
-    items.sort_by_key(Item::rank);
+    items.sort_by_key(|i| (i.rank(), place(&i.id)));
     items
 }
 
@@ -251,6 +273,8 @@ pub struct PaneFit {
     pub hidden: Vec<Item>,
     /// The name's least width (points): it never goes under it.
     pub name_min: f32,
+    /// The team toggle the name pill carries, when this session may lead.
+    pub team: Option<TeamToggle>,
 }
 
 impl PaneFit {
@@ -298,18 +322,74 @@ pub fn switch_w(agent: &str) -> f32 {
     SWITCH_PAD * 2.0 + seg_w(agent) + SWITCH_GAP + seg_w(BASH)
 }
 
+/// The team mode toggle, carried by the pane's name pill: the threads
+/// feature's `lead` extra (`lead_start` / `lead_end`, the same intents, the
+/// same dialog), never a chip of its own. A session that may not lead (a
+/// thread, a stopped sandbox: the feature emits no `lead` for it) has none,
+/// and its name is plain text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TeamToggle {
+    /// Team mode is on: the purple pill with the leader icon; pressing it ends it.
+    pub on: bool,
+    pub intent: (String, J),
+}
+
+/// The intent that ends team mode: the toggle is on while it is the one offered.
+pub const LEAD_END: &str = "lead_end";
+
+/// Takes the team control out of `items`, for the name pill.
+pub fn take_team(items: &mut Vec<Item>) -> Option<TeamToggle> {
+    let at = items.iter().position(|i| i.id == "lead")?;
+    let it = items.remove(at);
+    // One toggle per name, whatever a feature emitted.
+    items.retain(|i| i.id != "lead");
+    let intent = it.intent?;
+    Some(TeamToggle { on: intent.0 == LEAD_END, intent })
+}
+
+/// What the name pill adds around the name: its padding, and with team
+/// mode on the leader icon and its gap. Plain text (no toggle): the
+/// leader mark and its gap when `leads`, else nothing.
+pub fn name_pad(team: Option<&TeamToggle>, leads: bool) -> f32 {
+    match team {
+        Some(t) if t.on => CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP,
+        Some(_) => CHIP_PX * 2.0,
+        None if leads => CHIP_ICON + PANE_GAP,
+        None => 0.0,
+    }
+}
+
+/// The name pill's accessible name: the sandbox and the team state.
+pub fn name_label(name: &str, team: &TeamToggle) -> String {
+    format!("{name}, team mode {}", if team.on { "on" } else { "off" })
+}
+
+/// The name pill's tooltip: the whole name (it may be cut), then what a press does.
+pub fn name_help(name: &str, team: &TeamToggle) -> String {
+    if team.on {
+        format!("{name}. Team mode is on: press to turn it off")
+    } else {
+        format!("{name}. Team mode is off: press to turn it on (this session plans the work into threads, you approve the plan, it follows them)")
+    }
+}
+
 /// What shows in a pane bar `width` points wide. `agent`: the mode
 /// switch's agent segment ("Claude", "Thread"...), `None` for a pane with no
 /// switch (a kit's prompt: its kind word instead). `menu`: the "⋯" button is
 /// always there (it also holds the pane's moves), so its room is kept.
-pub fn pane_fit(width: f32, name: &str, agent: Option<&str>, items: Vec<Item>, menu: bool) -> PaneFit {
+/// `leads`: the session leads a team (`App::pane_leads`): the leader icon
+/// shows before its name. The `lead` extra becomes the name pill's toggle
+/// ([`take_team`]), never a chip or a menu row.
+pub fn pane_fit(width: f32, name: &str, agent: Option<&str>, mut items: Vec<Item>, menu: bool, leads: bool) -> PaneFit {
+    let team = take_team(&mut items);
+    let pad = name_pad(team.as_ref(), leads);
     let (only_menu, items): (Vec<Item>, Vec<Item>) = items.into_iter().partition(|i| menu && MENU_ONLY.contains(&i.id.as_str()));
     let items = by_priority(items);
     let name_w = measure(name, NAME_TEXT, 500.0);
     let name_min = name_w.min(NAME_MIN);
     let name_keep = name_w.min(NAME_WANT);
     // grip, dot | name, switch, extras…, more | close
-    let base = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name_keep + PANE_GAP + CLOSE_W + if menu { PANE_GAP + more_w(items.len()) } else { 0.0 };
+    let base = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + pad + name_keep + PANE_GAP + CLOSE_W + if menu { PANE_GAP + more_w(items.len()) } else { 0.0 };
     let sw = agent.map_or(0.0, |a| switch_w(a) + PANE_GAP);
     // The switch goes into the menu only when even it alone does not fit.
     let switch = agent.is_some() && base + sw <= width + 0.5;
@@ -324,7 +404,7 @@ pub fn pane_fit(width: f32, name: &str, agent: Option<&str>, items: Vec<Item>, m
     // What the rail or the sidebar offers is not listed again in the menu.
     hidden.retain(|i| !i.elsewhere);
     hidden.extend(only_menu);
-    PaneFit { switch, shown: by_zone(shown), hidden, name_min }
+    PaneFit { switch, shown: by_zone(shown), hidden, name_min, team }
 }
 
 /// The overflow button's mark for what it hides: the most urgent tone among
@@ -526,7 +606,6 @@ mod tests {
             ex("dictate", "Dictate", "muted", None),
             ex("project", "Project", "muted", None),
             ex("approvals", "sbx asks", "muted", Some(2)),
-            ex("lead", "Team", "muted", None),
             ex("interrupt", "Esc", "muted", None),
             ex("remote", "Remote", "muted", None),
             ex("plan", "Review plan", "amber", None),
@@ -543,7 +622,7 @@ mod tests {
     fn a_chip_keeps_its_colour_in_the_overflow_menu() {
         let tones: Vec<(String, String)> = many().iter().map(|i| (i.id.clone(), menu_tone(i).to_string())).collect();
         let get = |id: &str| tones.iter().find(|(i, _)| *i == id).unwrap().1.clone();
-        assert_eq!((get("interrupt"), get("remote"), get("threads"), get("lead"), get("browser"), get("project")), ("red".into(), "blue".into(), "blue".into(), "purple".into(), "blue".into(), "blue".into()));
+        assert_eq!((get("interrupt"), get("remote"), get("threads"), get("browser"), get("project")), ("red".into(), "blue".into(), "blue".into(), "blue".into(), "blue".into()));
         assert_eq!(get("plan"), "amber", "a toned extra keeps its own tone");
         assert_eq!(get("dictate"), "neutral");
     }
@@ -551,7 +630,7 @@ mod tests {
     #[test]
     fn what_needs_the_person_goes_first() {
         let order = by_priority(many());
-        assert_eq!(ids(&order), ["plan", "approvals", "browser", "dictate", "project", "lead", "interrupt", "remote", "threads"]);
+        assert_eq!(ids(&order), ["plan", "approvals", "interrupt", "dictate", "threads", "browser", "project", "remote"]);
         assert_eq!(rank("red", None), 2, "red is danger (Close thread), not attention");
         assert_eq!(rank("green", None), 1);
     }
@@ -563,10 +642,10 @@ mod tests {
         let mut items = many();
         items.push(ex("envfile", "Env", "muted", None));
         for width in [1400.0, 700.0, 300.0] {
-            let f = pane_fit(width, "test-sbx", Some("Claude"), items.clone(), true);
+            let f = pane_fit(width, "test-sbx", Some("Claude"), items.clone(), true, false);
             assert!(f.hidden.iter().any(|i| i.id == "envfile") && f.shown.iter().all(|i| i.id != "envfile"), "{width}");
         }
-        let wide = pane_fit(1400.0, "test-sbx", Some("Claude"), items, true);
+        let wide = pane_fit(1400.0, "test-sbx", Some("Claude"), items, true, false);
         assert!(wide.shown.iter().any(|i| i.id == DICTATE));
         let mic = ex(DICTATE, "Dictate", "muted", None);
         assert_eq!(mic.chip_text(), "", "the icon alone; its word names it");
@@ -581,9 +660,9 @@ mod tests {
         for it in items.iter_mut().filter(|i| i.id == "approvals") {
             it.elsewhere = true;
         }
-        let wide = pane_fit(1400.0, "test-sbx", Some("Claude"), items.clone(), true);
+        let wide = pane_fit(1400.0, "test-sbx", Some("Claude"), items.clone(), true, false);
         assert!(wide.shown.iter().any(|i| i.id == "approvals"), "inline while it fits");
-        let narrow = pane_fit(200.0, "test-sbx", Some("Claude"), items, true);
+        let narrow = pane_fit(200.0, "test-sbx", Some("Claude"), items, true, false);
         assert!(narrow.shown.iter().chain(&narrow.hidden).all(|i| i.id != "approvals"), "not in the menu: {:?}", ids(&narrow.hidden));
     }
 
@@ -624,9 +703,9 @@ mod tests {
     #[test]
     fn pane_bars_fit_at_every_width() {
         for width in [1100.0, 700.0, 560.0, 450.0, 330.0, 230.0, 200.0, 160.0] {
-            for n in [0, 1, 3, 9] {
+            for n in [0, 1, 3, 8] {
                 let items: Vec<Item> = many().into_iter().take(n).collect();
-                let f = pane_fit(width, "test-sbx", Some("Claude"), items.clone(), true);
+                let f = pane_fit(width, "test-sbx", Some("Claude"), items.clone(), true, false);
                 assert_eq!(f.shown.len() + f.hidden.len(), n, "{width} {n}");
                 let name = measure("test-sbx", crate::theme::font_size::CAPTION, 500.0).min(NAME_WANT);
                 // The "⋯" menu is always there (it holds the pane's moves).
@@ -649,16 +728,16 @@ mod tests {
 
     #[test]
     fn widths_decide_what_overflows() {
-        let wide = pane_fit(1100.0, "test-sbx", Some("Claude"), many(), true);
+        let wide = pane_fit(1100.0, "test-sbx", Some("Claude"), many(), true, false);
         assert!(wide.switch && wide.hidden.len() <= 1, "one pane at 1400: the switch and all but one inline: {:?}", ids(&wide.hidden));
-        let two = pane_fit(560.0, "test-sbx", Some("Claude"), many(), true);
+        let two = pane_fit(560.0, "test-sbx", Some("Claude"), many(), true, false);
         assert_eq!(ids(&two.shown)[..2], ["plan", "approvals"], "two panes at 1400: what needs you stays inline");
         assert!(!two.hidden.is_empty());
-        let narrow = pane_fit(210.0, "test-sbx", Some("Claude"), many(), true);
+        let narrow = pane_fit(210.0, "test-sbx", Some("Claude"), many(), true, false);
         assert!(narrow.shown.len() <= 1, "4 panes at 720: {:?}", ids(&narrow.shown));
-        assert_eq!(narrow.hidden.len() + narrow.shown.len(), 9);
+        assert_eq!(narrow.hidden.len() + narrow.shown.len(), 8);
         // The name keeps its floor even with nothing else drawn.
-        let long = pane_fit(210.0, "a-very-long-sandbox-name-for-tests", Some("Claude"), many(), true);
+        let long = pane_fit(210.0, "a-very-long-sandbox-name-for-tests", Some("Claude"), many(), true, false);
         assert_eq!(long.name_min, NAME_MIN);
     }
 
@@ -700,5 +779,127 @@ mod tests {
         assert!(c && k < extras.len(), "narrow: compact and an overflow ({c}, {k})");
         let (c, k) = top_fit(330.0, Some("Jarvis · 2 to review"), "connected", false, &extras);
         assert!(c && k == 0, "the smallest window with a notice: everything in the menu ({c}, {k})");
+    }
+
+    fn act(id: &str, label: &str, tone: &str, count: Option<u64>, intent: &str) -> Item {
+        let mut it = ex(id, label, tone, count);
+        it.intent = Some((intent.into(), serde_json::json!({ "sandbox": "sbxw-2" })));
+        it
+    }
+
+    /// The threads feature's team control, as it emits it (feat/threads `lead`).
+    fn lead(on: bool) -> Item {
+        if on { act("lead", "Team on", "purple", None, "lead_end") } else { act("lead", "Team", "muted", None, "lead_start") }
+    }
+
+    /// The main session's pane bar of a sandbox, as the person's screenshot
+    /// had it, in the order the features emit it (the core adds the
+    /// microphone where Env stood).
+    fn main_bar(team: Option<bool>) -> Vec<Item> {
+        let mut v = vec![act("approvals", "sbx asks", "muted", Some(9), "network_show"), act("merge", "Retry merge", "green", None, "plan_review")];
+        v.push(ex("browser", "Browser", "muted", None));
+        v.push(ex(DICTATE, "Dictate", "muted", None));
+        v.push(ex("project", "Project", "muted", None));
+        v.extend(team.map(lead));
+        v.push(act("interrupt", "Esc", "muted", None, "session_interrupt"));
+        v.push(act("remote", "Remote", "muted", None, "remote_control"));
+        v.push(act("threads", "Threads", "muted", None, "threads_show"));
+        v
+    }
+
+    /// Left to right, by group: the session (Esc, the microphone) | the team
+    /// (Threads, Merge) | attention (the shield) | tools (Browser, Project) |
+    /// Remote. The name pill (group 0) and the switch are the core's.
+    const WIDE: &[&str] = &["interrupt", DICTATE, "threads", "merge", "approvals", "browser", "project", "remote"];
+
+    #[test]
+    fn a_leader_with_team_on_the_name_pill_carries_it_and_the_bar_reads_by_group() {
+        let f = pane_fit(1400.0, "sbxw-2", Some("Claude"), main_bar(Some(true)), true, true);
+        assert_eq!(ids(&f.shown), WIDE);
+        assert!(f.hidden.is_empty(), "{:?}", ids(&f.hidden));
+        let t = f.team.expect("the name pill toggles the team");
+        assert!(t.on);
+        assert_eq!(t.intent, ("lead_end".to_string(), serde_json::json!({ "sandbox": "sbxw-2" })), "the very intent \"Team on\" ran");
+        assert_eq!(name_label("sbxw-2", &t), "sbxw-2, team mode on");
+        assert!(name_help("sbxw-2", &t).contains("Team mode is on: press to turn it off"));
+        // The groups, in order, with a change only between two of them.
+        let z: Vec<u8> = f.shown.iter().map(|i| zone(&i.id)).collect();
+        assert_eq!(z, [1, 1, 2, 2, 3, 4, 4, 5]);
+    }
+
+    #[test]
+    fn with_team_off_the_name_is_a_quiet_pill_that_turns_it_on() {
+        let f = pane_fit(1400.0, "sbxw-2", Some("Claude"), main_bar(Some(false)), true, false);
+        assert_eq!(ids(&f.shown), WIDE);
+        let t = f.team.expect("the toggle is there");
+        assert!(!t.on);
+        assert_eq!(t.intent.0, "lead_start", "the very intent \"Team\" ran");
+        assert_eq!(name_label("sbxw-2", &t), "sbxw-2, team mode off");
+        assert!(name_help("sbxw-2", &t).contains("Team mode is off: press to turn it on"));
+        // Off: the pill's padding, no icon; on: the icon and its gap too.
+        assert_eq!(name_pad(Some(&t), false), CHIP_PX * 2.0);
+        assert_eq!(name_pad(Some(&TeamToggle { on: true, ..t }), true), CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP);
+    }
+
+    /// A thread's pane: no team toggle (the feature emits none: threads
+    /// never lead), its name plain text; Close thread after Remote.
+    #[test]
+    fn a_thread_pane_has_no_toggle_and_close_comes_last() {
+        let items = vec![
+            ex("state", "working", "blue", None),
+            act("interrupt", "Esc", "muted", None, "session_interrupt"),
+            act("remote", "Remote", "muted", None, "remote_control"),
+            act("close", "Close thread", "red", None, "thread_close"),
+            ex(DICTATE, "Dictate", "muted", None),
+            act("threads", "Threads", "muted", None, "threads_show"),
+        ];
+        let f = pane_fit(1400.0, "sbxw-2", Some("Thread"), items, true, false);
+        assert!(f.team.is_none());
+        assert_eq!(ids(&f.shown), ["interrupt", DICTATE, "state", "threads", "remote", "close"]);
+        assert_eq!(name_pad(None, false), 0.0);
+        assert_eq!(name_pad(None, true), CHIP_ICON + PANE_GAP, "a leader with no toggle keeps the mark before plain text");
+    }
+
+    /// A stopped sandbox: no extras at all, the name plain text.
+    #[test]
+    fn a_stopped_sandbox_has_its_name_and_nothing_else() {
+        let f = pane_fit(1400.0, "sbxw-2", Some("Claude"), vec![ex("status", "connecting", "muted", None)], true, false);
+        assert!(f.team.is_none() && f.hidden.is_empty());
+        assert_eq!(ids(&f.shown), ["status"]);
+    }
+
+    /// No "Team on" (or "Team") chip or menu row at any width, team on or off.
+    #[test]
+    fn the_team_is_never_a_chip_or_a_menu_row() {
+        for on in [true, false] {
+            for width in [1400.0, 700.0, 450.0, 300.0, 200.0, 160.0] {
+                let f = pane_fit(width, "sbxw-2", Some("Claude"), main_bar(Some(on)), true, on);
+                assert!(f.shown.iter().chain(&f.hidden).all(|i| i.id != "lead" && !i.label.starts_with("Team")), "{on} {width}");
+                assert_eq!(f.team.as_ref().map(|t| t.on), Some(on), "{on} {width}");
+            }
+        }
+    }
+
+    /// Narrowing the pane: the quiet chips go from the bar's right end
+    /// (Remote, Project, Browser, Threads, the microphone, Esc), the shield's
+    /// count and Merge stay longest; what is shown is still drawn by group.
+    #[test]
+    fn a_narrow_pane_collapses_from_the_right_end_keeping_what_asks() {
+        let mut seen = vec![];
+        let mut width = 1400.0;
+        while width > 150.0 {
+            let f = pane_fit(width, "sbxw-2", Some("Claude"), main_bar(Some(true)), true, true);
+            assert!(f.shown.windows(2).all(|w| place(&w[0].id) <= place(&w[1].id)), "{width}: {:?}", ids(&f.shown));
+            for it in &f.hidden {
+                if !seen.contains(&it.id) {
+                    seen.push(it.id.clone());
+                }
+            }
+            width -= 10.0;
+        }
+        assert_eq!(seen, ["remote", "project", "browser", "threads", DICTATE, "interrupt", "approvals", "merge"]);
+        let mid = pane_fit(600.0, "sbxw-2", Some("Claude"), main_bar(Some(true)), true, true);
+        assert!(mid.shown.iter().any(|i| i.id == "approvals") && mid.shown.iter().any(|i| i.id == "merge"), "{:?}", ids(&mid.shown));
+        assert!(mid.hidden.iter().any(|i| i.id == "remote"), "{:?}", ids(&mid.hidden));
     }
 }
