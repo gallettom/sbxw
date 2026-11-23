@@ -1571,6 +1571,20 @@ impl State {
         // A new drop replaces what an earlier one left (normally nothing: a
         // Cancel empties it), and those paths are forgotten.
         let mut out: Vec<Action> = forget(paths_of(std::mem::take(&mut self.dropped).iter())).into_iter().collect();
+        // A picture pasted into the pane: one file, named by the app, never
+        // by the clipboard; its dialog every time (the core asks for it).
+        if let Some(png) = &d.picture {
+            self.staged_seq += 1;
+            let s = Staged { id: self.staged_seq, name: pasted_name(super::now_ms()), size: png.len() as u64, payload: Payload::Png(png.clone()), to: Some((d.sandbox.clone(), d.thread.clone())) };
+            match self.upload(cx, &s, None) {
+                Ok(a) => {
+                    self.dropped.push(s);
+                    out.push(a);
+                }
+                Err(e) => out.push(Action::error(format!("The picture was not pasted: {e}"))),
+            }
+            return out;
+        }
         let mut notes = vec![];
         for p in &d.paths {
             if self.dropped.len() >= view::STAGED_MAX {
@@ -1859,6 +1873,14 @@ impl State {
         out.extend(self.ui_action(cx));
         out
     }
+}
+
+/// The name of a picture pasted into a pane at `ms` (UTC):
+/// `pasted-2026-11-23-143005.png`. Only digits and dashes: nothing from the clipboard.
+pub fn pasted_name(ms: u64) -> String {
+    let t = ms / 1000;
+    let s = t % 86_400;
+    format!("pasted-{}-{:02}{:02}{:02}.png", view::date(t), s / 3600, s / 60 % 60, s % 60)
 }
 
 /// A path the daemon's upload routes return (`/tmp/sbxw-uploads/<ms>/<name>`,

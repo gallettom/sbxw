@@ -1255,6 +1255,7 @@ impl App {
         let settle = headless().then_some(Duration::from_millis(1500));
         let mut copies = vec![];
         let mut file_clicks = vec![];
+        let mut pictures = vec![];
         for (i, p) in self.panes.iter_mut().enumerate() {
             let Some(t) = &mut p.term else { continue };
             // Only the pane with the keyboard shows a solid cursor and gets
@@ -1286,6 +1287,10 @@ impl App {
             if let Some(path) = t.take_file_click() {
                 file_clicks.push((i, path));
             }
+            // A picture pasted with no text (the key's clipboard read, off macOS).
+            if let Some(png) = t.take_pasted_image() {
+                pictures.push((i, png));
+            }
             let wants = t.wants_you(terminal::session_for(self.feats.data.get("sessions"), p.sandbox.as_deref(), p.thread.as_deref(), p.mode == Mode::Agent).as_ref());
             ch |= std::mem::replace(&mut p.attention, wants) != wants;
             if let (true, true, Some(path)) = (ch, i == self.focused, &self.dump_text) {
@@ -1303,6 +1308,10 @@ impl App {
         }
         for (i, path) in file_clicks {
             self.pane_file_open(i, path);
+            changed = true;
+        }
+        for (i, png) in pictures {
+            self.pane_paste_image(i, &png);
             changed = true;
         }
         for (i, name, text) in copies {
@@ -2359,6 +2368,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // through the key. Headless runs keep it for scripted pastes.
     // A picture pasted while a feature's panel that takes files is shown,
     // and no terminal has the keyboard, goes to that feature; text pastes as before.
+    // A picture with no text, pasted while a terminal may take keys: uploaded
+    // to that pane's sandbox and its path typed, as a dropped file's
+    // (`pane_paste_image`); text wins when both are there (`paste_content`).
     let root = if window_paste() {
         root.on_paste_content(|s: &mut App, content: &rune::ClipboardContent, tx: &mut Tx| {
             let in_terminal = tx.focused().is_some_and(|k| k.starts_with("grid-"));
@@ -2370,6 +2382,12 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             // has the keyboard takes its own paste inside Rune).
             if !content.text().is_empty() && (crate::surface::focused().is_some() || s.terminal_may_take_keys(tx.focused())) {
                 s.paste(content.text());
+            } else if let (true, Some(img)) = (content.text().is_empty() && crate::surface::focused().is_none(), content.image()) {
+                if s.terminal_may_take_keys(tx.focused()) {
+                    s.pane_paste_image(s.focused, img.png());
+                } else if in_terminal {
+                    s.notify("Close what is open first: nothing was pasted", false);
+                }
             }
         })
     } else {

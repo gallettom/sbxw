@@ -318,9 +318,43 @@ impl App {
         let skip_dialog = self.drops_skip_dialog();
         // Only for the actions of this very drop, and only these paths.
         self.feats.drop_grant = skip_dialog.then(|| DropGrant::of_drop(paths, &sandbox));
-        let acts = on(&Ctx { data: &data }, &feat::PaneDrop { paths: paths.to_vec(), skip_dialog, sandbox, thread });
+        let acts = on(&Ctx { data: &data }, &feat::PaneDrop { paths: paths.to_vec(), skip_dialog, sandbox, thread, picture: None });
         self.feature_actions(f, &format!("feature:{}", f.name), acts);
         self.feats.drop_grant = None;
+        self.push_data();
+    }
+
+    /// A picture pasted into pane `i` with no text beside it: checked with
+    /// the core's picture limits ([`crate::picture::check`]: 32 MB, 16384 px
+    /// a side, 40 megapixels, PNG, JPEG or WebP, not animated), then to the
+    /// feature that takes pane drops, as a drop of that one picture. Always
+    /// through its dialog: "Do not ask again" covers files the person
+    /// dropped (`DropGrant`, `core:uploads` of handed-in paths), not this,
+    /// so no grant is made here. Never while something covers the panes.
+    pub(crate) fn pane_paste_image(&mut self, i: usize, png: &[u8]) {
+        if self.panes_covered() {
+            return self.notify("Close what is open first: nothing was pasted", false);
+        }
+        let Some(p) = self.panes.get(i) else { return };
+        let Some(sandbox) = p.sandbox.clone() else {
+            return self.notify("This pane shows no sandbox: the picture was not pasted", false);
+        };
+        let thread = p.thread.clone();
+        let why = match crate::picture::check(png, crate::picture::Limits::default()) {
+            Err(e) => Some(e),
+            Ok(_) if crate::picture::sniff(png) != Some(image::ImageFormat::Png) => Some("not a PNG picture".into()),
+            Ok(_) => None,
+        };
+        if let Some(e) = why {
+            return self.notify(format!("The picture was not pasted: {e}"), true);
+        }
+        let Some((f, on)) = feat::FEATURES.iter().find_map(|f| f.on_pane_drop.map(|on| (*f, on))) else {
+            return self.notify("Nothing here takes pictures pasted into a terminal", false);
+        };
+        log::info!("pane {}: a picture of {} bytes pasted", i + 1, png.len());
+        let data = self.feat_ctx_data();
+        let acts = on(&Ctx { data: &data }, &feat::PaneDrop { paths: vec![], skip_dialog: false, sandbox, thread, picture: Some(png.to_vec()) });
+        self.feature_actions(f, &format!("feature:{}", f.name), acts);
         self.push_data();
     }
 

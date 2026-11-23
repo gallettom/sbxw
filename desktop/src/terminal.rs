@@ -377,6 +377,9 @@ pub struct TerminalState {
     file_hover: Option<FileHover>,
     /// A path the person clicked (modifier + click), until the shell takes it.
     file_click: Option<String>,
+    /// A picture the person pasted with no text beside it (PNG, Rune's),
+    /// until the shell takes it: never typed here, the shell uploads it.
+    pasted_image: Option<Vec<u8>>,
     /// Times the file-path detection ran (a test reads it: it must not run
     /// without the modifier).
     pub file_probes: u64,
@@ -530,6 +533,7 @@ impl TerminalState {
             hover_link: None,
             file_hover: None,
             file_click: None,
+            pasted_image: None,
             file_probes: 0,
             want: None,
             room: None,
@@ -1254,9 +1258,9 @@ impl TerminalState {
                     if let Some(t) = lens(s) {
                         if debug_keys() {
                             let bracketed = t.mode().contains(TermMode::BRACKETED_PASTE);
-                            eprintln!("sbxw keys: paste (read_clipboard) pane {} {} bytes{}", t.id, content.text().len(), if bracketed { " bracketed" } else { "" });
+                            eprintln!("sbxw keys: paste (read_clipboard) pane {} {} bytes{}{}", t.id, content.text().len(), if bracketed { " bracketed" } else { "" }, if content.image().is_some() { " and a picture" } else { "" });
                         }
-                        t.paste(content.text());
+                        t.paste_content(content);
                     }
                 });
                 debug_key(ev, &pane, tx, "paste (clipboard read asked)");
@@ -1272,6 +1276,24 @@ impl TerminalState {
         let taken = self.on_key(ev);
         debug_key(ev, &pane, tx, if taken { "sent to the program" } else { "not taken" });
         taken
+    }
+
+    /// A paste from the clipboard: its text when it has any (as ever),
+    /// else its picture, kept for the shell to upload
+    /// ([`Self::take_pasted_image`]). Text wins when both are there: a file
+    /// copied in Finder carries its name as text and its icon as a picture,
+    /// and a terminal always took the text.
+    pub fn paste_content(&mut self, content: &rune::ClipboardContent) {
+        match (content.text().is_empty(), content.image()) {
+            (true, Some(img)) => self.pasted_image = Some(img.png().to_vec()),
+            _ => self.paste(content.text()),
+        }
+    }
+
+    /// The picture pasted with no text, once (the shell uploads it to the
+    /// pane's sandbox and types its path, as a dropped file's).
+    pub fn take_pasted_image(&mut self) -> Option<Vec<u8>> {
+        self.pasted_image.take()
     }
 
     /// Pastes `text` (bracketed when the program asked).
