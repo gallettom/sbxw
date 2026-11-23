@@ -29,7 +29,7 @@ fn plan(id: &str, state: PlanState, threads: Vec<PlanThread>) -> Plan {
 }
 
 fn merge(state: MergeState, order: &[&str], results: Vec<MergeResult>) -> Option<Merge> {
-    Some(Merge { order: order.iter().map(|s| s.to_string()).collect(), note: String::new(), state, base: None, results, distillate: vec![] })
+    Some(Merge { order: order.iter().map(|s| s.to_string()).collect(), note: String::new(), state, base: None, results, distillate: vec![], abandoned_ms: None })
 }
 
 fn ok(t: &str, ok: bool) -> MergeResult {
@@ -67,6 +67,20 @@ fn every_plan_and_thread_state_has_its_column() {
     assert_eq!(one(PlanState::Approved, Done, merge(MergeState::Merged, &["a"], vec![]), false), (Merged, vec![]));
     assert_eq!(one(PlanState::Approved, Working, None, true), (Progress, vec![Mark::TeamEnded]));
     assert_eq!(one(PlanState::Approved, Done, merge(MergeState::Merged, &["a"], vec![]), true), (Merged, vec![]));
+}
+
+/// An abandoned merge is no merge to do: a done thread goes back to Test,
+/// marked; one a failed merge merged before it was abandoned stays merged;
+/// git's answer (branch gone) still wins over Test, the mark kept.
+#[test]
+fn an_abandoned_merge_leaves_its_threads_in_test_marked() {
+    let mut p = plan("p", PlanState::Approved, vec![th("a", ThreadState::Done, None), th("b", ThreadState::Done, None), th("c", ThreadState::Done, None)]);
+    p.merge = merge(MergeState::Abandoned, &["a", "b", "c"], vec![ok("a", true), ok("b", false)]);
+    p.ext.insert("c".into(), Ext::Gone);
+    assert_eq!(column_of(&p, &p.threads[0]), (Column::Merged, vec![]));
+    assert_eq!(column_of(&p, &p.threads[1]), (Column::Test, vec![Mark::MergeAbandoned]));
+    assert_eq!(column_of(&p, &p.threads[2]), (Column::Merged, vec![Mark::MergeAbandoned, Mark::BranchGone]));
+    assert_eq!((Mark::MergeAbandoned.label(), Mark::MergeAbandoned.tone()), ("merge abandoned", "neutral"));
 }
 
 #[test]
