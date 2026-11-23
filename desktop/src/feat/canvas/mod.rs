@@ -568,7 +568,16 @@ impl State {
                 let (x, y) = if d.lr() { (b[0] + b[2] + sc::diagram::RANK_GAP + w / 2.0, d.nodes.first().map_or(h / 2.0, |n| n.y + n.h / 2.0)) } else { (d.nodes.first().map_or(w / 2.0, |n| n.x + n.w / 2.0), b[1] + b[3] + sc::diagram::RANK_GAP + h / 2.0) };
                 self.diagram_op(&did, sc::diagram::Op::AddAt { x: x.round(), y: y.round() })
             }
-            "relayout" => self.diagram_op(&did, sc::diagram::Op::Relayout),
+            "relayout" => {
+                let st = &self.diagrams[&did];
+                if st.saving || st.dirty {
+                    return Err("Not laid out: your last change is still being saved. Try again in a moment.".into());
+                }
+                if st.conflict.is_some() {
+                    return Err("Not laid out: reload the diagram or reapply your change first.".into());
+                }
+                self.diagram_op(&did, sc::diagram::Op::Relayout)
+            }
             "undo" => self.history(&did, false),
             "redo" => self.history(&did, true),
             "rename" => {

@@ -91,15 +91,16 @@ end
 local function diagram_bar(ui, wide)
   local d = ui.diagram
   if not d then return false end
-  local out = { gap = 6, w = "full", key = "canvas-diagram-bar", px = 8, py = 6, radius = "xs", fill = "elevated" }
+  local out = { gap = 4, w = "full", key = "canvas-diagram-bar", px = 8, py = 4, radius = "xs", fill = "elevated" }
   local off = d.idle or d.busy
   out[#out + 1] = row{ gap = 4, w = "full", align = "center",
     icon{ "canvas", size = 14, color = "purple" },
     text{ d.idle and "Diagrams" or (d.selected or ("Diagram · " .. (d.title or ""))), size = "sm", color = "text-bright", truncate = true, grow = 1, key = "canvas-diagram-name" },
     button{ wide and "Add node" or nil, icon = "plus", key = "canvas-diagram-add", on = "diagram", arg = "add", dense = true, variant = "ghost", disabled = off,
       help = "Add a node to this diagram (or double click its ground where it goes)" },
-    button{ wide and "Lay out again" or nil, icon = "grid", key = "canvas-diagram-relayout", on = "diagram", arg = "relayout", dense = true, variant = "ghost", disabled = off,
-      help = "Lay the whole diagram out again, as the agent's was: one step, undo brings your places back" },
+    button{ wide and "Lay out again" or nil, icon = "grid", key = "canvas-diagram-relayout", on = "diagram", arg = "relayout", dense = true, variant = "ghost",
+      disabled = off or (d.relayout_why ~= nil),
+      help = d.relayout_why or "Lay out again: rearranges the whole diagram (every node, your places too), as the agent's was laid out. One step: Undo puts every node back" },
     button{ "Undo", key = "canvas-diagram-undo", on = "diagram", arg = "undo", dense = true, variant = "ghost", disabled = not d.undo, help = "Undo the last change to this diagram (⌘Z)" },
     button{ "Redo", key = "canvas-diagram-redo", on = "diagram", arg = "redo", dense = true, variant = "ghost", disabled = not d.redo, help = "Redo (⇧⌘Z)" } }
   out[#out + 1] = row{ gap = 8, w = "full",
@@ -107,7 +108,7 @@ local function diagram_bar(ui, wide)
     text{ d.hint or "", size = "xs", color = "text-muted", truncate = true, grow = 1, help = d.hint },
     text{ d.status or "", size = "xs", color = "text-muted", key = "canvas-diagram-status" } }
   if d.conflict then
-    out[#out + 1] = column{ gap = 6, w = "full", key = "canvas-diagram-conflict",
+    out[#out + 1] = column{ gap = 8, w = "full", key = "canvas-diagram-conflict",
       text{ d.conflict, size = "sm", color = "amber", wrap = true },
       row{ gap = 8,
         button{ "Reload", key = "canvas-diagram-reload", on = "diagram", arg = "reload", dense = true, help = "Take the newer version; undo brings your change back" },

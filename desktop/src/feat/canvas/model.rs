@@ -514,7 +514,9 @@ fn diagram_view(s: &State, c: &Manifest) -> J {
         "\"{title}\" changed elsewhere (revision {}) while you edited it: your last change was not saved. Reload takes the newer version (undo brings yours back); Reapply my change saves yours over it.", d.rev));
     json!({ "id": did, "title": title, "kind": st.cur.kind.name(), "nodes": st.cur.nodes.len(), "edges": st.cur.edges.len(),
         "selected": selected, "part": match part { dg::Part::Node(_) => "node", dg::Part::Edge(_) => "edge", dg::Part::Whole => "whole" },
-        "undo": undo > 0, "redo": redo > 0, "status": status, "hint": hint, "conflict": conflict, "busy": st.relayout })
+        "undo": undo > 0, "redo": redo > 0, "status": status, "hint": hint, "conflict": conflict, "busy": st.relayout,
+        // Lay out again waits for the save in flight (it rearranges what was saved).
+        "relayout_why": if st.relayout { Some("Laying out again: a moment") } else if st.saving || st.dirty { Some("Wait: your last change is still being saved") } else if st.conflict.is_some() { Some("Reload or reapply your change first") } else { None } })
 }
 
 /// The sessions of `sb` a send or an ask may go to, one per place as the

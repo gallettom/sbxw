@@ -653,3 +653,43 @@ fn a_diagram_change_counts_in_the_send_and_send_keeps_its_one_confirmation() {
 }
 
 
+
+#[test]
+fn lay_out_again_waits_for_the_save_in_flight_and_its_undo_is_one_save() {
+    let mut w = World::new("diagrams");
+    w.open();
+    w.hold = vec!["cv-dsave:"];
+    w.surface(CanvasEvent::Select { target: Some(FLOW.into()) });
+    w.surface(CanvasEvent::Diagram { item: FLOW.into(), op: Op::Move { node: "plan".into(), x: 400.0, y: 140.0 } });
+    assert!(w.ui()["diagram"]["relayout_why"].as_str().unwrap().contains("still being saved"));
+    assert!(w.intent("canvas_diagram", json!({ "op": "relayout" })).unwrap_err().contains("still being saved"));
+    // The save answered: laid out by the daemon (the stand-in's layout here), every node placed.
+    w.hold.clear();
+    let first = w.held.remove(0);
+    let (code, v) = crate::feat::answer_from(&mut w.daemon, "POST", &first.path, &first.body, &mut |_, _| {});
+    let more = on_answer(&w.cx(), &first, Ok((code, v)));
+    w.run(more);
+    assert!(w.ui()["diagram"]["relayout_why"].is_null());
+    let before = cur(FLOW);
+    let a = w.intent("canvas_diagram", json!({ "op": "relayout" })).unwrap();
+    w.run(a);
+    let sent = *dsaves(&w).last().unwrap();
+    assert!(sent.body["diagram"]["nodes"].as_array().unwrap().iter().all(|n| n.get("x").is_none()), "every node sent without a place");
+    assert!(cur(FLOW).nodes.iter().all(|n| n.placed == dg::Placed::Layout));
+    // Undo: every node back where it was, in one save.
+    let n = dsaves(&w).len();
+    let a = w.intent("canvas_diagram", json!({ "op": "undo" })).unwrap();
+    w.run(a);
+    assert_eq!(dsaves(&w).len(), n + 1, "one save");
+    let back = cur(FLOW);
+    assert_eq!(back.nodes.iter().map(|n| (n.x, n.y)).collect::<Vec<_>>(), before.nodes.iter().map(|n| (n.x, n.y)).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_canvas_without_diagrams_as_an_older_daemon_sends_shows_no_diagram_bar() {
+    let mut w = World::new("basic");
+    w.open();
+    assert!(w.ui()["diagram"].is_null());
+    assert!(STATE().lock().unwrap().diagrams.is_empty());
+    assert!(w.calls.iter().all(|c| !c.path.contains("/diagrams/")));
+}
