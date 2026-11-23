@@ -200,6 +200,17 @@ page instead of the chat.
   where that is acceptable. terminal-mac is a pinned, SHA-256-checked
   third-party release run on the host; see
   [its trust notes](../assets/terminal-mac/README.md#trust).
+- **Canvas diagrams:** an agent adds a diagram only to its own sandbox's
+  canvases (the token says which; a body field never does), from a `.json`
+  file whose real path is in the workspace, the home or `/tmp`, never in
+  `~/.sbxw`, `~/.claude`, `~/.ssh`, `~/.config`, `~/.aws`, `~/.gnupg`,
+  `~/.docker` or `~/.kube`. The daemon checks it in full (256 KB, 200 nodes,
+  ids refused rather than cleaned, every text through `canvas::clean`) and
+  generates its id. Your edits reach the agent only with a review round you
+  send (its confirmation unchanged); the relay server then writes the
+  diagram inside the sandbox under `/tmp/sbxw-canvas/<canvas id>/<diagram
+  id>.json`, names made only from ids it checked, files 0600. The daemon
+  writes nothing into a sandbox. See [Relay](relay.md#canvas-reviews).
 - **Plans:** nothing starts until you approve. After approval, a lead and its
   threads message each other without clicks, **inside one sandbox only**. See
   [the lead's trust model](threads-and-lead.md#trust).
@@ -222,7 +233,7 @@ handles such text uses that list, each with its own action:
 |---|---|
 | Text typed into a terminal (`terminal::sanitize_typed`) | removed |
 | A reason on an approval card (`mac::clean_reason`) | becomes a word break |
-| Canvas and ticket texts (`canvas::clean`, `tickets::clean`) | removed |
+| Canvas and ticket texts (`canvas::clean`, `tickets::clean`), diagram titles and labels | removed |
 | A phone's message, device name or canvas remark | the whole text is refused |
 | An uploaded file's name (`uploads::upload_name`) | becomes `_` (only `A-Z a-z 0-9 . - _` survive) |
 | Desktop: a downloaded file's name (`safe::file_name`) | removed |

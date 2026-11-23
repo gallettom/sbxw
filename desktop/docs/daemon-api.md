@@ -178,20 +178,25 @@ when the manifest lists them. Every answer is `{ok, ...}`.
 
 | Route | Body or query | Answer |
 |---|---|---|
-| `GET /api/canvas` | | `canvases` (newest first: `id, sandbox, title, created_ms, updated_ms, shots, rounds, reviews, bytes, draft`), `total_bytes`, `max_canvas_bytes` |
+| `GET /api/canvas` | | `canvases` (newest first: `id, sandbox, title, created_ms, updated_ms, shots, rounds, reviews, bytes, draft, diagrams, draft_diagrams`), `total_bytes`, `max_canvas_bytes` |
 | `POST /api/canvas` | `{sandbox, title}` | `canvas` (a new manifest) |
-| `GET /api/canvas/:id` | | `canvas` (the manifest: `shots, assets, pins, notes, rounds, reviews`), `bytes`. A shot has `moved` (placed by the person) and `cell` (`[row, column, slot]` in its round's grid); a round `cols`, `cell_w`, `slot_w` |
+| `GET /api/canvas/:id` | | `canvas` (the manifest: `shots, assets, pins, notes, rounds, reviews, diagrams`), `bytes`, `diagram_bytes`. A shot has `moved` (placed by the person) and `cell` (`[row, column, slot]` in its round's grid); a round `cols`, `cell_w`, `slot_w`, `diagrams`; a review `diagrams` (how many changed diagrams it sent). `diagrams` is absent when there is none; each is `{id, title, kind, round, added_ms, x, y, w, h, moved, bytes, diagram}`: a node at `(n.x, n.y)` sits at `(x + n.x, y + n.y)` on the surface, `w, h` are the content's far corner. `diagram` is the current version (sbxw's schema, with `rev`). Manifest `version` 2 with diagrams, 1 without |
+| `GET /api/canvas/:id/diagrams/:did` | | `diagram` (one item as in the manifest); 404 for an id the canvas does not hold |
+| `POST /api/canvas/:id/diagrams/:did` | `{rev, diagram}`: `rev` the revision the editor started from, `diagram` the whole new version in sbxw's schema (unknown fields refused; nodes the person placed carry `placed: "person"`; nodes without `x, y` are laid out) | `diagram` (the item saved), `rev` (the new revision). 409 when the diagram moved past `rev` (read it again), 400 with the reason when it fails a check |
 | `GET /api/canvas/:id/images/:file` | | the picture's bytes, its type (PNG, JPEG, WebP), `nosniff`; 404 for a name the manifest does not list |
 | `POST /api/canvas/:id/rename` | `{title}` | `title` |
-| `POST /api/canvas/:id/edit` | `{pins?, notes?, remove_assets, layout: [{id, x, y, w, h}]}`: the unsent pins and notes whole; sent ones never change | `updated_ms, draft` |
+| `POST /api/canvas/:id/edit` | `{pins?, notes?, remove_assets, layout: [{id, x, y, w, h}]}`: the unsent pins and notes whole; sent ones never change. A diagram's id in `layout` moves it (`x, y` only) | `updated_ms, draft` |
 | `POST /api/canvas/:id/assets?name=&x=&y=` | the picture's bytes (20 MB at most; checked by content) | `asset` |
-| `POST /api/canvas/:id/submit` | `{session, assets: {asset id: path in the sandbox}}` (paths under `/tmp/sbxw-uploads/` only) | `review` (its number), `line` (the fixed line the app types) |
+| `POST /api/canvas/:id/submit` | `{session, assets: {asset id: path in the sandbox}}` (paths under `/tmp/sbxw-uploads/` only). Takes the diagrams the person changed too; a round of diagram changes only is allowed | `review` (its number), `line` (the fixed line the app types) |
 | `POST /api/canvas/delete` | `{ids}` and/or `{before_ms}` | `deleted, bytes` |
-| bus event `canvas` | | `{id, sandbox, what}`: `created`, `shots` (the agent added some), `asset`, `edit`, `review`, `read`, `renamed`, `deleted` |
+| bus event `canvas` | | `{id, sandbox, what}`: `created`, `shots` (the agent added some), `diagram` (the agent added or replaced one), `asset`, `edit`, `review`, `read`, `renamed`, `deleted` |
 
 Agent listener (the sandbox is the token's): `POST /api/canvas/shots`
 (`{canvas?, title?, batch, shot: {b64, title, note?, width?, screen?}}`),
-`POST /api/canvas/list`, `POST /api/canvas/read` (`{canvas?}`: `text`).
+`POST /api/canvas/list`, `POST /api/canvas/read` (`{canvas?}`: `text`,
+`diagrams: [{canvas, id, title, rev, lines, json}]`), `POST /api/canvas/diagrams`
+(`{canvas?, batch, diagram: {json, title?, kind?, replace?}}`: `canvas,
+canvas_title, diagram, title, kind, rev, round, nodes, edges, replaced`).
 
 ### Tickets and the Kanban (`src/feat/kanban/`, KANBAN.md)
 
