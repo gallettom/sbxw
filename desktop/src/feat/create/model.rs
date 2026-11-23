@@ -918,6 +918,90 @@ pub fn job_view(j: &Job) -> J {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Hosts sbx denied during a kit install (sbx 0.54; the `denied` progress
+// event, `sbxw_core::progress::Progress::Denied`)
+
+/// One failed kit install and the hosts sbx denied, kept after its bring-up
+/// ended (a kit add that fails on an existing sandbox still ends "ready")
+/// until it is retried or dismissed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Denied {
+    pub sandbox: String,
+    /// `create` (`sbx create` failed) or `kits` (`sbx kit add`).
+    pub step: String,
+    pub kit: Option<String>,
+    pub hosts: Vec<String>,
+    /// `sbx` (named in sbx's message) or `policy_log`.
+    pub source: String,
+    /// `sandbox`, or `global` when the sandbox does not exist (the rule is then every sandbox's).
+    pub allow_scope: String,
+    /// sbx's words, as the daemon clipped them.
+    pub message: String,
+    /// Hosts an allow rule was added for since (this app's own calls).
+    pub allowed: Vec<String>,
+    /// The bring-up to send again on Retry (create's route and body).
+    pub route: Option<&'static str>,
+    pub body: Option<J>,
+    pub clone: Option<(String, String)>,
+}
+
+/// A host as an allow rule takes it: a name of letters, digits, `-` and `.`
+/// (the daemon's are already so; anything else from an event is dropped).
+fn host_ok(h: &str) -> bool {
+    !h.is_empty() && h.len() <= 253 && !h.starts_with(['-', '.']) && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+}
+
+impl Denied {
+    /// From a `denied` event; None for another kind, or no usable host.
+    pub fn from_event(ev: &J) -> Option<Denied> {
+        if ev["kind"] != "denied" {
+            return None;
+        }
+        let mut hosts: Vec<String> = Vec::new();
+        for h in ev["hosts"].as_array()?.iter().filter_map(J::as_str).map(str::trim) {
+            if host_ok(h) && !hosts.iter().any(|x| x == h) {
+                hosts.push(h.to_string());
+            }
+        }
+        if hosts.is_empty() {
+            return None;
+        }
+        let exists = ev["exists"] != false;
+        // The scope follows the daemon's word, and never says "this sandbox"
+        // for one that does not exist.
+        let allow_scope = if !exists || ev["allow_scope"] == "global" { "global" } else { "sandbox" };
+        Some(Denied {
+            sandbox: ev["sandbox"].as_str()?.to_string(),
+            step: ev["step"].as_str().unwrap_or("kits").to_string(),
+            kit: ev["kit"].as_str().map(str::to_string),
+            hosts,
+            source: ev["source"].as_str().unwrap_or("sbx").to_string(),
+            allow_scope: allow_scope.to_string(),
+            message: ev["message"].as_str().unwrap_or("").to_string(),
+            allowed: vec![],
+            route: None,
+            body: None,
+            clone: None,
+        })
+    }
+
+    pub fn view(&self) -> J {
+        let hosts: Vec<J> = self.hosts.iter().map(|h| json!({ "host": h, "allowed": self.allowed.contains(h) })).collect();
+        json!({
+            "sandbox": self.sandbox,
+            "step": self.step,
+            "kit": self.kit,
+            "hosts": hosts,
+            "left": self.hosts.iter().filter(|h| !self.allowed.contains(h)).count(),
+            "source": self.source,
+            "allow_scope": self.allow_scope,
+            "message": self.message,
+            "can_retry": self.body.is_some(),
+        })
+    }
+}
+
 /// How a bring-up stands in the status bar (shell/statusbar.rs).
 #[derive(Debug, Clone, PartialEq)]
 pub enum BarState {

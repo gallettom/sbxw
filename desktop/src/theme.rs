@@ -265,6 +265,14 @@ impl Mode {
         let s = s.trim().to_ascii_lowercase();
         Mode::ALL.into_iter().find(|m| m.name() == s)
     }
+    /// Whether its ground is light (the Canvas's "Follow theme" picks the
+    /// white ground for a light theme). No theme is light yet; a new one
+    /// must say.
+    pub fn light(self) -> bool {
+        match self {
+            Mode::Dark | Mode::Graphite => false,
+        }
+    }
     /// The next theme in [`Mode::ALL`], round.
     pub fn next(self) -> Mode {
         let i = Mode::ALL.iter().position(|m| *m == self).unwrap_or(0);
@@ -351,6 +359,139 @@ pub const ON_LIGHT_GROUND: &[(&str, u32)] = &[
     ("purple", 0x8250df),
     ("cyan", 0x1b7c83),
     ("pill-danger", 0xcf222e),
+];
+
+/// The Canvas's own tokens: what the canvas surface (`surface_canvas.rs`)
+/// draws on its ground. The ground is the person's choice (White, Dark or
+/// Follow theme), and no app theme is light, so the white ground has its own
+/// palette here ([`CANVAS_WHITE`]); the dark ground reads the active theme's
+/// tokens through [`CANVAS_DARK`], exactly the colours the canvas had before
+/// the white ground existed. `canvas-dot` is decorative (quiet on purpose:
+/// about 1.6:1 on white), and so are `canvas-mat-edge` and `canvas-line`;
+/// every other pair is in [`CANVAS_PAIRS`].
+pub const CANVAS_WHITE: &[(&str, u32)] = &[
+    ("canvas-ground", 0xffffff),
+    ("canvas-dot", 0xc9cdd3),
+    // A shot's mat, a shade off the ground, and its hairline.
+    ("canvas-mat", 0xf6f8fa),
+    ("canvas-mat-edge", 0xd0d7de),
+    // A picture's frame, and its ground while its pixels load.
+    ("canvas-frame", 0x818b98),
+    ("canvas-picture", 0xeaeef2),
+    // Captions, a note's text, a round's label and its rule.
+    ("canvas-text", 0x1f2328),
+    ("canvas-text-muted", 0x59636e),
+    ("canvas-line", 0xd0d7de),
+    // The selection ring, a selected frame, the resize handle.
+    ("canvas-accent", 0x0969da),
+    // An example picture's frame (the dark ground's `amber`).
+    ("canvas-asset", 0x9a6700),
+    // A note card: its fill and its edge.
+    ("canvas-note", 0xfff8c5),
+    ("canvas-note-edge", 0x9a6700),
+    // A pin: its fill (new, sent, selected), its ring and its number.
+    ("canvas-pin", 0x1a7f37),
+    ("canvas-pin-sent", 0x59636e),
+    ("canvas-pin-selected", 0x0969da),
+    ("canvas-pin-ring", 0xffffff),
+    ("canvas-pin-ring-selected", 0x1f2328),
+    ("canvas-pin-text", 0xffffff),
+    // The edge of the resize handle (the ground's colour).
+    ("canvas-handle-edge", 0xffffff),
+];
+
+/// The dark ground: each canvas token is the active theme's token named
+/// here (the colours the canvas always had).
+pub const CANVAS_DARK: &[(&str, &str)] = &[
+    ("canvas-ground", "bg"),
+    ("canvas-dot", "border"),
+    ("canvas-mat", "surface"),
+    ("canvas-mat-edge", "dim"),
+    ("canvas-frame", "border"),
+    ("canvas-picture", "elevated"),
+    ("canvas-text", "text"),
+    ("canvas-text-muted", "text-muted"),
+    ("canvas-line", "border"),
+    ("canvas-accent", "accent"),
+    ("canvas-asset", "amber"),
+    ("canvas-note", "amber-tint"),
+    ("canvas-note-edge", "amber"),
+    ("canvas-pin", "primary"),
+    ("canvas-pin-sent", "text-muted"),
+    ("canvas-pin-selected", "accent"),
+    ("canvas-pin-ring", "bg"),
+    ("canvas-pin-ring-selected", "text-bright"),
+    ("canvas-pin-text", "on-primary"),
+    ("canvas-handle-edge", "bg"),
+];
+
+/// The dots' opacity on the dark ground (`border` at 70 %); opaque on white.
+pub const CANVAS_DOT_ALPHA_DARK: f32 = 0.7;
+
+/// A canvas token's value on the white ground (`light`) or the dark one (the
+/// active theme's).
+pub fn canvas_value(light: bool, name: &str) -> Option<u32> {
+    if light {
+        CANVAS_WHITE.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
+    } else {
+        CANVAS_DARK.iter().find(|(n, _)| *n == name).and_then(|(_, t)| color_value(t))
+    }
+}
+
+/// A canvas token's colour; panics on a name not in [`CANVAS_WHITE`].
+pub fn canvas_c(light: bool, name: &str) -> Color {
+    hex(canvas_value(light, name).unwrap_or_else(|| panic!("no canvas token {name}")))
+}
+
+/// Every pair the canvas draws on its ground, with what it must reach.
+/// Checked on the white ground and on the dark one in every theme, except
+/// [`CANVAS_DARK_AS_BEFORE`].
+pub const CANVAS_PAIRS: &[(&str, &str, Need)] = &[
+    // Captions (title, second line) under a picture, on the ground; a
+    // round's label; a note's title and text on its card; a picture's
+    // "cannot be shown" line on its loading ground.
+    ("canvas-text", "canvas-ground", Need::Text),
+    ("canvas-text-muted", "canvas-ground", Need::Text),
+    ("canvas-text", "canvas-note", Need::Text),
+    ("canvas-text-muted", "canvas-note", Need::Text),
+    ("canvas-text-muted", "canvas-picture", Need::Text),
+    // A pin's number on each of its fills.
+    ("canvas-pin-text", "canvas-pin", Need::Text),
+    ("canvas-pin-text", "canvas-pin-sent", Need::Text),
+    ("canvas-pin-text", "canvas-pin-selected", Need::Text),
+    // A pin's ring against its fill (it sits on any picture: the ring is
+    // what sets it apart), and the pin against the ground.
+    ("canvas-pin-ring", "canvas-pin", Need::Mark),
+    ("canvas-pin-ring", "canvas-pin-sent", Need::Mark),
+    ("canvas-pin-ring-selected", "canvas-pin-selected", Need::Mark),
+    ("canvas-pin", "canvas-ground", Need::Mark),
+    ("canvas-pin-selected", "canvas-ground", Need::Mark),
+    // The selection ring, outside the mat, on the ground; a selected frame
+    // on the mat; a selected note's edge on the card and the ground.
+    ("canvas-accent", "canvas-ground", Need::Mark),
+    ("canvas-accent", "canvas-mat", Need::Mark),
+    ("canvas-accent", "canvas-note", Need::Mark),
+    // An example picture's frame and a picture's frame, on the mat.
+    ("canvas-asset", "canvas-mat", Need::Mark),
+    ("canvas-asset", "canvas-ground", Need::Mark),
+    ("canvas-frame", "canvas-mat", Need::Mark),
+    // A note card's edge on the ground.
+    ("canvas-note-edge", "canvas-ground", Need::Mark),
+];
+
+/// Pairs the dark ground draws as the canvas always did, under the level:
+/// this stage leaves the dark ground's look unchanged (a follow-up can fix
+/// them). The white ground passes them all.
+pub const CANVAS_DARK_AS_BEFORE: &[(&str, &str)] = &[
+    // White numbers on a sent (grey) or selected (blue) pin in the dark
+    // theme: 2.91 and 2.53:1.
+    ("canvas-pin-text", "canvas-pin-sent"),
+    ("canvas-pin-text", "canvas-pin-selected"),
+    // The selected pin's `text-bright` ring on its accent fill: 2.14 (dark)
+    // and 2.44:1 (graphite).
+    ("canvas-pin-ring-selected", "canvas-pin-selected"),
+    // The picture's frame is the quiet `border` hairline on the mat: about 1.4:1.
+    ("canvas-frame", "canvas-mat"),
 ];
 
 /// Tokens whose desktop value differs from app.css, with app.css's value:
@@ -1463,6 +1604,51 @@ mod tests {
         assert_eq!(color_in(Mode::Dark, "bg"), Some(0x0d1117));
         assert_eq!(color_in(Mode::Dark, "focus"), Some(0x58a6ff));
         assert_eq!(color_in(Mode::Dark, "primary"), color_in(Mode::Dark, "green-deep"));
+    }
+
+    /// The canvas's pairs reach WCAG AA on the white ground, and on the dark
+    /// ground in every theme except the few drawn as before (each of which
+    /// still fails somewhere, so the list cannot go stale). Every canvas
+    /// token is on both grounds. Prints the table (`-- --nocapture`).
+    #[test]
+    fn canvas_pairs_reach_the_level_on_both_grounds() {
+        let w: Vec<&str> = CANVAS_WHITE.iter().map(|(n, _)| *n).collect();
+        let d: Vec<&str> = CANVAS_DARK.iter().map(|(n, _)| *n).collect();
+        assert_eq!(w, d, "the same canvas tokens on both grounds, in the same order");
+        let mut bad = vec![];
+        let mut failing = std::collections::HashSet::new();
+        let ratio = |light: bool, fg: &str, bg: &str| contrast(canvas_value(light, fg).expect(fg), canvas_value(light, bg).expect(bg));
+        println!("\nWhite ground\n\n| Foreground | Background | Kind | Ratio |\n|---|---|---|---|");
+        for &(fg, bg, need) in CANVAS_PAIRS {
+            let r = ratio(true, fg, bg);
+            println!("| `{fg}` | `{bg}` | {need:?} | {r:.2} |");
+            if r < need.min() {
+                bad.push(format!("white: {fg} on {bg}: {r:.2} < {}", need.min()));
+            }
+        }
+        for m in MODES {
+            with_mode(m, || {
+                for &(fg, bg, need) in CANVAS_PAIRS {
+                    let r = ratio(false, fg, bg);
+                    if r < need.min() {
+                        failing.insert((fg, bg));
+                        if !CANVAS_DARK_AS_BEFORE.contains(&(fg, bg)) {
+                            bad.push(format!("{m:?} dark ground: {fg} on {bg}: {r:.2} < {}", need.min()));
+                        }
+                    }
+                }
+            });
+        }
+        for p in CANVAS_DARK_AS_BEFORE {
+            assert!(failing.contains(p), "{p:?} passes on the dark ground now: take it off CANVAS_DARK_AS_BEFORE");
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+        // The dots stay quiet but seen on white (decorative, not a pair).
+        let dot = ratio(true, "canvas-dot", "canvas-ground");
+        assert!((1.4..=2.0).contains(&dot), "dots on white: {dot:.2}");
+        // The dark ground is today's canvas: the theme's own tokens.
+        assert_eq!(with_mode(Mode::Dark, || canvas_value(false, "canvas-ground")), color_in(Mode::Dark, "bg"));
+        assert_eq!(with_mode(Mode::Graphite, || canvas_value(false, "canvas-accent")), color_in(Mode::Graphite, "accent"));
     }
 
     /// The active palette is per process, a forced one per thread.

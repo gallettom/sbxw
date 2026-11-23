@@ -262,3 +262,62 @@ mod window {
         assert!(p[1] >= d[1] + d[3] - 0.5, "the next server under the details");
     }
 }
+
+// ---- sbx 0.54: each sandbox's MCP mode and the servers connected now ----
+
+/// The stand-in's answer to `GET /api/sandboxes/:name/mcp`.
+fn mode_of(data: &mut J, sb: &str) -> J {
+    let mut publish = |_: &str, _: J| {};
+    let mut st = crate::feat::Standin { data, publish: &mut publish };
+    crate::feat::setup::standin::answer(&mut st, "GET", &format!("/api/sandboxes/{sb}/mcp"), &J::Null).unwrap().1
+}
+
+#[test]
+fn the_panel_shows_static_dynamic_and_unknown_and_what_is_connected() {
+    let mut d = fixture("full");
+    d["mcp_mode_of"] = json!({ "docs": { "ok": true, "supported": true, "mode": "dynamic", "servers": [] } });
+    // The stand-in: static by default, the fixture's dynamic, an older sbx unknown.
+    let web = mode_of(&mut d, "web-app");
+    assert_eq!((web["mode"].clone(), web["supported"].clone()), (json!("static"), json!(true)));
+    // Loading into a dynamic sandbox connects the server; the read follows the load.
+    let v = run(&d, "mcp_load", json!({ "server": "linear", "sandbox": "docs" })).unwrap();
+    let Action::Call(c) = &v[0] else { panic!() };
+    assert!(c.then.iter().any(|k| k == "mcp_mode"), "{:?}", c.then);
+    let mut publish = |_: &str, _: J| {};
+    let mut st = crate::feat::Standin { data: &mut d, publish: &mut publish };
+    crate::feat::setup::standin::answer(&mut st, "POST", &c.path, &c.body).unwrap();
+    let docs = mode_of(&mut d, "docs");
+    assert_eq!(docs["servers"], json!(["linear"]));
+    let mut old = d.clone();
+    old["standin_sbx_old"] = true.into();
+    let unknown = mode_of(&mut old, "web-app");
+    assert_eq!((unknown["supported"].clone(), unknown["mode"].clone()), (json!(false), json!("unknown")));
+
+    // Opening reads every running sandbox's mode; picking one not read yet reads again.
+    let v = run(&d, "mcp_show", json!({})).unwrap();
+    assert!(v.contains(&Action::Refresh("mcp_mode")));
+    assert!(run(&d, "mcp_pick", json!({ "sandbox": "docs" })).unwrap().contains(&Action::Refresh("mcp_mode")));
+    let mut read = d.clone();
+    read["mcp_mode"] = json!({ "docs": docs.clone() });
+    assert!(!run(&read, "mcp_pick", json!({ "sandbox": "docs" })).unwrap().contains(&Action::Refresh("mcp_mode")));
+
+    // The panel: one row per running sandbox, its mode and what is connected.
+    let (t, _) = render_panel("mcp", SRC, "full", json!({ "mcp_view": { "sandbox": "docs" }, "mcp_mode": { "web-app": web, "docs": docs } }));
+    let all = t.join("\n");
+    assert!(all.contains("mcp-mode-web-app") && all.contains("mcp-mode-docs"), "{all}");
+    assert!(t.iter().any(|s| s == "static") && t.iter().any(|s| s == "dynamic"), "{all}");
+    assert!(all.contains("no server connected") && all.contains("mcp-on-linear") && all.contains("connected in docs") && !all.contains("mcp-on-playwright"), "{all}");
+    // Unknown: an older sbx's note, and a failed read, muted, never red.
+    let (t, tree) = render_panel("mcp", SRC, "full", json!({ "mcp_mode": { "web-app": unknown, "docs": { "ok": true, "supported": true, "mode": "unknown", "servers": [] } } }));
+    let all = t.join("\n");
+    assert!(all.contains("needs sbx 0.54") && t.iter().filter(|s| *s == "unknown").count() == 2, "{all}");
+    fn find<'a>(n: &'a crate::luau::Node, k: &str) -> Option<&'a crate::luau::Node> {
+        if n.key.as_deref() == Some(k) {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| find(c, k))
+    }
+    for sb in ["web-app", "docs"] {
+        assert_eq!(find(&tree, &format!("mcp-mode-word-{sb}")).and_then(|b| b.variant.clone()).as_deref(), Some("neutral"), "{sb}: unknown is quiet, not an error");
+    }
+}

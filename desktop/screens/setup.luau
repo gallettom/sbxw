@@ -39,6 +39,12 @@ local function view(data)
   d.secrets = { github = (type(gh) == "table" and gh.ok ~= false) and gh or nil, services = services, custom = custom }
   d.errors.secrets = err("secrets") or err("github_token")
 
+  -- SSH access to sandboxes (feat/ssh.rs): absent when the daemon has no
+  -- GET /api/ssh (an older sbxw) or its answer is a failure.
+  local ssh = data.ssh
+  d.ssh = (type(ssh) == "table" and ssh.ok ~= false and not app_errors.ssh) and ssh or nil
+  d.ssh_run = data.ssh_run or {}
+
   local rh = data.remote_hosts or {}
   d.hosts = { hosts = rh.hosts or {}, provision = data.provision }
   d.errors.hosts = err("remote_hosts")
@@ -101,10 +107,52 @@ local function gb(m) return string.format("%.1f GB", (tonumber(m) or 0) / 1000) 
 local data_app = nil
 
 -- ── Secrets ─────────────────────────────────────────────────────────────
+-- Older than 0.54 by its version words ("0.53.2"), or nil when unknown.
+local function before_054(v)
+  local a, b = string.match(v or "", "^(%d+)%.(%d+)")
+  if not a then return nil end
+  a, b = tonumber(a), tonumber(b)
+  return a == 0 and b < 54
+end
+
+-- ── SSH access to sandboxes (the *.sbx hosts in ~/.ssh/config) ─────────
+local function ssh_card(s, run)
+  local due = s.refresh_due == true and not run.done
+  local kids = {
+    title("SSH access to sandboxes", due and badge{ "rewrite asked", tone = "amber" }
+      or (s.configured and pill(true, "set up", "") or badge{ "not set up", tone = "neutral" })),
+    note("ssh <sandbox>.sbx reaches a sandbox through the block sbx writes in ~/.ssh/config (sbx setup ssh). Editors that connect over SSH use the same hosts."),
+  }
+  if due then
+    kids[#kids + 1] = row{ w = "full", gap = 8, key = "ssh-due",
+      icon{ "warning", size = 12, color = "amber" },
+      text{ "sbx 0.54 asks to rewrite the SSH configuration", size = "sm", color = "text", wrap = true, grow = 1 },
+      button{ run.busy and "Rewriting…" or "Rewrite SSH configuration", key = "ssh-setup", variant = "primary", on = "ssh_setup",
+        busy = run.busy == true, help = "Runs sbx setup ssh: its block in ~/.ssh/config is written again for sbx " .. (s.sbx or "0.54") },
+    }
+    if (s.refreshed_at or "") ~= "" then
+      kids[#kids + 1] = note("Last written with sbx " .. s.refreshed_at .. ".")
+    end
+  elseif run.done then
+    kids[#kids + 1] = note("Rewritten" .. ((run.refreshed_at and (" with sbx " .. run.refreshed_at)) or "") .. ".", "green")
+  elseif not s.configured then
+    kids[#kids + 1] = note("Not set up on this machine. From a terminal: sbxw ssh --setup")
+  elseif before_054(s.sbx) then
+    kids[#kids + 1] = note("Written by sbx " .. s.sbx .. ". The one-click rewrite needs sbx 0.54.")
+  elseif (s.refreshed_at or "") ~= "" then
+    kids[#kids + 1] = note("Up to date: written with sbx " .. s.refreshed_at .. ".")
+  end
+  if run.error and not run.busy then
+    kids[#kids + 1] = text{ "Not rewritten: " .. run.error, wrap = true, size = "sm", color = "red", key = "ssh-error" }
+  end
+  return card(kids)
+end
+
 local function secrets_tab(state, d)
   local sec = d.secrets or {}
   local gh = sec.github
   local out = { gap = 12 }
+  if d.ssh then out[#out + 1] = ssh_card(d.ssh, d.ssh_run) end
 
   local services = {}
   for _, x in ipairs(sec.services or {}) do
@@ -423,6 +471,9 @@ return {
       state.host.sent = trim(state.host.name)
       return intent("host_save", host_args(state.host))
     end,
+
+    -- SSH access to sandboxes
+    ssh_setup = function() return intent("ssh_setup") end,
 
     -- Voice
     voice_install = function() return intent("voice_install") end,

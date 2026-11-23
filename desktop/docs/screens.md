@@ -368,10 +368,31 @@ without the screen running; presses that mean something (select, move,
 resize, place a pin, a note, an example picture) go to the owning feature's Rust as
 `SurfaceEvent::Canvas`, never to the screen. It takes the space its parent
 leaves. An `id` no feature declares in `surfaces` draws nothing and hears
-nothing. Each picture sits on a mat (`surface`, a `dim` hairline); a
-selected item has an accent ring outside it, and a resize handle on its
-corner only when it is drawn large enough (8 % of its smaller side, 6 to
-12 pt). Fit leaves room for the round bands above and the captions below.
+nothing. Each picture sits on a mat (`canvas-mat`, a `canvas-mat-edge`
+hairline); a selected item has an accent ring outside it, and a resize
+handle on its corner only when it is drawn large enough (8 % of its smaller
+side, 6 to 12 pt). Fit leaves room for the round bands above and the
+captions below.
+
+**The ground** is the scene's choice (Canvas's bar: `canvas_ground`, kept as
+`features.canvas.ground`): White (the default), Dark (the theme's `bg`), or
+Follow theme (Dark for the dark themes; a light theme, if one comes, picks
+White). Everything on it is drawn in the canvas's own tokens (`canvas-*` in
+`theme.rs`): a fixed light palette on white, the active theme's tokens on
+dark, so the dark ground looks as the canvas always did. Their contrast is
+`theme::tests::canvas_pairs_reach_the_level_on_both_grounds`.
+
+**The dot grid** sits inside the world, under every item, so a live pan or
+pinch moves it without a build. Dots are 24 world points apart at 100 %;
+the spacing doubles as you zoom out and halves as you zoom in, so it stays
+16 to 32 pt on screen. A dot is 1 pt in radius on screen (1.25 on dark,
+`border` at 70 %). One build draws only the dots of the view and a 50 %
+margin, as one shape (a zero-length round line per dot, one small GPU quad
+each), at most 16,000: the margin shrinks first, and a view too large even
+without it gets a coarser spacing. A 2560 x 1440 pt full-screen view at
+16 pt is about 14,600 dots. With `SBXW_DESKTOP_PERF=1` each build logs
+`perf: canvas dots: <n> at <step> pt <ms> ms`. The outgoing spacing does not
+fade yet when the level changes.
 
 | Prop | Value | Effect |
 |---|---|---|
@@ -1448,6 +1469,29 @@ pressed: if the list now holds another number, nothing is sent and an error
 says the list changed. A request that holds something is never dismissed
 this way.
 
+**sbx 0.54: an automatic host port.** Publish with the host port empty
+sends no `host_port`: sbx picks a free one, and the answer says which
+(`data.network_publish`: `{sandbox, sandbox_port, host_ip, host_port,
+assigned, note, forwarded_port}`, or `{error}`; `{busy}` while it runs,
+the Publish button `port-publish` busy). The row of that port carries
+`port-picked-<spec>` ("sbx picked"), and `port-published` under the form
+says "Published 5173 on 127.0.0.1:49153, the port sbx picked." An older sbx
+publishes on the sandbox port and its `note` shows in amber ("automatic host
+port needs sbx 0.54: ..."). A fixed host port is unchanged (the core's
+dialog).
+
+**sbx 0.54: Why?** Each allowed host of Recent egress has `why-<host>`
+("Why?"): `network_why {sandbox, target}` reads `GET
+/api/sandboxes/:name/policy/check?target=` and the answer shows under the
+host (`why-answer`, closed by `why-close`): allowed or not, `why-rule`
+("Rule: r-12ab", or "No rule named") and sbx's own words `why-raw`, all set
+as text. When sbx names a rule id the panel's rules list has, `why-rm` is
+that list's own remove (`network_rule_rm` for an allow rule, else
+`network_unblock` and its dialog). An older sbx, or a daemon without the
+route: "needs sbx 0.54", muted. `data.network_why`: `{sandbox, target,
+busy, supported, allowed, rule, rule_id, raw, note, removable, error}`.
+`network_why_close` hides it. Both are direct and read only.
+
 ### create
 
 New sandbox (the web UI's `create.js`, and the bring-up cards of
@@ -1558,6 +1602,23 @@ forgotten; a screen only sees names and whether a value is set.
 | `voice_rm` | none | approval | Deletes the models |
 | `voice_warm` | none | direct | Loads the models now |
 
+**SSH access to sandboxes** (`src/feat/ssh.rs`, its own small feature so
+that its busy state and failure stay out of the other dialogs): a card at
+the top of "Secrets and sign-in", from `data.ssh` (`GET /api/ssh`:
+`{configured, refresh_due, sbx, refreshed_at}`). While sbx 0.54 asks for
+it (`refresh_due`), the card says "sbx 0.54 asks to rewrite the SSH
+configuration" with `ssh-setup` ("Rewrite SSH configuration"), and
+Settings in the rail is amber. The press is `ssh_setup` (direct, `POST
+/api/ssh/setup`, `sbx setup ssh`): busy while it runs (`data.ssh_run.busy`),
+then "Rewritten with sbx 0.54.0." and the reminder is gone; a failure shows
+sbx's words in red (`ssh-error`, "Not rewritten: ...") and the button
+stays. An older sbx: "The one-click rewrite needs sbx 0.54.", no button; a
+daemon without the route: no card.
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `ssh_setup` | none | direct | Rewrites the `*.sbx` block of `~/.ssh/config` with the running sbx |
+
 ### mcp, skills, kits
 
 Three overlays over the pane area (`Slot::Overlay`, as Commits and
@@ -1612,6 +1673,17 @@ lists no load state per sandbox (`sbx mcp ls` gives name and type), so a
 row shows its kind (remote blue, local command amber), not whether it is
 loaded, and the list keeps this machine's order; the list's heading says so.
 
+**sbx 0.54: MCP mode.** `mcp-modes` ("Connected now") lists each running
+sandbox (`mcp-mode-<sandbox>`): its mode badge (`mcp-mode-word-<sandbox>`:
+static, dynamic, or unknown) and the servers connected now, or "no server
+connected". Data: `data.mcp_mode`, by sandbox (`GET
+/api/sandboxes/:name/mcp`, one `sbx inspect` each), read when the panel
+opens, when it moves to a sandbox not read yet, and after a load or an
+unload; never on a timer. A server connected in the sandbox picked carries
+`mcp-on-<name>` ("connected in <sandbox>"). An older sbx, a remote sandbox
+or a failed read: "unknown" in a neutral badge and the daemon's note
+("needs sbx 0.54"), never red.
+
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
 | `mcp_show` | `sandbox` (optional) | direct | Opens the panel and reads the servers again, on that sandbox (else the last one used) |
@@ -1651,6 +1723,23 @@ pane, never this panel. Keys: `kits-waiting`, `kit-answer-<sandbox>`,
 `kits-file`, `kit-<name>` (a bundled kit's box), `kit-rm-<ref>`,
 `kits-add`, `kit-push`, `kits-defaults`, `kits-discard`, `kits-save`,
 `kits-more`, `kits-error`.
+
+**sbx 0.54: a kit install that sbx denied hosts for.** The `denied`
+progress event (`{sandbox, step, kit, hosts, source, exists, allow_scope,
+message}`) is kept by create (`data.create.denied`, one per sandbox, until
+Retry or Dismiss; a notice opens this panel). Each shows here as
+`kits-denied-<sandbox>`: what failed, sbx's words (`kits-denied-msg-...`,
+as text), each host with `denied-allow-<sandbox>-<host>` (network's own
+`network_allow`, the core's dialog) or "allowed" once a rule was added,
+`kits-denied-retry-<sandbox>` (`create_retry`: the same bring-up again; the
+daemon adopts the sandbox and adds the kits not applied yet) and
+`kits-denied-dismiss-<sandbox>` (`create_dismiss`). The button reads "Allow
+for this sandbox" only when the rule is the sandbox's (`allow_scope`
+`sandbox`); for a sandbox that does not exist it reads "Allow for all
+sandboxes", and its tooltip and dialog say the rule is every sandbox's. The
+status bar's bring-ups popover lists the first 3 hosts of a failed one with
+the same buttons (`job-allow-<sandbox>-<host>`), then `job-denied-more-<sandbox>`
+("and N more: open Kits").
 
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|

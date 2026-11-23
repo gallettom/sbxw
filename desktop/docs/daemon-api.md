@@ -149,6 +149,23 @@ The terminal (`/ws`, above) with `size=1`: `{"type":"size","cols","rows","owner"
 before the replay and on every change; the grid takes the PTY's size and is
 drawn smaller when another window owns a larger one (TERMINAL.md).
 
+### Covered for sbx 0.54 (features 1, 2, 3, 5, 6)
+
+The contract is `.sbxw-artifacts/reports/sbx-054-features-api.md`. An sbx
+older than 0.54 answers `supported: false` and a `note`; the app shows that
+note muted ("needs sbx 0.54"), never an error. A daemon without a route
+(404) is treated the same way, or the control is absent. Every string from
+sbx (`raw`, `message`, `rule`, server names) is set as text.
+
+| Route | `Daemon` method (feature) | Notes |
+|---|---|---|
+| `POST /api/sandboxes/:name/ports/publish` (changed) | `request` (network, `port_publish`) | `host_port` left out: sbx 0.54 picks. Answer adds `sandbox_port, host_ip, host_port, assigned, note, forwarded_port`; kept as `data.network_publish`, the row of that port says "sbx picked" |
+| `GET /api/sandboxes/:name/policy/check?target=<host>[:<port>]` | `request` (network, `network_why`) | `{supported, target, allowed (true/false/null), rule, rule_id, raw, note}`; the target is checked in the app first (host and optional port). Removing the rule named is the existing `.../policy/rules/rm`, from the rules list's own button |
+| `GET /api/sandboxes/:name/mcp` | data key `mcp_mode` (mcp, lazy, by sandbox) | `{supported, mode: static\|dynamic\|unknown, servers, note}`; read when the panel opens, when it moves to a sandbox not read yet, after a load or unload; never on a timer |
+| `GET /api/ssh` | data key `ssh` (ssh) | `{configured, refresh_due, sbx, refreshed_at}`; Setup's card. `GET /api/state` also carries `ssh_refresh_due` (`daemon_state`), which turns Settings amber |
+| `POST /api/ssh/setup` | `request` (ssh, `ssh_setup`) | `{}` → the same fields as `GET /api/ssh`; 502 with sbx's words. A person's press only |
+| bus event `provision`, `kind: "denied"` | create (`on_event`) | `{sandbox, step: create\|kits, kit, hosts, source: sbx\|policy_log, exists, allow_scope: sandbox\|global, message}`, just before the failure it explains. Kept in `data.create.denied` until Retry (`create_retry`: the same `POST /api/sandboxes/create`, which adopts the existing sandbox) or Dismiss. Allowing is the existing `POST .../policy/rules` through `network_allow` (`global: true` when `allow_scope` is `global`) |
+
 ### Remote access (admin, not covered yet by a screen)
 
 The Mac's side of [remote access](../../docs/security.md#remote-access), on the UI listener with the
@@ -244,7 +261,7 @@ each group, so a later thread can read what it expects.
 | Session history, for Sessions (the feature `monitor`; no web UI caller; docs/session-history.md) | `GET /api/sessions/:sandbox/:session_id/history?before=&limit=` (newest page first; reading subscribes for 120 s), `DELETE /api/sessions/:sandbox/:session_id/history/subscription`, bus event `history` `{sandbox, session_id, seq}` (a nudge without text, only while subscribed); `GET /api/sessions` items gain `ended`, `end_reason`, `continues`, `last_input_from`, `last_input_sender` |
 | Sessions and agents (`main.js`, `panes.js`) | `GET /api/ptys`, `GET /api/hook/log`, `POST /api/focus`, `POST /api/watching`, `GET /api/events` (sessions only), `GET /api/watch-events`, `POST /api/sandboxes/:name/up` |
 | Relay events (`relay.js`) | `GET /api/relay/events` (the app reads `GET /api/relay` after the bus event `relay` instead) |
-| SSH card (`ssh.js`) | its routes |
+| SSH card (`ssh.js`) | its connection details popover (no route; `GET /api/ssh` and `POST /api/ssh/setup` are covered above) |
 | Header leftovers (`main.js`) | `POST /api/initial`, `POST /api/shutdown` |
 | Browser pairing (`browser.js`) | `GET /api/embed/resolve`, `GET`/`POST /api/embed/pairings`, `POST /api/embed/pairings/rm` |
 
@@ -293,6 +310,14 @@ Simulations for headless demos: `POST /api/standin/other-client` with
 publishes its `emphasis` event; `--stats full|partial|none` serves
 `GET /api/stats` and its event; `--approval SECS`, `--jarvis`, `--voice`,
 `--clients N` as the file's header says.
+
+sbx 0.54 fixture keys: `standin_sbx_old` (true: answer as an sbx before
+0.54: publish on the sandbox port with a note, `policy/check` and the MCP
+mode unsupported), `policy_check[sandbox][target]` (a fixed check answer),
+`mcp_mode_of[sandbox]` (the MCP mode; a load into a dynamic sandbox
+connects the server), `ssh` and `standin_ssh_fail` (the SSH card),
+`create_denied[name]` (`{hosts, step, kit}`: sbx denies those hosts at the
+kits step until an allow rule of the stand-in's policy lets each through).
 
 Phase 4, second wave: a `GET /ws/<route>` upgrade goes to the stand-in's own
 `/ws/echo` (tests of `src/socket.rs`: a hello with the connection's number,

@@ -94,6 +94,47 @@ return {
       out[#out + 1] = note("No sandbox is running: start one to load a server into it.")
     end
 
+    -- Each running sandbox's MCP mode and the servers connected now (sbx
+    -- 0.54, data.mcp_mode by sandbox name). An older sbx, a remote sandbox
+    -- or a daemon without the route: "needs sbx 0.54" or the daemon's note,
+    -- muted, never an error. Server names are sbx's: set as text.
+    local modes = data.mcp_mode
+    local mode_errs = type(errors.mcp_mode) == "table" and errors.mcp_mode or {}
+    local connected = {}
+    if type(modes) == "table" and #running > 0 then
+      local rows_ = {}
+      for _, sbn in ipairs(names) do
+        local m = modes[sbn]
+        local why = mode_errs[sbn]
+        local word, tone, line, help
+        if type(m) == "table" and m.supported ~= false and m.ok ~= false then
+          word = m.mode or "unknown"
+          tone = word == "dynamic" and "blue" or "neutral"
+          local list_ = m.servers or {}
+          line = #list_ > 0 and table.concat(list_, ", ") or "no server connected"
+          help = word == "dynamic" and "Dynamic: the agent connects servers as it needs them; this is what is connected now"
+            or (word == "static" and "Static: the servers loaded at start stay connected" or "sbx says something sbxw does not read")
+          if sbn == target then for _, x in ipairs(list_) do connected[x] = true end end
+        elseif type(m) == "table" then
+          word, tone, line = "unknown", "neutral", m.note or "needs sbx 0.54"
+        elseif why then
+          word, tone, line, help = "unknown", "neutral", "needs sbx 0.54", why
+        else
+          word, tone, line = nil, nil, "Reading…"
+        end
+        rows_[#rows_ + 1] = row{ w = "full", gap = 8, key = "mcp-mode-" .. sbn, help = help,
+          text{ sbn, mono = true, color = sbn == target and "text-bright" or "text", truncate = true, w = 140 },
+          word and badge{ word, tone = tone, key = "mcp-mode-word-" .. sbn } or false,
+          text{ line, size = "sm", color = "text-muted", truncate = true, grow = 1, min_w = 0, help = line },
+        }
+      end
+      out[#out + 1] = column{ w = "full", gap = 4, key = "mcp-modes",
+        row{ w = "full", gap = 8,
+          text{ "Connected now", size = "caption", weight = "semibold", color = "text-muted" },
+          text{ "MCP mode of each running sandbox, as sbx inspect says", size = "xs", color = "text-muted", truncate = true, grow = 1, min_w = 0 } },
+        list(rows_) }
+    end
+
     -- The form, on top. Added: the server is listed now, so the form starts
     -- again (as the web UI resets it). The next edit drops the old fields (`reset`).
     local f = state.mcp or {}
@@ -143,8 +184,8 @@ return {
     -- The servers, under the form, the whole width: the first PAGE (+ "Show more").
     out[#out + 1] = row{ w = "full", gap = 8, wrap = true, key = "mcp-list-head",
       text{ "Registered on this machine", size = "caption", weight = "semibold", color = "text-muted" }, badge{ tostring(#servers) },
-      text{ "sbx does not say which servers a sandbox has loaded: Load and Unload are both offered.", size = "xs", color = "text-muted", truncate = true, grow = 1, min_w = 0,
-        help = "sbx does not say which servers a sandbox has loaded: Load and Unload are both offered, and the list keeps the order of this machine's registrations." } }
+      text{ "Load and Unload are both offered; \"connected\" is what sbx says is connected now.", size = "xs", color = "text-muted", truncate = true, grow = 1, min_w = 0,
+        help = "Load and Unload are both offered. A server marked connected is one sbx 0.54 reports connected in the sandbox picked; the list keeps the order of this machine's registrations." } }
     local shown = PAGE + (state.more or 0)
     local rows = {}
     for i, x in ipairs(servers) do
@@ -168,6 +209,7 @@ return {
             text{ x.name, mono = true, truncate = true, color = "text-bright" },
             badge{ x.stdio and "local command" or "remote", tone = x.stdio and "amber" or "blue",
               help = x.stdio and "Runs on this machine, outside any sandbox, each time a sandbox loads it" or "An HTTP endpoint" },
+            connected[x.name] and badge{ "connected in " .. target, tone = "green", key = "mcp-on-" .. x.name } or false,
             spacer{} },
           acts },
       }

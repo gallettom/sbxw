@@ -48,6 +48,8 @@ function attachToEmptyPaneOrMarkReady(name) {
 function addPendingSandbox(name) {
   const existing = pendingCreations.get(name);
   if (existing) return existing;
+  // A card held over from a bring-up sbx refused hosts in: this one replaces it.
+  dropHeldDeniedCard(name);
 
   const { id, card, body } = openBgJob('bg-job-rich sbx-creating');
   body.innerHTML = `<div class="bg-job-label">${escHtml(name)}</div>`
@@ -67,6 +69,9 @@ function addPendingSandbox(name) {
   const pending = {
     /// The corner card's id, for `finishBgJob` when the bring-up ends.
     job: id,
+    card,
+    /// The last `denied` event (hosts sbx refused in a kit install), or null.
+    denied: null,
     statusEl: body.querySelector('.sbx-creating-status'),
     stepsEl: steps,
     /// The plan, as announced up front: `[{ id, label }]`.
@@ -87,8 +92,11 @@ function addPendingSandbox(name) {
 function removePendingSandbox(name) {
   const p = pendingCreations.get(name);
   if (!p) return;
-  finishBgJob(p.job);
   pendingCreations.delete(name);
+  // Hosts sbx refused: the card stays, with its Allow buttons, until the
+  // person dismisses it or retries (see `renderDeniedHosts` in create.js).
+  if (p.denied) holdDeniedCard(name, p);
+  else finishBgJob(p.job);
   renderSidebar();
 }
 
@@ -151,6 +159,10 @@ function applyProvisionEvent(ev) {
     p.detail = '';
   } else if (ev.kind === 'detail') {
     p.detail = ev.text || '';
+  } else if (ev.kind === 'denied') {
+    p.denied = ev;
+    renderDeniedHosts(ev.sandbox, p);
+    return;
   } else {
     return;
   }

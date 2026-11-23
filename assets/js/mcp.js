@@ -26,6 +26,7 @@ const mcpArgs      = document.getElementById('mcp-args');
 const mcpDir       = document.getElementById('mcp-dir');
 const mcpSave      = document.getElementById('mcp-save');
 const mcpCancel    = document.getElementById('mcp-cancel-edit');
+const mcpModeEl    = document.getElementById('mcp-mode');
 
 let mcpServers = [];
 let mcpEditing = null;   // the name being edited, or null for a new server
@@ -204,11 +205,40 @@ async function mcpRowAction(btn) {
   }
 }
 
+// BEGIN sbx-054 mcp rules
+// The picked sandbox's MCP mode and connected servers (sbx 0.54, through
+// `sbx inspect`), as one line of text. Every word is sbx's: text, not markup.
+function mcpModeLine(name, r) {
+  if (!r || !r.ok) return `${name}: MCP mode not read (${(r && r.error) || 'no answer'})`;
+  if (!r.supported) return `${name}: MCP mode and connected servers ${r.note || 'need sbx 0.54'}`;
+  const mode = ['static', 'dynamic'].includes(r.mode) ? r.mode : 'unknown';
+  const servers = Array.isArray(r.servers) && r.servers.length ? r.servers.join(', ') : 'none';
+  return `${name}: MCP mode ${mode}; connected: ${servers}`;
+}
+// END sbx-054 mcp rules
+
+// One `sbx inspect` per sandbox while the panel is open: when it opens and
+// when the picker moves to a sandbox not asked yet, never on a timer.
+const mcpModeSeen = new Map();
+async function mcpShowMode() {
+  const name = mcpSandbox.value;
+  if (!name) { showNote(mcpModeEl, ''); return; }
+  if (!mcpModeSeen.has(name)) {
+    let r;
+    try { r = await (await fetch(`/api/sandboxes/${encodeURIComponent(name)}/mcp`)).json(); }
+    catch (e) { r = { ok: false, error: e.message }; }
+    mcpModeSeen.set(name, r);
+  }
+  if (mcpSandbox.value === name) showNote(mcpModeEl, mcpModeLine(name, mcpModeSeen.get(name)));
+}
+
 async function openMcpModal() {
   showNote(mcpError, '');
   mcpInspect.classList.add('hidden');
+  mcpModeSeen.clear();
   modalOpen(mcpOverlay);
   mcpRenderSandboxes();
+  mcpShowMode();
   await mcpLoad();
 }
 
@@ -226,7 +256,7 @@ mcpListEl.addEventListener('click', e => {
   const btn = e.target.closest('button[data-act]');
   if (btn) mcpRowAction(btn);
 });
-mcpSandbox.addEventListener('change', mcpRenderList);
+mcpSandbox.addEventListener('change', () => { mcpRenderList(); mcpShowMode(); });
 mcpKind.addEventListener('change', mcpSyncKind);
 mcpHeaders.addEventListener('input', mcpRenderSecrets);
 mcpSave.addEventListener('click', mcpSubmit);

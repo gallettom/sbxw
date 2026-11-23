@@ -130,3 +130,39 @@ fn the_sandbox_picker_puts_it_on_that_sandbox_s_file() {
     assert!(run(&data, "kits_pick", json!({})).is_err());
     assert_eq!(press("kits", SRC, "full", json!({}), "kits-sandbox").len(), 1);
 }
+
+// ---- sbx 0.54: kit installs that failed on hosts sbx denied ----
+
+#[test]
+fn a_failed_kit_install_lists_its_denied_hosts_with_allow_and_retry() {
+    let failure = |scope: &str, allowed: bool| json!({ "create": { "denied": [{
+        "sandbox": "web-app", "step": "kits", "kit": "sbxw:agent-skills", "source": "sbx", "allow_scope": scope, "can_retry": true, "left": if allowed { 1 } else { 2 },
+        "message": "`sbx kit add web-app sbxw:agent-skills` exited with status 1",
+        "hosts": [{ "host": "registry.npmjs.org", "allowed": allowed }, { "host": "github.com", "allowed": false }] }] } });
+    let (t, _) = render_panel("kits", SRC, "full", failure("sandbox", false));
+    let all = t.join("\n");
+    assert!(all.contains("web-app: sbx denied 2 hosts") && all.contains("Installing sbxw:agent-skills failed"), "{all}");
+    assert!(all.contains("`sbx kit add web-app sbxw:agent-skills` exited with status 1"), "sbx's words, as text: {all}");
+    assert_eq!(t.iter().filter(|x| *x == "Allow for this sandbox").count(), 2, "{all}");
+    assert!(!all.contains("Allow for all sandboxes"));
+    // The allow is network's existing intent, scoped to the sandbox.
+    let a = press("kits", SRC, "full", failure("sandbox", false), "denied-allow-web-app-github.com");
+    assert_eq!(a, vec![json!({ "name": "network_allow", "args": { "sandbox": "web-app", "resources": "github.com", "global": false } })]);
+    // One allowed: said so, the other still offered; Retry is create's.
+    let (t, _) = render_panel("kits", SRC, "full", failure("sandbox", true));
+    let all = t.join("\n");
+    assert!(!all.contains("denied-allow-web-app-registry.npmjs.org") && all.contains("allowed") && all.contains("denied-allow-web-app-github.com"), "{all}");
+    let a = press("kits", SRC, "full", failure("sandbox", true), "kits-denied-retry-web-app");
+    assert_eq!(a, vec![json!({ "name": "create_retry", "args": { "sandbox": "web-app" } })]);
+    let a = press("kits", SRC, "full", failure("sandbox", true), "kits-denied-dismiss-web-app");
+    assert_eq!(a, vec![json!({ "name": "create_dismiss", "args": { "sandbox": "web-app" } })]);
+    // A sandbox that does not exist: the rule can only be every sandbox's, and the button says so.
+    let (t, _) = render_panel("kits", SRC, "full", failure("global", false));
+    let all = t.join("\n");
+    assert!(all.contains("Allow for all sandboxes") && !all.contains("Allow for this sandbox") && all.contains("every sandbox on this machine"), "{all}");
+    let a = press("kits", SRC, "full", failure("global", false), "denied-allow-web-app-github.com");
+    assert_eq!(a[0]["args"]["global"], true);
+    // Nothing failed: no card.
+    let (t, _) = render_panel("kits", SRC, "full", json!({}));
+    assert!(!t.iter().any(|x| x.starts_with("kits-denied-")));
+}

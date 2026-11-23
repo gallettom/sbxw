@@ -526,7 +526,11 @@ impl App {
                 memory: Some(cfg.memory.clone()).filter(|m| !m.is_empty()),
             };
             let applied = opts.kits.clone();
-            self.create_with_port_fallback(name, &opts, sink, &mut run).await?;
+            let since = utc_rfc3339(unix_now());
+            if let Err(e) = self.create_with_port_fallback(name, &opts, sink, &mut run).await {
+                self.report_denied(&run, name, progress::CREATE, None, &e, &since).await;
+                return Err(e);
+            }
             created_with_kits = true;
             // A kit that changed was just mirrored to its host under a new
             // directory: the moment the ones it replaces may have become
@@ -701,7 +705,12 @@ impl App {
                     continue;
                 }
                 run.info(format!("applying kit {kit} (this recreates the container; state is kept)"));
-                match self.sbx_for(name).await?.kit_add(n, kit).await {
+                let since = utc_rfc3339(unix_now());
+                let added = self.sbx_for(name).await?.kit_add(n, kit).await;
+                if let Err(e) = &added {
+                    self.report_denied(&run, name, progress::KITS, Some(kit), e, &since).await;
+                }
+                match added {
                     Ok(()) => {
                         let k = kit.clone();
                         let _ = self.store.update(name, |r| r.kits.push(k));
@@ -1428,17 +1437,52 @@ impl App {
         });
     }
 
+    /// After a failed `sbx create` or `sbx kit add`: the hosts sbx refused,
+    /// as a [`Progress::Denied`], when there are any. sbx's own list (0.54,
+    /// through [`sbxw_sbx::SbxFailure`]) first, else what the sandbox's
+    /// policy log blocked since `since`. Says nothing when neither names one.
+    async fn report_denied(&self, run: &Run<'_>, sb: &SandboxRef, step: &str, kit: Option<&String>, e: &anyhow::Error, since: &str) {
+        let Ok(sbx) = self.sbx_for(sb).await else { return };
+        let failure = e.chain().find_map(|c| c.downcast_ref::<sbxw_sbx::SbxFailure>());
+        let message = failure.map_or_else(|| format!("{e:#}"), |f| f.message.clone());
+        let exists = sbx.exists(&sb.name).await;
+        let (hosts, source) = match failure.map(|f| f.denied.clone()).filter(|d| !d.is_empty()) {
+            Some(d) => (d, "sbx"),
+            None if exists => {
+                let mut hosts: Vec<String> = Vec::new();
+                for b in sbx.blocked_since(&sb.name, since).await {
+                    if !b.resource.is_empty() && !hosts.contains(&b.resource) {
+                        hosts.push(b.resource);
+                    }
+                }
+                (hosts, "policy_log")
+            }
+            None => (Vec::new(), "policy_log"),
+        };
+        if let Some(p) = denied_event(step, kit.cloned(), hosts, source, exists, message) {
+            tracing::warn!("'{sb}': sbx refused hosts during {step}");
+            (run.sink)(p);
+        }
+    }
+
     /// For a remote sandbox, forward the host port of a just-published
     /// `ip:host_port:sandbox_port` here, through its host's link.
-    pub(crate) async fn forward_port(&self, sb: &SandboxRef, spec: &str) {
+    /// The local end of the forward, `None` for a local sandbox or when it failed.
+    pub(crate) async fn forward_port(&self, sb: &SandboxRef, spec: &str) -> Option<u16> {
         if sb.is_local() {
-            return;
+            return None;
         }
-        let Some(port) = spec.split(':').rev().nth(1).and_then(|p| p.parse::<u16>().ok()) else { return };
-        let Ok(r) = self.remote(&sb.host).await else { return };
+        let port = spec.split(':').rev().nth(1).and_then(|p| p.parse::<u16>().ok())?;
+        let r = self.remote(&sb.host).await.ok()?;
         match r.link.forward(port).await {
-            Ok(local) => tracing::info!("'{sb}': port {port} on host '{}' → http://{}.{}.localhost:{local}", sb.host, sb.name, sb.host),
-            Err(e) => tracing::warn!("'{sb}': could not forward port {port}: {e:#}"),
+            Ok(local) => {
+                tracing::info!("'{sb}': port {port} on host '{}' → http://{}.{}.localhost:{local}", sb.host, sb.name, sb.host);
+                Some(local)
+            }
+            Err(e) => {
+                tracing::warn!("'{sb}': could not forward port {port}: {e:#}");
+                None
+            }
         }
     }
 }
@@ -1463,6 +1507,30 @@ fn busy_host_ports(specs: &[String]) -> Vec<String> {
         })
         .cloned()
         .collect()
+}
+
+/// The [`Progress::Denied`] for these hosts; `None` when there are none.
+fn denied_event(step: &str, kit: Option<String>, hosts: Vec<String>, source: &str, exists: bool, message: String) -> Option<Progress> {
+    let allow_scope = if exists { "sandbox" } else { "global" };
+    (!hosts.is_empty()).then(|| Progress::Denied { step: step.into(), kit, hosts, source: source.into(), exists, allow_scope: allow_scope.into(), message })
+}
+
+/// `secs` since the epoch as RFC 3339 UTC (`2026-11-23T09:05:00Z`), the
+/// form sbx writes `last_seen` in, for a string comparison against it.
+fn utc_rfc3339(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
 fn unix_now() -> u64 {
@@ -1991,6 +2059,102 @@ mod tests {
         assert!(waiting[0].ends_with("/kits/k8s-tools"), "{waiting:?}");
         assert_eq!(app.sandboxes().await.iter().find(|s| s.name == "myapp").unwrap().kits_waiting, 1);
         assert!(fake.log().iter().any(|c| c.starts_with("kit add myapp")));
+    }
+
+    fn kit_bring_up(dir: &std::path::Path, app: &Arc<App>) -> BringUp {
+        let ws = dir.join("myapp");
+        std::fs::create_dir_all(&ws).unwrap();
+        let myapp = SandboxRef::parse("myapp").unwrap();
+        app.store.update(&myapp, |r| r.workspace = Some(ws.clone())).unwrap();
+        BringUp {
+            name: myapp,
+            workspace: ws,
+            ro: vec![],
+            rw: vec![],
+            carve: vec![],
+            config: Config { kits: vec!["sbxw:k8s-tools".into()], network_allow: vec![], network_deny: vec![], ..Config::default() },
+            extra_ports: vec![],
+            chat: false,
+            api_key: None,
+            template: Default::default(),
+            remote_control: false,
+            chrome: false,
+            git: None,
+            consent: Consent::Checked(vec![]),
+        }
+    }
+
+    fn denied_events(seen: &std::sync::Mutex<Vec<Progress>>) -> Vec<Progress> {
+        seen.lock().unwrap().iter().filter(|p| matches!(p, Progress::Denied { .. })).cloned().collect()
+    }
+
+    #[tokio::test]
+    async fn a_kit_install_sbx_refused_hosts_for_says_which_before_the_warning() {
+        let (dir, app, _fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("myapp", "running")]),
+            Some("kit") => Output::fail(1, "installing kit\nnetwork: connection to registry.npmjs.org:443 denied by policy\nerror: kit install failed"),
+            Some("inspect") => Output::ok(r#"{"name":"myapp","kits":[],"created_version":"v0.51.0"}"#),
+            _ => sbx_answer(a),
+        });
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<Progress>::new()));
+        let s2 = seen.clone();
+        let sink: Sink = Arc::new(move |p| s2.lock().unwrap().push(p));
+        let w = app.provision(kit_bring_up(dir.path(), &app), Some(sink)).await.unwrap();
+        assert!(w.iter().any(|w| w.contains("failed to apply")), "{w:?}");
+        let denied = denied_events(&seen);
+        assert_eq!(denied.len(), 1, "{denied:?}");
+        let Progress::Denied { step, kit, hosts, source, exists, allow_scope, message } = &denied[0] else { unreachable!() };
+        assert_eq!((step.as_str(), source.as_str(), *exists, allow_scope.as_str()), ("kits", "sbx", true, "sandbox"));
+        assert_eq!(hosts, &["registry.npmjs.org".to_string()]);
+        assert!(kit.as_deref().is_some_and(|k| k.ends_with("k8s-tools")), "{kit:?}");
+        assert!(message.contains("kit install failed"), "{message}");
+        // Before the warning that reports the same failure.
+        let all = seen.lock().unwrap().clone();
+        let at = |f: &dyn Fn(&Progress) -> bool| all.iter().position(f).unwrap();
+        assert!(at(&|p| matches!(p, Progress::Denied { .. })) < at(&|p| matches!(p, Progress::Warning { text } if text.contains("failed to apply"))));
+    }
+
+    #[tokio::test]
+    async fn a_kit_failure_naming_no_host_falls_back_to_the_policy_log_or_says_nothing() {
+        // The log's row is "now" or later: blocked during the step.
+        let (dir, app, _fake) = app_with(|a: &[String]| match (a.first().map(String::as_str), a.get(1).map(String::as_str)) {
+            (Some("ls"), _) => crate::testing::ls(&[("myapp", "running")]),
+            (Some("kit"), _) => Output::fail(1, "error: kit install failed"),
+            (Some("inspect"), _) => Output::ok(r#"{"name":"myapp","kits":[],"created_version":"v0.51.0"}"#),
+            (Some("policy"), Some("log")) => Output::ok(r#"{"allowed":[],"blocked":[
+                {"host":"old.example.com:443","rule":"default-deny-all","reason":"no matching allow rule","count":1,"last_seen":"2001-01-01T00:00:00Z"},
+                {"host":"dl.k8s.io:443","rule":"default-deny-all","reason":"no matching allow rule","count":2,"last_seen":"2999-01-01T00:00:00Z"}]}"#),
+            _ => sbx_answer(a),
+        });
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<Progress>::new()));
+        let s2 = seen.clone();
+        let sink: Sink = Arc::new(move |p| s2.lock().unwrap().push(p));
+        app.provision(kit_bring_up(dir.path(), &app), Some(sink)).await.unwrap();
+        let denied = denied_events(&seen);
+        let [Progress::Denied { hosts, source, .. }] = denied.as_slice() else { panic!("{denied:?}") };
+        assert_eq!(source, "policy_log");
+        assert_eq!(hosts, &["dl.k8s.io".to_string()], "only what was blocked since the step began");
+        let (dir, app, _fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("myapp", "running")]),
+            Some("kit") => Output::fail(1, "error: kit install failed"),
+            _ => sbx_answer(a),
+        });
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<Progress>::new()));
+        let s2 = seen.clone();
+        let sink: Sink = Arc::new(move |p| s2.lock().unwrap().push(p));
+        app.provision(kit_bring_up(dir.path(), &app), Some(sink)).await.unwrap();
+        assert!(denied_events(&seen).is_empty());
+    }
+
+    #[test]
+    fn utc_rfc3339_is_the_form_sbx_writes_last_seen_in() {
+        assert_eq!(utc_rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(utc_rfc3339(1_795_424_700), "2026-11-23T09:05:00Z");
+        assert_eq!(utc_rfc3339(951_782_400), "2000-02-29T00:00:00Z");
+        assert!(denied_event("kits", None, vec![], "sbx", true, String::new()).is_none());
+        // A sandbox that is not there cannot scope a rule: the allow is every sandbox's, and says so.
+        let Some(Progress::Denied { allow_scope, .. }) = denied_event("create", None, vec!["a.example.com".into()], "sbx", false, String::new()) else { panic!() };
+        assert_eq!(allow_scope, "global");
     }
 
     #[tokio::test]

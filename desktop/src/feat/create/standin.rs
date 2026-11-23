@@ -13,6 +13,13 @@
 //!   until those exact lines come back as `approved`;
 //! * `create_fail`: `{name: reason}`: that bring-up fails once at its kits
 //!   step, then works on Retry;
+//! * `create_denied`: `{name: {hosts, step, kit}}`: at its kits step sbx
+//!   denies each of `hosts` that no allow rule of the stand-in's network
+//!   policy (`policy[name]`, or a rule for every sandbox) lets through: a
+//!   `denied` event (sbx 0.54), then for `step` `create` the bring-up fails
+//!   (the sandbox does not exist: the allow is every sandbox's), for `kits`
+//!   it ends ready with a warning (the sandbox exists). A create of a name
+//!   listed here adopts the existing sandbox, as the daemon does;
 //! * `create_step_ms`: how long each step takes (default 350).
 
 use super::super::Standin;
@@ -137,7 +144,8 @@ fn bring_up(s: &mut Standin, b: &J, chat: bool) -> (u16, J) {
     if !super::model::valid_name(name.rsplit('~').next().unwrap_or("")) {
         return (400, json!({ "ok": false, "error": format!("'{name}' is not a valid sandbox name") }));
     }
-    if s.data["sandboxes"].as_array().is_some_and(|a| a.iter().any(|x| x["name"] == name.as_str())) {
+    let adopt = s.data["create_denied"][&name].is_object();
+    if !adopt && s.data["sandboxes"].as_array().is_some_and(|a| a.iter().any(|x| x["name"] == name.as_str())) {
         return (400, json!({ "ok": false, "error": format!("a sandbox named {name} already exists") }));
     }
     if !chat {
@@ -165,6 +173,24 @@ fn bring_up(s: &mut Standin, b: &J, chat: bool) -> (u16, J) {
             s.publish_after(ms / 2, "provision", ev(json!({ "kind": "detail", "text": "Pulling image docker/sandbox-templates:claude-code 63%" })));
         }
         if *id == "kits" {
+            let denied = s.data["create_denied"][&name].clone();
+            let left = not_allowed(s.data, &name, &denied["hosts"]);
+            if !left.is_empty() {
+                let create = denied["step"] == "create";
+                let kit = denied["kit"].as_str().unwrap_or("sbxw:agent-skills").to_string();
+                let message = format!("`sbx kit add {name} {kit}` exited with status 1: network access denied for {}", left.join(", "));
+                s.publish_after(ms, "provision", ev(json!({ "kind": "denied", "step": if create { "create" } else { "kits" }, "kit": if create { J::Null } else { kit.clone().into() },
+                    "hosts": left, "source": "sbx", "exists": !create, "allow_scope": if create { "global" } else { "sandbox" }, "message": message })));
+                if create {
+                    s.publish_after(0, "provision", ev(json!({ "kind": "done", "error": message })));
+                    return (502, json!({ "ok": false, "error": message }));
+                }
+                let warning = format!("kit {kit} not installed: {message}");
+                s.publish_after(0, "provision", ev(json!({ "kind": "warning", "text": warning })));
+                s.publish_after(ms, "provision", ev(json!({ "kind": "done" })));
+                add_sandbox(s.data, &name, b, chat);
+                return (200, json!({ "ok": true, "warnings": [warning] }));
+            }
             if let Some(why) = &fail {
                 s.data["create_fail"].as_object_mut().unwrap().remove(&name);
                 s.publish_after(ms, "provision", ev(json!({ "kind": "done", "error": why })));
@@ -173,15 +199,33 @@ fn bring_up(s: &mut Standin, b: &J, chat: bool) -> (u16, J) {
         }
     }
     s.publish_after(ms, "provision", ev(json!({ "kind": "done" })));
-    let ws = if chat { format!("/tmp/sbxw-chat/{name}") } else { b["path"].as_str().unwrap_or("").to_string() };
-    if let Some(a) = s.data["sandboxes"].as_array_mut() {
-        a.push(json!({ "name": name, "agent": "claude", "status": "running", "workspace": ws, "chat": chat }));
-    }
+    add_sandbox(s.data, &name, b, chat);
     let mut out = json!({ "ok": true, "warnings": [] });
     if chat {
         out["name"] = name.into();
     }
     (200, out)
+}
+
+/// The new sandbox in the list (once: an adopted one is there already).
+fn add_sandbox(data: &mut J, name: &str, b: &J, chat: bool) {
+    let ws = if chat { format!("/tmp/sbxw-chat/{name}") } else { b["path"].as_str().unwrap_or("").to_string() };
+    if let Some(a) = data["sandboxes"].as_array_mut() {
+        if !a.iter().any(|x| x["name"] == name) {
+            a.push(json!({ "name": name, "agent": "claude", "status": "running", "workspace": ws, "chat": chat }));
+        }
+    }
+}
+
+/// The hosts no allow rule of the stand-in's policy lets `sandbox` reach:
+/// its own rules (`policy[sandbox]`), or any sandbox's rule for every sandbox.
+fn not_allowed(data: &J, sandbox: &str, hosts: &J) -> Vec<String> {
+    let allowed = |h: &str| {
+        data["policy"].as_object().into_iter().flat_map(|m| m.iter()).any(|(sb, p)| {
+            p["rules"]["rows"].as_array().into_iter().flatten().any(|r| r[5] == h && r[4] == "allow" && (sb == sandbox || r[3] == "all"))
+        })
+    };
+    hosts.as_array().into_iter().flatten().filter_map(J::as_str).filter(|h| !allowed(h)).map(str::to_string).collect()
 }
 
 #[cfg(test)]

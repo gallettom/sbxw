@@ -710,6 +710,12 @@
       <code>Host *.sbx</code> block already carries the user, the key and a
       ProxyCommand, so the greyed fields must stay <strong>empty</strong>.
     </p>
+    <div class="ssh-refresh hidden" id="ssh-refresh" role="status">
+      <p class="pop-note">sbx 0.54 asks to rewrite its SSH configuration: the older
+        <code>Host *.sbx</code> block let crafted host names run commands with older OpenSSH clients.</p>
+      <button class="btn-create" id="ssh-refresh-btn" type="button" title="Runs sbx setup ssh on this Mac">Rewrite SSH configuration</button>
+      <span class="ports-error-msg hidden" id="ssh-refresh-error"></span>
+    </div>
     <div id="ssh-fields"></div>
     <p class="pop-note pop-note-dim">
       Needs <code>sbxw ssh --setup</code> once on this Mac; it writes the
@@ -848,7 +854,7 @@
             <div class="add-port-row">
               <input id="add-sbx-port"  class="port-input w-port" type="number" min="1" max="65535" placeholder="3000" title="Sandbox port">
               <span class="port-arrow">→</span>
-              <input id="add-host-port" class="port-input w-port" type="number" min="1" max="65535" placeholder="same" title="Host port">
+              <input id="add-host-port" class="port-input w-port" type="number" min="1" max="65535" placeholder="auto" title="Host port (optional): left empty, sbx 0.54 picks a free one; an older sbx uses the sandbox port">
               <span class="port-at">@</span>
               <input id="add-host-ip"   class="port-input w-ip"   type="text" placeholder="127.0.0.1" title="Host IP">
             </div>
@@ -857,6 +863,7 @@
               <button class="btn-add-mapping" id="btn-add-mapping" disabled>＋ Add</button>
             </div>
             <span class="ports-error-msg hidden" id="ports-add-error"></span>
+            <span class="ports-result-msg hidden" id="ports-add-result" role="status"></span>
           </div>
 
           <div class="ports-section-label" style="margin-top:.9rem">Host aliases <span class="label-aside label-aside-dim">(/etc/hosts)</span></div>
@@ -1324,6 +1331,7 @@
               <select id="mcp-sandbox" class="field-input" aria-label="Sandbox"></select>
             </label>
           </div>
+          <p class="mcp-mode hidden" id="mcp-mode" role="status"></p>
           <div class="tpl-list" id="mcp-list"><p class="repo-note">Loading…</p></div>
           <pre class="policy-raw hidden" id="mcp-inspect"></pre>
         </section>

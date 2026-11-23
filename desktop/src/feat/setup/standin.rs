@@ -8,7 +8,8 @@
 //! Fixture keys (each one route's answer): `secrets`, `github_token`, `kits`,
 //! `my_skills`, `mcp`, `remote_hosts`, `voice`, plus `sandbox_skills_of`
 //! (sandbox name → `GET /api/sandboxes/:name/skills`) and `mcp_inspect_of`
-//! (server → its inspect text), and `standin_voice_steps` (true: each
+//! (server → its inspect text), `mcp_mode_of` (sandbox →
+//! `GET /api/sandboxes/:name/mcp`, sbx 0.54), `standin_sbx_old` (true: answer as an sbx before 0.54), and `standin_voice_steps` (true: each
 //! `GET /api/voice` moves a running download a quarter on).
 
 use crate::feat::Standin;
@@ -84,7 +85,7 @@ pub fn answer(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u
     let segs: Vec<String> = path.trim_start_matches('/').split('/').map(decode).collect();
     let s: Vec<&str> = segs.iter().map(String::as_str).collect();
     let mine = matches!(s.as_slice(), ["api", "secrets", ..] | ["api", "github-token", ..] | ["api", "kits"] | ["api", "my-skills", ..] | ["api", "mcp", ..] | ["api", "remote-hosts", ..] | ["api", "voice", ..])
-        || matches!(s.as_slice(), ["api", "sandboxes", _, "skills", ..] | ["api", "sandboxes", _, "mcp", _]);
+        || matches!(s.as_slice(), ["api", "sandboxes", _, "skills", ..] | ["api", "sandboxes", _, "mcp", ..]);
     if !mine {
         return None;
     }
@@ -96,6 +97,15 @@ pub fn answer(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u
         (true, ["api", "kits"]) => served(&d["kits"]),
         (true, ["api", "my-skills"]) => served(&d["my_skills"]),
         (true, ["api", "mcp"]) => served(&d["mcp"]),
+        // sbx 0.54's MCP mode of a sandbox: `mcp_mode_of[sandbox]`, else
+        // static with nothing connected; `standin_sbx_old`: not supported.
+        (true, ["api", "sandboxes", sb, "mcp"]) => {
+            if d["standin_sbx_old"] == true {
+                return Some((200, json!({ "ok": true, "supported": false, "mode": "unknown", "servers": [], "note": "needs sbx 0.54" })));
+            }
+            let v = &d["mcp_mode_of"][*sb];
+            served(&if v.is_null() { json!({ "ok": true, "supported": true, "mode": "static", "servers": [] }) } else { v.clone() })
+        }
         (true, ["api", "remote-hosts"]) => served(&d["remote_hosts"]),
         (true, ["api", "voice"]) => {
             voice_tick(st);
@@ -216,6 +226,19 @@ pub fn answer(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u
         (false, ["api", "mcp", server, "auth"]) => Some((200, json!({ "ok": true, "text": format!("signed in to {server}") }))),
         (false, ["api", "sandboxes", sb, "mcp", verb]) => {
             eprintln!("standin: {verb} {} in {sb}", body["server"]);
+            // A dynamic sandbox connects and drops servers as they are loaded.
+            let server = body["server"].clone();
+            let m = &mut d["mcp_mode_of"][*sb];
+            if m["mode"] == "dynamic" {
+                if !m["servers"].is_array() {
+                    m["servers"] = json!([]);
+                }
+                let l = m["servers"].as_array_mut().expect("array");
+                l.retain(|x| *x != server);
+                if *verb == "load" {
+                    l.push(server);
+                }
+            }
             ok()
         }
 

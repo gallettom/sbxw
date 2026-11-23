@@ -27,7 +27,7 @@ mod standin;
 use super::{Action, Asked, Call, Confirm, Ctx, Feature, ScreenDecl, Slot};
 use crate::client::enc;
 use crate::intent::{Arg, Risk, Spec};
-use model::{Answer, Dialog, Form, Job, JobState, Listing, Preview};
+use model::{Answer, Denied, Dialog, Form, Job, JobState, Listing, Preview};
 use serde_json::{json, Value as J};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -111,6 +111,9 @@ pub struct State {
     pub last_host: String,
     /// Bring-ups that ended ready, and when (the status bar's "created").
     pub ready: Vec<(String, Instant)>,
+    /// Kit installs that failed on hosts sbx denied, one per sandbox
+    /// (`data.create.denied`; the Kits panel and the bring-ups' popover).
+    pub denied: Vec<Denied>,
 }
 
 /// How long the status bar says "created" after a bring-up ends ready.
@@ -289,7 +292,8 @@ impl State {
             "can_create": f.can_create(taken),
             "create_problem": create_problem,
             "error": f.error,
-            "jobs": self.jobs.iter().map(model::job_view).collect::<Vec<_>>(),
+            "jobs": self.jobs_view(),
+            "denied": self.denied.iter().map(Denied::view).collect::<Vec<_>>(),
         })
     }
 
@@ -451,14 +455,26 @@ impl State {
             "create_chat" => out.extend(self.chat(&taken)?),
             "create_retry" => {
                 let name = a.req("sandbox");
-                let j = self.jobs.iter_mut().find(|j| j.sandbox == name).ok_or_else(|| format!("No creation of {name} to retry."))?;
+                // A kit install that failed after its bring-up ended: the
+                // same request again (the daemon adopts the sandbox and adds
+                // the kits not applied yet).
+                if !self.jobs.iter().any(|j| j.sandbox == name) {
+                    let d = self.denied.iter().find(|d| d.sandbox == name).ok_or_else(|| format!("No creation of {name} to retry."))?;
+                    let (Some(route), Some(body)) = (d.route, d.body.clone()) else { return Err(format!("{name} was started elsewhere: bring it up again from there.")) };
+                    let mut job = Job::new(name, Some(route), Some(body));
+                    job.clone = d.clone.clone();
+                    self.jobs.push(job);
+                }
+                let j = self.jobs.iter_mut().find(|j| j.sandbox == name).expect("a job");
                 let (Some(route), Some(body)) = (j.route, j.body.clone()) else { return Err(format!("{name} was started elsewhere: create it again from New sandbox.")) };
                 j.restart();
                 let clone = j.clone.clone();
+                self.denied.retain(|d| d.sandbox != name);
                 out.push(Action::Call(bring_up(route, name, body, vec![], clone)));
             }
             "create_dismiss" => {
                 self.jobs.retain(|j| j.sandbox != a.req("sandbox"));
+                self.denied.retain(|d| d.sandbox != a.req("sandbox"));
             }
             other => return Err(format!("{other}: not a create intent")),
         }
@@ -532,6 +548,25 @@ impl State {
             v => v.to_string(),
         };
         let ev: J = serde_json::from_str(&text).unwrap_or_default();
+        if let Some(mut d) = Denied::from_event(&ev) {
+            // Kept with the request that brought it up, for Retry.
+            if let Some(j) = self.jobs.iter().find(|j| j.sandbox == d.sandbox) {
+                (d.route, d.body, d.clone) = (j.route, j.body.clone(), j.clone.clone());
+            }
+            self.denied.retain(|x| x.sandbox != d.sandbox);
+            let n = d.hosts.len();
+            let what = d.kit.clone().map(|k| format!("kit {k}")).unwrap_or_else(|| "its kits".into());
+            let name = d.sandbox.clone();
+            self.denied.push(d);
+            return vec![
+                Action::Notice {
+                    text: format!("{name}: sbx denied {n} host{} while installing {what}: allow them in Kits, then Retry", if n == 1 { "" } else { "s" }),
+                    error: true,
+                    then: Some(("kits_show".into(), json!({ "sandbox": name }))),
+                },
+                self.set(&taken(ctx)),
+            ];
+        }
         let had = self.jobs.iter().any(|j| ev["sandbox"] == j.sandbox.as_str());
         let failed_before = self.jobs.iter().any(|j| ev["sandbox"] == j.sandbox.as_str() && matches!(j.state, JobState::Failed(_)));
         let Some(sandbox) = model::apply_provision(&mut self.jobs, &text) else { return vec![] };
@@ -739,7 +774,43 @@ fn failed_notice(name: &str, why: &str) -> Action {
 
 /// The bring-ups as the status bar's popover lists them, oldest first.
 pub fn jobs_view() -> Vec<J> {
-    STATE.lock().unwrap().jobs.iter().map(model::job_view).collect()
+    STATE.lock().unwrap().jobs_view()
+}
+
+impl State {
+    /// Each job's view, with the hosts sbx denied it (`denied`) when any.
+    pub fn jobs_view(&self) -> Vec<J> {
+        self.jobs
+            .iter()
+            .map(|j| {
+                let mut v = model::job_view(j);
+                if let Some(d) = self.denied.iter().find(|d| d.sandbox == j.sandbox) {
+                    v["denied"] = d.view();
+                }
+                v
+            })
+            .collect()
+    }
+
+    /// An allow rule was added for `host` (network's answer): marked on
+    /// the kit failures that list it, for that sandbox or, global, all.
+    pub fn mark_allowed(&mut self, sandbox: &str, host: &str, global: bool) -> bool {
+        let mut changed = false;
+        for d in self.denied.iter_mut().filter(|d| global || d.sandbox == sandbox) {
+            if d.hosts.iter().any(|h| h == host) && !d.allowed.iter().any(|h| h == host) {
+                d.allowed.push(host.to_string());
+                changed = true;
+            }
+        }
+        changed
+    }
+}
+
+/// Network's answer to an allow rule it added: the kit failures listing
+/// that host say so (`data.create`), or nothing when none does.
+pub fn mark_allowed(ctx: &Ctx, sandbox: &str, host: &str, global: bool) -> Option<Action> {
+    let mut st = STATE.lock().unwrap();
+    st.mark_allowed(sandbox, host, global).then(|| st.set(&taken(ctx)))
 }
 
 /// `POST /api/sandboxes/<route>` with the approved lines, or the clone first.
