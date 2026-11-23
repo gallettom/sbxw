@@ -125,6 +125,10 @@ pub struct PaneDrop {
     /// The sandbox the pane shows, and its thread (nil: the main session).
     pub sandbox: String,
     pub thread: Option<String>,
+    /// A picture pasted into the pane (PNG, already checked by the core's
+    /// picture limits) instead of files: `paths` is empty and `skip_dialog`
+    /// false (a paste is always asked).
+    pub picture: Option<Vec<u8>>,
 }
 
 /// Where a download goes ([`Action::Download`]).

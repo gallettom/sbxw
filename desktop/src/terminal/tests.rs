@@ -195,6 +195,28 @@ fn bracketed_paste() {
     assert_eq!(written(&rx), b"x");
 }
 
+/// A paste's text is typed as ever; a picture with no text beside it is
+/// typed as nothing and kept, once, for the shell to upload; with both, the
+/// text wins (a file copied in Finder: its name and its icon).
+#[test]
+fn a_paste_types_its_text_and_keeps_a_picture_with_no_text_for_the_shell() {
+    let (mut t, _ev, rx) = term();
+    let png = crate::feat::canvas::model::mock_png(4, 3, 1);
+    let img = || rune::ClipboardImage::from_png(png.clone()).unwrap();
+    t.paste_content(&rune::ClipboardContent::new("ls -la"));
+    assert_eq!(written(&rx), b"ls -la");
+    assert_eq!(t.take_pasted_image(), None);
+    t.paste_content(&rune::ClipboardContent::new("").with_image(img()));
+    assert_eq!(written(&rx), b"", "a picture types nothing");
+    assert_eq!(t.take_pasted_image().as_deref(), Some(png.as_slice()));
+    assert_eq!(t.take_pasted_image(), None, "once");
+    t.paste_content(&rune::ClipboardContent::new("shot.png").with_image(img()));
+    assert_eq!(written(&rx), b"shot.png");
+    assert_eq!(t.take_pasted_image(), None, "text wins");
+    t.paste_content(&rune::ClipboardContent::new(""));
+    assert_eq!((written(&rx), t.take_pasted_image()), (vec![], None), "nothing: nothing");
+}
+
 #[test]
 fn mouse_reports_for_programs_and_shift_selects() {
     let (mut t, _ev, rx) = term();

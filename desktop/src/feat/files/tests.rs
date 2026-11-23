@@ -273,7 +273,7 @@ fn uploads_show_the_local_path_and_size_respect_the_limits_and_type_the_path() {
     assert_eq!(c.call.bytes.as_ref().map(|(t, b)| (t.as_str(), b.len())), Some(("image/png", 2048)));
     st.staged.clear();
     // Dropped on a stopped sandbox's pane: the dialog is asked for, and refused.
-    let a = st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![small.clone()], skip_dialog: false, sandbox: "data-pipeline".into(), thread: None });
+    let a = st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![small.clone()], skip_dialog: false, sandbox: "data-pipeline".into(), thread: None, picture: None });
     assert!(matches!(a.as_slice(), [Action::Intent { name, .. }] if name == "files_upload_dropped"), "{a:?}");
     assert!(run(&mut st, &d, "files_upload_dropped", json!({})).unwrap_err().contains("not running"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -287,7 +287,7 @@ fn files_dropped_together_go_through_one_dialog_that_explains_it_and_offers_to_s
     let (a1, a2) = (dir.join("spec one.md"), dir.join("logo.png"));
     std::fs::write(&a1, b"# spec").unwrap();
     std::fs::write(&a2, vec![0u8; 3000]).unwrap();
-    let drop = |paths: Vec<std::path::PathBuf>, skip: bool| PaneDrop { paths, skip_dialog: skip, sandbox: "api".into(), thread: Some("checkout".into()) };
+    let drop = |paths: Vec<std::path::PathBuf>, skip: bool| PaneDrop { paths, skip_dialog: skip, sandbox: "api".into(), thread: Some("checkout".into()), picture: None };
     // The drop itself uploads nothing and types nothing: it asks for the dialog.
     let a = st.on_pane_drop(&Ctx { data: &d }, &drop(vec![a1.clone(), a2.clone()], false));
     assert!(matches!(a.as_slice(), [Action::Intent { name, args }] if name == "files_upload_dropped" && args == &json!({})), "{a:?}");
@@ -349,7 +349,7 @@ fn chosen_not_to_be_asked_a_plain_drop_goes_at_once_and_a_guardrail_still_asks()
     let dir = tmp("skip");
     let brief = dir.join("brief.md");
     std::fs::write(&brief, b"# Brief").unwrap();
-    let drop = |paths: Vec<std::path::PathBuf>| PaneDrop { paths, skip_dialog: true, sandbox: "web-app".into(), thread: None };
+    let drop = |paths: Vec<std::path::PathBuf>| PaneDrop { paths, skip_dialog: true, sandbox: "web-app".into(), thread: None, picture: None };
     // Plain: the batch at once, said by a notice; no dialog asked for.
     let a = st.on_pane_drop(&Ctx { data: &d }, &drop(vec![brief.clone()]));
     assert!(a.iter().any(|x| matches!(x, Action::Notice { text, .. } if text == "Uploading brief.md to web-app…")), "{a:?}");
@@ -807,7 +807,7 @@ fn a_cancelled_pane_drop_leaves_no_file_waiting_nor_uploadable() {
     let paths: Vec<_> = ["a.txt", "b.txt", "c.txt"].iter().map(|n| { let p = dir.join(n); std::fs::write(&p, b"x").unwrap(); p }).collect();
     // As the core does on a drop: handed in, then the feature.
     crate::files::hand_in(&paths);
-    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: paths.clone(), skip_dialog: false, sandbox: "web-app".into(), thread: None });
+    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: paths.clone(), skip_dialog: false, sandbox: "web-app".into(), thread: None, picture: None });
     assert!(paths.iter().all(|p| crate::files::was_handed(p)));
     let a = run(&mut st, &d, "files_upload_dropped", json!({})).unwrap();
     let [Action::Confirm(c)] = a.as_slice() else { panic!() };
@@ -1258,4 +1258,51 @@ fn a_location_row_is_24_pt() {
     for (k, h) in rows {
         assert_eq!(h, Some(crate::luau::Size::Pt(24.0)), "{k}");
     }
+}
+
+/// A picture pasted into a pane: its one dialog at once (paste-image, the
+/// name the app made), and on the daemon's answer its path typed into that
+/// pane's session with a space, never a Return; Cancel leaves nothing; a
+/// stopped sandbox is refused with no dialog.
+#[test]
+fn a_picture_pasted_into_a_pane_asks_once_then_types_its_path() {
+    let d = fixture("standin");
+    let mut st = State::default();
+    let paste = |sb: &str| PaneDrop { paths: vec![], skip_dialog: false, sandbox: sb.into(), thread: Some("checkout".into()), picture: Some(vec![7; 3000]) };
+    let a = st.on_pane_drop(&Ctx { data: &d }, &paste("web-app"));
+    let [Action::Confirm(c)] = a.as_slice() else { panic!("{a:?}") };
+    assert!(st.staged.is_empty(), "never shown as waiting in the panel");
+    assert!(c.title.starts_with("Upload pasted-20") && c.title.ends_with(".png into web-app?"), "{}", c.title);
+    assert_eq!(c.lines[0], "a picture from the clipboard · 2.9 KB");
+    assert_eq!(c.call.path, "/api/sandboxes/web-app/paste-image");
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "ok": true, "path": "/tmp/sbxw-pastes/paste-1.png" }))));
+    let calls: Vec<&Call> = a.iter().filter_map(|x| if let Action::Call(c) = x { Some(c) } else { None }).collect();
+    let [t] = calls.as_slice() else { panic!("{a:?}") };
+    assert_eq!((t.path.as_str(), &t.body), ("/api/input", &json!({ "sandbox": "web-app", "mode": "thread:checkout", "data": "/tmp/sbxw-pastes/paste-1.png " })));
+    assert!(st.dropped.is_empty());
+    // A path the daemon does not make is never typed.
+    let a = st.on_pane_drop(&Ctx { data: &d }, &paste("web-app"));
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "ok": true, "path": "/tmp/x; rm -rf ~" }))));
+    assert!(!a.iter().any(|x| matches!(x, Action::Call(_))), "{a:?}");
+    // The daemon unreachable: said, nothing typed.
+    let a = st.on_pane_drop(&Ctx { data: &d }, &paste("web-app"));
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Err("not connected to the daemon".into()));
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { text, error: true, .. } if text.ends_with("was not uploaded: not connected to the daemon"))), "{a:?}");
+    assert!(!a.iter().any(|x| matches!(x, Action::Call(_))));
+    // Cancel: nothing left.
+    let a = st.on_pane_drop(&Ctx { data: &d }, &paste("web-app"));
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    st.on_dismiss(&Ctx { data: &d }, &c.call.tag);
+    assert!(st.dropped.is_empty());
+    // A stopped sandbox: refused, no dialog.
+    let a = st.on_pane_drop(&Ctx { data: &d }, &paste("data-pipeline"));
+    assert!(matches!(a.as_slice(), [Action::Notice { text, error: true, .. }] if text.contains("not running")), "{a:?}");
+    assert!(st.dropped.is_empty());
+}
+
+#[test]
+fn a_pasted_picture_is_named_by_the_time_only() {
+    assert_eq!(pasted_name(1_795_444_205_000), "pasted-2026-11-23-143005.png");
 }

@@ -103,7 +103,15 @@ pub fn prepare(bytes: &[u8], limits: Limits, fit: Option<u32>, out: Encode) -> R
     std::panic::catch_unwind(|| prepare_inner(bytes, limits, fit, out)).unwrap_or_else(|_| Err("the picture could not be read (the decoder failed)".into()))
 }
 
-fn prepare_inner(bytes: &[u8], limits: Limits, fit: Option<u32>, out: Encode) -> Result<Picture, String> {
+/// The checks [`prepare`] makes before decoding any pixel (length, format,
+/// animation, the header's dimensions within `limits`), without decoding:
+/// the width and height. For a picture sent on as it is (a pasted one,
+/// uploaded to a sandbox).
+pub fn check(bytes: &[u8], limits: Limits) -> Result<(u32, u32), String> {
+    std::panic::catch_unwind(|| header(bytes, limits).map(|(_, w, h)| (w, h))).unwrap_or_else(|_| Err("the picture could not be read (the decoder failed)".into()))
+}
+
+fn header(bytes: &[u8], limits: Limits) -> Result<(ImageFormat, u32, u32), String> {
     if bytes.len() > limits.max_bytes {
         return Err(format!("the picture is {} MB, more than {} MB", bytes.len() >> 20, limits.max_bytes >> 20));
     }
@@ -111,24 +119,30 @@ fn prepare_inner(bytes: &[u8], limits: Limits, fit: Option<u32>, out: Encode) ->
     if animated(fmt, bytes) {
         return Err("animated pictures are not taken".into());
     }
-    let reader = |b: &[u8]| {
-        let mut r = ImageReader::with_format(Cursor::new(b.to_vec()), fmt);
-        let mut l = image::Limits::default();
-        l.max_image_width = Some(limits.max_side);
-        l.max_image_height = Some(limits.max_side);
-        l.max_alloc = Some(limits.max_pixels.saturating_mul(4).saturating_add(1 << 20));
-        r.limits(l);
-        r
-    };
     // The header first: no pixel is decoded for a picture too large.
-    let (w, h) = reader(bytes).into_dimensions().map_err(|e| format!("the picture could not be read: {e}"))?;
+    let (w, h) = reader(bytes, fmt, limits).into_dimensions().map_err(|e| format!("the picture could not be read: {e}"))?;
     if w == 0 || h == 0 {
         return Err("the picture is empty".into());
     }
     if w > limits.max_side || h > limits.max_side || (w as u64) * (h as u64) > limits.max_pixels {
         return Err(format!("the picture is {w}x{h} pixels, more than allowed ({} a side, {} megapixels)", limits.max_side, limits.max_pixels / 1_000_000));
     }
-    let mut img = reader(bytes).decode().map_err(|e| format!("the picture could not be read: {e}"))?;
+    Ok((fmt, w, h))
+}
+
+fn reader(b: &[u8], fmt: ImageFormat, limits: Limits) -> ImageReader<Cursor<Vec<u8>>> {
+    let mut r = ImageReader::with_format(Cursor::new(b.to_vec()), fmt);
+    let mut l = image::Limits::default();
+    l.max_image_width = Some(limits.max_side);
+    l.max_image_height = Some(limits.max_side);
+    l.max_alloc = Some(limits.max_pixels.saturating_mul(4).saturating_add(1 << 20));
+    r.limits(l);
+    r
+}
+
+fn prepare_inner(bytes: &[u8], limits: Limits, fit: Option<u32>, out: Encode) -> Result<Picture, String> {
+    let (fmt, _, _) = header(bytes, limits)?;
+    let mut img = reader(bytes, fmt, limits).decode().map_err(|e| format!("the picture could not be read: {e}"))?;
     if let Some(m) = fit.filter(|m| *m > 0) {
         if img.width() > m || img.height() > m {
             img = img.resize(m, m, image::imageops::FilterType::Triangle);

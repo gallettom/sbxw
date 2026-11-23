@@ -318,9 +318,78 @@ impl App {
         let skip_dialog = self.drops_skip_dialog();
         // Only for the actions of this very drop, and only these paths.
         self.feats.drop_grant = skip_dialog.then(|| DropGrant::of_drop(paths, &sandbox));
-        let acts = on(&Ctx { data: &data }, &feat::PaneDrop { paths: paths.to_vec(), skip_dialog, sandbox, thread });
+        let acts = on(&Ctx { data: &data }, &feat::PaneDrop { paths: paths.to_vec(), skip_dialog, sandbox, thread, picture: None });
         self.feature_actions(f, &format!("feature:{}", f.name), acts);
         self.feats.drop_grant = None;
+        self.push_data();
+    }
+
+    /// Files dragged over pane `i` (`over`), or off it: the one pane marked.
+    pub(super) fn pane_drop_hover(&mut self, i: usize, over: bool) {
+        let now = if over { Some(i) } else if self.rects.pane_drop == Some(i) { None } else { self.rects.pane_drop };
+        if self.rects.pane_drop != now {
+            self.rects.pane_drop = now;
+            self.push_data();
+        }
+    }
+
+    /// Why files dropped on pane `i` would not be taken, said while they
+    /// are dragged over it (the drop itself says the same): something over
+    /// the panes, no sandbox, a sandbox not running.
+    pub(crate) fn pane_drop_refusal(&self, i: usize) -> Option<String> {
+        if self.panes_covered() {
+            return Some("Close what is open first: nothing would be dropped".into());
+        }
+        let Some(sb) = self.panes.get(i).and_then(|p| p.sandbox.as_deref()) else {
+            return Some("This pane shows no sandbox: nothing would be dropped".into());
+        };
+        let status = self.sandboxes.iter().find(|s| s.name == sb).map(|s| s.status.as_str());
+        match status {
+            Some("running") | None => None,
+            Some(_) => Some(format!("{sb} is not running: start it first, then drop")),
+        }
+    }
+
+    /// Files dragged over a docked panel or the modal (`name`), or off it.
+    pub(super) fn panel_drop_hover(&mut self, name: &str, over: bool) {
+        let now = if over { Some(name.to_string()) } else if self.rects.panel_drop.as_deref() == Some(name) { None } else { self.rects.panel_drop.clone() };
+        if self.rects.panel_drop != now {
+            self.rects.panel_drop = now;
+            self.push_data();
+        }
+    }
+
+    /// A picture pasted into pane `i` with no text beside it: checked with
+    /// the core's picture limits ([`crate::picture::check`]: 32 MB, 16384 px
+    /// a side, 40 megapixels, PNG, JPEG or WebP, not animated), then to the
+    /// feature that takes pane drops, as a drop of that one picture. Always
+    /// through its dialog: "Do not ask again" covers files the person
+    /// dropped (`DropGrant`, `core:uploads` of handed-in paths), not this,
+    /// so no grant is made here. Never while something covers the panes.
+    pub(crate) fn pane_paste_image(&mut self, i: usize, png: &[u8]) {
+        if self.panes_covered() {
+            return self.notify("Close what is open first: nothing was pasted", false);
+        }
+        let Some(p) = self.panes.get(i) else { return };
+        let Some(sandbox) = p.sandbox.clone() else {
+            return self.notify("This pane shows no sandbox: the picture was not pasted", false);
+        };
+        let thread = p.thread.clone();
+        let why = match crate::picture::check(png, crate::picture::Limits::default()) {
+            Err(e) => Some(e),
+            Ok(_) if crate::picture::sniff(png) != Some(image::ImageFormat::Png) => Some("not a PNG picture".into()),
+            Ok(_) => None,
+        };
+        if let Some(e) = why {
+            return self.notify(format!("The picture was not pasted: {e}"), true);
+        }
+        let Some((f, on)) = feat::FEATURES.iter().find_map(|f| f.on_pane_drop.map(|on| (*f, on))) else {
+            return self.notify("Nothing here takes pictures pasted into a terminal", false);
+        };
+        log::info!("pane {}: a picture of {} bytes pasted", i + 1, png.len());
+        let data = self.feat_ctx_data();
+        let acts = on(&Ctx { data: &data }, &feat::PaneDrop { paths: vec![], skip_dialog: false, sandbox, thread, picture: Some(png.to_vec()) });
+        self.feature_actions(f, &format!("feature:{}", f.name), acts);
         self.push_data();
     }
 
@@ -1295,11 +1364,18 @@ impl App {
             // A press inside stays inside (it does not reach the scrim).
             .on_press(|_s: &mut App| {})
             .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| {
+                s.rects.panel_drop = None;
                 if let Some(f) = s.feats.modal.as_ref().and_then(|(m, _)| feat::screen(m)).filter(|(f, _)| f.on_files.is_some()).map(|(f, _)| f.name) {
                     s.feature_incoming(f, feat::Incoming::Files(files.to_vec()));
                 }
             })
-            .child(body);
+            .on_drop_hover(|s: &mut App, over: bool, _tx| s.panel_drop_hover("modal", over))
+            .child(body)
+            .children((self.rects.panel_drop.as_deref() == Some("modal")).then(|| {
+                let takes = self.feats.modal.as_ref().and_then(|(m, _)| feat::screen(m)).is_some_and(|(f, _)| f.on_files.is_some());
+                let label = if takes { "Drop to add the files here" } else { "This dialog takes no files" };
+                super::drop_mark("modal-drop", label, !takes, radius("lg").unwrap())
+            }));
         let scrim = super::scrim_with("modal-scrim", card, |s: &mut App| {
             // An open list takes the first Escape (and the first outside press): it closes, the dialog stays.
             if let Some(name) = s.feats.modal.as_ref().map(|(n, _)| n.clone()) {
@@ -1330,6 +1406,12 @@ impl App {
             Some(n) => format!("panel-tabs-{n}"),
             None => "panel-tabs".into(),
         }).w_full().h(layout::CONTROL_H).gap(4.0).items_center();
+        // The key the drop hover marks this panel by (`App::panel_drop_hover`).
+        let drop_key = match only {
+            Some(n) => format!("panel-{n}"),
+            None => "panel".to_string(),
+        };
+        let hover_key = drop_key.clone();
         let mut close_title = String::new();
         for name in &names {
             let Some((_, decl)) = feat::screen(name) else { continue };
@@ -1425,12 +1507,19 @@ impl App {
             .radius(radius("md").unwrap())
             // Files dropped on the shown panel go to its feature (if it takes them).
             .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| {
+                s.rects.panel_drop = None;
                 if let Some(f) = s.files_target() {
                     s.feature_incoming(f, feat::Incoming::Files(files.to_vec()));
                 }
             })
+            .on_drop_hover(move |s: &mut App, over: bool, _tx| s.panel_drop_hover(&hover_key, over))
             .child(tabs)
             .child(col().w_full().grow(1.0).min_h(0.0).child(screen))
+            .children((self.rects.panel_drop.as_deref() == Some(drop_key.as_str())).then(|| {
+                let refused = self.files_target().is_none();
+                let label = if refused { format!("{close_title} takes no files") } else { format!("Drop to add to {close_title}") };
+                super::drop_mark(&format!("{drop_key}-drop"), &label, refused, radius("md").unwrap())
+            }))
     }
 
     /// A docked panel's width: what it asks for, narrowed so the panes keep
@@ -1719,6 +1808,67 @@ mod tests {
         a.feats.modal = Some(("help".into(), serde_json::Value::Null));
         a.pane_file_open(0, "src/main.ts".into());
         assert!(a.feats.overlay.is_none(), "under a modal nothing opens");
+    }
+
+    /// A picture pasted into a pane: the drop's dialog for that one picture
+    /// (always: "Do not ask again" covers dropped files only), one upload on
+    /// Upload, its path typed into the pane's session, never submitted. A
+    /// picture too large, not a picture, a pane with no sandbox or one under
+    /// something: refused with a line, no dialog, nothing sent.
+    #[test]
+    fn a_picture_pasted_into_a_pane_goes_through_the_drops_dialog_and_types_its_path() {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/files/standin.json");
+        let mut a = App::new(super::super::Args { fixture: Some(fixture.into()), ..Default::default() });
+        a.drain(Some(Duration::from_secs(3)), true);
+        if a.panes.is_empty() {
+            let id = a.fresh();
+            a.panes.push(super::super::Pane::empty(id));
+        }
+        a.panes[0].sandbox = Some("web-app".into());
+        a.panes[0].thread = Some("checkout".into());
+        let last = |a: &App| a.notice.as_ref().map(|n| n.0.clone()).unwrap_or_default();
+        let png = crate::feat::canvas::model::mock_png(64, 48, 1);
+        // Chosen not to be asked for drops: a paste is asked all the same.
+        a.store.set_in(UPLOADS_KEY, SKIP_DROP_DIALOG, J::Bool(true));
+
+        a.pane_paste_image(0, &png);
+        let c = a.feats.dialog.as_ref().and_then(|d| d.confirm.clone()).expect("the dialog");
+        assert!(c.title.starts_with("Upload pasted-") && c.title.ends_with(".png into web-app?"), "{}", c.title);
+        assert_eq!(c.call.path, "/api/sandboxes/web-app/paste-image");
+        assert_eq!(c.call.bytes.as_ref().map(|(t, b)| (t.as_str(), b.len())), Some(("image/png", png.len())));
+        assert!(c.lines.iter().any(|l| l.contains("typed into web-app's thread checkout's prompt, not submitted")), "{:?}", c.lines);
+        assert!(c.dont_ask.is_none(), "no box: a paste is always asked");
+        assert!(a.feats.drop_grant.is_none(), "no grant for a paste");
+        // Upload: one call to paste-image, then the path typed (or, with no
+        // session to take it, said with the path to copy). Never a Return.
+        a.confirm_click();
+        a.drain(Some(Duration::from_secs(3)), true);
+        let n = last(&a);
+        assert!(n.contains("/tmp/sbxw-pastes/paste-") && (n.contains("typed into web-app's prompt") || n.contains("no agent session of web-app took the path")), "{n}");
+        a.feats.dialog = None;
+
+        // Refused before any dialog: nothing can be sent.
+        let refused = |a: &mut App, bytes: &[u8]| {
+            a.notice = None;
+            a.pane_paste_image(0, bytes);
+            assert!(a.feats.dialog.is_none(), "no dialog, no upload");
+            last(a)
+        };
+        assert!(refused(&mut a, b"not a picture at all").contains("not a PNG, JPEG or WebP picture"));
+        let mut big = png.clone();
+        big.resize((32 << 20) + 1, 0);
+        assert!(refused(&mut a, &big).contains("more than 32 MB"));
+        let wide = refused(&mut a, &crate::feat::canvas::model::mock_png(16_385, 1, 1));
+        assert!(wide.contains("more than allowed") || wide.contains("could not be read"), "{wide}");
+        a.panes[0].sandbox = None;
+        assert!(refused(&mut a, &png).contains("shows no sandbox"));
+        a.panes[0].sandbox = Some("web-app".into());
+        a.open_modal("files", J::Null);
+        if a.panes_covered() {
+            assert!(refused(&mut a, &png).contains("Close what is open first"));
+        }
+        a.feats.modal = None;
+        a.store.set_in(UPLOADS_KEY, SKIP_DROP_DIALOG, J::Null);
     }
 
     #[test]
