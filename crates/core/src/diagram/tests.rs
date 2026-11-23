@@ -569,3 +569,18 @@ fn sequence_reorders_and_lane_moves_read_plainly() {
     let lines = diff::lines(&diff::diff(&base, &now));
     assert_eq!(lines, ["Renamed lane \"Person\" to \"The person\".", "Moved \"Asks for a change\" to lane \"Lead session\"."]);
 }
+
+#[test]
+fn a_dataflow_imports_with_stages_as_groups() {
+    let json = r#"{ "schema_version": 1, "diagram_type": "dataflow", "meta": { "title": "Events", "output": "x.html" },
+      "stages": [{ "label": "Producers" }, { "label": "Store" }],
+      "nodes": [{ "id": "api", "type": "backend", "label": "API", "stage": 0, "row": 0 },
+                { "id": "db", "type": "database", "label": "Events table", "stage": 1, "row": 0 }],
+      "flows": [{ "from": "api", "to": "db", "label": "insert", "classification": "pii" }] }"#;
+    let mut d = import::archify(json).unwrap();
+    assert_eq!(d.kind, Kind::Dataflow);
+    assert_eq!(d.groups.iter().map(|g| (g.id.as_str(), g.label.as_str())).collect::<Vec<_>>(), [("stage-1", "Producers"), ("stage-2", "Store")]);
+    assert_eq!(d.node("db").unwrap().shape, Shape::Store);
+    layout::place_missing(&mut d);
+    assert!(layout::overlaps(&d).is_empty() && d.node("api").unwrap().x < d.node("db").unwrap().x);
+}
