@@ -675,6 +675,12 @@
         <ol class="merge-list" id="merge-list" aria-live="polite"></ol>
         <div class="merge-team" id="merge-team"></div>
         <p class="merge-outcome" id="merge-outcome" role="status" hidden></p>
+        <!-- Abandon merge, asked here before the daemon is called. -->
+        <div class="merge-abandon-ask" id="merge-abandon-ask" hidden>
+          <p id="merge-abandon-text"></p>
+          <button class="btn-cancel" id="merge-abandon-no">Keep it</button>
+          <button class="btn-cancel" id="merge-abandon-yes">Abandon merge</button>
+        </div>
         <label class="thread-check" id="merge-close-row">
           <input type="checkbox" id="merge-close" checked>
           <span>Close the threads after merging</span>
@@ -682,6 +688,7 @@
       </div>
       <div class="modal-foot plan-merge-part">
         <span class="create-error hidden" id="merge-error"></span>
+        <button class="btn-cancel" id="merge-abandon" hidden>Abandon merge</button>
         <button class="btn-cancel" id="merge-later">Not now</button>
         <button class="btn-create" id="merge-all">Merge all</button>
       </div>
