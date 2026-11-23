@@ -1243,7 +1243,7 @@ impl App {
     }
 
     /// Tells the feature that declared `key` (its `on_data`).
-    fn feats_data_changed(&mut self, key: &str, old: &J, new: &J) {
+    pub(super) fn feats_data_changed(&mut self, key: &str, old: &J, new: &J) {
         for f in feat::FEATURES {
             if let (true, Some(on)) = (f.data.iter().any(|d| d.key == key), f.on_data) {
                 let data = self.feat_ctx_data();

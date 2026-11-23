@@ -779,17 +779,22 @@ return {
     -- group's language (its colour's tint, as its terminal header's; with
     -- no workspace, a hue of its own while it draws the block); in a group, no second block (a
     -- stronger tint would take `text-muted` under 4.5:1), a 2 pt bar in the
-    -- group's colour down the group's gutter beside its rows. The stack's
-    -- room is always there (ungrouped: 4 pt each side, taken from the
-    -- list's block), so the block comes and goes without moving a word.
+    -- group's colour down the group's gutter beside its rows. Out of a
+    -- group every sandbox is a card of the same width, padding and radius
+    -- as a group's block (surface-alt with one session, the tint above
+    -- with several), so a stopped one or the last one reads as the others.
     local function sandbox_rows(sb, blk, look)
       local multi = session_count(sb, app) >= 2
-      local stack = { key = "sb-" .. sb.name, gap = 2, w = "full", folds = true, radius = look and "sm" or "md", px = look and 0 or 4 }
+      local stack = { key = "sb-" .. sb.name, gap = 2, w = "full", folds = true, radius = look and "sm" or "md", px = look and 0 or 4, py = look and 0 or 4 }
       local gc = colors[sb.name]
-      if multi and not look then
-        -- With no workspace, the core gives it a hue of its own while it
-        -- draws this block (App::own_hues, in app.groups like any colour).
-        local own = gc and (app.group_look or {})[gc]
+      if not look then
+        -- One card recipe for every sandbox out of a group, whatever its
+        -- state, its sessions or its place in the list: the list's full
+        -- width, 4 pt inside, the group blocks' radius, and a fill. With
+        -- several sessions the fill is its colour's tint (with no workspace,
+        -- the core gives it a hue of its own while it draws this block:
+        -- App::own_hues, in app.groups like any colour); else surface-alt.
+        local own = multi and gc and (app.group_look or {})[gc]
         stack.fill = own and own.tint or "surface-alt"
       end
       inset = look and 4 or 0

@@ -735,45 +735,11 @@ fn refusal(r: &Result<(u16, J), String>) -> Option<String> {
     }
 }
 
-/// Opens a pane for each of the plan's threads (plans.js `openPlanPanes`),
-/// through the core's paged "spare" rule: the current page's empty panes
-/// and room first, then the following pages, then new pages. Then the page
-/// where the first thread landed shows (`page_show`), not the last one.
-fn open_plan_panes(ctx: &Ctx, plan: &J) -> Vec<Action> {
-    let sb = plan["sandbox"].as_str().unwrap_or("");
-    let mut out = vec![];
-    for t in plan["threads"].as_array().into_iter().flatten() {
-        let Some(name) = t["name"].as_str() else { continue };
-        if pane_of(ctx, sb, Some(name)).is_some() {
-            continue;
-        }
-        out.push(Action::Intent { name: "open_terminal".into(), args: json!({ "sandbox": sb, "thread": name, "pane": "spare" }) });
-    }
-    if let (false, Some(first)) = (out.is_empty(), first_spare_page(ctx)) {
-        out.push(Action::Intent { name: "page_show".into(), args: json!({ "page": first }) });
-    }
-    out
-}
-
-/// The page (from 1) the next spare terminal goes to, as the core places it
-/// (`data.app.pages`: the current page, then the following ones, then the
-/// ones before; an empty pane or room below `per`; else a new page).
-fn first_spare_page(ctx: &Ctx) -> Option<u64> {
-    let pages = &ctx.data["app"]["pages"];
-    let per = pages["per"].as_u64()?;
-    let list = pages["panes"].as_array()?;
-    let current = pages["current"].as_u64()?.saturating_sub(1) as usize;
-    let panes = ctx.data["app"]["panes"].as_array().cloned().unwrap_or_default();
-    let empty = |n: &J| n.as_u64().and_then(|n| panes.get(n as usize - 1)).is_some_and(|p| p["sandbox"].is_null());
-    let order = (current..list.len()).chain(0..current.min(list.len()));
-    for k in order {
-        let on = list[k].as_array().cloned().unwrap_or_default();
-        if on.iter().any(empty) || (on.len() as u64) < per {
-            return Some(k as u64 + 1);
-        }
-    }
-    Some(list.len() as u64 + 1)
-}
+// A plan's threads open no pane on their own (the person's decision for
+// team mode, unlike the web UI's `openPlanPanes`): the daemon starts them,
+// the sidebar, Board and Threads view list them at once, and a click on a
+// row opens its pane (`open_terminal`). A thread the person starts from
+// New thread still opens its pane: they asked for that one, now.
 
 fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
     let (kind, rest) = call.tag.split_once(':').unwrap_or((call.tag.as_str(), ""));
@@ -793,17 +759,7 @@ fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action>
                 obj(&mut u, "drafts").remove(rest);
                 let plan = &body["plan"];
                 let n = plan["threads"].as_array().map(|a| a.len()).unwrap_or(0);
-                let mut out = vec![];
-                let opened = u["opened"].as_array().cloned().unwrap_or_default();
-                if !opened.iter().any(|x| x == rest) {
-                    out = open_plan_panes(ctx, plan);
-                    let mut o = opened;
-                    o.push(json!(rest));
-                    u["opened"] = J::Array(o);
-                }
-                let mut acts = vec![set_ui(u), Action::CloseModal, Action::notice(format!("Plan approved: {n} thread{} starting", if n == 1 { "" } else { "s" }))];
-                acts.extend(out);
-                acts
+                vec![set_ui(u), Action::CloseModal, Action::notice(format!("Plan approved: {n} thread{} starting", if n == 1 { "" } else { "s" }))]
             }
         },
         "merge" => {
@@ -993,14 +949,6 @@ fn plans_changed(ctx: &Ctx, old: &J, new: &J) -> Vec<Action> {
                 out.push(Action::Fetch { key: "thread_repos".into(), path: format!("{}/repos", sb_path(sb)) });
                 out.push(Action::OpenModal { screen: "plans".into(), arg: json!(id) });
             }
-        }
-        let was_pending = prev.is_some_and(|x| x["state"] == "pending");
-        if !seed && p["state"] == "approved" && was_pending && !u["opened"].as_array().is_some_and(|o| o.iter().any(|x| x == id)) {
-            out.extend(open_plan_panes(ctx, p));
-            let mut o = u["opened"].as_array().cloned().unwrap_or_default();
-            o.push(json!(id));
-            u["opened"] = J::Array(o);
-            changed = true;
         }
         if !seed && p["merge"]["state"] == "proposed" && prev.is_some_and(|x| x["merge"].is_null()) {
             out.push(Action::Notice { text: format!("The lead of {sb} proposes merging its threads"), error: false, then: Some(("plan_review".into(), json!({ "id": id }))) });
