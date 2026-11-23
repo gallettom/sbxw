@@ -1,7 +1,10 @@
 //! The only door to the `sbx` CLI. sbxw never calls `docker sandbox`.
 //!
-//! Written for sbx 0.51 and newer, with no fallbacks: an unrecognised command
-//! or flag is an *error*, so success means the command really ran. Parsed output
+//! Written for sbx 0.51 and newer, with no fallbacks for older releases: an
+//! unrecognised command or flag is an *error*, so success means the command
+//! really ran. A newer release's form is gated on the version read once
+//! ([`Sbx::known_version`]), and the older form stays where the newer one is
+//! not documented to the flag (0.54's `sbx port`). Parsed output
 //! is `--format json`, except `policy ls` and `template ls` (tables).
 //!
 //! ```text
@@ -17,10 +20,12 @@
 //! sbx run -d --name N                         (keep running with nobody attached)
 //! sbx ls --format json                        (a bare array)
 //! sbx exec [-i|-it] N -- cmd…                 (starts a stopped sandbox first; no --detach since 0.53; 125 = not run)
-//! sbx ports N --format json · sbx ports N --publish|--unpublish SPEC
+//! sbx port ls N [--format json] · sbx port publish|unpublish N SPEC   (0.54; IP::SP = sbx picks the host port)
+//! sbx ports N --format json · sbx ports N --publish|--unpublish SPEC   (before 0.54, and the fallback)
 //! sbx policy allow|deny network [--sandbox N] [--method M,…] [--path GLOB] [--query K=V]… RESOURCES
 //! sbx policy ls [N] [--wide] · sbx policy log [N]   (N positional here)
 //! sbx policy rm network --id RULE_ID [--sandbox N] --force
+//! sbx policy check network [--sandbox N] TARGET   (0.54; argument shape unverified)
 //! sbx secret set [--sandbox N] SERVICE [--force]  (value on stdin)
 //! sbx kit add N REF                           (recreates the container; startup commands too)
 //! sbx env create PATH… --name N [--env-arg K=V]…   (shows a plan and asks)
@@ -69,6 +74,10 @@ pub use scripts::ThreadStatus;
 pub const MIN_VERSION: (u32, u32, u32) = (0, 51, 0);
 pub const SKIP_VERSION_CHECK_ENV: &str = "SBXW_SKIP_SBX_VERSION_CHECK";
 
+/// The release with `sbx port ls|publish|unpublish` and an automatic host
+/// port; `sbx ports` stays, deprecated.
+pub const PORT_SINCE: (u32, u32, u32) = (0, 54, 0);
+
 /// `sbx exec`'s status when it could not run the command (no such sandbox).
 /// A stopped sandbox is not that: `exec` starts it first, so callers that must
 /// not wake one check `is_running` first.
@@ -93,6 +102,64 @@ pub fn command_error(args: &[String], out: &Output) -> anyhow::Error {
         None => msg.to_string(),
     };
     anyhow!("`sbx {shown}` exited with {status}:\n{tail}")
+}
+
+/// A failed `sbx create` or `sbx kit add`, kept whole for whoever can do
+/// more than show it: `message` is what [`command_error`] says (sbx's own
+/// words, its tail), `denied` the hosts sbx said it refused while installing
+/// a kit (sbx 0.54 reports them), each a bare host name fit for an allow
+/// rule. Reached through `anyhow::Error::downcast_ref`, context or not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SbxFailure {
+    pub message: String,
+    pub denied: Vec<String>,
+}
+
+impl std::fmt::Display for SbxFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SbxFailure {}
+
+impl SbxFailure {
+    pub fn new(args: &[String], out: &Output) -> Self {
+        let said = format!("{}\n{}", out.stdout_str(), String::from_utf8_lossy(&out.stderr));
+        Self { message: format!("{:#}", command_error(args, out)), denied: denied_hosts(&said) }
+    }
+}
+
+/// The hosts named on lines that say a connection was denied or blocked:
+/// `host`, `host:port` or a URL's host, each checked as a host name
+/// ([`sbxw_core::policy::clean_host`]), deduplicated in order. The wording is
+/// sbx's and not documented: a line it phrases otherwise names nothing.
+pub fn denied_hosts(said: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in said.lines() {
+        let lower = line.to_ascii_lowercase();
+        if !["denied", "blocked", "not allowed", "refused"].iter().any(|w| lower.contains(w)) {
+            continue;
+        }
+        for word in line.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')' | '"' | '\'' | '`' | '<' | '>' | '[' | ']')) {
+            let word = word.split_once("://").map_or(word, |(_, rest)| rest);
+            let word = word.split('/').next().unwrap_or("").trim_end_matches([':', '.']);
+            if !word.contains('.') || word.starts_with('-') {
+                continue;
+            }
+            if let Ok(h) = sbxw_core::policy::clean_host(&sbxw_core::policy::allow_resource(word)) {
+                // clean_host refuses an address or a version; a file is not a host either.
+                let last = h.rsplit('.').next().unwrap_or("");
+                if ["json", "yaml", "yml", "log", "sh", "go"].contains(&last) {
+                    continue;
+                }
+                if !out.contains(&h) {
+                    out.push(h);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// One row of `sbx ls`.
@@ -324,7 +391,35 @@ pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
              egress.stalledConnectionTimeoutSeconds 0` turns that off.",
         );
     }
+    if before < (0, 54, 0) && now >= (0, 54, 0) {
+        notes.push(
+            "sbx 0.54 checks kit permissions with stronger digests: a sandbox may ask again to confirm a kit's \
+             permissions it already had. Answer sbx's prompt in the sandbox's terminal.",
+        );
+        notes.push(
+            "sbx 0.54 refuses to start a sandbox whose saved mount now resolves to a different directory (a \
+             moved folder, a changed symlink). sbxw shows sbx's message; the fix is `sbx umount` for that mount, \
+             then mount it again (or `sbxw rm <name>` and `sbxw up <name>`).",
+        );
+        notes.push(
+            "If HTTPS from sandboxes stalls behind a firewall or a TLS-inspecting proxy since sbx 0.54, it may drop \
+             post-quantum key exchange: `sbx settings set tls.postQuantumKeyExchange false`, then `sbx daemon restart`.",
+        );
+    }
     notes
+}
+
+/// The release whose `sbx setup ssh` writes a configuration crafted host or
+/// user names cannot run commands through (with older OpenSSH clients); a
+/// configuration written before it stays unsafe until setup runs again.
+pub const SSH_CONFIG_SINCE: (u32, u32, u32) = (0, 54, 0);
+
+/// Must `sbx setup ssh` run again? When sbx is `now` 0.54 or newer and the
+/// configuration was last written (`refreshed_at`, the sbx version sbxw ran
+/// setup with; `None` when sbxw never did) by an older one or nobody knows.
+/// Whether SSH is set up at all is the caller's to know.
+pub fn ssh_refresh_due(refreshed_at: Option<&str>, now: &str) -> bool {
+    parse_version(now).is_some_and(|v| v >= SSH_CONFIG_SINCE) && refreshed_at.and_then(parse_version).is_none_or(|v| v < SSH_CONFIG_SINCE)
 }
 
 /// The first `MAJOR.MINOR[.PATCH]` in `raw`, however it is framed; a digit run
@@ -533,6 +628,92 @@ pub fn prune_args(until: Option<&str>, dry_run: bool) -> Vec<String> {
     a
 }
 
+/// Did sbx refuse the command line itself (an older sbx without the
+/// command, or a form it does not take), rather than the work?
+pub fn is_usage_error(err: &str) -> bool {
+    let e = err.to_lowercase();
+    ["unknown command", "unknown flag", "unknown shorthand", "usage:", "invalid argument", "accepts ", "invalid port", "invalid spec", "invalid publish"]
+        .iter()
+        .any(|p| e.contains(p))
+}
+
+/// A publish spec `[[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]` as sbxw writes
+/// them: digits, dots, colons and a protocol, never a flag.
+fn check_port_spec(spec: &str) -> Result<()> {
+    let (ports, proto) = spec.split_once('/').unwrap_or((spec, "tcp"));
+    let ok = !ports.is_empty()
+        && !ports.starts_with(':')
+        && ports.split(':').count() <= 3
+        && ports.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ':')
+        && matches!(proto, "tcp" | "udp" | "tcp4" | "tcp6" | "udp4" | "udp6");
+    if !ok {
+        bail!("not a port spec: {spec:?}");
+    }
+    Ok(())
+}
+
+/// The host port sbx says it assigned to `sandbox_port` on `host_ip`, from
+/// its answer to `port publish`: a JSON row (or rows) with `host_port`, or
+/// an `IP:PORT` address in its text. Not documented: `None` when neither.
+pub fn assigned_host_port(said: &str, host_ip: &str, sandbox_port: u16) -> Option<u16> {
+    for line in said.lines().map(str::trim).filter(|l| l.starts_with('{') || l.starts_with('[')) {
+        if let Some(rows) = sbxw_core::ports::parse_ports_json(line).or_else(|| sbxw_core::ports::parse_ports_json(&format!("[{line}]"))) {
+            if let Some(m) = rows.iter().find(|m| m.sandbox_port == sandbox_port) {
+                return Some(m.host_port);
+            }
+        }
+    }
+    let prefix = format!("{host_ip}:");
+    said.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')' | '"' | '\'' | '/'))
+        .filter_map(|w| w.trim_start_matches("http://").strip_prefix(prefix.as_str()))
+        .filter_map(|rest| rest.split(|c: char| !c.is_ascii_digit()).next()?.parse::<u16>().ok())
+        .find(|p| *p != 0)
+}
+
+/// What `sbx policy check network` (0.54) said of one target: `allowed`
+/// and the `rule` that decided, when its answer says so, and `raw`, its
+/// answer as printed, always.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PolicyCheck {
+    pub allowed: Option<bool>,
+    pub rule: Option<String>,
+    pub raw: String,
+}
+
+/// The release that added `sbx policy check network`.
+pub const POLICY_CHECK_SINCE: (u32, u32, u32) = (0, 54, 0);
+
+/// [`PolicyCheck`] out of `raw`: a JSON object (`allowed` or `decision`,
+/// `rule`/`rule_id`/`rule_name`/`id`, or a nested `rule.name|id`), else
+/// text: `allow`/`deny` words and the word after `rule`. Not documented.
+pub fn parse_policy_check(raw: &str) -> PolicyCheck {
+    let mut c = PolicyCheck { raw: raw.trim().to_string(), ..Default::default() };
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim()) {
+        let text = |v: &serde_json::Value, keys: &[&str]| keys.iter().find_map(|k| v.get(*k).and_then(|x| x.as_str())).map(String::from);
+        c.allowed = v.get("allowed").and_then(|a| a.as_bool()).or_else(|| {
+            let d = text(&v, &["decision", "action", "result"])?.to_ascii_lowercase();
+            d.starts_with("allow").then_some(true).or(d.starts_with("den").then_some(false).or(d.starts_with("block").then_some(false)))
+        });
+        c.rule = text(&v, &["rule_name", "rule", "rule_id", "id"]).or_else(|| v.get("rule").and_then(|r| text(r, &["name", "id"])));
+        return c;
+    }
+    let lower = raw.to_ascii_lowercase();
+    c.allowed = if lower.contains("denied") || lower.contains("blocked") || lower.contains("not allowed") {
+        Some(false)
+    } else if lower.contains("allowed") {
+        Some(true)
+    } else {
+        None
+    };
+    let words: Vec<&str> = raw.split_whitespace().collect();
+    c.rule = words
+        .windows(2)
+        .find(|w| w[0].trim_matches(|ch: char| matches!(ch, ':' | '(' | ',')).eq_ignore_ascii_case("rule"))
+        .map(|w| w[1].trim_matches(|ch: char| matches!(ch, '"' | '\'' | '`' | ',' | '.' | '(' | ')')).to_string())
+        .filter(|r| !r.is_empty());
+    c
+}
+
 /// Did sbx refuse because it wanted a yes it could not ask for?
 pub fn wants_confirmation(err: &str) -> bool {
     let e = err.to_lowercase();
@@ -543,6 +724,8 @@ pub fn wants_confirmation(err: &str) -> bool {
 pub struct Sbx {
     runner: Arc<dyn Runner>,
     timeouts: Timeouts,
+    /// The version once read (see [`Sbx::known_version`]), shared by clones.
+    version_seen: Arc<std::sync::Mutex<Option<(u32, u32, u32)>>>,
 }
 
 /// How long an `sbx` call may take before it is stopped, so a wedged sbx
@@ -586,6 +769,8 @@ fn command_class(args: &[String]) -> String {
     let first = args.first().map(String::as_str).unwrap_or("");
     match (first, args.get(1)) {
         ("policy" | "mcp" | "template" | "secret" | "setting", Some(sub)) if sub.chars().all(|c| c.is_ascii_lowercase() || c == '-') => format!("{first} {sub}"),
+        // `port`'s second word is its verb; `ports`'s is a sandbox name.
+        ("port", Some(sub)) if matches!(sub.as_str(), "ls" | "publish" | "unpublish") => format!("port {sub}"),
         _ => first.to_string(),
     }
 }
@@ -596,7 +781,7 @@ fn s(args: &[&str]) -> Vec<String> {
 
 impl Sbx {
     pub fn new(runner: Arc<dyn Runner>) -> Self {
-        Self { runner, timeouts: Timeouts::default() }
+        Self { runner, timeouts: Timeouts::default(), version_seen: Arc::default() }
     }
 
     /// The same client with other bounds (tests shorten them).
@@ -726,7 +911,9 @@ impl Sbx {
         let sink: runner::LineSink = Arc::new(move |line: &str| {
             {
                 let mut t = t.lock().unwrap();
-                if t.len() == 12 {
+                // sbx 0.54 keeps a failed kit install's diagnostics and the
+                // hosts it denied: room for them (command_error caps the text).
+                if t.len() == 40 {
                     t.pop_front();
                 }
                 t.push_back(line.to_string());
@@ -746,8 +933,8 @@ impl Sbx {
             .await?;
         if !out.success() {
             let said = Vec::from(std::mem::take(&mut *tail.lock().unwrap())).join("\n");
-            let out = Output { stderr: said.into_bytes(), ..out };
-            return Err(command_error(&args, &out));
+            let out = if said.is_empty() { out } else { Output { stderr: said.into_bytes(), stdout: Vec::new(), ..out } };
+            return Err(SbxFailure::new(&args, &out).into());
         }
         Ok(())
     }
@@ -784,25 +971,107 @@ impl Sbx {
         self.capture(prune_args(until, dry_run)).await
     }
 
-    /// The live mappings, from the documented JSON rows.
+    /// The live mappings, from the documented JSON rows: `port ls` on sbx
+    /// 0.54, `ports` before it (and when `port ls` refuses `--format json`).
     pub async fn ports(&self, name: &SandboxName) -> Vec<PortMapping> {
-        self.capture(s(&["ports", name.as_str(), "--format", "json"]))
-            .await
-            .ok()
-            .and_then(|r| sbxw_core::ports::parse_ports_json(&r))
-            .unwrap_or_default()
+        let parse = |r: String| sbxw_core::ports::parse_ports_json(&r);
+        if self.has_port_command().await {
+            if let Some(rows) = self.capture(s(&["port", "ls", name.as_str(), "--format", "json"])).await.ok().and_then(parse) {
+                return rows;
+            }
+        }
+        self.capture(s(&["ports", name.as_str(), "--format", "json"])).await.ok().and_then(parse).unwrap_or_default()
     }
 
+    /// The mappings as sbx prints them for a person.
     pub async fn ports_raw(&self, name: &SandboxName) -> Result<String> {
+        if self.has_port_command().await {
+            match self.capture(s(&["port", "ls", name.as_str()])).await {
+                Ok(out) => return Ok(out),
+                Err(e) if !is_usage_error(&format!("{e:#}")) => return Err(e),
+                Err(_) => {}
+            }
+        }
         self.capture(s(&["ports", name.as_str()])).await
     }
 
+    /// Publish `[[HOST_IP:]HOST_PORT:]SANDBOX_PORT`: `port publish` on sbx
+    /// 0.54, `ports --publish` before it, or when 0.54 refuses the spec's form
+    /// as usage (the notes show `HOST:SANDBOX`, not a host IP before them).
     pub async fn publish(&self, name: &SandboxName, spec: &str) -> Result<()> {
-        self.checked(Invocation::new(s(&["ports", name.as_str(), "--publish", spec]))).await.map(drop)
+        check_port_spec(spec)?;
+        self.port_change(name, "publish", spec).await
     }
 
+    /// Unpublish one mapping, as [`Self::publish`] does.
     pub async fn unpublish(&self, name: &SandboxName, spec: &str) -> Result<()> {
-        self.checked(Invocation::new(s(&["ports", name.as_str(), "--unpublish", spec]))).await.map(drop)
+        check_port_spec(spec)?;
+        self.port_change(name, "unpublish", spec).await
+    }
+
+    async fn port_change(&self, name: &SandboxName, verb: &str, spec: &str) -> Result<()> {
+        let legacy = s(&["ports", name.as_str(), &format!("--{verb}"), spec]);
+        if !self.has_port_command().await {
+            return self.checked(Invocation::new(legacy)).await.map(drop);
+        }
+        let Err(new) = self.checked(Invocation::new(s(&["port", verb, name.as_str(), spec]))).await else {
+            return Ok(());
+        };
+        if !is_usage_error(&format!("{new:#}")) {
+            return Err(new);
+        }
+        self.checked(Invocation::new(legacy))
+            .await
+            .map(drop)
+            .map_err(|old| anyhow!("{old:#}\n(`sbx ports` tried after `sbx port {verb}` refused the spec: {new:#})"))
+    }
+
+    /// Publish `sandbox_port` on loopback `host_ip`, at `host_port` or, when
+    /// `None`, at a port sbx assigns (0.54: an older sbx is refused here,
+    /// never sent a spec it would read otherwise). The mapping as published:
+    /// read from sbx's answer, else found by listing the ports afterwards.
+    pub async fn port_publish(&self, name: &SandboxName, host_ip: &str, host_port: Option<u16>, sandbox_port: u16) -> Result<PortMapping> {
+        if !sbxw_core::hosts::is_ipv4_literal(host_ip) || sandbox_port == 0 || host_port == Some(0) {
+            bail!("not a port mapping: {host_ip}:{}:{sandbox_port}", host_port.map(|p| p.to_string()).unwrap_or_default());
+        }
+        let fixed = |host_port| PortMapping { sandbox_port, proto: "tcp".into(), host_ip: host_ip.to_string(), host_port };
+        if let Some(hp) = host_port {
+            self.publish(name, &format!("{host_ip}:{hp}:{sandbox_port}")).await?;
+            return Ok(fixed(hp));
+        }
+        if !self.has_port_command().await {
+            bail!("an automatic host port needs sbx {}.{}.{} or newer: name the host port", PORT_SINCE.0, PORT_SINCE.1, PORT_SINCE.2);
+        }
+        let before = self.ports(name).await;
+        // Always with the host IP, as docker writes an assigned host port
+        // (`IP::SANDBOX`): a bare sandbox port could bind every interface.
+        let out = self.checked(Invocation::new(s(&["port", "publish", name.as_str(), &format!("{host_ip}::{sandbox_port}")]))).await?;
+        let said = format!("{}\n{}", out.stdout_str(), String::from_utf8_lossy(&out.stderr));
+        if let Some(hp) = assigned_host_port(&said, host_ip, sandbox_port) {
+            return Ok(fixed(hp));
+        }
+        self.ports(name)
+            .await
+            .into_iter()
+            .find(|m| m.sandbox_port == sandbox_port && m.host_ip == host_ip && !before.contains(m))
+            .ok_or_else(|| anyhow!("sbx published sandbox port {sandbox_port} but did not say on which host port, and `sbx port ls` does not list a new one"))
+    }
+
+    /// Does this sbx have `sbx port` (0.54)? From its version, read once and
+    /// kept; an unreadable one is an older sbx, whose `sbx ports` 0.54 keeps.
+    pub async fn has_port_command(&self) -> bool {
+        self.known_version().await.is_some_and(|v| v >= PORT_SINCE)
+    }
+
+    /// [`Self::version`], read once per client while it reads; an answer
+    /// that is not a version is asked again next time.
+    pub async fn known_version(&self) -> Option<(u32, u32, u32)> {
+        if let Some(v) = *self.version_seen.lock().unwrap() {
+            return Some(v);
+        }
+        let v = self.version().await.ok().flatten()?;
+        *self.version_seen.lock().unwrap() = Some(v);
+        Some(v)
     }
 
     /// `None` writes a host-wide rule — every sandbox, present and future.
@@ -862,6 +1131,27 @@ impl Sbx {
             }
         }
         (self.policy_view(s(&["policy", "log", sandbox.as_str()]), s(&["policy", "log"]), sandbox).await, None)
+    }
+
+    /// Which rule lets the sandbox (or, with `None`, every sandbox) reach
+    /// `target` (`host` or `host:port`, checked before it reaches argv):
+    /// `sbx policy check network [--sandbox N] TARGET`, the shape of `policy
+    /// allow network`, on 0.54 only.
+    pub async fn policy_check(&self, sandbox: Option<&SandboxName>, target: &str) -> Result<PolicyCheck> {
+        let (host, port) = match target.rsplit_once(':') {
+            Some((h, p)) if p.parse::<u16>().is_ok_and(|p| p != 0) => (h, Some(p)),
+            _ => (target, None),
+        };
+        let host = sbxw_core::policy::clean_host(host).map_err(|e| anyhow!("not a target: {e}"))?;
+        if !self.known_version().await.is_some_and(|v| v >= POLICY_CHECK_SINCE) {
+            bail!("`sbx policy check` needs sbx 0.54 or newer");
+        }
+        let mut a = s(&["policy", "check", "network"]);
+        if let Some(n) = sandbox {
+            a.extend(["--sandbox".into(), n.to_string()]);
+        }
+        a.push(port.map_or(host.clone(), |p| format!("{host}:{p}")));
+        Ok(parse_policy_check(&self.capture(a).await?))
     }
 
     /// `sbx policy refresh`: re-read policy now, e.g. after an AI
@@ -1097,8 +1387,25 @@ impl Sbx {
         s(&["kit", "add", name.as_str(), kit])
     }
 
+    /// A failure is an [`SbxFailure`]: sbx's words and the hosts it denied.
     pub async fn kit_add(&self, name: &SandboxName, kit: &str) -> Result<()> {
-        self.checked(Invocation::new(s(&["kit", "add", name.as_str(), kit]))).await.map(drop)
+        let args = Self::kit_add_args(name, kit);
+        let out = self.run(Invocation::new(args.clone())).await?;
+        if !out.success() {
+            return Err(SbxFailure::new(&args, &out).into());
+        }
+        Ok(())
+    }
+
+    /// The hosts the sandbox was refused since `since` (RFC 3339, as sbx
+    /// writes `last_seen`), from `policy log --format json`: what a kit's
+    /// install hit when sbx's own message names none (before 0.54). Empty
+    /// when the log cannot be read.
+    pub async fn blocked_since(&self, name: &SandboxName, since: &str) -> Vec<sbxw_core::policy::BlockedHost> {
+        let (_, log) = self.policy_log(name).await;
+        let Some(mut log) = log else { return Vec::new() };
+        log.blocked.retain(|e| e.last_seen.as_str() >= since);
+        log.blocked_hosts()
     }
 
     /// `sbx inspect --format json`, as far as sbxw reads it: an error when
@@ -1240,6 +1547,9 @@ impl Sbx {
         Ok(scripts::MergeOutcome::from_fields(&f))
     }
 
+    /// `sbx setup ssh`: writes (again) the managed `Host *.sbx` block. Safe
+    /// to re-run; sbx 0.54 asks for it once after the upgrade (see
+    /// [`ssh_refresh_due`]).
     pub async fn setup_ssh(&self) -> Result<()> {
         self.checked(Invocation::new(s(&["setup", "ssh"]))).await.map(drop)
     }
@@ -1288,7 +1598,19 @@ mod tests {
         assert_eq!(upgrade_notes("0.51.2", "0.53.0").len(), 3, "policy case, secret commands, Remote Control");
         assert_eq!(upgrade_notes("0.50.1", "0.53.0").len(), 6, "0.52 was skipped: both crossings at once");
         assert!(upgrade_notes("0.53.0", "0.53.1").is_empty());
+        assert_eq!(upgrade_notes("0.53.1", "0.54.0").len(), 3, "kit permissions, saved mounts, post-quantum TLS");
+        assert!(upgrade_notes("0.54.0", "0.54.1").is_empty());
         assert!(upgrade_notes("", "0.50.0").is_empty(), "a first install has nothing to upgrade from");
+    }
+
+    #[test]
+    fn the_ssh_configuration_is_refreshed_once_on_0_54() {
+        assert!(ssh_refresh_due(None, "0.54.0"), "never refreshed by sbxw");
+        assert!(ssh_refresh_due(Some("0.53.1"), "0.54.0"));
+        assert!(!ssh_refresh_due(Some("0.54.0"), "0.54.2"), "done once");
+        assert!(!ssh_refresh_due(None, "0.53.1"), "an older sbx writes the same thing again");
+        assert!(!ssh_refresh_due(None, "dev build"));
+        assert!(ssh_refresh_due(Some("garbage"), "0.55.0"));
     }
 
     #[test]
@@ -1603,6 +1925,12 @@ mod tests {
             assert_eq!(of(none), None, "{none:?}");
         }
         assert!(t.ordinary == Duration::from_secs(60));
+        for port in [&["port", "ls", "a"][..], &["port", "publish", "a", "127.0.0.1::3000"], &["ports", "a", "--publish", "1:1"]] {
+            assert_eq!(of(port), Some(t.ordinary), "{port:?}");
+        }
+        assert_eq!(command_class(&s(&["port", "publish", "myapp", "1:1"])), "port publish");
+        assert_eq!(command_class(&s(&["ports", "myapp", "--publish", "1:1"])), "ports", "a sandbox name is never shown");
+        assert_eq!(command_class(&s(&["port", "myapp"])), "port");
     }
 
     /// The real runner: on a timeout the child is killed, not left behind.
@@ -1645,5 +1973,199 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let e = format!("{e:#}");
         assert!(e.contains("sbx could not run the command in 'myapp'") && e.contains("sandbox myapp not found"), "{e}");
+    }
+
+    /// An sbx at `version` whose `port` command is `port`: `None` answers
+    /// as 0.54 would be expected to, `Some(err)` refuses every `port` call.
+    fn ports_fake(version: &'static str, port: impl Fn(&[String]) -> Output + Send + Sync + 'static) -> Arc<Fake> {
+        Fake::new(move |a| match a[0].as_str() {
+            "--version" => Output::ok(version),
+            "port" => port(a),
+            "ports" if a.get(2).map(String::as_str) == Some("--format") => Output::ok(r#"[{"host_ip":"127.0.0.1","host_port":4200,"sandbox_port":4200,"protocol":"tcp"}]"#),
+            _ => Output::ok(""),
+        })
+    }
+
+    #[tokio::test]
+    async fn an_sbx_before_0_54_is_sent_the_ports_command() {
+        let fake = ports_fake("sbx version 0.53.1", |_| Output::fail(1, "unknown command \"port\""));
+        let sbx = Sbx::new(fake.clone());
+        sbx.publish(&sb("n"), "127.0.0.1:4200:4200").await.unwrap();
+        sbx.unpublish(&sb("n"), "127.0.0.1:4200:4200").await.unwrap();
+        assert_eq!(sbx.ports(&sb("n")).await.len(), 1);
+        assert_eq!(fake.log(), ["--version", "ports n --publish 127.0.0.1:4200:4200", "ports n --unpublish 127.0.0.1:4200:4200", "ports n --format json"], "the version is read once");
+        let e = sbx.port_publish(&sb("n"), "127.0.0.1", None, 3000).await.unwrap_err();
+        assert!(format!("{e:#}").contains("needs sbx 0.54"), "{e:#}");
+        assert!(!fake.log().iter().any(|c| c.contains("::")), "an older sbx is never sent an automatic spec");
+        // Unreadable: the legacy command, which 0.54 keeps.
+        let fake = ports_fake("dev build", |_| Output::ok(""));
+        Sbx::new(fake.clone()).publish(&sb("n"), "127.0.0.1:1:1").await.unwrap();
+        assert_eq!(fake.log()[1], "ports n --publish 127.0.0.1:1:1");
+    }
+
+    #[tokio::test]
+    async fn sbx_0_54_is_sent_port_and_falls_back_only_on_a_usage_refusal() {
+        let fake = ports_fake("sbx version 0.54.0", |a| match a[1].as_str() {
+            "ls" => Output::ok(r#"[{"host_ip":"127.0.0.1","host_port":8000,"sandbox_port":8000,"protocol":"tcp"}]"#),
+            "publish" if a[3].contains("4200") => Output::fail(1, "Error: invalid argument \"127.0.0.1:4200:4200\" for publish\nUsage: sbx port publish SANDBOX [HOST_PORT:]SANDBOX_PORT"),
+            "publish" => Output::fail(1, "host port 8000 is already in use"),
+            _ => Output::ok(""),
+        });
+        let sbx = Sbx::new(fake.clone());
+        assert_eq!(sbx.ports(&sb("n")).await[0].host_port, 8000);
+        sbx.unpublish(&sb("n"), "127.0.0.1:8000:8000").await.unwrap();
+        sbx.publish(&sb("n"), "127.0.0.1:4200:4200").await.unwrap();
+        let busy = sbx.publish(&sb("n"), "127.0.0.1:8000:8000").await.unwrap_err();
+        assert!(format!("{busy:#}").contains("already in use"));
+        assert_eq!(
+            fake.log(),
+            [
+                "--version",
+                "port ls n --format json",
+                "port unpublish n 127.0.0.1:8000:8000",
+                "port publish n 127.0.0.1:4200:4200",
+                "ports n --publish 127.0.0.1:4200:4200",
+                "port publish n 127.0.0.1:8000:8000",
+            ],
+            "a busy port is not tried twice"
+        );
+        // `port ls` without --format json: the legacy JSON.
+        let fake = ports_fake("sbx version 0.54.0", |_| Output::fail(1, "Error: unknown flag: --format"));
+        assert_eq!(Sbx::new(fake.clone()).ports(&sb("n")).await[0].host_port, 4200);
+        assert!(fake.called("ports n --format json"));
+    }
+
+    #[tokio::test]
+    async fn an_automatic_host_port_is_read_from_sbx_or_from_the_list() {
+        for said in [r#"{"host_ip":"127.0.0.1","host_port":49153,"sandbox_port":3000,"protocol":"tcp"}"#, "Published 127.0.0.1:49153 -> 3000/tcp\n"] {
+            let fake = ports_fake("sbx version 0.54.0", move |a| if a[1] == "publish" { Output::ok(said) } else { Output::ok("[]") });
+            let m = Sbx::new(fake.clone()).port_publish(&sb("n"), "127.0.0.1", None, 3000).await.unwrap();
+            assert_eq!((m.host_ip.as_str(), m.host_port, m.sandbox_port), ("127.0.0.1", 49153, 3000), "{said}");
+            assert!(fake.called("port publish n 127.0.0.1::3000"), "always with the loopback IP: {:?}", fake.log());
+        }
+        // Nothing said: the new row in the list is the answer.
+        let published = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let p = published.clone();
+        let fake = ports_fake("sbx version 0.54.0", move |a| match a[1].as_str() {
+            "publish" => {
+                p.store(true, std::sync::atomic::Ordering::SeqCst);
+                Output::ok("")
+            }
+            _ if p.load(std::sync::atomic::Ordering::SeqCst) => Output::ok(r#"[{"host_ip":"127.0.0.1","host_port":8000,"sandbox_port":3000},{"host_ip":"127.0.0.1","host_port":49200,"sandbox_port":3000}]"#),
+            _ => Output::ok(r#"[{"host_ip":"127.0.0.1","host_port":8000,"sandbox_port":3000}]"#),
+        });
+        assert_eq!(Sbx::new(fake).port_publish(&sb("n"), "127.0.0.1", None, 3000).await.unwrap().host_port, 49200);
+        // A fixed host port is the ordinary publish.
+        let fake = ports_fake("sbx version 0.54.0", |_| Output::ok(""));
+        assert_eq!(Sbx::new(fake.clone()).port_publish(&sb("n"), "127.0.0.2", Some(4200), 3000).await.unwrap().host_port, 4200);
+        assert!(fake.called("port publish n 127.0.0.2:4200:3000"));
+    }
+
+    #[tokio::test]
+    async fn a_bad_port_spec_never_reaches_sbx() {
+        let fake = ports_fake("sbx version 0.54.0", |_| Output::ok(""));
+        let sbx = Sbx::new(fake.clone());
+        for bad in ["--force", "127.0.0.1:1:2:3", "a:1", "", ":1", "1/sctp", "1 2"] {
+            assert!(sbx.publish(&sb("n"), bad).await.is_err(), "{bad:?}");
+            assert!(sbx.unpublish(&sb("n"), bad).await.is_err(), "{bad:?}");
+        }
+        for bad in ["0.0.0.0.0", "localhost", "-1", "::1"] {
+            assert!(sbx.port_publish(&sb("n"), bad, None, 3000).await.is_err(), "{bad:?}");
+        }
+        assert!(sbx.port_publish(&sb("n"), "127.0.0.1", None, 0).await.is_err());
+        assert!(fake.log().iter().all(|c| c == "--version"), "{:?}", fake.log());
+    }
+
+    #[test]
+    fn the_assigned_port_is_read_out_of_what_sbx_said() {
+        assert_eq!(assigned_host_port("[{\"host_port\":5,\"sandbox_port\":3000}]", "127.0.0.1", 3000), Some(5));
+        assert_eq!(assigned_host_port("warning: x\nhttp://127.0.0.1:61000 → sandbox 3000", "127.0.0.1", 3000), Some(61000));
+        assert_eq!(assigned_host_port("done", "127.0.0.1", 3000), None);
+        assert_eq!(assigned_host_port("127.0.0.2:5 -> 3000", "127.0.0.1", 3000), None, "another loopback's mapping is not this one");
+    }
+
+    #[tokio::test]
+    async fn inspect_keeps_the_mcp_mode_when_sbx_gives_one() {
+        let fake = Fake::new(|a| match a[1].as_str() {
+            "new" => Output::ok(r#"{"name":"new","kits":[],"created_version":"v0.54.0","mcp":{"mode":"static","servers":[{"name":"github"}]}}"#),
+            _ => Output::ok(r#"{"name":"old","kits":[],"created_version":"v0.53.0"}"#),
+        });
+        let sbx = Sbx::new(fake.clone());
+        let new = sbx.inspect(&sb("new")).await.unwrap().mcp.unwrap();
+        assert_eq!((new.mode.as_str(), new.servers.as_slice()), ("static", &["github".to_string()][..]));
+        assert_eq!(sbx.inspect(&sb("old")).await.unwrap().mcp, None);
+        assert_eq!(fake.log()[0], "inspect new --format json");
+    }
+
+    #[test]
+    fn denied_hosts_are_read_off_the_lines_that_say_so() {
+        let said = "installing kit sbxw:agent-skills v1.2.3\n\
+                    npm ERR! request to https://registry.npmjs.org/foo failed\n\
+                    Network denials during installation:\n\
+                    \x20 - registry.npmjs.org:443 (blocked by network policy)\n\
+                    \x20 - \"github.com\" denied, rule default-deny-all\n\
+                    Blocked by network policy: domain objects.githubusercontent.com\n\
+                    blocked: registry.npmjs.org again, see policy.json, sbx 0.54.0\n\
+                    blocked --sandbox=x.y rm -rf\n";
+        assert_eq!(denied_hosts(said), ["registry.npmjs.org", "github.com", "objects.githubusercontent.com"]);
+        assert!(denied_hosts("all good: registry.npmjs.org").is_empty(), "a host on a line that denies nothing");
+    }
+
+    #[tokio::test]
+    async fn a_failed_kit_install_keeps_sbx_words_and_the_denied_hosts() {
+        let fake = Fake::new(|a| match a[0].as_str() {
+            // Streamed: the fake hands stdout to the line sink, as sbx's progress.
+            "create" => Output { code: Some(1), stdout: b"pulling 100%\nkit sbxw:codemap: startup command failed (exit 1): npm install\ndenied: registry.npmjs.org:443\n".to_vec(), stderr: vec![] },
+            _ => Output::fail(1, "kit add: install failed\nblocked by network policy: pypi.org, files.pythonhosted.org\n"),
+        });
+        let sbx = Sbx::new(fake.clone());
+        let e = sbx.create(&sb("n"), &CreateOpts { workspace: "/w".into(), ..Default::default() }, None).await.unwrap_err();
+        let e = e.context("creating 'n'");
+        let f = e.downcast_ref::<SbxFailure>().expect("typed through a context");
+        assert_eq!(f.denied, ["registry.npmjs.org"]);
+        assert!(f.message.contains("startup command failed") && format!("{e:#}").contains("denied: registry.npmjs.org:443"), "sbx's words, unchanged: {e:#}");
+        let e = sbx.kit_add(&sb("n"), "sbxw:k").await.unwrap_err();
+        assert_eq!(e.downcast_ref::<SbxFailure>().unwrap().denied, ["pypi.org", "files.pythonhosted.org"]);
+        assert!(format!("{e:#}").starts_with("`sbx kit add n sbxw:k` exited with exit status 1:"), "{e:#}");
+    }
+
+    #[tokio::test]
+    async fn blocked_hosts_since_an_install_began_come_from_the_policy_log() {
+        let fake = Fake::new(|_| Output::ok(r#"{"allowed":[],"blocked":[
+            {"host":"old.example.com:443","rule":"default-deny-all","reason":"no matching allow rule","count":1,"last_seen":"2026-11-01T09:00:00Z"},
+            {"host":"pypi.org:443","rule":"default-deny-all","reason":"no matching allow rule","count":4,"last_seen":"2026-11-23T10:00:05Z"}]}"#));
+        let b = Sbx::new(fake.clone()).blocked_since(&sb("n"), "2026-11-23T10:00:00Z").await;
+        assert_eq!(b.iter().map(|b| b.resource.as_str()).collect::<Vec<_>>(), ["pypi.org"]);
+        assert_eq!(fake.log(), ["policy log n --format json"]);
+    }
+
+    #[tokio::test]
+    async fn policy_check_names_the_rule_on_0_54_only() {
+        let fake = Fake::new(|a| match a[0].as_str() {
+            "--version" => Output::ok("sbx version 0.54.0"),
+            _ => Output::ok("ALLOWED pypi.org:443 by rule b-12 (allow network pypi.org, sandbox n)\n"),
+        });
+        let sbx = Sbx::new(fake.clone());
+        let c = sbx.policy_check(Some(&sb("n")), "pypi.org:443").await.unwrap();
+        assert_eq!((c.allowed, c.rule.as_deref()), (Some(true), Some("b-12")));
+        assert_eq!(fake.log()[1], "policy check network --sandbox n pypi.org:443");
+        for bad in ["--force", "a b", "pypi.org:x:1", "", "*.org"] {
+            assert!(sbx.policy_check(None, bad).await.is_err(), "{bad:?}");
+        }
+        assert_eq!(fake.log().len(), 2, "a bad target never reaches sbx");
+        let old = Sbx::new(Fake::new(|_| Output::ok("sbx version 0.53.1")));
+        assert!(format!("{:#}", old.policy_check(None, "pypi.org").await.unwrap_err()).contains("0.54"));
+    }
+
+    #[test]
+    fn a_policy_check_answer_is_read_as_json_or_text() {
+        let j = parse_policy_check(r#"{"target":"x.com:443","decision":"allow","rule":{"id":"r-1","name":"balanced: x.com"}}"#);
+        assert_eq!((j.allowed, j.rule.as_deref()), (Some(true), Some("balanced: x.com")));
+        let j = parse_policy_check(r#"{"allowed":false,"rule_id":"default-deny-all"}"#);
+        assert_eq!((j.allowed, j.rule.as_deref()), (Some(false), Some("default-deny-all")));
+        let t = parse_policy_check("x.com: blocked (rule: default-deny-all)");
+        assert_eq!((t.allowed, t.rule.as_deref()), (Some(false), Some("default-deny-all")));
+        let t = parse_policy_check("something else");
+        assert_eq!((t.allowed, t.rule, t.raw.as_str()), (None, None, "something else"), "kept as printed");
     }
 }

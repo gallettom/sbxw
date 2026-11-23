@@ -14,6 +14,14 @@ sbxw ssh myapp -- git status   # one command
 `--setup` writes a managed, sbx-owned `Host *.sbx` block into your SSH config.
 It matches no host you already have, and it's safe to re-run.
 
+**After upgrading to sbx 0.54, the block must be written again**: 0.54's
+version stops crafted host or user names from running shell commands with
+older OpenSSH clients, and only a rerun replaces the old one. sbxw does it for
+you once, on its first run after it sees sbx reach 0.54, if a `*.sbx` block is
+already in `~/.ssh/config`, and says so. If that fails it says to run
+`sbxw ssh --setup` (or `sbx setup ssh`). sbxw remembers the sbx version setup
+last ran with (`~/.sbxw/state/ssh-refreshed.json`), so it happens once.
+
 **The installer does this for you.** Run interactively, it asks (default yes).
 Piped (`curl … | sh`), it applies the same default, since otherwise the web UI's
 SSH button and `sbxw ssh` would fail on most installs. `SBXW_SETUP_SSH=0` leaves

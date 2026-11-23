@@ -249,4 +249,13 @@ mod tests {
         assert_eq!((c[1].0 == Level::Warn, c[1].2.as_str()), (true, "sync=always slows image builds"));
         assert_eq!(c[2].0, Level::Fail);
     }
+
+    /// sbx 0.54 gives each check a stable `id` beside its display `name`:
+    /// shown once, by its name.
+    #[test]
+    fn a_check_with_an_id_is_shown_once_by_its_name() {
+        let v: Value = serde_json::from_str(r#"{"checks":[{"id":"host.mkfs","name":"mkfs.ext4","status":"ok"},{"id":"net.policy","status":"warning"}]}"#).unwrap();
+        let c = summarise(&v);
+        assert_eq!(c.iter().map(|c| c.1.as_str()).collect::<Vec<_>>(), ["mkfs.ext4", "net.policy"], "the id when there is no name");
+    }
 }

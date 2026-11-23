@@ -248,3 +248,14 @@ running desktop app is not restarted: quit and reopen it. `--no-desktop` leaves
 it alone.
 
 The web UI shows both versions, `sbx` and `sbxw`, at the foot of the sidebar.
+
+### Upgrading sbx
+
+sbxw notices when sbx changes and says, once, what the upgrade costs. For sbx
+0.54: it rewrites the `*.sbx` SSH block if you have one ([SSH](ssh.md)), kits
+may ask again to confirm their permissions, and a sandbox whose saved mount now
+resolves to another folder will not start until you `sbx umount` it and mount
+it again. If HTTPS from sandboxes stalls behind a firewall or a TLS-inspecting
+proxy after the upgrade, turn off post-quantum key exchange:
+`sbx settings set tls.postQuantumKeyExchange false`, then `sbx daemon restart`.
+sbxw works with sbx 0.51 to 0.54.
