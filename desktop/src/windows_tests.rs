@@ -152,3 +152,86 @@ fn full_screen_is_the_platforms_key() {
         assert!(!full_screen_key(&ev(rune::Key::Function(10), rune::Mods::default())));
     }
 }
+
+/// Page windows: each its own number, opened and closed by the hub, and
+/// closed once (by the person, or by the main window taking the page back).
+#[test]
+fn page_windows_open_by_number_and_close_once() {
+    let mut h = Hub::default();
+    let a = h.open_page("web-app".into());
+    let b = h.open_page("api".into());
+    assert_ne!(a, b);
+    assert_eq!(h.page_windows(), vec![a, b]);
+    assert_eq!(h.take_native(), vec![Native::Open(Win::Page(a)), Native::Open(Win::Page(b))]);
+    assert_eq!(h.name(Win::Page(a)), "the page window “web-app”");
+    h.window_closed(Win::Page(a));
+    h.window_closed(Win::Page(a));
+    let got = h.take_for_primary();
+    assert!(matches!(got.as_slice(), [(Win::Page(n), ToPrimary::Closed)] if *n == a), "{got:?}");
+    assert!(h.close_page(b));
+    assert!(!h.close_page(b));
+    h.window_closed(Win::Page(b));
+    assert!(h.take_for_primary().is_empty(), "taken back by the main window: nothing more");
+    assert_eq!(h.take_native(), vec![Native::Close(Win::Page(b))]);
+}
+
+/// A confirmation raised in one page window holds every other window: the
+/// main one draws where it is, the canvas window and the other page window
+/// take no input and draw a scrim; only its own window's answer is taken.
+#[test]
+fn a_page_windows_confirmation_holds_every_other_window() {
+    let mut h = Hub::default();
+    h.open_canvas();
+    let (a, b) = (h.open_page("a".into()), h.open_page("b".into()));
+    let (pa, pb) = (Win::Page(a), Win::Page(b));
+    h.dialog_raised("drop-1".into(), pa);
+    h.set_gates(vec![Gate { owner: pa, what: "A confirmation waits for you in the page window “a”.".into() }]);
+    assert_eq!(h.dialog_owner(), Some(pa));
+    assert_eq!(h.gate_for(pa), None, "its own window draws it, no scrim there");
+    assert!(h.gate_for(pb).is_some_and(|g| g.owner == pa) && h.gate_for(CANVAS).is_some_and(|g| g.owner == pa) && h.gate_for(PRIMARY).is_some_and(|g| g.owner == pa));
+    for from in [CANVAS, pb, pa] {
+        assert!(!h.post(from, intents()), "{from}: input waits");
+        assert!(!h.post(from, ToPrimary::Run { f: RunFn(std::rc::Rc::new(|_| {})), input: true }));
+    }
+    for from in [PRIMARY, CANVAS, pb] {
+        assert!(!h.post(from, ToPrimary::Answer { confirm: true, dialog: "drop-1".into() }), "{from} cannot answer it");
+    }
+    assert!(h.post(pa, ToPrimary::Answer { confirm: false, dialog: "drop-1".into() }));
+    // Its window's own news still goes (a bar laid out, a copy asked by a program).
+    assert!(h.post(pb, ToPrimary::Run { f: RunFn(std::rc::Rc::new(|_| {})), input: false }));
+}
+
+/// A copy offer belongs to the window whose terminal asked for it: only
+/// that window answers it, and closing that window drops it (never copies).
+#[test]
+fn a_copy_offer_is_answered_by_its_own_window_only_and_dropped_when_it_closes() {
+    let mut h = Hub::default();
+    let a = h.open_page("a".into());
+    let pa = Win::Page(a);
+    h.copy_raised("offer-1".into(), pa);
+    assert_eq!(h.copy_owner(), Some(pa));
+    assert!(!h.post(PRIMARY, ToPrimary::CopyAnswer { copy: true }));
+    assert!(!h.post(CANVAS, ToPrimary::CopyAnswer { copy: true }));
+    h.note_copy(Some("offer-1".into()));
+    assert_eq!(h.copy_owner(), Some(pa), "the same offer: still its");
+    h.window_closed(pa);
+    let got = h.take_for_primary();
+    assert!(matches!(got.first(), Some((w, ToPrimary::CopyAnswer { copy: false })) if *w == pa), "{got:?}");
+    assert!(!got.iter().any(|(_, m)| matches!(m, ToPrimary::CopyAnswer { copy: true })));
+    // A newer offer from the main window's own terminal is the main window's.
+    h.note_copy(Some("offer-2".into()));
+    assert_eq!(h.copy_owner(), Some(PRIMARY));
+}
+
+/// While the main window holds the keyboard for a proposal, every window is
+/// told (it draws again), once.
+#[test]
+fn the_held_keyboard_is_news_for_every_window() {
+    let mut h = Hub::default();
+    let a = h.open_page("a".into());
+    h.take_dirty(Win::Page(a));
+    h.set_keys_held(true);
+    assert!(h.keys_held() && h.take_dirty(Win::Page(a)));
+    h.set_keys_held(true);
+    assert!(!h.take_dirty(Win::Page(a)));
+}

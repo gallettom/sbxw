@@ -168,6 +168,45 @@ pub struct TerminalConn {
 /// Called from a background thread when something is queued (the UI's waker).
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
+/// A terminal's wake-up, routed to the window that shows it: the socket
+/// thread calls [`WakeRoute::wake`]'s closure, which wakes whichever window
+/// the route points at now. A pane moved to its own window (crate::windows)
+/// points its route there, so its output, redraws and reconnects wake that
+/// window and only it; moved back, the main window again. One target at a
+/// time: a wake is never lost (the new owner is woken when the route moves)
+/// nor doubled (the old owner stops hearing it).
+#[derive(Clone)]
+pub struct WakeRoute {
+    to: Arc<std::sync::Mutex<Wake>>,
+}
+
+impl WakeRoute {
+    pub fn new(to: Wake) -> WakeRoute {
+        WakeRoute { to: Arc::new(std::sync::Mutex::new(to)) }
+    }
+
+    /// The closure for `Daemon::open_terminal` (and the terminal's reconnects).
+    pub fn wake(&self) -> Wake {
+        let to = self.to.clone();
+        Arc::new(move || {
+            let w = to.lock().unwrap().clone();
+            w();
+        })
+    }
+
+    /// From now on, wakes `to`; and wakes it once, so it takes in what the
+    /// old target was woken for and has not drained yet.
+    pub fn set(&self, to: Wake) {
+        *self.to.lock().unwrap() = to.clone();
+        to();
+    }
+
+    /// Whether it points at `w` now (tests).
+    pub fn targets(&self, w: &Wake) -> bool {
+        Arc::ptr_eq(&*self.to.lock().unwrap(), w)
+    }
+}
+
 /// One event of `/api/stream`: its SSE name and its `data:` text.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BusEvent {
@@ -1299,6 +1338,38 @@ mod tests {
     }
 
     use super::*;
+
+    /// A terminal's wakes go to the one window that shows it: moved, the new
+    /// window hears every later wake (and one at the move, for what was
+    /// queued), the old one none.
+    #[test]
+    fn a_wake_route_wakes_one_window_at_a_time() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let (main, page) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (m, p) = (main.clone(), page.clone());
+        let to_main: Wake = Arc::new(move || {
+            m.fetch_add(1, SeqCst);
+        });
+        let to_page: Wake = Arc::new(move || {
+            p.fetch_add(1, SeqCst);
+        });
+        let route = WakeRoute::new(to_main.clone());
+        let wake = route.wake();
+        // The socket thread's closure, called from another thread.
+        let w = wake.clone();
+        std::thread::spawn(move || w()).join().unwrap();
+        assert_eq!((main.load(SeqCst), page.load(SeqCst)), (1, 0));
+        route.set(to_page.clone());
+        assert_eq!((main.load(SeqCst), page.load(SeqCst)), (1, 1), "the new window is woken once at the move");
+        for _ in 0..3 {
+            wake();
+        }
+        assert_eq!((main.load(SeqCst), page.load(SeqCst)), (1, 4), "no wake for the old window, none lost");
+        assert!(route.targets(&to_page) && !route.targets(&to_main));
+        route.set(to_main);
+        wake();
+        assert_eq!((main.load(SeqCst), page.load(SeqCst)), (3, 4), "back: the main window again");
+    }
 
     #[test]
     fn sse_frames_are_parsed() {

@@ -1128,6 +1128,26 @@ panel's resize handle, the status bar at the window's foot (bring-ups,
 total CPU, the sessions' cost, Help: `src/shell/statusbar.rs`) and every
 approval dialog are drawn by the core.
 
+**A page in its own window** (`src/shell/pagewin.rs`). "Move Page to New
+Window" (the pager's "terminals per page" menu and its hidden tabs' menu,
+the palette, ⌘⇧M on macOS and Ctrl+Shift+M elsewhere) moves the current
+page and its terminals to a window of their own: the same terminals (no
+socket reopens), each shown in one window only, its PTY size the tile that
+shows it. That window has the page's tiling and pane bars (the core's
+same bar: keys `pane-<n>-…` numbered within the window), a header with
+"Full screen" and "Move page back", its own focus and keyboard, and no
+pager, sidebar, rail or Jarvis. Its close button, ⌘W, its Window menu's
+"Move Page Back to Main Window", the button or the same chord put the
+page back as the main window's last page (the main window keeps its own
+page and focus); a window close never closes a terminal. Its bars' presses
+run in the main window's model through the window hub (`src/windows.rs`),
+inside that page. A confirmation or copy offer raised by what was done in
+the window is drawn and answered there; everything else stays in the main
+window, and the page window then shows a scrim saying where. Its
+microphone is disabled ("Dictation works in the main window"). The state
+file keeps the page among the main window's pages; the window itself is
+not restored at the next start.
+
 The current page's tab and the pane under its left side are one shape: the
 tab stands on the pane's top edge, its outline (2 pt, `JOIN_W`) in that
 pane's line colour (its group's colour, else `border`) and its fill that

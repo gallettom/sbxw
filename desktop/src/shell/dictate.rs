@@ -325,6 +325,11 @@ impl App {
     /// their way, ready, or why it cannot dictate now (the same reasons the
     /// dictate key gets, said before the press).
     pub(super) fn pane_dictate_state(&self, i: usize) -> PaneDictate {
+        // A pane in its page's own window (pagewin.rs): dictation stays the
+        // main window's (its keyboard focus is where the words are typed).
+        if self.swapped.is_some() {
+            return PaneDictate::Off("Dictation works in the main window.".into());
+        }
         let into = |t: &Take| t.term.as_ref().is_some_and(|(p, _)| *p == i);
         match (&self.dictation.on, &self.dictation.pending) {
             (Some(t), _) if into(t) => return PaneDictate::Recording,

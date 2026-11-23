@@ -35,8 +35,10 @@ fn setup(s: &mut App, waker: Waker) {
     s.setup(waker);
 }
 
-// Closing the main window quits, as before, even with the canvas window
-// open (a window `open_window` made would keep the app running alone).
+// Closing the main window quits, as before, even with the canvas window or
+// page windows open (a window `open_window` made would keep the app running
+// alone). Nothing is confirmed on the way out; the page windows' pages are
+// in the state file already (`App::save_layout` keeps them as pages).
 fn on_close(_s: &mut App, tx: &mut Tx) {
     tx.quit();
 }
@@ -88,10 +90,11 @@ fn main() {
     if let Err(e) = rune::set_app_icon(include_bytes!("../packaging/icon-1024.png").to_vec()) {
         log::warn!("app icon: {e}");
     }
-    // The window hub (windows.rs): the Canvas screen and a confirmation it
-    // raised move to the canvas window for its turns and back, by the
-    // turn scope; Rune opens, focuses and closes the windows it asks for.
+    // The window hub (windows.rs): the Canvas screen, a page of panes
+    // (shell/pagewin.rs) and a confirmation raised in their windows move to
+    // those windows for their turns and back, by the turn scope; Rune
+    // opens, focuses and closes the windows it asks for.
     let app = rune::App::new(spec).chrome(shell::window_chrome()).menu_item(help).on_ime(on_ime).on_visibility(on_visibility).on_close(on_close).turn_scope(windows::primary_enter, windows::primary_leave);
-    windows::install(Box::new(windows::RunePlatform { primary: app.handle(), canvas: None }));
+    windows::install(Box::new(windows::RunePlatform { primary: app.handle(), canvas: None, pages: Default::default() }));
     app.run();
 }

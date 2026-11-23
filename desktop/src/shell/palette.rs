@@ -42,6 +42,12 @@ pub enum Run {
     SwitchMode,
     /// The focused pane's program draws its screen again (`App::redraw_terminal`).
     Redraw,
+    /// The current page to a window of its own (pagewin.rs).
+    PageToWindow,
+    /// Page window N's page back to the main window.
+    PageBack(u32),
+    /// Page window N to the front.
+    ShowPageWindow(u32),
 }
 
 /// One row of the palette.
@@ -108,6 +114,7 @@ pub fn shortcuts(ptt: &str) -> Vec<(Vec<String>, String)> {
         (page_keys(true), "Next page of terminals".into()),
         (page_keys(false), "Previous page of terminals".into()),
         (close_keys(), "Close the focused pane (the sandbox and its session go on)".into()),
+        (super::pagewin::back_keys(), "Move the page to its own window (in that window: back to the main window)".into()),
         (chord_keys("+ / − / 0"), "Zoom the app in, out, back to 100% (in a terminal: its text size)".into()),
         (vec![ptt.to_string()], "Push to talk to Jarvis (hold)".into()),
         (vec!["Escape".into()], "Close the menu, dialog or palette on top".into()),
@@ -289,6 +296,15 @@ impl App {
             v.push(core(&format!("to-page-{}", k + 1), &format!("Move pane to page {}", k + 1), &self.tab_info(k).label, "single", vec![], i("pane_to_page", serde_json::json!({ "page": k + 1 }))));
         }
         v.push(core("to-new-page", "Move pane to a new page", "", "plus", vec![], i("pane_to_page", J::Null)));
+        // A page in its own window (pagewin.rs), and back.
+        if self.shown().any(|k| self.panes[k].sandbox.is_some()) && self.leads.is_none() {
+            v.push(core("page-to-window", "Move Page to New Window", &self.tab_info(self.pages.current).label, "single", super::pagewin::back_keys(), Run::PageToWindow));
+        }
+        for n in self.page_windows() {
+            let title = crate::windows::with(|h| h.page_title(n).unwrap_or("").to_string());
+            v.push(core(&format!("page-window-{n}"), "Show page window", &title, "single", vec![], Run::ShowPageWindow(n)));
+            v.push(core(&format!("page-window-{n}-back"), "Move Page Back to Main Window", &title, "single", vec![], Run::PageBack(n)));
+        }
         v.push(core("zoom-in", "Zoom in", &format!("now {}%", (self.zoom() * 100.0).round()), "plus", chord_keys("+"), Run::Zoom(1)));
         v.push(core("zoom-out", "Zoom out", "", "search", chord_keys("−"), Run::Zoom(-1)));
         v.push(core("zoom-reset", "Actual size", "100%", "search", chord_keys("0"), Run::Zoom(0)));
@@ -356,6 +372,14 @@ impl App {
                 let i = self.focused;
                 self.redraw_terminal(i);
             }
+            Run::PageToWindow => {
+                let k = self.pages.current;
+                self.move_page_out(k);
+            }
+            Run::PageBack(n) => self.page_window_back(n),
+            Run::ShowPageWindow(n) => {
+                crate::windows::focus_window(crate::windows::Win::Page(n));
+            }
         }
         self.push_data();
     }
@@ -379,6 +403,8 @@ impl App {
             'j' if !mac() => Run::Jarvis,
             // Shift+W only: ⌘W alone is the window's Close on macOS.
             'w' if ev.mods.shift => Run::ClosePane,
+            // Shift+M: the page to its own window (pagewin.rs).
+            'm' if ev.mods.shift => Run::PageToWindow,
             '1'..='9' => Run::FocusPane(c as usize - '1' as usize),
             // In a terminal these size its text (terminal/keys.rs).
             '=' | '-' | '0' if !terminal => Run::Zoom(match c {

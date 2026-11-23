@@ -206,9 +206,20 @@ impl App {
         let fixed = matches!(key, "pager" | "page-new" | "pager-view" | "pager-view-tabs" | "pager-view-grid" | "pager-per") || (key == "pager-gather-now" && self.gather_would_move());
         let more = (a > 0 || b < n) && key == "pager-more";
         let tab = key.strip_prefix("page-").and_then(|r| r.strip_suffix("-close").unwrap_or(r).parse::<usize>().ok()).is_some_and(|k| k >= 1 && k <= n && ((a..b).contains(&(k - 1)) || (!key.ends_with("-close") && self.pager_menu.as_deref() == Some("more"))));
-        let per = self.pager_menu.as_deref() == Some("per") && (key == "pager-per-list" || key == "pager-gather" || PER_CHOICES.iter().any(|c| key == format!("pager-per-{c}")));
+        let per = self.pager_menu.as_deref() == Some("per") && (key == "pager-per-list" || key == "pager-gather" || key == "pager-to-window" || PER_CHOICES.iter().any(|c| key == format!("pager-per-{c}")));
         let more_list = self.pager_menu.as_deref() == Some("more") && key == "pager-more-list";
         fixed || more || tab || per || more_list
+    }
+
+    /// Why the current page cannot move to its own window now (None: it can).
+    pub(super) fn page_movable(&self) -> Option<String> {
+        if self.leads.is_some() {
+            return Some("Not in Lead Mode: turn it off first".into());
+        }
+        if !self.shown().any(|k| self.panes[k].sandbox.is_some()) {
+            return Some("This page shows no terminal".into());
+        }
+        None
     }
 
     /// The pager's open menu, if any (an overlay anchored to its button).
@@ -224,10 +235,25 @@ impl App {
                     .collect();
                 let gather_help = "Fill pages up to the count per page, in order: raising the count moves nothing by itself";
                 rows.push(screen::MenuRow { key: "pager-gather".into(), label: &gather, icon: Some("columns"), tone: None, help: Some(gather_help), keys: &[], count: None, chosen: false, disabled: false });
+                let (to_window, window_keys) = ("Move Page to New Window".to_string(), super::pagewin::back_keys());
+                let movable = self.page_movable();
+                rows.push(screen::MenuRow { key: "pager-to-window".into(), label: &to_window, icon: Some("single"), tone: None, help: Some(movable.as_deref().unwrap_or("This page and its terminals in a window of their own")), keys: &window_keys, count: None, chosen: false, disabled: movable.is_some() });
                 let mut list = screen::menu_surface("pager-per-list".into(), "pager-per".into(), rune::Align::End, screen::menu_width(&rows));
                 for (i, r) in rows.iter().enumerate() {
                     let e = screen::menu_row(r);
-                    let e = if i < PER_CHOICES.len() {
+                    let e = if r.key == "pager-to-window" {
+                        list = list.child(screen::menu_divider());
+                        if r.disabled {
+                            e
+                        } else {
+                            e.on_press(|s: &mut App| {
+                                s.pager_menu = None;
+                                let k = s.pages.current;
+                                s.move_page_out(k);
+                                s.push_data();
+                            })
+                        }
+                    } else if i < PER_CHOICES.len() {
                         let n = PER_CHOICES[i];
                         e.on_press(move |s: &mut App| {
                             s.pager_menu = None;
@@ -259,7 +285,11 @@ impl App {
                     .zip(&labels)
                     .map(|((k, t), l)| screen::MenuRow { key: format!("page-{}", k + 1), label: l, icon: Some("single"), tone: t.tone, help: Some(t.help.as_str()), keys: &[], count: None, chosen: false, disabled: false })
                     .collect();
-                let mut list = screen::menu_surface("pager-more-list".into(), "pager-more".into(), rune::Align::Start, screen::menu_width(&rows));
+                let (to_window, window_keys) = ("Move Page to New Window".to_string(), super::pagewin::back_keys());
+                let movable = self.page_movable();
+                let move_row = screen::MenuRow { key: "pager-more-to-window".into(), label: &to_window, icon: Some("single"), tone: None, help: Some(movable.as_deref().unwrap_or("The current page and its terminals in a window of their own")), keys: &window_keys, count: None, chosen: false, disabled: movable.is_some() };
+                let w = screen::menu_width(&rows).max(screen::menu_width(std::slice::from_ref(&move_row)));
+                let mut list = screen::menu_surface("pager-more-list".into(), "pager-more".into(), rune::Align::Start, w);
                 for ((k, _), r) in infos.iter().zip(&rows) {
                     let k = *k;
                     list = list.child(screen::menu_row(r).on_press(move |s: &mut App| {
@@ -268,6 +298,18 @@ impl App {
                         s.push_data();
                     }));
                 }
+                list = list.child(screen::menu_divider());
+                let e = screen::menu_row(&move_row);
+                list = list.child(if move_row.disabled {
+                    e
+                } else {
+                    e.on_press(|s: &mut App| {
+                        s.pager_menu = None;
+                        let k = s.pages.current;
+                        s.move_page_out(k);
+                        s.push_data();
+                    })
+                });
                 Some(list)
             }
             _ => None,

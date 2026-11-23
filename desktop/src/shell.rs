@@ -17,6 +17,9 @@ mod leads;
 mod memory;
 mod pager;
 pub mod pages;
+pub mod pagewin;
+#[cfg(test)]
+mod pagewin_tests;
 mod palette;
 mod rail;
 pub mod statusbar;
@@ -52,6 +55,7 @@ use rune::{col, el, row, text, Cursor, Cx, El, Key, KeyEvent, TextStyle, Tx, Wak
 use serde_json::Value as J;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -116,11 +120,14 @@ pub struct Pane {
     /// Its id for its whole life, whatever page or place it moves to
     /// (pages.rs and tiling.rs hold these).
     pub uid: Uid,
+    /// Where its terminal's output wakes: the window that shows it (the
+    /// main one, or its page's own window, pagewin.rs).
+    pub wake: Option<crate::client::WakeRoute>,
 }
 
 impl Pane {
     fn empty(uid: Uid) -> Pane {
-        Pane { sandbox: None, mode: Mode::Agent, thread: None, term: None, error: None, title: None, attention: false, reconnecting: None, used: 0, uid }
+        Pane { sandbox: None, mode: Mode::Agent, thread: None, term: None, error: None, title: None, attention: false, reconnecting: None, used: 0, uid, wake: None }
     }
 
     /// Nothing open in it any more; it keeps its place.
@@ -327,6 +334,18 @@ pub struct App {
     held_focus: Option<Option<String>>,
     /// The status bar's state (statusbar.rs).
     pub status: statusbar::Status,
+    /// The pages moved to their own windows (pagewin.rs), each with its
+    /// panes, terminals included: off the main window's pages and panes.
+    pub windowed: Vec<pagewin::WinPage>,
+    /// While a page window's action runs on the app (`App::in_window`):
+    /// that window's number; its page is the app's only page meanwhile.
+    pub(crate) swapped: Option<u32>,
+    /// Meanwhile, the sessions the other windows show (one view each).
+    elsewhere: Vec<pagewin::Shown>,
+    /// A view to focus in another window once the page window's action is done.
+    pending_focus: Option<(crate::windows::Win, Uid)>,
+    /// A page window's Copy on the copy offer, run with the next `Tx`.
+    copy_accept: bool,
 }
 
 /// Laid-out rects (window points) the drag and drop reads.
@@ -454,6 +473,11 @@ impl App {
             bar_w: HashMap::new(),
             top_w: 0.0,
             bar_menu: None,
+            windowed: vec![],
+            swapped: None,
+            elsewhere: vec![],
+            pending_focus: None,
+            copy_accept: false,
             sidebar_live: None,
             theme_choice: theme::DEFAULT_MODE,
             theme_seen: 0,
@@ -1080,6 +1104,9 @@ impl App {
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         // What the other windows asked (crate::windows), first.
         let mut changed = self.windows_drain();
+        if std::mem::take(&mut self.copy_accept) {
+            self.accept_copy_offer(tx);
+        }
         self.memory_tick();
         if self.theme_seen != theme::generation() {
             self.theme_seen = theme::generation();
@@ -1328,7 +1355,7 @@ impl App {
             changed = true;
         }
         for (i, name, text) in copies {
-            self.osc_copy(i, &name, text, now, tx);
+            self.osc_copy(i, &name, text, now, &mut |t| tx.copy(t));
             changed = true;
         }
         // Last: what it asks for wins over this frame's own refocus of a pane.
@@ -1614,7 +1641,14 @@ impl App {
 
     /// A base view (the Monitor) instead of the terminals covers them too.
     pub fn panes_covered(&self) -> bool {
-        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.feats.base.is_some() || self.jarvis.shown.is_some() || self.palette.is_some()
+        // A page window's panes (`in_window`): what covers the main
+        // window's pane area (its overlay, its base view) is not over them.
+        if self.swapped.is_some() {
+            return self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some();
+        }
+        // A copy offer drawn in a page window: the main window shows its scrim, modal as any.
+        let copy_elsewhere = self.copy_offer.is_some() && crate::windows::copy_elsewhere_in().is_some();
+        self.feats.dialog.is_some() || self.feats.modal.is_some() || self.feats.overlay.is_some() || self.feats.base.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || copy_elsewhere
     }
 
     /// `data.app.covered`: something over the panes and over the view drawn
@@ -1675,7 +1709,7 @@ impl App {
 
     /// An OSC 52 copy from pane `i`'s program: copied, offered or dropped by
     /// size, as the web UI does (approval.rs).
-    fn osc_copy(&mut self, i: usize, sandbox: &str, text: String, now: Instant, tx: &mut Tx) {
+    pub(crate) fn osc_copy(&mut self, i: usize, sandbox: &str, text: String, now: Instant, copy: &mut dyn FnMut(String)) {
         if text.is_empty() {
             return;
         }
@@ -1687,7 +1721,7 @@ impl App {
         }
         match tier {
             approval::OscTier::Copy => {
-                tx.copy(text);
+                copy(text);
                 self.notify(format!("Copied {} from {who}", approval::size_label(bytes)), false);
             }
             // A newer offer replaces the one showing.
@@ -1737,14 +1771,17 @@ impl App {
         p.reconnecting = None;
         let req = TerminalRequest::new(sandbox, mode, thread, start);
         let again = req.again();
-        let r = match (&self.daemon, waker) {
-            (Some(d), Some(w)) => d.open_terminal(&req, w).map_err(|e| format!("{e:#}")),
+        // Its wakes follow the window that shows it (a page window, pagewin.rs).
+        let route = waker.map(|w| crate::client::WakeRoute::new(self.window_waker(w)));
+        let r = match (&self.daemon, &route) {
+            (Some(d), Some(w)) => d.open_terminal(&req, w.wake()).map_err(|e| format!("{e:#}")),
             (None, _) => Err(format!("not connected: {}", self.connection.text)),
             (_, None) => Err("not started".into()),
         };
+        self.panes[i].wake = route.clone();
         match r {
             Ok(conn) => {
-                let (current, wake) = (self.current.clone(), self.waker.clone().expect("setup ran"));
+                let (current, wake) = (self.current.clone(), route.expect("setup ran").wake());
                 let reopen: terminal::Reconnect = Arc::new(move || {
                     let d = current.lock().unwrap().clone().ok_or_else(|| anyhow::anyhow!("not connected to the daemon"))?;
                     d.open_terminal(&again, wake.clone())
@@ -1814,6 +1851,10 @@ impl App {
 
     /// Closes the panes showing that session, on every page (each page re-tiles).
     fn close_panes(&mut self, sandbox: &str, thread: Option<&str>) {
+        // In the page windows too, each in its own page (pagewin.rs).
+        for id in self.page_windows() {
+            self.in_window(id, |a| a.close_panes(sandbox, thread));
+        }
         let gone: Vec<Uid> = self.panes.iter().filter(|p| p.sandbox.as_deref() == Some(sandbox) && p.thread.as_deref() == thread).map(|p| p.uid).collect();
         for u in gone {
             if let Some(i) = self.index_of(u) {
@@ -1928,6 +1969,10 @@ impl App {
     /// Pages and panes, for the state file: each pane's session (not its
     /// terminal) and each page's tiling.
     fn save_layout(&mut self) {
+        // Inside a page window's action: saved once its page is back in place.
+        if self.swapped.is_some() {
+            return;
+        }
         // In the team leads view: the layout it replaced (leads.rs), with the
         // sessions its panes held (shown, parked, or closed in the view).
         if let Some(l) = &self.leads {
@@ -1941,16 +1986,20 @@ impl App {
                     },
                 }
             };
-            let panes: Vec<J> = order.iter().map(|u| info(*u)).collect();
-            let idx: HashMap<Uid, Uid> = order.iter().enumerate().map(|(i, u)| (*u, i as Uid)).collect();
-            let mut v = l.saved.to_json(&|u| idx.get(&u).copied());
+            let mut panes: Vec<J> = order.iter().map(|u| info(*u)).collect();
+            let mut idx: HashMap<Uid, Uid> = order.iter().enumerate().map(|(i, u)| (*u, i as Uid)).collect();
+            let mut saved = l.saved.clone();
+            self.windowed_layout(&mut saved, &mut panes, &mut idx);
+            let mut v = saved.to_json(&|u| idx.get(&u).copied());
             v["panes"] = J::Array(panes);
             self.store.set("layout", v);
             return;
         }
-        let panes: Vec<J> = self.panes.iter().map(|p| serde_json::json!({ "sandbox": p.sandbox, "mode": p.mode.name(), "thread": p.thread })).collect();
-        let idx: HashMap<Uid, Uid> = self.panes.iter().enumerate().map(|(i, p)| (p.uid, i as Uid)).collect();
-        let mut v = self.pages.to_json(&|u| idx.get(&u).copied());
+        let mut panes: Vec<J> = self.panes.iter().map(|p| serde_json::json!({ "sandbox": p.sandbox, "mode": p.mode.name(), "thread": p.thread })).collect();
+        let mut idx: HashMap<Uid, Uid> = self.panes.iter().enumerate().map(|(i, p)| (p.uid, i as Uid)).collect();
+        let mut pages = self.pages.clone();
+        self.windowed_layout(&mut pages, &mut panes, &mut idx);
+        let mut v = pages.to_json(&|u| idx.get(&u).copied());
         v["panes"] = J::Array(panes);
         self.store.set("layout", v);
     }
@@ -2145,11 +2194,19 @@ impl App {
         log::info!("{}", intent_log_line(from, &intent));
         match intent {
             Intent::OpenTerminal { sandbox, mode, thread, pane, start } => {
+                // Shown in another window (a page window, or the main one from
+                // a page window): that view is focused, none is added (pagewin.rs).
+                if self.focus_if_elsewhere(&sandbox, mode, thread.as_deref()) {
+                    return;
+                }
                 let i = self.pane_for(&pane);
                 self.open_with(i, &sandbox, mode, thread, start);
                 self.focused = i;
             }
             Intent::StartSandbox { sandbox, pane } => {
+                if self.focus_if_elsewhere(&sandbox, Mode::Agent, None) {
+                    return;
+                }
                 let i = self.pane_for(&pane);
                 self.open(i, &sandbox, Mode::Agent, None);
                 self.focused = i;
@@ -2162,8 +2219,9 @@ impl App {
                 if let Some(s) = self.sandboxes.iter_mut().find(|s| s.name == sandbox) {
                     s.status = "stopping…".into();
                 }
-                // As the web UI does: close this sandbox's terminals first.
-                for p in &mut self.panes {
+                // As the web UI does: close this sandbox's terminals first
+                // (those in page windows too, pagewin.rs).
+                for p in self.panes.iter_mut().chain(self.windowed.iter_mut().flat_map(|w| w.panes.iter_mut())) {
                     if p.sandbox.as_deref() == Some(sandbox.as_str()) {
                         p.term = None;
                     }
@@ -2325,6 +2383,22 @@ pub(crate) fn intent_log_line(from: &str, intent: &Intent) -> String {
     }
 }
 
+/// Tooltips in the app's own look, in every window of the app.
+pub(crate) fn help_look() -> rune::HelpLook {
+    rune::HelpLook::system(true)
+        .fill(c("elevated"))
+        .ink(c("text-bright"))
+        .ring(1.0, c("border"))
+        .radius(theme::corner::CONTROL)
+        .padding(8.0, 6.0)
+        .font(screen::body(crate::theme::font_size::CAPTION, 400.0))
+        .max_width(Some(280.0))
+        .gap(crate::theme::spacing::INLINE)
+        .row_gap(4.0)
+        .keycaps(c("bg"), c("text"), screen::body(crate::theme::font_size::CAPTION, 500.0), false)
+        .keycap_shape(18.0, 5.0, 4.0, 4.0, 8.0)
+}
+
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // The theme first: every colour below reads the active palette.
     theme::set_mode(s.theme_choice);
@@ -2339,20 +2413,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // place of AppKit's pale ones): the elevated surface, a hairline border,
     // 12 pt text that wraps at 280 pt, 8 pt by 6 of padding, keycaps on the
     // page's dark with a border, aligned after the text.
-    cx.help_look(
-        rune::HelpLook::system(true)
-            .fill(c("elevated"))
-            .ink(c("text-bright"))
-            .ring(1.0, c("border"))
-            .radius(theme::corner::CONTROL)
-            .padding(8.0, 6.0)
-            .font(screen::body(crate::theme::font_size::CAPTION, 400.0))
-            .max_width(Some(280.0))
-            .gap(crate::theme::spacing::INLINE)
-            .row_gap(4.0)
-            .keycaps(c("bg"), c("text"), screen::body(crate::theme::font_size::CAPTION, 500.0), false)
-            .keycap_shape(18.0, 5.0, 4.0, 4.0, 8.0),
-    );
+    cx.help_look(help_look());
     // Folds and fades follow the system's reduced-motion setting (screen.rs).
     screen::set_reduced_motion(cx.is_reduced_motion());
     let root = col()
@@ -2572,8 +2633,12 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(m) = modal {
         root = root.child(m);
     }
-    if let Some(o) = &s.copy_offer {
-        root = root.child(approval::copy_offer_view::<App>(o, |s: &mut App, tx: &mut Tx| s.accept_copy_offer(tx), |s: &mut App| s.copy_offer = None));
+    // A copy offer raised by a page window's terminal is answered there
+    // (crate::windows); here, a scrim saying where it is.
+    match (&s.copy_offer, crate::windows::copy_elsewhere_in()) {
+        (Some(_), Some(w)) => root = root.child(crate::windows::elsewhere_scrim(w, true)),
+        (Some(o), None) => root = root.child(approval::copy_offer_view::<App>(o, |s: &mut App, tx: &mut Tx| s.accept_copy_offer(tx), |s: &mut App| s.copy_offer = None)),
+        _ => {}
     }
     if let Some(p) = palette::view(s) {
         root = root.child(p);
@@ -2586,8 +2651,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // The core's confirmation: a press outside cancels, as its × and Escape do.
     // A confirmation raised in the canvas window is drawn and answered
     // there (crate::windows); here, a scrim saying where it is.
-    if crate::windows::dialog_elsewhere() {
-        root = root.child(crate::windows::elsewhere_scrim());
+    if let Some(w) = crate::windows::dialog_elsewhere_in() {
+        root = root.child(crate::windows::elsewhere_scrim(w, false));
     } else if let Some(dialog) = s.confirm_view() {
         root = root.child(scrim("cf-scrim", dialog, |s: &mut App| approval::ConfirmAnswers::cancel_click(s)));
     }
@@ -3114,18 +3179,28 @@ impl App {
             self.focus_pane(j);
             return;
         }
+        if self.focus_if_elsewhere(&sb, to, thread.as_deref()) {
+            return;
+        }
         self.open_with(i, &sb, to, thread, ThreadStart::default());
         self.save_layout();
     }
 
     /// The overflow menu of pane `i`'s bar, anchored under its button.
     fn bar_menu_view(&self) -> Option<El> {
+        self.bar_menu_view_as::<App>()
+    }
+
+    /// [`Self::bar_menu_view`] for window side `S`: a page window's menu has
+    /// no moves (its page is all it has).
+    pub(crate) fn bar_menu_view_as<S: WinSide>(&self) -> Option<El> {
         let i = self.bar_menu?;
         let f = self.pane_fit(i)?;
         let n = i + 1;
+        let uid = self.panes.get(i).map_or(0, |p| p.uid);
         let names: Vec<String> = f.hidden.iter().map(|it| if it.label.is_empty() { it.help.clone() } else { it.label.clone() }).collect();
         let rows: Vec<screen::MenuRow> = f.hidden.iter().zip(&names).map(|(it, l)| bar_menu_row(it, n, l)).collect();
-        let moves = self.pane_moves(i);
+        let moves = if S::MAIN { self.pane_moves(i) } else { vec![] };
         let move_rows: Vec<screen::MenuRow> = moves
             .iter()
             .map(|m| screen::MenuRow { key: m.key.clone(), label: &m.label, icon: Some(m.icon), tone: None, help: Some(m.help.as_str()), keys: &[], count: None, chosen: false, disabled: m.op.is_none() })
@@ -3146,20 +3221,20 @@ impl App {
                 if off {
                     e
                 } else {
-                    e.on_press(move |s: &mut App| {
+                    e.on_press(on_pane::<S>(uid, |s: &mut App, i| {
                         s.bar_menu = None;
                         s.dictate_pane_press(i);
                         s.push_data();
-                    })
+                    }))
                 }
             } else if it.core && it.id == "mode" {
-                screen::menu_row(r).on_press(move |s: &mut App| {
+                screen::menu_row(r).on_press(on_pane::<S>(uid, |s: &mut App, i| {
                     s.bar_menu = None;
                     s.switch_mode(i);
                     s.push_data();
-                })
+                }))
             } else {
-                bar_menu_item(it, r)
+                bar_menu_item::<S>(it, r)
             });
         }
         if !rows.is_empty() {
@@ -3167,21 +3242,23 @@ impl App {
         }
         if self.panes.get(i).is_some_and(|p| p.term.is_some()) {
             list = list.child(
-                screen::menu_row(&redraw_row(n)).on_press(move |s: &mut App| {
+                screen::menu_row(&redraw_row(n)).on_press(on_pane::<S>(uid, |s: &mut App, i| {
                     s.bar_menu = None;
                     s.redraw_terminal(i);
-                }),
+                })),
             );
-            list = list.child(screen::menu_divider());
+            if !moves.is_empty() {
+                list = list.child(screen::menu_divider());
+            }
         }
         for (m, r) in moves.iter().zip(&move_rows) {
             let e = screen::menu_row(r);
             list = list.child(match m.op.clone() {
-                Some(op) => e.on_press(move |s: &mut App| {
+                Some(op) => e.on_press(on::<S>(move |s: &mut App| {
                     s.bar_menu = None;
                     s.run_intent("pane", Intent::Pages(op.clone()));
                     s.push_data();
-                }),
+                })),
                 None => e,
             });
         }
@@ -3375,7 +3452,8 @@ fn drag_overlay(s: &App) -> Vec<El> {
 /// Bash): the current segment marked, the other pressable (switch_mode).
 /// The agent's segment: its mark in its vendor's colour; the shell's: a
 /// prompt. Keys `pane-<n>-mode-agent`, `pane-<n>-mode-bash`.
-fn mode_switch(s: &App, i: usize, agent: &str, ground: u32) -> El {
+fn mode_switch<S: WinSide>(s: &App, i: usize, agent: &str, ground: u32) -> El {
+    let uid = s.panes.get(i).map_or(0, |p| p.uid);
     let n = i + 1;
     let bash = s.panes.get(i).is_some_and(|p| p.mode == Mode::Bash);
     let thread = s.panes.get(i).is_some_and(|p| p.thread.is_some());
@@ -3402,10 +3480,10 @@ fn mode_switch(s: &App, i: usize, agent: &str, ground: u32) -> El {
         if on {
             e = e.fill(c("elevated"));
         } else {
-            e = e.hover(c("hover-subtle")).cursor(Cursor::Pointer).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).on_press(move |s: &mut App| {
+            e = e.hover(c("hover-subtle")).cursor(Cursor::Pointer).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).on_press(on_pane::<S>(uid, |s: &mut App, i| {
                 s.switch_mode(i);
                 s.push_data();
-            });
+            }));
         }
         e
     };
@@ -3426,7 +3504,7 @@ fn mode_switch(s: &App, i: usize, agent: &str, ground: u32) -> El {
 }
 
 /// `active`: the panel it opens shows, for this pane; `ground`: the bar's tint.
-fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
+fn bar_chip<S: WinSide>(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
     // Quiet: a muted chip is its icon in its colour by meaning and its words
     // in the bright text on the bar; a tone is its colour on its tint.
     // The Browser chip in use keeps the quiet look (its words stay bright) and
@@ -3461,10 +3539,10 @@ fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
         let hover = if quiet { theme::hex(theme::over(meaning_fg, 0.12, quiet_tint)) } else { c("active-bg") };
         // A chip with words is named by them; a bare icon or number by its tooltip.
         let named = if it.chip_text() == it.text() && !it.text().is_empty() { it.text() } else { it.help.clone() };
-        b = b.role("button").label(named).expanded(active).hover(hover).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+        b = b.role("button").label(named).expanded(active).hover(hover).focusable(true).focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus")).cursor(Cursor::Pointer).on_press(on::<S>(move |s: &mut App| {
             s.press_extra("pane", &name, &args);
             s.push_data();
-        });
+        }));
     }
     b
 }
@@ -3476,7 +3554,8 @@ fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
 /// reason as its tooltip when it cannot dictate. It never takes the
 /// keyboard from the terminal: the words are typed only while the pane's
 /// grid has it.
-fn dictate_chip(s: &App, it: &bar::Item, i: usize, ground: u32) -> El {
+fn dictate_chip<S: WinSide>(s: &App, it: &bar::Item, i: usize, ground: u32) -> El {
+    let uid = s.panes.get(i).map_or(0, |p| p.uid);
     let state = s.pane_dictate_state(i);
     let rec = state == PaneDictate::Recording;
     let (red, red_tint) = crate::screen::tone("red");
@@ -3506,10 +3585,10 @@ fn dictate_chip(s: &App, it: &bar::Item, i: usize, ground: u32) -> El {
         PaneDictate::Busy => b.busy(true),
         _ => {
             let keys = if rec { vec![] } else { vec![s.dictation.key_name().to_string()] };
-            b.checked(rec).help_keys(keys).hover(if rec { theme::hex(theme::over(red, 0.12, red_tint)) } else { c("elevated") }).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+            b.checked(rec).help_keys(keys).hover(if rec { theme::hex(theme::over(red, 0.12, red_tint)) } else { c("elevated") }).cursor(Cursor::Pointer).on_press(on_pane::<S>(uid, |s: &mut App, i| {
                 s.dictate_pane_press(i);
                 s.push_data();
-            })
+            }))
         }
     }
 }
@@ -3530,24 +3609,24 @@ fn bar_menu_row<'a>(it: &'a bar::Item, n: usize, label: &'a str) -> screen::Menu
     }
 }
 
-fn bar_menu_item(it: &bar::Item, r: &screen::MenuRow) -> El {
+fn bar_menu_item<S: WinSide>(it: &bar::Item, r: &screen::MenuRow) -> El {
     let e = screen::menu_row(r);
     match it.intent.clone() {
-        Some((name, args)) => e.on_press(move |s: &mut App| {
+        Some((name, args)) => e.on_press(on::<S>(move |s: &mut App| {
             s.bar_menu = None;
             s.press_extra("pane", &name, &args);
             s.push_data();
-        }),
+        })),
         None => e,
     }
 }
 
 /// The overflow button of pane `n`'s bar: "…", how many it holds, and a dot
 /// in the tone of the most urgent of them (bar::more_tone).
-fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
+fn bar_more<S: WinSide>(f: &bar::PaneFit, i: usize, uid: Uid, open: bool) -> El {
     let n = i + 1;
     let count = f.overflowed();
-    let (label, help) = if count > 0 { (format!("{count} more"), format!("{count} more: what does not fit in this bar, and this pane's moves")) } else { ("Pane menu".to_string(), "Move this pane: left, right, up, down, rotate, to another page".to_string()) };
+    let (label, help) = if count > 0 { (format!("{count} more"), format!("{count} more: what does not fit in this bar, and this pane's moves")) } else { ("Pane menu".to_string(), if S::MAIN { "Move this pane: left, right, up, down, rotate, to another page".to_string() } else { "This pane's menu".to_string() }) };
     let mut b = row()
         .key(format!("pane-{n}-more"))
         .role("button")
@@ -3562,9 +3641,9 @@ fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
         .fill(c(if open { "elevated" } else { "surface" }))
         .hover(c("elevated"))
         .cursor(Cursor::Pointer)
-        .on_press(move |s: &mut App| {
+        .on_press(on_pane::<S>(uid, |s: &mut App, i| {
             s.bar_menu = if s.bar_menu == Some(i) { None } else { Some(i) };
-        })
+        }))
         .child(rune::icon(crate::icons::get("more").unwrap(), bar::CHIP_ICON).color(c("text")));
     if count > 0 {
         b = b.child(text(count.to_string()).font(small(bar::CHIP_TEXT, 500.0)).color(c("text")));
@@ -3615,7 +3694,7 @@ fn grip(n: usize) -> El {
 /// outlined pill with the same icon muted (`pane-<n>-team-icon`), so the
 /// pill reads as the team switch without a hover. Without one (a thread, a stopped sandbox, a kit)
 /// it is plain text, the leader mark before it when the session leads.
-fn name_pill(s: &App, i: usize, label: &str, team: Option<&bar::TeamToggle>, leads: bool, name_min: f32, ground: u32) -> El {
+fn name_pill<S: WinSide>(s: &App, i: usize, label: &str, team: Option<&bar::TeamToggle>, leads: bool, name_min: f32, ground: u32) -> El {
     let n = i + 1;
     let focused = i == s.focused;
     let plain = if focused { "text-bright" } else { "text" };
@@ -3647,13 +3726,63 @@ fn name_pill(s: &App, i: usize, label: &str, team: Option<&bar::TeamToggle>, lea
         .focusable(true)
         .focus_ring(crate::theme::focus::W, crate::theme::focus::OUT, c("focus"))
         .cursor(Cursor::Pointer)
-        .on_press(move |s: &mut App| {
+        .on_press(crate::shell::on::<S>(move |s: &mut App| {
             s.press_extra("pane", &intent, &args);
             s.push_data();
-        })
+        }))
 }
 
-fn pane_view(s: &App, i: usize) -> El {
+/// Where a pane bar's presses go: the main window runs them on the app at
+/// once; a page window (pagewin.rs) hands them to the main window through
+/// the hub, which runs them inside that window's page (`App::in_window`)
+/// and refuses them while a gate holds the window.
+pub trait WinSide: Sized + 'static {
+    /// The main window: its panes are dragged by their bars, and moved by
+    /// their menus to other places and pages.
+    const MAIN: bool;
+    /// Runs `f` on the app; `input`: the person's (a gate holds it).
+    fn act(&mut self, input: bool, f: Rc<dyn Fn(&mut App)>);
+    /// Pane `uid`'s bar was laid out this wide (what fits in it, bar.rs).
+    fn bar_width(&mut self, uid: Uid, w: f32);
+    /// Pane `uid` dragged by its bar (the main window only).
+    fn side_drag(&mut self, _uid: Uid, _d: &mut rune::Drag) {}
+}
+
+impl WinSide for App {
+    const MAIN: bool = true;
+    fn act(&mut self, _input: bool, f: Rc<dyn Fn(&mut App)>) {
+        f(self)
+    }
+    fn bar_width(&mut self, uid: Uid, w: f32) {
+        let x = self.bar_w.entry(uid).or_insert(0.0);
+        if (*x - w).abs() > 0.5 {
+            *x = w;
+        }
+    }
+    fn side_drag(&mut self, uid: Uid, d: &mut rune::Drag) {
+        self.pane_drag(uid, d)
+    }
+}
+
+/// A press that runs `f` on the app, from window side `S`.
+pub(crate) fn on<S: WinSide>(f: impl Fn(&mut App) + 'static) -> impl Fn(&mut S) + Clone + 'static {
+    let f: Rc<dyn Fn(&mut App)> = Rc::new(f);
+    move |s: &mut S| s.act(true, f.clone())
+}
+
+/// A press on pane `uid`'s bar: `f` gets its index at the time it runs.
+pub(crate) fn on_pane<S: WinSide>(uid: Uid, f: impl Fn(&mut App, usize) + 'static) -> impl Fn(&mut S) + Clone + 'static {
+    on::<S>(move |a: &mut App| {
+        if let Some(i) = a.index_of(uid) {
+            f(a, i)
+        }
+    })
+}
+
+/// Pane `i`'s bar (`pane-<n>-bar`), its look and what its presses do for
+/// window side `S`: grip, dot | name, switch, extras… | "⋯" | close. Also
+/// its ground (the bar's tint) and its sandbox's group colour.
+pub(crate) fn pane_bar<S: WinSide>(s: &App, i: usize) -> (El, u32, Option<u32>) {
     let pane = s.panes.get(i);
     let uid = pane.map_or(0, |p| p.uid);
     let focused = i == s.focused;
@@ -3677,16 +3806,11 @@ fn pane_view(s: &App, i: usize) -> El {
         .gap(bar::PANE_GAP)
         .items_center()
         .fill(theme::hex(bar_ground))
-        .on_layout(move |s: &mut App, r: [f32; 4]| {
-            let w = s.bar_w.entry(uid).or_insert(0.0);
-            if (*w - r[2]).abs() > 0.5 {
-                *w = r[2];
-            }
-        });
+        .on_layout(move |s: &mut S, r: [f32; 4]| s.bar_width(uid, r[2]));
     // The bar drags its pane (its buttons keep their presses): drag.rs.
-    let bar = if pane.is_some_and(|p| p.sandbox.is_some()) {
+    let bar = if S::MAIN && pane.is_some_and(|p| p.sandbox.is_some()) {
         bar.cursor(if s.drag.as_ref().is_some_and(|d| d.active && d.uid == uid) { Cursor::Grabbing } else { Cursor::Grab })
-            .on_drag(move |s: &mut App, d: &mut rune::Drag, _tx| s.pane_drag(uid, d))
+            .on_drag(move |s: &mut S, d: &mut rune::Drag, _tx| s.side_drag(uid, d))
             .child(grip(i + 1))
     } else {
         bar
@@ -3695,7 +3819,7 @@ fn pane_view(s: &App, i: usize) -> El {
     let fit = s.pane_fit(i);
     let name_min = fit.as_ref().map_or(0.0, |f| f.name_min);
     let mut mid = row().grow(1.0).min_w(0.0).h_full().gap(bar::PANE_GAP).items_center().clip_rounded(0.0);
-    mid = mid.child(name_pill(s, i, &label, fit.as_ref().and_then(|f| f.team.as_ref()), pane.is_some_and(|p| s.pane_leads(p)), name_min, bar_ground));
+    mid = mid.child(name_pill::<S>(s, i, &label, fit.as_ref().and_then(|f| f.team.as_ref()), pane.is_some_and(|p| s.pane_leads(p)), name_min, bar_ground));
     if let (Some(_), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
         // By group (bar::zone), a hairline between two: the name pill is
         // group 0, the switch opens the session's group 1.
@@ -3703,7 +3827,7 @@ fn pane_view(s: &App, i: usize) -> El {
         let mut last = Some(0);
         if f.switch {
             if let Some(agent) = s.agent_label(i) {
-                mid = mid.child(mode_switch(s, i, &agent, bar_ground).child(hairline(1)));
+                mid = mid.child(mode_switch::<S>(s, i, &agent, bar_ground).child(hairline(1)));
                 last = Some(1);
             }
         }
@@ -3711,7 +3835,7 @@ fn pane_view(s: &App, i: usize) -> El {
         for it in &f.shown {
             let z = bar::zone(&it.id);
             let active = focused && bar::panel_of(&it.id).is_some_and(shown_panel);
-            let mut chip = if it.core && it.id == bar::DICTATE { dictate_chip(s, it, i, bar_ground) } else { bar_chip(it, i + 1, active, bar_ground) };
+            let mut chip = if it.core && it.id == bar::DICTATE { dictate_chip::<S>(s, it, i, bar_ground) } else { bar_chip::<S>(it, i + 1, active, bar_ground) };
             if last.is_some_and(|l| l != z) {
                 // In the gap before the group's first chip (no room of its own).
                 chip = chip.child(hairline(z));
@@ -3724,14 +3848,14 @@ fn pane_view(s: &App, i: usize) -> El {
     // The "⋯" menu sits outside the clipped middle, beside the close
     // button: a narrow pane's name shrinks, never the menu.
     if let (Some(_), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
-        bar = bar.child(bar_more(f, i, s.bar_menu == Some(i)));
+        bar = bar.child(bar_more::<S>(f, i, uid, s.bar_menu == Some(i)));
     }
     if pane.is_some_and(|p| p.sandbox.is_some()) {
         bar = bar.child(
             el().key(format!("pane-{}-close", i + 1))
                 .role("button")
                 .label("Close pane")
-                .help("Close this pane (the sandbox and its session go on)")
+                .help(if S::MAIN { "Close this pane (the sandbox and its session go on)" } else { "Close this pane (the sandbox and its session go on; the window stays)" })
                 .help_keys(palette::close_keys())
                 .w(bar::CLOSE_W)
                 .h(bar::CLOSE_W)
@@ -3740,13 +3864,21 @@ fn pane_view(s: &App, i: usize) -> El {
                 .radius(theme::radius("xs").unwrap())
                 .hover(c("elevated"))
                 .cursor(Cursor::Pointer)
-                .on_press(move |s: &mut App| {
+                .on_press(on_pane::<S>(uid, |s: &mut App, i| {
                     s.remove_pane(i);
                     s.push_data();
-                })
+                }))
                 .child(rune::icon(crate::icons::get("close").unwrap(), 14.0).color(c("text-muted"))),
         );
     }
+    (bar, bar_ground, group)
+}
+
+fn pane_view(s: &App, i: usize) -> El {
+    let pane = s.panes.get(i);
+    let uid = pane.map_or(0, |p| p.uid);
+    let focused = i == s.focused;
+    let (bar, bar_ground, group) = pane_bar::<App>(s, i);
     let body = match pane {
         // The pane fills a row (its width grows, its height is the row's).
         Some(Pane { term: Some(t), .. }) => row().w_full().grow(1.0).min_h(0.0).child(terminal::pane_held(t, lens(i), layout_lens(i), s.panes_held())),
@@ -5655,15 +5787,15 @@ end, actions = {} }"#).unwrap();
         let mut tx = Tx::default();
         let now = Instant::now();
         // Up to 4 KB: copied at once, and said so.
-        a.osc_copy(0, "mus", "x".repeat(40), now, &mut tx);
+        a.osc_copy(0, "mus", "x".repeat(40), now, &mut |t| tx.copy(t));
         assert_eq!(a.notice.as_ref().map(|n| (n.0.as_str(), n.1)), Some(("Copied 40 B from mus", false)));
         assert!(a.copy_offer.is_none());
         // Up to 100 KB: offered, nothing copied yet; a newer offer replaces it.
         a.notice = None;
-        a.osc_copy(0, "mus", "y".repeat(6 * 1024), now, &mut tx);
+        a.osc_copy(0, "mus", "y".repeat(6 * 1024), now, &mut |t| tx.copy(t));
         assert_eq!(a.copy_offer.as_ref().map(|o| o.bytes), Some(6 * 1024));
         assert!(a.notice.is_none());
-        a.osc_copy(1, "web-app", "z".repeat(5000), now, &mut tx);
+        a.osc_copy(1, "web-app", "z".repeat(5000), now, &mut |t| tx.copy(t));
         let o = a.copy_offer.as_ref().unwrap();
         assert_eq!((o.sandbox.as_str(), o.bytes), ("web-app", 5000));
         assert_eq!(o.headline(), "web-app wants to copy 4.9 KB to your clipboard:");
@@ -5672,8 +5804,8 @@ end, actions = {} }"#).unwrap();
         assert!(a.copy_offer.is_none());
         assert_eq!(a.notice.as_ref().map(|n| n.0.as_str()), Some("Copied 4.9 KB from web-app"));
         // Above: dropped, with an error notice; an offer showing stays.
-        a.osc_copy(0, "mus", "y".repeat(6 * 1024), now, &mut tx);
-        a.osc_copy(0, "mus", "w".repeat(100 * 1024 + 1), now, &mut tx);
+        a.osc_copy(0, "mus", "y".repeat(6 * 1024), now, &mut |t| tx.copy(t));
+        a.osc_copy(0, "mus", "w".repeat(100 * 1024 + 1), now, &mut |t| tx.copy(t));
         assert_eq!(a.notice.as_ref().map(|n| n.1), Some(true));
         assert!(a.notice.as_ref().unwrap().0.contains("more than 100.0 KB, dropped"), "{:?}", a.notice);
         assert_eq!(a.copy_offer.as_ref().map(|o| o.bytes), Some(6 * 1024));
