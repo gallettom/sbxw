@@ -1677,7 +1677,7 @@ the main session's: `lead`, `plan`, `merge`, `threads`; in the top bar
 |---|---|---|---|
 | `threads_show` | `sandbox`, `tab` (`sessions`, `worktrees`, `board`) | direct | Opens the panel on that sandbox and tab |
 | `thread_new` | `sandbox`, `kind` (`thread`, `session`) | direct | Opens New thread and reads the repositories |
-| `thread_open` | `sandbox`, `name`, `repo` (`=` then its path; `=` is the workspace), `model`, `checkout`, `pane` | direct | Opens that session (spare pane); repo, model and checkout only for a new one. Refused: a bad name, one of the other kind, no place free under `max_agent_sessions` (said with the names) |
+| `thread_open` | `sandbox`, `name`, `repo` (`=` then its path; `=` is the workspace), `model`, `checkout`, `pane` | direct | Opens that session (spare pane): a thread the person starts from New thread opens its pane, as they asked for it now; repo, model and checkout only for a new one. Refused: a bad name, one of the other kind, no place free under `max_agent_sessions` (said with the names) |
 | `thread_bash` | `sandbox`, `thread` | direct | A shell in its worktree |
 | `session_interrupt` | `sandbox`, `thread` | direct | Escape into that Claude session (`POST /api/input`) |
 | `remote_control` | `sandbox`, `thread` | direct | Reads the login, then turns Remote Control on, or says why not |
@@ -1691,7 +1691,7 @@ the main session's: `lead`, `plan`, `merge`, `threads`; in the top bar
 | `plan_variant` | `id`, `variant` (`split`, `shared`) | direct | The draft's variant |
 | `plan_refuse` | `id`, `note` | direct | Refuses; the lead reads the note |
 | `merge_close_set` | `id`, `on` | direct | Close the threads once merged (default on) |
-| `plan_approve` | `id` | approval | The core reads the sessions, its dialog lists the draft, the changes and the sessions it starts; over the ceiling it says how many are open, which, how many are free, how to free one |
+| `plan_approve` | `id` | approval | The core reads the sessions, its dialog lists the draft, the changes and the sessions it starts; over the ceiling it says how many are open, which, how many are free, how to free one. Approved (here or elsewhere), its threads open no pane on their own and the focus stays: the daemon starts them, the sidebar (under the leader), the Board and the Threads view list them at once, and a click on a row opens its pane (unlike the web UI's `openPlanPanes`) |
 | `plan_merge` | `id` | approval | The core's dialog: order, note, base, distillate, whether threads close; refused while a shared plan's files are claimed |
 | `thread_close` | `sandbox`, `thread` | approval | Reads what closing loses; the dialog needs uncommitted files discarded explicitly; its panes go once closed |
 
