@@ -8,10 +8,18 @@ local function note(t, color)
   return text{ t, size = "sm", color = color or "text-muted", wrap = true }
 end
 
+-- The view's width: its own window's when it has one (ui.win_w), else the
+-- overlay's over the panes.
+local function view_w(data)
+  local ui = data.canvas_ui or {}
+  if ui.windowed and ui.win_w then return ui.win_w end
+  return (((data.app or {}).overlay or {}).w) or 1000
+end
+
 -- The storage line sits in the title band only on a wide overlay (1100 pt
 -- and more); else beside Rename and Delete. It never wraps.
 local function storage_in_title(data)
-  return ((((data.app or {}).overlay or {}).w) or 1000) >= 1100
+  return view_w(data) >= 1100
 end
 
 -- A title cut to `n` characters with an ellipsis (the menu keeps a sane width).
@@ -25,7 +33,7 @@ end
 -- scope picker can replace them: the sandbox, then the canvas.
 local function pickers(data, ui)
   local cur = ui.current or {}
-  local w = (((data.app or {}).overlay or {}).w or 1000)
+  local w = view_w(data)
   local label = "No canvas"
   if cur.title then label = (w >= 600) and clip(cur.title, w >= 1100 and 40 or 24) or "Canvas" end
   return row{ key = "title-slot", gap = 8,
@@ -69,6 +77,11 @@ local function toolbar(ui, wide)
   -- Dense like the bar's buttons; its name shows on a wide overlay only.
   out[#out + 1] = menu{ wide and (ui.ground_label or "White") or nil, id = "canvas-ground", icon = "appearance", items = ui.grounds or {},
     on = "ground", variant = "ghost", dense = true, help = "Ground: " .. (ui.ground_label or "White") .. ". White, dark, or the theme's" }
+  -- Its own window (full screen there); not shown in that window, whose bar has the way back.
+  if not ui.windowed then
+    out[#out + 1] = button{ wide and "Open in a window" or nil, icon = "single", key = "canvas-open-window", on = "window", variant = "ghost", dense = true,
+      help = "Open in a window: the Canvas in its own window, which can go full screen" }
+  end
   return row(out)
 end
 
@@ -140,7 +153,7 @@ end
 return {
   render = function(_, data)
     local ui = data.canvas_ui or {}
-    local wide = overlay_wide(data)
+    local wide = view_w(data) >= 760
     local top = pickers(data, ui)
     local head = { gap = 8, w = "full", top }
     if ui.error then head[#head + 1] = note(ui.error, "red") end
@@ -218,5 +231,6 @@ return {
     ask_text = function(_, _, v) return intent("canvas_ask_text", { text = v or "" }) end,
     tab = function(_, t) return intent("canvas_tab", { tab = t }) end,
     ground = function(_, _, v) return intent("canvas_ground", { ground = v or "white" }) end,
+    window = function() return intent("canvas_window", { to = "window" }) end,
   },
 }

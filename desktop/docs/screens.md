@@ -408,6 +408,23 @@ fade yet when the level changes.
 canvas{ id = "canvas" }
 ```
 
+**Its own window.** The Canvas view can open in a second window
+(`canvas_window {to = "window"}`: its bar's "Open in a window", ⌃⌥O on
+macOS and Alt+O elsewhere, the palette), which goes full screen with ⌃⌘F
+on macOS (F11 elsewhere), the green button, or its "Full screen" button.
+Asking again brings that window to the front: there is one canvas window.
+The view is in one place at a time: while it has its window, the main
+window's Canvas overlay says so ("Open in its window", "Bring it back
+here"), and closing the window, or `canvas_window {to = "main"}`, shows it
+over the panes again. The screen itself is the same file: its Luau state
+moves to the window for the window's turns (`src/windows.rs`), so nothing
+here changes. `canvas_ui.windowed` is true there, and `canvas_ui.win_w`
+is the window's width (the screen lays out by it instead of
+`app.overlay.w`). A confirmation asked for in that window (Send, Ask,
+Delete) is the core's, drawn and answered in that window; one that rises
+in the main window (or Jarvis's proposal, the copy offer, the palette)
+holds the canvas window behind a scrim that says where to answer.
+
 ### `icon`
 
 Positional: an [icon](#icons) name.

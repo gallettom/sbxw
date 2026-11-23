@@ -19,6 +19,7 @@
 use rune::{AppSpec, Cx, El, KeyEvent, Tx, Waker};
 use sbxw_desktop::shell::{self, App, Args};
 use sbxw_desktop::terminal;
+use sbxw_desktop::windows;
 
 /// The system allocator, counting only under `SBXW_DESKTOP_MEM=1`
 /// (sbxw_desktop::mem: off, one relaxed load of a flag per allocation).
@@ -30,7 +31,14 @@ fn init() -> App {
 }
 
 fn setup(s: &mut App, waker: Waker) {
+    windows::set_primary_waker(waker.clone());
     s.setup(waker);
+}
+
+// Closing the main window quits, as before, even with the canvas window
+// open (a window `open_window` made would keep the app running alone).
+fn on_close(_s: &mut App, tx: &mut Tx) {
+    tx.quit();
 }
 
 fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
@@ -80,5 +88,10 @@ fn main() {
     if let Err(e) = rune::set_app_icon(include_bytes!("../packaging/icon-1024.png").to_vec()) {
         log::warn!("app icon: {e}");
     }
-    rune::App::new(spec).chrome(shell::window_chrome()).menu_item(help).on_ime(on_ime).on_visibility(on_visibility).run();
+    // The window hub (windows.rs): the Canvas screen and a confirmation it
+    // raised move to the canvas window for its turns and back, by the
+    // turn scope; Rune opens, focuses and closes the windows it asks for.
+    let app = rune::App::new(spec).chrome(shell::window_chrome()).menu_item(help).on_ime(on_ime).on_visibility(on_visibility).on_close(on_close).turn_scope(windows::primary_enter, windows::primary_leave);
+    windows::install(Box::new(windows::RunePlatform { primary: app.handle(), canvas: None }));
+    app.run();
 }

@@ -358,6 +358,8 @@ pub fn view(s: &State, snap: &J) -> J {
         "ground": s.ground.name(), "ground_label": s.ground.label(),
         "grounds": crate::surface_canvas::Ground::ALL.iter().map(|g| if *g == s.ground { json!({ "id": g.name(), "label": g.label(), "icon": "check" }) } else { json!({ "id": g.name(), "label": g.label() }) }).collect::<Vec<_>>(),
         "popup": s.tool != Tool::Select, "zoom": format!("{:.0}%", crate::surface_canvas::camera(super::SURF).zoom * 100.0),
+        // In its own window (crate::windows): its width lays the view out.
+        "windowed": crate::windows::canvas_open(), "win_w": crate::windows::canvas_width(),
     });
     let Some(c) = &s.canvas else {
         v["empty"] = if s.current.is_none() { "none".into() } else { "loading".into() };

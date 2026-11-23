@@ -1083,3 +1083,288 @@ fn the_element_tree_has_the_ground_and_the_grid_for_each_choice() {
         assert_eq!(kept, g, "kept");
     }
 }
+
+// ---------------------------------------------------------------------------
+// The canvas window (crate::windows): the main window and the canvas window
+// as two runtimes, each run inside its turn scope as Rune runs them.
+
+mod in_window {
+    use super::window::{runtime, settle, tap};
+    use super::*;
+    use crate::screen::Host;
+    use crate::shell::App;
+    use crate::windows::{self as w, CanvasWin, Native, CANVAS};
+    use rune::{Key, KeyEvent, Mods, Runtime, Tx};
+
+    /// A turn of the main window: the screen (and a confirmation) back, then out.
+    fn main<R>(rt: &mut Runtime<App>, f: impl FnOnce(&mut Runtime<App>) -> R) -> R {
+        rt.update(|s, _| w::primary_enter(s));
+        let r = f(rt);
+        rt.update(|s, _| w::primary_leave(s));
+        r
+    }
+
+    /// A turn of the canvas window.
+    fn cwin<R>(ct: &mut Runtime<CanvasWin>, f: impl FnOnce(&mut Runtime<CanvasWin>) -> R) -> R {
+        ct.update(|s, _| w::canvas_enter(s));
+        let r = f(ct);
+        ct.update(|s, _| w::canvas_leave(s));
+        r
+    }
+
+    fn canvas_runtime() -> Runtime<CanvasWin> {
+        let mut ct = Runtime::new(CanvasWin::default(), w::canvas_view, (1200.0, 800.0), rune::Env::new(true, 1.0));
+        ct.on_key = Some(|s: &mut CanvasWin, ev: &KeyEvent, tx: &mut Tx| s.on_key(ev, tx));
+        ct
+    }
+
+    fn ctap(ct: &mut Runtime<CanvasWin>, key: &str) {
+        cwin(ct, |ct| {
+            ct.frame(0.05);
+            let (x, y) = ct.find(key).unwrap_or_else(|| panic!("{key} drawn in the canvas window"));
+            ct.pointer_down(x, y);
+            ct.pointer_up(x, y);
+            ct.frame(0.05);
+        });
+    }
+
+    fn cframe(ct: &mut Runtime<CanvasWin>) {
+        cwin(ct, |ct| {
+            ct.frame(0.05);
+            ct.frame(0.05);
+        });
+    }
+
+    fn key(k: Key) -> KeyEvent {
+        KeyEvent { key: k, mods: Mods::default() }
+    }
+
+    /// Canvas over the panes, then in its own window from its bar's control.
+    fn opened() -> (Runtime<App>, Runtime<CanvasWin>) {
+        *STATE().lock().unwrap() = State::default();
+        crate::surface_canvas::close(SURF);
+        w::reset();
+        let mut rt = runtime(1284.0, 816.0);
+        main(&mut rt, |rt| tap(rt, "rail-canvas"));
+        main(&mut rt, |rt| settle(rt, 6));
+        main(&mut rt, |rt| tap(rt, "canvas-open-window"));
+        assert!(w::canvas_open());
+        assert_eq!(w::take_done(), vec![Native::Open(CANVAS)]);
+        let mut ct = canvas_runtime();
+        cframe(&mut ct);
+        main(&mut rt, |rt| settle(rt, 4));
+        cframe(&mut ct);
+        (rt, ct)
+    }
+
+    #[test]
+    fn open_in_a_window_moves_the_view_and_keeps_one_place() {
+        let (mut rt, mut ct) = opened();
+        // The main window's overlay says where it is, never a second live copy.
+        main(&mut rt, |rt| {
+            settle(rt, 2);
+            assert!(rt.find("canvas-in-window").is_some(), "the overlay's placeholder");
+            assert!(rt.find("canvas-tool-pin").is_none() && rt.find("canvas-surface-col").is_none(), "no second copy");
+        });
+        // The window draws the Canvas view, without the open control.
+        cwin(&mut ct, |ct| {
+            ct.frame(0.05);
+            assert!(ct.state.has_screen());
+            assert!(ct.find("canvas-tool-pin").is_some() && ct.find("cwin-back").is_some() && ct.find("cwin-full-screen").is_some());
+            assert!(ct.find("canvas-open-window").is_none());
+        });
+        // A press there runs in the main window's feature, as from the overlay.
+        ctap(&mut ct, "canvas-tool-pin");
+        main(&mut rt, |rt| settle(rt, 2));
+        assert_eq!(STATE().lock().unwrap().tool, Tool::Pin);
+        // Asked again (the palette's shortcut, the placeholder): focused, not a second window.
+        main(&mut rt, |rt| {
+            let list = crate::intent::parse(&json!({ "kind": "intent", "name": "canvas_window", "args": { "to": "window" } })).unwrap();
+            rt.update(|s, _| s.intents("canvas", list));
+            settle(rt, 2);
+        });
+        assert_eq!(w::take_done(), vec![Native::Focus(CANVAS)]);
+        main(&mut rt, |rt| tap(rt, "canvas-in-window-show"));
+        assert_eq!(w::take_done(), vec![Native::Focus(CANVAS)]);
+        // Its keys (P picks Pin's tool, as in the overlay) go to the feature too.
+        cwin(&mut ct, |ct| {
+            ct.key(key(Key::Escape));
+            ct.frame(0.05);
+        });
+        main(&mut rt, |rt| settle(rt, 2));
+        assert_eq!(STATE().lock().unwrap().tool, Tool::Select, "Escape left the tool");
+    }
+
+    #[test]
+    fn closing_the_window_puts_the_canvas_back_over_the_panes() {
+        let (mut rt, mut ct) = opened();
+        ct.update(|s, tx| w::canvas_closed(s, tx));
+        cframe(&mut ct);
+        main(&mut rt, |rt| settle(rt, 4));
+        assert!(!w::canvas_open());
+        main(&mut rt, |rt| {
+            settle(rt, 2);
+            assert!(rt.find("canvas-in-window").is_none());
+            assert!(rt.find("canvas-tool-pin").is_some(), "the live Canvas, over the panes");
+            assert!(rt.find("canvas-open-window").is_some());
+        });
+        assert!(STATE().lock().unwrap().open, "the surface kept its canvas");
+    }
+
+    #[test]
+    fn bring_it_back_from_the_main_window() {
+        let (mut rt, mut ct) = opened();
+        main(&mut rt, |rt| tap(rt, "canvas-in-window-back"));
+        assert!(!w::canvas_open());
+        assert_eq!(w::take_done(), vec![Native::Close(CANVAS)]);
+        // Rune then runs its on_close: nothing more is said.
+        ct.update(|s, tx| w::canvas_closed(s, tx));
+        main(&mut rt, |rt| {
+            settle(rt, 2);
+            assert!(rt.find("canvas-tool-pin").is_some());
+        });
+    }
+
+    /// Ask in the canvas window: the core's Confirm, drawn there; the main
+    /// window says where it is, and no key or press there answers it.
+    fn asked() -> (Runtime<App>, Runtime<CanvasWin>) {
+        let (mut rt, mut ct) = opened();
+        cwin(&mut ct, |ct| {
+            for (name, args) in [("canvas_ask_text", json!({ "text": "Shots of the login page, please." })), ("canvas_ask", json!({}))] {
+                let list = crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })).unwrap();
+                ct.update(|s, _| s.intents("canvas", list));
+            }
+        });
+        main(&mut rt, |rt| settle(rt, 4));
+        assert_eq!(w::with(|h| h.dialog_owner()), Some(CANVAS), "the Confirm belongs to the canvas window");
+        cframe(&mut ct);
+        (rt, ct)
+    }
+
+    #[test]
+    fn a_confirmation_raised_in_the_canvas_window_is_drawn_there_alone() {
+        let (mut rt, mut ct) = asked();
+        cwin(&mut ct, |ct| {
+            ct.frame(0.05);
+            assert!(ct.find("cf-dialog").is_some() && ct.find("cf-confirm").is_some(), "the core's Confirm, in the canvas window");
+            assert!(ct.find("cwin-gate").is_none());
+            let d = ct.state.dialog().expect("held for this turn");
+            assert!(d.confirm.as_ref().is_some_and(|c| c.preview.as_ref().is_some_and(|p| p.text == "Shots of the login page, please.")), "the prompt in full");
+        });
+        main(&mut rt, |rt| {
+            settle(rt, 2);
+            assert!(rt.find("cwin-elsewhere-scrim").is_some(), "the main window says where it is");
+            assert!(rt.find("cf-dialog").is_none() && rt.find("cf-confirm").is_none(), "drawn in one window only");
+        });
+    }
+
+    #[test]
+    fn no_key_or_press_in_the_main_window_answers_the_canvas_windows_confirmation() {
+        let (mut rt, mut ct) = asked();
+        main(&mut rt, |rt| {
+            for k in [Key::Escape, Key::Enter, Key::Text(" ".into()), Key::Tab] {
+                rt.key(key(k));
+                settle(rt, 1);
+            }
+            let (x, y) = rt.find("cwin-elsewhere-scrim").unwrap();
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            settle(rt, 2);
+            let d = rt.state.feats.dialog.as_ref().expect("still waiting");
+            assert!(d.running.is_none(), "not confirmed");
+        });
+        assert_eq!(w::with(|h| h.dialog_owner()), Some(CANVAS));
+        // Nor a forged answer from the main window.
+        let id = cwin(&mut ct, |ct| ct.state.dialog().map(|d| d.identity()).unwrap());
+        assert!(!w::with(|h| h.post(w::PRIMARY, w::ToPrimary::Answer { confirm: true, dialog: id })));
+        main(&mut rt, |rt| assert!(rt.state.feats.dialog.as_ref().is_some_and(|d| d.running.is_none())));
+    }
+
+    #[test]
+    fn the_canvas_windows_confirmation_is_answered_there() {
+        // Cancel there: closed, nothing sent.
+        let (mut rt, mut ct) = asked();
+        ctap(&mut ct, "cf-cancel");
+        main(&mut rt, |rt| settle(rt, 2));
+        assert!(rt.state.feats.dialog.is_none() && STATE().lock().unwrap().job.is_none());
+        cframe(&mut ct);
+        cwin(&mut ct, |ct| {
+            ct.frame(0.05);
+            assert!(ct.find("cf-dialog").is_none() && ct.find("canvas-tool-pin").is_some());
+        });
+        // Confirm there: the main window's confirm_click runs it.
+        let (mut rt, mut ct) = asked();
+        ctap(&mut ct, "cf-confirm");
+        main(&mut rt, |rt| settle(rt, 4));
+        assert!(rt.state.feats.dialog.as_ref().is_none_or(|d| d.running.is_some() || d.error.is_some()), "confirmed");
+    }
+
+    #[test]
+    fn closing_the_canvas_window_cancels_its_confirmation() {
+        let (mut rt, mut ct) = asked();
+        ct.update(|s, tx| w::canvas_closed(s, tx));
+        cframe(&mut ct);
+        main(&mut rt, |rt| settle(rt, 4));
+        assert!(rt.state.feats.dialog.is_none(), "cancelled, never confirmed");
+        assert!(!w::canvas_open());
+    }
+
+    /// A gate of the main window's own (here the palette) holds the canvas
+    /// window: a scrim says where, and its presses and keys reach nothing.
+    #[test]
+    fn a_gate_in_the_main_window_holds_the_canvas_window() {
+        let (mut rt, mut ct) = opened();
+        main(&mut rt, |rt| {
+            rt.update(|s, _| s.palette_open());
+            settle(rt, 2);
+        });
+        cwin(&mut ct, |ct| {
+            ct.frame(0.05);
+            assert!(ct.find("cwin-gate").is_some() && ct.find("cwin-gate-show").is_some());
+            assert!(ct.state.shown_gate().is_some_and(|g| g.owner == w::PRIMARY));
+        });
+        let refused = w::with(|h| h.refused);
+        cwin(&mut ct, |ct| {
+            let (x, y) = ct.find("canvas-tool-pin").unwrap();
+            ct.pointer_down(x, y);
+            ct.pointer_up(x, y);
+            ct.key(key(Key::Enter));
+            ct.key(key(Key::Text("p".into())));
+            ct.frame(0.05);
+        });
+        main(&mut rt, |rt| settle(rt, 2));
+        assert_eq!(STATE().lock().unwrap().tool, Tool::Select, "nothing reached the view");
+        assert!(w::with(|h| h.refused) > refused);
+        assert!(!w::with(|h| h.pending_for_primary()));
+        ctap(&mut ct, "cwin-gate-show");
+        assert_eq!(w::take_done(), vec![Native::FocusPrimary]);
+        main(&mut rt, |rt| {
+            rt.update(|s, _| s.palette_close());
+            settle(rt, 2);
+        });
+        cwin(&mut ct, |ct| {
+            ct.frame(0.05);
+            assert!(ct.find("cwin-gate").is_none());
+        });
+    }
+
+    /// A typed change (an input's per-keystroke action) stays a typed change
+    /// across windows: the main window's `pressed` rule sees `editing`.
+    #[test]
+    fn a_typed_change_is_never_taken_for_a_press() {
+        let (mut rt, mut ct) = opened();
+        cwin(&mut ct, |ct| {
+            let list = crate::intent::parse(&json!({ "kind": "intent", "name": "canvas_asset", "args": {} })).unwrap();
+            ct.update(|s, _| {
+                s.screen("canvas").ui.editing = true;
+                s.intents("canvas", list);
+                s.screen("canvas").ui.editing = false;
+            });
+        });
+        main(&mut rt, |rt| {
+            settle(rt, 2);
+            let n = rt.state.notice.as_ref().map(|n| n.0.clone()).unwrap_or_default();
+            assert!(n.contains("runs only from your own press"), "{n}");
+        });
+    }
+}
