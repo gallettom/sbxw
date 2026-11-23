@@ -12,7 +12,10 @@
 //!   last changed, and the override's own hash (see `shell.rs`,
 //!   `check_overrides`).
 //! * `features`: `{<feature>: {<key>: value}}`, what a feature asked to
-//!   keep (the remote host last used, Setup's last tab).
+//!   keep (the remote host last used, Setup's last tab). Among them
+//!   `features.canvas.ground`: `"white"`, `"dark"` or `"follow"`, the
+//!   Canvas's ground from its bar (`canvas_ground`); absent, or a name no
+//!   ground has: White.
 //! * `uploads`: `{skip_drop_dialog: true}` once the person ticked "Do not
 //!   ask again for files I drop" in the core's upload dialog; only that box
 //!   sets it, Setup's "Ask before uploading dropped files" clears it

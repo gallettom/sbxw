@@ -33,7 +33,7 @@ mod tests;
 use crate::feat::monitor::model::who;
 use crate::feat::{Action, Asked, Call, Confirm, Ctx, Extra, Feature, Incoming, Place, ScreenDecl, Slot, Zone};
 use crate::intent::{Arg, Risk, Spec};
-use crate::surface_canvas::{self as sc, CanvasEvent, Tool, ZoomCmd};
+use crate::surface_canvas::{self as sc, CanvasEvent, Ground, Tool, ZoomCmd};
 use model::{Manifest, NoteD, PinD};
 use serde_json::{json, Value as J};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -75,6 +75,7 @@ const ZOOMS: &[&str] = &["in", "out", "fit", "actual"];
 const KEYS: &[&str] = &["type", "backspace", "escape", "up", "down", "enter", "left", "right"];
 const OLDER: &[&str] = &["7", "30", "90"];
 const TABS: &[&str] = &["canvas", "remarks"];
+const GROUNDS: &[&str] = &["white", "dark", "follow"];
 
 use crate::intent::direct as d;
 
@@ -91,6 +92,7 @@ pub const INTENTS: &[Spec] = &[
     d("canvas_asset", &[], "Opens the file dialog to add an example picture (PNG, JPEG or WebP)."),
     d("canvas_session", &[("key", Arg::Str, true)], "The session the remarks go to (`<sandbox>` for its main session, `<sandbox>::<thread>`)."),
     d("canvas_ask_text", &[("text", Arg::Text, true)], "Edits the prompt of Ask the agent for screenshots."),
+    d("canvas_ground", &[("ground", Arg::OneOf(GROUNDS), true)], "The canvas's ground: `white` (the default), `dark`, or `follow` (the theme's: dark for the dark themes). Remembered across launches."),
     d("canvas_tab", &[("tab", Arg::OneOf(TABS), true)], "On a narrow window: the canvas or the remarks."),
     d("canvas_key", &[("key", Arg::OneOf(KEYS), true), ("text", Arg::Text, false)], "The Canvas's keys: V, P, N, A pick a tool, Escape leaves it, Backspace removes the unsent remark selected."),
     Spec { name: "canvas_send", risk: Risk::Approval("Sends your remarks to an agent's session"), args: &[], doc: "Sends the new pins, notes and example pictures to the session shown, after one confirmation listing them all: the pictures are copied into the sandbox, the round recorded, and a fixed line asks the agent to read it with canvas_read." },
@@ -154,6 +156,8 @@ pub struct State {
     pub job_seq: u64,
     pub renaming: bool,
     pub tab: String,
+    /// The ground the person chose (remembered: `features.canvas.ground`).
+    pub ground: Ground,
     /// The surface holds this canvas's pictures (dropped on close).
     pub open: bool,
     pub seq: u64,
@@ -197,6 +201,11 @@ fn on_surface(ev: &crate::surface::SurfaceEvent) -> Vec<Action> {
 
 pub fn shown(cx: &Ctx) -> bool {
     cx.get("app")["overlay"]["screen"] == SCREEN
+}
+
+/// The ground remembered across launches (absent, or a name no ground has: White).
+pub fn kept_ground(cx: &Ctx) -> Ground {
+    cx.get("app")["kept"]["canvas"]["ground"].as_str().and_then(Ground::parse).unwrap_or_default()
 }
 
 /// Why nothing may be sent now: something over the view, or a Jarvis proposal.
@@ -285,6 +294,7 @@ impl State {
                 if self.sandbox.is_none() {
                     self.sandbox = cx.get("app")["selected"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
                 }
+                self.ground = kept_ground(cx);
                 let want = a.s("canvas").map(str::to_string).or_else(|| self.current.clone());
                 // Opened again: the pictures are read again (they were dropped on close).
                 self.forget_surface();
@@ -384,6 +394,11 @@ impl State {
             }
             "canvas_ask_text" => self.ask_text = Some(a.s("text").unwrap_or("").chars().take(2000).collect()),
             "canvas_tab" => self.tab = a.req("tab").to_string(),
+            "canvas_ground" => {
+                self.ground = Ground::parse(a.req("ground")).unwrap_or_default();
+                self.push_scene();
+                out.push(Action::Remember { key: "ground".into(), value: self.ground.name().into() });
+            }
             "canvas_key" => return self.key(cx, a),
             "canvas_send" => return self.send(cx),
             "canvas_ask" => return self.ask(cx),
@@ -488,7 +503,8 @@ impl State {
     /// The surface's scene from the manifest and the draft.
     pub fn push_scene(&mut self) {
         if let Some(c) = &self.canvas {
-            let scene = model::scene(c, &self.pins, &self.notes, &self.layout, self.selected.as_deref(), self.tool);
+            let mut scene = model::scene(c, &self.pins, &self.notes, &self.layout, self.selected.as_deref(), self.tool);
+            scene.ground = self.ground;
             sc::set_scene(SURF, scene);
             self.open = true;
         }

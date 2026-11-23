@@ -368,10 +368,31 @@ without the screen running; presses that mean something (select, move,
 resize, place a pin, a note, an example picture) go to the owning feature's Rust as
 `SurfaceEvent::Canvas`, never to the screen. It takes the space its parent
 leaves. An `id` no feature declares in `surfaces` draws nothing and hears
-nothing. Each picture sits on a mat (`surface`, a `dim` hairline); a
-selected item has an accent ring outside it, and a resize handle on its
-corner only when it is drawn large enough (8 % of its smaller side, 6 to
-12 pt). Fit leaves room for the round bands above and the captions below.
+nothing. Each picture sits on a mat (`canvas-mat`, a `canvas-mat-edge`
+hairline); a selected item has an accent ring outside it, and a resize
+handle on its corner only when it is drawn large enough (8 % of its smaller
+side, 6 to 12 pt). Fit leaves room for the round bands above and the
+captions below.
+
+**The ground** is the scene's choice (Canvas's bar: `canvas_ground`, kept as
+`features.canvas.ground`): White (the default), Dark (the theme's `bg`), or
+Follow theme (Dark for the dark themes; a light theme, if one comes, picks
+White). Everything on it is drawn in the canvas's own tokens (`canvas-*` in
+`theme.rs`): a fixed light palette on white, the active theme's tokens on
+dark, so the dark ground looks as the canvas always did. Their contrast is
+`theme::tests::canvas_pairs_reach_the_level_on_both_grounds`.
+
+**The dot grid** sits inside the world, under every item, so a live pan or
+pinch moves it without a build. Dots are 24 world points apart at 100 %;
+the spacing doubles as you zoom out and halves as you zoom in, so it stays
+16 to 32 pt on screen. A dot is 1 pt in radius on screen (1.25 on dark,
+`border` at 70 %). One build draws only the dots of the view and a 50 %
+margin, as one shape (a zero-length round line per dot, one small GPU quad
+each), at most 16,000: the margin shrinks first, and a view too large even
+without it gets a coarser spacing. A 2560 x 1440 pt full-screen view at
+16 pt is about 14,600 dots. With `SBXW_DESKTOP_PERF=1` each build logs
+`perf: canvas dots: <n> at <step> pt <ms> ms`. The outgoing spacing does not
+fade yet when the level changes.
 
 | Prop | Value | Effect |
 |---|---|---|
