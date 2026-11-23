@@ -426,3 +426,73 @@ fn a_detail_line_gives_its_words_and_percentage() {
     assert_eq!(step_words("Create the sandbox", "63%"), "Create the sandbox 63%");
     assert_eq!(step_words("Create the sandbox", "Copying files"), "Create the sandbox");
 }
+
+// ---- sbx 0.54: a kit install's denied hosts, allowed, then Retry ----
+
+/// The network feature's own intent, as the core runs it (Kits panel's
+/// "Allow for ..." and the popover's): its dialog, then its call.
+fn allow(r: &mut Run, sandbox: &str, host: &str, global: bool) -> Confirm {
+    let a = Asked { name: "network_allow", args: json!({ "sandbox": sandbox, "resources": host, "global": global }).as_object().unwrap().clone() };
+    let d = r.ctx_data();
+    let mut v = (crate::feat::network::FEATURE.act)(&Ctx { data: &d }, &a).unwrap();
+    let Action::Confirm(c) = v.remove(0) else { panic!("the core's dialog") };
+    *c
+}
+
+#[test]
+fn denied_hosts_are_listed_allowed_one_by_one_and_retried() {
+    for (step, global) in [("kits", false), ("create", true)] {
+        let mut r = Run::new(json!({ "sandboxes": [], "create_step_ms": 0, "create_denied": { "docs": { "hosts": ["registry.npmjs.org", "github.com"], "step": step, "kit": "sbxw:agent-skills" } } }));
+        r.ask("create_open", json!({ "dialog": "workspace" })).unwrap();
+        r.ask("create_pick", json!({})).unwrap();
+        r.ask("create_set", json!({ "field": "name", "value": "docs" })).unwrap();
+        r.ask("create_submit", json!({})).unwrap();
+        // Two hosts, the scope the daemon gave, sbx's words, and a notice that opens Kits.
+        let d = r.c()["denied"][0].clone();
+        assert_eq!(d["hosts"], json!([{ "host": "registry.npmjs.org", "allowed": false }, { "host": "github.com", "allowed": false }]), "{step}: {d}");
+        assert_eq!((d["allow_scope"].as_str(), d["can_retry"].as_bool(), d["left"].as_u64()), (Some(if global { "global" } else { "sandbox" }), Some(true), Some(2)));
+        assert!(d["message"].as_str().unwrap().contains("network access denied"));
+        assert!(r.asked.iter().any(|a| matches!(a, Action::Notice { text, then: Some((n, _)), .. } if n == "kits_show" && text.contains("sbx denied 2 hosts"))), "{:?}", r.asked);
+        if step == "create" {
+            // The bring-up failed: the popover's card carries them too.
+            assert_eq!(r.c()["jobs"][0]["state"], "failed");
+            assert_eq!(r.c()["jobs"][0]["denied"]["hosts"][1]["host"], "github.com");
+        } else {
+            assert!(r.c()["jobs"].as_array().unwrap().is_empty(), "ready with a warning; the failure stays for Kits");
+        }
+        // One allowed, with the scope said in the dialog: a missing sandbox's rule is every sandbox's.
+        let c = allow(&mut r, "docs", "registry.npmjs.org", global);
+        assert_eq!(c.call.body["global"], global);
+        if global {
+            assert!(c.title.contains("EVERY sandbox") && c.danger, "{}", c.title);
+        } else {
+            assert!(c.lines[0].contains("docs only"), "{:?}", c.lines);
+        }
+        r.call(c.call);
+        assert!(r.st.mark_allowed("docs", "registry.npmjs.org", global));
+        let v = r.st.view(&[]);
+        assert_eq!((v["denied"][0]["hosts"][0]["allowed"].as_bool(), v["denied"][0]["left"].as_u64()), (Some(true), Some(1)));
+        // Retry: the same create; the host still refused is listed alone.
+        r.ask("create_retry", json!({ "sandbox": "docs" })).unwrap();
+        assert_eq!(r.c()["denied"][0]["hosts"], json!([{ "host": "github.com", "allowed": false }]), "{step}");
+        // The other allowed, Retry again: nothing denied, the sandbox ready.
+        let c = allow(&mut r, "docs", "github.com", global);
+        r.call(c.call);
+        r.ask("create_retry", json!({ "sandbox": "docs" })).unwrap();
+        assert!(r.c()["denied"].as_array().unwrap().is_empty(), "{step}: {}", r.c()["denied"]);
+        assert!(r.c()["jobs"].as_array().unwrap().is_empty());
+        assert_eq!(r.daemon["sandboxes"].as_array().unwrap().iter().filter(|s| s["name"] == "docs").count(), 1, "adopted, not created twice");
+        // Dismiss forgets one.
+        r.st.denied.push(model::Denied::from_event(&json!({ "sandbox": "docs", "kind": "denied", "hosts": ["a.dev"], "exists": true })).unwrap());
+        r.ask("create_dismiss", json!({ "sandbox": "docs" })).unwrap();
+        assert!(r.c()["denied"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn a_denied_event_keeps_only_hosts_and_never_says_this_sandbox_for_a_missing_one() {
+    let d = model::Denied::from_event(&json!({ "sandbox": "x", "kind": "denied", "hosts": ["ok.dev", "bad host; rm", "ok.dev", ""], "exists": false, "allow_scope": "sandbox" })).unwrap();
+    assert_eq!((d.hosts.clone(), d.allow_scope.as_str()), (vec!["ok.dev".to_string()], "global"));
+    assert!(model::Denied::from_event(&json!({ "sandbox": "x", "kind": "denied", "hosts": [] })).is_none());
+    assert!(model::Denied::from_event(&json!({ "sandbox": "x", "kind": "warning", "hosts": ["a.dev"] })).is_none());
+}

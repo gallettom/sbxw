@@ -130,6 +130,40 @@ return {
       }
     end
 
+    -- Kit installs sbx refused hosts for (sbx 0.54; data.create.denied):
+    -- each host with its allow (network_allow, the core's dialog), then
+    -- Retry (the same bring-up). For a sandbox that does not exist the rule
+    -- can only be every sandbox's: the button says so. sbx's words are text.
+    for _, f in ipairs(((data.create or {}).denied) or {}) do
+      local global = f.allow_scope == "global"
+      local rows_ = {}
+      for _, h in ipairs(f.hosts or {}) do
+        rows_[#rows_ + 1] = row{ w = "full", gap = 8, key = "denied-" .. f.sandbox .. "-" .. h.host,
+          text{ h.host, mono = true, color = "text-bright", truncate = true, grow = 1, min_w = 0 },
+          h.allowed and badge{ "allowed", tone = "green" }
+            or button{ global and "Allow for all sandboxes" or "Allow for this sandbox", tone = "green", variant = "neutral",
+              on = "allow_denied", arg = { sandbox = f.sandbox, host = h.host, global = global },
+              key = "denied-allow-" .. f.sandbox .. "-" .. h.host,
+              help = global and ("A rule for every sandbox on this machine: " .. f.sandbox .. " does not exist, so the rule cannot be its own")
+                or ("A rule for " .. f.sandbox .. " only: other sandboxes are not changed") },
+        }
+      end
+      local what = f.kit and ("Installing " .. f.kit .. " failed") or (f.step == "create" and "Creating the sandbox failed" or "Installing its kits failed")
+      out[#out + 1] = column{ w = "full", gap = 8, pad = 12, radius = "md", border = "red-border", fill = "surface", key = "kits-denied-" .. f.sandbox,
+        section(f.sandbox .. ": sbx denied " .. #(f.hosts or {}) .. ((#(f.hosts or {}) == 1) and " host" or " hosts"), badge{ tostring(f.left or 0), tone = (f.left or 0) > 0 and "red" or "green", help = "Hosts not allowed yet" }),
+        note(what .. ": sbx refused these hosts" .. (f.source == "policy_log" and " (read from the sandbox's policy log: sbx's message named none)." or ".")),
+        list(rows_),
+        (f.message or "") ~= "" and text{ f.message, mono = true, size = "xs", color = "text-muted", wrap = true, key = "kits-denied-msg-" .. f.sandbox } or false,
+        row{ w = "full", gap = 8, wrap = true,
+          (not f.can_retry) and note("Started elsewhere: bring it up again from there.") or false,
+          spacer{},
+          button{ "Dismiss", variant = "ghost", on = "denied_dismiss", arg = f.sandbox, key = "kits-denied-dismiss-" .. f.sandbox },
+          f.can_retry and button{ "Retry", icon = "reload", variant = (f.left or 0) == 0 and "primary" or "neutral", on = "denied_retry", arg = f.sandbox,
+            key = "kits-denied-retry-" .. f.sandbox, help = "The same bring-up again: the kits not applied yet are added" } or false,
+        },
+      }
+    end
+
     local files = k.files or {}
     if #files == 0 then
       if not err then
@@ -245,6 +279,9 @@ return {
   end,
 
   actions = {
+    allow_denied = function(_, a) return intent("network_allow", { sandbox = a.sandbox, resources = a.host, global = a.global == true }) end,
+    denied_retry = function(_, sb) return intent("create_retry", { sandbox = sb }) end,
+    denied_dismiss = function(_, sb) return intent("create_dismiss", { sandbox = sb }) end,
     reload = function() return intent("kits_show") end,
     pick = function(state, _, path) state.edit = nil; return intent("kits_pick", { path = path }) end,
     pick_sandbox = function(state, _, sb) if sb and sb ~= "" then state.edit = nil; return intent("kits_pick", { sandbox = sb }) end end,

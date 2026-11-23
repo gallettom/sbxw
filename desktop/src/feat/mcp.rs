@@ -27,7 +27,10 @@ pub const ICON: &str = "plug";
 
 pub const FEATURE: Feature = Feature {
     name: "mcp",
-    data: &[Data::new("mcp", "/api/mcp")],
+    // `mcp_mode`: each running sandbox's MCP mode and connected servers
+    // (sbx 0.54, one `sbx inspect` each), read when the panel opens and
+    // when it moves to a sandbox not read yet; never on a timer.
+    data: &[Data::new("mcp", "/api/mcp"), Data { key: "mcp_mode", path: "/api/sandboxes/{sandbox}/mcp", on: &[], every: 0, lazy: true }],
     screens: &[ScreenDecl { name: "mcp", src: include_str!("../../screens/mcp.luau"), slot: Slot::Overlay { title: "MCP servers", icon: ICON } }],
     intents: INTENTS,
     act,
@@ -43,7 +46,7 @@ const fn a(name: &'static str, asks: &'static str, args: &'static [(&'static str
 }
 
 pub const INTENTS: &[Spec] = &[
-    d("mcp_show", &[("sandbox", Arg::Str, false)], "Opens the MCP servers panel and reads the servers again; on that sandbox when given (Load and Unload act on it), else on the last one used. View state only."),
+    d("mcp_show", &[("sandbox", Arg::Str, false)], "Opens the MCP servers panel and reads the servers again, and each running sandbox's MCP mode (static or dynamic) and connected servers (sbx 0.54); on that sandbox when given (Load and Unload act on it), else on the last one used."),
     d("mcp_pick", &[("sandbox", Arg::Str, true)], "Puts the MCP servers panel on that sandbox (the one Load and Unload act on). View state only: nothing is read or sent."),
     d("mcp_load", &[("server", Arg::Str, true), ("sandbox", Arg::Str, true)], "Loads a registered MCP server into a running sandbox."),
     a("mcp_unload", "Unload an MCP server", &[("server", Arg::Str, true), ("sandbox", Arg::Str, true)], "Unloads an MCP server from a sandbox."),
@@ -127,6 +130,7 @@ pub fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
                 None => vec![Action::Set { key: "mcp_view".into(), value: J::Null }],
             };
             v.push(Action::Refresh("mcp"));
+            v.push(Action::Refresh("mcp_mode"));
             v.push(Action::OpenPanel("mcp".into()));
             Ok(v)
         }
@@ -135,7 +139,11 @@ pub fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
             if ctx.sandbox(sb).is_none() {
                 return Err(format!("no sandbox named {sb}"));
             }
-            Ok(view_on(sb))
+            let mut v = view_on(sb);
+            if ctx.get("mcp_mode")[sb].is_null() {
+                v.push(Action::Refresh("mcp_mode"));
+            }
+            Ok(v)
         }
         "mcp_load" | "mcp_unload" => {
             let (server, sb) = (q.req("server"), q.req("sandbox"));
@@ -145,6 +153,8 @@ pub fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
             let load = q.name == "mcp_load";
             let verb = if load { "load" } else { "unload" };
             let call = Call::post(format!("/api/sandboxes/{}/mcp/{verb}", crate::client::enc(sb)), json!({ "server": server }), format!("{verb} {server} {} {sb}", if load { "into" } else { "from" }));
+            // What is connected follows a load or an unload.
+            let call = call.then(&["mcp_mode"]);
             if load {
                 Ok(vec![Action::Call(call)])
             } else {

@@ -90,7 +90,7 @@ const INTENTS: &[Spec] = &[
         name: "port_publish",
         risk: Risk::Direct,
         args: &[("sandbox", Arg::Str, true), ("sandbox_port", PORT, true), ("alias", Arg::Str, false)],
-        doc: "Publishes a sandbox port on a host port sbx picks, on the loopback address.",
+        doc: "Publishes a sandbox port on a host port sbx picks (sbx 0.54; an older sbx publishes on the sandbox port and says so), on the loopback address. The port sbx gave shows on its row.",
     },
     Spec {
         name: "port_publish_fixed",
@@ -98,6 +98,13 @@ const INTENTS: &[Spec] = &[
         args: &[("sandbox", Arg::Str, true), ("sandbox_port", PORT, true), ("host_port", PORT, true), ("host_ip", Arg::Str, false), ("alias", Arg::Str, false)],
         doc: "Publishes a sandbox port on the host port (and address) given, after the core's dialog.",
     },
+    Spec {
+        name: "network_why",
+        risk: Risk::Direct,
+        args: &[("sandbox", Arg::Str, true), ("target", Arg::Str, true)],
+        doc: "Asks sbx which rule let a host through (`sbx policy check network`, sbx 0.54), for the sandbox the panel shows; the answer shows under the host in Recent egress. Reads only: removing the rule is `network_rule_rm` or `network_unblock`.",
+    },
+    Spec { name: "network_why_close", risk: Risk::Direct, args: &[], doc: "Hides the answer of `network_why`. View state only." },
     Spec { name: "port_unpublish", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true), ("spec", Arg::Str, true)], doc: "Unpublishes one port mapping (its `spec`)." },
     Spec { name: "port_open", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true), ("spec", Arg::Str, true)], doc: "Opens a published port in the browser (http://host:port, from the daemon's list)." },
 ];
@@ -243,6 +250,18 @@ pub fn scope_label(v: &str) -> String {
     }
 }
 
+/// A host, or a host and a port, as the daemon's check takes it
+/// (`api.github.com`, `api.github.com:443`); anything else is refused here.
+pub fn target_ok(t: &str) -> bool {
+    let (host, port) = match t.rsplit_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (t, None),
+    };
+    let host_ok = !host.is_empty() && host.len() <= 253 && !host.starts_with(['-', '.']) && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
+    let port_ok = port.is_none_or(|p| p.parse::<u32>().is_ok_and(|n| (1..=65535).contains(&n)));
+    host_ok && port_ok
+}
+
 fn governed(source: &str) -> bool {
     matches!(source, "org" | "corporate" | "system")
 }
@@ -260,6 +279,8 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
             if target != shown(cx) {
                 v.push(Action::Set { key: "network_policy".into(), value: J::Null });
                 v.push(Action::Set { key: "network_ports".into(), value: J::Null });
+                v.push(Action::Set { key: "network_why".into(), value: J::Null });
+                v.push(Action::Set { key: "network_publish".into(), value: J::Null });
             }
             v.extend(reload(target.as_deref()));
             v.push(Action::OpenPanel("network".into()));
@@ -390,6 +411,22 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
                 .danger()
                 .into_action()]
         }
+        "network_why" => {
+            let sb = sb.unwrap();
+            let target = a.req("target").trim().to_string();
+            if shown(cx).as_deref() != Some(sb.as_str()) {
+                return Err(format!("{sb}'s policy is not the one shown: open it first"));
+            }
+            if !target_ok(&target) {
+                return Err(format!("{target:?} is not a host (or host:port) sbx can check"));
+            }
+            let path = format!("/api/sandboxes/{}/policy/check?target={}", enc(&sb), enc(&target));
+            vec![
+                Action::Set { key: "network_why".into(), value: json!({ "sandbox": sb, "target": target, "busy": true }) },
+                Action::Call(Call::get(path, format!("ask sbx why {target} was allowed")).tag("why").quiet()),
+            ]
+        }
+        "network_why_close" => vec![Action::Set { key: "network_why".into(), value: J::Null }],
         "policy_refresh" => vec![Action::Call(Call::post("/api/policy/refresh", json!({}), "re-read the network policy").tag("refresh"))],
         "port_publish" | "port_publish_fixed" => {
             let sb = sb.unwrap();
@@ -399,7 +436,11 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
                 body["alias"] = al.trim().into();
             }
             if a.name == "port_publish" {
-                return Ok(vec![Action::Call(Call::post(format!("/api/sandboxes/{}/ports/publish", enc(&sb)), body, format!("publish {sb}:{sport}")))]);
+                // No host port: sbx 0.54 picks one; the answer says which.
+                return Ok(vec![
+                    Action::Set { key: "network_publish".into(), value: json!({ "sandbox": sb, "sandbox_port": sport, "busy": true }) },
+                    Action::Call(Call::post(format!("/api/sandboxes/{}/ports/publish", enc(&sb)), body, format!("publish {sb}:{sport}")).tag("publish")),
+                ]);
             }
             let hport = a.i("host_port").unwrap_or(0);
             body["host_port"] = hport.into();
@@ -408,7 +449,7 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
                 body["host_ip"] = ip.into();
             }
             let open = matches!(ip, Some("0.0.0.0") | Some("::"));
-            let mut c = Confirm::new(format!("Publish {sb}'s port {sport} on host port {hport}?"), Call::post(format!("/api/sandboxes/{}/ports/publish", enc(&sb)), body, format!("publish {sb}:{sport} on {hport}")))
+            let mut c = Confirm::new(format!("Publish {sb}'s port {sport} on host port {hport}?"), Call::post(format!("/api/sandboxes/{}/ports/publish", enc(&sb)), body, format!("publish {sb}:{sport} on {hport}")).tag("publish"))
                 .line(format!("Sandbox: {sb}, port {sport}."))
                 .line(format!("On this machine: {}:{hport}.", ip.unwrap_or("127.0.0.1 (sbx's default address)")))
                 .line(if open { "Reachable from other machines on your network, not only this one.".to_string() } else { "Reachable from this machine.".to_string() })
@@ -459,11 +500,28 @@ fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> 
         v.extend(reload(shown(cx).as_deref()));
         return v;
     }
+    if call.tag == "why" {
+        return vec![Action::Set { key: "network_why".into(), value: why_answer(cx, call, r) }];
+    }
+    if call.tag == "publish" {
+        let (value, mut v) = published(call, &r);
+        v.insert(0, Action::Set { key: "network_publish".into(), value });
+        v.extend(reload(shown(cx).as_deref()));
+        return v;
+    }
     let mut v = match r {
         Ok((c, body)) if (200..300).contains(&c) && body["ok"] != false => {
             let mut v = vec![Action::notice(format!("{}: done", call.what))];
             if let Some(w) = body["hosts_warning"].as_str() {
                 v.push(Action::error(format!("{}: {w}", call.what)));
+            }
+            // An allowed host a kit install was denied: its failure says so.
+            if call.path.ends_with("/policy/rules") && call.body["decision"] == "allow" {
+                let sb = sandbox_of(&call.path);
+                let global = call.body["global"] == true;
+                for h in call.body["resources"].as_str().unwrap_or("").split([',', ' ']).map(str::trim).filter(|h| !h.is_empty()) {
+                    v.extend(crate::feat::create::mark_allowed(cx, &sb, h, global));
+                }
             }
             v
         }
@@ -472,6 +530,79 @@ fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> 
     };
     v.extend(reload(shown(cx).as_deref()));
     v
+}
+
+/// The sandbox a call's path names (`/api/sandboxes/<name>/...`).
+fn sandbox_of(path: &str) -> String {
+    let seg = path.strip_prefix("/api/sandboxes/").and_then(|r| r.split('/').next()).unwrap_or("");
+    crate::pct::decode(seg, false)
+}
+
+/// `network_why` as the screen reads it: the target asked, and sbx's
+/// answer (`supported`, `allowed`, `rule`, `rule_id`, `raw`, `note`) or why
+/// there is none. A daemon without the route (older than sbx 0.54's
+/// features) is "needs sbx 0.54", never an error.
+fn why_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> J {
+    let sb = sandbox_of(&call.path);
+    let target = call.path.split_once("target=").map(|(_, t)| crate::pct::decode(t, true)).unwrap_or_default();
+    let mut v = json!({ "sandbox": sb, "target": target, "busy": false });
+    match r {
+        Ok((c, body)) if (200..300).contains(&c) && body["ok"] != false => {
+            for k in ["supported", "allowed", "rule", "rule_id", "raw", "note"] {
+                v[k] = body[k].clone();
+            }
+            // The remove button follows only a rule id the panel lists.
+            if let Some(id) = body["rule_id"].as_str() {
+                v["removable"] = match rule(cx, &sb, id) {
+                    Some((_, action, _, source)) if !governed(&source) => json!(if action == "allow" { "rule_rm" } else { "unblock" }),
+                    _ => J::Null,
+                };
+            }
+        }
+        Ok((404, _)) => {
+            v["supported"] = false.into();
+            v["note"] = "needs sbx 0.54 (and an sbxw daemon that knows `sbx policy check`)".into();
+        }
+        Ok((c, body)) => v["error"] = body["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("the daemon answered {c}")).into(),
+        Err(e) => v["error"] = e.into(),
+    }
+    v
+}
+
+/// A publish's answer: `network_publish` (the port sbx gave, or why not)
+/// and the notices.
+fn published(call: &Call, r: &Result<(u16, J), String>) -> (J, Vec<Action>) {
+    let sb = sandbox_of(&call.path);
+    let sport = call.body["sandbox_port"].as_u64().unwrap_or(0);
+    match r {
+        Ok((c, b)) if (200..300).contains(c) && b["ok"] != false => {
+            let ip = b["host_ip"].as_str().filter(|s| !s.is_empty()).unwrap_or("127.0.0.1").to_string();
+            let hport = b["host_port"].as_u64();
+            let assigned = b["assigned"] == true;
+            let value = json!({ "sandbox": sb, "sandbox_port": sport, "host_ip": ip, "host_port": hport, "assigned": assigned,
+                "note": b["note"], "forwarded_port": b["forwarded_port"], "busy": false });
+            let mut text = match hport {
+                Some(h) => format!("Published {sb}:{sport} on {ip}:{h}{}", if assigned { " (the port sbx picked)" } else { "" }),
+                None => format!("{}: done", call.what),
+            };
+            if let Some(f) = b["forwarded_port"].as_u64() {
+                text.push_str(&format!(", here on 127.0.0.1:{f}"));
+            }
+            let mut v = vec![Action::notice(text)];
+            if let Some(n) = b["note"].as_str().filter(|n| !n.is_empty()) {
+                v.push(Action::notice(format!("{sb}:{sport}: {n}")));
+            }
+            if let Some(w) = b["hosts_warning"].as_str() {
+                v.push(Action::error(format!("{}: {w}", call.what)));
+            }
+            (value, v)
+        }
+        Ok((c, b)) => {
+            let why = b["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("the daemon answered {c}"));
+            (json!({ "sandbox": sb, "sandbox_port": sport, "error": why, "busy": false }), vec![Action::error(format!("{}: {why}", call.what))])
+        }
+        Err(e) => (json!({ "sandbox": sb, "sandbox_port": sport, "error": e, "busy": false }), vec![Action::error(format!("{}: {e}", call.what))]),
+    }
 }
 
 /// New requests from sbx: a notice that opens the panel on that sandbox.
@@ -650,7 +781,15 @@ fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16,
     if let (Some(c), "POST") = (match_path("/api/sandboxes/{sandbox}/ports/publish", path), method) {
         let sb = c[0].1.clone();
         let sport = body["sandbox_port"].as_u64().unwrap_or(0);
-        let hport = body["host_port"].as_u64().unwrap_or(40000 + sport % 1000);
+        // sbx 0.54 picks a free host port when none is given (from 49153
+        // here); an older sbx (`standin_sbx_old`) publishes on the sandbox port.
+        let old = st.data["standin_sbx_old"] == true;
+        let n = st.data["ports"][sb.as_str()]["ports"].as_array().map(Vec::len).unwrap_or(0) as u64;
+        let (hport, assigned, note) = match body["host_port"].as_u64() {
+            Some(h) => (h, false, J::Null),
+            None if old => (sport, false, json!("automatic host port needs sbx 0.54: published on the sandbox port")),
+            None => (49153 + n, true, J::Null),
+        };
         let ip = body["host_ip"].as_str().unwrap_or("127.0.0.1").to_string();
         let spec = format!("{ip}:{hport}:{sport}/tcp");
         let entry = json!({ "spec": spec, "sandbox_port": sport, "proto": "tcp", "host_ip": ip, "host_port": hport });
@@ -659,7 +798,7 @@ fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16,
             *ports = json!([]);
         }
         ports.as_array_mut().unwrap().push(entry);
-        return Some((200, json!({ "ok": true })));
+        return Some((200, json!({ "ok": true, "sandbox_port": sport, "host_ip": ip, "host_port": hport, "assigned": assigned, "note": note, "forwarded_port": J::Null })));
     }
     if let (Some(c), "POST") = (match_path("/api/sandboxes/{sandbox}/ports/unpublish", path), method) {
         let spec = body["spec"].as_str().unwrap_or("");
@@ -668,11 +807,39 @@ fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16,
         }
         return Some((200, json!({ "ok": true })));
     }
+    if let (Some(c), "GET") = (match_path("/api/sandboxes/{sandbox}/policy/check", path), method) {
+        return Some(policy_check(st.data, &c[0].1, &query(path, "target").unwrap_or_default()));
+    }
     if (method, path) == ("GET", "/api/hosts") {
         let v = st.data["network_hosts"].clone();
         return Some((200, if v.is_null() { json!([]) } else { v }));
     }
     None
+}
+
+/// `GET .../policy/check?target=`: the fixture's `policy_check[sandbox][target]`
+/// when it has one, else the rule of the stand-in's own list whose host is
+/// the target's (its id), else an answer that names no rule.
+fn policy_check(data: &J, sb: &str, target: &str) -> (u16, J) {
+    if target.is_empty() || !target_ok(target) {
+        return (400, json!({ "ok": false, "error": format!("not a target: {target:?}") }));
+    }
+    if data["standin_sbx_old"] == true {
+        return (200, json!({ "ok": true, "supported": false, "target": target, "note": "needs sbx 0.54: `sbx policy check` is new there" }));
+    }
+    let fixed = &data["policy_check"][sb][target];
+    if !fixed.is_null() {
+        return (200, fixed.clone());
+    }
+    let host = host_of(target);
+    let rules = &data["policy"][sb]["rules"];
+    let roles: Vec<&str> = rules["roles"].as_array().map(|r| r.iter().filter_map(J::as_str).collect()).unwrap_or_default();
+    let col = |role: &str| roles.iter().position(|r| *r == role);
+    let found = rules["rows"].as_array().into_iter().flatten().filter_map(J::as_array).find(|r| col("host").and_then(|i| r.get(i)).and_then(J::as_str) == Some(host.as_str()));
+    match found.and_then(|r| col("rule_id").and_then(|i| r.get(i)).and_then(J::as_str)) {
+        Some(id) => (200, json!({ "ok": true, "supported": true, "target": target, "allowed": true, "rule": id, "rule_id": id, "raw": format!("allowed by rule {id} ({host})") })),
+        None => (200, json!({ "ok": true, "supported": true, "target": target, "allowed": J::Null, "rule": J::Null, "rule_id": J::Null, "raw": format!("{target}: no decision recorded") })),
+    }
 }
 
 /// The host of a request's title (`api.github.com:443` → `api.github.com`).
@@ -1066,5 +1233,123 @@ mod tests {
         assert!(a.screen_data()["network_view"].is_null(), "dropped on close");
         run(&mut a, json!({ "kind": "intent", "name": "open_panel", "args": { "screen": "network" } }));
         assert!(a.screen_data()["network_view"].is_null(), "reopened unfiltered");
+    }
+
+    // ---- sbx 0.54: an automatic host port, and which rule allowed a host ----
+
+    /// The stand-in daemon's answer to a call, through the feature's routes.
+    fn answer(d: &mut J, call: &Call) -> (u16, J) {
+        let mut publish = |_: &str, _: J| {};
+        let mut st = Standin { data: d, publish: &mut publish };
+        standin(&mut st, if call.method == Method::Get { "GET" } else { "POST" }, &call.path, &call.body).expect("a stand-in route")
+    }
+
+    fn the_call(v: &[Action]) -> Call {
+        v.iter().find_map(|a| if let Action::Call(c) = a { Some(c.clone()) } else { None }).expect("a call")
+    }
+
+    fn set_of(v: &[Action], key: &str) -> Option<J> {
+        v.iter().find_map(|a| match a {
+            Action::Set { key: k, value } if k == key => Some(value.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_publish_without_host_port_shows_the_port_sbx_picked() {
+        let mut d = cx_data();
+        let v = act(&Ctx { data: &d }, &ask("port_publish", json!({ "sandbox": "web-app", "sandbox_port": 5173 }))).unwrap();
+        // Busy while it runs; no host_port in the body: sbx picks.
+        assert_eq!(set_of(&v, "network_publish").unwrap()["busy"], true);
+        let call = the_call(&v);
+        assert!(call.body["host_port"].is_null(), "{}", call.body);
+        let r = answer(&mut d, &call);
+        assert_eq!((r.1["assigned"].clone(), r.1["host_port"].clone()), (json!(true), json!(49154)));
+        let after = on_answer(&Ctx { data: &d }, &call, Ok(r));
+        let pubd = set_of(&after, "network_publish").unwrap();
+        assert_eq!((pubd["host_port"].clone(), pubd["assigned"].clone(), pubd["busy"].clone()), (json!(49154), json!(true), json!(false)));
+        assert!(after.iter().any(|a| matches!(a, Action::Notice { text, error: false, .. } if text == "Published web-app:5173 on 127.0.0.1:49154 (the port sbx picked)")), "{after:?}");
+        // The panel: the new row says sbx picked its port, and the line under the form.
+        d["network_ports"] = d["ports"]["web-app"].clone();
+        d["network_publish"] = pubd;
+        let (out, _, _) = render(d.clone(), None, 0);
+        let all = out.join("\n");
+        assert!(all.contains("port-picked-127.0.0.1:49154:5173/tcp") && all.contains("sbx picked"), "{all}");
+        assert!(all.contains("Published 5173 on 127.0.0.1:49154, the port sbx picked."), "{all}");
+        // While it runs, the button is busy.
+        d["network_publish"] = json!({ "sandbox": "web-app", "sandbox_port": 5173, "busy": true });
+        let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+        h.load("network", include_str!("../../screens/network.luau")).unwrap();
+        let tree = h.render(&d).unwrap();
+        assert!(find(&tree, "port-publish").is_some_and(|b| b.busy), "busy");
+    }
+
+    #[test]
+    fn an_older_sbx_publishes_on_the_sandbox_port_and_says_so() {
+        let mut d = cx_data();
+        d["standin_sbx_old"] = true.into();
+        let call = the_call(&act(&Ctx { data: &d }, &ask("port_publish", json!({ "sandbox": "web-app", "sandbox_port": 8080 }))).unwrap());
+        let r = answer(&mut d, &call);
+        let after = on_answer(&Ctx { data: &d }, &call, Ok(r));
+        let pubd = set_of(&after, "network_publish").unwrap();
+        assert_eq!((pubd["host_port"].clone(), pubd["assigned"].clone()), (json!(8080), json!(false)));
+        assert!(pubd["note"].as_str().unwrap().contains("needs sbx 0.54"));
+        d["network_ports"] = d["ports"]["web-app"].clone();
+        d["network_publish"] = pubd;
+        let (out, _, _) = render(d, None, 0);
+        let all = out.join("\n");
+        assert!(all.contains("automatic host port needs sbx 0.54") && !all.contains("port-picked-"), "{all}");
+    }
+
+    #[test]
+    fn why_shows_the_rule_with_its_remove_or_an_unknown_answer() {
+        let mut d = cx_data();
+        let cx = Ctx { data: &d };
+        // Only allowed rows have the button; the target is checked first.
+        let (out, args, _) = render(d.clone(), None, 0);
+        assert!(out.iter().any(|s| s == "why-api.anthropic.com:443") && !out.iter().any(|s| s == "why-registry.npmjs.org:443"), "{out:?}");
+        assert_eq!(args.iter().find(|(k, _)| k == "why-api.anthropic.com:443").unwrap().1, json!("api.anthropic.com:443"));
+        assert!(act(&cx, &ask("network_why", json!({ "sandbox": "web-app", "target": "x.com; rm -rf /" }))).is_err());
+        let v = act(&cx, &ask("network_why", json!({ "sandbox": "web-app", "target": "api.anthropic.com:443" }))).unwrap();
+        assert_eq!(set_of(&v, "network_why").unwrap()["busy"], true);
+        let call = the_call(&v);
+        assert_eq!(call.path, "/api/sandboxes/web-app/policy/check?target=api.anthropic.com%3A443");
+        // A rule: named, and the rules list's remove (an allow rule: direct).
+        d["policy"]["web-app"]["rules"]["rows"].as_array_mut().unwrap().push(json!(["local-policy", "r-9", "local", "sandbox:web-app", "allow", "api.anthropic.com"]));
+        d["network_policy"] = d["policy"]["web-app"].clone();
+        let r = answer(&mut d, &call);
+        let w = why_answer(&Ctx { data: &d }, &call, Ok(r));
+        assert_eq!((w["rule"].clone(), w["rule_id"].clone(), w["removable"].clone(), w["target"].clone()), (json!("r-9"), json!("r-9"), json!("rule_rm"), json!("api.anthropic.com:443")));
+        d["network_why"] = w;
+        let (out, args, h) = render(d.clone(), None, 0);
+        let all = out.join("\n");
+        assert!(all.contains("Rule: r-9") && all.contains("allowed by rule r-9 (api.anthropic.com)") && all.contains("why-rm"), "{all}");
+        let rm = args.iter().find(|(k, _)| k == "why-rm").unwrap().1.clone();
+        let asks = h.act("rule_rm", &rm, &J::Null).unwrap();
+        assert_eq!((asks["name"].clone(), asks["args"]["rule"].clone()), (json!("network_rule_rm"), json!("r-9")));
+        // sbx names no rule: said so, no remove.
+        let mut d2 = cx_data();
+        d2["policy_check"] = json!({ "web-app": { "api.anthropic.com:443": { "ok": true, "supported": true, "target": "api.anthropic.com:443", "allowed": J::Null, "rule": J::Null, "rule_id": J::Null, "raw": "unknown: no matching entry" } } });
+        let r = answer(&mut d2, &call);
+        d2["network_why"] = why_answer(&Ctx { data: &d2 }, &call, Ok(r));
+        let (out, _, _) = render(d2, None, 0);
+        let all = out.join("\n");
+        assert!(all.contains("sbx does not say") && all.contains("No rule named") && all.contains("unknown: no matching entry") && !all.contains("why-rm"), "{all}");
+        // An older sbx, and a daemon without the route: "needs sbx 0.54", never red.
+        let mut d3 = cx_data();
+        d3["standin_sbx_old"] = true.into();
+        let r = answer(&mut d3, &call);
+        let w = why_answer(&Ctx { data: &d3 }, &call, Ok(r));
+        assert_eq!(w["supported"], false);
+        assert!(w["note"].as_str().unwrap().contains("needs sbx 0.54"));
+        let w = why_answer(&Ctx { data: &d3 }, &call, Ok((404, json!({ "ok": false, "error": "not found" }))));
+        assert!(w["error"].is_null() && w["note"].as_str().unwrap().starts_with("needs sbx 0.54"), "{w}");
+    }
+
+    fn find<'a>(n: &'a crate::luau::Node, key: &str) -> Option<&'a crate::luau::Node> {
+        if n.key.as_deref() == Some(key) {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| find(c, key))
     }
 }

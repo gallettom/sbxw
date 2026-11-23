@@ -790,6 +790,8 @@ features! {
     network,
     relay,
     setup,
+    // Setup's SSH card: the *.sbx hosts and sbx 0.54's rewrite.
+    ssh,
     // Out of Setup, each its own panel and rail entry (configure zone).
     mcp,
     skills,

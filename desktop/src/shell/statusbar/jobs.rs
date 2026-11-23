@@ -36,6 +36,15 @@ impl App {
         }
     }
 
+    /// Another feature's intent from a card (an allow, the Kits panel),
+    /// checked as from a screen; the popover closes for its dialog.
+    fn statusbar_job_ask(&mut self, name: &'static str, args: J) {
+        self.status.pop = None;
+        let args = args.as_object().cloned().unwrap_or_default();
+        self.run_intent("statusbar", Intent::Feature(Asked { name, args }));
+        self.push_data();
+    }
+
     fn statusbar_job_intent(&mut self, name: &'static str, sandbox: &str) {
         let args = serde_json::json!({ "sandbox": sandbox }).as_object().cloned().unwrap_or_default();
         self.run_intent("statusbar", Intent::Feature(Asked { name, args }));
@@ -141,6 +150,7 @@ fn card(j: &J) -> El {
     for w in j["warnings"].as_array().into_iter().flatten().filter_map(J::as_str) {
         col = col.child(small(w, "amber").wrap());
     }
+    col = denied(col, &name, &j["denied"]);
     let mut buttons = row().w_full().gap(4.0).items_center().child(el().grow(1.0));
     let mut any = false;
     if j["can_retry"] == true {
@@ -155,6 +165,49 @@ fn card(j: &J) -> El {
     }
     if any {
         col = col.child(buttons);
+    }
+    col
+}
+
+/// Hosts shown in a card before "and N more: open Kits".
+const DENIED_SHOWN: usize = 3;
+
+/// The hosts sbx denied a kit install (sbx 0.54; create's `denied`): the
+/// first few, each with its allow (network's own intent, the core's
+/// dialog), then the Kits panel for the rest. Retry is the card's own.
+/// For a sandbox that does not exist the rule is every sandbox's, and the
+/// button says so.
+fn denied(mut col: El, name: &str, d: &J) -> El {
+    let Some(hosts) = d["hosts"].as_array().filter(|h| !h.is_empty()) else { return col };
+    let global = d["allow_scope"] == "global";
+    let n = hosts.len();
+    col = col.child(small(&format!("sbx denied {n} host{}:", if n == 1 { "" } else { "s" }), "red-text").key(format!("job-{name}-denied")));
+    for h in hosts.iter().take(DENIED_SHOWN) {
+        let host = h["host"].as_str().unwrap_or("").to_string();
+        let mut r = row()
+            .key(format!("job-{name}-denied-{host}"))
+            .w_full()
+            .gap(crate::theme::spacing::INLINE)
+            .items_center()
+            .child(text(host.clone()).font(screen::body(TEXT, 400.0).mono()).color(c("text")).truncate().min_w(0.0).grow(1.0));
+        if h["allowed"] == true {
+            r = r.child(small("allowed", "green"));
+        } else {
+            let (sb, hs) = (name.to_string(), host.clone());
+            let label = if global { "Allow for all sandboxes" } else { "Allow for this sandbox" };
+            r = r.child(action(format!("job-allow-{name}-{host}"), label, None, "green", move |s: &mut App| {
+                s.statusbar_job_ask("network_allow", serde_json::json!({ "sandbox": sb, "resources": hs, "global": global }))
+            }));
+        }
+        col = col.child(r);
+    }
+    if n > DENIED_SHOWN {
+        let sb = name.to_string();
+        col = col.child(
+            row().w_full().items_center().child(el().grow(1.0)).child(action(format!("job-denied-more-{name}"), &format!("and {} more: open Kits", n - DENIED_SHOWN), None, "blue", move |s: &mut App| {
+                s.statusbar_job_ask("kits_show", serde_json::json!({ "sandbox": sb }))
+            })),
+        );
     }
     col
 }
