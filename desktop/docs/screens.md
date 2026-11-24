@@ -1081,7 +1081,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`, `eye`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
 `coin`, `help`, `moon`, `appearance`, `branch`, `globe`, `remote`, `key`, `people`, `leader`, `threads`,
-`shield`, `prompt`, `ask`, `jarvis`, `tag`, `kanban`, `monitor` (the virtual Mac: a desktop screen on its stand), `inbox` (Sessions: a list of sessions, the first dot filled), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
+`shield`, `prompt`, `ask`, `jarvis`, `tag`, `kanban`, `detach` (a window, an arrow leaving its corner), `monitor` (the virtual Mac: a desktop screen on its stand), `inbox` (Sessions: a list of sessions, the first dot filled), `history` (commits), `logo-prompt`, `logo-mark` (the sbxw mark's
 ">", for the top bar's logo).
 
 One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
@@ -1109,6 +1109,7 @@ One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 | `canvas` | Canvas: shots of an agent's screens to review (rail, its overlay) |
 | `pointer`, `pin`, `note`, `image` | Canvas's tools: select, a numbered pin, a note card, Add example (a picture of the person's) |
 | `minus`, `fit` | zoom out; show everything (Canvas) |
+| `detach` | move this page to a new window (the pager's button after its tabs) |
 
 ## Where screens live
 
@@ -1130,7 +1131,13 @@ approval dialog are drawn by the core.
 
 **A page in its own window** (`src/shell/pagewin.rs`). "Move Page to New
 Window" (the pager's "terminals per page" menu and its hidden tabs' menu,
-the palette, ⌘⇧M on macOS and Ctrl+Shift+M elsewhere) moves the current
+the pager's button after the tabs (`pager-to-window-now`: a quiet 24 pt
+square as "+", the `detach` mark in muted text, tooltip "Move this page to
+a new window" with the chord; disabled at the app's disabled opacity, the
+reason as its tooltip, where the menus' row is disabled: Lead Mode, a page
+with no terminal; its room is reserved in the pager's fit, so on a narrow
+pager the tabs go compact, then into the hidden tabs' menu, and the button
+stays), the palette, ⌘⇧M on macOS and Ctrl+Shift+M elsewhere) moves the current
 page and its terminals to a window of their own: the same terminals (no
 socket reopens), each shown in one window only, its PTY size the tile that
 shows it. That window has the page's tiling and pane bars (the core's

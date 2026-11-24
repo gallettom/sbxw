@@ -207,7 +207,7 @@ fn the_pager_shows_pages_and_fits_from_720_to_1800() {
             let (t, _) = r.rt.presented(&format!("page-{}", k + 1)).unwrap_or_else(|| panic!("{w}: tab {} not drawn", k + 1));
             assert!(t[0] >= pr[0] - 0.5 && t[0] + t[2] <= pr[0] + pr[2] + 0.5, "{w}: tab {} {t:?} out of the pager {pr:?}", k + 1);
         }
-        for key in ["page-new", "pager-view-tabs", "pager-view-grid", "pager-per"] {
+        for key in ["page-new", "pager-to-window-now", "pager-view-tabs", "pager-view-grid", "pager-per"] {
             let (t, _) = r.rt.presented(key).unwrap_or_else(|| panic!("{w}: {key}"));
             assert!(t[0] + t[2] <= pr[0] + pr[2] + 0.5 && t[0] >= pr[0] - 0.5, "{w}: {key} {t:?} out of {pr:?}");
         }
@@ -215,6 +215,13 @@ fn the_pager_shows_pages_and_fits_from_720_to_1800() {
             assert!(r.rt.presented("pager-more").is_some(), "{w}: the hidden tabs have their menu");
             assert!(s.drawn("pager-more"));
         }
+        // The button sits after the tabs (and "+"), before the view switch.
+        let (d, _) = r.rt.presented("pager-to-window-now").unwrap();
+        let (plus, _) = r.rt.presented("page-new").unwrap();
+        let (sw, _) = r.rt.presented("pager-view-tabs").unwrap();
+        assert!(d[0] >= plus[0] + plus[2] - 0.5 && d[0] + d[2] <= sw[0] + 0.5, "{w}: the button between + {plus:?} and the switch {sw:?}: {d:?}");
+        let (t, _) = r.rt.presented(&format!("page-{}", s.pages.current + 1)).unwrap();
+        assert!(t[0] + t[2] <= d[0] + 0.5, "{w}: the current tab {t:?} is not pushed under the button {d:?}");
         eprintln!("pager at {w}: tabs {a}..{b} of 9");
     }
 }

@@ -1,6 +1,8 @@
 //! The pager: a slim strip (28 pt) where the pane area begins, above the
 //! panes. One tab per page, naming what is on it, the current one marked;
-//! "+" for a new empty page; at the right the view switch (Tabs: one
+//! "+" for a new empty page; after the tabs, the "move this page to a new
+//! window" button (`pager-to-window-now`, the same action as the menus'
+//! "Move Page to New Window"); at the right the view switch (Tabs: one
 //! terminal per page; Grid: the last count above one) and the "terminals per
 //! page" menu (1, 2, 3, 4, 6, and Gather). Tabs that do not fit go into a
 //! menu (`pager-more`), the current tab always shown.
@@ -11,7 +13,7 @@
 //!
 //! Keys: `pager`, `page-<k>` (from 1), `page-<k>-close`, `page-new`,
 //! `pager-view-tabs`, `pager-view-grid`, `pager-per` (its list
-//! `pager-per-list`, items `pager-per-<n>` and `pager-gather`), `pager-gather-now` (the Gather button beside it, while gathering would move something), `pager-more`
+//! `pager-per-list`, items `pager-per-<n>` and `pager-gather`), `pager-gather-now` (the Gather button beside it, while gathering would move something), `pager-to-window-now`, `pager-more`
 //! (`pager-more-list`, items `page-<k>`).
 
 use super::pages::PER_CHOICES;
@@ -29,6 +31,8 @@ const TAB_LABEL_MAX: f32 = 160.0;
 const GAP: f32 = 4.0;
 const PLUS_W: f32 = 24.0;
 const MORE_W: f32 = 44.0;
+/// The "move this page to a new window" button, square as "+".
+const DETACH_W: f32 = 24.0;
 
 /// What a page's tab shows: its label, the tooltip, and a dot's tone when a
 /// terminal on it wants the person (amber) or works (blue).
@@ -179,7 +183,7 @@ impl App {
     pub fn pager_fit_as(&self) -> (usize, usize, bool) {
         let n = self.pages.list.len();
         let w = if self.pager_w > 0.0 { self.pager_w } else { self.window.0 - self.left_w() - layout::GUTTER * 2.0 };
-        let fixed = PLUS_W + GAP + controls_w(self.pages.per) + GAP + if self.gather_would_move() { gather_w() + GAP } else { 0.0 };
+        let fixed = PLUS_W + GAP + DETACH_W + GAP + controls_w(self.pages.per) + GAP + if self.gather_would_move() { gather_w() + GAP } else { 0.0 };
         let widths = |compact: bool| -> Vec<f32> {
             (0..n).map(|k| {
                 let t = self.tab_info_as(k, compact);
@@ -203,7 +207,7 @@ impl App {
     pub(super) fn pager_drawn(&self, key: &str) -> bool {
         let n = self.pages.list.len();
         let (a, b) = self.pager_fit();
-        let fixed = matches!(key, "pager" | "page-new" | "pager-view" | "pager-view-tabs" | "pager-view-grid" | "pager-per") || (key == "pager-gather-now" && self.gather_would_move());
+        let fixed = matches!(key, "pager" | "page-new" | "pager-to-window-now" | "pager-view" | "pager-view-tabs" | "pager-view-grid" | "pager-per") || (key == "pager-gather-now" && self.gather_would_move());
         let more = (a > 0 || b < n) && key == "pager-more";
         let tab = key.strip_prefix("page-").and_then(|r| r.strip_suffix("-close").unwrap_or(r).parse::<usize>().ok()).is_some_and(|k| k >= 1 && k <= n && ((a..b).contains(&(k - 1)) || (!key.ends_with("-close") && self.pager_menu.as_deref() == Some("more"))));
         let per = self.pager_menu.as_deref() == Some("per") && (key == "pager-per-list" || key == "pager-gather" || key == "pager-to-window" || PER_CHOICES.iter().any(|c| key == format!("pager-per-{c}")));
@@ -246,12 +250,7 @@ impl App {
                         if r.disabled {
                             e
                         } else {
-                            e.on_press(|s: &mut App| {
-                                s.pager_menu = None;
-                                let k = s.pages.current;
-                                s.move_page_out(k);
-                                s.push_data();
-                            })
+                            e.on_press(self::to_window)
                         }
                     } else if i < PER_CHOICES.len() {
                         let n = PER_CHOICES[i];
@@ -303,17 +302,55 @@ impl App {
                 list = list.child(if move_row.disabled {
                     e
                 } else {
-                    e.on_press(|s: &mut App| {
-                        s.pager_menu = None;
-                        let k = s.pages.current;
-                        s.move_page_out(k);
-                        s.push_data();
-                    })
+                    e.on_press(self::to_window)
                 });
                 Some(list)
             }
             _ => None,
         }
+    }
+}
+
+/// "Move Page to New Window": the current page and its terminals into a
+/// window of their own (pagewin.rs). The one press of the two menus' rows
+/// and the pager's button; the palette and the chord run the same
+/// [`App::move_page_out`].
+fn to_window(s: &mut App) {
+    s.pager_menu = None;
+    let k = s.pages.current;
+    s.move_page_out(k);
+    s.push_data();
+}
+
+/// The pager's "move this page to a new window" button: a quiet square as
+/// "+", the `detach` mark, the chord in its tooltip. Offered where the menus'
+/// row is, and disabled (the reason as its tooltip) where that row is.
+fn to_window_button(s: &App) -> El {
+    let why = s.page_movable();
+    let (help, keys) = to_window_help(why.as_deref());
+    let b = el()
+        .key("pager-to-window-now")
+        .role("button")
+        .label("Move page to new window")
+        .help(help)
+        .help_keys(keys)
+        .w(DETACH_W)
+        .h(DETACH_W)
+        .items_center()
+        .justify_center()
+        .radius(theme::radius("xs").unwrap())
+        .child(small_icon("detach", theme::icon::MEDIUM, c("text-muted")));
+    if why.is_some() {
+        return b.opacity(theme::DISABLED_OPACITY).disabled(true);
+    }
+    b.hover(c("elevated")).cursor(Cursor::Pointer).on_press(to_window)
+}
+
+/// The button's tooltip and its chord: why it is disabled, if it is.
+pub(super) fn to_window_help(why: Option<&str>) -> (String, Vec<String>) {
+    match why {
+        Some(w) => (w.to_string(), vec![]),
+        None => ("Move this page to a new window".into(), super::pagewin::back_keys()),
     }
 }
 
@@ -333,6 +370,8 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
         .label(t.help.clone())
         .help(t.help.clone())
         .checked(on)
+        .min_w(0.0)
+        .shrink()
         .h(H - 4.0)
         .pl(TAB_PX)
         .pr(4.0)
@@ -501,7 +540,10 @@ pub fn view(s: &App) -> El {
     let n = s.pages.list.len();
     let (a, b, compact) = s.pager_fit_as();
     // Tabs sit on the pager's foot: the current one reaches the pane area.
-    let mut tabs = row().gap(GAP).h(H).items_end().min_w(0.0).clip_rounded(0.0);
+    // When even the current tab alone is wider than the room left (a narrow
+    // pager), the run gives way and its label truncates: "+", the
+    // new-window button and the controls keep their places.
+    let mut tabs = row().gap(GAP).h(H).items_end().min_w(0.0).shrink().clip_rounded(0.0);
     for k in a..b {
         tabs = tabs.child(tab(s, k, compact));
     }
@@ -613,6 +655,7 @@ pub fn view(s: &App) -> El {
             }
         })
         .child(left)
+        .child(to_window_button(s))
         .child(view_switch)
         .children(gather)
         .child(per)

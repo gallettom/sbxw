@@ -120,6 +120,8 @@ icons! {
     FIT "fit" concat!(st!("polyline", r#"points="2,5.5 2,2 5.5,2""#), st!("polyline", r#"points="10.5,2 14,2 14,5.5""#), st!("polyline", r#"points="14,10.5 14,14 10.5,14""#), st!("polyline", r#"points="5.5,14 2,14 2,10.5""#));
     // The Kanban (the top bar's button): three columns of cards, hung from
     // one top line, each shorter than the one before (work moving right).
+    // A window with an arrow leaving its corner: "move this page to a new window" (the pager).
+    DETACH "detach" concat!(st!("path", r#"d="M7 2.5H3a1 1 0 0 0-1 1v9.5a1 1 0 0 0 1 1h9.5a1 1 0 0 0 1-1V9""#), st!("polyline", r#"points="9.5,2 14,2 14,6.5""#), st!("line", r#"x1="14" y1="2" x2="7.5" y2="8.5""#));
     KANBAN "kanban" concat!(st!("rect", r#"x="1.75" y="2.25" width="3.5" height="11.5" rx="1""#), st!("rect", r#"x="6.25" y="2.25" width="3.5" height="8" rx="1""#), st!("rect", r#"x="10.75" y="2.25" width="3.5" height="5" rx="1""#));
 }
 
