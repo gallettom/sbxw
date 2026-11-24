@@ -440,7 +440,7 @@ impl App {
                 )
             })
             .collect();
-        format!("{:?}", (theme::generation(), self.zoom(), self.focused, self.bar_menu, (self.window.0 as i32, self.window.1 as i32), copy, &self.feats.panel, self.feats.split, &self.feats.panels, panes))
+        format!("{:?}", (theme::generation(), crate::terminal::theme::chosen_generation(), self.zoom(), self.focused, self.bar_menu, (self.window.0 as i32, self.window.1 as i32), copy, &self.feats.panel, self.feats.split, &self.feats.panels, panes))
     }
 
     /// The state file holds the page windows' pages too, after the main

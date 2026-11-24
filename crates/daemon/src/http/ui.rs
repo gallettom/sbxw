@@ -1953,6 +1953,14 @@ async fn state(State(app): S) -> Json<Value> {
         "models": { "default": app.cfg.claude_model, "models": app.offered_models() },
         "versions": { "sbxw": app.versions.sbxw, "sbx": app.versions.sbx },
         "ssh_refresh_due": app.ssh_status().await.refresh_due,
+        // sbxw.toml's terminal colours as the config holds them (empty when
+        // unset): the desktop app's picker falls back to these, as the web
+        // UI does with the values baked into its page.
+        "terminal_colors": {
+            "background": app.cfg.terminal_color,
+            "bar": app.cfg.terminal_bar_color,
+            "text": app.cfg.terminal_text_color,
+        },
     }))
 }
 

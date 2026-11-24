@@ -56,12 +56,200 @@ pub const GRAPHITE: Theme = Theme {
 };
 
 /// The terminal's theme for one of the app's themes (the dark one is the
-/// web UI's default, unchanged).
+/// web UI's default, unchanged), with the person's terminal colours
+/// ([`chosen`]) over it.
 pub fn for_mode(m: crate::theme::Mode) -> Theme {
+    chosen().theme(builtin_for_mode(m))
+}
+
+/// The app theme's own terminal colours, before any choice.
+pub fn builtin_for_mode(m: crate::theme::Mode) -> Theme {
     match m {
         crate::theme::Mode::Dark => Theme::default(),
         crate::theme::Mode::Graphite => GRAPHITE,
     }
+}
+
+// The terminal colours picker (the web UI's `assets/js/term-color.js`,
+// `TERM_COLOR_SLOTS`): three slots, each a list of presets and a custom
+// colour. The lists are the web UI's, value for value
+// (`the_presets_are_the_web_uis` reads that file).
+
+/// The terminal's background.
+pub const BACKGROUND_PRESETS: &[(&str, &str)] = &[
+    ("#0d1117", "Midnight (built-in)"),
+    ("#000000", "Black"),
+    ("#1a1b26", "Night"),
+    ("#002b36", "Solarized"),
+    ("#0e1f17", "Phosphor"),
+    ("#1f1530", "Aubergine"),
+    ("#2a1d10", "Amber"),
+    ("#fdf6e3", "Paper"),
+];
+
+/// The pane bar: dark on purpose, its labels and buttons are light text.
+pub const BAR_PRESETS: &[(&str, &str)] = &[
+    ("#2f4f4f", "Slate (built-in)"),
+    ("#21262d", "Graphite"),
+    ("#1c2f4a", "Navy"),
+    ("#163a3a", "Teal"),
+    ("#2b3a1f", "Moss"),
+    ("#3a2b4f", "Plum"),
+    ("#4a2a2a", "Oxblood"),
+    ("#4a3a1a", "Ochre"),
+];
+
+/// The text: `auto` follows the background's lightness.
+pub const TEXT_PRESETS: &[(&str, &str)] = &[
+    ("auto", "Auto (follows the background)"),
+    ("#ffffff", "White"),
+    ("#c9d1d9", "Silver"),
+    ("#8b949e", "Grey"),
+    ("#e6d5b8", "Cream"),
+    ("#ffb000", "Amber"),
+    ("#33ff66", "Phosphor"),
+    ("#7dcfff", "Ice"),
+];
+
+/// One of the picker's three slots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Slot {
+    Background,
+    Bar,
+    Text,
+}
+
+impl Slot {
+    pub const ALL: [Slot; 3] = [Slot::Background, Slot::Bar, Slot::Text];
+
+    /// Its key in the app's state file and in the daemon's
+    /// `terminal_colors` (`GET /api/state`).
+    pub fn key(self) -> &'static str {
+        match self {
+            Slot::Background => "background",
+            Slot::Bar => "bar",
+            Slot::Text => "text",
+        }
+    }
+
+    /// Its heading in the picker (the web UI's zone names).
+    pub fn heading(self) -> &'static str {
+        match self {
+            Slot::Background => "Background",
+            Slot::Bar => "Top bar",
+            Slot::Text => "Text",
+        }
+    }
+
+    pub fn presets(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Slot::Background => BACKGROUND_PRESETS,
+            Slot::Bar => BAR_PRESETS,
+            Slot::Text => TEXT_PRESETS,
+        }
+    }
+
+    /// The web UI's built-in for the slot (its first preset). The app keeps
+    /// its theme's own colours when nothing is picked and sbxw.toml says
+    /// nothing.
+    pub fn builtin(self) -> &'static str {
+        self.presets()[0].0
+    }
+
+    /// A value of this slot, as spelled in sbxw.toml or typed: `#rrggbb`
+    /// (any case), and `auto` for the text. Anything else is no colour.
+    pub fn parse(self, s: &str) -> Option<Pick> {
+        let s = s.trim().to_ascii_lowercase();
+        if self == Slot::Text && s == "auto" {
+            return Some(Pick::Auto);
+        }
+        let h = s.strip_prefix('#')?;
+        (h.len() == 6 && h.bytes().all(|b| b.is_ascii_hexdigit())).then(|| Pick::Color(u32::from_str_radix(h, 16).unwrap()))
+    }
+
+    /// The preset's name for a value, if it is one.
+    pub fn preset_name(self, p: Pick) -> Option<&'static str> {
+        self.presets().iter().find(|(v, _)| self.parse(v) == Some(p)).map(|(_, n)| *n)
+    }
+}
+
+/// A slot's value: a colour, or (the text only) Auto.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pick {
+    Color(u32),
+    Auto,
+}
+
+impl Pick {
+    /// As sbxw.toml spells it.
+    pub fn spelled(self) -> String {
+        match self {
+            Pick::Color(c) => format!("#{c:06x}"),
+            Pick::Auto => "auto".into(),
+        }
+    }
+}
+
+/// What the terminals and the pane bars use now, per slot: the value that
+/// won (the person's pick, else sbxw.toml's), `None` for the app theme's own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Chosen {
+    pub background: Option<u32>,
+    pub bar: Option<u32>,
+    pub text: Option<Pick>,
+}
+
+impl Chosen {
+    /// `base` (the app theme's terminal) with these colours over it. A
+    /// background makes the theme the web UI's for it ([`Theme::from_settings`]:
+    /// a light one takes the light cursor and selection, and the pills the
+    /// light ground's tones through [`crate::emphasis`], the path sbxw.toml's
+    /// light `terminal_color` takes); a text colour alone replaces the
+    /// foreground and ANSI white and bright white of `base`.
+    pub fn theme(&self, base: Theme) -> Theme {
+        let text = match self.text {
+            Some(Pick::Color(t)) => Some(t),
+            _ => None,
+        };
+        match (self.background, text) {
+            (Some(bg), text) => Theme::from_settings(bg, text),
+            (None, Some(t)) => {
+                let mut th = base;
+                th.foreground = t;
+                th.palette[7] = t;
+                th.palette[15] = t;
+                th
+            }
+            (None, None) => base,
+        }
+    }
+}
+
+thread_local! {
+    // The UI is one thread (every window's terminals read it there); tests
+    // that run side by side each have their own.
+    static CHOSEN: std::cell::Cell<Chosen> = const { std::cell::Cell::new(Chosen { background: None, bar: None, text: None }) };
+    static CHOSEN_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The terminal colours in force.
+pub fn chosen() -> Chosen {
+    CHOSEN.with(|c| c.get())
+}
+
+/// Puts `c` in force; true when it changed. Every terminal follows on its
+/// next poll ([`for_mode`]), in every window.
+pub fn set_chosen(c: Chosen) -> bool {
+    let was = CHOSEN.with(|x| x.replace(c));
+    if was != c {
+        CHOSEN_GENERATION.with(|g| g.set(g.get() + 1));
+    }
+    was != c
+}
+
+/// Counts the changes of [`chosen`] (what caches a bar can tell it is stale).
+pub fn chosen_generation() -> u64 {
+    CHOSEN_GENERATION.with(|g| g.get())
 }
 
 impl Default for Theme {
@@ -194,6 +382,60 @@ mod tests {
         assert_eq!(crate::theme::color_in(m, "text"), Some(GRAPHITE_FOREGROUND));
         assert_eq!(crate::theme::color_in(m, "accent"), Some(t.cursor));
         assert!(!is_light(GRAPHITE_BACKGROUND));
+    }
+
+    /// The three slots' presets equal the web UI's (`TERM_COLOR_SLOTS` in
+    /// assets/js/term-color.js), value, name and order.
+    #[test]
+    fn the_presets_are_the_web_uis() {
+        let js = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/js/term-color.js"));
+        for (slot, block) in [(Slot::Background, "  term: {"), (Slot::Bar, "  bar: {"), (Slot::Text, "  text: {")] {
+            let from = js.find(block).unwrap_or_else(|| panic!("{block} in term-color.js"));
+            let rest = &js[from..];
+            let body = &rest[rest.find("presets: [").unwrap()..rest.find("],\n  },").unwrap()];
+            let web: Vec<(String, String)> = body
+                .lines()
+                .filter_map(|l| {
+                    let l = l.trim().strip_prefix("['")?.strip_suffix("'],")?;
+                    let (v, n) = l.split_once("', '")?;
+                    Some((v.to_string(), n.to_string()))
+                })
+                .collect();
+            let ours: Vec<(String, String)> = slot.presets().iter().map(|(v, n)| (v.to_string(), n.to_string())).collect();
+            assert_eq!(ours, web, "{slot:?}");
+            assert_eq!(ours.len(), 8);
+            let b = &rest[rest.find("builtin: '").unwrap() + 10..];
+            assert_eq!(&b[..b.find('\'').unwrap()], slot.builtin(), "{slot:?}'s built-in");
+        }
+    }
+
+    /// Auto text reads at 4.5:1 on every background preset.
+    #[test]
+    fn auto_text_reads_on_every_background() {
+        use crate::theme::contrast;
+        for (v, name) in BACKGROUND_PRESETS {
+            let Some(Pick::Color(bg)) = Slot::Background.parse(v) else { panic!("{v}") };
+            let t = Chosen { background: Some(bg), bar: None, text: Some(Pick::Auto) }.theme(Theme::default());
+            let r = contrast(t.foreground, bg);
+            assert!(r >= 4.5, "{name}: {r:.2}");
+            assert!(contrast(t.cursor, bg) >= 3.0, "{name}'s cursor");
+        }
+    }
+
+    #[test]
+    fn a_slot_takes_only_its_values() {
+        assert_eq!(Slot::Background.parse("#1A1b26"), Some(Pick::Color(0x1a1b26)));
+        assert_eq!(Slot::Text.parse(" AUTO "), Some(Pick::Auto));
+        for bad in ["auto", "1a1b26", "#1a1b2", "#1a1b266", "#gggggg", "red", "", "#12 456", "#+1a1b2"] {
+            assert_eq!(Slot::Background.parse(bad), None, "{bad}");
+        }
+        assert_eq!(Slot::Text.parse("#ffb000").map(Pick::spelled).as_deref(), Some("#ffb000"));
+        assert_eq!(Slot::Background.preset_name(Pick::Color(0xfdf6e3)), Some("Paper"));
+        // Nothing chosen: the app theme's own, Graphite included.
+        assert_eq!(Chosen::default().theme(GRAPHITE), GRAPHITE);
+        // A text colour alone keeps the app theme's ground.
+        let t = Chosen { text: Some(Pick::Color(0xffb000)), ..Chosen::default() }.theme(GRAPHITE);
+        assert_eq!((t.background, t.foreground, t.palette[7], t.palette[15]), (GRAPHITE_BACKGROUND, 0xffb000, 0xffb000, 0xffb000));
     }
 
     #[test]

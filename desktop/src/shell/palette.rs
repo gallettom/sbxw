@@ -48,6 +48,8 @@ pub enum Run {
     PageBack(u32),
     /// Page window N to the front.
     ShowPageWindow(u32),
+    /// The terminal colours popover (term_colors.rs).
+    TermColors,
 }
 
 /// One row of the palette.
@@ -305,6 +307,7 @@ impl App {
             v.push(core(&format!("page-window-{n}"), "Show page window", &title, "single", vec![], Run::ShowPageWindow(n)));
             v.push(core(&format!("page-window-{n}-back"), "Move Page Back to Main Window", &title, "single", vec![], Run::PageBack(n)));
         }
+        v.push(core("term-colors", "Terminal colours", "Background, bar and text of every terminal", "appearance", vec![], Run::TermColors));
         v.push(core("zoom-in", "Zoom in", &format!("now {}%", (self.zoom() * 100.0).round()), "plus", chord_keys("+"), Run::Zoom(1)));
         v.push(core("zoom-out", "Zoom out", "", "search", chord_keys("−"), Run::Zoom(-1)));
         v.push(core("zoom-reset", "Actual size", "100%", "search", chord_keys("0"), Run::Zoom(0)));
@@ -363,6 +366,7 @@ impl App {
                 self.remove_pane(i);
             }
             Run::Zoom(step) => self.zoom_by(step),
+            Run::TermColors => self.open_term_colors(),
             Run::Leads => self.toggle_leads(),
             Run::SwitchMode => {
                 let i = self.focused;

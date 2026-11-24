@@ -845,3 +845,35 @@ fn the_page_windows_header_keeps_room_for_the_window_buttons() {
     assert_eq!(pw::lights_room(0.0), 0.0);
     assert_eq!(pw::lights_room(76.0), 76.0 - layout::GUTTER + 12.0);
 }
+
+/// A terminal colour picked in the main window reaches a page window: its
+/// window is woken, its terminals take the colours and its bars are drawn
+/// again on the picked bar (term_colors.rs).
+#[test]
+fn a_page_window_follows_the_terminal_colours() {
+    use crate::terminal::theme::Slot;
+    let mut r = Rig::new(&["web-app", "api", "docs"], 2);
+    let id = r.move_out(0);
+    let bg = |r: &mut Rig| r.win(0, |pt| pt.state.page.as_ref().unwrap().panes.iter().map(|p| p.term.as_ref().unwrap().theme().background).collect::<Vec<_>>());
+    let bar = |r: &mut Rig| {
+        r.win(0, |pt| {
+            pt.frame(0.03);
+            pt.elements().into_iter().find(|e| !e.exiting && e.key.as_deref() == Some("pane-1-bar")).map(|e| e.fill)
+        })
+    };
+    assert_eq!(bg(&mut r), [0x0d1117; 2]);
+    let bar0 = bar(&mut r);
+    let woken = r.wakes(Win::Page(id));
+    r.main(|rt| {
+        rt.update(|s, _| {
+            s.set_term_color(Slot::Background, Slot::Background.parse("#fdf6e3"));
+            s.set_term_color(Slot::Bar, Slot::Bar.parse("#4a2a2a"));
+        })
+    });
+    assert!(r.wakes(Win::Page(id)) > woken, "the page window is woken");
+    r.settle();
+    assert_eq!(bg(&mut r), [0xfdf6e3; 2], "its terminals follow (Paper)");
+    assert_ne!(bar(&mut r), bar0, "its bars too");
+    let cursor = r.win(0, |pt| pt.state.page.as_ref().unwrap().panes[0].term.as_ref().unwrap().theme().cursor);
+    assert_eq!(cursor, 0x0969da, "the light rules");
+}

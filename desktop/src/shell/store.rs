@@ -22,6 +22,10 @@
 //!   (`shell/features.rs`, "Files dropped on a pane").
 //! * `theme`: `"dark"` or `"graphite"`, the person's choice from the status
 //!   bar's theme switch (`set_theme`); absent, or a name no theme has: Dark.
+//! * `terminal_colors`: `{background, bar, text}`, each `#rrggbb` (the text
+//!   also `auto`), the person's picks from the terminal colours popover
+//!   (`shell/term_colors.rs`); a slot absent, or a value that is not a
+//!   colour, falls back to sbxw.toml's, then the built-in. Reset removes it.
 //! * `terminal_scrollback`: lines of history each terminal keeps (100 to
 //!   100,000; absent: 10,000, the web UI's). Read at start; written only by
 //!   the person (no control sets it yet). Its memory: MEMORY.md.
