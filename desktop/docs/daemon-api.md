@@ -136,6 +136,7 @@ waiting (amber).
 | Core: feature sockets (`src/socket.rs`) | any `GET /ws/<route>?<query>` a feature opens (`Action::OpenSocket`), `Authorization: Bearer` as `/ws`; text and binary frames both ways; reconnect optional (new token after a daemon restart) | none (a feature's own) |
 | Core: raw reads and uploads (`Call::raw`, `Call::post_bytes`, `src/files.rs`) | a feature's `GET` read as bytes (at most `max + 1`); `POST` with a raw body of known length (`Content-Length`, streamed from a file the person handed in, 128 MB at most) | uploads: always from a `Confirm` |
 | Core: downloads, open, reveal (`src/files.rs`, `src/safe.rs`) | a feature's `GET` route written to the Downloads folder or a place the person picks (save dialog) under a sanitised name, never over a file; opened with the system's default app by the core's verdict | choosing the place, opening: from a `Confirm` |
+| Files: a whole folder (`feat/files/`) | `GET /api/sandboxes/:name/fs/folder/size?path=` (`{path, files, bytes, max}`, counted without reading), `GET /api/sandboxes/:name/fs/folder?path=&max=` (`<folder>.tar.gz`, `max` 128 MB from the app, 413 past it with the size and the cap), saved through the core's download | Save as: from a `Confirm` |
 
 ### Covered since (status bar, keyword pills)
 
