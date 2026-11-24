@@ -91,8 +91,10 @@ fn action(key: String, label: &str, icon: Option<&str>, tone: &str, press: impl 
     b.child(text(label.to_string()).font(screen::body(TEXT, 500.0)).color(fg))
 }
 
-/// One sandbox being created (key `job-<name>`).
-fn card(j: &J) -> El {
+/// One sandbox being created (key `<p>-<name>`: `job` in the popover,
+/// `corner-job` in the corner). `compact` (the corner) lists only the step
+/// that runs or failed, and turns a busy ring while it runs.
+fn card(j: &J, p: &str, compact: bool) -> El {
     let name = j["sandbox"].as_str().unwrap_or("").to_string();
     let state = j["state"].as_str().unwrap_or("running");
     let (icon, tone) = tone_of(state);
@@ -102,7 +104,7 @@ fn card(j: &J) -> El {
         _ => "text-muted",
     };
     let mut col = rune::col()
-        .key(format!("job-{name}"))
+        .key(format!("{p}-{name}"))
         .w_full()
         .gap(4.0)
         .padding(8.0)
@@ -113,7 +115,11 @@ fn card(j: &J) -> El {
                 .w_full()
                 .gap(crate::theme::spacing::INLINE)
                 .items_center()
-                .child(rune::icon(crate::icons::get(icon).unwrap(), theme::icon::SMALL).color(c(tone)))
+                .child(if compact && state == "running" {
+                    screen::busy_spinner(theme::icon::SMALL, c(tone)).key(format!("{p}-{name}-busy"))
+                } else {
+                    rune::icon(crate::icons::get(icon).unwrap(), theme::icon::SMALL).color(c(tone))
+                })
                 .child(text(name.clone()).font(screen::body(TEXT, 600.0)).color(c("text-bright")).truncate().min_w(0.0).grow(1.0))
                 .child(small(j["headline"].as_str().unwrap_or(""), head_c)),
         );
@@ -123,6 +129,9 @@ fn card(j: &J) -> El {
     }
     for (i, s) in steps.iter().enumerate() {
         let st = s["state"].as_str().unwrap_or("waiting");
+        if compact && st != "running" && st != "failed" {
+            continue;
+        }
         let (mark, mc) = match st {
             "done" => ("check", "green"),
             "running" => ("reload", "blue"),
@@ -131,7 +140,7 @@ fn card(j: &J) -> El {
         };
         col = col.child(
             row()
-                .key(format!("job-{name}-step-{}", i + 1))
+                .key(format!("{p}-{name}-step-{}", i + 1))
                 .w_full()
                 .gap(crate::theme::spacing::INLINE)
                 .items_center()
@@ -145,22 +154,22 @@ fn card(j: &J) -> El {
         }
     }
     if let Some(e) = j["error"].as_str() {
-        col = col.child(small(e, if state == "asking" { "amber" } else { "red-text" }).wrap().key(format!("job-{name}-error")));
+        col = col.child(small(e, if state == "asking" { "amber" } else { "red-text" }).wrap().key(format!("{p}-{name}-error")));
     }
     for w in j["warnings"].as_array().into_iter().flatten().filter_map(J::as_str) {
         col = col.child(small(w, "amber").wrap());
     }
-    col = denied(col, &name, &j["denied"]);
+    col = denied(col, &name, &j["denied"], p);
     let mut buttons = row().w_full().gap(4.0).items_center().child(el().grow(1.0));
     let mut any = false;
     if j["can_retry"] == true {
         let n = name.clone();
-        buttons = buttons.child(action(format!("job-retry-{name}"), "Retry", Some("reload"), "blue", move |s: &mut App| s.statusbar_job_intent("create_retry", &n)));
+        buttons = buttons.child(action(format!("{p}-retry-{name}"), "Retry", Some("reload"), "blue", move |s: &mut App| s.statusbar_job_intent("create_retry", &n)));
         any = true;
     }
     if state != "running" {
         let n = name.clone();
-        buttons = buttons.child(action(format!("job-dismiss-{name}"), "Dismiss", None, "neutral", move |s: &mut App| s.statusbar_job_intent("create_dismiss", &n)));
+        buttons = buttons.child(action(format!("{p}-dismiss-{name}"), "Dismiss", None, "neutral", move |s: &mut App| s.statusbar_job_intent("create_dismiss", &n)));
         any = true;
     }
     if any {
@@ -177,15 +186,15 @@ const DENIED_SHOWN: usize = 3;
 /// dialog), then the Kits panel for the rest. Retry is the card's own.
 /// For a sandbox that does not exist the rule is every sandbox's, and the
 /// button says so.
-fn denied(mut col: El, name: &str, d: &J) -> El {
+fn denied(mut col: El, name: &str, d: &J, p: &str) -> El {
     let Some(hosts) = d["hosts"].as_array().filter(|h| !h.is_empty()) else { return col };
     let global = d["allow_scope"] == "global";
     let n = hosts.len();
-    col = col.child(small(&format!("sbx denied {n} host{}:", if n == 1 { "" } else { "s" }), "red-text").key(format!("job-{name}-denied")));
+    col = col.child(small(&format!("sbx denied {n} host{}:", if n == 1 { "" } else { "s" }), "red-text").key(format!("{p}-{name}-denied")));
     for h in hosts.iter().take(DENIED_SHOWN) {
         let host = h["host"].as_str().unwrap_or("").to_string();
         let mut r = row()
-            .key(format!("job-{name}-denied-{host}"))
+            .key(format!("{p}-{name}-denied-{host}"))
             .w_full()
             .gap(crate::theme::spacing::INLINE)
             .items_center()
@@ -195,7 +204,7 @@ fn denied(mut col: El, name: &str, d: &J) -> El {
         } else {
             let (sb, hs) = (name.to_string(), host.clone());
             let label = if global { "Allow for all sandboxes" } else { "Allow for this sandbox" };
-            r = r.child(action(format!("job-allow-{name}-{host}"), label, None, "green", move |s: &mut App| {
+            r = r.child(action(format!("{p}-allow-{name}-{host}"), label, None, "green", move |s: &mut App| {
                 s.statusbar_job_ask("network_allow", serde_json::json!({ "sandbox": sb, "resources": hs, "global": global }))
             }));
         }
@@ -204,7 +213,7 @@ fn denied(mut col: El, name: &str, d: &J) -> El {
     if n > DENIED_SHOWN {
         let sb = name.to_string();
         col = col.child(
-            row().w_full().items_center().child(el().grow(1.0)).child(action(format!("job-denied-more-{name}"), &format!("and {} more: open Kits", n - DENIED_SHOWN), None, "blue", move |s: &mut App| {
+            row().w_full().items_center().child(el().grow(1.0)).child(action(format!("{p}-denied-more-{name}"), &format!("and {} more: open Kits", n - DENIED_SHOWN), None, "blue", move |s: &mut App| {
                 s.statusbar_job_ask("kits_show", serde_json::json!({ "sandbox": sb }))
             })),
         );
@@ -219,7 +228,7 @@ pub fn popover(s: &App) -> El {
     let max_h = (s.window.1 - 120.0).clamp(120.0, 520.0);
     let mut list = rune::col().w_full().gap(8.0);
     for j in &jobs {
-        list = list.child(card(j));
+        list = list.child(card(j, "job", false));
     }
     let failed = jobs.iter().filter(|j| j["state"] == "failed").count();
     let title = match (jobs.len() - failed, failed) {
@@ -247,4 +256,56 @@ pub fn popover(s: &App) -> El {
         surface = surface.transition(screen::quick_fade());
     }
     surface
+}
+
+/// Cards drawn in the corner before "and N more: open the status bar".
+pub const CORNER_MAX: usize = 3;
+/// The corner cards' width (narrower in a narrow pane area).
+pub const CORNER_W: f32 = 300.0;
+/// Their distance from the pane area's right and bottom edges.
+pub const CORNER_INSET: f32 = 12.0;
+
+/// The bring-ups' corner cards (key `corner-jobs`), the web UI's corner
+/// stack: pinned to the bottom right of the pane area, so they sit above the
+/// status bar and left of the Jarvis panel and any docked panel, and never
+/// cover either. Each sandbox in create's list, the newest on top: its name,
+/// the step that runs (a busy ring), or its failure with sbx's words, the
+/// hosts sbx denied (network's own allow) and Retry, Dismiss; the same
+/// lines and actions as the popover, compact. A bring-up that ends ready
+/// leaves the list, and its card goes (the status bar says "created").
+/// Only the cards take a press: the stack has no ground of its own. Not
+/// drawn while the popover lists the same jobs; a dialog, a menu or the
+/// popover draws above it.
+pub fn corner(s: &App) -> Option<El> {
+    if s.status.pop == Some(Pop::Jobs) {
+        return None;
+    }
+    let jobs = listed();
+    if jobs.is_empty() {
+        return None;
+    }
+    let area = s.rects.area.unwrap_or([0.0, 0.0, s.window.0, s.window.1]);
+    let w = CORNER_W.min(area[2] - CORNER_INSET * 2.0).max(0.0);
+    let mut stack = rune::col().key("corner-jobs").role("status").label("Sandboxes being created").w(w).gap(crate::theme::spacing::INLINE).pin(None, None, Some(CORNER_INSET), Some(CORNER_INSET));
+    let n = jobs.len();
+    for j in jobs.iter().rev().take(CORNER_MAX) {
+        let mut e = card(j, "corner-job", true).fill(c("surface")).lift(crate::theme::elevation::FLOAT);
+        if !screen::reduced_motion() {
+            e = e.transition(screen::quick_fade());
+        }
+        stack = stack.child(e);
+    }
+    if n > CORNER_MAX {
+        stack = stack.child(
+            row().w_full().items_center().child(el().grow(1.0)).child(
+                action("corner-jobs-more".into(), &format!("and {} more: open the status bar", n - CORNER_MAX), None, "blue", |s: &mut App| {
+                    s.statusbar_open_jobs();
+                    s.push_data();
+                })
+                .fill(c("surface"))
+                .lift(crate::theme::elevation::FLOAT),
+            ),
+        );
+    }
+    Some(stack)
 }

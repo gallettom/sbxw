@@ -2609,6 +2609,13 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         Some(o) => panes_view(s).child(o),
         None => panes_view(s),
     };
+    // The bring-ups' corner cards, at the pane area's bottom right: above
+    // the status bar, left of the Jarvis panel (its input is never covered),
+    // under any menu, popover, modal or dialog drawn later (statusbar/jobs.rs).
+    let panes = match statusbar::jobs::corner(s) {
+        Some(k) => panes.child(k),
+        None => panes,
+    };
     main = main.child(if s.proposal_up() { panes.child(proposal_scrim()) } else { panes });
     for p in fpanels {
         main = main.child(p);

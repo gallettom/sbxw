@@ -1622,6 +1622,23 @@ until retried or dismissed, and says so in an error notice. The palette's
 (kept as an alias) open the same popover; with nothing listed, a notice
 says "Nothing is being created."
 
+**Corner cards** (key `corner-jobs`, the web UI's corner stack): while
+anything is listed, one card per sandbox (`corner-job-<name>`), newest on
+top, pinned to the pane area's bottom right (12 pt in): above the status
+bar, left of the Jarvis panel and any docked panel, so the Jarvis input is
+never covered; only the cards take a press. Each is the popover's card,
+compact: the name, the step that runs (`corner-job-<name>-step-<i>`, with
+what sbx prints under it) beside a busy ring (`corner-job-<name>-busy`); a
+failure stays with sbx's words (`corner-job-<name>-error`), the denied
+hosts with the same allow (`corner-job-allow-<name>-<host>`: network's
+`network_allow`, the core's dialog), `corner-job-retry-<name>` and
+`corner-job-dismiss-<name>`. Three at most, then `corner-jobs-more` ("and N
+more: open the status bar", the popover). A ready one leaves the list and
+its card fades out (the status bar says "created"). The cards give way
+while the popover is open; menus, popovers, modals and the core's dialogs
+draw above them. Main window only: a page window shows its page's panes,
+no status bar and no cards.
+
 **Extras.** `create` ("New", opens the chooser): drawn in the sidebar's
 header (`sidebar-new`), on the rail under Files while the sidebar is hidden
 (`rail-new`), and in the palette (⌃⌥N / Alt+N).
