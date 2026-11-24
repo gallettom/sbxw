@@ -86,6 +86,8 @@ const fxApi = (path, extra = '') =>
   `/api/sandboxes/${encodeURIComponent(filesTarget)}/fs${path}${extra}`;
 const fxFileUrl = (path, extra = '') =>
   fxApi('/file', `?path=${encodeURIComponent(path)}${extra}`);
+const fxFolderUrl = (path, extra = '') =>
+  fxApi('/folder', `?path=${encodeURIComponent(path)}${extra}`);
 const fxJoin = (dir, name) => (dir === '/' ? '' : dir) + '/' + name;
 // A row's identity and its absolute path. Recent rows come from all over the
 // filesystem (two `notes.md` are two rows), so they are told apart by path.
@@ -353,7 +355,9 @@ function renderList() {
       <td class="fx-time" title="${escHtml(fullTime(e.modified))}">${humanTime(e.modified)}</td>
       <td class="fx-act">${e.kind === 'file'
         ? `<button class="fx-dl" type="button" tabindex="-1" title="Download"
-             aria-label="Download ${escHtml(e.name)}">⬇</button>` : ''}${fxDeleteButton(e)}</td>
+             aria-label="Download ${escHtml(e.name)}">⬇</button>`
+        : e.kind === 'dir' ? `<button class="fx-dl" type="button" tabindex="-1" title="Download the folder as ${escHtml(e.name)}.tar.gz"
+             aria-label="Download the folder ${escHtml(e.name)}">⬇</button>` : ''}${fxDeleteButton(e)}</td>
     </tr>`).join('');
   fxTbody.querySelector('.fx-row.selected')?.scrollIntoView({ block: 'nearest' });
 }
@@ -527,7 +531,37 @@ async function fxDelete(entry) {
   fxFetchRecent(name);
 }
 
+/// A folder's file count and bytes, and the archive cap, from the daemon
+/// (counted, not read). Null when it cannot say.
+async function fxFolderSize(path) {
+  try {
+    const res = await fetch(fxApi('/folder/size', `?path=${encodeURIComponent(path)}`));
+    const data = await res.json();
+    return data.ok ? data : null;
+  } catch (_) { return null; }
+}
+
+/// Why a folder of this size cannot be downloaded here, or null.
+function fxFolderOverCap(size) {
+  if (!size || !(size.bytes > size.max)) return null;
+  return `${humanSize(size.bytes)}: over the ${humanSize(size.max)} a folder download allows here`;
+}
+
+/// A whole folder, as `<name>.tar.gz` (the daemon's `fs/folder`): sized first,
+/// so a folder over the cap says so instead of saving an error as a file.
+async function fxDownloadFolder(entry) {
+  const path = fxPathOf(entry);
+  const over = fxFolderOverCap(await fxFolderSize(path));
+  if (over) { showToast(`${entry.name}: ${over}`, 'error'); return; }
+  const a = document.createElement('a');
+  a.href = fxFolderUrl(path);
+  a.download = `${entry.name}.tar.gz`;
+  a.click();
+  showToast(`Packing ${entry.name}.tar.gz: the download starts when it is ready`);
+}
+
 function fxDownload(entry) {
+  if (entry.kind === 'dir') { fxDownloadFolder(entry); return; }
   const a = document.createElement('a');
   a.href = fxFileUrl(fxPathOf(entry), '&download=1');
   a.download = entry.name;
@@ -548,9 +582,27 @@ function fxShow(entry) {
     <div class="fx-prev-head">
       <div class="fx-prev-name">${escHtml(entry.name)}</div>
       <div class="fx-prev-meta">${entry.kind === 'dir' ? 'Folder: Return to open it' : 'Not a regular file'}</div>
-      ${fxCanDelete(fxPathOf(entry)) ? `<div class="fx-prev-actions">
-        <button class="fx-copy fx-del" data-delete title="Delete it and everything in it (Del)">Delete</button></div>` : ''}
+      ${entry.kind === 'dir' ? '<div class="fx-prev-meta" id="fx-folder-size">Counting its files…</div>' : ''}
+      ${entry.kind === 'dir' || fxCanDelete(fxPathOf(entry)) ? `<div class="fx-prev-actions">
+        ${entry.kind === 'dir' ? `<button class="fx-copy" data-folder-dl title="Download it as ${escHtml(entry.name)}.tar.gz">⬇ Download folder</button>` : ''}
+        ${fxCanDelete(fxPathOf(entry)) ? '<button class="fx-copy fx-del" data-delete title="Delete it and everything in it (Del)">Delete</button>' : ''}</div>` : ''}
     </div>`;
+  if (entry.kind === 'dir') fxShowFolderSize(entry);
+}
+
+/// The folder's size under its name in the preview, and its Download button
+/// disabled with the reason when it is over the cap.
+async function fxShowFolderSize(entry) {
+  const key = fxKey(entry);
+  const size = await fxFolderSize(fxPathOf(entry));
+  if (fx.selected !== key) return;
+  const line = document.getElementById('fx-folder-size');
+  const btn = document.querySelector('#fx-preview [data-folder-dl]');
+  if (!line) return;
+  if (!size) { line.textContent = 'Its size could not be counted'; return; }
+  line.textContent = `${size.files} ${size.files === 1 ? 'file' : 'files'} · ${humanSize(size.bytes)}`;
+  const over = fxFolderOverCap(size);
+  if (over && btn) { btn.disabled = true; btn.title = over; line.textContent += ` · ${over}`; }
 }
 
 /* ── Preview ──
@@ -1058,6 +1110,11 @@ document.getElementById('fx-preview').addEventListener('click', (e) => {
   }
   const mdLink = e.target.closest('a[data-md-link]');
   if (mdLink) { e.preventDefault(); fxMdFollow(document.getElementById('fx-prev-body'), Number(mdLink.dataset.mdLink)); return; }
+  if (e.target.closest('[data-folder-dl]')) {
+    const entry = fx.entries.find((x) => fxKey(x) === fx.selected);
+    if (entry) fxDownloadFolder(entry);
+    return;
+  }
   if (e.target.closest('[data-delete]')) {
     const entry = fx.entries.find((x) => fxKey(x) === fx.selected);
     if (entry) fxDelete(entry);
