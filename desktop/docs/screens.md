@@ -1788,16 +1788,31 @@ or a failed read: "unknown" in a neutral badge and the daemon's note
 
 `screens/skills.luau`. Data: `data.my_skills` (`GET /api/my-skills`),
 `data.skills_view` (`{sandbox}`), `data.skills_for` and
-`data.sandbox_skills` (`skills_look`). Keys: `kept-<name>`,
+`data.sandbox_skills` and `data.sandbox_commands` (`skills_look`). Keys: `kept-<name>`,
 `forget-<name>`, `skills-sandbox`, `skills-look`, `found-<name>`,
-`keep-<name>`, `skills-more-kept`, `skills-more-found`. Looking stays a
-press: it starts a stopped sandbox.
+`keep-<name>`, `skills-more-kept`, `skills-more-found`, `skills-installed`,
+`skills-installed-count`, `skills-installed-reason`, `installed-group-<id>`,
+`installed-<name>`, `skills-more-inst-<id>`. Looking stays a press: it
+starts a stopped sandbox.
+
+After Look, **Installed in <sandbox>** lists every skill and command of
+`GET /api/sandboxes/:name/commands`, read only (no Keep: kits and built-ins
+come back with every sandbox), with a count, grouped by origin in plain
+words: `Kit <name>` (an origin `kit:<name>`), `Kits` (a home command),
+`Your kept skills` (a home command named as one you keep), `sbx shared
+skills` (a home skill), `Written in this sandbox` (a home skill the keepable
+listing also found), `Project` (`workspace`), `Built-in`. A partial answer
+(`complete: false`, a stopped sandbox) shows its `reason` as a quiet line;
+nothing is started for it. A failed read or a daemon without the route
+(404) leaves the panel as before. With the installed list there, an empty
+keepable list says "Nothing to keep: …" instead of "No skill in …". Names
+are cut to 64 characters, descriptions to 160, the reason to 200.
 
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
 | `skills_show` | `sandbox` (optional) | direct | Opens the panel and reads the kept skills again; its picker on that sandbox (else the last one used) |
 | `skills_pick` | `sandbox` | direct | Puts the picker on that sandbox (view state) |
-| `skills_look` | `sandbox` | direct | Lists that sandbox's skills (`data.sandbox_skills`) |
+| `skills_look` | `sandbox` | direct | Lists that sandbox's skills (`data.sandbox_skills`) and what it has installed (`data.sandbox_commands`) |
 | `skill_keep` | `sandbox`, `name` | approval | Keeps a skill found by `skills_look` for every new sandbox |
 | `skill_forget` | `name` | approval | Stops keeping it |
 
