@@ -1488,10 +1488,15 @@ fn a_path_wrapped_by_the_terminal_is_one_link_a_hard_break_is_not() {
     }
     assert_eq!(click(&mut t, (3, 1), cmd()), None);
     assert_eq!(t.take_file_click().as_deref(), Some("docs/guides/long-name.md"));
-    // A line break the program wrote is a break: two words, no path.
+    // A line break the program wrote is a break: two words, not the joined path
+    // (the first row's `docs/guides/` is a folder link of its own, the second none).
     let (mut t, _ev, _rx) = term();
     t.feed(format!("{}docs/guides/\r\nlong-name.md", " ".repeat(30)).as_bytes());
     t.on_pointer_move(at(32, 0).0, at(32, 0).1, cmd());
+    assert_eq!(t.file_hover_path(), Some("docs/guides/"));
+    // 12 characters from column 30: soft-wrapped into row 1, then the program's break.
+    assert_eq!(t.file_hover.as_ref().unwrap().rows, vec![(0, 30, 40), (1, 0, 2)]);
+    t.on_pointer_move(at(3, 2).0, at(3, 2).1, cmd());
     assert_eq!(t.file_hover_path(), None);
 }
 
