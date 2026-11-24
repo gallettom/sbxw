@@ -122,6 +122,9 @@ pub struct Style {
     pub pills: Option<String>,
     /// Out of the parent's flow, pinned to some of its edges (left, top, right, bottom).
     pub pin: Option<[Option<f32>; 4]>,
+    /// `lift`: a shadow from the theme's elevation (`theme::elevation`):
+    /// `raised`, `float` or `overlay`. Any other value: none.
+    pub lift: Option<(f32, f32)>,
 }
 
 /// One entry of a `menu` or `select`.
@@ -338,7 +341,7 @@ pub enum Positional {
 }
 
 /// Props every element takes.
-pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin"];
+pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin", "lift"];
 const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate", "pills"];
 const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "on_left", "on_right", "clip", "folds", "shortcuts", "paint", "wrap", "keep_focus"];
 
@@ -1075,6 +1078,14 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "hover" => st.hover = Some(color_of(v)?),
         "radius" => st.radius = Some(num_or(v, crate::theme::radius)?),
         "opacity" => st.opacity = Some(num_of(v)?.clamp(0.0, 1.0)),
+        "lift" => {
+            st.lift = match string_of(v)?.as_str() {
+                "raised" => Some(crate::theme::elevation::RAISED),
+                "float" => Some(crate::theme::elevation::FLOAT),
+                "overlay" => Some(crate::theme::elevation::OVERLAY),
+                _ => None,
+            }
+        }
         "align" => {
             st.align = Some(match one_of(v, &["start", "center", "end", "stretch"])?.as_str() {
                 "start" => Align::Start,
@@ -1532,6 +1543,16 @@ mod tests {
         assert_eq!((n.kind, n.text.as_str(), n.on.as_deref()), (Kind::Markdown, "**run `ls`**", Some("link")));
         assert!(render("markdown{ text'x' }").unwrap_err().contains("takes one string"));
         assert!(render("markdown{ 'x', wrap = true }").unwrap_err().contains("unknown prop 'wrap'"));
+    }
+
+    /// `lift` names one of the theme's three elevations; any other word draws no shadow.
+    #[test]
+    fn lift_takes_the_themes_elevation_and_ignores_other_words() {
+        let n = render("column{ lift = 'float' }").unwrap();
+        assert_eq!(n.style.lift, Some(crate::theme::elevation::FLOAT));
+        assert_eq!(render("column{ lift = 'overlay' }").unwrap().style.lift, Some(crate::theme::elevation::OVERLAY));
+        assert_eq!(render("column{ lift = 'sky' }").unwrap().style.lift, None);
+        assert_eq!(render("column{}").unwrap().style.lift, None);
     }
 
     #[test]

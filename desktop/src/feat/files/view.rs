@@ -18,6 +18,41 @@ pub const OUTLINE_MAX: usize = 150;
 pub const IMAGE_MAX: u64 = 24 * 1024 * 1024;
 /// Recent: the badge counts the last hour's files.
 pub const FRESH_SECS: u64 = 3600;
+/// How long the "Saved <name>" toast stays (a failure stays until closed;
+/// the pointer resting on it holds it, through its hover zone).
+pub const TOAST_SECS: u64 = 6;
+
+/// The explorer's toast: a file saved (Show in folder), or why a download
+/// failed. `seq` names it, so an expiry meant for an older toast does
+/// nothing to a newer one; `expired`: its time is up (the screen still
+/// draws it while the pointer rests on it).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Toast {
+    pub seq: u64,
+    pub name: String,
+    pub path: Option<String>,
+    pub error: Option<String>,
+    pub expired: bool,
+}
+
+impl Toast {
+    pub fn json(&self) -> J {
+        json!({ "seq": self.seq, "name": self.name, "path": self.path, "error": self.error, "expired": self.expired })
+    }
+}
+
+/// After [`TOAST_SECS`], `files_toast_expire` for toast `seq`, posted to the
+/// UI thread as a socket thread posts (the core has no timer for a
+/// feature). Under test nothing is scheduled: tests send the intent.
+pub fn schedule_toast_expiry(seq: u64) {
+    #[cfg(not(test))]
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(TOAST_SECS));
+        crate::socket::post("files", vec![crate::feat::Action::Intent { name: "files_toast_expire".into(), args: json!({ "seq": seq }) }]);
+    });
+    #[cfg(test)]
+    let _ = seq;
+}
 
 /// The largest folder the app downloads (as `.tar.gz`): what the core
 /// downloads at most (`files::MAX_BYTES`), under the daemon's own 256 MB cap

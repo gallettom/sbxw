@@ -164,8 +164,9 @@ pub(super) fn violations(rt: &Runtime<App>, win: (f32, f32)) -> Vec<String> {
     for (pp, ks) in &kids {
         for (i, a) in ks.iter().enumerate() {
             for b in &ks[i + 1..] {
-                // A thin pinned mark (the accent edge) lies on its row by design.
-                if a.rect[2] <= 3.0 || b.rect[2] <= 3.0 || a.rect[3] <= 0.0 || b.rect[3] <= 0.0 {
+                // A thin pinned mark (the accent edge) lies on its row by design,
+                // and the toast floats over the columns.
+                if [a, b].iter().any(|n| n.key.as_deref() == Some("files-toast")) || a.rect[2] <= 3.0 || b.rect[2] <= 3.0 || a.rect[3] <= 0.0 || b.rect[3] <= 0.0 {
                     continue;
                 }
                 let (x, y) = (a.rect[0].max(b.rect[0]) < (a.rect[0] + a.rect[2]).min(b.rect[0] + b.rect[2]) - EPS, a.rect[1].max(b.rect[1]) < (a.rect[1] + a.rect[3]).min(b.rect[1] + b.rect[3]) - EPS);

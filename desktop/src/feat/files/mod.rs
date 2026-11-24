@@ -32,6 +32,8 @@ pub mod explorer;
 #[cfg(test)]
 mod narrow_tests;
 #[cfg(test)]
+mod layout_tests;
+#[cfg(test)]
 mod scroll_tests;
 mod standin;
 #[cfg(test)]
@@ -118,6 +120,8 @@ pub const INTENTS: &[Spec] = &[
     Spec { name: "files_download", risk: Risk::Direct, args: &[], doc: "Downloads the selected file into this computer's Downloads folder, under a name the core cleans (never over a file there). A folder shown in the reader goes whole, as `<folder>.tar.gz` packed in the sandbox (128 MB at most here)." },
     Spec { name: "files_reveal", risk: Risk::Direct, args: &[], doc: "Downloads the selected file (or folder, as .tar.gz) into Downloads and shows it in the file manager." },
     Spec { name: "files_show_saved", risk: Risk::Direct, args: &[], doc: "Shows the last file the panel saved in the file manager." },
+    Spec { name: "files_toast_close", risk: Risk::Direct, args: &[], doc: "Closes the explorer's toast (a file saved, or a download that failed)." },
+    Spec { name: "files_toast_expire", risk: Risk::Direct, args: &[("seq", Arg::Int(0, i64::MAX), true)], doc: "The saved toast's time is up (the core sends it after a few seconds): it goes once the pointer is not on it. A failure stays until closed." },
     Spec { name: "files_save_as", risk: Risk::Approval("Save a sandbox file outside Downloads"), args: &[], doc: "The save dialog, for the selected file (or folder, as .tar.gz); the core's dialog names it and its size first." },
     Spec { name: "files_open_with", risk: Risk::Approval("Open a sandbox file with this computer's app"), args: &[], doc: "Downloads the selected file, then the core's dialog says what it is (its type sniffed) and what would open it; programs, scripts, installers and shortcuts are refused." },
     Spec { name: "files_delete", risk: Risk::Approval("Delete a file in a sandbox"), args: &[], doc: "Deletes the selected file or folder (under the workspace, a read-write mount, home or /tmp only), after the core's dialog shows its path and size." },
@@ -270,6 +274,9 @@ pub struct State {
     sent_at: Option<u64>,
     /// The last file the panel saved (Show in folder).
     saved: Option<(String, String)>,
+    /// The toast at the bottom of the explorer, and the last one's number.
+    toast: Option<view::Toast>,
+    toast_seq: u64,
     /// The sandbox each daemon answer was asked for.
     asked_for: BTreeMap<&'static str, String>,
     /// Sandboxes whose run ended before the answer to its start came back
@@ -414,7 +421,7 @@ impl State {
                 cx.sandbox(&sb).ok_or_else(|| format!("{sb} is not a sandbox sbxw knows"))?;
                 if self.sandbox.as_deref() != Some(&sb) {
                     let staged = std::mem::take(&mut self.staged);
-                    *self = State { map: std::mem::take(&mut self.map), staged, dropped: std::mem::take(&mut self.dropped), paste_seq: self.paste_seq, staged_seq: self.staged_seq, seq: self.seq, drop_seq: self.drop_seq, drop_tag: std::mem::take(&mut self.drop_tag), drop_why: std::mem::take(&mut self.drop_why), drop_skip: self.drop_skip, sent_at: self.sent_at, saved: self.saved.take(), ..State::default() };
+                    *self = State { map: std::mem::take(&mut self.map), staged, dropped: std::mem::take(&mut self.dropped), paste_seq: self.paste_seq, staged_seq: self.staged_seq, seq: self.seq, drop_seq: self.drop_seq, drop_tag: std::mem::take(&mut self.drop_tag), drop_why: std::mem::take(&mut self.drop_why), drop_skip: self.drop_skip, sent_at: self.sent_at, saved: self.saved.take(), toast: self.toast.take(), toast_seq: self.toast_seq, ..State::default() };
                     self.sandbox = Some(sb.clone());
                     self.first = true;
                     for k in [ARTIFACTS, DIR, RECENT] {
@@ -629,6 +636,17 @@ impl State {
             "files_show_saved" => {
                 let (_, path) = self.saved.clone().ok_or("nothing saved yet")?;
                 out.push(Action::Reveal(PathBuf::from(path)));
+            }
+            "files_toast_close" => {
+                self.toast = None;
+                out.extend(self.ui_action(cx));
+            }
+            "files_toast_expire" => {
+                let seq = a.args.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
+                if let Some(t) = self.toast.as_mut().filter(|t| t.seq == seq && t.error.is_none()) {
+                    t.expired = true;
+                    out.extend(self.ui_action(cx));
+                }
             }
             "files_save_as" => {
                 let s = self.file_sel()?;
@@ -1494,7 +1512,14 @@ impl State {
             "worktrees": if mine(DIR) { d["worktrees"].as_array().into_iter().flatten().filter_map(|w| Some(json!({ "thread": w["thread"].as_str()?, "path": w["path"].as_str()?, "here": d["path"].as_str().is_some_and(|p| w["path"].as_str().is_some_and(|wp| p.starts_with(wp))) }))).collect::<Vec<_>>() } else { vec![] },
             "staged": staged, "upload_max": view::size_label(view::UPLOAD_MAX),
             "saved": self.saved.as_ref().map(|(n, p)| json!({ "name": n, "path": p })),
+            "toast": self.toast.as_ref().map(view::Toast::json),
         })
+    }
+
+    /// A download that failed: the toast says why, in the error colour, until closed.
+    fn toast_failed(&mut self, call: &Call, e: &str) {
+        self.toast_seq += 1;
+        self.toast = Some(view::Toast { seq: self.toast_seq, name: call.what.clone(), path: None, error: Some(e.to_string()), expired: false });
     }
 
     /// The preview as the explorer's reader draws it: a Markdown file with
@@ -1866,6 +1891,9 @@ impl State {
                     if let Some(p) = body["saved"].as_str() {
                         let name = body["name"].as_str().unwrap_or("the file").to_string();
                         self.saved = Some((name.clone(), p.to_string()));
+                        self.toast_seq += 1;
+                        self.toast = Some(view::Toast { seq: self.toast_seq, name: name.clone(), path: Some(p.to_string()), error: None, expired: false });
+                        view::schedule_toast_expiry(self.toast_seq);
                         out.push(Action::notice(format!("Saved {name}: {p}")));
                     }
                     if let Some(e) = body["after_error"].as_str() {
@@ -1873,8 +1901,15 @@ impl State {
                     }
                 }
                 Ok((499, _)) => {}
-                Ok((c, body)) => out.push(Action::error(format!("{}: {}", call.what, why(c, &body)))),
-                Err(e) => out.push(Action::error(format!("{}: {e}", call.what))),
+                Ok((c, body)) => {
+                    let e = why(c, &body);
+                    self.toast_failed(call, &e);
+                    out.push(Action::error(format!("{}: {e}", call.what)));
+                }
+                Err(e) => {
+                    self.toast_failed(call, &e);
+                    out.push(Action::error(format!("{}: {e}", call.what)));
+                }
             }
         } else {
             match r {
