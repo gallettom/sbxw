@@ -498,6 +498,15 @@ getting it.
 - Skills in sbx's [shared store](#shared-skills) are not offered: they reach
   every sandbox already.
 
+**What a sandbox has installed.** Showing a sandbox's skills (**Look** in the
+desktop app's Skills panel, **Show its skills** in the web UI) also lists,
+under **Installed in <sandbox>**, every skill and command it has: the same
+list as [what `/` completes to](#what--completes-to-in-the-desktop-app),
+grouped by where it comes from (a kit, your kept skills, sbx shared skills,
+the project, Claude Code's built-ins), with no Keep button: those come back
+with every sandbox. For a stopped sandbox the list says it is partial and
+why; nothing is started for it. With an older daemon the list is not shown.
+
 ## What `/` completes to in the desktop app
 
 The desktop app's message input lists the skills and commands you can type

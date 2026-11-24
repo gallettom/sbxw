@@ -11,6 +11,12 @@
 //! on the last one used. Looking stays the person's press: it starts a
 //! stopped sandbox.
 //!
+//! **What it has installed.** Look also reads `GET /api/sandboxes/:name/commands`
+//! (`data.sandbox_commands`): every skill and command the sandbox has, from
+//! its kits, sbx's shared store, the project and Claude Code itself. The
+//! panel lists them read only, grouped by origin, under the keepable ones;
+//! `skill_keep` still only takes a skill from the keepable listing.
+//!
 //! A kept skill reaches new sandboxes as the `sbxw-my-skills` kit (the code
 //! map's generated-kits.md); keeping one is always the core's dialog.
 
@@ -80,6 +86,12 @@ pub fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
                 Action::Set { key: "skills_for".into(), value: json!(sb) },
                 Action::Set { key: "sandbox_skills".into(), value: J::Null },
                 Action::Fetch { key: "sandbox_skills".into(), path: format!("/api/sandboxes/{}/skills", crate::client::enc(sb)) },
+                // Everything it has installed, read only (kits, sbx's shared
+                // store, the project, built-ins). The route never starts a
+                // stopped sandbox; a daemon without it answers 404 and the
+                // panel stays as before.
+                Action::Set { key: "sandbox_commands".into(), value: J::Null },
+                Action::Fetch { key: "sandbox_commands".into(), path: format!("/api/sandboxes/{}/commands", crate::client::enc(sb)) },
             ])
         }
         "skill_keep" => {

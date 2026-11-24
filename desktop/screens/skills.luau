@@ -8,7 +8,10 @@
 -- sandbox), else the last one used (data.app.kept.skills.sandbox), else the
 -- first sandbox. Picking another asks `skills_pick`; looking stays a press
 -- (`skills_look` starts a stopped sandbox). Keeping and removing are the
--- core's dialogs.
+-- core's dialogs. After Look, "Installed in <sandbox>" lists every skill and
+-- command it has (`data.sandbox_commands`, the daemon's /commands route),
+-- grouped by origin and read only: kits and built-ins come back with every
+-- sandbox, so they have no Keep.
 
 -- Rows drawn at a time; past this, "Show N more".
 local PAGE = 25
@@ -55,6 +58,108 @@ local function paged(rows, extra, key)
       button{ "Show " .. n .. " more", variant = "ghost", on = "more", arg = key, key = "skills-more-" .. key } }
   end
   return list(out), more
+end
+
+-- A sandbox text cut to `n` characters with an ellipsis (agent or sandbox
+-- data: never trusted to be short).
+local function clip(t, n)
+  t = tostring(t or "")
+  local len = utf8.len(t)
+  if not len then return "?" end
+  if len <= n then return t end
+  return string.sub(t, 1, utf8.offset(t, n) - 1) .. "…"
+end
+
+-- Where an entry of `GET /api/sandboxes/:name/commands` comes from, in plain
+-- words: { id, title, where }. The route says workspace, home or built-in;
+-- home is ~/.claude/commands (kits, kept skills) or ~/.claude/skills (sbx's
+-- shared store, or a skill the agent wrote there: the keepable list names
+-- those). A `kit:<name>` origin names its kit.
+local function origin_of(c, kept, own_home)
+  local o = tostring(c.origin or "")
+  if o == "built-in" then return { id = "built-in", title = "Built-in", where = "Claude Code's own commands" } end
+  if o == "workspace" then return { id = "project", title = "Project", where = "the project's .claude/skills/ and .claude/commands/" } end
+  local kit = string.match(o, "^kit:(.+)$")
+  if kit then return { id = "kit-" .. clip(kit, 40), title = "Kit " .. clip(kit, 40), where = "installed by that kit" } end
+  if o == "home" and c.kind == "command" then
+    if kept[c.name] then return { id = "kept", title = "Your kept skills", where = "the sbxw-my-skills kit" } end
+    return { id = "kits", title = "Kits", where = "~/.claude/commands/, written by the sandbox's kits" }
+  end
+  if o == "home" then
+    if own_home[c.name] then return { id = "own", title = "Written in this sandbox", where = "~/.claude/skills/: you can keep it above" } end
+    return { id = "store", title = "sbx shared skills", where = "~/.claude/skills/, sbx's shared skills store" }
+  end
+  return { id = "other-" .. clip(o, 24), title = clip(o, 24), where = "" }
+end
+
+-- The order the groups show in: what kits bring first, built-in last.
+local GROUP_ORDER = { kits = 1, kept = 2, store = 3, own = 4, project = 5, ["built-in"] = 7 }
+
+-- "Installed in <sandbox>": every skill and command it has (from
+-- `data.sandbox_commands`), grouped by origin, read only. Nil when the
+-- daemon has no such route or the read failed (the panel is as before).
+local function installed(state, data, look_for, kept, found)
+  local cmds = data.sandbox_commands
+  if type(cmds) ~= "table" or type(cmds.commands) ~= "table" then return nil end
+  local own_home = {}
+  if type(found) == "table" then
+    for _, x in ipairs(found.skills or {}) do
+      if x.origin == "home" then own_home[x.name] = true end
+    end
+  end
+  local groups, order = {}, {}
+  for _, c in ipairs(cmds.commands) do
+    if type(c) == "table" and type(c.name) == "string" then
+      local o = origin_of(c, kept, own_home)
+      local g = groups[o.id]
+      if not g then
+        g = { o = o, rows = {} }
+        groups[o.id] = g
+        order[#order + 1] = o.id
+      end
+      local desc = type(c.description) == "string" and c.description ~= "" and c.description or nil
+      g.rows[#g.rows + 1] = row{ w = "full", gap = 8, align = "start", key = "installed-" .. clip(c.name, 64),
+        dot{ tone = "neutral" },
+        column{ grow = 1, gap = 2,
+          text{ "/" .. clip(c.name, 64), mono = true, color = "text-bright" },
+          desc and text{ clip(desc, 160), size = "sm", wrap = true, color = "text-soft" } or false,
+        },
+        text{ c.kind == "command" and "command" or "skill", size = "xs", color = "text-muted" },
+      }
+    end
+  end
+  table.sort(order, function(a, b)
+    local function rank(id) return GROUP_ORDER[id] or (string.sub(id, 1, 4) == "kit-" and 0 or 6) end
+    local ra, rb = rank(a), rank(b)
+    if ra ~= rb then return ra < rb end
+    return a < b
+  end)
+  local total = 0
+  for _, id in ipairs(order) do total = total + #groups[id].rows end
+  local out = { w = "full", gap = 10, key = "skills-installed" }
+  out[#out + 1] = row{ w = "full", gap = 8,
+    text{ "Installed in " .. look_for, size = "caption", weight = "semibold", color = "text-muted", truncate = true, grow = 1 },
+    badge{ total .. " installed", tone = "neutral", key = "skills-installed-count" },
+  }
+  out[#out + 1] = note("What every sandbox gets already, read only: you type them after /. Nothing here needs keeping.")
+  if cmds.complete == false then
+    out[#out + 1] = row{ w = "full", key = "skills-installed-reason",
+      note(clip(cmds.reason or "The list is partial.", 200)) }
+  end
+  for _, id in ipairs(order) do
+    local g = groups[id]
+    local gc = { w = "full", gap = 6, key = "installed-group-" .. id }
+    gc[#gc + 1] = row{ w = "full", gap = 8,
+      text{ g.o.title, size = "sm", weight = "semibold", color = "text-soft" },
+      badge{ tostring(#g.rows), tone = "neutral" },
+      g.o.where ~= "" and text{ g.o.where, size = "xs", color = "text-muted", truncate = true, grow = 1 } or false,
+    }
+    local l, more = paged(g.rows, state.more["inst-" .. id], "inst-" .. id)
+    gc[#gc + 1] = l
+    gc[#gc + 1] = more
+    out[#out + 1] = column(gc)
+  end
+  return column(out)
 end
 
 return {
@@ -121,7 +226,7 @@ return {
     out[#out + 1] = row{ w = "full", gap = 8,
       text{ pick and ("Skills in " .. pick) or "Keep a skill from a sandbox", size = "caption", weight = "semibold", color = "text-muted", truncate = true, grow = 1 },
       button{ "Look", icon = "search", variant = "primary", on = "look", arg = pick, disabled = not pick, key = "skills-look",
-        help = "Lists the skills it has under .claude/skills (a stopped sandbox is started)" },
+        help = "Lists the skills its agent wrote, which you can keep, and everything it has installed (a stopped sandbox is started)" },
     }
     if pick and data.skills_for ~= pick then
       out[#out + 1] = note("Press Look to list the skills " .. pick .. "'s agent wrote; keep one and every new sandbox gets it.")
@@ -155,13 +260,17 @@ return {
               or text{ "name not kept", size = "sm", color = "text-muted", help = "Lowercase letters, digits, - and _ only" },
           }
         end
+        local inst = installed(state, data, look_for, kept_names, found)
         if #rows > 0 then
           local l, more = paged(rows, state.more.found, "found")
           out[#out + 1] = l
           out[#out + 1] = more
+        elseif inst then
+          out[#out + 1] = note("Nothing to keep: no skill the agent wrote under the project's .claude/skills/ or the sandbox's own ~/.claude/skills/. What " .. look_for .. " has already is listed below.")
         else
           out[#out + 1] = note("No skill in " .. look_for .. ": none under the project's .claude/skills/ or the sandbox's own ~/.claude/skills/.")
         end
+        out[#out + 1] = inst or false
       end
     end
     main[#main + 1] = column(out)
