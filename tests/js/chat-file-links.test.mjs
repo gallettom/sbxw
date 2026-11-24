@@ -13,26 +13,34 @@ const { p: filePath, md, wire } = ctx;
 const render = (text) => { const files = { paths: [] }; return { html: md(text, files), files }; };
 const linked = (text) => render(text).files.paths.map((f) => f.path);
 
-test('positive cases', () => {
-  assert.deepEqual(linked('the report is at `.sbxw-artifacts/foo.md`'), ['.sbxw-artifacts/foo.md']);
-  assert.deepEqual(linked('the report is at .sbxw-artifacts/foo.md.'), ['.sbxw-artifacts/foo.md']);
-  assert.deepEqual(linked('see src/main.rs:42, then'), ['src/main.rs']);
-  assert.deepEqual(linked('see ./a/b.json and ~/notes/x.txt and /var/log/y.log'), ['./a/b.json', '~/notes/x.txt', '/var/log/y.log']);
-  assert.deepEqual(linked('**docs/a.md**'), ['docs/a.md']);
-  assert.equal(filePath('src/main.rs:42:7').line, 42);
-  assert.deepEqual(linked('(see docs/a.md)'), ['docs/a.md']);
-});
+// The table the desktop terminal's tests read too (desktop/src/terminal/filelink.rs).
+const cases = JSON.parse(readFileSync(new URL('./file-link-cases.json', import.meta.url), 'utf8'));
 
-test('negative cases', () => {
-  for (const t of ['foo.md', 'a/b', 'a/b.exe', 'a/../b.md', '../b.md', 'a//b.md', 'javascript:a/b.md', 'file:///etc/a.md',
-    'http://x.com/a.md', 'https://x.com/a/b.md', '~a/b.md', 'a/.md', 'a/b.md/', 'a∕b.md', 'a/b\u0000.md', 'a/./b.md', 'x=y/b.md',
-    'a/' + 'b'.repeat(4000) + '.md']) {
+test('the shared table links what it says and nothing else', () => {
+  for (const [text, want] of cases.links) {
+    assert.deepEqual(linked(text), want, text);
+    for (const w of want) assert.equal(filePath(w).folder, w.endsWith('/'), w);
+  }
+  for (const t of [...cases.plain, 'a/' + 'b'.repeat(4000) + '.md', '/a/' + 'b'.repeat(400) + '/']) {
     assert.equal(filePath(t), null, t.slice(0, 40));
     assert.deepEqual(linked(t), [], t.slice(0, 40));
   }
-  assert.deepEqual(linked('```\na/b.md\nc/d.md\n```'), []);
+  assert.equal(filePath('src/main.rs:42:7').line, 42);
+  assert.equal(filePath('~/dev/sbxw/Makefile:12').line, 12);
+  assert.deepEqual(linked('```\na/b.md\nc/d.md\n/tmp/x/\n```'), []);
   assert.deepEqual(linked('[a/b.md](https://x.com/a/b.md)'), []);
+  assert.deepEqual(linked('[/tmp/x/](https://x.com/a/b/)'), []);
   assert.deepEqual(linked('`cat a/b.md`'), []);
+  assert.deepEqual(linked('`/tmp/sbxw-chat/test/graph-lookup/`'), ['/tmp/sbxw-chat/test/graph-lookup/']);
+});
+
+test('a folder link hands its path, trailing slash and all, to the opener', () => {
+  const { files } = render('In /tmp/sbxw-chat/test/graph-lookup/, run it');
+  const calls = [];
+  const bt = { dataset: { file: '0' }, h: null, addEventListener(_, f) { this.h = f; } };
+  wire({ querySelectorAll: () => [bt] }, files, 'box', (...a) => calls.push(a));
+  bt.h();
+  assert.deepEqual(calls, [['box', '/tmp/sbxw-chat/test/graph-lookup/']]);
 });
 
 test('hostile text yields text or one inert button', () => {
@@ -107,6 +115,7 @@ test('the tooltip carries the full resolved path and the sandbox', () => {
   assert.equal(bt.title, "Open /work/docs/a.md in box's Project files");
 });
 
-test('dotfiles without an extension and bare directories are not links', () => {
-  for (const t of ['a/.env', 'a/.gitignore', 'a/dir/', 'src/', '~/', './', 'a/Makefile']) assert.equal(filePath(t), null, t);
+test('dotfiles without an extension stay plain; folders link only by the rule', () => {
+  for (const t of ['a/.env', 'a/.gitignore', '~/', './', 'a/Makefile', 'and/or']) assert.equal(filePath(t), null, t);
+  for (const t of ['a/dir/', 'src/', '/tmp/x', '~/dev/sbxw']) assert.ok(filePath(t), t);
 });

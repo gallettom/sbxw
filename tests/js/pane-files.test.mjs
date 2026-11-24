@@ -109,7 +109,7 @@ test('detects the chat rule on recorded lines, with columns', async () => {
 
 test('negatives: no slash, unknown extension, scheme, ..', async () => {
   const { api } = load();
-  for (const line of ['see main.rs', 'a/b.exe', 'https://x.example/a/b.js', '../a/b.js', 'a/../b.js', '~x/a.js', 'dir/', '//host/a.js', 'k=v/ok.md:']) {
+  for (const line of ['see main.rs', 'a/b.exe', 'https://x.example/a/b.js', '../a/b.js', 'a/../b.js', '~x/a.js', 'and/or', 'TCP/IP', '/tmp', '//host/a.js', 'k=v/ok.md:']) {
     const out = await links(makeBuf([line]), 1, api);
     if (line === 'k=v/ok.md:') continue; // '=' is not a path character: not linked either
     assert.equal(out, undefined, line);

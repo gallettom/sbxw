@@ -230,7 +230,10 @@ function fxNotice(text, kind) {
   el.className = `fx-notice${text ? '' : ' hidden'}${kind ? ` ${kind}` : ''}`;
 }
 
-async function fxOpen(path, { push = true, select = null } = {}) {
+// `readme: false` lists the folder with no row selected (a folder link);
+// `enter`: when `select` names a folder there, list that folder instead (an
+// extensionless path from a link, which may be a folder or a file).
+async function fxOpen(path, { push = true, select = null, readme = true, enter = false } = {}) {
   if (!filesTarget) return;
   const seq = ++fx.seq;
   fxTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg">Loading…</td></tr>';
@@ -250,6 +253,9 @@ async function fxOpen(path, { push = true, select = null } = {}) {
     else renderList();
     return;
   }
+  if (enter && select && (data.entries || []).some((e) => e.name === select && e.kind === 'dir')) {
+    return fxOpen(fxJoin(data.path, select), { push, readme: false });
+  }
   if (push && fx.recent) fx.history.push(FX_RECENT);
   else if (push && fx.path && fx.path !== data.path) fx.history.push(fx.path);
   fx.recent = null;
@@ -268,7 +274,7 @@ async function fxOpen(path, { push = true, select = null } = {}) {
   // A folder with a README opens on it, the way a repository page does: the
   // preview has something to say before anything is clicked.
   const explicit = !!select;
-  if (!select) select = fx.entries.find((e) => e.kind === 'file' && FX_README.test(e.name))?.name || null;
+  if (!select && readme) select = fx.entries.find((e) => e.kind === 'file' && FX_README.test(e.name))?.name || null;
   fx.selected = select;
   const ro = fx.places.mounts.find((m) => m.readonly && (fx.path === m.path || fx.path.startsWith(m.path + '/')));
   const wt = fxWorktreeOf(fx.path);
@@ -944,16 +950,21 @@ function fxResolvePath(sandbox, path) {
 
 /// Open `path` (as an agent wrote it: absolute, `~/`, or relative to the
 /// workspace) in `sandbox`'s Files tab, in its folder, selected and previewed
-/// through the same listing and preview as a click. Called by a press on a
-/// file link in a chat (chat-core.js); the daemon decides what may be read.
+/// through the same listing and preview as a click. A path ending in `/` is a
+/// folder: listed, no row selected. One with no extension may be either: its
+/// folder's listing decides (a folder is entered, a file selected). Called by
+/// a press on a file link in a chat (chat-core.js); the daemon decides what
+/// may be read.
 async function fxOpenPath(sandbox, path) {
   if (typeof path !== 'string' || !path) return;
   if (filesTarget !== sandbox || !filesOverlay.open) await openFilesModal(sandbox, { artifacts: false });
   if (filesTarget !== sandbox) return;
   const abs = fxResolvePath(sandbox, path);
   if (!abs) { fxNotice(`Not found in ${sandbox}: ${path}`, 'error'); return; }
+  if (abs.endsWith('/')) { await fxOpen(abs.replace(/\/+$/, '') || '/', { readme: false }); return; }
   const cut = abs.lastIndexOf('/');
-  await fxOpen(cut > 0 ? abs.slice(0, cut) : '/', { select: abs.slice(cut + 1) });
+  const name = abs.slice(cut + 1);
+  await fxOpen(cut > 0 ? abs.slice(0, cut) : '/', { select: name, enter: name.lastIndexOf('.') < 1 });
 }
 
 function closeFilesModal() { filesOverlay.close(); filesTarget = null; fx.seq++; }

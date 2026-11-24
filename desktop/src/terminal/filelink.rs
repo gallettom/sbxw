@@ -28,11 +28,14 @@ pub const EXT: &[&str] = &[
 /// The web's `CHAT_FILE_MAX`.
 pub const MAX: usize = 300;
 
-/// A path worth linking, as written (without the line).
+/// A path worth linking, as written (without the line). `folder` when it
+/// ends with `/` (the path keeps it): the explorer lists it. An anchored path
+/// with no extension may be either; the daemon's listing decides.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FilePath {
     pub path: String,
     pub line: Option<u32>,
+    pub folder: bool,
 }
 
 fn path_char(c: char) -> bool {
@@ -62,24 +65,35 @@ pub fn file_path(token: &str) -> Option<FilePath> {
     if t.is_empty() || !t.chars().all(path_char) || !t.contains('/') {
         return None;
     }
-    if t.starts_with('~') && !t.starts_with("~/") || t.ends_with('/') {
+    if t.starts_with('~') && !t.starts_with("~/") {
         return None;
     }
-    let mut segs: Vec<&str> = t.split('/').collect();
+    let folder = t.ends_with('/');
+    let anchored = t.starts_with('/') || t.starts_with("~/") || t.starts_with("./");
+    let mut segs: Vec<&str> = t.strip_suffix('/').unwrap_or(t).split('/').collect();
     if matches!(segs[0], "" | "~" | ".") {
         segs.remove(0);
     }
-    if segs.iter().any(|s| matches!(*s, "" | "." | "..")) {
+    if segs.is_empty() || segs.iter().any(|s| matches!(*s, "" | "." | "..")) {
         return None;
     }
     let name = segs.last()?;
-    let dot = name.rfind('.')?;
-    if dot < 1 {
+    let found = |folder| Some(FilePath { path: t.to_string(), line, folder });
+    if folder {
+        // `src/app/`, `./build/`, `~/projects/`: a folder, never with a line.
+        return if line.is_none() && name.chars().all(|c| name_char(c, false)) { found(true) } else { None };
+    }
+    if !name.chars().enumerate().all(|(i, c)| name_char(c, i == 0) || (i == 0 && c == '.')) {
         return None;
     }
-    let ok_name = name.chars().enumerate().all(|(i, c)| name_char(c, i == 0));
-    let ext = name[dot + 1..].to_ascii_lowercase();
-    (ok_name && EXT.contains(&ext.as_str())).then(|| FilePath { path: t.to_string(), line })
+    match name[1..].rfind('.').map(|d| d + 1) {
+        Some(dot) if !name.starts_with('.') => EXT.contains(&name[dot + 1..].to_ascii_lowercase().as_str()).then(|| FilePath { path: t.to_string(), line, folder: false }),
+        Some(_) => None,
+        // No extension: a folder or a file such as a Makefile; only anchored
+        // and two segments deep (`/tmp/x/y`, `~/dev/app`), so `and/or` stays prose.
+        None if anchored && segs.len() >= 2 => found(false),
+        None => None,
+    }
 }
 
 /// What cuts a token: whitespace, quotes, brackets (the web's separators).
@@ -145,32 +159,30 @@ mod tests {
         out
     }
 
-    #[test]
-    fn positive_cases() {
-        let cases: &[(&str, &[&str])] = &[
-            ("the report is at .sbxw-artifacts/foo.md.", &[".sbxw-artifacts/foo.md"]),
-            ("see src/main.rs:42, then", &["src/main.rs"]),
-            ("see ./a/b.json and ~/notes/x.txt and /var/log/y.log", &["./a/b.json", "~/notes/x.txt", "/var/log/y.log"]),
-            ("**docs/a.md**", &["docs/a.md"]),
-            ("(see docs/a.md)", &["docs/a.md"]),
-        ];
-        for (text, want) in cases {
-            assert_eq!(linked(text), *want, "{text}");
-        }
-        assert_eq!(file_path("src/main.rs:42:7").unwrap().line, Some(42));
-        assert_eq!(file_path("src/main.rs").unwrap().line, None);
-    }
+    /// The table the web's tests read too (tests/js/file-link-cases.json).
+    const CASES: &str = include_str!("../../../tests/js/file-link-cases.json");
 
     #[test]
-    fn negative_cases() {
+    fn the_shared_table_links_what_it_says_and_nothing_else() {
+        let t: serde_json::Value = serde_json::from_str(CASES).unwrap();
+        for case in t["links"].as_array().unwrap() {
+            let text = case[0].as_str().unwrap();
+            let want: Vec<&str> = case[1].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+            assert_eq!(linked(text), want, "{text}");
+            for w in want {
+                assert_eq!(file_path(w).unwrap().folder, w.ends_with('/'), "{w}");
+            }
+        }
         let long = format!("a/{}.md", "b".repeat(4000));
-        for t in [
-            "foo.md", "a/b", "a/b.exe", "a/../b.md", "../b.md", "a//b.md", "javascript:a/b.md", "file:///etc/a.md", "http://x.com/a.md", "https://x.com/a/b.md", "~a/b.md", "a/.md", "a/b.md/",
-            "a∕b.md", "a/b\u{0}.md", "a/./b.md", "x=y/b.md", &long, "a/.env", "a/.gitignore", "a/dir/", "src/", "~/", "./", "a/Makefile",
-        ] {
+        let long_dir = format!("/a/{}/", "b".repeat(400));
+        let plain: Vec<&str> = t["plain"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+        for t in plain.into_iter().chain([long.as_str(), long_dir.as_str()]) {
             assert_eq!(file_path(t), None, "{}", &t[..t.len().min(40)]);
             assert!(linked(t).is_empty(), "{}", &t[..t.len().min(40)]);
         }
+        assert_eq!(file_path("src/main.rs:42:7").unwrap().line, Some(42));
+        assert_eq!(file_path("src/main.rs").unwrap().line, None);
+        assert_eq!(file_path("~/dev/sbxw/Makefile:12").unwrap().line, Some(12));
         // The web links a code span only when it is just a path, and no text inside a
         // fence or a link label; a terminal has no such context: a path is a path between
         // spaces, quotes and brackets (the one difference, said in TTYLINKS.md).
@@ -211,5 +223,6 @@ mod tests {
         assert!(src.contains(&format!("const CHAT_FILE_MAX = {MAX};")));
         assert!(src.contains("const CHAT_FILE_NAME = /^[A-Za-z0-9_+@%-][A-Za-z0-9_.+@%-]*$/;"));
         assert!(src.contains("const CHAT_FILE_CHARS = /^[A-Za-z0-9_.+@%\\-\\/~]+$/;"));
+        assert!(src.contains("const CHAT_FOLDER_NAME = /^[A-Za-z0-9_.+@%-]+$/;"));
     }
 }
