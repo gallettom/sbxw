@@ -1155,6 +1155,28 @@ microphone is disabled ("Dictation works in the main window"). The state
 file keeps the page among the main window's pages; the window itself is
 not restored at the next start.
 
+**Terminal colours** (`src/shell/term_colors.rs`), the web UI's picker
+(`assets/js/term-color.js`). The pager's button right of the "terminals per
+page" switch (`pager-colors`: a tiny pane, its bar over its background, and
+the `appearance` mark) and the palette's "Terminal colours" open a popover
+(`term-colors`) with three slots: Background, Top bar (the pane bar) and
+Text. Each has the web UI's eight presets as swatches
+(`term-colors-<slot>-<n>`, radios, the current one checked, its name as
+tooltip and label), a custom field (`term-colors-<slot>-custom`: `#rrggbb`,
+the text also `auto`; anything else is refused with a red line, nothing
+applied) with Apply, and Reset (to sbxw.toml's value, else the built-in).
+Per slot the first source set wins: the pick (the state file's
+`terminal_colors`), sbxw.toml's (`GET /api/state` `terminal_colors`), the
+app theme's own. sbxw.toml is never written. A choice applies at once to
+every terminal (its ground, text, ANSI white and bright white for a picked
+text, the selection, the cursor and the keyword pills; a light background
+such as Paper takes the light rules, the same `Theme::from_settings` path
+as sbxw.toml's light value) and every pane bar, in the main window and in
+page windows. A picked bar is the surface under the group tint: a grouped
+pane's bar is the group's colour at the theme's bar tint over the picked
+colour. Text or bar labels under 4.5:1 are allowed, with a quiet warning
+line in the popover.
+
 The current page's tab and the pane under its left side are one shape: the
 tab stands on the pane's top edge, its outline (2 pt, `JOIN_W`) in that
 pane's line colour (its group's colour, else `border`) and its fill that

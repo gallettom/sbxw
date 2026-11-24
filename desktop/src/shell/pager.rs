@@ -101,7 +101,7 @@ pub fn fit_tabs(widths: &[f32], current: usize, avail: f32) -> (usize, usize) {
 /// The right group's width: Tabs, Grid, the per-page menu.
 fn controls_w(per: usize) -> f32 {
     let seg = |l: &str| bar::measure(l, TAB_TEXT, 500.0) + 16.0 + 14.0 + 4.0;
-    seg("Tabs") + seg("Grid") + GAP + bar::measure(&per_label(per), TAB_TEXT, 500.0) + 16.0 + 12.0 + 4.0 + GAP
+    seg("Tabs") + seg("Grid") + GAP + bar::measure(&per_label(per), TAB_TEXT, 500.0) + 16.0 + 12.0 + 4.0 + GAP + super::term_colors::TRIGGER_W + GAP
 }
 
 /// The "Gather" button beside the per-page menu.

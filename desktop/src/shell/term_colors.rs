@@ -38,6 +38,9 @@ pub const KEY: &str = "terminal_colors";
 pub const NEED: f64 = 4.5;
 
 const W: f32 = 320.0;
+/// The pager's button: its padding, the tiny pane, the gap and the mark
+/// (the pager's fit counts it, pager.rs `controls_w`).
+pub const TRIGGER_W: f32 = 6.0 * 2.0 + 16.0 + 4.0 + theme::icon::SMALL;
 const SWATCH_W: f32 = 30.0;
 const SWATCH_H: f32 = 22.0;
 
@@ -202,10 +205,10 @@ pub fn trigger(s: &App) -> El {
     let swatch = col()
         .w(16.0)
         .h(12.0)
-        .radius(2.0)
+        .radius(theme::radius("xs").unwrap())
         .border(1.0, c("border"))
         .fill(theme::hex(t.background))
-        .clip_rounded(2.0)
+        .clip_rounded(theme::radius("xs").unwrap())
         .child(el().w_full().h(4.0).fill(theme::hex(bar_ground(None, true))))
         .child(el().ml(2.0).mt(2.0).w(7.0).h(2.0).fill(theme::hex(t.foreground)));
     row()
@@ -215,6 +218,7 @@ pub fn trigger(s: &App) -> El {
         .expanded(open)
         .help("Terminal colours: background, bar and text")
         .h(pager::H - 6.0)
+        .w(TRIGGER_W)
         .px(6.0)
         .gap(4.0)
         .items_center()
