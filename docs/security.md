@@ -215,6 +215,18 @@ page instead of the chat.
   on automatic screenshots in that browser's panel does it answer without a
   click, at most once per sandbox every 10 seconds; further requests wait for
   the click. See [the side panel's screenshots](web-ui.md#screenshots-from-the-browser-side-panel).
+- **Pictures pasted into a terminal** (desktop app): a picture on the
+  clipboard pasted into a terminal pane (⌘V, or Ctrl+Shift+V off macOS) is
+  uploaded at once, with no dialog: the paste is your own gesture. It goes to
+  the sandbox of the focused pane only, and only when that pane may take keys:
+  a paste while a dialog, a modal or Jarvis's proposal is open, or while the
+  keyboard is held, does nothing. It is a picture only (PNG, at most 32 MB,
+  16384 px a side, 40 megapixels; text on the clipboard wins and is typed as
+  before), written under `/tmp/sbxw-pastes/` as a new PNG named by the app,
+  and its path is typed into that pane's agent prompt, never submitted. A
+  notice says it was pasted, or why not; a second paste while one uploads is
+  refused. Files dragged onto a pane still go through their upload dialog,
+  with its own "Do not ask again".
 - **Virtual Mac** (`sbxw:terminal-mac`, opt-in): your approval is needed to
   create or boot the VM, to resume a paused one, to lend a running VM that
   sbxw did not start itself, and to publish a port to it. Clicks, typing and

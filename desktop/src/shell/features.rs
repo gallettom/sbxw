@@ -400,10 +400,13 @@ impl App {
     /// A picture pasted into pane `i` with no text beside it: checked with
     /// the core's picture limits ([`crate::picture::check`]: 32 MB, 16384 px
     /// a side, 40 megapixels, PNG, JPEG or WebP, not animated), then to the
-    /// feature that takes pane drops, as a drop of that one picture. Always
-    /// through its dialog: "Do not ask again" covers files the person
-    /// dropped (`DropGrant`, `core:uploads` of handed-in paths), not this,
-    /// so no grant is made here. Never while something covers the panes.
+    /// feature that takes pane drops, as a drop of that one picture, which
+    /// uploads it at once with no dialog (the person asked for that: a paste
+    /// is their own gesture) and types its path, never submitted. The paste
+    /// reached here only through the keyboard's gate (the focused pane that
+    /// may take keys); never while something covers the panes (a dialog, a
+    /// modal, Jarvis's proposal). No `DropGrant`: the picture's bytes go in
+    /// the call, no handed-in path is involved.
     pub(crate) fn pane_paste_image(&mut self, i: usize, png: &[u8]) {
         if self.panes_covered() {
             return self.notify("Close what is open first: nothing was pasted", false);
@@ -1950,13 +1953,13 @@ mod tests {
         assert!(a.feats.overlay.is_none(), "under a modal nothing opens");
     }
 
-    /// A picture pasted into a pane: the drop's dialog for that one picture
-    /// (always: "Do not ask again" covers dropped files only), one upload on
-    /// Upload, its path typed into the pane's session, never submitted. A
-    /// picture too large, not a picture, a pane with no sandbox or one under
-    /// something: refused with a line, no dialog, nothing sent.
+    /// A picture pasted into a pane: uploaded at once, no dialog (the
+    /// person's own gesture), its path typed into the pane's session, never
+    /// submitted, and a short notice says so. A picture too large, not a
+    /// picture, a pane with no sandbox or a stopped one, or anything over the
+    /// panes (a dialog, a modal, a proposal): refused with a line, nothing sent.
     #[test]
-    fn a_picture_pasted_into_a_pane_goes_through_the_drops_dialog_and_types_its_path() {
+    fn a_picture_pasted_into_a_pane_uploads_at_once_and_types_its_path() {
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/files/standin.json");
         let mut a = App::new(super::super::Args { fixture: Some(fixture.into()), ..Default::default() });
         a.drain(Some(Duration::from_secs(3)), true);
@@ -1968,30 +1971,23 @@ mod tests {
         a.panes[0].thread = Some("checkout".into());
         let last = |a: &App| a.notice.as_ref().map(|n| n.0.clone()).unwrap_or_default();
         let png = crate::feat::canvas::model::mock_png(64, 48, 1);
-        // Chosen not to be asked for drops: a paste is asked all the same.
-        a.store.set_in(UPLOADS_KEY, SKIP_DROP_DIALOG, J::Bool(true));
 
-        a.pane_paste_image(0, &png);
-        let c = a.feats.dialog.as_ref().and_then(|d| d.confirm.clone()).expect("the dialog");
-        assert!(c.title.starts_with("Upload pasted-") && c.title.ends_with(".png into web-app?"), "{}", c.title);
-        assert_eq!(c.call.path, "/api/sandboxes/web-app/paste-image");
-        assert_eq!(c.call.bytes.as_ref().map(|(t, b)| (t.as_str(), b.len())), Some(("image/png", png.len())));
-        assert!(c.lines.iter().any(|l| l.contains("typed into web-app's thread checkout's prompt, not submitted")), "{:?}", c.lines);
-        assert!(c.dont_ask.is_none(), "no box: a paste is always asked");
-        assert!(a.feats.drop_grant.is_none(), "no grant for a paste");
-        // Upload: one call to paste-image, then the path typed (or, with no
+        // No dialog: the upload goes, then the path is typed (or, with no
         // session to take it, said with the path to copy). Never a Return.
-        a.confirm_click();
+        a.pane_paste_image(0, &png);
+        assert!(a.feats.dialog.is_none(), "a paste is not asked");
+        assert!(a.feats.drop_grant.is_none(), "no grant for a paste");
+        assert!(last(&a).starts_with("Pasting pasted-"), "{}", last(&a));
         a.drain(Some(Duration::from_secs(3)), true);
         let n = last(&a);
-        assert!(n.contains("/tmp/sbxw-pastes/paste-") && (n.contains("typed into web-app's prompt") || n.contains("no agent session of web-app took the path")), "{n}");
-        a.feats.dialog = None;
+        assert!(n.starts_with("Pasted pasted-") && (n.ends_with(".png into web-app: its path is in the prompt") || n.contains("no agent session of web-app took the path")), "{n}");
+        assert!(a.feats.dialog.is_none());
 
-        // Refused before any dialog: nothing can be sent.
+        // Refused, nothing sent, no dialog.
         let refused = |a: &mut App, bytes: &[u8]| {
             a.notice = None;
             a.pane_paste_image(0, bytes);
-            assert!(a.feats.dialog.is_none(), "no dialog, no upload");
+            assert!(a.feats.dialog.is_none() || a.feats.dialog.as_ref().is_some_and(|d| d.confirm.as_ref().is_none_or(|c| !c.title.starts_with("Upload"))), "no upload dialog");
             last(a)
         };
         assert!(refused(&mut a, b"not a picture at all").contains("not a PNG, JPEG or WebP picture"));
@@ -2002,13 +1998,39 @@ mod tests {
         assert!(wide.contains("more than allowed") || wide.contains("could not be read"), "{wide}");
         a.panes[0].sandbox = None;
         assert!(refused(&mut a, &png).contains("shows no sandbox"));
+        // A stopped sandbox: the error as text, nothing uploaded.
+        a.panes[0].sandbox = Some("data-pipeline".into());
+        let n = refused(&mut a, &png);
+        assert!(n.contains("The picture was not pasted") && n.contains("not running"), "{n}");
         a.panes[0].sandbox = Some("web-app".into());
-        a.open_modal("files", J::Null);
-        if a.panes_covered() {
-            assert!(refused(&mut a, &png).contains("Close what is open first"));
-        }
+        // Under a modal or the core's dialog: nothing.
+        a.open_modal("templates", J::Null);
+        assert!(a.panes_covered());
+        assert!(refused(&mut a, &png).contains("Close what is open first"));
         a.feats.modal = None;
-        a.store.set_in(UPLOADS_KEY, SKIP_DROP_DIALOG, J::Null);
+        let f = App::feature_of("files").unwrap();
+        a.open_dialog(f, "test", Some(Confirm::new("Something else?", feat::Call::post("/api/x", json!({}), "x"))), None);
+        assert!(a.panes_covered());
+        assert!(refused(&mut a, &png).contains("Close what is open first"));
+        assert_eq!(a.feats.dialog.as_ref().and_then(|d| d.confirm.as_ref()).map(|c| c.title.as_str()), Some("Something else?"), "the dialog stays as it was");
+        a.feats.dialog = None;
+        // Jarvis's proposal held up: nothing.
+        a.jarvis.shown = Some("p-high-1".into());
+        assert!(refused(&mut a, &png).contains("Close what is open first"));
+        a.jarvis.shown = None;
+
+        // Files dragged onto the pane still go through their dialog.
+        let dir = std::env::temp_dir().join(format!("sbxw-paste-drop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let brief = dir.join("brief.md");
+        std::fs::write(&brief, b"# Brief").unwrap();
+        a.pane_drop(0, std::slice::from_ref(&brief));
+        let c = a.feats.dialog.as_ref().and_then(|d| d.confirm.clone()).expect("a drop is asked");
+        assert_eq!(c.title, "Upload brief.md into web-app?");
+        assert!(c.dont_ask.is_some(), "with its own box");
+        a.feats.dialog = None;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
