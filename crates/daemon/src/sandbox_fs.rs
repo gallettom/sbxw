@@ -852,4 +852,49 @@ mod tests {
             assert!(archive(&sbx, &h, &sb, None, o, 1 << 20).await.is_err(), "{n}: no workspace");
         }
     }
+
+    /// A folder whose name looks like a tar option is packed as a folder,
+    /// never read as an option (`./` put before it): on both hosts with the
+    /// real `tar`, nothing runs and the archive holds `./<name>/`.
+    #[tokio::test]
+    async fn a_folder_named_like_a_tar_option_is_packed_as_a_folder_and_nothing_runs() {
+        for (n, h) in hosts() {
+            let root = tempfile::tempdir().unwrap();
+            let root = std::fs::canonicalize(root.path()).unwrap();
+            let ws = root.join("ws");
+            for name in ["--checkpoint=1 --checkpoint-action=exec=touch pwned", "--checkpoint-action=exec=touch pwned", "--use-compress-program=touch pwned", "-x"] {
+                let dir = ws.join(name);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("f.txt"), b"hi").unwrap();
+                let (sbx, sb) = (stopped(), SandboxName::parse("s").unwrap());
+                let gz = archive(&sbx, &h, &sb, Some(&ws), dir.to_str().unwrap(), 1 << 20).await.unwrap();
+                let listing = untar_list(&gz);
+                assert!(listing.contains(&format!("./{name}/f.txt")), "{n} {name}: {listing}");
+                for place in [&root, &ws] {
+                    assert!(!place.join("pwned").exists(), "{n} {name}: tar ran a command");
+                }
+                assert_eq!(archive_name(dir.to_str().unwrap()), format!("{name}.tar.gz"));
+            }
+        }
+    }
+
+    /// The sandbox branch runs the same script: the name is an argument, a
+    /// name starting with `-` becomes a `./` path before tar sees it, and
+    /// every other command takes `--` or runs on `.`.
+    #[tokio::test]
+    async fn the_sandbox_branch_guards_a_name_starting_with_a_dash() {
+        let fake = sbxw_sbx::runner::Fake::new(|a| match a.first().map(String::as_str) {
+            Some("ls") => Output::ok(r#"[{"name":"s","agent":"claude","status":"running"}]"#),
+            _ => Output::ok("GZ"),
+        });
+        let (_, h) = hosts().remove(0);
+        let dir = "/home/agent/--checkpoint-action=exec=touch pwned";
+        archive(&Sbx::new(fake.clone()), &h, &SandboxName::parse("s").unwrap(), None, dir, 1000).await.unwrap();
+        let call = fake.calls.lock().unwrap().iter().find(|c| c[0] == "exec").cloned().unwrap();
+        let script = &call[5];
+        assert!(script.contains(r#"case "$b" in -*) b="./$b" ;; esac"#));
+        assert!(script.contains(r#"cd -P -- "$1""#) && script.contains(r#"dirname -- "$d""#) && script.contains(r#"basename -- "$d""#) && script.contains(r#"cd -- "$p""#));
+        assert!(script.contains("find . -type f") && script.contains("du -sk ."));
+        assert!(!script.contains("checkpoint") && call[7] == dir);
+    }
 }
