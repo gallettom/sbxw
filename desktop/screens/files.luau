@@ -3,7 +3,7 @@
 -- segments, back, up, copy, Go to…), Upload and the "…" menu. Left: the
 -- sandbox picker, the Locations (this sandbox: Home, Workspace, Temporary
 -- files, the root; shared with sbxw: Artifacts, Recent; its worktrees;
--- pinned folders), then the list (the filter with Hidden and the sort, the
+-- pinned folders) with the upload block at their foot, then the list (the filter with Hidden and the sort, the
 -- rows as a tree whose folders open in place); right, the reader (Markdown at a reading measure with its outline,
 -- text and code with line numbers, pictures). A sandbox's deliverables
 -- (.sbxw-artifacts), its files, what was written lately, and uploads into
@@ -213,48 +213,80 @@ local function crumbs(state, ui, narrow, w)
   return { back, up }, { path }, tail, button{ "Go to…", key = "files-goto", on = "goto", variant = "ghost", dense = true, help = "Type a path (~ is the agent's home)" }
 end
 
--- Upload: one header button; this card under the header while it is open,
--- while files wait, or while files are dragged over the explorer.
-local function uploads(ui, dragging)
-  local kids = { gap = 8, w = "full", px = 8, py = 4, radius = "sm", border = dragging and "blue" or "border", fill = "surface-alt", key = "files-drop" }
+-- Upload: a compact block. From 900 pt it sits at the bottom of the left
+-- column, under the Locations, always there (`lit`: the header's Upload was
+-- pressed, so it is marked); narrower, at the top of the list's column while
+-- it is open, while files wait, or while files are dragged over the explorer.
+-- The staged files stack in it, each with its Upload and its close.
+local function uploads(ui, dragging, lit)
   local staged = ui.staged or {}
-  kids[#kids + 1] = row{ gap = 8, w = "full",
-    icon{ "plus", size = 12, color = "text-muted" },
-    text{ dragging and ("Drop to upload into " .. (ui.sandbox or "?")) or (#staged == 0 and "Upload: drop files here or on a terminal" or ("Upload into " .. (ui.sandbox or "?"))), size = "sm", truncate = true, grow = 1,
+  local kids = { gap = 6, w = "full", min_w = 0, pad = 8, radius = "sm", key = "files-drop",
+    border = dragging and "blue" or (lit and "accent" or "border"), fill = dragging and "blue-tint" or "surface-alt",
+    row{ gap = 6, w = "full", min_w = 0,
+      icon{ "plus", size = 12, color = dragging and "blue" or "text-muted" },
+      text{ #staged == 0 and "Upload" or ("Upload into " .. (ui.sandbox or "?")), size = "sm", weight = "semibold", truncate = true, grow = 1 },
+    },
+    text{ dragging and ("Drop to upload into " .. (ui.sandbox or "?")) or "Drop files here or on a terminal", size = "xs", color = "text-muted", wrap = true,
       help = "Or paste a picture. Up to " .. (ui.upload_max or "128 MB") .. " each; the path is typed into the agent's prompt, not submitted." },
-    button{ "Choose…", key = "files-upload-pick", on = "pick", variant = "ghost", help = "The system's file dialog" },
-    button{ "Paste", key = "files-upload-paste", on = "paste", variant = "ghost", help = "The picture on the clipboard" },
+    row{ gap = 6, w = "full", wrap = true,
+      button{ "Choose…", key = "files-upload-pick", on = "pick", variant = "ghost", dense = true, help = "The system's file dialog" },
+      button{ "Paste", key = "files-upload-paste", on = "paste", variant = "ghost", dense = true, help = "The picture on the clipboard" },
+    },
   }
-  if #staged == 0 then
-    -- nothing more: the line above says it
-  else
-    for _, s in ipairs(staged) do
-      local sending = s.state == "sending"
-      kids[#kids + 1] = row{ gap = 8, w = "full", key = "files-staged-" .. s.index,
+  for _, s in ipairs(staged) do
+    local sending = s.state == "sending"
+    kids[#kids + 1] = column{ gap = 4, w = "full", min_w = 0, key = "files-staged-" .. s.index,
+      row{ gap = 6, w = "full", min_w = 0,
         icon{ "file", size = 12, color = "text-muted" },
-        column{ gap = 2, grow = 1,
-          text{ s.name, size = "sm", truncate = true },
-          nz(s.problem) and text{ s.problem, size = "xs", color = "red", wrap = true }
-            or text{ s.size .. (s.to and ("  →  " .. s.to) or ""), size = "xs", color = "text-muted", truncate = true },
-          sending and progress{ value = s.progress or 0 } or false,
-        },
-        button{ sending and "Sending…" or "Upload", key = "files-upload-send-" .. s.index, icon = "send", variant = s.index == 1 and "primary" or "neutral",
+        text{ s.name, size = "sm", truncate = true, grow = 1 },
+        button{ icon = "close", key = "files-unstage-" .. s.index, on = "unstage", arg = s.index, variant = "ghost", dense = true, help = "Leave it out", disabled = sending },
+      },
+      nz(s.problem) and text{ s.problem, size = "xs", color = "red", wrap = true }
+        or text{ s.size .. (s.to and ("  →  " .. s.to) or ""), size = "xs", color = "text-muted", truncate = true },
+      sending and progress{ value = s.progress or 0 } or false,
+      row{ w = "full",
+        button{ sending and "Sending…" or "Upload", key = "files-upload-send-" .. s.index, icon = "send", variant = s.index == 1 and "primary" or "neutral", dense = true,
           on = "send", arg = s.index, busy = sending and true or false, disabled = nz(s.problem) and not sending, help = "The app shows the file, its size and where it goes first" },
-        button{ icon = "close", key = "files-unstage-" .. s.index, on = "unstage", arg = s.index, variant = "ghost", help = "Leave it out", disabled = sending },
-      }
-    end
-    if #staged > 1 then
-      kids[#kids + 1] = row{ w = "full", spacer{}, button{ "Clear all", key = "files-unstage-all", on = "unstage", variant = "ghost" } }
-    end
-  end
-  if ui.saved then
-    kids[#kids + 1] = row{ gap = 8, w = "full", key = "files-saved",
-      icon{ "check", size = 12, color = "green" },
-      text{ "Saved " .. ui.saved.name, size = "xs", color = "text-muted", truncate = true, grow = 1, help = ui.saved.path },
-      button{ "Show in folder", key = "files-show-saved", on = "show_saved", variant = "ghost" },
+        spacer{} },
     }
   end
+  if #staged > 1 then
+    kids[#kids + 1] = row{ w = "full", spacer{}, button{ "Clear all", key = "files-unstage-all", on = "unstage", variant = "ghost", dense = true } }
+  end
   return column(kids)
+end
+
+-- The toast at the bottom centre of the explorer, over the columns: a file
+-- saved (Show in folder), gone after a few seconds (the core's
+-- `view::TOAST_SECS`) unless the pointer rests on it; a download that
+-- failed, in the error colour, until its close. `w`: the explorer's width
+-- as the screen estimates it; the toast is pinned at its own width, so it
+-- takes no click outside its rect.
+local TOAST_W = 420
+local function toast(ui, hovered, w)
+  local t = ui.toast
+  if not t or (t.expired and not hovered) then return false end
+  local tw = math.max(200, math.min(TOAST_W, w - 32))
+  local failed = nz(t.error)
+  local body
+  if failed then
+    body = row{ gap = 8, w = "full", align = "start",
+      icon{ "warning", size = 14, color = "red" },
+      column{ gap = 2, grow = 1, min_w = 0,
+        text{ t.name, size = "sm", truncate = true, color = "text-bright" },
+        text{ t.error, size = "xs", color = "red", wrap = true, key = "files-toast-error" } },
+      button{ icon = "close", key = "files-toast-close", on = "toast_close", variant = "ghost", dense = true, help = "Close" },
+    }
+  else
+    body = row{ gap = 8, w = "full",
+      icon{ "check", size = 14, color = "green" },
+      text{ "Saved " .. t.name, size = "sm", truncate = true, grow = 1, help = t.path },
+      button{ "Show in folder", key = "files-show-saved", on = "show_saved", variant = "ghost", dense = true },
+    }
+  end
+  return column{ key = "files-toast", hover_zone = "files-toast", w = tw, px = 12, py = 8, radius = "md",
+    fill = "surface", border = "border", lift = "float",
+    pin = { left = math.floor((w - tw) / 2), bottom = 12 }, body }
 end
 
 -- The list's own bar: the filter (typing anywhere in the list filters too),
@@ -483,7 +515,8 @@ return {
     local over = (data.app or {}).overlay or {}
     local narrow = (over.w or 1000) < 760
     local dragging = over.drop_over == true
-    local open_up = state.upload or dragging or #(ui.staged or {}) > 0 or ui.saved ~= nil
+    -- Under 900 pt the upload block opens at the top of the list's column.
+    local open_up = state.upload or dragging or #(ui.staged or {}) > 0
     -- The header, across both columns: where you are, and the secondary actions.
     local actions = {
       { id = "refresh", label = "Read the lists again", icon = "reload" },
@@ -499,7 +532,8 @@ return {
     local tree_w = narrow and body_w or math.max(220, split_w * ratio - 4)
     local reader_w = narrow and body_w or math.max(340, split_w * (1 - ratio) - 4)
     local codemap = codemap_button(ui, narrow)
-    local upload_btn = button{ (not narrow) and "Upload" or nil, key = "files-upload", icon = "plus", on = "upload", variant = open_up and "neutral" or "ghost", dense = true,
+    -- From 900 pt it marks the block at the foot of the Locations; narrower, it opens the block.
+    local upload_btn = button{ (not narrow) and "Upload" or nil, key = "files-upload", icon = "plus", on = "upload", variant = (three and state.upload or (not three) and open_up) and "neutral" or "ghost", dense = true,
       help = "Upload into " .. ui.sandbox .. ": drop files on the explorer, choose them or paste a picture" }
     local refresh_btn = button{ icon = "reload", key = "files-refresh", on = "refresh", variant = "ghost", dense = true, help = "Read the lists again" }
     local more_menu = menu{ "", id = "files-actions", icon = "more", items = actions, on = "action", arg = { sandbox = ui.sandbox, has_map = ui.has_map == true } }
@@ -529,7 +563,7 @@ return {
       head = row{ gap = 8, w = "full", key = "files-head", row(c), codemap, upload_btn, refresh_btn, more_menu }
     end
     local top = { gap = 8, w = "full", head }
-    if open_up then top[#top + 1] = uploads(ui, dragging) end
+    local hovered = (data.app or {}).hover_zone == "files-toast"
     -- The scope beside the overlay's title ("Files in [web-app v]"): the core
     -- draws this row in its header (screen.rs, TITLE_SLOT) and the picker
     -- itself (scope.rs).
@@ -546,10 +580,11 @@ return {
       if state.pane == "reader" and ui.selected then
         return column{ h = "full", gap = 8, w = "full",
           row{ w = "full", button{ "← Files", key = "files-to-tree", on = "to_tree", variant = "ghost", tone = "blue", help = "Back to the list" }, spacer{} },
-          preview(ui, true, body_w) }
+          preview(ui, true, body_w), toast(ui, hovered, body_w) }
       end
       top[#top + 1] = scroll{ key = "files-tree-scroll", column{ gap = 8, w = "full",
-        locations(ui, true), listing_head(ui), list_head, listbar(ui, tree_w), rows(ui, true) } }
+        locations(ui, true), open_up and uploads(ui, dragging, false) or false, listing_head(ui), list_head, listbar(ui, tree_w), rows(ui, true) } }
+      top[#top + 1] = toast(ui, hovered, body_w)
       top.h = "full"
       return column(top)
     end
@@ -558,6 +593,7 @@ return {
     -- the reader. From 760: two, the Locations folded into one line.
     local tree = column{ h = "full", min_h = 0, gap = 8, w = "full",
       (not three) and locations(ui, true) or false,
+      (not three) and open_up and uploads(ui, dragging, false) or false,
       listing_head(ui),
       list_head,
       listbar(ui, tree_w),
@@ -567,13 +603,16 @@ return {
     local reading = split{ id = "files-split", vertical = true, ratio = ratio, min_a = 220, min_b = 340, tree, preview(ui, ow < 1200, reader_w) }
     if three then
       top[#top + 1] = row{ gap = 12, w = "full", grow = 1, min_h = 0, align = "stretch", key = "files-columns",
+        -- The Locations scroll; the upload block stays at the column's foot.
         column{ w = 224, h = "full", min_h = 0, gap = 8, key = "files-left",
-          scroll{ key = "files-locations-scroll", locations(ui, false) } },
+          scroll{ key = "files-locations-scroll", locations(ui, false) },
+          uploads(ui, dragging, state.upload == true) },
         divider{ vertical = true },
         column{ grow = 1, min_w = 0, h = "full", min_h = 0, reading } }
     else
       top[#top + 1] = reading
     end
+    top[#top + 1] = toast(ui, hovered, body_w)
     top.h = "full"
     top.min_h = 0
     return column(top)
@@ -604,6 +643,7 @@ return {
     unstage = function(_, i) if i then return intent("files_upload_remove", { index = i }) end return intent("files_upload_remove", {}) end,
     send = function(_, i) return intent("files_upload_send", { index = i }) end,
     show_saved = function() return intent("files_show_saved", {}) end,
+    toast_close = function() return intent("files_toast_close", {}) end,
     back = function() return intent("files_back", {}) end,
     up = function() return intent("files_up", {}) end,
     go = function(state, _, path) if path and path ~= "" then state.goto = false; return intent("files_browse", { path = path }) end end,

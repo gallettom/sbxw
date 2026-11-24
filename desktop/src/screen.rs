@@ -1228,6 +1228,9 @@ fn apply(mut e: El, st: &Style, help: &Option<String>) -> El {
     if let Some([l, t, r, b]) = st.pin {
         e = e.pin(l, t, r, b);
     }
+    if let Some(l) = st.lift {
+        e = theme::lift(e, l);
+    }
     if let Some(h) = help {
         e = e.help(h.clone());
     }

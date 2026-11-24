@@ -145,6 +145,7 @@ Every element takes these.
 | `radius` | number or radius | Rounded corners |
 | `opacity` | 0 to 1 | |
 | `pin` | `{ left =, top =, right =, bottom = }` (any of them; numbers or space) | Out of the parent's flow, pinned to those edges of its padding box: a toolbar over the end of a row |
+| `lift` | `"raised"`, `"float"` or `"overlay"` | A shadow from the theme's elevation (`theme::elevation`): `float` for a card that floats over a screen (the explorer's saved toast), `overlay` as menus and dialogs. Any other word: no shadow |
 | `reveal` | bool | Drawn only while the nearest `hover_group` above it is hovered or holds the keyboard focus. It stays pressable and reachable with Tab (reaching it lights the group). Use it for a row's secondary actions, and keep them in the row's menu too: a touch or trackpad user who never hovers reaches them there |
 
 A key you do not set is made for you on elements that react: `<on>-<arg>`
@@ -2068,9 +2069,7 @@ pressable segments (`files-crumb-<i>`, the agent's home shown as `~`, a
 long path folding in the middle into `files-crumbs-more`, never cut at its
 end), back `files-back`, up `files-up`, copy the folder `files-copy-folder`,
 pin it `files-star`, **Go to…** `files-goto` (the typed path `files-path`),
-then **Upload** `files-upload` (the upload card `files-drop` under the
-header: open, while files wait, or while files are dragged over the
-explorer, `data.app.overlay.drop_over`) and the "…" menu `files-actions`
+then **Upload** `files-upload` and the "…" menu `files-actions`
 (read again, the code map), read again `files-refresh`. **In the title**:
 the scope picker `files-sandbox` (its second level the worktree the list is
 in). **Left**: the **Locations** (`files_ui.locations`, `view::locations`:
@@ -2079,7 +2078,28 @@ project, this computer's folder mounted at the same path; Code map
 `files-codemap` beside it), Temporary files (`/tmp`), File system root,
 the mounts, Kit logs; "Shared with sbxw": Artifacts, Recent; "Worktrees":
 `files-worktree-<thread>`; "Pinned"; keys `files-loc-<id>`, the current one
-`files_ui.location` marked; under 760 pt a menu `files-locations`), then
+`files_ui.location` marked; under 760 pt a menu `files-locations`). **At
+the foot of the Locations** (from 900 pt; they scroll above it), the
+upload block `files-drop`: "Upload" with its plus, "Drop files here or on
+a terminal" (wrapping), Choose… `files-upload-pick` and Paste
+`files-upload-paste` as small buttons, then the files waiting, stacked
+(`files-staged-<n>`: the name and its close, the size and where it goes,
+the progress, Upload). It is always there; the header's Upload marks it
+(an accent border). While files are dragged over the explorer
+(`data.app.overlay.drop_over`) it is blue, as the explorer is. Under 900 pt
+(no left column) Upload opens it at the top of the list's column (narrow:
+inside the scrolled tree), as it does while files wait or are dragged.
+**The toast** `files-toast`: after a download, a folder download or a
+reveal, "Saved <name>" (the check, the name cut, Show in folder
+`files-show-saved`) floats at the bottom centre of the explorer (12 pt
+above its foot, 420 pt wide at most, pinned at its own width so it takes
+no click outside it), with the surface fill, a 1 pt `border`, radius `md`
+and the FLOAT shadow (`lift = "float"`). It goes after
+`view::TOAST_SECS` (6 s: the feature posts `files_toast_expire` from a
+timer thread, as a socket thread posts, the core having no feature timer)
+unless the pointer rests on it (hover zone `files-toast`): then when it
+leaves. A download that failed shows its words in red with a close
+`files-toast-close` and stays until closed. Then
 the list: the filter `files-filter` with **Hidden** `files-hidden` and the
 sort `files-sort` (`files_sort`), and the rows as a tree (`files-rows`, one
 keyboard list): a folder opens in place (`files_expand`, read from the
@@ -2155,7 +2175,7 @@ a failed read is in `data.app.errors[key]`, a string):
 | `files_dir` | `GET /api/sandboxes/:name/fs?path=`: `{path, parent, entries: [{name, kind, link, size, modified}], offline, workspace, artifacts, home, mounts, worktrees}` |
 | `files_recent` | `GET /api/sandboxes/:name/fs/recent`: `{files: [{path, size, modified}], days, workspace, home, roots}` |
 | `codemap` | `GET /api/codemap`, read again on each `codemap` event: every run `{sandbox, kind: map\|lens, phase: writing\|done\|failed, note}` |
-| `files_ui` | Set by the core: `sandbox`, `tab`, `rows` (`id`, `name`, `kind` (`folder` for a folded artifact folder, with `count` and `open`), `icon`, `dir`, `depth`, `size`, `when`, `fresh`, `group`, `can_delete`, `selected`), `count` (`total`, `shown`, `more`, `label`), `places`, `path`, `can_up`, `can_back`, `offline`, `selected`, `preview` (`state`: `loading`, `text`, `markdown`, `html`, `image` with `key`, `note`, `error`, `folder` with `counting`, `files`, `bytes`, `line`, `over`, `error`), `selected.packing` (a folder download under way), `staged` (`index`, `name`, `size`, `to`, `problem`, `state`, `progress`), `saved`, `run`, `has_map`, `errors`, `loading` |
+| `files_ui` | Set by the core: `sandbox`, `tab`, `rows` (`id`, `name`, `kind` (`folder` for a folded artifact folder, with `count` and `open`), `icon`, `dir`, `depth`, `size`, `when`, `fresh`, `group`, `can_delete`, `selected`), `count` (`total`, `shown`, `more`, `label`), `places`, `path`, `can_up`, `can_back`, `offline`, `selected`, `preview` (`state`: `loading`, `text`, `markdown`, `html`, `image` with `key`, `note`, `error`, `folder` with `counting`, `files`, `bytes`, `line`, `over`, `error`), `selected.packing` (a folder download under way), `staged` (`index`, `name`, `size`, `to`, `problem`, `state`, `progress`), `saved`, `toast` (`seq`, `name`, `path`, `error`, `expired`), `run`, `has_map`, `errors`, `loading` |
 | `codemap_ui` | Set by the core: `sandbox`, `maps`, `root`, `loading`, `error`, `map` (`docs`, `count`, `broken`, `doc`: `{key, title, path, section, markdown, outline, backlinks, code}`), `diagram`, `run`, `writing`, `running`, `lens`, `lens_left` |
 
 **Rules.** File content is read raw (`Call::raw`): text and Markdown are
@@ -2194,6 +2214,8 @@ panel and its Upload button opens its own dialog.
 | `files_folder` | `id?` (a folder row's; none: the folder listed) | direct | Shows the folder in the reader, with its file count and size as the daemon counts them, to download it whole |
 | `files_download`, `files_reveal` | none | direct | Into Downloads (never over a file); and shown in its folder. A folder in the reader goes whole, as `<name>.tar.gz` |
 | `files_show_saved` | none | direct | Shows the last file saved in its folder |
+| `files_toast_close` | none | direct | Closes the toast |
+| `files_toast_expire` | `seq` | direct | The saved toast's time is up (sent by the feature's own timer); a failure, or another toast's number, is left as it is |
 | `files_save_as` | none | approval | The save dialog, after the core's dialog names the file (or the folder, its count and size) and its size |
 | `files_open_with` | none | approval | The core downloads it and judges it (its name and first bytes); its dialog says what it is; a program, script, installer or shortcut is never opened; a file it warns about needs the box ticked |
 | `files_delete` | none | approval | The dialog shows the path and size (a folder: everything in it); only under the workspace, a read-write mount, home or /tmp, never those folders, `.sbxw-artifacts` or `.git` |
