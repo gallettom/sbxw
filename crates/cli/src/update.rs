@@ -686,7 +686,6 @@ fn desktop_report(ui: &Ui, outcome: &DesktopOutcome) {
 /// The app is never quit or relaunched: its process is named `sbxw`, as the
 /// CLI and the daemon are, so it cannot be told apart by name. A running app
 /// keeps the code it started with until the person restarts it, and is told so.
-#[allow(clippy::too_many_arguments)]
 fn desktop_step(
     ui: &Ui,
     home: &std::path::Path,
@@ -1387,13 +1386,26 @@ mod tests {
             std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
             exe
         };
+        // A script just written can fail to start with "text file busy" while
+        // another test thread forks: retried until it has run.
+        let run = |exe: &std::path::Path, args: &[String]| {
+            for _ in 0..50 {
+                let _ = std::fs::remove_file(&args_file);
+                let r = run_apps_step(exe, args);
+                if args_file.exists() {
+                    return r;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!("{} never started", exe.display())
+        };
         let args = apps_step_args("v4.4.0", opts(true, DesktopChoice::Always));
-        assert_eq!(run_apps_step(&fake("new", 0), &args), AppsStep::Ran);
+        assert_eq!(run(&fake("new", 0), &args), AppsStep::Ran);
         assert_eq!(std::fs::read_to_string(&args_file).unwrap(), "update\n--apps-step\nv4.4.0\n--no-island\n--desktop\n");
         // Its own failure is its to report: not done a second time.
-        assert_eq!(run_apps_step(&fake("failing", 1), &args), AppsStep::Ran);
+        assert_eq!(run(&fake("failing", 1), &args), AppsStep::Ran);
         // A binary that does not know the flag, or none at all: the caller does it.
-        assert_eq!(run_apps_step(&fake("older", 2), &args), AppsStep::NotRun);
+        assert_eq!(run(&fake("older", 2), &args), AppsStep::NotRun);
         assert_eq!(run_apps_step(&dir.path().join("missing"), &args), AppsStep::NotRun);
     }
 
