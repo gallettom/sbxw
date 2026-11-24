@@ -693,6 +693,50 @@ fn the_pager_menu_the_palette_and_the_chord_move_the_page_out() {
     }), None);
 }
 
+/// The pager's button after the tabs: labelled, the chord in its tooltip,
+/// the menus' own press (the page moves to a window); disabled with the
+/// menu row's reason where that row is (a page with no terminal).
+#[test]
+fn the_pagers_button_moves_the_page_out_where_the_menu_would() {
+    let mut r = Rig::new(&["web-app", "docs"], 1);
+    let el = |r: &mut Rig| r.main(|rt| {
+        rt.frame(0.03);
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some("pager-to-window-now") && !e.exiting).expect("the button is drawn")
+    });
+    let e = el(&mut r);
+    assert_eq!((e.role, e.label.as_deref()), ("button", Some("Move page to new window")));
+    assert!(e.path.contains("pager"), "in the pager's row: {}", e.path);
+    assert!(!e.inert && e.opacity > 0.99);
+    assert!(r.app(|a| a.pager_drawn("pager-to-window-now")));
+    let why = r.app(|a| a.page_movable());
+    let (help, keys) = super::pager::to_window_help(why.as_deref());
+    assert_eq!(help, "Move this page to a new window");
+    assert_eq!(keys, super::pagewin::back_keys());
+    assert_eq!(keys.concat(), if cfg!(target_os = "macos") { "⌘⇧M" } else { "CtrlShiftM" });
+    r.tap_main("pager-to-window-now");
+    assert_eq!(r.app(|a| a.windowed.len()), 1, "the page moved to a window");
+    assert_eq!(r.main_names(), [vec!["docs".to_string()]]);
+    // A new empty page: the menu row is disabled, so is the button.
+    r.main(|rt| rt.update(|s, _| {
+        s.run_intent("test", Intent::Pages(PageOp::New));
+        s.push_data();
+    }));
+    r.settle();
+    let why = r.app(|a| a.page_movable());
+    assert_eq!(why.as_deref(), Some("This page shows no terminal"));
+    assert_eq!(super::pager::to_window_help(why.as_deref()), ("This page shows no terminal".to_string(), vec![]));
+    let e = el(&mut r);
+    assert!(e.opacity < 0.99, "the disabled recipe: {}", e.opacity);
+    let (x, y) = r.main(|rt| rt.find("pager-to-window-now").unwrap());
+    r.main(|rt| {
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.03);
+    });
+    r.settle();
+    assert_eq!(r.app(|a| a.windowed.len()), 1, "a disabled button moves nothing");
+}
+
 /// A session closed elsewhere (its thread ended) closes its pane in the page
 /// window too, the window's page re-tiling; a stopped sandbox's terminals
 /// there close as the main window's do.

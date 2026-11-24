@@ -250,7 +250,7 @@ impl App {
                         if r.disabled {
                             e
                         } else {
-                            e.on_press(to_window)
+                            e.on_press(self::to_window)
                         }
                     } else if i < PER_CHOICES.len() {
                         let n = PER_CHOICES[i];
@@ -302,7 +302,7 @@ impl App {
                 list = list.child(if move_row.disabled {
                     e
                 } else {
-                    e.on_press(to_window)
+                    e.on_press(self::to_window)
                 });
                 Some(list)
             }
@@ -327,12 +327,13 @@ fn to_window(s: &mut App) {
 /// row is, and disabled (the reason as its tooltip) where that row is.
 fn to_window_button(s: &App) -> El {
     let why = s.page_movable();
+    let (help, keys) = to_window_help(why.as_deref());
     let b = el()
         .key("pager-to-window-now")
         .role("button")
         .label("Move page to new window")
-        .help(why.clone().unwrap_or_else(|| "Move this page to a new window".into()))
-        .help_keys(if why.is_some() { vec![] } else { super::pagewin::back_keys() })
+        .help(help)
+        .help_keys(keys)
         .w(DETACH_W)
         .h(DETACH_W)
         .items_center()
@@ -343,6 +344,14 @@ fn to_window_button(s: &App) -> El {
         return b.opacity(theme::DISABLED_OPACITY).disabled(true);
     }
     b.hover(c("elevated")).cursor(Cursor::Pointer).on_press(to_window)
+}
+
+/// The button's tooltip and its chord: why it is disabled, if it is.
+pub(super) fn to_window_help(why: Option<&str>) -> (String, Vec<String>) {
+    match why {
+        Some(w) => (w.to_string(), vec![]),
+        None => ("Move this page to a new window".into(), super::pagewin::back_keys()),
+    }
 }
 
 fn small_icon(name: &str, size: f32, color: rune::Color) -> El {
@@ -361,6 +370,8 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
         .label(t.help.clone())
         .help(t.help.clone())
         .checked(on)
+        .min_w(0.0)
+        .shrink()
         .h(H - 4.0)
         .pl(TAB_PX)
         .pr(4.0)
@@ -529,7 +540,10 @@ pub fn view(s: &App) -> El {
     let n = s.pages.list.len();
     let (a, b, compact) = s.pager_fit_as();
     // Tabs sit on the pager's foot: the current one reaches the pane area.
-    let mut tabs = row().gap(GAP).h(H).items_end().min_w(0.0).clip_rounded(0.0);
+    // When even the current tab alone is wider than the room left (a narrow
+    // pager), the run gives way and its label truncates: "+", the
+    // new-window button and the controls keep their places.
+    let mut tabs = row().gap(GAP).h(H).items_end().min_w(0.0).shrink().clip_rounded(0.0);
     for k in a..b {
         tabs = tabs.child(tab(s, k, compact));
     }
