@@ -1420,7 +1420,7 @@ impl State {
                 "state": u["state"], "progress": match (u["sent"].as_f64(), u["total"].as_f64()) { (Some(a), Some(t)) if t > 0.0 => a / t, _ => 0.0 } })
         }).collect();
         let sel = self.sel.as_ref().map(|s| json!({
-            "id": s.path, "name": s.name, "kind": s.kind, "size": view::size_label(s.size), "type": if s.kind == "dir" { "Folder".to_string() } else { view::kind_label(&s.name) },
+            "id": s.path, "name": s.name, "kind": s.kind, "size": view::size_label(s.size), "type": if s.kind == "dir" { "Folder" } else { view::kind_label(&s.name) },
             "packing": self.packing.as_deref() == Some(s.path.as_str()),
             "modified": view::date(s.modified), "path": self.abs_path(cx, s),
             "can_delete": d.is_object() && view::can_delete(&self.abs_path(cx, s), d),
