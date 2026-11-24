@@ -1496,6 +1496,41 @@ fn a_path_wrapped_by_the_terminal_is_one_link_a_hard_break_is_not() {
 }
 
 #[test]
+fn the_screenshots_folder_path_links_without_its_comma_and_prose_does_not() {
+    let (mut t, _ev, _rx) = term();
+    t.feed(b"In /tmp/sbxw-chat/test/graph-lookup/, run cp .env.example .env");
+    t.on_pointer_move(at(10, 0).0, at(10, 0).1, cmd());
+    assert_eq!(t.file_hover_path(), Some("/tmp/sbxw-chat/test/graph-lookup/"));
+    assert_eq!(t.file_hover.as_ref().unwrap().rows, vec![(0, 3, 36)]);
+    assert_eq!(click(&mut t, (10, 0), cmd()), None, "no URL: a folder is not opened as one");
+    assert_eq!(t.take_file_click().as_deref(), Some("/tmp/sbxw-chat/test/graph-lookup/"));
+    // Its comma, `cp` and the dotfiles are not links.
+    for col in [36, 39] {
+        click(&mut t, (col, 0), cmd());
+        assert_eq!(t.take_file_click(), None, "{col}");
+    }
+    let (mut t, _ev, _rx) = term();
+    t.feed(b"and/or TCP/IP ~/dev/sbxw Rust/Luau");
+    for (col, want) in [(1, None), (9, None), (17, Some("~/dev/sbxw")), (27, None)] {
+        click(&mut t, (col, 0), cmd());
+        assert_eq!(t.take_file_click().as_deref(), want, "{col}");
+    }
+}
+
+#[test]
+fn a_wrapped_folder_path_is_one_link() {
+    let (mut t, _ev, _rx) = term();
+    t.feed(format!("{}/tmp/sbxw-chat/test/graph-lookup/ end", " ".repeat(30)).as_bytes());
+    for cell in [(31, 0), (20, 1)] {
+        t.on_pointer_move(at(cell.0, cell.1).0, at(cell.0, cell.1).1, cmd());
+        assert_eq!(t.file_hover_path(), Some("/tmp/sbxw-chat/test/graph-lookup/"), "{cell:?}");
+        assert_eq!(t.file_hover.as_ref().unwrap().rows, vec![(0, 30, 40), (1, 0, 23)]);
+    }
+    click(&mut t, (5, 1), cmd());
+    assert_eq!(t.take_file_click().as_deref(), Some("/tmp/sbxw-chat/test/graph-lookup/"));
+}
+
+#[test]
 fn hostile_output_yields_no_link_or_one_inert_one() {
     let (mut t, _ev, _rx) = term();
     let mut hostile: Vec<Vec<u8>> = vec![

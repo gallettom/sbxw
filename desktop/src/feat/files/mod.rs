@@ -448,7 +448,9 @@ impl State {
                 cx.sandbox(&sb).ok_or("that is not a sandbox sbxw knows")?;
                 // The terminal-link rule again, whoever asks: nothing else is opened.
                 let raw = a.req("path");
-                crate::terminal::filelink::file_path(raw).filter(|f| f.path == raw && f.line.is_none()).ok_or("that is not a file path the explorer opens")?;
+                let found = crate::terminal::filelink::file_path(raw).filter(|f| f.path == raw && f.line.is_none()).ok_or("that is not a file or folder path the explorer opens")?;
+                // A folder's path without its slash, for joining and listing.
+                let raw = raw.strip_suffix('/').unwrap_or(raw);
                 let thread = a.s("thread").filter(|t| !t.is_empty() && t.len() < 200 && !t.contains('/'));
                 let listed = self.sandbox.as_deref() == Some(sb.as_str()) && self.asked_for.get(DIR) == Some(&sb);
                 let relative = !raw.starts_with('/') && !raw.starts_with("~/");
@@ -467,10 +469,10 @@ impl State {
                 match (wanted, abs) {
                     (Some(t), _) => {
                         // The worktree's folder is in the listing still to come.
-                        self.want_open = Some((raw.to_string(), t.to_string()));
+                        self.want_open = Some((found.path.clone(), t.to_string()));
                         self.first = false;
                     }
-                    (None, Some(abs)) => out.extend(self.open_file(&abs)?),
+                    (None, Some(abs)) => out.extend(self.open_target(&abs, found.folder)?),
                     (None, None) => return Err("this sandbox has no workspace to resolve the path in".into()),
                 }
             }
@@ -787,6 +789,25 @@ impl State {
         self.select_next = Some(name.to_string());
         self.exact = true;
         Ok(out)
+    }
+
+    /// A folder listed with no row selected (not even its README); the
+    /// daemon's answer says when it is not there.
+    fn open_folder(&mut self, abs: &str) -> Result<Vec<Action>, String> {
+        self.first = false;
+        let out = self.browse(if abs.is_empty() { "/" } else { abs })?;
+        self.exact = true;
+        Ok(out)
+    }
+
+    /// `files_open_path`'s target: a folder (the path ended with `/`), else
+    /// a file, or a folder named like one (the listing decides, `on_data`).
+    fn open_target(&mut self, abs: &str, folder: bool) -> Result<Vec<Action>, String> {
+        if folder {
+            self.open_folder(abs)
+        } else {
+            self.open_file(abs)
+        }
     }
 
     fn browse(&mut self, path: &str) -> Result<Vec<Action>, String> {
@@ -1884,7 +1905,8 @@ impl State {
             if let Some((p, t)) = self.want_open.take() {
                 let ws = cx.sandbox(self.sandbox.as_deref().unwrap_or("")).and_then(|s| s["workspace"].as_str()).filter(|w| w.starts_with('/')).map(str::to_string);
                 if let Some(base) = worktree_path(new, &t).or(ws) {
-                    if let Ok(a) = self.open_file(&view::join(&base, p.strip_prefix("./").unwrap_or(&p))) {
+                    let rel = p.strip_prefix("./").unwrap_or(&p);
+                    if let Ok(a) = self.open_target(&view::join(&base, rel.strip_suffix('/').unwrap_or(rel)), p.ends_with('/')) {
                         out.extend(a);
                         out.extend(self.ui_action(cx));
                         return out;
@@ -1911,10 +1933,20 @@ impl State {
             }
             // `exact` stays until the person goes elsewhere: a second answer for the same folder must not pick a README either.
             let (want, exact) = (self.select_next.take(), self.exact);
+            // Opened on a path with no extension that names a folder here: that folder, listed.
+            if let (true, Some(w), Some(base)) = (exact, want.as_deref(), new["path"].as_str()) {
+                if new["entries"].as_array().into_iter().flatten().any(|e| e["kind"] == "dir" && e["name"].as_str() == Some(w)) {
+                    if let Ok(a) = self.open_folder(&view::join(base, w)) {
+                        out.extend(a);
+                        out.extend(self.ui_action(cx));
+                        return out;
+                    }
+                }
+            }
             if exact && want.is_some() && self.sel.is_none() {
                 let listed = new["entries"].as_array().into_iter().flatten().any(|e| e["kind"] == "file" && e["name"].as_str() == want.as_deref());
                 if !listed {
-                    out.push(Action::Notice { text: "That file is not in this folder (the terminal's own folder is not known, so a relative path is read from the workspace or the thread's folder)".into(), error: false, then: None });
+                    out.push(Action::Notice { text: "That path is not in this folder (the terminal's own folder is not known, so a relative path is read from the workspace or the thread's folder)".into(), error: false, then: None });
                 }
             }
             if self.tab() == "files" && self.sel.is_none() {
