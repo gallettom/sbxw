@@ -265,19 +265,29 @@ it adds no route, origin or permission, changes nothing in the CSP, the token,
 the WebSocket protocol or what the daemon accepts, and loads no new library
 (it uses xterm's own `registerLinkProvider`).
 
-**A file path in the terminal is a link.** Hover it: it is underlined, the
+**A file or folder path in the terminal is a link.** Hover it: it is underlined, the
 pointer shows a hand, and a tooltip gives the resolved absolute path and the
 sandbox (and thread) a press would look in. **Cmd + click** (macOS) or
 **Ctrl + click** (elsewhere) opens the [Project panel's Files tab](#files) on
-that file, in that pane's sandbox, through the same `fxOpenPath` the
+that file or folder, in that pane's sandbox, through the same `fxOpenPath` the
 [chat's file links](chat.md) use. A plain click and a text selection keep
 working. Terminal web links have no click gesture of their own here (plain URLs
 are not links; OSC 8 hyperlinks keep their behaviour, http and https only), so
 Cmd/Ctrl + click is the one this adds.
 
-- **What counts as a path** is the chat's rule (`chatFilePath`): an extension
-  from the same list, a slash in it, no scheme, no `..`, at most 300 characters,
-  an optional `:line` (the line is ignored by the preview).
+- **What counts as a path** is the chat's rule (`chatFilePath`): ASCII path
+  characters, a slash in it, no scheme, no `..`, at most 300 characters, and
+  one of three shapes. A file with an extension from the same list, with an
+  optional `:line` (ignored by the preview). A **folder**, written with a
+  trailing slash (`/tmp/x/`, `src/app/`, `./build/`, `~/projects/`): the Files
+  tab lists it, no row selected. An **anchored path with no extension**
+  (starting with `/`, `~/` or `./`, at least two segments deep, such as
+  `/tmp/sbxw-chat/test/graph-lookup` or `~/dev/sbxw/Makefile`): its folder's
+  listing decides; a folder is listed, a file selected and previewed, neither
+  says *Not found*. So `and/or`, `TCP/IP`, `Rust/Luau` and URLs never link.
+  Trailing punctuation (`.` `,` `;` `:` `!` `?` `*`) is not part of a path.
+  The cases are one table, `tests/js/file-link-cases.json`, that the desktop
+  app's terminal tests read too.
 - **Relative paths** are relative to the shell's current directory, which the
   page cannot know. They are read against the sandbox's workspace, as the Files
   tab does; in a thread's pane (agent or shell) against that thread's worktree,

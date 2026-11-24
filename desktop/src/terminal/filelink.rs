@@ -1,23 +1,29 @@
-//! File paths in terminal text: the same rule as the web UI's `chatFilePath`
-//! (assets/js/chat-core.js), so both clients link the same words.
+//! File and folder paths in terminal text: the same rule as the web UI's
+//! `chatFilePath` (assets/js/chat-core.js), so both clients link the same
+//! words; both are tested on one table (tests/js/file-link-cases.json).
 //!
 //! STANDING RULE, CHANGED ON THE PERSON'S REQUEST AND ONLY THIS FAR: until
 //! now the desktop took file paths only from core events or daemon answers,
-//! never from agent or terminal text. A path READ FROM TERMINAL TEXT may now
-//! be handed to the Files screen, and only so: after a deliberate gesture by
-//! the person (the primary modifier held, then a click), as a request to OPEN
-//! THE FILES SCREEN on that path in that pane's sandbox (`files_open_path`).
-//! The daemon's file routes decide what can be listed and read. Nothing is
+//! never from agent or terminal text. A path READ FROM TERMINAL TEXT (a file
+//! or a folder) may now be handed to the Files screen, and only so: after a
+//! deliberate gesture by the person (the primary modifier held, then a
+//! click), as a request to OPEN THE FILES SCREEN on that path in that pane's
+//! sandbox (`files_open_path`). The daemon's file routes decide what can be
+//! listed and read, and whether the path is a folder or a file. Nothing is
 //! executed, nothing is typed into a terminal, nothing is opened in the
 //! system (no `open`, no app, no URL handler), and no approval path or input
 //! gate changes. The path travels as a value, never formatted into a command,
 //! a URL or a log line.
 //!
 //! Detection: ASCII path characters, a slash (or a leading `./`, `~/`, `/`),
-//! no `..` segment, no scheme, a file name with an extension from [`EXT`], an
-//! optional `:line` (and `:col`), at most [`MAX`] characters; trailing
-//! punctuation is not part of the path. It runs on the one row (and the rows
-//! it wraps into) under the pointer, only while the modifier is held.
+//! no `..` segment, no scheme, at most [`MAX`] characters, and one of: a file
+//! name with an extension from [`EXT`] and an optional `:line` (and `:col`);
+//! a FOLDER ending with `/` (`src/app/`, `~/projects/`, no line); a path with
+//! no extension that is ANCHORED (`/`, `~/`, `./`) and two segments deep
+//! (`/tmp/x/y`, `~/dev/sbxw`), a folder or a file such as a Makefile, so
+//! `and/or`, `TCP/IP` and `Rust/Luau` stay prose. Trailing punctuation is not
+//! part of the path. It runs on the one row (and the rows it wraps into)
+//! under the pointer, only while the modifier is held.
 
 /// Extensions the Files preview handles; the web's `CHAT_FILE_EXT`, in the
 /// same order (a test reads the web's list and compares).
@@ -141,8 +147,7 @@ pub fn find_at(cells: &[char], at: usize) -> Option<(usize, usize, FilePath)> {
 mod tests {
     use super::*;
 
-    /// The web's cases (tests/js/chat-file-links.test.mjs), as `(text, paths)`:
-    /// every `token` of `text` that links, in order. Keep them equal.
+    /// Every path in `text` that links, in order (the shared table's shape).
     fn linked(text: &str) -> Vec<String> {
         let cells: Vec<char> = text.chars().collect();
         let mut out = vec![];

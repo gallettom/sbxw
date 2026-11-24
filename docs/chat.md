@@ -52,8 +52,10 @@ only one reply per session, so the transcript lives in the tab's
 
 ### File paths in answers
 
-A file path in an answer (`.sbxw-artifacts/report.md`, `src/a.rs:12`) is a
-button: pressing it opens that chat's sandbox in the Project panel on the file.
+A file or folder path in an answer (`.sbxw-artifacts/report.md`, `src/a.rs:12`,
+`/tmp/build/`) is a button: pressing it opens that chat's sandbox in the
+Project panel on the file (its folder listed, the file selected) or on the
+folder (listed, nothing selected).
 The rule and its limits are in [Web UI](web-ui.md#files). Your own messages are
 never linked, and the browser side panel shows the path as text.
 

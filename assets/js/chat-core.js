@@ -89,11 +89,14 @@ function chatEscape(s) {
 }
 
 // ── File paths in an agent's reply ─────────────────────────────────────────
-// A token that looks like a path to a previewable file becomes a button that
-// opens it in the Project panel's Files tab (see `fxOpenPath` in files.js).
-// Detection is deliberately boring: ASCII path characters only, a slash (or a
-// leading ./ ~/ /), no `..`, no scheme, a file name with an extension from the
-// list below, an optional :line. The scan is linear: tokens are cut at
+// A token that looks like a path to a previewable file, or to a folder,
+// becomes a button that opens it in the Project panel's Files tab (see
+// `fxOpenPath` in files.js). Detection is deliberately boring: ASCII path
+// characters only, a slash (or a leading ./ ~/ /), no `..`, no scheme, and a
+// file name with an extension from the list below (an optional :line), or a
+// folder ending in `/`, or an anchored path two segments deep with no
+// extension (see chatFilePath). The cases are tests/js/file-link-cases.json,
+// shared with the desktop terminal (desktop/src/terminal/filelink.rs). The scan is linear: tokens are cut at
 // whitespace and quotes, and anything over CHAT_FILE_MAX is dropped before any
 // pattern runs on it. The path never enters the markup: the HTML carries a
 // button with an integer, and the path waits in the caller's `files.paths`.
