@@ -1005,3 +1005,40 @@ async fn retiring_dead_records_stays_within_the_posting_sandbox() {
     call(agent_router(app.clone()), hook(&a, start("a2", "11:1", &["11:1"]))).await;
     assert_eq!(ids(&app), vec!["a2", "b1"]);
 }
+
+/// A folder download: `<folder>.tar.gz` under the file route's headers, the
+/// cap refused as 413 with the size, and its size counted on its own route.
+#[tokio::test]
+async fn a_folder_downloads_as_a_tar_gz_and_past_the_cap_is_refused_with_its_size() {
+    use axum::http::header;
+    use sbxw_core::SandboxRef;
+    let (_d, app) = app();
+    let ws = tempfile::tempdir().unwrap();
+    let ws = std::fs::canonicalize(ws.path()).unwrap();
+    std::fs::create_dir_all(ws.join("out")).unwrap();
+    std::fs::write(ws.join("out/a.txt"), vec![b'a'; 300]).unwrap();
+    app.store.update(SandboxRef::parse("web").unwrap(), |r| r.workspace = Some(ws.clone())).unwrap();
+    let out = ws.join("out");
+    let get = |q: String| Request::builder().uri(format!("/api/sandboxes/web/fs/folder{q}")).header("host", HOST).body(Body::empty()).unwrap();
+
+    let res = signed_in(app.clone()).oneshot(get(format!("?path={}", out.display()))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let h = res.headers();
+    assert_eq!(h[header::CONTENT_DISPOSITION], "attachment; filename=\"out.tar.gz\"");
+    assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(h[header::CONTENT_SECURITY_POLICY], "sandbox");
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    assert_eq!(&bytes[..2], [0x1f, 0x8b]);
+
+    let (s, v) = call(signed_in(app.clone()), get(format!("?path={}&max=100", out.display()))).await;
+    assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE, "{v}");
+    let e = v["error"].as_str().unwrap_or(&v.to_string()).to_string();
+    assert!(e.contains("300 bytes (1 files)") && e.contains("100 bytes"), "{e}");
+
+    let (s, v) = call(signed_in(app.clone()), get(format!("/size?path={}", out.display()))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["files"].as_u64(), v["bytes"].as_u64(), v["max"].as_u64()), (Some(1), Some(300), Some(crate::sandbox_fs::MAX_ARCHIVE)));
+
+    let (s, _) = call(signed_in(app.clone()), get("?path=/etc".into())).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "stopped: outside the workspace is refused");
+}

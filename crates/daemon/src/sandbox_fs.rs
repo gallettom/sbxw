@@ -118,7 +118,7 @@ fn archive_script() -> String {
     format!(
         "{SIZE_PART}\n{}",
         r#"[ "$d" != / ] || { echo "the whole filesystem is not something to download" >&2; exit 3; }
-[ "$s" -le "$2" ] || { echo "too large to download here: $s bytes in $n files, over the $2 bytes a folder download allows" >&2; exit 4; }
+[ "$s" -le "$2" ] || { echo "too large to download here: $s bytes ($n files), over the $2 bytes a folder download allows" >&2; exit 4; }
 p=$(dirname -- "$d"); b=$(basename -- "$d")
 case "$b" in -*) b="./$b" ;; esac
 cd -- "$p" || exit 3
@@ -843,7 +843,7 @@ mod tests {
 
             let e = archive(&sbx, &h, &sb, Some(&ws), o, 50).await.unwrap_err();
             let m = format!("{e:#}");
-            assert!(is_too_large(&e) && m.contains(&format!("{} bytes in 2 files", size.bytes)) && m.contains("50 bytes"), "{n}: {m}");
+            assert!(is_too_large(&e) && m.contains(&format!("{} bytes (2 files)", size.bytes)) && m.contains("50 bytes"), "{n}: {m}");
 
             assert!(archive(&sbx, &h, &sb, Some(&ws), root.join("secrets").to_str().unwrap(), 1 << 20).await.is_err(), "{n}: outside the workspace");
             assert!(archive(&sbx, &h, &sb, Some(&ws), out.join("escape").to_str().unwrap(), 1 << 20).await.is_err(), "{n}: a link out of it");
