@@ -78,6 +78,74 @@ const HEAD_SCRIPT: &str = r#"[ -f "$1" ] || { echo "not a file" >&2; exit 3; }
 exec head -c "$2" -- "$1""#;
 
 
+/// The largest folder archive (`<folder>.tar.gz`) handed over in one answer:
+/// [`MAX_FILE`], for the same reason. The exec path buffers a command's whole
+/// output on both sides, so this is a memory bound too.
+pub const MAX_ARCHIVE: u64 = MAX_FILE;
+
+/// What a folder holds, counted without reading it: regular files under it
+/// (links not followed) and their bytes.
+#[derive(Serialize, Debug, PartialEq, Clone, Copy)]
+pub struct FolderSize {
+    pub files: u64,
+    pub bytes: u64,
+}
+
+/// `$1` resolved (`d`), then its files (`n`) and their bytes (`s`): GNU `find
+/// -printf` in a sandbox, `find | wc` and `du -sk` (an upper bound) where
+/// `-printf` is missing, as on a Mac host. `find` never follows a link.
+const SIZE_PART: &str = r#"d=$(cd -P -- "$1" 2>/dev/null && pwd -P) || { echo "no such folder, or not readable" >&2; exit 3; }
+cd -- "$d" || exit 3
+if find . -maxdepth 0 -printf '' >/dev/null 2>&1; then
+  set -- $(find . -type f -printf '%s\n' 2>/dev/null | awk '{n++; s+=$1} END {printf "%.0f %.0f\n", n, s}') "$@"
+else
+  k=$(du -sk . 2>/dev/null | cut -f1)
+  set -- "$(find . -type f 2>/dev/null | wc -l | tr -d ' ')" "$(( ${k:-0} * 1024 ))" "$@"
+fi
+n=$1; s=$2; shift 2"#;
+
+/// A folder's size: `files bytes`.
+fn size_script() -> String {
+    format!("{SIZE_PART}\necho \"$n $s\"")
+}
+
+/// `$1` as a gzip tar holding the folder by its own name, refused when its
+/// files hold more than `$2` bytes (the size and the cap said); the archive is
+/// cut at `$3` (`$2 + 1`) bytes, which the caller refuses, and tar failing is a
+/// failure, never a short archive. Links are stored as links (no `-h`). The
+/// path is an argument, never part of the script.
+fn archive_script() -> String {
+    format!(
+        "{SIZE_PART}\n{}",
+        r#"[ "$d" != / ] || { echo "the whole filesystem is not something to download" >&2; exit 3; }
+[ "$s" -le "$2" ] || { echo "too large to download here: $s bytes in $n files, over the $2 bytes a folder download allows" >&2; exit 4; }
+p=$(dirname -- "$d"); b=$(basename -- "$d")
+case "$b" in -*) b="./$b" ;; esac
+cd -- "$p" || exit 3
+exec 4>&1
+st=$( { { tar -czf - "$b"; echo $? >&3; } | head -c "$3" >&4; } 3>&1 )
+[ "$st" = 0 ] && exit 0
+[ "$st" -gt 128 ] 2>/dev/null && { echo "the archive passed the $2 bytes a folder download allows: not downloaded" >&2; exit 4; }
+echo "tar could not pack all of it (status $st): a file the agent user cannot read, or one that changed while it was read" >&2
+exit 5"#
+    )
+}
+
+/// The file name a folder downloads under: its last component, `.tar.gz`
+/// added, quotes and line breaks dropped (the client cleans it again).
+pub fn archive_name(path: &str) -> String {
+    let base = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    let base: String = base.chars().filter(|c| !matches!(c, '"' | '\\' | '\r' | '\n' | '/')).collect();
+    let base = if base.is_empty() || base == "." || base == ".." { "folder".to_string() } else { base };
+    format!("{base}.tar.gz")
+}
+
+/// Whether an archive error is the cap (the answer is then 413, not 404).
+pub fn is_too_large(e: &anyhow::Error) -> bool {
+    let m = format!("{e:#}");
+    m.contains("too large to download here") || m.contains("a folder download allows")
+}
+
 /// Folders a scan for recent files does not descend into: version control,
 /// dependencies, build output, tool caches, and the agent's own transcripts,
 /// which change every turn. What is left is what someone, usually the agent,
@@ -313,6 +381,73 @@ pub async fn read(
         return Ok(out.stdout);
     }
     host.fs.read(&path, max).await.with_context(|| format!("{file}: not readable"))
+}
+
+/// The folder `dir` from the host, for a stopped sandbox: resolved, inside the
+/// workspace (as `read` requires), and a folder.
+async fn host_folder(host: &Host, workspace: Option<&Path>, dir: &str) -> Result<PathBuf> {
+    let path = host_path(host, workspace, dir).await?;
+    let meta = host.fs.stat(&path).await?.with_context(|| format!("{dir}: not found"))?;
+    if meta.kind != Kind::Dir {
+        bail!("{dir}: not a folder");
+    }
+    Ok(path)
+}
+
+/// Run a folder script: inside the sandbox when it runs, else on the host on
+/// the resolved workspace path. Exactly `read`'s two branches.
+async fn folder_script(
+    sbx: &Sbx,
+    host: &Host,
+    sandbox: &SandboxName,
+    workspace: Option<&Path>,
+    dir: &str,
+    script: &str,
+    extra: &[&str],
+) -> Result<Vec<u8>> {
+    if !dir.starts_with('/') {
+        bail!("{dir}: give an absolute path");
+    }
+    let out = if sbx.is_running(sandbox).await {
+        let mut args = vec!["sh", "-c", script, "sh", dir];
+        args.extend_from_slice(extra);
+        sbx.exec(sandbox, &args, None).await?
+    } else {
+        let path = host_folder(host, workspace, dir).await?;
+        let mut args: Vec<String> = ["-c", script, "sh"].map(String::from).to_vec();
+        args.push(path.to_string_lossy().into_owned());
+        args.extend(extra.iter().map(|s| s.to_string()));
+        host.exec.exec(HostCmd::new("sh", args)).await?
+    };
+    if !out.success() {
+        return Err(script_error(&out, dir));
+    }
+    Ok(out.stdout)
+}
+
+/// How many files a folder holds and their bytes, without reading them.
+pub async fn folder_size(sbx: &Sbx, host: &Host, sandbox: &SandboxName, workspace: Option<&Path>, dir: &str) -> Result<FolderSize> {
+    let out = folder_script(sbx, host, sandbox, workspace, dir, &size_script(), &[]).await?;
+    parse_size(&out).with_context(|| format!("{dir}: could not count its files"))
+}
+
+fn parse_size(raw: &[u8]) -> Option<FolderSize> {
+    let s = String::from_utf8_lossy(raw);
+    let mut it = s.split_whitespace();
+    Some(FolderSize { files: it.next()?.parse().ok()?, bytes: it.next()?.parse().ok()? })
+}
+
+/// A folder as `.tar.gz` bytes, the folder by its own name inside. Sized first
+/// and refused past `max` bytes ([`MAX_ARCHIVE`] at most), with the size in
+/// the error; an archive that still grows past `max` is refused, never cut.
+pub async fn archive(sbx: &Sbx, host: &Host, sandbox: &SandboxName, workspace: Option<&Path>, dir: &str, max: u64) -> Result<Vec<u8>> {
+    let max = max.min(MAX_ARCHIVE);
+    let (cap, cut) = (max.to_string(), (max + 1).to_string());
+    let out = folder_script(sbx, host, sandbox, workspace, dir, &archive_script(), &[&cap, &cut]).await?;
+    if out.len() as u64 > max {
+        bail!("{dir}: the archive passed the {max} bytes a folder download allows: not downloaded");
+    }
+    Ok(out)
 }
 
 /// Why `path` may not be deleted, if it may not: it is relative, climbs with
@@ -621,6 +756,100 @@ mod tests {
             assert_eq!(read(&sbx, &h, &sb, Some(&ws), f, 5, true).await.unwrap(), b"hello", "{n}: a preview is cut");
             assert!(read(&sbx, &h, &sb, Some(&ws), ws.join("src").to_str().unwrap(), 5, false).await.is_err(), "{n}");
             assert!(read(&sbx, &h, &sb, Some(&ws), root.join("secret").to_str().unwrap(), 5, false).await.is_err(), "{n}");
+        }
+    }
+
+    /// A running sandbox: the folder is packed by `tar` through `sbx exec`,
+    /// the path and the caps as arguments after the script, never inside it.
+    #[tokio::test]
+    async fn a_running_sandbox_packs_a_folder_with_its_path_as_an_argument() {
+        let fake = sbxw_sbx::runner::Fake::new(|a| match a.first().map(String::as_str) {
+            Some("ls") => Output::ok(r#"[{"name":"s","agent":"claude","status":"running"}]"#),
+            _ => Output::ok("GZ"),
+        });
+        let sbx = Sbx::new(fake.clone());
+        let (_, h) = hosts().remove(0);
+        let sb = SandboxName::parse("s").unwrap();
+        let dir = "/home/agent/my $(x) dir";
+        assert_eq!(archive(&sbx, &h, &sb, None, dir, 1000).await.unwrap(), b"GZ");
+        let call = fake.calls.lock().unwrap().iter().find(|c| c[0] == "exec").cloned().unwrap();
+        assert_eq!(&call[..5], ["exec", "s", "--", "sh", "-c"]);
+        assert!(call[5].contains("tar -czf - \"$b\"") && !call[5].contains("my $(x) dir"), "the path is never in the script");
+        assert!(!call[5].contains("tar -h") && !call[5].contains("-czhf"), "links are not followed");
+        assert_eq!(&call[6..], ["sh", dir, "1000", "1001"]);
+        // The cap is MAX_ARCHIVE at most, whatever is asked.
+        archive(&sbx, &h, &sb, None, dir, u64::MAX).await.unwrap();
+        let last = fake.calls.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(last[last.len() - 2], MAX_ARCHIVE.to_string());
+        // An answer longer than the cap is refused, never handed over cut.
+        let long = sbxw_sbx::runner::Fake::new(|a| match a.first().map(String::as_str) {
+            Some("ls") => Output::ok(r#"[{"name":"s","agent":"claude","status":"running"}]"#),
+            _ => Output::ok("0123456789"),
+        });
+        let e = archive(&Sbx::new(long), &h, &sb, None, dir, 5).await.unwrap_err();
+        assert!(is_too_large(&e), "{e:#}");
+        assert!(archive(&sbx, &h, &sb, None, "relative/dir", 5).await.is_err());
+    }
+
+    #[test]
+    fn a_folder_downloads_under_its_own_name_with_tar_gz() {
+        assert_eq!(archive_name("/home/agent/proj"), "proj.tar.gz");
+        assert_eq!(archive_name("/home/agent/proj/"), "proj.tar.gz");
+        assert_eq!(archive_name("/w/we\"ird\nname"), "weirdname.tar.gz");
+        assert_eq!(archive_name("/"), "folder.tar.gz");
+        assert_eq!(parse_size(b"3 1200\n"), Some(FolderSize { files: 3, bytes: 1200 }));
+        assert_eq!(parse_size(b""), None);
+    }
+
+    fn untar_list(gz: &[u8]) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.tar.gz");
+        std::fs::write(&f, gz).unwrap();
+        let out = std::process::Command::new("tar").arg("-tvzf").arg(&f).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// Stopped, on both kinds of host: the workspace folder is packed by its
+    /// name, a link inside it stays a link (its target outside is not packed),
+    /// the cap is refused with the size, and what `read` refuses (outside the
+    /// workspace, a relative path) this refuses, as it does a file.
+    #[tokio::test]
+    async fn a_stopped_sandbox_packs_a_workspace_folder_keeping_links_as_links() {
+        for (n, h) in hosts() {
+            let root = tempfile::tempdir().unwrap();
+            let root = std::fs::canonicalize(root.path()).unwrap();
+            let ws = root.join("ws");
+            std::fs::create_dir_all(ws.join("out/sub")).unwrap();
+            std::fs::write(ws.join("out/a.txt"), b"hello world").unwrap();
+            std::fs::write(ws.join("out/sub/b.txt"), vec![b'x'; 100]).unwrap();
+            std::fs::create_dir_all(root.join("secrets")).unwrap();
+            std::fs::write(root.join("secrets/key"), vec![b'k'; 5000]).unwrap();
+            std::os::unix::fs::symlink(root.join("secrets"), ws.join("out/escape")).unwrap();
+            let (sbx, sb) = (stopped(), SandboxName::parse("s").unwrap());
+            let out = ws.join("out");
+            let o = out.to_str().unwrap();
+
+            let size = folder_size(&sbx, &h, &sb, Some(&ws), o).await.unwrap();
+            assert_eq!(size.files, 2, "{n}: the link's target is not counted");
+            assert!(size.bytes >= 111 && size.bytes < 5000, "{n}: {size:?}");
+
+            let gz = archive(&sbx, &h, &sb, Some(&ws), o, 1 << 20).await.unwrap();
+            assert_eq!(&gz[..2], [0x1f, 0x8b], "{n}: gzip");
+            let listing = untar_list(&gz);
+            assert!(listing.contains("out/a.txt") && listing.contains("out/sub/b.txt"), "{n}: {listing}");
+            assert!(listing.lines().any(|l| l.starts_with('l') && l.contains("out/escape")), "{n}: a link: {listing}");
+            assert!(!listing.contains("key"), "{n}: never followed out: {listing}");
+
+            let e = archive(&sbx, &h, &sb, Some(&ws), o, 50).await.unwrap_err();
+            let m = format!("{e:#}");
+            assert!(is_too_large(&e) && m.contains(&format!("{} bytes in 2 files", size.bytes)) && m.contains("50 bytes"), "{n}: {m}");
+
+            assert!(archive(&sbx, &h, &sb, Some(&ws), root.join("secrets").to_str().unwrap(), 1 << 20).await.is_err(), "{n}: outside the workspace");
+            assert!(archive(&sbx, &h, &sb, Some(&ws), out.join("escape").to_str().unwrap(), 1 << 20).await.is_err(), "{n}: a link out of it");
+            assert!(archive(&sbx, &h, &sb, Some(&ws), out.join("a.txt").to_str().unwrap(), 1 << 20).await.is_err(), "{n}: a file");
+            assert!(archive(&sbx, &h, &sb, Some(&ws), "out", 1 << 20).await.is_err(), "{n}: relative");
+            assert!(archive(&sbx, &h, &sb, None, o, 1 << 20).await.is_err(), "{n}: no workspace");
         }
     }
 }
