@@ -13,7 +13,7 @@
 //!
 //! Keys: `pager`, `page-<k>` (from 1), `page-<k>-close`, `page-new`,
 //! `pager-view-tabs`, `pager-view-grid`, `pager-per` (its list
-//! `pager-per-list`, items `pager-per-<n>` and `pager-gather`), `pager-gather-now` (the Gather button beside it, while gathering would move something), `pager-to-window-now`, `pager-more`
+//! `pager-per-list`, items `pager-per-<n>` and `pager-gather`), `pager-colors` (the terminal colours popover `term-colors`, term_colors.rs), `pager-gather-now` (the Gather button beside it, while gathering would move something), `pager-to-window-now`, `pager-more`
 //! (`pager-more-list`, items `page-<k>`).
 
 use super::pages::PER_CHOICES;
@@ -212,7 +212,7 @@ impl App {
         let tab = key.strip_prefix("page-").and_then(|r| r.strip_suffix("-close").unwrap_or(r).parse::<usize>().ok()).is_some_and(|k| k >= 1 && k <= n && ((a..b).contains(&(k - 1)) || (!key.ends_with("-close") && self.pager_menu.as_deref() == Some("more"))));
         let per = self.pager_menu.as_deref() == Some("per") && (key == "pager-per-list" || key == "pager-gather" || key == "pager-to-window" || PER_CHOICES.iter().any(|c| key == format!("pager-per-{c}")));
         let more_list = self.pager_menu.as_deref() == Some("more") && key == "pager-more-list";
-        fixed || more || tab || per || more_list
+        fixed || more || tab || per || more_list || self.term_colors_drawn(key)
     }
 
     /// Why the current page cannot move to its own window now (None: it can).
@@ -306,6 +306,7 @@ impl App {
                 });
                 Some(list)
             }
+            "colors" => Some(super::term_colors::view(self)),
             _ => None,
         }
     }
@@ -659,6 +660,7 @@ pub fn view(s: &App) -> El {
         .child(view_switch)
         .children(gather)
         .child(per)
+        .child(super::term_colors::trigger(s))
 }
 
 #[cfg(test)]

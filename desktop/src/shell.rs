@@ -24,6 +24,7 @@ mod palette;
 mod rail;
 pub mod statusbar;
 pub mod store;
+pub mod term_colors;
 pub mod tiling;
 #[cfg(test)]
 mod layout_tests;
@@ -260,8 +261,11 @@ pub struct App {
     pub rects: Rects,
     /// A pane being dragged by its bar.
     pub drag: Option<PaneDrag>,
-    /// The pager's open menu: `per` or `more`.
+    /// The pager's open menu: `per`, `more` or `colors` (the terminal
+    /// colours popover, term_colors.rs).
     pub pager_menu: Option<String>,
+    /// The terminal colours popover's fields (term_colors.rs).
+    pub term_colors: term_colors::Panel,
     /// The rail's "More" menu is open (rail.rs).
     pub rail_menu: bool,
     /// The pager's width as last laid out (0: not yet).
@@ -443,6 +447,7 @@ impl App {
             rects: Rects::default(),
             drag: None,
             pager_menu: None,
+            term_colors: term_colors::Panel::default(),
             rail_menu: false,
             pager_w: 0.0,
             restore: None,
@@ -493,6 +498,7 @@ impl App {
         app.theme_choice = forced.or_else(|| app.store.get("theme").as_str().and_then(theme::Mode::parse)).unwrap_or(theme::DEFAULT_MODE);
         theme::set_mode(app.theme_choice);
         app.theme_seen = theme::generation();
+        app.sync_term_colors();
         // Lines of history per terminal: the person's number, else the default.
         if let Some(n) = app.store.get("terminal_scrollback").as_u64() {
             terminal::set_scrollback(n as usize);
@@ -1108,6 +1114,8 @@ impl App {
             self.accept_copy_offer(tx);
         }
         self.memory_tick();
+        // The terminal colours: a pick, or sbxw.toml's from the daemon.
+        changed |= self.sync_term_colors();
         if self.theme_seen != theme::generation() {
             self.theme_seen = theme::generation();
             crate::screen::invalidate_renders();
@@ -3795,7 +3803,9 @@ pub(crate) fn pane_bar<S: WinSide>(s: &App, i: usize) -> (El, u32, Option<u32>) 
     // for both), as a tint (theme::bar_ground); an ungrouped sandbox's bar is
     // the neutral surface.
     let group = pane.and_then(|p| p.sandbox.as_deref()).and_then(|n| s.group_colors().get(n).copied());
-    let bar_ground = theme::bar_ground(group, focused);
+    // The person's bar colour, when one is in force, is the surface under
+    // that tint (term_colors.rs).
+    let bar_ground = term_colors::bar_ground(group, focused);
     // grip, dot | name, kind, extras… | "⋯" | close. The middle part is clipped and
     // shrinks; the dot and the close button never move out of view.
     let bar = row()
