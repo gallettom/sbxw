@@ -1,0 +1,27 @@
+{
+  "_": "File and folder links in agent text: the one table the desktop terminal (desktop/src/terminal/filelink.rs) and the web chat (assets/js/chat-core.js) are tested on. `links`: a text and every path in it that links, in order (a path ending in / is a folder). `plain`: tokens that never link.",
+  "links": [
+    ["the report is at .sbxw-artifacts/foo.md.", [".sbxw-artifacts/foo.md"]],
+    ["see src/main.rs:42, then", ["src/main.rs"]],
+    ["see ./a/b.json and ~/notes/x.txt and /var/log/y.log", ["./a/b.json", "~/notes/x.txt", "/var/log/y.log"]],
+    ["**docs/a.md**", ["docs/a.md"]],
+    ["(see docs/a.md)", ["docs/a.md"]],
+    ["In /tmp/sbxw-chat/test/graph-lookup/, run cp .env.example .env and fill in the key.", ["/tmp/sbxw-chat/test/graph-lookup/"]],
+    ["folders: /tmp/x/ src/app/ ./build/ ~/projects/ a/dir/ src/", ["/tmp/x/", "src/app/", "./build/", "~/projects/", "a/dir/", "src/"]],
+    ["anchored, no extension: /tmp/sbxw-chat/test/graph-lookup and ~/dev/sbxw.", ["/tmp/sbxw-chat/test/graph-lookup", "~/dev/sbxw"]],
+    ["run ./scripts/deploy or /usr/local/bin/sbx, then (see ~/dev/sbxw/Makefile)", ["./scripts/deploy", "/usr/local/bin/sbx", "~/dev/sbxw/Makefile"]],
+    ["**/opt/data/**, and /home/agent/.claude!", ["/opt/data/", "/home/agent/.claude"]],
+    ["the settings live in `~/.config/sbxw/`; see there", ["~/.config/sbxw/"]],
+    ["a folder with a dot: build/v1.2/ and pkg/foo.d/", ["build/v1.2/", "pkg/foo.d/"]],
+    ["prose: and/or, A/B, TCP/IP, Rust/Luau, I/O, km/h, input/output/", ["input/output/"]]
+  ],
+  "plain": [
+    "foo.md", "a/b", "a/b.exe", "a/../b.md", "../b.md", "a//b.md", "javascript:a/b.md", "file:///etc/a.md",
+    "http://x.com/a.md", "https://x.com/a/b.md", "~a/b.md", "a/.md", "a∕b.md", "a/b\u0000.md", "a/./b.md", "x=y/b.md",
+    "a/.env", "a/.gitignore", "~/", "./", "/", "a/Makefile",
+    "and/or", "A/B", "TCP/IP", "Rust/Luau", "I/O", "/tmp", "~/x", "./x", "/usr/bin/python3.12", "/etc/nginx.conf",
+    "http://x.com/a/b/", "https://example.org/docs/", "file:///tmp/x/", "/tmp/../etc/", "a/../b/", "//host/x/", "~root/x/",
+    "/tmp/x/:12", "a/b/:3", "~/aа/b", "src/main.rs:12:7:3",
+    "/a/.hidden.md"
+  ]
+}

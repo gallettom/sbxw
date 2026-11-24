@@ -89,11 +89,14 @@ function chatEscape(s) {
 }
 
 // ── File paths in an agent's reply ─────────────────────────────────────────
-// A token that looks like a path to a previewable file becomes a button that
-// opens it in the Project panel's Files tab (see `fxOpenPath` in files.js).
-// Detection is deliberately boring: ASCII path characters only, a slash (or a
-// leading ./ ~/ /), no `..`, no scheme, a file name with an extension from the
-// list below, an optional :line. The scan is linear: tokens are cut at
+// A token that looks like a path to a previewable file, or to a folder,
+// becomes a button that opens it in the Project panel's Files tab (see
+// `fxOpenPath` in files.js). Detection is deliberately boring: ASCII path
+// characters only, a slash (or a leading ./ ~/ /), no `..`, no scheme, and a
+// file name with an extension from the list below (an optional :line), or a
+// folder ending in `/`, or an anchored path two segments deep with no
+// extension (see chatFilePath). The cases are tests/js/file-link-cases.json,
+// shared with the desktop terminal (desktop/src/terminal/filelink.rs). The scan is linear: tokens are cut at
 // whitespace and quotes, and anything over CHAT_FILE_MAX is dropped before any
 // pattern runs on it. The path never enters the markup: the HTML carries a
 // button with an integer, and the path waits in the caller's `files.paths`.
@@ -108,7 +111,11 @@ const CHAT_FILE_MAX = 300;
 const CHAT_FILE_NAME = /^[A-Za-z0-9_+@%-][A-Za-z0-9_.+@%-]*$/;
 const CHAT_FILE_CHARS = /^[A-Za-z0-9_.+@%\-\/~]+$/;
 
-// `token` as `{ path, line }` when it is a file path worth linking, else null.
+// `token` as `{ path, line, folder }` when it is a path worth linking, else
+// null. `folder` when it ends with `/` (the path keeps it). An anchored path
+// (`/`, `~/`, `./`) two segments deep with no extension links too: a folder
+// or a file such as a Makefile, the listing decides; `and/or` stays prose.
+const CHAT_FOLDER_NAME = /^[A-Za-z0-9_.+@%-]+$/;
 function chatFilePath(token) {
   if (typeof token !== 'string' || token.length === 0 || token.length > CHAT_FILE_MAX) return null;
   let t = token;
@@ -119,16 +126,21 @@ function chatFilePath(token) {
   const slash = t.indexOf('/');
   if (slash < 0) return null;
   if (t.startsWith('~') && !t.startsWith('~/')) return null;
-  if (t.endsWith('/')) return null;
-  const parts = t.split('/');
-  parts.forEach((seg, i) => { if (i === 0 && (seg === '' || seg === '~' || seg === '.')) parts[i] = null; });
-  const segs = parts.filter(x => x !== null);
-  for (const seg of segs) if (seg === '' || seg === '.' || seg === '..') return null;
-  const name = segs[segs.length - 1];
+  const folder = t.endsWith('/');
+  const anchored = t.startsWith('/') || t.startsWith('~/') || t.startsWith('./');
+  const parts = (folder ? t.slice(0, -1) : t).split('/');
+  if (parts[0] === '' || parts[0] === '~' || parts[0] === '.') parts.shift();
+  if (parts.length === 0) return null;
+  for (const seg of parts) if (seg === '' || seg === '.' || seg === '..') return null;
+  const name = parts[parts.length - 1];
+  if (folder) return line === null && CHAT_FOLDER_NAME.test(name) ? { path: t, line, folder: true } : null;
+  if (!CHAT_FOLDER_NAME.test(name)) return null;
   const dot = name.lastIndexOf('.');
-  if (dot < 1) return null;
-  if (!CHAT_FILE_NAME.test(name) || !CHAT_FILE_EXT.has(name.slice(dot + 1).toLowerCase())) return null;
-  return { path: t, line };
+  if (dot >= 1) {
+    if (name.startsWith('.') || !CHAT_FILE_NAME.test(name) || !CHAT_FILE_EXT.has(name.slice(dot + 1).toLowerCase())) return null;
+    return { path: t, line, folder: false };
+  }
+  return anchored && parts.length >= 2 ? { path: t, line, folder: false } : null;
 }
 
 // The path inside `s` between whitespace and quotes: trailing punctuation and

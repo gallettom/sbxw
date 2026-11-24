@@ -1209,7 +1209,7 @@ fn the_intent_refuses_a_path_outside_the_terminal_link_rule() {
     let d = fixture("standin");
     for p in [
         "../x.md", "a/../b.md", "/etc/../etc/passwd.md", "http://x.com/a.md", "file:///etc/a.md", "javascript:a/b.md", "a/b.exe", "src/main.ts:12", "~root/a.md", "a/b c.md", "a//b.md", "foo.md",
-        "a/.env", "a/b.md\n", "a/\u{430}.md", "a/b.md/", "", "/",
+        "a/.env", "a/b.md\n", "a/\u{430}.md", "", "/", "~/", "and/or", "/tmp", "a/Makefile", "src/:3", "/tmp/x/:3",
     ] {
         let mut st = State::default();
         let r = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": p }));
@@ -1218,6 +1218,53 @@ fn the_intent_refuses_a_path_outside_the_terminal_link_rule() {
     }
     assert!(run(&mut State::default(), &d, "files_open_path", json!({ "sandbox": "nobody", "path": "a/b.md" })).is_err());
     assert!(matches!(spec("files_open_path").risk, Risk::Direct));
+}
+
+#[test]
+fn a_folder_path_from_a_terminal_lists_that_folder_with_no_row_selected() {
+    let mut d = fixture("standin");
+    let mut st = State::default();
+    // The workspace has a README: a folder link lists it and selects nothing, not even that.
+    for (p, dir) in [("/Users/me/web/", "/Users/me/web"), ("src/", "/Users/me/web/src"), ("./src/", "/Users/me/web/src"), ("~/scratch/", "/home/agent/scratch")] {
+        let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": p })).unwrap();
+        admit("files_open_path", &a).unwrap();
+        let all = pump(&mut st, &mut d, a);
+        assert!(!all.iter().any(|x| matches!(x, Action::Notice { .. })), "{p}: {all:?}");
+        assert_eq!((d[UI]["tab"].as_str(), d[DIR]["path"].as_str()), (Some("files"), Some(dir)), "{p}");
+        assert_eq!(d[UI]["selected"], J::Null, "{p}");
+    }
+    // A thread's relative folder, before its worktree is known: listed once it is.
+    let mut st = State::default();
+    run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "./src/", "thread": "checkout" })).unwrap();
+    let listing = d["__daemon"]["files_dir"].clone();
+    let b = st.on_data(&Ctx { data: &d }, DIR, &J::Null, &listing);
+    assert!(b.iter().any(|x| matches!(x, Action::Fetch { path, .. } if path.ends_with("%2F.sbxw-worktrees%2Fcheckout%2Fsrc"))), "{b:?}");
+    // A folder that is not there: the daemon is asked for it, and its answer says so.
+    let a = run(&mut State::default(), &d, "files_open_path", json!({ "sandbox": "web-app", "path": "/nope/here/" })).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::Fetch { path, .. } if path.ends_with("/fs?path=%2Fnope%2Fhere"))), "{a:?}");
+}
+
+#[test]
+fn an_anchored_path_with_no_extension_is_a_folder_or_a_file_as_the_listing_says() {
+    let mut d = fixture("standin");
+    let mut st = State::default();
+    // A folder: its parent is asked, then the folder itself listed, no row selected.
+    let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "/home/agent/scratch" })).unwrap();
+    pump(&mut st, &mut d, a);
+    assert_eq!(d[DIR]["path"], "/home/agent/scratch");
+    assert_eq!(d[UI]["selected"], J::Null);
+    // A file (a Makefile, a dotfile): its folder listed, the file selected, as a file link.
+    let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "~/.bashrc" })).err();
+    assert!(a.is_some(), "one segment under ~ is not a link");
+    let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "/home/agent/.bashrc" })).unwrap();
+    pump(&mut st, &mut d, a);
+    assert_eq!(d[DIR]["path"], "/home/agent");
+    assert_eq!(d[UI]["selected"]["name"], ".bashrc");
+    // Neither: the explorer says so, and selects nothing in its place.
+    let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "web-app", "path": "/home/agent/nothing" })).unwrap();
+    let all = pump(&mut st, &mut d, a);
+    assert!(all.iter().any(|x| matches!(x, Action::Notice { text, .. } if text.contains("not in this folder"))), "{all:?}");
+    assert_eq!(d[UI]["selected"], J::Null);
 }
 
 #[test]
