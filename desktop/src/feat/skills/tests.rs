@@ -97,3 +97,137 @@ fn the_sandbox_s_skills_are_above_yours_at_every_width() {
         assert!(rt.presented("skills-split").is_none());
     }
 }
+
+/// What `GET /api/sandboxes/web-app/commands` answers in these tests: a kit
+/// that names itself, two kit commands, a kept skill's command, sbx's shared
+/// store, the project and a built-in (as sbxw-2 has them).
+fn commands() -> J {
+    json!({ "ok": true, "complete": true, "commands": [
+        { "name": "archify", "description": "Draw a validated architecture diagram.", "kind": "command", "origin": "kit:agent-skills" },
+        { "name": "clear", "description": "Clear the conversation history", "kind": "command", "origin": "built-in" },
+        { "name": "deploy", "description": "Deploy the web app to staging, then smoke test it.", "kind": "skill", "origin": "workspace" },
+        { "name": "frontend-design", "description": "Distinctive, intentional visual design.", "kind": "skill", "origin": "home" },
+        { "name": "grill-me", "description": "Grill the user about a plan.", "kind": "command", "origin": "home" },
+        { "name": "handoff", "description": "Hand the work to the next session.", "kind": "command", "origin": "home" },
+        { "name": "release-notes", "description": "Write release notes.", "kind": "command", "origin": "home" },
+    ] })
+}
+
+fn find_key<'a>(n: &'a crate::luau::Node, k: &str) -> Option<&'a crate::luau::Node> {
+    if crate::screen::key_of(n).as_deref() == Some(k) {
+        return Some(n);
+    }
+    n.children.iter().find_map(|c| find_key(c, k))
+}
+
+fn handlers(n: &crate::luau::Node, out: &mut Vec<String>) {
+    if let Some(on) = &n.on {
+        out.push(on.clone());
+    }
+    for c in &n.children {
+        handlers(c, out);
+    }
+}
+
+#[test]
+fn look_also_reads_what_is_installed_and_never_starts_anything_more() {
+    let data = fixture("full");
+    let v = run(&data, "skills_look", json!({ "sandbox": "web-app" })).unwrap();
+    assert!(v.contains(&Action::Set { key: "sandbox_commands".into(), value: J::Null }), "{v:?}");
+    let paths: Vec<&str> = v.iter().filter_map(|a| if let Action::Fetch { path, .. } = a { Some(path.as_str()) } else { None }).collect();
+    assert_eq!(paths, ["/api/sandboxes/web-app/skills", "/api/sandboxes/web-app/commands"]);
+    // The stand-in (the monitor's) answers it from `commands.<name>`, and
+    // without an entry is a daemon without the route.
+    let mut d = data.clone();
+    let (c, _) = crate::feat::answer_from(&mut d, "GET", "/api/sandboxes/web-app/commands", &J::Null, &mut |_, _| {});
+    assert_eq!(c, 404);
+    d["commands"] = json!({ "web-app": commands() });
+    let (c, b) = crate::feat::answer_from(&mut d, "GET", "/api/sandboxes/web-app/commands", &J::Null, &mut |_, _| {});
+    assert_eq!((c, b["commands"].as_array().unwrap().len()), (200, 7));
+}
+
+#[test]
+fn installed_lists_every_entry_by_origin_read_only() {
+    let (t, tree) = render_panel("skills", SRC, "looked", json!({ "sandbox_commands": commands() }));
+    assert!(t.iter().any(|x| x == "Installed in web-app"), "{t:?}");
+    assert!(t.iter().any(|x| x == "7 installed"), "{t:?}");
+    let at = |s: &str| t.iter().position(|x| x == s).unwrap_or_else(|| panic!("no {s:?} in {t:?}"));
+    // Grouped, in plain words: the kit that names itself, kits, your kept
+    // skills, sbx's shared store, the project, Claude Code's own.
+    let order = ["Kit agent-skills", "Kits", "Your kept skills", "sbx shared skills", "Project", "Built-in"];
+    for w in order.windows(2) {
+        assert!(at(w[0]) < at(w[1]), "{} before {}: {t:?}", w[0], w[1]);
+    }
+    for (name, desc) in [("/handoff", "Hand the work to the next session."), ("/frontend-design", "Distinctive, intentional visual design."), ("/clear", "Clear the conversation history")] {
+        assert!(at(name) < at(desc));
+    }
+    assert!(at("/grill-me") > at("Kits") && at("/grill-me") < at("Your kept skills"));
+    assert!(at("/frontend-design") > at("sbx shared skills") && at("/frontend-design") < at("Project"));
+    // Read only: no Keep (nor anything else to press) on any of them, while
+    // the keepable list keeps its Keep.
+    let inst = find_key(&tree, "skills-installed").expect("the installed section");
+    let mut on = Vec::new();
+    handlers(inst, &mut on);
+    assert!(on.is_empty(), "{on:?}");
+    for n in ["archify", "clear", "handoff", "frontend-design", "grill-me"] {
+        assert!(find_key(&tree, &format!("installed-{n}")).is_some(), "{n}");
+        assert!(find_key(&tree, &format!("keep-{n}")).is_none(), "{n}");
+    }
+    assert!(find_key(&tree, "keep-deploy").is_some());
+    assert_eq!(press("skills", SRC, "looked", json!({ "sandbox_commands": commands() }), "keep-deploy")[0], json!({ "name": "skill_keep", "args": { "sandbox": "web-app", "name": "deploy" } }));
+}
+
+#[test]
+fn a_skill_the_agent_wrote_at_home_is_named_so_and_texts_are_cut() {
+    let long = "x".repeat(400);
+    let found = json!({ "ok": true, "skills": [{ "name": "notes", "origin": "home", "path": "~/.claude/skills/notes", "description": null, "files": 1, "bytes": 10, "kept": false, "keepable": true }] });
+    let cmds = json!({ "ok": true, "complete": true, "commands": [
+        { "name": "notes", "description": long, "kind": "skill", "origin": "home" },
+    ] });
+    let (t, _) = render_panel("skills", SRC, "looked", json!({ "sandbox_skills": found, "sandbox_commands": cmds }));
+    assert!(t.iter().any(|x| x == "Written in this sandbox"), "{t:?}");
+    assert!(!t.iter().any(|x| x == "sbx shared skills"), "{t:?}");
+    let d = t.iter().find(|x| x.starts_with("xxx")).unwrap();
+    assert_eq!(d.chars().count(), 160);
+    assert!(d.ends_with('…'));
+}
+
+#[test]
+fn nothing_to_keep_no_longer_says_no_skill() {
+    let empty = json!({ "ok": true, "skills": [] });
+    let (t, _) = render_panel("skills", SRC, "looked", json!({ "sandbox_skills": empty, "sandbox_commands": commands() }));
+    assert!(t.iter().any(|x| x.starts_with("Nothing to keep: no skill the agent wrote under the project's .claude/skills/")), "{t:?}");
+    assert!(!t.iter().any(|x| x.starts_with("No skill")), "{t:?}");
+    assert!(t.iter().any(|x| x == "7 installed"), "{t:?}");
+}
+
+#[test]
+fn a_stopped_sandbox_shows_what_the_route_read_and_its_reason() {
+    let empty = json!({ "ok": true, "skills": [] });
+    let cmds = json!({ "ok": true, "complete": false, "reason": "The sandbox is stopped: only the project's skills and commands and the built-in ones are listed.", "commands": [
+        { "name": "deploy", "description": "Deploy it.", "kind": "skill", "origin": "workspace" },
+        { "name": "compact", "description": "Free up context", "kind": "command", "origin": "built-in" },
+    ] });
+    let (t, tree) = render_panel("skills", SRC, "looked", json!({ "sandbox_skills": empty, "sandbox_commands": cmds }));
+    assert!(t.iter().any(|x| x.starts_with("The sandbox is stopped: only the project's")), "{t:?}");
+    assert!(find_key(&tree, "skills-installed-reason").is_some());
+    assert!(t.iter().any(|x| x == "2 installed"), "{t:?}");
+    assert!(!t.iter().any(|x| x == "Kits" || x == "sbx shared skills"), "{t:?}");
+    // No start offered: the only press in the card is Look, as before.
+    let mut on = Vec::new();
+    handlers(find_key(&tree, "skills-found").unwrap(), &mut on);
+    assert_eq!(on, ["look"]);
+}
+
+#[test]
+fn a_daemon_without_the_route_shows_the_panel_as_before() {
+    let empty = json!({ "ok": true, "skills": [] });
+    // A 404 (or any failed read) leaves `sandbox_commands` empty: the
+    // error goes to `app.errors`, never on the panel.
+    let (t, tree) = render_panel("skills", SRC, "looked", json!({ "sandbox_skills": empty }));
+    assert!(find_key(&tree, "skills-installed").is_none());
+    assert!(!t.iter().any(|x| x.starts_with("Installed in")), "{t:?}");
+    assert!(t.iter().any(|x| x == "No skill in web-app: none under the project's .claude/skills/ or the sandbox's own ~/.claude/skills/."), "{t:?}");
+    let (t, _) = render_panel("skills", SRC, "looked", json!({}));
+    assert!(t.iter().any(|x| x == "/deploy") && !t.iter().any(|x| x.starts_with("Installed in")), "{t:?}");
+}
