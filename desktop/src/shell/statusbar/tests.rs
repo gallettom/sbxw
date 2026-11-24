@@ -386,3 +386,123 @@ fn the_versions_are_the_first_thing_a_narrow_bar_drops() {
     let wide = fit(2000.0, 0.0, &jobs, &cpu, &cost);
     assert!(!wide.versions || wide.step);
 }
+
+/// The bring-ups' corner cards (jobs.rs, `corner`): one per sandbox being
+/// created, newest on top, pinned to the pane area's bottom right, above the
+/// status bar and left of the Jarvis panel (its input never covered); the
+/// step that runs with a busy ring; a failure stays with sbx's words, the
+/// denied hosts' allows (network's own intent, the core's dialog) and
+/// Dismiss; a dialog draws above the cards; a ready one goes; past three,
+/// "and N more" opens the status bar's popover, which the cards give way to.
+#[test]
+fn the_bring_ups_corner_cards() {
+    use crate::shell::{view, Args};
+    let (w, h) = (1284.0, 816.0);
+    let a = App::new(Args { fixture: Some(format!("{}/fixtures/shell/statusbar-many.json", env!("CARGO_MANIFEST_DIR")).into()), ..Args::default() });
+    let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+    let settle = |rt: &mut rune::Runtime<App>| {
+        for _ in 0..30 {
+            rt.update(|s, _| {
+                s.statusbar_poll(Instant::now());
+            });
+            rt.frame(0.016);
+        }
+    };
+    let ev = |rt: &mut rune::Runtime<App>, v: serde_json::Value| {
+        rt.update(|s, _| {
+            s.feats_bus("provision", &v.to_string());
+            s.push_data();
+        });
+    };
+    let tap = |rt: &mut rune::Runtime<App>, key: &str| {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+    };
+    let inside = |r: [f32; 4], o: [f32; 4]| r[0] >= o[0] - 0.5 && r[1] >= o[1] - 0.5 && r[0] + r[2] <= o[0] + o[2] + 0.5 && r[1] + r[3] <= o[1] + o[3] + 0.5;
+    let meet = |a: [f32; 4], b: [f32; 4]| a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+    rt.update(|s, _| s.jarvis.open = true);
+    settle(&mut rt);
+
+    // The fixture's three: payments-v2 failed, better-api and docs-site running.
+    let (k, _) = rt.presented("corner-jobs").expect("the corner cards show while sandboxes are being created");
+    assert!(k[2] > 100.0 && k[3] > 40.0, "not zero-sized: {k:?}");
+    assert!(inside(k, [0.0, 0.0, w, h]), "inside the window: {k:?}");
+    let (panes, _) = rt.presented("panes").unwrap();
+    assert!(inside(k, panes), "in the pane area {panes:?}: {k:?}");
+    assert!((panes[0] + panes[2] - (k[0] + k[2]) - super::jobs::CORNER_INSET).abs() < 1.0, "anchored right");
+    assert!((panes[1] + panes[3] - (k[1] + k[3]) - super::jobs::CORNER_INSET).abs() < 1.0, "anchored bottom");
+    let (bar, _) = rt.presented("status-bar").unwrap();
+    assert!(!meet(k, bar) && k[1] + k[3] <= bar[1], "above the status bar");
+    let (input, _) = rt.presented(crate::shell::jarvis::INPUT).expect("the Jarvis input drawn");
+    assert!(!meet(k, input) && k[0] + k[2] <= input[0], "left of the Jarvis input {input:?}: {k:?}");
+    let y = |rt: &rune::Runtime<App>, key: &str| rt.presented(key).unwrap_or_else(|| panic!("{key} drawn")).0[1];
+    assert!(y(&rt, "corner-job-docs-site") < y(&rt, "corner-job-better-api") && y(&rt, "corner-job-better-api") < y(&rt, "corner-job-payments-v2"), "newest on top");
+    // A running one: its step, as the daemon says it, and the busy ring; no Dismiss.
+    for key in ["corner-job-better-api-step-2", "corner-job-better-api-busy", "corner-job-docs-site-step-1"] {
+        assert!(rt.find(key).is_some(), "{key}");
+    }
+    assert!(rt.find("corner-job-better-api-step-1").is_none(), "compact: only the step that runs");
+    assert!(rt.find("corner-job-better-api-dismiss-better-api").is_none() && rt.find("corner-job-dismiss-better-api").is_none());
+    // The failed one stays, with sbx's message and Dismiss (no Retry: started elsewhere).
+    assert!(rt.find("corner-job-payments-v2-error").is_some() && rt.find("corner-job-dismiss-payments-v2").is_some());
+    assert!(rt.find("corner-job-retry-payments-v2").is_none());
+
+    // A kit install sbx denied hosts in: failed, the hosts each with an allow.
+    let plan = serde_json::json!([{ "id": "create", "label": "Create the sandbox" }, { "id": "kits", "label": "Install kits" }]);
+    ev(&mut rt, serde_json::json!({ "sandbox": "kits-web", "kind": "plan", "steps": plan }));
+    ev(&mut rt, serde_json::json!({ "sandbox": "kits-web", "kind": "started", "id": "kits" }));
+    ev(&mut rt, serde_json::json!({ "sandbox": "kits-web", "kind": "denied", "step": "kits", "kit": "sbxw:agent-skills", "hosts": ["a.dev", "b.dev"], "exists": true, "allow_scope": "sandbox", "message": "network access denied" }));
+    ev(&mut rt, serde_json::json!({ "sandbox": "kits-web", "kind": "done", "error": "sbx: kit failed: network access denied" }));
+    settle(&mut rt);
+    for key in ["corner-job-kits-web-error", "corner-job-kits-web-denied", "corner-job-allow-kits-web-a.dev", "corner-job-allow-kits-web-b.dev", "corner-job-dismiss-kits-web"] {
+        assert!(rt.find(key).is_some(), "{key}");
+    }
+    // Four: three cards, the oldest behind "and 1 more".
+    assert!(rt.find("corner-job-payments-v2").is_none(), "capped at {}", super::jobs::CORNER_MAX);
+    assert!(rt.find("corner-jobs-more").is_some());
+    let (k2, _) = rt.presented("corner-jobs").unwrap();
+    assert!(!meet(k2, bar) && !meet(k2, rt.presented(crate::shell::jarvis::INPUT).unwrap().0) && inside(k2, panes), "still clear: {k2:?}");
+
+    // An allow is network's, in the core's dialog, which draws above the cards:
+    // a press where a card's Dismiss is reaches the dialog's scrim, not the card.
+    tap(&mut rt, "corner-job-allow-kits-web-a.dev");
+    settle(&mut rt);
+    assert!(rt.state.feats.dialog.is_some(), "the core's dialog asks");
+    assert!(rt.find("cf-scrim").is_some());
+    tap(&mut rt, "corner-job-dismiss-kits-web");
+    settle(&mut rt);
+    assert!(rt.state.feats.dialog.is_none(), "the press outside cancelled the dialog");
+    assert!(rt.find("corner-job-kits-web").is_some(), "and dismissed nothing");
+
+    // Dismiss: the card goes, the oldest one comes back into view.
+    tap(&mut rt, "corner-job-dismiss-kits-web");
+    settle(&mut rt);
+    assert!(rt.find("corner-job-kits-web").is_none());
+    assert!(rt.find("corner-job-payments-v2").is_some() && rt.find("corner-jobs-more").is_none());
+
+    // Ready: the card goes (the status bar says "created").
+    ev(&mut rt, serde_json::json!({ "sandbox": "docs-site", "kind": "done" }));
+    settle(&mut rt);
+    assert!(rt.find("corner-job-docs-site").is_none(), "a ready one goes");
+    assert!(rt.find("corner-job-better-api").is_some());
+
+    // The popover lists the same jobs: the cards give way while it is open.
+    tap(&mut rt, "status-jobs");
+    settle(&mut rt);
+    assert!(rt.find("status-jobs-pop").is_some() && rt.find("corner-jobs").is_none());
+    assert!(rt.state.statusbar_escape());
+    settle(&mut rt);
+    assert!(rt.find("corner-jobs").is_some());
+
+    // Nothing left: nothing drawn.
+    ev(&mut rt, serde_json::json!({ "sandbox": "better-api", "kind": "done" }));
+    rt.update(|s, _| ev_dismiss(s, "payments-v2"));
+    settle(&mut rt);
+    assert!(rt.find("corner-jobs").is_none(), "no bring-up, no card");
+}
+
+fn ev_dismiss(s: &mut App, sandbox: &str) {
+    let args = serde_json::json!({ "sandbox": sandbox }).as_object().cloned().unwrap_or_default();
+    s.run_intent("test", crate::intent::Intent::Feature(crate::feat::Asked { name: "create_dismiss", args }));
+}

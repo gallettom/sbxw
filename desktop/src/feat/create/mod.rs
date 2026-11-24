@@ -29,7 +29,9 @@ use crate::client::enc;
 use crate::intent::{Arg, Risk, Spec};
 use model::{Answer, Denied, Dialog, Form, Job, JobState, Listing, Preview};
 use serde_json::{json, Value as J};
-use std::sync::{LazyLock, Mutex};
+#[cfg(not(test))]
+use std::sync::LazyLock;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// The dialog's screen. The bring-ups have no screen: the status bar shows
@@ -123,7 +125,7 @@ pub const CREATED_FOR: Duration = Duration::from_secs(4);
 /// list (running, asking, failed), then the ones ready in the last
 /// [`CREATED_FOR`], most recent first.
 pub fn bar_jobs() -> Vec<model::BarJob> {
-    let mut st = STATE.lock().unwrap();
+    let mut st = state();
     st.bar_jobs(Instant::now())
 }
 
@@ -146,16 +148,36 @@ impl State {
     }
 }
 
+#[cfg(not(test))]
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::default()));
 
+/// The bring-ups and the form: one per process.
+#[cfg(not(test))]
+fn state() -> std::sync::MutexGuard<'static, State> {
+    STATE.lock().unwrap()
+}
+
+// Under test, one per test thread: an App test's bring-ups (a fixture's
+// replayed `provision`, a stand-in's) are drawn by the status bar and the
+// corner cards of that test's window only, never over another test's panes.
+#[cfg(test)]
+thread_local! {
+    static STATE: &'static Mutex<State> = Box::leak(Box::new(Mutex::new(State::default())));
+}
+
+#[cfg(test)]
+fn state() -> std::sync::MutexGuard<'static, State> {
+    STATE.with(|s| *s).lock().unwrap()
+}
+
 fn act(ctx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
-    STATE.lock().unwrap().act(ctx, a)
+    state().act(ctx, a)
 }
 fn on_event(ctx: &Ctx, name: &str, data: &J) -> Vec<Action> {
-    STATE.lock().unwrap().on_event(ctx, name, data)
+    state().on_event(ctx, name, data)
 }
 fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
-    STATE.lock().unwrap().on_answer(ctx, call, r)
+    state().on_answer(ctx, call, r)
 }
 
 /// "New sandbox" (the sidebar's header, or the rail when it is hidden).
@@ -774,7 +796,7 @@ fn failed_notice(name: &str, why: &str) -> Action {
 
 /// The bring-ups as the status bar's popover lists them, oldest first.
 pub fn jobs_view() -> Vec<J> {
-    STATE.lock().unwrap().jobs_view()
+    state().jobs_view()
 }
 
 impl State {
@@ -809,7 +831,7 @@ impl State {
 /// Network's answer to an allow rule it added: the kit failures listing
 /// that host say so (`data.create`), or nothing when none does.
 pub fn mark_allowed(ctx: &Ctx, sandbox: &str, host: &str, global: bool) -> Option<Action> {
-    let mut st = STATE.lock().unwrap();
+    let mut st = state();
     st.mark_allowed(sandbox, host, global).then(|| st.set(&taken(ctx)))
 }
 
