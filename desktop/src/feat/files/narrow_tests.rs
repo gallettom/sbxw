@@ -55,7 +55,11 @@ fn fixture(c: &Case) -> String {
     v["daemon"]["files_tree"][&deep] = d;
     let long_md = format!("{WEB}/{}", long_name(1));
     v["daemon"]["files_content"][&long_md] = "# A heading that is long enough to need the outline\n\n## Second\n\ntext\n\n## Third\n\ntext\n".into();
-    let p = std::env::temp_dir().join(format!("sbxw-files-narrow-{}-{}-{}.json", std::process::id(), c.extra, c.long));
+    // One file per call: cases run in parallel, and two with the same
+    // `extra` and `long` would read each other's half-written file.
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let p = std::env::temp_dir().join(format!("sbxw-files-narrow-{}-{n}-{}-{}.json", std::process::id(), c.extra, c.long));
     std::fs::write(&p, serde_json::to_string(&v).unwrap()).unwrap();
     p.to_string_lossy().to_string()
 }

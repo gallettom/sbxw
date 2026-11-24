@@ -1245,6 +1245,25 @@ fn a_folder_path_from_a_terminal_lists_that_folder_with_no_row_selected() {
 }
 
 #[test]
+fn a_chat_sandboxs_paths_open_like_any_sandboxs() {
+    // A chat: a throwaway agent on an empty folder under /tmp/sbxw-chat.
+    let mut d = fixture("standin");
+    d["sandboxes"].as_array_mut().unwrap().push(json!({ "name": "chat-test", "workspace": "/tmp/sbxw-chat/test", "chat": true, "status": "running" }));
+    for (p, dir) in [
+        ("/tmp/sbxw-chat/test/graph-lookup/", "%2Ftmp%2Fsbxw-chat%2Ftest%2Fgraph-lookup"),
+        ("/tmp/sbxw-chat/test/graph-lookup/lookup.py", "%2Ftmp%2Fsbxw-chat%2Ftest%2Fgraph-lookup"),
+        ("graph-lookup/", "%2Ftmp%2Fsbxw-chat%2Ftest%2Fgraph-lookup"),
+    ] {
+        let mut st = State::default();
+        let a = run(&mut st, &d, "files_open_path", json!({ "sandbox": "chat-test", "path": p })).unwrap();
+        admit("files_open_path", &a).unwrap();
+        assert!(a.iter().any(|x| matches!(x, Action::OpenPanel(s) if s == "files")), "{p}: {a:?}");
+        let want = format!("/fs?path={dir}");
+        assert!(a.iter().any(|x| matches!(x, Action::Fetch { path, .. } if path.ends_with(&want))), "{p}: {a:?}");
+    }
+}
+
+#[test]
 fn an_anchored_path_with_no_extension_is_a_folder_or_a_file_as_the_listing_says() {
     let mut d = fixture("standin");
     let mut st = State::default();

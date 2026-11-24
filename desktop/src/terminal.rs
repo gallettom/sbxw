@@ -329,6 +329,9 @@ pub struct DragInput {
 enum Gesture {
     Select,
     Report(mouse::Button),
+    /// A modifier press on a link while the program takes mouse reports:
+    /// the link's, not the program's (it hears neither press nor release).
+    Link,
 }
 
 pub struct TerminalState {
@@ -1545,7 +1548,12 @@ impl TerminalState {
         match d.phase {
             Phase::Down => {
                 self.blink_epoch = self.clock;
-                if self.mouse_reporting(mods.shift) {
+                if self.mouse_reporting(mods.shift) && b == mouse::Button::Left && mods.cmd && d.clicks <= 1 && self.link_under(d.x, d.y) {
+                    // What the modifier underlines is what its click does,
+                    // whatever the program asked for (Claude Code takes
+                    // every report): the link opens, the program hears nothing.
+                    self.gesture = Some(Gesture::Link);
+                } else if self.mouse_reporting(mods.shift) {
                     self.gesture = Some(Gesture::Report(b));
                     self.last_report_cell = None;
                     self.mouse_report(b, mouse::Action::Press, d.x, d.y, mods);
@@ -1567,11 +1575,12 @@ impl TerminalState {
                     }
                     self.select_update(d.x, d.y);
                 }
-                None => {}
+                // A press on a link that moves is no click: nothing happens.
+                Some(Gesture::Link) | None => {}
             },
             Phase::Up => match self.gesture.take() {
                 Some(Gesture::Report(b)) => self.mouse_report(b, mouse::Action::Release, d.x, d.y, mods),
-                Some(Gesture::Select) => {
+                Some(Gesture::Select | Gesture::Link) => {
                     let moved = d.dx.abs() > 2.0 || d.dy.abs() > 2.0;
                     if !moved && d.clicks <= 1 && mods.cmd {
                         // An OSC 8 link first; else a file path in the text,
@@ -1680,6 +1689,16 @@ impl TerminalState {
             }
         }
         Some(FileHover { rows, path: f.path })
+    }
+
+    /// Whether a modifier click at (`x`, `y`) would open something: an OSC 8
+    /// web link or a file path (the same rules as the click itself).
+    fn link_under(&mut self, x: f32, y: f32) -> bool {
+        if self.link_at(x, y).is_some() {
+            return true;
+        }
+        self.file_probes += 1;
+        self.file_link_at(x, y).is_some()
     }
 
     /// Whether the pointer is over an OSC 8 link.

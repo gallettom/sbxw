@@ -333,7 +333,10 @@ impl App {
             return;
         }
         let Some(p) = self.panes.get(i) else { return };
-        let Some(sandbox) = p.sandbox.clone() else { return };
+        // Refused, but never in silence: the underline promised a click.
+        let Some(sandbox) = p.sandbox.clone() else {
+            return self.notify("Not opened in Files: this pane has no sandbox", true);
+        };
         let mut args = Map::new();
         args.insert("sandbox".into(), J::String(sandbox));
         args.insert("path".into(), J::String(path));
@@ -1935,6 +1938,8 @@ mod tests {
         // Covered panes (a dialog is up): nothing is asked, whatever was clicked.
         assert!(!a.panes_covered());
         assert_eq!(a.feats.panel, None, "a pane with no sandbox opens nothing");
+        assert!(a.notice.as_ref().is_some_and(|n| n.0.contains("no sandbox")), "and says why");
+        a.notice = None;
         a.panes[0].sandbox = Some("web-app".into());
         a.panes[0].thread = Some("checkout".into());
         a.pane_file_open(0, "src/main.ts".into());
@@ -1944,6 +1949,7 @@ mod tests {
         a.feats.overlay = None;
         a.pane_file_open(0, "../../etc/passwd.md".into());
         assert!(a.feats.overlay.is_none());
+        assert!(a.notice.take().is_some(), "a refusal is said");
         // With the explorer (an overlay) already over the panes, a click reaches nothing.
         a.pane_file_open(0, "src/main.ts".into());
         assert!(a.feats.overlay.is_some());

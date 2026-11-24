@@ -24,6 +24,13 @@
 //! `and/or`, `TCP/IP` and `Rust/Luau` stay prose. Trailing punctuation is not
 //! part of the path. It runs on the one row (and the rows it wraps into)
 //! under the pointer, only while the modifier is held.
+//!
+//! The click does what the underline promises, also while the program takes
+//! mouse reports (Claude Code turns them on): a modifier press on a link (a
+//! path here, or an OSC 8 web link) is the link's, and the program hears
+//! neither that press nor its release. Off a link, or with no modifier, the
+//! program hears every click as before. This only withholds a report: nothing
+//! is sent to the program that it would not have had.
 
 /// Extensions the Files preview handles; the web's `CHAT_FILE_EXT`, in the
 /// same order (a test reads the web's list and compares).
