@@ -59,6 +59,8 @@ pub const RUNS: &str = "codemap";
 
 /// The most map files read (a map is a few dozen).
 const MAP_FILES_MAX: usize = 200;
+/// How long a pasted picture's upload may keep a second paste out (ms).
+const PASTE_BUSY_MS: u64 = 120_000;
 
 const TABS: &[&str] = &["artifacts", "files", "recent"];
 
@@ -261,6 +263,11 @@ pub struct State {
     drop_why: Vec<String>,
     /// The person chose not to be asked (as the core said with the drop).
     drop_skip: bool,
+    /// When `dropped` went out with no dialog (a pasted picture, a drop the
+    /// person chose not to be asked about), in ms: a paste meanwhile is
+    /// refused rather than doubled. Bounded in time, as an answer that never
+    /// comes (not connected) must not refuse every later paste.
+    sent_at: Option<u64>,
     /// The last file the panel saved (Show in folder).
     saved: Option<(String, String)>,
     /// The sandbox each daemon answer was asked for.
@@ -407,7 +414,7 @@ impl State {
                 cx.sandbox(&sb).ok_or_else(|| format!("{sb} is not a sandbox sbxw knows"))?;
                 if self.sandbox.as_deref() != Some(&sb) {
                     let staged = std::mem::take(&mut self.staged);
-                    *self = State { map: std::mem::take(&mut self.map), staged, dropped: std::mem::take(&mut self.dropped), paste_seq: self.paste_seq, staged_seq: self.staged_seq, seq: self.seq, drop_seq: self.drop_seq, drop_tag: std::mem::take(&mut self.drop_tag), drop_why: std::mem::take(&mut self.drop_why), drop_skip: self.drop_skip, saved: self.saved.take(), ..State::default() };
+                    *self = State { map: std::mem::take(&mut self.map), staged, dropped: std::mem::take(&mut self.dropped), paste_seq: self.paste_seq, staged_seq: self.staged_seq, seq: self.seq, drop_seq: self.drop_seq, drop_tag: std::mem::take(&mut self.drop_tag), drop_why: std::mem::take(&mut self.drop_why), drop_skip: self.drop_skip, sent_at: self.sent_at, saved: self.saved.take(), ..State::default() };
                     self.sandbox = Some(sb.clone());
                     self.first = true;
                     for k in [ARTIFACTS, DIR, RECENT] {
@@ -1233,8 +1240,8 @@ impl State {
         }
     }
 
-    /// The core's dialog for one file; `more`: files dropped with it, asked next.
-    fn upload(&self, cx: &Ctx, s: &Staged, more: Option<usize>) -> Result<Action, String> {
+    /// The call that uploads waiting file `s`, where it lands, and the session its path is typed into.
+    fn upload_call(&self, cx: &Ctx, s: &Staged) -> Result<(Call, &'static str, String, String), String> {
         if let Some(p) = s.problem() {
             return Err(format!("{} cannot go: {p}", s.name));
         }
@@ -1255,6 +1262,12 @@ impl State {
             Some(t) => format!("{sb}'s thread {t}"),
             None => format!("{sb}'s agent"),
         };
+        Ok((call, dest, sb, session))
+    }
+
+    /// The core's dialog for one file; `more`: files dropped with it, asked next.
+    fn upload(&self, cx: &Ctx, s: &Staged, more: Option<usize>) -> Result<Action, String> {
+        let (call, dest, sb, session) = self.upload_call(cx, s)?;
         let mut c = Confirm::new(format!("Upload {} into {sb}?", s.name), call)
             .line(format!("{} · {}", s.source(), view::size_label(s.size)))
             .line(format!("Copied into {sb} under {dest}."))
@@ -1614,7 +1627,9 @@ impl State {
                         if let Some(t) = thread {
                             at["mode"] = format!("thread:{t}").into();
                         }
-                        vec![Action::Call(Call::post("/api/input", at, format!("type {path}")).tag(&format!("input:{path}")).quiet())]
+                        // A pasted picture's answer names it (`pasted:<name>:<path>`).
+                        let tag = if matches!(s.payload, Payload::Png(_)) { format!("pasted:{name}:{path}") } else { format!("input:{path}") };
+                        vec![Action::Call(Call::post("/api/input", at, format!("type {path}")).tag(&tag).quiet())]
                     }
                     // Not a path the daemon makes: never typed into a prompt.
                     (Some(path), _) => vec![Action::error(format!("{name} was uploaded, but its path {path:?} is not one the app types into a prompt"))],
@@ -1651,18 +1666,29 @@ impl State {
     /// Files dropped on a terminal pane: waiting for that sandbox's agent,
     /// and the core's dialog for the first at once.
     pub fn on_pane_drop(&mut self, cx: &Ctx, d: &PaneDrop) -> Vec<Action> {
+        // A paste while an upload with no dialog still runs: refused, never
+        // doubled (and that upload's files kept for its answer).
+        let now = super::now_ms();
+        if d.picture.is_some() && !self.dropped.is_empty() && self.sent_at.is_some_and(|t| now.saturating_sub(t) < PASTE_BUSY_MS) {
+            return vec![Action::notice("An upload is still running: paste again once it is done")];
+        }
+        self.sent_at = None;
         // A new drop replaces what an earlier one left (normally nothing: a
         // Cancel empties it), and those paths are forgotten.
         let mut out: Vec<Action> = forget(paths_of(std::mem::take(&mut self.dropped).iter())).into_iter().collect();
         // A picture pasted into the pane: one file, named by the app, never
-        // by the clipboard; its dialog every time (the core asks for it).
+        // by the clipboard; uploaded at once, with no dialog (the paste is
+        // the person's own gesture, the core let it through only to the
+        // pane that may take keys). Its answer types the path, never a Return.
         if let Some(png) = &d.picture {
             self.staged_seq += 1;
-            let s = Staged { id: self.staged_seq, name: pasted_name(super::now_ms()), size: png.len() as u64, payload: Payload::Png(png.clone()), to: Some((d.sandbox.clone(), d.thread.clone())) };
-            match self.upload(cx, &s, None) {
-                Ok(a) => {
+            let s = Staged { id: self.staged_seq, name: pasted_name(now), size: png.len() as u64, payload: Payload::Png(png.clone()), to: Some((d.sandbox.clone(), d.thread.clone())) };
+            match self.upload_call(cx, &s) {
+                Ok((call, ..)) => {
+                    out.push(Action::notice(format!("Pasting {} into {}…", s.name, d.sandbox)));
+                    out.push(Action::Call(call));
                     self.dropped.push(s);
-                    out.push(a);
+                    self.sent_at = Some(now);
                 }
                 Err(e) => out.push(Action::error(format!("The picture was not pasted: {e}"))),
             }
@@ -1699,6 +1725,7 @@ impl State {
         if d.skip_dialog && plain {
             match self.drop_call(cx) {
                 Ok(call) => {
+                    self.sent_at = Some(now);
                     out.push(Action::notice(format!("Uploading {} to {}…", self.drop_names(), d.sandbox)));
                     out.push(Action::Call(call));
                 }
@@ -1778,6 +1805,17 @@ impl State {
                 // The daemon's refusal says why (stopped, no codemap kit, one at a time).
                 Ok((c, body)) => out.push(Action::error(format!("{sb}: {}", why(c, &body)))),
                 Err(e) => out.push(Action::error(format!("{sb}: {e}"))),
+            }
+        } else if let Some((name, path)) = tag.strip_prefix("pasted:").and_then(|t| t.split_once(':')) {
+            // A pasted picture's path typed into the prompt, or why not.
+            let sb = call.body["sandbox"].as_str().unwrap_or("");
+            match r {
+                Ok((c, _)) if (200..300).contains(&c) => out.push(Action::notice(format!("Pasted {name} into {sb}: its path is in the prompt"))),
+                _ => out.push(Action::Notice {
+                    text: format!("Pasted {name} to {path}; no agent session of {sb} took the path: open it, then paste the path (click to copy)"),
+                    error: true,
+                    then: Some(("copy_text".into(), json!({ "text": path }))),
+                }),
             }
         } else if let Some(path) = tag.strip_prefix("input:") {
             // The uploaded file's path typed into the prompt, or why not.

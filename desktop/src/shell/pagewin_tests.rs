@@ -42,8 +42,12 @@ fn sizes(rx: &mpsc::Receiver<TermInput>) -> Vec<(u16, u16)> {
 }
 
 /// A picture to paste (the drops dialog takes it).
-fn png() -> Vec<u8> {
-    crate::feat::canvas::model::mock_png(64, 48, 1)
+/// A file to drop on a pane: the drops dialog is the confirmation these tests
+/// raise from a page window (a pasted picture asks nothing any more).
+fn dropped(tag: &str) -> Vec<std::path::PathBuf> {
+    let f = std::env::temp_dir().join(format!("sbxw-pagewin-{tag}-{}.md", std::process::id()));
+    std::fs::write(&f, b"# Brief").unwrap();
+    vec![f]
 }
 
 fn b64(data: &[u8]) -> String {
@@ -450,15 +454,15 @@ fn an_idle_page_window_costs_no_frames() {
     assert!(!r.win_frames(0, 5));
 }
 
-/// A confirmation raised by what was done in the page window (here its
-/// pasted picture, through the drops dialog) is drawn there alone: the main
+/// A confirmation raised by what was done in the page window (here a file
+/// dropped on its pane, through the drops dialog) is drawn there alone: the main
 /// window says where it is and draws no copy of it.
 #[test]
 fn a_confirmation_raised_in_a_page_window_is_drawn_there_alone() {
     let mut r = Rig::new(&["web-app", "docs"], 1);
     let id = r.move_out(0);
-    let png = png();
-    assert!(r.run_from(id, move |a| a.pane_paste_image(0, &png)), "taken: {:?}", w::with(|h| h.gate().cloned()));
+    let files = dropped("drawn");
+    assert!(r.run_from(id, move |a| a.pane_drop(0, &files)), "taken: {:?}", w::with(|h| h.gate().cloned()));
     r.settle();
     assert_eq!(w::with(|h| h.dialog_owner()), Some(Win::Page(id)), "it belongs to the page window: {:?}", r.rt.state.notice);
     assert!(r.drawn_win(0, "cf-dialog") && r.drawn_win(0, "cf-confirm"));
@@ -478,8 +482,8 @@ fn a_confirmation_raised_in_a_page_window_is_drawn_there_alone() {
 fn only_the_page_window_answers_its_confirmation() {
     let mut r = Rig::new(&["web-app", "docs"], 1);
     let id = r.move_out(0);
-    let png = png();
-    r.run_from(id, move |a| a.pane_paste_image(0, &png));
+    let files = dropped("answer");
+    r.run_from(id, move |a| a.pane_drop(0, &files));
     r.settle();
     let ident = r.app(|a| a.feats.dialog.as_ref().map(Dialog::identity)).expect("up");
     for k in [Key::Escape, Key::Enter, Key::Text(" ".into()), Key::Tab] {
@@ -569,8 +573,8 @@ fn a_page_window_refuses_terminal_keys_while_the_main_window_holds_the_keyboard(
 fn closing_a_page_window_cancels_its_confirmation() {
     let mut r = Rig::new(&["web-app", "docs"], 1);
     let id = r.move_out(0);
-    let png = png();
-    r.run_from(id, move |a| a.pane_paste_image(0, &png));
+    let files = dropped("answer");
+    r.run_from(id, move |a| a.pane_drop(0, &files));
     r.settle();
     assert!(r.app(|a| a.feats.dialog.is_some()));
     r.rt.state.notice = None;
@@ -584,7 +588,7 @@ fn closing_a_page_window_cancels_its_confirmation() {
     }
     r.settle();
     assert!(r.app(|a| a.feats.dialog.is_none()), "cancelled");
-    assert!(r.rt.state.notice.as_ref().is_none_or(|n| !n.0.contains("/tmp/sbxw-pastes")), "nothing uploaded");
+    assert!(r.rt.state.notice.as_ref().is_none_or(|n| !n.0.contains("/tmp/sbxw-uploads")), "nothing uploaded");
     assert_eq!(r.main_names(), [vec!["docs"], vec!["web-app"]]);
 }
 
@@ -642,9 +646,9 @@ fn a_page_windows_microphone_is_disabled_and_dictates_nothing() {
 fn quitting_with_a_page_window_open_is_clean() {
     let mut r = Rig::new(&["web-app", "api", "docs"], 2);
     r.move_out(0);
-    let png = png();
+    let files = dropped("quit");
     let id = w::with(|h| h.page_windows()[0]);
-    r.run_from(id, move |a| a.pane_paste_image(0, &png));
+    r.run_from(id, move |a| a.pane_drop(0, &files));
     r.settle();
     let saved = r.rt.state.store.get("layout");
     assert_eq!(saved["panes"].as_array().map(Vec::len), Some(3), "{saved}");

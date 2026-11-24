@@ -2457,8 +2457,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // A picture pasted while a feature's panel that takes files is shown,
     // and no terminal has the keyboard, goes to that feature; text pastes as before.
     // A picture with no text, pasted while a terminal may take keys: uploaded
-    // to that pane's sandbox and its path typed, as a dropped file's
-    // (`pane_paste_image`); text wins when both are there (`paste_content`).
+    // at once to that pane's sandbox, no dialog, and its path typed, not
+    // submitted (`pane_paste_image`); text wins when both are there (`paste_content`).
     let root = if window_paste() {
         root.on_paste_content(|s: &mut App, content: &rune::ClipboardContent, tx: &mut Tx| {
             let in_terminal = tx.focused().is_some_and(|k| k.starts_with("grid-"));
@@ -4148,11 +4148,11 @@ mod tests {
     }
 
     /// A paste in a terminal: text is typed as before; a picture with no
-    /// text types nothing and opens the drop's upload dialog for that
-    /// pane's sandbox (one paste-image call, the picture's own bytes);
+    /// text types nothing itself and is uploaded at once to that pane's
+    /// sandbox, with no dialog (its path is typed once the daemon answers);
     /// with both, the text wins; with the panes covered, nothing.
     #[test]
-    fn a_picture_pasted_into_a_terminal_asks_to_upload_it_and_text_still_pastes() {
+    fn a_picture_pasted_into_a_terminal_uploads_at_once_and_text_still_pastes() {
         let (mut rt, rx, clip) = window_with_terminal();
         tap(&mut rt, "grid-1");
         sent(&rx);
@@ -4163,28 +4163,27 @@ mod tests {
         let png = crate::feat::canvas::model::mock_png(40, 30, 1);
         let image = || rune::ClipboardImage::from_png(png.clone()).unwrap();
         clip.set_content(rune::ClipboardContent::new("").with_image(image()));
+        rt.state.notice = None;
         paste_key(&mut rt);
         assert_eq!(sent(&rx), b"", "a picture types nothing itself");
-        let c = rt.state.feats.dialog.as_ref().and_then(|d| d.confirm.clone()).expect("the upload's dialog");
-        assert!(c.title.starts_with("Upload pasted-") && c.title.ends_with("into web-app?"), "{}", c.title);
-        assert_eq!(c.call.path, "/api/sandboxes/web-app/paste-image");
-        assert_eq!(c.call.bytes.as_ref().map(|(_, b)| b.as_slice()), Some(png.as_slice()));
-        rt.update(|s, _| { s.dismiss_dialog(); });
-        rt.frame(0.02);
-        assert!(rt.state.feats.dialog.is_none());
+        assert!(rt.state.feats.dialog.is_none(), "a paste is not asked");
+        let n = rt.state.notice.as_ref().map(|n| n.0.clone()).unwrap_or_default();
+        assert!(n.contains("pasted-") && n.contains("web-app"), "the upload went: {n}");
         // Text beside the picture (a file copied in Finder): the text.
         tap(&mut rt, "grid-1");
         clip.set_content(rune::ClipboardContent::new("shot.png").with_image(image()));
         paste_key(&mut rt);
         assert_eq!(sent(&rx), b"shot.png");
-        assert!(rt.state.feats.dialog.is_none(), "text wins: no upload");
-        // Something over the panes: nothing typed, nothing asked.
+        assert!(rt.state.feats.dialog.is_none(), "text wins");
+        // Something over the panes: nothing typed, nothing uploaded.
         rt.update(|s, _| s.open_modal("templates", J::Null));
         rt.frame(0.02);
         clip.set_content(rune::ClipboardContent::new("").with_image(image()));
+        rt.state.notice = None;
         paste_key(&mut rt);
         assert_eq!(sent(&rx), b"");
-        assert!(rt.state.feats.dialog.is_none(), "no upload behind a modal");
+        assert!(rt.state.feats.dialog.is_none(), "nothing asked behind a modal");
+        assert!(rt.state.notice.as_ref().is_none_or(|n| !n.0.contains("pasted-")), "no upload behind a modal: {:?}", rt.state.notice);
     }
 
     /// Files dragged over a pane mark that pane only, with where they would

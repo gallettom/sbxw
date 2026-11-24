@@ -123,6 +123,8 @@ icons! {
     // A window with an arrow leaving its corner: "move this page to a new window" (the pager).
     DETACH "detach" concat!(st!("path", r#"d="M7 2.5H3a1 1 0 0 0-1 1v9.5a1 1 0 0 0 1 1h9.5a1 1 0 0 0 1-1V9""#), st!("polyline", r#"points="9.5,2 14,2 14,6.5""#), st!("line", r#"x1="14" y1="2" x2="7.5" y2="8.5""#));
     KANBAN "kanban" concat!(st!("rect", r#"x="1.75" y="2.25" width="3.5" height="11.5" rx="1""#), st!("rect", r#"x="6.25" y="2.25" width="3.5" height="8" rx="1""#), st!("rect", r#"x="10.75" y="2.25" width="3.5" height="5" rx="1""#));
+    // An arrow down onto an open tray: "download" (the Files explorer's buttons).
+    DOWNLOAD "download" concat!(st!("line", r#"x1="8" y1="2" x2="8" y2="10""#), st!("polyline", r#"points="4.5,6.5 8,10 11.5,6.5""#), st!("path", r#"d="M2.5 10.5v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2""#));
 }
 
 pub fn get(name: &str) -> Option<&'static Icon> {

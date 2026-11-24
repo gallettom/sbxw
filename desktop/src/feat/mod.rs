@@ -127,7 +127,9 @@ pub struct PaneDrop {
     pub thread: Option<String>,
     /// A picture pasted into the pane (PNG, already checked by the core's
     /// picture limits) instead of files: `paths` is empty and `skip_dialog`
-    /// false (a paste is always asked).
+    /// false (it is about dropped files). The feature uploads it at once,
+    /// with no dialog: the core lets a paste through only to the focused
+    /// pane that may take keys, never under a dialog.
     pub picture: Option<Vec<u8>>,
 }
 
