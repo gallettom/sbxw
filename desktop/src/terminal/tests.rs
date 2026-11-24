@@ -1474,9 +1474,9 @@ fn with_mouse_reports_on_a_modifier_click_on_a_link_opens_it_and_the_program_hea
     assert!(written(&rx).is_empty(), "the program heard nothing of that click");
     // A file path and a relative folder on the same line do the same.
     t.feed(b"\r\nsee /tmp/sbxw-chat/test/graph-lookup/lookup.py and graph-lookup/ ok");
-    click(&mut t, (6, 1), cmd());
-    assert_eq!(t.take_file_click().as_deref(), Some("/tmp/sbxw-chat/test/graph-lookup/lookup.py"));
     click(&mut t, (6, 2), cmd());
+    assert_eq!(t.take_file_click().as_deref(), Some("/tmp/sbxw-chat/test/graph-lookup/lookup.py"));
+    click(&mut t, (12, 3), cmd());
     assert_eq!(t.take_file_click().as_deref(), Some("graph-lookup/"));
     assert!(written(&rx).is_empty(), "nor of these");
     // Off a link, a modifier click is the program's, as before; a plain click too.
