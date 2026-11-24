@@ -482,7 +482,9 @@ mod tests {
         rt.update(|s, _| s.set_term_color(Slot::Background, Slot::Background.parse("#fdf6e3")));
         settle(&mut rt);
         let t = rt.state.panes[0].term.as_ref().unwrap();
-        assert_eq!(t.theme(), &Theme::from_setting_strings("#fdf6e3", "auto"), "sbxw.toml's path");
+        // A pick also makes the program's explicit greys follow it (Remap).
+        assert_eq!(&Theme { remap: None, ..t.theme().clone() }, &Theme::from_setting_strings("#fdf6e3", "auto"), "sbxw.toml's path");
+        assert_eq!(t.theme().remap, Some(crate::terminal::theme::Remap { text: 0x24292f, ground: 0xfdf6e3 }));
         assert_eq!((t.theme().foreground, t.theme().cursor), (0x24292f, 0x0969da));
         let green = crate::theme::ON_LIGHT_GROUND.iter().find(|(n, _)| *n == "green").unwrap().1;
         assert_eq!(t.pills.colors(Tone::Green), crate::emphasis::palette(Tone::Green, 0xfdf6e3, 0x24292f));

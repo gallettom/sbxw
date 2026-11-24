@@ -57,11 +57,21 @@ fn rgb_of(r: Rgb) -> u32 {
 }
 
 /// A cell colour as 0xRRGGBB: the program's overrides (OSC 4, 10, 11) first,
-/// then the theme.
+/// then the theme. Under a picked colour ([`Theme::remap`]) an explicit
+/// neutral colour (24-bit, or 256-colour 16 and up) follows the pick.
 pub fn resolve(c: AColor, colors: &Colors, theme: &Theme, fg: bool) -> u32 {
     match c {
-        AColor::Spec(r) => rgb_of(r),
-        AColor::Indexed(i) => colors[i as usize].map(rgb_of).unwrap_or_else(|| theme.indexed(i)),
+        AColor::Spec(r) => match theme.remap {
+            Some(m) => m.apply(rgb_of(r), fg),
+            None => rgb_of(r),
+        },
+        AColor::Indexed(i) => {
+            let v = colors[i as usize].map(rgb_of).unwrap_or_else(|| theme.indexed(i));
+            match theme.remap {
+                Some(m) if i >= 16 => m.apply(v, fg),
+                _ => v,
+            }
+        }
         AColor::Named(n) => {
             if let Some(r) = colors[n] {
                 return rgb_of(r);
@@ -609,7 +619,201 @@ fn draw_glyph(p: &mut Painter, ch: char, x0: f32, x1: f32, lh: f32, light: f32, 
 
 #[cfg(test)]
 mod tests {
-    use super::box_lines;
+    use super::{box_lines, resolve};
+    use crate::terminal::theme::{self as tt, Chosen, Pick, Slot, Theme};
+    use crate::theme::contrast;
+    use alacritty_terminal::term::color::Colors;
+    use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor, Rgb};
+
+    fn spec(c: u32) -> AColor {
+        AColor::Spec(Rgb { r: (c >> 16) as u8, g: (c >> 8) as u8, b: c as u8 })
+    }
+
+    fn picked(bg: Option<u32>, text: Option<Pick>, base: Theme) -> Theme {
+        Chosen { background: bg, bar: None, text }.theme(base)
+    }
+
+    // Claude Code's dark theme: its text, its "inactive" grey, its message
+    // band and its bash band.
+    const WHITE: u32 = 0xffffff;
+    const INACTIVE: u32 = 0x999999;
+    const BAND: u32 = 0x373737;
+    const BASH_BAND: u32 = 0x413c41;
+    const NIGHT: u32 = 0x1a1b26;
+    const PAPER: u32 = 0xfdf6e3;
+    const CREAM: u32 = 0xe6d5b8;
+
+    /// With nothing picked every colour is drawn as today: the program's
+    /// 24-bit and 256 colours, foreground and background, in both app themes.
+    #[test]
+    fn nothing_picked_leaves_every_colour_unchanged() {
+        let colors = Colors::default();
+        for base in [Theme::default(), tt::GRAPHITE] {
+            let th = picked(None, None, base.clone());
+            assert_eq!(th, base);
+            assert_eq!(th.remap, None);
+            for fg in [true, false] {
+                for c in (0..=0xffffffu32).step_by(0x010307) {
+                    assert_eq!(resolve(spec(c), &colors, &th, fg), c);
+                }
+                for i in 0..=255u8 {
+                    assert_eq!(resolve(AColor::Indexed(i), &colors, &th, fg), th.indexed(i));
+                }
+            }
+            // Auto text alone is nothing picked.
+            assert_eq!(picked(None, Some(Pick::Auto), base.clone()), base);
+        }
+    }
+
+    #[test]
+    fn a_picked_text_remaps_white_and_ramp_greys_and_keeps_colours() {
+        let colors = Colors::default();
+        let th = picked(None, Some(Pick::Color(CREAM)), Theme::default());
+        let r = |c: AColor| resolve(c, &colors, &th, true);
+        assert_eq!(r(spec(WHITE)), CREAM);
+        assert_eq!(r(AColor::Indexed(231)), CREAM, "the cube's white");
+        // A ramp grey (250, #bcbcbc) is a tone between the ground and the pick.
+        let g = r(AColor::Indexed(250));
+        assert_eq!(g, tt::mix(th.background, CREAM, 0xbc as f32 / 255.0));
+        assert!(contrast(g, th.background) < contrast(CREAM, th.background));
+        // Dim stays dimmer than full, and faint marks stay.
+        assert!(contrast(r(spec(INACTIVE)), th.background) < contrast(CREAM, th.background));
+        assert_eq!(r(spec(0x505050)), 0x505050);
+        // Saturated colours stay as the program chose, 24-bit and 256.
+        for c in [0xcc0000, 0x4e9a06, 0xff8700, 0x58a6ff, 0xe5c07b, 0xa0d0a0] {
+            assert_eq!(r(spec(c)), c, "{c:06x}");
+        }
+        assert_eq!(r(AColor::Indexed(196)), 0xff0000);
+        // Named colours keep their own path (ANSI white is the pick).
+        assert_eq!(r(AColor::Named(NamedColor::White)), CREAM);
+        assert_eq!(r(AColor::Named(NamedColor::Red)), th.palette[1]);
+    }
+
+    #[test]
+    fn a_picked_background_remaps_a_near_black_band() {
+        let colors = Colors::default();
+        let th = picked(Some(NIGHT), Some(Pick::Color(CREAM)), Theme::default());
+        let bg = |c: u32| resolve(spec(c), &colors, &th, false);
+        // Black is the ground; a band is the ground a step toward the text.
+        assert_eq!(bg(0x000000), NIGHT);
+        let band = bg(BAND);
+        assert_ne!(band, NIGHT);
+        assert!(contrast(band, NIGHT) > 1.3, "still a band: {:.2}", contrast(band, NIGHT));
+        assert!(contrast(CREAM, band) >= 4.5);
+        assert_eq!(bg(BASH_BAND) != bg(BAND), true);
+        // A coloured band (a diff line) and a light one stay.
+        assert_eq!(bg(0x225c2b), 0x225c2b);
+        assert_eq!(bg(0xf0f0f0), 0xf0f0f0);
+        // A background picked with Auto text: the text follows too.
+        let auto = picked(Some(NIGHT), Some(Pick::Auto), Theme::default());
+        assert_eq!(resolve(spec(WHITE), &colors, &auto, true), auto.foreground);
+        println!("Cream on Night: text #{CREAM:06x} on band #{band:06x} (ground #{NIGHT:06x}), dim #{:06x}", resolve(spec(INACTIVE), &colors, &th, true));
+    }
+
+    /// On Paper a band is a light grey band and the text on it dark.
+    #[test]
+    fn paper_stays_readable() {
+        let colors = Colors::default();
+        for text in [Some(Pick::Auto), None, Some(Pick::Color(0x24292f))] {
+            let th = picked(Some(PAPER), text, Theme::default());
+            let band = resolve(spec(BAND), &colors, &th, false);
+            let fg = resolve(spec(WHITE), &colors, &th, true);
+            assert!(tt::is_light(band), "#{band:06x}");
+            assert!(!tt::is_light(fg), "#{fg:06x}");
+            assert!(contrast(fg, band) >= 4.5, "{:.2}", contrast(fg, band));
+            assert!(contrast(band, PAPER) > 1.1);
+            let dim = resolve(spec(INACTIVE), &colors, &th, true);
+            assert!(contrast(dim, PAPER) >= 3.0, "dim #{dim:06x}");
+            println!("Paper ({text:?}): text #{fg:06x} on band #{band:06x}, dim #{dim:06x}");
+        }
+    }
+
+    /// Every pair the picker offers (each background preset or none, each
+    /// text preset or none, over both app themes) whose own text reads on
+    /// its own ground at 4.5:1 keeps that on Claude Code's bands: white on
+    /// the message band and on the bash band.
+    #[test]
+    fn remapped_text_reads_on_remapped_bands_for_every_preset_pair() {
+        let colors = Colors::default();
+        let bgs: Vec<Option<u32>> = std::iter::once(None).chain(Slot::Background.presets().iter().map(|(v, _)| tt::parse_hex(v))).collect();
+        let texts: Vec<Option<Pick>> = std::iter::once(None).chain(Slot::Text.presets().iter().map(|(v, _)| Slot::Text.parse(v))).collect();
+        let (mut checked, mut bad) = (0, vec![]);
+        for base in [Theme::default(), tt::GRAPHITE] {
+            for bg in &bgs {
+                for text in &texts {
+                    let th = picked(*bg, *text, base.clone());
+                    if th.remap.is_none() || contrast(th.foreground, th.background) < 4.5 {
+                        continue;
+                    }
+                    let fg = resolve(spec(WHITE), &colors, &th, true);
+                    assert_eq!(fg, th.foreground);
+                    for b in [BAND, BASH_BAND, 0x2d2d2d, 0x505050] {
+                        let band = resolve(spec(b), &colors, &th, false);
+                        checked += 1;
+                        if contrast(fg, band) < 4.5 {
+                            bad.push(format!("{bg:?} {text:?} band {b:06x} -> {band:06x}: {:.2}", contrast(fg, band)));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 200, "{checked}");
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    #[test]
+    fn the_remap_is_cached_per_colour_and_per_pick() {
+        let a = tt::Remap { text: CREAM, ground: NIGHT };
+        let b = tt::Remap { text: 0xffb000, ground: NIGHT };
+        let h0 = tt::remap_cache_hits();
+        let first = a.apply(BAND, false);
+        assert_eq!(tt::remap_cache_hits(), h0);
+        assert_eq!(a.apply(BAND, false), first);
+        assert_eq!(tt::remap_cache_hits(), h0 + 1);
+        // Another pick is not served the first one's answer.
+        assert_ne!(b.apply(BAND, false), first);
+        assert_eq!(tt::remap_cache_hits(), h0 + 1);
+        // The foreground and background of one grey are two entries.
+        assert_ne!(a.apply(0x606060, true), a.apply(0x606060, false));
+        // Saturated colours never reach the cache.
+        assert_eq!(a.apply(0xcc0000, true), 0xcc0000);
+        assert_eq!(tt::remap_cache_hits(), h0 + 1);
+    }
+
+    /// The cost of the remap where colours are resolved: a 200 x 50 screen
+    /// of Claude Code's greys and some syntax colours, both roles per cell,
+    /// a hundred times, with and without a pick. Prints the numbers.
+    #[test]
+    fn remap_cost() {
+        let colors = Colors::default();
+        let plain = Theme::default();
+        let th = picked(Some(NIGHT), Some(Pick::Color(CREAM)), Theme::default());
+        let cells: Vec<(AColor, AColor)> = (0..200 * 50)
+            .map(|i| match i % 5 {
+                0 => (spec(WHITE), spec(BAND)),
+                1 => (spec(INACTIVE), spec(0)),
+                2 => (spec(0xe5c07b), spec(BASH_BAND)),
+                3 => (AColor::Indexed(250), AColor::Named(NamedColor::Background)),
+                _ => (AColor::Named(NamedColor::Foreground), spec(0x225c2b)),
+            })
+            .collect();
+        let time = |th: &Theme| {
+            let t0 = std::time::Instant::now();
+            let mut acc = 0u32;
+            for _ in 0..100 {
+                for (f, b) in &cells {
+                    acc ^= resolve(*f, &colors, th, true) ^ resolve(*b, &colors, th, false);
+                }
+            }
+            (t0.elapsed(), acc)
+        };
+        let (base, _) = time(&plain);
+        let (remap, _) = time(&th);
+        let per = |d: std::time::Duration| d.as_nanos() as f64 / (100.0 * cells.len() as f64 * 2.0);
+        println!("resolve: {:.1} ns/colour plain, {:.1} ns/colour picked; one 200x50 screen {:.0} us vs {:.0} us", per(base), per(remap), base.as_micros() as f64 / 100.0, remap.as_micros() as f64 / 100.0);
+        // A debug build: generous, it is the per-frame order that matters.
+        assert!(remap.as_millis() / 100 < 20, "{remap:?} for 100 screens");
+    }
 
     #[test]
     fn box_table_matches_the_characters() {

@@ -1177,6 +1177,25 @@ pane's bar is the group's colour at the theme's bar tint over the picked
 colour. Text or bar labels under 4.5:1 are allowed, with a quiet warning
 line in the popover.
 
+A pick (a background, or a text colour other than Auto) also reaches the
+neutral colours a program draws explicitly, 24-bit or from the 256-colour
+cube and greyscale ramp, which otherwise ignore the theme: Claude Code
+draws its text white and its prompt and message bands grey that way
+(`Remap` in `terminal/theme.rs`, applied in `render::resolve`). A grey's
+lightness is read as its place between black and white and drawn at that
+place between the picked ground and the picked text: a light grey (mean
+channel 128 and up) is text, white the pick at full strength and a mid grey
+a dimmer tone; a dark grey (96 and below) is a ground or a band, black the
+ground itself and a band the ground moved the same step toward the text
+(lighter on a dark ground, a light grey band on Paper), held where the text
+at full strength still reads at 4.5:1. Only colours whose channels lie
+within 24 of each other move: syntax highlighting, diffs, red and green stay
+as the program chose. With nothing picked every colour is drawn as before.
+The answer is cached per colour. Cream text on Night: Claude Code's text is
+cream (`#e6d5b8`) and its band `#464345` over the `#1a1b26` ground; on Paper
+with Auto text, dark text (`#24292f`) on a `#cecabc` band. The web UI does
+not do this: xterm.js draws 24-bit colours as given.
+
 The current page's tab and the pane under its left side are one shape: the
 tab stands on the pane's top edge, its outline (2 pt, `JOIN_W`) in that
 pane's line colour (its group's colour, else `border`) and its fill that
