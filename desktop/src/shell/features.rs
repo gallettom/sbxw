@@ -2003,8 +2003,8 @@ mod tests {
         let n = refused(&mut a, &png);
         assert!(n.contains("The picture was not pasted") && n.contains("not running"), "{n}");
         a.panes[0].sandbox = Some("web-app".into());
-        // Under a modal or the core's dialog (`panes_covered`, which Jarvis's proposal sets too): nothing.
-        a.open_modal("files", J::Null);
+        // Under a modal or the core's dialog: nothing.
+        a.open_modal("templates", J::Null);
         assert!(a.panes_covered());
         assert!(refused(&mut a, &png).contains("Close what is open first"));
         a.feats.modal = None;
@@ -2014,6 +2014,10 @@ mod tests {
         assert!(refused(&mut a, &png).contains("Close what is open first"));
         assert_eq!(a.feats.dialog.as_ref().and_then(|d| d.confirm.as_ref()).map(|c| c.title.as_str()), Some("Something else?"), "the dialog stays as it was");
         a.feats.dialog = None;
+        // Jarvis's proposal held up: nothing.
+        a.jarvis.shown = Some("p-high-1".into());
+        assert!(refused(&mut a, &png).contains("Close what is open first"));
+        a.jarvis.shown = None;
 
         // Files dragged onto the pane still go through their dialog.
         let dir = std::env::temp_dir().join(format!("sbxw-paste-drop-{}", std::process::id()));
