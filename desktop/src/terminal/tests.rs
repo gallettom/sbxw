@@ -1460,20 +1460,46 @@ fn an_osc8_link_keeps_priority_over_a_path_in_it() {
 }
 
 #[test]
-fn with_mouse_reports_on_only_modifier_shift_click_opens_a_path() {
+fn with_mouse_reports_on_a_modifier_click_on_a_link_opens_it_and_the_program_hears_nothing() {
+    // Claude Code turns mouse reports on (1000, 1002, 1003, 1006): the
+    // underline shown under the modifier must be what the click does.
     let (mut t, _ev, rx) = term();
-    t.feed(b"\x1b[?1000h\x1b[?1006hsee src/main.rs ok");
-    let shift_cmd = Mods { shift: true, ..cmd() };
-    // Cmd + click goes to the program, as today (and never to Files).
-    assert_eq!(click(&mut t, (6, 0), cmd()), None);
+    t.feed(b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006hIn /tmp/sbxw-chat/test/graph-lookup/, run cp .env.example .env");
+    let _ = written(&rx);
+    t.on_pointer_move(at(10, 0).0, at(10, 0).1, cmd());
+    assert_eq!(t.file_hover_path(), Some("/tmp/sbxw-chat/test/graph-lookup/"));
+    let _ = written(&rx);
+    assert_eq!(click(&mut t, (10, 0), cmd()), None);
+    assert_eq!(t.take_file_click().as_deref(), Some("/tmp/sbxw-chat/test/graph-lookup/"));
+    assert!(written(&rx).is_empty(), "the program heard nothing of that click");
+    // A file path and a relative folder on the same line do the same.
+    t.feed(b"\r\nsee /tmp/sbxw-chat/test/graph-lookup/lookup.py and graph-lookup/ ok");
+    click(&mut t, (6, 2), cmd());
+    assert_eq!(t.take_file_click().as_deref(), Some("/tmp/sbxw-chat/test/graph-lookup/lookup.py"));
+    click(&mut t, (12, 3), cmd());
+    assert_eq!(t.take_file_click().as_deref(), Some("graph-lookup/"));
+    assert!(written(&rx).is_empty(), "nor of these");
+    // Off a link, a modifier click is the program's, as before; a plain click too.
+    click(&mut t, (38, 0), cmd());
     assert_eq!(t.take_file_click(), None);
     assert!(!written(&rx).is_empty(), "the program heard the press and release");
-    // Cmd + Shift + click is the selection gesture: it opens the path (and an OSC 8 link).
-    assert_eq!(click(&mut t, (6, 0), shift_cmd), None);
-    assert_eq!(t.take_file_click().as_deref(), Some("src/main.rs"));
-    assert!(written(&rx).is_empty(), "the program heard nothing");
+    click(&mut t, (10, 0), Mods::default());
+    assert_eq!(t.take_file_click(), None);
+    assert!(!written(&rx).is_empty(), "a plain click on the path is the program's");
+    // A drag that starts on a link with the modifier opens nothing.
+    drag(&mut t, Phase::Down, (10, 0), (10, 0), 1, cmd());
+    drag(&mut t, Phase::Move, (10, 0), (20, 0), 1, cmd());
+    drag(&mut t, Phase::Up, (10, 0), (20, 0), 1, cmd());
+    assert_eq!(t.take_file_click(), None);
+    // Cmd + Shift + click (the selection gesture) still opens it, and an OSC 8 web link opens either way.
+    let shift_cmd = Mods { shift: true, ..cmd() };
+    assert_eq!(click(&mut t, (10, 0), shift_cmd), None);
+    assert_eq!(t.take_file_click().as_deref(), Some("/tmp/sbxw-chat/test/graph-lookup/"));
     t.feed(b"\r\n\x1b]8;;https://example.org/x\x07link\x1b]8;;\x07");
-    assert_eq!(click(&mut t, (1, 1), shift_cmd).as_deref(), Some("https://example.org/x"));
+    let _ = written(&rx);
+    assert_eq!(click(&mut t, (1, 4), shift_cmd).as_deref(), Some("https://example.org/x"));
+    assert_eq!(click(&mut t, (1, 4), cmd()).as_deref(), Some("https://example.org/x"));
+    assert!(written(&rx).is_empty());
 }
 
 #[test]
