@@ -204,6 +204,9 @@ local function crumbs(state, ui, narrow, w)
   local tail = {}
   if ui.tab == "files" and ui.path then
     tail[#tail + 1] = button{ icon = "copy", key = "files-copy-folder", on = "copy_folder", arg = ui.path, variant = "ghost", dense = true, help = "Copy " .. ui.path }
+    if ui.path ~= "/" then
+      tail[#tail + 1] = button{ icon = "chevron-down", key = "files-download-listed", on = "folder", variant = "ghost", dense = true, help = "Download this folder whole, as .tar.gz (its size first, in the reader)" }
+    end
     tail[#tail + 1] = button{ icon = "flag", key = "files-star", on = "star", arg = ui.path, variant = "ghost", dense = true,
       color = ui.starred and "amber" or "text-muted", help = ui.starred and "Unpin this folder" or "Pin this folder among the Locations" }
   end
@@ -309,6 +312,8 @@ local function dirview(r)
       text{ r.name .. (r.link and " ↪" or ""), size = "sm", truncate = true, grow = 1 },
       count and text{ count, size = "xs", color = "text-muted" } or false,
       nz(r.when) and text{ r.when, size = "xs", color = "text-muted" } or false,
+      button{ icon = "chevron-down", key = "files-folder-" .. r.id, on = "folder", arg = r.id, variant = "ghost", dense = true, reveal = true,
+        help = "Download " .. r.name .. " whole, as .tar.gz (its size first, in the reader)" },
       button{ icon = "chevron-right", key = "files-into-" .. r.id, on = "select", arg = r.id, variant = "ghost", dense = true, reveal = true,
         help = "List " .. r.name .. " (Enter)" },
     },
@@ -388,8 +393,15 @@ local function preview(ui, narrow, w)
   end
   local p = ui.preview or {}
   local isfile = s.kind == "file"
+  local isdir = s.kind == "dir" and p.state == "folder"
   local words = w >= 380
+  local packing = s.packing == true
   local acts = { gap = 4, w = "full", key = "files-acts",
+    isdir and button{ words and (packing and "Packing…" or "Download folder") or nil, key = "files-download-folder", icon = "chevron-down", on = "download",
+      busy = packing, disabled = packing or nz(p.over) and true or false,
+      help = nz(p.over) and p.over or ((words and "" or "Download folder: ") .. "Into Downloads as " .. s.name .. ".tar.gz (never over a file there)") } or false,
+    isdir and button{ icon = "folder", key = "files-reveal-folder", on = "reveal", variant = "ghost", disabled = packing or nz(p.over) and true or false, help = "Download it as .tar.gz and show it in its folder" } or false,
+    isdir and button{ words and "Save as…" or nil, icon = (not words) and "file" or nil, key = "files-save-as-folder", on = "save_as", variant = "ghost", disabled = packing or nz(p.over) and true or false, help = (words and "" or "Save as: ") .. "Choose where (the app asks first)" } or false,
     isfile and button{ words and "Download" or nil, key = "files-download", icon = "chevron-down", on = "download", help = words and "Into Downloads (never over a file there)" or "Download: into Downloads (never over a file there)" } or false,
     isfile and button{ icon = "folder", key = "files-reveal", on = "reveal", variant = "ghost", help = "Download it and show it in its folder" } or false,
     isfile and button{ words and "Open" or nil, icon = (not words) and "play" or nil, key = "files-open-with", on = "open_with", variant = "ghost", help = (words and "" or "Open: ") .. "With this computer's app; the app asks first, and never opens programs or scripts" } or false,
@@ -399,7 +411,15 @@ local function preview(ui, narrow, w)
     s.can_delete and button{ icon = "trash", key = "files-delete", on = "delete", variant = "ghost", color = "red", help = "Delete it (the app asks first)" } or false,
   }
   local body
-  if p.state == "loading" then
+  if p.state == "folder" then
+    body = column{ gap = 6, w = "full",
+      text{ p.counting and "Counting its files…" or (p.line or ""), size = "sm", color = "text", key = "files-folder-size" },
+      nz(p.over) and note(p.over, "amber") or false,
+      nz(p.error) and note(p.error, "red") or false,
+      packing and note("Packing " .. s.name .. ".tar.gz in the sandbox, then saving it into Downloads…") or false,
+      note("The whole folder, as one .tar.gz that holds it by its name; links stay links. Double-click it on a Mac to unpack it."),
+    }
+  elseif p.state == "loading" then
     body = note("Loading…")
   elseif p.state == "markdown" then
     -- About 70 characters a line, the prose face; links followed inside.
@@ -602,6 +622,7 @@ return {
     outline_pick = function(_, _, id) return intent("files_outline", { index = tonumber(id) }) end,
     show = function(_, id) return intent("files_show_in_folder", { id = id }) end,
     download = function() return intent("files_download", {}) end,
+    folder = function(state, id) state.pane = "reader"; if id ~= nil and id ~= "" then return intent("files_folder", { id = id }) end return intent("files_folder", {}) end,
     reveal = function() return intent("files_reveal", {}) end,
     open_with = function() return intent("files_open_with", {}) end,
     save_as = function() return intent("files_save_as", {}) end,

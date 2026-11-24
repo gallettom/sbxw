@@ -1306,3 +1306,104 @@ fn a_picture_pasted_into_a_pane_asks_once_then_types_its_path() {
 fn a_pasted_picture_is_named_by_the_time_only() {
     assert_eq!(pasted_name(1_795_444_205_000), "pasted-2026-11-23-143005.png");
 }
+
+/// A folder downloads whole: shown in the reader from its row (or the folder
+/// listed) with the daemon's count, saved as `<name>.tar.gz` into Downloads
+/// by the core (its clean name, never over a file), busy until the answer,
+/// the daemon's refusal said as text, refused here when over the cap, and
+/// Save as behind the core's dialog. A file row is not a folder.
+#[test]
+fn a_folder_downloads_whole_as_a_tar_gz_into_downloads_or_through_the_dialog() {
+    let mut d = fixture("standin");
+    let mut st = opened_pumped(&mut d);
+    let a = run(&mut st, &d, "files_place", json!({ "id": "/Users/me/web" })).unwrap();
+    pump(&mut st, &mut d, a);
+    assert!(run(&mut st, &d, "files_folder", json!({ "id": "/Users/me/web/README.md" })).is_err(), "a file is not a folder");
+    let a = run(&mut st, &d, "files_folder", json!({ "id": "/Users/me/web/src" })).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::Call(c) if c.path == "/api/sandboxes/web-app/fs/folder/size?path=%2FUsers%2Fme%2Fweb%2Fsrc")), "{a:?}");
+    pump(&mut st, &mut d, a);
+    let ui = st.ui(&Ctx { data: &d });
+    assert_eq!((ui["selected"]["kind"].as_str(), ui["selected"]["type"].as_str()), (Some("dir"), Some("Folder")));
+    assert_eq!(ui["preview"]["state"], "folder");
+    assert_eq!(ui["preview"]["files"], 1);
+    assert!(ui["preview"]["over"].is_null());
+
+    // Into Downloads, direct: the core writes it under the name it cleans.
+    let a = run(&mut st, &d, "files_download", json!({})).unwrap();
+    let Action::Download(dl) = &a[0] else { panic!("{a:?}") };
+    assert!(dl.direct());
+    assert_eq!((dl.name.as_str(), dl.to, dl.after), ("src.tar.gz", Dest::Downloads, After::Nothing));
+    assert_eq!(dl.get, format!("/api/sandboxes/web-app/fs/folder?path=%2FUsers%2Fme%2Fweb%2Fsrc&max={}", view::FOLDER_MAX));
+    assert_eq!(st.ui(&Ctx { data: &d })["selected"]["packing"], true, "busy until the answer");
+    let a = st.on_answer(&Ctx { data: &d }, &dl.call("save src.tar.gz"), Ok((200, json!({ "saved": "/Users/me/Downloads/src (1).tar.gz", "name": "src (1).tar.gz", "bytes": 20, "verdict": "plain" }))));
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { text, .. } if text == "Saved src (1).tar.gz: /Users/me/Downloads/src (1).tar.gz")));
+    let ui = st.ui(&Ctx { data: &d });
+    assert_eq!(ui["selected"]["packing"], false);
+    assert_eq!(ui["saved"]["path"], "/Users/me/Downloads/src (1).tar.gz", "Show in folder offers it");
+    let a = run(&mut st, &d, "files_reveal", json!({})).unwrap();
+    assert!(matches!(&a[0], Action::Download(x) if x.after == After::Reveal && x.direct() && x.name == "src.tar.gz"));
+    // The daemon's refusal, as text; busy ends.
+    let a = st.on_answer(&Ctx { data: &d }, &dl.call("save src.tar.gz"), Ok((413, json!({ "ok": false, "error": "/Users/me/web/src: too large to download here: 300 bytes (2 files), over the 100 bytes a folder download allows" }))));
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { text, error: true, .. } if text.contains("300 bytes (2 files), over the 100 bytes"))), "{a:?}");
+    assert_eq!(st.ui(&Ctx { data: &d })["selected"]["packing"], false);
+
+    // Save as: the core's dialog first, then the system's.
+    let a = run(&mut st, &d, "files_save_as", json!({})).unwrap();
+    admit("files_save_as", &a).unwrap();
+    let [Action::Confirm(c)] = a.as_slice() else { panic!("{a:?}") };
+    assert_eq!((c.call.path.as_str(), c.call.body["to"].as_str(), c.call.body["name"].as_str()), ("core:download", Some("ask"), Some("src.tar.gz")));
+    assert!(c.lines.iter().any(|l| l.contains("/Users/me/web/src")) && c.lines.iter().any(|l| l.starts_with("1 file · ")), "{:?}", c.lines);
+
+    // Over the cap: said with the size and the cap, and not downloaded.
+    d["__daemon"]["files_folder_bytes"] = json!({ "/Users/me/web/src": 152u64 << 20 });
+    let a = run(&mut st, &d, "files_folder", json!({})).unwrap();
+    pump(&mut st, &mut d, a);
+    let a = run(&mut st, &d, "files_folder", json!({ "id": "/Users/me/web/src" })).unwrap();
+    pump(&mut st, &mut d, a);
+    let over = st.ui(&Ctx { data: &d })["preview"]["over"].as_str().unwrap().to_string();
+    assert_eq!(over, "152.0 MB: over the 128.0 MB a folder download allows here");
+    let e = run(&mut st, &d, "files_download", json!({})).unwrap_err();
+    assert!(e.contains("152.0 MB") && e.contains("128.0 MB"), "{e}");
+    assert!(run(&mut st, &d, "files_save_as", json!({})).is_err());
+    // And the daemon says the same when asked anyway.
+    let (c, v) = daemon(&mut d, "GET", &format!("/api/sandboxes/web-app/fs/folder?path=%2FUsers%2Fme%2Fweb%2Fsrc&max={}", view::FOLDER_MAX), J::Null);
+    assert_eq!(c, 413, "{v}");
+
+    // A file selected is still downloaded as a file.
+    let a = run(&mut st, &d, "files_select", json!({ "id": "/Users/me/web/README.md" })).unwrap();
+    pump(&mut st, &mut d, a);
+    let a = run(&mut st, &d, "files_download", json!({})).unwrap();
+    assert!(matches!(&a[0], Action::Download(x) if x.name == "README.md" && x.get.contains("/fs/file?")));
+}
+
+/// The screen draws Download folder only for a folder in the reader, and its
+/// button on folder rows and on the folder listed.
+#[test]
+fn the_download_folder_button_is_drawn_for_a_folder_only() {
+    let mut d = fixture("standin");
+    let mut st = opened_pumped(&mut d);
+    let a = run(&mut st, &d, "files_place", json!({ "id": "/Users/me/web" })).unwrap();
+    pump(&mut st, &mut d, a);
+    let dir = std::env::temp_dir().join("sbxw-no-overrides");
+    let draw = |st: &State, d: &J| {
+        let mut data = d.clone();
+        data[UI] = st.ui(&Ctx { data: d });
+        let s = crate::screen::ScreenState::new(SCREEN, &dir, crate::fixture::screen_data(&data, &crate::fixture::AppView::default()));
+        assert!(s.error.is_none(), "{:?}", s.error);
+        s.last_good.unwrap()
+    };
+    fn has(n: &crate::luau::Node, k: &str) -> bool {
+        n.key.as_deref() == Some(k) || n.children.iter().any(|c| has(c, k))
+    }
+    let n = draw(&st, &d);
+    assert!(has(&n, "files-folder-/Users/me/web/src") && has(&n, "files-download-listed"));
+    assert!(!has(&n, "files-download-folder"));
+    let a = run(&mut st, &d, "files_select", json!({ "id": "/Users/me/web/README.md" })).unwrap();
+    pump(&mut st, &mut d, a);
+    let n = draw(&st, &d);
+    assert!(has(&n, "files-download") && !has(&n, "files-download-folder"), "a file: its own Download");
+    let a = run(&mut st, &d, "files_folder", json!({ "id": "/Users/me/web/src" })).unwrap();
+    pump(&mut st, &mut d, a);
+    let n = draw(&st, &d);
+    assert!(has(&n, "files-download-folder") && has(&n, "files-save-as-folder") && !has(&n, "files-download") && !has(&n, "files-open-with"));
+}
