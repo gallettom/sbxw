@@ -166,6 +166,7 @@ async fn the_index_carries_its_versions_and_the_state_is_one_call() {
         assert!(v.get(k).is_some(), "{k}");
     }
     assert_eq!(v["ssh_refresh_due"], false, "a bool, false where SSH is not set up");
+    assert_eq!(v["terminal_colors"], serde_json::json!({ "background": "", "bar": "", "text": "" }), "sbxw.toml's terminal colours, empty when unset");
 }
 
 #[tokio::test]
