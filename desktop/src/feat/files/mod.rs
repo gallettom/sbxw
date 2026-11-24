@@ -112,10 +112,11 @@ pub const INTENTS: &[Spec] = &[
     Spec { name: "files_select", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Picks a row by its `id`: a folder is listed, a file previewed (text, Markdown, pictures; HTML as its source)." },
     Spec { name: "files_show_in_folder", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Recent: lists the folder a file was written to, on that file." },
     Spec { name: "files_copy_path", risk: Risk::Direct, args: &[], doc: "Puts the selected file's path, as the agent sees it, on the clipboard." },
-    Spec { name: "files_download", risk: Risk::Direct, args: &[], doc: "Downloads the selected file into this computer's Downloads folder, under a name the core cleans (never over a file there)." },
-    Spec { name: "files_reveal", risk: Risk::Direct, args: &[], doc: "Downloads the selected file into Downloads and shows it in the file manager." },
+    Spec { name: "files_folder", risk: Risk::Direct, args: &[("id", Arg::Str, false)], doc: "Shows a folder in the reader, to download it whole (`id`: a folder row's id in Files; none: the folder listed), with its file count and size as the daemon counts them." },
+    Spec { name: "files_download", risk: Risk::Direct, args: &[], doc: "Downloads the selected file into this computer's Downloads folder, under a name the core cleans (never over a file there). A folder shown in the reader goes whole, as `<folder>.tar.gz` packed in the sandbox (128 MB at most here)." },
+    Spec { name: "files_reveal", risk: Risk::Direct, args: &[], doc: "Downloads the selected file (or folder, as .tar.gz) into Downloads and shows it in the file manager." },
     Spec { name: "files_show_saved", risk: Risk::Direct, args: &[], doc: "Shows the last file the panel saved in the file manager." },
-    Spec { name: "files_save_as", risk: Risk::Approval("Save a sandbox file outside Downloads"), args: &[], doc: "The save dialog, for the selected file; the core's dialog names the file and its size first." },
+    Spec { name: "files_save_as", risk: Risk::Approval("Save a sandbox file outside Downloads"), args: &[], doc: "The save dialog, for the selected file (or folder, as .tar.gz); the core's dialog names it and its size first." },
     Spec { name: "files_open_with", risk: Risk::Approval("Open a sandbox file with this computer's app"), args: &[], doc: "Downloads the selected file, then the core's dialog says what it is (its type sniffed) and what would open it; programs, scripts, installers and shortcuts are refused." },
     Spec { name: "files_delete", risk: Risk::Approval("Delete a file in a sandbox"), args: &[], doc: "Deletes the selected file or folder (under the workspace, a read-write mount, home or /tmp only), after the core's dialog shows its path and size." },
     Spec { name: "files_star", risk: Risk::Direct, args: &[("path", Arg::Str, true)], doc: "Pins a folder among the places of this sandbox, or unpins it (kept across runs)." },
@@ -285,6 +286,9 @@ pub struct State {
     sort: String,
     /// The keyboard's row, by id.
     cursor: Option<String>,
+    /// A folder download under way (its path): packed in the sandbox, then
+    /// saved by the core. Cleared by its answer.
+    packing: Option<String>,
 }
 
 crate::feat::relay::per_thread!(STATE, State);
@@ -585,6 +589,29 @@ impl State {
                 let s = self.sel.clone().ok_or("pick a file first")?;
                 out.push(Action::Intent { name: "copy_text".into(), args: json!({ "text": self.abs_path(cx, &s) }) });
             }
+            "files_folder" => out.extend(self.show_folder(cx, a.s("id").filter(|x| !x.is_empty()))?),
+            "files_download" | "files_reveal" if self.sel.as_ref().is_some_and(|s| s.kind == "dir") => {
+                let s = self.sel.clone().unwrap_or_else(|| unreachable!());
+                let after = if a.name == "files_reveal" { After::Reveal } else { After::Nothing };
+                let d = self.folder_download(&s, Dest::Downloads, after)?;
+                self.packing = Some(s.path.clone());
+                out.push(Action::Download(d));
+            }
+            "files_save_as" if self.sel.as_ref().is_some_and(|s| s.kind == "dir") => {
+                let s = self.sel.clone().unwrap_or_else(|| unreachable!());
+                let d = self.folder_download(&s, Dest::Ask, After::Nothing)?;
+                let name = d.name.clone();
+                let mut c = Confirm::new(format!("Save {name} where you choose?"), d.call(format!("save {name}")))
+                    .line(format!("From {}: {} (the whole folder, packed in the sandbox)", self.sandbox()?, s.path));
+                if let Some(size) = self.folder_size_line() {
+                    c = c.line(size);
+                }
+                let c = c
+                    .line("Next, the system's save dialog: the name is cleaned by the app, and nothing is written over a file without the dialog asking.")
+                    .labels("Choose where", "Cancel");
+                self.packing = Some(s.path.clone());
+                return Ok(vec![c.into_action()]);
+            }
             "files_download" | "files_reveal" => {
                 let s = self.file_sel()?;
                 let after = if a.name == "files_reveal" { After::Reveal } else { After::Nothing };
@@ -780,6 +807,61 @@ impl State {
             return Err(format!("{} is not a file", s.name));
         }
         Ok(s)
+    }
+
+    /// A folder in the reader (`files_folder`): a folder row of Files, or the
+    /// folder listed. Its size is asked of the daemon, which counts without
+    /// reading.
+    fn show_folder(&mut self, cx: &Ctx, id: Option<&str>) -> Result<Vec<Action>, String> {
+        let sb = self.sandbox()?;
+        if self.tab() != "files" {
+            return Err("folders download from Files".into());
+        }
+        let d = cx.get(DIR);
+        let path = match id {
+            Some(id) => {
+                let e = self.entry_of(cx, id).ok_or_else(|| format!("{id} is not in this folder"))?;
+                if e["kind"] != "dir" {
+                    return Err(format!("{id} is not a folder"));
+                }
+                id.to_string()
+            }
+            None => d["path"].as_str().ok_or("no folder listed yet")?.to_string(),
+        };
+        if path == "/" {
+            return Err("the whole filesystem is not something to download".into());
+        }
+        let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+        let modified = self.entry_of(cx, &path).and_then(|e| e["modified"].as_u64()).unwrap_or(0);
+        let mut out = vec![];
+        if let Some(k) = self.preview["key"].as_str() {
+            out.push(Action::Image { key: k.to_string(), bytes: vec![] });
+        }
+        self.seq += 1;
+        self.section = None;
+        self.cursor = Some(path.clone());
+        self.preview = json!({ "state": "folder", "counting": true });
+        let route = format!("{}?path={}", sb_route(&sb, "/fs/folder/size"), enc(&path));
+        out.push(Action::Call(Call::get(route, format!("count {name}")).tag(&format!("folder-size:{}", self.seq)).quiet()));
+        self.sel = Some(Sel { src: Src::Fs, path, name, size: 0, modified, kind: "dir".into() });
+        Ok(out)
+    }
+
+    /// A folder's download: `<name>.tar.gz` from the daemon's `fs/folder`,
+    /// capped at what the core downloads (`files::MAX_BYTES`). Refused here
+    /// when its counted size is already over.
+    fn folder_download(&self, s: &Sel, to: Dest, after: After) -> Result<Download, String> {
+        let sb = self.sandbox()?;
+        if let Some(why) = self.preview["over"].as_str() {
+            return Err(format!("{}: {why}", s.name));
+        }
+        let get = format!("{}?path={}&max={}", sb_route(&sb, "/fs/folder"), enc(&s.path), view::FOLDER_MAX);
+        Ok(Download { get, name: format!("{}.tar.gz", s.name), to, after, tag: "folder".into() })
+    }
+
+    /// "3 files · 1.2 KB", once the daemon counted them.
+    fn folder_size_line(&self) -> Option<String> {
+        self.preview["line"].as_str().map(str::to_string)
     }
 
     /// The path as the agent sees it (the workspace is mounted at its own path).
@@ -1338,7 +1420,8 @@ impl State {
                 "state": u["state"], "progress": match (u["sent"].as_f64(), u["total"].as_f64()) { (Some(a), Some(t)) if t > 0.0 => a / t, _ => 0.0 } })
         }).collect();
         let sel = self.sel.as_ref().map(|s| json!({
-            "id": s.path, "name": s.name, "kind": s.kind, "size": view::size_label(s.size), "type": view::kind_label(&s.name),
+            "id": s.path, "name": s.name, "kind": s.kind, "size": view::size_label(s.size), "type": if s.kind == "dir" { "Folder" } else { view::kind_label(&s.name) },
+            "packing": self.packing.as_deref() == Some(s.path.as_str()),
             "modified": view::date(s.modified), "path": self.abs_path(cx, s),
             "can_delete": d.is_object() && view::can_delete(&self.abs_path(cx, s), d),
         }));
@@ -1707,7 +1790,18 @@ impl State {
                     then: Some(("copy_text".into(), json!({ "text": path }))),
                 }),
             }
-        } else if tag == "download" || tag == "open" {
+        } else if let Some(seq) = tag.strip_prefix("folder-size:").and_then(|s| s.parse::<u64>().ok()) {
+            if seq == self.seq && self.preview["state"] == "folder" {
+                self.preview = match r {
+                    Ok((200, b)) if b["bytes"].is_u64() => view::folder_preview(b["files"].as_u64().unwrap_or(0), b["bytes"].as_u64().unwrap_or(0)),
+                    Ok((c, b)) => json!({ "state": "folder", "error": format!("Its size could not be counted: {}", why(c, &b)) }),
+                    Err(e) => json!({ "state": "folder", "error": format!("Its size could not be counted: {e}") }),
+                };
+            }
+        } else if tag == "download" || tag == "open" || tag == "folder" {
+            if tag == "folder" {
+                self.packing = None;
+            }
             match r {
                 Ok((c, body)) if (200..300).contains(&c) => {
                     if let Some(p) = body["saved"].as_str() {

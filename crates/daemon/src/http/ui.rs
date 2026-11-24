@@ -162,6 +162,8 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/artifacts/download", get(artifact_download))
         .route("/api/sandboxes/:name/fs", get(sandbox_fs_list))
         .route("/api/sandboxes/:name/fs/file", get(sandbox_fs_file))
+        .route("/api/sandboxes/:name/fs/folder", get(sandbox_fs_folder))
+        .route("/api/sandboxes/:name/fs/folder/size", get(sandbox_fs_folder_size))
         .route("/api/sandboxes/:name/fs/recent", get(sandbox_fs_recent))
         .route("/api/sandboxes/:name/fs/delete", post(sandbox_fs_delete))
         // Code map runs.
@@ -1906,6 +1908,47 @@ async fn sandbox_fs_file(State(app): S, Path(name): Path<String>, Query(q): Quer
         data,
     )
         .into_response())
+}
+
+/// A whole folder as `<folder>.tar.gz`, packed by `tar` where `read` reads
+/// (inside the sandbox, or the workspace on the host when it is stopped), under
+/// the file route's headers. Sized first: past the cap (`max`, at most
+/// `sandbox_fs::MAX_ARCHIVE`) the answer is 413 with the size and the cap.
+/// Logged by size only, never by path.
+async fn sandbox_fs_folder(State(app): S, Path(name): Path<String>, Query(q): Query<FsQuery>) -> Result<Response, ApiError> {
+    let sb = sandbox(&name)?;
+    let ws = app.store.workspace(&sb);
+    let max = q.max.unwrap_or(sandbox_fs::MAX_ARCHIVE);
+    let (sbx, host) = (app.sbx_for(&sb).await?, app.host_for(&sb).await?);
+    let data = sandbox_fs::archive(&sbx, &host, &sb.name, ws.as_deref(), &q.path, max).await.map_err(|e| {
+        if sandbox_fs::is_too_large(&e) {
+            ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, format!("{e:#}"))
+        } else {
+            ApiError::not_found(format!("{e:#}"))
+        }
+    })?;
+    tracing::info!(bytes = data.len(), "folder archive sent");
+    let filename = sandbox_fs::archive_name(&q.path);
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/gzip".to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\"")),
+            (header::CONTENT_SECURITY_POLICY, "sandbox".to_string()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+        ],
+        data,
+    )
+        .into_response())
+}
+
+/// A folder's file count and bytes, counted without reading the files, with
+/// the archive cap: what the explorers show before a folder download.
+async fn sandbox_fs_folder_size(State(app): S, Path(name): Path<String>, Query(q): Query<FsQuery>) -> ApiResult {
+    let sb = sandbox(&name)?;
+    let ws = app.store.workspace(&sb);
+    let (sbx, host) = (app.sbx_for(&sb).await?, app.host_for(&sb).await?);
+    let size = sandbox_fs::folder_size(&sbx, &host, &sb.name, ws.as_deref(), &q.path).await.map_err(|e| ApiError::not_found(format!("{e:#}")))?;
+    Ok(ok_with(json!({ "path": q.path, "files": size.files, "bytes": size.bytes, "max": sandbox_fs::MAX_ARCHIVE })))
 }
 
 // ── Code map ─────────────────────────────────────────────────────────────

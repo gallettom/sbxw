@@ -2083,6 +2083,19 @@ places, Hidden files, the typed path) and Recent (written lately anywhere,
 by age, Show in folder); an upload card; a filter; a preview under the list
 (text, Markdown through `markdown`, a picture through `image`, HTML as its
 source) with Download, Show in folder, Open, Save as, Copy path, Delete.
+
+**A whole folder.** A folder row's ⌄ button (on hover), or the one beside the
+path for the folder listed, shows that folder in the reader: "Folder", its
+file count and size (`GET .../fs/folder/size`, counted in the sandbox without
+reading the files), and **Download folder**, Show in folder, Save as….
+Download folder saves `<name>.tar.gz` into Downloads through the core, as a
+file download (the core's clean name, never over a file), with "Packing…"
+until the answer, the daemon's refusal as text, then Show in folder. **The
+cap here is 128 MB** (`view::FOLDER_MAX`, the core's own download limit,
+under the daemon's 256 MB): a folder whose files hold more says so ("152.0 MB:
+over the 128.0 MB a folder download allows here") and its buttons are off.
+There is no byte-by-byte progress: the daemon packs the folder whole before
+it answers (see `docs/web-ui.md`, "Downloading a folder").
 `codemap` (panel "Code map", 520 pt): the map or a lens, a file or one of
 its sections drawn through `markdown` (a `[[wiki link]]` is a link to
 `https://sbxw-codemap.invalid/<file>#<section>`, followed in the panel; a
@@ -2106,7 +2119,8 @@ amber) while its map or a lens is being written.
 path under `.sbxw-artifacts`, else the file's absolute path), Recent's
 `files-show-<id>`, Locations `files-loc-<id>` (the tabs `files-tab-<tab>` before views2), actions `files-download`,
 `files-reveal`, `files-open-with`, `files-save-as`, `files-copy-path`,
-`files-delete`, the preview's body `files-preview-<state>` (`loading`, `text` (HTML too), `markdown`, `image`, `note`, `error`), uploads `files-drop` (the drop target), `files-upload-send-<n>`
+`files-delete`, a folder's `files-folder-<path>` (on its row), `files-download-listed` (beside the path), and in the reader
+`files-download-folder`, `files-reveal-folder`, `files-save-as-folder`, the preview's body `files-preview-<state>` (`loading`, `text` (HTML too), `markdown`, `image`, `note`, `error`, `folder`), uploads `files-drop` (the drop target), `files-upload-send-<n>`
 and `files-unstage-<n>` (by position), `files-more` (Show N more), a folder row
 `files-row-<folder path>`; the map's `codemap-docs` (picker,
 items by file key), `codemap-outline-<section id>`, `codemap-hit-<file key>`,
@@ -2121,7 +2135,7 @@ a failed read is in `data.app.errors[key]`, a string):
 | `files_dir` | `GET /api/sandboxes/:name/fs?path=`: `{path, parent, entries: [{name, kind, link, size, modified}], offline, workspace, artifacts, home, mounts, worktrees}` |
 | `files_recent` | `GET /api/sandboxes/:name/fs/recent`: `{files: [{path, size, modified}], days, workspace, home, roots}` |
 | `codemap` | `GET /api/codemap`, read again on each `codemap` event: every run `{sandbox, kind: map\|lens, phase: writing\|done\|failed, note}` |
-| `files_ui` | Set by the core: `sandbox`, `tab`, `rows` (`id`, `name`, `kind` (`folder` for a folded artifact folder, with `count` and `open`), `icon`, `dir`, `depth`, `size`, `when`, `fresh`, `group`, `can_delete`, `selected`), `count` (`total`, `shown`, `more`, `label`), `places`, `path`, `can_up`, `can_back`, `offline`, `selected`, `preview` (`state`: `loading`, `text`, `markdown`, `html`, `image` with `key`, `note`, `error`), `staged` (`index`, `name`, `size`, `to`, `problem`, `state`, `progress`), `saved`, `run`, `has_map`, `errors`, `loading` |
+| `files_ui` | Set by the core: `sandbox`, `tab`, `rows` (`id`, `name`, `kind` (`folder` for a folded artifact folder, with `count` and `open`), `icon`, `dir`, `depth`, `size`, `when`, `fresh`, `group`, `can_delete`, `selected`), `count` (`total`, `shown`, `more`, `label`), `places`, `path`, `can_up`, `can_back`, `offline`, `selected`, `preview` (`state`: `loading`, `text`, `markdown`, `html`, `image` with `key`, `note`, `error`, `folder` with `counting`, `files`, `bytes`, `line`, `over`, `error`), `selected.packing` (a folder download under way), `staged` (`index`, `name`, `size`, `to`, `problem`, `state`, `progress`), `saved`, `run`, `has_map`, `errors`, `loading` |
 | `codemap_ui` | Set by the core: `sandbox`, `maps`, `root`, `loading`, `error`, `map` (`docs`, `count`, `broken`, `doc`: `{key, title, path, section, markdown, outline, backlinks, code}`), `diagram`, `run`, `writing`, `running`, `lens`, `lens_left` |
 
 **Rules.** File content is read raw (`Call::raw`): text and Markdown are
@@ -2157,9 +2171,10 @@ panel and its Upload button opens its own dialog.
 | `files_select` | `id` (a row's) | direct | A folder is listed, a file previewed; a row not listed is refused |
 | `files_show_in_folder` | `id` | direct | Recent: lists its folder, on it |
 | `files_copy_path` | none | direct | The path as the agent sees it, through `copy_text` |
-| `files_download`, `files_reveal` | none | direct | Into Downloads (never over a file); and shown in its folder |
+| `files_folder` | `id?` (a folder row's; none: the folder listed) | direct | Shows the folder in the reader, with its file count and size as the daemon counts them, to download it whole |
+| `files_download`, `files_reveal` | none | direct | Into Downloads (never over a file); and shown in its folder. A folder in the reader goes whole, as `<name>.tar.gz` |
 | `files_show_saved` | none | direct | Shows the last file saved in its folder |
-| `files_save_as` | none | approval | The save dialog, after the core's dialog names the file and its size |
+| `files_save_as` | none | approval | The save dialog, after the core's dialog names the file (or the folder, its count and size) and its size |
 | `files_open_with` | none | approval | The core downloads it and judges it (its name and first bytes); its dialog says what it is; a program, script, installer or shortcut is never opened; a file it warns about needs the box ticked |
 | `files_delete` | none | approval | The dialog shows the path and size (a folder: everything in it); only under the workspace, a read-write mount, home or /tmp, never those folders, `.sbxw-artifacts` or `.git` |
 | `files_star` | `path` | direct | Pins a folder among the places (kept across runs) |

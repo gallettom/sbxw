@@ -460,6 +460,24 @@ such as `public/`, `src/` or `templates/`, or one beside web code.
   webp, svg, bmp, ico, avif) is loaded through the same file route as the
   preview, capped at 24 MB, at most 24 per document. A remote image is never
   loaded: its description and address are shown as text.
+- **Downloading a folder:** a folder row has a ⬇ button, as a file row
+  does, and a folder's preview (↑/↓ onto it) shows its file count and size
+  and **⬇ Download folder**. It downloads as `<folder>.tar.gz`, which holds
+  the folder by its own name (a double click on a Mac unpacks it). The
+  daemon packs it with `tar` where it reads files: inside the sandbox when it
+  runs, else from the workspace on the host (a stopped sandbox, workspace
+  only). Links are stored as links, never followed out of the folder;
+  nothing in it is left out, as for a single file (`~/.ssh` or `~/.claude`
+  download as files do today: the explorer has never hidden them). **The cap
+  is 256 MB** of files in the folder (the daemon's `MAX_ARCHIVE`, the same
+  memory bound as a single file's 256 MB): the folder is counted first, and
+  one over the cap is refused with its size and the cap ("too large to
+  download here: N bytes (M files), over the 268435456 bytes a folder
+  download allows"); the page says so before it saves anything, and the
+  button is off in the preview. An archive that still grows past the cap
+  while it is packed is refused too, never handed over cut. The desktop
+  app's cap is lower, 128 MB (its own download limit). The daemon packs the
+  whole folder before it answers, so the browser's download starts only then.
 - **Keyboard:** ↑/↓ move and preview, Return opens a folder or downloads a
   file, Backspace goes up (in **Recent**, back to the previous view).
 - **Favourites:** `.sbxw-artifacts`, the workspace, the agent's home and `/` are

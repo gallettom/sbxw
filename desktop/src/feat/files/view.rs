@@ -19,6 +19,24 @@ pub const IMAGE_MAX: u64 = 24 * 1024 * 1024;
 /// Recent: the badge counts the last hour's files.
 pub const FRESH_SECS: u64 = 3600;
 
+/// The largest folder the app downloads (as `.tar.gz`): what the core
+/// downloads at most (`files::MAX_BYTES`), under the daemon's own 256 MB cap
+/// (`sandbox_fs::MAX_ARCHIVE`). Asked of the daemon as `max`, which refuses
+/// a folder whose files hold more, with the size.
+pub const FOLDER_MAX: u64 = crate::files::MAX_BYTES;
+
+/// A folder in the reader once the daemon counted it: its files and bytes,
+/// and why it cannot download here when its files hold more than
+/// [`FOLDER_MAX`].
+pub fn folder_preview(files: u64, bytes: u64) -> J {
+    let over = (bytes > FOLDER_MAX).then(|| format!("{}: over the {} a folder download allows here", size_label(bytes), size_label(FOLDER_MAX)));
+    json!({
+        "state": "folder", "files": files, "bytes": bytes,
+        "line": format!("{files} {} · {}", if files == 1 { "file" } else { "files" }, size_label(bytes)),
+        "over": over,
+    })
+}
+
 /// `1240` → `1,240`.
 pub fn thousands(n: usize) -> String {
     let s = n.to_string();

@@ -10,7 +10,9 @@
 //! (`GET /api/codemap`). Stand-in only: `files_tree` (more `GET .../fs`
 //! answers, by path), `files_content` (file text by absolute path, for
 //! `GET .../fs/file` and `.../artifacts/download`), `files_map_after` (the
-//! artifacts answer once a code map run is done).
+//! artifacts answer once a code map run is done), `files_folder_bytes` (a
+//! folder's byte count by path, for `GET .../fs/folder/size` and
+//! `.../fs/folder`, else the sum of its `files_content`).
 //!
 //! File bodies are answered raw, in the stand-in's form (`{"$raw": text,
 //! "$type": ...}`, or `{"$raw_hex": ...}` for a picture).
@@ -122,6 +124,29 @@ pub fn route(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u1
             }
         }
         return content(st.data, &p, max);
+    }
+    // A folder: counted from `files_content` under it (`files_folder_bytes`
+    // overrides the byte count, for a big folder), packed into a stand-in
+    // gzip; past `max` refused with the size and the cap, as the daemon does.
+    let folder = |data: &J, p: &str| {
+        let under = format!("{}/", p.trim_end_matches('/'));
+        let (files, bytes) = data["files_content"].as_object().into_iter().flatten().filter(|(k, _)| k.starts_with(&under))
+            .fold((0u64, 0u64), |(n, b), (_, v)| (n + 1, b + v.as_str().map_or(0, |t| t.len() as u64)));
+        (files, data["files_folder_bytes"][p].as_u64().unwrap_or(bytes))
+    };
+    if match_path("/api/sandboxes/{name}/fs/folder/size", path).is_some() && method == "GET" {
+        let p = query(path, "path").unwrap_or_default();
+        let (files, bytes) = folder(st.data, &p);
+        return Some((200, json!({ "ok": true, "path": p, "files": files, "bytes": bytes, "max": 256u64 << 20 })));
+    }
+    if match_path("/api/sandboxes/{name}/fs/folder", path).is_some() && method == "GET" {
+        let p = query(path, "path").unwrap_or_default();
+        let max: u64 = query(path, "max").and_then(|m| m.parse().ok()).unwrap_or(256 << 20).min(256 << 20);
+        let (files, bytes) = folder(st.data, &p);
+        if bytes > max {
+            return err(413, format!("{p}: too large to download here: {bytes} bytes ({files} files), over the {max} bytes a folder download allows"));
+        }
+        return Some((200, json!({ "$raw_hex": "1f8b08000000000000030300000000000000000000", "$type": "application/gzip" })));
     }
     if match_path("/api/sandboxes/{name}/fs", path).is_some() && method == "GET" {
         let p = query(path, "path").unwrap_or_default();

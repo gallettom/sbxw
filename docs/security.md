@@ -144,6 +144,24 @@ leave the daemon: at most 300 entries, 4 KB read per file, 5 s per read.
 Nothing but counts is logged. The list is text to show and grants nothing:
 it changes no approval path and no input gate.
 
+**A folder download** (`GET /api/sandboxes/:name/fs/folder?path=`, and
+`.../fs/folder/size` for its count) is read-only and answers only behind this
+token, as the single-file route does: the same path rules (an absolute path;
+a stopped sandbox is read from the host inside its workspace only, after the
+path is resolved, so a link is no way out of it), the same headers
+(`Content-Disposition: attachment` under a cleaned `<folder>.tar.gz`,
+`Content-Security-Policy: sandbox`, `nosniff`). `tar` runs inside the
+sandbox (or, stopped, on the host on the resolved workspace path), with the
+path passed as an argument, never formatted into the script; links are
+stored as links (no `-h`), so a link to `~/.ssh` or `/` inside a folder adds
+a link, not what it points to. Nothing is excluded that a single-file
+download allows: the explorer has never refused a file of `~/.ssh` or
+`~/.claude`, and a folder keeps that rule. The folder is counted first and
+refused past 256 MB (413, the size and the cap in the error), and an archive
+that grows past the cap while packed is refused, never cut. The log line
+says the archive's size only, never the path. The remote listener has no
+such route: the phone gets nothing new.
+
 **Port squatting.** Before the CLI sends the token, or anything secret such as
 the API key of `sbxw up --use-api-key`, it checks that what answers on the
 port knows the token, without revealing it: it sends a random nonce to
