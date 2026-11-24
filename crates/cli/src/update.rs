@@ -21,9 +21,77 @@ const RELEASE_PUBLIC_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID07mlyWqu
 /// not pass for one.
 const SIG_NAMESPACE: &str = "sbxw-release";
 
-/// Checks GitHub for a newer sbxw release and, unless `check_only`, downloads
+/// What to do with the desktop app (sbxw.app) during an update.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DesktopChoice {
+    /// Refresh it when installed; offer it once, on a terminal, when not.
+    Ask,
+    /// `--no-desktop`: leave it alone, never ask.
+    Never,
+    /// `--desktop`: install or refresh it without asking, forget a "no".
+    Always,
+}
+
+impl DesktopChoice {
+    pub fn from_flags(no_desktop: bool, desktop: bool) -> Self {
+        match (no_desktop, desktop) {
+            (true, _) => Self::Never,
+            (_, true) => Self::Always,
+            _ => Self::Ask,
+        }
+    }
+}
+
+/// The `sbxw update` flags.
+#[derive(Clone, Copy, Debug)]
+pub struct Opts {
+    pub check: bool,
+    pub no_island: bool,
+    pub desktop: DesktopChoice,
+}
+
+/// The apps' step of an update (island, desktop app), on its own: what the
+/// new binary runs for the old one once it is in place (`--apps-step TAG`).
+pub fn apps_step(tag: &str, opts: Opts) -> Result<()> {
+    if !valid_tag(tag) {
+        anyhow::bail!("--apps-step takes a release tag such as v4.3.0, not {tag:?}");
+    }
+    let ui = Ui::new();
+    let base = format!("https://github.com/{REPO}/releases/download/{tag}");
+    if !opts.no_island {
+        island_or_warn(&ui, &base, opts.check);
+    }
+    desktop_or_warn(&ui, &base, opts.check, opts.desktop);
+    Ok(())
+}
+
+/// A release tag as GitHub names ours: `v` then digits, dots, letters, dashes.
+fn valid_tag(tag: &str) -> bool {
+    tag.len() <= 40
+        && tag.starts_with('v')
+        && tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+}
+
+fn island_or_warn(ui: &Ui, base: &str, check: bool) {
+    if let Err(e) = update_island(ui, base, check) {
+        ui.warn(&format!(
+            "could not refresh {ISLAND_APP}: {e:#}\ninstall it manually from https://github.com/{REPO}/releases"
+        ));
+    }
+}
+
+fn desktop_or_warn(ui: &Ui, base: &str, check: bool, choice: DesktopChoice) {
+    if let Err(e) = update_desktop(ui, base, check, choice) {
+        ui.warn(&format!(
+            "could not install or refresh {DESKTOP_APP}: {e:#}\ninstall it manually from https://github.com/{REPO}/releases"
+        ));
+    }
+}
+
+/// Checks GitHub for a newer sbxw release and, unless `check`, downloads
 /// and installs it in place of the currently running binary.
-pub fn run(check_only: bool, no_island: bool, no_desktop: bool) -> Result<()> {
+pub fn run(opts: Opts) -> Result<()> {
+    let Opts { check: check_only, no_island, desktop: desktop_choice } = opts;
     let ui = Ui::new();
     let current = env!("CARGO_PKG_VERSION");
     println!("{}\n", crate::banner());
@@ -38,31 +106,25 @@ pub fn run(check_only: bool, no_island: bool, no_desktop: bool) -> Result<()> {
         if no_island {
             return;
         }
-        if let Err(e) = update_island(&ui, &base, check) {
-            ui.warn(&format!(
-                "could not refresh {ISLAND_APP}: {e:#}\ninstall it manually from https://github.com/{REPO}/releases"
-            ));
-        }
+        island_or_warn(&ui, &base, check);
     };
 
-    // The desktop app follows the release's version: refreshed when installed.
-    let desktop = |check: bool| {
-        if no_desktop {
-            return;
-        }
-        if let Err(e) = update_desktop(&ui, &base, check) {
-            ui.warn(&format!(
-                "could not refresh {DESKTOP_APP}: {e:#}\ninstall it manually from https://github.com/{REPO}/releases"
-            ));
-        }
-    };
+    // The desktop app follows the release's version: refreshed when
+    // installed, offered when not (see `desktop_step`).
+    let desktop = |check: bool| desktop_or_warn(&ui, &base, check, desktop_choice);
 
     let exe = std::env::current_exe().context("could not resolve current executable path")?;
 
     // The island bullet only when there is one to refresh: updating never
     // installs what the user declined.
     let island_planned = !no_island && std::env::consts::OS == "macos" && installed_island_app().is_some();
-    let desktop_planned = !no_desktop && std::env::consts::OS == "macos" && installed_app(DESKTOP_APP).is_some();
+    let desktop_planned = match desktop_choice {
+        DesktopChoice::Never => None,
+        _ if std::env::consts::OS != "macos" => None,
+        _ if installed_app(DESKTOP_APP).is_some() => Some("native app, if a newer one ships"),
+        DesktopChoice::Always => Some("native app (--desktop)"),
+        DesktopChoice::Ask => None,
+    };
 
     if parse_version(latest) <= parse_version(current) {
         ui.ok("sbxw", &format!("v{current} is the latest"));
@@ -127,8 +189,13 @@ pub fn run(check_only: bool, no_island: bool, no_desktop: bool) -> Result<()> {
     ui.ok("installed", &exe.display().to_string());
 
     refresh_extension(&ui, &exe);
-    island(false);
-    desktop(false);
+    // The apps' step from the NEW binary, so a change to it takes effect in
+    // this same run. Only when it cannot run at all does this (old) process
+    // do the step itself.
+    if run_apps_step(&exe, &apps_step_args(&latest_tag, opts)) == AppsStep::NotRun {
+        island(false);
+        desktop(false);
+    }
 
     println!(
         "\n  {}  sbxw {}v{current}{} → {}{latest_tag}{}\n",
@@ -143,6 +210,39 @@ pub fn run(check_only: bool, no_island: bool, no_desktop: bool) -> Result<()> {
         println!("    {}\n", ui.cmd("sbxw down && sbxw up"));
     }
     Ok(())
+}
+
+/// The arguments for the new binary's apps step: the release tag and the
+/// flags the person passed, so it does what this run was asked to do.
+fn apps_step_args(tag: &str, opts: Opts) -> Vec<String> {
+    let mut args = vec!["update".to_string(), "--apps-step".into(), tag.into()];
+    if opts.no_island {
+        args.push("--no-island".into());
+    }
+    match opts.desktop {
+        DesktopChoice::Never => args.push("--no-desktop".into()),
+        DesktopChoice::Always => args.push("--desktop".into()),
+        DesktopChoice::Ask => {}
+    }
+    args
+}
+
+#[derive(Debug, PartialEq)]
+enum AppsStep {
+    /// The new binary ran it (it reports its own failures).
+    Ran,
+    /// It could not be started, or did not know `--apps-step` (clap's usage
+    /// error, exit 2): the caller does the step itself.
+    NotRun,
+}
+
+/// Runs `exe` with `args` on this terminal, so its prompt reaches the person.
+fn run_apps_step(exe: &std::path::Path, args: &[String]) -> AppsStep {
+    match std::process::Command::new(exe).args(args).status() {
+        Ok(s) if s.code() == Some(2) => AppsStep::NotRun,
+        Ok(_) => AppsStep::Ran,
+        Err(_) => AppsStep::NotRun,
+    }
 }
 
 /// Whether a daemon answers on this directory's configured address — the
@@ -194,12 +294,12 @@ impl PlanItem {
         })
     }
 
-    fn desktop(installed: bool) -> Option<Self> {
-        installed.then(|| Self {
+    fn desktop(why: Option<&str>) -> Option<Self> {
+        why.map(|why| Self {
             colour: BLUE,
             title: "sbxw desktop app".into(),
             place: "~/Applications".into(),
-            why: "native app, if a newer one ships".into(),
+            why: why.into(),
         })
     }
 }
@@ -413,9 +513,12 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
 
 /// Replaces the bundle at `app` with the freshly extracted one. `mv` rather
 /// than `std::fs::rename` for the cross-filesystem case (/tmp → ~/Applications).
+/// A first install has nothing to remove.
 fn swap_bundle(staged: &std::path::Path, app: &std::path::Path) -> Result<()> {
-    std::fs::remove_dir_all(app)
-        .with_context(|| format!("could not remove {} (permissions?)", app.display()))?;
+    if app.exists() {
+        std::fs::remove_dir_all(app)
+            .with_context(|| format!("could not remove {} (permissions?)", app.display()))?;
+    }
     let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("mv"))
         .arg(staged)
         .arg(app)
@@ -441,7 +544,11 @@ fn installed_island_app() -> Option<PathBuf> {
 /// is in neither.
 fn installed_app(name: &str) -> Option<PathBuf> {
     let home = std::env::var("HOME").ok().map(PathBuf::from);
-    app_candidates(home.as_deref(), name).into_iter().find(|p| p.is_dir())
+    installed_app_in(home.as_deref(), name)
+}
+
+fn installed_app_in(home: Option<&std::path::Path>, name: &str) -> Option<PathBuf> {
+    app_candidates(home, name).into_iter().find(|p| p.is_dir())
 }
 
 /// Where a bundle may be installed, most specific first.
@@ -455,80 +562,245 @@ fn app_candidates(home: Option<&std::path::Path>, name: &str) -> Vec<PathBuf> {
 }
 
 // ── macOS desktop app (sbxw.app) ─────────────────────────────────────────
-// Like the island: refreshed in place only when already installed. Its
-// version is the release's (desktop/packaging/build-app.sh), published as
+// Refreshed in place when installed. When it is not, offered once on a
+// terminal, into the folder install.sh uses (~/Applications); a "no" is
+// remembered in DECLINED_MARKER until `--desktop`. Its version is the
+// release's (desktop/packaging/build-app.sh), published as
 // `desktop-version.txt` beside the zip.
 const DESKTOP_APP: &str = "sbxw.app";
 const DESKTOP_ZIP: &str = "sbxw-desktop-macos.zip";
+/// Under ~/.sbxw: present once the person said no to the offer.
+const DECLINED_MARKER: &str = "desktop-app-declined";
 
-/// Refreshes an installed `sbxw.app` when the release ships a newer build.
-/// macOS only; a no-op when the app is not installed, and when the release
-/// has no desktop build (its job is optional). With `check_only` it only
-/// reports.
+/// The outside world of the desktop step: the release and macOS in real
+/// use, a stub in the tests.
+trait DesktopRelease {
+    /// The release's desktop version; `None` when it publishes no desktop build.
+    fn latest(&self) -> Option<String>;
+    /// The installed bundle's version ("0" when it can't be read).
+    fn installed_version(&self, app: &std::path::Path) -> String;
+    /// Downloads the zip into `dir`, verifies it (fail closed) and extracts
+    /// it: the staged bundle, ready to move into place.
+    fn stage(&self, ui: &Ui, dir: &std::path::Path) -> Result<PathBuf>;
+    /// Whether the installed app runs now.
+    fn running(&self, app: &std::path::Path) -> bool;
+}
+
+/// The release at `base`, on this Mac.
+struct LiveDesktop<'a> {
+    base: &'a str,
+}
+
+impl DesktopRelease for LiveDesktop<'_> {
+    fn latest(&self) -> Option<String> {
+        let tmp = PrivateDir::new("sbxw-desktop").ok()?;
+        let ver = tmp.path().join("desktop-version.txt");
+        curl_download(&format!("{}/desktop-version.txt", self.base), &ver).ok()?;
+        let v = std::fs::read_to_string(&ver).ok()?.trim().to_string();
+        (!v.is_empty()).then_some(v)
+    }
+
+    fn installed_version(&self, app: &std::path::Path) -> String {
+        island_bundle_version(app)
+    }
+
+    fn stage(&self, ui: &Ui, dir: &std::path::Path) -> Result<PathBuf> {
+        let zip = dir.join(DESKTOP_ZIP);
+        ui.spin(&format!("downloading {DESKTOP_ZIP}"), || {
+            curl_download(&format!("{}/{DESKTOP_ZIP}", self.base), &zip).with_context(|| format!("failed to download {DESKTOP_ZIP}"))
+        })?;
+        // Fail closed, as for the binary: no line for the zip, no install.
+        fetch_and_verify(self.base, dir, &zip, DESKTOP_ZIP)
+            .context("verification failed: the desktop app was not installed or changed")?;
+        // `ditto -x -k` is what install.sh uses; it restores the bundle layout.
+        let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("ditto"))
+            .args(["-x", "-k"])
+            .arg(&zip)
+            .arg(dir)
+            .status()
+            .context("failed to run ditto")?;
+        let staged = dir.join(DESKTOP_APP);
+        if !status.success() || !staged.is_dir() {
+            anyhow::bail!("downloaded archive did not contain {DESKTOP_APP}");
+        }
+        Ok(staged)
+    }
+
+    fn running(&self, app: &std::path::Path) -> bool {
+        desktop_running(app)
+    }
+}
+
+/// What the desktop step did, reported by [`desktop_report`].
+#[derive(Debug, PartialEq)]
+enum DesktopOutcome {
+    /// `--no-desktop`.
+    LeftAlone,
+    /// The release has no desktop build. `say`: the person would expect a
+    /// word (it is installed, or they asked for it).
+    NoBuild { say: bool },
+    UpToDate(String),
+    /// `--check`, installed and stale.
+    Newer { latest: String, installed: String },
+    /// Not installed, and this run may not install it (`--check`, no
+    /// terminal): the one-line hint.
+    Available(String),
+    /// Not installed: the person just said no (remembered).
+    Declined,
+    /// Not installed: they said no at an earlier update.
+    DeclinedBefore,
+    Installed { latest: String, app: PathBuf },
+    Refreshed { from: String, to: String, running: bool },
+}
+
+/// Prints the outcome in the update's ✓ style.
+fn desktop_report(ui: &Ui, outcome: &DesktopOutcome) {
+    const L: &str = "desktop app";
+    match outcome {
+        DesktopOutcome::LeftAlone | DesktopOutcome::DeclinedBefore | DesktopOutcome::NoBuild { say: false } => {}
+        DesktopOutcome::NoBuild { say: true } => ui.ok(L, "no build in this release: left as is"),
+        DesktopOutcome::UpToDate(v) => ui.ok(L, &format!("v{v} is up to date")),
+        DesktopOutcome::Newer { latest, installed } => ui.ok(L, &format!("v{latest} available  (you have v{installed})")),
+        DesktopOutcome::Available(v) => {
+            ui.ok(L, &format!("v{v} available, not installed ({} installs it)", ui.cmd("sbxw update --desktop")))
+        }
+        DesktopOutcome::Declined => {
+            ui.ok(L, &format!("not installed, and not offered again ({} installs it)", ui.cmd("sbxw update --desktop")))
+        }
+        DesktopOutcome::Installed { latest, app } => {
+            ui.ok(L, &format!("v{latest} installed → {}", app.display()));
+            println!("    Launch it:  open '{}'", app.display());
+            println!("    It talks to the running daemon: start one with 'sbxw' first.");
+        }
+        DesktopOutcome::Refreshed { from, to, running } => ui.ok(
+            L,
+            &format!("v{from} → v{to}{}", if *running { "  (quit and reopen it to use the new version)" } else { "" }),
+        ),
+    }
+}
+
+/// The desktop step, on macOS. `ask` puts the offer to the person: `Some(yes)`,
+/// or `None` when no answer came (end of input), which installs nothing and
+/// remembers nothing.
 ///
 /// The app is never quit or relaunched: its process is named `sbxw`, as the
 /// CLI and the daemon are, so it cannot be told apart by name. A running app
 /// keeps the code it started with until the person restarts it, and is told so.
-fn update_desktop(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
-    if std::env::consts::OS != "macos" {
-        return Ok(());
+#[allow(clippy::too_many_arguments)]
+fn desktop_step(
+    ui: &Ui,
+    home: &std::path::Path,
+    rel: &dyn DesktopRelease,
+    choice: DesktopChoice,
+    check_only: bool,
+    interactive: bool,
+    ask: &mut dyn FnMut(&str) -> Option<bool>,
+) -> Result<DesktopOutcome> {
+    if choice == DesktopChoice::Never {
+        return Ok(DesktopOutcome::LeftAlone);
     }
-    let Some(app) = installed_app(DESKTOP_APP) else {
-        return Ok(()); // not installed: nothing to refresh
+    let marker = home.join(".sbxw").join(DECLINED_MARKER);
+    if choice == DesktopChoice::Always && !check_only {
+        let _ = std::fs::remove_file(&marker);
+    }
+    let installed_app = installed_app_in(Some(home), DESKTOP_APP);
+    let Some(latest) = rel.latest() else {
+        return Ok(DesktopOutcome::NoBuild { say: installed_app.is_some() || choice == DesktopChoice::Always });
     };
 
-    // Removed when it goes out of scope, on every exit path.
-    let tmp = PrivateDir::new("sbxw-desktop")?;
-    let tmp_dir = tmp.path();
-
-    let tmp_ver = tmp_dir.join("desktop-version.txt");
-    if curl_download(&format!("{base}/desktop-version.txt"), &tmp_ver).is_err() {
-        ui.ok("desktop app", "no build in this release: left as is");
-        return Ok(());
+    if let Some(app) = installed_app {
+        let installed = rel.installed_version(&app);
+        if parse_version(&latest) <= parse_version(&installed) {
+            return Ok(DesktopOutcome::UpToDate(installed));
+        }
+        if check_only {
+            return Ok(DesktopOutcome::Newer { latest, installed });
+        }
+        // Removed when it goes out of scope, on every exit path.
+        let tmp = PrivateDir::new("sbxw-desktop")?;
+        let staged = rel.stage(ui, tmp.path())?;
+        let running = rel.running(&app);
+        swap_bundle(&staged, &app)?;
+        unquarantine(&app);
+        return Ok(DesktopOutcome::Refreshed { from: installed, to: latest, running });
     }
-    let latest = std::fs::read_to_string(&tmp_ver)?.trim().to_string();
-    let installed = island_bundle_version(&app);
 
-    if parse_version(&latest) <= parse_version(&installed) {
-        ui.ok("desktop app", &format!("v{installed} is up to date"));
-        return Ok(());
-    }
+    // Not installed: never without a yes or `--desktop`.
     if check_only {
-        ui.ok("desktop app", &format!("v{latest} available  (you have v{installed})"));
-        return Ok(());
+        return Ok(DesktopOutcome::Available(latest));
     }
-
-    let tmp_zip = tmp_dir.join(DESKTOP_ZIP);
-    ui.spin(&format!("downloading {DESKTOP_ZIP}"), || {
-        curl_download(&format!("{base}/{DESKTOP_ZIP}"), &tmp_zip).with_context(|| format!("failed to download {DESKTOP_ZIP}"))
-    })?;
-
-    // Fail closed, as for the binary: no line for the zip, no install.
-    fetch_and_verify(base, tmp_dir, &tmp_zip, DESKTOP_ZIP).context("verification failed: leaving the installed app alone")?;
-
-    let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("ditto"))
-        .args(["-x", "-k"])
-        .arg(&tmp_zip)
-        .arg(tmp_dir)
-        .status()
-        .context("failed to run ditto")?;
-    let staged = tmp_dir.join(DESKTOP_APP);
-    if !status.success() || !staged.is_dir() {
-        anyhow::bail!("downloaded archive did not contain {DESKTOP_APP}");
+    // install.sh's DESKTOP_APP_DIR.
+    let dir = home.join("Applications");
+    if choice == DesktopChoice::Ask {
+        if marker.exists() {
+            return Ok(DesktopOutcome::DeclinedBefore);
+        }
+        if !interactive {
+            return Ok(DesktopOutcome::Available(latest));
+        }
+        match ask(&format!("The sbxw desktop app is available (v{latest}). Install it in {}? [Y/n] ", dir.display())) {
+            None => return Ok(DesktopOutcome::Available(latest)),
+            Some(false) => {
+                remember_declined(&marker)?;
+                return Ok(DesktopOutcome::Declined);
+            }
+            Some(true) => {}
+        }
     }
-
-    let running = desktop_running(&app);
+    let tmp = PrivateDir::new("sbxw-desktop")?;
+    let staged = rel.stage(ui, tmp.path())?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("could not create {}", dir.display()))?;
+    let app = dir.join(DESKTOP_APP);
     swap_bundle(&staged, &app)?;
-    // Ad-hoc-signed, not notarised: without this Gatekeeper refuses to open it.
+    unquarantine(&app);
+    Ok(DesktopOutcome::Installed { latest, app })
+}
+
+fn remember_declined(marker: &std::path::Path) -> Result<()> {
+    if let Some(dir) = marker.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
+    }
+    std::fs::write(
+        marker,
+        "You said no to the sbxw desktop app at `sbxw update`, so it is not offered again.\n\
+         `sbxw update --desktop` installs it and removes this file.\n",
+    )
+    .with_context(|| format!("could not write {}", marker.display()))
+}
+
+/// Ad-hoc-signed, not notarised: without this Gatekeeper refuses to open it.
+fn unquarantine(app: &std::path::Path) {
     let _ = std::process::Command::new(sbxw_core::sysbin::sys_bin("xattr"))
         .args(["-dr", "com.apple.quarantine"])
-        .arg(&app)
+        .arg(app)
         .status();
+}
 
-    ui.ok(
-        "desktop app",
-        &format!("v{installed} → v{latest}{}", if running { "  (quit and reopen it to use the new version)" } else { "" }),
-    );
+/// The `[Y/n]` offer on this terminal: an empty line is yes, as in install.sh.
+fn ask_on_terminal(prompt: &str) -> Option<bool> {
+    use std::io::Write;
+    print!("\n  {prompt}");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(!line.trim_start().starts_with(['n', 'N'])),
+    }
+}
+
+/// The desktop step with the real release, terminal and home.
+fn update_desktop(ui: &Ui, base: &str, check_only: bool, choice: DesktopChoice) -> Result<()> {
+    if std::env::consts::OS != "macos" {
+        if choice == DesktopChoice::Always {
+            ui.ok("desktop app", "macOS only: nothing to do here");
+        }
+        return Ok(());
+    }
+    use std::io::IsTerminal;
+    let home = std::env::var_os("HOME").map(PathBuf::from).context("HOME is not set")?;
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let outcome = desktop_step(ui, &home, &LiveDesktop { base }, choice, check_only, interactive, &mut ask_on_terminal)?;
+    desktop_report(ui, &outcome);
     Ok(())
 }
 
@@ -916,6 +1188,214 @@ mod tests {
     use super::*;
 
     const HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    // ── The desktop step, against a stub release and a temp HOME ───────────
+
+    /// A release with a desktop build `latest` (or none), an installed bundle
+    /// reporting `installed`, and a `stage` that only counts its calls (no
+    /// download, no verify, no ditto).
+    struct Stub {
+        latest: Option<&'static str>,
+        installed: &'static str,
+        staged: std::cell::Cell<u32>,
+    }
+
+    impl Stub {
+        fn new(latest: Option<&'static str>, installed: &'static str) -> Self {
+            Self { latest, installed, staged: std::cell::Cell::new(0) }
+        }
+    }
+
+    impl DesktopRelease for Stub {
+        fn latest(&self) -> Option<String> {
+            self.latest.map(str::to_string)
+        }
+        fn installed_version(&self, _: &std::path::Path) -> String {
+            self.installed.to_string()
+        }
+        fn stage(&self, _: &Ui, dir: &std::path::Path) -> Result<PathBuf> {
+            self.staged.set(self.staged.get() + 1);
+            let app = dir.join(DESKTOP_APP);
+            std::fs::create_dir_all(app.join("Contents")).unwrap();
+            std::fs::write(app.join("Contents").join("new"), "").unwrap();
+            Ok(app)
+        }
+        fn running(&self, _: &std::path::Path) -> bool {
+            false
+        }
+    }
+
+    const UI: Ui = Ui { tty: false };
+
+    fn home() -> PrivateDir {
+        PrivateDir::new("sbxw-update-test-home").unwrap()
+    }
+
+    fn marker(home: &std::path::Path) -> PathBuf {
+        home.join(".sbxw").join(DECLINED_MARKER)
+    }
+
+    fn never_asked(_: &str) -> Option<bool> {
+        panic!("this run must not ask")
+    }
+
+    fn step(home: &std::path::Path, rel: &Stub, choice: DesktopChoice, check: bool, tty: bool, ask: &mut dyn FnMut(&str) -> Option<bool>) -> DesktopOutcome {
+        desktop_step(&UI, home, rel, choice, check, tty, ask).unwrap()
+    }
+
+    #[test]
+    fn not_installed_and_yes_installs_into_the_home_applications() {
+        let h = home();
+        let rel = Stub::new(Some("4.4.0"), "0");
+        let mut asked = Vec::new();
+        let out = step(h.path(), &rel, DesktopChoice::Ask, false, true, &mut |p| {
+            asked.push(p.to_string());
+            Some(true)
+        });
+        let app = h.path().join("Applications").join(DESKTOP_APP);
+        assert_eq!(out, DesktopOutcome::Installed { latest: "4.4.0".into(), app: app.clone() });
+        assert_eq!(
+            asked,
+            [format!("The sbxw desktop app is available (v4.4.0). Install it in {}? [Y/n] ", h.path().join("Applications").display())]
+        );
+        assert!(app.join("Contents").join("new").is_file());
+        assert_eq!(rel.staged.get(), 1);
+    }
+
+    #[test]
+    fn not_installed_and_no_is_remembered_and_not_asked_again() {
+        let h = home();
+        let rel = Stub::new(Some("4.4.0"), "0");
+        assert_eq!(step(h.path(), &rel, DesktopChoice::Ask, false, true, &mut |_| Some(false)), DesktopOutcome::Declined);
+        assert!(marker(h.path()).is_file());
+        assert_eq!(step(h.path(), &rel, DesktopChoice::Ask, false, true, &mut never_asked), DesktopOutcome::DeclinedBefore);
+        assert_eq!(rel.staged.get(), 0);
+        assert!(!h.path().join("Applications").exists());
+    }
+
+    #[test]
+    fn no_answer_installs_nothing_and_remembers_nothing() {
+        let h = home();
+        let rel = Stub::new(Some("4.4.0"), "0");
+        assert_eq!(step(h.path(), &rel, DesktopChoice::Ask, false, true, &mut |_| None), DesktopOutcome::Available("4.4.0".into()));
+        assert!(!marker(h.path()).exists());
+        assert_eq!(rel.staged.get(), 0);
+    }
+
+    #[test]
+    fn the_desktop_flag_installs_without_asking_and_clears_a_no() {
+        let h = home();
+        let rel = Stub::new(Some("4.4.0"), "0");
+        remember_declined(&marker(h.path())).unwrap();
+        let out = step(h.path(), &rel, DesktopChoice::Always, false, false, &mut never_asked);
+        assert!(matches!(out, DesktopOutcome::Installed { .. }), "{out:?}");
+        assert!(!marker(h.path()).exists());
+    }
+
+    #[test]
+    fn a_run_without_a_terminal_or_with_check_never_installs_and_gives_the_hint() {
+        let h = home();
+        let rel = Stub::new(Some("4.4.0"), "0");
+        let hint = DesktopOutcome::Available("4.4.0".into());
+        assert_eq!(step(h.path(), &rel, DesktopChoice::Ask, false, false, &mut never_asked), hint);
+        assert_eq!(step(h.path(), &rel, DesktopChoice::Ask, true, true, &mut never_asked), hint);
+        // --check --desktop still only reports, and keeps a remembered no.
+        remember_declined(&marker(h.path())).unwrap();
+        assert_eq!(step(h.path(), &rel, DesktopChoice::Always, true, true, &mut never_asked), hint);
+        assert!(marker(h.path()).is_file());
+        assert_eq!(rel.staged.get(), 0);
+        assert!(!h.path().join("Applications").exists());
+    }
+
+    #[test]
+    fn no_desktop_never_asks_nor_touches_the_app() {
+        let h = home();
+        let rel = Stub::new(Some("4.4.0"), "0");
+        for tty in [true, false] {
+            assert_eq!(step(h.path(), &rel, DesktopChoice::Never, false, tty, &mut never_asked), DesktopOutcome::LeftAlone);
+        }
+        assert_eq!(rel.staged.get(), 0);
+    }
+
+    #[test]
+    fn an_installed_app_is_refreshed_as_before() {
+        let h = home();
+        let app = h.path().join("Applications").join(DESKTOP_APP);
+        std::fs::create_dir_all(app.join("Contents")).unwrap();
+        std::fs::write(app.join("Contents").join("old"), "").unwrap();
+        // A remembered no is about the offer, not about refreshing.
+        remember_declined(&marker(h.path())).unwrap();
+
+        let current = Stub::new(Some("4.4.0"), "4.4.0");
+        assert_eq!(step(h.path(), &current, DesktopChoice::Ask, false, true, &mut never_asked), DesktopOutcome::UpToDate("4.4.0".into()));
+
+        let stale = Stub::new(Some("4.4.0"), "4.3.0");
+        assert_eq!(
+            step(h.path(), &stale, DesktopChoice::Ask, true, true, &mut never_asked),
+            DesktopOutcome::Newer { latest: "4.4.0".into(), installed: "4.3.0".into() }
+        );
+        assert_eq!(stale.staged.get(), 0, "--check downloads nothing");
+        assert_eq!(
+            step(h.path(), &stale, DesktopChoice::Ask, false, false, &mut never_asked),
+            DesktopOutcome::Refreshed { from: "4.3.0".into(), to: "4.4.0".into(), running: false }
+        );
+        assert!(app.join("Contents").join("new").is_file());
+        assert!(!app.join("Contents").join("old").exists());
+    }
+
+    #[test]
+    fn a_release_without_a_desktop_build_is_quiet_unless_it_matters() {
+        let h = home();
+        let rel = Stub::new(None, "0");
+        assert_eq!(step(h.path(), &rel, DesktopChoice::Ask, false, true, &mut never_asked), DesktopOutcome::NoBuild { say: false });
+        assert_eq!(step(h.path(), &rel, DesktopChoice::Always, false, true, &mut never_asked), DesktopOutcome::NoBuild { say: true });
+    }
+
+    // ── The post-swap step ──────────────────────────────────────────────────
+
+    fn opts(no_island: bool, desktop: DesktopChoice) -> Opts {
+        Opts { check: false, no_island, desktop }
+    }
+
+    #[test]
+    fn the_apps_step_passes_the_tag_and_the_flags() {
+        assert_eq!(apps_step_args("v4.4.0", opts(false, DesktopChoice::Ask)), ["update", "--apps-step", "v4.4.0"]);
+        assert_eq!(
+            apps_step_args("v4.4.0", opts(true, DesktopChoice::Never)),
+            ["update", "--apps-step", "v4.4.0", "--no-island", "--no-desktop"]
+        );
+        assert_eq!(apps_step_args("v4.4.0", opts(false, DesktopChoice::Always)), ["update", "--apps-step", "v4.4.0", "--desktop"]);
+    }
+
+    #[test]
+    fn the_apps_step_takes_only_a_release_tag() {
+        assert!(valid_tag("v4.4.0") && valid_tag("v4.4.0-rc.1"));
+        for bad in ["4.4.0", "v4/../x", "v1?x=y", "", "v1 2"] {
+            assert!(!valid_tag(bad), "{bad}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_post_swap_step_runs_the_new_binary_with_those_arguments() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = PrivateDir::new("sbxw-update-test-exe").unwrap();
+        let args_file = dir.path().join("args");
+        let fake = |name: &str, exit: u8| {
+            let exe = dir.path().join(name);
+            std::fs::write(&exe, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit {exit}\n", args_file.display())).unwrap();
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+            exe
+        };
+        let args = apps_step_args("v4.4.0", opts(true, DesktopChoice::Always));
+        assert_eq!(run_apps_step(&fake("new", 0), &args), AppsStep::Ran);
+        assert_eq!(std::fs::read_to_string(&args_file).unwrap(), "update\n--apps-step\nv4.4.0\n--no-island\n--desktop\n");
+        // Its own failure is its to report: not done a second time.
+        assert_eq!(run_apps_step(&fake("failing", 1), &args), AppsStep::Ran);
+        // A binary that does not know the flag, or none at all: the caller does it.
+        assert_eq!(run_apps_step(&fake("older", 2), &args), AppsStep::NotRun);
+        assert_eq!(run_apps_step(&dir.path().join("missing"), &args), AppsStep::NotRun);
+    }
 
     #[test]
     fn a_bundle_is_looked_for_in_the_home_applications_first() {
