@@ -267,9 +267,18 @@ enum Cmd {
         check: bool,
         #[arg(long)]
         no_island: bool,
-        /// Leave an installed desktop app (sbxw.app) as it is.
-        #[arg(long)]
+        /// Leave the desktop app (sbxw.app) alone: never install, refresh or ask.
+        #[arg(long, conflicts_with = "desktop")]
         no_desktop: bool,
+        /// Install or update the desktop app (macOS) without asking, and
+        /// forget an earlier "no" to the offer.
+        #[arg(long)]
+        desktop: bool,
+        /// Internal: run only the apps' step (island, desktop app) of an update
+        /// to the release with this tag. The old binary calls the new one with
+        /// it once the new binary is in place, so the new code does that step.
+        #[arg(long, hide = true, value_name = "TAG")]
+        apps_step: Option<String>,
     },
     /// Install the browser extension (side panel beside the app under test).
     Extension {
@@ -423,7 +432,13 @@ fn main() -> Result<()> {
         Cmd::Remote { cmd, config } => cmd::remote::run(cmd.unwrap_or_default(), &config),
         Cmd::Cache { action, config } => cmd::cache(action.unwrap_or_default(), &config),
         Cmd::Down { name } => cmd::down(name),
-        Cmd::Update { check, no_island, no_desktop } => update::run(check, no_island, no_desktop),
+        Cmd::Update { check, no_island, no_desktop, desktop, apps_step } => {
+            let opts = update::Opts { check, no_island, desktop: update::DesktopChoice::from_flags(no_desktop, desktop) };
+            match apps_step {
+                Some(tag) => update::apps_step(&tag, opts),
+                None => update::run(opts),
+            }
+        }
         Cmd::Extension { config, daemon, refresh } => {
             let cfg = cmd::load_config(&config)?;
             extension::cmd(&cfg.web_addr, daemon, refresh)
@@ -460,5 +475,22 @@ mod tests {
     #[test]
     fn the_cli_is_well_formed() {
         Cli::command().debug_assert();
+    }
+
+    fn update_flags(args: &[&str]) -> Option<(bool, bool, Option<String>)> {
+        match Cli::try_parse_from(args).ok()?.cmd {
+            Cmd::Update { no_desktop, desktop, apps_step, .. } => Some((no_desktop, desktop, apps_step)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn update_takes_desktop_and_the_hidden_apps_step() {
+        assert_eq!(update_flags(&["sbxw", "update", "--desktop"]), Some((false, true, None)));
+        assert_eq!(
+            update_flags(&["sbxw", "update", "--apps-step", "v9.9.9", "--no-desktop"]),
+            Some((true, false, Some("v9.9.9".into())))
+        );
+        assert!(update_flags(&["sbxw", "update", "--desktop", "--no-desktop"]).is_none(), "the two conflict");
     }
 }

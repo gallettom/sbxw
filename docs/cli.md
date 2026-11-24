@@ -94,7 +94,7 @@ See [Environment files](environment-files.md).
 | `sbxw doctor [--json]` | Check sbxw: the sbx version, `sbxw.toml`, the daemon, every local kit (v3 only since sbx 0.51) and `clipboard.textCopy`. Then summarise `sbx diagnose`: CLI and shim processes, the global network policy, the ZFS setting that slows image builds. Exits non-zero when a check fails. `--json` prints sbx's full report. |
 | `sbxw logs [name] [-n N]` | Tail the daemon log (default 40 lines). With a name, only lines about that sandbox. |
 | `sbxw down [name]` | Stop the daemon (closing every terminal it holds) **and** remove the `/etc/hosts` block. With a name, only close that sandbox's terminals. |
-| `sbxw update [--check] [--no-island] [--no-desktop]` | Install the latest release over this binary. See [Updating](getting-started.md#updating). |
+| `sbxw update [--check] [--no-island] [--no-desktop \| --desktop]` | Install the latest release over this binary. On macOS, refresh the island and the desktop app, and offer the desktop app once when it is not installed (`--desktop` installs it without asking). From the release after 4.3.0 on, one run is enough; from 4.3.0 or older, run `sbxw update` twice (or `sbxw update --desktop` once updated) to be offered the desktop app. See [Updating](getting-started.md#updating). |
 | `sbxw extension` | Write the Chrome/Edge extension folder, print how to load it, and print the sign-in address the panel needs after each daemon start. See [the side panel](chat.md#the-browser-side-panel). |
 | `sbxw completion [shell]` | Print a completion script for bash, zsh, fish, elvish or powershell. |
 

@@ -242,10 +242,30 @@ sbxw update --check    # only check
 
 `sbxw update` also refreshes the browser extension folder. On macOS it updates
 an installed `SbxwIsland.app` when the release has a newer build, and relaunches
-it if it was running. `--no-island` leaves the app alone. It also updates an
-installed `sbxw.app` (the desktop app) when the release has a newer one; a
-running desktop app is not restarted: quit and reopen it. `--no-desktop` leaves
-it alone.
+it if it was running. `--no-island` leaves the app alone.
+
+It also updates an installed `sbxw.app` (the desktop app) when the release has
+a newer one; a running desktop app is not restarted: quit and reopen it. When
+the desktop app is not installed, `sbxw update` asks once, on a terminal:
+
+```
+The sbxw desktop app is available (v4.4.0). Install it in /Users/you/Applications? [Y/n]
+```
+
+Yes (or Enter) installs it where `install.sh` would, checked against the
+release's signed checksums first. No is remembered in
+`~/.sbxw/desktop-app-declined`, and you are not asked again. Without a terminal,
+and with `--check`, nothing is installed; it prints
+`desktop app  v4.4.0 available, not installed (sbxw update --desktop installs it)`.
+
+- `--desktop` installs or updates the desktop app without asking, and forgets
+  an earlier no.
+- `--no-desktop` leaves it alone and never asks.
+
+The island and desktop step is run by the new binary, once it is in place, so
+an update always uses the new release's rules for them. Updating from sbxw
+4.3.0 or older runs the old rules one last time, which never offer the desktop
+app: run `sbxw update` a second time, or `sbxw update --desktop`, to get it.
 
 The web UI shows both versions, `sbx` and `sbxw`, at the foot of the sidebar.
 
