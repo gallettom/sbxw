@@ -14,6 +14,11 @@ pub struct Theme {
     pub selection_alpha: f32,
     /// ANSI 0-15.
     pub palette: [u32; 16],
+    /// Set when the person picked a terminal colour ([`Chosen::theme`]):
+    /// the explicit neutral colours a program draws (24-bit and the
+    /// 256-colour cube and ramp) follow the pick. `None` draws every colour
+    /// as the program chose it.
+    pub remap: Option<Remap>,
 }
 
 /// xterm.js's default ANSI colours (its `DEFAULT_ANSI_COLORS`, Tango), which
@@ -53,6 +58,7 @@ pub const GRAPHITE: Theme = Theme {
     selection: 0x58a6ff,
     selection_alpha: 0x4d as f32 / 255.0,
     palette: GRAPHITE_PALETTE,
+    remap: None,
 };
 
 /// The terminal's theme for one of the app's themes (the dark one is the
@@ -211,7 +217,7 @@ impl Chosen {
             Some(Pick::Color(t)) => Some(t),
             _ => None,
         };
-        match (self.background, text) {
+        let mut th = match (self.background, text) {
             (Some(bg), text) => Theme::from_settings(bg, text),
             (None, Some(t)) => {
                 let mut th = base;
@@ -220,8 +226,10 @@ impl Chosen {
                 th.palette[15] = t;
                 th
             }
-            (None, None) => base,
-        }
+            (None, None) => return base,
+        };
+        th.remap = Some(Remap { text: th.foreground, ground: th.background });
+        th
     }
 }
 
@@ -279,6 +287,7 @@ impl Theme {
             // '#0969da40' and '#58a6ff4d' in the web UI.
             selection_alpha: if light { 0x40 as f32 / 255.0 } else { 0x4d as f32 / 255.0 },
             palette,
+            remap: None,
         }
     }
 
@@ -309,6 +318,111 @@ impl Theme {
     pub fn dim(&self, c: u32) -> u32 {
         mix(c, self.background, 0.34)
     }
+}
+
+/// How a picked terminal colour reaches the colours a program draws
+/// explicitly (SGR 38;2 / 48;2, and the 256-colour cube and greyscale ramp):
+/// Claude Code, for one, draws its text white and its prompt and message
+/// bands grey in 24-bit, so without this they ignore the pick.
+///
+/// Only neutral colours move ([`NEUTRAL_CHROMA`]): syntax highlighting,
+/// diffs, red and green stay as the program chose. A program that draws
+/// greys assumes a black ground and white text, so a grey's lightness `v`
+/// (0 to 255) is read as its place between the two, and drawn at that
+/// place between the picked ground and the picked text:
+///
+/// - a light foreground ([`LIGHT_TEXT`] and above) becomes `mix(ground,
+///   text, v / 255)`: white is the picked text at full strength, a mid grey
+///   a tone between, so dim text stays dim;
+/// - a dark background ([`DARK_BAND`] and below) becomes the same mix: black
+///   is the ground itself and a band a few steps lighter than black is the
+///   ground moved the same step toward the text (lighter on a dark ground,
+///   darker on Paper), kept light enough for the text at full strength to
+///   read on it at [`BAND_CONTRAST`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Remap {
+    pub text: u32,
+    pub ground: u32,
+}
+
+/// Largest channel spread (max - min, of 255) still read as grey. The
+/// greys programs draw are exact (Claude Code's are 0, its bash band 5) and
+/// xterm's whites are 2 to 8; the least saturated syntax and diff colours
+/// are 60 and more apart. 24 sits between with room on both sides.
+pub const NEUTRAL_CHROMA: u32 = 24;
+/// A grey this light (mean channel) or lighter is text to follow the pick:
+/// the upper half, from a mid grey to white. Darker greys (Claude Code's
+/// "subtle" 80) are faint marks a program means as faint; they stay.
+pub const LIGHT_TEXT: u32 = 0x80;
+/// A grey this dark or darker is a ground or a band to follow the picked
+/// ground: black to a few steps lighter (Claude Code's bands are 55 to 65).
+pub const DARK_BAND: u32 = 0x60;
+/// What the picked text at full strength keeps on a remapped band.
+pub const BAND_CONTRAST: f64 = 4.5;
+
+impl Remap {
+    /// `c` as drawn under this pick; `fg` for a foreground. Saturated colours
+    /// return at once; a neutral's answer is cached (it costs a few contrast
+    /// computations for a band), so it is worked out once per colour, not
+    /// per cell.
+    pub fn apply(self, c: u32, fg: bool) -> u32 {
+        let (r, g, b) = (c >> 16 & 0xff, c >> 8 & 0xff, c & 0xff);
+        if r.max(g).max(b) - r.min(g).min(b) > NEUTRAL_CHROMA {
+            return c;
+        }
+        let v = (r + g + b) / 3;
+        if (fg && v < LIGHT_TEXT) || (!fg && v > DARK_BAND) {
+            return c;
+        }
+        CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let slot = &mut cache[cache_slot(c, fg)];
+            if slot.0 == Some((self, c, fg)) {
+                CACHE_HITS.with(|h| h.set(h.get() + 1));
+                return slot.1;
+            }
+            let out = self.compute(v, fg);
+            *slot = (Some((self, c, fg)), out);
+            out
+        })
+    }
+
+    fn compute(self, v: u32, fg: bool) -> u32 {
+        let t = v as f32 / 255.0;
+        if fg {
+            return mix(self.ground, self.text, t);
+        }
+        // A band no lighter (on Paper, no darker) than the text at full
+        // strength reads on, unless the pick itself does not read.
+        use crate::theme::contrast;
+        let mut steps = v;
+        if contrast(self.text, self.ground) >= BAND_CONTRAST {
+            while steps > 0 && contrast(self.text, mix(self.ground, self.text, steps as f32 / 255.0)) < BAND_CONTRAST {
+                steps -= 1;
+            }
+        }
+        mix(self.ground, self.text, steps as f32 / 255.0)
+    }
+}
+
+const CACHE_SIZE: usize = 256;
+
+fn cache_slot(c: u32, fg: bool) -> usize {
+    ((c ^ c >> 8 ^ c >> 16) as usize ^ (fg as usize) << 7) % CACHE_SIZE
+}
+
+type CacheEntry = (Option<(Remap, u32, bool)>, u32);
+
+thread_local! {
+    // The UI thread draws every terminal; a direct-mapped table is enough
+    // for the handful of greys a screen holds.
+    static CACHE: std::cell::RefCell<[CacheEntry; CACHE_SIZE]> = const { std::cell::RefCell::new([(None, 0); CACHE_SIZE]) };
+    static CACHE_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many [`Remap::apply`] answers came from the cache (tests).
+pub fn remap_cache_hits() -> u64 {
+    CACHE_HITS.with(|h| h.get())
 }
 
 pub fn parse_hex(s: &str) -> Option<u32> {
