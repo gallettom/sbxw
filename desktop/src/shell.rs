@@ -276,6 +276,10 @@ pub struct App {
     pub selected: Option<String>,
     /// A line at the bottom right: text, is an error, until.
     pub notice: Option<(String, bool, Instant)>,
+    /// A relay request's notice a newer notice replaced while the request
+    /// still waited: it comes back when the newer one goes (text, error,
+    /// its offer). See [`App::notice_back`].
+    pub held_notice: Option<(String, bool, Option<(String, serde_json::Value)>)>,
     pub approvals: Vec<approval::Pending>,
     /// An OSC 52 copy too long to make unasked, waiting for a click (approval.rs).
     pub copy_offer: Option<approval::CopyOffer>,
@@ -453,6 +457,7 @@ impl App {
             restore: None,
             selected: init.selected.clone(),
             notice: None,
+            held_notice: None,
             approvals: vec![],
             copy_offer: None,
             expect: vec![],
@@ -992,7 +997,36 @@ impl App {
         } else {
             log::info!("{text}");
         }
+        // A relay request still waiting keeps its notice: put aside, it comes
+        // back when this one goes. The offer belongs to the notice it came
+        // with: whoever sets one sets it after this call.
+        let sticky = self.notice_sticky();
+        if let (Some((t, e, _)), true) = (self.notice.take(), sticky) {
+            self.held_notice = Some((t, e, self.feats.notice_then.clone()));
+        }
+        self.feats.notice_then = None;
         self.notice = Some((text, error, Instant::now() + Duration::from_secs(if error { 10 } else { 4 })));
+    }
+
+    /// The notice shown offers a relay request that still waits for the
+    /// person: it stays until they deal with it or close it, instead of
+    /// going after 4 seconds (D17 of the reliability audit).
+    pub(crate) fn notice_sticky(&self) -> bool {
+        self.notice.is_some() && crate::feat::relay::notice_due(self.feats.notice_then.as_ref(), &self.feats.data)
+    }
+
+    /// The notice went (its time, its ×, a click): the held relay notice
+    /// comes back, if its request still waits.
+    pub(crate) fn notice_back(&mut self) {
+        if self.notice.is_some() {
+            return;
+        }
+        if let Some((t, e, then)) = self.held_notice.take() {
+            if crate::feat::relay::notice_due(then.as_ref(), &self.feats.data) {
+                self.notice = Some((t, e, Instant::now() + Duration::from_secs(4)));
+                self.feats.notice_then = then;
+            }
+        }
     }
 
     /// Takes what the link sent. Headless (`wait`), first waits up to `wait`
@@ -1266,8 +1300,12 @@ impl App {
         } else if let Some(o) = &self.copy_offer {
             tx.wake_after(o.until.saturating_duration_since(now));
         }
-        if self.notice.as_ref().is_some_and(|n| n.2 <= now) {
+        if self.notice_sticky() {
+            // Stays while its request waits; the data's next change looks again.
+        } else if self.notice.as_ref().is_some_and(|n| n.2 <= now) {
             self.notice = None;
+            self.feats.notice_then = None;
+            self.notice_back();
             changed = true;
         } else if let Some(n) = &self.notice {
             tx.wake_after(n.2.saturating_duration_since(now));
@@ -2743,6 +2781,7 @@ fn notice_view(s: &App) -> Option<El> {
         .on_press(|s: &mut App| {
             s.notice = None;
             s.feats.notice_then = None;
+            s.notice_back();
             s.push_data();
         })
         .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text")));
@@ -2770,6 +2809,7 @@ fn notice_view(s: &App) -> Option<El> {
                 if let Some((name, args)) = s.feats.notice_then.take() {
                     s.press_extra("notice", &name, &args);
                 }
+                s.notice_back();
                 s.push_data();
             })
             .child(rune::icon(crate::icons::get(icon).unwrap(), theme::icon::MEDIUM).color(c(kind)))

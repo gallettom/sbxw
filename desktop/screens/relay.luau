@@ -36,6 +36,12 @@ local function section(title, count)
   }
 end
 
+-- Requests the daemon reminded the person of, after 10 minutes waiting.
+local function long_wait(ui, id)
+  for _, w in ipairs(ui.waited or {}) do if w == id then return true end end
+  return false
+end
+
 local function note(t, color)
   return text{ t, size = "sm", color = color or "text-muted", wrap = true }
 end
@@ -183,6 +189,9 @@ local function detail(data, ui, r)
     },
   }
   local function add(x) if x then kids[#kids + 1] = x end end
+  if not settled(r) and long_wait(ui, r.id) then
+    add(row{ gap = 4, w = "full", key = "relay-waited-" .. r.id, icon{ "history", color = "amber" }, note("Waiting for you for over 10 minutes", "amber") })
+  end
   if nz(r.note) and not settled(r) then add(note(r.note, "amber")) end
 
   if settled(r) then
@@ -371,6 +380,7 @@ return {
           badge{ KIND[r.kind] or r.kind, tone = r.state == "answered" and "green" or "amber" },
           text{ who(r), size = "sm", weight = "medium", color = "text-bright" },
           text{ gist(r.question), size = "sm", color = "text-muted", truncate = true, grow = 1 },
+          long_wait(ui, r.id) and badge{ "10+ min", tone = "amber" } or false,
         }
       end
       -- Long lists draw a page and "Show N more" (docs/screens.md, "Long lists").

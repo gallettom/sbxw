@@ -133,9 +133,17 @@ struct Form {
 pub struct State {
     /// The request the panel shows, when the person picked one.
     current: Option<String>,
-    /// Settled requests the person closed, and requests already announced.
+    /// Settled requests the person closed.
     closed: HashSet<String>,
-    announced: HashSet<String>,
+    /// Requests already announced, by id AND creation time: a daemon that
+    /// gives an id again (after a restart) gives a new request, announced.
+    announced: HashSet<(String, u64)>,
+    /// The creation time each id was last seen with: what was typed for a
+    /// request never carries over to another one that got its id.
+    born: HashMap<String, u64>,
+    /// Reminders already announced (the daemon's, after 10 minutes waiting),
+    /// by id, creation time and when the reminder was made.
+    reminded: HashSet<(String, u64, u64)>,
     forms: HashMap<String, Form>,
     own: HashMap<String, String>,
     /// A routed answer as edited: (the answer it was edited from, the text).
@@ -264,6 +272,35 @@ pub fn queue(reqs: &[J]) -> Vec<&J> {
     let mut v: Vec<&J> = reqs.iter().filter(|r| !settled(r) && s(r, "state") != "routed").collect();
     v.sort_by_key(|r| r["created_ms"].as_u64().unwrap_or(0));
     v
+}
+
+/// Whether a notice offering `then` is a relay request's that still waits
+/// for the person (pending, or answered for review): such a notice stays
+/// until the person deals with the request or closes the notice, and comes
+/// back after a newer notice (`shell.rs`, `notice_sticky`). Any other notice
+/// goes after its time.
+pub fn notice_due(then: Option<&(String, J)>, data: &Map<String, J>) -> bool {
+    let Some((name, args)) = then else { return false };
+    let Some(id) = args["id"].as_str().filter(|_| name == "relay_open") else { return false };
+    let reqs = data.get("relay").and_then(|r| r["requests"].as_array()).map(Vec::as_slice).unwrap_or(&[]);
+    queue(reqs).iter().any(|r| r["id"] == id)
+}
+
+/// When the daemon reminded the person of a request that waited 10 minutes
+/// for them (`reminded_ms`), if it did.
+pub fn reminded(r: &J) -> Option<u64> {
+    r["reminded_ms"].as_u64().filter(|t| *t > 0)
+}
+
+/// The kind of request, in a few words (a reminder's notice).
+fn what_kind(r: &J) -> &'static str {
+    match (s(r, "state"), s(r, "kind")) {
+        ("answered", _) => "an answer to review",
+        (_, "screenshot") => "a screenshot",
+        (_, "ask") => "a round of questions",
+        (_, "mac") => "the virtual Mac",
+        _ => "a question",
+    }
 }
 
 /// Who asks, with its thread.
@@ -797,14 +834,24 @@ impl State {
             let mut fresh = vec![];
             for r in &now {
                 let id = s(r, "id").to_string();
-                let prev = before.iter().find(|p| p["id"] == id.as_str());
+                let created = r["created_ms"].as_u64().unwrap_or(0);
+                if self.born.insert(id.clone(), created).is_some_and(|was| was != created) {
+                    // Another request under an old id: nothing of the old one is its.
+                    v.extend(self.drop_shots(&id));
+                    self.forget(&id);
+                    self.closed.remove(&id);
+                    if self.current.as_deref() == Some(id.as_str()) {
+                        self.current = None;
+                    }
+                }
+                let prev = before.iter().find(|p| p["id"] == id.as_str() && p["created_ms"].as_u64().unwrap_or(0) == created);
                 if settled(r) {
                     // Whatever was attached was sent or refused: dropped either way.
                     v.extend(self.drop_shots(&id));
                     continue;
                 }
                 let st = s(r, "state");
-                if prev.is_none() && st != "routed" && self.announced.insert(id.clone()) {
+                if prev.is_none() && st != "routed" && self.announced.insert((id.clone(), created)) {
                     fresh.push(r.clone());
                 } else if let Some(p) = prev {
                     let was = s(p, "state");
@@ -843,8 +890,20 @@ impl State {
                     v.push(Action::OpenPanel(SCREEN.into()));
                 }
                 many => {
-                    v.push(Action::Notice { text: format!("{} request{} from agents wait for you", many.len(), if many.len() == 1 { "" } else { "s" }), error: false, then: Some(("relay_open".into(), json!({}))) });
+                    // On the oldest (what `relay_open` with no id opens), so the
+                    // notice stays while it waits (`notice_due`).
+                    let oldest = many.iter().min_by_key(|r| r["created_ms"].as_u64().unwrap_or(0)).map(|r| s(r, "id")).unwrap_or("");
+                    v.push(Action::Notice { text: format!("{} request{} from agents wait for you", many.len(), if many.len() == 1 { "" } else { "s" }), error: false, then: Some(("relay_open".into(), json!({ "id": oldest }))) });
                     v.push(Action::OpenPanel(SCREEN.into()));
+                }
+            }
+            // The daemon's reminder: a request that has waited 10 minutes for
+            // the person is a notice again, once, and stays while it waits.
+            for r in queue(&now) {
+                let Some(at) = reminded(r) else { continue };
+                let key = (s(r, "id").to_string(), r["created_ms"].as_u64().unwrap_or(0), at);
+                if self.reminded.insert(key) && !first {
+                    v.push(Action::Notice { text: format!("{} has waited 10 minutes for you: {}", who(r), what_kind(r)), error: false, then: Some(("relay_open".into(), json!({ "id": s(r, "id") }))) });
                 }
             }
             // Forget what belongs to requests the daemon no longer lists.
@@ -855,6 +914,10 @@ impl State {
                 }
             }
             self.closed.retain(|id| live.contains(id));
+            let keys: HashSet<(String, u64)> = now.iter().map(|r| (s(r, "id").to_string(), r["created_ms"].as_u64().unwrap_or(0))).collect();
+            self.announced.retain(|k| keys.contains(k));
+            self.born.retain(|id, _| live.contains(id));
+            self.reminded.retain(|(id, created, _)| keys.contains(&(id.clone(), *created)));
         }
         v.push(self.ui_action(cx));
         v
@@ -938,6 +1001,8 @@ impl State {
             "sending": self.answering,
             "follow": follow::FOLLOW().lock().unwrap().to_json(),
             "voice": VOICE().lock().unwrap().as_ref().map(|(id, at)| json!({ "id": id, "index": at })),
+            // Requests the daemon reminded the person of: they read as waiting long.
+            "waited": queue(&reqs).into_iter().filter(|r| reminded(r).is_some()).map(|r| s(r, "id")).collect::<Vec<_>>(),
         })
     }
 
