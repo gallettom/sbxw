@@ -251,6 +251,13 @@ struct RelayRequest: Codable, Equatable, Identifiable {
     var note: String? = nil
     let created_ms: UInt64
     let updated_ms: UInt64
+    /// When the daemon reminded the person of it, after 10 minutes waiting.
+    /// Absent on an older daemon, and before the reminder.
+    var reminded_ms: UInt64? = nil
+
+    /// The request told apart from another that got its id again (a daemon
+    /// restarted): its id and its creation time.
+    var key: String { "\(id)@\(created_ms)" }
 
     /// Still live: nobody has settled it.
     var isOpen: Bool { state != .approved && state != .denied }

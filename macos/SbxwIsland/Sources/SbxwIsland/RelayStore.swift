@@ -19,8 +19,8 @@ import Combine
 final class RelayStore: ObservableObject {
     @Published private(set) var requests: [RelayRequest] = []
 
-    /// Requests the user has waved off in the island, by id → the state they
-    /// waved off.
+    /// Requests the user has waved off in the island, by key (id and creation
+    /// time, `RelayRequest.key`) → the state they waved off.
     ///
     /// Keyed by *state* rather than just by id for the same reason
     /// `SessionStore.acknowledged` is keyed by content: dismissing a question
@@ -39,9 +39,13 @@ final class RelayStore: ObservableObject {
     var onArrival: ((RelayRequest) -> Void)?
 
     private var streamTask: Task<Void, Never>?
-    /// Every id seen so far in a state that wanted the human, so `onArrival`
-    /// fires once per *turn* rather than on every event about the same request.
+    /// Every request seen so far in a state that wanted the human, by key (id
+    /// and creation time: an id a restarted daemon gives again is a new
+    /// request), so `onArrival` fires once per *turn* rather than on every
+    /// event about the same request.
     private var announced: Set<String> = []
+    /// The system notification for a request that waits, and its reminder.
+    let notifier = RelayNotifier()
 
     // MARK: - Derived
 
@@ -67,15 +71,15 @@ final class RelayStore: ObservableObject {
 
     /// Has the user waved this request off in the state it is currently in?
     func isDismissed(_ req: RelayRequest) -> Bool {
-        dismissed[req.id] == req.state
+        dismissed[req.key] == req.state
     }
 
     /// Take a request off the notch without answering it — the island's "later".
     /// The daemon still holds it, and the asking agent still waits; this only
     /// stops the island from occupying the menu bar with it.
     func dismiss(_ req: RelayRequest) {
-        guard dismissed[req.id] != req.state else { return }
-        dismissed[req.id] = req.state
+        guard dismissed[req.key] != req.state else { return }
+        dismissed[req.key] = req.state
         Log.log("relay dismiss \(req.id) state=\(req.state.rawValue)")
     }
 
@@ -180,25 +184,28 @@ final class RelayStore: ObservableObject {
         requests = next
 
         if !req.isOpen {
-            dismissed.removeValue(forKey: req.id)
-            announced.remove(req.id)
+            dismissed.removeValue(forKey: req.key)
+            announced.remove(req.key)
+            notifier.settled(requests)
             return
         }
         // A dismissal only covered the state it was made in, so a request that
         // moved on is new again — to `announced` as well, which is what lets the
         // answer to a routed question raise its own card.
-        if dismissed[req.id] != nil && dismissed[req.id] != req.state {
-            dismissed.removeValue(forKey: req.id)
+        if dismissed[req.key] != nil && dismissed[req.key] != req.state {
+            dismissed.removeValue(forKey: req.key)
         }
         if req.needsYou {
-            if announced.insert(req.id).inserted {
+            if announced.insert(req.key).inserted {
+                notifier.waiting(req, reminder: false)
                 onArrival?(req)
             }
+            if req.reminded_ms != nil { notifier.waiting(req, reminder: true) }
         } else {
             // `routed`: out with a sandbox. Clearing this here is what makes the
             // answer's arrival count as news rather than as an update to
             // something already announced.
-            announced.remove(req.id)
+            announced.remove(req.key)
         }
     }
 
@@ -206,9 +213,10 @@ final class RelayStore: ObservableObject {
         let live = list.filter(\.isOpen)
         requests = live.sorted { ($0.created_ms, $0.id) < ($1.created_ms, $1.id) }
         // Forget bookkeeping for requests the daemon no longer has.
-        let ids = Set(live.map(\.id))
-        dismissed = dismissed.filter { ids.contains($0.key) }
-        announced.formIntersection(ids)
+        let keys = Set(live.map(\.key))
+        dismissed = dismissed.filter { keys.contains($0.key) }
+        announced.formIntersection(keys)
+        notifier.settled(live)
 
         // A seed announces what it has never announced before — and nothing
         // else. That distinction is the whole design: `announced` survives
@@ -221,10 +229,14 @@ final class RelayStore: ObservableObject {
         // arriving, just a little later. Announcing only from the event stream
         // left that daemon with a populated banner and a notch that never once
         // opened — silence that looked exactly like a broken feature.
-        let fresh = live.filter { $0.needsYou && !announced.contains($0.id) && !isDismissed($0) }
-        for req in fresh { announced.insert(req.id) }
+        let fresh = live.filter { $0.needsYou && !announced.contains($0.key) && !isDismissed($0) }
+        for req in fresh { announced.insert(req.key) }
         Log.log("relay seed: \(live.count) open, \(fresh.count) new to announce")
-        for req in fresh { onArrival?(req) }
+        for req in fresh {
+            notifier.waiting(req, reminder: false)
+            onArrival?(req)
+        }
+        for req in live where req.needsYou && req.reminded_ms != nil { notifier.waiting(req, reminder: true) }
     }
 
     // MARK: - HTTP
