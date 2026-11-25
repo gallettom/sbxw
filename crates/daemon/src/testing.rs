@@ -67,6 +67,13 @@ fn build_with(dir: &Path, fake: Arc<Fake>, cfg: Config) -> Arc<App> {
     .build()
 }
 
+/// [`app_with`] on a directory the test owns: a second `App` on the same
+/// directory is the daemon after a restart.
+pub fn app_in_with(dir: &Path, answer: impl Fn(&[String]) -> Output + Send + Sync + 'static) -> (Arc<App>, Arc<Fake>) {
+    let fake = Fake::new(answer);
+    (build(dir, fake.clone()), fake)
+}
+
 pub fn app() -> (tempfile::TempDir, Arc<App>) {
     let d = tempfile::tempdir().unwrap();
     let a = app_in(d.path());

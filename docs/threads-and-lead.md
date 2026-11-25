@@ -220,12 +220,13 @@ refused if the threads wouldn't fit under `max_agent_sessions`.
 On approval, sbxw opens each thread with a **briefing** as its first message:
 its goal, its scope, and the rules (commit on your branch, never merge or push,
 report your state). The briefing also carries the standing rules that hold in
-every repository (`STANDING_RULES` in `crates/core/src/messages.rs`, about 440
+every repository (`STANDING_RULES` in `crates/core/src/messages.rs`, under 600
 characters): commit at each stable point, check `git merge-tree --write-tree`
 against main before reporting done, do nothing if another session of the same
 name already works in the worktree, send what the lead must read by
-`SendMessage`, and stop at a refused hook, a blocked host or a pending
-approval. A repository's own rules (build commands, what not to touch) go in
+`SendMessage`, stop at a refused hook, a blocked host or a pending
+approval, and, when the sandbox declares test suites, commit and ask the test
+queue (`run_tests`) rather than running a suite by hand. A repository's own rules (build commands, what not to touch) go in
 its root `CLAUDE.md`, which every session reads by itself; sbxw's own is the
 example. The lead's goal then says only what is specific to the thread.
 
@@ -457,6 +458,26 @@ settles it with nothing to merge (above) and closes it. A shared plan's one
 branch in its base is refused at `propose_merge`, which says so rather than
 proposing a merge of nothing. Git proves only that the branch is in the base,
 not who merged it or how.
+
+### Tests: the queue
+
+When the sandbox declares test suites (`[[tests]]`, see
+[Configuration](configuration.md#test-suites)), every session has three tools:
+`list_tests` (the suites, what is queued or running, the latest results),
+`run_tests` (a suite by name on a commit, the caller's `HEAD` by default) and
+`check_tests` (a job `run_tests` left running). The daemon runs one job at a
+time per sandbox, inside the sandbox, and answers a stored result at once when
+the code the suite covers did not change. A call waits up to 600 seconds; past
+that it returns the job's id, which survives a daemon restart, and asking again
+for the same code joins the job instead of queueing another.
+
+The lead names one suite as the plan's `team_suite` in `propose_plan` (a name
+the sandbox does not declare is refused). `run_tests` with no suite then asks
+for it: on the team branch's tip for a shared plan, on the commit the lead
+names for a split one. `plan_status` prints the team suite and how many of the
+plan's test jobs ran and how many were answered from a stored result. The lead
+relies on that result before proposing the merge. Showing the team suite in the
+plan dialog and on the Board is still to come.
 
 ### What survives a daemon restart
 

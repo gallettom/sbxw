@@ -81,14 +81,24 @@ Then choose the variant:
 
 When in doubt, split: it is the variant that can fail without harming the
 others. In a shared plan the scopes still matter: a thread edits and commits
-only its own files, and you run the full test suite at checkpoints and before
-proposing the merge. Nobody starts a dev server but the user, in the main
+only its own files, and the full test suite runs at checkpoints and before
+proposing the merge (through the test queue when the sandbox declares suites,
+see below). Nobody starts a dev server but the user, in the main
 pane's Bash, from the shared worktree. A shared plan's threads all work in one
 repo.
 
 A thread may name a `model`: `claude-opus-5-5` for hard work (design, tricky
 debugging), `claude-haiku-5-5` for mechanical work (renames, boilerplate,
 docs). Leave it out for the sandbox's default.
+
+Call `list_tests` once. When it shows declared test suites, the sandbox has a
+test queue: the daemon runs a suite on a commit inside the sandbox, one job at
+a time, and answers a stored result when the code the suite covers did not
+change. Then name the suite that tests the whole of the plan's code as
+`team_suite` in `propose_plan` (a name `list_tests` shows; another is refused),
+and in each goal name the suite that thread should ask for. Threads commit,
+then call `run_tests`; nobody runs a declared suite by hand. Their briefing
+already says so.
 
 Check which git repositories the workspace holds: it may be one repo, or a
 folder of several (`backend/`, `frontend/`), each with its own `.git`
@@ -182,10 +192,19 @@ scope, a dirty worktree, leftovers in it (`.sbxw-artifacts/`, `target*` dirs,
 scratch worktrees) and the added lines that log. It decides nothing: read what
 it prints, then read the diff.
 
+When the plan has a team suite, rely on the queue's result before proposing
+the merge: `run_tests` with no suite and, for a split plan, `ref` set to the
+commit you would merge (a shared plan's team branch is the default). Passed or
+reused is the answer; do not run the suite again by hand. A failure that was
+retried says so: report it as a possibly flaky test, do not hide it. With no
+suite declared, run the tests as the repository says.
+
 Check it did what its goal said, stayed in its scope, and does not collide with
 another thread's branch. When every thread is done, give the user one report:
 
 - what each branch contains, in a sentence,
+- the test queue's result, when there is one (passed or failed, reused or not,
+  the commit),
 - anything that worries you.
 
 Then call `propose_merge` with the order to merge the threads in and a short

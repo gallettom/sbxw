@@ -152,6 +152,14 @@ pub struct App {
     /// Remote access: state, devices, pairing, the remote listener and the
     /// tailnet sidecar (see `svc::remote_access`).
     pub(crate) remote_access: Mutex<crate::svc::remote_access::RemoteRuntime>,
+    /// The test queue's jobs and stored results, as in `state/tests.json`
+    /// (see `svc::testq`).
+    pub(crate) tests: Mutex<sbxw_core::testq::Book>,
+    /// Sandboxes whose test worker runs: one at a time each. Locked after
+    /// `tests`.
+    pub(crate) tests_workers: Mutex<HashSet<String>>,
+    /// Bumped at every change of `tests`: what a waiting request watches.
+    pub(crate) tests_tick: tokio::sync::watch::Sender<u64>,
 }
 
 pub struct AppBuilder {
@@ -173,6 +181,7 @@ impl AppBuilder {
         let daemon_kits = Mutex::new(self.cfg.kits.clone());
         let emphasis = Mutex::new(self.cfg.emphasis.clone());
         let remote_access = Mutex::new(crate::svc::remote_access::RemoteRuntime::load(&store.paths.root));
+        let tests = crate::svc::testq::load(&store.paths.state().join("tests.json"));
         let jarvis = sbxw_core::jarvis::Book::load(crate::svc::jarvis::load(&store.paths.state().join("jarvis.json")));
         Arc::new(App {
             store,
@@ -231,6 +240,9 @@ impl AppBuilder {
             tickets: Mutex::new(Default::default()),
             plan_ext: Mutex::new(Default::default()),
             remote_access,
+            tests: Mutex::new(tests),
+            tests_workers: Mutex::new(HashSet::new()),
+            tests_tick: tokio::sync::watch::channel(0).0,
         })
     }
 }
@@ -344,6 +356,7 @@ impl App {
         self.start_board_listener();
         self.start_tickets_listener();
         self.start_mac_lifecycle();
+        self.tests_resume();
     }
 
     fn prune(&self) {
@@ -356,6 +369,7 @@ impl App {
         for sb in touched {
             self.persist_plans(&sb);
         }
+        self.tests_prune();
     }
 
     /// Hook state of sandboxes `sbx ls` no longer reports running is dropped,

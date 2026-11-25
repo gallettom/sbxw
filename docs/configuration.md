@@ -86,6 +86,12 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 | `[env]` | empty | Variables for the sandbox. See [below](#environment-variables) |
 | `[[ports]]` | none | `alias`, `sandbox_port`, `host_port`. See [below](#ports-and-host-aliases) |
 
+### Tests
+
+| Key | Default | Meaning |
+|---|---|---|
+| `[[tests]]` | none | Test suites the daemon's test queue runs inside the sandbox when an agent asks (`run_tests`): `name`, `command`, `paths`, `depends`, `timeout_minutes`, `retries`, `version_cmd`. A host-access grant per command. See [below](#test-suites) |
+
 ## Ports and host aliases
 
 ```toml
@@ -235,6 +241,71 @@ creates it with the new ones. Because the file can be edited from inside the
 sandbox, removing a carve or weakening it (`none` to `ro`, `strict` to `soft`)
 needs your approval like a new grant; adding or strengthening one does not.
 The line reads `access restored: /path (was: no access, strict)`.
+
+## Test suites
+
+A `[[tests]]` table declares a suite the daemon's **test queue** may run.
+Agents ask for one by name with the `run_tests` tool of the `sbxw-relay` MCP
+server, see what is declared with `list_tests`, and pick up a long run with
+`check_tests`. An agent can only name a suite: no tool takes a command, and
+the suite's name and the commit go to the queue's script as arguments.
+
+```toml
+[[tests]]
+name = "crates"                          # lower-case letters, digits, hyphens
+command = "scripts/run-suite.sh crates"  # run with `bash -c` in the checkout
+paths = ["crates", "assets", "Cargo.toml", "Cargo.lock"]  # all it reads; "." is the whole repo
+depends = []                             # suites whose paths this one also covers
+timeout_minutes = 60                     # 1 to 240; default 30
+retries = 1                              # 0 or 1: run a failed suite once more
+version_cmd = "rustc --version"          # optional: its output is part of the key
+```
+
+- **A commit, not the files being edited.** The queue tests a commit of the
+  workspace's repository (by default the asking session's `HEAD`): it checks
+  it out, detached, in a worktree of its own, `.sbxw-worktrees/.tests`, and
+  runs `command` there inside the sandbox. A ref that is not a commit of that
+  repository is refused, and so is anything that is not a plain revision
+  (`main`, a hash, `HEAD~1`).
+- **The environment.** `SBXW_TEST_TARGET` is one build directory in the
+  sandbox's home (`~/.sbxw/tests/target`), kept from job to job so builds stay
+  warm; `SBXW_TEST_CHECKOUT` is the checkout (also the working directory);
+  `SBXW_TEST_SUITE` and `SBXW_TEST_COMMIT` name the job. The full output stays
+  in the sandbox, in `~/.sbxw/tests/logs/<suite>.log`; only its last lines
+  reach the agent.
+- **Reuse.** A result is stored under a key: the suite's declaration (and its
+  dependencies'), the git object of every path the suite and its `depends`
+  cover at that commit, and what `version_cmd` prints. Asked again with the
+  same key, the queue answers the stored result at once, marked as reused,
+  with the commit it first ran on: a commit that changes only paths the suite
+  does not cover runs nothing. List the lock files a suite depends on among
+  its `paths`. **`paths` must cover everything the suite's build and tests
+  read**: files it embeds (`include_str!` outside its folder), what a build
+  script reads, fixtures and scripts its tests open or run. A path left out
+  is a change the key does not see, and a stale result is reused for it.
+  `["."]` (the whole repository) is the safe choice for a cheap suite; narrow
+  it only for a long one, after checking what it reads. A suite that timed out or could not start is never reused;
+  `run_tests` with `rerun` runs it again regardless.
+- **One job at a time per sandbox.** A second request waits its turn; a
+  request for the same suite and key as a job queued or running joins it.
+  The job id is returned at once and kept, with the results, in
+  `~/.sbxw/state/tests.json`, so a daemon restart loses neither (a job that
+  was running runs again). Results older than 30 days are pruned.
+- **Retries.** With `retries = 1` a failed or timed-out suite runs once more,
+  and the result says so (`attempts`, the first outcome), so a flaky test
+  stays visible.
+- **The team suite.** A lead may name one declared suite as its plan's
+  `team_suite`; `run_tests` with no suite asks for it, on the team branch's
+  tip for a shared plan. The plan counts how many jobs ran and how many were
+  answered without running.
+- **Trust.** The file is agent-writable, so each `command` and `version_cmd`
+  is a host-access line approved at `sbxw up` (`test suite crates: an agent
+  may make sbxw run ...`), and the queue reads the suites only from the
+  config recorded at the last bring-up, never from the file as it is now.
+- **Where.** Like `[[ports]]`, the tables go after every bare key of the file.
+  `sbxw.toml.example` ends with sbxw's own four suites, ready to paste; they
+  call `scripts/run-suite.sh`, described in
+  [desktop/docs/testing.md](../desktop/docs/testing.md).
 
 ## Approving host access
 

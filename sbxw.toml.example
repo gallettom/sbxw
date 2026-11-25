@@ -313,3 +313,63 @@ env_files = []
 # [voice.words]
 # sbxw = { fr = "ece bé ixe double vé", en = "S B X W" }
 # nginx = { en = "engine X" }
+
+# Test suites the daemon's test queue may run, inside the sandbox, when an
+# agent asks with the `run_tests` tool (`list_tests` shows them). An agent only
+# names a suite; the command is yours, and `sbxw up` asks you to approve each
+# command (and version command) before any agent can name it. A suite tests a
+# COMMIT: the queue checks it out in its own worktree
+# (`.sbxw-worktrees/.tests`), runs `command` there with `bash -c`, and keeps
+# the result. Asked again for code it already tested, it answers that result
+# at once, marked as reused. The key is the suite's declaration, the git object
+# of every path it covers (its own and those of the suites in `depends`) at
+# that commit, and what `version_cmd` prints. List lock files among `paths`.
+# The command gets SBXW_TEST_TARGET (one build directory in the sandbox's home,
+# kept from job to job), SBXW_TEST_CHECKOUT (the checkout, also its cwd),
+# SBXW_TEST_SUITE and SBXW_TEST_COMMIT. One job runs at a time per sandbox.
+# `retries = 1` runs a failed suite once more; the result says it was retried.
+# Tables: write them after every bare key of the file. Read at `sbxw up`.
+#
+# `paths` must cover everything the suite's build and tests read: a path left
+# out is a change the key does not see, and a stale result is reused for it.
+# `["."]` is the safe choice for a cheap suite.
+#
+# sbxw's own repository declares these four (scripts/run-suite.sh). What each
+# reads outside its folder: crates embeds assets/, install.sh and this file,
+# and its tests run scripts/fake-ssh and scripts/test-emphasis.mjs; desktop
+# embeds assets/app.css, tests/js/*-cases.json, tests/fixtures/ and
+# crates/core/testdata/, and reads assets/js/; the script reads
+# tests/quarantine.txt with scripts/quarantine.mjs. Paste them into your
+# sbxw.toml without the leading `# `:
+#
+# [[tests]]
+# name = "crates"
+# command = "scripts/run-suite.sh crates"
+# paths = ["crates", "assets", "scripts", "tests/quarantine.txt", "install.sh", "sbxw.toml.example", "Cargo.toml", "Cargo.lock"]
+# timeout_minutes = 60
+# retries = 1
+# version_cmd = "rustc --version"
+#
+# [[tests]]
+# name = "js"
+# command = "scripts/run-suite.sh js"
+# paths = ["."]
+# timeout_minutes = 15
+# retries = 1
+# version_cmd = "node --version"
+#
+# [[tests]]
+# name = "desktop"
+# command = "scripts/run-suite.sh desktop"
+# paths = ["desktop", "assets", "crates/core/testdata", "tests", "scripts/run-suite.sh", "scripts/quarantine.mjs"]
+# timeout_minutes = 120
+# retries = 1
+# version_cmd = "cd desktop && rustc --version"
+#
+# [[tests]]
+# name = "all"
+# command = "scripts/run-suite.sh all"
+# paths = ["."]
+# timeout_minutes = 180
+# retries = 1
+# version_cmd = "rustc --version; node --version; cd desktop && rustc --version"
