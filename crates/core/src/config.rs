@@ -121,9 +121,6 @@ pub struct Config {
     /// config and from a project's own (which overrides `enabled` and
     /// `guidance` for its sandboxes); the vocabulary from the daemon's only.
     pub emphasis: crate::emphasis::EmphasisSettings,
-    /// Test suites the daemon's test queue may run inside the sandbox
-    /// (`[[tests]]`, see `testq`): an agent names one, never its command.
-    pub tests: Vec<crate::testq::Suite>,
 
     /// The file this was read from, absolute. `None` for built-in defaults.
     #[serde(skip)]
@@ -233,7 +230,6 @@ impl Default for Config {
             mac: Default::default(),
             voice: Default::default(),
             emphasis: Default::default(),
-            tests: vec![],
             source: None,
             asked: None,
         }
@@ -460,7 +456,6 @@ impl Config {
         self.voice.validate().map_err(anyhow::Error::msg)?;
         crate::spoken::check_words(&self.voice.words).map_err(anyhow::Error::msg)?;
         self.emphasis.validate().map_err(anyhow::Error::msg)?;
-        crate::testq::validate(&self.tests).map_err(anyhow::Error::msg)?;
         if let Some(mode) = self.skills_mode() {
             if !SKILL_MODES.contains(&mode) {
                 bail!("skills = \"{mode}\" — expected one of {}", SKILL_MODES.join(", "));
@@ -772,38 +767,14 @@ mod tests {
         assert_eq!(cfg.models, default_models());
     }
 
+    /// The test command belongs to a plan now: a file that still has the
+    /// `[[tests]]` tables of an earlier sbxw loads, and they are ignored.
     #[test]
-    fn test_suites_parse_with_defaults_and_bad_ones_are_refused() {
-        let c = Config::parse("[[tests]]\nname = \"crates\"\ncommand = \"scripts/run-suite.sh crates\"\npaths = [\"crates\", \"Cargo.lock\"]\n\n[[tests]]\nname = \"all\"\ncommand = \"scripts/run-suite.sh all\"\npaths = [\".\"]\ndepends = [\"crates\"]\nretries = 1\ntimeout_minutes = 90\nversion_cmd = \"rustc --version\"\n").unwrap();
-        assert_eq!(c.tests.len(), 2);
-        assert_eq!((c.tests[0].timeout_minutes, c.tests[0].retries, c.tests[0].version_cmd.as_str()), (crate::testq::DEFAULT_TIMEOUT_MINUTES, 0, ""));
-        assert_eq!((c.tests[1].retries, c.tests[1].timeout_minutes), (1, 90));
-        // Written out (as `sbxw` rewrites a file) and read again, unchanged.
-        assert_eq!(Config::parse(&c.to_toml().unwrap()).unwrap().tests, c.tests);
-        assert_eq!(serde_json::from_value::<Config>(serde_json::to_value(&c).unwrap()).unwrap().tests, c.tests);
-        for bad in [
-            "[[tests]]\nname = \"x y\"\ncommand = \"c\"\npaths = [\".\"]",
-            "[[tests]]\nname = \"x\"\ncommand = \"c\"\npaths = [\"/etc\"]",
-            "[[tests]]\nname = \"x\"\ncommand = \"c\"\npaths = [\".\"]\nretries = 3",
-            "[[tests]]\nname = \"x\"\ncommand = \"c\"\npaths = [\".\"]\ndepends = [\"y\"]",
-            // `path` for `paths`: unknown keys are ignored, so the missing list is what is caught.
-            "[[tests]]\nname = \"x\"\ncommand = \"c\"\npath = [\".\"]",
-        ] {
-            assert!(Config::parse(bad).is_err(), "{bad}");
-        }
-    }
-
-    /// The example's commented `[[tests]]` block, pasted as it says, is a
-    /// valid declaration of sbxw's own four suites.
-    #[test]
-    fn the_example_test_suites_parse_once_uncommented() {
-        let example = include_str!("../../../sbxw.toml.example");
-        let start = example.find("# [[tests]]").expect("the example documents [[tests]]");
-        let block: String = example[start..].lines().map(|l| l.strip_prefix("# ").unwrap_or(l.strip_prefix('#').unwrap_or(l))).collect::<Vec<_>>().join("\n");
-        let c = Config::parse(&block).unwrap();
-        let names: Vec<&str> = c.tests.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["crates", "js", "desktop", "all"]);
-        assert!(c.tests.iter().all(|s| s.command == format!("scripts/run-suite.sh {}", s.name)));
+    fn an_old_tests_table_is_ignored() {
+        let raw = "[[tests]]\nname = \"crates\"\ncommand = \"make test\"\npaths = [\"crates\", \"Cargo.lock\"]\ndepends = [\"x\"]\nretries = 3\n";
+        let c = Config::parse(raw).unwrap();
+        assert!(!c.to_toml().unwrap().contains("tests"), "not written back");
+        assert!(serde_json::to_value(&c).unwrap().get("tests").is_none());
     }
 
     #[test]
