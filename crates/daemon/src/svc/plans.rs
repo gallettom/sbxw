@@ -180,29 +180,13 @@ impl App {
         justification: &str,
         lead: Option<&str>,
     ) -> Result<Plan, String> {
-        self.check_plan_repos(sandbox, &threads).await?;
-        if variant == Variant::Shared {
-            self.shared_worktree(sandbox, &threads, "team").await?;
-        }
-        let plan = self.plans.lock().unwrap().propose(
-            sbxw_core::ids::plan_id(),
-            &sandbox.to_string(),
-            summary,
-            threads,
-            variant,
-            justification,
-            lead,
-            now_ms(),
-        )?;
-        tracing::info!("plans: '{sandbox}' proposed {} ({} thread(s), {:?})", plan.id, plan.threads.len(), plan.variant);
-        let n = self.main_uncommitted(sandbox, &plan.threads).await;
-        let plan = self.plans.lock().unwrap().note_main_uncommitted(&plan.id, n).unwrap_or(plan);
-        Ok(self.plan_changed(plan))
+        self.plan_propose_with_tests(sandbox, summary, threads, variant, justification, lead, None).await
     }
 
     /// `plan_propose`, with the test command a lead proposed: stored on the
-    /// plan as proposed, to be shown in the plan dialog; it takes effect only
-    /// when the person approves the plan ([`App::plan_approve`]).
+    /// plan as proposed, under the same lock as the proposal, so no screen
+    /// ever shows the plan without it; it takes effect only when the person
+    /// approves the plan ([`App::plan_approve`]).
     #[allow(clippy::too_many_arguments)]
     pub async fn plan_propose_with_tests(
         &self,
@@ -214,11 +198,21 @@ impl App {
         lead: Option<&str>,
         tests: Option<PlanTests>,
     ) -> Result<Plan, String> {
-        let plan = self.plan_propose(sandbox, summary, threads, variant, justification, lead).await?;
-        if tests.is_none() {
-            return Ok(plan);
+        self.check_plan_repos(sandbox, &threads).await?;
+        if variant == Variant::Shared {
+            self.shared_worktree(sandbox, &threads, "team").await?;
         }
-        let plan = self.plans.lock().unwrap().note_proposed_tests(&plan.id, tests).unwrap_or(plan);
+        let plan = {
+            let mut book = self.plans.lock().unwrap();
+            let plan = book.propose(sbxw_core::ids::plan_id(), &sandbox.to_string(), summary, threads, variant, justification, lead, now_ms())?;
+            match tests {
+                Some(t) => book.note_proposed_tests(&plan.id, Some(t)).unwrap_or(plan),
+                None => plan,
+            }
+        };
+        tracing::info!("plans: '{sandbox}' proposed {} ({} thread(s), {:?})", plan.id, plan.threads.len(), plan.variant);
+        let n = self.main_uncommitted(sandbox, &plan.threads).await;
+        let plan = self.plans.lock().unwrap().note_main_uncommitted(&plan.id, n).unwrap_or(plan);
         Ok(self.plan_changed(plan))
     }
 
