@@ -298,7 +298,9 @@ version_cmd = "rustc --version"          # optional: its output is part of the k
   may make sbxw run ...`), and the queue reads the suites only from the
   config recorded at the last bring-up, never from the file as it is now.
 - **Where.** Like `[[ports]]`, the tables go after every bare key of the file.
-  `sbxw.toml.example` ends with sbxw's own four suites, ready to paste.
+  `sbxw.toml.example` ends with sbxw's own four suites, ready to paste; they
+  call `scripts/run-suite.sh`, described in
+  [desktop/docs/testing.md](../desktop/docs/testing.md).
 
 ## Approving host access
 
