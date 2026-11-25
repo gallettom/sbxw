@@ -15,8 +15,10 @@
 //   the index is shared, so a bare commit takes other threads' staged work.
 //   Commits are serialized with a lock file in the git directory, taken here
 //   and dropped after the command (no race on `index.lock`).
-// * PostToolUse: what changed in `git status` across a Bash command, files
-//   read and edited, and a new commit are reported to the board; the board's
+// * PostToolUse: what a Bash command can be shown to have changed (its write
+//   targets and this thread's claims, not whatever else moved in the shared
+//   worktree meanwhile), files read and edited, and the commit it made are
+//   reported to the board; the board's
 //   news for this session comes back as `additionalContext`.
 //
 // The daemon unreachable, git missing, input malformed: the hook lets the
@@ -375,6 +377,45 @@ function dropLock(lock, owner) {
   } catch (_) {}
 }
 
+// ── What one call can be shown to have done ──────────────────────────────
+//
+// Threads share one worktree, so a long command (a test run) sees the other
+// threads' edits and commits move across it. What changed during the call is
+// only this thread's when the call can be tied to it:
+//
+// * a changed file the command names as a write target (or commits by name,
+//   or sits under a directory it names), or one this thread holds a claim on;
+// * a HEAD that moved, when the command itself moves HEAD (the commit lock
+//   was held for it, so no other thread's commit landed meanwhile).
+//
+// Anything else is left out of the report: a change nobody can attribute
+// must not become a "wrote outside its claims" warning against the caller.
+
+/// The session name the board knows this thread by.
+const SESSION = THREAD || "lead";
+
+async function attribute(root, cwd, cmd, candidates) {
+  if (!candidates.length) return [];
+  const named = [...writeTargets(cmd, cwd), ...gitRules(cmd).paths].map((p) => boardFile(root, cwd, p)).filter(Boolean);
+  const byCommand = (c) => named.some((t) => c === t || c.startsWith(t + "/"));
+  const out = candidates.filter(byCommand);
+  const rest = candidates.filter((c) => !byCommand(c));
+  if (rest.length) {
+    const res = await ask("/api/board/read", {});
+    const own = new Set(((res && res.claims) || []).filter((c) => c.owner === SESSION).map((c) => c.file));
+    out.push(...rest.filter((c) => own.has(c)));
+  }
+  return out;
+}
+
+/// Whether a command is one that moves HEAD by itself (a commit, a merge…).
+function movesHead(cmd) {
+  return segments(cmd).some((seg) => {
+    const w = commandWords(seg);
+    return path.basename(w[0] || "") === "git" && ["commit", "merge", "cherry-pick", "revert", "am", "pull", "rebase"].includes(gitSub(w)[0]);
+  });
+}
+
 // ── The two events ────────────────────────────────────────────────────────
 
 async function pre(input) {
@@ -430,10 +471,11 @@ async function post(input) {
     const f = boardFile(root, cwd, ti.file_path || ti.notebook_path);
     if (f) body.written.push(f);
   } else if (state && state.before) {
+    const cmd = String(ti.command || "");
     const after = snapshot(root);
-    if (after) body.written.push(...changed(state.before, after).slice(0, 200));
+    if (after) body.written.push(...(await attribute(root, cwd, cmd, changed(state.before, after))).slice(0, 200));
     const now = head(root);
-    if (now && state.head && now !== state.head) {
+    if (now && state.head && now !== state.head && movesHead(cmd)) {
       const files = (git(root, ["show", "--name-only", "--format=", now]) || "").split("\n").filter(Boolean).slice(0, 200);
       const subject = (git(root, ["log", "-1", "--format=%s", now]) || "").trim();
       body.commit = { hash: now, subject, files };

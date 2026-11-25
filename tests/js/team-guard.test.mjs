@@ -145,3 +145,81 @@ test('write targets that were already found keep being found', withSandbox((s) =
   assert.deepEqual(s.checked(s.pre('api', 'cp a.txt b.txt')), ['b.txt']);
   assert.deepEqual(s.checked(s.pre('api', 'sed -i s/x/y/ a.txt')), ['a.txt']);
 }));
+
+// ── Two threads, one worktree ─────────────────────────────────────────────
+
+const written = (r) => r.sent.find((x) => x.route === '/api/board/after').body.written;
+const commitOf = (r) => r.sent.find((x) => x.route === '/api/board/after').body.commit;
+
+test('a long command is not credited with the other thread\'s edits', withSandbox((s) => {
+  const cmd = 'npm test';
+  assert.equal(s.pre('api', cmd, 'a1').code, 0);
+  // meanwhile the other thread works in the same worktree
+  s.write('theirs.txt');
+  s.write('seed.txt', 'edited by them\n');
+  const r = s.post('api', cmd, 'a1');
+  assert.deepEqual(written(r), [], 'nothing here can be tied to the caller');
+  assert.equal(r.stdout, '', 'so no warning against the caller');
+}));
+
+test('what the command names, and the caller\'s own claims, are still reported', withSandbox((s) => {
+  const cmd = 'echo built > out.txt && ./gen.sh';
+  assert.equal(s.pre('api', cmd, 'a2').code, 0);
+  s.write('out.txt'); // named as a write target
+  s.write('mine.txt'); // not named, but the caller's claim
+  s.write('theirs.txt'); // the other thread's
+  const answers = { '/api/board/read': { claims: [{ file: 'mine.txt', owner: 'api' }, { file: 'theirs.txt', owner: 'front' }] } };
+  const r = s.post('api', cmd, 'a2', answers);
+  assert.deepEqual(written(r).sort(), ['mine.txt', 'out.txt']);
+}));
+
+test('a directory the command names covers the files under it', withSandbox((s) => {
+  fs.mkdirSync(path.join(s.repo, 'gen'));
+  assert.equal(s.pre('api', 'touch gen', 'a3').code, 0);
+  s.write('gen/one.txt');
+  s.write('other/two.txt'.replace('other/', 'o-'));
+  const r = s.post('api', 'touch gen', 'a3');
+  assert.deepEqual(written(r), ['gen/one.txt']);
+}));
+
+test('a HEAD the other thread moved is not this thread\'s commit', withSandbox((s) => {
+  const cmd = 'npm test';
+  assert.equal(s.pre('api', cmd, 'a4').code, 0);
+  s.write('theirs.txt');
+  s.git('add', 'theirs.txt');
+  s.git('commit', '-q', '-m', 'their commit', '--', 'theirs.txt');
+  const r = s.post('api', cmd, 'a4');
+  assert.equal(commitOf(r), undefined);
+  assert.deepEqual(written(r), []);
+}));
+
+test('the caller\'s own commit is reported, with the files it named', withSandbox((s) => {
+  s.write('mine.txt');
+  s.write('theirs.txt');
+  const cmd = 'git add mine.txt && git commit -q -m "mine; ok" -- mine.txt';
+  assert.equal(s.pre('api', cmd, 'a5').code, 0);
+  execFileSync('sh', ['-c', cmd], { cwd: s.repo });
+  const r = s.post('api', cmd, 'a5');
+  const c = commitOf(r);
+  assert.equal(c.subject, 'mine; ok');
+  assert.deepEqual(c.files, ['mine.txt']);
+  assert.deepEqual(written(r), ['mine.txt'], 'theirs.txt, still untracked, is not mine');
+  assert.ok(!fs.existsSync(path.join(s.repo, '.git/sbxw-commit.lock')), 'the lock is dropped');
+}));
+
+test('two threads commit one after the other, each credited with its own', withSandbox((s) => {
+  s.write('a.txt');
+  s.write('b.txt');
+  const ca = 'git add a.txt && git commit -q -m "from api" -- a.txt';
+  const cb = 'git add b.txt && git commit -q -m "from front" -- b.txt';
+  assert.equal(s.pre('api', ca, 'x1').code, 0);
+  execFileSync('sh', ['-c', ca], { cwd: s.repo });
+  const ra = s.post('api', ca, 'x1');
+  assert.equal(s.pre('front', cb, 'x2').code, 0);
+  execFileSync('sh', ['-c', cb], { cwd: s.repo });
+  const rb = s.post('front', cb, 'x2');
+  assert.deepEqual([commitOf(ra).subject, commitOf(ra).files], ['from api', ['a.txt']]);
+  assert.deepEqual([commitOf(rb).subject, commitOf(rb).files], ['from front', ['b.txt']]);
+  assert.equal(ra.sent[0].body.thread, 'api');
+  assert.equal(rb.sent[0].body.thread, 'front');
+}));
