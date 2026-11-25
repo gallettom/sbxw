@@ -790,6 +790,19 @@ mod tests {
         }
     }
 
+    /// The example's commented `[[tests]]` block, pasted as it says, is a
+    /// valid declaration of sbxw's own four suites.
+    #[test]
+    fn the_example_test_suites_parse_once_uncommented() {
+        let example = include_str!("../../../sbxw.toml.example");
+        let start = example.find("# [[tests]]").expect("the example documents [[tests]]");
+        let block: String = example[start..].lines().map(|l| l.strip_prefix("# ").unwrap_or(l.strip_prefix('#').unwrap_or(l))).collect::<Vec<_>>().join("\n");
+        let c = Config::parse(&block).unwrap();
+        let names: Vec<&str> = c.tests.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["crates", "js", "desktop", "all"]);
+        assert!(c.tests.iter().all(|s| s.command == format!("scripts/run-suite.sh {}", s.name)));
+    }
+
     #[test]
     fn unknown_modes_and_a_shared_port_are_refused() {
         let bad = |s: &str| toml::from_str::<Config>(s).unwrap().validate().is_err();

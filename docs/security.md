@@ -1131,7 +1131,10 @@ as with `direnv allow`:
   list, a published port, a `/etc/hosts` alias, `ip_per_app`, a
   `monitor_cmd` (it runs **on the host**), a moved `web_addr` or
   `agent_addr`, `skills = "readwrite"`, a named `template`, a longer
-  `cache_ttl_days`, and the virtual Mac's `vm` and `guest_host_ip`. A value
+  `cache_ttl_days`, the virtual Mac's `vm` and `guest_host_ip`, and each
+  `[[tests]]` suite's `command` and `version_cmd` (the test queue runs them
+  in the sandbox when an agent names the suite; the agent never sends a
+  command, and the queue reads the suites from the recorded config only). A value
   equal to the built-in default is not a line, so a file that only changes
   the model, the colours, `env` or the sizes asks nothing. (`env` stays
   inside the sandbox; `[env]` is still not for secrets.)
