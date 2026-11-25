@@ -787,6 +787,9 @@ pub struct Job {
     /// This app is waiting for its POST's answer.
     pub posting: bool,
     pub since: Instant,
+    /// Where the bring-up's time went, as the daemon's `done` event says it
+    /// (`ready in 41 s: create 28 s, boot 6 s, ...`); none from an older daemon.
+    pub summary: Option<String>,
 }
 
 impl Job {
@@ -803,6 +806,7 @@ impl Job {
             state: JobState::Running,
             posting: route.is_some(),
             since: Instant::now(),
+            summary: None,
         }
     }
 
@@ -812,6 +816,7 @@ impl Job {
         self.at = -1;
         self.detail.clear();
         self.warnings.clear();
+        self.summary = None;
         self.state = JobState::Running;
         self.posting = true;
         self.since = Instant::now();
@@ -855,6 +860,8 @@ pub fn apply_provision(jobs: &mut Vec<Job>, data: &str) -> Option<String> {
             }
         }
         "done" => {
+            // The daemon's timing summary, plain text, whoever posted it.
+            j.summary = ev["summary"].as_str().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
             // A job this app posted ends with its POST's answer (which says
             // more); one it only watches ends here.
             if !j.posting {
@@ -915,6 +922,7 @@ pub fn job_view(j: &Job) -> J {
         "error": error,
         "warnings": j.warnings,
         "can_retry": matches!(j.state, JobState::Failed(_) | JobState::Asking(_)) && j.body.is_some(),
+        "summary": if j.state == JobState::Ready { j.summary.clone().map(J::from).unwrap_or(J::Null) } else { J::Null },
     })
 }
 
@@ -1208,6 +1216,7 @@ mod tests {
         assert_eq!(v["steps"][0]["state"], "done");
         assert_eq!(v["steps"][1]["detail"], "pulling 40%");
         apply_provision(&mut jobs, r#"{"sandbox":"web","kind":"done","error":"boom"}"#);
+        assert_eq!(job_view(&jobs[0])["summary"], J::Null, "no summary while not ready");
         assert_eq!(jobs[0].state, JobState::Running, "a posted job waits for its answer");
         jobs[0].posting = false;
         jobs[0].state = JobState::Failed("sbx: boom".into());
@@ -1218,6 +1227,32 @@ mod tests {
         assert_eq!(jobs.len(), 2);
         apply_provision(&mut jobs, r#"{"sandbox":"other","kind":"done"}"#);
         assert_eq!(jobs.len(), 1);
+    }
+
+    /// The daemon's timing summary on `done` is kept as plain text and
+    /// shown once ready; an older daemon's `done` has none, and none is shown.
+    #[test]
+    fn the_done_summary_is_shown_when_ready_and_only_when_sent() {
+        let mut jobs = vec![Job::new("web", Some("create"), Some(json!({})))];
+        apply_provision(&mut jobs, r#"{"sandbox":"web","kind":"done","error":null,"summary":"ready in 41 s: create 28 s, boot 6 s, tooling 3 s"}"#);
+        jobs[0].posting = false;
+        jobs[0].state = JobState::Ready;
+        assert_eq!(job_view(&jobs[0])["summary"], "ready in 41 s: create 28 s, boot 6 s, tooling 3 s");
+        // Retry forgets it until the next end.
+        jobs[0].restart();
+        assert_eq!(jobs[0].summary, None);
+        // An older daemon: no field, nothing shown.
+        let mut old = vec![Job::new("docs", Some("create"), Some(json!({})))];
+        apply_provision(&mut old, r#"{"sandbox":"docs","kind":"done","error":null}"#);
+        old[0].posting = false;
+        old[0].state = JobState::Ready;
+        assert_eq!(job_view(&old[0])["summary"], J::Null);
+        // Markup stays text: the view carries the daemon's string as is.
+        let mut m = vec![Job::new("m", Some("create"), Some(json!({})))];
+        apply_provision(&mut m, r#"{"sandbox":"m","kind":"done","summary":"<b>ready</b> in 1 s"}"#);
+        m[0].posting = false;
+        m[0].state = JobState::Ready;
+        assert_eq!(job_view(&m[0])["summary"], "<b>ready</b> in 1 s");
     }
 
     #[test]
