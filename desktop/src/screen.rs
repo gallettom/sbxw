@@ -1277,9 +1277,16 @@ fn wrapping_row(screen: &str, n: &Node) -> bool {
 }
 
 /// Whether a screen's height is its content's: no scroll area, split or
-/// grown box that would need a height given to it (a modal then fits it).
+/// box grown downwards that would need a height given to it (a modal then
+/// fits it). A box grown inside a row takes width, not height: two cards
+/// sharing a row do not make their dialog as tall as the window.
 pub fn sized_by_content(n: &Node) -> bool {
-    !matches!(n.kind, Kind::Scroll | Kind::Split) && n.style.grow.is_none() && n.children.iter().all(sized_by_content)
+    fn fits(n: &Node, in_row: bool) -> bool {
+        !matches!(n.kind, Kind::Scroll | Kind::Split)
+            && (in_row || n.style.grow.is_none())
+            && n.children.iter().all(|c| fits(c, n.kind == Kind::Row))
+    }
+    fits(n, false)
 }
 
 fn boxed(e: El, st: &Style) -> El {
