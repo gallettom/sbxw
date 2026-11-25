@@ -91,10 +91,70 @@ function refusal(taken) {
 // ── Reading a shell command ───────────────────────────────────────────────
 //
 // Not a shell parser: enough of one to see the writes an agent actually
-// types. Segments split on ; && || | and newlines, words honour quotes.
+// types. Segments split on ; && || | and newlines outside quotes and
+// here-document bodies, words honour quotes.
+
+// Characters that mean something to the shell, hidden while they sit inside
+// quotes, so a splitter or a regex cannot see them there.
+const HIDE = { ";": "\uE000", "|": "\uE001", "&": "\uE002", "\n": "\uE003", ">": "\uE004", "<": "\uE005", " ": "\uE006", "\t": "\uE007" };
+const SHOW = Object.fromEntries(Object.entries(HIDE).map(([k, v]) => [v, k]));
+const unmask = (s) => s.replace(/[\uE000-\uE007]/g, (c) => SHOW[c]);
+
+/// The command with quoted text made inert (its `;`, `|`, `&`, `>`, `<`,
+/// blanks and newlines hidden) and here-document bodies dropped. Quotes and
+/// everything else stay, so `unmask` restores any piece of it.
+function mask(cmd) {
+  const src = String(cmd);
+  let out = "";
+  let q = null; // ' or "
+  const pending = []; // here-document delimiters waiting for the next newline
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (q) {
+      if (q === '"' && c === "\\" && i + 1 < src.length) {
+        out += (HIDE[c] || c) + (HIDE[src[i + 1]] || src[i + 1]);
+        i++;
+      } else if (c === q) {
+        q = null;
+        out += c;
+      } else out += HIDE[c] || c;
+      continue;
+    }
+    if (c === "\\" && i + 1 < src.length) {
+      out += c + (HIDE[src[i + 1]] || src[i + 1]);
+      i++;
+    } else if (c === "'" || c === '"') {
+      q = c;
+      out += c;
+    } else if (c === "<" && src[i + 1] === "<" && src[i + 2] !== "<") {
+      const m = /^<<(-?)[ \t]*(?:'([^']*)'|"([^"]*)"|([^\s;|&<>()]+))/.exec(src.slice(i));
+      if (m) {
+        pending.push({ tabs: m[1] === "-", word: m[2] ?? m[3] ?? m[4] });
+        out += src.slice(i, i + m[0].length).replace(/[ \t]/g, (b) => HIDE[b]);
+        i += m[0].length - 1;
+      } else out += c;
+    } else if (c === "\n" && pending.length) {
+      out += c;
+      let pos = i + 1;
+      for (const h of pending) {
+        while (pos < src.length) {
+          let end = src.indexOf("\n", pos);
+          if (end < 0) end = src.length;
+          let line = src.slice(pos, end);
+          pos = Math.min(end + 1, src.length);
+          if (h.tabs) line = line.replace(/^\t+/, "");
+          if (line === h.word) break;
+        }
+      }
+      pending.length = 0;
+      i = pos - 1;
+    } else out += c;
+  }
+  return out;
+}
 
 function segments(cmd) {
-  return String(cmd).split(/\|\||&&|;|\||\n/).map((s) => s.trim()).filter(Boolean);
+  return mask(cmd).split(/\|\||&&|;|\||\n/).map((x) => unmask(x).trim()).filter(Boolean);
 }
 
 function words(seg) {
@@ -112,7 +172,18 @@ function commandWords(seg) {
   while (w.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0]) || ["sudo", "env", "command", "exec", "time", "nohup"].includes(w[0]))) {
     w.shift();
   }
-  return w;
+  return dropRedirections(w);
+}
+
+/// `< in`, `<<EOF`, `> out`, `2>&1`: the redirections are not operands.
+function dropRedirections(w) {
+  const out = [];
+  for (let i = 0; i < w.length; i++) {
+    const m = /^[0-9]*([<>]+)(&?)(.*)$/.exec(w[i]);
+    if (!m) out.push(w[i]);
+    else if (!m[3] && !m[2]) i++; // the target is the next word
+  }
+  return out;
 }
 
 const operands = (w) => w.slice(1).filter((x) => !x.startsWith("-"));
@@ -121,9 +192,10 @@ const operands = (w) => w.slice(1).filter((x) => !x.startsWith("-"));
 function writeTargets(cmd, cwd) {
   const out = [];
   const re = /(?:^|[^<>&0-9])[0-9]?>{1,2}\|?\s*([^\s;|&<>]+)/g;
+  const masked = mask(cmd);
   let m;
-  while ((m = re.exec(cmd))) {
-    const t = m[1].replace(/^['"]|['"]$/g, "");
+  while ((m = re.exec(masked))) {
+    const t = unmask(m[1]).replace(/^['"]|['"]$/g, "");
     if (!t.startsWith("&") && !t.startsWith("/dev/")) out.push(t);
   }
   for (const seg of segments(cmd)) {
