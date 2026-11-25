@@ -28,6 +28,12 @@ pub enum Event {
     /// A tab is now reading a sandbox's terminal (for the island).
     Watching(SandboxRef),
     Relay(RelayRequest),
+    /// A step of a relay request, for whoever tells the person (the
+    /// desktop, the phone): opened, routed, unrouted, answered, settled, a
+    /// reminder after 10 minutes waiting on them (once), expired, owed. Ids
+    /// and names only, never the question or the answer (see
+    /// `sbxw_core::relay::RelayNote`).
+    RelayNote(sbxw_core::relay::RelayNote),
     Provision(ProvisionEvent),
     Codemap(Run),
     Plan(Plan),
@@ -93,6 +99,7 @@ impl Event {
             Event::Focus(_) => "focus",
             Event::Watching(_) => "watching",
             Event::Relay(_) => "relay",
+            Event::RelayNote(_) => "relay-note",
             Event::Provision(_) => "provision",
             Event::Codemap(_) => "codemap",
             Event::Plan(_) => "plan",
@@ -120,6 +127,7 @@ impl Event {
         match self {
             Event::Session(v) => json(v),
             Event::Relay(v) => json(v),
+            Event::RelayNote(v) => json(v),
             Event::Provision(v) => json(v),
             Event::Codemap(v) => json(v),
             Event::Plan(v) => json(v),

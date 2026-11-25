@@ -14,7 +14,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use sbxw_core::agents::{CostReport, ModelReport};
 use sbxw_core::plans::{DistillItem, PlanThread, ThreadState, Variant};
-use sbxw_core::relay::{agent_view, RelayKind};
+use sbxw_core::relay::{agent_view, agent_view_part, RelayKind};
 use sbxw_core::usage::Reading;
 use sbxw_core::{SandboxRef, ThreadName};
 use serde::Deserialize;
@@ -34,7 +34,9 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/relay/ask", post(ask))
         .route("/api/relay/shot", post(shot))
         .route("/api/relay/questions", post(questions))
+        .route("/api/relay/open", post(open))
         .route("/api/relay/wait", post(wait))
+        .route("/api/relay/ack", post(ack))
         .route("/api/relay/reply", post(reply))
         .route("/api/relay/show", post(show))
         .route("/api/plans/propose", post(propose))
@@ -162,10 +164,14 @@ struct AskBody {
     timeout: Option<u64>,
 }
 
+/// The request routes of a relay client from before `open` and `wait`
+/// were two steps: open, park, answer once. Kept for a sandbox whose relay
+/// files `sbxw up` has not refreshed; its caller has the outcome once it is
+/// returned (it cannot acknowledge).
 async fn open_and_park(app: Arc<App>, me: SandboxRef, b: AskBody, kind: RelayKind) -> ApiResult {
     let thread = thread_of(b.thread)?;
     let req = app.relay_open(&me, thread.as_ref(), kind, &b.question)?;
-    let got = app.relay_wait(&req.id, &me, wait_bound(b.timeout)).await?;
+    let got = app.relay_wait_as(&req.id, &me, Some(thread.as_ref()), false, wait_bound(b.timeout)).await?;
     Ok(Json(agent_view(&got)))
 }
 
@@ -183,15 +189,64 @@ async fn questions(State(app): S, Agent(me): Agent, Json(b): Json<AskBody>) -> A
 }
 
 #[derive(Deserialize)]
+struct OpenBody {
+    kind: RelayKind,
+    #[serde(default)]
+    thread: Option<String>,
+    question: String,
+    /// Made by the relay server for one tool call: an open retried with it
+    /// answers the same request.
+    #[serde(default)]
+    client_key: Option<String>,
+}
+
+/// Open a request and answer its id at once; `wait` parks on it. A Mac
+/// request is opened by its own route, never here.
+async fn open(State(app): S, Agent(me): Agent, Json(b): Json<OpenBody>) -> ApiResult {
+    if b.kind == RelayKind::Mac {
+        return Err(ApiError::bad("a virtual Mac request is opened with the mac tools"));
+    }
+    let thread = thread_of(b.thread)?;
+    let req = app.relay_open_keyed(&me, thread.as_ref(), b.kind, &b.question, b.client_key.as_deref())?;
+    Ok(Json(agent_view(&req)))
+}
+
+#[derive(Deserialize)]
 struct WaitBody {
     id: String,
     #[serde(default)]
     timeout: Option<u64>,
+    /// The asking session (empty: the sandbox's agent). Absent, from a
+    /// client that predates it: the sandbox is checked alone.
+    #[serde(default)]
+    thread: Option<String>,
+    /// The client acknowledges a final outcome with `ack` once it wrote it.
+    #[serde(default)]
+    ack: bool,
+    /// Which part of a long answer (1-based).
+    #[serde(default)]
+    part: Option<usize>,
 }
 
 async fn wait(State(app): S, Agent(me): Agent, Json(b): Json<WaitBody>) -> ApiResult {
-    let got = app.relay_wait(&b.id, &me, wait_bound(b.timeout)).await?;
-    Ok(Json(agent_view(&got)))
+    let thread = b.thread.map(|t| thread_of(Some(t))).transpose()?;
+    let got = app.relay_wait_as(b.id.trim(), &me, thread.as_ref().map(|t| t.as_ref()), b.ack, wait_bound(b.timeout)).await?;
+    Ok(Json(agent_view_part(&got, b.part.unwrap_or(1))))
+}
+
+#[derive(Deserialize)]
+struct AckBody {
+    id: String,
+    #[serde(default)]
+    thread: Option<String>,
+}
+
+/// The relay server wrote the tool result with the outcome of `id`: it is
+/// delivered, and nothing is handed on for it.
+async fn ack(State(app): S, Agent(me): Agent, Json(b): Json<AckBody>) -> ApiResult {
+    let thread = b.thread.map(|t| thread_of(Some(t))).transpose()?;
+    let first = app.relay_ack(b.id.trim(), &me, thread.as_ref().map(|t| t.as_ref()))?;
+    Ok(ok_with(json!({ "delivered": first })))
 }
 
 #[derive(Deserialize)]

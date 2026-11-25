@@ -190,6 +190,8 @@ impl AppBuilder {
         let emphasis = Mutex::new(self.cfg.emphasis.clone());
         let remote_access = Mutex::new(crate::svc::remote_access::RemoteRuntime::load(&store.paths.root));
         let tests = crate::svc::testq::load(&store.paths.state().join("tests.json"));
+        // Kept across restarts (see `svc::relay`): no request lost, no id reused.
+        let relay_book = crate::svc::relay::load(&store.paths.state().join("relay.json"));
         let inbox = crate::svc::inbox::load(&store.paths.state().join("inbox.json"));
         let jarvis = sbxw_core::jarvis::Book::load(crate::svc::jarvis::load(&store.paths.state().join("jarvis.json")));
         Arc::new(App {
@@ -208,7 +210,7 @@ impl AppBuilder {
             initial_sandbox: Mutex::new(String::new()),
             agents: Mutex::new(AgentBook::new()),
             history: Mutex::new(sbxw_core::history::HistoryBook::new()),
-            relay: Mutex::new(RelayBook::new()),
+            relay: Mutex::new(relay_book),
             relay_waiters: Mutex::new(HashMap::new()),
             #[cfg(test)]
             relay_told: Mutex::new(Vec::new()),
@@ -373,9 +375,11 @@ impl App {
         self.inbox_start();
     }
 
-    fn prune(&self) {
+    fn prune(self: &Arc<Self>) {
         let now = now_ms();
-        let dropped = self.relay.lock().unwrap().prune(now);
+        // Owed outcomes handed on, reminders, then expired requests told.
+        self.relay_tick();
+        let dropped = self.relay_prune(now);
         if dropped > 0 {
             tracing::info!("relay: pruned {dropped} stale request(s)");
         }

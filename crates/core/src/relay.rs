@@ -108,9 +108,9 @@ pub struct RelayRequest {
     /// acknowledge it; past `ACK_LIMIT_MS` without that, it is owed.
     #[serde(skip)]
     pub returned_ms: Option<u64>,
-    /// The person was reminded of it once (`REMIND_AFTER_MS`).
-    #[serde(skip)]
-    pub reminded: bool,
+    /// When the person was reminded of it (`REMIND_AFTER_MS`), once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reminded_ms: Option<u64>,
 }
 
 /// The whole request as `state/relay.json` keeps it, images included: what
@@ -142,7 +142,7 @@ struct Stored {
     #[serde(default)]
     returned_ms: Option<u64>,
     #[serde(default)]
-    reminded: bool,
+    reminded_ms: Option<u64>,
 }
 
 impl From<&RelayRequest> for Stored {
@@ -163,7 +163,7 @@ impl From<&RelayRequest> for Stored {
             client_key: r.client_key.clone(),
             delivered: r.delivered,
             returned_ms: r.returned_ms,
-            reminded: r.reminded,
+            reminded_ms: r.reminded_ms,
         }
     }
 }
@@ -186,7 +186,7 @@ impl From<Stored> for RelayRequest {
             client_key: s.client_key,
             delivered: s.delivered,
             returned_ms: s.returned_ms,
-            reminded: s.reminded,
+            reminded_ms: s.reminded_ms,
         }
     }
 }
@@ -453,7 +453,7 @@ impl RelayBook {
             client_key: key,
             delivered: false,
             returned_ms: None,
-            reminded: false,
+            reminded_ms: None,
         };
         self.requests.insert(req.id.clone(), req.clone());
         (req, true)
@@ -657,8 +657,8 @@ impl RelayBook {
     pub fn take_reminders(&mut self, now: u64) -> Vec<RelayRequest> {
         let mut out = Vec::new();
         for r in self.requests.values_mut() {
-            if !r.reminded && r.waits_for_person() && now.saturating_sub(r.updated_ms) >= REMIND_AFTER_MS {
-                r.reminded = true;
+            if r.reminded_ms.is_none() && r.waits_for_person() && now.saturating_sub(r.updated_ms) >= REMIND_AFTER_MS {
+                r.reminded_ms = Some(now);
                 out.push(r.clone());
             }
         }
