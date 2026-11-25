@@ -7,6 +7,9 @@
 // daemon answers with a note for the agent's context — a low host battery,
 // told to a Remote Control session on its next prompt — which is printed as
 // the daemon wrote it.
+// On a SessionStart the daemon may answer what sbxw holds for the new
+// conversation (svc::session_context in the daemon: the lead's instructions
+// after a /clear or a compaction), printed the same way. Any error: silent.
 // The daemon port is templated in at install time (see sbx::install_status_hooks).
 const http = require("http");
 const os = require("os");

@@ -127,6 +127,38 @@ pane's bar makes the main session do it: sbxw types `/lead` into it. It asks
 what you want done, reads the repo, and proposes a **plan**: a few threads,
 each with a name, a goal and the files it owns.
 
+### Turning Team on: waiting, activating, leading
+
+"Team on" means a session really leads, and the toggle says where it stands:
+
+- **Waiting**: you pressed Team while the agent was busy or at a prompt. sbxw
+  types `/lead` only into an idle agent (the phone's rule: its turn over, no
+  question or permission prompt, no tool call in the last seconds, bracketed
+  paste on), and does so as soon as it is idle. After 10 minutes it gives up
+  and Team is off, with the reason.
+- **Activating** (the toggle says Starting): `/lead` was typed. The session's
+  first instruction is to call `lead_ack` (relay tool); only that call turns
+  Team on. No call within 90 seconds: Team is off, with the reason.
+- **Leading** (On): the session confirmed. `lead_ack`'s answer names the plans
+  it follows again, if any (see "Turning Team on again").
+
+Clicking the toggle while it waits or activates cancels. A `/lead` you type by
+hand creates no lead: `lead_ack` refuses it and tells the agent to ask you to
+press Team. A thread's `lead_ack` is refused too.
+
+**`/clear` and compaction.** When the lead's main session starts a new
+conversation in its own terminal (a `/clear`, a compaction, a resume), sbxw's
+status hook gives that conversation its lead instructions again as additional
+context: that it leads, the open plans and where each thread stands, and
+lead.md (inline when it fits Claude Code's context limit, else the path of the
+installed `/lead` command to read). The lead's record follows the new
+conversation, and the state goes back to activating until it calls `lead_ack`
+again. This only keeps a lead that exists; it never creates one, and a
+thread's session (`SBXW_THREAD` set) never gets it.
+
+A plan under way with no session leading it (Team off, or a lead that fell
+back) shows as **No lead** on the toggle; clicking it resumes the lead.
+
 As lead it **does not code**. It plans, follows the threads, reviews their
 branches, and proposes the merge.
 
@@ -405,7 +437,7 @@ lead's session also removes the mark.
 the end closed that are still open: approved, not merged. A refused plan
 (by you, or the pending plan refused by the end) stays refused, and a merged
 one stays merged. Only the end of lead mode closes a plan, so a reopened plan
-is never one you settled. Right after `/lead`, sbxw types one line saying
+is never one you settled. The answer of `lead_ack` (nothing is typed) says
 which plans it follows again, with their ids, threads and states, e.g.
 `[sbxw] Lead mode is on again, and you follow again the open plans of this
 sandbox from before: plan p-1 (a done, b working). ...`. Then `plan_status`,
@@ -423,8 +455,9 @@ not who merged it or how.
 
 ### What survives a daemon restart
 
-Lead mode is kept in the sandbox's record (`lead`: when you turned it on and
-the Claude Code session id of the main session then). After a daemon restart,
+Lead mode is kept in the sandbox's record (`lead`: when it was confirmed and
+the Claude Code session id of the main session then), once confirmed: a lead
+still waiting or activating is in memory only, and a restart forgets it. After a daemon restart,
 or a main terminal closed and opened again, the sandbox leads again, without a
 click and without anything typed, as soon as both hold:
 
@@ -449,8 +482,10 @@ the record is dropped, when:
   none did before the restart);
 - it was not found again within 7 days of its last binding.
 
-Once bound, the terminal decides, as before: it leads while it is open,
-whatever conversation runs in it. A record written by an older sbxw
+Once bound, the terminal decides, as before: it leads while it is open; a new
+conversation in it goes through activating again (above). Every drop
+(the terminal closed, the session never known, another conversation past 7
+days, expired) sends `lead-end`, with its reason in `/api/lead-states`. A record written by an older sbxw
 has no `lead` field and loads as no leader; a leader turned on before this
 change needs Team on once more.
 
@@ -688,7 +723,7 @@ data rather than instructions, and copies its files into the sandbox under
 <details>
 <summary>Lead details for the curious</summary>
 
-- **Tools.** The `sbxw-relay` MCP server gives the main session `propose_plan`,
+- **Tools.** The `sbxw-relay` MCP server gives the main session `lead_ack`, `propose_plan`,
   `check_plan`, `plan_status`, `propose_merge` and `mark_thread_done`; a thread gets
   `report_thread_status` instead. A session knows which it is from
   `SBXW_THREAD`. **★ Lead mode** installs `/lead` and refreshes the server first.
@@ -699,7 +734,20 @@ data rather than instructions, and copies its files into the sandbox under
 - **Persistence.** Plans are written to `~/.sbxw/state/plans/<sandbox>.json`
   (directory `0700`) and survive a daemon restart. A plan whose threads are all
   done or failed is dropped a day after its last change. `GET /api/leads` lists
-  which session leads.
+  the sandboxes that lead (confirmed), as names.
+- **Lead states.** `GET /api/lead-states` (and `lead_states` in `/api/state`)
+  is `{ "<sandbox>": { "state": "waiting" | "activating" | "leading" | "off",
+  "since_ms": n, "reason": "..." } }`. A sandbox that is off is absent, except
+  for 2 minutes after a fall back, as `off` with the reason. `reason` is ""
+  when none. The `lead` event (data: the sandbox) goes out on every change of
+  state, `lead-end` on every fall back to off: read the states again on
+  either. `POST /api/sandboxes/<name>/lead` waits for an idle agent (above);
+  `POST /api/sandboxes/<name>/lead/cancel` cancels waiting or activating (409
+  when neither). `POST /api/lead/ack` (agent listener, the relay's `lead_ack`)
+  takes `{thread?}` and no other text: it confirms an activating lead of the
+  token's sandbox, else 409 with a fixed refusal. The `SessionStart` answer of
+  `POST /api/hook` may carry `hookSpecificOutput.additionalContext`
+  (`svc::session_context`).
 - **Variant.** The plan carries `variant` (`split`, the default and what older
   plan files read as, or `shared`), `justification`, and for a shared plan
   `worktree`, the shared worktree's path, set on approval. `propose_plan` takes
@@ -718,7 +766,8 @@ data rather than instructions, and copies its files into the sandbox under
   `[{kind: "decision" | "warning", text}]`. `POST /api/plans/<id>/merge` with
   `{close_threads, distillate?}` runs it; `distillate`, when given, replaces the
   proposed one.
-- **End.** `POST /api/sandboxes/<name>/lead/end`.
+- **End.** `POST /api/sandboxes/<name>/lead/end` (on a lead still waiting, a
+  cancel: nothing is typed).
 - **Tickets API** (UI listener). `GET /api/tickets?sandbox=<name>|all&older=1`
   is the board, every card's column, label, mark and count decided there:
   `{board: {scope, now, columns: [{id, title, tone, help, empty, count,

@@ -230,7 +230,7 @@ things about the **session** in the pane.
 |---|---|
 | **Project** | Opens the [Project panel](#the-project-panel): files and code map |
 | **⑂ Thread** | Opens another Claude session in its own git worktree. See [Threads](threads-and-lead.md) |
-| **★ Lead mode** | Turns the main session into a planner. See [The lead](threads-and-lead.md#the-lead) |
+| **★ Lead mode** | Turns the main session into a planner. Reads Off, Waiting (for an idle agent), Starting (until the session confirms), On, or No lead (a plan under way that no session leads); a click while Waiting or Starting cancels. See [The lead](threads-and-lead.md#the-lead) |
 | **⋯** | A menu: **SSH** (connection details for SSH clients), **Environment file** (export the sandbox as `sbxenv.yaml`), both [below](#environment-file-and-ssh-cards), and **Reconnect** (reopen the WebSocket) |
 | **↻** | Rebuild the terminal widget, then reconnect. Reconnect and ↻ both replay the last 256 KB of the session |
 | **Claude ↔ Bash** | Switch between the agent and a shell. Both keep running server-side, with their scrollback |

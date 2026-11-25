@@ -42,34 +42,49 @@ function pendingPlanFor(sandbox) {
   return null;
 }
 
-// Sandboxes whose main session was made lead with ★ Lead, per the daemon,
-// which forgets one as soon as that session is replaced (see /api/leads).
+// Each sandbox's lead as the daemon vouches for it (/api/lead-states):
+// `waiting` (Team pressed, the agent busy), `activating` (`/lead` typed, the
+// session has not confirmed), `leading`, or `off` with the reason of a recent
+// fall back. A sandbox that is off is absent.
+const leadStates = new Map();
+// The sandboxes that lead: those `leading` above, as /api/leads lists them.
 const leadSessions = new Set();
 
 function refreshLeads() {
-  fetch('/api/leads')
+  fetch('/api/lead-states')
     .then(r => r.json())
-    .then(list => {
+    .then(states => {
+      leadStates.clear();
       leadSessions.clear();
-      list.forEach(n => leadSessions.add(n));
+      for (const [n, st] of Object.entries(states || {})) {
+        leadStates.set(n, st);
+        if (st.state === 'leading') leadSessions.add(n);
+      }
       schedulePaintGroups();
     })
     .catch(() => {});
 }
 
-// Shown the moment Lead is clicked rather than when the daemon confirms, so
-// the pane changes under the click; `refreshLeads` puts it right if it failed.
-function markLeading(sandbox) {
-  leadSessions.add(sandbox);
-  schedulePaintGroups();
+// BEGIN plans lead pure
+// Is the main session of `sandbox` the lead? Only the daemon's word counts:
+// a plan under way says nothing of whether a session leads it (see
+// `planWithoutLead`).
+function leadingIn(leads, sandbox) {
+  return leads.has(sandbox);
 }
 
-// Is the main session of `sandbox` the lead: made lead with ★ Lead, or
-// leading a plan: one waiting on a person, or approved with a thread still at
-// work?
-function isLeading(sandbox) {
-  if (leadSessions.has(sandbox)) return true;
-  for (const p of plans.values()) {
+// The lead's state of `sandbox` other than leading: 'waiting',
+// 'activating', or null.
+function leadPendingIn(states, sandbox) {
+  const st = states.get(sandbox)?.state;
+  return st === 'waiting' || st === 'activating' ? st : null;
+}
+
+// A plan of `sandbox` is under way (one waiting on a person, or approved
+// with a thread still at work) while no session leads it.
+function planWithoutLeadIn(plans, leads, states, sandbox) {
+  if (leadingIn(leads, sandbox) || leadPendingIn(states, sandbox)) return false;
+  for (const p of plans) {
     if (p.sandbox !== sandbox || p.closed) continue;
     if (p.state === 'pending') return true;
     if (p.state === 'approved' && p.threads.some(t => !['done', 'failed'].includes(t.state))) return true;
@@ -77,11 +92,37 @@ function isLeading(sandbox) {
   return false;
 }
 
+// What the pane's Team toggle says, and its hover text.
+function leadToggleText(leading, pending, orphan, reason) {
+  if (leading) return { label: 'On', title: 'Team mode is on. Click to end it: this session stops leading; its threads keep running' };
+  if (pending === 'waiting') return { label: 'Waiting', title: 'Team mode waits for the agent to be idle before sbxw types /lead. Click to cancel' };
+  if (pending === 'activating') return { label: 'Starting', title: 'sbxw typed /lead and waits for the session to confirm it leads. Click to cancel' };
+  if (orphan) return { label: 'No lead', title: 'A plan is under way and no session leads it. Click to resume the lead' };
+  return { label: 'Off', title: reason ? `Team mode is off: ${reason}` : null };
+}
+// END plans lead pure
+
+function isLeading(sandbox) {
+  return leadingIn(leadSessions, sandbox);
+}
+
+function leadPending(sandbox) {
+  return leadPendingIn(leadStates, sandbox);
+}
+
+function planWithoutLead(sandbox) {
+  return planWithoutLeadIn(plans.values(), leadSessions, leadStates, sandbox);
+}
+
+function leadReason(sandbox) {
+  return leadStates.get(sandbox)?.reason || '';
+}
+
 // Lead mode ended, here or in another tab: the daemon has closed its plans
-// (they come back with `closed: true`), and this forgets the ★ Lead click.
+// (they come back with `closed: true`), and the states are read again.
 function forgetLeading(sandbox) {
   leadSessions.delete(sandbox);
-  schedulePaintGroups();
+  refreshLeads();
 }
 
 // ── End lead mode ──
@@ -931,7 +972,9 @@ fetch('/api/plans')
   .catch(() => {});
 
 refreshLeads();
-sbxwStream.addEventListener('lead', ev => markLeading(ev.data));
+// Every change of a lead's state sends `lead`, every fall back to off
+// `lead-end`: the states are read again on either.
+sbxwStream.addEventListener('lead', () => refreshLeads());
 sbxwStream.addEventListener('lead-end', ev => forgetLeading(ev.data));
 
 sbxwStream.addEventListener('plan', ev => {

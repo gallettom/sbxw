@@ -2025,19 +2025,23 @@ async function startLead(idx) {
   if (!sandbox || pane.thread) return;
   // Lit, the button is the way out: it ends team mode, after asking.
   if (typeof isLeading === 'function' && isLeading(sandbox)) { askEndLead(idx); return; }
+  // Waiting for an idle agent, or for the session's confirmation: cancel.
+  const pending = typeof leadPending === 'function' ? leadPending(sandbox) : null;
   if (pane.mode !== 'claude') connectPane(idx, sandbox, 'claude');
   const btn = document.getElementById(`plead-${idx}`);
   btn.disabled = true;
-  if (typeof markLeading === 'function') markLeading(sandbox);
+  // The toggle shows what the daemon says, from the `lead` events: it is
+  // not lit before the session confirmed.
+  const route = pending ? 'lead/cancel' : 'lead';
   let res;
   try {
-    res = await (await fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/lead`, { method: 'POST' })).json();
+    res = await (await fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/${route}`, { method: 'POST' })).json();
   } catch (e) {
     res = { ok: false, error: e.message };
   }
   btn.disabled = false;
-  if (!res.ok && typeof refreshLeads === 'function') refreshLeads();
-  if (!res.ok) pane.term.write(`\r\n\x1b[31m[sbxw] Lead: ${res.error}\x1b[0m\r\n`);
+  if (typeof refreshLeads === 'function') refreshLeads();
+  if (!res.ok) pane.term.write(`\r\n\x1b[31m[sbxw] Team: ${res.error}\x1b[0m\r\n`);
 }
 
 // ── Remote Control ──
@@ -2277,6 +2281,8 @@ function paintGroups() {
     // whether the main session is leading a plan right now.
     const st = thread && typeof planThreadState === 'function' ? planThreadState(p.sandbox, thread) : null;
     const leading = !thread && p.sandbox && typeof isLeading === 'function' && isLeading(p.sandbox);
+    const leadWait = !thread && p.sandbox && typeof leadPending === 'function' ? leadPending(p.sandbox) : null;
+    const orphan = !thread && p.sandbox && typeof planWithoutLead === 'function' && planWithoutLead(p.sandbox);
     // Team mode is said once, by its toggle lit On (kept on the bar while it
     // is, focused or not) and the stripe on the bar, not a second time by a
     // "★ lead" chip beside it. The chip stays "main" among its threads.
@@ -2285,10 +2291,14 @@ function paintGroups() {
     const leadBtn = document.getElementById(`plead-${i}`);
     if (leadBtn) {
       leadBtn.setAttribute('aria-pressed', String(!!leading));
-      leadBtn.querySelector('.lead-state').textContent = leading ? 'On' : 'Off';
-      // On, the toggle ends team mode; say so where a person hovers.
+      const say = typeof leadToggleText === 'function'
+        ? leadToggleText(!!leading, leadWait, !!orphan, typeof leadReason === 'function' && p.sandbox ? leadReason(p.sandbox) : '')
+        : { label: leading ? 'On' : 'Off', title: null };
+      leadBtn.querySelector('.lead-state').textContent = say.label;
+      leadBtn.classList.toggle('lead-pending', !!leadWait);
+      // Say on hover what a click does in each state.
       leadBtn.dataset.title ??= leadBtn.title;
-      leadBtn.title = leading ? 'Team mode is on. Click to end it: this session stops leading; its threads keep running' : leadBtn.dataset.title;
+      leadBtn.title = say.title || leadBtn.dataset.title;
     }
     chip.title = st ? `${st.state}${st.summary ? `: ${st.summary}` : ''}` : '';
     chip.classList.toggle('thread', !!thread);
