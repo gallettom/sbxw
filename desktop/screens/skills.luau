@@ -136,7 +136,7 @@ local function installed(state, data, look_for, kept, found)
   end)
   local total = 0
   for _, id in ipairs(order) do total = total + #groups[id].rows end
-  local out = { w = "full", gap = 10, key = "skills-installed" }
+  local out = { w = "full", gap = 12, key = "skills-installed" }
   out[#out + 1] = row{ w = "full", gap = 8,
     text{ "Installed in " .. look_for, size = "caption", weight = "semibold", color = "text-muted", truncate = true, grow = 1 },
     badge{ total .. " installed", tone = "neutral", key = "skills-installed-count" },
@@ -148,7 +148,7 @@ local function installed(state, data, look_for, kept, found)
   end
   for _, id in ipairs(order) do
     local g = groups[id]
-    local gc = { w = "full", gap = 6, key = "installed-group-" .. id }
+    local gc = { w = "full", gap = 8, key = "installed-group-" .. id }
     gc[#gc + 1] = row{ w = "full", gap = 8,
       text{ g.o.title, size = "sm", weight = "semibold", color = "text-soft" },
       badge{ tostring(#g.rows), tone = "neutral" },

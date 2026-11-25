@@ -1,0 +1,20 @@
+# Quarantined tests: skipped by scripts/run-suite.sh in the blocking run.
+#
+# One line per test, four fields separated by `|`:
+#
+#   suite | full test name | ticket | date
+#
+#   suite   crates, js or desktop.
+#   name    the test's full name as the runner prints it: for cargo the path
+#           (`theme::tests::screens_space_on_the_grid`; matched as a substring,
+#           so keep it whole), for node the test's title.
+#   ticket  where the fix is tracked: SBXW-123, #123 or a URL. A line without
+#           one is an error and the whole run refuses to start.
+#   date    the day it went in, YYYY-MM-DD.
+#
+# Quarantine a test only with evidence that it is flaky or broken, and fix or
+# delete it by its ticket. Blank lines and lines starting with # are ignored.
+# The list is empty on purpose: nothing fails on main.
+#
+# Example, commented out:
+# js | a flaky test's full title | SBXW-123 | 2026-11-25
