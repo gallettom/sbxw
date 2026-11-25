@@ -36,6 +36,7 @@ use sbxw_sbx::CreateOpts;
 use crate::carving;
 use crate::host::Host;
 use crate::remotes::Remote;
+use crate::svc::timings::{self, step};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -173,6 +174,14 @@ pub fn plan(existed: bool, cfg: &Config, template: bool) -> Vec<Step> {
     steps
 }
 
+/// Why the kits' startups are waited for: before a snapshot (it must not
+/// catch an install midway), or only to measure when they end.
+#[derive(Clone, Copy)]
+enum Watch {
+    Snapshot,
+    Measure,
+}
+
 struct Run<'a> {
     sink: &'a Sink,
     warnings: Vec<String>,
@@ -220,9 +229,24 @@ impl App {
             }
             bus.send(Event::Provision(ProvisionEvent { sandbox: name.clone(), progress: p }));
         });
-        let out = self.bring_up(req, &sink).await;
+        // Timed, measuring only: every step and every `sbx` call of this
+        // task (`svc::timings`).
+        let sb = req.name.clone();
+        let clock = timings::Clock::new(&sb);
+        let out = clock.recorder().scope(self.bring_up(req, &sink, &clock)).await;
+        let t = clock.finish(out.is_err());
+        let summary = t.summary.clone();
+        let id = self.timing_finished(&clock, t);
+        if let (Ok(_), Some(resolved)) = (&out, clock.take_watch()) {
+            match clock.kind().as_str() {
+                // It starts with its agent: watched from there (`svc::open`).
+                "stopped" => self.timing_watch_later(id, resolved),
+                _ => self.watch_kit_startups(sb, resolved, id, clock.start(), false),
+            }
+        }
         sink(Progress::Done {
             error: out.as_ref().err().map(|e| format!("{e:#}")),
+            summary: Some(summary),
         });
         out
     }
@@ -243,22 +267,29 @@ impl App {
         self.store.check_grants(&key, &all, &all, approved_now)
     }
 
-    async fn bring_up(self: &Arc<Self>, mut req: BringUp, sink: &Sink) -> Result<Vec<String>> {
+    async fn bring_up(self: &Arc<Self>, mut req: BringUp, sink: &Sink, clock: &timings::Clock) -> Result<Vec<String>> {
         // A remote host: its link first. The -R tunnel the hooks call home
         // through must be up before they are installed.
         let on_host: Option<Arc<Remote>> = match req.name.is_local() {
             true => None,
-            false => Some(self.ready_remote(&req.name).await?),
+            false => Some(clock.time(step::REMOTE_LINK, self.ready_remote(&req.name)).await?),
         };
         let host = self.host_for(&req.name).await?;
         let sbx = self.sbx_for(&req.name).await?;
+        clock.set(|t| {
+            t.sbx_version = match on_host {
+                None => self.versions.sbx.clone(),
+                Some(_) => sbx.seen_version().map(|(a, b, c)| format!("{a}.{b}.{c}")),
+            }
+        });
         if let Some(url) = &req.git {
-            clone_if_missing(&host, url, &req.workspace).await?;
+            clock.time(step::GIT_CLONE, clone_if_missing(&host, url, &req.workspace)).await?;
         }
         if on_host.is_some() {
             // sbxw.toml is the project's, so it is on the host, beside the code.
-            req.config = remote_config(&host, &req.workspace).await?;
+            req.config = clock.time(step::REMOTE_CONFIG, remote_config(&host, &req.workspace)).await?;
         }
+        let prepare = clock.begin(step::PREPARE);
         match (&on_host, &req.consent) {
             (Some(_), Consent::Check(ok) | Consent::Checked(ok)) => {
                 let key = format!("{}:{}", req.name.host, req.workspace.join("sbxw.toml").display());
@@ -290,9 +321,10 @@ impl App {
             bail!("{workspace} is not a directory{}", on_host.as_ref().map(|r| format!(" on host '{}'", r.cfg.name)).unwrap_or_default());
         }
         self.validate_kits(&req.config.kits)?;
+        clock.end(prepare);
 
         // Asked first: it decides two of the announced steps.
-        let initial = sbx.lookup(n).await;
+        let initial = clock.time(step::SBX_LS, sbx.lookup(n)).await;
         let existed = initial.is_some();
         // An existing sandbox keeps its creation workspace: sbx cannot move its
         // mount. Recording another directory would point the Project panel, env
@@ -312,7 +344,18 @@ impl App {
         }
         let stopped = initial.as_ref().is_some_and(|i| i.is_stopped());
         let mut running = Some(initial.as_ref().is_some_and(|i| i.is_running()));
-        let (template, rebuild, background) = self.template_for(&req, cfg, existed, &mut run).await;
+        let kind = match (existed, stopped, running) {
+            (false, _, _) => "new",
+            (true, true, _) => "stopped",
+            (true, false, Some(true)) => "running",
+            (true, false, _) => "existing",
+        };
+        clock.set(|t| {
+            t.kind = kind.into();
+            t.kits = cfg.kits.len();
+        });
+        let (template, rebuild, background) = clock.time(step::TEMPLATE_CHECK, self.template_for(&req, cfg, existed, &mut run)).await;
+        clock.set(|t| t.template.clone_from(&template));
         // A template holds the kits' installs, so its kits would never fill the
         // cache this sandbox claimed.
         wants_cache &= template.is_none();
@@ -333,9 +376,10 @@ impl App {
         // takes /remote-control, and none is created without credentials any
         // more. An older sbx does not know the setting.
         let native_remote = match !existed && req.remote_control {
-            true => sbx.setting_bool(remote::SETTING, remote::SINCE).await?,
+            true => clock.time(step::SETTING_REMOTE, sbx.setting_bool(remote::SETTING, remote::SINCE)).await?,
             false => None,
         };
+        let record = clock.begin(step::RECORD);
         let remote = recorded_remote || (!existed && req.remote_control && native_remote.is_none());
         let chrome = cfg.chrome || req.chrome || before.chrome;
         self.store
@@ -385,8 +429,9 @@ impl App {
             }
             None => {}
         }
+        clock.end(record);
         if chrome {
-            match sbx.setting_bool(sbxw_core::chrome::SETTING, sbxw_core::chrome::SINCE).await {
+            match clock.time(step::SETTING_CHROME, sbx.setting_bool(sbxw_core::chrome::SETTING, sbxw_core::chrome::SINCE)).await {
                 Ok(Some(true)) => run.info("Claude in Chrome: the agent starts with --chrome"),
                 Ok(Some(false)) => run.warn(sbxw_core::chrome::setting_advice()),
                 Ok(None) => run.warn(sbxw_core::chrome::NEEDS_SBX),
@@ -399,11 +444,13 @@ impl App {
 
         // ── Create, or reuse ─────────────────────────────────────────────
         run.step(progress::CREATE);
+        let create_prepare = clock.begin(step::CREATE_PREPARE);
         let mut created_with_kits = false;
         // The project's kits as `sbx` on the sandbox's host names them:
         // mirrored there for a remote host, as they are here.
         let (kits_here, mut mirrored) = self.kits_on(on_host.as_deref(), &cfg.kits, &run).await?;
         if existed {
+            clock.end(create_prepare);
             run.info(format!("sandbox '{name}' already exists — reusing it"));
             // Mounts too: a changed set of carves is a recreate, never applied.
             let had = self.store.get(name).carve.map(|c| c.file).unwrap_or_default();
@@ -527,7 +574,13 @@ impl App {
             };
             let applied = opts.kits.clone();
             let since = utc_rfc3339(unix_now());
-            if let Err(e) = self.create_with_port_fallback(name, &opts, sink, &mut run).await {
+            clock.end(create_prepare);
+            let creating = clock.begin(step::SBX_CREATE);
+            let created = self.create_with_port_fallback(name, &opts, sink, &mut run).await;
+            let from = opts.template.as_deref().map_or_else(|| "no template".to_string(), |t| format!("template {t}"));
+            let attempts = clock.recorder().count_since("create", 0);
+            clock.end_with(creating, Some(format!("{from}, {} kits passed{}", opts.kits.len(), if attempts > 1 { format!(", {attempts} attempts") } else { String::new() })));
+            if let Err(e) = created {
                 self.report_denied(&run, name, progress::CREATE, None, &e, &since).await;
                 return Err(e);
             }
@@ -554,7 +607,7 @@ impl App {
                 None => sbx.is_running(n).await,
             };
             if !existed || !up {
-                match sbx.run_detached(n).await {
+                match clock.time(step::RUN_DETACHED, sbx.run_detached(n)).await {
                     Ok(()) => {
                         running = None;
                         run.info(format!("'{name}' kept running until `sbxw stop {name}`"));
@@ -566,11 +619,18 @@ impl App {
 
         // ── Boot ─────────────────────────────────────────────────────────
         run.step(progress::BOOT);
-        let up = match running {
-            Some(true) => true,
-            Some(false) if stopped => false,
-            _ => sbx.wait_until_running(n, Duration::from_secs(30)).await,
+        let boot = clock.begin(step::BOOT);
+        let polls_from = clock.now_ms();
+        let (up, boot_detail) = match running {
+            Some(true) => (true, "already running".to_string()),
+            Some(false) if stopped => (false, "stopped: it starts at the attach".to_string()),
+            _ => {
+                let up = sbx.wait_until_running(n, Duration::from_secs(30)).await;
+                let polls = clock.recorder().count_since("ls", polls_from);
+                (up, format!("{polls} sbx ls poll(s){}", if up { "" } else { ", not running after 30 s" }))
+            }
         };
+        clock.end_with(boot, Some(boot_detail));
 
         // ── Tooling and policy ───────────────────────────────────────────
         // Independent (one a guest script, one a host-side rule), so they run
@@ -606,11 +666,11 @@ impl App {
         let (tooled, allowed) = tokio::join!(
             async {
                 match up {
-                    true => Some(sbx.tooling(n, &batch).await),
+                    true => Some(clock.time(step::TOOLING, sbx.tooling(n, &batch)).await),
                     false => None,
                 }
             },
-            sbx.policy("allow", Some(n), &allow)
+            clock.time(step::POLICY_ALLOW, sbx.policy("allow", Some(n), &allow))
         );
         if let (true, Some(tooled)) = (jarvis, &tooled) {
             // The session open that follows a bring-up need not write it again.
@@ -653,7 +713,7 @@ impl App {
             Err(e) => return Err(e).context("failed to apply the network allowlist"),
         }
         if !cfg.network_deny.is_empty() {
-            match sbx.policy("deny", Some(n), &cfg.network_deny.join(",")).await {
+            match clock.time(step::POLICY_DENY, sbx.policy("deny", Some(n), &cfg.network_deny.join(","))).await {
                 Ok(()) => {}
                 Err(e) if kits::policy_is_governed(&format!("{e:#}")) => {
                     run.warn(format!("network denylist not applied — your organization manages this policy:\n{e:#}"))
@@ -666,6 +726,7 @@ impl App {
         // The first kit is sbxw's base kit, applied at creation only.
         if !created_with_kits && cfg.kits.len() > 1 {
             run.step(progress::KITS);
+            let kits_add = clock.begin(step::KITS_ADD);
             let record = self.store.get(name);
             let recorded = record.kits;
             // A kit sbx refused to add to an existing sandbox is not offered
@@ -746,12 +807,13 @@ impl App {
             if refused != record.kits_refused {
                 let _ = self.store.update(name, |r| r.kits_refused = refused);
             }
+            clock.end(kits_add);
         }
 
         if let Some(key) = req.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty() && !remote) {
             if trusted {
                 run.info("storing ANTHROPIC_API_KEY as the global `anthropic` secret");
-                sbx.secret_set("anthropic", key, None).await.context("failed to store the anthropic secret")?;
+                clock.time(step::SECRET, sbx.secret_set("anthropic", key, None)).await.context("failed to store the anthropic secret")?;
             } else {
                 run.warn(format!("ANTHROPIC_API_KEY is not sent to host '{}' (trust_secrets = false)", name.host));
             }
@@ -765,7 +827,8 @@ impl App {
         if on_host.is_none() {
             let aliases = cfg.wanted_aliases(&req.extra_ports);
             let app = self.clone();
-            let warnings = tokio::task::spawn_blocking(move || app.hosts.apply(&app.store, &aliases))
+            let warnings = clock
+                .time(step::ALIASES, tokio::task::spawn_blocking(move || app.hosts.apply(&app.store, &aliases)))
                 .await
                 .unwrap_or_default();
             for w in warnings {
@@ -783,11 +846,20 @@ impl App {
         // sandbox.
         if rebuild {
             run.step(progress::TEMPLATE);
+            let saving = clock.begin(step::TEMPLATE_SAVE);
             if !up {
                 run.warn(format!("'{name}' is not running — the automatic template was not saved"));
             } else if let Err(e) = self.save_auto_template(name, &req.config.kits, &cfg.kits, cfg.keep_running, &mut run).await {
                 run.warn(format!("the automatic template was not saved: {e:#}"));
             }
+            clock.end(saving);
+        }
+        // Measured only: the kits' startup commands of a sandbox this
+        // bring-up created and found running are watched after `Done`, in
+        // the background; a stopped one's from its attach (`svc::open`),
+        // which starts it. A rebuild has waited for them already.
+        if (!existed && up && !rebuild) || stopped {
+            clock.watch_after(cfg.kits.clone());
         }
         if background {
             self.build_template_later(TemplateBuild {
@@ -1209,7 +1281,7 @@ impl App {
     /// The startup commands of the kits at `resolved` (local directories),
     /// and those of them that leave an end marker: the bundled kits', whose
     /// scripts this build wrote.
-    fn startup_commands(&self, resolved: &[String]) -> (Vec<String>, Vec<String>) {
+    pub(crate) fn startup_commands(&self, resolved: &[String]) -> (Vec<String>, Vec<String>) {
         let bundled = self.store.paths.kits();
         let (mut all, mut marked) = (Vec::new(), Vec::new());
         for kit in resolved {
@@ -1234,14 +1306,31 @@ impl App {
     /// judgement also stands in for a marker that never comes, after
     /// `MARKER_GRACE` of quiet.
     async fn wait_for_startups(&self, sb: &SandboxRef, commands: &[String], marked: &[String], run: &Run<'_>) -> Result<()> {
+        self.startups_over(sb, commands, marked, run, Watch::Snapshot).await
+    }
+
+    /// [`Self::wait_for_startups`] for a measurement only (`svc::timings`):
+    /// rarer looks, nothing said while it waits, and its own bound.
+    pub(crate) async fn watch_startups(&self, sb: &SandboxRef, commands: &[String], marked: &[String], sink: &Sink) -> Result<()> {
+        let run = Run { sink, warnings: vec![] };
+        self.startups_over(sb, commands, marked, &run, Watch::Measure).await
+    }
+
+    async fn startups_over(&self, sb: &SandboxRef, commands: &[String], marked: &[String], run: &Run<'_>, watch: Watch) -> Result<()> {
         if commands.is_empty() {
             return Ok(());
         }
         let sbx = self.sbx_for(sb).await?;
         let name = &sb.name;
-        run.info("waiting for the kits' startup installs to finish before the snapshot");
+        let (poll, timeout, announce) = match watch {
+            Watch::Snapshot => (STARTUP_POLL, STARTUP_TIMEOUT, true),
+            Watch::Measure => (timings::WATCH_POLL, timings::WATCH_FOR, false),
+        };
+        if announce {
+            run.info("waiting for the kits' startup installs to finish before the snapshot");
+        }
         let started = tokio::time::Instant::now();
-        let deadline = started + STARTUP_TIMEOUT;
+        let deadline = started + timeout;
         let mut quiet = 0;
         let mut quiet_since: Option<tokio::time::Instant> = None;
         let mut seen = false;
@@ -1280,15 +1369,15 @@ impl App {
                 quiet = 0;
                 quiet_since = None;
                 let now = format!("still installing: {}", busy.join(", "));
-                if now != shown {
+                if now != shown && announce {
                     run.info(&now);
-                    shown = now;
                 }
+                shown = now;
             }
             if tokio::time::Instant::now() >= deadline {
-                bail!("kit startup still running after {} min: {}", STARTUP_TIMEOUT.as_secs() / 60, busy.join(", "));
+                bail!("kit startup still running after {} min: {}", timeout.as_secs() / 60, busy.join(", "));
             }
-            tokio::time::sleep(STARTUP_POLL).await;
+            tokio::time::sleep(poll).await;
         }
     }
 

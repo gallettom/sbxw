@@ -168,6 +168,9 @@ pub struct App {
     pub(crate) inbox_wake: tokio::sync::Notify,
     /// Whether the inbox loop runs.
     pub(crate) inbox_running: std::sync::atomic::AtomicBool,
+    /// The last bring-ups' timelines, as in `state/timings.json` (see
+    /// `svc::timings`).
+    pub(crate) timings: Mutex<crate::svc::timings::Book>,
 }
 
 pub struct AppBuilder {
@@ -194,6 +197,7 @@ impl AppBuilder {
         let relay_book = crate::svc::relay::load(&store.paths.state().join("relay.json"));
         let inbox = crate::svc::inbox::load(&store.paths.state().join("inbox.json"));
         let jarvis = sbxw_core::jarvis::Book::load(crate::svc::jarvis::load(&store.paths.state().join("jarvis.json")));
+        let timings = crate::svc::timings::load(&store.paths.state().join("timings.json"));
         Arc::new(App {
             store,
             sbx: self.sbx,
@@ -258,6 +262,7 @@ impl AppBuilder {
             inbox_seen: Mutex::new(HashMap::new()),
             inbox_wake: tokio::sync::Notify::new(),
             inbox_running: std::sync::atomic::AtomicBool::new(false),
+            timings: Mutex::new(timings),
         })
     }
 }

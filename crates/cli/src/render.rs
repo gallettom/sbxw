@@ -80,7 +80,7 @@ impl Renderer {
                 self.clear_detail();
                 eprintln!("  ! sbx refused: {} (allow one with `sbx policy allow network --sandbox <name> <host>`)", hosts.join(", "));
             }
-            Progress::Done { error } => {
+            Progress::Done { error, summary } => {
                 if error.is_none() {
                     self.finish_current();
                 } else {
@@ -88,6 +88,10 @@ impl Renderer {
                     if let Some(id) = self.current.take() {
                         eprintln!("  ✕ {}", self.label(&id));
                     }
+                }
+                // Where the time went, as the daemon log has it.
+                if let Some(s) = summary.as_deref().filter(|s| !s.is_empty()) {
+                    eprintln!("  {s}");
                 }
             }
         }

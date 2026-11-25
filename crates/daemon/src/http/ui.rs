@@ -57,6 +57,7 @@ pub fn routes() -> Router<Arc<App>> {
         // Sandboxes.
         .route("/api/sandboxes", get(list))
         .route("/api/stats", get(stats))
+        .route("/api/timings", get(timings))
         .route("/api/sandboxes/create", post(create))
         .route("/api/carve/preview", post(carve_preview))
         .route("/api/sandboxes/chat", post(chat))
@@ -346,6 +347,11 @@ async fn lead_states(State(app): S) -> Json<Value> {
 /// CPU and memory, the daemon's and each sandbox's (see `svc::stats`).
 async fn stats(State(app): S) -> Json<sbxw_core::stats::Stats> {
     Json(app.stats().await)
+}
+
+/// The last bring-ups' timelines, newest first (`svc::timings`). Read only.
+async fn timings(State(app): S) -> Json<Value> {
+    Json(json!({ "timelines": app.timelines() }))
 }
 
 async fn list(State(app): S) -> Json<Value> {
