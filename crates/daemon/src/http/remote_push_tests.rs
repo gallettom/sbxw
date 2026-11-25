@@ -761,3 +761,128 @@ async fn the_task_wakes_on_new_shots() {
     let line = fake.line(2000).await.expect("the bus woke the task");
     assert_eq!(job(&line)["kind"], "c");
 }
+
+// ── Relay requests (R6, D17 of the reliability audit) ─────────────────────
+
+/// A relay request opened by `from` at `at` (ms), its text confidential.
+fn relay_open(app: &App, from: &str, at: u64) -> String {
+    let r = app.relay.lock().unwrap().open(from, None, sbxw_core::relay::RelayKind::Question, "Confidential budget of project Falcon?", at);
+    app.send(crate::bus::Event::Relay(r.clone()));
+    r.id
+}
+
+#[tokio::test]
+async fn a_relay_request_waiting_pushes_n_naming_the_sandbox_never_its_text() {
+    let (_d, app) = on();
+    let (_router, _token, _id) = subscribed(&app, "phone").await;
+    let mut fake = attach(&app).await;
+    app.remote_push_step(); // the baseline
+    assert!(fake.line(200).await.is_none());
+    relay_open(&app, "web-app", crate::app::now_ms());
+    app.remote_push_step();
+    let line = fake.line(1000).await.expect("an n job");
+    let j = job(&line);
+    assert_eq!((j["kind"].as_str(), j["name"].as_str(), j["lead"].as_bool()), (Some("n"), Some("web-app"), Some(false)));
+    assert_eq!(j["badge"].as_u64(), Some(0), "level 2 off: no relay count leaks through the badge");
+    for secret in ["Confidential", "Falcon", "budget", "question"] {
+        assert!(!line.contains(secret), "{secret} in the job: {line}");
+    }
+    app.remote_push_step();
+    assert!(fake.line(200).await.is_none(), "one push per request");
+}
+
+#[tokio::test]
+async fn the_badge_counts_relay_requests_waiting_with_level_2_on() {
+    let (_d, app) = on();
+    app.remote_approvals_enable().unwrap();
+    let (_router, _token, _id) = subscribed(&app, "phone").await;
+    let mut fake = attach(&app).await;
+    relay_open(&app, "web-app", crate::app::now_ms());
+    app.remote_push_step(); // the baseline: one already waits
+    assert!(fake.line(200).await.is_none(), "what already waits pushes nothing");
+    relay_open(&app, "api", crate::app::now_ms());
+    app.remote_push_step();
+    let j = job(&fake.line(1000).await.expect("an n job"));
+    assert_eq!((j["name"].as_str(), j["badge"].as_u64()), (Some("api"), Some(2)));
+}
+
+#[tokio::test]
+async fn a_settled_or_routed_relay_request_never_pushes() {
+    let (_d, app) = on();
+    let (_router, _token, _id) = subscribed(&app, "phone").await;
+    let mut fake = attach(&app).await;
+    app.remote_push_step();
+    let now = crate::app::now_ms();
+    let a = relay_open(&app, "web-app", now);
+    app.relay.lock().unwrap().deny(&a, None, now).unwrap();
+    let b = relay_open(&app, "api", now);
+    app.relay.lock().unwrap().route(&b, "other", now).unwrap();
+    app.remote_push_step();
+    assert!(fake.line(300).await.is_none(), "settled and routed requests do not wait for the person");
+}
+
+#[tokio::test]
+async fn the_task_wakes_on_a_relay_request() {
+    let (_d, app) = on();
+    let (_router, _token, _id) = subscribed(&app, "phone").await;
+    let mut fake = attach(&app).await;
+    app.remote_push_task();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    relay_open(&app, "web-app", crate::app::now_ms());
+    let line = fake.line(2000).await.expect("the bus woke the task");
+    assert_eq!(job(&line)["kind"], "n");
+}
+
+mod relay_edges {
+    use crate::svc::remote_push::{RelayEdges, RelayWait};
+    use sbxw_core::relay::{RelayKind, RelayRequest, RelayState};
+
+    fn req(id: &str, created: u64) -> RelayRequest {
+        let mut b = sbxw_core::relay::RelayBook::new();
+        let mut r = b.open("host~web-app", None, RelayKind::Screenshot, "secret", created);
+        r.id = id.into();
+        r.created_ms = created;
+        r
+    }
+
+    fn w(r: &RelayRequest) -> RelayWait {
+        RelayWait::of(r, false).unwrap()
+    }
+
+    #[test]
+    fn a_waiting_request_pushes_once_then_its_reminder_once() {
+        let mut e = RelayEdges::default();
+        assert!(e.step(&[]).is_none(), "the baseline");
+        let mut r = req("r1", 1_000);
+        let f = e.step(&[w(&r)]).expect("waits: one push");
+        assert_eq!((f.kind.letter(), f.name.as_str()), ("n", "web-app"), "the sandbox part only");
+        assert!(e.step(&[w(&r)]).is_none());
+        r.reminded_ms = Some(601_000);
+        assert!(e.step(&[w(&r)]).is_some(), "the reminder");
+        assert!(e.step(&[w(&r)]).is_none(), "once per request");
+    }
+
+    #[test]
+    fn a_reused_id_with_another_creation_time_is_a_new_request() {
+        let mut e = RelayEdges::default();
+        e.step(&[w(&req("r1", 1_000))]); // the baseline
+        assert!(e.step(&[w(&req("r1", 5_000))]).is_some(), "same id, another creation time: pushed");
+    }
+
+    #[test]
+    fn what_was_reminded_at_the_baseline_is_not_pushed_and_routed_waits_for_a_sandbox() {
+        let mut e = RelayEdges::default();
+        let mut r = req("r1", 0);
+        r.reminded_ms = Some(1);
+        e.step(&[w(&r)]);
+        assert!(e.step(&[w(&r)]).is_none(), "reminded before the baseline: maybe pushed before a restart");
+        assert!(e.step(&[]).is_none(), "settled: nothing");
+        let mut routed = r.clone();
+        routed.state = RelayState::Routed;
+        assert!(RelayWait::of(&routed, false).is_none(), "routed waits for a sandbox, not the person");
+        let mut back = r.clone();
+        back.state = RelayState::Answered;
+        assert!(e.step(&[w(&back)]).is_some(), "an answer to review waits anew: one push");
+        assert!(e.step(&[w(&back)]).is_none(), "its reminder was the request's, already made");
+    }
+}
