@@ -27,6 +27,18 @@ fn request(dir: &Path, cfg: Config) -> BringUp {
     }
 }
 
+/// A local kit whose startup command the watch looks for.
+fn kit_with_startup(dir: &Path) -> String {
+    let kit = dir.join("kit");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("spec.yaml"),
+        "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\ncapabilities:\n  - type: com.docker.sandbox/lifecycle@1\n    config:\n      startup:\n        - command: [\"bash\", \"/k/install.sh\"]\n",
+    )
+    .unwrap();
+    kit.to_string_lossy().into_owned()
+}
+
 fn bare() -> Config {
     Config { kits: vec![], network_allow: vec![], network_deny: vec![], ports: vec![], ..Config::default() }
 }
@@ -74,7 +86,7 @@ async fn bring_up(app: &Arc<App>, req: BringUp) -> (anyhow::Result<Vec<String>>,
 async fn a_new_sandbox_without_a_template_times_every_step_once_in_order() {
     let d = tempfile::tempdir().unwrap();
     let (app, _) = app_in_with(d.path(), sbx_answer_booting());
-    let (out, end) = bring_up(&app, request(d.path(), bare())).await;
+    let (out, end) = bring_up(&app, request(d.path(), Config { kits: vec![kit_with_startup(d.path())], ..bare() })).await;
     out.unwrap();
     let t = app.timelines().remove(0);
     assert_eq!(
@@ -82,8 +94,8 @@ async fn a_new_sandbox_without_a_template_times_every_step_once_in_order() {
         ["prepare", "sbx_ls", "template_check", "record", "create_prepare", "sbx_create", "boot", "tooling", "policy_allow", "aliases", "done"]
     );
     once_each(&t);
-    assert!(t.steps.iter().all(|s| s.ms.is_some() && !s.unfinished), "{:?}", t.steps);
-    assert_eq!((t.kind.as_str(), t.template.as_deref(), t.kits, t.host.as_str(), t.sandbox.as_str()), ("new", None, 1, "local", "myapp"));
+    assert!(t.steps.iter().take_while(|s| s.name != step::DONE).all(|s| s.ms.is_some() && !s.unfinished), "{:?}", t.steps);
+    assert_eq!((t.kind.as_str(), t.template.as_deref(), t.kits, t.host.as_str(), t.sandbox.as_str()), ("new", None, 2, "local", "myapp"));
     assert_eq!(t.sbx_version.as_deref(), Some("0.51.0"));
     assert!(t.error.is_none() && t.ready_ms.is_some());
     let create = t.span(step::SBX_CREATE).unwrap();

@@ -579,7 +579,13 @@ impl App {
             let created = self.create_with_port_fallback(name, &opts, sink, &mut run).await;
             let from = opts.template.as_deref().map_or_else(|| "no template".to_string(), |t| format!("template {t}"));
             let attempts = clock.recorder().count_since("create", 0);
-            clock.end_with(creating, Some(format!("{from}, {} kits passed{}", opts.kits.len(), if attempts > 1 { format!(", {attempts} attempts") } else { String::new() })));
+            let detail = format!("{from}, {} kits passed{}", opts.kits.len(), if attempts > 1 { format!(", {attempts} attempts") } else { String::new() });
+            // A failed create stays open: the timeline names it as the step
+            // the bring-up stopped in.
+            match created.is_ok() {
+                true => clock.end_with(creating, Some(detail)),
+                false => clock.set(|t| t.steps[creating].detail = Some(detail)),
+            }
             if let Err(e) = created {
                 self.report_denied(&run, name, progress::CREATE, None, &e, &since).await;
                 return Err(e);
