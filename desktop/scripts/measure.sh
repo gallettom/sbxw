@@ -21,7 +21,10 @@
 # the stand-in daemon (scripts/perf-fixture.py, 12 running sandboxes), plus a
 # burst of 100 session events over 10 s. Numbers from a software renderer
 # with a virtual frame clock and no cursor blink only show that the probes
-# work, never what the Mac pays.
+# work, never what the Mac pays. There a frame waits for a pane's output to
+# settle (up to 1.5 s), so the output scenarios take about 10 minutes each
+# on the wall's clock and the run about an hour; MEASURE_OUTPUT_SECS=2
+# shortens them.
 #
 # Out: $SBXW_SHOTS/measure/measure.txt (paste it back), app.log, and the
 # script's own notes. MEASURE_SECS (30): each scenario's length.
@@ -54,8 +57,9 @@ export SBXW_DESKTOP_PERF=counts SBXW_DESKTOP_MEM="${MEASURE_COUNT:-1}" MEM_GC=1
   echo "scenario length: $secs s"
 } >"$meta"
 
-# The heavy output: a build log's worth of long lines as fast as the PTY takes them.
-heavy="timeout $secs yes 'Compiling sbxw-desktop v0.1.0: warning: unused variable in src/feat/monitor/conv.rs:123:17, help: prefix it with an underscore'"
+# The heavy output: long build-log lines as fast as the PTY takes them, until
+# Ctrl+C after the scenario (at most 10 minutes).
+heavy="timeout 600 yes 'Compiling sbxw-desktop v0.1.0: warning: unused variable in src/feat/monitor/conv.rs:123:17, help: prefix it with an underscore'"
 
 if [ "$headless" = 1 ]; then
   size=${SHOT_SIZE:-1440x900}
@@ -82,9 +86,14 @@ for i in range(100):
 d["daemon"]["session_events"] = ev
 print(json.dumps(d))
 PY
-  python3 - "$secs" "$heavy" >"$out/script.json" <<'PY'
+  # Headless frames at 10 per second, and the output scenarios a third as
+  # long in the script's time: each frame with output waits for it to settle
+  # (up to 1.5 s), so 30 s at 60 fps took 9 minutes of wall time.
+  out_secs=${MEASURE_OUTPUT_SECS:-$(( (secs + 2) / 3 ))}
+  echo "headless: 10 frames a second; output scenarios $out_secs s of the script's clock (they last longer on the wall's)" >>"$meta"
+  python3 - "$secs" "$heavy" "$out_secs" >"$out/script.json" <<'PY'
 import json, sys
-secs, heavy = int(sys.argv[1]), sys.argv[2]
+secs, heavy, out_secs = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
 ev = []; t = 0.5
 def add(**e):
     global t
@@ -106,21 +115,27 @@ add(type="tap", key="page-1"); t += 1.0
 scenario("idle", secs)
 add(type="tap", key="rail-commits"); t += 1.5
 scenario("idle, an overlay over the panes", secs)
+# The output runs until Ctrl+C after the scenario: a headless frame waits
+# for a pane's output to settle (up to 1.5 s, terminal.rs), so the script's
+# clock falls behind the wall's while it prints, and a timed command would
+# end before the scenario does.
 add(type="key", name="Escape"); t += 0.5
 add(type="paste", text=heavy); add(type="key", name="Enter"); t += 0.5
-scenario("heavy output, visible", secs)
-t += 2.0
-# The fourth pane, on page 2: the command waits 3 s, page 1 shows meanwhile.
+scenario("heavy output, visible", out_secs)
+add(type="key", name="c", ctrl=True); t += 2.0
+# The fourth pane, on page 2, printing while page 1 shows.
 add(type="tap", key="page-2"); t += 1.0
-add(type="paste", text="sleep 3; " + heavy); add(type="key", name="Enter"); t += 0.3
-add(type="tap", key="page-1"); t += 2.7
-scenario("heavy output, hidden page", secs)
+add(type="paste", text=heavy); add(type="key", name="Enter"); t += 0.3
+add(type="tap", key="page-1"); t += 1.0
+scenario("heavy output, hidden page", out_secs)
+add(type="tap", key="page-2"); t += 0.5
+add(type="key", name="c", ctrl=True); t += 1.0
 mark("end")
 print(json.dumps({"events": ev}))
 PY
   start_daemon "$out/standin" --fixture "$out/fixture.json"
   app_dir=$(dirname "$app"); bin=$app_dir
-  SHOT_SIZE="$size" run_app "$log" --script "$out/script.json" --realtime --at mark:end+0.2 --snap "$out/end.png" || true
+  SHOT_SIZE="$size" run_app "$log" --script "$out/script.json" --realtime --fps 10 --at mark:end+0.2 --snap "$out/end.png" || true
   cleanup; pids=()
   echo "== session events burst (100 in 10 s)" >>"$side"
   echo "the stand-in sent 100 session events from 4 s after the app connected" >>"$side"
@@ -157,12 +172,11 @@ else
   echo "window: $win" >>"$meta"
   scenario "idle" "Leave a shell prompt focused in a pane, the usual panes shown."
   scenario "idle, an overlay over the panes" "Open Sessions, Commits or Files over the panes and leave it open."
-  long="timeout 600 yes 'Compiling sbxw-desktop v0.1.0: warning: unused variable in src/feat/monitor/conv.rs:123:17, help: prefix it with an underscore'"
   scenario "heavy output, visible" "Close the overlay. In a pane on the page shown, paste and run:
-    $long"
+    $heavy"
   ask "Stop it now: Ctrl+C in that pane."
   scenario "heavy output, hidden page" "Make sure you have a second page (a new page from the pager, one pane on it). In a pane on page 2, paste and run:
-    $long
+    $heavy
 then show page 1 (the output goes on, hidden)."
   ask "Stop it now: show page 2 and press Ctrl+C in that pane."
   echo "== session events burst" >>"$side"

@@ -153,6 +153,7 @@ impl App {
         let pics = crate::picture::mem();
         let kanban = crate::feat::kanban::previews_mem();
         let canvas = crate::surface_canvas::mem();
+        let handed = crate::feat::canvas::handed_mem();
         let surfaces = crate::surface::mem();
         let conv = crate::feat::monitor::conv_mem(&size);
         let jarvis: u64 = self.jarvis.log.iter().map(|m| m.text.capacity() as u64 + 64).sum();
@@ -178,6 +179,7 @@ impl App {
         lines.push(line("pictures shown", pics.0, format!("{} kept", pics.1)));
         lines.push(part("of which the Kanban's previews".into(), kanban.0, format!("{} kept", kanban.1)));
         lines.push(line("canvas pictures", canvas.0, format!("{} pictures (thumbs, previews, full levels)", canvas.1)));
+        lines.push(line("canvas: example pictures handed in", handed.0, format!("{} kept (until another canvas shows)", handed.1)));
         lines.push(line("surfaces", surfaces.0, format!("{} surfaces", surfaces.1)));
         lines.push(line("sessions conversations", conv.0, format!("{} logs, {} items", conv.1, conv.2)));
         lines.push(line("jarvis log", jarvis, format!("{} messages", self.jarvis.log.len())));
@@ -309,6 +311,7 @@ mod tests {
             "pictures shown",
             "of which the Kanban's previews",
             "canvas pictures",
+            "canvas: example pictures handed in",
             "sessions conversations",
             "Rune's image atlas",
             "GPU memory",
