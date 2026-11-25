@@ -410,6 +410,54 @@ pub fn lead_resumed(plans: &[Plan]) -> Option<String> {
     ))
 }
 
+/// The additional context a lead's new conversation gets at its start
+/// (after `/clear` or a compaction in the lead's terminal): that it leads,
+/// that it must call `lead_ack` first, the open plans of its sandbox (ids,
+/// validated thread names, states: no agent text), and its instructions,
+/// `lead_md` whole when everything fits in `max_chars`, else the `path` sbxw
+/// installed them at, to be read in full.
+pub fn lead_context(plans: &[Plan], lead_md: &str, path: &str, max_chars: usize) -> String {
+    let mut head = String::from(
+        "[sbxw] This conversation is the lead of this sandbox. The person turned Team mode on \
+         and it stays on across a /clear or a compaction, so sbxw gives you your lead \
+         instructions again. First call the `lead_ack` tool (MCP server sbxw-relay) to confirm \
+         you lead: until then the plan tools are refused, and with no confirmation within 90 \
+         seconds lead mode turns off.\n\n",
+    );
+    if plans.is_empty() {
+        head.push_str("No plan of this sandbox is open.");
+    } else {
+        let each: Vec<String> = plans
+            .iter()
+            .map(|p| {
+                let threads: Vec<String> = p
+                    .threads
+                    .iter()
+                    .map(|t| format!("{} {}", t.name, format!("{:?}", t.state).to_lowercase()))
+                    .collect();
+                let state = format!("{:?}", p.state).to_lowercase();
+                format!("- plan {} ({state}, {}): {}", p.id, if p.variant.is_split() { "split" } else { "shared" }, if threads.is_empty() { "no thread".into() } else { threads.join(", ") })
+            })
+            .collect();
+        head.push_str("The open plans of this sandbox, which you follow, and where each thread stands:\n");
+        head.push_str(&each.join("\n"));
+        head.push_str("\nRead each with plan_status and its id before you act on it.");
+    }
+    let goal = "(The goal was given earlier in this sandbox: read the open plans above, or ask the user.)";
+    let inline = format!(
+        "{head}\n\nYour lead instructions (the /lead command) follow.\n\n--- lead instructions ---\n{}\n--- end ---",
+        lead_md.replace("$ARGUMENTS", goal).trim()
+    );
+    if inline.chars().count() <= max_chars {
+        return inline;
+    }
+    format!(
+        "{head}\n\nYour lead instructions are the /lead command sbxw installed at {path}: read that \
+         file in full now, before anything else, and follow it. Where it says $ARGUMENTS, the goal \
+         was given earlier in this sandbox: read the open plans above, or ask the user."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -73,6 +73,13 @@ pub struct App {
     /// sandbox records: the agent session it was turned on in, which binds it
     /// again after a daemon restart (see `svc::plans`). Locked after `leads`.
     pub(crate) lead_recs: Mutex<HashMap<SandboxRef, crate::store::LeadRecord>>,
+    /// Leads asked for and not confirmed yet: `waiting` for an idle agent,
+    /// or `activating` until the session calls `lead_ack` (see `svc::lead`).
+    /// Locked after `lead_recs`.
+    pub(crate) lead_pending: Mutex<HashMap<SandboxRef, crate::svc::lead::Pending>>,
+    /// Why each recent lead fell back to off, and when: shown a short while
+    /// in `/api/lead-states` (see `svc::lead`).
+    pub(crate) lead_failed: Mutex<HashMap<SandboxRef, (String, u64)>>,
     pub(crate) hook_log: Mutex<VecDeque<serde_json::Value>>,
     pub(crate) stale_hooks: Mutex<HashSet<String>>,
     /// An approved plan's briefing, for a thread whose session has not
@@ -194,6 +201,8 @@ impl AppBuilder {
             models_live: Mutex::new(None),
             leads: Mutex::new(HashMap::new()),
             lead_recs: Mutex::new(lead_recs),
+            lead_pending: Mutex::new(HashMap::new()),
+            lead_failed: Mutex::new(HashMap::new()),
             hook_log: Mutex::new(VecDeque::new()),
             stale_hooks: Mutex::new(HashSet::new()),
             briefings: Mutex::new(HashMap::new()),
@@ -313,6 +322,15 @@ impl App {
                 tick.tick().await;
                 app.reconcile_sessions().await;
                 app.flush_session_costs();
+            }
+        });
+        let app = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(crate::svc::lead::TICK);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                app.lead_tick().await;
             }
         });
         if !self.use_api_key {

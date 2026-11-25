@@ -11,7 +11,6 @@ use sbxw_core::messages;
 use sbxw_core::plans::{DistillItem, Ext, MergeResult, MergeState, Plan, PlanState, PlanThread, ThreadState, Variant};
 use sbxw_sbx::scripts::Team;
 use sbxw_core::session::{SessionKey, SessionKind};
-use sbxw_core::tooling::Tooling;
 use sbxw_core::{ModelId, SandboxRef, ThreadName};
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,7 +34,7 @@ pub enum Probe {
 
 impl App {
     /// [`App::sbx_for`], its error as the plain text these services return.
-    async fn sbx_of(&self, sb: &SandboxRef) -> Result<sbxw_sbx::Sbx, String> {
+    pub(crate) async fn sbx_of(&self, sb: &SandboxRef) -> Result<sbxw_sbx::Sbx, String> {
         self.sbx_for(sb).await.map_err(|e| format!("{e:#}"))
     }
 }
@@ -44,7 +43,7 @@ impl App {
     /// Write `sandbox`'s plans (or remove the file when none are left) and
     /// broadcast. Every change comes through here. A plan id is a capability,
     /// hence the 0700 directory.
-    fn plan_changed(&self, plan: Plan) -> Plan {
+    pub(crate) fn plan_changed(&self, plan: Plan) -> Plan {
         self.persist_plans(&plan.sandbox);
         self.send(Event::Plan(plan.clone()));
         self.team_changed(&plan.id);
@@ -794,47 +793,17 @@ impl App {
         }
     }
 
-    /// ★ Lead: install `/lead` and refresh the relay server (a sandbox from
-    /// before plans lacks its tools), type `/lead`, remember *which* session.
+    /// ★ Lead, typed now: install `/lead` and refresh the relay server,
+    /// type `/lead`, remember *which* session, and wait for its `lead_ack`
+    /// (`activating`, see `svc::lead`). The caller has checked the agent can
+    /// be typed into (the phone's gate); the desktop's route goes through
+    /// [`App::lead_request`], which waits for an idle agent. Idempotent.
     pub async fn lead(self: &Arc<Self>, sandbox: &SandboxRef) -> Result<(), String> {
-        let token = self.store.token(sandbox).map_err(|e| format!("{e:#}"))?;
-        let batch = Tooling::new()
-            .agent_token(&token)
-            .relay(&self.agent_port_for(sandbox).await.map_err(|e| format!("{e:#}"))?)
-            .lead_command();
-        let outcome = self.sbx_of(sandbox).await?.tooling(&sandbox.name, &batch).await.map_err(|e| format!("{e:#}"))?;
-        if let Some((piece, e)) = outcome.failed.first() {
-            return Err(format!("{piece}: {e}"));
+        if self.lead_pending_of(sandbox).is_some() || self.leading().contains(&sandbox.to_string()) {
+            return Ok(());
         }
-        self.push_text(sandbox, SessionKind::Agent, messages::LEAD_COMMAND).await?;
-        if let Some(s) = self.sessions.live(&SessionKey::agent(sandbox)) {
-            let now = now_ms();
-            // The conversation the person turned the team on in. Unknown when
-            // the agent has not reported yet: filled by the first `leading()`
-            // while this very terminal is still the main one.
-            let session_id = self.main_session_id(sandbox);
-            let rec = LeadRecord { since_ms: now, session_id, bound_ms: now };
-            self.leads.lock().unwrap().insert(sandbox.clone(), Arc::as_ptr(&s) as usize);
-            self.lead_recs.lock().unwrap().insert(sandbox.clone(), rec.clone());
-            self.save_lead(sandbox, Some(rec));
-            self.send(Event::Lead(sandbox.into()));
-            // Plans its last end closed are this sandbox's lead's again,
-            // told once, after `/lead`, which plans and where they stand.
-            let back = self.plans.lock().unwrap().resume_lead(&sandbox.to_string(), now);
-            if !back.is_empty() {
-                tracing::info!("plans: '{sandbox}' leads again, {} open plan(s) given back", back.len());
-                let text = messages::lead_resumed(&back);
-                for p in back {
-                    self.plan_changed(p);
-                }
-                if let Some(text) = text {
-                    if let Err(e) = self.push_text(sandbox, SessionKind::Agent, &text).await {
-                        tracing::warn!("plans: could not tell '{sandbox}' which plans it follows again: {e}");
-                    }
-                }
-            }
-        }
-        Ok(())
+        self.lead_install(sandbox).await?;
+        self.lead_type(sandbox, false).await
     }
 
     /// The gate of the lead's plan routes (propose, wait, status,
@@ -953,6 +922,12 @@ impl App {
     }
 
     pub async fn lead_end(self: &Arc<Self>, sandbox: &SandboxRef) {
+        // Nothing was typed yet: a cancel, with nothing to tell the agent.
+        if self.lead_pending_of(sandbox).is_some_and(|p| p.phase == crate::svc::lead::LeadPhase::Waiting) {
+            let _ = self.lead_cancel(sandbox);
+            return;
+        }
+        self.lead_failed.lock().unwrap().remove(sandbox);
         self.forget_lead(sandbox);
         let ended = self.plans.lock().unwrap().end_lead(&sandbox.to_string(), now_ms());
         tracing::info!("plans: lead mode ended for '{sandbox}' ({} plan(s) refused or closed)", ended.len());
@@ -970,7 +945,9 @@ impl App {
     /// The lead of `sandbox` is over without a word to its agent: it was
     /// stopped or removed. Bookkeeping only; nothing is typed.
     pub fn lead_gone(&self, sandbox: &SandboxRef) {
-        let had = self.leads.lock().unwrap().contains_key(sandbox) || self.lead_recs.lock().unwrap().contains_key(sandbox);
+        let had = self.leads.lock().unwrap().contains_key(sandbox)
+            || self.lead_recs.lock().unwrap().contains_key(sandbox)
+            || self.lead_pending.lock().unwrap().contains_key(sandbox);
         self.forget_lead(sandbox);
         if had {
             tracing::info!("plans: lead mode of '{sandbox}' dropped, the sandbox stopped or went away");
@@ -978,15 +955,21 @@ impl App {
         }
     }
 
-    fn forget_lead(&self, sandbox: &SandboxRef) {
+    pub(crate) fn forget_lead(&self, sandbox: &SandboxRef) {
         self.leads.lock().unwrap().remove(sandbox);
         self.lead_recs.lock().unwrap().remove(sandbox);
+        self.lead_pending.lock().unwrap().remove(sandbox);
         self.save_lead(sandbox, None);
     }
 
     /// The lead on disk, written only to a sandbox that still has a record
-    /// (writing would bring a removed one back).
-    fn save_lead(&self, sandbox: &SandboxRef, rec: Option<LeadRecord>) {
+    /// (writing would bring a removed one back), and only once confirmed: a
+    /// lead still `activating` is not written (a restarted daemon never
+    /// brings back a lead nobody confirmed).
+    pub(crate) fn save_lead(&self, sandbox: &SandboxRef, rec: Option<LeadRecord>) {
+        if rec.is_some() && self.lead_pending.lock().unwrap().contains_key(sandbox) {
+            return;
+        }
         if !self.store.exists(sandbox) || (rec.is_none() && self.store.get(sandbox).lead.is_none()) {
             return;
         }
@@ -996,7 +979,7 @@ impl App {
     }
 
     /// The id of the live session the phone shows for `sandbox`.
-    fn main_session_id(&self, sandbox: &SandboxRef) -> Option<String> {
+    pub(crate) fn main_session_id(&self, sandbox: &SandboxRef) -> Option<String> {
         main_session(self, &self.session_infos(), sandbox)
     }
 
@@ -1011,7 +994,8 @@ impl App {
         }
     }
 
-    /// Sandboxes whose main session is still the very session made lead.
+    /// Sandboxes whose main session is still the very session made lead,
+    /// and confirmed it (`leading`: see `svc::lead`).
     ///
     /// While this daemon holds the terminal it was made lead in, that
     /// terminal decides, as before. A lead with no terminal bound (the daemon
@@ -1020,20 +1004,41 @@ impl App {
     /// session it shows is the recorded one; it is dropped when that terminal
     /// shows another live session (a new conversation is not a leader), when
     /// no session was ever recorded, or after [`LEAD_UNBOUND_MAX_MS`] unbound.
+    /// A lead still `activating` whose terminal goes is dropped at once.
+    ///
+    /// Every lead that stops being listed here sends `LeadEnd`, with the
+    /// reason kept for `/api/lead-states`: a terminal gone (the record still
+    /// waits to be bound again), or a record dropped.
     pub fn leading(&self) -> Vec<String> {
+        use crate::svc::lead::LeadPhase;
         let now = now_ms();
         let mut saves: Vec<(SandboxRef, Option<LeadRecord>)> = Vec::new();
         let mut rebound: Vec<SandboxRef> = Vec::new();
+        // Leads that stopped being listed, and why.
+        let mut dropped: Vec<(SandboxRef, &'static str)> = Vec::new();
         let out = {
             let mut leads = self.leads.lock().unwrap();
             let mut recs = self.lead_recs.lock().unwrap();
+            let mut pending = self.lead_pending.lock().unwrap();
             leads.retain(|sb, ptr| {
-                self.sessions
+                let kept = self
+                    .sessions
                     .live(&SessionKey::agent(sb))
-                    .is_some_and(|s| Arc::as_ptr(&s) as usize == *ptr)
+                    .is_some_and(|s| Arc::as_ptr(&s) as usize == *ptr);
+                if !kept {
+                    if pending.remove(sb).is_some() {
+                        // Activating: its `/lead` went with the terminal.
+                        recs.remove(sb);
+                        saves.push((sb.clone(), None));
+                        dropped.push((sb.clone(), "The agent's terminal closed before the session confirmed the lead."));
+                    } else {
+                        dropped.push((sb.clone(), "The lead's terminal closed. It leads again if the same conversation comes back."));
+                    }
+                }
+                kept
             });
-            let pending = recs.iter().any(|(sb, r)| !leads.contains_key(sb) || r.session_id.is_none());
-            let infos = if pending { self.session_infos() } else { Vec::new() };
+            let unbound = recs.iter().any(|(sb, r)| !leads.contains_key(sb) || r.session_id.is_none());
+            let infos = if unbound { self.session_infos() } else { Vec::new() };
             // A bound lead whose conversation was not reported at Team on:
             // the one its own terminal shows now.
             for (sb, r) in recs.iter_mut().filter(|(sb, r)| leads.contains_key(*sb) && r.session_id.is_none()) {
@@ -1046,52 +1051,59 @@ impl App {
                 if leads.contains_key(sb) {
                     return true;
                 }
-                let Some(want) = r.session_id.clone() else {
+                let why = match r.session_id.clone() {
                     // Unbound, and nothing ever said which conversation.
-                    saves.push((sb.clone(), None));
-                    return false;
+                    None => "No conversation was ever recorded for this lead, so it cannot be found again.",
+                    Some(want) => {
+                        let fresh = now.saturating_sub(r.bound_ms) <= LEAD_UNBOUND_MAX_MS;
+                        let here = self.sessions.live(&SessionKey::agent(sb));
+                        match (here, main_session(self, &infos, sb)) {
+                            (Some(s), Some(sid)) if sid == want => {
+                                leads.insert(sb.clone(), Arc::as_ptr(&s) as usize);
+                                r.bound_ms = now;
+                                saves.push((sb.clone(), Some(r.clone())));
+                                rebound.push(sb.clone());
+                                return true;
+                            }
+                            // Another conversation shows now: not a leader, but the
+                            // record waits (as an unbound one does) until
+                            // LEAD_UNBOUND_MAX_MS, so a wrong pick is never permanent.
+                            // Debug only: `leading()` runs often.
+                            (Some(_), Some(_)) if fresh => {
+                                tracing::debug!("plans: '{sb}' runs another conversation than the one made lead: waiting for that one");
+                                return true;
+                            }
+                            (Some(_), Some(_)) => "The sandbox runs another conversation than the one made lead.",
+                            _ if fresh => return true,
+                            _ => "The lead was not found again in time.",
+                        }
+                    }
                 };
-                let fresh = now.saturating_sub(r.bound_ms) <= LEAD_UNBOUND_MAX_MS;
-                let here = self.sessions.live(&SessionKey::agent(sb));
-                match (here, main_session(self, &infos, sb)) {
-                    (Some(s), Some(sid)) if sid == want => {
-                        leads.insert(sb.clone(), Arc::as_ptr(&s) as usize);
-                        r.bound_ms = now;
-                        saves.push((sb.clone(), Some(r.clone())));
-                        rebound.push(sb.clone());
-                        true
-                    }
-                    // Another conversation shows now: not a leader, but the
-                    // record waits (as an unbound one does) until
-                    // LEAD_UNBOUND_MAX_MS, so a wrong pick is never permanent.
-                    // Debug only: `leading()` runs often.
-                    (Some(_), Some(_)) if fresh => {
-                        tracing::debug!("plans: '{sb}' runs another conversation than the one made lead: waiting for that one");
-                        true
-                    }
-                    (Some(_), Some(_)) => {
-                        tracing::info!("plans: '{sb}' runs another conversation than the one made lead: lead mode dropped");
-                        saves.push((sb.clone(), None));
-                        false
-                    }
-                    _ if fresh => true,
-                    _ => {
-                        tracing::info!("plans: the lead of '{sb}' was not found again in time: dropped");
-                        saves.push((sb.clone(), None));
-                        false
-                    }
+                saves.push((sb.clone(), None));
+                // One unbound in this very pass already said so.
+                if !dropped.iter().any(|(d, _)| d == sb) {
+                    dropped.push((sb.clone(), why));
                 }
+                false
             });
-            let mut out: Vec<String> = leads.keys().map(|r| r.to_string()).collect();
+            let mut out: Vec<String> = leads
+                .keys()
+                .filter(|sb| !matches!(pending.get(*sb).map(|p| p.phase), Some(LeadPhase::Activating | LeadPhase::Waiting)))
+                .map(|r| r.to_string())
+                .collect();
             out.sort();
             out
         };
         for (sb, rec) in saves {
             self.save_lead(&sb, rec);
         }
+        for (sb, why) in dropped {
+            self.lead_dropped(&sb, why);
+        }
         for sb in rebound {
             tracing::info!("plans: '{sb}' leads again, its main session is the one made lead");
-            self.send(Event::Lead(sb));
+            self.lead_failed.lock().unwrap().remove(&sb);
+            self.send(Event::Lead(sb.into()));
         }
         out
     }

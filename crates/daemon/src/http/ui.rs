@@ -53,6 +53,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/usage", get(usage))
         .route("/api/models", get(models))
         .route("/api/leads", get(leads))
+        .route("/api/lead-states", get(lead_states))
         // Sandboxes.
         .route("/api/sandboxes", get(list))
         .route("/api/stats", get(stats))
@@ -136,6 +137,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/remote-control", get(remote_state).post(remote_control))
         .route("/api/sandboxes/:name/remote-control/login", post(remote_login))
         .route("/api/sandboxes/:name/lead/end", post(lead_end))
+        .route("/api/sandboxes/:name/lead/cancel", post(lead_cancel))
         // Plans (the browser's half).
         .route("/api/plans", get(plans))
         .route("/api/plans/:id/approve", post(plan_approve))
@@ -328,8 +330,15 @@ async fn models(State(app): S) -> Json<Value> {
     ok_with(json!({ "default": app.cfg.claude_model, "models": app.offered_models() }))
 }
 
+/// The sandboxes that lead (confirmed): a list of names, as before lead
+/// states. `/api/lead-states` has waiting and activating too.
 async fn leads(State(app): S) -> Json<Value> {
     Json(json!(app.leading()))
+}
+
+/// `{ "<sandbox>": { "state", "since_ms", "reason" } }`, see `svc::lead`.
+async fn lead_states(State(app): S) -> Json<Value> {
+    Json(json!(app.lead_states()))
 }
 
 // ── Sandboxes ────────────────────────────────────────────────────────────
@@ -1375,8 +1384,16 @@ async fn thread_close(State(app): S, Path((name, thread)): Path<(String, String)
     Ok(ok())
 }
 
+/// The Team click: `/lead` is typed only into an idle agent; otherwise the
+/// lead waits for one (`waiting` in `/api/lead-states`).
 async fn lead(State(app): S, Path(name): Path<String>) -> ApiResult {
-    app.lead(&sandbox(&name)?).await?;
+    app.lead_request(&sandbox(&name)?).await?;
+    Ok(ok())
+}
+
+/// Cancel a lead `waiting` or `activating`: 409 when there is none.
+async fn lead_cancel(State(app): S, Path(name): Path<String>) -> ApiResult {
+    app.lead_cancel(&sandbox(&name)?).map_err(ApiError::conflict)?;
     Ok(ok())
 }
 
@@ -1992,6 +2009,7 @@ async fn state(State(app): S) -> Json<Value> {
         "plans": app.plans_list(),
         "codemap": app.codemap_runs(),
         "leads": app.leading(),
+        "lead_states": app.lead_states(),
         "usage": app.usage(),
         "models": { "default": app.cfg.claude_model, "models": app.offered_models() },
         "versions": { "sbxw": app.versions.sbxw, "sbx": app.versions.sbx },

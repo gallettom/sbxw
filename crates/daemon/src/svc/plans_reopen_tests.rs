@@ -53,9 +53,15 @@ async fn led(app: &Arc<App>, dir: &Path, name: &str) -> SandboxRef {
     app.store.update(&sb, |r| r.token = Some(format!("tok-{name}"))).unwrap();
     main_pty(app, &sb, &dir.join(format!("{name}.typed"))).await;
     app.ingest_hook(&sb, json!({"hook_event_name": "SessionStart", "session_id": "s1", "hook_version": 2}));
-    app.lead(&sb).await.unwrap();
+    team_on(app, &sb).await;
     assert_eq!(app.leading(), vec![name.to_string()]);
     sb
+}
+
+/// Team on, and the session's `lead_ack`: what it is told back.
+async fn team_on(app: &Arc<App>, sb: &SandboxRef) -> String {
+    app.lead(sb).await.unwrap();
+    app.lead_ack(sb, None).unwrap()
 }
 
 /// A post to the agent listener with `sb`'s token: what the relay server of
@@ -120,9 +126,9 @@ async fn after_team_off_and_on_the_bound_lead_follows_and_merges_its_open_plans(
         assert!(text(&v).contains("the user ended lead mode, so plan"), "{path}: the message stays: {v}");
     }
 
-    app.lead(&sb).await.unwrap();
+    let told = team_on(&app, &sb).await;
     assert!(!app.plan(&id).unwrap().closed, "Team on gives it back");
-    assert!(typed_soon(d.path(), "reopen-e2e", &format!("plan {id} (a done, b done)")).await, "told once which plans: {}", typed(d.path(), "reopen-e2e"));
+    assert!(told.contains(&format!("plan {id} (a done, b done)")), "told once which plans, in lead_ack's answer: {told}");
     let (st, v) = post(&app, "reopen-e2e", "/api/plans/status", json!({ "id": id })).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(v["plan"]["closed"], Value::Null);
@@ -132,13 +138,12 @@ async fn after_team_off_and_on_the_bound_lead_follows_and_merges_its_open_plans(
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(v["plan"]["merge"]["state"], "proposed", "the person still clicks Merge");
 
-    // A third Team on gives nothing back twice, and types no second notice.
-    let before = typed(d.path(), "reopen-e2e").matches("Lead mode is on again").count();
+    // A third Team on tells again the plans it gives back, and types nothing.
     app.lead_end(&sb).await;
-    app.lead(&sb).await.unwrap();
+    let told = team_on(&app, &sb).await;
+    assert_eq!(told.matches("Lead mode is on again").count(), 1, "each Team on tells once the plans it gives back: {told}");
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(before, 1);
-    assert_eq!(typed(d.path(), "reopen-e2e").matches("Lead mode is on again").count(), 2, "each Team on tells once the plans it gives back");
+    assert!(!typed(d.path(), "reopen-e2e").contains("Lead mode is on again"), "told in lead_ack's answer, never typed");
 }
 
 #[tokio::test]
@@ -202,7 +207,7 @@ async fn another_sandbox_is_refused_whatever_it_posts_and_gets_no_plan_back() {
     // Another sandbox, leading itself, turns Team on: it reopens nothing of reopen-mine.
     let other = led(&app, d.path(), "reopen-other").await;
     assert!(app.plan(&id).unwrap().closed);
-    app.lead(&sb).await.unwrap();
+    team_on(&app, &sb).await;
     for path in ["/api/plans/status", "/api/plans/propose_merge", "/api/plans/mark_done", "/api/plans/wait"] {
         let (st, v) = post(&app, "reopen-other", path, json!({ "id": id, "order": ["a"], "thread": "a", "timeout": 0 })).await;
         assert_eq!(st, StatusCode::BAD_REQUEST, "{path}: {v}");
@@ -219,7 +224,8 @@ async fn a_refused_plan_stays_out_when_team_comes_back() {
     app.plan_refuse(&p.id, Some("not now".into())).unwrap();
     let q = app.plan_propose(&sb, "pending", vec![t("b")], Variant::Split, "x", Some("Lead")).await.unwrap();
     app.lead_end(&sb).await;
-    app.lead(&sb).await.unwrap();
+    let told = team_on(&app, &sb).await;
+    assert!(!told.contains("Lead mode is on again"), "{told}");
     for id in [&p.id, &q.id] {
         assert_eq!(app.plan(id).unwrap().state, sbxw_core::plans::PlanState::Refused);
     }

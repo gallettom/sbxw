@@ -46,6 +46,7 @@ async fn led(app: &Arc<App>, dir: &Path, name: &str) -> SandboxRef {
     main_pty(app, &sb, &dir.join(format!("{name}.typed"))).await;
     hook(app, &sb, "s1", "SessionStart");
     app.lead(&sb).await.unwrap();
+    app.lead_ack(&sb, None).unwrap();
     assert_eq!(app.leading(), vec![name.to_string()]);
     sb
 }
@@ -232,6 +233,8 @@ async fn a_session_unknown_at_team_on_is_recorded_once_it_reports() {
     app.store.update(&sb, |r| r.token = Some("tok".into())).unwrap();
     main_pty(&app, &sb, &d.path().join("lead1.typed")).await;
     app.lead(&sb).await.unwrap();
+    assert_eq!(app.store.get(&sb).lead, None, "not on disk before its lead_ack");
+    app.lead_ack(&sb, None).unwrap();
     assert_eq!(app.store.get(&sb).lead.unwrap().session_id, None);
     hook(&app, &sb, "s7", "UserPromptSubmit");
     assert_eq!(app.store.get(&sb).lead.unwrap().session_id.as_deref(), Some("s7"));
