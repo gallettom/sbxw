@@ -1,0 +1,80 @@
+name: Test
+
+# The suites are declared in scripts/run-suite.sh (the one place that knows
+# this repository's test commands); each job only installs what it needs and
+# calls it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same pull request makes the older run pointless.
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Third-party actions are pinned to full commit SHAs (the version in the
+# trailing comment), as in release.yml.
+
+jobs:
+  crates:
+    name: crates
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # dtolnay/rust-toolchain has no version tags: this is the head of its
+      # `stable` branch, which installs the stable toolchain.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: crates
+
+      # The scripts keep their build output under target/run-suite, which
+      # rust-cache keeps.
+      - name: Test the crates
+        run: scripts/run-suite.sh crates
+
+  js:
+    name: js
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Test the web UI and the scripts
+        run: scripts/run-suite.sh js
+
+  # The desktop app is the longest build, so it runs on main only, not on
+  # every pull request. Its dependencies build headless on Linux (the
+  # packages are listed in desktop/docs/testing.md); the tests draw offscreen
+  # with Mesa's software Vulkan driver.
+  desktop:
+    name: desktop
+    if: github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - name: Install the headless build and render packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libxkbcommon-dev libwayland-dev mesa-vulkan-drivers
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: desktop
+          workspaces: desktop
+
+      - name: Test the desktop app
+        env:
+          SBXW_TEST_TARGET: ${{ github.workspace }}/desktop/target
+        run: scripts/run-suite.sh desktop
