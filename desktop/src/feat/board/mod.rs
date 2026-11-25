@@ -16,6 +16,17 @@
 //! shows the lane graph and each thread's commits with a commit's diff in
 //! place, at the conversation's width.
 //!
+//! The plan's test queue shows in the conversation: each finished job is
+//! one centred line tinted by its outcome ("tests passed (reused)", "tests
+//! failed after a retry"; done green, could not run amber, failed or timed
+//! out red), with who asked, the short commit and the duration; a thread
+//! refused for running the plan's whole test command itself is a quiet
+//! line, never the command. Under the counters, when the daemon sends the
+//! timeline's `numbers`, one line of the plan's three numbers: approval to
+//! merge (counted to now, "not merged yet", until the merge), tests run and
+//! reused (none for a plan with no test command), times the person was
+//! asked. An older daemon sends none: the summary stays as it was.
+//!
 //! Read only. Acting stays where it is done: the plan dialog (approve,
 //! merge), the Requests panel (answers), a thread's terminal. The Board
 //! links there. It shows only what went through sbxw: the lead's and
@@ -88,6 +99,8 @@ struct Timeline {
     team: J,
     standing: Vec<J>,
     commits: J,
+    /// The plan's three numbers (`numbers`), Null from an older daemon.
+    numbers: J,
     loading: bool,
     error: Option<String>,
 }
@@ -519,6 +532,9 @@ impl State {
                 if !b["commits"].is_null() {
                     tl.commits = b["commits"].clone();
                 }
+                if !b["numbers"].is_null() {
+                    tl.numbers = b["numbers"].clone();
+                }
                 tl.error = None;
             }
             Err(e) => tl.error = Some(e),
@@ -693,6 +709,7 @@ impl State {
         json!({
             "id": team["id"], "sandbox": sb, "color": groups[sb], "summary": team["summary"], "names": model::team_names(team), "state": team["state"], "tone": model::team_tone(team["state"].as_str().unwrap_or("")),
             "lead": team["lead"], "variant": team["variant"], "threads": threads, "counts": counts,
+            "numbers": model::plan_numbers(&t.numbers, crate::feat::files::view::now_secs()),
             // The picker's capsule in the team sandbox's colours (scope.rs, as every scoped screen).
             "look": crate::scope::look_json(groups[sb].as_str().and_then(crate::scope::parse_hex)),
             "commits": per, "commits_available": t.commits["available"].as_bool().unwrap_or(t.commits.is_null()), "commits_why": t.commits["why"],
@@ -832,6 +849,9 @@ fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16,
     let mut out = json!({ "ok": true, "team": tl["team"], "events": all[start..end], "more": end < all.len(), "standing": tl["standing"] });
     if q("before").is_none() {
         out["commits"] = tl["commits"].clone();
+        if !tl["numbers"].is_null() {
+            out["numbers"] = tl["numbers"].clone();
+        }
     }
     Some((200, out))
 }

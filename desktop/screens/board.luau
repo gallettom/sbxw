@@ -185,6 +185,18 @@ local function rowview(r, sb)
       icon{ ICON[r.tone] or "info", size = 12, color = r.tone == "neutral" and "text-muted" or r.tone },
       text{ r.text or "", size = "sm", color = "text-muted", wrap = true, max_w = math.max(120, math.min(560, CONV_W - 200)) },
       team_tag(r), when(r), link(r.link, "board-link-" .. (r.id or "")) }
+  elseif r.type == "test" then
+    -- A finished test job of the plan's queue: sbxw's own line, centred,
+    -- tinted by outcome (passed green, could not run amber, failed or timed
+    -- out red), what it says first, then who asked, the commit, the time.
+    local t = TINT[r.tint or ""] or { "surface", "elevated" }
+    return row{ gap = 8, w = "full", justify = "center", wrap = true, py = 2, key = "board-msg-" .. (r.id or ""),
+      row{ gap = 8, px = 12, py = 4, radius = "md", fill = t[1], border = t[2], wrap = true, help = r.help, key = "board-test-" .. (r.id or ""),
+        max_w = math.max(160, math.min(560, CONV_W - 160)),
+        icon{ ICON[r.tone] or "info", size = 12, color = r.tone == "neutral" and "text-muted" or r.tone },
+        text{ r.label or "tests", size = "sm", weight = "semibold", color = "text-bright", key = "board-test-label-" .. (r.id or "") },
+        nz(r.meta) and text{ r.meta, size = "xs", color = "text-muted", wrap = true } or false },
+      team_tag(r), when(r) }
   elseif r.type == "transition" then
     -- A bare change of state: the agent, an arrow, the new state, no bubble.
     local n = r.count or 1
@@ -535,6 +547,20 @@ local function summary(s, ui, narrow)
       (not narrow) and row{ gap = 4, text{ "+" .. tostring(c.added or 0), size = "xs", mono = true, color = "green" }, text{ "-" .. tostring(c.removed or 0), size = "xs", mono = true, color = "red" } } or nil)
   end
   if #counts == 0 then counts[#counts + 1] = text{ "No standing decision or warning, no question waiting, no commit yet.", size = "xs", color = "text-muted" } end
+  -- The plan's numbers (a daemon that sends them), a line of their own
+  -- under the counters: read, not pressed.
+  local nb = s.numbers or {}
+  local figures = { gap = 4, w = "full", wrap = true, key = "board-summary-numbers" }
+  local function figure(key, ic, f, color)
+    if not f or not nz(f.text) then return end
+    figures[#figures + 1] = row{ key = "board-number-" .. key, gap = 4, px = 8, h = 24, radius = "pill", help = f.help,
+      icon{ ic, size = 12, color = color or "text-muted" },
+      text{ f.text, size = "xs", color = "text-bright" },
+      (f.running and not narrow) and text{ "not merged yet", size = "xs", color = "text-muted" } or false }
+  end
+  figure("time", "history", nb.time, nb.time and nb.time.running and "amber" or "green")
+  figure("tests", "check", nb.tests)
+  figure("asked", "ask", nb.asked)
   counts[#counts + 1] = spacer{}
   counts[#counts + 1] = row(links)
   local open = ui.details
@@ -552,6 +578,7 @@ local function summary(s, ui, narrow)
     kids[#kids + 1] = row(head)
     kids[#kids + 1] = row(counts)
   end
+  if #figures > 0 then kids[#kids + 1] = row(figures) end
   if open then
     local d = { gap = 2, w = "full", key = "board-summary-more" }
     for _, t in ipairs(s.threads or {}) do

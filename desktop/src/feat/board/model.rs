@@ -352,6 +352,8 @@ fn label(kind: &str) -> (&'static str, &'static str) {
         "claim" => ("Claimed", "neutral"),
         "release" => ("Released", "neutral"),
         "thread_status" => ("Status", "neutral"),
+        "test_job" => ("Tests", "neutral"),
+        "test_refused" => ("Sent to the queue", "neutral"),
         _ => ("", "neutral"),
     }
 }
@@ -544,6 +546,13 @@ pub fn row(ev: &J, o: &Opts) -> J {
             r["text"] = format!("{} could not start: {}", data["thread"].as_str().unwrap_or("a thread"), text.unwrap_or("no reason given")).into();
             r["link"] = json!({ "label": "Its terminal", "what": "terminal", "thread": data["thread"] });
         }
+        "test_job" => test_job(&mut r, data),
+        "test_refused" => {
+            // A quiet line: who was refused, never the command it typed.
+            r["type"] = "system".into();
+            let t = data["thread"].as_str().filter(|t| !t.is_empty()).or(ev["from"].as_str()).unwrap_or("a thread");
+            r["text"] = format!("{t} tried to run the plan's whole test command itself: sent to the test queue").into();
+        }
         "claim" | "release" => {
             r["type"] = "system".into();
             let files: Vec<&str> = data["files"].as_array().into_iter().flatten().filter_map(J::as_str).collect();
@@ -567,6 +576,124 @@ pub fn row(ev: &J, o: &Opts) -> J {
         r["text"] = breakable(t).into();
     }
     r
+}
+
+/// A duration in words: "45 s", "3 min 4 s", "1 h 12 min", "2 d 3 h".
+pub fn duration(ms: u64) -> String {
+    let s = ms / 1000;
+    match s {
+        0..60 => format!("{s} s"),
+        60..3600 => match s % 60 {
+            0 => format!("{} min", s / 60),
+            r => format!("{} min {r} s", s / 60),
+        },
+        3600..86_400 => match (s % 3600) / 60 {
+            0 => format!("{} h", s / 3600),
+            m => format!("{} h {m} min", s / 3600),
+        },
+        _ => match (s % 86_400) / 3600 {
+            0 => format!("{} d", s / 86_400),
+            h => format!("{} d {h} h", s / 86_400),
+        },
+    }
+}
+
+/// The plan's three numbers for the summary, from the timeline's
+/// `numbers` (none from an older daemon: Null, the summary unchanged):
+/// the time from approval to merge (counted to now while not merged), the
+/// test jobs run and results reused (none when the plan has no test
+/// command), and the times the person was asked.
+pub fn plan_numbers(n: &J, now_s: u64) -> J {
+    if !n.is_object() {
+        return J::Null;
+    }
+    let mut out = json!({});
+    if let Some(approved) = n["approved_ms"].as_u64() {
+        let merged = n["merged_ms"].as_u64();
+        let end = merged.unwrap_or(now_s * 1000).max(approved);
+        let d = duration(end - approved);
+        out["time"] = json!({
+            "text": d,
+            "running": merged.is_none(),
+            "help": if merged.is_some() { format!("From the plan approved to its merge: {d}") } else { format!("The plan was approved {d} ago and is not merged yet: still counting") },
+        });
+    }
+    if let Some(t) = n["tests"].as_object() {
+        let run = t.get("run").and_then(J::as_u64).unwrap_or(0);
+        let reused = t.get("reused").and_then(J::as_u64).unwrap_or(0);
+        let refused = t.get("refused").and_then(J::as_u64).unwrap_or(0);
+        let mut text = if run == 0 && reused == 0 { "tests: none run yet".to_string() } else { format!("tests: {run} run, {reused} reused") };
+        if refused > 0 {
+            text.push_str(&format!(", {refused} sent to the queue"));
+        }
+        out["tests"] = json!({
+            "run": run, "reused": reused, "refused": refused,
+            "text": text,
+            "help": format!("The plan's test command: {run} job{} run by the queue, {reused} result{} reused for code already tested", if run == 1 { "" } else { "s" }, if reused == 1 { "" } else { "s" }),
+        });
+    }
+    if let Some(a) = n["asked"].as_u64() {
+        out["asked"] = json!({
+            "n": a,
+            "text": match a { 0 => "did not ask you yet".to_string(), 1 => "asked you once".to_string(), _ => format!("asked you {a} times") },
+            "help": "Times the team asked you something: questions, screenshots, approvals",
+        });
+    }
+    out
+}
+
+/// A finished test job of the plan's queue: one line that reads at a
+/// glance ("tests passed (reused)"), its tint by outcome (done green,
+/// could not run amber, failed or timed out red), then who asked, the
+/// commit and how long it took.
+fn test_job(r: &mut J, data: &J) {
+    let outcome = data["outcome"].as_str().unwrap_or("");
+    let (word, tint) = match outcome {
+        "passed" => ("passed", "green"),
+        "failed" => ("failed", "red"),
+        "timed_out" => ("timed out", "red"),
+        "error" | "could_not_run" => ("could not run", "amber"),
+        _ => ("finished", ""),
+    };
+    let reused = data["reused"].as_bool().unwrap_or(false);
+    let retried = data["retried"].as_bool().unwrap_or(false);
+    let mut head = format!("tests {word}");
+    if retried {
+        head.push_str(" after a retry");
+    }
+    if reused {
+        head.push_str(" (reused)");
+    }
+    let asker = match data["asker"].as_str().filter(|a| !a.is_empty()) {
+        Some("lead") => "the lead".to_string(),
+        Some(a) => a.to_string(),
+        None => String::new(),
+    };
+    let mut meta: Vec<String> = vec![];
+    if !asker.is_empty() {
+        meta.push(format!("asked by {asker}"));
+    }
+    if let Some(c) = data["short"].as_str().filter(|c| !c.is_empty()) {
+        meta.push(c.chars().take(12).collect());
+    }
+    if let Some(ms) = data["duration_ms"].as_u64() {
+        meta.push(duration(ms));
+    }
+    r["type"] = "test".into();
+    r["label"] = head.into();
+    r["tint"] = tint.into();
+    r["tone"] = (if tint.is_empty() { "neutral" } else { tint }).into();
+    r["outcome"] = outcome.into();
+    r["reused"] = reused.into();
+    r["retried"] = retried.into();
+    r["meta"] = breakable(&meta.join(" · ")).into();
+    r["help"] = match (reused, data["reuse"].as_str()) {
+        (true, Some("joined")) => "Joined a run of the same commit already under way: not run twice",
+        (true, _) => "The result of an earlier run of the same code, reused: not run again",
+        (false, _) if retried => "Failed once, run a second time to tell a flaky test from a real failure",
+        _ => "Run by the plan's test queue",
+    }
+    .into();
 }
 
 fn files(v: &J) -> J {
