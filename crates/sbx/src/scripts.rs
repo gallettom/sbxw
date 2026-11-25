@@ -749,30 +749,22 @@ pub fn codemap_run_args(name: &SandboxName, agent_port: &str, prompt: &str) -> V
 }
 
 /// The test queue's probe of a commit, in the workspace's repository: the
-/// commit's full hash (`commit=`), the git object of each covered path there
-/// (`obj=<hash> <path>`, `-` when absent; `.` is the root tree) and what the
-/// suite's `version_cmd` prints (`version=`, one line). A ref that is not a
-/// commit of that repository is refused with an `error=` line and exit 4.
-/// The ref, the version command and the paths are positional arguments; the
-/// ref was checked as a revision by the daemon, and the version command and
-/// the paths are the person's approved declaration.
-pub fn tests_probe_args(name: &SandboxName, workspace: &str, git_ref: &str, version_cmd: &str, paths: &[String]) -> Vec<String> {
+/// commit's full hash (`commit=`) and the hash of its root tree (`tree=`),
+/// which with the plan's command is the key of a result. A ref that is not
+/// a commit of that repository is refused with an `error=` line and exit 4.
+/// The ref is a positional argument, checked as a revision by the daemon.
+pub fn tests_probe_args(name: &SandboxName, workspace: &str, git_ref: &str) -> Vec<String> {
     const SCRIPT: &str = concat!(unwrap_args!(), r#"
-        ws="$1" ref="$2" ver="$3"; shift 3
+        ws="$1" ref="$2"
         cd "$ws" 2>/dev/null || { echo "error=the workspace $ws is not in this sandbox"; exit 3; }
         common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { echo "error=$ws is not a git repository"; exit 3; }
         cd "$(dirname "$common")" || exit 3
         c=$(git rev-parse --verify --quiet "$ref^{commit}") || { echo "error=$ref is not a commit of the repository at $PWD"; exit 4; }
         echo "commit=$c"
-        for p do
-            if [ "$p" = . ]; then o=$(git rev-parse "$c^{tree}"); else o=$(git rev-parse --verify --quiet "$c:$p") || o=-; fi
-            echo "obj=$o $p"
-        done
-        if [ -n "$ver" ]; then echo "version=$(bash -c "$ver" 2>&1 </dev/null | head -n 3 | tr '\n\r' '  ')"; fi
+        echo "tree=$(git rev-parse "$c^{tree}")"
         exit 0"#);
     let mut args = owned(&["exec", name.as_str(), "--", "bash", "-lc", SCRIPT, "sbxw-tests-probe"]);
-    args.extend([workspace, git_ref, version_cmd].map(pos));
-    args.extend(paths.iter().map(|p| pos(p)));
+    args.extend([workspace, git_ref].map(pos));
     args
 }
 
@@ -780,24 +772,25 @@ pub fn tests_probe_args(name: &SandboxName, workspace: &str, git_ref: &str, vers
 pub const TESTS_LOG_MARK: &str = "sbxw-log=";
 pub const TESTS_ERROR_MARK: &str = "sbxw-error=";
 
-/// One run of a suite by the test queue, inside the sandbox.
+/// One run of a plan's test command by the test queue, inside the sandbox.
 ///
 /// * The commit is checked out, detached, in the queue's own worktree,
 ///   `.sbxw-worktrees/.tests` of the workspace's repository (a dot name, so
 ///   never a thread's), forced and cleaned of untracked files but not of
-///   ignored ones (`node_modules` stays warm). The suite runs there.
+///   ignored ones (`node_modules` stays warm). The command runs there.
 /// * `SBXW_TEST_TARGET` is one build directory in the sandbox's home, kept
 ///   from job to job; `SBXW_TEST_CHECKOUT` is the checkout, also the cwd.
-/// * The full output goes to `~/.sbxw/tests/logs/<suite>.log`, whose path is
-///   printed first (`sbxw-log=`), then its last 200 lines: only a tail
-///   crosses to the host. A step before the suite that fails prints
+/// * The full output goes to `~/.sbxw/tests/logs/<label>.log` (the label is
+///   the plan's id, also `SBXW_TEST_SUITE`), whose path is printed first
+///   (`sbxw-log=`), then its last 200 lines: only a tail crosses to the
+///   host. A step before the command that fails prints
 ///   `sbxw-error=` and exits 3.
-/// * `timeout` bounds the suite inside the sandbox (exit 124), so it does not
+/// * `timeout` bounds the command inside the sandbox (exit 124), so it does not
 ///   outlive the daemon's own bound; a lock in the home keeps two runs apart
 ///   should a restarted daemon start one while the last still runs.
-/// * The suite's name, the commit, the command and the limit are positional
-///   arguments: the command is the person's approved declaration, run with
-///   `bash -c`, never text an agent sent.
+/// * The label, the commit, the command and the limit are positional
+///   arguments: the command is the one the person approved with the plan,
+///   run with `bash -c`, never text a request carried.
 pub fn tests_run_args(name: &SandboxName, workspace: &str, suite: &str, commit: &str, command: &str, limit_secs: u64) -> Vec<String> {
     const SCRIPT: &str = concat!(unwrap_args!(), r#"
         ws="$1" suite="$2" commit="$3" cmd="$4" limit="$5"
@@ -1374,18 +1367,16 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
         git(&["add", "-A"]);
         git(&["commit", "-q", "-m", "one"]);
         let head = git(&["rev-parse", "HEAD"]);
-        let tree_a = git(&["rev-parse", "HEAD:crates/a"]);
+        let tree = git(&["rev-parse", "HEAD^{tree}"]);
         let run = |args: &[String]| {
             let out = std::process::Command::new("bash").env("HOME", &d).args(["-c", &args[5]]).args(&args[6..]).output().unwrap();
             (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned())
         };
         let ws = r.to_str().unwrap();
-        let paths = vec!["crates/a".to_string(), "nope".into(), ".".into()];
-        let (code, out) = run(&tests_probe_args(&sb(), ws, "main", "echo v1", &paths));
+        let (code, out) = run(&tests_probe_args(&sb(), ws, "main"));
         assert_eq!(code, Some(0), "{out}");
-        assert!(out.contains(&format!("commit={head}")) && out.contains(&format!("obj={tree_a} crates/a")), "{out}");
-        assert!(out.contains("obj=- nope") && out.contains("version=v1"), "{out}");
-        let (code, out) = run(&tests_probe_args(&sb(), ws, "no-such-branch", "", &paths));
+        assert_eq!(out, format!("commit={head}\ntree={tree}\n"));
+        let (code, out) = run(&tests_probe_args(&sb(), ws, "no-such-branch"));
         assert_eq!(code, Some(4), "{out}");
         assert!(out.contains("error=no-such-branch is not a commit"), "{out}");
         // The command sees the checkout as its cwd, the build dir and the commit.

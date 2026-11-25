@@ -211,8 +211,6 @@ pub enum TestsChoice {
     Approve,
     /// The person cleared it: the plan runs without a test queue.
     Clear,
-    /// Approved from a screen that does not show the command: not approved.
-    NotShown,
 }
 
 /// Where git shows a done thread's branch, when sbxw never merged it.
@@ -281,7 +279,7 @@ pub struct Plan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_tests: Option<PlanTests>,
     /// Why a proposed test command was not approved with the plan: the
-    /// person cleared it, or approved from a surface that does not show it.
+    /// person cleared it in the plan dialog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tests_not_approved: Option<String>,
     pub created_ms: u64,
@@ -694,7 +692,6 @@ impl PlanBook {
             let why = match tests {
                 TestsChoice::Approve => None,
                 TestsChoice::Clear => Some("the person cleared it in the plan dialog"),
-                TestsChoice::NotShown => Some("the plan was approved from a screen that does not show the test command"),
             };
             match (p.proposed_tests.clone(), why) {
                 (Some(t), None) => p.approved_tests = Some(t),
@@ -1193,7 +1190,6 @@ mod tests {
         for (choice, approved, why) in [
             (TestsChoice::Approve, true, None),
             (TestsChoice::Clear, false, Some("cleared")),
-            (TestsChoice::NotShown, false, Some("does not show")),
         ] {
             let mut b = PlanBook::new();
             let p = proposed(&mut b, "n", &["a"]);
@@ -1212,7 +1208,7 @@ mod tests {
         // No proposed command: nothing to approve, nothing to explain.
         let mut b = PlanBook::new();
         let p = proposed(&mut b, "n", &["a"]);
-        let p = b.approve_with(&p.id, vec![t("a")], None, None, TestsChoice::NotShown, 2).unwrap();
+        let p = b.approve_with(&p.id, vec![t("a")], None, None, TestsChoice::Clear, 2).unwrap();
         assert_eq!((p.approved_tests, p.tests_not_approved), (None, None));
     }
 
