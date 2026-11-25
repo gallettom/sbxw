@@ -23,6 +23,7 @@ fn plan(id: &str, state: PlanState, threads: Vec<PlanThread>) -> Plan {
         merge: None,
         earlier_merges: vec![],
         main_uncommitted: None,
+        team_suite: None,
         created_ms: 1,
         updated_ms: 2,
     }

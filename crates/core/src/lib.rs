@@ -54,6 +54,7 @@ pub mod sysbin;
 pub mod table;
 pub mod templates;
 pub mod terminal;
+pub mod testq;
 pub mod team;
 pub mod tickets;
 pub mod tooling;

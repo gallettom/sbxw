@@ -260,6 +260,11 @@ pub struct Plan {
     /// does not mount are not counted. `None` when it could not be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub main_uncommitted: Option<u32>,
+    /// The declared test suite (`[[tests]]`) the lead named as the team's:
+    /// the queue runs it once per state of the team's code. Checked against
+    /// the sandbox's suites when proposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_suite: Option<String>,
     pub created_ms: u64,
     pub updated_ms: u64,
 }
@@ -562,6 +567,7 @@ impl PlanBook {
             merge: None,
             earlier_merges: vec![],
             main_uncommitted: None,
+            team_suite: None,
             created_ms: now,
             updated_ms: now,
         };
@@ -571,6 +577,14 @@ impl PlanBook {
     }
 
     /// Record what the main checkout held when plan `id` was proposed.
+    /// The team suite a lead named, set right after the proposal (the
+    /// daemon checks the name against the sandbox's declared suites first).
+    pub fn note_team_suite(&mut self, id: &str, suite: Option<String>) -> Option<Plan> {
+        let p = self.plans.get_mut(id)?;
+        p.team_suite = suite;
+        Some(p.clone())
+    }
+
     pub fn note_main_uncommitted(&mut self, id: &str, n: Option<u32>) -> Option<Plan> {
         let p = self.plans.get_mut(id)?;
         p.main_uncommitted = n;

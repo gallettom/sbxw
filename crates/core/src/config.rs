@@ -121,6 +121,9 @@ pub struct Config {
     /// config and from a project's own (which overrides `enabled` and
     /// `guidance` for its sandboxes); the vocabulary from the daemon's only.
     pub emphasis: crate::emphasis::EmphasisSettings,
+    /// Test suites the daemon's test queue may run inside the sandbox
+    /// (`[[tests]]`, see `testq`): an agent names one, never its command.
+    pub tests: Vec<crate::testq::Suite>,
 
     /// The file this was read from, absolute. `None` for built-in defaults.
     #[serde(skip)]
@@ -230,6 +233,7 @@ impl Default for Config {
             mac: Default::default(),
             voice: Default::default(),
             emphasis: Default::default(),
+            tests: vec![],
             source: None,
             asked: None,
         }
@@ -456,6 +460,7 @@ impl Config {
         self.voice.validate().map_err(anyhow::Error::msg)?;
         crate::spoken::check_words(&self.voice.words).map_err(anyhow::Error::msg)?;
         self.emphasis.validate().map_err(anyhow::Error::msg)?;
+        crate::testq::validate(&self.tests).map_err(anyhow::Error::msg)?;
         if let Some(mode) = self.skills_mode() {
             if !SKILL_MODES.contains(&mode) {
                 bail!("skills = \"{mode}\" — expected one of {}", SKILL_MODES.join(", "));
@@ -765,6 +770,24 @@ mod tests {
         let cfg: Config = toml::from_str(raw).unwrap();
         cfg.validate().unwrap();
         assert_eq!(cfg.models, default_models());
+    }
+
+    #[test]
+    fn test_suites_parse_with_defaults_and_bad_ones_are_refused() {
+        let c = Config::parse("[[tests]]\nname = \"crates\"\ncommand = \"scripts/run-suite.sh crates\"\npaths = [\"crates\", \"Cargo.lock\"]\n\n[[tests]]\nname = \"all\"\ncommand = \"scripts/run-suite.sh all\"\npaths = [\".\"]\ndepends = [\"crates\"]\nretries = 1\ntimeout_minutes = 90\nversion_cmd = \"rustc --version\"\n").unwrap();
+        assert_eq!(c.tests.len(), 2);
+        assert_eq!((c.tests[0].timeout_minutes, c.tests[0].retries, c.tests[0].version_cmd.as_str()), (crate::testq::DEFAULT_TIMEOUT_MINUTES, 0, ""));
+        assert_eq!((c.tests[1].retries, c.tests[1].timeout_minutes), (1, 90));
+        for bad in [
+            "[[tests]]\nname = \"x y\"\ncommand = \"c\"\npaths = [\".\"]",
+            "[[tests]]\nname = \"x\"\ncommand = \"c\"\npaths = [\"/etc\"]",
+            "[[tests]]\nname = \"x\"\ncommand = \"c\"\npaths = [\".\"]\nretries = 3",
+            "[[tests]]\nname = \"x\"\ncommand = \"c\"\npaths = [\".\"]\ndepends = [\"y\"]",
+            // `path` for `paths`: unknown keys are ignored, so the missing list is what is caught.
+            "[[tests]]\nname = \"x\"\ncommand = \"c\"\npath = [\".\"]",
+        ] {
+            assert!(Config::parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
