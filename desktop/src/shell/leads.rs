@@ -360,6 +360,19 @@ mod tests {
         assert!(r.rt.find("monitor-empty").is_none(), "not the no-session state");
     }
 
+    /// The filter is "Leads only" wherever it is named (the words "lead
+    /// mode" stay for a session's real state), and the state file keeps its
+    /// old key, so a file written as "Lead Mode" was still loads it on.
+    #[test]
+    fn leads_only_is_named_so_and_keeps_the_old_state_key() {
+        assert_eq!(LEAD_KEY, "lead_mode", "older state files still load");
+        assert_eq!((super::super::bar::LEAD_ON, super::super::bar::LEAD_OFF), ("Leads only: on", "Leads only: off"));
+        for (what, src) in [("topbar", include_str!("../../screens/topbar.luau")), ("help", include_str!("../../screens/help.luau")), ("palette", include_str!("palette.rs")), ("monitor", include_str!("../../screens/monitor.luau"))] {
+            assert!(!src.contains("Lead Mode"), "{what} still says Lead Mode");
+            assert!(src.contains("Leads only"), "{what} names Leads only");
+        }
+    }
+
     /// Leads only on when the app quit comes back at the next start, once the
     /// teams are read, over the layout kept; with no team running then it
     /// stays off (and does not wait for one).

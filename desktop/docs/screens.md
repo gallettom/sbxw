@@ -810,7 +810,7 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
 | `sidebar` | `show`: `show`, `hide` or `toggle` | The sandboxes sidebar shown or hidden, remembered across launches (`data.app.sidebar.shown`); the pane area, terminals or Sessions, takes its width (each terminal resized once). Its header's `sidebar-hide` runs it; while it is hidden the rail's first entry `rail-sidebar` ("Show sandboxes") brings it back, its badge the sessions that want the person (amber). A `select` of a sandbox pressed elsewhere (the palette, Worktrees, the create jobs; not one a feature runs from its data) shows it first. No focus moves |
-| `team_leads` | `show`: `show`, `hide` or `toggle` | Lead Mode on or off, the top bar's `top-lead` (`data.app.leads`: `on`, `can` (a team runs), `leaders` while on). On: the terminals show only the team leaders' panes (the layout before comes back when it goes off) and Sessions only the leaders' sessions, each followed by its threads'. One state for both base views, kept in the state file (`lead_mode`) and restored at start when a team still runs. Nothing happens while no team runs |
+| `team_leads` | `show`: `show`, `hide` or `toggle` | Leads only on or off, the top bar's `top-lead` (`data.app.leads`: `on`, `can` (a team runs), `leaders` while on). On: the terminals show only the team leaders' panes (the layout before comes back when it goes off) and Sessions only the leaders' sessions, each followed by its threads'. One state for both base views, kept in the state file (`lead_mode`) and restored at start when a team still runs. Nothing happens while no team runs |
 | `set_theme` | `theme`: `dark`, `graphite` or `toggle` (the next one) | The app's theme, remembered across launches; every surface switches at once (`data.app.theme` and `theme.mode` say which palette is drawn) |
 | `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | The old layout picker's: that many terminals per page, and the current page that many panes (empty ones added) in the old arrangement |
 | `page_show` | `page` (from 1, required) | Shows that page of terminals |
@@ -1136,7 +1136,7 @@ Window" (the pager's "terminals per page" menu and its hidden tabs' menu,
 the pager's button after the tabs (`pager-to-window-now`: a quiet 24 pt
 square as "+", the `detach` mark in muted text, tooltip "Move this page to
 a new window" with the chord; disabled at the app's disabled opacity, the
-reason as its tooltip, where the menus' row is disabled: Lead Mode, a page
+reason as its tooltip, where the menus' row is disabled: Leads only, a page
 with no terminal; its room is reserved in the pager's fit, so on a narrow
 pager the tabs go compact, then into the hidden tabs' menu, and the button
 stays), the palette, ⌘⇧M on macOS and Ctrl+Shift+M elsewhere) moves the current
@@ -1946,9 +1946,10 @@ nothing only disables Open.
 | `sessions` | `GET /api/sessions`: every hook report (`sandbox`, `thread`, `state`: `working`, `idle`, `attention`, `exited`, ...) |
 | `threads` | By sandbox, `GET /api/sandboxes/:name/threads`: `{ok, threads: [{name, open, repo, model, worktree: same\|own\|team}], open, max}` |
 | `plans` | `GET /api/plans`: every plan (`id`, `sandbox`, `summary`, `threads` with `state` and `summary`, `state`, `variant`, `justification`, `closed`, `merge`: `{order, note, state, base, results, distillate}`) |
-| `leads`, `models` | `GET /api/leads`, `GET /api/models` (`{ok, default, models: [{id, label}]}`) |
+| `leads`, `models` | `GET /api/leads` (the sandboxes that really lead), `GET /api/models` (`{ok, default, models: [{id, label}]}`) |
+| `lead_states` | `GET /api/lead-states`: `{ "<sandbox>": {state: waiting, activating or leading, since_ms, reason} }`, absent: off. Read again on `lead`, `lead-end`, `session` and at every connection. Before it is read (or from a daemon without the route), `leads` stands in |
 | `board` | By sandbox, `GET /api/sandboxes/:name/board`: `{plan, claims, entries}` |
-| `threads_view` | Set by the core: by sandbox, `{sessions: [{thread, kind, running, state, word, tone, label, summary, repo, model}], open, max, leading, pending, merge}` |
+| `threads_view` | Set by the core: by sandbox, `{sessions: [{thread, kind, running, state, word, tone, label, summary, repo, model}], open, max, leading, lead, pending, merge}`. `leading`: the lead state is `leading`; `lead`: `leading`, `waiting`, `activating`, `unled` (off with a plan pending or a thread at work) or `off` |
 | `threads_ui` | Set by the core: `sandbox`, `tab`, `new` (`{sandbox, kind, suggest}`), `drafts` (by plan id: `{threads, variant}`), `plan_error`, `merge_close`, `merge_note` (by plan id), `repos_for`, `worktrees_for`, `remote` |
 | `thread_repos`, `worktrees` | Read on demand: `GET .../repos` (for `threads_ui.repos_for`), `GET .../worktrees` (for `worktrees_for`) |
 
@@ -1958,6 +1959,24 @@ panel; amber when a session waits); on each session's pane bar
 (`pane-<n>-x-<id>`): `model`, `state`, `interrupt`, `remote`, `close`; on
 the main session's: `lead`, `plan`, `merge`, `threads`; in the top bar
 `extra-topbar-plan` while a plan waits.
+
+**The lead state.** The `lead` extra is carried by the main session's
+name pill (shell/bar.rs `take_team`), one look per state
+(`model::team_state`):
+
+| State | Pill | A press |
+|---|---|---|
+| `leading` | purple, the leader mark ("Team on") | `lead_end` (the core's dialog) |
+| `waiting` | blue outline, "waits for idle" after the name: the agent is busy, lead mode starts when it is idle | `lead_cancel` |
+| `activating` | blue outline, "starting": `/lead` typed, the session has not confirmed | `lead_cancel` |
+| `unled` | amber outline, "Plan without lead": a plan pending or a thread at work, no lead | `lead_start` (Resume lead: the daemon gives the open plans back to the session) |
+| `off` | quiet outline ("Team") | `lead_start` |
+
+The word shows under `pane-<n>-team-word`. "Team on" never comes from a
+plan alone. A state that falls back to off with a `reason` says it once
+as a notice ("Team mode for X did not start: ..."). The Threads panel
+draws the same states (`lead-end`, `lead-cancel`, `lead-resume`,
+`lead-start`).
 
 **Intents** (indexes from 1):
 
@@ -1971,7 +1990,8 @@ the main session's: `lead`, `plan`, `merge`, `threads`; in the top bar
 | `remote_control` | `sandbox`, `thread` | direct | Reads the login, then turns Remote Control on, or says why not |
 | `remote_login` | `sandbox`, `thread` | approval | Stops injecting the setup token, types /login |
 | `worktrees_load` | `sandbox` | direct | Reads `data.worktrees` |
-| `lead_start`, `lead_end` | `sandbox` | direct | Team mode on; off after the core's dialog says what it leaves |
+| `lead_start`, `lead_end` | `sandbox` | direct | Asks for Team mode (also Resume lead); off after the core's dialog says what it leaves |
+| `lead_cancel` | `sandbox` | direct | `POST /api/sandboxes/{sandbox}/lead/cancel`: a lead mode waiting or starting does not start |
 | `plan_review` | `id` | direct | Opens the plan dialog (and its draft) |
 | `plans_reload` | none | direct | Reads plans and boards again |
 | `plan_edit` | `id`, `index`, `field` (`name`, `goal`, `scope`, `repo`, `model`), `value` (none: empty, default repo, default model) | direct | Edits the draft |
@@ -2570,7 +2590,7 @@ Ctrl+Option+I on macOS, Alt+I elsewhere, `monitor_toggle`, "Switch between
 GUI and TUI"; no rail entry). Left: the count ("8 sessions"), then the
 sessions, grouped Needs you (the longest waiting first), Working, Idle,
 Ended (the latest first), rows `monitor-row-<key>`, 50 a page
-(`monitor-more`), `monitor-next` ("2 need you", N). With Lead Mode on
+(`monitor-more`), `monitor-next` ("2 need you", N). With Leads only on
 (`data.app.leads.on`, the top bar's `top-lead`): no group headings; each
 leader's main session, then its threads' sessions one step in
 (`indent`), "Team leaders and their threads" for the count, and
@@ -2662,7 +2682,7 @@ a `Set` renders only drawn screens). Also read: `data.relay_ui.picks` and
 |---|---|---|---|
 | `monitor_open` | none | direct | Reads the list again and makes Sessions the base view (the sidebar's sandbox's most urgent session selected, its conversation read); an overlay over it closes. The top bar's GUI |
 | `monitor_toggle` | none | direct | GUI (Sessions) or TUI (the terminals), whichever is not the base now; leaving deletes the history subscription |
-| `monitor_refresh` | none | direct | Draws Sessions again (the core runs it when Lead Mode changes) |
+| `monitor_refresh` | none | direct | Draws Sessions again (the core runs it when Leads only changes) |
 | `monitor_expand` | `key` (the session shown), `id` | direct | Unfolds or folds a row of its conversation: a group of steps, a step's output, a long message |
 | `monitor_earlier` | `key` | direct | 60 more rows, then the page before (`GET ...history?before=`) |
 | `monitor_retry` | `key` | direct | Reads its newest page again after a failed read |
@@ -2727,7 +2747,7 @@ The terminals keep running underneath and are not resized (it is drawn
 absolute over them; while an overlay or a base view is drawn, `App::panes_held`,
 a terminal's room has no layout handler, `terminal::pane_held`). When the
 panes show again, each shown terminal is fitted to its rect then: one resize
-for each one whose room changed meanwhile (Lead Mode, pages, Tabs or Grid,
+for each one whose room changed meanwhile (Leads only, pages, Tabs or Grid,
 the sidebar, the window), none for the others; one sized by another window
 whose room did not change stays scaled, unsent. None takes a key, a paste, a press, a drag or the wheel
 while it shows (`App::terminal_may_take_keys` and the panes' handlers);
@@ -2758,14 +2778,17 @@ it goes back to the terminals; Escape never leaves it. The choice is kept
 in the app's state file (`base_view`) and comes back at start, its `open`
 run once the first lists and `data.sessions` are in.
 
-Lead Mode, beside the switch (`top-lead`, "Lead Mode On" purple on its
-tint / "Lead Mode Off" quiet, the `leader` mark; disabled while no team
-runs), is the `team_leads` intent: one state for both views (TUI: only the
-leaders' panes, the layout before back when it goes off; GUI: only their
-sessions). Kept in the state file (`lead_mode`), restored at start when a
-team still runs. `data.app.leads`: `on`, `can`, `leaders`.
+Leads only, beside the switch (`top-lead`, "Leads only: on" purple on its
+tint, "Leads only: off" quiet, the `leader` mark; disabled while no session
+leads), is the `team_leads` intent, a view filter only (it never calls the
+daemon; "lead mode" is a session's own state, the pane bar's name pill):
+one state for both views (TUI: only the leaders' panes, the layout before
+back when it goes off; GUI: only their sessions). A leader is a session
+whose lead state is `leading` (`model::leading`). Kept in the state file
+under its old key (`lead_mode`, so older files still load), restored at
+start when a session still leads. `data.app.leads`: `on`, `can`, `leaders`.
 
-The Kanban, after Lead Mode (`top-kanban`, the same pill: height, radius,
+The Kanban, after Leads only (`top-kanban`, the same pill: height, radius,
 8 pt gap; the `kanban` mark; "Kanban", its icon alone in a compact bar with
 the words in its tooltip), is `kanban_toggle` (also ⌃⌥K / Alt+K and the
 palette's "Show the Kanban"). Quiet at rest; lit (purple on its tint) only

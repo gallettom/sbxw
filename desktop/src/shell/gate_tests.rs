@@ -650,7 +650,7 @@ fn without_voice_f9_stays_the_programs_key() {
 /// Sessions (the base view) has no head band: both columns start at the
 /// panel's padding under its top edge, and nothing is drawn for a head row
 /// or a close cross. Another overlay (Files) keeps its head with title and
-/// close. The same with Lead Mode on.
+/// close. The same with Leads only on.
 #[test]
 fn sessions_has_no_head_band_and_files_keeps_its_head() {
     for lead in [false, true] {

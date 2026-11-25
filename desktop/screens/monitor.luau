@@ -30,7 +30,7 @@ local function square(data, sb)
 end
 
 -- One line a row: the status dot, the names, a chip and the time. Nested
--- under its leader (Lead Mode), a thread row names the thread alone. Each
+-- under its leader (Leads only), a thread row names the thread alone. Each
 -- name clips on its own (the thread keeps about 8 characters); the whole
 -- activity line is the row's tooltip, and why a session needs the person
 -- stays on the row, under it.
@@ -477,7 +477,7 @@ local screen = {
     if leads and #v.rows == 0 then
       rows[#rows + 1] = column{ key = "monitor-leads-empty", gap = 4, px = 8, py = 12, w = "full",
         text{ "No team leader is running", weight = "medium", color = "text-bright" },
-        text{ "A sandbox whose lead runs a plan shows here with its threads. Lead Mode Off, in the top bar, shows every session.", size = "sm", color = "text-muted", wrap = true } }
+        text{ "A sandbox whose lead runs a plan shows here with its threads. Turn Leads only off, in the top bar, to show every session.", size = "sm", color = "text-muted", wrap = true } }
     end
     local more = more_rows(v.count, { key = "monitor-more", on = "more", what = "sessions" })
     if more then rows[#rows + 1] = more end

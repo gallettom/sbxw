@@ -3,7 +3,7 @@
 //!
 //! Top: Requests and Network, with their counts as small badges (amber when
 //! something holds on the person). Every entry shows more about sessions
-//! and sandboxes; what changes the view (GUI | TUI, Lead Mode) is the top
+//! and sandboxes; what changes the view (GUI | TUI, Leads only) is the top
 //! bar's (topbar.luau), Tabs | Grid the pager's. New (a sandbox) is under
 //! Files while the sidebar is hidden. Bottom: Jarvis and
 //! Settings (Setup). Each entry runs the intent its old top bar button ran
@@ -548,11 +548,11 @@ mod tests {
         }
     }
 
-    /// The top bar's modes (GUI | TUI, Lead Mode, the Kanban) after the
+    /// The top bar's modes (GUI | TUI, Leads only, the Kanban) after the
     /// mark: as wide as `bar::modes_w` says (the bar's fit counts on it),
     /// icons alone in a narrow window, clear of the macOS window buttons,
     /// and overlapping nothing else of the bar, windowed and full screen,
-    /// Lead Mode on and off, the Kanban shown or not, in GUI and in TUI, in
+    /// Leads only on and off, the Kanban shown or not, in GUI and in TUI, in
     /// both themes.
     #[test]
     fn the_modes_fit_the_top_bar_at_every_width() {
@@ -592,12 +592,12 @@ mod tests {
                         let lead_w = r.rt.presented("top-lead").unwrap().0[2];
                         let k = r.rt.presented("top-kanban").expect("the Kanban button").0;
                         if compact {
-                            assert!(lead_w <= 28.5, "{what}: Lead Mode is its icon alone ({lead_w})");
+                            assert!(lead_w <= 28.5, "{what}: Leads only is its icon alone ({lead_w})");
                             assert!(k[2] <= 28.5, "{what}: the Kanban is its icon alone ({})", k[2]);
                         }
                         let l = r.rt.presented("top-lead").unwrap().0;
-                        assert!(k[0] >= l[0] + l[2] + 8.0 - 0.5 && k[0] + k[2] <= m[0] + m[2] + 0.5, "{what}: the Kanban after Lead Mode, inside the modes: {k:?} {l:?} {m:?}");
-                        assert!((k[3] - l[3]).abs() < 0.5, "{what}: the same height as Lead Mode");
+                        assert!(k[0] >= l[0] + l[2] + 8.0 - 0.5 && k[0] + k[2] <= m[0] + m[2] + 0.5, "{what}: the Kanban after Leads only, inside the modes: {k:?} {l:?} {m:?}");
+                        assert!((k[3] - l[3]).abs() < 0.5, "{what}: the same height as Leads only");
                         assert!(m[0] >= inset + 12.0 - 1.5, "{what}: clear of the window buttons (x {})", m[0]);
                         if let Some((mark, _)) = r.rt.presented("app-mark") {
                             assert!(m[0] >= mark[0] + mark[2], "{what}: after the mark");
@@ -649,7 +649,7 @@ mod tests {
         assert!(typed.iter().all(|n| *n == 0), "nothing typed: {typed:?}");
     }
 
-    /// Lead Mode wears the `leader` mark (a crown over one person) in the
+    /// Leads only wears the `leader` mark (a crown over one person) in the
     /// top bar and the palette, never the team's `people` the
     /// pane bar's Team keeps; it is not a rail entry any more (the rail
     /// shows more, the top bar switches views).
@@ -661,9 +661,9 @@ mod tests {
         assert!(l.top.iter().chain(&l.bottom).all(|e| e.key != "rail-leads" && e.key != "rail-monitor"));
         assert!(crate::icons::exists("leader") && crate::icons::exists("people"));
         assert_ne!(crate::icons::get("leader").unwrap().body, crate::icons::get("people").unwrap().body);
-        assert!(include_str!("palette.rs").contains("hint, \"leader\""), "the palette's Lead Mode uses the mark");
+        assert!(include_str!("palette.rs").contains("hint, \"leader\""), "the palette's Leads only uses the mark");
         assert!(!include_str!("pager.rs").contains("pager-leads"), "one place only: the top bar's toggle, not a pager chip");
-        assert!(include_str!("../../screens/topbar.luau").contains("icon = \"leader\", key = \"top-lead\""), "the top bar's Lead Mode too");
+        assert!(include_str!("../../screens/topbar.luau").contains("icon = \"leader\", key = \"top-lead\""), "the top bar's Leads only too");
     }
 
     /// Zones in order (activity, browse; then configure with Settings last,

@@ -711,6 +711,9 @@ fn each_lead_state_draws_its_own_pill() {
     seen.sort();
     seen.dedup();
     assert_eq!(seen.len(), 4, "four looks, four texts");
+    // A fallback kept for two minutes (state off, its reason) draws as off.
+    d["lead_states"] = json!({ "web-app": { "state": "off", "since_ms": 2, "reason": "no confirmation in time" } });
+    assert_eq!((lead_pill(&d).label.as_str(), model::lead_state(&d, "web-app")), (TEAM_OFF, "off"));
     // The in-between states say what they wait for.
     d["lead_states"] = json!({ "web-app": { "state": "waiting" } });
     assert!(lead_pill(&d).help.contains("busy: lead mode starts when it is idle"));

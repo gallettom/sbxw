@@ -218,7 +218,7 @@ impl App {
     /// Why the current page cannot move to its own window now (None: it can).
     pub(super) fn page_movable(&self) -> Option<String> {
         if self.leads.is_some() {
-            return Some("Not in Lead Mode: turn it off first".into());
+            return Some("Not with Leads only on: turn it off first".into());
         }
         if !self.shown().any(|k| self.panes[k].sandbox.is_some()) {
             return Some("This page shows no terminal".into());

@@ -35,7 +35,7 @@ events. The app does the same:
   features read their own keys again on the events they name (`feat::Data::on`);
 - on `thread-closed` `{sandbox, thread}` (a thread closed for good, by either
   client, a plan merge, or the chat dock): the threads feature closes that
-  thread's panes (on every page, and the ones Lead Mode parks), reads
+  thread's panes (on every page, and the ones Leads only parks), reads
   `threads` and `sessions` again, and says so in a notice unless this app
   asked for the close. A thread the app never showed is ignored; a pane
   closed alone sends nothing;

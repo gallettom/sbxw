@@ -68,7 +68,7 @@ pub const INTENTS: &[Spec] = &[
     d("monitor_open", &[], "Makes Sessions the base view of the pane area (instead of the terminals): every session, who needs you first, read again from the daemon's list. An overlay over it closes."),
     d("monitor_toggle", &[], "Switches the pane area between the Terminals and Sessions."),
     d("monitor_select", &[("key", Arg::Str, true)], "Shows that session (a row's `key`) in the middle. View state only."),
-    d("monitor_refresh", &[], "Draws Sessions again from what the app knows (the core runs it when Lead Mode changes). View state only."),
+    d("monitor_refresh", &[], "Draws Sessions again from what the app knows (the core runs it when Leads only changes). View state only."),
     d("monitor_expand", &[("key", Arg::Str, true), ("id", Arg::Str, true)], "Unfolds or folds again one row of the shown session's conversation (a group of steps, a step's result, a long message). View state only."),
     d("monitor_earlier", &[("key", Arg::Str, true)], "Shows earlier parts of the shown session's conversation (reads the older page when needed)."),
     d("monitor_retry", &[("key", Arg::Str, true)], "Reads the shown session's conversation again after a failed read."),

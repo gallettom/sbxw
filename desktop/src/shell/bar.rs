@@ -508,8 +508,8 @@ pub fn modes_w(compact: bool, lead_on: bool) -> f32 {
 }
 
 /// Leads only's words (topbar.luau draws the same).
-pub const LEAD_ON: &str = "Leads only";
-pub const LEAD_OFF: &str = "Leads only";
+pub const LEAD_ON: &str = "Leads only: on";
+pub const LEAD_OFF: &str = "Leads only: off";
 /// The Kanban button's word (topbar.luau draws the same).
 pub const KANBAN: &str = "Kanban";
 

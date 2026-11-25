@@ -2,7 +2,7 @@
 //! drawn over the panes (the base view, an overlay) no terminal is resized;
 //! when they show again, each shown terminal ends with the size its rect
 //! allows, with one resize for each one whose size changed and none for the
-//! others, whatever changed meanwhile (Lead Mode, pages, Tabs or Grid, the
+//! others, whatever changed meanwhile (Leads only, pages, Tabs or Grid, the
 //! sidebar, the window).
 
 use super::layout_tests::Rig;
@@ -79,7 +79,7 @@ fn changed(r: &Rig, before: &HashMap<Uid, (usize, usize)>) -> Vec<Uid> {
     sizes(r).into_iter().filter(|(u, z)| before.get(u) != Some(z)).map(|(u, _)| u).collect()
 }
 
-/// The user's report: TUI with four terminals, GUI, Lead Mode on, TUI: the
+/// The user's report: TUI with four terminals, GUI, Leads only on, TUI: the
 /// leader's pane fills the area, and its terminal must too.
 #[test]
 fn lead_mode_turned_on_in_gui_fills_the_leader_s_pane_back_in_tui() {
@@ -93,7 +93,7 @@ fn lead_mode_turned_on_in_gui_fills_the_leader_s_pane_back_in_tui() {
     tap(&mut r.rt, "top-lead");
     settle(&mut r);
     assert!(r.rt.state.leads_on());
-    one_each(&mut r, &[], "Lead Mode on under GUI");
+    one_each(&mut r, &[], "Leads only on under GUI");
     tap(&mut r.rt, "top-view-tui");
     settle(&mut r);
     assert_eq!(shown(&r), vec![a]);
@@ -102,7 +102,7 @@ fn lead_mode_turned_on_in_gui_fills_the_leader_s_pane_back_in_tui() {
     one_each(&mut r, &[a], "back in TUI");
 }
 
-/// Lead Mode off again in GUI, then TUI: the four panes come back in their
+/// Leads only off again in GUI, then TUI: the four panes come back in their
 /// grid, each terminal at its size; the leader's shrinks back with one
 /// resize, the parked ones never changed and send none.
 #[test]
@@ -118,7 +118,7 @@ fn lead_mode_turned_off_in_gui_puts_every_terminal_back_at_its_size() {
     tap(&mut r.rt, "top-lead");
     settle(&mut r);
     assert!(!r.rt.state.leads_on());
-    one_each(&mut r, &[], "Lead Mode off under GUI");
+    one_each(&mut r, &[], "Leads only off under GUI");
     tap(&mut r.rt, "top-view-tui");
     settle(&mut r);
     assert_eq!(shown(&r).len(), 4);
@@ -127,7 +127,7 @@ fn lead_mode_turned_off_in_gui_puts_every_terminal_back_at_its_size() {
     one_each(&mut r, &[a], "the grid back");
 }
 
-/// Lead Mode in TUI directly (already right before the fix): one resize
+/// Leads only in TUI directly (already right before the fix): one resize
 /// for the leader each way, none for the others.
 #[test]
 fn lead_mode_toggled_in_tui_resizes_the_leader_once_each_way() {
@@ -135,12 +135,12 @@ fn lead_mode_toggled_in_tui_resizes_the_leader_once_each_way() {
     let a = r.rt.state.panes[0].uid;
     tap(&mut r.rt, "top-lead");
     settle(&mut r);
-    all_fit(&r, "Lead Mode on in TUI");
-    one_each(&mut r, &[a], "Lead Mode on in TUI");
+    all_fit(&r, "Leads only on in TUI");
+    one_each(&mut r, &[a], "Leads only on in TUI");
     tap(&mut r.rt, "top-lead");
     settle(&mut r);
-    all_fit(&r, "Lead Mode off in TUI");
-    one_each(&mut r, &[a], "Lead Mode off in TUI");
+    all_fit(&r, "Leads only off in TUI");
+    one_each(&mut r, &[a], "Leads only off in TUI");
 }
 
 /// Pages and Tabs | Grid changed while Sessions is drawn (from the
@@ -233,9 +233,9 @@ fn the_sidebar_hidden_under_gui_fits_back_in_tui() {
     one_each(&mut r, &ids, "sidebar hidden under GUI, then TUI");
 }
 
-/// An overlay (Files) over the terminals while Lead Mode is turned on from
+/// An overlay (Files) over the terminals while Leads only is turned on from
 /// the top bar: nothing resizes under Files; closing it fits the leader.
-/// Then Lead Mode off under Files, closed: the grid back at its sizes.
+/// Then Leads only off under Files, closed: the grid back at its sizes.
 #[test]
 fn lead_mode_toggled_under_an_overlay_fits_once_it_closes() {
     let mut r = rig();
@@ -247,7 +247,7 @@ fn lead_mode_toggled_under_an_overlay_fits_once_it_closes() {
     tap(&mut r.rt, "top-lead");
     settle(&mut r);
     assert!(r.rt.state.leads_on());
-    one_each(&mut r, &[], "Lead Mode on under Files");
+    one_each(&mut r, &[], "Leads only on under Files");
     r.rt.key(KeyEvent { key: rune::Key::Escape, mods: rune::Mods::default() });
     settle(&mut r);
     assert!(r.rt.state.feats.overlay.is_none());
@@ -257,7 +257,7 @@ fn lead_mode_toggled_under_an_overlay_fits_once_it_closes() {
     settle(&mut r);
     tap(&mut r.rt, "top-lead");
     settle(&mut r);
-    one_each(&mut r, &[], "Lead Mode off under Files");
+    one_each(&mut r, &[], "Leads only off under Files");
     tap(&mut r.rt, "overlay-close");
     settle(&mut r);
     all_fit(&r, "Files closed again");
@@ -265,7 +265,7 @@ fn lead_mode_toggled_under_an_overlay_fits_once_it_closes() {
     one_each(&mut r, &[a], "Files closed again");
 }
 
-/// A restart that restores GUI with Lead Mode on: the terminals are not
+/// A restart that restores GUI with Leads only on: the terminals are not
 /// fitted under Sessions, and TUI fits the leader's to the whole area.
 #[test]
 fn a_restart_in_gui_with_lead_mode_on_fits_the_leader_in_tui() {
@@ -280,7 +280,7 @@ fn a_restart_in_gui_with_lead_mode_on_fits_the_leader_in_tui() {
         s.feats.data.entry("sessions").or_insert(serde_json::json!([]));
     });
     settle(&mut r);
-    assert!(r.rt.state.leads_on() && r.rt.state.feats.base.as_deref() == Some("monitor"), "GUI with Lead Mode on, as kept");
+    assert!(r.rt.state.leads_on() && r.rt.state.feats.base.as_deref() == Some("monitor"), "GUI with Leads only on, as kept");
     one_each(&mut r, &[], "restored under GUI");
     tap(&mut r.rt, "top-view-tui");
     settle(&mut r);
