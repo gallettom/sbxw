@@ -51,6 +51,23 @@ const SETTLE_MS: u64 = 2_000;
 /// How often the waiting inboxes are looked at without a reason to.
 const TICK: Duration = Duration::from_secs(15);
 
+/// A session still on an old hook this long after its refresh is not
+/// running the new one: the person is told.
+const STILL_OLD_MS: u64 = 60_000;
+
+/// Each sandbox's hook refresh for its inbox, by (state file, sandbox).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Refresh {
+    Running,
+    Done(u64),
+    Warned,
+}
+
+fn refreshes() -> &'static std::sync::Mutex<std::collections::HashMap<(PathBuf, String), Refresh>> {
+    static R: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(PathBuf, String), Refresh>>> = std::sync::OnceLock::new();
+    R.get_or_init(Default::default)
+}
+
 /// What the daemon knows of a recipient's hook, from its latest event.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Seen {
@@ -189,7 +206,7 @@ impl App {
     /// Every hook event, before its answer: what the recipient's hook is and
     /// when it last spoke (for the nudge), and a `read_team_notes` call that
     /// came back (the notes it handed are read: svc::team).
-    pub(crate) fn inbox_hook_seen(&self, sandbox: &SandboxRef, ev: &Value) {
+    pub(crate) fn inbox_hook_seen(self: &Arc<Self>, sandbox: &SandboxRef, ev: &Value) {
         let Some(to) = self.inbox_recipient(sandbox, ev) else { return };
         let version = HookEvent::new(ev).hook_version();
         {
@@ -197,6 +214,9 @@ impl App {
             let s = seen.entry((sandbox.to_string(), to.clone())).or_default();
             s.hook_version = version;
             s.event_ms = now_ms();
+        }
+        if version < MIN_HOOK_VERSION {
+            self.inbox_old_hook(sandbox, &to, true);
         }
         if ev["hook_event_name"] == "PostToolUse" && ev["tool_name"].as_str().is_some_and(|t| t.ends_with("read_team_notes")) {
             self.team_notes_handed(sandbox, &to);
@@ -289,7 +309,13 @@ impl App {
             let Ok(sandbox) = SandboxRef::parse(&sb) else { continue };
             let seen = self.inbox_seen.lock().unwrap().get(&(sb.clone(), to.clone())).cloned();
             match &seen {
-                Some(s) if s.hook_version < MIN_HOOK_VERSION && s.event_ms > 0 => continue,
+                // An old hook: refreshed first. Once refreshed, the script on
+                // disk is the new one, so the fixed line may start the turn
+                // whose hook (v5 now) carries the messages.
+                Some(s) if s.hook_version < MIN_HOOK_VERSION && s.event_ms > 0 && !self.inbox_refreshed(&sandbox) => {
+                    self.inbox_old_hook(&sandbox, &to, false);
+                    continue;
+                }
                 Some(s) if now.saturating_sub(s.nudged_ms) < NUDGE_EVERY_MS => continue,
                 Some(s) if now.saturating_sub(s.event_ms) < SETTLE_MS => continue,
                 _ => {}
@@ -304,6 +330,104 @@ impl App {
                     tracing::warn!("inbox: could not type the fixed line into the {to} of '{sandbox}': {e}");
                 }
             });
+        }
+    }
+
+    /// `to` of `sandbox` reported a status hook too old to print an inbox
+    /// (installed before v5: every sandbox created before this daemon,
+    /// until its tooling is refreshed). With messages waiting, sbxw
+    /// reinstalls the sandbox's agent token, status hooks and relay once
+    /// ([`App::inbox_refresh_hooks`]): Claude Code runs the hook script by
+    /// its path at every event, so the new one prints at the session's next
+    /// event, with no restart. If the refresh fails, or the session still
+    /// reports an old hook [`STILL_OLD_MS`] after it, the person is told
+    /// once, on the Board and in the log, that the sandbox needs `sbxw up`;
+    /// the messages stay for its next start. Never typed.
+    ///
+    /// `from_event`: called on an event of that session, the only proof it
+    /// still runs the old hook (an idle session sends none after a refresh).
+    pub(crate) fn inbox_old_hook(self: &Arc<Self>, sandbox: &SandboxRef, to: &To, from_event: bool) {
+        let sb = sandbox.to_string();
+        if self.inbox.lock().unwrap().pending(&sb, to).is_empty() {
+            return;
+        }
+        let key = (self.inbox_file(), sb.clone());
+        let now = now_ms();
+        let warn = {
+            let mut all = refreshes().lock().unwrap();
+            match all.get(&key).copied() {
+                None => {
+                    all.insert(key.clone(), Refresh::Running);
+                    None
+                }
+                Some(Refresh::Done(at)) if from_event && now.saturating_sub(at) >= STILL_OLD_MS => {
+                    all.insert(key.clone(), Refresh::Warned);
+                    Some("its status hook was refreshed but its session still runs the old one".to_string())
+                }
+                Some(_) => return,
+            }
+        };
+        if let Some(why) = warn {
+            self.inbox_warn_old_hook(sandbox, &why);
+            return;
+        }
+        tracing::info!("inbox: the {to} of '{sb}' runs a status hook older than v{MIN_HOOK_VERSION} with messages waiting: refreshing its hooks");
+        let app = self.clone();
+        let sandbox = sandbox.clone();
+        tokio::spawn(async move {
+            let res = app.inbox_refresh_hooks(&sandbox).await;
+            let mut all = refreshes().lock().unwrap();
+            match res {
+                Ok(()) => {
+                    tracing::info!("inbox: refreshed the status hooks of '{sandbox}': its next event prints its inbox");
+                    all.insert(key, Refresh::Done(now_ms()));
+                }
+                Err(e) => {
+                    all.insert(key, Refresh::Warned);
+                    drop(all);
+                    app.inbox_warn_old_hook(&sandbox, &format!("refreshing its status hooks failed ({e})"));
+                }
+            }
+        });
+    }
+
+    /// Whether this sandbox's hooks were refreshed for its inbox.
+    pub(crate) fn inbox_refreshed(&self, sandbox: &SandboxRef) -> bool {
+        matches!(refreshes().lock().unwrap().get(&(self.inbox_file(), sandbox.to_string())), Some(Refresh::Done(_)))
+    }
+
+    /// Tests: a refresh that ended `ago_ms` ago.
+    #[cfg(test)]
+    pub(crate) fn inbox_refresh_age(&self, sandbox: &SandboxRef, ago_ms: u64) {
+        let mut all = refreshes().lock().unwrap();
+        if let Some(Refresh::Done(at)) = all.get_mut(&(self.inbox_file(), sandbox.to_string())) {
+            *at = at.saturating_sub(ago_ms);
+        }
+    }
+
+    /// Reinstall the agent token, the status hooks and the relay in
+    /// `sandbox`: the pieces of a bring-up that carry the inbox (as
+    /// `lead_install` does for `/lead`).
+    pub(crate) async fn inbox_refresh_hooks(&self, sandbox: &SandboxRef) -> Result<(), String> {
+        use sbxw_core::tooling::Tooling;
+        let token = self.store.token(sandbox).map_err(|e| format!("{e:#}"))?;
+        let port = self.agent_port_for(sandbox).await.map_err(|e| format!("{e:#}"))?;
+        let batch = Tooling::new().agent_token(&token).status_hooks(&port).relay(&port);
+        let outcome = self.sbx_of(sandbox).await?.tooling(&sandbox.name, &batch).await.map_err(|e| format!("{e:#}"))?;
+        match outcome.failed.first() {
+            Some((piece, e)) => Err(format!("{piece}: {e}")),
+            None => Ok(()),
+        }
+    }
+
+    /// Told once per sandbox: its messages wait, and why.
+    fn inbox_warn_old_hook(&self, sandbox: &SandboxRef, why: &str) {
+        let text = format!(
+            "Messages from sbxw wait for the agents of '{sandbox}', but {why}. Run `sbxw up {sandbox}` to reinstall its hooks;              the messages are kept and given at the next start of each session."
+        );
+        tracing::warn!("inbox: {text}");
+        if let Err(e) = self.board_note(&sandbox.to_string(), None, "sbxw", sbxw_core::board::Kind::Warning, &text, None, &[]) {
+            tracing::warn!("inbox: could not post the warning for '{sandbox}' on its board: {e}");
         }
     }
 

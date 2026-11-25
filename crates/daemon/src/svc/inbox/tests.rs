@@ -341,3 +341,81 @@ async fn the_hook_route_answers_the_inbox_and_its_ack_route_takes_it_out() {
     let (_, v) = agent_post(&app, "inboxapp", "/api/hook", ev(Some("a"), "PreToolUse")).await;
     assert_eq!(v, json!({}));
 }
+
+fn old(t: &str, name: &str) -> Value {
+    let mut e = ev(Some(t), name);
+    e["hook_version"] = 4.into();
+    e
+}
+
+fn warnings(app: &Arc<App>, sb: &SandboxRef) -> Vec<String> {
+    app.with_board_read(&sb.to_string())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e.kind == sbxw_core::board::Kind::Warning && e.by == "sbxw")
+        .map(|e| e.text.unwrap_or_default())
+        .collect()
+}
+
+fn hook_refreshes(fake: &sbxw_sbx::runner::Fake) -> usize {
+    fake.stdins.lock().unwrap().iter().filter(|s| String::from_utf8_lossy(s).contains("const HOOK_VERSION = 5;")).count()
+}
+
+#[tokio::test]
+async fn an_old_hook_with_messages_waiting_is_refreshed_then_its_next_event_gets_them() {
+    let (_d, app, fake) = crate::testing::app_with(crate::testing::sbx_answer);
+    let sb = SandboxRef::parse("inboxold").unwrap();
+    // Nothing waits: an old hook alone refreshes nothing.
+    hook(&app, &sb, &old("a", "PostToolUse"));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(hook_refreshes(&fake), 0);
+    app.deliver(&sb, &thread("a"), Kind::TeamNote, "team note 1 from lead", "Hello a.", None).unwrap();
+    let e = old("a", "PostToolUse");
+    hook(&app, &sb, &e);
+    assert!(app.inbox_offer(&sb, &e, BUDGET).is_none(), "the old hook would print the ack part");
+    assert!(until(|| hook_refreshes(&fake) == 1).await, "its status hooks are reinstalled");
+    assert!(until(|| app.inbox_refreshed(&sb)).await);
+    // An event of the old script still in flight: no second refresh, no warning.
+    hook(&app, &sb, &old("a", "PostToolUse"));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(hook_refreshes(&fake), 1);
+    assert!(warnings(&app, &sb).is_empty());
+    // The next event runs the new script: delivered.
+    let v = answer(&app, &sb, &ev(Some("a"), "PostToolUse"));
+    assert!(context(&v).contains("Hello a."), "{v}");
+    // Another sandbox where the session keeps the old one after its refresh:
+    // the person is told once.
+    let sb2 = SandboxRef::parse("inboxold2").unwrap();
+    app.deliver(&sb2, &thread("a"), Kind::Notice, "sbxw", "x", None).unwrap();
+    hook(&app, &sb2, &old("a", "Stop"));
+    assert!(until(|| app.inbox_refreshed(&sb2)).await);
+    app.inbox_refresh_age(&sb2, 61_000);
+    hook(&app, &sb2, &old("a", "PostToolUse"));
+    hook(&app, &sb2, &old("a", "PostToolUse"));
+    let w = warnings(&app, &sb2);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].contains("sbxw up inboxold2") && w[0].contains("still runs the old one"), "{}", w[0]);
+    assert_eq!(app.inbox.lock().unwrap().pending("inboxold2", &To::Thread("a".into())).len(), 1, "kept for its next start");
+}
+
+#[tokio::test]
+async fn a_refresh_that_fails_tells_the_person_once_and_keeps_the_messages() {
+    let (_d, app, fake) = crate::testing::app_with(|a: &[String]| match a.first().map(String::as_str) {
+        Some("exec") if a.iter().any(|x| x == "node") => sbxw_sbx::runner::Output::ok("SBXW-TOOLING [[\"status-hooks\",\"EACCES: permission denied\"]]\n"),
+        _ => crate::testing::sbx_answer(a),
+    });
+    let sb = SandboxRef::parse("inboxfail").unwrap();
+    app.deliver(&sb, &SessionKind::Agent, Kind::Merge, "sbxw", "Merged.", None).unwrap();
+    let mut e = ev(None, "PostToolUse");
+    e["hook_version"] = 4.into();
+    hook(&app, &sb, &e);
+    assert!(until(|| !warnings(&app, &sb).is_empty()).await, "told");
+    let w = warnings(&app, &sb);
+    assert!(w[0].contains("sbxw up inboxfail") && w[0].contains("EACCES"), "{}", w[0]);
+    hook(&app, &sb, &e);
+    hook(&app, &sb, &e);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(warnings(&app, &sb).len(), 1, "once");
+    assert_eq!(hook_refreshes(&fake), 1, "not retried at every event");
+    assert_eq!(app.inbox.lock().unwrap().pending("inboxfail", &To::Main).len(), 1);
+}
