@@ -330,13 +330,14 @@ env_files = []
 # `retries = 1` runs a failed suite once more; the result says it was retried.
 # Tables: write them after every bare key of the file. Read at `sbxw up`.
 #
-# sbxw's own repository declares these four (scripts/run-suite.sh); paste them
-# into your sbxw.toml without the leading `# `:
+# sbxw's own repository declares these four (scripts/run-suite.sh, which skips
+# the tests listed in tests/quarantine.txt, so both are among the paths); paste
+# them into your sbxw.toml without the leading `# `:
 #
 # [[tests]]
 # name = "crates"
 # command = "scripts/run-suite.sh crates"
-# paths = ["crates", "assets", "Cargo.toml", "Cargo.lock", "scripts/run-suite.sh"]
+# paths = ["crates", "assets", "Cargo.toml", "Cargo.lock", "scripts/run-suite.sh", "scripts/quarantine.mjs", "tests/quarantine.txt"]
 # timeout_minutes = 60
 # retries = 1
 # version_cmd = "rustc --version"
@@ -344,7 +345,7 @@ env_files = []
 # [[tests]]
 # name = "js"
 # command = "scripts/run-suite.sh js"
-# paths = ["assets", "tests/js", "scripts/run-suite.sh"]
+# paths = ["assets", "tests/js", "scripts/run-suite.sh", "scripts/quarantine.mjs", "tests/quarantine.txt"]
 # timeout_minutes = 15
 # retries = 1
 # version_cmd = "node --version"
@@ -352,7 +353,7 @@ env_files = []
 # [[tests]]
 # name = "desktop"
 # command = "scripts/run-suite.sh desktop"
-# paths = ["desktop", "scripts/run-suite.sh"]
+# paths = ["desktop", "scripts/run-suite.sh", "scripts/quarantine.mjs", "tests/quarantine.txt"]
 # timeout_minutes = 120
 # retries = 1
 # version_cmd = "cd desktop && rustc --version"
