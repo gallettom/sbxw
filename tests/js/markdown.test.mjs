@@ -167,7 +167,7 @@ test('outline: buttons for the headings, found again from an anchor', () => {
 // ── The repository's own docs ──
 
 test('docs/security.md and docs/web-ui.md render whole', () => {
-  for (const [file, headings, tables] of [['docs/security.md', 33, 5], ['docs/web-ui.md', 22, null]]) {
+  for (const [file, headings, tables] of [['docs/security.md', 33, 5], ['docs/web-ui.md', 23, null]]) {
     const src = read(file);
     const r = mdRender(src, { base: '/work/docs' });
     const atx = src.split('\n').filter((l, i, all) => /^#{1,6} /.test(l)
