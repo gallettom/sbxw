@@ -1175,6 +1175,7 @@ impl App {
                 self.memory_report(l);
             } else {
                 log::info!("perf: ---- {}", m.strip_prefix("perf:").unwrap_or(&m));
+                log::info!("{}", self.layout_line());
             }
         }
         if std::mem::take(&mut self.copy_accept) {
@@ -1195,7 +1196,12 @@ impl App {
         }
         while self.marks.first().is_some_and(|(t, _)| *t <= clock) {
             match self.marks.remove(0).1 {
-                Mark::Perf(l) => log::info!("perf: ---- {l}"),
+                Mark::Perf(l) => {
+                    log::info!("perf: ---- {l}");
+                    if crate::perf::counting() {
+                        log::info!("{}", self.layout_line());
+                    }
+                }
                 Mark::Mem(l) => self.memory_report(&l),
                 Mark::Hold(ms) => {
                     log::info!("hold {ms} ms at {clock:.2}s");

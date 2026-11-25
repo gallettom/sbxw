@@ -35,9 +35,15 @@ for line in open(log, errors="replace"):
         cur["rows"]["RSS after trim"] = float(m.group(1)); continue
     m = re.search(r"mem: \| (.*?) \| (\S+) \| (.*)$", line)
     if m:
-        cur["rows"][m.group(1)] = float(m.group(2))
+        # An indented name is a part of the line above it; "-": not readable.
+        name = m.group(1)
+        cur["rows"][name] = None if m.group(2) == "-" else float(m.group(2))
         if m.group(3).strip():
-            cur["rows"].setdefault("_notes", {})[m.group(1)] = m.group(3).strip()
+            cur["rows"].setdefault("_notes", {})[name] = m.group(3).strip()
+        continue
+    m = re.search(r"mem: sum of owners (\S+) MB, rest (\S+) MB, heap live (\S+) MB", line)
+    if m:
+        cur["sum"] = [None if v == "-" else float(v) for v in m.groups()]
 
 if not marks:
     print("no mem: lines in", log, file=sys.stderr)
@@ -60,13 +66,13 @@ for k in order:
     print("| " + k.ljust(w) + " | " + " | ".join(cells) + " |")
 print()
 # The terminals as they were at the "terminals" mark (else the last mark with any).
-withterms = [mk for mk in marks if any(k.startswith("terminal ") for k in mk["rows"].get("_notes", {}))]
+withterms = [mk for mk in marks if any(k.strip().startswith("terminal ") for k in mk["rows"].get("_notes", {}))]
 pick = next((mk for mk in marks if mk["label"] == "terminals"), withterms[-1] if withterms else None)
 if pick:
     print(f"terminals at \"{pick['label']}\":")
     for k, v in pick["rows"].get("_notes", {}).items():
-        if k.startswith("terminal "):
-            print(f"  {k}: {v}")
+        if k.strip().startswith("terminal "):
+            print(f"  {k.strip()}: {v}")
 
 if "--json" in opt:
     json.dump(marks, open(opt["--json"], "w"), indent=1)

@@ -36,11 +36,29 @@ impl App {
         self.memory_report(&format!("{} s", now.duration_since(start).as_secs()));
     }
 
+    /// What the memory audit's estimates depend on, one line: the app's
+    /// version, the pane area, the panes, their pages and columns.
+    pub(crate) fn layout_line(&self) -> String {
+        let area = self.rects.area.map_or("unknown".to_string(), |r| format!("{:.0}x{:.0} pt", r[2], r[3]));
+        let shown = self.shown();
+        let sizes: Vec<String> = self.panes.iter().enumerate().filter_map(|(i, p)| p.term.as_ref().map(|t| format!("{}x{}{}", t.size.0, t.size.1, if shown.contains(&i) { "" } else { " hidden" }))).collect();
+        format!(
+            "perf: layout version {} pane area {area}, {} panes on {} pages (page {} shown), {} page windows, terminals (cols x rows) [{}]",
+            env!("CARGO_PKG_VERSION"),
+            self.panes.iter().filter(|p| p.term.is_some()).count(),
+            self.pages.list.len(),
+            self.pages.current + 1,
+            self.windowed.len(),
+            sizes.join(", ")
+        )
+    }
+
     /// Logs the report under `label`.
     pub(crate) fn memory_report(&self, label: &str) {
         let (rss, hwm) = mem::rss();
         let r = self.memory_lines(mem::live());
         log::info!("mem: ==== {label}");
+        log::info!("{}", self.layout_line());
         // MEM_TRIM=1: the resident size once the allocator gave back what it keeps.
         if std::env::var_os("MEM_TRIM").is_some() {
             mem::trim();
