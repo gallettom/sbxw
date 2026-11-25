@@ -425,3 +425,42 @@ async fn the_plan_a_request_runs_under_is_the_callers() {
     assert_eq!(r.app.tests_plan(&r.sb, None, Some(&api)).unwrap().id, api);
     assert!(r.app.tests_plan(&r.sb, None, None).is_some());
 }
+
+/// The plan dialog's Approve: the proposed command is approved with the
+/// plan, unless the person cleared it, and then `run_tests` is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_dialog_approves_the_command_or_clears_it() {
+    use tower::ServiceExt;
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    for (thread, clear) in [("kept", false), ("dropped", true)] {
+        let id = format!("p-{thread}");
+        {
+            let mut b = r.app.plans.lock().unwrap();
+            b.propose(id.clone(), &r.sb.to_string(), "s", vec![t(thread)], Variant::Split, "one", Some("lead"), 1).unwrap();
+            b.note_proposed_tests(&id, PlanTests::proposed(Some("echo ok"), None).unwrap());
+        }
+        assert!(r.app.plan(&id).unwrap().approved_tests.is_none(), "not before the approval");
+        let body = serde_json::json!({ "threads": [t(thread)], "clear_tests": clear });
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/api/plans/{id}/approve"))
+            .header("host", "127.0.0.1:7681")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        let res = crate::testing::signed_in(r.app.clone()).oneshot(req).await.unwrap();
+        assert!(res.status().is_success(), "{}", res.status());
+        let plan = r.app.plan(&id).unwrap();
+        assert_eq!(plan.approved_tests.is_some(), !clear, "{thread}");
+        let asked = r.app.tests_request(&r.sb, r.ask(&name(thread), "HEAD")).await;
+        if clear {
+            assert!(asked.unwrap_err().contains("no test command"));
+            assert!(plan.tests_not_approved.unwrap().contains("cleared"));
+        } else {
+            assert!(asked.is_ok());
+        }
+    }
+}
