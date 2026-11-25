@@ -106,7 +106,7 @@ impl App {
         // holds too: an outcome is either seen here or owed to this wait.
         let current = {
             let mut parked = self.relay_waiters.lock().unwrap();
-            let current = self.relay.lock().unwrap().check_asker(id, &from.to_string())?.clone();
+            let current = self.relay.lock().unwrap().check_asker(id, &from.to_string(), None)?.clone();
             if current.state.is_final() {
                 return Ok(current);
             }
@@ -198,7 +198,7 @@ impl App {
             messages::relay_notice(&req),
             Some(Box::new(move |e: String| {
                 let why = format!("could not reach '{target}': {e} — try another sandbox");
-                if let Ok(r) = app.relay.lock().unwrap().unroute(&rid, &why, now_ms()) {
+                if let Ok(r) = app.relay.lock().unwrap().unroute(&rid, &target.to_string(), &why, now_ms()) {
                     app.send(Event::Relay(r));
                 }
             })),
