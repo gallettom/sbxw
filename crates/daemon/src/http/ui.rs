@@ -1461,10 +1461,15 @@ struct ApproveBody {
     /// The dialog's choice; the proposal's when absent.
     #[serde(default)]
     variant: Option<Variant>,
+    /// The person cleared the proposed test command in the dialog: the plan
+    /// is approved without one. The command itself is never sent here.
+    #[serde(default)]
+    clear_tests: bool,
 }
 
 async fn plan_approve(State(app): S, Path(id): Path<String>, Json(b): Json<ApproveBody>) -> ApiResult {
-    let plan = app.plan_approve(&id, b.threads, b.variant).await?;
+    let tests = if b.clear_tests { sbxw_core::plans::TestsChoice::Clear } else { sbxw_core::plans::TestsChoice::Approve };
+    let plan = app.plan_approve(&id, b.threads, b.variant, tests).await?;
     Ok(ok_with(json!({ "plan": plan })))
 }
 
