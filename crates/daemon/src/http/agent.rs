@@ -44,6 +44,9 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/plans/report", post(report))
         .route("/api/plans/mark_done", post(mark_done))
         .route("/api/lead/ack", post(lead_ack))
+        .route("/api/tests/run", post(tests_run))
+        .route("/api/tests/check", post(tests_check))
+        .route("/api/tests/list", post(tests_list))
         .route("/api/sandboxes/:name/codemap/done", post(codemap_done))
         .merge(super::board::agent_routes())
         .merge(super::jarvis::agent_routes())
@@ -215,15 +218,72 @@ struct ProposeBody {
     justification: String,
     #[serde(default)]
     lead: Option<String>,
+    /// A declared test suite, the team's (see `svc::testq`).
+    #[serde(default)]
+    team_suite: Option<String>,
     #[serde(default)]
     timeout: Option<u64>,
 }
 
 async fn propose(State(app): S, Agent(me): Agent, Json(b): Json<ProposeBody>) -> ApiResult {
     app.require_leading(&me, None)?;
-    let plan = app.plan_propose(&me, &b.summary, b.threads, b.variant, &b.justification, b.lead.as_deref()).await?;
+    let plan = app
+        .plan_propose_with_suite(&me, &b.summary, b.threads, b.variant, &b.justification, b.lead.as_deref(), b.team_suite.as_deref())
+        .await?;
     let plan = app.plan_wait(&plan.id, &me, wait_bound(b.timeout)).await?;
     Ok(ok_with(json!({ "plan": app.plan_view(&plan), "ticket_notes": app.ticket_link_notes(&plan) })))
+}
+
+/// `run_tests`: a suite by name (empty: the team suite) and a ref (empty:
+/// the team's code, or `head`, the caller's HEAD). Never a command.
+#[derive(Deserialize)]
+struct TestsRunBody {
+    #[serde(default)]
+    thread: Option<String>,
+    #[serde(default)]
+    suite: Option<String>,
+    #[serde(default, rename = "ref")]
+    git_ref: Option<String>,
+    #[serde(default)]
+    head: Option<String>,
+    #[serde(default)]
+    plan: Option<String>,
+    #[serde(default)]
+    rerun: bool,
+    #[serde(default)]
+    timeout: Option<u64>,
+}
+
+async fn tests_run(State(app): S, Agent(me): Agent, Json(b): Json<TestsRunBody>) -> ApiResult {
+    let thread = thread_of(b.thread)?;
+    let ask = crate::svc::testq::TestAsk {
+        thread: thread.as_ref(),
+        suite: b.suite.as_deref(),
+        git_ref: b.git_ref.as_deref(),
+        head: b.head.as_deref(),
+        plan: b.plan.as_deref(),
+        rerun: b.rerun,
+    };
+    let (job, took) = app.tests_request(&me, ask).await?;
+    let took = match took {
+        sbxw_core::testq::Took::Queued => "queued",
+        sbxw_core::testq::Took::Joined => "joined",
+        sbxw_core::testq::Took::Reused => "reused",
+    };
+    let job = app.tests_wait(&job.id, &me, wait_bound(b.timeout)).await?;
+    Ok(ok_with(json!({ "job": crate::svc::testq::job_view(&job), "took": took })))
+}
+
+async fn tests_check(State(app): S, Agent(me): Agent, Json(b): Json<WaitBody>) -> ApiResult {
+    let job = app.tests_wait(b.id.trim(), &me, wait_bound(b.timeout)).await?;
+    Ok(ok_with(json!({ "job": crate::svc::testq::job_view(&job) })))
+}
+
+async fn tests_list(State(app): S, Agent(me): Agent) -> ApiResult {
+    let suites = app.tests_suites(&me).await;
+    let (active, latest) = app.tests_jobs(&me);
+    let view = |v: Vec<sbxw_core::testq::Job>| v.iter().map(crate::svc::testq::job_view).collect::<Vec<_>>();
+    Ok(ok_with(json!({ "suites": suites, "active": view(active), "latest": view(latest) })))
 }
 
 #[derive(Deserialize)]

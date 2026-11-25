@@ -81,6 +81,9 @@ impl App {
     /// running — the one fact a report cannot carry.
     pub fn plan_view(&self, plan: &Plan) -> serde_json::Value {
         let mut v = serde_json::to_value(plan).unwrap_or_default();
+        // The queue's jobs under this plan: run, or answered without running.
+        let c = self.tests_counts(&plan.id);
+        v["tests"] = serde_json::json!({ "ran": c.ran, "reused": c.reused });
         if let Ok(sb) = SandboxRef::parse(&plan.sandbox) {
             if let Some(threads) = v.get_mut("threads").and_then(|t| t.as_array_mut()) {
                 for (t, pt) in threads.iter_mut().zip(&plan.threads) {
@@ -193,6 +196,28 @@ impl App {
         tracing::info!("plans: '{sandbox}' proposed {} ({} thread(s), {:?})", plan.id, plan.threads.len(), plan.variant);
         let n = self.main_uncommitted(sandbox, &plan.threads).await;
         let plan = self.plans.lock().unwrap().note_main_uncommitted(&plan.id, n).unwrap_or(plan);
+        Ok(self.plan_changed(plan))
+    }
+
+    /// `plan_propose`, with the team suite a lead named: refused before
+    /// anything is proposed when the sandbox does not declare it.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn plan_propose_with_suite(
+        &self,
+        sandbox: &SandboxRef,
+        summary: &str,
+        threads: Vec<PlanThread>,
+        variant: Variant,
+        justification: &str,
+        lead: Option<&str>,
+        team_suite: Option<&str>,
+    ) -> Result<Plan, String> {
+        let suite = self.tests_check_team_suite(sandbox, team_suite).await?;
+        let plan = self.plan_propose(sandbox, summary, threads, variant, justification, lead).await?;
+        if suite.is_none() {
+            return Ok(plan);
+        }
+        let plan = self.plans.lock().unwrap().note_team_suite(&plan.id, suite).unwrap_or(plan);
         Ok(self.plan_changed(plan))
     }
 
