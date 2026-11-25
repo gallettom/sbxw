@@ -85,6 +85,11 @@ pub struct App {
     /// failed to build, as `<host>/<tag>`: one build at a time per template,
     /// and a failed one is not started again by every new sandbox.
     pub(crate) template_builds: Mutex<HashSet<String>>,
+    /// The daemon's scratch sandboxes while they live (a template's builder,
+    /// the kit cache's filler): nobody's to work in, so the sandbox list
+    /// leaves them out. One a stopped daemon left behind is not here, and
+    /// shows, so it can be removed.
+    pub(crate) scratches: Mutex<HashSet<SandboxRef>>,
     /// The daemon config's `kits`, read once at start and changed only by
     /// the Kits dialog's own write: the file usually sits in a workspace an
     /// agent can write, and a kit planted there must not reach the next
@@ -194,6 +199,7 @@ impl AppBuilder {
             briefings: Mutex::new(HashMap::new()),
             kit_approvals: Mutex::new(HashMap::new()),
             template_builds: Mutex::new(HashSet::new()),
+            scratches: Mutex::new(HashSet::new()),
             daemon_kits,
             emphasis,
             awake: Mutex::new(Default::default()),

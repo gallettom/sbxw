@@ -123,9 +123,10 @@ template in the background.
 The background build uses a sandbox of its own, `sbxw-tpl-…`, on an empty
 workspace: it waits for the new sandbox's kits to finish installing (so it
 copies from the kit cache), creates the builder with the same kits, waits for
-its installs, saves it as the template, and removes it. The builder shows in
-the sandbox list while it runs. It gets no token, no project environment and no
-port. The old template is removed once the new one is saved, and so is any
+its installs, saves it as the template, and removes it. The builder is left
+out of the sandbox list while it runs (`sbx ls` shows it; one a stopped daemon
+left behind shows in the list, so it can be removed). It gets no token, no
+project environment and no port. The old template is removed once the new one is saved, and so is any
 automatic template no sandbox was created from for a month. A build that
 fails is reported in the daemon's log and not tried again until the daemon
 restarts.

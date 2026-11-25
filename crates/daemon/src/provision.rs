@@ -1046,7 +1046,12 @@ impl App {
             cpus: (cfg.cpus > 0).then_some(cfg.cpus),
             memory: Some(cfg.memory.clone()).filter(|m| !m.is_empty()),
         };
-        sbx.create(n, &opts, None).await.with_context(|| format!("creating '{sb}'"))?;
+        // Out of the sandbox list from before it exists until it is removed.
+        self.scratches.lock().unwrap().insert(sb.clone());
+        if let Err(e) = sbx.create(n, &opts, None).await {
+            self.scratches.lock().unwrap().remove(&sb);
+            return Err(e).with_context(|| format!("creating '{sb}'"));
+        }
         let scratch = Scratch { sb, sbx, host, workspace };
         let up = async {
             let (sbx, n) = (&scratch.sbx, &scratch.sb.name);
@@ -1088,6 +1093,8 @@ impl App {
             tracing::warn!("could not remove '{}' ({e:#}) — `sbx rm {n}` it by hand", scratch.sb);
         }
         let _ = scratch.host.fs.remove(&scratch.workspace).await;
+        // Last: one that could not be removed shows again, to be removed by hand.
+        self.scratches.lock().unwrap().remove(&scratch.sb);
     }
 
     /// The sbx and sbxw versions a template is recorded against.

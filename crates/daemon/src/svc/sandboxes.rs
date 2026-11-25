@@ -147,10 +147,15 @@ impl App {
         let waiting = self.kit_approvals.lock().unwrap().clone();
         let pending = pending.unwrap_or_default();
         let infos = self.session_infos();
+        // The daemon's scratch sandboxes (a template's builder, the cache's
+        // filler) are nobody's to open, stop or remove while they live.
+        let scratches = self.scratches.lock().unwrap().clone();
+        let scratch = |name: &str| SandboxRef::parse(name).is_ok_and(|r| scratches.contains(&r));
         let pending_for = |name: &str| pending.iter().filter(|a| a.sandbox == name).count();
         let waiting_for = |name: &str| SandboxRef::parse(name).ok().and_then(|r| waiting.get(&r).map(Vec::len)).unwrap_or(0);
         listed
             .into_iter()
+            .filter(|s| !scratch(&s.name))
             .map(|s| {
                 // sbx lists this machine's sandboxes; one whose name sbxw would
                 // refuse has no record to look up.
@@ -177,7 +182,7 @@ impl App {
             })
             .collect::<Vec<_>>()
             .into_iter()
-            .chain(self.remote_sandboxes().await)
+            .chain(self.remote_sandboxes().await.into_iter().filter(|i| !scratch(&i.name)))
             .map(|mut item| {
                 let (model, model_name) = self.main_model(&item.name, &item.agent, &infos);
                 item.model = model;
@@ -1030,6 +1035,19 @@ mod tests {
     use crate::testing::{app_with, sbx_answer};
     use sbxw_core::SandboxRef;
     use sbxw_sbx::runner::Output;
+
+    #[tokio::test]
+    async fn a_scratch_sandbox_of_the_daemon_is_left_out_of_the_list_while_it_lives() {
+        let (_d, app, _fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("mine", "running"), ("sbxw-tpl-65efab12", "stopped")]),
+            _ => sbx_answer(a),
+        });
+        let names = |items: Vec<super::SandboxItem>| items.into_iter().map(|i| i.name).collect::<Vec<_>>();
+        // One a stopped daemon left behind shows, so it can be removed.
+        assert_eq!(names(app.sandboxes().await), ["mine", "sbxw-tpl-65efab12"]);
+        app.scratches.lock().unwrap().insert(SandboxRef::parse("sbxw-tpl-65efab12").unwrap());
+        assert_eq!(names(app.sandboxes().await), ["mine"]);
+    }
 
     #[tokio::test]
     async fn which_sbx_made_a_sandbox_is_asked_once_and_an_old_one_is_marked() {
