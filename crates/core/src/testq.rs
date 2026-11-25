@@ -44,7 +44,9 @@ pub struct Suite {
     /// job), `SBXW_TEST_CHECKOUT`, `SBXW_TEST_SUITE` and `SBXW_TEST_COMMIT`.
     pub command: String,
     /// Paths the suite covers, relative to the repository root; `.` is the
-    /// whole repository. Lock files the suite depends on belong here too.
+    /// whole repository. They must hold everything its build and tests read
+    /// (embedded files, fixtures, scripts, lock files): a path left out is a
+    /// change the key does not see, and a stale result is reused for it.
     pub paths: Vec<String>,
     /// Suites whose paths this one also covers (a crate and the crates it
     /// depends on).

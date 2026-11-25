@@ -330,14 +330,22 @@ env_files = []
 # `retries = 1` runs a failed suite once more; the result says it was retried.
 # Tables: write them after every bare key of the file. Read at `sbxw up`.
 #
-# sbxw's own repository declares these four (scripts/run-suite.sh, which skips
-# the tests listed in tests/quarantine.txt, so both are among the paths); paste
-# them into your sbxw.toml without the leading `# `:
+# `paths` must cover everything the suite's build and tests read: a path left
+# out is a change the key does not see, and a stale result is reused for it.
+# `["."]` is the safe choice for a cheap suite.
+#
+# sbxw's own repository declares these four (scripts/run-suite.sh). What each
+# reads outside its folder: crates embeds assets/, install.sh and this file,
+# and its tests run scripts/fake-ssh and scripts/test-emphasis.mjs; desktop
+# embeds assets/app.css, tests/js/*-cases.json, tests/fixtures/ and
+# crates/core/testdata/, and reads assets/js/; the script reads
+# tests/quarantine.txt with scripts/quarantine.mjs. Paste them into your
+# sbxw.toml without the leading `# `:
 #
 # [[tests]]
 # name = "crates"
 # command = "scripts/run-suite.sh crates"
-# paths = ["crates", "assets", "Cargo.toml", "Cargo.lock", "scripts/run-suite.sh", "scripts/quarantine.mjs", "tests/quarantine.txt"]
+# paths = ["crates", "assets", "scripts", "tests/quarantine.txt", "install.sh", "sbxw.toml.example", "Cargo.toml", "Cargo.lock"]
 # timeout_minutes = 60
 # retries = 1
 # version_cmd = "rustc --version"
@@ -345,7 +353,7 @@ env_files = []
 # [[tests]]
 # name = "js"
 # command = "scripts/run-suite.sh js"
-# paths = ["assets", "tests/js", "scripts/run-suite.sh", "scripts/quarantine.mjs", "tests/quarantine.txt"]
+# paths = ["."]
 # timeout_minutes = 15
 # retries = 1
 # version_cmd = "node --version"
@@ -353,7 +361,7 @@ env_files = []
 # [[tests]]
 # name = "desktop"
 # command = "scripts/run-suite.sh desktop"
-# paths = ["desktop", "scripts/run-suite.sh", "scripts/quarantine.mjs", "tests/quarantine.txt"]
+# paths = ["desktop", "assets", "crates/core/testdata", "tests", "scripts/run-suite.sh", "scripts/quarantine.mjs"]
 # timeout_minutes = 120
 # retries = 1
 # version_cmd = "cd desktop && rustc --version"

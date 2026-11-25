@@ -254,7 +254,7 @@ the suite's name and the commit go to the queue's script as arguments.
 [[tests]]
 name = "crates"                          # lower-case letters, digits, hyphens
 command = "scripts/run-suite.sh crates"  # run with `bash -c` in the checkout
-paths = ["crates", "Cargo.toml", "Cargo.lock"]  # relative to the repo root; "." is all of it
+paths = ["crates", "assets", "Cargo.toml", "Cargo.lock"]  # all it reads; "." is the whole repo
 depends = []                             # suites whose paths this one also covers
 timeout_minutes = 60                     # 1 to 240; default 30
 retries = 1                              # 0 or 1: run a failed suite once more
@@ -279,7 +279,12 @@ version_cmd = "rustc --version"          # optional: its output is part of the k
   same key, the queue answers the stored result at once, marked as reused,
   with the commit it first ran on: a commit that changes only paths the suite
   does not cover runs nothing. List the lock files a suite depends on among
-  its `paths`. A suite that timed out or could not start is never reused;
+  its `paths`. **`paths` must cover everything the suite's build and tests
+  read**: files it embeds (`include_str!` outside its folder), what a build
+  script reads, fixtures and scripts its tests open or run. A path left out
+  is a change the key does not see, and a stale result is reused for it.
+  `["."]` (the whole repository) is the safe choice for a cheap suite; narrow
+  it only for a long one, after checking what it reads. A suite that timed out or could not start is never reused;
   `run_tests` with `rerun` runs it again regardless.
 - **One job at a time per sandbox.** A second request waits its turn; a
   request for the same suite and key as a job queued or running joins it.
