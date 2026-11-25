@@ -230,7 +230,7 @@ async fn a_team_note_is_on_the_timeline_and_read_once_by_its_addressees() {
     let a = ThreadName::parse("a").unwrap();
     // The lead to a; a to the whole team.
     let (_, told, _) = app.team_note(&sb, None, "a", "info", "The fixtures moved to tests/data.").unwrap();
-    assert!(told.is_empty(), "no session open: recorded, nobody typed to");
+    assert_eq!(told, ["a"], "no session open: in its inbox for its next start, nothing typed");
     tick();
     app.team_note(&sb, Some(&a), "team", "warning", "Do not touch the money helper today.").unwrap();
     // Refused: an unknown kind, an addressee outside the plan, oneself, no team.
@@ -247,6 +247,10 @@ async fn a_team_note_is_on_the_timeline_and_read_once_by_its_addressees() {
     let mine = app.team_notes_read(&sb, Some(&a)).unwrap();
     assert_eq!(mine.len(), 1);
     assert_eq!(mine[0]["text"], "The fixtures moved to tests/data.");
+    // Read once its call came back to the agent (the call's PostToolUse).
+    assert_eq!(app.team_notes_read(&sb, Some(&a)).unwrap().len(), 1, "a lost answer is handed again");
+    let back = serde_json::json!({ "hook_event_name": "PostToolUse", "session_id": "sid-a", "hook_version": 5, "sbxw_thread": "a", "tool_name": "mcp__sbxw-relay__read_team_notes" });
+    app.inbox_hook_seen(&sb, &back);
     assert!(app.team_notes_read(&sb, Some(&a)).unwrap().is_empty(), "once");
     let lead = app.team_notes_read(&sb, None).unwrap();
     assert_eq!((lead.len(), lead[0]["kind"].as_str()), (1, Some("warning")));
@@ -439,26 +443,23 @@ async fn after_a_merge_the_other_threads_of_the_sandbox_hear_main_moved_once() {
     hook(&app, &sb, Some("ended"), serde_json::json!({ "hook_event_name": "SessionStart" }));
 
     let told = app.tell_main_moved(&sb, &["done".into()], &["done".into(), "older".into()], Some("main"));
-    assert_eq!(told, ["asked", "idle"], "the open threads but the merged one; held counts as told");
+    assert_eq!(told, ["asked", "idle"], "the open threads but the merged one");
     let line = "[sbxw] main moved: done merged. Check `git merge-tree --write-tree main HEAD` before you go on.";
-    assert!(until(|| shown(&idle).contains(line)).await, "typed into the idle thread: {:?}", shown(&idle));
-    assert_eq!(shown(&idle).matches("main moved").count(), 1, "once");
-    // The daemon recorded the line as its own: the history shows it from sbxw.
-    let post = serde_json::json!({"session_id": "h1", "from": 0, "to": 5, "items": [{"t": "user", "text": line}, {"t": "user", "text": "[sbxw] a person's words"}]});
-    app.history_post(&sb, &post).unwrap();
-    let page = app.history.lock().unwrap().page(&sb.to_string(), "h1", None, None, 0).unwrap();
-    let who: Vec<_> = page.items.iter().map(|i| (i.kind, i.from.clone())).collect();
-    assert_eq!(who, [(sbxw_core::history::Kind::Injected, Some("sbxw".to_string())), (sbxw_core::history::Kind::UserPrompt, None)]);
-    assert!(!shown(&asked).contains("main moved"), "held while it waits on a question");
-    assert!(!shown(&done).contains("main moved"), "the merged thread is not told");
-    assert!(!shown(&far).contains("main moved"), "another sandbox's thread is never typed into");
-
-    // Answered: the held line goes, once.
-    hook(&app, &sb, Some("asked"), serde_json::json!({ "hook_event_name": "Stop", "last_assistant_message": "Picked." }));
-    assert!(until(|| shown(&asked).contains(line)).await, "typed once it answered: {:?}", shown(&asked));
+    let waiting = |s: &SandboxRef, t: &str| {
+        app.inbox.lock().unwrap().pending(&s.to_string(), &sbxw_core::inbox::To::Thread(t.into())).iter().map(|m| m.text.clone()).collect::<Vec<_>>()
+    };
+    // In each one's inbox, for its hook to print: never typed.
+    assert_eq!(waiting(&sb, "idle"), [line]);
+    assert_eq!(waiting(&sb, "asked"), [line], "it reads it once it answered, at its next tool call");
+    assert!(waiting(&sb, "done").is_empty(), "the merged thread is not told");
+    assert!(waiting(&other, "far").is_empty(), "another sandbox's thread is never told");
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    assert_eq!(shown(&asked).matches("main moved").count(), 1);
-    assert_eq!(shown(&idle).matches("main moved").count(), 1);
+    for s in [&idle, &asked, &done, &far] {
+        assert!(!shown(s).contains("main moved"), "nothing typed");
+    }
+    // Told twice before it read it: one message.
+    app.tell_main_moved(&sb, &["done".into()], &["done".into()], Some("main"));
+    assert_eq!(waiting(&sb, "idle").len(), 1);
 
     // Nothing merged: nobody told.
     assert!(app.tell_main_moved(&sb, &[], &[], Some("main")).is_empty());
@@ -468,17 +469,14 @@ async fn after_a_merge_the_other_threads_of_the_sandbox_hear_main_moved_once() {
 }
 
 #[tokio::test]
-async fn a_line_held_for_a_thread_that_ends_is_dropped() {
+async fn a_thread_that_ended_is_not_told_main_moved() {
     let (_d, app) = app();
     let sb = SandboxRef::parse("myapp").unwrap();
-    let asked = echo_session(&app, &sb, "asked").await;
-    hook(&app, &sb, Some("asked"), serde_json::json!({ "hook_event_name": "SessionStart" }));
-    hook(&app, &sb, Some("asked"), serde_json::json!({ "hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "tool_input": { "questions": [{ "question": "Which?", "options": [{ "label": "A" }, { "label": "B" }] }] } }));
-    assert_eq!(app.tell_main_moved(&sb, &["x".into()], &["x".into()], None), ["asked"]);
-    hook(&app, &sb, Some("asked"), serde_json::json!({ "hook_event_name": "SessionEnd" }));
-    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    assert!(!shown(&asked).contains("main moved"), "ended: dropped, never typed");
-    asked.kill();
+    let gone = echo_session(&app, &sb, "gone").await;
+    hook(&app, &sb, Some("gone"), serde_json::json!({ "hook_event_name": "SessionStart" }));
+    hook(&app, &sb, Some("gone"), serde_json::json!({ "hook_event_name": "SessionEnd" }));
+    assert!(app.tell_main_moved(&sb, &["x".into()], &["x".into()], None).is_empty());
+    gone.kill();
 }
 
 async fn agent_post(app: &std::sync::Arc<crate::app::App>, sb: &str, path: &str, body: Value) -> (StatusCode, Value) {
@@ -526,10 +524,13 @@ async fn a_note_s_line_says_what_to_do_when_its_reader_may_lack_the_tool() {
     assert_eq!(status, StatusCode::OK, "{v}");
     assert_eq!(v["told"], serde_json::json!(["a", "b"]));
     assert_eq!(v["unsure"], serde_json::json!(["b"]), "the sender hears whom to send it by SendMessage");
-    assert!(until(|| shown(&a).contains("[sbxw team note") && shown(&b).contains("[sbxw team note")).await);
-    assert!(until(|| shown(&b).contains("ask lead to resend it by SendMessage.")).await, "{}", shown(&b));
-    assert!(!shown(&a).contains("resend"), "a can read it: the plain line");
-    assert!(!shown(&a).contains("SECRET") && !shown(&b).contains("SECRET"), "never the note's words");
+    // Both inboxes hold the note, for their hooks to print; nothing is typed.
+    for t in ["a", "b"] {
+        let held = app.inbox.lock().unwrap().pending("hello-team", &sbxw_core::inbox::To::Thread(t.into())).iter().map(|m| m.text.clone()).collect::<Vec<_>>();
+        assert!(held.len() == 1 && held[0].contains("SECRET-WORDS"), "{t}: {held:?}");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert!(!shown(&a).contains("sbxw") && !shown(&b).contains("sbxw"), "never typed");
 
     // A hello without the tool (an older relay) does not make a reader.
     assert_eq!(agent_post(&app, "hello-team", "/api/relay/hello", serde_json::json!({ "thread": "b", "agent_proc": "200:7", "tools": ["team_note"] })).await.0, StatusCode::OK);

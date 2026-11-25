@@ -218,6 +218,22 @@ async fn lead_terminal(app: &Arc<App>, sb: &SandboxRef, typed: &Path) {
     }
 }
 
+/// The lead's merge line, from its inbox (svc::inbox): handed by its hook,
+/// never typed into its terminal. Nothing typed there either.
+fn told_lead(app: &Arc<App>, sb: &SandboxRef, typed: &Path, what: &str) -> String {
+    let typed_text = String::from_utf8_lossy(&std::fs::read(typed).unwrap_or_default()).into_owned();
+    assert!(!typed_text.contains(what), "typed into the lead's terminal: {typed_text}");
+    app.inbox
+        .lock()
+        .unwrap()
+        .pending(&sb.to_string(), &sbxw_core::inbox::To::Main)
+        .iter()
+        .map(|m| m.text.clone())
+        .find(|t| t.contains(what))
+        .unwrap_or_default()
+}
+
+#[allow(dead_code)]
 async fn typed_soon(typed: &Path, what: &str) -> String {
     for _ in 0..150 {
         let s = String::from_utf8_lossy(&std::fs::read(typed).unwrap_or_default()).into_owned();
@@ -273,7 +289,7 @@ async fn a_re_proposed_merge_closes_and_ends_every_thread() {
         let err = app.open_session(&key).await.err().map(|e| format!("{e:#}")).unwrap_or_default();
         assert!(err.contains("was closed, so a reconnect"), "{n}: a reconnect does not start it again: {err:?}");
     }
-    let line = typed_soon(&typed, "Closed:").await;
+    let line = told_lead(&app, &sb, &typed, "Closed:");
     assert!(line.contains("Merged: a, b.") && line.contains("Closed: a, b."), "{line}");
 }
 
@@ -304,7 +320,7 @@ async fn a_close_that_fails_is_named_to_the_lead() {
     let b = session(&app, &SessionKey::thread(&sb, &ThreadName::parse("b").unwrap()), "exec sleep 60".into()).await;
     app.plan_propose_merge_checked(&id, &sb, vec!["a".into(), "b".into()], "", vec![]).await.unwrap();
     assert_eq!(app.plan_merge(&id, true, None).await.unwrap().state, MergeState::Merged);
-    let line = typed_soon(&typed, "Not closed:").await;
+    let line = told_lead(&app, &sb, &typed, "Not closed:");
     assert!(line.contains("Closed: a.") && line.contains("Not closed: b (") && line.contains("uncommitted"), "{line}");
     assert!(b.alive(), "b's session runs on");
 }
@@ -466,7 +482,7 @@ async fn abandoning_a_merge_merges_nothing_tells_the_lead_and_can_be_proposed_ag
     assert_eq!(s, axum::http::StatusCode::OK, "{v}");
     assert_eq!(v["plan"]["merge"]["state"], "abandoned");
     assert!(v["plan"]["merge"]["abandoned_ms"].as_u64().is_some());
-    let line = typed_soon(&typed, "abandoned").await;
+    let line = told_lead(&app, &sb, &typed, "abandoned");
     assert!(line.contains("[sbxw] The user abandoned the proposed merge of threads a, b: nothing was merged"), "{line}");
     assert_eq!(card(&app, &sb, "a"), (sbxw_core::tickets::Column::Test, vec!["merge_abandoned".to_string()]));
     let plan = app.plan(&id).unwrap();

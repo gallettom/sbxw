@@ -26,6 +26,7 @@ type S = State<Arc<App>>;
 pub fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/api/hook", post(hook))
+        .route("/api/hook/inbox_ack", post(inbox_ack))
         .route(
             "/api/hook/history",
             post(hook_history).layer(axum::extract::DefaultBodyLimit::max(sbxw_core::history::limits::POST_MAX_BYTES)),
@@ -58,35 +59,57 @@ pub fn routes() -> Router<Arc<App>> {
         .merge(super::tickets::agent_routes())
 }
 
-/// Answered with what the hook should print: on a prompt from a Remote
-/// Control session, a low-battery note for the agent's context; on a
-/// thread's Bash call that is its plan's whole test command, a deny. Empty
-/// otherwise — a hook printing nothing changes nothing.
+/// Answered with what the hook should print: on a thread's Bash call that
+/// is its plan's whole test command, a deny; otherwise what sbxw holds for
+/// the session as context (svc::inbox: its inbox on PostToolUse,
+/// UserPromptSubmit, SessionStart and, as the reason to go on, Stop; the
+/// lead's instructions on a new conversation; a low-battery note for a
+/// Remote Control session's prompt). The inbox part (`sbxw_inbox`) is not
+/// printed: it tells the hook what to acknowledge. Empty otherwise: a hook
+/// printing nothing changes nothing.
 async fn hook(State(app): S, Agent(me): Agent, Json(body): Json<Value>) -> Json<Value> {
+    use crate::svc::session_context::CONTEXT_MAX_CHARS;
     // A thread about to run its plan's whole test command is sent to the
     // queue (svc::testq). The hook prints this answer; a daemon that does
     // not answer within the hook's limit lets the command run.
     let refused = app.tests_gate(&me, &body);
-    let prompt = body["hook_event_name"] == "UserPromptSubmit";
-    let start = (body["hook_event_name"] == "SessionStart").then(|| body.clone());
+    let event = body["hook_event_name"].as_str().unwrap_or("").to_string();
+    let ev = body.clone();
     app.ingest_hook(&me, body);
+    app.inbox_hook_seen(&me, &ev);
     if let Some(reason) = refused {
         return Json(json!({
             "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason }
         }));
     }
+    let mut pieces = vec![];
     // A new conversation is given what sbxw holds for it (svc::session_context).
-    if let Some(ctx) = start.and_then(|ev| app.session_start_context(&me, &ev)) {
-        return Json(json!({
-            "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": ctx }
-        }));
+    if event == "SessionStart" {
+        pieces.extend(app.session_start_context(&me, &ev));
     }
-    match prompt.then(|| app.battery_notice(&me)).flatten() {
-        Some(note) => Json(json!({
-            "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": note }
-        })),
-        None => Json(json!({})),
+    if event == "UserPromptSubmit" {
+        pieces.extend(app.battery_notice(&me));
     }
+    // What is left of the context the harness keeps whole, for the inbox.
+    let used: usize = pieces.iter().map(|p: &String| p.chars().count() + 2).sum();
+    let inbox = app.inbox_offer(&me, &ev, CONTEXT_MAX_CHARS.saturating_sub(used));
+    Json(crate::svc::inbox::hook_answer(&event, pieces, inbox))
+}
+
+#[derive(Deserialize)]
+struct InboxAckBody {
+    session_id: String,
+    #[serde(default)]
+    ids: Vec<String>,
+}
+
+/// The status hook printed these inbox messages for its session: they
+/// leave the inbox. Only messages of the token's sandbox last offered to
+/// that session; anything else is left as it was.
+async fn inbox_ack(State(app): S, Agent(me): Agent, Json(b): Json<InboxAckBody>) -> Json<Value> {
+    let ids: Vec<String> = b.ids.into_iter().take(sbxw_core::inbox::MAX_PER_RECIPIENT).collect();
+    let n = app.inbox_ack(&me, b.session_id.trim(), &ids);
+    Json(json!({ "ok": true, "acked": n }))
 }
 
 /// The status hook's summarised transcript tail, for its own session (the

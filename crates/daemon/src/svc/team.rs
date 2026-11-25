@@ -441,9 +441,9 @@ impl App {
         let mut told = vec![];
         for w in others {
             let Ok(t) = ThreadName::parse(&w) else { continue };
-            // A thread that ended is not told: its next conversation starts
-            // from a fresh worktree check anyway.
-            if !self.sessions.is_live(&SessionKey::thread(sandbox, &t)) || self.session_state(sandbox, &w) == Some(SessionState::Exited) {
+            // A thread whose session ended (or never reported) is not told,
+            // as before: its next conversation checks its worktree anyway.
+            if !self.sessions.is_live(&SessionKey::thread(sandbox, &t)) || matches!(self.session_state(sandbox, &w), None | Some(SessionState::Exited)) {
                 continue;
             }
             let key = format!("main-moved:{}", base.unwrap_or("main"));
@@ -517,6 +517,12 @@ impl App {
             }
         }
         f(c)
+    }
+
+    /// Tests: forget the cursors read from disk, as a daemon restart does.
+    #[cfg(test)]
+    pub(crate) fn forget_note_cursors(&self) {
+        note_cursors().lock().unwrap().remove(&self.cursors_file());
     }
 
     fn persist_cursors(&self, c: &NoteCursors) {
