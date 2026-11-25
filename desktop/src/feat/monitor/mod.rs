@@ -97,6 +97,16 @@ pub const INTENTS: &[Spec] = &[
 
 crate::feat::relay::per_thread!(STATE, Model);
 
+/// The Sessions conversations in memory (the memory report,
+/// shell/memory.rs): their items and built rows sized by `size`, how many
+/// logs and how many items.
+pub fn conv_mem(size: &dyn Fn(&serde_json::Value) -> u64) -> (u64, usize, usize) {
+    let m = STATE().lock().unwrap_or_else(|e| e.into_inner());
+    let logs = &m.conv.logs;
+    let bytes = logs.values().map(|h| h.items.values().map(size).sum::<u64>() + h.built.as_ref().map_or(0, |b| size(&b.2))).sum();
+    (bytes, logs.len(), logs.values().map(|h| h.items.len()).sum())
+}
+
 use crate::feat::now_ms as wall_ms;
 
 /// `data.monitor` as the model stands.

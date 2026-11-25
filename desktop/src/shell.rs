@@ -40,6 +40,8 @@ mod leader_mark_tests;
 mod sidebar_tests;
 #[cfg(test)]
 mod timing_tests;
+#[cfg(test)]
+mod perf_tests;
 
 use crate::approval;
 use dictate::PaneDictate;
@@ -694,6 +696,11 @@ impl App {
             let w = waker.clone();
             crate::socket::set_wake(Arc::new(move || w()));
         }
+        {
+            // The counters' line once a second, and scripts/measure.sh's marks (perf.rs).
+            let w = waker.clone();
+            crate::perf::start_reporter(Arc::new(move || w()));
+        }
         self.waker = Some(waker);
         if let Some((sb, mode)) = self.start.take() {
             self.open(0, &sb, mode, None);
@@ -720,6 +727,7 @@ impl App {
     }
 
     pub fn screen_data(&self) -> J {
+        crate::perf::add(crate::perf::C::ScreenData, 1);
         let mut daemon = match &self.raw {
             J::Object(o) => o.clone(),
             _ => serde_json::Map::new(),
@@ -929,6 +937,8 @@ impl App {
     /// [`Self::push_data`]; `again`: whether a moved overlay scope may push
     /// once more (never from that second push: one extra push at most).
     fn push_data_once(&mut self, again: bool) {
+        crate::perf::add(crate::perf::C::Pushes, 1);
+        let counted = crate::perf::count_start();
         let t = crate::perf::start();
         let mut d = self.screen_data();
         // A sandbox's own colour follows its session block (the list's rows,
@@ -951,6 +961,13 @@ impl App {
             rendered += (s.renders != before) as usize;
         }
         crate::perf::done(t, || format!("push_data (screen_data {built:.2} ms, extras {extras:.2} ms, {} bytes; {rendered} of {} screens rendered)", d.to_string().len(), self.screens.len()));
+        if counted.is_some() {
+            crate::perf::add_us(crate::perf::C::PushUs, counted);
+            crate::perf::add(crate::perf::C::PushBytes, crate::mem::json_bytes(&d));
+        }
+        if crate::perf::counting() || crate::mem::on() {
+            memory::keep_snapshot(&d);
+        }
         // The overlay's scope as its screen has just drawn it (a pick, a
         // pre-scoped open): when it moved, the sidebar's "in view" mark follows now.
         if again && d["app"]["overlay"].is_object() && d["app"]["overlay"]["scope"] != self.overlay_scope() {
@@ -1142,8 +1159,24 @@ impl App {
     }
 
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
+        crate::perf::add(crate::perf::C::Polls, 1);
+        let timed = crate::perf::count_start();
+        let changed = self.poll_inner(clock, tx);
+        crate::perf::add_us(crate::perf::C::PollUs, timed);
+        changed
+    }
+
+    fn poll_inner(&mut self, clock: f64, tx: &mut Tx) -> bool {
         // What the other windows asked (crate::windows), first.
         let mut changed = self.windows_drain();
+        // Marks asked by scripts/measure.sh in a real run (perf.rs; empty unless counting).
+        for m in crate::perf::take_marks() {
+            if let Some(l) = m.strip_prefix("mem:") {
+                self.memory_report(l);
+            } else {
+                log::info!("perf: ---- {}", m.strip_prefix("perf:").unwrap_or(&m));
+            }
+        }
         if std::mem::take(&mut self.copy_accept) {
             self.accept_copy_offer(tx);
         }
@@ -1338,6 +1371,10 @@ impl App {
         // A screen shown since its data changed (a toggle that ran no intent).
         changed |= self.render_shown();
         let settle = headless().then_some(Duration::from_millis(1500));
+        // The counters (perf.rs): what asked for this poll's push, and the
+        // rows built for shown and hidden panes.
+        let counting = crate::perf::counting();
+        let (before_panes, covered) = (changed, counting && self.panes_covered());
         let mut copies = vec![];
         let mut file_clicks = vec![];
         let mut pictures = vec![];
@@ -1349,7 +1386,21 @@ impl App {
             // Keyword pills: the daemon's switch and the app's own preference
             // for this sandbox (feat/emphasis.rs), followed live.
             t.set_pills(crate::feat::emphasis::for_pane(self.feats.data.get("emphasis"), &self.store.get("features")["emphasis"], p.sandbox.as_deref()));
+            let built = t.rebuilt_rows;
             let mut ch = t.poll_tx(settle, clock, tx);
+            if counting {
+                let rows = (t.rebuilt_rows - built) as u64;
+                if shown.contains(&i) {
+                    crate::perf::add(crate::perf::C::RowsShown, rows);
+                } else {
+                    crate::perf::add(crate::perf::C::RowsHidden, rows);
+                    crate::perf::add(crate::perf::C::HiddenChanges, ch as u64);
+                }
+                if t.blinked {
+                    crate::perf::add(crate::perf::C::Blinks, 1);
+                    crate::perf::add(crate::perf::C::BlinksCovered, covered as u64);
+                }
+            }
             for ev in t.take_events() {
                 ch = true;
                 let name = p.sandbox.clone().unwrap_or_default();
@@ -1391,21 +1442,27 @@ impl App {
                 t.poll(None);
             }
         }
+        let after_panes = changed;
+        let mut late = false;
         for (i, path) in file_clicks {
             self.pane_file_open(i, path);
-            changed = true;
+            late = true;
         }
         for (i, png) in pictures {
             self.pane_paste_image(i, &png);
-            changed = true;
+            late = true;
         }
         for (i, name, text) in copies {
             self.osc_copy(i, &name, text, now, &mut |t| tx.copy(t));
-            changed = true;
+            late = true;
         }
         // Last: what it asks for wins over this frame's own refocus of a pane.
-        changed |= self.hold_focus_for_proposal(tx);
+        late |= self.hold_focus_for_proposal(tx);
+        changed |= late;
         if changed {
+            if counting && !before_panes && after_panes && !late {
+                crate::perf::add(crate::perf::C::PushesFromTerminals, 1);
+            }
             self.push_data();
         }
         changed
@@ -2445,6 +2502,14 @@ pub(crate) fn help_look() -> rune::HelpLook {
 }
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
+    crate::perf::add(crate::perf::C::Views, 1);
+    let counted = crate::perf::count_start();
+    let el = view_inner(s, cx);
+    crate::perf::add_us(crate::perf::C::ViewUs, counted);
+    el
+}
+
+fn view_inner(s: &App, cx: &mut Cx<App>) -> El {
     // The theme first: every colour below reads the active palette.
     theme::set_mode(s.theme_choice);
     // Keyboard focus as a web page has it: every pressable control is a Tab

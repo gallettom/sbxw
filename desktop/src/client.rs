@@ -1103,6 +1103,7 @@ impl Link {
         let pending = self.pending.clone();
         std::thread::spawn(move || {
             let result = job(daemon.as_ref()).map_err(|e| format!("{e:#}"));
+            crate::perf::keyed("fetch", || "sandboxes".to_string());
             let list = daemon.sandboxes();
             send.send(LinkEvent::Done { what, result });
             if let Ok(l) = list {
@@ -1153,6 +1154,7 @@ impl Link {
             .map_err(|e| format!("{e:#}"));
             // As after a stop: a change (a sandbox removed, created) reaches the list at once.
             if method == "POST" {
+                crate::perf::keyed("fetch", || "sandboxes".to_string());
                 if let Ok(l) = daemon.sandboxes() {
                     send_now(&send2, LinkEvent::Sandboxes(l));
                 }
@@ -1170,6 +1172,9 @@ impl Link {
     /// Reads data key `key`: one path, or one per sandbox (`(sandbox, path)`),
     /// gathered in an object by sandbox name (a sandbox whose read failed is left out).
     pub fn fetch(&self, daemon: Arc<dyn Daemon>, key: String, paths: Vec<(Option<String>, String)>) {
+        crate::perf::add(crate::perf::C::Fetches, 1);
+        crate::perf::add(crate::perf::C::FetchRequests, paths.len() as u64);
+        crate::perf::keyed("fetch", || key.clone());
         self.job(move || {
             let get = |p: &str| match daemon.request("GET", p, &serde_json::Value::Null, Duration::from_secs(30)) {
                 Ok((c, v)) if (200..300).contains(&c) => Ok(v),
@@ -1256,6 +1261,7 @@ fn supervise(target: Target, send: Sender, current: Current, kick: mpsc::Sender<
         if !send.send(LinkEvent::Up(daemon.clone())) {
             return;
         }
+        crate::perf::keyed("fetch", || "sandboxes".to_string());
         match daemon.sandboxes() {
             Ok(l) => {
                 send.send(LinkEvent::Sandboxes(l));
@@ -1310,6 +1316,7 @@ fn refresher(current: Current, send: Sender, kicks: mpsc::Receiver<Duration>) {
             slow = now + REFRESH_EVERY;
             let d = current.lock().unwrap().clone();
             if let Some(d) = d {
+                crate::perf::keyed("fetch", || "sandboxes".to_string());
                 match d.sandboxes() {
                     Ok(l) => {
                         if !send.send(LinkEvent::Sandboxes(l)) {
