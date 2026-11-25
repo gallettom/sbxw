@@ -410,8 +410,9 @@ the network.
   sandbox being created has not filled the cache yet, or its fill expired, sbxw
   creates `sbxw-cache-fill` in the background: the caching kits, an empty
   workspace, the cache **writable** (`SBXW_CACHE_FILL=1`). Its kits download
-  into the cache and mark each kit done, then it is removed. It shows in the
-  sandbox list while it runs.
+  into the cache and mark each kit done, then it is removed. It is left out of
+  the sandbox list while it runs (`sbx ls` shows it; one a stopped daemon left
+  behind shows in the list, so it can be removed).
 - **Every sandbox you work in gets it read-only**, the one whose creation
   started the fill included: that one installs from the network, the next ones
   from the cache. What one sandbox's agent could write, every later sandbox
