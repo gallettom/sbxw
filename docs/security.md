@@ -936,7 +936,7 @@ the Mac, and turned off with remote access. Contract:
 
 | Action | What the phone shows before you decide | What runs |
 |---|---|---|
-| Approve or refuse a plan, as it is or with a thread's model changed | its sandbox, summary, justification, variant, and each thread's name, model, repo, scope, whole goal and ticket; a model select per thread (the configured list, `models` in `sbxw.toml`) | the desktop's approve (the plan's own threads, only the models you chose changed) or refuse (no note) |
+| Approve or refuse a plan, as it is or with a thread's model changed | its sandbox, summary, justification, variant, the test command the lead proposed with its time limit, and each thread's name, model, repo, scope, whole goal and ticket; a model select per thread (the configured list, `models` in `sbxw.toml`) | the desktop's approve (the plan's own threads, only the models you chose changed, the test command as shown: the digest covers it) or refuse (no note) |
 | Run a merge a lead proposed | the sandbox, the order, the lead's note and distillate, and per branch its tip, commits ahead of the base, files changed with insertions and deletions (numbers and paths, never diff content), and whether an earlier try of this merge failed on it | the web UI's default merge: same order, stops at the first conflict, the merged threads closed (branch and all), the distillate as proposed (it is part of what Face ID covers, so it cannot change between view and approval); and each branch merged as the exact commit shown, checked again just before its merge: a branch or base that moved stops the merge as "changed" |
 | Answer a pending network request | the sandbox, the host and port, sbx's detail, every option sbx offers with what it does, and a flag on an option that leaves a lasting rule ("Allow storage.googleapis.com:443: adds a lasting network rule to sbxw-2 (remove it on the Mac with sbx policy rm)") | sbx's own answer, with one of that request's options |
 | Remove a stopped sandbox | the desktop's sentences: what is lost, that the workspace folder stays | the desktop's removal |
@@ -1131,10 +1131,11 @@ as with `direnv allow`:
   list, a published port, a `/etc/hosts` alias, `ip_per_app`, a
   `monitor_cmd` (it runs **on the host**), a moved `web_addr` or
   `agent_addr`, `skills = "readwrite"`, a named `template`, a longer
-  `cache_ttl_days`, the virtual Mac's `vm` and `guest_host_ip`, and each
-  `[[tests]]` suite's `command` and `version_cmd` (the test queue runs them
-  in the sandbox when an agent names the suite; the agent never sends a
-  command, and the queue reads the suites from the recorded config only). A value
+  `cache_ttl_days`, and the virtual Mac's `vm` and `guest_host_ip`. (A test
+  command is not one of these lines: it belongs to a plan, and the person
+  approves it with the plan, in the plan dialog, see
+  [Threads and lead](threads-and-lead.md#tests-the-queue); an agent never
+  sends a command to run.) A value
   equal to the built-in default is not a line, so a file that only changes
   the model, the colours, `env` or the sizes asks nothing. (`env` stays
   inside the sandbox; `[env]` is still not for secrets.)
