@@ -195,7 +195,7 @@ local function review(state, data, p)
   local tests = p.proposed_tests
   if tests and tests.command and tests.command ~= "" then
     local cleared = draft.no_tests == true
-    table.insert(out, row{ gap = 8, w = "full", key = "plan-tests",
+    table.insert(out, row{ gap = 8, w = "full", align = "start", key = "plan-tests",
       text{ "Tests", size = "sm", color = "text-muted" },
       column{ gap = 4, grow = 1,
         text{ tests.command, size = "sm", mono = true, wrap = true, color = cleared and "text-muted" or "text", key = "plan-test-command" },
