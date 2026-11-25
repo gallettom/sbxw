@@ -10,6 +10,14 @@
 // On a SessionStart the daemon may answer what sbxw holds for the new
 // conversation (svc::session_context in the daemon: the lead's instructions
 // after a /clear or a compaction), printed the same way. Any error: silent.
+// The daemon may also answer with the session's inbox (svc::inbox: answers,
+// team notes, merge results): context on PostToolUse, UserPromptSubmit and
+// SessionStart, the reason to go on (`decision: "block"`) on Stop. Its
+// `sbxw_inbox` field is never printed: a message too long for the context is
+// written whole to INBOX_DIR first, and once the answer is on stdout the hook
+// tells the daemon which messages it printed (`/api/hook/inbox_ack`), so they
+// leave the inbox. Writing a file fails: nothing is acknowledged, and the
+// daemon offers them again.
 // The daemon port is templated in at install time (see sbx::install_status_hooks).
 const http = require("http");
 const os = require("os");
@@ -46,7 +54,8 @@ function done() {
 // v3: the transcript's tail (see `postHistory`) and the agent process.
 // v4: Claude Code's session kind (`session_kind`), and `live_procs` covering
 // every Claude-like process (`live_scope: "claude"`).
-const HOOK_VERSION = 4;
+// v5: prints the daemon's inbox and acknowledges it (see `inboxOf`).
+const HOOK_VERSION = 5;
 
 // Which sshd-set variables are in this session's environment.
 //
@@ -472,6 +481,53 @@ function syncHistory(tp, sid, dir, post, opts, done) {
 }
 // END history
 
+// BEGIN inbox
+// Where a message too long for the context is written, per session. The
+// daemon has the same constant (sbxw_core::inbox::INBOX_DIR).
+const INBOX_DIR = "/tmp/sbxw-inbox";
+
+// The daemon's answer, split: what to print (its `sbxw_inbox` field taken
+// out, for Claude Code reads the JSON whole) and the inbox part, or null.
+// Only an answer a hook may print: event-specific output, or a Stop's block.
+function inboxOf(answer) {
+  if (!answer || typeof answer !== "object") return { print: null, inbox: null };
+  const ok = answer.hookSpecificOutput || answer.decision === "block";
+  const inbox = answer.sbxw_inbox && typeof answer.sbxw_inbox === "object" ? answer.sbxw_inbox : null;
+  const print = Object.assign({}, answer);
+  delete print.sbxw_inbox;
+  return { print: ok ? print : null, inbox: ok ? inbox : null };
+}
+
+// Write the inbox's files under `dir/<session>/`, 0600. False when one
+// cannot be written or a name is not one: the messages are then not
+// acknowledged, and come again.
+function writeInboxFiles(inbox, dir) {
+  const sid = inbox.session_id;
+  if (!validSession(sid)) return false;
+  const files = Array.isArray(inbox.files) ? inbox.files : [];
+  if (files.length === 0) return true;
+  try {
+    const p = require("path");
+    const d = p.join(dir, sid);
+    fs.mkdirSync(d, { recursive: true, mode: 0o700 });
+    for (const f of files) {
+      if (!f || typeof f.name !== "string" || !/^[A-Za-z0-9_.-]{1,64}$/.test(f.name) || f.name.startsWith(".") || typeof f.text !== "string") return false;
+      fs.writeFileSync(p.join(d, f.name), f.text, { mode: 0o600 });
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// The ids to acknowledge once printed, or null.
+function ackBody(inbox, filesOk) {
+  if (!inbox || !filesOk || !validSession(inbox.session_id)) return null;
+  const ids = (Array.isArray(inbox.ids) ? inbox.ids : []).filter((i) => typeof i === "string" && /^m-[0-9]{1,20}$/.test(i));
+  return ids.length ? { session_id: inbox.session_id, ids } : null;
+}
+// END inbox
+
 // Safety net: never hang the agent if stdin doesn't close.
 setTimeout(done, 2000);
 
@@ -550,11 +606,21 @@ process.stdin.on("end", () => {
   // Both requests at once; the hook exits when both are answered.
   let pending = 1 + (syncing ? 1 : 0);
   let output = null;
+  let inbox = null;
   const settle = () => {
     pending -= 1;
     if (pending > 0) return;
-    if (output) process.stdout.write(JSON.stringify(output), done);
-    else done();
+    if (!output) return done();
+    const ack = ackBody(inbox, inbox ? writeInboxFiles(inbox, INBOX_DIR) : false);
+    process.stdout.write(JSON.stringify(output), () => {
+      if (!ack) return done();
+      // Printed: the daemon may take these messages out of the inbox. A
+      // lost ack only means they are offered again.
+      send("/api/hook/inbox_ack", ack, (status) => {
+        log("inbox ack " + ack.ids.join(",") + " status=" + status);
+        done();
+      }, 700);
+    });
   };
   send("/api/hook", evt, (status, body) => {
     if (status >= 400) log("status=" + status + " body=" + body.replace(/\s+/g, " ").trim());
@@ -564,7 +630,9 @@ process.stdin.on("end", () => {
       try {
         out = JSON.parse(body);
       } catch (_) {}
-      if (out && out.hookSpecificOutput) output = out;
+      const split = inboxOf(out);
+      output = split.print;
+      inbox = split.inbox;
     }
     settle();
   });
@@ -585,7 +653,7 @@ process.stdin.on("end", () => {
 });
 
 // POST `body` to the daemon; `then(status, text)` once, 0 on a failure.
-function send(path, body, then) {
+function send(path, body, then, timeoutMs) {
   let called = false;
   const once = (status, text) => {
     if (!called) {
@@ -605,7 +673,7 @@ function send(path, body, then) {
         "content-length": payload.length,
         authorization: "Bearer " + agentToken(),
       },
-      timeout: 1500,
+      timeout: timeoutMs || 1500,
     },
     (res) => {
       // On a policy block (403) the proxy returns a structured body telling

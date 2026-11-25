@@ -12,6 +12,9 @@
 // Transport is stdio JSON-RPC 2.0, newline-delimited, per the MCP spec. The
 // three methods a client needs are `initialize`, `tools/list` and `tools/call`;
 // notifications (no `id`) are acknowledged with silence, as the spec requires.
+// One notification is acted on: `notifications/cancelled` abandons the call it
+// names (its wait on the daemon is aborted, no result is sent, and nothing is
+// acknowledged, so sbxw hands the outcome to the session another way).
 // No dependencies: this has to run in a sandbox where nothing was installed for
 // it, and `npx`-ing a package would need network access the policy denies.
 const fs = require("fs");
@@ -207,7 +210,11 @@ const TOOLS = [
       properties: {
         request_id: {
           type: "string",
-          description: "The id reported by `ask_other_sandbox` or `ask_user_for_screenshot`.",
+          description: "The id reported by `ask_other_sandbox`, `ask_user_for_screenshot` or `ask_user_questions`.",
+        },
+        part: {
+          type: "number",
+          description: "Which part of a long answer to read (1 first). A result that has more parts says so.",
         },
         timeout_seconds: {
           type: "number",
@@ -1811,19 +1818,41 @@ function outcomeResult(res) {
   return { content, isError: false };
 }
 
-async function callTool(name, args) {
+/// Open a request (its id comes back at once), then wait on it. A failed
+/// open is retried with the same client key, so it is never two requests.
+async function openAndWait(kind, question, timeout, ctx) {
+  const opened = await relay.openRequest(kind, question, THREAD, ctx.signal);
+  return waitFor(opened.id, timeout, ctx);
+}
+
+/// Wait on `id`. A wait that fails still names the request and says how to
+/// pick it up; a final outcome is marked for acknowledgement once written.
+async function waitFor(id, timeout, ctx, part) {
+  let res;
+  try {
+    res = await relay.waitRequest(id, timeout, THREAD, part, ctx.signal);
+  } catch (e) {
+    if (e.aborted || e.refused) throw e;
+    return textResult(relay.waitFailed(id, e, HOW_TO_WAIT(id)), true);
+  }
+  const out = outcomeResult(res);
+  if (relay.isFinal(res)) ACKS.set(out, id);
+  return out;
+}
+
+/// Results that hold a final outcome, and the request each acknowledges once
+/// written to stdout.
+const ACKS = new WeakMap();
+
+async function callTool(name, args, ctx) {
   args = args || {};
+  ctx = ctx || {};
 
   if (name === "ask_other_sandbox") {
     const timeout = clampTimeout(args.timeout_seconds, relay.MAX_TIMEOUT);
     const question = String(args.question || "").trim();
     if (!question) return textResult("No question given.", true);
-    const res = await relay.request(
-      "/api/relay/ask",
-      { from: relay.me, thread: THREAD, question, timeout },
-      (timeout + 10) * 1000,
-    );
-    return outcomeResult(res);
+    return openAndWait("question", question, timeout, ctx);
   }
 
   if (name === "ask_user_for_screenshot") {
@@ -1833,12 +1862,7 @@ async function callTool(name, args) {
     // person exactly as it shows a question.
     const reason = String(args.reason || "").trim();
     if (!reason) return textResult("No reason given — say what you need to see.", true);
-    const res = await relay.request(
-      "/api/relay/shot",
-      { from: relay.me, thread: THREAD, question: reason, timeout },
-      (timeout + 10) * 1000,
-    );
-    return outcomeResult(res);
+    return openAndWait("screenshot", reason, timeout, ctx);
   }
 
   if (name === "ask_user_questions") {
@@ -1846,24 +1870,15 @@ async function callTool(name, args) {
     const round = askRound(String(args.intro || ""), qs);
     if (!round) return textResult("No questions given.", true);
     const timeout = clampTimeout(args.timeout_seconds == null ? relay.MAX_TIMEOUT : args.timeout_seconds, relay.MAX_TIMEOUT);
-    const res = await relay.request(
-      "/api/relay/questions",
-      { from: relay.me, thread: THREAD, question: round, timeout },
-      (timeout + 10) * 1000,
-    );
-    return outcomeResult(res);
+    return openAndWait("ask", round, timeout, ctx);
   }
 
   if (name === "check_sandbox_question") {
     const timeout = clampTimeout(args.timeout_seconds, relay.MAX_TIMEOUT);
     const id = String(args.request_id || "").trim();
     if (!id) return textResult("No request_id given.", true);
-    const res = await relay.request(
-      "/api/relay/wait",
-      { from: relay.me, id, timeout },
-      (timeout + 10) * 1000,
-    );
-    return outcomeResult(res);
+    const part = Number(args.part);
+    return waitFor(id, timeout, ctx, Number.isFinite(part) && part >= 1 ? Math.floor(part) : undefined);
   }
 
   const planned = await callPlanTool(name, args);
@@ -1890,7 +1905,7 @@ async function callTool(name, args) {
   return textResult(`Unknown tool "${name}".`, true);
 }
 
-async function handle(msg) {
+async function handle(msg, ctx) {
   switch (msg.method) {
     case "initialize":
       return {
@@ -1905,7 +1920,7 @@ async function handle(msg) {
     case "tools/list":
       return { tools: TOOLS };
     case "tools/call":
-      return await callTool(msg.params && msg.params.name, msg.params && msg.params.arguments);
+      return await callTool(msg.params && msg.params.name, msg.params && msg.params.arguments, ctx);
     default:
       return { __error: { code: -32601, message: `Method not found: ${msg.method}` } };
   }
@@ -1951,9 +1966,13 @@ setInterval(hello, 2 * 60 * 1000).unref();
 
 // ── stdio loop ────────────────────────────────────────────────────────────
 
+/// Write one message; resolves once it is handed to the pipe.
 function send(obj) {
-  process.stdout.write(JSON.stringify(obj) + "\n");
+  return new Promise((resolve) => process.stdout.write(JSON.stringify(obj) + "\n", () => resolve()));
 }
+
+/// Calls in flight, by JSON-RPC id: what `notifications/cancelled` aborts.
+const calls = new Map();
 
 let buffer = "";
 // A call can be parked on a human for a minute or more, so closing stdin must
@@ -1995,24 +2014,39 @@ async function dispatchOne(line) {
   try {
     msg = JSON.parse(line);
   } catch (_) {
-    send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
+    await send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
+    return;
+  }
+  // The client gave up on a call: abort its wait, answer nothing, and
+  // acknowledge nothing, so the outcome reaches the session another way.
+  if (msg.method === "notifications/cancelled") {
+    const c = calls.get(msg.params && msg.params.requestId);
+    if (c) c.abort();
     return;
   }
   // A notification has no `id` and must not be answered at all.
   const isRequest = msg.id !== undefined && msg.id !== null;
+  const controller = new AbortController();
+  if (isRequest) calls.set(msg.id, controller);
   try {
-    const result = await handle(msg);
-    if (!isRequest) return;
-    if (result && result.__error) send({ jsonrpc: "2.0", id: msg.id, error: result.__error });
-    else send({ jsonrpc: "2.0", id: msg.id, result });
-  } catch (e) {
-    if (!isRequest) return;
-    // The daemon being unreachable is a *tool* failure, not a broken server —
-    // reported inside a result so the agent reads the reason and moves on.
-    send({
-      jsonrpc: "2.0",
-      id: msg.id,
-      result: textResult(`sbxw relay: ${(e && e.message) || e}`, true),
-    });
+    let reply;
+    let ackId;
+    try {
+      const result = await handle(msg, { signal: controller.signal });
+      if (!isRequest) return;
+      ackId = result && ACKS.get(result);
+      reply = result && result.__error ? { jsonrpc: "2.0", id: msg.id, error: result.__error } : { jsonrpc: "2.0", id: msg.id, result };
+    } catch (e) {
+      if (!isRequest) return;
+      // The daemon being unreachable is a *tool* failure, not a broken server —
+      // reported inside a result so the agent reads the reason and moves on.
+      reply = { jsonrpc: "2.0", id: msg.id, result: textResult(`sbxw relay: ${(e && e.message) || e}`, true) };
+    }
+    if (controller.signal.aborted) return;
+    await send(reply);
+    // Written: the outcome is the agent's now.
+    if (ackId) await relay.ackRequest(ackId, THREAD);
+  } finally {
+    if (isRequest) calls.delete(msg.id);
   }
 }

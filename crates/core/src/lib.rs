@@ -26,6 +26,7 @@ pub mod envexport;
 pub mod envfile;
 pub mod favourites;
 pub mod history;
+pub mod inbox;
 pub mod hosts;
 pub mod ids;
 pub mod invisible;

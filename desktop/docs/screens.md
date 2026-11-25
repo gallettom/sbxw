@@ -2017,12 +2017,29 @@ Jarvis panel (the non-Jarvis parts of `concierge.js`). Files:
 **Screen.** `relay` (panel "Requests"): the requests waiting, the one shown
 (a question, a screenshot request, a round of questions, a virtual Mac
 request, each in its state), those out with another sandbox, and agents
-waiting on a choice. It opens by itself when a request arrives.
+waiting on a choice. It opens by itself when a request arrives. A
+request the daemon reminded the person of (it waited 10 minutes for them,
+`reminded_ms`) shows "10+ min" in the list (`relay-req-<id>`) and "Waiting for
+you for over 10 minutes" on its card (`relay-waited-<id>`).
+
+**Notices and the Mac's notification** (D17 of the reliability audit). A
+request that starts to wait for the person (pending, or answered for review)
+is a notice offering `relay_open {id}`; several at once are one notice on the
+oldest. Such a notice does not go after 4 seconds: it stays while that
+request waits (`relay::notice_due`, `App::notice_sticky`), until the person
+opens it or closes it. A newer notice puts it aside (`held_notice`) and it
+comes back when that one goes, if the request still waits. The daemon's
+reminder is a notice once more ("web-app has waited 10 minutes for you: a
+question"). Requests are announced once, by id AND creation time: an id a
+restarted daemon gives again is a new request, announced, and nothing typed
+for the old one carries over. The system notification on the Mac is the
+island's (`macos/SbxwIsland`, `RelayNotifier.swift`), not this app's: no new
+crate. The phone's push is the daemon's (`svc/remote_push.rs`).
 
 **Data.** `data.relay` (`GET /api/relay`, read again on each `relay` event:
 `{requests}`, each `{id, from, from_thread?, kind: question|screenshot|ask|mac,
 question, to?, answer?, shot_count, state: pending|routed|answered|approved|denied,
-note?, created_ms}`); `data.sessions` (threads' key) for `AskUserQuestion`;
+note?, created_ms, reminded_ms?}`); `data.sessions` (threads' key) for `AskUserQuestion`;
 `data.relay_ui`, set by the core: `current`, `closed`, `rounds` (by id:
 `{intro, questions: [{id, title, body, rec}]}`), `forms` (by id: answers),
 `own`, `review`, `caption` (by id: what was typed), `shots` (by id: `{n,
@@ -2030,7 +2047,8 @@ source, w, h, kb, label, image}`, `image` a key for `image{}`; never the
 bytes), `max_shots`, `picks` and `sending` (by session key
 `sandbox::thread`), `local` (rounds found in a followed session, shown as
 requests with `local = true`), `follow` (`{target, follow, choosing}`),
-`voice` (`{id, index}`: the round answered by voice).
+`voice` (`{id, index}`: the round answered by voice), `waited` (ids of the
+requests waiting whose reminder came).
 
 **Pictures.** Dropped on the panel, pasted (⌘V on macOS while the panel is
 shown and no terminal has the keyboard), or read with "Paste from

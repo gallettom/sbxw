@@ -54,6 +54,16 @@ hidden until something happens:
 You can also force the list open from the menu-bar popover
 ("Show statuses on the notch").
 
+**A system notification** for a relay request (a question, a screenshot, the
+virtual Mac) that starts to wait for you, and again when sbxw reminds you of
+it after 10 minutes: the sandbox and the kind of request, never its text, and
+no sound (`RelayNotifier.swift`). macOS asks once whether the island may
+notify. None while the sbxw desktop app is in front (it opens its Requests
+panel on the request), and one per request and step: a request is told apart
+by its id and creation time. When the island is not running there is no
+system notification; the desktop app's badge and notice, and the phone's
+push, still say it.
+
 ## How it talks to sbxw
 
 Everything is local HTTP to your own sbxw daemon — no cloud, no accounts. The

@@ -219,3 +219,95 @@ fn the_stand_in_follows_the_daemons_rules() {
     assert_eq!(d["relay"]["requests"][1]["shot_count"], 1);
     assert!(events.iter().any(|(n, v)| n == "relay" && v["state"] == "routed"));
 }
+
+fn relay_data(reqs: J) -> J {
+    let mut d = fixture("basic");
+    d["relay"] = json!({ "requests": reqs });
+    d
+}
+
+fn req(id: &str, created: u64, extra: J) -> J {
+    let mut r = json!({ "id": id, "from": "web-app", "kind": "question", "question": "Confidential: the Falcon budget?", "state": "pending", "created_ms": created, "updated_ms": created, "shot_count": 0 });
+    for (k, v) in extra.as_object().unwrap() {
+        r[k] = v.clone();
+    }
+    r
+}
+
+fn notices(a: &[Action]) -> Vec<(String, Option<(String, J)>)> {
+    a.iter().filter_map(|a| match a {
+        Action::Notice { text, then, .. } => Some((text.clone(), then.clone())),
+        _ => None,
+    }).collect()
+}
+
+/// A daemon that gives an id again (after a restart) gives a new request:
+/// announced, and nothing typed for the old one carries over.
+#[test]
+fn the_announced_set_is_keyed_by_id_and_creation_time() {
+    let mut st = State::default();
+    let empty = relay_data(json!([]));
+    st.on_data(&Ctx { data: &empty }, "relay", &J::Null, &empty["relay"]);
+    let one = relay_data(json!([req("r-1", 100, json!({}))]));
+    let a = st.on_data(&Ctx { data: &one }, "relay", &empty["relay"], &one["relay"]);
+    assert_eq!(notices(&a).len(), 1, "{a:?}");
+    run(&mut st, &one, "relay_set", json!({ "id": "r-1", "field": "own", "value": "my draft" })).unwrap();
+    // The same request again: quiet.
+    assert!(notices(&st.on_data(&Ctx { data: &one }, "relay", &one["relay"], &one["relay"])).is_empty());
+    // The same id, another creation time: a new request.
+    let again = relay_data(json!([req("r-1", 900, json!({}))]));
+    let a = st.on_data(&Ctx { data: &again }, "relay", &one["relay"], &again["relay"]);
+    assert_eq!(notices(&a).len(), 1, "a reused id is announced: {a:?}");
+    assert!(st.own.get("r-1").is_none(), "the old request's draft is not the new one's");
+    // Settled and gone: forgotten.
+    st.on_data(&Ctx { data: &empty }, "relay", &again["relay"], &empty["relay"]);
+    assert!(st.announced.is_empty() && st.born.is_empty(), "{:?} {:?}", st.announced, st.born);
+}
+
+/// The daemon's reminder (`reminded_ms`): a notice once, offering the
+/// request, and the panel reads it as waiting long.
+#[test]
+fn a_reminded_request_is_a_notice_once_and_reads_as_waiting_long() {
+    let mut st = State::default();
+    let one = relay_data(json!([req("r-1", 100, json!({}))]));
+    st.on_data(&Ctx { data: &one }, "relay", &J::Null, &one["relay"]);
+    let late = relay_data(json!([req("r-1", 100, json!({ "reminded_ms": 600_100 }))]));
+    let a = st.on_data(&Ctx { data: &late }, "relay", &one["relay"], &late["relay"]);
+    let n = notices(&a);
+    assert_eq!(n.len(), 1, "{a:?}");
+    assert_eq!(n[0].0, "web-app has waited 10 minutes for you: a question");
+    assert_eq!(n[0].1, Some(("relay_open".into(), json!({ "id": "r-1" }))));
+    assert_eq!(ui(&a)["waited"], json!(["r-1"]));
+    assert!(notices(&st.on_data(&Ctx { data: &late }, "relay", &late["relay"], &late["relay"])).is_empty(), "once");
+    // Already reminded when the app starts: no notice, still marked.
+    let mut fresh = State::default();
+    let a = fresh.on_data(&Ctx { data: &late }, "relay", &J::Null, &late["relay"]);
+    assert!(notices(&a).iter().all(|(t, _)| !t.contains("10 minutes")), "{a:?}");
+    assert_eq!(ui(&a)["waited"], json!(["r-1"]));
+}
+
+/// Which notices stay: a relay request's while it waits for the person.
+#[test]
+fn notice_due_is_a_waiting_relay_request() {
+    let d = fixture("basic");
+    let data = d.as_object().unwrap().clone();
+    let open = |args: J| Some(("relay_open".to_string(), args));
+    assert!(notice_due(open(json!({ "id": "r-1" })).as_ref(), &data), "r-1 waits");
+    assert!(!notice_due(open(json!({})).as_ref(), &data), "no request named: an agent's question, goes after its time");
+    assert!(!notice_due(open(json!({ "id": "r-99" })).as_ref(), &data), "gone");
+    assert!(!notice_due(Some(&("network_show".to_string(), json!({ "id": "r-1" }))), &data));
+    assert!(!notice_due(None, &data));
+    let routed = relay_data(json!([req("r-1", 1, json!({ "state": "routed", "to": "api" }))]));
+    assert!(!notice_due(open(json!({ "id": "r-1" })).as_ref(), routed.as_object().unwrap()), "out with a sandbox: not the person's");
+}
+
+/// Several at once: the notice names the oldest, so it stays while it waits.
+#[test]
+fn several_new_requests_are_one_notice_on_the_oldest() {
+    let mut st = State::default();
+    let empty = relay_data(json!([]));
+    st.on_data(&Ctx { data: &empty }, "relay", &J::Null, &empty["relay"]);
+    let two = relay_data(json!([req("r-2", 300, json!({})), req("r-1", 100, json!({}))]));
+    let n = notices(&st.on_data(&Ctx { data: &two }, "relay", &empty["relay"], &two["relay"]));
+    assert_eq!(n, vec![("2 requests from agents wait for you".to_string(), Some(("relay_open".to_string(), json!({ "id": "r-1" }))))]);
+}

@@ -7,7 +7,9 @@
 //!
 //! What causes a push: only a change of state (a reachable session starts
 //! to ask for the person, more plans or merges wait, an agent of a
-//! reachable sandbox posts a new round of shots to a canvas). No route does, and
+//! reachable sandbox posts a new round of shots to a canvas, a relay request
+//! starts to wait for the person, or the daemon reminds the person of one
+//! after 10 minutes, `reminded_ms`). No route does, and
 //! a network request never does. A device whose event stream is open gets
 //! no push (it has the toast). Only while remote access is on (D4): the
 //! sidecar runs only then.
@@ -20,7 +22,8 @@ use sbxw_core::agents::SessionState;
 use sbxw_core::remote_access::journal::Kind;
 use sbxw_core::remote_access::push::{self as rules, Answer, Asking, Edges, Job, Limits, Outcome, PushFile, PushKind, Refused, Subscription, Vapid, Waiting};
 use sbxw_core::remote_access::reach::ReachKind;
-use std::collections::BTreeMap;
+use sbxw_core::relay::{RelayRequest, RelayState};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +41,67 @@ pub const RESTART_DELAY: Duration = Duration::from_secs(2);
 /// The trigger task looks again this often even with no event.
 const TICK: Duration = Duration::from_secs(30);
 
+/// One relay request as the trigger sees it: a request waits for the person
+/// while it is `pending` (to answer or route) or `answered` (to review). A
+/// request is told apart by its id AND its creation time, so a reused id is
+/// never taken for an older request; and by the state it waits in, so a
+/// routed question that comes back for review waits anew.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RelayWait {
+    pub key: (String, u64, &'static str),
+    /// The asking sandbox, as the push names it ([`rules::push_name`]).
+    pub name: String,
+    pub lead: bool,
+    /// The daemon reminded the person of it (`reminded_ms`, once per
+    /// request, after `relay::REMIND_AFTER_MS` waiting: D17).
+    pub due: bool,
+}
+
+impl RelayWait {
+    /// `None` for a request that does not wait for the person (routed, or
+    /// settled). Never the question, the answer or the note: a push carries
+    /// the sandbox's name and the kind letter only.
+    pub(crate) fn of(r: &RelayRequest, lead: bool) -> Option<RelayWait> {
+        let phase = match r.state {
+            RelayState::Pending => "pending",
+            RelayState::Answered => "answered",
+            _ => return None,
+        };
+        Some(RelayWait { key: (r.id.clone(), r.created_ms, phase), name: rules::push_name(&r.from), lead, due: r.reminded_ms.is_some() })
+    }
+}
+
+/// The relay's edges: a request that starts to wait for the person pushes
+/// `n` (the sandbox named, never the request's text), and so does the
+/// daemon's reminder of one, once. The first look sets
+/// the baseline: what already waits pushes nothing, and what was already due
+/// is not reminded (it may have been before a restart). A settled or routed
+/// request is forgotten.
+#[derive(Debug, Default)]
+pub(crate) struct RelayEdges {
+    seen: Option<BTreeSet<(String, u64, &'static str)>>,
+    reminded: BTreeSet<(String, u64, &'static str)>,
+}
+
+impl RelayEdges {
+    pub(crate) fn step(&mut self, waits: &[RelayWait]) -> Option<rules::Fire> {
+        let live: BTreeSet<_> = waits.iter().map(|w| w.key.clone()).collect();
+        self.reminded.retain(|k| live.contains(k));
+        let Some(seen) = &self.seen else {
+            self.reminded.extend(waits.iter().filter(|w| w.due).map(|w| w.key.clone()));
+            self.seen = Some(live);
+            return None;
+        };
+        let fresh = waits.iter().find(|w| !seen.contains(&w.key));
+        let due: Vec<&RelayWait> = waits.iter().filter(|w| w.due && !self.reminded.contains(&w.key)).collect();
+        // A request that is new and already due (a slow look) is one push.
+        self.reminded.extend(due.iter().map(|w| w.key.clone()));
+        self.reminded.extend(waits.iter().filter(|w| w.due && !seen.contains(&w.key)).map(|w| w.key.clone()));
+        self.seen = Some(live);
+        fresh.or(due.first().copied()).map(|w| rules::Fire { kind: PushKind::Needs, name: w.name.clone(), lead: w.lead })
+    }
+}
+
 /// The jobs pipe while a `--push` sidecar runs.
 struct Pipe {
     tx: tokio::sync::mpsc::Sender<String>,
@@ -48,6 +112,7 @@ pub struct Push {
     file: PushFile,
     limits: Limits,
     edges: Edges,
+    relay: RelayEdges,
     pipe: Option<Pipe>,
     /// Pipe generations: an old pipe's close is not this one's.
     gen: u64,
@@ -67,7 +132,7 @@ impl Push {
         let mut file = std::fs::read(dir.join(FILE)).ok().and_then(|b| PushFile::parse(&b)).unwrap_or_default();
         let before = file.subscriptions.len();
         file.subscriptions.retain(|id, _| known(id));
-        let p = Push { file, limits: Limits::default(), edges: Edges::default(), pipe: None, gen: 0, pending: BTreeMap::new(), seq: 0, task: false, restart_pending: false, restart_delay: RESTART_DELAY, restarts: 0 };
+        let p = Push { file, limits: Limits::default(), edges: Edges::default(), relay: RelayEdges::default(), pipe: None, gen: 0, pending: BTreeMap::new(), seq: 0, task: false, restart_pending: false, restart_delay: RESTART_DELAY, restarts: 0 };
         if p.file.subscriptions.len() != before {
             p.save(dir);
         }
@@ -364,6 +429,7 @@ impl App {
                     ev = bus.recv() => match ev {
                         Ok(Event::Session(_) | Event::Lead(_) | Event::LeadEnd(_) | Event::Plan(_)) => {}
                         Ok(Event::Canvas(n)) if n.what == "shots" => {}
+                        Ok(Event::Relay(_)) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                         Ok(_) => continue,
                         Err(_) => break,
@@ -391,18 +457,21 @@ impl App {
         let waiting_by = self.remote_waiting();
         let waiting: usize = waiting_by.values().map(|w| w.plans + w.merges).sum();
         let now = now_ms();
+        let relay: Vec<RelayWait> = self.relay_list().iter().filter_map(|r| RelayWait::of(r, reach.get(&r.from).copied().unwrap_or(false))).collect();
         let mut guard = self.remote_access.lock().unwrap();
         let rt = &mut *guard;
         let asking_n = asking.len();
         let mut fires = rt.push.edges.step(asking, waiting_by);
         fires.extend(rt.push.edges.shots(rounds, &reach));
+        fires.extend(rt.push.relay.step(&relay));
         if fires.is_empty() || !rt.enabled {
             return;
         }
         let Some(tx) = rt.push.pipe.as_ref().map(|p| p.tx.clone()) else { return };
         // With level 2 off the phone is told nothing of approvals but the
-        // content-free `p` push: the badge then counts sessions only.
-        let badge = rules::badge(asking_n + if rt.level2.enabled { waiting } else { 0 });
+        // content-free `p` push: the badge then counts sessions only. Relay
+        // requests waiting for the person count as plans and merges do.
+        let badge = rules::badge(asking_n + if rt.level2.enabled { waiting + relay.len() } else { 0 });
         let targets: Vec<(String, Subscription)> = rt
             .push
             .file

@@ -396,10 +396,11 @@ branch and stays one merge.
 thread of the sandbox with an open session (of this plan or another) is told
 in one fixed line written by sbxw, e.g. ``[sbxw] main moved: a, b merged.
 Check `git merge-tree --write-tree main HEAD` before you go on.`` (the branch
-is the one merged into). It follows a team note's delivery rule: typed when
-the thread is idle or working, held while it waits on a question or a
-permission prompt, dropped when its session ended. The merged threads are not
-told, and nothing is typed into a session of another sandbox. The lead's
+is the one merged into). It goes through the thread's inbox (see
+[relay.md](relay.md#the-inbox-how-sbxw-hands-an-agent-text)): printed by its
+status hook at its next tool call, never typed into a busy session. A thread
+whose session ended is not told. The merged threads are not told, and no
+session of another sandbox is. The lead's
 merge line then ends with `Told that main moved: <threads>.` sbxw does not
 say which of those branches now conflict: its merge checks look at the main
 checkout against the paths a merge changes, not at one branch against
@@ -612,17 +613,21 @@ sent before the daemon had this version are not recovered.
 - **Team notes.** The lead and its threads have two relay tools for what
   you should be able to follow: `team_note {to, kind, text}` (`to`: `lead`,
   a thread, or `team`; `kind`: `info`, `warning` or `decision`) records the
-  note on the team's timeline and types one line of sbxw's own into each
-  addressee's open session saying a note waits (never the note's words);
-  `read_team_notes` hands the caller its notes once, framed as another
-  agent's data. Their decisions and warnings stand pinned beside the board's.
-  A session that started before its relay had `read_team_notes` cannot read
-  a note, so sbxw only uses the plain line for an addressee whose relay
-  server said, lately, that it offers the tool (see `/api/relay/hello` in
-  [relay.md](relay.md#team-notes-and-the-relay-servers-hello)). For any other
-  the line adds "If your session has no such tool, ask <sender> to resend it
-  by SendMessage", and the sender's `team_note` answer names it: "<addressee>
-  may not be able to read team notes: send it by SendMessage too".
+  note on the team's timeline and files it, framed as another agent's data,
+  in each addressee's inbox, its session open or not: its status hook prints
+  it at its next tool call, prompt, start or stop (see
+  [relay.md](relay.md#the-inbox-how-sbxw-hands-an-agent-text)). Nothing is
+  typed into a busy session. `read_team_notes` hands the caller the notes it
+  does not have yet. A note counts as read once the inbox's hook confirmed it
+  printed it, or once the `read_team_notes` call came back to the agent (its
+  `PostToolUse`): a lost answer is handed again by the next call. The read
+  marks are kept in `state/team_cursors.json`, so a restart hands nothing
+  twice. Their decisions and warnings stand pinned beside the board's. An
+  addressee whose hook sbxw has not seen able to print an inbox (an older
+  hook, or not heard from since a daemon restart) and whose relay server did
+  not say lately that it offers `read_team_notes` is named in the sender's
+  `team_note` answer: "<addressee> may not be able to read team notes: send
+  it by SendMessage too".
 - Commits: each thread's branch against the main checkout, or once merged,
   the recorded merge commit's other side, so a thread's commits stay its own
   after the merge deletes its branch. No author email. A shared plan's
@@ -717,10 +722,10 @@ or its thread failed or merged. The thread's briefing names its ticket.
 form, a pasted picture), priority (P1 to P3), reorder inside Planned (Move
 up, Move down, To the top), "Validated on my machine" on a merged ticket,
 delete (one confirmation naming the files that go), and **Send to the
-lead**: after one confirmation, sbxw types one fixed line into the sandbox's
-main session, `[sbxw] ticket T-12 waits for a plan: read it with
-ticket_read`, under a team note's rule (typed when it is idle or working,
-held while it waits on a question). The ticket's words are never typed.
+lead**: after one confirmation, sbxw hands the sandbox's main session one
+fixed line, `[sbxw] ticket T-12 waits for a plan: read it with
+ticket_read`, through its inbox (printed by its hook, never typed into a busy
+session). The ticket's words are never sent.
 
 **Storage and limits.** On the host, under sbxw's state directory, per
 sandbox: `state/tickets/<sandbox>/tickets.json` and `files/` (0700 folders,

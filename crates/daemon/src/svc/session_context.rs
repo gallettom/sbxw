@@ -5,16 +5,20 @@
 //! [`App::session_start_context`] gathers what each source has pending for
 //! the session that just started. Today one source: the lead's instructions
 //! after a `/clear` or a compaction in the lead's terminal (D3 of the
-//! reliability audit). A later source (an inbox of team notes, merge
-//! results) adds a line to it, and nothing else changes.
+//! reliability audit). The session's inbox (svc::inbox: team notes, merge
+//! results, relay answers) is added by the hook route after it, within what
+//! is left of [`CONTEXT_MAX_CHARS`].
 
 use crate::app::App;
 use sbxw_core::plans::PlanState;
 use sbxw_core::SandboxRef;
 use serde_json::Value;
 
-/// Claude Code keeps a hook's `additionalContext` whole up to this size; the
-/// lead's instructions go by their path when they would not fit.
+/// Claude Code keeps a hook's `additionalContext` whole up to this size (an
+/// assumption: Claude Code's documented cap on hook output in context is
+/// taken to be 10,000 characters, not verified from this sandbox); the
+/// lead's instructions go by their path when they would not fit, and an
+/// inbox message by its head and a file.
 pub const CONTEXT_MAX_CHARS: usize = 9_500;
 
 impl App {

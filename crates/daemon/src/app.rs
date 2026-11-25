@@ -160,6 +160,14 @@ pub struct App {
     pub(crate) tests_workers: Mutex<HashSet<String>>,
     /// Bumped at every change of `tests`: what a waiting request watches.
     pub(crate) tests_tick: tokio::sync::watch::Sender<u64>,
+    /// Every agent session's inbox, as in `state/inbox.json` (see `svc::inbox`).
+    pub(crate) inbox: Mutex<sbxw_core::inbox::Book>,
+    /// Per recipient: its hook's version, its last event, its last nudge.
+    pub(crate) inbox_seen: Mutex<HashMap<(String, sbxw_core::inbox::To), crate::svc::inbox::Seen>>,
+    /// Wakes the inbox loop when a message is filed.
+    pub(crate) inbox_wake: tokio::sync::Notify,
+    /// Whether the inbox loop runs.
+    pub(crate) inbox_running: std::sync::atomic::AtomicBool,
 }
 
 pub struct AppBuilder {
@@ -182,6 +190,9 @@ impl AppBuilder {
         let emphasis = Mutex::new(self.cfg.emphasis.clone());
         let remote_access = Mutex::new(crate::svc::remote_access::RemoteRuntime::load(&store.paths.root));
         let tests = crate::svc::testq::load(&store.paths.state().join("tests.json"));
+        // Kept across restarts (see `svc::relay`): no request lost, no id reused.
+        let relay_book = crate::svc::relay::load(&store.paths.state().join("relay.json"));
+        let inbox = crate::svc::inbox::load(&store.paths.state().join("inbox.json"));
         let jarvis = sbxw_core::jarvis::Book::load(crate::svc::jarvis::load(&store.paths.state().join("jarvis.json")));
         Arc::new(App {
             store,
@@ -199,7 +210,7 @@ impl AppBuilder {
             initial_sandbox: Mutex::new(String::new()),
             agents: Mutex::new(AgentBook::new()),
             history: Mutex::new(sbxw_core::history::HistoryBook::new()),
-            relay: Mutex::new(RelayBook::new()),
+            relay: Mutex::new(relay_book),
             relay_waiters: Mutex::new(HashMap::new()),
             #[cfg(test)]
             relay_told: Mutex::new(Vec::new()),
@@ -243,6 +254,10 @@ impl AppBuilder {
             tests: Mutex::new(tests),
             tests_workers: Mutex::new(HashSet::new()),
             tests_tick: tokio::sync::watch::channel(0).0,
+            inbox: Mutex::new(inbox),
+            inbox_seen: Mutex::new(HashMap::new()),
+            inbox_wake: tokio::sync::Notify::new(),
+            inbox_running: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }
@@ -357,11 +372,14 @@ impl App {
         self.start_tickets_listener();
         self.start_mac_lifecycle();
         self.tests_resume();
+        self.inbox_start();
     }
 
-    fn prune(&self) {
+    fn prune(self: &Arc<Self>) {
         let now = now_ms();
-        let dropped = self.relay.lock().unwrap().prune(now);
+        // Owed outcomes handed on, reminders, then expired requests told.
+        self.relay_tick();
+        let dropped = self.relay_prune(now);
         if dropped > 0 {
             tracing::info!("relay: pruned {dropped} stale request(s)");
         }

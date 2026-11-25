@@ -60,3 +60,62 @@ fn the_notice_sits_in_the_bar_clear_of_its_controls() {
         assert!(n[2] <= 380.0 + 0.5, "{w}: at most 380 pt wide");
     }
 }
+
+/// A relay request's notice stays while the request waits (no 4 seconds),
+/// a newer notice puts it aside and it comes back after, and it goes once
+/// the request no longer waits (D17 of the reliability audit).
+#[test]
+fn a_waiting_relay_request_keeps_its_notice() {
+    let mut rt = window(1284.0, 816.0);
+    // The fixture's link first: its data would replace the test's.
+    let end = Instant::now() + Duration::from_secs(60);
+    let mut quiet = 0;
+    while quiet < 12 {
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        quiet = if rt.state.link_quiet() { quiet + 1 } else { 0 };
+        assert!(Instant::now() < end, "the fixture's link never settled");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let waiting = serde_json::json!({ "requests": [{ "id": "r-7", "from": "web-app", "kind": "question", "question": "q", "state": "pending", "created_ms": 1, "updated_ms": 1, "shot_count": 0 }] });
+    let past = || Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+    rt.update(move |s, _| {
+        s.feats.data.insert("relay".into(), waiting);
+        s.notify("web-app asks: q", false);
+        s.feats.notice_then = Some(("relay_open".into(), serde_json::json!({ "id": "r-7" })));
+        s.notice.as_mut().unwrap().2 = past();
+    });
+    rt.update(|s, tx| {
+        s.poll(0.0, tx);
+    });
+    assert_eq!(rt.state.notice.as_ref().map(|n| n.0.as_str()), Some("web-app asks: q"), "past its time, still shown: the request waits");
+    // A newer notice: shown, the relay one held, back when it goes.
+    rt.update(|s, _| s.notify("Copied 4.9 KB from web-app", false));
+    assert_eq!(rt.state.feats.notice_then, None, "the newer notice has no offer of its own");
+    rt.update(move |s, _| s.notice.as_mut().unwrap().2 = past());
+    rt.update(|s, tx| {
+        s.poll(0.0, tx);
+    });
+    assert_eq!(rt.state.notice.as_ref().map(|n| n.0.as_str()), Some("web-app asks: q"), "came back");
+    assert_eq!(rt.state.feats.notice_then, Some(("relay_open".into(), serde_json::json!({ "id": "r-7" }))));
+    // Dealt with: the request is gone from the daemon's list, the notice goes.
+    rt.update(move |s, _| {
+        s.feats.data.insert("relay".into(), serde_json::json!({ "requests": [] }));
+        s.notice.as_mut().unwrap().2 = past();
+    });
+    rt.update(|s, tx| {
+        s.poll(0.0, tx);
+    });
+    assert!(rt.state.notice.is_none(), "{:?}", rt.state.notice);
+    // Any other notice with an offer goes after its time.
+    rt.update(move |s, _| {
+        s.notify("api asks: 5173", false);
+        s.feats.notice_then = Some(("network_show".into(), serde_json::json!({ "sandbox": "api" })));
+        s.notice.as_mut().unwrap().2 = past();
+    });
+    rt.update(|s, tx| {
+        s.poll(0.0, tx);
+    });
+    assert!(rt.state.notice.is_none());
+}

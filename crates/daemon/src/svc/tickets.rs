@@ -352,13 +352,11 @@ impl App {
         let d = self.note_targets(sb, &who, |k| self.sessions.is_live(k)).into_iter().next().map(|(_, d)| d).unwrap_or(team::Delivery::Drop);
         let sent = match d {
             team::Delivery::Drop => return Err(format!("no session of {s}'s agent is open: open its terminal first")),
-            team::Delivery::Type => {
-                self.spawn_push(sb.clone(), sbxw_core::session::SessionKind::Agent, line, None);
-                Sent::Typed
-            }
-            team::Delivery::Hold => {
-                self.hold_note_line(sb.clone(), team::LEAD.to_string(), line);
-                Sent::Held
+            // Through the lead's inbox (svc::inbox): printed by its hook at
+            // its next tool call or prompt, never typed into a busy terminal.
+            d => {
+                self.deliver(sb, &sbxw_core::session::SessionKind::Agent, sbxw_core::inbox::Kind::Notice, "sbxw tickets", &line, Some(&format!("ticket:{n}")))?;
+                if d == team::Delivery::Type { Sent::Typed } else { Sent::Held }
             }
         };
         let _ = self.tickets_update(&s, Some(n), "sent", |b| {

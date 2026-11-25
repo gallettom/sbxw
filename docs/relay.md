@@ -45,11 +45,36 @@ codebase search instead of asking.
 
 The call waits about 90 seconds, then returns the answer, a refusal, or "still
 open, check later with `check_sandbox_question`". An agent's tool call never
-hangs on a human who stepped away. If the answer is approved after the call
-returned, sbxw types it into the asking session (the thread, if a thread
-asked). The same holds when the call was cut short (the agent's client gave up,
-the connection dropped): the answer is delivered once, either returned by a
-call still waiting or typed in, never both and never neither.
+hangs on a human who stepped away.
+
+How a request gets from the call to the agent and back:
+
+- **The id first.** The tool opens the request (`/api/relay/open`), which
+  answers its id at once, then waits on it (`/api/relay/wait`). A wait that
+  fails (the daemon restarted, the connection dropped) still gives the agent
+  the id and tells it to call `check_sandbox_question`, not to ask again.
+- **No duplicates.** The open carries a key the relay server makes for that
+  one tool call; an open retried with the same key gets the same request.
+- **Kept across restarts.** Requests live in `state/relay.json`, with the
+  counter their ids come from: after a daemon restart, an open request is
+  still open, a waiting agent finds it with `check_sandbox_question`, and an
+  id (`r-3`) never names another request. Only the session that asked (the
+  thread, or the sandbox's agent) can wait on it.
+- **Delivered once, when received.** An outcome counts as delivered only when
+  the relay server confirms it wrote the tool result (`/api/relay/ack`). If the
+  call was cancelled (Esc, `notifications/cancelled`), the server aborts its
+  wait and acknowledges nothing. An outcome approved after the call returned,
+  or returned and not acknowledged within 30 seconds, goes to the asking
+  session's inbox (the thread, if a thread asked): its status hook prints it
+  at the session's next step, never typed into a busy terminal. Once, never
+  both, never neither.
+- **Whole answers.** An answer is kept up to 200,000 characters and read in
+  parts of about 12,000: a result that has more says so, and
+  `check_sandbox_question` with `part: 2` (or `relay.js wait <id> --part 2`)
+  reads the next. A round of questions may be 32,000 characters long.
+- **Nobody forgotten.** A request that has waited on you for 10 minutes with
+  nothing done is reminded once. One still open after 6 hours is closed, and
+  the asker is told so.
 
 ### Your side
 
@@ -57,8 +82,8 @@ A popup shows the question and one button per running sandbox:
 
 <img src="images/relay.png" alt="An information request from api: the question, buttons for myapp and shop, and a box to answer it yourself" width="600">
 
-1. **Route it:** click a sandbox. A one-line notice is typed into that agent,
-   and it fetches the question with `node ~/.sbxw/relay.js show <id>`, framed
+1. **Route it:** click a sandbox. A one-line notice goes to that agent's inbox
+   (printed at its next step, never typed while it works), and it fetches the question with `node ~/.sbxw/relay.js show <id>`, framed
    as untrusted data, with the id it must answer with. A sandbox brought up
    before this version has no `show` until you run `sbxw up` for it.
 2. **Carry on:** the popup shrinks to a corner card while the other agent
@@ -274,14 +299,58 @@ with Jarvis's voice: the intro, then each question with its
 recommendation. Click again to stop. Nothing is read in full on its own;
 with the voice on, a short spoken cue says a round has arrived.
 
+## The inbox: how sbxw hands an agent text
+
+Whatever sbxw has for an agent session of its own accord (a relay answer the
+agent no longer waits for, a request routed to it, a team note, a merge
+result, a plan's approval for a lead whose `propose_plan` came back pending, a
+thread's briefing, a board refusal, a ticket sent to the lead) goes through
+one call, `App::deliver` (crates/daemon/src/svc/inbox.rs). It is filed in the
+inbox of that session's role (the sandbox's main session, or one thread;
+never a session id, so the next conversation of a thread gets what the last
+did not read), kept in `state/inbox.json` across restarts, and handed over:
+
+1. **By the status hook's answer, never typed.** On `PostToolUse` (the main
+   conversation's, never a subagent's), `UserPromptSubmit` and `SessionStart`
+   the messages go as `additionalContext`; on `Stop`, as the reason that
+   keeps the agent going (`decision: "block"`), once: a `Stop` that already
+   kept it going (`stop_hook_active`) carries only messages never offered. A
+   busy agent gets them at its next tool call; one ending its turn, before it
+   goes idle.
+2. **One fixed line, only when the session is idle at its prompt**: `[sbxw]
+   sbxw has messages for you: they come with this turn, from sbxw's hook.`
+   starts a turn, whose hook carries the content. The line never holds a
+   message's words. It is typed under the phone's idle rule (one session,
+   idle, no question or prompt open, no tool call in the last 3 s, bracketed
+   paste on), at most once a minute per session, and never to a session
+   whose hook is too old to print an inbox.
+3. **A session that is not running**: the messages wait for its next start.
+
+Each message has an id (`m-<n>`), a kind (answer, request, team note, merge
+result, plan, thread report, briefing, notice) and a source in sbxw's words,
+and is framed as data from that source, never the user's instructions. A
+hook answer holds at most 9500 characters of context; a longer message goes
+as its head, and the hook writes it whole to
+`/tmp/sbxw-inbox/<session id>/<m-id>.txt` (0600), which the context names.
+Messages that do not fit wait for the next event.
+
+A message leaves the inbox only when the hook that printed it says so: after
+its stdout is written, the hook posts `/api/hook/inbox_ack {session_id,
+ids}` (status hook v5). Only messages of the token's sandbox last offered to
+that session are removed. An ack lost on the way costs a second offer after
+30 s (or at once to another conversation of the same role), never the
+message. The next hook event was not used as the confirmation: an idle
+session may send none for hours, and an event proves the hook ran, not that
+it printed. Typing stays only for what a person typed (the phone's
+messages, the Team button's `/lead`).
+
 ## Team notes and the relay server's hello
 
 A lead and its threads leave each other team notes (`team_note`,
-`read_team_notes`, see [threads-and-lead.md](threads-and-lead.md)). sbxw
-types one fixed line into the addressee's session saying a note waits, never
-the note's words. A session reads a note only if its relay MCP server has
-`read_team_notes`; one started before the relay had it does not, and the
-line would leave the note unread.
+`read_team_notes`, see [threads-and-lead.md](threads-and-lead.md)). A note
+goes to the addressee's inbox (above), whatever its relay offers. A session
+whose hook is older than v5 cannot print an inbox, and reads a note only if
+its relay MCP server has `read_team_notes`.
 
 So each relay server says hello: at start and every 2 minutes it posts
 `/api/relay/hello` on the agent listener with `{thread, agent_proc, tools}`,
@@ -301,6 +370,16 @@ failed hello is silent.
 Why this signal: the hook version says what is on disk, not what a running
 session loaded; the daemon does not record when it wrote the relay into a
 sandbox; a session's own relay server is the one thing that knows its tools.
+
+## Events for the views that tell you
+
+Each step of a request is a `relay-note` event on `/api/stream`:
+`{step, id, kind, state, from, from_thread?, to?, created_ms, at_ms}`, where
+`step` is `opened`, `routed`, `unrouted`, `answered`, `settled`, `reminder`,
+`expired` or `owed`. It holds names and ids only, never the question or the
+answer. The reminder fires once per request, 10 minutes after its last change
+while it waits on you (pending, or an answer to review); the request then
+carries `reminded_ms` in `/api/relay`.
 
 ## What a sandbox cannot do
 
