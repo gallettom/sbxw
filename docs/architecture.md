@@ -35,6 +35,10 @@ State on the host lives under `~/.sbxw/`: `run/` (daemon pid and log),
 `kits/` (the bundled kits, written out), `cache/` (the kit cache) and
 `browser-extension/`.
 
+Each bring-up is timed, step by step and `sbx` call by `sbx` call, and the
+last 50 timelines are kept in `state/timings.json`: see
+[Where the time goes](web-ui.md#where-the-time-goes).
+
 ## Tests
 
 ```bash
