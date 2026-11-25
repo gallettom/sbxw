@@ -464,3 +464,127 @@ async fn the_dialog_approves_the_command_or_clears_it() {
         }
     }
 }
+
+/// The plan's test-job lines, oldest first.
+fn job_lines(app: &Arc<App>, plan: &str) -> Vec<serde_json::Value> {
+    let log = app.plans.lock().unwrap().log_of(plan);
+    log.entries
+        .iter()
+        .filter(|e| e.kind == sbxw_core::team::EventKind::TestJob)
+        .map(|e| {
+            let mut d = e.data.clone();
+            d["from"] = e.from.clone().into();
+            d["text"] = e.text.clone().into();
+            d
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn each_answered_request_is_a_line_on_its_plans_timeline() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    let api = r.plan("api", Some("echo ok"), TestsChoice::Approve);
+    let head = git(r.ws.path(), &["rev-parse", "HEAD"]);
+    // Passed, then the same tree again: a stored result.
+    run(&r.app, &r.sb, r.ask(&name("api"), "HEAD")).await;
+    run(&r.app, &r.sb, r.ask(&name("api"), "HEAD")).await;
+    let l = job_lines(&r.app, &api);
+    assert_eq!(l.len(), 2, "{l:?}");
+    assert_eq!((l[0]["outcome"].as_str(), l[0]["reused"].as_bool(), l[0]["retried"].as_bool()), (Some("passed"), Some(false), Some(false)));
+    assert_eq!((l[0]["from"].as_str(), l[0]["asker"].as_str(), l[0]["thread"].as_str()), (Some("api"), Some("api"), Some("api")));
+    assert_eq!(l[0]["short"].as_str(), Some(&head[..7]));
+    assert!(l[0]["duration_ms"].is_u64() && l[0]["job"].as_str().is_some_and(|j| j.starts_with("t-")));
+    assert_eq!((l[1]["reused"].as_bool(), l[1]["reuse"].as_str()), (Some(true), Some("stored")));
+    assert!(l.iter().all(|d| !d.to_string().contains("tail")), "no output on the timeline: {l:?}");
+    // Failed after a retry, and timed out.
+    let broken = r.plan("broken", Some("echo nope; exit 2"), TestsChoice::Approve);
+    run(&r.app, &r.sb, r.ask(&name("broken"), "HEAD")).await;
+    let l = job_lines(&r.app, &broken);
+    assert_eq!((l[0]["outcome"].as_str(), l[0]["retried"].as_bool()), (Some("failed"), Some(true)));
+    assert!(l[0]["text"].as_str().unwrap().contains("failed") && l[0]["text"].as_str().unwrap().contains("retried once"), "{l:?}");
+    let hang = r.plan("hang", Some("sleep 30"), TestsChoice::Approve);
+    run(&r.app, &r.sb, r.ask(&name("hang"), "HEAD")).await;
+    assert_eq!(job_lines(&r.app, &hang)[0]["outcome"].as_str(), Some("timed_out"));
+    // A join of a job at work: a line for the first asker and one for the
+    // joiner (the lead naming the plan), marked joined, when it finishes.
+    let gate = r.scratch("gate");
+    let slow = r.plan("slow", Some(&format!("while [ ! -e {gate} ]; do sleep 0.05; done")), TestsChoice::Approve);
+    let (job, _) = r.app.tests_request(&r.sb, r.ask(&name("slow"), "HEAD")).await.unwrap();
+    let (j2, took) = r.app.tests_request(&r.sb, TestAsk { git_ref: Some("HEAD"), plan: Some(&slow), ..Default::default() }).await.unwrap();
+    assert_eq!((took, j2.id.as_str()), (Took::Joined, job.id.as_str()));
+    assert!(job_lines(&r.app, &slow).is_empty(), "nothing until it finishes");
+    std::fs::write(&gate, "").unwrap();
+    r.app.tests_wait(&job.id, &r.sb, Duration::from_secs(30)).await.unwrap();
+    let l = job_lines(&r.app, &slow);
+    assert_eq!(l.len(), 2, "{l:?}");
+    assert_eq!((l[0]["from"].as_str(), l[0]["reused"].as_bool()), (Some("slow"), Some(false)));
+    assert_eq!((l[1]["from"].as_str(), l[1]["reuse"].as_str(), l[1]["thread"].as_str()), (Some("lead"), Some("joined"), None));
+    // The counts and the numbers agree.
+    let n = r.app.plan_view(&r.app.plan(&api).unwrap())["numbers"].clone();
+    assert_eq!((n["tests"]["run"].as_u64(), n["tests"]["reused"].as_u64(), n["tests"]["refused"].as_u64()), (Some(1), Some(1), Some(0)));
+}
+
+async fn hook_post(app: &Arc<App>, sb: &SandboxRef, body: serde_json::Value) -> serde_json::Value {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+    let token = app.store.token(sb.clone()).unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/hook")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let res = crate::http::agent_router(app.clone()).oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+}
+
+fn bash(thread: Option<&str>, command: &str) -> serde_json::Value {
+    let mut ev = serde_json::json!({
+        "hook_event_name": "PreToolUse", "session_id": "s1", "hook_version": 4,
+        "tool_name": "Bash", "tool_input": { "command": command },
+    });
+    if let Some(t) = thread {
+        ev["sbxw_thread"] = t.into();
+    }
+    ev
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_thread_running_the_plans_whole_test_command_is_sent_to_the_queue() {
+    let r = rig();
+    let plan = r.plan("api", Some("tools/check   all"), TestsChoice::Approve);
+    r.plan("bare", None, TestsChoice::Approve);
+    let denied = |v: &serde_json::Value| v["hookSpecificOutput"]["permissionDecision"] == "deny";
+    for cmd in ["tools/check all", "cd /w/app && tools/check all", "  tools/check \t all  ", "git commit -qm x; tools/check all 2>&1 | tail -40"] {
+        let v = hook_post(&r.app, &r.sb, bash(Some("api"), cmd)).await;
+        assert!(denied(&v), "{cmd:?}: {v}");
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        let why = v["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        assert!(why.contains("run_tests") && why.contains("Commit"), "{why}");
+    }
+    // A narrower command, the lead (no thread), a plan with no command, another tool.
+    for (thread, cmd) in [(Some("api"), "tools/check core"), (Some("api"), "tools/check all --only x"), (None, "tools/check all"), (Some("bare"), "tools/check all")] {
+        let v = hook_post(&r.app, &r.sb, bash(thread, cmd)).await;
+        assert!(!denied(&v), "{thread:?} {cmd:?}: {v}");
+    }
+    let mut read = bash(Some("api"), "tools/check all");
+    read["tool_name"] = "Read".into();
+    assert!(!denied(&hook_post(&r.app, &r.sb, read).await));
+    // Each refusal counted and on the timeline: the thread, not the command.
+    let log = r.app.plans.lock().unwrap().log_of(&plan);
+    let refused: Vec<_> = log.entries.iter().filter(|e| e.kind == sbxw_core::team::EventKind::TestRefused).collect();
+    assert_eq!(refused.len(), 4);
+    assert!(refused.iter().all(|e| e.from == "api" && e.data["thread"] == "api"));
+    assert!(refused.iter().all(|e| !serde_json::to_string(e).unwrap().contains("tools/check")), "never the command");
+    let n = r.app.plan_view(&r.app.plan(&plan).unwrap())["numbers"].clone();
+    assert_eq!(n["tests"]["refused"].as_u64(), Some(4));
+    let tl = r.app.team_timeline(&plan, &Default::default(), None, 100).await.unwrap();
+    assert_eq!(tl["numbers"]["tests"]["refused"].as_u64(), Some(4));
+    assert!(tl["events"].as_array().unwrap().iter().any(|e| e["kind"] == "test_refused" && e["group"] == "status"));
+}

@@ -967,6 +967,35 @@ function testsLines(p) {
   return [];
 }
 
+// BEGIN plan numbers
+/// The Board's three numbers of a plan (`numbers`, see sbxw_core::team::
+/// plan_numbers), as one line: time from approved to merged (to `now` while
+/// not merged), test jobs run and answered without running, times the user
+/// was asked. Empty when the daemon sent none.
+function numbersLine(n, now) {
+  if (!n || typeof n !== "object") return "";
+  const span = (ms) => {
+    const m = Math.max(0, Math.round(ms / 60000));
+    return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+  };
+  const parts = [];
+  if (typeof n.approved_ms === "number") {
+    parts.push(
+      typeof n.merged_ms === "number"
+        ? `approved to merged in ${span(n.merged_ms - n.approved_ms)}`
+        : `approved ${span(now - n.approved_ms)} ago, not merged yet`,
+    );
+  }
+  if (n.tests && typeof n.tests === "object") {
+    const t = n.tests;
+    parts.push(`test jobs: ${t.run || 0} run, ${t.reused || 0} answered without running, ${t.refused || 0} thread command(s) sent to the queue`);
+  }
+  const asked = Number(n.asked) || 0;
+  parts.push(`the user was asked ${asked} time${asked === 1 ? "" : "s"}`);
+  return `Numbers (also on the Board): ${parts.join("; ")}.`;
+}
+// END plan numbers
+
 function planText(res) {
   const p = res.plan || {};
   if (p.id) lastPlanId = p.id;
@@ -983,6 +1012,10 @@ function planText(res) {
     lines.push(`Plan ${p.id} is approved${p.summary ? `: ${p.summary}` : "."}`);
   }
   lines.push(...testsLines(p));
+  if (p.state === "approved") {
+    const nl = numbersLine(p.numbers, Date.now());
+    if (nl) lines.push(nl);
+  }
   for (const n of res.ticket_notes || []) lines.push(`Note: ${n}.`);
   for (const t of p.threads || []) {
     const run = p.state === "approved" ? (t.running ? ", session running" : ", session not running") : "";

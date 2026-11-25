@@ -184,6 +184,7 @@ impl App {
             "more": more,
             "standing": team::standing_notes(&plan, &board, &log, now),
             "relay_text_kept": team::KEEP_RELAY_TEXT,
+            "numbers": team::plan_numbers(&plan, &log, self.tests_counts(id)),
         });
         if before.is_none() {
             let list = commits.as_deref().unwrap_or(&[]);

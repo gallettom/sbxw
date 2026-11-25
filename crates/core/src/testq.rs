@@ -245,11 +245,23 @@ pub struct Job {
     /// Requests that joined this job while it was queued or running.
     #[serde(default)]
     pub joined: u32,
+    /// Who joined, and under which plan: each is told the result, and each
+    /// join is a line on its plan's timeline when the job finishes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joiners: Vec<Joiner>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<TestResult>,
     pub queued_ms: u64,
     #[serde(default)]
     pub started_ms: Option<u64>,
+}
+
+/// A request that joined a job already queued or running.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Joiner {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    pub by: String,
 }
 
 /// Jobs that really ran, and requests answered without running (a stored
@@ -332,6 +344,7 @@ impl Book {
             .find(|j| j.sandbox == ask.sandbox && j.key == ask.key && j.state != JobState::Done)
         {
             j.joined += 1;
+            j.joiners.push(Joiner { plan: ask.plan.map(str::to_string), by: ask.by.to_string() });
             let j = j.clone();
             self.count(ask.plan, false);
             return (j, Took::Joined);
@@ -350,6 +363,7 @@ impl Book {
             state: if reused { JobState::Done } else { JobState::Queued },
             reused,
             joined: 0,
+            joiners: vec![],
             result: stored,
             queued_ms: now,
             started_ms: None,
@@ -477,6 +491,109 @@ impl Book {
         }
         before != (self.jobs.len(), self.results.len())
     }
+}
+
+/// The words of a shell command for comparison: blanks collapsed, and the
+/// chain operators `&&`, `||`, `;`, `|`, `&` and newlines (outside quotes)
+/// cut it into segments. Each segment also loses its leading variable
+/// assignments (`X=1 cmd`) and its trailing redirections (`2>&1`,
+/// `> out.log`): neither changes which command runs.
+fn segments(command: &str) -> Vec<String> {
+    let mut out = vec![];
+    let mut cur = String::new();
+    let (mut quote, mut chars) = (None::<char>, command.chars().peekable());
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => {
+                quote = None;
+                cur.push(c);
+            }
+            // A backslash escapes inside double quotes only.
+            (Some('"'), '\\') => {
+                cur.push(c);
+                if let Some(n) = chars.next() {
+                    cur.push(n);
+                }
+            }
+            (Some(_), c) => cur.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                cur.push(c);
+            }
+            (None, '\\') => {
+                cur.push(c);
+                if let Some(n) = chars.next() {
+                    cur.push(n);
+                }
+            }
+            (None, ';' | '\n') => out.push(std::mem::take(&mut cur)),
+            (None, '|') => {
+                if chars.peek() == Some(&'|') {
+                    chars.next();
+                }
+                out.push(std::mem::take(&mut cur));
+            }
+            (None, '&') => {
+                if chars.peek() == Some(&'&') {
+                    chars.next();
+                    out.push(std::mem::take(&mut cur));
+                } else if cur.ends_with(['>', '<']) || chars.peek() == Some(&'>') {
+                    // `2>&1`, `&>`: a redirection, not a chain.
+                    cur.push(c);
+                } else {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            (None, c) => cur.push(c),
+        }
+    }
+    out.push(cur);
+    out.iter().map(|s| clean_segment(s)).filter(|s| !s.is_empty()).collect()
+}
+
+fn clean_segment(seg: &str) -> String {
+    let mut words: Vec<&str> = seg.split_whitespace().collect();
+    let is_assign = |w: &str| {
+        w.split_once('=').is_some_and(|(k, _)| {
+            !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') && !k.as_bytes()[0].is_ascii_digit()
+        })
+    };
+    while words.first().is_some_and(|w| is_assign(w)) {
+        words.remove(0);
+    }
+    // A redirection: `>x`, `2>x`, `&>x`, `2>&1`, `<x` (with its target),
+    // or a bare `>` / `2>>` whose target is the next word.
+    let redir = |w: &str| -> Option<bool> {
+        let r = w.trim_start_matches(|c: char| c.is_ascii_digit());
+        let r = r.strip_prefix('&').unwrap_or(r);
+        if !r.starts_with(['>', '<']) {
+            return None;
+        }
+        let t = r.trim_start_matches(['>', '<']);
+        Some(!t.strip_prefix('&').unwrap_or(t).is_empty())
+    };
+    loop {
+        let n = words.len();
+        if n >= 1 && redir(words[n - 1]) == Some(true) {
+            words.pop();
+        } else if n >= 2 && redir(words[n - 2]) == Some(false) {
+            words.truncate(n - 2);
+        } else {
+            break;
+        }
+    }
+    words.join(" ")
+}
+
+/// Whether the shell command `command` runs the plan's whole test command
+/// `approved`: the same words, alone or as consecutive segments of a chain
+/// (`cd app && <it>`, `<it> 2>&1 | tail -50`, `<it>; echo done`), blanks
+/// collapsed. Generic: only the approved text is known, never a tool. A
+/// narrower command (one test, one package, other arguments) is not it.
+pub fn runs_plan_command(command: &str, approved: &str) -> bool {
+    let want = segments(approved);
+    let have = segments(command);
+    !want.is_empty() && have.windows(want.len()).any(|w| w == want.as_slice())
 }
 
 /// A test job id: unguessable, like a plan id.
@@ -636,6 +753,52 @@ mod tests {
         assert!(!b.prune(10));
         assert!(b.prune(3 + RESULT_TTL_MS + JOB_TTL_MS));
         assert!(b.results.is_empty() && b.jobs.is_empty());
+    }
+
+    #[test]
+    fn the_plan_command_is_recognised_alone_in_a_chain_and_with_blanks() {
+        let cmd = "scripts/run-suite.sh all";
+        for yes in [
+            "scripts/run-suite.sh all",
+            "  scripts/run-suite.sh   all  ",
+            "cd /w/app && scripts/run-suite.sh all",
+            "cd app&&scripts/run-suite.sh\tall",
+            "git add x; scripts/run-suite.sh all; echo done",
+            "scripts/run-suite.sh all 2>&1 | tail -50",
+            "scripts/run-suite.sh all > /tmp/out.log 2>&1",
+            "TARGET=$PWD/t scripts/run-suite.sh all",
+            "make lint || scripts/run-suite.sh all",
+            "echo a\nscripts/run-suite.sh all",
+        ] {
+            assert!(runs_plan_command(yes, cmd), "{yes:?}");
+        }
+        for no in [
+            "scripts/run-suite.sh crates",
+            "scripts/run-suite.sh all --only core",
+            "scripts/run-suite.sh",
+            "echo 'scripts/run-suite.sh all'",
+            "echo \"x; scripts/run-suite.sh all\"",
+            "cat scripts/run-suite.sh",
+            "",
+        ] {
+            assert!(!runs_plan_command(no, cmd), "{no:?}");
+        }
+        // A plan command that is itself a chain matches as consecutive segments.
+        let chain = "cd app && npm ci && npm test";
+        assert!(runs_plan_command("cd app&&npm ci  &&  npm test", chain));
+        assert!(runs_plan_command("git status; cd app && npm ci && npm test | tee log", chain));
+        assert!(!runs_plan_command("cd app && npm test", chain), "a part of it is narrower");
+        assert!(!runs_plan_command("anything", ""), "no approved command, no match");
+    }
+
+    #[test]
+    fn a_join_is_remembered_with_its_plan_and_asker() {
+        let mut b = Book::default();
+        b.request("j1".into(), &ask("k", Some("p")), 1);
+        b.request("j2".into(), &Ask { by: "lead", ..ask("k", Some("q")) }, 2);
+        let j = b.jobs["j1"].clone();
+        assert_eq!(j.joiners, vec![Joiner { plan: Some("q".into()), by: "lead".into() }]);
+        assert_eq!(j.joined, 1);
     }
 
     #[test]

@@ -10,8 +10,10 @@
 #            decision on the board, a round of questions answered, a question
 #            to another sandbox answered, a screenshot waiting, two threads
 #            committing, a start that failed; at the bottom a run of bare
-#            changes of state (one line, x3), a decision to the whole team and
-#            a long done report (green bubble)
+#            changes of state (one line, x3), a decision to the whole team, a
+#            long done report (green bubble), then the test queue's jobs of
+#            every outcome and a thread sent to the queue; the summary's
+#            numbers (approved, not merged, tests run and reused, asked)
 #   picker   the team picker open: thread names, summaries, states and ages
 #   long     a team with long unbroken words (a path, hashes, 200 characters
 #            without a space) and a failed report (red bubble)

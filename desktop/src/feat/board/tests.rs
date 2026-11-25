@@ -1196,6 +1196,9 @@ fn eight_threads_keep_the_summary_to_two_rows() {
             tap(&mut rt, &k);
         }
         let (sm, _) = rt.presented("board-summary").unwrap();
+        // The plan's numbers (p-run has them) are a line of their own.
+        assert!(rt.presented("board-summary-numbers").is_some(), "at {w}: the plan's numbers");
+        let rows = rows + 1;
         // A row of chips or counters is 24 pt and 8 pt apart; a hairline and
         // 8 pt above and below.
         let max_h = 18.0 + rows as f32 * 24.0 + (rows - 1) as f32 * 8.0 + 4.0;
@@ -1654,4 +1657,136 @@ fn chips_and_detail_rows_sit_on_the_4_pt_steps() {
         }
     }
     assert!(chips >= 2 && rows >= 1, "{chips} chips, {rows} detail rows");
+}
+
+// ── The plan's test queue and its numbers (plan 2b) ─────────────────────
+
+fn job_row(data: J) -> J {
+    let ev = json!({ "id": "l1", "at": 1_795_100_000_000u64, "kind": "test_job", "group": "status", "from": data["asker"].clone(), "text": "tests", "data": data });
+    model::row(&ev, &model::Opts { now_s: 1_795_100_100, ..Default::default() })
+}
+
+#[test]
+fn a_test_job_reads_at_a_glance_tinted_by_its_outcome() {
+    let base = |outcome: &str| json!({ "asker": "web-page", "outcome": outcome, "reused": false, "retried": false, "short": "a1b2c3d", "duration_ms": 184_000 });
+    for (outcome, label, tint) in [("passed", "tests passed", "green"), ("failed", "tests failed", "red"), ("timed_out", "tests timed out", "red"), ("error", "tests could not run", "amber")] {
+        let r = job_row(base(outcome));
+        assert_eq!((r["type"].as_str(), r["label"].as_str(), r["tint"].as_str(), r["tone"].as_str()), (Some("test"), Some(label), Some(tint), Some(tint)), "{outcome}");
+        assert_eq!(r["meta"], "asked by web-page · a1b2c3d · 3 min 4 s", "{outcome}");
+    }
+    // Reused and retried say so in the line itself; the lead is "the lead".
+    let mut d = base("passed");
+    d["reused"] = true.into();
+    d["reuse"] = "stored".into();
+    d["asker"] = "lead".into();
+    let r = job_row(d);
+    assert_eq!(r["label"], "tests passed (reused)");
+    assert!(r["meta"].as_str().unwrap().starts_with("asked by the lead · a1b2c3d"));
+    assert!(r["help"].as_str().unwrap().contains("reused"));
+    let mut d = base("failed");
+    d["retried"] = true.into();
+    let r = job_row(d);
+    assert_eq!(r["label"], "tests failed after a retry");
+    let mut d = base("passed");
+    d["reused"] = true.into();
+    d["reuse"] = "joined".into();
+    assert!(job_row(d)["help"].as_str().unwrap().contains("already under way"));
+    // An outcome this desktop does not know: a neutral line, still read.
+    let r = job_row(base("cancelled"));
+    assert_eq!((r["label"].as_str(), r["tone"].as_str(), r["tint"].as_str()), (Some("tests finished"), Some("neutral"), Some("")));
+}
+
+#[test]
+fn a_thread_sent_to_the_queue_is_a_quiet_line_without_the_command() {
+    let ev = json!({ "id": "l2", "at": 1_795_100_000_000u64, "kind": "test_refused", "group": "status", "from": "web-page", "text": "cargo test --workspace", "data": { "thread": "web-page" } });
+    let r = model::row(&ev, &model::Opts::default());
+    assert_eq!((r["type"].as_str(), r["tone"].as_str()), (Some("system"), Some("neutral")));
+    let t = r["text"].as_str().unwrap();
+    assert!(t.starts_with("web-page tried to run the plan") && t.contains("sent to the test queue"), "{t}");
+    assert!(!t.contains("cargo"), "no command text: {t}");
+}
+
+#[test]
+fn the_fixture_s_test_rows_come_in_the_conversation_and_the_status_filter() {
+    let mut d = data();
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
+    let tests: Vec<String> = v["rows"].as_array().unwrap().iter().filter(|r| r["type"] == "test").map(|r| r["label"].as_str().unwrap().to_string()).collect();
+    assert_eq!(tests, ["tests passed", "tests failed after a retry", "tests passed (reused)", "tests timed out", "tests could not run"]);
+    assert!(v["rows"].as_array().unwrap().iter().any(|r| r["kind"] == "test_refused" && r["type"] == "system"));
+    let (v, _) = run(&mut st, &mut d, "board_filter", json!({ "group": "status" }));
+    assert_eq!(v["rows"].as_array().unwrap().iter().filter(|r| r["type"] == "test").count(), 5);
+    // The thread filter: the asker is the event's author.
+    let (v, _) = run(&mut st, &mut d, "board_filter", json!({ "group": "all", "thread": "web-page" }));
+    assert!(v["rows"].as_array().unwrap().iter().any(|r| r["label"] == "tests failed after a retry"));
+    assert!(!v["rows"].as_array().unwrap().iter().any(|r| r["label"] == "tests timed out"));
+}
+
+#[test]
+fn durations_read_in_words() {
+    for (ms, s) in [(0, "0 s"), (45_000, "45 s"), (60_000, "1 min"), (184_000, "3 min 4 s"), (3_600_000, "1 h"), (4_320_000, "1 h 12 min"), (86_400_000, "1 d"), (97_200_000, "1 d 3 h")] {
+        assert_eq!(model::duration(ms), s, "{ms}");
+    }
+}
+
+#[test]
+fn the_plan_s_three_numbers_merged_running_no_test_command_and_an_older_daemon() {
+    let a = 1_795_000_000_000u64;
+    // Merged: approval to merge, fixed.
+    let n = model::plan_numbers(&json!({ "approved_ms": a, "merged_ms": a + 4_320_000, "tests": { "run": 3, "reused": 5, "refused": 0 }, "asked": 4 }), a / 1000 + 99_999);
+    assert_eq!((n["time"]["text"].as_str(), n["time"]["running"].as_bool()), (Some("1 h 12 min"), Some(false)));
+    assert_eq!(n["tests"]["text"], "tests: 3 run, 5 reused");
+    assert_eq!(n["asked"]["text"], "asked you 4 times");
+    // Not merged: counted to now, and said to be still running.
+    let n = model::plan_numbers(&json!({ "approved_ms": a, "merged_ms": null, "tests": { "run": 0, "reused": 0, "refused": 2 }, "asked": 1 }), a / 1000 + 600);
+    assert_eq!((n["time"]["text"].as_str(), n["time"]["running"].as_bool()), (Some("10 min"), Some(true)));
+    assert!(n["time"]["help"].as_str().unwrap().contains("not merged yet"));
+    assert_eq!(n["tests"]["text"], "tests: none run yet, 2 sent to the queue");
+    assert_eq!(n["asked"]["text"], "asked you once");
+    // No test command: no tests number at all, not zeros; never asked.
+    let n = model::plan_numbers(&json!({ "approved_ms": a, "merged_ms": null, "tests": null, "asked": 0 }), a / 1000);
+    assert!(n["tests"].is_null());
+    assert_eq!(n["asked"]["text"], "did not ask you yet");
+    // Not approved yet: no time.
+    assert!(model::plan_numbers(&json!({ "approved_ms": null, "asked": 0 }), a / 1000)["time"].is_null());
+    // An older daemon sends none: nothing.
+    assert!(model::plan_numbers(&J::Null, a / 1000).is_null());
+}
+
+#[test]
+fn the_summary_carries_the_numbers_only_from_a_daemon_that_sends_them() {
+    let mut d = data();
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, json!({ "team": "p-run" }));
+    let n = &v["side"]["numbers"];
+    assert_eq!((n["time"]["running"].as_bool(), n["tests"]["text"].as_str(), n["asked"]["text"].as_str()), (Some(true), Some("tests: 4 run, 1 reused, 1 sent to the queue"), Some("asked you 3 times")));
+    let v = show(&mut st, &mut d, json!({ "team": "p-old" }));
+    let n = &v["side"]["numbers"];
+    assert_eq!(n["time"]["text"], "58 min 5 s");
+    assert_eq!(n["time"]["running"], false);
+    assert!(n["tests"].is_null(), "no test command: no tests number");
+    // p-long's timeline has no numbers, as from an older daemon: the counts as they were.
+    let v = show(&mut st, &mut d, json!({ "team": "p-long" }));
+    assert!(v["side"]["numbers"].is_null());
+    assert!(v["side"]["counts"].is_object());
+}
+
+#[test]
+fn drawn_the_test_rows_and_the_numbers_sit_on_the_grid_inside_the_overlay() {
+    for (w, h) in [(1284.0, 816.0), (760.0, 600.0)] {
+        let mut rt = window(w, h);
+        open(&mut rt, json!({ "team": "p-run" }));
+        for k in ["board-number-time", "board-number-tests", "board-number-asked"] {
+            let (r, _) = rt.presented(k).unwrap_or_else(|| panic!("at {w}: {k}"));
+            assert!(r[0] >= 0.0 && r[0] + r[2] <= w, "at {w}: {k} inside");
+        }
+        let (s, _) = rt.presented("board-summary").unwrap();
+        let (n, _) = rt.presented("board-summary-numbers").unwrap();
+        assert!(n[1] + n[3] <= s[1] + s[3] + 0.5, "at {w}: the numbers inside the summary");
+        let pills: Vec<_> = rt.elements().into_iter().filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("board-test-l") && !k.starts_with("board-test-label-"))).collect();
+        assert_eq!(pills.len(), 5, "at {w}: five test rows drawn");
+    }
+    let mut rt = window(1284.0, 816.0);
+    open(&mut rt, json!({ "team": "p-long" }));
+    assert!(rt.presented("board-summary-numbers").is_none(), "an older daemon: no numbers line");
 }

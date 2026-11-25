@@ -57,12 +57,22 @@ pub fn routes() -> Router<Arc<App>> {
 }
 
 /// Answered with what the hook should print: on a prompt from a Remote
-/// Control session, a low-battery note for the agent's context. Empty
+/// Control session, a low-battery note for the agent's context; on a
+/// thread's Bash call that is its plan's whole test command, a deny. Empty
 /// otherwise — a hook printing nothing changes nothing.
 async fn hook(State(app): S, Agent(me): Agent, Json(body): Json<Value>) -> Json<Value> {
+    // A thread about to run its plan's whole test command is sent to the
+    // queue (svc::testq). The hook prints this answer; a daemon that does
+    // not answer within the hook's limit lets the command run.
+    let refused = app.tests_gate(&me, &body);
     let prompt = body["hook_event_name"] == "UserPromptSubmit";
     let start = (body["hook_event_name"] == "SessionStart").then(|| body.clone());
     app.ingest_hook(&me, body);
+    if let Some(reason) = refused {
+        return Json(json!({
+            "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason }
+        }));
+    }
     // A new conversation is given what sbxw holds for it (svc::session_context).
     if let Some(ctx) = start.and_then(|ev| app.session_start_context(&me, &ev)) {
         return Json(json!({

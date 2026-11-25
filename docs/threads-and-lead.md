@@ -503,6 +503,38 @@ Nothing in `sbxw.toml` declares it; it belongs to the plan.
   are pruned. The plan counts how many of its jobs ran and how many were
   answered without running, and the lead relies on the queue's result on the
   code to merge before proposing the merge.
+- **On the team's timeline.** Every answered request is a `test_job` event
+  (group `status`) when it is answered: `from` is who asked (a thread or
+  `lead`), `data` is `{job, asker, thread, outcome, reused, reuse, retried,
+  short, duration_ms}` with `outcome` one of `passed`, `failed`, `timed_out`,
+  `error` (could not run), `reuse` `stored` (a stored result) or `joined` (a
+  job already at work, logged when it finishes) or null, `short` the 7-digit
+  commit asked for and `duration_ms` the run's own (for a reused answer, the
+  original run's). The output never is. So the Board shows how much work the
+  queue saved.
+- **A thread does not run the whole command itself** (audit D10). When a
+  thread's session (`SBXW_THREAD` set) whose plan has an approved command is
+  about to run a Bash command that is that command, sbxw refuses it and says
+  to commit and call `run_tests`. "Is that command" is about the approved
+  text only, never a tool: the same words with blanks collapsed, alone or as
+  consecutive segments of a chain cut at `&&`, `||`, `;`, `|`, `&` or a line
+  break (so `cd app && <it>` and `<it> 2>&1 | tail` count), each segment
+  without leading `NAME=value` assignments or trailing redirections. A
+  narrower command (one test, one package, other arguments) passes, and the
+  lead's and the person's own sessions are never refused. The status hook
+  posts every `PreToolUse` to the daemon with the whole command and prints
+  the daemon's answer; the daemon decides. It fails open: a daemon that does
+  not answer within the hook's limit (1.5 s) lets the command run. Each
+  refusal is a `test_refused` event (group `status`, `data.thread`, never the
+  command) and counts on the plan.
+- **Three numbers per plan** (audit D18), served as `numbers` with the team
+  timeline and with the plan (`plan_status` prints them): `approved_ms` and
+  `merged_ms` (unix ms, from the `PlanApproved` and merged `MergeFinished`
+  events; `merged_ms` null while not merged, and both null for a plan from
+  before the log), `tests: {run, reused, refused}` (null when the plan has no
+  approved command), and `asked`, the times the person was asked by the team
+  (`user_question`, `screenshot_asked` and `relay_question` events). All
+  are counted from what is already logged.
 
 ### What survives a daemon restart
 

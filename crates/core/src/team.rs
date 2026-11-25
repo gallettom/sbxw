@@ -96,6 +96,15 @@ pub enum EventKind {
     /// `SendMessage`, as the status hook reported the call (sender side,
     /// delivered). Only its addressee and words are kept.
     DirectMessage,
+    /// A request of the test queue answered (`run_tests`): a job that ran
+    /// to its end, or one answered without running (a stored result, or a
+    /// join of a job already at work). `from` is who asked. See
+    /// [`test_job_entry`].
+    TestJob,
+    /// sbxw refused a thread's Bash command that was the plan's whole test
+    /// command, and sent it to the queue. `data.thread` only, never the
+    /// command.
+    TestRefused,
 }
 
 impl EventKind {
@@ -174,6 +183,57 @@ pub fn clip(s: &str) -> String {
         Some((i, _)) => format!("{}…", &s[..i]),
         None => s.to_string(),
     }
+}
+
+/// How a test request was answered without running.
+pub const REUSE_STORED: &str = "stored";
+pub const REUSE_JOINED: &str = "joined";
+
+/// A test job's line on the timeline, for `asker` (a thread's name or
+/// `lead`): its text and data. `reuse` is `None` for the job that ran,
+/// [`REUSE_STORED`] or [`REUSE_JOINED`] for an answer without running.
+/// `None` while the job has no result. Never the output.
+pub fn test_job_entry(job: &crate::testq::Job, asker: &str, reuse: Option<&str>) -> Option<(String, Value)> {
+    let r = job.result.as_ref()?;
+    let short: String = job.commit.chars().take(7).collect();
+    let secs = r.duration_ms / 1000;
+    let how = match reuse {
+        Some(REUSE_STORED) => " (a stored result, not run again)",
+        Some(_) => " (joined a job already at work)",
+        None if r.retried() => " (retried once)",
+        None => "",
+    };
+    let text = format!("Tests {} at {short} in {secs} s{how}", r.outcome.word());
+    let data = json!({
+        "job": job.id, "asker": asker, "thread": (asker != LEAD).then_some(asker),
+        "outcome": r.outcome, "reused": reuse.is_some(), "reuse": reuse, "retried": r.retried(),
+        "short": short, "duration_ms": r.duration_ms,
+    });
+    Some((text, data))
+}
+
+/// Three numbers of plan `p`, from its log and its test counts:
+///
+/// * `approved_ms` and `merged_ms` (unix ms): the `PlanApproved` and the
+///   merged `MergeFinished` lines; `null` when not logged (not merged yet,
+///   or a plan from before the log). A UI counts to now while not merged.
+/// * `tests`: `{run, reused, refused}`, jobs really run, requests answered
+///   without running, and the thread commands refused for the queue;
+///   `null` when the plan has no approved test command.
+/// * `asked`: times the person was asked something by the team: questions
+///   (`UserQuestion`), screenshots (`ScreenshotAsked`) and questions for
+///   another sandbox (`RelayQuestion`, routed by the person).
+pub fn plan_numbers(p: &Plan, log: &TeamLog, counts: crate::testq::Counts) -> Value {
+    let approved = log.entries.iter().find(|e| e.kind == EventKind::PlanApproved).map(|e| e.at);
+    let merged = log.entries.iter().rev().find(|e| e.kind == EventKind::MergeFinished && e.data["state"] == "merged").map(|e| e.at);
+    let refused = log.entries.iter().filter(|e| e.kind == EventKind::TestRefused).count();
+    let asked = log
+        .entries
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::UserQuestion | EventKind::ScreenshotAsked | EventKind::RelayQuestion))
+        .count();
+    let tests = p.approved_tests.as_ref().map(|_| json!({ "run": counts.ran, "reused": counts.reused, "refused": refused }));
+    json!({ "approved_ms": approved, "merged_ms": merged, "tests": tests, "asked": asked })
 }
 
 /// A plan's state as the UIs name it.
@@ -826,5 +886,59 @@ mod tests {
         let unsure = note_line(4, "warning", "api", false);
         assert!(unsure.starts_with(&known) && unsure.ends_with("ask api to resend it by SendMessage."));
         assert!(!unsure.contains('\n'));
+    }
+
+    #[test]
+    fn the_numbers_come_from_the_log_and_the_counts() {
+        let mut b = PlanBook::new();
+        let p = b.propose("p-1".into(), "sb", "Do it", vec![t("a")], Variant::Split, "x", None, 1000).unwrap();
+        let mut log = TeamLog::default();
+        log.push(2000, EventKind::PlanApproved, USER, Some(LEAD), None, Value::Null);
+        log.push(3000, EventKind::UserQuestion, "a", Some(USER), Some("which?"), Value::Null);
+        log.push(3500, EventKind::UserAnswer, USER, Some("a"), Some("this"), Value::Null);
+        log.push(4000, EventKind::ScreenshotAsked, LEAD, Some(USER), None, Value::Null);
+        log.push(4100, EventKind::DirectMessage, "a", Some(LEAD), Some("hi"), Value::Null);
+        log.push(5000, EventKind::TestRefused, "a", None, None, json!({ "thread": "a" }));
+        // No approved command: no test numbers.
+        let n = plan_numbers(&p, &log, crate::testq::Counts { ran: 2, reused: 1 });
+        assert_eq!((n["approved_ms"].as_u64(), n["merged_ms"].as_u64(), n["asked"].as_u64()), (Some(2000), None, Some(2)));
+        assert!(n["tests"].is_null());
+        let mut p = p;
+        p.approved_tests = Some(crate::testq::PlanTests { command: "make test".into(), timeout_minutes: 5 });
+        // A failed merge is not the end; the merged one is.
+        log.push(6000, EventKind::MergeFinished, SBXW, None, None, json!({ "state": "failed" }));
+        log.push(9000, EventKind::MergeFinished, SBXW, None, None, json!({ "state": "merged" }));
+        let n = plan_numbers(&p, &log, crate::testq::Counts { ran: 2, reused: 1 });
+        assert_eq!(n, json!({ "approved_ms": 2000, "merged_ms": 9000, "tests": { "run": 2, "reused": 1, "refused": 1 }, "asked": 2 }));
+    }
+
+    #[test]
+    fn a_test_job_entry_says_who_what_and_how_never_the_output() {
+        use crate::testq::{Job, JobState, Outcome, TestResult};
+        let job = |o: Outcome, attempts: u8| Job {
+            id: "t-1".into(), sandbox: "sb".into(), command: "make test".into(), timeout_minutes: 5, key: "k".into(),
+            commit: "0123456789abcdef0123456789abcdef01234567".into(), plan: Some("p-1".into()), by: "a".into(),
+            state: JobState::Done, reused: false, joined: 0, joiners: vec![],
+            result: Some(TestResult { outcome: o, commit: "c".into(), duration_ms: 12_345, tail: "SECRET OUTPUT".into(), attempts,
+                first_outcome: None, log: "/log".into(), finished_ms: 1 }),
+            queued_ms: 0, started_ms: None,
+        };
+        for (o, word) in [(Outcome::Passed, "passed"), (Outcome::Failed, "failed"), (Outcome::TimedOut, "timed_out"), (Outcome::Error, "error")] {
+            let (text, d) = test_job_entry(&job(o, 1), "a", None).unwrap();
+            assert_eq!(d["outcome"], word);
+            assert!(text.starts_with(&format!("Tests {} at 0123456 in 12 s", o.word())), "{text}");
+            assert!(!d.to_string().contains("SECRET") && !text.contains("SECRET"));
+        }
+        let (text, d) = test_job_entry(&job(Outcome::Failed, 2), "lead", None).unwrap();
+        assert_eq!((d["retried"].as_bool(), d["reused"].as_bool(), d["thread"].is_null(), d["short"].as_str()), (Some(true), Some(false), true, Some("0123456")));
+        assert!(text.ends_with("(retried once)"));
+        let (_, d) = test_job_entry(&job(Outcome::Passed, 1), "a", Some(REUSE_STORED)).unwrap();
+        assert_eq!((d["reused"].as_bool(), d["reuse"].as_str(), d["duration_ms"].as_u64()), (Some(true), Some("stored"), Some(12_345)));
+        let mut j = job(Outcome::Passed, 1);
+        j.result = None;
+        assert!(test_job_entry(&j, "a", None).is_none());
+        assert_eq!(EventKind::TestJob.group(), "status");
+        assert_eq!(EventKind::TestRefused.group(), "status");
+        assert_eq!(serde_json::to_value(EventKind::TestJob).unwrap(), "test_job");
     }
 }

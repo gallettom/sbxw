@@ -102,7 +102,7 @@ same tree. It cannot be changed after the approval, so get it right. Leave it
 out when the project has no tests. Threads commit, then call `run_tests`
 instead of running the whole battery themselves; while working they run only
 the tests of what they touch. Their briefing already says so. `plan_status`
-shows whether the user approved the command.
+shows whether the user approved the command. The team's Board shows each test result (who asked, the outcome, reused or retried) and the plan's three numbers: time from approval to merge, test jobs run and reused, and how often the user was asked; `plan_status` prints the numbers too.
 
 Check which git repositories the workspace holds: it may be one repo, or a
 folder of several (`backend/`, `frontend/`), each with its own `.git`
