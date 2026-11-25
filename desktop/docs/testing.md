@@ -19,15 +19,14 @@ root; the first build takes about a minute, later ones a few seconds.
 | Show a daemon restart (new token) reconnecting the list and a terminal | `desktop/scripts/demo-reconnect.sh` |
 | Show another window (the web UI) taking the PTY's size, and typing taking it back | `desktop/scripts/demo-shared-size.sh` (`OTHER=200x60` for a larger one) |
 | Two live terminals: scrollback, selection, focus, a dead key | `desktop/scripts/shot.sh shots/x.png --script desktop/scripts/headless/two-panes-live.json` |
-| Run the unit and link tests | `cd desktop && CARGO_PROFILE_DEV_DEBUG=0 cargo test -j1` |
+| Run the unit and link tests | `scripts/run-suite.sh desktop` |
 | Check every tab-like control (tabs, locations, rows, Show more) changes what is drawn | `cd desktop && cargo test --test tab_presses` (add a case for a new screen's tabs) |
 | Measure the app's memory, and check its ceiling and leaks | `desktop/scripts/memory.sh` (see "Memory" below) |
 
 Shots and logs go to the checkout's root artifacts folder
 (`.sbxw-artifacts/desktop/shots/`, git-ignored), or `$SBXW_SHOTS`; never into
-`desktop/`. Keep `CARGO_TARGET_DIR` on the host mount (the scripts default it
-to `desktop/target`; a thread uses `desktop/target-<name>`, git-ignored, and
-deletes it when done).
+`desktop/`. Keep `CARGO_TARGET_DIR` on the host mount, in a git-ignored
+directory of your checkout (see "Where the build goes" below).
 
 Every demo (each writes its shots and says what they show in its header):
 
@@ -180,19 +179,45 @@ SBXW_DAEMON=127.0.0.1:7681 SBXW_TOKEN=$(cat ~/.sbxw/run/ui-token) SBXW_SANDBOX=<
 
 ### Running them
 
-| Suite | Command (from the repository root) | Tests |
-|---|---|---|
-| Desktop | `cd desktop && CARGO_PROFILE_DEV_DEBUG=0 cargo test -j1` | about 450, plus 9 against a real stand-in process |
-| Crates | `cargo test -p sbxw-core -p sbxw-daemon -p sbxw-sbx -p sbxw` | about 740 |
-| Web UI matcher | run by `crates/core`'s `the_web_matcher_passes_the_shared_cases` (needs `node`) | the shared pill cases |
-| Jarvis's MCP server | `node scripts/test-config-mcp.mjs` (by hand: nothing runs it yet) | 8 checks |
-| Web UI smoke | `scripts/ui-smoke.sh` (by hand, needs Playwright) | about 30 steps |
+`scripts/run-suite.sh <suite>` is the one place that knows the test commands
+(run it from anywhere in the checkout). Do not copy the commands below into
+other docs, scripts or CI: call the script.
 
-A thread keeps `CARGO_TARGET_DIR` in its own worktree (`desktop/target-<name>`,
-`target/<name>`, both git-ignored) and sets it on every command. A scratch copy
-of the sources (a mutation check) gets a target dir of its own: two copies of
-one package in one target dir share artifact names, and cargo then runs the
-other copy's binary.
+| Suite | What it runs | Notes |
+|---|---|---|
+| `crates` | `cargo test -p sbxw-core -p sbxw-daemon -p sbxw-sbx -p sbxw` | includes the web matcher's shared cases (`the_web_matcher_passes_the_shared_cases`, needs `node`) |
+| `js` | `node --test tests/js/*.test.mjs` | the web UI, the relay and hook scripts, the scripts themselves |
+| `desktop` | in `desktop/`: `CARGO_PROFILE_DEV_DEBUG=0 cargo test -j1 --no-fail-fast` | the lib tests, then `desktop/tests/*` (real stand-in process, pump, memory). `--no-fail-fast`: without it one failing lib test makes cargo skip `desktop/tests/*` |
+| `all` | the three, one after the other | none is skipped because another failed |
+
+It exits non-zero on any failure and ends with one line per suite
+(`suite crates: PASS (n passed, n failed, n quarantined) 41s`), so the counts
+are always current: this page keeps none. Not run by it: Jarvis's MCP server
+(`node scripts/test-config-mcp.mjs`, by hand) and the web UI smoke
+(`scripts/ui-smoke.sh`, by hand, needs Playwright).
+
+To run less while working, call the runner directly with a filter, for
+example `cd desktop && CARGO_PROFILE_DEV_DEBUG=0 cargo test -j1 --lib -- theme::tests`
+or `node --test tests/js/markdown.test.mjs`. A thread runs only the tests of
+what it touched; the full battery runs once before a merge.
+
+**Quarantine.** `tests/quarantine.txt` lists tests the blocking run skips
+(`suite | full test name | ticket | date`; the file explains the format). The
+script prints each one it skips. A line without a ticket reference is an
+error and the run does not start. It is empty: quarantine a test only with
+evidence that it is flaky or broken, and fix or delete it by its ticket.
+
+**Where the build goes.** The script uses `$SBXW_TEST_TARGET` as the cargo
+target directory when set (`crates` and `desktop` keep a subdirectory each),
+else `target/run-suite` under the checkout. For any other cargo command a
+thread sets `CARGO_TARGET_DIR=$PWD/target`, a git-ignored directory of its own
+worktree, and deletes it when done. A scratch copy of the sources (a mutation
+check) gets a target dir of its own: two copies of one package in one target
+dir share artifact names, and cargo then runs the other copy's binary.
+
+**CI.** `.github/workflows/test.yml` calls the script: `crates` and `js` on
+every push to main and every pull request, `desktop` on pushes to main only
+(the longest build; it needs the packages named at the top of this page).
 
 Measured 2026-11-18 in the sandbox (10 cores, 11 GB, other sessions building: load
 average 4 to 9), `CARGO_PROFILE_DEV_DEBUG=0` for the desktop, the default for

@@ -220,15 +220,15 @@ end
 -- The staged files stack in it, each with its Upload and its close.
 local function uploads(ui, dragging, lit)
   local staged = ui.staged or {}
-  local kids = { gap = 6, w = "full", min_w = 0, pad = 8, radius = "sm", key = "files-drop",
+  local kids = { gap = 8, w = "full", min_w = 0, pad = 8, radius = "sm", key = "files-drop",
     border = dragging and "blue" or (lit and "accent" or "border"), fill = dragging and "blue-tint" or "surface-alt",
-    row{ gap = 6, w = "full", min_w = 0,
+    row{ gap = 8, w = "full", min_w = 0,
       icon{ "plus", size = 12, color = dragging and "blue" or "text-muted" },
       text{ #staged == 0 and "Upload" or ("Upload into " .. (ui.sandbox or "?")), size = "sm", weight = "semibold", truncate = true, grow = 1 },
     },
     text{ dragging and ("Drop to upload into " .. (ui.sandbox or "?")) or "Drop files here or on a terminal", size = "xs", color = "text-muted", wrap = true,
       help = "Or paste a picture. Up to " .. (ui.upload_max or "128 MB") .. " each; the path is typed into the agent's prompt, not submitted." },
-    row{ gap = 6, w = "full", wrap = true,
+    row{ gap = 8, w = "full", wrap = true,
       button{ "Choose…", key = "files-upload-pick", on = "pick", variant = "ghost", dense = true, help = "The system's file dialog" },
       button{ "Paste", key = "files-upload-paste", on = "paste", variant = "ghost", dense = true, help = "The picture on the clipboard" },
     },
@@ -236,7 +236,7 @@ local function uploads(ui, dragging, lit)
   for _, s in ipairs(staged) do
     local sending = s.state == "sending"
     kids[#kids + 1] = column{ gap = 4, w = "full", min_w = 0, key = "files-staged-" .. s.index,
-      row{ gap = 6, w = "full", min_w = 0,
+      row{ gap = 8, w = "full", min_w = 0,
         icon{ "file", size = 12, color = "text-muted" },
         text{ s.name, size = "sm", truncate = true, grow = 1 },
         button{ icon = "close", key = "files-unstage-" .. s.index, on = "unstage", arg = s.index, variant = "ghost", dense = true, help = "Leave it out", disabled = sending },
@@ -444,7 +444,7 @@ local function preview(ui, narrow, w)
   }
   local body
   if p.state == "folder" then
-    body = column{ gap = 6, w = "full",
+    body = column{ gap = 8, w = "full",
       text{ p.counting and "Counting its files…" or (p.line or ""), size = "sm", color = "text", key = "files-folder-size" },
       nz(p.over) and note(p.over, "amber") or false,
       nz(p.error) and note(p.error, "red") or false,

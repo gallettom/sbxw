@@ -7,7 +7,8 @@ work in `.sbxw-worktrees/<thread>` on branch `sbxw/<thread>`). The lead and the 
 sessions are not bound by them, except the writing rules at the end.
 
 - Set `CARGO_TARGET_DIR` on every cargo command, to a git-ignored dir under your worktree
-  (`$PWD/target`). Desktop tests: `cd desktop && CARGO_PROFILE_DEV_DEBUG=0 cargo test -j1`.
+  (`$PWD/target`). Run tests with `scripts/run-suite.sh crates|js|desktop|all`, and only the
+  tests of what you touched while working; `desktop/docs/testing.md` is the one description.
 - One heavy job (build, test run, clippy) at a time. Delete your target dirs and scratch
   worktrees when you are done.
 - Never write to `/etc/sandbox-persistent.sh`.
