@@ -563,9 +563,12 @@ impl App {
             // Dropped mid-look when the daemon stops or removes the sandbox
             // (`timing_stop_watch`): the child `sbx` is killed with it.
             let watched = app.clone();
+            // The cancel first, at every wake-up: a look due at the same
+            // moment must not run once the daemon has asked for the stop.
             let done = tokio::select! {
-                d = watched.kit_startups_watch(sb, commands, marked, id, start, after_session) => d,
+                biased;
                 _ = cancel.notified() => (Err(anyhow::Error::new(NotRunning)), "the daemon stopped or removed the sandbox before the startups ended".to_string(), start.elapsed().as_millis() as u64),
+                d = watched.kit_startups_watch(sb, commands, marked, id, start, after_session) => d,
             };
             let mut book = app.timings.lock().unwrap();
             if book.watches.get(&key).is_some_and(|c| Arc::ptr_eq(c, &cancel)) {
