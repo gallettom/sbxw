@@ -365,3 +365,7 @@ pub fn job_view(job: &Job) -> serde_json::Value {
     }
     v
 }
+
+#[cfg(test)]
+#[path = "testq_tests.rs"]
+mod tests;
