@@ -274,8 +274,8 @@ const LEAD_TOOLS = [
     description:
       "Confirm to sbxw that this session took the lead. Call it first, as soon as you read the " +
       "/lead instructions or sbxw gives them back after a /clear or a compaction: the Team " +
-      "button turns on only then, and with no confirmation within 90 seconds lead mode turns " +
-      "off. A refusal means sbxw made no lead request: do not lead, and tell the person to " +
+      "button turns on only then. With no confirmation within 90 seconds of /lead (after a " +
+      "/clear or a compaction: by the end of your next turn), lead mode turns off. A refusal means sbxw made no lead request: do not lead, and tell the person to " +
       "press Team in sbxw.",
     inputSchema: { type: "object", properties: {} },
   },

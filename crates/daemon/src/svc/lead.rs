@@ -24,9 +24,14 @@ use std::time::Duration;
 
 /// How long a Team click waits for an idle agent before it falls back to off.
 pub const LEAD_WAIT_MAX_MS: u64 = 10 * 60 * 1000;
-/// How long the session has, once `/lead` is typed (or a new conversation of
-/// the lead started), to call `lead_ack`.
+/// How long the session has, once `/lead` is typed (a turn starts at
+/// once), to call `lead_ack`. A conversation the lead followed has its own
+/// clock ([`AckClock`]).
 pub const LEAD_ACK_MAX_MS: u64 = 90 * 1000;
+/// After a turn of a followed conversation ends with no `lead_ack`, how
+/// long before the lead falls back to off: the ack's request and the turn's
+/// `Stop` hook may cross.
+pub const LEAD_ACK_GRACE_MS: u64 = 15 * 1000;
 /// How long the reason of a fall back to off stays in `/api/lead-states`.
 pub const LEAD_REASON_KEEP_MS: u64 = 2 * 60 * 1000;
 /// How often waits and deadlines are looked at ([`App::lead_tick`]).
@@ -57,14 +62,32 @@ pub enum LeadPhase {
     Off,
 }
 
+/// What an activating lead's clock waits on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AckClock {
+    /// `until_ms` runs: `/lead` was just typed (a turn starts at once), or
+    /// a followed conversation's turn ended with no ack (the grace).
+    Deadline,
+    /// A conversation the lead followed (`/clear`, a compaction at the
+    /// prompt) is idle: the context it got starts no turn, so it cannot
+    /// answer before the person types. No deadline until its next turn.
+    NextTurn,
+    /// That conversation's turn runs: it can call `lead_ack`. No deadline
+    /// until the turn ends (`Stop`), then [`LEAD_ACK_GRACE_MS`].
+    ThisTurn,
+}
+
 /// A lead asked for and not confirmed yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pending {
     /// [`LeadPhase::Waiting`] or [`LeadPhase::Activating`].
     pub phase: LeadPhase,
     pub since_ms: u64,
-    /// Past it, the lead falls back to off.
+    /// Past it, the lead falls back to off, while `clock` is `Deadline`.
     pub until_ms: u64,
+    pub clock: AckClock,
+    /// A conversation the lead followed, not a Team click.
+    pub followed: bool,
 }
 
 /// One sandbox in `/api/lead-states`.
@@ -134,7 +157,7 @@ impl App {
             if pending.contains_key(sandbox) {
                 return Ok(());
             }
-            pending.insert(sandbox.clone(), Pending { phase: LeadPhase::Waiting, since_ms: now, until_ms: now + LEAD_WAIT_MAX_MS });
+            pending.insert(sandbox.clone(), Pending { phase: LeadPhase::Waiting, since_ms: now, until_ms: now + LEAD_WAIT_MAX_MS, clock: AckClock::Deadline, followed: false });
         }
         self.lead_failed.lock().unwrap().remove(sandbox);
         tracing::info!("plans: '{sandbox}' waits for an idle agent before /lead is typed");
@@ -254,7 +277,7 @@ impl App {
             let session_id = self.main_session_id(sandbox);
             leads.insert(sandbox.clone(), Arc::as_ptr(&s) as usize);
             recs.insert(sandbox.clone(), LeadRecord { since_ms: now, session_id, bound_ms: now });
-            pending.insert(sandbox.clone(), Pending { phase: LeadPhase::Activating, since_ms: now, until_ms: now + LEAD_ACK_MAX_MS });
+            pending.insert(sandbox.clone(), Pending { phase: LeadPhase::Activating, since_ms: now, until_ms: now + LEAD_ACK_MAX_MS, clock: AckClock::Deadline, followed: false });
         }
         self.lead_failed.lock().unwrap().remove(sandbox);
         if let Err(e) = self.push_text(sandbox, SessionKind::Agent, messages::LEAD_COMMAND).await {
@@ -303,9 +326,13 @@ impl App {
                         let _ = self.lead_type(&sb, true).await;
                     }
                 }
-                LeadPhase::Activating if now >= p.until_ms => self.lead_fail(
+                LeadPhase::Activating if p.clock == AckClock::Deadline && now >= p.until_ms => self.lead_fail(
                     &sb,
-                    "The session did not confirm it took the lead within 90 seconds. Press Team again.",
+                    if !p.followed {
+                        "The session did not confirm it took the lead within 90 seconds. Press Team again."
+                    } else {
+                        "The lead's new conversation ended a turn without confirming it leads. Press Team again."
+                    },
                 ),
                 _ => {}
             }
@@ -320,6 +347,11 @@ impl App {
     /// creates one. `true` when the lead was moved: the session must be
     /// given its instructions again (see `svc::session_context`).
     pub(crate) fn lead_follow_conversation(&self, sandbox: &SandboxRef, session_id: &str, compacted: bool) -> bool {
+        // The clock waits for the conversation's next turn, even after a
+        // compaction in the middle of one: its `SessionStart` shows the
+        // session idle, and the rest of that turn may still ack (any clock
+        // takes an ack). Late, never early.
+        let clock = AckClock::NextTurn;
         let Some(s) = self.sessions.live(&SessionKey::agent(sandbox)) else { return false };
         // The session the terminal shows must be this one: a session started
         // over SSH, or a thread's, is not the lead's.
@@ -344,11 +376,35 @@ impl App {
             }
             rec.session_id = Some(session_id.to_string());
             rec.bound_ms = now;
-            pending.insert(sandbox.clone(), Pending { phase: LeadPhase::Activating, since_ms: now, until_ms: now + LEAD_ACK_MAX_MS });
+            pending.insert(sandbox.clone(), Pending { phase: LeadPhase::Activating, since_ms: now, until_ms: u64::MAX, clock, followed: true });
         }
         tracing::info!("plans: the lead of '{sandbox}' started a new conversation: its instructions are given again, waiting for its lead_ack");
         self.send(Event::Lead(sandbox.into()));
         true
+    }
+}
+
+impl App {
+    /// A hook event of `sandbox`'s session `session_id` (never a thread's):
+    /// the ack clock of a followed conversation starts with its turn, and
+    /// runs out [`LEAD_ACK_GRACE_MS`] after that turn ends with no ack. A
+    /// session other than the lead's recorded one changes nothing.
+    pub(crate) fn lead_turn_event(&self, sandbox: &SandboxRef, session_id: &str, event: &str) {
+        let now = now_ms();
+        let recs = self.lead_recs.lock().unwrap();
+        if recs.get(sandbox).and_then(|r| r.session_id.as_deref()) != Some(session_id) {
+            return;
+        }
+        let mut pending = self.lead_pending.lock().unwrap();
+        let Some(p) = pending.get_mut(sandbox).filter(|p| p.phase == LeadPhase::Activating) else { return };
+        match (p.clock, event) {
+            (AckClock::NextTurn, "UserPromptSubmit") => p.clock = AckClock::ThisTurn,
+            (AckClock::ThisTurn, "Stop") => {
+                p.clock = AckClock::Deadline;
+                p.until_ms = now + LEAD_ACK_GRACE_MS;
+            }
+            _ => {}
+        }
     }
 }
 

@@ -421,8 +421,8 @@ pub fn lead_context(plans: &[Plan], lead_md: &str, path: &str, max_chars: usize)
         "[sbxw] This conversation is the lead of this sandbox. The person turned Team mode on \
          and it stays on across a /clear or a compaction, so sbxw gives you your lead \
          instructions again. First call the `lead_ack` tool (MCP server sbxw-relay) to confirm \
-         you lead: until then the plan tools are refused, and with no confirmation within 90 \
-         seconds lead mode turns off.\n\n",
+         you lead: until then the plan tools are refused, and if your next turn ends with no \
+         confirmation, lead mode turns off.\n\n",
     );
     if plans.is_empty() {
         head.push_str("No plan of this sandbox is open.");

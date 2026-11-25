@@ -368,3 +368,59 @@ async fn the_phone_path_still_types_only_at_idle_and_needs_the_ack() {
     app.lead_end(&sb).await;
     assert_eq!(state(&app, "ln"), None);
 }
+
+/// After `/clear` the new conversation sits at its prompt: the context it
+/// got starts no turn, so its ack clock waits for the person's next prompt.
+#[tokio::test]
+async fn a_clear_never_drops_the_lead_before_the_conversation_had_a_turn() {
+    let (d, app) = app();
+    let sb = ready(&app, d.path(), "lo").await;
+    app.lead_request(&sb).await.unwrap();
+    app.lead_ack(&sb, None).unwrap();
+    hook(&app, &sb, ev("s1", "SessionEnd"));
+    let start = json!({"hook_event_name": "SessionStart", "session_id": "s2", "source": "clear", "hook_version": 2});
+    hook(&app, &sb, start.clone());
+    assert!(app.session_start_context(&sb, &start).is_some());
+    let mut rx = app.bus.subscribe();
+    // Far past every deadline, and no turn: still activating, nothing said.
+    app.lead_pending.lock().unwrap().get_mut(&sb).unwrap().since_ms = now_ms() - 60 * 60 * 1000;
+    app.lead_tick().await;
+    assert_eq!(state(&app, "lo"), Some(LeadPhase::Activating));
+    assert_eq!(ends(&mut rx, "lo"), 0, "no lead-end while it had no chance to answer");
+    // The person types: the turn runs, a long one included.
+    hook(&app, &sb, ev("s2", "UserPromptSubmit"));
+    app.lead_tick().await;
+    assert_eq!(state(&app, "lo"), Some(LeadPhase::Activating));
+    assert_eq!(ends(&mut rx, "lo"), 0);
+    app.lead_ack(&sb, None).unwrap();
+    assert_eq!(app.leading(), vec!["lo".to_string()]);
+}
+
+#[tokio::test]
+async fn a_turn_of_the_followed_conversation_that_ends_with_no_ack_falls_back() {
+    let (d, app) = app();
+    let sb = ready(&app, d.path(), "lp").await;
+    app.lead_request(&sb).await.unwrap();
+    app.lead_ack(&sb, None).unwrap();
+    let start = json!({"hook_event_name": "SessionStart", "session_id": "s2", "source": "clear", "hook_version": 2});
+    hook(&app, &sb, start.clone());
+    assert!(app.session_start_context(&sb, &start).is_some());
+    // Another session's turn changes nothing of the lead's clock.
+    hook(&app, &sb, ev("s9", "UserPromptSubmit"));
+    hook(&app, &sb, ev("s9", "Stop"));
+    assert_eq!(app.lead_pending_of(&sb).unwrap().clock, super::AckClock::NextTurn);
+    hook(&app, &sb, ev("s2", "UserPromptSubmit"));
+    hook(&app, &sb, ev("s2", "Stop"));
+    let p = app.lead_pending_of(&sb).unwrap();
+    assert_eq!(p.clock, super::AckClock::Deadline);
+    assert!(p.until_ms <= now_ms() + super::LEAD_ACK_GRACE_MS);
+    app.lead_tick().await;
+    assert_eq!(state(&app, "lp"), Some(LeadPhase::Activating), "the grace runs");
+    app.lead_pending.lock().unwrap().get_mut(&sb).unwrap().until_ms = now_ms() - 1;
+    let mut rx = app.bus.subscribe();
+    app.lead_tick().await;
+    assert_eq!(ends(&mut rx, "lp"), 1);
+    let s = app.lead_states()["lp"].clone();
+    assert_eq!(s.state, LeadPhase::Off);
+    assert!(s.reason.contains("ended a turn without confirming"), "{}", s.reason);
+}

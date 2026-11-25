@@ -153,7 +153,12 @@ context: that it leads, the open plans and where each thread stands, and
 lead.md (inline when it fits Claude Code's context limit, else the path of the
 installed `/lead` command to read). The lead's record follows the new
 conversation, and the state goes back to activating until it calls `lead_ack`
-again. This only keeps a lead that exists; it never creates one, and a
+again. Its clock is not the 90 seconds of a Team click: the context starts no
+turn, so a conversation at its prompt stays activating, with no deadline,
+until its next turn starts (your next prompt; a compaction in the middle of a
+turn waits for the next one too). Once a turn of that conversation has run and
+ended (`Stop`) with no `lead_ack`, Team falls back to off 15 seconds later,
+with the reason. It never drops while the session had no chance to answer. This only keeps a lead that exists; it never creates one, and a
 thread's session (`SBXW_THREAD` set) never gets it.
 
 A plan under way with no session leading it (Team off, or a lead that fell

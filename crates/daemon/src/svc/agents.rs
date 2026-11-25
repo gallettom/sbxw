@@ -70,6 +70,12 @@ impl App {
             self.send(Event::Session(info));
         }
         self.history_event(sandbox, &body);
+        // The ack clock of a lead's followed conversation follows its turns.
+        if ev.thread().is_none() {
+            if let Some(sid) = body["session_id"].as_str() {
+                self.lead_turn_event(sandbox, sid, ev.event());
+            }
+        }
         // A leader from before a daemon restart is found again by its session.
         self.rebind_lead(sandbox);
     }
