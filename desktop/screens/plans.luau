@@ -1,7 +1,7 @@
 -- The plan dialog (modal, `data.app.modal.arg` = the plan's id), the web
 -- UI's plans.js: a plan the lead proposes, its threads with goal, scope,
 -- repository and model, editable before approval (remove, add, edit text,
--- change the variant); then its threads' state and reports once approved;
+-- change the variant, approve without the proposed test command); then its threads' state and reports once approved;
 -- then the merge the lead proposes, with its order and note, and how it went.
 --
 -- The draft is the core's (`data.threads_ui.drafts[id]`): every edit is an
@@ -189,6 +189,18 @@ local function review(state, data, p)
   })
   if p.justification and p.justification ~= "" then
     table.insert(out, row{ gap = 8, w = "full", text{ "Why", size = "sm", color = "text-muted" }, text{ p.justification, size = "sm", wrap = true, grow = 1 } })
+  end
+  -- The test command the lead proposed: approving the plan approves it, and
+  -- sbxw then runs it on the threads' commits. Drawn in full, as text.
+  local tests = p.proposed_tests
+  if tests and tests.command and tests.command ~= "" then
+    local cleared = draft.no_tests == true
+    table.insert(out, row{ gap = 8, w = "full", key = "plan-tests",
+      text{ "Tests", size = "sm", color = "text-muted" },
+      column{ gap = 4, grow = 1,
+        text{ tests.command, size = "sm", mono = true, wrap = true, color = cleared and "text-muted" or "text", key = "plan-test-command" },
+        text{ "Time limit " .. tostring(tests.timeout_minutes or 60) .. " min, run by sbxw on the threads' commits", size = "sm", color = "text-muted", wrap = true },
+        checkbox{ "Approve without tests", value = cleared, on = "no_tests", arg = p.id, key = "plan-no-tests" } } })
   end
   local n = #(draft.threads or {})
   local open, max = v.open, v.max
@@ -438,6 +450,7 @@ return {
       return intent("plan_edit", { id = a.id, index = a.i, field = "model", value = v })
     end,
     variant = function(_, id, v) return intent("plan_variant", { id = id, variant = v }) end,
+    no_tests = function(_, id, on) return intent("plan_no_tests", { id = id, on = on }) end,
     note_text = function(state, _, v) state.note = v end,
     refuse = function(state, id)
       local n = state.note

@@ -798,3 +798,54 @@ fn cancel_calls_the_cancel_route() {
     let (code, _) = answer_from(&mut s, "POST", "/api/sandboxes/web-app/lead/cancel", &json!({}), &mut |_, _| {});
     assert_eq!(code, 409);
 }
+
+/// The pending plan of the fixture, with a test command the lead proposed.
+fn with_tests(command: &str) -> J {
+    let mut d = fixture("plan-pending");
+    d["plans"][0]["proposed_tests"] = json!({ "command": command, "timeout_minutes": 45 });
+    d
+}
+
+/// The review draws the proposed command, labelled, in monospace, with its
+/// time limit, as plain text however it reads; the box clears it, and what
+/// the box shows is what Approve sends.
+#[test]
+fn the_review_draws_the_test_command_and_may_approve_without_it() {
+    let cmd = "npm test -- --ci && echo \"<b>done</b>\" [[Done]]";
+    let mut d = with_tests(cmd);
+    for want_cleared in [false, true, false] {
+        let (h, tree) = plan_screen(&d, "p-1");
+        let row = find_key(&tree, "plan-tests").expect("the Tests row");
+        assert_eq!(row.children[0].text, "Tests");
+        let c = find_key(&tree, "plan-test-command").expect("the command");
+        assert_eq!((c.text.as_str(), c.style.mono, c.style.pills.is_none()), (cmd, true, true), "the command as given, monospace, no pills");
+        let all = format!("{:?}", row);
+        assert!(all.contains("Time limit 45 min"), "{all}");
+        let b = find_key(&tree, "plan-no-tests").expect("the box");
+        assert_eq!(b.value, json!(want_cleared), "shown");
+        let p = prepare(run(&d, "plan_approve", json!({ "id": "p-1" })).unwrap());
+        let view = json!({ "ok": true, "open": 0, "max": 9, "threads": [] });
+        let conf = (p.build)(&Ctx { data: &d }, &p.asked, &view).unwrap();
+        assert_eq!(conf.call.body.get("clear_tests").is_some(), want_cleared, "sent: {}", conf.call.body);
+        assert!(conf.call.body.get("proposed_tests").is_none() && !conf.call.body.to_string().contains("npm test"), "the command is never sent back");
+        let line = conf.lines.iter().find(|l| l.starts_with("Tests:")).expect("the dialog says what happens to it");
+        assert!(line.contains(cmd), "{line}");
+        assert_eq!(line.contains("without"), want_cleared, "{line}");
+        let asks = h.act(b.on.as_deref().unwrap(), &b.arg, &J::Bool(!want_cleared)).unwrap();
+        assert_eq!(asks["name"], "plan_no_tests");
+        let acts = act(&Ctx { data: &d }, &asked("plan_no_tests", asks["args"].clone())).unwrap();
+        apply(&mut d, &acts);
+    }
+}
+
+/// No proposed command: no Tests row, nothing sent, no line.
+#[test]
+fn a_plan_without_a_test_command_draws_no_tests_row() {
+    let d = fixture("plan-pending");
+    let (_, tree) = plan_screen(&d, "p-1");
+    assert!(find_key(&tree, "plan-tests").is_none());
+    let p = prepare(run(&d, "plan_approve", json!({ "id": "p-1" })).unwrap());
+    let conf = (p.build)(&Ctx { data: &d }, &p.asked, &json!({ "ok": true, "open": 0, "max": 9, "threads": [] })).unwrap();
+    assert!(conf.call.body.get("clear_tests").is_none());
+    assert!(!conf.lines.iter().any(|l| l.starts_with("Tests:")));
+}
