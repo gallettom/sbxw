@@ -238,10 +238,13 @@ A timeline holds the sandbox's name, its host, the template's tag, the
 number of kits and the sbx version: no workspace path, no environment value,
 no token.
 
-The kit-startup watch costs one `sbx exec` (a process listing) every 5
-seconds, from the end of the card until the last startup command ends or 20
-minutes pass. The `kit_startups` step's detail says how many looks it took
-and how long `sbx exec` ran in total.
+The kit-startup watch looks every 10 seconds, from the end of the card
+until the last startup command ends or 20 minutes pass. Each look is an
+`sbx ls`, then, only while the sandbox runs, an `sbx exec` listing its
+processes. It never starts a sandbox: one found stopped ends the watch
+("the sandbox stopped before the startups ended"), and stopping or removing
+it from sbxw ends the watch first. The `kit_startups` step's detail says how
+many looks it took and how long those `sbx` calls ran in total.
 
 ## Remote hosts (experimental)
 
