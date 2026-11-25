@@ -158,7 +158,7 @@ impl App {
                  read_board, then force_release or tell one of them.",
                 list.join(", ")
             );
-            self.spawn_push(sandbox.clone(), SessionKind::Agent, text, None);
+            self.deliver_or_log(sandbox, &SessionKind::Agent, sbxw_core::inbox::Kind::Notice, "sbxw board", &text, None);
         }
         Ok(taken)
     }

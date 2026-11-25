@@ -160,6 +160,14 @@ pub struct App {
     pub(crate) tests_workers: Mutex<HashSet<String>>,
     /// Bumped at every change of `tests`: what a waiting request watches.
     pub(crate) tests_tick: tokio::sync::watch::Sender<u64>,
+    /// Every agent session's inbox, as in `state/inbox.json` (see `svc::inbox`).
+    pub(crate) inbox: Mutex<sbxw_core::inbox::Book>,
+    /// Per recipient: its hook's version, its last event, its last nudge.
+    pub(crate) inbox_seen: Mutex<HashMap<(String, sbxw_core::inbox::To), crate::svc::inbox::Seen>>,
+    /// Wakes the inbox loop when a message is filed.
+    pub(crate) inbox_wake: tokio::sync::Notify,
+    /// Whether the inbox loop runs.
+    pub(crate) inbox_running: std::sync::atomic::AtomicBool,
 }
 
 pub struct AppBuilder {
@@ -182,6 +190,7 @@ impl AppBuilder {
         let emphasis = Mutex::new(self.cfg.emphasis.clone());
         let remote_access = Mutex::new(crate::svc::remote_access::RemoteRuntime::load(&store.paths.root));
         let tests = crate::svc::testq::load(&store.paths.state().join("tests.json"));
+        let inbox = crate::svc::inbox::load(&store.paths.state().join("inbox.json"));
         let jarvis = sbxw_core::jarvis::Book::load(crate::svc::jarvis::load(&store.paths.state().join("jarvis.json")));
         Arc::new(App {
             store,
@@ -243,6 +252,10 @@ impl AppBuilder {
             tests: Mutex::new(tests),
             tests_workers: Mutex::new(HashSet::new()),
             tests_tick: tokio::sync::watch::channel(0).0,
+            inbox: Mutex::new(inbox),
+            inbox_seen: Mutex::new(HashMap::new()),
+            inbox_wake: tokio::sync::Notify::new(),
+            inbox_running: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }
@@ -357,6 +370,7 @@ impl App {
         self.start_tickets_listener();
         self.start_mac_lifecycle();
         self.tests_resume();
+        self.inbox_start();
     }
 
     fn prune(&self) {

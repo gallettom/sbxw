@@ -10,6 +10,7 @@ pub mod commands;
 pub mod emphasis;
 pub mod history;
 pub mod hosts;
+pub mod inbox;
 pub mod jarvis;
 pub mod jarvis_sandbox;
 pub mod kits;

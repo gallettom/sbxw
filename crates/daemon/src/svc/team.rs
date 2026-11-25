@@ -221,13 +221,40 @@ fn recent_messages() -> &'static Recent {
     C.get_or_init(Default::default)
 }
 
-/// The last team note each reader was handed, by (plan, reader). In memory:
-/// after a restart a reader is handed its notes again once.
-type NoteCursors = Mutex<HashMap<(String, String), u64>>;
+/// The last team note each reader has, by (plan, reader): confirmed by the
+/// inbox's ack of a note it delivered, or by the `PostToolUse` of the
+/// `read_team_notes` call that handed it ([`App::team_notes_handed`]), never
+/// when the answer is only sent. Persisted in `state/team_cursors.json`, so
+/// a restart hands nothing twice and loses nothing.
+#[derive(Default)]
+struct NoteCursors {
+    loaded: bool,
+    read: HashMap<(String, String), u64>,
+    /// What the last `read_team_notes` handed, not confirmed yet.
+    handed: HashMap<(String, String), u64>,
+}
 
-fn note_cursors() -> &'static NoteCursors {
-    static C: OnceLock<NoteCursors> = OnceLock::new();
+fn note_cursors() -> &'static Mutex<HashMap<std::path::PathBuf, NoteCursors>> {
+    static C: OnceLock<Mutex<HashMap<std::path::PathBuf, NoteCursors>>> = OnceLock::new();
     C.get_or_init(Default::default)
+}
+
+/// The inbox key of team note `seq` of `plan`.
+fn note_key(plan: &str, seq: u64) -> String {
+    format!("note:{plan}:{seq}")
+}
+
+fn parse_note_key(key: &str) -> Option<(&str, u64)> {
+    let rest = key.strip_prefix("note:")?;
+    let (plan, seq) = rest.rsplit_once(':')?;
+    Some((plan, seq.parse().ok()?))
+}
+
+fn reader_name(to: &sbxw_core::inbox::To) -> String {
+    match to {
+        sbxw_core::inbox::To::Main => team::LEAD.to_string(),
+        sbxw_core::inbox::To::Thread(t) => t.clone(),
+    }
 }
 
 /// The tool a note's addressee reads it with.
@@ -343,22 +370,24 @@ impl App {
         };
         self.persist_team_logs(&sandbox.to_string());
         self.team_changed(&id);
-        let line = team::note_line(seq, kind, &me, true);
-        let unsure_line = team::note_line(seq, kind, &me, false);
+        // Each addressee's inbox, its session open or not: printed by its
+        // hook, never typed. One whose hook sbxw has not seen able to print
+        // an inbox (an older hook, or not heard from since a restart) is
+        // named in the third value, so the sender can resend by SendMessage.
         let mut told = vec![];
         let mut unsure = vec![];
-        for (w, d) in self.note_targets(sandbox, &sessions, |k| self.sessions.is_live(k)) {
+        let body = format!("A {kind} from {me} (team note {seq}, to {to}):\n{text}");
+        for w in sessions {
             let Some(k) = session_kind(&w) else { continue };
-            let line = if d != team::Delivery::Drop && !self.can_read_notes(sandbox, &w) {
+            let Some(rcpt) = crate::svc::inbox::to_of(&k) else { continue };
+            let source = format!("team note {seq} from {me}");
+            if let Err(e) = self.deliver(sandbox, &k, sbxw_core::inbox::Kind::TeamNote, &source, &body, Some(&note_key(&id, seq))) {
+                tracing::warn!("team: note {seq} for {w}: {e}");
                 unsure.push(w.clone());
-                unsure_line.clone()
-            } else {
-                line.clone()
-            };
-            match d {
-                team::Delivery::Type => self.spawn_push(sandbox.clone(), k, line.clone(), None),
-                team::Delivery::Hold => self.hold_note_line(sandbox.clone(), w.clone(), line.clone()),
-                team::Delivery::Drop => continue,
+                continue;
+            }
+            if self.inbox_hook_version(sandbox, &rcpt).is_none_or(|v| v < crate::svc::inbox::MIN_HOOK_VERSION) && !self.can_read_notes(sandbox, &w) {
+                unsure.push(w.clone());
             }
             told.push(w);
         }
@@ -410,54 +439,19 @@ impl App {
         others.sort();
         others.dedup();
         let mut told = vec![];
-        for (w, d) in self.note_targets(sandbox, &others, |k| self.sessions.is_live(k)) {
-            let Some(k @ SessionKind::Thread(_)) = session_kind(&w) else { continue };
-            match d {
-                team::Delivery::Type => self.spawn_push(sandbox.clone(), k, line.clone(), None),
-                team::Delivery::Hold => self.hold_note_line(sandbox.clone(), w.clone(), line.clone()),
-                team::Delivery::Drop => continue,
+        for w in others {
+            let Ok(t) = ThreadName::parse(&w) else { continue };
+            // A thread that ended is not told: its next conversation starts
+            // from a fresh worktree check anyway.
+            if !self.sessions.is_live(&SessionKey::thread(sandbox, &t)) || self.session_state(sandbox, &w) == Some(SessionState::Exited) {
+                continue;
             }
+            let key = format!("main-moved:{}", base.unwrap_or("main"));
+            self.deliver_or_log(sandbox, &SessionKind::Thread(t), sbxw_core::inbox::Kind::Notice, "sbxw", &line, Some(&key));
             told.push(w);
         }
         tracing::info!("team: '{sandbox}' main moved, {} other thread(s) told", told.len());
         told
-    }
-
-    /// The line waits while `who` waits on a question or a prompt, and is
-    /// typed once it is idle or at work again; dropped if it ends, or after
-    /// 30 minutes (the note stays for `read_team_notes`).
-    pub(crate) fn hold_note_line(self: &std::sync::Arc<Self>, sandbox: SandboxRef, who: String, line: String) {
-        let app = self.clone();
-        tokio::spawn(async move {
-            let mut rx = app.bus.subscribe();
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(30 * 60);
-            loop {
-                let key = match session_kind(&who) {
-                    Some(SessionKind::Thread(t)) => SessionKey::thread(&sandbox, &t),
-                    _ => SessionKey::agent(&sandbox),
-                };
-                let live = app.sessions.is_live(&key);
-                match if live { team::note_delivery(app.session_state(&sandbox, &who)) } else { team::Delivery::Drop } {
-                    team::Delivery::Type => {
-                        if let Some(k) = session_kind(&who) {
-                            app.spawn_push(sandbox.clone(), k, line.clone(), None);
-                        }
-                        return;
-                    }
-                    team::Delivery::Drop => return,
-                    team::Delivery::Hold => {}
-                }
-                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-                if left.is_zero() {
-                    return;
-                }
-                match tokio::time::timeout(left, rx.recv()).await {
-                    Ok(Ok(Event::Session(i))) if i.sandbox == sandbox.to_string() => {}
-                    Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-                    _ => return,
-                }
-            }
-        });
     }
 
     /// A `SendMessage` the status hook reported: recorded on the team's
@@ -498,19 +492,108 @@ impl App {
         self.team_changed(&id);
     }
 
-    /// `read_team_notes`: the notes for the caller not handed yet, oldest
-    /// first, each `{from, kind, text, at, to}`.
+    fn cursors_file(&self) -> std::path::PathBuf {
+        self.store.paths.state().join("team_cursors.json")
+    }
+
+    /// The cursors of this daemon's state directory, read from disk once.
+    fn with_cursors<R>(&self, f: impl FnOnce(&mut NoteCursors) -> R) -> R {
+        let path = self.cursors_file();
+        let mut all = note_cursors().lock().unwrap();
+        let c = all.entry(path.clone()).or_default();
+        if !c.loaded {
+            c.loaded = true;
+            if let Ok(t) = std::fs::read_to_string(&path) {
+                match serde_json::from_str::<std::collections::BTreeMap<String, u64>>(&t) {
+                    Ok(m) => {
+                        for (k, v) in m {
+                            if let Some((plan, who)) = k.split_once('|') {
+                                c.read.insert((plan.to_string(), who.to_string()), v);
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!("team: could not read {}: {e}", path.display()),
+                }
+            }
+        }
+        f(c)
+    }
+
+    fn persist_cursors(&self, c: &NoteCursors) {
+        let m: std::collections::BTreeMap<String, u64> = c.read.iter().map(|((p, w), v)| (format!("{p}|{w}"), *v)).collect();
+        let path = self.cursors_file();
+        let res = serde_json::to_vec_pretty(&m).map_err(anyhow::Error::from).and_then(|b| write_atomic(&path, &b));
+        if let Err(e) = res {
+            tracing::warn!("team: could not save {}: {e:#}", path.display());
+        }
+    }
+
+    /// Reader `who` of `plan` has every note up to `seq`: its cursor moves
+    /// (never back), and the notes the inbox still holds for it up to there
+    /// leave it.
+    fn advance_cursor(&self, sandbox: &SandboxRef, plan: &str, to: &sbxw_core::inbox::To, seq: u64) {
+        let who = reader_name(to);
+        let moved = self.with_cursors(|c| {
+            let cur = c.read.entry((plan.to_string(), who.clone())).or_insert(0);
+            if seq <= *cur {
+                return false;
+            }
+            *cur = seq;
+            self.persist_cursors(c);
+            true
+        });
+        if !moved {
+            return;
+        }
+        let sb = sandbox.to_string();
+        let gone = self.inbox.lock().unwrap().remove_where(|m| {
+            m.sandbox == sb && &m.to == to && m.kind == sbxw_core::inbox::Kind::TeamNote
+                && m.key.as_deref().and_then(parse_note_key).is_some_and(|(p, s)| p == plan && s <= seq)
+        });
+        if gone > 0 {
+            self.persist_inbox();
+        }
+    }
+
+    /// The inbox delivered team note `key` to `to`: read.
+    pub(crate) fn team_note_delivered(&self, sandbox: &SandboxRef, to: &sbxw_core::inbox::To, key: Option<&str>) {
+        let Some((plan, seq)) = key.and_then(parse_note_key) else { return };
+        self.advance_cursor(sandbox, plan, to, seq);
+    }
+
+    /// The `read_team_notes` call of `to` came back to its agent (its
+    /// `PostToolUse`): what it handed is read.
+    pub(crate) fn team_notes_handed(&self, sandbox: &SandboxRef, to: &sbxw_core::inbox::To) {
+        let thread = match to {
+            sbxw_core::inbox::To::Main => None,
+            sbxw_core::inbox::To::Thread(t) => Some(t.as_str()),
+        };
+        let Some(plan) = self.plans.lock().unwrap().plan_for_request(&sandbox.to_string(), thread) else { return };
+        let who = reader_name(to);
+        let Some(seq) = self.with_cursors(|c| c.handed.remove(&(plan.clone(), who))) else { return };
+        self.advance_cursor(sandbox, &plan, to, seq);
+    }
+
+    /// `read_team_notes`: the notes for the caller it does not have yet,
+    /// oldest first, each `{from, kind, text, at, to}`. Nothing is marked
+    /// read here: the call's `PostToolUse` does that, so an answer lost on
+    /// the way is handed again by the next call.
     pub fn team_notes_read(&self, sandbox: &SandboxRef, thread: Option<&ThreadName>) -> Result<Vec<Value>, String> {
         let me = thread.map_or(team::LEAD.to_string(), |t| t.to_string());
-        let plans = self.plans.lock().unwrap();
-        let id = plans.plan_for_request(&sandbox.to_string(), thread.map(|t| t.as_str())).ok_or("you are in no team")?;
-        let log = plans.log_of(&id);
-        let mut cur = note_cursors().lock().unwrap();
-        let after = cur.get(&(id.clone(), me.clone())).copied().unwrap_or(0);
-        let notes = team::notes_for(&log, &me, after);
-        if let Some(last) = notes.last() {
-            cur.insert((id.clone(), me.clone()), last.seq);
-        }
+        let (id, log) = {
+            let plans = self.plans.lock().unwrap();
+            let id = plans.plan_for_request(&sandbox.to_string(), thread.map(|t| t.as_str())).ok_or("you are in no team")?;
+            let log = plans.log_of(&id);
+            (id, log)
+        };
+        let notes = self.with_cursors(|c| {
+            let after = c.read.get(&(id.clone(), me.clone())).copied().unwrap_or(0);
+            let notes = team::notes_for(&log, &me, after);
+            if let Some(last) = notes.last() {
+                c.handed.insert((id.clone(), me.clone()), last.seq);
+            }
+            notes
+        });
         Ok(notes.iter().map(|e| json!({ "from": e.from, "to": e.to, "kind": e.data["kind"], "text": e.text, "at": e.at })).collect())
     }
 }
