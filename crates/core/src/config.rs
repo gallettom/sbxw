@@ -778,6 +778,9 @@ mod tests {
         assert_eq!(c.tests.len(), 2);
         assert_eq!((c.tests[0].timeout_minutes, c.tests[0].retries, c.tests[0].version_cmd.as_str()), (crate::testq::DEFAULT_TIMEOUT_MINUTES, 0, ""));
         assert_eq!((c.tests[1].retries, c.tests[1].timeout_minutes), (1, 90));
+        // Written out (as `sbxw` rewrites a file) and read again, unchanged.
+        assert_eq!(Config::parse(&c.to_toml().unwrap()).unwrap().tests, c.tests);
+        assert_eq!(serde_json::from_value::<Config>(serde_json::to_value(&c).unwrap()).unwrap().tests, c.tests);
         for bad in [
             "[[tests]]\nname = \"x y\"\ncommand = \"c\"\npaths = [\".\"]",
             "[[tests]]\nname = \"x\"\ncommand = \"c\"\npaths = [\"/etc\"]",
