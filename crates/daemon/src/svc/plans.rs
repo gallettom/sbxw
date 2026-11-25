@@ -85,6 +85,9 @@ impl App {
         // The queue's jobs under this plan: run, or answered without running.
         let c = self.tests_counts(&plan.id);
         v["tests"] = serde_json::json!({ "ran": c.ran, "reused": c.reused });
+        // The Board's three numbers (sbxw_core::team::plan_numbers).
+        let log = self.plans.lock().unwrap().log_of(&plan.id);
+        v["numbers"] = sbxw_core::team::plan_numbers(plan, &log, c);
         if let Ok(sb) = SandboxRef::parse(&plan.sandbox) {
             if let Some(threads) = v.get_mut("threads").and_then(|t| t.as_array_mut()) {
                 for (t, pt) in threads.iter_mut().zip(&plan.threads) {

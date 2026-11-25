@@ -15,6 +15,7 @@
 
 use crate::app::{now_ms, App};
 use sbxw_core::plans::{Plan, PlanState, Variant};
+use sbxw_core::team;
 use sbxw_core::testq::{self, Ask, Book, Job, JobState, Outcome, TestResult, Took};
 use sbxw_core::{SandboxRef, ThreadName};
 use sbxw_sbx::runner::Invocation;
@@ -141,8 +142,11 @@ impl App {
         );
         tracing::info!("tests: '{sb}' {by} asked for {}'s tests at {} ({took:?}, job {})", plan.id, short(&probe.commit), job.id);
         self.tests_changed();
-        if took == Took::Queued {
-            self.tests_kick(&sandbox);
+        match took {
+            Took::Queued => self.tests_kick(&sandbox),
+            Took::Reused => self.test_job_noted(Some(&plan.id), &job, &by, Some(team::REUSE_STORED)),
+            // A join is logged when the job finishes, with its result.
+            Took::Joined => {}
         }
         Ok((job, took))
     }
@@ -168,6 +172,59 @@ impl App {
         let b = self.tests.lock().unwrap();
         let s = sb.to_string();
         (b.active(&s).into_iter().cloned().collect(), b.latest(&s, testq::LIST_DONE_JOBS).into_iter().cloned().collect())
+    }
+
+    /// A test request answered: a line on the timeline of the plan it was
+    /// made under (none: nothing), for the Board.
+    pub(crate) fn test_job_noted(&self, plan: Option<&str>, job: &Job, asker: &str, reuse: Option<&str>) {
+        let Some(plan) = plan else { return };
+        let Some((text, data)) = team::test_job_entry(job, asker, reuse) else { return };
+        let sandbox = {
+            let mut plans = self.plans.lock().unwrap();
+            let Some(sandbox) = plans.get(plan).map(|p| p.sandbox.clone()) else { return };
+            plans.note(plan, now_ms(), team::EventKind::TestJob, asker, None, Some(&text), data);
+            sandbox
+        };
+        self.persist_team_logs(&sandbox);
+        self.team_changed(plan);
+    }
+
+    /// The test gate (audit D10), for the hook route: a thread's Bash
+    /// command that runs its plan's whole approved test command is refused,
+    /// with the reason to print; the refusal is logged on the plan (the
+    /// thread, never the command). `None`, the command passes: any other
+    /// event, tool or command, the lead's or the person's sessions (no
+    /// thread), a thread whose plan has no approved command.
+    pub fn tests_gate(&self, sandbox: &SandboxRef, event: &serde_json::Value) -> Option<String> {
+        if event["hook_event_name"] != "PreToolUse" || event["tool_name"] != "Bash" {
+            return None;
+        }
+        let thread = nonempty(event["sbxw_thread"].as_str())?;
+        let command = event["tool_input"]["command"].as_str()?;
+        let (id, approved) = {
+            let plans = self.plans.lock().unwrap();
+            let (p, _) = plans.thread_plan(&sandbox.to_string(), thread)?;
+            if p.state != PlanState::Approved || p.closed {
+                return None;
+            }
+            (p.id.clone(), p.approved_tests.as_ref()?.command.clone())
+        };
+        if !testq::runs_plan_command(command, &approved) {
+            return None;
+        }
+        self.plans.lock().unwrap().note(
+            &id,
+            now_ms(),
+            team::EventKind::TestRefused,
+            thread,
+            None,
+            Some("ran the plan's whole test command itself: sent to the test queue"),
+            serde_json::json!({ "thread": thread }),
+        );
+        tracing::info!("tests: '{sandbox}' thread {thread} ran {id}'s whole test command: refused, sent to the queue");
+        self.persist_team_logs(&sandbox.to_string());
+        self.team_changed(&id);
+        Some(GATE_REASON.to_string())
     }
 
     pub fn tests_counts(&self, plan: &str) -> testq::Counts {
@@ -223,7 +280,14 @@ impl App {
                 result.duration_ms / 1000,
                 if result.retried() { " (retried)" } else { "" }
             );
-            self.tests.lock().unwrap().finish(&job.id, result);
+            let done = self.tests.lock().unwrap().finish(&job.id, result);
+            // On the timeline before the waiters are told it is done.
+            if let Some(done) = done {
+                self.test_job_noted(done.plan.as_deref(), &done, &done.by, None);
+                for j in &done.joiners {
+                    self.test_job_noted(j.plan.as_deref(), &done, &j.by, Some(team::REUSE_JOINED));
+                }
+            }
             self.tests_changed();
         }
     }
@@ -304,6 +368,11 @@ impl App {
     }
 }
 
+/// What a thread is told when it runs the plan's whole test command itself.
+pub const GATE_REASON: &str = "sbxw: this is your plan's whole test command, which the test queue runs, not a thread. \
+Commit your work, then call run_tests (MCP sbxw-relay): it answers a stored result at once when the code did not change. \
+A narrower command (one test, one package) is fine to run yourself.";
+
 /// The refusal outside any plan with an approved test command.
 pub const NO_COMMAND: &str = "no test command: run_tests runs the test command of an approved plan, and this plan has none. \
 The lead proposes the project's test command with the plan (propose_plan's test_command), and the person approves it with the plan; \
@@ -329,6 +398,7 @@ pub fn job_view(job: &Job) -> serde_json::Value {
     if let Some(o) = v.as_object_mut() {
         o.remove("key");
         o.remove("sandbox");
+        o.remove("joiners");
     }
     v
 }
