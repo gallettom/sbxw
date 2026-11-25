@@ -119,10 +119,12 @@ impl App {
         if self.lead_pending_of(sandbox).is_some() || self.leading().contains(&sandbox.to_string()) {
             return Ok(());
         }
-        if !self.sessions.is_live(&SessionKey::agent(sandbox)) {
-            return Err(format!("'{sandbox}' has no agent terminal open: open it, then press Team"));
-        }
         self.lead_install(sandbox).await?;
+        // No terminal yet (the pane is still connecting, the sandbox was
+        // stopped): opened here, and its agent is waited for like a busy one.
+        if !self.sessions.is_live(&SessionKey::agent(sandbox)) {
+            self.open_session(&SessionKey::agent(sandbox)).await.map_err(|e| format!("{e:#}"))?;
+        }
         if self.remote_can_type(sandbox).is_ok() {
             return self.lead_type(sandbox, false).await;
         }
