@@ -623,20 +623,23 @@ pub fn plan_numbers(n: &J, now_s: u64) -> J {
         let reused = t.get("reused").and_then(J::as_u64).unwrap_or(0);
         let refused = t.get("refused").and_then(J::as_u64).unwrap_or(0);
         let mut text = if run == 0 && reused == 0 { "tests: none run yet".to_string() } else { format!("tests: {run} run, {reused} reused") };
+        // Narrow: the counts alone, the rest in the tooltip.
+        let short = text.clone();
         if refused > 0 {
             text.push_str(&format!(", {refused} sent to the queue"));
         }
         out["tests"] = json!({
             "run": run, "reused": reused, "refused": refused,
-            "text": text,
-            "help": format!("The plan's test command: {run} job{} run by the queue, {reused} result{} reused for code already tested", if run == 1 { "" } else { "s" }, if reused == 1 { "" } else { "s" }),
+            "text": text, "short": short,
+            "help": format!("The plan's test command: {run} job{} run by the queue, {reused} result{} reused for code already tested, {refused} time{} a thread was sent to the queue", if run == 1 { "" } else { "s" }, if reused == 1 { "" } else { "s" }, if refused == 1 { "" } else { "s" }),
         });
     }
     if let Some(a) = n["asked"].as_u64() {
         out["asked"] = json!({
             "n": a,
             "text": match a { 0 => "did not ask you yet".to_string(), 1 => "asked you once".to_string(), _ => format!("asked you {a} times") },
-            "help": "Times the team asked you something: questions, screenshots, approvals",
+            "short": format!("asked {a}"),
+            "help": "Times the team asked you something: questions, screenshot requests, questions to another sandbox",
         });
     }
     out

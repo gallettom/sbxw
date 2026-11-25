@@ -555,7 +555,7 @@ local function summary(s, ui, narrow)
     if not f or not nz(f.text) then return end
     figures[#figures + 1] = row{ key = "board-number-" .. key, gap = 4, px = 8, h = 24, radius = "pill", help = f.help,
       icon{ ic, size = 12, color = color or "text-muted" },
-      text{ f.text, size = "xs", color = "text-bright" },
+      text{ (narrow and f.short) or f.text, size = "xs", color = "text-bright" },
       (f.running and not narrow) and text{ "not merged yet", size = "xs", color = "text-muted" } or false }
   end
   figure("time", "history", nb.time, nb.time and nb.time.running and "amber" or "green")
