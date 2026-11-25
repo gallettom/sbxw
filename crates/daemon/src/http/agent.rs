@@ -43,6 +43,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/plans/propose_merge", post(propose_merge))
         .route("/api/plans/report", post(report))
         .route("/api/plans/mark_done", post(mark_done))
+        .route("/api/lead/ack", post(lead_ack))
         .route("/api/sandboxes/:name/codemap/done", post(codemap_done))
         .merge(super::board::agent_routes())
         .merge(super::jarvis::agent_routes())
@@ -57,7 +58,14 @@ pub fn routes() -> Router<Arc<App>> {
 /// otherwise — a hook printing nothing changes nothing.
 async fn hook(State(app): S, Agent(me): Agent, Json(body): Json<Value>) -> Json<Value> {
     let prompt = body["hook_event_name"] == "UserPromptSubmit";
+    let start = (body["hook_event_name"] == "SessionStart").then(|| body.clone());
     app.ingest_hook(&me, body);
+    // A new conversation is given what sbxw holds for it (svc::session_context).
+    if let Some(ctx) = start.and_then(|ev| app.session_start_context(&me, &ev)) {
+        return Json(json!({
+            "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": ctx }
+        }));
+    }
     match prompt.then(|| app.battery_notice(&me)).flatten() {
         Some(note) => Json(json!({
             "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": note }
@@ -270,6 +278,22 @@ async fn mark_done(State(app): S, Agent(me): Agent, Json(b): Json<MarkDoneBody>)
     app.require_leading(&me, Some(&b.id))?;
     let plan = app.plan_mark_done(&b.id, &me, &b.thread, &b.note)?;
     Ok(ok_with(json!({ "plan": app.plan_view(&plan) })))
+}
+
+#[derive(Deserialize, Default)]
+struct LeadAckBody {
+    /// `SBXW_THREAD` of the calling session: a thread is refused.
+    #[serde(default)]
+    thread: Option<String>,
+}
+
+/// The main session says it took the lead: `activating` becomes `leading`
+/// (see `svc::lead`). The sandbox is the token's; the body carries no text
+/// the daemon acts on. A refusal is 409 with a fixed text for the agent.
+async fn lead_ack(State(app): S, Agent(me): Agent, body: Option<Json<LeadAckBody>>) -> ApiResult {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let text = app.lead_ack(&me, b.thread.as_deref()).map_err(ApiError::conflict)?;
+    Ok(ok_with(json!({ "text": text })))
 }
 
 #[derive(Deserialize)]

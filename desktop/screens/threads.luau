@@ -125,13 +125,33 @@ local function sessions_tab(data, sb, sbx)
   if err then table.insert(out, note("Could not read the threads of " .. sb .. ": " .. err, "red"))
   elseif running and v.max == nil then table.insert(out, note("The threads of " .. sb .. " are not read yet.", "amber")) end
   if running then
-    table.insert(out, row{ gap = 8, w = "full",
-      v.leading and badge{ "★ Team mode on", tone = "purple" } or text{ "Team mode off", size = "sm", color = "text-muted" },
-      spacer{},
-      v.leading and button{ "End Team mode", on = "lead_end", arg = sb, key = "lead-end" }
-        or button{ "Team mode", icon = "sparkle", on = "lead_start", arg = sb, key = "lead-start",
-          help = "Make the main session plan the work into threads, have you approve the plan, and follow them" },
-    })
+    -- The lead state, as the pane bar's name pill says it (threads `view`,
+    -- `lead`): "Team mode on" only when the session really leads.
+    local st = v.lead or (v.leading and "leading" or "off")
+    local state, action, why
+    if st == "leading" then
+      state = badge{ "★ Team mode on", tone = "purple" }
+      action = button{ "End Team mode", on = "lead_end", arg = sb, key = "lead-end" }
+    elseif st == "waiting" then
+      state = badge{ "Team mode waits for idle", tone = "blue" }
+      action = button{ "Cancel", on = "lead_cancel", arg = sb, key = "lead-cancel", help = "Cancel: lead mode does not start" }
+      why = "The agent is busy: lead mode starts when it is idle."
+    elseif st == "activating" then
+      state = badge{ "Team mode starting", tone = "blue" }
+      action = button{ "Cancel", on = "lead_cancel", arg = sb, key = "lead-cancel", help = "Cancel: lead mode does not start" }
+      why = "Lead mode is starting: waiting for the session to confirm it leads."
+    elseif st == "unled" then
+      state = badge{ "Plan without lead", tone = "amber" }
+      action = button{ "Resume lead", icon = "sparkle", on = "lead_start", arg = sb, key = "lead-resume",
+        help = "Make the main session lead again: it takes the open plans back" }
+      why = "A plan is under way and no session leads it."
+    else
+      state = text{ "Team mode off", size = "sm", color = "text-muted" }
+      action = button{ "Team mode", icon = "sparkle", on = "lead_start", arg = sb, key = "lead-start",
+        help = "Make the main session plan the work into threads, have you approve the plan, and follow them" }
+    end
+    table.insert(out, row{ gap = 8, w = "full", state, spacer{}, action })
+    if why then table.insert(out, note(why)) end
   end
   table.insert(out, plan_block(data, v, sb))
   local ses = v.sessions or {}
@@ -341,6 +361,7 @@ return {
     review = function(_, id) return intent("plan_review", { id = id }) end,
     lead_start = function(_, sb) return intent("lead_start", { sandbox = sb }) end,
     lead_end = function(_, sb) return intent("lead_end", { sandbox = sb }) end,
+    lead_cancel = function(_, sb) return intent("lead_cancel", { sandbox = sb }) end,
     wt_load = function(_, sb) return intent("worktrees_load", { sandbox = sb }) end,
     board_thread = function(state, _, v) state.board_thread = v end,
     board_kind = function(state, _, v) state.board_kind = v end,

@@ -32,7 +32,7 @@ fn settle(rt: &mut Runtime<App>) {
 fn window(fixture: &str, open: &[J]) -> Runtime<App> {
     let path = format!("{}/fixtures/{fixture}.json", env!("CARGO_MANIFEST_DIR"));
     let mut a = App::new(Args { fixture: Some(path), ..Args::default() });
-    // In memory: a press here (GUI, Lead Mode, a layout) must not reach the
+    // In memory: a press here (GUI, Leads only, a layout) must not reach the
     // state file the next window, or the person's app, starts from.
     a.store = sbxw_desktop::shell::store::Store::memory();
     let mut rt = Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
@@ -95,7 +95,7 @@ fn every_tab_like_control_changes_what_is_drawn() {
         ("kanban/basic", vec![intent("kanban_show", json!({ "sandbox": "web-app" }))], vec!["kanban-row-t-web-app-2", "kanban-close", "kanban-view-conversation"]),
         // The pager's Tabs and Grid.
         ("shell/finish-grid", vec![], vec!["pager-view-tabs", "pager-view-grid"]),
-        // The top bar's GUI | TUI and Lead Mode (two-state: each press must switch).
+        // The top bar's GUI | TUI and Leads only (two-state: each press must switch).
         ("monitor/basic", vec![], vec!["top-view-gui", "top-view-tui", "top-lead", "top-lead", "top-view-gui", "top-lead", "top-view-tui", "top-lead"]),
     ];
     let mut bad = vec![];

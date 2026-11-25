@@ -667,7 +667,7 @@ fn quitting_with_a_page_window_open_is_clean() {
 }
 
 /// The way out: the pager's menu, the palette and the chord, and none of
-/// them in Lead Mode or for a page with nothing open.
+/// them in Leads only or for a page with nothing open.
 #[test]
 fn the_pager_menu_the_palette_and_the_chord_move_the_page_out() {
     let mut r = Rig::new(&["web-app", "docs"], 1);

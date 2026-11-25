@@ -204,10 +204,15 @@ pub fn answer(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u
                 if !st.data["leads"].is_array() {
                     st.data["leads"] = json!([]);
                 }
+                let state = st.data["standin_lead_state"].as_str().unwrap_or("leading").to_string();
                 let leads = st.data["leads"].as_array_mut().unwrap();
-                if !leads.iter().any(|l| l == sb.as_str()) {
+                // `standin_lead_state`: the state the lead stays in
+                // (`waiting`, `activating`), to see the pill's in-between
+                // states; none: it leads at once, as a confirmed lead.
+                if state == "leading" && !leads.iter().any(|l| l == sb.as_str()) {
                     leads.push(json!(sb));
                 }
+                set_lead_state(st.data, &sb, Some(&state));
                 (st.publish)("lead", json!(sb));
                 if let J::Object(proto) = st.data["standin_lead_plan"].clone() {
                     let n = plans(st.data).len() + 1;
@@ -219,11 +224,21 @@ pub fn answer(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u
                 }
                 return ok(json!({}));
             }
+            if let Some(c) = cap("/api/sandboxes/{sandbox}/lead/cancel") {
+                let sb = c[0].clone();
+                if !matches!(st.data["lead_states"][&sb]["state"].as_str(), Some("waiting" | "activating")) {
+                    return refuse(409, format!("{sb} is not waiting to lead"));
+                }
+                set_lead_state(st.data, &sb, None);
+                (st.publish)("lead-end", json!(sb));
+                return ok(json!({}));
+            }
             if let Some(c) = cap("/api/sandboxes/{sandbox}/lead/end") {
                 let sb = c[0].clone();
                 if let Some(l) = st.data["leads"].as_array_mut() {
                     l.retain(|x| x != sb.as_str());
                 }
+                set_lead_state(st.data, &sb, None);
                 let mut ended = vec![];
                 for p in plans(st.data).iter_mut().filter(|p| p["sandbox"] == sb.as_str() && p["closed"] != true) {
                     if p["state"] == "pending" {
@@ -449,4 +464,20 @@ fn merge(st: &mut Standin, id: &str, close: bool) -> Option<(u16, J)> {
     let plan = st.data["plans"][i].clone();
     (st.publish)("plan", plan.clone());
     ok(json!({ "merge": plan["merge"] }))
+}
+
+/// `data.lead_states[sb]` as the daemon keeps it: `state` with its `since_ms`, none: off (the entry goes).
+fn set_lead_state(data: &mut J, sb: &str, state: Option<&str>) {
+    if !data["lead_states"].is_object() {
+        data["lead_states"] = json!({});
+    }
+    let m = data["lead_states"].as_object_mut().unwrap();
+    match state {
+        Some(s) => {
+            m.insert(sb.into(), json!({ "state": s, "since_ms": now_ms() }));
+        }
+        None => {
+            m.remove(sb);
+        }
+    }
 }

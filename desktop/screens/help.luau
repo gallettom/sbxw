@@ -43,7 +43,7 @@ return {
         step(2, "Restart the sbx daemon", "Run sbx first: after an update it may suggest a restart. Still empty? Start its daemon again in the background; it writes to ~/.sbx/daemon-restart.log.", "nohup sbx daemon start >> ~/.sbx/daemon-restart.log 2>&1 &"),
         divider{},
         text{ "Where things are", weight = "semibold", color = "text-bright" },
-        text{ "The top bar: GUI | TUI (Sessions or the terminals), Lead Mode (only the team leaders) and Kanban (the tickets planned, in progress, in test, ready to merge and merged; pressed again it closes).", size = "sm", color = "text-muted", wrap = true },
+        text{ "The top bar: GUI | TUI (Sessions or the terminals), Leads only (only the sessions that lead a team) and Kanban (the tickets planned, in progress, in test, ready to merge and merged; pressed again it closes).", size = "sm", color = "text-muted", wrap = true },
         text{ "The rail on the far left: at the top, what happens now (Requests, Network, the Dashboard: the teams' conversations, with the same Kanban one switch away); at the bottom, what is set up. MCP servers (tools a sandbox can load), Skills (kept for every new sandbox) and Kits (what a project's sandboxes start with; amber with a number when one waits for your answer) each open a panel on the right. Settings holds secrets and sign-in, remote hosts and the voice models. A sandbox's Manage dialog and a pane's ⋯ menu open the same panels on that sandbox.", size = "sm", color = "text-muted", wrap = true },
         divider{},
         text{ "Keyboard shortcuts", weight = "semibold", color = "text-bright" },

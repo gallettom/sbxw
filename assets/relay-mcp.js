@@ -270,6 +270,16 @@ const THREAD_ITEM = {
 
 const LEAD_TOOLS = [
   {
+    name: "lead_ack",
+    description:
+      "Confirm to sbxw that this session took the lead. Call it first, as soon as you read the " +
+      "/lead instructions or sbxw gives them back after a /clear or a compaction: the Team " +
+      "button turns on only then. With no confirmation within 90 seconds of /lead (after a " +
+      "/clear or a compaction: by the end of your next turn), lead mode turns off. A refusal means sbxw made no lead request: do not lead, and tell the person to " +
+      "press Team in sbxw.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "propose_plan",
     description:
       "Only when leading (the user ran /lead or asked you to split the work). " +
@@ -843,6 +853,16 @@ async function callPlanTool(name, args) {
         "\n\nThe user merges it with one click in the plan dialog; you will be told how it went.",
       false,
     );
+  }
+  if (name === "lead_ack") {
+    // No text of the agent's goes with it: the daemon decides from the
+    // sandbox's token and whether this is a thread's server.
+    try {
+      const res = await relay.request("/api/lead/ack", { from: relay.me, thread: THREAD || undefined }, 15000);
+      return textResult(String((res && res.text) || "Confirmed: you lead this sandbox."), false);
+    } catch (e) {
+      return textResult(String((e && e.message) || e), true);
+    }
   }
   if (name === "mark_thread_done") {
     const id = planId();

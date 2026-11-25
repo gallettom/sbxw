@@ -61,8 +61,13 @@ const DATA: &[Data] = &[
     Data { key: "threads", path: "/api/sandboxes/{sandbox}/threads", on: &["session", "plan", "lead-end"], every: 15, lazy: false },
     // Every plan, as the daemon keeps them (`sbxw_core::plans::Plan`).
     Data { key: "plans", path: "/api/plans", on: &["plan", "lead-end"], every: 0, lazy: false },
-    // Sandboxes whose main session was made lead.
-    Data { key: "leads", path: "/api/leads", on: &["lead", "lead-end"], every: 0, lazy: false },
+    // Sandboxes whose main session really leads.
+    Data { key: "leads", path: "/api/leads", on: &["lead", "lead-end", "session"], every: 0, lazy: false },
+    // Each sandbox's lead state: `{ "<sandbox>": { state: waiting | activating | leading, since_ms, reason } }`
+    // (absent: off; `reason`: why the last attempt fell back to off). Read
+    // again on every lead change and on `session` (a lead the daemon dropped
+    // with its terminal never stays on screen), and at every connection.
+    Data { key: "lead_states", path: "/api/lead-states", on: &["lead", "lead-end", "session"], every: 0, lazy: false },
     // `{ok, default, models: [{id, label}]}`.
     Data::new("models", "/api/models"),
     // A shared plan's board, per running sandbox: `{sandbox, plan, claims, entries}`.
@@ -95,6 +100,7 @@ pub const INTENTS: &[Spec] = &[
     d("worktrees_load", &[("sandbox", Arg::Str, true)], "Reads the sandbox's worktrees again (`data.worktrees`)."),
     d("lead_start", &[("sandbox", Arg::Str, true)], "Team mode: makes the sandbox's main session lead (it plans threads and follows them)."),
     d("lead_end", &[("sandbox", Arg::Str, true)], "Ends Team mode, after the core's dialog says what that leaves behind (threads run on, a waiting plan is refused)."),
+    d("lead_cancel", &[("sandbox", Arg::Str, true)], "Cancels a lead mode not yet on: waiting for the agent to be idle, or starting (the session has not confirmed it leads)."),
     d("plan_review", &[("id", Arg::Str, true)], "Opens the plan dialog: the review while it waits, its threads' state once approved, the merge once proposed."),
     d("plans_reload", &[], "Reads the plans again."),
     d(
@@ -267,7 +273,11 @@ fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
         }
         "lead_start" => {
             let sb = q.req("sandbox");
-            Ok(vec![Action::Call(Call::post(format!("{}/lead", sb_path(sb)), json!({}), format!("Team mode for {sb}")).then(&["leads"]).tag(&format!("lead:{sb}")))])
+            Ok(vec![Action::Call(Call::post(format!("{}/lead", sb_path(sb)), json!({}), format!("Team mode for {sb}")).then(&["leads", "lead_states"]).tag(&format!("lead:{sb}")))])
+        }
+        "lead_cancel" => {
+            let sb = q.req("sandbox");
+            Ok(vec![Action::Call(Call::post(format!("{}/lead/cancel", sb_path(sb)), json!({}), format!("cancel Team mode for {sb}")).then(&["leads", "lead_states"]).tag(&format!("lead-cancel:{sb}")))])
         }
         "lead_end" => {
             let sb = q.req("sandbox");
@@ -275,7 +285,7 @@ fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
             for p in ctx.get("plans").as_array().into_iter().flatten().filter(|p| p["sandbox"] == sb && p["closed"] != true && p["state"] == "approved") {
                 running += p["threads"].as_array().into_iter().flatten().filter(|t| t["state"] != "done" && t["state"] != "failed").count();
             }
-            let mut c = Confirm::new(format!("End Team mode for {sb}?"), Call::post(format!("{}/lead/end", sb_path(sb)), json!({}), format!("end Team mode for {sb}")).then(&["leads", "plans"]))
+            let mut c = Confirm::new(format!("End Team mode for {sb}?"), Call::post(format!("{}/lead/end", sb_path(sb)), json!({}), format!("end Team mode for {sb}")).then(&["leads", "lead_states", "plans"]))
                 .line(format!("The main session of {sb} stops leading and goes back to being an ordinary session."));
             if running > 0 {
                 c = c.line(format!(
@@ -929,7 +939,11 @@ fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action>
         },
         "lead" => match err {
             Some(e) => vec![Action::error(format!("Team mode for {rest}: {e}"))],
-            None => vec![Action::notice(format!("Team mode on for {rest}: its main session plans the work, you approve the plan"))],
+            None => vec![Action::notice(format!("Team mode for {rest}: it turns on once the main session confirms it leads (after its current work, if it is busy)"))],
+        },
+        "lead-cancel" => match err {
+            Some(e) => vec![Action::error(format!("Cancel Team mode for {rest}: {e}"))],
+            None => vec![Action::notice(format!("Team mode for {rest} cancelled"))],
         },
         "interrupt" => match err {
             Some(e) => vec![Action::error(format!("{}: {e}", call.what))],
@@ -950,6 +964,29 @@ fn on_data(ctx: &Ctx, key: &str, old: &J, new: &J) -> Vec<Action> {
     if key == "plans" {
         out.extend(plans_changed(ctx, old, new));
     }
+    if key == "lead_states" {
+        out.extend(lead_fell_back(old, new));
+    }
+    out
+}
+
+/// A lead state that fell back to off with a `reason` (no confirmation in
+/// time, the session gone): the reason, once, as a notice. Once only: the
+/// next reads find it off already. Nothing at the first read.
+fn lead_fell_back(old: &J, new: &J) -> Vec<Action> {
+    let Some(was) = old.as_object() else { return vec![] };
+    let on = |v: &J| matches!(v["state"].as_str(), Some("waiting" | "activating" | "leading"));
+    let mut out = vec![];
+    for (sb, before) in was {
+        let now = &new[sb.as_str()];
+        if !on(before) || on(now) {
+            continue;
+        }
+        if let Some(r) = now["reason"].as_str().filter(|r| !r.trim().is_empty()) {
+            let what = if before["state"] == "leading" { "ended" } else { "did not start" };
+            out.push(Action::error(format!("Team mode for {sb} {what}: {r}")));
+        }
+    }
     out
 }
 
@@ -965,7 +1002,7 @@ pub fn view(ctx: &Ctx) -> J {
             sb.into(),
             json!({
                 "sessions": model::sessions(ctx.data, sb).iter().map(Session::to_json).collect::<Vec<_>>(),
-                "open": t["open"], "max": t["max"], "leading": model::leading(ctx.data, sb),
+                "open": t["open"], "max": t["max"], "leading": model::leading(ctx.data, sb), "lead": model::team_state(ctx.data, sb),
                 "pending": model::pending_plan(ctx.data, sb).map(|p| p["id"].clone()),
                 "merge": model::merge_plan(ctx.data, sb).map(|p| p["id"].clone()),
             }),
@@ -975,6 +1012,14 @@ pub fn view(ctx: &Ctx) -> J {
 }
 
 pub const VIEW: &str = "threads_view";
+
+/// The `lead` extra's labels, one per team state (shell/bar.rs reads the
+/// in-between ones as the word the name pill shows after the name).
+pub const TEAM_ON: &str = "Team on";
+pub const TEAM_OFF: &str = "Team";
+pub const TEAM_WAITING: &str = "waits for idle";
+pub const TEAM_STARTING: &str = "starting";
+pub const TEAM_UNLED: &str = "Plan without lead";
 
 fn plans_changed(ctx: &Ctx, old: &J, new: &J) -> Vec<Action> {
     let seed = old.is_null();
@@ -1096,12 +1141,16 @@ fn extras(ctx: &Ctx) -> Vec<Extra> {
         if !up {
             continue;
         }
-        // The main session's pane bar.
-        let lead = model::leading(ctx.data, sb);
-        out.push(if lead {
-            extra(on_session(sb, None), "lead", "Team on", Some("people"), "purple", "Team mode: this session plans threads and follows them. Click to end it", Some(("lead_end", json!({ "sandbox": sb }))))
-        } else {
-            extra(on_session(sb, None), "lead", "Team", Some("people"), "muted", "Team mode: make this session plan the work into threads, have you approve the plan, and follow them", Some(("lead_start", json!({ "sandbox": sb }))))
+        // The main session's pane bar: the name pill carries the team state
+        // (shell/bar.rs `take_team`): "Team on" only for a session that
+        // really leads; the in-between states say what they wait for.
+        let cancel = || Some(("lead_cancel", json!({ "sandbox": sb })));
+        out.push(match model::team_state(ctx.data, sb) {
+            "leading" => extra(on_session(sb, None), "lead", TEAM_ON, Some("people"), "purple", "Team mode: this session plans threads and follows them. Click to end it", Some(("lead_end", json!({ "sandbox": sb })))),
+            "waiting" => extra(on_session(sb, None), "lead", TEAM_WAITING, Some("people"), "blue", "The agent is busy: lead mode starts when it is idle. Click to cancel", cancel()),
+            "activating" => extra(on_session(sb, None), "lead", TEAM_STARTING, Some("people"), "blue", "Lead mode is starting: waiting for the session to confirm it leads. Click to cancel", cancel()),
+            "unled" => extra(on_session(sb, None), "lead", TEAM_UNLED, Some("people"), "amber", "A plan is under way and no session leads it. Click to resume lead: the main session takes the open plans back", Some(("lead_start", json!({ "sandbox": sb })))),
+            _ => extra(on_session(sb, None), "lead", TEAM_OFF, Some("people"), "muted", "Team mode: make this session plan the work into threads, have you approve the plan, and follow them", Some(("lead_start", json!({ "sandbox": sb })))),
         });
         // Each session's own controls.
         for x in list.iter().filter(|x| x.running || x.thread.is_none()) {

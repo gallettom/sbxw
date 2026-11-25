@@ -108,7 +108,7 @@ local function more_menu(hidden)
 end
 
 -- The modes, after the mark: GUI | TUI (Sessions, the readable view of
--- every session, or the terminals), Lead Mode (only the team leaders,
+-- every session, or the terminals), Leads only (only the team leaders,
 -- in either) and the Kanban (the Dashboard's tickets, over either). They
 -- change what the pane area shows, so they live here and not in the rail,
 -- whose entries show more. Compact (a narrow window): icons alone, the
@@ -132,11 +132,11 @@ local function modes(app, compact)
     select{ id = "top-view", switch = true, value = gui and "gui" or "tui", on = "view",
       items = { { id = "gui", label = (not compact) and "GUI" or "", icon = "inbox" }, { id = "tui", label = (not compact) and "TUI" or "", icon = "terminal" } },
       help = (gui and "GUI: Sessions, every session's conversation in one view" or "TUI: the terminals") .. ". Press, or " .. keys .. ", for the other" },
-    button{ (not compact) and (on and "Lead Mode On" or "Lead Mode Off") or nil, icon = "leader", key = "top-lead", on = "lead", radius = "pill",
+    button{ (not compact) and (on and "Leads only: on" or "Leads only: off") or nil, icon = "leader", key = "top-lead", on = "lead", radius = "pill",
       tone = "purple", variant = on and "neutral" or "ghost", color = on and "purple" or "text-muted", fill = on and "purple-tint" or nil,
       disabled = (not on) and lead.can ~= true,
-      help = on and "Lead Mode On: only the team leaders (their terminals, their sessions and threads). Press for everything again"
-        or (lead.can == true and "Lead Mode Off: press to show only the team leaders, in the terminals and in Sessions" or "Lead Mode: no team is running") },
+      help = on and "Leads only is on: only the sessions that lead a team (their terminals, their sessions and threads). Press for everything again"
+        or (lead.can == true and "Leads only is off: press to show only the sessions that lead a team, in the terminals and in Sessions" or "Leads only: no session leads a team") },
     -- The Kanban: quiet at rest, lit only while it is the screen drawn (the
     -- Dashboard's conversation does not light it). A press opens it on the
     -- sandbox in context, or closes it (kanban_toggle).

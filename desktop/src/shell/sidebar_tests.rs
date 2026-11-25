@@ -369,7 +369,7 @@ fn in_the_window_the_order_waits_for_the_pointer_and_the_focus_follows() {
 /// The list at the sidebar's narrowest (200 pt) and its default width, with
 /// 15 sandboxes: rows never overlap, stay inside the sidebar and scroll in
 /// it; the status dots keep their size; hidden and shown again, filtered,
-/// and under Lead Mode, the same.
+/// and under Leads only, the same.
 #[test]
 fn the_list_fits_at_200_pt_and_at_the_default_width() {
     use super::tests::tap;
@@ -395,7 +395,7 @@ fn the_list_fits_at_200_pt_and_at_the_default_width() {
             rt.frame(1.0 / 60.0);
         }
         audit(&rt, w, ORDER.len(), "shown again");
-        // Lead Mode on: the list is the same.
+        // Leads only on: the list is the same.
         rt.update(|s, tx| {
             s.intents("test", crate::intent::parse(&serde_json::json!({ "kind": "intent", "name": "team_leads", "args": { "show": "show" } })).unwrap());
             s.poll(0.0, tx);
@@ -403,7 +403,7 @@ fn the_list_fits_at_200_pt_and_at_the_default_width() {
         for _ in 0..10 {
             rt.frame(1.0 / 60.0);
         }
-        audit(&rt, w, ORDER.len(), "Lead Mode");
+        audit(&rt, w, ORDER.len(), "Leads only");
         // The name filter: only atlas's rows, in order.
         tap(&mut rt, "filter");
         for ch in "atlas".chars() {

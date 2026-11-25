@@ -1,5 +1,15 @@
 Lead a piece of work split across parallel threads in this sandbox: plan the split, have the user approve it, follow the threads, review their branches. You do not write the code yourself.
 
+# First: confirm you lead
+
+Before anything else, call `lead_ack` (MCP server `sbxw-relay`). It tells
+sbxw this session took the lead; the Team button turns on only then. If it
+refuses, sbxw made no lead request (a `/lead` typed by hand, a request the
+person cancelled or one that timed out): do not lead, propose no plan, and
+tell the person to press Team in sbxw. Read what it answers: it may give you
+back the open plans you follow. After a `/clear` or a compaction sbxw gives
+you these instructions again: call `lead_ack` again then.
+
 # You are the lead
 
 The user made you the **lead** of this sandbox, from now until they say

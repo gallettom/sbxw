@@ -1173,7 +1173,7 @@ fn the_view_is_called_sessions_and_an_older_stored_base_still_restores() {
     let fx = format!("{}/fixtures/monitor/basic.json", env!("CARGO_MANIFEST_DIR"));
     let mut a = App::new(Args { fixture: Some(fx), ..Default::default() });
     assert!(matches!(crate::feat::screen("monitor").map(|(_, d)| &d.slot), Some(Slot::Base { title: "Sessions", icon: "inbox", .. })), "the view's title and its switch segment");
-    // GUI | TUI and Lead Mode are the top bar's: the rail has neither (it shows more, it does not switch views).
+    // GUI | TUI and Leads only are the top bar's: the rail has neither (it shows more, it does not switch views).
     let (top, bottom) = a.rail_entries();
     let keys: Vec<String> = top.iter().chain(&bottom).map(|e| e.key.clone()).collect();
     assert!(!keys.iter().any(|k| k == "rail-monitor" || k == "rail-leads"), "no Sessions or Team leads entry on the rail: {keys:?}");
@@ -1627,7 +1627,7 @@ fn rows_are_one_line_and_a_nested_thread_names_itself_alone() {
     d["monitor"] = v.clone();
     let n = host().render(&d).unwrap();
     let nested: Vec<&J> = v["rows"].as_array().unwrap().iter().filter(|r| r["indent"] == true).collect();
-    assert!(!nested.is_empty(), "Lead Mode: threads under their leader");
+    assert!(!nested.is_empty(), "Leads only: threads under their leader");
     for r in &nested {
         let k = r["key"].as_str().unwrap();
         assert!(find(&n, &format!("monitor-row-sb-{k}")).is_none(), "{k}: no sandbox name under its leader");
@@ -1700,7 +1700,7 @@ fn nothing_of_the_list_leaves_its_column_at_any_width_in_either_mode() {
                     }
                 });
                 frames(&mut rt, 6);
-                assert!(rt.state.leads_on(), "{w}: Lead Mode on");
+                assert!(rt.state.leads_on(), "{w}: Leads only on");
             }
             let Some((col, _)) = rt.presented("monitor-list-col") else { panic!("{w} {leads}: the list") };
             let side = rt.presented("monitor-detail").is_some();

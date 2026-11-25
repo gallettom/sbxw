@@ -410,11 +410,77 @@ pub fn lead_resumed(plans: &[Plan]) -> Option<String> {
     ))
 }
 
+/// The additional context a lead's new conversation gets at its start
+/// (after `/clear` or a compaction in the lead's terminal): that it leads,
+/// that it must call `lead_ack` first, the open plans of its sandbox (ids,
+/// validated thread names, states: no agent text), and its instructions,
+/// `lead_md` whole when everything fits in `max_chars`, else the `path` sbxw
+/// installed them at, to be read in full.
+pub fn lead_context(plans: &[Plan], lead_md: &str, path: &str, max_chars: usize) -> String {
+    let mut head = String::from(
+        "[sbxw] This conversation is the lead of this sandbox. The person turned Team mode on \
+         and it stays on across a /clear or a compaction, so sbxw gives you your lead \
+         instructions again. First call the `lead_ack` tool (MCP server sbxw-relay) to confirm \
+         you lead: until then the plan tools are refused, and if your next turn ends with no \
+         confirmation, lead mode turns off.\n\n",
+    );
+    if plans.is_empty() {
+        head.push_str("No plan of this sandbox is open.");
+    } else {
+        let each: Vec<String> = plans
+            .iter()
+            .map(|p| {
+                let threads: Vec<String> = p
+                    .threads
+                    .iter()
+                    .map(|t| format!("{} {}", t.name, format!("{:?}", t.state).to_lowercase()))
+                    .collect();
+                let state = format!("{:?}", p.state).to_lowercase();
+                format!("- plan {} ({state}, {}): {}", p.id, if p.variant.is_split() { "split" } else { "shared" }, if threads.is_empty() { "no thread".into() } else { threads.join(", ") })
+            })
+            .collect();
+        head.push_str("The open plans of this sandbox, which you follow, and where each thread stands:\n");
+        head.push_str(&each.join("\n"));
+        head.push_str("\nRead each with plan_status and its id before you act on it.");
+    }
+    let goal = "(The goal was given earlier in this sandbox: read the open plans above, or ask the user.)";
+    let inline = format!(
+        "{head}\n\nYour lead instructions (the /lead command) follow.\n\n--- lead instructions ---\n{}\n--- end ---",
+        lead_md.replace("$ARGUMENTS", goal).trim()
+    );
+    if inline.chars().count() <= max_chars {
+        return inline;
+    }
+    format!(
+        "{head}\n\nYour lead instructions are the /lead command sbxw installed at {path}: read that \
+         file in full now, before anything else, and follow it. Where it says $ARGUMENTS, the goal \
+         was given earlier in this sandbox: read the open plans above, or ask the user."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::plans::{MergeResult, MergeState, PlanState};
     use crate::relay::{RelayBook, Shot};
+
+    #[test]
+    fn the_lead_context_asks_for_the_ack_and_falls_back_to_the_path_when_too_long() {
+        let md = "Lead it.\n\n## 1. Get the goal\n\n$ARGUMENTS\n";
+        let short = lead_context(&[], md, "/home/agent/.claude/commands/lead.md", 9_500);
+        assert!(short.contains("call the `lead_ack` tool"), "{short}");
+        assert!(short.contains("No plan of this sandbox is open."));
+        assert!(short.contains("--- lead instructions ---\nLead it."), "{short}");
+        assert!(!short.contains("$ARGUMENTS"));
+        let long = lead_context(&[], &"x".repeat(20_000), "/home/agent/.claude/commands/lead.md", 9_500);
+        assert!(long.len() < 2_000);
+        assert!(long.contains("/home/agent/.claude/commands/lead.md: read that file in full now"), "{long}");
+        assert!(long.contains("lead_ack"));
+        assert!(!short.contains('\u{2014}') && !long.contains('\u{2014}'), "no em dash");
+        // The real lead.md, as sbxw sends it.
+        let real = lead_context(&[], crate::tooling::LEAD_COMMAND, crate::tooling::LEAD_COMMAND_PATH, 9_500);
+        assert!(real.chars().count() <= 9_500, "{}", real.len());
+    }
 
     #[test]
     fn a_routed_question_is_quarantined_and_names_its_id() {

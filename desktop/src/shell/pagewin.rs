@@ -246,7 +246,7 @@ impl App {
     }
 
     /// "Move Page to New Window": page `k` (from 0) and its panes leave the
-    /// main window for a window of their own. Refused in Lead Mode (its view
+    /// main window for a window of their own. Refused in Leads only (its view
     /// is the main window's) and for a page with nothing open. Returns the
     /// window's number.
     pub fn move_page_out(&mut self, k: usize) -> Option<u32> {
@@ -254,7 +254,7 @@ impl App {
             return None;
         }
         if self.leads.is_some() {
-            self.notify("Turn Lead Mode off first: a page moves to its own window from the usual layout", false);
+            self.notify("Turn Leads only off first: a page moves to its own window from the usual layout", false);
             return None;
         }
         let page = self.pages.list.get(k)?.clone();

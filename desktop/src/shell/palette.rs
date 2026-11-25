@@ -286,7 +286,7 @@ impl App {
             v.push(core("mode", &label, "The other session of this sandbox; this one keeps running", icon, vec![], Run::SwitchMode));
         }
         if self.leads_on() || !self.leaders().is_empty() {
-            let (label, hint) = if self.leads_on() { ("Turn Lead Mode off", "Every terminal and session again, the layout before it") } else { ("Turn Lead Mode on", "Only the team leaders' terminals, and their sessions in Sessions") };
+            let (label, hint) = if self.leads_on() { ("Turn Leads only off", "Every terminal and session again, the layout before it") } else { ("Turn Leads only on", "Only the terminals of the sessions that lead a team, and their sessions in Sessions") };
             v.push(core("leads", label, hint, "leader", vec![], Run::Leads));
         }
         if self.panes.get(self.focused).is_some_and(|p| p.term.is_some()) {

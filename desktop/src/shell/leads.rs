@@ -1,12 +1,13 @@
-//! Lead Mode (the team leads view): the top bar's "Lead Mode" shows only
+//! Leads only (the team leads view): the top bar's "Leads only" shows only
 //! the team leaders' terminals, and pressed again puts back exactly the
 //! layout that was there before. Sessions, as the base view, shows only the
 //! leaders' sessions under the same state.
 //!
 //! * A leader is the main session of a running sandbox that leads a team:
-//!   the daemon's `GET /api/leads` (`data.leads`, a list of sandbox names),
-//!   or a plan of that sandbox still under way (`feat::threads::model::leading`,
-//!   the same rule as the pane bar's "Team on"). Threads are never leaders.
+//!   state `leading` in the daemon's `GET /api/lead-states` (`data.lead_states`;
+//!   before it is read, `GET /api/leads`), as `feat::threads::model::leading`
+//!   says: the same rule as the pane bar's "Team on". A plan under way with
+//!   no lead is not a leader. Threads are never leaders.
 //! * Entering: the pages, N, tilings, current page and focus are kept; one
 //!   pane per leader, in the list's order, on pages of N with the default
 //!   tiling. A leader already open keeps its pane (the same terminal,
@@ -18,14 +19,14 @@
 //!   again when its sandbox still runs, else left out.
 //! * Quitting in the view: the state file holds the kept layout
 //!   (`App::save_layout`), never the view's, and `lead_mode: true`; at the
-//!   next start Lead Mode comes back over that layout once the teams are
+//!   next start Leads only comes back over that layout once the teams are
 //!   read (and only if a team runs then).
-//! * The top bar's Lead Mode (topbar.luau, the `team_leads` intent) and the
+//! * The top bar's Leads only (topbar.luau, the `team_leads` intent) and the
 //!   palette turn it on and off; Sessions filters its list by the same state.
 
 use super::*;
 
-/// The state file's key: Lead Mode was on when the app quit (comes back at start).
+/// The state file's key: Leads only was on when the app quit (comes back at start).
 pub const LEAD_KEY: &str = "lead_mode";
 
 /// The view while it shows.
@@ -43,7 +44,7 @@ pub struct LeadsView {
 impl App {
     /// The running sandboxes that lead a team, in the list's order.
     pub fn leaders(&self) -> Vec<String> {
-        let data = serde_json::json!({ "leads": self.feats.data.get("leads").cloned().unwrap_or(J::Null), "plans": self.feats.data.get("plans").cloned().unwrap_or(J::Null) });
+        let data = serde_json::json!({ "leads": self.feats.data.get("leads").cloned().unwrap_or(J::Null), "lead_states": self.feats.data.get("lead_states").cloned().unwrap_or(J::Null) });
         self.sandboxes.iter().filter(|s| s.status == "running" && crate::feat::threads::model::leading(&data, &s.name)).map(|s| s.name.clone()).collect()
     }
 
@@ -255,7 +256,7 @@ mod tests {
         let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
         r.rt.update(|s, _| s.toggle_leads());
         assert!(!r.rt.state.leads_on());
-        assert_eq!(r.rt.state.screen_data()["app"]["leads"], serde_json::json!({ "on": false, "can": false }), "the top bar draws Lead Mode disabled");
+        assert_eq!(r.rt.state.screen_data()["app"]["leads"], serde_json::json!({ "on": false, "can": false }), "the top bar draws Leads only disabled");
         r.rt.update(|s, _| s.run_intent("x", Intent::TeamLeads { show: Some(true) }));
         assert!(!r.rt.state.leads_on(), "nothing to show: it stays off");
     }
@@ -268,7 +269,7 @@ mod tests {
         r.rt.state.screen_data()["monitor"]["rows"].as_array().map(|v| v.iter().map(|x| x["key"].as_str().unwrap_or("").to_string()).collect()).unwrap_or_default()
     }
 
-    /// A thread closed elsewhere while Lead Mode parks its pane: the pane is
+    /// A thread closed elsewhere while Leads only parks its pane: the pane is
     /// dropped from the parked ones and from the layout to come back to, so
     /// leaving the view opens no dead terminal for it.
     #[test]
@@ -298,7 +299,7 @@ mod tests {
         assert_eq!(in_pages, r.rt.state.panes.len(), "the layout and the panes agree");
     }
 
-    /// Lead Mode is one state for both base views: on from the top bar in
+    /// Leads only is one state for both base views: on from the top bar in
     /// Sessions, the list keeps the leaders, each with its threads under it
     /// (indented), and a selection filtered out moves to the first leader;
     /// the terminals behind show only the leaders' panes; TUI and back keep
@@ -323,7 +324,7 @@ mod tests {
         assert_eq!(r.rt.state.screen_data()["monitor"]["sel"], "b:sb");
         tap(&mut r.rt, "top-lead");
         r.settle();
-        assert!(r.rt.state.leads_on(), "Lead Mode on from the top bar");
+        assert!(r.rt.state.leads_on(), "Leads only on from the top bar");
         assert_eq!(rows(&r), ["a:sa", "a::t1", "c:sc"], "each leader (the core's order), then its threads");
         let v = r.rt.state.screen_data()["monitor"].clone();
         assert_eq!(v["rows"][1]["indent"], true, "a thread under its leader");
@@ -335,7 +336,7 @@ mod tests {
         assert_eq!(shown, ["a", "c", "e"].iter().map(|s| s.to_string()).collect(), "the TUI shows the leaders' panes");
         tap(&mut r.rt, "top-view-tui");
         r.settle();
-        assert!(r.rt.state.leads_on() && r.rt.state.feats.base.is_none(), "TUI keeps Lead Mode");
+        assert!(r.rt.state.leads_on() && r.rt.state.feats.base.is_none(), "TUI keeps Leads only");
         tap(&mut r.rt, "top-view-gui");
         r.settle();
         assert_eq!(rows(&r), ["a:sa", "a::t1", "c:sc"], "back in GUI: still filtered");
@@ -359,7 +360,20 @@ mod tests {
         assert!(r.rt.find("monitor-empty").is_none(), "not the no-session state");
     }
 
-    /// Lead Mode on when the app quit comes back at the next start, once the
+    /// The filter is "Leads only" wherever it is named (the words "lead
+    /// mode" stay for a session's real state), and the state file keeps its
+    /// old key, so a file written as "Lead Mode" was still loads it on.
+    #[test]
+    fn leads_only_is_named_so_and_keeps_the_old_state_key() {
+        assert_eq!(LEAD_KEY, "lead_mode", "older state files still load");
+        assert_eq!((super::super::bar::LEAD_ON, super::super::bar::LEAD_OFF), ("Leads only: on", "Leads only: off"));
+        for (what, src) in [("topbar", include_str!("../../screens/topbar.luau")), ("help", include_str!("../../screens/help.luau")), ("palette", include_str!("palette.rs")), ("monitor", include_str!("../../screens/monitor.luau"))] {
+            assert!(!src.contains("Lead Mode"), "{what} still says Lead Mode");
+            assert!(src.contains("Leads only"), "{what} names Leads only");
+        }
+    }
+
+    /// Leads only on when the app quit comes back at the next start, once the
     /// teams are read, over the layout kept; with no team running then it
     /// stays off (and does not wait for one).
     #[test]
@@ -381,7 +395,7 @@ mod tests {
         quiet(&mut r);
         r.rt.update(|s, tx| {
             s.feats.data.remove("leads");
-            s.feats.data.remove("plans");
+            s.feats.data.remove("lead_states");
             s.leads_restore = true;
             s.listed = true;
             s.poll(1.0, tx);
@@ -395,27 +409,30 @@ mod tests {
         assert!(!r.rt.state.leads_on() && !r.rt.state.leads_restore, "no team: off, and it waits no more");
     }
 
-    /// A team known only by its plan (a thread still at work, the sandbox
-    /// not made lead): the made-lead list read first must not decide alone.
+    /// A plan under way with no lead (a thread still at work, the daemon
+    /// lists no lead) is no leader: Leads only does not come back on it.
+    /// The lead states decide over the leads list once read.
     #[test]
-    fn lead_mode_waits_for_the_plans_as_well_as_the_leads() {
+    fn a_plan_without_a_lead_is_no_leader_and_the_lead_states_decide() {
         let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
         quiet(&mut r);
         r.rt.update(|s, tx| {
             s.sandboxes = ["a", "b"].iter().map(|n| crate::client::Sandbox::new(n, "claude", "running")).collect();
-            s.feats.data.remove("plans");
+            s.feats.data.insert("plans".into(), serde_json::json!([{ "id": "p", "sandbox": "a", "state": "approved", "threads": [{ "state": "working" }] }]));
             s.feats.data.insert("leads".into(), serde_json::json!([]));
+            s.feats.data.remove("lead_states");
             s.store.set(LEAD_KEY, J::Bool(true));
             s.leads_restore = true;
             s.listed = true;
             s.poll(1.0, tx);
         });
-        assert!(r.rt.state.leads_restore && !r.rt.state.leads_on(), "the plans are not read yet: it waits");
-        r.rt.update(|s, tx| {
-            s.feats.data.insert("plans".into(), serde_json::json!([{ "id": "p", "sandbox": "a", "state": "approved", "threads": [{ "state": "working" }] }]));
-            s.poll(2.0, tx);
+        assert!(r.rt.state.leaders().is_empty(), "a plan alone makes no leader");
+        assert!(!r.rt.state.leads_on() && !r.rt.state.leads_restore, "no lead: Leads only stays off");
+        r.rt.update(|s, _| {
+            s.feats.data.insert("leads".into(), serde_json::json!(["a"]));
+            s.feats.data.insert("lead_states".into(), serde_json::json!({ "a": { "state": "activating" }, "b": { "state": "leading" } }));
         });
-        assert!(r.rt.state.leads_on() && !r.rt.state.leads_restore, "a team still runs by its plan: Lead Mode is back");
+        assert_eq!(r.rt.state.leaders(), ["b"], "only state leading counts, the lead states over the list");
     }
 
     /// A lead's plan approved (here or elsewhere): its threads open no pane
