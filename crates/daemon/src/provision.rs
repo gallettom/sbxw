@@ -277,9 +277,9 @@ impl App {
         let host = self.host_for(&req.name).await?;
         let sbx = self.sbx_for(&req.name).await?;
         clock.set(|t| {
-            t.sbx_version = match on_host {
-                None => self.versions.sbx.clone(),
-                Some(_) => sbx.seen_version().map(|(a, b, c)| format!("{a}.{b}.{c}")),
+            t.sbx_version = match on_host.is_none() {
+                true => self.versions.sbx.clone(),
+                false => sbx.seen_version().map(|(a, b, c)| format!("{a}.{b}.{c}")),
             }
         });
         if let Some(url) = &req.git {

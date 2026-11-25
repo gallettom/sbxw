@@ -150,6 +150,11 @@ impl Timeline {
     fn span(&self, name: &str) -> Option<&Span> {
         self.steps.iter().find(|s| s.name == name)
     }
+
+    /// Step `name` while it runs.
+    fn running(&mut self, name: &str) -> Option<&mut Span> {
+        self.steps.iter_mut().find(|s| s.name == name && s.ms.is_none())
+    }
 }
 
 /// A duration as a person reads it: `350 ms`, `4.2 s`, `41 s`, `3 min 5 s`.
@@ -367,7 +372,7 @@ pub(crate) fn load(path: &Path) -> Book {
 pub struct Late {
     id: u64,
     start: Instant,
-    index: usize,
+    name: String,
 }
 
 impl App {
@@ -431,14 +436,14 @@ impl App {
         }
         let at = start.elapsed().as_millis() as u64;
         t.steps.push(Span { name: name.into(), start_ms: at, ms: None, detail: None, unfinished: false });
-        Some(Late { id, start, index: t.steps.len() - 1 })
+        Some(Late { id, start, name: name.into() })
     }
 
     pub(crate) fn timing_end(&self, late: Late, detail: Option<String>) {
         let now = late.start.elapsed().as_millis() as u64;
         let mut book = self.timings.lock().unwrap();
         let Some(t) = book.get_mut(late.id) else { return };
-        if let Some(s) = t.steps.get_mut(late.index) {
+        if let Some(s) = t.running(&late.name) {
             s.ms = Some(now.saturating_sub(s.start_ms));
             s.detail = detail;
         }
@@ -449,9 +454,7 @@ impl App {
     pub(crate) fn timing_drop(&self, late: Late) {
         let mut book = self.timings.lock().unwrap();
         if let Some(t) = book.get_mut(late.id) {
-            if t.steps.get(late.index).is_some_and(|s| s.ms.is_none()) {
-                t.steps.remove(late.index);
-            }
+            t.steps.retain(|s| s.name != late.name || s.ms.is_some());
         }
     }
 
@@ -514,15 +517,14 @@ impl App {
     pub(crate) fn watch_kit_startups(self: &Arc<Self>, sb: SandboxRef, resolved: Vec<String>, id: u64, start: Instant, after_session: bool) {
         let (commands, marked) = self.startup_commands(&resolved);
         let app = self.clone();
-        let index = {
+        {
             let mut book = self.timings.lock().unwrap();
             let Some(t) = book.get_mut(id) else { return };
             if t.has(step::KIT_STARTUPS) {
                 return;
             }
             t.steps.push(Span { name: step::KIT_STARTUPS.into(), start_ms: start.elapsed().as_millis() as u64, ms: None, detail: None, unfinished: false });
-            t.steps.len() - 1
-        };
+        }
         tokio::spawn(async move {
             if after_session {
                 let deadline = Instant::now() + SESSION_WAIT;
@@ -550,7 +552,7 @@ impl App {
             let now = start.elapsed().as_millis() as u64;
             let mut book = app.timings.lock().unwrap();
             let Some(t) = book.get_mut(id) else { return };
-            if let Some(s) = t.steps.get_mut(index) {
+            if let Some(s) = t.running(step::KIT_STARTUPS) {
                 s.start_ms = s.start_ms.max(began.min(now));
                 s.ms = Some(now.saturating_sub(s.start_ms));
                 s.detail = Some(finished.clone());
