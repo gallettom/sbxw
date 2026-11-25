@@ -1,26 +1,29 @@
-//! The test queue's rules: the `[[tests]]` suites of `sbxw.toml`, the key a
+//! The test queue's rules: the test command a plan carries, the key a
 //! result is stored under, and the book of jobs and results.
 //!
-//! * A suite is declared by the person (the file is agent-writable, so its
-//!   commands are approved at `sbxw up`, see `consent::grants`) and only
-//!   ever NAMED by an agent. No route takes a command string.
-//! * A job tests a commit. Its key is the suite's declaration, the git object
-//!   of every path the suite and the suites it depends on cover, at that
-//!   commit, and the toolchain version its `version_cmd` prints. The same key
-//!   is the same code under the same command: the stored result is answered
-//!   at once, marked as reused, with the commit it was first run on.
+//! * The command belongs to the plan: the lead proposes it with the plan,
+//!   the person sees it in the plan dialog and approves it with the plan.
+//!   It is fixed from then on, and no request ever carries a command: an
+//!   agent asks for its plan's command on a commit.
+//! * A job tests a commit. Its key is the approved command's text and the
+//!   git tree of the commit's root (`<commit>^{tree}`): the same command on
+//!   the same tree is the same run, so the stored result is answered at
+//!   once, marked as reused, with the commit it was first run on, across
+//!   threads and plans of the sandbox.
 //! * One job runs at a time per sandbox; a request for a key already queued
 //!   or running joins that job instead of queueing a second one.
-//! * Only a suite that ran to its end (passed or failed) is stored for reuse.
+//! * Only a run that went to its end (passed or failed) is stored for reuse.
 //!   A time-out or a run that could not start is answered, never reused.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The default time limit of a suite, in minutes.
-pub const DEFAULT_TIMEOUT_MINUTES: u32 = 30;
-/// The longest a suite may be given.
-pub const MAX_TIMEOUT_MINUTES: u32 = 240;
+/// The default time limit of a plan's tests, in minutes.
+pub const DEFAULT_TIMEOUT_MINUTES: u32 = 60;
+/// The longest a plan's tests may be given.
+pub const MAX_TIMEOUT_MINUTES: u32 = 180;
+/// The longest command a plan may carry, in bytes.
+pub const MAX_COMMAND_BYTES: usize = 1000;
 /// Lines of output kept with a result.
 pub const TAIL_LINES: usize = 40;
 /// Bytes of output kept with a result, at most.
@@ -33,184 +36,60 @@ pub const MAX_RESULTS: usize = 100;
 pub const JOB_TTL_MS: u64 = 7 * 24 * 3600 * 1000;
 /// Finished jobs per sandbox, at most.
 pub const MAX_DONE_JOBS: usize = 200;
+/// Finished jobs `list_tests` shows.
+pub const LIST_DONE_JOBS: usize = 5;
 
-/// One `[[tests]]` table.
+/// A plan's test command: one shell command, run with `bash -c` inside the
+/// sandbox in the queue's checkout of the commit, with a time limit. It
+/// gets `SBXW_TEST_TARGET` (a build directory kept from job to job),
+/// `SBXW_TEST_CHECKOUT`, `SBXW_TEST_SUITE` (the plan's id) and
+/// `SBXW_TEST_COMMIT`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Suite {
-    /// What an agent names: lower-case letters, digits and hyphens.
-    pub name: String,
-    /// Run with `bash -c` inside the sandbox, in the queue's checkout of the
-    /// commit. It gets `SBXW_TEST_TARGET` (a build directory kept from job to
-    /// job), `SBXW_TEST_CHECKOUT`, `SBXW_TEST_SUITE` and `SBXW_TEST_COMMIT`.
+pub struct PlanTests {
     pub command: String,
-    /// Paths the suite covers, relative to the repository root; `.` is the
-    /// whole repository. They must hold everything its build and tests read
-    /// (embedded files, fixtures, scripts, lock files): a path left out is a
-    /// change the key does not see, and a stale result is reused for it.
-    pub paths: Vec<String>,
-    /// Suites whose paths this one also covers (a crate and the crates it
-    /// depends on).
-    #[serde(default)]
-    pub depends: Vec<String>,
-    #[serde(default = "default_timeout")]
     pub timeout_minutes: u32,
-    /// 0 or 1: run a failed suite once more. The result says it was retried.
-    #[serde(default)]
-    pub retries: u8,
-    /// A command printing the toolchain's version (`rustc --version`): part
-    /// of the key, so a new toolchain runs the suite again. Empty: none.
-    #[serde(default)]
-    pub version_cmd: String,
 }
 
-fn default_timeout() -> u32 {
-    DEFAULT_TIMEOUT_MINUTES
-}
-
-fn one_line_command(what: &str, s: &str) -> Result<(), String> {
-    if s.contains('\0') || s.contains('\n') || s.contains('\r') {
-        return Err(format!("{what}: one line, no control characters"));
-    }
-    Ok(())
-}
-
-/// `.`, `crates/core`, `Cargo.lock`: relative, inside the repository, one
-/// line, never read as a git option.
-fn path_error(p: &str) -> Option<&'static str> {
-    if p.trim().is_empty() {
-        Some("an empty path")
-    } else if p.starts_with('/') {
-        Some("paths are relative to the repository root")
-    } else if p.starts_with('-') {
-        Some("a path may not start with '-'")
-    } else if p.chars().any(|c| c.is_control()) {
-        Some("one path, on one line")
-    } else if p.split('/').any(|seg| seg == "..") {
-        Some("no `..` in a path")
-    } else if p.contains(':') {
-        Some("no ':' in a path (git would read it as a revision)")
-    } else {
-        None
+impl PlanTests {
+    /// What the lead proposed: `None` for no command (empty or absent);
+    /// refused when it is not one line. The time limit defaults to
+    /// [`DEFAULT_TIMEOUT_MINUTES`] and is capped at [`MAX_TIMEOUT_MINUTES`].
+    pub fn proposed(command: Option<&str>, timeout_minutes: Option<u32>) -> Result<Option<PlanTests>, String> {
+        let Some(command) = command.map(str::trim).filter(|c| !c.is_empty()) else { return Ok(None) };
+        if command.chars().any(|c| c.is_control()) {
+            return Err("test_command: one command on one line, no control characters".into());
+        }
+        if command.len() > MAX_COMMAND_BYTES {
+            return Err(format!("test_command: at most {MAX_COMMAND_BYTES} bytes; put a longer battery in a script of the repository"));
+        }
+        let timeout_minutes = match timeout_minutes {
+            None | Some(0) => DEFAULT_TIMEOUT_MINUTES,
+            Some(m) => m.min(MAX_TIMEOUT_MINUTES),
+        };
+        Ok(Some(PlanTests { command: command.to_string(), timeout_minutes }))
     }
 }
 
-/// A path as the key reads it: no `./`, no trailing `/`; the root is `.`.
-pub fn normal_path(p: &str) -> String {
-    let mut s = p.trim().trim_end_matches('/');
-    while let Some(rest) = s.strip_prefix("./") {
-        s = rest;
-    }
-    if s.is_empty() { ".".into() } else { s.to_string() }
-}
-
-/// Every check `Config::validate` makes of `[[tests]]`.
-pub fn validate(suites: &[Suite]) -> Result<(), String> {
-    let mut names = BTreeSet::new();
-    for s in suites {
-        if !crate::names::is_valid_command_name(&s.name) {
-            return Err(format!("tests: {:?} is not a suite name (lower-case letters, digits and hyphens, at most 64)", s.name));
-        }
-        if !names.insert(s.name.as_str()) {
-            return Err(format!("tests: the suite {:?} is declared twice", s.name));
-        }
-        if s.command.trim().is_empty() {
-            return Err(format!("tests: suite {:?} has no command", s.name));
-        }
-        one_line_command(&format!("tests: suite {:?} command", s.name), &s.command)?;
-        one_line_command(&format!("tests: suite {:?} version_cmd", s.name), &s.version_cmd)?;
-        if s.paths.is_empty() {
-            return Err(format!("tests: suite {:?} names no paths; `.` covers the whole repository", s.name));
-        }
-        for p in &s.paths {
-            if let Some(why) = path_error(p) {
-                return Err(format!("tests: suite {:?} path {p:?} — {why}", s.name));
-            }
-        }
-        if s.timeout_minutes == 0 || s.timeout_minutes > MAX_TIMEOUT_MINUTES {
-            return Err(format!("tests: suite {:?} timeout_minutes = {} — expected 1 to {MAX_TIMEOUT_MINUTES}", s.name, s.timeout_minutes));
-        }
-        if s.retries > 1 {
-            return Err(format!("tests: suite {:?} retries = {} — expected 0 or 1", s.name, s.retries));
-        }
-    }
-    for s in suites {
-        for d in &s.depends {
-            if d == &s.name {
-                return Err(format!("tests: suite {:?} depends on itself", s.name));
-            }
-            if !names.contains(d.as_str()) {
-                return Err(format!("tests: suite {:?} depends on {d:?}, which is not declared", s.name));
-            }
-        }
-    }
-    for s in suites {
-        if closure_names(suites, &s.name).is_err() {
-            return Err(format!("tests: suite {:?} is part of a dependency cycle", s.name));
-        }
-    }
-    Ok(())
-}
-
-/// `name` and every suite it depends on, directly or not; `Err` on a cycle.
-fn closure_names(suites: &[Suite], name: &str) -> Result<Vec<String>, ()> {
-    fn walk(suites: &[Suite], name: &str, path: &mut Vec<String>, out: &mut BTreeSet<String>) -> Result<(), ()> {
-        if path.iter().any(|p| p == name) {
-            return Err(());
-        }
-        if !out.insert(name.to_string()) {
-            return Ok(());
-        }
-        path.push(name.to_string());
-        if let Some(s) = suites.iter().find(|s| s.name == name) {
-            for d in &s.depends {
-                walk(suites, d, path, out)?;
-            }
-        }
-        path.pop();
-        Ok(())
-    }
-    let mut out = BTreeSet::new();
-    walk(suites, name, &mut vec![], &mut out)?;
-    Ok(out.into_iter().collect())
-}
-
-/// The paths a suite's key covers: its own and its dependencies', each once,
-/// sorted.
-pub fn covered_paths(suites: &[Suite], name: &str) -> Vec<String> {
-    let names = closure_names(suites, name).unwrap_or_else(|_| vec![name.to_string()]);
-    let set: BTreeSet<String> = suites
-        .iter()
-        .filter(|s| names.contains(&s.name))
-        .flat_map(|s| s.paths.iter().map(|p| normal_path(p)))
-        .collect();
-    set.into_iter().collect()
-}
-
-/// What the sandbox said about a commit: its full hash, the git object of
-/// each covered path there (`-` when absent), and the toolchain version.
+/// What the sandbox said about a commit: its full hash and the hash of its
+/// root tree.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Probe {
     pub commit: String,
-    pub objects: BTreeMap<String, String>,
-    pub version: String,
+    pub tree: String,
 }
 
-/// The key-script's output: `commit=<sha>`, `obj=<hash> <path>` lines, then
-/// `version=<text>` (the rest of the output, one line). `None` without a
-/// commit.
+/// The probe script's output: `commit=<sha>` and `tree=<sha>` lines. `None`
+/// unless both are full hashes.
 pub fn parse_probe(raw: &str) -> Option<Probe> {
     let mut p = Probe::default();
     for line in raw.lines() {
         if let Some(c) = line.strip_prefix("commit=") {
             p.commit = c.trim().to_string();
-        } else if let Some(rest) = line.strip_prefix("obj=") {
-            let (hash, path) = rest.split_once(' ')?;
-            p.objects.insert(path.to_string(), hash.trim().to_string());
-        } else if let Some(v) = line.strip_prefix("version=") {
-            p.version = v.trim().to_string();
+        } else if let Some(t) = line.strip_prefix("tree=") {
+            p.tree = t.trim().to_string();
         }
     }
-    (is_full_hash(&p.commit)).then_some(p)
+    (is_full_hash(&p.commit) && is_full_hash(&p.tree)).then_some(p)
 }
 
 /// 40 (SHA-1) or 64 (SHA-256) hex digits.
@@ -237,27 +116,16 @@ pub fn ref_error(r: &str) -> Option<&'static str> {
     }
 }
 
-/// The key of a suite at a commit: SHA-256 of its declaration (and its
-/// dependencies'), the objects of the covered paths and the version.
-pub fn cache_key(suites: &[Suite], name: &str, probe: &Probe) -> String {
+/// The key of a command on a commit: SHA-256 of the command's text and the
+/// commit's root tree. Nothing else: the tree is the whole code.
+pub fn cache_key(command: &str, tree: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    let names = closure_names(suites, name).unwrap_or_else(|_| vec![name.to_string()]);
-    h.update(b"sbxw-tests-1\0");
-    h.update(name.as_bytes());
-    for s in suites.iter().filter(|s| names.contains(&s.name)) {
-        // serde_json of the declaration: every field, in a fixed order.
-        h.update(b"\0suite\0");
-        h.update(serde_json::to_string(s).unwrap_or_default().as_bytes());
-    }
-    for p in covered_paths(suites, name) {
-        h.update(b"\0path\0");
-        h.update(p.as_bytes());
-        h.update(b"\0");
-        h.update(probe.objects.get(&p).map(String::as_str).unwrap_or("-").as_bytes());
-    }
-    h.update(b"\0version\0");
-    h.update(probe.version.as_bytes());
+    h.update(b"sbxw-tests-2\0");
+    h.update((command.len() as u64).to_be_bytes());
+    h.update(command.as_bytes());
+    h.update(b"\0tree\0");
+    h.update(tree.as_bytes());
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -322,15 +190,15 @@ impl Outcome {
     }
 }
 
-/// What a suite's run came to.
+/// What a run came to.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TestResult {
     pub outcome: Outcome,
-    /// The commit the suite actually ran on (for a reused result: the first).
+    /// The commit it actually ran on (for a reused result: the first).
     pub commit: String,
     pub duration_ms: u64,
     pub tail: String,
-    /// 1, or 2 when the first run failed and the suite retries once.
+    /// 1, or 2 when the first run failed and it ran once more.
     pub attempts: u8,
     /// The first attempt's outcome, when there was a second.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -359,7 +227,9 @@ pub enum JobState {
 pub struct Job {
     pub id: String,
     pub sandbox: String,
-    pub suite: String,
+    /// The plan's approved command, as it ran (no request carries one).
+    pub command: String,
+    pub timeout_minutes: u32,
     pub key: String,
     /// The commit asked for, resolved to its hash.
     pub commit: String,
@@ -414,10 +284,10 @@ fn result_key(sandbox: &str, key: &str) -> String {
     format!("{sandbox} {key}")
 }
 
-/// One request for a suite at a commit.
+/// One request for a plan's command at a commit.
 pub struct Ask<'a> {
     pub sandbox: &'a str,
-    pub suite: &'a str,
+    pub tests: &'a PlanTests,
     pub key: &'a str,
     pub commit: &'a str,
     pub plan: Option<&'a str>,
@@ -427,6 +297,20 @@ pub struct Ask<'a> {
 }
 
 impl Book {
+    /// `tests.json` as read back, entry by entry: a job, a result or a
+    /// count that does not parse (a file of an earlier format: jobs that
+    /// named a suite) is left out rather than costing the whole book.
+    /// `None` when the text is not a JSON object at all.
+    pub fn parse_lenient(text: &str) -> Option<Book> {
+        fn each<T: serde::de::DeserializeOwned>(v: Option<&serde_json::Value>) -> BTreeMap<String, T> {
+            let Some(m) = v.and_then(|v| v.as_object()) else { return BTreeMap::new() };
+            m.iter().filter_map(|(k, v)| serde_json::from_value(v.clone()).ok().map(|t| (k.clone(), t))).collect()
+        }
+        let v: serde_json::Value = serde_json::from_str(text).ok()?;
+        let o = v.as_object()?;
+        Some(Book { jobs: each(o.get("jobs")), results: each(o.get("results")), plans: each(o.get("plans")) })
+    }
+
     /// A book read back after a restart: what was running died with the
     /// daemon, so it waits to run again.
     pub fn loaded(mut self) -> Self {
@@ -457,7 +341,8 @@ impl Book {
         let job = Job {
             id: id.clone(),
             sandbox: ask.sandbox.to_string(),
-            suite: ask.suite.to_string(),
+            command: ask.tests.command.clone(),
+            timeout_minutes: ask.tests.timeout_minutes,
             key: ask.key.to_string(),
             commit: ask.commit.to_string(),
             plan: ask.plan.map(str::to_string),
@@ -524,7 +409,7 @@ impl Book {
     }
 
     /// A running job is over: its result is kept, and stored for its key
-    /// when the suite ran to its end.
+    /// when it ran to its end.
     pub fn finish(&mut self, id: &str, result: TestResult) -> Option<Job> {
         let j = self.jobs.get_mut(id)?;
         if j.state == JobState::Done {
@@ -547,16 +432,12 @@ impl Book {
         v
     }
 
-    /// The latest finished job of each suite in `sandbox`.
-    pub fn latest(&self, sandbox: &str) -> BTreeMap<String, &Job> {
-        let mut out: BTreeMap<String, &Job> = BTreeMap::new();
-        for j in self.jobs.values().filter(|j| j.sandbox == sandbox && j.state == JobState::Done) {
-            let newer = out.get(&j.suite).is_none_or(|o| o.queued_ms <= j.queued_ms);
-            if newer {
-                out.insert(j.suite.clone(), j);
-            }
-        }
-        out
+    /// The last `n` finished jobs in `sandbox`, newest first.
+    pub fn latest(&self, sandbox: &str, n: usize) -> Vec<&Job> {
+        let mut v: Vec<&Job> = self.jobs.values().filter(|j| j.sandbox == sandbox && j.state == JobState::Done).collect();
+        v.sort_by_key(|j| std::cmp::Reverse((j.queued_ms, j.id.clone())));
+        v.truncate(n);
+        v
     }
 
     pub fn counts(&self, plan: &str) -> Counts {
@@ -603,62 +484,32 @@ pub fn job_id() -> String {
     format!("t-{}", crate::ids::random_hex(12))
 }
 
-/// The grant lines of the suites, for `consent::grants`: each command the
-/// sandbox runs when an agent asks, and the version command.
-pub fn grant_lines(suites: &[Suite]) -> Vec<String> {
-    let mut out = vec![];
-    for s in suites {
-        out.push(format!("test suite {}: an agent may make sbxw run `{}` in the sandbox (tests)", s.name, s.command));
-        if !s.version_cmd.trim().is_empty() {
-            out.push(format!("test suite {}: its version is read with `{}` in the sandbox (tests)", s.name, s.version_cmd));
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    pub(crate) fn suite(name: &str, paths: &[&str], depends: &[&str]) -> Suite {
-        Suite {
-            name: name.into(),
-            command: format!("scripts/run-suite.sh {name}"),
-            paths: paths.iter().map(|s| s.to_string()).collect(),
-            depends: depends.iter().map(|s| s.to_string()).collect(),
-            timeout_minutes: DEFAULT_TIMEOUT_MINUTES,
-            retries: 0,
-            version_cmd: String::new(),
-        }
+    fn tests() -> &'static PlanTests {
+        static T: std::sync::OnceLock<PlanTests> = std::sync::OnceLock::new();
+        T.get_or_init(|| PlanTests { command: "npm test".into(), timeout_minutes: 5 })
     }
 
-    fn probe(objs: &[(&str, &str)]) -> Probe {
-        Probe {
-            commit: "a".repeat(40),
-            objects: objs.iter().map(|(p, h)| (p.to_string(), h.to_string())).collect(),
-            version: "rustc 1.90".into(),
-        }
+    fn ask<'a>(key: &'a str, plan: Option<&'a str>) -> Ask<'a> {
+        Ask { sandbox: "sb", tests: tests(), key, commit: "c1", plan, by: "t1", rerun: false }
     }
 
     #[test]
-    fn declarations_are_checked() {
-        assert!(validate(&[suite("crates", &["crates", "Cargo.lock"], &[]), suite("all", &["."], &["crates"])]).is_ok());
-        let bad = |s: Suite| validate(&[s]).unwrap_err();
-        assert!(bad(suite("Crates", &["."], &[])).contains("not a suite name"));
-        assert!(bad(suite("a b", &["."], &[])).contains("not a suite name"));
-        assert!(bad(suite("x", &[], &[])).contains("names no paths"));
-        for p in ["/etc", "../up", "-x", "a\nb", "HEAD:x", ""] {
-            assert!(validate(&[suite("x", &[p], &[])]).is_err(), "{p:?}");
+    fn a_proposed_command_is_one_line_with_a_bounded_limit() {
+        assert_eq!(PlanTests::proposed(None, Some(5)), Ok(None));
+        assert_eq!(PlanTests::proposed(Some("  "), None), Ok(None));
+        let t = PlanTests::proposed(Some(" npm test "), None).unwrap().unwrap();
+        assert_eq!((t.command.as_str(), t.timeout_minutes), ("npm test", DEFAULT_TIMEOUT_MINUTES));
+        assert_eq!(PlanTests::proposed(Some("x"), Some(0)).unwrap().unwrap().timeout_minutes, DEFAULT_TIMEOUT_MINUTES);
+        assert_eq!(PlanTests::proposed(Some("x"), Some(999)).unwrap().unwrap().timeout_minutes, MAX_TIMEOUT_MINUTES);
+        assert_eq!(PlanTests::proposed(Some("x"), Some(20)).unwrap().unwrap().timeout_minutes, 20);
+        for bad in ["a\nb", "a\rb", "a\0b"] {
+            assert!(PlanTests::proposed(Some(bad), None).unwrap_err().contains("one line"), "{bad:?}");
         }
-        assert!(bad(Suite { command: " ".into(), ..suite("x", &["."], &[]) }).contains("no command"));
-        assert!(bad(Suite { command: "a\nb".into(), ..suite("x", &["."], &[]) }).contains("one line"));
-        assert!(bad(Suite { retries: 2, ..suite("x", &["."], &[]) }).contains("0 or 1"));
-        assert!(bad(Suite { timeout_minutes: 0, ..suite("x", &["."], &[]) }).contains("timeout_minutes"));
-        assert!(bad(Suite { timeout_minutes: 999, ..suite("x", &["."], &[]) }).contains("timeout_minutes"));
-        assert!(bad(suite("x", &["."], &["nope"])).contains("not declared"));
-        assert!(bad(suite("x", &["."], &["x"])).contains("itself"));
-        assert!(validate(&[suite("x", &["."], &[]), suite("x", &["."], &[])]).unwrap_err().contains("twice"));
-        assert!(validate(&[suite("a", &["."], &["b"]), suite("b", &["."], &["a"])]).unwrap_err().contains("cycle"));
+        assert!(PlanTests::proposed(Some(&"x".repeat(MAX_COMMAND_BYTES + 1)), None).is_err());
     }
 
     #[test]
@@ -672,48 +523,53 @@ mod tests {
     }
 
     #[test]
-    fn covered_paths_follow_dependencies() {
-        let s = [suite("core", &["crates/core/", "./Cargo.lock"], &[]), suite("daemon", &["crates/daemon"], &["core"]), suite("all", &["."], &[])];
-        assert_eq!(covered_paths(&s, "daemon"), ["Cargo.lock", "crates/core", "crates/daemon"]);
-        assert_eq!(covered_paths(&s, "all"), ["."]);
-    }
-
-    #[test]
-    fn the_key_moves_with_covered_code_only() {
-        let s = [suite("core", &["crates/core", "Cargo.lock"], &[]), suite("daemon", &["crates/daemon"], &["core"])];
-        let base = probe(&[("Cargo.lock", "l1"), ("crates/core", "c1"), ("crates/daemon", "d1"), ("docs", "x1")]);
-        let k = cache_key(&s, "daemon", &base);
-        // An uncovered path, or another commit with the same trees: the same key.
-        let mut other = base.clone();
-        other.objects.insert("docs".into(), "x2".into());
-        other.commit = "b".repeat(40);
-        assert_eq!(cache_key(&s, "daemon", &other), k);
-        // A dependency's path, a lock file, the version, the command: a new key.
-        for (path, h) in [("crates/core", "c2"), ("Cargo.lock", "l2"), ("crates/daemon", "d2")] {
-            let mut p = base.clone();
-            p.objects.insert(path.into(), h.into());
-            assert_ne!(cache_key(&s, "daemon", &p), k, "{path}");
-        }
-        assert_ne!(cache_key(&s, "daemon", &Probe { version: "rustc 1.91".into(), ..base.clone() }), k);
-        let mut s2 = s.clone();
-        s2[1].command = "other".into();
-        assert_ne!(cache_key(&s2, "daemon", &base), k);
-        assert_ne!(cache_key(&s, "core", &base), k, "the suite name is in the key");
+    fn the_key_is_the_command_and_the_root_tree_only() {
+        let (t1, t2) = ("1".repeat(40), "2".repeat(40));
+        let k = cache_key("npm test", &t1);
+        assert_eq!(cache_key("npm test", &t1), k, "the same command on the same tree");
+        assert_ne!(cache_key("npm test", &t2), k, "another tree");
+        assert_ne!(cache_key("npm run test", &t1), k, "another command");
+        assert_ne!(cache_key("npm test\0tree\0", &t1), cache_key("npm test", &format!("\0tree\0{t1}")), "the parts are kept apart");
     }
 
     #[test]
     fn the_probe_is_parsed() {
-        let c = "c".repeat(40);
-        let p = parse_probe(&format!("commit={c}\nobj=abc crates/core\nobj=- missing dir\nversion=rustc 1.90.0 (x)\n")).unwrap();
-        assert_eq!(p.commit, c);
-        assert_eq!(p.objects["crates/core"], "abc");
-        assert_eq!(p.objects["missing dir"], "-");
-        assert_eq!(p.version, "rustc 1.90.0 (x)");
-        assert!(parse_probe("commit=nothex\n").is_none());
+        let (c, t) = ("c".repeat(40), "d".repeat(40));
+        let p = parse_probe(&format!("commit={c}\ntree={t}\n")).unwrap();
+        assert_eq!((p.commit.as_str(), p.tree.as_str()), (c.as_str(), t.as_str()));
+        assert!(parse_probe(&format!("commit={c}\n")).is_none(), "no tree");
+        assert!(parse_probe(&format!("commit=nothex\ntree={t}\n")).is_none());
     }
 
-    fn ask<'a>(key: &'a str, plan: Option<&'a str>) -> Ask<'a> {
-        Ask { sandbox: "sb", suite: "core", key, commit: "c1", plan, by: "t1", rerun: false }
+    #[test]
+    fn a_book_of_the_earlier_format_loads_what_parses() {
+        // Jobs that named a suite, with no command: left out; the rest kept.
+        let old = r#"{"jobs":{"t-1":{"id":"t-1","sandbox":"sb","suite":"crates","key":"k","commit":"c","by":"lead","state":"done","queued_ms":1}},
+            "results":{"sb k":{"outcome":"passed","commit":"c","duration_ms":1,"tail":"","attempts":1,"finished_ms":1},"sb bad":{"outcome":"weird"}},
+            "plans":{"p-1":{"ran":2,"reused":1}}}"#;
+        let b = Book::parse_lenient(old).unwrap();
+        assert!(b.jobs.is_empty());
+        assert_eq!(b.results.len(), 1);
+        assert_eq!(b.counts("p-1"), Counts { ran: 2, reused: 1 });
+        assert!(Book::parse_lenient("not json").is_none());
+        assert!(Book::parse_lenient("[1]").is_none());
+        let mut nb = Book::default();
+        nb.request("j1".into(), &ask("k", Some("p")), 1);
+        assert_eq!(Book::parse_lenient(&serde_json::to_string(&nb).unwrap()).unwrap(), nb, "the current format round-trips");
+    }
+
+    #[test]
+    fn the_latest_finished_jobs_come_newest_first() {
+        let mut b = Book::default();
+        for (i, k) in ["k1", "k2", "k3"].iter().enumerate() {
+            let id = format!("j{i}");
+            b.request(id.clone(), &ask(k, None), i as u64);
+            b.start_next("sb", 10);
+            b.finish(&id, result(Outcome::Passed, 11));
+        }
+        let ids: Vec<&str> = b.latest("sb", 2).iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids, ["j2", "j1"]);
+        assert_eq!(b.latest("sb", 2)[0].command, "npm test");
     }
 
     fn result(outcome: Outcome, now: u64) -> TestResult {

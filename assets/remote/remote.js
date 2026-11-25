@@ -2871,6 +2871,15 @@
   function planView(p) {
     const out = [head(str(p.summary) || 'A plan', [{ data: str(p.sandbox) }, str(p.variant) === 'shared' ? 'one shared branch' : 'a branch per thread'], true)];
     if (str(p.justification)) out.push(field_('Why this way', str(p.justification), { fold: true }));
+    // The test command the lead proposed: approving the plan approves it as
+    // shown (the digest covers it), and sbxw runs it on the threads' commits.
+    const tests = p.tests && typeof p.tests === 'object' ? p.tests : null;
+    if (tests && str(tests.command)) {
+      const box = field_('Tests', str(tests.command), { mono: true, fold: true });
+      box.classList.add('rc-plan-tests');
+      box.append(el('p', 'rc-item-sub', `Time limit ${Number(tests.timeout_minutes) || 60} min. Approving the plan approves this command; sbxw runs it on the threads' commits.`));
+      out.push(box);
+    }
     const dirty = Number(p.main_uncommitted) || 0;
     if (dirty) out.push(el('p', 'rc-item-warn', `${dirty} uncommitted ${dirty === 1 ? 'change' : 'changes'} in the main checkout.`));
     const threads = Array.isArray(p.threads) ? p.threads : [];

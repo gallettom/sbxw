@@ -111,6 +111,7 @@ pub const INTENTS: &[Spec] = &[
     d("plan_remove", &[("id", Arg::Str, true), ("index", Arg::Int(1, 64), true)], "Removes a thread from the draft."),
     d("plan_add", &[("id", Arg::Str, true)], "Adds an empty thread to the draft."),
     d("plan_variant", &[("id", Arg::Str, true), ("variant", Arg::OneOf(VARIANTS), true)], "Split (a worktree and a branch per thread) or shared (one worktree, files claimed on a board)."),
+    d("plan_no_tests", &[("id", Arg::Str, true), ("on", Arg::Bool, true)], "Whether the plan is approved without the test command the lead proposed (on: no tests, no test queue)."),
     d("plan_reset", &[("id", Arg::Str, true)], "Puts the draft back as the lead proposed it."),
     d("plan_refuse", &[("id", Arg::Str, true), ("note", Arg::Str, false)], "Refuses a waiting plan; the lead is told, with the note."),
     d("merge_close_set", &[("id", Arg::Str, true), ("on", Arg::Bool, true)], "Whether the merge closes each thread (session, worktree, branch) once all merged."),
@@ -319,7 +320,7 @@ fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
             ])
         }
         "plans_reload" => Ok(vec![Action::Refresh("plans"), Action::Refresh("board")]),
-        "plan_edit" | "plan_remove" | "plan_add" | "plan_variant" | "plan_reset" => edit_draft(ctx, q),
+        "plan_edit" | "plan_remove" | "plan_add" | "plan_variant" | "plan_no_tests" | "plan_reset" => edit_draft(ctx, q),
         "plan_refuse" => {
             let id = q.req("id");
             let p = model::plan(ctx.data, id).ok_or_else(|| format!("no plan {id}"))?;
@@ -448,6 +449,10 @@ fn edit_draft(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
         draft["variant"] = json!(q.req("variant"));
         return Ok(vec![set_ui(u)]);
     }
+    if q.name == "plan_no_tests" {
+        draft["no_tests"] = json!(q.b("on").unwrap_or(false));
+        return Ok(vec![set_ui(u)]);
+    }
     let list = draft["threads"].as_array_mut().ok_or("draft without threads")?;
     if q.name == "plan_add" {
         if list.len() >= 64 {
@@ -553,6 +558,9 @@ fn approve_build(ctx: &Ctx, q: &Asked, view: &J) -> Result<Confirm, String> {
         c = c.line(s.to_string());
     }
     c = c.line(if shared { "Shared: one worktree and one branch for every thread, files claimed on a board." } else { "Split: a worktree and a branch per thread, each merged at the end." });
+    if let Some(line) = model::tests_line(p, &draft) {
+        c = c.line(line);
+    }
     let mut list = String::new();
     for (i, t) in draft["threads"].as_array().into_iter().flatten().enumerate() {
         let m = t["model"].as_str().filter(|m| !m.is_empty()).map(model_label).unwrap_or_else(|| "default model".into());

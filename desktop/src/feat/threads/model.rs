@@ -343,7 +343,8 @@ pub fn draft_of(plan: &J) -> J {
 }
 
 /// What the approval sends: `{threads, variant}`, `repo` and `model` only
-/// where the thread has one (as plans.js `rowThread`).
+/// where the thread has one (as plans.js `rowThread`), and `clear_tests`
+/// when the person approves without the proposed test command.
 pub fn approve_body(draft: &J) -> J {
     let threads: Vec<J> = draft["threads"]
         .as_array()
@@ -360,7 +361,25 @@ pub fn approve_body(draft: &J) -> J {
             o
         })
         .collect();
-    json!({ "threads": threads, "variant": draft["variant"].as_str().unwrap_or("split") })
+    let mut body = json!({ "threads": threads, "variant": draft["variant"].as_str().unwrap_or("split") });
+    // The proposed test command is never sent: only that the person cleared it.
+    if draft["no_tests"] == true {
+        body["clear_tests"] = json!(true);
+    }
+    body
+}
+
+/// The approval dialog's line on the test command the lead proposed: what
+/// approving does with it. `None` when none was proposed.
+pub fn tests_line(plan: &J, draft: &J) -> Option<String> {
+    let t = &plan["proposed_tests"];
+    let cmd = t["command"].as_str().filter(|c| !c.is_empty())?;
+    let limit = t["timeout_minutes"].as_u64().unwrap_or(60);
+    Some(if draft["no_tests"] == true {
+        format!("Tests: none. You approve without the proposed command `{cmd}`, so this plan has no test queue.")
+    } else {
+        format!("Tests: `{cmd}` (time limit {limit} min), approved with the plan; sbxw runs it on the threads' commits.")
+    })
 }
 
 /// What the person changed against the proposal, one line each.
@@ -402,6 +421,9 @@ pub fn draft_changes(plan: &J, draft: &J) -> Vec<String> {
     }
     if plan["variant"].as_str().unwrap_or("split") != draft["variant"].as_str().unwrap_or("split") {
         out.push(format!("Variant: {} instead of {}", draft["variant"].as_str().unwrap_or("split"), plan["variant"].as_str().unwrap_or("split")));
+    }
+    if draft["no_tests"] == true && plan["proposed_tests"]["command"].is_string() {
+        out.push("Tests: approved without the proposed command".to_string());
     }
     out
 }

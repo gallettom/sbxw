@@ -1330,6 +1330,7 @@ test('level 2: hostile text in a plan and in file paths stays text; the sheet cl
     plan.plan.threads[0].goal = evil.repeat(5);
     plan.plan.threads[0].name = evil;
     plan.plan.justification = evil;
+    plan.plan.tests = { command: `npm test && ${evil}`, timeout_minutes: 45 };
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...plan, digest: 'a'.repeat(64) }) });
   });
   await page.route('**/r/merges/p-*', async route => {
@@ -1348,6 +1349,10 @@ test('level 2: hostile text in a plan and in file paths stays text; the sheet cl
   }));
   assert.deepEqual(await check(), { pwned: undefined, bad: 0 });
   assert.ok((await page.textContent('.rc-item-title')).includes('<img src=x'), 'shown as text');
+  // The proposed test command: labelled, as text, with its limit.
+  assert.equal(await page.textContent('.rc-plan-tests .rc-kv-k'), 'Tests');
+  assert.ok((await page.textContent('.rc-plan-tests .rc-kv-v')).startsWith('npm test && <img src=x'), 'the command shown as text');
+  assert.match(await page.textContent('.rc-plan-tests .rc-item-sub'), /^Time limit 45 min\. Approving the plan approves this command/);
   assert.ok(await noHScroll(page));
   await shot(page, '53-plan-hostile-320');
   await page.tap('#back');

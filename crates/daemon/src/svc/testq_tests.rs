@@ -5,9 +5,8 @@
 use super::TestAsk;
 use crate::app::App;
 use crate::testing::{app_in_with, ls, sbx_answer};
-use sbxw_core::config::Config;
-use sbxw_core::plans::{PlanThread, ThreadState, Variant};
-use sbxw_core::testq::{JobState, Outcome, Suite, Took};
+use sbxw_core::plans::{PlanThread, TestsChoice, ThreadState, Variant};
+use sbxw_core::testq::{JobState, Outcome, PlanTests, Took};
 use sbxw_core::{SandboxRef, ThreadName};
 use sbxw_sbx::runner::{Fake, Output};
 use std::path::{Path, PathBuf};
@@ -65,22 +64,50 @@ struct Rig {
     sb: SandboxRef,
 }
 
-fn suite(name: &str, paths: &[&str], command: &str) -> Suite {
-    Suite {
-        name: name.into(),
-        command: command.into(),
-        paths: paths.iter().map(|s| s.to_string()).collect(),
-        depends: vec![],
-        timeout_minutes: 5,
-        retries: 0,
-        version_cmd: "echo tool-1".into(),
+impl Rig {
+    /// A scratch file outside the repository.
+    fn scratch(&self, f: &str) -> String {
+        self.state.path().join(f).to_string_lossy().into_owned()
+    }
+
+    /// An approved split plan with thread `thread` and test command
+    /// `command` (none: `None`), as the person approved it.
+    fn plan(&self, thread: &str, command: Option<&str>, choice: TestsChoice) -> String {
+        let mut b = self.app.plans.lock().unwrap();
+        let id = format!("p-{thread}");
+        b.propose(id.clone(), &self.sb.to_string(), "s", vec![t(thread)], Variant::Split, "one", Some("lead"), 1).unwrap();
+        b.note_proposed_tests(&id, PlanTests::proposed(command, Some(5)).unwrap());
+        b.approve_with(&id, vec![t(thread)], None, None, choice, 2).unwrap();
+        id
+    }
+
+    /// A thread's request on `git_ref`.
+    fn ask<'a>(&self, thread: &'a ThreadName, git_ref: &'a str) -> TestAsk<'a> {
+        TestAsk { thread: Some(thread), git_ref: Some(git_ref), ..Default::default() }
     }
 }
 
-/// A repo with `crates/a`, `crates/b` and `docs`, a sandbox `myapp` on it
-/// brought up with `suites` (made by `make`, which gets a path prefix for
-/// scratch files outside the repo).
-fn rig(make: impl FnOnce(&dyn Fn(&str) -> String) -> Vec<Suite>) -> Rig {
+fn t(name: &str) -> PlanThread {
+    PlanThread {
+        name: name.into(),
+        goal: "g".into(),
+        scope: String::new(),
+        repo: None,
+        model: None,
+        state: ThreadState::Starting,
+        summary: String::new(),
+        updated_ms: 0,
+        set_by: None,
+        ticket: None,
+    }
+}
+
+fn name(n: &str) -> ThreadName {
+    ThreadName::parse(n).unwrap()
+}
+
+/// A repo with `crates/a`, `crates/b` and `docs`, and a sandbox `myapp` on it.
+fn rig() -> Rig {
     let state = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     git(ws.path(), &["init", "-q"]);
@@ -91,23 +118,12 @@ fn rig(make: impl FnOnce(&dyn Fn(&str) -> String) -> Vec<Suite>) -> Rig {
     std::fs::create_dir_all(&home).unwrap();
     let (app, fake) = app_in_with(state.path(), local_exec(home));
     let sb = SandboxRef::parse("myapp").unwrap();
-    let scratch = |f: &str| state.path().join(f).to_string_lossy().into_owned();
-    let suites = make(&scratch);
-    configure(&app, &sb, ws.path(), suites);
+    configure(&app, &sb, ws.path());
     Rig { state, ws, app, fake, sb }
 }
 
-fn configure(app: &Arc<App>, sb: &SandboxRef, ws: &Path, suites: Vec<Suite>) {
-    app.store
-        .update(sb, |r| {
-            r.workspace = Some(ws.to_path_buf());
-            r.config_snapshot = Some(Box::new(Config { tests: suites, ..Config::default() }));
-        })
-        .unwrap();
-}
-
-fn ask<'a>(suite: &'a str, git_ref: &'a str) -> TestAsk<'a> {
-    TestAsk { suite: Some(suite), git_ref: Some(git_ref), ..Default::default() }
+fn configure(app: &Arc<App>, sb: &SandboxRef, ws: &Path) {
+    app.store.update(sb, |r| r.workspace = Some(ws.to_path_buf())).unwrap();
 }
 
 async fn run(app: &Arc<App>, sb: &SandboxRef, a: TestAsk<'_>) -> (sbxw_core::testq::Job, Took) {
@@ -129,61 +145,115 @@ async fn until(what: &str, f: impl Fn() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_undeclared_suite_and_a_command_shaped_argument_are_refused() {
-    if !has_tools() {
-        return;
-    }
-    let r = rig(|_| vec![suite("a", &["crates/a"], "true")]);
-    for (s, rf, want) in [
-        ("nope", "HEAD", "not a declared test suite"),
-        ("a; rm -rf /", "HEAD", "not a declared test suite"),
-        ("a", "$(touch /tmp/sbxw-pwned)", "refused"),
-        ("a", "HEAD; id", "refused"),
-        ("a", "--output=/tmp/x", "refused"),
-        ("a", "no-such-branch", "is not a commit"),
-    ] {
-        let e = r.app.tests_request(&r.sb, ask(s, rf)).await.unwrap_err();
-        assert!(e.contains(want), "{s} {rf}: {e}");
-    }
-    // Only the last one reached the sandbox, and only to be probed.
-    let probes = r.fake.log().iter().filter(|c| c.contains("sbxw-tests-")).count();
-    assert_eq!(probes, 1, "{:?}", r.fake.log());
-    // A sandbox with no suites.
-    configure(&r.app, &r.sb, r.ws.path(), vec![]);
-    assert!(r.app.tests_request(&r.sb, ask("a", "HEAD")).await.unwrap_err().contains("declares no test suites"));
+fn probes(fake: &Fake) -> usize {
+    fake.log().iter().filter(|c| c.contains("sbxw-tests-")).count()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_result_is_reused_until_a_covered_path_changes() {
+async fn outside_a_plan_with_an_approved_command_run_tests_is_refused() {
     if !has_tools() {
         return;
     }
-    let r = rig(|p| vec![suite("a", &["crates/a"], &format!("echo ran >> {}; echo checkout=$SBXW_TEST_CHECKOUT", p("count")))]);
-    let count = r.state.path().join("count").to_string_lossy().into_owned();
+    let r = rig();
+    // No plan at all, from the lead or a thread.
+    let e = r.app.tests_request(&r.sb, TestAsk { git_ref: Some("HEAD"), ..Default::default() }).await.unwrap_err();
+    assert!(e.contains("no test command") && e.contains("lead proposes the project's test command with the plan"), "{e}");
+    let loose = name("loose");
+    assert!(r.app.tests_request(&r.sb, r.ask(&loose, "HEAD")).await.unwrap_err().contains("no test command"));
+    // A plan proposed with none, and one whose command the person cleared.
+    r.plan("bare", None, TestsChoice::Approve);
+    r.plan("cleared", Some("echo should-not-run"), TestsChoice::Clear);
+    for th in ["bare", "cleared"] {
+        let th = name(th);
+        assert!(r.app.tests_request(&r.sb, r.ask(&th, "HEAD")).await.unwrap_err().contains("no test command"), "{th}");
+    }
+    let (_, latest) = r.app.tests_jobs(&r.sb);
+    assert!(latest.is_empty());
+    assert_eq!(probes(&r.fake), 0, "nothing reached the sandbox: {:?}", r.fake.log());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_ref_that_is_not_a_revision_is_refused_before_the_sandbox() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    r.plan("api", Some("true"), TestsChoice::Approve);
+    let api = name("api");
+    for (rf, want) in [
+        ("$(touch /tmp/sbxw-pwned)", "refused"),
+        ("HEAD; id", "refused"),
+        ("--output=/tmp/x", "refused"),
+        ("no-such-branch", "is not a commit"),
+    ] {
+        let e = r.app.tests_request(&r.sb, r.ask(&api, rf)).await.unwrap_err();
+        assert!(e.contains(want), "{rf}: {e}");
+    }
+    assert_eq!(probes(&r.fake), 1, "only the last one was probed: {:?}", r.fake.log());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_result_is_reused_for_the_same_command_on_the_same_tree() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    let count = r.scratch("count");
+    let cmd = format!("echo ran >> {count}; echo checkout=$SBXW_TEST_CHECKOUT");
+    let plan = r.plan("api", Some(&cmd), TestsChoice::Approve);
+    let api = name("api");
     let first = git(r.ws.path(), &["rev-parse", "HEAD"]);
-    let (j1, t1) = run(&r.app, &r.sb, ask("a", "HEAD")).await;
+    let (j1, t1) = run(&r.app, &r.sb, r.ask(&api, "HEAD")).await;
     assert_eq!(t1, Took::Queued);
     let res = j1.result.clone().unwrap();
     assert_eq!((res.outcome, j1.reused, res.commit.as_str()), (Outcome::Passed, false, first.as_str()));
+    assert_eq!((j1.command.as_str(), j1.plan.as_deref(), j1.by.as_str()), (cmd.as_str(), Some(plan.as_str()), "api"));
     assert!(res.tail.contains("checkout=") && res.tail.contains(".sbxw-worktrees/.tests"), "{}", res.tail);
-    assert!(res.log.ends_with("/.sbxw/tests/logs/a.log"), "{}", res.log);
-    // An uncovered path changes: the stored result, marked reused, first commit.
-    let second = commit_file(r.ws.path(), "docs/z", "2");
-    let (j2, t2) = run(&r.app, &r.sb, ask("a", &second)).await;
+    assert!(res.log.ends_with(&format!("/.sbxw/tests/logs/{plan}.log")), "{}", res.log);
+    // Another commit with the same root tree: the stored result, marked
+    // reused, with the commit it first ran on.
+    git(r.ws.path(), &["commit", "-q", "--allow-empty", "-m", "empty"]);
+    let second = git(r.ws.path(), &["rev-parse", "HEAD"]);
+    assert_ne!(second, first);
+    let (j2, t2) = run(&r.app, &r.sb, r.ask(&api, &second)).await;
     assert_eq!(t2, Took::Reused);
     assert!(j2.reused && j2.commit == second);
     assert_eq!(j2.result.unwrap().commit, first, "reused from the commit it first ran on");
+    // Another thread of another plan, same command, same tree: reused too.
+    r.plan("web", Some(&cmd), TestsChoice::Approve);
+    let web = name("web");
+    let (_, t) = run(&r.app, &r.sb, r.ask(&web, "HEAD")).await;
+    assert_eq!(t, Took::Reused);
     assert_eq!(lines(&count), 1);
-    // A covered path changes: it runs again.
-    commit_file(r.ws.path(), "crates/a/x", "2");
-    let (j3, t3) = run(&r.app, &r.sb, ask("a", "main")).await;
+    // Any file changes, docs included: the tree is new, it runs again.
+    commit_file(r.ws.path(), "docs/z", "2");
+    let (j3, t3) = run(&r.app, &r.sb, r.ask(&api, "main")).await;
     assert_eq!((t3, j3.reused), (Took::Queued, false));
     assert_eq!(lines(&count), 2);
     // rerun runs the same code again.
-    let (_, t4) = run(&r.app, &r.sb, TestAsk { rerun: true, ..ask("a", "main") }).await;
+    let (_, t4) = run(&r.app, &r.sb, TestAsk { rerun: true, ..r.ask(&api, "main") }).await;
     assert_eq!(t4, Took::Queued);
     assert_eq!(lines(&count), 3);
+    // The plan counts what ran and what was answered without running.
+    let view = r.app.plan_view(&r.app.plan(&plan).unwrap());
+    assert_eq!((view["tests"]["ran"].as_u64(), view["tests"]["reused"].as_u64()), (Some(3), Some(1)));
+    assert_eq!(view["approved_tests"]["command"], cmd.as_str());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_different_command_on_the_same_tree_runs_again() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    let count = r.scratch("count");
+    r.plan("api", Some(&format!("echo a >> {count}")), TestsChoice::Approve);
+    r.plan("web", Some(&format!("echo b >> {count}")), TestsChoice::Approve);
+    let (api, web) = (name("api"), name("web"));
+    let (_, t1) = run(&r.app, &r.sb, r.ask(&api, "HEAD")).await;
+    let (j2, t2) = run(&r.app, &r.sb, r.ask(&web, "HEAD")).await;
+    assert_eq!((t1, t2, j2.reused), (Took::Queued, Took::Queued, false));
+    assert_eq!(lines(&count), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -191,22 +261,20 @@ async fn one_job_at_a_time_and_a_duplicate_joins() {
     if !has_tools() {
         return;
     }
-    let r = rig(|p| {
-        vec![
-            suite("slow", &["crates/a"], &format!("while [ ! -e {} ]; do sleep 0.05; done; echo slow-done", p("gate"))),
-            suite("other", &["crates/b"], &format!("echo other-ran >> {}", p("order"))),
-        ]
-    });
-    let gate = r.state.path().join("gate");
-    let (slow, t) = r.app.tests_request(&r.sb, ask("slow", "HEAD")).await.unwrap();
+    let r = rig();
+    let gate = r.scratch("gate");
+    r.plan("slow", Some(&format!("while [ ! -e {gate} ]; do sleep 0.05; done; echo slow-done")), TestsChoice::Approve);
+    r.plan("other", Some("echo other-ran"), TestsChoice::Approve);
+    let (slow_t, other_t) = (name("slow"), name("other"));
+    let (slow, t) = r.app.tests_request(&r.sb, r.ask(&slow_t, "HEAD")).await.unwrap();
     assert_eq!(t, Took::Queued);
     let app = r.app.clone();
     let sb = r.sb.to_string();
     let id = slow.id.clone();
     until("the slow job to run", || app.tests.lock().unwrap().get(&id, &sb).unwrap().state == JobState::Running).await;
-    let (dup, t) = r.app.tests_request(&r.sb, ask("slow", "main")).await.unwrap();
+    let (dup, t) = r.app.tests_request(&r.sb, r.ask(&slow_t, "main")).await.unwrap();
     assert_eq!((t, dup.id.as_str()), (Took::Joined, slow.id.as_str()), "the same code joins the job at work");
-    let (other, t) = r.app.tests_request(&r.sb, ask("other", "HEAD")).await.unwrap();
+    let (other, t) = r.app.tests_request(&r.sb, r.ask(&other_t, "HEAD")).await.unwrap();
     assert_eq!(t, Took::Queued);
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(r.app.tests.lock().unwrap().get(&other.id, &sb).unwrap().state, JobState::Queued, "the second waits");
@@ -222,17 +290,19 @@ async fn one_job_at_a_time_and_a_duplicate_joins() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_timeout_is_answered_and_not_stored() {
+async fn a_timeout_is_answered_not_retried_and_not_stored() {
     if !has_tools() {
         return;
     }
-    let r = rig(|_| vec![suite("hang", &["crates/a"], "echo started; sleep 30")]);
-    let (j, _) = run(&r.app, &r.sb, ask("hang", "HEAD")).await;
+    let r = rig();
+    r.plan("hang", Some("echo started; sleep 30"), TestsChoice::Approve);
+    let hang = name("hang");
+    let (j, _) = run(&r.app, &r.sb, r.ask(&hang, "HEAD")).await;
     let res = j.result.unwrap();
-    assert_eq!(res.outcome, Outcome::TimedOut, "{}", res.tail);
+    assert_eq!((res.outcome, res.attempts), (Outcome::TimedOut, 1), "{}", res.tail);
     assert!(res.tail.contains("over its limit") && res.tail.contains("started"), "{}", res.tail);
     assert!(r.app.tests.lock().unwrap().results.is_empty(), "a time-out is never reused");
-    let (_, t) = run(&r.app, &r.sb, ask("hang", "HEAD")).await;
+    let (_, t) = run(&r.app, &r.sb, r.ask(&hang, "HEAD")).await;
     assert_eq!(t, Took::Queued);
 }
 
@@ -241,25 +311,21 @@ async fn a_failure_is_retried_once_and_the_retry_recorded() {
     if !has_tools() {
         return;
     }
-    let r = rig(|p| {
-        let flag = p("flag");
-        vec![
-            Suite { retries: 1, ..suite("flaky", &["crates/a"], &format!("if [ -e {flag} ]; then echo second; else touch {flag}; echo first; exit 1; fi")) },
-            Suite { retries: 1, ..suite("broken", &["crates/b"], "echo nope; exit 2") },
-            suite("once", &["docs"], "exit 3"),
-        ]
-    });
-    let (j, _) = run(&r.app, &r.sb, ask("flaky", "HEAD")).await;
+    let r = rig();
+    let flag = r.scratch("flag");
+    r.plan("flaky", Some(&format!("if [ -e {flag} ]; then echo second; else touch {flag}; echo first; exit 1; fi")), TestsChoice::Approve);
+    r.plan("broken", Some("echo nope; exit 2"), TestsChoice::Approve);
+    let (j, _) = run(&r.app, &r.sb, r.ask(&name("flaky"), "HEAD")).await;
     let res = j.result.unwrap();
     assert_eq!((res.outcome, res.attempts, res.first_outcome), (Outcome::Passed, 2, Some(Outcome::Failed)));
     assert!(res.retried() && res.tail.contains("second"), "{}", res.tail);
-    let (j, _) = run(&r.app, &r.sb, ask("broken", "HEAD")).await;
+    let (j, _) = run(&r.app, &r.sb, r.ask(&name("broken"), "HEAD")).await;
     let res = j.result.unwrap();
     assert_eq!((res.outcome, res.attempts), (Outcome::Failed, 2));
     assert!(res.tail.contains("nope"));
-    let (j, _) = run(&r.app, &r.sb, ask("once", "HEAD")).await;
-    let res = j.result.unwrap();
-    assert_eq!((res.outcome, res.attempts, res.first_outcome), (Outcome::Failed, 1, None));
+    // A failure that ran to its end is stored.
+    let (_, t) = run(&r.app, &r.sb, r.ask(&name("broken"), "HEAD")).await;
+    assert_eq!(t, Took::Reused);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -267,79 +333,134 @@ async fn results_and_jobs_survive_a_daemon_restart() {
     if !has_tools() {
         return;
     }
-    let r = rig(|p| {
-        vec![
-            suite("a", &["crates/a"], "echo a"),
-            suite("slow", &["crates/b"], &format!("while [ ! -e {} ]; do sleep 0.05; done", p("gate"))),
-        ]
-    });
-    let (done, _) = run(&r.app, &r.sb, ask("a", "HEAD")).await;
-    let (slow, _) = r.app.tests_request(&r.sb, ask("slow", "HEAD")).await.unwrap();
+    let r = rig();
+    let gate = r.scratch("gate");
+    r.plan("a", Some("echo a"), TestsChoice::Approve);
+    r.plan("slow", Some(&format!("while [ ! -e {gate} ]; do sleep 0.05; done")), TestsChoice::Approve);
+    let (done, _) = run(&r.app, &r.sb, r.ask(&name("a"), "HEAD")).await;
+    let (slow, _) = r.app.tests_request(&r.sb, r.ask(&name("slow"), "HEAD")).await.unwrap();
     let (app, sb) = (r.app.clone(), r.sb.to_string());
     let id = slow.id.clone();
     until("the slow job to run", || app.tests.lock().unwrap().get(&id, &sb).unwrap().state == JobState::Running).await;
     // The daemon restarts: a new App on the same state directory.
+    r.app.persist_plans(&r.sb.to_string());
     let home = r.state.path().join("sandbox-home");
     let (app2, _) = app_in_with(r.state.path(), local_exec(home));
-    configure(&app2, &r.sb, r.ws.path(), r.app.tests_suites(&r.sb).await);
+    configure(&app2, &r.sb, r.ws.path());
     assert_eq!(app2.tests.lock().unwrap().get(&slow.id, &sb).unwrap().state, JobState::Queued, "what ran runs again");
     let again = app2.tests_wait(&done.id, &r.sb, Duration::from_secs(1)).await.unwrap();
     assert_eq!(again.result.unwrap().outcome, Outcome::Passed, "a job id outlives the restart");
-    let (j, t) = run(&app2, &r.sb, ask("a", "HEAD")).await;
+    let (j, t) = run(&app2, &r.sb, r.ask(&name("a"), "HEAD")).await;
     assert_eq!((t, j.reused), (Took::Reused, true), "a stored result outlives it");
-    std::fs::write(r.state.path().join("gate"), "").unwrap();
+    std::fs::write(&gate, "").unwrap();
     app2.tests_resume();
     let s = app2.tests_wait(&slow.id, &r.sb, Duration::from_secs(30)).await.unwrap();
     assert_eq!(s.result.unwrap().outcome, Outcome::Passed);
 }
 
-fn thread(name: &str) -> PlanThread {
-    PlanThread {
-        name: name.into(),
-        goal: "g".into(),
-        scope: String::new(),
-        repo: None,
-        model: None,
-        state: ThreadState::Starting,
-        summary: String::new(),
-        updated_ms: 0,
-        set_by: None,
-        ticket: None,
-    }
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_results_file_of_the_earlier_format_does_not_stop_the_daemon() {
+    let state = tempfile::tempdir().unwrap();
+    let file = app_in_with(state.path(), sbx_answer).0.tests_file();
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let old = r#"{"jobs":{"t-1":{"id":"t-1","sandbox":"myapp","suite":"crates","key":"k","commit":"c","by":"lead","state":"running","queued_ms":1}},"results":{},"plans":{"p-1":{"ran":1,"reused":0}}}"#;
+    std::fs::write(&file, old).unwrap();
+    let (app, _) = app_in_with(state.path(), sbx_answer);
+    assert!(app.tests.lock().unwrap().jobs.is_empty(), "a job naming a suite is left out");
+    assert_eq!(app.tests_counts("p-1").ran, 1, "what parses is kept");
+    std::fs::write(&file, "{ not json").unwrap();
+    let (app, _) = app_in_with(state.path(), sbx_answer);
+    assert!(app.tests.lock().unwrap().jobs.is_empty());
 }
 
+/// The agent route, as the relay calls it: an extra argument shaped like a
+/// command (or the old suite name) is not read; the plan's command runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_plan_names_its_team_suite_and_counts_its_jobs() {
+async fn run_tests_never_takes_a_command_from_the_request() {
+    use tower::ServiceExt;
     if !has_tools() {
         return;
     }
-    let r = rig(|_| vec![suite("a", &["crates/a"], "echo a"), suite("b", &["crates/b"], "echo b")]);
-    let e = r
-        .app
-        .plan_propose_with_suite(&r.sb, "s", vec![thread("api")], Variant::Split, "one", Some("lead"), Some("nope"))
-        .await
-        .unwrap_err();
-    assert!(e.contains("not a declared test suite") && e.contains("a, b"), "{e}");
-    assert!(r.app.plans_list().is_empty(), "nothing proposed");
-    let p = r.app.plan_propose_with_suite(&r.sb, "s", vec![thread("api")], Variant::Split, "one", Some("lead"), Some("a")).await.unwrap();
-    assert_eq!(p.team_suite.as_deref(), Some("a"));
-    r.app.plans.lock().unwrap().approve(&p.id, vec![thread("api")], None, None, 1).unwrap();
-    assert_eq!(r.app.plan(&p.id).unwrap().team_suite.as_deref(), Some("a"), "approval keeps it");
-    // A thread asks with no suite: the team's, on its HEAD.
-    let api = ThreadName::parse("api").unwrap();
-    let head = git(r.ws.path(), &["rev-parse", "HEAD"]);
-    let (j, _) = run(&r.app, &r.sb, TestAsk { thread: Some(&api), head: Some(&head), ..Default::default() }).await;
-    assert_eq!((j.suite.as_str(), j.plan.as_deref(), j.by.as_str()), ("a", Some(p.id.as_str()), "api"));
-    // Another suite on its own commit, then the team suite again: reused.
-    run(&r.app, &r.sb, TestAsk { thread: Some(&api), suite: Some("b"), head: Some(&head), ..Default::default() }).await;
-    let (_, t) = run(&r.app, &r.sb, TestAsk { thread: Some(&api), head: Some(&head), ..Default::default() }).await;
-    assert_eq!(t, Took::Reused);
-    let view = r.app.plan_view(&r.app.plan(&p.id).unwrap());
-    assert_eq!(view["team_suite"], "a");
-    assert_eq!((view["tests"]["ran"].as_u64(), view["tests"]["reused"].as_u64()), (Some(2), Some(1)));
-    // No team suite and no name: refused with the list.
-    let p2 = r.app.plan_propose(&r.sb, "s", vec![thread("web")], Variant::Split, "one", Some("lead")).await;
-    assert!(p2.is_ok());
-    let none = TestAsk { thread: Some(&ThreadName::parse("web").unwrap()), head: Some(&head), ..Default::default() };
-    assert!(r.app.tests_request(&r.sb, none).await.unwrap_err().contains("name a suite"));
+    let r = rig();
+    let pwned = r.scratch("pwned");
+    r.plan("api", Some("echo plan-command"), TestsChoice::Approve);
+    let token = r.app.store.token(r.sb.clone()).unwrap();
+    let body = serde_json::json!({
+        "thread": "api", "ref": "HEAD", "timeout": 30,
+        "command": format!("touch {pwned}"), "test_command": format!("touch {pwned}"), "suite": format!("x; touch {pwned}"),
+    });
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/tests/run")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let res = crate::http::agent_router(r.app.clone()).oneshot(req).await.unwrap();
+    let status = res.status();
+    let v: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert!(status.is_success(), "{status} {v}");
+    assert_eq!(v["job"]["command"], "echo plan-command", "{v}");
+    assert!(v["job"]["result"]["tail"].as_str().unwrap_or("").contains("plan-command"), "{v}");
+    assert!(!Path::new(&pwned).exists(), "the request's command never ran");
+}
+
+/// `list_tests` shows the caller's plan command, or that there is none.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_plan_a_request_runs_under_is_the_callers() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    let api = r.plan("api", Some("npm test"), TestsChoice::Approve);
+    r.plan("web", Some("npm test"), TestsChoice::Clear);
+    let p = r.app.tests_plan(&r.sb, Some(&name("api")), None).unwrap();
+    assert_eq!(p.id, api);
+    let v = super::plan_tests_view(Some(&p));
+    assert_eq!((v["plan"].as_str(), v["tests"]["command"].as_str(), v["tests"]["timeout_minutes"].as_u64()), (Some(api.as_str()), Some("npm test"), Some(5)));
+    let w = super::plan_tests_view(r.app.tests_plan(&r.sb, Some(&name("web")), None).as_ref());
+    assert!(w["tests"].is_null() && w["not_approved"].as_str().unwrap().contains("cleared"), "{w}");
+    assert!(super::plan_tests_view(None)["plan"].is_null());
+    // The lead, naming no plan: the latest approved plan still open.
+    assert_eq!(r.app.tests_plan(&r.sb, None, Some(&api)).unwrap().id, api);
+    assert!(r.app.tests_plan(&r.sb, None, None).is_some());
+}
+
+/// The plan dialog's Approve: the proposed command is approved with the
+/// plan, unless the person cleared it, and then `run_tests` is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_dialog_approves_the_command_or_clears_it() {
+    use tower::ServiceExt;
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    for (thread, clear) in [("kept", false), ("dropped", true)] {
+        let id = format!("p-{thread}");
+        {
+            let mut b = r.app.plans.lock().unwrap();
+            b.propose(id.clone(), &r.sb.to_string(), "s", vec![t(thread)], Variant::Split, "one", Some("lead"), 1).unwrap();
+            b.note_proposed_tests(&id, PlanTests::proposed(Some("echo ok"), None).unwrap());
+        }
+        assert!(r.app.plan(&id).unwrap().approved_tests.is_none(), "not before the approval");
+        let body = serde_json::json!({ "threads": [t(thread)], "clear_tests": clear });
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/api/plans/{id}/approve"))
+            .header("host", "127.0.0.1:7681")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        let res = crate::testing::signed_in(r.app.clone()).oneshot(req).await.unwrap();
+        assert!(res.status().is_success(), "{}", res.status());
+        let plan = r.app.plan(&id).unwrap();
+        assert_eq!(plan.approved_tests.is_some(), !clear, "{thread}");
+        let asked = r.app.tests_request(&r.sb, r.ask(&name(thread), "HEAD")).await;
+        if clear {
+            assert!(asked.unwrap_err().contains("no test command"));
+            assert!(plan.tests_not_approved.unwrap().contains("cleared"));
+        } else {
+            assert!(asked.is_ok());
+        }
+    }
 }

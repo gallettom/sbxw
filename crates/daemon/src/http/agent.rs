@@ -218,30 +218,31 @@ struct ProposeBody {
     justification: String,
     #[serde(default)]
     lead: Option<String>,
-    /// A declared test suite, the team's (see `svc::testq`).
+    /// The project's test command, proposed with the plan; run by the test
+    /// queue only once the person approves the plan (see `svc::testq`).
     #[serde(default)]
-    team_suite: Option<String>,
+    test_command: Option<String>,
+    #[serde(default)]
+    test_timeout_minutes: Option<u32>,
     #[serde(default)]
     timeout: Option<u64>,
 }
 
 async fn propose(State(app): S, Agent(me): Agent, Json(b): Json<ProposeBody>) -> ApiResult {
     app.require_leading(&me, None)?;
-    let plan = app
-        .plan_propose_with_suite(&me, &b.summary, b.threads, b.variant, &b.justification, b.lead.as_deref(), b.team_suite.as_deref())
-        .await?;
+    let tests = sbxw_core::testq::PlanTests::proposed(b.test_command.as_deref(), b.test_timeout_minutes)?;
+    let plan = app.plan_propose_with_tests(&me, &b.summary, b.threads, b.variant, &b.justification, b.lead.as_deref(), tests).await?;
     let plan = app.plan_wait(&plan.id, &me, wait_bound(b.timeout)).await?;
     Ok(ok_with(json!({ "plan": app.plan_view(&plan), "ticket_notes": app.ticket_link_notes(&plan) })))
 }
 
-/// `run_tests`: a suite by name (empty: the team suite) and a ref (empty:
-/// the team's code, or `head`, the caller's HEAD). Never a command.
+/// `run_tests`: the caller's plan's approved command on a ref (empty: a
+/// shared plan's team branch, or `head`, the caller's HEAD). Never a
+/// command: a field that would be one is not read.
 #[derive(Deserialize)]
 struct TestsRunBody {
     #[serde(default)]
     thread: Option<String>,
-    #[serde(default)]
-    suite: Option<String>,
     #[serde(default, rename = "ref")]
     git_ref: Option<String>,
     #[serde(default)]
@@ -258,7 +259,6 @@ async fn tests_run(State(app): S, Agent(me): Agent, Json(b): Json<TestsRunBody>)
     let thread = thread_of(b.thread)?;
     let ask = crate::svc::testq::TestAsk {
         thread: thread.as_ref(),
-        suite: b.suite.as_deref(),
         git_ref: b.git_ref.as_deref(),
         head: b.head.as_deref(),
         plan: b.plan.as_deref(),
@@ -279,11 +279,19 @@ async fn tests_check(State(app): S, Agent(me): Agent, Json(b): Json<WaitBody>) -
     Ok(ok_with(json!({ "job": crate::svc::testq::job_view(&job) })))
 }
 
-async fn tests_list(State(app): S, Agent(me): Agent) -> ApiResult {
-    let suites = app.tests_suites(&me).await;
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct TestsListBody {
+    thread: Option<String>,
+    plan: Option<String>,
+}
+
+async fn tests_list(State(app): S, Agent(me): Agent, Json(b): Json<TestsListBody>) -> ApiResult {
+    let thread = thread_of(b.thread)?;
+    let plan = app.tests_plan(&me, thread.as_ref(), b.plan.as_deref());
     let (active, latest) = app.tests_jobs(&me);
     let view = |v: Vec<sbxw_core::testq::Job>| v.iter().map(crate::svc::testq::job_view).collect::<Vec<_>>();
-    Ok(ok_with(json!({ "suites": suites, "active": view(active), "latest": view(latest) })))
+    Ok(ok_with(json!({ "plan": crate::svc::testq::plan_tests_view(plan.as_ref()), "active": view(active), "latest": view(latest) })))
 }
 
 #[derive(Deserialize)]

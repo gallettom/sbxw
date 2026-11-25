@@ -243,8 +243,8 @@ do nothing and tell the lead.\n\
 - Anything the lead must read goes by `SendMessage`.\n\
 - A hook that refuses a write, a blocked host or a pending network approval is a stop: tell \
 the lead, never work around it.\n\
-- Tests: when `list_tests` shows declared suites, commit, then ask the queue with `run_tests` \
-rather than running a suite yourself.";
+- Tests: when your plan has a test command (`list_tests`), commit, then call `run_tests` \
+rather than running the whole battery yourself.";
 
 /// A thread's first message: the lead's words as a person approved them, and
 /// the daemon's rules around them.
@@ -579,7 +579,9 @@ mod tests {
             merge: None,
             earlier_merges: vec![],
             main_uncommitted: None,
-            team_suite: None,
+            proposed_tests: None,
+            approved_tests: None,
+            tests_not_approved: None,
             created_ms: 0,
             updated_ms: 0,
         };

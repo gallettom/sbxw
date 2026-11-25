@@ -245,6 +245,7 @@
         "justification": "Two threads on separate branches: the schema and the checkout do not touch the same files.",
         "variant": "split",
         "main_uncommitted": 2,
+        "tests": { "command": "cargo test --workspace && npm test", "timeout_minutes": 45 },
         "threads": [
           {
             "name": "db-schema",

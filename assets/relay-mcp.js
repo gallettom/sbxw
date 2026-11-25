@@ -311,12 +311,17 @@ const LEAD_TOOLS = [
           description: "One line: why split or shared. Shown to the user in the plan dialog.",
         },
         threads: { type: "array", items: THREAD_ITEM, minItems: 1 },
-        team_suite: {
+        test_command: {
           type: "string",
           description:
-            "When the sandbox declares test suites (`list_tests`): the one that tests the team's " +
-            "code as a whole. The queue runs it once per state of that code; `run_tests` with no " +
-            "suite asks for it. A name that is not declared is refused.",
+            "When the project has tests: the one shell command that runs them from the repository " +
+            "root (for example `npm test`, or the project's own test script). The user sees it in the " +
+            "plan dialog and approves it with the plan; from then on `run_tests` runs exactly this, on " +
+            "a commit, and it cannot be changed. Leave it out when the project has no tests.",
+        },
+        test_timeout_minutes: {
+          type: "number",
+          description: "The time limit of one run of test_command, in minutes. Default 60, max 180.",
         },
         timeout_seconds: { type: "number", description: "How long to wait for the user. Default 90, max 600." },
       },
@@ -719,10 +724,10 @@ else TOOLS.push(...LEAD_TOOLS, ...BOARD_LEAD_TOOLS, ...TEAM_TOOLS);
 
 // ── Test queue ────────────────────────────────────────────────────────────
 //
-// The daemon runs a suite the sandbox declares (`[[tests]]` in sbxw.toml,
-// approved by the person at `sbxw up`) on a commit, inside the sandbox, one
-// job at a time, and answers a stored result when the tested code did not
-// change. An agent only NAMES a suite: no argument here is a command. A call
+// The daemon runs the plan's test command on a commit, inside the sandbox,
+// one job at a time, and answers a stored result when the same command ran
+// on the same tree. The command is the one the lead proposed with the plan
+// and the user approved with it: no argument here is a command. A call
 // waits for the result up to its timeout and otherwise returns the job id,
 // which outlives a daemon restart; asking again for the same code joins the
 // job already queued or running instead of queueing a second one.
@@ -731,25 +736,22 @@ const TEST_TOOLS = [
   {
     name: "run_tests",
     description:
-      "Run one of this sandbox's declared test suites (see `list_tests`) on a COMMIT, through " +
-      "sbxw's test queue, instead of running the suite yourself. Commit first: the queue tests " +
-      "the commit (by default your HEAD), never uncommitted edits. When the code the suite " +
-      "covers is unchanged since a run, the stored result comes back at once, marked as reused, " +
-      "with the commit it first ran on. Returns passed or failed, the duration, the commit and " +
+      "Run your plan's approved test command (see `list_tests`) on a COMMIT, through sbxw's " +
+      "test queue, instead of running the whole battery yourself. Commit first: the queue tests " +
+      "the commit (by default your HEAD), never uncommitted edits. When the same command already " +
+      "ran on the same tree, the stored result comes back at once, marked as reused, with the " +
+      "commit it first ran on. Refused when your plan has no approved test command. Returns " +
+      "passed or failed, the duration, the commit and " +
       "the tail of the output, or, when it takes longer than the wait, a job id to pick up with " +
       "`check_tests`. Asking again for the same code joins the job already at work.",
     inputSchema: {
       type: "object",
       properties: {
-        suite: {
-          type: "string",
-          description: "A declared suite's name. Empty: your plan's team suite.",
-        },
         ref: {
           type: "string",
           description:
             "The commit to test: a hash, a branch or a tag of this repository. Default: your HEAD " +
-            "(the team branch's tip, for a shared plan's team suite).",
+            "(the team branch's tip, for a shared plan).",
         },
         rerun: {
           type: "boolean",
@@ -775,9 +777,10 @@ const TEST_TOOLS = [
   {
     name: "list_tests",
     description:
-      "The test suites this sandbox declares (name, what each covers, its time limit), what the " +
-      "test queue has queued or running, and each suite's latest result. Call it before running " +
-      "tests: when it shows suites, ask the queue with `run_tests` rather than running them yourself.",
+      "Your plan's approved test command and its time limit (or that it has none), what the " +
+      "test queue has queued or running, and the last results. Call it before running tests: " +
+      "when your plan has a command, commit and ask the queue with `run_tests` rather than " +
+      "running the whole battery yourself.",
     inputSchema: { type: "object", properties: {} },
   },
 ];
@@ -810,16 +813,16 @@ function jobText(job, took) {
     const where = job.state === "running" ? "is running" : "is queued (one job at a time in this sandbox)";
     const joined = took === "joined" ? " It was already asked for this code, so your request joined it." : "";
     return (
-      `Test job ${job.id}: suite ${job.suite} at ${commit} ${where}.${joined} Carry on meanwhile, ` +
+      `Test job ${job.id}: \`${job.command}\` at ${commit} ${where}.${joined} Carry on meanwhile, ` +
       "and call `check_tests` when you need the result."
     );
   }
   const r = job.result || {};
   const word = { passed: "PASSED", failed: "FAILED", timed_out: "TIMED OUT", error: "COULD NOT RUN" }[r.outcome] || String(r.outcome);
-  const lines = [`Suite ${job.suite} ${word} (job ${job.id}).`];
+  const lines = [`Tests ${word} (job ${job.id}): \`${job.command}\`.`];
   if (job.reused) {
     lines.push(
-      `Reused: the code this suite covers is the same as at ${(r.commit || "").slice(0, 12)}, where it ran; ` +
+      `Reused: the same command already ran on the same tree, at ${(r.commit || "").slice(0, 12)}; ` +
         `nothing ran again for ${commit}. Ask with rerun only if you think the result is flaky.`,
     );
   } else {
@@ -844,7 +847,6 @@ async function callTestTool(name, args) {
       {
         from: relay.me,
         thread: THREAD || undefined,
-        suite: String(args.suite || "").trim() || undefined,
         ref: String(args.ref || "").trim() || undefined,
         head: headCommit() || undefined,
         plan: THREAD ? undefined : lastPlanId || undefined,
@@ -863,31 +865,37 @@ async function callTestTool(name, args) {
     return textResult(jobText(res.job), false);
   }
   if (name === "list_tests") {
-    const res = await relay.request("/api/tests/list", { from: relay.me }, 15000);
-    const suites = res.suites || [];
-    if (!suites.length) {
-      return textResult(
-        "This sandbox declares no test suites (`[[tests]]` in its sbxw.toml, applied at `sbxw up`). Run tests as the repository says.",
-        false,
+    const res = await relay.request(
+      "/api/tests/list",
+      { from: relay.me, thread: THREAD || undefined, plan: THREAD ? undefined : lastPlanId || undefined },
+      15000,
+    );
+    const p = res.plan || {};
+    const lines = [];
+    if (p.tests) {
+      lines.push(
+        `Your plan ${p.plan}'s approved test command: \`${p.tests.command}\` (limit ${p.tests.timeout_minutes} min). ` +
+          "Commit, then ask for it with `run_tests`.",
       );
-    }
-    const lines = ["Declared test suites (ask for one with `run_tests`, after committing):"];
-    for (const s of suites) {
-      const deps = (s.depends || []).length ? `; also covers ${s.depends.join(", ")}` : "";
-      const retry = s.retries ? "; retried once on failure" : "";
-      lines.push(`- ${s.name}: covers ${(s.paths || []).join(", ")}${deps}; limit ${s.timeout_minutes} min${retry}`);
+    } else {
+      const why = p.not_approved ? ` A command was proposed but not approved: ${p.not_approved}.` : "";
+      lines.push(
+        (p.plan ? `Your plan ${p.plan} has no approved test command.${why}` : "You are under no approved plan.") +
+          " The lead proposes the project's test command with the plan (propose_plan's test_command). Until then, run the tests as the repository says.",
+      );
     }
     const active = res.active || [];
     lines.push("");
     lines.push(active.length ? "In the queue:" : "Nothing queued or running.");
-    for (const j of active) lines.push(`- ${j.id}: ${j.suite} at ${(j.commit || "").slice(0, 12)}, ${j.state}, asked by ${j.by}`);
+    for (const j of active) lines.push(`- ${j.id}: \`${j.command}\` at ${(j.commit || "").slice(0, 12)}, ${j.state}, asked by ${j.by}`);
     const latest = res.latest || [];
     if (latest.length) {
       lines.push("");
-      lines.push("Latest results:");
+      lines.push("Last finished:");
       for (const j of latest) {
         const r = j.result || {};
-        lines.push(`- ${j.suite}: ${String(r.outcome || "?").replace("_", " ")} at ${(j.commit || "").slice(0, 12)}${j.reused ? " (reused)" : ""}`);
+        const outcome = String(r.outcome || "?").replace("_", " ");
+        lines.push(`- ${j.id}: ${outcome} at ${(j.commit || "").slice(0, 12)}${j.reused ? " (reused)" : ""}, \`${j.command}\`, asked by ${j.by}`);
       }
     }
     return textResult(lines.join("\n"), false);
@@ -934,6 +942,31 @@ function sessionName() {
   return entry ? entry.name.trim() : "";
 }
 
+/// What a plan says of its test command: proposed, approved by the user, or
+/// not approved and why; and the queue's counts once approved.
+function testsLines(p) {
+  const limit = (t) => `limit ${t.timeout_minutes} min`;
+  if (p.state === "approved" && p.approved_tests) {
+    const c = p.tests || {};
+    return [
+      `Tests, approved by the user with the plan: \`${p.approved_tests.command}\` (${limit(p.approved_tests)}). ` +
+        `Test queue for this plan: ${c.ran || 0} run, ${c.reused || 0} answered from a stored result. ` +
+        "Threads commit and call `run_tests`; rely on its result on the code to merge before proposing the merge.",
+    ];
+  }
+  if (p.state === "approved" && p.proposed_tests) {
+    return [
+      `Tests: the proposed command \`${p.proposed_tests.command}\` was NOT approved` +
+        `${p.tests_not_approved ? ` (${p.tests_not_approved})` : ""}. This plan has no test queue: run_tests is refused.`,
+    ];
+  }
+  if (p.state === "pending" && p.proposed_tests) {
+    return [`Tests, proposed, waiting for the user: \`${p.proposed_tests.command}\` (${limit(p.proposed_tests)}).`];
+  }
+  if (p.state === "approved") return ["Tests: none proposed with this plan, so it has no test queue."];
+  return [];
+}
+
 function planText(res) {
   const p = res.plan || {};
   if (p.id) lastPlanId = p.id;
@@ -949,15 +982,7 @@ function planText(res) {
   } else {
     lines.push(`Plan ${p.id} is approved${p.summary ? `: ${p.summary}` : "."}`);
   }
-  if (p.team_suite) {
-    const c = p.tests || {};
-    lines.push(
-      `Team suite: ${p.team_suite} (test queue for this plan: ${c.ran || 0} run, ${c.reused || 0} answered from a stored result). ` +
-        "`run_tests` with no suite asks for it; rely on its result before proposing the merge.",
-    );
-  } else if (p.tests && (p.tests.ran || p.tests.reused)) {
-    lines.push(`Test queue for this plan: ${p.tests.ran} run, ${p.tests.reused} answered from a stored result.`);
-  }
+  lines.push(...testsLines(p));
   for (const n of res.ticket_notes || []) lines.push(`Note: ${n}.`);
   for (const t of p.threads || []) {
     const run = p.state === "approved" ? (t.running ? ", session running" : ", session not running") : "";
@@ -1005,7 +1030,8 @@ async function callPlanTool(name, args) {
         variant: String(args.variant || "split"),
         justification: String(args.justification || ""),
         threads: args.threads || [],
-        team_suite: String(args.team_suite || "").trim() || undefined,
+        test_command: String(args.test_command || "").trim() || undefined,
+        test_timeout_minutes: typeof args.test_timeout_minutes === "number" ? args.test_timeout_minutes : undefined,
         lead: sessionName() || undefined,
         timeout,
       },

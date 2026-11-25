@@ -16,7 +16,7 @@ use crate::app::{now_ms, App};
 use crate::git;
 use crate::svc::remote_access::{write_private, DeviceCtx};
 use sbxw_core::approvals::Approval;
-use sbxw_core::plans::{MergeState, Plan, PlanState, Variant};
+use sbxw_core::plans::{MergeState, Plan, PlanState, TestsChoice, Variant};
 use sbxw_core::remote_access::journal::Kind;
 use sbxw_core::remote_access::level2::{self as l2, Action, Challenges, Enrolment, PasskeyFile, Purpose};
 use sbxw_core::remote_access::limits::Limiter;
@@ -609,7 +609,15 @@ impl App {
     fn plan_shown(&self, p: &Plan) -> Shown {
         let m = self.mask();
         let threads: Vec<Value> = p.threads.iter().map(|t| json!({ "name": t.name, "goal": t.goal, "scope": t.scope, "repo": t.repo, "model": t.model, "ticket": t.ticket })).collect();
-        let digest = l2::digest(&json!({ "id": p.id, "sandbox": p.sandbox, "summary": p.summary, "justification": p.justification, "variant": p.variant, "threads": threads }));
+        // The test command the lead proposed is approved with the plan: it is
+        // shown, and the digest covers it, so a command changed between
+        // showing and approving is refused.
+        // A plan without one keeps the digest it always had.
+        let mut covered = json!({ "id": p.id, "sandbox": p.sandbox, "summary": p.summary, "justification": p.justification, "variant": p.variant, "threads": threads });
+        if let Some(t) = &p.proposed_tests {
+            covered["tests"] = json!({ "command": t.command, "timeout_minutes": t.timeout_minutes });
+        }
+        let digest = l2::digest(&covered);
         let shown: Vec<Value> = p
             .threads
             .iter()
@@ -619,7 +627,8 @@ impl App {
         // in the digest, which covers the plan; the choice is bound to the
         // challenge instead.
         let view = json!({
-            "plan": { "id": p.id, "sandbox": p.sandbox, "summary": m(&p.summary), "justification": m(&p.justification), "variant": p.variant, "main_uncommitted": p.main_uncommitted, "threads": shown },
+            "plan": { "id": p.id, "sandbox": p.sandbox, "summary": m(&p.summary), "justification": m(&p.justification), "variant": p.variant, "main_uncommitted": p.main_uncommitted, "threads": shown,
+                "tests": p.proposed_tests.as_ref().map(|t| json!({ "command": m(&t.command), "timeout_minutes": t.timeout_minutes })) },
             "models": self.offered_models(), "default_model": self.cfg.claude_model,
         });
         Shown { view, digest, actionable: true, options: vec![], journal_target: p.id.clone(), pins: None, distillate: None }
@@ -862,7 +871,7 @@ impl App {
                             t.model = Some(m.clone());
                         }
                     }
-                    self.plan_approve(target, threads, None).await.map(|p| json!({ "plan": p }))
+                    self.plan_approve(target, threads, None, TestsChoice::Approve).await.map(|p| json!({ "plan": p }))
                 }
                 None => {
                     self.l2_journal(d, Kind::Changed, &jt);

@@ -8,7 +8,8 @@ use crate::store::{write_atomic, LeadRecord, Store, LEAD_UNBOUND_MAX_MS};
 use sbxw_core::agents::SessionInfo;
 use std::collections::{BTreeMap, HashMap};
 use sbxw_core::messages;
-use sbxw_core::plans::{DistillItem, Ext, MergeResult, MergeState, Plan, PlanState, PlanThread, ThreadState, Variant};
+use sbxw_core::plans::{DistillItem, Ext, MergeResult, MergeState, Plan, PlanState, PlanThread, TestsChoice, ThreadState, Variant};
+use sbxw_core::testq::PlanTests;
 use sbxw_sbx::scripts::Team;
 use sbxw_core::session::{SessionKey, SessionKind};
 use sbxw_core::{ModelId, SandboxRef, ThreadName};
@@ -179,30 +180,15 @@ impl App {
         justification: &str,
         lead: Option<&str>,
     ) -> Result<Plan, String> {
-        self.check_plan_repos(sandbox, &threads).await?;
-        if variant == Variant::Shared {
-            self.shared_worktree(sandbox, &threads, "team").await?;
-        }
-        let plan = self.plans.lock().unwrap().propose(
-            sbxw_core::ids::plan_id(),
-            &sandbox.to_string(),
-            summary,
-            threads,
-            variant,
-            justification,
-            lead,
-            now_ms(),
-        )?;
-        tracing::info!("plans: '{sandbox}' proposed {} ({} thread(s), {:?})", plan.id, plan.threads.len(), plan.variant);
-        let n = self.main_uncommitted(sandbox, &plan.threads).await;
-        let plan = self.plans.lock().unwrap().note_main_uncommitted(&plan.id, n).unwrap_or(plan);
-        Ok(self.plan_changed(plan))
+        self.plan_propose_with_tests(sandbox, summary, threads, variant, justification, lead, None).await
     }
 
-    /// `plan_propose`, with the team suite a lead named: refused before
-    /// anything is proposed when the sandbox does not declare it.
+    /// `plan_propose`, with the test command a lead proposed: stored on the
+    /// plan as proposed, under the same lock as the proposal, so no screen
+    /// ever shows the plan without it; it takes effect only when the person
+    /// approves the plan ([`App::plan_approve`]).
     #[allow(clippy::too_many_arguments)]
-    pub async fn plan_propose_with_suite(
+    pub async fn plan_propose_with_tests(
         &self,
         sandbox: &SandboxRef,
         summary: &str,
@@ -210,14 +196,23 @@ impl App {
         variant: Variant,
         justification: &str,
         lead: Option<&str>,
-        team_suite: Option<&str>,
+        tests: Option<PlanTests>,
     ) -> Result<Plan, String> {
-        let suite = self.tests_check_team_suite(sandbox, team_suite).await?;
-        let plan = self.plan_propose(sandbox, summary, threads, variant, justification, lead).await?;
-        if suite.is_none() {
-            return Ok(plan);
+        self.check_plan_repos(sandbox, &threads).await?;
+        if variant == Variant::Shared {
+            self.shared_worktree(sandbox, &threads, "team").await?;
         }
-        let plan = self.plans.lock().unwrap().note_team_suite(&plan.id, suite).unwrap_or(plan);
+        let plan = {
+            let mut book = self.plans.lock().unwrap();
+            let plan = book.propose(sbxw_core::ids::plan_id(), &sandbox.to_string(), summary, threads, variant, justification, lead, now_ms())?;
+            match tests {
+                Some(t) => book.note_proposed_tests(&plan.id, Some(t)).unwrap_or(plan),
+                None => plan,
+            }
+        };
+        tracing::info!("plans: '{sandbox}' proposed {} ({} thread(s), {:?})", plan.id, plan.threads.len(), plan.variant);
+        let n = self.main_uncommitted(sandbox, &plan.threads).await;
+        let plan = self.plans.lock().unwrap().note_main_uncommitted(&plan.id, n).unwrap_or(plan);
         Ok(self.plan_changed(plan))
     }
 
@@ -305,7 +300,8 @@ impl App {
     /// in the plan's one worktree when shared. Refused before anything is
     /// recorded when the threads would not fit under the ceiling, or a shared
     /// plan's threads name more than one repo.
-    pub async fn plan_approve(self: &Arc<Self>, id: &str, threads: Vec<PlanThread>, variant: Option<Variant>) -> Result<Plan, String> {
+    /// `tests` says whether the proposed test command is approved with it.
+    pub async fn plan_approve(self: &Arc<Self>, id: &str, threads: Vec<PlanThread>, variant: Option<Variant>, tests: TestsChoice) -> Result<Plan, String> {
         let plan = self.plan(id).ok_or_else(|| format!("no plan '{id}'"))?;
         let sandbox = SandboxRef::parse(&plan.sandbox).map_err(|e| e.to_string())?;
         let cfg = self.config_for(&sandbox).await;
@@ -330,7 +326,7 @@ impl App {
             Variant::Split => None,
             Variant::Shared => self.shared_worktree(&sandbox, &threads, &plan.team_name()).await?,
         };
-        let plan = self.plans.lock().unwrap().approve(id, threads, variant, worktree, now_ms())?;
+        let plan = self.plans.lock().unwrap().approve_with(id, threads, variant, worktree, tests, now_ms())?;
         let plan = self.plan_changed(plan);
         tracing::info!("plans: {id} approved for '{sandbox}' ({} thread(s), {:?})", plan.threads.len(), plan.variant);
         for t in &plan.threads {

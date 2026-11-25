@@ -1945,7 +1945,7 @@ nothing only disables Open.
 |---|---|
 | `sessions` | `GET /api/sessions`: every hook report (`sandbox`, `thread`, `state`: `working`, `idle`, `attention`, `exited`, ...) |
 | `threads` | By sandbox, `GET /api/sandboxes/:name/threads`: `{ok, threads: [{name, open, repo, model, worktree: same\|own\|team}], open, max}` |
-| `plans` | `GET /api/plans`: every plan (`id`, `sandbox`, `summary`, `threads` with `state` and `summary`, `state`, `variant`, `justification`, `closed`, `merge`: `{order, note, state, base, results, distillate}`) |
+| `plans` | `GET /api/plans`: every plan (`id`, `sandbox`, `summary`, `threads` with `state` and `summary`, `state`, `variant`, `justification`, `proposed_tests` (`{command, timeout_minutes}`, drawn as Tests in the review), `approved_tests`, `closed`, `merge`: `{order, note, state, base, results, distillate}`) |
 | `leads`, `models` | `GET /api/leads` (the sandboxes that really lead), `GET /api/models` (`{ok, default, models: [{id, label}]}`) |
 | `lead_states` | `GET /api/lead-states`: `{ "<sandbox>": {state: waiting, activating or leading, since_ms, reason} }`, absent: off. Read again on `lead`, `lead-end`, `session` and at every connection. Before it is read (or from a daemon without the route), `leads` stands in |
 | `board` | By sandbox, `GET /api/sandboxes/:name/board`: `{plan, claims, entries}` |
@@ -1997,6 +1997,7 @@ draws the same states (`lead-end`, `lead-cancel`, `lead-resume`,
 | `plan_edit` | `id`, `index`, `field` (`name`, `goal`, `scope`, `repo`, `model`), `value` (none: empty, default repo, default model) | direct | Edits the draft |
 | `plan_remove`, `plan_add`, `plan_reset` | `id` (`index`) | direct | Removes, adds, resets |
 | `plan_variant` | `id`, `variant` (`split`, `shared`) | direct | The draft's variant |
+| `plan_no_tests` | `id`, `on` | direct | Approve the plan without the test command the lead proposed (`clear_tests` in the approval) |
 | `plan_refuse` | `id`, `note` | direct | Refuses; the lead reads the note |
 | `merge_close_set` | `id`, `on` | direct | Close the threads once merged (default on) |
 | `plan_approve` | `id` | approval | The core reads the sessions, its dialog lists the draft, the changes and the sessions it starts; over the ceiling it says how many are open, which, how many are free, how to free one. Approved (here or elsewhere), its threads open no pane on their own and the focus stays: the daemon starts them, the sidebar (under the leader), the Board and the Threads view list them at once, and a click on a row opens its pane (unlike the web UI's `openPlanPanes`) |

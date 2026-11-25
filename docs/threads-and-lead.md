@@ -225,8 +225,8 @@ characters): commit at each stable point, check `git merge-tree --write-tree`
 against main before reporting done, do nothing if another session of the same
 name already works in the worktree, send what the lead must read by
 `SendMessage`, stop at a refused hook, a blocked host or a pending
-approval, and, when the sandbox declares test suites, commit and ask the test
-queue (`run_tests`) rather than running a suite by hand. A repository's own rules (build commands, what not to touch) go in
+approval, and, when the plan has a test command, commit and call `run_tests`
+rather than running the whole battery by hand. A repository's own rules (build commands, what not to touch) go in
 its root `CLAUDE.md`, which every session reads by itself; sbxw's own is the
 example. The lead's goal then says only what is specific to the thread.
 
@@ -461,23 +461,48 @@ not who merged it or how.
 
 ### Tests: the queue
 
-When the sandbox declares test suites (`[[tests]]`, see
-[Configuration](configuration.md#test-suites)), every session has three tools:
-`list_tests` (the suites, what is queued or running, the latest results),
-`run_tests` (a suite by name on a commit, the caller's `HEAD` by default) and
-`check_tests` (a job `run_tests` left running). The daemon runs one job at a
-time per sandbox, inside the sandbox, and answers a stored result at once when
-the code the suite covers did not change. A call waits up to 600 seconds; past
-that it returns the job's id, which survives a daemon restart, and asking again
-for the same code joins the job instead of queueing another.
+A plan may carry the project's **test command**: one shell command, run from
+the repository root, such as `npm test` or the project's own test script.
+Nothing in `sbxw.toml` declares it; it belongs to the plan.
 
-The lead names one suite as the plan's `team_suite` in `propose_plan` (a name
-the sandbox does not declare is refused). `run_tests` with no suite then asks
-for it: on the team branch's tip for a shared plan, on the commit the lead
-names for a split one. `plan_status` prints the team suite and how many of the
-plan's test jobs ran and how many were answered from a stored result. The lead
-relies on that result before proposing the merge. Showing the team suite in the
-plan dialog and on the Board is still to come.
+- **The lead proposes it.** The lead knows the project, so it passes
+  `test_command` (and optionally `test_timeout_minutes`, default 60, at most
+  180) to `propose_plan` when the project has tests. A plan without one has
+  no test queue.
+- **The person approves it.** The plan dialog (desktop, web UI and phone)
+  shows it beside the justification, labelled **Tests**, in monospace, with
+  its time limit. Approving the plan approves the command; the desktop and web
+  dialogs can also approve the plan without it ("Approve without tests"). The
+  phone's approval is bound to a digest that covers the command and its limit,
+  so a command changed between showing and approving is refused. From then on
+  the command is fixed: no tool or route changes it, and no request ever
+  carries a command to run. `plan_status` and the approved plan the lead gets
+  back say which command was approved, or that none was and why.
+- **Threads ask for it.** `run_tests` runs the plan's approved command on a
+  commit: a thread's `HEAD` (or the `ref` it names); for the lead, the plan it
+  names or its latest approved open plan, and on a shared plan the team
+  branch's tip by default. Outside a plan with an approved command it is
+  refused. `list_tests` shows the caller's command (or that there is none),
+  what is queued or running and the last results; `check_tests` picks up a job
+  left running. A call waits up to 600 seconds; past that it returns the job's
+  id, which survives a daemon restart.
+- **What is cached.** A result is stored under the command's text and the git
+  tree of the commit's root (`<commit>^{tree}`), nothing else. The same command
+  on the same tree is answered at once, marked as reused, with the commit it
+  first ran on, across threads and plans of the sandbox; any change to any file
+  is a new tree and runs again. Passed and failed results are reused; a
+  time-out or a run that could not start never is, and `rerun` runs again
+  regardless. A failed run is retried once and the result says so.
+- **How it runs.** One job at a time per sandbox, inside the sandbox, in the
+  queue's own checkout (`.sbxw-worktrees/.tests`), with a time limit enforced
+  there. A request for a tree already queued or running joins that job. The
+  command gets `SBXW_TEST_TARGET` (one build directory in the sandbox's home,
+  kept from job to job), `SBXW_TEST_CHECKOUT` (the checkout, also the working
+  directory), `SBXW_TEST_SUITE` (the plan's id) and `SBXW_TEST_COMMIT`. Jobs and
+  results are kept in `~/.sbxw/state/tests.json`; results older than 30 days
+  are pruned. The plan counts how many of its jobs ran and how many were
+  answered without running, and the lead relies on the queue's result on the
+  code to merge before proposing the merge.
 
 ### What survives a daemon restart
 
@@ -778,7 +803,12 @@ data rather than instructions, and copies its files into the sandbox under
   plan files read as, or `shared`), `justification`, and for a shared plan
   `worktree`, the shared worktree's path, set on approval. `propose_plan` takes
   `variant` and `justification`; `POST /api/plans/<id>/approve` takes
-  `{threads, variant?}`.
+  `{threads, variant?, clear_tests?}`.
+- **Test command.** `propose_plan` takes `test_command` and
+  `test_timeout_minutes`; the plan carries `proposed_tests`
+  (`{command, timeout_minutes}`), then, once approved, `approved_tests` (the
+  only one the queue runs) or `tests_not_approved` (why not). See
+  [Tests: the queue](#tests-the-queue).
 - **Who set a thread's state.** A thread carries `set_by` when it was not the
   thread itself: `"sbxw"` for a start that failed (`summary` is the reason),
   `"lead"` for a thread the lead marked done (`summary` is its note).

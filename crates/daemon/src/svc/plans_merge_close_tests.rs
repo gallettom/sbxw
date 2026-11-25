@@ -365,7 +365,7 @@ async fn a_plan_approved_with_a_closed_name_starts_it() {
     assert!(app.sessions.just_ended(&key));
     let before = calls(&fake.log(), "sbxw-thread-prepare").len();
     let p = app.plan_propose(&sb, "again", vec![t("x")], Variant::Split, "one", Some("lead")).await.unwrap();
-    app.plan_approve(&p.id, vec![t("x")], None).await.unwrap();
+    app.plan_approve(&p.id, vec![t("x")], None, sbxw_core::plans::TestsChoice::Approve).await.unwrap();
     for _ in 0..150 {
         if calls(&fake.log(), "sbxw-thread-prepare").len() > before {
             break;

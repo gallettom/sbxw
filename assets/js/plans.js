@@ -755,8 +755,26 @@ function paintPlanVariant(plan) {
       ${opt('split', 'Split', 'a worktree and a branch per thread')}
       ${opt('shared', 'Shared', 'one worktree, one branch, files claimed on a board')}
     </div>
-    ${plan.justification ? `<p class="plan-justification"><span class="plan-owns-label">Why</span> ${escHtml(plan.justification)}</p>` : ''}`;
+    ${plan.justification ? `<p class="plan-justification"><span class="plan-owns-label">Why</span> ${escHtml(plan.justification)}</p>` : ''}
+    ${planTestsHtml(plan.proposed_tests)}`;
 }
+
+// BEGIN plans tests pure
+// The test command the lead proposed with the plan: approving the plan
+// approves it, and sbxw then runs it on the threads' commits. So it is drawn
+// in full, as text (an agent's words are data), with its time limit, and
+// the person may approve the plan without it.
+function planTestsHtml(tests) {
+  if (!tests || !tests.command) return '';
+  const limit = Number(tests.timeout_minutes) || 60;
+  return `<div class="plan-tests"><p class="plan-justification"><span class="plan-owns-label">Tests</span> `
+    + `<code class="plan-test-command">${escHtml(tests.command)}</code> `
+    + `<span class="plan-variant-hint">time limit ${limit} min, run by sbxw on the threads' commits</span></p>`
+    + `<label class="plan-variant-opt"><input type="checkbox" id="plan-no-tests"> `
+    + `<span>Approve without tests <span class="plan-variant-hint">the plan then has no test queue</span></span></label></div>`;
+}
+// END plans tests pure
+const planClearTests = () => !!planVariant.querySelector('#plan-no-tests')?.checked;
 const planVariantChoice = () => planVariant.querySelector('input:checked')?.value || 'split';
 
 function setPlanError(msg) {
@@ -937,7 +955,7 @@ planApprove.addEventListener('click', async () => {
   planApprove.disabled = true;
   planApprove.textContent = 'Starting…';
   setPlanError('');
-  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/approve`, { threads, variant: planVariantChoice() });
+  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/approve`, { threads, variant: planVariantChoice(), clear_tests: planClearTests() });
   if (!res.ok) {
     planApprove.textContent = 'Approve and start';
     updatePlanReady();
