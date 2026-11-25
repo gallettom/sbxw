@@ -1496,7 +1496,10 @@ impl App {
         // or grown parts: a fixed height it fills and scrolls in. (Its own
         // close button; Escape and a press outside close it too.)
         let (card, body) = if fits {
-            (card.max_h(max), col().key("modal-body").w_full().max_h(max - 32.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(screen))
+            // The screen is full height of what holds it: inside a box as
+            // tall as its content it keeps its own height, so a screen
+            // taller than `max` scrolls instead of being cut at the foot.
+            (card.max_h(max), col().key("modal-body").w_full().max_h(max - 32.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(col().w_full().child(screen)))
         } else {
             (card.h(max), col().w_full().min_h(0.0).grow(1.0).child(screen))
         };

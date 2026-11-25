@@ -71,7 +71,18 @@ fn check_after(fixture: &str, open: Option<(&str, Option<&str>)>, tab: Option<&s
             rt.pointer_up(x, y);
             settle(&mut rt);
         }
-        let Some(sel) = lowest_select(&rt) else {
+        // A dialog taller than a small window scrolls its body: its select
+        // may start below the fold, where the person reaches it by scrolling.
+        let mut sel = lowest_select(&rt);
+        for _ in 0..12 {
+            if sel.is_some() {
+                break;
+            }
+            rt.wheel(size.0 / 2.0, size.1 / 2.0, -120.0);
+            settle(&mut rt);
+            sel = lowest_select(&rt);
+        }
+        let Some(sel) = sel else {
             bad.push(format!("{tag}: no select drawn"));
             continue;
         };
