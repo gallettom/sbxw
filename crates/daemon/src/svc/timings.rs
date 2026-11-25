@@ -35,9 +35,10 @@ const SHOWN_FROM_MS: u64 = 200;
 /// How long after `Done` the attach and the agent's first events still count
 /// for a bring-up.
 const LATE_FOR: Duration = Duration::from_secs(30 * 60);
-/// The kit-startup watch: one process listing this often, given up after
-/// this long. Rare on purpose: each look is one `sbx exec`.
-pub(crate) const WATCH_POLL: Duration = if cfg!(test) { Duration::from_millis(10) } else { Duration::from_secs(5) };
+/// The kit-startup watch: one look this often, given up after this long.
+/// Rare on purpose: each look is two calls, an `sbx ls` (is it still
+/// running?) then an `sbx exec` (its process list).
+pub(crate) const WATCH_POLL: Duration = if cfg!(test) { Duration::from_millis(10) } else { Duration::from_secs(10) };
 pub(crate) const WATCH_FOR: Duration = if cfg!(test) { Duration::from_millis(500) } else { Duration::from_secs(20 * 60) };
 /// For a stopped sandbox, the watch starts when its agent's session starts
 /// (the sandbox runs then): waited for this long at most.
@@ -326,6 +327,8 @@ pub struct Book {
     /// Kit startups to watch from the attach, by timeline: the kits as
     /// local directories (in memory only).
     at_attach: HashMap<u64, Vec<String>>,
+    /// The running kit-startup watches, by sandbox: what ends one at once.
+    watches: HashMap<String, Arc<tokio::sync::Notify>>,
 }
 
 #[derive(Serialize)]
@@ -367,6 +370,19 @@ pub(crate) fn load(path: &Path) -> Book {
     let skip = list.len().saturating_sub(KEEP);
     Book { list: list.into_iter().skip(skip).collect(), ..Default::default() }
 }
+
+/// The kit-startup watch found the sandbox not running: it ends there,
+/// without an `sbx exec`, which would start it again.
+#[derive(Debug)]
+pub struct NotRunning;
+
+impl std::fmt::Display for NotRunning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the sandbox stopped before the startups ended")
+    }
+}
+
+impl std::error::Error for NotRunning {}
 
 /// A step after `Done`, begun on a bring-up's timeline.
 pub struct Late {
@@ -504,6 +520,18 @@ impl App {
         Some((id, start, resolved))
     }
 
+    /// End `sb`'s kit-startup watch now, before the daemon stops or
+    /// removes it: no look may follow (it would start the sandbox again).
+    pub(crate) fn timing_stop_watch(&self, sb: &SandboxRef) {
+        let mut book = self.timings.lock().unwrap();
+        if let Some(cancel) = book.watches.remove(&format!("{}/{}", sb.host, sb.name)) {
+            cancel.notify_one();
+        }
+        if let Some((id, _)) = book.live.remove(&format!("{}/{}", sb.host, sb.name)) {
+            book.at_attach.remove(&id);
+        }
+    }
+
     fn timing_has(&self, id: u64, name: &str) -> bool {
         self.timings.lock().unwrap().get_mut(id).is_some_and(|t| t.has(name))
     }
@@ -511,12 +539,17 @@ impl App {
     /// Watch, in the background, for the last of the kits' startup commands
     /// to end in `sb`, and note when on timeline `id`. `after_session`: wait
     /// first for the agent's session to start (a stopped sandbox runs only
-    /// then; a look before would start it). Each look is one `sbx exec`,
-    /// every [`WATCH_POLL`], for [`WATCH_FOR`] at most; their number and
-    /// cost go in the step's detail.
+    /// then; a look before would start it). Each look is an `sbx ls`, then
+    /// an `sbx exec` only while it runs, every [`WATCH_POLL`], for
+    /// [`WATCH_FOR`] at most; their number and cost go in the step's detail.
+    /// A sandbox found stopped, or stopped or removed by the daemon
+    /// ([`Self::timing_stop_watch`]), ends the watch: a measurement never
+    /// starts a sandbox.
     pub(crate) fn watch_kit_startups(self: &Arc<Self>, sb: SandboxRef, resolved: Vec<String>, id: u64, start: Instant, after_session: bool) {
         let (commands, marked) = self.startup_commands(&resolved);
         let app = self.clone();
+        let key = format!("{}/{}", sb.host, sb.name);
+        let cancel = Arc::new(tokio::sync::Notify::new());
         {
             let mut book = self.timings.lock().unwrap();
             let Some(t) = book.get_mut(id) else { return };
@@ -524,52 +557,76 @@ impl App {
                 return;
             }
             t.steps.push(Span { name: step::KIT_STARTUPS.into(), start_ms: start.elapsed().as_millis() as u64, ms: None, detail: None, unfinished: false });
+            book.watches.insert(key.clone(), cancel.clone());
         }
         tokio::spawn(async move {
-            if after_session {
-                let deadline = Instant::now() + SESSION_WAIT;
-                while !app.timing_has(id, step::AGENT_SESSION_START) && Instant::now() < deadline {
-                    tokio::time::sleep(WATCH_POLL.min(Duration::from_secs(1))).await;
-                }
-            }
-            let rec = Recorder::new(Instant::now());
-            let began = start.elapsed().as_millis() as u64;
-            let (outcome, finished) = if commands.is_empty() {
-                (Ok(()), "no kit startup commands".to_string())
-            } else if after_session && !app.timing_has(id, step::AGENT_SESSION_START) {
-                (Err(anyhow::anyhow!("not watched")), "not watched: the agent's session did not start".to_string())
-            } else {
-                let sink: sbxw_core::progress::Sink = Arc::new(|_| {});
-                let out = rec.scope(app.watch_startups(&sb, &commands, &marked, &sink)).await;
-                let looks = rec.count_since("exec", 0);
-                let cost: u64 = rec.calls().iter().map(|c| c.ms).sum();
-                let said = match &out {
-                    Ok(()) => format!("{} startup command(s) ended; {looks} look(s), {} of sbx exec", commands.len(), human(cost)),
-                    Err(e) => format!("not seen to end ({e:#}); {looks} look(s), {} of sbx exec", human(cost)),
-                };
-                (out, said)
+            // Dropped mid-look when the daemon stops or removes the sandbox
+            // (`timing_stop_watch`): the child `sbx` is killed with it.
+            let watched = app.clone();
+            let done = tokio::select! {
+                d = watched.kit_startups_watch(sb, commands, marked, id, start, after_session) => d,
+                _ = cancel.notified() => (Err(anyhow::Error::new(NotRunning)), "the daemon stopped or removed the sandbox before the startups ended".to_string(), start.elapsed().as_millis() as u64),
             };
-            let now = start.elapsed().as_millis() as u64;
             let mut book = app.timings.lock().unwrap();
-            let Some(t) = book.get_mut(id) else { return };
-            if let Some(s) = t.running(step::KIT_STARTUPS) {
-                s.start_ms = s.start_ms.max(began.min(now));
-                s.ms = Some(now.saturating_sub(s.start_ms));
-                s.detail = Some(finished.clone());
-                s.unfinished = outcome.is_err();
+            if book.watches.get(&key).is_some_and(|c| Arc::ptr_eq(c, &cancel)) {
+                book.watches.remove(&key);
             }
-            if outcome.is_ok() {
-                t.startups_ms = Some(now);
-                let who = match t.host.as_str() {
-                    "local" | "" => t.sandbox.clone(),
-                    h => format!("{h}:{}", t.sandbox),
-                };
-                tracing::info!("bring-up of '{who}': kit startups finished after {} ({finished})", human(now));
-            } else {
-                tracing::info!("bring-up of '{sb}': kit startups {finished}");
-            }
-            app.persist_timings(&book);
+            app.kit_startups_noted(&mut book, id, start, done);
         });
+    }
+
+    /// The watch itself: its outcome, what it says, and when it began
+    /// looking (milliseconds after the request).
+    async fn kit_startups_watch(self: &Arc<Self>, sb: SandboxRef, commands: Vec<String>, marked: Vec<String>, id: u64, start: Instant, after_session: bool) -> (anyhow::Result<()>, String, u64) {
+        let app = self;
+        if after_session {
+            let deadline = Instant::now() + SESSION_WAIT;
+            while !app.timing_has(id, step::AGENT_SESSION_START) && Instant::now() < deadline {
+                tokio::time::sleep(WATCH_POLL.min(Duration::from_secs(1))).await;
+            }
+        }
+        let rec = Recorder::new(Instant::now());
+        let began = start.elapsed().as_millis() as u64;
+        if commands.is_empty() {
+            return (Ok(()), "no kit startup commands".to_string(), began);
+        }
+        if after_session && !app.timing_has(id, step::AGENT_SESSION_START) {
+            return (Err(anyhow::anyhow!("not watched")), "not watched: the agent's session did not start".to_string(), began);
+        }
+        let sink: sbxw_core::progress::Sink = Arc::new(|_| {});
+        let out = rec.scope(app.watch_startups(&sb, &commands, &marked, &sink)).await;
+        let looks = rec.count_since("exec", 0);
+        let cost: u64 = rec.calls().iter().map(|c| c.ms).sum();
+        let said = match &out {
+            Ok(()) => format!("{} startup command(s) ended; {looks} look(s), {} of sbx calls", commands.len(), human(cost)),
+            Err(e) if e.downcast_ref::<NotRunning>().is_some() => format!("{e}; {looks} look(s), {} of sbx calls", human(cost)),
+            Err(e) => format!("not seen to end ({e:#}); {looks} look(s), {} of sbx calls", human(cost)),
+        };
+        (out, said, began)
+    }
+
+    /// Write a watch's end on timeline `id`, and its log line (info at most).
+    fn kit_startups_noted(&self, book: &mut Book, id: u64, start: Instant, (outcome, finished, began): (anyhow::Result<()>, String, u64)) {
+        let now = start.elapsed().as_millis() as u64;
+        let Some(t) = book.get_mut(id) else { return };
+        if let Some(s) = t.running(step::KIT_STARTUPS) {
+            s.start_ms = s.start_ms.max(began.min(now));
+            s.ms = Some(now.saturating_sub(s.start_ms));
+            s.detail = Some(finished.clone());
+            s.unfinished = outcome.is_err();
+        }
+        let who = match t.host.as_str() {
+            "local" | "" => t.sandbox.clone(),
+            h => format!("{h}:{}", t.sandbox),
+        };
+        match outcome {
+            Ok(()) => {
+                t.startups_ms = Some(now);
+                tracing::info!("bring-up of '{who}': kit startups finished after {} ({finished})", human(now));
+            }
+            Err(_) => tracing::info!("bring-up of '{who}': kit startups {finished}"),
+        }
+        self.persist_timings(book);
     }
 }
 

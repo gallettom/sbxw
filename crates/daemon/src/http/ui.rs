@@ -758,6 +758,8 @@ async fn recreate(State(app): S, Path(name): Path<String>) -> ApiResult {
 
 async fn stop(State(app): S, Path(name): Path<String>) -> ApiResult {
     let sb = sandbox(&name)?;
+    // The bring-up's kit-startup watch ends first: its next look would start it again.
+    app.timing_stop_watch(&sb);
     app.sbx_for(&sb).await?.stop(&sb.name).await?;
     // Its agent stopped with it: a later start is a new conversation.
     app.lead_gone(&sb);

@@ -281,3 +281,81 @@ async fn the_route_serves_them_newest_first() {
     assert_eq!(v["timelines"][0]["sandbox"], "second");
     assert_eq!(v["timelines"][1]["sandbox"], "first");
 }
+
+/// An sbx whose created sandboxes run until `stopped`, whose kit install is
+/// always seen running, and which counts each process listing that came
+/// after an `sbx ls` reported the sandbox stopped.
+fn stoppable() -> (impl Fn(&[String]) -> Output + Send + Sync + 'static, Arc<std::sync::atomic::AtomicBool>, Arc<std::sync::atomic::AtomicUsize>, Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
+    let stopped = Arc::new(AtomicBool::new(false));
+    let said_stopped = Arc::new(AtomicBool::new(false));
+    let looks = Arc::new(AtomicUsize::new(0));
+    let late = Arc::new(AtomicUsize::new(0));
+    let (st, ss, lk, lt) = (stopped.clone(), said_stopped.clone(), looks.clone(), late.clone());
+    let made = Mutex::new(Vec::<String>::new());
+    let answer = move |a: &[String]| {
+        let joined = a.join(" ");
+        match a.first().map(String::as_str) {
+            Some("create") => {
+                made.lock().unwrap().push(a[4].clone());
+                Output::ok("")
+            }
+            Some("ls") => {
+                let state = if st.load(SeqCst) { "stopped" } else { "running" };
+                if st.load(SeqCst) {
+                    ss.store(true, SeqCst);
+                }
+                testing::ls(&made.lock().unwrap().iter().map(|n| (n.as_str(), state)).collect::<Vec<_>>())
+            }
+            Some("rm") => Output::ok(r#"[{"action":"removed","name":"myapp"}]"#),
+            Some("exec") if joined.contains("/proc/") => {
+                lk.fetch_add(1, SeqCst);
+                if ss.load(SeqCst) {
+                    lt.fetch_add(1, SeqCst);
+                }
+                Output::ok("/sbin/init \nbash /k/install.sh \n")
+            }
+            _ => sbx_answer(a),
+        }
+    };
+    (answer, stopped, looks, late)
+}
+
+#[tokio::test]
+async fn a_sandbox_found_stopped_ends_the_startup_watch_without_another_look() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let d = tempfile::tempdir().unwrap();
+    let (answer, stopped, looks, late) = stoppable();
+    let (app, _) = app_in_with(d.path(), answer);
+    bring_up(&app, request(d.path(), Config { kits: vec![kit_with_startup(d.path())], ..bare() })).await.0.unwrap();
+    assert!(eventually(|| looks.load(SeqCst) >= 2).await, "the watch looks while it runs");
+    // Stopped outside the daemon (`sbx stop`, sbx's idle stop).
+    stopped.store(true, SeqCst);
+    assert!(eventually(|| app.timelines()[0].span(step::KIT_STARTUPS).is_some_and(|s| s.ms.is_some())).await);
+    let t = app.timelines().remove(0);
+    let s = t.span(step::KIT_STARTUPS).unwrap();
+    assert!(s.detail.as_deref().unwrap().starts_with("the sandbox stopped before the startups ended"), "{s:?}");
+    assert!(s.unfinished && t.startups_ms.is_none());
+    tokio::time::sleep(WATCH_POLL * 5).await;
+    assert_eq!(late.load(SeqCst), 0, "no sbx exec after sbx ls said stopped");
+}
+
+#[tokio::test]
+async fn the_daemons_own_remove_ends_the_startup_watch_at_once() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let d = tempfile::tempdir().unwrap();
+    // `ls` keeps saying running: only the cancel can end this watch.
+    let (answer, _, looks, _) = stoppable();
+    let (app, fake) = app_in_with(d.path(), answer);
+    bring_up(&app, request(d.path(), Config { kits: vec![kit_with_startup(d.path())], ..bare() })).await.0.unwrap();
+    let id = app.timelines()[0].id;
+    assert!(eventually(|| looks.load(SeqCst) >= 2).await);
+    app.remove(&[t_ref()]).await.unwrap();
+    let rm_at = fake.calls.lock().unwrap().iter().position(|c| c[0] == "rm").unwrap();
+    tokio::time::sleep(WATCH_POLL * 5).await;
+    let after: Vec<String> = fake.calls.lock().unwrap()[rm_at..].iter().map(|c| c.join(" ")).collect();
+    assert!(!after.iter().any(|c| c.starts_with("exec ")), "no look after the remove: {after:?}");
+    let t = app.timelines().into_iter().find(|t| t.id == id).unwrap();
+    let s = t.span(step::KIT_STARTUPS).unwrap();
+    assert!(s.detail.as_deref().unwrap().contains("stopped or removed"), "{s:?}");
+}

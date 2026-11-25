@@ -1342,6 +1342,14 @@ impl App {
         let mut seen = false;
         let mut shown = String::new();
         loop {
+            // A measurement never starts a sandbox: `sbx exec` would start a
+            // stopped one, so it runs only on one `sbx ls` (which cannot
+            // start it) has just seen running, and the watch ends quietly
+            // otherwise. A stop landing between the two calls is the window
+            // left; the daemon's own stop and remove cancel the watch first.
+            if matches!(watch, Watch::Measure) && !sbx.is_running(name).await {
+                return Err(anyhow::Error::new(timings::NotRunning));
+            }
             let out = sbx.exec(name, &["sh", "-c", templates::PROCESS_LIST], None).await?;
             if !out.success() {
                 bail!("could not list the sandbox's processes: {}", String::from_utf8_lossy(&out.stderr).trim());
@@ -1870,6 +1878,29 @@ mod tests {
         assert_eq!(kept.len(), 3, "{kept:?}");
         assert!(kept.contains(&"sbxw-auto:lately".to_string()) && kept.contains(&"sbxw-auto:before".to_string()), "{kept:?}");
         assert!(!fake.log().iter().any(|c| c == "template rm sbxw-auto:before"), "a record with no last use starts its clock");
+    }
+
+    #[tokio::test]
+    async fn the_snapshot_wait_still_looks_without_asking_whether_it_runs() {
+        // Only the measurement checks `sbx ls` first; the wait before a
+        // snapshot is as it was: it looks, whatever `ls` would say.
+        let (_dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("myapp", "stopped")]),
+            Some("exec") => Output::ok("/sbin/init \n"),
+            _ => sbx_answer(a),
+        });
+        let sink: Sink = Arc::new(|_| {});
+        let run = Run { sink: &sink, warnings: vec![] };
+        let sb = SandboxRef::parse("myapp").unwrap();
+        app.wait_for_startups(&sb, &["bash /k/install.sh".to_string()], &[], &run).await.unwrap();
+        let log = fake.log();
+        assert!(log.iter().filter(|c| c.contains("/proc/")).count() >= 2, "{log:?}");
+        assert!(!log.iter().any(|c| c.starts_with("ls")), "{log:?}");
+        // The measurement asks first, and does not look at a stopped one.
+        let err = app.watch_startups(&sb, &["bash /k/install.sh".to_string()], &[], &sink).await.unwrap_err();
+        assert!(err.downcast_ref::<timings::NotRunning>().is_some(), "{err:#}");
+        let after = fake.log();
+        assert_eq!(after.iter().filter(|c| c.contains("/proc/")).count(), log.iter().filter(|c| c.contains("/proc/")).count());
     }
 
     #[tokio::test]
