@@ -18,7 +18,7 @@
 //
 //   node relay.js ask "question…" [--timeout 90]
 //   node relay.js shot "what you need to see…" [--timeout 90]   (one or more images back)
-//   node relay.js wait <id> [--timeout 90]
+//   node relay.js wait <id> [--timeout 90] [--part N]
 //   node relay.js show <id>        (read a question a human routed to you)
 //   node relay.js reply <id> "answer…" | --stdin
 //
@@ -26,6 +26,13 @@
 // after `--timeout` seconds with the request still open — a bounded call rather
 // than an agent's tool blocking for as long as a human takes to look. The id it
 // prints is how the same request is picked up again later with `wait`.
+//
+// Opening and waiting are two calls (`/api/relay/open`, then `/api/relay/wait`):
+// the id is known before the long wait, so a wait that fails still names the
+// request, and the open carries a key made for this one call, so a retried
+// open is the same request, not a second one. Once the outcome is written out,
+// `/api/relay/ack` tells sbxw it arrived; one never acknowledged is handed to
+// the asking session another way.
 //
 // A released screenshot arrives as base64 in the JSON — one image or several,
 // since a person answering "how does it look?" often has a before and an after
@@ -93,7 +100,7 @@ function usage(msg) {
     "usage:\n" +
       "  node relay.js ask <question> [--timeout <seconds>]\n" +
       "  node relay.js shot <what you need to see> [--timeout <seconds>]\n" +
-      "  node relay.js wait <request-id> [--timeout <seconds>]\n" +
+      "  node relay.js wait <request-id> [--timeout <seconds>] [--part <n>]\n" +
       "  node relay.js show <request-id>\n" +
       "  node relay.js reply <request-id> (<answer> | --stdin)\n",
   );
@@ -110,8 +117,27 @@ function takeTimeout(args, max = MAX_TIMEOUT) {
   return Math.min(raw, max);
 }
 
-function request(path, body, timeoutMs) {
+/// Pull `--part <n>` out of `args`: which part of a long answer to read.
+function takePart(args) {
+  const i = args.indexOf("--part");
+  if (i < 0) return undefined;
+  const raw = parseInt(args[i + 1], 10);
+  args.splice(i, 2);
+  if (!Number.isFinite(raw) || raw <= 0) usage("--part wants a positive number");
+  return raw;
+}
+
+/// POST `body` to the daemon. `signal` (an AbortSignal) abandons the call:
+/// the promise rejects with `aborted` set. A refusal by the daemon rejects
+/// with `refused` set, so a caller can tell it from not reaching sbxw.
+function request(path, body, timeoutMs, signal) {
   return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) {
+      const e = new Error("cancelled");
+      e.aborted = true;
+      reject(e);
+      return;
+    }
     const payload = Buffer.from(JSON.stringify(body));
     const req = http.request(
       {
@@ -138,21 +164,38 @@ function request(path, body, timeoutMs) {
             return;
           }
           if (parsed && parsed.ok === false) {
-            reject(new Error(parsed.error || `sbxw refused the call (HTTP ${res.statusCode})`));
+            const e = new Error(parsed.error || `sbxw refused the call (HTTP ${res.statusCode})`);
+            e.refused = true;
+            reject(e);
             return;
           }
           resolve(parsed);
         });
       },
     );
-    req.on("error", (e) =>
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      req.destroy();
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    req.on("close", () => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+    });
+    req.on("error", (e) => {
+      if (aborted) {
+        const c = new Error("cancelled");
+        c.aborted = true;
+        reject(c);
+        return;
+      }
       reject(
         new Error(
           `cannot reach the sbxw daemon at ${HOST}:${PORT} (${e && e.message}). ` +
             "It runs on the host as `sbxw web`; this sandbox is allowed to reach it by network policy.",
         ),
-      ),
-    );
+      );
+    });
     req.on("timeout", () => {
       req.destroy();
       reject(new Error("the sbxw daemon did not answer in time"));
@@ -160,6 +203,58 @@ function request(path, body, timeoutMs) {
     req.write(payload);
     req.end();
   });
+}
+
+/// A key for one call: a retried open with it is the same request.
+function clientKey() {
+  try {
+    return require("crypto").randomUUID();
+  } catch (_) {
+    return `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/// Open a request and answer it as it stands (its id at once). Retried on a
+/// failure to reach sbxw, with the same key, so a lost reply does not open a
+/// second request; a refusal is final.
+async function openRequest(kind, question, threadName, signal) {
+  const body = { kind, thread: threadName || "", question, client_key: clientKey() };
+  let last;
+  for (let i = 0; i < 3; i++) {
+    try {
+      return await request("/api/relay/open", body, 15000, signal);
+    } catch (e) {
+      if (e.aborted || e.refused) throw e;
+      last = e;
+      await sleep(400 * (i + 1));
+    }
+  }
+  throw last;
+}
+
+/// Wait on request `id` (only the session that opened it may).
+function waitRequest(id, timeout, threadName, part, signal) {
+  return request("/api/relay/wait", { id, thread: threadName || "", timeout, ack: true, part }, (timeout + 10) * 1000, signal);
+}
+
+/// Tell sbxw the outcome of `id` was written out. Never fatal.
+function ackRequest(id, threadName) {
+  return request("/api/relay/ack", { id, thread: threadName || "" }, 10000).catch((e) => {
+    process.stderr.write(`sbxw relay: could not confirm receipt of ${id}: ${(e && e.message) || e}\n`);
+  });
+}
+
+const isFinal = (res) => !!res && (res.state === "approved" || res.state === "denied");
+
+/// What a failed wait leaves the agent: the id, and how to pick it up.
+function waitFailed(id, e, howToWait) {
+  const again = howToWait || `run \`node ~/.sbxw/relay.js wait ${id}\``;
+  return (
+    `Request ${id} is open, but waiting for it failed: ${(e && e.message) || e}.\n` +
+    `Do not ask again: ${again} to pick it up.\n`
+  );
 }
 
 function readStdin() {
@@ -222,6 +317,16 @@ function describeOutcome(res, howToWait, shotPaths) {
   const again = howToWait || `run \`node ~/.sbxw/relay.js wait ${id}\``;
   const capitalised = `${again[0].toUpperCase()}${again.slice(1)}`;
   const caption = res.answer ? `\n\nThey added: ${res.answer}\n` : "\n";
+  // A long answer comes in parts: say which this is and how to read the next,
+  // so nothing is lost to a cut.
+  const parts = Number(res.answer_parts) || 1;
+  const part = Number(res.answer_part) || 1;
+  const more =
+    parts > 1 && part < parts
+      ? `\n[This answer is in ${parts} parts; this is part ${part}. Read the next with ` +
+        (howToWait ? `${howToWait} and part ${part + 1}` : `\`node ~/.sbxw/relay.js wait ${id} --part ${part + 1}\``) +
+        ".]\n"
+      : "";
   switch (res.state) {
     case "approved":
       if (images) {
@@ -257,9 +362,11 @@ function describeOutcome(res, howToWait, shotPaths) {
       return (
         `Answer to request ${id}, released by the human` +
         (res.to ? ` and written by sandbox "${res.to}"` : "") +
+        (parts > 1 ? ` (part ${part} of ${parts})` : "") +
         ":\n\n" +
         res.answer +
-        "\n"
+        "\n" +
+        more
       );
     case "denied":
       if (shot) {
@@ -303,6 +410,22 @@ function collect(res, howToWait) {
   return { shotPaths, text: describeOutcome(res, howToWait, shotPaths) };
 }
 
+/// Wait, print what came of it, and confirm receipt once it is written.
+async function waitAndPrint(id, timeout, part) {
+  let res;
+  try {
+    res = await waitRequest(id, timeout, thread, part);
+  } catch (e) {
+    if (e.refused) throw e;
+    process.stdout.write(waitFailed(id, e));
+    process.exitCode = 1;
+    return;
+  }
+  const text = collect(res).text;
+  await new Promise((r) => process.stdout.write(text, r));
+  if (isFinal(res)) await ackRequest(id, thread);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const verb = args.shift();
@@ -312,21 +435,17 @@ async function main() {
     const timeout = takeTimeout(args, verb === "shot" ? SHOT_MAX_TIMEOUT : MAX_TIMEOUT);
     const question = args.join(" ").trim();
     if (!question) usage(verb === "shot" ? "say what you need to see" : "nothing to ask");
-    const res = await request(
-      verb === "shot" ? "/api/relay/shot" : "/api/relay/ask",
-      { from: me, thread, question, timeout },
-      (timeout + 10) * 1000,
-    );
-    process.stdout.write(collect(res).text);
+    const opened = await openRequest(verb === "shot" ? "screenshot" : "question", question, thread);
+    await waitAndPrint(opened.id, timeout, undefined);
     return;
   }
 
   if (verb === "wait") {
     const timeout = takeTimeout(args);
+    const part = takePart(args);
     const id = (args.shift() || "").trim();
     if (!id) usage("which request?");
-    const res = await request("/api/relay/wait", { from: me, id, timeout }, (timeout + 10) * 1000);
-    process.stdout.write(collect(res).text);
+    await waitAndPrint(id, timeout, part);
     return;
   }
 
@@ -370,6 +489,11 @@ if (require.main === module) {
 
 module.exports = {
   request,
+  openRequest,
+  waitRequest,
+  ackRequest,
+  waitFailed,
+  isFinal,
   collect,
   describeOutcome,
   me,
