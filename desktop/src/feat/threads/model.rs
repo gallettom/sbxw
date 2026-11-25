@@ -250,18 +250,53 @@ pub fn sessions(data: &J, sandbox: &str) -> Vec<Session> {
     out
 }
 
-/// Sandboxes whose main session leads: made lead (`/api/leads`), or leading
-/// a plan that waits on a person or has a thread still at work (plans.js,
-/// `isLeading`).
-pub fn leading(data: &J, sandbox: &str) -> bool {
-    if data["leads"].as_array().is_some_and(|l| l.iter().any(|n| n == sandbox)) {
-        return true;
+/// Where the main session of `sandbox` stands as lead, as the daemon says:
+/// `leading` (it took the role), `waiting` (the agent is busy: lead mode
+/// starts once it is idle), `activating` (`/lead` typed, the session has not
+/// confirmed yet) or `off`. From `GET /api/lead-states` (`data.lead_states`:
+/// `{ "<sandbox>": { state, since_ms, reason } }`, a sandbox absent is off);
+/// before it is read (or from a daemon without the route), `GET /api/leads`
+/// (`data.leads`, the sandboxes that really lead).
+pub fn lead_state(data: &J, sandbox: &str) -> &'static str {
+    if let Some(states) = data["lead_states"].as_object() {
+        return match states.get(sandbox).and_then(|s| s["state"].as_str()) {
+            Some("leading") => "leading",
+            Some("waiting") => "waiting",
+            Some("activating") => "activating",
+            _ => "off",
+        };
     }
+    if data["leads"].as_array().is_some_and(|l| l.iter().any(|n| n == sandbox)) {
+        "leading"
+    } else {
+        "off"
+    }
+}
+
+/// The main session of `sandbox` really leads: "Team on" in the pane bar,
+/// the Threads panel and the Leads only filter (`App::leaders`). A plan
+/// under way is not enough ([`team_state`] calls that "unled").
+pub fn leading(data: &J, sandbox: &str) -> bool {
+    lead_state(data, sandbox) == "leading"
+}
+
+/// A plan of `sandbox` waits for the person, or has a thread still at work.
+pub fn plan_under_way(data: &J, sandbox: &str) -> bool {
     data["plans"].as_array().into_iter().flatten().any(|p| {
         p["sandbox"] == sandbox
             && p["closed"] != true
             && (p["state"] == "pending" || (p["state"] == "approved" && p["threads"].as_array().is_some_and(|t| t.iter().any(|t| t["state"] != "done" && t["state"] != "failed"))))
     })
+}
+
+/// What the team controls draw for `sandbox`: [`lead_state`], or `unled`
+/// when it is off while a plan is under way (the plan has no lead: "Resume
+/// lead" gives it one).
+pub fn team_state(data: &J, sandbox: &str) -> &'static str {
+    match lead_state(data, sandbox) {
+        "off" if plan_under_way(data, sandbox) => "unled",
+        s => s,
+    }
 }
 
 pub fn plan<'a>(data: &'a J, id: &str) -> Option<&'a J> {

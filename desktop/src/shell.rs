@@ -250,7 +250,7 @@ pub struct App {
     pub grid_saved: Option<Vec<pages::Page>>,
     /// The team leads view while it shows, with the layout it replaced (leads.rs).
     pub leads: Option<leads::LeadsView>,
-    /// Lead Mode was on when the app last quit: it comes back once the
+    /// Leads only was on when the app last quit: it comes back once the
     /// layout is restored and the teams are read (leads.rs).
     pub leads_restore: bool,
     /// The last pane id given.
@@ -785,7 +785,7 @@ impl App {
         data["app"]["covered_top"] = self.covered_top().into();
         data["app"]["dictation"] = self.dictation_data();
         // The team leads view (leads.rs), which Sessions filters by too.
-        // `can`: a team runs (Lead Mode can go on); `leaders` while it is on.
+        // `can`: a team runs (Leads only can go on); `leaders` while it is on.
         let leaders = self.leaders();
         data["app"]["leads"] = if self.leads_on() { serde_json::json!({ "on": true, "can": true, "leaders": leaders }) } else { serde_json::json!({ "on": false, "can": !leaders.is_empty() }) };
         data
@@ -1187,10 +1187,9 @@ impl App {
             self.restore_layout();
             changed = true;
         }
-        // Lead Mode of the last run, once the layout is back and the teams are
-        // read: both lists, since a team is known by either (`leading`), and
-        // they arrive on threads of their own in any order.
-        if self.leads_restore && self.restore.is_none() && self.listed && self.feats.data.contains_key("leads") && self.feats.data.contains_key("plans") {
+        // Leads only of the last run, once the layout is back and the leads
+        // are read (`leading`: the lead states, else the leads list).
+        if self.leads_restore && self.restore.is_none() && self.listed && (self.feats.data.contains_key("leads") || self.feats.data.contains_key("lead_states")) {
             self.leads_restore = false;
             if !self.leads_on() && !self.leaders().is_empty() {
                 self.toggle_leads();
@@ -1870,7 +1869,7 @@ impl App {
             }
             self.refocus = true;
         }
-        // Lead Mode keeps the other panes parked, and the layout to come back
+        // Leads only keeps the other panes parked, and the layout to come back
         // to: a closed thread's go from there too, or leaving the view would
         // open a dead terminal for it.
         if let Some(mut v) = self.leads.take() {
@@ -3084,7 +3083,7 @@ impl App {
     }
 
     /// Whether `p`'s session leads a team: the main session of a running
-    /// sandbox in `leaders()` (shell/leads.rs), never a thread; Lead Mode on or off.
+    /// sandbox in `leaders()` (shell/leads.rs), never a thread; Leads only on or off.
     pub fn pane_leads(&self, p: &Pane) -> bool {
         p.thread.is_none() && p.sandbox.as_ref().is_some_and(|sb| self.leaders().contains(sb))
     }
@@ -3730,10 +3729,26 @@ fn name_pill<S: WinSide>(s: &App, i: usize, label: &str, team: Option<&bar::Team
     };
     let pad = bar::name_pad(Some(t), leads);
     let mut b = row().key(format!("pane-{n}-name")).gap(bar::CHIP_GAP).px(bar::CHIP_PX).h(layout::DENSE_H).items_center().min_w(name_min + pad).shrink().radius(theme::radius("xs").unwrap());
-    b = if on { b.fill(theme::hex(purple_tint)).child(mark()) } else { b.border(1.0, theme::hex(theme::over(theme::color_value("text").unwrap(), 0.18, ground))).child(off_mark()) };
+    // An in-between state (waiting for idle, starting, a plan without a
+    // lead): outlined in its tone, the icon and the word after the name in
+    // it, under `pane-<n>-team-word`.
+    let word = t.word.as_ref().map(|w| {
+        let (ink, _) = crate::screen::tone(&t.tone);
+        text(w.clone()).key(format!("pane-{n}-team-word")).font(small(bar::CHIP_TEXT, 500.0)).color(theme::hex(ink))
+    });
+    b = if on {
+        b.fill(theme::hex(purple_tint)).child(mark())
+    } else if word.is_some() {
+        let (ink, tint) = crate::screen::tone(&t.tone);
+        let icon = el().key(format!("pane-{n}-team-icon")).w(LEADER_MARK).h(LEADER_MARK).child(rune::icon(crate::icons::get("leader").unwrap(), LEADER_MARK).color(theme::hex(ink)));
+        b.fill(theme::hex(tint)).border(1.0, theme::hex(ink)).child(icon)
+    } else {
+        b.border(1.0, theme::hex(theme::over(theme::color_value("text").unwrap(), 0.18, ground))).child(off_mark())
+    };
     let hover = if on { c("active-bg") } else { c("elevated") };
     let (intent, args) = t.intent.clone();
     b.child(name)
+        .children(word)
         .role("button")
         .label(bar::name_label(label, t))
         .help(bar::name_help(label, t))

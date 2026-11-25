@@ -333,6 +333,13 @@ pub struct TeamToggle {
     /// Team mode is on: the purple pill with the leader icon; pressing it ends it.
     pub on: bool,
     pub intent: (String, J),
+    /// An in-between state, said after the name in its tone: "waits for
+    /// idle" or "starting" (a press cancels), "Plan without lead" (a press
+    /// resumes the lead). None: plainly on or off.
+    pub word: Option<String>,
+    pub tone: String,
+    /// The feature's words for it (the tooltip, after the name).
+    pub help: String,
 }
 
 /// The intent that ends team mode: the toggle is on while it is the one offered.
@@ -345,7 +352,13 @@ pub fn take_team(items: &mut Vec<Item>) -> Option<TeamToggle> {
     // One toggle per name, whatever a feature emitted.
     items.retain(|i| i.id != "lead");
     let intent = it.intent?;
-    Some(TeamToggle { on: intent.0 == LEAD_END, intent })
+    let word = (it.label != crate::feat::threads::TEAM_ON && it.label != crate::feat::threads::TEAM_OFF).then(|| it.label.clone());
+    Some(TeamToggle { on: intent.0 == LEAD_END && word.is_none(), intent, word, tone: it.tone, help: it.help })
+}
+
+/// The in-between word's width in the pill, with its gap (none: 0).
+pub fn team_word_w(team: &TeamToggle) -> f32 {
+    team.word.as_deref().map_or(0.0, |w| CHIP_GAP + measure(w, CHIP_TEXT, 500.0))
 }
 
 /// What the name pill adds around the name: its padding, and the leader
@@ -353,7 +366,7 @@ pub fn take_team(items: &mut Vec<Item>) -> Option<TeamToggle> {
 /// leader mark and its gap when `leads`, else nothing.
 pub fn name_pad(team: Option<&TeamToggle>, leads: bool) -> f32 {
     match team {
-        Some(_) => CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP,
+        Some(t) => CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP + team_word_w(t),
         None if leads => CHIP_ICON + PANE_GAP,
         None => 0.0,
     }
@@ -361,12 +374,17 @@ pub fn name_pad(team: Option<&TeamToggle>, leads: bool) -> f32 {
 
 /// The name pill's accessible name: the sandbox and the team state.
 pub fn name_label(name: &str, team: &TeamToggle) -> String {
-    format!("{name}, team mode {}", if team.on { "on" } else { "off" })
+    match &team.word {
+        Some(w) => format!("{name}, team mode: {w}"),
+        None => format!("{name}, team mode {}", if team.on { "on" } else { "off" }),
+    }
 }
 
 /// The name pill's tooltip: the whole name (it may be cut), then what a press does.
 pub fn name_help(name: &str, team: &TeamToggle) -> String {
-    if team.on {
+    if team.word.is_some() {
+        format!("{name}. {}", team.help)
+    } else if team.on {
         format!("{name}. Team mode is on: press to turn it off")
     } else {
         format!("{name}. Team mode is off: press to turn it on (this session plans the work into threads, you approve the plan, it follows them)")
@@ -476,7 +494,7 @@ pub fn state_w(word: &str) -> f32 {
 }
 
 /// The modes at the top bar's left (topbar.luau `modes`): the GUI | TUI
-/// switch (switch.rs: one track, two equal slots), 8, the Lead Mode
+/// switch (switch.rs: one track, two equal slots), 8, the Leads only
 /// button, 8, the Kanban button. Compact (a narrow window): icons alone,
 /// their words in the tooltips. The Kanban's width is the same lit or not.
 pub fn modes_w(compact: bool, lead_on: bool) -> f32 {
@@ -489,9 +507,9 @@ pub fn modes_w(compact: bool, lead_on: bool) -> f32 {
     switch + 8.0 + b(lead) + 8.0 + b(kanban)
 }
 
-/// Lead Mode's words (topbar.luau draws the same).
-pub const LEAD_ON: &str = "Lead Mode On";
-pub const LEAD_OFF: &str = "Lead Mode Off";
+/// Leads only's words (topbar.luau draws the same).
+pub const LEAD_ON: &str = "Leads only";
+pub const LEAD_OFF: &str = "Leads only";
 /// The Kanban button's word (topbar.luau draws the same).
 pub const KANBAN: &str = "Kanban";
 
@@ -529,7 +547,7 @@ impl TopExtra {
 /// the element draws it (tested against the laid out bar).
 pub fn top_fit(width: f32, jarvis: Option<&str>, state_word: &str, lead_on: bool, extras: &[TopExtra]) -> (bool, usize) {
     // The sbxw mark (topbar.luau, `app-mark`): the prompt (15) and the cursor (11), 2 apart;
-    // then, 12 after it, the modes (the GUI | TUI switch, Lead Mode and the Kanban).
+    // then, 12 after it, the modes (the GUI | TUI switch, Leads only and the Kanban).
     let left = |compact: bool| if compact { modes_w(true, lead_on) } else { 28.0 + 12.0 + modes_w(false, lead_on) };
     // left, spacer, centre, spacer, right: four gaps; inside the right group
     // Jarvis and the state, and the gap before Jarvis when a tool precedes it.
@@ -839,6 +857,32 @@ mod tests {
         // Off: the pill's padding, no icon; on: the icon and its gap too.
         assert_eq!(name_pad(Some(&t), false), CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP, "off: the muted icon too");
         assert_eq!(name_pad(Some(&TeamToggle { on: true, ..t }), true), CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP);
+    }
+
+    /// The in-between states: the pill says its word after the name, in
+    /// its tone, wider by that word; a press runs the feature's intent
+    /// (cancel, or resume the lead), never "on".
+    #[test]
+    fn an_in_between_lead_state_says_its_word_in_the_pill() {
+        use crate::feat::threads::{TEAM_STARTING, TEAM_UNLED, TEAM_WAITING};
+        for (word, intent) in [(TEAM_WAITING, "lead_cancel"), (TEAM_STARTING, "lead_cancel"), (TEAM_UNLED, "lead_start")] {
+            let mut items = main_bar(None);
+            let mut it = act("lead", word, "blue", None, intent);
+            it.help = "Why it waits".into();
+            items.push(it);
+            let f = pane_fit(1400.0, "sbxw-2", Some("Claude"), items, true, false);
+            let t = f.team.expect("the name pill carries it");
+            assert!(!t.on, "{word}: not on");
+            assert_eq!((t.word.as_deref(), t.intent.0.as_str(), t.tone.as_str()), (Some(word), intent, "blue"));
+            assert_eq!(name_label("sbxw-2", &t), format!("sbxw-2, team mode: {word}"));
+            assert_eq!(name_help("sbxw-2", &t), "sbxw-2. Why it waits");
+            assert!(name_pad(Some(&t), false) > CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP, "{word}: room for the word");
+        }
+        // "Team on" and "Team" carry no word.
+        for on in [true, false] {
+            let f = pane_fit(1400.0, "sbxw-2", Some("Claude"), main_bar(Some(on)), true, on);
+            assert_eq!(f.team.unwrap().word, None);
+        }
     }
 
     /// A thread's pane: no team toggle (the feature emits none: threads

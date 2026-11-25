@@ -660,3 +660,138 @@ fn the_standin_abandons_as_the_daemon_does() {
     assert!(v["error"].as_str().unwrap().contains("already abandoned"));
     assert!(run(&d, "plan_merge", json!({ "id": "p-1" })).is_err(), "Merge is not offered on it");
 }
+
+// ---------------------------------------------------------------------------
+// The lead state: "Team on" only for a session that really leads
+
+/// The main session's `lead` extra on web-app.
+fn lead_pill(data: &J) -> Extra {
+    let main = Place::Session { sandbox: "web-app".into(), thread: None };
+    extras(&Ctx { data }).into_iter().find(|e| e.place == main && e.id == "lead").expect("a lead extra")
+}
+
+#[test]
+fn a_plan_under_way_with_no_lead_is_not_team_on() {
+    // An approved plan with threads at work, the daemon lists no lead.
+    let mut d = fixture("plan-approved");
+    d["leads"] = json!([]);
+    d["lead_states"] = json!({});
+    assert!(model::plan_under_way(&d, "web-app"));
+    assert!(!model::leading(&d, "web-app"));
+    let e = lead_pill(&d);
+    assert_eq!((e.label.as_str(), e.tone.as_str()), (TEAM_UNLED, "amber"), "{e:?}");
+    assert_eq!(e.intent, Some(("lead_start".into(), json!({ "sandbox": "web-app" }))), "Resume lead posts what Team posts");
+    assert_eq!(view(&Ctx { data: &d })["web-app"]["lead"], "unled");
+    assert_eq!(view(&Ctx { data: &d })["web-app"]["leading"], false);
+    // A pending plan, no lead: the same.
+    let mut d = fixture("plan-pending");
+    d["leads"] = json!([]);
+    assert_eq!(lead_pill(&d).label, TEAM_UNLED);
+    // Resume lead is the Team button's very call.
+    let acts = run(&d, "lead_start", json!({ "sandbox": "web-app" })).unwrap();
+    assert!(matches!(&acts[..], [Action::Call(c)] if c.path == "/api/sandboxes/web-app/lead" && c.then.contains(&"lead_states".to_string())), "{acts:?}");
+}
+
+#[test]
+fn each_lead_state_draws_its_own_pill() {
+    let mut d = fixture("basic");
+    let mut seen = vec![];
+    for (state, label, tone, intent) in [
+        ("leading", TEAM_ON, "purple", "lead_end"),
+        ("waiting", TEAM_WAITING, "blue", "lead_cancel"),
+        ("activating", TEAM_STARTING, "blue", "lead_cancel"),
+        ("off", TEAM_OFF, "muted", "lead_start"),
+    ] {
+        d["lead_states"] = if state == "off" { json!({}) } else { json!({ "web-app": { "state": state, "since_ms": 1 } }) };
+        let e = lead_pill(&d);
+        assert_eq!((e.label.as_str(), e.tone.as_str(), e.intent.as_ref().map(|i| i.0.as_str())), (label, tone, Some(intent)), "{state}");
+        assert_eq!(view(&Ctx { data: &d })["web-app"]["lead"], state);
+        seen.push((e.label, e.help));
+    }
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 4, "four looks, four texts");
+    // The in-between states say what they wait for.
+    d["lead_states"] = json!({ "web-app": { "state": "waiting" } });
+    assert!(lead_pill(&d).help.contains("busy: lead mode starts when it is idle"));
+    d["lead_states"] = json!({ "web-app": { "state": "activating" } });
+    assert!(lead_pill(&d).help.contains("Lead mode is starting"));
+    // The lead states decide over the leads list once read.
+    d["leads"] = json!(["web-app"]);
+    assert_eq!(lead_pill(&d).label, TEAM_STARTING);
+    // Not read yet (an older daemon): the leads list stands in.
+    d.as_object_mut().unwrap().remove("lead_states");
+    assert_eq!(lead_pill(&d).label, TEAM_ON);
+}
+
+#[test]
+fn a_lead_end_or_a_session_event_clears_a_stale_team_on() {
+    // Both reads follow the drop events and the session event.
+    for key in ["leads", "lead_states"] {
+        let d = DATA.iter().find(|d| d.key == key).unwrap();
+        for ev in ["lead", "lead-end", "session"] {
+            assert!(d.on.contains(&ev), "{key} is read again on {ev}");
+        }
+        assert!(!d.lazy, "{key} is read at every connection");
+    }
+    // On, then the daemon drops the lead (its terminal died): the next read
+    // has no entry, and the pill says Team, not Team on.
+    let mut d = fixture("basic");
+    let r = answer_from(&mut d, "POST", "/api/sandboxes/web-app/lead", &json!({}), &mut |_, _| {});
+    assert_eq!(r.0, 200);
+    let (_, states) = answer_from(&mut d, "GET", "/api/lead-states", &J::Null, &mut |_, _| {});
+    assert_eq!(states["web-app"]["state"], "leading");
+    d["lead_states"] = states;
+    assert_eq!(lead_pill(&d).label, TEAM_ON);
+    let old = d["lead_states"].clone();
+    d["lead_states"] = json!({});
+    d["leads"] = json!([]);
+    assert_eq!(lead_pill(&d).label, TEAM_OFF);
+    // Dropped without a reason: no notice (the person may have ended it).
+    let acts = on_data(&Ctx { data: &d }, "lead_states", &old, &d["lead_states"]);
+    assert!(!acts.iter().any(|a| matches!(a, Action::Notice { .. })), "{acts:?}");
+}
+
+#[test]
+fn a_lead_that_falls_back_to_off_says_its_reason_once() {
+    let d = fixture("basic");
+    let old = json!({ "web-app": { "state": "activating", "since_ms": 1 } });
+    let new = json!({ "web-app": { "state": "off", "reason": "the session did not confirm in time" } });
+    let acts = on_data(&Ctx { data: &d }, "lead_states", &old, &new);
+    let said: Vec<&str> = acts.iter().filter_map(|a| if let Action::Notice { text, .. } = a { Some(text.as_str()) } else { None }).collect();
+    assert_eq!(said, ["Team mode for web-app did not start: the session did not confirm in time"]);
+    // The next read finds it off already: nothing again.
+    assert!(!on_data(&Ctx { data: &d }, "lead_states", &new, &new).iter().any(|a| matches!(a, Action::Notice { .. })));
+    // The first read: nothing either.
+    assert!(!on_data(&Ctx { data: &d }, "lead_states", &J::Null, &new).iter().any(|a| matches!(a, Action::Notice { .. })));
+    // A lead that ended with a reason.
+    let acts = on_data(&Ctx { data: &d }, "lead_states", &json!({ "web-app": { "state": "leading" } }), &json!({ "web-app": { "reason": "its terminal closed" } }));
+    assert!(acts.iter().any(|a| matches!(a, Action::Notice { text, .. } if text == "Team mode for web-app ended: its terminal closed")), "{acts:?}");
+}
+
+#[test]
+fn cancel_calls_the_cancel_route() {
+    let d = fixture("basic");
+    let acts = run(&d, "lead_cancel", json!({ "sandbox": "web-app" })).unwrap();
+    let [Action::Call(c)] = &acts[..] else { panic!("{acts:?}") };
+    assert_eq!((c.method.clone(), c.path.as_str()), (crate::feat::Method::Post, "/api/sandboxes/web-app/lead/cancel"));
+    assert!(c.then.contains(&"lead_states".to_string()) && c.then.contains(&"leads".to_string()));
+    let ok = on_answer(&Ctx { data: &d }, c, Ok((200, json!({ "ok": true }))));
+    assert!(ok.iter().any(|a| matches!(a, Action::Notice { text, .. } if text == "Team mode for web-app cancelled")), "{ok:?}");
+    // The stand-in, as the daemon: waiting, cancelled, off.
+    let mut s = fixture("basic");
+    s["standin_lead_state"] = json!("waiting");
+    let mut ev = vec![];
+    answer_from(&mut s, "POST", "/api/sandboxes/web-app/lead", &json!({}), &mut |n, _| ev.push(n.to_string()));
+    assert_eq!(s["lead_states"]["web-app"]["state"], "waiting");
+    let mut d2 = d.clone();
+    d2["lead_states"] = s["lead_states"].clone();
+    assert_eq!(lead_pill(&d2).label, TEAM_WAITING);
+    let (code, _) = answer_from(&mut s, "POST", "/api/sandboxes/web-app/lead/cancel", &json!({}), &mut |n, _| ev.push(n.to_string()));
+    assert_eq!(code, 200);
+    assert!(s["lead_states"]["web-app"].is_null());
+    assert_eq!(ev, ["lead", "lead-end"]);
+    // Nothing to cancel: refused.
+    let (code, _) = answer_from(&mut s, "POST", "/api/sandboxes/web-app/lead/cancel", &json!({}), &mut |_, _| {});
+    assert_eq!(code, 409);
+}
