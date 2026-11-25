@@ -41,6 +41,8 @@ pub fn ui_routes() -> Router<Arc<App>> {
     Router::new()
         .route("/api/canvas", get(list).post(create))
         .route("/api/canvas/delete", post(delete))
+        .route("/api/canvas/ask", post(ask))
+        .route("/api/canvas/:id/ask/cancel", post(ask_cancel))
         .route("/api/canvas/:id", get(manifest))
         .route("/api/canvas/:id/images/:file", get(image))
         .route("/api/canvas/:id/rename", post(rename))
@@ -170,6 +172,59 @@ async fn create(State(app): S, Json(b): Json<CreateBody>) -> ApiResult {
     let sb = SandboxRef::parse(&b.sandbox)?;
     let c = app.canvas_create(&sb, if b.title.trim().is_empty() { "Review" } else { &b.title })?;
     Ok(ok_with(json!({ "canvas": c })))
+}
+
+#[derive(Deserialize)]
+struct AskBody {
+    /// The canvas asked from; none: a new one for `sandbox`.
+    #[serde(default)]
+    canvas: Option<String>,
+    sandbox: String,
+    #[serde(default)]
+    thread: Option<String>,
+    text: String,
+}
+
+/// The person asks a session for screenshots from a canvas: the prompt (with
+/// the canvas's id under it) is typed into the session, then the canvas waits
+/// for the shots and takes the agent's unnamed ones (`canvas_agent_add`).
+async fn ask(State(app): S, Json(b): Json<AskBody>) -> ApiResult {
+    let sb = SandboxRef::parse(&b.sandbox)?;
+    let thread = b.thread.filter(|t| !t.trim().is_empty()).map(|t| sbxw_core::ThreadName::parse(&t)).transpose()?;
+    let text = b.text.trim();
+    if text.is_empty() {
+        return Err(ApiError::bad("empty prompt"));
+    }
+    let (id, created) = match b.canvas.filter(|c| !c.is_empty()) {
+        Some(id) => {
+            checked(&id)?;
+            let c = app.canvas_get(&id).ok_or_else(|| ApiError::not_found("no such canvas"))?;
+            if c.sandbox != sb.to_string() {
+                return Err(ApiError::bad("that canvas belongs to another sandbox"));
+            }
+            (id, false)
+        }
+        None => (app.canvas_create(&sb, "Screenshots")?.id, true),
+    };
+    let to = match &thread {
+        Some(t) => format!("{sb} · {t}"),
+        None => sb.to_string(),
+    };
+    let prompt = format!("{text}\n\n{}", canvas::ask_line(&id));
+    if let Err(e) = app.chat_push(&prompt, Some(sb), false, false, thread).await {
+        if created {
+            app.canvas_delete(std::slice::from_ref(&id));
+        }
+        return Err(ApiError::bad(e));
+    }
+    let c = app.canvas_ask(&id, &to)?;
+    Ok(ok_with(json!({ "canvas": c.id, "created": created, "ask": c.ask })))
+}
+
+async fn ask_cancel(State(app): S, Path(id): Path<String>) -> ApiResult {
+    checked(&id)?;
+    app.canvas_ask_cancel(&id)?;
+    Ok(ok_with(json!({})))
 }
 
 #[derive(Deserialize)]
@@ -399,4 +454,32 @@ mod tests {
         assert_eq!(v["diagrams"], json!([]));
     }
 
+
+    #[tokio::test]
+    async fn asking_from_a_canvas_checks_it_and_leaves_nothing_when_the_prompt_cannot_go() {
+        let (_d, app) = app();
+        let web = sbxw_core::SandboxRef::parse("web").unwrap();
+        let id = app.canvas_create(&web, "Review").unwrap().id;
+        let other = app.canvas_create(&sbxw_core::SandboxRef::parse("docs").unwrap(), "Docs").unwrap().id;
+        let ask = |b: Value| post("/api/canvas/ask", None, b);
+        assert_eq!(call(ui_router(app.clone()), ask(json!({ "canvas": id, "sandbox": "web", "text": "Shots" }))).await.0, StatusCode::UNAUTHORIZED);
+        let (s, _) = call(signed_in(app.clone()), ask(json!({ "canvas": id, "sandbox": "web", "text": "  " }))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "an empty prompt");
+        let (s, _) = call(signed_in(app.clone()), ask(json!({ "canvas": other, "sandbox": "web", "text": "Shots" }))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "another sandbox's canvas");
+        // No session to type into here: refused, the canvas does not wait, no new canvas is left.
+        let before = app.canvas_list().0.len();
+        let (s, _) = call(signed_in(app.clone()), ask(json!({ "canvas": id, "sandbox": "web", "text": "Shots" }))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert!(app.canvas_get(&id).unwrap().ask.is_none());
+        let (s, _) = call(signed_in(app.clone()), ask(json!({ "sandbox": "web", "text": "Shots" }))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(app.canvas_list().0.len(), before, "the canvas made for the request is gone again");
+        // Cancel: the canvas stops waiting.
+        app.canvas_ask(&id, "web").unwrap();
+        let (s, _) = call(signed_in(app.clone()), post(&format!("/api/canvas/{id}/ask/cancel"), None, json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(app.canvas_get(&id).unwrap().ask.is_none());
+        assert_eq!(call(signed_in(app.clone()), post("/api/canvas/x/ask/cancel", None, json!({}))).await.0, StatusCode::BAD_REQUEST);
+    }
 }

@@ -127,6 +127,18 @@ you delete it.
 | `canvas_read {canvas?}` | The remarks of the review rounds not read yet: pins with their number, the shot's title, the position (percentages and a hint such as `top-left`) and the text; notes; each example picture's path inside the sandbox; for each diagram the person changed, the changes in plain sentences and the path of the whole diagram saved in the sandbox. Each round is handed over once. |
 | `canvas_list` | The sandbox's canvases: id, title, shots, rounds, unread review rounds. |
 
+**Asking for shots from a canvas.** **Ask the agent for screenshots** (on an
+empty canvas, or when the sandbox has none) types the prompt into the chosen
+session after one confirmation, with a line under it naming the canvas
+(`pass canvas: "c-…" to canvas_add_shots`). The canvas then waits: it shows
+**Asked web-app for screenshots 1 min ago**, its entry in the picker says
+*waiting for shots*, and **Stop waiting** ends it. While it waits (6 hours at
+most), any `canvas_add_shots` call that names no canvas lands there, even with
+a `title`. The first shot ends the wait, and the rest of the same call follows
+it. With no canvas open, a new one named "Screenshots" is made for the
+request. If the prompt cannot be typed (no live session), nothing waits and
+that new canvas is removed again.
+
 An agent reaches only its own sandbox's canvases (its token says which
 sandbox it is; a body field never does). It cannot delete a canvas, edit a
 remark or read another sandbox's canvas.

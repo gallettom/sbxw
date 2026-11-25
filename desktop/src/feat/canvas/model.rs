@@ -151,6 +151,16 @@ pub struct Manifest {
     pub rounds: Vec<Round>,
     pub reviews: Vec<Review>,
     pub diagrams: Vec<DiagramItem>,
+    /// The person's request for screenshots, while the canvas waits for them.
+    pub ask: Option<AskM>,
+}
+
+/// A request for screenshots sent from a canvas (the daemon's `canvas::Ask`).
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct AskM {
+    pub at_ms: u64,
+    pub to: String,
 }
 
 /// An unsent pin (the person's draft), as the edit route takes it.
@@ -382,7 +392,8 @@ pub fn view(s: &State, snap: &J) -> J {
         .filter(|c| c["sandbox"] == sb.as_str())
         .map(|c| {
             let bytes = c["bytes"].as_u64().unwrap_or(0);
-            json!({ "id": c["id"], "label": format!("{} · {} · {} shot(s) · {}", plain(c["title"].as_str().unwrap_or("")), when(c["updated_ms"].as_u64().unwrap_or(0)), c["shots"], size_label(bytes)),
+            let waits = if c["asked_ms"].is_u64() { " · waiting for shots" } else { "" };
+            json!({ "id": c["id"], "label": format!("{} · {} · {} shot(s) · {}{waits}", plain(c["title"].as_str().unwrap_or("")), when(c["updated_ms"].as_u64().unwrap_or(0)), c["shots"], size_label(bytes)),
                 "help": format!("{} review round(s), {} remark(s) not sent", c["reviews"], c["draft"]) })
         })
         .collect();
@@ -427,6 +438,10 @@ pub fn view(s: &State, snap: &J) -> J {
     v["current"] = json!({ "id": c.id, "title": plain(&c.title), "shots": c.shots.len(), "rounds": c.rounds.len(), "reviews": c.reviews.len() });
     if c.shots.is_empty() && c.diagrams.is_empty() {
         v["empty"] = "shots".into();
+    }
+    // A request sent from here: the canvas says it waits, until the first shot lands.
+    if let Some(a) = &c.ask {
+        v["asked"] = json!({ "line": format!("Asked {} for screenshots {}. They appear here as its agent adds them.", plain(&a.to), when(a.at_ms)) });
     }
     // The draft: pins, notes, assets not sent yet.
     let sel = s.selected.as_deref();
@@ -678,7 +693,7 @@ fn summary(c: &J, changed: &J) -> J {
     let draft_diagrams = c["diagrams"].as_array().into_iter().flatten().filter(|d| changed[d["id"].as_str().unwrap_or("")] == true).count();
     json!({ "id": c["id"], "sandbox": c["sandbox"], "title": c["title"], "created_ms": c["created_ms"], "updated_ms": c["updated_ms"],
         "shots": c["shots"].as_array().map_or(0, Vec::len), "rounds": c["rounds"].as_array().map_or(0, Vec::len), "reviews": c["reviews"].as_array().map_or(0, Vec::len), "bytes": bytes, "draft": draft,
-        "diagrams": diagrams, "draft_diagrams": draft_diagrams })
+        "diagrams": diagrams, "draft_diagrams": draft_diagrams, "asked_ms": c["ask"]["at_ms"] })
 }
 
 /// The stand-in's layout of the nodes without a place (the daemon runs the
@@ -800,6 +815,44 @@ pub fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(
         data["canvases"][id.as_str()] = c.clone();
         (st.publish)("canvas", json!({ "id": id, "sandbox": body["sandbox"], "what": "created" }));
         return Some((200, json!({ "ok": true, "canvas": c })));
+    }
+    if method == "POST" && p == "/api/canvas/ask" {
+        // The daemon's request: the prompt (with the canvas's id) typed into the session, the canvas waiting.
+        let sb = body["sandbox"].clone();
+        let id = match body["canvas"].as_str() {
+            Some(id) if !data["canvases"][id].is_null() => id.to_string(),
+            Some(_) => return Some((404, json!({ "ok": false, "error": "no such canvas" }))),
+            None => {
+                let id = format!("c-{:016x}", data["canvases"].as_object().map_or(0, |m| m.len()) + 0xaa00);
+                data["canvases"][id.as_str()] = json!({ "id": id, "sandbox": sb, "title": "Screenshots", "created_ms": now, "updated_ms": now, "shots": [], "assets": [], "pins": [], "notes": [], "rounds": [], "reviews": [] });
+                id
+            }
+        };
+        let to = match body["thread"].as_str() {
+            Some(t) => format!("{} · {t}", sb.as_str().unwrap_or("")),
+            None => sb.as_str().unwrap_or("").to_string(),
+        };
+        data["canvases"][id.as_str()]["ask"] = json!({ "at_ms": now, "to": to });
+        let prompt = format!("{}\n\nAdd them to canvas {id}, the one this request came from: pass canvas: \"{id}\" to canvas_add_shots.", body["text"].as_str().unwrap_or("").trim());
+        let mut asked = data["asked"].as_array().cloned().unwrap_or_default();
+        asked.push(json!({ "sandbox": sb, "thread": body["thread"], "text": prompt }));
+        data["asked"] = asked.into();
+        (st.publish)("canvas", json!({ "id": id, "sandbox": sb, "what": "asked" }));
+        return Some((200, json!({ "ok": true, "canvas": id, "ask": data["canvases"][id.as_str()]["ask"] })));
+    }
+    if method == "POST" {
+        if let Some(c) = match_path("/api/canvas/{id}/ask/cancel", p) {
+            let id = c[0].1.clone();
+            if data["canvases"][id.as_str()].is_null() {
+                return Some((404, json!({ "ok": false, "error": "no such canvas" })));
+            }
+            if let Some(m) = data["canvases"][id.as_str()].as_object_mut() {
+                m.remove("ask");
+            }
+            let sb = data["canvases"][id.as_str()]["sandbox"].clone();
+            (st.publish)("canvas", json!({ "id": id, "sandbox": sb, "what": "asked" }));
+            return Some((200, json!({ "ok": true })));
+        }
     }
     if method == "POST" && p == "/api/canvas/delete" {
         let mut n = 0;

@@ -121,6 +121,10 @@ impl World {
     fn pushed(&self) -> Vec<String> {
         self.calls.iter().filter(|c| c.path == "/api/chat/push").map(|c| c.body["text"].as_str().unwrap_or("").to_string()).collect()
     }
+    /// The prompts asked for screenshots with, as the UI sent them.
+    fn asked(&self) -> Vec<String> {
+        self.calls.iter().filter(|c| c.path == "/api/canvas/ask").map(|c| c.body["text"].as_str().unwrap_or("").to_string()).collect()
+    }
 }
 
 #[test]
@@ -352,9 +356,38 @@ fn ask_for_screenshots_is_one_dialog_with_the_prompt_in_full() {
     let a = w.intent("canvas_ask", json!({})).unwrap();
     let c = w.confirm(&a);
     assert_eq!(c.preview.as_ref().unwrap().text, "Shots of the login page, please.");
-    assert!(w.pushed().is_empty());
+    assert!(w.asked().is_empty());
     w.press(&c);
-    assert_eq!(w.pushed(), ["Shots of the login page, please."]);
+    assert_eq!(w.asked(), ["Shots of the login page, please."]);
+    assert!(w.pushed().is_empty(), "not a plain message any more");
+    // No canvas to answer: one is made for it, shown, and says it waits.
+    let ui = w.ui().clone();
+    assert_eq!(ui["current"]["title"], "Screenshots", "{ui}");
+    assert!(ui["asked"]["line"].as_str().unwrap().starts_with("Asked web-app for screenshots"), "{ui}");
+    let id = ui["current"]["id"].as_str().unwrap().to_string();
+    let typed = w.daemon["canvas"]["asked"][0]["text"].as_str().unwrap().to_string();
+    assert!(typed.starts_with("Shots of the login page, please.") && typed.contains(&format!("canvas: \"{id}\"")), "the prompt names the canvas: {typed}");
+    assert!(ui["canvases"].as_array().unwrap().iter().any(|c| c["label"].as_str().unwrap_or("").ends_with("waiting for shots")), "the picker says which one waits");
+}
+
+#[test]
+fn asking_from_a_canvas_shown_brings_the_shots_back_to_it_until_the_person_stops_waiting() {
+    let mut w = World::new("basic");
+    w.open();
+    let id = w.ui()["current"]["id"].as_str().unwrap().to_string();
+    assert!(w.ui()["asked"].is_null());
+    let a = w.intent("canvas_ask", json!({})).unwrap();
+    let c = w.confirm(&a);
+    assert!(c.lines.iter().any(|l| l.contains("come back to this canvas, \"Checkout review\"")), "{:?}", c.lines);
+    w.press(&c);
+    let ask = w.calls.iter().rev().find(|c| c.path == "/api/canvas/ask").unwrap();
+    assert_eq!(ask.body["canvas"], id.as_str(), "the canvas shown is the one asked from");
+    assert_eq!(w.ui()["current"]["id"], id.as_str());
+    assert!(w.ui()["asked"]["line"].is_string(), "it says it waits");
+    let a = w.intent("canvas_ask_cancel", json!({})).unwrap();
+    w.run(a);
+    assert!(w.calls.iter().any(|c| c.path == format!("/api/canvas/{id}/ask/cancel")));
+    assert!(w.ui()["asked"].is_null(), "it no longer waits");
 }
 
 #[test]
@@ -626,8 +659,8 @@ fn a_stale_question_beside_the_live_main_session_does_not_hold_the_ask() {
     let a = w.intent("canvas_ask", json!({})).unwrap();
     let c = w.confirm(&a);
     w.press(&c);
-    let push = w.calls.iter().find(|c| c.path == "/api/chat/push").unwrap();
-    assert_eq!(push.body["name"], "web-app");
+    let push = w.calls.iter().find(|c| c.path == "/api/canvas/ask").unwrap();
+    assert_eq!(push.body["sandbox"], "web-app");
     assert!(push.body["thread"].is_null());
 }
 

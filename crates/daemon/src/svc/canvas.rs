@@ -36,7 +36,7 @@ pub struct Book {
 pub struct CanvasNudge {
     pub id: String,
     pub sandbox: String,
-    /// What changed: `shots`, `diagram`, `edit`, `review`, `read`, `deleted`, `created`, `renamed`, `asset`.
+    /// What changed: `shots`, `diagram`, `edit`, `review`, `read`, `deleted`, `created`, `renamed`, `asset`, `asked`.
     pub what: &'static str,
 }
 
@@ -246,10 +246,17 @@ impl App {
     }
 
     /// The agent of `me` adds one shot. `canvas`: one of its own canvases,
+    /// else the one the person asked for screenshots from (while it waits),
     /// else its most recently changed one, else a new one titled `title`.
-    /// `batch`: the tool call's, so its shots form one round.
+    /// `batch`: the tool call's, so its shots form one round. The first shot
+    /// on a canvas that waits answers its request.
     pub fn canvas_agent_add(&self, me: &SandboxRef, canvas_id: Option<&str>, title: &str, batch: &str, shot: ShotIn) -> Result<Added, String> {
-        let id = self.canvas_agent_target(me, canvas_id, title, "Review")?;
+        let unnamed = canvas_id.filter(|s| !s.is_empty()).is_none();
+        // The rest of a call goes where its first shot went, then a request waiting.
+        let id = match unnamed.then(|| self.canvas_of_batch(me, batch).or_else(|| self.canvas_asked(me))).flatten() {
+            Some(id) => id,
+            None => self.canvas_agent_target(me, canvas_id, title, "Review")?,
+        };
         let bytes = canvas::unbase64(&shot.b64, canvas::MAX_IMAGE_BYTES)?;
         // Room in the round before the picture is written.
         let full = self.canvas_book(|b| {
@@ -263,6 +270,7 @@ impl App {
         let res = self.canvas_update(&id, "shots", |c| {
             let now = now_ms();
             let round = c.round_for(batch, now)?;
+            c.ask = None;
             let s = c.add_shot(round, file.clone(), h, size, &shot.title, &shot.note, shot.width, shot.screen.as_deref(), now);
             Ok((round, s.id.clone()))
         });
@@ -406,6 +414,50 @@ impl App {
     }
 
     /// The sandbox's most recently changed canvas.
+    /// The canvas of `me` that waits for the screenshots the person asked
+    /// for from it (the latest request, while it still routes).
+    fn canvas_asked(&self, me: &SandboxRef) -> Option<String> {
+        let (mine, now) = (me.to_string(), now_ms());
+        self.canvas_book(|b| {
+            b.by_id
+                .values()
+                .filter(|c| c.sandbox == mine)
+                .filter_map(|c| c.ask.as_ref().filter(|a| a.routes(now)).map(|a| (a.at_ms, c.id.clone())))
+                .max()
+                .map(|(_, id)| id)
+        })
+    }
+
+    /// The canvas of `me` whose latest round is the tool call `batch`'s.
+    fn canvas_of_batch(&self, me: &SandboxRef, batch: &str) -> Option<String> {
+        if batch.is_empty() {
+            return None;
+        }
+        let mine = me.to_string();
+        self.canvas_book(|b| b.by_id.values().find(|c| c.sandbox == mine && c.rounds.last().is_some_and(|r| r.batch == batch)).map(|c| c.id.clone()))
+    }
+
+    /// The person asked `to` for screenshots from canvas `id`: it waits for
+    /// them (the UI says so) and takes the agent's unnamed shots.
+    pub fn canvas_ask(&self, id: &str, to: &str) -> Result<Canvas, String> {
+        let to = canvas::clean(to, canvas::MAX_TITLE, false);
+        let (_, c) = self.canvas_update(id, "asked", |c| {
+            c.ask = Some(canvas::Ask { at_ms: now_ms(), to });
+            Ok(())
+        })?;
+        tracing::info!("canvas {}: screenshots asked of {}", c.id, c.sandbox);
+        Ok(c)
+    }
+
+    /// The person stops waiting: the agent's shots go where they used to.
+    pub fn canvas_ask_cancel(&self, id: &str) -> Result<Canvas, String> {
+        Ok(self.canvas_update(id, "asked", |c| {
+            c.ask = None;
+            Ok(())
+        })?
+        .1)
+    }
+
     fn canvas_current(&self, me: &SandboxRef) -> Option<String> {
         let mine = me.to_string();
         self.canvas_book(|b| b.by_id.values().filter(|c| c.sandbox == mine).max_by_key(|c| (c.updated_ms, c.id.clone())).map(|c| c.id.clone()))
@@ -564,6 +616,52 @@ mod tests {
 
     fn sb(n: &str) -> SandboxRef {
         SandboxRef::parse(n).unwrap()
+    }
+
+    #[test]
+    fn shots_answer_the_canvas_they_were_asked_from_until_the_first_lands() {
+        let (_d, app) = app();
+        let asked = app.canvas_create(&sb("web"), "Review").unwrap().id;
+        // A canvas changed later is the "current" one: without the request the shots would go there.
+        let later = app.canvas_agent_add(&sb("web"), None, "Other", "b0", shot("Old")).unwrap().canvas;
+        assert_ne!(asked, later);
+        let c = app.canvas_ask(&asked, "web · api").unwrap();
+        assert_eq!(c.ask.as_ref().map(|a| a.to.as_str()), Some("web · api"));
+        assert!(app.canvas_list().0.iter().any(|s| s.id == asked && s.asked_ms.is_some()), "the list says it waits");
+        // Another sandbox's agent is not routed there.
+        let other = app.canvas_agent_add(&sb("docs"), None, "", "x", shot("Docs")).unwrap();
+        assert_ne!(other.canvas, asked);
+        // The agent gives a title, as if for a new canvas: the request wins.
+        let a = app.canvas_agent_add(&sb("web"), None, "sbxw main screens", "b1", shot("Home")).unwrap();
+        assert_eq!(a.canvas, asked);
+        let b = app.canvas_agent_add(&sb("web"), None, "sbxw main screens", "b1", shot("Settings")).unwrap();
+        assert_eq!((b.canvas.as_str(), b.round), (asked.as_str(), a.round), "the whole call is one round there");
+        let c = app.canvas_get(&asked).unwrap();
+        assert_eq!((c.shots.len(), c.ask.is_none()), (2, true), "answered: it no longer waits");
+        // Answered: shots go where they used to (a title makes a new canvas).
+        let n = app.canvas_agent_add(&sb("web"), None, "Next", "b2", shot("Home")).unwrap();
+        assert!(n.canvas != asked && n.canvas != later);
+    }
+
+    #[test]
+    fn a_named_canvas_a_cancelled_or_a_stale_request_does_not_route() {
+        let (_d, app) = app();
+        let asked = app.canvas_create(&sb("web"), "Review").unwrap().id;
+        let named = app.canvas_create(&sb("web"), "Named").unwrap().id;
+        app.canvas_ask(&asked, "web").unwrap();
+        let a = app.canvas_agent_add(&sb("web"), Some(&named), "", "b1", shot("Home")).unwrap();
+        assert_eq!(a.canvas, named, "a canvas the agent names wins");
+        assert!(app.canvas_get(&asked).unwrap().ask.is_some(), "and the request still waits");
+        app.canvas_ask_cancel(&asked).unwrap();
+        assert!(app.canvas_get(&asked).unwrap().ask.is_none());
+        assert_ne!(app.canvas_agent_add(&sb("web"), None, "New", "b2", shot("Home")).unwrap().canvas, asked);
+        // A request older than ASK_ROUTES_MS no longer routes.
+        app.canvas_update(&asked, "asked", |c| {
+            c.ask = Some(canvas::Ask { at_ms: now_ms() - canvas::ASK_ROUTES_MS - 1, to: "web".into() });
+            Ok(())
+        })
+        .unwrap();
+        assert_ne!(app.canvas_agent_add(&sb("web"), None, "Newer", "b3", shot("Home")).unwrap().canvas, asked);
     }
 
     #[test]

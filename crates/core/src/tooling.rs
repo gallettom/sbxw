@@ -180,7 +180,9 @@ pub fn relay_guidance() -> String {
          for screenshots or a visual review, take the shots yourself (a headless\n\
          browser against your dev server at a fixed viewport, the project's own\n\
          screenshot script, or the virtual Mac) and add them with the\n\
-         **`canvas_add_shots`** tool. A good set: the main screens only, one state\n\
+         **`canvas_add_shots`** tool; when the request names a canvas, pass it as\n\
+         `canvas` (and no `title`), so the shots land where they were asked for.\n\
+         A good set: the main screens only, one state\n\
          per shot, the viewport width stated, a short title and a one-line note\n\
          each, no secrets, tokens or personal data on screen, about 12 per round\n\
          (24 at most). Give the same `screen` key to the same screen in every round\n\

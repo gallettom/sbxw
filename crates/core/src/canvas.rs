@@ -624,6 +624,35 @@ pub struct Canvas {
     /// Diagrams, in the order they were added. Absent from a manifest without any.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub diagrams: Vec<DiagramItem>,
+    /// The person's request for screenshots from this canvas, until the
+    /// agent's first shot lands here or the person cancels it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<Ask>,
+}
+
+/// A request for screenshots sent from a canvas: shots its agent posts with
+/// no canvas named go to this canvas while it waits ([`ASK_ROUTES_MS`]).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Ask {
+    pub at_ms: u64,
+    /// The session asked, as the UI names it (`web-app`, `web-app · api`).
+    pub to: String,
+}
+
+/// How long a request routes the agent's unnamed shots to its canvas.
+pub const ASK_ROUTES_MS: u64 = 6 * 3600 * 1000;
+
+impl Ask {
+    /// Still routing at `now`.
+    pub fn routes(&self, now: u64) -> bool {
+        now.saturating_sub(self.at_ms) < ASK_ROUTES_MS
+    }
+}
+
+/// The line added under the person's prompt, so the agent knows which canvas
+/// the shots answer (the daemon routes them there anyway while it waits).
+pub fn ask_line(id: &str) -> String {
+    format!("Add them to canvas {id}, the one this request came from: pass canvas: \"{id}\" to canvas_add_shots.")
 }
 
 /// The canvas as listed: no items.
@@ -643,6 +672,8 @@ pub struct Summary {
     pub diagrams: usize,
     /// Diagrams the person changed and has not sent yet.
     pub draft_diagrams: usize,
+    /// When the person asked for screenshots from it, while it waits.
+    pub asked_ms: Option<u64>,
 }
 
 /// What a person's edit may set: the unsent annotations whole, and positions.
@@ -709,6 +740,7 @@ impl Canvas {
             draft: self.draft(),
             diagrams: self.diagrams.len(),
             draft_diagrams: self.draft_diagrams(),
+            asked_ms: self.ask.as_ref().map(|a| a.at_ms),
         }
     }
 
@@ -1412,6 +1444,21 @@ pub fn ready_line(canvas: &str, n: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_is_kept_in_the_manifest_and_an_old_manifest_has_none() {
+        let mut c = Canvas::new("c-0123456789abcdef".into(), "web".into(), "Review", 1);
+        let old = serde_json::to_string(&c).unwrap();
+        assert!(!old.contains("ask"), "no request, no field: {old}");
+        assert_eq!(serde_json::from_str::<Canvas>(&old).unwrap().ask, None);
+        c.ask = Some(Ask { at_ms: 1_000, to: "web · api".into() });
+        let back: Canvas = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back.ask, c.ask);
+        assert_eq!(back.summary().asked_ms, Some(1_000));
+        let a = back.ask.unwrap();
+        assert!(a.routes(1_000 + ASK_ROUTES_MS - 1) && !a.routes(1_000 + ASK_ROUTES_MS));
+        assert!(ask_line("c-0123456789abcdef").contains("canvas: \"c-0123456789abcdef\""));
+    }
 
     fn png_bytes(w: u32, h: u32) -> Vec<u8> {
         let mut b = b"\x89PNG\r\n\x1a\n".to_vec();

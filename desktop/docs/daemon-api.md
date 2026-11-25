@@ -202,7 +202,7 @@ when the manifest lists them. Every answer is `{ok, ...}`.
 
 | Route | Body or query | Answer |
 |---|---|---|
-| `GET /api/canvas` | | `canvases` (newest first: `id, sandbox, title, created_ms, updated_ms, shots, rounds, reviews, bytes, draft, diagrams, draft_diagrams`), `total_bytes`, `max_canvas_bytes` |
+| `GET /api/canvas` | | `canvases` (newest first: `id, sandbox, title, created_ms, updated_ms, shots, rounds, reviews, bytes, draft, diagrams, draft_diagrams, asked_ms`), `total_bytes`, `max_canvas_bytes` |
 | `POST /api/canvas` | `{sandbox, title}` | `canvas` (a new manifest) |
 | `GET /api/canvas/:id` | | `canvas` (the manifest: `shots, assets, pins, notes, rounds, reviews, diagrams`), `bytes`, `diagram_bytes`. A shot has `moved` (placed by the person) and `cell` (`[row, column, slot]` in its round's grid); a round `cols`, `cell_w`, `slot_w`, `diagrams`; a review `diagrams` (how many changed diagrams it sent). `diagrams` is absent when there is none; each is `{id, title, kind, round, added_ms, x, y, w, h, moved, bytes, diagram}`: a node at `(n.x, n.y)` sits at `(x + n.x, y + n.y)` on the surface, `w, h` are the content's far corner. `diagram` is the current version (sbxw's schema, with `rev`). Manifest `version` 2 with diagrams, 1 without |
 | `GET /api/canvas/:id/diagrams/:did` | | `diagram` (one item as in the manifest); 404 for an id the canvas does not hold |
@@ -213,7 +213,9 @@ when the manifest lists them. Every answer is `{ok, ...}`.
 | `POST /api/canvas/:id/assets?name=&x=&y=` | the picture's bytes (20 MB at most; checked by content) | `asset` |
 | `POST /api/canvas/:id/submit` | `{session, assets: {asset id: path in the sandbox}}` (paths under `/tmp/sbxw-uploads/` only). Takes the diagrams the person changed too; a round of diagram changes only is allowed | `review` (its number), `line` (the fixed line the app types) |
 | `POST /api/canvas/delete` | `{ids}` and/or `{before_ms}` | `deleted, bytes` |
-| bus event `canvas` | | `{id, sandbox, what}`: `created`, `shots` (the agent added some), `diagram` (the agent added or replaced one), `asset`, `edit`, `review`, `read`, `renamed`, `deleted` |
+| `POST /api/canvas/ask` | `{canvas?, sandbox, thread?, text}`: the prompt typed into that session (as `/api/chat/push`) with a line naming the canvas; without `canvas`, a new one titled "Screenshots" (removed again if the push fails) | `canvas` (its id), `created`, `ask: {at_ms, to}`. The manifest then has `ask` until the agent's first shot lands there, and the list's `asked_ms` is set; the agent's `canvas_add_shots` without a canvas goes there meanwhile (6 hours at most) |
+| `POST /api/canvas/:id/ask/cancel` | | the canvas stops waiting (`ask` gone) |
+| bus event `canvas` | | `{id, sandbox, what}`: `created`, `shots` (the agent added some), `diagram` (the agent added or replaced one), `asset`, `edit`, `review`, `read`, `renamed`, `deleted`, `asked` (a request for screenshots sent or stopped) |
 
 Agent listener (the sandbox is the token's): `POST /api/canvas/shots`
 (`{canvas?, title?, batch, shot: {b64, title, note?, width?, screen?}}`),

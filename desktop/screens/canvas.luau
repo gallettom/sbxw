@@ -133,6 +133,16 @@ local function ask_block(ui, data, pick)
     (not s.ask_ok and s.ask_why) and text{ s.ask_why, size = "xs", color = "text-muted", wrap = true, key = "canvas-ask-why" } or false }
 end
 
+-- A request sent from this canvas: it waits for the agent's shots (the
+-- first one to land ends it), with a way to stop waiting.
+local function asked_block(ui)
+  return row{ gap = 8, w = "full", key = "canvas-asked", px = 8, py = 8, radius = "xs", fill = "elevated", align = "center",
+    icon{ "history", size = 14, color = "blue" },
+    text{ ui.asked.line, size = "sm", color = "text-bright", wrap = true, grow = 1, key = "canvas-asked-line" },
+    button{ "Stop waiting", key = "canvas-asked-cancel", on = "ask_cancel", dense = true, variant = "ghost",
+      help = "The agent's shots then go where they used to: its latest canvas, or a new one" } }
+end
+
 local function remark(d)
   local head = row{ gap = 8, w = "full", key = "canvas-row-" .. d.key, on = "select", arg = d.key, hover = "hover-subtle", radius = "xs", px = 4, py = 2,
     fill = d.selected and "active-bg" or nil, help = "Show it on the canvas",
@@ -216,7 +226,7 @@ return {
       (not storage_in_title(data)) and text{ ui.storage or "", size = "xs", color = "text-muted", truncate = true, key = "canvas-storage-line" } or false }
     local surface = column{ grow = 1, h = "full", min_w = 0, min_h = 0, gap = 8, key = "canvas-surface-col",
       toolbar(ui, wide),
-      ui.empty == "shots" and ask_block(ui, data, false) or false,
+      ui.asked and asked_block(ui) or (ui.empty == "shots" and ask_block(ui, data, false)) or false,
       ui.tool == "asset" and example_hint() or false,
       diagram_bar(ui, wide),
       canvas{ id = "canvas" } }
@@ -262,6 +272,7 @@ return {
     send = function() return intent("canvas_send", {}) end,
     ask = function() return intent("canvas_ask", {}) end,
     ask_text = function(_, _, v) return intent("canvas_ask_text", { text = v or "" }) end,
+    ask_cancel = function() return intent("canvas_ask_cancel", {}) end,
     tab = function(_, t) return intent("canvas_tab", { tab = t }) end,
     ground = function(_, _, v) return intent("canvas_ground", { ground = v or "white" }) end,
     window = function() return intent("canvas_window", { to = "window" }) end,

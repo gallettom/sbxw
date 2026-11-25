@@ -1062,8 +1062,8 @@ const CANVAS_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        canvas: { type: "string", description: "A canvas id from canvas_list. Leave it out for this sandbox's current canvas (a new one is made if there is none, or if you give a title)." },
-        title: { type: "string", description: "A title for a NEW canvas (e.g. \"Checkout redesign\")." },
+        canvas: { type: "string", description: "The canvas id the person's request names (\"Add them to canvas c-…\"), or one from canvas_list. Left out: the canvas the person asked for screenshots from, while it waits for them; else this sandbox's current canvas (a new one is made if there is none, or if you give a title)." },
+        title: { type: "string", description: "A title for a NEW canvas (e.g. \"Checkout redesign\"). Ignored while the person waits for shots on a canvas they asked from." },
         shots: {
           type: "array",
           description: "The shots, at most 24.",

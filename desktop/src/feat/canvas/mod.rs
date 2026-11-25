@@ -101,7 +101,8 @@ pub const INTENTS: &[Spec] = &[
     d("canvas_diagram", &[("op", Arg::OneOf(DIAGRAM_OPS), true), ("id", Arg::Str, false)], "Edits the diagram selected (or `id`): add a node, lay it out again (the daemon's layout; one undo step), undo, redo, rename or delete the part selected; after a save was refused because the diagram changed elsewhere, reload the newer version or reapply your change over it."),
     d("canvas_key", &[("key", Arg::OneOf(KEYS), true), ("text", Arg::Text, false)], "The Canvas's keys: V, P, N, A pick a tool, Escape leaves it, Backspace removes the unsent remark selected."),
     Spec { name: "canvas_send", risk: Risk::Approval("Sends your remarks to an agent's session"), args: &[], doc: "Sends the new pins, notes and example pictures to the session shown, after one confirmation listing them all: the pictures are copied into the sandbox, the round recorded, and a fixed line asks the agent to read it with canvas_read." },
-    Spec { name: "canvas_ask", risk: Risk::Approval("Types a prompt into an agent's session"), args: &[], doc: "Asks the session shown for screenshots of its main screens, after one confirmation showing the prompt in full." },
+    Spec { name: "canvas_ask", risk: Risk::Approval("Types a prompt into an agent's session"), args: &[], doc: "Asks the session shown for screenshots of its main screens, after one confirmation showing the prompt in full; the canvas shown (or a new one) waits for them." },
+    d("canvas_ask_cancel", &[], "Stops waiting for the screenshots asked for from the canvas shown: the agent's shots go where they used to."),
     Spec { name: "canvas_delete", risk: Risk::Approval("Deletes canvases and their pictures from this computer"), args: &[("older", Arg::OneOf(OLDER), false)], doc: "Deletes the canvas shown, or (`older`: days) every canvas not changed for that many days, after one confirmation naming what goes." },
 ];
 
@@ -446,6 +447,10 @@ impl State {
             }
             "canvas_send" => return self.send(cx),
             "canvas_ask" => return self.ask(cx),
+            "canvas_ask_cancel" => {
+                let id = self.current.clone().ok_or("No canvas is shown")?;
+                return Ok(vec![Action::Call(Call::post(format!("/api/canvas/{}/ask/cancel", crate::client::enc(&id)), json!({}), "stop waiting for screenshots").tag("cv-ask-cancel"))]);
+            }
             "canvas_delete" => return self.delete(a.s("older")),
             other => return Err(format!("{other}: not a canvas intent")),
         }
@@ -1156,7 +1161,26 @@ impl State {
         } else if tag.starts_with("cv-up:") || tag.starts_with("cv-submit:") || tag.starts_with("cv-push:") {
             out.extend(self.send_step(cx, tag, ok, &why, &body));
         } else if tag == "cv-ask" {
-            out.push(if ok { Action::notice("Asked the agent for screenshots: they appear here as it adds them") } else { Action::error(format!("Not asked: {why}")) });
+            if ok {
+                // The canvas asked from (or the one made for it) is shown, waiting.
+                if let Some(id) = body["canvas"].as_str() {
+                    self.current = Some(id.to_string());
+                    out.push(self.read_canvas(id));
+                }
+                out.push(self.read_list());
+                out.push(Action::notice("Asked the agent for screenshots: this canvas waits for them"));
+            } else {
+                out.push(Action::error(format!("Not asked: {why}")));
+            }
+        } else if tag == "cv-ask-cancel" {
+            if ok {
+                if let Some(id) = self.current.clone() {
+                    out.push(self.read_canvas(&id));
+                }
+                out.push(self.read_list());
+            } else {
+                out.push(Action::error(format!("The request still waits: {why}")));
+            }
         } else if tag == "cv-del" {
             if ok {
                 out.push(Action::notice(format!("Deleted {} canvas(es), {} freed", body["deleted"], crate::feat::files::view::size_label(body["bytes"].as_u64().unwrap_or(0)))));
@@ -1391,14 +1415,23 @@ impl State {
         let (sb, thread, _) = self.target(cx).map_err(|e| e.replacen("Not sent", "Not asked", 1))?;
         let to = who(&sb, thread.as_deref());
         let text = self.ask_text.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| ASK_PROMPT.to_string());
-        let mut b = json!({ "text": text.trim(), "name": sb });
+        let mut b = json!({ "text": text.trim(), "sandbox": sb });
         if let Some(t) = &thread {
             b["thread"] = t.clone().into();
         }
-        let call = Call::post("/api/chat/push", b, format!("ask {to} for screenshots")).tag("cv-ask");
+        // The canvas shown, when it is this sandbox's: the shots come back to it.
+        let here = self.canvas.as_ref().filter(|c| c.sandbox == sb).map(|c| (c.id.clone(), model::plain(&c.title)));
+        let lands = match &here {
+            Some((id, title)) => {
+                b["canvas"] = id.clone().into();
+                format!("Its shots come back to this canvas, \"{title}\", which shows it waits for them.")
+            }
+            None => "Its shots come back to a new canvas, \"Screenshots\", which shows it waits for them.".to_string(),
+        };
+        let call = Call::post("/api/canvas/ask", b, format!("ask {to} for screenshots")).tag("cv-ask");
         let c = Confirm::new(format!("Ask {to} for screenshots?"), call)
-            .line(format!("To: {to}'s agent, typed into its session as one message, shown in full below."))
-            .line("Its shots appear on this sandbox's canvas as it adds them.".to_string())
+            .line(format!("To: {to}'s agent, typed into its session as one message, shown in full below, with a line naming the canvas."))
+            .line(lands)
             .preview(text.trim().to_string(), false)
             .labels(&format!("Send to {sb}"), "Cancel");
         Ok(vec![Action::Confirm(Box::new(c))])

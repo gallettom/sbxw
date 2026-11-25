@@ -90,7 +90,9 @@ capabilities:
           for screenshots or a visual review, take the shots yourself (a headless
           browser against your dev server at a fixed viewport, the project's own
           screenshot script, or the virtual Mac) and add them with the
-          **`canvas_add_shots`** tool. A good set: the main screens only, one state
+          **`canvas_add_shots`** tool; when the request names a canvas, pass it as
+          `canvas` (and no `title`), so the shots land where they were asked for.
+          A good set: the main screens only, one state
           per shot, the viewport width stated, a short title and a one-line note
           each, no secrets, tokens or personal data on screen, about 12 per round
           (24 at most). Give the same `screen` key to the same screen in every round
