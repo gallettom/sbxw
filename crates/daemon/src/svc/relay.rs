@@ -7,7 +7,7 @@
 //! * An outcome is the asker's once its relay server acknowledged the tool
 //!   result (`relay_ack`). One returned and not acknowledged within
 //!   `ACK_LIMIT_MS`, or settled while nobody waits, is owed: handed to
-//!   delivery (`tell_asker`), once.
+//!   delivery (`tell_asker`, into the session's inbox), once.
 //! * Every step goes out as a `relay-note` event for whoever tells the
 //!   person, with a reminder after `REMIND_AFTER_MS` waiting on them.
 
@@ -15,6 +15,7 @@ use crate::app::{now_ms, App};
 use crate::bus::Event;
 use sbxw_core::messages::{self, Recipient};
 use sbxw_core::relay::{self, RelayKind, RelayNote, RelayRequest, RelayStep, Shot};
+use sbxw_core::inbox::Kind;
 use sbxw_core::session::SessionKind;
 use sbxw_core::{SandboxRef, ThreadName};
 use sbxw_core::relay::RelayBook;
@@ -65,12 +66,7 @@ impl Drop for WaitGuard<'_> {
             unread
         };
         if let Some(req) = unread {
-            if tokio::runtime::Handle::try_current().is_ok() {
-                self.app.tell_asker(&req);
-            } else {
-                // Not delivered: the next start's tick finds it owed.
-                tracing::warn!("relay: {} settled while its wait ended with the daemon; owed at the next start", self.id);
-            }
+            self.app.tell_asker(&req);
         }
     }
 }
@@ -346,23 +342,20 @@ impl App {
         Ok(())
     }
 
-    /// A human sends the question to `to`; it is typed into that agent. A
-    /// delivery that fails bounces the request back with the reason, unless
-    /// it was routed elsewhere since.
+    /// A human sends the question to `to`; a notice goes to that agent's
+    /// inbox (`App::deliver`). A delivery refused bounces the request back
+    /// with the reason, unless it was routed elsewhere since.
     pub fn relay_route(self: &Arc<Self>, id: &str, to: &SandboxRef) -> Result<(), String> {
         let req = self.relay.lock().unwrap().route(id, &to.to_string(), now_ms())?;
         tracing::info!("relay: {id} routed to '{to}'");
         let req = self.relay_changed(req);
         self.relay_note(RelayStep::Routed, &req);
-        let app = self.clone();
-        let rid = id.to_string();
-        let target = to.clone();
-        self.spawn_push(
-            to.clone(),
-            SessionKind::Agent,
-            messages::relay_notice(&req),
-            Some(Box::new(move |e: String| app.relay_route_failed(&rid, &target, &e))),
-        );
+        // Into the target agent's inbox, never typed while it works; a
+        // retried routing to the same target replaces the waiting notice.
+        let key = format!("relay:{id}");
+        if let Err(e) = self.deliver(to, &SessionKind::Agent, Kind::Request, &format!("relay request {id}"), &messages::relay_notice(&req), Some(&key)) {
+            self.relay_route_failed(id, to, &e);
+        }
         Ok(())
     }
 
@@ -464,8 +457,9 @@ impl App {
     }
 
     /// Hand the outcome to the asking session, whose own call came back
-    /// empty or moved on: into the thread that asked while its session is
-    /// open, else the sandbox's agent. A long answer goes as its first part,
+    /// empty or moved on: into the inbox (`App::deliver`, never typed into a
+    /// busy terminal) of the thread that asked while its session is open,
+    /// else of the sandbox's agent. A long answer goes as its first part,
     /// saying how to read the rest.
     fn tell_asker(self: &Arc<Self>, req: &RelayRequest) {
         self.relay.lock().unwrap().mark_delivered(&req.id);
@@ -502,7 +496,8 @@ impl App {
             },
         };
         tracing::info!("relay: handing {} to '{from}' ({kind:?})", req.id);
-        self.spawn_push(from, kind, text, None);
+        let key = format!("relay:{}", req.id);
+        self.deliver_or_log(&from, &kind, Kind::Answer, &format!("relay request {}", req.id), &text, Some(&key));
     }
 }
 
@@ -775,5 +770,26 @@ mod tests {
         assert_eq!(told(&app, &r.id), 1, "the asker is told");
         assert_eq!(notes(&mut rx), vec![(sbxw_core::relay::RelayStep::Expired, r.id.clone())]);
         assert!(super::expired_text(&r).contains("closed"));
+    }
+
+    #[test]
+    fn an_outcome_and_a_routed_request_go_to_an_inbox_not_a_terminal() {
+        let (_d, app) = app();
+        let long = "Q1 : ".to_string() + &"word ".repeat(6000);
+        let r = app.relay_open(&sb("alpha"), None, RelayKind::Ask, "Q1?").unwrap();
+        app.relay_approve(&r.id, Some(&long), &[]).unwrap();
+        let q = app.relay_open(&sb("alpha"), None, RelayKind::Question, "where?").unwrap();
+        app.relay_route(&q.id, &sb("beta")).unwrap();
+        app.relay_route(&q.id, &sb("beta")).unwrap();
+        let inbox = app.inbox.lock().unwrap();
+        let all = inbox.all();
+        let answer: Vec<_> = all.iter().filter(|m| m.kind == sbxw_core::inbox::Kind::Answer).collect();
+        assert_eq!(answer.len(), 1);
+        assert_eq!((answer[0].sandbox.as_str(), answer[0].key.clone()), ("alpha", Some(format!("relay:{}", r.id))));
+        assert!(answer[0].text.contains("part 2") && answer[0].text.len() < long.len(), "the first part, and how to read the rest");
+        let request: Vec<_> = all.iter().filter(|m| m.kind == sbxw_core::inbox::Kind::Request).collect();
+        assert_eq!(request.len(), 1, "routed twice to the same agent: one notice waits");
+        assert_eq!(request[0].sandbox, "beta");
+        assert!(request[0].text.contains(&q.id) && !request[0].text.contains("where?"), "the id, never the asker's words");
     }
 }
