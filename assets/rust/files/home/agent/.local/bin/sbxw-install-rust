@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Idempotent, and never fails the container start: a failed step is
+# reported and skipped. A restart with everything present runs nothing.
+set -uo pipefail
+info() { echo "  [rust] $*"; }
+
+# ── Startup marker ───────────────────────────────────────────────────
+# Left when this script ends, however it ends, with the boot it ran in:
+# how sbxw knows the install is over before it saves a template (a process
+# list cannot tell "not started yet" from "finished"). Removed first, so a
+# marker from an earlier start is never read as this one's.
+SBXW_DONE="$HOME/.sbxw/startup/$(echo "$0" | tr / _).done"
+mkdir -p "$HOME/.sbxw/startup" && rm -f "$SBXW_DONE"
+trap 'cat /proc/sys/kernel/random/boot_id > "$SBXW_DONE" 2>/dev/null' EXIT
+
+# What is missing, by the commands themselves rather than package names.
+NEED=""
+command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1 || NEED="$NEED cargo"
+command -v rustfmt >/dev/null 2>&1 || NEED="$NEED rustfmt"
+command -v cargo-clippy >/dev/null 2>&1 || NEED="$NEED rust-clippy"
+command -v cc >/dev/null 2>&1 && command -v make >/dev/null 2>&1 || NEED="$NEED build-essential"
+command -v pkg-config >/dev/null 2>&1 || NEED="$NEED pkg-config"
+
+if [ -z "$NEED" ]; then
+  info "toolchain already installed: $(cargo --version 2>/dev/null)"
+  exit 0
+fi
+
+# Another kit's startup may hold apt's lock at the same moment (sbx starts
+# them side by side): wait for it rather than fail on it.
+APT_WAIT="-o DPkg::Lock::Timeout=300"
+# The package lists are refreshed only when no kit has done so in the last
+# hour (the stamp is shared with the other bundled kits), and once more if
+# the install fails on lists that turned out to be stale.
+APT_STAMP=/home/agent/.cache/sbxw-apt-updated
+apt_update() {
+  if [ "$1" != force ] && [ -n "$(find "$APT_STAMP" -mmin -60 2>/dev/null)" ]; then return 0; fi
+  sudo apt-get $APT_WAIT update -qq >/dev/null 2>&1 || return 1
+  mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"
+}
+apt_install() {
+  apt_update fresh || return 1
+  sudo DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install -y -qq "$@" && return 0
+  apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install -y -qq "$@"
+}
+
+info "installing:$NEED"
+# $NEED unquoted on purpose: one word per package.
+if apt_install $NEED; then
+  info "installed: $(cargo --version 2>/dev/null)"
+else
+  info "apt-get install failed: skipping (check that deb.debian.org and dhi.io are allowed)"
+fi
+info "done."

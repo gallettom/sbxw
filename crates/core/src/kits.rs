@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 
 /// The kits that ship inside sbxw, referred to as `sbxw:<name>` in `kits`.
-pub const BUNDLED: [&str; 10] = ["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent", "terminal-mac", "dev-ports", "firecrawl"];
+pub const BUNDLED: [&str; 11] = ["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent", "terminal-mac", "dev-ports", "firecrawl", "rust"];
 
 /// sbxw's own kit, applied to every sandbox before the project's: Node.js,
 /// which sbx 0.51's Claude Code image lacks and every in-sandbox piece of sbxw
@@ -75,6 +75,7 @@ pub fn about(name: &str) -> &'static str {
         "md-to-pdf-tools" => "/md-to-pdf, with WeasyPrint, poppler-utils and Pillow",
         "retro" => "/retro: past sessions read back for what should become a script, hook, skill, rule or kit",
         "k8s-tools" => "kubectl, k3d and skaffold in ~/.local/bin",
+        "rust" => "cargo, rustc, rustfmt and clippy from apt, with a C toolchain; crates.io allowed",
         "git-identity" => "your host's Git user.name and user.email in the sandbox",
         "ssh-agent" => "your host's SSH agent, restricted to signing commits and the common Git hosts",
         "dev-ports" => "the agent publishes a dev server on a loopback port sbx picks, without a prompt (sbx 0.53; at creation only)",

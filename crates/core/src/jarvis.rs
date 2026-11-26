@@ -114,7 +114,7 @@ const SHELL_START_FILES: &[&str] = &[".bashrc", ".bash_profile", ".bash_login", 
 pub const PERSONAL_KITS: &[&str] = &["ssh-agent", "git-identity", "dev-ports", "terminal-mac"];
 
 /// Bundled kits that add tools and skills only: adding one is low risk.
-pub const TOOL_KITS: &[&str] = &["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "firecrawl"];
+pub const TOOL_KITS: &[&str] = &["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "firecrawl", "rust"];
 
 /// The risk of adding bundled kit `name`: low only when it is known to add
 /// tools alone.

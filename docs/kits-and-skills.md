@@ -121,6 +121,7 @@ path, since sbx doesn't know `sbxw:` names.
 | `sbxw:retro` | ✓ | `/retro`: reads past sessions and proposes what should become a script, hook, skill, rule or kit |
 | `sbxw:firecrawl` | ✓ | Firecrawl Local, the agents' tool for reading the web: MCP server `firecrawl` (public addresses only, Firecrawl Cloud off), built once into the kit cache |
 | `sbxw:k8s-tools` | | `kubectl`, `k3d` and `skaffold` in `~/.local/bin` |
+| `sbxw:rust` | | `cargo`, `rustc`, `rustfmt` and clippy from apt, with a C toolchain and `pkg-config`; crates.io allowed |
 | `sbxw:git-identity` | | Your host's Git `user.name` and `user.email` in the sandbox |
 | `sbxw:ssh-agent` | | Your host's SSH agent, restricted to signing commits and the common Git hosts |
 | `sbxw:dev-ports` | | The agent publishes a dev server on a loopback port sbx picks, without a prompt (sbx 0.53) |
@@ -285,6 +286,20 @@ are downloaded and built on your machine).
 its hash, arch-aware and idempotent, downloaded once per host with the kit
 cache. Opt-in. See
 [`assets/k8s-tools/README.md`](../assets/k8s-tools/README.md).
+
+### `sbxw:rust`
+
+For projects built with Cargo. At the sandbox's first start the kit installs
+`cargo`, `rustc`, `rustfmt` and clippy from the image's apt repositories
+(Debian and Docker Hardened Images), with `build-essential` and `pkg-config`
+for crates that build native code. There is no rustup: the version is the one
+apt carries, and a project that pins another toolchain needs its own kit.
+
+The kit allows the hosts this takes: `deb.debian.org`, `security.debian.org`
+and `dhi.io` for apt, `index.crates.io`, `static.crates.io` and `crates.io`
+for Cargo. A dependency fetched from a git repository needs that host in
+`network_allow` as well. Opt-in: with it, the agent can download and build
+any crate published on crates.io.
 
 ### `sbxw:git-identity` and `sbxw:ssh-agent`
 

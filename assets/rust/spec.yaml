@@ -1,0 +1,50 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: rust
+description: >
+  The Rust toolchain for projects built with Cargo: cargo, rustc, rustfmt and
+  clippy from the image's apt repositories, with a C toolchain and pkg-config
+  for crates that build native code, and the crates.io registry opened so
+  `cargo build` can fetch dependencies. Opt-in. Installed at the first start
+  (idempotent, safe to re-run on every container start).
+
+# Everything the kit ships is image content: files/ is copied into the
+# agent's home at build, owned by the agent.
+build: |
+  FROM scratch
+  COPY --chown=1000:1000 files/home/agent/ /home/agent/
+
+capabilities:
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          # apt: the toolchain itself.
+          - deb.debian.org
+          - security.debian.org
+          - dhi.io
+          # Cargo: the sparse index, then the crate files.
+          - index.crates.io
+          - static.crates.io
+          - crates.io
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      # Every boot, alongside the agent: the script is idempotent.
+      startup:
+        - command: ["bash", "/home/agent/.local/bin/sbxw-install-rust"]
+  - type: com.docker.sandbox/agent-context@2
+    optional: true
+    config:
+      content: |
+          ## Rust
+
+          `cargo`, `rustc`, `rustfmt` and `cargo clippy` are installed from
+          apt (not rustup: there is no `rustup` and no other toolchain
+          version to switch to), with `build-essential` and `pkg-config`.
+          crates.io is reachable, so `cargo build` fetches dependencies. A
+          dependency from a git repository needs that host allowed too. The
+          install runs at the sandbox's first start: if `cargo` is not found
+          yet, wait for `~/.local/bin/sbxw-install-rust` to finish, or run it.
+          A `-sys` crate may need its library's `-dev` package:
+          `sudo apt-get install -y <package>`.
