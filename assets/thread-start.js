@@ -93,6 +93,10 @@ function main() {
     }
   }
   lines.push("Commit before long builds, so a restart costs little.");
+  lines.push(
+    "Tests: run only the tests of what you touched, then report done. The plan's whole battery " +
+      "runs once, on its CI branch, after the lead proposes the merge: not by you.",
+  );
   return lines.join("\n");
 }
 

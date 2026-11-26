@@ -45,6 +45,9 @@ pub struct TestAsk<'a> {
     /// A lead names its plan; a thread's is found by its name.
     pub plan: Option<&'a str>,
     pub rerun: bool,
+    /// Who asks when it is neither a thread nor the lead: `sbxw` for a CI
+    /// branch's tests.
+    pub by: Option<&'a str>,
 }
 
 pub(crate) fn load(path: &Path) -> Book {
@@ -77,7 +80,7 @@ impl App {
         }
     }
 
-    fn tests_changed(&self) {
+    pub(crate) fn tests_changed(&self) {
         self.persist_tests();
         self.tests_tick.send_modify(|n| *n = n.wrapping_add(1));
     }
@@ -137,7 +140,7 @@ impl App {
             format!("could not read {git_ref} in '{sb}' (exit {}): {why}", out.code.unwrap_or(-1))
         })?;
         let key = testq::cache_key(&tests.command, &probe.tree);
-        let by = ask.thread.map_or_else(|| "lead".to_string(), |t| t.to_string());
+        let by = ask.by.map(str::to_string).unwrap_or_else(|| ask.thread.map_or_else(|| "lead".to_string(), |t| t.to_string()));
         let sandbox = sb.to_string();
         let (job, took) = self.tests.lock().unwrap().request(
             testq::job_id(),
@@ -283,6 +286,8 @@ impl App {
         for sb in waiting {
             self.tests_kick(&sb);
         }
+        // The CI runs at work before the restart, and the watch on main.
+        self.ci_resume();
     }
 
     pub(crate) fn tests_prune(&self) {
@@ -426,9 +431,10 @@ impl App {
 }
 
 /// What a thread is told when it runs the plan's whole test command itself.
-pub const GATE_REASON: &str = "sbxw: this is your plan's whole test command, which the test queue runs, not a thread. \
-Commit your work, then call run_tests (MCP sbxw-relay): it answers a stored result at once when the code did not change. \
-A narrower command (one test, one package) is fine to run yourself.";
+pub const GATE_REASON: &str = "sbxw: this is your plan's whole test command, which a thread does not run. \
+Run only the tests of what you touched (one test, one package: fine to run yourself), commit, and report done: \
+the whole battery runs once, on the plan's CI branch, after the lead proposes the merge. \
+For a risky change, commit and call run_tests (MCP sbxw-relay): it answers a stored result at once when the code did not change.";
 
 /// The refusal outside any plan with an approved test command.
 pub const NO_COMMAND: &str = "no test command: run_tests runs the test command of an approved plan, and this plan has none. \

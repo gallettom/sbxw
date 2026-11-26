@@ -1624,6 +1624,41 @@ impl Sbx {
         Ok(scripts::MergeOutcome::from_fields(&f))
     }
 
+    /// Build plan `plan`'s CI branch from `threads`, in order
+    /// ([`scripts::CI_BUILD_SCRIPT`]). A conflict comes back as data, not
+    /// as an error; an `Err` is a run that did not happen.
+    pub async fn ci_build(&self, name: &SandboxName, dir: &str, plan: &str, threads: &[ThreadName]) -> Result<scripts::CiBuild> {
+        let args = scripts::ci_build_args(name, dir, plan, threads);
+        let out = self.run(Invocation::new(args.clone())).await?;
+        let text = out.stdout_str();
+        if !out.success() && !text.lines().any(|l| l.starts_with("conflict=") || l.starts_with("error=")) {
+            return Err(command_error(&args, &out));
+        }
+        Ok(scripts::CiBuild::parse(&text))
+    }
+
+    /// Fast-forward the main checkout to a tested CI tip
+    /// ([`scripts::CI_FF_SCRIPT`]). `Ok(Err(now))`: main is no longer at
+    /// `base` (now at `now`), nothing changed.
+    pub async fn ci_fast_forward(&self, name: &SandboxName, dir: &str, tip: &str, base: &str, base_branch: &str) -> Result<std::result::Result<scripts::MergeOutcome, String>> {
+        let args = scripts::ci_ff_args(name, dir, tip, base, base_branch);
+        let out = self.run(Invocation::new(args.clone())).await?;
+        let text = out.stdout_str();
+        if let Some(now) = text.lines().find_map(|l| l.strip_prefix("moved=")) {
+            return Ok(Err(now.trim().to_string()));
+        }
+        let fields = scripts::script_fields(&text).map_err(|e| anyhow!(e))?;
+        if !out.success() {
+            return Err(command_error(&args, &out));
+        }
+        Ok(Ok(scripts::MergeOutcome::from_fields(&fields)))
+    }
+
+    /// Remove a plan's CI worktree and branch ([`scripts::CI_REMOVE_SCRIPT`]).
+    pub async fn ci_remove(&self, name: &SandboxName, dir: &str, plan: &str) -> Result<()> {
+        self.thread_script(scripts::ci_remove_args(name, dir, plan)).await.map(drop)
+    }
+
     /// `sbx setup ssh`: writes (again) the managed `Host *.sbx` block. Safe
     /// to re-run; sbx 0.54 asks for it once after the upgrade (see
     /// [`ssh_refresh_due`]).

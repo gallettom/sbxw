@@ -18,6 +18,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+mod ci;
+pub use ci::{ci_branch, ci_worktree, merge_status, skipped_line, Built, Ci, CiFailKind, CiFailure, CiSkip, CiStep, CiTests, MergeStatus, MERGED_TO_CI, MERGED_TO_MAIN};
+
 pub const MAX_THREADS: usize = 8;
 pub const MAX_TEXT: usize = 4000;
 /// What the lead's plan tools answer once the user ended lead mode: about
@@ -170,6 +173,24 @@ pub enum MergeState {
     /// merge, with `abandoned_ms`, until the lead proposes again, which is
     /// a fresh proposal. Not a merge to do: no Merge button offers it.
     Abandoned,
+    /// A CI merge (see [`ci`]): `sbxw/ci-<plan>` is being built from main.
+    #[serde(rename = "ci_building")]
+    CiBuilding,
+    /// Built: the plan's tests run once on its tip.
+    #[serde(rename = "ci_testing")]
+    CiTesting,
+    /// "Merged to CI": the tests passed on the CI tip; the click
+    /// fast-forwards main to it.
+    #[serde(rename = "merged_ci")]
+    MergedCi,
+    /// Was Merged to CI, but main moved since: waits its turn to be rebuilt
+    /// on the new main and tested again. No click is offered.
+    #[serde(rename = "ci_stale")]
+    CiStale,
+    /// A conflict while building, or the tests failed: nothing reached
+    /// main. The lead has the threads fix it and proposes again.
+    #[serde(rename = "ci_failed")]
+    CiFailed,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -202,6 +223,10 @@ pub struct Merge {
     /// person can, from the plan dialog; the plan's log says so too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abandoned_ms: Option<u64>,
+    /// A CI merge's branch, build and tests ([`ci`]); `None`: merged as
+    /// proposed, each branch in turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci: Option<Ci>,
 }
 
 /// What approving a plan does with the test command the lead proposed.
@@ -755,7 +780,9 @@ impl PlanBook {
             if p.threads.iter().any(|t| matches!(t.state, ThreadState::Starting | ThreadState::Working | ThreadState::Blocked)) {
                 return Err("a thread of this plan still works".into());
             }
-            if p.merge.as_ref().is_some_and(|m| matches!(m.state, MergeState::Proposed | MergeState::Merging)) {
+            // Merged to CI waits for the click like a proposed merge; a CI
+            // run building or testing ends as abandoned (`ci_closed`).
+            if p.merge.as_ref().is_some_and(|m| matches!(m.state, MergeState::Proposed | MergeState::Merging | MergeState::MergedCi)) {
                 return Err("a merge of this plan is proposed or running".into());
             }
             p.dismissed = true;
@@ -795,7 +822,29 @@ impl PlanBook {
         distillate: Vec<DistillItem>,
         now: u64,
     ) -> Result<Plan, String> {
+        self.propose_merge_with(id, sandbox, order, note, distillate, false, now)
+    }
+
+    /// [`PlanBook::propose_merge`]; with `ci` (a split plan with an
+    /// approved test command, every thread in the workspace's repository:
+    /// the daemon decides), the merge starts as [`MergeState::CiBuilding`]
+    /// with a fresh CI run, which the daemon builds and tests. A proposal
+    /// is refused while a CI branch is being built.
+    #[allow(clippy::too_many_arguments)]
+    pub fn propose_merge_with(
+        &mut self,
+        id: &str,
+        sandbox: &str,
+        order: Vec<String>,
+        note: &str,
+        distillate: Vec<DistillItem>,
+        ci: bool,
+        now: u64,
+    ) -> Result<Plan, String> {
         let plan = self.led(id, sandbox)?;
+        if plan.merge.as_ref().is_some_and(|m| m.state == MergeState::CiBuilding) {
+            return Err(format!("the CI branch of plan {id} is being built: propose again once it is built (plan_status says when)"));
+        }
         if plan.state != PlanState::Approved {
             return Err(format!("plan {id} is not approved, so there is nothing to merge"));
         }
@@ -846,6 +895,8 @@ impl PlanBook {
             }
         }
         self.mutate(id, now, |p| {
+            // Numbered above every earlier run, the one replaced included.
+            let run = ci.then(|| PlanBook::new_ci(p));
             // An earlier merge that merged something stays in the history.
             if let Some(m) = p.merge.take().filter(|m| m.results.iter().any(|r| r.ok)) {
                 p.earlier_merges.push(m);
@@ -853,17 +904,18 @@ impl PlanBook {
             p.merge = Some(Merge {
                 order,
                 note: clip(note),
-                state: MergeState::Proposed,
+                state: if run.is_some() { MergeState::CiBuilding } else { MergeState::Proposed },
                 base: None,
                 results: vec![],
                 distillate,
                 abandoned_ms: None,
+                ci: run,
             });
             Ok(())
         })
         .inspect(|p| {
             let m = p.merge.as_ref().expect("just proposed");
-            self.note(id, now, EventKind::MergeProposed, team::LEAD, Some(team::USER), Some(&m.note), json!({ "order": m.order, "distillate": m.distillate.len() }));
+            self.note(id, now, EventKind::MergeProposed, team::LEAD, Some(team::USER), Some(&m.note), json!({ "order": m.order, "distillate": m.distillate.len(), "ci": m.ci.as_ref().map(|c| c.branch.clone()) }));
         })
     }
 
@@ -880,6 +932,8 @@ impl PlanBook {
             let m = p.merge.as_mut().ok_or_else(|| format!("plan {id} has no merge proposed"))?;
             match m.state {
                 MergeState::Proposed | MergeState::Failed => {}
+                MergeState::CiTesting | MergeState::MergedCi | MergeState::CiStale | MergeState::CiFailed => {}
+                MergeState::CiBuilding => return Err(format!("the CI branch of plan {id} is being built: wait a moment, then abandon")),
                 MergeState::Merging => return Err(format!("plan {id} is merging: wait for the merge to end")),
                 MergeState::Merged => return Err(format!("plan {id} is already merged")),
                 MergeState::Abandoned => return Err(format!("the merge of plan {id} is already abandoned")),
@@ -902,9 +956,14 @@ impl PlanBook {
                 return Err(format!("plan {id} is not approved"));
             }
             let m = p.merge.as_mut().ok_or_else(|| format!("plan {id} has no merge proposed"))?;
-            match m.state {
-                MergeState::Proposed | MergeState::Failed => {}
-                s => return Err(format!("plan {id} is already {s:?}").to_lowercase()),
+            let st = merge_status(m);
+            match (m.state, m.ci.is_some()) {
+                (MergeState::Proposed | MergeState::Failed, false) | (MergeState::MergedCi, true) => {}
+                (_, true) => return Err(format!("plan {id} cannot be merged yet: {}", st.why_not.unwrap_or(st.detail))),
+                (s, false) => return Err(format!("plan {id} is already {s:?}").to_lowercase()),
+            }
+            if let Some(c) = m.ci.as_mut() {
+                c.click_refused = None;
             }
             m.state = MergeState::Merging;
             m.base = base;
@@ -936,6 +995,20 @@ impl PlanBook {
         .inspect(|_| self.note(id, now, EventKind::MergeResult, team::SBXW, None, text.as_deref(), data))
     }
 
+    /// Add `note` to thread `thread`'s result in the current merge (after
+    /// it was recorded: what the close did with its branch).
+    pub fn note_merge_result(&mut self, id: &str, thread: &str, note: &str, now: u64) -> Result<Plan, String> {
+        self.mutate(id, now, |p| {
+            let m = p.merge.as_mut().ok_or_else(|| format!("plan {id} has no merge"))?;
+            let r = m.results.iter_mut().rev().find(|r| r.thread == thread).ok_or_else(|| format!("no result for {thread:?}"))?;
+            r.note = Some(match r.note.take() {
+                Some(n) => format!("{n}; {note}"),
+                None => note.to_string(),
+            });
+            Ok(())
+        })
+    }
+
     /// Merged when every result is in and ok: one per thread, or the one
     /// branch of a shared plan.
     pub fn finish_merge(&mut self, id: &str, now: u64) -> Result<Plan, String> {
@@ -948,7 +1021,7 @@ impl PlanBook {
         })
         .inspect(|p| {
             let m = p.merge.as_ref().expect("merged");
-            self.note(id, now, EventKind::MergeFinished, team::SBXW, None, None, json!({ "state": m.state, "order": m.order }));
+            self.note(id, now, EventKind::MergeFinished, team::SBXW, None, None, json!({ "state": m.state, "order": m.order, "status": merge_status(m).word, "ci": m.ci.as_ref().map(|c| c.branch.clone()) }));
         })
     }
 

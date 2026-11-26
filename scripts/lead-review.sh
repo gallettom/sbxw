@@ -77,9 +77,10 @@ merge_state() {
   fi
 }
 
-# Live thread branches: sbxw/* with commits main lacks, sorted.
+# Live thread branches: sbxw/* with commits main lacks, sorted. A plan's CI
+# branch (sbxw/ci-<plan>, built by sbxw from the threads) is not a thread's.
 live_branches() {
-  git for-each-ref --format='%(refname:short)' 'refs/heads/sbxw/*' | sort | while read -r b; do
+  git for-each-ref --format='%(refname:short)' 'refs/heads/sbxw/*' | grep -v '^sbxw/ci-' | sort | while read -r b; do
     [ "$(git rev-list --count "$main_ref..$b" 2>/dev/null || echo 0)" -gt 0 ] && echo "$b"
   done
 }

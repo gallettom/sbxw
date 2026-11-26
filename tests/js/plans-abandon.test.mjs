@@ -47,3 +47,10 @@ test('the dialog asks before calling, in the words of the plan, and says what an
   assert.match(src, /showNote\(mergeError, `Abandon merge refused: /);
   assert.match(src, /mergeAbandonYes\.textContent = 'Abandoning…'/);
 });
+
+test('a CI merge: Merge and Abandon merge are offered once it is Merged to CI, never while it builds, tests or failed', () => {
+  const states = ['merged_ci', 'ci_building', 'ci_testing', 'ci_stale', 'ci_failed'];
+  const todo = Object.fromEntries(states.map(s => [s, mergeToDo({ state: s })]));
+  assert.deepEqual({ ...todo }, { merged_ci: true, ci_building: false, ci_testing: false, ci_stale: false, ci_failed: false });
+  assert.equal(mergeAbandonable({ state: 'merged_ci' }), true);
+});

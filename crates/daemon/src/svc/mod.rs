@@ -20,6 +20,7 @@ pub mod models;
 pub mod my_skills;
 pub mod open;
 pub mod plans;
+pub mod plans_ci;
 pub mod relay;
 pub mod remote;
 pub mod remote_access;

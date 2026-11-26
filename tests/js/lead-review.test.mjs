@@ -58,6 +58,10 @@ before(() => {
   commit(repo, 'done work');
   git(repo, 'checkout', '-q', 'main');
   git(repo, 'merge', '-q', '--no-ff', '-m', 'merge done', 'sbxw/done');
+  // A plan's CI branch, built by sbxw from beta: never listed as a thread's.
+  git(repo, 'checkout', '-q', '-b', 'sbxw/ci-p-1', 'main');
+  git(repo, 'merge', '-q', '--no-ff', '-m', 'ci', 'sbxw/beta');
+  git(repo, 'checkout', '-q', 'main');
 });
 
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -87,6 +91,7 @@ test('conflicts are named, against main and against a sibling', () => {
   const out = run('beta').stdout;
   assert.match(out, /^main: CLEAN$/m);
   assert.match(out, /^sbxw\/gamma: CONFLICT: src\/shared\.rs$/m);
+  assert.doesNotMatch(out, /sbxw\/ci-p-1/, 'a CI branch is not a sibling');
   assert.match(out, /\(no --scope given\)/);
   assert.match(out, /\(no worktree registered on sbxw\/beta\)/);
   assert.match(out, /== Added lines that log ==\n\(none\)/);

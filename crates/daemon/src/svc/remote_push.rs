@@ -514,7 +514,7 @@ impl App {
         let mut out: BTreeMap<String, Waiting> = BTreeMap::new();
         for p in self.plans_list().iter() {
             let plan = p.state == PlanState::Pending && !p.closed;
-            let merge = p.merge.as_ref().is_some_and(|m| m.state == MergeState::Proposed);
+            let merge = p.merge.as_ref().is_some_and(|m| matches!(m.state, MergeState::Proposed | MergeState::MergedCi));
             if plan || merge {
                 let w = out.entry(p.sandbox.clone()).or_default();
                 // A plan still pending counts as a plan, else its merge.

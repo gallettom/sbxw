@@ -643,6 +643,202 @@ pub fn thread_merge_pinned_args(name: &SandboxName, workspace: &str, thread: &Th
     args
 }
 
+/// Git's identity for a merge commit sbxw makes, when the sandbox has none
+/// configured: the person's own when set, else a plain sbxw one.
+macro_rules! ci_identity {
+    () => {
+        r#"
+        if ! git config user.email >/dev/null 2>&1; then
+            export GIT_AUTHOR_NAME=sbxw GIT_AUTHOR_EMAIL=sbxw@localhost GIT_COMMITTER_NAME=sbxw GIT_COMMITTER_EMAIL=sbxw@localhost
+        fi"#
+    };
+}
+
+/// Build a split plan's CI branch, `sbxw/ci-$2`, in its scratch worktree
+/// `.sbxw-worktrees/.ci-$2` of the repo under `$1` (a dot name, never a
+/// thread's, excluded from git like the test queue's `.tests`): made again
+/// from scratch every time, from the commit the main checkout's branch is on,
+/// then `git merge --no-ff` of each thread branch `sbxw/$3…` in that order,
+/// each at the tip it has now. The main checkout is never touched.
+///
+/// Prints `base_branch=` and `base=` (full id), then per thread
+/// `merged=<thread> <tip> <merge commit>` or `skip=<thread> <why>` (its
+/// branch is gone, or already in the base: nothing to merge), then `tip=`.
+/// A conflict is aborted and printed as `conflict=<thread>` and `files=`
+/// (five at most), exit 7; anything else that stops it is `error=`.
+pub const CI_BUILD_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), ci_identity!(), r#"
+    [ -n "$1" ] && cd "$1" 2>/dev/null
+    if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+        echo "error=$(sbxw_no_repo)"; exit 3
+    fi
+    root=$(dirname "$common"); plan="$2"; shift 2
+    case "$plan" in ""|*/*|*..*|.*|-*) echo "error=bad plan id $plan"; exit 3 ;; esac
+    base=$(git -C "$root" rev-parse --abbrev-ref HEAD)
+    if [ "$base" = HEAD ]; then
+        echo "error=the main checkout of $root is on a detached HEAD"; exit 4
+    fi
+    basec=$(git -C "$root" rev-parse --verify --quiet "refs/heads/$base^{commit}") || { echo "error=$base has no commit"; exit 4; }
+    ex=$(git -C "$root" rev-parse --git-path info/exclude)
+    case "$ex" in /*) ;; *) ex="$root/$ex" ;; esac
+    mkdir -p "$(dirname "$ex")"
+    grep -qxF '/.sbxw-worktrees/' "$ex" 2>/dev/null || printf '/.sbxw-worktrees/\n' >> "$ex"
+    wt="$root/.sbxw-worktrees/.ci-$plan"; br="sbxw/ci-$plan"
+    if [ -e "$wt" ]; then
+        git -C "$root" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"
+    fi
+    git -C "$root" worktree prune >/dev/null 2>&1
+    mkdir -p "$root/.sbxw-worktrees" || { echo "error=cannot create $root/.sbxw-worktrees"; exit 5; }
+    out=$(git -C "$root" worktree add --quiet -B "$br" "$wt" "$basec" 2>&1) \
+        || { echo "error=git worktree add $wt failed: $(printf '%s' "$out" | tail -n 1)"; exit 5; }
+    echo "base_branch=$base"
+    echo "base=$basec"
+    for t do
+        tb="sbxw/$t"
+        tip=$(git -C "$root" rev-parse --verify --quiet "refs/heads/$tb^{commit}")
+        if [ -z "$tip" ]; then echo "skip=$t $tb is gone"; continue; fi
+        if git -C "$root" merge-base --is-ancestor "$tip" "$basec"; then echo "skip=$t $tb is already in $base"; continue; fi
+        if ! out=$(git -C "$wt" merge --no-ff -m "Merge branch '$tb'" "$tip" 2>&1); then
+            files=$(git -C "$wt" diff --name-only --diff-filter=U | head -n 5 | tr '\n' ' ')
+            git -C "$wt" merge --abort >/dev/null 2>&1
+            echo "conflict=$t"
+            echo "files=${files% }"
+            [ -z "$files" ] && echo "why=$(printf '%s' "$out" | tail -n 1)"
+            exit 7
+        fi
+        echo "merged=$t $tip $(git -C "$wt" rev-parse HEAD)"
+    done
+    echo "tip=$(git -C "$wt" rev-parse HEAD)"
+    echo ok=1
+    exit 0"#);
+
+/// Argv for `CI_BUILD_SCRIPT`: the plan's CI branch from the threads, in order.
+pub fn ci_build_args(name: &SandboxName, workspace: &str, plan: &str, threads: &[ThreadName]) -> Vec<String> {
+    let mut args = owned(&["exec", name.as_str(), "--", "bash", "-lc", CI_BUILD_SCRIPT, "sbxw-ci-build"]);
+    args.extend([workspace, plan].map(pos));
+    args.extend(threads.iter().map(|t| pos(t.as_str())));
+    args
+}
+
+/// What `CI_BUILD_SCRIPT` said.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CiBuild {
+    pub base_branch: String,
+    pub base: String,
+    /// `(thread, its tip merged, the merge commit)`, in order.
+    pub merged: Vec<(String, String, String)>,
+    /// `(thread, why)`: nothing to merge.
+    pub skipped: Vec<(String, String)>,
+    pub tip: String,
+    /// The thread that conflicted and the files, when one did.
+    pub conflict: Option<(String, Vec<String>)>,
+    /// Why it stopped, when it did for another reason (or git named no file).
+    pub error: Option<String>,
+}
+
+impl CiBuild {
+    pub fn parse(stdout: &str) -> CiBuild {
+        let mut b = CiBuild::default();
+        let mut conflict: Option<String> = None;
+        let mut files = Vec::new();
+        for line in stdout.lines() {
+            let Some((k, v)) = line.split_once('=') else { continue };
+            let v = v.trim();
+            match k.trim() {
+                "base_branch" => b.base_branch = v.into(),
+                "base" => b.base = v.into(),
+                "tip" => b.tip = v.into(),
+                "merged" => {
+                    let mut it = v.splitn(3, ' ');
+                    if let (Some(t), Some(tip), Some(c)) = (it.next(), it.next(), it.next()) {
+                        b.merged.push((t.into(), tip.into(), c.into()));
+                    }
+                }
+                "skip" => {
+                    let (t, why) = v.split_once(' ').unwrap_or((v, ""));
+                    b.skipped.push((t.into(), why.into()));
+                }
+                "conflict" => conflict = Some(v.into()),
+                "files" => files = v.split_whitespace().map(String::from).collect(),
+                "why" | "error" => b.error = Some(v.into()),
+                _ => {}
+            }
+        }
+        b.conflict = conflict.map(|t| (t, files));
+        if b.conflict.is_none() && b.error.is_none() && b.tip.is_empty() {
+            b.error = Some("the CI build said nothing of its tip".into());
+        }
+        b
+    }
+}
+
+/// The person's click on a plan Merged to CI: fast-forward the branch the
+/// main checkout of the repo under `$1` is on to the tested CI tip `$2`,
+/// only if that branch is still `$4` at commit `$3` (else `moved=`, exit 8:
+/// nothing changed, the CI branch is to be rebuilt), and after the same
+/// checks as a thread merge ([`THREAD_MERGE_SCRIPT`]'s `sbxw_merge_check`,
+/// against the paths from `$3` to the tip): uncommitted or untracked work the
+/// merge does not touch stays as it is. Prints the same fields as a merge.
+pub const CI_FF_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), merge_check_fn!(), r#"
+    [ -n "$1" ] && cd "$1" 2>/dev/null
+    if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+        echo "error=$(sbxw_no_repo)"; exit 3
+    fi
+    root=$(dirname "$common"); tip="$2"; want="$3"; wantb="$4"
+    base=$(git -C "$root" rev-parse --abbrev-ref HEAD)
+    if [ "$base" != "$wantb" ]; then
+        echo "moved=the main checkout of $root is on $base, not $wantb"; exit 8
+    fi
+    now=$(git -C "$root" rev-parse --verify --quiet HEAD^{commit})
+    if [ "$now" != "$want" ]; then
+        echo "moved=$now"; exit 8
+    fi
+    git -C "$root" cat-file -e "$tip^{commit}" 2>/dev/null || { echo "error=the CI tip $tip is not in $root"; exit 5; }
+    sbxw_merge_check "$root" "$common" "$tip" || exit 6
+    if ! out=$(git -C "$root" merge --ff-only "$tip" 2>&1); then
+        echo "error=$(printf '%s' "$out" | tail -n 1)"; exit 7
+    fi
+    echo "base=$base"
+    echo "head=$(git -C "$root" rev-parse HEAD)"
+    echo "commit=$(git -C "$root" rev-parse --short HEAD)"
+    echo "absent=$absent_n"
+    echo "edits=$edits_n"
+    echo ok=1
+    exit 0"#);
+
+/// Argv for `CI_FF_SCRIPT`.
+pub fn ci_ff_args(name: &SandboxName, workspace: &str, tip: &str, base: &str, base_branch: &str) -> Vec<String> {
+    let mut args = owned(&["exec", name.as_str(), "--", "bash", "-lc", CI_FF_SCRIPT, "sbxw-ci-ff"]);
+    args.extend([workspace, tip, base, base_branch].map(pos));
+    args
+}
+
+/// Remove plan `$2`'s CI worktree and branch from the repo under `$1`:
+/// once merged, abandoned or closed. Nothing else is touched; an absent one
+/// is fine.
+pub const CI_REMOVE_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
+    [ -n "$1" ] && cd "$1" 2>/dev/null
+    if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+        echo "error=$(sbxw_no_repo)"; exit 3
+    fi
+    root=$(dirname "$common"); plan="$2"
+    case "$plan" in ""|*/*|*..*|.*|-*) echo "error=bad plan id $plan"; exit 3 ;; esac
+    wt="$root/.sbxw-worktrees/.ci-$plan"
+    if [ -e "$wt" ]; then
+        git -C "$root" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"
+    fi
+    git -C "$root" worktree prune >/dev/null 2>&1
+    if git -C "$root" show-ref --verify --quiet "refs/heads/sbxw/ci-$plan"; then
+        git -C "$root" branch -D "sbxw/ci-$plan" >/dev/null 2>&1 || { echo "error=could not delete sbxw/ci-$plan"; exit 4; }
+    fi
+    echo ok=1"#);
+
+/// Argv for `CI_REMOVE_SCRIPT`.
+pub fn ci_remove_args(name: &SandboxName, workspace: &str, plan: &str) -> Vec<String> {
+    let mut args = owned(&["exec", name.as_str(), "--", "bash", "-lc", CI_REMOVE_SCRIPT, "sbxw-ci-remove"]);
+    args.extend([workspace, plan].map(pos));
+    args
+}
+
 /// What a merge that went through has to say besides its commit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MergeOutcome {
@@ -1184,6 +1380,85 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
         std::fs::write(r.root.join(".git/MERGE_HEAD"), head).unwrap();
         let err = r.merge("api").unwrap_err();
         assert!(err.contains("in the middle of a merge") && err.contains("MERGE_HEAD"), "{err}");
+    }
+
+    /// A second thread branch from main touching `touch`.
+    fn add_branch(r: &Repo, thread: &str, touch: &str, text: &str) {
+        r.git(&["checkout", "-q", "-b", &format!("sbxw/{thread}"), "main"]);
+        r.write(touch, text);
+        r.git(&["add", "-A"]);
+        r.git(&["commit", "-q", "-m", thread]);
+        r.git(&["checkout", "-q", "main"]);
+    }
+
+    #[test]
+    fn the_ci_branch_merges_the_threads_in_order_and_main_is_untouched() {
+        let Some(r) = Repo::new("ci-build") else { return };
+        r.with_branch("api", "src/d");
+        add_branch(&r, "web", "docs/c", "web's");
+        r.git(&["branch", "sbxw/empty", "main"]);
+        let main = r.git(&["rev-parse", "main"]).trim().to_string();
+        r.write("untracked", "mine");
+        let (ok, out) = r.run(CI_BUILD_SCRIPT, &[r.root.to_str().unwrap(), "p-1", "api", "web", "empty", "gone"]);
+        assert!(ok, "{out}");
+        let b = CiBuild::parse(&out);
+        assert_eq!((b.base_branch.as_str(), b.base.as_str()), ("main", main.as_str()));
+        assert_eq!(b.merged.iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["api", "web"]);
+        assert_eq!(b.skipped.iter().map(|s| s.0.as_str()).collect::<Vec<_>>(), ["empty", "gone"]);
+        assert_eq!((b.conflict.clone(), b.error.clone()), (None, None));
+        assert_eq!(b.tip, b.merged[1].2);
+        assert_eq!(r.git(&["rev-parse", "sbxw/ci-p-1"]).trim(), b.tip);
+        assert_eq!(r.git(&["rev-parse", "main"]).trim(), main, "main untouched");
+        let wt = r.root.join(".sbxw-worktrees/.ci-p-1");
+        assert_eq!(std::fs::read_to_string(wt.join("docs/c")).unwrap(), "web's");
+        // A rebuild starts from scratch; the remove leaves nothing behind.
+        let (ok, out) = r.run(CI_BUILD_SCRIPT, &[r.root.to_str().unwrap(), "p-1", "web"]);
+        assert!(ok, "{out}");
+        assert_eq!(CiBuild::parse(&out).merged.len(), 1);
+        let (ok, out) = r.run(CI_REMOVE_SCRIPT, &[r.root.to_str().unwrap(), "p-1"]);
+        assert!(ok, "{out}");
+        assert!(!wt.exists());
+        assert!(!r.git(&["branch", "--list"]).contains("ci-p-1"));
+        assert_eq!(r.git(&["status", "--porcelain"]), "?? untracked\n");
+    }
+
+    #[test]
+    fn a_ci_conflict_names_the_thread_and_the_files() {
+        let Some(r) = Repo::new("ci-conflict") else { return };
+        r.with_branch("api", "b");
+        add_branch(&r, "web", "b", "web's own b");
+        let (ok, out) = r.run(CI_BUILD_SCRIPT, &[r.root.to_str().unwrap(), "p-1", "api", "web"]);
+        assert!(!ok);
+        let b = CiBuild::parse(&out);
+        assert_eq!(b.conflict, Some(("web".to_string(), vec!["b".to_string()])), "{out}");
+        assert_eq!(b.merged.len(), 1);
+    }
+
+    #[test]
+    fn the_click_fast_forwards_to_the_ci_tip_keeps_other_work_and_refuses_edits_or_a_moved_main() {
+        let Some(r) = Repo::new("ci-ff") else { return };
+        r.with_branch("api", "src/d");
+        let (_, out) = r.run(CI_BUILD_SCRIPT, &[r.root.to_str().unwrap(), "p-1", "api"]);
+        let b = CiBuild::parse(&out);
+        let root = r.root.to_str().unwrap();
+        // An edit on a path the merge changes: refused, nothing moved.
+        r.write("src/d", "my edit");
+        let (ok, out) = r.run(CI_FF_SCRIPT, &[root, &b.tip, &b.base, "main"]);
+        assert!(!ok && script_fields(&out).unwrap_err().contains("uncommitted changes to 1 file(s) this merge changes (src/d)"), "{out}");
+        assert_eq!(r.git(&["rev-parse", "main"]).trim(), b.base);
+        r.git(&["checkout", "-q", "--", "src/d"]);
+        // Other work stays: an edit elsewhere, an untracked file.
+        r.write("a", "edit elsewhere");
+        r.write("untracked", "mine");
+        let (ok, out) = r.run(CI_FF_SCRIPT, &[root, &b.tip, &b.base, "main"]);
+        assert!(ok, "{out}");
+        let m = MergeOutcome::from_fields(&script_fields(&out).unwrap());
+        assert_eq!((m.head.as_str(), m.edits), (b.tip.as_str(), 1));
+        assert_eq!(r.git(&["rev-parse", "main"]).trim(), b.tip, "exactly the tested commit");
+        assert_eq!(std::fs::read_to_string(r.root.join("a")).unwrap(), "edit elsewhere");
+        // Main moved since the build: nothing changes, `moved=`.
+        let (ok, out) = r.run(CI_FF_SCRIPT, &[root, &b.tip, &b.base, "main"]);
+        assert!(!ok && out.contains(&format!("moved={}", b.tip)), "{out}");
     }
 
     #[test]

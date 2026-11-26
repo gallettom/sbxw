@@ -32,7 +32,7 @@ fn plan(id: &str, state: PlanState, threads: Vec<PlanThread>) -> Plan {
 }
 
 fn merge(state: MergeState, order: &[&str], results: Vec<MergeResult>) -> Option<Merge> {
-    Some(Merge { order: order.iter().map(|s| s.to_string()).collect(), note: String::new(), state, base: None, results, distillate: vec![], abandoned_ms: None })
+    Some(Merge { order: order.iter().map(|s| s.to_string()).collect(), note: String::new(), state, base: None, results, distillate: vec![], abandoned_ms: None, ci: None })
 }
 
 fn ok(t: &str, ok: bool) -> MergeResult {
@@ -70,6 +70,26 @@ fn every_plan_and_thread_state_has_its_column() {
     assert_eq!(one(PlanState::Approved, Done, merge(MergeState::Merged, &["a"], vec![]), false), (Merged, vec![]));
     assert_eq!(one(PlanState::Approved, Working, None, true), (Progress, vec![Mark::TeamEnded]));
     assert_eq!(one(PlanState::Approved, Done, merge(MergeState::Merged, &["a"], vec![]), true), (Merged, vec![]));
+}
+
+/// A CI merge: building or testing and stale in Test, failed in Test,
+/// Merged to CI in Ready, each marked; merged in "Merged to main".
+#[test]
+fn a_ci_merge_shows_merged_to_ci_then_merged_to_main() {
+    let one = |state: MergeState| {
+        let mut p = plan("p", PlanState::Approved, vec![th("a", ThreadState::Done, None)]);
+        p.merge = merge(state, &["a"], vec![]);
+        p.merge.as_mut().unwrap().ci = Some(crate::plans::Ci::default());
+        column_of(&p, &p.threads[0])
+    };
+    assert_eq!(one(MergeState::CiBuilding), (Column::Test, vec![Mark::CiTesting]));
+    assert_eq!(one(MergeState::CiTesting), (Column::Test, vec![Mark::CiTesting]));
+    assert_eq!(one(MergeState::CiStale), (Column::Test, vec![Mark::CiStale]));
+    assert_eq!(one(MergeState::CiFailed), (Column::Test, vec![Mark::CiFailed]));
+    assert_eq!(one(MergeState::MergedCi), (Column::Ready, vec![Mark::MergedCi]));
+    assert_eq!(one(MergeState::Merging), (Column::Ready, vec![Mark::Merging]));
+    assert_eq!(one(MergeState::Merged), (Column::Merged, vec![]));
+    assert_eq!((Mark::MergedCi.label(), Column::Merged.title()), ("Merged to CI", "Merged to main"));
 }
 
 /// An abandoned merge is no merge to do: a done thread goes back to Test,
@@ -150,7 +170,7 @@ fn a_ticket_follows_its_thread_and_keeps_its_place_once_the_plan_is_gone() {
     let again: Book = serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
     assert_eq!(board("web", &[&again], &[], 100, false), bd);
     let h: Vec<String> = b.get(n).unwrap().history.iter().map(|s| s.text.clone()).collect();
-    assert!(h.iter().any(|t| t.contains("Taken into a plan")) && h.iter().any(|t| t == "pages: Merged"), "{h:?}");
+    assert!(h.iter().any(|t| t.contains("Taken into a plan")) && h.iter().any(|t| t == "pages: Merged to main"), "{h:?}");
 }
 
 #[test]

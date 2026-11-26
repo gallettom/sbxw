@@ -121,6 +121,16 @@ impl App {
         // The Board's three numbers (sbxw_core::team::plan_numbers).
         let log = self.plans.lock().unwrap().log_of(&plan.id);
         v["numbers"] = sbxw_core::team::plan_numbers(plan, &log, c);
+        // What a screen draws of the merge, as is (`plans::ci`), and why a
+        // merge proposed as is did not go through a CI branch.
+        if let Some(m) = &plan.merge {
+            v["merge_status"] = serde_json::to_value(sbxw_core::plans::merge_status(m)).unwrap_or_default();
+            if m.ci.is_none() && plan.variant.is_split() && plan.approved_tests.is_some() {
+                if let Err(why) = self.ci_applies(plan, &m.order) {
+                    v["merge_status"]["no_ci_because"] = why.into();
+                }
+            }
+        }
         if let Ok(sb) = SandboxRef::parse(&plan.sandbox) {
             if let Some(threads) = v.get_mut("threads").and_then(|t| t.as_array_mut()) {
                 for (t, pt) in threads.iter_mut().zip(&plan.threads) {
@@ -293,7 +303,11 @@ impl App {
     /// says so rather than wait for it. A split plan's thread in its base
     /// may be named: the merge settles it with nothing to merge and closes
     /// it with the others ([`App::plan_merge_pinned`]).
-    pub async fn plan_propose_merge_checked(&self, id: &str, sandbox: &SandboxRef, order: Vec<String>, note: &str, distillate: Vec<DistillItem>) -> Result<Plan, String> {
+    ///
+    /// A split plan with an approved test command, its threads in the
+    /// workspace's repository ([`App::ci_applies`]), is merged through its
+    /// CI branch: the proposal starts the build at once (`plans_ci`).
+    pub async fn plan_propose_merge_checked(self: &Arc<Self>, id: &str, sandbox: &SandboxRef, order: Vec<String>, note: &str, distillate: Vec<DistillItem>) -> Result<Plan, String> {
         let plan = self.plan_led(id, sandbox)?;
         let outside = if plan.variant.is_split() { BTreeMap::new() } else { self.merged_outside(&plan).await };
         let named: Vec<String> = plan.threads.iter().map(|t| t.name.clone()).collect();
@@ -304,7 +318,14 @@ impl App {
                 plan.team_name()
             ));
         }
-        self.plan_propose_merge(id, sandbox, order, note, distillate)
+        let order: Vec<String> = order.iter().map(|t| t.trim().to_string()).collect();
+        let ci = self.ci_applies(&plan, &order).is_ok();
+        let note = messages::clip_text(note, sbxw_core::plans::MAX_TEXT);
+        let plan = self.plans.lock().unwrap().propose_merge_with(id, &sandbox.to_string(), order, &note, distillate, ci, now_ms())?;
+        tracing::info!("plans: '{sandbox}' proposed merging {id}{}", if ci { " through its CI branch" } else { "" });
+        let plan = self.plan_changed(plan);
+        self.ci_start(&plan);
+        Ok(plan)
     }
 
     /// The lead marks a thread of its plan done ([`PlanBook::mark_done`]).
@@ -437,9 +458,12 @@ impl App {
 
     /// The person closes a settled plan from the Kanban: its unmerged
     /// threads leave the review columns. Only marks the plan; git is not touched.
-    pub fn plan_dismiss(&self, id: &str) -> Result<Plan, String> {
+    pub fn plan_dismiss(self: &Arc<Self>, id: &str) -> Result<Plan, String> {
         let plan = self.plans.lock().unwrap().dismiss(id, now_ms())?;
-        Ok(self.plan_changed(plan))
+        let plan = self.plan_changed(plan);
+        let (app, id) = (self.clone(), id.to_string());
+        tokio::spawn(async move { app.ci_close(&id).await });
+        Ok(plan)
     }
 
     /// The person abandons the merge proposed (or failed) for plan `id`, from
@@ -450,6 +474,9 @@ impl App {
     pub async fn plan_abandon_merge(self: &Arc<Self>, id: &str) -> Result<Plan, String> {
         let plan = self.plans.lock().unwrap().abandon_merge(id, now_ms())?;
         let plan = self.plan_changed(plan);
+        if plan.ci().is_some() {
+            self.ci_remove(&plan).await;
+        }
         let line = abandoned_line(&plan);
         tracing::info!("plans: {id}: {line}");
         if let Ok(sandbox) = SandboxRef::parse(&plan.sandbox) {
@@ -489,6 +516,9 @@ impl App {
         if plan.variant == Variant::Shared {
             self.refuse_while_claimed(&plan)?;
             return self.plan_merge_shared(plan, merge, &sandbox, close_threads, distillate, pins).await;
+        }
+        if merge.ci.is_some() {
+            return self.plan_merge_ci(plan, &sandbox, close_threads, distillate, pins).await;
         }
         // Per repo directory, the base the next pinned merge must find.
         let mut pinned_base: HashMap<String, String> = HashMap::new();
@@ -584,6 +614,16 @@ impl App {
         let plan = self.plans.lock().unwrap().finish_merge(id, now_ms())?;
         let plan = self.plan_changed(plan);
         let merge = plan.merge.clone().unwrap_or(merge);
+        let merge = self.merge_wrap_up(&sandbox, id, &plan, merge, &done_before, close_threads).await;
+        // Main moved: the plans Merged to CI on the old main wait their turn.
+        self.ci_schedule(&sandbox).await;
+        Ok(merge)
+    }
+
+    /// Once a split merge ended: the other threads told that main moved,
+    /// the merged ones closed (`close_threads`), the lead told in one line.
+    pub(crate) async fn merge_wrap_up(self: &Arc<Self>, sandbox: &SandboxRef, id: &str, plan: &Plan, merge: sbxw_core::plans::Merge, done_before: &[String], close_threads: bool) -> sbxw_core::plans::Merge {
+        let sandbox = sandbox.clone();
         let mut summary = messages::merge_summary(&merge);
         // The other threads of the sandbox hear that their base moved.
         let merged_now: Vec<String> = merge.results.iter().filter(|r| r.ok && !done_before.contains(&r.thread)).map(|r| r.thread.clone()).collect();
@@ -595,9 +635,24 @@ impl App {
         }
         if close_threads && merge.state == MergeState::Merged {
             let (mut closed, mut unclosed) = (Vec::new(), Vec::new());
+            // A CI merge took the tested tip, not the branches: a branch with
+            // a commit main lacks (made after the click's check) is kept.
+            let (keep, unread) = if merge.ci.is_some() { self.ci_unmerged_branches(plan).await } else { Default::default() };
+            if let Some(e) = &unread {
+                summary.push_str(&format!(" sbxw could not read the thread branches ({e}), so every branch was kept."));
+            }
             for t in &merge.order {
                 let Ok(name) = ThreadName::parse(t) else { continue };
-                match self.close_thread(&sandbox, &name, false, true).await {
+                let kept = keep.contains(t);
+                if kept {
+                    let note = format!("its branch sbxw/{t} was kept: it has commits main lacks, made after the CI branch was tested");
+                    let r = self.plans.lock().unwrap().note_merge_result(id, t, &note, now_ms());
+                    if let Ok(p) = r {
+                        self.plan_changed(p);
+                    }
+                    summary.push_str(&format!(" Kept the branch sbxw/{t}: it has commits main lacks."));
+                }
+                match self.close_thread(&sandbox, &name, false, !kept).await {
                     Ok(()) => closed.push(t.clone()),
                     Err(e) => {
                         tracing::warn!("plans: could not close merged thread '{t}': {e}");
@@ -614,12 +669,12 @@ impl App {
             }
         }
         self.tell_lead_merged(&sandbox, id, &summary).await;
-        Ok(merge)
+        merge
     }
 
     /// A merge refused for files missing from the checkout, with the reason
     /// sbxw knows when it split the workspace itself.
-    fn with_split_note(&self, sandbox: &SandboxRef, err: String) -> String {
+    pub(crate) fn with_split_note(&self, sandbox: &SandboxRef, err: String) -> String {
         match self.split_note(sandbox) {
             Some(note) if err.contains("missing from the main checkout") => format!("{err} {note}"),
             _ => err,
@@ -773,6 +828,7 @@ impl App {
             }
         }
         self.tell_lead_merged(sandbox, id, &summary).await;
+        self.ci_schedule(sandbox).await;
         Ok(merge)
     }
 
@@ -1014,7 +1070,8 @@ impl App {
         let ended = self.plans.lock().unwrap().end_lead(&sandbox.to_string(), now_ms());
         tracing::info!("plans: lead mode ended for '{sandbox}' ({} plan(s) refused or closed)", ended.len());
         for p in ended {
-            self.plan_changed(p);
+            let p = self.plan_changed(p);
+            self.ci_close(&p.id).await;
         }
         if self.sessions.is_live(&SessionKey::agent(sandbox)) {
             self.deliver_or_log(sandbox, &SessionKind::Agent, Kind::Notice, "sbxw (the person)", messages::LEAD_END, Some("lead-end"));
@@ -1216,6 +1273,10 @@ mod reopen_tests;
 #[cfg(test)]
 #[path = "plans_merge_close_tests.rs"]
 mod merge_close_tests;
+
+#[cfg(test)]
+#[path = "plans_ci_tests.rs"]
+mod ci_tests;
 
 #[cfg(test)]
 mod tests {
