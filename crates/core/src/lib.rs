@@ -58,6 +58,7 @@ pub mod terminal;
 pub mod testq;
 pub mod team;
 pub mod tickets;
+pub mod tracker;
 pub mod tooling;
 pub mod uploads;
 pub mod usage;

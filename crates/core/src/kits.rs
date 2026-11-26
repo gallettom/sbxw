@@ -37,6 +37,15 @@ pub const JARVIS: &str = "jarvis";
 /// no sandbox but the daemon's own is ever taken for Jarvis.
 pub const JARVIS_SANDBOX: &str = crate::jarvis::SANDBOX;
 
+/// The daemon-owned sandbox that runs the ticket sync script
+/// (`crate::tracker`), on this machine. No agent ever starts there, and
+/// nothing of a project is mounted. Its name is reserved on every host, as
+/// Jarvis's is.
+pub const SYNC_SANDBOX: &str = "sbxw-sync";
+
+/// The names only the daemon gives a sandbox.
+pub const RESERVED_SANDBOXES: [&str; 2] = [JARVIS_SANDBOX, SYNC_SANDBOX];
+
 /// `kits` as applied: [`BASE`] first, then the project's, without repeating it.
 pub fn with_base(kits: &[String]) -> Vec<String> {
     let base = format!("sbxw:{BASE}");
