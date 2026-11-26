@@ -834,7 +834,7 @@ fn backlog_comes_first_and_an_imported_card_shows_its_issue_key() {
     let closed = card_of(&v, "T-22");
     assert!(closed["plan"].is_null(), "no can_plan: no Move to Planned");
     let m = closed["marks"].as_array().unwrap();
-    assert!(m.iter().any(|m| m["label"] == "Closed at source" && m["quiet"] == true), "{m:?}");
+    assert!(m.iter().any(|m| m["label"] == "closed upstream" && m["quiet"] == true), "{m:?}");
     // An imported ticket at work keeps its key, and has no Move to Planned.
     assert_eq!(column_of(&v, "T-23"), "progress");
     assert_eq!(card_of(&v, "T-23")["origin"]["key"], "acme/web-app#7");
@@ -854,7 +854,7 @@ fn move_to_planned_posts_plan_and_is_refused_without_can_plan() {
     let (v2, _) = drive(&mut st, &mut d, out);
     assert_eq!(column_of(&v2, "T-20"), "planned", "the stand-in moved it, the board read again");
     assert_eq!(col(&v2, "backlog")["count"], 2);
-    // Closed at source with no can_plan, a Planned ticket, one at work: refused.
+    // Closed upstream with no can_plan, a Planned ticket, one at work: refused.
     for num in ["T-22", "T-1", "T-23"] {
         assert!(st.act(&Ctx { data: &d }, &asked("kanban_plan", json!({ "id": card_id(&v, num) }))).is_err(), "{num}");
     }
@@ -882,9 +882,12 @@ fn an_imported_ticket_is_read_only_and_opens_its_issue() {
     assert_eq!(t["edit_why"], "Edited in GitHub");
     assert!(t["imported"]["line"].as_str().unwrap().contains("edited there"));
     assert_eq!((t["imported"]["open"].as_bool(), t["imported"]["open_label"].as_str()), (Some(true), Some("Open in GitHub")));
-    for (name, args) in [("kanban_edit", json!({})), ("kanban_delete", json!({})), ("kanban_priority", json!({ "priority": "p1" })), ("kanban_remove_file", json!({ "file": "x" }))] {
+    for (name, args) in [("kanban_edit", json!({})), ("kanban_delete", json!({})), ("kanban_remove_file", json!({ "file": "x" }))] {
         assert!(st.act(&Ctx { data: &d }, &asked(name, args)).is_err(), "{name} on an imported ticket");
     }
+    // Its priority stays the person's: the tracker owns its words, not that.
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_priority", json!({ "priority": "p1" }))).unwrap();
+    assert!(matches!(out.as_slice(), [Action::Call(c)] if c.path == "/api/tickets/web-app/20/edit"), "{out:?}");
     let out = st.act(&Ctx { data: &d }, &asked("kanban_issue", json!({ "id": "" }))).unwrap();
     assert_eq!(out, vec![Action::OpenLink("https://github.com/acme/web-app/issues/12".into())]);
     // A person's ticket has no issue.

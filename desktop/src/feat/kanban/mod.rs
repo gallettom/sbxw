@@ -573,8 +573,8 @@ impl State {
             }
             "kanban_priority" => {
                 let (sb, n, c) = self.open_ticket()?;
-                if !model::editable(c) {
-                    return Err(if model::imported(c) { "an imported ticket is read-only here".into() } else { "a card recorded from a thread has no priority".into() });
+                if !model::prioritizable(c) {
+                    return Err("a card recorded from a thread has no priority".into());
                 }
                 out.push(self.post(&sb, n, "edit", json!({ "priority": a.req("priority") }), "set the priority", "kb-edit"));
                 return Ok(out);

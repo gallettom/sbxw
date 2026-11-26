@@ -2547,9 +2547,12 @@ opens only when it is http or https (`markdown::safe_url`); any other is
 shown as the key alone, disabled. A Backlog card with `can_plan` has one
 action, "Move to Planned" (`kanban-row-<key>-plan`, `kanban_plan`, posts
 `/plan`): the one way out of Backlog, the person's; there is no drag and no
-automatic move. The mark `closed-upstream` is a quiet "Closed at source"
-(text, not a pill). An imported ticket's panel is read-only (no edit,
-priority, delete or file removal, each refused in Rust too) with one line
+automatic move. The mark `closed-upstream` is a quiet "closed upstream"
+(text, not a pill): its issue was closed, or lost the sync label, in the
+tracker, and the work here goes on. An imported ticket's title,
+description and files are read-only (no edit, delete or file removal, each
+refused in Rust too); its priority (in Planned) and its validation (in
+Merged) stay the person's. Its panel has one line
 (`kanban-imported`) saying its words are edited in the tracker, and "Open in
 GitHub" (`kanban-issue`); a Backlog ticket's panel also has "Move to
 Planned" (`kanban-plan`). A ticket the person creates goes to Planned.

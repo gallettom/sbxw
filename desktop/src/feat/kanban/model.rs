@@ -47,7 +47,8 @@ pub fn can_plan(card: &J) -> bool {
     card["column"] == "backlog" && card["can_plan"] == true
 }
 
-/// A card's marks as drawn: `closed-upstream` is a quiet "Closed at source".
+/// A card's marks as drawn: `closed-upstream` is a quiet "closed upstream"
+/// (the issue was closed, or lost the sync label, in the tracker).
 fn marks_of(c: &J) -> Vec<J> {
     c["marks"]
         .as_array()
@@ -55,7 +56,7 @@ fn marks_of(c: &J) -> Vec<J> {
         .flatten()
         .map(|m| {
             if m["id"] == "closed-upstream" {
-                json!({ "label": "Closed at source", "tone": "neutral", "help": "The issue is closed in the tracker", "quiet": true })
+                json!({ "label": "closed upstream", "tone": "neutral", "help": "Its issue was closed, or lost the sync label, in the tracker: the work here goes on", "quiet": true })
             } else {
                 json!({ "label": m["label"], "tone": m["tone"], "help": m["help"] })
             }
@@ -231,7 +232,7 @@ pub fn panel(card: &J, view: Option<&J>, previews: &std::collections::BTreeSet<S
         "move_why": can["reorder_why"],
         "validate": if col == "merged" && !card["n"].is_null() { json!({ "on": card["validated"] == true }) } else { J::Null },
         "priority": card["priority"],
-        "priorities": if editable(card) && col == "planned" { json!([{ "id": "none", "label": "No priority" }, { "id": "p1", "label": "P1" }, { "id": "p2", "label": "P2" }, { "id": "p3", "label": "P3" }]) } else { J::Null },
+        "priorities": if prioritizable(card) && col == "planned" { json!([{ "id": "none", "label": "No priority" }, { "id": "p1", "label": "P1" }, { "id": "p2", "label": "P2" }, { "id": "p3", "label": "P3" }]) } else { J::Null },
         "loading": view.is_none() && !card["n"].is_null(),
         "plan": can_plan(card),
     });
@@ -245,7 +246,7 @@ pub fn panel(card: &J, view: Option<&J>, previews: &std::collections::BTreeSet<S
             "open": url,
             "open_label": format!("Open in {tracker}"),
             "open_help": if url { format!("Open the issue in {tracker}, in your browser") } else { "Its link is not a web address: not opened".to_string() },
-            "closed": card["origin"]["upstream"] == "closed",
+            "closed": card["origin"]["closed_upstream"] == true || card["origin"]["upstream"] == "closed",
         });
     }
     // Send to the lead: only a ticket no thread works on, and not now when
@@ -289,6 +290,12 @@ pub fn panel(card: &J, view: Option<&J>, previews: &std::collections::BTreeSet<S
 /// The person edits this ticket here (not a thread's card, not imported).
 pub fn editable(card: &J) -> bool {
     card["can"]["edit"] == true && !imported(card)
+}
+
+/// The person sets this ticket's priority here: their own, or an imported
+/// one (the tracker owns its words, not its priority).
+pub fn prioritizable(card: &J) -> bool {
+    card["can"]["edit"] == true || imported(card)
 }
 
 /// The person deletes this ticket here (an imported one goes with its source).
