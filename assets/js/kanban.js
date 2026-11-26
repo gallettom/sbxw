@@ -1,6 +1,7 @@
 // ── Kanban ────────────────────────────────────────────────────────────────
-// The tickets of a sandbox (or of every sandbox) in five columns: Planned,
-// In progress, In test, Ready to merge, Merged. The daemon decides everything
+// The tickets of a sandbox (or of every sandbox) in the daemon's columns:
+// Backlog (issues of a tracker, when ticket sync is on), Planned, In progress,
+// In test, Ready to merge, Merged. The daemon decides everything
 // on the board: which column a card is in, its labels, marks and counts, and
 // what the person may do (`sbxw_core::tickets`). This page draws its answer
 // and computes none of it. See docs/web-ui.md#the-kanban and
@@ -133,6 +134,26 @@ function kbMarksHtml(marks) {
     `<span class="kb-mark kb-tone-${kbTone(m.tone)}" title="${escHtml(m.help)}">${escHtml(m.label)}</span>`).join('')}</span>`;
 }
 
+// Where a Backlog card came from: `origin: {tracker, key, url, upstream}`, set
+// by the daemon from the tracker's issue. All of it is data: the key is text,
+// and the url is a link only when it is a plain http(s) address, opened in a
+// new tab with no opener and no referrer. Anything else: null, or no url.
+function kbOrigin(card) {
+  const o = card?.origin;
+  if (!o || typeof o !== 'object' || typeof o.key !== 'string' || !o.key) return null;
+  const url = typeof o.url === 'string' && /^https?:\/\/[^\s"'<>\\]+$/i.test(o.url) ? o.url : '';
+  return { key: o.key, url, tracker: typeof o.tracker === 'string' ? o.tracker : '' };
+}
+
+function kbOriginHtml(card) {
+  const o = kbOrigin(card);
+  if (!o) return '';
+  const what = o.tracker ? `${o.tracker} ` : '';
+  return `<p class="kb-p-origin">From ${escHtml(what)}${o.url
+    ? `<a class="kb-origin-link" href="${escHtml(o.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" title="${escHtml(o.url)}">${escHtml(o.key)}</a>`
+    : `<span class="kb-origin-key">${escHtml(o.key)}</span>`}</p>`;
+}
+
 function kbThreadHtml(card) {
   if (!card.thread) return '';
   return `<span class="kb-thread"><span class="kb-dot kb-tone-${kbTone(card.thread_tone)}" aria-hidden="true"></span>${escHtml(card.thread)}</span>`;
@@ -143,9 +164,11 @@ function kbThreadHtml(card) {
 // `title_short` under 250 px, `title_long` above.
 function kbCardHtml(card, o = {}) {
   const red = (card.marks || []).some(m => KB_RED_MARKS.includes(m.id));
+  const origin = kbOrigin(card);
   return `<button type="button" class="kb-card${red ? ' kb-red' : ''}" data-kb-card="${escHtml(card.key)}" title="${escHtml(card.title)}">
       <span class="kb-card-head"><span class="kb-num${card.n == null ? ' kb-num-thread' : ''}">${escHtml(card.num)}</span>${
-        o.all ? `<span class="kb-sb">${escHtml(card.sandbox)}</span>` : ''}<span class="kb-age">${escHtml(card.age)}</span></span>
+        o.all ? `<span class="kb-sb">${escHtml(card.sandbox)}</span>` : ''}${
+        origin ? `<span class="kb-origin">${escHtml(origin.key)}</span>` : ''}<span class="kb-age">${escHtml(card.age)}</span></span>
       <span class="kb-card-title kb-t-short">${escHtml(card.title_short)}</span><span class="kb-card-title kb-t-long">${escHtml(card.title_long)}</span>
       ${kbMarksHtml(card.marks)}
       ${kbThreadHtml(card)}
@@ -168,7 +191,7 @@ function kbColumnHtml(col, o = {}) {
     </section>`;
 }
 
-// The five columns, in the daemon's order.
+// The columns, in the daemon's order (Backlog first when it sends one).
 function kbBoardHtml(board, o = {}) {
   const cols = Array.isArray(board?.columns) ? board.columns : [];
   return `<div class="kb-cols">${cols.map(c => kbColumnHtml(c, o)).join('')}</div>`;
@@ -223,6 +246,7 @@ function kbPanelHtml(card, t, o = {}) {
     </div>`);
   parts.push(kbMarksHtml(marks));
   parts.push(`<h3 class="kb-p-title" id="kb-p-title">${escHtml(title)}</h3>`);
+  parts.push(kbOriginHtml(card));
   if (t?.description) parts.push(`<p class="kb-p-desc">${escHtml(t.description)}</p>`);
   if (files.length) {
     parts.push(`<h4 class="kb-p-h">${escHtml(t.files_label || 'Files')}</h4>`);
