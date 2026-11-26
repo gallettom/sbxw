@@ -787,27 +787,41 @@ pub const TESTS_ERROR_MARK: &str = "sbxw-error=";
 ///   ignored ones (`node_modules` stays warm). The command runs there.
 /// * `SBXW_TEST_TARGET` is one build directory in the sandbox's home, kept
 ///   from job to job; `SBXW_TEST_CHECKOUT` is the checkout, also the cwd.
-/// * The full output goes to `~/.sbxw/tests/logs/<label>.log` (the label is
-///   the plan's id, also `SBXW_TEST_SUITE`), whose path is printed first
-///   (`sbxw-log=`), then its last 200 lines: only a tail crosses to the
-///   host. A step before the command that fails prints
-///   `sbxw-error=` and exits 3.
+/// * The full output goes to `~/.sbxw/tests/logs/<label>/<run>.log` (the
+///   label is the plan's id, also `SBXW_TEST_SUITE`; the run names the job
+///   and its attempt, `<job>-<attempt>`), so no attempt overwrites another.
+///   Its path is printed first (`sbxw-log=`), then its last 200 lines: only
+///   a tail crosses to the host. After the run, the logs of the label's
+///   `keep` newest jobs stay and older ones are deleted. A step before the
+///   command that fails prints `sbxw-error=` and exits 3.
 /// * `timeout` bounds the command inside the sandbox (exit 124), so it does not
 ///   outlive the daemon's own bound; a lock in the home keeps two runs apart
 ///   should a restarted daemon start one while the last still runs.
-/// * The label, the commit, the command and the limit are positional
-///   arguments: the command is the one the person approved with the plan,
-///   run with `bash -c`, never text a request carried.
-pub fn tests_run_args(name: &SandboxName, workspace: &str, suite: &str, commit: &str, command: &str, limit_secs: u64) -> Vec<String> {
+/// * The label, the commit, the command, the run, `keep` and the limit are
+///   positional arguments: the command is the one the person approved with
+///   the plan, run with `bash -c`, never text a request carried.
+#[allow(clippy::too_many_arguments)]
+pub fn tests_run_args(
+    name: &SandboxName,
+    workspace: &str,
+    suite: &str,
+    commit: &str,
+    command: &str,
+    run: &str,
+    keep: usize,
+    limit_secs: u64,
+) -> Vec<String> {
     const SCRIPT: &str = concat!(unwrap_args!(), r#"
-        ws="$1" suite="$2" commit="$3" cmd="$4" limit="$5"
+        ws="$1" suite="$2" commit="$3" cmd="$4" run="$5" keep="$6" limit="$7"
         fail() { echo "sbxw-error=$1"; exit 3; }
         cd "$ws" 2>/dev/null || fail "the workspace $ws is not in this sandbox"
         common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || fail "$ws is not a git repository"
         root=$(dirname "$common")
         home="${HOME:-/tmp}/.sbxw/tests"
-        mkdir -p "$home/target" "$home/logs" || fail "cannot create $home"
-        log="$home/logs/$suite.log"
+        case "$suite/$run" in */*/*|*..*|.*) fail "bad log name $suite/$run" ;; esac
+        logs="$home/logs/$suite"
+        mkdir -p "$home/target" "$logs" || fail "cannot create $home"
+        log="$logs/$run.log"
         exec 9>"$home/queue.lock"
         command -v flock >/dev/null && flock -w 900 9
         ex=$(git -C "$root" rev-parse --git-path info/exclude)
@@ -828,12 +842,17 @@ pub fn tests_run_args(name: &SandboxName, workspace: &str, suite: &str, commit: 
         export SBXW_TEST_TARGET="$home/target" SBXW_TEST_CHECKOUT="$wt" SBXW_TEST_SUITE="$suite" SBXW_TEST_COMMIT="$commit"
         timeout --kill-after=30 "$limit" bash -c "$cmd" >"$log" 2>&1 </dev/null
         rc=$?
+        # The logs of the label's newest jobs stay (a job's attempts are
+        # <job>-<n>.log), older ones go; so does the one-file log of before.
+        rm -f "$home/logs/$suite.log"
+        ls -t "$logs" 2>/dev/null | grep '\.log$' | sed 's/-[0-9]*\.log$//' | awk '!seen[$0]++' \
+            | tail -n +"$((keep + 1))" | while IFS= read -r old; do rm -f "$logs/$old"-*.log; done
         echo "sbxw-log=$log"
         tail -n 200 "$log"
         exit $rc"#);
     let mut args = owned(&["exec", name.as_str(), "--", "bash", "-lc", SCRIPT, "sbxw-tests-run"]);
-    let limit = limit_secs.to_string();
-    args.extend([workspace, suite, commit, command, limit.as_str()].map(pos));
+    let (keep, limit) = (keep.to_string(), limit_secs.to_string());
+    args.extend([workspace, suite, commit, command, run, keep.as_str(), limit.as_str()].map(pos));
     args
 }
 
@@ -1388,18 +1407,18 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
         assert!(out.contains("error=no-such-branch is not a commit"), "{out}");
         // The command sees the checkout as its cwd, the build dir and the commit.
         let cmd = "test -f crates/a/x && echo \"target=$SBXW_TEST_TARGET\" && echo \"commit=$SBXW_TEST_COMMIT\" && echo \"$1\"";
-        let args = tests_run_args(&sb(), ws, "a", &head, cmd, 60);
+        let args = tests_run_args(&sb(), ws, "a", &head, cmd, "t-1-1", 5, 60);
         assert!(!args[5].contains("crates/a"), "the command is an argument");
         let (code, out) = run(&args);
         assert_eq!(code, Some(0), "{out}");
         assert!(out.contains(TESTS_LOG_MARK) && out.contains(&format!("commit={head}")) && out.contains("/.sbxw/tests/target"), "{out}");
         assert!(r.join(".sbxw-worktrees/.tests/crates/a/x").is_file());
         // Again on the same checkout, failing; then over its limit.
-        let (code, _) = run(&tests_run_args(&sb(), ws, "a", &head, "exit 7", 60));
+        let (code, _) = run(&tests_run_args(&sb(), ws, "a", &head, "exit 7", "t-2-1", 5, 60));
         assert_eq!(code, Some(7));
-        let (code, _) = run(&tests_run_args(&sb(), ws, "a", &head, "sleep 5", 1));
+        let (code, _) = run(&tests_run_args(&sb(), ws, "a", &head, "sleep 5", "t-3-1", 5, 1));
         assert_eq!(code, Some(124));
-        let (code, out) = run(&tests_run_args(&sb(), "/nonexistent/ws", "a", &head, "true", 60));
+        let (code, out) = run(&tests_run_args(&sb(), "/nonexistent/ws", "a", &head, "true", "t-4-1", 5, 60));
         assert_eq!(code, Some(3));
         assert!(out.contains(TESTS_ERROR_MARK), "{out}");
         let _ = std::fs::remove_dir_all(&d);
