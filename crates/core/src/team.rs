@@ -105,6 +105,9 @@ pub enum EventKind {
     /// command, and sent it to the queue. `data.thread` only, never the
     /// command.
     TestRefused,
+    /// A step of a CI merge (`data.step`: built, failed, passed, stale,
+    /// rebuild), by sbxw. See `plans::ci`.
+    CiStep,
 }
 
 impl EventKind {

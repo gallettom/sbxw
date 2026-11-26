@@ -91,7 +91,7 @@ impl Column {
             Column::Progress => "In progress",
             Column::Test => "In test",
             Column::Ready => "Ready to merge",
-            Column::Merged => "Merged",
+            Column::Merged => "Merged to main",
         }
     }
     pub fn tone(self) -> &'static str {
@@ -110,8 +110,8 @@ impl Column {
             Column::Planned => "Tickets no thread works on yet, and threads of a plan that waits for your approval",
             Column::Progress => "Threads starting, working or blocked",
             Column::Test => "Threads that reported done: the lead reviews and checks them before proposing the merge",
-            Column::Ready => "A merge is proposed and waits for your click",
-            Column::Merged => "Merged into the main checkout",
+            Column::Ready => "A merge is proposed, or Merged to CI, and waits for your click",
+            Column::Merged => "Merged to main: in the main checkout's branch",
         }
     }
     pub fn empty(self) -> &'static str {
@@ -152,6 +152,15 @@ pub enum Mark {
     Dismissed,
     /// The person abandoned the merge proposed for it: nothing was merged.
     MergeAbandoned,
+    /// Its plan's CI branch is being built or tested (In test).
+    CiTesting,
+    /// Main moved since its CI branch passed: a rebuild waits (In test).
+    CiStale,
+    /// Its plan's CI branch conflicted or failed its tests (In test).
+    CiFailed,
+    /// "Merged to CI": the tests passed on its plan's CI branch; the
+    /// person's Merge takes main to it (Ready to merge).
+    MergedCi,
 }
 
 impl Mark {
@@ -168,11 +177,18 @@ impl Mark {
             Mark::BranchGone => "branch gone",
             Mark::Dismissed => "plan closed",
             Mark::MergeAbandoned => "merge abandoned",
+            Mark::CiTesting => "CI testing",
+            Mark::CiStale => "CI rebuild waits",
+            Mark::CiFailed => "CI failed",
+            Mark::MergedCi => "Merged to CI",
         }
     }
     pub fn tone(self) -> &'static str {
         match self {
-            Mark::Proposed | Mark::Merging => "blue",
+            Mark::Proposed | Mark::Merging | Mark::CiTesting => "blue",
+            Mark::CiStale => "amber",
+            Mark::CiFailed => "red",
+            Mark::MergedCi => "green",
             Mark::Blocked => "amber",
             Mark::Failed | Mark::MergeFailed | Mark::Refused => "red",
             Mark::TeamEnded | Mark::BranchGone | Mark::Dismissed | Mark::MergeAbandoned => "neutral",
@@ -192,6 +208,10 @@ impl Mark {
             Mark::BranchGone => "The thread is done and sbxw never merged it, but its branch no longer exists. sbxw cannot tell a hand merge from a discard",
             Mark::Dismissed => "You closed this plan from the Kanban; git was not touched",
             Mark::MergeAbandoned => "You abandoned the merge proposed for this thread: nothing was merged, and the lead may propose it again",
+            Mark::CiTesting => "sbxw is building its plan's CI branch from main with the threads' branches, or running the plan's tests on it",
+            Mark::CiStale => "Main moved since its plan's CI branch passed: sbxw rebuilds it on the new main and tests it again before Merge is offered",
+            Mark::CiFailed => "Its plan's CI branch conflicted or failed its tests: nothing reached main, and the lead has the threads fix it",
+            Mark::MergedCi => "Merged to CI: the tests passed on its plan's CI branch, and Merge fast-forwards main to exactly that tested commit",
         }
     }
 }
@@ -232,6 +252,22 @@ pub fn column_of(plan: &Plan, t: &PlanThread) -> (Column, Vec<Mark>) {
                 Column::Ready
             }
             (None, MergeState::Proposed) => Column::Ready,
+            (None, MergeState::CiBuilding | MergeState::CiTesting) => {
+                marks.push(Mark::CiTesting);
+                Column::Test
+            }
+            (None, MergeState::CiStale) => {
+                marks.push(Mark::CiStale);
+                Column::Test
+            }
+            (None, MergeState::CiFailed) => {
+                marks.push(Mark::CiFailed);
+                Column::Test
+            }
+            (None, MergeState::MergedCi) => {
+                marks.push(Mark::MergedCi);
+                Column::Ready
+            }
             // Left out above; never reached.
             (None, MergeState::Abandoned) => Column::Test,
         }
