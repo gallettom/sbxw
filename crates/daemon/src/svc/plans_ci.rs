@@ -120,7 +120,8 @@ impl App {
             Ok(j) => j,
             Err(e) => {
                 let f = CiFailure { kind: CiFailKind::Error, thread: None, files: vec![], text: format!("the tests could not be queued: {e}") };
-                if let Ok(p) = self.plans.lock().unwrap().ci_failed(id, run, f, now_ms()) {
+                let r = self.plans.lock().unwrap().ci_failed(id, run, f, now_ms());
+                if let Ok(p) = r {
                     let p = self.plan_changed(p);
                     self.ci_tell_lead(&p, messages::ci_failed_line(&p), "failed");
                 }
@@ -140,7 +141,8 @@ impl App {
                 Ok(_) => {}
                 Err(e) => {
                     let f = CiFailure { kind: CiFailKind::Error, thread: None, files: vec![], text: format!("its test job is gone: {e}") };
-                    if let Ok(p) = self.plans.lock().unwrap().ci_failed(id, run, f, now_ms()) {
+                    let r = self.plans.lock().unwrap().ci_failed(id, run, f, now_ms());
+                    if let Ok(p) = r {
                         let p = self.plan_changed(p);
                         self.ci_tell_lead(&p, messages::ci_failed_line(&p), "failed");
                     }
@@ -200,7 +202,8 @@ impl App {
             }
             match m.state {
                 MergeState::MergedCi => {
-                    if let Ok(p) = self.plans.lock().unwrap().ci_stale(&p.id, &main, now_ms()) {
+                    let r = self.plans.lock().unwrap().ci_stale(&p.id, &main, now_ms());
+                    if let Ok(p) = r {
                         self.plan_changed(p);
                     }
                 }
@@ -216,17 +219,30 @@ impl App {
                 _ => {}
             }
         }
-        let next = self.plans.lock().unwrap().ci_next_rebuild(&s);
-        if let Some(id) = next {
-            self.ci_rebuild(&id, &main).await;
+        // Picked and started under one lock: two looks at main at once never
+        // start two rebuilds.
+        let next = {
+            let mut b = self.plans.lock().unwrap();
+            b.ci_next_rebuild(&s).and_then(|id| b.ci_rebuild(&id, &main, now_ms()).ok())
+        };
+        if let Some((p, run)) = next {
+            self.ci_rebuilt(p, run);
         }
     }
 
     async fn ci_rebuild(self: &Arc<Self>, id: &str, main: &str) {
-        let Ok((p, run)) = self.plans.lock().unwrap().ci_rebuild(id, main, now_ms()) else { return };
+        let r = self.plans.lock().unwrap().ci_rebuild(id, main, now_ms());
+        if let Ok((p, run)) = r {
+            self.ci_rebuilt(p, run);
+        }
+    }
+
+    /// A rebuild recorded: the lead told, the build started.
+    fn ci_rebuilt(self: &Arc<Self>, p: Plan, run: u32) {
+        let id = p.id.clone();
         let p = self.plan_changed(p);
         self.ci_tell_lead(&p, messages::ci_rebuild_line(&p), &format!("rebuild-{run}"));
-        let (app, id) = (self.clone(), id.to_string());
+        let app = self.clone();
         tokio::spawn(async move { app.ci_run(&id, run).await });
     }
 
@@ -361,14 +377,16 @@ impl App {
             Ok(Ok(o)) => o,
             Ok(Err(now)) => {
                 let why = format!("{base_branch} moved since the CI branch was built (now {}): sbxw rebuilds it on the new {base_branch} and tests it again; Merge comes back when it passes", short(&now));
-                if let Ok(p) = self.plans.lock().unwrap().ci_click_refused(&id, &why, now_ms()) {
+                let r = self.plans.lock().unwrap().ci_click_refused(&id, &why, now_ms());
+                if let Ok(p) = r {
                     self.plan_changed(p);
                 }
                 self.ci_schedule(sandbox).await;
                 return Err(why);
             }
             Err(e) => {
-                if let Ok(p) = self.plans.lock().unwrap().ci_click_refused(&id, &e, now_ms()) {
+                let r = self.plans.lock().unwrap().ci_click_refused(&id, &e, now_ms());
+                if let Ok(p) = r {
                     self.plan_changed(p);
                 }
                 return Err(e);
