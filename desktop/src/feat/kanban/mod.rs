@@ -310,7 +310,7 @@ impl State {
     }
 
     /// The board, and the source with it.
-    fn read_all(&self) -> Vec<Action> {
+    fn read_all(&mut self) -> Vec<Action> {
         let mut v = vec![self.read_board()];
         v.extend(self.read_source());
         v
@@ -965,6 +965,7 @@ impl State {
                 }
             };
         }
+        if let Some(g) = tag.strip_prefix("kb-board:") {
             if g != self.gen.to_string() {
                 return vec![];
             }
