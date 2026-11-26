@@ -334,13 +334,20 @@ fn nothing_of_the_board_is_drawn_outside_its_overlay_at_any_width() {
                 rt.pointer_down(x, y);
                 rt.pointer_up(x, y);
             } else {
-                let v = json!({ "kind": "intent", "name": "board_filter", "args": { "group": tab } });
-                for i in crate::intent::parse(&v).unwrap() {
-                    rt.update(|s, _| s.run_intent("test", i));
-                }
+                // The same for a filter: the press of its button, not the
+                // intent alone (the data would change and the drawing wait).
+                let (x, y) = rt.find(&format!("board-group-{tab}")).unwrap_or_else(|| panic!("the {tab} filter is drawn at {w}"));
+                rt.pointer_down(x, y);
+                rt.pointer_up(x, y);
             }
             settle(&mut rt);
             if tab == "details" { assert!(rt.find("board-detail-web-page").is_some(), "{tab} at {w}: the details are open"); }
+            // The press took effect, in the data and in the drawing: the
+            // filter is the one asked (the details case keeps "all"), and the
+            // conversation is drawn unless the Commits filter replaces it.
+            let want = if tab == "details" { "all" } else { tab };
+            assert_eq!(rt.state.feats.data.get(UI).and_then(|v| v["group"].as_str().map(str::to_string)).as_deref(), Some(want), "{tab} at {w}: the filter");
+            assert_eq!(rt.find("board-rows").is_some(), want != "commits", "{tab} at {w}: the conversation is drawn unless the Commits filter shows");
             let Some((p, _)) = rt.presented("overlay-board") else { panic!("no overlay at {w}") };
             let node = rt.state.screens.iter().find(|s| s.name == SCREEN).and_then(|s| s.last_good.clone()).unwrap_or_else(|| panic!("not drawn at {w}"));
             let mut ks = vec![];

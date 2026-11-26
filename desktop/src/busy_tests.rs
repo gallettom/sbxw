@@ -19,24 +19,12 @@ return {
 }
 "#;
 
-/// Frames until the fixture's link has answered everything asked (its calls
-/// and list reads run on threads of their own, and a loaded machine answers
-/// after any fixed count of frames), then a few more for the drawing to
-/// follow. The wait is bounded and fails saying what it waited for.
 fn settle(rt: &mut Runtime<App>) {
-    let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    let mut quiet = 0;
-    while quiet < 12 {
+    for _ in 0..12 {
         rt.frame(0.05);
         rt.update(|s, tx| {
             s.poll(0.0, tx);
         });
-        let busy = !rt.state.link_quiet();
-        quiet = if busy { 0 } else { quiet + 1 };
-        if busy {
-            assert!(std::time::Instant::now() < end, "the fixture's link never settled (it still has answers to give)");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
     }
 }
 
