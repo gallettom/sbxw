@@ -893,11 +893,12 @@ impl PlanBook {
             }
         }
         self.mutate(id, now, |p| {
+            // Numbered above every earlier run, the one replaced included.
+            let run = ci.then(|| PlanBook::new_ci(p));
             // An earlier merge that merged something stays in the history.
             if let Some(m) = p.merge.take().filter(|m| m.results.iter().any(|r| r.ok)) {
                 p.earlier_merges.push(m);
             }
-            let run = ci.then(|| PlanBook::new_ci(p));
             p.merge = Some(Merge {
                 order,
                 note: clip(note),

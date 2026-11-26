@@ -170,7 +170,7 @@ fn a_ticket_follows_its_thread_and_keeps_its_place_once_the_plan_is_gone() {
     let again: Book = serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
     assert_eq!(board("web", &[&again], &[], 100, false), bd);
     let h: Vec<String> = b.get(n).unwrap().history.iter().map(|s| s.text.clone()).collect();
-    assert!(h.iter().any(|t| t.contains("Taken into a plan")) && h.iter().any(|t| t == "pages: Merged"), "{h:?}");
+    assert!(h.iter().any(|t| t.contains("Taken into a plan")) && h.iter().any(|t| t == "pages: Merged to main"), "{h:?}");
 }
 
 #[test]
