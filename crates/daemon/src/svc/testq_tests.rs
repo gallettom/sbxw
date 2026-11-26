@@ -585,7 +585,7 @@ async fn a_thread_running_the_plans_whole_test_command_is_sent_to_the_queue() {
         assert!(denied(&v), "{cmd:?}: {v}");
         assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
         let why = v["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
-        assert!(why.contains("run_tests") && why.contains("Commit"), "{why}");
+        assert!(why.contains("run_tests") && why.contains("CI branch") && why.contains("Run only the tests of what you touched"), "{why}");
     }
     // A narrower command, the lead (no thread), a plan with no command, another tool.
     for (thread, cmd) in [(Some("api"), "tools/check core"), (Some("api"), "tools/check all --only x"), (None, "tools/check all"), (Some("bare"), "tools/check all")] {
