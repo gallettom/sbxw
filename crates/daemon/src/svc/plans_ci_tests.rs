@@ -576,3 +576,30 @@ async fn a_skipped_thread_is_shown_before_the_click() {
     assert!(detail.contains("Nothing to merge for: gone (sbxw/gone is gone)"), "{detail}");
     assert!(r.lead_line("[sbxw] Merged to CI: plan p1").contains("Nothing to merge for: gone (sbxw/gone is gone)."));
 }
+
+/// sbxw cannot read the thread branches (the workspace gone from the host's
+/// view): the click is refused, saying so, and the plan stays Merged to CI;
+/// a close after a CI merge keeps every ordered thread's branch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn when_the_branches_cannot_be_read_the_click_is_refused_and_every_branch_kept() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    branch(r.ws.path(), "a", "a.txt", "a's");
+    branch(r.ws.path(), "b", "b.txt", "b's");
+    r.plan("p1", &["a", "b"], Some(COMMAND));
+    r.propose("p1", &["a", "b"]).await;
+    r.until("p1", MergeState::MergedCi).await;
+    let before = r.main();
+    let gone = r._state.path().join("no-such-repo");
+    r.app.store.update(&r.sb, |x| x.workspace = Some(gone.clone())).unwrap();
+    let e = r.app.plan_merge("p1", false, None).await.unwrap_err();
+    assert!(e.starts_with("sbxw could not read the thread branches"), "{e}");
+    assert_eq!(r.state("p1"), MergeState::MergedCi, "not ci_stale: nothing is known to be untested");
+    assert_eq!(r.main(), before);
+    // The close side, on the same unreadable workspace: every branch kept.
+    let (keep, why) = r.app.ci_unmerged_branches(&r.app.plan("p1").unwrap()).await;
+    assert_eq!(keep, ["a".to_string(), "b".to_string()].into_iter().collect());
+    assert!(why.unwrap().contains("no-such-repo"));
+}

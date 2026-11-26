@@ -637,7 +637,10 @@ impl App {
             let (mut closed, mut unclosed) = (Vec::new(), Vec::new());
             // A CI merge took the tested tip, not the branches: a branch with
             // a commit main lacks (made after the click's check) is kept.
-            let keep = if merge.ci.is_some() { self.ci_unmerged_branches(plan).await } else { Default::default() };
+            let (keep, unread) = if merge.ci.is_some() { self.ci_unmerged_branches(plan).await } else { Default::default() };
+            if let Some(e) = &unread {
+                summary.push_str(&format!(" sbxw could not read the thread branches ({e}), so every branch was kept."));
+            }
             for t in &merge.order {
                 let Ok(name) = ThreadName::parse(t) else { continue };
                 let kept = keep.contains(t);

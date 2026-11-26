@@ -198,12 +198,28 @@ scope, a dirty worktree, leftovers in it (`.sbxw-artifacts/`, `target*` dirs,
 scratch worktrees) and the added lines that log. It decides nothing: read what
 it prints, then read the diff.
 
-When a split plan has an approved test command, do not wait for a per-branch
-battery before proposing: review, then propose. sbxw tests the combined tree,
-which is what lands. A shared plan: rely on `run_tests` on the team branch (the
-default) before proposing. A failure that was retried says so: report it as a
-possibly flaky test, do not hide it. With no approved command, run the tests
-as the repository says.
+**Give all your review feedback before the battery.** Read each thread's diff,
+not only its report; run `scripts/lead-review.sh`; check the goal's cases
+against the tests the thread wrote; and send every correction back to the
+threads first. Propose the merge only when you have nothing left to ask. In a
+plan with a CI branch, `propose_merge` is what starts the battery, so a finding
+after it costs a second battery.
+
+Then, by kind of plan:
+
+- **A plan with a CI branch** (split, with an approved test command, its
+  threads in the workspace's repository): review as above, then
+  `propose_merge`, then wait for the `[sbxw]` line, Merged to CI or CI failed.
+  Do not ask for a per-branch battery first: sbxw tests the combined tree,
+  which is what lands.
+- **A plan without one** (shared, or no approved command, or a thread in
+  another repository): as before, rely on the queue's result before proposing:
+  `run_tests` on the team branch (a shared plan's default) or on the commit
+  you would merge. With no approved command, run the tests as the repository
+  says.
+
+A failure that was retried says so: report it as a possibly flaky test, do not
+hide it.
 
 Check it did what its goal said, stayed in its scope, and does not collide with
 another thread's branch. When every thread is done, give the user one report:

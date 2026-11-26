@@ -371,7 +371,9 @@ const LEAD_TOOLS = [
       "its tip, and tells you: a conflict (the thread and the files), a failed run (each " +
       "attempt's tail and log), or Merged to CI. Only then is the user offered the click, which " +
       "fast-forwards main to exactly the tested commit (Merged to main); if main moved, sbxw " +
-      "rebuilds and retests first. Do not wait for a per-branch battery before proposing. " +
+      "rebuilds and retests first. Do not wait for a per-branch battery before proposing, but give " +
+      "all your review feedback first (read each diff, run lead-review, check the goal's cases " +
+      "against the tests): proposing starts the battery, and a finding after it costs a second one. " +
       "Other plans: the user merges with one click and sbxw runs `git merge --no-ff` of each " +
       "sbxw/<thread>, stops at the first conflict, and tells you how it went. You never merge " +
       "yourself, and do not print git merge commands.",

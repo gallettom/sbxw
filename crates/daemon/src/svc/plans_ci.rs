@@ -185,18 +185,15 @@ impl App {
     /// test, read on the host, in a person's words: a merged thread whose
     /// tip moved since ("sbxw/a has 1 commit the CI branch did not test",
     /// or "was rewritten"), a skipped one that now has commits main lacks.
-    /// `None`: what was tested is all there is. A branch gone since is not
-    /// untested work (its tested commits are in the CI tip).
-    pub(crate) async fn ci_untested(&self, plan: &Plan) -> Option<String> {
-        let c = plan.ci()?;
-        let base = c.base.as_deref()?;
-        let sandbox = SandboxRef::parse(&plan.sandbox).ok()?;
-        let ws = self.store.workspace(&sandbox)?;
-        let host = self.host_for(&sandbox).await.ok()?;
-        let root = git::repo_root(&host, &ws, "").await?;
+    /// `Ok(None)`: what was tested is all there is. A branch gone since is
+    /// not untested work (its tested commits are in the CI tip). `Err`: the
+    /// branches could not be read at all, so nobody knows: fail closed.
+    pub(crate) async fn ci_untested(&self, plan: &Plan) -> Result<Option<String>, String> {
+        let (Some(c), Some(merge)) = (plan.ci(), plan.merge.as_ref()) else { return Ok(None) };
+        let base = c.base.as_deref().ok_or("the CI branch has no base on record")?;
+        let (host, root) = self.ci_repo(plan).await?;
         let line = |o: Option<String>| o.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         let mut out = Vec::new();
-        let merge = plan.merge.as_ref()?;
         for t in &merge.order {
             let full = format!("refs/heads/sbxw/{t}");
             let Some(tip) = line(git::git(&host, &root, &["rev-parse", "--verify", "--quiet", &full]).await) else { continue };
@@ -217,17 +214,30 @@ impl App {
                 out.push(format!("sbxw/{t} has {n} commit{} the CI branch did not test", if n == 1 { "" } else { "s" }));
             }
         }
-        (!out.is_empty()).then(|| out.join("; "))
+        Ok((!out.is_empty()).then(|| out.join("; ")))
+    }
+
+    /// The host and the root of `plan`'s workspace repository, or why they
+    /// cannot be read.
+    async fn ci_repo(&self, plan: &Plan) -> Result<(git::Host, std::path::PathBuf), String> {
+        let sandbox = SandboxRef::parse(&plan.sandbox).map_err(|e| e.to_string())?;
+        let ws = self.store.workspace(&sandbox).ok_or_else(|| format!("sbxw has no workspace recorded for '{sandbox}'"))?;
+        let host = self.host_for(&sandbox).await.map_err(|e| format!("the host of '{sandbox}' cannot be reached: {e:#}"))?;
+        let root = git::repo_root(&host, &ws, "").await.ok_or_else(|| format!("{} is not a git repository git can read", ws.display()))?;
+        Ok((host, root))
     }
 
     /// After a CI merge: the threads whose branch now holds commits main
     /// lacks (committed after the check at the click). Their close keeps the
-    /// branch, so no work is lost.
-    pub(crate) async fn ci_unmerged_branches(&self, plan: &Plan) -> std::collections::HashSet<String> {
+    /// branch, so no work is lost. When the branches cannot be read, every
+    /// ordered thread's branch is kept (fail closed), and the reason given.
+    pub(crate) async fn ci_unmerged_branches(&self, plan: &Plan) -> (std::collections::HashSet<String>, Option<String>) {
         let mut out = std::collections::HashSet::new();
-        let (Ok(sandbox), Some(m)) = (SandboxRef::parse(&plan.sandbox), plan.merge.as_ref()) else { return out };
-        let (Some(ws), Ok(host)) = (self.store.workspace(&sandbox), self.host_for(&sandbox).await) else { return out };
-        let Some(root) = git::repo_root(&host, &ws, "").await else { return out };
+        let Some(m) = plan.merge.as_ref() else { return (out, None) };
+        let (host, root) = match self.ci_repo(plan).await {
+            Ok(r) => r,
+            Err(e) => return (m.order.iter().cloned().collect(), Some(e)),
+        };
         for t in &m.order {
             let full = format!("refs/heads/sbxw/{t}");
             let Some(tip) = git::git(&host, &root, &["rev-parse", "--verify", "--quiet", &full]).await else { continue };
@@ -235,7 +245,7 @@ impl App {
                 out.insert(t.clone());
             }
         }
-        out
+        (out, None)
     }
 
     /// Main's tip in `sandbox`'s workspace repository, read on the host.
@@ -263,7 +273,7 @@ impl App {
             if base == main {
                 // Main is where it was; a thread's branch may not be.
                 if m.state == MergeState::MergedCi {
-                    if let Some(why) = self.ci_untested(p).await {
+                    if let Ok(Some(why)) = self.ci_untested(p).await {
                         let r = self.plans.lock().unwrap().ci_stale_because(&p.id, &main, Some(&why), now_ms());
                         if let Ok(p) = r {
                             self.plan_changed(p);
@@ -461,7 +471,8 @@ impl App {
         // A thread committed after its CI branch was tested: that commit was
         // never tested, so the click is refused and the CI branch rebuilt
         // with it, as when main moves. Pins or not.
-        if let Some(why) = self.ci_untested(&plan).await {
+        let untested = self.ci_untested(&plan).await.map_err(|e| format!("sbxw could not read the thread branches, so Merge did not run (the plan stays Merged to CI): {e}"))?;
+        if let Some(why) = untested {
             let r = self.plans.lock().unwrap().ci_stale_because(&id, &base, Some(&why), now_ms());
             if let Ok(p) = r {
                 self.plan_changed(p);

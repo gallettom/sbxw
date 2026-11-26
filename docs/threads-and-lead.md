@@ -290,6 +290,15 @@ example. The lead's goal then says only what is specific to the thread.
 
 ### 3. One-click merge
 
+**The lead gives all its review feedback before the battery.** It reads each
+thread's diff (not only its report), runs `scripts/lead-review.sh`, checks the
+goal's cases against the tests, and sends every correction back to the
+threads first; it calls `propose_merge` only when it has nothing left to ask.
+In a plan with a CI branch, `propose_merge` starts the battery, so a finding
+after it costs a second battery. A plan without a CI branch: the lead relies
+on the queue's result (`run_tests` on the commit to merge, or a shared plan's
+team branch) before proposing, as before.
+
 Before proposing a merge, the lead runs `scripts/lead-review.sh <thread>
 [--scope <path>...]` in this repository (read-only, no build, a fraction of a
 second). For branch `sbxw/<thread>` it prints, in a stable order: the commits
