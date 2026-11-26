@@ -438,6 +438,18 @@ fn an_idle_page_window_costs_no_frames() {
     // Not the key window: no cursor blink.
     r.win(0, |pt| pt.window_focus(false));
     r.settle();
+    // Frames until the window rests, with a bound: after it opens (and after
+    // a resize) it takes a few frames to settle its bars (measured
+    // 2026-11-26: about 11 at 1100 wide on main, up to 14 after a resize,
+    // one chip more adds a couple), so a fixed count is a guess.
+    let mut rested = false;
+    for _ in 0..60 {
+        if !r.win_frames(0, 1) {
+            rested = true;
+            break;
+        }
+    }
+    assert!(rested, "the page window did not rest within 60 frames of opening");
     let drawn = r.win(0, |pt| pt.state.drawn);
     let wakes = r.wakes(Win::Page(id));
     assert!(!r.win_frames(0, 30), "no frame due and nothing to draw in 30 idle frames");
