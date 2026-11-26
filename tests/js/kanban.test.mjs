@@ -283,3 +283,31 @@ test('kanban.js declares no global another page script already declares', () => 
     for (const n of top(read(`assets/js/${f}`))) assert.ok(!mine.has(n), `${n} is declared in ${f} too`);
   }
 });
+
+test('a Backlog column the daemon sends first is drawn first, its cards with the issue\'s key as text and a safe link in the panel', () => {
+  const board = JSON.parse(JSON.stringify(basic.tickets_boards['web-app']));
+  const card = (key, url, k) => ({ ...board.columns[0].cards[0], key: `t:web-app:${k}`, column: 'backlog', origin: { tracker: 'github', key, url, upstream: 'open' } });
+  board.columns.unshift({ id: 'backlog', title: 'Backlog', tone: 'neutral', help: 'Issues of the tracker', empty: 'No issue.', count: 3, cards: [
+    card('acme/shop#12', 'https://github.com/acme/shop/issues/12', 90),
+    card('"><script>alert(1)</script>', 'javascript:alert(1)', 91),
+    card('acme/shop#14', 'https://github.com/x" onmouseover="y', 92),
+  ] });
+  const html = kb.kbBoardHtml(board, {});
+  tags(html);
+  const ids = [...html.matchAll(/data-kb-col="([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual(ids, ['backlog', 'planned', 'progress', 'test', 'ready', 'merged']);
+  assert.ok(html.includes('<span class="kb-origin">acme/shop#12</span>'));
+  assert.ok(!html.includes('<script>'));
+  assert.ok(!/<a\b/.test(html), 'a card is a button: no link inside it');
+  const [ok, evil, quoted] = board.columns[0].cards;
+  const p = kb.kbPanelHtml(ok, null, { column: 'Backlog' });
+  tags(p);
+  assert.ok(p.includes('<a class="kb-origin-link" href="https://github.com/acme/shop/issues/12" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"'));
+  for (const c of [evil, quoted]) {
+    const q = kb.kbPanelHtml(c, null, {});
+    tags(q);
+    assert.ok(!q.includes('kb-origin-link') && !q.includes('javascript:'), 'no link from an unsafe url');
+    assert.ok(q.includes(`<span class="kb-origin-key">${ctx.escHtml(c.origin.key)}</span>`));
+  }
+  assert.ok(!kb.kbPanelHtml(board.columns[1].cards[0], null, {}).includes('kb-p-origin'), 'a person\'s ticket has no origin line');
+});

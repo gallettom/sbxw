@@ -2384,6 +2384,7 @@
     const top = el('span', 'rc-kb-top');
     top.append(dataEl('span', 'rc-kb-num', c.num));
     if (c.priority !== 'none') top.append(el('span', `rc-kb-prio rc-kb-${c.priority}`, c.priority.toUpperCase()));
+    if (c.origin) top.append(dataEl('span', 'rc-kb-age', c.origin.key));
     if (c.age) top.append(dataEl('span', 'rc-kb-age', c.age));
     b.append(top, dataEl('span', 'rc-kb-title', c.title || c.num));
     if (c.marks.length) {
@@ -2449,6 +2450,24 @@
     v.ticket = null;
     renderBoard();
   }
+  // Where a Backlog card came from: the tracker's key as text, a link to the
+  // issue only when its address parses as http(s); a new tab, no opener, no
+  // referrer, as agent links are.
+  function originEl(o) {
+    const p = el('p', 'rc-muted rc-small-text');
+    p.append(el('span', null, o.tracker ? `From ${o.tracker} ` : 'From '));
+    let ok = false;
+    try { const u = new URL(o.url); ok = u.protocol === 'https:' || u.protocol === 'http:'; } catch (_) {}
+    if (!ok) { p.append(dataEl('span', null, o.key, true)); return p; }
+    const a = el('a', 'rc-link');
+    a.href = o.url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.referrerPolicy = 'no-referrer';
+    a.append(dataEl('span', null, o.key, true), ' ', el('span', 'rc-url', o.url));
+    p.append(a);
+    return p;
+  }
   function ticketView(card, t, note) {
     const frag = document.createDocumentFragment();
     const back = el('button', 'rc-kb-back');
@@ -2463,6 +2482,7 @@
     const col = view().board?.columns.find(c => c.id === (t?.column || ''))?.title;
     if (col) head_.append(el('span', 'rc-kb-tcol', col));
     frag.append(head_, dataEl('h2', 'rc-kb-ttitle', t?.title || card.title));
+    if (card.origin) frag.append(originEl(card.origin));
     if (card.marks.length) {
       const m = el('div', 'rc-kb-marks');
       for (const x of card.marks) m.append(dataEl('span', `rc-kb-mark rc-tone-${x.tone}`, x.label));

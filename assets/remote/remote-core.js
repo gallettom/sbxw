@@ -1588,10 +1588,18 @@ function rcL2Client(api) {
 // The contract is .sbxw-artifacts/remote/API-kanban.md. The page draws the
 // route's answer in the daemon's order and computes nothing: no counting,
 // no sorting, no moving. Every string is data, set as text.
-const RC_KB_COLS = ['planned', 'progress', 'test', 'ready', 'merged'];
+const RC_KB_COLS = ['backlog', 'planned', 'progress', 'test', 'ready', 'merged'];
 const RC_KB_TONES = ['neutral', 'blue', 'green', 'amber', 'red', 'purple', 'gray', 'grey'];
 const rcKbTone = t => (RC_KB_TONES.includes(t) ? (t === 'grey' ? 'gray' : t) : 'neutral');
 const rcStr = v => (typeof v === 'string' ? v : '');
+// A Backlog card's origin (`{tracker, key, url, upstream}`, from a tracker's
+// issue): the key as text, the url kept only when it is a plain http(s)
+// address (remote.js checks it once more on the element). Else null.
+function rcKbOrigin(o) {
+  if (!o || typeof o !== 'object' || typeof o.key !== 'string' || !o.key) return null;
+  const url = typeof o.url === 'string' && /^https?:\/\/[^\s"'<>\\]+$/i.test(o.url) ? o.url : '';
+  return { key: o.key, url, tracker: rcStr(o.tracker) };
+}
 // A card, its fields checked; anything unexpected becomes empty.
 function rcKbCard(c) {
   if (!c || typeof c !== 'object' || typeof c.key !== 'string' || !c.key) return null;
@@ -1608,9 +1616,10 @@ function rcKbCard(c) {
     marks: (Array.isArray(c.marks) ? c.marks : []).filter(m => m && typeof m.label === 'string' && m.label).map(m => ({ label: m.label, tone: rcKbTone(m.tone) })),
     files: Math.max(0, Math.floor(Number(c.files)) || 0),
     age: rcStr(c.age),
+    origin: rcKbOrigin(c.origin),
   };
 }
-// The board: the five columns in the daemon's order, with what it says.
+// The board: the columns in the daemon's order (Backlog first when sent), with what it says.
 function rcKbBoard(data) {
   const cols = Array.isArray(data?.columns) ? data.columns : [];
   return {

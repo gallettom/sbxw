@@ -701,7 +701,7 @@ test('the board is drawn as it comes: the daemon\'s order, fields checked, activ
   assert.equal(rc.rcKbFirst(rc.rcKbBoard(fx.kanban.board)), 'progress');
   assert.equal(rc.rcKbFirst(rc.rcKbBoard(fx.kanban.empty)), 'planned');
   const odd = plain(rc.rcKbBoard({ columns: [null, { id: 'planned', cards: [null, { key: 'k', n: '12', title: { x: 1 }, marks: [{ label: 'x', tone: 'javascript' }, 3], priority: 'p0', thread_tone: '"><' }] }] }));
-  assert.deepEqual(odd.columns[0].cards[0], { key: 'k', n: null, num: 'thread', title: '', priority: 'none', thread: null, thread_state: null, thread_tone: 'neutral', marks: [{ label: 'x', tone: 'neutral' }], files: 0, age: '' });
+  assert.deepEqual(odd.columns[0].cards[0], { key: 'k', n: null, num: 'thread', title: '', priority: 'none', thread: null, thread_state: null, thread_tone: 'neutral', marks: [{ label: 'x', tone: 'neutral' }], files: 0, age: '', origin: null });
   assert.deepEqual(plain(rc.rcKbBoard(null)), { latest: '', summary: '', columns: [] });
   const t = plain(rc.rcKbTicket(fx.kanban.ticket));
   assert.match(t.description, /\n\nThe migration must be reversible; see \[path\]/);
@@ -710,6 +710,31 @@ test('the board is drawn as it comes: the daemon\'s order, fields checked, activ
   assert.equal(rc.rcKbPaths('my shop'), '/r/leaders/my%20shop/kanban');
   assert.equal(rc.rcKbPaths('shop', 12), '/r/leaders/shop/kanban/T-12');
   for (const n of [null, 0, -1, 1.5, '12', 1e9]) assert.equal(rc.rcKbPaths('shop', n), null, String(n));
+});
+
+test('a Backlog column comes first when the daemon sends it; its origin is a key and an http(s) url, or nothing', () => {
+  const board = JSON.parse(JSON.stringify(fx.kanban.board));
+  const issue = (key, url, extra = {}) => ({ key: `t:${key}`, n: 40, num: 'T-40', title: 'From the tracker', origin: { tracker: 'github', key, url, upstream: 'open' }, ...extra });
+  board.columns.unshift({ id: 'backlog', title: 'Backlog', tone: 'neutral', count: 4, cards: [
+    issue('acme/shop#12', 'https://github.com/acme/shop/issues/12'),
+    issue('<img src=x onerror=alert(1)>', 'javascript:alert(1)'),
+    issue('acme/shop#13', 'https://github.com/a" onclick="x'),
+    { key: 't:odd', origin: { key: 7, url: 'https://x' } },
+  ] });
+  const b = plain(rc.rcKbBoard(board));
+  assert.deepEqual(b.columns.map(c => c.id), ['backlog', 'planned', 'progress', 'test', 'ready', 'merged']);
+  const o = b.columns[0].cards.map(c => c.origin);
+  assert.deepEqual(o[0], { key: 'acme/shop#12', url: 'https://github.com/acme/shop/issues/12', tracker: 'github' });
+  assert.deepEqual(o[1], { key: '<img src=x onerror=alert(1)>', url: '', tracker: 'github' }, 'a key stays text; no javascript: link');
+  assert.equal(o[2].url, '', 'a quote in the url: no link');
+  assert.equal(o[3], null, 'a key that is not a string: no origin');
+  assert.equal(rc.rcKbFirst(b), 'progress', 'active columns still open first');
+  // The page draws the key with dataEl (text) and checks the url again on the element.
+  const fn = pageSrc.slice(pageSrc.indexOf('function originEl('), pageSrc.indexOf('function ticketView('));
+  assert.match(fn, /dataEl\('span', null, o\.key, true\)/);
+  assert.match(fn, /u\.protocol === 'https:' \|\| u\.protocol === 'http:'/);
+  assert.match(fn, /a\.rel = 'noopener noreferrer'/);
+  assert.ok(!/innerHTML/.test(fn));
 });
 
 // ── iPhone dictation ──
