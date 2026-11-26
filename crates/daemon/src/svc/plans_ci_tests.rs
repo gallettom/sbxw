@@ -38,11 +38,33 @@ fn commit(ws: &Path, file: &str, text: &str) -> String {
     git(ws, &["rev-parse", "HEAD"])
 }
 
-/// One more commit on `sbxw/<thread>`, main checked out again after.
+/// One more commit on `sbxw/<thread>`, as a thread makes it in its own
+/// worktree: the main checkout never leaves main (a CI run may be reading
+/// it at that moment), so it is written with git's plumbing.
 fn branch_commit(ws: &Path, thread: &str, file: &str, text: &str) {
-    git(ws, &["checkout", "-q", &format!("sbxw/{thread}")]);
-    commit(ws, file, text);
-    git(ws, &["checkout", "-q", "main"]);
+    let br = format!("refs/heads/sbxw/{thread}");
+    let index = ws.join(".git").join(format!("sbxw-test-index-{thread}"));
+    let with_index = |args: &[&str], input: Option<&str>| {
+        use std::io::Write;
+        let mut c = std::process::Command::new("git");
+        c.arg("-C").arg(ws).args(["-c", "user.email=someone@example.invalid", "-c", "user.name=Ada", "-c", "commit.gpgsign=false"]).args(args).env("GIT_INDEX_FILE", &index);
+        c.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        let mut ch = c.spawn().unwrap();
+        if let Some(i) = input {
+            ch.stdin.take().unwrap().write_all(i.as_bytes()).unwrap();
+        }
+        let out = ch.wait_with_output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let parent = git(ws, &["rev-parse", &br]);
+    with_index(&["read-tree", &parent], None);
+    let blob = with_index(&["hash-object", "-w", "--stdin"], Some(text));
+    with_index(&["update-index", "--add", "--cacheinfo", &format!("100644,{blob},{file}")], None);
+    let tree = with_index(&["write-tree"], None);
+    let c = with_index(&["commit-tree", &tree, "-p", &parent, "-m", file], None);
+    git(ws, &["update-ref", &br, &c]);
+    let _ = std::fs::remove_file(&index);
 }
 
 /// Branch `sbxw/<thread>` from main with `file` set to `text`.
@@ -245,9 +267,7 @@ async fn a_failed_battery_leaves_main_untouched_reports_both_attempts_and_a_fix_
     r.app.plans.lock().unwrap().set_thread("myapp", "b", ThreadState::Working, "fixing", false, 10).unwrap();
     let e = r.app.plan_propose_merge_checked("p1", &r.sb, vec!["a".into(), "b".into()], "", vec![]).await.unwrap_err();
     assert!(e.contains("\"b\" is not done"), "{e}");
-    git(r.ws.path(), &["checkout", "-q", "sbxw/b"]);
-    commit(r.ws.path(), "verdict", "pass");
-    git(r.ws.path(), &["checkout", "-q", "main"]);
+    branch_commit(r.ws.path(), "b", "verdict", "pass");
     r.app.plans.lock().unwrap().set_thread("myapp", "b", ThreadState::Done, "fixed", false, 11).unwrap();
     r.propose("p1", &["a", "b"]).await;
     let p = r.until("p1", MergeState::MergedCi).await;

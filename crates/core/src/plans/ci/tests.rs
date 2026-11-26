@@ -20,10 +20,17 @@ fn t(name: &str) -> PlanThread {
 /// An approved split plan `id` in sandbox `sb` with threads a and b done
 /// and a test command.
 fn done_plan(b: &mut PlanBook, id: &str, sb: &str) {
-    b.propose(id.into(), sb, "s", vec![t("a"), t("b")], Variant::Split, "why", Some("lead"), 1).unwrap();
+    done_plan_of(b, id, sb, ["a", "b"]);
+}
+
+/// [`done_plan`] with its own thread names: two plans of one sandbox must
+/// not share a thread's name, or a report would go to either.
+fn done_plan_of(b: &mut PlanBook, id: &str, sb: &str, names: [&str; 2]) {
+    let threads: Vec<PlanThread> = names.iter().map(|n| t(n)).collect();
+    b.propose(id.into(), sb, "s", threads.clone(), Variant::Split, "why", Some("lead"), 1).unwrap();
     b.note_proposed_tests(id, PlanTests::proposed(Some("make test"), Some(5)).unwrap());
-    b.approve_with(id, vec![t("a"), t("b")], None, None, TestsChoice::Approve, 2).unwrap();
-    for n in ["a", "b"] {
+    b.approve_with(id, threads, None, None, TestsChoice::Approve, 2).unwrap();
+    for n in names {
         b.set_thread(sb, n, ThreadState::Done, "ok", false, 3).unwrap();
     }
 }
@@ -120,9 +127,9 @@ fn a_failed_ci_names_the_conflict_or_each_attempt_and_a_re_proposal_needs_the_th
 #[test]
 fn main_moving_rebuilds_one_plan_at_a_time_oldest_first_and_coalesces() {
     let mut b = PlanBook::new();
-    for (id, at) in [("p1", 7), ("p2", 5)] {
-        done_plan(&mut b, id, "sb");
-        b.propose_merge_with(id, "sb", vec!["a".into(), "b".into()], "n", vec![], true, 4).unwrap();
+    for (id, at, names) in [("p1", 7, ["a", "b"]), ("p2", 5, ["c", "d"])] {
+        done_plan_of(&mut b, id, "sb", names);
+        b.propose_merge_with(id, "sb", names.iter().map(|n| n.to_string()).collect(), "n", vec![], true, 4).unwrap();
         b.ci_built(id, 1, built("base1", "tip1"), 5).unwrap();
         b.ci_tested(id, 1, tests(Outcome::Passed), at).unwrap();
     }
