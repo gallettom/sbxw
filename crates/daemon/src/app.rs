@@ -90,8 +90,11 @@ pub struct App {
     pub(crate) kit_approvals: Mutex<HashMap<SandboxRef, Vec<String>>>,
     /// Automatic templates the daemon is building in the background, or
     /// failed to build, as `<host>/<tag>`: one build at a time per template,
-    /// and a failed one is not started again by every new sandbox.
-    pub(crate) template_builds: Mutex<HashSet<String>>,
+    /// and a failed one is tried again only after a delay that grows.
+    pub(crate) template_builds: Mutex<HashMap<String, crate::provision::BuildState>>,
+    /// The pre-warm of sbx's assembled image for the automatic templates:
+    /// its queue per host, what failed, the creations from a template.
+    pub(crate) warming: Mutex<crate::provision::Warming>,
     /// The daemon's scratch sandboxes while they live (a template's builder,
     /// the kit cache's filler): nobody's to work in, so the sandbox list
     /// leaves them out. One a stopped daemon left behind is not here, and
@@ -231,7 +234,8 @@ impl AppBuilder {
             stale_hooks: Mutex::new(HashSet::new()),
             briefings: Mutex::new(HashMap::new()),
             kit_approvals: Mutex::new(HashMap::new()),
-            template_builds: Mutex::new(HashSet::new()),
+            template_builds: Mutex::new(HashMap::new()),
+            warming: Mutex::new(Default::default()),
             scratches: Mutex::new(HashSet::new()),
             daemon_kits,
             emphasis,
@@ -378,6 +382,7 @@ impl App {
         self.start_mac_lifecycle();
         self.tests_resume();
         self.inbox_start();
+        self.warm_templates_at_start();
     }
 
     fn prune(self: &Arc<Self>) {

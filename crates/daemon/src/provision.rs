@@ -101,6 +101,84 @@ const MARKER_GRACE: Duration = if cfg!(test) { Duration::ZERO } else { Duration:
 /// A mirrored kit no sandbox uses is kept this long after its last use.
 const MIRROR_UNUSED_FOR: Duration = Duration::from_secs(7 * 86_400);
 const BUILDER_BOOT: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(60) };
+/// A background template build that failed is tried again, at the first
+/// creation that wants it, after this; doubled at each failure in a row, up
+/// to [`BUILD_RETRY_MAX`]. Long in tests: "not at once" is what they check.
+const BUILD_RETRY: Duration = Duration::from_secs(10 * 60);
+const BUILD_RETRY_MAX: Duration = Duration::from_secs(12 * 3600);
+
+/// One automatic template's background build, by `<host>/<tag>`.
+#[derive(Debug, Default)]
+pub(crate) struct BuildState {
+    running: bool,
+    /// Failures in a row.
+    failures: u32,
+    /// Not started again before this.
+    retry_at: Option<std::time::Instant>,
+}
+
+/// What [`App::build_template_later`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuildStatus {
+    Started,
+    Running,
+    /// The last build failed: none is started before this much longer.
+    Waiting(Duration),
+}
+
+/// The wait after `failures` failed builds in a row.
+fn retry_delay(failures: u32) -> Duration {
+    BUILD_RETRY.saturating_mul(1u32 << failures.saturating_sub(1).min(10)).min(BUILD_RETRY_MAX)
+}
+
+/// The pre-warm of sbx's assembled image (template plus kits), which sbx
+/// makes at the first creation with a template and a kit list and caches:
+/// about 11 s that the daemon pays in the background instead of the next
+/// person's creation. See [`App::warm_later`].
+#[derive(Default)]
+pub(crate) struct Warming {
+    /// Templates waiting to be warmed, per host; a host with an entry has
+    /// its one worker running.
+    queues: std::collections::HashMap<sbxw_core::names::HostName, std::collections::VecDeque<Warm>>,
+    /// `<host>/<tag>#<warm key>` that failed: never tried again in a loop,
+    /// only once the kits or sbx change, or the daemon restarts.
+    failed: std::collections::HashSet<String>,
+    /// Creations from a template running now, by `<host>/<tag>`: such a
+    /// creation warms it itself, so no scratch one runs beside it.
+    creating: std::collections::HashMap<String, usize>,
+}
+
+/// One template to warm.
+struct Warm {
+    host: sbxw_core::names::HostName,
+    tag: String,
+    /// As the project names them, base kit first (the template's identity).
+    kits: Vec<String>,
+    /// As directories on this machine: what is fingerprinted.
+    resolved: Vec<String>,
+    /// As `sbx` on the host names them: what a creation passes.
+    on_host: Vec<String>,
+    cfg: Config,
+}
+
+/// A person's creation from automatic template `key` (`<host>/<tag>`), for
+/// as long as it runs.
+struct CreatingFrom {
+    app: Arc<App>,
+    key: String,
+}
+
+impl Drop for CreatingFrom {
+    fn drop(&mut self) {
+        let mut w = self.app.warming.lock().unwrap();
+        if let Some(n) = w.creating.get_mut(&self.key) {
+            *n -= 1;
+            if *n == 0 {
+                w.creating.remove(&self.key);
+            }
+        }
+    }
+}
 
 /// A sandbox of the daemon's own, on an empty workspace, that nobody works
 /// in: a template's builder, the kit cache's filler.
@@ -323,14 +401,27 @@ impl App {
         self.validate_kits(&req.config.kits)?;
         clock.end(prepare);
 
-        // Asked first: it decides two of the announced steps.
-        let initial = clock.time(step::SBX_LS, sbx.lookup(n)).await;
+        // Read once: nothing below changes it before the update that follows.
+        let before = self.store.get(name);
+        // Asked first: it decides two of the announced steps. Beside it, the
+        // template list a creation from the automatic template checks: both
+        // are independent questions to sbx, and asking them side by side
+        // decides nothing differently.
+        let prefetch = self.auto_template_to_check(&req, cfg, &before);
+        let (initial, listed) = clock
+            .time(step::SBX_LS, async {
+                tokio::join!(sbx.lookup(n), async {
+                    match prefetch {
+                        true => Some(sbx.template_ls().await),
+                        false => None,
+                    }
+                })
+            })
+            .await;
         let existed = initial.is_some();
         // An existing sandbox keeps its creation workspace: sbx cannot move its
         // mount. Recording another directory would point the Project panel, env
         // and config at the wrong project, so refuse it before anything changes.
-        // Read once: nothing below changes it before the update that follows.
-        let before = self.store.get(name);
         if existed {
             if let Some(recorded) = before.workspace.clone() {
                 let canon = async |p: &Path| host.fs.canonicalize(p).await.unwrap_or_else(|_| p.to_path_buf());
@@ -354,8 +445,15 @@ impl App {
             t.kind = kind.into();
             t.kits = cfg.kits.len();
         });
-        let (template, rebuild, background) = clock.time(step::TEMPLATE_CHECK, self.template_for(&req, cfg, existed, &mut run)).await;
+        let (template, rebuild, background) = clock.time(step::TEMPLATE_CHECK, self.template_for(&req, cfg, existed, listed, &mut run)).await;
         clock.set(|t| t.template.clone_from(&template));
+        // A creation from the automatic template: no scratch warm of it runs
+        // meanwhile, and its create warms sbx's image (noted below).
+        let from_auto = template.as_ref().filter(|_| req.config.template_mode() == templates::Mode::Auto).map(|tag| {
+            let key = format!("{}/{tag}", name.host);
+            *self.warming.lock().unwrap().creating.entry(key.clone()).or_default() += 1;
+            CreatingFrom { app: self.clone(), key }
+        });
         // A template holds the kits' installs, so its kits would never fill the
         // cache this sandbox claimed.
         wants_cache &= template.is_none();
@@ -576,7 +674,12 @@ impl App {
             let since = utc_rfc3339(unix_now());
             clock.end(create_prepare);
             let creating = clock.begin(step::SBX_CREATE);
-            let created = self.create_with_port_fallback(name, &opts, sink, &mut run).await;
+            let inside = Arc::new(std::sync::Mutex::new(timings::Inside::default()));
+            let created = self.create_with_port_fallback(name, &opts, sink, &inside, &mut run).await;
+            let inside = std::mem::take(&mut *inside.lock().unwrap());
+            if !inside.is_empty() {
+                clock.set(|t| t.create = Some(inside));
+            }
             let from = opts.template.as_deref().map_or_else(|| "no template".to_string(), |t| format!("template {t}"));
             let attempts = clock.recorder().count_since("create", 0);
             let detail = format!("{from}, {} kits passed{}", opts.kits.len(), if attempts > 1 { format!(", {attempts} attempts") } else { String::new() });
@@ -591,6 +694,13 @@ impl App {
                 return Err(e);
             }
             created_with_kits = true;
+            // sbx assembled (or found) its image of the template and exactly
+            // these kits: the next creation finds it cached.
+            if let Some(f) = &from_auto {
+                if opts.kits == kits_here {
+                    self.set_warmed(&f.key, &self.warm_key(&cfg.kits));
+                }
+            }
             // A kit that changed was just mirrored to its host under a new
             // directory: the moment the ones it replaces may have become
             // nobody's. After the create, so this sandbox counts as a user.
@@ -867,8 +977,9 @@ impl App {
         if (!existed && up && !rebuild) || stopped {
             clock.watch_after(cfg.kits.clone());
         }
-        if background {
-            self.build_template_later(TemplateBuild {
+        drop(from_auto);
+        if let Some(why) = background {
+            let status = self.build_template_later(TemplateBuild {
                 after: up.then(|| name.clone()),
                 host: name.host.clone(),
                 kits: req.config.kits.clone(),
@@ -876,13 +987,21 @@ impl App {
                 on_host: kits_here,
                 cfg: cfg.clone(),
             });
+            let then = match status {
+                BuildStatus::Started | BuildStatus::Running => "one is being built in the background".to_string(),
+                BuildStatus::Waiting(d) => format!("the last build failed, tried again at a creation after {}", timings::human(d.as_millis() as u64)),
+            };
+            clock.set(|t| t.no_template = Some(format!("{why}; {then}")));
         }
         Ok(run.warnings)
     }
 
     /// The template `sbx create` starts from, and whether this bring-up saves
     /// a new automatic one. Only a sandbox being created is concerned.
-    async fn template_for(&self, req: &BringUp, cfg: &Config, existed: bool, run: &mut Run<'_>) -> (Option<String>, bool, bool) {
+    /// The third value, when a template is built in the background, says
+    /// why this creation goes without one (for the bring-up's summary).
+    /// `listed`: sbx's template list, when it was asked beside `sbx ls`.
+    async fn template_for(&self, req: &BringUp, cfg: &Config, existed: bool, listed: Option<Result<Vec<sbxw_sbx::TemplateInfo>>>, run: &mut Run<'_>) -> (Option<String>, bool, Option<String>) {
         if existed {
             if req.template == templates::Choice::Rebuild {
                 run.warn(format!(
@@ -891,13 +1010,13 @@ impl App {
                     req.name
                 ));
             }
-            return (None, false, false);
+            return (None, false, None);
         }
         match req.config.template_mode() {
-            templates::Mode::Off => (None, false, false),
+            templates::Mode::Off => (None, false, None),
             templates::Mode::Tag(t) => {
                 run.info(format!("creating from template {t}"));
-                (Some(t), false, false)
+                (Some(t), false, None)
             }
             templates::Mode::Auto => {
                 let (sbx, sbxw) = self.template_versions();
@@ -911,23 +1030,27 @@ impl App {
                     _ => None,
                 };
                 if let Some(tag) = used {
-                    if !self.template_present(&req.name, &tag).await {
+                    let present = match listed {
+                        Some(list) => template_listed(list, &tag),
+                        None => self.template_present(&req.name, &tag).await,
+                    };
+                    if !present {
                         self.forget_template(&req.name, &tag, run);
                         fresh = Freshness::Missing;
                     }
                 }
                 match (fresh, req.template) {
-                    (_, Choice::Skip) => (None, false, false),
-                    (_, Choice::Rebuild) => (None, true, false),
+                    (_, Choice::Skip) => (None, false, None),
+                    (_, Choice::Rebuild) => (None, true, None),
                     (Freshness::Fresh { record }, _) => {
                         self.template_used(&req.name, &record.tag);
                         run.info(format!("creating from the automatic template {} (sbx {}, sbxw {})", record.tag, record.sbx, record.sbxw));
-                        (Some(record.tag), false, false)
+                        (Some(record.tag), false, None)
                     }
                     (Freshness::Stale { record, .. }, Choice::Keep) => {
                         self.template_used(&req.name, &record.tag);
                         run.info(format!("creating from the out-of-date automatic template {}, as asked", record.tag));
-                        (Some(record.tag), false, false)
+                        (Some(record.tag), false, None)
                     }
                     // Nobody waits for a template: this sandbox is created
                     // from sbx's image and opens as soon as it is up, and the
@@ -939,14 +1062,14 @@ impl App {
                              a new one is built in the background for the next sandboxes",
                             changed.join(", ")
                         ));
-                        (None, false, true)
+                        (None, false, Some(format!("the template was out of date ({})", changed.join(", "))))
                     }
                     (Freshness::Missing, _) => {
                         run.info(
                             "no automatic template for these kits yet — creating from sbx's image; \
                              one is built in the background for the next sandboxes",
                         );
-                        (None, false, true)
+                        (None, false, Some("none existed yet for these kits".to_string()))
                     }
                 }
             }
@@ -969,10 +1092,27 @@ impl App {
     /// mends. A listing sbx refuses proves nothing, so it counts as present.
     async fn template_present(&self, sb: &SandboxRef, tag: &str) -> bool {
         let Ok(sbx) = self.sbx_for(sb).await else { return true };
-        match sbx.template_ls().await {
-            Ok(list) => list.iter().any(|t| t.tag == tag || t.tag.ends_with(&format!("/{tag}"))),
-            Err(_) => true,
+        template_listed(sbx.template_ls().await, tag)
+    }
+
+    /// Whether a creation of `req` would ask sbx for its automatic
+    /// template's presence, as far as can be told before `sbx ls`: auto,
+    /// a fresh record (or one kept as asked), and no sign the sandbox exists
+    /// (a record of sbxw's with kits is one: it was created and not
+    /// removed). Wrong either way costs nothing but the call:
+    /// [`App::template_for`] asks itself when nothing was fetched.
+    fn auto_template_to_check(&self, req: &BringUp, cfg: &Config, before: &crate::store::SandboxRecord) -> bool {
+        use templates::{Choice, Freshness};
+        if req.config.template_mode() != templates::Mode::Auto || !before.kits.is_empty() {
+            return false;
         }
+        let (sbx, sbxw) = self.template_versions();
+        let content = templates::fingerprint(&spec_texts(&cfg.kits));
+        let now = templates::Current { sbx: &sbx, sbxw, content: &content };
+        matches!(
+            (templates::check(&self.store.templates_of(&req.name.host), &req.config.kits, &now), req.template),
+            (Freshness::Fresh { .. }, Choice::Default | Choice::Keep) | (Freshness::Stale { .. }, Choice::Keep)
+        )
     }
 
     /// Drop the record of an automatic template sbx no longer has, so this
@@ -988,24 +1128,55 @@ impl App {
 
     /// Build an automatic template in the background, in a sandbox of the
     /// daemon's own: nobody waits for it, and a failure costs the template,
-    /// never a sandbox. One build per template at a time; one that failed is
-    /// not started again until the daemon restarts, so a kit whose install
-    /// never ends does not cost a builder per new sandbox.
-    fn build_template_later(self: &Arc<Self>, build: TemplateBuild) {
+    /// never a sandbox. One build per template at a time. One that failed is
+    /// started again by the first creation that wants it after
+    /// [`retry_delay`], which doubles at each failure in a row: a kit whose
+    /// install never ends costs a builder now and then, not one per new
+    /// sandbox. Each failure is logged once, when it happens. Once saved,
+    /// sbx's image of it and its kits is warmed ([`App::warm_later`]).
+    fn build_template_later(self: &Arc<Self>, build: TemplateBuild) -> BuildStatus {
         let (sbx, sbxw) = self.template_versions();
-        let key = format!("{}/{}", build.host, templates::auto_tag(&build.kits, sbxw, &sbx));
-        if !self.template_builds.lock().unwrap().insert(key.clone()) {
-            return;
+        let tag = templates::auto_tag(&build.kits, sbxw, &sbx);
+        let key = format!("{}/{tag}", build.host);
+        {
+            let mut builds = self.template_builds.lock().unwrap();
+            let st = builds.entry(key.clone()).or_default();
+            if st.running {
+                return BuildStatus::Running;
+            }
+            let now = std::time::Instant::now();
+            if let Some(at) = st.retry_at.filter(|at| *at > now) {
+                return BuildStatus::Waiting(at - now);
+            }
+            st.running = true;
         }
         let app = self.clone();
         tokio::spawn(async move {
+            let started = std::time::Instant::now();
             match app.build_template(&build).await {
                 Ok(()) => {
                     app.template_builds.lock().unwrap().remove(&key);
+                    tracing::info!("the automatic template {key} was built in {}", timings::human(started.elapsed().as_millis() as u64));
+                    app.warm_later(Warm { host: build.host, tag, kits: build.kits, resolved: build.resolved, on_host: build.on_host, cfg: build.cfg });
                 }
-                Err(e) => tracing::warn!("the automatic template {key} was not built: {e:#}"),
+                Err(e) => {
+                    let (n, wait) = {
+                        let mut builds = app.template_builds.lock().unwrap();
+                        let st = builds.entry(key.clone()).or_default();
+                        st.running = false;
+                        st.failures += 1;
+                        let wait = retry_delay(st.failures);
+                        st.retry_at = Some(std::time::Instant::now() + wait);
+                        (st.failures, wait)
+                    };
+                    tracing::warn!(
+                        "the automatic template {key} was not built ({n} failure(s) in a row; tried again at the first creation after {}): {e:#}",
+                        timings::human(wait.as_millis() as u64)
+                    );
+                }
             }
         });
+        BuildStatus::Started
     }
 
     /// Create a sandbox with `build`'s kits on an empty workspace, wait for
@@ -1031,10 +1202,154 @@ impl App {
             ro_mounts.push(dir);
         }
         tracing::info!("building the automatic template for {} in '{builder}'", build.kits.join(", "));
-        let scratch = self.scratch_up(builder, "template-build", build.on_host.clone(), cfg, env, ro_mounts, vec![]).await?;
+        let scratch = self.scratch_up(builder, "template-build", build.on_host.clone(), cfg, env, ro_mounts, vec![], None, true).await?;
         let built = self.save_auto_template(&scratch.sb, &build.kits, &build.resolved, false, &mut run).await;
         self.scratch_down(&scratch).await;
         built
+    }
+
+    /// What the warm of an automatic template with these kits (as
+    /// directories here) depends on: the kits' files and the sbx version.
+    fn warm_key(&self, resolved: &[String]) -> String {
+        templates::warm_key(&templates::fingerprint(&spec_texts(resolved)), &self.template_versions().0)
+    }
+
+    fn warm_file(&self) -> PathBuf {
+        self.store.paths.state().join("template-warm.json")
+    }
+
+    /// What was last warmed, by `<host>/<tag>`: its [`App::warm_key`].
+    /// Lenient: a file that does not read is no warm at all.
+    fn warmed(&self) -> std::collections::BTreeMap<String, String> {
+        std::fs::read(self.warm_file()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    }
+
+    /// Note that sbx holds its image of template `key` with the kits of
+    /// warm key `warm`. Only the templates sbxw still records are kept.
+    fn set_warmed(&self, key: &str, warm: &str) {
+        let _w = self.warming.lock().unwrap();
+        let mut all = self.warmed();
+        all.insert(key.to_string(), warm.to_string());
+        all.retain(|k, _| k.split_once('/').is_some_and(|(h, tag)| self.templates_of_host(h).iter().any(|r| r.tag == tag)));
+        let bytes = serde_json::to_vec_pretty(&all).unwrap_or_default();
+        if let Err(e) = crate::store::write_atomic(&self.warm_file(), &bytes) {
+            tracing::warn!("could not record the warmed template {key}: {e:#}");
+        }
+    }
+
+    fn templates_of_host(&self, host: &str) -> Vec<templates::Record> {
+        match sbxw_core::names::HostName::parse(host) {
+            Ok(h) => self.store.templates_of(&h),
+            Err(_) => vec![],
+        }
+    }
+
+    /// Warm sbx's assembled image of `w`'s template and kits in the
+    /// background: create a scratch sandbox from it with the same kit list,
+    /// then remove it, so the next creation finds the image cached. One at a
+    /// time per host, in a queue; skipped when already warmed for these kits
+    /// and this sbx, while a person's creation from it runs (that creation
+    /// warms it), or when it failed for these kits and this sbx before
+    /// (never in a loop).
+    fn warm_later(self: &Arc<Self>, w: Warm) {
+        let key = format!("{}/{}", w.host, w.tag);
+        let warm = self.warm_key(&w.resolved);
+        if self.warmed().get(&key) == Some(&warm) {
+            return;
+        }
+        let host = w.host.clone();
+        {
+            let mut st = self.warming.lock().unwrap();
+            if st.failed.contains(&format!("{key}#{warm}")) {
+                return;
+            }
+            if let Some(q) = st.queues.get_mut(&host) {
+                if !q.iter().any(|x| x.tag == w.tag) {
+                    q.push_back(w);
+                }
+                return;
+            }
+            st.queues.insert(host.clone(), std::collections::VecDeque::from([w]));
+        }
+        let app = self.clone();
+        tokio::spawn(async move {
+            loop {
+                let next = {
+                    let mut st = app.warming.lock().unwrap();
+                    match st.queues.get_mut(&host).and_then(|q| q.pop_front()) {
+                        Some(w) => w,
+                        None => {
+                            st.queues.remove(&host);
+                            return;
+                        }
+                    }
+                };
+                app.warm_one(next).await;
+            }
+        });
+    }
+
+    async fn warm_one(&self, w: Warm) {
+        let key = format!("{}/{}", w.host, w.tag);
+        let warm = self.warm_key(&w.resolved);
+        if self.warmed().get(&key) == Some(&warm) {
+            return;
+        }
+        // Still sbxw's template for these kits: one replaced meanwhile is not.
+        if !self.store.templates_of(&w.host).iter().any(|r| r.tag == w.tag && r.kits == w.kits) {
+            return;
+        }
+        {
+            let mut st = self.warming.lock().unwrap();
+            if st.creating.contains_key(&key) {
+                tracing::info!("sbx's kit image for {key} is not warmed by the daemon: a creation from it runs and warms it");
+                return;
+            }
+            st.failed.insert(format!("{key}#{warm}"));
+        }
+        let name = match sbxw_core::names::SandboxName::parse(&templates::warmer_name(&w.kits)) {
+            Ok(n) => n,
+            Err(e) => return tracing::warn!("sbx's kit image for {key} was not warmed: {e}"),
+        };
+        let sb = SandboxRef::new(w.host.clone(), name);
+        tracing::info!("warming sbx's kit image for {key} in '{sb}' ({} kits)", w.on_host.len());
+        let started = std::time::Instant::now();
+        match self.scratch_up(sb, "template-warm", w.on_host.clone(), &w.cfg, vec![], vec![], vec![], Some(w.tag.clone()), false).await {
+            Ok(scratch) => {
+                let created = started.elapsed().as_millis() as u64;
+                self.scratch_down(&scratch).await;
+                self.warming.lock().unwrap().failed.remove(&format!("{key}#{warm}"));
+                self.set_warmed(&key, &warm);
+                tracing::info!(
+                    "warmed sbx's kit image for {key}: created in {}, removed after {}",
+                    timings::human(created),
+                    timings::human(started.elapsed().as_millis() as u64)
+                );
+            }
+            Err(e) => tracing::warn!(
+                "sbx's kit image for {key} was not warmed ({e:#}); not tried again for these kits and this sbx until the daemon restarts"
+            ),
+        }
+    }
+
+    /// At the daemon's start, after an sbxw update for instance: warm each
+    /// automatic template of this machine that is fresh and was not warmed
+    /// for its kits' files and this sbx. With the daemon's config (sizing,
+    /// kit mounts): the project's is not known here.
+    pub(crate) fn warm_templates_at_start(self: &Arc<Self>) {
+        let local = sbxw_core::names::HostName::local();
+        let records = self.store.templates_of(&local);
+        let (sbx, sbxw) = self.template_versions();
+        for r in &records {
+            let Ok(resolved) = bundled::resolve(&self.store.paths, &r.kits) else { continue };
+            let content = templates::fingerprint(&spec_texts(&resolved));
+            let now = templates::Current { sbx: &sbx, sbxw, content: &content };
+            if !matches!(templates::check(&records, &r.kits, &now), templates::Freshness::Fresh { record } if record.tag == r.tag) {
+                continue;
+            }
+            let cfg = Config { kits: resolved.clone(), ..self.cfg.clone() };
+            self.warm_later(Warm { host: local.clone(), tag: r.tag.clone(), kits: r.kits.clone(), on_host: resolved.clone(), resolved, cfg });
+        }
     }
 
     /// The kit cache as a sandbox with `kits` mounts it, which is read-only
@@ -1078,7 +1393,7 @@ impl App {
         let filler = SandboxRef::new(fill.host.clone(), name);
         let env = vec![format!("SBXW_CACHE={}", fill.dir), "SBXW_CACHE_FILL=1".to_string()];
         tracing::info!("filling the kit cache on host '{}' in '{filler}'", fill.host);
-        let scratch = self.scratch_up(filler, "cache-fill", fill.on_host.clone(), &fill.cfg, env, vec![], vec![fill.dir.clone()]).await?;
+        let scratch = self.scratch_up(filler, "cache-fill", fill.on_host.clone(), &fill.cfg, env, vec![], vec![fill.dir.clone()], None, true).await?;
         let (commands, marked) = self.startup_commands(&fill.resolved);
         let filled = self.wait_for_startups(&scratch.sb, &commands, &marked, &run).await;
         self.scratch_down(&scratch).await;
@@ -1097,8 +1412,11 @@ impl App {
     /// and hold it up, with the project's sizing and egress and nothing else
     /// of the project: no tooling, token, environment, port or mount beyond
     /// the ones given. Removed again if it does not come up.
+    /// `template`: created from it instead of sbx's image. `hold`: started
+    /// and held up, with the project's egress; without, only created (what
+    /// a warm needs: sbx assembles the image at the create).
     #[allow(clippy::too_many_arguments)]
-    async fn scratch_up(&self, sb: SandboxRef, folder: &str, kits: Vec<String>, cfg: &Config, env: Vec<String>, ro_mounts: Vec<String>, rw_mounts: Vec<String>) -> Result<Scratch> {
+    async fn scratch_up(&self, sb: SandboxRef, folder: &str, kits: Vec<String>, cfg: &Config, env: Vec<String>, ro_mounts: Vec<String>, rw_mounts: Vec<String>, template: Option<String>, hold: bool) -> Result<Scratch> {
         let sbx = self.sbx_for(&sb).await?;
         let host = self.host_for(&sb).await?;
         let n = &sb.name;
@@ -1119,7 +1437,7 @@ impl App {
             env,
             env_files: vec![],
             rw_mounts,
-            template: None,
+            template,
             workspaces: vec![],
             cpus: (cfg.cpus > 0).then_some(cfg.cpus),
             memory: Some(cfg.memory.clone()).filter(|m| !m.is_empty()),
@@ -1131,6 +1449,9 @@ impl App {
             return Err(e).with_context(|| format!("creating '{sb}'"));
         }
         let scratch = Scratch { sb, sbx, host, workspace };
+        if !hold {
+            return Ok(scratch);
+        }
         let up = async {
             let (sbx, n) = (&scratch.sbx, &scratch.sb.name);
             // Held up with nobody attached: the kits' startup runs in a
@@ -1397,11 +1718,15 @@ impl App {
 
     /// `sbx create` with the port mappings, retried without them when the
     /// all-or-nothing `-p` loses the sandbox over one busy host port.
-    async fn create_with_port_fallback(&self, sb: &SandboxRef, opts: &CreateOpts, sink: &Sink, run: &mut Run<'_>) -> Result<()> {
+    /// `inside` collects what sbx's output says of the create's parts
+    /// (`timings::Inside`): read leniently, never a reason to fail.
+    async fn create_with_port_fallback(&self, sb: &SandboxRef, opts: &CreateOpts, sink: &Sink, inside: &Arc<std::sync::Mutex<timings::Inside>>, run: &mut Run<'_>) -> Result<()> {
         let sbx = self.sbx_for(sb).await?;
         let name = &sb.name;
         let s = sink.clone();
+        let parts = inside.clone();
         let lines: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |l: &str| {
+            parts.lock().unwrap().read_line(l);
             if let Some(p) = progress::detail(l) {
                 s(p);
             }
@@ -1601,6 +1926,15 @@ impl App {
 /// machine already listens on. Only "address in use" counts: an address this
 /// machine does not have yet (a loopback alias added later in the bring-up)
 /// or a port this process may not bind says nothing about sbx's chances.
+/// Whether sbx's template list holds `tag`. A listing sbx refused proves
+/// nothing, so it counts as present.
+fn template_listed(list: Result<Vec<sbxw_sbx::TemplateInfo>>, tag: &str) -> bool {
+    match list {
+        Ok(list) => list.iter().any(|t| t.tag == tag || t.tag.ends_with(&format!("/{tag}"))),
+        Err(_) => true,
+    }
+}
+
 fn busy_host_ports(specs: &[String]) -> Vec<String> {
     specs
         .iter()
@@ -1921,7 +2255,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_background_build_that_fails_is_not_started_again() {
+    async fn a_background_build_that_fails_is_retried_later_not_at_once() {
         // The builder never shows as running; the sandboxes people create do.
         let made = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let (dir, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
@@ -1939,15 +2273,174 @@ mod tests {
         });
         let kits = vec!["sbxw:codemap".to_string()];
         let builder = templates::builder_name(&kits::with_base(&kits));
-        for name in ["one", "two"] {
+        let builds = || fake.log().iter().filter(|c| c.starts_with("create") && c.contains(&builder)).count();
+        let removed = || fake.log().iter().filter(|c| c.starts_with("rm") && c.contains(&builder)).count();
+        let up = async |name: &str| {
             let mut req = auto_request(dir.path(), kits.clone(), templates::Choice::Default);
             req.name = SandboxRef::parse(name).unwrap();
             app.provision(req, None).await.unwrap();
-            assert!(eventually(|| fake.log().iter().any(|c| c.starts_with("rm") && c.contains(&builder))).await, "a failed builder is removed too");
+        };
+        up("one").await;
+        assert!(eventually(|| removed() == 1).await, "a failed builder is removed too");
+        assert!(eventually(|| app.template_builds.lock().unwrap().values().all(|b| !b.running)).await);
+        up("two").await;
+        assert_eq!(builds(), 1, "not at once: {:?}", fake.log());
+        let t = app.timelines().remove(0);
+        assert!(t.summary.contains("No template: none existed yet for these kits; the last build failed, tried again at a creation after"), "{}", t.summary);
+        {
+            let mut b = app.template_builds.lock().unwrap();
+            let st = b.values_mut().next().unwrap();
+            assert_eq!(st.failures, 1);
+            // The delay is over.
+            st.retry_at = Some(std::time::Instant::now() - Duration::from_secs(1));
         }
-        let builds = fake.log().iter().filter(|c| c.starts_with("create") && c.contains(&builder)).count();
-        assert_eq!(builds, 1, "{:?}", fake.log());
+        up("three").await;
+        assert!(eventually(|| removed() == 2).await, "{:?}", fake.log());
+        assert_eq!(builds(), 2, "tried again once its delay was over");
+        assert!(eventually(|| app.template_builds.lock().unwrap().values().all(|b| b.failures == 2 && !b.running)).await);
         assert!(app.store.templates().is_empty());
+        assert_eq!(retry_delay(1), BUILD_RETRY);
+        assert_eq!(retry_delay(2), BUILD_RETRY * 2, "it grows");
+        assert_eq!(retry_delay(40), BUILD_RETRY_MAX, "up to a bound");
+    }
+
+    #[tokio::test]
+    async fn a_config_that_never_sets_template_uses_the_automatic_one_and_an_empty_one_does_not() {
+        let kits = vec!["sbxw:codemap".to_string()];
+        let applied = kits::with_base(&kits);
+        for (raw, auto) in [(None, true), (Some(""), false)] {
+            let (dir, app, fake) = app_with(auto_sbx(0));
+            let content = crate::bundled::fingerprint(&app.store.paths, &applied).unwrap();
+            let fresh = templates::Record { tag: "sbxw-auto:fresh".into(), sbx: "0.51.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied.clone(), created_at: 1, content, used_at: 0 };
+            app.store.set_templates(&[fresh]).unwrap();
+            let mut req = auto_request(dir.path(), kits.clone(), templates::Choice::Default);
+            // As `Config::load` reads a file without the key, or with it empty.
+            let toml = match raw {
+                None => "kits = [\"sbxw:codemap\"]\nnetwork_allow = []\n".to_string(),
+                Some(v) => format!("kits = [\"sbxw:codemap\"]\nnetwork_allow = []\ntemplate = \"{v}\"\n"),
+            };
+            req.config = Config::parse(&toml).unwrap();
+            app.provision(req, None).await.unwrap();
+            let log = fake.log();
+            let create = log.iter().find(|c| c.starts_with("create claude")).unwrap();
+            assert_eq!(create.contains("--template sbxw-auto:fresh"), auto, "{raw:?}: {create}");
+            assert_eq!(log.iter().any(|c| c.starts_with("template ls")), auto, "{raw:?}: {log:?}");
+        }
+    }
+
+    /// An sbx like [`auto_sbx`] whose creations from a template print what
+    /// sbx 0.54 prints, and that notes whether a warm sandbox was hidden
+    /// from the list when it was created (`app` filled in once built).
+    fn warm_sbx(app: Arc<std::sync::Mutex<Option<Arc<App>>>>, hidden: Arc<std::sync::Mutex<Vec<bool>>>, fail_warm: bool) -> impl Fn(&[String]) -> Output + Send + Sync + 'static {
+        let inner = auto_sbx(0);
+        move |a: &[String]| {
+            if a.first().map(String::as_str) == Some("create") && a[4].starts_with("sbxw-warm-") {
+                let app = app.lock().unwrap().clone().unwrap();
+                hidden.lock().unwrap().push(app.scratches.lock().unwrap().iter().any(|s| s.name.as_str() == a[4]));
+                if fail_warm {
+                    return Output::fail(1, "no room");
+                }
+                inner(a);
+                return Output::ok("assembled kit image ready\n");
+            }
+            inner(a)
+        }
+    }
+
+    fn fresh_record(app: &App, kits: &[String]) -> templates::Record {
+        let content = crate::bundled::fingerprint(&app.store.paths, kits).unwrap();
+        let (sbx, sbxw) = app.template_versions();
+        templates::Record { tag: templates::auto_tag(kits, sbxw, &sbx), sbx, sbxw: sbxw.into(), kits: kits.to_vec(), created_at: 1, content, used_at: 0 }
+    }
+
+    #[tokio::test]
+    async fn the_kit_image_is_warmed_after_a_save_hidden_and_once() {
+        let slot = Arc::new(std::sync::Mutex::new(None));
+        let hidden = Arc::new(std::sync::Mutex::new(vec![]));
+        let (dir, app, fake) = app_with(warm_sbx(slot.clone(), hidden.clone(), false));
+        *slot.lock().unwrap() = Some(app.clone());
+        let kits = vec!["sbxw:codemap".to_string()];
+        let applied = kits::with_base(&kits);
+        let warmer = templates::warmer_name(&applied);
+        // No template yet: the creation goes without, the builder saves one,
+        // then the daemon warms sbx's image of it.
+        app.provision(auto_request(dir.path(), kits.clone(), templates::Choice::Default), None).await.unwrap();
+        let t = app.timelines().remove(0);
+        assert!(t.summary.ends_with("No template: none existed yet for these kits; one is being built in the background"), "{}", t.summary);
+        assert!(eventually(|| fake.log().iter().any(|c| c.starts_with("rm") && c.contains(&warmer))).await, "{:?}", fake.log());
+        let tag = app.store.templates()[0].tag.clone();
+        let log = fake.log();
+        let warm: Vec<&String> = log.iter().filter(|c| c.starts_with("create") && c.contains(&warmer)).collect();
+        assert_eq!(warm.len(), 1, "{log:?}");
+        assert!(warm[0].contains(&format!("--template {tag}")) && warm[0].contains("--kit"), "{}", warm[0]);
+        assert!(!log.iter().any(|c| c.starts_with("run -d") && c.contains(&warmer)), "created, never started");
+        assert_eq!(*hidden.lock().unwrap(), [true], "out of the sandbox list while it lives");
+        assert!(eventually(|| app.scratches.lock().unwrap().is_empty()).await);
+        let key = format!("local/{tag}");
+        assert_eq!(app.warmed().get(&key), Some(&app.warm_key(&bundled::resolve(&app.store.paths, &applied).unwrap())));
+
+        // Already warmed for these kits and this sbx: the start does nothing.
+        app.warm_templates_at_start();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(fake.log().iter().filter(|c| c.starts_with("create") && c.contains(&warmer)).count(), 1);
+
+        // The kits' files changed since (as after an sbxw update): warmed
+        // again at the start, once however often it is asked.
+        let mut all = app.warmed();
+        all.insert(key.clone(), "0000@0.51.0".into());
+        std::fs::write(app.warm_file(), serde_json::to_vec(&all).unwrap()).unwrap();
+        app.warm_templates_at_start();
+        app.warm_templates_at_start();
+        assert!(eventually(|| fake.log().iter().filter(|c| c.starts_with("rm") && c.contains(&warmer)).count() == 2).await, "{:?}", fake.log());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(fake.log().iter().filter(|c| c.starts_with("create") && c.contains(&warmer)).count(), 2, "{:?}", fake.log());
+    }
+
+    #[tokio::test]
+    async fn no_warm_runs_beside_a_creation_from_the_template_and_a_failed_one_is_not_repeated() {
+        let slot = Arc::new(std::sync::Mutex::new(None));
+        let hidden = Arc::new(std::sync::Mutex::new(vec![]));
+        let (_dir, app, fake) = app_with(warm_sbx(slot.clone(), hidden.clone(), true));
+        *slot.lock().unwrap() = Some(app.clone());
+        let applied = kits::with_base(&["sbxw:codemap".to_string()]);
+        let rec = fresh_record(&app, &applied);
+        app.store.set_templates(std::slice::from_ref(&rec)).unwrap();
+        let warmer = templates::warmer_name(&applied);
+        let warms = || fake.log().iter().filter(|c| c.starts_with("create") && c.contains(&warmer)).count();
+        let key = format!("local/{}", rec.tag);
+
+        app.warming.lock().unwrap().creating.insert(key.clone(), 1);
+        app.warm_templates_at_start();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(warms(), 0, "a person's creation from it warms it");
+
+        app.warming.lock().unwrap().creating.clear();
+        app.warm_templates_at_start();
+        assert!(eventually(|| warms() == 1).await);
+        assert!(eventually(|| app.warming.lock().unwrap().queues.is_empty()).await);
+        app.warm_templates_at_start();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(warms(), 1, "a failure is not tried again for the same kits and sbx");
+        assert!(app.warmed().get(&key).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_creation_from_the_template_counts_as_its_warm() {
+        let (dir, app, fake) = app_with(auto_sbx(0));
+        let kits = vec!["sbxw:codemap".to_string()];
+        let applied = kits::with_base(&kits);
+        let mut rec = fresh_record(&app, &applied);
+        rec.tag = "sbxw-auto:fresh".into();
+        app.store.set_templates(std::slice::from_ref(&rec)).unwrap();
+        app.provision(auto_request(dir.path(), kits, templates::Choice::Default), None).await.unwrap();
+        assert!(fake.log().iter().any(|c| c.starts_with("create") && c.contains("--template sbxw-auto:fresh")));
+        assert!(app.warmed().contains_key("local/sbxw-auto:fresh"));
+        assert!(app.warming.lock().unwrap().creating.is_empty(), "no longer counted once over");
+        // Asked beside `sbx ls`, before it: one listing, not two.
+        assert_eq!(fake.log().iter().filter(|c| c.starts_with("template ls")).count(), 1, "{:?}", fake.log());
+        app.warm_templates_at_start();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!fake.log().iter().any(|c| c.contains("sbxw-warm-")), "{:?}", fake.log());
     }
 
     #[tokio::test]
