@@ -141,6 +141,178 @@ pub struct Timeline {
     pub startups_ms: Option<u64>,
     #[serde(default)]
     pub summary: String,
+    /// What `sbx create`'s own output said of its parts, when it said any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create: Option<Inside>,
+    /// Why a creation with `template = "auto"` went without a template, and
+    /// what the daemon does about it: the reason it was slow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_template: Option<String>,
+}
+
+/// Inside `sbx create`, as its output tells it: whether sbx's image of the
+/// template and the kits was assembled or found cached, and each kit install
+/// command with its duration. The format is sbx's and may change: a line
+/// that does not read is ignored, never an error.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Inside {
+    /// `cached` or `assembled`; `None` when sbx did not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub installs: Vec<Install>,
+}
+
+/// One kit install command, as sbx reported it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Install {
+    /// The kit's name (a path's last part only).
+    pub kit: String,
+    /// The kit's own description of the command, cut to [`WHAT_MAX`] characters.
+    pub what: String,
+    pub ms: u64,
+}
+
+/// Installs kept per creation, and the length a description is cut to.
+const INSTALLS_MAX: usize = 32;
+const WHAT_MAX: usize = 60;
+/// Installs this long or longer are named in the summary line.
+const INSTALL_SHOWN_FROM_MS: u64 = 1000;
+
+impl Inside {
+    pub fn is_empty(&self) -> bool {
+        self.image.is_none() && self.installs.is_empty()
+    }
+
+    /// Take what `line` of `sbx create`'s output says, if anything.
+    pub fn read_line(&mut self, line: &str) {
+        let line = clean_line(line);
+        if line.is_empty() {
+            return;
+        }
+        if let Some(i) = parse_install(&line) {
+            if self.installs.len() < INSTALLS_MAX {
+                self.installs.push(i);
+            }
+            return;
+        }
+        let lower = line.to_lowercase();
+        if lower.contains("kit image") {
+            if lower.contains("cached") {
+                self.image = Some("cached".into());
+            } else if lower.contains("assembl") && self.image.is_none() {
+                self.image = Some("assembled".into());
+            }
+        }
+    }
+}
+
+/// A line without terminal escapes, and without the marks and spaces sbx
+/// may put before it (`✓ `, `- `, `> `).
+fn clean_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // CSI: ESC [ ... final byte in @..~; anything else: ESC and one char.
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for d in chars.by_ref() {
+                    if ('@'..='~').contains(&d) {
+                        break;
+                    }
+                }
+            } else {
+                chars.next();
+            }
+            continue;
+        }
+        if !c.is_control() {
+            out.push(c);
+        }
+    }
+    out.trim().trim_start_matches(|c: char| !c.is_alphanumeric()).trim().to_string()
+}
+
+/// `Install Node.js for sbxw's in-sandbox tooling (kit=base, user=0, 12.1s)`:
+/// the description, then in the last parentheses `kit=` first and a
+/// duration last.
+fn parse_install(line: &str) -> Option<Install> {
+    let body = line.strip_suffix(')')?;
+    let open = body.rfind(" (kit=")?;
+    let what = body[..open].trim();
+    let fields: Vec<&str> = body[open + 2..].split(',').map(str::trim).collect();
+    let kit = fields.first()?.strip_prefix("kit=")?.trim();
+    let ms = parse_duration(fields.last()?)?;
+    if what.is_empty() || kit.is_empty() || fields.len() < 2 {
+        return None;
+    }
+    // A path names a local kit: its last part is the name, the rest is not kept.
+    let kit = kit.trim_end_matches('/').rsplit(['/', '\\']).next().unwrap_or(kit);
+    Some(Install { kit: cut(kit, 40), what: cut(&without_paths(what), WHAT_MAX), ms })
+}
+
+/// A Go-style duration as sbx prints it: `128ms`, `12.1s`, `1m3.5s`, `850µs`.
+fn parse_duration(text: &str) -> Option<u64> {
+    let mut rest = text.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    let mut total = 0f64;
+    while !rest.is_empty() {
+        let num_end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(rest.len());
+        let n: f64 = rest[..num_end].parse().ok()?;
+        rest = &rest[num_end..];
+        let unit_end = rest.find(|c: char| c.is_ascii_digit() || c == '.').unwrap_or(rest.len());
+        let factor = match &rest[..unit_end] {
+            "h" => 3_600_000.0,
+            "m" => 60_000.0,
+            "s" => 1000.0,
+            "ms" => 1.0,
+            "us" | "µs" | "μs" => 0.001,
+            "ns" => 0.000_001,
+            _ => return None,
+        };
+        total += n * factor;
+        rest = &rest[unit_end..];
+    }
+    Some(total.round() as u64)
+}
+
+/// Words that look like a path (`/…`, `~/…`, `./…`) replaced: a
+/// description is the kit's own text, but a timeline keeps no path.
+fn without_paths(text: &str) -> String {
+    text.split_whitespace()
+        .map(|w| match w.starts_with('/') || w.starts_with("~/") || w.starts_with("./") || w.contains(":\\") {
+            true => "…",
+            false => w,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn cut(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &text[..i]),
+        None => text.to_string(),
+    }
+}
+
+/// An install as the summary names it: `Node.js install 12.1 s` for the
+/// usual `Install <what> for <why>`, else its kit and description.
+fn install_label(i: &Install) -> String {
+    let short = match i.what.strip_prefix("Install ").or_else(|| i.what.strip_prefix("install ")) {
+        Some(rest) => {
+            let end = [" for ", " (", ", "].iter().filter_map(|sep| rest.find(sep)).min().unwrap_or(rest.len());
+            format!("{} install", cut(rest[..end].trim(), 30))
+        }
+        None => format!("{}: {}", i.kit, cut(&i.what, 30)),
+    };
+    let took = match i.ms {
+        0..1000 => format!("{} ms", i.ms),
+        ms => format!("{:.1} s", ms as f64 / 1000.0),
+    };
+    format!("{short} {took}")
 }
 
 impl Timeline {
@@ -172,7 +344,9 @@ pub fn human(ms: u64) -> String {
 }
 
 /// The bring-up's line: its total, then its steps of [`SHOWN_FROM_MS`] or
-/// more, in order. `ready in 41 s: create 28 s, boot 6.0 s, tooling 3.1 s`.
+/// more, in order, the create with its installs of a second or more, then
+/// why it went without a template when that is why it was slow.
+/// `ready in 28 s: create 27 s (Node.js install 12.1 s), tooling 0.6 s`.
 pub fn summary(t: &Timeline) -> String {
     let total = t.ready_ms.unwrap_or(0);
     let head = match &t.error {
@@ -184,11 +358,29 @@ pub fn summary(t: &Timeline) -> String {
         .iter()
         .filter(|s| s.name != step::DONE)
         .filter_map(|s| s.ms.filter(|ms| *ms >= SHOWN_FROM_MS).map(|ms| (s, ms)))
-        .map(|(s, ms)| format!("{} {}{}", label(&s.name), human(ms), if s.unfinished { " (unfinished)" } else { "" }))
+        .map(|(s, ms)| {
+            let mut notes: Vec<String> = vec![];
+            if s.name == step::SBX_CREATE {
+                if let Some(inside) = &t.create {
+                    notes.extend(inside.installs.iter().filter(|i| i.ms >= INSTALL_SHOWN_FROM_MS).map(install_label));
+                }
+            }
+            if s.unfinished {
+                notes.push("unfinished".into());
+            }
+            match notes.is_empty() {
+                true => format!("{} {}", label(&s.name), human(ms)),
+                false => format!("{} {} ({})", label(&s.name), human(ms), notes.join(", ")),
+            }
+        })
         .collect();
-    match parts.is_empty() {
+    let line = match parts.is_empty() {
         true => head,
         false => format!("{head}: {}", parts.join(", ")),
+    };
+    match &t.no_template {
+        Some(why) => format!("{line}. No template: {why}"),
+        None => line,
     }
 }
 

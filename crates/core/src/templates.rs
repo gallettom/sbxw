@@ -166,6 +166,20 @@ pub fn builder_name(kits: &[String]) -> String {
     format!("sbxw-tpl-{:08x}", fnv1a(&kits.join("\n")) as u32)
 }
 
+/// The sandbox the daemon creates, then removes at once, from this kit
+/// list's automatic template so that sbx assembles and caches the image of
+/// the template and the kits: `sbxw-warm-<kits hash>`.
+pub fn warmer_name(kits: &[String]) -> String {
+    format!("sbxw-warm-{:08x}", fnv1a(&kits.join("\n")) as u32)
+}
+
+/// What sbx's cached image of a template and its kits depends on, as far as
+/// sbxw can tell: the kits' files (`fingerprint` of their contents) and the
+/// sbx that assembles it.
+pub fn warm_key(content: &str, sbx: &str) -> String {
+    format!("{content}@{sbx}")
+}
+
 /// Stable across builds and platforms, unlike `std`'s hasher.
 fn fnv1a(s: &str) -> u64 {
     s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))

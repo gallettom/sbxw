@@ -40,7 +40,7 @@ fn kit_with_startup(dir: &Path) -> String {
 }
 
 fn bare() -> Config {
-    Config { kits: vec![], network_allow: vec![], network_deny: vec![], ports: vec![], ..Config::default() }
+    Config { kits: vec![], network_allow: vec![], network_deny: vec![], ports: vec![], template: String::new(), ..Config::default() }
 }
 
 /// The steps up to `done`, by name.
@@ -358,4 +358,85 @@ async fn the_daemons_own_remove_ends_the_startup_watch_at_once() {
     let t = app.timelines().into_iter().find(|t| t.id == id).unwrap();
     let s = t.span(step::KIT_STARTUPS).unwrap();
     assert!(s.detail.as_deref().unwrap().contains("stopped or removed"), "{s:?}");
+}
+
+#[test]
+fn the_create_output_is_read_for_the_image_and_each_install_and_garbage_is_ignored() {
+    let mut inside = Inside::default();
+    for line in [
+        "Creating sandbox claude-myapp...",
+        "\u{1b}[32m✓\u{1b}[0m Install Node.js for sbxw's in-sandbox tooling (kit=base, user=0, 12.1s)",
+        "  Set up the code map (kit=/Users/someone/.sbxw/kits/codemap, user=1000, 128ms)",
+        "Fetch tools from /opt/private/x (kit=k8s-tools, user=0, 1m2.5s)",
+        "assembled kit image ready",
+        "garbage (kit=)",
+        "Install nothing (kit=base, user=0, soon)",
+        "Install no duration (kit=base)",
+        "(kit=base, user=0, 1s)",
+        "",
+        "\u{1b}[2K",
+    ] {
+        inside.read_line(line);
+    }
+    assert_eq!(inside.image.as_deref(), Some("assembled"));
+    let got: Vec<(&str, &str, u64)> = inside.installs.iter().map(|i| (i.kit.as_str(), i.what.as_str(), i.ms)).collect();
+    assert_eq!(
+        got,
+        [
+            ("base", "Install Node.js for sbxw's in-sandbox tooling", 12_100),
+            ("codemap", "Set up the code map", 128),
+            ("k8s-tools", "Fetch tools from …", 62_500),
+        ]
+    );
+    inside.read_line("assembled kit image ready (cached)");
+    assert_eq!(inside.image.as_deref(), Some("cached"));
+    inside.read_line("assembling kit image");
+    assert_eq!(inside.image.as_deref(), Some("cached"), "cached, once said, stays");
+    let mut long = Inside::default();
+    long.read_line(&format!("{} (kit=base, user=0, 2s)", "word ".repeat(40)));
+    assert_eq!(long.installs[0].what.chars().count(), WHAT_MAX + 1, "cut, with its ellipsis");
+}
+
+#[test]
+fn the_summary_names_slow_installs_and_why_there_was_no_template() {
+    let span = |name: &str, start_ms: u64, ms: u64| Span { name: name.into(), start_ms, ms: Some(ms), detail: None, unfinished: false };
+    let install = |kit: &str, what: &str, ms| Install { kit: kit.into(), what: what.into(), ms };
+    let mut t = Timeline {
+        steps: vec![span("sbx_create", 100, 27_400), span("tooling", 27_600, 640), span("done", 28_300, 0)],
+        ready_ms: Some(28_300),
+        create: Some(Inside {
+            image: Some("assembled".into()),
+            installs: vec![install("base", "Install Node.js for sbxw's in-sandbox tooling", 12_100), install("codemap", "Set up the code map", 300), install("tools", "Fetch the tools", 4_000)],
+        }),
+        ..Default::default()
+    };
+    assert_eq!(summary(&t), "ready in 28 s: create 27 s (Node.js install 12.1 s, tools: Fetch the tools 4.0 s), tooling 640 ms");
+    t.no_template = Some("none existed yet for these kits; one is being built in the background".into());
+    assert_eq!(
+        summary(&t),
+        "ready in 28 s: create 27 s (Node.js install 12.1 s, tools: Fetch the tools 4.0 s), tooling 640 ms. No template: none existed yet for these kits; one is being built in the background"
+    );
+}
+
+#[tokio::test]
+async fn nothing_secret_is_kept_from_the_create_output_either() {
+    let d = tempfile::tempdir().unwrap();
+    let ws = d.path().join("myapp").to_string_lossy().into_owned();
+    let said = format!("Install the thing for {ws} (kit={ws}/kit, user=0, 2.0s)\nInstall Node.js for sbxw (kit=base, user=0, 12.1s)\n");
+    let booting = sbx_answer_booting();
+    let (app, _) = app_in_with(d.path(), move |a: &[String]| match a.first().map(String::as_str) {
+        Some("create") => {
+            booting(a);
+            Output::ok(&said)
+        }
+        _ => booting(a),
+    });
+    let mut req = request(d.path(), bare());
+    req.api_key = Some("sk-ant-key-456".into());
+    bring_up(&app, req).await.0.unwrap();
+    let t = app.timelines().remove(0);
+    assert_eq!(t.create.as_ref().map(|c| c.installs.len()), Some(2), "{:?}", t.create);
+    let kept = std::fs::read_to_string(app.timings_file()).unwrap() + &serde_json::to_string(&t).unwrap();
+    assert!(!kept.contains(&ws), "no path kept");
+    assert!(!kept.contains(&app.store.token(&t_ref()).unwrap()));
 }

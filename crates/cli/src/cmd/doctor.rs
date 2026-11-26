@@ -114,9 +114,13 @@ pub fn run(config: &Path, json: bool) -> Result<()> {
                     "template (auto)",
                     &format!("{} is out of date ({}) — `sbxw up <name> --rebuild-template`", record.tag, changed.join(", ")),
                 ),
-                templates::Freshness::Missing => {
-                    r.line(Level::Warn, "template (auto)", "none yet for these kits — `sbxw up <name> --rebuild-template`")
-                }
+                // The default since the automatic template is: a project's
+                // first creation builds one in the background, nothing to fix.
+                templates::Freshness::Missing => r.line(
+                    Level::Ok,
+                    "template (auto)",
+                    "none yet for these kits: the first creation builds one in the background (`template = \"\"` in sbxw.toml turns it off)",
+                ),
             }
         }
     }

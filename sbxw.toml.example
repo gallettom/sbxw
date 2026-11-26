@@ -55,7 +55,10 @@ pull = ""
 
 # Start new sandboxes from a template instead of sbx's image, skipping the
 # pull and the kits' installs:
-#   "auto"   sbxw keeps one per kit list. When it was saved by another sbx,
+#   "auto"   (the default, also when the key is left out) sbxw keeps one per
+#            kit list. What it costs: disk for one saved image per kit list,
+#            and a background builder sandbox after the first creation with
+#            a kit list. When it was saved by another sbx,
 #            or the kits' specs changed since (or there is none yet), the
 #            sandbox is created from sbx's image and the daemon rebuilds the
 #            template in the background, in a sandbox of its own
@@ -65,8 +68,10 @@ pull = ""
 #            `sbxw up <name> --rebuild-template`.
 #   "<tag>"  one you saved with `sbxw template save <sandbox> <tag>`. Its files
 #            outside the workspace come along — keep it on this host.
+#   ""       none: every sandbox from sbx's image (each creation installs
+#            its kits again).
 # Read at CREATION only.
-template = ""
+template = "auto"
 
 # Keep the sandbox running with nobody attached (sbx 0.47's `sbx run -d`),
 # until `sbxw stop`. Off, it stops by itself once idle — fine for an agent, not

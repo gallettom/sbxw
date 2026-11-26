@@ -82,7 +82,8 @@ pub struct Config {
     /// `always` | `missing` | `never`; empty leaves it to sbx.
     pub pull: String,
     /// A saved template (`sbxw template save`) new sandboxes start from,
-    /// `auto` for one sbxw keeps and rebuilds itself; empty is sbx's image.
+    /// `auto` (the default) for one sbxw keeps and rebuilds itself; empty
+    /// (written out: `template = ""`) is sbx's image.
     pub template: String,
     /// Hold the sandbox up with nobody attached (`sbx run -d`).
     pub keep_running: bool,
@@ -214,7 +215,11 @@ impl Default for Config {
             phone_skills: default_phone_skills(),
             skills: String::new(),
             pull: String::new(),
-            template: String::new(),
+            // The automatic template: a creation with a kit list it has seen
+            // before skips the image pull and the kits' installs. It grants
+            // nothing (`consent`): what it costs is disk, one image per kit
+            // list, and a background builder after a first creation.
+            template: crate::templates::AUTO.into(),
             keep_running: false,
             chrome: false,
             max_agent_sessions: 4,
@@ -848,6 +853,21 @@ mod tests {
             cfg.terminal_text_color = good.into();
             assert!(cfg.validate().is_ok(), "{good} was refused as a text colour");
         }
+    }
+
+    #[test]
+    fn the_automatic_template_is_the_default_and_an_empty_one_is_none() {
+        use crate::templates::Mode;
+        let dir = tempfile::tempdir().unwrap();
+        // No file at all, and a file that never sets the key.
+        assert_eq!(Config::load(&dir.path().join("sbxw.toml"), dir.path()).unwrap().template_mode(), Mode::Auto);
+        assert_eq!(Config::parse("kits = []").unwrap().template_mode(), Mode::Auto);
+        // Written out, the old default and a tag mean what they meant.
+        assert_eq!(Config::parse("template = \"\"").unwrap().template_mode(), Mode::Off);
+        assert_eq!(Config::parse("template = \"auto\"").unwrap().template_mode(), Mode::Auto);
+        assert_eq!(Config::parse("template = \"mine:1\"").unwrap().template_mode(), Mode::Tag("mine:1".into()));
+        // The default grants nothing a person has to approve.
+        assert!(crate::consent::grants(&Config::default()).iter().all(|g| !g.starts_with("template")));
     }
 
     #[test]
