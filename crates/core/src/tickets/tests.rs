@@ -144,7 +144,7 @@ fn a_ticket_follows_its_thread_and_keeps_its_place_once_the_plan_is_gone() {
     assert_eq!(col(&b, std::slice::from_ref(&p)), Some(Column::Merged));
     // The plan pruned: the snapshot keeps it in Merged, one card, no thread card.
     let bd = board("web", &[&b], &[], 100, false);
-    assert_eq!(bd.columns[4].count, 1);
+    assert_eq!(bd.columns[5].count, 1);
     assert_eq!(bd.columns.iter().map(|c| c.count).sum::<usize>(), 1);
     // Saved and read again (a restart): the same board.
     let again: Book = serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
@@ -164,7 +164,7 @@ fn a_refused_plan_sends_its_ticket_back_to_planned() {
     let t = b.get(n).unwrap();
     assert!(t.link.is_none());
     let bd = board("web", &[&b], &[p.clone()], 100, false);
-    let c = &bd.columns[0].cards[0];
+    let c = &bd.columns[1].cards[0];
     assert_eq!((c.column, c.marks[0].id.as_str(), c.can.reorder, c.can.send), (Column::Planned, "refused", true, true));
     // Following the refused plan again changes nothing; its thread makes no card.
     assert!(!b.follow(&p, 8, &|_| false));
@@ -176,18 +176,18 @@ fn threads_without_a_ticket_are_cards_and_merged_ones_are_recorded() {
     let mut b = Book::new("web");
     let mut p = plan("p1", PlanState::Approved, vec![th("api", ThreadState::Working, None), th("docs", ThreadState::Done, None)]);
     let bd = board("web", &[&b], &[p.clone()], 100, false);
-    assert_eq!((bd.columns[1].count, bd.columns[2].count), (1, 1));
-    let c = &bd.columns[1].cards[0];
+    assert_eq!((bd.columns[2].count, bd.columns[3].count), (1, 1));
+    let c = &bd.columns[2].cards[0];
     assert_eq!((c.num.as_str(), c.n, c.title.as_str(), c.can.reorder), ("thread", None, "api: Do api", false));
     p.merge = merge(MergeState::Merged, &["docs"], vec![ok("docs", true)]);
     assert!(b.record_threads(&p, 50));
     assert!(!b.record_threads(&p, 51), "once");
     // While the plan is kept: one card for docs (the record), none twice.
     let bd = board("web", &[&b], &[p.clone()], 100, false);
-    assert_eq!(bd.columns[4].count, 1);
-    assert_eq!(bd.columns[4].cards[0].num, "thread");
+    assert_eq!(bd.columns[5].count, 1);
+    assert_eq!(bd.columns[5].cards[0].num, "thread");
     // Pruned: still there.
-    assert_eq!(board("web", &[&b], &[], 100, false).columns[4].count, 1);
+    assert_eq!(board("web", &[&b], &[], 100, false).columns[5].count, 1);
     // Kept to a bound.
     for k in 0..(KEEP_THREAD_RECORDS + 5) {
         let q = Plan { merge: merge(MergeState::Merged, &["t"], vec![ok("t", true)]), ..plan(&format!("q{k}"), PlanState::Approved, vec![th("t", ThreadState::Done, None)]) };
@@ -218,7 +218,7 @@ fn limits_are_kept_and_texts_are_data() {
         b2.add_file(m, TicketFile { id: format!("a-{k:08x}"), bytes: MAX_FILE_BYTES, ..Default::default() }, 3).unwrap();
     }
     assert!(b2.room(m, 1).unwrap_err().contains("100 MB"));
-    let c = &board("web", &[&b], &[], 10, false).columns[0].cards[0];
+    let c = &board("web", &[&b], &[], 10, false).columns[1].cards[0];
     assert!(c.title_short.chars().count() <= TITLE_SHORT && c.title_short.ends_with('…'));
     assert!(c.title_long.chars().count() <= TITLE_LONG);
     assert_eq!(c.marks.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["priority", "files"]);
@@ -260,7 +260,7 @@ fn only_planned_tickets_move_and_only_among_their_priority() {
         b.create(draft(t), 1).unwrap();
     }
     let live = |t: &Ticket| if t.link.is_some() { Column::Progress } else { Column::Planned };
-    let order = |b: &Book| board("web", &[b], &[], 9, false).columns[0].cards.iter().map(|c| c.title.clone()).collect::<Vec<_>>();
+    let order = |b: &Book| board("web", &[b], &[], 9, false).columns[1].cards.iter().map(|c| c.title.clone()).collect::<Vec<_>>();
     assert_eq!(order(&b), ["a", "b", "c"]);
     b.move_ticket(3, Move::Top, &live).unwrap();
     assert_eq!(order(&b), ["c", "a", "b"]);
@@ -292,7 +292,7 @@ fn planned_on_the_all_board_follows_each_sandboxs_order() {
     docs.tickets[0].priority = Priority::P1;
     let pending = plan("p-new", PlanState::Pending, vec![th("idea", ThreadState::Starting, None)]);
     let b = board("all", &[&web, &docs], &[pending], 9, false);
-    let order: Vec<&str> = b.columns[0].cards.iter().map(|c| c.title.as_str()).collect();
+    let order: Vec<&str> = b.columns[1].cards.iter().map(|c| c.title.as_str()).collect();
     assert_eq!(order[..6], ["d1", "d3", "w2", "w3", "d2", "w1"], "priority, then rank, then the newer");
     assert!(order[6].starts_with("idea"), "threads of a pending plan last: {order:?}");
 }
@@ -303,7 +303,7 @@ fn a_ticket_at_work_cannot_be_deleted_and_says_why() {
     let n = b.create(draft("a"), 1).unwrap().n;
     let p = plan("p1", PlanState::Approved, vec![th("x", ThreadState::Working, Some(n))]);
     b.follow(&p, 2, &|_| false);
-    let c = &board("web", &[&b], &[p], 9, false).columns[1].cards[0];
+    let c = &board("web", &[&b], &[p], 9, false).columns[2].cards[0];
     assert!(!c.can.delete && c.can.delete_why.contains("at work"));
     assert!(!c.can.reorder && c.can.reorder_why.contains("follows its thread"));
     assert_eq!(c.can.send_why, "Already in a plan");
@@ -319,9 +319,9 @@ fn merged_shows_the_recent_ones_and_counts_the_older() {
         t.updated_ms = 100 + k;
     }
     let bd = board("web", &[&b], &[], 1000, false);
-    assert_eq!((bd.columns[4].count, bd.columns[4].cards.len(), bd.columns[4].older), (20, MERGED_SHOWN, 20 - MERGED_SHOWN));
-    assert_eq!(bd.columns[4].cards[0].title, "m19", "newest first");
-    assert_eq!(board("web", &[&b], &[], 1000, true).columns[4].older, 0);
+    assert_eq!((bd.columns[5].count, bd.columns[5].cards.len(), bd.columns[5].older), (20, MERGED_SHOWN, 20 - MERGED_SHOWN));
+    assert_eq!(bd.columns[5].cards[0].title, "m19", "newest first");
+    assert_eq!(board("web", &[&b], &[], 1000, true).columns[5].older, 0);
 }
 
 #[test]
@@ -603,12 +603,12 @@ fn the_fixtures_boards_hold_every_column() {
     let f = basic_fx();
     let all: Vec<&Book> = f.books.iter().collect();
     let b = board("all", &all, &f.plans, f.now, false);
-    assert!(b.columns.iter().all(|c| c.count > 0), "{:?}", b.columns.iter().map(|c| c.count).collect::<Vec<_>>());
+    assert!(b.columns.iter().filter(|c| c.id != Column::Backlog).all(|c| c.count > 0), "{:?}", b.columns.iter().map(|c| c.count).collect::<Vec<_>>());
     let f = big_fx();
     let all: Vec<&Book> = f.books.iter().collect();
     let b = board("all", &all, &f.plans, f.now, false);
     assert_eq!(f.books.iter().flat_map(|b| &b.tickets).filter(|t| t.source == Source::Person).count(), 60);
-    assert!(b.columns.iter().all(|c| c.count > 0));
+    assert!(b.columns.iter().filter(|c| c.id != Column::Backlog).all(|c| c.count > 0));
     assert_eq!(f.plans.len(), 25);
     assert_eq!(f.plans.iter().map(|p| p.threads.len()).sum::<usize>(), 40);
 }
@@ -629,7 +629,135 @@ fn timing_board_full_planned() {
     let n = 20;
     let t = std::time::Instant::now();
     for _ in 0..n {
-        assert_eq!(board("web", &[&b], &[], 9, false).columns[0].count, MAX_TICKETS);
+        assert_eq!(board("web", &[&b], &[], 9, false).columns[1].count, MAX_TICKETS);
     }
     eprintln!("timing_board_full_planned {} tickets: {:?} per board", MAX_TICKETS, t.elapsed() / n);
+}
+
+// ── Backlog: tickets imported from a tracker ─────────────────────────────
+
+fn src() -> crate::tracker::Source {
+    crate::tracker::Source { repo: "acme/web".into(), ..Default::default() }
+}
+
+fn issue(n: u64, title: &str) -> crate::tracker::Issue {
+    let v = json!({ "key": format!("acme/web#{n}"), "number": n, "title": title, "body": "Body\u{202e} text", "labels": ["sbxw", "bug"], "state": "open", "url": format!("https://github.com/acme/web/issues/{n}"), "updated_at": "2026-11-26T10:00:00Z", "attachments": [] });
+    crate::tracker::Issue::cleaned(&v, &src()).unwrap()
+}
+
+fn none() -> HashMap<&'static str, &'static Plan> {
+    HashMap::new()
+}
+
+#[test]
+fn an_imported_ticket_waits_in_backlog_until_the_person_plans_it() {
+    let mut b = Book::new("web");
+    let n = b.import(crate::tracker::Tracker::Github, &issue(12, "Fix login"), 5).unwrap();
+    let t = b.get(n).unwrap();
+    assert_eq!(t.source, Source::Person, "an imported ticket is the person's, so a plan can link it once planned");
+    assert_eq!(t.description, "Body text", "imported text is cleaned as data");
+    assert_eq!(ticket_column(t, &none()).0, Column::Backlog);
+    assert!(b.import(crate::tracker::Tracker::Github, &issue(12, "again"), 6).is_err(), "one ticket per issue");
+
+    // The board: Backlog first, the card with its origin and can_plan.
+    let bd = board("web", &[&b], &[], 10, false);
+    assert_eq!(bd.columns.iter().map(|c| c.id).collect::<Vec<_>>(), Column::ALL.to_vec());
+    assert_eq!(bd.columns[0].id, Column::Backlog);
+    let v = serde_json::to_value(&bd.columns[0].cards[0]).unwrap();
+    assert_eq!(v["origin"], json!({ "tracker": "github", "key": "acme/web#12", "url": "https://github.com/acme/web/issues/12", "upstream": "open" }));
+    assert_eq!(v["can_plan"], true);
+    assert_eq!(v["can"]["edit"], false, "the tracker is the reference for its text");
+    assert_eq!(v["can"]["send"], false);
+    assert_eq!(v["can"]["reorder"], false);
+    assert!(bd.counts_line.starts_with("1 backlog · 0 planned"), "{}", bd.counts_line);
+
+    // A plan naming it links nothing while it is in Backlog.
+    let p = plan("p1", PlanState::Approved, vec![th("a", ThreadState::Working, Some(n))]);
+    assert!(!b.follow(&p, 20, &|_| false));
+    assert!(b.get(n).unwrap().link.is_none());
+    assert_eq!(b.link_notes(&p, &|_| false).len(), 1, "the lead is told it is not a ticket of this sandbox");
+
+    // Planned by the person: now it is an ordinary planned ticket.
+    b.plan(n, 30).unwrap();
+    assert!(b.plan(n, 31).is_err(), "only from Backlog");
+    let t = b.get(n).unwrap();
+    assert_eq!(ticket_column(t, &none()).0, Column::Planned);
+    let bd = board("web", &[&b], &[], 40, false);
+    let v = serde_json::to_value(&bd.columns[1].cards[0]).unwrap();
+    assert!(v.get("can_plan").is_none());
+    assert_eq!(v["can"]["send"], true);
+    assert!(b.follow(&p, 50, &|_| false));
+    assert!(b.get(n).unwrap().link.is_some());
+}
+
+#[test]
+fn a_ticket_the_person_writes_still_lands_in_planned() {
+    let mut b = Book::new("web");
+    b.create(draft("mine"), 1).unwrap();
+    assert_eq!(ticket_column(&b.tickets[0], &none()).0, Column::Planned);
+    assert!(b.plan(1, 2).is_err(), "not a Backlog ticket");
+    let bd = board("web", &[&b], &[], 10, false);
+    assert!(!bd.counts_line.contains("backlog"), "an empty Backlog is not said: {}", bd.counts_line);
+}
+
+#[test]
+fn an_issue_updates_its_ticket_until_work_starts_and_closing_upstream_never_stops_work() {
+    let mut b = Book::new("web");
+    let n = b.import(crate::tracker::Tracker::Github, &issue(3, "Old"), 1).unwrap();
+    let mut i = issue(3, "New");
+    i.labels.push("ui".into());
+    assert!(b.refresh_from(n, &i, Column::Backlog, 2));
+    assert_eq!(b.get(n).unwrap().title, "New");
+    assert_eq!(b.get(n).unwrap().origin.as_ref().unwrap().labels, ["sbxw", "bug", "ui"]);
+    assert!(!b.refresh_from(n, &i, Column::Backlog, 3), "nothing new");
+
+    // In progress: the text stays as the thread took it.
+    b.plan(n, 4).unwrap();
+    let p = plan("p1", PlanState::Approved, vec![th("a", ThreadState::Working, Some(n))]);
+    b.follow(&p, 5, &|_| false);
+    let later = issue(3, "Changed while worked on");
+    b.refresh_from(n, &later, Column::Progress, 6);
+    assert_eq!(b.get(n).unwrap().title, "New");
+
+    // Closed upstream: marked, kept, linked.
+    assert!(b.drop_upstream(n, true, 7).is_none());
+    let t = b.get(n).unwrap();
+    assert!(t.closed_upstream() && t.link.is_some());
+    assert_eq!(t.origin.as_ref().unwrap().upstream, crate::tracker::Upstream::Closed);
+    let by: HashMap<&str, &Plan> = [("p1", &p)].into_iter().collect();
+    let c = ticket_card("web", t, &by, 8);
+    assert!(c.marks.iter().any(|m| m.id == "closed-upstream"));
+    assert_eq!(c.column, Column::Progress);
+    // Reopened: the mark goes.
+    b.refresh_from(n, &issue(3, "x"), Column::Progress, 9);
+    assert!(!b.get(n).unwrap().closed_upstream());
+
+    // A Backlog ticket whose issue closes goes.
+    let m = b.import(crate::tracker::Tracker::Github, &issue(4, "Other"), 10).unwrap();
+    assert_eq!(b.drop_upstream(m, false, 11).map(|t| t.n), Some(m));
+    assert!(b.get(m).is_none());
+}
+
+#[test]
+fn turning_a_source_off_drops_backlog_and_keeps_the_rest_and_a_deleted_issue_stays_out() {
+    let mut b = Book::new("web");
+    let a = b.import(crate::tracker::Tracker::Github, &issue(1, "a"), 1).unwrap();
+    let c = b.import(crate::tracker::Tracker::Github, &issue(2, "c"), 1).unwrap();
+    b.plan(c, 2).unwrap();
+    let gone = b.drop_backlog();
+    assert_eq!(gone.iter().map(|t| t.n).collect::<Vec<_>>(), [a]);
+    assert!(b.get(c).unwrap().origin.is_some());
+    b.delete(c).unwrap();
+    assert_eq!(b.skipped, ["acme/web#2"]);
+}
+
+#[test]
+fn an_old_book_loads_unchanged() {
+    let old = r#"{"version":1,"sandbox":"web","next":3,"tickets":[{"n":1,"title":"a","description":"","priority":"p2","rank":1,"source":"person","created_ms":1,"updated_ms":1,"validated_ms":null,"link":null,"last":{"column":"progress","marks":[],"state":"working","at":3},"files":[],"history":[]},{"n":2,"title":"b","source":"person"}]}"#;
+    let b: Book = serde_json::from_str(old).unwrap();
+    assert!(b.tickets.iter().all(|t| t.origin.is_none()) && b.skipped.is_empty());
+    assert_eq!(ticket_column(&b.tickets[0], &none()).0, Column::Progress);
+    assert_eq!(ticket_column(&b.tickets[1], &none()).0, Column::Planned);
+    let again = serde_json::to_string(&b).unwrap();
+    assert!(!again.contains("origin") && !again.contains("skipped"), "a book with no import writes as before");
 }
