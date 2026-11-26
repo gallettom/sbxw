@@ -219,7 +219,7 @@ impl App {
 
     /// The host and the root of `plan`'s workspace repository, or why they
     /// cannot be read.
-    async fn ci_repo(&self, plan: &Plan) -> Result<(git::Host, std::path::PathBuf), String> {
+    async fn ci_repo(&self, plan: &Plan) -> Result<(crate::host::Host, std::path::PathBuf), String> {
         let sandbox = SandboxRef::parse(&plan.sandbox).map_err(|e| e.to_string())?;
         let ws = self.store.workspace(&sandbox).ok_or_else(|| format!("sbxw has no workspace recorded for '{sandbox}'"))?;
         let host = self.host_for(&sandbox).await.map_err(|e| format!("the host of '{sandbox}' cannot be reached: {e:#}"))?;
