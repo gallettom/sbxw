@@ -483,17 +483,34 @@ Nothing in `sbxw.toml` declares it; it belongs to the plan.
   commit: a thread's `HEAD` (or the `ref` it names); for the lead, the plan it
   names or its latest approved open plan, and on a shared plan the team
   branch's tip by default. Outside a plan with an approved command it is
-  refused. `list_tests` shows the caller's command (or that there is none),
-  what is queued or running and the last results; `check_tests` picks up a job
-  left running. A call waits up to 600 seconds; past that it returns the job's
-  id, which survives a daemon restart.
+  refused. `list_tests` shows, for every open plan the caller belongs to (a
+  thread: its own plan; the lead: the open plans it leads, else every open
+  plan of the sandbox), the command (or that there is none), what is queued or
+  running, and the plan's last five results whoever asked: outcome, commit,
+  who asked, attempts and the log of each attempt. `check_tests` with a job id
+  gives the job's full result to any session of the sandbox, the lead
+  included, not only to the one that asked; without an id it picks up the
+  session's own last job. A call waits up to 600 seconds; past that it returns
+  the job's id, which survives a daemon restart.
 - **What is cached.** A result is stored under the command's text and the git
   tree of the commit's root (`<commit>^{tree}`), nothing else. The same command
   on the same tree is answered at once, marked as reused, with the commit it
   first ran on, across threads and plans of the sandbox; any change to any file
   is a new tree and runs again. Passed and failed results are reused; a
   time-out or a run that could not start never is, and `rerun` runs again
-  regardless. A failed run is retried once and the result says so.
+  regardless. A failed run is retried once, and the result keeps the first
+  attempt: its outcome, its duration, its log and its last 40 lines, beside
+  the second's. `run_tests` and `check_tests` print both, one after the other
+  (`=== Attempt 1 of 2 ===`, `=== Attempt 2 of 2 ===`), each tail marked as
+  data. sbxw never parses test names: a runner prints its failures and its
+  summary at the end, so the first attempt's tail names what failed first.
+- **Where the logs are.** Each attempt writes its full output to its own file
+  in the sandbox, `~/.sbxw/tests/logs/<plan>/<job>-<attempt>.log` (attempt 1,
+  and 2 for a retry), which no later attempt or job overwrites. The sandbox
+  keeps the logs of a plan's last 5 jobs (`KEEP_LOG_JOBS`); older ones are
+  deleted when a job of that plan runs, and so is the single
+  `~/.sbxw/tests/logs/<plan>.log` of earlier versions. The result names each
+  log; only the tail crosses to the host.
 - **How it runs.** One job at a time per sandbox, inside the sandbox, in the
   queue's own checkout (`.sbxw-worktrees/.tests`), with a time limit enforced
   there. A request for a tree already queued or running joins that job. The
@@ -502,17 +519,22 @@ Nothing in `sbxw.toml` declares it; it belongs to the plan.
   directory), `SBXW_TEST_SUITE` (the plan's id) and `SBXW_TEST_COMMIT`. Jobs and
   results are kept in `~/.sbxw/state/tests.json`; results older than 30 days
   are pruned. The plan counts how many of its jobs ran and how many were
-  answered without running, and the lead relies on the queue's result on the
+  answered without running; a job counts once it is over (a retried one
+  counts once), so a job still at work shows in `list_tests`, not yet in
+  "N run", and the lead relies on the queue's result on the
   code to merge before proposing the merge.
 - **On the team's timeline.** Every answered request is a `test_job` event
   (group `status`) when it is answered: `from` is who asked (a thread or
   `lead`), `data` is `{job, asker, thread, outcome, reused, reuse, retried,
-  short, duration_ms}` with `outcome` one of `passed`, `failed`, `timed_out`,
+  short, duration_ms, first_outcome, first_log}` with `outcome` one of `passed`, `failed`, `timed_out`,
   `error` (could not run), `reuse` `stored` (a stored result) or `joined` (a
   job already at work, logged when it finishes) or null, `short` the 7-digit
   commit asked for and `duration_ms` the run's own (for a reused answer, the
-  original run's). The output never is. So the Board shows how much work the
-  queue saved.
+  original run's). For a retried run, `first_outcome` and `first_log` name
+  the first attempt and its log (null otherwise), and the line's text ends
+  with "first attempt failed, its log: <path>". The output never is. So the
+  Board shows how much work the queue saved, and where a flaky first attempt
+  can be read.
 - **A thread does not run the whole command itself** (audit D10). When a
   thread's session (`SBXW_THREAD` set) whose plan has an approved command is
   about to run a Bash command that is that command, sbxw refuses it and says
