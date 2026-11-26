@@ -167,6 +167,11 @@ impl App {
         let src = d.check()?;
         self.tracker_update(&s, |x| {
             let same = x.source.as_ref().is_some_and(|o| o.tracker == src.tracker && o.repo == src.repo && o.label == src.label);
+            // Another repository: what was queued for the old one is
+            // discarded, as on a disconnect.
+            if x.source.as_ref().is_some_and(|o| o.tracker != src.tracker || o.repo != src.repo) {
+                x.queue.clear();
+            }
             x.source = Some(src.clone());
             if !same {
                 x.status = Status { state: SyncState::Syncing, last_ok_ms: x.status.last_ok_ms, ..Default::default() };

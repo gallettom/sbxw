@@ -816,7 +816,7 @@ source.
 the others keep their origin. Write-backs still queued are discarded: a
 source set again later replays none of them; it writes back only an
 imported ticket's column as it is then, when it differs from the last one
-written.
+written. Setting another repository discards the queue the same way.
 
 **Routes (UI listener).** `GET /api/tickets/:sandbox/source`
 (`{configured, tracker, repo, label, auto_close, detected, status: {state,

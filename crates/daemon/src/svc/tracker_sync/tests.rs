@@ -435,6 +435,10 @@ async fn removing_the_source_drops_backlog_and_keeps_the_rest() {
     app.tracker_tick().await;
     assert_eq!(w.ops("comment").len(), before, "no replay on reconnect");
     assert!(app.tracker_with(SANDBOX, |x| x.queue.is_empty()));
+    // Another repository set over a queued write-back: discarded too.
+    let _ = app.tracker_update(SANDBOX, |x| x.push(WriteBack { n: b, key: "acme/web#2".into(), ..Default::default() }));
+    app.tracker_source_set(&sb(), SourceDraft { repo: Some("acme/other".into()), ..Default::default() }).unwrap();
+    assert!(app.tracker_with(SANDBOX, |x| x.queue.is_empty()), "nothing queued for the old repository is sent");
 }
 
 #[tokio::test]
