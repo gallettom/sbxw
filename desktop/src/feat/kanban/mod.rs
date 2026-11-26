@@ -26,6 +26,16 @@
 //!   ticket's number alone, under a team note's delivery rule. Refused here
 //!   in Rust under a dialog or a menu, and while a Jarvis proposal waits.
 //! * **Text.** Ticket and agent words are data: text and pills, never a control.
+//! * **Ticket source.** A daemon with ticket sources adds a Backlog column,
+//!   first: the issues of a tracker (GitHub first), imported by the daemon.
+//!   An imported card shows its issue's key and opens it in the browser
+//!   (http and https only); it is read-only here. "Move to Planned" (only on
+//!   a card with `can_plan`) is the one way out of Backlog, the person's.
+//!   The header shows the sandbox's source (`GET /api/tickets/:sb/source`):
+//!   its status and Connect, or Refresh. Its dialog's Save and Disconnect
+//!   change what sbxw writes to the tracker: each is an Approval, ONE
+//!   Confirm saying what is written outward. An older daemon (no Backlog,
+//!   404 on the source) leaves the Kanban as it was.
 
 pub mod model;
 #[cfg(test)]
@@ -43,6 +53,16 @@ pub const SCREEN: &str = "kanban";
 pub const FORM: &str = "kanban-form";
 pub const UI: &str = "kanban_ui";
 pub const FORM_UI: &str = "kanban_form";
+pub const SOURCE: &str = "kanban-source";
+pub const SOURCE_UI: &str = "kanban_source_form";
+/// The trackers a source can be (GitHub only for now).
+const TRACKERS: &[&str] = &["github"];
+/// A filter label's default.
+pub const DEFAULT_LABEL: &str = "sbxw";
+/// What sbxw writes to the tracker, said in the dialog and in both Confirms.
+pub fn writes_line(tracker: &str) -> String {
+    format!("sbxw writes one comment and one state label per issue to {tracker}, under your own account.")
+}
 
 const KEYS: &[&str] = &["up", "down", "left", "right", "enter", "escape", "type"];
 const MOVES: &[&str] = &["up", "down", "top", "bottom"];
@@ -59,6 +79,7 @@ pub const FEATURE: Feature = Feature {
     screens: &[
         ScreenDecl { name: SCREEN, src: include_str!("../../../screens/kanban.luau"), slot: Slot::Overlay { title: TITLE, icon: "board" } },
         ScreenDecl { name: FORM, src: include_str!("../../../screens/kanban-form.luau"), slot: Slot::Modal { width: 720.0, light_dismiss: false } },
+        ScreenDecl { name: SOURCE, src: include_str!("../../../screens/kanban-source.luau"), slot: Slot::Modal { width: 560.0, light_dismiss: false } },
     ],
     events: &["tickets", "plan"],
     intents: INTENTS,
@@ -106,7 +127,37 @@ pub const INTENTS: &[Spec] = &[
     d("kanban_file", &[("file", Arg::Str, true), ("open", Arg::Bool, false)], "Saves a file of the open ticket to your Downloads folder and shows it there (`open`: opens it with the system, after the core's check)."),
     d("kanban_link", &[("what", Arg::OneOf(LINKS), true)], "Goes where the open card's thread is: its terminal, its session in Sessions, its commits or worktrees, the plan dialog."),
     d("kanban_refresh", &[], "Reads the Kanban again."),
+    d("kanban_issue", &[("id", Arg::Text, false)], "Opens an imported card's issue in the browser (its element key; empty: the ticket open in the panel). Only an http or https link opens."),
+    d("kanban_plan", &[("id", Arg::Text, false)], "Moves a Backlog ticket to Planned (its element key; empty: the ticket open in the panel). The one way out of Backlog."),
+    d("kanban_source_open", &[], "Opens the ticket source dialog for the sandbox shown: the tracker, the repository, the filter label, whether merged tickets close their issue."),
+    d("kanban_source_field", &[("tracker", Arg::OneOf(TRACKERS), false), ("repo", Arg::Text, false), ("label", Arg::Text, false), ("auto_close", Arg::Bool, false)], "The source dialog's fields as the person sets them."),
+    d("kanban_source_cancel", &[], "Closes the source dialog without saving."),
+    d("kanban_source_refresh", &[], "Syncs the sandbox shown with its ticket source now."),
+    Spec { name: "kanban_source_save", risk: Risk::Approval("Changes what sbxw writes to the tracker"), args: &[], doc: "Saves the source dialog: sbxw imports the repository's issues with the label and writes each ticket's progress back to its issue, after one confirmation saying what is written." },
+    Spec { name: "kanban_source_remove", risk: Risk::Approval("Stops sbxw writing to the tracker"), args: &[], doc: "Disconnects the sandbox's ticket source, after one confirmation: imported Backlog tickets are removed; nothing is written to the tracker any more." },
 ];
+
+/// The source dialog, open.
+#[derive(Debug, Default, Clone)]
+pub struct SourceForm {
+    pub sandbox: String,
+    pub tracker: String,
+    pub repo: String,
+    pub label: String,
+    pub auto_close: bool,
+    /// The repository was filled from the sandbox's own (`detected`).
+    pub detected: bool,
+    /// A source is set now (Disconnect is offered).
+    pub configured: bool,
+    pub saving: bool,
+    pub error: Option<String>,
+}
+
+/// `owner/name`, each part made of letters, digits, `-`, `_`, `.`.
+pub fn repo_ok(r: &str) -> bool {
+    let ok = |p: &str| !p.is_empty() && p != "." && p != ".." && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    matches!(r.split_once('/'), Some((o, n)) if ok(o) && ok(n))
+}
 
 /// A file the person handed the form, not saved yet.
 #[derive(Debug, Clone)]
@@ -156,6 +207,10 @@ pub struct State {
     previews: BTreeSet<String>,
     pub form: Option<Form>,
     pick_armed: bool,
+    /// The sandbox's ticket source as the daemon answered (`None`: not read,
+    /// every sandbox shown, or an older daemon with no sources).
+    source: Option<J>,
+    pub source_form: Option<SourceForm>,
 }
 
 crate::feat::relay::per_thread!(STATE, State);
@@ -177,6 +232,12 @@ fn on_files(cx: &Ctx, inc: Incoming) -> Vec<Action> {
 }
 fn on_dismiss(cx: &Ctx, tag: &str) -> Vec<Action> {
     let mut s = STATE().lock().unwrap();
+    if tag == "kb-src-save" || tag == "kb-src-rm" {
+        if let Some(f) = s.source_form.as_mut() {
+            f.saving = false;
+        }
+        return s.views(cx);
+    }
     if tag == "kb-save" {
         if let Some(f) = s.form.as_mut() {
             f.saving = false;
@@ -242,6 +303,27 @@ impl State {
         Action::Call(Call::get(p, "read the Kanban").tag(&format!("kb-board:{}", self.gen)).quiet())
     }
 
+    /// The sandbox's ticket source (one sandbox shown only).
+    fn read_source(&self) -> Option<Action> {
+        let sb = self.scope.as_deref()?;
+        Some(Action::Call(Call::get(format!("/api/tickets/{}/source", enc(sb)), "read the ticket source").tag(&format!("kb-source:{}:{sb}", self.gen)).quiet()))
+    }
+
+    /// The board, and the source with it.
+    fn read_all(&mut self) -> Vec<Action> {
+        let mut v = vec![self.read_board()];
+        v.extend(self.read_source());
+        v
+    }
+
+    /// A card named by its element key, or the one open in the panel.
+    fn card_or_open(&self, id: Option<&str>) -> Result<&J, String> {
+        match id.filter(|i| !i.is_empty()) {
+            Some(i) => self.card(i).ok_or_else(|| format!("{i} is not a card on the board")),
+            None => self.open_card(),
+        }
+    }
+
     fn cards(&self) -> Vec<&J> {
         self.board["columns"].as_array().into_iter().flatten().flat_map(|c| c["cards"].as_array().into_iter().flatten()).collect()
     }
@@ -292,7 +374,7 @@ impl State {
                 }
                 self.scope = (!sb.is_empty()).then(|| sb.to_string());
                 self.reset();
-                out.push(self.read_board());
+                out.extend(self.read_all());
             }
             "kanban_open" => {
                 let id = a.req("id");
@@ -323,11 +405,62 @@ impl State {
                 self.older = true;
                 out.push(self.read_board());
             }
-            "kanban_refresh" => out.push(self.read_board()),
+            "kanban_refresh" => out.extend(self.read_all()),
+            "kanban_issue" => {
+                let c = self.card_or_open(a.s("id"))?;
+                if !model::imported(c) {
+                    return Err("not an imported ticket: it has no issue".into());
+                }
+                let url = model::issue_url(c).ok_or("its link is not an http or https address: not opened")?;
+                return Ok(vec![Action::OpenLink(url.to_string())]);
+            }
+            "kanban_plan" => {
+                let c = self.card_or_open(a.s("id"))?;
+                if !model::can_plan(c) {
+                    return Err(if c["column"] == "backlog" { "this ticket does not move to Planned now".into() } else { "only a Backlog ticket moves to Planned".into() });
+                }
+                let (sb, n) = model::ticket_of(c).ok_or("a card with no ticket")?;
+                return Ok(vec![self.post(&sb, n, "plan", json!({}), "move the ticket to Planned", "kb-plan")]);
+            }
+            "kanban_source_open" => return self.source_open(cx),
+            "kanban_source_field" => {
+                let f = self.source_form.as_mut().ok_or("the source dialog is not open")?;
+                if let Some(t) = a.s("tracker") {
+                    f.tracker = t.to_string();
+                }
+                if let Some(r) = a.s("repo") {
+                    f.repo = r.chars().take(200).collect();
+                    f.detected = false;
+                }
+                if let Some(l) = a.s("label") {
+                    f.label = l.chars().take(60).collect();
+                }
+                if let Some(b) = a.b("auto_close") {
+                    f.auto_close = b;
+                }
+                f.error = None;
+                return Ok(vec![self.source_ui()]);
+            }
+            "kanban_source_cancel" => {
+                self.source_form = None;
+                return Ok(vec![Action::CloseModal, Action::Set { key: SOURCE_UI.into(), value: J::Null }]);
+            }
+            "kanban_source_refresh" => {
+                let sb = self.scope.clone().ok_or("pick a sandbox: a source is one sandbox's")?;
+                if self.source.as_ref().is_none_or(|s| s["configured"] != true) {
+                    return Err(format!("{sb} has no ticket source"));
+                }
+                return Ok(vec![Action::Call(Call::post(format!("/api/tickets/{}/source/refresh", enc(&sb)), json!({}), "sync the ticket source").tag("kb-src-refresh").quiet())]);
+            }
+            "kanban_source_save" => return self.source_save(),
+            "kanban_source_remove" => return self.source_remove(),
             "kanban_key" => return self.key(cx, a.req("key"), a.s("text")),
             "kanban_new" => return Ok(self.new_form(cx, None)),
             "kanban_edit" => {
                 let (sb, n, c) = self.open_ticket()?;
+                if model::imported(c) {
+                    return Err(format!("an imported ticket is edited in {}", model::tracker_label(c["origin"]["tracker"].as_str().unwrap_or(""))));
+                }
                 if c["can"]["edit"] != true {
                     return Err("this card is recorded from a thread: nothing to edit".into());
                 }
@@ -396,6 +529,9 @@ impl State {
             }
             "kanban_delete" => {
                 let (sb, n, c) = self.open_ticket()?;
+                if model::imported(c) {
+                    return Err("an imported ticket goes when its source is disconnected".into());
+                }
                 if c["can"]["delete"] != true {
                     return Err(c["can"]["delete_why"].as_str().unwrap_or("not deleted").to_string());
                 }
@@ -413,7 +549,10 @@ impl State {
                 return Ok(vec![Action::Confirm(Box::new(conf.labels("Delete", "Cancel")))]);
             }
             "kanban_remove_file" => {
-                let (sb, n, _) = self.open_ticket()?;
+                let (sb, n, c) = self.open_ticket()?;
+                if model::imported(c) {
+                    return Err("an imported ticket is read-only here".into());
+                }
                 let fid = a.req("file");
                 let v = self.view.as_ref().ok_or("the ticket is still being read")?;
                 let f = v["files"].as_array().into_iter().flatten().find(|f| f["id"] == fid).ok_or("no such file on this ticket")?;
@@ -434,7 +573,7 @@ impl State {
             }
             "kanban_priority" => {
                 let (sb, n, c) = self.open_ticket()?;
-                if c["can"]["edit"] != true {
+                if !model::prioritizable(c) {
                     return Err("a card recorded from a thread has no priority".into());
                 }
                 out.push(self.post(&sb, n, "edit", json!({ "priority": a.req("priority") }), "set the priority", "kb-edit"));
@@ -474,7 +613,9 @@ impl State {
     fn show(&mut self, sb: Option<String>) -> Vec<Action> {
         self.scope = sb.filter(|s| !s.is_empty());
         self.reset();
-        vec![Action::OpenPanel(SCREEN.into()), self.read_board()]
+        let mut v = vec![Action::OpenPanel(SCREEN.into())];
+        v.extend(self.read_all());
+        v
     }
 
     fn reset(&mut self) {
@@ -486,6 +627,68 @@ impl State {
         self.open = None;
         self.view = None;
         self.focus = None;
+        self.source = None;
+    }
+
+    fn source_open(&mut self, cx: &Ctx) -> Result<Vec<Action>, String> {
+        let sb = self.scope.clone().ok_or("pick a sandbox: a ticket source is one sandbox's")?;
+        cx.sandbox(&sb).ok_or_else(|| format!("{sb} is not a sandbox sbxw lists"))?;
+        let src = self.source.clone().ok_or("this daemon has no ticket sources")?;
+        let configured = src["configured"] == true;
+        let det = src["detected"]["repo"].as_str().filter(|r| !r.is_empty());
+        let (repo, detected) = match src["repo"].as_str().filter(|r| configured && !r.is_empty()) {
+            Some(r) => (r.to_string(), false),
+            None => (det.unwrap_or("").to_string(), det.is_some()),
+        };
+        let tracker = src["tracker"].as_str().filter(|t| configured && TRACKERS.contains(t)).or_else(|| src["detected"]["tracker"].as_str().filter(|t| TRACKERS.contains(t))).unwrap_or("github");
+        let label = if configured { src["label"].as_str().unwrap_or("").to_string() } else { DEFAULT_LABEL.to_string() };
+        self.source_form = Some(SourceForm { sandbox: sb, tracker: tracker.into(), repo, label, auto_close: configured && src["auto_close"] == true, detected, configured, saving: false, error: None });
+        Ok(vec![self.source_ui(), Action::OpenModal { screen: SOURCE.into(), arg: J::Null }, Action::Focus("kanban-source-repo".into())])
+    }
+
+    fn source_save(&mut self) -> Result<Vec<Action>, String> {
+        let f = self.source_form.as_mut().ok_or("the source dialog is not open")?;
+        if f.saving {
+            return Err("the source is being saved".into());
+        }
+        let repo = f.repo.trim().to_string();
+        let label = f.label.trim().to_string();
+        if !repo_ok(&repo) {
+            f.error = Some("Write the repository as owner/name, for example acme/web-app.".into());
+            return Ok(vec![self.source_ui()]);
+        }
+        if label.chars().any(|c| c.is_control()) {
+            f.error = Some("A label is one line of text.".into());
+            return Ok(vec![self.source_ui()]);
+        }
+        let tracker = model::tracker_label(&f.tracker);
+        let body = json!({ "tracker": f.tracker, "repo": repo, "label": label, "auto_close": f.auto_close });
+        let call = Call::post(format!("/api/tickets/{}/source", enc(&f.sandbox)), body, format!("set {}'s ticket source", f.sandbox)).tag("kb-src-save").quiet();
+        f.saving = true;
+        f.error = None;
+        let mut conf = Confirm::new(format!("Connect {} to {tracker} {repo}?", f.sandbox), call)
+            .line(if label.is_empty() { format!("The open issues of {repo} come in as Backlog tickets of {}.", f.sandbox) } else { format!("The open issues of {repo} labelled \"{label}\" come in as Backlog tickets of {}.", f.sandbox) })
+            .line(writes_line(&tracker));
+        conf = conf.line(if f.auto_close { "When a ticket is merged, sbxw closes its issue.".to_string() } else { "sbxw never closes an issue: you close it.".to_string() });
+        let label_btn = if f.configured { "Save" } else { "Connect" };
+        Ok(vec![Action::Confirm(Box::new(conf.labels(label_btn, "Cancel"))), self.source_ui()])
+    }
+
+    fn source_remove(&mut self) -> Result<Vec<Action>, String> {
+        let f = self.source_form.as_mut().ok_or("the source dialog is not open")?;
+        if !f.configured {
+            return Err(format!("{} has no ticket source", f.sandbox));
+        }
+        let tracker = model::tracker_label(&f.tracker);
+        let call = Call::post(format!("/api/tickets/{}/source/remove", enc(&f.sandbox)), json!({}), format!("disconnect {}'s ticket source", f.sandbox)).tag("kb-src-rm").quiet();
+        f.saving = true;
+        let conf = Confirm::new(format!("Disconnect {} from {tracker}?", f.sandbox), call)
+            .danger()
+            .line(format!("The imported tickets still in Backlog are removed from {}.", f.sandbox))
+            .line("Imported tickets already planned or worked on stay, as your own.")
+            .line(format!("sbxw writes nothing more to {tracker}; what it wrote there stays."))
+            .labels("Disconnect", "Cancel");
+        Ok(vec![Action::Confirm(Box::new(conf)), self.source_ui()])
     }
 
     fn new_form(&mut self, cx: &Ctx, edit: Option<(String, u32, J)>) -> Vec<Action> {
@@ -713,6 +916,11 @@ impl State {
             }
         }
         let mut out = vec![self.read_board()];
+        // The source changed or synced: its line is read again (only from a
+        // daemon that has sources: an older one never sends these).
+        if name == "tickets" && matches!(data["what"].as_str(), Some("source" | "synced")) {
+            out.extend(self.read_source());
+        }
         if let Ok((sb, n, _)) = self.open_ticket() {
             out.push(self.read_ticket(&sb, n));
         }
@@ -726,6 +934,37 @@ impl State {
             Err(e) => Err(e),
         };
         let tag = call.tag.as_str();
+        if let Some(rest) = tag.strip_prefix("kb-source:") {
+            let mine = format!("{}:{}", self.gen, self.scope.as_deref().unwrap_or(""));
+            if rest != mine {
+                return vec![];
+            }
+            // A 404 (an older daemon) or any failure: no source line, the Kanban as before.
+            self.source = match body.as_ref().ok() {
+                Some(b) if b.is_object() && !b["status"].is_null() => Some(b.clone()),
+                _ => None,
+            };
+            return self.views(cx);
+        }
+        if tag == "kb-src-save" || tag == "kb-src-rm" {
+            let Some(f) = self.source_form.as_mut() else { return vec![] };
+            return match body {
+                Ok(_) => {
+                    let removed = tag == "kb-src-rm";
+                    let sb = f.sandbox.clone();
+                    self.source_form = None;
+                    let mut out = vec![Action::CloseModal, Action::Set { key: SOURCE_UI.into(), value: J::Null }];
+                    out.push(Action::notice(if removed { format!("{sb}'s ticket source is disconnected") } else { format!("{sb}'s ticket source is saved: its issues come in as Backlog tickets") }));
+                    out.extend(self.read_all());
+                    out
+                }
+                Err(e) => {
+                    f.saving = false;
+                    f.error = Some(format!("Not saved: {e}."));
+                    vec![self.source_ui()]
+                }
+            };
+        }
         if let Some(g) = tag.strip_prefix("kb-board:") {
             if g != self.gen.to_string() {
                 return vec![];
@@ -830,6 +1069,9 @@ impl State {
             (_, Err(e)) => out.push(Action::error(e)),
         }
         out.push(self.read_board());
+        if tag == "kb-src-refresh" {
+            out.extend(self.read_source());
+        }
         if let Ok((sb, n, _)) = self.open_ticket() {
             out.push(self.read_ticket(&sb, n));
         }
@@ -900,7 +1142,34 @@ impl State {
         if self.form.is_some() {
             v.push(self.form_ui());
         }
+        if self.source_form.is_some() {
+            v.push(self.source_ui());
+        }
         v
+    }
+
+    fn source_ui(&self) -> Action {
+        let Some(f) = &self.source_form else { return Action::Set { key: SOURCE_UI.into(), value: J::Null } };
+        let tracker = model::tracker_label(&f.tracker);
+        let v = json!({
+            "sandbox": f.sandbox,
+            "heading": if f.configured { "Ticket source" } else { "Connect a ticket source" },
+            "trackers": TRACKERS.iter().map(|t| json!({ "id": t, "label": model::tracker_label(t) })).collect::<Vec<_>>(),
+            "tracker": f.tracker,
+            "tracker_note": "GitHub only for now.",
+            "repo": f.repo,
+            "repo_note": if f.detected { J::from(format!("Filled from {}'s own repository.", f.sandbox)) } else { J::Null },
+            "label": f.label,
+            "label_note": if f.label.trim().is_empty() { "Every open issue is imported." } else { "Only open issues with this label are imported." },
+            "auto_close": f.auto_close,
+            "writes": writes_line(&tracker),
+            "configured": f.configured,
+            "saving": f.saving,
+            "error": f.error,
+            "save_label": if f.configured { "Save" } else { "Connect" },
+            "save_why": if f.saving { J::from("Saving…") } else if f.repo.trim().is_empty() { J::from("Write the repository first") } else { J::Null },
+        });
+        Action::Set { key: SOURCE_UI.into(), value: v }
     }
 
     fn ui(&self, cx: &Ctx) -> Action {
@@ -910,7 +1179,13 @@ impl State {
         let panel = self.open.as_deref().and_then(|id| self.card(id)).map(|c| model::panel(c, self.view.as_ref(), &self.previews, held(cx).as_deref()));
         let mut sandboxes = vec![json!({ "id": "", "label": "All sandboxes" })];
         sandboxes.extend(cx.get("sandboxes").as_array().into_iter().flatten().filter_map(|s| s["name"].as_str()).map(|n| json!({ "id": n })));
+        let now = self.board["now"].as_u64().unwrap_or_else(crate::feat::now_ms);
+        let source = match (&self.scope, &self.source) {
+            (Some(_), Some(s)) => model::source_line(s, now),
+            _ => J::Null,
+        };
         let v = json!({
+            "source": source,
             "scope": self.scope.clone().unwrap_or_default(),
             "sandboxes": sandboxes,
             "columns": cols,
@@ -990,8 +1265,10 @@ fn read_handed(p: &std::path::Path) -> Result<Vec<u8>, String> {
 
 /// The stand-in's tickets: the fixture's `tickets_boards` (by sandbox, `all`,
 /// and `<scope>|older`), `tickets_views` (`<sandbox>/<n>`), `tickets_files`
-/// (`<sandbox>/<n>/<file>`, raw). A new ticket joins Planned; every write
-/// sends the `tickets` event, as the daemon does.
+/// (`<sandbox>/<n>/<file>`, raw), `tickets_sources` (by sandbox: a missing
+/// one answers 404, as an older daemon). A new ticket joins Planned (not the
+/// first column: Backlog comes before it); `/plan` moves a Backlog ticket
+/// there; every write sends the `tickets` event, as the daemon does.
 fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16, J)> {
     if !path.starts_with("/api/tickets") {
         return None;
@@ -1009,6 +1286,10 @@ fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16,
             }
             return ok(json!({ "ok": true, "board": b }));
         }
+        if let Some(c) = crate::feat::match_path("/api/tickets/{sandbox}/source", path) {
+            let v = st.data["tickets_sources"][c[0].1.as_str()].clone();
+            return Some(if v.is_null() { (404, json!({ "ok": false, "error": "not found" })) } else { (200, v) });
+        }
         if let Some(c) = crate::feat::match_path("/api/tickets/{sandbox}/{n}/files/{file}", path) {
             let k = format!("{}/{}/{}", c[0].1, c[1].1, c[2].1);
             let v = st.data["tickets_files"][k.as_str()].clone();
@@ -1024,17 +1305,57 @@ fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16,
     if method != "POST" {
         return None;
     }
+    if let Some(c) = crate::feat::match_path("/api/tickets/{sandbox}/source/{what}", path) {
+        let (sb, what) = (c[0].1.clone(), c[1].1.clone());
+        if st.data["tickets_sources"][sb.as_str()].is_null() {
+            return Some((404, json!({ "ok": false, "error": "not found" })));
+        }
+        match what.as_str() {
+            "remove" => {
+                let src = &mut st.data["tickets_sources"][sb.as_str()];
+                src["configured"] = false.into();
+                src["status"] = json!({ "state": "off", "last_ok_ms": null, "error": null, "hint": null });
+                for b in st.data["tickets_boards"].as_object_mut().into_iter().flat_map(|m| m.values_mut()) {
+                    if let Some(col) = column_mut(b, "backlog") {
+                        if let Some(cards) = col["cards"].as_array_mut() {
+                            cards.retain(|x| x["sandbox"] != sb.as_str() || x["origin"].is_null());
+                            let n = cards.len();
+                            col["count"] = n.into();
+                        }
+                    }
+                }
+            }
+            "refresh" => {}
+            _ => return Some((404, json!({ "ok": false, "error": "not found" }))),
+        }
+        (st.publish)("tickets", json!({ "sandbox": sb, "what": if what == "refresh" { "synced" } else { "source" } }));
+        return ok(json!({ "ok": true }));
+    }
+    if let Some(c) = crate::feat::match_path("/api/tickets/{sandbox}/source", path) {
+        let sb = c[0].1.clone();
+        if st.data["tickets_sources"][sb.as_str()].is_null() {
+            return Some((404, json!({ "ok": false, "error": "not found" })));
+        }
+        let src = &mut st.data["tickets_sources"][sb.as_str()];
+        for k in ["tracker", "repo", "label", "auto_close"] {
+            src[k] = body[k].clone();
+        }
+        src["configured"] = true.into();
+        src["status"] = json!({ "state": "syncing", "last_ok_ms": null, "error": null, "hint": null });
+        (st.publish)("tickets", json!({ "sandbox": sb, "what": "source" }));
+        return ok(json!({ "ok": true }));
+    }
     if let Some(c) = crate::feat::match_path("/api/tickets/{sandbox}", path) {
         let sb = c[0].1.clone();
         let n = 1 + st.data["tickets_views"].as_object().map_or(0, |m| m.keys().filter(|k| k.starts_with(&format!("{sb}/"))).count()) as u64 + 100;
         let title = body["title"].as_str().unwrap_or("").to_string();
         let card = json!({ "key": format!("t:{sb}:{n}"), "sandbox": sb, "n": n, "num": format!("T-{n}"), "column": "planned", "title": title, "title_short": title, "title_long": title, "source": "person", "priority": body["priority"], "thread": null, "thread_state": null, "thread_tone": "neutral", "plan": null, "marks": [], "files": 0, "bytes": 0, "validated": false, "created_ms": 0, "updated_ms": 0, "age": "now", "can": { "reorder": true, "validate": false, "edit": true, "delete": true, "send": true, "reorder_why": "", "delete_why": "", "send_why": "" } });
         for k in [sb.clone(), "all".into()] {
-            if let Some(cards) = st.data["tickets_boards"][k.as_str()]["columns"][0]["cards"].as_array_mut() {
-                cards.insert(0, card.clone());
-            }
-            if let Some(c) = st.data["tickets_boards"][k.as_str()]["columns"][0]["count"].as_u64() {
-                st.data["tickets_boards"][k.as_str()]["columns"][0]["count"] = (c + 1).into();
+            if let Some(col) = column_mut(&mut st.data["tickets_boards"][k.as_str()], "planned") {
+                if let Some(cards) = col["cards"].as_array_mut() {
+                    cards.insert(0, card.clone());
+                }
+                col["count"] = (col["count"].as_u64().unwrap_or(0) + 1).into();
             }
         }
         let view = json!({ "card": card, "n": n, "num": format!("T-{n}"), "title": title, "description": body["description"], "priority": body["priority"], "files": [], "files_label": "", "history": [{ "at": 0, "when": "now", "text": "Created by you", "tone": "neutral" }] });
@@ -1063,6 +1384,29 @@ fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16,
             json!({ "ok": true, "deleted": 1, "files": files, "bytes": 0 })
         }
         "send" => json!({ "ok": true, "sent": "typed", "line": send_line(n.parse().unwrap_or(0)) }),
+        "plan" => {
+            let key = format!("t:{sb}:{n}");
+            for b in st.data["tickets_boards"].as_object_mut().into_iter().flat_map(|m| m.values_mut()) {
+                let Some(back) = column_mut(b, "backlog") else { continue };
+                let Some(cards) = back["cards"].as_array_mut() else { continue };
+                let Some(i) = cards.iter().position(|x| x["key"] == key.as_str()) else { continue };
+                let mut card = cards.remove(i);
+                back["count"] = (back["count"].as_u64().unwrap_or(1).saturating_sub(1)).into();
+                card["column"] = "planned".into();
+                card["can_plan"] = false.into();
+                if let Some(p) = column_mut(b, "planned") {
+                    if let Some(cs) = p["cards"].as_array_mut() {
+                        cs.push(card);
+                    }
+                    p["count"] = (p["count"].as_u64().unwrap_or(0) + 1).into();
+                }
+            }
+            if let Some(c) = st.data["tickets_views"][k.as_str()]["card"].as_object_mut() {
+                c.insert("column".into(), "planned".into());
+                c.insert("can_plan".into(), false.into());
+            }
+            json!({ "ok": true, "ticket": st.data["tickets_views"][k.as_str()] })
+        }
         "files" => json!({ "ok": true, "ticket": st.data["tickets_views"][k.as_str()] }),
         _ => json!({ "ok": true, "ticket": st.data["tickets_views"][k.as_str()] }),
     };
@@ -1070,8 +1414,13 @@ fn standin(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16,
     ok(r)
 }
 
+/// A board's column by its id.
+fn column_mut<'a>(board: &'a mut J, id: &str) -> Option<&'a mut J> {
+    board["columns"].as_array_mut()?.iter_mut().find(|c| c["id"] == id)
+}
+
 fn empty_board(scope: &str) -> J {
-    let cols: Vec<J> = model::COLUMNS
+    let cols: Vec<J> = model::LOCAL_COLUMNS
         .iter()
         .map(|id| {
             let (t, tone) = model::column_label(id);

@@ -2503,7 +2503,7 @@ The filter row starts with the **Conversation | Kanban** switch
 ### kanban
 
 The Dashboard's second view (`src/feat/kanban/`, `screens/kanban.luau`, the
-form `screens/kanban-form.luau`): an overlay titled "Dashboard" (icon `board`),
+form `screens/kanban-form.luau`, the source dialog `screens/kanban-source.luau`): an overlay titled "Dashboard" (icon `board`),
 opened by the switch or by the top bar's Kanban button (`kanban_toggle`),
 with the same switch (`kanban-view`) and the sandbox's scope capsule in its
 title (`kanban-sandbox`, All sandboxes first). Five columns side by side
@@ -2536,6 +2536,52 @@ reads the clipboard, a drop on the dialog; each checked by
 `drops::guardrails`, a secret-looking one marked "Look first" and asked
 about once, with the ack box, at Save), Save (Cmd+Return).
 
+**Ticket sources.** A daemon with ticket sources puts a **Backlog** column
+first (`kanban-lane-backlog`): the issues of a tracker (GitHub for now)
+imported as tickets. The columns then share the width six ways; under
+1,080 pt (180 pt a column) one column at a time. An imported card (`origin`
+from the daemon: tracker, key, url, upstream) shows its issue's key
+(`acme/web-app#12`) as a link button (`kanban-row-<key>-issue`) that opens
+the issue in the browser through `kanban_issue`: the url stays in Rust and
+opens only when it is http or https (`markdown::safe_url`); any other is
+shown as the key alone, disabled. A Backlog card with `can_plan` has one
+action, "Move to Planned" (`kanban-row-<key>-plan`, `kanban_plan`, posts
+`/plan`): the one way out of Backlog, the person's; there is no drag and no
+automatic move. The mark `closed-upstream` is a quiet "closed upstream"
+(text, not a pill): its issue was closed, or lost the sync label, in the
+tracker, and the work here goes on. An imported ticket's title,
+description and files are read-only (no edit, delete or file removal, each
+refused in Rust too); its priority (in Planned) and its validation (in
+Merged) stay the person's. Its panel has one line
+(`kanban-imported`) saying its words are edited in the tracker, and "Open in
+GitHub" (`kanban-issue`); a Backlog ticket's panel also has "Move to
+Planned" (`kanban-plan`). A ticket the person creates goes to Planned.
+
+With one sandbox shown, a line under the summary (`kanban-source`) says its
+source (`GET /api/tickets/:sb/source`): "No ticket source" and Connect
+(`kanban-source-open`); or the tracker, the repository, the filter label
+and the state (synced so long ago, syncing, or "sync failed:" and the
+daemon's hint, the tracker's own error in the tooltip), with Refresh
+(`kanban-source-refresh`, posts `/source/refresh`) and "Source…". The
+dialog `screens/kanban-source.luau` (a modal, 560 pt, no light dismiss, its
+fields scrolling above Cancel and Save): tracker (`kanban-source-tracker`,
+GitHub only, shown so the choice is visible), repository
+(`kanban-source-repo`, `owner/name`, filled from `detected` when the daemon
+found one), filter label (`kanban-source-label`, `sbxw` by default),
+"Close the issue when its ticket is merged" (`kanban-source-close`, off by
+default), one line saying what sbxw writes to the tracker (one comment and
+one state label per issue, under the person's own account), Disconnect
+(`kanban-source-remove`, only when a source is set), Cancel and Save
+(Connect the first time). Save and Disconnect are Approvals: one Confirm
+each, saying what is written outward; Disconnect's, in red, says the
+imported tickets still in Backlog are removed. The `tickets` event with
+`what` `source` or `synced` reads the source again. An older daemon (no
+Backlog column, a 404 on the source route) leaves the Kanban as it was: no
+line, five columns. Fixtures: `fixtures/kanban/backlog.json` (source on),
+`source-off`, `source-syncing`, `source-failed`, written by
+`fixtures/kanban/backlog.py` from `basic.json` (which stays the older
+daemon's).
+
 | Intent | Args | Effect |
 |---|---|---|
 | `kanban_show` | `sandbox?` | Opens it (empty: every sandbox; none: the last scope, else the selected sandbox) |
@@ -2552,6 +2598,12 @@ about once, with the ack box, at Save), Save (Cmd+Return).
 | `kanban_file` | `file`, `open?` | Saves a file to Downloads and shows it (`open`: opens it, after a Confirm and the core's check) |
 | `kanban_link` | `what` | terminal, monitor, commits, worktrees, plan |
 | `kanban_refresh` | | Reads again |
+| `kanban_issue` | `id?` | Opens an imported card's issue in the browser (http or https only; empty: the open ticket's) |
+| `kanban_plan` | `id?` | Moves a Backlog ticket with `can_plan` to Planned (posts `/plan`) |
+| `kanban_source_open`, `kanban_source_field`, `kanban_source_cancel` | ; `tracker?`, `repo?`, `label?`, `auto_close?`; | The source dialog |
+| `kanban_source_refresh` | | Syncs the sandbox shown now (posts `/source/refresh`) |
+| `kanban_source_save` | | **Approval**: one Confirm saying what sbxw imports and writes to the tracker; posts `/source` |
+| `kanban_source_remove` | | **Approval**: one Confirm, in red, saying imported Backlog tickets are removed; posts `/source/remove` |
 
 ### worktrees
 

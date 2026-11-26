@@ -8,7 +8,7 @@
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 shots="$shots_root"; mkdir -p "$shots"
-build
+build sbxw standin
 port=$(free_port); addr="127.0.0.1:$port"
 tokdir=$(mktemp -d); tokfile="$tokdir/ui-token"
 script="$shots/reconnect-script.json"

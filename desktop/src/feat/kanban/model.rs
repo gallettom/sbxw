@@ -16,7 +16,70 @@ pub const PREVIEWS: usize = 4;
 /// A picture's bytes read at most for a preview (the daemon's own cap is 20 MB).
 pub const PREVIEW_MAX: u64 = 21 << 20;
 
-pub const COLUMNS: &[&str] = &["planned", "progress", "test", "ready", "merged"];
+/// Every column a board may have, in order. `backlog` comes only from a
+/// daemon with ticket sources (an older one has the five others).
+pub const COLUMNS: &[&str] = &["backlog", "planned", "progress", "test", "ready", "merged"];
+/// The columns of a board with no ticket source (an older daemon's).
+pub const LOCAL_COLUMNS: &[&str] = &["planned", "progress", "test", "ready", "merged"];
+
+/// A tracker's name as the person reads it.
+pub fn tracker_label(t: &str) -> String {
+    match t {
+        "github" => "GitHub".into(),
+        "" => "the tracker".into(),
+        t => t.to_string(),
+    }
+}
+
+/// A card's origin url, only when it is one to open in the browser
+/// (http or https, no space or control character). Data from the daemon.
+pub fn issue_url(card: &J) -> Option<&str> {
+    card["origin"]["url"].as_str().filter(|u| crate::markdown::safe_url(u))
+}
+
+/// An imported ticket: its words are edited in the tracker.
+pub fn imported(card: &J) -> bool {
+    card["origin"].is_object()
+}
+
+/// A Backlog card the person may move to Planned.
+pub fn can_plan(card: &J) -> bool {
+    card["column"] == "backlog" && card["can_plan"] == true
+}
+
+/// A card's marks as drawn: `closed-upstream` is a quiet "closed upstream"
+/// (the issue was closed, or lost the sync label, in the tracker).
+fn marks_of(c: &J) -> Vec<J> {
+    c["marks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|m| {
+            if m["id"] == "closed-upstream" {
+                json!({ "label": "closed upstream", "tone": "neutral", "help": "Its issue was closed, or lost the sync label, in the tracker: the work here goes on", "quiet": true })
+            } else {
+                json!({ "label": m["label"], "tone": m["tone"], "help": m["help"] })
+            }
+        })
+        .collect()
+}
+
+/// An imported card's origin, ready: its key, its tracker, and whether its
+/// link opens (the url itself stays in Rust).
+fn origin_of(c: &J, id: &str) -> J {
+    if !imported(c) {
+        return J::Null;
+    }
+    let tracker = tracker_label(c["origin"]["tracker"].as_str().unwrap_or(""));
+    let url = issue_url(c).is_some();
+    json!({
+        "key": c["origin"]["key"],
+        "tracker": tracker,
+        "open": url,
+        "open_help": if url { format!("Open the issue in {tracker}, in your browser") } else { "Its link is not a web address: not opened".to_string() },
+        "el": format!("{id}-issue"),
+    })
+}
 
 /// `s` cut to `max` characters with an ellipsis (a title in a sentence).
 pub fn clip(s: &str, max: usize) -> String {
@@ -48,7 +111,7 @@ pub fn card(c: &J, groups: &J, all: bool, focus: Option<&str>) -> J {
     let id = el(key);
     let sb = c["sandbox"].as_str().unwrap_or("");
     let thread = c["thread"].as_str().unwrap_or("");
-    let marks: Vec<J> = c["marks"].as_array().into_iter().flatten().map(|m| json!({ "label": m["label"], "tone": m["tone"], "help": m["help"] })).collect();
+    let marks = marks_of(c);
     // Failed or refused work: a red edge (a priority is not a failure).
     let red = c["marks"].as_array().into_iter().flatten().any(|m| matches!(m["id"].as_str(), Some("failed" | "merge_failed" | "refused")));
     let can = &c["can"];
@@ -81,6 +144,8 @@ pub fn card(c: &J, groups: &J, all: bool, focus: Option<&str>) -> J {
         "selected": focus == Some(id.as_str()),
         "movable": can["reorder"] == true,
         "move_help": if can["reorder"] == true { "Move up or down in Planned (its panel)".to_string() } else { can["reorder_why"].as_str().unwrap_or("").to_string() },
+        "origin": origin_of(c, &id),
+        "plan": if can_plan(c) { json!({ "el": format!("{id}-plan") }) } else { J::Null },
     })
 }
 
@@ -130,6 +195,7 @@ pub fn order(cols: &[J]) -> Vec<Vec<String>> {
 /// A column's id by its label in the History.
 pub fn column_label(id: &str) -> (&'static str, &'static str) {
     match id {
+        "backlog" => ("Backlog", "neutral"),
         "planned" => ("Planned", "neutral"),
         "progress" => ("In progress", "blue"),
         "test" => ("In test", "purple"),
@@ -156,19 +222,33 @@ pub fn panel(card: &J, view: Option<&J>, previews: &std::collections::BTreeSet<S
         "column_label": label,
         "column_tone": tone,
         "title": card["title"],
-        "marks": card["marks"].as_array().cloned().unwrap_or_default().iter().map(|m| json!({ "label": m["label"], "tone": m["tone"], "help": m["help"] })).collect::<Vec<_>>(),
+        "marks": marks_of(card),
         "thread": thread.map(|t| json!({ "name": t, "state": state, "tone": card["thread_tone"], "color": crate::feat::worktrees::graph::lane_color(t) })),
-        "editable": can["edit"] == true,
-        "edit_why": if can["edit"] == true { J::Null } else { "Recorded from a thread: nothing to edit".into() },
-        "deletable": can["delete"] == true,
-        "delete_why": if can["delete"] == true { "Delete the ticket and its files".to_string() } else { can["delete_why"].as_str().filter(|s| !s.is_empty()).unwrap_or("A thread card: it goes with its plan").to_string() },
+        "editable": editable(card),
+        "edit_why": if editable(card) { J::Null } else if imported(card) { format!("Edited in {}", tracker_label(card["origin"]["tracker"].as_str().unwrap_or(""))).into() } else { "Recorded from a thread: nothing to edit".into() },
+        "deletable": deletable(card),
+        "delete_why": if deletable(card) { "Delete the ticket and its files".to_string() } else if imported(card) { "Imported from the tracker: it goes when its source is disconnected".to_string() } else { can["delete_why"].as_str().filter(|s| !s.is_empty()).unwrap_or("A thread card: it goes with its plan").to_string() },
         "movable": can["reorder"] == true,
         "move_why": can["reorder_why"],
         "validate": if col == "merged" && !card["n"].is_null() { json!({ "on": card["validated"] == true }) } else { J::Null },
         "priority": card["priority"],
-        "priorities": if can["edit"] == true && col == "planned" { json!([{ "id": "none", "label": "No priority" }, { "id": "p1", "label": "P1" }, { "id": "p2", "label": "P2" }, { "id": "p3", "label": "P3" }]) } else { J::Null },
+        "priorities": if prioritizable(card) && col == "planned" { json!([{ "id": "none", "label": "No priority" }, { "id": "p1", "label": "P1" }, { "id": "p2", "label": "P2" }, { "id": "p3", "label": "P3" }]) } else { J::Null },
         "loading": view.is_none() && !card["n"].is_null(),
+        "plan": can_plan(card),
     });
+    // An imported ticket: read-only here, one line saying where it is edited.
+    if imported(card) {
+        let tracker = tracker_label(card["origin"]["tracker"].as_str().unwrap_or(""));
+        let url = issue_url(card).is_some();
+        v["imported"] = json!({
+            "key": card["origin"]["key"],
+            "line": format!("Imported from {tracker}: its title and description are edited there."),
+            "open": url,
+            "open_label": format!("Open in {tracker}"),
+            "open_help": if url { format!("Open the issue in {tracker}, in your browser") } else { "Its link is not a web address: not opened".to_string() },
+            "closed": card["origin"]["closed_upstream"] == true || card["origin"]["upstream"] == "closed",
+        });
+    }
     // Send to the lead: only a ticket no thread works on, and not now when
     // something holds the window (the core's dialog, a Jarvis proposal).
     let why = if can["send"] != true { can["send_why"].as_str().filter(|s| !s.is_empty()).unwrap_or("Not a planned ticket").to_string() } else { held.unwrap_or("").to_string() };
@@ -205,6 +285,67 @@ pub fn panel(card: &J, view: Option<&J>, previews: &std::collections::BTreeSet<S
         v["files"] = json!([]);
     }
     v
+}
+
+/// The person edits this ticket here (not a thread's card, not imported).
+pub fn editable(card: &J) -> bool {
+    card["can"]["edit"] == true && !imported(card)
+}
+
+/// The person sets this ticket's priority here: their own, or an imported
+/// one (the tracker owns its words, not its priority).
+pub fn prioritizable(card: &J) -> bool {
+    card["can"]["edit"] == true || imported(card)
+}
+
+/// The person deletes this ticket here (an imported one goes with its source).
+pub fn deletable(card: &J) -> bool {
+    card["can"]["delete"] == true && !imported(card)
+}
+
+/// The source line in the Kanban's header, for one sandbox: `None` when the
+/// daemon has no ticket sources (an older one: the header is as before).
+pub fn source_line(src: &J, now_ms: u64) -> J {
+    let st = &src["status"];
+    let state = st["state"].as_str().unwrap_or("off");
+    if src["configured"] != true || state == "off" {
+        return json!({
+            "on": false,
+            "text": "No ticket source",
+            "help": "Import the issues of a repository as tickets in Backlog",
+            "tone": "neutral",
+        });
+    }
+    let tracker = tracker_label(src["tracker"].as_str().unwrap_or(""));
+    let repo = src["repo"].as_str().unwrap_or("");
+    let label = src["label"].as_str().filter(|l| !l.is_empty());
+    let what = match label {
+        Some(l) => format!("{tracker} {repo}, label {l}"),
+        None => format!("{tracker} {repo}"),
+    };
+    let (status, tone) = match state {
+        "syncing" => ("syncing".to_string(), "blue"),
+        "failed" => {
+            let hint = st["hint"].as_str().filter(|h| !h.is_empty());
+            let err = st["error"].as_str().filter(|e| !e.is_empty());
+            (format!("sync failed: {}", hint.or(err).unwrap_or("the tracker did not answer")), "red")
+        }
+        _ => match st["last_ok_ms"].as_u64().filter(|t| *t > 0) {
+            Some(t) => (format!("synced {}", crate::feat::files::view::ago(t / 1000, now_ms / 1000)), "green"),
+            None => ("not synced yet".to_string(), "neutral"),
+        },
+    };
+    json!({
+        "on": true,
+        "text": format!("{what} · {status}"),
+        "help": match (state, st["error"].as_str().filter(|e| !e.is_empty())) {
+            ("failed", Some(e)) => format!("The tracker said: {e}"),
+            _ => format!("Issues of {repo} come in as Backlog tickets; sbxw writes each ticket's progress back to its issue"),
+        },
+        "tone": tone,
+        "failed": state == "failed",
+        "syncing": state == "syncing",
+    })
 }
 
 /// The registered picture's key for a file's preview.

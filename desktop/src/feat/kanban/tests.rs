@@ -803,3 +803,288 @@ fn the_form_renders_within_the_budgets_with_a_long_description_and_ten_files() {
     assert!(rt.presented("kanban-form-save").is_some());
     assert_eq!(rt.state.feats.data.get(FORM_UI).map(|f| f["files"].as_array().map_or(0, |a| a.len())), Some(10));
 }
+
+// ── Ticket sources: Backlog, imported tickets, the source and its dialog ──
+
+const BACKLOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/kanban/backlog.json");
+const SRC_OFF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/kanban/source-off.json");
+const SRC_SYNCING: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/kanban/source-syncing.json");
+const SRC_FAILED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/kanban/source-failed.json");
+
+fn card_of<'a>(v: &'a J, num: &str) -> &'a J {
+    v["columns"].as_array().unwrap().iter().flat_map(|c| c["cards"].as_array().unwrap()).find(|c| c["num"] == num).unwrap_or_else(|| panic!("no card {num}"))
+}
+
+fn confirm_of(out: &[Action]) -> Confirm {
+    out.iter().find_map(|a| if let Action::Confirm(c) = a { Some((**c).clone()) } else { None }).unwrap_or_else(|| panic!("no Confirm in {out:?}"))
+}
+
+#[test]
+fn backlog_comes_first_and_an_imported_card_shows_its_issue_key() {
+    let mut d = data_of(BACKLOG, 1260.0);
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, "web-app");
+    let ids: Vec<&str> = v["columns"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["backlog", "planned", "progress", "test", "ready", "merged"]);
+    assert_eq!(col(&v, "backlog")["title"], "Backlog");
+    let open = card_of(&v, "T-20");
+    assert_eq!(open["origin"]["key"], "acme/web-app#12");
+    assert_eq!(open["origin"]["open"], true);
+    assert!(open["plan"].is_object(), "an open issue with can_plan moves to Planned");
+    let closed = card_of(&v, "T-22");
+    assert!(closed["plan"].is_null(), "no can_plan: no Move to Planned");
+    let m = closed["marks"].as_array().unwrap();
+    assert!(m.iter().any(|m| m["label"] == "closed upstream" && m["quiet"] == true), "{m:?}");
+    // An imported ticket at work keeps its key, and has no Move to Planned.
+    assert_eq!(column_of(&v, "T-23"), "progress");
+    assert_eq!(card_of(&v, "T-23")["origin"]["key"], "acme/web-app#7");
+    assert!(card_of(&v, "T-23")["plan"].is_null());
+    // The person's own tickets carry no origin.
+    assert!(card_of(&v, "T-1")["origin"].is_null());
+}
+
+#[test]
+fn move_to_planned_posts_plan_and_is_refused_without_can_plan() {
+    let mut d = data_of(BACKLOG, 1260.0);
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, "web-app");
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_plan", json!({ "id": card_id(&v, "T-20") }))).unwrap();
+    let [Action::Call(c)] = out.as_slice() else { panic!("{out:?}") };
+    assert_eq!((c.method == crate::feat::Method::Post, c.path.as_str()), (true, "/api/tickets/web-app/20/plan"));
+    let (v2, _) = drive(&mut st, &mut d, out);
+    assert_eq!(column_of(&v2, "T-20"), "planned", "the stand-in moved it, the board read again");
+    assert_eq!(col(&v2, "backlog")["count"], 2);
+    // Closed upstream with no can_plan, a Planned ticket, one at work: refused.
+    for num in ["T-22", "T-1", "T-23"] {
+        assert!(st.act(&Ctx { data: &d }, &asked("kanban_plan", json!({ "id": card_id(&v, num) }))).is_err(), "{num}");
+    }
+    // From the panel too.
+    run(&mut st, &mut d, "kanban_open", json!({ "id": card_id(&v, "T-21") }));
+    let panel = &ui_of(&st, &d)["ticket"];
+    assert_eq!(panel["plan"], true);
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_plan", json!({ "id": "" }))).unwrap();
+    assert!(matches!(out.as_slice(), [Action::Call(c)] if c.path == "/api/tickets/web-app/21/plan"));
+}
+
+fn ui_of(st: &State, d: &J) -> J {
+    last_set(&st.views(&Ctx { data: d }), UI)
+}
+
+#[test]
+fn an_imported_ticket_is_read_only_and_opens_its_issue() {
+    let mut d = data_of(BACKLOG, 1260.0);
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, "web-app");
+    let (v, _) = run(&mut st, &mut d, "kanban_open", json!({ "id": card_id(&v, "T-20") }));
+    let t = &v["ticket"];
+    assert_eq!((t["editable"].as_bool(), t["deletable"].as_bool()), (Some(false), Some(false)));
+    assert!(t["priorities"].is_null());
+    assert_eq!(t["edit_why"], "Edited in GitHub");
+    assert!(t["imported"]["line"].as_str().unwrap().contains("edited there"));
+    assert_eq!((t["imported"]["open"].as_bool(), t["imported"]["open_label"].as_str()), (Some(true), Some("Open in GitHub")));
+    for (name, args) in [("kanban_edit", json!({})), ("kanban_delete", json!({})), ("kanban_remove_file", json!({ "file": "x" }))] {
+        assert!(st.act(&Ctx { data: &d }, &asked(name, args)).is_err(), "{name} on an imported ticket");
+    }
+    // Its priority stays the person's: the tracker owns its words, not that.
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_priority", json!({ "priority": "p1" }))).unwrap();
+    assert!(matches!(out.as_slice(), [Action::Call(c)] if c.path == "/api/tickets/web-app/20/edit"), "{out:?}");
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_issue", json!({ "id": "" }))).unwrap();
+    assert_eq!(out, vec![Action::OpenLink("https://github.com/acme/web-app/issues/12".into())]);
+    // A person's ticket has no issue.
+    let v = ui_of(&st, &d);
+    assert!(st.act(&Ctx { data: &d }, &asked("kanban_issue", json!({ "id": card_id(&v, "T-1") }))).is_err());
+}
+
+#[test]
+fn a_non_http_issue_link_is_not_offered_and_never_opens() {
+    for bad in ["javascript:alert(1)", "file:///etc/passwd", "https://evil.example/a b", "sbxw://intent", ""] {
+        let mut d = data_of(BACKLOG, 1260.0);
+        for b in d["tickets_boards"].as_object_mut().unwrap().values_mut() {
+            for c in b["columns"].as_array_mut().unwrap() {
+                for x in c["cards"].as_array_mut().unwrap() {
+                    if x["n"] == 20 {
+                        x["origin"]["url"] = bad.into();
+                    }
+                }
+            }
+        }
+        let mut st = State::default();
+        let v = show(&mut st, &mut d, "web-app");
+        assert_eq!(card_of(&v, "T-20")["origin"]["open"], false, "{bad}");
+        assert!(!serde_json::to_string(&v).unwrap().contains(bad) || bad.is_empty(), "the url never reaches the screen: {bad}");
+        let err = st.act(&Ctx { data: &d }, &asked("kanban_issue", json!({ "id": card_id(&v, "T-20") }))).unwrap_err();
+        assert!(err.contains("not an http"), "{bad}: {err}");
+        let (v, _) = run(&mut st, &mut d, "kanban_open", json!({ "id": card_id(&v, "T-20") }));
+        assert_eq!(v["ticket"]["imported"]["open"], false, "{bad}");
+    }
+}
+
+#[test]
+fn the_header_says_the_source_in_each_state() {
+    let line = |path: &str| {
+        let mut d = data_of(path, 1260.0);
+        let mut st = State::default();
+        show(&mut st, &mut d, "web-app")["source"].clone()
+    };
+    let off = line(SRC_OFF);
+    assert_eq!((off["on"].as_bool(), off["text"].as_str()), (Some(false), Some("No ticket source")));
+    let ok = line(BACKLOG);
+    assert_eq!(ok["text"], "GitHub acme/web-app, label sbxw · synced 4 min ago");
+    assert_eq!((ok["on"].as_bool(), ok["failed"].as_bool()), (Some(true), Some(false)));
+    let sync = line(SRC_SYNCING);
+    assert!(sync["text"].as_str().unwrap().ends_with("· syncing"));
+    assert_eq!(sync["syncing"], true);
+    let failed = line(SRC_FAILED);
+    assert_eq!(failed["text"], "GitHub acme/web-app, label sbxw · sync failed: Sign in to GitHub again in Setup, MCP.");
+    assert_eq!(failed["failed"], true);
+    assert!(failed["help"].as_str().unwrap().contains("401"), "the tracker's own error in the tooltip");
+    // Every sandbox shown: a source is one sandbox's, no line.
+    let mut d = data_of(BACKLOG, 1260.0);
+    let mut st = State::default();
+    show(&mut st, &mut d, "web-app");
+    let (v, _) = run(&mut st, &mut d, "kanban_scope", json!({ "sandbox": "" }));
+    assert!(v["source"].is_null());
+    // Refresh posts /source/refresh.
+    let (_, _) = run(&mut st, &mut d, "kanban_scope", json!({ "sandbox": "web-app" }));
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_source_refresh", json!({}))).unwrap();
+    assert!(matches!(out.as_slice(), [Action::Call(c)] if c.path == "/api/tickets/web-app/source/refresh" && c.method == crate::feat::Method::Post));
+}
+
+#[test]
+fn save_and_disconnect_ask_first_and_post_their_route() {
+    for name in ["kanban_source_save", "kanban_source_remove"] {
+        assert!(spec(name).is_some_and(|s| matches!(s.risk, Risk::Approval(_))), "{name} is an Approval");
+    }
+    // Off: the dialog is pre-filled from the detected repository.
+    let mut d = data_of(SRC_OFF, 1260.0);
+    let mut st = State::default();
+    show(&mut st, &mut d, "web-app");
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_source_open", json!({}))).unwrap();
+    assert!(out.iter().any(|a| matches!(a, Action::OpenModal { screen, .. } if screen == SOURCE)));
+    let f = last_set(&out, SOURCE_UI);
+    assert_eq!((f["repo"].as_str(), f["label"].as_str(), f["auto_close"].as_bool(), f["tracker"].as_str()), (Some("acme/web-app"), Some("sbxw"), Some(false), Some("github")));
+    assert!(f["repo_note"].as_str().unwrap().contains("web-app's own repository"));
+    assert_eq!(f["configured"], false, "no Disconnect while off");
+    assert!(f["writes"].as_str().unwrap().contains("one comment and one state label per issue"));
+    assert!(st.act(&Ctx { data: &d }, &asked("kanban_source_remove", json!({}))).is_err());
+    // A repository not owner/name: said in the dialog, nothing asked.
+    st.act(&Ctx { data: &d }, &asked("kanban_source_field", json!({ "repo": "not a repo" }))).unwrap();
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_source_save", json!({}))).unwrap();
+    assert!(!out.iter().any(|a| matches!(a, Action::Confirm(_) | Action::Call(_))));
+    assert!(last_set(&out, SOURCE_UI)["error"].as_str().unwrap().contains("owner/name"));
+    st.act(&Ctx { data: &d }, &asked("kanban_source_field", json!({ "repo": "acme/web-app", "auto_close": true }))).unwrap();
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_source_save", json!({}))).unwrap();
+    assert!(!out.iter().any(|a| matches!(a, Action::Call(_))), "nothing posted before the Confirm");
+    let c = confirm_of(&out);
+    assert_eq!(c.call.path, "/api/tickets/web-app/source");
+    assert_eq!(c.call.body, json!({ "tracker": "github", "repo": "acme/web-app", "label": "sbxw", "auto_close": true }));
+    assert!(c.lines.iter().any(|l| l.contains("one comment and one state label per issue") && l.contains("your own account")), "{:?}", c.lines);
+    assert!(c.lines.iter().any(|l| l.contains("closes its issue")));
+    // Confirmed: the dialog closes, the source and the board are read again.
+    let (v, after) = drive(&mut st, &mut d, vec![Action::Call(c.call)]);
+    assert!(after.iter().any(|a| matches!(a, Action::CloseModal)));
+    assert!(st.source_form.is_none());
+    assert_eq!(v["source"]["syncing"], true, "{:?}", v["source"]);
+    // On: Disconnect asks once, in red, naming what goes.
+    let mut d = data_of(BACKLOG, 1260.0);
+    let mut st = State::default();
+    show(&mut st, &mut d, "web-app");
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_source_open", json!({}))).unwrap();
+    assert_eq!(last_set(&out, SOURCE_UI)["configured"], true);
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_source_remove", json!({}))).unwrap();
+    let c = confirm_of(&out);
+    assert!(c.danger);
+    assert_eq!(c.call.path, "/api/tickets/web-app/source/remove");
+    assert!(c.lines.iter().any(|l| l.contains("imported tickets still in Backlog are removed")), "{:?}", c.lines);
+    let (v, _) = drive(&mut st, &mut d, vec![Action::Call(c.call)]);
+    assert_eq!(col(&v, "backlog")["count"], 0);
+    assert_eq!(v["source"]["on"], false);
+    assert_eq!(column_of(&v, "T-23"), "progress", "an imported ticket at work stays");
+}
+
+#[test]
+fn an_older_daemon_leaves_the_kanban_as_it_was() {
+    // basic.json: no Backlog column, a 404 on the source route.
+    let mut d = data();
+    let mut st = State::default();
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_show", json!({ "sandbox": "web-app" }))).unwrap();
+    assert!(out.iter().any(|a| matches!(a, Action::Call(c) if c.path == "/api/tickets/web-app/source")));
+    let (v, all) = drive(&mut st, &mut d, out);
+    let ids: Vec<&str> = v["columns"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, model::LOCAL_COLUMNS);
+    assert!(v["source"].is_null(), "no source line");
+    assert!(!all.iter().any(|a| matches!(a, Action::Notice { error: true, .. })), "a 404 is said nowhere: {all:?}");
+    assert!(v["columns"].as_array().unwrap().iter().flat_map(|c| c["cards"].as_array().unwrap()).all(|c| c["origin"].is_null() && c["plan"].is_null()));
+    assert!(st.act(&Ctx { data: &d }, &asked("kanban_source_open", json!({}))).is_err());
+    assert!(st.act(&Ctx { data: &d }, &asked("kanban_source_refresh", json!({}))).is_err());
+    // A tickets event from it re-reads the board only, as before.
+    let ev = st.on_event(&Ctx { data: &d }, "tickets", &json!({ "sandbox": "web-app", "what": "created" }));
+    assert!(!ev.iter().any(|a| matches!(a, Action::Call(c) if c.path.ends_with("/source"))));
+    // From a new daemon, `source` and `synced` re-read the source too.
+    let ev = st.on_event(&Ctx { data: &d }, "tickets", &json!({ "sandbox": "web-app", "what": "synced" }));
+    assert!(ev.iter().any(|a| matches!(a, Action::Call(c) if c.path == "/api/tickets/web-app/source")));
+}
+
+#[test]
+fn a_new_ticket_of_the_person_lands_in_planned_not_backlog() {
+    let mut d = data_of(BACKLOG, 1260.0);
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, "web-app");
+    let before = col(&v, "planned")["count"].as_u64().unwrap();
+    run(&mut st, &mut d, "kanban_new", json!({}));
+    d["app"]["modal"] = json!({ "screen": FORM });
+    run(&mut st, &mut d, "kanban_form", json!({ "title": "Mine, not imported" }));
+    let (v, _) = run(&mut st, &mut d, "kanban_save", json!({}));
+    let mine = v["columns"].as_array().unwrap().iter().flat_map(|c| c["cards"].as_array().unwrap()).find(|c| c["title"] == "Mine, not imported").expect("the new card");
+    assert_eq!(column_of(&v, mine["num"].as_str().unwrap()), "planned");
+    assert_eq!(col(&v, "planned")["count"].as_u64().unwrap(), before + 1);
+    assert_eq!(col(&v, "backlog")["count"], 3, "Backlog unchanged");
+}
+
+#[test]
+fn six_columns_fit_the_overlay_and_the_source_dialog_keeps_save_in_view() {
+    let mut bad = vec![];
+    for (w, h) in [(1900.0, 950.0), (1284.0, 816.0), (900.0, 700.0), (720.0, 600.0)] {
+        for state in ["board", "ticket"] {
+            let mut rt = window(BACKLOG, w, h);
+            if w < 1000.0 {
+                rt.update(|s, _| s.toggle_sidebar());
+                settle(&mut rt);
+            }
+            intent(&mut rt, "kanban_show", json!({ "sandbox": "web-app" }));
+            assert!(rt.presented("kanban-source").is_some(), "the source line at {w}");
+            if state == "ticket" {
+                let id = card_id(&ui_now(&rt), "T-20");
+                intent(&mut rt, "kanban_open", json!({ "id": id }));
+                assert!(rt.presented("kanban-issue").is_some(), "Open in GitHub at {w}");
+            }
+            bad.extend(outside(&rt, &format!("backlog {state} at {w}")).1);
+        }
+    }
+    for (w, h) in [(1284.0, 816.0), (720.0, 480.0)] {
+        let mut rt = window(BACKLOG, w, h);
+        if w < 1000.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            settle(&mut rt);
+        }
+        intent(&mut rt, "kanban_show", json!({ "sandbox": "web-app" }));
+        intent(&mut rt, "kanban_source_open", json!({}));
+        let Some(([mx, my, mw, mh], _)) = rt.presented("modal") else {
+            bad.push(format!("{w}x{h}: no dialog"));
+            continue;
+        };
+        if mx < 0.0 || my < 0.0 || mx + mw > w + 0.5 || my + mh > h + 0.5 {
+            bad.push(format!("{w}x{h}: dialog {mx},{my},{mw},{mh} leaves the window"));
+        }
+        for k in ["kanban-source-save", "kanban-source-cancel", "kanban-source-remove"] {
+            match rt.presented(k) {
+                Some(([x, y, bw, bh], _)) if x >= mx && y >= my && x + bw <= mx + mw + 0.5 && y + bh <= my + mh + 0.5 => {}
+                other => bad.push(format!("{w}x{h}: {k} not whole inside the dialog: {other:?}")),
+            }
+        }
+        if let Some(e) = rt.state.screens.iter().find(|s| s.name == SOURCE).and_then(|s| s.error.clone()) {
+            bad.push(format!("{w}x{h}: screen error {e}"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
