@@ -1,5 +1,6 @@
 -- The Kanban (feat/kanban/): the Dashboard's second view. Five columns side by
--- side (Planned, In progress, In test, Ready to merge, Merged), each with its
+-- side (Planned, In progress, In test, Ready to merge, Merged; a daemon with
+-- ticket sources puts Backlog first, the tracker's issues), each with its
 -- count and its cards stacked and scrolling inside it; under 900 pt one
 -- column at a time with a column picker. Pressing a card opens its ticket
 -- as a panel over the board (not a second column); Escape, its cross or a
@@ -11,7 +12,8 @@
 -- prepared titles by one comparison of the column's width, and lays out.
 --
 -- Ticket and agent words are data: drawn as text (the prose face, pills),
--- never as a control.
+-- never as a control. A tracker's words (an issue's title, its key) too: the
+-- issue's link opens only through Rust, which keeps the url.
 
 local function nz(s) return s ~= nil and s ~= "" end
 
@@ -28,12 +30,27 @@ local function scope(ui)
       scope = { kind = "sandbox", all = true } } }
 end
 
+local function mark(m)
+  if m.quiet then return text{ m.label, size = "xs", color = "text-muted", help = m.help } end
+  return badge{ m.label, tone = m.tone or "neutral", help = m.help }
+end
+
 local function marks(c)
   local r = { gap = 4, wrap = true, w = "full" }
-  for _, m in ipairs(c.marks or {}) do
-    r[#r + 1] = badge{ m.label, tone = m.tone or "neutral", help = m.help }
-  end
+  for _, m in ipairs(c.marks or {}) do r[#r + 1] = mark(m) end
   return row(r)
+end
+
+-- An imported card's issue key, a link to it, and on a Backlog card the one
+-- way out: "Move to Planned".
+local function origin(c)
+  local o = c.origin
+  if not o then return false end
+  return row{ gap = 4, w = "full", wrap = true,
+    o.open and button{ o.key or "", icon = "link", variant = "ghost", dense = true, on = "issue", arg = c.id, key = o.el, help = o.open_help } or
+      text{ o.key or "", size = "xs", mono = true, color = "text-muted", help = o.open_help },
+    spacer{},
+    c.plan and button{ "Move to Planned", variant = "ghost", tone = "blue", dense = true, on = "plan", arg = c.id, key = c.plan.el, help = "Planned is where a lead takes tickets from" } or false }
 end
 
 local function card(c, wide)
@@ -49,10 +66,23 @@ local function card(c, wide)
       text{ c.age or "", size = "xs", color = "text-muted" } },
     text{ wide and (c.title_long or "") or (c.title or ""), size = "sm", wrap = true, color = "text-bright" },
     #(c.marks or {}) > 0 and marks(c) or false,
+    origin(c),
     c.thread and row{ gap = 8, w = "full",
       dot{ tone = c.thread_tone or "neutral" },
       text{ c.thread, size = "xs", mono = true, color = c.thread_color or "text-muted", truncate = true, grow = 1 } } or false,
   }
+end
+
+-- The sandbox's ticket source: its status line and its button. Absent with
+-- every sandbox shown, and with a daemon that has no sources.
+local function source(s)
+  if not s then return false end
+  return row{ gap = 8, w = "full", key = "kanban-source", px = 4,
+    icon{ "link", size = 12, color = "text-muted" },
+    dot{ tone = s.tone or "neutral" },
+    text{ s.text or "", size = "xs", color = s.failed and "red" or "text-muted", truncate = true, grow = 1, help = s.help, key = "kanban-source-line" },
+    s.on and button{ "Refresh", icon = "reload", variant = "ghost", dense = true, on = "source_refresh", key = "kanban-source-refresh", disabled = s.syncing == true, help = s.syncing and "Syncing now" or "Sync with the tracker now" } or false,
+    button{ s.on and "Source…" or "Connect", variant = "ghost", tone = s.on and nil or "blue", dense = true, on = "source", key = "kanban-source-open", help = s.on and "The ticket source: its repository, its label, what sbxw writes there" or "Import a repository's issues as Backlog tickets" } }
 end
 
 local function head(col, ui)
@@ -100,10 +130,22 @@ local function panel(t, ow)
     button{ icon = "close", variant = "ghost", dense = true, on = "close", key = "kanban-close", help = "Close", keys = { "Esc" } } }
   if #(t.marks or {}) > 0 then
     local m = { gap = 4, wrap = true }
-    for _, x in ipairs(t.marks) do m[#m + 1] = badge{ x.label, tone = x.tone or "neutral", help = x.help } end
+    for _, x in ipairs(t.marks) do m[#m + 1] = mark(x) end
     kids[#kids + 1] = row(m)
   end
   kids[#kids + 1] = text{ t.title or "", size = "lg", weight = "semibold", wrap = true, color = "text-bright", key = "kanban-panel-title" }
+  if t.imported then
+    local im = t.imported
+    kids[#kids + 1] = row{ gap = 8, w = "full", wrap = true, key = "kanban-imported",
+      text{ im.key or "", size = "xs", mono = true, color = "text-muted" },
+      text{ im.line or "", size = "xs", color = "text-muted", wrap = true, grow = 1 },
+      button{ im.open_label or "Open", icon = "link", variant = "ghost", dense = true, on = "issue", arg = "", key = "kanban-issue", disabled = not im.open, help = im.open_help } }
+  end
+  if t.plan then
+    kids[#kids + 1] = row{ gap = 8, w = "full",
+      text{ "In Backlog until you move it: a lead takes tickets from Planned.", size = "xs", color = "text-muted", wrap = true, grow = 1 },
+      button{ "Move to Planned", tone = "blue", dense = true, on = "plan", arg = "", key = "kanban-plan" } }
+  end
   if t.loading then kids[#kids + 1] = note("Reading the ticket…") end
   if nz(t.description) then kids[#kids + 1] = text{ t.description, wrap = true, pills = t.sandbox or true, key = "kanban-panel-description" } end
   if #(t.files or {}) > 0 then
@@ -169,10 +211,12 @@ return {
     local ui = data.kanban_ui or {}
     local ov = (data.app or {}).overlay or {}
     local ow = ov.w or 1200
-    local narrow = ow < 900
     local cols = ui.columns or {}
+    local n = math.max(1, #cols)
+    -- 180 pt a column at least, else one column at a time (900 pt for five).
+    local narrow = ow < 180 * math.max(5, n)
     local gap = 8
-    local col_w = math.floor((ow - 24 - gap * 4) / 5)
+    local col_w = math.floor((ow - 24 - gap * (n - 1)) / n)
     local body
     if ui.loading then
       body = column{ grow = 1, note("Reading the tickets…") }
@@ -200,6 +244,7 @@ return {
           help = "The Dashboard's two views: the team's conversation, or the Kanban of its tickets" },
         text{ ui.counts_line or "", size = "xs", color = "text-muted", truncate = true, grow = 1 },
         button{ "New ticket", icon = "plus", variant = "primary", dense = true, on = "new", key = "kanban-new", keys = { "N" }, disabled = ui.new_why ~= nil, help = ui.new_why or "A ticket for the sandbox shown: a title, a description, files" } },
+      source(ui.source),
       ui.error and note(ui.error, "red") or false,
       body,
       dismiss,
@@ -223,5 +268,9 @@ return {
     priority = function(_, _, v) return intent("kanban_priority", { priority = v }) end,
     validate = function(_, _, on) return intent("kanban_validate", { on = on == true }) end,
     link = function(_, what) return intent("kanban_link", { what = what }) end,
+    issue = function(_, id) return intent("kanban_issue", { id = id or "" }) end,
+    plan = function(_, id) return intent("kanban_plan", { id = id or "" }) end,
+    source = function() return intent("kanban_source_open", {}) end,
+    source_refresh = function() return intent("kanban_source_refresh", {}) end,
   },
 }
