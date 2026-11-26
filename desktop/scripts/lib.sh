@@ -43,9 +43,18 @@ mkdir -p "$shots_root"
 # binary unless a script points SBXW_DESKTOP_SCREENS somewhere on purpose.
 export SBXW_DESKTOP_SCREENS="${SBXW_DESKTOP_SCREENS:-$shots_root/.no-overrides}"
 
+# build [bin...]: builds only the binaries named (the app, sbxw, when none
+# is), one at a time, with one job and no debug info. Building every bin at
+# once linked three debug binaries in parallel and hung an 11 GB machine.
+# SBXW_BUILD_JOBS raises the job limit on a machine that can take it.
 build() {
   local flag=(); [ "$profile" = release ] && flag=(--release)
-  (cd "$here" && "$cargo" build --quiet --bins "${flag[@]}")
+  local names=("$@"); [ ${#names[@]} -eq 0 ] && names=(sbxw)
+  local name
+  for name in "${names[@]}"; do
+    (cd "$here" && CARGO_PROFILE_DEV_DEBUG=0 "$cargo" build --quiet \
+      -j "${SBXW_BUILD_JOBS:-1}" --bin "$name" "${flag[@]}") || return 1
+  done
   bin="$CARGO_TARGET_DIR/$profile"
 }
 
@@ -62,6 +71,7 @@ start_daemon() {
     daemon="$SBXW_DAEMON"; token="${SBXW_TOKEN:?SBXW_TOKEN}"
     return
   fi
+  build standin
   local port; port=$(free_port)
   daemon="127.0.0.1:$port"; token="shot-$RANDOM$RANDOM"
   "$bin/standin" "$daemon" "$token" "$@" >"$logs/standin.log" 2>&1 &

@@ -14,6 +14,7 @@ shots="$shots_root/emphasis"; mkdir -p "$shots"
 export SHOT_SIZE="${SHOT_SIZE:-1284x816}"
 reply="$here/fixtures/emphasis/reply.txt"
 start_daemon "$shots"
+build term-demo
 show="clear; cat $reply"
 post() { curl -s -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data "$2" "http://$daemon$1" >/dev/null; }
 
