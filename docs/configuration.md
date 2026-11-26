@@ -57,7 +57,7 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 | `cache_ttl_days` | `7` | Days before the kit cache's apt lists and packages are downloaded again; pinned downloads are kept four times as long, then the cache is emptied |
 | `skills` | `""` (sbx decides) | `off`, `readonly` or `readwrite`. See [Shared skills](kits-and-skills.md#shared-skills) |
 | `pull` | `""` (sbx decides) | Image pull policy: `always`, `missing` or `never` |
-| `template` | `""` (sbx's image) | Template new sandboxes start from, with no registry pull: `"auto"` for one sbxw keeps per kit list and rebuilds in the background when sbx or the kits change, or a tag saved with `sbxw template save` |
+| `template` | `"auto"` | Template new sandboxes start from, with no registry pull: `"auto"` for one sbxw keeps per kit list and rebuilds in the background when sbx or the kits change (the default: it costs disk for one saved image per kit list, and a background builder sandbox after the first creation with a kit list), a tag saved with `sbxw template save`, or `""` for none (sbx's image, every kit installed again at each creation) |
 
 ### Agent
 

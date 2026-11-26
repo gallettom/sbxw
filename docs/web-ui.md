@@ -113,8 +113,9 @@ The **chat sandbox** dialog is the browser version of `sbxw chat`. See
 
 ### The automatic template
 
-With `template = "auto"` in `sbxw.toml`, **Create** uses the template for the
-configured kits when it is up to date. If it was made by another version of
+The automatic template is the default: a project with no `sbxw.toml`, or one
+that never sets `template`, behaves as `template = "auto"`. **Create** uses the
+template for the configured kits when it is up to date. If it was made by another version of
 sbx, or the kits' specs changed since (an sbxw release that leaves the kits
 alone does not count), or there is none yet, nothing is asked: the sandbox is
 created from sbx's image and opens as usual, and the daemon builds a new
@@ -128,8 +129,31 @@ out of the sandbox list while it runs (`sbx ls` shows it; one a stopped daemon
 left behind shows in the list, so it can be removed). It gets no token, no
 project environment and no port. The old template is removed once the new one is saved, and so is any
 automatic template no sandbox was created from for a month. A build that
-fails is reported in the daemon's log and not tried again until the daemon
-restarts.
+fails is reported in the daemon's log, once, and tried again by the first
+creation that wants it after 10 minutes; the wait doubles at each failure in
+a row, up to 12 hours. A creation that went without a template says so at the
+end of its summary line (`No template: none existed yet for these kits; one
+is being built in the background`), so a slow one explains itself.
+
+The first creation with a template and a kit list costs about 11 s more:
+sbx assembles an image of the template and the kits and caches it. The
+daemon pays that in the background: once a template is saved, and at its
+start for a template whose kits' files or sbx changed since (after an sbxw
+update, say), it creates a sandbox of its own from the template with the same
+kits, `sbxw-warm-…`, and removes it at once. It is created only, never
+started, and left out of the sandbox list like the builder. One at a time per
+host, never while a creation from that template runs (that creation warms it
+anyway), and one that fails is not tried again for the same kits and sbx
+until the daemon restarts. The daemon log times each (`warmed sbx's kit image
+for …`); `~/.sbxw/state/template-warm.json` records what was warmed. A
+sandbox given more kits than the template's (your kept skills, `volumes`) is
+assembled anew by sbx at its creation: the warm does not cover it.
+
+What it costs: disk for one saved image per kit list, and a builder sandbox in
+the background after the first creation with a kit list. To turn it off, set
+`template = ""` in `sbxw.toml`: every sandbox is then created from sbx's image
+and installs its kits (sbxw's own Node.js included, about 12 s) at each
+creation.
 
 To save the sandbox being created as the template instead, and wait for it,
 tick **Rebuild the starting template** at the bottom of the create dialog. The
@@ -211,6 +235,19 @@ request:
 A creation from a template against one without (`template = ""`, or a new
 name with the automatic template skipped) says whether the template pays
 off: compare `sbx_create` and `startups_ms`.
+
+**Inside `sbx create`.** When sbx's output says so, the timeline's `create`
+holds `image` (`cached` or `assembled`: whether sbx found its image of the
+template and the kits, or built it) and `installs`, one per kit install
+command, each with its `kit` (a local kit by its folder's name only), `what`
+(the kit's own description, cut to 60 characters, path-like words left out)
+and `ms`. Installs of a second or more show in the summary line:
+`ready in 28 s: create 27 s (Node.js install 12.1 s), tooling 640 ms`. The
+lines are sbx's and may change: one that does not read is ignored. A timeline
+of a creation that went without the automatic template carries `no_template`,
+the reason, which also ends the summary line. `sbx_ls` holds `sbx template
+ls` too when a creation from the automatic template is likely: the two are
+asked side by side.
 
 Reading a timeline:
 
