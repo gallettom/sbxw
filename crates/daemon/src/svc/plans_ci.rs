@@ -151,7 +151,7 @@ impl App {
                 Err(e) => {
                     tracing::info!("plans: {id}: the CI test job {job} is gone ({e}): building and testing again");
                     let (app, id) = (self.clone(), id.to_string());
-                    tokio::spawn(async move { app.ci_rebuild_now(&id, run).await });
+                    tokio::spawn(app.ci_rebuild_now(&id, run));
                     return;
                 }
             }
@@ -287,13 +287,19 @@ impl App {
 
     /// A run cut short by a restart: built again from scratch, as the same
     /// proposal (a building one has no result to keep).
-    async fn ci_rebuild_now(self: &Arc<Self>, id: &str, run: u32) {
-        let reset = self.plans.lock().unwrap().ci_restart(id, run, now_ms());
-        if let Ok(p) = reset {
-            let run = p.ci().map_or(run, |c| c.run);
-            self.plan_changed(p);
-            self.ci_run(id, run).await;
-        }
+    ///
+    /// Boxed as `Send`: it is spawned from inside the wait it leads back
+    /// to (`ci_await`), and a named future type ends that cycle.
+    fn ci_rebuild_now(self: &Arc<Self>, id: &str, run: u32) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        let (app, id) = (self.clone(), id.to_string());
+        Box::pin(async move {
+            let reset = app.plans.lock().unwrap().ci_restart(&id, run, now_ms());
+            if let Ok(p) = reset {
+                let run = p.ci().map_or(run, |c| c.run);
+                app.plan_changed(p);
+                app.ci_run(&id, run).await;
+            }
+        })
     }
 
     /// Look at main for every sandbox (or those named) with a CI run.
