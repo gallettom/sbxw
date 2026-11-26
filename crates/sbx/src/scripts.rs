@@ -1382,6 +1382,85 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
         assert!(err.contains("in the middle of a merge") && err.contains("MERGE_HEAD"), "{err}");
     }
 
+    /// A second thread branch from main touching `touch`.
+    fn add_branch(r: &Repo, thread: &str, touch: &str, text: &str) {
+        r.git(&["checkout", "-q", "-b", &format!("sbxw/{thread}"), "main"]);
+        r.write(touch, text);
+        r.git(&["add", "-A"]);
+        r.git(&["commit", "-q", "-m", thread]);
+        r.git(&["checkout", "-q", "main"]);
+    }
+
+    #[test]
+    fn the_ci_branch_merges_the_threads_in_order_and_main_is_untouched() {
+        let Some(r) = Repo::new("ci-build") else { return };
+        r.with_branch("api", "src/d");
+        add_branch(&r, "web", "docs/c", "web's");
+        r.git(&["branch", "sbxw/empty", "main"]);
+        let main = r.git(&["rev-parse", "main"]).trim().to_string();
+        r.write("untracked", "mine");
+        let (ok, out) = r.run(CI_BUILD_SCRIPT, &[r.root.to_str().unwrap(), "p-1", "api", "web", "empty", "gone"]);
+        assert!(ok, "{out}");
+        let b = CiBuild::parse(&out);
+        assert_eq!((b.base_branch.as_str(), b.base.as_str()), ("main", main.as_str()));
+        assert_eq!(b.merged.iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["api", "web"]);
+        assert_eq!(b.skipped.iter().map(|s| s.0.as_str()).collect::<Vec<_>>(), ["empty", "gone"]);
+        assert_eq!((b.conflict.clone(), b.error.clone()), (None, None));
+        assert_eq!(b.tip, b.merged[1].2);
+        assert_eq!(r.git(&["rev-parse", "sbxw/ci-p-1"]).trim(), b.tip);
+        assert_eq!(r.git(&["rev-parse", "main"]).trim(), main, "main untouched");
+        let wt = r.root.join(".sbxw-worktrees/.ci-p-1");
+        assert_eq!(std::fs::read_to_string(wt.join("docs/c")).unwrap(), "web's");
+        // A rebuild starts from scratch; the remove leaves nothing behind.
+        let (ok, out) = r.run(CI_BUILD_SCRIPT, &[r.root.to_str().unwrap(), "p-1", "web"]);
+        assert!(ok, "{out}");
+        assert_eq!(CiBuild::parse(&out).merged.len(), 1);
+        let (ok, out) = r.run(CI_REMOVE_SCRIPT, &[r.root.to_str().unwrap(), "p-1"]);
+        assert!(ok, "{out}");
+        assert!(!wt.exists());
+        assert!(!r.git(&["branch", "--list"]).contains("ci-p-1"));
+        assert_eq!(r.git(&["status", "--porcelain"]), "?? untracked\n");
+    }
+
+    #[test]
+    fn a_ci_conflict_names_the_thread_and_the_files() {
+        let Some(r) = Repo::new("ci-conflict") else { return };
+        r.with_branch("api", "b");
+        add_branch(&r, "web", "b", "web's own b");
+        let (ok, out) = r.run(CI_BUILD_SCRIPT, &[r.root.to_str().unwrap(), "p-1", "api", "web"]);
+        assert!(!ok);
+        let b = CiBuild::parse(&out);
+        assert_eq!(b.conflict, Some(("web".to_string(), vec!["b".to_string()])), "{out}");
+        assert_eq!(b.merged.len(), 1);
+    }
+
+    #[test]
+    fn the_click_fast_forwards_to_the_ci_tip_keeps_other_work_and_refuses_edits_or_a_moved_main() {
+        let Some(r) = Repo::new("ci-ff") else { return };
+        r.with_branch("api", "src/d");
+        let (_, out) = r.run(CI_BUILD_SCRIPT, &[r.root.to_str().unwrap(), "p-1", "api"]);
+        let b = CiBuild::parse(&out);
+        let root = r.root.to_str().unwrap();
+        // An edit on a path the merge changes: refused, nothing moved.
+        r.write("src/d", "my edit");
+        let (ok, out) = r.run(CI_FF_SCRIPT, &[root, &b.tip, &b.base, "main"]);
+        assert!(!ok && script_fields(&out).unwrap_err().contains("uncommitted changes to 1 file(s) this merge changes (src/d)"), "{out}");
+        assert_eq!(r.git(&["rev-parse", "main"]).trim(), b.base);
+        r.git(&["checkout", "-q", "--", "src/d"]);
+        // Other work stays: an edit elsewhere, an untracked file.
+        r.write("a", "edit elsewhere");
+        r.write("untracked", "mine");
+        let (ok, out) = r.run(CI_FF_SCRIPT, &[root, &b.tip, &b.base, "main"]);
+        assert!(ok, "{out}");
+        let m = MergeOutcome::from_fields(&script_fields(&out).unwrap());
+        assert_eq!((m.head.as_str(), m.edits), (b.tip.as_str(), 1));
+        assert_eq!(r.git(&["rev-parse", "main"]).trim(), b.tip, "exactly the tested commit");
+        assert_eq!(std::fs::read_to_string(r.root.join("a")).unwrap(), "edit elsewhere");
+        // Main moved since the build: nothing changes, `moved=`.
+        let (ok, out) = r.run(CI_FF_SCRIPT, &[root, &b.tip, &b.base, "main"]);
+        assert!(!ok && out.contains(&format!("moved={}", b.tip)), "{out}");
+    }
+
     #[test]
     fn a_conflict_is_aborted_and_absent_files_stay_absent() {
         let Some(r) = Repo::new("merge-conflict") else { return };

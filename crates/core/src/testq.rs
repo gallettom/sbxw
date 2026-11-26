@@ -416,6 +416,17 @@ impl Book {
         }
     }
 
+    /// Take back a job still queued that nobody joined (a CI run dropped
+    /// for a newer main): it never runs. A job running, done or joined
+    /// stays.
+    pub fn withdraw(&mut self, id: &str) -> bool {
+        let gone = self.jobs.get(id).is_some_and(|j| j.state == JobState::Queued && j.joiners.is_empty());
+        if gone {
+            self.jobs.remove(id);
+        }
+        gone
+    }
+
     pub fn get(&self, id: &str, sandbox: &str) -> Result<&Job, String> {
         self.jobs
             .get(id)

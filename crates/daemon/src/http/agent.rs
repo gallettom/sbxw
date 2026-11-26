@@ -351,6 +351,7 @@ async fn tests_run(State(app): S, Agent(me): Agent, Json(b): Json<TestsRunBody>)
         head: b.head.as_deref(),
         plan: b.plan.as_deref(),
         rerun: b.rerun,
+        by: None,
     };
     let (job, took) = app.tests_request(&me, ask).await?;
     let took = match took {
@@ -406,6 +407,8 @@ async fn plan_wait(State(app): S, Agent(me): Agent, Json(b): Json<PlanIdBody>) -
 
 async fn plan_status(State(app): S, Agent(me): Agent, Json(b): Json<PlanIdBody>) -> ApiResult {
     app.require_leading(&me, Some(&b.id))?;
+    // Main may have moved under a CI run: looked at before answering.
+    app.ci_watch(Some(&[me.to_string()])).await;
     let plan = app.plan_led(&b.id, &me)?;
     Ok(ok_with(json!({ "plan": app.plan_view_checked(&plan).await })))
 }

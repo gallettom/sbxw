@@ -311,6 +311,26 @@ impl PlanBook {
         Ok(p)
     }
 
+    /// The threads merged into the CI branch before one conflicted: kept
+    /// for the lead's line.
+    pub fn ci_partial(&mut self, id: &str, run: u32, merged: Vec<CiStep>, now: u64) -> Result<Plan, String> {
+        self.ci_step(id, run, &[MergeState::CiBuilding], now, |m| {
+            m.ci.as_mut().expect("ci").merged = merged;
+            Ok(())
+        })
+    }
+
+    /// A run cut short by a daemon restart (building, or built and not yet
+    /// queued): built again as the next run of the same proposal.
+    pub fn ci_restart(&mut self, id: &str, run: u32, now: u64) -> Result<Plan, String> {
+        self.ci_step(id, run, &[MergeState::CiBuilding, MergeState::CiTesting], now, |m| {
+            let c = m.ci.as_mut().expect("ci");
+            *c = Ci { branch: c.branch.clone(), worktree: c.worktree.clone(), run: c.run + 1, builds: c.builds, rebuilt_because: c.rebuilt_because.clone(), base_branch: c.base_branch.clone(), passed_ms: c.passed_ms, ..Default::default() };
+            m.state = MergeState::CiBuilding;
+            Ok(())
+        })
+    }
+
     /// The test job on the CI tip.
     pub fn ci_job(&mut self, id: &str, run: u32, job: &str, now: u64) -> Result<Plan, String> {
         self.ci_step(id, run, &[MergeState::CiTesting], now, |m| {
@@ -410,6 +430,26 @@ impl PlanBook {
             m.state = MergeState::MergedCi;
             Ok(())
         })
+    }
+
+    /// The plan was closed (lead mode ended, or the person closed it from
+    /// the Kanban) while its merge was a CI run not merged: the run is over,
+    /// as abandoned, its branch removed by the daemon. `None`: nothing to do.
+    pub fn ci_closed(&mut self, id: &str, now: u64) -> Option<Plan> {
+        let open = self.get(id)?.merge.as_ref().is_some_and(|m| m.ci.is_some() && (m.state.ci_busy() || matches!(m.state, MergeState::MergedCi | MergeState::CiFailed)));
+        if !open {
+            return None;
+        }
+        let p = self
+            .mutate(id, now, |p| {
+                let m = p.merge.as_mut().expect("merge");
+                m.state = MergeState::Abandoned;
+                m.abandoned_ms = Some(now);
+                Ok(())
+            })
+            .ok()?;
+        self.ci_note(id, now, "closed", "the plan was closed: its CI branch was removed, nothing reached main", json!({}));
+        Some(p)
     }
 
     /// The next plan of `sandbox` to rebuild after main moved: none while
