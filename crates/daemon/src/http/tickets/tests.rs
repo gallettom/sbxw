@@ -52,8 +52,8 @@ async fn the_ui_writes_tickets_with_its_token_and_agents_only_read_their_own() {
     // The board: every column, counts, labels, the card ready to draw.
     let (_, b) = call(signed_in(app.clone()), get("/api/tickets?sandbox=alpha")).await;
     let cols = b["board"]["columns"].as_array().unwrap();
-    assert_eq!(cols.iter().map(|c| c["id"].as_str().unwrap()).collect::<Vec<_>>(), ["planned", "progress", "test", "ready", "merged"]);
-    let card = &cols[0]["cards"][0];
+    assert_eq!(cols.iter().map(|c| c["id"].as_str().unwrap()).collect::<Vec<_>>(), ["backlog", "planned", "progress", "test", "ready", "merged"]);
+    let card = &cols[1]["cards"][0];
     assert_eq!((card["num"].as_str(), card["column"].as_str(), card["can"]["reorder"].as_bool()), (Some("T-1"), Some("planned"), Some(true)));
     assert_eq!(card["marks"][0]["label"], "P1");
     assert!(b["board"]["counts_line"].as_str().unwrap().starts_with("1 planned"));
@@ -67,7 +67,7 @@ async fn the_ui_writes_tickets_with_its_token_and_agents_only_read_their_own() {
     assert!(!v["text"].as_str().unwrap().contains("Export"), "{v}");
     let (s, _) = call(agent_router(app.clone()), post("/api/tickets/read", Some(&beta), json!({ "id": "T-1", "sandbox": "alpha" }))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "beta has no T-1");
-    for path in ["/api/tickets/alpha", "/api/tickets/alpha/1/edit", "/api/tickets/alpha/1/delete", "/api/tickets/alpha/1/move", "/api/tickets/alpha/1/send", "/api/tickets/alpha/1/files"] {
+    for path in ["/api/tickets/alpha/1/plan", "/api/tickets/alpha/source", "/api/tickets/alpha/source/remove", "/api/tickets/alpha/source/refresh", "/api/tickets/alpha", "/api/tickets/alpha/1/edit", "/api/tickets/alpha/1/delete", "/api/tickets/alpha/1/move", "/api/tickets/alpha/1/send", "/api/tickets/alpha/1/files"] {
         let (s, _) = call(agent_router(app.clone()), post(path, Some(&alpha), json!({ "title": "x", "to": "up" }))).await;
         assert!(s == StatusCode::NOT_FOUND || s == StatusCode::METHOD_NOT_ALLOWED, "{path}: {s}");
     }
@@ -80,4 +80,37 @@ async fn the_ui_writes_tickets_with_its_token_and_agents_only_read_their_own() {
     assert_eq!(s, StatusCode::CONFLICT, "no session open: {v}");
     let (s, v) = call(signed_in(app.clone()), post("/api/tickets/alpha/1/delete", None, json!({}))).await;
     assert_eq!((s, v["files"].as_u64()), (StatusCode::OK, Some(1)));
+}
+
+#[tokio::test]
+async fn the_source_routes_and_the_person_s_plan_route() {
+    let (_d, app) = app();
+    let (s, v) = call(signed_in(app.clone()), get("/api/tickets/web/source")).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["configured"].as_bool(), v["status"]["state"].as_str(), v["label"].as_str()), (Some(false), Some("off"), Some("sbxw")));
+    assert!(v["detected"].is_null());
+    let (s, v) = call(signed_in(app.clone()), post("/api/tickets/web/source", None, json!({ "tracker": "github", "repo": "nope" }))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, v) = call(signed_in(app.clone()), post("/api/tickets/web/source", None, json!({ "tracker": "github", "repo": "acme/web", "label": "todo", "auto_close": true }))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["configured"].as_bool(), v["repo"].as_str(), v["label"].as_str(), v["auto_close"].as_bool()), (Some(true), Some("acme/web"), Some("todo"), Some(true)));
+    let (s, _) = call(signed_in(app.clone()), post("/api/tickets/web/source/refresh", None, json!({}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, v) = call(signed_in(app.clone()), post("/api/tickets/web/source/remove", None, json!({}))).await;
+    assert_eq!((s, v["configured"].as_bool()), (StatusCode::OK, Some(false)));
+    let (s, _) = call(signed_in(app.clone()), post("/api/tickets/web/source/refresh", None, json!({}))).await;
+    assert_eq!(s, StatusCode::CONFLICT, "nothing to refresh");
+    // Plan: only a Backlog ticket; a ticket the person wrote is in Planned already.
+    call(signed_in(app.clone()), post("/api/tickets/web", None, json!({ "title": "Mine" }))).await;
+    let (s, _) = call(signed_in(app.clone()), post("/api/tickets/web/1/plan", None, json!({}))).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    let issue = sbxw_core::tracker::Issue { key: "acme/web#4".into(), number: 4, title: "Imported".into(), ..Default::default() };
+    app.tickets_update("web", None, "synced", |b| b.import(sbxw_core::tracker::Tracker::Github, &issue, 1).map(|_| ())).unwrap();
+    let (_, b) = call(signed_in(app.clone()), get("/api/tickets?sandbox=web")).await;
+    let backlog = &b["board"]["columns"][0];
+    assert_eq!((backlog["id"].as_str(), backlog["cards"][0]["can_plan"].as_bool()), (Some("backlog"), Some(true)));
+    assert_eq!(backlog["cards"][0]["origin"]["key"], "acme/web#4");
+    let (s, v) = call(signed_in(app.clone()), post("/api/tickets/web/2/plan", None, json!({}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["ticket"]["card"]["column"], "planned");
 }

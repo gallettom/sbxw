@@ -100,6 +100,10 @@ pub struct App {
     /// leaves them out. One a stopped daemon left behind is not here, and
     /// shows, so it can be removed.
     pub(crate) scratches: Mutex<HashSet<SandboxRef>>,
+    /// The ticket sync's own sandbox (svc/tracker_sandbox.rs).
+    pub(crate) sync_box: Mutex<crate::svc::tracker_sandbox::SyncBox>,
+    /// The ticket sync with trackers (svc/tracker_sync.rs).
+    pub(crate) tracker: crate::svc::tracker_sync::Engine,
     /// The daemon config's `kits`, read once at start and changed only by
     /// the Kits dialog's own write: the file usually sits in a workspace an
     /// agent can write, and a kit planted there must not reach the next
@@ -237,6 +241,8 @@ impl AppBuilder {
             template_builds: Mutex::new(HashMap::new()),
             warming: Mutex::new(Default::default()),
             scratches: Mutex::new(HashSet::new()),
+            sync_box: Mutex::new(Default::default()),
+            tracker: Default::default(),
             daemon_kits,
             emphasis,
             awake: Mutex::new(Default::default()),
@@ -379,6 +385,7 @@ impl App {
         self.start_keep_awake();
         self.start_board_listener();
         self.start_tickets_listener();
+        self.start_tracker_sync();
         self.start_mac_lifecycle();
         self.tests_resume();
         self.inbox_start();

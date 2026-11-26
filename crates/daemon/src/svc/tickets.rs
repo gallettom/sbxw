@@ -44,7 +44,8 @@ pub struct TicketsNudge {
     pub sandbox: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub n: Option<u32>,
-    /// `created`, `edited`, `file`, `moved`, `deleted`, `followed`, `sent`.
+    /// `created`, `edited`, `file`, `moved`, `deleted`, `followed`, `sent`,
+    /// `planned`, `source` (a tracker source changed), `synced`.
     pub what: &'static str,
 }
 
@@ -59,12 +60,12 @@ pub enum Sent {
 }
 
 impl App {
-    fn tickets_root(&self) -> PathBuf {
+    pub(crate) fn tickets_root(&self) -> PathBuf {
         self.store.paths.state().join("tickets")
     }
 
     /// A parsed sandbox's folder (its text form: `web`, `host~web`).
-    fn tickets_dir(&self, sb: &str) -> Option<PathBuf> {
+    pub(crate) fn tickets_dir(&self, sb: &str) -> Option<PathBuf> {
         let r = SandboxRef::parse(sb).ok()?;
         let name = r.to_string();
         (name == sb && !name.contains(['/', '\\']) && !name.starts_with('.')).then(|| self.tickets_root().join(name))
@@ -96,7 +97,7 @@ impl App {
 
     /// Runs `f` on the sandboxes' books (loaded on first use, following the
     /// plans kept then, so a change while the daemon was down is caught up).
-    fn tickets_with<R>(&self, sb: &str, f: impl FnOnce(&mut Book) -> R) -> R {
+    pub(crate) fn tickets_with<R>(&self, sb: &str, f: impl FnOnce(&mut Book) -> R) -> R {
         let fresh = !self.tickets.lock().unwrap().books.contains_key(sb);
         if fresh {
             let mut b = self.tickets_load(sb);
@@ -118,7 +119,7 @@ impl App {
     }
 
     /// Every sandbox that has a book on disk or in memory.
-    fn tickets_sandboxes(&self) -> Vec<String> {
+    pub(crate) fn tickets_sandboxes(&self) -> Vec<String> {
         let listed = self.tickets.lock().unwrap().listed;
         if !listed {
             let names: Vec<String> = std::fs::read_dir(self.tickets_root())
@@ -138,18 +139,18 @@ impl App {
         v
     }
 
-    fn tickets_save(&self, b: &Book) -> Result<(), String> {
+    pub(crate) fn tickets_save(&self, b: &Book) -> Result<(), String> {
         let dir = self.tickets_dir(&b.sandbox).ok_or("bad sandbox name")?;
         let body = serde_json::to_vec_pretty(b).map_err(|e| e.to_string())?;
         crate::store::write_atomic(&dir.join("tickets.json"), &body).map_err(|e| format!("could not save the tickets: {e:#}"))
     }
 
-    fn tickets_changed(&self, sb: &str, n: Option<u32>, what: &'static str) {
+    pub(crate) fn tickets_changed(&self, sb: &str, n: Option<u32>, what: &'static str) {
         self.send(Event::Tickets(TicketsNudge { sandbox: sb.to_string(), n, what }));
     }
 
     /// Changes `sb`'s book with `f` and saves it; `Err` leaves it as it was.
-    fn tickets_update<R>(&self, sb: &str, n: Option<u32>, what: &'static str, f: impl FnOnce(&mut Book) -> Result<R, String>) -> Result<R, String> {
+    pub(crate) fn tickets_update<R>(&self, sb: &str, n: Option<u32>, what: &'static str, f: impl FnOnce(&mut Book) -> Result<R, String>) -> Result<R, String> {
         let r = self.tickets_with(sb, |b| {
             let mut next = b.clone();
             let r = f(&mut next)?;
@@ -161,7 +162,7 @@ impl App {
         Ok(r)
     }
 
-    fn plans_of(&self, sb: Option<&str>) -> Vec<Plan> {
+    pub(crate) fn plans_of(&self, sb: Option<&str>) -> Vec<Plan> {
         let mut out = {
             let p = self.plans.lock().unwrap();
             match sb {
@@ -241,6 +242,10 @@ impl App {
         if texts && source == Some(tickets::Source::Thread) {
             return Err("a card recorded from a thread is not edited: only its validation changes".into());
         }
+        let imported = self.tickets_with(&s, |b| b.get(n).is_some_and(|t| t.origin.is_some()));
+        if imported && (d.title.is_some() || d.description.is_some()) {
+            return Err("an imported ticket follows its issue: edit it in the tracker".into());
+        }
         self.tickets_update(&s, Some(n), "edited", |b| {
             if texts {
                 b.edit(n, d, now_ms())?;
@@ -256,6 +261,15 @@ impl App {
 
     /// The person attaches a file (bytes the app read from a file they handed in).
     pub fn ticket_attach(&self, sb: &SandboxRef, n: u32, name: &str, bytes: &[u8]) -> Result<Value, String> {
+        if self.tickets_with(&sb.to_string(), |b| b.get(n).is_some_and(|t| t.origin.is_some())) {
+            return Err("an imported ticket follows its issue: attach the file there".into());
+        }
+        self.ticket_attach_checked(sb, n, name, bytes)
+    }
+
+    /// [`App::ticket_attach`]'s checks and storage, for the person's file
+    /// and for an issue's attachment the sync fetched.
+    pub(crate) fn ticket_attach_checked(&self, sb: &SandboxRef, n: u32, name: &str, bytes: &[u8]) -> Result<Value, String> {
         let s = sb.to_string();
         let kind = tickets::sniff(bytes)?;
         let size = bytes.len() as u64;
@@ -293,6 +307,9 @@ impl App {
 
     pub fn ticket_remove_file(&self, sb: &SandboxRef, n: u32, id: &str) -> Result<Value, String> {
         let s = sb.to_string();
+        if self.tickets_with(&s, |b| b.get(n).is_some_and(|t| t.origin.is_some())) {
+            return Err("an imported ticket follows its issue: remove the file there".into());
+        }
         let file = self.tickets_update(&s, Some(n), "file", |b| b.remove_file(n, id, now_ms()))?;
         if tickets::valid_file(&file) {
             if let Some(d) = self.tickets_dir(&s) {
@@ -309,6 +326,25 @@ impl App {
         let by: HashMap<&str, &Plan> = plans.iter().map(|p| (p.id.as_str(), p)).collect();
         let live = |t: &Ticket| tickets::ticket_column(t, &by).0;
         self.tickets_update(&s, Some(n), "moved", |b| b.move_ticket(n, m, &live))
+    }
+
+    /// The person moves a Backlog ticket to Planned: from then agents see
+    /// it and a plan may take it. Only the UI's route calls this.
+    pub fn ticket_plan(&self, sb: &SandboxRef, n: u32) -> Result<Value, String> {
+        let s = sb.to_string();
+        self.tickets_update(&s, Some(n), "planned", |b| b.plan(n, now_ms()).map(|_| ()))?;
+        tracing::info!("tickets: {} moved from Backlog to Planned in {s}", tickets::num(n));
+        self.tracker_column_check(&s);
+        self.ticket_view(sb, n).ok_or_else(|| "the ticket went".into())
+    }
+
+    /// Removes files of tickets that left the book.
+    pub(crate) fn tickets_remove_files(&self, sb: &str, gone: &[Ticket]) {
+        if let Some(d) = self.tickets_dir(sb) {
+            for f in gone.iter().flat_map(|t| &t.files).filter(|f| tickets::valid_file(&f.file)) {
+                let _ = std::fs::remove_file(d.join("files").join(&f.file));
+            }
+        }
     }
 
     /// Deletes a ticket and its files; returns how many files and their size.
@@ -409,7 +445,10 @@ impl App {
             Ok::<_, String>(changed)
         });
         match res {
-            Ok(_) => self.tickets_changed(&p.sandbox, None, "followed"),
+            Ok(_) => {
+                self.tickets_changed(&p.sandbox, None, "followed");
+                self.tracker_column_check(&p.sandbox);
+            }
             Err(e) => tracing::warn!("tickets of {}: could not follow plan {}: {e}", p.sandbox, p.id),
         }
     }
@@ -436,9 +475,10 @@ impl App {
         let mut open: Vec<(Column, tickets::Priority, i64, String)> = b
             .tickets
             .iter()
-            .filter(|t| t.source == tickets::Source::Person)
+            // Backlog is the person's alone: never shown to an agent.
+            .filter(|t| t.source == tickets::Source::Person && !t.in_backlog())
             .map(|t| (tickets::ticket_column(t, &by).0, t))
-            .filter(|(c, _)| *c != Column::Merged)
+            .filter(|(c, _)| !matches!(c, Column::Merged | Column::Backlog))
             .map(|(c, t)| (c, t.priority, t.rank, tickets::list_line(t, c)))
             .collect();
         open.sort();
@@ -458,7 +498,8 @@ impl App {
     pub async fn tickets_agent_read(&self, me: &SandboxRef, id: &str) -> Result<String, String> {
         let s = me.to_string();
         let n = tickets::parse_num(id).ok_or("id is a ticket number of this sandbox (T-12); tickets_list shows them")?;
-        let t = self.tickets_with(&s, |b| b.get(n).cloned()).filter(|t| t.source == tickets::Source::Person).ok_or_else(|| format!("this sandbox has no ticket {}; tickets_list shows them", tickets::num(n)))?;
+        // A Backlog ticket reads as one that does not exist.
+        let t = self.tickets_with(&s, |b| b.get(n).cloned()).filter(|t| t.source == tickets::Source::Person && !t.in_backlog()).ok_or_else(|| format!("this sandbox has no ticket {}; tickets_list shows them", tickets::num(n)))?;
         let mut paths = vec![];
         if !t.files.is_empty() {
             let at = now_ms();

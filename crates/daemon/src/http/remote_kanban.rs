@@ -169,7 +169,21 @@ fn card(v: &Value) -> Value {
         "files": v.get("files").and_then(Value::as_u64).unwrap_or(0).min(MAX_FILES as u64),
         "validated": v.get("validated").and_then(Value::as_bool).unwrap_or(false),
         "age": text(v, "age", 12),
+        "origin": origin(v),
     })
+}
+
+/// An imported card's issue: the tracker, its key as text, and its link only
+/// when it is the tracker's own (checked again by the page).
+fn origin(v: &Value) -> Value {
+    let Some(o) = v.get("origin").filter(|o| o.is_object()) else { return Value::Null };
+    let Ok(t) = serde_json::from_value::<sbxw_core::tracker::Tracker>(pick(o, "tracker")) else { return Value::Null };
+    let key = text(o, "key", 160);
+    if key.as_str().is_none_or(str::is_empty) {
+        return Value::Null;
+    }
+    let url = o.get("url").and_then(Value::as_str).filter(|u| t.url_ok(u)).unwrap_or("");
+    json!({ "tracker": t, "key": key, "url": url, "upstream": pick(o, "upstream") })
 }
 
 /// The board of one sandbox as the phone reads it, with its `latest`.
@@ -179,6 +193,8 @@ pub fn board_view(app: &App, sb: &SandboxRef) -> Value {
         .get("columns")
         .and_then(Value::as_array)
         .map(|cols| {
+            // Backlog is shown as the Mac shows it, read-only: the phone has
+            // no way to plan a ticket (that route is the Mac's).
             cols.iter()
                 .map(|c| {
                     let cards: Vec<Value> = c.get("cards").and_then(Value::as_array).map(|a| a.iter().map(card).collect()).unwrap_or_default();
@@ -539,8 +555,8 @@ mod tests {
         assert_eq!(b["sandbox"], "web");
         assert_eq!(b["latest"].as_str().unwrap().len(), 16);
         let cols: Vec<&str> = b["columns"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
-        assert_eq!(cols, ["planned", "progress", "test", "ready", "merged"]);
-        let c = &b["columns"][0]["cards"][0];
+        assert_eq!(cols, ["backlog", "planned", "progress", "test", "ready", "merged"]);
+        let c = &b["columns"][1]["cards"][0];
         assert_eq!((c["num"].as_str(), c["n"].as_u64(), c["thread"].as_str()), (Some("T-1"), Some(1), Some("pages")));
         assert_eq!(c["marks"][0]["label"], "proposed");
         assert_eq!(c["files"], 1);
@@ -633,7 +649,7 @@ mod tests {
         assert!(t["files"].as_array().unwrap().iter().all(|f| f["name"].as_str().unwrap().chars().count() <= MAX_NAME));
         assert!(t["history"].as_array().unwrap().len() <= MAX_HISTORY);
         let b = call(&router, "GET", "/r/leaders/web/kanban", Some(&token)).await.json();
-        let c = &b["columns"][0]["cards"][0];
+        let c = &b["columns"][1]["cards"][0];
         assert!(c["title_short"].as_str().unwrap().chars().count() <= TITLE_SHORT);
         assert!(c["title_long"].as_str().unwrap().chars().count() <= TITLE_LONG);
     }

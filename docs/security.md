@@ -1195,6 +1195,37 @@ To keep the config out of the agent's reach entirely, store it outside the
 workspace and use `--config`. (`sbxw env export` writes beside the
 workspace for the same reason.)
 
+### Ticket sync with a tracker
+
+A tracker source (see [Tracker sources](threads-and-lead.md#tracker-sources))
+is off unless you set it for a sandbox. When it is on:
+
+- **What leaves the machine:** only fixed texts. One comment per issue
+  starting with `[sbxw]` and one `sbxw:` state label, written by
+  `sbxw_core::tracker` from the column, a branch name (`sbxw/<thread>`, only
+  when the thread's name is lower-case letters, digits and dashes) and a
+  commit hash; with auto-close on, the close of the issue after a merge.
+  Never a ticket's words, an agent's text, a file or a path.
+- **Under whose name:** your own GitHub account, through the GitHub MCP
+  server you registered and signed in to in Setup, MCP. The daemon holds no
+  token and makes no HTTPS call: a script with no agent runs with `node` in
+  the daemon's own `sbxw-sync` sandbox and goes through sbx's MCP gateway.
+  That sandbox has nothing of a project, runs no agent, and its egress is
+  limited to GitHub's hosts for attachments (best effort: an organization
+  policy may decide). Project sandboxes never get the GitHub server.
+- **What comes in is data:** issue titles, bodies, labels and attachment
+  names are cleaned and clipped like any ticket text; links must be
+  GitHub's; attachments pass the same checks as a file you attach (no
+  archives, no programs, 8 MB each). An imported ticket waits in Backlog,
+  where no agent can list, read or plan it, until you move it to Planned:
+  an issue anyone can label does not reach an agent without you. A paired
+  phone reads the Backlog column as it reads the others (titles, the issue's
+  key and link), and cannot move a ticket out of it.
+- **Turning a source off** discards the write-backs it still had queued:
+  nothing of before is sent if a source is set again.
+- **The log** holds counts, ticket numbers, issue keys and failure kinds,
+  never a title, a body, a label or a file name.
+
 ### The kit cache filler
 
 The first sandbox after the cache expires can write the

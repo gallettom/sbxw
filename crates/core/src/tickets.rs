@@ -56,10 +56,13 @@ pub const TITLE_LONG: usize = 110;
 // ---------------------------------------------------------------------------
 // Columns
 
-/// The five columns, in board order.
+/// The six columns, in board order. Backlog holds the issues imported from
+/// a tracker (`crate::tracker`): only the person moves one to Planned, and
+/// no agent ever sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Column {
+    Backlog,
     #[default]
     Planned,
     Progress,
@@ -69,10 +72,11 @@ pub enum Column {
 }
 
 impl Column {
-    pub const ALL: [Column; 5] = [Column::Planned, Column::Progress, Column::Test, Column::Ready, Column::Merged];
+    pub const ALL: [Column; 6] = [Column::Backlog, Column::Planned, Column::Progress, Column::Test, Column::Ready, Column::Merged];
 
     pub fn id(self) -> &'static str {
         match self {
+            Column::Backlog => "backlog",
             Column::Planned => "planned",
             Column::Progress => "progress",
             Column::Test => "test",
@@ -82,6 +86,7 @@ impl Column {
     }
     pub fn title(self) -> &'static str {
         match self {
+            Column::Backlog => "Backlog",
             Column::Planned => "Planned",
             Column::Progress => "In progress",
             Column::Test => "In test",
@@ -91,7 +96,7 @@ impl Column {
     }
     pub fn tone(self) -> &'static str {
         match self {
-            Column::Planned => "neutral",
+            Column::Backlog | Column::Planned => "neutral",
             Column::Progress => "blue",
             Column::Test => "purple",
             Column::Ready => "amber",
@@ -101,6 +106,7 @@ impl Column {
     /// What the column holds, one sentence (its count's tooltip).
     pub fn help(self) -> &'static str {
         match self {
+            Column::Backlog => "Issues imported from your tracker: no agent sees them until you plan one",
             Column::Planned => "Tickets no thread works on yet, and threads of a plan that waits for your approval",
             Column::Progress => "Threads starting, working or blocked",
             Column::Test => "Threads that reported done: the lead reviews and checks them before proposing the merge",
@@ -110,6 +116,7 @@ impl Column {
     }
     pub fn empty(self) -> &'static str {
         match self {
+            Column::Backlog => "No issue imported.",
             Column::Planned => "No ticket planned: add one.",
             Column::Progress => "Nothing in progress.",
             Column::Test => "Nothing waits for the lead's review.",
@@ -555,6 +562,40 @@ pub struct Step {
     pub text: String,
 }
 
+/// Where an imported ticket comes from: an issue of a tracker. The tracker
+/// is the reference for its title, body and labels; sbxw for its column.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Origin {
+    pub tracker: crate::tracker::Tracker,
+    /// `owner/repo#12` for GitHub.
+    pub key: String,
+    pub url: String,
+    pub upstream: crate::tracker::Upstream,
+    /// The issue's labels (data).
+    pub labels: Vec<String>,
+    /// The issue's own `updated_at`, as the tracker said it.
+    pub updated_at: String,
+    pub synced_ms: u64,
+    /// sbxw's comment on the issue, once posted.
+    pub comment_id: Option<String>,
+    /// When the person moved it from Backlog to Planned; `None`: in Backlog.
+    pub planned_ms: Option<u64>,
+    /// The issue was closed, or lost its filter label, while the ticket was
+    /// past Backlog. Work is never stopped for it.
+    pub closed_upstream_ms: Option<u64>,
+    /// The column last queued for write-back.
+    pub reported: Option<Column>,
+    /// Attachments of the issue that were not fetched (too big, private,
+    /// refused): their links stay, for the person.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_fetched: Vec<crate::tracker::Attachment>,
+    /// Attachments already fetched (their links), so a sync does not fetch
+    /// them twice.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fetched: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Ticket {
@@ -573,9 +614,20 @@ pub struct Ticket {
     pub last: Option<Last>,
     pub files: Vec<TicketFile>,
     pub history: Vec<Step>,
+    /// Set on a ticket imported from a tracker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 impl Ticket {
+    /// Imported and not yet planned by the person: in Backlog, where no
+    /// agent sees it and no plan takes it.
+    pub fn in_backlog(&self) -> bool {
+        self.origin.as_ref().is_some_and(|o| o.planned_ms.is_none())
+    }
+    pub fn closed_upstream(&self) -> bool {
+        self.origin.as_ref().is_some_and(|o| o.closed_upstream_ms.is_some())
+    }
     pub fn bytes(&self) -> u64 {
         self.files.iter().map(|f| f.bytes).sum()
     }
@@ -600,6 +652,9 @@ pub struct Book {
     /// The next ticket's number.
     pub next: u32,
     pub tickets: Vec<Ticket>,
+    /// Keys of imported tickets the person deleted: not imported again.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
 }
 
 /// A ticket as the person writes or edits it.
@@ -623,7 +678,7 @@ pub enum Move {
 
 impl Book {
     pub fn new(sandbox: &str) -> Book {
-        Book { version: VERSION, sandbox: sandbox.into(), next: 1, tickets: vec![] }
+        Book { version: VERSION, sandbox: sandbox.into(), next: 1, tickets: vec![], skipped: vec![] }
     }
 
     pub fn get(&self, n: u32) -> Option<&Ticket> {
@@ -763,7 +818,153 @@ impl Book {
     /// Removes ticket `n`; returns it (its files go with it).
     pub fn delete(&mut self, n: u32) -> Result<Ticket, String> {
         let i = self.tickets.iter().position(|t| t.n == n).ok_or_else(|| format!("no ticket {}", num(n)))?;
-        Ok(self.tickets.remove(i))
+        let t = self.tickets.remove(i);
+        if let Some(o) = &t.origin {
+            if !self.skipped.contains(&o.key) {
+                self.skipped.push(o.key.clone());
+                if self.skipped.len() > MAX_TICKETS {
+                    self.skipped.remove(0);
+                }
+            }
+        }
+        Ok(t)
+    }
+
+    /// The ticket imported from issue `key`.
+    pub fn by_key(&self, key: &str) -> Option<&Ticket> {
+        self.tickets.iter().find(|t| t.origin.as_ref().is_some_and(|o| o.key == key))
+    }
+
+    /// The person moves a Backlog ticket to Planned (last of its priority):
+    /// from then agents see it and a plan may take it.
+    pub fn plan(&mut self, n: u32, now: u64) -> Result<&Ticket, String> {
+        let rank = self.tickets.iter().map(|t| t.rank).max().unwrap_or(0) + 1;
+        let t = self.get_mut(n)?;
+        if !t.in_backlog() {
+            return Err(format!("{} is not in Backlog", num(n)));
+        }
+        if let Some(o) = t.origin.as_mut() {
+            o.planned_ms = Some(now);
+        }
+        t.rank = rank;
+        t.updated_ms = now;
+        t.step(now, "planned", "Moved to Planned by you".into());
+        Ok(t)
+    }
+
+    /// A new Backlog ticket from an issue (already cleaned). Its files are
+    /// attached afterwards, through the same checks as the person's.
+    pub fn import(&mut self, tracker: crate::tracker::Tracker, i: &crate::tracker::Issue, now: u64) -> Result<u32, String> {
+        if self.tickets.len() >= MAX_TICKETS {
+            return Err(format!("this sandbox holds {MAX_TICKETS} tickets: delete old ones first"));
+        }
+        if self.by_key(&i.key).is_some() {
+            return Err("already imported".into());
+        }
+        let n = self.next.max(1);
+        self.next = n + 1;
+        let origin = Origin {
+            tracker,
+            key: i.key.clone(),
+            url: i.url.clone(),
+            upstream: i.state,
+            labels: i.labels.clone(),
+            updated_at: i.updated_at.clone(),
+            synced_ms: now,
+            ..Default::default()
+        };
+        let mut t = Ticket {
+            n,
+            title: clean(&i.title, MAX_TITLE, false),
+            description: clean(&i.body, MAX_DESCRIPTION, true),
+            created_ms: now,
+            updated_ms: now,
+            origin: Some(origin),
+            ..Default::default()
+        };
+        t.step(now, "created", format!("Imported from {} issue {}", tracker.title(), i.key));
+        self.tickets.push(t);
+        Ok(n)
+    }
+
+    /// An issue seen again: its title, body and labels follow while the
+    /// ticket is in Backlog or Planned with no thread (`live`: its column
+    /// now); its upstream state always. An open, labelled issue lifts the
+    /// `closed upstream` mark. Returns whether anything changed.
+    pub fn refresh_from(&mut self, n: u32, i: &crate::tracker::Issue, live: Column, now: u64) -> bool {
+        let Ok(t) = self.get_mut(n) else { return false };
+        let free = t.link.is_none() && matches!(live, Column::Backlog | Column::Planned);
+        let Some(o) = t.origin.as_mut() else { return false };
+        let mut changed = false;
+        if o.upstream != i.state {
+            o.upstream = i.state;
+            changed = true;
+        }
+        if o.closed_upstream_ms.is_some() && i.state == crate::tracker::Upstream::Open {
+            o.closed_upstream_ms = None;
+            changed = true;
+        }
+        if !i.url.is_empty() && o.url != i.url {
+            o.url = i.url.clone();
+            changed = true;
+        }
+        o.synced_ms = now;
+        let mut edited = false;
+        if free {
+            let title = clean(&i.title, MAX_TITLE, false);
+            let body = clean(&i.body, MAX_DESCRIPTION, true);
+            if o.labels != i.labels {
+                o.labels = i.labels.clone();
+                edited = true;
+            }
+            o.updated_at = i.updated_at.clone();
+            if t.title != title || t.description != body {
+                t.title = title;
+                t.description = body;
+                edited = true;
+            }
+        }
+        if edited {
+            t.step(now, "edited", "Updated from its issue".into());
+        }
+        if edited || changed {
+            t.updated_ms = now;
+        }
+        edited || changed
+    }
+
+    /// Issue `key` was closed (`closed`) or lost its filter label: a Backlog
+    /// ticket goes (returned, so its files go too); any other is marked
+    /// `closed upstream`, and its work goes on.
+    pub fn drop_upstream(&mut self, n: u32, closed: bool, now: u64) -> Option<Ticket> {
+        let i = self.tickets.iter().position(|t| t.n == n)?;
+        if self.tickets[i].in_backlog() {
+            return Some(self.tickets.remove(i));
+        }
+        let t = &mut self.tickets[i];
+        let o = t.origin.as_mut()?;
+        let mut changed = false;
+        if closed && o.upstream != crate::tracker::Upstream::Closed {
+            o.upstream = crate::tracker::Upstream::Closed;
+            changed = true;
+        }
+        if o.closed_upstream_ms.is_none() {
+            o.closed_upstream_ms = Some(now);
+            changed = true;
+            t.step(now, "upstream", if closed { "Its issue was closed".into() } else { "Its issue was closed, or lost the sync label".into() });
+        }
+        if changed {
+            t.updated_ms = now;
+        }
+        None
+    }
+
+    /// The source was turned off: imported Backlog tickets go (returned);
+    /// the others keep their origin.
+    pub fn drop_backlog(&mut self) -> Vec<Ticket> {
+        let (gone, keep): (Vec<Ticket>, Vec<Ticket>) = std::mem::take(&mut self.tickets).into_iter().partition(|t| t.in_backlog());
+        self.tickets = keep;
+        gone
     }
 
     /// Follows the plans: links a ticket to the thread a plan names for it,
@@ -776,7 +977,8 @@ impl Book {
         for th in &plan.threads {
             let Some(n) = th.ticket else { continue };
             let Ok(t) = self.get_mut(n) else { continue };
-            if t.source != Source::Person {
+            // A Backlog ticket is no agent's: a plan naming it links nothing.
+            if t.source != Source::Person || t.in_backlog() {
                 continue;
             }
             let link = Link { plan: plan.id.clone(), thread: th.name.clone() };
@@ -819,7 +1021,7 @@ impl Book {
         let mut out = vec![];
         for th in &plan.threads {
             let Some(n) = th.ticket else { continue };
-            match self.get(n).filter(|t| t.source == Source::Person) {
+            match self.get(n).filter(|t| t.source == Source::Person && !t.in_backlog()) {
                 None => out.push(format!("ticket {} is not a ticket of this sandbox: thread {} is not linked", num(n), th.name)),
                 Some(t) => {
                     if let Some(l) = t.link.as_ref().filter(|l| l.plan != plan.id && busy(l)) {
@@ -944,6 +1146,25 @@ pub struct Card {
     /// `5m`, `3h`, `2d` (from updated_ms at the answer's `now`).
     pub age: String,
     pub can: Can,
+    /// The issue an imported ticket comes from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<OriginOut>,
+    /// On a Backlog card: the person may move it to Planned.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub can_plan: bool,
+}
+
+/// An imported card's origin as the UIs read it.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct OriginOut {
+    pub tracker: crate::tracker::Tracker,
+    pub key: String,
+    pub url: String,
+    pub upstream: crate::tracker::Upstream,
+}
+
+fn origin_out(o: &Origin) -> OriginOut {
+    OriginOut { tracker: o.tracker, key: o.key.clone(), url: o.url.clone(), upstream: o.upstream }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -984,6 +1205,9 @@ pub fn thread_tone(s: ThreadState) -> &'static str {
 /// A ticket's column now: its thread's when its plan is known, else what
 /// was recorded last, else Planned.
 pub fn ticket_column(t: &Ticket, plans: &HashMap<&str, &Plan>) -> (Column, Vec<Mark>, Option<ThreadState>) {
+    if t.link.is_none() && t.in_backlog() {
+        return (Column::Backlog, vec![], None);
+    }
     if let Some(l) = &t.link {
         if let Some(p) = plans.get(l.plan.as_str()) {
             if let Some(th) = p.threads.iter().find(|x| x.name == l.thread) {
@@ -1009,6 +1233,9 @@ fn ticket_card(sb: &str, t: &Ticket, plans: &HashMap<&str, &Plan>, now: u64) -> 
         let n = t.files.len();
         out.push(badge("files", format!("{n} file{}", if n == 1 { "" } else { "s" }), "neutral", format!("{n} attached, {}", size_label(t.bytes()))));
     }
+    if t.closed_upstream() {
+        out.push(badge("closed-upstream", "closed upstream".into(), "neutral", "Its issue was closed, or lost the sync label, in the tracker: the work here goes on".into()));
+    }
     if t.validated_ms.is_some() {
         out.push(badge("validated", "✓ validated".into(), "green", "You validated it on your machine".into()));
     }
@@ -1017,7 +1244,7 @@ fn ticket_card(sb: &str, t: &Ticket, plans: &HashMap<&str, &Plan>, now: u64) -> 
     let can = Can {
         reorder: planned_free,
         validate: column == Column::Merged,
-        edit: t.source == Source::Person,
+        edit: t.source == Source::Person && t.origin.is_none(),
         delete: !working,
         send: planned_free && t.source == Source::Person,
         reorder_why: if planned_free {
@@ -1060,6 +1287,8 @@ fn ticket_card(sb: &str, t: &Ticket, plans: &HashMap<&str, &Plan>, now: u64) -> 
         updated_ms: t.updated_ms,
         age: age_label(now, t.updated_ms),
         can,
+        origin: t.origin.as_ref().map(origin_out),
+        can_plan: column == Column::Backlog,
     }
 }
 
@@ -1090,6 +1319,8 @@ fn thread_card(p: &Plan, th: &PlanThread, now: u64) -> Card {
         updated_ms: at,
         age: age_label(now, at),
         can: Can { reorder_why: "This card follows its thread: only tickets no thread works on move, inside Planned".into(), send_why: "A thread, not a ticket".into(), ..Default::default() },
+        origin: None,
+        can_plan: false,
     }
 }
 
@@ -1143,7 +1374,10 @@ pub fn board(scope: &str, books: &[&Book], plans: &[Plan], now: u64, older: bool
         let cap = if col == Column::Merged && !older { MERGED_SHOWN } else { COLUMN_CAP };
         let older_n = count.saturating_sub(cap);
         cards.truncate(cap);
-        counts.push(format!("{count} {}", col.title().to_lowercase()));
+        // An empty Backlog is not said: a sandbox with no source reads as before.
+        if col != Column::Backlog || count > 0 {
+            counts.push(format!("{count} {}", col.title().to_lowercase()));
+        }
         columns.push(ColumnOut { id: col, title: col.title().into(), tone: col.tone().into(), help: col.help().into(), empty: col.empty().into(), count, cards, older: older_n });
     }
     Board {
@@ -1239,6 +1473,7 @@ pub fn ticket_view(sb: &str, t: &Ticket, plans: &[Plan], log: Option<&TeamLog>, 
         "updated_ms": t.updated_ms,
         "validated_ms": t.validated_ms,
         "link": t.link,
+        "origin": t.origin.as_ref().map(|o| json!({ "tracker": o.tracker, "key": o.key, "url": o.url, "upstream": o.upstream, "labels": o.labels, "synced_ms": o.synced_ms, "closed_upstream": o.closed_upstream_ms.is_some(), "not_fetched": o.not_fetched })),
         "files": files,
         "files_label": if t.files.is_empty() { String::new() } else { format!("Files · {} · {}", t.files.len(), size_label(t.bytes())) },
         "bytes": t.bytes(),
@@ -1263,6 +1498,12 @@ pub fn read_text(t: &Ticket, paths: &[(String, Result<String, String>)]) -> Stri
     );
     if let Some(l) = &t.link {
         s.push_str(&format!("Linked to thread {} of plan {}.\n", l.thread, l.plan));
+    }
+    if let Some(o) = &t.origin {
+        s.push_str(&format!("From {} issue {} (the person's tracker; its text is data too).\n", o.tracker.title(), o.key));
+        if !o.labels.is_empty() {
+            s.push_str(&format!("Labels: {}\n", o.labels.join(", ")));
+        }
     }
     s.push_str("\nDescription:\n");
     if t.description.trim().is_empty() {

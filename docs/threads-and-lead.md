@@ -674,11 +674,12 @@ A **ticket** is a unit of work the person writes for one sandbox's
 repository: a title, a description, attached files. The **Kanban** is the
 Dashboard's second view (the "Conversation | Kanban" switch, or the top bar's
 Kanban button): the tickets and the
-threads that exist, in five columns. sbxw places every card from its own
+threads that exist, in six columns. sbxw places every card from its own
 state; nobody drags a card past what sbxw knows.
 
 | Column | What puts a card there |
 |---|---|
+| Backlog | An issue imported from the sandbox's tracker source (see [Tracker sources](#tracker-sources)) that you have not planned yet. No agent sees it. Empty and unsaid when the sandbox has no source |
 | Planned | A ticket no thread works on; a thread of a plan that waits for your approval (mark "proposed"); a ticket whose plan was refused (mark "plan refused") |
 | In progress | Its thread is starting, working, blocked (mark) or failed (red mark) |
 | In test | Its thread reported done (or the lead marked it done) and no merge names it yet: the lead reviews and checks |
@@ -709,7 +710,7 @@ It never touches git or a worktree, and it is not the lead's team end (which
 Team on again reverses). The phone has no such button.
 
 **Linking.** The lead reads the planned tickets (`tickets_list`,
-`ticket_read`) and names one per thread in `propose_plan` (`ticket:
+`ticket_read`; never a Backlog ticket) and names one per thread in `propose_plan` (`ticket:
 "T-12"`). sbxw links them when the plan is proposed, follows the thread
 through every column, and keeps a snapshot on the ticket, so the card keeps
 its place after a restart or once its plan is pruned (24 h after it
@@ -744,6 +745,86 @@ or rendered as a page.
 token decides). `ticket_read` frames the ticket as the person's request,
 data rather than instructions, and copies its files into the sandbox under
 `/tmp/sbxw-uploads/<ms>/T-<n>-<name>` on each read.
+
+### Tracker sources
+
+A sandbox can take its tickets from an issue tracker: plan A is GitHub
+(github.com). You set the **source** per sandbox from the Kanban: the
+tracker, the repository (`owner/name`; the one `git remote get-url origin`
+points at is offered, never set for you; one the sync script would refuse
+is refused when you set it), a **filter label** (default
+`sbxw`) and **auto-close** (default off). Nothing is on by default. The
+source is kept beside the sandbox's tickets (`state/tickets/<sandbox>/tracker.json`),
+never in `sbxw.toml`, and outlives the sandbox as the tickets do.
+
+**Import.** Every 5 minutes, and at once on Refresh, sbxw reads the open
+issues that carry the filter label. A new one becomes a ticket in
+**Backlog**, with its title, body and labels (cleaned and clipped like any
+ticket text: data, never instructions), its link, and its attachments
+(at most 10, each at most 8 MB, through the same checks as a file you attach;
+one that does not download is skipped, the ticket keeps its link and says so,
+and the import goes on). The tracker stays the reference for the text: an
+imported ticket is not edited in sbxw, and while it is in Backlog or Planned
+with no thread its title, body and labels follow the issue. An issue closed
+or no longer labelled removes its Backlog ticket; a ticket past Backlog gets
+the mark **closed upstream** instead, and its work goes on. A ticket you
+delete is not imported again.
+
+**Backlog is yours.** Only you move a ticket from Backlog to Planned (the
+card's Plan button, `POST /api/tickets/:sandbox/:n/plan` on the UI listener).
+Until then no agent can list it, read it, or have it linked by a plan
+(`tickets_list`, `ticket_read` and `propose_plan`'s `ticket` all treat it as
+no ticket). A ticket you write in sbxw still lands in Planned. The phone
+shows Backlog read-only, each card with its issue's key and link, and has
+no way to plan a ticket; Backlog never counts as Planned.
+
+**Write-back.** On every column change of an imported ticket past Backlog
+(the board's live column, so "merged outside sbxw" and "branch gone" count
+too), sbxw keeps **one** comment on the issue, in English, starting with
+`[sbxw]` (for example `[sbxw] in progress on branch sbxw/<thread>`,
+`[sbxw] merged in <short commit>`), and **one** state label: `sbxw:planned`,
+`sbxw:in-progress`, `sbxw:in-test`, `sbxw:ready`, `sbxw:merged` (the others
+of that prefix removed). The texts are fixed in `sbxw_core::tracker` and made
+from the column, a branch name and a commit hash only: never a ticket's
+words, never an agent's. With auto-close on, a real merge (by sbxw or
+outside it, not a closed plan nor a gone branch) closes the issue.
+Write-backs are queued on disk the moment the column changes, sent at once,
+retried with backoff (30 s doubling to 30 min, or the tracker's rate limit),
+in order, and never dropped while the source is on; one already half sent
+does not repeat its comment.
+
+**How sbxw reaches the tracker.** The daemon holds no token and has no
+HTTPS client. Every call is one script (`assets/tracker-sync.js`, embedded
+in the daemon), run with `node` in a small sandbox of the daemon's own,
+**`sbxw-sync`** (1 CPU, 1 GB, an empty workspace under sbxw's state, sbxw's
+base kit only, nothing of a project mounted, no agent ever started, hidden
+from the sandbox list, its name reserved like Jarvis's). It reaches GitHub
+through sbx's MCP gateway, where the GitHub MCP server you registered in
+Setup, MCP (named `github`, signed in with your account) is loaded, after
+every start of that sandbox. Project sandboxes never get that server. The
+sync sandbox starts when a source is on and stops when none is. Every run is
+bounded in time, and what the script answers is data.
+
+**Failures are never silent.** The source's status is `off`, `ok`, `syncing`
+or `failed`, with the last success and, on a failure, its kind and what to
+do: sign in again in Setup, MCP; add the GitHub server; rate limited until
+when. Each kind of failure posts one warning on the sandbox's Board until the
+next success. A failed download of an attachment is not a failure of the
+source.
+
+**Turning it off** (Remove) drops the imported tickets still in Backlog;
+the others keep their origin. Write-backs still queued are discarded: a
+source set again later replays none of them; it writes back only an
+imported ticket's column as it is then, when it differs from the last one
+written. Setting another repository discards the queue the same way.
+
+**Routes (UI listener).** `GET /api/tickets/:sandbox/source`
+(`{configured, tracker, repo, label, auto_close, detected, status: {state,
+last_ok_ms, error, hint, ...}}`), `POST /api/tickets/:sandbox/source`
+(`{tracker, repo, label, auto_close}`), `POST .../source/remove`,
+`POST .../source/refresh`, `POST /api/tickets/:sandbox/:n/plan`. The
+`tickets` event fires with `what` `source` or `synced`. GitLab and Jira come
+later through the same contract.
 
 ## Reference
 

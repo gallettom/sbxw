@@ -159,6 +159,10 @@ impl App {
             };
             return Ok(Spawn { program: program.clone(), args: args.to_vec(), env: vec![] });
         };
+        // The ticket sync's sandbox runs one script, never an agent nor a shell.
+        if crate::svc::tracker_sandbox::is_sync_name(&sandbox) {
+            bail!("'{sandbox}' is sbxw's ticket sync sandbox: no session opens there");
+        }
         let sbx = self.sbx_for(&sandbox).await?;
         // A chat workspace under /tmp may have been swept away; `sbx run` then
         // refuses to start the sandbox. It is empty by definition: re-create it.
