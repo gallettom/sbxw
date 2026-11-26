@@ -372,6 +372,8 @@ async fn tests_check(State(app): S, Agent(me): Agent, Json(b): Json<WaitBody>) -
 struct TestsListBody {
     thread: Option<String>,
     plan: Option<String>,
+    /// The caller's session name: the plans it leads are shown.
+    lead: Option<String>,
 }
 
 async fn tests_list(State(app): S, Agent(me): Agent, Json(b): Json<TestsListBody>) -> ApiResult {
@@ -379,7 +381,13 @@ async fn tests_list(State(app): S, Agent(me): Agent, Json(b): Json<TestsListBody
     let plan = app.tests_plan(&me, thread.as_ref(), b.plan.as_deref());
     let (active, latest) = app.tests_jobs(&me);
     let view = |v: Vec<sbxw_core::testq::Job>| v.iter().map(crate::svc::testq::job_view).collect::<Vec<_>>();
-    Ok(ok_with(json!({ "plan": crate::svc::testq::plan_tests_view(plan.as_ref()), "active": view(active), "latest": view(latest) })))
+    let plans = app.tests_plans_of(&me, thread.as_ref(), b.plan.as_deref(), b.lead.as_deref());
+    Ok(ok_with(json!({
+        "plan": crate::svc::testq::plan_tests_view(plan.as_ref()),
+        "active": view(active),
+        "latest": view(latest),
+        "plans": app.tests_list(&me, &plans),
+    })))
 }
 
 #[derive(Deserialize)]

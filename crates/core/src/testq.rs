@@ -36,8 +36,12 @@ pub const MAX_RESULTS: usize = 100;
 pub const JOB_TTL_MS: u64 = 7 * 24 * 3600 * 1000;
 /// Finished jobs per sandbox, at most.
 pub const MAX_DONE_JOBS: usize = 200;
-/// Finished jobs `list_tests` shows.
+/// Finished jobs `list_tests` shows, per plan.
 pub const LIST_DONE_JOBS: usize = 5;
+/// Jobs of a plan whose logs the sandbox keeps (each attempt has its own
+/// log, `~/.sbxw/tests/logs/<plan>/<job>-<attempt>.log`); older ones are
+/// deleted when a job of the plan runs.
+pub const KEEP_LOG_JOBS: usize = 5;
 
 /// A plan's test command: one shell command, run with `bash -c` inside the
 /// sandbox in the queue's checkout of the commit, with a time limit. It
@@ -190,6 +194,20 @@ impl Outcome {
     }
 }
 
+/// One attempt of a retried run, kept with its result: what it came to and
+/// where its full output is.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Attempt {
+    pub outcome: Outcome,
+    pub duration_ms: u64,
+    /// Its own log inside the sandbox, never overwritten by a later attempt.
+    #[serde(default)]
+    pub log: String,
+    /// Its last lines, bounded like a result's.
+    #[serde(default)]
+    pub tail: String,
+}
+
 /// What a run came to.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TestResult {
@@ -203,6 +221,11 @@ pub struct TestResult {
     /// The first attempt's outcome, when there was a second.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_outcome: Option<Outcome>,
+    /// The first attempt, when there was a second: its outcome, duration,
+    /// log and tail (`duration_ms` and `tail` above are the whole run's and
+    /// the last attempt's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first: Option<Attempt>,
     /// The full output of the last attempt, inside the sandbox.
     #[serde(default)]
     pub log: String,
@@ -254,6 +277,13 @@ pub struct Job {
     pub queued_ms: u64,
     #[serde(default)]
     pub started_ms: Option<u64>,
+}
+
+impl Job {
+    /// Asked under `plan`, or joined from it.
+    pub fn concerns(&self, plan: &str) -> bool {
+        self.plan.as_deref() == Some(plan) || self.joiners.iter().any(|j| j.plan.as_deref() == Some(plan))
+    }
 }
 
 /// A request that joined a job already queued or running.
@@ -443,6 +473,20 @@ impl Book {
     pub fn active(&self, sandbox: &str) -> Vec<&Job> {
         let mut v: Vec<&Job> = self.jobs.values().filter(|j| j.sandbox == sandbox && j.state != JobState::Done).collect();
         v.sort_by_key(|j| j.queued_ms);
+        v
+    }
+
+    /// Jobs queued or running in `sandbox` for `plan` (asked under it, or
+    /// joined from it), oldest first.
+    pub fn plan_active(&self, sandbox: &str, plan: &str) -> Vec<&Job> {
+        self.active(sandbox).into_iter().filter(|j| j.concerns(plan)).collect()
+    }
+
+    /// The last `n` finished jobs in `sandbox` for `plan`, newest first.
+    pub fn plan_latest(&self, sandbox: &str, plan: &str, n: usize) -> Vec<&Job> {
+        let mut v = self.latest(sandbox, usize::MAX);
+        v.retain(|j| j.concerns(plan));
+        v.truncate(n);
         v
     }
 
@@ -690,7 +734,7 @@ mod tests {
     }
 
     fn result(outcome: Outcome, now: u64) -> TestResult {
-        TestResult { outcome, commit: "c1".into(), duration_ms: 5, tail: "ok".into(), attempts: 1, first_outcome: None, log: String::new(), finished_ms: now }
+        TestResult { outcome, commit: "c1".into(), duration_ms: 5, tail: "ok".into(), attempts: 1, first_outcome: None, first: None, log: String::new(), finished_ms: now }
     }
 
     #[test]

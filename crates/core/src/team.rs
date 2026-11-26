@@ -203,11 +203,21 @@ pub fn test_job_entry(job: &crate::testq::Job, asker: &str, reuse: Option<&str>)
         None if r.retried() => " (retried once)",
         None => "",
     };
-    let text = format!("Tests {} at {short} in {secs} s{how}", r.outcome.word());
+    // A retried run names its first attempt's log: what failed first is there.
+    let first = r.first.as_ref().filter(|_| reuse.is_none() && r.retried());
+    let first_text = first.map_or(String::new(), |f| {
+        if f.log.is_empty() {
+            format!("; first attempt {}", f.outcome.word())
+        } else {
+            format!("; first attempt {}, its log: {}", f.outcome.word(), f.log)
+        }
+    });
+    let text = format!("Tests {} at {short} in {secs} s{how}{first_text}", r.outcome.word());
     let data = json!({
         "job": job.id, "asker": asker, "thread": (asker != LEAD).then_some(asker),
         "outcome": r.outcome, "reused": reuse.is_some(), "reuse": reuse, "retried": r.retried(),
         "short": short, "duration_ms": r.duration_ms,
+        "first_outcome": first.map(|f| f.outcome), "first_log": first.map(|f| f.log.as_str()).filter(|l| !l.is_empty()),
     });
     Some((text, data))
 }
@@ -920,7 +930,7 @@ mod tests {
             commit: "0123456789abcdef0123456789abcdef01234567".into(), plan: Some("p-1".into()), by: "a".into(),
             state: JobState::Done, reused: false, joined: 0, joiners: vec![],
             result: Some(TestResult { outcome: o, commit: "c".into(), duration_ms: 12_345, tail: "SECRET OUTPUT".into(), attempts,
-                first_outcome: None, log: "/log".into(), finished_ms: 1 }),
+                first_outcome: None, first: None, log: "/log".into(), finished_ms: 1 }),
             queued_ms: 0, started_ms: None,
         };
         for (o, word) in [(Outcome::Passed, "passed"), (Outcome::Failed, "failed"), (Outcome::TimedOut, "timed_out"), (Outcome::Error, "error")] {
@@ -932,6 +942,15 @@ mod tests {
         let (text, d) = test_job_entry(&job(Outcome::Failed, 2), "lead", None).unwrap();
         assert_eq!((d["retried"].as_bool(), d["reused"].as_bool(), d["thread"].is_null(), d["short"].as_str()), (Some(true), Some(false), true, Some("0123456")));
         assert!(text.ends_with("(retried once)"));
+        // With its first attempt: named, with its log, never its output.
+        let mut j = job(Outcome::Passed, 2);
+        j.result.as_mut().unwrap().first = Some(crate::testq::Attempt {
+            outcome: Outcome::Failed, duration_ms: 9, log: "/logs/p-1/t-1-1.log".into(), tail: "SECRET FIRST".into(),
+        });
+        let (text, d) = test_job_entry(&j, "a", None).unwrap();
+        assert!(text.ends_with("(retried once); first attempt failed, its log: /logs/p-1/t-1-1.log"), "{text}");
+        assert_eq!((d["first_outcome"].as_str(), d["first_log"].as_str()), (Some("failed"), Some("/logs/p-1/t-1-1.log")));
+        assert!(!text.contains("SECRET") && !d.to_string().contains("SECRET"));
         let (_, d) = test_job_entry(&job(Outcome::Passed, 1), "a", Some(REUSE_STORED)).unwrap();
         assert_eq!((d["reused"].as_bool(), d["reuse"].as_str(), d["duration_ms"].as_u64()), (Some(true), Some("stored"), Some(12_345)));
         let mut j = job(Outcome::Passed, 1);

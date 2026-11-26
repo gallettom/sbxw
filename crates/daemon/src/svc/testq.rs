@@ -9,6 +9,10 @@
 //! * Everything runs through `sbx_for`: the probe of the commit (its hash
 //!   and its root tree) and the run itself, so a remote host's sandbox is
 //!   served the same way. Only a tail of the output crosses back.
+//! * Each attempt keeps its own log in the sandbox,
+//!   `~/.sbxw/tests/logs/<plan>/<job>-<attempt>.log`, for the plan's last
+//!   [`testq::KEEP_LOG_JOBS`] jobs; a retried result carries its first
+//!   attempt (outcome, duration, log, tail) beside the second.
 //! * Jobs and results live in `state/tests.json`: a job id outlives a daemon
 //!   restart, a job that was running runs again, and a result stays reusable.
 //!   See `sbxw_core::testq` for the rules.
@@ -16,7 +20,7 @@
 use crate::app::{now_ms, App};
 use sbxw_core::plans::{Plan, PlanState, Variant};
 use sbxw_core::team;
-use sbxw_core::testq::{self, Ask, Book, Job, JobState, Outcome, TestResult, Took};
+use sbxw_core::testq::{self, Ask, Attempt, Book, Job, JobState, Outcome, TestResult, Took};
 use sbxw_core::{SandboxRef, ThreadName};
 use sbxw_sbx::runner::Invocation;
 use sbxw_sbx::scripts::{tests_probe_args, tests_run_args, TESTS_ERROR_MARK, TESTS_LOG_MARK};
@@ -174,6 +178,48 @@ impl App {
         (b.active(&s).into_iter().cloned().collect(), b.latest(&s, testq::LIST_DONE_JOBS).into_iter().cloned().collect())
     }
 
+    /// The plans `list_tests` shows the caller: a thread's own; for any
+    /// other session, the open approved plans of the sandbox it leads
+    /// (`session`, the lead's session name, as plans record it) or names
+    /// (`plan`), else every open approved plan of the sandbox. Newest first.
+    pub fn tests_plans_of(&self, sb: &SandboxRef, thread: Option<&ThreadName>, plan: Option<&str>, session: Option<&str>) -> Vec<Plan> {
+        if thread.is_some() {
+            return self.tests_plan(sb, thread, None).into_iter().collect();
+        }
+        let plans = self.plans.lock().unwrap();
+        let s = sb.to_string();
+        let mut open: Vec<Plan> = plans
+            .list()
+            .into_iter()
+            .filter(|p| p.sandbox == s && p.state == PlanState::Approved && !p.closed && !p.dismissed)
+            .collect();
+        open.sort_by_key(|p| std::cmp::Reverse(p.created_ms));
+        let (plan, session) = (nonempty(plan), nonempty(session));
+        let mine: Vec<Plan> =
+            open.iter().filter(|p| Some(p.id.as_str()) == plan || (session.is_some() && p.lead.as_deref() == session)).cloned().collect();
+        if mine.is_empty() {
+            open
+        } else {
+            mine
+        }
+    }
+
+    /// What `list_tests` shows of each plan: its command, what is queued
+    /// or running for it, and its last results, each with its attempts'
+    /// logs.
+    pub fn tests_list(&self, sb: &SandboxRef, plans: &[Plan]) -> Vec<serde_json::Value> {
+        let b = self.tests.lock().unwrap();
+        let s = sb.to_string();
+        plans
+            .iter()
+            .map(|p| {
+                let active: Vec<_> = b.plan_active(&s, &p.id).into_iter().map(job_view).collect();
+                let latest: Vec<_> = b.plan_latest(&s, &p.id, testq::LIST_DONE_JOBS).into_iter().map(job_view).collect();
+                serde_json::json!({ "plan": plan_tests_view(Some(p)), "active": active, "latest": latest })
+            })
+            .collect()
+    }
+
     /// A test request answered: a line on the timeline of the plan it was
     /// made under (none: nothing), for the Board.
     pub(crate) fn test_job_noted(&self, plan: Option<&str>, job: &Job, asker: &str, reuse: Option<&str>) {
@@ -300,26 +346,36 @@ impl App {
             tail: why,
             attempts: 1,
             first_outcome: None,
+            first: None,
             log: String::new(),
             finished_ms: now_ms(),
         };
         let Ok(sb) = SandboxRef::parse(&job.sandbox) else { return error(format!("'{}' is not a sandbox name", job.sandbox)) };
         let Some(ws) = self.store.workspace(&sb) else { return error(format!("sbxw has no workspace recorded for '{sb}'")) };
-        let first = self.tests_attempt(&sb, &ws.to_string_lossy(), job).await;
+        let first = self.tests_attempt(&sb, &ws.to_string_lossy(), job, 1).await;
         // One retry, of a failure only: a time-out already took the whole limit.
         if first.outcome != Outcome::Failed {
             return first;
         }
         tracing::info!("tests: '{sb}' {} failed at {}; running it once more", job.id, short(&job.commit));
-        let second = self.tests_attempt(&sb, &ws.to_string_lossy(), job).await;
-        TestResult { attempts: 2, first_outcome: Some(first.outcome), duration_ms: first.duration_ms + second.duration_ms, ..second }
+        let second = self.tests_attempt(&sb, &ws.to_string_lossy(), job, 2).await;
+        let kept = Attempt { outcome: first.outcome, duration_ms: first.duration_ms, log: first.log, tail: first.tail };
+        TestResult {
+            attempts: 2,
+            first_outcome: Some(kept.outcome),
+            duration_ms: kept.duration_ms + second.duration_ms,
+            first: Some(kept),
+            ..second
+        }
     }
 
-    async fn tests_attempt(&self, sb: &SandboxRef, ws: &str, job: &Job) -> TestResult {
+    /// Attempt `n` of `job`, logged to its own file (`<job>-<n>.log`).
+    async fn tests_attempt(&self, sb: &SandboxRef, ws: &str, job: &Job, n: u8) -> TestResult {
         let (commit, minutes) = (job.commit.as_str(), job.timeout_minutes);
         let limit = Duration::from_secs(u64::from(minutes) * 60);
         let label = job.plan.as_deref().unwrap_or("tests");
-        let args = tests_run_args(&sb.name, ws, label, commit, &job.command, limit.as_secs());
+        let run = format!("{}-{n}", job.id);
+        let args = tests_run_args(&sb.name, ws, label, commit, &job.command, &run, testq::KEEP_LOG_JOBS, limit.as_secs());
         let started = Instant::now();
         let run = async { self.sbx_for(sb).await?.raw(Invocation::new(args)).await };
         let out = tokio::time::timeout(limit + BACKSTOP, run).await;
@@ -362,6 +418,7 @@ impl App {
             tail,
             attempts: 1,
             first_outcome: None,
+            first: None,
             log,
             finished_ms: now_ms(),
         }
