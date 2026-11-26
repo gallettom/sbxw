@@ -951,7 +951,7 @@ impl Book {
         if o.closed_upstream_ms.is_none() {
             o.closed_upstream_ms = Some(now);
             changed = true;
-            t.step(now, "upstream", if closed { "Its issue was closed".into() } else { "Its issue lost the sync label".into() });
+            t.step(now, "upstream", if closed { "Its issue was closed".into() } else { "Its issue was closed, or lost the sync label".into() });
         }
         if changed {
             t.updated_ms = now;

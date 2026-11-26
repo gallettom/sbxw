@@ -12,7 +12,8 @@
 //! * A source is polled every [`POLL_MS`] and on a refresh. Write-backs are
 //!   queued on disk the moment a column changes (the board's live column,
 //!   so a merge outside sbxw counts too), sent at once, retried with backoff,
-//!   never dropped, in order.
+//!   never dropped while the source is on, in order; turning the source off
+//!   discards them.
 //! * A failure is never silent: the source's status says what and what to
 //!   do, and the Board gets one warning per kind until a success.
 //! * The log gets numbers, keys and kinds, never a title, a body, a label or
@@ -180,13 +181,14 @@ impl App {
     }
 
     /// The person turns the source off: imported Backlog tickets go, the
-    /// others keep their origin. Write-backs still queued stay on disk and
-    /// go once a source is on again.
+    /// others keep their origin, and the write-backs still queued are
+    /// discarded (a source set again later replays none of them).
     pub fn tracker_source_remove(&self, sb: &SandboxRef) -> Result<(), String> {
         let s = sb.to_string();
-        self.tracker_update(&s, |x| {
+        let dropped = self.tracker_update(&s, |x| {
             x.source = None;
             x.status = Status::default();
+            std::mem::take(&mut x.queue).len()
         })?;
         let gone = self.tickets_with(&s, |b| {
             let mut next = b.clone();
@@ -198,7 +200,7 @@ impl App {
             Ok::<_, String>(gone)
         })?;
         self.tickets_remove_files(&s, &gone);
-        tracing::info!("tracker sync of {s}: source removed, {} Backlog ticket(s) dropped", gone.len());
+        tracing::info!("tracker sync of {s}: source removed, {} Backlog ticket(s) dropped, {dropped} queued write-back(s) discarded", gone.len());
         self.tickets_changed(&s, None, "source");
         self.tracker_wake();
         Ok(())

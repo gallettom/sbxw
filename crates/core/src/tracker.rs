@@ -108,10 +108,15 @@ impl Tracker {
     /// A repository as the person types it, checked: `owner/repo`.
     pub fn parse_repo(self, s: &str) -> Result<String, String> {
         let s = s.trim().trim_end_matches(".git").trim_matches('/');
-        let ok_part = |p: &str| !p.is_empty() && p.len() <= 100 && !p.starts_with('.') && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        // The sync script's own rules, so a source it would refuse is refused
+        // here, when it is set: an owner of 1 to 39 letters, digits and dashes
+        // starting with a letter or digit; a name of 1 to 100 letters, digits,
+        // dots, dashes and underscores, not starting with a dot.
+        let ok_owner = |p: &str| !p.is_empty() && p.len() <= 39 && !p.starts_with('-') && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        let ok_name = |p: &str| !p.is_empty() && p.len() <= 100 && !p.starts_with('.') && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
         match self {
             Tracker::Github => match s.split_once('/') {
-                Some((o, r)) if ok_part(o) && ok_part(r) && s.len() <= MAX_REPO => Ok(format!("{o}/{r}")),
+                Some((o, r)) if ok_owner(o) && ok_name(r) && s.len() <= MAX_REPO => Ok(format!("{o}/{r}")),
                 _ => Err("a GitHub repository is owner/name, for example acme/web".into()),
             },
         }
