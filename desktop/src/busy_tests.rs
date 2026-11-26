@@ -38,6 +38,11 @@ fn window(reduced: bool) -> Runtime<App> {
     let path = format!("{}/fixtures/shell/two-panes.json", env!("CARGO_MANIFEST_DIR"));
     let mut a = App::new(Args { fixture: Some(path), ..Args::default() });
     a.store = crate::shell::store::Store::memory();
+    // The status bar reads the git item after a wall-clock debounce and
+    // follows this process's CPU share as the clock ticks: frames never pass
+    // that time, so a slow run drew the bar after the test had settled. This
+    // test is about a button: the bar is told its window is off screen.
+    a.statusbar_visible(false);
     let mut rt = Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
     settle(&mut rt);
     rt.update(|s, _| s.screens.iter_mut().find(|x| x.name == "topbar").unwrap().load_file(dir.join("topbar.luau")));

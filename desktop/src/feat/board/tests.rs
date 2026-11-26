@@ -265,6 +265,10 @@ fn a_big_team_draws_a_page_of_rows_and_shows_earlier_on_demand() {
 // ── In the whole window ───────────────────────────────────────────────────
 
 fn window(w: f32, h: f32) -> Runtime<App> {
+    // The Board's state is one per thread (per_thread!): a test that builds
+    // several windows on its thread starts each from nothing, else what one
+    // window toggled (the summary's details) is carried into the next.
+    *super::STATE().lock().unwrap() = super::State::default();
     let a = App::new(Args { fixture: Some(FIXTURE.into()), ..Args::default() });
     let mut rt = Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
     settle(&mut rt);
@@ -321,14 +325,29 @@ fn nothing_of_the_board_is_drawn_outside_its_overlay_at_any_width() {
                 settle(&mut rt);
             }
             open(&mut rt, json!({ "team": "p-run" }));
-            let v = match tab {
-                "details" => json!({ "kind": "intent", "name": "board_expand", "args": { "id": "summary" } }),
-                g => json!({ "kind": "intent", "name": "board_filter", "args": { "group": g } }),
-            };
-            for i in crate::intent::parse(&v).unwrap() {
-                rt.update(|s, _| s.run_intent("test", i));
+            if tab == "details" {
+                // A press on the button, as a person does it: a screen's intent
+                // runs through App::intents, which pushes the data to the
+                // screens after it. `run_intent` alone does not push, and the
+                // drawing then stayed closed until some other event pushed.
+                let (x, y) = rt.find("board-summary-details").expect("the Details button is drawn");
+                rt.pointer_down(x, y);
+                rt.pointer_up(x, y);
+            } else {
+                // The same for a filter: the press of its button, not the
+                // intent alone (the data would change and the drawing wait).
+                let (x, y) = rt.find(&format!("board-group-{tab}")).unwrap_or_else(|| panic!("the {tab} filter is drawn at {w}"));
+                rt.pointer_down(x, y);
+                rt.pointer_up(x, y);
             }
             settle(&mut rt);
+            if tab == "details" { assert!(rt.find("board-detail-web-page").is_some(), "{tab} at {w}: the details are open"); }
+            // The press took effect, in the data and in the drawing: the
+            // filter is the one asked (the details case keeps "all"), and the
+            // conversation is drawn unless the Commits filter replaces it.
+            let want = if tab == "details" { "all" } else { tab };
+            assert_eq!(rt.state.feats.data.get(UI).and_then(|v| v["group"].as_str().map(str::to_string)).as_deref(), Some(want), "{tab} at {w}: the filter");
+            assert_eq!(rt.find("board-rows").is_some(), want != "commits", "{tab} at {w}: the conversation is drawn unless the Commits filter shows");
             let Some((p, _)) = rt.presented("overlay-board") else { panic!("no overlay at {w}") };
             let node = rt.state.screens.iter().find(|s| s.name == SCREEN).and_then(|s| s.last_good.clone()).unwrap_or_else(|| panic!("not drawn at {w}"));
             let mut ks = vec![];
