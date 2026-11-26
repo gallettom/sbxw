@@ -243,8 +243,8 @@ do nothing and tell the lead.\n\
 - Anything the lead must read goes by `SendMessage`.\n\
 - A hook that refuses a write, a blocked host or a pending network approval is a stop: tell \
 the lead, never work around it.\n\
-- Tests: when your plan has a test command (`list_tests`), commit, then call `run_tests` \
-rather than running the whole battery yourself.";
+- Tests: run only the tests of what you touched, then report done. The whole battery runs \
+once, on the plan's CI branch, after `propose_merge`.";
 
 /// A thread's first message: the lead's words as a person approved them, and
 /// the daemon's rules around them.

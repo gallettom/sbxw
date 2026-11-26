@@ -225,8 +225,8 @@ characters): commit at each stable point, check `git merge-tree --write-tree`
 against main before reporting done, do nothing if another session of the same
 name already works in the worktree, send what the lead must read by
 `SendMessage`, stop at a refused hook, a blocked host or a pending
-approval, and, when the plan has a test command, commit and call `run_tests`
-rather than running the whole battery by hand. A repository's own rules (build commands, what not to touch) go in
+approval, and run only the tests of what the thread touched, then report done:
+the whole battery runs once, on the plan's CI branch, after `propose_merge`. A repository's own rules (build commands, what not to touch) go in
 its root `CLAUDE.md`, which every session reads by itself; sbxw's own is the
 example. The lead's goal then says only what is specific to the thread.
 
@@ -306,7 +306,9 @@ how far ahead and behind main they are and their merge state against it. The
 test is `tests/js/lead-review.test.mjs`, on a temporary repository.
 
 When every thread is done, the lead calls `propose_merge` with an order and a
-note. The plan dialog offers **Merge all**. For each thread, in order, sbxw:
+note. A split plan with an approved test command goes through its **CI
+branch** first (next section). Any other plan: the plan dialog offers **Merge
+all**. For each thread, in order, sbxw:
 
 1. checks the main checkout against the paths the merge changes (from the
    merge base to the branch), and refuses only when the merge could be harmed
@@ -317,6 +319,92 @@ note. The plan dialog offers **Merge all**. For each thread, in order, sbxw:
    missing from the working tree (see below),
 2. runs `git merge --no-ff --no-edit sbxw/<thread>` inside the sandbox,
 3. on conflict, runs `git merge --abort` and stops there.
+
+#### The CI branch: one battery per plan
+
+A split plan whose approved test command is set, and whose threads of the
+order all work in the workspace's repository (the one the test queue tests),
+is tested once, as the tree that will land, before you are offered the click.
+A plan with no test command, a shared plan, and a plan with a thread in
+another repository merge as below, each branch in turn; `plan_status` says
+why (`merge_status.no_ci_because`).
+
+```
+propose_merge ─▶ ci_building ─┬─ conflict / error ─▶ ci_failed
+                              └▶ ci_testing ─┬─ passed ─▶ merged_ci   "Merged to CI"
+                                             └─ failed ─▶ ci_failed
+merged_ci ── main moved ─▶ ci_stale ── its turn ─▶ ci_building (on the new main)
+merged_ci ── your click ─▶ merging ─┬─ fast-forward ─▶ merged       "Merged to main"
+                                    └─ refused ─▶ merged_ci (the reason kept)
+```
+
+1. **Built at once.** On `propose_merge`, with no click, the daemon makes
+   `sbxw/ci-<plan>` (one per plan, never shared) from the commit main is on,
+   in a scratch worktree `.sbxw-worktrees/.ci-<plan>` (a dot name, excluded
+   from git like the queue's `.tests`), and merges the thread branches into
+   it in the lead's order (`git merge --no-ff`, each branch at the tip it has
+   then, recorded). The main checkout is not touched. A branch already in main,
+   or gone, is skipped as nothing to merge.
+2. **Tested once.** The plan's command runs on the CI tip through the test
+   queue: the same approved command, the same one-job lock, the stored result
+   for a tree already tested, the single retry and the per-attempt logs. The
+   asker is `sbxw`.
+3. **Merged to CI.** When it passes, the plan's merge is `merged_ci` and the
+   lead is told, with the tip and the suite's tail. Your click (Merge all, the
+   same dialog, the same close threads box, the phone too) then fast-forwards
+   main to exactly that commit: what was tested is what lands. The same checks
+   as a thread merge run first (a merge under way, staged changes, edits to a
+   path the merge changes, a changed path missing from the checkout);
+   untracked files and edits elsewhere stay as they are. A click refused that
+   way leaves the plan Merged to CI, the reason shown, and can be clicked
+   again. Once merged, the CI branch and its worktree are removed, the
+   threads are closed as below, and the lead hears `[sbxw] Merged to main:
+   a, b. main fast-forwarded to the tested tip of sbxw/ci-<plan>, <commit>.`
+   Each thread's result is its merge commit in the CI branch, now in main, so
+   the Board's commits per thread stay right.
+4. **CI failed.** A conflict while building (the lead is told the thread and
+   the files; no tests run), a failed, timed-out or unrunnable battery (each
+   attempt's tail and log), or a build that could not run: nothing reaches
+   main, and no click is offered. The lead attributes the failures to threads
+   by their scopes and sends them back. A thread sent back reports working,
+   then done once fixed and committed; `propose_merge` is refused while a
+   thread of the order is not done. The lead's new proposal rebuilds the CI
+   branch from scratch on the newest main and tests it again. The CI branch of
+   a failed run is kept until then: it is the thing to rebuild, and can be
+   looked at.
+5. **Main moved.** If main is no longer the commit the CI branch was built
+   on (another plan merged, a commit by hand), the plan is not offered: its
+   status says "Main moved: CI rebuild waits", and why. sbxw looks at main
+   every 30 seconds while a plan has a CI run, at `plan_status`, after every
+   merge it makes, and at your click (which is refused with the reason).
+   Rebuilds are paced, so main moving does not set off a storm of batteries:
+   one plan rebuilds at a time per sandbox, the one that passed first; a
+   rebuild under way when main moves again is dropped (its queued job taken
+   back) and started once on the newest main; and a rebuilt tree already
+   tested is answered from the stored result. The lead hears when a rebuild
+   starts, and again when it passes or fails. **With three plans Merged to
+   CI**, merging the first moves main: the second rebuilds and retests (one
+   battery, about as long as one run), then the third, each offered again as
+   soon as its own run passes. Merging them in the order they passed costs
+   one battery each after the first.
+6. **Clean-up.** The CI branch and worktree are removed when the plan is
+   merged, when you abandon the merge (allowed while it tests, is Merged to
+   CI, waits for a rebuild or failed; not in the seconds it is being built),
+   and when the plan is closed (lead mode ended, Close plan on the Kanban),
+   which ends a CI run not merged as abandoned. After a daemon restart, a run
+   that was testing waits on its stored job again; one that was building is
+   built again.
+
+What a screen draws comes with the plan (`plan_status`, the plan events):
+`merge.state`, `merge.ci` (the branch, the base it was built on, the tip, the
+threads merged with their tips and merge commits, those skipped, the build
+count and why it was rebuilt, the test job and its result with each attempt,
+the failure, a refused click), and `merge_status`: `word` ("Merged to CI",
+"Merged to main", "Building the CI branch", "Testing the CI branch", "Main
+moved: CI rebuild waits", "CI failed", ...), `detail`, `can_merge`, and
+`why_not` when the click is not offered. Each step is a `ci_step` event on the
+team's timeline (`data.step`: built, failed, passed, stale, rebuild, closed;
+`data.status`, the word). The desktop draws them in a later change.
 
 **Nothing to merge.** Before that, sbxw asks git on the host about each
 thread of the order. A thread whose branch is already in the base (a
@@ -380,7 +468,10 @@ proposed merge of "<plan summary>": nothing was merged. ...` (the threads
 when the plan has no summary), so it does not wait; it may call
 `propose_merge` again, which is a fresh proposal. Abandon merge is the
 person's only: its route is on the UI listener, and no agent tool reaches it.
-The phone lists only proposed merges, so an abandoned one leaves its
+The phone lists proposed merges and merges Merged to CI (its merge then
+goes through the CI path: refused as changed when a thread's tip is not the
+one the CI branch tested), never a CI run building, testing, waiting or
+failed. So an abandoned one leaves its
 approvals, and its Kanban shows the same mark.
 
 **A thread that finishes late can still be merged.** In a split plan, once
@@ -521,8 +612,9 @@ Nothing in `sbxw.toml` declares it; it belongs to the plan.
   are pruned. The plan counts how many of its jobs ran and how many were
   answered without running; a job counts once it is over (a retried one
   counts once), so a job still at work shows in `list_tests`, not yet in
-  "N run", and the lead relies on the queue's result on the
-  code to merge before proposing the merge.
+  "N run". In a split plan the battery runs on the CI branch after
+  `propose_merge`, not per thread; `run_tests` stays for a thread with a
+  risky change, or the lead on a ref.
 - **On the team's timeline.** Every answered request is a `test_job` event
   (group `status`) when it is answered: `from` is who asked (a thread or
   `lead`), `data` is `{job, asker, thread, outcome, reused, reuse, retried,
@@ -538,7 +630,8 @@ Nothing in `sbxw.toml` declares it; it belongs to the plan.
 - **A thread does not run the whole command itself** (audit D10). When a
   thread's session (`SBXW_THREAD` set) whose plan has an approved command is
   about to run a Bash command that is that command, sbxw refuses it and says
-  to commit and call `run_tests`. "Is that command" is about the approved
+  to run only the tests of what it touched: the battery runs on the plan's CI
+  branch after `propose_merge` (`run_tests` for a risky change). "Is that command" is about the approved
   text only, never a tool: the same words with blanks collapsed, alone or as
   consecutive segments of a chain cut at `&&`, `||`, `;`, `|`, `&` or a line
   break (so `cd app && <it>` and `<it> 2>&1 | tail` count), each segment
@@ -704,9 +797,9 @@ state; nobody drags a card past what sbxw knows.
 | Backlog | An issue imported from the sandbox's tracker source (see [Tracker sources](#tracker-sources)) that you have not planned yet. No agent sees it. Empty and unsaid when the sandbox has no source |
 | Planned | A ticket no thread works on; a thread of a plan that waits for your approval (mark "proposed"); a ticket whose plan was refused (mark "plan refused") |
 | In progress | Its thread is starting, working, blocked (mark) or failed (red mark) |
-| In test | Its thread reported done (or the lead marked it done) and no merge names it yet: the lead reviews and checks |
-| Ready to merge | A merge is proposed (or running) and names the thread; a failed merge stays here with a red mark |
-| Merged | Its merge result is ok, in this merge or an earlier one of the plan (a late merge); or git shows its branch already in the base (mark "merged outside sbxw"); or it is done, sbxw never merged it and its branch no longer exists (mark "branch gone"); or you closed its plan (mark "plan closed") |
+| In test | Its thread reported done (or the lead marked it done) and no merge names it yet: the lead reviews and checks. Also its plan's CI branch at work (mark "CI testing"), waiting to be rebuilt after main moved ("CI rebuild waits"), or failed ("CI failed") |
+| Ready to merge | A merge is proposed (or running) and names the thread; a failed merge stays here with a red mark. A CI merge comes here once its tests passed, with the mark "Merged to CI" |
+| Merged to main | Its merge result is ok, in this merge or an earlier one of the plan (a late merge); or git shows its branch already in the base (mark "merged outside sbxw"); or it is done, sbxw never merged it and its branch no longer exists (mark "branch gone"); or you closed its plan (mark "plan closed") |
 
 `sbxw_core::tickets::column_of` is the one place this is decided; the
 desktop, the web and the agents read the daemon's answer. A team that ended

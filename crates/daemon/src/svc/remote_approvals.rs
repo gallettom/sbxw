@@ -490,7 +490,7 @@ impl App {
     }
 
     fn l2_proposed_merges(&self) -> Vec<Plan> {
-        self.plans_list().into_iter().filter(|p| p.merge.as_ref().is_some_and(|m| m.state == MergeState::Proposed)).collect()
+        self.plans_list().into_iter().filter(|p| p.merge.as_ref().is_some_and(|m| matches!(m.state, MergeState::Proposed | MergeState::MergedCi))).collect()
     }
 
     fn mask(&self) -> impl Fn(&str) -> String {

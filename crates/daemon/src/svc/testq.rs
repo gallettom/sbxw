@@ -431,9 +431,10 @@ impl App {
 }
 
 /// What a thread is told when it runs the plan's whole test command itself.
-pub const GATE_REASON: &str = "sbxw: this is your plan's whole test command, which the test queue runs, not a thread. \
-Commit your work, then call run_tests (MCP sbxw-relay): it answers a stored result at once when the code did not change. \
-A narrower command (one test, one package) is fine to run yourself.";
+pub const GATE_REASON: &str = "sbxw: this is your plan's whole test command, which a thread does not run. \
+Run only the tests of what you touched (one test, one package: fine to run yourself), commit, and report done: \
+the whole battery runs once, on the plan's CI branch, after the lead proposes the merge. \
+For a risky change, commit and call run_tests (MCP sbxw-relay): it answers a stored result at once when the code did not change.";
 
 /// The refusal outside any plan with an approved test command.
 pub const NO_COMMAND: &str = "no test command: run_tests runs the test command of an approved plan, and this plan has none. \

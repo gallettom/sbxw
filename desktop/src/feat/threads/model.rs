@@ -308,12 +308,13 @@ pub fn pending_plan<'a>(data: &'a J, sandbox: &str) -> Option<&'a J> {
     data["plans"].as_array()?.iter().filter(|p| p["sandbox"] == sandbox && p["state"] == "pending" && p["closed"] != true).max_by_key(|p| p["created_ms"].as_u64().unwrap_or(0))
 }
 
-/// The plan of `sandbox` whose merge waits, runs, or failed (and can be retried).
+/// The plan of `sandbox` whose merge waits, runs, or failed (and can be retried);
+/// a CI merge waits for the click once Merged to CI (`merged_ci`).
 pub fn merge_plan<'a>(data: &'a J, sandbox: &str) -> Option<&'a J> {
     data["plans"]
         .as_array()?
         .iter()
-        .filter(|p| p["sandbox"] == sandbox && p["closed"] != true && ["proposed", "merging", "failed"].contains(&p["merge"]["state"].as_str().unwrap_or("")))
+        .filter(|p| p["sandbox"] == sandbox && p["closed"] != true && ["proposed", "merging", "failed", "merged_ci"].contains(&p["merge"]["state"].as_str().unwrap_or("")))
         .max_by_key(|p| p["created_ms"].as_u64().unwrap_or(0))
 }
 

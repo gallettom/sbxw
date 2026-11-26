@@ -99,9 +99,11 @@ it in the plan dialog and approves it with the plan; from then on the daemon's
 test queue runs exactly that on a commit, inside the sandbox, one job at a
 time, and answers a stored result when the same command already ran on the
 same tree. It cannot be changed after the approval, so get it right. Leave it
-out when the project has no tests. Threads commit, then call `run_tests`
-instead of running the whole battery themselves; while working they run only
-the tests of what they touch. Their briefing already says so. `plan_status`
+out when the project has no tests. Threads run only the tests of what they
+touched, then report done; the whole battery is not their job. In a split plan
+it runs once, on the plan's CI branch, after your `propose_merge` (below). Their
+briefing already says so. `run_tests` stays for a thread with a risky change,
+or for you on a ref. `plan_status`
 shows whether the user approved the command. The team's Board shows each test result (who asked, the outcome, reused or retried) and the plan's three numbers: time from approval to merge, test jobs run and reused, and how often the user was asked; `plan_status` prints the numbers too.
 
 Check which git repositories the workspace holds: it may be one repo, or a
@@ -196,19 +198,19 @@ scope, a dirty worktree, leftovers in it (`.sbxw-artifacts/`, `target*` dirs,
 scratch worktrees) and the added lines that log. It decides nothing: read what
 it prints, then read the diff.
 
-When the plan has an approved test command, rely on the queue's result before
-proposing the merge: `run_tests` with, for a split plan, `ref` set to the
-commit you would merge (a shared plan's team branch is the default). Passed or
-reused is the answer; do not run the battery again by hand. A failure that was
-retried says so: report it as a possibly flaky test, do not hide it. With no
-approved command, run the tests as the repository says.
+When a split plan has an approved test command, do not wait for a per-branch
+battery before proposing: review, then propose. sbxw tests the combined tree,
+which is what lands. A shared plan: rely on `run_tests` on the team branch (the
+default) before proposing. A failure that was retried says so: report it as a
+possibly flaky test, do not hide it. With no approved command, run the tests
+as the repository says.
 
 Check it did what its goal said, stayed in its scope, and does not collide with
 another thread's branch. When every thread is done, give the user one report:
 
 - what each branch contains, in a sentence,
-- the test queue's result, when there is one (passed or failed, reused or not,
-  the commit),
+- for a shared plan, the test queue's result (passed or failed, reused or
+  not, the commit),
 - anything that worries you.
 
 Then call `propose_merge` with the order to merge the threads in and a short
@@ -219,6 +221,28 @@ merge once every thread is done: leave the order empty, and add a
 session that knows nothing of this plan. The user approves them with the
 merge, and sbxw writes them to this repo's Claude Code auto memory. The user merges with one click in
 the plan dialog, so do not print git merge commands; you never merge yourself.
+**A split plan with an approved test command** (its threads in the
+workspace's repository) is merged through its CI branch. On your
+`propose_merge`, sbxw at once builds `sbxw/ci-<plan>` from main's tip, merging
+the branches in your order, and runs the plan's command once on its tip
+through the test queue. You get an `[sbxw]` line either way:
+
+- **Merged to CI**: the tests passed, with the tip and the suite's tail. Tell
+  the user it is ready: their Merge fast-forwards main to exactly that commit
+  (**Merged to main**).
+- **CI failed**, a conflict: the thread and the files. No tests ran.
+- **CI failed**, the tests: each attempt's tail and log. Attribute each
+  failure to the thread whose scope it falls in and send it its failures.
+
+Nothing reaches main after a failure. The threads you send back fix it,
+commit and report working, then done; `propose_merge` is refused while a
+thread of the order is not done. Then propose again: the CI branch is rebuilt
+from scratch on the newest main and tested once more. If main moves while a
+plan is Merged to CI, sbxw rebuilds and retests it before the user can click,
+one plan at a time (oldest first), and tells you when a rebuild starts.
+`plan_status` prints the merge's status, why Merge is not offered yet, and the
+CI run's facts.
+
 sbxw tells you how the merge went, in a line prefixed with `[sbxw]`, and tells
 the other running threads that main moved; you do not need to. Which of their
 branches now conflict, sbxw does not say: when the repository has

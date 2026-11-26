@@ -71,6 +71,11 @@ fn world() -> World {
                 return Output::ok(&String::from_utf8_lossy(&out.stdout));
             }
         }
+        // A CI merge's fast-forward and clean-up (see `phone_ci_tests.rs`), run here.
+        if let Some(at) = a.iter().position(|x| x.starts_with("sbxw-ci-")) {
+            let out = std::process::Command::new("bash").arg("-c").arg(&a[at - 1]).args(&a[at..]).output().unwrap();
+            return Output { code: out.status.code(), stdout: out.stdout, stderr: out.stderr };
+        }
         match (a.first().map(String::as_str), a.get(1).map(String::as_str), a.get(2).map(String::as_str)) {
             (Some("ls"), _, _) => {
                 let rows: Vec<Value> = st.sandboxes.iter().map(|(n, s, c)| json!({ "name": n, "agent": "claude", "status": s, "created_at": c })).collect();
@@ -574,3 +579,7 @@ async fn checked_register_and_act_challenges_do_not_cross() {
     assert_eq!(r.status, StatusCode::FORBIDDEN);
     assert_eq!(w.app.plan(&id).unwrap().state, PlanState::Pending);
 }
+
+// The phone and a CI merge: offered once Merged to CI, never before.
+#[path = "phone_ci_tests.rs"]
+mod ci;

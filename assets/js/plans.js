@@ -223,10 +223,10 @@ let mergeAsk = null;
 // person abandoned is none: the pane's Merge button goes, the dialog shows
 // the record. Abandon merge is offered while it is proposed or failed only.
 function mergeToDo(m) {
-  return !!m && ['proposed', 'merging', 'failed'].includes(m.state);
+  return !!m && ['proposed', 'merging', 'failed', 'merged_ci'].includes(m.state);
 }
 function mergeAbandonable(m) {
-  return !!m && (m.state === 'proposed' || m.state === 'failed');
+  return !!m && (m.state === 'proposed' || m.state === 'failed' || m.state === 'merged_ci');
 }
 const MERGE_ABANDON_ASK = 'Abandon the proposed merge? Nothing is merged, and the threads, their branches and worktrees stay as they are. The lead is told.';
 // The outcome line of an abandoned merge: what merged before stays merged.

@@ -571,6 +571,16 @@ fn merge_in(state: &str) -> J {
     d
 }
 
+/// A CI merge waits for the person's click once Merged to CI: the bar's
+/// merge offer finds it then, never while its CI branch builds, tests,
+/// waits for a rebuild or failed (the daemon refuses that click anyway).
+#[test]
+fn a_ci_merge_is_offered_to_the_bar_once_merged_to_ci() {
+    for (state, offered) in [("merged_ci", true), ("ci_building", false), ("ci_testing", false), ("ci_stale", false), ("ci_failed", false)] {
+        assert_eq!(model::merge_plan(&merge_in(state), "web-app").is_some(), offered, "{state}");
+    }
+}
+
 /// Abandon merge: a quiet button beside Not now while the merge is
 /// proposed or failed, never while it runs or once merged or abandoned.
 /// Pressed, the screen only asks for the intent; the intent only opens the
