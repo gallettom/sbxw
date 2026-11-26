@@ -11,7 +11,7 @@ mod bar;
 mod dictate;
 mod drag;
 mod features;
-pub use features::Dialog;
+pub use features::{admit, Dialog};
 mod jarvis;
 mod leads;
 mod memory;

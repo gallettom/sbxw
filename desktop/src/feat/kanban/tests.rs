@@ -967,14 +967,16 @@ fn save_and_disconnect_ask_first_and_post_their_route() {
     assert_eq!(f["configured"], false, "no Disconnect while off");
     assert!(f["writes"].as_str().unwrap().contains("one comment and one state label per issue"));
     assert!(st.act(&Ctx { data: &d }, &asked("kanban_source_remove", json!({}))).is_err());
-    // A repository not owner/name: said in the dialog, nothing asked.
-    st.act(&Ctx { data: &d }, &asked("kanban_source_field", json!({ "repo": "not a repo" }))).unwrap();
+    // A repository not owner/name: said in the dialog as it is typed (Save
+    // is off, with the reason), and refused if asked anyway.
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_source_field", json!({ "repo": "not a repo" }))).unwrap();
+    assert!(last_set(&out, SOURCE_UI)["save_why"].as_str().unwrap().contains("owner/name"));
+    assert!(st.act(&Ctx { data: &d }, &asked("kanban_source_save", json!({}))).unwrap_err().contains("owner/name"));
+    let out = st.act(&Ctx { data: &d }, &asked("kanban_source_field", json!({ "repo": "acme/web-app", "auto_close": true }))).unwrap();
+    assert!(last_set(&out, SOURCE_UI)["save_why"].is_null());
     let out = st.act(&Ctx { data: &d }, &asked("kanban_source_save", json!({}))).unwrap();
-    assert!(!out.iter().any(|a| matches!(a, Action::Confirm(_) | Action::Call(_))));
-    assert!(last_set(&out, SOURCE_UI)["error"].as_str().unwrap().contains("owner/name"));
-    st.act(&Ctx { data: &d }, &asked("kanban_source_field", json!({ "repo": "acme/web-app", "auto_close": true }))).unwrap();
-    let out = st.act(&Ctx { data: &d }, &asked("kanban_source_save", json!({}))).unwrap();
-    assert!(!out.iter().any(|a| matches!(a, Action::Call(_))), "nothing posted before the Confirm");
+    // The core's own rule: an Approval answers with its one Confirm, or nothing runs.
+    let out = crate::shell::admit(spec("kanban_source_save").unwrap().risk, "kanban_source_save", out).expect("only the core's dialog");
     let c = confirm_of(&out);
     assert_eq!(c.call.path, "/api/tickets/web-app/source");
     assert_eq!(c.call.body, json!({ "tracker": "github", "repo": "acme/web-app", "label": "sbxw", "auto_close": true }));
@@ -992,6 +994,7 @@ fn save_and_disconnect_ask_first_and_post_their_route() {
     let out = st.act(&Ctx { data: &d }, &asked("kanban_source_open", json!({}))).unwrap();
     assert_eq!(last_set(&out, SOURCE_UI)["configured"], true);
     let out = st.act(&Ctx { data: &d }, &asked("kanban_source_remove", json!({}))).unwrap();
+    let out = crate::shell::admit(spec("kanban_source_remove").unwrap().risk, "kanban_source_remove", out).expect("only the core's dialog");
     let c = confirm_of(&out);
     assert!(c.danger);
     assert_eq!(c.call.path, "/api/tickets/web-app/source/remove");

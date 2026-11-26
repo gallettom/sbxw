@@ -153,6 +153,19 @@ pub struct SourceForm {
     pub error: Option<String>,
 }
 
+/// Why the source dialog cannot be saved as its fields stand, if it cannot.
+pub fn source_why(repo: &str, label: &str) -> Option<&'static str> {
+    if repo.is_empty() {
+        Some("Write the repository first")
+    } else if !repo_ok(repo) {
+        Some("Write the repository as owner/name, for example acme/web-app.")
+    } else if label.chars().any(|c| c.is_control()) {
+        Some("A label is one line of text.")
+    } else {
+        None
+    }
+}
+
 /// `owner/name`, each part made of letters, digits, `-`, `_`, `.`.
 pub fn repo_ok(r: &str) -> bool {
     let ok = |p: &str| !p.is_empty() && p != "." && p != ".." && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
@@ -653,13 +666,11 @@ impl State {
         }
         let repo = f.repo.trim().to_string();
         let label = f.label.trim().to_string();
-        if !repo_ok(&repo) {
-            f.error = Some("Write the repository as owner/name, for example acme/web-app.".into());
-            return Ok(vec![self.source_ui()]);
-        }
-        if label.chars().any(|c| c.is_control()) {
-            f.error = Some("A label is one line of text.".into());
-            return Ok(vec![self.source_ui()]);
+        // An Approval answers with its one Confirm and nothing else
+        // (`shell::features::admit`): what is wrong with the fields is said
+        // by the dialog as they are typed (`source_why`), and refused here.
+        if let Some(why) = source_why(&repo, &label) {
+            return Err(why.into());
         }
         let tracker = model::tracker_label(&f.tracker);
         let body = json!({ "tracker": f.tracker, "repo": repo, "label": label, "auto_close": f.auto_close });
@@ -671,7 +682,7 @@ impl State {
             .line(writes_line(&tracker));
         conf = conf.line(if f.auto_close { "When a ticket is merged, sbxw closes its issue.".to_string() } else { "sbxw never closes an issue: you close it.".to_string() });
         let label_btn = if f.configured { "Save" } else { "Connect" };
-        Ok(vec![Action::Confirm(Box::new(conf.labels(label_btn, "Cancel"))), self.source_ui()])
+        Ok(vec![Action::Confirm(Box::new(conf.labels(label_btn, "Cancel")))])
     }
 
     fn source_remove(&mut self) -> Result<Vec<Action>, String> {
@@ -688,7 +699,7 @@ impl State {
             .line("Imported tickets already planned or worked on stay, as your own.")
             .line(format!("sbxw writes nothing more to {tracker}; what it wrote there stays."))
             .labels("Disconnect", "Cancel");
-        Ok(vec![Action::Confirm(Box::new(conf)), self.source_ui()])
+        Ok(vec![Action::Confirm(Box::new(conf))])
     }
 
     fn new_form(&mut self, cx: &Ctx, edit: Option<(String, u32, J)>) -> Vec<Action> {
@@ -1167,7 +1178,7 @@ impl State {
             "saving": f.saving,
             "error": f.error,
             "save_label": if f.configured { "Save" } else { "Connect" },
-            "save_why": if f.saving { J::from("Saving…") } else if f.repo.trim().is_empty() { J::from("Write the repository first") } else { J::Null },
+            "save_why": if f.saving { J::from("Saving…") } else { source_why(f.repo.trim(), f.label.trim()).map(J::from).unwrap_or(J::Null) },
         });
         Action::Set { key: SOURCE_UI.into(), value: v }
     }
