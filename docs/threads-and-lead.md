@@ -395,6 +395,16 @@ merged_ci ── your click ─▶ merging ─┬─ fast-forward ─▶ merged 
    that was testing waits on its stored job again; one that was building is
    built again.
 
+**Not verified, stated limits.** The CI flow is tested against real git
+repositories with the sandbox's commands run locally, not against a real
+sandbox and `sbx`. The 30-second look at main is tested by calling it, not
+through its timer. A test job already running when main moves is not
+stopped: it runs to its end and its result is dropped (only a job still
+queued is taken back). Two looks at main at once start one rebuild (picked
+and started under one lock), but no stress test covers it. Close plan on the
+Kanban is refused while a plan is Merged to CI, as for a proposed merge:
+abandon it first.
+
 What a screen draws comes with the plan (`plan_status`, the plan events):
 `merge.state`, `merge.ci` (the branch, the base it was built on, the tip, the
 threads merged with their tips and merge commits, those skipped, the build

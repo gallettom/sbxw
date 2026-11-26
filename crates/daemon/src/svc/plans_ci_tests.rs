@@ -346,3 +346,114 @@ async fn a_click_before_merged_to_ci_is_refused_with_the_reason() {
     assert_eq!(r.main(), before);
     assert!(!r.fake.log().iter().any(|c| c.contains("sbxw-ci-ff") || c.contains("sbxw-thread-merge")), "nothing ran");
 }
+
+/// Plan `id`'s CI branch built for real (as `ci_run` would) and recorded as
+/// built, so it is left in ci_testing: what a daemon stopped mid-battery
+/// leaves behind.
+async fn built_and_testing(r: &Rig, id: &str, order: &[&str]) -> String {
+    r.app.plans.lock().unwrap().propose_merge_with(id, "myapp", order.iter().map(|s| s.to_string()).collect(), "", vec![], true, 4).unwrap();
+    let threads: Vec<sbxw_core::ThreadName> = order.iter().map(|t| sbxw_core::ThreadName::parse(t).unwrap()).collect();
+    let b = r.app.sbx_of(&r.sb).await.unwrap().ci_build(&r.sb.name, &r.ws.path().to_string_lossy(), id, &threads).await.unwrap();
+    let built = sbxw_core::plans::Built {
+        base_branch: b.base_branch,
+        base: b.base,
+        tip: b.tip.clone(),
+        merged: b.merged.into_iter().map(|(thread, tip, commit)| sbxw_core::plans::CiStep { thread, tip, commit }).collect(),
+        skipped: vec![],
+    };
+    r.app.plans.lock().unwrap().ci_built(id, 1, built, 5).unwrap();
+    b.tip
+}
+
+/// A job queued in the book and never started (no worker): as a queue
+/// that had not reached it.
+fn queued_job(r: &Rig, id: &str, tip: &str) -> String {
+    let tests = PlanTests { command: COMMAND.into(), timeout_minutes: 5 };
+    let ask = sbxw_core::testq::Ask { sandbox: "myapp", tests: &tests, key: "k-queued", commit: tip, plan: Some(id), by: "sbxw", rerun: false };
+    let (job, took) = r.app.tests.lock().unwrap().request("t-queued".into(), &ask, 6);
+    assert_eq!(took, sbxw_core::testq::Took::Queued);
+    r.app.plans.lock().unwrap().ci_job(id, 1, &job.id, 7).unwrap();
+    job.id
+}
+
+/// After a restart: a run left building is built again; one left testing
+/// waits on its job again; one whose job is gone from the queue is built
+/// and tested again. None is left stuck, none is merged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_picks_up_every_ci_run_and_merges_none() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    branch(r.ws.path(), "a", "a.txt", "a's");
+    branch(r.ws.path(), "b", "b.txt", "b's");
+    branch(r.ws.path(), "c", "c.txt", "c's");
+    r.plan("p1", &["a"], Some(COMMAND));
+    r.plan("p2", &["b"], Some(COMMAND));
+    r.plan("p3", &["c"], Some(COMMAND));
+    let before = r.main();
+    // p1: left building (nothing recorded but the proposal).
+    r.app.plans.lock().unwrap().propose_merge_with("p1", "myapp", vec!["a".into()], "", vec![], true, 4).unwrap();
+    // p2: left testing, its job finished meanwhile (a run the queue resumed).
+    let tip2 = built_and_testing(&r, "p2", &["b"]).await;
+    let (job2, _) = r.app.tests_request(&r.sb, crate::svc::testq::TestAsk { plan: Some("p2"), git_ref: Some(&tip2), by: Some("sbxw"), ..Default::default() }).await.unwrap();
+    r.app.tests_wait(&job2.id, &r.sb, Duration::from_secs(60)).await.unwrap();
+    r.app.plans.lock().unwrap().ci_job("p2", 1, &job2.id, 7).unwrap();
+    // p3: left testing on a job the queue no longer has.
+    built_and_testing(&r, "p3", &["c"]).await;
+    r.app.plans.lock().unwrap().ci_job("p3", 1, "t-lost", 7).unwrap();
+    let runs_before = r.runs();
+
+    r.app.tests_resume();
+    let p1 = r.until("p1", MergeState::MergedCi).await;
+    let p2 = r.until("p2", MergeState::MergedCi).await;
+    let p3 = r.until("p3", MergeState::MergedCi).await;
+    assert_eq!(p1.ci().unwrap().run, 2, "p1 built again");
+    assert_eq!((p2.ci().unwrap().run, p2.ci().unwrap().tests.as_ref().map(|t| t.job.clone())), (1, Some(job2.id.clone())), "p2 kept its job");
+    assert_eq!(p3.ci().unwrap().run, 2, "p3 built and tested again");
+    assert_eq!(r.runs(), runs_before + 2, "p1 and p3 tested, p2 not again");
+    assert_eq!(r.main(), before, "nothing merged without the click");
+}
+
+/// Closing a plan while its CI branch is built or tested (lead mode ended,
+/// Close plan on the Kanban): the run ends as abandoned, its queued job is
+/// taken back, its CI branch and worktree are gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn closing_the_plan_while_ci_runs_ends_it_and_removes_the_ci_branch() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    branch(r.ws.path(), "a", "a.txt", "a's");
+    branch(r.ws.path(), "b", "b.txt", "b's");
+    // Close plan on the Kanban while testing, its job still queued.
+    r.plan("p1", &["a"], Some(COMMAND));
+    let tip = built_and_testing(&r, "p1", &["a"]).await;
+    let job = queued_job(&r, "p1", &tip);
+    assert!(r.has_ci_branch("p1"));
+    r.app.plan_dismiss("p1").unwrap();
+    let p = r.until("p1", MergeState::Abandoned).await;
+    assert!(p.merge.unwrap().abandoned_ms.is_some());
+    for _ in 0..200 {
+        if !r.has_ci_branch("p1") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(!r.has_ci_branch("p1"), "the CI branch and worktree are gone");
+    assert!(r.app.tests.lock().unwrap().get(&job, "myapp").is_err(), "the queued job was taken back");
+    // Lead mode ended while building: the run ends, its branch goes.
+    r.plan("p2", &["b"], Some(COMMAND));
+    r.app.plans.lock().unwrap().propose_merge_with("p2", "myapp", vec!["b".into()], "", vec![], true, 4).unwrap();
+    let threads = [sbxw_core::ThreadName::parse("b").unwrap()];
+    r.app.sbx_of(&r.sb).await.unwrap().ci_build(&r.sb.name, &r.ws.path().to_string_lossy(), "p2", &threads).await.unwrap();
+    assert!(r.has_ci_branch("p2"));
+    r.app.lead_end(&r.sb).await;
+    assert_eq!(r.state("p2"), MergeState::Abandoned);
+    assert!(!r.has_ci_branch("p2"));
+    // A build still at work when the plan closed would land after it: its
+    // step is refused and what it built is removed.
+    r.app.ci_run("p2", 1).await;
+    assert!(!r.has_ci_branch("p2"), "a late build leaves nothing behind");
+    assert_eq!(r.runs(), 0, "no battery ran for a closed plan");
+}

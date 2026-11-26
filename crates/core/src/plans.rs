@@ -780,7 +780,9 @@ impl PlanBook {
             if p.threads.iter().any(|t| matches!(t.state, ThreadState::Starting | ThreadState::Working | ThreadState::Blocked)) {
                 return Err("a thread of this plan still works".into());
             }
-            if p.merge.as_ref().is_some_and(|m| matches!(m.state, MergeState::Proposed | MergeState::Merging)) {
+            // Merged to CI waits for the click like a proposed merge; a CI
+            // run building or testing ends as abandoned (`ci_closed`).
+            if p.merge.as_ref().is_some_and(|m| matches!(m.state, MergeState::Proposed | MergeState::Merging | MergeState::MergedCi)) {
                 return Err("a merge of this plan is proposed or running".into());
             }
             p.dismissed = true;

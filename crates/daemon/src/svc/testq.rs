@@ -80,7 +80,7 @@ impl App {
         }
     }
 
-    fn tests_changed(&self) {
+    pub(crate) fn tests_changed(&self) {
         self.persist_tests();
         self.tests_tick.send_modify(|n| *n = n.wrapping_add(1));
     }

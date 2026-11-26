@@ -102,17 +102,24 @@ impl App {
         let built = match step {
             Err(f) => {
                 let r = self.plans.lock().unwrap().ci_failed(id, run, f, now_ms());
-                if let Ok(p) = r {
-                    let p = self.plan_changed(p);
-                    self.ci_tell_lead(&p, messages::ci_failed_line(&p), "failed");
-                    self.ci_schedule(&sandbox).await;
+                match r {
+                    Ok(p) => {
+                        let p = self.plan_changed(p);
+                        self.ci_tell_lead(&p, messages::ci_failed_line(&p), "failed");
+                        self.ci_schedule(&sandbox).await;
+                    }
+                    Err(_) => self.ci_dropped(id).await,
                 }
                 return;
             }
             Ok(b) => b,
         };
         let tip = built.tip.clone();
-        let Ok(p) = self.plans.lock().unwrap().ci_built(id, run, built, now_ms()) else { return };
+        let r = self.plans.lock().unwrap().ci_built(id, run, built, now_ms());
+        let Ok(p) = r else {
+            self.ci_dropped(id).await;
+            return;
+        };
         self.plan_changed(p);
         // The battery, once, through the queue: its lock, its stored result.
         let ask = TestAsk { plan: Some(id), git_ref: Some(&tip), by: Some(sbxw_core::team::SBXW), ..Default::default() };
@@ -139,13 +146,12 @@ impl App {
             match self.tests_wait(job, sandbox, CI_WAIT).await {
                 Ok(j) if j.state == JobState::Done => break j,
                 Ok(_) => {}
+                // The job is gone from the queue (pruned, a lost state file):
+                // tested again, from a fresh build, never left waiting.
                 Err(e) => {
-                    let f = CiFailure { kind: CiFailKind::Error, thread: None, files: vec![], text: format!("its test job is gone: {e}") };
-                    let r = self.plans.lock().unwrap().ci_failed(id, run, f, now_ms());
-                    if let Ok(p) = r {
-                        let p = self.plan_changed(p);
-                        self.ci_tell_lead(&p, messages::ci_failed_line(&p), "failed");
-                    }
+                    tracing::info!("plans: {id}: the CI test job {job} is gone ({e}): building and testing again");
+                    let (app, id) = (self.clone(), id.to_string());
+                    tokio::spawn(async move { app.ci_rebuild_now(&id, run).await });
                     return;
                 }
             }
@@ -212,6 +218,7 @@ impl App {
                     if let Some(job) = c.job.as_deref() {
                         if self.tests.lock().unwrap().withdraw(job) {
                             tracing::info!("tests: '{sandbox}' job {job} taken back: main moved under {}", p.id);
+                            self.tests_changed();
                         }
                     }
                     self.ci_rebuild(&p.id, &main).await;
@@ -259,10 +266,7 @@ impl App {
                 match (state, p.ci().and_then(|c| c.job.clone())) {
                     (MergeState::CiTesting, Some(job)) => app.ci_await(&id, run, &sb, &job, false).await,
                     // Built but not yet queued, or building: from scratch.
-                    _ => {
-                        let main = app.ci_main_tip(&sb).await.unwrap_or_default();
-                        app.ci_rebuild_now(&id, run, &main).await;
-                    }
+                    _ => app.ci_rebuild_now(&id, run).await,
                 }
             });
         }
@@ -283,7 +287,7 @@ impl App {
 
     /// A run cut short by a restart: built again from scratch, as the same
     /// proposal (a building one has no result to keep).
-    async fn ci_rebuild_now(self: &Arc<Self>, id: &str, run: u32, _main: &str) {
+    async fn ci_rebuild_now(self: &Arc<Self>, id: &str, run: u32) {
         let reset = self.plans.lock().unwrap().ci_restart(id, run, now_ms());
         if let Ok(p) = reset {
             let run = p.ci().map_or(run, |c| c.run);
@@ -330,9 +334,27 @@ impl App {
     /// The plan was closed (lead mode ended, closed from the Kanban): a CI
     /// run not merged is over and its branch removed.
     pub(crate) async fn ci_close(self: &Arc<Self>, id: &str) {
+        let job = self.plan(id).and_then(|p| p.ci().and_then(|c| c.job.clone()));
         let closed = self.plans.lock().unwrap().ci_closed(id, now_ms());
         if let Some(p) = closed {
             let p = self.plan_changed(p);
+            if let Some(job) = job {
+                if self.tests.lock().unwrap().withdraw(&job) {
+                    tracing::info!("tests: job {job} taken back: plan {id} was closed");
+                    self.tests_changed();
+                }
+            }
+            self.ci_remove(&p).await;
+        }
+    }
+
+    /// A step of run `run` was refused by the book: when the plan no longer
+    /// wants a CI branch (abandoned, closed while it was built), what the
+    /// build left is removed. A newer run (a rebuild) keeps its branch.
+    async fn ci_dropped(&self, id: &str) {
+        let Some(p) = self.plan(id) else { return };
+        let gone = p.closed || p.dismissed || p.state != PlanState::Approved || p.merge.as_ref().is_none_or(|m| m.state == MergeState::Abandoned);
+        if gone {
             self.ci_remove(&p).await;
         }
     }
