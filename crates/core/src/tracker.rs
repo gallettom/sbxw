@@ -82,10 +82,11 @@ impl Tracker {
         }
     }
     /// What the sync sandbox may reach besides the gateway: where the
-    /// issues' attachments are served. Unverified against a real sbx.
+    /// issues' attachments are served: the script's own download hosts.
+    /// Unverified against a real sbx.
     pub fn hosts(self) -> &'static [&'static str] {
         match self {
-            Tracker::Github => &["github.com", "api.github.com", "objects.githubusercontent.com", "private-user-images.githubusercontent.com", "user-images.githubusercontent.com"],
+            Tracker::Github => &["github.com", "api.github.com", "objects.githubusercontent.com", "private-user-images.githubusercontent.com", "user-images.githubusercontent.com", "raw.githubusercontent.com"],
         }
     }
     /// An issue's key: `owner/repo#12`.

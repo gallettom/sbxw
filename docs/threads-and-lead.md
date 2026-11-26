@@ -751,7 +751,8 @@ data rather than instructions, and copies its files into the sandbox under
 A sandbox can take its tickets from an issue tracker: plan A is GitHub
 (github.com). You set the **source** per sandbox from the Kanban: the
 tracker, the repository (`owner/name`; the one `git remote get-url origin`
-points at is offered, never set for you), a **filter label** (default
+points at is offered, never set for you; one the sync script would refuse
+is refused when you set it), a **filter label** (default
 `sbxw`) and **auto-close** (default off). Nothing is on by default. The
 source is kept beside the sandbox's tickets (`state/tickets/<sandbox>/tracker.json`),
 never in `sbxw.toml`, and outlives the sandbox as the tickets do.
@@ -774,7 +775,8 @@ card's Plan button, `POST /api/tickets/:sandbox/:n/plan` on the UI listener).
 Until then no agent can list it, read it, or have it linked by a plan
 (`tickets_list`, `ticket_read` and `propose_plan`'s `ticket` all treat it as
 no ticket). A ticket you write in sbxw still lands in Planned. The phone
-neither shows Backlog nor counts it as Planned.
+shows Backlog read-only, each card with its issue's key and link, and has
+no way to plan a ticket; Backlog never counts as Planned.
 
 **Write-back.** On every column change of an imported ticket past Backlog
 (the board's live column, so "merged outside sbxw" and "branch gone" count
@@ -788,8 +790,8 @@ words, never an agent's. With auto-close on, a real merge (by sbxw or
 outside it, not a closed plan nor a gone branch) closes the issue.
 Write-backs are queued on disk the moment the column changes, sent at once,
 retried with backoff (30 s doubling to 30 min, or the tracker's rate limit),
-in order, and never dropped; one already half sent does not repeat its
-comment.
+in order, and never dropped while the source is on; one already half sent
+does not repeat its comment.
 
 **How sbxw reaches the tracker.** The daemon holds no token and has no
 HTTPS client. Every call is one script (`assets/tracker-sync.js`, embedded
@@ -811,8 +813,10 @@ next success. A failed download of an attachment is not a failure of the
 source.
 
 **Turning it off** (Remove) drops the imported tickets still in Backlog;
-the others keep their origin. Write-backs still queued stay on disk and go
-when a source is on again.
+the others keep their origin. Write-backs still queued are discarded: a
+source set again later replays none of them; it writes back only an
+imported ticket's column as it is then, when it differs from the last one
+written.
 
 **Routes (UI listener).** `GET /api/tickets/:sandbox/source`
 (`{configured, tracker, repo, label, auto_close, detected, status: {state,

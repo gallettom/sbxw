@@ -1218,7 +1218,11 @@ is off unless you set it for a sandbox. When it is on:
   GitHub's; attachments pass the same checks as a file you attach (no
   archives, no programs, 8 MB each). An imported ticket waits in Backlog,
   where no agent can list, read or plan it, until you move it to Planned:
-  an issue anyone can label does not reach an agent without you.
+  an issue anyone can label does not reach an agent without you. A paired
+  phone reads the Backlog column as it reads the others (titles, the issue's
+  key and link), and cannot move a ticket out of it.
+- **Turning a source off** discards the write-backs it still had queued:
+  nothing of before is sent if a source is set again.
 - **The log** holds counts, ticket numbers, issue keys and failure kinds,
   never a title, a body, a label or a file name.
 
