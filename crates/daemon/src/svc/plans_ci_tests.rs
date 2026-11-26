@@ -318,3 +318,31 @@ async fn no_test_command_merges_as_today_and_abandon_removes_the_ci_branch() {
     assert_eq!(r.state("p1"), MergeState::Abandoned);
     assert!(!r.has_ci_branch("p1"), "abandoned: the CI branch and worktree are removed");
 }
+
+/// A Merge click can arrive while the CI branch builds, tests or failed
+/// (a screen that offers Merge for any state): refused in words a person
+/// reads, nothing run, main untouched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_click_before_merged_to_ci_is_refused_with_the_reason() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    branch(r.ws.path(), "a", "a.txt", "a's");
+    r.plan("p1", &["a"], Some(COMMAND));
+    let before = r.main();
+    // Proposed in the book only: nothing builds it, it stays ci_building.
+    r.app.plans.lock().unwrap().propose_merge_with("p1", "myapp", vec!["a".into()], "", vec![], true, 4).unwrap();
+    let e = r.app.plan_merge("p1", false, None).await.unwrap_err();
+    assert!(e.contains("cannot be merged yet") && e.contains("is building sbxw/ci-p1"), "{e}");
+    let built = sbxw_core::plans::Built { base_branch: "main".into(), base: before.clone(), tip: before.clone(), merged: vec![], skipped: vec![] };
+    r.app.plans.lock().unwrap().ci_built("p1", 1, built, 5).unwrap();
+    let e = r.app.plan_merge("p1", false, None).await.unwrap_err();
+    assert!(e.contains("cannot be merged yet") && e.contains("the plan's tests run on sbxw/ci-p1"), "{e}");
+    let f = sbxw_core::plans::CiFailure { kind: CiFailKind::Tests, thread: None, files: vec![], text: "failed".into() };
+    r.app.plans.lock().unwrap().ci_failed("p1", 1, f, 6).unwrap();
+    let e = r.app.plan_merge("p1", false, None).await.unwrap_err();
+    assert!(e.contains("cannot be merged yet") && e.contains("proposes the merge again"), "{e}");
+    assert_eq!(r.main(), before);
+    assert!(!r.fake.log().iter().any(|c| c.contains("sbxw-ci-ff") || c.contains("sbxw-thread-merge")), "nothing ran");
+}
