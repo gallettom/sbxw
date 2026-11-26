@@ -177,6 +177,19 @@ pub struct State {
 
 crate::feat::relay::per_thread!(STATE, State);
 
+/// The bytes of the example pictures the person handed in and the Canvas
+/// keeps (sent or waiting), and how many (the memory report, shell/memory.rs).
+pub fn handed_mem() -> (u64, usize) {
+    let s = STATE().lock().unwrap_or_else(|e| e.into_inner());
+    let all = s.handed.values().chain(s.adding.values());
+    let (mut b, mut n) = (0u64, 0usize);
+    for h in all {
+        b += h.bytes.capacity() as u64;
+        n += 1;
+    }
+    (b, n)
+}
+
 fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
     STATE().lock().unwrap().act(cx, a)
 }

@@ -364,6 +364,7 @@ impl ScreenState {
                 let mtime = |p: &PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
                 loop {
                     std::thread::sleep(Duration::from_millis(150));
+                    crate::perf::add(crate::perf::C::WatcherWakes, 1);
                     let m = mtime(&path);
                     if m != seen {
                         seen = m;
@@ -542,9 +543,13 @@ impl ScreenState {
             None => self.data.clone(),
         };
         self.renders += 1;
+        crate::perf::add(crate::perf::C::Renders, 1);
+        crate::perf::keyed("render", || self.name.clone());
+        let counted = crate::perf::count_start();
         let t = crate::perf::start();
         let out = self.host.get_or_insert_with(|| LuauHost::new(Limits::default()).expect("Luau VM")).render_shared(&data);
         crate::perf::done(t, || format!("render {}", self.name));
+        crate::perf::add_us(crate::perf::C::RenderUs, counted);
         match out {
             Ok((n, reads)) => {
                 self.reads = Some(reads);
@@ -868,6 +873,7 @@ pub fn view_slot<S: Host>(s: &ScreenState) -> (El, Vec<El>, Option<El>) {
 
 /// The screen's view; with `slot`, its [`TITLE_SLOT`] row apart (else in place).
 fn build_view<S: Host>(s: &ScreenState, slot: bool) -> (El, Vec<El>, Option<El>) {
+    crate::perf::add(crate::perf::C::PanelBuilds, 1);
     let name: Rc<str> = s.name.as_str().into();
     let mut b = Build { name: name.clone(), ui: &s.ui, data: &s.data, overlays: vec![], slot: None, take_slot: slot, nav: HashMap::new() };
     // The top bar is one line: what the core adds goes beside it, not under it.

@@ -186,6 +186,15 @@ fn on_dismiss(cx: &Ctx, tag: &str) -> Vec<Action> {
     vec![]
 }
 
+/// The Kanban's previews still registered for `image` elements: their
+/// pixels' bytes and how many (the memory report, shell/memory.rs). They are
+/// counted in `picture::mem` too.
+pub fn previews_mem() -> (u64, usize) {
+    let s = STATE().lock().unwrap_or_else(|e| e.into_inner());
+    let kept: Vec<(u32, u32)> = s.previews.iter().filter_map(|k| crate::picture::shown(k).map(|p| p.1)).collect();
+    (kept.iter().map(|(w, h)| *w as u64 * *h as u64 * 4).sum(), kept.len())
+}
+
 pub fn shown(cx: &Ctx) -> bool {
     cx.get("app")["overlay"]["screen"] == SCREEN
 }

@@ -590,6 +590,13 @@ impl State {
             ];
         }
         let had = self.jobs.iter().any(|j| ev["sandbox"] == j.sandbox.as_str());
+        // A bring-up this app posted, whose answer came before its `done`:
+        // the daemon's timing summary in a notice of its own (plain text).
+        if let (false, "done", true, Some(t), Some(sb)) = (had, ev["kind"].as_str().unwrap_or(""), ev["error"].is_null(), ev["summary"].as_str().map(str::trim).filter(|t| !t.is_empty()), ev["sandbox"].as_str()) {
+            if self.ready.iter().any(|(n, _)| n == sb) {
+                return vec![Action::Notice { text: format!("Sandbox \"{sb}\": {t}"), error: false, then: None }];
+            }
+        }
         let failed_before = self.jobs.iter().any(|j| ev["sandbox"] == j.sandbox.as_str() && matches!(j.state, JobState::Failed(_)));
         let Some(sandbox) = model::apply_provision(&mut self.jobs, &text) else { return vec![] };
         // A watched bring-up that ended ready (a posted one ends with its answer).
@@ -751,10 +758,13 @@ impl State {
             Answer::Ready { name: real, warnings } => {
                 j.state = JobState::Ready;
                 let shown = j.sandbox.clone();
+                // The daemon's timing summary, when its `done` came first
+                // (plain text; a later one gets a notice of its own, `on_event`).
+                let timing = j.summary.as_ref().map_or(String::new(), |t| format!(" ({t})"));
                 let text = match warnings.last() {
-                    Some(w) => format!("Sandbox \"{real}\" is ready; {w}"),
-                    None if j.body.as_ref().is_some_and(|b| b["remote_control"] == true) => format!("Sandbox \"{real}\" is ready: press Remote in its pane (before sbx 0.53: /login there first)"),
-                    None => format!("Sandbox \"{real}\" is ready"),
+                    Some(w) => format!("Sandbox \"{real}\" is ready{timing}; {w}"),
+                    None if j.body.as_ref().is_some_and(|b| b["remote_control"] == true) => format!("Sandbox \"{real}\" is ready{timing}: press Remote in its pane (before sbx 0.53: /login there first)"),
+                    None => format!("Sandbox \"{real}\" is ready{timing}"),
                 };
                 let error = !warnings.is_empty();
                 self.mark_ready(&shown);

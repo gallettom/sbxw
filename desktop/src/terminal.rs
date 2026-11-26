@@ -359,6 +359,8 @@ pub struct TerminalState {
     pub echo_ms: Vec<f64>,
     /// Rows rebuilt over the run, rebuilds, and how long building them took.
     pub rebuilt_rows: usize,
+    /// The cursor blinked in the last [`Self::poll_tx`] (the counters, perf.rs).
+    pub blinked: bool,
     pub rebuilds: usize,
     pub build_time: Duration,
     /// Output bytes parsed over the run.
@@ -525,6 +527,7 @@ impl TerminalState {
             key_sent: None,
             echo_ms: Vec::new(),
             rebuilt_rows: 0,
+            blinked: false,
             rebuilds: 0,
             build_time: Duration::ZERO,
             bytes_in: 0,
@@ -645,6 +648,16 @@ impl TerminalState {
         }
     }
 
+    /// Events waiting for [`Self::take_events`]: how many, and the bytes of
+    /// their texts (titles, clipboard copies; the memory report).
+    pub fn queued_events(&self) -> (usize, u64) {
+        let text = |e: &TerminalEvent| match e {
+            TerminalEvent::Title(t) | TerminalEvent::Clipboard(t) | TerminalEvent::Disconnected(t) => t.capacity() as u64,
+            _ => 0,
+        };
+        (self.out.len(), self.out.capacity() as u64 * std::mem::size_of::<TerminalEvent>() as u64 + self.out.iter().map(text).sum::<u64>())
+    }
+
     /// The events since the last call.
     pub fn take_events(&mut self) -> Vec<TerminalEvent> {
         std::mem::take(&mut self.out)
@@ -678,11 +691,13 @@ impl TerminalState {
         self.step_nudge(Some(tx));
         // Blink while the cursor shows; it stays lit for a period after activity.
         let blinking = self.cursor_blink || self.term.cursor_style().blinking;
+        self.blinked = false;
         if blinking && self.focused && self.cursor.is_some() {
             let since = (clock - self.blink_epoch).max(0.0);
             let on = (since / BLINK) as u64 % 2 == 0;
             if on != self.blink_on {
                 self.blink_on = on;
+                self.blinked = true;
                 self.dirty = true;
             }
             tx.wake_after(Duration::from_secs_f64(BLINK - since % BLINK + 0.001));
@@ -727,7 +742,10 @@ impl TerminalState {
                 loop {
                     let left = deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(100));
                     match self.events.recv_timeout(left) {
-                        Ok(ev) => changed |= self.on_event(ev),
+                        Ok(ev) => {
+                    crate::perf::add(crate::perf::C::TermMessages, 1);
+                    changed |= self.on_event(ev)
+                }
                         Err(_) => break,
                     }
                 }
@@ -735,7 +753,10 @@ impl TerminalState {
         }
         loop {
             match self.events.try_recv() {
-                Ok(ev) => changed |= self.on_event(ev),
+                Ok(ev) => {
+                    crate::perf::add(crate::perf::C::TermMessages, 1);
+                    changed |= self.on_event(ev)
+                }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     let closed = self.status.starts_with("closed") || self.status.starts_with("disconnected") || self.status.starts_with("reconnect");

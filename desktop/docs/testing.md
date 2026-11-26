@@ -22,6 +22,7 @@ root; the first build takes about a minute, later ones a few seconds.
 | Run the unit and link tests | `scripts/run-suite.sh desktop` |
 | Check every tab-like control (tabs, locations, rows, Show more) changes what is drawn | `cd desktop && cargo test --test tab_presses` (add a case for a new screen's tabs) |
 | Measure the app's memory, and check its ceiling and leaks | `desktop/scripts/memory.sh` (see "Memory" below) |
+| Measure the app's CPU (idle, terminal output) and memory in one run, on the Mac or headless | `desktop/scripts/measure.sh` (see "Measuring a run" below) |
 
 Shots and logs go to the checkout's root artifacts folder
 (`.sbxw-artifacts/desktop/shots/`, git-ignored), or `$SBXW_SHOTS`; never into
@@ -312,6 +313,44 @@ regression check on a loaded machine, not a benchmark) or a data push
 renders more than the screens drawn. `src/perf.rs` says what the probes
 cost when off (one cached flag). Numbers and causes: the checkout's
 `.sbxw-artifacts/desktop/PERF.md`.
+
+## Measuring a run: CPU and memory
+
+`desktop/scripts/measure.sh` says, in one run, what the app costs idle and
+under terminal output, and what its memory holds. It builds the release
+binary with the counters on (`SBXW_DESKTOP_PERF=counts`, `src/perf.rs`)
+and asks for the memory report after each scenario (`SBXW_DESKTOP_MEM=1`,
+`MEM_GC=1`). Scenarios, `MEASURE_SECS` (30) each: idle; idle with an
+overlay over the panes; heavy output in a pane shown; the same on a hidden
+page; headless only, a burst of 100 session events from the stand-in.
+
+- On the Mac it runs the real app in its window against the real daemon and
+  says what to do at each step (quit sbxw first; about 4 minutes). It records
+  the system's footprint (`footprint`, `vmmap --summary`) after each
+  scenario, since the app's own RSS misses GPU and compressed memory.
+- Elsewhere (or `MEASURE_HEADLESS=1`) it scripts the same against the
+  stand-in. Headless numbers (software renderer, a virtual frame clock, no
+  cursor blink) show that the probes work, not what the Mac pays. A
+  headless frame waits for a terminal's output to settle (up to 1.5 s), so
+  the two output scenarios take about 10 minutes of wall time each and the
+  whole run about an hour; `MEASURE_OUTPUT_SECS=2` shortens them.
+- Out: `$SBXW_SHOTS/measure/measure.txt`, to paste back: per scenario the
+  seconds, the app's CPU percent of one core, each counter per second, reads
+  and renders by key, the memory report, the layout (version, pane area,
+  panes, pages, columns). `measure-summary.py --parse` reads it back and
+  exits 1 when a scenario lacks its numbers.
+- The counters, once a second in the log (`perf: counts t=<s> cpu_ms=<ms>
+  ...`): polls, views, panel builds, pushes (their time, their bytes, and
+  those only a terminal asked for), full screen-data builds and those for a
+  feature's handler, Luau renders (by screen), terminal rows built for shown
+  and hidden panes, hidden panes' changes, socket messages, blinks (and under
+  a cover), watcher wake-ups, stream events (by name), data reads (by key).
+  `SBXW_DESKTOP_PERF=1` keeps them too, with a log line per event. Off, each
+  probe is one cached load (`shell/perf_tests.rs` checks that nothing is
+  counted). In a real run, `SBXW_DESKTOP_PERF_MARKS=<file>` takes `perf:` and
+  `mem:` labels written there, as a headless script's marks.
+- The table of the audits' findings and what measures each:
+  `.sbxw-artifacts/desktop/PERF.md`, "Measuring the audits' findings".
 
 ## Memory
 

@@ -116,6 +116,42 @@ fn a_workspace_sandbox_from_the_chooser_to_its_terminal() {
     assert!(r.c()["jobs"].as_array().unwrap().is_empty(), "a ready sandbox's card goes");
 }
 
+/// The daemon's timing summary on `done` is said where the bring-up is
+/// said ready: in the ready notice when it came first, in a notice of its
+/// own when the answer came first, and not at all from an older daemon.
+#[test]
+fn the_ready_notice_carries_the_daemons_timing_summary() {
+    let ready = |r: &Run| r.asked.iter().find_map(|a| match a { Action::Notice { text, error: false, .. } if text.contains("is ready") => Some(text.clone()), _ => None });
+    // The stand-in sends its `done` (with the summary) before the answer.
+    let mut r = Run::new(json!({ "sandboxes": [] }));
+    r.ask("create_open", json!({ "dialog": "workspace" })).unwrap();
+    r.ask("create_browse", json!({ "path": "/home/you/dev/shop" })).unwrap();
+    r.ask("create_set", json!({ "field": "name", "value": "shop" })).unwrap();
+    r.ask("create_submit", json!({})).unwrap();
+    assert_eq!(ready(&r).as_deref(), Some("Sandbox \"shop\" is ready (ready in 4.0 s: create 2.0 s, boot 1.0 s, kits 1.0 s)"));
+
+    let d = json!({ "sandboxes": [] });
+    let ctx = Ctx { data: &d };
+    let done = |st: &mut State, v: J| st.on_event(&ctx, "provision", &J::String(v.to_string()));
+    // The answer first: the job is gone, the late summary gets its own notice, as text.
+    let mut st = State::default();
+    st.mark_ready("web");
+    let out = done(&mut st, json!({ "sandbox": "web", "kind": "done", "error": null, "summary": "<b>ready</b> in 41 s" }));
+    assert_eq!(out, vec![Action::Notice { text: "Sandbox \"web\": <b>ready</b> in 41 s".into(), error: false, then: None }]);
+    // An older daemon: no summary, nothing said.
+    let out = done(&mut st, json!({ "sandbox": "web", "kind": "done", "error": null }));
+    assert!(!out.iter().any(|a| matches!(a, Action::Notice { .. })), "{out:?}");
+    // Not a bring-up this app saw end: nothing said.
+    let out = done(&mut st, json!({ "sandbox": "ghost", "kind": "done", "summary": "ready in 1 s" }));
+    assert!(!out.iter().any(|a| matches!(a, Action::Notice { .. })), "{out:?}");
+    // A job that ends ready with no summary: the notice as before.
+    let mut j = model::Job::new("old", Some("create"), Some(json!({})));
+    j.posting = true;
+    st.jobs.push(j);
+    model::apply_provision(&mut st.jobs, r#"{"sandbox":"old","kind":"done","error":null}"#);
+    assert_eq!(st.jobs[0].summary, None);
+}
+
 #[test]
 fn extra_folders_are_confirmed_with_what_they_grant() {
     let mut r = Run::new(json!({ "sandboxes": [] }));

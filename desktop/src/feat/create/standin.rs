@@ -198,7 +198,8 @@ fn bring_up(s: &mut Standin, b: &J, chat: bool) -> (u16, J) {
             }
         }
     }
-    s.publish_after(ms, "provision", ev(json!({ "kind": "done" })));
+    // The daemon's timing summary on its `done` (an older daemon sends none).
+    s.publish_after(ms, "provision", ev(json!({ "kind": "done", "summary": "ready in 4.0 s: create 2.0 s, boot 1.0 s, kits 1.0 s" })));
     add_sandbox(s.data, &name, b, chat);
     let mut out = json!({ "ok": true, "warnings": [] });
     if chat {

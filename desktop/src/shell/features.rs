@@ -154,6 +154,7 @@ pub fn admit(risk: Risk, name: &str, actions: Vec<Action>) -> Result<Vec<Action>
 
 impl App {
     fn feat_ctx_data(&self) -> J {
+        crate::perf::add(crate::perf::C::FeatCtx, 1);
         self.screen_data()
     }
 
@@ -1114,6 +1115,8 @@ impl App {
 
     /// A stream event: data keys read again 300 ms later; features told.
     pub(super) fn feats_bus(&mut self, name: &str, raw: &str) -> bool {
+        crate::perf::add(crate::perf::C::Events, 1);
+        crate::perf::keyed("event", || name.to_string());
         let soon = Instant::now() + Duration::from_millis(300);
         for d in feat::FEATURES.iter().flat_map(|f| f.data.iter()) {
             if d.on.contains(&name) {
