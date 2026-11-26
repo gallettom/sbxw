@@ -235,11 +235,16 @@ pub fn add(c: C, n: u64) {
     }
 }
 
-/// Adds the microseconds since `t` to `c` (`t` from [`count_start`]).
+/// Adds the microseconds since `t` to `c` (`t` from [`count_start`]), when
+/// still counting: a clock started while the switch was on adds nothing
+/// once it is off (in a real run the switch never changes; tests flip it
+/// while other tests draw).
 #[inline]
 pub fn add_us(c: C, t: Option<Instant>) {
     if let Some(t) = t {
-        COUNTS[c as usize].fetch_add(t.elapsed().as_micros() as u64, Ordering::Relaxed);
+        if counting() {
+            COUNTS[c as usize].fetch_add(t.elapsed().as_micros() as u64, Ordering::Relaxed);
+        }
     }
 }
 

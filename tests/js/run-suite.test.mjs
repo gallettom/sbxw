@@ -70,7 +70,9 @@ test('crates runs the four packages, in the target directory SBXW_TEST_TARGET na
   assert.equal(fs.realpathSync(cwd), fs.realpathSync(c.dir));
   assert.equal(target, path.join(c.dir, 'tt', 'crates'));
   assert.equal(args, 'test -p sbxw-core -p sbxw-daemon -p sbxw-sbx -p sbxw --');
-  assert.deepEqual(r.summary, ['suite crates: PASS (7 passed, 0 failed, 0 quarantined) 0s']);
+  // The seconds are whatever the run took: a loaded machine takes one.
+  assert.equal(r.summary.length, 1);
+  assert.match(r.summary[0], /^suite crates: PASS \(7 passed, 0 failed, 0 quarantined\) \d+s$/);
 }));
 
 test('without SBXW_TEST_TARGET the target is under the checkout', withCheckout({}, (c) => {
