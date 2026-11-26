@@ -209,7 +209,7 @@ async fn a_result_is_reused_for_the_same_command_on_the_same_tree() {
     assert_eq!((res.outcome, j1.reused, res.commit.as_str()), (Outcome::Passed, false, first.as_str()));
     assert_eq!((j1.command.as_str(), j1.plan.as_deref(), j1.by.as_str()), (cmd.as_str(), Some(plan.as_str()), "api"));
     assert!(res.tail.contains("checkout=") && res.tail.contains(".sbxw-worktrees/.tests"), "{}", res.tail);
-    assert!(res.log.ends_with(&format!("/.sbxw/tests/logs/{plan}.log")), "{}", res.log);
+    assert!(res.log.ends_with(&format!("/.sbxw/tests/logs/{plan}/{}-1.log", j1.id)), "{}", res.log);
     // Another commit with the same root tree: the stored result, marked
     // reused, with the commit it first ran on.
     git(r.ws.path(), &["commit", "-q", "--allow-empty", "-m", "empty"]);
@@ -315,10 +315,29 @@ async fn a_failure_is_retried_once_and_the_retry_recorded() {
     let flag = r.scratch("flag");
     r.plan("flaky", Some(&format!("if [ -e {flag} ]; then echo second; else touch {flag}; echo first; exit 1; fi")), TestsChoice::Approve);
     r.plan("broken", Some("echo nope; exit 2"), TestsChoice::Approve);
+    let flaky = r.app.tests_plan(&r.sb, Some(&name("flaky")), None).unwrap().id;
     let (j, _) = run(&r.app, &r.sb, r.ask(&name("flaky"), "HEAD")).await;
-    let res = j.result.unwrap();
+    let res = j.result.clone().unwrap();
     assert_eq!((res.outcome, res.attempts, res.first_outcome), (Outcome::Passed, 2, Some(Outcome::Failed)));
     assert!(res.retried() && res.tail.contains("second"), "{}", res.tail);
+    // Each attempt kept its own log, and the result carries the first.
+    let first = res.first.clone().expect("the first attempt is kept");
+    assert_eq!(first.outcome, Outcome::Failed);
+    assert!(first.log.ends_with(&format!("/logs/{flaky}/{}-1.log", j.id)), "{}", first.log);
+    assert!(res.log.ends_with(&format!("/logs/{flaky}/{}-2.log", j.id)), "{}", res.log);
+    assert!(first.tail.contains("first") && !first.tail.contains("second"), "{}", first.tail);
+    assert!(!res.tail.contains("first"), "{}", res.tail);
+    assert_eq!(std::fs::read_to_string(&first.log).unwrap().trim(), "first");
+    assert_eq!(std::fs::read_to_string(&res.log).unwrap().trim(), "second");
+    assert!(res.duration_ms >= first.duration_ms);
+    // Counted once it has run, as one job; the Board's line names the first log.
+    let view = r.app.plan_view(&r.app.plan(&flaky).unwrap());
+    assert_eq!((view["tests"]["ran"].as_u64(), view["numbers"]["tests"]["run"].as_u64()), (Some(1), Some(1)));
+    let l = job_lines(&r.app, &flaky);
+    let text = l[0]["text"].as_str().unwrap();
+    assert!(text.contains("retried once") && text.contains(&first.log), "{text}");
+    assert_eq!((l[0]["first_outcome"].as_str(), l[0]["first_log"].as_str()), (Some("failed"), Some(first.log.as_str())));
+    assert!(!l[0].to_string().contains("tail"), "never the output: {l:?}");
     let (j, _) = run(&r.app, &r.sb, r.ask(&name("broken"), "HEAD")).await;
     let res = j.result.unwrap();
     assert_eq!((res.outcome, res.attempts), (Outcome::Failed, 2));
@@ -587,4 +606,88 @@ async fn a_thread_running_the_plans_whole_test_command_is_sent_to_the_queue() {
     let tl = r.app.team_timeline(&plan, &Default::default(), None, 100).await.unwrap();
     assert_eq!(tl["numbers"]["tests"]["refused"].as_u64(), Some(4));
     assert!(tl["events"].as_array().unwrap().iter().any(|e| e["kind"] == "test_refused" && e["group"] == "status"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_later_job_never_overwrites_an_earlier_jobs_logs_and_old_ones_are_pruned() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    let count = r.scratch("count");
+    let plan = r.plan("api", Some(&format!("echo ran >> {count}; echo run-$(wc -l < {count})")), TestsChoice::Approve);
+    let api = name("api");
+    // The one-file log of before goes with the first run.
+    let logs = r.state.path().join("sandbox-home/.sbxw/tests/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(logs.join(format!("{plan}.log")), "old").unwrap();
+    let mut jobs = vec![];
+    for _ in 0..KEEP + 2 {
+        let (j, _) = run(&r.app, &r.sb, TestAsk { rerun: true, ..r.ask(&api, "HEAD") }).await;
+        jobs.push(j);
+    }
+    assert!(!logs.join(format!("{plan}.log")).exists(), "the one-file log is gone");
+    let log = |j: &sbxw_core::testq::Job| j.result.as_ref().unwrap().log.clone();
+    // The first two jobs' logs are pruned; each kept one still holds its own run.
+    for (i, j) in jobs.iter().enumerate() {
+        let path = log(j);
+        assert!(path.ends_with(&format!("/logs/{plan}/{}-1.log", j.id)), "{path}");
+        if i < 2 {
+            assert!(!Path::new(&path).exists(), "job {i} pruned");
+        } else {
+            assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), format!("run-{}", i + 1), "job {i} kept its own output");
+        }
+    }
+    let kept = std::fs::read_dir(logs.join(&plan)).unwrap().count();
+    assert_eq!(kept, KEEP);
+}
+
+const KEEP: usize = sbxw_core::testq::KEEP_LOG_JOBS;
+
+/// The lead reads a job a thread asked for: `check_tests` by id, and
+/// `list_tests` for every open plan it leads, with each attempt's log.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_session_that_did_not_ask_reads_the_result() {
+    use tower::ServiceExt;
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    let flag = r.scratch("flag");
+    let a = r.plan("api", Some(&format!("if [ -e {flag} ]; then echo second; else touch {flag}; echo first; exit 1; fi")), TestsChoice::Approve);
+    let b = r.plan("web", Some("echo web"), TestsChoice::Approve);
+    let (j, _) = run(&r.app, &r.sb, r.ask(&name("api"), "HEAD")).await;
+    assert_eq!(j.by, "api");
+    // The lead's check_tests, as the relay calls it: no thread, the job id.
+    let token = r.app.store.token(r.sb.clone()).unwrap();
+    let post = |uri: &str, body: serde_json::Value| {
+        axum::http::Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap()
+    };
+    let res = crate::http::agent_router(r.app.clone()).oneshot(post("/api/tests/check", serde_json::json!({ "id": j.id, "timeout": 1 }))).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert_eq!((v["job"]["state"].as_str(), v["job"]["by"].as_str()), (Some("done"), Some("api")), "{v}");
+    assert_eq!(v["job"]["result"]["attempts"].as_u64(), Some(2));
+    assert!(v["job"]["result"]["first"]["tail"].as_str().unwrap().contains("first"), "{v}");
+    assert!(v["job"]["result"]["first"]["log"].as_str().unwrap().ends_with("-1.log"), "{v}");
+    // The lead's list_tests: both open plans it leads, whoever asked.
+    let res = crate::http::agent_router(r.app.clone()).oneshot(post("/api/tests/list", serde_json::json!({ "lead": "lead", "plan": b }))).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+    let plans = v["plans"].as_array().unwrap();
+    let ids: Vec<&str> = plans.iter().map(|p| p["plan"]["plan"].as_str().unwrap()).collect();
+    assert_eq!(ids, [b.as_str(), a.as_str()], "{v}");
+    let latest = plans[1]["latest"].as_array().unwrap();
+    assert_eq!((latest[0]["id"].as_str(), latest[0]["by"].as_str()), (Some(j.id.as_str()), Some("api")));
+    assert!(latest[0]["result"]["first"]["log"].as_str().is_some() && latest[0]["result"]["log"].as_str().is_some());
+    assert!(plans[0]["latest"].as_array().unwrap().is_empty(), "a plan's list has its own jobs only");
+    // A session that leads none of them (the person's own) sees every open plan;
+    // a thread sees its own.
+    assert_eq!(r.app.tests_plans_of(&r.sb, None, None, Some("someone-else")).len(), 2);
+    let own = r.app.tests_plans_of(&r.sb, Some(&name("web")), None, None);
+    assert_eq!(own.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), [b.as_str()]);
 }

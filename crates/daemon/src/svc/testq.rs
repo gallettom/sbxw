@@ -193,7 +193,7 @@ impl App {
             .into_iter()
             .filter(|p| p.sandbox == s && p.state == PlanState::Approved && !p.closed && !p.dismissed)
             .collect();
-        open.sort_by_key(|p| std::cmp::Reverse(p.created_ms));
+        open.sort_by_key(|p| std::cmp::Reverse((p.created_ms, p.id.clone())));
         let (plan, session) = (nonempty(plan), nonempty(session));
         let mine: Vec<Plan> =
             open.iter().filter(|p| Some(p.id.as_str()) == plan || (session.is_some() && p.lead.as_deref() == session)).cloned().collect();
