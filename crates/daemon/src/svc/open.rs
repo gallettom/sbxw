@@ -5,6 +5,7 @@
 use crate::app::{now_ms, App};
 use crate::bus::Event;
 use crate::git;
+use crate::svc::timings;
 use crate::pty::{PtySession, Spawn};
 use crate::typing;
 use anyhow::{anyhow, bail, Result, Context};
@@ -67,10 +68,30 @@ impl App {
         Box::pin(async move {
             let app = self.clone();
             let k = key.clone();
+            // The attach a bring-up is followed by, timed on its timeline
+            // (`svc::timings`): only a main agent session this call starts.
+            let attach = match (&key.sandbox, &key.kind) {
+                (Some(sb), SessionKind::Agent) if !self.sessions.is_live(key) => self.timing_begin(sb, timings::step::ATTACH),
+                _ => None,
+            };
             let opened = self
                 .sessions
                 .get_or_open(key, now_ms(), move || async move { app.spawn_for(&k).await })
-                .await?;
+                .await;
+            if let Some(late) = attach {
+                match &opened {
+                    Ok((_, true)) => self.timing_end(late, Some("sbx run spawned".into())),
+                    _ => self.timing_drop(late),
+                }
+            }
+            let opened = opened?;
+            // A stopped sandbox starts with its agent: its kits' startups are
+            // watched from its session's start.
+            if let (true, Some(sb), SessionKind::Agent) = (opened.1, &key.sandbox, &key.kind) {
+                if let Some((id, start, resolved)) = self.timing_watch_at_attach(sb) {
+                    self.watch_kit_startups(sb.clone(), resolved, id, start, true);
+                }
+            }
             match (opened.1, &key.sandbox, &key.kind) {
                 (true, Some(sb), SessionKind::Thread(t)) => self.watch_thread_start(sb.clone(), t.clone(), opened.0.clone()),
                 // A new main terminal: a leader from before a restart may be in it.
@@ -150,10 +171,14 @@ impl App {
         let cfg = self.config_for(&sandbox).await;
         // The two kinds that start a stopped sandbox: `sbx run` and `sbx exec`
         // (threads release ports in `ensure_running_for_thread`).
+        let late = matches!(key.kind, SessionKind::Agent).then(|| self.timing_begin(&sandbox, timings::step::ATTACH_LS)).flatten();
         let running = match key.kind {
             SessionKind::Agent | SessionKind::Bash => Some(sbx.is_running(&sandbox.name).await),
             _ => None,
         };
+        if let Some(late) = late {
+            self.timing_end(late, None);
+        }
         if running == Some(false) {
             self.release_busy_ports(&sandbox, &cfg).await;
         }
@@ -183,10 +208,17 @@ impl App {
                 let rec = self.store.get(&sandbox);
                 let chrome = match cfg.chrome || rec.chrome {
                     // Not read: the agent starts without --chrome, and says why.
-                    true => sbx.setting_bool(sbxw_core::chrome::SETTING, sbxw_core::chrome::SINCE).await.unwrap_or_else(|e| {
-                        tracing::warn!("'{sandbox}' starts without --chrome, sbx's setting could not be read: {e:#}");
-                        None
-                    }),
+                    true => {
+                        let late = self.timing_begin(&sandbox, timings::step::ATTACH_SETTING);
+                        let read = sbx.setting_bool(sbxw_core::chrome::SETTING, sbxw_core::chrome::SINCE).await.unwrap_or_else(|e| {
+                            tracing::warn!("'{sandbox}' starts without --chrome, sbx's setting could not be read: {e:#}");
+                            None
+                        });
+                        if let Some(late) = late {
+                            self.timing_end(late, None);
+                        }
+                        read
+                    }
                     false => None,
                 };
                 let flags = sbxw_core::chrome::agent_flags(cfg.chrome || rec.chrome, chrome);

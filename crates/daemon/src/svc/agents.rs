@@ -66,6 +66,12 @@ impl App {
         self.note_reader_seen(sandbox, ev.thread(), ev.agent_proc());
         let has_pty = self.sessions.is_live(&SessionKey::agent(sandbox));
         let infos = self.agents.lock().unwrap().apply(&sandbox.to_string(), &ev, origin, has_pty, now_ms());
+        // A bring-up's timeline notes its main session's first start and
+        // first idle prompt (`svc::timings`); measured only.
+        if ev.thread().is_none() {
+            let idle = infos.iter().any(|i| i.thread.is_none() && i.state == agents::SessionState::Idle);
+            self.timing_agent_event(sandbox, ev.event(), idle);
+        }
         for info in infos {
             self.send(Event::Session(info));
         }

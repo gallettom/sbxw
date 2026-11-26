@@ -55,6 +55,7 @@ pub mod host;
 pub mod runner;
 pub mod scripts;
 pub mod ssh;
+pub mod timing;
 
 use anyhow::{anyhow, bail, Result};
 use runner::{Invocation, Output, Runner};
@@ -843,18 +844,24 @@ impl Sbx {
     /// Every call goes through here: bounded by its class, the child killed
     /// when the bound passes (the runner's future is dropped, and both local
     /// runners spawn with `kill_on_drop`).
+    ///
+    /// Each call's wall time is noted by subcommand ([`timing`]): in the
+    /// bring-up it belongs to, else in the debug log.
     async fn run(&self, inv: Invocation) -> Result<Output> {
-        let Some(bound) = self.timeouts.for_args(&inv.args) else {
-            return self.runner.run(inv).await;
-        };
         let class = command_class(&inv.args);
-        match tokio::time::timeout(bound, self.runner.run(inv)).await {
-            Ok(out) => out,
-            Err(_) => {
-                tracing::warn!("`sbx {class}` did not finish within {} s; stopped", bound.as_secs());
-                Err(anyhow!("`sbx {class}` did not finish within {} s and was stopped", bound.as_secs()))
-            }
-        }
+        let started = std::time::Instant::now();
+        let out = match self.timeouts.for_args(&inv.args) {
+            None => self.runner.run(inv).await,
+            Some(bound) => match tokio::time::timeout(bound, self.runner.run(inv)).await {
+                Ok(out) => out,
+                Err(_) => {
+                    tracing::warn!("`sbx {class}` did not finish within {} s; stopped", bound.as_secs());
+                    Err(anyhow!("`sbx {class}` did not finish within {} s and was stopped", bound.as_secs()))
+                }
+            },
+        };
+        timing::note(&class, started, out.as_ref().is_ok_and(Output::success));
+        out
     }
 
     pub fn process() -> Self {
@@ -973,6 +980,7 @@ impl Sbx {
             }
         });
         let args = create_args(name, opts);
+        let started = std::time::Instant::now();
         let out = self
             .runner
             .run(Invocation {
@@ -980,7 +988,9 @@ impl Sbx {
                 stdin: None,
                 on_line: Some(sink),
             })
-            .await?;
+            .await;
+        timing::note("create", started, out.as_ref().is_ok_and(Output::success));
+        let out = out?;
         if !out.success() {
             let said = Vec::from(std::mem::take(&mut *tail.lock().unwrap())).join("\n");
             let out = if said.is_empty() { out } else { Output { stderr: said.into_bytes(), stdout: Vec::new(), ..out } };
@@ -1127,6 +1137,11 @@ impl Sbx {
 
     /// [`Self::version`], read once per client while it reads; an answer
     /// that is not a version is asked again next time.
+    /// The version [`Self::known_version`] already read, without asking.
+    pub fn seen_version(&self) -> Option<(u32, u32, u32)> {
+        *self.version_seen.lock().unwrap()
+    }
+
     pub async fn known_version(&self) -> Option<(u32, u32, u32)> {
         if let Some(v) = *self.version_seen.lock().unwrap() {
             return Some(v);
@@ -2273,5 +2288,33 @@ mod tests {
         assert_eq!((t.allowed, t.rule.as_deref()), (Some(false), Some("default-deny-all")));
         let t = parse_policy_check("something else");
         assert_eq!((t.allowed, t.rule, t.raw.as_str()), (None, None, "something else"), "kept as printed");
+    }
+
+    #[tokio::test]
+    async fn each_call_in_a_scope_is_timed_by_subcommand_and_none_of_its_arguments() {
+        let fake = Fake::new(|a| match a.first().map(String::as_str) {
+            Some("ls") => Output::ok("[]"),
+            Some("policy") => Output::fail(1, "nope"),
+            _ => Output::ok(""),
+        });
+        let sbx = Sbx::new(fake);
+        let rec = timing::Recorder::new(std::time::Instant::now());
+        rec.scope(async {
+            sbx.ls().await;
+            let _ = sbx.policy("allow", Some(&sb("secretname")), "token-abc.example").await;
+            sbx.secret_set("anthropic", "sk-123", None).await.unwrap();
+            sbx.create(&sb("secretname"), &CreateOpts { env: vec!["API_TOKEN=xyz".into()], ..Default::default() }, None).await.unwrap();
+        })
+        .await;
+        // Outside the scope: not kept.
+        sbx.ls().await;
+        let calls = rec.calls();
+        let classes: Vec<(&str, bool)> = calls.iter().map(|c| (c.class.as_str(), c.ok)).collect();
+        assert_eq!(classes, [("ls", true), ("policy allow", false), ("secret set", true), ("create", true)]);
+        let text = serde_json::to_string(&calls).unwrap();
+        for secret in ["secretname", "token-abc", "sk-123", "xyz", "anthropic"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+        assert_eq!(rec.count_since("ls", 0), 1);
     }
 }

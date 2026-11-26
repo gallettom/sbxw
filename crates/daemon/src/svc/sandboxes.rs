@@ -277,6 +277,11 @@ impl App {
         }
         let mut failed: Vec<String> = Vec::new();
         let mut chats: Vec<PathBuf> = Vec::new();
+        // A bring-up's kit-startup watch ends first: no look at a sandbox
+        // being removed (`svc::timings`).
+        for n in names {
+            self.timing_stop_watch(n);
+        }
         for refs in by_host.values() {
             let sbx = self.sbx_for(&refs[0]).await?;
             let bare: Vec<SandboxName> = refs.iter().map(|r| r.name.clone()).collect();

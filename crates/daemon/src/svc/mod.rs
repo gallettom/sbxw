@@ -36,5 +36,6 @@ pub mod stats;
 pub mod team;
 pub mod testq;
 pub mod tickets;
+pub mod timings;
 pub mod usage;
 pub mod voice;

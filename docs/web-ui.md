@@ -169,6 +169,83 @@ sbxw  myapp                     Creating… 2/5
   for a confirmation and add a rule through the same route as the network
   panel. **Retry** (on the tab that clicked Create) sends the same request again.
 
+### Where the time goes
+
+Every bring-up is timed: each step, each `sbx` call, and what follows the
+end of the card until the agent can be typed into. The timing only measures;
+it changes nothing a bring-up does or waits for.
+
+| Where | What |
+|---|---|
+| The end of `sbxw up` | One line under the steps: `ready in 41 s: create 28 s, boot 6.0 s, tooling 3.1 s` |
+| The daemon log (`sbxw logs <name>`, `~/.sbxw/run/daemon.log`) | The same line, then `agent ready ... after the request` once the agent's prompt is up, then `kit startups finished after ...` |
+| `GET /api/timings` (UI token, like every `/api` route) | The last 50 timelines in full, newest first |
+| `~/.sbxw/state/timings.json` | The same 50, kept across daemon restarts |
+
+The progress stream's `done` event carries the line as `summary`; the
+desktop create card does not show it yet. From a terminal on the Mac:
+
+```sh
+curl -s -H "Authorization: Bearer $(cat ~/.sbxw/run/ui-token)" \
+  http://sbxw.localhost:7681/api/timings | python3 -m json.tool
+```
+
+**Three numbers answer "where does the time go"**, each counted from the
+request:
+
+1. **Creation**: `ready_ms`, the time to the end of the card. Inside it,
+   `sbx_create` is `sbx create` itself (its detail names the template, if any,
+   and the number of kits passed); the rest is sbxw's own work and its small
+   `sbx` calls (`sbx_ls`, `template_check`, `boot` with its number of `sbx ls`
+   polls, `tooling`, `policy_allow`).
+2. **From creation to a usable agent**: `agent_ms` minus `ready_ms`. Inside
+   it, `attach` is sbxw opening the pane (its `sbx ls`, the `sbx run` spawn),
+   `agent_session_start` Claude Code's first `SessionStart` hook, and
+   `agent_idle` the first time the session waits at its prompt (today the
+   same event, so the same time).
+3. **The kits' startups after that**: `startups_ms`, when the last of the
+   kits' startup commands ended in the guest. They run in the background
+   after `sbx create` returns, beside the agent, so the agent may be usable
+   long before they end.
+
+A creation from a template against one without (`template = ""`, or a new
+name with the automatic template skipped) says whether the template pays
+off: compare `sbx_create` and `startups_ms`.
+
+Reading a timeline:
+
+- `start_ms` and `ms` are milliseconds after the request. `tooling` and
+  `policy_allow` run side by side, so they overlap.
+- `kind`: `new`; `stopped` (sbx starts it at the attach, so its `boot` is
+  empty and its kits' startups are watched from the agent's start);
+  `running`; or empty when the bring-up failed before it looked.
+- `calls`: every `sbx` call the bring-up made, by subcommand only, with its
+  wall time and whether it exited 0. `sbx` calls outside a bring-up go to the
+  daemon's debug log (`sbx <class> took N ms`).
+- A step marked `unfinished` was running when the bring-up failed; `error`
+  names that step (`failed during create`), never the message.
+- The attach and the agent's events count for the first attach within 30
+  minutes of the bring-up.
+- Step names, in order: `remote_link`, `git_clone`, `remote_config` (remote
+  host, `--git`), `prepare`, `sbx_ls`, `template_check`,
+  `setting_remote_control`, `record`, `setting_chrome`, `create_prepare`,
+  `sbx_create`, `run_detached`, `boot`, `tooling`, `policy_allow`,
+  `policy_deny`, `kits_add`, `secret`, `aliases`, `template_save`, `done`,
+  then `attach`, `attach_ls`, `attach_setting`, `agent_session_start`,
+  `agent_idle`, `kit_startups`. A step that does not apply is absent.
+
+A timeline holds the sandbox's name, its host, the template's tag, the
+number of kits and the sbx version: no workspace path, no environment value,
+no token.
+
+The kit-startup watch looks every 10 seconds, from the end of the card
+until the last startup command ends or 20 minutes pass. Each look is an
+`sbx ls`, then, only while the sandbox runs, an `sbx exec` listing its
+processes. It never starts a sandbox: one found stopped ends the watch
+("the sandbox stopped before the startups ended"), and stopping or removing
+it from sbxw ends the watch first. The `kit_startups` step's detail says how
+many looks it took and how long those `sbx` calls ran in total.
+
 ## Remote hosts (experimental)
 
 sbxw can run sandboxes on other machines over SSH ([Remote

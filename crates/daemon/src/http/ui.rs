@@ -57,6 +57,7 @@ pub fn routes() -> Router<Arc<App>> {
         // Sandboxes.
         .route("/api/sandboxes", get(list))
         .route("/api/stats", get(stats))
+        .route("/api/timings", get(timings))
         .route("/api/sandboxes/create", post(create))
         .route("/api/carve/preview", post(carve_preview))
         .route("/api/sandboxes/chat", post(chat))
@@ -346,6 +347,11 @@ async fn lead_states(State(app): S) -> Json<Value> {
 /// CPU and memory, the daemon's and each sandbox's (see `svc::stats`).
 async fn stats(State(app): S) -> Json<sbxw_core::stats::Stats> {
     Json(app.stats().await)
+}
+
+/// The last bring-ups' timelines, newest first (`svc::timings`). Read only.
+async fn timings(State(app): S) -> Json<Value> {
+    Json(json!({ "timelines": app.timelines() }))
 }
 
 async fn list(State(app): S) -> Json<Value> {
@@ -752,6 +758,8 @@ async fn recreate(State(app): S, Path(name): Path<String>) -> ApiResult {
 
 async fn stop(State(app): S, Path(name): Path<String>) -> ApiResult {
     let sb = sandbox(&name)?;
+    // The bring-up's kit-startup watch ends first: its next look would start it again.
+    app.timing_stop_watch(&sb);
     app.sbx_for(&sb).await?.stop(&sb.name).await?;
     // Its agent stopped with it: a later start is a new conversation.
     app.lead_gone(&sb);

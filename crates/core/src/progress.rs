@@ -61,7 +61,14 @@ pub enum Progress {
         allow_scope: String,
         message: String,
     },
-    Done { error: Option<String> },
+    /// The end. `summary`: where the bring-up's time went, as the daemon
+    /// log says it (`ready in 41 s: create 28 s, boot 6.0 s, ...`); absent
+    /// from an older daemon.
+    Done {
+        error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
 }
 
 pub type Sink = Arc<dyn Fn(Progress) + Send + Sync>;
@@ -101,5 +108,9 @@ mod tests {
     fn the_wire_shape_is_tagged_by_kind() {
         let v = serde_json::to_value(Progress::Started { id: CREATE.into() }).unwrap();
         assert_eq!(v, serde_json::json!({"kind": "started", "id": "create"}));
+        let v = serde_json::to_value(Progress::Done { error: None, summary: Some("ready in 4.0 s".into()) }).unwrap();
+        assert_eq!(v, serde_json::json!({"kind": "done", "error": null, "summary": "ready in 4.0 s"}));
+        let old: Progress = serde_json::from_value(serde_json::json!({"kind": "done", "error": null})).unwrap();
+        assert_eq!(old, Progress::Done { error: None, summary: None }, "an older daemon's end still reads");
     }
 }
