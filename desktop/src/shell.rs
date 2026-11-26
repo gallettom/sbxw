@@ -3223,12 +3223,19 @@ impl App {
         // Dictation stands where Env stood (Env is a menu row now).
         let at = extras.iter().position(|it| it.id == "envfile").unwrap_or(extras.len());
         extras.insert(at, self.dictate_item(i));
+        // "Redraw terminal" after Esc (bar::ORDER), for a pane with a terminal.
+        let redraw = p.term.is_some();
+        if redraw {
+            extras.insert(at, redraw_item());
+        }
         items.extend(extras);
         if p.status() != "connected" {
             items.push(core("status", &p.status(), "muted", "The terminal's connection"));
         }
         let agent = self.agent_label(i);
         let mut f = bar::pane_fit(self.bar_width(i), &pane_name(p), agent.as_deref(), items, true, self.pane_leads(p));
+        // Never a second row in the menu: it has its own "Redraw terminal".
+        f.hidden.retain(|it| !(it.core && it.id == bar::REDRAW));
         if let (false, Some(_)) = (f.switch, &agent) {
             // Too narrow even for the switch: the menu's first row.
             let to = if p.mode == Mode::Bash { agent.clone().unwrap_or_default() } else { bar::BASH.to_string() };
@@ -3779,6 +3786,38 @@ fn bar_more<S: WinSide>(f: &bar::PaneFit, i: usize, uid: Uid, open: bool) -> El 
     b
 }
 
+/// The pane bar's "Redraw terminal" button as the fit sees it.
+fn redraw_item() -> bar::Item {
+    bar::Item { id: bar::REDRAW.into(), label: "Redraw terminal".into(), icon: Some("reload".into()), tone: "muted".into(), help: "Redraw terminal".into(), count: None, intent: None, core: true, elsewhere: false }
+}
+
+/// Pane `i`'s "Redraw terminal" button: the reload icon alone, as big as a
+/// chip; the same press as the "⋯" menu's row ([`App::redraw_terminal`]). It
+/// never takes the keyboard from the terminal.
+fn redraw_chip<S: WinSide>(s: &App, it: &bar::Item, i: usize, ground: u32) -> El {
+    let uid = s.panes.get(i).map_or(0, |p| p.uid);
+    let ink = theme::hex(theme::mark_on(theme::color_value("text-bright").unwrap(), ground));
+    row()
+        .key(it.key(i + 1))
+        .role("button")
+        .label(it.label.clone())
+        .help(it.help.clone())
+        .px(bar::CHIP_PX)
+        .h(layout::DENSE_H)
+        .min_w(layout::DENSE_H)
+        .justify_center()
+        .items_center()
+        .radius(theme::radius("xs").unwrap())
+        .focusable(false)
+        .preserve_focus_on_press(true)
+        .hover(c("elevated"))
+        .cursor(Cursor::Pointer)
+        .on_press(on_pane::<S>(uid, |s: &mut App, i| {
+            s.redraw_terminal(i);
+        }))
+        .child(rune::icon(crate::icons::get("reload").unwrap(), bar::CHIP_ICON).color(ink))
+}
+
 /// The "⋯" menu's "Redraw terminal" row (key `pane-<n>-redraw`).
 fn redraw_row(n: usize) -> screen::MenuRow<'static> {
     screen::MenuRow {
@@ -3978,7 +4017,11 @@ pub(crate) fn pane_bar<S: WinSide>(s: &App, i: usize) -> (El, u32, Option<u32>) 
         for it in &f.shown {
             let z = bar::zone(&it.id);
             let active = focused && bar::panel_of(&it.id).is_some_and(shown_panel);
-            let mut chip = if it.core && it.id == bar::DICTATE { dictate_chip::<S>(s, it, i, bar_ground) } else { bar_chip::<S>(it, i + 1, active, bar_ground) };
+            let mut chip = if it.core && it.id == bar::DICTATE {
+                dictate_chip::<S>(s, it, i, bar_ground)
+            } else if it.core && it.id == bar::REDRAW {
+                redraw_chip::<S>(s, it, i, bar_ground)
+            } else { bar_chip::<S>(it, i + 1, active, bar_ground) };
             if last.is_some_and(|l| l != z) {
                 // In the gap before the group's first chip (no room of its own).
                 chip = chip.child(hairline(z));

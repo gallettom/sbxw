@@ -984,7 +984,7 @@ sandbox with no workspace is on the neutral bar. A bar's actions are its
 icon in its colour by meaning and its label in `text-bright`, grouped
 left to right with a hairline between two groups (`bar::zone`,
 `bar::ORDER`): identity (the grip, the state dot, the name) | the session
-(the Claude / Bash switch, Esc, the microphone) | the team (Threads, a plan
+(the Claude / Bash switch, Esc, Redraw terminal as the reload icon alone, the microphone) | the team (Threads, a plan
 to review, Merge or Retry merge) | attention (wants you, a question, the sbx
 shield and its count) | tools (Browser, Project) | Remote (and Close thread)
 last. The name carries team mode: on the main session of a running sandbox
