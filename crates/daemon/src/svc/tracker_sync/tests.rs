@@ -1,8 +1,8 @@
 //! Ticket sync with a fake sbx and a fake script answering as the contract
 //! says: import, update, removal, `closed upstream`; agents never see
-//! Backlog; write-backs for every column, merged outside sbxw included; the
+//! Backlog, the phone shows it read-only; write-backs for every column, merged outside sbxw included; the
 //! queue across a failure and a restart; auto-close; status and one Board
-//! warning; the sync sandbox's life; nothing of a ticket's text logged.
+//! warning; a disconnect discards the queue; the sync sandbox's life; nothing of a ticket's text logged.
 
 use super::*;
 use crate::testing::{app_in_with, ls, sbx_answer};
@@ -159,11 +159,18 @@ async fn issues_are_imported_updated_removed_and_closed_upstream_marked() {
     assert_eq!(by_key(&app, "acme/web#1").unwrap().title, "Fix the login page");
     assert!(w.ops("comment").is_empty(), "nothing is written back for Backlog");
 
-    // The phone: Backlog neither counts as Planned nor shows.
+    // Backlog does not count as Planned. The phone shows it, read-only:
+    // each card with its issue, and no write permission.
     assert_eq!(app.tickets_planned_count(SANDBOX), 0);
     let phone = crate::http::remote_kanban::board_view(&app, &sb());
-    assert!(phone["columns"].as_array().unwrap().iter().all(|c| c["id"] != "backlog"));
-    assert!(!phone["summary"].as_str().unwrap().contains("backlog"), "{phone}");
+    let backlog = &phone["columns"][0];
+    assert_eq!((backlog["id"].as_str(), backlog["count"].as_u64()), (Some("backlog"), Some(2)), "{phone}");
+    let o = &backlog["cards"][0]["origin"];
+    assert_eq!(o["tracker"], "github");
+    assert!(o["key"].as_str().unwrap().starts_with("acme/web#"), "{o}");
+    assert!(o["url"].as_str().unwrap().starts_with("https://github.com/acme/web/issues/"), "{o}");
+    assert!(backlog["cards"][0].get("can").is_none() && backlog["cards"][0].get("can_plan").is_none(), "read-only on the phone");
+    assert!(phone["summary"].as_str().unwrap().contains("2 backlog"), "{phone}");
 
     // B is planned; then both issues leave: A (Backlog) goes, B is marked.
     app.ticket_plan(&sb(), b.n).unwrap();
@@ -181,6 +188,11 @@ async fn issues_are_imported_updated_removed_and_closed_upstream_marked() {
     refresh(&app).await;
     assert!(!by_key(&app, "acme/web#2").unwrap().closed_upstream());
     assert_eq!(app.tickets_with(SANDBOX, |b| b.tickets.len()), 1);
+    // Closed upstream, label still on: the same mark.
+    w.issues.lock().unwrap()[0]["state"] = json!("closed");
+    refresh(&app).await;
+    assert!(by_key(&app, "acme/web#2").unwrap().closed_upstream(), "a closed issue marks it as an unlabelled one does");
+    assert_eq!(col(&app, b.n), Some(Column::Planned));
 }
 
 #[tokio::test]
@@ -404,13 +416,25 @@ async fn removing_the_source_drops_backlog_and_keeps_the_rest() {
     set(&app, false);
     app.tracker_tick().await;
     let b = by_key(&app, "acme/web#2").unwrap().n;
+    // Its write-back fails, so it waits in the queue.
+    *w.fail.lock().unwrap() = Some(("comment".into(), "network".into()));
     app.ticket_plan(&sb(), b).unwrap();
+    app.tracker_tick().await;
+    assert_eq!(app.tracker_with(SANDBOX, |x| x.queue.len()), 1);
     app.tracker_source_remove(&sb()).unwrap();
     assert!(by_key(&app, "acme/web#1").is_none());
     assert!(by_key(&app, "acme/web#2").unwrap().origin.is_some());
+    assert!(app.tracker_with(SANDBOX, |x| x.queue.is_empty()), "a disconnect discards the queued write-backs");
     let v = app.tracker_source_view(&sb()).await;
-    assert_eq!((v["configured"].as_bool(), v["status"]["state"].as_str()), (Some(false), Some("off")));
+    assert_eq!((v["configured"].as_bool(), v["status"]["state"].as_str(), v["status"]["pending"].as_u64()), (Some(false), Some("off"), Some(0)));
     assert!(app.tracker_refresh(&sb()).is_err());
+    // On again: nothing of before is replayed.
+    *w.fail.lock().unwrap() = None;
+    let before = w.ops("comment").len();
+    set(&app, false);
+    app.tracker_tick().await;
+    assert_eq!(w.ops("comment").len(), before, "no replay on reconnect");
+    assert!(app.tracker_with(SANDBOX, |x| x.queue.is_empty()));
 }
 
 #[tokio::test]

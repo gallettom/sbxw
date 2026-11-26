@@ -21,9 +21,13 @@ fn a_github_repository_is_detected_from_every_remote_form() {
 fn a_source_is_checked_when_set() {
     let s = SourceDraft { repo: Some(" acme/web.git ".into()), ..Default::default() }.check().unwrap();
     assert_eq!((s.repo.as_str(), s.label.as_str(), s.auto_close, s.tracker), ("acme/web", "sbxw", false, Tracker::Github));
-    for bad in ["acme", "acme/web/x", "../x", "acme/we b", ""] {
+    // Refused here exactly where the sync script would refuse it later.
+    let long_owner = format!("{}/web", "a".repeat(40));
+    for bad in ["acme", "acme/web/x", "../x", "acme/we b", "", "ac_me/web", "ac.me/web", "-acme/web", "acme/.web", "acme/..", long_owner.as_str()] {
         assert!(SourceDraft { repo: Some(bad.into()), ..Default::default() }.check().is_err(), "{bad}");
     }
+    let ok = format!("{}/we_b.x-1", "a-1".repeat(13));
+    assert_eq!(SourceDraft { repo: Some(ok.clone()), ..Default::default() }.check().unwrap().repo, ok);
     assert!(SourceDraft { repo: Some("a/b".into()), label: Some("sbxw:planned".into()), ..Default::default() }.check().is_err(), "sbxw's own labels are not a filter");
     assert!(SourceDraft { repo: Some("a/b".into()), label: Some("a,b".into()), ..Default::default() }.check().is_err());
 }
