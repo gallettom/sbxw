@@ -1128,3 +1128,40 @@ fn redraw_terminal_nudges_the_size_and_gives_it_back() {
     r.settle();
     assert!(!r.rt.state.palette_cmds().iter().any(|c| c.id == "redraw"), "no terminal, no redraw");
 }
+
+/// The pane bar's "Redraw terminal" button: right after Esc, before the
+/// microphone, only for a pane with a terminal; pressing it does what the
+/// menu's row does (the size nudged and given back, once).
+#[test]
+fn the_redraw_button_follows_esc_and_redraws_the_pane() {
+    let mut r = Rig::new(&["a"], 1284.0, 816.0);
+    let (uid, want) = {
+        let p = &r.rt.state.panes[0];
+        (p.uid, p.term.as_ref().unwrap().wanted_size().unwrap())
+    };
+    let (c, rows) = (want.0 as u16, want.1 as u16);
+    let f = r.rt.state.pane_fit(0).unwrap();
+    let ids: Vec<&str> = f.shown.iter().map(|i| i.id.as_str()).collect();
+    let at = ids.iter().position(|i| *i == bar::REDRAW).expect("the button is in the bar");
+    if let Some(e) = ids.iter().position(|i| *i == "interrupt") {
+        assert_eq!(e + 1, at, "right after Esc");
+    }
+    assert_eq!(ids[at + 1], bar::DICTATE, "right before the microphone");
+    assert!(f.hidden.iter().all(|i| i.id != bar::REDRAW), "never a second menu row");
+    assert!(r.rt.presented("pane-1-redraw-button").is_some(), "drawn");
+    super::tests::tap(&mut r.rt, "pane-1-redraw-button");
+    for _ in 0..20 {
+        r.clock += 0.03;
+        let clock = r.clock;
+        r.rt.update(|s, tx| {
+            s.poll(clock, tx);
+        });
+        r.rt.frame(0.03);
+    }
+    assert_eq!(r.take()[&uid], vec![(c - 1, rows), (c, rows)], "one column narrower, then the size back, once");
+    // No terminal, no button.
+    r.rt.update(|s, _| s.panes[0].term = None);
+    r.settle();
+    let f = r.rt.state.pane_fit(0).unwrap();
+    assert!(f.shown.iter().chain(&f.hidden).all(|i| i.id != bar::REDRAW));
+}

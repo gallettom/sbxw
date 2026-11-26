@@ -43,7 +43,7 @@ pub fn meaning(id: &str) -> &'static str {
 ///    core, never an extra; the name pill carries the team toggle, see
 ///    [`take_team`]);
 /// 1. the session: the Claude / Bash switch (drawn by the core), then Esc,
-///    the microphone, then what only describes it (model, state word,
+///    Redraw terminal, the microphone, then what only describes it (model, state word,
 ///    connection): what acts on this session's agent;
 /// 2. the team: Threads, a plan to review, Merge / Retry merge;
 /// 3. attention: a session that wants you, a question, sbx's requests
@@ -52,7 +52,7 @@ pub fn meaning(id: &str) -> &'static str {
 /// 5. the session's remote control, then closing a thread, last.
 pub fn zone(id: &str) -> u8 {
     match id {
-        "interrupt" | DICTATE | "model" | "state" | "status" => 1,
+        "interrupt" | REDRAW | DICTATE | "model" | "state" | "status" => 1,
         "threads" | "plan" | "merge" | "lead" => 2,
         "attention" | "relay" | "approvals" => 3,
         "remote" | "close" => 5,
@@ -61,7 +61,7 @@ pub fn zone(id: &str) -> u8 {
 }
 
 /// The order inside a group (an id not listed comes after the listed ones of its group).
-pub const ORDER: &[&str] = &["interrupt", DICTATE, "model", "state", "status", "threads", "plan", "merge", "attention", "relay", "approvals", "browser", "project", "codemap", "remote", "close"];
+pub const ORDER: &[&str] = &["interrupt", REDRAW, DICTATE, "model", "state", "status", "threads", "plan", "merge", "attention", "relay", "approvals", "browser", "project", "codemap", "remote", "close"];
 
 /// Where `id` is drawn: its group, then its place in [`ORDER`].
 pub fn place(id: &str) -> (u8, usize) {
@@ -170,7 +170,7 @@ pub const COUNT_ONLY: &[&str] = &["approvals"];
 
 /// Chips drawn as their icon alone (their word is the accessible name, the
 /// tooltip and the menu row's label): the microphone.
-pub const ICON_ONLY: &[&str] = &[DICTATE];
+pub const ICON_ONLY: &[&str] = &[REDRAW, DICTATE];
 
 /// Extras that always sit in the "⋯" menu, never inline: a view setting
 /// of the pane (keyword pills), or a card opened now and then (the
@@ -181,6 +181,12 @@ pub const MENU_ONLY: &[&str] = &["pills", "envfile", "commits", "mcp-view", "ski
 /// The core's dictation button (`pane-<n>-dictate`): it stands where Env
 /// stood in the fit order, Env having moved into the "⋯" menu.
 pub const DICTATE: &str = "dictate";
+
+/// The core's "Redraw terminal" button (`pane-<n>-redraw-button`), right
+/// after Esc: the same action as the "⋯" menu's row (`pane-<n>-redraw`) and
+/// the palette, so only a pane with a terminal has it, and it never goes
+/// into the overflow menu (the menu's own row stays).
+pub const REDRAW: &str = "redraw-button";
 
 /// Whether a press on the rail (or a sidebar row) that runs `other` (its
 /// intent and arguments; `screen`: the screen that entry shows, when it
@@ -769,6 +775,17 @@ mod tests {
         assert!(chip_w(&a) + 40.0 < CHIP_PX * 2.0 + CHIP_ICON + CHIP_GAP + measure("sbx asks 24", CHIP_TEXT, 500.0), "room back for the others");
         let other = ex("relay", "asks you", "amber", Some(2));
         assert_eq!(other.chip_text(), "asks you 2", "only the counts whose icon says it lose their words");
+    }
+
+    /// The redraw button stands right after Esc and before the microphone.
+    #[test]
+    fn the_redraw_button_is_right_after_esc() {
+        let mut items = main_bar(Some(false));
+        items.push(Item { id: REDRAW.into(), label: "Redraw terminal".into(), icon: Some("reload".into()), tone: "muted".into(), help: "Redraw terminal".into(), count: None, intent: None, core: true, elsewhere: false });
+        let f = pane_fit(1400.0, "sbxw-2", Some("Claude"), items, true, false);
+        assert_eq!(&ids(&f.shown)[..3], ["interrupt", REDRAW, DICTATE]);
+        assert_eq!(f.shown[1].chip_text(), "", "the icon alone");
+        assert_eq!(zone(REDRAW), zone("interrupt"));
     }
 
     #[test]
