@@ -38,6 +38,13 @@ fn commit(ws: &Path, file: &str, text: &str) -> String {
     git(ws, &["rev-parse", "HEAD"])
 }
 
+/// One more commit on `sbxw/<thread>`, main checked out again after.
+fn branch_commit(ws: &Path, thread: &str, file: &str, text: &str) {
+    git(ws, &["checkout", "-q", &format!("sbxw/{thread}")]);
+    commit(ws, file, text);
+    git(ws, &["checkout", "-q", "main"]);
+}
+
 /// Branch `sbxw/<thread>` from main with `file` set to `text`.
 fn branch(ws: &Path, thread: &str, file: &str, text: &str) {
     git(ws, &["checkout", "-q", "-b", &format!("sbxw/{thread}"), "main"]);
@@ -45,12 +52,22 @@ fn branch(ws: &Path, thread: &str, file: &str, text: &str) {
     git(ws, &["checkout", "-q", "main"]);
 }
 
+/// A commit a thread makes on its branch at the moment the fast-forward
+/// runs: `(repo, thread)`, taken once.
+type Late = Arc<std::sync::Mutex<Option<(PathBuf, String)>>>;
+
 /// `sbx exec <name> -- bash -lc SCRIPT $0 args…` of sbxw's own scripts, run
-/// here; the rest answered as a running sandbox would.
-fn local_exec(home: PathBuf) -> impl Fn(&[String]) -> Output + Send + Sync + 'static {
+/// here (the thread close too); the rest answered as a running sandbox
+/// would.
+fn local_exec(home: PathBuf, late: Late) -> impl Fn(&[String]) -> Output + Send + Sync + 'static {
     move |a: &[String]| match a.first().map(String::as_str) {
         Some("ls") => ls(&[("myapp", "running")]),
-        Some("exec") if a.get(3).is_some_and(|x| x == "bash") && a.get(6).is_some_and(|x| x.starts_with("sbxw-tests-") || x.starts_with("sbxw-ci-") || x == "sbxw-thread-merge") => {
+        Some("exec") if a.get(3).is_some_and(|x| x == "bash") && a.get(6).is_some_and(|x| x.starts_with("sbxw-tests-") || x.starts_with("sbxw-ci-") || x == "sbxw-thread-merge" || x == "sbxw-thread-end") => {
+            if a[6] == "sbxw-ci-ff" {
+                if let Some((ws, t)) = late.lock().unwrap().take() {
+                    branch_commit(&ws, &t, "late.txt", "made after the check");
+                }
+            }
             let out = std::process::Command::new("bash")
                 .env("HOME", &home)
                 .env("GIT_AUTHOR_NAME", "Ada")
@@ -63,7 +80,6 @@ fn local_exec(home: PathBuf) -> impl Fn(&[String]) -> Output + Send + Sync + 'st
                 .unwrap();
             Output { code: out.status.code(), stdout: out.stdout, stderr: out.stderr }
         }
-        Some("exec") if a.iter().any(|x| x == "sbxw-thread-end") => Output::ok("ok=1\n"),
         _ => sbx_answer(a),
     }
 }
@@ -74,6 +90,7 @@ struct Rig {
     app: Arc<App>,
     fake: Arc<Fake>,
     sb: SandboxRef,
+    late: Late,
 }
 
 fn t(name: &str) -> PlanThread {
@@ -90,10 +107,11 @@ fn rig() -> Rig {
     commit(ws.path(), "b.txt", "b");
     let home = state.path().join("sandbox-home");
     std::fs::create_dir_all(&home).unwrap();
-    let (app, fake) = app_in_with(state.path(), local_exec(home));
+    let late: Late = Default::default();
+    let (app, fake) = app_in_with(state.path(), local_exec(home, late.clone()));
     let sb = SandboxRef::parse("myapp").unwrap();
     app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
-    Rig { _state: state, ws, app, fake, sb }
+    Rig { _state: state, ws, app, fake, sb, late }
 }
 
 impl Rig {
@@ -456,4 +474,105 @@ async fn closing_the_plan_while_ci_runs_ends_it_and_removes_the_ci_branch() {
     r.app.ci_run("p2", 1).await;
     assert!(!r.has_ci_branch("p2"), "a late build leaves nothing behind");
     assert_eq!(r.runs(), 0, "no battery ran for a closed plan");
+}
+
+/// A thread commits after its CI branch passed: the watch says so before
+/// the click ("CI rebuild waits", with the reason); a click from the
+/// desktop or the web UI (no pins) is refused with it too; the CI branch is
+/// rebuilt with the commit, tested again, and the click then lands it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_commit_the_ci_did_not_test_is_refused_at_the_click_and_rebuilt() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    branch(r.ws.path(), "a", "a.txt", "a's");
+    r.plan("p1", &["a"], Some(COMMAND));
+    r.propose("p1", &["a"]).await;
+    r.until("p1", MergeState::MergedCi).await;
+    let before = r.main();
+    branch_commit(r.ws.path(), "a", "more.txt", "after the pass");
+    // The click, from the desktop or the web UI: no pins.
+    let e = r.app.plan_merge("p1", false, None).await.unwrap_err();
+    assert!(e.starts_with("sbxw/a has 1 commit the CI branch did not test"), "{e}");
+    assert_eq!(r.main(), before, "nothing reached main");
+    let p = r.until("p1", MergeState::MergedCi).await;
+    let c = p.ci().unwrap();
+    assert_eq!((c.builds, c.rebuilt_because.as_deref()), (2, Some("sbxw/a has 1 commit the CI branch did not test")));
+    assert!(r.lead_line("[sbxw] Plan p1").contains("did not test"), "the lead hears of the rebuild");
+    r.app.plan_merge("p1", false, None).await.unwrap();
+    assert!(r.ws.path().join("more.txt").exists(), "the commit landed once tested");
+}
+
+/// The watch sees a thread's new commit before the click: the plan waits
+/// for its rebuild, the reason in `why_not`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_watch_sees_a_thread_commit_before_the_click() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    branch(r.ws.path(), "a", "a.txt", "a's");
+    branch(r.ws.path(), "b", "b.txt", "b's");
+    r.plan("p1", &["a"], Some(COMMAND));
+    r.plan("p2", &["b"], Some(COMMAND));
+    r.propose("p1", &["a"]).await;
+    r.until("p1", MergeState::MergedCi).await;
+    r.propose("p2", &["b"]).await;
+    r.until("p2", MergeState::MergedCi).await;
+    branch_commit(r.ws.path(), "a", "more.txt", "x");
+    branch_commit(r.ws.path(), "b", "more-b.txt", "y");
+    r.app.ci_watch(None).await;
+    // Both flagged; p1 (passed first) rebuilds, p2 waits, with its reason.
+    assert_ne!(r.state("p1"), MergeState::MergedCi);
+    let v = r.app.plan_view(&r.app.plan("p2").unwrap());
+    assert_eq!((v["merge"]["state"].as_str(), v["merge_status"]["word"].as_str()), (Some("ci_stale"), Some("CI rebuild waits")));
+    assert!(v["merge_status"]["why_not"].as_str().unwrap().starts_with("sbxw/b has 1 commit the CI branch did not test"), "{v}");
+    r.until("p1", MergeState::MergedCi).await;
+    r.until("p2", MergeState::MergedCi).await;
+}
+
+/// A commit lands on a thread's branch between the click's check and the
+/// fast-forward: main takes the tested tip, and the close keeps that
+/// thread's branch (its result says so), while the other's is deleted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_branch_with_an_untested_commit_survives_the_close() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    branch(r.ws.path(), "a", "a.txt", "a's");
+    branch(r.ws.path(), "b", "b.txt", "b's");
+    r.plan("p1", &["a", "b"], Some(COMMAND));
+    r.propose("p1", &["a", "b"]).await;
+    r.until("p1", MergeState::MergedCi).await;
+    *r.late.lock().unwrap() = Some((r.ws.path().to_path_buf(), "a".into()));
+    let m = r.app.plan_merge("p1", true, None).await.unwrap();
+    assert_eq!(m.state, MergeState::Merged);
+    let late = git(r.ws.path(), &["rev-parse", "sbxw/a"]);
+    assert!(git(r.ws.path(), &["log", "-1", "--format=%s", &late]).contains("late.txt"), "a's branch kept, with the late commit");
+    assert!(git(r.ws.path(), &["branch", "--list", "sbxw/b"]).is_empty(), "b's branch, all merged, is deleted");
+    let p = r.app.plan("p1").unwrap();
+    let note = p.merge.unwrap().results.iter().find(|x| x.thread == "a").and_then(|x| x.note.clone()).unwrap_or_default();
+    assert!(note.contains("its branch sbxw/a was kept"), "{note}");
+    assert!(r.lead_line("Merged to main").contains("Kept the branch sbxw/a"));
+}
+
+/// A thread with nothing to merge (its branch gone before the build) is
+/// said before the click: in the status the screens draw and in the lead's
+/// Merged to CI line.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_skipped_thread_is_shown_before_the_click() {
+    if !has_tools() {
+        return;
+    }
+    let r = rig();
+    branch(r.ws.path(), "a", "a.txt", "a's");
+    r.plan("p1", &["a", "gone"], Some(COMMAND));
+    r.propose("p1", &["a", "gone"]).await;
+    let p = r.until("p1", MergeState::MergedCi).await;
+    let v = r.app.plan_view(&p);
+    let detail = v["merge_status"]["detail"].as_str().unwrap();
+    assert!(detail.contains("Nothing to merge for: gone (sbxw/gone is gone)"), "{detail}");
+    assert!(r.lead_line("[sbxw] Merged to CI: plan p1").contains("Nothing to merge for: gone (sbxw/gone is gone)."));
 }

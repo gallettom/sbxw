@@ -136,6 +136,11 @@ pub struct Ci {
     /// Main's tip when it was seen moved ([`MergeState::CiStale`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub main_now: Option<String>,
+    /// Why it waits to be rebuilt when main did not move: a thread's branch
+    /// has commits the CI branch did not test ("sbxw/a has 1 commit the CI
+    /// branch did not test"). The next build's `rebuilt_because`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_because: Option<String>,
     /// The test job on the tip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<String>,
@@ -212,19 +217,31 @@ pub fn merge_status(m: &Merge) -> MergeStatus {
         }
         MergeState::MergedCi => {
             let tip = ci.and_then(|c| c.tip.as_deref()).map(short).unwrap_or("?");
-            let detail = match ci.and_then(|c| c.click_refused.as_deref()) {
+            let mut detail = match ci.and_then(|c| c.click_refused.as_deref()) {
                 Some(e) => format!("Tests passed on {branch} at {tip}. The last Merge was refused: {e}"),
                 None => format!("Tests passed on {branch} at {tip}: Merge fast-forwards {base} to exactly that commit"),
             };
+            if let Some(n) = ci.and_then(skipped_line) {
+                detail.push_str(&format!(". {n}"));
+            }
             s(MERGED_TO_CI, detail, true, None)
         }
-        MergeState::CiStale => {
-            let why = format!(
-                "{base} moved since {branch} was built: sbxw rebuilds it on the new {base} and tests it again before Merge is offered. \
-                 One plan rebuilds at a time, the oldest first, so this one waits its turn"
-            );
-            s("Main moved: CI rebuild waits", format!("{MERGED_TO_CI} on an older {base}"), false, Some(&why))
-        }
+        MergeState::CiStale => match ci.and_then(|c| c.stale_because.as_deref()) {
+            Some(r) => {
+                let why = format!(
+                    "{r}: sbxw rebuilds {branch} with it and tests it again before Merge is offered. \
+                     One plan rebuilds at a time, the oldest first, so this one waits its turn"
+                );
+                s("CI rebuild waits", format!("{MERGED_TO_CI} without the newest commits of a thread"), false, Some(&why))
+            }
+            None => {
+                let why = format!(
+                    "{base} moved since {branch} was built: sbxw rebuilds it on the new {base} and tests it again before Merge is offered. \
+                     One plan rebuilds at a time, the oldest first, so this one waits its turn"
+                );
+                s("Main moved: CI rebuild waits", format!("{MERGED_TO_CI} on an older {base}"), false, Some(&why))
+            }
+        },
         MergeState::CiFailed => {
             let f = ci.and_then(|c| c.failure.as_ref());
             let detail = match f {
@@ -240,6 +257,16 @@ pub fn merge_status(m: &Merge) -> MergeStatus {
             s("CI failed", detail, false, Some("the lead has the threads fix it, then proposes the merge again, which rebuilds and retests the CI branch"))
         }
     }
+}
+
+/// The threads of the order with nothing to merge, in one sentence:
+/// "Nothing to merge for: b (sbxw/b is gone)". `None` when there are none.
+pub fn skipped_line(c: &Ci) -> Option<String> {
+    if c.skipped.is_empty() {
+        return None;
+    }
+    let list: Vec<String> = c.skipped.iter().map(|k| format!("{} ({})", k.thread, k.why)).collect();
+    Some(format!("Nothing to merge for: {}", list.join(", ")))
 }
 
 impl MergeState {
@@ -381,13 +408,25 @@ impl PlanBook {
     /// Main is at `main_now`, no longer the commit a Merged to CI plan was
     /// built on: it waits its turn to be rebuilt.
     pub fn ci_stale(&mut self, id: &str, main_now: &str, now: u64) -> Result<Plan, String> {
+        self.ci_stale_because(id, main_now, None, now)
+    }
+
+    /// [`PlanBook::ci_stale`], with the reason when it is not main that
+    /// moved but a thread's branch (`because`, said as it is).
+    pub fn ci_stale_because(&mut self, id: &str, main_now: &str, because: Option<&str>, now: u64) -> Result<Plan, String> {
         let run = self.get(id).and_then(Plan::ci).map(|c| c.run).unwrap_or(0);
         let p = self.ci_step(id, run, &[MergeState::MergedCi], now, |m| {
-            m.ci.as_mut().expect("ci").main_now = Some(main_now.to_string());
+            let c = m.ci.as_mut().expect("ci");
+            c.main_now = Some(main_now.to_string());
+            c.stale_because = because.map(str::to_string);
             m.state = MergeState::CiStale;
             Ok(())
         })?;
-        self.ci_note(id, now, "stale", "main moved: the CI branch waits to be rebuilt", json!({ "run": run, "main": main_now }));
+        let text = match because {
+            Some(b) => format!("{b}: the CI branch waits to be rebuilt"),
+            None => "main moved: the CI branch waits to be rebuilt".into(),
+        };
+        self.ci_note(id, now, "stale", &text, json!({ "run": run, "main": main_now, "because": because }));
         Ok(p)
     }
 
@@ -399,12 +438,17 @@ impl PlanBook {
         let p = self.ci_step(id, run, &[MergeState::CiStale, MergeState::CiBuilding, MergeState::CiTesting], now, |m| {
             let c = m.ci.as_mut().expect("ci");
             let was = c.base.as_deref().map(short).unwrap_or("?").to_string();
+            let because = match c.stale_because.take() {
+                Some(b) if c.base.as_deref() == Some(main_now) => b,
+                Some(b) => format!("{b}, and main moved from {was} to {}", short(main_now)),
+                None => format!("main moved from {was} to {}", short(main_now)),
+            };
             let fresh = Ci {
                 branch: c.branch.clone(),
                 worktree: c.worktree.clone(),
                 run: c.run + 1,
                 builds: c.builds + 1,
-                rebuilt_because: Some(format!("main moved from {was} to {}", short(main_now))),
+                rebuilt_because: Some(because),
                 base_branch: c.base_branch.clone(),
                 passed_ms: c.passed_ms,
                 ..Default::default()

@@ -635,9 +635,21 @@ impl App {
         }
         if close_threads && merge.state == MergeState::Merged {
             let (mut closed, mut unclosed) = (Vec::new(), Vec::new());
+            // A CI merge took the tested tip, not the branches: a branch with
+            // a commit main lacks (made after the click's check) is kept.
+            let keep = if merge.ci.is_some() { self.ci_unmerged_branches(plan).await } else { Default::default() };
             for t in &merge.order {
                 let Ok(name) = ThreadName::parse(t) else { continue };
-                match self.close_thread(&sandbox, &name, false, true).await {
+                let kept = keep.contains(t);
+                if kept {
+                    let note = format!("its branch sbxw/{t} was kept: it has commits main lacks, made after the CI branch was tested");
+                    let r = self.plans.lock().unwrap().note_merge_result(id, t, &note, now_ms());
+                    if let Ok(p) = r {
+                        self.plan_changed(p);
+                    }
+                    summary.push_str(&format!(" Kept the branch sbxw/{t}: it has commits main lacks."));
+                }
+                match self.close_thread(&sandbox, &name, false, !kept).await {
                     Ok(()) => closed.push(t.clone()),
                     Err(e) => {
                         tracing::warn!("plans: could not close merged thread '{t}': {e}");

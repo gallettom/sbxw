@@ -161,3 +161,27 @@ fn a_merge_without_ci_is_as_before() {
     assert!(serde_json::to_value(m).unwrap().get("ci").is_none());
     assert!(b.start_merge("p1", None, None, 5).is_ok());
 }
+
+#[test]
+fn a_thread_commit_the_ci_did_not_test_waits_for_a_rebuild_with_that_reason_and_skipped_threads_are_said() {
+    let mut b = PlanBook::new();
+    done_plan(&mut b, "p1", "sb");
+    b.propose_merge_with("p1", "sb", vec!["a".into(), "b".into()], "n", vec![], true, 4).unwrap();
+    let mut bt = built("base1", "tip1");
+    bt.merged.truncate(1);
+    bt.skipped = vec![CiSkip { thread: "b".into(), why: "sbxw/b is gone".into() }];
+    b.ci_built("p1", 1, bt, 5).unwrap();
+    let p = b.ci_tested("p1", 1, tests(Outcome::Passed), 6).unwrap();
+    let st = merge_status(p.merge.as_ref().unwrap());
+    assert!(st.detail.contains("Nothing to merge for: b (sbxw/b is gone)"), "{st:?}");
+    assert!(crate::messages::ci_passed_line(&p).unwrap().contains("Nothing to merge for: b (sbxw/b is gone)."));
+    // Main did not move; a's branch did.
+    let why = "sbxw/a has 1 commit the CI branch did not test";
+    let p = b.ci_stale_because("p1", "base1", Some(why), 7).unwrap();
+    let st = merge_status(p.merge.as_ref().unwrap());
+    assert_eq!(st.word, "CI rebuild waits");
+    assert!(st.why_not.as_deref().unwrap().starts_with(why), "{st:?}");
+    let (p, _) = b.ci_rebuild("p1", "base1", 8).unwrap();
+    assert_eq!(p.ci().unwrap().rebuilt_because.as_deref(), Some(why));
+    assert!(crate::messages::ci_rebuild_line(&p).unwrap().contains(why));
+}

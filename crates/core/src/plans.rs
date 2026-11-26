@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 mod ci;
-pub use ci::{ci_branch, ci_worktree, merge_status, Built, Ci, CiFailKind, CiFailure, CiSkip, CiStep, CiTests, MergeStatus, MERGED_TO_CI, MERGED_TO_MAIN};
+pub use ci::{ci_branch, ci_worktree, merge_status, skipped_line, Built, Ci, CiFailKind, CiFailure, CiSkip, CiStep, CiTests, MergeStatus, MERGED_TO_CI, MERGED_TO_MAIN};
 
 pub const MAX_THREADS: usize = 8;
 pub const MAX_TEXT: usize = 4000;
@@ -993,6 +993,20 @@ impl PlanBook {
             Ok(())
         })
         .inspect(|_| self.note(id, now, EventKind::MergeResult, team::SBXW, None, text.as_deref(), data))
+    }
+
+    /// Add `note` to thread `thread`'s result in the current merge (after
+    /// it was recorded: what the close did with its branch).
+    pub fn note_merge_result(&mut self, id: &str, thread: &str, note: &str, now: u64) -> Result<Plan, String> {
+        self.mutate(id, now, |p| {
+            let m = p.merge.as_mut().ok_or_else(|| format!("plan {id} has no merge"))?;
+            let r = m.results.iter_mut().rev().find(|r| r.thread == thread).ok_or_else(|| format!("no result for {thread:?}"))?;
+            r.note = Some(match r.note.take() {
+                Some(n) => format!("{n}; {note}"),
+                None => note.to_string(),
+            });
+            Ok(())
+        })
     }
 
     /// Merged when every result is in and ok: one per thread, or the one

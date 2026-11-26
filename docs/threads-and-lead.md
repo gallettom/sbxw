@@ -387,7 +387,24 @@ merged_ci ── your click ─▶ merging ─┬─ fast-forward ─▶ merged 
    battery, about as long as one run), then the third, each offered again as
    soon as its own run passes. Merging them in the order they passed costs
    one battery each after the first.
-6. **Clean-up.** The CI branch and worktree are removed when the plan is
+6. **A thread committed after the pass.** The click takes the tested tip,
+   not the branches, so a commit on a thread's branch after its CI branch
+   was tested would not land, and would be lost when the close deletes the
+   branch. So sbxw compares each thread's branch with the tip its CI branch
+   merged, every time it looks at main and at the click (desktop, web UI and
+   phone alike): a branch with commits the CI branch did not test, or one
+   skipped as nothing to merge that now has some, sends the plan to "CI
+   rebuild waits" with the reason ("sbxw/a has 1 commit the CI branch did not
+   test"), and it is rebuilt and tested again in its turn, as when main
+   moves; a click then is refused with that reason. A commit that lands in
+   the second between the click's check and the fast-forward is not merged,
+   and is not lost either: after a CI merge, the close deletes only a branch
+   with no commit main lacks; any other is closed with its branch kept, and
+   the thread's result says so. Threads with nothing to merge (a branch
+   gone or already in main) are said before the click, in the status
+   (`Nothing to merge for: b (sbxw/b is gone)`) and in the lead's Merged to
+   CI line.
+7. **Clean-up.** The CI branch and worktree are removed when the plan is
    merged, when you abandon the merge (allowed while it tests, is Merged to
    CI, waits for a rebuild or failed; not in the seconds it is being built),
    and when the plan is closed (lead mode ended, Close plan on the Kanban),

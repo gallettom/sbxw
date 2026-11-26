@@ -154,7 +154,8 @@ pub enum Mark {
     MergeAbandoned,
     /// Its plan's CI branch is being built or tested (In test).
     CiTesting,
-    /// Main moved since its CI branch passed: a rebuild waits (In test).
+    /// Main or a thread's branch moved since its CI branch passed: a
+    /// rebuild waits (In test).
     CiStale,
     /// Its plan's CI branch conflicted or failed its tests (In test).
     CiFailed,
@@ -209,7 +210,7 @@ impl Mark {
             Mark::Dismissed => "You closed this plan from the Kanban; git was not touched",
             Mark::MergeAbandoned => "You abandoned the merge proposed for this thread: nothing was merged, and the lead may propose it again",
             Mark::CiTesting => "sbxw is building its plan's CI branch from main with the threads' branches, or running the plan's tests on it",
-            Mark::CiStale => "Main moved since its plan's CI branch passed: sbxw rebuilds it on the new main and tests it again before Merge is offered",
+            Mark::CiStale => "Main or a thread's branch moved since its plan's CI branch passed: sbxw rebuilds it and tests it again before Merge is offered",
             Mark::CiFailed => "Its plan's CI branch conflicted or failed its tests: nothing reached main, and the lead has the threads fix it",
             Mark::MergedCi => "Merged to CI: the tests passed on its plan's CI branch, and Merge fast-forwards main to exactly that tested commit",
         }
