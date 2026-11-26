@@ -63,14 +63,19 @@ pub fn is_jarvis_name(sb: &SandboxRef) -> bool {
 }
 
 /// Why a person cannot create, duplicate to or bring up `sb`: its name is
-/// Jarvis's, on whichever host. `None` for every other name.
+/// one of the daemon's own sandboxes' ([`kits::RESERVED_SANDBOXES`]: Jarvis's,
+/// the ticket sync's), on whichever host. `None` for every other name.
 pub fn reserved(sb: &SandboxRef) -> Option<String> {
-    (sb.name.as_str() == NAME).then(|| {
-        format!(
+    let name = sb.name.as_str();
+    if name == NAME {
+        return Some(format!(
             "'{NAME}' is reserved for Jarvis, sbxw's assistant, which the daemon creates itself — pick another name. \
              To recreate Jarvis, `sbxw rm {NAME}` and start Jarvis again"
-        )
-    })
+        ));
+    }
+    kits::RESERVED_SANDBOXES
+        .contains(&name)
+        .then(|| format!("'{name}' is reserved for sbxw's ticket sync, which the daemon creates itself: pick another name"))
 }
 
 /// Its empty workspace: under sbxw's state, not `~/.sbxw` itself, so the

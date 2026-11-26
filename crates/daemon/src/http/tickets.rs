@@ -40,6 +40,10 @@ pub fn ui_routes() -> Router<Arc<App>> {
         .route("/api/tickets/:sandbox/:n/move", post(move_ticket))
         .route("/api/tickets/:sandbox/:n/delete", post(delete))
         .route("/api/tickets/:sandbox/:n/send", post(send))
+        .route("/api/tickets/:sandbox/:n/plan", post(plan))
+        .route("/api/tickets/:sandbox/source", get(source).post(set_source))
+        .route("/api/tickets/:sandbox/source/remove", post(remove_source))
+        .route("/api/tickets/:sandbox/source/refresh", post(refresh_source))
 }
 
 fn sandbox(raw: &str) -> Result<SandboxRef, ApiError> {
@@ -170,6 +174,39 @@ async fn send(State(app): S, Path((sb, n)): Path<(String, String)>) -> ApiResult
     let n = number(&n)?;
     let sent = app.ticket_send(&sb, n).map_err(ApiError::conflict)?;
     Ok(ok_with(json!({ "sent": sent, "line": tickets::send_line(n) })))
+}
+
+/// The person moves a Backlog ticket to Planned. The UI's route only: an
+/// agent has no way to it.
+async fn plan(State(app): S, Path((sb, n)): Path<(String, String)>) -> ApiResult {
+    let sb = sandbox(&sb)?;
+    let t = app.ticket_plan(&sb, number(&n)?).map_err(ApiError::conflict)?;
+    Ok(ok_with(json!({ "ticket": t })))
+}
+
+// ── The tracker source (svc::tracker_sync) ─────────────────────────────────
+
+async fn source(State(app): S, Path(sb): Path<String>) -> ApiResult {
+    let sb = sandbox(&sb)?;
+    Ok(ok_with(app.tracker_source_view(&sb).await))
+}
+
+async fn set_source(State(app): S, Path(sb): Path<String>, Json(d): Json<sbxw_core::tracker::SourceDraft>) -> ApiResult {
+    let sb = sandbox(&sb)?;
+    app.tracker_source_set(&sb, d)?;
+    Ok(ok_with(app.tracker_source_view(&sb).await))
+}
+
+async fn remove_source(State(app): S, Path(sb): Path<String>) -> ApiResult {
+    let sb = sandbox(&sb)?;
+    app.tracker_source_remove(&sb)?;
+    Ok(ok_with(app.tracker_source_view(&sb).await))
+}
+
+async fn refresh_source(State(app): S, Path(sb): Path<String>) -> ApiResult {
+    let sb = sandbox(&sb)?;
+    app.tracker_refresh(&sb).map_err(ApiError::conflict)?;
+    Ok(ok_with(app.tracker_source_view(&sb).await))
 }
 
 #[cfg(test)]

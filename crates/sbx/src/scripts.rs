@@ -28,6 +28,13 @@ fn pos(value: &str) -> String {
     format!("={value}")
 }
 
+/// `node - =<request>`: the ticket sync script, piped on stdin, with its one
+/// argument (the request as JSON) in the `=value` form, since sbx refuses an
+/// empty argument. The script strips the `=`.
+pub fn tracker_args(request: &str) -> Vec<String> {
+    vec!["node".into(), "-".into(), pos(request)]
+}
+
 /// Shell function `sbxw_no_repo`: why the current directory cannot hold a
 /// thread, and the repos under it (a workspace is often a folder of repos; the
 /// fix is to pick one, `repo=` on the thread's socket). One line, no colour:

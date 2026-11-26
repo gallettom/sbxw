@@ -74,6 +74,15 @@ pub async fn git(host: &Host, dir: &Path, args: &[&str]) -> Option<String> {
     run_git(host, dir, &filters, args).await
 }
 
+/// The URL `origin` points at in the repo at or above `workspace`
+/// (`git remote get-url origin`), trimmed. Pre-fills a tracker source only.
+pub async fn origin_url(host: &Host, workspace: &Path) -> Option<String> {
+    let repo = enclosing_repo(host, workspace).await?;
+    let out = git(host, &repo, &["remote", "get-url", "origin"]).await?;
+    let u = out.trim();
+    (!u.is_empty()).then(|| u.to_string())
+}
+
 async fn has_git(host: &Host, dir: &Path) -> bool {
     host.fs.lstat(&dir.join(".git")).await.is_ok_and(|m| m.is_some())
 }

@@ -150,7 +150,8 @@ impl App {
         // The daemon's scratch sandboxes (a template's builder, the cache's
         // filler) are nobody's to open, stop or remove while they live.
         let scratches = self.scratches.lock().unwrap().clone();
-        let scratch = |name: &str| SandboxRef::parse(name).is_ok_and(|r| scratches.contains(&r));
+        // The ticket sync's sandbox is the daemon's too, and runs no agent.
+        let scratch = |name: &str| SandboxRef::parse(name).is_ok_and(|r| scratches.contains(&r) || crate::svc::tracker_sandbox::is_sync_name(&r));
         let pending_for = |name: &str| pending.iter().filter(|a| a.sandbox == name).count();
         let waiting_for = |name: &str| SandboxRef::parse(name).ok().and_then(|r| waiting.get(&r).map(Vec::len)).unwrap_or(0);
         listed

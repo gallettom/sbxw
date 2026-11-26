@@ -89,8 +89,8 @@ fn an_older_book_loads_and_an_unreadable_one_is_set_aside() {
     std::fs::write(tickets_dir(d.path(), "bad").join("tickets.json"), "{ not json").unwrap();
     let app = app_in(d.path());
     let b = app.tickets_board(None, false);
-    assert_eq!(b.columns[0].cards.len(), 1);
-    assert_eq!(b.columns[0].cards[0].title, "From before");
+    assert_eq!(b.columns[1].cards.len(), 1);
+    assert_eq!(b.columns[1].cards[0].title, "From before");
     // The next number is past the highest one.
     assert_eq!(app.ticket_create(&sb("web"), draft("new")).unwrap()["num"], "T-5");
     assert!(std::fs::read_dir(tickets_dir(d.path(), "bad")).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with("tickets.unreadable-")));
@@ -114,7 +114,7 @@ fn a_ticket_moves_through_the_columns_with_its_thread_and_survives_the_prune() {
         app.tickets_follow(&p);
     };
     set(ThreadState::Blocked);
-    let card = app.tickets_board(Some(&me), false).columns[1].cards.iter().find(|c| c.n == Some(n)).cloned().unwrap();
+    let card = app.tickets_board(Some(&me), false).columns[2].cards.iter().find(|c| c.n == Some(n)).cloned().unwrap();
     assert_eq!((card.thread.as_deref(), card.marks[0].id.as_str()), (Some("pages"), "blocked"));
     set(ThreadState::Done);
     assert_eq!(column_of(&app, "web", n), Some(Column::Test));
@@ -131,7 +131,7 @@ fn a_ticket_moves_through_the_columns_with_its_thread_and_survives_the_prune() {
     assert_eq!(column_of(&app, "web", n), Some(Column::Merged));
     // The thread with no ticket is its own card meanwhile.
     let b = app.tickets_board(Some(&me), false);
-    assert!(b.columns[1].cards.iter().any(|c| c.thread.as_deref() == Some("other") && c.num == "thread"));
+    assert!(b.columns[2].cards.iter().any(|c| c.thread.as_deref() == Some("other") && c.num == "thread"));
     // A restart after the plan was pruned: still merged.
     app.plans.lock().unwrap().prune(crate::app::now_ms() + 10 * tickets::MERGED_SHOWN as u64 * 86_400_000, 0);
     let again = app_in(d.path());
@@ -173,11 +173,11 @@ fn a_refused_plan_brings_the_ticket_back_and_the_board_keeps_per_sandbox() {
     let p = app.plans.lock().unwrap().refuse("p-1", Some("not now".into()), now).unwrap();
     app.tickets_follow(&p);
     let b = app.tickets_board(Some(&sb("web")), false);
-    assert_eq!((b.columns[0].count, b.columns[0].cards[0].marks[0].id.as_str()), (1, "refused"));
+    assert_eq!((b.columns[1].count, b.columns[1].cards[0].marks[0].id.as_str()), (1, "refused"));
     assert_eq!(b.columns.iter().map(|c| c.count).sum::<usize>(), 1, "docs' ticket is not on web's board");
     let all = app.tickets_board(None, false);
-    assert_eq!(all.columns[0].count, 2);
-    assert!(all.columns[0].cards.iter().any(|c| c.sandbox == "docs" && c.n == Some(k)));
+    assert_eq!(all.columns[1].count, 2);
+    assert!(all.columns[1].cards.iter().any(|c| c.sandbox == "docs" && c.n == Some(k)));
     // A plan of docs naming web's ticket number links docs' own ticket only.
     let q = app.plans.lock().unwrap().propose("p-2".into(), "docs", "s", vec![th("d", Some(n))], Variant::Split, "why", None, now).unwrap();
     app.tickets_follow(&q);
@@ -237,7 +237,7 @@ fn a_plan_with_no_ticket_makes_no_book() {
     app.tickets_follow(&p);
     assert!(!tickets_dir(d.path(), "web").exists());
     // Its thread is still a card.
-    assert_eq!(app.tickets_board(Some(&sb("web")), false).columns[0].cards[0].num, "thread");
+    assert_eq!(app.tickets_board(Some(&sb("web")), false).columns[1].cards[0].num, "thread");
 }
 
 #[test]

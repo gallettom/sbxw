@@ -179,7 +179,10 @@ pub fn board_view(app: &App, sb: &SandboxRef) -> Value {
         .get("columns")
         .and_then(Value::as_array)
         .map(|cols| {
+            // Backlog is not on the phone: it is the person's inbox of
+            // imported issues, planned from the Mac.
             cols.iter()
+                .filter(|c| c.get("id").and_then(Value::as_str) != Some("backlog"))
                 .map(|c| {
                     let cards: Vec<Value> = c.get("cards").and_then(Value::as_array).map(|a| a.iter().map(card).collect()).unwrap_or_default();
                     json!({
@@ -190,7 +193,8 @@ pub fn board_view(app: &App, sb: &SandboxRef) -> Value {
                 .collect()
         })
         .unwrap_or_default();
-    let mut out = json!({ "sandbox": sb.to_string(), "summary": text(&b, "counts_line", 400), "columns": columns });
+    let summary: Vec<String> = text(&b, "counts_line", 400).split(" · ").filter(|p| !p.ends_with(" backlog")).map(String::from).collect();
+    let mut out = json!({ "sandbox": sb.to_string(), "summary": summary.join(" · "), "columns": columns });
     let latest = latest_of(&out);
     out["latest"] = Value::String(latest);
     out

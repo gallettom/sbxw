@@ -361,6 +361,16 @@ pub fn fetch(t: Tracker, url: &str) -> Value {
 /// it is read out or removed.
 pub const FETCH_DIR: &str = "/tmp/sbxw-tracker/";
 
+/// A comment id as the script gives it (a number or a string), checked.
+pub fn comment_id(v: &Value) -> Option<String> {
+    let s = match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => return None,
+    };
+    (!s.is_empty() && s.len() <= 100 && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '=' | ':'))).then_some(s)
+}
+
 pub fn fetch_path_ok(p: &str) -> bool {
     p.starts_with(FETCH_DIR) && p.len() < 300 && !p.contains("..") && p[FETCH_DIR.len()..].chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/'))
 }
@@ -526,6 +536,9 @@ pub struct Sync {
     pub status: Status,
     pub last_poll_ms: u64,
     pub queue: Vec<WriteBack>,
+    /// sbxw's comment on each issue (key to id), kept here too so a ticket
+    /// deleted meanwhile does not make a second comment.
+    pub comments: std::collections::BTreeMap<String, String>,
 }
 
 impl Sync {
