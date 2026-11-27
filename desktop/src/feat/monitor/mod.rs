@@ -25,6 +25,10 @@
 //! * **Agent text is data.** Prompts, replies, steps, questions and options
 //!   are drawn as text; an option's act is its index, never its words; a
 //!   conversation row's only act is its own fold, by its id.
+//! * **Pictures sent.** The person's own prompts that name a picture sbxw
+//!   uploaded show it small ([`pics`]): only those paths, only in their
+//!   prompts, read once each through the Files view's route, forgotten with
+//!   the session.
 
 pub mod attach;
 pub mod cmds;
