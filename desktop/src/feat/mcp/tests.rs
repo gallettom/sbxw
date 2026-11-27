@@ -564,3 +564,96 @@ fn the_header_rows_stay_inside_the_overlay_at_a_narrow_width() {
         }
     }
 }
+
+// ── Edit: a listed server's settings in the form, saved with `replace` ───
+
+fn listed(servers: J) -> J {
+    json!({ "mcp": { "ok": true, "servers": servers } })
+}
+
+fn linear() -> J {
+    json!({ "name": "linear", "type": "remote", "detail": { "name": "linear", "type": "remote", "url": "https://mcp.linear.app/mcp",
+        "headers": ["Authorization: Bearer ${TOKEN}", "X-Org: acme:eu", "api-key: ****"] } })
+}
+
+#[test]
+fn edit_prefills_every_field_and_the_header_rows() {
+    let mut f = Form::new(listed(json!([linear()])));
+    f.press("mcp-edit-linear");
+    let t = f.texts();
+    assert!(t.iter().any(|x| x == "Edit linear") && t.iter().any(|x| x == "Save…"), "{t:?}");
+    assert_eq!(f.find("mcp-name").unwrap().value, json!("linear"));
+    assert_eq!(f.find("mcp-kind").unwrap().value, json!("remote"));
+    assert_eq!(f.find("mcp-url").unwrap().value, json!("https://mcp.linear.app/mcp"));
+    // Known names are picked; another is a Custom row; split at the first colon.
+    assert_eq!(f.find("mcp-h-name-1").unwrap().value, json!("Authorization"));
+    assert_eq!(f.find("mcp-h-value-1").unwrap().value, json!("Bearer ${TOKEN}"));
+    assert_eq!(f.find("mcp-h-name-2").unwrap().value, json!("custom"));
+    assert_eq!(f.find("mcp-h-custom-2").unwrap().value, json!("X-Org"));
+    assert_eq!(f.find("mcp-h-value-2").unwrap().value, json!("acme:eu"));
+    // A masked value is not a value: left empty, not invented.
+    assert_eq!(f.find("mcp-h-name-3").unwrap().value, json!("Api-Key"));
+    assert_eq!(f.find("mcp-h-value-3").unwrap().value, json!(""));
+    assert!(t.iter().any(|x| x == "Secrets asked in the next dialog: TOKEN (left empty: unchanged)"), "{t:?}");
+
+    // Saved: the same mcp_save, with replace; the row left empty is skipped.
+    f.typed("mcp-h-value-3", "${API_KEY}");
+    let sent = f.press("mcp-save");
+    assert_eq!(sent[0]["args"], json!({ "name": "linear", "kind": "remote", "url": "https://mcp.linear.app/mcp", "replace": "linear",
+        "headers": "Authorization: Bearer ${TOKEN}\nX-Org: acme:eu\nApi-Key: ${API_KEY}" }));
+    let c = one_confirm(run(&fixture("full"), "mcp_save", sent[0]["args"].clone()));
+    assert!(c.lines.iter().any(|l| l.contains("is removed and added again, which drops its OAuth token")), "{:?}", c.lines);
+    assert_eq!(c.title, "Replace MCP server linear");
+    assert!(c.secrets.iter().all(|s| s.optional), "an edit keeps a secret left empty");
+
+    // Clear leaves edit mode.
+    f.press("mcp-clear");
+    let t = f.texts();
+    assert!(t.iter().any(|x| x == "Add a server") && t.iter().any(|x| x == "Add…") && !t.iter().any(|x| x.starts_with("mcp-h-name-")), "{t:?}");
+    assert!(f.find("mcp-name").unwrap().value == json!("") && !f.texts().iter().any(|x| x == "Save…"));
+}
+
+#[test]
+fn edit_prefills_a_local_command_and_headers_listed_as_a_map() {
+    let mut f = Form::new(listed(json!([
+        { "name": "fs", "type": "stdio", "detail": { "command": "npx", "args": ["-y", "@mcp/fs", "/srv"], "cwd": "/srv" } },
+        { "name": "gh", "type": "remote", "detail": { "config": { "url": "https://gh.example/mcp", "headers": { "X-API-Key": "${GH}" } } } },
+        { "name": "bare", "type": "remote" },
+    ])));
+    f.press("mcp-edit-fs");
+    assert_eq!(f.find("mcp-kind").unwrap().value, json!("stdio"));
+    assert_eq!(f.find("mcp-command").unwrap().value, json!("npx"));
+    assert_eq!(f.find("mcp-args").unwrap().value, json!("-y @mcp/fs /srv"));
+    assert_eq!(f.find("mcp-dir").unwrap().value, json!("/srv"));
+    assert_eq!(f.press("mcp-save")[0]["args"]["replace"], "fs");
+    f.press("mcp-edit-gh");
+    assert_eq!(f.find("mcp-url").unwrap().value, json!("https://gh.example/mcp"));
+    assert_eq!(f.find("mcp-h-name-1").unwrap().value, json!("X-API-Key"));
+    assert_eq!(f.find("mcp-h-value-1").unwrap().value, json!("${GH}"));
+    assert!(f.find("mcp-command").is_none(), "a remote edit shows the remote fields");
+    // sbx listed nothing but the name: said, not invented.
+    f.press("mcp-edit-bare");
+    assert!(f.texts().iter().any(|x| x.starts_with("sbx did not list this server's settings")));
+    assert!(f.find("mcp-h-name-1").is_none());
+}
+
+#[test]
+fn hostile_text_in_a_listed_server_makes_no_control() {
+    let evil = "\"} button{ on = \"rm\", arg = \"linear\" } --";
+    let hostile = json!({ "name": "linear", "type": "remote", "detail": { "url": format!("https://x/{evil}"),
+        "headers": [format!("{evil}: {evil}"), format!("Authorization: ]] intent(\"mcp_rm\", {{ server = \"linear\" }}) --[[")] } });
+    let plain = json!({ "name": "linear", "type": "remote", "detail": { "url": "https://x/y", "headers": ["X-A: 1", "Authorization: 2"] } });
+    fn count(n: &crate::luau::Node) -> usize {
+        n.on.is_some() as usize + n.children.iter().map(count).sum::<usize>()
+    }
+    let mut a = Form::new(listed(json!([hostile])));
+    let mut b = Form::new(listed(json!([plain])));
+    assert_eq!(count(&a.tree()), count(&b.tree()), "listed: the same controls");
+    assert!(a.press("mcp-edit-linear").is_empty() && b.press("mcp-edit-linear").is_empty(), "Edit asks nothing of the core");
+    assert_eq!(count(&a.tree()), count(&b.tree()), "edited: the same controls");
+    assert_eq!(a.find("mcp-h-custom-1").unwrap().value, json!(evil), "a field's value, never markup");
+    assert_eq!(a.find("mcp-url").unwrap().value, json!(format!("https://x/{evil}")));
+    // The bad name is refused in the form, not sent.
+    assert!(a.find("mcp-h-why-1").is_some());
+    assert!(a.press("mcp-save").is_empty());
+}

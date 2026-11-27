@@ -1809,7 +1809,7 @@ saying what to do.
 (`{sandbox}`), `data.mcp_inspect_for` and `data.mcp_inspect`. Keys:
 `mcp-sandbox` (the sandbox Load and Unload act on), per server
 `mcp-<name>`, `mcp-load-<name>`, `mcp-unload-<name>`, `mcp-auth-<name>`
-(remote only), `mcp-inspect-<name>`, `mcp-rm-<name>`; `mcp-more`, the form
+(remote only), `mcp-edit-<name>`, `mcp-inspect-<name>`, `mcp-rm-<name>`; `mcp-more`, the form
 `mcp-name`, `mcp-kind`, `mcp-url`, `mcp-headers` (the header rows), `mcp-command`,
 `mcp-args`, `mcp-dir`, `mcp-save`, `mcp-clear`; `mcp-error`; `mcp-about`
 (the quiet line under the title, its full text in the tooltip), `mcp-form`,
@@ -1817,7 +1817,7 @@ saying what to do.
 the row). One column: the form on top (Name and Kind on one row when each
 keeps 240 pt, the fields that depend on Kind under them two by two, the
 hint and Add… on the last row), the servers under it, each a full-width
-row with Load, Unload, Sign in (remote), Inspect and the bin. The daemon
+row with Load, Unload, Sign in (remote), Edit, Inspect and the bin. The daemon
 lists no load state per sandbox (`sbx mcp ls` gives name and type), so a
 row shows its kind (remote blue, local command amber), not whether it is
 loaded, and the list keeps this machine's order; the list's heading says so.
@@ -1836,6 +1836,20 @@ name or value left out; the hint lists every `${KEY}` of all rows. A row
 that cannot be sent as typed shows its reason under it (`mcp-h-why-<n>`)
 and Add… is disabled: a `;` in a value (the intent splits on `;`), a name
 that is not an HTTP token, or a name set twice.
+
+**Edit** (`mcp-edit-<name>`) fills the form with a listed server's
+settings, as the web UI's `mcpStartEdit`: the form says "Edit <name>", Add…
+becomes Save…, and the save is the same `mcp_save` with `replace` (its
+dialog says the server is removed and added again, which drops its OAuth
+token; a secret left empty is unchanged). sbx documents only `name` and
+`type`, so the rest is read from the row's `detail` (`url`, `endpoint`,
+`remote.url`, `config.url`; `headers` or `config.headers`, a list of
+`Name: value` or a map; `command`, `args`, `dir` or `cwd`, each also under
+`config`). Each header becomes a row, split at the first colon; a name out
+of the list is a Custom row; a value that is only a mask (`****`) is left
+empty, never sent back. When sbx listed no URL (or command), an amber line
+says to fill the settings in again. Clear leaves edit mode. Listed text is
+a field's value, never markup.
 
 **sbx 0.54: MCP mode.** `mcp-modes` ("Connected now") lists each running
 sandbox (`mcp-mode-<sandbox>`): its mode badge (`mcp-mode-word-<sandbox>`:

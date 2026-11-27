@@ -97,6 +97,67 @@ local function header_lines(rows)
   return table.concat(lines, "\n"), bad
 end
 
+-- A listed server's field, by the first of these paths that holds a string
+-- or a list (sbx documents only name and type: the rest is read as the web
+-- UI's mcpField reads it, and is data, never markup).
+local function field_of(detail, paths)
+  for _, path in ipairs(paths) do
+    local v = detail
+    for part in string.gmatch(path, "[^%.]+") do v = type(v) == "table" and v[part] or nil end
+    if type(v) == "string" and v ~= "" then return v end
+    if type(v) == "table" and next(v) ~= nil then return v end
+  end
+  return nil
+end
+
+-- A listed value that is only a mask ("****", "•••") is not the value:
+-- left empty, never sent back as typed.
+local function unmasked(v)
+  v = trim(v)
+  if v == "" or string.find(v, "^[%*•]+$") then return "" end
+  return v
+end
+
+-- One listed header ("Name: value", split at the first colon) as a row: a
+-- name out of HEADERS is picked, any other is a Custom row.
+local function row_of(h, id)
+  local n, v = string.match(h, "^([^:]*):(.*)$")
+  n, v = trim(n or h), unmasked(v or "")
+  for _, known in ipairs(HEADERS) do
+    if string.lower(known) == string.lower(n) then return { id = id, pick = known, name = "", value = v } end
+  end
+  return { id = id, pick = CUSTOM, name = n, value = v }
+end
+
+-- What Edit puts in the form, from a listed server (the row's `detail`).
+local function edit_of(x)
+  local d = type(x.detail) == "table" and x.detail or {}
+  local function str(v) return type(v) == "string" and v or nil end
+  local hs = field_of(d, { "headers", "config.headers" })
+  local headers = {}
+  if type(hs) == "table" then
+    if #hs > 0 then
+      for _, h in ipairs(hs) do if type(h) == "string" and trim(h) ~= "" then headers[#headers + 1] = h end end
+    else
+      local names = {}
+      for k, v in pairs(hs) do if type(k) == "string" and type(v) == "string" then names[#names + 1] = k end end
+      table.sort(names)
+      for _, k in ipairs(names) do headers[#headers + 1] = k .. ": " .. hs[k] end
+    end
+  elseif type(hs) == "string" then
+    for h in string.gmatch(hs, "[^;\n]+") do if trim(h) ~= "" then headers[#headers + 1] = h end end
+  end
+  local args = field_of(d, { "args", "config.args" })
+  if type(args) == "table" then
+    local words = {}
+    for _, w in ipairs(args) do if type(w) == "string" then words[#words + 1] = w end end
+    args = table.concat(words, " ")
+  end
+  return { name = x.name, stdio = x.stdio, url = str(field_of(d, { "url", "endpoint", "remote.url", "config.url" })),
+    headers = headers, command = str(field_of(d, { "command", "config.command" })), args = str(args),
+    dir = str(field_of(d, { "dir", "cwd", "config.dir" })) }
+end
+
 local function form_of(state, a)
   if (a and a.reset) or not state.mcp then state.mcp = {} end
   return state.mcp
@@ -115,7 +176,7 @@ return {
     local m = data.mcp or {}
     local err = errors.mcp or failed(data.mcp)
     local servers = {}
-    for _, x in ipairs(m.servers or {}) do servers[#servers + 1] = { name = x.name, type = x.type, stdio = is_stdio(x) } end
+    for _, x in ipairs(m.servers or {}) do servers[#servers + 1] = { name = x.name, type = x.type, stdio = is_stdio(x), detail = x.detail } end
 
     -- The sandbox Load and Unload act on.
     local running, names = {}, {}
@@ -255,6 +316,9 @@ return {
       form[#form + 1] = row{ w = "full", gap = 8, align = "start",
         row{ w = 76, h = 28, text{ "Headers", size = "sm", color = "text-muted" } }, column(hrows) }
     end
+    if f.replace and f.unlisted then
+      form[#form + 1] = note("sbx did not list this server's settings: fill them in again (Inspect shows its headers).", "amber")
+    end
     local hint
     if stdio then
       hint = note("A local command runs on this machine, outside any sandbox: the next dialog shows the exact line and asks you to confirm you read it.", "amber")
@@ -281,12 +345,15 @@ return {
     for i, x in ipairs(servers) do
       if i > shown then break end
       local open = sel == x.name
-      local acts = row{ gap = 4, wrap = true,
+      -- Narrow, the actions take their own line and wrap inside it.
+      local acts = row{ gap = 4, wrap = true, grow = (not wide) and 1 or nil, min_w = 0,
         button{ "Load", key = "mcp-load-" .. x.name, variant = "ghost", on = "load", arg = { server = x.name, sandbox = target }, disabled = not target,
           help = "Attach to " .. (target or "a running sandbox") .. ": its agent picks up the tools without a restart" },
         button{ "Unload", key = "mcp-unload-" .. x.name, variant = "ghost", on = "unload", arg = { server = x.name, sandbox = target }, disabled = not target },
         (not x.stdio) and button{ "Sign in", key = "mcp-auth-" .. x.name, variant = "ghost", on = "auth", arg = x.name,
           help = "sbx mcp auth: sign in from this machine's browser; the token serves every sandbox" } or false,
+        button{ "Edit", key = "mcp-edit-" .. x.name, variant = "ghost", on = "edit", arg = edit_of(x),
+          help = "Fill the form with this server's settings: saving removes it and adds it again (its OAuth token is dropped)" },
         button{ "Inspect", key = "mcp-inspect-" .. x.name, variant = "ghost", on = open and "inspect_close" or "inspect", arg = x.name, help = open and "Hide the details" or nil },
         button{ icon = "trash", variant = "ghost", color = "red", on = "rm", arg = x.name, key = "mcp-rm-" .. x.name, help = "Unregister from this machine" },
       }
@@ -370,6 +437,20 @@ return {
     kind = function(state, a, v)
       if a.reset or not state.mcp then state.mcp = {} end
       state.mcp.kind = v
+    end,
+    -- Edit: the form holds a listed server's settings and saves with
+    -- `replace` (the core's dialog says it is removed and added again).
+    edit = function(state, x)
+      local f = { replace = x.name, name = x.name, kind = x.stdio and "stdio" or "remote",
+        url = x.url or "", command = x.command or "", args = x.args or "", dir = x.dir or "", rows = {}, next = 0 }
+      if not x.stdio then
+        for _, h in ipairs(x.headers or {}) do
+          f.next = f.next + 1
+          f.rows[#f.rows + 1] = row_of(h, f.next)
+        end
+      end
+      f.unlisted = (x.stdio and f.command == "") or (not x.stdio and f.url == "")
+      state.mcp = f
     end,
     clear = function(state) state.mcp = {} end,
     save = function(state)
