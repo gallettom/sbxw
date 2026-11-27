@@ -2922,6 +2922,8 @@ a `Set` renders only drawn screens). Also read: `data.relay_ui.picks` and
 | `monitor_attach` | `key` (the session shown) | direct | The core's file dialog (`Action::PickFiles`, from a press only); the file comes back through `on_files` and waits as a chip of that session |
 | `monitor_commands` | `key` (the session shown) | direct | The composer's completion list: `GET /api/sandboxes/:name/commands` for that session's sandbox, once (the screen asks when the draft first starts with `/` and a partial name). One sandbox's list is held; the shown session in another sandbox reads that one's. Never on a timer, never from Luau. The answer's names are checked (`^[a-z0-9][a-z0-9:_-]{0,63}$`) and its descriptions cleaned (controls and invisible characters dropped, one line, 100 characters) before `detail.commands` (`{state = "loading" \| "ready" \| "none", items = { {name, desc} }}`); a 404 (a daemon without the route) or any failure is `none`: no list, nothing said |
 | `monitor_attach_remove` | `key`, `id` | direct | Takes that file off the session's chips; the core forgets its path |
+| `monitor_picture` | `key` (a ready preview's key) | direct | Opens that sent picture large in the `monitor-picture` dialog, read again from the sandbox (below). A key not among the previews of the session shown opens nothing |
+| `monitor_picture_close` | none | direct | Closes the picture dialog; the large picture is forgotten |
 | `monitor_say` | `key` (the session shown), `text` | press | Words alone, from Send or Return in the composer only (the core refuses any other origin): masked (`/api/voice/anonymise`), then `/api/chat/push {text, name, thread}` at once, no dialog. Refused with files attached, empty words, a session not shown, on a menu, ended or unreachable, under `data.app.covered` or a Jarvis proposal, or while its last words are on their way. A failure keeps the words in the box and says why (never the words) |
 | `monitor_send` | `key`, `text?` | approval | The screen raises it when files are attached. Masked (`/api/voice/anonymise`), then ONE core dialog: the words in full, each attached file (local path, size, "look" reasons), the total, the session; a "look" file needs its box ticked. Send there: without files, `/api/chat/push {text, name, thread}`; with files, `core:uploads` (then each pasted picture's `paste-image`), then the push of the words followed by the daemon's paths. A failure pushes nothing |
 
@@ -2968,7 +2970,7 @@ out; the log gets counts and `what` lines without names.
 
 **Pictures sent.** A prompt of the person's whose text holds the path of a
 picture sbxw uploaded shows it small under the text (`image`, 180 x 120 pt
-at most, inside the bubble at every width; no action of its own). Only
+at most, inside the bubble at every width). Only
 paths under `/tmp/sbxw-pastes/<name>` and `/tmp/sbxw-uploads/<n>/<name>`, a
 plain name (no `/`, no `..`, not hidden, no control or invisible character)
 ending in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`, and only in the
@@ -2985,6 +2987,30 @@ sandbox", "Picture too large to preview", "Picture cannot be previewed",
 shows its thumbnail (from the bytes in memory) until it is removed or sent;
 a file attached by its path keeps the plain chip (the feature reads no
 local path). Fixture: `fixtures/monitor/pictures.json`.
+
+**A sent picture opened large.** A ready preview is pressable (a pointer
+cursor, a hover, "Show the picture"); a muted line is not. The press is
+`monitor_picture {key}`, the preview's own key: the path is looked up in
+the previews' map (only paths found in the person's prompts of the
+session shown), so a key not there, or any path, opens nothing. Refused
+under `data.app.covered` or a Jarvis proposal. It opens the modal
+`monitor-picture` (`screens/monitor-picture.luau`, 1080 wide at most) and
+reads the file again by the same route, decoded within 1600 px (the Files
+view's preview bound) into `data.monitor_picture` (`{state = "loading" |
+"ready" | "note", name, small = {key, w, h}, key?, w?, h?, note?}`). While
+it loads, the small preview and "Loading the full picture…"; a failure,
+the same muted lines as the previews, never a notice. Drawn: the picture
+fitted to `data.app.window` inside the card, never larger than its
+pixels; under it the file's name (cut and made safe as a chip's), its size
+in pixels, and Close. Nothing else: no download, no copy, no other app.
+One large picture at a time: forgotten on Close, when another opens,
+another session is selected (the dialog closes) or the view is left.
+Escape (and any close by the core) tells no feature: the feature forgets
+it at its next call (a session report, an intent, an answer), which comes
+within seconds while Sessions shows. A press on a preview selects no text;
+a drag across the prompt over its previews still selects the texts.
+Fixture: `fixtures/monitor/picture-note.json` (the dialog open on a failed
+read, a long name).
 
 ### Overlays
 
