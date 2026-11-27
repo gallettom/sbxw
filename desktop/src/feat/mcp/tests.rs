@@ -683,3 +683,57 @@ fn a_masked_header_removed_on_edit_is_dropped_explicitly_and_a_new_empty_row_sta
     g.typed("mcp-h-value-1", "1");
     assert_eq!(g.press("mcp-save")[0]["args"]["headers"], "X-Empty: 1");
 }
+
+#[test]
+fn a_client_id_is_sent_named_in_the_confirm_and_its_secret_is_asked_optional() {
+    let mut f = remote_form("github");
+    let t = f.texts();
+    assert!(t.iter().any(|x| x == "Only for a server that needs a pre-registered OAuth client, such as GitHub."), "{t:?}");
+    assert_eq!(f.find("mcp-client-id").unwrap().value, json!(""));
+    f.typed("mcp-client-id", " Iv1.abc ");
+    assert!(f.texts().iter().any(|x| x == "Secrets asked in the next dialog: the OAuth client secret (optional)"), "{:?}", f.texts());
+    let sent = f.press("mcp-save");
+    assert_eq!(sent[0]["args"], json!({ "name": "github", "kind": "remote", "url": "https://mcp.example.com/mcp", "client_id": "Iv1.abc" }));
+    let c = one_confirm(run(&fixture("full"), "mcp_save", sent[0]["args"].clone()));
+    assert_eq!(c.call.body["spec"]["client_id"], "Iv1.abc");
+    assert!(c.lines.iter().any(|l| l.starts_with("OAuth client ID: Iv1.abc")), "{:?}", c.lines);
+    let s: Vec<(&str, bool)> = c.secrets.iter().map(|s| (s.field.as_str(), s.optional)).collect();
+    assert_eq!(s, [("secrets.client_secret", true)]);
+    assert_eq!(c.call.body["secrets"], json!({}), "a secret is the dialog's, never the intent's");
+    // With a header secret: both, the header's first.
+    let c = one_confirm(run(&fixture("full"), "mcp_save", json!({ "name": "g", "kind": "remote", "url": "https://x", "headers": "X-K: ${KEY}", "client_id": "abc" })));
+    let fields: Vec<&str> = c.secrets.iter().map(|s| s.field.as_str()).collect();
+    assert_eq!(fields, ["secrets.KEY", "secrets.client_secret"]);
+    // Without one, no client secret and an empty client_id.
+    let c = one_confirm(run(&fixture("full"), "mcp_save", json!({ "name": "g", "kind": "remote", "url": "https://x" })));
+    assert!(c.secrets.is_empty() && c.call.body["spec"]["client_id"] == "");
+    assert!(!c.lines.iter().any(|l| l.contains("client ID")));
+}
+
+#[test]
+fn a_bad_client_id_is_refused_and_a_local_command_takes_none() {
+    let data = fixture("full");
+    for bad in ["-x", "a b", "a;b", "é"] {
+        assert!(run(&data, "mcp_save", json!({ "name": "g", "kind": "remote", "url": "https://x", "client_id": bad })).unwrap_err().contains("client ID"), "{bad}");
+    }
+    assert!(run(&data, "mcp_save", json!({ "name": "s", "kind": "stdio", "command": "npx", "client_id": "abc" })).unwrap_err().contains("remote"));
+    let e = run(&data, "mcp_save", json!({ "name": "g", "kind": "remote", "url": "https://x", "headers": "X-K: ${client_secret}" })).unwrap_err();
+    assert!(e.contains("client secret"), "{e}");
+}
+
+#[test]
+fn edit_prefills_the_listed_client_id_and_its_secret_stays_unchanged_if_empty() {
+    let gh = json!({ "name": "github", "type": "remote", "detail": { "url": "https://api.githubcopilot.com/mcp", "oauth": { "client_id": "Iv1.abc", "client_secret": "never-shown" } } });
+    let mut f = Form::new(listed(json!([gh])));
+    f.press("mcp-edit-github");
+    assert_eq!(f.find("mcp-client-id").unwrap().value, json!("Iv1.abc"));
+    assert!(!f.texts().iter().any(|x| x.contains("never-shown")), "a secret never reaches the form");
+    let sent = f.press("mcp-save");
+    assert_eq!(sent[0]["args"]["client_id"], "Iv1.abc");
+    let c = one_confirm(run(&fixture("full"), "mcp_save", sent[0]["args"].clone()));
+    assert!(c.secrets.iter().any(|s| s.field == "secrets.client_secret" && s.optional && s.placeholder == "unchanged if left empty"));
+    // A local command's form has no client ID field.
+    f.press("mcp-clear");
+    f.act("mcp-kind", json!("stdio"));
+    assert!(f.find("mcp-client-id").is_none());
+}

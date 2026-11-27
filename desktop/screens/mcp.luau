@@ -13,6 +13,11 @@
 -- Headers: one row each, a name picked (or Custom) and a value; sent as
 -- "Name: value" lines. A value holding ";" is refused in the form.
 --
+-- OAuth client ID (remote only, optional): for a server with no dynamic
+-- client registration (GitHub). Filled, the next dialog also asks the
+-- client's secret (optional: a public client has none). Edit pre-fills the
+-- ID when sbx lists one; never a secret.
+--
 -- Secrets: a header's ${KEY} is named here, never valued. Its value is typed
 -- in the core's dialog after Add; this screen never sees it. Unload, Remove
 -- and Add are confirmed in the core's dialog, not here.
@@ -157,7 +162,10 @@ local function edit_of(x)
     for _, w in ipairs(args) do if type(w) == "string" then words[#words + 1] = w end end
     args = table.concat(words, " ")
   end
-  return { name = x.name, stdio = x.stdio, url = str(field_of(d, { "url", "endpoint", "remote.url", "config.url" })),
+  -- sbx does not document where a row keeps it: these are guesses, as the web UI's.
+  local client_id = str(field_of(d, { "client_id", "clientId", "oauth.client_id", "oauth.clientId", "auth.client_id", "auth.clientId", "config.client_id" }))
+  return { name = x.name, stdio = x.stdio, client_id = client_id and trim(client_id) or nil,
+    url = str(field_of(d, { "url", "endpoint", "remote.url", "config.url" })),
     headers = headers, command = str(field_of(d, { "command", "config.command" })), args = str(args),
     dir = str(field_of(d, { "dir", "cwd", "config.dir" })) }
 end
@@ -319,6 +327,9 @@ return {
       -- The label stays beside the first row (top), not in the middle of many.
       form[#form + 1] = row{ w = "full", gap = 8, align = "start",
         row{ w = 76, h = 28, text{ "Headers", size = "sm", color = "text-muted" } }, column(hrows) }
+      form[#form + 1] = column{ w = "full", gap = 4, key = "mcp-client",
+        cell("Client ID", input{ id = "mcp-client-id", value = f.client_id or "", on = "field", arg = { k = "client_id", reset = done }, placeholder = "OAuth client ID (optional)" }),
+        row{ w = "full", gap = 8, row{ w = 76 }, text{ "Only for a server that needs a pre-registered OAuth client, such as GitHub.", wrap = true, size = "sm", color = "text-muted", grow = 1, min_w = 0, key = "mcp-client-help" } } }
     end
     if f.replace and f.unlisted then
       form[#form + 1] = note("sbx did not list this server's settings: fill them in again (Inspect shows its headers).", "amber")
@@ -326,8 +337,11 @@ return {
     local hint
     if stdio then
       hint = note("A local command runs on this machine, outside any sandbox: the next dialog shows the exact line and asks you to confirm you read it.", "amber")
-    elseif #keys > 0 then
-      hint = note("Secrets asked in the next dialog: " .. table.concat(keys, ", ") .. (f.replace and " (left empty: unchanged)" or ""))
+    elseif #keys > 0 or trim(f.client_id) ~= "" then
+      local asked = {}
+      for _, k in ipairs(keys) do asked[#asked + 1] = k end
+      if trim(f.client_id) ~= "" then asked[#asked + 1] = "the OAuth client secret (optional)" end
+      hint = note("Secrets asked in the next dialog: " .. table.concat(asked, ", ") .. (f.replace and " (left empty: unchanged)" or ""))
     else
       hint = note("OAuth servers are added unauthorized: use Sign in once added.")
     end
@@ -446,7 +460,8 @@ return {
     -- `replace` (the core's dialog says it is removed and added again).
     edit = function(state, x)
       local f = { replace = x.name, name = x.name, kind = x.stdio and "stdio" or "remote",
-        url = x.url or "", command = x.command or "", args = x.args or "", dir = x.dir or "", rows = {}, next = 0 }
+        url = x.url or "", command = x.command or "", args = x.args or "", dir = x.dir or "", rows = {}, next = 0,
+        client_id = (not x.stdio) and x.client_id or "" }
       if not x.stdio then
         for _, h in ipairs(x.headers or {}) do
           f.next = f.next + 1
@@ -470,6 +485,7 @@ return {
         -- Refused in the form (the reason is under the row): never sent otherwise than typed.
         if bad then return nil end
         if headers ~= "" then args.headers = headers end
+        if trim(f.client_id) ~= "" then args.client_id = trim(f.client_id) end
       end
       if f.replace then args.replace = f.replace end
       f.sent = args.name

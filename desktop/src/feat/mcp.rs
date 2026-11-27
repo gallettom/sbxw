@@ -13,6 +13,10 @@
 //! **Secrets.** A header's `${KEY}` is a secret: the screen names the key,
 //! the value is typed in the core's dialog ([`crate::feat::Secret`]) and put
 //! in the request body on Confirm. Nothing here stores, logs or returns one.
+//! A remote server's optional OAuth client ID (`client_id`, for a server with
+//! no dynamic client registration, such as GitHub) adds one optional secret,
+//! the client secret, asked in the same dialog (`secrets.client_secret`; the
+//! daemon stores it as `mcp:<name>:client_secret` before the add).
 //!
 //! The stand-in answers these routes in `setup/standin.rs` (one fixture
 //! object for every Setup route, as before the move).
@@ -66,8 +70,9 @@ pub const INTENTS: &[Spec] = &[
             ("args", Arg::Str, false),
             ("dir", Arg::Str, false),
             ("replace", Arg::Str, false),
+            ("client_id", Arg::Str, false),
         ],
-        "Registers an MCP server, or replaces `replace`. `headers` are separated by `;` or new lines; each `${KEY}` in them is a secret asked in the core's dialog. A `stdio` server shows its host command and needs an acknowledgement.",
+        "Registers an MCP server, or replaces `replace`. `headers` are separated by `;` or new lines; each `${KEY}` in them is a secret asked in the core's dialog. `client_id`: a remote server's pre-registered OAuth client ID (a server with no dynamic client registration, such as GitHub); its optional client secret is asked in the same dialog. A `stdio` server shows its host command and needs an acknowledgement.",
     ),
 ];
 
@@ -106,6 +111,15 @@ pub fn host_command(command: &str, args: &[String], dir: &str) -> String {
 /// sbx's server name rule (`crates/core/src/mcp.rs`, `check_name`).
 pub fn mcp_name_ok(n: &str) -> bool {
     !n.is_empty() && n.len() <= 64 && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') && !n.starts_with(['-', '.'])
+}
+
+/// The key a pre-registered OAuth client's secret is stored under
+/// (`crates/core/src/mcp.rs`, `CLIENT_SECRET`): no header placeholder takes it.
+pub const CLIENT_SECRET: &str = "client_secret";
+
+/// The core's OAuth client ID rule (`crates/core/src/mcp.rs`, `check_client_id`).
+pub fn client_id_ok(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 256 && !id.starts_with('-') && id.chars().all(|c| c.is_ascii_alphanumeric() || "-._~:@/+=".contains(c))
 }
 
 fn confirm(c: Confirm) -> Result<Vec<Action>, String> {
@@ -194,11 +208,15 @@ pub fn mcp_spec(q: &Asked) -> Result<J, String> {
         return Err(format!("{name:?} is not a server name: letters, digits, '-', '_' and '.', up to 64"));
     }
     let kind = q.req("kind");
+    let client_id = q.s("client_id").unwrap_or("").trim().to_string();
     let split = |s: Option<&str>, sep: &[char]| -> Vec<String> { s.unwrap_or("").split(sep).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).collect() };
     if kind == "stdio" {
         let command = q.s("command").unwrap_or("").trim().to_string();
         if command.is_empty() {
             return Err("a local server needs its command".into());
+        }
+        if !client_id.is_empty() {
+            return Err("an OAuth client ID is for a remote server, not a local command".into());
         }
         Ok(json!({ "name": name, "kind": "stdio", "url": "", "headers": [], "command": command, "args": split(q.s("args"), &[' ', '\t', '\n']), "dir": q.s("dir").unwrap_or("").trim() }))
     } else {
@@ -206,7 +224,14 @@ pub fn mcp_spec(q: &Asked) -> Result<J, String> {
         if !(url.starts_with("https://") || url.starts_with("http://")) {
             return Err("a remote server needs its http:// or https:// URL".into());
         }
-        Ok(json!({ "name": name, "kind": "remote", "url": url, "headers": split(q.s("headers"), &[';', '\n']), "command": "", "args": [], "dir": "" }))
+        if !client_id.is_empty() && !client_id_ok(&client_id) {
+            return Err(format!("{client_id:?} is not an OAuth client ID: letters, digits and - . _ ~ : @ / + =, up to 256, not starting with '-'"));
+        }
+        let headers = split(q.s("headers"), &[';', '\n']);
+        if placeholders(&headers).iter().any(|k| k == CLIENT_SECRET) {
+            return Err(format!("${{{CLIENT_SECRET}}} is the OAuth client secret's own key: name the header's secret otherwise"));
+        }
+        Ok(json!({ "name": name, "kind": "remote", "url": url, "headers": headers, "command": "", "args": [], "dir": "", "client_id": client_id }))
     }
 }
 
@@ -242,6 +267,9 @@ fn mcp_save(q: &Asked) -> Result<Vec<Action>, String> {
         if !headers.is_empty() {
             c = c.line(format!("Headers: {}", headers.join("; ")));
         }
+        if let Some(id) = spec["client_id"].as_str().filter(|id| !id.is_empty()) {
+            c = c.line(format!("OAuth client ID: {id} (a pre-registered client). Its client secret, if it has one, is stored by sbx; leave it empty for a public client."));
+        }
         c = c.line("OAuth servers are added unauthorized: use Sign in once added.");
     }
     if let Some(r) = &replace {
@@ -254,6 +282,10 @@ fn mcp_save(q: &Asked) -> Result<Vec<Action>, String> {
         let label = format!("${{{k}}}");
         let field = format!("secrets.{k}");
         c = if replace.is_some() { c.optional_secret(&label, &field, "unchanged if left empty") } else { c.secret(&label, &field) };
+    }
+    if spec["client_id"].as_str().is_some_and(|id| !id.is_empty()) {
+        let hint = if replace.is_some() { "unchanged if left empty" } else { "only for a confidential client" };
+        c = c.optional_secret("OAuth client secret", &format!("secrets.{CLIENT_SECRET}"), hint);
     }
     confirm(c)
 }

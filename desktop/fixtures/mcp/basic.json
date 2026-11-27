@@ -227,6 +227,16 @@
           }
         },
         {
+          "name": "github",
+          "type": "remote",
+          "detail": {
+            "name": "github",
+            "type": "remote",
+            "url": "https://api.githubcopilot.com/mcp",
+            "client_id": "Iv1.0123456789abcdef"
+          }
+        },
+        {
           "name": "playwright",
           "type": "stdio",
           "detail": {
