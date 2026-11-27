@@ -175,11 +175,15 @@ local function conv_row(r, d, now)
     return row{ gap = 8, w = "full", py = 4, key = "monitor-" .. r.id, column{ grow = 1, h = 1, fill = "elevated" }, text{ r.label, size = "xs", color = "text-muted" }, column{ grow = 1, h = 1, fill = "elevated" } }
   elseif r.t == "you" then
     local body = { pad = 12, gap = 8, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = BW, key = "monitor-body-you-" .. r.id, text{ r.text, wrap = true, color = "text-bright", selectable = true } }
-    -- The pictures the person sent in it (the Rust reads only these): small, no action of their own.
+    -- The pictures the person sent in it (the Rust reads only these): small;
+    -- a press on one opens it large, named by its preview's key alone. A
+    -- muted line (gone, a GIF) is not pressable.
     if r.pics and #r.pics > 0 then
       local pics = { gap = 8, wrap = true, key = "monitor-pics-" .. r.id }
       for i, p in ipairs(r.pics) do
-        pics[#pics + 1] = p.key and image{ key = p.key, max_w = math.min(180, BW - 24), max_h = 120 }
+        pics[#pics + 1] = p.key and column{ key = "monitor-pic-" .. r.id .. "-" .. i, radius = "xs", hover = "hover-subtle",
+            on = "zoom", arg = { key = p.key }, help = "Show the picture",
+            image{ key = p.key, max_w = math.min(180, BW - 24), max_h = 120 } }
           or text{ p.note, key = "monitor-pic-note-" .. r.id .. "-" .. i, size = "sm", color = "text-muted", wrap = true }
       end
       body[#body + 1] = row(pics)
@@ -588,6 +592,7 @@ local screen = {
     end,
     earlier = function(_, a) return intent("monitor_earlier", { key = a.key }) end,
     retry = function(_, a) return intent("monitor_retry", { key = a.key }) end,
+    zoom = function(_, a) return intent("monitor_picture", { key = a.key }) end,
     unattach = function(_, a) return intent("monitor_attach_remove", { key = a.key, id = a.id }) end,
   },
 }

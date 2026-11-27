@@ -18,6 +18,12 @@
 //!   Another session, or the view left: every preview is forgotten
 //!   (`Action::Image` with no bytes).
 //! * **Failures** are a muted line under the text, never a notice.
+//! * **Opened large.** A press on a ready preview names it by its key
+//!   ([`Pics::zoom_open`]); its path comes from [`Pics::map`] only. The
+//!   file is read again, decoded within [`ZOOM_FIT`] px, for the dialog
+//!   (`monitor-picture`); one such picture at a time, forgotten when the
+//!   dialog closes, another opens, another session is shown or the view
+//!   is left.
 
 use super::conv::Sid;
 use crate::feat::{Action, Call};
@@ -30,6 +36,9 @@ pub const CAP: usize = 12;
 pub const INFLIGHT: usize = 2;
 /// A preview's longest side once decoded (twice the drawn 180 pt).
 pub const FIT: u32 = 360;
+/// A picture opened large: its longest side once decoded, the Files
+/// view's own preview bound (`feat/files/mod.rs`, `got_preview`).
+pub const ZOOM_FIT: u32 = 1600;
 /// The largest picture read: the Files view's own cap.
 pub const MAX_BYTES: u64 = crate::feat::files::view::IMAGE_MAX;
 
@@ -99,6 +108,36 @@ pub struct Pics {
     /// The paths wanted, newest first (the order reads start in).
     order: Vec<String>,
     seq: u64,
+    /// The one picture opened large, if any.
+    pub zoom: Option<Zoom>,
+}
+
+/// A picture opened large in the dialog: its path (from [`Pics::map`]),
+/// its preview (drawn while the large copy loads) and the large copy.
+#[derive(Debug)]
+pub struct Zoom {
+    pub path: String,
+    pub small: (String, u32, u32),
+    pub st: St,
+}
+
+/// A read's answer decoded within `fit` px, or the muted line it gets.
+fn decode(r: Result<(u16, Vec<u8>, String), String>, fit: u32) -> Result<crate::picture::Picture, &'static str> {
+    match r {
+        Ok((200, bytes, _)) if bytes.len() as u64 > MAX_BYTES => Err(TOO_LARGE),
+        Ok((200, bytes, _)) => {
+            let limits = crate::picture::Limits { max_bytes: MAX_BYTES as usize, ..crate::picture::Limits::default() };
+            crate::picture::prepare(&bytes, limits, Some(fit), crate::picture::Encode::Png).map_err(|e| {
+                // `picture`'s limits say "more than" (bytes, sides, pixels).
+                if e.contains("more than") { TOO_LARGE } else { UNREADABLE }
+            })
+        }
+        Ok((code, body, _)) => {
+            let why = String::from_utf8_lossy(&body[..body.len().min(4096)]).to_ascii_lowercase();
+            Err(if code == 413 || why.contains("too large") || why.contains("larger than") { TOO_LARGE } else { GONE })
+        }
+        Err(_) => Err(NOT_READ),
+    }
 }
 
 fn forget(st: &St) -> Option<Action> {
@@ -117,6 +156,7 @@ impl Pics {
         let mut changed = false;
         if self.sid.as_ref() != sid {
             out.extend(self.map.values().filter_map(forget));
+            out.extend(self.zoom_close());
             changed |= !self.map.is_empty();
             self.map.clear();
             self.order.clear();
@@ -180,36 +220,86 @@ impl Pics {
     pub fn got(&mut self, n: u64, r: Result<(u16, Vec<u8>, String), String>) -> Option<Vec<Action>> {
         let path = self.map.iter().find(|(_, s)| **s == St::Loading(n)).map(|(p, _)| p.clone())?;
         let mut out = vec![];
-        let st = match r {
-            Ok((200, bytes, _)) if bytes.len() as u64 > MAX_BYTES => St::Note(TOO_LARGE),
-            Ok((200, bytes, _)) => {
-                let limits = crate::picture::Limits { max_bytes: MAX_BYTES as usize, ..crate::picture::Limits::default() };
-                match crate::picture::prepare(&bytes, limits, Some(FIT), crate::picture::Encode::Png) {
-                    Ok(p) => {
-                        let key = format!("monitor-pic-{n}");
-                        out.push(Action::Image { key: key.clone(), bytes: p.bytes });
-                        St::Ready { key, w: p.width, h: p.height }
-                    }
-                    // `picture`'s limits say "more than" (bytes, sides, pixels).
-                    Err(e) if e.contains("more than") => St::Note(TOO_LARGE),
-                    Err(_) => St::Note(UNREADABLE),
-                }
+        let st = match decode(r, FIT) {
+            Ok(p) => {
+                let key = format!("monitor-pic-{n}");
+                out.push(Action::Image { key: key.clone(), bytes: p.bytes });
+                St::Ready { key, w: p.width, h: p.height }
             }
-            Ok((code, body, _)) => {
-                let why = String::from_utf8_lossy(&body[..body.len().min(4096)]).to_ascii_lowercase();
-                if code == 413 || why.contains("too large") || why.contains("larger than") {
-                    St::Note(TOO_LARGE)
-                } else {
-                    St::Note(GONE)
-                }
-            }
-            Err(_) => St::Note(NOT_READ),
+            Err(t) => St::Note(t),
         };
         self.map.insert(path, st);
         if let Some(sid) = self.sid.clone() {
             out.extend(self.start(&sid.0));
         }
         Some(out)
+    }
+
+    /// The preview drawn under `key`, and its path: only a ready preview of
+    /// the session shown (the map holds nothing else).
+    pub fn ready(&self, key: &str) -> Option<(String, String, u32, u32)> {
+        self.map.iter().find_map(|(p, s)| match s {
+            St::Ready { key: k, w, h } if k == key => Some((p.clone(), k.clone(), *w, *h)),
+            _ => None,
+        })
+    }
+
+    /// The picture of preview `key` opened large: the large picture held
+    /// before is forgotten, the file read again ([`ZOOM_FIT`]). `None`: no
+    /// ready preview of that key (nothing opens).
+    pub fn zoom_open(&mut self, key: &str) -> Option<Vec<Action>> {
+        let (path, small, w, h) = self.ready(key)?;
+        let sid = self.sid.clone()?;
+        let mut out = self.zoom_close();
+        self.seq += 1;
+        let n = self.seq;
+        let route = format!("/api/sandboxes/{}/fs/file?path={}&max={MAX_BYTES}", crate::client::enc(&sid.0), crate::client::enc(&path));
+        out.push(Action::Call(Call::get(route, "read a picture you sent").raw(MAX_BYTES).tag(&format!("zoom:{n}")).quiet()));
+        self.zoom = Some(Zoom { path, small: (small, w, h), st: St::Loading(n) });
+        Some(out)
+    }
+
+    /// The large read `n` answered. `None`: not the one waited for (closed,
+    /// another opened): nothing is shown.
+    pub fn zoom_got(&mut self, n: u64, r: Result<(u16, Vec<u8>, String), String>) -> Option<Vec<Action>> {
+        let z = self.zoom.as_mut().filter(|z| z.st == St::Loading(n))?;
+        Some(match decode(r, ZOOM_FIT) {
+            Ok(p) => {
+                let key = format!("monitor-zoom-{n}");
+                z.st = St::Ready { key: key.clone(), w: p.width, h: p.height };
+                vec![Action::Image { key, bytes: p.bytes }]
+            }
+            Err(t) => {
+                z.st = St::Note(t);
+                vec![]
+            }
+        })
+    }
+
+    /// The large picture forgotten (the dialog closed).
+    pub fn zoom_close(&mut self) -> Vec<Action> {
+        self.zoom.take().and_then(|z| forget(&z.st)).into_iter().collect()
+    }
+
+    /// `data.monitor_picture`: what the dialog draws, or null.
+    pub fn zoom_view(&self) -> J {
+        let Some(z) = &self.zoom else { return J::Null };
+        let name = z.path.rsplit('/').next().unwrap_or("");
+        let mut v = json!({ "name": super::attach::clipped(name), "small": { "key": z.small.0, "w": z.small.1, "h": z.small.2 } });
+        match &z.st {
+            St::Ready { key, w, h } => {
+                v["state"] = "ready".into();
+                v["key"] = key.as_str().into();
+                v["w"] = (*w).into();
+                v["h"] = (*h).into();
+            }
+            St::Note(t) => {
+                v["state"] = "note".into();
+                v["note"] = (*t).into();
+            }
+            _ => v["state"] = "loading".into(),
+        }
+        v
     }
 
     /// The rows as drawn, each prompt of the person given its previews

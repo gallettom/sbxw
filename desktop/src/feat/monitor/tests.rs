@@ -2489,15 +2489,32 @@ fn serve_all(d: &mut J, acts: Vec<Action>) -> Vec<Action> {
     let mut todo = acts;
     for _ in 0..64 {
         let mut next = vec![];
-        for a in serve(d, todo) {
+        let got = serve(d, todo);
+        // What the core applies at once (the dialog, its data), before any read answers.
+        for a in &got {
             match a {
-                Action::Call(c) if c.tag.starts_with("pic:") => {
+                Action::OpenModal { screen, arg } => {
+                    d["app"]["modal"] = json!({ "screen": screen, "arg": arg });
+                    d["app"]["covered"] = true.into();
+                }
+                Action::CloseModal => {
+                    d["app"]["modal"] = J::Null;
+                    d["app"]["covered"] = false.into();
+                }
+                Action::Set { key, value } if key == PICTURE_UI => d[PICTURE_UI] = value.clone(),
+                _ => {}
+            }
+        }
+        for a in got {
+            match a {
+                Action::Call(c) if c.tag.starts_with("pic:") || c.tag.starts_with("zoom:") => {
                     assert!(c.raw.is_some() && c.method == crate::feat::Method::Get, "a raw read: {c:?}");
                     let p = crate::feat::query(&c.path, "path").unwrap_or_default();
-                    if !d["pic_calls"].is_array() {
-                        d["pic_calls"] = json!([]);
+                    let log = if c.tag.starts_with("zoom:") { "zoom_calls" } else { "pic_calls" };
+                    if !d[log].is_array() {
+                        d[log] = json!([]);
                     }
-                    d["pic_calls"].as_array_mut().unwrap().push(p.clone().into());
+                    d[log].as_array_mut().unwrap().push(p.clone().into());
                     let r = match d["pic_answers"][&p].as_array() {
                         Some(x) => (x[0].as_u64().unwrap() as u16, x[1].as_str().unwrap().as_bytes().to_vec(), "text/plain".into()),
                         None => {
@@ -2621,7 +2638,12 @@ fn a_prompt_with_sent_pictures_reads_each_once_and_draws_them_under_its_text() {
     assert_eq!(imgs.len(), 2, "{imgs:?}");
     assert_eq!(notes, [super::pics::GONE]);
     let row = find(&n, &format!("monitor-pics-{}", you["id"].as_str().unwrap())).unwrap();
-    assert!(controls(row).is_empty(), "a preview has no action: {:?}", controls(row));
+    let mut els = vec![];
+    walk(row, &mut els);
+    let pressable: Vec<&J> = els.iter().filter(|x| x.on.is_some()).map(|x| &x.arg).collect();
+    assert_eq!(pressable.len(), 2, "each ready preview opens, the muted line does not: {:?}", controls(row));
+    assert!(pressable.iter().all(|a| a.as_object().is_some_and(|o| o.len() == 1 && o["key"].as_str().is_some_and(|k| k.starts_with("monitor-pic-")))), "named by its key alone: {pressable:?}");
+    assert!(els.iter().filter(|x| x.on.is_some()).all(|x| x.on.as_deref() == Some("zoom") && x.help.as_deref() == Some("Show the picture")));
     // Claude's reply holding the same path: no preview drawn for it.
     let reply = conv_rows(&d["monitor"]).into_iter().find(|r| r["t"] == "claude" && r["text"].as_str().unwrap().contains("/tmp/sbxw-pastes/")).unwrap();
     assert!(reply["pics"].is_null());
@@ -2794,7 +2816,9 @@ fn hostile_text_around_a_path_makes_no_control() {
     let n = host().render(&d).unwrap();
     let you = first_you(&d["monitor"]);
     let row = find(&n, &format!("monitor-you-{}", you["id"].as_str().unwrap())).unwrap();
-    assert!(controls(row).is_empty(), "{:?}", controls(row));
+    // The one preview opens its picture; nothing else is a control.
+    let c: Vec<String> = controls(row).into_iter().filter(|c| !c.contains("Some(\"zoom\")")).collect();
+    assert!(c.is_empty(), "{c:?}");
     let mut all = vec![];
     walk(row, &mut all);
     assert!(all.iter().any(|x| x.text.contains("<button on=\"send\">")), "drawn as its characters");
@@ -2885,6 +2909,379 @@ fn previews_stay_inside_the_conversation_at_every_width() {
     }
 }
 
+
+// ---- A sent picture opened large (pics.rs `zoom_*`, monitor-picture.luau) ----
+
+const PIC_SRC: &str = include_str!("../../../screens/monitor-picture.luau");
+
+fn pic_host() -> LuauHost {
+    let mut h = LuauHost::new(Limits::default()).unwrap();
+    h.load(PICTURE, PIC_SRC).unwrap();
+    h
+}
+
+fn zoom_calls(d: &mut J) -> Vec<String> {
+    let v = d["zoom_calls"].as_array().cloned().unwrap_or_default();
+    d["zoom_calls"] = json!([]);
+    v.iter().map(|x| x.as_str().unwrap_or("").to_string()).collect()
+}
+
+/// A path of a big screenshot sent in a prompt of billing-api main.
+const BIG: &str = "/tmp/sbxw-pastes/paste-big.png";
+const OTHER: &str = "/tmp/sbxw-uploads/4/second.png";
+
+/// billing-api main with two pictures sent, both read for their previews:
+/// the data, and the two preview keys (BIG's first).
+fn zoomable() -> (J, String, String) {
+    let mut d = data_of("basic");
+    d["app"]["modal"] = J::Null;
+    put_pic(&mut d, BIG, &png_of(2400, 1500));
+    put_pic(&mut d, OTHER, &png_of(500, 400));
+    put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": [
+        it(1, "user_prompt", json!({ "text": format!("look {BIG} and {OTHER}") })),
+        it(2, "assistant_text", json!({ "text": format!("I see {BIG} and /tmp/sbxw-pastes/agent.png") })),
+    ] }));
+    put_pic(&mut d, "/tmp/sbxw-pastes/agent.png", &png_of(40, 40));
+    pics_on(&mut d, "billing-api:s-bill-main");
+    pic_calls(&mut d);
+    let you = first_you(&d["monitor"]);
+    let k = |i: usize| you["pics"][i]["key"].as_str().unwrap().to_string();
+    (d.clone(), k(0), k(1))
+}
+
+fn zoom(d: &mut J, key: &str) -> Result<Vec<Action>, String> {
+    let a = run(d, "monitor_picture", json!({ "key": key }))?;
+    Ok(serve_all(d, a))
+}
+
+fn opens(acts: &[Action]) -> bool {
+    acts.iter().any(|a| matches!(a, Action::OpenModal { screen, .. } if screen == PICTURE))
+}
+
+#[test]
+fn a_press_on_a_ready_preview_opens_the_dialog_and_reads_the_file_once() {
+    let (mut d, big, _) = zoomable();
+    let out = zoom(&mut d, &big).unwrap();
+    assert!(opens(&out), "{out:?}");
+    assert_eq!(zoom_calls(&mut d), [BIG], "the file read once, again, for the dialog");
+    assert!(pic_calls(&mut d).is_empty(), "no preview read again");
+    // The answer: a large copy, within the Files view's bound, larger than the preview.
+    let v = d[PICTURE_UI].clone();
+    assert_eq!(v["state"], "ready", "{v}");
+    let (w, h) = (v["w"].as_u64().unwrap(), v["h"].as_u64().unwrap());
+    assert_eq!((w, h), (super::pics::ZOOM_FIT as u64, 1000), "the Files view's 1600 px");
+    let zk = v["key"].as_str().unwrap().to_string();
+    assert!(shown_images(&out).contains(&zk));
+    assert_eq!(v["name"], "paste-big.png");
+    // Drawn: the large image, its size, Close; nothing more.
+    let n = pic_host().render(&d).unwrap();
+    let mut els = vec![];
+    walk(&n, &mut els);
+    let imgs: Vec<String> = els.iter().filter(|x| matches!(x.kind, crate::luau::Kind::Image)).map(|x| x.key.clone().unwrap_or_default()).collect();
+    assert_eq!(imgs, [zk.clone()]);
+    assert!(els.iter().any(|x| x.text == "1600 × 1000 px"));
+    assert_eq!(controls(&n).len(), 1, "Close only: {:?}", controls(&n));
+    // Redraws and session reports while it shows: nothing read again, nothing forgotten.
+    let more = { let a = run(&d, "monitor_refresh", json!({})).unwrap(); serve_all(&mut d, a) };
+    let info = d["sessions"][1].clone();
+    let ev = on_event(&Ctx { data: &d }, "session", &info);
+    let more2 = serve_all(&mut d, ev);
+    assert!(zoom_calls(&mut d).is_empty());
+    assert!(forgotten(&more).is_empty() && forgotten(&more2).is_empty(), "{more2:?}");
+    assert_eq!(STATE().lock().unwrap().pics.zoom.as_ref().map(|z| z.path.clone()).as_deref(), Some(BIG));
+}
+
+#[test]
+fn while_it_loads_the_small_preview_shows_and_closing_forgets_the_large_one() {
+    let (mut d, big, _) = zoomable();
+    // Opened, not yet answered: the preview and one line.
+    let a = run(&d, "monitor_picture", json!({ "key": big })).unwrap();
+    let v = a.iter().find_map(|x| match x {
+        Action::Set { key, value } if key == PICTURE_UI => Some(value.clone()),
+        _ => None,
+    }).unwrap();
+    assert_eq!(v["state"], "loading");
+    d[PICTURE_UI] = v;
+    let n = pic_host().render(&d).unwrap();
+    let mut els = vec![];
+    walk(&n, &mut els);
+    assert!(els.iter().any(|x| matches!(x.kind, crate::luau::Kind::Image) && x.key.as_deref() == Some(big.as_str())), "the small preview");
+    assert!(els.iter().any(|x| x.text.starts_with("Loading")));
+    serve_all(&mut d, a);
+    let zk = d[PICTURE_UI]["key"].as_str().unwrap().to_string();
+    // Close: forgotten, the dialog closed, its data gone; the preview stays.
+    let out = { let a = run(&d, "monitor_picture_close", json!({})).unwrap(); serve_all(&mut d, a) };
+    assert_eq!(forgotten(&out), [zk]);
+    assert!(out.iter().any(|a| matches!(a, Action::CloseModal)));
+    assert!(d[PICTURE_UI].is_null() && d["app"]["modal"].is_null());
+    assert!(STATE().lock().unwrap().pics.zoom.is_none());
+    assert!(STATE().lock().unwrap().pics.ready(&big).is_some(), "the preview is kept");
+    // A late answer of a closed one shows nothing.
+    let mut d2 = d.clone();
+    let a = run(&d2, "monitor_picture", json!({ "key": big })).unwrap();
+    let call = a.iter().find_map(|x| match x { Action::Call(c) if c.tag.starts_with("zoom:") => Some(c.clone()), _ => None }).unwrap();
+    d2["app"]["modal"] = json!({ "screen": PICTURE });
+    run(&d2, "monitor_picture_close", json!({})).unwrap();
+    let late = on_bytes(&Ctx { data: &d2 }, &call, Ok((200, png_of(800, 600), "image/png".into())));
+    assert!(shown_images(&late).is_empty(), "{late:?}");
+}
+
+#[test]
+fn escape_closes_it_and_the_feature_forgets_the_picture_at_its_next_call() {
+    let (mut d, big, _) = zoomable();
+    zoom(&mut d, &big).unwrap();
+    let zk = d[PICTURE_UI]["key"].as_str().unwrap().to_string();
+    // The core closed it (Escape): nothing told the feature; its next call forgets.
+    d["app"]["modal"] = J::Null;
+    d["app"]["covered"] = false.into();
+    let info = d["sessions"][1].clone();
+    let out = on_event(&Ctx { data: &d }, "session", &info);
+    assert_eq!(forgotten(&out), [zk]);
+    assert!(out.iter().any(|a| matches!(a, Action::Set { key, value } if key == PICTURE_UI && value.is_null())));
+    assert!(!out.iter().any(|a| matches!(a, Action::CloseModal)), "nothing else of the core's to close");
+    assert!(STATE().lock().unwrap().pics.zoom.is_none());
+}
+
+#[test]
+fn opening_a_second_picture_forgets_the_first() {
+    let (mut d, big, other) = zoomable();
+    zoom(&mut d, &big).unwrap();
+    let first = d[PICTURE_UI]["key"].as_str().unwrap().to_string();
+    // Under its own dialog the other preview cannot be pressed: refused, nothing read.
+    let e = run(&d, "monitor_picture", json!({ "key": other })).unwrap_err();
+    assert!(e.starts_with("Not opened"), "{e}");
+    // Closed by Escape, then the second opened: the first forgotten, the second read.
+    d["app"]["modal"] = J::Null;
+    d["app"]["covered"] = false.into();
+    let out = zoom(&mut d, &other).unwrap();
+    assert_eq!(forgotten(&out), [first]);
+    assert_eq!(zoom_calls(&mut d), [BIG, OTHER]);
+    assert_eq!(d[PICTURE_UI]["name"], "second.png");
+    assert_eq!((d[PICTURE_UI]["w"].as_u64(), d[PICTURE_UI]["h"].as_u64()), (Some(500), Some(400)), "never larger than its own pixels");
+    // Both still loading at once never happens: the first's read no longer counts.
+    let held = STATE().lock().unwrap().pics.zoom.as_ref().map(|z| z.path.clone());
+    assert_eq!(held.as_deref(), Some(OTHER));
+}
+
+#[test]
+fn another_session_or_leaving_the_view_closes_it_and_forgets_it() {
+    let (mut d, big, _) = zoomable();
+    zoom(&mut d, &big).unwrap();
+    let zk = d[PICTURE_UI]["key"].as_str().unwrap().to_string();
+    let out = { let a = run(&d, "monitor_select", json!({ "key": "shop-web:s-shop-main" })).unwrap(); serve_all(&mut d, a) };
+    assert!(forgotten(&out).contains(&zk), "{out:?}");
+    assert!(out.iter().any(|a| matches!(a, Action::CloseModal)));
+    assert!(d[PICTURE_UI].is_null() && d["app"]["modal"].is_null());
+    // The view left: forgotten and closed too.
+    let (mut d, big, _) = zoomable();
+    zoom(&mut d, &big).unwrap();
+    let zk = d[PICTURE_UI]["key"].as_str().unwrap().to_string();
+    d["app"]["base"] = SCREEN.into();
+    let out = run(&d, "monitor_toggle", json!({})).unwrap();
+    assert!(forgotten(&out).contains(&zk), "{out:?}");
+    assert!(out.iter().any(|a| matches!(a, Action::CloseModal)));
+    // The view closed by something else: the next event.
+    let (mut d, big, _) = zoomable();
+    zoom(&mut d, &big).unwrap();
+    let zk = d[PICTURE_UI]["key"].as_str().unwrap().to_string();
+    d["app"]["overlay"] = J::Null;
+    let info = d["sessions"][0].clone();
+    let out = on_event(&Ctx { data: &d }, "session", &info);
+    assert!(forgotten(&out).contains(&zk), "{out:?}");
+    assert!(STATE().lock().unwrap().pics.zoom.is_none());
+}
+
+#[test]
+fn a_key_not_in_the_map_or_an_agent_s_path_opens_nothing() {
+    let (d, big, _) = zoomable();
+    let agent = "/tmp/sbxw-pastes/agent.png";
+    for key in [agent, BIG, "monitor-pic-999", "monitor-zoom-1", "", "../x", &format!("{big} ")] {
+        let r = run(&d, "monitor_picture", json!({ "key": key }));
+        let out = r.as_ref().map(|v| v.clone()).unwrap_or_default();
+        assert!(r.is_err(), "{key:?}: refused");
+        assert!(!opens(&out) && !out.iter().any(|a| matches!(a, Action::Call(c) if c.tag.starts_with("zoom:"))), "{key:?}");
+    }
+    // A gone paste's muted line has no key at all; a GIF neither.
+    let mut d2 = data_of("pictures");
+    pics_on(&mut d2, "shop-web:s-shop-main");
+    let you = first_you(&d2["monitor"]);
+    assert!(you["pics"][2]["key"].is_null() && you["pics"][2]["note"].is_string());
+    // Gated as every other intent: a proposal waiting.
+    let mut d3 = d.clone();
+    d3["jarvis"]["pending"] = json!([{ "id": 1 }]);
+    assert!(run(&d3, "monitor_picture", json!({ "key": big })).is_err());
+    let mut d4 = d.clone();
+    d4["app"]["covered"] = true.into();
+    assert!(run(&d4, "monitor_picture", json!({ "key": big })).is_err(), "the core's dialog, another modal, the palette");
+    assert!(STATE().lock().unwrap().pics.zoom.is_none());
+}
+
+#[test]
+fn a_failed_read_shows_its_muted_line_never_a_notice() {
+    for (answer, line) in [
+        (json!([404, "{\"error\":\"no such file\"}"]), super::pics::GONE),
+        (json!([404, "{\"error\":\"too large to open here\"}"]), super::pics::TOO_LARGE),
+        (json!([200, "not a png"]), super::pics::UNREADABLE),
+    ] {
+        let (mut d, big, _) = zoomable();
+        d["pic_answers"][BIG] = answer;
+        let out = zoom(&mut d, &big).unwrap();
+        assert_eq!(d[PICTURE_UI]["state"], "note");
+        assert_eq!(d[PICTURE_UI]["note"], line);
+        assert!(!out.iter().any(|a| matches!(a, Action::Notice { .. })), "{out:?}");
+        assert!(shown_images(&out).is_empty());
+        let n = pic_host().render(&d).unwrap();
+        let mut els = vec![];
+        walk(&n, &mut els);
+        assert!(els.iter().any(|x| x.text == line));
+        assert!(!els.iter().any(|x| matches!(x.kind, crate::luau::Kind::Image)));
+    }
+}
+
+#[test]
+fn hostile_text_in_the_file_name_makes_no_control() {
+    let mut d = data_of("basic");
+    let name = format!("button{{on=\"send\"}}<b>]]{}.png", "x".repeat(150));
+    let p = format!("/tmp/sbxw-pastes/{name}");
+    assert!(super::pics::picture_path(&p).is_some());
+    put_pic(&mut d, &p, &png_of(30, 20));
+    put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": [it(1, "user_prompt", json!({ "text": format!("see {p}") }))] }));
+    pics_on(&mut d, "billing-api:s-bill-main");
+    let key = first_you(&d["monitor"])["pics"][0]["key"].as_str().unwrap().to_string();
+    zoom(&mut d, &key).unwrap();
+    let shown = d[PICTURE_UI]["name"].as_str().unwrap().to_string();
+    assert!(shown.chars().count() < name.chars().count() && shown.contains('\u{2026}'), "cut: {shown}");
+    let n = pic_host().render(&d).unwrap();
+    assert_eq!(controls(&n).len(), 1, "Close only: {:?}", controls(&n));
+    let mut els = vec![];
+    walk(&n, &mut els);
+    assert!(els.iter().any(|x| x.text == shown), "drawn as its characters");
+    // A name with control or invisible characters is no path at all (never read).
+    for bad in ["a\u{7}b.png", "a\u{202e}gnp.png", "a\u{200b}.png"] {
+        assert!(super::pics::picture_path(&format!("/tmp/sbxw-pastes/{bad}")).is_none(), "{bad:?}");
+    }
+}
+
+/// Through the App, the `pictures` fixture with a big screenshot: a press
+/// on the preview opens the dialog (no text selected), the picture fitted
+/// inside the window at a wide, a narrow, a short and a tall size; Escape closes it;
+/// a drag across the prompt over the previews still selects the texts.
+#[test]
+fn the_dialog_opens_on_a_press_stays_inside_the_window_and_escape_closes_it() {
+    use crate::shell::{view as shell_view, App};
+    use rune::{Key, KeyEvent};
+    let mut fx = fixture("pictures");
+    let p = "/tmp/sbxw-pastes/paste-1763461690000.png";
+    fx["daemon"]["files_content"][p] = json!({ "$raw_hex": hex(&png_of(2400, 1500)), "$type": "image/png" });
+    let path = std::env::temp_dir().join(format!("sbxw-sessions-zoom-{}.json", std::process::id()));
+    std::fs::write(&path, serde_json::to_string(&fx).unwrap()).unwrap();
+    let quiet = |rt: &mut rune::Runtime<App>| {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+            if rt.state.link_quiet() {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "the fixture's link never settled");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        for _ in 0..8 {
+            rt.frame(0.05);
+        }
+    };
+    let tap = |rt: &mut rune::Runtime<App>, (x, y): (f32, f32)| {
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+    };
+    let rect = |rt: &rune::Runtime<App>, k: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k) && !e.exiting).map(|e| e.rect);
+    for (w, h) in [(1284.0, 816.0), (420.0, 700.0), (1284.0, 420.0), (1284.0, 1400.0)] {
+        let a = App::new(crate::shell::Args { fixture: Some(path.to_string_lossy().into()), ..Default::default() });
+        let mut rt = rune::Runtime::new(a, shell_view, (w, h), rune::Env::new(true, 1.0));
+        rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut rune::Tx| s.on_key(ev, tx));
+        rt.set_system_reduced_motion(true);
+        quiet(&mut rt);
+        if w < 1000.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+        }
+        let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_open", "args": {} })).unwrap();
+        rt.update(|s, _| l.into_iter().for_each(|i| s.run_intent("test", i)));
+        quiet(&mut rt);
+        let (x, y) = rt.find("monitor-row-shop-web:s-shop-main").expect("shop-web main's row");
+        tap(&mut rt, (x, y));
+        quiet(&mut rt);
+        quiet(&mut rt);
+        let you = conv_rows(&rt.state.feats.data["monitor"]).into_iter().find(|r| r["t"] == "you").unwrap();
+        let id = you["id"].as_str().unwrap().to_string();
+        let k = format!("monitor-pic-{id}-1");
+        let pr = rect(&rt, &k).unwrap_or_else(|| panic!("{w}x{h}: the preview"));
+        // Scroll it into view when the window is short.
+        rt.update(|_, tx| tx.scroll_into_view(k.as_str()));
+        quiet(&mut rt);
+        let pr = rect(&rt, &k).unwrap_or(pr);
+        tap(&mut rt, (pr[0] + pr[2] / 2.0, pr[1] + pr[3] / 2.0));
+        quiet(&mut rt);
+        quiet(&mut rt);
+        assert_eq!(rt.state.feats.modal.as_ref().map(|m| m.0.as_str()), Some(PICTURE), "{w}x{h}: the press opened it");
+        assert!(rt.elements().into_iter().filter_map(|e| e.selected).all(|s| s.is_empty()), "{w}x{h}: a press selects nothing");
+        let m = rect(&rt, "modal").expect("the card");
+        let frame = rect(&rt, "monitor-picture-frame").unwrap();
+        let foot = rect(&rt, "monitor-picture-foot").unwrap();
+        let close = rt.find("monitor-picture-close").expect("Close");
+        let inside = |r: [f32; 4], o: [f32; 4]| r[0] >= o[0] - 0.5 && r[1] >= o[1] - 0.5 && r[0] + r[2] <= o[0] + o[2] + 0.5 && r[1] + r[3] <= o[1] + o[3] + 0.5;
+        let win = [0.0, 0.0, w, h];
+        assert!(inside(m, win), "{w}x{h}: card {m:?}");
+        for r in [frame, foot] {
+            assert!(inside(r, m), "{w}x{h}: {r:?} inside the card {m:?}");
+        }
+        assert!(close.0 < w && close.1 < h && close.1 > m[1], "{w}x{h}: Close at {close:?}");
+        // The picture: drawn under its key, inside the card, at most its pixels.
+        let zk = rt.state.feats.data[PICTURE_UI]["key"].as_str().map(str::to_string).unwrap_or_else(|| panic!("{w}x{h}: the large copy read: {}", rt.state.feats.data[PICTURE_UI]));
+        let ir = rect(&rt, &zk).unwrap_or(frame);
+        assert!(inside(ir, m), "{w}x{h}: picture {ir:?} inside {m:?}");
+        assert!(ir[2] <= 1600.5 && ir[3] <= 1000.5 && ir[2] > 100.0, "{w}x{h}: {ir:?}");
+        // Escape closes it; the next call of the feature forgets the large copy.
+        rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+        rt.frame(1.0 / 60.0);
+        assert!(rt.state.feats.modal.is_none(), "{w}x{h}: Escape closed it");
+        assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()).or(rt.state.feats.base.as_deref()), Some(SCREEN), "Sessions stays");
+        let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_refresh", "args": {} })).unwrap();
+        rt.update(|s, _| l.into_iter().for_each(|i| s.run_intent("test", i)));
+        quiet(&mut rt);
+        assert!(crate::picture::shown(&zk).is_none(), "{w}x{h}: forgotten");
+        assert!(rt.state.feats.data[PICTURE_UI].is_null());
+        // Tall enough for the whole prompt to show under the header.
+        if (w, h) != (1284.0, 1400.0) {
+            continue;
+        }
+        // A drag from the prompt's text, over the previews, into the reply: the texts selected, nothing opened.
+        let body = rect(&rt, &format!("monitor-body-you-{id}")).unwrap();
+        let reply = conv_rows(&rt.state.feats.data["monitor"]).into_iter().find(|r| r["t"] == "claude").unwrap();
+        let cl = rect(&rt, &format!("monitor-body-claude-{}", reply["id"].as_str().unwrap())).unwrap();
+        let pr = rect(&rt, &k).unwrap();
+        // On the prompt's last line of text, just above its previews (its top may be scrolled away).
+        let (x0, y0) = (body[0] + 13.0, pr[1] - 16.0);
+        assert!(y0 > body[1] + 12.0, "{body:?} {pr:?}");
+        rt.pointer_move(x0, y0);
+        rt.pointer_down(x0, y0);
+        rt.frame(1.0 / 60.0);
+        for (x, y) in [(pr[0] + 10.0, pr[1] + 10.0), (pr[0] + pr[2] / 2.0, pr[1] + pr[3] / 2.0), (cl[0] + 40.0, cl[1] + 14.0), (cl[0] + cl[2] - 13.0, cl[1] + cl[3] - 14.0)] {
+            rt.pointer_move(x, y);
+            rt.frame(1.0 / 60.0);
+        }
+        rt.pointer_up(cl[0] + cl[2] - 13.0, cl[1] + cl[3] - 14.0);
+        rt.frame(1.0 / 60.0);
+        quiet(&mut rt);
+        assert!(rt.state.feats.modal.is_none(), "a drag opens nothing");
+        let sel: Vec<String> = rt.elements().into_iter().filter_map(|e| e.selected).filter(|s| !s.is_empty()).collect();
+        assert!(sel.len() >= 2, "the prompt and the reply hold the selection: {sel:?}");
+    }
+    let _ = std::fs::remove_file(&path);
+}
 
 // ---- Words alone, sent at once (`monitor_say`, risk Press) ----
 
