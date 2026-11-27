@@ -57,7 +57,7 @@ Each proposal holds one or more changes. Jarvis can propose:
 | **Status pills switch** (`emphasis_switch`) | `enabled` and `guidance` under `[emphasis]`, in the daemon's `sbxw.toml` (every sandbox: the terminals follow at once, the guidance at each next bring-up) or one sandbox's own (at its next bring-up) | Low |
 | **Network** (`network_allow`) | Add or remove hosts in the daemon's `network_allow`, for sandboxes created after the daemon restarts. Bare host names only: no address, no port, no wildcard, not this machine. Approving records the same consent as any new grant | High |
 | **Desktop screen** (`desktop_screen`, `desktop_screen_remove`) | Replace one screen of sbxw's desktop app with your own version, `~/.sbxw/desktop/screens/<name>.luau`, or remove your version so the app's built-in one comes back. Only a screen the app has (no new screen). The app reloads it at once. See [Desktop screens](#desktop-screens) | High |
-| **MCP server** (`mcp_server`, `mcp_remove`) | Add, replace or remove an MCP server, as the MCP tab of Setup does. A remote server is a URL; a **stdio** server is a command that runs on your machine, outside any sandbox (see below) | High |
+| **MCP server** (`mcp_server`, `mcp_remove`) | Add, replace or remove an MCP server, as the MCP tab of Setup does. A remote server is a URL; a **stdio** server is a command that runs on your machine, outside any sandbox (see below). Jarvis never proposes an OAuth client ID: a server that needs one (GitHub's) is added in the MCP dialog | High |
 
 Ask Jarvis "how do you say sbxw?" or tell it a word is said badly: it reads
 the dictionary (the built-in words and yours, marked which) and proposes the

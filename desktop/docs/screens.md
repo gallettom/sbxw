@@ -1810,7 +1810,8 @@ saying what to do.
 `mcp-sandbox` (the sandbox Load and Unload act on), per server
 `mcp-<name>`, `mcp-load-<name>`, `mcp-unload-<name>`, `mcp-auth-<name>`
 (remote only), `mcp-edit-<name>`, `mcp-inspect-<name>`, `mcp-rm-<name>`; `mcp-more`, the form
-`mcp-name`, `mcp-kind`, `mcp-url`, `mcp-headers` (the header rows), `mcp-command`,
+`mcp-name`, `mcp-kind`, `mcp-url`, `mcp-headers` (the header rows), `mcp-client`
+(the OAuth client ID: `mcp-client-id` and its help `mcp-client-help`), `mcp-command`,
 `mcp-args`, `mcp-dir`, `mcp-save`, `mcp-clear`; `mcp-error`; `mcp-about`
 (the quiet line under the title, its full text in the tooltip), `mcp-form`,
 `mcp-sel-<name>` (the row's name: opens its details, `mcp-inspect`, under
@@ -1837,6 +1838,18 @@ that cannot be sent as typed shows its reason under it (`mcp-h-why-<n>`)
 and Add… is disabled: a `;` in a value (the intent splits on `;`), a name
 that is not an HTTP token, or a name set twice.
 
+**OAuth client ID** (a Remote server, under the header rows): one optional
+input, `mcp-client-id`, with one line of help ("Only for a server that
+needs a pre-registered OAuth client, such as GitHub"). A server with no
+dynamic client registration (GitHub's) refuses to be added without one; the
+daemon's error then says to fill this field, ahead of sbx's words. Filled,
+`mcp_save` gets `client_id` (sbx `--client-id`), the hint adds "the OAuth
+client secret (optional)", and the core's dialog names the client ID and
+asks the client secret as one more optional secret (`secrets.client_secret`,
+stored as `mcp:<name>:client_secret` before the add; empty for a public
+client, or unchanged on an edit). A header placeholder named
+`${client_secret}` is refused: that key is the client secret's.
+
 **Edit** (`mcp-edit-<name>`) fills the form with a listed server's
 settings, as the web UI's `mcpStartEdit`: the form says "Edit <name>", Add…
 becomes Save…, and the save is the same `mcp_save` with `replace` (its
@@ -1845,7 +1858,9 @@ token; a secret left empty is unchanged). sbx documents only `name` and
 `type`, so the rest is read from the row's `detail` (`url`, `endpoint`,
 `remote.url`, `config.url`; `headers` or `config.headers`, a list of
 `Name: value` or a map; `command`, `args`, `dir` or `cwd`, each also under
-`config`). Each header becomes a row, split at the first colon; a name out
+`config`; the client ID from `client_id`, `clientId`, or either under
+`oauth` or `auth`, or `config.client_id`: guesses, sbx documents none).
+Each header becomes a row, split at the first colon; a name out
 of the list is a Custom row; a value that is only a mask (`****`) is left
 empty, never sent back, and such a row (or one listed with no value) is not
 dropped unsaid: its reason says sbx did not show the value, and Save… stays
