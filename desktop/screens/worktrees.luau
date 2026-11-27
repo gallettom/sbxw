@@ -113,6 +113,7 @@ local function rowview(r, wide)
       text{ r.thread or "", size = "xs", color = "text-muted", truncate = true, max_w = 140, help = "The thread that owns it" },
       nz(r.word) and badge{ r.word, tone = r.tone or "neutral" } or false,
       r.merged and badge{ "merged", tone = "green", help = "The main checkout's branch holds it" } or false,
+      r.fresh and badge{ "no commits yet", tone = "neutral", help = "Its branch has no commit of its own yet" } or false,
       counts(r),
     },
     row{ gap = 8, w = "full",

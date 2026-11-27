@@ -116,6 +116,64 @@ pub fn state_tone(state: &str) -> &'static str {
     }
 }
 
+/// What a row says of a branch with nothing ahead of its base. Git alone
+/// cannot tell a merged branch from one just cut from main once main has
+/// moved: both have nothing ahead. The plans and the sessions can.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum BranchWord {
+    /// Commits of its own, no branch, or nothing to say.
+    None,
+    /// The main checkout's branch holds it: the plan merged this thread, or
+    /// no open plan owns it and no session is at work in it.
+    Merged,
+    /// Nothing ahead, but its thread is at work or its plan is still open:
+    /// no commit yet.
+    NoCommits,
+}
+
+/// The latest plan of `sb` that lists thread `name`, if any.
+fn plan_of<'a>(cx: &'a Ctx, sb: &str, name: &str) -> Option<&'a J> {
+    cx.get("plans")
+        .as_array()?
+        .iter()
+        .filter(|p| p["sandbox"] == sb && p["threads"].as_array().is_some_and(|ts| ts.iter().any(|t| t["name"] == name)))
+        .max_by_key(|p| p["created_ms"].as_u64().unwrap_or(0))
+}
+
+/// The plan merged this thread's branch: its merge is `merged`, the thread
+/// in its order, and no result of it says it failed.
+pub fn plan_merged(p: &J, name: &str) -> bool {
+    let m = &p["merge"];
+    m["state"] == "merged"
+        && m["order"].as_array().is_some_and(|o| o.iter().any(|t| t == name))
+        && !m["results"].as_array().is_some_and(|rs| rs.iter().any(|r| r["thread"] == name && r["ok"] == false))
+}
+
+/// An open plan: approved or waiting, not closed, its merge not done.
+fn plan_open(p: &J) -> bool {
+    p["closed"] != true && matches!(p["state"].as_str(), Some("pending" | "approved")) && !matches!(p["merge"]["state"].as_str(), Some("merged" | "abandoned"))
+}
+
+/// See [`BranchWord`]. `t`: the thread's entry of the daemon's worktrees
+/// answer; `session`: its session, when the sidebar knows one.
+pub fn branch_word(cx: &Ctx, sb: &str, name: &str, t: &J, session: Option<&crate::feat::threads::model::Session>) -> BranchWord {
+    if !t["tip"].is_string() || t["ahead"].as_u64() != Some(0) {
+        return BranchWord::None;
+    }
+    match plan_of(cx, sb, name) {
+        Some(p) if plan_merged(p, name) => BranchWord::Merged,
+        Some(p) if plan_open(p) => BranchWord::NoCommits,
+        _ => {
+            let at_work = session.is_some_and(|x| matches!(x.state, "starting" | "working" | "wants"));
+            if at_work {
+                BranchWord::NoCommits
+            } else {
+                BranchWord::Merged
+            }
+        }
+    }
+}
+
 impl State {
     fn read_all(&mut self, cx: &Ctx) -> Vec<Action> {
         self.gen += 1;
@@ -176,7 +234,8 @@ impl State {
                         "has_session": session.is_some(),
                         "ahead": t["ahead"], "behind": t["behind"], "dirty": t["dirty"],
                         "subject": t["tip_subject"], "when": t["tip_at"].as_i64().filter(|a| *a > 0).map(|a| crate::feat::files::view::ago(a as u64, now)),
-                        "merged": has_tip && t["ahead"].as_u64() == Some(0),
+                        "merged": branch_word(cx, sb, name, t, session) == BranchWord::Merged,
+                        "fresh": branch_word(cx, sb, name, t, session) == BranchWord::NoCommits,
                         "selected": self.selected.as_deref() == Some(format!("{sb}:{name}").as_str()),
                         // Its lane's colour in the graph (unmerged only).
                         "lane_color": if graph::unmerged(t) { J::from(graph::lane_color(name)) } else { J::Null },

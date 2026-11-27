@@ -606,8 +606,20 @@ fn plan_merge(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
         let why = v["why_not"].as_str().or(v["detail"].as_str()).unwrap_or("");
         return Err(format!("the merge of {sb} cannot run yet: {why}"));
     }
-    if status.is_none() && m["state"].as_str().is_some_and(|s| s.starts_with("ci_")) {
-        return Err(format!("the merge of {sb} cannot run yet: its CI branch is not tested"));
+    // No status (an older daemon, or a list without it): a CI state is
+    // refused on what the state alone says, never merged blind.
+    if status.is_none() {
+        let why = match m["state"].as_str().unwrap_or("") {
+            "ci_building" => "sbxw is still building its CI branch; Merge is offered once the plan's tests pass on it",
+            "ci_testing" => "the plan's tests are running on its CI branch; Merge is offered when they pass",
+            "ci_stale" => "its CI branch waits to be rebuilt on the new main and tested again",
+            "ci_failed" => "its CI branch failed to build or its tests failed; the lead has the threads fix it and proposes again",
+            "merged_ci" => "sbxw sent no status for this merge, so the tested tip is not known here; read the plan again and retry",
+            _ => "",
+        };
+        if !why.is_empty() {
+            return Err(format!("the merge of {sb} cannot run yet: {why}"));
+        }
     }
     let ci = status.as_ref().is_some_and(|v| v["ci"] == true) && m["state"] == "merged_ci";
     let shared = p["variant"] == "shared";
@@ -1099,8 +1111,16 @@ fn plans_changed(ctx: &Ctx, old: &J, new: &J) -> Vec<Action> {
                     changed = true;
                 }
             }
-            let text = if new_ci { format!("The lead of {sb} proposes merging its threads: sbxw builds and tests the CI branch first") } else { format!("The lead of {sb} proposes merging its threads") };
-            out.push(Action::Notice { text, error: false, then: Some(("plan_review".into(), json!({ "id": id }))) });
+            // A CI start is news, nothing to do yet: no follow-up, so the
+            // shell draws it as information, not as an offer (`notice_kind`).
+            // The invitation to merge is the `merged_ci` notice below.
+            if new_ci {
+                let text = format!("CI started for {sb}: sbxw builds the CI branch and runs the plan's tests; Merge is offered when they pass");
+                out.push(Action::Notice { text, error: false, then: None });
+            } else {
+                let text = format!("The lead of {sb} proposes merging its threads");
+                out.push(Action::Notice { text, error: false, then: Some(("plan_review".into(), json!({ "id": id }))) });
+            }
         }
         // The CI run's two ends the person waits for: Merge offered, or failed.
         let st = |x: &J| x["merge"]["state"].as_str().unwrap_or("").to_string();

@@ -2057,9 +2057,27 @@ Merge (`plan-merge`) only when `can_merge`, else Details
 (`plan-merge-details`), both opening the dialog. Every string of it is
 drawn as text: the daemon's words, a branch name, a test's tail.
 
-Notices: a CI proposal ("... sbxw builds and tests the CI branch first"),
-and a merge reaching `merged_ci` or `ci_failed` ("<word> for <sandbox>:
-<detail>", the second as an error), each opening the dialog.
+Notices: a CI start ("CI started for <sandbox>: sbxw builds the CI branch
+and runs the plan's tests; Merge is offered when they pass"), news with no
+follow-up, so drawn as information and not as something to do; a merge
+reaching `merged_ci` (the invitation to merge) or `ci_failed` ("<word> for
+<sandbox>: <detail>", the second as an error), each opening the dialog. A
+proposal without CI keeps "The lead of <sandbox> proposes merging its
+threads", opening the dialog.
+
+While the merge cannot run (`can_merge` false, not merging), the dialog's
+title is the daemon's word, "<word> for <sandbox>" ("Building the CI branch
+for web-app"), not "Merge the threads of <sandbox>", and Merge is off with
+its reason. Without `merge_status` (an older daemon), `plan_merge` refuses
+every CI state with what the state alone says, never merges.
+
+`fixtures/threads/route-ci-building.json` is not written by hand: it is
+`GET /api/plans` as the daemon answers it for a CI plan being built,
+written and checked by sbxw-daemon's
+`the_desktops_route_ci_building_fixture_is_this_routes_answer`
+(`SBXW_WRITE_PLANS_FIXTURE=1` rewrites it); the desktop's
+`the_routes_answer_for_a_ci_plan_being_built_draws_its_status_and_no_merge`
+draws the dialog from it.
 
 Fixtures: `fixtures/threads/ci-building`, `ci-testing`, `ci-merged`,
 `ci-refused` (a click refused), `ci-stale`, `ci-failed-conflict`,
@@ -2767,13 +2785,21 @@ An overlay (`src/feat/worktrees.rs`, `screens/worktrees.luau`): one block
 per sandbox (the scope picker `worktrees-sandbox` in the title: All
 sandboxes from the rail, one sandbox with `worktrees_show {sandbox}` or a
 pick, `worktrees_sandbox {sandbox?}`), one row per worktree (path, thread and its state, ahead,
-behind, uncommitted changes, merged, the last commit; Terminal, Commits,
-Files). Above a block's rows, the **branch graph** of its unmerged
+behind, uncommitted changes, merged or no commits yet, the last commit;
+Terminal, Commits, Files). A branch with nothing ahead of its base is
+"merged" (green chip) only when its plan says it merged that thread (the
+plan's `merge.state` is `merged`, the thread in its order and no failed
+result for it), or, when no open plan owns it, when no session is at work
+in it (starting, working or wanting the person); a thread at work or in an
+open plan with nothing ahead reads "no commits yet" (neutral chip): git
+alone cannot tell a merged branch from one just cut from main once main has
+moved (`worktrees::branch_word`, from `plans` and the sessions). Above a block's rows, the **branch graph** of its unmerged
 worktrees, one per repository (`src/feat/worktrees_graph.rs`, the web UI's
 `wtLayout` mapping): the base branch as the top lane, each unmerged thread
 (a tip with commits of its own) forking from its merge-base and running to
-its tip, a dot per commit; merged worktrees and branches with nothing of
-their own are not drawn (their rows keep the "merged" chip). Lanes go by
+its tip, a dot per commit; a branch with nothing ahead, merged or with no
+commit yet, is not drawn (its row keeps its chip), and a branch with
+commits ahead is never called merged. Lanes go by
 fork, the newest first (no link crosses a lane above it), then by name;
 each lane's colour comes from the thread's name (`lane_color`, a stable
 palette; the row's branch icon wears it), its label from the thread's

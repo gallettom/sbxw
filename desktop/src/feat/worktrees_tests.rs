@@ -6,7 +6,7 @@ fn fx() -> J {
 
 fn data() -> J {
     let f = fx();
-    let mut d = json!({ "sandboxes": f["daemon"]["sandboxes"], "sessions": f["daemon"]["sessions"], "app": { "groups": { "web-app": "#e06c75" } } });
+    let mut d = json!({ "sandboxes": f["daemon"]["sandboxes"], "sessions": f["daemon"]["sessions"], "plans": f["daemon"]["plans"], "app": { "groups": { "web-app": "#e06c75" } } });
     d["threads"] = json!({});
     d
 }
@@ -68,6 +68,58 @@ fn every_sandbox_s_worktrees_with_their_numbers_and_thread_state() {
     let v = ui(&st.act(&cx, &asked("worktrees_filter", json!({ "text": "release" }))).unwrap());
     assert_eq!(v["blocks"].as_array().unwrap().len(), 1);
     assert_eq!(v["blocks"][0]["sandbox"], "docs");
+}
+
+/// Nothing ahead is not "merged" on its own: a branch just cut from main
+/// has nothing ahead either. The plans and the sessions say which.
+#[test]
+fn merged_only_when_the_plan_merged_it_or_nothing_owns_it_and_no_session_works_in_it() {
+    let d = data();
+    let cx = Ctx { data: &d };
+    let mut st = State::default();
+    let out = st.act(&cx, &asked("worktrees_show", json!({}))).unwrap();
+    let v = answer(&mut st, &cx, out);
+    let rows: Vec<J> = v["blocks"].as_array().unwrap().iter().flat_map(|b| b["rows"].as_array().unwrap().clone()).collect();
+    let r = |t: &str| rows.iter().find(|r| r["thread"] == t).unwrap_or_else(|| panic!("{t}")).clone();
+    let says = |t: &str| (r(t)["merged"].as_bool().unwrap(), r(t)["fresh"].as_bool().unwrap());
+    // Plan p-w1 merged it (its session still wants the person).
+    assert_eq!(says("header-fix"), (true, false));
+    // In the open plan p-w2, nothing ahead, one uncommitted file: no commit yet.
+    assert_eq!(says("pricing-page"), (false, true));
+    assert_eq!(r("pricing-page")["dirty"], 1);
+    // No plan, its session at work: no commit yet.
+    assert_eq!(says("promo-banner"), (false, true));
+    // No plan, no session, nothing ahead: merged.
+    assert_eq!(says("old-draft"), (true, false));
+    // Commits of its own: neither, and a lane in the graph.
+    assert_eq!(says("checkout-copy"), (false, false));
+    // No branch: neither.
+    assert_eq!(says("search-index"), (false, false));
+    // The graph draws a lane exactly for the rows that are neither merged nor fresh and have commits.
+    for row in &rows {
+        if row["merged"] == true || row["fresh"] == true {
+            assert!(row["lane_color"].is_null(), "{}: no lane", row["thread"]);
+        }
+    }
+    // Same branch, the session idle and no plan: merged.
+    let mut d2 = d.clone();
+    for s in d2["sessions"].as_array_mut().unwrap() {
+        if s["thread"] == "promo-banner" {
+            s["state"] = json!("idle");
+        }
+    }
+    let cx2 = Ctx { data: &d2 };
+    let t = &fx()["daemon"]["worktrees_of"]["web-app"]["repos"][0]["threads"].as_array().unwrap().iter().find(|t| t["name"] == "promo-banner").unwrap().clone();
+    assert_eq!(branch_word(&cx2, "web-app", "promo-banner", t, None), BranchWord::Merged);
+    // A plan whose merge of the thread failed did not merge it.
+    let mut p = d["plans"][0].clone();
+    p["merge"]["results"][0]["ok"] = json!(false);
+    assert!(!plan_merged(&p, "header-fix"));
+    // The screen draws both chips.
+    let mut data = d.clone();
+    data[UI] = v.clone();
+    let s = crate::screen::ScreenState::new(SCREEN, &std::env::temp_dir().join("sbxw-no-overrides"), data);
+    assert!(s.error.is_none(), "{:?}", s.error);
 }
 
 #[test]

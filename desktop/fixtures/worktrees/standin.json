@@ -337,6 +337,32 @@
         "commits": [],
         "tip_subject": null,
         "tip_at": null
+       },
+       {
+        "name": "pricing-page",
+        "branch": "sbxw/pricing-page",
+        "worktree": "/Users/ana/dev/web/.sbxw-worktrees/pricing-page",
+        "tip": "81474065e55c009845245500f60909b8cf4cb991",
+        "fork": "81474065e55c009845245500f60909b8cf4cb991",
+        "ahead": 0,
+        "behind": 0,
+        "dirty": 1,
+        "commits": [],
+        "tip_subject": "Release 2.4.1",
+        "tip_at": 1794892800
+       },
+       {
+        "name": "promo-banner",
+        "branch": "sbxw/promo-banner",
+        "worktree": "/Users/ana/dev/web/.sbxw-worktrees/promo-banner",
+        "tip": "81474065e55c009845245500f60909b8cf4cb991",
+        "fork": "81474065e55c009845245500f60909b8cf4cb991",
+        "ahead": 0,
+        "behind": 0,
+        "dirty": 0,
+        "commits": [],
+        "tip_subject": "Release 2.4.1",
+        "tip_at": 1794892800
        }
       ],
       "error": null
@@ -400,6 +426,19 @@
         ],
         "tip_subject": "Draft the release notes for 3.7",
         "tip_at": 1794890000
+       },
+       {
+        "name": "old-draft",
+        "branch": "sbxw/old-draft",
+        "worktree": "/Users/ana/dev/docs/.sbxw-worktrees/old-draft",
+        "tip": "028c53e75aa8366e1f7a3189ec9e9ff22673bd2a",
+        "fork": "028c53e75aa8366e1f7a3189ec9e9ff22673bd2a",
+        "ahead": 0,
+        "behind": 2,
+        "dirty": 0,
+        "commits": [],
+        "tip_subject": "Index",
+        "tip_at": 1794885600
        }
       ],
       "error": null
@@ -444,6 +483,78 @@
     "thread": "header-fix",
     "state": "attention",
     "cwd": "/Users/ana/dev/web/.sbxw-worktrees/header-fix"
+   },
+   {
+    "sandbox": "web-app",
+    "thread": "pricing-page",
+    "state": "working",
+    "cwd": "/Users/ana/dev/web/.sbxw-worktrees/pricing-page"
+   },
+   {
+    "sandbox": "web-app",
+    "thread": "promo-banner",
+    "state": "working",
+    "cwd": "/Users/ana/dev/web/.sbxw-worktrees/promo-banner"
+   }
+  ],
+  "plans": [
+   {
+    "id": "p-w1",
+    "sandbox": "web-app",
+    "summary": "The header fix",
+    "threads": [
+     {
+      "name": "header-fix",
+      "goal": "g",
+      "scope": "",
+      "state": "done",
+      "summary": ""
+     }
+    ],
+    "state": "approved",
+    "variant": "split",
+    "created_ms": 1794880000000,
+    "updated_ms": 1794880000000,
+    "merge": {
+     "order": [
+      "header-fix"
+     ],
+     "note": "",
+     "state": "merged",
+     "base": "main",
+     "results": [
+      {
+       "thread": "header-fix",
+       "ok": true,
+       "commit": "81474065e55c009845245500f60909b8cf4cb991"
+      }
+     ]
+    }
+   },
+   {
+    "id": "p-w2",
+    "sandbox": "web-app",
+    "summary": "Pricing and checkout",
+    "threads": [
+     {
+      "name": "pricing-page",
+      "goal": "g",
+      "scope": "",
+      "state": "working",
+      "summary": ""
+     },
+     {
+      "name": "checkout-copy",
+      "goal": "g",
+      "scope": "",
+      "state": "working",
+      "summary": ""
+     }
+    ],
+    "state": "approved",
+    "variant": "split",
+    "created_ms": 1794890000000,
+    "updated_ms": 1794890000000
    }
   ]
  },
@@ -453,5 +564,5 @@
    "web-app"
   ]
  },
- "about": "The Worktrees view (feat/worktrees.rs): basic.json's sandboxes, worktrees_of (GET .../worktrees, the daemon's graph with tip_subject and tip_at), sessions (thread states)."
+ "about": "The Worktrees view (feat/worktrees.rs): basic.json's sandboxes, worktrees_of (GET .../worktrees, the daemon's graph with tip_subject and tip_at), sessions (thread states); plans (GET /api/plans, the shape the daemon sends): header-fix merged by plan p-w1, pricing-page in the open plan p-w2 with no commit yet and one uncommitted file, promo-banner at work with no plan and no commit yet, docs' old-draft with nothing ahead and no session (merged)."
 }

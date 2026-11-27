@@ -1467,8 +1467,10 @@ async fn remote_login(State(app): S, Path(name): Path<String>, b: Option<Json<Re
 
 // ── Plans ────────────────────────────────────────────────────────────────
 
+/// Every plan, each with the `merge_status` the desktop's plan screens draw
+/// ([`App::plans_listed`]).
 async fn plans(State(app): S) -> Json<Value> {
-    Json(json!(app.plans_list()))
+    Json(json!(app.plans_listed()))
 }
 
 #[derive(Deserialize)]

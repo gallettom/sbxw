@@ -1224,16 +1224,31 @@ fn a_ci_plan_against_the_standin() {
     }
 }
 
-/// The CI run's news reaches the person: a proposal says sbxw builds and
-/// tests first; Merged to CI and CI failed are said once, with the daemon's
-/// words, and open the dialog.
+/// The CI run's news reaches the person: its start is news (no follow-up,
+/// so the shell draws it as information, not as something to do); Merged to
+/// CI and CI failed are said once, with the daemon's words, and open the
+/// dialog.
 #[test]
-fn a_ci_proposal_merged_to_ci_and_ci_failed_are_announced() {
+fn a_ci_start_is_news_and_merged_to_ci_and_ci_failed_are_announced() {
     let d = fixture("ci-building");
     let mut before = d["plans"].clone();
     before[0]["merge"] = J::Null;
     let acts = on_data(&Ctx { data: &d }, "plans", &before, &d["plans"]);
-    assert!(acts.iter().any(|a| matches!(a, Action::Notice { text, .. } if text.ends_with("sbxw builds and tests the CI branch first"))), "{acts:?}");
+    let start = acts.iter().find_map(|a| match a {
+        Action::Notice { text, error, then } if text.starts_with("CI started for web-app") => Some((text.clone(), *error, then.clone())),
+        _ => None,
+    });
+    let (text, error, then) = start.unwrap_or_else(|| panic!("{acts:?}"));
+    assert_eq!(text, "CI started for web-app: sbxw builds the CI branch and runs the plan's tests; Merge is offered when they pass");
+    assert!(!error && then.is_none(), "news, not an offer to act");
+    assert_eq!(crate::shell::notice_kind(error, then.is_some()).1, "notice-info");
+    assert!(!acts.iter().any(|a| matches!(a, Action::Notice { text, .. } if text.contains("proposes merging"))), "{acts:?}");
+    // A proposal without CI keeps its words and its offer.
+    let d = fixture("merge-proposed");
+    let mut before = d["plans"].clone();
+    before[0]["merge"] = J::Null;
+    let acts = on_data(&Ctx { data: &d }, "plans", &before, &d["plans"]);
+    assert!(acts.iter().any(|a| matches!(a, Action::Notice { text, then: Some(_), .. } if text == "The lead of web-app proposes merging its threads")), "{acts:?}");
     for (name, error) in [("ci-merged", false), ("ci-failed-tests", true)] {
         let after = fixture(name);
         let acts = on_data(&Ctx { data: &after }, "plans", &fixture("ci-testing")["plans"], &after["plans"]);
@@ -1243,5 +1258,71 @@ fn a_ci_proposal_merged_to_ci_and_ci_failed_are_announced() {
         // Read again unchanged: nothing more.
         let acts = on_data(&Ctx { data: &after }, "plans", &after["plans"], &after["plans"]);
         assert!(!acts.iter().any(|a| matches!(a, Action::Notice { .. })), "{name}: once");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The plans as the daemon's `GET /api/plans` really answers them
+
+/// `ci-building` with its plans replaced by `route-ci-building.json`, the
+/// daemon's own answer (written and checked by sbxw-daemon's
+/// `the_desktops_route_ci_building_fixture_is_this_routes_answer`), not a
+/// fixture's hand-written `merge_status`.
+fn from_the_route() -> J {
+    let mut d = fixture("ci-building");
+    d["plans"] = fixture("route-ci-building")["plans"].clone();
+    d
+}
+
+fn header_text(tree: &crate::luau::Node) -> Vec<String> {
+    let mut out = vec![];
+    texts(tree, &mut out);
+    out
+}
+
+#[test]
+fn the_routes_answer_for_a_ci_plan_being_built_draws_its_status_and_no_merge() {
+    let d = from_the_route();
+    let p = &d["plans"][0];
+    assert_eq!(p["merge"]["state"], "ci_building");
+    let v = model::merge_view(p).expect("merge_view reads what the daemon sends");
+    assert_eq!(v["word"], "Building the CI branch");
+    assert_eq!(v["can_merge"], false);
+    let why = v["why_not"].as_str().unwrap().to_string();
+    let (_, tree) = plan_screen(&d, "p-1");
+    let all = header_text(&tree);
+    assert!(all.iter().any(|t| t == "Building the CI branch for web-app"), "the title says what goes on: {all:?}");
+    assert!(!all.iter().any(|t| t.starts_with("Merge the threads of")), "{all:?}");
+    assert_eq!(find_key(&tree, "merge-word").unwrap().text, "Building the CI branch");
+    let b = find_key(&tree, "merge-all").expect("Merge, off");
+    assert!(b.disabled, "off while it builds");
+    assert_eq!(b.help.as_deref(), Some(why.as_str()));
+    let e = run(&d, "plan_merge", json!({ "id": "p-1" })).unwrap_err();
+    assert_eq!(e, format!("the merge of web-app cannot run yet: {why}"));
+}
+
+#[test]
+fn a_proposed_merge_without_ci_keeps_its_title() {
+    let (_, tree) = plan_screen(&fixture("merge-no-ci"), "p-1");
+    let all = header_text(&tree);
+    assert!(all.iter().any(|t| t == "Merge the threads of web-app"), "{all:?}");
+    assert!(!find_key(&tree, "merge-all").unwrap().disabled);
+}
+
+/// Without `merge_status` (an older daemon), a CI state is refused on what
+/// the state says, never merged.
+#[test]
+fn a_ci_state_without_a_status_is_refused_with_what_the_state_says() {
+    for (name, word) in [
+        ("ci-building", "still building its CI branch"),
+        ("ci-testing", "tests are running"),
+        ("ci-stale", "waits to be rebuilt"),
+        ("ci-failed-tests", "failed"),
+        ("ci-merged", "sent no status"),
+    ] {
+        let mut d = fixture(name);
+        d["plans"][0].as_object_mut().unwrap().remove("merge_status");
+        let e = run(&d, "plan_merge", json!({ "id": "p-1" })).unwrap_err();
+        assert!(e.starts_with("the merge of web-app cannot run yet: ") && e.contains(word), "{name}: {e}");
     }
 }
