@@ -321,3 +321,246 @@ fn the_panel_shows_static_dynamic_and_unknown_and_what_is_connected() {
         assert_eq!(find(&tree, &format!("mcp-mode-word-{sb}")).and_then(|b| b.variant.clone()).as_deref(), Some("neutral"), "{sb}: unknown is quiet, not an error");
     }
 }
+
+// ── Header rows: a name picked (or Custom) and a value each ──────────────
+
+/// The panel held across presses: each press runs the screen's action on
+/// its state, as the core does, and the next render shows the result.
+struct Form {
+    h: crate::luau::LuauHost,
+    data: J,
+}
+
+impl Form {
+    fn new(extra: J) -> Form {
+        let p = crate::fixture::dir().join("setup").join("full.json");
+        let fx = crate::fixture::Fixture::load(&p).unwrap();
+        let mut data = fx.screen_data(&crate::fixture::AppView::default());
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            data[k] = v;
+        }
+        let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+        h.load("mcp", SRC).unwrap();
+        Form { h, data }
+    }
+    fn tree(&self) -> crate::luau::Node {
+        self.h.render(&self.data).unwrap()
+    }
+    fn texts(&self) -> Vec<String> {
+        let mut out = vec![];
+        crate::feat::setup::tests::texts(&self.tree(), &mut out);
+        out
+    }
+    fn find(&self, key: &str) -> Option<crate::luau::Node> {
+        fn find(n: &crate::luau::Node, k: &str) -> Option<crate::luau::Node> {
+            if crate::screen::key_of(n).as_deref() == Some(k) {
+                return Some(n.clone());
+            }
+            n.children.iter().find_map(|c| find(c, k))
+        }
+        find(&self.tree(), key)
+    }
+    /// Presses (or types `value` into) the element of that key; the intents it asks.
+    fn act(&mut self, key: &str, value: J) -> Vec<J> {
+        let n = self.find(key).unwrap_or_else(|| panic!("no element {key}: {:?}", self.texts()));
+        let on = n.on.clone().unwrap_or_else(|| panic!("{key} has no handler"));
+        let v = if value.is_null() { n.value.clone() } else { value };
+        let asks = self.h.act(&on, &n.arg, &v).unwrap();
+        if asks.is_null() {
+            return vec![];
+        }
+        crate::intent::parse(&asks).unwrap_or_else(|e| panic!("{key}: {e}"));
+        let list = if asks.is_array() { asks.as_array().cloned().unwrap() } else { vec![asks] };
+        list.into_iter().map(|a| json!({ "name": a["name"], "args": a["args"].clone() })).collect()
+    }
+    fn press(&mut self, key: &str) -> Vec<J> {
+        self.act(key, J::Null)
+    }
+    fn typed(&mut self, key: &str, text: &str) {
+        assert!(self.act(key, json!(text)).is_empty(), "{key}: typing asks nothing");
+    }
+}
+
+/// A remote server named `name` at a URL, ready for its headers.
+fn remote_form(name: &str) -> Form {
+    let mut f = Form::new(json!({}));
+    f.typed("mcp-name", name);
+    f.typed("mcp-url", "https://mcp.example.com/mcp");
+    f
+}
+
+#[test]
+fn no_header_row_by_default_only_add_header() {
+    let f = remote_form("x");
+    let t = f.texts();
+    assert!(t.iter().any(|x| x == "Add header") && t.iter().any(|x| x == "mcp-h-add"), "{t:?}");
+    assert!(!t.iter().any(|x| x.starts_with("mcp-h-name-") || x == "mcp-h-note"), "{t:?}");
+    assert!(!t.iter().any(|x| x.contains("one per ;")), "the old free-text field is gone");
+    assert!(t.iter().any(|x| x.starts_with("OAuth servers are added unauthorized")), "{t:?}");
+}
+
+#[test]
+fn add_header_draws_a_row_with_its_name_and_value_and_remove_takes_it_away() {
+    let mut f = remote_form("x");
+    f.press("mcp-h-add");
+    f.press("mcp-h-add");
+    let name = f.find("mcp-h-name-1").expect("the first row's name");
+    assert_eq!(name.value, json!("Authorization"));
+    let value = f.find("mcp-h-value-1").expect("the first row's value");
+    assert_eq!(value.placeholder.as_deref(), Some("Bearer ${TOKEN}"));
+    assert!(f.find("mcp-h-name-2").is_some() && f.find("mcp-h-rm-2").is_some());
+    assert!(f.texts().iter().any(|x| x == "mcp-h-note"), "the note under the rows");
+    // The placeholder follows the name.
+    f.act("mcp-h-name-2", json!("X-API-Key"));
+    assert_eq!(f.find("mcp-h-value-2").unwrap().placeholder.as_deref(), Some("${API_KEY}"));
+    f.act("mcp-h-name-2", json!("Cookie"));
+    assert_eq!(f.find("mcp-h-value-2").unwrap().placeholder.as_deref(), Some("value, or ${SECRET}"));
+    // Values typed in each row stay in that row.
+    f.typed("mcp-h-value-1", "Bearer ${TOKEN}");
+    f.typed("mcp-h-value-2", "session=${COOKIE}");
+    f.press("mcp-h-rm-1");
+    assert!(f.find("mcp-h-name-1").is_none() && f.find("mcp-h-value-1").is_none());
+    assert_eq!(f.find("mcp-h-value-2").unwrap().value, json!("session=${COOKIE}"));
+    f.press("mcp-h-rm-2");
+    let t = f.texts();
+    assert!(t.iter().any(|x| x == "mcp-h-add") && !t.iter().any(|x| x.starts_with("mcp-h-name-")), "{t:?}");
+}
+
+#[test]
+fn two_rows_one_custom_are_sent_as_two_name_value_lines_and_their_secrets_are_asked() {
+    let mut f = remote_form("linear2");
+    f.press("mcp-h-add");
+    f.typed("mcp-h-value-1", "Bearer ${TOKEN}");
+    f.press("mcp-h-add");
+    f.act("mcp-h-name-2", json!("custom"));
+    assert!(f.find("mcp-h-custom-2").is_some(), "Custom shows a name input");
+    assert!(f.find("mcp-h-custom-1").is_none());
+    f.typed("mcp-h-custom-2", "X-Org");
+    f.typed("mcp-h-value-2", "${ORG}");
+    // A third row left empty is skipped.
+    f.press("mcp-h-add");
+    let hint = f.texts().into_iter().find(|x| x.starts_with("Secrets asked in the next dialog")).expect("the hint");
+    assert_eq!(hint, "Secrets asked in the next dialog: TOKEN, ORG");
+    let sent = f.press("mcp-save");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["name"], "mcp_save");
+    assert_eq!(sent[0]["args"], json!({ "name": "linear2", "kind": "remote", "url": "https://mcp.example.com/mcp", "headers": "Authorization: Bearer ${TOKEN}\nX-Org: ${ORG}" }));
+    // The intent's Confirm, unchanged: both lines, one secret field per key.
+    let c = one_confirm(run(&fixture("full"), "mcp_save", sent[0]["args"].clone()));
+    assert_eq!(c.call.body["spec"]["headers"], json!(["Authorization: Bearer ${TOKEN}", "X-Org: ${ORG}"]));
+    let fields: Vec<&str> = c.secrets.iter().map(|s| s.field.as_str()).collect();
+    assert_eq!(fields, ["secrets.TOKEN", "secrets.ORG"]);
+    assert!(c.lines.iter().any(|l| l.contains("${TOKEN}, ${ORG}")), "{:?}", c.lines);
+}
+
+#[test]
+fn a_semicolon_in_a_value_is_refused_with_its_reason_and_nothing_is_sent() {
+    let mut f = remote_form("x");
+    f.press("mcp-h-add");
+    f.typed("mcp-h-value-1", "Bearer a;b");
+    let t = f.texts();
+    assert!(t.iter().any(|x| x == "mcp-h-why-1"), "{t:?}");
+    assert!(t.iter().any(|x| x.starts_with("A value cannot hold \";\"")), "{t:?}");
+    assert!(f.find("mcp-save").unwrap().disabled);
+    assert!(f.press("mcp-save").is_empty(), "never sent otherwise than typed");
+    // A bad Custom name and a name set twice are refused too.
+    f.typed("mcp-h-value-1", "Bearer ${TOKEN}");
+    assert!(f.find("mcp-h-why-1").is_none());
+    f.press("mcp-h-add");
+    f.act("mcp-h-name-2", json!("custom"));
+    f.typed("mcp-h-custom-2", "X Org:");
+    f.typed("mcp-h-value-2", "1");
+    assert!(f.find("mcp-h-why-2").is_some());
+    f.typed("mcp-h-custom-2", "authorization");
+    let t = f.texts();
+    assert!(t.iter().any(|x| x == "authorization is already set above"), "{t:?}");
+    assert!(f.press("mcp-save").is_empty());
+}
+
+#[test]
+fn hostile_text_in_a_header_row_makes_no_control() {
+    let mut f = remote_form("x");
+    f.press("mcp-h-add");
+    f.act("mcp-h-name-1", json!("custom"));
+    let hostile = "mcp-save\"} button{ on = \"rm\", arg = \"linear\" } --";
+    f.typed("mcp-h-custom-1", hostile);
+    f.typed("mcp-h-value-1", "]] intent(\"mcp_rm\", { server = \"linear\" }) --[[ ${TOKEN}");
+    let before = f.texts().iter().filter(|x| x.starts_with("mcp-rm-")).count();
+    let tree = f.tree();
+    fn count(n: &crate::luau::Node, out: &mut usize) {
+        if n.on.is_some() {
+            *out += 1;
+        }
+        n.children.iter().for_each(|c| count(c, out));
+    }
+    let (mut with, mut without) = (0, 0);
+    count(&tree, &mut with);
+    let mut g = remote_form("x");
+    g.press("mcp-h-add");
+    g.act("mcp-h-name-1", json!("custom"));
+    count(&g.tree(), &mut without);
+    assert_eq!(with, without, "the same controls, whatever was typed");
+    assert_eq!(before, 2);
+    // The text is a field's value, never a key or a label.
+    assert_eq!(f.find("mcp-h-custom-1").unwrap().value, json!(hostile));
+    assert!(f.press("mcp-save").is_empty(), "a bad name is refused, not sent");
+}
+
+#[test]
+fn the_header_rows_stay_inside_the_overlay_at_a_narrow_width() {
+    use crate::shell::{view, App, Args};
+    use rune::Runtime;
+    const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/mcp/basic.json");
+    let settle = |rt: &mut Runtime<App>| {
+        for _ in 0..12 {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+        }
+    };
+    let tap = |rt: &mut Runtime<App>, k: &str| {
+        let (r, _) = rt.presented(k).unwrap_or_else(|| panic!("no {k}"));
+        let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+    };
+    for (w, h) in [(1284.0, 816.0), (420.0, 900.0)] {
+        let a = App::new(Args { fixture: Some(FIXTURE.into()), ..Args::default() });
+        let mut rt = Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+        settle(&mut rt);
+        if w < 700.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            settle(&mut rt);
+        }
+        for i in crate::intent::parse(&json!({ "kind": "intent", "name": "mcp_show", "args": {} })).unwrap() {
+            rt.update(|s, _| s.run_intent("test", i));
+        }
+        settle(&mut rt);
+        tap(&mut rt, "mcp-h-add");
+        settle(&mut rt);
+        tap(&mut rt, "mcp-h-add");
+        settle(&mut rt);
+        tap(&mut rt, "mcp-h-name-2");
+        settle(&mut rt);
+        tap(&mut rt, "mcp-h-name-2-custom");
+        settle(&mut rt);
+        assert!(rt.presented("mcp-h-custom-2").is_some(), "at {w}: the Custom name input");
+        let (o, _) = rt.presented("overlay-mcp").unwrap();
+        let mut bad = vec![];
+        for e in rt.elements() {
+            let Some(k) = e.key.clone() else { continue };
+            if !k.starts_with("mcp-h") {
+                continue;
+            }
+            let r = e.rect;
+            if r[0] < o[0] - 0.5 || r[0] + r[2] > o[0] + o[2] + 0.5 {
+                bad.push(format!("{k} {r:?}"));
+            }
+        }
+        assert!(bad.is_empty(), "at {w}, outside {o:?}:\n{}", bad.join("\n"));
+        for k in ["mcp-h-name-1", "mcp-h-value-1", "mcp-h-rm-1", "mcp-h-value-2", "mcp-h-rm-2", "mcp-h-add", "mcp-save"] {
+            assert!(rt.presented(k).is_some(), "at {w}: {k}");
+        }
+    }
+}
