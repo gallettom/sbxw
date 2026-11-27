@@ -117,7 +117,7 @@ pub const INTENTS: &[Spec] = &[
     d("merge_close_set", &[("id", Arg::Str, true), ("on", Arg::Bool, true)], "Whether the merge closes each thread (session, worktree, branch) once all merged."),
     a("plan_approve", "Approve a plan and start its threads", &[("id", Arg::Str, true)], "Opens the core's dialog with the draft as it stands and the sessions it starts; Approve there starts the threads."),
     a("plan_merge", "Merge a plan's threads", &[("id", Arg::Str, true)], "Opens the core's dialog with the lead's merge order and note; Merge there merges each thread in order, stopping at the first failure."),
-    a("plan_merge_abandon", "Abandon a plan's proposed merge", &[("id", Arg::Str, true)], "Opens the core's dialog; Abandon merge there withdraws the merge proposed (or failed): nothing is merged, closed or deleted, and the lead is told. Refused while merging."),
+    a("plan_merge_abandon", "Abandon a plan's proposed merge", &[("id", Arg::Str, true)], "Opens the core's dialog; Abandon merge there withdraws the merge proposed (or failed): nothing is merged, closed or deleted, and the lead is told. Refused while merging, or while a CI branch is being built."),
     a("thread_close", "Close a thread with its worktree", &[("sandbox", Arg::Str, true), ("thread", Arg::Str, true)], "Reads what closing would lose (uncommitted files, commits), then the core's dialog; Close there stops the session and removes its worktree."),
 ];
 
@@ -594,11 +594,22 @@ fn plan_merge(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
     let m = &p["merge"];
     let sb = p["sandbox"].as_str().unwrap_or("");
     match m["state"].as_str() {
-        Some("proposed") | Some("failed") => {}
+        Some("proposed") | Some("failed") | Some("merged_ci") => {}
         Some("merging") => return Err(format!("the threads of {sb} are being merged")),
         Some("merged") => return Err(format!("the threads of {sb} are merged already")),
+        Some("ci_building" | "ci_testing" | "ci_stale" | "ci_failed") => {}
         _ => return Err(format!("the lead of {sb} has proposed no merge")),
     }
+    // The daemon's word on it: while it cannot merge, its reason, as it is.
+    let status = model::merge_view(p);
+    if let Some(v) = status.as_ref().filter(|v| v["can_merge"] != true) {
+        let why = v["why_not"].as_str().or(v["detail"].as_str()).unwrap_or("");
+        return Err(format!("the merge of {sb} cannot run yet: {why}"));
+    }
+    if status.is_none() && m["state"].as_str().is_some_and(|s| s.starts_with("ci_")) {
+        return Err(format!("the merge of {sb} cannot run yet: its CI branch is not tested"));
+    }
+    let ci = status.as_ref().is_some_and(|v| v["ci"] == true) && m["state"] == "merged_ci";
     let shared = p["variant"] == "shared";
     if shared {
         let claims = ctx.get("board")[sb]["claims"].as_array().cloned().unwrap_or_default();
@@ -624,19 +635,32 @@ fn plan_merge(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
         format!("Merge the threads of {sb}?"),
         Call::post(format!("/api/plans/{}/merge", enc(id)), body, format!("merge the threads of {sb}")).then(&["plans", "threads"]).timeout(600).tag(&format!("merge:{id}")),
     );
-    c = c.line(if shared {
+    let cid = &m["ci"];
+    c = c.line(if ci {
+        let base = cid["base_branch"].as_str().unwrap_or("main");
+        format!(
+            "A fast-forward: {base} moves to {}, the tip of {} the plan's tests passed on. Nothing is merged again.",
+            cid["tip"].as_str().map(|t| t.chars().take(7).collect::<String>()).unwrap_or_else(|| "?".into()),
+            cid["branch"].as_str().unwrap_or("the CI branch")
+        )
+    } else if shared {
         format!("One branch, sbxw/team-{id}, merged once {into}.")
     } else {
         format!("Each thread's branch, in this order, {into}. A failure stops the run: what follows it is not merged.")
     });
-    let order: Vec<String> = rows
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            let n = r["name"].as_str().unwrap_or("");
-            format!("{}. {n}{}", i + 1, if done.contains(&n) { " (merged already, skipped)" } else { "" })
-        })
-        .collect();
+    let order: Vec<String> = if ci {
+        let mut l: Vec<String> = cid["merged"].as_array().into_iter().flatten().enumerate().map(|(i, s)| format!("{}. {} (in the CI branch)", i + 1, s["thread"].as_str().unwrap_or("?"))).collect();
+        l.extend(cid["skipped"].as_array().into_iter().flatten().map(|k| format!("   {}: nothing to merge, {}", k["thread"].as_str().unwrap_or("?"), k["why"].as_str().unwrap_or(""))));
+        l
+    } else {
+        rows.iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let n = r["name"].as_str().unwrap_or("");
+                format!("{}. {n}{}", i + 1, if done.contains(&n) { " (merged already, skipped)" } else { "" })
+            })
+            .collect()
+    };
     c = c.preview(order.join("\n"), false);
     if let Some(n) = m["note"].as_str().filter(|n| !n.is_empty()) {
         c = c.line(format!("The lead's note: {n}"));
@@ -657,7 +681,10 @@ fn plan_merge_abandon(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
     let p = model::plan(ctx.data, id).ok_or_else(|| format!("no plan {id}"))?;
     let sb = p["sandbox"].as_str().unwrap_or("");
     match p["merge"]["state"].as_str() {
-        Some("proposed") | Some("failed") => {}
+        // As the daemon (`PlanBook::abandon_merge`): a CI run tested, waiting
+        // or failed may be given up; one being built not yet.
+        Some(s) if model::abandonable(s) => {}
+        Some("ci_building") => return Err(format!("the CI branch of {sb} is being built: wait a moment, then abandon")),
         Some("merging") => return Err(format!("the threads of {sb} are being merged: wait for the merge to end")),
         Some("merged") => return Err(format!("the threads of {sb} are merged already")),
         Some("abandoned") => return Err(format!("the merge of {sb} is abandoned already")),
@@ -829,6 +856,7 @@ fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action>
                     let close = u["merge_close"][rest].as_bool().unwrap_or(true);
                     let order: Vec<String> = m["order"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_string)).collect();
                     let msg = match m["state"].as_str() {
+                        Some("merged") if m["ci"].is_object() => format!("Merged to main: {} fast-forwarded to the tested tip of {}", m["ci"]["base_branch"].as_str().or(m["base"].as_str()).unwrap_or("main"), m["ci"]["branch"].as_str().unwrap_or("the CI branch")),
                         Some("merged") => format!("Merged the threads of {sb}"),
                         _ => {
                             let (_, outcome) = model::merge_rows(&json!({ "merge": m, "threads": [] }));
@@ -1013,6 +1041,8 @@ pub fn view(ctx: &Ctx) -> J {
                 "open": t["open"], "max": t["max"], "leading": model::leading(ctx.data, sb), "lead": model::team_state(ctx.data, sb),
                 "pending": model::pending_plan(ctx.data, sb).map(|p| p["id"].clone()),
                 "merge": model::merge_plan(ctx.data, sb).map(|p| p["id"].clone()),
+                "merge_line": model::live_merge_plan(ctx.data, sb).and_then(model::merge_line),
+                "merges": ctx.get("plans").as_array().into_iter().flatten().filter(|p| p["sandbox"] == sb).filter_map(|p| Some((p["id"].as_str()?.to_string(), model::merge_view(p)?))).collect::<Map<String, J>>(),
             }),
         );
     }
@@ -1056,15 +1086,33 @@ fn plans_changed(ctx: &Ctx, old: &J, new: &J) -> Vec<Action> {
         // A new proposal: the first, a late one after a merge, or one that
         // replaces the proposal before it (another order). The words of the
         // merge before it (its refusal, what was closed) are not this one's.
+        // A CI proposal starts building at once (`ci_building`, a first build):
+        // new unless the run before was already at work (a restart rebuilds it).
         let proposed = |x: &J| x["merge"]["state"] == "proposed";
-        let new_proposal = proposed(p) && prev.is_some_and(|x| !proposed(x) || x["merge"]["order"] != p["merge"]["order"]);
+        let ci_new = |x: &J| x["merge"]["state"] == "ci_building" && x["merge"]["ci"]["rebuilt_because"].is_null();
+        let ci_at_work = |x: &J| matches!(x["merge"]["state"].as_str(), Some("ci_building" | "ci_testing" | "ci_stale" | "merged_ci"));
+        let new_ci = ci_new(p) && prev.is_some_and(|x| !ci_at_work(x) || x["merge"]["order"] != p["merge"]["order"]);
+        let new_proposal = new_ci || (proposed(p) && prev.is_some_and(|x| !proposed(x) || x["merge"]["order"] != p["merge"]["order"]));
         if !seed && new_proposal {
             for k in ["merge_note", "plan_error"] {
                 if obj(&mut u, k).remove(id).is_some() {
                     changed = true;
                 }
             }
-            out.push(Action::Notice { text: format!("The lead of {sb} proposes merging its threads"), error: false, then: Some(("plan_review".into(), json!({ "id": id }))) });
+            let text = if new_ci { format!("The lead of {sb} proposes merging its threads: sbxw builds and tests the CI branch first") } else { format!("The lead of {sb} proposes merging its threads") };
+            out.push(Action::Notice { text, error: false, then: Some(("plan_review".into(), json!({ "id": id }))) });
+        }
+        // The CI run's two ends the person waits for: Merge offered, or failed.
+        let st = |x: &J| x["merge"]["state"].as_str().unwrap_or("").to_string();
+        if !seed && prev.is_some_and(|x| st(x) != st(p)) {
+            if let Some(v) = model::merge_view(p).filter(|v| v["ci"] == true) {
+                let line = format!("{} for {sb}: {}", v["word"].as_str().unwrap_or(""), v["detail"].as_str().unwrap_or(""));
+                match st(p).as_str() {
+                    "merged_ci" => out.push(Action::Notice { text: line, error: false, then: Some(("plan_review".into(), json!({ "id": id }))) }),
+                    "ci_failed" => out.push(Action::Notice { text: line, error: true, then: Some(("plan_review".into(), json!({ "id": id }))) }),
+                    _ => {}
+                }
+            }
         }
     }
     if changed {
@@ -1144,7 +1192,12 @@ fn extras(ctx: &Ctx) -> Vec<Extra> {
                 Some("failed") => "Retry merge",
                 _ => "Merge",
             };
-            out.push(extra(on_session(sb, None), "merge", label, Some("check"), "green", "This lead's threads are reviewed and ready to merge", Some(("plan_review", json!({ "id": p["id"] })))));
+            // Merged to CI: the daemon's line on it (the tested tip Merge fast-forwards to).
+            let help = match model::merge_view(p) {
+                Some(v) if v["ci"] == true => format!("{}: {}", v["word"].as_str().unwrap_or(""), v["detail"].as_str().unwrap_or("")),
+                _ => "This lead's threads are reviewed and ready to merge".to_string(),
+            };
+            out.push(extra(on_session(sb, None), "merge", label, Some("check"), "green", &help, Some(("plan_review", json!({ "id": p["id"] })))));
         }
         if !up {
             continue;

@@ -19,6 +19,16 @@
 //! * `standin_merge_fail`: the thread whose merge stops at a conflict, once
 //!   (the retry after it merges);
 //! * `standin_close_refuse`: threads a merge cannot close (their worktree is busy).
+//! * `standin_ci_fail`: a CI plan's run fails, once: `"conflict"` (its last
+//!   thread conflicts while the CI branch is built) or `"tests"` (the
+//!   battery fails twice on the tip).
+//!
+//! A CI plan (split, with `approved_tests`) is merged as the daemon merges it
+//! (`crates/core/src/plans/ci.rs`): the proposal is `ci_building`, the next
+//! steps `ci_testing`, then `merged_ci` or `ci_failed`; a click in `merged_ci`
+//! fast-forwards to `merged`, a click in any other CI state is refused with
+//! `why_not`. Every plan the stand-in changes carries `merge_status` as the
+//! daemon adds it ([`merge_status`], ported word for word).
 //!
 //! Abandon merge (`/api/plans/{id}/merge/abandon`) answers as the daemon:
 //! a merge proposed or failed becomes abandoned; anything else is refused.
@@ -326,6 +336,10 @@ fn approve(st: &mut Standin, id: &str, body: &J) -> Option<(u16, J)> {
         pl["variant"] = json!(variant);
         pl["state"] = json!("approved");
         pl["updated_ms"] = json!(now);
+        // The proposed test command is approved with the plan, unless cleared.
+        if pl["proposed_tests"]["command"].is_string() && body["clear_tests"] != true {
+            pl["approved_tests"] = pl["proposed_tests"].clone();
+        }
         if variant == "shared" {
             pl["worktree"] = json!(format!("/work/.sbxw-worktrees/team-{id}"));
         }
@@ -375,22 +389,182 @@ fn step_plans(st: &mut Standin) {
         if !moved {
             let order: Vec<J> = list.iter().map(|t| t["name"].clone()).collect();
             p["merge"] = json!({ "order": order, "note": note, "state": "proposed", "base": null, "results": [] });
+            if p["variant"] != "shared" && p["approved_tests"]["command"].is_string() {
+                let id = p["id"].as_str().unwrap_or("").to_string();
+                p["merge"]["state"] = json!("ci_building");
+                p["merge"]["ci"] = json!({ "branch": format!("sbxw/ci-{id}"), "worktree": format!(".sbxw-worktrees/.ci-{id}"), "run": 1, "builds": 1 });
+            }
         }
+        restatus(p);
         p["updated_ms"] = json!(now_ms());
         changed.push(p.clone());
+    }
+    let fail = st.data["standin_ci_fail"].as_str().map(str::to_string);
+    let mut failed_once = false;
+    for p in plans(st.data).iter_mut().filter(|p| p["state"] == "approved" && p["closed"] != true && p["merge"]["ci"].is_object()) {
+        if !step_ci(p, fail.as_deref()) {
+            continue;
+        }
+        failed_once |= p["merge"]["state"] == "ci_failed";
+        restatus(p);
+        p["updated_ms"] = json!(now_ms());
+        changed.push(p.clone());
+    }
+    if failed_once {
+        st.data["standin_ci_fail"] = J::Null;
     }
     for p in changed {
         (st.publish)("plan", p);
     }
 }
 
+/// One step of a CI run, as the daemon's build and test queue: built (or a
+/// conflict), then tested (passed, or failed twice). False: nothing moved.
+fn step_ci(p: &mut J, fail: Option<&str>) -> bool {
+    let order: Vec<String> = p["merge"]["order"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_string)).collect();
+    let m = &mut p["merge"];
+    let ci = &mut m["ci"];
+    let run = ci["run"].as_u64().unwrap_or(1);
+    match m["state"].as_str() {
+        Some("ci_building") => {
+            let merged: Vec<J> = order.iter().enumerate().map(|(k, t)| json!({ "thread": t, "tip": format!("{:07x}{k}aa", 0x7ab000 + k), "commit": format!("{:07x}{k}cc", 0xc1c000 + k) })).collect();
+            ci["base_branch"] = json!("main");
+            m["base"] = json!("main");
+            if fail == Some("conflict") && !order.is_empty() {
+                let last = order.last().unwrap().clone();
+                ci["merged"] = J::Array(merged[..merged.len() - 1].to_vec());
+                ci["failure"] = json!({ "kind": "conflict", "thread": last, "files": ["src/routes.rs", "src/api/orders.ts"], "text": format!("sbxw/{last} conflicts in src/routes.rs, src/api/orders.ts") });
+                m["state"] = json!("ci_failed");
+                return true;
+            }
+            ci["base"] = json!(format!("ba5e{run:03}0000000000000000000000000000000"));
+            ci["tip"] = json!(format!("71b{run:03}00000000000000000000000000000000"));
+            ci["merged"] = J::Array(merged);
+            ci["job"] = json!(format!("j-ci-{run}"));
+            m["state"] = json!("ci_testing");
+            true
+        }
+        Some("ci_testing") => {
+            let tip = ci["tip"].as_str().unwrap_or("").to_string();
+            let job = ci["job"].as_str().unwrap_or("j").to_string();
+            if fail == Some("tests") {
+                let tail = "running 412 tests\ntest feat::orders::lists_v2 ... FAILED\n\nfailures:\n    feat::orders::lists_v2\n\ntest result: FAILED. 411 passed; 1 failed";
+                let a = json!({ "outcome": "failed", "duration_ms": 183000, "log": "/work/.sbxw-worktrees/.tests/log-1", "tail": tail });
+                ci["tests"] = json!({ "job": job, "outcome": "failed", "reused": false, "commit": tip, "attempts": [a.clone(), a] });
+                ci["failure"] = json!({ "kind": "tests", "files": [], "text": "failed" });
+                m["state"] = json!("ci_failed");
+            } else {
+                ci["tests"] = json!({ "job": job, "outcome": "passed", "reused": false, "commit": tip, "attempts": [{ "outcome": "passed", "duration_ms": 171000, "log": "/work/.sbxw-worktrees/.tests/log-1", "tail": "test result: ok. 412 passed; 0 failed" }] });
+                ci["passed_ms"] = json!(now_ms());
+                m["state"] = json!("merged_ci");
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// `merge_status` of a merge, word for word the daemon's
+/// (`crates/core/src/plans/ci.rs`, `merge_status`): the stand-in's plans
+/// carry it as the daemon's do.
+pub fn merge_status(m: &J) -> J {
+    let c = m["ci"].is_object().then_some(&m["ci"]);
+    let has = c.is_some();
+    let s = |word: &str, detail: String, can: bool, why: Option<String>| {
+        let mut v = json!({ "word": word, "detail": detail, "can_merge": can, "ci": has });
+        if let Some(w) = why {
+            v["why_not"] = json!(w);
+        }
+        v
+    };
+    let short = |x: Option<&str>| x.map(|t| t.chars().take(7).collect::<String>()).unwrap_or_else(|| "?".into());
+    let branch = c.and_then(|c| c["branch"].as_str()).unwrap_or("").to_string();
+    let base = c.and_then(|c| c["base_branch"].as_str()).unwrap_or("main").to_string();
+    let rebuilt = c.and_then(|c| c["rebuilt_because"].as_str());
+    let tip = short(c.and_then(|c| c["tip"].as_str()));
+    match m["state"].as_str().unwrap_or("") {
+        "proposed" => s("Merge proposed", "The lead proposed the merge: it waits for your click".into(), true, None),
+        "failed" => s("Merge failed", "The merge stopped: the results say why. It can be retried".into(), true, None),
+        "abandoned" => s("Merge abandoned", "You abandoned this merge: nothing was merged".into(), false, None),
+        "merging" => s("Merging", format!("Merging into {base}"), false, Some("the merge is running".into())),
+        "merged" if has => s("Merged to main", format!("{base} is now the tested tip of {branch}"), false, None),
+        "merged" => s("Merged to main", format!("Merged into {}", m["base"].as_str().unwrap_or("main")), false, None),
+        "ci_building" => {
+            let why = match rebuilt {
+                Some(r) => format!("{r}: sbxw is rebuilding {branch} on the new {base} and will test it again; Merge comes back when it passes"),
+                None => format!("sbxw is building {branch} from {base} with the threads' branches; the tests run next, then Merge is offered"),
+            };
+            s("Building the CI branch", format!("Merging the threads into {branch}"), false, Some(why))
+        }
+        "ci_testing" => {
+            let why = match rebuilt {
+                Some(r) => format!("{r}: the rebuilt {branch} is being tested; Merge comes back when it passes"),
+                None => format!("the plan's tests run on {branch}; Merge is offered when they pass"),
+            };
+            s("Testing the CI branch", format!("The plan's tests run on {branch} at {tip}"), false, Some(why))
+        }
+        "merged_ci" => {
+            let mut detail = match c.and_then(|c| c["click_refused"].as_str()) {
+                Some(e) => format!("Tests passed on {branch} at {tip}. The last Merge was refused: {e}"),
+                None => format!("Tests passed on {branch} at {tip}: Merge fast-forwards {base} to exactly that commit"),
+            };
+            let skipped: Vec<String> = c.and_then(|c| c["skipped"].as_array()).into_iter().flatten().map(|k| format!("{} ({})", k["thread"].as_str().unwrap_or(""), k["why"].as_str().unwrap_or(""))).collect();
+            if !skipped.is_empty() {
+                detail += &format!(". Nothing to merge for: {}", skipped.join(", "));
+            }
+            s("Merged to CI", detail, true, None)
+        }
+        "ci_stale" => match c.and_then(|c| c["stale_because"].as_str()) {
+            Some(r) => s(
+                "CI rebuild waits",
+                "Merged to CI without the newest commits of a thread".into(),
+                false,
+                Some(format!("{r}: sbxw rebuilds {branch} with it and tests it again before Merge is offered. One plan rebuilds at a time, the oldest first, so this one waits its turn")),
+            ),
+            None => s(
+                "Main moved: CI rebuild waits",
+                format!("Merged to CI on an older {base}"),
+                false,
+                Some(format!("{base} moved since {branch} was built: sbxw rebuilds it on the new {base} and tests it again before Merge is offered. One plan rebuilds at a time, the oldest first, so this one waits its turn")),
+            ),
+        },
+        "ci_failed" => {
+            let f = c.map(|c| &c["failure"]).filter(|f| f.is_object());
+            let detail = match f {
+                Some(f) if f["kind"] == "conflict" => {
+                    let files: Vec<&str> = f["files"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).collect();
+                    format!("sbxw/{} conflicts in {}: nothing reached {base}, no tests ran", f["thread"].as_str().unwrap_or("?"), if files.is_empty() { "?".to_string() } else { files.join(", ") })
+                }
+                Some(f) if f["kind"] == "tests" => format!("The tests {} on {branch}: nothing reached {base}", f["text"].as_str().unwrap_or("")),
+                Some(f) => format!("{branch} could not be built: {}", f["text"].as_str().unwrap_or("")),
+                None => format!("{branch} failed: nothing reached {base}"),
+            };
+            s("CI failed", detail, false, Some("the lead has the threads fix it, then proposes the merge again, which rebuilds and retests the CI branch".into()))
+        }
+        _ => J::Null,
+    }
+}
+
+/// The plan's `merge_status`, as the daemon's plan view adds it.
+fn restatus(p: &mut J) {
+    if p["merge"].is_object() {
+        let st = merge_status(&p["merge"]);
+        if !st.is_null() {
+            p["merge_status"] = st;
+        }
+    }
+}
+
 /// Abandon merge, as the daemon answers it (`PlanBook::abandon_merge`):
-/// only a merge proposed or failed; nothing merged, closed or deleted.
+/// a merge proposed or failed, or a CI run not being built; nothing merged,
+/// closed or deleted.
 fn abandon(st: &mut Standin, id: &str) -> Option<(u16, J)> {
     let Some(i) = plan_index(st.data, id) else { return refuse(400, format!("no plan '{id}'")) };
     let m = &mut plans(st.data)[i]["merge"];
     match m["state"].as_str() {
         Some("proposed") | Some("failed") => {}
+        Some("ci_testing" | "merged_ci" | "ci_stale" | "ci_failed") => {}
+        Some("ci_building") => return refuse(400, format!("the CI branch of plan {id} is being built: wait a moment, then abandon")),
         Some("merging") => return refuse(400, format!("plan {id} is merging: wait for the merge to end")),
         Some("merged") => return refuse(400, format!("plan {id} is already merged")),
         Some("abandoned") => return refuse(400, format!("the merge of plan {id} is already abandoned")),
@@ -398,6 +572,7 @@ fn abandon(st: &mut Standin, id: &str) -> Option<(u16, J)> {
     }
     m["state"] = json!("abandoned");
     m["abandoned_ms"] = json!(now_ms());
+    restatus(&mut plans(st.data)[i]);
     plans(st.data)[i]["updated_ms"] = json!(now_ms());
     let plan = st.data["plans"][i].clone();
     (st.publish)("plan", plan.clone());
@@ -411,6 +586,9 @@ fn merge(st: &mut Standin, id: &str, close: bool) -> Option<(u16, J)> {
         return refuse(400, format!("plan {id} has no merge proposed"));
     }
     let sb = p["sandbox"].as_str().unwrap_or("").to_string();
+    if p["merge"]["ci"].is_object() {
+        return merge_ci(st, i, id, &sb, close);
+    }
     if p["variant"] == "shared" {
         let claims = st.data["board"][&sb]["claims"].as_array().cloned().unwrap_or_default();
         if !claims.is_empty() {
@@ -452,6 +630,7 @@ fn merge(st: &mut Standin, id: &str, close: bool) -> Option<(u16, J)> {
         }
     }
     plans(st.data)[i]["merge"]["state"] = json!(if failed { "failed" } else { "merged" });
+    restatus(&mut plans(st.data)[i]);
     plans(st.data)[i]["updated_ms"] = json!(now_ms());
     if !failed {
         if close {
@@ -459,6 +638,53 @@ fn merge(st: &mut Standin, id: &str, close: bool) -> Option<(u16, J)> {
             for t in order.iter().filter(|t| !refuse_close.contains(t)) {
                 forget(st.data, &sb, t);
             }
+        }
+    }
+    let plan = st.data["plans"][i].clone();
+    (st.publish)("plan", plan.clone());
+    ok(json!({ "merge": plan["merge"] }))
+}
+
+/// The click on a CI plan (`plan_merge_ci`): refused with `why_not` unless
+/// Merged to CI; then main fast-forwarded to the tested tip, each thread's
+/// result noted as the daemon notes it, the threads closed if asked.
+fn merge_ci(st: &mut Standin, i: usize, id: &str, sb: &str, close: bool) -> Option<(u16, J)> {
+    let m = st.data["plans"][i]["merge"].clone();
+    if m["state"] != "merged_ci" {
+        let s = merge_status(&m);
+        let why = s["why_not"].as_str().or(s["detail"].as_str()).unwrap_or("").to_string();
+        return refuse(400, format!("plan {id} cannot be merged yet: {why}"));
+    }
+    let c = &m["ci"];
+    let base = c["base_branch"].as_str().unwrap_or("main").to_string();
+    let tip: String = c["tip"].as_str().unwrap_or("").chars().take(7).collect();
+    {
+        let p = &mut plans(st.data)[i];
+        p["merge"]["state"] = json!("merging");
+        p["merge"]["results"] = json!([]);
+        restatus(p);
+    }
+    st.publish_after(200, "plan", st.data["plans"][i].clone());
+    let order: Vec<String> = m["order"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_string)).collect();
+    let results: Vec<J> = order
+        .iter()
+        .map(|t| match (c["merged"].as_array().and_then(|a| a.iter().find(|s| s["thread"] == t.as_str())), c["skipped"].as_array().and_then(|a| a.iter().find(|s| s["thread"] == t.as_str()))) {
+            (Some(s), _) => json!({ "thread": t, "ok": true, "commit": s["commit"].as_str().map(|x| x.chars().take(7).collect::<String>()), "note": format!("fast-forwarded {base} to the tested CI tip {tip}") }),
+            (None, Some(k)) => json!({ "thread": t, "ok": true, "note": format!("nothing to merge, {}", k["why"].as_str().unwrap_or("")) }),
+            _ => json!({ "thread": t, "ok": true, "note": format!("nothing to merge: not in {}", c["branch"].as_str().unwrap_or("")) }),
+        })
+        .collect();
+    {
+        let p = &mut plans(st.data)[i];
+        p["merge"]["results"] = J::Array(results);
+        p["merge"]["state"] = json!("merged");
+        p["updated_ms"] = json!(now_ms());
+        restatus(p);
+    }
+    if close {
+        let refuse_close: Vec<String> = st.data["standin_close_refuse"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_string)).collect();
+        for t in order.iter().filter(|t| !refuse_close.contains(t)) {
+            forget(st.data, sb, t);
         }
     }
     let plan = st.data["plans"][i].clone();

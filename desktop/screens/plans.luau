@@ -2,7 +2,9 @@
 -- UI's plans.js: a plan the lead proposes, its threads with goal, scope,
 -- repository and model, editable before approval (remove, add, edit text,
 -- change the variant, approve without the proposed test command); then its threads' state and reports once approved;
--- then the merge the lead proposes, with its order and note, and how it went.
+-- then the merge the lead proposes, with its order and note, and how it went;
+-- a CI merge (`merge.ci`) with its CI branch, build, tests and failure, its
+-- status in the daemon's words (`merge_status`).
 --
 -- The draft is the core's (`data.threads_ui.drafts[id]`): every edit is an
 -- intent, and Approve and Merge only open the core's own dialog, which lists
@@ -352,16 +354,97 @@ local function merge_view(data, p)
   return column(out)
 end
 
+-- The merge's status as the daemon words it (`threads_view[sb].merges[id]`,
+-- built by threads::model::merge_view from `merge_status` and `merge.ci`):
+-- drawn as it is, never worked out here from the state. Every string in it is
+-- data (the daemon's, an agent's branch name, a test's output): text only.
+local function merge_of(data, p)
+  local v = (data.threads_view or {})[p.sandbox] or {}
+  return (v.merges or {})[p.id]
+end
+
+local function status_block(mv)
+  local out = { gap = 4, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = mv.tone == "neutral" and "elevated" or mv.tone, key = "merge-status",
+    row{ gap = 8, w = "full", badge{ mv.word, tone = mv.tone, key = "merge-word" }, spacer{} },
+    (mv.detail ~= "") and text{ mv.detail, size = "sm", wrap = true, key = "merge-detail" } or false,
+  }
+  if not mv.can_merge and mv.why_not then
+    table.insert(out, text{ "Why Merge waits: " .. mv.why_not, size = "sm", color = "text-muted", wrap = true, key = "merge-why-not" })
+  end
+  if mv.no_ci_because then
+    table.insert(out, text{ "No CI branch for this merge: " .. mv.no_ci_because, size = "sm", color = "text-muted", wrap = true, key = "merge-no-ci" })
+  end
+  return column(out)
+end
+
+local function ci_view(mv)
+  local out = { gap = 8, w = "full" }
+  table.insert(out, status_block(mv))
+  local facts = { gap = 4, w = "full", key = "ci-facts" }
+  for _, f in ipairs(mv.facts or {}) do
+    table.insert(facts, row{ gap = 8, w = "full", align = "start", key = "ci-" .. f.k,
+      text{ f.label, size = "sm", color = "text-muted", w = 96 },
+      text{ f.text, size = "sm", mono = f.mono, wrap = true, grow = 1 } })
+  end
+  table.insert(out, column(facts))
+  if #(mv.threads or {}) > 0 then
+    local rows = { gap = 4, w = "full", key = "ci-threads" }
+    for i, t in ipairs(mv.threads) do
+      table.insert(rows, row{ gap = 8, w = "full", pad = 6, radius = "sm", fill = "surface-alt", border = hues[((i - 1) % 4) + 1], key = "ci-thread-" .. i,
+        text{ t.mark, color = t.tone },
+        text{ t.name, weight = "medium", truncate = true },
+        text{ t.text, size = "sm", color = "text-muted", wrap = true, grow = 1 } })
+    end
+    table.insert(out, column(rows))
+  end
+  if mv.tests then
+    table.insert(out, text{ mv.tests, size = "sm", color = mv.tests_tone or "text-muted", wrap = true, key = "ci-tests" })
+    for i, a in ipairs(mv.attempts or {}) do
+      table.insert(out, text{ a.line, size = "sm", color = a.tone, key = "ci-attempt-" .. i })
+      if a.tail and a.tail ~= "" then
+        table.insert(out, column{ w = "full", pad = 8, radius = "sm", fill = "surface-alt", key = "ci-tail-" .. i,
+          text{ a.tail, size = "sm", mono = true, wrap = true, color = "text-soft", w = "full" } })
+      end
+    end
+  end
+  local f = mv.failure
+  if f then
+    local box = { gap = 4, w = "full", pad = 8, radius = "sm", fill = "red-tint", border = "red", key = "ci-failure",
+      text{ f.line, color = "red", wrap = true, key = "ci-failure-line" } }
+    if f.kind == "conflict" then
+      table.insert(box, row{ gap = 8, w = "full", text{ "Thread", size = "sm", color = "text-muted" }, text{ f.thread or "?", size = "sm", weight = "medium", truncate = true, key = "ci-conflict-thread" } })
+      local files = { gap = 4, w = "full", wrap = true, key = "ci-files", text{ "Files", size = "sm", color = "text-muted" } }
+      for i, x in ipairs(f.files or {}) do table.insert(files, row{ key = "ci-file-" .. i, badge{ chip_text(x), tone = "neutral" } }) end
+      table.insert(box, row(files))
+    elseif f.kind ~= "tests" and f.text ~= "" then
+      table.insert(box, text{ f.text, size = "sm", mono = true, wrap = true, key = "ci-failure-text" })
+    end
+    table.insert(out, column(box))
+  end
+  if mv.click_refused then table.insert(out, text{ mv.click_refused, color = "amber", wrap = true, key = "ci-click-refused" }) end
+  if mv.ff then table.insert(out, text{ mv.ff, size = "sm", wrap = true, key = "merge-ff" }) end
+  return column(out)
+end
+
 local function approved(state, data, p)
   local ui = data.threads_ui or {}
   local out = { gap = 12, w = "full", h = "full" }
   local over = p.merge and p.merge.state == "merged"
   -- An abandoned merge is no merge to do: the plan, its record kept below.
   local todo = p.merge and not over and p.merge.state ~= "abandoned"
+  local mv = p.merge and merge_of(data, p)
   table.insert(out, header((todo and "Merge the threads of " or "Plan of ") .. p.sandbox, p.summary))
   if p.closed then table.insert(out, note("Team mode was ended: the threads run on, their reports no longer reach the lead.")) end
   local body = { gap = 12, w = "full" }
-  if p.merge then table.insert(body, merge_view(data, p)) end
+  if mv and mv.ci then
+    table.insert(body, ci_view(mv))
+    if p.merge.note and p.merge.note ~= "" then table.insert(body, row{ gap = 8, w = "full", text{ "Lead's note", size = "sm", color = "text-muted" }, text{ p.merge.note, size = "sm", wrap = true, grow = 1 } }) end
+    local mn = (ui.merge_note or {})[p.id]
+    if mn then table.insert(body, text{ mn, color = string.sub(mn, 1, 4) == "Not " and "amber" or "text-muted", wrap = true, key = "merge-note" }) end
+  elseif p.merge then
+    if mv then table.insert(body, status_block(mv)) end
+    table.insert(body, merge_view(data, p))
+  end
   table.insert(body, text{ "Threads", size = "sm", weight = "semibold", color = "text-muted" })
   table.insert(body, status(data, p))
   table.insert(out, scroll{ gap = 8, grow = 1, fade = 24, key = "plan-body", column(body) })
@@ -376,12 +459,18 @@ local function approved(state, data, p)
     if close == nil then close = true end
     table.insert(buttons, checkbox{ "Close each thread once merged", value = close, on = "close_set", arg = p.id, disabled = running, key = "merge-close" })
     -- Quiet, beside Not now: gives the merge up (the core's dialog says what that leaves).
-    if not running then table.insert(buttons, button{ "Abandon merge", variant = "ghost", on = "abandon", arg = p.id, key = "merge-abandon", help = "Withdraw this merge: nothing is merged, closed or deleted" }) end
+    -- The states the daemon lets the person abandon (`threads::model::abandonable`).
+    local st = p.merge.state
+    local abandonable = st == "proposed" or st == "failed" or st == "ci_testing" or st == "merged_ci" or st == "ci_stale" or st == "ci_failed"
+    if abandonable then table.insert(buttons, button{ "Abandon merge", variant = "ghost", on = "abandon", arg = p.id, key = "merge-abandon", help = "Withdraw this merge: nothing is merged, closed or deleted" }) end
     table.insert(buttons, button{ "Not now", on = "later", key = "merge-later" })
     -- A shared plan's claims hold Merge until released (the daemon refuses it anyway).
     local held = p.variant == "shared" and #((((data.board or {})[p.sandbox]) or {}).claims or {}) > 0
-    table.insert(buttons, button{ running and "Merging…" or (p.merge.state == "failed" and "Retry merge" or "Merge all"), variant = "primary", on = "merge", arg = p.id, busy = running, disabled = held and not running, key = "merge-all",
-      help = held and "Files are still claimed: release them first" or nil })
+    -- While the daemon says it cannot merge, Merge is off with its reason.
+    local waits = mv and not mv.can_merge and not running
+    local label = (mv and mv.button) or (running and "Merging…" or (st == "failed" and "Retry merge" or "Merge all"))
+    local help = (held and "Files are still claimed: release them first") or (waits and (mv.why_not or mv.detail)) or (mv and mv.ff) or nil
+    table.insert(buttons, button{ label, variant = "primary", on = "merge", arg = p.id, busy = running, disabled = (held or waits) and not running, key = "merge-all", help = help })
   else
     table.insert(buttons, button{ "Close", on = "later", key = "plan-close" })
   end
