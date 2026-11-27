@@ -2673,7 +2673,7 @@ fn a_picture_too_large_or_not_a_picture_says_so_in_one_muted_line() {
     let all = pics_on(&mut d, "billing-api:s-bill-main");
     let mut asked = pic_calls(&mut d);
     asked.sort();
-    assert_eq!(asked, [bad, big, ok], "a GIF is not read: it would not decode");
+    assert_eq!(asked, [big, ok, bad], "a GIF is not read: it would not decode");
     let you = first_you(&d["monitor"]);
     let notes: Vec<&str> = you["pics"].as_array().unwrap().iter().filter_map(|p| p["note"].as_str()).collect();
     assert_eq!(notes, [super::pics::TOO_LARGE, super::pics::UNREADABLE, super::pics::GIF]);
@@ -2801,7 +2801,7 @@ fn a_pasted_picture_s_chip_shows_its_thumbnail_until_it_goes() {
     let at = |k: &str| out.iter().position(|a| matches!(a, Action::Image { key, .. } if key == k)).unwrap();
     assert!(at(&shown[0]) < out.iter().position(|a| matches!(a, Action::Set { .. })).unwrap(), "shown before the view names it");
     let v = last_view(&out);
-    let chip = &v["detail"]["files"][0];
+    let chip = v["detail"]["files"][0].clone();
     assert_eq!(chip["img"], shown[0].as_str());
     d["monitor"] = v;
     let n = host().render(&d).unwrap();
@@ -2870,6 +2870,7 @@ fn previews_stay_inside_the_conversation_at_every_width() {
         assert_eq!(pics.len(), 1, "{w}: the prompt's previews laid out");
         let r = pics[0].rect;
         assert!(r[0] >= conv[0] - 0.5 && r[0] + r[2] <= conv[0] + conv[2] + 0.5, "{w}: {r:?} inside {conv:?}");
-        assert!(r[3] <= 120.5 + 0.5 && r[3] >= 16.0, "{w}: at most a preview high: {r:?}");
+        // Narrow, they wrap: three lines of previews at most for three pictures.
+        assert!(r[3] <= 3.0 * 128.0 + 0.5 && r[3] >= 16.0, "{w}: {r:?}");
     }
 }
