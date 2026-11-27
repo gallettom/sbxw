@@ -247,10 +247,13 @@ return {
             text{ why, wrap = true, size = "sm", color = "red", grow = 1, min_w = 0 } } or false,
         }
       end
-      hrows[#hrows + 1] = row{ w = "full", gap = 8, wrap = true,
-        button{ "Add header", icon = "plus", variant = "ghost", on = "header_add", arg = { reset = done }, key = "mcp-h-add" },
-        #(f.rows or {}) > 0 and text{ "A secret goes in a value as ${NAME}: it is asked in the next dialog, never typed here.", wrap = true, size = "sm", color = "text-muted", grow = 1, min_w = 0, key = "mcp-h-note" } or false }
-      form[#form + 1] = row{ w = "full", gap = 8, text{ "Headers", size = "sm", color = "text-muted", w = 76 }, column(hrows) }
+      if #(f.rows or {}) > 0 then
+        hrows[#hrows + 1] = text{ "A secret goes in a value as ${NAME}: it is asked in the next dialog, never typed here.", wrap = true, size = "sm", color = "text-muted", key = "mcp-h-note" }
+      end
+      hrows[#hrows + 1] = row{ gap = 8, button{ "Add header", icon = "plus", variant = "ghost", on = "header_add", arg = { reset = done }, key = "mcp-h-add" } }
+      -- The label stays beside the first row (top), not in the middle of many.
+      form[#form + 1] = row{ w = "full", gap = 8, align = "start",
+        row{ w = 76, h = 28, text{ "Headers", size = "sm", color = "text-muted" } }, column(hrows) }
     end
     local hint
     if stdio then
