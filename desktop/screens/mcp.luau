@@ -10,6 +10,9 @@
 -- opened for a sandbox), else the last one used (data.app.kept.mcp.sandbox),
 -- else the first running one. Picking another asks `mcp_pick`.
 --
+-- Headers: one row each, a name picked (or Custom) and a value; sent as
+-- "Name: value" lines. A value holding ";" is refused in the form.
+--
 -- Secrets: a header's ${KEY} is named here, never valued. Its value is typed
 -- in the core's dialog after Add; this screen never sees it. Unload, Remove
 -- and Add are confirmed in the core's dialog, not here.
@@ -45,6 +48,63 @@ local function placeholders(headers)
     if not contains(keys, k) then keys[#keys + 1] = k end
   end
   return keys
+end
+
+-- Header rows (a Remote server): one name picked from HEADERS (or Custom,
+-- typed in the row) and one value each. The screen still sends `headers` as
+-- one string: the rows as "Name: value" lines, as the intent takes them.
+local HEADERS = { "Authorization", "X-API-Key", "Api-Key", "Cookie" }
+local CUSTOM = "custom"
+local HEADER_ITEMS = {}
+for _, h in ipairs(HEADERS) do HEADER_ITEMS[#HEADER_ITEMS + 1] = { id = h, label = h } end
+HEADER_ITEMS[#HEADER_ITEMS + 1] = { id = CUSTOM, label = "Custom…" }
+
+local function value_hint(name)
+  if name == "Authorization" then return "Bearer ${TOKEN}" end
+  if name == "X-API-Key" or name == "Api-Key" then return "${API_KEY}" end
+  return "value, or ${SECRET}"
+end
+
+-- A row's header name: the picked one, or the one typed for Custom.
+local function row_name(r)
+  if r.pick == CUSTOM then return trim(r.name) end
+  return r.pick or HEADERS[1]
+end
+
+-- Why a row cannot be sent as typed, or nil. An empty name or value is not
+-- a reason: that row is skipped. The intent splits headers on ";" and new
+-- lines, so a ";" in a value would send something else than what was typed.
+local function row_problem(r, seen)
+  local n, v = row_name(r), trim(r.value)
+  if n == "" or v == "" then return nil end
+  if string.find(n, "[^%w!#%$%%&'%*%+%-%.%^_`|~]") then return "A header name is letters, digits and - _ . only (no space, \":\" or \";\")" end
+  if string.find(v, ";", 1, true) then return "A value cannot hold \";\": sbxw sends headers separated by \";\". Put it in a secret, ${NAME}, instead" end
+  if seen[string.lower(n)] then return n .. " is already set above" end
+  return nil
+end
+
+-- The rows as the intent's `headers`: "Name: value" lines, rows with an empty
+-- name or value left out; and the first problem, if any.
+local function header_lines(rows)
+  local lines, seen, bad = {}, {}, nil
+  for _, r in ipairs(rows or {}) do
+    local why = row_problem(r, seen)
+    local n, v = row_name(r), trim(r.value)
+    if why then bad = bad or why
+    elseif n ~= "" and v ~= "" then lines[#lines + 1] = n .. ": " .. v end
+    if n ~= "" and v ~= "" then seen[string.lower(n)] = true end
+  end
+  return table.concat(lines, "\n"), bad
+end
+
+local function form_of(state, a)
+  if (a and a.reset) or not state.mcp then state.mcp = {} end
+  return state.mcp
+end
+
+local function header_row(f, id)
+  for i, r in ipairs(f.rows or {}) do if r.id == id then return r, i end end
+  return nil
 end
 
 return {
@@ -144,7 +204,8 @@ return {
     end
     if done then f = {} end
     local stdio = f.kind == "stdio"
-    local keys = placeholders(f.headers)
+    local headers, header_bad = header_lines(f.rows)
+    local keys = placeholders(headers)
     -- Two fields on a row when there is room (each keeps 240 pt), else one under the other.
     local function pair(a, b) return row{ w = "full", gap = 12, wrap = true, a, b or false } end
     local function cell(label, child, w)
@@ -162,9 +223,34 @@ return {
         cell("Arguments", input{ id = "mcp-args", value = f.args or "", on = "field", arg = { k = "args", reset = done }, placeholder = "-y @modelcontextprotocol/server-filesystem /srv" }))
       form[#form + 1] = cell("Directory", input{ id = "mcp-dir", value = f.dir or "", on = "field", arg = { k = "dir", reset = done }, placeholder = "optional" })
     else
-      form[#form + 1] = pair(cell("URL", input{ id = "mcp-url", value = f.url or "", on = "field", arg = { k = "url", reset = done }, placeholder = "https://mcp.example.com/mcp" }),
-        cell("Headers", input{ id = "mcp-headers", value = f.headers or "", on = "field", arg = { k = "headers", reset = done },
-          placeholder = "Authorization: Bearer ${TOKEN}; one per ;" }))
+      form[#form + 1] = cell("URL", input{ id = "mcp-url", value = f.url or "", on = "field", arg = { k = "url", reset = done }, placeholder = "https://mcp.example.com/mcp" })
+      -- The header rows: name (picked, or typed for Custom), value, remove;
+      -- they wrap when narrow. No row is the default (OAuth servers need none).
+      local hrows = { grow = 1, min_w = 0, gap = 8, key = "mcp-headers" }
+      local seen = {}
+      for _, r in ipairs(f.rows or {}) do
+        local id = tostring(r.id)
+        local n = row_name(r)
+        local why = row_problem(r, seen)
+        if n ~= "" and trim(r.value) ~= "" then seen[string.lower(n)] = true end
+        hrows[#hrows + 1] = column{ w = "full", gap = 4, key = "mcp-h-" .. id,
+          row{ w = "full", gap = 8, wrap = true,
+            select{ id = "mcp-h-name-" .. id, value = r.pick or HEADERS[1], items = HEADER_ITEMS, on = "header_pick", arg = { id = r.id, reset = done }, w = 160 },
+            r.pick == CUSTOM and input{ id = "mcp-h-custom-" .. id, value = r.name or "", on = "header_field", arg = { id = r.id, k = "name", reset = done },
+              placeholder = "Header name", w = 160 } or false,
+            row{ gap = 8, grow = 1, min_w = 200,
+              input{ id = "mcp-h-value-" .. id, value = r.value or "", on = "header_field", arg = { id = r.id, k = "value", reset = done },
+                placeholder = value_hint(n), grow = 1, min_w = 0 },
+              button{ icon = "close", variant = "ghost", on = "header_rm", arg = { id = r.id, reset = done }, key = "mcp-h-rm-" .. id, help = "Remove this header" } } },
+          why and row{ w = "full", gap = 4, key = "mcp-h-why-" .. id,
+            icon{ "warning", size = 12, color = "red" },
+            text{ why, wrap = true, size = "sm", color = "red", grow = 1, min_w = 0 } } or false,
+        }
+      end
+      hrows[#hrows + 1] = row{ w = "full", gap = 8, wrap = true,
+        button{ "Add header", icon = "plus", variant = "ghost", on = "header_add", arg = { reset = done }, key = "mcp-h-add" },
+        #(f.rows or {}) > 0 and text{ "A secret goes in a value as ${NAME}: it is asked in the next dialog, never typed here.", wrap = true, size = "sm", color = "text-muted", grow = 1, min_w = 0, key = "mcp-h-note" } or false }
+      form[#form + 1] = row{ w = "full", gap = 8, text{ "Headers", size = "sm", color = "text-muted", w = 76 }, column(hrows) }
     end
     local hint
     if stdio then
@@ -177,7 +263,8 @@ return {
     form[#form + 1] = row{ w = "full", gap = 8, wrap = true,
       column{ grow = 1, min_w = 200, hint },
       (f.replace or trim(f.name) ~= "") and button{ "Clear", variant = "ghost", on = "clear", key = "mcp-clear" } or false,
-      button{ f.replace and "Save…" or "Add…", key = "mcp-save", variant = "primary", on = "save", disabled = trim(f.name) == "" },
+      button{ f.replace and "Save…" or "Add…", key = "mcp-save", variant = "primary", on = "save", disabled = trim(f.name) == "" or (not stdio and header_bad ~= nil),
+        help = (not stdio and header_bad) and "A header cannot be sent as typed: see the reason under it" or nil },
     }
     out[#out + 1] = column(form)
 
@@ -258,6 +345,25 @@ return {
       if a.reset or not state.mcp then state.mcp = {} end
       state.mcp[a.k] = v
     end,
+    header_add = function(state, a)
+      local f = form_of(state, a)
+      f.rows = f.rows or {}
+      f.next = (f.next or 0) + 1
+      f.rows[#f.rows + 1] = { id = f.next, pick = HEADERS[1], name = "", value = "" }
+    end,
+    header_rm = function(state, a)
+      local f = form_of(state, a)
+      local _, i = header_row(f, a.id)
+      if i then table.remove(f.rows, i) end
+    end,
+    header_pick = function(state, a, v)
+      local r = header_row(form_of(state, a), a.id)
+      if r then r.pick = v end
+    end,
+    header_field = function(state, a, v)
+      local r = header_row(form_of(state, a), a.id)
+      if r then r[a.k] = v end
+    end,
     kind = function(state, a, v)
       if a.reset or not state.mcp then state.mcp = {} end
       state.mcp.kind = v
@@ -272,7 +378,10 @@ return {
         if trim(f.dir) ~= "" then args.dir = trim(f.dir) end
       else
         args.url = trim(f.url)
-        if trim(f.headers) ~= "" then args.headers = trim(f.headers) end
+        local headers, bad = header_lines(f.rows)
+        -- Refused in the form (the reason is under the row): never sent otherwise than typed.
+        if bad then return nil end
+        if headers ~= "" then args.headers = headers end
       end
       if f.replace then args.replace = f.replace end
       f.sent = args.name
