@@ -32,7 +32,9 @@
 -- inline; more-<name> is the "+N" of badges that did not fit.
 -- Sessions: sessions-<name> (the disclosure line), sessions-block-<name>,
 -- extra-row-<name>-<id> (a line), session-add-<name>-<id> (its "+": a new
--- pane). Groups: block-<label> (the tinted block), group-<label> (its header); block-ungrouped (the rest, on the plain ground).
+-- pane). The focused pane's marks: lit-row-<name> (the 3 pt bar on its
+-- sandbox's row), lit-line-<name>-<id> (on the session line it shows).
+-- Groups: block-<label> (the tinted block), group-<label> (its header); block-ungrouped (the rest, on the plain ground).
 -- What opens and shuts (a group, a sandbox's sessions) folds: its height
 -- glides over 0.18 s and its lines fade (docs/screens.md, `folds`).
 --
@@ -88,6 +90,23 @@ local function pane_is_bash(app, index)
   end
   return false
 end
+
+-- The focused pane, as the list marks it: its sandbox's row and, under it,
+-- the session line it shows, in the pane's own colour (its sandbox's group
+-- colour, `app.groups`, as the pane's border and top line take it; else the
+-- accent, the focused pane's border without a group). Read from
+-- data.app.panes (the core's one record of focus, `focused` on one pane),
+-- never kept here. A pane with no sandbox lights no row.
+local function lit_of(app)
+  for _, p in ipairs(app.panes or {}) do
+    if p.focused and p.sandbox then
+      return { sandbox = p.sandbox, thread = p.thread, color = (app.groups or {})[p.sandbox] or "accent" }
+    end
+  end
+  return nil
+end
+-- Filled by render: the focused pane's (lit_of), for the rows and lines.
+local lit = nil
 
 -- Features' extras on a row (data.app.extras.sandboxes[name]): the intent of
 -- each by "<sandbox>\n<id>", for the actions (filled by render).
@@ -447,7 +466,13 @@ local function item(sb, app, data)
     shortcuts = { { "Open its terminal", "Enter" }, { "Start or stop", "Space" } },
     h = 52, w = "full", gap = 8, align = "stretch", radius = "sm",
     fill = selected and "elevated" or nil, hover = selected and "elevated" or "hover-subtle",
-    column{ py = 8, w = 7, align = "start", st.shape == "notch" and rail(st.tone, st.shape) or false },
+    -- The left edge: "wants you"'s notch, else, on the row of the focused
+    -- pane's sandbox, a 3 pt bar in that pane's colour (lit_of). In the
+    -- column the row always keeps, so nothing on it moves.
+    column{ py = 8, w = 7, align = "start",
+      (st.shape == "notch" and rail(st.tone, st.shape))
+      or (lit and lit.sandbox == name and column{ key = "lit-row-" .. name, w = 3, h = "full", radius = "mark", fill = lit.color })
+      or false },
     column{ grow = 1, gap = 0, justify = "center",
       row(line1),
       row(line2),
@@ -580,7 +605,11 @@ local function session_line(sb, e, data, base_model)
     on = e.intent and "extra" or nil, arg = e.intent and (sb.name .. "\n" .. e.id) or nil,
     help = name .. (word ~= "" and (": " .. word) or "") .. (m and (", " .. m) or "") .. (full and (", in " .. full) or "") .. (e.count and (". Shown in pane " .. e.count) or ""),
     hover_zone = "sb:" .. sb.name,
-    column{ w = 12 },
+    -- The session the focused pane shows: a 2 pt bar in its colour, in the
+    -- 12 pt the line always keeps before its mark.
+    column{ w = 12, py = 4, align = "start",
+      (lit and lit.sandbox == sb.name and (lit.thread or "main") == e.id)
+        and column{ key = "lit-line-" .. sb.name .. "-" .. e.id, w = 2, h = "full", radius = "mark", fill = lit.color } or false },
     column{ py = done and 8 or 4, w = 12, align = done and "center" or "start", mark },
     row{ grow = 1, gap = 8,
       own and icon{ "branch", size = 12, color = "text-muted" } or false,
@@ -761,6 +790,7 @@ return {
 
   render = function(state, data)
     local app = data.app
+    lit = lit_of(app)
     local collapsed = state.collapsed or {}
     local colors = app.groups or {}
     local shown = {}

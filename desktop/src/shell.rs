@@ -39,6 +39,8 @@ mod leader_mark_tests;
 #[cfg(test)]
 mod sidebar_tests;
 #[cfg(test)]
+mod focus_mark_tests;
+#[cfg(test)]
 mod timing_tests;
 #[cfg(test)]
 mod perf_tests;
@@ -1924,6 +1926,13 @@ impl App {
         }
     }
 
+    /// The pane of this window (any page) that shows this session in this
+    /// mode with a terminal (connecting, live or closed and reconnecting);
+    /// one whose open failed has none, and is opened again as before.
+    fn shown_here(&self, sandbox: &str, mode: Mode, thread: Option<&str>) -> Option<usize> {
+        self.panes.iter().position(|p| p.sandbox.as_deref() == Some(sandbox) && p.mode == mode && p.thread.as_deref() == thread && p.term.is_some())
+    }
+
     /// Where an `open_terminal` goes: the focused pane, pane N (any page),
     /// or a spare one (see [`App::spare_pane`]).
     fn pane_for(&mut self, target: &PaneTarget) -> usize {
@@ -2306,6 +2315,22 @@ impl App {
                 // a page window): that view is focused, none is added (pagewin.rs).
                 if self.focus_if_elsewhere(&sandbox, mode, thread.as_deref()) {
                     return;
+                }
+                // Already in a pane of this window (any page), the same
+                // session in the same mode, with its terminal: that pane is
+                // shown and focused, nothing is opened (a sidebar row or a
+                // session line pressed; the web UI's connectPane refuses the
+                // duplicate too). Only for the focused pane: a pane named, or
+                // a spare one, is asked for on purpose.
+                if matches!(pane, PaneTarget::Focused) {
+                    if let Some(j) = self.shown_here(&sandbox, mode, thread.as_deref()) {
+                        let u = self.panes[j].uid;
+                        self.show_page_of(u);
+                        if let Some(j) = self.index_of(u) {
+                            self.focus_pane(j);
+                        }
+                        return;
+                    }
                 }
                 let i = self.pane_for(&pane);
                 self.open_with(i, &sandbox, mode, thread, start);
@@ -2939,6 +2964,13 @@ impl App {
     /// it) takes: its sandbox's group colour, else the neutral hairline.
     pub fn pane_line(&self, i: usize) -> u32 {
         self.pane_group(i).unwrap_or_else(|| theme::color_value("border").unwrap())
+    }
+
+    /// The colour the focused pane's border takes, and the mark on its
+    /// sidebar row (sandboxes.luau `lit_of` reads the same `app.groups`):
+    /// its sandbox's group colour, else the accent.
+    pub fn pane_focus_color(&self, i: usize) -> u32 {
+        self.pane_group(i).unwrap_or_else(|| theme::color_value("accent").unwrap())
     }
 
     /// Pane `i`'s sandbox's group colour, if it is in a group.
@@ -4084,12 +4116,13 @@ fn pane_view(s: &App, i: usize) -> El {
         }
         None => el().grow(1.0),
     };
-    // The focused pane: a clear 1.5 pt border in the accent (blue in the dark
-    // theme, the orange in the light one); the others a quiet one.
-    // A 2 pt line on top in the sandbox's group colour (the web UI's), so
-    // panes of one piece of work read together.
+    // The focused pane: a clear 1.5 pt border in the pane's own colour, the
+    // one its sidebar row is marked with (sandboxes.luau `lit_of`): its
+    // sandbox's group colour, else the accent (blue in Dark, the orange in
+    // Graphite); the others a quiet one. A 2 pt line on top in the group
+    // colour (the web UI's), so panes of one piece of work read together.
     let accent = group.map(theme::hex).unwrap_or_else(|| c("border"));
-    let (bw, border) = if focused { (1.5, c("accent")) } else { (1.0, c("elevated")) };
+    let (bw, border) = if focused { (1.5, theme::hex(s.pane_focus_color(i))) } else { (1.0, c("elevated")) };
     let md = theme::radius("md").unwrap();
     col()
         .key(format!("pane-{}", i + 1))

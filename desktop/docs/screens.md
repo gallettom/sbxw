@@ -980,6 +980,23 @@ in it, with its tint under the pointer and the keyboard focus.
 - Every coloured label or icon meets the contrast test on what it sits on
   (its surface, its tint, a group's tint): `theme::tests`.
 
+**The focused pane and its row.** One record of focus (`App.focused`,
+`focused` on one entry of `data.app.panes`), two marks in one colour: the
+pane's sandbox's group colour (`app.groups`, `App::pane_focus_color`), else
+`accent`. The focused pane's border is 1.5 pt of it. In the Sandboxes list
+(`sandboxes.luau`, `lit_of`), the row of that pane's sandbox has a 3 pt bar
+of it on its left edge (`lit-row-<name>`), in the 7 pt column the row always
+keeps, so nothing moves; a sandbox that wants you keeps its amber notch
+there instead. With several sessions, the line of the session that pane
+shows (main or a thread) has a 2 pt bar of it before its mark
+(`lit-line-<name>-<id>`); the session block keeps its own tint (a second
+one would take `text-muted` under 4.5:1). A pane with no sandbox marks no
+row. A press on a row, a session line or the palette's "Open <sandbox>"
+whose session (same sandbox, mode and thread) already has a terminal in a
+pane of this window focuses that pane, showing its page, and opens nothing
+(`run_intent`, `open_terminal` with the focused pane as target); anything
+else opens in the focused pane as before. No flash: the border is the mark.
+
 **Pane bars and page tabs** (drawn by the core). A pane's bar takes its
 sandbox's group colour, the sidebar's own (`App::group_colors`, one function
 for both), as a 20% tint (16% unfocused) under a 2 pt line of the colour; a
