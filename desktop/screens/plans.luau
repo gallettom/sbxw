@@ -459,9 +459,11 @@ local function approved(state, data, p)
     if close == nil then close = true end
     table.insert(buttons, checkbox{ "Close each thread once merged", value = close, on = "close_set", arg = p.id, disabled = running, key = "merge-close" })
     -- Quiet, beside Not now: gives the merge up (the core's dialog says what that leaves).
-    -- The states the daemon lets the person abandon (`threads::model::abandonable`).
+    -- Whether the daemon lets the person abandon it: the model's word
+    -- (`threads::model::abandonable`); an older daemon, proposed or failed.
     local st = p.merge.state
-    local abandonable = st == "proposed" or st == "failed" or st == "ci_testing" or st == "merged_ci" or st == "ci_stale" or st == "ci_failed"
+    local abandonable
+    if mv then abandonable = mv.abandonable == true else abandonable = st == "proposed" or st == "failed" end
     if abandonable then table.insert(buttons, button{ "Abandon merge", variant = "ghost", on = "abandon", arg = p.id, key = "merge-abandon", help = "Withdraw this merge: nothing is merged, closed or deleted" }) end
     table.insert(buttons, button{ "Not now", on = "later", key = "merge-later" })
     -- A shared plan's claims hold Merge until released (the daemon refuses it anyway).

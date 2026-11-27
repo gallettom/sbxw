@@ -599,6 +599,25 @@ fn abandon_merge_is_offered_when_proposed_or_failed_and_asks_the_core_dialog() {
             assert!(find_key(&tree, "merge-later").is_some(), "beside Not now");
         }
     }
+    // With the daemon's merge_status: the button follows the merge view's
+    // `abandonable` (the model's), CI states included; the screen keeps no list.
+    let mut cases: Vec<J> = ["proposed", "failed", "merging", "merged", "abandoned"]
+        .iter()
+        .map(|s| {
+            let mut d = merge_in(s);
+            d["plans"][0]["merge_status"] = standin::merge_status(&d["plans"][0]["merge"]);
+            d
+        })
+        .collect();
+    cases.extend(CI_FIXTURES.iter().map(|(n, _)| fixture(n)));
+    for d in &cases {
+        let state = d["plans"][0]["merge"]["state"].as_str().unwrap().to_string();
+        let flag = view(&Ctx { data: d })["web-app"]["merges"]["p-1"]["abandonable"].clone();
+        assert_eq!(flag, json!(model::abandonable(&state)), "{state}: the view carries the model's word");
+        let (_, tree) = plan_screen(d, "p-1");
+        let todo = !matches!(state.as_str(), "merged" | "abandoned");
+        assert_eq!(find_key(&tree, "merge-abandon").is_some(), todo && flag == true, "{state}: drawn from the flag");
+    }
     assert!(matches!(spec("plan_merge_abandon").risk, Risk::Approval(_)));
     let mut data = merge_in("failed");
     data["app"]["modal"] = json!({ "screen": "plans", "arg": "p-1" });

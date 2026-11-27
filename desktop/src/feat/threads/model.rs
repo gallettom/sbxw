@@ -689,7 +689,7 @@ pub fn merge_view(plan: &J) -> Option<J> {
         "state": state, "word": word, "detail": st["detail"].as_str().unwrap_or(""), "can_merge": can,
         "why_not": st["why_not"].as_str().filter(|w| !w.is_empty()), "ci": is_ci,
         "no_ci_because": st["no_ci_because"].as_str().filter(|w| !w.is_empty()),
-        "tone": merge_tone(state), "button": label,
+        "tone": merge_tone(state), "button": label, "abandonable": abandonable(state),
     });
     if !is_ci {
         return Some(v);
