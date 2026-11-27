@@ -401,7 +401,9 @@ fn step_plans(st: &mut Standin) {
     }
     let fail = st.data["standin_ci_fail"].as_str().map(str::to_string);
     let mut failed_once = false;
-    for p in plans(st.data).iter_mut().filter(|p| p["state"] == "approved" && p["closed"] != true && p["merge"]["ci"].is_object()) {
+    // A run proposed by this very step waits for the next one.
+    let fresh: Vec<J> = changed.iter().map(|p| p["id"].clone()).collect();
+    for p in plans(st.data).iter_mut().filter(|p| p["state"] == "approved" && p["closed"] != true && p["merge"]["ci"].is_object() && !fresh.contains(&p["id"])) {
         if !step_ci(p, fail.as_deref()) {
             continue;
         }
@@ -422,10 +424,23 @@ fn step_plans(st: &mut Standin) {
 /// conflict), then tested (passed, or failed twice). False: nothing moved.
 fn step_ci(p: &mut J, fail: Option<&str>) -> bool {
     let order: Vec<String> = p["merge"]["order"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_string)).collect();
-    let m = &mut p["merge"];
-    let ci = &mut m["ci"];
+    let mut m = p["merge"].clone();
+    let moved = step_ci_merge(&mut m, &order, fail);
+    p["merge"] = m;
+    moved
+}
+
+fn step_ci_merge(m: &mut J, order: &[String], fail: Option<&str>) -> bool {
+    let state = m["state"].as_str().unwrap_or("").to_string();
+    let mut ci = m["ci"].take();
+    let moved = step_ci_run(&state, &mut ci, m, order, fail);
+    m["ci"] = ci;
+    moved
+}
+
+fn step_ci_run(state: &str, ci: &mut J, m: &mut J, order: &[String], fail: Option<&str>) -> bool {
     let run = ci["run"].as_u64().unwrap_or(1);
-    match m["state"].as_str() {
+    match Some(state) {
         Some("ci_building") => {
             let merged: Vec<J> = order.iter().enumerate().map(|(k, t)| json!({ "thread": t, "tip": format!("{:07x}{k}aa", 0x7ab000 + k), "commit": format!("{:07x}{k}cc", 0xc1c000 + k) })).collect();
             ci["base_branch"] = json!("main");
