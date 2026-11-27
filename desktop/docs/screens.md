@@ -1391,6 +1391,16 @@ and `build` makes the `Confirm` from the answer (a host key's fingerprints),
 so a screen cannot forge what is shown. A Direct intent may also answer a
 `Confirm` (more confirmation, never less). Screens never see the dialog.
 
+**Press.** An intent of risk `Press` runs like a Direct one, but the core
+first checks where it came from: only the person's own press on its
+feature's own screen (a button, a row, an input's submit or Return), never
+an input's per-keystroke action, a feature's chain (`Action::Intent`), a
+notice's follow-up, a shortcut, the palette, Jarvis or another screen.
+Anything else is refused with a notice before any of the feature's code
+runs. It is for a step the person decided needs no dialog but that must
+never start by itself (Sessions' `monitor_say`: words alone to an agent).
+The intent list labels it `press`.
+
 **What screens get.** The feature's keys under `data`, and in `data.app`:
 `modal` (`{screen, arg}` or nil), `panels` (`{open = {...}, shown, split}`: `split` when the person shows the open panels side by side, each in its own column, with the switch at the right of the tabs),
 `extras` (`topbar`, a list; `sandboxes` and `rows`, lists by sandbox name; each `{id,
@@ -2894,10 +2904,11 @@ a `Set` renders only drawn screens). Also read: `data.relay_ui.picks` and
 | `monitor_attach` | `key` (the session shown) | direct | The core's file dialog (`Action::PickFiles`, from a press only); the file comes back through `on_files` and waits as a chip of that session |
 | `monitor_commands` | `key` (the session shown) | direct | The composer's completion list: `GET /api/sandboxes/:name/commands` for that session's sandbox, once (the screen asks when the draft first starts with `/` and a partial name). One sandbox's list is held; the shown session in another sandbox reads that one's. Never on a timer, never from Luau. The answer's names are checked (`^[a-z0-9][a-z0-9:_-]{0,63}$`) and its descriptions cleaned (controls and invisible characters dropped, one line, 100 characters) before `detail.commands` (`{state = "loading" \| "ready" \| "none", items = { {name, desc} }}`); a 404 (a daemon without the route) or any failure is `none`: no list, nothing said |
 | `monitor_attach_remove` | `key`, `id` | direct | Takes that file off the session's chips; the core forgets its path |
-| `monitor_send` | `key`, `text?` | approval | Masked (`/api/voice/anonymise`), then ONE core dialog: the words in full, each attached file (local path, size, "look" reasons), the total, the session; a "look" file needs its box ticked. Send there: without files, `/api/chat/push {text, name, thread}`; with files, `core:uploads` (then each pasted picture's `paste-image`), then the push of the words followed by the daemon's paths. A failure pushes nothing |
+| `monitor_say` | `key` (the session shown), `text` | press | Words alone, from Send or Return in the composer only (the core refuses any other origin): masked (`/api/voice/anonymise`), then `/api/chat/push {text, name, thread}` at once, no dialog. Refused with files attached, empty words, a session not shown, on a menu, ended or unreachable, under `data.app.covered` or a Jarvis proposal, or while its last words are on their way. A failure keeps the words in the box and says why (never the words) |
+| `monitor_send` | `key`, `text?` | approval | The screen raises it when files are attached. Masked (`/api/voice/anonymise`), then ONE core dialog: the words in full, each attached file (local path, size, "look" reasons), the total, the session; a "look" file needs its box ticked. Send there: without files, `/api/chat/push {text, name, thread}`; with files, `core:uploads` (then each pasted picture's `paste-image`), then the push of the words followed by the daemon's paths. A failure pushes nothing |
 
 **The composer's keys.** Return sends (the Send press: the same intent and
-the same checks in Rust); Shift+Return starts a new line; Cmd+Return
+the same checks in Rust; words alone go at once, with files the dialog shows first); Shift+Return starts a new line; Cmd+Return
 (Ctrl+Return) sends too. A closed composer, or no words and no file, sends
 nothing. While the draft is `/` and a partial name (no space yet), the
 skills and commands of the session's sandbox whose name starts with it,
@@ -2929,8 +2940,9 @@ menu, ended, or a sandbox not running). The guardrails are
 `feat::files::drops`' (a secret-looking name, a `.ssh`/`.aws`/`.gnupg`
 folder, more than 25 MB in all: "look", the dialog's box), an empty file or
 one over 128 MB is refused (Send off and refused). "Do not ask again for
-files I drop" never applies: words to an agent always get the dialog (the
-core grants it to the files feature's pane drops only). A file uploaded by a
+files I drop" never applies: words with files always get the dialog (the
+core grants it to the files feature's pane drops only); words alone go
+without one, from the press only (`monitor_say`). A file uploaded by a
 send that stopped keeps its daemon path and goes with the next Send (the core
 forgets a local path once uploaded). Names: cut in a chip, control and
 direction characters as `?`; whole in the dialog, those characters written

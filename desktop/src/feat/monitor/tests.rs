@@ -2406,12 +2406,19 @@ fn the_composer_keys_in_the_window() {
     rt.ime(rune::Ime::Commit("ね".into()));
     frames(&mut rt, 2);
     assert_eq!(typed(&rt), "hello\nthereね");
-    // Enter: the Send press, once: the core's dialog (after masking).
+    // Enter: the Send press, once: words alone go at once (masked first), no dialog.
+    let sent = || STATE().lock().unwrap().sent.get("billing-api:s-bill-main").copied().unwrap_or(0);
+    let before = sent();
     press(&mut rt, Key::Enter, none);
-    frames(&mut rt, 4);
-    assert!(rt.state.feats.dialog.is_some(), "Enter sends: {:?}", rt.state.notice);
-    assert_eq!(typed(&rt), "hello\nthereね", "no line added by the Enter that sent");
-    rt.update(|s, _| s.feats.dialog = None);
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while sent() == before && std::time::Instant::now() < end {
+        frames(&mut rt, 1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(sent(), before + 1, "Enter sends: {:?}", rt.state.notice);
+    assert!(rt.state.feats.dialog.is_none(), "no dialog for words alone");
+    frames(&mut rt, 2);
+    assert!(!typed(&rt).ends_with('\n'), "no line added by the Enter that sent");
     frames(&mut rt, 2);
     // The list: `/gr` read from the stand-in, shown above the box.
     rt.update(|s, _| {
@@ -3090,8 +3097,10 @@ fn words_alone_go_only_from_the_person_s_press_through_the_app() {
         rt.key(KeyEvent { key: Key::Text(c.to_string()), mods: rune::Mods::default() });
         rt.frame(0.02);
     }
+    rt.key(KeyEvent { key: Key::Enter, mods: rune::Mods { shift: true, ..Default::default() } });
+    rt.key(KeyEvent { key: Key::Text("2".into()), mods: rune::Mods::default() });
     settle(&mut rt);
-    assert_eq!(sent(), 0, "typing sends nothing");
+    assert_eq!(sent(), 0, "typing sends nothing, Shift+Enter neither");
     // Enter: once, no dialog; the box empties.
     rt.key(KeyEvent { key: Key::Enter, mods: rune::Mods::default() });
     settle(&mut rt);

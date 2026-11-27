@@ -100,7 +100,7 @@ pub const INTENTS: &[Spec] = &[
     Spec {
         name: "monitor_say",
         risk: Risk::Press,
-        args: &[("key", Arg::Str, true), ("text", Arg::Text, true)],
+        args: &[("key", Arg::Str, true), ("text", Arg::Str, true)],
         doc: "Words alone for the session shown, sent at once: only from the person's own Send press or Enter in its composer (the core refuses any other origin). Masked, then typed into the session as one message. Refused with files attached (Send's dialog takes those), while the session waits on a menu, while anything covers the view or a Jarvis proposal waits.",
     },
     Spec {

@@ -31,7 +31,7 @@ fn spec(name: &str) -> &'static Spec {
 /// The core's rule (`shell::features::admit`): an approval answers with its dialog only.
 fn admitted(name: &str, a: &[Action]) -> bool {
     match spec(name).risk {
-        Risk::Direct => true,
+        Risk::Direct | Risk::Press => true,
         Risk::Approval(_) => matches!(a, [Action::Confirm(_)] | [Action::Prepare(_)]),
     }
 }
