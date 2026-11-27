@@ -190,6 +190,11 @@ pub enum Risk {
     /// The text says what is asked (wave 4: Jarvis proposals, network rules,
     /// host commands).
     Approval(&'static str),
+    /// Runs like [`Risk::Direct`], but only from the person's own press on
+    /// its feature's own screen (`shell/features.rs` checks the origin before
+    /// the feature runs): never from a feature's chain, an input's
+    /// per-keystroke action, a notice, a shortcut, the palette or another screen.
+    Press,
 }
 
 /// What an intent argument holds.
@@ -547,6 +552,8 @@ mod tests {
         assert_eq!(parse(&i("pane_to_page", json!({}))).unwrap(), vec![Intent::Pages(PageOp::ToPage { pane: None, page: None })]);
         assert_eq!(parse(&i("pane_move", json!({ "pane": 3, "to": "up" }))).unwrap(), vec![Intent::Pages(PageOp::Move { pane: Some(2), to: "up".into() })]);
         assert_eq!(parse(&i("page_step", json!({ "back": true }))).unwrap()[0].risk(), Risk::Direct);
+        // A press-only feature intent parses like any other; the core checks its origin.
+        assert_eq!(parse(&i("monitor_say", json!({ "key": "a:b", "text": "hi" }))).unwrap()[0].risk(), Risk::Press);
     }
 
     #[test]

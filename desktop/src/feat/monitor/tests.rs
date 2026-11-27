@@ -341,8 +341,9 @@ fn nothing_is_sent_without_a_press() {
     let send_b = find(&n, "monitor-send").unwrap();
     assert!(!send_b.disabled);
     let it = h.act("send", &send_b.arg, &J::Null).unwrap();
-    assert_eq!(it["name"], "monitor_send");
+    assert_eq!(it["name"], "monitor_say", "words alone: sent at once");
     assert_eq!(it["args"]["text"], "Ship it");
+    // `monitor_send` (words alone, raised by anything but this press) is still the dialog.
     let a = run(&d, "monitor_send", it["args"].clone()).unwrap();
     let a = admit(Risk::Approval("x"), "monitor_send", a).expect("only the core's dialog");
     let Action::Prepare(p) = &a[0] else { panic!("{a:?}") };
@@ -2131,8 +2132,10 @@ fn enter_in_the_composer_is_the_send_press_and_shift_enter_is_not() {
     }
     // Words: the Send press's intent, once.
     let it = h.act("submit", &ta.arg, &"Ship it\nnow".into()).unwrap();
-    assert_eq!(it["name"], "monitor_send");
+    assert_eq!(it["name"], "monitor_say");
     assert_eq!(it["args"], json!({ "key": "billing-api:s-bill-main", "text": "Ship it\nnow" }));
+    let mut it = it;
+    it["name"] = "monitor_send".into();
     // The same checks: the Rust refuses under a dialog as for the button.
     let mut covered = d.clone();
     covered["app"]["covered"] = true.into();
@@ -2873,4 +2876,228 @@ fn previews_stay_inside_the_conversation_at_every_width() {
         // Narrow, they wrap: three lines of previews at most for three pictures.
         assert!(r[3] <= 3.0 * 128.0 + 0.5 && r[3] >= 16.0, "{w}: {r:?}");
     }
+}
+
+
+// ---- Words alone, sent at once (`monitor_say`, risk Press) ----
+
+/// The Rust of a `monitor_say` (its origin already checked by the core):
+/// the masking, then one push; `None` when it was refused.
+fn say_flow(d: &J, key: &str, text: &str) -> Result<(Vec<Action>, Vec<Action>, Vec<Action>), String> {
+    let a = run(d, "monitor_say", json!({ "key": key, "text": text }))?;
+    let mask = match a.as_slice() {
+        [Action::Call(c)] => c.clone(),
+        other => panic!("one call, no dialog: {other:?}"),
+    };
+    assert_eq!(mask.path, "/api/voice/anonymise");
+    let b = on_answer(&Ctx { data: d }, &mask, Ok((200, json!({ "ok": true, "text": text.replace("Jeanne Martin", "Personne A"), "masked": 1 }))));
+    let c = b.iter().find_map(|x| match x {
+        Action::Call(c) => Some(c.clone()),
+        _ => None,
+    });
+    let done = match &c {
+        Some(c) => on_answer(&Ctx { data: d }, c, Ok((200, json!({ "ok": true })))),
+        None => vec![],
+    };
+    Ok((a, b, done))
+}
+
+#[test]
+fn words_alone_post_once_with_no_dialog_masked_first() {
+    let mut d = data_of("basic");
+    opened(&mut d);
+    shown_on(&mut d, "billing-api:s-bill-main");
+    let (a, b, done) = say_flow(&d, "billing-api:s-bill-main", "Ask Jeanne Martin about it").unwrap();
+    assert!(!a.iter().any(|x| matches!(x, Action::Confirm(_) | Action::Prepare(_))), "no dialog");
+    let pushes: Vec<&Call> = b.iter().filter_map(|x| match x {
+        Action::Call(c) => Some(c),
+        _ => None,
+    }).collect();
+    assert_eq!(pushes.len(), 1, "one push");
+    assert_eq!(pushes[0].path, "/api/chat/push");
+    assert_eq!(pushes[0].body, json!({ "text": "Ask Personne A about it", "name": "billing-api" }), "the dialog's own body, the masked words");
+    assert!(done.iter().any(|x| matches!(x, Action::Notice { error: false, .. })));
+    assert_eq!(STATE().lock().unwrap().sent["billing-api:s-bill-main"], 1, "the composer empties");
+    assert!(STATE().lock().unwrap().saying.is_empty());
+    // A thread's words go to the thread.
+    shown_on(&mut d, "shop-web::tax-rules");
+    let (_, b, _) = say_flow(&d, "shop-web::tax-rules", "Go on").unwrap();
+    assert!(b.iter().any(|x| matches!(x, Action::Call(c) if c.body == json!({ "text": "Go on", "name": "shop-web", "thread": "tax-rules" }))));
+}
+
+#[test]
+fn every_gate_still_refuses_words_alone() {
+    let mut d = data_of("basic");
+    opened(&mut d);
+    shown_on(&mut d, "billing-api:s-bill-main");
+    let say = |d: &J, key: &str, text: &str| run(d, "monitor_say", json!({ "key": key, "text": text }));
+    // Nothing to send.
+    for t in ["", "  ", "\n\t "] {
+        assert!(say(&d, "billing-api:s-bill-main", t).is_err(), "{t:?}");
+    }
+    // Something over the view; a Jarvis proposal waiting.
+    let mut covered = d.clone();
+    covered["app"]["covered"] = true.into();
+    assert!(say(&covered, "billing-api:s-bill-main", "x").unwrap_err().starts_with("Not sent"));
+    let mut prop = d.clone();
+    prop["jarvis"]["pending"] = json!([{ "id": "p1" }]);
+    assert!(say(&prop, "billing-api:s-bill-main", "x").unwrap_err().contains("Jarvis"));
+    // Not the session shown.
+    assert!(say(&d, "docs-site:s-docs-main", "x").unwrap_err().contains("not the one shown"));
+    // A session waiting on a menu (shown).
+    shown_on(&mut d, "shop-web:s-shop-main");
+    assert!(say(&d, "shop-web:s-shop-main", "1").unwrap_err().contains("answer that first"));
+    // Files attached: the dialog's path only.
+    shown_on(&mut d, "billing-api:s-bill-main");
+    on_files(&Ctx { data: &d }, Incoming::Png(png_of(4, 4)));
+    assert!(say(&d, "billing-api:s-bill-main", "x").unwrap_err().contains("dialog"));
+    assert!(STATE().lock().unwrap().saying.is_empty(), "nothing on its way");
+}
+
+#[test]
+fn a_failed_masking_or_push_keeps_the_words_and_never_shows_them() {
+    let marker = "MARKER-91c words";
+    let mut d = data_of("basic");
+    opened(&mut d);
+    shown_on(&mut d, "billing-api:s-bill-main");
+    let a = run(&d, "monitor_say", json!({ "key": "billing-api:s-bill-main", "text": marker })).unwrap();
+    let Action::Call(mask) = &a[0] else { panic!() };
+    // A second press while the first is on its way: refused, nothing sent twice.
+    assert!(run(&d, "monitor_say", json!({ "key": "billing-api:s-bill-main", "text": marker })).unwrap_err().contains("on its way"));
+    let out = on_answer(&Ctx { data: &d }, mask, Ok((200, json!({ "ok": false, "error": "the model is not loaded" }))));
+    let errs: Vec<String> = out.iter().filter_map(|x| match x {
+        Action::Notice { text, error: true, .. } => Some(text.clone()),
+        _ => None,
+    }).collect();
+    assert_eq!(errs.len(), 1);
+    assert!(errs[0].contains("still in the box") && !errs[0].contains("MARKER"), "{}", errs[0]);
+    assert!(!out.iter().any(|x| matches!(x, Action::Call(_))), "nothing pushed");
+    assert!(STATE().lock().unwrap().sent.get("billing-api:s-bill-main").is_none(), "the box keeps the words");
+    // The push fails: the words stay, said so, never shown.
+    let a = run(&d, "monitor_say", json!({ "key": "billing-api:s-bill-main", "text": marker })).unwrap();
+    let Action::Call(mask) = &a[0] else { panic!() };
+    let b = on_answer(&Ctx { data: &d }, mask, Ok((200, json!({ "ok": true, "text": marker }))));
+    let push = b.iter().find_map(|x| match x {
+        Action::Call(c) => Some(c.clone()),
+        _ => None,
+    }).unwrap();
+    assert!(!push.what.contains("MARKER"));
+    let out = on_answer(&Ctx { data: &d }, &push, Ok((500, json!({ "ok": false, "error": "no such session" }))));
+    let e = out.iter().find_map(|x| match x {
+        Action::Notice { text, error: true, .. } => Some(text.clone()),
+        _ => None,
+    }).unwrap();
+    assert!(e.contains("still in the box") && !e.contains("MARKER"), "{e}");
+    assert!(STATE().lock().unwrap().saying.is_empty());
+    // The intent log: names only.
+    let a = Asked { name: "monitor_say", args: json!({ "key": "billing-api:s-bill-main", "text": marker }).as_object().cloned().unwrap() };
+    assert_eq!(crate::shell::intent_log_line("monitor", &crate::intent::Intent::Feature(a)), "intent from monitor: monitor_say(key, text)");
+    // A mask answer no press asked for pushes nothing.
+    let stray = Call::post("/api/voice/anonymise", json!({}), "x").tag("say:999");
+    assert!(on_answer(&Ctx { data: &d }, &stray, Ok((200, json!({ "ok": true, "text": "injected" })))).is_empty());
+}
+
+#[test]
+fn with_a_file_the_send_press_is_still_the_dialog() {
+    let mut d = data_of("basic");
+    opened(&mut d);
+    shown_on(&mut d, "billing-api:s-bill-main");
+    let out = on_files(&Ctx { data: &d }, Incoming::Png(png_of(4, 4)));
+    d["monitor"] = last_view(&out);
+    let h = host();
+    let ta = find(&h.render(&d).unwrap(), "monitor-compose").unwrap().clone();
+    h.act("typed", &ta.arg, &"Look".into()).unwrap();
+    let n = h.render(&d).unwrap();
+    let b = find(&n, "monitor-send").unwrap().clone();
+    assert_eq!(b.text, "Send…", "the dialog's label");
+    let it = h.act("send", &b.arg, &J::Null).unwrap();
+    assert_eq!(it["name"], "monitor_send");
+    let it2 = h.act("submit", &ta.arg, &"Look".into()).unwrap();
+    assert_eq!(it2["name"], "monitor_send", "Enter too");
+    let a = admit(Risk::Approval("x"), "monitor_send", run(&d, "monitor_send", it["args"].clone()).unwrap()).expect("only the core's dialog");
+    assert!(matches!(a.as_slice(), [Action::Prepare(_)]));
+}
+
+/// Through the App: the core refuses `monitor_say` from every origin but
+/// the Sessions screen's own press, before any feature code runs; Enter
+/// in the composer with words posts once; typing posts nothing.
+#[test]
+fn words_alone_go_only_from_the_person_s_press_through_the_app() {
+    use crate::shell::{view as shell_view, App};
+    use rune::{Key, KeyEvent};
+    let fx = format!("{}/fixtures/monitor/basic.json", env!("CARGO_MANIFEST_DIR"));
+    let a = App::new(crate::shell::Args { fixture: Some(fx), ..Default::default() });
+    let mut rt = rune::Runtime::new(a, shell_view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut rune::Tx| s.on_key(ev, tx));
+    rt.frame(0.0);
+    let settle = |rt: &mut rune::Runtime<App>| {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+            if rt.state.link_quiet() {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "the link never settled");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        for _ in 0..4 {
+            rt.frame(0.05);
+        }
+    };
+    let tap = |rt: &mut rune::Runtime<App>, key: &str| {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.016);
+    };
+    let key = "billing-api:s-bill-main";
+    let sent = || STATE().lock().unwrap().sent.get(key).copied().unwrap_or(0);
+    settle(&mut rt);
+    tap(&mut rt, "top-view-gui");
+    settle(&mut rt);
+    tap(&mut rt, &format!("monitor-row-{key}"));
+    settle(&mut rt);
+    // Refused origins: a feature's chain, a notice's follow-up, the palette
+    // (and its shortcuts), another screen, the composer's per-keystroke action.
+    let say = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_say", "args": { "key": key, "text": "from elsewhere" } })).unwrap();
+    for from in ["feature:relay", "feature:monitor", "notice", "palette", "keys", "files", "jarvis"] {
+        rt.update(|s, _| {
+            s.notice = None;
+            crate::screen::Host::intents(s, from, say.clone());
+        });
+        settle(&mut rt);
+        let n = rt.state.notice.as_ref().map(|n| n.0.clone()).unwrap_or_default();
+        assert!(n.contains("runs only from your own press"), "{from}: {n:?}");
+        assert!(STATE().lock().unwrap().saying.is_empty(), "{from}: the feature's code never ran");
+        assert!(rt.state.feats.dialog.is_none());
+        assert_eq!(sent(), 0, "{from}");
+    }
+    rt.update(|s, _| {
+        s.notice = None;
+        s.screens.iter_mut().find(|x| x.name == "monitor").unwrap().ui.editing = true;
+        crate::screen::Host::intents(s, "monitor", say.clone());
+        s.screens.iter_mut().find(|x| x.name == "monitor").unwrap().ui.editing = false;
+    });
+    settle(&mut rt);
+    assert!(rt.state.notice.as_ref().is_some_and(|n| n.0.contains("runs only from your own press")), "while an input's action runs");
+    assert_eq!(sent(), 0);
+    // Typing posts nothing.
+    rt.update(|_, tx| tx.focus("monitor-compose", false));
+    for c in "Ship it".chars() {
+        rt.key(KeyEvent { key: Key::Text(c.to_string()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+    }
+    settle(&mut rt);
+    assert_eq!(sent(), 0, "typing sends nothing");
+    // Enter: once, no dialog; the box empties.
+    rt.key(KeyEvent { key: Key::Enter, mods: rune::Mods::default() });
+    settle(&mut rt);
+    settle(&mut rt);
+    assert!(rt.state.feats.dialog.is_none(), "no dialog for words alone");
+    assert_eq!(sent(), 1, "posted once: {:?}", rt.state.notice);
+    let typed = rt.state.screens.iter().find(|x| x.name == "monitor").and_then(|sc| sc.ui.edits.get("monitor-compose").map(|e| e.0.text.clone()));
+    assert_eq!(typed.as_deref().unwrap_or(""), "", "the box is empty");
 }

@@ -424,9 +424,10 @@ local function composer(state, d, data)
         help = rec and "Listening: press again to put the words in the field, Escape cancels"
           or (not c.can and c.why)
           or ("Dictate: press, speak, press again (or hold " .. (dict.key or "F9") .. "). The words are masked and put in the field; nothing is sent") },
-      button{ "Send…", key = "monitor-send", icon = "send", tone = "green", on = "send", arg = { key = d.key, gen = d.sent },
+      button{ #files > 0 and "Send…" or "Send", key = "monitor-send", icon = "send", tone = "green", on = "send", arg = { key = d.key, gen = d.sent, files = #files },
         disabled = not can or refused or (draft == "" and #files == 0),
-        help = "Opens the core's dialog with your words in full, the files and the session they go to. Enter in the box does the same; Shift+Enter starts a new line", keys = { "↩" } } },
+        help = #files > 0 and "Opens the core's dialog with your words in full, the files and the session they go to. Enter in the box does the same; Shift+Enter starts a new line"
+          or "Sends your words to this session now (masked first). Enter in the box does the same; Shift+Enter starts a new line", keys = { "↩" } } },
     (not c.can) and text{ c.why, size = "sm", color = "text-muted", wrap = true } or false }
 end
 
@@ -539,11 +540,15 @@ local screen = {
       if a.need and slash_query(text or "") then return intent("monitor_commands", { key = a.key }) end
     end,
     -- Words, files, or both: the core's Rust checks what may go.
+    -- Words alone go at once (`monitor_say`, the core takes it only from this
+    -- press); with files, the core's dialog shows them first (`monitor_send`).
     send = function(state, a)
       local dr = (state.drafts or {})[a.key]
       local text = (dr and dr.gen == a.gen) and dr.text or ""
+      local words = string.find(text, "%S") ~= nil
+      if words and (a.files or 0) == 0 then return intent("monitor_say", { key = a.key, text = text }) end
       -- No words: no `text` (files alone; the Rust says when nothing would go).
-      return intent("monitor_send", { key = a.key, text = string.find(text, "%S") and text or nil })
+      return intent("monitor_send", { key = a.key, text = words and text or nil })
     end,
     -- Enter (Cmd or Ctrl+Enter too): the Send press. A closed composer, or
     -- no words and no file, sends nothing; the Rust checks the rest.
@@ -552,6 +557,7 @@ local screen = {
       state.drafts[a.key] = { text = text or "", gen = a.gen }
       local words = string.find(text or "", "%S") ~= nil
       if not a.can or (not words and (a.files or 0) == 0) then return nil end
+      if words and (a.files or 0) == 0 then return intent("monitor_say", { key = a.key, text = text }) end
       return intent("monitor_send", { key = a.key, text = words and text or nil })
     end,
     -- The completion list's keys, while it is open (the field keeps the keyboard).
