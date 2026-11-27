@@ -1847,7 +1847,9 @@ token; a secret left empty is unchanged). sbx documents only `name` and
 `Name: value` or a map; `command`, `args`, `dir` or `cwd`, each also under
 `config`). Each header becomes a row, split at the first colon; a name out
 of the list is a Custom row; a value that is only a mask (`****`) is left
-empty, never sent back. When sbx listed no URL (or command), an amber line
+empty, never sent back, and such a row (or one listed with no value) is not
+dropped unsaid: its reason says sbx did not show the value, and Save… stays
+off until the value is typed again or the row is removed. When sbx listed no URL (or command), an amber line
 says to fill the settings in again. Clear leaves edit mode. Listed text is
 a field's value, never markup.
 

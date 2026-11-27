@@ -595,9 +595,14 @@ fn edit_prefills_every_field_and_the_header_rows() {
     assert_eq!(f.find("mcp-h-name-3").unwrap().value, json!("Api-Key"));
     assert_eq!(f.find("mcp-h-value-3").unwrap().value, json!(""));
     assert!(t.iter().any(|x| x == "Secrets asked in the next dialog: TOKEN (left empty: unchanged)"), "{t:?}");
+    // ...and never dropped unsaid: its reason shows and Save is off until it is typed again or removed.
+    assert!(t.iter().any(|x| x == "sbx did not show this header's value: type it again, or remove the row"), "{t:?}");
+    assert!(t.iter().any(|x| x == "mcp-h-why-3") && f.find("mcp-save").unwrap().disabled);
+    assert!(f.press("mcp-save").is_empty(), "not sent without the masked header");
 
     // Saved: the same mcp_save, with replace; the row left empty is skipped.
     f.typed("mcp-h-value-3", "${API_KEY}");
+    assert!(!f.find("mcp-save").unwrap().disabled && f.find("mcp-h-why-3").is_none(), "typed again: Save is on");
     let sent = f.press("mcp-save");
     assert_eq!(sent[0]["args"], json!({ "name": "linear", "kind": "remote", "url": "https://mcp.linear.app/mcp", "replace": "linear",
         "headers": "Authorization: Bearer ${TOKEN}\nX-Org: acme:eu\nApi-Key: ${API_KEY}" }));
@@ -656,4 +661,25 @@ fn hostile_text_in_a_listed_server_makes_no_control() {
     // The bad name is refused in the form, not sent.
     assert!(a.find("mcp-h-why-1").is_some());
     assert!(a.press("mcp-save").is_empty());
+}
+
+#[test]
+fn a_masked_header_removed_on_edit_is_dropped_explicitly_and_a_new_empty_row_stays_skipped() {
+    let mut f = Form::new(listed(json!([linear()])));
+    f.press("mcp-edit-linear");
+    assert!(f.find("mcp-save").unwrap().disabled);
+    // Removing the row is the person's way to drop that header.
+    f.press("mcp-h-rm-3");
+    assert!(!f.find("mcp-save").unwrap().disabled && f.find("mcp-h-why-3").is_none());
+    // A row the person adds and leaves empty is skipped, as before.
+    f.press("mcp-h-add");
+    assert!(f.find("mcp-h-why-4").is_none() && !f.find("mcp-save").unwrap().disabled);
+    let sent = f.press("mcp-save");
+    assert_eq!(sent[0]["args"]["headers"], "Authorization: Bearer ${TOKEN}\nX-Org: acme:eu");
+    // A listed header with no value at all is held the same way.
+    let mut g = Form::new(listed(json!([{ "name": "a", "type": "remote", "detail": { "url": "https://a", "headers": ["X-Empty:"] } }])));
+    g.press("mcp-edit-a");
+    assert!(g.find("mcp-h-why-1").is_some() && g.press("mcp-save").is_empty());
+    g.typed("mcp-h-value-1", "1");
+    assert_eq!(g.press("mcp-save")[0]["args"]["headers"], "X-Empty: 1");
 }

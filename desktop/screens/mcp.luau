@@ -76,6 +76,10 @@ end
 -- lines, so a ";" in a value would send something else than what was typed.
 local function row_problem(r, seen)
   local n, v = row_name(r), trim(r.value)
+  -- A row Edit filled from a listed header whose value sbx did not show
+  -- (masked or empty): skipping it would add the server again without that
+  -- header, unsaid. Removing the row is the explicit way to drop it.
+  if r.listed and n ~= "" and v == "" then return "sbx did not show this header's value: type it again, or remove the row" end
   if n == "" or v == "" then return nil end
   if string.find(n, "[^%w!#%$%%&'%*%+%-%.%^_`|~]") then return "A header name is letters, digits and - _ . only (no space, \":\" or \";\")" end
   if string.find(v, ";", 1, true) then return "A value cannot hold \";\": sbxw sends headers separated by \";\". Put it in a secret, ${NAME}, instead" end
@@ -124,9 +128,9 @@ local function row_of(h, id)
   local n, v = string.match(h, "^([^:]*):(.*)$")
   n, v = trim(n or h), unmasked(v or "")
   for _, known in ipairs(HEADERS) do
-    if string.lower(known) == string.lower(n) then return { id = id, pick = known, name = "", value = v } end
+    if string.lower(known) == string.lower(n) then return { id = id, pick = known, name = "", value = v, listed = true } end
   end
-  return { id = id, pick = CUSTOM, name = n, value = v }
+  return { id = id, pick = CUSTOM, name = n, value = v, listed = true }
 end
 
 -- What Edit puts in the form, from a listed server (the row's `detail`).
