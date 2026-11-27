@@ -205,6 +205,53 @@ pub fn team_tone(state: &str) -> &'static str {
     }
 }
 
+/// A plan's merge state's tone, by the Board's own: work under way blue
+/// (building, testing, merging, as a running team), waiting for the
+/// person's click purple (a proposed merge, Merged to CI, as the "Merge
+/// proposed" chip), waiting amber (a CI rebuild waits its turn, as a
+/// blocked thread), a failure red, merged to main green.
+pub fn merge_tone(state: &str) -> &'static str {
+    match state {
+        "ci_building" | "ci_testing" | "merging" => "blue",
+        "proposed" | "merged_ci" => "purple",
+        "ci_stale" => "amber",
+        "ci_failed" | "failed" => "red",
+        "merged" => "green",
+        _ => "neutral",
+    }
+}
+
+/// A plan's merge status as the Board draws it: the daemon's
+/// `merge_status` word (its detail, and why Merge is not offered, as the
+/// help), the tone of its state. Null when the plan has no merge, or the
+/// daemon sends no status (an older one): the team's state is drawn then.
+pub fn merge_badge(plan: &J) -> J {
+    let ms = &plan["merge_status"];
+    let Some(word) = ms["word"].as_str().filter(|w| !w.trim().is_empty()) else { return J::Null };
+    let state = plan["merge"]["state"].as_str().unwrap_or("");
+    let mut help = ms["detail"].as_str().unwrap_or("").to_string();
+    if let Some(w) = ms["why_not"].as_str().filter(|w| !w.is_empty()) {
+        if !help.is_empty() {
+            help.push('\n');
+        }
+        help.push_str(&format!("Merge is not offered: {w}"));
+    }
+    json!({ "word": word, "help": if help.is_empty() { J::Null } else { help.into() }, "tone": merge_tone(state), "state": state, "ci": ms["ci"] == true })
+}
+
+/// A plan still at work for the Board's counts: pending, or approved and
+/// open with its merge not over. A plan in any CI state (building,
+/// testing, Merged to CI, a rebuild waiting, CI failed) is at work; Merged
+/// to main is not.
+pub fn plan_at_work(p: &J) -> bool {
+    p["state"] == "pending" || approved_at_work(p)
+}
+
+/// [`plan_at_work`] for an approved plan only (the rail's count of teams at work).
+pub fn approved_at_work(p: &J) -> bool {
+    p["state"] == "approved" && p["closed"] != true && p["merge"]["state"] != "merged"
+}
+
 /// `14:03 UTC`, `2026-11-19 14:03 UTC`, the day's label.
 pub fn clock(ms: u64) -> String {
     let s = ms / 1000;
@@ -349,6 +396,7 @@ fn label(kind: &str) -> (&'static str, &'static str) {
         "merge_started" => ("Pressed Merge", "green"),
         "merge_result" => ("Merge", "neutral"),
         "merge_finished" => ("Merge", "neutral"),
+        "ci_step" => ("CI branch", "neutral"),
         "claim" => ("Claimed", "neutral"),
         "release" => ("Released", "neutral"),
         "thread_status" => ("Status", "neutral"),
@@ -538,9 +586,13 @@ pub fn row(ev: &J, o: &Opts) -> J {
             r["type"] = "system".into();
             let merged = data["state"] == "merged";
             r["tone"] = (if merged { "green" } else { "red" }).into();
-            r["text"] = (if merged { format!("Merged: {}", join(&data["order"])) } else { "The merge stopped: retry it from the plan dialog".to_string() }).into();
+            // The daemon's word ("Merged to main") and the CI branch it came from, when it says them.
+            let word = data["status"].as_str().filter(|w| !w.trim().is_empty());
+            let from = data["ci"].as_str().filter(|b| !b.is_empty()).map(|b| format!(" from {b}")).unwrap_or_default();
+            r["text"] = (if merged { format!("{}{from}: {}", word.unwrap_or("Merged"), join(&data["order"])) } else { "The merge stopped: retry it from the plan dialog".to_string() }).into();
             r["link"] = json!({ "label": "Plan dialog", "what": "plan" });
         }
+        "ci_step" => ci_step(&mut r, data, text),
         "thread_failed" => {
             r["type"] = "system".into();
             r["text"] = format!("{} could not start: {}", data["thread"].as_str().unwrap_or("a thread"), text.unwrap_or("no reason given")).into();
@@ -660,7 +712,9 @@ fn test_job(r: &mut J, data: &J) {
     };
     let reused = data["reused"].as_bool().unwrap_or(false);
     let retried = data["retried"].as_bool().unwrap_or(false);
-    let mut head = format!("tests {word}");
+    // The plan's battery on its CI branch: asked by sbxw itself.
+    let ci = data["asker"] == "sbxw";
+    let mut head = format!("{}tests {word}", if ci { "CI " } else { "" });
     if retried {
         head.push_str(" after a retry");
     }
@@ -673,7 +727,13 @@ fn test_job(r: &mut J, data: &J) {
         None => String::new(),
     };
     let mut meta: Vec<String> = vec![];
-    if !asker.is_empty() {
+    if ci {
+        meta.push("on the CI branch, asked by sbxw".into());
+        // A reused result ran no attempt here.
+        if !reused {
+            meta.push(if retried { "2 attempts".into() } else { "1 attempt".into() });
+        }
+    } else if !asker.is_empty() {
         meta.push(format!("asked by {asker}"));
     }
     if let Some(c) = data["short"].as_str().filter(|c| !c.is_empty()) {
@@ -689,12 +749,58 @@ fn test_job(r: &mut J, data: &J) {
     r["outcome"] = outcome.into();
     r["reused"] = reused.into();
     r["retried"] = retried.into();
+    r["ci"] = ci.into();
     r["meta"] = breakable(&meta.join(" · ")).into();
     r["help"] = match (reused, data["reuse"].as_str()) {
         (true, Some("joined")) => "Joined a run of the same commit already under way: not run twice",
         (true, _) => "The result of an earlier run of the same code, reused: not run again",
         (false, _) if retried => "Failed once, run a second time to tell a flaky test from a real failure",
+        _ if ci => "The plan's whole test command, run once by sbxw on the plan's CI branch through the test queue",
         _ => "Run by the plan's test queue",
+    }
+    .into();
+}
+
+/// A step of the plan's CI run, sbxw's own line, drawn as a test job is
+/// (centred, tinted): the merge status the step led to, in the daemon's
+/// words ("Merged to CI", "Main moved: CI rebuild waits"), then the
+/// daemon's line on it ("main moved from abc1234 to def5678: rebuilding
+/// sbxw/ci-p"). Built and a rebuild are work under way, passed green, a
+/// failure red, a rebuild waiting amber.
+fn ci_step(r: &mut J, data: &J, text: Option<&str>) {
+    let step = data["step"].as_str().unwrap_or("");
+    let tint = match step {
+        "passed" => "green",
+        "failed" => "red",
+        "stale" => "amber",
+        _ => "",
+    };
+    let word = data["status"].as_str().filter(|w| !w.trim().is_empty());
+    let label = match (step, word) {
+        ("rebuild", _) => "Rebuilding the CI branch".to_string(),
+        ("closed", _) => "CI branch removed".to_string(),
+        (_, Some(w)) => w.to_string(),
+        _ => "CI branch".to_string(),
+    };
+    r["type"] = "test".into();
+    r["label"] = label.into();
+    r["tint"] = tint.into();
+    r["tone"] = (match (step, tint) {
+        ("built" | "rebuild", _) => "blue",
+        (_, "") => "neutral",
+        (_, t) => t,
+    })
+    .into();
+    r["step"] = step.into();
+    r["meta"] = text.map(breakable).unwrap_or_default().into();
+    r["help"] = match step {
+        "built" => "sbxw merged the threads' branches into the plan's CI branch; the plan's tests run on it next",
+        "passed" => "The plan's tests passed on the CI branch: Merge fast-forwards main to exactly that commit",
+        "failed" => "Nothing reached main: the lead has the threads fix it, then proposes the merge again",
+        "stale" => "Main or a thread's branch moved since the CI branch passed: sbxw rebuilds it and tests it again before Merge is offered",
+        "rebuild" => "sbxw builds the CI branch again on the new main and tests it again",
+        "closed" => "The plan was closed: its CI branch was removed, nothing reached main",
+        _ => "A step of the plan's CI branch",
     }
     .into();
 }

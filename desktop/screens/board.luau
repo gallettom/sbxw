@@ -335,6 +335,15 @@ local function two_lines(s, w)
   return cut .. "…"
 end
 
+-- A team's state: its plan's merge status in the daemon's words when it has
+-- a merge ("Testing the CI branch", "Merged to CI", "CI failed", "Merged to
+-- main"), its detail as the help; else the team's state. Data, drawn as text.
+local function state_badge(t, key)
+  local b = t.badge
+  if b and nz(b.word) then return badge{ b.word, tone = b.tone or "neutral", help = b.help, key = key } end
+  return badge{ t.state or "", tone = t.tone or "neutral", key = key }
+end
+
 local function picker_button(ui, s, ow, wide)
   local p = ui.picker or {}
   local names, summary, color
@@ -353,7 +362,7 @@ local function picker_button(ui, s, ow, wide)
       text{ names or "", size = "sm", weight = "medium", mono = true, color = lk.text or "text-bright", truncate = true, max_w = math.floor(bw * 0.55) },
       nz(summary) and wide and text{ summary, size = "xs", color = lk.muted or "text-muted", truncate = true, grow = 1 } or spacer{},
       icon{ "chevron-down", size = 12, color = lk.muted or "text-muted" } },
-    s and badge{ s.state or "", tone = s.tone or "neutral" } or false }
+    s and state_badge(s, "board-team-state") or false }
 end
 
 local function picker_row(t, i, p, mw)
@@ -367,7 +376,7 @@ local function picker_row(t, i, p, mw)
       column{ w = 8, h = 8, radius = "mark", fill = t.color or "text-muted" },
       text{ t.names or "", size = "sm", mono = true, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
       current and icon{ "check", size = 12, color = "accent" } or false,
-      nz(t.state) and badge{ t.state, tone = t.tone or "neutral" } or false,
+      nz(t.state) and state_badge(t, "board-team-state-" .. t.id) or false,
       nz(t.when) and text{ t.when, size = "xs", color = "text-muted" } or false },
     shown and text{ shown, size = "xs", color = "text-muted", wrap = true } or false }
 end

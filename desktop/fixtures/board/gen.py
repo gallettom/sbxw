@@ -1,4 +1,5 @@
-# Generates desktop/fixtures/board/basic.json: invented, neutral content.
+# Generates desktop/fixtures/board/basic.json, and ci.json with its views
+# (ci-*.json) beside it: invented, neutral content. Run: python3 gen.py basic.json
 import json, hashlib, sys
 out = sys.argv[1]
 DAY = 86_400_000
@@ -182,3 +183,105 @@ fx = {
  }}
 json.dump(fx, open(out, "w"), indent=1)
 print("ok", len(run), len(mer))
+
+# ── ci.json and its views: six teams merged through their CI branch ──
+# One team per CI state (the daemon's merge.state and merge_status, its words
+# as crates/core/src/plans/ci.rs writes them), and the timeline's CI lines:
+# the ci_step events, the battery sbxw asked on the CI branch (test_job,
+# asker sbxw), a rebuild because main moved, a merge finished to main.
+import os
+here = os.path.dirname(os.path.abspath(out))
+C = T0 + 3*DAY
+def ci_team(pid, sb, summary, names, state, at, last):
+    return {"id": pid, "sandbox": sb, "summary": summary, "state": state, "variant": "split", "lead": None,
+            "threads": [{"name": n, "state": "done"} for n in names], "created_ms": at, "updated_ms": last, "last_ms": last}
+def story(pid, names, at, extra):
+    br = "sbxw/ci-" + pid
+    t = lambda mins: at + mins*60_000
+    e = [ev(t(0), "plan_proposed", "lead", "Two threads, merged through the CI branch.", "user", {"variant": "split", "justification": "Two folders.", "threads": [{"name": n, "goal": "Its part.", "scope": n + "/", "model": None} for n in names]}),
+         ev(t(1), "plan_approved", "user", None, "lead", {"variant": "split", "threads": names})]
+    for i, n in enumerate(names):
+        e.append(ev(t(20 + i), "thread_status", n, "Done, with its tests.", "lead", {"thread": n, "state": "done"}))
+    e.append(ev(t(30), "merge_proposed", "lead", "Both reviewed; " + names[0] + " first.", "user", {"order": names, "distillate": 1}))
+    for mins, kind, frm, text, data in extra(br, t):
+        e.append(ev(t(mins) if isinstance(mins, int) else mins, kind, frm, text, None, data))
+    e.sort(key=lambda x: x["at"]); e.reverse()
+    return e
+def built(br, tip, base, status="Testing the CI branch"):
+    return ("ci_step", "sbxw", f"{br} built at {tip[:7]} on {base[:7]}", {"step": "built", "run": 1, "tip": tip, "base": base, "state": "ci_testing", "status": status})
+def job(short, outcome, retried=False, reuse=None, ms=312_000):
+    return ("test_job", "sbxw", f"Tests {outcome} at {short}", {"job": "j-" + short, "asker": "sbxw", "thread": "sbxw", "outcome": outcome, "reused": reuse is not None, "reuse": reuse, "retried": retried, "short": short, "duration_ms": ms})
+def passed(br, tip):
+    return ("ci_step", "sbxw", f"Merged to CI: tests passed on {br} at {tip[:7]}", {"step": "passed", "run": 1, "job": "j", "outcome": "passed", "reused": False, "state": "merged_ci", "status": "Merged to CI"})
+
+teams_ci, timelines_ci, plans_ci = [], {}, []
+def add(pid, sb, summary, names, at, merge_state, ci, status, extra, numbers, team_state="done"):
+    e = story(pid, names, at, extra)
+    last = e[0]["at"]
+    team = ci_team(pid, sb, summary, names, team_state, at, last)
+    teams_ci.append(team)
+    timelines_ci[pid] = {"team": team, "events": e, "standing": [], "commits": {"available": True, "list": [], "totals": [], "merged": merge_state == "merged"}, "numbers": numbers}
+    plans_ci.append({"id": pid, "sandbox": sb, "summary": summary, "state": "approved", "closed": False, "threads": [],
+                     "merge": {"state": merge_state, "order": names, "ci": ci}, "merge_status": status, "created_ms": at, "updated_ms": last})
+
+def nums(at, run, reused, merged=None): return {"approved_ms": at + 60_000, "merged_ms": merged, "tests": {"run": run, "reused": reused, "refused": 0}, "asked": 0}
+
+# Testing, after a rebuild because main moved (web-app: the view opened first).
+A = C; br = "sbxw/ci-p-ci-test"; tip1, base1, base2, tip2 = h("t1"), h("b1"), h("b2"), h("t2")
+add("p-ci-test", "web-app", "Checkout: the cart page and its API client, merged through CI", ["cart-page", "api-client"], A, "ci_testing",
+    {"branch": br, "run": 2, "builds": 2, "base_branch": "main", "base": base2, "tip": tip2, "rebuilt_because": f"main moved from {base1[:7]} to {base2[:7]}"},
+    {"word": "Testing the CI branch", "detail": f"The plan's tests run on {br} at {tip2[:7]}", "can_merge": False, "why_not": f"main moved from {base1[:7]} to {base2[:7]}: the rebuilt {br} is being tested; Merge comes back when it passes", "ci": True},
+    lambda br, t: [(31, *built(br, tip1, base1)), (37, *job(tip1[:7], "passed", retried=True, ms=402_000)), (38, *passed(br, tip1)),
+                   (52, "ci_step", "sbxw", "main moved: the CI branch waits to be rebuilt", {"step": "stale", "run": 1, "main": base2, "because": None, "state": "ci_stale", "status": "Main moved: CI rebuild waits"}),
+                   (53, "ci_step", "sbxw", f"main moved from {base1[:7]} to {base2[:7]}: rebuilding {br}", {"step": "rebuild", "run": 2, "main": base2, "state": "ci_building", "status": "Building the CI branch"}),
+                   (54, *built(br, tip2, base2))],
+    nums(A, 2, 0))
+# Building (docs).
+B = C + 2*3600_000; br = "sbxw/ci-p-ci-build"
+add("p-ci-build", "docs", "Guide: the glossary and its search entries", ["glossary", "search-terms"], B, "ci_building",
+    {"branch": br, "run": 1, "builds": 1},
+    {"word": "Building the CI branch", "detail": f"Merging the threads into {br}", "can_merge": False, "why_not": f"sbxw is building {br} from main with the threads' branches; the tests run next, then Merge is offered", "ci": True},
+    lambda br, t: [], nums(B, 0, 0))
+# Merged to CI, the battery's result reused (api).
+D = C + 3*3600_000; br = "sbxw/ci-p-ci-ok"; tip = h("ok"); base = h("okb")
+add("p-ci-ok", "api", "Rate limits: the middleware and its settings", ["rate-limit", "limit-settings"], D, "merged_ci",
+    {"branch": br, "run": 1, "builds": 1, "base_branch": "main", "base": base, "tip": tip, "tests": {"job": "j-ok", "outcome": "passed", "reused": True, "commit": tip, "attempts": []}},
+    {"word": "Merged to CI", "detail": f"Tests passed on {br} at {tip[:7]}: Merge fast-forwards main to exactly that commit", "can_merge": True, "ci": True},
+    lambda br, t: [(31, *built(br, tip, base)), (32, *job(tip[:7], "passed", reuse="stored", ms=280_000)), (32, *passed(br, tip))], nums(D, 0, 1))
+# CI failed: a conflict while building (ops).
+E = C + 4*3600_000; br = "sbxw/ci-p-ci-fail"
+add("p-ci-fail", "ops", "Backups: the nightly job and its schema change", ["db-schema", "backup-job"], E, "ci_failed",
+    {"branch": br, "run": 1, "builds": 1, "base_branch": "main", "base": h("fb"), "failure": {"kind": "conflict", "thread": "backup-job", "files": ["migrations/0042_backups.sql"], "text": "backup-job conflicts"}},
+    {"word": "CI failed", "detail": "sbxw/backup-job conflicts in migrations/0042_backups.sql: nothing reached main, no tests ran", "can_merge": False, "why_not": "the lead has the threads fix it, then proposes the merge again, which rebuilds and retests the CI branch", "ci": True},
+    lambda br, t: [(31, "ci_step", "sbxw", "sbxw/backup-job conflicts in migrations/0042_backups.sql", {"step": "failed", "run": 1, "kind": "conflict", "thread": "backup-job", "files": ["migrations/0042_backups.sql"], "state": "ci_failed", "status": "CI failed"})],
+    nums(E, 0, 0))
+# A rebuild waits: a thread's branch moved since the CI branch passed (site).
+F = C + 5*3600_000; br = "sbxw/ci-p-ci-stale"; tip = h("st"); base = h("stb")
+because = "sbxw/home-hero has 1 commit the CI branch did not test"
+add("p-ci-stale", "site", "Home page: the hero and its newsletter form", ["home-hero", "newsletter"], F, "ci_stale",
+    {"branch": br, "run": 1, "builds": 1, "base_branch": "main", "base": base, "tip": tip, "stale_because": because, "main_now": base},
+    {"word": "CI rebuild waits", "detail": "Merged to CI without the newest commits of a thread", "can_merge": False, "why_not": f"{because}: sbxw rebuilds {br} with it and tests it again before Merge is offered. One plan rebuilds at a time, the oldest first, so this one waits its turn", "ci": True},
+    lambda br, t: [(31, *built(br, tip, base)), (36, *job(tip[:7], "passed", ms=301_000)), (36, *passed(br, tip)),
+                   (44, "ci_step", "sbxw", f"{because}: the CI branch waits to be rebuilt", {"step": "stale", "run": 1, "main": base, "because": because, "state": "ci_stale", "status": "CI rebuild waits"})],
+    nums(F, 1, 0))
+# Merged to main, from its CI branch (shop).
+G = C + 6*3600_000; br = "sbxw/ci-p-ci-main"; tip = h("mn"); base = h("mnb")
+add("p-ci-main", "shop", "Invoices: the PDF export and its mail", ["invoice-pdf", "invoice-mail"], G, "merged",
+    {"branch": br, "run": 1, "builds": 1, "base_branch": "main", "base": base, "tip": tip},
+    {"word": "Merged to main", "detail": f"main is now the tested tip of {br}", "can_merge": False, "ci": True},
+    lambda br, t: [(31, *built(br, tip, base)), (35, *job(tip[:7], "passed", ms=240_000)), (35, *passed(br, tip)),
+                   (50, "merge_started", "user", None, {"order": ["invoice-pdf", "invoice-mail"], "base": "main"}),
+                   (51, "merge_finished", "sbxw", None, {"state": "merged", "order": ["invoice-pdf", "invoice-mail"], "status": "Merged to main", "ci": br})],
+    nums(G, 1, 0, merged=G + 51*60_000), team_state="merged")
+
+sb_ci = [{"name": n, "agent": "claude", "status": "running", "workspace": "/work/" + n, "created_at": "2026-11-10T09:12:00Z", "approvals": 0, "kits_waiting": 0} for n in ["web-app", "docs", "api", "ops", "site", "shop"]]
+VIEWS = [("ci", "web-app", "testing after a rebuild because main moved"), ("ci-merged-ci", "api", "Merged to CI, its tests reused"), ("ci-failed", "ops", "CI failed on a conflict"),
+         ("ci-stale", "site", "a CI rebuild waits for a thread's newer commit"), ("ci-main", "shop", "Merged to main from its CI branch"), ("ci-building", "docs", "building the CI branch")]
+for name, sel, what in VIEWS:
+    fx_ci = {
+     "about": f"The Board's CI states (generated by gen.py): six teams merged through their CI branch, one per state (web-app testing after a rebuild because main moved, docs building, api Merged to CI with a reused result, ops CI failed on a conflict, site a rebuild waits, shop Merged to main). Opened on {sel}: {what}.",
+     "app": {"selected": sel, "panes": 1, "split": "columns", "open": [sel], "focused": 0},
+     "daemon": {"sandboxes": sb_ci, "plans": plans_ci, "board_teams": teams_ci, "board_timelines": timelines_ci, "commits": {n["name"]: [] for n in sb_ci}, "commit_details": {}},
+    }
+    json.dump(fx_ci, open(os.path.join(here, name + ".json"), "w"), indent=1)
+print("ci", len(teams_ci))

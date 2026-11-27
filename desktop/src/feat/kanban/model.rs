@@ -113,7 +113,7 @@ pub fn card(c: &J, groups: &J, all: bool, focus: Option<&str>) -> J {
     let thread = c["thread"].as_str().unwrap_or("");
     let marks = marks_of(c);
     // Failed or refused work: a red edge (a priority is not a failure).
-    let red = c["marks"].as_array().into_iter().flatten().any(|m| matches!(m["id"].as_str(), Some("failed" | "merge_failed" | "refused")));
+    let red = c["marks"].as_array().into_iter().flatten().any(|m| matches!(m["id"].as_str(), Some("failed" | "merge_failed" | "refused" | "ci_failed")));
     let can = &c["can"];
     // The whole title in the tooltip only when the card cuts it (and its sandbox in All).
     let cut = c["title_long"] != c["title"] || c["title_short"] != c["title"];
@@ -192,7 +192,8 @@ pub fn order(cols: &[J]) -> Vec<Vec<String>> {
     cols.iter().map(|c| c["cards"].as_array().into_iter().flatten().filter_map(|x| x["id"].as_str().map(str::to_string)).collect()).collect()
 }
 
-/// A column's id by its label in the History.
+/// A column's title and tone when the daemon sent none (an empty board
+/// before its first answer): the daemon's own words (`tickets.rs`).
 pub fn column_label(id: &str) -> (&'static str, &'static str) {
     match id {
         "backlog" => ("Backlog", "neutral"),
@@ -200,16 +201,23 @@ pub fn column_label(id: &str) -> (&'static str, &'static str) {
         "progress" => ("In progress", "blue"),
         "test" => ("In test", "purple"),
         "ready" => ("Ready to merge", "amber"),
-        "merged" => ("Merged", "green"),
+        "merged" => ("Merged to main", "green"),
         _ => ("", "neutral"),
     }
 }
 
 /// The ticket's panel: the daemon's view (or, for a thread with no ticket,
-/// its card), what the person may do and why not.
-pub fn panel(card: &J, view: Option<&J>, previews: &std::collections::BTreeSet<String>, held: Option<&str>) -> J {
+/// its card), what the person may do and why not. `column`: the daemon's
+/// column the card is in (its title and tone, as the board draws it).
+pub fn panel(card: &J, column: Option<&J>, view: Option<&J>, previews: &std::collections::BTreeSet<String>, held: Option<&str>) -> J {
     let col = card["column"].as_str().unwrap_or("");
-    let (label, tone) = column_label(col);
+    let (label, tone) = match column.and_then(|c| c["title"].as_str().filter(|t| !t.is_empty()).map(|t| (t, c["tone"].as_str().unwrap_or("neutral")))) {
+        Some((t, tone)) => (t.to_string(), tone.to_string()),
+        None => {
+            let (t, tone) = column_label(col);
+            (t.to_string(), tone.to_string())
+        }
+    };
     let can = &card["can"];
     let thread = card["thread"].as_str().filter(|t| !t.is_empty());
     let sb = card["sandbox"].as_str().unwrap_or("");
